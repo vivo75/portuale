@@ -210,6 +210,16 @@ _start_pre_clean` + `dblink.merge()`'s tail); `run_qmerge` stays
 clean-free like real `doebuild qmerge` (evidence: `TEST/findings/l2.md`
 "#42").
 
+**2026-09-13 (later):** #43 (binrepo `verify-signature` + the bed's
+gentoo binrepo) and #39/#40 (gpkg metadata completeness; the archive's
+`IUSE`/`IUSE_EFFECTIVE`/`SIZE`/`PROVIDES`/`REQUIRES`/6-field
+`NEEDED.ELF.2`/rewritten `*DEPEND`/`Packages` `EAPI`+`REPO` now match
+real) are **closed** — the L2 porttest track is `strict hard=0 soft=0`
+on every archive pair with all `l2-gpkg-*` allowlists deleted
+(`l2-20260913T232955Z`, `TEST/findings/l2.md` "#39 / #40"). The L2 real
+set (`l1-merge.txt`) is the remaining #29 half; L3 (#30) is the new
+harness in `TEST/run/l3-source-parity.sh`.
+
 For what is **genuinely still open** — real portage behaviour not ported
 to either side, the deliberate cuts, the standing non-goals — see
 **[`scope-backlog.md`](scope-backlog.md)** (Part 2 = remaining work,

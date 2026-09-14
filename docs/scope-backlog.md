@@ -686,11 +686,18 @@ blockers are the #39 entries plus the test-bed GPG check below.
   one genuinely nondeterministic `porttest/setuid` build-id link race
   (real disagrees with itself). Plan: `docs/038_Packaging-transforms.plan.md`;
   evidence: `TEST/findings/l2.md` "#38 S0-S5".
-- **Incomplete gpkg metadata** (`l2-gpkg-metadata-members`, MEDIUM):
-  `SIZE`, `IUSE`, `IUSE_EFFECTIVE`, `repository`, `REPO_REVISIONS`,
-  ebuild-derived `RDEPEND`/`REQUIRES`/`PROVIDES`, the `Packages` index
-  `REPO` field, and `NEEDED.ELF.2`'s trailing ELF-class field
-  (`l2-needed-elf2-format`).
+- **FIXED 2026-09-13 (backlog #39) — incomplete gpkg metadata**
+  (`l2-gpkg-metadata-members`/`l2-pkgindex-eapi-missing`/
+  `l2-gpkg-dep-metadata-rewrite`/`l2-needed-elf2-format`). The
+  install-phase metadata passes now match real: `IUSE` (always),
+  `IUSE_EFFECTIVE`, the pre-transform `${D}`-walk `SIZE`, `*DEPEND`
+  atom-use-dep evaluation + `:=` binding + `>=<libc>` injection,
+  `PROVIDES`/`REQUIRES` from a `SonameDepsProcessor` port, the 6th
+  `NEEDED.ELF.2` multilib-category field, and real's own sorted/
+  translated `Packages` stanza (`EAPI`/`DEFINED_PHASES`/`REPO`/`MTIME`).
+  L2 porttest is `hard=0 soft=0` with every `l2-gpkg-*` allowlist entry
+  deleted (`l2-20260913T232955Z`). Evidence: `TEST/findings/l2.md`
+  "#39".
 - **FIXED 2026-09-13 (backlog #42, found in #38 S4) — `emerge` never
   pre-cleans `${PORTAGE_BUILDDIR}`.** `ebuild_phases::run_clean` (the
   real `clean` phase, `__dyn_clean`) now runs before every source build,
@@ -700,9 +707,12 @@ blockers are the #39 entries plus the test-bed GPG check below.
   like real `doebuild qmerge`. The #38 S4 instprep repro no longer wipes
   the builddir and is green (`TEST/logs/l2-instprep-20260913T222526Z`).
   Evidence: `TEST/findings/l2.md` "#42".
-- **Degraded consumer env** (`l2-consumes-portuale-env-degraded`,
-  MEDIUM): real Portage merging a portuale-built archive runs merge
-  phases with `MERGE_TYPE` unset and skips `pkg_pretend`.
+- **FIXED 2026-09-13 (backlog #40, via #39) — degraded consumer env**
+  (`l2-consumes-portuale-env-degraded`): the `Packages` index now carries
+  `EAPI`, so real Portage no longer defaults it to "0" and no longer
+  exports the EAPI≤6 `DESTTREE`/`INSDESTTREE`/`PORTDIR`/`ECLASSDIR` into
+  the merged vdb env; `pkg_pretend` runs and the `porttest/phases` log
+  matches. Evidence: `TEST/findings/l2.md` "#39".
 - **FIXED 2026-09-13 (backlog #43) — test-bed binpkg GPG check blocked
   the real-set cross-install** (`l2-binpkg-gpg-check`, found in #37 S4 /
   surfaced again by #38 S5): `TEST/layers/l1/consume.sh` drops the

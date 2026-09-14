@@ -2912,6 +2912,7 @@ fn merge_after_install(
     let instprep_status = ebuild_phases::run_instprep(
         ebuild_path,
         None,
+        false,
         root,
         portage_tmpdir,
         &options.build_env,
@@ -3354,6 +3355,8 @@ pub(crate) fn run_vdb_saved_env_phase(
     crate::ebuild_phases::run_phase_from_saved_env(
         &dst,
         &env,
+        // Each unmerge seeds its own (old version's) builddir once.
+        true,
         phase,
         root,
         portage_tmpdir,
@@ -3416,6 +3419,35 @@ pub fn merge_binpkg(
     portage_tmpdir: &Path,
     options: &MergeOptions,
 ) -> Result<i32, String> {
+    // Real `config.environ()`'s `filter_calling_env` (`config.py:3275-
+    // 3310`): once `${T}/environment` exists -- every binary-merge hook
+    // has it, seeded from the archive -- the calling environment is
+    // narrowed to `environ_whitelist` (bug #189417: a variable the
+    // ebuild unsets must not leak back in), so a harness/portuale-only
+    // var (`PORTAGE_RUNNING_ROOT`, `L1_SKIP_PORTAGE_UPGRADE`,
+    // synthesized `GNUMAKEFLAGS`) never reaches the regenerated vdb
+    // env. Programmatic per-phase keys (`EMERGE_FROM`, `MERGE_TYPE`,
+    // `PORTAGE_UPDATE_ENV`, the `*_EXCLUDE` reads) are added separately
+    // by `run_phase_from_saved_env` and are unaffected. L3 finding: the
+    // L2 real-set control leg carries exactly those three vars without
+    // this filter.
+    let filtered_options = {
+        let build_env: Vec<(String, String)> = options
+            .build_env
+            .iter()
+            .filter(|(k, _)| ebuild_phases::environ_whitelisted(k))
+            .cloned()
+            .collect();
+        if build_env.len() == options.build_env.len() {
+            None
+        } else {
+            let mut filtered = options.clone();
+            filtered.build_env = build_env;
+            Some(filtered)
+        }
+    };
+    let options = filtered_options.as_ref().unwrap_or(options);
+
     // Peek the embedded metadata first -- real portage knows the cpv
     // (and so `${PORTAGE_BUILDDIR}`) before it extracts anything. This
     // lets the image land straight in `${PORTAGE_BUILDDIR}/image`, the
@@ -3507,13 +3539,23 @@ pub fn merge_binpkg(
     // `always`: run the phase even when the ebuild does not define it --
     // real portage's `postinst` `EbuildPhase` always starts (`pkg_postinst`
     // defined or not) so its post-hook `PORTAGE_UPDATE_ENV` block can run.
+    //
+    // Real `_emerge/BinpkgEnvExtractor` extracts `${T}/environment` once
+    // per package; every hook then evolves that one file. Seed on the
+    // first hook that actually runs, `false` afterwards -- a per-hook
+    // re-seed would wipe `pkg_setup`'s own variable mutations before
+    // `pkg_preinst`/`pkg_postinst` (and the vdb env regeneration) see
+    // them (#30 finding `l3-binpkg-hook-env-reseed`).
+    let seeded = std::cell::Cell::new(false);
     let run_hook_ex =
         |phase: &str, always: bool, update_env: Option<&Path>| -> Result<i32, String> {
             match &extracted_ebuild {
                 Some(ebuild) if always || phase_defined(phase) => {
+                    let seed = !seeded.replace(true);
                     crate::ebuild_phases::run_phase_from_saved_env(
                         ebuild,
                         &saved_env,
+                        seed,
                         phase,
                         root,
                         portage_tmpdir,
@@ -3559,9 +3601,16 @@ pub fn merge_binpkg(
     // (see `ebuild_phases::run_instprep`). A binpkg without a saved env
     // gets no phase at all -- the same documented degrade as the hooks.
     if let Some(ebuild) = &extracted_ebuild {
+        // `seeded` is false when no hook before this ran (a binpkg that
+        // defines neither `pkg_pretend` nor `pkg_setup`): seed here so
+        // `__dyn_instprep` still runs from the archive's env; otherwise
+        // reuse the env `pkg_setup` evolved (see `run_instprep`'s own
+        // `seed` doc comment).
+        let seed_instprep = !seeded.replace(true);
         let instprep_status = ebuild_phases::run_instprep(
             ebuild,
             Some(&saved_env),
+            seed_instprep,
             root,
             portage_tmpdir,
             &options.build_env,
@@ -6189,6 +6238,14 @@ mod tests {
             entry.needed.iter().any(|n| n.starts_with("libc.so")),
             "{:?}",
             entry.needed
+        );
+        // #39: the install-phase `_post_src_install_soname_symlinks`
+        // rewrite adds real's 6th multilib-category field, so the vdb
+        // copy carries six `;`-separated fields.
+        assert_eq!(entry.multilib_category.as_deref(), Some("x86_64"));
+        assert!(
+            needed.lines().all(|l| l.split(';').count() >= 6),
+            "every rewritten line must carry the category field: {needed}"
         );
 
         // `crate::needed_elf::read_all_needed_entries` end to end: the

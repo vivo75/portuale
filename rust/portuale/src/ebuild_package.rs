@@ -669,6 +669,22 @@ pub(crate) fn package_after_install(
         })
         .unwrap_or_default();
     let get = |key: &str| metadata.get(key).map(String::as_str).unwrap_or("");
+    // Real `_pkgindex_entry` reads `cpv._metadata`, i.e. the *archive's
+    // own* metadata -- which for everything the install-phase passes
+    // rewrote (`RDEPEND` with its libc injection, `PROVIDES`/
+    // `REQUIRES` from the ELF scan, `IUSE`/`IUSE_EFFECTIVE`, `SIZE`) is
+    // `build-info`, not the raw `md5-cache`. Read `build-info` first and
+    // fall back to `md5-cache` for the keys the phase runtime does not
+    // record itself.
+    let build_info = env.build_info();
+    let build_info_value = |key: &str| -> Option<String> {
+        std::fs::read_to_string(build_info.join(key))
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    let get_bi =
+        |key: &str| -> String { build_info_value(key).unwrap_or_else(|| get(key).to_string()) };
     let build_time_str = build_time.to_string();
     // Real `_pkgindex_entry` (`bintree.py:2311`) always writes `PATH`,
     // regardless of format -- not gpkg-only. Needed for correctness (a
@@ -706,32 +722,64 @@ pub(crate) fn package_after_install(
         .map(|st| binpkg::file_mtime(&st).to_string())
         .unwrap_or_default();
     let (md5_str, sha1_str) = binpkg_checksums(&binpkg_path).unwrap_or_default();
+
+    // Real `_pkgindex_entry` + `PackageIndex.write` (`bintree.py:2289-
+    // 2312`, `getbinpkg.py:155-175`): the stanza fields are the archive
+    // metadata's own values, written in real's `keys.sort()` order --
+    // which puts the *internal* names `_mtime_`/`repository` after every
+    // uppercase key, so the translated `MTIME`/`REPO` land last -- with
+    // values equal to real's `_pkgindex_default_pkg_data` omitted
+    // (`SLOT: 0`, `EAPI: 0`) and empty values skipped. `PROVIDES`/
+    // `REQUIRES`/`DEFINED_PHASES`/`SIZE`/`IUSE`/`IUSE_EFFECTIVE` and the
+    // rewritten `*DEPEND` values all now live in `build-info` (#39), so
+    // read them from there, falling back to `md5-cache` for the rest.
+    let defined_phases = get_bi("DEFINED_PHASES");
+    let eapi = get_bi("EAPI");
+    let eapi = if eapi == "0" { String::new() } else { eapi };
+    let slot = get_bi("SLOT");
+    let slot = if slot == "0" { String::new() } else { slot };
+    let iuse = get_bi("IUSE");
+    let keywords = get_bi("KEYWORDS");
+    let license = get_bi("LICENSE");
+    let properties = get_bi("PROPERTIES");
+    let restrict = get_bi("RESTRICT");
+    let depend = get_bi("DEPEND");
+    let rdepend = get_bi("RDEPEND");
+    let bdepend = get_bi("BDEPEND");
+    let pdepend = get_bi("PDEPEND");
+    let idepend = get_bi("IDEPEND");
+    let provides = get_bi("PROVIDES");
+    let requires = get_bi("REQUIRES");
+    let repository = build_info_value("repository").unwrap_or_default();
     write_packages_index_entry(
         &options.pkgdir,
         &cpv,
         &[
-            ("CPV", &cpv),
-            ("PF", &env.split.pf),
-            ("CATEGORY", &env.category),
-            ("SLOT", get("SLOT")),
-            ("KEYWORDS", get("KEYWORDS")),
-            ("USE", use_flags),
-            ("LICENSE", get("LICENSE")),
-            ("IUSE", get("IUSE")),
-            ("PROPERTIES", get("PROPERTIES")),
-            ("RESTRICT", get("RESTRICT")),
-            ("DEPEND", get("DEPEND")),
-            ("RDEPEND", get("RDEPEND")),
-            ("BDEPEND", get("BDEPEND")),
-            ("PDEPEND", get("PDEPEND")),
-            ("IDEPEND", get("IDEPEND")),
-            ("PATH", &path_field),
-            ("BUILD_TIME", &build_time_str),
-            ("SIZE", &size_str),
-            ("_mtime_", &mtime_str),
+            ("BDEPEND", &bdepend),
             ("BUILD_ID", &build_id_str),
+            ("BUILD_TIME", &build_time_str),
+            ("CPV", &cpv),
+            ("DEFINED_PHASES", &defined_phases),
+            ("DEPEND", &depend),
+            ("EAPI", &eapi),
+            ("IDEPEND", &idepend),
+            ("IUSE", &iuse),
+            ("KEYWORDS", &keywords),
+            ("LICENSE", &license),
             ("MD5", &md5_str),
+            ("PATH", &path_field),
+            ("PDEPEND", &pdepend),
+            ("PROPERTIES", &properties),
+            ("PROVIDES", &provides),
+            ("RDEPEND", &rdepend),
+            ("REQUIRES", &requires),
+            ("RESTRICT", &restrict),
             ("SHA1", &sha1_str),
+            ("SIZE", &size_str),
+            ("SLOT", &slot),
+            ("USE", use_flags),
+            ("MTIME", &mtime_str),
+            ("REPO", &repository),
         ],
     )?;
 

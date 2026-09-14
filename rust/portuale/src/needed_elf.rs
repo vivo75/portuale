@@ -136,6 +136,336 @@ impl NeededEntry {
     }
 }
 
+/// Real `ELFHeader.read` + `compute_multilib_category`
+/// (`portage/util/_dyn_libs/NeededEntry.py`, `portage/dep/soname/
+/// multilib_category.py`): read one ELF header's own `EI_CLASS`,
+/// `e_machine` and `e_flags` and classify it into the real multilib
+/// category (`x86_64`, `x86_32`, `x86_x32`, `arm_64`, ...), or `None`
+/// for a non-ELF/unreadable file or an unrecognized machine/class
+/// combination (real's own `None` return, which makes the entry an
+/// "unrecognized ELF file" and keeps its 6th `NEEDED.ELF.2` field
+/// empty). Used by `ebuild_phases::write_post_install_soname_deps` to
+/// add the trailing field real's `_post_src_install_soname_symlinks`
+/// writes back.
+pub fn compute_multilib_category(path: &Path) -> Option<String> {
+    const ELFCLASS32: u8 = 1;
+    const ELFCLASS64: u8 = 2;
+    fn u16_at(data: &[u8], off: usize, le: bool) -> Option<u16> {
+        let b = data.get(off..off + 2)?;
+        Some(if le {
+            u16::from_le_bytes([b[0], b[1]])
+        } else {
+            u16::from_be_bytes([b[0], b[1]])
+        })
+    }
+    fn u32_at(data: &[u8], off: usize, le: bool) -> Option<u32> {
+        let b = data.get(off..off + 4)?;
+        Some(if le {
+            u32::from_le_bytes([b[0], b[1], b[2], b[3]])
+        } else {
+            u32::from_be_bytes([b[0], b[1], b[2], b[3]])
+        })
+    }
+
+    let data = std::fs::read(path).ok()?;
+    if data.len() < 20 || &data[0..4] != b"\x7fELF" {
+        return None;
+    }
+    let ei_class = data[4];
+    let le = match data[5] {
+        1 => true,
+        2 => false,
+        _ => return None,
+    };
+    let e_machine = u16_at(&data, 18, le)?;
+    let flags_off = if ei_class == ELFCLASS64 { 48 } else { 36 };
+    let e_flags = u32_at(&data, flags_off, le)?;
+
+    // Real constants (portage/util/elf/constants.py).
+    const EM_SPARC: u16 = 2;
+    const EM_386: u16 = 3;
+    const EM_68K: u16 = 4;
+    const EM_MIPS: u16 = 8;
+    const EM_PARISC: u16 = 15;
+    const EM_SPARC32PLUS: u16 = 18;
+    const EM_PPC: u16 = 20;
+    const EM_PPC64: u16 = 21;
+    const EM_S390: u16 = 22;
+    const EM_ARM: u16 = 40;
+    const EM_SH: u16 = 42;
+    const EM_SPARCV9: u16 = 43;
+    const EM_ARC: u16 = 45;
+    const EM_IA_64: u16 = 50;
+    const EM_X86_64: u16 = 62;
+    const EM_ARC_COMPACT: u16 = 93;
+    const EM_ALTERA_NIOS2: u16 = 113;
+    const EM_MCST_ELBRUS: u16 = 175;
+    const EM_AARCH64: u16 = 183;
+    const EM_ARC_COMPACT2: u16 = 195;
+    const EM_AMDGPU: u16 = 224;
+    const EM_RISCV: u16 = 243;
+    const EM_BPF: u16 = 247;
+    const EM_ARC_COMPACT3_64: u16 = 253;
+    const EM_ARC_COMPACT3: u16 = 255;
+    const EM_LOONGARCH: u16 = 258;
+    const EM_ALPHA: u16 = 0x9026;
+    const EF_MIPS_ABI: u32 = 0x0000_F000;
+    const EF_MIPS_ABI2: u32 = 0x0000_0020;
+    const E_MIPS_ABI_O32: u32 = 0x0000_1000;
+    const E_MIPS_ABI_O64: u32 = 0x0000_2000;
+    const E_MIPS_ABI_EABI32: u32 = 0x0000_3000;
+    const E_MIPS_ABI_EABI64: u32 = 0x0000_4000;
+    const EF_RISCV_RVC: u32 = 0x0001;
+    const EF_RISCV_FLOAT_ABI_DOUBLE: u32 = 0x0004;
+    const EF_LOONGARCH_ABI_MASK: u32 = 0x07;
+
+    let prefix = match e_machine {
+        EM_386 => "x86",
+        EM_68K => "m68k",
+        EM_AARCH64 => "arm",
+        EM_ALPHA => "alpha",
+        EM_AMDGPU => "amdgpu",
+        EM_ALTERA_NIOS2 => "nios2",
+        EM_ARC | EM_ARC_COMPACT | EM_ARC_COMPACT2 | EM_ARC_COMPACT3 | EM_ARC_COMPACT3_64 => "arc",
+        EM_ARM => "arm",
+        EM_BPF => "bpf",
+        EM_IA_64 => "ia64",
+        EM_LOONGARCH => "loong",
+        EM_MCST_ELBRUS => "e2k",
+        EM_MIPS => "mips",
+        EM_PARISC => "hppa",
+        EM_PPC | EM_PPC64 => "ppc",
+        EM_RISCV => "riscv",
+        EM_S390 => "s390",
+        EM_SH => "sh",
+        EM_SPARC | EM_SPARC32PLUS | EM_SPARCV9 => "sparc",
+        EM_X86_64 => "x86",
+        _ => return None,
+    };
+
+    let suffix = match prefix {
+        "loong" => match e_flags & EF_LOONGARCH_ABI_MASK {
+            0b001 => "lp64s".to_string(),
+            0b010 => "lp64f".to_string(),
+            0b011 => "lp64d".to_string(),
+            0b101 => "ilp32s".to_string(),
+            0b110 => "ilp32f".to_string(),
+            0b111 => "ilp32d".to_string(),
+            _ => return None,
+        },
+        "mips" => {
+            let abi = e_flags & EF_MIPS_ABI;
+            if abi != 0 {
+                match abi {
+                    E_MIPS_ABI_EABI32 => "eabi32",
+                    E_MIPS_ABI_EABI64 => "eabi64",
+                    E_MIPS_ABI_O32 => "o32",
+                    E_MIPS_ABI_O64 => "o64",
+                    _ => return None,
+                }
+                .to_string()
+            } else if e_flags & EF_MIPS_ABI2 != 0 {
+                "n32".to_string()
+            } else if ei_class == ELFCLASS64 {
+                "n64".to_string()
+            } else {
+                return None;
+            }
+        }
+        "riscv" => match (ei_class, e_flags) {
+            (ELFCLASS64, EF_RISCV_RVC) => "lp64".to_string(),
+            (ELFCLASS64, f) if f == EF_RISCV_RVC | EF_RISCV_FLOAT_ABI_DOUBLE => "lp64d".to_string(),
+            (ELFCLASS32, EF_RISCV_RVC) => "ilp32".to_string(),
+            (ELFCLASS32, f) if f == EF_RISCV_RVC | EF_RISCV_FLOAT_ABI_DOUBLE => {
+                "ilp32d".to_string()
+            }
+            _ => return None,
+        },
+        _ => match ei_class {
+            ELFCLASS64 => "64".to_string(),
+            ELFCLASS32 if e_machine == EM_X86_64 => "x32".to_string(),
+            ELFCLASS32 => "32".to_string(),
+            _ => return None,
+        },
+    };
+    Some(format!("{prefix}_{suffix}"))
+}
+
+/// One `fnmatch`-style exclusion pattern list (real
+/// `SonameDepsProcessor._exclude_pattern`: `shlex.split` the
+/// `PROVIDES_EXCLUDE`/`REQUIRES_EXCLUDE` value, `lstrip("/")` each
+/// pattern, match any of them). The `shlex` part is a minimal
+/// whitespace/quote split -- real's own excludes are bare path globs.
+fn exclude_patterns(value: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    for c in value.chars() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => current.push(c),
+            None if c == '\'' || c == '"' => quote = Some(c),
+            None if c.is_whitespace() => {
+                if !current.is_empty() {
+                    out.push(std::mem::take(&mut current));
+                }
+            }
+            None => current.push(c),
+        }
+    }
+    if !current.is_empty() {
+        out.push(current);
+    }
+    out.into_iter()
+        .map(|p| p.trim_start_matches('/').to_string())
+        .collect()
+}
+
+/// Real `SonameDepsProcessor` (`portage/util/_dyn_libs/soname_deps.py`):
+/// turn one package's `NEEDED.ELF.2` entries into the `PROVIDES` and
+/// `REQUIRES` strings real writes into `build-info` (and therefore into
+/// the archive's `metadata/PROVIDES`/`metadata/REQUIRES`, #39).
+/// `(provides, requires)`, each `None` when the corresponding map is
+/// empty -- real writes no file at all in that case. Entries without a
+/// recognized `multilib_category` are the caller's own "unrecognized
+/// ELF" case and must be filtered before calling this (real
+/// `SonameDepsProcessor.add` asserts on a missing category).
+pub fn generate_soname_deps(
+    entries: &[NeededEntry],
+    provides_exclude: &str,
+    requires_exclude: &str,
+) -> (Option<String>, Option<String>) {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let provides_exclude = exclude_patterns(provides_exclude);
+    let requires_exclude = exclude_patterns(requires_exclude);
+    let excluded = |patterns: &[String], name: &str| {
+        patterns
+            .iter()
+            .any(|p| crate::install_mask::fnmatch(name, p))
+    };
+
+    let mut basename_map: BTreeMap<String, Vec<&NeededEntry>> = BTreeMap::new();
+    // cat -> soname -> set of expanded runpath sets.
+    let mut requires_map: BTreeMap<String, BTreeMap<String, BTreeSet<Vec<String>>>> =
+        BTreeMap::new();
+    let mut provides_unfiltered: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut provides_map: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+
+    for entry in entries {
+        let Some(cat) = entry.multilib_category.as_deref() else {
+            continue;
+        };
+        let basename = basename(&entry.filename).to_string();
+        basename_map.entry(basename).or_default().push(entry);
+
+        if !entry.needed.is_empty()
+            && !excluded(&requires_exclude, entry.filename.trim_start_matches('/'))
+        {
+            let origin = dirname(&entry.filename);
+            let runpaths: Vec<String> = entry
+                .runpaths
+                .iter()
+                .map(|r| normalize_path(&expand_origin(r, &origin)))
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            for needed in &entry.needed {
+                if !excluded(&requires_exclude, needed) {
+                    requires_map
+                        .entry(cat.to_string())
+                        .or_default()
+                        .entry(needed.clone())
+                        .or_default()
+                        .insert(runpaths.clone());
+                }
+            }
+        }
+
+        if entry.soname.is_empty() {
+            continue;
+        }
+        provides_unfiltered
+            .entry(cat.to_string())
+            .or_default()
+            .insert(entry.soname.clone());
+        if !excluded(&provides_exclude, entry.filename.trim_start_matches('/'))
+            && !excluded(&provides_exclude, &entry.soname)
+        {
+            provides_map
+                .entry(cat.to_string())
+                .or_default()
+                .insert(entry.soname.clone());
+        }
+    }
+
+    // Real `_intersect`: a provided soname is never a requirement;
+    // an internal library without an soname is resolved through a
+    // matching DT_RUNPATH entry.
+    let cats: BTreeSet<String> = requires_map
+        .keys()
+        .chain(provides_map.keys())
+        .cloned()
+        .collect();
+    let mut drop_requires: Vec<(String, String)> = Vec::new();
+    for cat in &cats {
+        let Some(reqs) = requires_map.get_mut(cat) else {
+            continue;
+        };
+        for (soname, consumers) in reqs.iter_mut() {
+            if provides_unfiltered
+                .get(cat)
+                .is_some_and(|p| p.contains(soname))
+            {
+                drop_requires.push((cat.clone(), soname.clone()));
+                continue;
+            }
+            if let Some(basename_entries) = basename_map.get(soname) {
+                let mut resolved = false;
+                for entry in basename_entries {
+                    if entry.multilib_category.as_deref() != Some(cat.as_str()) {
+                        continue;
+                    }
+                    let obj_dir = dirname(&entry.filename);
+                    consumers.retain(|runpaths| !runpaths.contains(&obj_dir));
+                    if consumers.is_empty() {
+                        resolved = true;
+                        break;
+                    }
+                }
+                if resolved {
+                    drop_requires.push((cat.clone(), soname.clone()));
+                }
+            }
+        }
+        for (cat, soname) in drop_requires.drain(..) {
+            if let Some(reqs) = requires_map.get_mut(&cat) {
+                reqs.remove(&soname);
+            }
+        }
+    }
+
+    let format = |map: &BTreeMap<String, BTreeSet<String>>| -> Option<String> {
+        let mut parts: Vec<String> = Vec::new();
+        for (cat, sonames) in map {
+            if sonames.is_empty() {
+                continue;
+            }
+            parts.push(format!("{cat}:"));
+            parts.extend(sonames.iter().cloned());
+        }
+        (!parts.is_empty()).then(|| format!("{}\n", parts.join(" ")))
+    };
+    let requires = format(
+        &requires_map
+            .iter()
+            .map(|(cat, reqs)| (cat.clone(), reqs.keys().cloned().collect()))
+            .collect(),
+    );
+    let provides = format(&provides_map);
+    (provides, requires)
+}
+
 /// Real `LinkageMap.rebuild()`'s own initial data-gathering loop
 /// (`LinkageMapELF.py:218-231`): for every real installed package (real
 /// `dbapi.cpv_all()`, walked here the same way `ebuild_merge::
@@ -1534,5 +1864,78 @@ mod tests {
         let preserved =
             find_libs_to_preserve(&root, &map, &defpath, &old_contents, &old_owner, &new_owner);
         assert!(preserved.is_empty());
+    }
+
+    /// #39: real `compute_multilib_category` (`multilib_category.py`) on
+    /// hand-built ELF headers -- one per branch of the machine/class
+    /// mapping (class suffix, x32's `EM_X86_64`+`ELFCLASS32`, the
+    /// specialized riscv/mips/loong flag logic).
+    #[test]
+    fn compute_multilib_category_classifies_real_elf_headers() {
+        fn header(class: u8, machine: u16, flags: u32) -> Vec<u8> {
+            let mut data = vec![0u8; 64];
+            data[0..4].copy_from_slice(b"\x7fELF");
+            data[4] = class;
+            data[5] = 1; // little-endian
+            data[6] = 1; // EV_CURRENT
+            data[18..20].copy_from_slice(&machine.to_le_bytes());
+            let off = if class == 2 { 48 } else { 36 };
+            data[off..off + 4].copy_from_slice(&flags.to_le_bytes());
+            data
+        }
+        let dir = tempdir();
+        let write = |name: &str, bytes: &[u8]| {
+            let p = dir.join(name);
+            std::fs::write(&p, bytes).unwrap();
+            p
+        };
+        let cat = |class, machine, flags| {
+            compute_multilib_category(&write(
+                &format!("{class}-{machine}-{flags}.elf"),
+                &header(class, machine, flags),
+            ))
+        };
+        assert_eq!(cat(2, 62, 0).as_deref(), Some("x86_64"));
+        assert_eq!(cat(1, 3, 0).as_deref(), Some("x86_32"));
+        assert_eq!(cat(1, 62, 0).as_deref(), Some("x86_x32"));
+        assert_eq!(cat(2, 183, 0).as_deref(), Some("arm_64"));
+        assert_eq!(cat(1, 40, 0).as_deref(), Some("arm_32"));
+        assert_eq!(cat(2, 243, 0x0005).as_deref(), Some("riscv_lp64d"));
+        assert_eq!(cat(2, 243, 0x0001).as_deref(), Some("riscv_lp64"));
+        assert_eq!(cat(2, 8, 0).as_deref(), Some("mips_n64"));
+        assert_eq!(cat(1, 8, 0x0000_2000).as_deref(), Some("mips_o64"));
+        assert_eq!(cat(2, 258, 0b011).as_deref(), Some("loong_lp64d"));
+        // A non-ELF file and an unknown machine both yield real's `None`.
+        assert_eq!(compute_multilib_category(&write("not-elf", b"hello")), None);
+        assert_eq!(cat(2, 0xffff, 0), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #39: real `SonameDepsProcessor` output -- provides become
+    /// `PROVIDES`, needed sonames become `REQUIRES` unless the package
+    /// itself provides them, and the exclude patterns filter both.
+    #[test]
+    fn generate_soname_deps_matches_the_real_soname_deps_processor() {
+        let entries = vec![
+            NeededEntry::parse("X86_64;/usr/bin/x;;;libc.so.6;x86_64").unwrap(),
+            NeededEntry::parse("X86_64;/usr/lib64/libfoo.so.1;libfoo.so.1;;;x86_64").unwrap(),
+            // Consumes the soname it also provides: must not land in
+            // REQUIRES (real `_intersect`).
+            NeededEntry::parse("X86_64;/usr/lib64/libfoo.so.1;libfoo.so.1;;libfoo.so.1;x86_64")
+                .unwrap(),
+        ];
+        let (provides, requires) = generate_soname_deps(&entries, "", "");
+        assert_eq!(provides.as_deref(), Some("x86_64: libfoo.so.1\n"));
+        assert_eq!(requires.as_deref(), Some("x86_64: libc.so.6\n"));
+
+        // Real `PROVIDES_EXCLUDE`/`REQUIRES_EXCLUDE` globs.
+        let (provides, requires) = generate_soname_deps(&entries, "libfoo.so*", "libc.so*");
+        assert_eq!(provides, None);
+        assert_eq!(requires, None);
+
+        // An entry with no multilib category is the caller's own
+        // "unrecognized ELF" case and contributes nothing.
+        let no_cat = vec![NeededEntry::parse("X86_64;/usr/bin/x;;;libc.so.6;").unwrap()];
+        assert_eq!(generate_soname_deps(&no_cat, "", ""), (None, None));
     }
 }

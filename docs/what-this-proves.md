@@ -16436,3 +16436,39 @@ the discriminator end-to-end: a `FEATURES=noclean` merge keeps
 `emerge` must rebuild and land the real file (a marker-skipped install
 would merge the stale image instead) and post-clean the builddir.
 Evidence: `TEST/findings/l2.md` "#42".
+
+### gpkg metadata completeness: real's install-phase metadata passes, byte-for-byte (backlog #39/#40, 2026-09-13)
+
+Portuale's archives now carry the whole metadata set real's
+`_post_src_install_write_metadata` / `_post_src_install_uid_fix` /
+`_post_src_install_soname_symlinks` chain produces, in real's own
+order (metadata and `SIZE` **before** `install_qa_check`'s transforms;
+`PROVIDES`/`REQUIRES` and the 6-field `NEEDED.ELF.2` after): `IUSE`
+(always, empty included), the profile-computed `IUSE_EFFECTIVE`, the
+inode-deduped `${D}`-walk `SIZE`, dependency atoms reduced with their
+own use-deps evaluated (`Atom.evaluate_conditionals`, so a disabled
+`[flag?]` is dropped) and `:=` bound, the implicit `>=<libc>` injected
+into `RDEPEND`, `PROVIDES`/`REQUIRES` from a `SonameDepsProcessor`
+port, the trailing multilib-category field on every `NEEDED.ELF.2`
+line, and a `Packages` stanza in real's sorted/translated field set
+(`EAPI`, `DEFINED_PHASES`, `REPO`, `MTIME`, ...). That last field also
+closed the consumer-side gap (#40): real Portage no longer defaults a
+portuale archive's `EAPI` to `0`, so its merge-time phases stop
+exporting the EAPI≤6 `DESTTREE`/`INSDESTTREE`/`PORTDIR`/`ECLASSDIR`
+into the merged vdb env and `pkg_pretend` runs. Runnable,
+live-verified:
+
+```sh
+L2_REBUILD=1 TEST/run/l2-portuale-builder.sh TEST/atomlists/l1-porttest.txt   # rc 0
+A=TEST/logs/_l2-pkgcache-portuale/porttest/splitdebug/splitdebug-1.0-1.gpkg.tar
+T=$(tar -tf "$A" | grep metadata.tar)
+tar -xOf "$A" "$T" | zstd -dc | tar -xOf - metadata/NEEDED.ELF.2 metadata/PROVIDES
+awk 'BEGIN{RS="";FS="\\n"} /CPV: porttest\\/splitdebug-1.0/' \
+  TEST/logs/_l2-pkgcache-portuale/Packages | grep -E 'EAPI|REPO'
+```
+
+Live (`TEST/logs/l2-20260913T232955Z`): every archive pair is
+`gpkg-diff: mode=strict hard=0 soft=0`, structure findings are 0/0, and
+the cross-install diff is 0 hard / 0 unexplained — with all
+`l2-gpkg-*` allowlist entries deleted first. Evidence:
+`TEST/findings/l2.md` "#39 / #40".

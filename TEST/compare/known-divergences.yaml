@@ -58,42 +58,6 @@
 # they exist only so the L2 bed can gate everything else while the gap
 # is open.
 
-- id: l2-gpkg-metadata-members
-  layer: l2
-  categories: [VDB]
-  path_glob:
-    - "porttest/*/IUSE"
-    - "porttest/*/IUSE_EFFECTIVE"
-    - "porttest/*/REPO_REVISIONS"
-    - "porttest/*/SIZE"
-    - "porttest/*/repository"
-    - "porttest/*/RDEPEND"
-    - "porttest/*/REQUIRES"
-    - "porttest/*/PROVIDES"
-    - "porttest/*/NEEDED"
-    - "porttest/*/NEEDED.ELF.2"
-    - "porttest/*/metadata"
-  reason: >
-    portuale's gpkg `metadata/` member set is incomplete vs real (SIZE,
-    IUSE, IUSE_EFFECTIVE, repository, REPO_REVISIONS, and the
-    ebuild-derived *DEPEND / scanelf NEEDED* keys); the merged VDB then
-    lacks them. Filed as l2-gpkg-metadata-members.
-  owner: portuale-bug
-
-- id: l2-pkgindex-eapi-missing
-  layer: l2
-  category: VDB
-  path_glob: "porttest/*/environment"
-  reason: >
-    portuale's Packages index stanza carries no EAPI/DEFINED_PHASES (real
-    `bintree._pkgindex_aux_keys`). Under pkgdir-index-trusted real Portage
-    takes the binpkg's EAPI from the index, defaults it to "0"
-    (`bintree.py:615`), and the merge-time phases then export the EAPI<=6
-    DESTTREE/INSDESTTREE/PORTDIR/ECLASSDIR into the saved vdb environment.
-    The producer's own environment.bz2 matches real exactly (archive diff,
-    no allowlist). #39 scope; filed as l2-pkgindex-eapi-missing.
-  owner: portuale-bug
-
 - id: l2-gpkg-dostrip-splitdebug
   layer: l2
   category: SYMLINK
@@ -118,16 +82,3 @@
   reason: "VDB CONTENTS sym-target residue of the same ungradable build-id link race."
   owner: portuale-bug
 
-
-
-
-- id: l2-consumes-portuale-env-degraded
-  layer: l2
-  categories: [SIZE, CONTENT]
-  path_glob: "/var/lib/porttest/phase.log"
-  reason: >
-    Real Portage merging a portuale-built archive runs merge phases with
-    a degraded saved env (no MERGE_TYPE, pkg_pretend skipped), so the
-    phases fixture's log is shorter. Filed as
-    l2-consumes-portuale-env-degraded.
-  owner: portuale-bug

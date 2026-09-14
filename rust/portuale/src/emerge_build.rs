@@ -1932,6 +1932,18 @@ mod tests {
             "missing real XPAK magic bytes"
         );
 
+        // #39: `packagepkg` installs a real file, so the
+        // `_post_src_install_uid_fix` size walk must record a positive
+        // `SIZE` in the archive's metadata.
+        let meta = crate::binpkg::read_xpak_metadata(&tbz2).expect("xpak metadata parses");
+        assert!(
+            meta.get("SIZE")
+                .and_then(|s| s.trim().parse::<u64>().ok())
+                .is_some_and(|n| n > 0),
+            "SIZE must be positive for a package with a real file, got {:?}",
+            meta.get("SIZE")
+        );
+
         let packages = fs::read_to_string(pkgdir.join("Packages")).unwrap();
         assert!(packages.contains("CPV: dev-libs/packagepkg-1.0"));
     }
@@ -2210,6 +2222,25 @@ mod tests {
         );
         assert_eq!(meta.get("FEATURES").map(String::as_str), Some("sandbox"));
         assert_eq!(meta.get("SLOT").map(String::as_str), Some("0"));
+        // #39: real `_post_src_install_write_metadata` always writes
+        // `IUSE` (empty for a no-IUSE ebuild), the profile-computed
+        // `IUSE_EFFECTIVE`, and `_post_src_install_uid_fix`'s own
+        // `${D}`-walk `SIZE`.
+        assert_eq!(meta.get("IUSE").map(String::as_str), Some(""));
+        assert_eq!(
+            meta.get("IUSE_EFFECTIVE").map(String::as_str),
+            Some("abi_x86_64 amd64 elibc_glibc kernel_linux")
+        );
+        // `phaseenvpkg` installs only a `keepdir` (the `.keep_*` marker
+        // lands at merge time), so its image holds no regular file and
+        // real's own walk writes `0` -- the member must be *present*.
+        assert!(
+            meta.get("SIZE")
+                .and_then(|s| s.parse::<u64>().ok())
+                .is_some(),
+            "SIZE must be the real installed-size walk, got {:?}",
+            meta.get("SIZE")
+        );
 
         let packages = fs::read_to_string(pkgdir.join("Packages")).unwrap();
         assert!(

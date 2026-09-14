@@ -54,11 +54,10 @@ KNOWN_HITS=0
 
 # finding lines that are a filed portuale producer gap, not a regression
 # (ids match TEST/findings/l2.md; delete an entry when its gap is fixed).
+# The `l2-gpkg-metadata-members`/`l2-pkgindex-eapi-missing` rows are gone
+# (#39, 2026-09-13): the archive metadata and `Packages` stanza now match
+# real, archive diffs are `hard=0 soft=0`, and the merged VDB is clean.
 KNOWN_FINDINGS=(
-  "l2-gpkg-metadata-members|missing metadata/(SIZE|IUSE|IUSE_EFFECTIVE|repository|REPO_REVISIONS)$"
-  "l2-gpkg-metadata-members|missing in b: metadata/(SIZE|IUSE|IUSE_EFFECTIVE|repository|REPO_REVISIONS|RDEPEND|REQUIRES|PROVIDES|NEEDED|NEEDED\.ELF\.2)$"
-  "l2-gpkg-metadata-members|metadata/NEEDED(\.ELF\.2)? differs:"
-  "l2-gpkg-metadata-members|Packages stanza has no REPO field$"
   # `porttest/setuid`'s three byte-identical binaries share one build-id;
   # which name the shared `.build-id/e0/2277…` links target depends on
   # `estrip`'s `___parallel` traversal order. Real disagrees with itself

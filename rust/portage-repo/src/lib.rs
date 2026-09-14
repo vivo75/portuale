@@ -5611,7 +5611,11 @@ fn flat_dep_atoms(depstr: &str, use_flags: &HashSet<String>) -> Option<HashSet<S
 /// `strip_libc_deps`'s whole purpose: practically every ebuild silently
 /// gains/loses an implicit libc dependency across revisions, and that's
 /// noise, not a real dependency change worth reporting.
-fn libc_provider_cps(root: &Path) -> HashSet<(String, String)> {
+///
+/// `pub`: also the first half of real `_inject_libc_dep` (`doebuild.py:
+/// 3026-3067`, backlog #39), which needs the realized provider versions
+/// on top -- see `ebuild_phases::inject_libc_dep`.
+pub fn libc_provider_cps(root: &Path) -> HashSet<(String, String)> {
     let mut result = HashSet::new();
     for version in installed_versions(root, "virtual", "libc") {
         let use_flags = read_vdb_flag_set(root, "virtual", "libc", &version, "USE");

@@ -1231,8 +1231,14 @@ fn build_phase_use(build_env: &[(String, String)]) -> std::collections::HashSet<
 fn write_post_install_metadata(
     env: &Environment,
     root: &Path,
-    use_flags: &std::collections::HashSet<String>,
+    build_env: &[(String, String)],
 ) -> Result<(), String> {
+    let use_flags = build_phase_use(build_env);
+    let iuse_effective = build_env
+        .iter()
+        .find(|(k, _)| k == "IUSE_EFFECTIVE")
+        .map(|(_, v)| v.trim())
+        .unwrap_or("");
     let Some(repo_root) = repo_root_for(&env.pkg_dir) else {
         return Ok(());
     };
@@ -1267,17 +1273,32 @@ fn write_post_install_metadata(
         let tokens: Vec<String> = raw.split_whitespace().map(String::from).collect();
         let reduced = portage_use_reduce::use_reduce_structured(
             &tokens,
-            use_flags,
+            &use_flags,
             portage_use_reduce::MatchMode::Normal,
         )
         .map_err(|e| format!("{}: build-info/{key}: {e}", env.pkg_dir.display()))?;
-        // Real `_post_src_install_write_metadata`: the `*DEPEND` keys go
-        // through `evaluate_slot_operator_equal_deps` -- bind every `:=`
-        // atom to the installed dependency's `<slot>/<sub-slot>=`.
+        // Real `_post_src_install_write_metadata` with `token_class=Atom`
+        // (`doebuild.py:2749`): every dependency-atom token's own USE
+        // deps are evaluated against this package's effective USE before
+        // the result is stored -- `Atom.evaluate_conditionals`,
+        // `lib/portage/dep/__init__.py:1387`; an unknown/disabled
+        // `flag?` use-dep is *dropped* (bug #386829's canonicalisation),
+        // while a `flag?` group conditional was already handled by
+        // `use_reduce_structured` above. `evaluate_atom_conditionals` is
+        // the port; a token that isn't an atom (a `||` marker, a bare
+        // paren) passes through unchanged.
+        //
+        // Then the `*DEPEND` keys go through real
+        // `evaluate_slot_operator_equal_deps`: bind every `:=` atom to
+        // the installed dependency's `<slot>/<sub-slot>=`.
         let value = if key.ends_with("DEPEND") {
             reduced
                 .into_iter()
-                .map(|tok| bind_slot_operator(&tok, root))
+                .map(|tok| {
+                    let tok =
+                        portage_dep::evaluate_atom_conditionals(&tok, &use_flags).unwrap_or(tok);
+                    bind_slot_operator(&tok, root)
+                })
                 .collect::<Vec<_>>()
                 .join(" ")
         } else {
@@ -1290,26 +1311,210 @@ fn write_post_install_metadata(
             .map_err(|e| format!("{}: {e}", build_info.join(key).display()))?;
     }
 
-    // real: `settings.configdict["pkg"]["IUSE"]` written verbatim ("in
-    // case it's corrupted due to local environment settings", bug
-    // #386829) -- `bin/phase-functions.sh` already wrote it, but only
-    // when non-empty; re-assert from md5-cache so it is always present
-    // and canonical. `IUSE_EFFECTIVE` is the profile's own EAPI 5+
-    // `_calc_iuse_effective` result -- portuale computes it as
-    // `Config::iuse_effective`, not reachable from here without threading
-    // a resolved `Config` through the whole phase chain; left as a
-    // documented gap (the vdb `IUSE_EFFECTIVE` file is only read by a
-    // built package's own USE-dep check, itself already narrowed -- see
-    // `dependency_avoid_update_candidate`).
-    if let Some(iuse) = metadata
-        .get("IUSE")
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-    {
-        std::fs::write(build_info.join("IUSE"), format!("{iuse}\n"))
-            .map_err(|e| format!("{}: {e}", build_info.join("IUSE").display()))?;
+    // Real `_post_src_install_write_metadata` (`doebuild.py:2720-2744`):
+    // `IUSE` is written verbatim from the package config ("in case it's
+    // corrupted due to local environment settings", bug #386829) and is
+    // *always* present -- a no-IUSE ebuild gets an empty
+    // `metadata/IUSE`, which is exactly what real archives carry.
+    // `IUSE_EFFECTIVE` (EAPI 5+) is the profile's own
+    // `_calc_iuse_effective` result, threaded here as an ordinary phase
+    // env key by #37 S1 (`portage_profile::phase_environ`); absent for a
+    // standalone `ebuild <file>` run with no resolved config, in which
+    // case real's `configdict` has no such key either.
+    let iuse = metadata.get("IUSE").map(|s| s.trim()).unwrap_or("");
+    std::fs::write(build_info.join("IUSE"), format!("{iuse}\n"))
+        .map_err(|e| format!("{}: {e}", build_info.join("IUSE").display()))?;
+    if !iuse_effective.is_empty() {
+        std::fs::write(
+            build_info.join("IUSE_EFFECTIVE"),
+            format!("{iuse_effective}\n"),
+        )
+        .map_err(|e| format!("{}: {e}", build_info.join("IUSE_EFFECTIVE").display()))?;
     }
+
+    // Real `_post_src_install_uid_fix` (`doebuild.py:2997-3004`): the
+    // package's own installed size, summed over `${D}` -- regular files
+    // only, and hardlinked inodes counted exactly once (the same
+    // `counted_inodes` dedup real uses). Written into `build-info/SIZE`,
+    // which both the archive metadata (`metadata/SIZE`, #39) and the vdb
+    // copy.
+    let size = dir_size_bytes(&env.d())?;
+    std::fs::write(build_info.join("SIZE"), format!("{size}\n"))
+        .map_err(|e| format!("{}: {e}", build_info.join("SIZE").display()))?;
     Ok(())
+}
+
+/// Real `_post_src_install_soname_symlinks` (`doebuild.py:3069-3300`),
+/// run where real runs it: after the `install_qa_check
+/// install_symlink_html_docs install_hooks` misc-function sequence, in
+/// `_emerge/EbuildPhase._commands_exit`. Four things, all #39:
+///
+/// 1. Rewrite `build-info/NEEDED.ELF.2` with the 6th, trailing multilib
+///    category field -- real reads each object's own ELF header
+///    (`ELFHeader.read`) and writes `NeededEntry.__str__`'s
+///    `arch;obj;soname;rpaths;needed;category` line back. A line whose
+///    object no longer reads as ELF keeps an empty category (real's
+///    `multilib_category = None`).
+/// 2. Generate `build-info/REQUIRES`/`PROVIDES` from the recognized
+///    entries (`SonameDepsProcessor`, `PROVIDES_EXCLUDE`/
+///    `REQUIRES_EXCLUDE` aware); real writes each file only when the
+///    corresponding map is non-empty.
+/// 3. Report a `QA Notice: Missing soname symlink(s):` block when a
+///    library's own soname symlink is missing (real only *reports*;
+///    it never creates the link here).
+/// 4. Append `_inject_libc_dep`'s implicit `>=<installed libc>` to
+///    `build-info/RDEPEND` (bug #753500). Real reaches this function
+///    only when `NEEDED.ELF.2` exists, so a package with no ELF gets
+///    neither `PROVIDES`/`REQUIRES` nor the libc dep -- matched by the
+///    early return below.
+fn write_post_install_soname_deps(env: &Environment, root: &Path) -> Result<(), String> {
+    let build_info = env.build_info();
+    let needed_path = build_info.join("NEEDED.ELF.2");
+    let Ok(text) = std::fs::read_to_string(&needed_path) else {
+        return Ok(());
+    };
+
+    let mut rewritten = String::new();
+    let mut recognized: Vec<crate::needed_elf::NeededEntry> = Vec::new();
+    let mut missing_symlinks: Vec<(String, String)> = Vec::new();
+    let libpaths =
+        crate::needed_elf::getlibpaths(root, std::env::var("LD_LIBRARY_PATH").ok().as_deref());
+    for mut entry in crate::needed_elf::NeededEntry::parse_file(&text) {
+        let obj_path = env.d().join(entry.filename.trim_start_matches('/'));
+        if let Some(cat) = crate::needed_elf::compute_multilib_category(&obj_path) {
+            entry.multilib_category = Some(cat);
+            recognized.push(entry.clone());
+        }
+        // Real's own symlink QA: only for an entry with an soname in a
+        // real libdir, and never created -- reported only.
+        if !entry.soname.is_empty() {
+            let obj_dir = obj_path.parent().map(|p| p.to_path_buf());
+            let parent_rel = std::path::Path::new(&entry.filename)
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let in_libdir = libpaths
+                .iter()
+                .any(|l| l.trim_end_matches('/') == parent_rel.trim_end_matches('/'));
+            if in_libdir
+                && let Some(dir) = obj_dir
+                && !dir.join(&entry.soname).exists()
+            {
+                missing_symlinks.push((entry.filename.clone(), entry.soname.clone()));
+            }
+        }
+        rewritten.push_str(&entry.to_needed_line());
+    }
+    std::fs::write(&needed_path, rewritten)
+        .map_err(|e| format!("{}: {e}", needed_path.display()))?;
+
+    let read_trim = |name: &str| {
+        std::fs::read_to_string(build_info.join(name))
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default()
+    };
+    let provides_exclude = read_trim("PROVIDES_EXCLUDE");
+    let requires_exclude = read_trim("REQUIRES_EXCLUDE");
+    let (provides, requires) =
+        crate::needed_elf::generate_soname_deps(&recognized, &provides_exclude, &requires_exclude);
+    if let Some(requires) = requires {
+        let path = build_info.join("REQUIRES");
+        std::fs::write(&path, requires).map_err(|e| format!("{}: {e}", path.display()))?;
+    }
+    if let Some(provides) = provides {
+        let path = build_info.join("PROVIDES");
+        std::fs::write(&path, provides).map_err(|e| format!("{}: {e}", path.display()))?;
+    }
+
+    if !missing_symlinks.is_empty() {
+        eprintln!("QA Notice: Missing soname symlink(s):");
+        eprintln!();
+        for (obj, soname) in &missing_symlinks {
+            let dir = std::path::Path::new(obj)
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
+            eprintln!(
+                "\t{} -> {}",
+                std::path::Path::new(&dir).join(soname).display(),
+                std::path::Path::new(obj)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            );
+        }
+        eprintln!();
+    }
+
+    inject_libc_dep(env, root)
+}
+
+/// Real `_inject_libc_dep` (`doebuild.py:3026-3067`, bug #753500): every
+/// ELF-bearing package records an implicit `>=<provider>` runtime dep on
+/// the installed libc, so a binpkg merge cannot silently downgrade the
+/// libc it was built against. `find_libc_deps(..., realized=True)`:
+/// expand `virtual/libc`'s installed `RDEPEND` to its provider cps
+/// (`portage_repo::libc_provider_cps`), take each provider's lowest
+/// installed version (real `portdb.match(atom)[0]`), skip entirely when
+/// this package *is* a libc provider (real's own `pkgcmp` self-check),
+/// then append the `>=` atoms to the existing `build-info/RDEPEND`.
+fn inject_libc_dep(env: &Environment, root: &Path) -> Result<(), String> {
+    let current_cp = (env.category.clone(), env.split.pn.clone());
+    let mut providers: Vec<(String, String)> =
+        portage_repo::libc_provider_cps(root).into_iter().collect();
+    providers.sort();
+    let mut injected: Vec<String> = Vec::new();
+    for (category, package) in providers {
+        if (category.clone(), package.clone()) == current_cp {
+            return Ok(());
+        }
+        let lowest = portage_repo::installed_candidates(root, &category, &package)
+            .into_iter()
+            .min_by(|a, b| portage_versions::vercmp(&a.0, &b.0).unwrap_or(0).cmp(&0));
+        if let Some((version, _slot, _sub_slot)) = lowest {
+            injected.push(format!(">={category}/{package}-{version}"));
+        }
+    }
+    if injected.is_empty() {
+        return Ok(());
+    }
+    let rdepend_path = env.build_info().join("RDEPEND");
+    let existing = std::fs::read_to_string(&rdepend_path)
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    let value = if existing.is_empty() {
+        injected.join(" ")
+    } else {
+        format!("{existing} {}", injected.join(" "))
+    };
+    std::fs::write(&rdepend_path, format!("{value}\n"))
+        .map_err(|e| format!("{}: {e}", rdepend_path.display()))?;
+    Ok(())
+}
+
+/// Real `_post_src_install_uid_fix`'s own size accumulation: every
+/// regular file under `dir`, once per inode (`counted_inodes`), summed
+/// by `st_size`. Directory and symlink entries contribute nothing;
+/// unreadable entries are an error (real would raise the same way).
+fn dir_size_bytes(dir: &Path) -> Result<u64, String> {
+    use std::os::unix::fs::MetadataExt;
+    fn walk(dir: &Path, seen: &mut std::collections::HashSet<u64>) -> Result<u64, String> {
+        let mut total = 0;
+        let entries = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("{}: {e}", dir.display()))?;
+            let path = entry.path();
+            let md =
+                std::fs::symlink_metadata(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            if md.is_dir() {
+                total += walk(&path, seen)?;
+            } else if md.is_file() && seen.insert(md.ino()) {
+                total += md.len();
+            }
+        }
+        Ok(total)
+    }
+    walk(dir, &mut std::collections::HashSet::new())
 }
 
 /// Which real shell executes a phase, and every real `bin/*.sh` this
@@ -2141,6 +2346,45 @@ fn phase_env_vars(
     // verbatim `extra_env` pair would drop them again.
     vars.extend(extra_env.iter().filter(|(k, _)| k != "PATH").cloned());
 
+    // Real `EbuildPhase._start` (`EbuildPhase.py:52-56`) calls
+    // `split_LC_ALL(settings)` (`portage/util/locale.py:160`) before
+    // spawning any phase: a set `LC_ALL` is copied to every
+    // `locale_categories` entry and itself blanked (then deleted by
+    // `config.environ()`; for EAPI 5+'s `posixish_locale` real even
+    // asserts it is absent, `config.py:3374-3385`). The phase therefore
+    // sees `LC_*`, never `LC_ALL`. The resolved `extra_env` value wins
+    // over the calling process env, and any `LC_ALL` pair is filtered
+    // out so it cannot leak back in. (The `--shell brush` path still
+    // inherits the hosting process's own `LC_ALL` in its embedded
+    // shell; the category exports below override it for every
+    // subprocess the phase spawns.)
+    vars.retain(|(k, _)| k != "LC_ALL");
+    let lc_all = extra_env
+        .iter()
+        .rev()
+        .find(|(k, _)| k == "LC_ALL")
+        .map(|(_, v)| v.clone())
+        .or_else(|| std::env::var("LC_ALL").ok())
+        .unwrap_or_default();
+    if !lc_all.is_empty() {
+        for category in [
+            "LC_COLLATE",
+            "LC_CTYPE",
+            "LC_MONETARY",
+            "LC_MESSAGES",
+            "LC_NUMERIC",
+            "LC_TIME",
+            "LC_ADDRESS",
+            "LC_IDENTIFICATION",
+            "LC_MEASUREMENT",
+            "LC_NAME",
+            "LC_PAPER",
+            "LC_TELEPHONE",
+        ] {
+            vars.push((category.to_string(), lc_all.clone()));
+        }
+    }
+
     vars
 }
 
@@ -2458,7 +2702,11 @@ fn run_one_phase_bash(
     // vars real's `environ_whitelist` keeps; `phase_env_vars` sets the
     // rest on top. (L1-f.)
     cmd.env_clear();
-    cmd.envs(std::env::vars().filter(|(k, _)| environ_whitelisted(k)));
+    // `LC_ALL` never reaches a real phase (see `phase_env_vars`' own
+    // locale split): real `split_LC_ALL` blanks it, so even a
+    // whitelisted process-env entry is dropped here and the `LC_*`
+    // category exports stand alone.
+    cmd.envs(std::env::vars().filter(|(k, _)| environ_whitelisted(k) && k != "LC_ALL"));
     cmd.envs(vars);
     if let Some(path) = log_file {
         // `sink.pump` MUST outlive `cmd`: the guard joins the gzip
@@ -2908,6 +3156,16 @@ fn run_misc_functions_bash(
     // parent write-end copies deterministically.
     let mut pump_guard: Option<LogPump> = None;
     let mut cmd = sandbox_wrapped_command(&bin_dir.join("misc-functions.sh"), dyn_command, iso);
+    // Same curated environment real `MiscFunctionsProcess` gets (the
+    // phase env, not the inherited process env): `misc-functions.sh`
+    // sources `bin/ebuild.sh`, whose `__preprocess_ebuild_env` *saves*
+    // the live env back to `${T}/environment` when a binpkg's
+    // `environment.raw` marker is present -- so an unfiltered inherited
+    // env (the calling `cargo test`/shell process) would leak into the
+    // regenerated vdb env. See `run_one_phase_bash`'s own `env_clear`
+    // for the phase-side equivalent.
+    cmd.env_clear();
+    cmd.envs(std::env::vars().filter(|(k, _)| environ_whitelisted(k) && k != "LC_ALL"));
     cmd.envs(vars);
     if let Some(path) = log_file {
         let sink = open_log_file(path)?;
@@ -3104,6 +3362,16 @@ async fn run_commands_async(
             // equivalent to real portage's own three separate positional
             // args -- `run_misc_functions` needs no changes at all.
             if phase == "install" {
+                // Real `EbuildPhase._ebuild_exit_unlocked` order
+                // (`EbuildPhase.py:424-438`): `_post_src_install_write_
+                // metadata` and `_post_src_install_uid_fix` run right
+                // after `bin/ebuild.sh install` returns and **before**
+                // the `install_qa_check` post-phase commands below. That
+                // ordering is load-bearing for `SIZE`: it is the
+                // *pre-transform* image (`ecompress`/`estrip` run later),
+                // real's own 807 bytes for `porttest/docs` against the
+                // 372 the compressed image would give.
+                write_post_install_metadata(&env, root, build_env)?;
                 let qa_status = run_misc_functions(
                     &env,
                     root,
@@ -3119,14 +3387,14 @@ async fn run_commands_async(
                 if qa_status != 0 {
                     return Ok(qa_status);
                 }
-                // Real `doebuild(mydo="install")` -> `_post_src_install_
-                // write_metadata` (see its own doc comment): the
-                // dependency/LICENSE/PROPERTIES/RESTRICT/IUSE build-info
-                // files `bin/phase-functions.sh` doesn't write. Run in
-                // the same spot -- after `install` + its post-phase
-                // misc-functions, before the vdb merge / xpak build reads
-                // `build-info`.
-                write_post_install_metadata(&env, root, &build_phase_use(build_env))?;
+                // Real `EbuildPhase._commands_exit` runs
+                // `_post_src_install_soname_symlinks` immediately after
+                // that same misc-function sequence (see its own doc
+                // comment): the 6-field `NEEDED.ELF.2` (from the
+                // post-`estrip` image), generated `PROVIDES`/
+                // `REQUIRES`, and `_inject_libc_dep`'s own implicit libc
+                // dependency (#39).
+                write_post_install_soname_deps(&env, root)?;
             }
         }
     }
@@ -3566,6 +3834,13 @@ fn binary_merge_env() -> Vec<(String, String)> {
 pub(crate) fn run_instprep(
     ebuild_path: &Path,
     saved_env_bz2: Option<&Path>,
+    // Extract `${T}/environment` from `saved_env_bz2` first: `true` when
+    // this is the first phase of a binary merge (no earlier hook has
+    // seeded it), `false` when `pkg_setup` already ran -- real extracts
+    // the archive env **once** and every phase evolves it, so a second
+    // extraction here would wipe `pkg_setup`'s own variables (e.g.
+    // `linux-info`'s `SKIP_KERNEL_BINPKG_ENV_RESET`).
+    seed: bool,
     root: &Path,
     portage_tmpdir: &Path,
     build_env: &[(String, String)],
@@ -3580,7 +3855,9 @@ pub(crate) fn run_instprep(
         create_directories(&env)?;
         let mut extra_env = build_env.to_vec();
         if let Some(saved) = saved_env_bz2 {
-            seed_saved_environment(&env, saved)?;
+            if seed {
+                seed_saved_environment(&env, saved)?;
+            }
             extra_env.extend(binary_merge_env());
         }
         run_misc_functions(
@@ -3630,10 +3907,26 @@ pub(crate) fn run_instprep(
 /// == ebuild ]]` false, so a binpkg's `pkg_setup` runs from the saved
 /// env too instead of re-sourcing (and re-`inherit`-ing, which would
 /// `die` -- no repo) the extracted ebuild.
+///
+/// `seed` controls the `${T}/environment` extraction: real
+/// `_emerge/BinpkgEnvExtractor` runs **once per package** and every
+/// subsequent phase (`pkg_setup`, `pkg_preinst`, `pkg_postinst`, …)
+/// evolves that one file (`PORTAGE_UPDATE_ENV` re-saves it at the end
+/// of the hook phases). A caller that runs several hooks against the
+/// same builddir must therefore pass `false` after the first one: a
+/// per-hook re-seed would wipe every variable a previous phase set
+/// (`linux-info`'s `SKIP_KERNEL_BINPKG_ENV_RESET`, the acct-user
+/// eclass's own `_ACCT_USER_*`) before the vdb env is regenerated.
+/// `unmerge` hooks use `true` (each old version seeds its own
+/// builddir).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_phase_from_saved_env(
     ebuild_path: &Path,
     saved_env_bz2: &Path,
+    // Extract `${T}/environment` from `saved_env_bz2` first (see the
+    // doc comment above): `true` for the first hook of a package /
+    // an unmerge, `false` for the following hooks of the same merge.
+    seed: bool,
     phase: &str,
     root: &Path,
     portage_tmpdir: &Path,
@@ -3665,7 +3958,9 @@ pub(crate) fn run_phase_from_saved_env(
     runtime.block_on(async {
         let env = compute_environment(ebuild_path, portage_tmpdir)?;
         create_directories(&env)?;
-        seed_saved_environment(&env, saved_env_bz2)?;
+        if seed {
+            seed_saved_environment(&env, saved_env_bz2)?;
+        }
 
         let mut extra_env = binary_merge_env();
         if let Some(p) = update_env {
@@ -4365,6 +4660,7 @@ mod tests {
             run_instprep(
                 &ebuild_path,
                 None,
+                false,
                 Path::new("/"),
                 &portage_tmpdir,
                 &env_with(features),

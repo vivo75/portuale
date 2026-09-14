@@ -1081,6 +1081,57 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    /// Real `config.environ()`'s `filter_calling_env`: a binary merge's
+    /// calling env is narrowed to real's `environ_whitelist`, so a
+    /// harness/portuale-only key in `build_env` never reaches the
+    /// regenerated vdb environment (L3 finding: the L2 real-set control
+    /// leg leaked `PORTAGE_RUNNING_ROOT` / `L1_SKIP_PORTAGE_UPGRADE` /
+    /// `GNUMAKEFLAGS`).
+    #[test]
+    fn merge_binpkg_filters_non_whitelisted_build_env_from_the_vdb_environment() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+
+        let opts = MergeOptions {
+            features: "mergetimefeat".to_string(),
+            build_env: vec![
+                (
+                    "CARGO_MANIFEST_DIR".to_string(),
+                    "/tmp/not-whitelisted".to_string(),
+                ),
+                ("L1_SKIP_PORTAGE_UPGRADE".to_string(), "0".to_string()),
+                ("FEATURES".to_string(), "mergetimefeat".to_string()),
+            ],
+            ..MergeOptions::default()
+        };
+        let status = ebuild_merge::merge_binpkg(
+            &fixtures_root().join("pkgdir/dev-libs/binpkgpretendpkg-1.0.tbz2"),
+            &root,
+            &tmp.join("portage_tmpdir"),
+            &opts,
+        )
+        .expect("merge succeeds");
+        assert_eq!(status, 0);
+
+        let env_bz2 = root.join("var/db/pkg/dev-libs/binpkgpretendpkg-1.0/environment.bz2");
+        let out = std::process::Command::new("bzip2")
+            .args(["-dc", "--"])
+            .arg(&env_bz2)
+            .output()
+            .expect("bunzip2 the vdb environment");
+        let env = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            !env.contains("CARGO_MANIFEST_DIR") && !env.contains("L1_SKIP_PORTAGE_UPGRADE"),
+            "non-whitelisted build_env keys must be filtered from the vdb env"
+        );
+        assert!(
+            env.contains(r#"FEATURES="mergetimefeat""#),
+            "whitelisted FEATURES must survive the filter"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     #[test]
     fn merge_binpkg_replace_runs_the_replaced_versions_pkg_prerm_and_pkg_postrm() {
         let tmp = tempdir();

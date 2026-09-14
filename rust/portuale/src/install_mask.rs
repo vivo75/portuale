@@ -158,8 +158,11 @@ pub(crate) fn install_mask_dir(base_dir: &Path, mask: &InstallMask) -> std::io::
 /// Python `fnmatch.fnmatch` semantics (case-sensitive, `/` is *not*
 /// special, `*` spans everything): translate to an anchored regex.
 /// Supports `*`, `?`, and `[...]`/`[!...]` character classes -- the
-/// whole of what real `INSTALL_MASK` patterns ever use.
-fn fnmatch(name: &str, pattern: &str) -> bool {
+/// whole of what real `INSTALL_MASK` patterns ever use. Also reused by
+/// `needed_elf`'s `PROVIDES_EXCLUDE`/`REQUIRES_EXCLUDE` matcher (real
+/// `SonameDepsProcessor._exclude_pattern`, the same `fnmatch.translate`
+/// semantics).
+pub(crate) fn fnmatch(name: &str, pattern: &str) -> bool {
     thread_local! {
         static CACHE: std::cell::RefCell<std::collections::HashMap<String, regex::Regex>> =
             std::cell::RefCell::new(std::collections::HashMap::new());
