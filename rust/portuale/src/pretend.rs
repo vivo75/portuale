@@ -110,13 +110,9 @@
 // `required_by` (see `GraphEntry::required_by`'s own doc comment,
 // portage-repo, for how the latter is tracked through the BFS). Hand-
 // rolled JSON (`json_escape`/`json_string`), not a crate dependency --
-// see `json_escape`'s own doc comment for why. The Python reference
-// mirrors this output byte-for-byte (verified directly, not just
-// structurally-equal-as-JSON), via its own hand-rolled
-// `_json_escape`/`_entry_to_json`/`_print_json`, the same "two
-// independent implementations building the identical string via the
-// identical algorithm" approach portuale uses everywhere else, rather
-// than two different JSON libraries that merely happen to agree.
+// see `json_escape`'s own doc comment for why. The contract suite and
+// `tests/output_invariants.py` read this output; the byte shape is pinned
+// by the harvested corpus (`tests/corpus/`).
 //
 // A top-level atom may carry an operator/version/slot (e.g.
 // `>=cat/pkg-1.2`, `cat/pkg:0`) -- resolve_pretend's own atom-vs-candidate
@@ -1854,9 +1850,8 @@ fn autounmask_change_to_json(change: &portage_repo::AutounmaskChange) -> String 
 /// Backlog #19 Slice 4: the `--json` `aborted` field for a resolve
 /// outcome — `null` on the complete path, `{"reason":…}` on an abort.
 /// Reason spellings (`masked-dep`, `unsatisfied-atom`,
-/// `unserializable-cycle`) match the Python mirror's outcome tuples
-/// exactly (see `_print_json`); the contract suite pins both sides'
-/// bytes on the abort fixtures.
+/// `unserializable-cycle`) are pinned by the contract suite's abort
+/// fixtures.
 fn abort_outcome_to_json(outcome: &portage_repo::ResolveOutcome) -> String {
     match outcome {
         portage_repo::ResolveOutcome::Complete => "null".to_string(),
@@ -2028,8 +2023,8 @@ fn print_json(
         .collect();
     // Backlog #19 Slice 4: the abort outcome as provenance — `null` on
     // the complete path every consumer already parses, `{"reason":…}`
-    // on an abort (reason spellings match the Python mirror's outcome
-    // tuples). The `entries` array above is already the partial list on
+    // on an abort (reason spellings pinned by the abort contract tests).
+    // The `entries` array above is already the partial list on
     // an abort (the caller passes the display list), so a `--json`
     // consumer sees the same rows the text list shows.
     let aborted_json = abort_outcome_to_json(outcome);
@@ -2091,8 +2086,7 @@ fn wants_help(args: &[String]) -> bool {
 /// The `emerge --help` / `-h` text: a grouped tour of every action and
 /// option portuale actually implements. NOT a port of real emerge's
 /// own `_emerge/help.py` (157 lines of colorized syntax for its full
-/// ~130-flag surface -- see the module doc comment). Kept byte-identical
-/// to `emerge_pretend_reference.py`'s `_HELP_TEXT`; the contract suite
+/// ~130-flag surface -- see the module doc comment). The contract suite
 /// pins it in full.
 fn print_help() {
     print!("{HELP_TEXT}");
@@ -6103,10 +6097,8 @@ pub(crate) fn build_config_env(config: &portage_profile::Config) -> Vec<(String,
 /// binary, `ebuild_merge::run_vdb_saved_env_phase` for an installed
 /// match), exactly the real `writemsg_stdout(...)` + `doebuild(...,
 /// "info", ...)` step. The phase's own output is whatever the ebuild
-/// `einfo`s; the Python contract reference stops at the deterministic
-/// message (the `--config`/`--regen` "no Python mirror for execution"
-/// precedent), and the real phase run is covered Rust-only in
-/// `test_portuale.py`.
+/// `einfo`s; the contract suite pins the deterministic message and the
+/// real phase run is covered in `test_portuale.py`.
 ///
 /// **Large, deliberate cut:** real `action_info`'s output is dominated by
 /// *host state* a fixture-driven test can't verify -- the
@@ -6222,7 +6214,7 @@ fn highest_installed_pvr(root: &Path, category: &str, package: &str) -> Option<S
 /// `Timestamp`/`Head commit of repository`, the `sh:`/`coreutils:`/`ld:`
 /// probes and the `info_pkgs` version table. Everything here is
 /// host-state a fixture cannot reproduce -- the contract normalizes the
-/// volatile values to `XXX` and checks structure + Rust==Python.
+/// volatile values to `XXX` and checks the structure.
 fn print_info_header(
     config: &portage_profile::Config,
     repos: &[portage_repo::RepoConfig],
@@ -7803,9 +7795,9 @@ pub fn run(args: &[String]) -> ExitCode {
     // --solver=<portage|pubgrub|resolvo>: portuale-only (real `emerge`
     // has no `--solver`), same "special-cased, not in emerge_options.rs"
     // treatment `--shell`/`--json` get. Picks the dependency-solving
-    // algorithm: the backtracking walk (default, the only solver with a
-    // Python reference) or lu-zero's PubGrub / resolvo bridges over the
-    // same repo facts (Rust-only -- see `solver_bridge.rs`).
+    // algorithm: the backtracking walk (default, the one real Portage
+    // runs) or lu-zero's PubGrub / resolvo bridges over the same repo
+    // facts (see `solver_bridge.rs`).
     let mut solver = portage_repo::SolverKind::Portage;
     // --verbose-conflicts: real bare boolean (`main.py`'s `y_or_n` group,
     // so `--verbose-conflicts` / `=y` / `=n`). Pure display: real
@@ -12076,12 +12068,11 @@ mod tests {
     }
 
     #[test]
-    fn abort_outcome_to_json_spells_reasons_like_the_python_mirror() {
+    fn abort_outcome_to_json_spells_each_abort_reason() {
         // Slice 4 `--json` provenance: `null` on the complete path, one
         // `{"reason":…}` shape per abort variant. The spellings and
-        // payload keys are the cross-language contract (the Python
-        // mirror's `_print_json` builds them independently; the abort
-        // contract tests pin both sides' bytes on the fixtures).
+        // payload keys are what `--json` consumers read (the abort
+        // contract tests pin the bytes on the fixtures).
         use portage_repo::{AbortReason, ResolveOutcome};
         assert_eq!(abort_outcome_to_json(&ResolveOutcome::Complete), "null");
         assert_eq!(

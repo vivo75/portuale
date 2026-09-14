@@ -11,8 +11,7 @@
 // real syntax lets `ebuild.rs` tell "a real ebuild option/command this
 // portuale doesn't implement yet" apart from "not valid ebuild syntax at
 // all", the same distinction `emerge_options.rs` draws for `emerge`.
-// Unlike `emerge --pretend`, `ebuild` has no Python reference
-// implementation at all -- it's Rust-only, tested directly against the
+// `ebuild` is tested directly against the
 // compiled binary by `tests/test_portuale.py` (see that
 // file's own doc comment).
 //

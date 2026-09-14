@@ -67,11 +67,10 @@ rust/                      Rust workspace
   portuale/                the real emerge / ebuild multicall binary
 python/
   *_harness.py             thin CLI wrappers around the real portage.* modules
-  emerge_pretend_reference.py   Python reference for the emerge --pretend contract
 fixtures/                  synthetic repo + vdb + profile tree the contract suite runs against
 bench/                     benchmark-mode timing comparison (CI perf gate)
 musl/                      musl static-build smoke test (minimal-Linux CI gate)
-tests/                     shared, black-box pytest contract suite
+tests/                     shared, black-box pytest contract suite (+ output invariants, harvested corpus)
 TEST/                      real-Gentoo-tree validation harness (container; see TEST/README.md)
 docs/                      all project documentation (see below)
 ```

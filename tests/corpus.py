@@ -2,10 +2,11 @@
 reference (`python/emerge_pretend_reference.py`) still existed.
 
 `docs/second_python_copy_removal.md` §11: before the reference was
-deleted, every contract-suite invocation and an expanded grid of fixture
-atoms x option combinations was run through *both* implementations, and
-the outputs they agreed on were stored here. The Python copy is gone;
-what remains is its last known agreement with Rust.
+deleted (commit `2738e9c` holds the harvest tooling), every
+contract-suite invocation and an expanded grid of fixture atoms x option
+combinations was run through *both* implementations, and the outputs
+they agreed on were stored here. The Python copy is gone; what remains
+is its last known agreement with Rust.
 
 A Rust output that no longer matches its stored entry is **flagged for
 review, not auto-failed**: a `CorpusDrift` warning plus a line in the
@@ -37,7 +38,6 @@ EXPANDED_CORPUS = CORPUS_DIR / "expanded.json.xz"
 
 STRICT = os.environ.get("PORTUALE_CORPUS_STRICT") == "1"
 BLESS = os.environ.get("PORTUALE_CORPUS_BLESS") == "1"
-HARVEST_DIR = os.environ.get("PORTUALE_HARVEST")
 
 current_nodeid: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "current_nodeid", default=None
@@ -70,7 +70,7 @@ def normalize(text: str) -> str:
 # The host environment at import time; a case's identity is only what the
 # test changed on top of it (fixture roots, overrides, CLEAN_DELAY, ...).
 _HOST_ENV = dict(os.environ)
-_IGNORED_ENV = {"PYTEST_CURRENT_TEST", "PORTUALE_HARVEST", "PORTUALE_CORPUS_STRICT",
+_IGNORED_ENV = {"PYTEST_CURRENT_TEST", "PORTUALE_CORPUS_STRICT",
                 "PORTUALE_CORPUS_BLESS"}
 
 
@@ -132,31 +132,6 @@ def save(path: Path, cases: dict[str, dict]) -> None:
 
 
 # --------------------------------------------------------------------------
-# Harvest-time recording (only while the Python reference existed).
-
-_ordinals: dict[tuple[str, str], int] = {}
-
-
-def record_call(impl: str, args, env, result) -> None:
-    nodeid = current_nodeid.get()
-    if HARVEST_DIR is None or nodeid is None:
-        return
-    with _lock:
-        n = _ordinals.get((nodeid, impl), 0)
-        _ordinals[(nodeid, impl)] = n + 1
-        line = {
-            "nodeid": nodeid,
-            "impl": impl,
-            "ordinal": n,
-            **case_identity(list(args), env),
-            **result_record(result.returncode, result.stdout, result.stderr),
-        }
-        out = Path(HARVEST_DIR) / f"calls-{os.getpid()}.jsonl"
-        with out.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(line, ensure_ascii=False) + "\n")
-
-
-# --------------------------------------------------------------------------
 # Drift checking (after deletion).
 
 _contract_cases: dict[str, dict] | None = None
@@ -175,6 +150,18 @@ def _contract() -> dict[str, dict]:
     if _contract_cases is None:
         _contract_cases = load(CONTRACT_CORPUS)
     return _contract_cases
+
+
+_nodeid_index: dict[str, list[tuple[str, dict]]] | None = None
+
+
+def _by_nodeid() -> dict[str, list[tuple[str, dict]]]:
+    global _nodeid_index
+    if _nodeid_index is None:
+        _nodeid_index = {}
+        for k, c in sorted(_contract().items()):
+            _nodeid_index.setdefault(k.rsplit("#", 1)[0], []).append((k, c))
+    return _nodeid_index
 
 
 def compare(key: str, stored: dict, args, env, result) -> str | None:
@@ -206,18 +193,24 @@ def check_contract_call(args, env, result) -> tuple[str | None, str | None]:
     corpus key (None when this call has no harvested entry, or its args or
     env changed since) and the drift message (None when it still matches)."""
     nodeid = current_nodeid.get()
-    if nodeid is None or HARVEST_DIR is not None:
+    if nodeid is None:
         return None, None
     with _lock:
         n = _rust_ordinals.get(nodeid, 0)
         _rust_ordinals[nodeid] = n + 1
     key = contract_key(nodeid, n)
     stored = _contract().get(key)
-    if stored is None:
-        return None, None
     ident = case_identity(list(args), env)
-    if ident["args"] != stored["args"] or ident["env"] != stored["env"]:
-        return None, None
+    if stored is None or ident["args"] != stored["args"] or ident["env"] != stored["env"]:
+        # The harvest paired calls by args+env, so a test that runs the same
+        # command twice may have its entry under the other ordinal.
+        key, stored = next(
+            ((k, c) for k, c in _by_nodeid().get(nodeid, [])
+             if c["args"] == ident["args"] and c["env"] == ident["env"]),
+            (None, None),
+        )
+        if stored is None:
+            return None, None
     message = compare(key, stored, args, env, result)
     if message:
         flag(key, message, stored, args, env, result, blessed)

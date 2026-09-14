@@ -1,8 +1,9 @@
 # T5+T2-SLICED ∷ BabelTele mirror — LLM→LLM consult-only
 SRC=docs/backlog_tier_5_and_2_sliced.opus.md @ main:69f5877 2026-09-14; AUTH=SRC (divergence→SRC wins, never cite THIS as evidence)
 PROJ: readability-relaxed semantic projection (BabelTele, arXiv:2606.19857); glyph-light ⇒ savings from dropped prose; ALL ids/paths/line-refs byte-exact; line-refs drift→relocate by symbol
-LEGEND: `∷`is `;`fence `|`field `→`leads/causes `⇒`decision `←`from `∈`in `∉`not-in `¬`not `∧`and `∨`or `:=`def `!`must-not `?`unverified `+`add `-`remove `@`anchor file:sym:line `F/M/S`=tiers(F Opus5/Fable5.1, M Sonnet5, S Haiku4.5; Frev=F reads full diff pre-user-commit) `U`=user-owned `D#`=owner decision §3 `PR`=rust/portage-repo/src/lib.rs `MO`=rust/portage-repo/src/merge_order.rs `PT`=rust/portuale/src/pretend.rs `EP`=rust/portuale/src/ebuild_phases.rs `EM`=rust/portuale/src/ebuild_merge.rs `MD`=rust/mrg-director/src/lib.rs `PY`=python/emerge_pretend_reference.py `CT`=tests/test_emerge_pretend_contract.py `F25`=docs/025-tier2-closeout.deepseek.md §11 `L3F`=TEST/findings/l3.md `L2F`=TEST/findings/l2.md
+LEGEND (PY/CT-byte-identical refs below = pre-2026-09-15 rules, superseded by PYREF-REMOVED): `∷`is `;`fence `|`field `→`leads/causes `⇒`decision `←`from `∈`in `∉`not-in `¬`not `∧`and `∨`or `:=`def `!`must-not `?`unverified `+`add `-`remove `@`anchor file:sym:line `F/M/S`=tiers(F Opus5/Fable5.1, M Sonnet5, S Haiku4.5; Frev=F reads full diff pre-user-commit) `U`=user-owned `D#`=owner decision §3 `PR`=rust/portage-repo/src/lib.rs `MO`=rust/portage-repo/src/merge_order.rs `PT`=rust/portuale/src/pretend.rs `EP`=rust/portuale/src/ebuild_phases.rs `EM`=rust/portuale/src/ebuild_merge.rs `MD`=rust/mrg-director/src/lib.rs `PY`=python/emerge_pretend_reference.py `CT`=tests/test_emerge_pretend_contract.py `F25`=docs/025-tier2-closeout.deepseek.md §11 `L3F`=TEST/findings/l3.md `L2F`=TEST/findings/l2.md
 
+PYREF-REMOVED 2026-09-15 (branch backlog/python-copy-removal; docs/second_python_copy_removal.md) ⇒ R3b..R5 ¬PY ¬Rust==PY: pin Rust vs real oracle ∧ tests/test_output_invariants.py green ∧ reviewed corpus drift blessed (PORTUALE_CORPUS_BLESS=1) same commit ∷ #26 F-A1 w/ PORTUALE_DYNAMIC_DEPS_APPEND=1 ⇒ only test_oracle_slotop_undo_cascade fails (PY half gone) ∷ found+fixed C2 race dc8022b (concurrent cache-miss shared depend metadata file)
 STATUS: proposed 2026-09-14 ∷ D1-D6 ANSWERED ∷ R0 DONE (#21 cut) ∷ W1 DONE ∷ W2 DONE (R2 rescoped per (a): #36 not-reproducible-as-framed, genuine upstream oracle captured) ∷ W3 DONE: P2b (env rows 0) ∥ C2 (depend-phase fallback) ∥ R3a (025b design, owner read pending before R3b) ∥ H3 (6/8 slots) ∷ W4 ¬started (R3b gates on the owner reading 025b)
 SCOPE: docs/backlog-tasks.md OPEN only: T5{41,44,45} T2{17,20,21,25,28,35,36} ∷ DONE/DONE-PARTIAL ∉scope
 RF: AGENTS.md(step8 verify); docs/agent-context.md; docs/scope-backlog.md §A §H §I §K; per-track plan/finding below
@@ -10,17 +11,17 @@ RF: AGENTS.md(step8 verify); docs/agent-context.md; docs/scope-backlog.md §A §
 §1 TRACKS+ORDER
   P:={#44,#45} real-exec container ¬PY ∷ unblocks l3-core/@system (#30 S4 stop rule) ⇒ highest leverage ⇒ FIRST
   C:={#41} repo reader+depend phase ∷ ¬PY (D2) ∷ parallel w/ P ∷ BEFORE H4
-  R:={#20,#36,#25,#35,#17} resolver dual-lang (#21 cut D1) ∷ order: R0 DONE ∷ R1 #20 → R2 #36 → R3 #25 → R4 #35 → R5 #17
+  R:={#20,#36,#25,#35,#17} resolver (dual-lang until 2026-09-15; R3b+ Rust-only) (#21 cut D1) ∷ order: R0 DONE ∷ R1 #20 → R2 #36 → R3 #25 → R4 #35 → R5 #17
     why #36<#25: local selection change, default-budget fixpoint proven identical ⇒ ¬L0 move ⇒ stable base
     why #35>#25: real graph_db.match_pkgs sees installed as nodes = what #25 adds
     why #17 last: F-B3 ⇒ iteration-1 batch order ← _create_graph insertion order (stable-sort bias) = #25 R3b ⇒ timing on final graph only
   H:={#28} Rust refactor behaviour-neutral ¬PY ∷ any time 1 slot/commit ∷ H4 after C
   DAG: P0→{P1,P2a}; P2a→P2b; {P1,P2b}→P3 ∷ C0→C1→C2→C3→H4 ∷ R2→R3a→R3b→R3c→R3d→R3e→R4→R5 ∷ H1→H2→H3→H4→H5
   FILE-CONFLICT: C×R ∈PR (diff regions; worktrees; rebase C first) ∷ P×C ∈EP (land P2b first ∨ C2 call-site only) ∷ H4×C by design
-    P: EM EP rust/portuale/src/emerge_getbinpkg.rs TEST/layers/l3/* ∷ C: PR EP:run_depend_phase ¬PY ∷ R: PR MO PT PY CT ∷ H: MD + call sites portuale/src/{fetch,pretend,emerge_build,emerge_getbinpkg}.rs
+    P: EM EP rust/portuale/src/emerge_getbinpkg.rs TEST/layers/l3/* ∷ C: PR EP:run_depend_phase ¬PY ∷ R: PR MO PT CT tests/corpus/ ∷ H: MD + call sites portuale/src/{fetch,pretend,emerge_build,emerge_getbinpkg}.rs
 
 §2 INV (every slice)
-  R ⇒ Rust+PY one commit, CT byte-identical ∷ P,H ⇒ real-exec only ¬PY ¬CASES
+  R ⇒ Rust pinned vs real oracle ∈CT + test_output_invariants green + blessed corpus drift (was: Rust+PY one commit, superseded 2026-09-15) ∷ P,H ⇒ real-exec only ¬CASES
   expected output ← real Portage oracle (container TEST/ ∨ host emerge) ¬reading source
   ! weaken L0/L1/L2 ∷ R slices: L0 (TEST/layers/l0/in-container.sh) clean/parity/order before+after; any probe regression ⇒ STOP report
   `git add` fixture BEFORE `git clean -fdq fixtures/` ∷ compare failing test NAMES vs clean-main baseline ¬counts
@@ -90,9 +91,9 @@ RF: AGENTS.md(step8 verify); docs/agent-context.md; docs/scope-backlog.md §A §
     R3d(F,4-6h) reachable installed ⇒ nodes; same-slot supersede ⇒ move/drop in-edges; retire reverse-dep atom approximation at parity ∷ ACCEPT: gtk:4/gedit/nautilus node+edge sets = real --debug digraph dump ∧ MO_NODES equal all 4 probes
     R3e(M,2h+container) full L0; TEST/findings/l0.md "## I" + F25 F-B3/F-B4 resolved∨residue explained + backlog-tasks ∷ net L0 order count ¬rise (D4)
   R4(F,4-6h) #35 downgrade_probe + live graph_db
-    real dep_zapdeps conflict_downgrade/installed_downgrade 3rdparty/portage/lib/portage/dep/dep_check.py soft 476-521 bug 531656 ∷ seams PR:9069 PY:6351 ∷ plan docs/023-backtracking_resolve.md B2
+    real dep_zapdeps conflict_downgrade/installed_downgrade 3rdparty/portage/lib/portage/dep/dep_check.py soft 476-521 bug 531656 ∷ seam PR:9069 ∷ plan docs/023-backtracking_resolve.md B2
     after R3: live graph_db = read resolver current node set + slot index ¬new parallel structure
-    oracle fixture (build if plan only describes): || group, 1st alt conflicts w/ installed higher version same slot ∷ implement downgrade_probe (config/CLI accept downgrade?) + 2 guards; pin both langs
+    oracle fixture (build if plan only describes): || group, 1st alt conflicts w/ installed higher version same slot ∷ implement downgrade_probe (config/CLI accept downgrade?) + 2 guards; pin vs oracle (¬PY)
     ACCEPT: fixture == real ∧ L0 ≥ before
   R5(F,time-box 600s,D5) #17 F-B1 drain timing
     state: gtk:4 398==398 nodes; iterations 578 vs real 290; first div = iteration-1 greedy batch order (sys-libs/zlib real pos 9 vs portuale 45) ∷ F25 + TEST/findings/l0.md "## I"

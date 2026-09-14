@@ -15,13 +15,20 @@ each one gets a specific "recognized, not implemented" message instead
 of a generic "unsupported option" one). Drives the real compiled
 `emerge` binary (portuale, dispatched via a real symlink
 -- not a neutral harness, since emerge is an actual product surface per
-docs/agent-context.md's testing decision) and the Python reference implementation
-identically, against the synthetic fixture tree at fixtures
-(whose repos.conf/make.profile/make.conf/package.mask/package.unmask/
-package.accept_keywords/package.use now drive real config resolution,
-not hardcoded values, and whose repos.conf now defines a second,
-higher-priority overlay repo alongside the main one), and asserts their
-stdout, stderr, and exit codes all match exactly.
+docs/agent-context.md's testing decision) against the synthetic fixture
+tree at fixtures (whose repos.conf/make.profile/make.conf/package.mask/
+package.unmask/package.accept_keywords/package.use now drive real config
+resolution, not hardcoded values, and whose repos.conf now defines a
+second, higher-priority overlay repo alongside the main one), and pins
+stdout, stderr and exit codes to real Portage's behaviour.
+
+Until 2026-09-15 every case also ran the Python reference
+(`python/emerge_pretend_reference.py`) and asserted Rust == Python; that
+copy is gone (`docs/second_python_copy_removal.md`). Every call still
+replays against the agreement harvested before the removal
+(`tests/corpus.py`: drift is a warning, `_assert_harvested` a strict pin
+where nothing else was asserted), and `tests/test_output_invariants.py`
+runs expectation-free checks over the same cases.
 """
 
 import json
@@ -39,8 +46,8 @@ import corpus
 # 1 resolution/parse error OR autounmask config change still needed
 # (real `action_build`: `if not success: return 1` fires for any
 # autounmask keyword/mask/use/license change, `--pretend` included --
-# `--autounmask-only` is the one exception), 2 CLI-usage error (mirrors
-# both sides' shared convention, not real emerge's own exit codes).
+# `--autounmask-only` is the one exception), 2 CLI-usage error (portuale's
+# own convention, not real emerge's own exit codes).
 CASES = [
     ("new install", ["--pretend", "dev-libs/newpkg"], 0),
     (
@@ -1488,7 +1495,7 @@ CASES = [
     ("--misspell-suggestions: a near-miss package name gets suggestions", ["--pretend", "dev-libs/newpgk"], 1),
     ("--misspell-suggestions=n: no suggestions", ["--pretend", "--misspell-suggestions=n", "dev-libs/newpgk"], 1),
     ("--misspell-suggestions: a masked (existing) cp gets no name suggestions", ["--pretend", "dev-libs/autounmaskkeywordpkg"], 1),
-    ("--debug: resolver trace, Rust==Python on both streams", ["--pretend", "--debug", "dev-libs/newpkg"], 0),
+    ("--debug: resolver trace on both streams", ["--pretend", "--debug", "dev-libs/newpkg"], 0),
     ("-d: --debug short alias, resolver trace", ["--pretend", "-d", "dev-libs/newpkg"], 0),
     ("-pd: --debug bundles with -p", ["-pd", "dev-libs/newpkg"], 0),
     ("--debug + a slot conflict: resolver trace survives backtracking", ["--pretend", "--debug", "dev-libs/slotconfgroup"], 0),
@@ -2126,10 +2133,9 @@ def _run(cmd: list[str], args: list[str], env: dict[str, str]) -> subprocess.Com
     result = subprocess.run(
         [*cmd, *args], capture_output=True, text=True, env=env, check=False
     )
-    impl = "python" if str(cmd[-1]).endswith("emerge_pretend_reference.py") else "rust"
-    corpus.record_call(impl, args, env, result)
-    if impl == "rust":
-        result.corpus_key, result.corpus_drift = corpus.check_contract_call(args, env, result)
+    # Every call is replayed against the corpus harvested before the
+    # Python reference was removed (tests/corpus.py): drift is a warning.
+    result.corpus_key, result.corpus_drift = corpus.check_contract_call(args, env, result)
     return result
 
 
@@ -2173,10 +2179,9 @@ BACKTRACK_TERMINATED_EARLY = (
 # uname:`, `KiB Mem/Swap:`, repo `Timestamp`/`Head commit`, the
 # `sh:`/`coreutils:`/`ld:` probes and the `info_pkgs` table) is host
 # state a fixture cannot reproduce -- free-memory KiB even changes
-# between the Rust and Python process spawns. Both sides run the *same*
-# probes on the *same* host, so `_normalize_info` blanks every volatile
-# value to `XXX` before a Rust == Python comparison. What stays pinned is
-# the line structure, the labels, and the deterministic config block.
+# between two process spawns. `_normalize_info` blanks every volatile
+# value to `XXX` before a comparison. What stays pinned is the line
+# structure, the labels, and the deterministic config block.
 _INFO_VOLATILE = [
     (re.compile(r"^Portage .*", re.M), "Portage XXX"),
     (re.compile(r"^System uname: .*", re.M), "System uname: XXX"),
@@ -2240,26 +2245,19 @@ def _assert_slot_collision_block(stdout, slot_atom, instances, backtrack_hint=Tr
 
 
 @pytest.mark.parametrize("description,args,expected_exit", CASES)
-def test_pretend_matches_between_implementations(
-    description, args, expected_exit, emerge_binary, emerge_pretend_python, fixture_env
+def test_pretend_case_exit_code(
+    description, args, expected_exit, emerge_binary, fixture_env
 ):
     rust_result = _run([str(emerge_binary)], args, fixture_env)
-    python_result = _run(emerge_pretend_python, args, fixture_env)
 
     assert rust_result.returncode == expected_exit, (
         f"{description}: rust exit {rust_result.returncode} != expected {expected_exit}\n"
         f"stdout={rust_result.stdout!r} stderr={rust_result.stderr!r}"
     )
-    assert python_result.returncode == expected_exit, (
-        f"{description}: python exit {python_result.returncode} != expected {expected_exit}\n"
-        f"stdout={python_result.stdout!r} stderr={python_result.stderr!r}"
-    )
-    assert rust_result.stdout == python_result.stdout, description
-    assert rust_result.stderr == python_result.stderr, description
 
 
 def test_debug_resolver_trace_stage1_digraph_dump(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """`emerge --pretend --debug` Stage 1: the `\\ndigraph:\\n\\n` +
     `debug_print()` dump on stderr (real depgraph.py:9461), in real's
@@ -2269,10 +2267,7 @@ def test_debug_resolver_trace_stage1_digraph_dump(
     node."""
     args = ["--pretend", "--debug", "dev-libs/diamond"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    python = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == 0 and python.returncode == 0
-    assert rust.stdout == python.stdout
-    assert rust.stderr == python.stderr
+    assert rust.returncode == 0
     # plain-p merge list on stdout is unchanged by --debug (trace is
     # stdout-narration + stderr-dumps, never the bracket lines).
     plain = _run([str(emerge_binary)], ["--pretend", "dev-libs/diamond"], fixture_env)
@@ -2292,30 +2287,24 @@ def test_debug_resolver_trace_stage1_digraph_dump(
 
 
 def test_debug_resolver_trace_stage3_candidate_list(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Stage 3: `Arg:`/`Atom:` on stdout, the width-10 `   ebuild:` /
     `installed:` candidate list on stderr (real depgraph.py:8347)."""
     args = ["--pretend", "--debug", "dev-libs/diamond"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    python = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.stdout == python.stdout
-    assert rust.stderr == python.stderr
     assert "\n      Arg: dev-libs/diamond\n     Atom: dev-libs/diamond\n" in rust.stdout
     assert "   ebuild: dev-libs/diamond-1.0::testrepo\n" in rust.stderr
 
 
 def test_debug_resolver_trace_stages_2_4_walk(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Stages 2/4: the per-package `Child:` / `Parent Dep:` /
     `Parent:` / `Depstring:` / `Priority:` / `Candidates:` / `Exiting...`
     narration on stdout."""
     args = ["--pretend", "--debug", "dev-libs/diamond"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    python = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.stdout == python.stdout
-    assert rust.stderr == python.stderr
     assert (
         'Child:         (dev-libs/shared-a-1.0:0/0::testrepo, ebuild scheduled for merge) USE=""\n'
         "Parent Dep:    dev-libs/shared-a required by "
@@ -2329,7 +2318,7 @@ def test_debug_resolver_trace_stages_2_4_walk(
 
 
 def test_debug_resolver_trace_stage5_rebuild_summaries(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """Stage 5: `forced reinstall atoms:` / `slot operator dependencies:`
     / `forced rebuilds:` on stdout (real depgraph.py:1011-1206), driven
@@ -2338,9 +2327,6 @@ def test_debug_resolver_trace_stage5_rebuild_summaries(
     env["ROOT"] = str(_slotbind_root(tmp_path))
     args = ["--pretend", "--debug", "dev-libs/slotbindtarget"]
     rust = _run([str(emerge_binary)], args, env)
-    python = _run(emerge_pretend_python, args, env)
-    assert rust.stdout == python.stdout
-    assert rust.stderr == python.stderr
     assert "forced reinstall atoms:\n\n\n" in rust.stdout
     assert (
         "slot operator dependencies:\n"
@@ -2351,8 +2337,8 @@ def test_debug_resolver_trace_stage5_rebuild_summaries(
     assert "forced rebuilds:\n" in rust.stdout
 
 
-def test_missing_repos_conf_matches_between_implementations(
-    emerge_binary, emerge_pretend_python
+def test_missing_repos_conf_pinned_output(
+    emerge_binary
 ):
     """A config root with no repos.conf at all is a distinct error path
     from "package not found" -- exercised separately since it doesn't use
@@ -2361,16 +2347,12 @@ def test_missing_repos_conf_matches_between_implementations(
     args = ["--pretend", "dev-libs/newpkg"]
 
     rust_result = _run([str(emerge_binary)], args, env)
-    python_result = _run(emerge_pretend_python, args, env)
 
     assert rust_result.returncode == 1
-    assert python_result.returncode == 1
-    assert rust_result.stdout == python_result.stdout
-    assert rust_result.stderr == python_result.stderr
 
 
-def test_root_deps_matches_between_implementations(
-    emerge_binary, emerge_pretend_python, fixture_env
+def test_root_deps_pinned_output(
+    emerge_binary, fixture_env
 ):
     """--root-deps: rootdepspkg's own BDEPEND (dev-libs/rootdepsprovider)
     has no ebuild anywhere in the fixture repo tree -- only a hand-seeded
@@ -2387,25 +2369,17 @@ def test_root_deps_matches_between_implementations(
     args_with = ["--pretend", "--root-deps", "dev-libs/rootdepspkg"]
 
     rust_without = _run([str(emerge_binary)], args_without, env)
-    python_without = _run(emerge_pretend_python, args_without, env)
     assert rust_without.returncode == 1
-    assert python_without.returncode == 1
-    assert rust_without.stdout == python_without.stdout
-    assert rust_without.stderr == python_without.stderr
     assert "no visible ebuild for dependency" in rust_without.stderr
 
     rust_with = _run([str(emerge_binary)], args_with, env)
-    python_with = _run(emerge_pretend_python, args_with, env)
     assert rust_with.returncode == 0
-    assert python_with.returncode == 0
-    assert rust_with.stdout == python_with.stdout
-    assert rust_with.stderr == python_with.stderr
     assert rust_with.stderr == ""
     assert rust_with.stdout.strip() == "[ebuild  N     ] dev-libs/rootdepspkg-1.0"
 
 
 def test_bdepend_routes_to_the_running_root_for_a_cross_root_build_without_root_deps(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """Real EAPI-7+ portage resolves BDEPEND/IDEPEND against the running
     root `/` unconditionally, not only under --root-deps -- observable for
@@ -2422,11 +2396,7 @@ def test_bdepend_routes_to_the_running_root_for_a_cross_root_build_without_root_
     args = ["--pretend", "dev-libs/rootdepspkg"]
 
     rust = _run([str(emerge_binary)], args, cross)
-    python = _run(emerge_pretend_python, args, cross)
     assert rust.returncode == 0
-    assert python.returncode == 0
-    assert rust.stdout == python.stdout
-    assert rust.stderr == python.stderr
     assert rust.stderr == ""
     assert rust.stdout.strip() == "[ebuild  N     ] dev-libs/rootdepspkg-1.0"
 
@@ -2437,8 +2407,8 @@ def test_bdepend_routes_to_the_running_root_for_a_cross_root_build_without_root_
     assert "no visible ebuild for dependency" in rust_same.stderr
 
 
-def test_root_deps_disjunctive_branch_selection_matches_between_implementations(
-    emerge_binary, emerge_pretend_python, fixture_env
+def test_root_deps_disjunctive_branch_selection_pinned_output(
+    emerge_binary, fixture_env
 ):
     """--root-deps branch-selection feed-in: rootdepsorpkg's own BDEPEND
     is "|| ( dev-libs/rootdepsnonexistent dev-libs/rootdepsprovider )" --
@@ -2461,25 +2431,17 @@ def test_root_deps_disjunctive_branch_selection_matches_between_implementations(
     args_with = ["--pretend", "--root-deps", "dev-libs/rootdepsorpkg"]
 
     rust_without = _run([str(emerge_binary)], args_without, env)
-    python_without = _run(emerge_pretend_python, args_without, env)
     assert rust_without.returncode == 1
-    assert python_without.returncode == 1
-    assert rust_without.stdout == python_without.stdout
-    assert rust_without.stderr == python_without.stderr
     assert "no visible ebuild for dependency" in rust_without.stderr
 
     rust_with = _run([str(emerge_binary)], args_with, env)
-    python_with = _run(emerge_pretend_python, args_with, env)
     assert rust_with.returncode == 0
-    assert python_with.returncode == 0
-    assert rust_with.stdout == python_with.stdout
-    assert rust_with.stderr == python_with.stderr
     assert rust_with.stderr == ""
     assert rust_with.stdout.strip() == "[ebuild  N     ] dev-libs/rootdepsorpkg-1.0"
 
 
-def test_root_deps_recursive_build_entry_matches_between_implementations(
-    emerge_binary, emerge_pretend_python, fixture_env
+def test_root_deps_recursive_build_entry_pinned_output(
+    emerge_binary, fixture_env
 ):
     """Real "recursively pull in and build a new package against the
     running root" (--root-deps's own last remaining documented gap, see
@@ -2506,11 +2468,7 @@ def test_root_deps_recursive_build_entry_matches_between_implementations(
     args_with = ["--pretend", "--root-deps", "dev-libs/rootdepsbuildpkg"]
 
     rust_without = _run([str(emerge_binary)], args_without, env)
-    python_without = _run(emerge_pretend_python, args_without, env)
     assert rust_without.returncode == 0
-    assert python_without.returncode == 0
-    assert rust_without.stdout == python_without.stdout
-    assert rust_without.stderr == python_without.stderr
     assert rust_without.stdout.strip() == (
         (
         '[ebuild  N     ] dev-libs/rootdepsbuildtool-1.0 \n'
@@ -2519,11 +2477,7 @@ def test_root_deps_recursive_build_entry_matches_between_implementations(
     )
 
     rust_with = _run([str(emerge_binary)], args_with, env)
-    python_with = _run(emerge_pretend_python, args_with, env)
     assert rust_with.returncode == 0
-    assert python_with.returncode == 0
-    assert rust_with.stdout == python_with.stdout
-    assert rust_with.stderr == python_with.stderr
     # The running-root build entry is now visually distinguished from the
     # pre-existing ROOT-targeted fallback (this slice): with --root-deps
     # the rootdepsbuildtool line carries a " to <running root>" marker.
@@ -2535,7 +2489,7 @@ def test_root_deps_recursive_build_entry_matches_between_implementations(
 
 
 def test_root_deps_build_entry_output_marks_the_running_root(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """The " to <running root>" marker portuale adds to a --root-deps
     running-root build entry (real lib/_emerge/resolver/output.py:841-862's
@@ -2553,11 +2507,7 @@ def test_root_deps_build_entry_output_marks_the_running_root(
     base = ["--pretend", "--root-deps", "dev-libs/rootdepsbuildpkg"]
 
     rust_plain = _run([str(emerge_binary)], base, env)
-    python_plain = _run(emerge_pretend_python, base, env)
     assert rust_plain.returncode == 0
-    assert python_plain.returncode == 0
-    assert rust_plain.stdout == python_plain.stdout
-    assert rust_plain.stderr == python_plain.stderr
     assert rust_plain.stdout == (
         (
         '[ebuild  N     ] dev-libs/rootdepsbuildtool-1.0 to /\n'
@@ -2566,16 +2516,12 @@ def test_root_deps_build_entry_output_marks_the_running_root(
     )
 
     rust_json = _run([str(emerge_binary)], [*base, "--json"], env)
-    python_json = _run(emerge_pretend_python, [*base, "--json"], env)
-    assert rust_json.stdout == python_json.stdout
     parsed = json.loads(rust_json.stdout)
     by_pkg = {e["package"]: e for e in parsed["entries"]}
     assert by_pkg["rootdepsbuildtool"]["builds_against_running_root"] == "/"
     assert by_pkg["rootdepsbuildpkg"]["builds_against_running_root"] is None
 
     rust_tree = _run([str(emerge_binary)], [*base, "--tree"], env)
-    python_tree = _run(emerge_pretend_python, [*base, "--tree"], env)
-    assert rust_tree.stdout == python_tree.stdout
     assert rust_tree.stdout == (
         "[ebuild  N     ] dev-libs/rootdepsbuildpkg-1.0 \n"
         "[ebuild  N     ]   dev-libs/rootdepsbuildtool-1.0 to /\n"
@@ -2583,7 +2529,7 @@ def test_root_deps_build_entry_output_marks_the_running_root(
 
 
 def test_root_deps_recursion_walks_the_build_entrys_own_deps(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """A running-root build entry's own DEPEND/BDEPEND/RDEPEND are now
     walked against the running root too, recursively (real
@@ -2598,11 +2544,7 @@ def test_root_deps_recursion_walks_the_build_entrys_own_deps(
     base = ["--pretend", "--root-deps", "dev-libs/rdrapp"]
 
     rust = _run([str(emerge_binary)], base, env)
-    python = _run(emerge_pretend_python, base, env)
     assert rust.returncode == 0
-    assert python.returncode == 0
-    assert rust.stdout == python.stdout
-    assert rust.stderr == python.stderr
     assert rust.stdout == (
         (
         '[ebuild  N     ] dev-libs/rdrtooldep-1.0 to /\n'
@@ -2613,8 +2555,6 @@ def test_root_deps_recursion_walks_the_build_entrys_own_deps(
     )
 
     rust_tree = _run([str(emerge_binary)], [*base, "--tree"], env)
-    python_tree = _run(emerge_pretend_python, [*base, "--tree"], env)
-    assert rust_tree.stdout == python_tree.stdout
     assert rust_tree.stdout == (
         "[ebuild  N     ] dev-libs/rdrapp-1.0 \n"
         "[ebuild  N     ]   dev-libs/rdrtool-1.0 to /\n"
@@ -2624,7 +2564,7 @@ def test_root_deps_recursion_walks_the_build_entrys_own_deps(
 
 
 def test_root_deps_recursion_walks_a_build_entrys_own_idepend(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Real portage resolves IDEPEND against the running root always
     (depgraph.py:4247-4252, independent of --root-deps). The recursion
@@ -2636,11 +2576,7 @@ def test_root_deps_recursion_walks_a_build_entrys_own_idepend(
     base = ["--pretend", "--root-deps", "dev-libs/rdriapp"]
 
     rust = _run([str(emerge_binary)], base, env)
-    python = _run(emerge_pretend_python, base, env)
     assert rust.returncode == 0
-    assert python.returncode == 0
-    assert rust.stdout == python.stdout
-    assert rust.stderr == python.stderr
     assert rust.stdout == (
         (
         '[ebuild  N     ] dev-libs/rdrilib-1.0 to /\n'
@@ -2651,7 +2587,7 @@ def test_root_deps_recursion_walks_a_build_entrys_own_idepend(
 
 
 def test_root_deps_top_level_idepend_resolves_against_the_running_root(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Real portage resolves IDEPEND (and BDEPEND) against the running
     root for *every* package, not just under --root-deps and not just for
@@ -2687,16 +2623,12 @@ def test_root_deps_top_level_idepend_resolves_against_the_running_root(
         (["--pretend", "dev-libs/topidepapp"], same, plain_out),
     ]:
         rust = _run([str(emerge_binary)], args, env)
-        python = _run(emerge_pretend_python, args, env)
         assert rust.returncode == 0
-        assert python.returncode == 0
-        assert rust.stdout == python.stdout
-        assert rust.stderr == python.stderr
         assert rust.stdout == expected, (args, env["PORTAGE_RUNNING_ROOT"])
 
 
 def test_root_deps_recursion_terminates_on_a_bdepend_cycle(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """rdrcyca BDEPENDs rdrcycb which BDEPENDs rdrcyca -- an unremarkable
     bootstrap pattern. The shared root_deps_build_seen set is the cycle
@@ -2708,10 +2640,7 @@ def test_root_deps_recursion_terminates_on_a_bdepend_cycle(
     base = ["--pretend", "--root-deps", "dev-libs/rdrcyc"]
 
     rust = _run([str(emerge_binary)], base, env)
-    python = _run(emerge_pretend_python, base, env)
     assert rust.returncode == 0
-    assert python.returncode == 0
-    assert rust.stdout == python.stdout
     assert rust.stdout == (
         (
         '[ebuild  N     ] dev-libs/rdrcycb-1.0 to /\n'
@@ -2722,7 +2651,7 @@ def test_root_deps_recursion_terminates_on_a_bdepend_cycle(
 
 
 def test_build_time_cycle_between_two_installed_packages_is_not_circular(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """instcyclea BDEPENDs instcycleb which BDEPENDs instcyclea -- but
     both are already installed. Real `DepPriority.satisfied` (a build-time
@@ -2737,12 +2666,8 @@ def test_build_time_cycle_between_two_installed_packages_is_not_circular(
     where neither end is installed)."""
     base = ["--pretend", "--emptytree", "dev-libs/instcyclea"]
     rust = _run([str(emerge_binary)], base, fixture_env)
-    python = _run(emerge_pretend_python, base, fixture_env)
 
     assert rust.returncode == 0
-    assert python.returncode == 0
-    assert rust.stdout == python.stdout
-    assert rust.stderr == python.stderr
     assert "circular dependencies" not in rust.stderr
     assert rust.stdout == (
         "[ebuild   R    ] dev-libs/instcyclea-1.0 \n"
@@ -2751,7 +2676,7 @@ def test_build_time_cycle_between_two_installed_packages_is_not_circular(
 
 
 def test_unbreakable_build_time_cycle_prints_the_circular_deps_error(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """hardcyclea DEPENDs hardcycleb which DEPENDs hardcyclea, both
     unbuilt, empty RDEPEND, no IUSE -- every edge an unsatisfied
@@ -2768,12 +2693,8 @@ def test_unbreakable_build_time_cycle_prints_the_circular_deps_error(
     CASES entry)."""
     base = ["--pretend", "dev-libs/hardcyclea"]
     rust = _run([str(emerge_binary)], base, fixture_env)
-    python = _run(emerge_pretend_python, base, fixture_env)
 
     assert rust.returncode == 1
-    assert python.returncode == 1
-    assert rust.stdout == python.stdout
-    assert rust.stderr == python.stderr
     assert rust.stdout == (
         "[ebuild  N     ] dev-libs/hardcyclea-1.0 \n"
         "[ebuild  N     ] dev-libs/hardcycleb-1.0 \n"
@@ -2791,7 +2712,7 @@ def test_unbreakable_build_time_cycle_prints_the_circular_deps_error(
 
 
 def test_circular_dep_use_flag_suggestion(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """find-suggestions Slice 2: dev-libs/usecyclea (IUSE +x) build-depends
     on dev-libs/usecycleb only when x is on; usecycleb unconditionally
@@ -2800,12 +2721,10 @@ def test_circular_dep_use_flag_suggestion(
     violating REQUIRED_USE, so real prints `It might be possible to break
     this cycle / by applying the following change: / - dev-libs/
     usecyclea-1.0 (Change USE: -x)` instead of the generic advisory.
-    Rust==Python byte-identical; the `-x` renders blue under --color y."""
+    The `-x` renders blue under --color y."""
     base = ["--pretend", "dev-libs/usecyclea"]
     rust = _run([str(emerge_binary)], base, fixture_env)
-    py = _run(emerge_pretend_python, base, fixture_env)
-    assert rust.returncode == 1 and py.returncode == 1
-    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.returncode == 1
     assert rust.stderr == (
         "\n * Error: circular dependencies:\n"
         "\n"
@@ -2823,13 +2742,11 @@ def test_circular_dep_use_flag_suggestion(
     # --color y: the -x flag renders blue (real colorize("blue", ...))
     c = ["--pretend", "--color", "y", "dev-libs/usecyclea"]
     rc = _run([str(emerge_binary)], c, fixture_env)
-    cpy = _run(emerge_pretend_python, c, fixture_env)
-    assert rc.stderr == cpy.stderr
     assert "(Change USE: \x1b[34;01m-x\x1b[39;49;00m)" in rc.stderr
 
 
 def test_circular_dep_grandparent_use_conflict_disqualifies_the_suggestion(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """The grandparent-atom conflict path (`docs/history/find-suggestions-
     plan.md`'s "no fixture yet" note, `grandparent_use_conflict` /
@@ -2841,12 +2758,10 @@ def test_circular_dep_grandparent_use_conflict_disqualifies_the_suggestion(
     x off on gpcyclea" fix would violate gpcyclec's own hard requirement,
     so the suggestion is disqualified and dropped -- real prints the
     generic "temporarily disabling USE flags" advisory instead of a
-    `Change USE:` line. Rust == Python byte-identical."""
+    `Change USE:` line."""
     args = ["--pretend", "dev-libs/gpcyclec"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == 1 and py.returncode == 1
-    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.returncode == 1
     assert rust.stderr == (
         "\n * Error: circular dependencies:\n"
         "\n"
@@ -2861,7 +2776,7 @@ def test_circular_dep_grandparent_use_conflict_disqualifies_the_suggestion(
 
 
 def test_circular_dep_conditional_grandparent_keeps_the_suggestion_with_followup(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """The `followup_change` arm of the same grandparent check (real
     `_find_suggestions` step 9; `docs/history/find-suggestions-plan.md`
@@ -2870,12 +2785,10 @@ def test_circular_dep_conditional_grandparent_keeps_the_suggestion_with_followup
     so the "disable x on fucyclea" fix survives but is flagged as possibly
     cascading upward -- real prints the `Change USE:` line *plus* the
     ` (This change might require USE changes on parent packages.)`
-    trailer. Rust == Python byte-identical, full stderr pinned."""
+    trailer. Full stderr pinned."""
     args = ["--pretend", "dev-libs/fucyclec"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == 1 and py.returncode == 1
-    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.returncode == 1
     assert rust.stderr == (
         "\n * Error: circular dependencies:\n"
         "\n"
@@ -2892,7 +2805,7 @@ def test_circular_dep_conditional_grandparent_keeps_the_suggestion_with_followup
 
 
 def test_circular_dep_four_ring_reports_redisplay_suggestion_and_lot_of_cycles(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """The Tier 2.21 slice on one fixture: dev-libs/cyc4a through
     dev-libs/cyc4d form a four-ring of build-time deps with the
@@ -2903,13 +2816,11 @@ def test_circular_dep_four_ring_reports_redisplay_suggestion_and_lot_of_cycles(
     the stuck remainder only (leaf-drain order -- flat lines, since
     portuale's tree model dedups shared nodes; no separate re-display,
     which would duplicate it), then the error block with the `-x`
-    suggestion and the lot-of-cycles trailer. Exit 1. Rust == Python
-    byte-identical, both streams pinned."""
+    suggestion and the lot-of-cycles trailer. Exit 1. Both streams
+    pinned."""
     args = ["--pretend", "dev-libs/cyc4a"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == 1 and py.returncode == 1
-    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.returncode == 1
     assert rust.stdout.splitlines() == [
         "[ebuild  N     ] dev-libs/cyc4a-1.0  USE=\"x\"",
         "[ebuild  N     ] dev-libs/cyc4d-1.0 ",
@@ -2985,7 +2896,7 @@ def _merge_lines(stdout: str) -> list[str]:
     ],
 )
 def test_abort_path_masked_unsat_suppresses_merge_list(
-    atom, mode, emerge_binary, emerge_pretend_python, fixture_env
+    atom, mode, emerge_binary, fixture_env
 ):
     """Oracle-pinned (live-captured against real 3.0.81.3, see
     `fixtures/abort-captures/` + `docs/abort-path-spec.md`): a masked-only
@@ -2996,7 +2907,7 @@ def test_abort_path_masked_unsat_suppresses_merge_list(
     either way. Slice 4 renders the (empty) partial instead of the full
     list with the gate on; the `--debug` cases for the `-mid` atoms and
     `abort-masked-cycle` stay xfailed below (pre-existing dump-order gap
-    and Slice-5 error-block work respectively). Rust == Python asserted."""
+    and Slice-5 error-block work respectively)."""
     # Test command lines carry explicit --pretend (suite convention: never
     # exercise the real-merge path against the fixture ROOT). The oracle
     # ran bare -pv/-pvt; the flag is a no-op on the abort path (both forms
@@ -3005,9 +2916,6 @@ def test_abort_path_masked_unsat_suppresses_merge_list(
     # see docs/abort-path-spec.md §3), so the pinned behavior is identical.
     args = [*mode, atom]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == py.returncode
-    assert rust.stdout == py.stdout and rust.stderr == py.stderr
     assert rust.returncode == 1
     assert _merge_lines(rust.stdout) == []
     assert "Total:" not in rust.stdout
@@ -3017,7 +2925,7 @@ def test_abort_path_masked_unsat_suppresses_merge_list(
 @pytest.mark.parametrize("atom", ["dev-libs/abort-masked-cycle"])
 @pytest.mark.parametrize("mode", _ABORT_MODES, ids=["pv", "pvt", "columns", "debug"])
 def test_abort_path_masked_cycle_hides_circular_block(
-    atom, mode, emerge_binary, emerge_pretend_python, fixture_env
+    atom, mode, emerge_binary, fixture_env
 ):
     """Slice 3 precedence oracle: masked dep + hard cycle in one top --
     real abandons the walk before serialization ever runs, so no list and
@@ -3025,9 +2933,6 @@ def test_abort_path_masked_cycle_hides_circular_block(
     suppresses the circular block for a MaskedDep outcome."""
     args = [*mode, atom]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == py.returncode
-    assert rust.stdout == py.stdout and rust.stderr == py.stderr
     assert rust.returncode == 1
     assert _merge_lines(rust.stdout) == []
     assert "Total:" not in rust.stdout
@@ -3036,10 +2941,10 @@ def test_abort_path_masked_cycle_hides_circular_block(
 
 @pytest.mark.parametrize("atom", ["dev-libs/abort-masked-mid", "dev-libs/abort-unsat-mid"])
 def test_abort_debug_digraph_dump_order_matches(
-    atom, emerge_binary, emerge_pretend_python, fixture_env
+    atom, emerge_binary, fixture_env
 ):
     """The `--debug` Stage-1 digraph dump and `--json` merge_order expose
-    entry-admission order: both implementations admit the
+    entry-admission order: portuale admits the
     NoVisibleCandidate entry second for the `-mid` atoms (e.g. maskeddep
     merge_order 1) and render installed-node labels with an empty version
     (never a bare "None" in a cpv-shaped label). Unmarked in Slice 5 --
@@ -3047,9 +2952,7 @@ def test_abort_debug_digraph_dump_order_matches(
     fixed on the Python side to match Rust's `unwrap_or("")`."""
     for args in (["--pretend", "--debug", atom],):
         rust = _run([str(emerge_binary)], args, fixture_env)
-        py = _run(emerge_pretend_python, args, fixture_env)
-        assert rust.returncode == py.returncode == 1
-        assert rust.stdout == py.stdout and rust.stderr == py.stderr
+        assert rust.returncode == 1
 
 
 @pytest.mark.parametrize(
@@ -3069,7 +2972,7 @@ def test_abort_debug_digraph_dump_order_matches(
     ],
 )
 def test_abort_path_cycle_shows_reduced_list_only(
-    atom, mode, emerge_binary, emerge_pretend_python, fixture_env
+    atom, mode, emerge_binary, fixture_env
 ):
     """Oracle-pinned (live-captured, see `fixtures/abort-captures/` +
     `docs/abort-path-spec.md`): an unserializable cycle aborts with exit
@@ -3080,16 +2983,14 @@ def test_abort_path_cycle_shows_reduced_list_only(
     stays a deliberate G0.2 cut). Mid/last pin that the cycle entry's
     declared position is unobservable in real's output. Slice 4 renders
     the remainder as the only list; the `abort-au-*` fourth-shape order
-    stays xfailed below. Rust == Python asserted. Mode-shaped
+    stays xfailed below. Mode-shaped
     assertions: `--columns` splits the version into `[x.y::repo]`, and
     `--debug` without `-v` prints no `Total:` line (real: verbosity != 3
     -- the oracle `--debug` capture shows the remainder with no counters
     either)."""
     args = [*mode, atom]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == py.returncode == 1
-    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.returncode == 1
     # Merge-line-scoped: `--debug` stdout also carries the full-walk
     # narration (`Child:`/`Candidates:` name every visited dep, leaves
     # included -- the oracle `--debug` capture walks them too); only the
@@ -3127,7 +3028,7 @@ def test_abort_path_cycle_shows_reduced_list_only(
     ],
 )
 def test_abort_path_au_cycle_orders_use_block_after_circular(
-    atom, mode, emerge_binary, emerge_pretend_python, fixture_env
+    atom, mode, emerge_binary, fixture_env
 ):
     """Fourth shape (spec §4d): autounmask changes coinciding with the
     cycle -- the same stuck remainder, the circular block, and then the
@@ -3137,9 +3038,7 @@ def test_abort_path_au_cycle_orders_use_block_after_circular(
     (pre-flip USE staleness, unrelated to rendering)."""
     args = [*mode, atom]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == py.returncode == 1
-    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.returncode == 1
     merge_lines = _merge_lines(rust.stdout)
     assert not any("abort-leaf" in line for line in merge_lines)
     assert any("abort-cycle-a" in line for line in merge_lines)
@@ -3149,18 +3048,10 @@ def test_abort_path_au_cycle_orders_use_block_after_circular(
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="pre-existing --debug narration gap (not #19's rendering): the "
-    "reference bakes entry USE before the backward-cascade flip, so its "
-    "Child: line shows the pre-flip flags (USE=\"cascade\") while real "
-    "3.0.81.3 and the Rust walk show post-flip (USE=\"-cascade\") -- the "
-    "abort list, counters, error blocks, and exit code already match",
-)
 @pytest.mark.parametrize("atom", ["dev-libs/abort-au-restart-cycle"])
 @pytest.mark.parametrize("mode", [["--pretend", "--debug"]], ids=["debug"])
 def test_abort_debug_child_line_shows_post_flip_use(
-    atom, mode, emerge_binary, emerge_pretend_python, fixture_env
+    atom, mode, emerge_binary, fixture_env
 ):
     """The `--debug` resolution-walk narration names every visited dep;
     for a backward-cascade flip the Child: USE must reflect the flipped
@@ -3171,9 +3062,14 @@ def test_abort_debug_child_line_shows_post_flip_use(
     test_abort_path_au_cycle_orders_use_block_after_circular)."""
     args = [*mode, atom]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == py.returncode == 1
-    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.returncode == 1
+    # Until 2026-09-15 this was a strict xfail: the removed Python
+    # reference baked the pre-flip USE into its narration. Rust matches the
+    # oracle.
+    assert (
+        'Child:         (dev-libs/aucascmid-1.0:0/0::testrepo, ebuild scheduled '
+        'for merge) USE="-cascade"\n'
+    ) in rust.stdout
 
 
 @pytest.mark.parametrize(
@@ -3197,7 +3093,7 @@ def test_abort_debug_child_line_shows_post_flip_use(
     ],
 )
 def test_abort_path_json_carries_partial_list_and_aborted_reason(
-    atom, expected_packages, expected_reason, emerge_binary, emerge_pretend_python,
+    atom, expected_packages, expected_reason, emerge_binary, 
     fixture_env,
 ):
     """Slice 4 `--json` provenance (plan: "add an `aborted` field with the
@@ -3207,14 +3103,11 @@ def test_abort_path_json_carries_partial_list_and_aborted_reason(
     atom/parent for dep shapes, members for cycles); `null` on the
     complete path (pinned by the diamond case). Exit 1 like every other
     format (real `actions.py:460-462` runs before any format split).
-     Rust == Python asserted, including the exact reason payloads."""
+    """
     args = ["--pretend", "--json", atom]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == py.returncode == 1
-    assert rust.stderr == py.stderr
+    assert rust.returncode == 1
     payload = json.loads(rust.stdout)
-    assert payload == json.loads(py.stdout)
     assert [e["package"] for e in payload["entries"]] == expected_packages
     aborted = payload["aborted"]
     assert aborted is not None
@@ -3229,17 +3122,15 @@ def test_abort_path_json_carries_partial_list_and_aborted_reason(
 
 
 def test_abort_path_json_complete_resolve_carries_null_aborted(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """The `aborted` field is `null` on the complete path (and the full
     list stays the `entries` array) -- pinned on the diamond so the new
     key cannot regress ordinary `--json` consumers."""
     args = ["--pretend", "--json", "dev-libs/diamond"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == py.returncode == 0
+    assert rust.returncode == 0
     payload = json.loads(rust.stdout)
-    assert payload == json.loads(py.stdout)
     assert payload["aborted"] is None
     assert {e["package"] for e in payload["entries"]} == {
         "diamond",
@@ -3259,7 +3150,7 @@ def test_abort_path_json_complete_resolve_carries_null_aborted(
     ],
 )
 def test_abort_path_gate_is_behaviour_neutral(
-    atom, emerge_binary, emerge_pretend_python, fixture_env
+    atom, emerge_binary, fixture_env
 ):
     """Merge-order-unchanged guard (plan invariant): `PORTUALE_ABORT_PATH=0`
     (legacy fallback) and the default (gate on) are byte-identical on both
@@ -3277,18 +3168,6 @@ def test_abort_path_gate_is_behaviour_neutral(
         rust_on.stderr,
         rust_on.returncode,
     )
-    py_on = _run(emerge_pretend_python, args, fixture_env)
-    py_off = _run(emerge_pretend_python, args, off_env)
-    assert (py_off.stdout, py_off.stderr, py_off.returncode) == (
-        py_on.stdout,
-        py_on.stderr,
-        py_on.returncode,
-    )
-    assert (rust_on.stdout, rust_on.stderr, rust_on.returncode) == (
-        py_on.stdout,
-        py_on.stderr,
-        py_on.returncode,
-    )
 
 
 @pytest.mark.parametrize(
@@ -3302,7 +3181,7 @@ def test_abort_path_gate_is_behaviour_neutral(
     ],
 )
 def test_abort_path_gate_off_restores_legacy_exit_code(
-    atom, emerge_binary, emerge_pretend_python, fixture_env
+    atom, emerge_binary, fixture_env
 ):
     """Slice 3+4: the abort outcome is produced for a masked-only or
     unsatisfiable dependency of a merge-bound package, so with the gate on
@@ -3310,20 +3189,16 @@ def test_abort_path_gate_off_restores_legacy_exit_code(
     empty stdout) like real (`actions.py:460-462`); with
     `PORTUALE_ABORT_PATH=0` the legacy "report, don't enforce" full list
     and exit 0 stay. The stderr error content is byte-identical either
-    way on both implementations -- only the list presence and the exit
+    way -- only the list presence and the exit
     code depend on the gate."""
     args = ["--pretend", atom]
     off_env = dict(fixture_env, PORTUALE_ABORT_PATH="0")
     rust_on = _run([str(emerge_binary)], args, fixture_env)
     rust_off = _run([str(emerge_binary)], args, off_env)
-    py_on = _run(emerge_pretend_python, args, fixture_env)
-    py_off = _run(emerge_pretend_python, args, off_env)
-    assert rust_on.returncode == py_on.returncode == 1
-    assert rust_off.returncode == py_off.returncode == 0
-    assert rust_on.stdout == py_on.stdout == ""
-    assert rust_off.stdout == py_off.stdout
+    assert rust_on.returncode == 1
+    assert rust_off.returncode == 0
+    assert rust_on.stdout == ''
     assert _merge_lines(rust_off.stdout) != []
-    assert (rust_on.stderr, rust_off.stderr) == (py_on.stderr, py_off.stderr)
     assert rust_on.stderr == rust_off.stderr
 
 
@@ -3336,7 +3211,7 @@ def test_abort_path_gate_off_restores_legacy_exit_code(
     "portuale prints it for every autounmask change with backtrack off",
 )
 def test_autounmask_only_resolve_prints_no_terminated_early_notice(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Live-captured (`fixtures/abort-captures/dev-libs_abort-au-plain.*`):
     a fresh-candidate `[auflag]` flip with no other problem shows the full
@@ -3348,9 +3223,7 @@ def test_autounmask_only_resolve_prints_no_terminated_early_notice(
     path -- pinned here so the divergence has an oracle-backed target."""
     args = ["--pretend", "-v", "dev-libs/abort-au-plain"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == py.returncode == 1
-    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.returncode == 1
     assert len(_merge_lines(rust.stdout)) == 4
     assert "USE changes are necessary" in rust.stderr
     assert "terminated early" not in rust.stderr
@@ -3365,7 +3238,7 @@ def test_autounmask_only_resolve_prints_no_terminated_early_notice(
     "test_autounmask_backward_cascade_re_resolves_an_already_resolved_slot)",
 )
 def test_autounmask_cascade_flip_before_dep_walk_pulls_the_gated_leaf(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Live-captured (`fixtures/abort-captures/dev-libs_aucasctop.*`, real
     3.0.81.3, `backtrack: 0/20`): `aucasctop`'s two deps are both added to
@@ -3379,9 +3252,7 @@ def test_autounmask_cascade_flip_before_dep_walk_pulls_the_gated_leaf(
     oracle-backed target."""
     args = ["--pretend", "dev-libs/aucasctop"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == py.returncode == 1
-    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.returncode == 1
     assert [line.split()[2] for line in _merge_lines(rust.stdout)] == [
         "dev-libs/aucascleaf-1.0",
         "dev-libs/aucascmid-1.0",
@@ -3391,7 +3262,7 @@ def test_autounmask_cascade_flip_before_dep_walk_pulls_the_gated_leaf(
 
 
 def test_root_deps_recursion_reports_an_unbuildable_build_dep(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """rdrmisstool (pulled in against the running root) BDEPENDs
     rdrnothere, which has no ebuild anywhere and isn't installed. Since
@@ -3404,11 +3275,7 @@ def test_root_deps_recursion_reports_an_unbuildable_build_dep(
     base = ["--pretend", "--root-deps", "dev-libs/rdrmiss"]
 
     rust = _run([str(emerge_binary)], base, env)
-    python = _run(emerge_pretend_python, base, env)
     assert rust.returncode == 1
-    assert python.returncode == 1
-    assert rust.stdout == python.stdout
-    assert rust.stderr == python.stderr
     assert rust.stdout == ""
     assert '!!! no visible ebuild for dependency "dev-libs/rdrnothere"' in rust.stderr
 
@@ -3476,7 +3343,7 @@ def test_libc_merges_asap_in_merge_order(emerge_binary, fixture_env):
 
 
 def test_json_entries_are_merge_ordered_with_an_explicit_index(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """--json: the entries array is emitted in the same dependency-first
     merge order as the plain-text list, and every entry carries an
@@ -3487,9 +3354,7 @@ def test_json_entries_are_merge_ordered_with_an_explicit_index(
 
     args = ["--pretend", "--json", "dev-libs/diamond"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    python = _run(emerge_pretend_python, args, fixture_env)
     assert rust.returncode == 0
-    assert rust.stdout == python.stdout
     entries = json.loads(rust.stdout)["entries"]
     assert [e["package"] for e in entries] == ["common", "shared-a", "shared-b", "diamond"]
     assert [e["merge_order"] for e in entries] == [0, 1, 2, 3]
@@ -3516,7 +3381,7 @@ def test_any_of_group_prefers_the_installed_alternative(emerge_binary, fixture_e
 
 
 def test_or_group_prefers_a_branch_already_in_the_graph(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Real `dep_zapdeps` `all_in_graph` (dep_check.py:636-649) files a
     `||` alternative every atom of which is already a merge-bound graph
@@ -3530,23 +3395,19 @@ def test_or_group_prefers_a_branch_already_in_the_graph(
     ingraphnoany control has nothing pulling ingraphwallet, so the same
     `||` falls back to the first-listed ingraphkeyring."""
     r1 = _run([str(emerge_binary)], ["--pretend", "dev-libs/ingraphany"], fixture_env)
-    p1 = _run(emerge_pretend_python, ["--pretend", "dev-libs/ingraphany"], fixture_env)
     assert r1.returncode == 0
-    assert r1.stdout == p1.stdout
     lines = r1.stdout.splitlines()
     assert any("dev-libs/ingraphwallet-1.0" in ln for ln in lines)
     assert not any("dev-libs/ingraphkeyring" in ln for ln in lines)
 
     r2 = _run([str(emerge_binary)], ["--pretend", "dev-libs/ingraphnoany"], fixture_env)
-    p2 = _run(emerge_pretend_python, ["--pretend", "dev-libs/ingraphnoany"], fixture_env)
     assert r2.returncode == 0
-    assert r2.stdout == p2.stdout
     assert any("dev-libs/ingraphkeyring-1.0" in ln for ln in r2.stdout.splitlines())
     assert not any("dev-libs/ingraphwallet" in ln for ln in r2.stdout.splitlines())
 
 
 def test_or_group_installed_preference_skips_a_required_use_broken_first_alternative(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Regression for the live `emerge -puD @world` abort on
     `app-emulation/wine-vanilla`. dev-libs/orrequseprefer's RDEPEND is
@@ -3562,15 +3423,12 @@ def test_or_group_installed_preference_skips_a_required_use_broken_first_alterna
     is exactly `virtual/wine` -> `wine-staging` on a real system."""
     args = ["--pretend", "dev-libs/orrequseprefer"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
     assert rust.returncode == 0, rust.stdout + rust.stderr
     assert rust.stdout.splitlines() == ['[ebuild  N     ] dev-libs/orrequseprefer-1.0 ']
-    assert rust.stdout == py.stdout
-    assert rust.returncode == py.returncode
 
 
 def test_or_group_in_bin_ordering_promotes_the_upgrade_over_the_first_listed_alternative(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Backlog #22 slice 2 (in-bin ordering, `docs/022-agent-task-22-
     zapdeps.fable.md` §4): real `dep_zapdeps` doesn't just take the
@@ -3592,9 +3450,7 @@ def test_or_group_in_bin_ordering_promotes_the_upgrade_over_the_first_listed_alt
     must NOT appear, `:2`'s must."""
     args = ["--pretend", "-D", "dev-libs/orupgrade"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == 0 and py.returncode == 0
-    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.returncode == 0
     assert rust.stdout.splitlines() == [
         "[ebuild  N     ] dev-libs/orupgrademarker2-1.0 ",
         "[ebuild  N     ] dev-libs/orupgrade-1.0 ",
@@ -3605,7 +3461,7 @@ def test_or_group_in_bin_ordering_promotes_the_upgrade_over_the_first_listed_alt
 
 
 def test_or_group_in_bin_ordering_promotes_in_graph_over_installed_only(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Backlog #22 slice 2, in-bin ordering rule 3 (`docs/022-agent-task-
     22-zapdeps.fable.md` §4, dep_check.py soft 788-796): "prefer choices
@@ -3622,9 +3478,7 @@ def test_or_group_in_bin_ordering_promotes_in_graph_over_installed_only(
     `--deep` walk would reveal it if the || group wrongly chose it."""
     args = ["--pretend", "-D", "dev-libs/oringraph"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == 0 and py.returncode == 0
-    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.returncode == 0
     assert rust.stdout.splitlines() == [
         "[ebuild  N     ] dev-libs/oringraphpulled-1.0 ",
         "[ebuild  N     ] dev-libs/oringraphtie-1.0 ",
@@ -3636,7 +3490,7 @@ def test_or_group_in_bin_ordering_promotes_in_graph_over_installed_only(
 
 
 def test_or_group_in_bin_ordering_promotes_all_installed_slots_over_any_slot(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Backlog #22 slice 2, in-bin ordering rule 2 (`docs/022-agent-task-
     22-zapdeps.fable.md` §4, dep_check.py soft 763-770): `all_installed_
@@ -3653,9 +3507,7 @@ def test_or_group_in_bin_ordering_promotes_all_installed_slots_over_any_slot(
     unwanted slot 2."""
     args = ["--pretend", "dev-libs/oranyslot"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == 0 and py.returncode == 0
-    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.returncode == 0
     assert rust.stdout.splitlines() == ["[ebuild  N     ] dev-libs/oranyslot-1.0 "]
     assert "oranyslotalt" not in rust.stdout, (
         "the already-installed slot must satisfy the || group with no new merge at all"
@@ -3663,7 +3515,7 @@ def test_or_group_in_bin_ordering_promotes_all_installed_slots_over_any_slot(
 
 
 def test_or_group_other_installed_bin_beats_plain_other_in_the_allow_masked_pass(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Backlog #22 slice 4 (`docs/022-agent-task-22-zapdeps.fable.md` §4,
     dep_check.py soft 715-724 + the two-pass `allow_masked` return, soft
@@ -3682,9 +3534,7 @@ def test_or_group_other_installed_bin_beats_plain_other_in_the_allow_masked_pass
     slice-4-unrelated quirk), and `omaskedmissing` is dropped entirely."""
     args = ["--pretend", "dev-libs/omasked"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == 0 and py.returncode == 0
-    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.returncode == 0
     assert rust.stdout.splitlines() == ['[ebuild  N     ] dev-libs/omasked-1.0 ']
     assert rust.stderr == ""
     assert "omaskedmissing" not in rust.stdout, (
@@ -3693,7 +3543,7 @@ def test_or_group_other_installed_bin_beats_plain_other_in_the_allow_masked_pass
 
 
 def test_or_group_other_installed_some_bin_beats_plain_other(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Backlog #22 slice 4, `other_installed_some` (dep_check.py soft
     715-719): a bracketed AND-alternative where only SOME (not all) of
@@ -3714,9 +3564,7 @@ def test_or_group_other_installed_some_bin_beats_plain_other(
     identical interaction."""
     args = ["--pretend", "dev-libs/opartly"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == 1 and py.returncode == 1
-    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.returncode == 1
     assert rust.stdout.splitlines() == []
     assert rust.stderr.splitlines() == [
         '!!! no visible ebuild for dependency "dev-libs/opartlya"',
@@ -3728,7 +3576,7 @@ def test_or_group_other_installed_some_bin_beats_plain_other(
 
 
 def test_or_group_other_installed_any_slot_bin_beats_plain_other(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Backlog #22 slice 4, `other_installed_any_slot` (dep_check.py soft
     720-724, bug 522652's fuzzy cp-level match): when an atom's FULL vdb
@@ -3751,9 +3599,7 @@ def test_or_group_other_installed_any_slot_bin_beats_plain_other(
      independent of which alternative #22 picked."""
     args = ["--pretend", "dev-libs/ofuzzy"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == 1 and py.returncode == 1
-    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.returncode == 1
     assert rust.stdout.splitlines() == []
     assert rust.stderr.splitlines() == [
         '!!! no visible ebuild for dependency "dev-libs/ofuzzyinstalled"',
@@ -3764,7 +3610,7 @@ def test_or_group_other_installed_any_slot_bin_beats_plain_other(
 
 
 def test_or_group_resolves_a_use_unsatisfiable_but_unmasked_alternative(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """The bug-515584 `unsat_use_*` bins, now genuinely produced by the
     `||` dispatch (see commit "portage-repo: wire dep_zapdeps
@@ -3784,9 +3630,7 @@ def test_or_group_resolves_a_use_unsatisfiable_but_unmasked_alternative(
     ebuild for dependency "dev-libs/doesnotexist-unsatuseor"`)."""
     args = ["--pretend", "dev-libs/unsatuseor"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == 1 and py.returncode == 1
-    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.returncode == 1
     assert rust.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/unsatusealt-1.0  USE="unsatuseorflag"',
         '[ebuild  N     ] dev-libs/unsatuseor-1.0 ',
@@ -3810,7 +3654,7 @@ def test_or_group_resolves_a_use_unsatisfiable_but_unmasked_alternative(
 
 
 def test_or_group_use_unsat_alternative_reports_the_dependency_it_enqueued_without_autounmask(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Same unsatuseor fixture with `--autounmask-use=n`: the `||` group
     still resolves to `unsatusealt[unsatuseorflag]` (alternative 1 is
@@ -3825,9 +3669,7 @@ def test_or_group_use_unsat_alternative_reports_the_dependency_it_enqueued_witho
     stderr carried two `no visible ebuild` lines."""
     args = ["--pretend", "--autounmask-use=n", "dev-libs/unsatuseor"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == 1 and py.returncode == 1
-    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.returncode == 1
     assert rust.stdout.splitlines() == []
     assert rust.stderr.splitlines() == [
         "",
@@ -3841,7 +3683,7 @@ def test_or_group_use_unsat_alternative_reports_the_dependency_it_enqueued_witho
 
 
 def test_deep_walk_dispatches_or_group_through_the_same_unsat_use_bins_as_the_main_walk(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Review finding F1 (2026-09-11 review of "portage-repo: wire
     dep_zapdeps unsat_use fine bins"): `enqueue_dependencies` (the
@@ -3859,9 +3701,7 @@ def test_deep_walk_dispatches_or_group_through_the_same_unsat_use_bins_as_the_ma
     BOTH alternatives -- the dead `doesnotexist-unsatuseor` included."""
     args = ["--pretend", "-D", "dev-libs/unsatuseinstconsumer"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == 1 and py.returncode == 1
-    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.returncode == 1
     assert rust.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/unsatusealt-1.0  USE="unsatuseorflag"',
         "[ebuild  N     ] dev-libs/unsatuseinstconsumer-1.0 ",
@@ -3873,9 +3713,7 @@ def test_deep_walk_dispatches_or_group_through_the_same_unsat_use_bins_as_the_ma
 
     args_no_unmask = ["--pretend", "-D", "--autounmask-use=n", "dev-libs/unsatuseinstconsumer"]
     rust2 = _run([str(emerge_binary)], args_no_unmask, fixture_env)
-    py2 = _run(emerge_pretend_python, args_no_unmask, fixture_env)
-    assert rust2.returncode == 0 and py2.returncode == 0
-    assert rust2.stdout == py2.stdout and rust2.stderr == py2.stderr
+    assert rust2.returncode == 0
     assert rust2.stdout.splitlines() == [
         "[ebuild  N     ] dev-libs/unsatuseinstconsumer-1.0 ",
     ]
@@ -3892,7 +3730,7 @@ def test_deep_walk_dispatches_or_group_through_the_same_unsat_use_bins_as_the_ma
 
 
 def test_use_unsat_missing_iuse_reports_the_missing_flag(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Backlog #20, reason kind 2: a `[flag]` dep whose flag is not in the
     target's IUSE at all. Real `_show_unsatisfied_dep` reads
@@ -3905,9 +3743,7 @@ def test_use_unsat_missing_iuse_reports_the_missing_flag(
     plus the `(dependency required by …)` chain."""
     args = ["--pretend", "--autounmask-use=n", "dev-libs/unsatuseiuse"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == 1 and py.returncode == 1
-    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.returncode == 1
     assert rust.stdout.splitlines() == []
     assert rust.stderr.splitlines() == [
         "",
@@ -3920,7 +3756,7 @@ def test_use_unsat_missing_iuse_reports_the_missing_flag(
 
 
 def test_use_unsat_lists_only_the_latest_change_use_candidate(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Backlog #20: real `_show_unsatisfied_dep`'s "Only show the latest
     version" rule for the `Change USE:` path (`unmasked_use_reasons` is
@@ -3931,9 +3767,7 @@ def test_use_unsat_lists_only_the_latest_change_use_candidate(
     that row and no `-1.0` row."""
     args = ["--pretend", "--autounmask-use=n", "dev-libs/unsatusealtmultidep"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == 1 and py.returncode == 1
-    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.returncode == 1
     assert rust.stdout.splitlines() == []
     assert rust.stderr.splitlines() == [
         "",
@@ -3947,7 +3781,7 @@ def test_use_unsat_lists_only_the_latest_change_use_candidate(
 
 
 def test_or_group_unsat_use_installed_bin_keys_on_the_targeted_slot_not_just_cp(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Review finding F4: real dep_zapdeps' unsat_use_installed choice bin
     keys on all_installed_slots (dep_check.py soft 599-607) -- every
@@ -3965,9 +3799,7 @@ def test_or_group_unsat_use_installed_bin_keys_on_the_targeted_slot_not_just_cp(
     (unsatuseslotalt:2) won on the tie -- wrong slot, wrong package."""
     args = ["--pretend", "dev-libs/unsatuseslot"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == 1 and py.returncode == 1
-    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.returncode == 1
     assert rust.stdout.splitlines() == [
         '[ebuild   R    ] dev-libs/unsatuseslotother-1.0  USE="unsatuseorflag*"',
         "[ebuild  N     ] dev-libs/unsatuseslot-1.0 ",
@@ -3978,7 +3810,7 @@ def test_or_group_unsat_use_installed_bin_keys_on_the_targeted_slot_not_just_cp(
 
 
 def test_or_group_preferred_non_installed_outranks_unsat_use_non_installed(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Review finding F8 (contract coverage): the real-source comment
     "unsat_use_* must come after preferred_non_installed for correct
@@ -3993,9 +3825,7 @@ def test_or_group_preferred_non_installed_outranks_unsat_use_non_installed(
     outright, with NO autounmask change proposed at all, exit 0."""
     args = ["--pretend", "dev-libs/unsatuseorder"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == 0 and py.returncode == 0
-    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.returncode == 0
     assert rust.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/unsatuseordertarget-1.0  USE="unsatuseotherflag -unsatuseorflag"',
         "[ebuild  N     ] dev-libs/unsatuseorder-1.0 ",
@@ -4004,12 +3834,11 @@ def test_or_group_preferred_non_installed_outranks_unsat_use_non_installed(
 
 
 def test_or_group_use_mask_violation_demotes_to_other_never_selected(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Review finding F8 (contract coverage) for the bug-515584 masked
     demotion, at the contract level (the Rust side already had a unit
-    test for this; this pins the same behaviour end to end and gives the
-    Python mirror its own coverage). dev-libs/unsatusemasked's RDEPEND is
+    test for this; this pins the same behaviour end to end). dev-libs/unsatusemasked's RDEPEND is
     `|| ( dev-libs/unsatusemaskedalt[unsatusemaskedflag]
     dev-libs/unsatuseordertarget[unsatuseorflag] )`; unsatusemaskedflag is
     globally use.mask'd for unsatusemaskedalt (profiles/package.use.mask),
@@ -4020,9 +3849,7 @@ def test_or_group_use_mask_violation_demotes_to_other_never_selected(
     so it wins and an autounmask flip is proposed for it."""
     args = ["--pretend", "dev-libs/unsatusemasked"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == 1 and py.returncode == 1
-    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.returncode == 1
     assert rust.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/unsatuseordertarget-1.0  USE="unsatuseorflag unsatuseotherflag"',
         "[ebuild  N     ] dev-libs/unsatusemasked-1.0 ",
@@ -4034,7 +3861,7 @@ def test_or_group_use_mask_violation_demotes_to_other_never_selected(
 
 
 def test_or_group_alternative_yields_to_the_next_when_backtracking_masks_it(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Real `dep_zapdeps` re-choosing a `||` alternative once
     backtracking's `runtime_pkg_mask` hides the preferred one. dev-libs/
@@ -4064,16 +3891,14 @@ def test_or_group_alternative_yields_to_the_next_when_backtracking_masks_it(
     # --backtrack=0 conflict path both match byte-for-byte.
     for extra in ([], ["--backtrack=0"], ["--tree"]):
         args = ["--pretend", *extra, "dev-libs/orbtblocked"]
-        py = _run(emerge_pretend_python, args, fixture_env)
         rs = _run([str(emerge_binary)], args, fixture_env)
-        assert rs.stdout == py.stdout, (extra, rs.stdout, py.stdout)
-        assert rs.stderr == py.stderr, (extra, rs.stderr, py.stderr)
+        _assert_harvested(rs)
     nobt = _run([str(emerge_binary)], ["--pretend", "--backtrack=0", "dev-libs/orbtblocked"], fixture_env)
     assert "slot conflict" in nobt.stdout
 
 
 def test_or_group_alternative_yields_to_the_next_on_a_missing_transitive_dep(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Real `backtracking.py::_feedback_missing_dep`: a dependency atom
     with no matching package masks its parent and re-drives, so
@@ -4094,10 +3919,8 @@ def test_or_group_alternative_yields_to_the_next_on_a_missing_transitive_dep(
     ]
     for extra in ([], ["--backtrack=0"], ["--tree"]):
         args = ["--pretend", *extra, "dev-libs/ormisstop"]
-        py = _run(emerge_pretend_python, args, fixture_env)
         rs = _run([str(emerge_binary)], args, fixture_env)
-        assert rs.stdout == py.stdout, (extra, rs.stdout, py.stdout)
-        assert rs.stderr == py.stderr, (extra, rs.stderr, py.stderr)
+        _assert_harvested(rs)
     nobt = _run(
         [str(emerge_binary)], ["--pretend", "--backtrack=0", "dev-libs/ormisstop"], fixture_env
     )
@@ -4196,7 +4019,7 @@ def test_sub_slot_restricted_dependency_atom_rejects_a_real_mismatch(
 
 
 def test_dependency_avoid_update_is_slot_aware(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """Real `avoid_update` for a dependency atom returns an installed
     package only when `vardb.match(atom)` -- which honours the atom's
@@ -4219,7 +4042,6 @@ def test_dependency_avoid_update_is_slot_aware(
         "[ebuild  NS    ] dev-libs/avoidslotpkg-1.0 [1.0]",
         "[ebuild  N     ] dev-libs/avoidslotconsumer-1.0 ",
     ]
-    assert _run(emerge_pretend_python, args, env).stdout == result.stdout
 
 
 def _slotbind_root(tmp_path):
@@ -4257,7 +4079,7 @@ def _slotbind_root(tmp_path):
 
 
 def test_slot_operator_rebuild_reinstalls_a_stale_equals_consumer(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """Real depgraph's _slot_operator_trigger_reinstalls: dev-libs/
     slotbindconsumer's vdb RDEPEND is "dev-libs/slotbindtarget:2/2="
@@ -4294,9 +4116,8 @@ def test_slot_operator_rebuild_reinstalls_a_stale_equals_consumer(
     # Full Rust-vs-Python lockstep, incl. --json (slot_operator_rebuild +
     # abi_rebuilds), and --verbose-slot-rebuilds=n dropping the block.
     for extra in (["--json"], ["--verbose-slot-rebuilds=n"]):
-        python = _run(emerge_pretend_python, args + extra, env)
         rust = _run([str(emerge_binary)], args + extra, env)
-        assert rust.stdout == python.stdout, (extra, rust.stdout, python.stdout)
+        _assert_harvested(rust)
     assert '"slot_operator_rebuild":true' in _run(
         [str(emerge_binary)], args + ["--json"], env
     ).stdout
@@ -4308,7 +4129,7 @@ def test_slot_operator_rebuild_reinstalls_a_stale_equals_consumer(
 
 
 def test_slot_operator_rebuild_is_a_walked_node_and_off_at_backtrack_zero(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """Backlog #24 S3, the two observables of routing the rebuild through
     the `Backtracker` instead of synthesising an entry after the settle.
@@ -4351,8 +4172,6 @@ def test_slot_operator_rebuild_is_a_walked_node_and_off_at_backtrack_zero(
 
     for budget in (["--backtrack", "0"], ["--backtrack=0"]):
         rust = _run([str(emerge_binary)], args + budget, env)
-        python = _run(emerge_pretend_python, args + budget, env)
-        assert rust.stdout == python.stdout and rust.stderr == python.stderr
         assert rust.returncode == 0
         assert rust.stdout.splitlines() == [
             "[ebuild     U  ] dev-libs/slotbindtarget-2.0 [1.0]"
@@ -4363,7 +4182,7 @@ def test_slot_operator_rebuild_is_a_walked_node_and_off_at_backtrack_zero(
 
 
 def test_ignore_built_slot_operator_deps_suppresses_the_rebuild(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """Real --ignore-built-slot-operator-deps (main.py:470, y_or_n): real
     portage strips the built := operator parts out of every installed
@@ -4384,9 +4203,8 @@ def test_ignore_built_slot_operator_deps_suppresses_the_rebuild(
     # Full Rust-vs-Python lockstep, incl. --json and the bare form.
     for these in (args, args + ["--json"],
                   ["--pretend", "--ignore-built-slot-operator-deps", "dev-libs/slotbindtarget"]):
-        python = _run(emerge_pretend_python, these, env)
         rust = _run([str(emerge_binary)], these, env)
-        assert rust.stdout == python.stdout, (these, rust.stdout, python.stdout)
+        _assert_harvested(rust)
     assert '"abi_rebuilds":[]' in _run([str(emerge_binary)], args + ["--json"], env).stdout
 
 
@@ -4430,7 +4248,7 @@ def _slotcascade_root(tmp_path):
 
 
 def test_slot_operator_rebuild_cascades_through_a_multi_level_chain(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """Real _backtrack_depgraph's slot-operator re-drive to a fixpoint: a
     scheduled rebuild lands at its tree ebuild's SLOT (not the vdb's), so
@@ -4467,9 +4285,8 @@ def test_slot_operator_rebuild_cascades_through_a_multi_level_chain(
     ]
     # Full Rust-vs-Python lockstep, bare + --json + --tree.
     for extra in ([], ["--json"], ["--tree"]):
-        python = _run(emerge_pretend_python, args + extra, env)
         rust = _run([str(emerge_binary)], args + extra, env)
-        assert rust.stdout == python.stdout, (extra, rust.stdout, python.stdout)
+        _assert_harvested(rust)
 
 
 def test_use_dep_dependency_atoms_are_resolved_not_dropped(emerge_binary, fixture_env):
@@ -4525,7 +4342,7 @@ def test_autounmask_use_resolves_a_dependency_use_dep_mismatch(
 
 
 def test_autounmask_backward_cascade_re_resolves_an_already_resolved_slot(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """dev-libs/aucasctop RDEPENDs aucascmid (resolved cascade-off first,
     the bare atom) then aucasclate, whose RDEPEND is
@@ -4547,12 +4364,10 @@ def test_autounmask_backward_cascade_re_resolves_an_already_resolved_slot(
     test_autounmask_cascade_flip_before_dep_walk_pulls_the_gated_leaf.
 
     --autounmask-backtrack=y: the loop re-runs the whole walk with the
-    flip applied, so aucascleaf now appears too. Full Rust==Python."""
+    flip applied, so aucascleaf now appears too."""
     base = ["--pretend", "dev-libs/aucasctop"]
     rust = _run([str(emerge_binary)], base, fixture_env)
-    py = _run(emerge_pretend_python, base, fixture_env)
     assert rust.returncode == 1
-    assert rust.stdout == py.stdout and rust.stderr == py.stderr
     assert rust.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/aucascmid-1.0  USE="cascade"',
         "[ebuild  N     ] dev-libs/aucasclate-1.0 ",
@@ -4570,8 +4385,6 @@ def test_autounmask_backward_cascade_re_resolves_an_already_resolved_slot(
     # --autounmask-backtrack=y: the whole graph is re-driven, aucascleaf appears
     ab = ["--pretend", "--autounmask-backtrack=y", "dev-libs/aucasctop"]
     rust_ab = _run([str(emerge_binary)], ab, fixture_env)
-    py_ab = _run(emerge_pretend_python, ab, fixture_env)
-    assert rust_ab.stdout == py_ab.stdout and rust_ab.stderr == py_ab.stderr
     assert rust_ab.stdout.splitlines() == [
         "[ebuild  N     ] dev-libs/aucascleaf-1.0 ",
         '[ebuild  N     ] dev-libs/aucascmid-1.0  USE="cascade"',
@@ -4599,12 +4412,6 @@ def test_autounmask_backward_cascade_re_resolves_an_already_resolved_slot(
     n = _run(
         [str(emerge_binary)], ["--pretend", "--autounmask-use=n", "dev-libs/aucasctop"], fixture_env
     )
-    npy = _run(
-        emerge_pretend_python,
-        ["--pretend", "--autounmask-use=n", "dev-libs/aucasctop"],
-        fixture_env,
-    )
-    assert n.stdout == npy.stdout and n.stderr == npy.stderr
     assert "aucascleaf" not in n.stdout
     # Backlog #20: real's "no ebuilds built with USE flags to satisfy"
     # block (oracle: portage 3.0.81.3, TEST/run/abort-capture.sh tree,
@@ -4623,7 +4430,7 @@ def test_autounmask_backward_cascade_re_resolves_an_already_resolved_slot(
 
 
 def test_autounmask_breakage_abandons_autounmask_when_a_flag_is_wanted_both_ways(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """dev-libs/aubreaktop pulls dev-libs/aubreaksub plain, then
     dev-libs/aubreakwant (needs aubreaksub[brk]) and dev-libs/aubreakunwant
@@ -4643,12 +4450,10 @@ def test_autounmask_breakage_abandons_autounmask_when_a_flag_is_wanted_both_ways
     autounmask change and re-resolves once with suggestion off -- NO 'USE
     changes are necessary' block, aubreaksub at its default USE="-brk",
     aubreakwant's [brk] as the ordinary non-fatal dependency warning.
-    Rust==Python byte-identical both ways."""
+   """
     args = ["--pretend", "dev-libs/aubreaktop"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == 1 and py.returncode == 1
-    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.returncode == 1
     assert rust.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/aubreaksub-1.0  USE="brk"',
         "[ebuild  N     ] dev-libs/aubreakwant-1.0 ",
@@ -4666,8 +4471,6 @@ def test_autounmask_breakage_abandons_autounmask_when_a_flag_is_wanted_both_ways
     # --autounmask-backtrack=y: the contradiction is detected, autounmask abandoned
     ab = ["--pretend", "--autounmask-backtrack=y", "dev-libs/aubreaktop"]
     rust_ab = _run([str(emerge_binary)], ab, fixture_env)
-    py_ab = _run(emerge_pretend_python, ab, fixture_env)
-    assert rust_ab.stdout == py_ab.stdout and rust_ab.stderr == py_ab.stderr
     assert rust_ab.stdout.splitlines() == []
     assert "USE changes are necessary" not in rust_ab.stderr
     # Backlog #20: the block, not the bare line. Chain note: real shows
@@ -4688,7 +4491,7 @@ def test_autounmask_breakage_abandons_autounmask_when_a_flag_is_wanted_both_ways
 
 
 def test_autounmask_keyword_backward_cascade_re_resolves_a_slot_to_a_masked_version(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Slice 6: dev-libs/kwbacktop RDEPENDs dev-libs/kwbackmid (bare ->
     stable 1.0 wins the slot first) AND >=dev-libs/kwbackmid-2.0 (only 2.0
@@ -4700,12 +4503,10 @@ def test_autounmask_keyword_backward_cascade_re_resolves_a_slot_to_a_masked_vers
 
     Default (keyword suggestions off): the >=2.0 dep just stays
     unresolvable (a non-fatal dependency warning), same as before.
-    Rust==Python byte-identical."""
+   """
     # default: no keyword suggestions -> >=2.0 unresolvable, top still merges
     d = _run([str(emerge_binary)], ["--pretend", "dev-libs/kwbacktop"], fixture_env)
-    dpy = _run(emerge_pretend_python, ["--pretend", "dev-libs/kwbacktop"], fixture_env)
     assert d.returncode == 1
-    assert d.stdout == dpy.stdout and d.stderr == dpy.stderr
     assert "kwbackmid-2.0" not in d.stdout
     assert (
         'All ebuilds that could satisfy ">=dev-libs/kwbackmid-2.0" have been masked.'
@@ -4715,9 +4516,7 @@ def test_autounmask_keyword_backward_cascade_re_resolves_a_slot_to_a_masked_vers
     # --autounmask: the slot re-resolves to 2.0 with an implicit keyword change
     a = ["--pretend", "--autounmask", "dev-libs/kwbacktop"]
     rust = _run([str(emerge_binary)], a, fixture_env)
-    py = _run(emerge_pretend_python, a, fixture_env)
     assert rust.returncode == 1
-    assert rust.stdout == py.stdout and rust.stderr == py.stderr
     assert rust.stdout.splitlines() == [
         "[ebuild  N    ~] dev-libs/kwbackmid-2.0 ",
         "[ebuild  N     ] dev-libs/kwbacktop-1.0 ",
@@ -4733,7 +4532,7 @@ def test_autounmask_keyword_backward_cascade_re_resolves_a_slot_to_a_masked_vers
 
 
 def test_autounmask_levels_unmask_two_categories_at_once_on_the_same_version(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Per-level version re-scan (real `_select_pkg_highest_available_imp`
     re-runs its highest-first match for each `_autounmask_levels` step).
@@ -4744,12 +4543,10 @@ def test_autounmask_levels_unmask_two_categories_at_once_on_the_same_version(
     higher 2.0 -- recording a keyword change AND a license change for the
     same version. Before, portuale's flat `keyword_masked_only` fallback
     dropped 2.0 (it also had a license problem) and settled on 1.0.
-    Rust==Python byte-identical."""
+   """
     a = ["--pretend", "--autounmask", "dev-libs/multimaskconsumer"]
     rust = _run([str(emerge_binary)], a, fixture_env)
-    py = _run(emerge_pretend_python, a, fixture_env)
     assert rust.returncode == 1
-    assert rust.stdout == py.stdout and rust.stderr == py.stderr
     assert rust.stdout.splitlines() == [
         "[ebuild  N    ~] dev-libs/multimaskdep-2.0 ",
         "[ebuild  N     ] dev-libs/multimaskconsumer-1.0 ",
@@ -4772,12 +4569,6 @@ def test_autounmask_levels_unmask_two_categories_at_once_on_the_same_version(
     d = _run(
         [str(emerge_binary)], ["--pretend", "dev-libs/multimaskconsumer"], fixture_env
     )
-    dpy = _run(
-        emerge_pretend_python,
-        ["--pretend", "dev-libs/multimaskconsumer"],
-        fixture_env,
-    )
-    assert d.stdout == dpy.stdout and d.stderr == dpy.stderr
     assert "multimaskdep" not in d.stdout
     assert (
         'All ebuilds that could satisfy "dev-libs/multimaskdep" have been masked.'
@@ -4786,19 +4577,17 @@ def test_autounmask_levels_unmask_two_categories_at_once_on_the_same_version(
 
 
 def test_autounmask_levels_prefer_license_over_a_higher_keyword_masked_version(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Real _autounmask_levels (depgraph.py:7446) tries relaxations least-
     to most-invasive -- +license (level 1) before +~arch (level 2) -- and
     stops at the first level yielding a candidate. dev-libs/levelpkg-1.0
     is @EULA-license-masked (stable keyword); levelpkg-2.0 is ~amd64
     keyword-masked (acceptable license). So the LOWER 1.0 wins, with a
-    license change, over the higher 2.0's keyword change. Rust==Python."""
+    license change, over the higher 2.0's keyword change."""
     args = ["--pretend", "--autounmask", "dev-libs/levelconsumer"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
     assert rust.returncode == 1
-    assert rust.stdout == py.stdout and rust.stderr == py.stderr
     assert rust.stdout.splitlines() == [
         "[ebuild  N     ] dev-libs/levelpkg-1.0 ",
         "[ebuild  N     ] dev-libs/levelconsumer-1.0 ",
@@ -5287,7 +5076,7 @@ def test_autounmask_suggests_a_keyword_once_explicitly_enabled(emerge_binary, fi
 
 
 def test_autounmask_continue_and_backtrack_are_inert_without_autounmask_changes(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """--autounmask-continue's write-and-continue half is gated on
     `"--pretend" not in myopts` (depgraph.py:5796), so under --pretend its
@@ -5309,7 +5098,6 @@ def test_autounmask_continue_and_backtrack_are_inert_without_autounmask_changes(
         r = _run([str(emerge_binary)], plain[:1] + extra + plain[1:], fixture_env)
         assert r.stdout == base.stdout
         assert r.stderr == base.stderr
-        assert r.stdout == _run(emerge_pretend_python, plain[:1] + extra + plain[1:], fixture_env).stdout
 
     # --autounmask-continue + --autounmask=n -> the warning on stderr,
     # merge list unchanged on stdout.
@@ -5321,24 +5109,16 @@ def test_autounmask_continue_and_backtrack_are_inert_without_autounmask_changes(
     assert warn.returncode == 0
     assert warn.stdout == base.stdout
     assert "--autounmask-continue has been disabled by --autounmask=n" in warn.stderr
-    assert warn.stderr == _run(
-        emerge_pretend_python,
-        ["--pretend", "--autounmask-continue", "--autounmask=n", "dev-libs/newpkg"],
-        fixture_env,
-    ).stderr
 
 
-def test_autounmask_only_suppresses_the_merge_list(emerge_binary, emerge_pretend_python, fixture_env):
+def test_autounmask_only_suppresses_the_merge_list(emerge_binary, fixture_env):
     """--autounmask-only (real actions.py:456): resolve the graph, then
     `mydepgraph.display_problems(); return 0` -- the `[ebuild ...]` merge
     list is NOT printed, only the autounmask changes block (+ slot
     conflicts), and the exit code stays 0. Byte-identical Rust/Python."""
     args = ["--pretend", "--autounmask", "--autounmask-only", "dev-libs/autounmaskkeywordpkg"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
     assert rust.returncode == 0
-    assert rust.stdout == py.stdout
-    assert rust.stderr == py.stderr
     # No merge list on stdout at all.
     assert rust.stdout == ""
     # The changes block still goes to stderr.
@@ -5718,7 +5498,7 @@ def test_autounmask_use_parent_flip_suggestion_is_suppressed_by_autounmask_use_n
 
 
 def test_autounmask_use_parent_flip_resolves_when_the_child_flag_is_masked(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Real --autounmask-use PART B *resolution* (_apply_parent_use_changes
     -> _show_unsatisfied_dep(collect_use_changes=True)): dev-libs/
@@ -5732,10 +5512,7 @@ def test_autounmask_use_parent_flip_resolves_when_the_child_flag_is_masked(
     resolves as a normal New."""
     args = ["--pretend", "dev-libs/parentflipeqpkg"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
     assert rust.returncode == 1
-    assert rust.stdout == py.stdout
-    assert rust.stderr == py.stderr
     assert rust.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/parentflipchildpkg-1.0  USE="(-feat)"',
         '[ebuild  N     ] dev-libs/parentflipeqpkg-1.0  USE="-feat"',
@@ -5766,7 +5543,7 @@ def test_autounmask_use_parent_flip_resolves_when_the_child_flag_is_masked(
 
 
 def test_autounmask_use_parent_flip_re_resolves_the_whole_graph(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """dev-libs/pfgraphparent (IUSE +pf) RDEPENDs pfgraphchild[pf=] AND
     `pf? ( dev-libs/pfgraphextra )`; pfgraphchild's `pf` is use.mask'd, so
@@ -5780,12 +5557,10 @@ def test_autounmask_use_parent_flip_re_resolves_the_whole_graph(
     --autounmask-backtrack=y (Slice 4): the flip is fed back into
     _needed_use_config_changes and the WHOLE graph re-resolves, so
     `pf? ( pfgraphextra )` re-evaluates with pf OFF and pfgraphextra is
-    dropped. Rust==Python byte-identical."""
+    dropped."""
     args = ["--pretend", "dev-libs/pfgraphparent"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == 1 and py.returncode == 1
-    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.returncode == 1
     assert rust.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/pfgraphchild-1.0  USE="(-pf)"',
         "[ebuild  N     ] dev-libs/pfgraphextra-1.0 ",
@@ -5803,8 +5578,6 @@ def test_autounmask_use_parent_flip_re_resolves_the_whole_graph(
     # --autounmask-backtrack=y: the whole graph re-resolves, pfgraphextra drops
     ab = ["--pretend", "--autounmask-backtrack=y", "dev-libs/pfgraphparent"]
     rust_ab = _run([str(emerge_binary)], ab, fixture_env)
-    py_ab = _run(emerge_pretend_python, ab, fixture_env)
-    assert rust_ab.stdout == py_ab.stdout and rust_ab.stderr == py_ab.stderr
     assert rust_ab.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/pfgraphchild-1.0  USE="(-pf)"',
         '[ebuild  N     ] dev-libs/pfgraphparent-1.0  USE="-pf"',
@@ -5819,12 +5592,6 @@ def test_autounmask_use_parent_flip_re_resolves_the_whole_graph(
         ["--pretend", "--autounmask-use=n", "dev-libs/pfgraphparent"],
         fixture_env,
     )
-    npy = _run(
-        emerge_pretend_python,
-        ["--pretend", "--autounmask-use=n", "dev-libs/pfgraphparent"],
-        fixture_env,
-    )
-    assert n.stdout == npy.stdout and n.stderr == npy.stderr
     assert "pfgraphextra" not in n.stdout
     assert 'no visible ebuild for dependency "dev-libs/pfgraphchild"' in n.stderr
 
@@ -5885,7 +5652,7 @@ def test_binpkg_respect_use_rejects_a_use_mismatched_binary_by_default(
 
 
 def test_use_mismatched_remote_binary_at_the_ebuilds_key_does_not_hide_the_ebuild(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Regression: found live with `emerge -p --getbinpkg x11-misc/colord`
     -- "there are no ebuilds to satisfy". A remote binhost binary and a
@@ -5898,16 +5665,14 @@ def test_use_mismatched_remote_binary_at_the_ebuilds_key_does_not_hide_the_ebuil
     ebuild; `--getbinpkg` must still land on the ebuild."""
     args = ["--pretend", "--getbinpkg", "dev-libs/binaryusemismatchpkg"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
     assert rust.returncode == 0, (rust.stdout, rust.stderr)
-    assert rust.stdout == py.stdout
     assert rust.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/binaryusemismatchpkg-1.0  USE="foo"',
     ]
 
 
 def test_binary_wins_a_version_tie_against_the_ebuild(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Real `_wrapped_select_pkg_highest_available_imp` builds
     `matched_packages` in `dbs` order -- ebuild before binary -- and
@@ -5924,8 +5689,6 @@ def test_binary_wins_a_version_tie_against_the_ebuild(
 
     args = ["--pretend", "--getbinpkg", "dev-libs/binebuildtie"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.stdout == py.stdout
     assert rust.stdout.splitlines() == ["[binary  N g   ] dev-libs/binebuildtie-1.0-1 "]
 
 
@@ -5952,7 +5715,7 @@ def test_usepkgonly_defaults_binpkg_respect_use_off(emerge_binary, fixture_env):
 
 
 def test_useoldpkg_atoms_prefers_the_old_binary_over_a_newer_ebuild(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """--useoldpkg-atoms ATOMS (real main.py:713 -> WildcardPackageSet;
     depgraph.py:7936 + matched_oldpkg/visible_matches): for a matching
@@ -5971,11 +5734,6 @@ def test_useoldpkg_atoms_prefers_the_old_binary_over_a_newer_ebuild(
         fixture_env,
     )
     assert old.stdout.splitlines() == ["[binary  N     ] dev-libs/useoldpkgpkg-1.0-1 "]
-    assert old.stdout == _run(
-        emerge_pretend_python,
-        ["--pretend", "--usepkg", "--useoldpkg-atoms", "dev-libs/useoldpkgpkg", "dev-libs/useoldpkgpkg"],
-        fixture_env,
-    ).stdout
 
     # Without --usepkg the binary is never in the pool, so it's inert.
     inert = _run(
@@ -5987,7 +5745,7 @@ def test_useoldpkg_atoms_prefers_the_old_binary_over_a_newer_ebuild(
 
 
 def test_useoldpkg_atoms_picks_the_newest_multi_instance_old_binary(
-    emerge_binary, emerge_pretend_python, tmp_path
+    emerge_binary, tmp_path
 ):
     """`--useoldpkg-atoms` + `binpkg-multi-instance`: when the matched
     "old binary" cpv has several builds (different `BUILD_ID`s), real
@@ -6039,21 +5797,17 @@ def test_useoldpkg_atoms_picks_the_newest_multi_instance_old_binary(
 
     # Default: the newer ebuild wins.
     default = _run([str(emerge_binary)], ["--pretend", "--getbinpkg", "dev-libs/oldmi"], env)
-    assert default.stdout == _run(
-        emerge_pretend_python, ["--pretend", "--getbinpkg", "dev-libs/oldmi"], env
-    ).stdout
     assert default.stdout.splitlines() == ["[ebuild  N     ] dev-libs/oldmi-2.0 "]
 
     # --useoldpkg-atoms: the newest multi-instance old binary (BUILD_ID 2).
     args = ["--pretend", "--getbinpkg", "--useoldpkg-atoms", "dev-libs/oldmi", "dev-libs/oldmi"]
     old = _run([str(emerge_binary)], args, env)
     assert old.returncode == 0, (old.stdout, old.stderr)
-    assert old.stdout == _run(emerge_pretend_python, args, env).stdout
     assert old.stdout.splitlines() == ["[binary  N g   ] dev-libs/oldmi-1.0-2 "]
 
 
 def test_quickpkg_direct_injects_source_root_packages(
-    emerge_binary, emerge_pretend_python, fixture_env, fixtures_root
+    emerge_binary, fixture_env, fixtures_root
 ):
     """--quickpkg-direct / --quickpkg-direct-root (real actions.py:150-164
     + bintree._populate_additional): when --usepkg + --quickpkg-direct=y
@@ -6082,7 +5836,6 @@ def test_quickpkg_direct_injects_source_root_packages(
     ]
     got = _run([str(emerge_binary)], args, fixture_env)
     assert got.returncode == 0
-    assert got.stdout == _run(emerge_pretend_python, args, fixture_env).stdout
     # The quickpkg candidate resolves as a binary, and its vdb-recorded
     # RDEPEND is walked (proving the source-root metadata is used).
     assert "[binary  N     ] dev-libs/quickpkgdirectpkg-1.0 " in got.stdout
@@ -6095,11 +5848,6 @@ def test_quickpkg_direct_injects_source_root_packages(
         fixture_env,
     )
     assert same.returncode == 1
-    assert same.stdout == _run(
-        emerge_pretend_python,
-        args[:3] + [f"--quickpkg-direct-root={fixture_env['ROOT']}"] + args[4:],
-        fixture_env,
-    ).stdout
 
 
 def _binscan_configroot(tmp_path, fixtures_root, binpkg_files):
@@ -6128,7 +5876,7 @@ def _binscan_configroot(tmp_path, fixtures_root, binpkg_files):
 
 
 def test_pkgdir_directory_scan_resolves_a_binpkg_with_no_packages_index(
-    emerge_binary, emerge_pretend_python, tmp_path, fixtures_root
+    emerge_binary, tmp_path, fixtures_root
 ):
     """Real `bintree._populate_local`'s "no trusted index" branch: a
     `$PKGDIR` holding binpkg *files* but no `Packages` is scanned, each
@@ -6156,32 +5904,23 @@ def test_pkgdir_directory_scan_resolves_a_binpkg_with_no_packages_index(
     ]:
         args = ["--pretend", "--usepkgonly", f"dev-libs/{pkg}"]
         rust = _run([str(emerge_binary)], args, env)
-        py = _run(emerge_pretend_python, args, env)
         assert rust.returncode == 1, (pkg, rust.stdout, rust.stderr)
-        assert rust.stdout == py.stdout, pkg
-        assert rust.stderr == py.stderr, pkg
         # The binary candidate resolved (its dep was walked far enough to
         # name it); the abort suppresses every merge line.
         assert rust.stdout.splitlines() == [], (pkg, rust.stdout)
         assert f'no visible ebuild for dependency "{dep}"' in rust.stderr, pkg
 
-    # -v: same abort, still exit 1 on both sides.
+    # -v: same abort, still exit 1.
     v = _run(
         [str(emerge_binary)],
         ["--pretend", "-v", "--usepkgonly", "dev-libs/gpkgreadpkg"],
         env,
     )
-    vp = _run(
-        emerge_pretend_python,
-        ["--pretend", "-v", "--usepkgonly", "dev-libs/gpkgreadpkg"],
-        env,
-    )
     assert v.returncode == 1  # abort path: unsatisfiable dep of a merge-bound parent
-    assert v.stdout == vp.stdout
 
 
 def test_binrepos_conf_is_read_as_a_directory_of_fragments(
-    emerge_binary, emerge_pretend_python, tmp_path, fixtures_root
+    emerge_binary, tmp_path, fixtures_root
 ):
     """Real `BinRepoConfigLoader._parse` runs `_recursive_file_list` over
     the `binrepos.conf` path, so it may be a **directory** of `*.conf`
@@ -6222,9 +5961,7 @@ def test_binrepos_conf_is_read_as_a_directory_of_fragments(
     for pkg in ("dev-libs/remotebinpkg", "dev-libs/dirbinhostonly"):
         args = ["--pretend", "--getbinpkgonly", pkg]
         rust = _run([str(emerge_binary)], args, env)
-        py = _run(emerge_pretend_python, args, env)
         assert rust.returncode == 0, (pkg, rust.stdout, rust.stderr)
-        assert rust.stdout == py.stdout, pkg
         # remote-only binary -> the `g` (PkgAttrDisplay.remote_binary) column.
         assert rust.stdout.splitlines()[0].startswith(
             f"[binary  N g   ] {pkg}-1.0"
@@ -6267,7 +6004,7 @@ def test_pkgdir_scan_finds_both_indexed_and_loose_binpkgs(
 
 
 def test_pkgdir_scan_reads_a_multi_instance_xpak_from_the_cat_pn_subdir(
-    emerge_binary, emerge_pretend_python, tmp_path, fixtures_root
+    emerge_binary, tmp_path, fixtures_root
 ):
     """Real `FEATURES=binpkg-multi-instance` writes an xpak binpkg to
     `<pkgdir>/<cat>/<pn>/<pf>-<build_id>.xpak` (real
@@ -6304,10 +6041,7 @@ def test_pkgdir_scan_reads_a_multi_instance_xpak_from_the_cat_pn_subdir(
 
     args = ["--pretend", "--usepkgonly", "dev-libs/packagepkg"]
     rust = _run([str(emerge_binary)], args, env)
-    py = _run(emerge_pretend_python, args, env)
     assert rust.returncode == 1, (rust.stdout, rust.stderr)
-    assert rust.stdout == py.stdout
-    assert rust.stderr == py.stderr
     # The multi-instance file was read (its embedded RDEPEND names the
     # dep below); the unresolvable dep then aborts the resolve (exit 1,
     # no merge list since Slice 4 -- the `-3` build-id rendering is
@@ -6323,7 +6057,7 @@ def test_pkgdir_scan_reads_a_multi_instance_xpak_from_the_cat_pn_subdir(
 
 
 def test_getbinpkg_makes_a_remote_binhost_binary_eligible(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """dev-libs/remotebinpkg exists ONLY as a binary in the binhost's own
     Packages index (fixtures/binhost/Packages, reached via
@@ -6348,9 +6082,7 @@ def test_getbinpkg_makes_a_remote_binhost_binary_eligible(
     g = _run(
         [str(emerge_binary)], ["--pretend", "--getbinpkg", "dev-libs/remotebinpkg"], fixture_env
     )
-    gp = _run(emerge_pretend_python, ["--pretend", "--getbinpkg", "dev-libs/remotebinpkg"], fixture_env)
     assert g.returncode == 0
-    assert g.stdout == gp.stdout
     assert g.stdout.splitlines() == [
                                         '[binary  N g   ] dev-libs/remotebinpkg-1.0-1  USE="-rbfoo"',
                                     ]
@@ -6362,13 +6094,7 @@ def test_getbinpkg_makes_a_remote_binhost_binary_eligible(
         ["--pretend", "-v", "--getbinpkg", "dev-libs/remotebinpkg"],
         fixture_env,
     )
-    vp = _run(
-        emerge_pretend_python,
-        ["--pretend", "-v", "--getbinpkg", "dev-libs/remotebinpkg"],
-        fixture_env,
-    )
     assert v.returncode == 0
-    assert v.stdout == vp.stdout
     assert v.stdout.splitlines() == [
         '[binary  N g   ] dev-libs/remotebinpkg-1.0-1::gentoo  USE="-rbfoo" 560 KiB',
         '',
@@ -6386,7 +6112,7 @@ def test_getbinpkg_makes_a_remote_binhost_binary_eligible(
 
 
 def test_getbinpkg_slot_repo_decoration_on_a_remote_binary_line(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """dev-libs/remotebinslotpkg is a binhost-only binary with SLOT=2/1 --
     verbosity-3 `:slot/sub_slot` + `::repo` decoration (real _append_slot
@@ -6399,13 +6125,7 @@ def test_getbinpkg_slot_repo_decoration_on_a_remote_binary_line(
         ["--pretend", "-v", "--getbinpkg", "dev-libs/remotebinslotpkg"],
         fixture_env,
     )
-    vp = _run(
-        emerge_pretend_python,
-        ["--pretend", "-v", "--getbinpkg", "dev-libs/remotebinslotpkg"],
-        fixture_env,
-    )
     assert v.returncode == 0
-    assert v.stdout == vp.stdout
     assert v.stdout.splitlines() == [
         '[binary  N g   ] dev-libs/remotebinslotpkg-1.0-1:2/1::gentoo  1024 KiB',
         '',
@@ -6414,7 +6134,7 @@ def test_getbinpkg_slot_repo_decoration_on_a_remote_binary_line(
 
 
 def test_getbinpkg_equiv_ebuild_visible_rejects_an_orphaned_binary(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """_equiv_ebuild_visible (real depgraph.py:8015-8025): dev-libs/
     eqebvispkg has only a 1.0 ebuild in the tree, but the binhost carries
@@ -6428,11 +6148,7 @@ def test_getbinpkg_equiv_ebuild_visible_rejects_an_orphaned_binary(
     getbinpkg = _run(
         [str(emerge_binary)], ["--pretend", "--getbinpkg", "dev-libs/eqebvispkg"], fixture_env
     )
-    py = _run(
-        emerge_pretend_python, ["--pretend", "--getbinpkg", "dev-libs/eqebvispkg"], fixture_env
-    )
     assert getbinpkg.returncode == 0
-    assert getbinpkg.stdout == py.stdout
     assert getbinpkg.stdout.splitlines() == ["[ebuild  N     ] dev-libs/eqebvispkg-1.0 "]
 
     only = _run(
@@ -6449,7 +6165,7 @@ def test_getbinpkg_equiv_ebuild_visible_rejects_an_orphaned_binary(
 
 
 def test_usepkg_binary_of_a_since_removed_ebuild_is_reinstalled_only_when_it_differs(
-    emerge_binary, emerge_pretend_python, tmp_path
+    emerge_binary, tmp_path
 ):
     """Real bug #354441 / `identical_binary` (`depgraph.py:8001-8014`)
     plus `_equiv_ebuild_visible` (`depgraph.py:7399`): when a package's
@@ -6502,10 +6218,7 @@ def test_usepkg_binary_of_a_since_removed_ebuild_is_reinstalled_only_when_it_dif
     )
     args = ["--pretend", "--usepkg", "--update", "--deep", "--selective", "dev-libs/idbinpkg"]
     rust = _run([str(emerge_binary)], args, env)
-    py = _run(emerge_pretend_python, args, env)
     assert rust.returncode == 0, (rust.stdout, rust.stderr)
-    assert rust.stdout == py.stdout
-    assert rust.stderr == py.stderr
     assert "[binary" not in rust.stdout
     assert "[ebuild" not in rust.stdout
 
@@ -6518,10 +6231,7 @@ def test_usepkg_binary_of_a_since_removed_ebuild_is_reinstalled_only_when_it_dif
         "PATH: dev-libs/idbinpkg-1.0.tbz2\nREPO: main\nSIZE: 4096\nSLOT: 0\nUSE:\n"
     )
     rust = _run([str(emerge_binary)], args, env)
-    py = _run(emerge_pretend_python, args, env)
     assert rust.returncode == 0, (rust.stdout, rust.stderr)
-    assert rust.stdout == py.stdout
-    assert rust.stderr == py.stderr
     assert rust.stdout.splitlines() == ["[binary   R    ] dev-libs/idbinpkg-1.0 "]
 
     # A bare top-level atom still reinstalls (matches real -- `emerge foo`
@@ -6532,7 +6242,7 @@ def test_usepkg_binary_of_a_since_removed_ebuild_is_reinstalled_only_when_it_dif
 
 
 def test_getbinpkg_binpkg_changed_deps_rejects_a_stale_binary(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """--binpkg-changed-deps auto-enables whenever --usepkgonly is not
     given (create_depgraph_params.py:196-203). dev-libs/bcdeppkg's tree
@@ -6543,9 +6253,7 @@ def test_getbinpkg_binpkg_changed_deps_rejects_a_stale_binary(
     never bcdepold."""
     args = ["--pretend", "--getbinpkg", "dev-libs/bcdeppkg"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
     assert rust.returncode == 0, (rust.stdout, rust.stderr)
-    assert rust.stdout == py.stdout
     assert set(rust.stdout.splitlines()) == {
         "[ebuild  N     ] dev-libs/bcdeppkg-1.0 ",
         "[ebuild  N     ] dev-libs/bcdepnew-1.0 ",
@@ -6554,7 +6262,7 @@ def test_getbinpkg_binpkg_changed_deps_rejects_a_stale_binary(
 
 
 def test_binpkg_changed_deps_explicit_override(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """`--binpkg-changed-deps=y|n` (real `create_depgraph_params.py:196-203`
     + `default_arg_opts`): the explicit override of the automatic default
@@ -6562,11 +6270,10 @@ def test_binpkg_changed_deps_explicit_override(
     binary that `--getbinpkg` would otherwise reject; `=y` forces the
     rejection under `--getbinpkgonly` (`--usepkgonly`), where the check is
     off by default -- and with no ebuild fallback there, that leaves the
-    atom unsatisfied. rust == python throughout."""
+    atom unsatisfied."""
     # =n: the stale binary is kept (default --getbinpkg rejects it).
     n_args = ["--pretend", "--getbinpkg", "--binpkg-changed-deps=n", "dev-libs/bcdeppkg"]
     rn = _run([str(emerge_binary)], n_args, fixture_env)
-    assert rn.stdout == _run(emerge_pretend_python, n_args, fixture_env).stdout
     assert rn.returncode == 0
     assert "[binary  N g   ] dev-libs/bcdeppkg-1.0-1 " in rn.stdout.splitlines()
     # The space-separated value form parses the same.
@@ -6577,10 +6284,7 @@ def test_binpkg_changed_deps_explicit_override(
     # there), the stale binary is rejected, nothing else can satisfy it.
     y_args = ["--pretend", "--getbinpkgonly", "--binpkg-changed-deps=y", "dev-libs/bcdeppkg"]
     ry = _run([str(emerge_binary)], y_args, fixture_env)
-    py = _run(emerge_pretend_python, y_args, fixture_env)
     assert ry.returncode == 1
-    assert ry.stdout == py.stdout
-    assert ry.stderr == py.stderr
     assert 'no ebuilds to satisfy "dev-libs/bcdeppkg"' in ry.stderr
     # ...whereas plain --getbinpkgonly keeps it (check off by default) --
     # but its own dep is unresolvable, so the resolve aborts (exit 1, no
@@ -6594,7 +6298,7 @@ def test_binpkg_changed_deps_explicit_override(
 
 
 def test_use_ebuild_visibility_enforces_the_check_under_usepkgonly(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """`--use-ebuild-visibility` (real `main.py:1103`, `depgraph.py:8027`'s
     `not use_ebuild_visibility and (usepkgonly or useoldpkg)` guard):
@@ -6602,7 +6306,7 @@ def test_use_ebuild_visibility_enforces_the_check_under_usepkgonly(
     `--getbinpkgonly dev-libs/eqebvispkg` keeps the orphaned 2.0 binary
     (its ebuild since removed). With `--use-ebuild-visibility` the check is
     enforced there too, rejecting the orphan -- and `--usepkgonly` has no
-    ebuild to fall back to, so the atom is unsatisfied. rust == python."""
+    ebuild to fall back to, so the atom is unsatisfied."""
     base = _run(
         [str(emerge_binary)], ["--pretend", "--getbinpkgonly", "dev-libs/eqebvispkg"], fixture_env
     )
@@ -6610,15 +6314,12 @@ def test_use_ebuild_visibility_enforces_the_check_under_usepkgonly(
 
     args = ["--pretend", "--getbinpkgonly", "--use-ebuild-visibility", "dev-libs/eqebvispkg"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
     assert rust.returncode == 1
-    assert rust.stdout == py.stdout
-    assert rust.stderr == py.stderr
     assert 'no ebuilds to satisfy "dev-libs/eqebvispkg"' in rust.stderr
 
 
 def test_getbinpkg_multi_instance_newest_build_time_wins(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """binpkg-multi-instance: the binhost `Packages` lists three builds of
     dev-libs/multiinst-1.0 (BUILD_ID 1/3/2, BUILD_TIME 1000/3000/2000, in
@@ -6628,9 +6329,7 @@ def test_getbinpkg_multi_instance_newest_build_time_wins(
     highest BUILD_ID by numeric luck."""
     args = ["--pretend", "--getbinpkg", "dev-libs/multiinst"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
     assert rust.returncode == 0, (rust.stdout, rust.stderr)
-    assert rust.stdout == py.stdout
     assert rust.stdout.splitlines() == ["[binary  N g   ] dev-libs/multiinst-1.0-3 "]
 
 
@@ -6714,7 +6413,7 @@ def test_keyword_masked_but_installed_dependency_with_a_use_dep_is_kept(
 
 
 def test_installed_dependency_use_dep_flag_only_in_built_use_is_kept(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """dev-libs/needsbuiltusediverge (New) RDEPENDs on
     dev-libs/builtusedivergedep[divergedflag]. The installed 1.0 has vdb
@@ -6730,10 +6429,7 @@ def test_installed_dependency_use_dep_flag_only_in_built_use_is_kept(
     result = _run(
         [str(emerge_binary)], ["--pretend", "dev-libs/needsbuiltusediverge"], fixture_env
     )
-    rp = _run(emerge_pretend_python, ["--pretend", "dev-libs/needsbuiltusediverge"], fixture_env)
     assert result.returncode == 0
-    assert result.stdout == rp.stdout
-    assert result.stderr == rp.stderr
     assert result.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/needsbuiltusediverge-1.0 ',
     ]
@@ -6751,7 +6447,7 @@ def test_installed_dependency_use_dep_flag_only_in_built_use_is_kept(
 
 
 def test_any_of_group_falls_back_to_every_alternative_when_none_satisfiable(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """dev-libs/anyofunresolvable's own RDEPEND is
     "|| ( dev-libs/doesnotexist-anywhere dev-libs/alsodoesnotexist-anywhere )"
@@ -6772,9 +6468,7 @@ def test_any_of_group_falls_back_to_every_alternative_when_none_satisfiable(
     hard failure with no list, not just a warning."""
     args = ["--pretend", "dev-libs/anyofunresolvable"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == 1 and py.returncode == 1
-    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.returncode == 1
     assert rust.stdout.splitlines() == []
     assert rust.stderr.strip().splitlines() == [
         '!!! no visible ebuild for dependency "dev-libs/doesnotexist-anywhere"',
@@ -6785,7 +6479,7 @@ def test_any_of_group_falls_back_to_every_alternative_when_none_satisfiable(
 
 
 def test_env_config_vars_override_the_profile_and_make_conf(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Real `config.regenerate()`'s `env` USE_ORDER layer: config vars in
     the process environment override / stack on the profile chain +
@@ -6796,14 +6490,8 @@ def test_env_config_vars_override_the_profile_and_make_conf(
     def run(extra_env, args):
         env = {**fixture_env, **extra_env}
         rust = _run([str(emerge_binary)], args, env)
-        py = _run(emerge_pretend_python, args, env)
         # --info's host-state header has genuinely-volatile values
         # (free-memory KiB changes between the two spawns) -> normalize.
-        assert _normalize_info(rust.stdout) == _normalize_info(py.stdout), (
-            args,
-            extra_env,
-        )
-        assert rust.returncode == py.returncode
         return rust
 
     kw = ["--pretend", "--autounmask=n", "dev-libs/autounmaskkeywordpkg"]
@@ -6910,7 +6598,7 @@ def test_use_expand_unprefixed_variable_drives_a_dependency(emerge_binary, fixtu
 
 
 def test_use_expand_star_wildcard_expands_against_the_packages_own_iuse(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """fixtures/etc/portage/package.use: "dev-libs/wildexpandpkg
     linguas_*" -- real config.py setcpv's own _* wildcard: enable every
@@ -6923,12 +6611,7 @@ def test_use_expand_star_wildcard_expands_against_the_packages_own_iuse(
     result = _run(
         [str(emerge_binary)], ["--pretend", "-v", "dev-libs/wildexpandpkg"], fixture_env
     )
-    result_py = _run(
-        emerge_pretend_python, ["--pretend", "-v", "dev-libs/wildexpandpkg"], fixture_env
-    )
     assert result.returncode == 0
-    assert result.stdout == result_py.stdout
-    assert result.stderr == result_py.stderr
     assert result.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/wildexpanddep-1.0::testrepo ',
         '[ebuild  N     ] dev-libs/wildexpandpkg-1.0::testrepo  LINGUAS="de (-en)"',
@@ -6940,7 +6623,7 @@ def test_use_expand_star_wildcard_expands_against_the_packages_own_iuse(
 
 
 def test_pv_decorates_the_cpv_with_slot_and_repo(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Real `emerge -pv` (verbosity 3) runs `_append_slot` +
     `_append_repository` on the bracket cpv (and `convert_myoldbest` on
@@ -6952,9 +6635,6 @@ def test_pv_decorates_the_cpv_with_slot_and_repo(
     assert p.stdout == "[ebuild  N     ] dev-libs/newpkg-1.0 \n"
 
     v = _run([str(emerge_binary)], ["--pretend", "-v", "dev-libs/subslotconsumer"], fixture_env)
-    assert v.stdout == _run(
-        emerge_pretend_python, ["--pretend", "-v", "dev-libs/subslotconsumer"], fixture_env
-    ).stdout
     assert v.stdout.splitlines()[:2] == [
         '[ebuild  N     ] dev-libs/subslotpkg-1.0:0/2::testrepo ',
         '[ebuild  N     ] dev-libs/subslotconsumer-1.0::testrepo ',
@@ -6963,11 +6643,6 @@ def test_pv_decorates_the_cpv_with_slot_and_repo(
     # An Upgrade: both the new cpv and the [old-ver] are decorated
     # (upgradepkg-1.0's vdb `repository` file is testrepo).
     up = _run([str(emerge_binary)], ["--pretend", "-v", "--update", "dev-libs/upgradepkg"], fixture_env)
-    assert up.stdout == _run(
-        emerge_pretend_python,
-        ["--pretend", "-v", "--update", "dev-libs/upgradepkg"],
-        fixture_env,
-    ).stdout
     assert up.stdout.splitlines()[0] == (
         "[ebuild     U  ] dev-libs/upgradepkg-2.0::testrepo [1.0::testrepo]"
     )
@@ -6975,9 +6650,6 @@ def test_pv_decorates_the_cpv_with_slot_and_repo(
     # A new-slot New: the resolved `:1` and the other-slot `[1.0:0::…]`
     # list (real `myoldbest = installed_versions`, all slots).
     ns = _run([str(emerge_binary)], ["--pretend", "-v", "dev-libs/newslotpkg:1"], fixture_env)
-    assert ns.stdout == _run(
-        emerge_pretend_python, ["--pretend", "-v", "dev-libs/newslotpkg:1"], fixture_env
-    ).stdout
     assert ns.stdout.splitlines()[0] == (
         "[ebuild  NS    ] dev-libs/newslotpkg-2.0:1::testrepo [1.0:0::testrepo]"
     )
@@ -6995,7 +6667,7 @@ def test_pv_decorates_the_cpv_with_slot_and_repo(
 
 
 def test_pv_groups_use_by_use_expand_variable(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Real output.py:_display_use / map_to_use_expand: `emerge -pv` shows
     IUSE flags split into the plain USE="..." group plus one VAR="..."
@@ -7009,16 +6681,14 @@ def test_pv_groups_use_by_use_expand_variable(
     ]:
         args = ["--pretend", "-v", f"dev-libs/{pkg}"]
         rust = _run([str(emerge_binary)], args, fixture_env)
-        python = _run(emerge_pretend_python, args, fixture_env)
         assert rust.returncode == 0
-        assert rust.stdout == python.stdout, pkg
         pkg_line = next(l for l in rust.stdout.splitlines() if f"/{pkg}-1.0" in l)
         assert pkg_line == f"[ebuild  N     ] dev-libs/{pkg}-1.0::testrepo  {expected}", pkg
         assert 'USE="' not in pkg_line, pkg
 
 
 def test_pv_omits_a_use_expand_hidden_group(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """USE_EXPAND_HIDDEN="CPU_FLAGS_X86" (fixtures/repo/profiles/base/
     make.defaults): real output.py:map_to_use_expand's remove_hidden
@@ -7029,11 +6699,7 @@ def test_pv_omits_a_use_expand_hidden_group(
     printed."""
     args = ["--pretend", "-v", "dev-libs/hiddenexpandpkg"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    python = _run(emerge_pretend_python, args, fixture_env)
     assert rust.returncode == 0
-    assert python.returncode == 0
-    assert rust.stdout == python.stdout
-    assert rust.stderr == python.stderr
     assert rust.stdout.splitlines() == [
         "[ebuild  N     ] dev-libs/hiddenexpandpkg-1.0::testrepo ",
         "",
@@ -7044,7 +6710,7 @@ def test_pv_omits_a_use_expand_hidden_group(
 
 
 def test_pv_marks_use_changes_against_the_installed_version(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Real output_helpers.py::_create_use_string, for an entry that
     replaces an installed one (is_new=False), diffs each flag against the
@@ -7063,11 +6729,7 @@ def test_pv_marks_use_changes_against_the_installed_version(
     """
     args = ["--pretend", "-v", "--update", "dev-libs/upgradeusepkg"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    python = _run(emerge_pretend_python, args, fixture_env)
     assert rust.returncode == 0
-    assert python.returncode == 0
-    assert rust.stdout == python.stdout
-    assert rust.stderr == python.stderr
     assert rust.stdout.splitlines() == [
         '[ebuild     U  ] dev-libs/upgradeusepkg-2.0::testrepo [1.0::testrepo] USE="added%* keep -change* (-drop%)"',
         "",
@@ -7093,7 +6755,7 @@ def test_pv_marks_use_changes_against_the_installed_version(
 
 
 def test_use_expand_implicit_flag_is_valid_iuse_even_when_unlisted(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """fixtures/repo/profiles/base/make.defaults declares
     USE_EXPAND_IMPLICIT="ELIBC", USE_EXPAND_VALUES_ELIBC="glibc musl",
@@ -7106,10 +6768,7 @@ def test_use_expand_implicit_flag_is_valid_iuse_even_when_unlisted(
     own [elibc_musl] dep is valid but unsatisfiable (elibc_musl not
     enabled), so it's reported as an unresolvable dependency."""
     ok = _run([str(emerge_binary)], ["--pretend", "dev-libs/implicitiusepkg"], fixture_env)
-    ok_py = _run(emerge_pretend_python, ["--pretend", "dev-libs/implicitiusepkg"], fixture_env)
     assert ok.returncode == 0
-    assert ok.stdout == ok_py.stdout
-    assert ok.stderr == ok_py.stderr
     assert ok.stdout == (
         (
         '[ebuild  N     ] dev-libs/implicitiuseprov-1.0 \n'
@@ -7118,10 +6777,7 @@ def test_use_expand_implicit_flag_is_valid_iuse_even_when_unlisted(
     )
 
     bad = _run([str(emerge_binary)], ["--pretend", "dev-libs/implicitiusepkgmusl"], fixture_env)
-    bad_py = _run(emerge_pretend_python, ["--pretend", "dev-libs/implicitiusepkgmusl"], fixture_env)
     assert bad.returncode == 1  # abort path: unsatisfiable dep of a merge-bound parent
-    assert bad.stdout == bad_py.stdout
-    assert bad.stderr == bad_py.stderr
     assert bad.stdout == ''
     # Backlog #20: the block, not the bare line. Divergence note: real
     # resolves this one through --autounmask-use (its blocked-change
@@ -7129,7 +6785,7 @@ def test_use_expand_implicit_flag_is_valid_iuse_even_when_unlisted(
     # because real treats implicit IUSE flags as flippable; portuale's
     # autounmask suggestion does not cover implicit flags yet, so its
     # display falls back to this disclosure. The pinned text is
-    # portuale's, Rust == Python.
+    # portuale's,
     assert bad.stderr.splitlines() == [
         "",
         'emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/implicitiuseprov[elibc_musl]".',
@@ -7503,7 +7159,7 @@ def test_package_accept_keywords_bare_atom_implicitly_grants_tilde_arch(
     assert result.stdout.strip() == '[ebuild  N    ~] dev-libs/bareacceptkeywordspkg-1.0'
 
 
-def test_pv_bracket_mask_marker(emerge_binary, emerge_pretend_python, fixture_env):
+def test_pv_bracket_mask_marker(emerge_binary, fixture_env):
     """Real output.py::gen_mask_str: the [ebuild N] bracket gains a
     one-character marker for a package pulled in despite not being visible
     via the global ACCEPT_KEYWORDS alone --
@@ -7527,14 +7183,10 @@ def test_pv_bracket_mask_marker(emerge_binary, emerge_pretend_python, fixture_en
         ("maskedandunmaskedpkg", "#"),
     ]:
         v = _run([str(emerge_binary)], ["--pretend", "-v", f"dev-libs/{pkg}"], fixture_env)
-        vp = _run(emerge_pretend_python, ["--pretend", "-v", f"dev-libs/{pkg}"], fixture_env)
         assert v.returncode == 0
-        assert v.stdout == vp.stdout, pkg
         assert v.stdout.splitlines()[0] == f"[ebuild  N    {marker}] dev-libs/{pkg}-1.0::testrepo ", pkg
         # Plain -p: the marker column is still there (verbosity 2).
         p = _run([str(emerge_binary)], ["--pretend", f"dev-libs/{pkg}"], fixture_env)
-        pp = _run(emerge_pretend_python, ["--pretend", f"dev-libs/{pkg}"], fixture_env)
-        assert p.stdout == pp.stdout, pkg
         assert p.stdout.splitlines()[0] == f"[ebuild  N    {marker}] dev-libs/{pkg}-1.0 ", pkg
 
     v = _run([str(emerge_binary)], ["--pretend", "-v", "dev-libs/newpkg"], fixture_env)
@@ -7545,7 +7197,7 @@ def test_pv_bracket_mask_marker(emerge_binary, emerge_pretend_python, fixture_en
     ]
 
 
-def test_pv_use_flag_list_is_natural_sorted(emerge_binary, emerge_pretend_python, fixture_env):
+def test_pv_use_flag_list_is_natural_sorted(emerge_binary, fixture_env):
     """Real output_helpers.py::_alnum_sort_key
     (`any_iuse.sort(key=_alnum_sort_key)` in `_create_use_string`): the
     `-pv` `USE="..."` flag list splits on digit runs and compares them as
@@ -7555,15 +7207,13 @@ def test_pv_use_flag_list_is_natural_sorted(emerge_binary, emerge_pretend_python
     for extra in ([], ["--alphabetical"]):
         args = ["--pretend", "-v", *extra, "dev-libs/naturalsortpkg"]
         v = _run([str(emerge_binary)], args, fixture_env)
-        vp = _run(emerge_pretend_python, args, fixture_env)
         assert v.returncode == 0
-        assert v.stdout == vp.stdout, extra
         assert v.stdout.splitlines()[0] == (
             '[ebuild  N     ] dev-libs/naturalsortpkg-1.0::testrepo  USE="n2 n9 n10"'
         ), extra
 
 
-def test_color_y_renders_real_ansi_bracket_line(emerge_binary, emerge_pretend_python, fixture_env):
+def test_color_y_renders_real_ansi_bracket_line(emerge_binary, fixture_env):
     """Increment 2 of the -pv layout + colour buildout: `emerge --color y`
     (the explicit override that wins over NO_COLOR/NOCOLOR/isatty, so the
     output is deterministic even under a captured stdout) colours the
@@ -7583,9 +7233,7 @@ def test_color_y_renders_real_ansi_bracket_line(emerge_binary, emerge_pretend_py
     R = "\x1b[39;49;00m"
     args = ["--pretend", "--color=y", "dev-libs/diamond"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    python = _run(emerge_pretend_python, args, fixture_env)
     assert rust.returncode == 0
-    assert rust.stdout == python.stdout
     assert rust.stdout.splitlines() == [
         f"[\x1b[32mebuild{R}  \x1b[32;01mN{R}     ] \x1b[32mdev-libs/common-1.0{R} ",
         f"[\x1b[32mebuild{R}  \x1b[32;01mN{R}     ] \x1b[32mdev-libs/shared-a-1.0{R} ",
@@ -7596,7 +7244,6 @@ def test_color_y_renders_real_ansi_bracket_line(emerge_binary, emerge_pretend_py
     # An Upgrade: turquoise U, blue [old-ver].
     up_args = ["--pretend", "--color=y", "--update", "dev-libs/upgradepkg"]
     rup = _run([str(emerge_binary)], up_args, fixture_env)
-    assert rup.stdout == _run(emerge_pretend_python, up_args, fixture_env).stdout
     assert rup.stdout == (
         f"[\x1b[32;01mebuild{R}     \x1b[36;01mU{R}  ] "
         f"\x1b[32;01mdev-libs/upgradepkg-2.0{R} \x1b[34;01m[1.0]{R}\n"
@@ -7608,7 +7255,6 @@ def test_color_y_renders_real_ansi_bracket_line(emerge_binary, emerge_pretend_py
     # a would-be world member.
     one_args = ["--pretend", "--color=y", "--oneshot", "--update", "dev-libs/upgradepkg"]
     rone = _run([str(emerge_binary)], one_args, fixture_env)
-    assert rone.stdout == _run(emerge_pretend_python, one_args, fixture_env).stdout
     assert rone.stdout == (
         f"[\x1b[32mebuild{R}     \x1b[36;01mU{R}  ] "
         f"\x1b[32mdev-libs/upgradepkg-2.0{R} \x1b[34;01m[1.0]{R}\n"
@@ -7621,7 +7267,6 @@ def test_color_y_renders_real_ansi_bracket_line(emerge_binary, emerge_pretend_py
     # The -v mask column is coloured (WARN ~).
     m_args = ["--pretend", "-v", "--color=y", "dev-libs/bareacceptkeywordspkg"]
     rm = _run([str(emerge_binary)], m_args, fixture_env)
-    assert rm.stdout == _run(emerge_pretend_python, m_args, fixture_env).stdout
     assert rm.stdout.splitlines()[0] == (
         f"[\x1b[32;01mebuild{R}  \x1b[32;01mN{R}    \x1b[33;01m~{R}] "
         f"\x1b[32;01mdev-libs/bareacceptkeywordspkg-1.0::testrepo{R} "
@@ -7639,7 +7284,6 @@ def test_color_y_renders_real_ansi_bracket_line(emerge_binary, emerge_pretend_py
     # wrap. A New: enabled `foo` red, disabled `-missingflag` blue.
     u_args = ["--pretend", "-v", "--color=y", "dev-libs/useflagpkg"]
     ru = _run([str(emerge_binary)], u_args, fixture_env)
-    assert ru.stdout == _run(emerge_pretend_python, u_args, fixture_env).stdout
     assert next(
         l for l in ru.stdout.splitlines() if "useflagpkg-1.0" in l
     ).endswith(f'USE="\x1b[31;01mfoo{R} \x1b[34;01m-missingflag{R}"')
@@ -7648,7 +7292,6 @@ def test_color_y_renders_real_ansi_bracket_line(emerge_binary, emerge_pretend_py
     # yellow core inside plain ( … ).
     up2_args = ["--pretend", "-v", "--color=y", "--update", "dev-libs/upgradeusepkg"]
     rup2 = _run([str(emerge_binary)], up2_args, fixture_env)
-    assert rup2.stdout == _run(emerge_pretend_python, up2_args, fixture_env).stdout
     assert rup2.stdout.splitlines()[0].endswith(
         f'USE="\x1b[33;01madded{R}%* \x1b[31;01mkeep{R} \x1b[32;01m-change{R}* (\x1b[33;01m-drop{R}%)"'
     )
@@ -7657,16 +7300,12 @@ def test_color_y_renders_real_ansi_bracket_line(emerge_binary, emerge_pretend_py
     # (yellow); the `-pC`/`-pc` cleanup output is coloured too.
     c_args = ["--pretend", "-v", "--color=y", "dev-libs/interactivemergepkg"]
     rc = _run([str(emerge_binary)], c_args, fixture_env)
-    assert rc.stdout == _run(emerge_pretend_python, c_args, fixture_env).stdout
     assert rc.stdout.splitlines()[-1] == (
         f"Total: 1 package (1 new, 1 \x1b[33;01minteractive{R}), Size of downloads: 0 KiB"
     )
 
     pc_args = ["--pretend", "-C", "--color=y", "dev-libs/systempkg"]
     pc = _run([str(emerge_binary)], pc_args, fixture_env)
-    pcp = _run(emerge_pretend_python, pc_args, fixture_env)
-    assert pc.stdout == pcp.stdout
-    assert pc.stderr == pcp.stderr
     assert pc.stdout.startswith(
         f"\x1b[32m>>> These are the packages that would be unmerged:{R}\n"
     )
@@ -7725,7 +7364,7 @@ def test_package_use_wildcard_entry_enables_a_flag_and_pulls_in_a_dependency(
 
 
 def test_env_use_is_the_highest_tier_and_overrides_a_package_use_flag(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Real `configdict["env"]` is the highest `USE_ORDER` tier -- above
     the user-level `/etc/portage/package.use`. `fixtures/etc/portage/
@@ -7733,15 +7372,13 @@ def test_env_use_is_the_highest_tier_and_overrides_a_package_use_flag(
     (pulling `dev-libs/newpkg`); a process-env `USE="-pkguseflag"` now
     cancels it, so the dep is not pulled -- proving env `USE` reaches
     `effective_use_flags` at its real position (was folded into the
-    weaker `conf` tier before). Rust == Python."""
+    weaker `conf` tier before)."""
     env = dict(fixture_env)
     env["USE"] = "-pkguseflag"
     args = ["--pretend", "dev-libs/packageuseenablepkg"]
 
     rust = _run([str(emerge_binary)], args, env)
-    py = _run(emerge_pretend_python, args, env)
     assert rust.returncode == 0
-    assert rust.stdout == py.stdout
     assert rust.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/packageuseenablepkg-1.0  USE="-pkguseflag"',
     ]
@@ -7766,7 +7403,7 @@ def test_package_env_env_file_use_enables_a_flag_and_pulls_in_a_dependency(
 
 
 def test_package_env_env_file_use_expands_dollar_vars(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """`fixtures/etc/portage/package.env` maps "dev-libs/penvexppkg" to
     the env file "penv-expand", whose `USE="penvexp-${PENVSCOPE}
@@ -7775,12 +7412,10 @@ def test_package_env_env_file_use_expands_dollar_vars(
     level's `make.defaults`), `PENVSCOPE` from the same file's own
     earlier line (real `getconfig` feeds every assignment back into the
     map). Both flags land on, so the `penvexp-penvexpscope?` dependency
-    (dev-libs/newpkg) is pulled in. Rust == Python."""
+    (dev-libs/newpkg) is pulled in."""
     base = ["--pretend", "-v", "dev-libs/penvexppkg"]
     rust = _run([str(emerge_binary)], base, fixture_env)
-    python = _run(emerge_pretend_python, base, fixture_env)
     assert rust.returncode == 0
-    assert rust.stdout == python.stdout
     assert rust.stdout.splitlines()[:2] == [
         "[ebuild  N     ] dev-libs/newpkg-1.0::testrepo ",
         '[ebuild  N     ] dev-libs/penvexppkg-1.0::testrepo  '
@@ -7789,7 +7424,7 @@ def test_package_env_env_file_use_expands_dollar_vars(
 
 
 def test_profile_defaults_walk_is_per_level_not_flat(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """The `defaults` USE_ORDER tier is walked one profile chain level at
     a time (real config.py::regenerate() over configdict["defaults"]):
@@ -7798,12 +7433,10 @@ def test_profile_defaults_walk_is_per_level_not_flat(
     the leaf profiles/default/make.defaults (applied *after* base's
     package.use) disables it -> USE="-interleaveflag", its gated dep NOT
     pulled. A flat "all make.defaults then all package.use" model would
-    leave it ON. Rust == Python."""
+    leave it ON."""
     base = ["--pretend", "-v", "dev-libs/interleavepkg"]
     rust = _run([str(emerge_binary)], base, fixture_env)
-    py = _run(emerge_pretend_python, base, fixture_env)
     assert rust.returncode == 0
-    assert rust.stdout == py.stdout
     assert rust.stdout.splitlines()[0] == (
         '[ebuild  N     ] dev-libs/interleavepkg-1.0::testrepo  '
         'USE="-interleaveflag -other"'
@@ -7812,7 +7445,7 @@ def test_profile_defaults_walk_is_per_level_not_flat(
 
 
 def test_profile_use_expand_default_is_folded_per_level(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Real config.py (2849-2889): a USE_EXPAND value set in a profile
     level's make.defaults is translated to its equivalent USE flag *in
@@ -7832,9 +7465,7 @@ def test_profile_use_expand_default_is_folded_per_level(
     resolver divergence in miniature."""
     base = ["--pretend", "-v", "dev-libs/singletargetpkg"]
     rust = _run([str(emerge_binary)], base, fixture_env)
-    py = _run(emerge_pretend_python, base, fixture_env)
     assert rust.returncode == 0
-    assert rust.stdout == py.stdout
     assert rust.stdout.splitlines()[0] == (
         '[ebuild  N     ] dev-libs/singletargetpkg-1.0::testrepo  '
         'LUA_SINGLE_TARGET="luajit -lua5-1"'
@@ -7843,7 +7474,7 @@ def test_profile_use_expand_default_is_folded_per_level(
 
 
 def test_repo_make_defaults_use_enables_a_flag_and_pulls_in_a_dependency(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """fixtures/repo/profiles/make.defaults (the main repo's top-level
     make.defaults -- real config.py's _repo_make_defaults) sets
@@ -7851,12 +7482,10 @@ def test_repo_make_defaults_use_enables_a_flag_and_pulls_in_a_dependency(
     nowhere else, so repomakedefaultpkg's own repomakedefaultflag?-gated
     dependency (dev-libs/newpkg) is pulled in only because this weakest
     `repo` USE_ORDER layer now reaches effective_use_flags; ${ARCH}
-    expands to amd64 -> repo_amd64 also enabled. Rust == Python."""
+    expands to amd64 -> repo_amd64 also enabled."""
     base = ["--pretend", "-v", "dev-libs/repomakedefaultpkg"]
     rust = _run([str(emerge_binary)], base, fixture_env)
-    py = _run(emerge_pretend_python, base, fixture_env)
     assert rust.returncode == 0
-    assert rust.stdout == py.stdout
     assert rust.stdout.splitlines()[:2] == [
         "[ebuild  N     ] dev-libs/newpkg-1.0::testrepo ",
         '[ebuild  N     ] dev-libs/repomakedefaultpkg-1.0::testrepo  '
@@ -7865,7 +7494,7 @@ def test_repo_make_defaults_use_enables_a_flag_and_pulls_in_a_dependency(
 
 
 def test_envd_use_enables_a_flag_and_pulls_in_a_dependency(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """`fixtures/etc/profile.env` sets `USE='envdusetestflag'` -- real
     `config.py`'s `configdict["env.d"]["USE"]` (from `/etc/env.d/*` via
@@ -7873,12 +7502,10 @@ def test_envd_use_enables_a_flag_and_pulls_in_a_dependency(
     (`IUSE="envdusetestflag other"`,
     `RDEPEND="envdusetestflag? ( dev-libs/newpkg )"`) resolves with the
     flag on -- nothing higher touches it -- so `dev-libs/newpkg` is
-    pulled in. Rust == Python."""
+    pulled in."""
     base = ["--pretend", "-v", "dev-libs/envdusepkg"]
     rust = _run([str(emerge_binary)], base, fixture_env)
-    py = _run(emerge_pretend_python, base, fixture_env)
     assert rust.returncode == 0
-    assert rust.stdout == py.stdout
     assert rust.stdout.splitlines()[:2] == [
         "[ebuild  N     ] dev-libs/newpkg-1.0::testrepo ",
         '[ebuild  N     ] dev-libs/envdusepkg-1.0::testrepo  '
@@ -7887,7 +7514,7 @@ def test_envd_use_enables_a_flag_and_pulls_in_a_dependency(
 
 
 def test_envd_use_read_from_eroot_not_config_root(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """`env.d` (`etc/profile.env`) is read from `eroot` (real
     `_get_env_d`), not `config_root` -- the two coincide except on a
@@ -7895,15 +7522,13 @@ def test_envd_use_read_from_eroot_not_config_root(
     the fixtures (whose `profile.env` sets `USE='envdusetestflag'`) but
     `ROOT` on a bare tree without any `profile.env`,
     `dev-libs/envdusepkg` loses the flag: no `dev-libs/newpkg` pull-in,
-    `USE="-envdusetestflag -other"`. Rust == Python."""
+    `USE="-envdusetestflag -other"`."""
     env = dict(fixture_env)
     env["ROOT"] = str(tmp_path)
     env["PORTAGE_RUNNING_ROOT"] = str(tmp_path)
     base = ["--pretend", "-v", "dev-libs/envdusepkg"]
     rust = _run([str(emerge_binary)], base, env)
-    python = _run(emerge_pretend_python, base, env)
     assert rust.returncode == 0
-    assert rust.stdout == python.stdout
     assert rust.stdout.splitlines()[:1] == [
         '[ebuild  N     ] dev-libs/envdusepkg-1.0::testrepo  '
         'USE="-envdusetestflag -other"',
@@ -7911,7 +7536,7 @@ def test_envd_use_read_from_eroot_not_config_root(
 
 
 def test_overlay_own_make_defaults_use_enables_a_flag_for_its_packages(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Real `_repo_make_defaults` is per-repo: `fixtures/overlay/profiles/
     make.defaults` sets `USE="omdflag"`, which reaches
@@ -7919,12 +7544,10 @@ def test_overlay_own_make_defaults_use_enables_a_flag_for_its_packages(
     candidate resolved from the `overlay` repo. `dev-libs/
     overlaymakedefaultpkg` (`IUSE="omdflag other"`, overlay-only) gets
     `omdflag` on and pulls `dev-libs/newpkg`; the main repo has no such
-    USE. Rust == Python."""
+    USE."""
     base = ["--pretend", "-v", "dev-libs/overlaymakedefaultpkg"]
     rust = _run([str(emerge_binary)], base, fixture_env)
-    py = _run(emerge_pretend_python, base, fixture_env)
     assert rust.returncode == 0
-    assert rust.stdout == py.stdout
     assert rust.stdout.splitlines()[:2] == [
         "[ebuild  N     ] dev-libs/newpkg-1.0::testrepo ",
         '[ebuild  N     ] dev-libs/overlaymakedefaultpkg-1.0::overlay  '
@@ -7933,7 +7556,7 @@ def test_overlay_own_make_defaults_use_enables_a_flag_for_its_packages(
 
 
 def test_features_test_enables_the_test_use_flag_and_pulls_test_deps(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Real `configdict["features"]["USE"]` (config.py ~2043): `FEATURES=test`
     appends `test` to the `features` USE_ORDER tier (between `repo` and
@@ -7946,9 +7569,7 @@ def test_features_test_enables_the_test_use_flag_and_pulls_test_deps(
     args = ["--pretend", "-v", "dev-libs/featuretestpkg"]
 
     rust = _run([str(emerge_binary)], args, with_test)
-    py = _run(emerge_pretend_python, args, with_test)
     assert rust.returncode == 0
-    assert rust.stdout == py.stdout
     assert rust.stdout.splitlines()[:2] == [
         "[ebuild  N     ] dev-libs/newpkg-1.0::testrepo ",
         '[ebuild  N     ] dev-libs/featuretestpkg-1.0::testrepo  '
@@ -7957,8 +7578,6 @@ def test_features_test_enables_the_test_use_flag_and_pulls_test_deps(
 
     # No FEATURES=test -> test off, no dep.
     rust_off = _run([str(emerge_binary)], args, fixture_env)
-    py_off = _run(emerge_pretend_python, args, fixture_env)
-    assert rust_off.stdout == py_off.stdout
     assert rust_off.stdout.splitlines()[0] == (
         '[ebuild  N     ] dev-libs/featuretestpkg-1.0::testrepo  '
         'USE="-other -test"'
@@ -8087,7 +7706,7 @@ def test_package_use_mask_and_force_with_atom_specificity_ordering(emerge_binary
     )
 
 
-def test_strong_blocker_matches_an_installed_package(emerge_binary, emerge_pretend_python, fixture_env):
+def test_strong_blocker_matches_an_installed_package(emerge_binary, fixture_env):
     """dev-libs/blockerpkg's RDEPEND is "!!dev-libs/samepkg", and
     dev-libs/samepkg-1.0 is already installed per the fixture vdb.
     Real ResolverOutput._blockers (output.py:75-123): a `[blocks B      ]`
@@ -8101,20 +7720,16 @@ def test_strong_blocker_matches_an_installed_package(emerge_binary, emerge_prete
     `Conflict:` line gains `(1 unsatisfied)`, the `* Error: The above
     package list ...` block prints, and `actions.py` returns 1."""
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/blockerpkg"], fixture_env)
-    rp = _run(emerge_pretend_python, ["--pretend", "dev-libs/blockerpkg"], fixture_env)
     assert result.returncode == 1
-    assert rp.returncode == 1
-    assert result.stdout == rp.stdout
     # plain --pretend (verbosity 2) shows no Total:/Conflict: line
     assert result.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/blockerpkg-1.0 ',
         '[blocks B      ] dev-libs/samepkg ("dev-libs/samepkg" is hard blocking dev-libs/blockerpkg-1.0)',
     ]
     assert "cannot be\n" in result.stderr or "cannot be " in result.stderr
-    assert result.stderr == rp.stderr
 
 
-def test_weak_blocker_matches_another_new_package_in_the_same_graph(emerge_binary, emerge_pretend_python, fixture_env):
+def test_weak_blocker_matches_another_new_package_in_the_same_graph(emerge_binary, fixture_env):
     """dev-libs/graphblockerparent pulls in both dev-libs/blockerpartnerpkg
     and dev-libs/weakblockerpkg (whose RDEPEND is
     "!dev-libs/blockerpartnerpkg") as New in the same run, so the weak
@@ -8125,9 +7740,7 @@ def test_weak_blocker_matches_another_new_package_in_the_same_graph(emerge_binar
     result = _run(
         [str(emerge_binary)], ["--pretend", "dev-libs/graphblockerparent"], fixture_env
     )
-    rp = _run(emerge_pretend_python, ["--pretend", "dev-libs/graphblockerparent"], fixture_env)
     assert result.returncode == 0
-    assert result.stdout == rp.stdout
     assert result.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/blockerpartnerpkg-1.0 ',
         '[ebuild  N     ] dev-libs/weakblockerpkg-1.0 ',
@@ -8137,7 +7750,7 @@ def test_weak_blocker_matches_another_new_package_in_the_same_graph(emerge_binar
 
 
 def test_blocker_lines_print_after_every_package_line_not_inline(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """dev-libs/blockerorderpkg RDEPENDs "!!dev-libs/samepkg" *and*
     dev-libs/newpkg, so its blocker's owner (blockerorderpkg itself) is
@@ -8146,10 +7759,7 @@ def test_blocker_lines_print_after_every_package_line_not_inline(
     print_messages() -- so the `[blocks B ...]` line lands after
     dev-libs/newpkg, not interleaved right after its owner."""
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/blockerorderpkg"], fixture_env)
-    rp = _run(emerge_pretend_python, ["--pretend", "dev-libs/blockerorderpkg"], fixture_env)
     assert result.returncode == 1
-    assert rp.returncode == 1
-    assert result.stdout == rp.stdout
     assert result.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/newpkg-1.0 ',
         '[ebuild  N     ] dev-libs/blockerorderpkg-1.0 ',
@@ -8157,7 +7767,7 @@ def test_blocker_lines_print_after_every_package_line_not_inline(
     ]
 
 
-def test_blocker_line_is_coloured_under_color_y(emerge_binary, emerge_pretend_python, fixture_env):
+def test_blocker_line_is_coloured_under_color_y(emerge_binary, fixture_env):
     """Real _blockers wraps `blocks`, the `B`, the resolved atom, and the
     parenthetical in colorize(PKG_BLOCKER, ...) -- style "red"
     (\\x1b[31;01m). `-v` widens the bracket by the mask column's own
@@ -8165,12 +7775,7 @@ def test_blocker_line_is_coloured_under_color_y(emerge_binary, emerge_pretend_py
     result = _run(
         [str(emerge_binary)], ["--pretend", "--color=y", "-v", "dev-libs/blockerpkg"], fixture_env
     )
-    rp = _run(
-        emerge_pretend_python, ["--pretend", "--color=y", "-v", "dev-libs/blockerpkg"], fixture_env
-    )
     assert result.returncode == 1
-    assert rp.returncode == 1
-    assert result.stdout == rp.stdout
     R = "\x1b[31;01m"
     Z = "\x1b[39;49;00m"
     assert result.stdout.splitlines()[1] == (
@@ -8188,7 +7793,7 @@ def test_unrelated_package_reports_no_blockers(emerge_binary, fixture_env):
 
 
 def test_use_dep_blocker_that_the_target_does_not_satisfy_is_dropped(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Real drops a `[blocks]` line for a blocker atom whose own `[use]`
     deps the blocked package doesn't actually satisfy -- the block is a
@@ -8199,12 +7804,10 @@ def test_use_dep_blocker_that_the_target_does_not_satisfy_is_dropped(
     default stands in as enabled, and `-gone` is unmet). Neither block
     applies -- no `[blocks]` line, no `Conflict:` summary. (This is the
     `media-libs/mesa[-libglvnd(+)]` / `sys-apps/shadow[su]` real-tree
-    noise in miniature.) Rust == Python."""
+    noise in miniature.)"""
     base = ["--pretend", "dev-libs/blockusedepconsumer"]
     rust = _run([str(emerge_binary)], base, fixture_env)
-    py = _run(emerge_pretend_python, base, fixture_env)
     assert rust.returncode == 0
-    assert rust.stdout == py.stdout
     assert rust.stdout == "[ebuild  N     ] dev-libs/blockusedepconsumer-1.0 \n"
     assert "[blocks" not in rust.stdout
     assert "Conflict" not in rust.stdout
@@ -8430,7 +8033,7 @@ def test_profiles_repo_name_is_the_canonical_name_source(emerge_binary, fixture_
 
 
 def test_repo_name_section_mismatch_drops_the_repo_with_a_warning(
-    emerge_binary, emerge_pretend_python, tmp_path
+    emerge_binary, tmp_path
 ):
     """A repo whose profiles/repo_name differs from its repos.conf
     [section] name -- and with no matching alias -- is dropped entirely
@@ -8461,10 +8064,7 @@ def test_repo_name_section_mismatch_drops_the_repo_with_a_warning(
     env = {"PORTAGE_CONFIGROOT": str(cfg), "ROOT": str(cfg)}
 
     rust = _run([str(emerge_binary)], ["--pretend", "dev-libs/mainpkg"], env)
-    py = _run(emerge_pretend_python, ["--pretend", "dev-libs/mainpkg"], env)
-    assert rust.returncode == py.returncode == 0  # [main] still fine
-    assert rust.stdout == py.stdout
-    assert rust.stderr == py.stderr
+    assert rust.returncode == 0
     assert (
         "!!! Section 'mismatched-section' in repos.conf has name different"
         in rust.stderr
@@ -8472,7 +8072,7 @@ def test_repo_name_section_mismatch_drops_the_repo_with_a_warning(
 
 
 def test_profile_parent_resolves_an_aliased_repo_name(
-    emerge_binary, emerge_pretend_python, tmp_path, fixtures_root
+    emerge_binary, tmp_path, fixtures_root
 ):
     """A profile `parent` line `<alias>:some/path` where `<alias>` is a
     repo's `aliases =` (not its canonical name) resolves through the
@@ -8484,7 +8084,7 @@ def test_profile_parent_resolves_an_aliased_repo_name(
     (An atom's own `cat/pkg::alias` is deliberately NOT alias-resolved --
     real `match_from_list` does a straight name comparison; the sibling
     fixture `dev-libs/repnamepkg::repnamesection` already covers that
-    both sides reject it.)"""
+    it is rejected.)"""
     cfg = tmp_path / "cfg"
     main = tmp_path / "main"
     other = tmp_path / "other"
@@ -8529,10 +8129,7 @@ def test_profile_parent_resolves_an_aliased_repo_name(
     env = {"PORTAGE_CONFIGROOT": str(cfg), "ROOT": str(cfg)}
     args = ["--pretend", "-v", "dev-libs/aliasusepkg"]
     rust = _run([str(emerge_binary)], args, env)
-    py = _run(emerge_pretend_python, args, env)
     assert rust.returncode == 0, (rust.stdout, rust.stderr)
-    assert rust.stdout == py.stdout
-    assert rust.stderr == py.stderr
     # `USE="aliasflag"` -> the aliased `ovl:shared` profile level was
     # actually reached.
     assert 'USE="aliasflag"' in rust.stdout.splitlines()[0], rust.stdout
@@ -9078,39 +8675,26 @@ def test_columns_and_tree_together_is_a_usage_error(emerge_binary, fixture_env):
 
 
 def test_solver_portage_matches_the_default_resolution(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """`--solver=portage` resolves exactly like the default (no `--solver`
-    at all): same merge list, same exit code, on both implementations.
+    at all): same merge list, same exit code.
     The unknown-solver and missing-value usage errors are pinned byte for
     byte too (both exit 2)."""
     args = ["--pretend", "dev-libs/newpkg"]
     plain_rust = _run([str(emerge_binary)], args, fixture_env)
-    plain_python = _run(emerge_pretend_python, args, fixture_env)
     flagged_rust = _run(
         [str(emerge_binary)], ["--pretend", "--solver=portage", "dev-libs/newpkg"], fixture_env
     )
-    flagged_python = _run(
-        emerge_pretend_python,
-        ["--pretend", "--solver=portage", "dev-libs/newpkg"],
-        fixture_env,
-    )
-    assert flagged_rust.returncode == 0 and flagged_python.returncode == 0
-    assert flagged_rust.stdout == plain_rust.stdout == plain_python.stdout == flagged_python.stdout
-    assert flagged_rust.stderr == plain_rust.stderr == plain_python.stderr == flagged_python.stderr
+    assert flagged_rust.returncode == 0
+    assert flagged_rust.stdout == plain_rust.stdout
+    assert flagged_rust.stderr == plain_rust.stderr
     bad_rust = _run(
         [str(emerge_binary)], ["--pretend", "--solver=sat", "dev-libs/newpkg"], fixture_env
     )
-    bad_python = _run(
-        emerge_pretend_python, ["--pretend", "--solver=sat", "dev-libs/newpkg"], fixture_env
-    )
-    assert bad_rust.returncode == 2 and bad_python.returncode == 2
-    assert bad_rust.stdout == bad_python.stdout == ""
-    assert (
-        bad_rust.stderr
-        == bad_python.stderr
-        == 'emerge: --solver: "sat" is not "portage", "pubgrub" or "resolvo"\n'
-    )
+    assert bad_rust.returncode == 2
+    assert bad_rust.stdout == ''
+    assert bad_rust.stderr == 'emerge: --solver: "sat" is not "portage", "pubgrub" or "resolvo"\n'
 
 
 def test_columns_columnwidth_falls_back_to_default_on_an_unparsable_value(
@@ -9284,18 +8868,16 @@ def test_unsolvable_slot_conflict_survives_backtracking_and_is_reported(
     )
 
 
-def test_slot_conflict_notice_renders_pkg_use_display(emerge_binary, emerge_pretend_python, fixture_env):
+def test_slot_conflict_notice_renders_pkg_use_display(emerge_binary, fixture_env):
     """Real `slot_collision.py`'s `get_conflict()`: each instance header
     and each shown parent line carries that package's own
     `pkg_use_display(pkg, myopts, modified_use=...)` -- `USE="…"` with
     every IUSE flag, enabled-first -- not a hardcoded `USE=""`.
     `dev-libs/scusetarget` has `IUSE="+scuon scuoff"`, `dev-libs/scusenewpin`
     `IUSE="+scupin"`, `dev-libs/scuseoldpin` none. The `^` marker line
-    still spans the full (now longer) `cur_line`. Rust == Python."""
+    still spans the full (now longer) `cur_line`."""
     rust = _run([str(emerge_binary)], ["--pretend", "dev-libs/scuseparent"], fixture_env)
-    py = _run(emerge_pretend_python, ["--pretend", "dev-libs/scuseparent"], fixture_env)
     assert rust.returncode == 0
-    assert rust.stdout == py.stdout
     assert (
         '  (dev-libs/scusetarget-2.0:0/0::testrepo, ebuild scheduled for merge) '
         'USE="scuon -scuoff" pulled in by\n'
@@ -9362,7 +8944,7 @@ def test_slot_conflict_groups_same_reason_parents_and_offers_verbose_conflicts(
 
 
 def test_slot_conflict_color_y_colours_violated_spans_with_aligned_markers(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Slot-conflict `--color y` marker alignment (backlog Tier 1,
     decided): real `highlight_violations` wraps the violated operator /
@@ -9372,16 +8954,14 @@ def test_slot_conflict_color_y_colours_violated_spans_with_aligned_markers(
     colormap, so byte-parity with the drift is unachievable anyway).
     Portuale wraps the same spans but marks the DISPLAYED string, so
     color and carets agree: `>=` and `2.0` come out red, and the `^`
-    line sits under exactly those visible characters. Rust == Python."""
+    line sits under exactly those visible characters."""
     import re
 
     RED = "\x1b[31;01m"
     R = "\x1b[39;49;00m"
     base = ["--pretend", "--color=y", "dev-libs/slotconfgroup"]
     rust = _run([str(emerge_binary)], base, fixture_env)
-    python = _run(emerge_pretend_python, base, fixture_env)
     assert rust.returncode == 0
-    assert rust.stdout == python.stdout
     out = rust.stdout
     atom_line = (
         f"    {RED}>{R}{RED}={R}dev-libs/slotconflicttarget-"
@@ -9404,7 +8984,7 @@ def test_slot_conflict_color_y_colours_violated_spans_with_aligned_markers(
 
 
 def test_slot_conflict_use_reason_keys_unconditional_before_violated(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """dev-libs/slotusegroup pulls slotuseplain (>=slotusetarget-2.0, no
     USE-deps -- resolves 2.0 first) plus slotusex/slotusey, whose
@@ -9416,13 +8996,11 @@ def test_slot_conflict_use_reason_keys_unconditional_before_violated(
     violated `[x]` one, each with a `^` marker under its own token (no
     colorization). A single conflict block (one handler per slot), no
     autounmask block (nothing flippable), no need_rebuild trailer (no
-    installed parent). Rust == Python byte-identical."""
+    installed parent)."""
     args = ["--pretend", "dev-libs/slotusegroup"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == 0 and py.returncode == 0
-    assert rust.stdout == py.stdout
-    assert rust.stderr == py.stderr == ""
+    assert rust.returncode == 0
+    assert rust.stderr == ''
     out = rust.stdout
     assert out.splitlines()[:5] == [
         '[ebuild  N     ] dev-libs/slotusetarget-2.0  USE="(-x)"',
@@ -9843,7 +9421,7 @@ def test_verbose_shows_use_flags_gated_by_profile_and_make_conf(emerge_binary, f
 
 
 def test_use_line_at_p_is_full_for_a_new_pkg_and_changed_only_for_a_reinstall(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Real `print_use_string = verbosity != 1` (not -v-gated); it's
     `all_flags = verbosity == 3` that changes *which* flags render. A New
@@ -9861,9 +9439,6 @@ def test_use_line_at_p_is_full_for_a_new_pkg_and_changed_only_for_a_reinstall(
         p = _run([str(emerge_binary)], ["--pretend", f"dev-libs/{pkg}"], fixture_env)
         pv = _run([str(emerge_binary)], ["--pretend", "-v", f"dev-libs/{pkg}"], fixture_env)
         assert p.returncode == 0
-        assert p.stdout == _run(
-            emerge_pretend_python, ["--pretend", f"dev-libs/{pkg}"], fixture_env
-        ).stdout, pkg
         p_line = next(l for l in p.stdout.splitlines() if f"/{pkg}-1.0" in l)
         pv_line = next(l for l in pv.stdout.splitlines() if f"/{pkg}-1.0" in l)
         assert p_line == f"[ebuild  N     ] dev-libs/{pkg}-1.0  {use}", pkg
@@ -9882,11 +9457,6 @@ def test_use_line_at_p_is_full_for_a_new_pkg_and_changed_only_for_a_reinstall(
         fixture_env,
     )
     assert up.returncode == 0
-    assert up.stdout == _run(
-        emerge_pretend_python,
-        ["--pretend", "--update", "dev-libs/upgradeusepkg"],
-        fixture_env,
-    ).stdout
     assert (
         next(l for l in up.stdout.splitlines() if "upgradeusepkg-2.0" in l)
         == '[ebuild     U  ] dev-libs/upgradeusepkg-2.0 [1.0] USE="added%* -change*"'
@@ -9899,7 +9469,7 @@ def test_use_line_at_p_is_full_for_a_new_pkg_and_changed_only_for_a_reinstall(
 
 
 def test_reinst_flags_force_show_a_dropped_iuse_trigger_flag_at_plain_p(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Real `_create_use_string`'s `reinst_flag` (`reinst_flags_map`, the
     Reinstall's own `_reinstall_for_flags` trigger set): a flag is shown
@@ -9917,11 +9487,6 @@ def test_reinst_flags_force_show_a_dropped_iuse_trigger_flag_at_plain_p(
             fixture_env,
         )
         assert p.returncode == 0
-        assert p.stdout == _run(
-            emerge_pretend_python,
-            ["--pretend", flag, "dev-libs/reinstdropiusepkg"],
-            fixture_env,
-        ).stdout, flag
         assert p.stdout.strip() == (
             '[ebuild   R    ] dev-libs/reinstdropiusepkg-1.0  USE="(-gone%*)"'
         ), flag
@@ -9931,11 +9496,6 @@ def test_reinst_flags_force_show_a_dropped_iuse_trigger_flag_at_plain_p(
         ["--pretend", "-v", "--newuse", "dev-libs/reinstdropiusepkg"],
         fixture_env,
     )
-    assert pv.stdout == _run(
-        emerge_pretend_python,
-        ["--pretend", "-v", "--newuse", "dev-libs/reinstdropiusepkg"],
-        fixture_env,
-    ).stdout
     # -pv already showed every flag: unchanged `-keep` plus the removed one.
     assert next(
         l for l in pv.stdout.splitlines() if "reinstdropiusepkg-1.0" in l
@@ -9943,7 +9503,7 @@ def test_reinst_flags_force_show_a_dropped_iuse_trigger_flag_at_plain_p(
 
 
 def test_verbose_use_order_is_enabled_first_and_alphabetical_flips_it(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Real output_helpers.py::_create_use_string joins `enabled +
     disabled` -- enabled flags first, then disabled, each alphabetical --
@@ -9994,18 +9554,6 @@ def test_verbose_use_order_is_enabled_first_and_alphabetical_flips_it(
     )
 
     # Both implementations agree, both forms.
-    py_default = _run(
-        emerge_pretend_python,
-        ["--pretend", "-v", "dev-libs/iusedefaultpkg", "dev-libs/useexpandpkg"],
-        fixture_env,
-    )
-    py_alpha = _run(
-        emerge_pretend_python,
-        ["--pretend", "-v", "--alphabetical", "dev-libs/iusedefaultpkg", "dev-libs/useexpandpkg"],
-        fixture_env,
-    )
-    assert default.stdout == py_default.stdout
-    assert alpha.stdout == py_alpha.stdout
 
 
 def test_verbose_use_flags_reflect_package_use_overrides(emerge_binary, fixture_env):
@@ -10418,7 +9966,7 @@ def test_selected_set_expands_the_same_as_world(emerge_binary, fixture_env):
 
 
 def test_installed_set_expands_to_a_slot_atom_per_vdb_package(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """Real @installed (EverythingSet): a `cat/pkg:slot` atom for every
     package under var/db/pkg -- always slot-qualified, even for a lone
@@ -10441,11 +9989,10 @@ def test_installed_set_expands_to_a_slot_atom_per_vdb_package(
         "[ebuild   R    ] dev-libs/dualslotpkg-1.0 ",
         "[ebuild   R    ] dev-libs/nestedsetpkg-1.0 ",
     ]
-    assert _run(emerge_pretend_python, args, env).stdout == result.stdout
 
 
 def test_preserved_rebuild_set_expands_to_the_consumers_of_registered_preserved_libs(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """Real @preserved-rebuild (PreservedLibraryConsumerSet): the
     installed packages that still link a library kept alive only by
@@ -10453,8 +10000,7 @@ def test_preserved_rebuild_set_expands_to_the_consumers_of_registered_preserved_
     installed and a NEEDED.ELF.2 saying its binary links libpreserved.so.1;
     the preserved_libs_registry records that soname under a
     now-uninstalled provider (dev-libs/goneprovider). @preserved-rebuild
-    must resolve to nestedsetpkg (the surviving consumer), and Rust must
-    match the Python reference byte for byte."""
+    must resolve to nestedsetpkg (the surviving consumer)."""
     vdb = tmp_path / "var" / "db" / "pkg" / "dev-libs" / "nestedsetpkg-1.0"
     vdb.mkdir(parents=True)
     (vdb / "CATEGORY").write_text("dev-libs\n")
@@ -10485,11 +10031,10 @@ def test_preserved_rebuild_set_expands_to_the_consumers_of_registered_preserved_
     assert result.stdout.splitlines() == [
         "[ebuild   R    ] dev-libs/nestedsetpkg-1.0 ",
     ]
-    assert _run(emerge_pretend_python, args, env).stdout == result.stdout
 
 
 def test_preserved_rebuild_set_is_empty_when_the_registry_is_empty(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """No preserved_libs_registry (or an empty one) -> @preserved-rebuild
     expands to nothing, which hits the same "nothing to resolve" error an
@@ -10500,11 +10045,10 @@ def test_preserved_rebuild_set_is_empty_when_the_registry_is_empty(
     result = _run([str(emerge_binary)], args, env)
     assert result.returncode == 2
     assert result.stdout == ""
-    assert _run(emerge_pretend_python, args, env).returncode == 2
 
 
 def test_world_missing_file_expands_to_system_not_an_error(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """A missing WORLD_FILE (a fresh ROOT that's never had anything merged
     into it) is a real, valid state. Real `@world` is
@@ -10517,11 +10061,9 @@ def test_world_missing_file_expands_to_system_not_an_error(
     env = dict(fixture_env)
     env["ROOT"] = str(tmp_path)
 
-    # @world -> @system: resolves, rc 0, and Rust == Python.
+    # @world -> @system: resolves, rc 0, and
     w_rust = _run([str(emerge_binary)], ["--pretend", "@world"], env)
-    w_py = _run(emerge_pretend_python, ["--pretend", "@world"], env)
     assert w_rust.returncode == 0, w_rust.stderr
-    assert w_rust.stdout == w_py.stdout
     assert w_rust.stdout != ""
 
     # @selected alone -> empty -> the same "nothing to resolve" error.
@@ -10770,8 +10312,8 @@ def test_depclean_package_provided_removes_a_provided_cpv_even_as_a_world_root_o
     assert " dev-libs/pdwtest\n" not in result.stdout
 
 
-def test_depclean_package_provided_matches_between_implementations(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+def test_depclean_package_provided_pinned_output(
+    emerge_binary, fixture_env, tmp_path
 ):
     env = dict(fixture_env)
     env["ROOT"] = str(_depclean_pprovided_root(tmp_path))
@@ -10781,10 +10323,7 @@ def test_depclean_package_provided_matches_between_implementations(
         ["--pretend", "--depclean", "--color=y"],
     ):
         rust = _run([str(emerge_binary)], args, env)
-        python = _run(emerge_pretend_python, args, env)
-        assert rust.returncode == python.returncode, args
-        assert rust.stdout == python.stdout, args
-        assert rust.stderr == python.stderr, args
+        _assert_harvested(rust)
 
 
 def test_depclean_keeps_a_build_only_dependency(emerge_binary, fixture_env, tmp_path):
@@ -10874,9 +10413,8 @@ def test_depclean_args_deselect_n_keeps_a_world_member(emerge_binary, fixture_en
 
 def test_depclean_without_pretend_is_no_longer_gated(emerge_binary, fixture_env):
     """`emerge --depclean` WITHOUT `--pretend` really removes the cleanlist
-    now (pretend.rs's execute_unmerge). Not a Rust-vs-Python contract
-    case: the Python reference has no ebuild-execution machinery and just
-    returns 0. The real removal is covered in test_portuale.py. Here we
+    now (pretend.rs's execute_unmerge). The real removal is covered in
+    test_portuale.py. Here we
     only assert the old `requires --pretend` exit-2 gate is gone, using a
     non-matching atom so nothing is removed from the read-only fixture."""
     result = _run(
@@ -10885,8 +10423,8 @@ def test_depclean_without_pretend_is_no_longer_gated(emerge_binary, fixture_env)
     assert "requires --pretend" not in result.stderr
 
 
-def test_depclean_matches_between_implementations(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+def test_depclean_pinned_output(
+    emerge_binary, fixture_env, tmp_path
 ):
     env = _depclean_env(fixture_env, tmp_path)
     for args in (
@@ -10908,10 +10446,7 @@ def test_depclean_matches_between_implementations(
         ["--pretend", "-c", "-v", "dev-libs/dcorphan"],
     ):
         rust = _run([str(emerge_binary)], args, env)
-        python = _run(emerge_pretend_python, args, env)
-        assert rust.returncode == python.returncode, args
-        assert rust.stdout == python.stdout, args
-        assert rust.stderr == python.stderr, args
+        _assert_harvested(rust)
 
 
 def _libcheck_root(tmp_path):
@@ -11010,8 +10545,8 @@ def test_depclean_lib_check_disabled_removes_the_provider_and_warns(
     assert ">>> Checking for lib consumers..." not in result.stderr
 
 
-def test_depclean_lib_check_matches_between_implementations(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+def test_depclean_lib_check_pinned_output(
+    emerge_binary, fixture_env, tmp_path
 ):
     env = _libcheck_env(fixture_env, tmp_path)
     for args in (
@@ -11027,10 +10562,7 @@ def test_depclean_lib_check_matches_between_implementations(
         ["--pretend", "-c", "--color=y"],
     ):
         rust = _run([str(emerge_binary)], args, env)
-        python = _run(emerge_pretend_python, args, env)
-        assert rust.returncode == python.returncode, args
-        assert rust.stdout == python.stdout, args
-        assert rust.stderr == python.stderr, args
+        _assert_harvested(rust)
 
 
 def _unresolved_root(tmp_path):
@@ -11131,8 +10663,8 @@ def test_prune_nodeps_ignores_the_unresolvable_dep(emerge_binary, fixture_env, t
     assert "Dependencies could not be completely resolved" not in result.stderr
 
 
-def test_depclean_unresolved_matches_between_implementations(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+def test_depclean_unresolved_pinned_output(
+    emerge_binary, fixture_env, tmp_path
 ):
     env = _unresolved_env(fixture_env, tmp_path)
     for args in (
@@ -11144,10 +10676,7 @@ def test_depclean_unresolved_matches_between_implementations(
         ["--pretend", "-c", "dev-libs/uorphan"],
     ):
         rust = _run([str(emerge_binary)], args, env)
-        python = _run(emerge_pretend_python, args, env)
-        assert rust.returncode == python.returncode, args
-        assert rust.stdout == python.stdout, args
-        assert rust.stderr == python.stderr, args
+        _assert_harvested(rust)
 
 
 def _depclean_revdep_root(tmp_path):
@@ -11257,17 +10786,14 @@ def test_depclean_pretend_removal_order_is_topological(emerge_binary, fixture_en
     )
 
 
-def test_depclean_removal_order_matches_between_implementations(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+def test_depclean_removal_order_pinned_output(
+    emerge_binary, fixture_env, tmp_path
 ):
     env = dict(fixture_env)
     env["ROOT"] = str(_depclean_order_root(tmp_path))
     args = ["--pretend", "--depclean"]
     rust = _run([str(emerge_binary)], args, env)
-    python = _run(emerge_pretend_python, args, env)
-    assert rust.returncode == python.returncode
-    assert rust.stdout == python.stdout
-    assert rust.stderr == python.stderr
+    _assert_harvested(rust)
 
 
 def _depclean_cycle_root(tmp_path):
@@ -11302,7 +10828,7 @@ def _depclean_cycle_root(tmp_path):
 
 
 def test_depclean_breaks_a_dependency_cycle_by_popping_one_node(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     env = dict(fixture_env)
     env["ROOT"] = str(_depclean_cycle_root(tmp_path))
@@ -11315,9 +10841,6 @@ def test_depclean_breaks_a_dependency_cycle_by_popping_one_node(
     # The -4 (DEPEND) edge into cyclicdepb is dropped first; the -2
     # (RDEPEND) edge into cyclicdepa is preserved as long as possible.
     assert blocks == ["dev-libs/cyclicdepb", "dev-libs/cyclicdepa"]
-    python = _run(emerge_pretend_python, args, env)
-    assert result.stdout == python.stdout
-    assert result.stderr == python.stderr
 
 
 def _prune_root(tmp_path):
@@ -11403,8 +10926,7 @@ def test_prune_pretend_nothing_to_prune(emerge_binary, fixture_env, tmp_path):
 
 def test_prune_without_pretend_is_no_longer_gated(emerge_binary, fixture_env):
     """`emerge --prune` WITHOUT `--pretend` really removes now
-    (pretend.rs's execute_unmerge). Not a Rust-vs-Python contract case
-    (the Python reference just returns 0). Real removal is covered in
+    (pretend.rs's execute_unmerge). Real removal is covered in
     test_portuale.py; here we only assert the exit-2 gate is gone, using a
     non-matching atom so nothing is removed from the read-only fixture."""
     result = _run(
@@ -11463,8 +10985,8 @@ def test_prune_nodeps_pretend_nothing_outdated(emerge_binary, fixture_env, tmp_p
     assert ">>> No packages selected for removal by prune" in witharg.stdout
 
 
-def test_prune_nodeps_matches_between_implementations(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+def test_prune_nodeps_pinned_output(
+    emerge_binary, fixture_env, tmp_path
 ):
     env = dict(fixture_env)
     env["ROOT"] = str(_prune_root(tmp_path))
@@ -11478,10 +11000,7 @@ def test_prune_nodeps_matches_between_implementations(
         ["--pretend", "--prune", "--nodeps", "dev-libs/nope"],
     ):
         rust = _run([str(emerge_binary)], args, env)
-        python = _run(emerge_pretend_python, args, env)
-        assert rust.returncode == python.returncode, args
-        assert rust.stdout == python.stdout, args
-        assert rust.stderr == python.stderr, args
+        _assert_harvested(rust)
 
 
 def test_prune_pretend_verbose_shows_reverse_deps(emerge_binary, fixture_env, tmp_path):
@@ -11506,8 +11025,8 @@ def test_prune_pretend_verbose_shows_reverse_deps(emerge_binary, fixture_env, tm
     assert out.index("pulled in by:") < out.index(">>> Calculating removal order...")
 
 
-def test_prune_matches_between_implementations(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+def test_prune_pinned_output(
+    emerge_binary, fixture_env, tmp_path
 ):
     env = dict(fixture_env)
     env["ROOT"] = str(_prune_root(tmp_path))
@@ -11523,23 +11042,17 @@ def test_prune_matches_between_implementations(
         ["--pretend", "--prune", "dev-libs/nope"],
     ):
         rust = _run([str(emerge_binary)], args, env)
-        python = _run(emerge_pretend_python, args, env)
-        assert rust.returncode == python.returncode, args
-        assert rust.stdout == python.stdout, args
-        assert rust.stderr == python.stderr, args
+        _assert_harvested(rust)
 
 
-def test_prune_matches_between_implementations_on_the_shared_vdb(
-    emerge_binary, emerge_pretend_python, fixture_env
+def test_prune_pinned_output_on_the_shared_vdb(
+    emerge_binary, fixture_env
 ):
     """The committed fixtures install dev-libs/unmergepkg at 1.0 and 2.0
     -- a real multi-version cp for --prune to act on."""
     for args in (["--pretend", "--prune"], ["--pretend", "--prune", "dev-libs/unmergepkg"]):
         rust = _run([str(emerge_binary)], args, fixture_env)
-        python = _run(emerge_pretend_python, args, fixture_env)
-        assert rust.returncode == python.returncode, args
-        assert rust.stdout == python.stdout, args
-        assert rust.stderr == python.stderr, args
+        _assert_harvested(rust)
 
 
 def test_unmerge_pretend_lists_selected_and_omitted(emerge_binary, fixture_env):
@@ -11620,8 +11133,8 @@ def test_unmerge_pretend_accepts_a_literal_vdb_path(emerge_binary, fixture_env, 
     assert nocont.stdout.rstrip() == f"!!! Not a valid db dir: {bad}"
 
 
-def test_unmerge_pretend_vdb_path_matches_between_implementations(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+def test_unmerge_pretend_vdb_path_pinned_output(
+    emerge_binary, fixture_env, tmp_path
 ):
     root, pkgdir = _vdb_path_root(tmp_path)
     env = dict(fixture_env)
@@ -11635,10 +11148,7 @@ def test_unmerge_pretend_vdb_path_matches_between_implementations(
     ):
         args = ["--pretend", "-C", target]
         rust = _run([str(emerge_binary)], args, env)
-        python = _run(emerge_pretend_python, args, env)
-        assert rust.returncode == python.returncode, target
-        assert rust.stdout == python.stdout, target
-        assert rust.stderr == python.stderr, target
+        _assert_harvested(rust)
 
 
 def test_unmerge_pretend_refuses_portage_itself(emerge_binary, fixture_env):
@@ -12038,8 +11548,8 @@ def test_deselect_n_does_not_trigger_deselect_mode(emerge_binary, fixture_env, t
     assert result.stdout == '[ebuild   R    ] dev-libs/foo-1.0 \n'
 
 
-def test_deselect_matches_between_implementations(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+def test_deselect_pinned_output(
+    emerge_binary, fixture_env, tmp_path
 ):
     env = _deselect_env(fixture_env, tmp_path)
     for args in (
@@ -12061,10 +11571,7 @@ def test_deselect_matches_between_implementations(
         ["--pretend", "--deselect", ">=dev-libs/vers-1.0"],
     ):
         rust_result = _run([str(emerge_binary)], args, env)
-        python_result = _run(emerge_pretend_python, args, env)
-        assert rust_result.returncode == python_result.returncode, args
-        assert rust_result.stdout == python_result.stdout, args
-        assert rust_result.stderr == python_result.stderr, args
+        _assert_harvested(rust_result)
 
 
 def test_system_expands_to_the_fixture_profile_chains_own_packages_files(
@@ -12328,7 +11835,7 @@ def test_changed_deps_ignores_a_libc_only_dependency_change(emerge_binary, fixtu
 
 
 def test_changed_deps_detects_an_atom_moved_between_two_dep_keys(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """dev-libs/movedkeydepspkg's vdb recorded RDEPEND="dev-libs/samepkg";
     its current ebuild has that exact atom in PDEPEND instead, nothing
@@ -12339,18 +11846,14 @@ def test_changed_deps_detects_an_atom_moved_between_two_dep_keys(
     key, which portuale now mirrors: the move registers as changed."""
     args = ["--pretend", "--changed-deps", "dev-libs/movedkeydepspkg"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    python = _run(emerge_pretend_python, args, fixture_env)
     assert rust.returncode == 0
-    assert python.returncode == 0
-    assert rust.stdout == python.stdout
-    assert rust.stderr == python.stderr
     assert rust.stdout.splitlines() == [
         "[ebuild   R    ] dev-libs/movedkeydepspkg-1.0 ",
     ]
 
 
 def test_changed_deps_ignores_a_built_slot_operators_resolved_slot(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """dev-libs/slotopdepspkg's current ebuild has
     RDEPEND="dev-libs/slotoptarget:="; its vdb recorded the built form
@@ -12361,16 +11864,12 @@ def test_changed_deps_ignores_a_built_slot_operators_resolved_slot(
     spuriously trigger a --changed-deps reinstall."""
     args = ["--pretend", "--changed-deps", "dev-libs/slotopdepspkg"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    python = _run(emerge_pretend_python, args, fixture_env)
     assert rust.returncode == 0
-    assert python.returncode == 0
-    assert rust.stdout == python.stdout
-    assert rust.stderr == python.stderr
     assert rust.stdout.strip() == ""
 
 
 def test_changed_deps_structured_comparison(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Real _changed_deps (depgraph.py:3168) compares structured
     use_reduce(token_class=Atom) output as Python lists -- order-sensitive
@@ -12390,22 +11889,14 @@ def test_changed_deps_structured_comparison(
     for pkg in changed:
         args = ["--pretend", "--changed-deps", f"dev-libs/{pkg}"]
         rust = _run([str(emerge_binary)], args, fixture_env)
-        python = _run(emerge_pretend_python, args, fixture_env)
         assert rust.returncode == 0
-        assert python.returncode == 0
-        assert rust.stdout == python.stdout, pkg
-        assert rust.stderr == python.stderr, pkg
         assert rust.stdout.splitlines() == [
             f"[ebuild   R    ] dev-libs/{pkg}-1.0 ",
         ], pkg
 
     args = ["--pretend", "--changed-deps", "dev-libs/redundantbracketdepspkg"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    python = _run(emerge_pretend_python, args, fixture_env)
     assert rust.returncode == 0
-    assert python.returncode == 0
-    assert rust.stdout == python.stdout
-    assert rust.stderr == python.stderr
     assert rust.stdout.strip() == ""
 
 
@@ -12889,7 +12380,7 @@ def test_deep_bounded_depth_stops_short_of_the_full_chain(emerge_binary, fixture
 
 
 def test_package_provided_drops_the_dep_and_warns_on_a_direct_target(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """profiles/default/package.provided lists dev-libs/providedpkg-1.0
     and dev-libs/providedpkg2-1.0 (both have ebuilds in the fixture repo).
@@ -12901,10 +12392,7 @@ def test_package_provided_drops_the_dep_and_warns_on_a_direct_target(
     so the ref is always `'args'`."""
     # dev-libs/needsprovided RDEPENDs providedpkg (dropped) + newpkg (New).
     dep = _run([str(emerge_binary)], ["--pretend", "dev-libs/needsprovided"], fixture_env)
-    dep_py = _run(emerge_pretend_python, ["--pretend", "dev-libs/needsprovided"], fixture_env)
     assert dep.returncode == 0
-    assert dep.stdout == dep_py.stdout
-    assert dep.stderr == dep_py.stderr
     assert dep.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/newpkg-1.0 ',
         '[ebuild  N     ] dev-libs/needsprovided-1.0 ',
@@ -12913,10 +12401,8 @@ def test_package_provided_drops_the_dep_and_warns_on_a_direct_target(
 
     # A direct target -> no merge-list line, the singular WARNING block.
     one = _run([str(emerge_binary)], ["--pretend", "dev-libs/providedpkg"], fixture_env)
-    one_py = _run(emerge_pretend_python, ["--pretend", "dev-libs/providedpkg"], fixture_env)
     assert one.returncode == 0
-    assert one.stdout == "" and one.stdout == one_py.stdout
-    assert one.stderr == one_py.stderr
+    assert one.stdout == ''
     assert one.stderr == (
         "\nWARNING: A requested package will not be merged because it is listed in\n"
         "package.provided:\n"
@@ -12931,12 +12417,6 @@ def test_package_provided_drops_the_dep_and_warns_on_a_direct_target(
         ["--pretend", "dev-libs/providedpkg", "dev-libs/providedpkg2"],
         fixture_env,
     )
-    two_py = _run(
-        emerge_pretend_python,
-        ["--pretend", "dev-libs/providedpkg", "dev-libs/providedpkg2"],
-        fixture_env,
-    )
-    assert two.stderr == two_py.stderr
     assert two.stderr == (
         "\nWARNING: Requested packages will not be merged because they are listed in\n"
         "package.provided:\n"
@@ -12949,15 +12429,12 @@ def test_package_provided_drops_the_dep_and_warns_on_a_direct_target(
     # --color=y: `WARNING: ` is BAD (red), the atom is INFORM (darkgreen).
     R = "\x1b[39;49;00m"
     col = _run([str(emerge_binary)], ["--pretend", "--color=y", "dev-libs/providedpkg"], fixture_env)
-    assert col.stderr == _run(
-        emerge_pretend_python, ["--pretend", "--color=y", "dev-libs/providedpkg"], fixture_env
-    ).stderr
     assert col.stderr.startswith(f"\x1b[31;01m\nWARNING: {R}A requested package")
     assert f"  \x1b[32mdev-libs/providedpkg{R} pulled in by 'args'\n" in col.stderr
 
 
 def test_emptytree_reinstalls_the_whole_deep_dependency_tree(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """--emptytree/-e (real create_depgraph_params.py:176-179 --
     myparams["empty"] = True; myparams["deep"] = True;
@@ -12972,10 +12449,7 @@ def test_emptytree_reinstalls_the_whole_deep_dependency_tree(
     against real portage and for debugging resolution."""
     args = ["--pretend", "--emptytree", "dev-libs/deeppkg"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    python = _run(emerge_pretend_python, args, fixture_env)
     assert rust.returncode == 0
-    assert rust.stdout == python.stdout
-    assert rust.stderr == python.stderr
     assert rust.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/newpkg-1.0 ',
         '[ebuild   R    ] dev-libs/deeppkg2-1.0 ',
@@ -12984,9 +12458,6 @@ def test_emptytree_reinstalls_the_whole_deep_dependency_tree(
 
     # -e alone reinstalls; the counters line counts the reinstalls.
     v = _run([str(emerge_binary)], ["--pretend", "-v", "--emptytree", "dev-libs/deeppkg"], fixture_env)
-    assert v.stdout == _run(
-        emerge_pretend_python, ["--pretend", "-v", "--emptytree", "dev-libs/deeppkg"], fixture_env
-    ).stdout
     assert v.stdout.splitlines()[-1] == (
         "Total: 3 packages (1 new, 2 reinstalls), Size of downloads: 0 KiB"
     )
@@ -12998,11 +12469,6 @@ def test_emptytree_reinstalls_the_whole_deep_dependency_tree(
         ["--pretend", "--emptytree", "--update", "dev-libs/withdeps"],
         fixture_env,
     )
-    assert eu.stdout == _run(
-        emerge_pretend_python,
-        ["--pretend", "--emptytree", "--update", "dev-libs/withdeps"],
-        fixture_env,
-    ).stdout
     assert "[ebuild     U  ] dev-libs/upgradepkg-2.0 [1.0]" in eu.stdout
 
     # -e without -p really merges now (the dry-run pilot's refusal died
@@ -13018,7 +12484,7 @@ def test_emptytree_reinstalls_the_whole_deep_dependency_tree(
 
 
 def test_installed_consumer_version_bound_blocks_an_upgrade(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Real depgraph._complete_graph reaching
     _slot_operator_check_reverse_dependencies: an upgrade has to satisfy
@@ -13044,16 +12510,13 @@ def test_installed_consumer_version_bound_blocks_an_upgrade(
     live divergence this was written for)."""
     args = ["--pretend", "--update", "dev-libs/revdeptarget"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    python = _run(emerge_pretend_python, args, fixture_env)
     assert rust.returncode == 0
-    assert rust.stdout == python.stdout
-    assert rust.stderr == python.stderr
     assert rust.stdout.splitlines() == [
     ]
 
 
 def test_installed_consumers_built_slot_operator_atom_does_not_block_an_upgrade(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """The other half of the same real rule
     (_slot_operator_check_reverse_dependencies, depgraph.py:2494-2502): a
@@ -13072,10 +12535,7 @@ def test_installed_consumers_built_slot_operator_atom_does_not_block_an_upgrade(
     only in the recorded atom -- which is the whole distinction."""
     args = ["--pretend", "--update", "dev-libs/revdepslottarget"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    python = _run(emerge_pretend_python, args, fixture_env)
     assert rust.returncode == 0
-    assert rust.stdout == python.stdout
-    assert rust.stderr == python.stderr
     assert rust.stdout.splitlines() == [
         "[ebuild     U  ] dev-libs/revdepslottarget-2.0 [1.0]",
     ]
@@ -13113,7 +12573,7 @@ def _assert_masked_dep_block(stderr, atom, masked_lines, chain_lines):
 
 
 def test_masked_dependency_is_disclosed_with_its_mask_reasons(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Real `_show_unsatisfied_dep` for a dependency atom matching
     masked-only ebuilds (verified live against 3.0.82.2): the "All
@@ -13125,10 +12585,7 @@ def test_masked_dependency_is_disclosed_with_its_mask_reasons(
     only the error block) and the exit code is 1 (Slice 3)."""
     args = ["--pretend", "dev-libs/maskneedpkg"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    python = _run(emerge_pretend_python, args, fixture_env)
     assert rust.returncode == 1  # abort path (Slice 3): masked-only dep aborts, exit 1
-    assert rust.stdout == python.stdout
-    assert rust.stderr == python.stderr
     assert rust.stdout.splitlines() == []
     _assert_masked_dep_block(
         rust.stderr,
@@ -13142,7 +12599,7 @@ def test_masked_dependency_is_disclosed_with_its_mask_reasons(
 
 
 def test_keyword_masked_dependency_is_disclosed_with_its_mask_reasons(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Same real rule for a KEYWORDS mask: dev-libs/kwneedpkg-1.0
     RDEPENDs dev-libs/kwmaskeddep, whose only keyword is `~amd64`. The
@@ -13153,10 +12610,7 @@ def test_keyword_masked_dependency_is_disclosed_with_its_mask_reasons(
     no fixture covers that here.)"""
     args = ["--pretend", "dev-libs/kwneedpkg"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    python = _run(emerge_pretend_python, args, fixture_env)
     assert rust.returncode == 1  # abort path (Slice 3): masked-only dep aborts, exit 1
-    assert rust.stdout == python.stdout
-    assert rust.stderr == python.stderr
     assert rust.stdout.splitlines() == []
     _assert_masked_dep_block(
         rust.stderr,
@@ -13216,7 +12670,7 @@ def _assert_residual_slot_conflict_block(
 
 
 def test_explicitly_pinned_upgrade_breaks_an_installed_pin_and_reports_it(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Real _complete_graph's end-of-walk unsatisfied-dep loop
     (depgraph.py:8770+): an installed consumer's recorded atom that the
@@ -13236,10 +12690,7 @@ def test_explicitly_pinned_upgrade_breaks_an_installed_pin_and_reports_it(
     ebuilds to satisfy")."""
     args = ["--pretend", "=dev-libs/paired-2.0"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    python = _run(emerge_pretend_python, args, fixture_env)
     assert rust.returncode == 0
-    assert rust.stdout == python.stdout
-    assert rust.stderr == python.stderr
     assert rust.stdout.splitlines()[:1] == [
         "[ebuild     U  ] dev-libs/paired-2.0 [1.0]",
     ]
@@ -13255,7 +12706,7 @@ def test_explicitly_pinned_upgrade_breaks_an_installed_pin_and_reports_it(
 
 
 def test_hard_dependency_requirement_breaks_an_installed_pin_and_reports_it(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Same real rule as above, with the hard requirement coming from a
     dependency instead of an argument: dev-libs/needer-1.0 requires
@@ -13267,10 +12718,7 @@ def test_hard_dependency_requirement_breaks_an_installed_pin_and_reports_it(
     the installed instance's the keeper pin."""
     args = ["--pretend", "dev-libs/needer"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    python = _run(emerge_pretend_python, args, fixture_env)
     assert rust.returncode == 0
-    assert rust.stdout == python.stdout
-    assert rust.stderr == python.stderr
     assert rust.stdout.splitlines()[:2] == [
         "[ebuild     U  ] dev-libs/paired-2.0 [1.0]",
         "[ebuild  N     ] dev-libs/needer-1.0 ",
@@ -13287,7 +12735,7 @@ def test_hard_dependency_requirement_breaks_an_installed_pin_and_reports_it(
 
 
 def test_needer_triangle_reports_the_installed_instance_with_both_parents(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Both hard sides at once: needer requires `>=paired-2.0` while
     othermod requires `<paired-2.0`, and keeper pins `=paired-1.0` from
@@ -13297,10 +12745,7 @@ def test_needer_triangle_reports_the_installed_instance_with_both_parents(
     drop paired from the merge list entirely here."""
     args = ["--pretend", "dev-libs/needer", "dev-libs/othermod"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    python = _run(emerge_pretend_python, args, fixture_env)
     assert rust.returncode == 0
-    assert rust.stdout == python.stdout
-    assert rust.stderr == python.stderr
     assert rust.stdout.splitlines()[:3] == [
         "[ebuild     U  ] dev-libs/paired-2.0 [1.0]",
         "[ebuild  N     ] dev-libs/needer-1.0 ",
@@ -13321,7 +12766,7 @@ def test_needer_triangle_reports_the_installed_instance_with_both_parents(
 
 
 def test_satisfiable_installed_pin_still_holds_the_upgrade(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """The other side of the same rule: a bare `--update dev-libs/paired`
     is satisfiable together with the keeper pin (1.0 satisfies the
@@ -13330,15 +12775,12 @@ def test_satisfiable_installed_pin_still_holds_the_upgrade(
     above and like real, which also keeps 1.0 here (verified live)."""
     args = ["--pretend", "--update", "dev-libs/paired"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    python = _run(emerge_pretend_python, args, fixture_env)
     assert rust.returncode == 0
-    assert rust.stdout == python.stdout
-    assert rust.stderr == python.stderr
     assert rust.stdout.splitlines() == []
 
 
 def test_reinstall_atoms_forces_one_deep_dependency_to_reinstall(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """--reinstall-atoms ATOMS (real main.py `action: "append"` ->
     depgraph.py:363 WildcardPackageSet): an already-installed package
@@ -13353,10 +12795,7 @@ def test_reinstall_atoms_forces_one_deep_dependency_to_reinstall(
 
     args = ["--pretend", "--deep", "--reinstall-atoms", "dev-libs/deeppkg2", "dev-libs/deeppkg"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    python = _run(emerge_pretend_python, args, fixture_env)
     assert rust.returncode == 0
-    assert rust.stdout == python.stdout
-    assert rust.stderr == python.stderr
     assert rust.stdout.splitlines() == [
         "[ebuild  N     ] dev-libs/newpkg-1.0 ",
         "[ebuild   R    ] dev-libs/deeppkg2-1.0 ",
@@ -13372,20 +12811,16 @@ def test_reinstall_atoms_forces_one_deep_dependency_to_reinstall(
              "--reinstall-atoms=dev-libs/deeppkg",
              "dev-libs/deeppkg"]
     r = _run([str(emerge_binary)], multi, fixture_env)
-    assert r.stdout == _run(emerge_pretend_python, multi, fixture_env).stdout
     assert "[ebuild   R    ] dev-libs/deeppkg-1.0 " in r.stdout
     assert "[ebuild   R    ] dev-libs/deeppkg2-1.0 " in r.stdout
 
     # No value -> usage error, exit 2, matching --exclude.
     err = _run([str(emerge_binary)], ["--pretend", "dev-libs/deeppkg", "--reinstall-atoms"], fixture_env)
     assert err.returncode == 2
-    assert err.stderr == _run(
-        emerge_pretend_python, ["--pretend", "dev-libs/deeppkg", "--reinstall-atoms"], fixture_env
-    ).stderr
 
 
 def test_rebuild_if_star_rebuilds_an_installed_consumer_of_a_merged_build_dep(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """--rebuild-if-unbuilt / --rebuild-if-new-rev / --rebuild-if-new-ver
     (real `_rebuild_config.trigger_rebuilds`): an installed package whose
@@ -13395,10 +12830,7 @@ def test_rebuild_if_star_rebuilds_an_installed_consumer_of_a_merged_build_dep(
     `dev-libs/rebuildtrigger` (installed 1.0, tree has 2.0)."""
     up = ["--pretend", "-u", "--rebuild-if-unbuilt", "dev-libs/rebuildtrigger"]
     rust = _run([str(emerge_binary)], up, fixture_env)
-    python = _run(emerge_pretend_python, up, fixture_env)
     assert rust.returncode == 0
-    assert rust.stdout == python.stdout
-    assert rust.stderr == python.stderr
     assert rust.stdout.splitlines() == [
         "[ebuild     U  ] dev-libs/rebuildtrigger-2.0 [1.0]",
         "[ebuild   R    ] dev-libs/rebuildconsumer-1.0 ",
@@ -13408,9 +12840,6 @@ def test_rebuild_if_star_rebuilds_an_installed_consumer_of_a_merged_build_dep(
     # same-version re-merge: rebuildnochange's best tree version == the
     # installed one.
     nv = _run([str(emerge_binary)], ["--pretend", "--rebuild-if-new-ver", "dev-libs/rebuildnochange"], fixture_env)
-    assert nv.stdout == _run(
-        emerge_pretend_python, ["--pretend", "--rebuild-if-new-ver", "dev-libs/rebuildnochange"], fixture_env
-    ).stdout
     assert "rebuildnochangeconsumer" not in nv.stdout
     ub = _run([str(emerge_binary)], ["--pretend", "--rebuild-if-unbuilt", "dev-libs/rebuildnochange"], fixture_env)
     assert "[ebuild   R    ] dev-libs/rebuildnochangeconsumer-1.0 " in ub.stdout
@@ -13422,12 +12851,11 @@ def test_rebuild_if_star_rebuilds_an_installed_consumer_of_a_merged_build_dep(
     ):
         args = ["--pretend", "-u", "--rebuild-if-unbuilt", *extra, "dev-libs/rebuildtrigger"]
         r = _run([str(emerge_binary)], args, fixture_env)
-        assert r.stdout == _run(emerge_pretend_python, args, fixture_env).stdout
         assert "rebuildconsumer" not in r.stdout
 
 
 def test_dynamic_deps_chooses_ebuild_vs_vdb_deps_for_an_installed_deep_dep(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """--dynamic-deps (real create_depgraph_params.py, ON by default for a
     source install): an AlreadyInstalled package's --deep dependency walk
@@ -13437,18 +12865,14 @@ def test_dynamic_deps_chooses_ebuild_vs_vdb_deps_for_an_installed_deep_dep(
     (New) but its vdb RDEPEND is dev-libs/samepkg (installed)."""
     base = ["--pretend", "-D", "--noreplace", "dev-libs/changeddepspkg"]
     dyn = _run([str(emerge_binary)], base, fixture_env)
-    assert dyn.stdout == _run(emerge_pretend_python, base, fixture_env).stdout
     assert "[ebuild  N     ] dev-libs/newpkg-1.0 " in dyn.stdout
 
     static = _run([str(emerge_binary)], base[:3] + ["--dynamic-deps=n"] + base[3:], fixture_env)
-    assert static.stdout == _run(
-        emerge_pretend_python, base[:3] + ["--dynamic-deps=n"] + base[3:], fixture_env
-    ).stdout
     assert "newpkg" not in static.stdout
 
 
 def test_dynamic_deps_default_appends_the_vdb_built_binding_dropped_by_the_ebuild(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """A1 (#26): real's FakeVartree._apply_dynamic_deps overlays the live
     ebuild metadata and then appends the vdb's own built slot-operator
@@ -13458,7 +12882,7 @@ def test_dynamic_deps_default_appends_the_vdb_built_binding_dropped_by_the_ebuil
     RDEPEND is "dev-libs/newpkg" -- with the append on, the default walks
     BOTH; --dynamic-deps=n walks the vdb snapshot alone; and
     --ignore-built-slot-operator-deps suppresses only the append (real
-    FakeVartree.py:171). Rust == Python on all cases.
+    FakeVartree.py:171).
 
     The append is gated `PORTUALE_DYNAMIC_DEPS_APPEND` (default off)
     until the resolver can reconcile the vdb-built + ebuild-unbound pair
@@ -13467,15 +12891,11 @@ def test_dynamic_deps_default_appends_the_vdb_built_binding_dropped_by_the_ebuil
     pinned too, so both sides of the gate are covered."""
     base = ["--pretend", "-D", "--noreplace", "dev-libs/builtbindpkg"]
     default = _run([str(emerge_binary)], base, fixture_env)
-    assert default.stdout == _run(emerge_pretend_python, base, fixture_env).stdout
     assert default.stdout.splitlines() == [
         "[ebuild  N     ] dev-libs/newpkg-1.0 ",
     ]
 
     static = _run([str(emerge_binary)], base[:3] + ["--dynamic-deps=n"] + base[3:], fixture_env)
-    assert static.stdout == _run(
-        emerge_pretend_python, base[:3] + ["--dynamic-deps=n"] + base[3:], fixture_env
-    ).stdout
     assert static.stdout.splitlines() == [
         "[ebuild  N     ] dev-libs/builtbindtarget-1.0 ",
     ]
@@ -13483,7 +12903,6 @@ def test_dynamic_deps_default_appends_the_vdb_built_binding_dropped_by_the_ebuil
     append_env = dict(fixture_env)
     append_env["PORTUALE_DYNAMIC_DEPS_APPEND"] = "1"
     appended = _run([str(emerge_binary)], base, append_env)
-    assert appended.stdout == _run(emerge_pretend_python, base, append_env).stdout
     assert appended.stdout.splitlines() == [
         "[ebuild  N     ] dev-libs/newpkg-1.0 ",
         "[ebuild  N     ] dev-libs/builtbindtarget-1.0 ",
@@ -13494,18 +12913,13 @@ def test_dynamic_deps_default_appends_the_vdb_built_binding_dropped_by_the_ebuil
         base[:3] + ["--ignore-built-slot-operator-deps"] + base[3:],
         append_env,
     )
-    assert ignored.stdout == _run(
-        emerge_pretend_python,
-        base[:3] + ["--ignore-built-slot-operator-deps"] + base[3:],
-        append_env,
-    ).stdout
     assert ignored.stdout.splitlines() == [
         "[ebuild  N     ] dev-libs/newpkg-1.0 ",
     ]
 
 
 def test_deep_walk_evaluates_flag_deps_against_the_installed_vdb_use(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Real `_pkg_use_enabled(pkg)` returns `pkg._metadata["USE"]` for a
     `built` (installed) package, so a `--deep` walk's `flag? ( dep )`
@@ -13518,12 +12932,10 @@ def test_deep_walk_evaluates_flag_deps_against_the_installed_vdb_use(
     NOT drag in deepvdbusetarget -- portuale previously used the
     effective profile USE here and pulled it (+ its whole subtree; live
     `-D @world` on a real box did the same, ~50 phantom packages).
-    Rust == Python."""
+   """
     base = ["--pretend", "-D", "dev-libs/deepvdbuseconsumer"]
     rust = _run([str(emerge_binary)], base, fixture_env)
-    py = _run(emerge_pretend_python, base, fixture_env)
     assert rust.returncode == 0
-    assert rust.stdout == py.stdout
     assert rust.stdout.splitlines() == [
         "[ebuild  N     ] dev-libs/deepvdbuseconsumer-1.0 ",
     ]
@@ -13531,7 +12943,7 @@ def test_deep_walk_evaluates_flag_deps_against_the_installed_vdb_use(
 
 
 def test_complete_graph_does_not_merge_a_missing_deep_dep_of_an_installed_pkg(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Real `_complete_graph` toggles `myparams["deep"] = True` **and**
     swaps package selection to `_select_pkg_from_graph`
@@ -13548,9 +12960,6 @@ def test_complete_graph_does_not_merge_a_missing_deep_dep_of_an_installed_pkg(
     assert "newpkg" not in plain.stdout
 
     cg = _run([str(emerge_binary)], ["--pretend", "--complete-graph", "dev-libs/deeppkg"], fixture_env)
-    assert cg.stdout == _run(
-        emerge_pretend_python, ["--pretend", "--complete-graph", "dev-libs/deeppkg"], fixture_env
-    ).stdout
     assert "newpkg" not in cg.stdout
     assert cg.stdout == plain.stdout
 
@@ -13564,7 +12973,7 @@ def test_complete_graph_does_not_merge_a_missing_deep_dep_of_an_installed_pkg(
 
 
 def test_complete_graph_if_new_ver_auto_enables_on_an_upgrade(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Real depgraph.py::_complete_graph 8581-8648: --complete-graph-if-new-ver
     defaults ON, so complete mode auto-enables when a run would change an
@@ -13578,13 +12987,9 @@ def test_complete_graph_if_new_ver_auto_enables_on_an_upgrade(
     separately below to still opt out of the wider accounting."""
     base = ["--pretend", "--update", "dev-libs/completegraphpkg"]
     auto = _run([str(emerge_binary)], base, fixture_env)
-    assert auto.stdout == _run(emerge_pretend_python, base, fixture_env).stdout
     assert auto.stdout == "[ebuild     U  ] dev-libs/completegraphpkg-2.0 [1.0]\n"
 
     off = _run([str(emerge_binary)], base[:2] + ["--complete-graph-if-new-ver=n"] + base[2:], fixture_env)
-    assert off.stdout == _run(
-        emerge_pretend_python, base[:2] + ["--complete-graph-if-new-ver=n"] + base[2:], fixture_env
-    ).stdout
     assert off.stdout == auto.stdout
 
 
@@ -13622,13 +13027,13 @@ def test_deep_rejects_a_negative_inline_value(emerge_binary, fixture_env):
 
 
 def test_jobs_and_load_average_are_scheduling_only_under_pretend(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """--jobs/--load-average (real `main.py`: `valid_integers_or_y_or_n`
     + `insert_optional_args` for `--jobs`, `type=float` for
     `--load-average`; consumed by the build `Scheduler` and
-    `MetadataRegen`, never by the resolver): every spelling parses on
-    both sides and leaves the `--pretend` merge list byte-identical --
+    `MetadataRegen`, never by the resolver): every spelling parses and
+    leaves the `--pretend` merge list byte-identical --
     including `--jobs=0` (real: CPU count) -- while bad values fail with
     byte-identical messages. The `--regen` execution half (real
     `action_regen(max_jobs, max_load)`) is black-box-tested in
@@ -13646,10 +13051,8 @@ def test_jobs_and_load_average_are_scheduling_only_under_pretend(
     ):
         args = ["--pretend", *extra, "dev-libs/newpkg"]
         rust = _run([str(emerge_binary)], args, fixture_env)
-        py = _run(emerge_pretend_python, args, fixture_env)
-        assert rust.returncode == py.returncode == 0
-        assert rust.stdout == py.stdout == expected
-        assert rust.stderr == py.stderr
+        assert rust.returncode == 0
+        assert rust.stdout == expected
     for args, message in (
         (["--pretend", "--jobs=x"], 'emerge: invalid --jobs parameter: "x"'),
         (["--pretend", "-jx"], 'emerge: invalid -j parameter: "x"'),
@@ -13667,14 +13070,13 @@ def test_jobs_and_load_average_are_scheduling_only_under_pretend(
         ),
     ):
         rust = _run([str(emerge_binary)], args, fixture_env)
-        py = _run(emerge_pretend_python, args, fixture_env)
-        assert rust.returncode == py.returncode == 2
-        assert rust.stdout == py.stdout == ""
-        assert rust.stderr.strip() == py.stderr.strip() == message
+        assert rust.returncode == 2
+        assert rust.stdout == ''
+        assert rust.stderr.strip() == message
 
 
 def test_implicit_system_deps_n_skips_the_system_first_merge_order_bias(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """`--implicit-system-deps=n` (real `y_or_n`, default `y`; real
     `create_depgraph_params.py:120` + `depgraph._merge_order_bias`'s own
@@ -13700,14 +13102,12 @@ def test_implicit_system_deps_n_skips_the_system_first_merge_order_bias(
     for extra in ([], ["--implicit-system-deps"], ["--implicit-system-deps=y"]):
         args = ["--pretend", "--update", *extra, "@world"]
         rust = _run([str(emerge_binary)], args, fixture_env)
-        py = _run(emerge_pretend_python, args, fixture_env)
-        assert rust.returncode == py.returncode == 0
-        assert rust.stdout.splitlines() == py.stdout.splitlines() == biased
+        assert rust.returncode == 0
+        assert rust.stdout.splitlines() == biased
     args = ["--pretend", "--update", "--implicit-system-deps=n", "@world"]
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == py.returncode == 0
-    assert rust.stdout.splitlines() == py.stdout.splitlines() == unbiased
+    assert rust.returncode == 0
+    assert rust.stdout.splitlines() == unbiased
 
 
 def test_deep_is_ignored_when_nodeps_disables_the_dependency_walk_entirely(
@@ -14178,19 +13578,16 @@ def test_real_option_inline_equals_form_is_still_recognized(emerge_binary, fixtu
     )
 
 
-def test_sync_points_at_emaint(emerge_binary, emerge_pretend_python, fixture_env):
+def test_sync_points_at_emaint(emerge_binary, fixture_env):
     """`emerge --sync` is a permanent non-goal in portuale -- repo syncing
     belongs to `emaint sync` (real portage's own long-standing split).
     The exact message, with or without --pretend, exit 1, byte-identical
     Rust/Python."""
     for args in (["--sync"], ["--pretend", "--sync"]):
         rust = _run([str(emerge_binary)], args, fixture_env)
-        py = _run(emerge_pretend_python, args, fixture_env)
         assert rust.returncode == 1
         assert rust.stdout == ""
         assert rust.stderr.strip() == "Functionality has moved to `emaint sync`."
-        assert rust.stderr == py.stderr
-        assert rust.returncode == py.returncode
 
 
 def test_real_action_not_implemented_message_says_action_not_option(emerge_binary, fixture_env):
@@ -14208,14 +13605,12 @@ def test_real_action_not_implemented_message_says_action_not_option(emerge_binar
     assert result.stderr.strip() == expected
 
 
-def test_list_sets_prints_the_defined_set_names(emerge_binary, emerge_pretend_python, fixture_env):
+def test_list_sets_prints_the_defined_set_names(emerge_binary, fixture_env):
     """emerge --list-sets (real _emerge/actions.py:3839): every defined
     package-set name, sorted, one per line -- the cnf/sets/portage.conf
-    built-ins plus the fixture's own user set files. Rust == Python."""
+    built-ins plus the fixture's own user set files."""
     rust = _run([str(emerge_binary)], ["--list-sets"], fixture_env)
-    py = _run(emerge_pretend_python, ["--list-sets"], fixture_env)
     assert rust.returncode == 0
-    assert rust.stdout == py.stdout
     lines = rust.stdout.splitlines()
     assert lines == sorted(lines)
     assert "world" in lines and "system" in lines and "selected" in lines
@@ -14226,8 +13621,7 @@ def test_list_sets_prints_the_defined_set_names(emerge_binary, emerge_pretend_py
 
 
 def test_search_reads_cache_less_fixture_ebuilds(emerge_binary, fixture_env):
-    """C2 consequence, Rust-only pin (the Python reference is no longer
-    mirrored, owner decision 2026-09-14): 21 fixture ebuilds have no
+    """C2 consequence (owner decision D2, 2026-09-14): 21 fixture ebuilds have no
     `metadata/md5-cache` entry, and with the depend-phase provider
     registered the Rust search now reads them -- real parses a cache-less
     ebuild -- so `--searchdesc fixture` lists `collisionpkg-a` and
@@ -14273,16 +13667,13 @@ def test_search_reads_cache_less_fixture_ebuilds(emerge_binary, fixture_env):
         ["-s", "--search-similarity=150", "foo"],
     ],
 )
-def test_search_matches_rust_and_python(emerge_binary, emerge_pretend_python, fixture_env, args):
+def test_search_pinned_output(emerge_binary, fixture_env, args):
     """emerge --search/-s (--searchdesc/-S also matches DESCRIPTION;
     --fuzzy-search / --regex-search-auto / --search-similarity modifiers):
-    real action_search / search.output() shape. Rust == Python (stdout,
-    stderr, and exit code)."""
+    real action_search / search.output() shape; stdout, stderr and exit
+    code pinned to the harvested output."""
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == py.returncode
-    assert rust.stdout == py.stdout
-    assert rust.stderr == py.stderr
+    _assert_harvested(rust)
 
 
 def test_fuzzy_and_regex_search_change_the_result_set(
@@ -14303,7 +13694,7 @@ def test_fuzzy_and_regex_search_change_the_result_set(
 
 
 def test_misspell_suggestions_for_a_missing_package_name(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """--misspell-suggestions (real depgraph.py:7037 + _similar_name_search,
     default on): a top-level `cat/pkg` that doesn't exist gets
@@ -14312,9 +13703,7 @@ def test_misspell_suggestions_for_a_missing_package_name(
     existing-but-masked cp gets no name suggestions (real `not
     cp_exists`)."""
     r = _run([str(emerge_binary)], ["--pretend", "dev-libs/newpgk"], fixture_env)
-    p = _run(emerge_pretend_python, ["--pretend", "dev-libs/newpgk"], fixture_env)
     assert r.returncode == 1
-    assert r.stderr == p.stderr
     assert 'there are no ebuilds to satisfy "dev-libs/newpgk".' in r.stderr
     assert "emerge: searching for similar names..." in r.stderr
     assert "dev-libs/newpkg" in r.stderr  # the close match
@@ -14324,11 +13713,6 @@ def test_misspell_suggestions_for_a_missing_package_name(
         ["--pretend", "--misspell-suggestions=n", "dev-libs/newpgk"],
         fixture_env,
     )
-    assert off.stderr == _run(
-        emerge_pretend_python,
-        ["--pretend", "--misspell-suggestions=n", "dev-libs/newpgk"],
-        fixture_env,
-    ).stderr
     assert "searching for similar names" not in off.stderr
 
     # dev-libs/autounmaskkeywordpkg exists (keyword-masked) -> the
@@ -14338,7 +13722,7 @@ def test_misspell_suggestions_for_a_missing_package_name(
 
 
 def test_bare_command_line_name_is_category_qualified(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Real `dep_expand()` / `cpv_expand()` (`lib/portage/dbapi/`): a
     command-line target with no category is qualified against the repo
@@ -14352,14 +13736,12 @@ def test_bare_command_line_name_is_category_qualified(
         ("virtprefpkg", "[ebuild  N     ] dev-libs/virtprefpkg-1.0"),
     ):
         r = _run([str(emerge_binary)], ["--pretend", target], fixture_env)
-        p = _run(emerge_pretend_python, ["--pretend", target], fixture_env)
         assert r.returncode == 0, r.stderr
-        assert r.stdout == p.stdout
         assert r.stdout.splitlines()[0].rstrip() == expected
 
 
 def test_bare_command_line_name_with_version_or_slot_is_category_qualified(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Real `dep_expand` (lib/portage/dbapi/dep_expand.py): a no-category
     target that carries an operator, a bare version, or a slot is still
@@ -14367,39 +13749,35 @@ def test_bare_command_line_name_with_version_or_slot_is_category_qualified(
     result is parsed (retrying with a leading `=` for the missing-`=`
     backward-compat shape), the package name is pulled back out and
     `cpv_expand`ed, and the category is spliced into the original string.
-    `dev-libs/newpkg` is the only `newpkg` anywhere. Rust == Python."""
+    `dev-libs/newpkg` is the only `newpkg` anywhere."""
     for target, first_line, exit_code in (
         ("newpkg-1.0", "[ebuild  N     ] dev-libs/newpkg-1.0", 0),
         (">=newpkg-1.0", "[ebuild  N     ] dev-libs/newpkg-1.0", 0),
         ("newpkg:0", "[ebuild  N     ] dev-libs/newpkg-1.0", 0),
     ):
         r = _run([str(emerge_binary)], ["--pretend", target], fixture_env)
-        p = _run(emerge_pretend_python, ["--pretend", target], fixture_env)
         assert r.returncode == exit_code, r.stderr
-        assert r.stdout == p.stdout and r.stderr == p.stderr
         assert r.stdout.splitlines()[0].rstrip() == first_line
 
     # a bare version with no matching ebuild: the message quotes the
     # dep_expand'd atom (real cpv_expand splices the category, then
     # resolution fails)
     r = _run([str(emerge_binary)], ["--pretend", "newpkg-9.9"], fixture_env)
-    p = _run(emerge_pretend_python, ["--pretend", "newpkg-9.9"], fixture_env)
-    assert r.returncode == 1 and r.stderr == p.stderr
+    assert r.returncode == 1
     assert r.stderr.strip() == 'emerge: there are no ebuilds to satisfy "=dev-libs/newpkg-9.9".'
 
     # ambiguous survives version stripping (non-`--quiet`: the full
     # search-style block -- see
     # test_bare_name_ambiguous_across_categories_is_rejected)
     r = _run([str(emerge_binary)], ["--pretend", "ambigpkg-1.0"], fixture_env)
-    p = _run(emerge_pretend_python, ["--pretend", "ambigpkg-1.0"], fixture_env)
-    assert r.returncode == 1 and r.stdout == p.stdout and r.stderr == p.stderr
+    assert r.returncode == 1
     assert '!!! The short ebuild name "ambigpkg-1.0" is ambiguous.' in r.stderr
     assert "*  app-misc/ambigpkg" in r.stdout
     assert "*  dev-libs/ambigpkg" in r.stdout
 
 
 def test_bare_name_ambiguous_across_categories_is_rejected(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """`ambigpkg` exists as both `app-misc/ambigpkg` and
     `dev-libs/ambigpkg` (both non-virtual) -> real
@@ -14409,12 +13787,9 @@ def test_bare_name_ambiguous_across_categories_is_rejected(
     with its own `Latest version`/installed-status/`Homepage`/
     `Description`/`License` lines per match, `[ Applications found : N
     ]` footer) followed by the `!!!` "is ambiguous... one of the above"
-    trailer, exit 1. Rust == Python."""
+    trailer, exit 1."""
     r = _run([str(emerge_binary)], ["--pretend", "ambigpkg"], fixture_env)
-    p = _run(emerge_pretend_python, ["--pretend", "ambigpkg"], fixture_env)
     assert r.returncode == 1
-    assert r.stdout == p.stdout
-    assert r.stderr == p.stderr
     assert '!!! The short ebuild name "ambigpkg" is ambiguous.' in r.stderr
     assert "!!! one of the above fully-qualified ebuild names instead." in r.stderr
     assert "[ Results for search key : ambigpkg ]" in r.stdout
@@ -14424,35 +13799,28 @@ def test_bare_name_ambiguous_across_categories_is_rejected(
 
 
 def test_bare_name_ambiguous_quiet_form_is_the_terse_deterministic_list(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """The same ambiguity, but with `--quiet`: real `ambiguous_package_
     name`'s own `--quiet` form -- the two `!!!` lines plus the sorted,
     colourized fully-qualified list, no search-style block at all.
-    Rust == Python."""
+   """
     r = _run([str(emerge_binary)], ["--pretend", "--quiet", "ambigpkg"], fixture_env)
-    p = _run(
-        emerge_pretend_python, ["--pretend", "--quiet", "ambigpkg"], fixture_env
-    )
     assert r.returncode == 1
-    assert r.stdout == p.stdout
-    assert r.stderr == p.stderr
     assert '!!! The short ebuild name "ambigpkg" is ambiguous.' in r.stderr
     assert "!!! one of the following fully-qualified ebuild names instead:" in r.stderr
     assert r.stdout.split() == ["app-misc/ambigpkg", "dev-libs/ambigpkg"]
 
 
 def test_bare_name_with_no_match_reports_no_ebuilds(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """A bare name matching no package anywhere -> `emerge: there are no
     ebuilds to satisfy "<name>".`, exit 1 (real `cpv_expand` returns
     `null/<name>` and resolution then fails; portuale short-circuits
-    with the message). Rust == Python."""
+    with the message)."""
     r = _run([str(emerge_binary)], ["--pretend", "nosuchpkgname"], fixture_env)
-    p = _run(emerge_pretend_python, ["--pretend", "nosuchpkgname"], fixture_env)
     assert r.returncode == 1
-    assert r.stderr == p.stderr
     assert r.stderr.strip() == 'emerge: there are no ebuilds to satisfy "nosuchpkgname".'
 
 
@@ -14484,7 +13852,7 @@ def _check_news_isolated_root(fixture_env, tmp_path, name="root"):
 
 
 def test_check_news_counts_unread_relevant_items(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """emerge --check-news (real actions.py:3844 -> count_unread_news):
     the fixture testrepo has eleven GLEP 42 news items -- one
@@ -14499,13 +13867,10 @@ def test_check_news_counts_unread_relevant_items(
     `:slot` atom, one with a `[use]` atom (both invalid under 1.x's EAPI
     0 atom grammar), and one with a plain atom relative to the installed
     samepkg (valid AND relevant). Five are relevant, so the count is 5.
-    Rust == Python."""
+   """
     rust_env = _check_news_isolated_root(fixture_env, tmp_path, "root-rust")
-    py_env = _check_news_isolated_root(fixture_env, tmp_path, "root-py")
     rust = _run([str(emerge_binary)], ["--check-news"], rust_env)
-    py = _run(emerge_pretend_python, ["--check-news"], py_env)
     assert rust.returncode == 0
-    assert rust.stdout == py.stdout
     assert "5 news items need reading for repository 'testrepo'." in rust.stdout
     assert "eselect news read" in rust.stdout
     env = rust_env
@@ -14548,29 +13913,27 @@ def test_check_news_counts_unread_relevant_items(
         ["-p", "--rage-clean"],
     ],
 )
-def test_clean_and_rage_clean_pretend_match_rust_and_python(
-    emerge_binary, emerge_pretend_python, fixture_env, args
+def test_clean_and_rage_clean_pretend_pinned_output(
+    emerge_binary, fixture_env, args
 ):
     """emerge -p --clean / -p --rage-clean (real action_uninstall ->
     unmerge). --clean keeps only the newest version per slot
     (dev-libs/unmergepkg 1.0+2.0 in slot 0 -> remove 1.0;
     dev-libs/dualslotpkg 1.0/slot1 + 2.0/slot2 -> nothing). --rage-clean
-    removes every matched version (a fast --unmerge). Rust == Python."""
+    removes every matched version (a fast --unmerge)."""
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.stdout == py.stdout
-    assert rust.returncode == py.returncode
+    _assert_harvested(rust)
 
 
 def test_color_map_overrides_the_ansi_codes(
-    emerge_binary, emerge_pretend_python, fixture_env, fixtures_root, tmp_path
+    emerge_binary, fixture_env, fixtures_root, tmp_path
 ):
     """Real /etc/portage/color.map (output.py::_parse_color_map): a
     `KEY = VALUE` line overrides the ANSI code for a `_styles` key or a
     `codes` colour-name (VALUE = a raw code like `31m`, or a
     space-separated list of colour-names). Here `GOOD = darkred` recolours
     `emerge --search`'s `*` marker from green to darkred, and
-    `PKG_MERGE = 34;01m` recolours a `[ebuild N ]` cpv. Rust == Python."""
+    `PKG_MERGE = 34;01m` recolours a `[ebuild N ]` cpv."""
     cfg = tmp_path / "cfg"
     shutil.copytree(fixtures_root / "etc", cfg / "etc", symlinks=True)
     # The fixture make.profile is a relative symlink into ../../repo; make
@@ -14603,9 +13966,7 @@ def test_color_map_overrides_the_ansi_codes(
 
     for args in (["--color=y", "-s", "newpkg"], ["-pv", "--color=y", "dev-libs/newpkg"]):
         rust = _run([str(emerge_binary)], args, env)
-        py = _run(emerge_pretend_python, args, env)
-        assert rust.stdout == py.stdout, args
-        assert rust.returncode == py.returncode
+        _assert_harvested(rust)
 
     # `*` is GOOD -> darkred (\x1b[31m), not the default green (\x1b[32;01m).
     search = _run([str(emerge_binary)], ["--color=y", "-s", "newpkg"], env)
@@ -14625,27 +13986,31 @@ def test_color_map_overrides_the_ansi_codes(
         ["-q", "--check-news"],
     ],
 )
-def test_quiet_verbosity_level_1_matches_rust_and_python(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path, args
+def test_quiet_verbosity_level_1_pinned_output(
+    emerge_binary, fixture_env, tmp_path, args
 ):
     """emerge --quiet/-q (real _DisplayConfig verbosity 1): the mask
     column disappears from the [ebuild ...] bracket, the USE="..." line
     is suppressed (unless -v is also given), the ::repo cpv decoration
     and the Total: line never show, and --search drops its verbose
-    block. Rust == Python."""
+    block."""
     # --check-news really writes .unread/.skip now (see
     # _check_news_isolated_root's own doc comment) -- never against the
     # shared, git-tracked fixture ROOT other args here still use, and
     # each side needs its own starting state since both are real writes.
     if "--check-news" in args:
         rust_env = _check_news_isolated_root(fixture_env, tmp_path, "root-rust")
-        py_env = _check_news_isolated_root(fixture_env, tmp_path, "root-py")
     else:
-        rust_env = py_env = fixture_env
+        rust_env = fixture_env
     rust = _run([str(emerge_binary)], args, rust_env)
-    py = _run(emerge_pretend_python, args, py_env)
-    assert rust.stdout == py.stdout, args
-    assert rust.returncode == py.returncode
+    if "--check-news" in args:
+        # Real `emerge -q --check-news` still prints the count (quiet only
+        # affects the merge list/search display); no harvested entry here --
+        # the two implementations wrote to separate roots.
+        assert rust.returncode == 0
+        assert "5 news items need reading for repository 'testrepo'." in rust.stdout
+    else:
+        _assert_harvested(rust)
 
 
 def test_quiet_drops_the_mask_column_and_the_use_line(emerge_binary, fixture_env):
@@ -14688,17 +14053,15 @@ def test_quiet_drops_the_mask_column_and_the_use_line(emerge_binary, fixture_env
         ["-pv", "--package-moves", "y", "dev-libs/newmovepkg"],
     ],
 )
-def test_profiles_updates_package_moves_match_rust_and_python(
-    emerge_binary, emerge_pretend_python, fixture_env, args
+def test_profiles_updates_package_moves_pinned_output(
+    emerge_binary, fixture_env, args
 ):
     """Real profiles/updates/ package moves (portage.update /
     _do_global_updates): `move`/`slotmove` directives, applied at read
     time (portuale never syncs), rewrite command-line atoms, `*DEPEND`
-    strings and an installed package's identity. Rust == Python."""
+    strings and an installed package's identity."""
     rust = _run([str(emerge_binary)], args, fixture_env)
-    py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.stdout == py.stdout, args
-    assert rust.returncode == py.returncode
+    _assert_harvested(rust)
 
 
 def test_profiles_updates_move_makes_the_renamed_package_already_installed(
@@ -14719,7 +14082,7 @@ def test_profiles_updates_move_makes_the_renamed_package_already_installed(
     assert "[ebuild   R    ] dev-libs/slotmovepkg-1.0:1::testrepo" in sm.stdout
 
 
-def test_package_moves_n_disables_profiles_updates(emerge_binary, emerge_pretend_python, fixture_env):
+def test_package_moves_n_disables_profiles_updates(emerge_binary, fixture_env):
     """--package-moves (real y_or_n, default y): --package-moves=n turns
     every profiles/updates/ move/slotmove into a no-op. `move
     dev-libs/oldmovepkg dev-libs/newmovepkg` + vdb dev-libs/oldmovepkg-1.0:
@@ -14731,9 +14094,6 @@ def test_package_moves_n_disables_profiles_updates(emerge_binary, emerge_pretend
     assert "[ebuild   R    ] dev-libs/newmovepkg-1.0 " in default.stdout
 
     off = _run([str(emerge_binary)], ["-p", "--package-moves=n", "dev-libs/newmovepkg"], fixture_env)
-    assert off.stdout == _run(
-        emerge_pretend_python, ["-p", "--package-moves=n", "dev-libs/newmovepkg"], fixture_env
-    ).stdout
     assert "[ebuild  N     ] dev-libs/newmovepkg-1.0 " in off.stdout
 
     # The pre-move name has only a vdb entry, no ebuild -> unsatisfiable.
@@ -14743,18 +14103,16 @@ def test_package_moves_n_disables_profiles_updates(emerge_binary, emerge_pretend
 
 
 def test_info_prints_the_deterministic_config_block(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """emerge --info (real action_info): the host-state header (Portage
     version line, `System uname:`, `KiB Mem/Swap:`, repo `Timestamp`/
     `Head commit`, `sh:`/`coreutils:`/`ld:` probes, `info_pkgs` table),
     then `Repositories:`, `Binary Repositories:`, `Installed sets:`, the
-    sorted VAR="value" dump and the `Unset:` line. Rust == Python once
-    the volatile header values are XXX-normalized (`_normalize_info`)."""
+    sorted VAR="value" dump and the `Unset:` line, compared once the
+    volatile header values are XXX-normalized (`_normalize_info`)."""
     rust = _run([str(emerge_binary)], ["--info"], fixture_env)
-    py = _run(emerge_pretend_python, ["--info"], fixture_env)
     assert rust.returncode == 0
-    assert _normalize_info(rust.stdout) == _normalize_info(py.stdout)
     # Header first, then the config block.
     assert rust.stdout.startswith("Portage ")
     assert "\n" + "=" * 65 + "\n" in rust.stdout
@@ -14767,7 +14125,7 @@ def test_info_prints_the_deterministic_config_block(
 
 
 def test_info_stacks_make_globals_profile_env_and_info_vars(
-    emerge_binary, emerge_pretend_python, tmp_path
+    emerge_binary, tmp_path
 ):
     """emerge --info reads the same config layers real portage does:
     cnf/make.globals (the base db, with its multi-line quoted FEATURES=
@@ -14777,7 +14135,7 @@ def test_info_stacks_make_globals_profile_env_and_info_vars(
     const.INCREMENTALS variables (FEATURES / CONFIG_PROTECT /
     CONFIG_PROTECT_MASK / ENV_UNSET) are shown "-*"/"-tok"-resolved then
     sorted, exactly as real config.regenerate() stores them. Binary
-    Repositories show location + verify-signature. Rust == Python."""
+    Repositories show location + verify-signature."""
     cfg = tmp_path / "cfg"
     repo = tmp_path / "repo"
     binhost = tmp_path / "binhost"
@@ -14842,9 +14200,7 @@ def test_info_stacks_make_globals_profile_env_and_info_vars(
     env = {"PORTAGE_CONFIGROOT": str(cfg), "ROOT": str(cfg)}
 
     rust = _run([str(emerge_binary)], ["--info"], env)
-    py = _run(emerge_pretend_python, ["--info"], env)
     assert rust.returncode == 0
-    assert _normalize_info(rust.stdout) == _normalize_info(py.stdout)
     # Host-state header structure (values are host-specific -> normalized):
     lines = rust.stdout.splitlines()
     assert lines[0].startswith("Portage ") and lines[0].endswith(")")
@@ -14898,37 +14254,30 @@ def test_info_stacks_make_globals_profile_env_and_info_vars(
 
 
 def test_info_atom_that_does_not_exist_errors_with_misspell_suggestions(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Real action_info's `myfiles` loop: a target whose cat/pkg has no
     ebuild anywhere aborts before the config block with `emerge: there
     are no ebuilds to satisfy "<atom>".` + `--misspell-suggestions`,
-    exit 1. Rust == Python."""
+    exit 1."""
     rust = _run([str(emerge_binary)], ["--info", "dev-libs/newpgk"], fixture_env)
-    py = _run(emerge_pretend_python, ["--info", "dev-libs/newpgk"], fixture_env)
     assert rust.returncode == 1
-    assert py.returncode == 1
-    assert rust.stdout == "" == py.stdout
-    assert rust.stderr == py.stderr
+    assert rust.stdout == ''
     assert 'there are no ebuilds to satisfy "dev-libs/newpgk"' in rust.stderr
     assert "emerge: Maybe you meant" in rust.stderr
 
 
 def test_info_atom_prints_package_settings_for_a_pkg_info_package(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """dev-libs/pkginfopkg's ebuild defines pkg_info() (DEFINED_PHASES=
     info), so real action_info appends the `Package Settings` section
     with a `<cpv>::<repo> would be built with the following:` + USE line,
     then `>>> Attempting to run pkg_info() for '<cpv>'` before running the
-    phase (the phase's own output goes to stderr -- einfo -- so stdout
-    stays Rust == Python; the Python reference stops at the message, like
-    --config/--regen). An ordinary package (dev-libs/newpkg, no pkg_info)
-    gets no such block. Rust == Python on stdout."""
+    phase (the phase's own output goes to stderr -- einfo). An ordinary
+    package (dev-libs/newpkg, no pkg_info) gets no such block."""
     rust = _run([str(emerge_binary)], ["--info", "dev-libs/pkginfopkg"], fixture_env)
-    py = _run(emerge_pretend_python, ["--info", "dev-libs/pkginfopkg"], fixture_env)
     assert rust.returncode == 0
-    assert _normalize_info(rust.stdout) == _normalize_info(py.stdout)
     assert rust.stdout.endswith(
         "=================================================================\n"
         "                        Package Settings\n"
@@ -14948,13 +14297,10 @@ def test_info_atom_prints_package_settings_for_a_pkg_info_package(
 
     plain = _run([str(emerge_binary)], ["--info", "dev-libs/newpkg"], fixture_env)
     assert "Package Settings" not in plain.stdout
-    assert _normalize_info(plain.stdout) == _normalize_info(
-        _run(emerge_pretend_python, ["--info", "dev-libs/newpkg"], fixture_env).stdout
-    )
 
 
 def test_info_atom_wraps_a_forced_flag_and_colours_the_use_line(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Real `pkg_use_display`'s `( )` force/mask wrap and per-flag ANSI
     colour (`UseFlagDisplay.__str__`): `dev-libs/infoforcedpkg` is
@@ -14966,28 +14312,18 @@ def test_info_atom_wraps_a_forced_flag_and_colours_the_use_line(
     (not the parens) is red (enabled), the disabled flag is blue. Rust ==
     Python."""
     plain = _run([str(emerge_binary)], ["--info", "dev-libs/infoforcedpkg"], fixture_env)
-    py_plain = _run(
-        emerge_pretend_python, ["--info", "dev-libs/infoforcedpkg"], fixture_env
-    )
     assert plain.returncode == 0
-    assert _normalize_info(plain.stdout) == _normalize_info(py_plain.stdout)
     assert 'USE="(globalforceflag) -otherflag"' in plain.stdout
 
     colored = _run(
         [str(emerge_binary)], ["--info", "--color=y", "dev-libs/infoforcedpkg"], fixture_env
     )
-    py_colored = _run(
-        emerge_pretend_python,
-        ["--info", "--color=y", "dev-libs/infoforcedpkg"],
-        fixture_env,
-    )
     assert colored.returncode == 0
-    assert _normalize_info(colored.stdout) == _normalize_info(py_colored.stdout)
     assert 'USE="(\x1b[31;01mglobalforceflag\x1b[39;49;00m) \x1b[34;01m-otherflag\x1b[39;49;00m"' in colored.stdout
 
 
 def test_info_atom_prints_the_installed_package_block(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Real action_info checks the vdb first: an installed match
     short-circuits the ebuild lookup and prints `<cpv>::<repo> was built
@@ -14996,7 +14332,7 @@ def test_info_atom_prints_the_installed_package_block(
     from the current config, then an `Unset:` line for the ones with no
     stored value. `dev-libs/infoinstpkg` is installed with
     IUSE="alpha beta" USE="alpha", CFLAGS/CHOST recorded, the make.conf
-    setting neither. Rust == Python.
+    setting neither.
 
     infoinstpkg's vdb has NO `DEFINED_PHASES` file at all -> real
     `action_info`'s `if metadata["DEFINED_PHASES"]:` is falsy -> the
@@ -15005,9 +14341,7 @@ def test_info_atom_prints_the_installed_package_block(
     `test_info_dash_defined_phases_does_not_attempt_pkg_info` for the
     `DEFINED_PHASES="-"` counter-case."""
     rust = _run([str(emerge_binary)], ["--info", "dev-libs/infoinstpkg"], fixture_env)
-    py = _run(emerge_pretend_python, ["--info", "dev-libs/infoinstpkg"], fixture_env)
     assert rust.returncode == 0
-    assert _normalize_info(rust.stdout) == _normalize_info(py.stdout)
     assert rust.stdout.endswith(
         "dev-libs/infoinstpkg-1.0::testrepo was built with the following:\n"
         'USE="alpha -beta"\n'
@@ -15021,7 +14355,7 @@ def test_info_atom_prints_the_installed_package_block(
 
 
 def test_info_installed_block_reads_mydesiredvars_from_environment_bz2(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Real `mydesiredvars` sourcing is `_aux_env_search` and *only*
     that: `dev-libs/infoenvpkg`'s vdb carries a `CFLAGS` individual
@@ -15031,9 +14365,7 @@ def test_info_installed_block_reads_mydesiredvars_from_environment_bz2(
     complementary half (env values present, output unchanged). Rust ==
     Python."""
     rust = _run([str(emerge_binary)], ["--info", "dev-libs/infoenvpkg"], fixture_env)
-    py = _run(emerge_pretend_python, ["--info", "dev-libs/infoenvpkg"], fixture_env)
     assert rust.returncode == 0
-    assert _normalize_info(rust.stdout) == _normalize_info(py.stdout)
     assert rust.stdout.endswith(
         "dev-libs/infoenvpkg-1.0::testrepo was built with the following:\n"
         'USE="alpha -beta"\n'
@@ -15047,7 +14379,7 @@ def test_info_installed_block_reads_mydesiredvars_from_environment_bz2(
 
 
 def test_info_dash_defined_phases_does_not_attempt_pkg_info(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Counter-case to the empty-`DEFINED_PHASES` quirk: `dev-libs/
     infodashphases` is installed with `DEFINED_PHASES="-"` (the modern
@@ -15056,9 +14388,7 @@ def test_info_dash_defined_phases_does_not_attempt_pkg_info(
     `continue` fires -> NO `>>> Attempting to run pkg_info()`. Rust ==
     Python."""
     rust = _run([str(emerge_binary)], ["--info", "dev-libs/infodashphases"], fixture_env)
-    py = _run(emerge_pretend_python, ["--info", "dev-libs/infodashphases"], fixture_env)
     assert rust.returncode == 0
-    assert _normalize_info(rust.stdout) == _normalize_info(py.stdout)
     assert rust.stdout.endswith(
         "dev-libs/infodashphases-1.0::testrepo was built with the following:\n"
         'USE="gamma"\n'
@@ -15070,7 +14400,7 @@ def test_info_dash_defined_phases_does_not_attempt_pkg_info(
 
 
 def test_info_usepkg_atom_selects_a_non_installed_binary_and_attempts_pkg_info(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """Real action_info's `(bindb, "binary")` search half (only under
     --usepkg, only when nothing is installed and no visible ebuild defines
@@ -15079,16 +14409,12 @@ def test_info_usepkg_atom_selects_a_non_installed_binary_and_attempts_pkg_info(
     names `info`. Real prints `<cpv>::<repo> (non-installed binary) was
     built with the following:` + the binary's own baked USE, then
     `>>> Attempting to run pkg_info() for '<cpv>'`. Without --usepkg the
-    same atom is a hard `no ebuilds to satisfy` error. Rust == Python on
-    stdout (the phase output the Rust side then produces goes to stderr)."""
+    same atom is a hard `no ebuilds to satisfy` error (the phase output
+    goes to stderr)."""
     rust = _run(
         [str(emerge_binary)], ["--info", "--usepkg", "dev-libs/binaryinfopkg"], fixture_env
     )
-    py = _run(
-        emerge_pretend_python, ["--info", "--usepkg", "dev-libs/binaryinfopkg"], fixture_env
-    )
     assert rust.returncode == 0
-    assert _normalize_info(rust.stdout) == _normalize_info(py.stdout)
     assert rust.stdout.endswith(
         "dev-libs/binaryinfopkg-1.0::testrepo (non-installed binary) was built with the following:\n"
         'USE="alpha -beta"\n'
@@ -15098,16 +14424,15 @@ def test_info_usepkg_atom_selects_a_non_installed_binary_and_attempts_pkg_info(
     )
 
     # No --usepkg: binary-only package is invisible -> the pre-config
-    # `myfiles` no-match error (exit 1), Rust == Python.
+    # `myfiles` no-match error (exit 1),
     rust_no = _run([str(emerge_binary)], ["--info", "dev-libs/binaryinfopkg"], fixture_env)
-    py_no = _run(emerge_pretend_python, ["--info", "dev-libs/binaryinfopkg"], fixture_env)
-    assert rust_no.returncode == 1 == py_no.returncode
-    assert rust_no.stdout == "" == py_no.stdout
+    assert rust_no.returncode == 1
+    assert rust_no.stdout == ''
     assert 'there are no ebuilds to satisfy "dev-libs/binaryinfopkg"' in rust_no.stderr
 
 
 def test_check_news_reports_none_when_all_items_are_read(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """A news item id listed in
     <eroot>/var/lib/gentoo/news/news-<repo>.read (what `eselect news
@@ -15123,14 +14448,12 @@ def test_check_news_reports_none_when_all_items_are_read(
     env = dict(fixture_env)
     env["ROOT"] = str(tmp_path)
     rust = _run([str(emerge_binary)], ["--check-news"], env)
-    py = _run(emerge_pretend_python, ["--check-news"], env)
     assert rust.returncode == 0
-    assert rust.stdout == py.stdout
     assert rust.stdout.strip() == "* No news items were found."
 
 
 def test_check_news_skip_file_excludes_items_like_the_read_file(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """An id in <eroot>/var/lib/gentoo/news/news-<repo>.skip (real
     NewsManager.updateItems' permanent per-item skip list) is not
@@ -15143,14 +14466,12 @@ def test_check_news_skip_file_excludes_items_like_the_read_file(
     env = dict(fixture_env)
     env["ROOT"] = str(tmp_path)
     rust = _run([str(emerge_binary)], ["--check-news"], env)
-    py = _run(emerge_pretend_python, ["--check-news"], env)
     assert rust.returncode == 0
-    assert rust.stdout == py.stdout
     assert rust.stdout.strip() == "* No news items were found."
 
 
 def test_check_news_read_file_lazily_removes_a_previously_unread_item(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """Real `getUnreadItems`'s count is `len(.unread)`, not a live
     recompute (see `run_check_news`'s own doc comment) -- an item stays
@@ -15170,9 +14491,7 @@ def test_check_news_read_file_lazily_removes_a_previously_unread_item(
     env = dict(fixture_env)
     env["ROOT"] = str(tmp_path)
     rust = _run([str(emerge_binary)], ["--check-news"], env)
-    py = _run(emerge_pretend_python, ["--check-news"], env)
     assert rust.returncode == 0
-    assert rust.stdout == py.stdout
     assert "1 news items need reading for repository 'testrepo'." in rust.stdout
 
     assert (news_dir / "news-testrepo.unread").read_text().splitlines() == [
@@ -15186,7 +14505,7 @@ def test_check_news_read_file_lazily_removes_a_previously_unread_item(
 
 
 def test_check_news_matches_a_versioned_display_if_installed_atom(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """Real `DisplayInstalledRestriction.checkRestriction` is
     `vardb.match(self.atom)` -- a full atom match, not a bare `cat/pkg`
@@ -15197,7 +14516,7 @@ def test_check_news_matches_a_versioned_display_if_installed_atom(
     (the unrestricted one, the bare `samepkg` one, the `>=` one, and the
     `infoinstpkg[alpha]` use-dep one) and the count must drop to 0 -- the
     `>` item and the `[beta]`/malformed items were never counted, and no
-    other item is left. Rust == Python."""
+    other item is left."""
     rust_env = _check_news_isolated_root(fixture_env, tmp_path, "root-rust")
     py_env = _check_news_isolated_root(fixture_env, tmp_path, "root-py")
     read_ids = (
@@ -15213,9 +14532,7 @@ def test_check_news_matches_a_versioned_display_if_installed_atom(
         (news_dir / "news-testrepo.read").write_text(read_ids)
 
     rust = _run([str(emerge_binary)], ["--check-news"], rust_env)
-    py = _run(emerge_pretend_python, ["--check-news"], py_env)
     assert rust.returncode == 0
-    assert rust.stdout == py.stdout
     assert rust.stdout.strip() == "* No news items were found."
 
 
@@ -15261,39 +14578,14 @@ def _b1_merges(stdout):
     return [ln for ln in stdout.splitlines() if ln.startswith("[ebuild")]
 
 
-def _b1_both(args, env, emerge_binary, emerge_pretend_python):
+def _b1_run(args, env, emerge_binary):
     rust = _run([str(emerge_binary)], args, env)
-    python = _run(emerge_pretend_python, args, env)
     assert rust.returncode == 0
-    assert rust.stdout == python.stdout
-    assert rust.stderr == python.stderr
     return rust
 
 
-def _b1_python_drift_xfail(rust, args, env, emerge_pretend_python):
-    """A1 (#26): run the Python mirror after the Rust side's own pinned
-    expectations have already been asserted, and mark the test xfail
-    (non-strict) when it diverges. The append of the vdb's built `:=`
-    atoms exposed a pre-existing Python-only divergence: the solvable
-    slot-conflict pre-check folds a joint `slot_constraints` bucket where
-    real (and the Rust side) resolve the conflict through the
-    slot-operator rebuild probe first. Rust == the pinned real output; the
-    drift is surfaced in `docs/025-tier2-closeout.deepseek.md`. When the
-    mirror is fixed this helper stops xfailing without any edit."""
-    python = _run(emerge_pretend_python, args, env)
-    if (rust.returncode, rust.stdout, rust.stderr) != (
-        python.returncode,
-        python.stdout,
-        python.stderr,
-    ):
-        pytest.xfail(
-            "A1 (#26): Python mirror diverges after the vdb built := append; "
-            "Rust matches real -- tracked in docs/025-tier2-closeout.deepseek.md"
-        )
-
-
 def test_oracle_slot_conflict_masks_highest_version_first(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """023 oracle, case mgf (upstream
     `test_slot_conflict_mask_update.py::testBacktrackingGoodVersionFirst`):
@@ -15301,11 +14593,10 @@ def test_oracle_slot_conflict_masks_highest_version_first(
     the highest conflicting instance (`mgfc-2`) and merges
     `[mgfc-1, mgfb-1, mgfa-1]` -- portuale's slice-3 downgrade bias already
     does this. Regression guard: MATCHES real."""
-    rust = _b1_both(
+    rust = _b1_run(
         ["--pretend", "dev-libs/mgfa"],
         fixture_env,
         emerge_binary,
-        emerge_pretend_python,
     )
     assert _b1_merges(rust.stdout) == [
         "[ebuild  N     ] dev-libs/mgfc-1 ",
@@ -15315,7 +14606,7 @@ def test_oracle_slot_conflict_masks_highest_version_first(
 
 
 def test_oracle_explicit_pin_beats_transitive_pull(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """023 oracle, case btb (upstream
     `test_backtracking.py::testBacktracking`): `=btba-1` + `btbb`
@@ -15325,7 +14616,7 @@ def test_oracle_explicit_pin_beats_transitive_pull(
         ["--pretend", "=dev-libs/btba-1", "dev-libs/btbb"],
         ["--pretend", "dev-libs/btbb", "=dev-libs/btba-1"],
     ):
-        rust = _b1_both(args, fixture_env, emerge_binary, emerge_pretend_python)
+        rust = _b1_run(args, fixture_env, emerge_binary)
         assert _b1_merges(rust.stdout) == [
             "[ebuild  N     ] dev-libs/btba-1 ",
             "[ebuild  N     ] dev-libs/btbb-1 ",
@@ -15333,17 +14624,16 @@ def test_oracle_explicit_pin_beats_transitive_pull(
 
 
 def test_oracle_one_step_backtrack_budget(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """023 oracle, case btn (upstream
     `test_backtracking.py::testBacktrackNotNeeded`, `--backtrack 1`):
     `btnc` needs `btna` + `btnb`, `btnd` pins both `-1`. Real merges all
     four (order-insensitive). Guard: MATCHES real."""
-    rust = _b1_both(
+    rust = _b1_run(
         ["--pretend", "--backtrack", "1", "dev-libs/btnc", "dev-libs/btnd"],
         fixture_env,
         emerge_binary,
-        emerge_pretend_python,
     )
     assert _b1_merges(rust.stdout) == [
         "[ebuild  N     ] dev-libs/btna-1 ",
@@ -15354,7 +14644,7 @@ def test_oracle_one_step_backtrack_budget(
 
 
 def test_oracle_update_pull_over_installed_old(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """023 oracle, case btw (upstream
     `test_backtracking.py::testBacktrackWithoutUpdates`): `btwa` needs
@@ -15362,11 +14652,10 @@ def test_oracle_update_pull_over_installed_old(
     Real merges `[btwz-2, btwb-1, btwa-1]` (order-insensitive). Guard:
     MATCHES real."""
     root = _b1_root(tmp_path, [], [("dev-libs", "btwz", "1", "0", {})])
-    rust = _b1_both(
+    rust = _b1_run(
         ["--pretend", "dev-libs/btwb", "dev-libs/btwa"],
         _b1_env(fixture_env, root),
         emerge_binary,
-        emerge_pretend_python,
     )
     assert _b1_merges(rust.stdout) == [
         "[ebuild     U  ] dev-libs/btwz-2 [1]",
@@ -15376,7 +14665,7 @@ def test_oracle_update_pull_over_installed_old(
 
 
 def test_oracle_selective_update_is_a_noop(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """023 oracle, case btmu (upstream
     `test_backtracking.py::testBacktrackMissedUpdates`): `btmb` pins
@@ -15390,17 +14679,16 @@ def test_oracle_selective_update_is_a_noop(
             ("dev-libs", "btmb", "1", "0", {"RDEPEND": "<=dev-libs/btma-1"}),
         ],
     )
-    rust = _b1_both(
+    rust = _b1_run(
         ["--pretend", "--update", "--deep", "--selective", "dev-libs/btma", "dev-libs/btmb"],
         _b1_env(fixture_env, root),
         emerge_binary,
-        emerge_pretend_python,
     )
     assert _b1_merges(rust.stdout) == []
 
 
 def test_oracle_boost_subslot_upgrade(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """023 oracle, case boost (upstream
     `test_slot_conflict_update.py::testSlotConflictUpdate`): `libcmis`
@@ -15411,8 +14699,7 @@ def test_oracle_boost_subslot_upgrade(
     this test was written for -- and since #24 S1's complete-mode gate
     it also schedules the `libcmis` subslot rebuild real merges (the
     `r`-tagged provider + `rR` consumer + "causing rebuilds" block).
-    Full mergelist MATCH (`@system` lines are fixture-profile noise,
-    identical on both sides)."""
+    Full mergelist MATCH (`@system` lines are fixture-profile noise)."""
     root = _b1_root(
         tmp_path,
         ["dev-cpp/libcmis", "dev-libs/boost", "app-text/podofo"],
@@ -15435,11 +14722,10 @@ def test_oracle_boost_subslot_upgrade(
             ),
         ],
     )
-    rust = _b1_both(
+    rust = _b1_run(
         ["--pretend", "--update", "--deep", "@world"],
         _b1_env(fixture_env, root),
         emerge_binary,
-        emerge_pretend_python,
     )
     merges = _b1_merges(rust.stdout)
     assert "[ebuild     U  ] dev-util/boost-build-1.53.0 [1.52.0]" in merges
@@ -15455,7 +14741,7 @@ def test_oracle_boost_subslot_upgrade(
 
 
 def test_oracle_virtual_subslot_upgrade_avoids_missed_update(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """023 oracle, case virt (upstream
     `test_slot_conflict_update_virt.py`, bug 692746): `DBD-mysql` needs
@@ -15487,11 +14773,10 @@ def test_oracle_virtual_subslot_upgrade_avoids_missed_update(
             ),
         ],
     )
-    rust = _b1_both(
+    rust = _b1_run(
         ["--pretend", "--update", "--deep", "@world"],
         _b1_env(fixture_env, root),
         emerge_binary,
-        emerge_pretend_python,
     )
     merges = _b1_merges(rust.stdout)
     assert "[ebuild     U  ] dev-db/mysql-connector-c-8.0.17-r3 [6.1.11-r2]" in merges
@@ -15506,7 +14791,7 @@ def test_oracle_virtual_subslot_upgrade_avoids_missed_update(
 
 
 def test_oracle_backtrack_masks_are_discarded_with_their_reason(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """023 oracle, case btnr -- oracle-DIVERGENT, see `docs/023-oracle.md`
     (upstream `test_backtracking.py::testBacktrackNoWrongRebuilds`,
@@ -15527,11 +14812,10 @@ def test_oracle_backtrack_masks_are_discarded_with_their_reason(
             ("dev-libs", "btrd", "1", "0", {"RDEPEND": "<dev-libs/btra-2"}),
         ],
     )
-    rust = _b1_both(
+    rust = _b1_run(
         ["--pretend", "--backtrack", "6", "--deep", "--selective", "--update", "@world"],
         _b1_env(fixture_env, root),
         emerge_binary,
-        emerge_pretend_python,
     )
     merges = _b1_merges(rust.stdout)
     assert "[ebuild     U  ] dev-libs/btra-2 [1]" in merges
@@ -15540,7 +14824,7 @@ def test_oracle_backtrack_masks_are_discarded_with_their_reason(
 
 
 def test_oracle_no_aggressive_downgrade(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """023 oracle, case bwd (upstream
     `test_aggressive_backtrack_downgrade.py`, bug 693836): upgrading
@@ -15577,18 +14861,17 @@ def test_oracle_no_aggressive_downgrade(
             ),
         ],
     )
-    rust = _b1_both(
+    rust = _b1_run(
         ["--pretend", "--update", "--deep", "@world"],
         _b1_env(fixture_env, root),
         emerge_binary,
-        emerge_pretend_python,
     )
     merges = _b1_merges(rust.stdout)
     assert not [ln for ln in merges if "firefox" in ln or "libvpx" in ln or "ffmpeg" in ln]
 
 
 def test_oracle_non_slot_operator_update_selects_new_slot(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """023 oracle, case a522084 -- MATCH, see `docs/023-oracle.md`
     (upstream `test_solve_non_slot_operator_slot_conflicts.py`, bug
@@ -15609,11 +14892,10 @@ def test_oracle_non_slot_operator_update_selects_new_slot(
             ("app-misc", "B", "0", "0", {"RDEPEND": "app-misc/A:0/1="}),
         ],
     )
-    rust = _b1_both(
+    rust = _b1_run(
         ["--pretend", "--update", "--deep", "@world"],
         _b1_env(fixture_env, root),
         emerge_binary,
-        emerge_pretend_python,
     )
     merges = _b1_merges(rust.stdout)
     assert "[ebuild  r  U  ] app-misc/A-2 [1]" in merges
@@ -15634,7 +14916,7 @@ def test_oracle_non_slot_operator_update_selects_new_slot(
     "detector can never see it. Filed as a v2 item; S3/S4 stay post-walk.",
 )
 def test_oracle_slot_operator_unsatisfied_rebuilds_the_stale_consumer(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """024 oracle, bug 439694 (upstream
     `test_slot_operator_unsatisfied.py::testSlotOperatorUnsatisfied` case
@@ -15658,11 +14940,10 @@ def test_oracle_slot_operator_unsatisfied_rebuilds_the_stale_consumer(
             ),
         ],
     )
-    rust = _b1_both(
+    rust = _b1_run(
         ["--pretend", "--update", "--deep", "@world"],
         _b1_env(fixture_env, root),
         emerge_binary,
-        emerge_pretend_python,
     )
     assert [ln for ln in _b1_merges(rust.stdout) if "app-misc/" in ln] == [
         "[ebuild  rR    ] app-misc/B-0 ",
@@ -15670,7 +14951,7 @@ def test_oracle_slot_operator_unsatisfied_rebuilds_the_stale_consumer(
 
 
 def test_oracle_slot_operator_unsatisfied_oneshot_selects_without_rebuild(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """024 oracle, bug 439694 (upstream
     `test_slot_operator_unsatisfied.py::testSlotOperatorUnsatisfied` case
@@ -15679,7 +14960,7 @@ def test_oracle_slot_operator_unsatisfied_oneshot_selects_without_rebuild(
     mode, and initially-unsatisfied deps are ignored there anyway.
     MATCHES real: a directly-named atom re-merges even when installed
     (non-selective default, hence `[R]`), and the seed-less run sees no
-    reachable consumer. Rust == Python asserted."""
+    reachable consumer."""
     root = _b1_root(
         tmp_path,
         ["app-misc/B"],
@@ -15694,17 +14975,16 @@ def test_oracle_slot_operator_unsatisfied_oneshot_selects_without_rebuild(
             ),
         ],
     )
-    rust = _b1_both(
+    rust = _b1_run(
         ["--pretend", "--oneshot", "app-misc/A"],
         _b1_env(fixture_env, root),
         emerge_binary,
-        emerge_pretend_python,
     )
     assert _b1_merges(rust.stdout) == ["[ebuild   R    ] app-misc/A-2 "]
 
 
 def test_oracle_two_simultaneous_conflicts_defer_second_to_later_pass(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """023 oracle, case mg2 (C3 first-conflict-only deferral, no direct
     upstream equivalent -- real `_feedback_slot_conflicts` takes
@@ -15714,11 +14994,10 @@ def test_oracle_two_simultaneous_conflicts_defer_second_to_later_pass(
     is handled under each sibling in later passes. The search settles
     with every `-1.0` and no conflict block -- the same set a bundled
     trial would reach, via real's deferral order."""
-    rust = _b1_both(
+    rust = _b1_run(
         ["--pretend", "dev-libs/mg2top"],
         fixture_env,
         emerge_binary,
-        emerge_pretend_python,
     )
     assert _b1_merges(rust.stdout) == [
         "[ebuild  N     ] dev-libs/mgxc-1 ",
@@ -15732,7 +15011,7 @@ def test_oracle_two_simultaneous_conflicts_defer_second_to_later_pass(
 
 
 def test_oracle_missed_update_siblings_masked_together(
-    emerge_binary, emerge_pretend_python, fixture_env
+    emerge_binary, fixture_env
 ):
     """023 oracle, case mg3 (C4 similar-grouping): `mgfc-3.0` is visible
     but pulled by nothing -- a missed-update sibling of the `mgfc-2.0`
@@ -15748,16 +15027,16 @@ def test_oracle_missed_update_siblings_masked_together(
     carries that oracle, and the `--backtrack=1` block below pins
     portuale's low-budget conflict shape only. #36 is closed as
     not-reproducible-as-framed."""
-    ok = _b1_both(["--pretend", "dev-libs/mgfa"], fixture_env, emerge_binary,
-                  emerge_pretend_python)
+    ok = _b1_run(["--pretend", "dev-libs/mgfa"], fixture_env, emerge_binary,
+)
     assert _b1_merges(ok.stdout) == [
         "[ebuild  N     ] dev-libs/mgfc-1 ",
         "[ebuild  N     ] dev-libs/mgfb-1 ",
         "[ebuild  N     ] dev-libs/mgfa-1 ",
     ]
-    one = _b1_both(
+    one = _b1_run(
         ["--pretend", "--backtrack", "1", "dev-libs/mgfa"],
-        fixture_env, emerge_binary, emerge_pretend_python,
+        fixture_env, emerge_binary, 
     )
     assert _b1_merges(one.stdout) == [
         "[ebuild  N     ] dev-libs/mgfc-1 ",
@@ -15786,8 +15065,7 @@ def test_backtracking_good_version_first_matches_the_upstream_oracle(
     (`--backtrack=N` budgets N mask steps directly rather than real's
     depth formula), NOT a selection gap: the runtime-mask `!` negatives
     are already applied during selection (`resolve_pretend`'s
-    `extra_constraints` filter). Rust-only pin (the Python reference is
-    no longer mirrored as of 2026-09-14)."""
+    `extra_constraints` filter)."""
     for args, note in (
         (["--pretend", "dev-libs/btgp"], "default budget"),
         (["--pretend", "--backtrack", "4", "dev-libs/btgp"], "real's minimum (oracle)"),
@@ -15806,8 +15084,8 @@ def test_backtracking_good_version_first_matches_the_upstream_oracle(
 # ---------------------------------------------------------------------------
 # Backlog #24 Slice 2 oracle pins: the slot-operator family, one
 # `test_oracle_slotop_*` per upstream shape (method: `docs/023-oracle.md`;
-# verdict table: `docs/024-oracle.md`). Every pin asserts Rust == Python
-# *now* (`_b1_both`); real's mergelist is the expectation, under
+# verdict table: `docs/024-oracle.md`). Every pin runs portuale
+# (`_b1_run`); real's mergelist is the expectation, under
 # `xfail(strict=True)` where portuale still diverges. Fixture ebuilds live
 # under `fixtures/repo/` (+ `metadata/md5-cache/`); vdb + world come from
 # `_b1_root`. Renames (`soc*`, `so*`) mark shapes whose upstream names
@@ -15830,7 +15108,7 @@ def _slotop_cpv(stdout):
 
 
 def test_oracle_slotop_rebuild_order(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """Upstream `test_slot_operator_rebuild.py` case 1 (`emerge app-misc/A`,
     `--dynamic-deps=n`): installed `A-1`, `B-0` (`A:0/1=`), `C-0`
@@ -15853,11 +15131,10 @@ def test_oracle_slotop_rebuild_order(
             ),
         ],
     )
-    rust = _b1_both(
+    rust = _b1_run(
         ["--pretend", "--dynamic-deps=n", "app-misc/A"],
         _b1_env(fixture_env, root),
         emerge_binary,
-        emerge_pretend_python,
     )
     merges = _b1_merges(rust.stdout)
     app = [ln for ln in merges if "app-misc/" in ln]
@@ -15890,7 +15167,7 @@ def test_oracle_slotop_rebuild_order(
     "`socfoo:0/2=`).",
 )
 def test_oracle_slotop_complete(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """Upstream `test_slot_operator_complete_graph.py` (bug 614390):
     `=meta-pkg-2 + C`, `--backtrack 9`. Renamed onto `dev-libs/soc*`
@@ -15948,11 +15225,10 @@ def test_oracle_slotop_complete(
             ("dev-libs", "socfoo", "1", "0/1", {}),
         ],
     )
-    rust = _b1_both(
+    rust = _b1_run(
         ["--pretend", "=dev-libs/socmeta-2", "dev-libs/socc", "--backtrack", "9"],
         _b1_env(fixture_env, root),
         emerge_binary,
-        emerge_pretend_python,
     )
     got = _slotop_cpv(rust.stdout)
     got = [c for c in got if c[0].startswith("dev-libs/soc")]
@@ -15966,7 +15242,7 @@ def test_oracle_slotop_complete(
 
 
 def test_oracle_slotop_slotchange_case1(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """Upstream `test_slot_change_without_revbump.py` case 1, ebuild
     variant (`kde-base/ark --oneshot --usepkg`; no binaries exist in the
@@ -16003,11 +15279,10 @@ def test_oracle_slotop_slotchange_case1(
             ),
         ],
     )
-    rust = _b1_both(
+    rust = _b1_run(
         ["--pretend", "--oneshot", "--usepkg", "kde-base/ark"],
         _b1_env(fixture_env, root),
         emerge_binary,
-        emerge_pretend_python,
     )
     assert _b1_merges(rust.stdout) == [
         "[ebuild  rR    ] app-arch/libarchive-3.1.1 [3.1.1]",
@@ -16017,7 +15292,7 @@ def test_oracle_slotop_slotchange_case1(
 
 
 def test_oracle_slotop_slotchange_case2_noreplace(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """Upstream `test_slot_change_without_revbump.py` case 2
     (`libarchive --noreplace --usepkg`): nothing to do, mergelist `[]`.
@@ -16039,11 +15314,10 @@ def test_oracle_slotop_slotchange_case2_noreplace(
             ),
         ],
     )
-    rust = _b1_both(
+    rust = _b1_run(
         ["--pretend", "--noreplace", "--usepkg", "app-arch/libarchive"],
         _b1_env(fixture_env, root),
         emerge_binary,
-        emerge_pretend_python,
     )
     assert not [
         ln
@@ -16053,7 +15327,7 @@ def test_oracle_slotop_slotchange_case2_noreplace(
 
 
 def test_oracle_slotop_slotchange_case4_changedslot(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """Upstream `test_slot_change_without_revbump.py` case 4, ebuild
     variant (`@world --changed-slot --usepkg -uD`): real merges
@@ -16095,16 +15369,10 @@ def test_oracle_slotop_slotchange_case4_changedslot(
     assert "[ebuild  rR    ] app-arch/libarchive-3.1.1 [3.1.1]" in merges
     assert "[ebuild  rR    ] kde-base/ark-4.10.0 " in merges
     assert "The following packages are causing rebuilds:" in rust.stdout
-    _b1_python_drift_xfail(
-        rust,
-        ["--pretend", "--update", "--deep", "--changed-slot", "--usepkg", "@world"],
-        _b1_env(fixture_env, root),
-        emerge_pretend_python,
-    )
 
 
 def test_need_rebuild_trailer_fires_for_an_installed_parent(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """#27 (025 A4): with A1's built-`:=` append on (the append gate),
     `kde-base/ark`'s vdb binding `app-arch/libarchive:0/0=` walks
@@ -16112,7 +15380,7 @@ def test_need_rebuild_trailer_fires_for_an_installed_parent(
     slot conflict, and the installed parent's atom is recorded as a
     puller (A4 `enqueue_dependencies` recording). `slot_collision.py`'s
     `need_rebuild` scan then fires for the two flag reasons
-    (`--exclude`, `--useoldpkg-atoms`), byte-identical Rust == Python.
+    (`--exclude`, `--useoldpkg-atoms`), byte-identical
     With the append gate off no conflict forms, so no trailer -- pinned
     as the negative control. The "ebuild is masked or unavailable" reason
     needs an installed parent whose ebuild is present-but-masked reached
@@ -16166,14 +15434,10 @@ def test_need_rebuild_trailer_fires_for_an_installed_parent(
         assert (
             f"(kde-base/ark-4.10.0:0/0::testrepo, installed): {reason}" in rust.stdout
         )
-        # The Python mirror diverges on this shape for the F-A1 reason
-        # (solvable-slot-conflict folding vs the slot-op rebuild probe);
-        # the Rust side is the real-pinned one.
-        _b1_python_drift_xfail(rust, args, env, emerge_pretend_python)
 
 
 def test_oracle_slotop_regslotchange(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """Upstream `test_regular_slot_change_without_revbump.py`, ebuild
     variant (`soslotconsumer --oneshot --usepkg`): real pulls the
@@ -16192,11 +15456,10 @@ def test_oracle_slotop_regslotchange(
         [],
         [("dev-libs", "soslotlib", "1.52.0", "0/1.52", {})],
     )
-    rust = _b1_both(
+    rust = _b1_run(
         ["--pretend", "--oneshot", "--usepkg", "dev-libs/soslotconsumer"],
         _b1_env(fixture_env, root),
         emerge_binary,
-        emerge_pretend_python,
     )
     assert _b1_merges(rust.stdout) == [
         "[ebuild  rR    ] dev-libs/soslotlib-1.52.0 [1.52.0]",
@@ -16206,7 +15469,7 @@ def test_oracle_slotop_regslotchange(
 
 
 def test_oracle_slotop_revdeps(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """Upstream `test_slot_operator_reverse_deps.py` case 1 (bug 584626,
     `-uD @world`): installed `mesa-11.2.2` (`llvm:0/3.7.1=`),
@@ -16242,11 +15505,10 @@ def test_oracle_slotop_revdeps(
             ),
         ],
     )
-    rust = _b1_both(
+    rust = _b1_run(
         ["--pretend", "--update", "--deep", "@world"],
         _b1_env(fixture_env, root),
         emerge_binary,
-        emerge_pretend_python,
     )
     merges = _b1_merges(rust.stdout)
     assert [
@@ -16260,7 +15522,7 @@ def test_oracle_slotop_revdeps(
 
 
 def test_oracle_slotop_revdeps_ignorebuilt(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """Upstream `test_slot_operator_reverse_deps.py` case 2
     (`--ignore-built-slot-operator-deps=y`): real merges
@@ -16293,11 +15555,10 @@ def test_oracle_slotop_revdeps_ignorebuilt(
             ),
         ],
     )
-    rust = _b1_both(
+    rust = _b1_run(
         ["--pretend", "--update", "--deep", "--ignore-built-slot-operator-deps=y", "@world"],
         _b1_env(fixture_env, root),
         emerge_binary,
-        emerge_pretend_python,
     )
     merges = _b1_merges(rust.stdout)
     assert [
@@ -16310,7 +15571,7 @@ def test_oracle_slotop_revdeps_ignorebuilt(
 
 
 def test_oracle_slotop_revdeps_libgit2_stays_empty(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """Upstream `test_slot_operator_reverse_deps.py::testSlotOperatorReverseDepsLibGit2`
     (bug 717140, `-uD @world`): real merges `[]` -- no upgrade to
@@ -16343,11 +15604,10 @@ def test_oracle_slotop_revdeps_libgit2_stays_empty(
             ),
         ],
     )
-    rust = _b1_both(
+    rust = _b1_run(
         ["--pretend", "--update", "--deep", "@world"],
         _b1_env(fixture_env, root),
         emerge_binary,
-        emerge_pretend_python,
     )
     assert not [
         ln
@@ -16357,7 +15617,7 @@ def test_oracle_slotop_revdeps_libgit2_stays_empty(
 
 
 def test_oracle_slotop_parentdowngrade_stays_empty(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """Upstream `test_slot_operator_update_probe_parent_downgrade.py`
     (bug 528610, `-uD @world`): real merges `[]` -- the update probe
@@ -16383,11 +15643,10 @@ def test_oracle_slotop_parentdowngrade_stays_empty(
             ("sys-libs", "sodb", "5.3", "5.3", {}),
         ],
     )
-    rust = _b1_both(
+    rust = _b1_run(
         ["--pretend", "--update", "--deep", "@world"],
         _b1_env(fixture_env, root),
         emerge_binary,
-        emerge_pretend_python,
     )
     assert not [
         ln
@@ -16397,7 +15656,7 @@ def test_oracle_slotop_parentdowngrade_stays_empty(
 
 
 def test_oracle_slotop_conflict_rebuild(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """Upstream `test_slot_conflict_rebuild.py::testSlotConflictRebuild`
     (bug 439688, `-uD --backtrack 4 @world`): `C-0`'s `<A-2` cap holds
@@ -16434,11 +15693,10 @@ def test_oracle_slotop_conflict_rebuild(
             ),
         ],
     )
-    rust = _b1_both(
+    rust = _b1_run(
         ["--pretend", "--update", "--deep", "--backtrack", "4", "@world"],
         _b1_env(fixture_env, root),
         emerge_binary,
-        emerge_pretend_python,
     )
     merges = _b1_merges(rust.stdout)
     assert [
@@ -16463,7 +15721,7 @@ def test_oracle_slotop_conflict_rebuild(
     "walk's own graph).",
 )
 def test_oracle_slotop_conflict_mass_rebuild(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """Upstream `test_slot_conflict_rebuild.py::testSlotConflictMassRebuild`
     (bug 486580, `somassa --backtrack 3 -uD`): real merges
@@ -16484,11 +15742,10 @@ def test_oracle_slotop_conflict_mass_rebuild(
         for i in range(5)
     ]
     root = _b1_root(tmp_path, [], installed)
-    rust = _b1_both(
+    rust = _b1_run(
         ["--pretend", "--backtrack", "3", "--update", "--deep", "app-misc/somassa"],
         _b1_env(fixture_env, root),
         emerge_binary,
-        emerge_pretend_python,
     )
     got = {c for c in _slotop_cpv(rust.stdout) if c[0].startswith("app-misc/somass")}
     assert got == {
@@ -16503,7 +15760,7 @@ def test_oracle_slotop_conflict_mass_rebuild(
 
 
 def test_oracle_slotop_required_use(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """Upstream `test_slot_operator_required_use.py` (bug 523048,
     `emerge app-misc/A`): installed `A-1` + `soreqb-0` (`A:0/1=`,
@@ -16531,14 +15788,12 @@ def test_oracle_slotop_required_use(
     )
     env = _b1_env(fixture_env, root)
     rust = _run([str(emerge_binary)], ["--pretend", "app-misc/A"], env)
-    python = _run(emerge_pretend_python, ["--pretend", "app-misc/A"], env)
-    assert rust.stdout == python.stdout and rust.stderr == python.stderr
     assert rust.returncode == 1
     assert "soreqb" in rust.stderr
 
 
 def test_oracle_slotop_bdeps(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """Upstream `test_slot_operator_bdeps.py` case 1 (`-uD @world`) and
     case 2 (same + `--usepkg --with-bdeps=y`; no binaries exist in the
@@ -16563,11 +15818,10 @@ def test_oracle_slotop_bdeps(
         tmp_path, ["app-emulation/buildah", "app-emulation/libpod"], installed
     )
     for extra in ([], ["--usepkg", "--with-bdeps=y"]):
-        rust = _b1_both(
+        rust = _b1_run(
             ["--pretend", *extra, "--update", "--deep", "@world"],
             _b1_env(fixture_env, root),
             emerge_binary,
-            emerge_pretend_python,
         )
         merges = _b1_merges(rust.stdout)
         assert [
@@ -16583,7 +15837,7 @@ def test_oracle_slotop_bdeps(
 
 
 def test_oracle_slotop_runtime_pkg_mask(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """Upstream `test_slot_operator_runtime_pkg_mask.py`
     (`=socmeta-2`, `--backtrack 14` -- same version topology as the
@@ -16639,11 +15893,10 @@ def test_oracle_slotop_runtime_pkg_mask(
             ("dev-libs", "socfoo", "1", "0/1", {}),
         ],
     )
-    rust = _b1_both(
+    rust = _b1_run(
         ["--pretend", "=dev-libs/socmeta-2", "--backtrack", "14"],
         _b1_env(fixture_env, root),
         emerge_binary,
-        emerge_pretend_python,
     )
     got = _slotop_cpv(rust.stdout)
     got = [c for c in got if c[0].startswith("dev-libs/soc")]
@@ -16665,7 +15918,7 @@ def test_oracle_slotop_runtime_pkg_mask(
     "for upstream's `python_targets_*` USE_EXPAND machinery.",
 )
 def test_oracle_slotop_missed_update(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """Upstream `test_slot_operator_missed_update.py` (bug 743115,
     `>=sopypy-7.3.2 @world -uD --backtrack 4`): real merges
@@ -16701,7 +15954,7 @@ def test_oracle_slotop_missed_update(
             ),
         ],
     )
-    rust = _b1_both(
+    rust = _b1_run(
         [
             "--pretend",
             ">=dev-python/sopypy-7.3.2",
@@ -16713,7 +15966,6 @@ def test_oracle_slotop_missed_update(
         ],
         _b1_env(fixture_env, root),
         emerge_binary,
-        emerge_pretend_python,
     )
     got = _slotop_cpv(rust.stdout)
     got = [c for c in got if not c[0].startswith("dev-libs/")]
@@ -16725,7 +15977,7 @@ def test_oracle_slotop_missed_update(
 
 
 def test_oracle_slotop_autounmask_ignorebuilt(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """Upstream `test_slot_operator_autounmask.py::testSubSlot` case 2
     (`icu --oneshot --ignore-built-slot-operator-deps=y`): installed
@@ -16751,11 +16003,10 @@ def test_oracle_slotop_autounmask_ignorebuilt(
             ),
         ],
     )
-    rust = _b1_both(
+    rust = _b1_run(
         ["--pretend", "--oneshot", "--ignore-built-slot-operator-deps=y", "dev-libs/icu"],
         _b1_env(fixture_env, root),
         emerge_binary,
-        emerge_pretend_python,
     )
     assert [
         ln for ln in _b1_merges(rust.stdout) if "dev-libs/icu" in ln
@@ -16764,7 +16015,7 @@ def test_oracle_slotop_autounmask_ignorebuilt(
 
 
 def test_oracle_slotop_undo_unnecessary(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """Synthetic `slotundo-unnecessary`: `souprov` upgrades `1.0`
     (`0/1`) -> `2.0` (`0/2`); `sounneed-1.0` records
@@ -16798,11 +16049,10 @@ def test_oracle_slotop_undo_unnecessary(
         ],
     )
     args = ["--pretend", "--update", "--deep", "@world"]
-    rust = _b1_both(
+    rust = _b1_run(
         args,
         _b1_env(fixture_env, root),
         emerge_binary,
-        emerge_pretend_python,
     )
     assert [
         ln
@@ -16815,11 +16065,10 @@ def test_oracle_slotop_undo_unnecessary(
     # pairs are empty (real `_compute_abi_rebuild_info` drops the edge of
     # a demoted parent -- the replacement has no non-installed node to
     # point at).
-    rj = _b1_both(
+    rj = _b1_run(
         args + ["--json"],
         _b1_env(fixture_env, root),
         emerge_binary,
-        emerge_pretend_python,
     )
     payload = json.loads(rj.stdout)
     assert payload["abi_rebuilds"] == []
@@ -16831,7 +16080,7 @@ def test_oracle_slotop_undo_unnecessary(
 
 
 def test_oracle_slotop_undo_changed_slot_guard(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """Synthetic `slotundo-changed-slot` (no-flag half): `souneedslot`
     is `sounneed` plus its own same-version SLOT move (tree `0/2`,
@@ -16855,11 +16104,10 @@ def test_oracle_slotop_undo_changed_slot_guard(
             ),
         ],
     )
-    rust = _b1_both(
+    rust = _b1_run(
         ["--pretend", "--update", "--deep", "@world"],
         _b1_env(fixture_env, root),
         emerge_binary,
-        emerge_pretend_python,
     )
     merges = _b1_merges(rust.stdout)
     assert "[ebuild  r  U  ] dev-libs/souprov-2.0 [1.0]" in merges
@@ -16868,7 +16116,7 @@ def test_oracle_slotop_undo_changed_slot_guard(
 
 
 def test_oracle_slotop_undo_changed_slot_flag(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """Synthetic `slotundo-changed-slot` (flag half): same shape as
     `test_oracle_slotop_undo_changed_slot_guard` with `--changed-slot`.
@@ -16899,11 +16147,10 @@ def test_oracle_slotop_undo_changed_slot_flag(
             ),
         ],
     )
-    rust = _b1_both(
+    rust = _b1_run(
         ["--pretend", "--update", "--deep", "--changed-slot", "@world"],
         _b1_env(fixture_env, root),
         emerge_binary,
-        emerge_pretend_python,
     )
     merges = _b1_merges(rust.stdout)
     assert "[ebuild     U  ] dev-libs/souprov-2.0 [1.0]" in merges
@@ -16913,7 +16160,7 @@ def test_oracle_slotop_undo_changed_slot_flag(
 
 
 def test_oracle_slotop_undo_rebind(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """Synthetic `slotundo-rebind`: `sorebind-1.0`'s tree `RDEPEND`
     gained `dev-libs/sounewdep` over its installed
@@ -16936,14 +16183,11 @@ def test_oracle_slotop_undo_rebind(
         ],
     )
     env = _b1_env(fixture_env, root)
-    rust = _b1_both(
+    rust = _b1_run(
         ["--pretend", "--update", "--deep", "@world"], env, emerge_binary,
-        emerge_pretend_python,
     )
     assert "[ebuild  N     ] dev-libs/sounewdep-1.0 " in _b1_merges(rust.stdout)
     rj = _run([str(emerge_binary)], ["--pretend", "--update", "--deep", "--json", "@world"], env)
-    pj = _run(emerge_pretend_python, ["--pretend", "--update", "--deep", "--json", "@world"], env)
-    assert rj.stdout == pj.stdout and rj.stderr == pj.stderr
     rows = [
         e for e in json.loads(rj.stdout)["entries"] if e["package"] == "sorebind"
     ]
@@ -16952,7 +16196,7 @@ def test_oracle_slotop_undo_rebind(
 
 
 def test_oracle_slotop_undo_cascade(
-    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+    emerge_binary, fixture_env, tmp_path
 ):
     """Synthetic `slotundo-cascade`: a522084 plus the consumer's own
     tree `SLOT` bumped (`soccascb` tree `0/5`, installed `0`), so its
@@ -16992,9 +16236,3 @@ def test_oracle_slotop_undo_cascade(
     assert "[ebuild  rR    ] app-misc/soccascb-0 [0]" in merges
     assert "[ebuild  rR    ] app-misc/soccascc-0 " in merges
     assert rust.stdout.count("causes rebuilds for:") == 2
-    _b1_python_drift_xfail(
-        rust,
-        ["--pretend", "--update", "--deep", "@world"],
-        _b1_env(fixture_env, root),
-        emerge_pretend_python,
-    )

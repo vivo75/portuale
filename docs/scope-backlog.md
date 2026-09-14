@@ -1,11 +1,14 @@
 # Scope backlog
 
-What real portage does that portuale doesn't (either side), the standing
-non-goals, and the honest distance to a drop-in replacement. **Not** a
-Python-vs-Rust parity backlog — every slice ships on both sides in one
-commit, verified byte-identical via the shared contract suite. An
-inventory scan (CLI flag tables, `--json` fields, git history) finds zero
-Rust-vs-Python behavioural gaps.
+What real portage does that portuale doesn't, the standing non-goals, and
+the honest distance to a drop-in replacement. Expected behaviour comes
+from real Portage (the `TEST/` beds, the host's `emerge`, upstream
+resolver tests). The second Python copy of the resolver
+(`python/emerge_pretend_reference.py`) was **removed 2026-09-15**
+([`second_python_copy_removal.md`](second_python_copy_removal.md)); its
+checks were replaced by output invariants, determinism runs, a
+tree-wide primitive differential and a harvested corpus. Entries below
+that say "dual-language" / "Rust==Python" record how a slice shipped.
 
 `what-this-proves.md` is the authoritative record of what has shipped;
 `git log` is the slice history. Re-verify any entry here against both
@@ -576,7 +579,7 @@ ANSI USE colour all shipped 2026-09-05, see `what-this-proves.md`'s
 `mrg` is a clap front end over portuale's own emerge codepath
 (`to_emerge_argv` → `pretend::run`) — resolution output and exit codes
 are literally `emerge`'s. The parser covers the full `lib/_emerge/main.py`
-surface. Rust-only, no Python reference. **Open: nothing** — everything
+surface. **Open: nothing** — everything
 open for the emerge codepath (the other Part 2 sections) is open for
 `mrg` by definition.
 
@@ -605,8 +608,7 @@ local merge path resolves files by `$PKGDIR` scan, not by index).
 test-only. Tracking: `backlog-tasks.md` #28 (`NewsSet` is a permanent
 single by design).
 
-**Hard invariant: `mrg` is portuale-only — no portage counterpart, no
-Python reference.**
+**Hard invariant: `mrg` is portuale-only — no portage counterpart.**
 
 ### I. Container test bed — L2–L5
 
@@ -815,10 +817,9 @@ Standing decisions, not oversights.
   space-split, `-pX requires an argument and can't be bundled`, and the
   exact real error strings. It also carries the
   recognized-but-unimplemented machinery (a real emerge option reports
-  "not yet implemented in portuale", not "unknown") and is kept
-  structurally parallel to the Python reference so the two parsers can't
-  drift. `clap` would fight every one of these; ~1500 lines across two
-  languages under ~1100 contract tests, near-zero payoff. This applies
+  "not yet implemented in portuale", not "unknown"). `clap` would fight
+  every one of these; ~1100 contract tests pin the parser, near-zero
+  payoff. This applies
   to the **`emerge`/`ebuild` parsers only** — the new `mrg` applet
   (Part 2.H) is the deliberate counter-example and *does* use clap.
 

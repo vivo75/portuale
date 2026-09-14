@@ -13,9 +13,8 @@
 // shell for it" approach the vdb-merge code already takes) and calls it
 // from both `merge_after_install` (source) and `merge_binpkg` (binary).
 //
-// This is real-execution code with no `emerge --pretend` Python mirror,
-// so there is no contract reference for it -- it's covered by Rust unit
-// tests only.
+// This is real-execution code, covered by Rust unit tests and the L1/L2
+// merge beds.
 
 use std::path::Path;
 

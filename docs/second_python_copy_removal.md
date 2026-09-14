@@ -1,8 +1,9 @@
 # Removing the second Python copy (`emerge_pretend_reference.py`)
 
-Status: **decided 2026-09-14** — the 23.5k-line Python reference is being
-removed. This document records why, and the checks that replace it so the
-bugs it used to catch are still caught (and ideally more).
+Status: **decided 2026-09-14, removed 2026-09-15** (branch
+`backlog/python-copy-removal`). This document records why, the checks
+that replace it so the bugs it used to catch are still caught, and (in
+"Where each check stands" at the end) what landed and what is still open.
 
 ## Scope
 
@@ -182,3 +183,34 @@ pinned against stored goldens only; §1 and §2 still apply to `--json`.
 - `backlog-tasks.md:10` rule ("ship Rust + `python/emerge_pretend_reference.py`").
 - `3rdparty/repos.toml` `[portage]` description.
 - `tests/conftest.py` `EMERGE_PRETEND_PYTHON_REFERENCE`.
+
+## Where each check stands (2026-09-15)
+
+| § | Check | State | Where |
+|---|---|---|---|
+| 1 | Output invariants | **Done.** All 479 `--json`-capable `CASES`, every fixture package under `-p`/`-puD`/`-pe`, the last L0 run and this host's `emerge -puD @world` (1770 entries): 0 violations. Merge-order edges an installed instance satisfies are exempt (real `DepPriority.satisfied`; the host `@world` run showed the need). Checker self-tests plant each past bug class. | `tests/output_invariants.py`, `tests/test_output_invariants.py`, `TEST/compare/check-invariants.py` |
+| 2 | Cross-mode consistency | **Done**, same tests: plain / `--tree` / `--quiet` entry sets equal `--json`; `--tree` nesting agrees with `required_by` (through non-displayed owners). `--onlydeps` and `--autounmask-only` handled; `--columns` skipped. | same |
+| 3 | Tree-wide primitive differential | **Done.** Whole gentoo md5-cache: 46165 atoms, 136575 `use_reduce`, 13464 `REQUIRED_USE` inputs. One mismatch, in the *Python harness* (explicit `-r0` reported as no revision); fixed and pinned. Re-run on every `3rdparty/portage` re-pin. | `scripts/primitive_tree_differential.py`, `tests/primitive_regressions/` |
+| 4 | No silent drops | **Done** for the two dependency walks (resolver queue, merge-order digraph): `note_unparsed_dep_token` counts, `PORTUALE_REPORT_UNPARSED_DEP_TOKENS` reports, the invariant tests and L0 require 0. Fixtures and host `@world`: 0. Other `parse_atom` call sites (config files, sets) are not dependency tokens and are not counted. | `portage_repo::note_unparsed_dep_token` |
+| 5 | Metamorphic tests | **Not started.** | — |
+| 6 | Real `emerge` as fixture oracle | **Spiked, blocked on staging.** Real `emerge -p dev-libs/diamond` on a copy of `fixtures/` needs: absolute `repos.conf` locations (real rejects the relative `location = repo`), `PORTAGE_REPOSITORIES` to hide the host's repos, and a clean `/etc/portage` (real still read the host `make.profile` for the running root); several fixture inputs are portuale-only syntax real rejects (`${PORTAGE_CONFIGROOT}` in `binrepos.conf`, comment lines in `profiles/updates`, `*/pkg` in `package.use.force`). Run it inside the test container with a staging step. | — |
+| 7 | Upstream resolver test translation | **Not started.** `docs/023-oracle.md` "R2 — genuine upstream oracle" shows the `ResolverPlayground` route works for single cases. | — |
+| 8 | Re-pin diff review | **Done.** Lists changed functions between two pins and the Rust lines citing them (by line range or distinctive name). `portage-3.0.81.3 → 3.0.82.2`: 693 changed functions. | `scripts/portage_repin_review.py` |
+| 9 | Determinism | **Done** for repeated runs (every `CASES` entry ×3). It found a real race: concurrent cache-miss resolutions shared the depend phase's metadata file (`dc8022b`). Shuffling directory-read and `repos.conf` section order in a test mode is **not started** (≈56 `read_dir` sites). | `test_repeated_runs_are_byte_identical` |
+| 10 | Mutation testing | **Not started** (`cargo-mutants` is not installed on this host). | — |
+| 11 | Harvest before deletion | **Done.** 1057 contract calls and 4900 grid cases (510 fixture packages/sets × 10 option sets) where Rust and Python agreed. 13 contract disagreements (`--info` host state the tests normalise, the known F-A2 trailer, one `--debug` narration case where Rust matches real) and 200 grid disagreements (all cache-less fixtures, D2) were not stored. Drift is a warning; `_assert_harvested` is a strict pin at the 20 call sites whose only check was Rust == Python. | `tests/corpus.py`, `tests/corpus/`, `tests/test_harvested_corpus.py`; harvest tooling in commit `2738e9c` |
+
+What the removal changed in the contract suite: 222 test functions lost
+their Python parameter, ~630 comparison statements were removed or
+reduced to their Rust half, and 19 tests named `…_matches_between_implementations`
+/ `…_rust_and_python` were renamed `…_pinned_output`. Two strict xfails
+that existed only because of Python bugs now pass as ordinary tests:
+the A1 (#26) mirror-drift xfail and the `--debug` post-flip `Child:`
+line (Rust matches the oracle capture). With the append gate
+(`PORTUALE_DYNAMIC_DEPS_APPEND=1`) on, only `test_oracle_slotop_undo_cascade`
+still fails: F-A1's Python half is gone, its Rust half (the cascade
+drops a consumer) remains.
+
+Follow-up doc changes listed above: done in the same branch
+(`AGENTS.md`, `agent-context.md`, `backlog-tasks.md`, `repos.toml`,
+`conftest.py`, plus the Tier 5/2 plans and `scope-backlog.md`).

@@ -517,9 +517,10 @@ pub fn unparsed_dep_tokens() -> usize {
 /// (`slotchange-case4`, `slotundo-cascade`) prove the *resolver* cannot
 /// yet reconcile a vdb-built `:S/SS=` atom walking alongside the
 /// ebuild's unbound `:=` for the same cp -- real resolves that pair
-/// through the slot-operator rebuild probe; portuale folds it as a
-/// solvable slot conflict (Python) or drops the cascade's second
-/// consumer (both). Until that probe ordering is fixed the append stays
+/// through the slot-operator rebuild probe; portuale drops the cascade's
+/// second consumer. (The other half of F-A1, the removed Python
+/// reference folding the pair as a solvable slot conflict, left with
+/// the reference on 2026-09-15.) Until that probe ordering is fixed the append stays
 /// behind this gate, exactly like `PORTUALE_ABORT_PATH` gated backlog
 /// #19. Process-global, env-free -- `pretend.rs` sets it once from the
 /// env, and `--dynamic-deps=n` never appends regardless (Effective
@@ -15568,7 +15569,7 @@ pub struct ResolveRequest {
 /// Which dependency-solving algorithm answers a [`ResolveRequest`].
 ///
 /// Portuale-only (real `emerge` has no `--solver`): `Portage` is the
-/// default and the only solver with a Python reference implementation;
+/// default and the backtracking walk real Portage runs;
 /// `PubGrub`/`Resolvo` drive lu-zero's `portage-atom-pubgrub` /
 /// `portage-atom-resolvo` bridges (see `solver_bridge.rs`) and are
 /// Rust-only. The selection rides inside [`ResolveRequest`] so a

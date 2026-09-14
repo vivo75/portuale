@@ -4,9 +4,9 @@
 // end, allowed to lean on major mainstream crates (`clap` here, `serde`
 // and friends later) instead of portuale's hand-rolled, minimal-
 // dependency machinery. It does not have to live on a minimal static
-// musl box, match a Python reference byte-for-byte, or stay near-zero-
+// musl box, match real `emerge` byte-for-byte, or stay near-zero-
 // dependency. `mrg` is a **portuale-only applet -- there will never be a
-// portage counterpart or Python reference implementation**; only this
+// portage counterpart**; only this
 // Rust code and its tests define it. What it DOES share is real
 // `emerge`'s actual option surface:
 // every short option and every long option keeps real emerge's own

@@ -55,13 +55,16 @@ well-tested; the Portage-specific mapping layers on top are the young part.
   workspace's hand-rolled `pub enum Error` posture (`refactor-01 S4`) — either
   map `thiserror` errors at the seam (`From<...> for String` / `portage_repo::Error`)
   or justify the new macro dependency.
-- **Determinism: ADAPTER MUST ENFORCE.** The contract suite pins
-  Rust==Python byte-identical output; the resolver is deterministic today
+- **Determinism: ADAPTER MUST ENFORCE.** The contract suite pinned
+  Rust==Python byte-identical output (now: pinned output, repeated-run
+  determinism in `tests/test_output_invariants.py`); the resolver is deterministic today
   (sorted traversals, no timing lines). PubGrub/resolvo version ordering,
   tie-breaks, and error derivation order must be pinned/normalized in the
   adapter — never leak `HashMap` iteration, timing, or engine-native error
   strings into output.
-- **Dual-language lockstep: NEEDS A SCOPE DECISION.** AGENTS.md §4 requires
+- **Dual-language lockstep: moot since 2026-09-15** (the Python reference
+  was removed, `second_python_copy_removal.md`); kept for the record.
+  **Original text:** AGENTS.md §4 requires
   `rust/…` + `python/emerge_pretend_reference.py` behaviourally identical,
   verified empirically. A Rust-only SAT solver has no Python mirror. Options:
   (a) `--solver=portage` (default) stays dual-language and contract-pinned;

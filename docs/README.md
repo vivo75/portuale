@@ -12,6 +12,7 @@ holds everything else.
 | [`../AGENTS.md`](../AGENTS.md) | The "next slice" workflow and the verification / commit rules. |
 | [`scope-backlog.md`](scope-backlog.md) | What real portage does that portuale doesn't (either side), the standing non-goals, the distance to a drop-in replacement. |
 | [`backlog-tasks.md`](backlog-tasks.md) | The same open work as a flat, one-line-per-task list with code/doc pointers — for picking up a slice without a full context load. |
+| [`second_python_copy_removal.md`](second_python_copy_removal.md) | Why the Python copy of the resolver was removed (2026-09-15), the checks that replaced it, and which are still open. |
 | [`what-this-proves.md`](what-this-proves.md) | The append-only per-slice record — every shipped feature with its real-portage source grounding, plus a runnable example. Large; `git log` is the same history per-commit. |
 
 ## Reference

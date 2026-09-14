@@ -23,19 +23,25 @@ the next slice") and expects the same rhythm every time:
 3. **Re-open judgment calls that surface during implementation** rather
    than silently picking a default. If a slice conflicts with a hard
    constraint (e.g. contract-suite determinism), stop and surface it.
-4. **Implement both language sides in lockstep** — `rust/…` and
-   `python/emerge_pretend_reference.py` must stay behaviourally
-   identical, verified *empirically* (run both against `fixtures/` and
-   diff), not just via pytest. Real-execution-only features
-   (merge/unmerge/package/fetch/phases) have no Python mirror — only
-   their CLI-recognition surface is mirrored.
+4. **Ground expected output in real Portage, not in a second copy.**
+   There is no Python mirror any more
+   ([`docs/second_python_copy_removal.md`](docs/second_python_copy_removal.md)).
+   A slice that changes `emerge` output takes its expected value from real
+   Portage — the container test bed (`TEST/`), this host's real `emerge`,
+   or an upstream `lib/portage/tests/resolver/` case — and says which in
+   the test's docstring. Real-execution features
+   (merge/unmerge/package/fetch/phases) are checked the same way (L1–L3).
 5. **Add fixtures by hand** under `fixtures/repo/…` (+ `metadata/md5-cache/…`).
    Check for name collisions with existing fixtures first. A fixture that
    "passes" without isolating the new behaviour is worse than none.
-6. **Add tests**: a parametrized `CASES` entry *and* a pinned-output test
-   function in `tests/test_emerge_pretend_contract.py`, plus a Rust unit
-   test in the relevant crate. Real-execution features get Rust
-   fixture-driven end-to-end tests instead.
+6. **Add tests**: a `CASES` entry (Rust exit code; the output invariants
+   in `tests/test_output_invariants.py` run over it automatically) *and*
+   a pinned-output test function in `tests/test_emerge_pretend_contract.py`,
+   plus a Rust unit test in the relevant crate. Real-execution features
+   get Rust fixture-driven end-to-end tests instead. If a change moves an
+   output recorded in the harvested corpus (`tests/corpus/`), the run
+   reports `corpus drift`: review it, then accept it with
+   `PORTUALE_CORPUS_BLESS=1` in the same commit.
 7. **Update the docs**: append a paragraph to
    [`docs/what-this-proves.md`](docs/what-this-proves.md) (never rewrite
    prior slices' paragraphs — they are history; fix one only to correct a

@@ -43,7 +43,11 @@ both real portage (`/usr/sbin/emerge`) and portuale
 (`/usr/local/bin/emerge`) inside a throwaway container, then
 `compare/resolve-compare.py` diffs the merge lists / USE / order /
 errors / exit codes. Findings that match `compare/known-divergences.yaml`
-are "explained"; the run is green iff none are unexplained.
+are "explained"; the run is green iff none are unexplained **and**
+`compare/check-invariants.py` finds no violation in portuale's own output
+(the expectation-free checks from `tests/output_invariants.py`, over each
+probe's extra `--json`/`--tree`/`--quiet` runs, plus a zero
+unparsed-dependency-token count; report in `invariants.txt`).
 
 Output: `TEST/logs/l0-<timestamp>/` (raw `emerge` outputs, `meta.tsv`,
 `fingerprint.tsv`, `l0-report.txt`, `l0-report.json`);
@@ -51,6 +55,7 @@ Output: `TEST/logs/l0-<timestamp>/` (raw `emerge` outputs, `meta.tsv`,
 
 Env: `L0_SKIP_PORTAGE_UPGRADE=1` (skip the `=sys-apps/portage-3.0.82.2`
 step), `L0_SKIP_MULTI=1` (skip the `@system`/`@world` whole-graph runs),
+`L0_SKIP_INVARIANTS=1` (skip the extra portuale mode runs),
 `L0_EMERGE_OPTS`, `PORTTEST_IMAGE`, `PORTTEST_PODMAN`.
 
 ### L1 — merge parity from an identical prebuilt binpkg set

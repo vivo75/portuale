@@ -18,7 +18,7 @@ changes.
 
 | dir | why it's needed | pinned by |
 |---|---|---|
-| `portage/` | the `.py` ebuild helpers that `import portage` (`doins.py`, `xpak-helper.py`, …), their `lib/portage` import path, `cnf/sets/portage.conf`, and the real `portage.*` modules the Python reference (`python/emerge_pretend_reference.py`) mirrors | `repos.toml` `[portage]` |
+| `portage/` | the `.py` ebuild helpers that `import portage` (`doins.py`, `xpak-helper.py`, …), their `lib/portage` import path, `cnf/sets/portage.conf`, and the real `portage.versions` / `portage.dep` modules the primitive harnesses (`python/*_harness.py`) wrap | `repos.toml` `[portage]` |
 | `brush/` | reference/hacking checkout of the bash interpreter `portuale` embeds; `rust/portuale/Cargo.toml` fetches it via git independently | `repos.toml` `[brush]` |
 | `portage-cli/` | reference checkout of upstream Rust Portage CLI (`portage-solver` / `portage-atom-pubgrub` / `portage-atom-resolvo`); analysis in `docs/solver-backends-analysis.md`. No Cargo dependency yet | `repos.toml` `[portage-cli]` |
 

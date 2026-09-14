@@ -77,6 +77,6 @@ but not the other).
 - Real's container is PID-1 `/init`-based; the `podman run --entrypoint
   /bin/bash` form above bypasses it so the patch and the emerge run are
   one shell.
-- The Python reference (`python/emerge_pretend_reference.py`) does not
-  mirror the trace: complete-mode real-tree graphs take minutes in
-  Python, so the harness is Rust-only by design.
+- The harness is Rust-only by design (the Python reference that once
+  mirrored the resolver was removed; see
+  `docs/second_python_copy_removal.md`).

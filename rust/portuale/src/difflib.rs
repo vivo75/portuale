@@ -13,8 +13,7 @@
 // omitted here. Everything else (`find_longest_match`'s `j2len` DP, the
 // earliest-match tie-break, the recursive `get_matching_blocks` split,
 // `2.0 * matches / total`) is ported literally so a Rust search produces
-// byte-identical results to `emerge_pretend_reference.py`'s own
-// `difflib`-backed one, verified by the shared contract suite.
+// byte-identical results to real `emerge --search`'s `difflib`-backed one.
 
 use std::collections::HashMap;
 

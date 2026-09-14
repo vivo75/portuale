@@ -15,6 +15,21 @@ language, two new fixtures + pins; #20 closed in `backlog-tasks.md`),
 H1 (`Fetcher` on the production path, trait reshaped to
 `FetchRequest`). Docs in `what-this-proves.md`; wave 2 may start.
 
+**Python reference removed 2026-09-15** (branch
+`backlog/python-copy-removal`,
+[`second_python_copy_removal.md`](second_python_copy_removal.md)).
+This changes every remaining track-R slice (R3b–R5): **no Python
+mirror, no Rust==Python pin.** Each slice pins Rust against its real
+oracle, keeps `tests/test_output_invariants.py` green, and accepts any
+harvested-corpus drift it causes with `PORTUALE_CORPUS_BLESS=1` in the
+same commit after reviewing it. Rule 1 in §2, the R row of the
+file-conflict map and R4's steps are updated below; the R1/R2 text is
+kept as shipped. Side effect for #26 F-A1: with
+`PORTUALE_DYNAMIC_DEPS_APPEND=1` only `test_oracle_slotop_undo_cascade`
+still fails (the Python half of F-A1 left with the mirror). The removal
+also found and fixed a C2 race (`dc8022b`: concurrent cache-miss
+resolutions shared the depend phase's metadata file).
+
 Scope: the **open** entries of **Tier 5** (#41, #44, #45) and **Tier 2**
 (#17, #20, #21, #25, #28, #35, #36) in
 [`backlog-tasks.md`](backlog-tasks.md). The DONE / DONE-PARTIAL entries
@@ -48,11 +63,11 @@ decision.
 
 Ten open items fall into four tracks that barely touch each other:
 
-| Track | Items | Kind | Python mirror? | Why this position |
+| Track | Items | Kind | Python mirror? (until 2026-09-15) | Why this position |
 |---|---|---|---|---|
 | **P** — L3 producer parity | #44, #45 | real execution, container | no | Unblocks `l3-core` / `@system` (the #30 S4 stop rule). Highest leverage per hour. |
 | **C** — cache-less repo | #41 | repo reader + depend phase | no (D2) | Self-contained drop-in gap; lets the porttest overlay stop committing a generated cache. Must land before H4. |
-| **R** — resolver parity | #20, ~~#21~~ (cut, D1), #36, #25, #35, #17 | resolver, dual-language | yes | Ordered cheapest-and-independent first, graph-shape changes before merge-order timing. |
+| **R** — resolver parity | #20, ~~#21~~ (cut, D1), #36, #25, #35, #17 | resolver | was yes; none from R3b on | Ordered cheapest-and-independent first, graph-shape changes before merge-order timing. |
 | **H** — mrg-director | #28 | Rust refactor | no | Independent; H4 (`RepoCache`) waits for C. |
 
 The recommended order, and why:
@@ -103,7 +118,7 @@ flowchart LR
 |---|---|
 | P | `rust/portuale/src/ebuild_merge.rs`, `ebuild_phases.rs`, `emerge_getbinpkg.rs`, `TEST/layers/l3/*` |
 | C | `rust/portage-repo/src/lib.rs` (repo reader), `rust/portuale/src/ebuild_phases.rs::run_depend_phase`, no Python (D2) |
-| R | `rust/portage-repo/src/lib.rs`, `merge_order.rs`, `rust/portuale/src/pretend.rs`, `python/emerge_pretend_reference.py`, `tests/test_emerge_pretend_contract.py` |
+| R | `rust/portage-repo/src/lib.rs`, `merge_order.rs`, `rust/portuale/src/pretend.rs`, `tests/test_emerge_pretend_contract.py`, `tests/corpus/` (blessed drift) |
 | H | `rust/mrg-director/src/lib.rs`, call sites in `rust/portuale/src/{fetch,pretend,emerge_build,emerge_getbinpkg}.rs` |
 
 Conflicts to schedule around: **C × R** both edit
@@ -116,10 +131,13 @@ to a call site only); **H4 × C** by design.
 
 ## 2. Rules for every slice
 
-1. **Resolver slices (track R) ship Rust + `python/emerge_pretend_reference.py`
-   in one commit**, pinned byte-identical by
-   `tests/test_emerge_pretend_contract.py`. Tracks P and H are
-   real-execution only: no Python mirror, no `CASES`.
+1. **Resolver slices (track R) pin Rust against real Portage** in
+   `tests/test_emerge_pretend_contract.py` (a `CASES` entry plus a
+   pinned-output test), keep `tests/test_output_invariants.py` green, and
+   bless any reviewed `corpus drift` in the same commit. (Until
+   2026-09-15 this rule required a lockstep Python mirror; R1 and R2
+   shipped under it.) Tracks P and H are real-execution only: no
+   `CASES`.
 2. **Expected output comes from real Portage, not from reading its
    source.** Every slice that changes output starts with an oracle step
    in the container bed (`TEST/`) or on this host's real `emerge`.
@@ -491,8 +509,9 @@ must not rise (D4).
 conflict it would create is solvable by downgrade
 (`conflict_downgrade` / `installed_downgrade`,
 `3rdparty/portage/lib/portage/dep/dep_check.py`, soft lines 476–521, bug
-531656). The seam is already marked in both languages
-(`rust/portage-repo/src/lib.rs:9069`, `emerge_pretend_reference.py:6351`).
+531656). The seam is already marked in
+`rust/portage-repo/src/lib.rs:9069` (`disjunction_preference`'s doc
+comment).
 
 Why after R3: `graph_db.match_pkgs` sees installed packages as graph
 nodes, which R3d introduces. With R3 in place, a "live graph_db" is a
@@ -503,7 +522,7 @@ Steps: oracle fixture from `docs/023-backtracking_resolve.md` B2 (build
 one if the plan only describes it: `||` group whose first alternative
 conflicts with an installed higher version in the same slot);
 implement `downgrade_probe` (does config/CLI accept the downgrade?) and
-the two guards; pin both languages.
+the two guards; pin against the oracle fixture.
 
 **Accept:** fixture == real; L0 ≥ before.
 

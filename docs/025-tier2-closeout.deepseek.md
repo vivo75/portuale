@@ -536,6 +536,8 @@ resolver cannot yet consume that union when the ebuild carries the
   slot-matching (`True` for `libarchive-3.1.1:0`), while the Rust
   `portage-dep` matcher is stricter; the two languages disagree on
   whether a single version satisfies both wants.
+  **2026-09-15:** the Python mirror was removed; this half of F-A1 no
+  longer exists (the test passes with the append on).
 - `test_oracle_slotop_undo_cascade`: with the append on, **both**
   languages drop the cascade's second consumer (`soccascc`) from the
   merge list (the rebuilds block still names it), diverging from the

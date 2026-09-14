@@ -93,8 +93,7 @@ invokes `emerge`/`ebuild` by name directly. **Shipped**: `rust/portuale`.
 A bare `portuale` (or `portuale --help`/`-h`) lists the applets with a
 one-line description and exits 0; an unrecognized applet name still
 errors. `emerge --help` is a grouped tour of every action/option portuale
-implements (`pretend.rs`'s `HELP_TEXT`, mirrored in
-`emerge_pretend_reference.py` and pinned by the contract suite).
+implements (`pretend.rs`'s `HELP_TEXT`, pinned by the contract suite).
 
 ## Test/benchmark harness architecture
 
@@ -106,6 +105,21 @@ implements (`pretend.rs`'s `HELP_TEXT`, mirrored in
   (with symlinks set up in the test `PATH` so multicall dispatch is
   exercised as in real usage), since they're in scope as actual products,
   not just internal library surface.
+- **There is no second copy of the resolver.** Until 2026-09-15 a Python
+  reference (`python/emerge_pretend_reference.py`) mirrored every
+  `emerge --pretend` slice and the contract suite asserted Rust == Python;
+  it proved agreement with a portuale-authored copy, not with Portage,
+  and was removed ([`second_python_copy_removal.md`](second_python_copy_removal.md)).
+  Expected `emerge` output now comes from real Portage (the `TEST/` beds,
+  this host's `emerge`, upstream `lib/portage/tests/resolver/` cases).
+  In its place: expectation-free output invariants and cross-mode checks
+  (`tests/test_output_invariants.py`, also run over L0), repeated-run
+  determinism, the tree-wide primitive differential
+  (`scripts/primitive_tree_differential.py`), the unparsed-dependency-token
+  counter, the re-pin review checklist (`scripts/portage_repin_review.py`),
+  and the corpus harvested from the last Rust/Python agreement
+  (`tests/corpus/`, drift is a warning). The primitive harnesses above
+  stay: they wrap real `portage.versions`/`portage.dep`.
 - The harness needs **two modes**:
   - *Correctness mode*: one operation per process invocation, pytest-driven,
     exhaustive edge cases.
@@ -336,7 +350,7 @@ pin, the staged fixes, and the re-pin checklist.**
 ## How portuale actually runs, session to session
 
 The session-to-session operating rhythm — the "next slice" workflow, the
-lockstep/fixture/test rules, the full verification pass, and the
+oracle/fixture/test rules, the full verification pass, and the
 commit/push rules — lives in **[`../AGENTS.md`](../AGENTS.md)**. Read it
 before scoping or implementing a slice.
 

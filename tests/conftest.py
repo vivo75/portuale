@@ -14,7 +14,6 @@ VERSIONS_PYTHON_HARNESS = REPO_ROOT / "python" / "versions_harness.py"
 ATOM_PYTHON_HARNESS = REPO_ROOT / "python" / "atom_harness.py"
 USE_REDUCE_PYTHON_HARNESS = REPO_ROOT / "python" / "use_reduce_harness.py"
 REQUIRED_USE_PYTHON_HARNESS = REPO_ROOT / "python" / "required_use_harness.py"
-EMERGE_PRETEND_PYTHON_REFERENCE = REPO_ROOT / "python" / "emerge_pretend_reference.py"
 FIXTURES_ROOT = REPO_ROOT / "fixtures"
 
 # Config variables portuale now honours from the process environment
@@ -140,11 +139,6 @@ def mrg_binary(portuale_binary: Path, tmp_path_factory: pytest.TempPathFactory) 
     return link
 
 
-@pytest.fixture(scope="session")
-def emerge_pretend_python() -> list[str]:
-    return [sys.executable, str(EMERGE_PRETEND_PYTHON_REFERENCE)]
-
-
 @pytest.fixture(autouse=True)
 def _corpus_context(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory):
     """Tell `corpus.py` which test is running (entries are keyed by node
@@ -162,7 +156,7 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
         for line in corpus.drifted:
             terminalreporter.line(line)
         terminalreporter.line(
-            "Rust output differs from the harvested Rust==Python agreement "
+            "Rust output differs from the harvested Rust==Python-reference agreement "
             "(tests/corpus.py). Review, then re-run with PORTUALE_CORPUS_BLESS=1 "
             "to accept."
         )

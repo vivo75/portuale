@@ -1,5 +1,10 @@
 # Backlog #26 — `--dynamic-deps=n` "walk-source disagreement" — agent plan (deepseek draft)
 
+> **2026-09-15:** the Python reference this plan keeps in lockstep was
+> removed (`second_python_copy_removal.md`). Read its dual-language
+> steps as history; F-A1's only remaining blocker is
+> `test_oracle_slotop_undo_cascade` (`backlog-tasks.md` #26).
+
 Status: proposed. Written 2026-09-12 against `main` @ `be76d0d` (post
 #24 S7). Filename keeps the `024-` the user asked for; the backlog item
 is **#26** (`docs/backlog-tasks.md:47`), not #24. A sibling draft

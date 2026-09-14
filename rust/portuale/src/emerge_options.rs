@@ -7,10 +7,8 @@
 // one `emerge --help` documents (see `pretend.rs`'s `HELP_TEXT`); every
 // table here exists purely for recognition, not behavior, and each
 // implemented flag is excluded from these tables (from `VALUE_OPTIONS`
-// too, not just `BOOLEAN_OPTIONS`). Mirrored exactly in
-// python/emerge_pretend_reference.py's own copy of these same three
-// tables, so both sides report identical text for identical input
-// (verified by the shared contract suite).
+// too, not just `BOOLEAN_OPTIONS`). The contract suite pins the text each
+// table produces.
 //
 // KNOWN, DOCUMENTED SCOPE CUTS:
 //   - Short-flag bundling (`-pv`) IS supported -- see pretend.rs's own

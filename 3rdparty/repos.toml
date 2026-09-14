@@ -14,7 +14,7 @@
 # Update this file in the same commit that changes a pin.
 
 [portage]
-description = "Upstream Gentoo Portage. portuale vendors the whole bash phase runtime into ./bin/ (see bin/README.md), but the .py helpers that `import portage` (doins.py, xpak-helper.py, ...), their lib/portage import path, and cnf/sets/portage.conf still come from this checkout. The Python reference (python/emerge_pretend_reference.py) also imports the real portage.dep etc. from here."
+description = "Upstream Gentoo Portage. portuale vendors the whole bash phase runtime into ./bin/ (see bin/README.md), but the .py helpers that `import portage` (doins.py, xpak-helper.py, ...), their lib/portage import path, and cnf/sets/portage.conf still come from this checkout. The primitive harnesses (python/*_harness.py) import the real portage.versions / portage.dep from here."
 url = "https://github.com/gentoo/portage"
 kind = "reference-checkout"
 checkout_path = "3rdparty/portage"
