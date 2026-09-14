@@ -628,3 +628,20 @@ slot conflict` masked block), contradicting `docs/023-oracle.md`'s
 mg3-bt1 row ("real merges") and this plan's R2 target — see that file's
 "R2 oracle correction" + `TEST/logs/r2-blocker-20260914/`. Needs an
 owner decision before R2/R3 resume. Wave 3 not started.
+
+**Wave 2 closed + wave 3 done 2026-09-14:** R2 was re-scoped per the
+owner's decision (a): a genuine upstream oracle (`test_backtracking.py::
+testBacktrackingGoodVersionFirst` through portage's own
+`ResolverPlayground`) settles at `--backtrack=4` and portuale reaches
+the same fixpoint at 2/4, so #36 closed as not-reproducible-as-framed
+(`docs/023-oracle.md` "R2 — genuine upstream oracle"). Wave 3:
+**P2b-1** (`flat_field_on` dedup+sort), **P2b-2** (source-merge
+postinst `PORTAGE_UPDATE_ENV` + `A`) -- L3 smoke `l3-20260914T192147Z`
+now has **0 environment rows, 0 OWNER rows** (the 12 left are
+`BUILD_TIME`/`metadata`, filed #47); **C2** (depend-phase metadata
+provider; cache-less `porttest/docs` resolves, Rust-only pin);
+**R3a** (`docs/025b-complete-graph-nodes.md`, awaiting the owner's read
+before R3b); **H3** (remote `Packages` via
+`RemoteBinhostIndex::metadata_with_source`; #28 now 6/8 slots). Full
+wave verification: cargo fmt/clippy/test green, L1 `l1-20260914T215056Z`
+0 findings, full pytest green (count in the wave report).
