@@ -1823,4 +1823,75 @@ mod tests {
         });
         assert!(preserved.is_empty());
     }
+
+    /// `compute_multilib_category` on hand-built ELF headers -- one per branch
+    /// of the machine/class mapping (class suffix, x32, the specialized
+    /// riscv/mips/loong flag logic).
+    #[test]
+    fn compute_multilib_category_classifies_real_elf_headers() {
+        fn header(class: u8, machine: u16, flags: u32) -> Vec<u8> {
+            let mut data = vec![0u8; 64];
+            data[0..4].copy_from_slice(b"\x7fELF");
+            data[4] = class;
+            data[5] = 1; // little-endian
+            data[6] = 1; // EV_CURRENT
+            data[18..20].copy_from_slice(&machine.to_le_bytes());
+            let off = if class == 2 { 48 } else { 36 };
+            data[off..off + 4].copy_from_slice(&flags.to_le_bytes());
+            data
+        }
+        let dir = tempdir();
+        let write = |name: &str, bytes: &[u8]| {
+            let p = dir.join(name);
+            std::fs::write(&p, bytes).unwrap();
+            p
+        };
+        let cat = |class, machine, flags| {
+            compute_multilib_category(&write(
+                &format!("{class}-{machine}-{flags}.elf"),
+                &header(class, machine, flags),
+            ))
+        };
+        assert_eq!(cat(2, 62, 0).as_deref(), Some("x86_64"));
+        assert_eq!(cat(1, 3, 0).as_deref(), Some("x86_32"));
+        assert_eq!(cat(1, 62, 0).as_deref(), Some("x86_x32"));
+        assert_eq!(cat(2, 183, 0).as_deref(), Some("arm_64"));
+        assert_eq!(cat(1, 40, 0).as_deref(), Some("arm_32"));
+        assert_eq!(cat(2, 243, 0x0005).as_deref(), Some("riscv_lp64d"));
+        assert_eq!(cat(2, 243, 0x0001).as_deref(), Some("riscv_lp64"));
+        assert_eq!(cat(2, 8, 0).as_deref(), Some("mips_n64"));
+        assert_eq!(cat(1, 8, 0x0000_2000).as_deref(), Some("mips_o64"));
+        assert_eq!(cat(2, 258, 0b011).as_deref(), Some("loong_lp64d"));
+        // A non-ELF file and an unknown machine both yield `None`.
+        assert_eq!(compute_multilib_category(&write("not-elf", b"hello")), None);
+        assert_eq!(cat(2, 0xffff, 0), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `SonameDepsProcessor` output: provides become `PROVIDES`, needed
+    /// sonames become `REQUIRES` unless the package itself provides them, and
+    /// the exclude patterns filter both.
+    #[test]
+    fn generate_soname_deps_matches_the_portage_soname_deps_processor() {
+        let entries = vec![
+            NeededEntry::parse("X86_64;/usr/bin/x;;;libc.so.6;x86_64").unwrap(),
+            NeededEntry::parse("X86_64;/usr/lib64/libfoo.so.1;libfoo.so.1;;;x86_64").unwrap(),
+            // Consumes the soname it also provides: must not land in REQUIRES.
+            NeededEntry::parse("X86_64;/usr/lib64/libfoo.so.1;libfoo.so.1;;libfoo.so.1;x86_64")
+                .unwrap(),
+        ];
+        let (provides, requires) = generate_soname_deps(&entries, "", "");
+        assert_eq!(provides.as_deref(), Some("x86_64: libfoo.so.1\n"));
+        assert_eq!(requires.as_deref(), Some("x86_64: libc.so.6\n"));
+
+        // `PROVIDES_EXCLUDE`/`REQUIRES_EXCLUDE` globs.
+        let (provides, requires) = generate_soname_deps(&entries, "libfoo.so*", "libc.so*");
+        assert_eq!(provides, None);
+        assert_eq!(requires, None);
+
+        // An entry with no multilib category is the caller's own
+        // "unrecognized ELF" case and contributes nothing.
+        let no_cat = vec![NeededEntry::parse("X86_64;/usr/bin/x;;;libc.so.6;").unwrap()];
+        assert_eq!(generate_soname_deps(&no_cat, "", ""), (None, None));
+    }
 }

@@ -178,6 +178,146 @@ implements (`pretend.rs`'s `HELP_TEXT`, pinned by the contract suite).
   shared submodule) — neither team may unilaterally narrow it to make
   their side pass.
 
+## Current state
+
+portuale is a **working package manager**, used on real systems. It
+resolves, builds, merges, unmerges, and manages the world file for real
+Gentoo packages, with real ebuild-phase execution and real filesystem
+mutation. The `--pretend` resolver is validated against Portage's `emerge`
+at real-tree scale (pmtest's differential bed, L0: ~120 real atoms,
+96/120 byte-identical plans; L1: filesystem+VDB merge parity, clean).
+
+For the authoritative, cited-source record of every shipped capability
+read **[`what-this-proves.md`](what-this-proves.md)** (the living
+per-slice ledger) and `git log`. The per-slice "current state" narrative
+that used to live here is snapshotted in `history/agent-context-current-state-2026-09-10.md` (deleted
+2026-10-03; git history).
+
+**2026-10-11 #336 note (readability refactor, done):** the files were
+split by topic (`crates/<crate>/src/<area>/…`, plan
+`plans/2026-10-10-split-map.md`), functions with more than five
+parameters take one `<Fname>Args` struct, and code comments are short:
+long context, Portage citations and history now live in
+[`code-notes/`](code-notes/INDEX.md), one notes file per source file.
+Paths written before 2026-10-10 may predate this: see
+[`renames.tsv`](renames.tsv). Humans start at `docs/architecture.md`.
+
+**2026-10-03 close-out note:** the per-batch plans (`batch-2026-09-21` …
+`batch-2026-10-02`), the per-phase plans and `docs/history/` were deleted
+and condensed into [`lessons-of-backlog-ops-2026-10-03.md`](lessons-of-backlog-ops-2026-10-03.md)
+(how to work: oracle method, gates, beds, numbering — **read it before any
+slice**) and [`recap-of-backlog-ops-2026-10-03.md`](recap-of-backlog-ops-2026-10-03.md)
+(per-item status/residue/cuts). No batch is live; everything in the
+09-21 → 10-02 batches shipped or was filed with a number in
+`backlog-tasks.md`. The runbook those batches shared (paired branches
+and worktrees, commit per slice, `--no-ff` merge, Z0 baselines, merge-path
+gate, bed queue) is summarised in the lessons file; the stale-artifact
+trap (`cargo test` does not relink `target/release/portuale`; run
+`cargo build --release -p portuale` first) is there too.
+
+**2026-09-12 memory note:** backlog #24 (slot-operator rebuild undo
+path, S1–S7) is **closed** — the rebuild is a walked graph node, the
+`_eliminate_rebuilds` undo and the `_slot_change_probe` slot-move
+detector are in, L0 is regression-free, and the v2 residue
+(`#24b`–`#24f`, `IUSE_EFFECTIVE`, `--rebuild-if-*` through the same
+path) is filed in `scope-backlog.md` §A with its upstream tests. The
+one open judgment call (G0.4's S4 acceptance bar, `024-S4-review.md` D-1, in git history)
+is recorded in `024-oracle.md` §"Verdict" (git history), awaiting the
+owner.
+
+**2026-09-13 memory note:** backlogs #37 (build-phase env completeness)
+and #38 (packaging transforms: `dostrip`/`splitdebug`/`docompress`) are
+**closed**. #37: `emerge`/`--resume`/`--buildpkgonly` run every ebuild
+phase with the resolved config env (`portage_profile::phase_environ`:
+implicit USE, resolved `FEATURES`/`PORTAGE_FEATURES`, multilib vars,
+`SLOT`/`PORTAGE_REPO_*`, `SOURCE_DATE_EPOCH`), and the Rust execution
+gates read the resolved `FEATURES`. #38: Portage's `install_qa_check`
+gates fire on every source path, the transform output matches the
+portage-built sibling (including the oracle's own `.build-id`/`.debug`
+bytes; the only residue is Portage's own `setuid` link nondeterminism), and
+`ebuild_phases::run_instprep` runs the merge-time complement on every
+source and binary merge. L2 porttest is green from a
+clean run with the `l2-bpkgonly-env`, `l2-gpkg-dostrip-splitdebug` and
+`l2-gpkg-docompress` allowlists gone (evidence: `TEST/findings/l2.md`
+"#38 S0-S5"; plans `037_Build-phase-env-completeness.plan.md` and
+`038_Packaging-transforms.plan.md`, in git history). The L2 real set's next
+blockers are **#39** (gpkg metadata/`Packages` index, incl. the
+install-time `*DEPEND` rewrite) and the test-bed GPG check
+(`l2-binpkg-gpg-check`, backlog #43) — not env or transform parity.
+Backlog #42 (`emerge` never pre-cleans `PORTAGE_BUILDDIR`, found in #38
+S4) is **closed too**: `ebuild_phases::run_clean` runs the real `clean`
+phase before every source build, after a `--buildpkgonly` package, and
+after a merge unless `FEATURES=noclean` (Portage's `EbuildBuild.
+_start_pre_clean` + `dblink.merge()`'s tail); `run_qmerge` stays
+clean-free like Portage's `doebuild qmerge` (evidence: `TEST/findings/l2.md`
+"#42").
+
+**2026-09-13 (later):** #43 (binrepo `verify-signature` + the bed's
+gentoo binrepo) and #39/#40 (gpkg metadata completeness; the archive's
+`IUSE`/`IUSE_EFFECTIVE`/`SIZE`/`PROVIDES`/`REQUIRES`/6-field
+`NEEDED.ELF.2`/rewritten `*DEPEND`/`Packages` `EAPI`+`REPO` now match
+Portage) are **closed** — the L2 porttest track is `strict hard=0 soft=0`
+on every archive pair with all `l2-gpkg-*` allowlists deleted
+(`l2-20260913T232955Z`, `TEST/findings/l2.md` "#39 / #40"). **#29 is
+closed 2026-09-14**: the L2 real set (`l1-merge.txt`,
+`TEST/logs/l2-20260914T032915Z`) is green both directions
+(cross-install direction A 0 hard / 0 unexplained, control 0/0).
+
+**L3 (#30) is in progress 2026-09-14.** Harness shipped:
+`TEST/run/l3-source-parity.sh` + `TEST/layers/l3/build-and-merge.sh` +
+`TEST/atomlists/l3-{smoke,core,system}.txt`; full-tree snapshot with
+`SNAPSHOT_PRUNE`, `diff.py --layer l3 --tolerate-payload`, metrics JSON.
+The portage-vs-portage control pair is **0 unexplained on `l3-smoke`**.
+The candidate run surfaced four producer classes: the sub-slot
+self-collision (`find_collisions` given the full `slot/sub_slot`) and
+the "second `FEATURES=` in one make.conf replaces for real, stacks for
+portuale" semantics are fixed with Rust tests; the ncurses `OWNER 1:1`
+vs `0:0` and the saved-env accumulation (`A`/`RESTRICT`/stray locals)
+are filed with repros in `TEST/findings/l3.md`. Per the S4 stop rule,
+`l3-core` (344 ebuilds) and `@system` (368) are not started until those
+two are fixed.
+
+**2026-09-15 memory note:** backlog #46 (md5-cache validation) is
+**closed**. The read path now validates a present `metadata/md5-cache`
+entry the way Portage's `_pull_valid_cache` does (`portage-repo::md5_dict`:
+`_md5_`, EAPI, `_eclasses_` -- pairs for the pregen cache, triples for
+the depcachedir) and falls through to the depcachedir/depend-phase
+rungs on a reject; no provider returns it as-is, an ebuild-less entry is
+trusted, and a provider failure never falls back to stale data. All 565
+committed fixture entries were regenerated with Portage's `egencache` first
+(byte-identical to `portuale emerge --regen`), the 21 deliberately
+cache-less ebuilds stay cache-less, and the guard
+`test_committed_fixture_md5_cache_entries_match_their_ebuilds` keeps
+them valid. L2_STALECACHE=1, the #49 fixture-oracle stale case, the L0
+image audit (gentoo 0 stale) and L1 porttest are green. Detail:
+`history/05.046-metadata_md5-cache.opus.md` (git history),
+`TEST/findings/l2.md` S0-S4, `docs/on-disk-caches.md` §2.
+
+**2026-09-15 (later) memory note:** backlog #55 (GLEP 82
+`layout.conf` `cache-formats`) is **closed**. The key is resolved on
+`RepoConfig` with Portage's rule (lowercase + split; empty -> auto-detect
+`md5-dict` then `pms`), and the read path honours it: the pregen
+`metadata/md5-cache` rung is used only when the first **known** format is
+`md5-dict` and `FEATURES=metadata-transfer` is absent (Portage's
+`porttree.py:322`); otherwise `repo_aux_metadata` goes straight to the
+depcachedir/depend provider, and `mrg-director`'s `Md5Cache::category`
+lists `*.ebuild`. `--regen` follows `egencache`'s writer targets -- it
+skips a `pms`-only repo with a message and exit 1 instead of writing the
+wrong directory. The one narrowing: no `pms` reader exists, so a
+`pms`-first repo takes the depend-phase fallback (same metadata as Portage
+reads from a valid `pms` cache; slower, not different). Container oracle:
+`TEST/findings/l2.md` "## #55 S0" (cells a-h, run
+`c55-20260915T172758Z`); L0 after the change is byte-identical to the
+pre-change baseline (clean 100 / parity 0.833). Detail and decisions:
+`history/07.55-layout_conf_cache_formats.opus.md` (git history).
+
+For what is **genuinely still open** — Portage behaviour not ported
+to either side, the deliberate cuts, the standing non-goals — see
+**[`scope-backlog.md`](scope-backlog.md)** (Part 2 = remaining work,
+Part 3 = non-goals). Keep that file current when a slice closes an entry.
+When scoping the next slice, re-ground candidates in current code
+(`what-this-proves.md` / `git log` / the source), never in a stale list.
+
 ## Real ebuild phase execution + filesystem merge
 
 Live. `ebuild <file> install|merge|unmerge|package` and non-`--pretend`
