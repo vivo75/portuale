@@ -31,6 +31,7 @@ PARSE_VALID_ATOMS = [
     "=dev-libs/foo-1.0b",  # letter suffix
     "=dev-libs/foo-1.0_pre2",  # underscore suffix
     "=dev-libs/foo-1.0_alpha3-r4",
+    "!=dev-libs/foo-1.0_p1-r0",  # explicit -r0 (tree-wide differential, §3)
     "dev-libs/foo:=",  # slot operator, no explicit slot: any slot acceptable
     "dev-libs/foo:*",  # same, "*" form
     "dev-libs/foo:0=",  # slot operator with an explicit slot ("slot=" form)

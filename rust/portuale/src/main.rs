@@ -97,7 +97,17 @@ fn print_applets() {
 }
 
 fn run_emerge(args: &[String]) -> ExitCode {
-    pretend::run(args)
+    let code = pretend::run(args);
+    // `docs/second_python_copy_removal.md` §4: the L0 bed and the
+    // contract suite ask for the count of dependency tokens the resolver
+    // dropped as unparseable, and assert it is zero.
+    if std::env::var_os("PORTUALE_REPORT_UNPARSED_DEP_TOKENS").is_some() {
+        eprintln!(
+            "portuale: unparsed dependency tokens: {}",
+            portage_repo::unparsed_dep_tokens()
+        );
+    }
+    code
 }
 
 fn run_ebuild(args: &[String]) -> ExitCode {

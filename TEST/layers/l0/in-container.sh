@@ -14,6 +14,8 @@
 #   L0_SKIP_PORTAGE_UPGRADE=1   skip the `=sys-apps/portage-<PIN>` step
 #   L0_PORTAGE_PIN=3.0.82.2     the portage version portuale mirrors
 #   L0_EMERGE_OPTS="-pv"        emerge flags for every probe
+#   L0_SKIP_INVARIANTS=1        skip the extra portuale --json/--tree/--quiet
+#                               runs read by TEST/compare/check-invariants.py
 
 set -u
 ATOMLIST=${1:?atom list path}
@@ -36,7 +38,7 @@ export LC_ALL=C.UTF-8 TZ=UTC
 export PYTHONHASHSEED=0
 umask 022
 
-mkdir -p "$OUTDIR"/real "$OUTDIR"/portuale
+mkdir -p "$OUTDIR"/real "$OUTDIR"/portuale "$OUTDIR"/portuale-modes
 : > "$OUTDIR/meta.tsv"          # slug \t kind \t real_rc \t ptl_rc
 : > "$OUTDIR/run.log"
 
@@ -102,6 +104,19 @@ probe() {
   timeout 600 "$REAL" $EOPTS --color=n "$atom" > "$OUTDIR/real/$s.txt" 2>&1 ; rrc=$?
   # shellcheck disable=SC2086
   timeout 600 "$PTL"  $EOPTS --color=n "$atom" > "$OUTDIR/portuale/$s.txt" 2>&1 ; prc=$?
+  if [ "${L0_SKIP_INVARIANTS:-0}" != 1 ]; then
+    # Output-invariant input (docs/second_python_copy_removal.md §1/§2):
+    # the same probe in the other display modes; stdout only.
+    local mode
+    for mode in tree quiet ; do
+      # shellcheck disable=SC2086
+      timeout 600 "$PTL" $EOPTS --color=n "--$mode" "$atom" \
+        > "$OUTDIR/portuale-modes/$s.$mode.txt" 2>/dev/null
+    done
+    # shellcheck disable=SC2086
+    PORTUALE_REPORT_UNPARSED_DEP_TOKENS=1 timeout 600 "$PTL" $EOPTS --color=n --json "$atom" \
+      > "$OUTDIR/portuale-modes/$s.json.txt" 2> "$OUTDIR/portuale-modes/$s.json.stderr"
+  fi
   printf '%s\t%s\t%s\t%s\n' "$s" "$kind" "$rrc" "$prc" >> "$OUTDIR/meta.tsv"
   log "  [$kind] $atom  (real rc=$rrc  ptl rc=$prc)"
 }

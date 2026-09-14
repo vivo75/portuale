@@ -86,7 +86,9 @@ def _format_parse(s):
         revision = ""
     else:
         _, _, version, rev = catpkgsplit(a.cpv)
-        revision = "" if rev == "r0" else rev[1:]
+        # catpkgsplit reports an absent revision as "r0" too; only an
+        # explicit "-r0" in the atom is a revision field.
+        revision = "" if rev == "r0" and not a.cpv.endswith("-r0") else rev[1:]
 
     category, package = a.cp.split("/", 1)
     fields = [

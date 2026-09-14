@@ -487,6 +487,30 @@ pub fn resolver_debug() -> bool {
     RESOLVER_DEBUG.load(AtomicOrdering::Relaxed)
 }
 
+/// Dependency tokens the resolver dropped because `portage_dep::parse_atom`
+/// could not read them (`docs/second_python_copy_removal.md` §4). Real
+/// `use_reduce(token_class=Atom)` raises `InvalidDependString` on such a
+/// token; portuale skips it, so a grammar gap in `portage-dep` would
+/// otherwise vanish silently from the graph. Every skip goes through
+/// `note_unparsed_dep_token`; `emerge --pretend` reports the total on
+/// stderr when `PORTUALE_REPORT_UNPARSED_DEP_TOKENS` is set, and the L0
+/// bed and the contract suite assert it stays zero.
+static UNPARSED_DEP_TOKENS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Record one dependency token dropped as unparseable (debug builds also
+/// name it on stderr).
+pub fn note_unparsed_dep_token(token: &str, site: &str) {
+    UNPARSED_DEP_TOKENS.fetch_add(1, AtomicOrdering::Relaxed);
+    if cfg!(debug_assertions) {
+        eprintln!("portage-repo: dropped unparseable dependency token {token:?} ({site})");
+    }
+}
+
+/// How many dependency tokens this process dropped as unparseable.
+pub fn unparsed_dep_tokens() -> usize {
+    UNPARSED_DEP_TOKENS.load(AtomicOrdering::Relaxed)
+}
+
 /// `PORTUALE_DYNAMIC_DEPS_APPEND` (default off): the gate for the
 /// `FakeVartree._apply_dynamic_deps` built-`:=` append (A1, #26). A1
 /// landed the overlay helper and the append, but two #24 oracle pins
@@ -17018,6 +17042,9 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
     }) = state.queue.pop_front()
     {
         let Some(atom) = portage_dep::parse_atom(&current_atom) else {
+            if owner.is_some() {
+                note_unparsed_dep_token(&current_atom, "resolver queue");
+            }
             continue;
         };
         if atom.blocker != portage_dep::Blocker::None {

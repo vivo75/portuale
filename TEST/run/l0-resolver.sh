@@ -35,6 +35,7 @@ echo ">>> running L0 probes in $IMAGE  (out: $OUT)"
 podman_run_portuale "porttest-l0-$$" \
   -e "L0_SKIP_PORTAGE_UPGRADE=${L0_SKIP_PORTAGE_UPGRADE:-0}" \
   -e "L0_SKIP_MULTI=${L0_SKIP_MULTI:-0}" \
+  -e "L0_SKIP_INVARIANTS=${L0_SKIP_INVARIANTS:-0}" \
   -e "L0_EMERGE_OPTS=${L0_EMERGE_OPTS:--pv}" \
   -e "L0_PORTAGE_PIN=${L0_PORTAGE_PIN:-3.0.82.2}" \
   --entrypoint /bin/bash "$IMAGE" \
@@ -44,6 +45,10 @@ echo ">>> comparing"
 set +e
 python3 "$TEST_DIR/compare/resolve-compare.py" "$OUT" "$TEST_DIR/compare/known-divergences.yaml"
 rc=$?
+# Expectation-free output invariants over portuale's own output
+# (docs/second_python_copy_removal.md §1/§2); a violation fails the run.
+python3 "$TEST_DIR/compare/check-invariants.py" "$OUT" | tee "$OUT/invariants.txt"
+[ "${PIPESTATUS[0]}" = 0 ] || [ "$rc" != 0 ] || rc=1
 set -e
 
 ln -sfn "$RUN/l0-report.txt" "$LOGS_DIR/l0-report.txt"

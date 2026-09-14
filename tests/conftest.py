@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+import corpus
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RUST_DIR = REPO_ROOT / "rust"
 VERSIONS_PYTHON_HARNESS = REPO_ROOT / "python" / "versions_harness.py"
@@ -141,6 +143,29 @@ def mrg_binary(portuale_binary: Path, tmp_path_factory: pytest.TempPathFactory) 
 @pytest.fixture(scope="session")
 def emerge_pretend_python() -> list[str]:
     return [sys.executable, str(EMERGE_PRETEND_PYTHON_REFERENCE)]
+
+
+@pytest.fixture(autouse=True)
+def _corpus_context(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory):
+    """Tell `corpus.py` which test is running (entries are keyed by node
+    id) and where pytest's base temp is (normalised to `<TMP>`)."""
+    corpus.set_basetemp(str(tmp_path_factory.getbasetemp()))
+    token = corpus.current_nodeid.set(request.node.nodeid)
+    yield
+    corpus.current_nodeid.reset(token)
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    corpus.write_blessed()
+    if corpus.drifted:
+        terminalreporter.section("corpus drift (flagged for review)")
+        for line in corpus.drifted:
+            terminalreporter.line(line)
+        terminalreporter.line(
+            "Rust output differs from the harvested Rust==Python agreement "
+            "(tests/corpus.py). Review, then re-run with PORTUALE_CORPUS_BLESS=1 "
+            "to accept."
+        )
 
 
 @pytest.fixture(autouse=True)

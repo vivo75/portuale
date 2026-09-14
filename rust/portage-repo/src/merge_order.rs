@@ -291,6 +291,7 @@ pub(crate) fn dep_edges_from_metadata(
             }
             let disjunctive = alt.is_some();
             let Some(dep_atom) = portage_dep::parse_atom(&t) else {
+                crate::note_unparsed_dep_token(&t, "merge-order digraph");
                 continue;
             };
             if dep_atom.blocker != portage_dep::Blocker::None {

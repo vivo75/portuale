@@ -33,6 +33,8 @@ from pathlib import Path
 
 import pytest
 
+import corpus
+
 # (description, args, expected_exit_code) -- exit codes: 0 success,
 # 1 resolution/parse error OR autounmask config change still needed
 # (real `action_build`: `if not success: return 1` fires for any
@@ -2121,9 +2123,23 @@ CASES = [
 
 
 def _run(cmd: list[str], args: list[str], env: dict[str, str]) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    result = subprocess.run(
         [*cmd, *args], capture_output=True, text=True, env=env, check=False
     )
+    impl = "python" if str(cmd[-1]).endswith("emerge_pretend_reference.py") else "rust"
+    corpus.record_call(impl, args, env, result)
+    if impl == "rust":
+        result.corpus_key, result.corpus_drift = corpus.check_contract_call(args, env, result)
+    return result
+
+
+def _assert_harvested(result: subprocess.CompletedProcess) -> None:
+    """Strict pin for a call whose only expectation used to be "Rust ==
+    the Python reference": the output must still equal the agreement
+    harvested before the reference was removed (`tests/corpus.py`;
+    accept an intended change with `PORTUALE_CORPUS_BLESS=1`)."""
+    assert result.corpus_key is not None, "no harvested corpus entry for this call"
+    assert corpus.BLESS or result.corpus_drift is None, result.corpus_drift
 
 
 def _all_masked(atom: str, cpv_repo: str, reason: str) -> str:
