@@ -561,6 +561,23 @@ fn distdir_writable(distdir: &Path) -> bool {
     unsafe { libc::access(c.as_ptr(), libc::W_OK) == 0 }
 }
 
+/// Real `fetch.py:1503`: check if there's enough free space on the
+/// filesystem holding `distdir` to accommodate a file of size `bytes`.
+/// Uses `os.statvfs` (real `_emerge/main.py:1063`) to get filesystem stats.
+fn has_enough_space(distdir: &Path, bytes: u64) -> bool {
+    let Ok(c) = std::ffi::CString::new(distdir.as_os_str().as_encoded_bytes()) else {
+        return false;
+    };
+    let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+    // SAFETY: `c` is a NUL-terminated path; `stat` is a valid mutable buffer.
+    if unsafe { libc::statvfs(c.as_ptr(), &mut stat) } != 0 {
+        return false;
+    }
+    // Available space = block size * available blocks.
+    let available_bytes = (stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64);
+    available_bytes >= bytes
+}
+
 /// site): for every file `src_uri` (this ebuild's own real, md5-cache-
 /// sourced `SRC_URI` string) names for the current USE set, fetches it
 /// into `options.distdir` unless a real, Manifest-verified copy is
@@ -661,8 +678,8 @@ pub fn fetch_src_uri(
         // Real `fetch.py:1503-1513`: before any download (and regardless
         // of `RESTRICT=fetch`/`mirror`, which only shape the download
         // list), a missing file is copied from the first on-filesystem
-        // mirror that has it.
-        if !already_verified && !dest.exists() {
+        // mirror that has it -- only if there is enough free space.
+        if !already_verified && !dest.exists() && has_enough_space(&options.distdir, digests.size) {
             let fsmirrors = fsmirrors(&custommirrors, &options.gentoo_mirrors);
             if copy_from_fsmirrors(&fsmirrors, &entry.filename, &digests.hashes, options, &dest)? {
                 match verify_digests(&dest, digests) {
@@ -1774,6 +1791,53 @@ mod tests {
         .unwrap_err();
         assert!(err.contains("127.0.0.1:1"), "{err}");
         assert!(!err.contains(&mirror_dir.display().to_string()), "{err}");
+    }
+
+    #[test]
+    fn has_enough_space_checks_free_disk_space() {
+        let distdir = tempdir();
+        // Typical systems have at least a few GB of free space;
+        // test with a huge number that should fail.
+        assert!(
+            has_enough_space(&distdir, 100),
+            "typical DISTDIR should have more than 100 bytes free"
+        );
+        // A ridiculously large number (larger than most disks)
+        let impossible_size = u64::MAX / 2;
+        assert!(
+            !has_enough_space(&distdir, impossible_size),
+            "should not have {impossible_size} bytes free"
+        );
+    }
+
+    #[test]
+    fn fetch_src_uri_fsmirrors_with_layout_conf_resolution() {
+        let mirror = tempdir();
+        // Create a file in the filesystem mirror using flat layout
+        fs::write(mirror.join("hello-1.0.tar.gz"), "hello world").unwrap();
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+
+        // Fetch from the filesystem mirror (flat layout)
+        let result = fetch_src_uri(
+            &pkg_dir,
+            "http://127.0.0.1:999/hello-1.0.tar.gz",
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![mirror.display().to_string()],
+                ..FetchOptions::default()
+            },
+        );
+
+        assert!(
+            result.is_ok(),
+            "should successfully copy from filesystem mirror"
+        );
+        assert_eq!(
+            fs::read_to_string(distdir.join("hello-1.0.tar.gz")).unwrap(),
+            "hello world"
+        );
     }
 
     /// Real `RESTRICT=fetch` (`fetch.py:1061`/`:1167`): a plain `SRC_URI`
