@@ -617,3 +617,14 @@ the long one).
 - L0/L1/L2 never regressed at any commit; contract suite green;
   `backlog-tasks.md`, `scope-backlog.md` and the findings files updated
   in the closing commits.
+
+**Wave 2 progress 2026-09-14:** P1 (#44 fixed; 0 OWNER rows at L3,
+L1 0 findings), P2a (#45 bisected: RESTRICT flatten + missing
+postinst `PORTAGE_UPDATE_ENV`; `A` no longer reproduces), C1 (#41
+entry point, committed), H2 (#28 `PackagesDb` CONTENTS on the
+production path, committed). **R2 stopped**: a fresh oracle shows real
+3.0.82.2 *aborts* `mgfa --backtrack=1` (partial list + `backtracking:
+slot conflict` masked block), contradicting `docs/023-oracle.md`'s
+mg3-bt1 row ("real merges") and this plan's R2 target — see that file's
+"R2 oracle correction" + `TEST/logs/r2-blocker-20260914/`. Needs an
+owner decision before R2/R3 resume. Wave 3 not started.

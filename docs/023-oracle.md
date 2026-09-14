@@ -85,3 +85,40 @@ search can see the conflict), a522084-`B-0` (needs #24 `:=` rebuild;
 **shipped 2026-09-12, row MATCH**), mg3-bt1 (needs #36 mask-aware
 selection fallback). C4 acceptance met: no table entry moved down;
 mg2 + 375573-unit + mg3-default are new matches; the rest held.
+
+## R2 oracle correction (2026-09-14, wave 2 of the Tier5/2 slicing)
+
+The mg3-bt1 row above says real settles all-`-1.0`s at `--backtrack=1`
+("mask-aware selection picks `mgfb-1.0` directly"). **A fresh oracle run
+falsifies that**: real aborts at bt1 on the current fixtures, on both
+pinned portage versions.
+
+Repro (fixture tree staged by `TEST/run/abort-capture.sh`; scripts and
+captures kept in `TEST/logs/r2-blocker-20260914/`):
+
+```sh
+# real 3.0.82.2 first, then the fixture env
+FEATURES="-cgroup" ACCEPT_KEYWORDS="~amd64" emerge -q -1 --usepkg=n =sys-apps/portage-3.0.82.2
+PORTAGE_CONFIGROOT=/fixtures ROOT=/fixtures emerge --pretend --backtrack=1 dev-libs/mgfa
+```
+
+| version | budget | real result |
+|---|---|---|
+| 3.0.82.2 | default | `[mgfc-1, mgfb-1, mgfa-1]`, rc 0 (matches the doc) |
+| 3.0.82.2 | `--backtrack=1` | rc 1: partial list `[mgfc-1, mgfc-2, mgfb-2, mgfa-1]` + masked block `=dev-libs/mgfc-1 … (masked by: backtracking: slot conflict)` |
+| 3.0.81.3 | `--backtrack=1` | identical shape to 3.0.82.2 |
+
+So real's conflict feedback at bt1 masks `mgfc-1` (the atom `mgfa`
+requires) rather than `{mgfc-3,2}`, then has no budget left and aborts.
+Portuale's current bt1 pin is a different failure shape
+(`[mgfc-1, mgfb-2, mgfa-1]` + "Multiple package instances…"), and the
+plan's R2 target ("real merges, portuale reports") does not hold.
+
+**Decision needed (owner):** re-scope R2 — either (a) re-capture the
+intended upstream oracle (`test_slot_conflict_mask_update.py` at a tight
+budget) on a fixture where real genuinely settles and implement the
+selection-time probe against that, (b) pin real's actual bt1 behaviour
+(partial list + `backtracking: slot conflict` masked block) as the
+target, which is a different mechanism (mask-choice/abort rendering, not
+selection), or (c) close #36 as not-reproducible and fold the residue
+into the backtracking-fidelity work. R2 is stopped until then.
