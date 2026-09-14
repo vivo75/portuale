@@ -48,11 +48,13 @@
 //! algorithm a fixed seam to plug into. Slots whose production path runs
 //! through the trait (`SchedulerPolicy` via `run_build_scheduler`,
 //! `MergeEngine` via the merge dispatch, `NewsSelector` via
-//! `--check-news`) prove the seam carries real traffic; the rest stay
+//! `--check-news`, `Fetcher` via `portuale::fetch::fetch_src_uri`'s
+//! candidate loop) prove the seam carries real traffic; the rest stay
 //! swappable behind `Director`'s delegation methods until their second
 //! algorithm lands. (`Fetcher`'s transport is shared with
-//! `portuale::fetch` via `portage_fetch::download_via_wget`, but the
-//! trait itself is not yet dispatched on the production path.)
+//! `portuale::fetch` via `portage_fetch::download_via_wget`; Manifest
+//! verification stays at that call site, the seam's documented
+//! narrowing.)
 
 #![deny(missing_docs)]
 
@@ -206,31 +208,56 @@ pub trait RepoCache {
 /// `portage-repo` and is not named here — a director that needs it wraps
 /// that function behind an identical shaped trait.
 ///
-/// The trait takes the flattened per-file [`portage_fetch::SrcUriEntry`]
-/// (its `uri` + `override_mirror`/`override_fetch` flags already
-/// resolved by `flatten_src_uri`) rather than raw `SRC_URI` text, so a
-/// fetch implementation owns the mirror/verification policy but not the
-/// flag-aware parse.
+/// The trait takes one already-assembled [`FetchRequest`] -- the exact
+/// resolved candidate URI the caller's candidate loop popped (a
+/// `mirror_url` for a mirror root, else the entry's literal/expanded
+/// URI), the local `dest` it must land in, and the fresh-vs-resume bit
+/// -- not raw `SRC_URI` text or a [`portage_fetch::SrcUriEntry`], so
+/// candidate assembly and the `mirror+`/`fetch+` override policy stay at
+/// the call site while the transport owns only the download.
 ///
-/// Single by design (no second implementation planned): real has a
-/// second fetch method -- the local-`fsmirror` copy (`fetch.py:1503`,
-/// `/`-rooted `custommirrors["local"]`/`GENTOO_MIRRORS` dirs tried via
-/// `shutil.copyfile` before any `FETCHCOMMAND`) -- but it verifies
-/// against Manifest digests resolved outside this seam, and this trait
-/// deliberately passes no Manifest context (only `entry` + `distdir`),
-/// so no second transport can satisfy the verification clause from
-/// inside a library crate. The optimization itself is out of scope in
-/// portuale too (`resolve_mirror_candidates` documents the cut), so
-/// there is nothing to factor out behind this seam either. (What *is*
-/// newly real here versus the old marker: the download half. Manifest
-/// digest verification stays at the `fetch_src_uri` call site, which
-/// holds the `Manifest` entry -- see [`WgetFetcher`].)
+/// Deliberate narrowing: real's Manifest digest verification and the
+/// local-`fsmirror` copy are *not* behind this seam, because both need
+/// the file's `Manifest` entry and a [`FetchRequest`] deliberately
+/// carries no Manifest context. Both shipped in `portuale::fetch`
+/// itself: `fsmirrors`/`copy_from_fsmirrors` (real `fetch.py:1503`, the
+/// `/`-rooted `custommirrors["local"]`/`GENTOO_MIRRORS` dirs copied via
+/// `shutil.copyfile` before any `FETCHCOMMAND`) and the `verify_digests`
+/// call after each candidate attempt. The fsmirror copy is a
+/// pre-download step of that one call-site sequence, not a swappable
+/// transport, so it is no second `Fetcher` implementation either;
+/// Manifest digest verification stays at the `fetch_src_uri` call site,
+/// which holds the `Manifest` entry -- see [`WgetFetcher`].
 pub trait Fetcher {
-    /// Download `entry`'s file into `distdir` (creating it if needed),
-    /// verifying real `Manifest` digests (`size` + `BLAKE2B`/`SHA512`),
-    /// and return the manifested local path. `Err` with an explanation
-    /// when the download or verification fails.
-    fn fetch(&self, entry: &portage_fetch::SrcUriEntry, distdir: &Path) -> Result<PathBuf, String>;
+    /// Download `request.uri` to `request.dest`, continuing a non-empty
+    /// partial when `request.resume` is set (real `RESUMECOMMAND`) and
+    /// starting fresh otherwise (real `FETCHCOMMAND`). `Err` with an
+    /// explanation when the transport fails; digest verification is the
+    /// caller's, per the trait's documented narrowing.
+    fn fetch(&self, request: &FetchRequest<'_>) -> Result<(), String>;
+}
+
+/// One resolved candidate download the candidate loop hands to a
+/// [`Fetcher`]: the URI it popped, the local distfile path it must land
+/// in, and whether the transport should continue an existing partial
+/// (real `RESUMECOMMAND`) or start fresh (real `FETCHCOMMAND`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FetchRequest<'a> {
+    /// The `SRC_URI` filename this candidate serves (the `dest`
+    /// basename; carried for implementations that need the file
+    /// identity).
+    pub filename: &'a str,
+    /// The fully resolved URI to download.
+    pub uri: &'a str,
+    /// The local path the download must be written to (the call site's
+    /// already-computed `distdir/<filename>`; never re-derived here, so
+    /// an implementation cannot drift from the path the caller locks and
+    /// verifies).
+    pub dest: &'a Path,
+    /// `true` to continue a non-empty partial at `dest` -- real
+    /// `make.globals`'s default `RESUMECOMMAND`, byte-for-byte
+    /// `FETCHCOMMAND` plus `-c` -- or `false` for `FETCHCOMMAND`.
+    pub resume: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -863,31 +890,28 @@ impl RepoCache for VolatileCache {
 }
 
 /// The current `Fetcher`: real-src via the shared `wget` transport
-/// (`portage_fetch::download_via_wget`, the same `FETCHCOMMAND` the
-/// `portuale::fetch::fetch_src_uri` candidate loop runs).
+/// (`portage_fetch::download_via_wget`, the same `FETCHCOMMAND`/
+/// `RESUMECOMMAND` the `portuale::fetch::fetch_src_uri` candidate loop
+/// runs).
 ///
-/// An already-materialized `distdir/<filename>` is returned as-is (the
-/// same already-fetched short-circuit real `fetch.py`'s own
-/// `_check_distfile` gives before ever spawning `FETCHCOMMAND`);
-/// otherwise the entry's own `uri` is downloaded fresh (non-resume --
-/// resume applies to a partial left by an earlier candidate, which only
-/// the full candidate loop in `portuale::fetch` can see).
+/// One request, one `wget` invocation: `request.resume` picks real
+/// `RESUMECOMMAND` (`wget -c`) over `FETCHCOMMAND`, and `request.dest`
+/// is written exactly as given. The already-materialized short-circuit
+/// real `fetch.py`'s own `_check_distfile` gives before ever spawning
+/// `FETCHCOMMAND` lives at the call sites (`Director::fetch`'s
+/// `distdir/<filename>` check and `fetch_src_uri`'s own
+/// `already_verified` check), not here -- only the caller can see the
+/// `Manifest` entry that verification needs.
 ///
 /// Deliberate narrowing, documented on the trait: Manifest digest
 /// verification stays at the `fetch_src_uri` call site (it needs the
 /// `Manifest` entry for the file, context this seam deliberately does
-/// not pass), so a second transport behind this seam downloads but never
+/// not pass), so a transport behind this seam downloads but never
 /// verifies on its own.
 pub struct WgetFetcher;
 impl Fetcher for WgetFetcher {
-    fn fetch(&self, entry: &portage_fetch::SrcUriEntry, distdir: &Path) -> Result<PathBuf, String> {
-        std::fs::create_dir_all(distdir).map_err(|e| format!("{}: {e}", distdir.display()))?;
-        let dest = distdir.join(&entry.filename);
-        if dest.is_file() {
-            return Ok(dest);
-        }
-        portage_fetch::download_via_wget(&entry.uri, &dest, false)?;
-        Ok(dest)
+    fn fetch(&self, request: &FetchRequest<'_>) -> Result<(), String> {
+        portage_fetch::download_via_wget(request.uri, request.dest, request.resume)
     }
 }
 
@@ -1198,13 +1222,28 @@ impl<S, D, C, F, M, B, N, P> Director<S, D, C, F, M, B, N, P>
 where
     F: Fetcher,
 {
-    /// Materialize one `SRC_URI` file through the director's fetcher.
+    /// Materialize one `SRC_URI` file through the director's fetcher:
+    /// an already-materialized `distdir/<filename>` is returned as-is
+    /// (real `fetch.py`'s own `_check_distfile` short-circuit), else the
+    /// entry's own `uri` is downloaded fresh (non-resume -- the director
+    /// holds no candidate loop and so no partial-file state).
     pub fn fetch(
         &self,
         entry: &portage_fetch::SrcUriEntry,
         distdir: &Path,
     ) -> Result<PathBuf, String> {
-        self.fetcher.fetch(entry, distdir)
+        std::fs::create_dir_all(distdir).map_err(|e| format!("{}: {e}", distdir.display()))?;
+        let dest = distdir.join(&entry.filename);
+        if dest.is_file() {
+            return Ok(dest);
+        }
+        self.fetcher.fetch(&FetchRequest {
+            filename: &entry.filename,
+            uri: &entry.uri,
+            dest: &dest,
+            resume: false,
+        })?;
+        Ok(dest)
     }
 }
 
@@ -1544,33 +1583,44 @@ mod tests {
         assert_eq!(empty.category("dev-libs"), vec!["c-3.0"]);
     }
 
-    /// `Fetcher::fetch` takes a flattened per-file [`SrcUriEntry`] and
-    /// returns the manifested local path; consuming the structured entry
-    /// (not raw `SRC_URI` text) keeps the mirror/verification policy
-    /// inside the implementation. The marker's own transport shells out to
-    /// real `wget` and is live-tested in `portuale::fetch`, not here --
-    /// this only pins the seam's shape.
+    /// `Fetcher::fetch` takes one already-assembled [`FetchRequest`]
+    /// (resolved candidate URI + local `dest` + fresh-vs-resume) and
+    /// downloads it through the shared transport; consuming the resolved
+    /// request keeps candidate assembly and Manifest verification at the
+    /// caller (`portuale::fetch::fetch_src_uri`'s candidate loop, where
+    /// the `has_partial` bit and the `Manifest` entry live -- the
+    /// already-materialized short-circuit is the caller's too). The
+    /// transport shells out to real `wget` and is live-tested in
+    /// `portuale::fetch`, not here -- this only pins the seam's shape.
     #[test]
-    fn fetcher_returns_a_manifested_path() {
+    fn fetcher_takes_one_resolved_candidate_request() {
         let fetcher = WgetFetcher;
-        let entry = portage_fetch::SrcUriEntry {
-            uri: "https://example.invalid/x.tgz".to_string(),
-            filename: "x.tgz".to_string(),
-            override_mirror: false,
-            override_fetch: false,
-        };
-        // Unfetchable host, nothing pre-materialized: the shared `wget`
-        // transport fails, and the seam reports it (no panic, no
-        // half-written file left behind).
         let dir = tempdir("mrg_director_fetch");
-        assert!(fetcher.fetch(&entry, &dir).is_err());
-        assert!(!dir.join("x.tgz").exists());
+        let dest = dir.join("x.tgz");
+        let request = FetchRequest {
+            filename: "x.tgz",
+            uri: "https://example.invalid/x.tgz",
+            dest: &dest,
+            resume: false,
+        };
+        // Unfetchable host, no partial: the shared `wget` transport
+        // fails, and the seam reports it (no panic, no half-written file
+        // left behind -- the fresh-fetch cleanup is the shared
+        // transport's own).
+        assert!(fetcher.fetch(&request).is_err());
+        assert!(!dest.exists());
 
-        // An already-materialized `distdir/<filename>` is returned as-is
-        // without touching the network (real `_check_distfile`'s own
-        // already-fetched short-circuit).
-        std::fs::write(dir.join("x.tgz"), b"already here").unwrap();
-        assert_eq!(fetcher.fetch(&entry, &dir).unwrap(), dir.join("x.tgz"));
+        // `resume` rides the same request (real `RESUMECOMMAND` vs
+        // `FETCHCOMMAND`): the candidate loop's partial-file bit is
+        // carried into the transport, not re-derived inside the seam.
+        assert!(
+            fetcher
+                .fetch(&FetchRequest {
+                    resume: true,
+                    ..request
+                })
+                .is_err()
+        );
 
         // The unit constructors carry the common-case defaults (local,
         // unqualified, no replace).

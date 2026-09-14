@@ -16589,3 +16589,12 @@ python3 -m pytest tests/test_emerge_pretend_contract.py -q \
   -k "use_unsat or or_group_use_unsat or deep_walk_dispatches"
 # -> 5 passed
 ```
+
+**mrg-director `Fetcher` on the production path (backlog #28 H1, 2026-09-14).** The `fetch_src_uri` candidate loop now dispatches every per-candidate download through the director's `Fetcher` seam instead of calling the transport wrappers inline. The trait was reshaped to carry exactly the production operation -- one `FetchRequest { filename, uri, dest, resume }` (a resolved candidate URI, the call site's already-computed destination, and real's fresh-vs-resume bit) -- because the old `entry + distdir` signature could not express a resolved-mirror candidate or the `RESUMECOMMAND` switch, and the plan's rule was "change the trait, not the fetch semantics". `WgetFetcher` is now a pure `portage_fetch::download_via_wget` pass-through honoring `resume`; Manifest digest verification, the
+`already_verified` short-circuit and the local-`fsmirror` pre-copy stay at the `fetch_src_uri` call site, which is where the `Manifest` entry lives (the trait's documented narrowing). `Director::fetch` keeps its external signature and its own `_check_distfile`-style short-circuit. The trait's now-false "single by design / fsmirrors out of scope" doc was corrected. Behaviour-neutral by construction: same transport, same retry/checksum-failure handling, same error strings; the whole portuale fetch test set (including the resume-after-drop and mirror-cache tests) passes unchanged, plus the updated seam-shape unit in `mrg-director`.
+
+```sh
+cargo test --release -p portuale fetch_src_uri
+cargo test --release -p mrg-director fetcher
+# -> all green; the candidate loop's downloads run through Fetcher
+```

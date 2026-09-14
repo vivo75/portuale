@@ -3,7 +3,7 @@ SRC=docs/backlog_tier_5_and_2_sliced.opus.md @ main:69f5877 2026-09-14; AUTH=SRC
 PROJ: readability-relaxed semantic projection (BabelTele, arXiv:2606.19857); glyph-light ⇒ savings from dropped prose; ALL ids/paths/line-refs byte-exact; line-refs drift→relocate by symbol
 LEGEND: `∷`is `;`fence `|`field `→`leads/causes `⇒`decision `←`from `∈`in `∉`not-in `¬`not `∧`and `∨`or `:=`def `!`must-not `?`unverified `+`add `-`remove `@`anchor file:sym:line `F/M/S`=tiers(F Opus5/Fable5.1, M Sonnet5, S Haiku4.5; Frev=F reads full diff pre-user-commit) `U`=user-owned `D#`=owner decision §3 `PR`=rust/portage-repo/src/lib.rs `MO`=rust/portage-repo/src/merge_order.rs `PT`=rust/portuale/src/pretend.rs `EP`=rust/portuale/src/ebuild_phases.rs `EM`=rust/portuale/src/ebuild_merge.rs `MD`=rust/mrg-director/src/lib.rs `PY`=python/emerge_pretend_reference.py `CT`=tests/test_emerge_pretend_contract.py `F25`=docs/025-tier2-closeout.deepseek.md §11 `L3F`=TEST/findings/l3.md `L2F`=TEST/findings/l2.md
 
-STATUS: proposed 2026-09-14 ∷ D1-D6 ANSWERED 2026-09-14 ∷ R0 DONE (#21 cut) ∷ other slices ¬started
+STATUS: proposed 2026-09-14 ∷ D1-D6 ANSWERED 2026-09-14 ∷ R0 DONE (#21 cut) ∷ W1 DONE 2026-09-14: P0 (bed+keepwork; H2 `_needs_move` vartree:6363 confirmed) ∥ C0 (depcachedir write / non-root in-memory / `_md5_` validation; stale committed docs cache fixed → follow-up #46) ∥ R1 (#20 DONE dual-lang; +2 fixtures, parent-conditional row implemented) ∥ H1 (Fetcher on production path; trait→FetchRequest) ⇒ gate oracles captured ∷ W2 slices ¬started
 SCOPE: docs/backlog-tasks.md OPEN only: T5{41,44,45} T2{17,20,21,25,28,35,36} ∷ DONE/DONE-PARTIAL ∉scope
 RF: AGENTS.md(step8 verify); docs/agent-context.md; docs/scope-backlog.md §A §H §I §K; per-track plan/finding below
 

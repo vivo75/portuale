@@ -6,6 +6,15 @@ Status: proposed. Written 2026-09-14 against `main` @ `69f5877`.
 applied: #21 moved to the deliberate cuts (R0 done). D5 sets R5's time
 box to **600 seconds**.
 
+**Wave 1 done 2026-09-14:** P0 (oracle bed + kept work dirs; H2
+confirmed with the exact `_needs_move` rule — see `TEST/findings/l3.md`
+"P0"), C0 (cache-less oracle: depcachedir write, read-only branch,
+`_md5_` validation — `TEST/findings/l2.md` "C0", plus a stale committed
+`docs-1.0` cache entry fixed), R1 (#20 `[use]`-dep unsat block, dual
+language, two new fixtures + pins; #20 closed in `backlog-tasks.md`),
+H1 (`Fetcher` on the production path, trait reshaped to
+`FetchRequest`). Docs in `what-this-proves.md`; wave 2 may start.
+
 Scope: the **open** entries of **Tier 5** (#41, #44, #45) and **Tier 2**
 (#17, #20, #21, #25, #28, #35, #36) in
 [`backlog-tasks.md`](backlog-tasks.md). The DONE / DONE-PARTIAL entries

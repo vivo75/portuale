@@ -27,9 +27,11 @@
 //
 // KNOWN, DOCUMENTED GAPS (v1 scope, matching portuale's own
 // "narrow v1, document the cut" pattern):
-//   - Resume IS modelled now (`wget_resume` = real `make.globals`'s own
-//     default `RESUMECOMMAND`, `FETCHCOMMAND` + `-c`): once a non-empty
-//     partial file is on disk (a dropped connection, a mirror that closed
+//   - Resume IS modelled now (the candidate loop passes real's
+//     fresh-vs-resume bit through the `mrg_director::FetchRequest` seam,
+//     `resume: true` running `make.globals`'s own default
+//     `RESUMECOMMAND`, `FETCHCOMMAND` + `-c`): once a non-empty partial
+//     file is on disk (a dropped connection, a mirror that closed
 //     mid-transfer), the candidate loop switches to `wget -c` to continue
 //     it rather than restarting, matching real `fetch.py`. A complete-
 //     but-corrupt file (digest mismatch after a full download) is still
@@ -80,6 +82,7 @@
 //     term. Neither `gpkg` nor repo syncing are in portuale's own
 //     scope at all yet, so there's nothing to port here.
 
+use mrg_director::{FetchRequest, Fetcher, WgetFetcher};
 use portage_fetch::{
     SrcUriEntry, flatten_src_uri, parse_manifest, parse_thirdpartymirrors,
     resolve_mirror_candidates, verify_digests,
@@ -227,21 +230,13 @@ impl Default for FetchOptions {
 /// own build-failure handling already applies elsewhere.
 ///
 /// The transport itself is `portage_fetch::download_via_wget` (shared
-/// with the `mrg-director` `Fetcher` seam); these two wrappers only name
-/// real's `FETCHCOMMAND`/`RESUMECOMMAND` split at the call site.
+/// with the `mrg-director` `Fetcher` seam); this wrapper names the
+/// non-resume `FETCHCOMMAND` for its own callers (the standalone mirror
+/// `layout.conf` read below and the remote-`Packages` fetches in
+/// `emerge_getbinpkg`), while `fetch_src_uri`'s candidate loop dispatches
+/// real's fresh-vs-resume split through the seam.
 pub(crate) fn wget_fetch(uri: &str, dest: &Path) -> Result<(), String> {
     portage_fetch::download_via_wget(uri, dest, false)
-}
-
-/// Real `make.globals`'s own default `RESUMECOMMAND` -- byte-for-byte
-/// `FETCHCOMMAND` plus a leading `-c`, so `wget` appends to whatever
-/// partial `dest` a previous, interrupted fetch left behind (a dropped
-/// connection, a mirror that closed mid-transfer) instead of restarting
-/// from zero. Real `fetch.py` switches from `FETCHCOMMAND` to
-/// `RESUMECOMMAND` once a partial file is on disk; `fetch_src_uri`'s
-/// candidate loop does the same.
-pub(crate) fn wget_resume(uri: &str, dest: &Path) -> Result<(), String> {
-    portage_fetch::download_via_wget(uri, dest, true)
 }
 
 /// Real `doebuild()`'s own `SRC_URI`-vs-`DISTDIR` fetch check, run once
@@ -762,6 +757,11 @@ pub fn fetch_src_uri(
             // primary-uri switch below jumps ahead of what is left.
             let mut uri_list: Vec<Candidate> = candidates.iter().rev().cloned().collect();
             let mut checksum_failures = 0;
+            // The download half is the director's `Fetcher` seam: one
+            // resolved candidate URI -> `dest`, fresh or resumed, with no
+            // Manifest context -- digest verification stays right below
+            // at this call site, which holds the `Manifest` entry.
+            let fetcher: &dyn Fetcher = &WgetFetcher;
             while let Some(candidate) = uri_list.pop() {
                 let candidate = match &candidate {
                     Candidate::Uri(uri) => uri.clone(),
@@ -786,11 +786,12 @@ pub fn fetch_src_uri(
                 let has_partial = std::fs::metadata(&dest)
                     .map(|m| m.len() > 0)
                     .unwrap_or(false);
-                let attempt = if has_partial {
-                    wget_resume(candidate, &dest)
-                } else {
-                    wget_fetch(candidate, &dest)
-                };
+                let attempt = fetcher.fetch(&FetchRequest {
+                    filename: entry.filename.as_str(),
+                    uri: candidate,
+                    dest: &dest,
+                    resume: has_partial,
+                });
                 match attempt {
                     Ok(()) => match verify_digests(&dest, digests) {
                         Ok(()) => {
@@ -1269,9 +1270,9 @@ mod tests {
     /// testmirror/foo-1.0.tar.gz` SRC_URI is resolved through that file,
     /// fetched via a real `wget` subprocess, and digest-verified,
     /// proving the whole chain (`repo_root_for` -> `parse_
-    /// thirdpartymirrors` -> `resolve_mirror_candidates` -> `wget_fetch`
-    /// -> `verify_digests`) works together, not just each piece in
-    /// isolation.
+    /// thirdpartymirrors` -> `resolve_mirror_candidates` ->
+    /// `Fetcher::fetch` -> `verify_digests`) works together, not just
+    /// each piece in isolation.
     #[test]
     fn fetch_src_uri_resolves_a_real_mirror_uri_via_thirdpartymirrors() {
         let (uri_base, handle) = serve_once(b"hello world".to_vec());
