@@ -172,3 +172,47 @@ fn blockers_from_flat_deps_matches_only_blocker_atoms_against_the_vdb() {
         HashSet::from([("dev-libs".to_string(), "normalpkg-2.0".to_string())])
     );
 }
+
+/// `find_owners`/`owns_path` read each vdb entry's file list through the
+/// `PackagesDb` seam, splitting the `pf` directory name back into its
+/// `(package, version)` key and stripping the `CONTENTS` leading `/`.
+#[test]
+fn find_owners_reads_contents_through_the_packages_db_seam() {
+    let tmp = tempdir();
+    let root = tmp.join("root");
+    let pkg_dir = root.join("var/db/pkg/dev-libs/findownerspkg-1.0");
+    std::fs::create_dir_all(&pkg_dir).unwrap();
+    std::fs::write(
+        pkg_dir.join("CONTENTS"),
+        "dir /usr/share/findownerspkg\nobj /usr/share/findownerspkg/owned.txt abc 0\n",
+    )
+    .unwrap();
+
+    assert!(owns_path(
+        &root,
+        "dev-libs",
+        "findownerspkg",
+        "1.0",
+        "/usr/share/findownerspkg/owned.txt"
+    ));
+    assert!(!owns_path(
+        &root,
+        "dev-libs",
+        "findownerspkg",
+        "1.0",
+        "/usr/share/findownerspkg/other.txt"
+    ));
+
+    let collisions = vec!["/usr/share/findownerspkg/owned.txt".to_string()];
+    assert_eq!(
+        find_owners(&root, &collisions),
+        BTreeMap::from([(
+            "dev-libs/findownerspkg-1.0".to_string(),
+            vec!["/usr/share/findownerspkg/owned.txt".to_string()],
+        )])
+    );
+    assert!(
+        find_owners(&root, &["/usr/share/findownerspkg/stray.txt".to_string()]).is_empty(),
+        "a path no installed entry recorded stays unclaimed"
+    );
+}

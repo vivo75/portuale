@@ -67,6 +67,22 @@ fn depend_phase_reduces_restrict_on_the_config_use_set() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+#[test]
+fn flat_field_on_dedups_and_sorts_like_portage_flatten() {
+    // Deduped and sorted like Portage's _flatten (Portage: config.py, _flatten).
+    let empty = std::collections::HashSet::new();
+    assert_eq!(flat_field_on("!test? ( test ) test", &empty), "test");
+    assert_eq!(flat_field_on("zoo alpha zoo", &empty), "alpha zoo");
+    let mut use_set = std::collections::HashSet::new();
+    use_set.insert("bar".to_string());
+    assert_eq!(
+        flat_field_on("foo bar? ( bar baz )", &use_set),
+        "bar baz foo"
+    );
+    assert_eq!(flat_field_on("foo bar? ( bar baz )", &empty), "foo");
+    assert_eq!(flat_field_on("", &empty), "");
+}
+
 /// The `depend` phase never gets the standalone base env: the loader
 /// short-circuits before any config load.
 #[test]

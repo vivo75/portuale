@@ -66,6 +66,13 @@ pub type AuxMetadataProvider = fn(&Path, &str, &str) -> Result<HashMap<String, S
 
 pub(crate) static AUX_METADATA_PROVIDER: OnceLock<AuxMetadataProvider> = OnceLock::new();
 
+/// Register the process-wide fallback provider (idempotent: only the
+/// first registration wins). Called once at startup by the binary that
+/// can run ebuild phases.
+pub fn register_aux_metadata_provider(provider: AuxMetadataProvider) {
+    let _ = AUX_METADATA_PROVIDER.set(provider);
+}
+
 /// The single entry point for a repo's aux metadata for `category/pf`.
 /// Every production `read_md5_cache` call site goes through here.
 ///

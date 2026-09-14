@@ -97,6 +97,72 @@ pub(crate) fn run_depend_phase(
     Ok(parse_aux_entry(&text))
 }
 
+/// Cache-miss provider: regenerates one ebuild's aux metadata by running its
+/// `depend` phase, in the same `HashMap` shape `read_md5_cache` returns.
+///
+/// Wraps the phase run with the depcachedir rung: a fresh entry is reused
+/// as-is, a successful run is written back (best-effort; a read-only dir keeps
+/// the result in the in-memory memo).
+///
+/// Lives in `portuale` (registered once from `main`); `portage-repo` holds only
+/// the fn-pointer slot.
+// Portage: porttree.py, _pull_valid_cache, EbuildMetadataPhase, flat_hash.py
+pub(crate) fn depend_phase_metadata(
+    repo_location: &Path,
+    category: &str,
+    pf: &str,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    let Some((package, _version)) = portage_repo::split_pf(pf) else {
+        return Err(format!("{pf}: not a package-version name"));
+    };
+    let ebuild = repo_location
+        .join(category)
+        .join(&package)
+        .join(format!("{pf}.ebuild"));
+    if !ebuild.is_file() {
+        return Err(format!("{}: no ebuild", ebuild.display()));
+    }
+    let config_root = portage_repo::config_root_from_env();
+    let root = portage_repo::root_from_env();
+    let masters = portage_repo::md5_dict::repo_masters_for_location(repo_location);
+
+    // The depcachedir auxdb sits between the repo pregen cache and the phase run;
+    // same validator, but its `_eclasses_` carries eclass dir paths.
+    let depcache = depcache_entry_path(repo_location, category, pf);
+    if let Ok(text) = std::fs::read_to_string(&depcache)
+        && portage_repo::md5_dict::entry_is_valid(&text, &ebuild, repo_location, &masters, true)
+    {
+        return Ok(parse_aux_entry(&text));
+    }
+
+    // Portage parses the EAPI head first and skips unsupported ones; portuale
+    // returns a failure instead, so the cp drops out rather than masking by EAPI.
+    let head_eapi = parse_eapi(&std::fs::read_to_string(&ebuild).unwrap_or_default());
+    let head_eapi = if head_eapi.is_empty() {
+        "0".to_string()
+    } else {
+        head_eapi
+    };
+    if !portage_repo::md5_dict::eapi_is_supported(&head_eapi) {
+        return Err(format!(
+            "{}: EAPI {head_eapi} is unsupported",
+            ebuild.display()
+        ));
+    }
+
+    let portage_tmpdir = portage_repo::portage_tmpdir_from_env();
+    let env = compute_environment(&ebuild, &portage_tmpdir)?;
+    let md = run_depend_phase(&env, &root, &config_root, false).map_err(|e| e.message)?;
+
+    // Portage: _write_cache — stamps the ebuild md5, then writes the entry.
+    if let Ok(body) = crate::regen::render_entry(&md, &ebuild, repo_location, &masters, true)
+        && let Some(dir) = depcache.parent()
+    {
+        let _ = crate::regen::write_entry(dir, pf, &body);
+    }
+    Ok(md)
+}
+
 /// Splits the `KEY=value` lines from the phase pipe (or a depcachedir entry)
 /// into the map `read_md5_cache` also returns. Lines without `=` are skipped.
 pub(crate) fn parse_aux_entry(text: &str) -> std::collections::HashMap<String, String> {
