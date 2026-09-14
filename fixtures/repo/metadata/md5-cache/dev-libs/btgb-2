@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=023 oracle fixture: upstream backtracking good-version-first (B-2)
+DEPEND==dev-libs/btgc-2
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000

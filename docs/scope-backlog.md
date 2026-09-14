@@ -845,7 +845,7 @@ merge, unmerge, world management, all real. The gap to a full drop-in is:
     left is depth on other pieces already built: the follow-ups that own
     the remaining resolver divergences (`#25` installed-nomerge
     instances for btnr, `#24` `:=` rebuild for the a522084 `B-0`,
-    `#36` mask-aware selection fallback for mg3 at tight budgets;
+    `#36` closed 2026-09-14 (rescoped against the genuine upstream oracle: no selection gap, only the documented budget accounting);
     slot conflicts keep the standing informational exit 0 --
     reconciled explicitly under the #19 Slice-5 entry above, not
     flipped), and the `_serialize_tasks`

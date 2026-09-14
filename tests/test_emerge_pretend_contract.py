@@ -15700,16 +15700,18 @@ def test_oracle_missed_update_siblings_masked_together(
 ):
     """023 oracle, case mg3 (C4 similar-grouping): `mgfc-3.0` is visible
     but pulled by nothing -- a missed-update sibling of the `mgfc-2.0`
-    vs `=mgfc-1` conflict. Real's `_slot_confict_backtrack` masks `{3.0,
-    2.0}` in ONE node (similar grouping) and its mask-aware selection
-    then picks `mgfb-1.0` directly, settling all-`1.0`. Portuale groups
-    the node the same way, but still selects the highest visible
-    `mgfb-2.0` and NVCs instead of falling back, so the downgrade costs
-    a second mask step through missing-dep feedback. At the default
-    budget both converge to all-`1.0` (pinned); at `--backtrack=1` real
-    settles while portuale exhausts and reports -- oracle-DIVERGENT, see
-    `docs/023-oracle.md` (mask-aware candidate fallback, backlog #36,
-    beyond #23's loop scope)."""
+    vs `=mgfc-1` conflict. Real's `_slot_confict_backtrack` groups
+    similar versions into ONE node, and portuale groups the node the
+    same way, but still selects the highest visible `mgfb-2.0` and
+    reports the conflict at `--backtrack=1` instead of falling back, so
+    the downgrade costs a second mask step through missing-dep feedback.
+    At the default budget both converge to all-`1.0` (pinned). The
+    former claim that real settles at `--backtrack=1` was falsified
+    2026-09-14 (real aborts there and at `<=3`; see `docs/023-oracle.md`
+    "R2 — genuine upstream oracle"): the upstream-shaped `btgp` pin now
+    carries that oracle, and the `--backtrack=1` block below pins
+    portuale's low-budget conflict shape only. #36 is closed as
+    not-reproducible-as-framed."""
     ok = _b1_both(["--pretend", "dev-libs/mgfa"], fixture_env, emerge_binary,
                   emerge_pretend_python)
     assert _b1_merges(ok.stdout) == [
@@ -15727,6 +15729,42 @@ def test_oracle_missed_update_siblings_masked_together(
         "[ebuild  N     ] dev-libs/mgfa-1 ",
     ]
     assert "!!! Multiple package instances within a single package slot" in one.stdout
+
+
+def test_backtracking_good_version_first_matches_the_upstream_oracle(
+    emerge_binary, fixture_env
+):
+    """Upstream `test_backtracking.py::testBacktrackingGoodVersionFirst`
+    translated to fixtures (`btgp` = A, `btgb` = B-1/B-2, `btgc` =
+    C-1/C-2): A needs `=C-1` + `B`, B-2 needs `=C-2`, so the slot
+    conflict must be resolved by masking the *highest* version rather
+    than the first-pulled one.
+
+    Genuine oracle, re-captured 2026-09-14 through portage's own
+    `ResolverPlayground` on the pinned 3.0.82.2 (script + output:
+    `TEST/logs/r2-blocker-20260914/`): real settles
+    `[C-1, B-1, A-1]` at the default budget and at `--backtrack=4` (its
+    minimum -- `<=3` aborts), matching upstream's `mergelist`. Portuale
+    reaches the same fixpoint at `--backtrack=2`; the tighter threshold
+    is the already-documented mask-step budget accounting
+    (`--backtrack=N` budgets N mask steps directly rather than real's
+    depth formula), NOT a selection gap: the runtime-mask `!` negatives
+    are already applied during selection (`resolve_pretend`'s
+    `extra_constraints` filter). Rust-only pin (the Python reference is
+    no longer mirrored as of 2026-09-14)."""
+    for args, note in (
+        (["--pretend", "dev-libs/btgp"], "default budget"),
+        (["--pretend", "--backtrack", "4", "dev-libs/btgp"], "real's minimum (oracle)"),
+        (["--pretend", "--backtrack", "2", "dev-libs/btgp"], "portuale's threshold"),
+    ):
+        r = _run([str(emerge_binary)], args, fixture_env)
+        assert r.returncode == 0, (note, r.stdout, r.stderr)
+        assert _b1_merges(r.stdout) == [
+            "[ebuild  N     ] dev-libs/btgc-1 ",
+            "[ebuild  N     ] dev-libs/btgb-1 ",
+            "[ebuild  N     ] dev-libs/btgp-1 ",
+        ], (note, r.stdout)
+        assert "Multiple package instances" not in r.stdout, note
 
 
 # ---------------------------------------------------------------------------

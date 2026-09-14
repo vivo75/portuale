@@ -51,7 +51,7 @@ blocker machinery (#24 + scheduler), likewise out of scope.
 | mg2 | C3 first-only deferral (no direct upstream equivalent; real `_feedback_slot_conflicts` takes `conflicts_data[0]`) | all `-1.0`s (by construction: two independent mask-good-first subtrees under `mg2top`) | same 7 lines | MATCH | two simultaneous conflicts: only the first becomes nodes, the second is handled under each sibling in later passes. Guards the deferral order. |
 | 375573-unit | Rust unit `check_runtime_pkg_mask_discards_fully_masked_parent_sets` | real `_check_runtime_pkg_mask` truth table (discard iff every conflict parent masked; no-parent and missing-dep arms valid) | same | MATCH | Direct predicate oracle: no fixture reaches the 3-pass parent-masking chain end to end yet (recorded gap, not a divergence). |
 | mg3 | C4 similar-grouping (`mgfc-3.0` visible, pulled by nothing; default budget) | all `-1.0`s | same 3 lines | MATCH | Missed-update sibling joins the mask group; both languages settle identically. |
-| mg3-bt1 | same, `--backtrack 1` | all `-1.0`s (grouped 1 node + mask-aware selection picks `mgfb-1.0` directly) | conflict reported (`[mgfc-1, mgfb-2, mgfa-1]`) | DIVERGENT | Portuale groups the node identically but still selects highest-visible `mgfb-2.0` and NVCs; the downgrade needs a second mask step the budget denies. Mask-aware candidate fallback, backlog #36 (beyond #23's loop scope). |
+| mg3-bt1 | same, `--backtrack 1` | FAILS (partial `[mgfc-1, mgfc-2, mgfb-2, mgfa-1]` + `masked by: backtracking: slot conflict`; corrected 2026-09-14, see the R2 section at the end) | conflict reported (`[mgfc-1, mgfb-2, mgfa-1]`) | PROVISIONAL | The original "real settles" claim did not reproduce; the genuine upstream case is clean-scenario bt4. See "R2 — genuine upstream oracle" below. |
 
 ## Verdict: GO for Phase C (narrow, re-scoped after C2)
 
@@ -86,39 +86,40 @@ search can see the conflict), a522084-`B-0` (needs #24 `:=` rebuild;
 selection fallback). C4 acceptance met: no table entry moved down;
 mg2 + 375573-unit + mg3-default are new matches; the rest held.
 
-## R2 oracle correction (2026-09-14, wave 2 of the Tier5/2 slicing)
+## R2 — genuine upstream oracle re-capture (2026-09-14, waves 2/3 of the Tier5/2 slicing)
 
-The mg3-bt1 row above says real settles all-`-1.0`s at `--backtrack=1`
-("mask-aware selection picks `mgfb-1.0` directly"). **A fresh oracle run
-falsifies that**: real aborts at bt1 on the current fixtures, on both
-pinned portage versions.
+The mg3-bt1 row's "real settles at `--backtrack 1`" claim did not
+reproduce (real 3.0.82.2 and 3.0.81.3 both abort with a partial list and
+`=dev-libs/mgfc-1 … (masked by: backtracking: slot conflict)`; captures
+`TEST/logs/r2-blocker-20260914/real-3.0.{81.3,82.2}`). Re-scoped per the
+owner's decision (a): re-capture the **genuine upstream oracle** instead
+of the synthetic mg3 shape.
 
-Repro (fixture tree staged by `TEST/run/abort-capture.sh`; scripts and
-captures kept in `TEST/logs/r2-blocker-20260914/`):
+**Upstream scenario** `test_backtracking.py::testBacktrackingGoodVersionFirst`
+(A needs `=C-1` + `B`; B-2 needs `=C-2`), run through portage's own
+`ResolverPlayground` on 3.0.82.2
+(`TEST/logs/r2-blocker-20260914/playground-oracle.py` + `.out`):
 
-```sh
-# real 3.0.82.2 first, then the fixture env
-FEATURES="-cgroup" ACCEPT_KEYWORDS="~amd64" emerge -q -1 --usepkg=n =sys-apps/portage-3.0.82.2
-PORTAGE_CONFIGROOT=/fixtures ROOT=/fixtures emerge --pretend --backtrack=1 dev-libs/mgfa
-```
+| budget | real result |
+|---|---|
+| default / 30 | `[C-1, B-1, A-1]`, success |
+| 1, 2, 3 | fail (partial `[C-1, C-2, B-2, A-1]`) |
+| **4 (real's minimum)** | `[C-1, B-1, A-1]`, success |
 
-| version | budget | real result |
-|---|---|---|
-| 3.0.82.2 | default | `[mgfc-1, mgfb-1, mgfa-1]`, rc 0 (matches the doc) |
-| 3.0.82.2 | `--backtrack=1` | rc 1: partial list `[mgfc-1, mgfc-2, mgfb-2, mgfa-1]` + masked block `=dev-libs/mgfc-1 … (masked by: backtracking: slot conflict)` |
-| 3.0.81.3 | `--backtrack=1` | identical shape to 3.0.82.2 |
+Translated to fixtures `btgp`/`btgb`/`btgc` (same shape, no extra
+sibling), portuale reaches the identical fixpoint at `--backtrack=2`
+and at real's minimum `--backtrack=4`; the tighter threshold is the
+already-documented mask-step budget accounting (`--backtrack=N` budgets
+N mask steps directly rather than real's `max(1,(N+1)//2)` depth +
+restart cap). There is **no selection gap to fix**: portuale already
+applies the runtime-mask `!` negatives during selection
+(`resolve_pretend`'s `extra_constraints` filter), and the upstream
+oracle's fixpoint is reached at its budget. #36 is therefore closed as
+not-reproducible-as-framed; the pin lives in
+`test_backtracking_good_version_first_matches_the_upstream_oracle`.
 
-So real's conflict feedback at bt1 masks `mgfc-1` (the atom `mgfa`
-requires) rather than `{mgfc-3,2}`, then has no budget left and aborts.
-Portuale's current bt1 pin is a different failure shape
-(`[mgfc-1, mgfb-2, mgfa-1]` + "Multiple package instances…"), and the
-plan's R2 target ("real merges, portuale reports") does not hold.
-
-**Decision needed (owner):** re-scope R2 — either (a) re-capture the
-intended upstream oracle (`test_slot_conflict_mask_update.py` at a tight
-budget) on a fixture where real genuinely settles and implement the
-selection-time probe against that, (b) pin real's actual bt1 behaviour
-(partial list + `backtracking: slot conflict` masked block) as the
-target, which is a different mechanism (mask-choice/abort rendering, not
-selection), or (c) close #36 as not-reproducible and fold the residue
-into the backtracking-fidelity work. R2 is stopped until then.
+The mgfa fixture (with the C4-added `mgfc-3.0` sibling) is why the
+synthetic shape diverged: the extra sibling changes real's mask choice,
+and real's own bt1 already aborts even without it. The existing
+`test_oracle_missed_update_siblings_masked_together` pin is kept as
+portuale's low-budget conflict shape, with its docstring corrected.

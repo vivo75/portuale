@@ -16622,3 +16622,16 @@ cargo test --release -p portuale find_owners
 cargo test --release -p portuale owns_path
 # -> green; the CONTENTS reads now dispatch through PackagesDb/VdbReader
 ```
+
+**#36 rescoped against the genuine upstream oracle: no selection gap (2026-09-14).** #36 was filed as "mask-aware candidate fallback in selection": real's `_select_pkg_highest_available` allegedly skips a version whose *dependency* is masked, so a lower version is picked in the same pass, while portuale only reaches the downgrade through a second missing-dep mask step. A re-capture against the genuine upstream oracle falsifies the framing: `test_backtracking.py::testBacktrackingGoodVersionFirst` (A needs `=C-1` + `B`, B-2 needs `=C-2`), run through portage's own `ResolverPlayground` on the pinned 3.0.82.2, settles `[C-1, B-1, A-1]` at the default budget and at `--backtrack=4` — its minimum, with `<=3` aborting (`TEST/logs/r2-blocker-20260914/playground-oracle.{py,out}`). The synthetic `mgfa` shape's bt1 claim ("real merges") was an artefact of the added `mgfc-3.0` sibling plus a misread mechanism; real's selection skips a candidate version only when that *version itself* is runtime-masked, and portuale already applies exactly those `!` negatives during selection (`resolve_pretend`'s `extra_constraints` filter). Translated to fresh `btgp`/`btgb`/`btgc` fixtures, portuale reaches real's fixpoint at `--backtrack=2` and at real's bt4; the tighter threshold is the standing, documented mask-step budget accounting difference, not a selection gap. Pinned Rust-only in `test_backtracking_good_version_first_matches_the_upstream_oracle`; `docs/023-oracle.md`'s mg3-bt1 row and the old pin's docstring were corrected.
+
+```sh
+# genuine upstream oracle (vendored playground, pinned 3.0.82.2)
+PORTAGE_GNUPGHOME=$(mktemp -d)   # + a copy of portage/tests/.gnupg, chmod 700
+python3 TEST/logs/r2-blocker-20260914/playground-oracle.py
+# -> default / bt4+ settle [C-1, B-1, A-1]; bt1..3 fail
+
+python3 -m pytest tests/test_emerge_pretend_contract.py -q \
+  -k backtracking_good_version_first
+# -> 1 passed (Rust-only; default, bt4 and bt2 all == real's mergelist)
+```
