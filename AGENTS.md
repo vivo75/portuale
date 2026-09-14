@@ -10,6 +10,99 @@ the operating rhythm and the rules. Humans new to the tree start with
 [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) (build, test, comments,
 commits).
 
+## The "next slice" workflow
+
+The user drives portuale forward by saying **"next slice"** (or "scope
+the next slice") and expects the same rhythm every time:
+
+1. **Ground candidates in real code, not guesses.** Grep for the actual
+   scope-cut / TODO / "deferred" doc comment, or read the corresponding
+   Portage's `lib/portage` / `lib/_emerge` source. Many slices come from
+   noticing a doc comment's own "still out of scope" wording is now
+   stale — or the backlog claiming something is open that `git log`
+   shows shipped.
+2. **Present 2–4 concrete candidate slices via `AskUserQuestion`**, one
+   marked "Recommended", each with a short source-grounded rationale.
+   Let the user pick.
+3. **Re-open judgment calls that surface during implementation** rather
+   than silently picking a default. If a slice conflicts with a hard
+   constraint (e.g. contract-suite determinism), stop and surface it.
+4. **Ground expected output in Portage, not in a second copy.**
+   There is no Python mirror any more
+   (`docs/history/second_python_copy_removal.md`, deleted 2026-10-03 — in git history; the rule here is its conclusion).
+   A slice that changes `emerge` output takes its expected value from
+   Portage — the container test bed (`../pmtest/differential-test-bed/`),
+   this host's Portage `emerge`, or an upstream
+   `lib/portage/tests/resolver/` case — and says which in the test's
+   docstring. Real-execution features
+   (merge/unmerge/package/fetch/phases) are checked the same way (L1–L3).
+5. **Add fixtures by hand** under `fixtures/repo/…` (+ `metadata/md5-cache/…`).
+   There is one fixture tree and it lives in pmtest: `fixtures/` here is
+   a symlink to `../pmtest/fixtures`, so the file you add is pmtest's
+   and belongs in pmtest's commit, while the Rust tests read it through
+   the symlink. Check for name collisions with existing fixtures first.
+   A fixture that "passes" without isolating the new behaviour is worse
+   than none.
+6. **Add tests**. The black-box suite lives in the sibling `pmtest`
+   repo (see `LLM/agent-context.md`, "Where the tests live"): a `CASES`
+   entry there (Rust exit code; the output invariants in
+   `pytests-contract-suite/test_output_invariants.py` run over it
+   automatically) *and* a pinned-output test function in
+   `pytests-contract-suite/test_emerge_pretend_contract.py`, plus a Rust
+   unit test in the relevant crate **here**. Real-execution features get
+   Rust fixture-driven end-to-end tests instead. If a change moves an
+   output recorded in the harvested corpus
+   (`pytests-contract-suite/corpus/`), the run reports `corpus drift`:
+   review it, then accept it with `PORTUALE_CORPUS_BLESS=1` — in pmtest's
+   own commit, which stays separate from this repo's.
+7. **Update the docs**: append a paragraph to
+   [`LLM/what-this-proves.md`](LLM/what-this-proves.md) (never rewrite
+   prior slices' paragraphs — they are history; fix one only to correct a
+   now-stale claim) with a runnable, live-verified example, and update
+   [`LLM/scope-backlog.md`](LLM/scope-backlog.md) if the slice closes or
+   changes an open entry. Update other docs only if the slice makes them
+   stale.
+8. **Run the full verification pass** before a slice is done. Here:
+   `cargo fmt --check`, `cargo clippy --release --all-targets` (zero
+   warnings), `cargo test --release` (whole workspace). Then in
+   `../pmtest`: `python3 -m pytest pytests-contract-suite -q` (whole
+   suite; it rebuilds this tree's binary itself through its registry).
+   **Periodically — and always after a big merge from another branch, or
+   a change to the resolver / merge-order / ebuild-phase / merge code —
+   also run the container differential test bed**
+   (`differential-test-bed/run/l0-resolver.sh`, plus
+   `differential-test-bed/run/l1-merge-from-binpkg.sh` if merge behaviour
+   changed, both from pmtest). It compares portuale against Portage's
+   `emerge` on a real Gentoo tree and is the only thing that catches
+   regressions the fixture suite can't; it's heavier, so it's not part of
+   every slice. See pmtest's `USAGE.AGENTS.md` and
+   `differential-test-bed/README.md`. **Merge-path safety gate:** any
+   change to the merge path (per `agent-context.md` "Merge-path safety
+   gate") must additionally be verified by a **successful test merge of
+   `sys-libs/glibc` and `app-shells/bash`** — the two packages whose
+   running files every process maps — before the slice is done.
+ 9. **Only `git commit` / `git push` when explicitly asked** — separate,
+    later requests each time, never implied by finishing a slice. Commit
+    title `<what changed>: <short description>`; wrapped body explaining
+    the *why* and the Portage-source grounding; trailer
+    `Co-Authored-By: …` replace `…` with actual model name. Commits and
+    pushes are paired across the two repos — see "Two repos, one
+    project" below; one ask covers both repos unless stated otherwise.
+10. **Track slices as tasks** — one per shipped slice, `completed` only
+    once step 8 is green and the docs are updated.
+11. **Close out a multi-slice plan in one commit.** When the last slice
+    of a `LLM/<tier>.<nnn>-*.opus.md` plan lands, the same commit that
+    flips its `backlog-tasks.md` entry to `DONE <date>` must also flip
+    the **plan file's own `Status:` header** from `proposed` to
+    `done <date>` (with the slice range, branch and commits). A plan's
+    §0 tells the next agent to read the plan first, so a plan left
+    saying "proposed" after it shipped is the single most misleading
+    staleness this repo produces — it happened to four of six plans in
+    the 2026-09-15/16 batch. Same commit: correct any commit hash the
+    entry cites if the branch was rebased before merging (cite hashes
+    reachable from `main`, not pre-rebase ones), and give every residue
+    you defer a real backlog number, checking the number is free first.
+
 ## Graft — repo context graph
 
 This repo is indexed in `graft/`: small linked markdown nodes that explain each

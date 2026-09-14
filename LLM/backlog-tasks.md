@@ -1,3 +1,31 @@
+# Backlog tasks
+
+> Paths and identifiers written before 2026-10-10 may predate the #336 refactor: see [`renames.tsv`](renames.tsv).
+
+One line per open task. Each has a code/doc pointer so a fresh model can
+start without a full context load. Source of truth for detail:
+[`scope-backlog.md`](scope-backlog.md) (section letters in brackets),
+`what-this-proves.md` (what already shipped), `git log`, and the memory
+notes under
+`.claude/projects/-home-vivo-repo-PORTUALE-portuale/memory/`.
+
+Rules that apply to every task: take expected output from real Portage
+(container bed, host `emerge`, or an upstream resolver test), pin it in
+`pytests-contract-suite/test_emerge_pretend_contract.py` /
+`test_portuale.py`, keep `test_output_invariants.py` green, and run the
+full verification pass (`AGENTS.md` step 8). The suite and the container
+bed live in the sibling `pmtest` repo since 2026-09-18
+(`agent-context.md`, "Where the tests live"); `TEST/...` and `tests/...`
+paths in the entries below are the pre-move spelling of what is now
+`../pmtest/differential-test-bed/...` and
+`../pmtest/pytests-contract-suite/...`. The Python mirror
+(`python/emerge_pretend_reference.py`) was removed 2026-09-15 —
+[`history/second_python_copy_removal.md`](history/second_python_copy_removal.md); older
+entries below that say "dual-language" / "Rust==Python" describe how
+they shipped, not a rule for new work.
+
+---
+
 ## Tier 1 — focused slices (scoped, ~one sitting each)
 
 > **Audited 2026-09-13:** commit `67f3b0e` (2026-09-10, "Tier 1 backlog:
