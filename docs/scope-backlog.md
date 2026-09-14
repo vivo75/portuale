@@ -794,6 +794,13 @@ Standing decisions, not oversights.
   (unmerge re-sorts, `qmerge`/`qlist` sort on read), and determinism is
   worth more here than bug-compatible arbitrariness — see
   `ebuild_merge.rs`'s module doc comment.
+- **Circular-dependency `--tree` nesting** — real's `[nomerge]` rows,
+  duplicated nodes and row-counted `Total:` under a cycle. Portuale's
+  tree model dedups by design (Gate G0.2); the flat cycle re-display,
+  elementary-cycle enumeration and `large_cycle_count` trailer already
+  match real (Part 2.A circular-dep entry, `cyc4a` pin). Decided
+  2026-09-14 (D1 of `backlog_tier_5_and_2_sliced.opus.md`, former
+  backlog #21).
 - **Switching CLI option parsing to `clap`** — evaluated 2026-09-02,
   rejected. The parser (`pretend.rs`'s parse loop + `emerge_options.rs`
   tables) faithfully reproduces `emerge`'s `argparse` quirks that `clap`

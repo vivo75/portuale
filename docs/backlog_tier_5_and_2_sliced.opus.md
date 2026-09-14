@@ -2,6 +2,10 @@
 
 Status: proposed. Written 2026-09-14 against `main` @ `69f5877`.
 
+**Progress 2026-09-14:** owner decisions D1–D6 answered (§3). D1
+applied: #21 moved to the deliberate cuts (R0 done). D5 sets R5's time
+box to **600 seconds**.
+
 Scope: the **open** entries of **Tier 5** (#41, #44, #45) and **Tier 2**
 (#17, #20, #21, #25, #28, #35, #36) in
 [`backlog-tasks.md`](backlog-tasks.md). The DONE / DONE-PARTIAL entries
@@ -38,8 +42,8 @@ Ten open items fall into four tracks that barely touch each other:
 | Track | Items | Kind | Python mirror? | Why this position |
 |---|---|---|---|---|
 | **P** — L3 producer parity | #44, #45 | real execution, container | no | Unblocks `l3-core` / `@system` (the #30 S4 stop rule). Highest leverage per hour. |
-| **C** — cache-less repo | #41 | repo reader + depend phase | decision D2 | Self-contained drop-in gap; lets the porttest overlay stop committing a generated cache. Must land before H4. |
-| **R** — resolver parity | #20, #21, #36, #25, #35, #17 | resolver, dual-language | yes | Ordered cheapest-and-independent first, graph-shape changes before merge-order timing. |
+| **C** — cache-less repo | #41 | repo reader + depend phase | no (D2) | Self-contained drop-in gap; lets the porttest overlay stop committing a generated cache. Must land before H4. |
+| **R** — resolver parity | #20, ~~#21~~ (cut, D1), #36, #25, #35, #17 | resolver, dual-language | yes | Ordered cheapest-and-independent first, graph-shape changes before merge-order timing. |
 | **H** — mrg-director | #28 | Rust refactor | no | Independent; H4 (`RepoCache`) waits for C. |
 
 The recommended order, and why:
@@ -49,9 +53,8 @@ The recommended order, and why:
    smaller and is a warm-up in the same container bed #45 needs.
 2. **C** (#41) in parallel with P. Different files (`portage-repo` repo
    reader vs `portuale` merge/phase code).
-3. **R1** (#20) and the **R0** decision on #21 in parallel with P/C:
-   #20 is an output-rendering slice with a known test pin; #21 is a
-   one-line owner decision.
+3. **R1** (#20) in parallel with P/C: an output-rendering slice with a
+   known test pin. (#21 was the R0 owner decision — answered and cut.)
 4. **R2** (#36) before **R3** (#25): #36 is a local change inside
    selection whose default-budget fixpoint is already proven identical,
    so it moves no L0 numbers; #25 is the big architectural change and
@@ -75,7 +78,7 @@ flowchart LR
     C0[C0 oracle] --> C1[C1 metadata entry point] --> C2[C2 depend-phase metadata] --> C3[C3 depcachedir + tests]
   end
   subgraph R[Track R · resolver]
-    R0[R0 #21 decision U] 
+    R0[R0 #21 cut ✔] 
     R1[R1 #20 USE-unsat block]
     R2[R2 #36 mask-aware selection] --> R3a[R3a #25 design] --> R3b[R3b..e #25 slices] --> R4[R4 #35 downgrade probe] --> R5[R5 #17 drain timing]
   end
@@ -90,7 +93,7 @@ flowchart LR
 | Track | Main files touched |
 |---|---|
 | P | `rust/portuale/src/ebuild_merge.rs`, `ebuild_phases.rs`, `emerge_getbinpkg.rs`, `TEST/layers/l3/*` |
-| C | `rust/portage-repo/src/lib.rs` (repo reader), `rust/portuale/src/ebuild_phases.rs::run_depend_phase`, `python/emerge_pretend_reference.py` (per D2) |
+| C | `rust/portage-repo/src/lib.rs` (repo reader), `rust/portuale/src/ebuild_phases.rs::run_depend_phase`, no Python (D2) |
 | R | `rust/portage-repo/src/lib.rs`, `merge_order.rs`, `rust/portuale/src/pretend.rs`, `python/emerge_pretend_reference.py`, `tests/test_emerge_pretend_contract.py` |
 | H | `rust/mrg-director/src/lib.rs`, call sites in `rust/portuale/src/{fetch,pretend,emerge_build,emerge_getbinpkg}.rs` |
 
@@ -129,16 +132,19 @@ to a call site only); **H4 × C** by design.
 
 ---
 
-## 3. Owner decisions (resolve before the slice that needs them)
+## 3. Owner decisions (answered 2026-09-14)
 
-| # | Question | Recommendation | Blocks |
-|---|---|---|---|
-| **D1** | #21 cycle `--tree` nesting: move to Part 3 deliberate cuts? | **Yes.** The flat cycle display, enumeration and trailer already match; nesting contradicts the dedup'd tree model (Gate G0.2). | R0 |
-| **D2** | #41: does the Python reference mirror the ebuild fallback? | **No.** The fallback needs a bash depend phase; the Python reference stays cache-reading. Pin the fallback with a Rust-only test in `tests/test_portuale.py`, not the contract suite. | C2 |
-| **D3** | #41: write generated metadata to `depcachedir` (`/var/cache/edb/dep`) like real, or keep it in memory? | **Mirror real**: write when `depcachedir` is writable, fall back to in-memory (`VolatileCache` semantics) when not — real `porttree.py` does exactly this split. | C3 |
-| **D4** | #25 is allowed to move L0 merge-order rows in both directions during its slices, provided the *final* R3 slice nets ≥ 0? | **Yes**, with a per-slice log of every flipped probe. Otherwise #25 cannot be sliced at all. | R3b+ |
-| **D5** | #17 stop rule: if after #25 the gtk:4 iteration count still differs and no lever from the 14-probe family closes it within R5's budget, file the residue as a deliberate cut? | **Yes.** Byte-for-byte merge order on every real-tree probe is not required for drop-in use. | R5 |
-| **D6** | #28 end state: is "all 8 slots dispatched on the production path" enough, or does `Director` itself become the production entry point? | **Slots only** for this plan; the `action_build` decomposition is a separate, later decision (H5 writes the proposal). | H5 |
+All six are answered; the **Owner answer** column is binding for the
+slices it blocks. The recommendation column is kept as the rationale.
+
+| # | Question | Recommendation | Owner answer (2026-09-14) | Blocks |
+|---|---|---|---|---|
+| **D1** | #21 cycle `--tree` nesting: move to Part 3 deliberate cuts? | Yes. The flat cycle display, enumeration and trailer already match; nesting contradicts the dedup'd tree model (Gate G0.2). | **Yes — moved to deliberate cuts** (applied: `backlog-tasks.md`, `scope-backlog.md` Part 3). | R0 ✔ |
+| **D2** | #41: does the Python reference mirror the ebuild fallback? | No. The fallback needs a bash depend phase; the Python reference stays cache-reading. | **No Python mirror; Rust-only test** in `tests/test_portuale.py`, not the contract suite. | C2 |
+| **D3** | #41: write generated metadata to `depcachedir` (`/var/cache/edb/dep`) like real, or keep it in memory? | Mirror real — real `porttree.py` does exactly this split. | **Write to `depcachedir` when writable, otherwise keep in memory**, as real Portage does. | C3 |
+| **D4** | #25 is allowed to move L0 merge-order rows in both directions during its slices, provided the net after R3e is not worse? | Yes, with a per-slice log of every flipped probe. | **Yes** — individual slices may move L0 order up or down; the net after R3e must not be worse. | R3b+ |
+| **D5** | #17 stop rule: time box R5, file the residue as a deliberate cut if no lever closes it? | Yes, with a time box. | **Time box = 600 seconds.** At the limit, stop and file the residue (with the lever table so far) as a deliberate cut. | R5 |
+| **D6** | #28 end state: is "all 8 slots dispatched on the production path" enough, or does `Director` itself become the production entry point? | Slots only; the `action_build` decomposition is a separate, later decision. | **Slots only.** | H5 |
 
 ---
 
@@ -329,12 +335,12 @@ finding → FIXED.
 
 ## 6. Track R — resolver parity (Tier 2)
 
-### R0 (U, 10 min) — #21 decision
+### R0 (U, 10 min) — #21 decision — **DONE 2026-09-14**
 
-Apply D1: move #21 to `backlog-tasks.md` "Deliberate cuts" and
-`scope-backlog.md` Part 3 with one sentence of rationale (tree model
-dedups by design; flat cycle display already matches). If the owner
-re-opens it instead, it goes to the end of track R.
+D1 answered yes and applied: #21 moved to `backlog-tasks.md` "Deliberate
+cuts" and `scope-backlog.md` Part 3 with one sentence of rationale (tree
+model dedups by design; flat cycle display already matches). If the
+owner ever re-opens it, it goes to the end of track R.
 
 ### R1 (M, F review, 2–4h) — #20 `[use]`-dep unsat block
 
@@ -492,7 +498,7 @@ the two guards; pin both languages.
 
 **Accept:** fixture == real; L0 ≥ before.
 
-### R5 (F, time-boxed 6h, D5) — #17 F-B1 frontier drain timing
+### R5 (F, time-boxed 600 s per D5) — #17 F-B1 frontier drain timing
 
 **State:** node sets equal (398 == 398 on gtk:4), but portuale runs 578
 drain iterations vs real's 290; first divergence is the order inside the
@@ -509,7 +515,8 @@ Steps:
    the `--debug` dump with the mo-trace harness, one lever from the
    14-probe installed-chain family at a time, keeping a table of
    lever → probes flipped.
-3. At the time box, apply D5.
+3. At the 600-second time box, stop: file the residue as a deliberate
+   cut with the lever table gathered so far (D5).
 
 **Accept:** either #17 closed with numbers, or a deliberate-cut entry
 with the lever table as evidence.
@@ -578,14 +585,14 @@ Close #28 per D6.
 
 | Wave | Parallel slices | Gate before next wave |
 |---|---|---|
-| 1 | P0, C0, R0 (U), R1, H1 | oracles captured; D1–D3 answered |
+| 1 | P0, C0, R1, H1 (R0 done) | oracles captured (D1–D6 answered 2026-09-14) |
 | 2 | P1, P2a, C1, R2, H2 | P2a root cause reviewed |
-| 3 | P2b, C2, R3a (design, user reads), H3 | R3a approved (D4) |
+| 3 | P2b, C2, R3a (design, user reads), H3 | R3a approved (D4 answered: yes) |
 | 4 | P3, C3, R3b | L3 smoke clean; C finding FIXED |
 | 5 | R3c, H4 | — |
 | 6 | R3d → R3e | full L0 |
 | 7 | R4, H5 | — |
-| 8 | R5 (time-boxed) | D5 |
+| 8 | R5 (600 s time box) | D5 |
 
 Sizes are agent-hours of focused work, excluding container runs (L0 is
 the long one).

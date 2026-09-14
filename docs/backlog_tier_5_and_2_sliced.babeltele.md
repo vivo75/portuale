@@ -3,21 +3,21 @@ SRC=docs/backlog_tier_5_and_2_sliced.opus.md @ main:69f5877 2026-09-14; AUTH=SRC
 PROJ: readability-relaxed semantic projection (BabelTele, arXiv:2606.19857); glyph-light ⇒ savings from dropped prose; ALL ids/paths/line-refs byte-exact; line-refs drift→relocate by symbol
 LEGEND: `∷`is `;`fence `|`field `→`leads/causes `⇒`decision `←`from `∈`in `∉`not-in `¬`not `∧`and `∨`or `:=`def `!`must-not `?`unverified `+`add `-`remove `@`anchor file:sym:line `F/M/S`=tiers(F Opus5/Fable5.1, M Sonnet5, S Haiku4.5; Frev=F reads full diff pre-user-commit) `U`=user-owned `D#`=owner decision §3 `PR`=rust/portage-repo/src/lib.rs `MO`=rust/portage-repo/src/merge_order.rs `PT`=rust/portuale/src/pretend.rs `EP`=rust/portuale/src/ebuild_phases.rs `EM`=rust/portuale/src/ebuild_merge.rs `MD`=rust/mrg-director/src/lib.rs `PY`=python/emerge_pretend_reference.py `CT`=tests/test_emerge_pretend_contract.py `F25`=docs/025-tier2-closeout.deepseek.md §11 `L3F`=TEST/findings/l3.md `L2F`=TEST/findings/l2.md
 
-STATUS: proposed 2026-09-14 ∷ no slice started
+STATUS: proposed 2026-09-14 ∷ D1-D6 ANSWERED 2026-09-14 ∷ R0 DONE (#21 cut) ∷ other slices ¬started
 SCOPE: docs/backlog-tasks.md OPEN only: T5{41,44,45} T2{17,20,21,25,28,35,36} ∷ DONE/DONE-PARTIAL ∉scope
 RF: AGENTS.md(step8 verify); docs/agent-context.md; docs/scope-backlog.md §A §H §I §K; per-track plan/finding below
 
 §1 TRACKS+ORDER
   P:={#44,#45} real-exec container ¬PY ∷ unblocks l3-core/@system (#30 S4 stop rule) ⇒ highest leverage ⇒ FIRST
-  C:={#41} repo reader+depend phase ∷ PY per D2 ∷ parallel w/ P ∷ BEFORE H4
-  R:={#20,#21,#36,#25,#35,#17} resolver dual-lang ∷ order: R0 #21(U) ∥ R1 #20 → R2 #36 → R3 #25 → R4 #35 → R5 #17
+  C:={#41} repo reader+depend phase ∷ ¬PY (D2) ∷ parallel w/ P ∷ BEFORE H4
+  R:={#20,#36,#25,#35,#17} resolver dual-lang (#21 cut D1) ∷ order: R0 DONE ∷ R1 #20 → R2 #36 → R3 #25 → R4 #35 → R5 #17
     why #36<#25: local selection change, default-budget fixpoint proven identical ⇒ ¬L0 move ⇒ stable base
     why #35>#25: real graph_db.match_pkgs sees installed as nodes = what #25 adds
     why #17 last: F-B3 ⇒ iteration-1 batch order ← _create_graph insertion order (stable-sort bias) = #25 R3b ⇒ timing on final graph only
   H:={#28} Rust refactor behaviour-neutral ¬PY ∷ any time 1 slot/commit ∷ H4 after C
   DAG: P0→{P1,P2a}; P2a→P2b; {P1,P2b}→P3 ∷ C0→C1→C2→C3→H4 ∷ R2→R3a→R3b→R3c→R3d→R3e→R4→R5 ∷ H1→H2→H3→H4→H5
   FILE-CONFLICT: C×R ∈PR (diff regions; worktrees; rebase C first) ∷ P×C ∈EP (land P2b first ∨ C2 call-site only) ∷ H4×C by design
-    P: EM EP rust/portuale/src/emerge_getbinpkg.rs TEST/layers/l3/* ∷ C: PR EP:run_depend_phase PY? ∷ R: PR MO PT PY CT ∷ H: MD + call sites portuale/src/{fetch,pretend,emerge_build,emerge_getbinpkg}.rs
+    P: EM EP rust/portuale/src/emerge_getbinpkg.rs TEST/layers/l3/* ∷ C: PR EP:run_depend_phase ¬PY ∷ R: PR MO PT PY CT ∷ H: MD + call sites portuale/src/{fetch,pretend,emerge_build,emerge_getbinpkg}.rs
 
 §2 INV (every slice)
   R ⇒ Rust+PY one commit, CT byte-identical ∷ P,H ⇒ real-exec only ¬PY ¬CASES
@@ -27,13 +27,13 @@ RF: AGENTS.md(step8 verify); docs/agent-context.md; docs/scope-backlog.md §A §
   pub sig change ∈portage-* ⇒ cargo build/test/clippy --release @workspace root
   closing commit updates backlog-tasks.md + findings + scope-backlog.md ∷ ¬push ∷ branch backlog/<track>
 
-§3 DECISIONS (U; REC first)
-  D1 #21→Part 3 deliberate cut ⇒ REC yes (flat cycle display/enum/trailer match; nesting ⊥ dedup tree model Gate G0.2) ∷ blocks R0
-  D2 #41 PY mirrors ebuild fallback? ⇒ REC no; Rust-only test ∈tests/test_portuale.py ¬CT ∷ blocks C2
-  D3 #41 write depcachedir(/var/cache/edb/dep) ∨ in-memory ⇒ REC mirror real: write if writable else in-memory (porttree.py depcachedir_w_ok split) ∷ blocks C3
-  D4 #25 per-slice L0 order may move ± if R3e nets ≥0; log every flipped probe ⇒ REC yes ∷ blocks R3b+
-  D5 #17 time-box; residue→deliberate cut w/ lever table ⇒ REC yes ∷ blocks R5 close
-  D6 #28 end state = 8 slots dispatched (¬Director as production entry; decomposition = later proposal) ⇒ REC slots only ∷ blocks H5
+§3 DECISIONS ANSWERED 2026-09-14 (U; binding)
+  D1 #21→Part 3 deliberate cut ⇒ ANS yes ∷ APPLIED backlog-tasks.md "Deliberate cuts" + scope-backlog.md Part 3 ⇒ R0 DONE
+  D2 #41 PY mirror ⇒ ANS no; Rust-only test ∈tests/test_portuale.py ¬CT ∷ C2
+  D3 #41 cache ⇒ ANS write depcachedir(/var/cache/edb/dep) if writable else in-memory (=real porttree.py depcachedir_w_ok split) ∷ C3
+  D4 #25 ⇒ ANS yes: per-slice L0 order may move ±; net after R3e ¬worse; log every flipped probe ∷ R3b+
+  D5 #17 ⇒ ANS time-box R5 = 600 s; limit hit ⇒ STOP + residue→deliberate cut w/ lever table so far ∷ R5
+  D6 #28 ⇒ ANS slots only (¬Director as production entry) ∷ H5
 
 §4 TRACK-P L3 producer (#44 #45)
   GOAL: L3 smoke (TEST/atomlists/l3-smoke.txt) OWNER+VDB environment 0 unexplained ⇒ l3-core(344) startable
@@ -71,7 +71,7 @@ RF: AGENTS.md(step8 verify); docs/agent-context.md; docs/scope-backlog.md §A §
     ACCEPT: 2nd run ¬depend ∧ L2 porttest `strict hard=0 soft=0` w/ ∧ w/o committed cache ∧ L2F→FIXED
 
 §6 TRACK-R resolver
-  R0(U,10m,D1) #21 → backlog-tasks "Deliberate cuts" + scope-backlog Part 3 1-sentence rationale ∷ owner re-opens ⇒ end of R
+  R0 DONE 2026-09-14 (D1) #21 → backlog-tasks "Deliberate cuts" + scope-backlog Part 3 1-sentence rationale ∷ owner re-opens ⇒ end of R
   R1(M,Frev,2-4h) #20 [use]-dep unsat block
     TARGET: `emerge: there are no ebuilds built with USE flags to satisfy "<atom>".` + `!!! One of the following packages is required to complete your request:` + `- <cpv>::<repo> (<reason>)` rows ∷ NOW bare `!!! no visible ebuild for dependency` @PT:1216 PY:22591 helper doc PR:8474 ∷ exit1 ∧ Rust==PY already ok
     1 oracle: container fixture ← CT:3789 test_or_group_use_unsat_alternative_reports_the_dependency_it_enqueued_without_autounmask; capture full real incl (dependency required by …) chain + reason wording (change USE / missing IUSE) ∷ + real-tree gnome-shell samba[client] (F25 F-B5)
@@ -94,11 +94,11 @@ RF: AGENTS.md(step8 verify); docs/agent-context.md; docs/scope-backlog.md §A §
     after R3: live graph_db = read resolver current node set + slot index ¬new parallel structure
     oracle fixture (build if plan only describes): || group, 1st alt conflicts w/ installed higher version same slot ∷ implement downgrade_probe (config/CLI accept downgrade?) + 2 guards; pin both langs
     ACCEPT: fixture == real ∧ L0 ≥ before
-  R5(F,time-box 6h,D5) #17 F-B1 drain timing
+  R5(F,time-box 600s,D5) #17 F-B1 drain timing
     state: gtk:4 398==398 nodes; iterations 578 vs real 290; first div = iteration-1 greedy batch order (sys-libs/zlib real pos 9 vs portuale 45) ∷ F25 + TEST/findings/l0.md "## I"
     1 re-measure post-R3: batch order fixed by R3b? ⇒ record L0 + CLOSE #17
     2 else mo-trace replay real _serialize_tasks frontier vs --debug dump; 1 lever at a time ∈14-probe installed-chain family; table lever→probes flipped
-    3 time-box hit ⇒ D5
+    3 600s hit ⇒ STOP ⇒ residue→deliberate cut w/ lever table so far (D5)
     ACCEPT: #17 DONE w/ numbers ∨ deliberate cut w/ lever table
 
 §7 TRACK-H #28 mrg-director
@@ -111,14 +111,14 @@ RF: AGENTS.md(step8 verify); docs/agent-context.md; docs/scope-backlog.md §A §
   H5(F,2h,docs,D6) proposal Director as production action_build entry w/ post-H1..H4 call graph ⇒ close #28 per D6
 
 §8 WAVES (parallel ∥; gate)
-  W1 P0 ∥ C0 ∥ R0(U) ∥ R1 ∥ H1 ⇒ gate: oracles captured ∧ D1-D3 answered
+  W1 P0 ∥ C0 ∥ R1 ∥ H1 (R0 done) ⇒ gate: oracles captured (D1-D6 answered)
   W2 P1 ∥ P2a ∥ C1 ∥ R2 ∥ H2 ⇒ gate: P2a root cause reviewed
   W3 P2b ∥ C2 ∥ R3a ∥ H3 ⇒ gate: R3a approved ∧ D4
   W4 P3 ∥ C3 ∥ R3b ⇒ gate: L3 smoke clean ∧ L2F #41 FIXED
   W5 R3c ∥ H4
   W6 R3d → R3e ⇒ gate: full L0
   W7 R4 ∥ H5
-  W8 R5 time-boxed ⇒ D5
+  W8 R5 600s ⇒ D5
   sizes = agent-hours excl container runs (L0 longest)
 
 §9 DONE
