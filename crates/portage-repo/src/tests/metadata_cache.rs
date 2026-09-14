@@ -1,5 +1,13 @@
 use super::*;
 
+/// `has_usable_md5_cache` is the per-repo "cache format available?" bit.
+#[test]
+fn has_usable_md5_cache_is_the_presence_of_the_cache_dir() {
+    assert!(has_usable_md5_cache(&fixtures_root().join("repo")));
+    let bare = TempDir::new("portage-repo-has-usable-md5-cache-test").keep();
+    assert!(!has_usable_md5_cache(&bare));
+}
+
 /// With no provider registered a present-but-stale entry is returned as-is.
 #[test]
 fn stale_md5_cache_entry_is_returned_without_a_provider() {
