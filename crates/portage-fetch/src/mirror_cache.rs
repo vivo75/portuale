@@ -378,3 +378,121 @@ impl Json {
         u16::from_str_radix(&digits, 16).ok()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A cache file as Portage wrote it (see notes for provenance).
+    const REAL_CACHE: &str = r#"{"http://gentoo.mirror.root.lu": [1770760517.2913396, [["filename-hash", "BLAKE2B", "8"]]], "https://ftp.fau.de/gentoo": [1767201153.5657716, [["filename-hash", "BLAKE2B", "8"]]], "http://distfiles.gentoo.org": [1788293350.3617969, [["filename-hash", "BLAKE2B", "8"]]]}"#;
+
+    #[test]
+    fn a_real_portage_cache_round_trips_byte_for_byte() {
+        let entries = parse_mirror_cache(REAL_CACHE);
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[2].mirror_url, "http://distfiles.gentoo.org");
+        assert_eq!(entries[2].timestamp, 1788293350.3617969);
+        assert_eq!(
+            entries[2].structure,
+            vec![vec![
+                "filename-hash".to_string(),
+                "BLAKE2B".into(),
+                "8".into()
+            ]]
+        );
+        assert_eq!(serialize_mirror_cache(&entries), REAL_CACHE);
+    }
+
+    #[test]
+    fn upsert_replaces_in_place_and_appends_new_mirrors() {
+        let mut entries = parse_mirror_cache(REAL_CACHE);
+        upsert_mirror_cache(
+            &mut entries,
+            CacheEntry {
+                mirror_url: "https://ftp.fau.de/gentoo".into(),
+                timestamp: 1800000000.0,
+                structure: vec![],
+            },
+        );
+        upsert_mirror_cache(
+            &mut entries,
+            CacheEntry {
+                mirror_url: "/srv/mirror".into(),
+                timestamp: 1800000000.5,
+                structure: vec![vec!["flat".into()]],
+            },
+        );
+        assert_eq!(
+            serialize_mirror_cache(&entries),
+            r#"{"http://gentoo.mirror.root.lu": [1770760517.2913396, [["filename-hash", "BLAKE2B", "8"]]], "https://ftp.fau.de/gentoo": [1800000000.0, []], "http://distfiles.gentoo.org": [1788293350.3617969, [["filename-hash", "BLAKE2B", "8"]]], "/srv/mirror": [1800000000.5, [["flat"]]]}"#
+        );
+    }
+
+    #[test]
+    fn unreadable_or_wrongly_shaped_caches_are_empty() {
+        for text in [
+            "",
+            "not json",
+            "[]",
+            r#"{"m": 1}"#,
+            r#"{"m": [1, [["flat", 2]]]}"#,
+            r#"{"m": [1, []]} trailing"#,
+        ] {
+            assert!(parse_mirror_cache(text).is_empty(), "{text:?}");
+        }
+        assert_eq!(parse_mirror_cache("{}"), vec![]);
+    }
+
+    #[test]
+    fn json_strings_escape_like_python_ensure_ascii() {
+        let entries = vec![CacheEntry {
+            mirror_url: "http://mïrror/\"q\"\\".into(),
+            timestamp: 1.25,
+            structure: vec![],
+        }];
+        let text = serialize_mirror_cache(&entries);
+        // Python: `json.dumps({'http://mïrror/"q"\\': (1.25, ())})`.
+        assert_eq!(text, r#"{"http://m\u00efrror/\"q\"\\": [1.25, []]}"#);
+        assert_eq!(parse_mirror_cache(&text), entries);
+    }
+
+    /// Expected values: Portage `urlparse(...).scheme/.hostname` and
+    /// `urllib.parse.quote`.
+    #[test]
+    fn url_helpers_match_python_urllib() {
+        assert_eq!(url_scheme("HTTPS://Host.Example/x"), "https");
+        assert_eq!(url_scheme("/srv/mirror"), "");
+        assert_eq!(
+            url_hostname("http://distfiles.gentoo.org"),
+            "distfiles.gentoo.org"
+        );
+        assert_eq!(
+            url_hostname("https://user:pw@Mirror.Example:8080/gentoo"),
+            "mirror.example"
+        );
+        assert_eq!(url_hostname("http://[::1]:8080/x"), "::1");
+        assert_eq!(url_hostname("/srv/mirror"), "None");
+        assert_eq!(url_quote("80/a b+c~d_e.f-g"), "80/a%20b%2Bc~d_e.f-g");
+        assert_eq!(url_quote("2e/über.tgz"), "2e/%C3%BCber.tgz");
+    }
+
+    #[test]
+    fn mirror_file_url_quotes_only_web_schemes_and_joins_local_dirs() {
+        assert_eq!(
+            mirror_file_url("http://distfiles.gentoo.org", "80/a b.tgz"),
+            "http://distfiles.gentoo.org/distfiles/80/a%20b.tgz"
+        );
+        assert_eq!(
+            mirror_file_url("rsync://mirror.example/gentoo", "80/a b.tgz"),
+            "rsync://mirror.example/gentoo/distfiles/80/a b.tgz"
+        );
+        assert_eq!(
+            mirror_file_url("/srv/mirror", "80/a b.tgz"),
+            "/srv/mirror/80/a b.tgz"
+        );
+        assert_eq!(
+            mirror_file_url("/srv/mirror/", "a.tgz"),
+            "/srv/mirror/a.tgz"
+        );
+    }
+}

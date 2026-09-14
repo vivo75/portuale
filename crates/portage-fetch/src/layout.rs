@@ -192,6 +192,12 @@ impl MirrorLayoutConfig {
         Ok(Self { structure })
     }
 
+    /// Portage `validate_structure(val, filename)`: with digests given,
+    /// a content-hash layout is only valid for an algorithm the file has.
+    pub fn validate_structure(val: &[String], digests: Option<&HashMap<String, String>>) -> bool {
+        Self::layout_for(val, digests).is_some()
+    }
+
     fn layout_for(
         val: &[String],
         digests: Option<&HashMap<String, String>>,
@@ -235,5 +241,196 @@ impl MirrorLayoutConfig {
             .iter()
             .find_map(|val| Self::layout_for(val, digests))
             .unwrap_or(MirrorLayout::Flat)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn val(s: &str) -> Vec<String> {
+        s.split_whitespace().map(str::to_string).collect()
+    }
+
+    fn fhash(algo: &str, cutoffs: &str) -> MirrorLayout {
+        MirrorLayoutConfig {
+            structure: vec![val(&format!("filename-hash {algo} {cutoffs}"))],
+        }
+        .best_supported(None)
+    }
+
+    /// Expected paths are Portage's own output (portage 3.0.82.2).
+    #[test]
+    fn filename_hash_paths_match_portage() {
+        let none = HashMap::new();
+        for (algo, cutoffs, name, expected) in [
+            ("BLAKE2B", "8", "which-2.23.tar.gz", "80/which-2.23.tar.gz"),
+            (
+                "BLAKE2B",
+                "8:8",
+                "which-2.23.tar.gz",
+                "80/0b/which-2.23.tar.gz",
+            ),
+            ("SHA512", "16", "foo-1.0.tar.gz", "e7e2/foo-1.0.tar.gz"),
+            ("SHA256", "4:12", "a b+c.tar.xz", "7/42d/a b+c.tar.xz"),
+            ("BLAKE2B", "8", "über-1.0.tgz", "2e/über-1.0.tgz"),
+            ("MD5", "8", "x", "9d/x"),
+            ("SHA1", "8", "x", "11/x"),
+            ("BLAKE2S", "8", "x", "ec/x"),
+            ("BLAKE2B", "0", "which-2.23.tar.gz", "/which-2.23.tar.gz"),
+            (
+                "BLAKE2B",
+                "8:0",
+                "which-2.23.tar.gz",
+                "80//which-2.23.tar.gz",
+            ),
+        ] {
+            assert_eq!(
+                fhash(algo, cutoffs).get_path(name, &none).as_deref(),
+                Some(expected),
+                "{algo} {cutoffs} {name}"
+            );
+        }
+        // Negative cutoffs slice like Python (`fnhash[:-1]`).
+        let neg = fhash("BLAKE2B", "-8:4")
+            .get_path("which-2.23.tar.gz", &none)
+            .unwrap();
+        assert_eq!(
+            neg,
+            "800bac16a98c5ba03da25cef5996250a4541cf5796f800c511fecaa89bcf6dee\
+             53036e6e44a0a074db50978380d9c19f11c997c5af809b7ad890838ef0d360/a/which-2.23.tar.gz"
+        );
+    }
+
+    /// Expected verdicts are Portage `MirrorLayoutConfig.validate_structure` (portage 3.0.82.2).
+    #[test]
+    fn validate_structure_matches_portage() {
+        for (entry, expected) in [
+            ("flat", true),
+            ("flat x", false),
+            ("filename-hash BLAKE2B 8", true),
+            ("filename-hash blake2b 8", false),
+            ("filename-hash BLAKE2B 6", false),
+            ("filename-hash BLAKE2B 8:x", false),
+            ("filename-hash BLAKE2B x:6", false),
+            ("filename-hash BLAKE2B -4", true),
+            ("filename-hash BLAKE2B 0", true),
+            ("content-hash SHA512 8", true),
+            ("content-hash blake2b 8", false),
+            ("content-hash WHIRLPOOL 8", true),
+            ("bogus", false),
+            ("", false),
+        ] {
+            assert_eq!(
+                MirrorLayoutConfig::validate_structure(&val(entry), None),
+                expected,
+                "{entry:?}"
+            );
+        }
+        // With the file's digests (`filename.digests = {"SHA512": ...}`).
+        let sha512: HashMap<String, String> = [("SHA512".to_string(), "x".to_string())].into();
+        for (entry, expected) in [
+            ("content-hash SHA512 8", true),
+            ("content-hash BLAKE2B 8", false),
+            ("content-hash sha512 8", false),
+            ("content-hash WHIRLPOOL 8", false),
+        ] {
+            assert_eq!(
+                MirrorLayoutConfig::validate_structure(&val(entry), Some(&sha512)),
+                expected,
+                "{entry:?} with digests"
+            );
+        }
+        // Empty cutoffs: `int("")` fails in Portage too.
+        assert!(!MirrorLayoutConfig::validate_structure(
+            &["filename-hash".into(), "BLAKE2B".into(), String::new()],
+            None
+        ));
+    }
+
+    #[test]
+    fn content_hash_requires_the_files_own_digest() {
+        let config = MirrorLayoutConfig {
+            structure: vec![
+                val("content-hash SHA512 8:8"),
+                val("filename-hash BLAKE2B 8"),
+            ],
+        };
+        let digests: HashMap<String, String> =
+            [("SHA512".to_string(), "abcdef0123".to_string())].into();
+        let layout = config.best_supported(Some(&digests));
+        assert_eq!(
+            layout.get_path("f.tar.gz", &digests).as_deref(),
+            Some("ab/cd/abcdef0123")
+        );
+        // Without a SHA512 digest the next entry wins.
+        let blake_only: HashMap<String, String> =
+            [("BLAKE2B".to_string(), "00".to_string())].into();
+        assert_eq!(
+            config.best_supported(Some(&blake_only)),
+            MirrorLayout::FilenameHash {
+                algo: "BLAKE2B".into(),
+                cutoffs: vec![8]
+            }
+        );
+    }
+
+    #[test]
+    fn best_supported_skips_invalid_entries_and_falls_back_to_flat() {
+        let config = MirrorLayoutConfig {
+            structure: vec![
+                val("filename-hash WHIRLPOOL 8"),
+                val("filename-hash BLAKE2B 6"),
+            ],
+        };
+        assert_eq!(config.best_supported(None), MirrorLayout::Flat);
+        assert_eq!(
+            MirrorLayoutConfig::default().best_supported(None),
+            MirrorLayout::Flat
+        );
+    }
+
+    #[test]
+    fn parse_reads_the_real_gentoo_layout_conf() {
+        let config = MirrorLayoutConfig::parse("[structure]\n0=filename-hash BLAKE2B 8\n").unwrap();
+        assert_eq!(config.structure, vec![val("filename-hash BLAKE2B 8")]);
+    }
+
+    #[test]
+    fn parse_reads_keys_in_order_until_the_first_gap() {
+        let text = "# mirror layout\n[structure]\n1 = flat\n0 : filename-hash BLAKE2B 8:8\n\
+                    3=flat\n\n[other]\nx=y\n";
+        let config = MirrorLayoutConfig::parse(text).unwrap();
+        assert_eq!(
+            config.structure,
+            vec![val("filename-hash BLAKE2B 8:8"), val("flat")]
+        );
+    }
+
+    #[test]
+    fn parse_joins_continuation_lines_before_splitting() {
+        let config =
+            MirrorLayoutConfig::parse("[structure]\n0=filename-hash\n  BLAKE2B 8\n").unwrap();
+        assert_eq!(config.structure, vec![val("filename-hash BLAKE2B 8")]);
+    }
+
+    #[test]
+    fn parse_missing_structure_section_is_empty_not_an_error() {
+        assert_eq!(
+            MirrorLayoutConfig::parse("[other]\n0=flat\n").unwrap(),
+            MirrorLayoutConfig::default()
+        );
+    }
+
+    #[test]
+    fn parse_rejects_what_configparser_rejects() {
+        for text in [
+            "0=flat\n",
+            "[structure]\n[structure]\n",
+            "[structure]\n0=flat\n0=flat\n",
+            "[structure]\njust words\n",
+        ] {
+            assert!(MirrorLayoutConfig::parse(text).is_err(), "{text:?}");
+        }
     }
 }

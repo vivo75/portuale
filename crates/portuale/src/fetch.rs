@@ -1398,6 +1398,61 @@ mod tests {
         );
     }
 
+    /// A cache entry younger than a day is used as-is; an older one is
+    /// refreshed and rewritten.
+    #[test]
+    fn fetch_src_uri_uses_a_fresh_mirror_cache_entry_and_refreshes_a_stale_one() {
+        let now = 1800000000.0;
+        for (age, expect_layout_request) in [(10.0, false), (90000.0, true)] {
+            let hashed = "/distfiles/ce/hello-1.0.tar.gz";
+            let mut routes = vec![(hashed, b"hello world".to_vec())];
+            if expect_layout_request {
+                routes.push((
+                    "/distfiles/layout.conf",
+                    b"[structure]\n0=filename-hash BLAKE2B 8\n".to_vec(),
+                ));
+            }
+            let connections = routes.len();
+            let (mirror_root, requested, handle) = serve_mirror(routes, connections);
+            let pkg_dir = tempdir();
+            let distdir = tempdir();
+            write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+            fs::write(
+                distdir.join(".mirror-cache.json"),
+                format!(
+                    r#"{{"{mirror_root}": [{}, [["filename-hash", "BLAKE2B", "8"]]]}}"#,
+                    now - age
+                ),
+            )
+            .unwrap();
+
+            fetch_src_uri(
+                &pkg_dir,
+                "http://127.0.0.1:1/hello-1.0.tar.gz",
+                &FetchOptions {
+                    distdir: distdir.clone(),
+                    gentoo_mirrors: vec![mirror_root.clone()],
+                    mirror_cache_now: Some(now),
+                    ..FetchOptions::default()
+                },
+            )
+            .unwrap();
+            handle.join().unwrap();
+            let requested = requested.lock().unwrap().clone();
+            if expect_layout_request {
+                assert_eq!(requested, vec!["/distfiles/layout.conf", hashed], "stale");
+                assert!(
+                    fs::read_to_string(distdir.join(".mirror-cache.json"))
+                        .unwrap()
+                        .contains("[1800000000.0, "),
+                    "stale entry rewritten with the new time"
+                );
+            } else {
+                assert_eq!(requested, vec![hashed], "fresh");
+            }
+        }
+    }
+
     /// A file fetched from an earlier candidate never asks a later mirror for
     /// its `layout.conf`.
     #[test]
@@ -1866,6 +1921,151 @@ mod tests {
         );
     }
 
+    /// Expected values from Portage's `fetch(..., listonly=1)`: the public
+    /// mirror once, inline expansions, then literals last-listed-first plus
+    /// third-party expansions again -- or that group first under primaryuri.
+    #[test]
+    fn assemble_candidates_groups_a_files_uris_like_portage_listonly() {
+        use std::collections::HashMap;
+        let mut third: HashMap<String, Vec<String>> = HashMap::new();
+        third.insert(
+            "gnome".to_string(),
+            vec!["https://download.gnome.org/".to_string()],
+        );
+        let mut options = test_options();
+        options.gentoo_mirrors = vec!["http://127.0.0.1:1".to_string()];
+        let public = mirror("http://127.0.0.1:1");
+        let (a, b, c) = (
+            test_entry("http://a.example/f-1.tar.gz", "f-1.tar.gz"),
+            test_entry("http://b.example/f-1.tar.gz", "f-1.tar.gz"),
+            test_entry("http://c.example/f-1.tar.gz", "f-1.tar.gz"),
+        );
+        let gnome = test_entry("mirror://gnome/x/f-1.tar.gz", "f-1.tar.gz");
+        let gnome_url = uri("https://download.gnome.org/x/f-1.tar.gz");
+        let (ua, ub, uc) = (
+            uri("http://a.example/f-1.tar.gz"),
+            uri("http://b.example/f-1.tar.gz"),
+            uri("http://c.example/f-1.tar.gz"),
+        );
+        for (group, default, primaryuri) in [
+            (
+                vec![&a, &b, &c],
+                vec![public.clone(), uc.clone(), ub.clone(), ua.clone()],
+                vec![uc.clone(), ub.clone(), ua.clone(), public.clone()],
+            ),
+            (
+                vec![&a, &gnome, &b],
+                vec![
+                    public.clone(),
+                    gnome_url.clone(),
+                    ub.clone(),
+                    ua.clone(),
+                    gnome_url.clone(),
+                ],
+                vec![
+                    ub.clone(),
+                    ua.clone(),
+                    gnome_url.clone(),
+                    public.clone(),
+                    gnome_url.clone(),
+                ],
+            ),
+        ] {
+            options.restrict_primaryuri = false;
+            assert_eq!(
+                assemble_candidates(&group, &HashMap::new(), &third, &options),
+                default
+            );
+            options.restrict_primaryuri = true;
+            assert_eq!(
+                assemble_candidates(&group, &HashMap::new(), &third, &options),
+                primaryuri
+            );
+        }
+    }
+
+    /// The second digest failure jumps to the primary URIs (mirror 3 never
+    /// contacted); with a cap of 2 nothing after the second failure is tried.
+    #[test]
+    fn fetch_src_uri_checksum_failures_switch_to_primary_uris_then_stop_at_the_cap() {
+        for (cap, expect_success) in [(5, true), (2, false)] {
+            let bad = || {
+                serve_mirror(
+                    vec![("/distfiles/hello-1.0.tar.gz", b"HELLO WORLD".to_vec())],
+                    2,
+                )
+            };
+            let (m1, _, h1) = bad();
+            let (m2, _, h2) = bad();
+            let (m3, m3_requests, h3) = bad();
+            let (literal_root, literal_requests, hl) =
+                serve_mirror(vec![("/hello-1.0.tar.gz", b"hello world".to_vec())], 1);
+            let pkg_dir = tempdir();
+            let distdir = tempdir();
+            write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+
+            let result = fetch_src_uri(
+                &pkg_dir,
+                &format!("{literal_root}/hello-1.0.tar.gz"),
+                &FetchOptions {
+                    distdir: distdir.clone(),
+                    gentoo_mirrors: vec![m1, m2, m3.clone()],
+                    checksum_failure_max_tries: cap,
+                    ..FetchOptions::default()
+                },
+            );
+            h1.join().unwrap();
+            h2.join().unwrap();
+            unblock_server(&m3);
+            h3.join().unwrap();
+            if !expect_success {
+                unblock_server(&literal_root);
+            }
+            hl.join().unwrap();
+            assert!(
+                m3_requests.lock().unwrap().is_empty(),
+                "cap={cap}: mirror 3 never contacted"
+            );
+            if expect_success {
+                result.unwrap_or_else(|e| panic!("cap={cap}: {e}"));
+                assert_eq!(
+                    fs::read_to_string(distdir.join("hello-1.0.tar.gz")).unwrap(),
+                    "hello world"
+                );
+            } else {
+                let err = result.unwrap_err();
+                assert!(literal_requests.lock().unwrap().is_empty(), "{err}");
+                assert_eq!(
+                    err.matches("digest verification failed").count(),
+                    2,
+                    "{err}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn checksum_failure_max_tries_parses_like_portage() {
+        assert_eq!(checksum_failure_max_tries(None), (5, vec![]));
+        assert_eq!(checksum_failure_max_tries(Some("3")), (3, vec![]));
+        assert_eq!(
+            checksum_failure_max_tries(Some("many")),
+            (
+                5,
+                vec![
+                    "!!! Variable PORTAGE_FETCH_CHECKSUM_TRY_MIRRORS contains non-integer value: 'many'"
+                        .to_string(),
+                    "!!! Using PORTAGE_FETCH_CHECKSUM_TRY_MIRRORS default value: 5".to_string(),
+                ]
+            )
+        );
+        assert_eq!(checksum_failure_max_tries(Some("0")).0, 5);
+        assert_eq!(
+            checksum_failure_max_tries(Some("0")).1[0],
+            "!!! Variable PORTAGE_FETCH_CHECKSUM_TRY_MIRRORS contains value less than 1: '0'"
+        );
+    }
+
     #[test]
     fn checksum_failures_rename_bad_files_with_deterministic_suffix() {
         let bad = || serve_mirror(vec![("/distfiles/bad-1.0.tar.gz", b"BAD DATA".to_vec())], 2);
@@ -1924,6 +2124,31 @@ mod tests {
                 i + 1
             );
         }
+    }
+
+    /// Entries grouped by distfile in first-seen order, duplicates dropped.
+    #[test]
+    fn group_by_filename_keeps_first_seen_order_and_drops_repeated_uris() {
+        let entries = vec![
+            test_entry("http://a.example/f-1.tar.gz", "f-1.tar.gz"),
+            test_entry("http://a.example/g-1.tar.gz", "g-1.tar.gz"),
+            test_entry("http://b.example/f-1.tar.gz", "f-1.tar.gz"),
+            test_entry("http://a.example/f-1.tar.gz", "f-1.tar.gz"),
+        ];
+        let groups = group_by_filename(&entries);
+        assert_eq!(
+            groups
+                .iter()
+                .map(|(name, g)| (*name, g.iter().map(|e| e.uri.as_str()).collect::<Vec<_>>()))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "f-1.tar.gz",
+                    vec!["http://a.example/f-1.tar.gz", "http://b.example/f-1.tar.gz"]
+                ),
+                ("g-1.tar.gz", vec!["http://a.example/g-1.tar.gz"]),
+            ]
+        );
     }
 
     /// A multiply-sourced file is still listed once.
