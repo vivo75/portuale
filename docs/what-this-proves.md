@@ -16635,3 +16635,14 @@ python3 -m pytest tests/test_emerge_pretend_contract.py -q \
   -k backtracking_good_version_first
 # -> 1 passed (Rust-only; default, bt4 and bt2 all == real's mergelist)
 ```
+
+**The vdb `environment` now matches real byte-for-byte: real `_flatten`'s set+sort and the source merge's postinst regeneration (backlog #45, P2b, 2026-09-14).** The #45 filing had three symptoms; P2a's live per-phase bisect (a bashrc hook dumping `declare -p A AA RESTRICT f x` at every phase boundary on both PMs) showed one no longer reproduced and the other two had different causes. `RESTRICT="test test"` was not cross-phase accumulation at all: it appeared in the very first phase's assembled env, because `flat_field_on` (used for `PORTAGE_RESTRICT`/`PORTAGE_PROPERTIES`) kept both tokens of ncurses' `RESTRICT="!test? ( test ) test"`, and `bin/ebuild.sh:721-724` overwrote the phase's `RESTRICT` from it. The fix mirrors real `config.py::_flatten` (`:1681-1688`), `" ".join(sorted(set(use_reduce(..., flat=True))))`. The stray `declare -- f` / `declare -- x=""` came from a different mechanism: real's `dblink.treewalk` sets `PORTAGE_UPDATE_ENV=<dbpkgdir>/environment.bz2` before the postinst phase of *every* merge (`vartree.py:5334-5337`), so the vdb env is rewritten from the hook's live env through `__save_ebuild_env --exclude-init-phases | __filter_readonly_variables --filter-path --filter-sandbox --allow-extra-vars` -- the filtered path that drops those globals; portuale's source merge ran the hook without it, keeping the install-time `build-info/environment` save. `merge_after_install` now passes `PORTAGE_UPDATE_ENV` plus the `A` value real `doebuild_environment` exports (`doebuild.py:585-594`; `Some("")` for an `SRC_URI`-less package like `virtual/pkgconfig`). L3 smoke `l3-20260914T192147Z`: **0 environment rows, 0 OWNER rows** (the filing showed 2121 OWNER + 30 VDB); the remaining 12 VDB rows are the `BUILD_TIME`/`metadata` pair, filed separately as #47.
+
+```sh
+TEST/run/l3-source-parity.sh TEST/atomlists/l3-smoke.txt
+# -> TEST/logs/l3-20260914T192147Z: hard findings 12 (BUILD_TIME/metadata only),
+#    no [VDB] .../environment rows, no [OWNER] rows
+
+cargo test --release -p portuale flat_field_on
+# -> flat_field_on_dedups_and_sorts_like_real_flatten: "test test" -> "test"
+```

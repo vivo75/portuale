@@ -3011,6 +3011,50 @@ pub fn run_qmerge(
 /// both real `merge` (after a fresh `install` phase run) and real
 /// `qmerge` (skipping straight here, assuming `install` already ran) --
 /// see `run_merge`/`run_qmerge`'s own doc comments.
+/// Real `configdict["pkg"]["A"]` (`doebuild.py:585-594`): the
+/// use-reduced, unique distfile basenames of the ebuild's `SRC_URI`,
+/// reduced against the resolved `USE` the hook env carries. Real's
+/// `config.environ()` exports it into every phase, so the postinst
+/// vdb-env regeneration (see [`merge_after_install`]'s own
+/// `PORTAGE_UPDATE_ENV` comment) sees it; the filtered `${T}/environment`
+/// does not, which is why the merge path re-supplies it. `None` outside
+/// a repo checkout, with no `SRC_URI`, or on an unparsable `SRC_URI` --
+/// the same "can't tell, so don't set it" degrade `flat_field_on` uses.
+fn source_distfiles(
+    env: &ebuild_phases::Environment,
+    hook_env: &[(String, String)],
+) -> Option<String> {
+    let repo_root = crate::ebuild_phases::repo_root_for(&env.pkg_dir)?;
+    let metadata =
+        portage_repo::repo_aux_metadata(&repo_root, &env.category, &env.split.pf).ok()?;
+    // Real sets `A` unconditionally (`" ".join(uri_map)` is `""` for an
+    // SRC_URI-less package like `virtual/pkgconfig`), so a missing or
+    // empty `SRC_URI` yields `Some("")`, not `None` -- the vdb env must
+    // carry `declare -x A=""` the way real's does.
+    let src_uri = metadata.get("SRC_URI").map(String::as_str).unwrap_or("");
+    if src_uri.trim().is_empty() {
+        return Some(String::new());
+    }
+    let use_value = hook_env
+        .iter()
+        .rev()
+        .find(|(k, _)| k == "USE")
+        .map(|(_, v)| v.as_str())
+        .unwrap_or("");
+    let use_flags: std::collections::HashSet<String> =
+        use_value.split_whitespace().map(String::from).collect();
+    let mut a: Vec<String> = Vec::new();
+    for entry in
+        portage_fetch::flatten_src_uri(src_uri, |negated, flag| use_flags.contains(flag) != negated)
+            .ok()?
+    {
+        if !a.contains(&entry.filename) {
+            a.push(entry.filename);
+        }
+    }
+    Some(a.join(" "))
+}
+
 fn merge_after_install(
     ebuild_path: &Path,
     root: &Path,
@@ -3181,6 +3225,33 @@ fn merge_after_install(
     // here, so keep going regardless of phase return code") -- real
     // `env_update()` always runs next, as long as anything was actually
     // installed (real `if contents:`) or a replaced version was removed.
+    //
+    // Real `dblink.treewalk()` (`vartree.py:5334-5337`) sets
+    // `PORTAGE_UPDATE_ENV=<dbpkgdir>/environment.bz2` before the
+    // postinst phase of *every* merge, source included, so
+    // `bin/phase-functions.sh:1072-1082` rewrites the vdb environment
+    // from the hook's live environment through the filtered save
+    // (`__save_ebuild_env --exclude-init-phases | __filter_readonly_variables
+    // --filter-path --filter-sandbox --allow-extra-vars`). That rewrite is
+    // what drops the install-time `build-info/environment` save's stray
+    // globals (`f`, `x`) real never records (#45 P2a finding). The
+    // filtered `${T}/environment` drops `A`, so it is re-supplied here
+    // exactly as real `doebuild_environment` exports it
+    // (`doebuild.py:585-594`: the use-reduced, unique distfile names;
+    // real's `config.environ()` gives every phase that value).
+    let vdb_env_bz2 = root
+        .join("var/db/pkg")
+        .join(&env.category)
+        .join(&env.split.pf)
+        .join("environment.bz2");
+    let mut postinst_env = options.build_env.clone();
+    postinst_env.push((
+        "PORTAGE_UPDATE_ENV".to_string(),
+        vdb_env_bz2.display().to_string(),
+    ));
+    if let Some(a) = source_distfiles(env, &postinst_env) {
+        postinst_env.push(("A".to_string(), a));
+    }
     let postinst_status = ebuild_phases::run_single_phase(
         ebuild_path,
         "postinst",
@@ -3189,7 +3260,7 @@ fn merge_after_install(
         options.debug,
         &options.config_root,
         options.shell,
-        &options.build_env,
+        &postinst_env,
         options.log_file.as_deref(),
     )?;
 
