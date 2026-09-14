@@ -3683,6 +3683,100 @@ def test_emerge_atom_upgrade_replaces_the_installed_version(emerge_binary, tmp_p
     )
 
 
+def _passwordless_sudo() -> list[str] | None:
+    """`["sudo", "-n"]` when the host has passwordless sudo (the
+    container test bed's convention; the L3 oracle bed relies on it), or
+    `None` -- ownership-preservation assertions need to `chown` to a
+    non-root uid, which only root may do."""
+    import shutil
+
+    sudo = shutil.which("sudo")
+    if sudo is None:
+        return None
+    probe = subprocess.run([sudo, "-n", "true"], capture_output=True, check=False)
+    if probe.returncode != 0:
+        return None
+    return [sudo, "-n"]
+
+
+def test_merge_skips_an_identical_file_preserving_ownership(emerge_binary, tmp_path):
+    """Real `dblink._needs_move` (`vartree.py:6363`, bug #722270): a
+    re-merge whose destination is already a regular file with the same
+    mode and byte-identical content does not move the file at all, so the
+    destination's inode and ownership survive; a *different* file is
+    replaced and takes the source's own ownership. This is exactly the L3
+    ncurses `OWNER 1:1` case: the stage3 image ships `/usr/include/
+    curses.h` `1:1`, the rebuilt copy is byte-identical, and real keeps
+    `1:1` while a blind copy writes `0:0`.
+
+    Runs as root via `sudo -n` because observing the difference needs a
+    `chown 1:1` between the two merges; skips when passwordless sudo is
+    unavailable."""
+    sudo = _passwordless_sudo()
+    if sudo is None:
+        pytest.skip("passwordless sudo unavailable")
+
+    import shutil
+
+    root = tmp_path / "root"
+    shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
+    env_args = [
+        f"PORTAGE_CONFIGROOT={FIXTURES_ROOT}",
+        f"ROOT={root}",
+        f"PORTAGE_TMPDIR={tmp_path / 'portage-tmpdir'}",
+    ]
+    ebuild_link = tmp_path / "ebuild"
+    ebuild_link.symlink_to(Path(emerge_binary).resolve())
+    v1 = str(Path(FIXTURES_ROOT) / "repo/dev-libs/binpkgrmpkg/binpkgrmpkg-1.0.ebuild")
+
+    def merge() -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [*sudo, "env", *env_args, str(ebuild_link), v1, "merge"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    first = merge()
+    assert first.returncode == 0, (first.stdout, first.stderr)
+    dest = root / "usr/share/binpkgrmpkg/payload-1.0.txt"
+    assert dest.is_file()
+
+    # Real installed-1:1 case: make the destination look like a file the
+    # image shipped as bin:bin, record its inode, re-merge the identical
+    # ebuild.
+    swapped = subprocess.run(
+        [*sudo, "chown", "1:1", str(dest)], capture_output=True, check=False
+    )
+    assert swapped.returncode == 0, swapped.stderr
+    ino = os.stat(dest).st_ino
+    second = merge()
+    assert second.returncode == 0, (second.stdout, second.stderr)
+    st = os.stat(dest)
+    assert (st.st_uid, st.st_gid) == (1, 1), (
+        "an identical re-merge must leave the destination's ownership alone"
+    )
+    assert st.st_ino == ino, "an identical re-merge must not replace the inode"
+
+    # Negative control: content differs -> real moves the file, which
+    # takes the source's own 0:0 ownership.
+    bumped = subprocess.run(
+        [*sudo, "sh", "-c", f"printf 'changed\\n' >> '{dest}'"],
+        capture_output=True,
+        check=False,
+    )
+    assert bumped.returncode == 0, bumped.stderr
+    third = merge()
+    assert third.returncode == 0, (third.stdout, third.stderr)
+    st = os.stat(dest)
+    assert (st.st_uid, st.st_gid) == (0, 0), (
+        "a differing file must be replaced, taking the source's ownership"
+    )
+    assert dest.read_text() == "payload 1.0\n", (
+        "a differing destination must be overwritten with the source content"
+    )
+
+
 def test_emerge_unmerge_without_pretend_really_removes_and_deselects(
     emerge_binary, tmp_path
 ):

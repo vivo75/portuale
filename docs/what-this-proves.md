@@ -16600,3 +16600,17 @@ cargo test --release -p mrg-director fetcher
 ```
 
 **One aux-metadata entry point per repo, cache-less listers made visible (backlog #41, slice C1, 2026-09-14).** Real's `porttree.py` treats `md5-dict` as a cache *format*, not a requirement: when a repo's `metadata/md5-cache` is absent (or an entry is missing) the metadata comes from the ebuild via the depend phase. Portuale's repo reader was invoked directly from every call site, so a cache-less repo was silently version-less. C1 is the behaviour-neutral plumbing half, Rust-only per D2: `portage-repo::repo_aux_metadata(repo_location, category, pf)` is now the single entry point every production `read_md5_cache` call site goes through (`read_md5_cache` is private to the delegation), and `portage-repo::has_usable_md5_cache(repo_location)` memoizes the repo-level "is there a cache directory" bit. The `mrg-director` `RepoCache` impl now lists `<cat>/<pkg>/*.ebuild` file stems for a cache-less repo instead of an empty `md5-cache` directory. Nothing changes for repos with a cache (every L0/L1 probe): a miss still returns the same `Error::ReadFile` -- C2 registers the depend-phase provider at `repo_aux_metadata`. Verified: `cargo fmt`/`clippy`/`test --release` green, full `pytest` 1572 passed / 0 failed (Python untouched), `grep read_md5_cache` shows only the definition + delegation. Grounding: `3rdparty/portage/lib/portage/dbapi/porttree.py` (`depcachedir`, auxdb selection, `_pull_valid_cache`/`doebuild` depend).
+
+**Identical files survive a rebuild: real `_needs_move` at the merge (backlog #44, slice P1, 2026-09-14).** The L3 source-parity candidate showed 2121 `OWNER` rows on the rebuilt ncurses: the stage3 image ships `/usr/include/curses.h`, terminfo, … as `bin:bin` (`1:1`), real's `--emptytree` merge kept `1:1`, portuale's blind `std::fs::copy` wrote `0:0`. The P0 oracle decided the mechanism: real's `${D}` is `0:0` too, so real is not preserving ownership by copying — `dblink.mergeme` calls `movefile` only when `self._needs_move(mysrc, mydest, mymode, mydmode)` is true (`vartree.py:5916`, definition `:6363`, bug #722270): an existing regular file with the same full mode and `filecmp.cmp(shallow=False)`-equal bytes is left in place and only its mtime is refreshed, so its inode/ownership/xattrs survive. A symlink never takes that path (which is why real's `ncurses.h` symlink did come out `0:0`). Portuale now ports that gate at the regular-file merge site: `needs_move` (lstat modes + chunked byte compare) skips the copy and refreshes the mtime, `write_dest != dest` (a diverted `._cfgNNNN_` write) always moves like real's cleared `mydmode`, and the only documented narrowing is real's `FEATURES=xattr` `_cmpxattr` compare (portuale's merge copies no xattrs). Pinned by a root-requiring regression test that pre-creates a `1:1` destination, asserts ownership and inode survive a byte-identical re-merge, then bumps the content and asserts the file flips back to the source's `0:0` (fails on the pre-fix merge, passes with it).
+
+```sh
+# root-owned destination, identical re-merge (passwordless sudo)
+python3 -m pytest tests/test_portuale.py -q -k test_merge_skips_an_identical_file_preserving_ownership
+# -> 1 passed
+
+# real-tree scale: OWNER rows 2121 -> 0
+L3_CONTROL=0 TEST/run/l3-source-parity.sh TEST/atomlists/l3-smoke.txt
+# -> TEST/logs/l3-20260914T132606Z: hard findings 18 (all VDB, #45), 0 OWNER
+TEST/run/l1-merge-from-binpkg.sh TEST/atomlists/l1-porttest.txt
+# -> TEST/logs/l1-20260914T135235Z: strict hard=0, unexplained 0
+```

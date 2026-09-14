@@ -1699,41 +1699,61 @@ fn merge_tree(
                         std::fs::create_dir_all(parent)
                             .map_err(|e| format!("{}: {e}", parent.display()))?;
                     }
-                    std::fs::copy(&src, &write_dest)
-                        .map_err(|e| format!("{}: {e}", src.display()))?;
-                    // Real `movefile()`'s `_apply_stat`: `os.chown(dest,
-                    // sstat.st_uid, sstat.st_gid)` then `os.chmod(dest,
-                    // sstat.st_mode)` after the copy/rename -- preserves
-                    // the source's own recorded owner/group and mode.
-                    // `std::fs::copy` already carries a regular file's
-                    // permission bits over on Unix, so the chmod here is
-                    // belt-and-suspenders that also fixes up a
-                    // pre-existing `._cfgNNNN_` sibling should the umask
-                    // have masked a bit; the chown is not redundant --
-                    // `std::fs::copy` never touches ownership. See
-                    // `lchown_or_chown`'s own doc comment for the
-                    // root/non-root behavior.
-                    {
-                        use std::os::unix::fs::PermissionsExt;
-                        let src_meta = std::fs::metadata(&src)
-                            .map_err(|e| format!("{}: {e}", src.display()))?;
-                        lchown_or_chown(&write_dest, src_meta.uid(), src_meta.gid(), false)?;
-                        std::fs::set_permissions(
+                    // Real `mergeme()`'s `if self._needs_move(mysrc,
+                    // mydest, mymode, mydmode)` gate (bug #722270): a
+                    // destination that already is a regular file with
+                    // the same mode and byte-identical content is left
+                    // completely in place -- inode, ownership and xattrs
+                    // survive the rebuild, and only the mtime is
+                    // refreshed (`os.utime(mydest, ns=(mymtime,
+                    // mymtime))`). A diverted `._cfgNNNN_` write never
+                    // takes this path: real clears `mydmode` whenever
+                    // `_protect` diverts (`vartree.py:5645-5647`), so it
+                    // always moves there, and `write_dest != dest` says
+                    // the same thing here.
+                    if write_dest == dest && !needs_move(&src, &write_dest) {
+                        filetime::set_file_mtime(
                             &write_dest,
-                            std::fs::Permissions::from_mode(src_meta.permissions().mode()),
+                            filetime::FileTime::from_unix_time(mtime, 0),
+                        )
+                        .map_err(|e| format!("{}: {e}", write_dest.display()))?;
+                    } else {
+                        std::fs::copy(&src, &write_dest)
+                            .map_err(|e| format!("{}: {e}", src.display()))?;
+                        // Real `movefile()`'s `_apply_stat`: `os.chown(dest,
+                        // sstat.st_uid, sstat.st_gid)` then `os.chmod(dest,
+                        // sstat.st_mode)` after the copy/rename -- preserves
+                        // the source's own recorded owner/group and mode.
+                        // `std::fs::copy` already carries a regular file's
+                        // permission bits over on Unix, so the chmod here is
+                        // belt-and-suspenders that also fixes up a
+                        // pre-existing `._cfgNNNN_` sibling should the umask
+                        // have masked a bit; the chown is not redundant --
+                        // `std::fs::copy` never touches ownership. See
+                        // `lchown_or_chown`'s own doc comment for the
+                        // root/non-root behavior.
+                        {
+                            use std::os::unix::fs::PermissionsExt;
+                            let src_meta = std::fs::metadata(&src)
+                                .map_err(|e| format!("{}: {e}", src.display()))?;
+                            lchown_or_chown(&write_dest, src_meta.uid(), src_meta.gid(), false)?;
+                            std::fs::set_permissions(
+                                &write_dest,
+                                std::fs::Permissions::from_mode(src_meta.permissions().mode()),
+                            )
+                            .map_err(|e| format!("{}: {e}", write_dest.display()))?;
+                        }
+                        // Real movefile() preserves the source's own mtime onto
+                        // the destination -- std::fs::copy doesn't (the copy
+                        // gets a fresh "now" mtime), which would otherwise never
+                        // match what's recorded in CONTENTS below (see
+                        // ebuild_unmerge.rs's own "!mtime" staleness check).
+                        filetime::set_file_mtime(
+                            &write_dest,
+                            filetime::FileTime::from_unix_time(mtime, 0),
                         )
                         .map_err(|e| format!("{}: {e}", write_dest.display()))?;
                     }
-                    // Real movefile() preserves the source's own mtime onto
-                    // the destination -- std::fs::copy doesn't (the copy
-                    // gets a fresh "now" mtime), which would otherwise never
-                    // match what's recorded in CONTENTS below (see
-                    // ebuild_unmerge.rs's own "!mtime" staleness check).
-                    filetime::set_file_mtime(
-                        &write_dest,
-                        filetime::FileTime::from_unix_time(mtime, 0),
-                    )
-                    .map_err(|e| format!("{}: {e}", write_dest.display()))?;
                 }
                 // Real CONTENTS always records the package's own logical
                 // path (`abs_path`) and the *source*'s own MD5 -- never
@@ -1907,6 +1927,76 @@ fn lchown_or_chown(dest: &Path, uid: u32, gid: u32, is_symlink: bool) -> Result<
         ));
     }
     Ok(())
+}
+
+/// Real `dblink._needs_move` (`vartree.py:6363`): `true` unless the
+/// destination already exists as a regular file with the same full mode
+/// and byte-identical content. When it returns `false`, real's
+/// `mergeme` does not call `movefile` at all (`:5916`'s
+/// `if self._needs_move(...)` gate, bug #722270) -- the destination's
+/// inode, ownership and xattrs survive the rebuild and only its mtime is
+/// refreshed, which is exactly why the L3 ncurses case keeps `1:1`:
+/// the stage3 image's `curses.h`/terminfo are byte-identical to the
+/// rebuilt ones, so real leaves them alone while a fresh copy would
+/// come out `0:0`.
+///
+/// Narrowing: real also compares xattrs when `FEATURES=xattr`
+/// (`_cmpxattr`, `PORTAGE_XATTR_EXCLUDE`-aware); portuale's merge copies
+/// no xattrs, so xattrs are treated as equal (the ordinary no-xattr
+/// case). Real's `filecmp.cmp(shallow=False)` is a byte compare after
+/// the mode check; [`files_equal`] does the same in fixed chunks.
+fn needs_move(src: &Path, dest: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let Ok(src_meta) = std::fs::symlink_metadata(src) else {
+        return true;
+    };
+    let Ok(dest_meta) = std::fs::symlink_metadata(dest) else {
+        return true;
+    };
+    if !dest_meta.is_file() || src_meta.permissions().mode() != dest_meta.permissions().mode() {
+        return true;
+    }
+    !files_equal(src, dest).unwrap_or(false)
+}
+
+/// Byte-for-byte comparison for [`needs_move`] (real
+/// `filecmp.cmp(shallow=False)`, which also short-circuits on a size
+/// mismatch first). Chunked so a large distfile-scale object never
+/// materializes in memory twice.
+fn files_equal(a: &Path, b: &Path) -> std::io::Result<bool> {
+    let mut fa = std::fs::File::open(a)?;
+    let mut fb = std::fs::File::open(b)?;
+    if fa.metadata()?.len() != fb.metadata()?.len() {
+        return Ok(false);
+    }
+    let mut ba = [0u8; 64 * 1024];
+    let mut bb = [0u8; 64 * 1024];
+    loop {
+        let na = read_filling(&mut fa, &mut ba)?;
+        let nb = read_filling(&mut fb, &mut bb)?;
+        if na != nb || ba[..na] != bb[..nb] {
+            return Ok(false);
+        }
+        if na == 0 {
+            return Ok(true);
+        }
+    }
+}
+
+/// `read` until `buf` is full or EOF (a plain `Read::read` may return a
+/// short count for regular files too, which would otherwise misalign the
+/// chunk comparison).
+fn read_filling(reader: &mut std::fs::File, buf: &mut [u8]) -> std::io::Result<usize> {
+    use std::io::Read as _;
+    let mut filled = 0;
+    while filled < buf.len() {
+        let n = reader.read(&mut buf[filled..])?;
+        if n == 0 {
+            break;
+        }
+        filled += n;
+    }
+    Ok(filled)
 }
 
 /// Real `lib/portage/const.py`'s own `CACHE_PATH` (`var/cache/edb`): the
