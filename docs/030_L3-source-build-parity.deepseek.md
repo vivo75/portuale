@@ -9,7 +9,7 @@ The candidate run (`l3-20260914T021049Z`) builds and merges all 6 smoke
 packages under portuale and surfaced four producer classes; two are
 fixed with Rust regression tests (`l3-subslot-self-collision`,
 `l3-config-multi-assignment-stacks`) and two are filed with repros
-(`l3-merge-owner-1-1`, `l3-merge-vdb-env-accumulates`). Per the S4 stop
+(`l3-merge-owner-1-1` = backlog #44, `l3-merge-vdb-env-accumulates` = backlog #45). Per the S4 stop
 rule (>3 distinct systemic classes), `l3-core` (344 ebuilds with `-e`)
 and `@system` (368) are deliberately not started until those two are
 fixed. S3's #37/#38 prerequisites landed as their own Tier-5 slices
@@ -703,8 +703,8 @@ from S3 on wants a frontier model, and S0 must be frontier by design.
       end-to-end; report + metrics emitted; `L3_PM` one-side mode works.
 - [x] portage-vs-portage control is 0 unexplained on smoke.
 - [ ] `l3-core` is 0 unexplained hard findings. *(not started: S4 stop
-      rule — two filed systemic classes, `l3-merge-owner-1-1` and
-      `l3-merge-vdb-env-accumulates`)*
+      rule — two filed systemic classes: backlog #44
+      (`l3-merge-owner-1-1`) and #45 (`l3-merge-vdb-env-accumulates`))*
 - [ ] `@system` has been run on both PMs; every hard finding is
       fixed or filed with a repro, an `owner:` and (if adjudicated) a
       `layer: l3` entry; metrics + eclass ledger written. *(not
