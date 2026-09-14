@@ -660,6 +660,15 @@ pub fn download_with_commands(args: DownloadWithCommandsArgs<'_>) -> Result<(), 
     Ok(())
 }
 
+/// A quiet fetch failure: the same one-line summary
+/// [`download_with_commands`] would return, plus everything the fetch
+/// command wrote to stderr (its stdout is discarded).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuietFetchError {
+    pub summary: String,
+    pub stderr: String,
+}
+
 /// The `make.globals` default transport, for callers with no resolved
 /// config: `download_with_commands` over the defaults, no extra
 /// variables. Shared by the `portuale` fetch path and the `mrg-director`
@@ -777,6 +786,16 @@ mod tests {
     use portage_util::TempDir;
     use std::fs;
 
+    /// Serialises stub-script creation against every stub spawn across
+    /// the parallel test threads (see notes for the `ETXTBSY` story).
+    static SPAWN_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn spawn_guard() -> std::sync::MutexGuard<'static, ()> {
+        // Recover from poisoning: a panicking test must not cascade into
+        // every other spawn test.
+        SPAWN_SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn tempdir() -> std::path::PathBuf {
         // Unique per call across parallel test threads (pid + counter);
         // the timestamp is a run marker only (see notes).
@@ -801,6 +820,53 @@ mod tests {
         hashes.insert("BLAKE2B".to_string(), "aa".to_string());
         let digests = DistfileDigests { size: 11, hashes };
         assert_eq!(digests_variable(&digests), "blake2b:aa sha512:bb");
+    }
+
+    /// A stub "fetch command": `cp <uri-path> <dest>`. Spawned directly,
+    /// exactly the way a Portage `FETCHCOMMAND` is.
+    fn stub_fetch_script(dir: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
+        // Under the spawn lock: no other test may fork (spawn) while
+        // this write-fd is open — see `SPAWN_SERIAL`.
+        let _guard = spawn_guard();
+        let path = dir.join(name);
+        fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        let mut perms = fs::metadata(&path).unwrap().permissions();
+        use std::os::unix::fs::PermissionsExt;
+        perms.set_mode(0o755);
+        fs::set_permissions(&path, perms).unwrap();
+        path
+    }
+
+    /// Arguments of [`download_serialized`].
+    struct DownloadSerializedArgs<'a> {
+        uri: &'a str,
+        dest: &'a std::path::Path,
+        resume: bool,
+        distdir: &'a std::path::Path,
+        vars: FetchCommandVars<'a>,
+        commands: &'a FetchCommands,
+    }
+
+    /// The only way these tests spawn a stub: [`download_with_commands`]
+    /// under the spawn lock (see `SPAWN_SERIAL`).
+    fn download_serialized(args: DownloadSerializedArgs<'_>) -> Result<(), String> {
+        let DownloadSerializedArgs {
+            uri,
+            dest,
+            resume,
+            distdir,
+            vars,
+            commands,
+        } = args;
+        let _guard = spawn_guard();
+        download_with_commands(DownloadWithCommandsArgs {
+            uri,
+            dest,
+            resume,
+            distdir,
+            vars,
+            commands,
+        })
     }
 
     #[test]
