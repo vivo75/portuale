@@ -3057,8 +3057,48 @@ pub(crate) fn run_depend_phase(
     Ok(md)
 }
 
+/// C2's registered cache-miss provider (see
+/// `portage_repo::register_aux_metadata_provider`): regenerate one
+/// ebuild's aux metadata by running its real `depend` phase -- real
+/// `porttree.py`'s ebuild fallback when `metadata/md5-cache` has no
+/// entry (`_pull_valid_cache` miss -> `doebuild(mydo="depend")`, C0's
+/// oracle). The result is the same `HashMap` shape `read_md5_cache`
+/// returns, so the resolver cannot tell the difference.
+///
+/// Layering: this lives in `portuale` (the binary that owns real phase
+/// execution) and is registered once from `main`; `portage-repo` only
+/// holds the `fn`-pointer slot. `root`/`config_root`/`PORTAGE_TMPDIR`
+/// come from the process environment, the same CLI-boundary defaults
+/// `root_from_env`/`config_root_from_env`/`portage_tmpdir_from_env`
+/// already establish. `depend` is never sandboxed, so this is a plain
+/// `bash bin/ebuild.sh depend` (see `run_depend_phase`).
+pub(crate) fn depend_phase_metadata(
+    repo_location: &Path,
+    category: &str,
+    pf: &str,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    let Some((package, _version)) = crate::remote_bundle::split_pf(pf) else {
+        return Err(format!("{pf}: not a package-version name"));
+    };
+    let ebuild = repo_location
+        .join(category)
+        .join(&package)
+        .join(format!("{pf}.ebuild"));
+    if !ebuild.is_file() {
+        return Err(format!("{}: no ebuild", ebuild.display()));
+    }
+    let portage_tmpdir = portage_repo::portage_tmpdir_from_env();
+    let env = compute_environment(&ebuild, &portage_tmpdir)?;
+    run_depend_phase(
+        &env,
+        &portage_repo::root_from_env(),
+        &portage_repo::config_root_from_env(),
+        false,
+    )
+    .map_err(|e| e.message)
+}
+
 /// Real `bin/misc-functions.sh`'s own invocation shape -- unlike
-/// `run_one_phase`'s own `bin/ebuild.sh` + `__ebuild_main <phase>`, real
 /// `doebuild()` invokes commands like `"package"` as a *separate*
 /// script, `bin/misc-functions.sh __dyn_<mydo>` (real
 /// `lib/portage/package/ebuild/doebuild.py`'s own `misc_sh = ... +

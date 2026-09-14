@@ -1364,23 +1364,98 @@ fn read_md5_cache(
     Ok(map)
 }
 
+/// The hook `repo_aux_metadata` asks on a cache miss: it receives the
+/// repo location plus `category`/`pf` and returns the aux dict a `depend`
+/// phase produced (real `porttree.py`'s ebuild fallback). A plain `fn`
+/// pointer, because the phase runner lives in the binary crate
+/// (`portuale`), which cannot be referenced from here -- the layering
+/// constraint C2 documents.
+pub type AuxMetadataProvider = fn(&Path, &str, &str) -> Result<HashMap<String, String>, String>;
+
+static AUX_METADATA_PROVIDER: OnceLock<AuxMetadataProvider> = OnceLock::new();
+
+/// Register the process-wide fallback provider (idempotent: only the
+/// first registration wins, so a second call is a no-op). Called once at
+/// startup by the binary that can run ebuild phases; with no provider
+/// registered, `repo_aux_metadata` behaves exactly as before C2.
+pub fn register_aux_metadata_provider(provider: AuxMetadataProvider) {
+    let _ = AUX_METADATA_PROVIDER.set(provider);
+}
+
 /// The single entry point for a repo's aux metadata for `category/pf`
 /// ("package-version", e.g. `foo-1.2.3-r1`): every production
 /// `read_md5_cache` call site in this crate and in `portuale`/`mrg-director`
 /// goes through here.
 ///
 /// This is the C2 hook site: a per-cp cache miss (no
-/// `metadata/md5-cache/<category>/<pf>` file) will ask the registered
-/// depend-phase provider here for the metadata the cache lacks. Today it
-/// delegates to [`read_md5_cache`] unchanged, so a miss keeps the same
-/// `Error::ReadFile` and behaviour is neutral for repos that have a
-/// cache (every L0/L1 probe).
+/// `metadata/md5-cache/<category>/<pf>` file) asks the registered
+/// depend-phase provider for the metadata the cache lacks -- real
+/// `porttree.py`'s ebuild fallback (`_pull_valid_cache` miss ->
+/// `doebuild(mydo="depend")`, C0's oracle). With no provider registered
+/// (unit tests, `mrg`-only builds) a miss keeps the same `Error::ReadFile`
+/// as before, so cached repos -- every L0/L1 probe -- are untouched.
+/// Provider results are memoised per cp for the process lifetime (the
+/// resolver reads one entry many times; C3 layers the cross-process
+/// `depcachedir` write-back on top).
 pub fn repo_aux_metadata(
     repo_location: &Path,
     category: &str,
     pf: &str,
 ) -> Result<std::sync::Arc<HashMap<String, String>>, Error> {
-    read_md5_cache(repo_location, category, pf)
+    match read_md5_cache(repo_location, category, pf) {
+        Ok(map) => Ok(map),
+        Err(read_err) => {
+            let Some(provider) = AUX_METADATA_PROVIDER.get() else {
+                return Err(read_err);
+            };
+            type FallbackCache =
+                HashMap<(PathBuf, String, String), std::sync::Arc<HashMap<String, String>>>;
+            static FALLBACK: OnceLock<RwLock<FallbackCache>> = OnceLock::new();
+            let cache = FALLBACK.get_or_init(|| RwLock::new(HashMap::new()));
+            let key = (
+                repo_location.to_path_buf(),
+                category.to_string(),
+                pf.to_string(),
+            );
+            // The provider itself runs the depend phase, whose env
+            // assembly reads `RESTRICT`/`PROPERTIES` through this same
+            // entry point -- a *nested* miss must not recurse into the
+            // provider again (it would never terminate). Real has the
+            // same shape: the depend phase reads the ebuild, not the
+            // cache it is generating.
+            thread_local! {
+                static IN_PROVIDER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+            }
+            if IN_PROVIDER.with(|flag| flag.get()) {
+                return Err(read_err);
+            }
+            if let Ok(guard) = cache.read()
+                && let Some(map) = guard.get(&key)
+            {
+                return Ok(std::sync::Arc::clone(map));
+            }
+            struct InProviderGuard;
+            impl Drop for InProviderGuard {
+                fn drop(&mut self) {
+                    IN_PROVIDER.with(|flag| flag.set(false));
+                }
+            }
+            IN_PROVIDER.with(|flag| flag.set(true));
+            let _guard = InProviderGuard;
+            match provider(repo_location, category, pf) {
+                Ok(map) => {
+                    let map = std::sync::Arc::new(map);
+                    if let Ok(mut guard) = cache.write() {
+                        guard.insert(key, std::sync::Arc::clone(&map));
+                    }
+                    Ok(map)
+                }
+                // The provider already reported its own failure; the
+                // caller's contract (a missing entry) is the read error.
+                Err(_) => Err(read_err),
+            }
+        }
+    }
 }
 
 /// Whether `repo_location` ships a usable `metadata/md5-cache` (i.e. the

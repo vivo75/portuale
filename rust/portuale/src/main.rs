@@ -120,6 +120,14 @@ fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().collect();
     let invoked_as = basename(&argv[0]);
 
+    // C2: the binary that owns real ebuild-phase execution registers the
+    // cache-miss metadata provider `portage-repo` asks from
+    // `repo_aux_metadata` (the ebuild fallback real `porttree.py` runs
+    // when `metadata/md5-cache` lacks the entry). `portage-repo` itself
+    // carries no phase runner; unregistered (unit tests), a miss keeps
+    // the old read error.
+    portage_repo::register_aux_metadata_provider(ebuild_phases::depend_phase_metadata);
+
     // Primary dispatch: argv[0] (how a real emerge/ebuild symlink invokes
     // us). Fallback: an explicit first argument, e.g. `portuale emerge
     // --pretend ...`, matching busybox's own dual invocation style so the

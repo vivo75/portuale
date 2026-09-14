@@ -16646,3 +16646,13 @@ TEST/run/l3-source-parity.sh TEST/atomlists/l3-smoke.txt
 cargo test --release -p portuale flat_field_on
 # -> flat_field_on_dedups_and_sorts_like_real_flatten: "test test" -> "test"
 ```
+
+**A cache-less repo resolves through the depend phase: the #41 fallback is wired (slice C2, 2026-09-14).** Real `porttree.py` treats `metadata/md5-cache` as one cache *format*: when a repo has no cache (or no entry for a cpv) the metadata comes from the ebuild via `doebuild(mydo="depend")`, and C0's oracle captured the exact shape (the aux dict written to `depcachedir`, the read-only in-memory branch, `_md5_` validation of existing entries). C1 made `portage_repo::repo_aux_metadata` the single read entry point and `has_usable_md5_cache` the per-repo bit; C2 fills the hook: `portage_repo::register_aux_metadata_provider` takes a plain `fn(&Path, &str, &str) -> Result<HashMap<String,String>, String>` (the layering point -- `portage-repo` cannot call the binary's phase runner), `portuale::main` registers `ebuild_phases::depend_phase_metadata`, and a cache miss inside `repo_aux_metadata` now runs the real `depend` phase (`run_depend_phase`, the same runner `--regen` uses), memoised per cp for the process and guarded against re-entry (the depend phase's own env assembly reads `RESTRICT`/`PROPERTIES` through the same entry point). With no provider registered -- unit tests, `mrg`-only builds -- a miss keeps the pre-C2 `Error::ReadFile`, so cached repos are untouched. Rust-only per D2; the `depcachedir` write-back and the L2 cache-less variant are C3.
+
+```sh
+# staged porttest overlay with metadata/md5-cache removed
+python3 -m pytest tests/test_portuale.py -q \
+  -k test_cache_less_repo_metadata_falls_back_to_the_depend_phase
+# -> 1 passed: `[ebuild  N     ] porttest/docs-1.0` with no cache on disk,
+#    and byte-identical output from the restored-cache control run
+```

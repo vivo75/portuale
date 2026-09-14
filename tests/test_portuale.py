@@ -2320,6 +2320,81 @@ def test_emerge_regen_regenerates_md5_cache_from_the_depend_phase(
     )
 
 
+def test_cache_less_repo_metadata_falls_back_to_the_depend_phase(
+    emerge_binary, tmp_path
+):
+    """#41 C2: a repo with no `metadata/md5-cache` resolves through the
+    registered depend-phase metadata provider -- real `porttree.py`'s
+    ebuild fallback (`_pull_valid_cache` miss -> `doobuild(mydo="depend")`,
+    C0's oracle: `emerge -p porttest/docs` resolves to
+    `[ebuild  N] porttest/docs-1.0`). The provider is registered by the
+    binary's `main` (`portage_repo::register_aux_metadata_provider`), so
+    this runs the production path end to end. Rust-only (D2); the C3
+    slice adds the `depcachedir` write-back on top."""
+    import shutil
+
+    repo_root = Path(__file__).resolve().parents[1]
+    overlay = repo_root / "TEST" / "images" / "overlay" / "porttest"
+    repo = tmp_path / "porttest-repo"
+    shutil.copytree(overlay, repo)
+    # The staged copy stands alone: its `masters = gentoo` layout has no
+    # matching repo in this config root, and no profile is needed for
+    # these dependency-free fixtures.
+    layout = repo / "metadata" / "layout.conf"
+    if "masters" in layout.read_text():
+        layout.write_text(
+            "\n".join(
+                ln
+                for ln in layout.read_text().splitlines()
+                if not ln.startswith("masters")
+            )
+            + "\n"
+        )
+    cache = repo / "metadata" / "md5-cache"
+    assert cache.is_dir()
+    shutil.rmtree(cache)
+
+    cfg = tmp_path / "cfg"
+    # `symlinks=True`: the fixtures config root's `make.profile` is a
+    # relative symlink into `repo/profiles/default`; copying it as a
+    # directory would break its own `parent` resolution.
+    shutil.copytree(Path(FIXTURES_ROOT), cfg, symlinks=True)
+    with (cfg / "etc" / "portage" / "repos.conf" / "repos.conf").open("a") as fh:
+        fh.write(f"\n[porttest]\nlocation = {repo}\n")
+
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = str(cfg)
+    env["ROOT"] = FIXTURES_ROOT
+    env["PORTAGE_RUNNING_ROOT"] = FIXTURES_ROOT
+    env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "pt")
+
+    result = subprocess.run(
+        [str(emerge_binary), "--pretend", "porttest/docs"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert result.stdout.splitlines() == ["[ebuild  N     ] porttest/docs-1.0 "]
+    # The cache really was absent (the resolution above is the fallback).
+    assert not cache.exists()
+
+    # Control: with the committed cache restored, the same resolve works
+    # from the cache path (no provider needed), byte-identical output.
+    shutil.copytree(overlay / "metadata" / "md5-cache", cache)
+    again = subprocess.run(
+        [str(emerge_binary), "--pretend", "porttest/docs"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert again.returncode == 0, (again.stdout, again.stderr)
+    assert again.stdout == result.stdout
+
+
 def test_emerge_regen_prunes_a_stale_cache_entry(emerge_binary, tmp_path):
     """Real `MetadataRegen._cleanup`'s "global cleanse"
     (`MetadataRegen.py:142-189`): a plain, unfiltered `--regen` diffs the
