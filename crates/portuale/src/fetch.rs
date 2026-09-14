@@ -1691,6 +1691,23 @@ mod tests {
     }
 
     #[test]
+    fn has_enough_space_checks_free_disk_space() {
+        let distdir = tempdir();
+        // Typical systems have at least a few GB of free space;
+        // test with a huge number that should fail.
+        assert!(
+            has_enough_space(&distdir, 100),
+            "typical DISTDIR should have more than 100 bytes free"
+        );
+        // A ridiculously large number (larger than most disks)
+        let impossible_size = u64::MAX / 2;
+        assert!(
+            !has_enough_space(&distdir, impossible_size),
+            "should not have {impossible_size} bytes free"
+        );
+    }
+
+    #[test]
     fn fetch_src_uri_fsmirrors_with_layout_conf_resolution() {
         let mirror = tempdir();
         // Create a file in the filesystem mirror using flat layout
