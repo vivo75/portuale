@@ -6038,6 +6038,190 @@ def _masked_candidates_for_atom(repos, atom_str, config):
     return out
 
 
+def _use_unsat_parent_row(repos, entries, display_atom, owner, config):
+    """Real _show_unsatisfied_dep's parent-conditional row (depgraph.py:
+    6768-6858): when a [use]-dep is opt?-conditional on the requirer and
+    the child's violation is entirely conditional, real appends the
+    *requirer* to missing_use_reasons with its own Change USE: flip, and
+    the display shows it after the latest child row. Portuale
+    approximates real's violated_conditionals partitioning by toggling
+    every conditional flag the unevaluated atom references (the same
+    narrowing _suggested_parent_use_candidate documents), gated on the
+    flip being settable and not newly violating the parent's own
+    REQUIRED_USE (real's warning text is reproduced when it would). None
+    when the atom has no conditional use-deps, the parent's state can't
+    be read, or a flip is pinned by use.mask/use.force. Mirrors
+    portage-repo/src/lib.rs's use_unsat_parent_row."""
+    if owner is None:
+        return None
+    involved_flags = _conditional_flags(display_atom)
+    if not involved_flags:
+        return None
+    parent_state = _parent_use_state(repos, entries, owner, config)
+    if parent_state is None:
+        return None
+    parent_candidate, parent_iuse, parent_use, parent_required_use = parent_state
+    category, package = owner
+    hypothetical_use = set(parent_use)
+    changes = []
+    for flag in involved_flags:
+        desired = flag not in parent_use
+        if not _flag_is_settable(
+            parent_candidate, category, package, flag, desired, config
+        ):
+            return None
+        if desired:
+            hypothetical_use.add(flag)
+        else:
+            hypothetical_use.discard(flag)
+        changes.append(f"+{flag}" if desired else f"-{flag}")
+    reason = f"Change USE: {' '.join(changes)}"
+    if parent_required_use and parent_required_use.strip():
+        try:
+            old_sat = bool(
+                check_required_use(
+                    parent_required_use,
+                    parent_use,
+                    lambda flag: flag in parent_iuse,
+                    eapi="8",
+                )
+            )
+            new_sat = bool(
+                check_required_use(
+                    parent_required_use,
+                    hypothetical_use,
+                    lambda flag: flag in parent_iuse,
+                    eapi="8",
+                )
+            )
+        except InvalidDependString:
+            old_sat = new_sat = False
+        if old_sat and not new_sat:
+            reason += (
+                f", this change violates use flag constraints defined by "
+                f"{category}/{package}-{parent_candidate['version']}: "
+                f"'{parent_required_use}'"
+            )
+    return (
+        f"{category}/{package}-{parent_candidate['version']}::"
+        f"{parent_candidate['repo_name']}",
+        [reason],
+    )
+
+
+def _use_unsat_candidates_for_atom(repos, entries, display_atom, evaluated_atom, owner, config):
+    """Real _show_unsatisfied_dep's "no ebuilds built with USE flags to
+    satisfy" candidate scan (backlog #20, depgraph.py:6619 collects
+    missing_use, :6714-6873 turns it into unmasked_use_reasons /
+    unmasked_iuse_reasons): the version/slot-matching, *visible* ebuilds
+    whose own IUSE is missing a required (unconditional) flag, or whose
+    effective USE cannot satisfy the atom's unconditional use-deps.
+    None when the atom carries no use-deps or no visible candidate
+    misses on USE -- real's plain masked / "no ebuilds to satisfy"
+    paths own those.
+
+    Display order mirrors real exactly: when any candidate can be fixed
+    by a Change USE:, that path owns the block and only the latest such
+    candidate is listed ("Only show the latest version", :6876-6890);
+    only when there is none do all "Missing IUSE:" candidates print
+    (:6896-6907), in descending-version order. Documented narrowings
+    (same family as _masked_candidates_for_atom's): no
+    parent-conditional row (:6768-6858), and no masked-candidate
+    suppression of the Missing IUSE fallback (:6897-6907). Mirrors
+    portage-repo/src/lib.rs's use_unsat_candidates_for_atom."""
+    display = _parse_atom(display_atom)
+    if display is None or not display.use:
+        return None
+    evaluated = _parse_atom(evaluated_atom)
+    if evaluated is None:
+        return None
+    category, package = display.cp.split("/", 1)
+    candidates = list_candidates(repos, category, package)
+    strs = [
+        f"{category}/{package}-{c['version']}:{c['slot']}/{c['sub_slot']}::{c['repo_name']}"
+        for c in candidates
+    ]
+    matched = set(match_from_list(_without_use(display_atom), strs))
+    cands = [c for c, s in zip(candidates, strs) if s in matched]
+    cands.sort(
+        key=functools.cmp_to_key(lambda a, b: vercmp(b["version"], a["version"]) or 0)
+    )
+
+    # Real atom.unevaluated_atom.use.required -- no_default, i.e. the
+    # unconditional flag/-flag forms *without* a (+)/(-) default marker,
+    # in declaration order here (real's frozenset order is a set
+    # artefact; portuale pins declaration order for determinism). The
+    # evaluated atom's own enabled/disabled sets drive the Change USE:
+    # computation below.
+    required = [
+        t.lstrip("+-")
+        for t in display.use.tokens
+        if "(" not in t and not t.endswith(("?", "="))
+    ]
+    enabled = list(evaluated.use.enabled)
+    disabled = list(evaluated.use.disabled)
+
+    change_rows = []
+    iuse_rows = []
+    for c in cands:
+        if not is_visible(c, category, package, config):
+            continue
+        if c.get("source") != "binary":
+            try:
+                read_md5_cache(
+                    c["repo_location"], category, f"{package}-{c['version']}"
+                )
+            except OSError:
+                continue
+        declared, use_flags = _candidate_iuse_and_use(c, category, package, config)
+        valid = _valid_iuse(declared, config)
+        missing = [f for f in required if f not in valid]
+        output_cpv = f"{category}/{package}-{c['version']}::{c['repo_name']}"
+        if missing:
+            iuse_rows.append((output_cpv, [f"Missing IUSE: {' '.join(missing)}"]))
+            continue
+        need_enable = sorted(
+            f for f in enabled if f not in use_flags and f in valid
+        )
+        need_disable = sorted(
+            f for f in disabled if f in use_flags and f in valid
+        )
+        if not need_enable and not need_disable:
+            continue
+        candidate_str = (
+            f"{category}/{package}-{c['version']}:{c['slot']}/{c['sub_slot']}::"
+            f"{c['repo_name']}"
+        )
+        stable = _is_stable(
+            c["keywords"],
+            candidate_str,
+            category,
+            package,
+            config["accept_keywords"],
+            config["package_accept_keywords"],
+        )
+        untouchable = _resolved_use_mask_or_force(
+            "mask", config, candidate_str, category, package, stable
+        ) | _resolved_use_mask_or_force(
+            "force", config, candidate_str, category, package, stable
+        )
+        if any(f in untouchable for f in need_enable + need_disable):
+            continue
+        changes = [f"+{f}" for f in need_enable] + [f"-{f}" for f in need_disable]
+        change_rows.append((output_cpv, [f"Change USE: {' '.join(changes)}"]))
+    if change_rows:
+        rows = [change_rows[0]]
+        parent_row = _use_unsat_parent_row(
+            repos, entries, display_atom, owner, config
+        )
+        if parent_row is not None:
+            rows.append(parent_row)
+        return rows
+    if not iuse_rows:
+        return None
+    return iuse_rows
+
+
 def _all_masked_report(repos, atom_str, config, xinfo):
     """Real _show_unsatisfied_dep's "All ebuilds that could satisfy
     <atom> have been masked" report (depgraph.py:6992-7016 +
@@ -12036,6 +12220,10 @@ def resolve_pretend_graph(
         # slot_conflicts, so only the final pass's reports are rendered.
         # Mirrors portage-repo/src/lib.rs's masked_deps.
         masked_deps = []
+        # USE-unsatisfied dependency disclosures for this pass (see
+        # _use_unsat_candidates_for_atom): rebuilt every attempt like
+        # masked_deps. Mirrors portage-repo/src/lib.rs's use_unsat_deps.
+        use_unsat_deps = []
         # The unevaluated dep atom behind each dependency
         # no_visible_candidate entry (first requirer wins, like the entry
         # itself), for _abort_outcome's "unsatisfied-atom" reason.
@@ -12810,6 +12998,37 @@ def resolve_pretend_graph(
                                 "masked": _masked,
                                 # Walked post-loop out of the final
                                 # entries (see below).
+                                "chain": [],
+                            }
+                        )
+                    # USE-unsatisfied-dependency disclosure (backlog
+                    # #20, real _show_unsatisfied_dep's separate "no
+                    # ebuilds built with USE flags to satisfy" path): a
+                    # dependency NoVisibleCandidate whose atom names
+                    # version-matching ebuilds that are *visible* but
+                    # cannot satisfy the atom's own [use] deps. Real's
+                    # precedence puts this block before the masked one.
+                    # Computed every pass; only the final pass's reports
+                    # are rendered. Mirrors portage-repo/src/lib.rs.
+                    _use_unsat = _use_unsat_candidates_for_atom(
+                        repos,
+                        entries,
+                        _display_atom,
+                        current_atom_str,
+                        owner,
+                        config,
+                    )
+                    if _use_unsat is not None and not any(
+                        r["category"] == category and r["package"] == package
+                        for r in use_unsat_deps
+                    ):
+                        use_unsat_deps.append(
+                            {
+                                "category": category,
+                                "package": package,
+                                "atom": _display_atom,
+                                "rows": _use_unsat,
+                                # Walked post-loop (see below).
                                 "chain": [],
                             }
                         )
@@ -13785,6 +14004,7 @@ def resolve_pretend_graph(
             entries,
             slot_conflicts,
             masked_deps,
+            use_unsat_deps,
             required_use_violations,
             changed_deps_report_entries,
             pprovided_atoms,
@@ -13837,6 +14057,7 @@ def resolve_pretend_graph(
             entries,
             slot_conflicts,
             masked_deps,
+            use_unsat_deps,
             required_use_violations,
             changed_deps_report_entries,
             pprovided_atoms,
@@ -14174,6 +14395,7 @@ def resolve_pretend_graph(
             entries,
             slot_conflicts,
             masked_deps,
+            use_unsat_deps,
             required_use_violations,
             changed_deps_report_entries,
             pprovided_atoms,
@@ -14328,6 +14550,12 @@ def resolve_pretend_graph(
         _rep["chain"] = _masked_dep_chain(
             entries, _rep["category"], _rep["package"], atoms, root, repos
         )
+    # Same walk for the [use]-unsatisfied disclosures (#20): the chain
+    # shape is real _get_dep_chain's, shared with the masked block.
+    for _rep in use_unsat_deps:
+        _rep["chain"] = _masked_dep_chain(
+            entries, _rep["category"], _rep["package"], atoms, root, repos
+        )
 
     # Elementary-cycle enumeration for the large_cycle_count trailer
     # and the cycle-only re-display (real circular_dependency_handler,
@@ -14366,6 +14594,10 @@ def resolve_pretend_graph(
         # no-visible-ebuild line. Mirrors portage-repo/src/lib.rs's
         # GraphResult::masked_deps.
         "masked_deps": masked_deps,
+        # [use]-unsatisfied dependency disclosures (backlog #20). Real's
+        # precedence renders this block ahead of the masked one. Mirrors
+        # portage-repo/src/lib.rs's GraphResult::use_unsat_deps.
+        "use_unsat_deps": use_unsat_deps,
         # Real _serialize_tasks -> _show_circular_deps: an unbreakable
         # build-time dependency cycle. See portage-repo/src/lib.rs's
         # GraphResult::circular_deps.
@@ -22547,6 +22779,19 @@ def run(args):
             # matched nothing in real, so it was dropped.
             pass
         else:
+            # USE-unsatisfied dependency disclosure (backlog #20, real
+            # _show_unsatisfied_dep's "no ebuilds built with USE flags to
+            # satisfy" block): real renders this *before* the masked
+            # block when both apply (show_missing_use wins over
+            # masked_packages), so the lookup is ordered the same way.
+            _use_rep = next(
+                (
+                    r
+                    for r in result["use_unsat_deps"]
+                    if r["category"] == category and r["package"] == package
+                ),
+                None,
+            )
             # Masked-dependency disclosure (real _show_unsatisfied_dep's
             # "All ebuilds that could satisfy ... have been masked" block
             # for a *dependency*): when the resolver recorded masked-only
@@ -22561,7 +22806,26 @@ def run(args):
                 ),
                 None,
             )
-            if _rep is not None:
+            if _use_rep is not None:
+                print(
+                    f'\nemerge: there are no ebuilds built with USE flags to satisfy "{_use_rep["atom"]}".',
+                    file=sys.stderr,
+                )
+                print(
+                    "!!! One of the following packages is required to complete your request:",
+                    file=sys.stderr,
+                )
+                for _cpv, _reasons in _use_rep["rows"]:
+                    print(
+                        f"- {_cpv} ({', '.join(_reasons)})",
+                        file=sys.stderr,
+                    )
+                for _node, _ty in _use_rep["chain"]:
+                    print(
+                        f'(dependency required by "{_node}" [{_ty}])',
+                        file=sys.stderr,
+                    )
+            elif _rep is not None:
                 print(
                     f'\n!!! All ebuilds that could satisfy "{_rep["atom"]}" have been masked.',
                     file=sys.stderr,

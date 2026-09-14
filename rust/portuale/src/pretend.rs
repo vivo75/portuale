@@ -891,6 +891,10 @@ fn print_entry_line(
     // `!!! no visible ebuild for dependency` line. Empty when nothing was
     // masked-only (e.g. `--resume --pretend`, which never re-resolves).
     masked_deps: &[portage_repo::MaskedDepReport],
+    // `[use]`-unsatisfied dependency disclosures (backlog #20): real's
+    // precedence puts this block ahead of the masked one, and the
+    // `NoVisibleCandidate` arm below does the same.
+    use_unsat_deps: &[portage_repo::UseUnsatDepReport],
 ) {
     // Real `_DisplayConfig` verbosity: `--quiet and 1 or --verbose and 3
     // or 2`. `--quiet` wins over `-v`. `v3` is "verbosity == 3" -- the
@@ -1184,14 +1188,29 @@ fn print_entry_line(
             // for `--json` consumers.
         }
         PretendOutcome::NoVisibleCandidate => {
-            // Masked-dependency disclosure (real `_show_unsatisfied_dep`'s
-            // "All ebuilds that could satisfy … have been masked" block
-            // for a *dependency*): when the resolver recorded masked-only
-            // candidates for this atom, render the block plus its
-            // `(dependency required by …)` chain instead of the bare
-            // line. Suggestion notes below print either way (they name a
-            // fix; the block names the mask).
-            if let Some(report) = masked_deps
+            // USE-unsatisfied dependency disclosure (backlog #20, real
+            // `_show_unsatisfied_dep`'s "no ebuilds built with USE flags
+            // to satisfy" block): real renders this *before* the masked
+            // block when both apply (`show_missing_use` wins over
+            // `masked_packages`), so the lookup is ordered the same way.
+            if let Some(report) = use_unsat_deps
+                .iter()
+                .find(|r| r.category == entry.category && r.package == entry.package)
+            {
+                eprintln!(
+                    "\nemerge: there are no ebuilds built with USE flags to satisfy {:?}.",
+                    report.atom
+                );
+                eprintln!(
+                    "!!! One of the following packages is required to complete your request:"
+                );
+                for (cpv, reasons) in &report.rows {
+                    eprintln!("- {cpv} ({})", reasons.join(", "));
+                }
+                for (node, ty) in &report.chain {
+                    eprintln!("(dependency required by \"{node}\" [{ty}])");
+                }
+            } else if let Some(report) = masked_deps
                 .iter()
                 .find(|r| r.category == entry.category && r.package == entry.package)
             {
@@ -1350,6 +1369,7 @@ fn print_tree(
     force_reinstall_cps: &HashSet<(String, String)>,
     blocker_lines: &mut Vec<String>,
     masked_deps: &[portage_repo::MaskedDepReport],
+    use_unsat_deps: &[portage_repo::UseUnsatDepReport],
 ) {
     let mut children: HashMap<(String, String), Vec<usize>> = HashMap::new();
     for (i, entry) in entries.iter().enumerate() {
@@ -1386,6 +1406,7 @@ fn print_tree(
         world_atoms: &'a [String],
         force_reinstall_cps: &'a HashSet<(String, String)>,
         masked_deps: &'a [portage_repo::MaskedDepReport],
+        use_unsat_deps: &'a [portage_repo::UseUnsatDepReport],
     }
 
     fn render(
@@ -1421,6 +1442,7 @@ fn print_tree(
             ctx.force_reinstall_cps,
             blocker_lines,
             ctx.masked_deps,
+            ctx.use_unsat_deps,
         );
         let key = (
             ctx.entries[i].category.clone(),
@@ -1448,6 +1470,7 @@ fn print_tree(
         world_atoms,
         force_reinstall_cps,
         masked_deps,
+        use_unsat_deps,
     };
     let mut rendered: HashSet<usize> = HashSet::new();
     for (i, entry) in entries.iter().enumerate() {
@@ -1479,6 +1502,7 @@ fn print_tree(
                 force_reinstall_cps,
                 blocker_lines,
                 masked_deps,
+                use_unsat_deps,
             );
         }
     }
@@ -4038,8 +4062,10 @@ fn run_resume(
                 // caveat above.
                 &HashSet::new(),
                 &mut blocker_lines,
-                // No resolve ran, so no masked-dependency disclosure
-                // either (any NVC entry here renders the bare line).
+                // No resolve ran, so no masked-dependency or
+                // USE-unsatisfied disclosure either (any NVC entry here
+                // renders the bare line).
+                &[],
                 &[],
             );
         }
@@ -10745,6 +10771,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 &force_reinstall_cps,
                 &mut blocker_lines,
                 &result.masked_deps,
+                &result.use_unsat_deps,
             );
         } else {
             for entry in display_entries {
@@ -10766,6 +10793,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     &force_reinstall_cps,
                     &mut blocker_lines,
                     &result.masked_deps,
+                    &result.use_unsat_deps,
                 );
             }
         }
@@ -10816,6 +10844,7 @@ pub fn run(args: &[String]) -> ExitCode {
                         &force_reinstall_cps,
                         &mut thrown_away,
                         &result.masked_deps,
+                        &result.use_unsat_deps,
                     );
                 }
             }
@@ -10907,6 +10936,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 &force_reinstall_cps,
                 &mut thrown_away,
                 &result.masked_deps,
+                &result.use_unsat_deps,
             );
         }
     }

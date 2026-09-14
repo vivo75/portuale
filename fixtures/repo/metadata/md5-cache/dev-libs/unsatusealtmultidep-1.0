@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: RDEPENDs dev-libs/unsatusealtmulti[unsatuseorflag] where two versions are visible and both miss on USE -- real _show_unsatisfied_dep lists only the latest Change USE candidate (backlog #20)
+EAPI=8
+KEYWORDS=amd64
+RDEPEND=dev-libs/unsatusealtmulti[unsatuseorflag]
+SLOT=0
+_md5_=0000000000000000000000000000000

@@ -8497,6 +8497,31 @@ pub struct MaskedDepReport {
     pub chain: Vec<(String, String)>,
 }
 
+/// Real `_show_unsatisfied_dep`'s separate "no ebuilds built with USE
+/// flags to satisfy" disclosure (backlog #20) for a *dependency*'s
+/// `[use]`-unsatisfied atom: among the ebuilds an atom names by version
+/// (USE ignored), the visible ones whose own IUSE is missing a required
+/// flag (`Missing IUSE: …`) or whose effective USE cannot satisfy the
+/// atom's unconditional use-deps (`Change USE: +… -…`). Rendered instead
+/// of the bare `!!! no visible ebuild for dependency` line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UseUnsatDepReport {
+    pub category: String,
+    pub package: String,
+    /// The requesting atom as queued, unevaluated (real
+    /// `atom.unevaluated_atom`), so a `[flag]` dep shows as written.
+    pub atom: String,
+    /// The `- <cpv>::<repo> (<reason>)` rows in real's display order: the
+    /// latest `Change USE:`-adjustable candidate only (real
+    /// `unmasked_use_reasons`'s "Only show the latest version"), else
+    /// every `Missing IUSE:` candidate in descending-version order. Never
+    /// empty (the report exists only when a row does).
+    pub rows: Vec<(String, Vec<String>)>,
+    /// Real `_get_dep_chain`, walked post-pass exactly like
+    /// [`MaskedDepReport::chain`].
+    pub chain: Vec<(String, String)>,
+}
+
 /// Real `_show_unsatisfied_dep`'s version match: the candidates an atom
 /// names by version, visibility and USE ignored (real `db.match(atom.
 /// without_use)`). `None` when the atom matches no ebuild at all by
@@ -8559,6 +8584,284 @@ fn masked_candidates_for_atom(
     }
     Some(out)
 }
+/// Real `_show_unsatisfied_dep`'s parent-conditional row (`depgraph.py:
+/// 6768-6858`): when a `[use]`-dep is `opt?`-conditional on the requirer
+/// and the child's violation is entirely conditional, real appends the
+/// *requirer* to `missing_use_reasons` with its own `Change USE:` flip,
+/// and the display shows it after the latest child row. Portuale
+/// approximates real's `violated_conditionals` partitioning by toggling
+/// **every** conditional flag the unevaluated atom references (the same
+/// narrowing `suggested_parent_use_candidate` documents), gated on the
+/// flip being settable and not newly violating the parent's own
+/// REQUIRED_USE (real's warning text is reproduced when it would).
+/// `None` when the atom has no conditional use-deps, the parent's state
+/// can't be read, or a flip is pinned by `use.mask`/`use.force`.
+fn use_unsat_parent_row(
+    repos: &[RepoConfig],
+    entries: &[GraphEntry],
+    display_atom: &str,
+    owner: Option<&(String, String)>,
+    config: &portage_profile::Config,
+) -> Option<(String, Vec<String>)> {
+    let owner = owner?;
+    let involved_flags = conditional_flags(display_atom);
+    if involved_flags.is_empty() {
+        return None;
+    }
+    let (parent_candidate, parent_iuse, parent_use, parent_required_use) =
+        parent_use_state(repos, entries, owner, config)?;
+    let mut hypothetical = parent_use.clone();
+    let mut changes: Vec<String> = Vec::new();
+    for flag in &involved_flags {
+        let desired = !parent_use.contains(flag);
+        if !flag_is_settable(&parent_candidate, &owner.0, &owner.1, flag, desired, config) {
+            return None;
+        }
+        if desired {
+            hypothetical.insert(flag.clone());
+        } else {
+            hypothetical.remove(flag);
+        }
+        changes.push(if desired {
+            format!("+{flag}")
+        } else {
+            format!("-{flag}")
+        });
+    }
+    let mut reason = format!("Change USE: {}", changes.join(" "));
+    if let Some(required_use) = &parent_required_use
+        && !required_use.trim().is_empty()
+    {
+        let old_sat =
+            portage_required_use::check_required_use(required_use, &parent_use, &parent_iuse)
+                .unwrap_or(false);
+        let new_sat =
+            portage_required_use::check_required_use(required_use, &hypothetical, &parent_iuse)
+                .unwrap_or(false);
+        if old_sat && !new_sat {
+            reason.push_str(&format!(
+                ", this change violates use flag constraints defined by {}/{}-{}: '{}'",
+                owner.0, owner.1, parent_candidate.version, required_use
+            ));
+        }
+    }
+    Some((
+        format!(
+            "{}/{}-{}::{}",
+            owner.0, owner.1, parent_candidate.version, parent_candidate.repo_name
+        ),
+        vec![reason],
+    ))
+}
+
+/// Real `_show_unsatisfied_dep`'s "no ebuilds built with USE flags to
+/// satisfy" candidate scan (`depgraph.py:6619` collects `missing_use`,
+/// `:6714-6873` turns it into `unmasked_use_reasons` /
+/// `unmasked_iuse_reasons`): the version/slot-matching, *visible* ebuilds
+/// whose own IUSE is missing a required (unconditional) flag, or whose
+/// effective USE cannot satisfy the atom's unconditional use-deps.
+/// `None` when the atom carries no use-deps or no visible candidate
+/// misses on USE -- real's plain masked / "no ebuilds to satisfy" paths
+/// own those.
+///
+/// Display order mirrors real exactly: when any candidate can be fixed by
+/// a `Change USE:`, that path owns the block and only the **latest** such
+/// candidate is listed ("Only show the latest version", `:6876-6890`),
+/// followed by the requirer's own row when the dep is
+/// `opt?`-conditional ([`use_unsat_parent_row`]); only when there is none
+/// do all `Missing IUSE:` candidates print (`:6896-6907`), in
+/// descending-version order.
+///
+/// Documented narrowings (same family as `masked_candidates_for_atom`'s):
+/// the parent row is the all-conditional approximation
+/// [`use_unsat_parent_row`] documents; real's `Missing IUSE:` fallback can
+/// be suppressed by a *masked* candidate that has the flag
+/// (`:6897-6907`), which this visibility-filtered scan cannot express.
+fn use_unsat_candidates_for_atom(
+    repos: &[RepoConfig],
+    entries: &[GraphEntry],
+    display_atom: &str,
+    evaluated_atom: &str,
+    owner: Option<&(String, String)>,
+    config: &portage_profile::Config,
+) -> Option<Vec<(String, Vec<String>)>> {
+    let display = portage_dep::parse_atom(display_atom)?;
+    display.use_deps.as_deref().filter(|d| !d.is_empty())?;
+    let evaluated = portage_dep::parse_atom(evaluated_atom)?;
+    let candidates = list_candidates(repos, &display.category, &display.package).ok()?;
+
+    let strs: Vec<String> = candidates
+        .iter()
+        .map(|c| {
+            format!(
+                "{}/{}-{}:{}/{}::{}",
+                display.category, display.package, c.version, c.slot, c.sub_slot, c.repo_name
+            )
+        })
+        .collect();
+    let refs: Vec<&str> = strs.iter().map(String::as_str).collect();
+    // Real `db.match(atom.without_use)`: version/slot filter, USE and
+    // visibility ignored.
+    let matched: std::collections::HashSet<&str> =
+        portage_dep::match_from_list(portage_dep::without_use(display_atom), &refs)?
+            .into_iter()
+            .collect();
+    let mut cands: Vec<&Candidate> = candidates
+        .iter()
+        .zip(strs.iter())
+        .filter(|(_, s)| matched.contains(s.as_str()))
+        .map(|(c, _)| c)
+        .collect();
+    // Real `cpv_list.reverse()` -> descending version.
+    cands.sort_by(|a, b| vercmp_ordering(&b.version, &a.version));
+
+    let flags_of = |atom: &portage_dep::Atom, op: portage_dep::UseDepOp| -> Vec<String> {
+        atom.use_deps
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .filter(|d| d.op == op)
+            .map(|d| d.flag.clone())
+            .collect()
+    };
+    // Real `atom.unevaluated_atom.use.required` -- `no_default`, i.e.
+    // the unconditional (`flag`/`-flag`) forms *without* a `(+)`/`(-)`
+    // default marker, in declaration order here. A default-marked token
+    // is not a `required` flag in real's parser (it has a fallback when
+    // missing from IUSE).
+    let required_of = |atom: &portage_dep::Atom| -> Vec<String> {
+        atom.use_deps
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .filter(|d| {
+                d.default.is_none()
+                    && matches!(
+                        d.op,
+                        portage_dep::UseDepOp::Enabled | portage_dep::UseDepOp::Disabled
+                    )
+            })
+            .map(|d| d.flag.clone())
+            .collect()
+    };
+    let required = required_of(&display);
+    // Real `atom.use.enabled` / `.disabled` -- the *evaluated* atom's own
+    // unconditional deps.
+    let enabled = flags_of(&evaluated, portage_dep::UseDepOp::Enabled);
+    let disabled = flags_of(&evaluated, portage_dep::UseDepOp::Disabled);
+
+    let mut change_rows: Vec<(String, Vec<String>)> = Vec::new();
+    let mut iuse_rows: Vec<(String, Vec<String>)> = Vec::new();
+    for c in cands {
+        // Real `unmasked_use_reasons` / `unmasked_iuse_reasons`: masked
+        // instances never reach the displayed rows.
+        if !is_visible(c, &display.category, &display.package, config) {
+            continue;
+        }
+        let Some((declared, use_flags)) =
+            candidate_iuse_and_use(c, &display.category, &display.package, config)
+        else {
+            continue;
+        };
+        let valid = valid_iuse(&declared, config);
+        // Real `pkg.iuse.get_missing_iuse(required_flags)`.
+        let missing: Vec<String> = required
+            .iter()
+            .filter(|f| !valid.contains(*f))
+            .cloned()
+            .collect();
+        let output_cpv = format!(
+            "{}/{}-{}::{}",
+            display.category, display.package, c.version, c.repo_name
+        );
+        if !missing.is_empty() {
+            iuse_rows.push((
+                output_cpv,
+                vec![format!("Missing IUSE: {}", missing.join(" "))],
+            ));
+            continue;
+        }
+        // Real `need_enable`/`need_disable` (`:6729-6730`), sorted and
+        // restricted to flags this candidate's own IUSE declares.
+        let mut need_enable: Vec<String> = enabled
+            .iter()
+            .filter(|f| !use_flags.contains(*f) && valid.contains(*f))
+            .cloned()
+            .collect();
+        let mut need_disable: Vec<String> = disabled
+            .iter()
+            .filter(|f| use_flags.contains(*f) && valid.contains(*f))
+            .cloned()
+            .collect();
+        need_enable.sort();
+        need_enable.dedup();
+        need_disable.sort();
+        need_disable.dedup();
+        if need_enable.is_empty() && need_disable.is_empty() {
+            continue;
+        }
+        // Real `:6732-6736`: a flag this candidate's own `use.mask`/
+        // `use.force` pins is not adjustable -- no row at all, and the
+        // candidate also stays out of `missing_use_adjustable`.
+        let candidate_str = format!(
+            "{}/{}-{}:{}/{}::{}",
+            display.category, display.package, c.version, c.slot, c.sub_slot, c.repo_name
+        );
+        let stable = is_stable(
+            &c.keywords,
+            &candidate_str,
+            &display.category,
+            &display.package,
+            &config.accept_keywords,
+            &config.package_accept_keywords,
+        );
+        let mut untouchable = resolved_use_mask_or_force(
+            MaskOrForce::Mask,
+            config,
+            &candidate_str,
+            &display.category,
+            &display.package,
+            stable,
+        );
+        untouchable.extend(resolved_use_mask_or_force(
+            MaskOrForce::Force,
+            config,
+            &candidate_str,
+            &display.category,
+            &display.package,
+            stable,
+        ));
+        if need_enable
+            .iter()
+            .chain(need_disable.iter())
+            .any(|f| untouchable.contains(f))
+        {
+            continue;
+        }
+        let mut changes: Vec<String> = need_enable.iter().map(|f| format!("+{f}")).collect();
+        changes.extend(need_disable.iter().map(|f| format!("-{f}")));
+        change_rows.push((
+            output_cpv,
+            vec![format!("Change USE: {}", changes.join(" "))],
+        ));
+    }
+    if !change_rows.is_empty() {
+        // Real `:6877-6887`: "Only show the latest version" -- the first
+        // (highest-version) unmasked `Change USE:` candidate, then the
+        // requirer's own row when the dep is conditional.
+        let mut rows = vec![change_rows.remove(0)];
+        if let Some(parent_row) = use_unsat_parent_row(repos, entries, display_atom, owner, config)
+        {
+            rows.push(parent_row);
+        }
+        return Some(rows);
+    }
+    if iuse_rows.is_empty() {
+        return None;
+    }
+    Some(iuse_rows)
+}
+
 fn all_masked_report(
     repos: &[RepoConfig],
     atom_str: &str,
@@ -14570,6 +14873,14 @@ pub struct GraphResult {
     /// reasons (nothing matched at all, or only a `[use]`-dep mismatch
     /// -- the autounmask-use path).
     pub masked_deps: Vec<MaskedDepReport>,
+    /// `[use]`-unsatisfied dependency disclosures (backlog #20, real
+    /// `_show_unsatisfied_dep`'s separate "no ebuilds built with USE
+    /// flags to satisfy" block): one per dependency `NoVisibleCandidate`
+    /// entry whose atom names visible ebuilds that miss on USE. Real's
+    /// precedence renders this block ahead of `masked_deps`; the caller
+    /// (`pretend.rs`) does the same. Empty when no dependency missed
+    /// that way.
+    pub use_unsat_deps: Vec<UseUnsatDepReport>,
 }
 
 /// One real `--autounmask` change (`depgraph.py::_display_autounmask`):
@@ -16313,6 +16624,7 @@ struct PassResult {
     slot_want: HashMap<(String, String), Vec<String>>,
     slot_pullers: SlotPullers,
     masked_deps: Vec<MaskedDepReport>,
+    use_unsat_deps: Vec<UseUnsatDepReport>,
     nvc_dep_atoms: HashMap<(String, String), String>,
     missing_dep_trigger: Option<((String, String), String, String)>,
     autounmask_grew: bool,
@@ -16427,6 +16739,10 @@ struct PassState {
     /// `MaskedDepReport`): rebuilt every attempt like `slot_conflicts`,
     /// so only the final pass's reports are rendered.
     masked_deps: Vec<MaskedDepReport>,
+    /// USE-unsatisfied dependency disclosures for this pass (see
+    /// `UseUnsatDepReport`): rebuilt every attempt like `masked_deps`, so
+    /// only the final pass's reports are rendered.
+    use_unsat_deps: Vec<UseUnsatDepReport>,
     /// The unevaluated dep atom behind each dependency
     /// `NoVisibleCandidate` entry (first requirer wins, like the entry
     /// itself), for `abort_outcome`'s `UnsatisfiedAtom` reason.
@@ -17434,6 +17750,35 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                         masked,
                         // Walked post-loop out of the final entries
                         // (see below).
+                        chain: Vec::new(),
+                    });
+                }
+                // USE-unsatisfied-dependency disclosure (backlog #20,
+                // real `_show_unsatisfied_dep`'s separate "no ebuilds
+                // built with USE flags to satisfy" path): a dependency
+                // `NoVisibleCandidate` whose atom names version-matching
+                // ebuilds that are *visible* but cannot satisfy the
+                // atom's own `[use]` deps. Real's precedence puts this
+                // block before the masked one (`show_missing_use` wins),
+                // and the caller renders it first. Computed every pass;
+                // only the final pass's reports are rendered.
+                if let Some(rows) = use_unsat_candidates_for_atom(
+                    &ctx.repos,
+                    &state.entries,
+                    display_atom,
+                    &current_atom,
+                    owner.as_ref(),
+                    config,
+                ) && !state
+                    .use_unsat_deps
+                    .iter()
+                    .any(|r: &UseUnsatDepReport| r.category == key.0 && r.package == key.1)
+                {
+                    state.use_unsat_deps.push(UseUnsatDepReport {
+                        category: key.0.clone(),
+                        package: key.1.clone(),
+                        atom: display_atom.to_string(),
+                        rows,
                         chain: Vec::new(),
                     });
                 }
@@ -18750,6 +19095,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         slot_want: state.slot_want,
         slot_pullers: state.slot_pullers,
         masked_deps: state.masked_deps,
+        use_unsat_deps: state.use_unsat_deps,
         nvc_dep_atoms: state.nvc_dep_atoms,
         missing_dep_trigger: state.missing_dep_trigger,
         autounmask_grew: state.autounmask_grew,
@@ -19418,6 +19764,17 @@ fn assemble_result(
             ctx.root,
         );
     }
+    // Same walk for the `[use]`-unsatisfied disclosures (#20): the chain
+    // shape is real `_get_dep_chain`'s, shared with the masked block.
+    for rep in &mut pass.use_unsat_deps {
+        rep.chain = masked_dep_chain(
+            &pass.entries,
+            &rep.category,
+            &rep.package,
+            ctx.atoms,
+            ctx.root,
+        );
+    }
 
     // Backlog #19 Slice 3: classify the settled graph the way real's
     // abandon sites would have (see `abort_outcome`).
@@ -19443,6 +19800,7 @@ fn assemble_result(
         abi_rebuilds,
         circular_deps,
         masked_deps: pass.masked_deps,
+        use_unsat_deps: pass.use_unsat_deps,
         large_cycle_count,
         cycle_display,
     }
@@ -28018,6 +28376,94 @@ mod tests {
                     "ebuild".to_string()
                 ),
                 ("dev-libs/maskneedpkg".to_string(), "argument".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn use_unsat_candidates_classify_change_use_and_missing_iuse() {
+        // Backlog #20: real `_show_unsatisfied_dep`'s two reason kinds and
+        // its "Only show the latest version" rule, direct on the fixture
+        // repo -- the same rows the contract pins.
+        let root = fixtures_root();
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+            &root,
+        )
+        .expect("fixture config resolves");
+        let repos = find_repos(&root).expect("repos");
+        let one =
+            |atom: &str| use_unsat_candidates_for_atom(&repos, &[], atom, atom, None, &config);
+        assert_eq!(
+            one("dev-libs/unsatusealt[unsatuseorflag]"),
+            Some(vec![(
+                "dev-libs/unsatusealt-1.0::testrepo".to_string(),
+                vec!["Change USE: +unsatuseorflag".to_string()]
+            )])
+        );
+        assert_eq!(
+            one("dev-libs/unsatuseiusetarget[noiuse]"),
+            Some(vec![(
+                "dev-libs/unsatuseiusetarget-1.0::testrepo".to_string(),
+                vec!["Missing IUSE: noiuse".to_string()]
+            )])
+        );
+        // Two visible versions both miss: only the latest is listed.
+        assert_eq!(
+            one("dev-libs/unsatusealtmulti[unsatuseorflag]"),
+            Some(vec![(
+                "dev-libs/unsatusealtmulti-2.0::testrepo".to_string(),
+                vec!["Change USE: +unsatuseorflag".to_string()]
+            )])
+        );
+        // A satisfiable use-dep (flag is off, `-flag` required) is not
+        // this disclosure at all.
+        assert_eq!(one("dev-libs/unsatusealt[-unsatuseorflag]"), None);
+        // No use-deps at all: real's other paths own the atom.
+        assert_eq!(one("dev-libs/unsatusealt"), None);
+    }
+
+    #[test]
+    fn use_unsat_dep_report_carries_the_chain_to_the_argument() {
+        // End to end through the driver: the unsatuseiuse resolve records
+        // one Missing IUSE disclosure whose chain walks the merge parent
+        // up to the top-level argument, like real's `(dependency required
+        // by …)` lines.
+        let result = graph_result_real("dev-libs/unsatuseiuse");
+        assert_eq!(result.use_unsat_deps.len(), 1);
+        let rep = &result.use_unsat_deps[0];
+        assert_eq!(
+            (
+                rep.category.as_str(),
+                rep.package.as_str(),
+                rep.atom.as_str()
+            ),
+            (
+                "dev-libs",
+                "unsatuseiusetarget",
+                "dev-libs/unsatuseiusetarget[noiuse]"
+            )
+        );
+        assert_eq!(
+            rep.rows,
+            vec![(
+                "dev-libs/unsatuseiusetarget-1.0::testrepo".to_string(),
+                vec!["Missing IUSE: noiuse".to_string()]
+            )]
+        );
+        assert_eq!(
+            rep.chain,
+            vec![
+                (
+                    "dev-libs/unsatuseiuse-1.0::testrepo".to_string(),
+                    "ebuild".to_string()
+                ),
+                ("dev-libs/unsatuseiuse".to_string(), "argument".to_string()),
             ]
         );
     }

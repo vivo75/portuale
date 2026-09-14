@@ -756,6 +756,9 @@ fn graph_result_from_order(
         // relaxation loop ran), so there is nothing to disclose here --
         // same standing empty as slot_conflicts above.
         masked_deps: Vec::new(),
+        // Same standing empty: the engine backends have no BFS walk to
+        // record a `[use]`-unsatisfied dependency disclosure.
+        use_unsat_deps: Vec::new(),
     }
 }
 

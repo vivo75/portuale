@@ -534,6 +534,16 @@ CASES = [
         0,
     ),
     (
+        "recursion: [use]-dep unsat with the flag absent from IUSE -- real's Missing IUSE reason (backlog #20)",
+        ["--pretend", "--autounmask-use=n", "dev-libs/unsatuseiuse"],
+        1,
+    ),
+    (
+        "recursion: [use]-dep unsat with two visible versions -- real lists only the latest Change USE candidate (backlog #20)",
+        ["--pretend", "--autounmask-use=n", "dev-libs/unsatusealtmultidep"],
+        1,
+    ),
+    (
         "recursion: || group's unsat_use_installed bin keys on the SLOT the alternative targets, not just cp-installed (F4 all_installed_slots)",
         ["--pretend", "dev-libs/unsatuseslot"],
         1,
@@ -3791,11 +3801,12 @@ def test_or_group_use_unsat_alternative_reports_the_dependency_it_enqueued_witho
     selectable regardless), so `unsatusealt` is enqueued as a dependency
     -- but with no autounmask flip available it has no visible ebuild and
     aborts the resolve (exit 1, no merge list since Slice 4), reported as
-    (`!!! no visible ebuild for dependency "dev-libs/unsatusealt"`). The
-    dead second alternative is again never enqueued. Before the fine-bin
-    wiring both alternatives ranked `Unsatisfiable`, so the literal `||`
-    fallback enqueued BOTH and stderr carried two `no visible ebuild`
-    lines."""
+    real `_show_unsatisfied_dep`'s "no ebuilds built with USE flags to
+    satisfy" block (backlog #20): the latest `Change USE:` candidate plus
+    the `(dependency required by …)` chain. The dead second alternative is
+    again never enqueued. Before the fine-bin wiring both alternatives
+    ranked `Unsatisfiable`, so the literal `||` fallback enqueued BOTH and
+    stderr carried two `no visible ebuild` lines."""
     args = ["--pretend", "--autounmask-use=n", "dev-libs/unsatuseor"]
     rust = _run([str(emerge_binary)], args, fixture_env)
     py = _run(emerge_pretend_python, args, fixture_env)
@@ -3803,7 +3814,12 @@ def test_or_group_use_unsat_alternative_reports_the_dependency_it_enqueued_witho
     assert rust.stdout == py.stdout and rust.stderr == py.stderr
     assert rust.stdout.splitlines() == []
     assert rust.stderr.splitlines() == [
-        '!!! no visible ebuild for dependency "dev-libs/unsatusealt"',
+        "",
+        'emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/unsatusealt[unsatuseorflag]".',
+        "!!! One of the following packages is required to complete your request:",
+        "- dev-libs/unsatusealt-1.0::testrepo (Change USE: +unsatuseorflag)",
+        '(dependency required by "dev-libs/unsatuseor-1.0::testrepo" [ebuild])',
+        '(dependency required by "dev-libs/unsatuseor" [argument])',
     ]
     assert "doesnotexist-unsatuseor" not in rust.stderr
 
@@ -3848,9 +3864,70 @@ def test_deep_walk_dispatches_or_group_through_the_same_unsat_use_bins_as_the_ma
         "[ebuild  N     ] dev-libs/unsatuseinstconsumer-1.0 ",
     ]
     assert rust2.stderr.splitlines() == [
-        '!!! no visible ebuild for dependency "dev-libs/unsatusealt"',
+        "",
+        'emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/unsatusealt[unsatuseorflag]".',
+        "!!! One of the following packages is required to complete your request:",
+        "- dev-libs/unsatusealt-1.0::testrepo (Change USE: +unsatuseorflag)",
+        '(dependency required by "dev-libs/unsatuseinst-1.0::testrepo" [installed])',
+        '(dependency required by "dev-libs/unsatuseinstconsumer-1.0::testrepo" [ebuild])',
+        '(dependency required by "dev-libs/unsatuseinstconsumer" [argument])',
     ]
     assert "doesnotexist-unsatuseor" not in rust2.stderr
+
+
+def test_use_unsat_missing_iuse_reports_the_missing_flag(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Backlog #20, reason kind 2: a `[flag]` dep whose flag is not in the
+    target's IUSE at all. Real `_show_unsatisfied_dep` reads
+    `pkg.iuse.get_missing_iuse(atom.unevaluated_atom.use.required)` and
+    prints `(Missing IUSE: <flags>)` (depgraph.py:6724-6727, :6980-6990),
+    with no `Change USE:` row and no autounmask suggestion (there is no
+    candidate flag to flip). Oracle capture
+    (portage 3.0.81.3, TEST/run/abort-capture.sh fixture tree):
+    `- dev-libs/unsatuseiusetarget-1.0::testrepo (Missing IUSE: noiuse)`
+    plus the `(dependency required by …)` chain."""
+    args = ["--pretend", "--autounmask-use=n", "dev-libs/unsatuseiuse"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 1 and py.returncode == 1
+    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.stdout.splitlines() == []
+    assert rust.stderr.splitlines() == [
+        "",
+        'emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/unsatuseiusetarget[noiuse]".',
+        "!!! One of the following packages is required to complete your request:",
+        "- dev-libs/unsatuseiusetarget-1.0::testrepo (Missing IUSE: noiuse)",
+        '(dependency required by "dev-libs/unsatuseiuse-1.0::testrepo" [ebuild])',
+        '(dependency required by "dev-libs/unsatuseiuse" [argument])',
+    ]
+
+
+def test_use_unsat_lists_only_the_latest_change_use_candidate(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Backlog #20: real `_show_unsatisfied_dep`'s "Only show the latest
+    version" rule for the `Change USE:` path (`unmasked_use_reasons` is
+    reduced to the first, highest-version entry, depgraph.py:6876-6890).
+    `unsatusealtmulti-1.0` and `-2.0` are both visible and both miss on
+    `[unsatuseorflag]`; real lists only `-2.0`. Oracle capture (portage
+    3.0.81.3, TEST/run/abort-capture.sh fixture tree) confirmed exactly
+    that row and no `-1.0` row."""
+    args = ["--pretend", "--autounmask-use=n", "dev-libs/unsatusealtmultidep"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 1 and py.returncode == 1
+    assert rust.stdout == py.stdout and rust.stderr == py.stderr
+    assert rust.stdout.splitlines() == []
+    assert rust.stderr.splitlines() == [
+        "",
+        'emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/unsatusealtmulti[unsatuseorflag]".',
+        "!!! One of the following packages is required to complete your request:",
+        "- dev-libs/unsatusealtmulti-2.0::testrepo (Change USE: +unsatuseorflag)",
+        '(dependency required by "dev-libs/unsatusealtmultidep-1.0::testrepo" [ebuild])',
+        '(dependency required by "dev-libs/unsatusealtmultidep" [argument])',
+    ]
+    assert "unsatusealtmulti-1.0" not in rust.stderr
 
 
 def test_or_group_unsat_use_installed_bin_keys_on_the_targeted_slot_not_just_cp(
@@ -4513,7 +4590,20 @@ def test_autounmask_backward_cascade_re_resolves_an_already_resolved_slot(
     )
     assert n.stdout == npy.stdout and n.stderr == npy.stderr
     assert "aucascleaf" not in n.stdout
-    assert 'no visible ebuild for dependency "dev-libs/aucascmid"' in n.stderr
+    # Backlog #20: real's "no ebuilds built with USE flags to satisfy"
+    # block (oracle: portage 3.0.81.3, TEST/run/abort-capture.sh tree,
+    # `--pretend --autounmask-use=n dev-libs/aucasctop`) -- same rows and
+    # chain as real (minus the `for <root>` xinfo suffix, portuale's
+    # standing convention).
+    assert n.stderr.splitlines() == [
+        "",
+        'emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aucascmid[cascade]".',
+        "!!! One of the following packages is required to complete your request:",
+        "- dev-libs/aucascmid-1.0::testrepo (Change USE: +cascade)",
+        '(dependency required by "dev-libs/aucasclate-1.0::testrepo" [ebuild])',
+        '(dependency required by "dev-libs/aucasctop-1.0::testrepo" [ebuild])',
+        '(dependency required by "dev-libs/aucasctop" [argument])',
+    ]
 
 
 def test_autounmask_breakage_abandons_autounmask_when_a_flag_is_wanted_both_ways(
@@ -4564,8 +4654,20 @@ def test_autounmask_breakage_abandons_autounmask_when_a_flag_is_wanted_both_ways
     assert rust_ab.stdout == py_ab.stdout and rust_ab.stderr == py_ab.stderr
     assert rust_ab.stdout.splitlines() == []
     assert "USE changes are necessary" not in rust_ab.stderr
+    # Backlog #20: the block, not the bare line. Chain note: real shows
+    # only its DFS-first parent branch (`aubreakwant` -> `aubreaktop` ->
+    # argument); portuale's shared chain walker discloses every failing
+    # branch (the #19-parked multi-branch narrowing, see `masked_dep_chain`),
+    # so the two extra `aubreakunwant`/`aubreakwant` lines are expected.
     assert rust_ab.stderr == (
-        '!!! no visible ebuild for dependency "dev-libs/aubreaksub"\n'
+        '\n'
+        'emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aubreaksub[brk]".\n'
+        "!!! One of the following packages is required to complete your request:\n"
+        "- dev-libs/aubreaksub-1.0::testrepo (Change USE: +brk)\n"
+        '(dependency required by "dev-libs/aubreaktop-1.0::testrepo" [ebuild])\n'
+        '(dependency required by "dev-libs/aubreaktop" [argument])\n'
+        '(dependency required by "dev-libs/aubreakunwant-1.0::testrepo" [ebuild])\n'
+        '(dependency required by "dev-libs/aubreakwant-1.0::testrepo" [ebuild])\n'
     )
 
 
@@ -5491,10 +5593,19 @@ def test_autounmask_use_dependency_suggestion_is_suppressed_by_autounmask_use_n(
     )
     assert result.returncode == 1  # abort path: unsatisfiable dep of a merge-bound parent
     assert result.stdout.splitlines() == []
-    assert (
-        result.stderr.strip()
-        == '!!! no visible ebuild for dependency "dev-libs/useflagpkg"'
-    )
+    # Backlog #20; oracle (portage 3.0.81.3, abort-capture tree,
+    # `--pretend --autounmask-use=n dev-libs/usedeprejectedpkg`) prints
+    # exactly this block. The fixture ebuild now declares the IUSE the
+    # cache always had (it was missing from the ebuild, so real parsed
+    # the fixture as invalid metadata and showed the masked block).
+    assert result.stderr.splitlines() == [
+        "",
+        'emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/useflagpkg[-foo]".',
+        "!!! One of the following packages is required to complete your request:",
+        "- dev-libs/useflagpkg-1.0::testrepo (Change USE: -foo)",
+        '(dependency required by "dev-libs/usedeprejectedpkg-1.0::testrepo" [ebuild])',
+        '(dependency required by "dev-libs/usedeprejectedpkg" [argument])',
+    ]
 
 
 def test_autounmask_use_changes_appear_in_json(emerge_binary, fixture_env):
@@ -5575,10 +5686,19 @@ def test_autounmask_use_parent_flip_suggestion_is_suppressed_by_autounmask_use_n
     )
     assert result.returncode == 1  # abort path: unsatisfiable dep of a merge-bound parent
     assert result.stdout.strip() == ''
-    assert (
-        result.stderr.strip()
-        == '!!! no visible ebuild for dependency "dev-libs/useeqchildpkg"'
-    )
+    # Backlog #20: the child row plus the parent-conditional row real
+    # appends (`violated_conditionals`' all-conditional branch,
+    # depgraph.py:6768-6858; oracle: abort-capture tree,
+    # `--pretend --autounmask-use=n dev-libs/useeqparentoffpkg`).
+    assert result.stderr.splitlines() == [
+        "",
+        'emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/useeqchildpkg[eqflag=]".',
+        "!!! One of the following packages is required to complete your request:",
+        "- dev-libs/useeqchildpkg-1.0::testrepo (Change USE: -eqflag)",
+        "- dev-libs/useeqparentoffpkg-1.0::testrepo (Change USE: +eqflag)",
+        '(dependency required by "dev-libs/useeqparentoffpkg-1.0::testrepo" [ebuild])',
+        '(dependency required by "dev-libs/useeqparentoffpkg" [argument])',
+    ]
 
 
 def test_autounmask_use_parent_flip_resolves_when_the_child_flag_is_masked(
@@ -6987,7 +7107,21 @@ def test_use_expand_implicit_flag_is_valid_iuse_even_when_unlisted(
     assert bad.stdout == bad_py.stdout
     assert bad.stderr == bad_py.stderr
     assert bad.stdout == ''
-    assert '!!! no visible ebuild for dependency "dev-libs/implicitiuseprov"' in bad.stderr
+    # Backlog #20: the block, not the bare line. Divergence note: real
+    # resolves this one through --autounmask-use (its blocked-change
+    # suggestion names `>=dev-libs/implicitiuseprov-1.0 elibc_musl`),
+    # because real treats implicit IUSE flags as flippable; portuale's
+    # autounmask suggestion does not cover implicit flags yet, so its
+    # display falls back to this disclosure. The pinned text is
+    # portuale's, Rust == Python.
+    assert bad.stderr.splitlines() == [
+        "",
+        'emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/implicitiuseprov[elibc_musl]".',
+        "!!! One of the following packages is required to complete your request:",
+        "- dev-libs/implicitiuseprov-1.0::testrepo (Change USE: +elibc_musl)",
+        '(dependency required by "dev-libs/implicitiusepkgmusl-1.0::testrepo" [ebuild])',
+        '(dependency required by "dev-libs/implicitiusepkgmusl" [argument])',
+    ]
 
 
 def test_use_stable_force_and_package_use_stable_mask_apply_when_stable(
@@ -8790,9 +8924,18 @@ def test_use_dep_equal_parent_mismatches_when_parent_flag_is_disabled(emerge_bin
     )
     assert result.returncode == 1  # abort path: unsatisfiable dep of a merge-bound parent
     assert result.stdout.strip() == ''
-    assert result.stderr.strip() == (
-        '!!! no visible ebuild for dependency "dev-libs/useeqchildpkg"'
-    )
+    # Backlog #20: child row + the parent-conditional row (real
+    # depgraph.py:6768-6858), matching the oracle capture
+    # (`--pretend --autounmask-use=n dev-libs/useeqparentoffpkg`).
+    assert result.stderr.splitlines() == [
+        "",
+        'emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/useeqchildpkg[eqflag=]".',
+        "!!! One of the following packages is required to complete your request:",
+        "- dev-libs/useeqchildpkg-1.0::testrepo (Change USE: -eqflag)",
+        "- dev-libs/useeqparentoffpkg-1.0::testrepo (Change USE: +eqflag)",
+        '(dependency required by "dev-libs/useeqparentoffpkg-1.0::testrepo" [ebuild])',
+        '(dependency required by "dev-libs/useeqparentoffpkg" [argument])',
+    ]
 
 
 def test_tree_indents_a_diamond_dependency_and_shows_it_once(emerge_binary, fixture_env):

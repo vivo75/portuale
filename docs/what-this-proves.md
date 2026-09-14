@@ -16570,3 +16570,22 @@ failures under the new pin, where pristine `25bffd54` leaves 41 eclasses
 unparsed and fails 20 of the 1407 functions it does parse. Evidence:
 `docs/brush-pin.md` "Current pin", `docs/brush-pr/` (five write-ups +
 patches), `TEST/findings/l2.md` "#38 S2".
+
+**`[use]`-dep unsat diagnostics: real's separate "no ebuilds built with USE flags" block (backlog #20, 2026-09-14).** Real `_show_unsatisfied_dep` has two dependency-failure disclosures: the masked block (shipped with #19) and, for a `[use]`-dep atom no autounmask flip can fix, the separate `emerge: there are no ebuilds built with USE flags to satisfy "<atom>".` + `!!! One of the following packages is required…` block with `- <cpv>::<repo> (<reason>)` rows (`Change USE: +flag -flag` for flags the candidate could flip; `Missing IUSE: <flags>` when a required flag is not a valid IUSE flag at all), real's "only show the latest version" reduction for the `Change USE:` path (`depgraph.py:6876-6890`), and the shared `(dependency required by …)` chain. Both languages in lockstep: `portage-repo::UseUnsatDepReport` + the `use_unsat_candidates_for_atom` scan (version/slot match with USE ignored, visible candidates only, real's descending-version order, the `use.mask`/`use.force`-pinned skip, declaration-order flags), carried on `GraphResult::use_unsat_deps`, rendered ahead of the masked block (real's precedence) in `pretend.rs`/`emerge_pretend_reference.py`, chain walked by the existing `masked_dep_chain`. Oracle captures against real 3.0.81.3 on the fixture tree for both reason kinds and the latest-only rule; the two existing pins were re-pinned to the block text and two new fixtures (`dev-libs/unsatuseiuse` → `Missing IUSE: noiuse`; `dev-libs/unsatusealtmultidep` → only `unsatusealtmulti-2.0`). Six pre-existing pins whose fixtures hit the USE path were re-pinned too, two of them after the oracle showed the parent-conditional row (implemented: `use_unsat_parent_row`, the `[eqflag=]`/`useeqparentoffpkg` shape) and one after repairing `dev-libs/useflagpkg`'s ebuild, which had lost the `IUSE` line its committed cache still carried (real regenerated the fixture metadata, parsed the ebuild as invalid and showed the masked block). A dependency's block prints on exit 1 whenever its requirer is merge-bound, matching real; the `--deep` walk into an *installed* requirer keeps its pre-existing divergence (real still prints the block and exits 1, portuale prints the block and exits 0 with the list -- the #19 merge-bound abort rule, pinned as such by `test_deep_walk_dispatches_or_group_through_the_same_unsat_use_bins_as_the_main_walk`). Documented narrowings (same #19 park): no parent-conditional `Change USE:` row on the *requirer*, no masked-candidate suppression of the `Missing IUSE:` fallback, no `for <root>` atom suffix.
+
+```sh
+# both implementations, byte-identical; real's block, not the bare line
+PORTAGE_CONFIGROOT=$PWD/fixtures ROOT=$PWD/fixtures \
+PORTAGE_RUNNING_ROOT=$PWD/fixtures DISTDIR=$PWD/fixtures/distfiles \
+  rust/target/release/emerge --pretend --autounmask-use=n dev-libs/unsatuseor
+# -> stderr: emerge: there are no ebuilds built with USE flags to satisfy
+#    "dev-libs/unsatusealt[unsatuseorflag]".
+#    !!! One of the following packages is required to complete your request:
+#    - dev-libs/unsatusealt-1.0::testrepo (Change USE: +unsatuseorflag)
+#    (dependency required by "dev-libs/unsatuseor-1.0::testrepo" [ebuild])
+#    (dependency required by "dev-libs/unsatuseor" [argument]); exit 1
+
+python3 -m pytest tests/test_emerge_pretend_contract.py -q \
+  -k "use_unsat or or_group_use_unsat or deep_walk_dispatches"
+# -> 5 passed
+```
