@@ -797,13 +797,24 @@ fn flat_field_has_token(raw: &str, wanted: &[&str]) -> bool {
 /// input: empty for every phase but `depend` (see
 /// `restrict_and_properties`), the config `USE` set for `depend` (see
 /// `depend_use_set`).
+///
+/// Deduped and sorted like real `config.py::_flatten` (`:1681-1688`):
+/// `" ".join(sorted(set(use_reduce(..., flat=True))))`. This is
+/// load-bearing, not cosmetic: ncurses' `RESTRICT="!test? ( test ) test"`
+/// use-reduces (with `test` off) to two `test` tokens, and `bin/ebuild.sh:
+/// 721-724` overwrites the phase's `RESTRICT` with this value -- without
+/// the set, the saved env (and the vdb `environment.bz2`) carries
+/// `RESTRICT="test test"` where real has `"test"` (#45 P2a finding).
 fn flat_field_on(raw: &str, use_set: &std::collections::HashSet<String>) -> String {
     if raw.trim().is_empty() {
         return String::new();
     }
     let tokens: Vec<String> = raw.split_whitespace().map(String::from).collect();
     portage_use_reduce::use_reduce_flat(&tokens, use_set, portage_use_reduce::MatchMode::Normal)
-        .map(|flat| flat.join(" "))
+        .map(|flat| {
+            let unique: std::collections::BTreeSet<String> = flat.into_iter().collect();
+            unique.into_iter().collect::<Vec<_>>().join(" ")
+        })
         .unwrap_or_default()
 }
 
@@ -4328,6 +4339,26 @@ mod tests {
             ("strip".to_string(), String::new())
         );
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn flat_field_on_dedups_and_sorts_like_real_flatten() {
+        // Real `config.py::_flatten` (`:1681-1688`):
+        // `" ".join(sorted(set(use_reduce(..., flat=True))))` -- the
+        // #45 ncurses case: `RESTRICT="!test? ( test ) test"` reduces
+        // to two `test` tokens with `test` off, and the set collapses
+        // them (real's saved value is `"test"`).
+        let empty = std::collections::HashSet::new();
+        assert_eq!(flat_field_on("!test? ( test ) test", &empty), "test");
+        assert_eq!(flat_field_on("zoo alpha zoo", &empty), "alpha zoo");
+        let mut use_set = std::collections::HashSet::new();
+        use_set.insert("bar".to_string());
+        assert_eq!(
+            flat_field_on("foo bar? ( bar baz )", &use_set),
+            "bar baz foo"
+        );
+        assert_eq!(flat_field_on("foo bar? ( bar baz )", &empty), "foo");
+        assert_eq!(flat_field_on("", &empty), "");
     }
 
     #[test]
