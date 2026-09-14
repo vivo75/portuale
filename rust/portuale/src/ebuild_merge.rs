@@ -2379,7 +2379,7 @@ fn blocked_installed_packages(
     (|| -> Option<HashSet<(String, String)>> {
         let repo_root = ebuild_phases::repo_root_for(&env.pkg_dir)?;
         let metadata =
-            portage_repo::read_md5_cache(&repo_root, &env.category, &env.split.pf).ok()?;
+            portage_repo::repo_aux_metadata(&repo_root, &env.category, &env.split.pf).ok()?;
 
         let repos = portage_repo::find_repos(config_root).ok()?;
         let main_repo = repos.iter().find(|r| r.is_main)?;

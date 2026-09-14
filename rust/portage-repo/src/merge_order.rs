@@ -44,7 +44,7 @@ use std::path::Path;
 
 use crate::{
     CandidateSource, GraphEntry, PretendOutcome, RepoConfig, VisibilityProvenance,
-    all_installed_packages, list_candidates, read_md5_cache, read_vdb_flag_set, read_vdb_slot,
+    all_installed_packages, list_candidates, read_vdb_flag_set, read_vdb_slot, repo_aux_metadata,
 };
 
 /// Real `_emerge/DepPriority.py::DepPriority` -- the per-edge dependency
@@ -1140,7 +1140,9 @@ fn add_installed_dependency_closure(
             cs.iter()
                 .filter(|c| c.version == ver)
                 .max_by_key(|c| c.repo_priority)
-                .and_then(|c| read_md5_cache(&c.repo_location, cat, &format!("{pkg}-{ver}")).ok())
+                .and_then(|c| {
+                    repo_aux_metadata(&c.repo_location, cat, &format!("{pkg}-{ver}")).ok()
+                })
         });
         let mut md: HashMap<String, String> = HashMap::new();
         let mut memo: HashMap<(String, String, String, String), String> = HashMap::new();

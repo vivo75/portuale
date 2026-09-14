@@ -5398,7 +5398,7 @@ fn run_search(
             let desc_match = !name_match
                 && searchdesc
                 && best.as_ref().is_some_and(|c| {
-                    portage_repo::read_md5_cache(
+                    portage_repo::repo_aux_metadata(
                         &c.repo_location,
                         cat,
                         &format!("{pkg}-{}", c.version),
@@ -5453,7 +5453,7 @@ fn run_search(
                 println!("{star}  {}", color.c("bold", cp));
             }
             if verbose && let Some(c) = &best {
-                let meta = portage_repo::read_md5_cache(
+                let meta = portage_repo::repo_aux_metadata(
                     &c.repo_location,
                     cat,
                     &format!("{pkg}-{}", c.version),
@@ -5562,7 +5562,7 @@ fn render_ambiguous_search_output(
             println!("{star}  {}", color.c("bold", cp));
         }
         if let Some(c) = &best {
-            let meta = portage_repo::read_md5_cache(
+            let meta = portage_repo::repo_aux_metadata(
                 &c.repo_location,
                 cat,
                 &format!("{pkg}-{}", c.version),

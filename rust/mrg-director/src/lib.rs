@@ -179,8 +179,11 @@ pub trait RepoCache {
         pf: &str,
     ) -> Result<std::collections::HashMap<String, String>, String>;
 
-    /// The `pf` names present for one category (the directory entries
-    /// under `metadata/md5-cache/<category>`), in stable sort order.
+    /// The `pf` names present for one category, in stable sort order:
+    /// the directory entries under `metadata/md5-cache/<category>` when
+    /// the repo has a usable md5-cache, else the `<pkg>-<version>` stems
+    /// of the ebuilds under `<repo>/<category>/<pkg>/` (the repo without
+    /// a cache, whose metadata must come from the ebuild itself).
     fn category(&self, category: &str) -> Vec<String>;
 
     /// The repo this cache reads (`::reponame`), for provenance.
@@ -762,8 +765,9 @@ impl PackagesDb for MemoryDb {
 }
 
 /// The current, only `RepoCache` implementation: the flat md5-cache
-/// directory. Delegate to `portage_repo::read_md5_cache` (identical to
-/// real `flat_hash.py`'s layout on disk).
+/// directory. Delegate to `portage_repo::repo_aux_metadata` (identical to
+/// real `flat_hash.py`'s layout on disk) and, when the repo has no usable
+/// cache, enumerate the category's ebuilds instead of cache-dir entries.
 pub struct Md5Cache<'a> {
     repo_location: &'a Path,
     repo_name: &'a str,
@@ -774,27 +778,58 @@ impl RepoCache for Md5Cache<'_> {
         category: &str,
         pf: &str,
     ) -> Result<std::collections::HashMap<String, String>, String> {
-        portage_repo::read_md5_cache(self.repo_location, category, pf)
+        portage_repo::repo_aux_metadata(self.repo_location, category, pf)
             .map(|m| (*m).clone())
             .map_err(|e| e.to_string())
     }
     fn category(&self, category: &str) -> Vec<String> {
-        let dir = self
-            .repo_location
-            .join("metadata")
-            .join("md5-cache")
-            .join(category);
-        std::fs::read_dir(&dir)
-            .map(|it| {
-                let mut names: Vec<String> = it
-                    .filter_map(|e| e.ok())
-                    .map(|e| e.file_name().to_string_lossy().into_owned())
-                    .filter(|n| !n.contains('.'))
-                    .collect();
-                names.sort();
-                names
-            })
-            .unwrap_or_default()
+        if portage_repo::has_usable_md5_cache(self.repo_location) {
+            let dir = self
+                .repo_location
+                .join("metadata")
+                .join("md5-cache")
+                .join(category);
+            std::fs::read_dir(&dir)
+                .map(|it| {
+                    let mut names: Vec<String> = it
+                        .filter_map(|e| e.ok())
+                        .map(|e| e.file_name().to_string_lossy().into_owned())
+                        .filter(|n| !n.contains('.'))
+                        .collect();
+                    names.sort();
+                    names
+                })
+                .unwrap_or_default()
+        } else {
+            // No cache dir: the `<cat>/<pkg>/<pf>.ebuild` tree itself is
+            // the only source of `pf` names, so walk it and yield each
+            // ebuild file's `<pkg>-<version>` stem.
+            let dir = self.repo_location.join(category);
+            let mut names: Vec<String> = std::fs::read_dir(&dir)
+                .map(|it| {
+                    it.filter_map(|e| e.ok())
+                        .filter(|e| e.path().is_dir())
+                        .flat_map(|pkg_dir| {
+                            std::fs::read_dir(pkg_dir.path())
+                                .map(|files| {
+                                    files
+                                        .filter_map(|f| f.ok())
+                                        .filter(|f| f.path().is_file())
+                                        .filter_map(|f| {
+                                            let name = f.file_name().to_string_lossy().into_owned();
+                                            name.strip_suffix(".ebuild").map(str::to_string)
+                                        })
+                                        .collect::<Vec<String>>()
+                                })
+                                .unwrap_or_default()
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            names.sort();
+            names.dedup();
+            names
+        }
     }
     fn repo(&self) -> &str {
         self.repo_name
@@ -1538,6 +1573,43 @@ mod tests {
         assert_eq!(cache.repo(), "main");
         assert!(cache.category("dev-libs").is_empty());
         assert!(cache.metadata("dev-libs", "example-1.0").is_err());
+    }
+
+    /// `Md5Cache::category` names both shapes: a repo with a usable
+    /// `metadata/md5-cache` lists the cache-dir entries (no `.`), while a
+    /// repo without one lists the `<cat>/<pkg>/<pf>.ebuild` file stems --
+    /// the cache-less tree whose metadata C2 must generate from the
+    /// ebuild. A stray non-ebuild file is not a pf, and the stems come
+    /// out deduped + sorted.
+    #[test]
+    fn md5_cache_category_lists_cache_entries_or_ebuild_stems() {
+        let bare = tempdir("mrg_director_bare_repo");
+        std::fs::create_dir_all(bare.join("dev-libs/docs")).unwrap();
+        std::fs::write(bare.join("dev-libs/docs/docs-1.0.ebuild"), "EAPI=8\n").unwrap();
+        std::fs::write(bare.join("dev-libs/docs/Manifest"), "").unwrap();
+        let cache = Md5Cache {
+            repo_location: &bare,
+            repo_name: "bare",
+        };
+        assert_eq!(cache.category("dev-libs"), vec!["docs-1.0"]);
+        assert!(cache.metadata("dev-libs", "docs-1.0").is_err());
+
+        let cached = tempdir("mrg_director_cached_repo");
+        std::fs::create_dir_all(cached.join("metadata/md5-cache/dev-libs")).unwrap();
+        std::fs::write(
+            cached.join("metadata/md5-cache/dev-libs/docs-2"),
+            "SLOT=0\n",
+        )
+        .unwrap();
+        let cache = Md5Cache {
+            repo_location: &cached,
+            repo_name: "cached",
+        };
+        assert_eq!(cache.category("dev-libs"), vec!["docs-2"]);
+        assert_eq!(
+            cache.metadata("dev-libs", "docs-2").unwrap().get("SLOT"),
+            Some(&"0".to_string())
+        );
     }
 
     /// `VolatileCache` is the repo-cache slot's second implementation

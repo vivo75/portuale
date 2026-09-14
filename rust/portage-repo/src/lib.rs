@@ -1312,7 +1312,7 @@ pub fn find_repos(config_root: &Path) -> Result<Vec<RepoConfig>, Error> {
 /// immutable for the process lifetime (real portage's `portdbapi` keeps
 /// the same entries in its own `_aux_cache`); `--regen`, portuale's only
 /// md5-cache writer, is a separate process. No caller mutates the map.
-pub fn read_md5_cache(
+fn read_md5_cache(
     repo_location: &Path,
     category: &str,
     pf: &str,
@@ -1362,6 +1362,54 @@ pub fn read_md5_cache(
         guard.insert(path, std::sync::Arc::clone(&map));
     }
     Ok(map)
+}
+
+/// The single entry point for a repo's aux metadata for `category/pf`
+/// ("package-version", e.g. `foo-1.2.3-r1`): every production
+/// `read_md5_cache` call site in this crate and in `portuale`/`mrg-director`
+/// goes through here.
+///
+/// This is the C2 hook site: a per-cp cache miss (no
+/// `metadata/md5-cache/<category>/<pf>` file) will ask the registered
+/// depend-phase provider here for the metadata the cache lacks. Today it
+/// delegates to [`read_md5_cache`] unchanged, so a miss keeps the same
+/// `Error::ReadFile` and behaviour is neutral for repos that have a
+/// cache (every L0/L1 probe).
+pub fn repo_aux_metadata(
+    repo_location: &Path,
+    category: &str,
+    pf: &str,
+) -> Result<std::sync::Arc<HashMap<String, String>>, Error> {
+    read_md5_cache(repo_location, category, pf)
+}
+
+/// Whether `repo_location` ships a usable `metadata/md5-cache` (i.e. the
+/// path is a real directory), memoised per repo path.
+///
+/// Grounding: real portage's auxdb/cache-format selection
+/// (`repository/config.py::iter_pregenerated_caches`, driven by
+/// `porttree.py:392`'s `_create_pregen_cache`) treats the md5-cache as one
+/// *cache format* among several (`pms`'s `metadata/cache`, `md5-dict`'s
+/// `metadata/md5-cache`); when no format is available, `aux_get` falls
+/// back to generating metadata from the ebuild via the depend phase. The
+/// same split here: `true` means aux metadata can be read from the
+/// cache-dir; `false` means it must come from the ebuild itself (C2).
+pub fn has_usable_md5_cache(repo_location: &Path) -> bool {
+    type UsableFlags = HashMap<PathBuf, bool>;
+    static FLAGS: OnceLock<RwLock<UsableFlags>> = OnceLock::new();
+    let flags = FLAGS.get_or_init(|| RwLock::new(HashMap::new()));
+
+    if let Ok(guard) = flags.read()
+        && let Some(usable) = guard.get(repo_location)
+    {
+        return *usable;
+    }
+
+    let usable = repo_location.join("metadata").join("md5-cache").is_dir();
+    if let Ok(mut guard) = flags.write() {
+        guard.insert(repo_location.to_path_buf(), usable);
+    }
+    usable
 }
 
 /// Which kind of package this `Candidate` actually is -- real portage's
@@ -1574,7 +1622,7 @@ fn list_candidates_uncached(
             let Some(version) = strip_version_prefix(stem, package) else {
                 continue;
             };
-            let Ok(metadata) = read_md5_cache(&repo.location, category, stem) else {
+            let Ok(metadata) = repo_aux_metadata(&repo.location, category, stem) else {
                 continue;
             };
             let keywords = metadata
@@ -4209,7 +4257,7 @@ fn flag_is_settable(
     config: &portage_profile::Config,
 ) -> bool {
     let pf = format!("{package}-{}", candidate.version);
-    let Ok(metadata) = read_md5_cache(&candidate.repo_location, category, &pf) else {
+    let Ok(metadata) = repo_aux_metadata(&candidate.repo_location, category, &pf) else {
         return false;
     };
     let iuse = metadata.get("IUSE").map(String::as_str).unwrap_or_default();
@@ -4419,7 +4467,7 @@ fn parent_use_state(
         .clone();
     let (_iuse, use_flags) = candidate_iuse_and_use(&resolved, &owner.0, &owner.1, config)?;
     let pf = format!("{}-{version}", owner.1);
-    let metadata = read_md5_cache(&resolved.repo_location, &owner.0, &pf).ok()?;
+    let metadata = repo_aux_metadata(&resolved.repo_location, &owner.0, &pf).ok()?;
     let full_iuse = implicit_iuse_set(
         metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
         config,
@@ -5452,7 +5500,7 @@ pub fn candidate_use_flags_display(
         return Vec::new();
     };
     let pf = format!("{package}-{version}");
-    let Ok(metadata) = read_md5_cache(&candidate.repo_location, category, &pf) else {
+    let Ok(metadata) = repo_aux_metadata(&candidate.repo_location, category, &pf) else {
         return Vec::new();
     };
     let Some(iuse) = metadata.get("IUSE") else {
@@ -5512,7 +5560,7 @@ pub fn candidate_effective_use_flags(
         return Vec::new();
     };
     let pf = format!("{package}-{version}");
-    let Ok(metadata) = read_md5_cache(&candidate.repo_location, category, &pf) else {
+    let Ok(metadata) = repo_aux_metadata(&candidate.repo_location, category, &pf) else {
         return Vec::new();
     };
     // A missing `IUSE` key is an empty `IUSE`, not missing metadata: the
@@ -7409,7 +7457,7 @@ fn binary_deps_changed(
         return false;
     };
     let pf = format!("{package}-{}", candidate.version);
-    let Ok(ebuild_metadata) = read_md5_cache(&resolved.repo_location, category, &pf) else {
+    let Ok(ebuild_metadata) = repo_aux_metadata(&resolved.repo_location, category, &pf) else {
         return false;
     };
     let libc_cps = libc_provider_cps(root);
@@ -7472,7 +7520,7 @@ fn deps_changed(
         return false;
     };
     let pf = format!("{package}-{version}");
-    let Ok(metadata) = read_md5_cache(&resolved.repo_location, category, &pf) else {
+    let Ok(metadata) = repo_aux_metadata(&resolved.repo_location, category, &pf) else {
         return false;
     };
 
@@ -7581,7 +7629,7 @@ fn slot_changed(
         return false;
     };
     let pf = format!("{package}-{version}");
-    let Ok(metadata) = read_md5_cache(&resolved.repo_location, category, &pf) else {
+    let Ok(metadata) = repo_aux_metadata(&resolved.repo_location, category, &pf) else {
         return false;
     };
     let repo_slot = split_slot(
@@ -7827,7 +7875,7 @@ fn candidate_iuse_and_use(
         return Some((iuse, use_flags));
     }
     let pf = format!("{package}-{}", candidate.version);
-    let metadata = read_md5_cache(&candidate.repo_location, category, &pf).ok()?;
+    let metadata = repo_aux_metadata(&candidate.repo_location, category, &pf).ok()?;
     // A missing IUSE key is a real, valid "declares no USE flags at all"
     // state (same "absence is real, not an error" precedent
     // read_vdb_flag_set already sets for a missing vdb IUSE/USE file),
@@ -9709,7 +9757,7 @@ pub fn resolve_info_candidate(
     // candidate is only listed in the per-package block when its EAPI is
     // 4+ and its `DEFINED_PHASES` names `info` (so `pkg_info()` can run).
     let pf = format!("{}-{}", atom.package, best.version);
-    let defines_pkg_info = read_md5_cache(&best.repo_location, &atom.category, &pf)
+    let defines_pkg_info = repo_aux_metadata(&best.repo_location, &atom.category, &pf)
         .ok()
         .and_then(|md| md.get("DEFINED_PHASES").cloned())
         .is_some_and(|dp| dp.split_whitespace().any(|p| p == "info"));
@@ -10385,7 +10433,7 @@ fn resolved_version_meta_and_use(
         .filter(|c| c.version == version)
         .max_by_key(|c| c.repo_priority)?;
     let pf = format!("{package}-{version}");
-    let metadata = read_md5_cache(&resolved.repo_location, category, &pf).ok()?;
+    let metadata = repo_aux_metadata(&resolved.repo_location, category, &pf).ok()?;
     let (_iuse, use_flags) = candidate_iuse_and_use(resolved, category, package, config)?;
     // Cold path (`--root-deps` only); the shared `Arc` isn't worth
     // threading through `unsatisfied_root_deps_atoms`'s `&HashMap`.
@@ -12686,7 +12734,7 @@ fn tree_metadata_for(
         .iter()
         .filter(|c| c.version == version)
         .max_by_key(|c| c.repo_priority)?;
-    read_md5_cache(
+    repo_aux_metadata(
         &resolved.repo_location,
         &cp.0,
         &format!("{}-{version}", cp.1),
@@ -13468,7 +13516,7 @@ pub fn circular_dep_solutions(
         let Some(pc) = pcands.iter().find(|c| c.version == pver) else {
             continue;
         };
-        let Ok(md) = read_md5_cache(&pc.repo_location, &pcat, &format!("{ppkg}-{pver}")) else {
+        let Ok(md) = repo_aux_metadata(&pc.repo_location, &pcat, &format!("{ppkg}-{pver}")) else {
             continue;
         };
         let get = |k: &str| md.get(k).map(String::as_str).unwrap_or("");
@@ -13649,7 +13697,7 @@ fn grandparent_use_conflict(
         let Some(oc) = ocands.iter().find(|c| c.version == over) else {
             continue;
         };
-        let Ok(omd) = read_md5_cache(&oc.repo_location, ocat, &format!("{opkg}-{over}")) else {
+        let Ok(omd) = repo_aux_metadata(&oc.repo_location, ocat, &format!("{opkg}-{over}")) else {
             continue;
         };
         for key in ["DEPEND", "BDEPEND", "RDEPEND", "PDEPEND"] {
@@ -17594,7 +17642,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                         })
                 {
                     let pf = format!("{}-{version}", key.1);
-                    if let Ok(metadata) = read_md5_cache(&resolved.repo_location, &key.0, &pf) {
+                    if let Ok(metadata) = repo_aux_metadata(&resolved.repo_location, &key.0, &pf) {
                         // Installed recorded USE, not effective profile
                         // USE -- see `enqueue_dependencies`'s own note
                         // just below; a `flag?`-gated dep this display
@@ -18365,7 +18413,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             std::sync::Arc::new(metadata)
         } else {
             let pf = format!("{}-{version}", key.1);
-            let Ok(metadata) = read_md5_cache(&repo_location, &key.0, &pf) else {
+            let Ok(metadata) = repo_aux_metadata(&repo_location, &key.0, &pf) else {
                 continue;
             };
             metadata
@@ -20283,7 +20331,7 @@ fn enqueue_dependencies(
     let repo_location = resolved.repo_location.clone();
 
     let pf = format!("{package}-{version}");
-    let Ok(metadata) = read_md5_cache(&repo_location, category, &pf) else {
+    let Ok(metadata) = repo_aux_metadata(&repo_location, category, &pf) else {
         return;
     };
 
@@ -20552,6 +20600,26 @@ mod tests {
             portage_tmpdir_from_config(&config),
             PathBuf::from("/var/tmp")
         );
+    }
+
+    /// `has_usable_md5_cache` is the per-repo "cache format available?"
+    /// bit real `porttree.py` derives from its auxdb/cache-format
+    /// selection: `fixtures/repo` ships `metadata/md5-cache`, a fresh
+    /// ebuild-only tree does not (so C2 must generate its metadata from
+    /// the ebuild).
+    #[test]
+    fn has_usable_md5_cache_is_the_presence_of_the_cache_dir() {
+        assert!(has_usable_md5_cache(&fixtures_root().join("repo")));
+        let bare = std::env::temp_dir().join(format!(
+            "portage-repo-has-usable-md5-cache-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&bare).unwrap();
+        assert!(!has_usable_md5_cache(&bare));
     }
 
     fn masters_test_root(name: &str) -> PathBuf {

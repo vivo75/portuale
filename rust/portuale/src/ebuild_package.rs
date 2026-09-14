@@ -665,7 +665,7 @@ pub(crate) fn package_after_install(
     let cpv = format!("{}/{}", env.category, env.split.pf);
     let metadata = ebuild_phases::repo_root_for(&env.pkg_dir)
         .and_then(|repo_root| {
-            portage_repo::read_md5_cache(&repo_root, &env.category, &env.split.pf).ok()
+            portage_repo::repo_aux_metadata(&repo_root, &env.category, &env.split.pf).ok()
         })
         .unwrap_or_default();
     let get = |key: &str| metadata.get(key).map(String::as_str).unwrap_or("");

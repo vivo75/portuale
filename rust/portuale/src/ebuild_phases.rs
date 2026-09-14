@@ -442,7 +442,9 @@ pub(crate) fn compute_environment(
     // \t<name>\t<md5>…`; older/fixture caches store a plain `INHERITED=
     // <space list>`. Absent for a standalone ebuild outside any repo.
     let inherited = repo_root_for(&pkg_dir)
-        .and_then(|repo_root| portage_repo::read_md5_cache(&repo_root, &category, &split.pf).ok())
+        .and_then(|repo_root| {
+            portage_repo::repo_aux_metadata(&repo_root, &category, &split.pf).ok()
+        })
         .and_then(|md| {
             if let Some(eclasses) = md.get("_eclasses_") {
                 let names: Vec<&str> = eclasses.split('\t').step_by(2).collect();
@@ -900,7 +902,7 @@ fn phase_standalone_base_env(
         // `USE=` half needs no separate step: `candidate_use_flags_display`
         // above already folds `package_env_use` in via
         // `effective_use_flags`' own atom matching.
-        let slot_raw = portage_repo::read_md5_cache(
+        let slot_raw = portage_repo::repo_aux_metadata(
             &repo_root_for(&env.pkg_dir)?,
             &env.category,
             &env.split.pf,
@@ -952,7 +954,7 @@ fn restrict_and_properties(
     let Some(repo_root) = repo_root_for(&env.pkg_dir) else {
         return (String::new(), String::new());
     };
-    let metadata = portage_repo::read_md5_cache(&repo_root, &env.category, &env.split.pf).ok();
+    let metadata = portage_repo::repo_aux_metadata(&repo_root, &env.category, &env.split.pf).ok();
     let get = |key: &str| {
         metadata
             .as_ref()
@@ -1061,7 +1063,7 @@ async fn fetch_sources(
     let Some(repo_root) = repo_root_for(&env.pkg_dir) else {
         return Ok((Vec::new(), Vec::new()));
     };
-    let metadata = portage_repo::read_md5_cache(&repo_root, &env.category, &env.split.pf).ok();
+    let metadata = portage_repo::repo_aux_metadata(&repo_root, &env.category, &env.split.pf).ok();
     let src_uri = metadata
         .as_ref()
         .and_then(|m| m.get("SRC_URI").cloned())
@@ -1257,7 +1259,7 @@ fn write_post_install_metadata(
     let Some(repo_root) = repo_root_for(&env.pkg_dir) else {
         return Ok(());
     };
-    let Ok(metadata) = portage_repo::read_md5_cache(&repo_root, &env.category, &env.split.pf)
+    let Ok(metadata) = portage_repo::repo_aux_metadata(&repo_root, &env.category, &env.split.pf)
     else {
         return Ok(());
     };

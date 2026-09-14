@@ -64,7 +64,7 @@ use std::collections::{HashMap, HashSet};
 use super::{
     GraphEntry, GraphResult, InstalledRef, PretendOutcome, RepoConfig, ResolveRequest,
     Resolver as PortualeResolver, all_installed_packages, effective_use_flags, find_repos,
-    installed_pkg_iuse_and_use, is_visible, list_candidates, read_md5_cache,
+    installed_pkg_iuse_and_use, is_visible, list_candidates, repo_aux_metadata,
 };
 
 // --- Lazy fact loading -----------------------------------------------------
@@ -223,7 +223,8 @@ impl LazyRepo {
                     continue;
                 }
                 let pf = format!("{package}-{}", candidate.version);
-                let Ok(metadata) = read_md5_cache(&candidate.repo_location, category, &pf) else {
+                let Ok(metadata) = repo_aux_metadata(&candidate.repo_location, category, &pf)
+                else {
                     continue;
                 };
                 // Skip versions outside `portage_atom`'s own version grammar.
