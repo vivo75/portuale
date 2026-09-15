@@ -1557,6 +1557,23 @@ CASES = [
         0,
     ),
     (
+        "merge order: the bootstrap branch of a self-referential || "
+        "BDEPEND merges before a 2nd hard-BDEPEND consumer chain of the "
+        "same owner (#53, podman/go-md2man repro)",
+        ["--pretend", "app-misc/mopodman"],
+        0,
+    ),
+    (
+        "-v form of the #53 merge-order fixture",
+        ["--pretend", "-v", "app-misc/mopodman"],
+        0,
+    ),
+    (
+        "#53 nearest-passing pin: same chain without the self-branch",
+        ["--pretend", "app-misc/mopodmanok"],
+        0,
+    ),
+    (
         "a `[flag]` dep on an already-installed package that lacks the "
         "flag reinstalls it + autounmasks (L0 nginx/systemd/curl root cause)",
         ["--pretend", "dev-libs/flipinstconsumer"],
@@ -4179,6 +4196,55 @@ def test_slot_operator_rebuild_is_a_walked_node_and_off_at_backtrack_zero(
 
     # The default budget still rebuilds (guard against the gate leaking).
     assert "slotbindconsumer" in _run([str(emerge_binary)], args, env).stdout
+
+
+def test_self_referential_bootstrap_branch_merges_before_its_consumers(
+    emerge_binary, fixture_env
+):
+    """#53 (L0 finding, live `dev-lang/go` / `dev-go/go-md2man` probe):
+    `dev-lang/mogo`'s own BDEPEND is `|| ( >=mogo-N >=mogoboot-N )`; the
+    resolver picks the non-circular `mogoboot` branch (L0 finding D,
+    `b5b256f`), but `merge_order.rs`'s own independent `||`-branch
+    re-derivation (`alt_suppressed`) used to pick the *self* branch
+    instead (it trivially matches the owner's own not-yet-merged graph
+    node), adding a permanent `mogo -> mogo` buildtime self-edge that
+    stalled `mogo` behind every package with a (relaxable)
+    `buildtime_slot_op` edge to it -- `dev-go/momd2man`,
+    `app-misc/moconmon`, `app-misc/mocommon` -- even though none of them
+    structurally need to come first. Fixed by excluding a `||`
+    alternative's match against the *owning entry's own index* from
+    `alt_suppressed`'s branch preference, mirroring the resolver's own
+    `circular_self` carve-out (`b5b256f`).
+
+    `tests/output_invariants.py`'s "merges after its owner" check is the
+    expectation-free version of this same assertion (run automatically
+    over every fixture package by `test_output_invariants.py`); this
+    test pins the concrete index relationship by name."""
+    rows = json.loads(
+        _run([str(emerge_binary)], ["--pretend", "--json", "app-misc/mopodman"], fixture_env).stdout
+    )["entries"]
+    order = [e["package"] for e in rows]
+    assert order.index("mogo") < order.index("momd2man")
+    assert order.index("mogoboot") < order.index("mogo")
+    assert order == [
+        "mounzip",
+        "mogoboot",
+        "mogo",
+        "momd2man",
+        "moconmon",
+        "mocommon",
+        "mopodman",
+    ]
+
+    # The nearest-passing shape (no self-branch) was never affected by
+    # the bug; pinned here too so a regression on either side is caught.
+    ok_rows = json.loads(
+        _run(
+            [str(emerge_binary)], ["--pretend", "--json", "app-misc/mopodmanok"], fixture_env
+        ).stdout
+    )["entries"]
+    ok_order = [e["package"] for e in ok_rows]
+    assert ok_order.index("mogook") < ok_order.index("momd2manok")
 
 
 def test_ignore_built_slot_operator_deps_suppresses_the_rebuild(

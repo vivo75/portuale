@@ -1441,7 +1441,8 @@ fn build_digraph(entries: &[GraphEntry], top_level_atoms: &[String], root: &Path
     // over-inclusive stopgap).
     let alt_suppressed: Vec<HashSet<usize>> = entries
         .iter()
-        .map(|e| {
+        .enumerate()
+        .map(|(i, e)| {
             let mut groups: HashMap<(u8, u32), Vec<(u32, usize)>> = HashMap::new();
             for (ei, edge) in e.deps.iter().enumerate() {
                 if let Some((g, b)) = edge.alt
@@ -1467,6 +1468,23 @@ fn build_digraph(entries: &[GraphEntry], top_level_atoms: &[String], root: &Path
                         cp_indices.get(&(edge.category.as_str(), edge.package.as_str()))
                     {
                         for &j in idxs {
+                            // Real `dep_zapdeps` treats a `||` alternative
+                            // satisfied only by the package currently
+                            // being resolved as unavailable -- a circular
+                            // self-dependency (the `circular_self` check
+                            // in lib.rs's actual resolve, b5b256f, L0
+                            // finding D). Without this guard, an
+                            // alternative whose only tree match is the
+                            // owner's own not-yet-merged graph node (`j
+                            // == i`) trivially counts as "in graph" and
+                            // can win over the branch the resolver
+                            // actually chose (e.g. a bootstrap branch),
+                            // adding a phantom self-edge that can never
+                            // be satisfied and stalls the owner's own
+                            // merge-order position (#53).
+                            if j == i && !g.installed[j] {
+                                continue;
+                            }
                             if edge_matches(&edge.atom, j) {
                                 any_m = true;
                                 if g.installed[j] {
@@ -3195,5 +3213,105 @@ mod tests {
         let chain = test_graph(4, &[(0, 1, prio(1)), (1, 2, prio(1)), (0, 3, prio(1))]);
         let members: HashSet<usize> = [0, 1, 2, 3].into_iter().collect();
         assert_eq!(reduced_merge_order(&chain, &members), vec![2, 3, 1, 0]);
+    }
+
+    /// A minimal `New` `GraphEntry` for `build_digraph` tests --
+    /// mirrors `synthetic_installed_entry`'s full field list.
+    fn new_entry(category: &str, package: &str, version: &str, deps: Vec<DepEdge>) -> GraphEntry {
+        GraphEntry {
+            category: category.to_string(),
+            package: package.to_string(),
+            outcome: PretendOutcome::New {
+                version: version.to_string(),
+            },
+            blockers: Vec::new(),
+            slot: Some(version.to_string()),
+            sub_slot: Some(version.to_string()),
+            repo_name: None,
+            oldbest: Vec::new(),
+            use_flags_display: Vec::new(),
+            use_expand_display: Vec::new(),
+            use_expand_display_p: Vec::new(),
+            keyword_mask: None,
+            new_slot: false,
+            interactive: false,
+            fetch_restrict: false,
+            fetch_restrict_satisfied: false,
+            download_files: Vec::new(),
+            required_by: Vec::new(),
+            source: CandidateSource::Ebuild,
+            provenance: VisibilityProvenance::default(),
+            keyword_suggestion: None,
+            use_suggestion: None,
+            parent_use_suggestion: None,
+            targets_running_root: false,
+            remote_binary: false,
+            build_id: None,
+            deps,
+        }
+    }
+
+    #[test]
+    fn self_referential_disjunctive_bdepend_skips_the_self_branch() {
+        // #53: `dev-lang/mogo`'s own BDEPEND is
+        // `|| ( >=mogo-1.24 >=mogoboot-1.24 )`. The resolver picks the
+        // non-circular `mogoboot` branch (L0 finding D, `b5b256f`) --
+        // `alt_suppressed` must agree, not let the self branch win via
+        // its trivial "matches the owner's own not-yet-merged graph
+        // node" match, which used to add a permanent `mogo -> mogo`
+        // buildtime self-edge and demote the real edge to `mogoboot`
+        // down to the weaker `required_by`-fallback `runtime` priority.
+        let mogo_deps = vec![
+            DepEdge {
+                atom: ">=dev-lang/mogo-1.24".to_string(),
+                category: "dev-lang".to_string(),
+                package: "mogo".to_string(),
+                priority: DepPriority {
+                    buildtime: true,
+                    ..DepPriority::default()
+                },
+                disjunctive: true,
+                alt: Some((0, 0)),
+                key: 4,
+            },
+            DepEdge {
+                atom: ">=dev-lang/mogoboot-1.24".to_string(),
+                category: "dev-lang".to_string(),
+                package: "mogoboot".to_string(),
+                priority: DepPriority {
+                    buildtime: true,
+                    ..DepPriority::default()
+                },
+                disjunctive: true,
+                alt: Some((0, 1)),
+                key: 4,
+            },
+        ];
+        let entries = vec![
+            new_entry("dev-lang", "mogo", "1.26", mogo_deps),
+            new_entry("dev-lang", "mogoboot", "1.24", Vec::new()),
+        ];
+        let g = build_digraph(
+            &entries,
+            &["dev-lang/mogo".to_string()],
+            Path::new("/nonexistent-root-for-unit-test"),
+        );
+        assert!(
+            g.children[0].iter().all(|&(c, _)| c != 0),
+            "mogo must not depend on itself: {:?}",
+            g.children[0]
+        );
+        let to_boot = g.children[0].iter().find(|&&(c, _)| c == 1);
+        assert!(
+            to_boot.is_some(),
+            "mogo must depend on mogoboot: {:?}",
+            g.children[0]
+        );
+        let (_, prios) = to_boot.unwrap();
+        assert!(
+            prios.iter().any(|p| p.buildtime),
+            "the mogo -> mogoboot edge must be the real buildtime one, \
+             not the weaker required_by-fallback edge: {prios:?}"
+        );
     }
 }
