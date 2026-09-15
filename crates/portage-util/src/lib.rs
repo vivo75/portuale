@@ -123,3 +123,39 @@ fn fnv1a(bytes: &[u8]) -> u64 {
     }
     hash
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(dir: &Path) -> Vec<String> {
+        read_dir_entries(dir)
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect()
+    }
+
+    // One test for the whole seam (the shuffle is process-global); the
+    // seeded half lives in `tests/shuffle_seed_freeze.rs`.
+    #[test]
+    fn shuffle_seed_is_frozen_at_first_use_and_read_dir_is_sorted_by_default() {
+        let dir = TempDir::new("portage-util").keep();
+        for name in ["g", "a", "h", "c", "b", "f", "d", "e"] {
+            std::fs::write(dir.join(name), b"").unwrap();
+        }
+
+        let first = shuffle_seed();
+        // SAFETY: a value set after the first read is ignored.
+        unsafe { std::env::set_var("PORTUALE_SHUFFLE_DIRS", "7") };
+        let second = shuffle_seed();
+        unsafe { std::env::remove_var("PORTUALE_SHUFFLE_DIRS") };
+
+        assert_eq!(first, second, "the first use pins the value");
+        assert_eq!(first, None, "the harness never sets the variable");
+        let sorted = ["a", "b", "c", "d", "e", "f", "g", "h"];
+        assert_eq!(names(&dir), sorted, "unset must be sorted");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
