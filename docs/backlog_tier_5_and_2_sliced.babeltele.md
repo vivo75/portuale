@@ -4,7 +4,7 @@ PROJ: readability-relaxed semantic projection (BabelTele, arXiv:2606.19857); gly
 LEGEND (PY/CT-byte-identical refs below = pre-2026-09-15 rules, superseded by PYREF-REMOVED): `∷`is `;`fence `|`field `→`leads/causes `⇒`decision `←`from `∈`in `∉`not-in `¬`not `∧`and `∨`or `:=`def `!`must-not `?`unverified `+`add `-`remove `@`anchor file:sym:line `F/M/S`=tiers(F Opus5/Fable5.1, M Sonnet5, S Haiku4.5; Frev=F reads full diff pre-user-commit) `U`=user-owned `D#`=owner decision §3 `PR`=rust/portage-repo/src/lib.rs `MO`=rust/portage-repo/src/merge_order.rs `PT`=rust/portuale/src/pretend.rs `EP`=rust/portuale/src/ebuild_phases.rs `EM`=rust/portuale/src/ebuild_merge.rs `MD`=rust/mrg-director/src/lib.rs `PY`=python/emerge_pretend_reference.py `CT`=tests/test_emerge_pretend_contract.py `F25`=docs/025-tier2-closeout.deepseek.md §11 `L3F`=TEST/findings/l3.md `L2F`=TEST/findings/l2.md
 
 PYREF-REMOVED 2026-09-15 (branch backlog/python-copy-removal; docs/second_python_copy_removal.md) ⇒ R3b..R5 ¬PY ¬Rust==PY: pin Rust vs real oracle ∧ tests/test_output_invariants.py green ∧ reviewed corpus drift blessed (PORTUALE_CORPUS_BLESS=1) same commit ∷ #26 F-A1 w/ PORTUALE_DYNAMIC_DEPS_APPEND=1 ⇒ only test_oracle_slotop_undo_cascade fails (PY half gone) ∷ found+fixed C2 race dc8022b (concurrent cache-miss shared depend metadata file)
-STATUS: proposed 2026-09-14 ∷ D1-D7 ANSWERED ∷ R0 DONE (#21 cut) ∷ W1 DONE ∷ W2 DONE (R2 rescoped per (a): #36 not-reproducible-as-framed, genuine upstream oracle captured) ∷ W3 DONE: P2b (env rows 0) ∥ C2 (depend-phase fallback) ∥ R3a (025b design, owner read pending before R3b) ∥ H3 (6/8 slots) ∷ W4 DONE (P3 C3 R3b) ∷ W5 H4 DONE ∷ W6 R3c STOPPED→REVALIDATED 2026-09-15 ⇒ R3c∧R3d WITHDRAWN ∷ D7 ANS opt1 ⇒ W6 R3e′ DONE (#25 DONE-PARTIAL) ∷ W7 DONE (R4 #35 ∧ H5 #28) ∷ W8 R5 next
+STATUS: proposed 2026-09-14 ∷ D1-D7 ANSWERED ∷ R0 DONE (#21 cut) ∷ W1 DONE ∷ W2 DONE (R2 rescoped per (a): #36 not-reproducible-as-framed, genuine upstream oracle captured) ∷ W3 DONE: P2b (env rows 0) ∥ C2 (depend-phase fallback) ∥ R3a (025b design, owner read pending before R3b) ∥ H3 (6/8 slots) ∷ W4 DONE (P3 C3 R3b) ∷ W5 H4 DONE ∷ W6 R3c STOPPED→REVALIDATED 2026-09-15 ⇒ R3c∧R3d WITHDRAWN ∷ D7 ANS opt1 ⇒ W6 R3e′ DONE (#25 DONE-PARTIAL) ∷ W7 DONE (R4 #35 ∧ H5 #28) ∷ W8 DONE (R5 #17 CLOSED deliberate cut) ⇒ ALL TRACKS DONE/CLOSED
 SCOPE: docs/backlog-tasks.md OPEN only: T5{41,44,45} T2{17,20,21,25,28,35,36} ∷ DONE/DONE-PARTIAL ∉scope
 RF: AGENTS.md(step8 verify); docs/agent-context.md; docs/scope-backlog.md §A §H §I §K; per-track plan/finding below
 
@@ -150,4 +150,11 @@ W7 DONE 2026-09-15:
   H5 #28 DONE: docs/028-director-proposal.md call graph (all slots incl solver production) ∷ REC Director stays test-only (D6) + revisit triggers
   housekeeping: backlog-tasks #35 #36 + "Tier 3" header dropped by e5ffd0f (H3) ⇒ restored
   NEXT W8 R5 #17 600s (D5) ∷ 15 order rows, equal node sets
+
+W8 DONE 2026-09-15 R5 #17 CLOSED (deliberate cut, D5 600s):
+  step1 re-measure: R3b seed-sort only covers pretend.rs expand_top_level_atoms (explicit @system/@world arg) ∷ gtk:4 mo-trace re-run post-R3b (TEST/logs/r3c-revalidate-20260915/) ⇒ UNCHANGED 578 vs real 290 iter, nodes 398==398, iter-1 batch div @zlib
+  step2 1 lever: same unsorted seed ∈add_installed_dependency_closure Seed-1b (complete-mode @system, fires EVERY complete probe ¬just explicit arg) ⇒ ported identical sort fix
+  result: 0 effect ∷ 14-probe container rerun + full L0 (l0-20260915T073208Z) byte-identical 120/120 vs pre-fix ⇒ rules out seed/discovery order ⇒ wall = installed-nomerge-node DRAIN TIMING ∈_serialize_tasks (confirms 2026-09-09 "Deeper dig") ⇒ needs per-node trace across ~400-node graph = multi-session, ¬600s
+  DISPOSITION: #17 CLOSED deliberate cut ∷ lever table ∈TEST/findings/l0.md "R5 — #17 closed" ∷ seed-sort fix KEPT (harmless L0-neutral, closer to real) ¬reopen
+  ⇒ ALL 7 TRACKS (P C R H) DONE/CLOSED: T5 #41/#44/#45 DONE ∷ T2 #17 cut #20/#25/#28/#35/#36 DONE(-PARTIAL) #21 cut
 

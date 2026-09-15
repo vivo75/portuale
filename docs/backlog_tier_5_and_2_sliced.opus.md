@@ -538,7 +538,7 @@ the two guards; pin against the oracle fixture.
 
 **Accept:** fixture == real; L0 ≥ before.
 
-### R5 (F, time-boxed 600 s per D5) — #17 F-B1 frontier drain timing
+### R5 (F, time-boxed 600 s per D5) — #17 F-B1 frontier drain timing — **CLOSED 2026-09-15 (deliberate cut)**
 
 **State:** node sets equal (398 == 398 on gtk:4), but portuale runs 578
 drain iterations vs real's 290; first divergence is the order inside the
@@ -854,4 +854,34 @@ assume `resolved_slots` covers them. Next: wave 7 (R4 ∥ H5).
 Next: wave 8, R5 (#17, 600 s time box per D5). It owns the 15 order
 rows, all with equal node sets (families in `TEST/findings/l0.md` "R3c
 revalidation").
+
+**Wave 8 done 2026-09-15: R5, #17 closed as a deliberate cut.**
+
+- Step 1 (re-measure after R3): R3b's `SetArg` seed-sort fix only
+  covers the explicit `@system`/`@world` top-level argument path
+  (`pretend.rs::expand_top_level_atoms`); re-measuring `gui-libs/gtk:4`
+  against the current binary confirms the F-B1 frontier-drain symptom
+  is unchanged (578 vs real's 290 iterations, node sets equal,
+  iteration-1 batch order still diverges at `sys-libs/zlib`).
+- Step 2 (one lever, per D5's time box): the identical unsorted seed
+  gap survives in `add_installed_dependency_closure`'s complete-mode
+  `@system` seeding, which fires on every complete-mode probe. Ported
+  the same fix. Verified **zero effect**: a 14-probe container re-run
+  and a full L0 run (`l0-20260915T073208Z`) are byte-identical to the
+  pre-fix baseline on every metric and all 120 probes.
+- This rules out seed/discovery order as the cause and confirms the
+  2026-09-09 "Deeper dig" note's conclusion: the wall is
+  installed-nomerge-node **drain timing** inside `_serialize_tasks`,
+  which needs per-node tracing across the ~400-node graph -- a
+  multi-session investigation the 600 s box correctly doesn't fund.
+- **Disposition:** #17 closed as a deliberate cut
+  (`docs/backlog-tasks.md` #17, lever table in `TEST/findings/l0.md`
+  "R5 — #17 closed"). The seed-sort fix is kept (harmless, L0-neutral,
+  closer to real's own semantics) but reopens nothing.
+
+**Tier 2/5 sliced-plan status: all seven tracks (P, C, R, H) are now
+DONE or closed.** T5 #41/#44/#45 DONE; T2 #17 closed (deliberate cut),
+#20/#25/#28/#35/#36 DONE (#25/#36 DONE-PARTIAL with named residues),
+#21 deliberate cut. See `docs/backlog-tasks.md` for the per-item
+status and `docs/scope-backlog.md` for the residue inventory.
 

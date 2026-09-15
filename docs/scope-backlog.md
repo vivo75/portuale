@@ -867,7 +867,11 @@ merge, unmerge, world management, all real. The gap to a full drop-in is:
     and cut the count from 22 with parity 0.800 -> 0.817, residue
     adjudicated in `docs/025-tier2-closeout.deepseek.md` §11
     F-B1/F-B3/F-B4 and #25; after #25's R3e′ the L0 unexplained order
-    count is 15).
+    count is 15). **#17 (F-B1) closed as a deliberate cut 2026-09-15**
+    (D5 600s time box): one further lever (the R3b seed-sort fix ported
+    to the complete-mode `@system` closure) verified zero L0 effect,
+    confirming the residue is frontier drain-timing, not seed order --
+    see `docs/backlog-tasks.md` #17 and `TEST/findings/l0.md` "## I".
 2. **The Part 2 tails** — F's `--info` host-state
    half, G's brush re-pin, §J's `--solver=` real-tree bugs (E's fetch
    ordering and §J's notices/markers/doc cuts shipped as Tier-1

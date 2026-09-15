@@ -1254,8 +1254,23 @@ fn add_installed_dependency_closure(
     // members (`dev-libs/gmp` under `glibc` -> `gcc`, `sys-libs/readline`
     // under `bash`, ...) stay, exactly as real's own post-prune graph
     // keeps them.
+    //
+    // R5 (#17): real `_resolve` (`depgraph.py:5500`) processes this
+    // `SetArg`'s own atom list `sorted(arg.pset.getAtoms(), key=str)` --
+    // the same seed-order fact R3b already fixed for an *explicit*
+    // `@world`/`@system` top-level target (`pretend.rs`'s
+    // `expand_top_level_atoms`). This is the other place the identical
+    // unsorted-profile-order seed survives: *every* complete-mode probe
+    // (not just an explicit `@system`/`@world` argument) walks
+    // `system_atoms` here to build the installed closure, and an
+    // unsorted seed skews the DFS discovery order the pre-bias sort
+    // preserves -- exactly the `_serialize_tasks` "installed-chain"
+    // front-load family (`pyproject-metadata`, `freetype`, …) `TEST/
+    // findings/l0.md` "## I" names as the outstanding wall.
+    let mut system_atoms_sorted = system_atoms.to_vec();
+    system_atoms_sorted.sort();
     if !virtuals_only {
-        for atom_str in system_atoms {
+        for atom_str in &system_atoms_sorted {
             let Some(atom) = portage_dep::parse_atom(atom_str) else {
                 continue;
             };
