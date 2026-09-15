@@ -101,6 +101,19 @@ The Python mirror was removed; `second_python_copy_removal.md` "Where each check
 
 54. **Installed-consumer pin/residual conflict over-approximation (found by the #49 fixture oracle)** — portuale applies keeper's `=paired-1.0` pin from outside every target closure, but real 3.0.82.2 only sees an installed consumer when a competing constraint keeps the installed instance in the graph: complete mode is enabled only on an existing slot conflict (`depgraph.py:9446-9453`) and the end-of-walk installed-satisfier loop (`depgraph.py:8562+`) only walks deps of graph nodes. Hermetic staged-fixture evidence (`TEST/logs/l0-fx-20260915T101508Z`, `TEST/findings/l0-fixture-oracle.md` "#54"): `--update dev-libs/paired` real `U paired-2.0` rc 0 vs portuale silent; `dev-libs/needer` real no block vs portuale block; `=dev-libs/paired-2.0` real no block vs portuale block; the `needer+othermod` triangle real block with only `othermod` as the installed instance's parent (and rc 1) vs portuale's keeper parent too (rc 0). Portuale's over-approximation is the Tier 2.25 port (commit `511e659`); the contract pins `test_satisfiable_installed_pin_still_holds_the_upgrade`, `test_explicitly_pinned_upgrade_breaks_an_installed_pin_and_reports_it`, `test_hard_dependency_requirement_breaks_an_installed_pin_and_reports_it` and the triangle test encode the divergent behavior and must move with the fix. Two `owner: portuale-bug` entries in `TEST/compare/known-divergences-fixture-oracle.yaml` suppress the findings until then; delete them when this lands. [A]
 
+## Tier 7 — GLEP compliance gaps (filed 2026-09-15)
+
+Surfaced by an audit of portuale against the 12 GLEPs flagged as technical
+(78, 82, 74, 79, 81, 53, 59, 61, 64, 68, 83, 84), cross-referenced against
+both portuale's Rust source and the vendored real Portage it's validated
+against. Full per-GLEP writeup, including the ten that are solidly covered
+or correctly out of scope (74/61/79/81/68/83/84 delegate to `gemato`/
+repoman/pkgcheck/social process, none of which portuale implements or
+needs to), is in `docs/glep-compliance-review.md`. Two genuine, narrow gaps:
+
+55. **`layout.conf` `cache-formats` key is never read (GLEP 82 gap).** `parse_layout_conf` (`rust/portage-repo/src/lib.rs:1036`) only extracts `masters`/`aliases`/`repo-name`/`profile-formats` (`lib.rs:1205-1237`); `cache-formats` (real `config.py:578,1564-1577`) is parsed as raw text but never consulted. Portuale's `has_usable_md5_cache` (`lib.rs:1497`) instead always auto-probes for a `metadata/md5-cache` directory, which matches real's implementation-defined default and every mainstream repo (all have used `md5-dict` since ~2012) — but a repo that explicitly sets `cache-formats = pms` to force the legacy format would silently diverge. Fix: read the key in `parse_layout_conf`; when set and it excludes `md5-dict`, skip the `has_usable_md5_cache` probe and fall back to the legacy `metadata/cache` reader (check during scoping whether portuale has one). Low real-world impact, cheap to add. Evidence: `docs/glep-compliance-review.md` "GLEP 82" and "Prioritized backlog candidates" #1. [C]
+56. **gpkg outer-container tar walk doesn't check member entry types (GLEP 78 hardening).** The outer-container walk in `binpkg.rs` (~line 413) checks `is_dir()` but not that the named members (`gpkg-1`, `metadata.tar*`, `image.tar*`, `Manifest`) are regular files before trusting them. Not a verified correctness-vs-real divergence (real's own `gpkg.py` extraction code wasn't independently re-checked against this, only its rationale prose) — defense-in-depth hardening against a crafted/corrupt archive with a symlink or device entry at one of those names, not a differential-test-bed finding. Fix: reject non-regular entries at that same walk site. Evidence: `docs/glep-compliance-review.md` "GLEP 78" and "Prioritized backlog candidates" #2. [K]
+
 ---
 
 ## Deliberate cuts — do NOT pick these (documented non-goals)
