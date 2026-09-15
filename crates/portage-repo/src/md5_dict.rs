@@ -419,6 +419,36 @@ mod tests {
         assert!(!valid_repo(ebuild, Some("# eclass\n"), Some(&good), true));
     }
 
+    /// Triple form (`store_eclass_paths`): `name\tpath\tmd5`, path ignored.
+    #[test]
+    fn triple_eclass_format() {
+        let ebuild = "EAPI=8\n";
+        let ebuild_md5 = md5_hex(ebuild.as_bytes());
+        let eclass_md5 = md5_hex(b"# eclass\n");
+        let good = format!(
+            "EAPI=8\n_eclasses_=myclass\t/some/where/eclass\t{eclass_md5}\n_md5_={ebuild_md5}\n"
+        );
+        assert!(valid_repo(ebuild, Some("# eclass\n"), Some(&good), true));
+        // A wrong path element does not matter, only the checksum.
+        let wrong_path = format!(
+            "EAPI=8\n_eclasses_=myclass\t/elsewhere/eclass\t{eclass_md5}\n_md5_={ebuild_md5}\n"
+        );
+        assert!(valid_repo(
+            ebuild,
+            Some("# eclass\n"),
+            Some(&wrong_path),
+            true
+        ));
+        // A stale checksum invalidates.
+        let stale = format!(
+            "EAPI=8\n_eclasses_=myclass\t/some/where/eclass\t{}\n_md5_={ebuild_md5}\n",
+            md5_hex(b"# old\n")
+        );
+        assert!(!valid_repo(ebuild, Some("# eclass\n"), Some(&stale), true));
+        // The triple form is not a pair form.
+        assert!(!valid_repo(ebuild, Some("# eclass\n"), Some(&good), false));
+    }
+
     /// A changed eclass must be re-hashed, not served from the memo.
     #[test]
     fn eclass_change_after_a_validation_is_seen() {

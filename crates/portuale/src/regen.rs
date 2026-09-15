@@ -609,4 +609,41 @@ mod tests {
         );
         assert!(select_retry_cps(&cps, &HashSet::new()).is_empty());
     }
+
+    /// `render_entry` serves both `_eclasses_` shapes; `INHERITED` itself is
+    /// never written.
+    /// Portage: EbuildMetadataPhase.
+    #[test]
+    fn render_entry_writes_the_eclass_shape_of_each_rung() {
+        let dir = TempDir::new("portuale-regen-render").keep();
+        let _ = std::fs::remove_dir_all(&dir);
+        let repo = dir.join("repo");
+        let ebuild = repo.join("dev-libs/pkg/pkg-1.0.ebuild");
+        std::fs::create_dir_all(ebuild.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(repo.join("eclass")).unwrap();
+        std::fs::write(&ebuild, "EAPI=8\n").unwrap();
+        std::fs::write(repo.join("eclass/myclass.eclass"), "# eclass\n").unwrap();
+
+        let mut md = std::collections::HashMap::new();
+        md.insert("EAPI".to_string(), "8".to_string());
+        md.insert("INHERITED".to_string(), "myclass".to_string());
+        let eclass_md5 = format!("{:x}", Md5::digest(b"# eclass\n"));
+
+        let pairs = render_entry(&md, &ebuild, &repo, &[], false).unwrap();
+        assert!(
+            pairs.contains(&format!("_eclasses_=myclass\t{eclass_md5}\n")),
+            "{pairs}"
+        );
+        assert!(!pairs.contains("INHERITED="), "{pairs}");
+
+        let triples = render_entry(&md, &ebuild, &repo, &[], true).unwrap();
+        assert!(
+            triples.contains(&format!(
+                "_eclasses_=myclass\t{}\t{eclass_md5}\n",
+                repo.join("eclass").display()
+            )),
+            "{triples}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
