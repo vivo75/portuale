@@ -66,64 +66,23 @@
     the masked package set are the same.
   owner: portuale-oracle
 
-# -- resolver behaviour: filed as backlog #54. portuale applies the
-#    installed-consumer pin/residual-conflict machinery even when the
-#    installed instance is replaced and never enters the graph; real
-#    only sees such a consumer when a competing constraint keeps the
-#    installed instance as a graph node (which enables complete mode).
-#    Delete these two entries when #54 lands.
-
-- id: portuale-bug-installed-pin-holds-an-upgrade
-  category: missing
-  slugs: ["--update_dev-libs_paired"]
-  match: "ebuild dev-libs/paired-2.0 present for real, absent for portuale"
-  reason: >
-    Portuale backlog #54. `emerge -p --update dev-libs/paired` holds the
-    installed 1.0 because keeper's `=paired-1.0` pin is applied from
-    outside every target closure; real 3.0.82.2 merges the 2.0 upgrade
-    (the installed instance is replaced, so the pin is never walked).
-    The pinned contract case `test_satisfiable_installed_pin_still_holds_
-    the_upgrade` encodes the divergent behaviour and must change with the
-    fix.
-  owner: portuale-bug
-
-- id: portuale-bug-residual-conflict-without-a-graph-node
-  category: error
-  slugs: ["dev-libs_needer", "_dev-libs_paired-2.0"]
-  match: "Multiple package instances within a single package slot have been pulled"
-  reason: >
-    Portuale backlog #54. Real prints the residual installed-instance
-    conflict only when the installed 1.0 is itself a graph node (the
-    needer+othermod triangle, where `<paired-2.0` keeps it in the graph
-    and its slot conflict enables complete mode); for `needer` or
-    `=paired-2.0` alone real 3.0.82.2 upgrades silently and prints no
-    block. Portuale prints the block in all three. Pinned contract cases
-    `test_explicitly_pinned_upgrade_breaks_an_installed_pin_and_reports_
-    it` and `test_hard_dependency_requirement_breaks_an_installed_pin_
-    and_reports_it` encode the divergent behaviour.
-  owner: portuale-bug
-
-- id: portuale-bug-residual-conflict-second-line
-  category: error
-  slugs: ["dev-libs_needer", "_dev-libs_paired-2.0"]
-  match: "into the dependency graph, resulting in a slot conflict:"
-  reason: >
-    The second line of the #54 residual-conflict block (see
-    `portuale-bug-residual-conflict-without-a-graph-node`).
-  owner: portuale-bug
-
 - id: triangle-residual-conflict-exit
   category: exit
   slugs: ["dev-libs_needer_dev-libs_othermod"]
   match: "real rc=1 portuale rc=0"
   reason: >
-    In the one shape where real also reports the residual conflict
-    (needer+othermod: the competing `<paired-2.0` keeps installed 1.0 in
-    the graph), real exits 1 while portuale reports it informationally at
-    exit 0 -- the standing convention of the Tier 2.25 port. The merge
-    lists themselves are identical; the block content is under #54 (real
-    names only othermod as the installed instance's parent, portuale also
-    lists keeper).
+    #54 S1 gated the installed-consumer reverse scan on required-set
+    reachability, so keeper's pin (outside every reachable set here) no
+    longer applies -- but portuale's residual-conflict block for this
+    shape was entirely driven by that scan's dropped pins, and there is
+    no independent mechanism for two directly-requested hard atoms
+    (needer's `>=2.0`, othermod's `<2.0`) disagreeing on the same
+    transitive dependency with no installed vdb consumer involved. Real
+    still reports the conflict (installed 1.0 pulled in by othermod
+    alone, exit 1); portuale merges all three silently, exit 0. Filed as
+    backlog #57 (a second, narrower conflict-detection gap, out of #54's
+    scope). See `triangle-residual-conflict-missing-block-*` for the
+    block-content findings this same gap causes.
   owner: portuale-bug
 
 - id: triangle-residual-conflict-suppressed-merge-list
@@ -134,4 +93,26 @@
     The comparator suppresses merge-list comparison on the rc mismatch
     above; the two merge lists are identical (3 entries each, verified in
     the saved outputs).
+  owner: portuale-bug
+
+- id: triangle-residual-conflict-missing-block-header
+  category: error
+  slugs: ["dev-libs_needer_dev-libs_othermod"]
+  match: "Multiple package instances within a single package slot have been pulled"
+  reason: >
+    Backlog #57 (see `triangle-residual-conflict-exit`): real reports the
+    needer/othermod residual conflict via its ordinary two-hard-atom
+    slot-conflict mechanism, independent of any installed vdb consumer;
+    portuale's equivalent block is gated on `reverse_dependency_
+    constraints`'s dropped pins only, so with keeper correctly excluded
+    (#54 S1) it renders nothing for this shape.
+  owner: portuale-bug
+
+- id: triangle-residual-conflict-missing-block-second-line
+  category: error
+  slugs: ["dev-libs_needer_dev-libs_othermod"]
+  match: "into the dependency graph, resulting in a slot conflict:"
+  reason: >
+    The second line of the #57 missing block (see
+    `triangle-residual-conflict-missing-block-header`).
   owner: portuale-bug

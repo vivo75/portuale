@@ -386,14 +386,20 @@ unexplained — diamond, `anyof`, `iusedefaultpkg`, `dualslotpkg` and
 only in staging-path/wording
 (allowlisted). The oracle immediately earned its keep: it caught
 **backlog #54**, the installed-consumer pin over-approximation from the
-Tier 2.25 port — real 3.0.82.2 only walks an installed consumer when a
-competing constraint keeps the installed instance in the graph (complete
-mode is enabled on an existing slot conflict, `depgraph.py:9446`), so
-`--update paired`, `needer` and `=paired-2.0` behave differently in
-portuale, and the triangle's block names keeper where real names only
-`othermod`. Filed as #54 with two `owner: portuale-bug` allowlist entries
-suppressing it until fixed; the contract pins that encode the divergent
-behavior are named in `TEST/findings/l0-fixture-oracle.md` "#54".
+Tier 2.25 port — real 3.0.82.2 only walks an installed consumer reachable
+from `@world ∪ @selected ∪ @system` over the installed dependency graph
+(`_complete_graph`'s required-set walk, `depgraph.py:8677-8731`; the
+attribution above to an existing slot conflict alone was incomplete —
+auto-enable also fires on any plain version/USE/slot change,
+`depgraph.py:8591-8647`), so `--update paired`, `needer` and
+`=paired-2.0` behaved differently in portuale, and the triangle's block
+named keeper where real named only `othermod`. **DONE 2026-09-15**:
+fixed by gating the consumer scan on `ResolveCtx::slot_op_reachable`
+(`docs/backlog-tasks.md` #54); the contract pins that encoded the
+divergent behavior were rewritten in `TEST/findings/l0-fixture-oracle.md`
+"#54 S0"-"S2". A narrower residue (the triangle's block disappearing
+entirely rather than gaining the right parent) was filed separately as
+#57.
 
 ### #50 / §7 — bulk translation of upstream resolver tests (M with F review; time-boxed, see step 1)
 

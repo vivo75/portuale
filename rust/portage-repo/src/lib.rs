@@ -12522,25 +12522,40 @@ fn rev_dep_pin_holdable(
 /// any installed package would change version, slot or USE,
 /// `_complete_graph` auto-enables complete mode
 /// (`depgraph.py:8592-8648`) and re-seeds the walk from
-/// `@world`/`@selected`/`@system`, pulling the *whole* installed
-/// universe in as nomerge nodes. Each of those contributes its recorded
-/// `*DEPEND` atoms to `_parent_atoms`, and a candidate has to satisfy
-/// every parent atom on its package -- so an installed consumer nowhere
-/// near the requested atom's own dependency tree can still veto an
-/// upgrade. Live example this exists for: `net-libs/rest` does not
-/// reach `dev-libs/weston`, but weston's recorded
-/// `<media-libs/libdisplay-info-0.4.0:0/3=` is why real leaves
-/// `media-libs/libdisplay-info` at `0.3.0` while portuale used to
-/// upgrade it to `0.4.0`.
+/// `@world`/`@selected`/`@system` (`_initial_arg_list` plus the required
+/// sets, `depgraph.py:8677-8731`), pulling every installed package
+/// **reachable from those seeds over the installed dependency graph**
+/// in as nomerge nodes -- not the whole installed universe (#54:
+/// `keeper`'s `=paired-1.0` pin is outside every target closure in the
+/// hermetic fixture and real never walks to it there; it only shows up
+/// when a competing hard requirement keeps `paired`'s installed instance
+/// itself in the graph, or when `keeper` is reachable from `@world`).
+/// Each reachable consumer contributes its recorded `*DEPEND` atoms to
+/// `_parent_atoms`, and a candidate has to satisfy every parent atom on
+/// its package -- so an installed consumer nowhere near the requested
+/// atom's own dependency tree can still veto an upgrade, as long as it
+/// is in that reachable closure. Live example this exists for:
+/// `net-libs/rest` does not reach `dev-libs/weston` through the
+/// requested atom's own tree, but both are `@world`-reachable, and
+/// weston's recorded `<media-libs/libdisplay-info-0.4.0:0/3=` is why
+/// real leaves `media-libs/libdisplay-info` at `0.3.0` while portuale
+/// used to upgrade it to `0.4.0`.
 ///
 /// Portuale reaches the same answer without carrying the extra ~1400
 /// installed nodes: it scans the vdb for the consumers of each
-/// upgrade-bound `cat/pkg` directly and hands the surviving atoms back
-/// to the `'backtrack` loop as ordinary `slot_constraints` -- which is
-/// exactly what those parent atoms are. The re-resolve then picks the
-/// highest candidate that satisfies them (here: the installed `0.3.0`,
-/// so the entry settles as `AlreadyInstalled`), and drops whatever the
-/// rejected version had dragged in.
+/// upgrade-bound `cat/pkg` directly, keeps only the ones `reachable`
+/// names or that are themselves a graph entry this pass (real's "or is a
+/// dep of a node already in the graph" case), and hands the surviving
+/// atoms back to the `'backtrack` loop as ordinary `slot_constraints` --
+/// which is exactly what those parent atoms are. The re-resolve then
+/// picks the highest candidate that satisfies them (here: the installed
+/// `0.3.0`, so the entry settles as `AlreadyInstalled`), and drops
+/// whatever the rejected version had dragged in. `reachable` is
+/// `ResolveCtx::slot_op_reachable` (`required_set_reachable_cps` over
+/// `@world ∪ @selected ∪ @system ∪` this run's own argument cps) -- the
+/// same reachable closure that gates the slot-operator-rebuild scan
+/// (`slot_operator_rebuild_scan`), computed once per resolve, not a
+/// second walker.
 ///
 /// Only `Upgrade`/`Downgrade` entries are checked -- those are the only
 /// ones that move a package's version out from under an existing
@@ -12574,13 +12589,20 @@ fn reverse_dependency_constraints(
     with_bdeps: bool,
     excluded: &[String],
     hard_want: &HashMap<(String, String), Vec<String>>,
+    reachable: &HashSet<(String, String)>,
 ) -> (Vec<RevDepPin>, Vec<RevDepPin>) {
     // (`cat/pkg`, slot) -> the candidate string this run would install,
     // for every entry that replaces an installed version in its own slot.
     let mut upgrading: HashMap<((String, String), String), String> = HashMap::new();
     let mut being_replaced: HashSet<(String, String)> = HashSet::new();
+    // Every `cat/pkg` this pass walked, any outcome -- real's "or is a dep
+    // of a node already in the graph" reachability path (`_complete_graph`
+    // deep-walks the required sets, but a package the requested atoms'
+    // own tree already pulled in is a graph node regardless of that walk).
+    let mut graph_cps: HashSet<(String, String)> = HashSet::new();
     for e in entries {
         let cp = (e.category.clone(), e.package.clone());
+        graph_cps.insert(cp.clone());
         if merge_bound_cpv(e).is_some() {
             being_replaced.insert(cp.clone());
         }
@@ -12623,6 +12645,12 @@ fn reverse_dependency_constraints(
     for consumer in all_installed_packages(root) {
         let consumer_cp = (consumer.category.clone(), consumer.package.clone());
         if being_replaced.contains(&consumer_cp) {
+            continue;
+        }
+        // #54: real only ever sees this consumer if `_complete_graph`'s
+        // required-set walk reaches it, or it is itself a dep of a node
+        // already in the graph -- not merely because it is installed.
+        if !reachable.contains(&consumer_cp) && !graph_cps.contains(&consumer_cp) {
             continue;
         }
         let consumer_str = format!(
@@ -16288,10 +16316,11 @@ struct ResolveCtx<'a> {
     /// Real `_complete_graph`'s deep re-walk of the required sets: the
     /// installed `(cat, pkg)` closure reachable from `@world ∪ @selected ∪
     /// @system` (`config.complete_seed_atoms`, populated by the CLI layer
-    /// only in complete mode). Gates the slot-operator-rebuild scan --
-    /// empty means "not complete mode", which suppresses it entirely, the
-    /// way real produces no slot-op rebuild for a plain `emerge -p <atom>`
-    /// that changes nothing installed.
+    /// only in complete mode). Gates the slot-operator-rebuild scan and
+    /// (#54) `reverse_dependency_constraints`'s installed-consumer scan --
+    /// empty means "not complete mode", which suppresses both entirely,
+    /// the way real produces no slot-op rebuild or reverse-dependency pin
+    /// for a plain `emerge -p <atom>` that changes nothing installed.
     slot_op_reachable: HashSet<(String, String)>,
     /// Real `_complete_graph` swaps package selection to
     /// `_select_pkg_from_graph` (`depgraph.py:8662`) -- graph-or-installed,
@@ -19813,8 +19842,11 @@ fn collect_feedback(
     // nowhere near the requested atom's own tree -- already records
     // against it. Real sees such an atom because complete mode
     // (auto-enabled by any installed-package version/USE change)
-    // pulls every installed package into the graph as a nomerge
-    // node, contributing its recorded atoms to `_parent_atoms`;
+    // deep-walks `@world`/`@selected`/`@system` and pulls every
+    // *reachable* installed package into the graph as a nomerge node
+    // (#54: not the whole installed universe -- see
+    // `reverse_dependency_constraints`'s doc comment), contributing its
+    // recorded atoms to `_parent_atoms`;
     // portuale finds them with a direct vdb reverse scan instead and
     // feeds them back here as positive enforcement atoms (C1: they stay
     // in the positives bucket -- they are not masks), which is
@@ -19843,6 +19875,7 @@ fn collect_feedback(
         ctx.with_bdeps,
         ctx.excluded,
         &pass.slot_want,
+        &ctx.slot_op_reachable,
     );
     // #24 S4: rule 4 of `_eliminate_rebuilds` checks every parent atom of
     // the rebuilt pkg, and real's complete-graph nomerge consumers are
@@ -28967,14 +29000,20 @@ mod tests {
     }
 
     #[test]
-    fn dropped_pin_reports_a_residual_installed_conflict() {
-        // dev-libs/keeper-1.0 (installed, outside every target closure)
-        // records `=dev-libs/paired-1.0`, which no candidate satisfies
-        // together with the explicit `=dev-libs/paired-2.0` request --
-        // so the pin is dropped, 2.0 merges, and the run reports the
-        // residual conflict pairing the merge instance against the kept
-        // installed 1.0 with keeper as its installed parent (real
-        // _complete_graph's end-of-walk nomerge node, verified live).
+    fn unreachable_installed_pin_does_not_block_an_upgrade() {
+        // #54: dev-libs/keeper-1.0 (installed, outside every target
+        // closure, and outside @world/@selected/@system in the checked-in
+        // fixture) records `=dev-libs/paired-1.0` -- but `graph_result_real`
+        // resolves through a single non-complete-mode pass (no
+        // `complete_seed_atoms`, matching real never entering complete
+        // mode here at all: hermetic real 3.0.82.2 never walks to keeper),
+        // so the explicit `=dev-libs/paired-2.0` request merges cleanly
+        // with no residual conflict (verified live,
+        // `TEST/findings/l0-fixture-oracle.md` "#54 S0" hermetic row).
+        // Before the #54 fix this asserted the opposite: a residual
+        // conflict pairing the merge against installed 1.0 with keeper as
+        // parent -- portuale's unconditional (unreachable-consumers
+        // included) vdb reverse scan applying a pin real never sees.
         let result = graph_result_real("=dev-libs/paired-2.0");
         let paired = result
             .entries
@@ -28986,35 +29025,13 @@ mod tests {
                 &paired.outcome,
                 PretendOutcome::Upgrade { to, .. } if to == "2.0"
             ),
-            "the hard-required upgrade merges, not masked away: {:?}",
+            "the upgrade merges, unblocked by keeper's unreachable pin: {:?}",
             paired.outcome
         );
-        assert_eq!(result.slot_conflicts.len(), 1);
-        let c = &result.slot_conflicts[0];
-        assert_eq!(
-            (c.category.as_str(), c.package.as_str(), c.slot.as_str()),
-            ("dev-libs", "paired", "0")
-        );
-        assert_eq!(c.instances.len(), 2);
-        let merge = &c.instances[0];
-        assert_eq!(merge.version, "2.0");
-        assert!(!merge.installed);
         assert!(
-            merge.parents.iter().any(|p| p.parent_cpv.is_empty()
-                && p.atom == "=dev-libs/paired-2.0"
-                && !p.installed),
-            "the explicit request shows as an (Argument) parent: {:?}",
-            merge.parents
-        );
-        let inst = &c.instances[1];
-        assert_eq!(inst.version, "1.0");
-        assert!(inst.installed);
-        assert!(
-            inst.parents.iter().any(|p| p.installed
-                && p.atom == "=dev-libs/paired-1.0"
-                && p.parent_cpv.starts_with("dev-libs/keeper-1.0:")),
-            "keeper shows as an installed parent: {:?}",
-            inst.parents
+            result.slot_conflicts.is_empty(),
+            "keeper is unreachable, so there is no residual conflict: {:?}",
+            result.slot_conflicts
         );
     }
 
@@ -32036,6 +32053,80 @@ mod tests {
         let r = required_set_reachable_cps(&dir, &[], &["dev-libs/sysmember".to_string()]);
         assert!(r.contains(&cp("sysmember")) && r.contains(&cp("sysdep")));
         assert!(!r.contains(&cp("mid")));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reverse_dependency_constraints_skips_an_unreachable_installed_consumer() {
+        // #54: an installed consumer's pin is only found when its cp is in
+        // `reachable` (the `@world ∪ @selected ∪ @system ∪` argument-cp
+        // closure, `ResolveCtx::slot_op_reachable`) or is itself a graph
+        // entry this pass -- not merely because it is installed.
+        let dir = std::env::temp_dir().join(format!(
+            "portage-repo-revdep-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mk = |name: &str, rdepend: &str| {
+            let d = dir.join("var/db/pkg/dev-libs").join(name);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+            fs::write(d.join("SLOT"), "0\n").unwrap();
+            fs::write(d.join("USE"), "\n").unwrap();
+            if !rdepend.is_empty() {
+                fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+            }
+        };
+        // `pinner` records a pin on `target` that this run's upgrade
+        // breaks (the `keeper`/`paired` fixture-oracle shape, #54).
+        mk("pinner-1.0", "=dev-libs/target-1.0");
+        mk("target-1.0", "");
+
+        let target_upgrade = GraphEntry {
+            category: "dev-libs".into(),
+            package: "target".into(),
+            outcome: PretendOutcome::Upgrade {
+                from: "1.0".into(),
+                to: "2.0".into(),
+            },
+            ..graph_entry("dev-libs", "target", "2.0")
+        };
+        let entries = [target_upgrade];
+        let hard_want: HashMap<(String, String), Vec<String>> = HashMap::new();
+
+        // Not reachable, and `pinner` is not itself a graph entry -> the
+        // consumer scan skips it entirely (real never walks to it either).
+        let (enforced, dropped) = reverse_dependency_constraints(
+            &[],
+            &dir,
+            &entries,
+            false,
+            &[],
+            &hard_want,
+            &HashSet::new(),
+        );
+        assert!(
+            enforced.is_empty() && dropped.is_empty(),
+            "an unreachable installed consumer must yield no pin"
+        );
+
+        // Reachable (as if `pinner` were in @world, directly or
+        // transitively) -> the pin is found. Enforced-vs-dropped is
+        // `rev_dep_pin_holdable`'s call (exercised by the contract suite);
+        // only "found at all" matters here.
+        let reachable: HashSet<(String, String)> =
+            HashSet::from([("dev-libs".to_string(), "pinner".to_string())]);
+        let (enforced, dropped) =
+            reverse_dependency_constraints(&[], &dir, &entries, false, &[], &hard_want, &reachable);
+        assert_eq!(
+            enforced.len() + dropped.len(),
+            1,
+            "a reachable installed consumer's pin must be found"
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }
