@@ -1,7 +1,6 @@
 DEFINED_PHASES=-
 DESCRIPTION=fixture package: stable amd64, but a package.accept_keywords -amd64 entry revokes it specifically
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=24ef8f0381364c6b100cc43203609fb7

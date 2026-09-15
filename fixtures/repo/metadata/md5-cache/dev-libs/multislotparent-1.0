@@ -4,4 +4,4 @@ EAPI=8
 KEYWORDS=amd64
 RDEPEND=dev-libs/multislotpkg:0 dev-libs/multislotpkg:1
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=557c73b2994fb6abfe3742a083a91eee

@@ -1,7 +1,6 @@
 DEFINED_PHASES=-
 DESCRIPTION=fixture: slot-op cascade -- target new sub-slot 0/2
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 SLOT=0/2
-_md5_=0000000000000000000000000000000
+_md5_=de6c3ffba1988827f21f6764ce726404

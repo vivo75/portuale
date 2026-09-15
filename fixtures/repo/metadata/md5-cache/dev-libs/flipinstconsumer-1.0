@@ -1,8 +1,7 @@
 DEFINED_PHASES=-
-DESCRIPTION=fixture: RDEPENDs flipinstdep[wantflag]
+DESCRIPTION=fixture: RDEPENDs dev-libs/flipinstdep[wantflag] where flipinstdep is installed without it
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 RDEPEND=dev-libs/flipinstdep[wantflag]
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=43ce69e1ed126c565be6b6588e58c7d2

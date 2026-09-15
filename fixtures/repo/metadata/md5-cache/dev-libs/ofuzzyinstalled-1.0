@@ -3,4 +3,4 @@ DESCRIPTION=fixture: backlog #22 slice 4 other_installed_any_slot bin (bug 52265
 EAPI=8
 KEYWORDS=amd64
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=b1365923eeb23758a25e75b5e2c47eea

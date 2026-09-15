@@ -3,4 +3,4 @@ DESCRIPTION=fixture: slice 2 in-bin ordering -- not installed, but pulled into t
 EAPI=8
 KEYWORDS=amd64
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=d4ac43ad4c8d886da2218d646975db83

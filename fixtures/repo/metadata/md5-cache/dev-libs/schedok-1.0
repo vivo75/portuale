@@ -1,7 +1,6 @@
 DEFINED_PHASES=install
 DESCRIPTION=fixture package: Scheduler / parallel-build test (schedok)
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=d21d1466d5ca3ef89d27072c52b812b3

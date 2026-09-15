@@ -1,7 +1,7 @@
 DEFINED_PHASES=-
-DESCRIPTION=fixture package: newer version, RDEPEND >=dev-libs/bttarget-2.0
+DESCRIPTION=fixture package: newer version RDEPENDs >=dev-libs/bttarget-2.0, the constraint that causes the unsolvable slot conflict against dev-libs/btpin
 EAPI=8
 KEYWORDS=amd64
 RDEPEND=>=dev-libs/bttarget-2.0
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=150516263403e550a31b2bf4b52f41fe

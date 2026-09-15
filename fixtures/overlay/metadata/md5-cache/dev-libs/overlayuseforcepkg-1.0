@@ -5,4 +5,4 @@ IUSE=overlayforceflag
 KEYWORDS=amd64
 RDEPEND=overlayforceflag? ( dev-libs/newpkg )
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=a13c0d192529ab2d5278d1b50caf9f2d

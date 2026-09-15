@@ -3,4 +3,4 @@ DESCRIPTION=fixture: marker pulled in only if the || group's slot-2 alternative 
 EAPI=8
 KEYWORDS=amd64
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=9b58987443a19017923181a692e17328

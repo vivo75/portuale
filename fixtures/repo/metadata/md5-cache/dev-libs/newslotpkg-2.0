@@ -3,4 +3,4 @@ DESCRIPTION=fixture: SLOT 1, not installed; the new-slot candidate when SLOT 0 i
 EAPI=8
 KEYWORDS=amd64
 SLOT=1
-_md5_=0000000000000000000000000000000
+_md5_=6efa19a7c5e7fd542da3ac7d58104086

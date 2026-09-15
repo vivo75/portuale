@@ -3,4 +3,4 @@ DESCRIPTION=fixture package: exists only in the overlay repo, not the main repo,
 EAPI=8
 KEYWORDS=amd64
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=9ab15a17ccd889840329fdfc818fa54b

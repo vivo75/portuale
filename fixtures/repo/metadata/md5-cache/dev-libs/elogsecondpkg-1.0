@@ -1,7 +1,6 @@
-DEFINED_PHASES=-
+DEFINED_PHASES=install
 DESCRIPTION=fixture package: second elog emitter, for multi-package mail_summary
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=6e0b9451a473781cc2d6dd2d799bb434

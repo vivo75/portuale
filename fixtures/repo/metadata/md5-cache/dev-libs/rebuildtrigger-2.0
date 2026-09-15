@@ -1,7 +1,6 @@
 DEFINED_PHASES=-
 DESCRIPTION=fixture: --rebuild-if-* trigger dep (1.0 installed, 2.0 visible)
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=c4bf6d9ee4154c34fe5bd799b9bd2777

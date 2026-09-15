@@ -1,7 +1,6 @@
 DEFINED_PHASES=-
 DESCRIPTION=fixture package: reached only via withbdepspkg's own DEPEND
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=0506d4078b018e54f1c3c91f2ca889dc

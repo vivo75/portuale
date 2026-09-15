@@ -5,4 +5,4 @@ IUSE=soflag
 KEYWORDS=amd64
 RDEPEND=soflag? ( dev-libs/souprov:= )
 SLOT=0/1
-_md5_=0000000000000000000000000000000
+_md5_=6884e9825eba7b031df97b0e5a2a7131

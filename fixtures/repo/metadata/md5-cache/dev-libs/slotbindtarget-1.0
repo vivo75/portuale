@@ -1,7 +1,6 @@
 DEFINED_PHASES=-
 DESCRIPTION=fixture: slot-operator rebuild -- installed at SLOT=2
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 SLOT=2
-_md5_=0000000000000000000000000000000
+_md5_=570d5c300b263a299aaea63ebde35a5a

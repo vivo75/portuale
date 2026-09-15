@@ -3,4 +3,4 @@ DESCRIPTION=fixture package: elogrmpkg 2.0, replaces 1.0 in-place so 1.0's pkg_p
 EAPI=8
 KEYWORDS=amd64
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=1cd2d01c6431db2f09eb99c985e84061

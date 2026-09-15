@@ -4,4 +4,4 @@ EAPI=8
 KEYWORDS=amd64
 RDEPEND=dev-libs/aucascmid dev-libs/aucasclate
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=62d20b192904fa1083b6bb6ca89deccf

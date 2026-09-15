@@ -3,4 +3,4 @@ DESCRIPTION=fixture package: a plain, dependency-free package used as the target
 EAPI=8
 KEYWORDS=amd64
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=c7fd99deb25a8b6482af1b4f1f0de2c1

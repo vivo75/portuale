@@ -1,8 +1,7 @@
 DEFINED_PHASES=-
 DESCRIPTION=fixture: --changed-deps structured -- redundant brackets are not a change
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 RDEPEND=( dev-libs/reorderdepa dev-libs/reorderdepb )
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=f4e45bb3190d7ea5f98fc8cb2ff20057

@@ -1,7 +1,6 @@
 DEFINED_PHASES=compile install
-DESCRIPTION=fixture package: Scheduler / kill-in-flight-on-hard-failure test (schedslow)
+DESCRIPTION=fixture package: Scheduler / kill-in-flight-on-hard-failure test (schedslow) -- src_compile sleeps well past any other package in the same run, and only writes its own completion marker afterward, so a test can prove the sleep was actually killed rather than left to finish
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=6ffa0e819caa68af7409257b9c0aa820

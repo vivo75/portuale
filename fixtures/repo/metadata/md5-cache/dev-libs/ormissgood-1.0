@@ -1,7 +1,6 @@
 DEFINED_PHASES=-
 DESCRIPTION=fixture: ||-missing-dep -- the clean second alternative
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=fd4a78275f12804e20c7657f9d34312b

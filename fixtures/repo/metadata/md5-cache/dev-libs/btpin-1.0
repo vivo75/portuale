@@ -1,7 +1,7 @@
 DEFINED_PHASES=-
-DESCRIPTION=fixture package: RDEPEND <dev-libs/bttarget-2.0
+DESCRIPTION=fixture package: RDEPENDs <dev-libs/bttarget-2.0, unsatisfiable against the 2.0 that dev-libs/btconsumer-2.0 pulls
 EAPI=8
 KEYWORDS=amd64
 RDEPEND=<dev-libs/bttarget-2.0
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=d88d887e01b8e24d5492a435ebe6afca

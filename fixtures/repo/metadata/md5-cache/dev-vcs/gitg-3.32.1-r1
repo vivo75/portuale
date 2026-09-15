@@ -1,8 +1,7 @@
 DEFINED_PHASES=-
 DESCRIPTION=024 oracle fixture: gitg := consumer (bug 717140)
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 RDEPEND=dev-libs/libgit2:= >=dev-libs/libgit2-glib-0.27 <dev-libs/libgit2-glib-1
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=88df10ae2954a025158b491dbbb31510

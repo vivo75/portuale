@@ -1,8 +1,7 @@
 DEFINED_PHASES=-
 DESCRIPTION=fixture package: depends on the package.mask'd dev-libs/maskeddep
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 RDEPEND=dev-libs/maskeddep
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=c9d0cf4ca7c83e8ef353b6f7262845f5

@@ -1,7 +1,6 @@
 DEFINED_PHASES=-
 DESCRIPTION=fixture package: installed in two slots, for the -pC higher-slot set-protection refinement
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 SLOT=2
-_md5_=0000000000000000000000000000000
+_md5_=f35406fdb9bcc56ee23e36c97bbd5946

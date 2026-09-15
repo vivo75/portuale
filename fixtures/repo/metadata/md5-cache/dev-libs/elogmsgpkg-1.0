@@ -1,7 +1,6 @@
 DEFINED_PHASES=install postinst
 DESCRIPTION=fixture package: emits elog/ewarn/einfo messages, for the elog echo module
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=772e9589c96d442f1f6faf43f7793792

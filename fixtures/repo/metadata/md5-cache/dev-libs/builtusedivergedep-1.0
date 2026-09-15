@@ -3,4 +3,4 @@ DESCRIPTION=fixture package: installed with vdb USE=divergedflag, but the curren
 EAPI=8
 KEYWORDS=amd64
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=3c0d43cc9d78cbb8d86a3af601e1bae7

@@ -5,4 +5,4 @@ IUSE=video_cards_nvidia video_cards_amdgpu
 KEYWORDS=amd64
 RDEPEND=video_cards_nvidia? ( dev-libs/newpkg ) video_cards_amdgpu? ( dev-libs/hiddendep )
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=2b5cce20692225b42ca3a5806c47c02d

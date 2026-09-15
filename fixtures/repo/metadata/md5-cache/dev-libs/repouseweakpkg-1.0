@@ -5,4 +5,4 @@ IUSE=repoweakflag
 KEYWORDS=amd64
 RDEPEND=repoweakflag? ( dev-libs/newpkg )
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=4a9f21ef823a005714b34da630c1baae

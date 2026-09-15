@@ -1,8 +1,7 @@
 DEFINED_PHASES=-
 DESCRIPTION=fixture package: sibling where the masked dep is last, so partial and full membership coincide
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 RDEPEND=dev-libs/abort-leaf-a dev-libs/abort-leaf-b dev-libs/maskeddep
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=9a709d3c6ae366c78e1c5dd287901de2

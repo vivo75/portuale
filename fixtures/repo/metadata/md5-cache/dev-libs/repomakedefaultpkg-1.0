@@ -5,4 +5,4 @@ IUSE=repomakedefaultflag repo_amd64 other
 KEYWORDS=amd64
 RDEPEND=repomakedefaultflag? ( dev-libs/newpkg )
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=f2d4bd865f4194cfe5052596d7cdc743

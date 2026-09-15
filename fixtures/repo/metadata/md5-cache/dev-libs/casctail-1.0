@@ -1,8 +1,7 @@
 DEFINED_PHASES=-
 DESCRIPTION=fixture: slot-op cascade -- tail, tree ebuild unchanged 0/1
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 RDEPEND=dev-libs/cascmid:=
 SLOT=0/1
-_md5_=0000000000000000000000000000000
+_md5_=af57d0ba3217b195dd1989ec3560c62f

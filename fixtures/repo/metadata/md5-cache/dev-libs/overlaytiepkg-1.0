@@ -3,4 +3,4 @@ DESCRIPTION=fixture package: same version (1.0) exists in both the main repo (th
 EAPI=8
 KEYWORDS=amd64
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=1b9ce2b8de7284305f8e5ea97354940d

@@ -1,7 +1,6 @@
 DEFINED_PHASES=-
 DESCRIPTION=fixture: --changed-deps structured -- reorder target
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=31a065d27b2a38bd50a025e840f74555

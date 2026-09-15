@@ -1,7 +1,6 @@
 DEFINED_PHASES=-
 DESCRIPTION=fixture package: not installed, one visible version -> New
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=63475a29c46a7e443cc5d85c8fb6725a

@@ -3,4 +3,4 @@ DESCRIPTION=fixture package: newer version (2.0) lives in the overlay, older ver
 EAPI=8
 KEYWORDS=amd64
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=f20f0b06eca39c3f914fae786775511a

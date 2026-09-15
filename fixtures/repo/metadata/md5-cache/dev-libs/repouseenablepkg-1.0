@@ -5,4 +5,4 @@ IUSE=repouseflag
 KEYWORDS=amd64
 RDEPEND=repouseflag? ( dev-libs/newpkg )
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=cafdf9607a2f8796a51cc78a3e740efc

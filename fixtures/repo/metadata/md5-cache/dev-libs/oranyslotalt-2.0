@@ -3,4 +3,4 @@ DESCRIPTION=fixture: slice 2 in-bin ordering -- visible in slot 2 (newer version
 EAPI=8
 KEYWORDS=amd64
 SLOT=2
-_md5_=0000000000000000000000000000000
+_md5_=486b964e28a4fc608a3e500d29c2ee15

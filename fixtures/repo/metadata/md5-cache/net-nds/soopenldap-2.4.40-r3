@@ -1,8 +1,6 @@
 DEFINED_PHASES=-
 DESCRIPTION=024 oracle fixture: openldap-like with := (bug 528610)
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 RDEPEND=<sys-libs/sodb-6.0:= || ( sys-libs/sodb:5.3 sys-libs/sodb:5.1 )
-SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=098d34347c20b7d7da442f20151bd692

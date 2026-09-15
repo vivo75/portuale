@@ -1,7 +1,6 @@
 DEFINED_PHASES=install
 DESCRIPTION=fixture package: docompress (binpkg-docompress + PORTAGE_COMPRESS) compresses ${D} docs
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=b3c4a65e47053d7275fde892165b8da3

@@ -1,7 +1,6 @@
 DEFINED_PHASES=-
-DESCRIPTION=023 oracle fixture: upstream backtracking good-version-first
+DESCRIPTION=023 oracle fixture: upstream backtracking good-version-first (C-1)
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=0bd62eadf40bbea5db4d46ad2a685cb7

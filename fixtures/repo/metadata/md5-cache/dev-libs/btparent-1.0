@@ -1,7 +1,7 @@
 DEFINED_PHASES=-
-DESCRIPTION=fixture package: pulls in dev-libs/btconsumer and dev-libs/btpin
+DESCRIPTION=fixture package: pulls in dev-libs/btconsumer and dev-libs/btpin, whose bttarget:0 needs collide until backtracking masks btconsumer-2.0
 EAPI=8
 KEYWORDS=amd64
 RDEPEND=dev-libs/btconsumer dev-libs/btpin
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=1634189006c533c2fd2da347d369bd04

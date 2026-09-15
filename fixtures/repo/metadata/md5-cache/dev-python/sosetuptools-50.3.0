@@ -5,4 +5,4 @@ IUSE=+soflag
 KEYWORDS=amd64
 RDEPEND=soflag? ( dev-python/sopypy:= )
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=fbbaa624024c013489c1ecfa45f786e2

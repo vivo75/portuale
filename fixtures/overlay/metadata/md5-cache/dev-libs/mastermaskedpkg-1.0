@@ -1,7 +1,6 @@
 DEFINED_PHASES=-
 DESCRIPTION=fixture package: exists only in the overlay, masked via its implicit masters inheritance from the main repo's own package.mask
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=0511bbeddd8cd63d9ce6095b930fc274

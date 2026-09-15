@@ -1,8 +1,7 @@
 DEFINED_PHASES=-
 DESCRIPTION=fixture: ||-backtrack -- first || alt conflicts with a hard dep
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 RDEPEND=|| ( >=dev-libs/orbttool-2.0 dev-libs/orbtclean ) =dev-libs/orbttool-1.0
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=b1682827c85d7062f9852d8af7e765c9

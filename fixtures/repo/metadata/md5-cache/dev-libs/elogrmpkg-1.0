@@ -3,4 +3,4 @@ DESCRIPTION=fixture package: pkg_prerm/pkg_postrm emit elog/ewarn, for elog on u
 EAPI=8
 KEYWORDS=amd64
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=451dfb86d34da82cfd095c97574b321b

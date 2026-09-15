@@ -4,4 +4,4 @@ EAPI=8
 KEYWORDS=amd64
 RDEPEND=dev-libs/slotuseplain dev-libs/slotusex dev-libs/slotusey
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=2080967b2ab3b8302e1662f02987d5c2

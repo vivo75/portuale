@@ -1,8 +1,7 @@
 DEFINED_PHASES=-
 DESCRIPTION=fixture: dep_zapdeps all_in_graph choice-bin-0 for || groups
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 RDEPEND=dev-libs/ingraphkeyringdep
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=f63d2c79b09f3f786da5921fdbb53206

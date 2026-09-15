@@ -5,4 +5,4 @@ IUSE=stableforceflag maskflag
 KEYWORDS=amd64
 RDEPEND=stableforceflag? ( dev-libs/newpkg )
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=b8d23ef24e231324f76e8a31f43dd93b

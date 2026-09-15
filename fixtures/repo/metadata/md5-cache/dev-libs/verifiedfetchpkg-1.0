@@ -5,4 +5,4 @@ IUSE=test
 KEYWORDS=amd64
 SLOT=0
 SRC_URI=https://example.invalid/payload.bin -> verifiedfetchpkg-1.0.tar.gz test? ( https://example.invalid/tests.bin -> verifiedfetchpkg-tests-1.0.tar.gz )
-_md5_=0000000000000000000000000000000
+_md5_=79bb9f0771c69bf76901b1a7e4d7ed93

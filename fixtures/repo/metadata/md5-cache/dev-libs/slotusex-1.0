@@ -4,4 +4,4 @@ EAPI=8
 KEYWORDS=amd64
 RDEPEND=>=dev-libs/slotusetarget-1.0[x]
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=da8ea79c720b4a3cdbac994a9b22664c

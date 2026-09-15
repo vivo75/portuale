@@ -5,4 +5,4 @@ IUSE=eqflag
 KEYWORDS=amd64
 RDEPEND=dev-libs/useeqchildpkg[eqflag=]
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=f5a391e631f1ff889578c2315426c3d4

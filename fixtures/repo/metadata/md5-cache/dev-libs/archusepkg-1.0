@@ -5,4 +5,4 @@ IUSE=amd64 riscv
 KEYWORDS=amd64
 RDEPEND=amd64? ( dev-libs/newpkg ) riscv? ( dev-libs/hiddendep )
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=536f2bc5d767ea740b53c82f05df98f6

@@ -5,4 +5,4 @@ IUSE=test
 KEYWORDS=amd64
 RDEPEND=dev-libs/newpkg test? ( dev-libs/testonlydep )
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=ff76e13b1d9484fa8a0e5837db03162e

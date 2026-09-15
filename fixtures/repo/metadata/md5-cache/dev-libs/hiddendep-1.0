@@ -1,7 +1,6 @@
 DEFINED_PHASES=-
 DESCRIPTION=fixture package: only reachable via useflagpkg's missingflag? conditional, which must stay false
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=2652f92a988d730890bb12ed58669e1b

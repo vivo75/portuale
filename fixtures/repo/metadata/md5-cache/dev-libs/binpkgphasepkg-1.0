@@ -1,7 +1,6 @@
 DEFINED_PHASES=install postinst preinst
 DESCRIPTION=fixture package: real pkg_preinst/pkg_postinst run for a binary-package merge
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=54e44704e69229a2cd59f1e73348f3d9

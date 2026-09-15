@@ -1,8 +1,7 @@
 DEFINED_PHASES=-
 DESCRIPTION=fixture package: dependency cycle, must terminate
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 RDEPEND=dev-libs/cycle-b
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=beabe3ff345936976dd7ec8c69c312d3

@@ -1,6 +1,6 @@
 DEFINED_PHASES=-
-DESCRIPTION=fixture package for backtracking runtime_pkg_mask slot-conflict test
+DESCRIPTION=fixture package: slot 0, two versions, target of a backtracking runtime_pkg_mask slot-conflict test
 EAPI=8
 KEYWORDS=amd64
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=a8425e1fe9c1c3f2418ab16cbde62f4b

@@ -5,4 +5,4 @@ IUSE=omdflag other
 KEYWORDS=amd64
 RDEPEND=omdflag? ( dev-libs/newpkg )
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=c00c2929f11c5d808d0928e0447a60e9

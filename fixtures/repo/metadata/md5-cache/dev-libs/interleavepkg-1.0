@@ -5,4 +5,4 @@ IUSE=interleaveflag other
 KEYWORDS=amd64
 RDEPEND=interleaveflag? ( dev-libs/newpkg )
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=22c0fcacbc0ba25853515b08041f79ad

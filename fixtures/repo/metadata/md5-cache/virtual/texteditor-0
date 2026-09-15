@@ -4,4 +4,4 @@ EAPI=8
 KEYWORDS=amd64
 RDEPEND=|| ( dev-libs/newpkg dev-libs/samepkg )
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=ec75964d56828fb68e2cc0c87ddd0d58

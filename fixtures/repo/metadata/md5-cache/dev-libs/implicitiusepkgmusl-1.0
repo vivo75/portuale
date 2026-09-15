@@ -1,9 +1,7 @@
 DEFINED_PHASES=-
-DEPEND=
-DESCRIPTION=fixture: USE_EXPAND_IMPLICIT -- implicitiusepkgmusl
+DESCRIPTION=fixture: USE_EXPAND_IMPLICIT -- implicitiusepkgmusl (elibc_musl is valid implicit IUSE but not enabled -> dep unsatisfied)
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 RDEPEND=dev-libs/implicitiuseprov[elibc_musl]
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=f813511cf5c9c0d5bdfaf49be04f1bc2

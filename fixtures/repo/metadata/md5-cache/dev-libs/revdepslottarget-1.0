@@ -1,7 +1,6 @@
 DEFINED_PHASES=-
 DESCRIPTION=fixture package: sub-slot bump 0/1 -> 0/2; an installed consumer binds :0/1= and must be rebuilt, not block the upgrade
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 SLOT=0/1
-_md5_=0000000000000000000000000000000
+_md5_=10eac2348142c673f5a7a4d52e38ef8b

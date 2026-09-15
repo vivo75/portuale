@@ -5,4 +5,4 @@ IUSE=+overlaymaskflag
 KEYWORDS=amd64
 RDEPEND=overlaymaskflag? ( dev-libs/newpkg )
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=b3f102dbb5bd134ddc4fde8aa5419f99

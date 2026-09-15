@@ -1,8 +1,7 @@
 DEFINED_PHASES=-
+DEPEND=dev-libs/btna dev-libs/btnb
 DESCRIPTION=023 oracle fixture: btnc
 EAPI=8
-IUSE=
 KEYWORDS=amd64
-DEPEND=dev-libs/btna dev-libs/btnb
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=9751a979b1032cf6ac28939f81c7eb26

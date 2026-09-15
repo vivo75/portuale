@@ -4,4 +4,4 @@ EAPI=8
 KEYWORDS=amd64
 RDEPEND=|| ( dev-libs/oranyslotalt:2 dev-libs/oranyslotalt:1 )
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=2d73e6dec51754f89db16fef4e1902fb

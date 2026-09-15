@@ -5,4 +5,4 @@ IUSE=python_targets_python3_12
 KEYWORDS=amd64
 RDEPEND=python_targets_python3_12? ( dev-libs/newpkg )
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=6b7168d9be5e1dfa87a391e4eb854c07

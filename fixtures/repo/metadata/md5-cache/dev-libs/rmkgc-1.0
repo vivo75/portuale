@@ -1,7 +1,6 @@
 DEFINED_PHASES=install
 DESCRIPTION=remote keep-going fixture C (independent; still merges under --keep-going)
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=b2ed7988a661e493d3c8552e461924db

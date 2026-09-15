@@ -4,4 +4,4 @@ EAPI=8
 KEYWORDS=amd64
 RDEPEND=dev-libs/slotconfgroupnew dev-libs/slotconfgroupa dev-libs/slotconfgroupb dev-libs/slotconfgroupc
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=203581227dee3945e99030bde6ca7504

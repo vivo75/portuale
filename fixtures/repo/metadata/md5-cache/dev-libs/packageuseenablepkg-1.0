@@ -5,4 +5,4 @@ IUSE=pkguseflag
 KEYWORDS=amd64
 RDEPEND=pkguseflag? ( dev-libs/newpkg )
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=328a196622c6fb5743bde60d99f8278f

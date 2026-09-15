@@ -34,6 +34,7 @@ run (the same pins `TEST/layers/l0/in-container.sh` uses).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib
 import json
 import os
@@ -208,7 +209,7 @@ def _ebuild_text(cpv: str, meta: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _cache_text(meta: dict) -> str:
+def _cache_text(meta: dict, ebuild_text: str) -> str:
     keys = ("EAPI", "DEFINED_PHASES", "DESCRIPTION", "IUSE", "KEYWORDS",
             "SLOT", "DEPEND", "RDEPEND", "BDEPEND", "IDEPEND", "PDEPEND",
             "PROPERTIES", "RESTRICT", "LICENSE")
@@ -218,7 +219,10 @@ def _cache_text(meta: dict) -> str:
             lines.append(f"{key}={meta[key]}")
     if "DEFINED_PHASES" not in meta:
         lines.append("DEFINED_PHASES=-")
-    lines.append("_md5_=0000000000000000000000000000000")
+    # The real md5 of the emitted ebuild, not a placeholder: the committed
+    # fixture guard (`test_committed_fixture_md5_cache_entries_match_their_
+    # ebuilds`) and the reader validation (#46 S3) both check it.
+    lines.append(f"_md5_={hashlib.md5(ebuild_text.encode()).hexdigest()}")
     return "\n".join(lines) + "\n"
 
 
@@ -239,10 +243,11 @@ def emit_fixtures(capture: Capture, out: Path) -> dict:
             pkg, _, version = pkgver.rpartition("-")
             pkgdir = pg_dir / "repo" / cat / pkg
             pkgdir.mkdir(parents=True, exist_ok=True)
-            (pkgdir / f"{pkgver}.ebuild").write_text(_ebuild_text(cpv, meta))
+            ebuild_text = _ebuild_text(cpv, meta)
+            (pkgdir / f"{pkgver}.ebuild").write_text(ebuild_text)
             cache_dir = pg_dir / "repo" / "metadata" / "md5-cache" / cat
             cache_dir.mkdir(parents=True, exist_ok=True)
-            (cache_dir / pkgver).write_text(_cache_text(meta))
+            (cache_dir / pkgver).write_text(_cache_text(meta, ebuild_text))
         installed = playground.get("installed") or {}
         for cpv, meta in sorted(installed.items()):
             meta = meta if isinstance(meta, dict) else {}

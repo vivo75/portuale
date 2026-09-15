@@ -4,4 +4,4 @@ DESCRIPTION=fixture: unconditionally build-depends on dev-libs/usecyclea -- the 
 EAPI=8
 KEYWORDS=amd64
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=5d434289534fe7120dbb2e465183ec02

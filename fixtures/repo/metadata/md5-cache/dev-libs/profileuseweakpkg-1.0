@@ -5,4 +5,4 @@ IUSE=profweakflag
 KEYWORDS=amd64
 RDEPEND=profweakflag? ( dev-libs/newpkg )
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=6a262a2f03bfa9c231b012fb6b04c170

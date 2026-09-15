@@ -5,4 +5,4 @@ IUSE=envdusetestflag other
 KEYWORDS=amd64
 RDEPEND=envdusetestflag? ( dev-libs/newpkg )
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=e7303eafd17ad39844ebdb2644cb90d0

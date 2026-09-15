@@ -1,7 +1,6 @@
 DEFINED_PHASES=-
 DESCRIPTION=fixture package: real SLOT="main/sub" sub-slot, no slot-operator involved
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 SLOT=0/2
-_md5_=0000000000000000000000000000000
+_md5_=9a6a216d7b347031831c45b009c4cac5

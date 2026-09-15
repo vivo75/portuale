@@ -1,8 +1,7 @@
 DEFINED_PHASES=-
 DESCRIPTION=fixture package: LICENSE in the @EULA group, masked by the real default ACCEPT_LICENSE=* -@EULA
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 LICENSE=SomeEula
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=f40a28f27c804104adc323c76ebeffec

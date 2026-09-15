@@ -5,4 +5,4 @@ IUSE=+feat
 KEYWORDS=amd64
 RDEPEND=dev-libs/parentflipchildpkg[feat=]
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=524d8fb4392bad13415b552b254a5fea

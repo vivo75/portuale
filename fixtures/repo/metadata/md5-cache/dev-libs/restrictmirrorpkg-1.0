@@ -5,4 +5,4 @@ KEYWORDS=amd64
 RESTRICT=mirror
 SLOT=0
 SRC_URI=https://example.invalid/payload.bin -> restrictmirrorpkg-1.0.tar.gz
-_md5_=0000000000000000000000000000000
+_md5_=5abd77efc55023c71c7b04a31f871f41

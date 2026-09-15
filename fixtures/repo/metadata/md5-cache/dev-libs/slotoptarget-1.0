@@ -1,7 +1,6 @@
 DEFINED_PHASES=-
 DESCRIPTION=fixture: --changed-deps strip_slots -- a slot-2 dependency target
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 SLOT=2
-_md5_=0000000000000000000000000000000
+_md5_=1dce86bfe395b9fd556a401b641ad66e

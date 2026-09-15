@@ -1,7 +1,6 @@
 DEFINED_PHASES=-
 DESCRIPTION=024 oracle fixture: main slot moved without revbump (regslotchange)
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=6dbc1c30448e67a05813765612ac8a2a

@@ -1,7 +1,6 @@
 DEFINED_PHASES=-
 DESCRIPTION=fixture: SLOT 1 half of a two-slot dep; pulled only by slotorderb
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 SLOT=1
-_md5_=0000000000000000000000000000000
+_md5_=5ac64b4f44a00c4cc7ebb539388ae97d

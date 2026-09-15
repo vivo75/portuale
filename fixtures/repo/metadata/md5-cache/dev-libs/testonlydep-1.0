@@ -1,7 +1,6 @@
 DEFINED_PHASES=-
 DESCRIPTION=fixture package: only ever pulled in via dev-libs/withtestdeppkg's own test?-gated RDEPEND under --with-test-deps
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=a88944f892e8e518d6f29fe21d7c9b5d

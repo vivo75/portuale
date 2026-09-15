@@ -1,7 +1,6 @@
 DEFINED_PHASES=-
 DESCRIPTION=fixture package: regression check for package-name-prefix ambiguity vs sibling dev-libs/foo
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=481d89573d73b6bf332f66fa517252d6

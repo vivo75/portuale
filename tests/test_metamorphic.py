@@ -23,6 +23,7 @@ transform.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shutil
@@ -175,7 +176,7 @@ EAPI=8
 IUSE=
 KEYWORDS=amd64
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_={md5}
 """
 
 
@@ -183,8 +184,12 @@ def _add_unrelated_package(root: Path, args: list[str]) -> tuple[list[str], None
     pkgdir = root / "repo" / "dev-libs" / "mtunrelated"
     pkgdir.mkdir(parents=True)
     (pkgdir / "mtunrelated-1.0.ebuild").write_text(_UNRELATED_EBUILD)
+    # The real md5 of the emitted ebuild, not a placeholder (backlog #46
+    # S1: the committed-fixture guard and the S3 reader validation both
+    # check `_md5_`).
     (root / "repo" / "metadata" / "md5-cache" / "dev-libs" / "mtunrelated-1.0").write_text(
-        _UNRELATED_CACHE)
+        _UNRELATED_CACHE.format(
+            md5=hashlib.md5(_UNRELATED_EBUILD.encode()).hexdigest()))
     return args, None
 
 

@@ -1,8 +1,7 @@
 DEFINED_PHASES=-
 DESCRIPTION=fixture: the only genuine consumer of dev-libs/slotorderdual:1
 EAPI=8
-IUSE=
 KEYWORDS=amd64
 RDEPEND=dev-libs/slotorderdual:1
 SLOT=0
-_md5_=0000000000000000000000000000000
+_md5_=7ffe2125423609277101f8cd0a1a265e
