@@ -914,6 +914,18 @@ pub struct RepoConfig {
     /// simplification; every real Gentoo repo that uses the syntax
     /// declares it explicitly).
     pub profile_formats: Vec<String>,
+    /// The repo's resolved `cache-formats` (real `parse_layout`,
+    /// `config.py:1564-1577`): `layout.conf`'s value lowercased and
+    /// split, or -- when that is empty -- auto-detected from directory
+    /// presence, `md5-dict` first, then `pms`. Real
+    /// `iter_pregenerated_caches` (`config.py:576-605`) yields a
+    /// database per **known** name (`pms` -> `metadata/cache`,
+    /// `md5-dict` -> `metadata/md5-cache`) in list order, ignoring
+    /// unknown names, and `get_pregenerated_cache` (`config.py:607-616`)
+    /// keeps only the **first** one -- so downstream, see
+    /// [`pregen_md5_cache_enabled`]. Empty when neither directory exists
+    /// and the key is unset.
+    pub cache_formats: Vec<String>,
     /// This repo's own `aliases` (real `config.py:216-224`/`492-499`):
     /// `layout.conf`'s `aliases =` first, then `repos.conf`'s appended.
     /// Portuale acts on aliases in exactly one place -- the
@@ -1038,10 +1050,10 @@ fn parse_ini(text: &str, sections: &mut HashMap<String, HashMap<String, String>>
 /// `lib/portage/repository/config.py:1516`) -- a section-less `key =
 /// value` file. Returns an empty map when the file is absent (every key
 /// portuale reads has a real "absent" default). Portuale reads
-/// exactly four keys -- `masters`, `repo-name`, `profile-formats`,
-/// `aliases` -- out of the ~20 real ones (`sign-manifests`,
-/// `manifest-hashes`, `cache-formats`, `eapis-banned`, `use-manifests`,
-/// ...); the rest are real but out of portuale's scope.
+/// exactly five keys -- `masters`, `repo-name`, `profile-formats`,
+/// `cache-formats`, `aliases` -- out of the ~20 real ones
+/// (`sign-manifests`, `manifest-hashes`, `eapis-banned`,
+/// `use-manifests`, ...); the rest are real but out of portuale's scope.
 fn parse_layout_conf(repo_location: &Path) -> HashMap<String, String> {
     let Ok(text) = fs::read_to_string(repo_location.join("metadata/layout.conf")) else {
         return HashMap::new();
@@ -1199,6 +1211,7 @@ pub fn find_repos(config_root: &Path) -> Result<Vec<RepoConfig>, Error> {
             is_main: *name == main_repo,
             masters: Vec::new(),
             profile_formats: Vec::new(),
+            cache_formats: Vec::new(),
             aliases: Vec::new(),
             sync_type,
             sync_uri,
@@ -1231,6 +1244,29 @@ pub fn find_repos(config_root: &Path) -> Result<Vec<RepoConfig>, Error> {
             .get("profile-formats")
             .map(|v| v.split_whitespace().map(String::from).collect())
             .unwrap_or_default();
+        // Real `parse_layout` (`config.py:1564-1577`): lowercase the
+        // whole value, split, then -- only when empty -- auto-detect
+        // `md5-dict` before `pms` from directory presence. An explicit
+        // unknown format stays in the list (real keeps it and
+        // `iter_pregenerated_caches` skips it).
+        let mut cache_formats: Vec<String> = layout
+            .get("cache-formats")
+            .map(|v| {
+                v.to_lowercase()
+                    .split_whitespace()
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if cache_formats.is_empty() {
+            if repo.location.join("metadata/md5-cache").is_dir() {
+                cache_formats.push("md5-dict".to_string());
+            }
+            if repo.location.join("metadata/cache").is_dir() {
+                cache_formats.push("pms".to_string());
+            }
+        }
+        repo.cache_formats = cache_formats;
         let mut aliases: Vec<String> = layout
             .get("aliases")
             .map(|v| v.split_whitespace().map(String::from).collect())
@@ -1589,6 +1625,33 @@ fn md5_cache_entry_is_valid(repo_location: &Path, category: &str, pf: &str) -> b
         guard.insert(cache_path, is_valid);
     }
     is_valid
+}
+
+/// Whether real portage would read this repo's pregenerated aux metadata
+/// from `metadata/md5-cache` rather than falling through to the
+/// writable depcachedir / `depend` phase: the **first known** entry of
+/// [`RepoConfig::cache_formats`] is `md5-dict`.
+///
+/// Real's chain: `parse_layout` resolves `cache-formats` (lowercased +
+/// split, auto-detect `md5-dict` then `pms`) into the repo's list
+/// (`config.py:1564-1577`); `iter_pregenerated_caches`
+/// (`config.py:576-605`) yields one database per known format in list
+/// order, skipping unknown names; `get_pregenerated_cache`
+/// (`config.py:607-616`) keeps only the first. So `cache-formats = pms
+/// md5-dict` resolves to `metadata/cache` even when only
+/// `metadata/md5-cache` exists -- every lookup misses and falls through
+/// -- and `foo` yields no pregen cache at all. Portuale has no `pms`
+/// reader (#55 decision L1, a documented narrowing -- slower, not
+/// different: the depcachedir rung and `depend` phase produce the same
+/// metadata real reads from a valid `pms` cache), so "the first known
+/// format is `md5-dict`" is exactly "portuale may read
+/// `metadata/md5-cache`". Pure, so the read-path gate and `--regen`'s
+/// writer both resolve the same way; memoised per path only by callers.
+pub fn pregen_md5_cache_enabled(repo: &RepoConfig) -> bool {
+    repo.cache_formats
+        .iter()
+        .find(|f| f.as_str() == "md5-dict" || f.as_str() == "pms")
+        .is_some_and(|f| f.as_str() == "md5-dict")
 }
 
 /// Whether `repo_location` ships a usable `metadata/md5-cache` (i.e. the
@@ -21606,6 +21669,71 @@ mod tests {
         let repos = find_repos(&root).expect("repos.conf resolves");
         let overlay = repos.iter().find(|r| r.name == "overlay").unwrap();
         assert_eq!(overlay.masters, Vec::<PathBuf>::new());
+    }
+
+    /// #55 S0 cells a-f (`TEST/findings/l2.md` "## #55 S0"): real
+    /// lowercases and splits `cache-formats`, auto-detects
+    /// `md5-dict` then `pms` from directory presence when it is empty,
+    /// and `get_pregenerated_cache` keeps only the **first known**
+    /// format -- an unknown name is skipped, no known name means no
+    /// pregen cache at all.
+    #[test]
+    fn pregen_md5_cache_follows_the_first_known_cache_format() {
+        let root = masters_test_root("cache-formats");
+        std::fs::create_dir_all(root.join("etc/portage")).unwrap();
+        std::fs::write(
+            root.join("etc/portage/repos.conf"),
+            "[DEFAULT]\nmain-repo = main\n\n[main]\nlocation = main\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("main/metadata")).unwrap();
+        let layout = root.join("main/metadata/layout.conf");
+        let formats = || {
+            let repos = find_repos(&root).expect("repos.conf resolves");
+            let main = repos.iter().find(|r| r.is_main).unwrap();
+            (main.cache_formats.clone(), pregen_md5_cache_enabled(main))
+        };
+
+        // Cell a: no key, `metadata/md5-cache` present -> auto `md5-dict`.
+        std::fs::create_dir_all(root.join("main/metadata/md5-cache")).unwrap();
+        std::fs::write(&layout, "masters = \n").unwrap();
+        assert_eq!(formats(), (vec!["md5-dict".to_string()], true));
+        // Both directories present -> `md5-dict` still first.
+        std::fs::create_dir_all(root.join("main/metadata/cache")).unwrap();
+        assert_eq!(
+            formats(),
+            (vec!["md5-dict".to_string(), "pms".to_string()], true)
+        );
+        // Only `metadata/cache` -> auto `pms`, no md5-cache read.
+        std::fs::remove_dir_all(root.join("main/metadata/md5-cache")).unwrap();
+        assert_eq!(formats(), (vec!["pms".to_string()], false));
+        // Neither directory -> empty list, no pregen cache at all.
+        std::fs::remove_dir_all(root.join("main/metadata/cache")).unwrap();
+        assert_eq!(formats(), (Vec::<String>::new(), false));
+
+        // Cells b/e: explicit `md5-dict`, and `md5-dict pms` -> used
+        // (`MD5-DICT` proves the value is lowercased first).
+        std::fs::write(&layout, "cache-formats = MD5-DICT\n").unwrap();
+        assert_eq!(formats(), (vec!["md5-dict".to_string()], true));
+        std::fs::write(&layout, "cache-formats = md5-dict pms\n").unwrap();
+        assert_eq!(
+            formats(),
+            (vec!["md5-dict".to_string(), "pms".to_string()], true)
+        );
+        // Cells c/d: `pms` first, with or without a following
+        // `md5-dict` -> real reads `metadata/cache`; portuale (no pms
+        // reader, L1) falls through to depcache/depend.
+        std::fs::write(&layout, "cache-formats = pms\n").unwrap();
+        assert_eq!(formats(), (vec!["pms".to_string()], false));
+        std::fs::write(&layout, "cache-formats = pms md5-dict\n").unwrap();
+        assert_eq!(
+            formats(),
+            (vec!["pms".to_string(), "md5-dict".to_string()], false)
+        );
+        // Cell f: only unknown names -> kept in the list (real skips
+        // them at yield time) and no pregen cache.
+        std::fs::write(&layout, "cache-formats = foo\n").unwrap();
+        assert_eq!(formats(), (vec!["foo".to_string()], false));
     }
 
     #[test]
