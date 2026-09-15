@@ -15081,6 +15081,74 @@ def test_backtracking_good_version_first_matches_the_upstream_oracle(
         assert "Multiple package instances" not in r.stdout, note
 
 
+def test_or_choice_avoids_downgrade_into_the_graphed_update(
+    emerge_binary, fixture_env, tmp_path
+):
+    """Backlog #35 (R4): upstream `test_or_choices.py::testConflictMissedUpdate`
+    (bug 531656) translated to fixtures -- `mlocaml` = dev-lang/ocaml
+    (4.01.0 installed, 4.02.1 available, sub-slotted), `mllablgl` =
+    dev-ml/lablgl (`>=ocaml-3.10.2:= || ( labltk:= <ocaml-4.02 )`,
+    installed against ocaml 4.01.0), `mllabltk` = dev-ml/labltk
+    (`>=ocaml-4.02:=`).
+
+    Real `dep_zapdeps`'s `installed_downgrade` guard demotes the
+    `<ocaml-4.02` arm once the ocaml update is in the graph (the lower
+    version is not a desirable downgrade: `_downgrade_probe` is False), so
+    lablgl takes `labltk` and the update survives. Genuine oracle, captured
+    2026-09-15 through portage's own `ResolverPlayground` on the vendored
+    3.0.82.2 (`TEST/logs/r4-20260915/playground-oracle.{py,out}`): default
+    budget `[ocaml-4.02.1, labltk-8.06.0, lablgl-1.05]`, success; with
+    `_downgrade_probe` forced True the same run merges nothing (the missed
+    update the bug is about) -- which is what portuale did before #35.
+    `--backtrack=0`: real fails with the partial `[ocaml-4.02.1,
+    labltk-8.06.0]`."""
+    lablgl_deps = (
+        ">=dev-libs/mlocaml-3.10.2:0/4.01.0= "
+        "|| ( dev-libs/mllabltk:= <dev-libs/mlocaml-4.02 )"
+    )
+    root = _b1_root(
+        tmp_path,
+        ["dev-libs/mlocaml", "dev-libs/mllablgl"],
+        [
+            ("dev-libs", "mlocaml", "4.01.0", "0/4.01.0", {"EAPI": "5"}),
+            (
+                "dev-libs",
+                "mllablgl",
+                "1.05",
+                "0",
+                {"EAPI": "5", "DEPEND": lablgl_deps, "RDEPEND": lablgl_deps},
+            ),
+        ],
+    )
+    env = _b1_env(fixture_env, root)
+
+    def ml_merges(stdout):
+        return [
+            ln.split("] ", 1)[1].split(" ", 1)[0]
+            for ln in _b1_merges(stdout)
+            if "dev-libs/ml" in ln
+        ]
+
+    rust = _b1_run(["--pretend", "--update", "--deep", "@world"], env, emerge_binary)
+    assert ml_merges(rust.stdout) == [
+        "dev-libs/mlocaml-4.02.1",
+        "dev-libs/mllabltk-8.06.0",
+        "dev-libs/mllablgl-1.05",
+    ], rust.stdout
+    assert "Multiple package instances" not in rust.stdout
+
+    tight = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--update", "--deep", "--backtrack=0", "@world"],
+        env,
+    )
+    assert ml_merges(tight.stdout) == [
+        "dev-libs/mlocaml-4.02.1",
+        "dev-libs/mllabltk-8.06.0",
+    ], tight.stdout
+    assert "Multiple package instances" in tight.stdout
+
+
 # ---------------------------------------------------------------------------
 # Backlog #24 Slice 2 oracle pins: the slot-operator family, one
 # `test_oracle_slotop_*` per upstream shape (method: `docs/023-oracle.md`;

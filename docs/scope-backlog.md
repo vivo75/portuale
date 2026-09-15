@@ -845,9 +845,10 @@ merge, unmerge, world management, all real. The gap to a full drop-in is:
    the bug-515584 unmask gate, `all_installed_slots`, in-bin
    upgrade-preference ordering, and the `other_*` bins + `allow_masked`
    two-pass return, shipped 2026-09-11, one shared probe + tie-break pair
-   both languages —    `minimize_slots` and the `conflict_downgrade`/
-   `installed_downgrade`/`circular_atom` guards stay deliberate,
-   documented cuts, the latter two carved to #35). The backtracking
+   both languages —    `minimize_slots` and the `circular_atom` guard
+   stay deliberate, documented cuts; the `conflict_downgrade`/
+   `installed_downgrade` guards were carved to #35 and shipped
+   2026-09-15). The backtracking
    search itself is **done** (2026-09-11, backlog #23: real's node-stack
    search with ranked one-node-per-choice masks, similar grouping,
    mask-step budget, `get_best_run`, and dead-end abandonment -- see

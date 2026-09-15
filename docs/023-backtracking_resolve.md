@@ -3,7 +3,7 @@
 > **2026-09-15:** #23 is closed; the "Python mirror in lockstep" rules
 > below no longer apply (the reference was removed,
 > `second_python_copy_removal.md`). B2 (#35) is now R4 of
-> `backlog_tier_5_and_2_sliced.opus.md`, Rust-only.
+> `backlog_tier_5_and_2_sliced.opus.md`, Rust-only, and shipped 2026-09-15.
 
 Written 2026-09-11 against `main` @ `eef8494` (post #19/#22 merge). Two
 phases in strict order: **Phase A** — a behaviour-neutral Rust-only

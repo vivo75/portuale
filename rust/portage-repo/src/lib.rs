@@ -9358,6 +9358,163 @@ fn atoms_all_in_graph(
     })
 }
 
+/// The visible tree candidates matching `atom_str` (USE deps ignored) after
+/// the `'backtrack` loop's `runtime_pkg_mask` constraints, as
+/// `(version, slot)` -- the listing half of `atom_currently_satisfiable`,
+/// returned rather than collapsed to a bool so the bug-531656 downgrade
+/// guards can compare versions. Same small-duplication precedent as that
+/// function's own doc comment.
+fn visible_tree_matches(
+    repos: &[RepoConfig],
+    atom_str: &str,
+    config: &portage_profile::Config,
+    extra_constraints: &[String],
+) -> Vec<(String, String)> {
+    let Some(atom) = portage_dep::parse_atom(atom_str) else {
+        return Vec::new();
+    };
+    let Ok(candidates) = list_candidates(repos, &atom.category, &atom.package) else {
+        return Vec::new();
+    };
+    let visible: Vec<&Candidate> = candidates
+        .iter()
+        .filter(|c| is_visible(c, &atom.category, &atom.package, config))
+        .collect();
+    let strs: Vec<String> = visible
+        .iter()
+        .map(|c| {
+            format!(
+                "{}/{}-{}:{}/{}::{}",
+                atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
+            )
+        })
+        .collect();
+    let refs: Vec<&str> = strs.iter().map(String::as_str).collect();
+    let stripped = portage_dep::without_use(atom_str);
+    let Some(matched) = portage_dep::match_from_list(stripped, &refs) else {
+        return Vec::new();
+    };
+    let passes_constraints = |m: &str| {
+        extra_constraints.iter().all(|c| match c.strip_prefix('!') {
+            Some(neg) => !portage_dep::match_from_list(neg, &[m]).is_some_and(|r| !r.is_empty()),
+            None => portage_dep::match_from_list(c, &[m]).is_some_and(|r| !r.is_empty()),
+        })
+    };
+    visible
+        .iter()
+        .zip(strs.iter())
+        .filter(|(_, s)| matched.contains(&s.as_str()) && passes_constraints(s))
+        .map(|(c, _)| (c.version.clone(), c.slot.clone()))
+        .collect()
+}
+
+/// Real `depgraph._downgrade_probe` (`depgraph.py:2946`): a downgrade to
+/// `version` is *desirable* only when no visible, not-installed candidate in
+/// its slot is at the same or a higher version (the current one is masked or
+/// gone). `slot_atom` is `cat/pkg:slot`; `extra_constraints` is the
+/// `runtime_pkg_mask` real's `_iter_similar_available` skips.
+fn downgrade_probe(
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    slot_atom: &str,
+    version: &str,
+    extra_constraints: &[String],
+) -> bool {
+    let similar = visible_tree_matches(repos, slot_atom, config, extra_constraints);
+    !similar.is_empty()
+        && !similar
+            .iter()
+            .any(|(v, _)| vercmp_ordering(v, version) != Ordering::Less)
+}
+
+/// Real `dep_zapdeps`'s two bug-531656 guards (`dep_check.py` soft 476-490
+/// `conflict_downgrade`, 531-541 `installed_downgrade`): an otherwise
+/// available `||` alternative is demoted to the `other` bin when one of its
+/// atoms would pull in a *lower* version of a package whose slot the live
+/// graph already holds at a higher version, unless that downgrade is
+/// desirable ([`downgrade_probe`]). This is what makes
+/// `|| ( dev-ml/labltk:= <dev-lang/ocaml-4.02 )` take `labltk` once the
+/// `ocaml-4.02.1` update is in the graph (upstream
+/// `test_or_choices.py::testConflictMissedUpdate`) instead of the
+/// `<ocaml-4.02` arm that forces the update back out.
+///
+/// Real's `graph_db` is the depgraph's live package set; portuale's is the
+/// resolver's in-progress `entries` (both `||` call sites pass
+/// `state.entries`/`entries` as they stand at that instant), which is the
+/// same set real consults at the same moment.
+///
+/// Port notes, each a deliberate narrowing:
+///   - `avail_pkg` is the highest visible tree match of the atom without its
+///     `[use]` block (real then re-selects with USE when that succeeds; the
+///     version compared below can only differ when a USE-satisfying lower
+///     version exists, not a shape this guard targets).
+///   - `highest_in_slot` counts only as "in graph" when an entry for that
+///     `cat/pkg` slot exists (merge-bound, or an `AlreadyInstalled` node).
+///     Real's `_select_package` would also return a bare installed instance
+///     that is not yet a graph node when `--update` is off; that variant
+///     needs the update mode threaded to this depth and is left out.
+///   - `replacing` (`will_replace_child`): an atom of the entry's own
+///     `cat/pkg` (`self_cp`) is never demoted.
+fn alternative_downgrade_demoted(
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    entries: &[GraphEntry],
+    self_cp: &(String, String),
+    constraints: &HashMap<(String, String), Vec<String>>,
+    atoms: &[String],
+) -> bool {
+    atoms.iter().any(|a| {
+        let Some(at) = portage_dep::parse_atom(a) else {
+            return false;
+        };
+        if at.blocker != portage_dep::Blocker::None
+            || (at.category.clone(), at.package.clone()) == *self_cp
+        {
+            return false;
+        }
+        let extra = constraints
+            .get(&(at.category.clone(), at.package.clone()))
+            .map_or(&[][..], Vec::as_slice);
+        let Some((avail_version, avail_slot)) = visible_tree_matches(repos, a, config, extra)
+            .into_iter()
+            .max_by(|x, y| vercmp_ordering(&x.0, &y.0))
+        else {
+            return false;
+        };
+        // Graph nodes in `cat/pkg:avail_slot`: merge-bound versions, and the
+        // installed version when an `AlreadyInstalled` node holds the slot.
+        let in_slot: Vec<String> = entries
+            .iter()
+            .filter(|e| {
+                e.category == at.category
+                    && e.package == at.package
+                    && e.slot.as_deref() == Some(avail_slot.as_str())
+            })
+            .filter_map(|e| match &e.outcome {
+                PretendOutcome::AlreadyInstalled { version }
+                | PretendOutcome::New { version }
+                | PretendOutcome::Reinstall { version, .. } => Some(version.clone()),
+                PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
+                    Some(to.clone())
+                }
+                PretendOutcome::NoVisibleCandidate => None,
+            })
+            .collect();
+        let Some(highest_in_graph) = in_slot.iter().max_by(|x, y| vercmp_ordering(x, y)) else {
+            return false;
+        };
+        if vercmp_ordering(&avail_version, highest_in_graph) != Ordering::Less {
+            return false;
+        }
+        let slot_atom = format!("{}/{}:{avail_slot}", at.category, at.package);
+        // `conflict_downgrade` (two or more graph packages in the slot) and
+        // `installed_downgrade` (the slot's highest is in the graph) share the
+        // same "lower than what the graph holds, and not a desirable
+        // downgrade" test once `highest_in_slot` is a graph node.
+        !downgrade_probe(repos, config, &slot_atom, &avail_version, extra)
+    })
+}
+
 /// The single probe closure `use_reduce_flat_disjunctive` calls for every
 /// `||` alternative -- real `dep_zapdeps`'s whole choice-bin
 /// classification (`dep_check.py` soft 449-523, 599-618) collapsed into
@@ -9508,30 +9665,24 @@ fn disjunction_preference(
             portage_use_reduce::AltPreference::Other
         };
     }
+    // Real demotes an otherwise-`all_available` choice straight to `other`
+    // (skipping bin 0/1 entirely) when `conflict_downgrade` or
+    // `installed_downgrade` fires (dep_check.py soft 634, bug 531656) --
+    // backlog #35, see `alternative_downgrade_demoted`. `entries` is the
+    // resolver's live in-progress set at both call sites.
+    if alternative_downgrade_demoted(repos, config, entries, self_cp, constraints, atoms) {
+        return portage_use_reduce::AltPreference::Other;
+    }
     // Backlog #22 slice 5 (`docs/022-agent-task-22-zapdeps.fable.md` §4):
-    // real demotes an otherwise-`all_available` choice straight to `other`
-    // (skipping bin 0/1 entirely) on THREE further conditions this
-    // deliberately never checks, each needing an input portuale's
-    // architecture doesn't have and the design brief itself flags as such
-    // (§2's own "inputs portuale does not have" list) -- documented cuts,
-    // not oversights:
-    //   - `conflict_downgrade`/`installed_downgrade` (dep_check.py soft
-    //     476-521, bug 531656/downgrade-into-a-slot-conflict guards): both
-    //     need `downgrade_probe` (whether config/CLI flags accept a
-    //     downgrade for this specific atom) and a `graph_db` that
-    //     reflects the CURRENT in-progress backtrack attempt's own slot
-    //     choices, not just this run's final merge-bound set
-    //     (`atoms_all_in_graph`'s `entries` is close but not the same
-    //     live, mutating structure real threads through the whole
-    //     `dep_zapdeps` call).
+    // one further demotion stays a documented cut, needing inputs
+    // portuale's architecture doesn't have:
     //   - `circular_atom` (soft 649-682): needs `circular_dependency`
     //     (populated by an earlier, separate real backtrack pass this
     //     alternative isn't itself running inside of) and
     //     `parent.onlydeps` (the `--onlydeps` CLI flag, not threaded to
     //     this call depth).
-    // All three belong with the slot-conflict backtracking work (#23/#24)
-    // if their inputs ever get mapped, per the brief's own slice-5 note --
-    // not bolted onto this classification function as a guess.
+    // It belongs with the circular-dependency backtracking work if those
+    // inputs ever get mapped, per the brief's own slice-5 note.
     if all_use_satisfied {
         // Real `dep_zapdeps` choice bin 0 -- the single list
         // `preferred_in_graph` / `preferred_installed` / `preferred_any_slot`
@@ -14502,7 +14653,21 @@ fn build_residual_slot_conflicts(
     let mut grouped: HashMap<(String, String, String, String, String), SlotConflict> =
         HashMap::new();
     let mut order: Vec<(String, String, String, String, String)> = Vec::new();
-    for pin in dropped {
+    // `dropped` accumulates across backtrack passes, so a pin can outlive
+    // the reason it was recorded: its consumer may be merge-bound in the
+    // final graph (e.g. a `:=` rebuild seeded by a later pass). Apply
+    // `reverse_dependency_constraints`'s own "consumer being replaced"
+    // skip against the final `entries` (real `depgraph.py:2512-2522`).
+    let replaced: HashSet<(&str, &str)> = entries
+        .iter()
+        .filter(|e| merge_bound_cpv(e).is_some())
+        .map(|e| (e.category.as_str(), e.package.as_str()))
+        .collect();
+    let dropped: Vec<&RevDepPin> = dropped
+        .iter()
+        .filter(|p| !replaced.contains(&(p.consumer.0.as_str(), p.consumer.1.as_str())))
+        .collect();
+    for pin in dropped.iter().copied() {
         let (category, package) = (pin.cp.0.clone(), pin.cp.1.clone());
         // The final merge-bound version of this package, if any.
         let mut merge: Option<(String, String, String, String)> = None;
@@ -14667,7 +14832,7 @@ fn build_residual_slot_conflicts(
     // instance's parents (real lists each installed consumer beside the
     // hard pullers already filed above). A pin belongs to a record only
     // when it guards that record's own installed version.
-    for pin in dropped {
+    for pin in dropped.iter().copied() {
         for key in order.iter() {
             if key.0 != pin.cp.0 || key.1 != pin.cp.1 {
                 continue;
