@@ -4,7 +4,7 @@ PROJ: readability-relaxed semantic projection (BabelTele, arXiv:2606.19857); gly
 LEGEND (PY/CT-byte-identical refs below = pre-2026-09-15 rules, superseded by PYREF-REMOVED): `∷`is `;`fence `|`field `→`leads/causes `⇒`decision `←`from `∈`in `∉`not-in `¬`not `∧`and `∨`or `:=`def `!`must-not `?`unverified `+`add `-`remove `@`anchor file:sym:line `F/M/S`=tiers(F Opus5/Fable5.1, M Sonnet5, S Haiku4.5; Frev=F reads full diff pre-user-commit) `U`=user-owned `D#`=owner decision §3 `PR`=rust/portage-repo/src/lib.rs `MO`=rust/portage-repo/src/merge_order.rs `PT`=rust/portuale/src/pretend.rs `EP`=rust/portuale/src/ebuild_phases.rs `EM`=rust/portuale/src/ebuild_merge.rs `MD`=rust/mrg-director/src/lib.rs `PY`=python/emerge_pretend_reference.py `CT`=tests/test_emerge_pretend_contract.py `F25`=docs/025-tier2-closeout.deepseek.md §11 `L3F`=TEST/findings/l3.md `L2F`=TEST/findings/l2.md
 
 PYREF-REMOVED 2026-09-15 (branch backlog/python-copy-removal; docs/second_python_copy_removal.md) ⇒ R3b..R5 ¬PY ¬Rust==PY: pin Rust vs real oracle ∧ tests/test_output_invariants.py green ∧ reviewed corpus drift blessed (PORTUALE_CORPUS_BLESS=1) same commit ∷ #26 F-A1 w/ PORTUALE_DYNAMIC_DEPS_APPEND=1 ⇒ only test_oracle_slotop_undo_cascade fails (PY half gone) ∷ found+fixed C2 race dc8022b (concurrent cache-miss shared depend metadata file)
-STATUS: proposed 2026-09-14 ∷ D1-D7 ANSWERED ∷ R0 DONE (#21 cut) ∷ W1 DONE ∷ W2 DONE (R2 rescoped per (a): #36 not-reproducible-as-framed, genuine upstream oracle captured) ∷ W3 DONE: P2b (env rows 0) ∥ C2 (depend-phase fallback) ∥ R3a (025b design, owner read pending before R3b) ∥ H3 (6/8 slots) ∷ W4 DONE (P3 C3 R3b) ∷ W5 H4 DONE ∷ W6 R3c STOPPED→REVALIDATED 2026-09-15 ⇒ R3c∧R3d WITHDRAWN ∷ D7 ANS opt1 ⇒ W6 R3e′ DONE (#25 DONE-PARTIAL) ∷ W7 next
+STATUS: proposed 2026-09-14 ∷ D1-D7 ANSWERED ∷ R0 DONE (#21 cut) ∷ W1 DONE ∷ W2 DONE (R2 rescoped per (a): #36 not-reproducible-as-framed, genuine upstream oracle captured) ∷ W3 DONE: P2b (env rows 0) ∥ C2 (depend-phase fallback) ∥ R3a (025b design, owner read pending before R3b) ∥ H3 (6/8 slots) ∷ W4 DONE (P3 C3 R3b) ∷ W5 H4 DONE ∷ W6 R3c STOPPED→REVALIDATED 2026-09-15 ⇒ R3c∧R3d WITHDRAWN ∷ D7 ANS opt1 ⇒ W6 R3e′ DONE (#25 DONE-PARTIAL) ∷ W7 DONE (R4 #35 ∧ H5 #28) ∷ W8 R5 next
 SCOPE: docs/backlog-tasks.md OPEN only: T5{41,44,45} T2{17,20,21,25,28,35,36} ∷ DONE/DONE-PARTIAL ∉scope
 RF: AGENTS.md(step8 verify); docs/agent-context.md; docs/scope-backlog.md §A §H §I §K; per-track plan/finding below
 
@@ -141,4 +141,13 @@ REVAL 2026-09-15 (W6; SRC §9 "Wave 6 revalidated"; TEST/findings/l0.md "R3c rev
 
 W6 CLOSED 2026-09-15 R3e′ DONE: known-divergences.yaml gedit-nautilus-cluster-a-rewalk-abort [order] ∷ L0 subset l0-20260915T063724Z both explained ∧ portuale out byte-identical ∧ advice/error unchanged ⇒ order unexplained 17→15 ∷ F-B4 corrected ∈025 §11 ∷ #25 DONE-PARTIAL residue {virtual/man bundle timing, docbook-xml-dtd hash swap, 023 btnr (installed instance ∉resolved_slots ⇒ ¬slot-conflict party; resolver-level, ¬touched by R3)}
   ⇒ R4 graph_db: installed matches via best_installed_for_atom ! assume resolved_slots covers installed ∷ NEXT W7 R4 ∥ H5
+
+W7 DONE 2026-09-15:
+  R4 #35 DONE: alternative_downgrade_demoted + downgrade_probe + visible_tree_matches ∈PR ← disjunction_preference (both || sites) ∷ live graph_db := resolver in-progress entries (¬new structure) ∷ oracle test_or_choices.py::testConflictMissedUpdate via ResolverPlayground + guards-off control (merges nothing = old portuale) TEST/logs/r4-20260915/ ∷ fixtures mlocaml/mllablgl/mllabltk ∷ pin test_or_choice_avoids_downgrade_into_the_graphed_update (default ∧ --backtrack=0 partial)
+    +fix build_residual_slot_conflicts: dropped pins accumulate across passes ⇒ filter consumer merge-bound ∈final entries (=reverse_dependency_constraints skip)
+    narrowing: highest_in_slot = graph entries only (¬bare installed w/o --update)
+    verify: fmt clippy ok ∷ cargo test 1074 pass ∷ pytest 1595 pass ∷ L0 l0-20260915T070018Z clean 100 parity 0.833 UNEXPL 34 order 15 ∧ portuale out byte-identical 120/120 vs l0-20260915T005709Z ⇒ L0-neutral
+  H5 #28 DONE: docs/028-director-proposal.md call graph (all slots incl solver production) ∷ REC Director stays test-only (D6) + revisit triggers
+  housekeeping: backlog-tasks #35 #36 + "Tier 3" header dropped by e5ffd0f (H3) ⇒ restored
+  NEXT W8 R5 #17 600s (D5) ∷ 15 order rows, equal node sets
 

@@ -515,7 +515,7 @@ Full L0 run; update `TEST/findings/l0.md` "## I", §11 F-B3/F-B4 →
 resolved (or residue explained), `backlog-tasks.md`. Net L0 order count
 must not rise (D4).
 
-### R4 (F, 4–6h) — #35 `downgrade_probe` + live `graph_db`
+### R4 (F, 4–6h) — #35 `downgrade_probe` + live `graph_db` — **DONE 2026-09-15**
 
 **Target:** real `dep_zapdeps` demotes a `||` alternative when the slot
 conflict it would create is solvable by downgrade
@@ -613,7 +613,7 @@ exists, a depend-phase-backed implementation (write-through to
 `VolatileCache` / `depcachedir`) when not. This is the natural home for
 #41's fallback and avoids implementing it twice.
 
-### H5 (F, 2h, docs, D6) — `Director` proposal
+### H5 (F, 2h, docs, D6) — `Director` proposal — **DONE 2026-09-15**
 
 Write a short proposal for whether `Director` becomes the production
 `action_build` entry, with the call graph as it stands after H1–H4.
@@ -823,4 +823,35 @@ packages as graph members, while portuale's `resolved_slots` indexes
 merge-bound outcomes only. R4's live `graph_db` must therefore answer
 installed matches through `best_installed_for_atom`, and must not
 assume `resolved_slots` covers them. Next: wave 7 (R4 ∥ H5).
+
+**Wave 7 done 2026-09-15: R4 + H5.**
+- **R4 (#35):** real's bug-531656 guards are ported as
+  `alternative_downgrade_demoted`/`downgrade_probe` inside
+  `disjunction_preference`. The live `graph_db` is the resolver's
+  in-progress `entries`, which both `||` call sites already pass, so no
+  new structure was needed.
+  - Oracle: upstream `test_or_choices.py::testConflictMissedUpdate`
+    through `ResolverPlayground`, with a guards-off control that merges
+    nothing (`TEST/logs/r4-20260915/`). Fixtures `mlocaml`/`mllablgl`/
+    `mllabltk`; the pin covers the default budget and `--backtrack=0`.
+  - Fixing it exposed a residual-conflict bug: a reverse-dep pin dropped
+    in an early pass was still reported after its consumer became a
+    rebuild. It is now filtered against the final entries.
+  - Verification: fmt/clippy clean, `cargo test --release` 1074 passed,
+    pytest 1595 passed. L0 `l0-20260915T070018Z`: clean 100 / parity 0.833 /
+    UNEXPLAINED 34 / order 15, portuale output byte-identical to
+    `l0-20260915T005709Z` on all 120 probes.
+  - The narrowing is documented in the function: `highest_in_slot` is
+    graph entries only.
+- **H5 (#28):** `docs/028-director-proposal.md` holds the post-H1–H4
+  call graph, where every slot including the solver has a production
+  caller. The recommendation is to keep `Director` test-only per D6,
+  with a trigger list for revisiting. #28 is DONE.
+- **Housekeeping:** backlog items #35/#36 and the "Tier 3" heading had
+  been dropped from `docs/backlog-tasks.md` by the H3 commit (`e5ffd0f`)
+  and are restored.
+
+Next: wave 8, R5 (#17, 600 s time box per D5). It owns the 15 order
+rows, all with equal node sets (families in `TEST/findings/l0.md` "R3c
+revalidation").
 
