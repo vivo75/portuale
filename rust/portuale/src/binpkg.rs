@@ -99,6 +99,138 @@ impl Drop for ScratchDir {
     }
 }
 
+/// `#56` (GLEP 78's "only regular files are permitted inside the
+/// container"): the file type of an already-extracted outer-container
+/// entry, as a bare phrase for the error message. `symlink_metadata` /
+/// `FileType` throughout -- never a follow, so a symlink reports itself,
+/// not its target.
+fn outer_entry_type(file_type: &fs::FileType) -> &'static str {
+    use std::os::unix::fs::FileTypeExt;
+    if file_type.is_symlink() {
+        "a symbolic link"
+    } else if file_type.is_dir() {
+        "a directory"
+    } else if file_type.is_file() {
+        "a regular file"
+    } else if file_type.is_fifo() {
+        "a FIFO"
+    } else if file_type.is_char_device() {
+        "a character device"
+    } else if file_type.is_block_device() {
+        "a block device"
+    } else if file_type.is_socket() {
+        "a socket"
+    } else {
+        "not a regular file"
+    }
+}
+
+/// The shared `#56` error for a non-regular entry at a trusted name.
+fn outer_entry_error(path: &Path, gpkg: &Path, expected: &str) -> String {
+    let kind = fs::symlink_metadata(path)
+        .map(|m| outer_entry_type(&m.file_type()))
+        .unwrap_or("not a regular file");
+    format!(
+        "{}: gpkg container member {:?} is {kind}, not {expected}",
+        gpkg.display(),
+        path.file_name().unwrap_or_default(),
+    )
+}
+
+/// `#56`/GLEP 78: a container member whose *name* is about to be trusted
+/// must itself be a regular file. Real `_verify_binpkg` never follows one
+/// either (`tarfile.extractfile` resolves a symlink/hardlink inside the
+/// archive, returns `None` for a device/FIFO), but portuale extracts with
+/// `tar -xf` and then walks the filesystem, where `Path::is_file` /
+/// `fs::read` / `fs::copy` all follow (`TEST/findings/l2.md` "## #56 S0").
+fn outer_regular_member(path: &Path, gpkg: &Path) -> Result<(), String> {
+    let file_type = fs::symlink_metadata(path)
+        .map_err(|e| format!("{}: {e}", path.display()))?
+        .file_type();
+    if file_type.is_file() {
+        Ok(())
+    } else {
+        Err(outer_entry_error(path, gpkg, "a regular file"))
+    }
+}
+
+/// `#56`: the container's prefix must be a real directory, not a symlink
+/// to one -- a symlinked prefix made the walk list a host directory (S0
+/// cell c, `/etc`).
+fn outer_prefix_dir(path: &Path, gpkg: &Path) -> Result<(), String> {
+    let file_type = fs::symlink_metadata(path)
+        .map_err(|e| format!("{}: {e}", path.display()))?
+        .file_type();
+    if file_type.is_dir() {
+        Ok(())
+    } else {
+        Err(outer_entry_error(path, gpkg, "a directory"))
+    }
+}
+
+/// The outer member names `#56` trusts by name: the `gpkg-1` version
+/// marker, the two inner tars (and any compression), their `.sig`
+/// sidecars, and `Manifest`. A non-regular entry at one of these names is
+/// an error wherever a container is walked -- not only where the member
+/// is read -- so a crafted symlink can never be skipped in favour of a
+/// later regular one.
+fn trusted_outer_member_name(name: &str) -> bool {
+    name == "gpkg-1"
+        || name == "Manifest"
+        || name.ends_with(".sig")
+        || classify_inner_member("metadata", name).is_some()
+        || classify_inner_member("image", name).is_some()
+}
+
+/// The shared outer-container walk behind `read_gpkg_metadata` and
+/// `extract_gpkg_member`: every top-level entry must be a real directory
+/// (the prefix, checked with no follow) or, for the legacy flat shape, a
+/// regular `gpkg-1`; members inside a prefix have every `#56`-trusted name
+/// checked for regular-file type. Returns `(gpkg marker seen, [(name,
+/// path)] of the prefix members)`. `verify_gpkg_manifest` walks its own
+/// topology (it also rejects more than one top-level directory) with the
+/// same two helpers.
+fn walk_outer_members(outer: &Path, gpkg: &Path) -> Result<(bool, Vec<(String, PathBuf)>), String> {
+    let mut gpkg_marker = false;
+    let mut members = Vec::new();
+    for basename_dir in read_dir_sorted(outer)? {
+        let file_type = fs::symlink_metadata(&basename_dir)
+            .map_err(|e| format!("{}: {e}", basename_dir.display()))?
+            .file_type();
+        if file_type.is_dir() {
+            for member in read_dir_sorted(&basename_dir)? {
+                let Some(name) = member
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(String::from)
+                else {
+                    continue;
+                };
+                if trusted_outer_member_name(&name) {
+                    outer_regular_member(&member, gpkg)?;
+                }
+                if name == "gpkg-1" {
+                    gpkg_marker = true;
+                }
+                members.push((name, member));
+            }
+        } else if file_type.is_file() {
+            if basename_dir.file_name().and_then(|n| n.to_str()) == Some("gpkg-1") {
+                gpkg_marker = true;
+            }
+        } else {
+            // A symlinked prefix is exactly S0 cell c: it made the walk
+            // list a host directory.
+            return Err(outer_entry_error(
+                &basename_dir,
+                gpkg,
+                "a directory or a regular file",
+            ));
+        }
+    }
+    Ok((gpkg_marker, members))
+}
+
 /// Real `portage.gpkg.gpkg.get_metadata()` / `unpack_metadata(want=None)`
 /// (`lib/portage/gpkg.py:838-870`), narrowed to the local metadata read:
 /// a `.gpkg.tar` is a plain (uncompressed) tar whose members are
@@ -117,7 +249,13 @@ impl Drop for ScratchDir {
 /// (`extract_binpkg`) runs the real `Manifest` digest check first --
 /// see [`verify_gpkg_manifest`]. Still required here: the `gpkg-1`
 /// version marker's *presence* (real `_get_inner_tarinfo`'s own
-/// `InvalidBinaryPackageFormat` guard).
+/// `InvalidBinaryPackageFormat` guard) and, since `#56`, that every
+/// trusted member name is a **regular file** (`walk_outer_members`): a
+/// symlinked marker/metadata/`Manifest` member is an error naming the
+/// member and its type, never a follow (see `TEST/findings/l2.md`
+/// "## #56 S0" -- before this, this path listed the host `/etc` through
+/// a symlinked prefix and read a host file through a symlinked
+/// `Manifest`).
 ///
 /// **Deliberate cut**: NO GPG `.sig` check on this populate path --
 /// a container that carries `.sig` members still has its cleartext
@@ -139,32 +277,25 @@ pub fn read_gpkg_metadata(gpkg_path: &Path) -> Result<HashMap<String, String>, S
     let outer = scratch.path().join("outer");
     fs::create_dir_all(&outer).map_err(|e| format!("{}: {e}", outer.display()))?;
 
-    // 1. Unpack the outer container (plain tar).
-    run_tar(&["-xf", &lossy(gpkg_path), "-C", &lossy(&outer)])?;
+    // 1. Unpack the outer container (plain tar). `--no-same-owner`: never
+    //    recreate archive ownership in the scratch dir, even as root
+    //    (`#56` N3).
+    run_tar(&[
+        "-xf",
+        &lossy(gpkg_path),
+        "-C",
+        &lossy(&outer),
+        "--no-same-owner",
+    ])?;
 
     // 2. Locate `<basename>/gpkg-1` (real validity guard) and the
-    //    `metadata.tar[.<comp>]` member.
-    let mut gpkg_marker = false;
-    let mut metadata_member: Option<(PathBuf, Option<&'static [&'static str]>)> = None;
-    for basename_dir in read_dir_sorted(&outer)? {
-        if !basename_dir.is_dir() {
-            if basename_dir.file_name().and_then(|n| n.to_str()) == Some("gpkg-1") {
-                gpkg_marker = true;
-            }
-            continue;
-        }
-        for member in read_dir_sorted(&basename_dir)? {
-            let Some(name) = member.file_name().and_then(|n| n.to_str()) else {
-                continue;
-            };
-            if name == "gpkg-1" {
-                gpkg_marker = true;
-            }
-            if let Some(comp) = classify_inner_member("metadata", name) {
-                metadata_member.get_or_insert((member.clone(), comp));
-            }
-        }
-    }
+    //    `metadata.tar[.<comp>]` member, with `#56`'s regular-file check
+    //    on every trusted name (a symlinked marker or metadata member is
+    //    an error, never followed).
+    let (gpkg_marker, members) = walk_outer_members(&outer, gpkg_path)?;
+    let metadata_member = members.iter().find_map(|(name, member)| {
+        classify_inner_member("metadata", name).map(|comp| (member.clone(), comp))
+    });
     if !gpkg_marker {
         return Err(format!(
             "{}: not a gpkg container (no `gpkg-1` version marker)",
@@ -367,6 +498,11 @@ fn be32(b: &[u8]) -> u32 {
 /// `DATA <basename> <size> BLAKE2B <hex> SHA512 <hex>` line per other
 /// member (real `_record_checksum` / `_add_manifest`, and
 /// `MANIFEST2_HASH_DEFAULTS = {BLAKE2B, SHA512}`). This checks:
+///   - `#56`/GLEP 78: the one prefix is a **real** directory and every
+///     trusted member inside it (`gpkg-1`, `Manifest`, the two inner
+///     tars, `.sig` sidecars) is a **regular file** -- `symlink_metadata`,
+///     no follow, before anything is read (real's own reader can never
+///     read through one either; see `TEST/findings/l2.md` "## #56 S0");
 ///   - a `Manifest` member exists (real `MissingSignature` otherwise);
 ///   - the GPG layer (real `request_signature` / `signature_exist` /
 ///     `verify_signature`): when the container carries any `.sig`
@@ -403,14 +539,24 @@ fn verify_gpkg_manifest(gpkg_path: &Path, gpg: &GpgVerify) -> Result<(), String>
     let scratch = ScratchDir::new("gpkg-verify")?;
     let outer = scratch.path().join("outer");
     fs::create_dir_all(&outer).map_err(|e| format!("{}: {e}", outer.display()))?;
-    run_tar(&["-xf", &lossy(gpkg_path), "-C", &lossy(&outer)])?;
+    // `--no-same-owner`: never recreate archive ownership in the scratch
+    // dir (`#56` N3).
+    run_tar(&[
+        "-xf",
+        &lossy(gpkg_path),
+        "-C",
+        &lossy(&outer),
+        "--no-same-owner",
+    ])?;
 
     // The single `<prefix>/` directory: real portage rejects a member
     // that is not exactly one level deep, or a container whose members
-    // do not share one common prefix.
+    // do not share one common prefix. `#56`: the directory must be a
+    // real one (no symlink follow -- a symlinked prefix made the walk
+    // list a host directory, S0 cell c).
     let mut prefix_dir: Option<PathBuf> = None;
     for entry in read_dir_sorted(&outer)? {
-        if entry.is_dir() {
+        if outer_prefix_dir(&entry, gpkg_path).is_ok() {
             if prefix_dir.is_some() {
                 return Err(format!(
                     "{}: gpkg container has more than one top-level directory",
@@ -419,18 +565,33 @@ fn verify_gpkg_manifest(gpkg_path: &Path, gpg: &GpgVerify) -> Result<(), String>
             }
             prefix_dir = Some(entry);
         } else {
-            return Err(format!(
-                "{}: gpkg container member {:?} is not inside a directory",
-                gpkg_path.display(),
-                entry.file_name().unwrap_or_default()
-            ));
+            return Err(outer_entry_error(&entry, gpkg_path, "inside a directory"));
         }
     }
     let prefix_dir =
         prefix_dir.ok_or_else(|| format!("{}: empty gpkg container", gpkg_path.display()))?;
 
+    // `#56`: every trusted member of the prefix must be a regular file,
+    // checked *before* the Manifest is read (a symlinked `Manifest` used
+    // to be followed onto the host, S0 cell a). This is the same walk
+    // `read_gpkg_metadata`/`extract_gpkg_member` share, with the extra
+    // single-prefix topology check above.
+    let mut member_names: Vec<String> = Vec::new();
+    for member in read_dir_sorted(&prefix_dir)? {
+        let Some(name) = member
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(String::from)
+        else {
+            continue;
+        };
+        if trusted_outer_member_name(&name) {
+            outer_regular_member(&member, gpkg_path)?;
+        }
+        member_names.push(name);
+    }
     let manifest_path = prefix_dir.join("Manifest");
-    if !manifest_path.is_file() {
+    if !member_names.iter().any(|n| n == "Manifest") {
         return Err(format!(
             "{}: Manifest not found in the gpkg container",
             gpkg_path.display()
@@ -444,10 +605,6 @@ fn verify_gpkg_manifest(gpkg_path: &Path, gpg: &GpgVerify) -> Result<(), String>
     // `:1711-1712`): "if any signature exists, we assume all files have
     // signature" -- any `.sig` sidecar member, or an inline PGP block in
     // the Manifest itself.
-    let member_names: Vec<String> = read_dir_sorted(&prefix_dir)?
-        .iter()
-        .filter_map(|m| m.file_name().and_then(|n| n.to_str()).map(String::from))
-        .collect();
     let signature_exist = member_names.iter().any(|n| n.ends_with(".sig"))
         || manifest_text.contains("-----BEGIN PGP SIGNATURE-----");
 
@@ -714,7 +871,8 @@ fn extract_xpak_image(binpkg_path: &Path, dest: &Path) -> Result<(), String> {
 
 /// Locate `<basename>/<want>.tar[.<comp>]` in a gpkg's outer tar,
 /// decompress it if needed, and extract it into `dest`. Shares the outer
-/// unpack + `gpkg-1` validity guard with `read_gpkg_metadata`.
+/// unpack, the `#56` trusted-name regular-file walk and the `gpkg-1`
+/// validity guard with `read_gpkg_metadata`.
 fn extract_gpkg_member(gpkg_path: &Path, want: &str, dest: &Path) -> Result<(), String> {
     if !gpkg_path.is_file() {
         return Err(format!("{}: not a file", gpkg_path.display()));
@@ -722,29 +880,23 @@ fn extract_gpkg_member(gpkg_path: &Path, want: &str, dest: &Path) -> Result<(), 
     let scratch = ScratchDir::new("gpkg-member")?;
     let outer = scratch.path().join("outer");
     fs::create_dir_all(&outer).map_err(|e| format!("{}: {e}", outer.display()))?;
-    run_tar(&["-xf", &lossy(gpkg_path), "-C", &lossy(&outer)])?;
+    // `--no-same-owner`: never recreate archive ownership in the scratch
+    // dir (`#56` N3).
+    run_tar(&[
+        "-xf",
+        &lossy(gpkg_path),
+        "-C",
+        &lossy(&outer),
+        "--no-same-owner",
+    ])?;
 
-    let mut gpkg_marker = false;
-    let mut member: Option<(PathBuf, Option<&'static [&'static str]>)> = None;
-    for basename_dir in read_dir_sorted(&outer)? {
-        if !basename_dir.is_dir() {
-            if basename_dir.file_name().and_then(|n| n.to_str()) == Some("gpkg-1") {
-                gpkg_marker = true;
-            }
-            continue;
-        }
-        for m in read_dir_sorted(&basename_dir)? {
-            let Some(n) = m.file_name().and_then(|n| n.to_str()) else {
-                continue;
-            };
-            if n == "gpkg-1" {
-                gpkg_marker = true;
-            }
-            if let Some(comp) = classify_inner_member(want, n) {
-                member.get_or_insert((m.clone(), comp));
-            }
-        }
-    }
+    // `#56`: same trusted-name regular-file walk as `read_gpkg_metadata`;
+    // the selected `<want>.tar*` member (and every other trusted name) is
+    // rejected if it is not a regular file.
+    let (gpkg_marker, members) = walk_outer_members(&outer, gpkg_path)?;
+    let member = members.iter().find_map(|(name, member)| {
+        classify_inner_member(want, name).map(|comp| (member.clone(), comp))
+    });
     if !gpkg_marker {
         return Err(format!(
             "{}: no `gpkg-1` version marker",
@@ -1580,6 +1732,104 @@ mod tests {
         root.join("out.gpkg.tar")
     }
 
+    /// One member of a `#56` crafted test container.
+    enum GpkgEntry<'a> {
+        File(&'a [u8]),
+        Symlink(&'a str),
+        Fifo,
+        /// `fs::hard_link` to an earlier member: real GNU `tar` records it
+        /// as `LNKTYPE`.
+        Hardlink(&'a str),
+        CharDevice {
+            major: u32,
+            minor: u32,
+        },
+    }
+
+    /// `build_gpkg`'s typed sibling: stage one filesystem object per
+    /// entry (each name is the full member path, `<prefix>/<name>` or a
+    /// crafted top-level name) and let real GNU `tar` write the headers.
+    fn build_gpkg_entries(entries: &[(&str, GpkgEntry)]) -> PathBuf {
+        let scratch = ScratchDir::new("gpkg-build-typed").unwrap();
+        // leak the scratch dir for the caller's test lifetime
+        let root = scratch.path().to_path_buf();
+        std::mem::forget(scratch);
+        let mut argv: Vec<String> = vec![
+            "-cf".into(),
+            lossy(&root.join("out.gpkg.tar")),
+            "-C".into(),
+            lossy(&root),
+        ];
+        for (name, entry) in entries {
+            let path = root.join(name);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            match entry {
+                GpkgEntry::File(bytes) => fs::write(&path, bytes).unwrap(),
+                GpkgEntry::Symlink(target) => std::os::unix::fs::symlink(target, &path).unwrap(),
+                GpkgEntry::Fifo => {
+                    let cstr = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
+                        .expect("test path has no NUL");
+                    // SAFETY: `mkfifo` takes a valid NUL-terminated path
+                    // and a mode, and returns a plain int.
+                    assert_eq!(unsafe { libc::mkfifo(cstr.as_ptr(), 0o644) }, 0);
+                }
+                GpkgEntry::Hardlink(target) => fs::hard_link(root.join(target), &path).unwrap(),
+                GpkgEntry::CharDevice { major, minor } => {
+                    let cstr = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
+                        .expect("test path has no NUL");
+                    let dev = libc::makedev(*major, *minor);
+                    // SAFETY: `mknod` takes a valid NUL-terminated path, a
+                    // mode/type and a device number, and returns a plain
+                    // int. Root-only, like cell e itself.
+                    assert_eq!(
+                        unsafe { libc::mknod(cstr.as_ptr(), libc::S_IFCHR | 0o666, dev) },
+                        0
+                    );
+                }
+            }
+            argv.push(name.to_string());
+        }
+        let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+        run_tar(&refs).unwrap();
+        root.join("out.gpkg.tar")
+    }
+
+    /// `#56` S1: every one of the three outer-container sites must reject
+    /// `g`, and every error must contain each of `needles` (the member
+    /// name and, for the type checks, its type).
+    fn assert_rejects_everywhere(g: &Path, needles: &[&str]) {
+        let check = |site: &str, err: String| {
+            for needle in needles {
+                assert!(
+                    err.contains(needle),
+                    "{site}: error {err:?} does not name {needle:?}"
+                );
+            }
+        };
+        check("read_gpkg_metadata", read_gpkg_metadata(g).unwrap_err());
+        check(
+            "verify_gpkg_manifest",
+            verify_gpkg_manifest(g, &GpgVerify::default()).unwrap_err(),
+        );
+        let dest = std::env::temp_dir().join(format!(
+            "portuale-56-reject-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = fs::remove_dir_all(&dest);
+        fs::create_dir_all(&dest).unwrap();
+        check(
+            "extract_gpkg_member",
+            extract_gpkg_member(g, "metadata", &dest).unwrap_err(),
+        );
+        let _ = fs::remove_dir_all(&dest);
+    }
+
     fn blake2b_hex(bytes: &[u8]) -> String {
         use blake2::Digest as _;
         blake2::Blake2b512::digest(bytes)
@@ -1677,6 +1927,131 @@ mod tests {
         let g = build_gpkg("foo-1.0", &[("gpkg-1", b"")], Some(&manifest));
         let err = verify_gpkg_manifest(&g, &GpgVerify::default()).unwrap_err();
         assert!(err.contains("not present in the container"), "{err}");
+    }
+
+    /// `#56` S0 cell a: a symlinked `Manifest` was followed onto the host
+    /// (`fs::read` read `/etc/hostname`); all three sites now reject it by
+    /// type, before any read.
+    #[test]
+    fn regular_outer_member_check_rejects_a_symlinked_manifest() {
+        let g = build_gpkg_entries(&[
+            ("pkg-1.0/gpkg-1", GpkgEntry::File(b"")),
+            ("pkg-1.0/metadata.tar.zst", GpkgEntry::File(b"meta")),
+            ("pkg-1.0/Manifest", GpkgEntry::Symlink("/etc/hostname")),
+        ]);
+        assert_rejects_everywhere(&g, &["Manifest", "a symbolic link"]);
+    }
+
+    /// `#56` S0 cell b: a symlinked `metadata.tar.zst` was followed by the
+    /// decompressor; all three sites now reject it by type.
+    #[test]
+    fn regular_outer_member_check_rejects_a_symlinked_metadata_member() {
+        let g = build_gpkg_entries(&[
+            ("pkg-1.0/gpkg-1", GpkgEntry::File(b"")),
+            (
+                "pkg-1.0/metadata.tar.zst",
+                GpkgEntry::Symlink("/etc/hostname"),
+            ),
+            (
+                "pkg-1.0/Manifest",
+                GpkgEntry::File(b"DATA gpkg-1 0 BLAKE2B x SHA512 y\n"),
+            ),
+        ]);
+        assert_rejects_everywhere(&g, &["metadata.tar.zst", "a symbolic link"]);
+    }
+
+    /// `#56` S0 cell c: a symlinked prefix made the walk list a host
+    /// directory (`/etc`, 266 dirents); all three sites now reject it
+    /// before walking anything.
+    #[test]
+    fn regular_outer_member_check_rejects_a_symlinked_prefix_directory() {
+        let g = build_gpkg_entries(&[
+            ("pkg-1.0", GpkgEntry::Symlink("/etc")),
+            ("pkg-1.0-members/gpkg-1", GpkgEntry::File(b"")),
+            ("pkg-1.0-members/metadata.tar.zst", GpkgEntry::File(b"meta")),
+        ]);
+        assert_rejects_everywhere(&g, &["pkg-1.0", "a symbolic link"]);
+    }
+
+    /// `#56` S0 cell d: a FIFO at `metadata.tar.zst` blocked the
+    /// decompressor forever (which is why the check runs before any
+    /// read); all three sites now reject it by type, so the test must
+    /// return rather than hang.
+    #[test]
+    fn regular_outer_member_check_rejects_a_fifo_metadata_member() {
+        let g = build_gpkg_entries(&[
+            ("pkg-1.0/gpkg-1", GpkgEntry::File(b"")),
+            ("pkg-1.0/metadata.tar.zst", GpkgEntry::Fifo),
+            (
+                "pkg-1.0/Manifest",
+                GpkgEntry::File(b"DATA gpkg-1 0 BLAKE2B x SHA512 y\n"),
+            ),
+        ]);
+        assert_rejects_everywhere(&g, &["metadata.tar.zst", "a FIFO"]);
+    }
+
+    /// `#56` S0 cell f: a hardlink to another member extracts as a
+    /// *regular* file (the walk cannot see the header type), so the
+    /// type check passes and the pre-existing reading paths reject it --
+    /// the decompressor on the 0-byte link and the Manifest size check.
+    /// No host bytes are read (S0's own verdict).
+    #[test]
+    fn regular_outer_member_check_still_rejects_a_hardlinked_metadata_member() {
+        let manifest = format!(
+            "{}DATA metadata.tar.zst 471 BLAKE2B x SHA512 y\n",
+            data_line("gpkg-1", b"")
+        );
+        let g = build_gpkg_entries(&[
+            ("pkg-1.0/gpkg-1", GpkgEntry::File(b"")),
+            (
+                "pkg-1.0/metadata.tar.zst",
+                GpkgEntry::Hardlink("pkg-1.0/gpkg-1"),
+            ),
+            ("pkg-1.0/Manifest", GpkgEntry::File(manifest.as_bytes())),
+        ]);
+        assert_rejects_everywhere(&g, &["metadata.tar.zst"]);
+    }
+
+    /// `#56` S0 cell h: a symlinked `gpkg-1` marker was trusted by name
+    /// and, on the merge path, read `Manifest` through the link.
+    #[test]
+    fn regular_outer_member_check_rejects_a_symlinked_gpkg_marker() {
+        let g = build_gpkg_entries(&[
+            ("pkg-1.0/gpkg-1", GpkgEntry::Symlink("Manifest")),
+            ("pkg-1.0/metadata.tar.zst", GpkgEntry::File(b"meta")),
+            (
+                "pkg-1.0/Manifest",
+                GpkgEntry::File(b"DATA gpkg-1 0 BLAKE2B x SHA512 y\n"),
+            ),
+        ]);
+        assert_rejects_everywhere(&g, &["gpkg-1", "a symbolic link"]);
+    }
+
+    /// `#56` S0 cell e (root only, like the device itself): a character
+    /// device at `image.tar.zst` made the merge path read `/dev/zero`
+    /// unboundedly. All three sites reject it by type before any read.
+    #[test]
+    fn regular_outer_member_check_rejects_a_char_device_image_member_when_root() {
+        // SAFETY: `geteuid` takes no arguments and returns a plain int.
+        if unsafe { libc::geteuid() } != 0 {
+            eprintln!(
+                "skipping regular_outer_member_check_rejects_a_char_device_image_member_when_root: not root"
+            );
+            return;
+        }
+        let g = build_gpkg_entries(&[
+            ("pkg-1.0/gpkg-1", GpkgEntry::File(b"")),
+            ("pkg-1.0/metadata.tar.zst", GpkgEntry::File(b"meta")),
+            (
+                "pkg-1.0/image.tar.zst",
+                GpkgEntry::CharDevice { major: 1, minor: 5 },
+            ),
+            (
+                "pkg-1.0/Manifest",
+                GpkgEntry::File(b"DATA gpkg-1 0 BLAKE2B x SHA512 y\n"),
+            ),
+        ]);
+        assert_rejects_everywhere(&g, &["image.tar.zst", "a character device"]);
     }
 
     #[test]
