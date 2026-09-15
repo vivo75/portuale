@@ -64,6 +64,17 @@ if [ -n "${FX_WORLD_EXTRA:-}" ]; then
   done
 fi
 
+# FX_DROP_VDB: remove one or more `var/db/pkg/<cat>/<pf>` entries from
+# the staged vdb before either PM runs (#57 S0) -- a merge-vs-merge
+# control for a shape whose checked-in fixture has the package
+# installed (e.g. `dev-libs/paired-1.0`), without touching the shared
+# fixture tree itself.
+if [ -n "${FX_DROP_VDB:-}" ]; then
+  for cpf in $FX_DROP_VDB; do
+    rm -rf "${FX:?}/var/db/pkg/$cpf"
+  done
+fi
+
 # 3. categories real will accept. Written to /etc/portage/categories
 #    *and* to each staged repo's own profiles/categories: a BDEPEND
 #    resolved against the running root uses a `local_config=False`

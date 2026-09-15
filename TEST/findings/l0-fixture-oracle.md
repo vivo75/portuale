@@ -230,6 +230,87 @@ the live tree's `@world` essentially never leaves anyone in.
 Commit: allowlist fixes + this section + S1's surfaced-regression
 writeup above (no further code change).
 
+## #57 S0 — oracle matrix: backtrack trace + argv order + solvable control
+
+`docs/06.057-directly_requested_hard_atom_conflict.opus.md` §S0. Same
+fixture as #54 (`dev-libs/{needer,othermod,paired}`, `paired-1.0`
+installed), plus a new throwaway solvable-control fixture
+`dev-libs/plainuser-1.0` (`RDEPEND="dev-libs/paired"`, bare/unversioned)
+and a new `stage.sh` knob `FX_DROP_VDB` (space-separated `cat/pf`
+entries removed from the staged vdb before either PM runs — the
+merge-vs-merge control needs `paired-1.0` *not* installed without
+touching the shared fixture).
+
+Real: `emerge -p --pretend` (cell a also `--debug`) inside
+`localhost/test-portuale:latest`, staged via `in-container.sh` directly
+(oracle-only exploration, not the atomlist-comparator wrapper), two run
+dirs (cells a/b/c/e/f share the default staging; cell d uses
+`FX_DROP_VDB=dev-libs/paired-1.0`).
+
+| # | args | real | portuale |
+|---|---|---|---|
+| a | `needer othermod --debug` | block (installed 1.0 pulled by othermod, merge 2.0 pulled by needer), rc 1, `backtrack: 4/20` | no block, rc 0 |
+| b | `othermod needer` | same block, rc 1 | no block, rc 0 |
+| c | `needer othermod --backtrack=0` | **byte-identical block** to cell a (`backtrack: 0/0`) | no block, rc 0 |
+| d | `needer othermod`, `paired-1.0` dropped from vdb (`FX_DROP_VDB`) | block (**both** sides `ebuild scheduled for merge`), rc 1 | **same block already renders** (existing `resolved_slots` path), rc 0 |
+| e | `plainuser needer` / `needer plainuser` | `U 2.0` + both new, silent, rc 0 (both orders) | identical, silent, rc 0 (both orders) |
+| f | `othermod` / `needer` alone | matches #54 S0 hermetic baselines | identical |
+
+Run dirs: `TEST/logs/l0-fx-057-main-20260915T195546Z` (a/b/c/e/f),
+`TEST/logs/l0-fx-057-notinstalled-20260915T195546Z` (d).
+
+**§2 open question, answered by cell a's `--debug` trace and confirmed
+by cell c:** real's final reported state is exactly "the tracker holds
+installed 1.0 plus merge 2.0, unsolvable, choices exhausted" — **none**
+of the 4 backtrack tries change what gets reported. Trace detail:
+`runtime_pkg_mask` grows across tries 1-4 (try 1 masks *both* the
+`paired-1.0` ebuild and its installed instance for the slot conflict
+against needer; try 2 masks the `paired-2.0` ebuild, which then makes
+othermod's own `<2.0` dep unsatisfiable — "All ebuilds that could
+satisfy othermod have been masked"; try 3 and 4 keep widening the same
+way, ending with needer itself unsatisfiable), and after
+"backtracking aborted after 4 tries" `get_best_run` falls back to the
+**original, first-discovered** conflict shape — byte-identical to the
+`--backtrack=0` output (cell c). There is no masked-`paired-1.0`
+fallback shape in the final render; the "installed instance in the
+block" is simply the untouched initial state, not a side effect of a
+backtrack step. **Verdict: "tracker collision + slot-conflict
+backtracking exhausted" — proceed to S1 as specced (no K4 trigger).**
+
+**Portuale's own `--debug` trace (cell a)** confirms §2's outcome-model
+diagnosis directly: the digraph shows `needer -> (paired-2.0, ebuild
+scheduled for merge)` (an `Upgrade` outcome, indexed in
+`resolved_slots`) and `othermod -> (paired-1.0, installed)` (an
+`AlreadyInstalled` outcome, invisible to slot tracking) — two different
+outcomes for the same slot, confirmed by the earlier static reading of
+`lib.rs`, not merely inferred. It also reproduces the exact `Parent Dep`
+misfiling §2 flagged: **both** `dev-libs/paired required by (needer)`
+and `... required by (othermod)` print under the single `paired-2.0`
+child, even though the digraph correctly routes othermod's edge to
+`paired-1.0` — the trace's per-child parent listing reads a different,
+coarser map than `build_slot_conflict` will need. S1 step 1's
+`state.slot_pullers` change is expected to fix this as a side effect
+(verify, per the doc's "check, don't assume").
+
+**Cell d confirms the K2 scope note ("mirrors `_process_slot_conflicts`
+... nothing broader") from the opposite direction**: with `paired-1.0`
+not installed, both instances are ordinary merge candidates and
+portuale's *existing* `resolved_slots` slot check already renders the
+same block real does (module path-string formatting the comparator
+already normalizes) — confirming the gap S1 needs to close is
+installed-instance-specific, not a defect in the slot-conflict
+mechanism itself.
+
+**Cell e confirms the K2 regression guard**: a bare, unversioned
+`dev-libs/paired` dependency (satisfied by whichever instance is
+already graphed) merges silently in both argv orders, both PMs,
+byte-identical merge-list order — the solvable shape S1 step 3 must
+keep silent stays silent today, giving S1 a concrete before/after
+control.
+
+Commit: `stage.sh` `FX_DROP_VDB` knob + `plainuser` fixture (ebuild +
+md5-cache entry) + this section (no resolver code change).
+
 ## What a fixture addition must not break
 
 A new fixture that real will read needs: a digest for **every** ebuild in
