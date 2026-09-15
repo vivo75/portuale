@@ -2627,7 +2627,11 @@ def test_emerge_regen_finds_an_inherited_eclass_across_the_masters_chain(
     eclass_md5 = hashlib.md5(eclass_text.encode()).hexdigest()
     lines = entry.read_text().splitlines()
     assert f"_eclasses_=regenclass\t{eclass_md5}" in lines
-    assert "INHERITED=regenclass" in lines
+    # Real `EbuildMetadataPhase._async_start` pops the phase-env
+    # `INHERITED` before the cache write and records `INHERIT` +
+    # `_eclasses_` instead; the writer must not emit `INHERITED`.
+    assert "INHERIT=regenclass" in lines
+    assert "INHERITED=regenclass" not in lines
 
 
 def test_emerge_regen_jobs_parallel_matches_serial_cache_bytes(emerge_binary, tmp_path):

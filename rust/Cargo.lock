@@ -1561,6 +1561,7 @@ name = "portage-repo"
 version = "0.1.0"
 dependencies = [
  "bzip2",
+ "md-5",
  "portage-atom-pubgrub",
  "portage-atom-resolvo",
  "portage-dep",

@@ -54,6 +54,7 @@
 // what lets tests point at a fixture tree without needing anything
 // portuale-specific.
 
+pub mod md5_dict;
 mod merge_order;
 mod resolver_trace;
 mod solver_bridge;

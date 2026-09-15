@@ -4,6 +4,11 @@ version = "0.1.0"
 edition.workspace = true
 
 [dependencies]
+# The `md5-dict` aux-cache validator (`md5_dict.rs`): real's `_md5_` is
+# the md5 of the ebuild/eclass bytes (`cache/template.py::validate_entry`),
+# so the reader validates cache entries the way `_pull_valid_cache` does.
+# Same RustCrypto family and waiver as `portuale`/`portage-fetch`.
+md-5 = "0.10"
 portage-util = { path = "../portage-util" }
 portage-versions = { path = "../portage-versions" }
 portage-dep = { path = "../portage-dep" }

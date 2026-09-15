@@ -3091,9 +3091,10 @@ pub(crate) fn run_depend_phase(
 /// `cache/flat_hash.py:20-22`). When that write cannot happen -- an
 /// unwritable depcachedir, real's `secpass < 1` read-only branch -- the
 /// result still lives for the process in `repo_aux_metadata`'s own memo
-/// (C2). The write is best-effort; the read/validate/render/write
-/// helpers live in `regen.rs` because `--regen` writes the identical
-/// `flat_hash` format into the repo's `metadata/md5-cache`.
+/// (C2). The write is best-effort; render/write live in `regen.rs`
+/// because `--regen` writes the identical `flat_hash` format into the
+/// repo's `metadata/md5-cache`, and the shared validator lives in
+/// `portage_repo::md5_dict` (#46 S2).
 ///
 /// Layering: this lives in `portuale` (the binary that owns real phase
 /// execution) and is registered once from `main`; `portage-repo` only
@@ -3119,15 +3120,18 @@ pub(crate) fn depend_phase_metadata(
     }
     let config_root = portage_repo::config_root_from_env();
     let root = portage_repo::root_from_env();
-    let masters = repo_masters(repo_location, &config_root);
+    let masters = portage_repo::md5_dict::repo_masters_for_location(repo_location);
 
     // Real `_pull_valid_cache`: the depcachedir auxdb is consulted after
     // the repo's pregen `metadata/md5-cache` (C1's `read_md5_cache`) and
     // before `EbuildMetadataPhase` runs. Same validator as the repo
-    // cache (real `template.validate_entry` for `md5_database`).
+    // cache (real `template.validate_entry`), but the writable
+    // depcachedir is `mtime_md5_database`: its `_eclasses_` carries the
+    // eclass dir (`name\tpath\tmd5`, `store_eclass_paths = True`, S0
+    // cell (a)).
     let depcache = depcache_entry_path(repo_location, category, pf);
     if let Ok(text) = std::fs::read_to_string(&depcache)
-        && crate::regen::entry_is_valid(&text, &ebuild, repo_location, &masters)
+        && portage_repo::md5_dict::entry_is_valid(&text, &ebuild, repo_location, &masters, true)
     {
         return Ok(parse_aux_entry(&text));
     }
@@ -3140,7 +3144,7 @@ pub(crate) fn depend_phase_metadata(
     // `cache[cpv] = metadata` -- the md5-dict/`flat_hash` writer.
     // Best-effort: a read-only depcachedir keeps the result in memory
     // (C2's memo) exactly like real's volatile `_ro_auxdb` branch.
-    if let Ok(body) = crate::regen::render_entry(&md, &ebuild, repo_location, &masters)
+    if let Ok(body) = crate::regen::render_entry(&md, &ebuild, repo_location, &masters, true)
         && let Some(dir) = depcache.parent()
     {
         let _ = crate::regen::write_entry(dir, pf, &body);
@@ -3191,23 +3195,6 @@ fn depcachedir() -> std::path::PathBuf {
         .filter(|v| !v.is_empty())
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("/var/cache/edb/dep"))
-}
-
-/// The `masters`-then-self chain the depcache validator needs for
-/// `_eclasses_` (`regen::entry_is_valid`). A repo the resolved config
-/// does not describe (or an unreadable config) yields an empty chain:
-/// `_eclasses_` then fails validation, so the depend phase re-runs --
-/// the safe direction.
-fn repo_masters(repo_location: &Path, config_root: &Path) -> Vec<std::path::PathBuf> {
-    portage_repo::find_repos(config_root)
-        .ok()
-        .and_then(|repos| {
-            repos
-                .into_iter()
-                .find(|r| r.location == repo_location)
-                .map(|r| r.masters)
-        })
-        .unwrap_or_default()
 }
 
 /// Real `bin/misc-functions.sh`'s own invocation shape -- unlike
