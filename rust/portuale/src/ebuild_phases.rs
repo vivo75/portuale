@@ -1261,6 +1261,23 @@ fn write_post_install_metadata(
     root: &Path,
     build_env: &[(String, String)],
 ) -> Result<(), String> {
+    let build_info = env.build_info();
+
+    // Real `_post_src_install_write_metadata` (`doebuild.py:2727-2732`)
+    // writes `int(time.time())` into `build-info/BUILD_TIME` before any
+    // metadata key, unconditionally (backlog #47). The vdb entry copies
+    // it (`write_vdb_entry_from_dir`) and `_consolidate_to_metadata_file`
+    // folds it into the consolidated `metadata` body -- real's own
+    // reader (`versions.py:413`) and binpkg multi-instance logic compare
+    // against it, and omitting it made every portuale vdb entry differ
+    // from real's by the `BUILD_TIME` file *and* the `metadata` field.
+    let build_time = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| format!("system clock before epoch: {e}"))?
+        .as_secs();
+    std::fs::write(build_info.join("BUILD_TIME"), format!("{build_time}\n"))
+        .map_err(|e| format!("{}: {e}", build_info.join("BUILD_TIME").display()))?;
+
     let use_flags = build_phase_use(build_env);
     let iuse_effective = build_env
         .iter()
@@ -1274,7 +1291,6 @@ fn write_post_install_metadata(
     else {
         return Ok(());
     };
-    let build_info = env.build_info();
 
     // real `_vdb_use_conditional_keys` = `Package._dep_keys` + LICENSE /
     // PROPERTIES / RESTRICT.
@@ -4589,6 +4605,47 @@ mod tests {
         let contents = std::fs::read_to_string(&installed)
             .unwrap_or_else(|e| panic!("{} should have been installed: {e}", installed.display()));
         assert_eq!(contents, "hello from phasepkg\n");
+
+        let _ = std::fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    /// Backlog #47: real `_post_src_install_write_metadata`
+    /// (`doebuild.py:2727-2732`) writes `build-info/BUILD_TIME` (epoch
+    /// seconds) before any metadata key, and the vdb copy +
+    /// `_consolidate_to_metadata_file` carry it. The install chain must
+    /// leave that file behind for the merge to copy.
+    #[test]
+    fn install_writes_the_real_build_time_file() {
+        let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/repo/dev-libs/phasepkg/phasepkg-1.0.ebuild");
+        let portage_tmpdir = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-{}",
+            std::process::id(),
+            "install_writes_the_real_build_time_file"
+        ));
+        let _ = std::fs::remove_dir_all(&portage_tmpdir);
+
+        let status = run_commands(
+            &ebuild_path,
+            &["install"],
+            Path::new("/"),
+            &portage_tmpdir,
+            &portage_tmpdir.join("distfiles"),
+            false,
+            Path::new("/dev/null/no-config-root"),
+            ShellBackend::Brush,
+            &[],
+        )
+        .expect("run_commands should not itself error");
+        assert_eq!(status, 0, "install should exit successfully");
+
+        let build_time = portage_tmpdir.join("portage/dev-libs/phasepkg-1.0/build-info/BUILD_TIME");
+        let text = std::fs::read_to_string(&build_time)
+            .unwrap_or_else(|e| panic!("{} should exist: {e}", build_time.display()));
+        assert!(
+            text.trim().parse::<u64>().is_ok(),
+            "BUILD_TIME must be an epoch-seconds integer: {text:?}"
+        );
 
         let _ = std::fs::remove_dir_all(&portage_tmpdir);
     }

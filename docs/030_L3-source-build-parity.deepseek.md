@@ -1,7 +1,8 @@
 # L3 — source-build parity — agent plan (deepseek draft)
 
-Status: **in progress — S0–S2 landed 2026-09-14; S3 verification-mode;
-S4 partial (stop rule invoked).** The harness is shipped
+Status: **S0–S2 landed 2026-09-14; S3 verification-mode;
+S4 stop rule lifted 2026-09-15 (P3, wave 4 of the Tier5/2 slicing).**
+The harness is shipped
 (`TEST/run/l3-source-parity.sh` + `TEST/layers/l3/build-and-merge.sh` +
 `l3-{smoke,core,system}.txt`) and the portage-vs-portage control pair is
 **0 unexplained on `l3-smoke`** (full-tree, no per-path rule needed).
@@ -702,13 +703,14 @@ from S3 on wants a frontier model, and S0 must be frontier by design.
 - [x] `TEST/run/l3-source-parity.sh TEST/atomlists/l3-smoke.txt` runs
       end-to-end; report + metrics emitted; `L3_PM` one-side mode works.
 - [x] portage-vs-portage control is 0 unexplained on smoke.
-- [ ] `l3-core` is 0 unexplained hard findings. *(not started: S4 stop
-      rule — two filed systemic classes: backlog #44
-      (`l3-merge-owner-1-1`) and #45 (`l3-merge-vdb-env-accumulates`))*
+- [ ] `l3-core` is 0 unexplained hard findings. *(unblocked
+      2026-09-15 by P3: the `l3-smoke` candidate+control pair is 0
+      unexplained -- #44/#45 fixed, #47's `BUILD_TIME` gap closed;
+      `l3-core` itself is the separate, long, user-triggered run)*
 - [ ] `@system` has been run on both PMs; every hard finding is
       fixed or filed with a repro, an `owner:` and (if adjudicated) a
       `layer: l3` entry; metrics + eclass ledger written. *(not
-      started, same stop rule)*
+      started; the S4 stop rule is lifted as of 2026-09-15)*
 - [x] No structural finding is allowlisted (none added); the `l2-*`
       entries were deleted as their gaps closed.
 - [x] Full verification pass (AGENTS step 8) still green: `cargo fmt

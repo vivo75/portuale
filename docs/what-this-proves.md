@@ -16675,3 +16675,15 @@ python3 scripts/primitive_tree_differential.py --repo /var/db/repos/gentoo
 scripts/portage_repin_review.py portage-3.0.81.3 portage-3.0.82.2 | grep -c '^- \[ \]'
 # -> 693
 ```
+
+**The L3 smoke is clean on both pairs, and the last 12 VDB rows were a missing `BUILD_TIME` (backlog #47, slice P3, 2026-09-15).** P2b had left the L3 smoke candidate at 12 hard findings, all the per-package `BUILD_TIME` file and the `BUILD_TIME` field inside the consolidated `metadata` file: real `_post_src_install_write_metadata` writes `int(time.time())` into `build-info/BUILD_TIME` *before* any other metadata key (`doebuild.py:2727-2732`), the vdb copy takes it (`vartree.py:4911-4913`) and `_consolidate_to_metadata_file` folds it into the `metadata` body -- portuale's `write_post_install_metadata` had every other half of that function but not this line, so every source-merged vdb entry looked older than real's. Fixed at the top of `write_post_install_metadata` (before its repo-metadata early returns, because real's write is unconditional), pinned by `install_writes_the_real_build_time_file`. P3 re-runs the full candidate**+control** smoke pair:
+
+```sh
+L3_CONTROL=1 TEST/run/l3-source-parity.sh TEST/atomlists/l3-smoke.txt
+# -> TEST/logs/l3-20260914T234404Z/l3-report.txt
+#    candidate (portage vs portuale): hard findings 0, UNEXPLAINED 0
+#    control   (portage vs portage): UNEXPLAINED 0
+#    rc=0
+```
+
+Both pairs are 0 unexplained with no `layer: l3` allowlist entries at all, so the S4 stop rule (>3 systemic producer classes) is lifted and `l3-core` (344 ebuilds) is unblocked for a user-triggered run. Detail: `TEST/findings/l3.md` "P3", `docs/030_L3-source-build-parity.deepseek.md`.
