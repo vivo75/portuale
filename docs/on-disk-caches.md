@@ -70,14 +70,24 @@ alternative; `cache/volatile.py` is memory-only.
 - **Read:** every `portdb.aux_get()` tries `_pregen_auxdb`
   (repo-shipped) → `_ro_auxdb` → writable `auxdb`; first
   `validate_entry()` hit wins, corrupt writable entries are deleted
-  (`porttree.py:603-658`). Unprivileged or non-writable-depcachedir
-  users get `volatile.database` + a read-only disk mirror
-  (`porttree.py:299-313`).
+  (`porttree.py:603-658`). The pregen rung itself is selected by the
+  repo's resolved `cache-formats` — first **known** format, auto-detected
+  `md5-dict` then `pms` when the key is empty — and is removed entirely
+  by `FEATURES=metadata-transfer` (`porttree.py:322`); portuale mirrors
+  that gate but reads the `md5-dict` rung only, so a `pms`-first repo
+  falls through to the same depcachedir/depend rungs (#55). Unprivileged
+  or non-writable-depcachedir users get `volatile.database` + a read-only
+  disk mirror (`porttree.py:299-313`).
 - **Modified in place:** never — single-file replace only.
 
-The pregen side lives in the repo itself (`metadata/md5-cache`,
-`repository/config.py:590-605`): read-only for normal runs, produced
-by `egencache`, never patched by the client.
+The pregen side lives in the repo itself (`metadata/md5-cache` for
+`md5-dict`, `metadata/cache` for the deprecated `pms`,
+`repository/config.py:590-605`): read-only for normal runs, produced by
+`egencache`, never patched by the client. `egencache --update` writes
+every known resolved format (`bin/egencache:350-362`, an empty list
+defaulting to `md5-dict`); portuale's `--regen` writes only the
+`md5-dict` half and skips a `pms`-only repo with a message + exit 1
+rather than writing a directory real would leave alone (#55 L3).
 
 ## 3. `/var/cache/edb/{mtimedb,counter}` (`_legacy_globals.py:20-27`)
 

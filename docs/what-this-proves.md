@@ -16783,3 +16783,18 @@ TEST/run/l0-fixture-oracle.sh
 TEST/run/l1-merge-from-binpkg.sh TEST/atomlists/l1-porttest.txt
 # -> TEST/logs/l1-20260915T161521Z: hard findings 0, UNEXPLAINED 0, rc 0
 ```
+
+**A repo's `layout.conf` `cache-formats` now decides whether portuale trusts its `metadata/md5-cache`, and `--regen` refuses to write the wrong directory (backlog #55, 2026-09-15).** Real `parse_layout` resolves `cache-formats` (lowercased + split; empty -> auto-detect `md5-dict` then `pms` from directory presence), `iter_pregenerated_caches` yields one database per **known** format and `get_pregenerated_cache` keeps only the first; `porttree.py:322` removes the pregen rung entirely under `FEATURES=metadata-transfer`. Portuale used to just probe for the directory. Now `RepoConfig::cache_formats` carries the resolved list, `pregen_md5_cache_enabled` is "first known format is `md5-dict`", and that predicate (plus no `metadata-transfer`, resolved through the same config stack the CLI layers use) gates `repo_aux_metadata` — a disabled repo skips the md5-cache rung and goes straight to the C2/C3 depcachedir/depend provider — `mrg-director`'s category lister (a disabled md5-cache lists `*.ebuild`) and `--regen`'s writer. The oracle got the two non-obvious cells right: `cache-formats = pms md5-dict` does **not** fall back to an existing md5-cache (the `pms` rung is first, misses, falls through), and a valid entry whose `KEYWORDS` masks the package is ignored under `pms` but masks it under `md5-dict pms`. `--regen` follows egencache's targets: `pms` alone writes `metadata/cache` and never touches `metadata/md5-cache`, so portuale skips such a repo with a message + exit 1 rather than write the wrong dir (no `pms` writer — the one narrowing: the depcache/depend rungs supply the same metadata real would read from a valid `pms` cache, slower not different). An empty format list keeps egencache's `force=True` `("md5-dict",)` default on the writer, while the reader (`force=False`) treats it as no pregen. L0 after the change is byte-identical to the pre-change baseline (clean 100 / parity 0.833, `TEST/logs/l0-20260915T180851Z`).
+
+```sh
+python3 -m pytest tests/test_portuale.py -q -k "pms_first_cache_formats or metadata_transfer_features or regen_skips"
+# -> 4 passed  (cells c/e ignoring the valid masking entry, cell g, the L3 skip)
+cargo test --release -p portage-repo -- pregen_md5_cache
+# -> 1 passed  (S0 cells a-f: first known format, auto-detect, unknown-only)
+cargo test --release -p portage-repo -- metadata_transfer
+# -> 1 passed  (cell g: `metadata-transfer` read from the resolved FEATURES)
+cargo test --release -p portage-repo -- regen_writes_md5_cache
+# -> 1 passed  (S0 cell h: the --regen writer's md5-dict targets)
+```
+
+The oracle run dir is `TEST/logs/c55-20260915T172758Z/` (git-ignored script + captures); the cells table and the writer cells h1-h3 are in `TEST/findings/l2.md` "## #55 S0".
