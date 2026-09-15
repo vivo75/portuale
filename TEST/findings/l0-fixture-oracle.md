@@ -162,6 +162,67 @@ correction, if S1 adds it.
 
 Commit: bed switch + throwaway fixture + this section (no code change).
 
+## #54 S1 — surfaced regression: the triangle's block disappears entirely
+
+S1 (`b27bdb4`) gated `reverse_dependency_constraints`'s consumer scan on
+`ResolveCtx::slot_op_reachable`, as S0 confirmed. Fixed 3 of the 4 cases
+byte-identical to real hermetically (`--update paired`, `needer`,
+`=paired-2.0` all merge cleanly, no block) and reproduced 511e659's exact
+keeper-reachable shapes on a copied configroot (K2).
+
+**New finding, not anticipated by the S1 plan:** the needer+othermod
+triangle's residual-conflict block, which S1 §3 expected to "list only
+othermod" once gated, instead **disappears entirely** — portuale merges
+all three packages silently, no block, exit 0. Root cause: the block
+(`build_residual_slot_conflicts`) is driven exclusively by
+`reverse_dependency_constraints`'s *dropped* pins; with keeper correctly
+excluded (unreachable), `dropped` is empty and the function never fires.
+Real's mechanism for this specific case is different: needer's `>=2.0`
+and othermod's `<2.0` are both **directly-requested** hard atoms (no
+installed vdb consumer at all), so real's ordinary two-hard-atom
+slot-conflict detection reports it independent of `_complete_graph`.
+Portuale has no equivalent path — the vdb reverse scan is the *only*
+producer of this block shape, and it doesn't fire when both conflicting
+atoms come from the requested-atom tree itself.
+
+Surfaced via `AskUserQuestion` mid-S1 (the fix as specced was already a
+clean win for 3/4 cases; building the missing mechanism inline risked
+guessing at a central resolver path). **Decision: ship S1 as specced,
+file the gap separately as backlog #57.** Contract coverage:
+`test_needer_othermod_triangle_merges_cleanly_when_the_pin_is_unreachable`
+documents the new (narrower) divergence with a docstring explaining why.
+
+## #54 S2 — fixture oracle + L0 verification
+
+Fixture oracle (`TEST/run/l0-fixture-oracle.sh`, run
+`l0-fx-20260915T173233Z`): **0 unexplained**, 14 probes / 10 clean /
+parity 0.714 / 17 explained. The two stale `portuale-bug` #54 entries
+were deleted (S1); `triangle-residual-conflict-exit`'s reason text was
+updated to describe the new gap, and two new entries
+(`triangle-residual-conflict-missing-block-header`/`-second-line`)
+explain the triangle's now-missing block lines, both referencing backlog
+#57 (filed in S3).
+
+Full L0 (`TEST/run/l0-resolver.sh`, run `l0-20260915T173332Z`, same
+120-probe atomlist as the last recorded snapshot): **100/120 clean,
+parity 0.833** (up from the prior 96/120 = 0.800 — a net improvement,
+not a regression: the delta is other work landed since that snapshot,
+not #54). 0 portuale invariant violations, 0 control violations. None of
+the 32 unexplained findings mention `paired`/`needer`/`othermod`/
+`keeper`/`revdeptarget`/`revdepconsumer`/`residual`/`libdisplay-info` —
+every one is a pre-existing, already-triaged cluster (merge-order #,
+`gcr[gtk]`/`xwayland[libei]` masked-during-backtracking, `plasma-meta`
+truncation). `media-libs/libdisplay-info` does not appear at all,
+confirming the reverse-dep-atoms fix (memory
+`complete-graph-reverse-dep-atoms`) stays intact — real's `@world`
+reaches almost every installed package on the live tree, so the
+reachability gate has (as predicted) no visible effect there; the gap it
+closes is specific to a consumer *outside* every reachable set, which
+the live tree's `@world` essentially never leaves anyone in.
+
+Commit: allowlist fixes + this section + S1's surfaced-regression
+writeup above (no further code change).
+
 ## What a fixture addition must not break
 
 A new fixture that real will read needs: valid bash in its ebuild

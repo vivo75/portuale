@@ -71,13 +71,18 @@
   slugs: ["dev-libs_needer_dev-libs_othermod"]
   match: "real rc=1 portuale rc=0"
   reason: >
-    In the one shape where real also reports the residual conflict
-    (needer+othermod: the competing `<paired-2.0` keeps installed 1.0 in
-    the graph), real exits 1 while portuale reports it informationally at
-    exit 0 -- the standing convention of the Tier 2.25 port. The merge
-    lists themselves are identical; the block content is under #54 (real
-    names only othermod as the installed instance's parent, portuale also
-    lists keeper).
+    #54 S1 gated the installed-consumer reverse scan on required-set
+    reachability, so keeper's pin (outside every reachable set here) no
+    longer applies -- but portuale's residual-conflict block for this
+    shape was entirely driven by that scan's dropped pins, and there is
+    no independent mechanism for two directly-requested hard atoms
+    (needer's `>=2.0`, othermod's `<2.0`) disagreeing on the same
+    transitive dependency with no installed vdb consumer involved. Real
+    still reports the conflict (installed 1.0 pulled in by othermod
+    alone, exit 1); portuale merges all three silently, exit 0. Filed as
+    backlog #57 (a second, narrower conflict-detection gap, out of #54's
+    scope). See `triangle-residual-conflict-missing-block-*` for the
+    block-content findings this same gap causes.
   owner: portuale-bug
 
 - id: triangle-residual-conflict-suppressed-merge-list
@@ -88,4 +93,26 @@
     The comparator suppresses merge-list comparison on the rc mismatch
     above; the two merge lists are identical (3 entries each, verified in
     the saved outputs).
+  owner: portuale-bug
+
+- id: triangle-residual-conflict-missing-block-header
+  category: error
+  slugs: ["dev-libs_needer_dev-libs_othermod"]
+  match: "Multiple package instances within a single package slot have been pulled"
+  reason: >
+    Backlog #57 (see `triangle-residual-conflict-exit`): real reports the
+    needer/othermod residual conflict via its ordinary two-hard-atom
+    slot-conflict mechanism, independent of any installed vdb consumer;
+    portuale's equivalent block is gated on `reverse_dependency_
+    constraints`'s dropped pins only, so with keeper correctly excluded
+    (#54 S1) it renders nothing for this shape.
+  owner: portuale-bug
+
+- id: triangle-residual-conflict-missing-block-second-line
+  category: error
+  slugs: ["dev-libs_needer_dev-libs_othermod"]
+  match: "into the dependency graph, resulting in a slot conflict:"
+  reason: >
+    The second line of the #57 missing block (see
+    `triangle-residual-conflict-missing-block-header`).
   owner: portuale-bug
