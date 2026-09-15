@@ -24,8 +24,16 @@ dev-libs/kwneedpkg
 # installed consumer's hard dependency breaks a pin
 dev-libs/needer
 # the same, with the competing othermod constraint present (real prints
-# the residual conflict only in this shape; backlog #54)
+# the installed-instance slot conflict in this shape; backlog #54/#57)
 dev-libs/needer dev-libs/othermod
+# ... and with the arguments the other way round: real's block is
+# byte-identical, so portuale's must be argv-order-independent too (#57)
+dev-libs/othermod dev-libs/needer
+# #57 K2 regression guard: a bare `dev-libs/paired` dep plus needer's
+# `>=paired-2.0` is a *solvable* same-slot installed-vs-merge collision --
+# both PMs must merge the upgrade silently, in either argv order
+dev-libs/plainuser dev-libs/needer
+dev-libs/needer dev-libs/plainuser
 # explicit request against an installed pin (same #54 shape)
 =dev-libs/paired-2.0
 # USE-dep blocker

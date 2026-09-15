@@ -11677,6 +11677,37 @@ pub fn resolve_pretend(
     // portuale's own pre-existing, narrower behavior instead (see the
     // later, `!is_top_level`-aware `!update` shortcut's own comment) --
     // skipped here so that block still gets a chance to run.
+    //
+    // #57: `extra_constraints` gates the two `avoid_update` shortcuts
+    // (this one and the `!update` block further down) as well as the
+    // `matched` list they bypass. The constraints are every *other*
+    // parent atom that targeted this `cat/pkg:slot` (real
+    // `_select_pkg_highest_available` weighs the whole atom set, not
+    // just the one being resolved), so an installed version one of them
+    // rejects is not a version real would "avoid updating" to -- it
+    // falls through to the ordinary highest-available search, which is
+    // what makes a *solvable* installed-vs-merge slot collision
+    // reconcile on the backtracking retry (`dev-libs/paired` staying on
+    // installed 1.0 while a sibling's `>=paired-2.0` forces 2.0) instead
+    // of re-deriving the same conflict on every attempt.
+    let satisfies_extra_constraints =
+        |c: &Candidate| -> bool {
+            if extra_constraints.is_empty() {
+                return true;
+            }
+            let s = format!(
+                "{}/{}-{}:{}/{}::{}",
+                atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
+            );
+            extra_constraints
+                .iter()
+                .all(|ec| match ec.strip_prefix('!') {
+                    Some(neg) => !portage_dep::match_from_list(neg, &[s.as_str()])
+                        .is_some_and(|r| !r.is_empty()),
+                    None => portage_dep::match_from_list(ec, &[s.as_str()])
+                        .is_some_and(|r| !r.is_empty()),
+                })
+        };
     if !update && !is_top_level && excluded.is_empty() {
         let installed = installed_candidates(root, &atom.category, &atom.package);
         if let Some(installed_best) = dependency_avoid_update_candidate(
@@ -11686,7 +11717,9 @@ pub fn resolve_pretend(
             &candidates,
             &installed,
             config,
-        ) {
+        )
+        .filter(|c| satisfies_extra_constraints(c))
+        {
             return already_installed_or_reinstall(
                 root,
                 repos,
@@ -12021,6 +12054,9 @@ pub fn resolve_pretend(
     // remaining combination.
     if !update && (!is_top_level || selective) {
         let installed_best = if !is_top_level {
+            // #57: same `extra_constraints` gate as the early shortcut
+            // above (`matched`, which the `is_top_level` arm below reads,
+            // is already filtered by them).
             dependency_avoid_update_candidate(
                 root,
                 &atom,
@@ -12029,6 +12065,7 @@ pub fn resolve_pretend(
                 &installed_pairs,
                 config,
             )
+            .filter(|c| satisfies_extra_constraints(c))
         } else {
             matched
                 .iter()
@@ -13946,17 +13983,24 @@ fn rebuild_if_entries(
     out
 }
 
+/// The version a merge-bound `PretendOutcome` would install, or `None`
+/// for `AlreadyInstalled`/`NoVisibleCandidate` (which merge nothing).
+/// Exactly the four outcomes `PassState::resolved_slots` ever indexes.
+fn merge_bound_version(outcome: &PretendOutcome) -> Option<&String> {
+    match outcome {
+        PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+            Some(version)
+        }
+        PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => Some(to),
+        PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::NoVisibleCandidate => None,
+    }
+}
+
 /// The `category/package-version` a merge-bound `GraphEntry` would
 /// install, or `None` for `AlreadyInstalled`/`NoVisibleCandidate` (which
 /// never participate in a build-time cycle).
 fn merge_bound_cpv(entry: &GraphEntry) -> Option<String> {
-    let version = match &entry.outcome {
-        PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => version,
-        PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to,
-        PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::NoVisibleCandidate => {
-            return None;
-        }
-    };
+    let version = merge_bound_version(&entry.outcome)?;
     Some(format!("{}/{}-{version}", entry.category, entry.package))
 }
 
@@ -14852,16 +14896,38 @@ pub fn slot_conflict_flag_sets(
     }
 }
 
+/// Which conflict party (if either) is an already-installed graph node
+/// rather than a scheduled-for-merge one -- #57's installed-instance
+/// collisions (real `_add_pkg` feeds installed nomerge nodes to
+/// `_package_tracker` too, so one slot holding an installed node plus a
+/// merge node is an ordinary slot collision). `Existing` is
+/// `build_slot_conflict`'s instance A (already in the graph), `Current`
+/// its instance B (what the detecting atom resolved to).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InstalledSide {
+    Existing,
+    Current,
+}
+
 /// Assembles a `SlotConflict` (real `slot_collision_handler`'s
 /// `(pkg, parent_atoms)` per `slot_atom`): instance A is `existing_version`
 /// (already in the graph), instance B is `current_version` (what the
 /// atom that triggered detection resolved to). Each `slot_pullers` entry
 /// for `cat/pkg` is filed under whichever instance its atom matches
 /// (under A when it matches both -- a bare atom pulled the resolved one).
+///
+/// `installed_side` (#57) names the party that is an installed nomerge
+/// node: its sub-slot/repo, `USE=` display and use-dep flag sets come
+/// from the vdb (`installed_refs` / `installed_use_display_for` /
+/// `installed_pkg_iuse_and_use`, exactly what `build_residual_slot_conflicts`
+/// uses) instead of from the repo candidate carrying the same version,
+/// and its instance renders `(… installed in '<root>')`. `None` for the
+/// merge-vs-merge conflicts this function has always built.
 #[allow(clippy::too_many_arguments)]
 fn build_slot_conflict(
     repos: &[RepoConfig],
     config: &portage_profile::Config,
+    root: &Path,
     category: &str,
     package: &str,
     slot: &str,
@@ -14869,9 +14935,34 @@ fn build_slot_conflict(
     current_atom: &str,
     current_version: &str,
     slot_pullers: &SlotPullers,
+    installed_side: Option<InstalledSide>,
 ) -> SlotConflict {
-    let (a_sub, a_repo, _) = slot_conflict_meta(repos, category, package, existing_version);
-    let (b_sub, b_repo, _) = slot_conflict_meta(repos, category, package, current_version);
+    let a_installed = installed_side == Some(InstalledSide::Existing);
+    let b_installed = installed_side == Some(InstalledSide::Current);
+    // An installed instance's own vdb `(sub_slot, repo)`: the repo the
+    // *installed* copy came from can differ from whatever currently
+    // provides that version, and a version no longer in any repo has no
+    // candidate at all -- both of which `slot_conflict_meta` would render
+    // as empty strings.
+    let vdb_meta = |version: &str| -> (String, String) {
+        installed_refs(root, category, package)
+            .into_iter()
+            .find(|r| r.version == version)
+            .map(|r| (r.sub_slot, r.repo))
+            .unwrap_or_default()
+    };
+    let (a_sub, a_repo) = if a_installed {
+        vdb_meta(existing_version)
+    } else {
+        let (s, r, _) = slot_conflict_meta(repos, category, package, existing_version);
+        (s, r)
+    };
+    let (b_sub, b_repo) = if b_installed {
+        vdb_meta(current_version)
+    } else {
+        let (s, r, _) = slot_conflict_meta(repos, category, package, current_version);
+        (s, r)
+    };
     // The match strings carry the sub-slot (real matches puller atoms
     // against full packages, not slot-only strings): without it, a
     // *built* slot-operator puller (`cat/pkg:S/SS=`) matches neither
@@ -14896,10 +14987,16 @@ fn build_slot_conflict(
     // `>=T-1.0[x]` under 1.0, never under the x-off 2.0 it version-
     // matches). Without this, USE parents file under the wrong instance
     // and vanish from the notice (their atom satisfies the other side).
-    let (a_iuse, a_use) =
-        slot_conflict_flag_sets(repos, config, category, package, existing_version);
-    let (b_iuse, b_use) =
-        slot_conflict_flag_sets(repos, config, category, package, current_version);
+    let (a_iuse, a_use) = if a_installed {
+        installed_pkg_iuse_and_use(root, category, package, existing_version)
+    } else {
+        slot_conflict_flag_sets(repos, config, category, package, existing_version)
+    };
+    let (b_iuse, b_use) = if b_installed {
+        installed_pkg_iuse_and_use(root, category, package, current_version)
+    } else {
+        slot_conflict_flag_sets(repos, config, category, package, current_version)
+    };
     let mut parents_a: Vec<SlotConflictParent> = Vec::new();
     let mut parents_b: Vec<SlotConflictParent> = Vec::new();
     if let Some(pullers) = slot_pullers.get(&(category.to_string(), package.to_string())) {
@@ -14950,23 +15047,25 @@ fn build_slot_conflict(
                 version: existing_version.to_string(),
                 sub_slot: a_sub,
                 repo_name: a_repo,
-                use_display: pkg_use_display_for(
-                    repos,
-                    config,
-                    category,
-                    package,
-                    existing_version,
-                ),
+                use_display: if a_installed {
+                    installed_use_display_for(root, config, category, package, existing_version)
+                } else {
+                    pkg_use_display_for(repos, config, category, package, existing_version)
+                },
                 parents: parents_a,
-                installed: false,
+                installed: a_installed,
             },
             SlotConflictInstance {
                 version: current_version.to_string(),
                 sub_slot: b_sub,
                 repo_name: b_repo,
-                use_display: pkg_use_display_for(repos, config, category, package, current_version),
+                use_display: if b_installed {
+                    installed_use_display_for(root, config, category, package, current_version)
+                } else {
+                    pkg_use_display_for(repos, config, category, package, current_version)
+                },
                 parents: parents_b,
-                installed: false,
+                installed: b_installed,
             },
         ],
     }
@@ -16856,6 +16955,14 @@ impl Backtracker {
         let (mut params, terminal, mask_cost) = match kind {
             BacktrackFeedback::Config { params } => (*params, current_terminal, 0),
             BacktrackFeedback::SlotConflict { base, choices } => {
+                // #57 S1: keep the pass's merged accumulators on the node
+                // itself, exactly as `PassDecision::DeadEnd` does -- the
+                // mask children below are non-terminal, so `get_best_run`
+                // comes back to *this* node, and without this its
+                // dropped reverse-dep pins and autounmask records would
+                // be thrown away and the re-pass would report less than
+                // the pass that found the conflict did.
+                self.nodes[current_idx].params = (*base).clone();
                 // C3: one node per ranked choice (real's
                 // `_feedback_slot_conflict` loop), masking the target
                 // plus its C4 similar group. A repeated mask replaces
@@ -17355,6 +17462,8 @@ struct PassResult {
     /// `None` = the scan did not run for this pass (the `get_best_run`
     /// re-pass, which never goes through `collect_feedback`).
     abi_rebuilds: Option<Vec<(String, String)>>,
+    /// See `PassState::suppressed_nvc` (#57).
+    suppressed_nvc: bool,
 }
 
 /// Phase A3 (023): the walk's-Everything per-pass `let mut`s, moved out of
@@ -17384,6 +17493,21 @@ struct PassState {
     /// (see `SlotConflict`) instead of triggering a second, independent
     /// resolution.
     resolved_slots: HashMap<(String, String, String), usize>,
+    /// #57: (category, package, slot) -> the version of the
+    /// `AlreadyInstalled` node this pass put in that slot (slot read from
+    /// the vdb `InstalledRef`, since an `AlreadyInstalled` `GraphEntry`
+    /// carries none). Deliberately a second map rather than a new
+    /// `resolved_slots` arm, so the `unreachable!` at the merge-outcome
+    /// slot check below stays truthful.
+    ///
+    /// Real `_add_pkg` adds installed nomerge nodes to `_package_tracker`
+    /// exactly like merge-bound ones (`depgraph.py:3736`), so a slot
+    /// holding one of each is an ordinary slot collision
+    /// (`PackageTracker.conflicts()`); portuale's walker used to see
+    /// installed nodes only through the early `resolved_version.is_none()`
+    /// branch, which never consulted `resolved_slots` at all -- the whole
+    /// of backlog #57.
+    installed_slots: HashMap<(String, String, String), String>,
     /// (category, package) -> already added an AlreadyInstalled/
     /// NoVisibleCandidate entry for it. Separate from `resolved_slots`
     /// since neither outcome carries a slot to usefully key repeats by.
@@ -17511,6 +17635,12 @@ struct PassState {
     /// This pass hit an autounmask contradiction (a flag wanted both on
     /// and off); `collect_feedback` + driver latches it into `bp.autounmask_use_broke`.
     use_broke: bool,
+    /// #57: this pass dropped a `NoVisibleCandidate` on the
+    /// `other_outcomes` cp dedup while a mask was active -- an
+    /// unsatisfiable dependency that leaves no NVC entry behind, so
+    /// `collect_feedback`'s `has_nvc` scan cannot see it. Set only under
+    /// a non-empty `runtime_pkg_mask`, so an ordinary pass is unaffected.
+    suppressed_nvc: bool,
 }
 
 /// Phase A3 (023): the effective value of one autounmask flag for the
@@ -18264,10 +18394,101 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     }
                 }
             }
+            // #57, direction 1: this atom settled on an *installed*
+            // instance, and the same `(cat, pkg, slot)` may already hold a
+            // merge-bound one that this atom rejects -- real's
+            // `_package_tracker` sees both nodes and calls that a slot
+            // collision (`othermod`'s `<paired-2.0` landing on installed
+            // 1.0 while `needer`'s `>=paired-2.0` already graphed 2.0).
+            // Recorded *before* the `other_outcomes` dedup, since a
+            // repeat visit of this `cat/pkg` under a different atom text
+            // is exactly how the second, conflicting constraint arrives.
+            //
+            // Deliberately no `continue`: real keeps the installed node
+            // in the graph and still merges the other instance, and the
+            // solvable/unsolvable split (real
+            // `_solve_non_slot_operator_slot_conflicts`) is the
+            // backtracker's -- `collect_feedback`'s `slot_want`
+            // solvability check reconciles a jointly-satisfiable slot on
+            // the retry and this record disappears with it; only a slot
+            // no single version can satisfy survives to be reported.
+            if let PretendOutcome::AlreadyInstalled { version } = &outcome {
+                // The vdb `SLOT` file only -- one read per installed
+                // node. `installed_refs` would re-list every version and
+                // read each one's `repository` too, and this runs for
+                // every `AlreadyInstalled` outcome in the walk (thousands
+                // on a `-puD @world`); the fuller lookup is deferred to
+                // the two rare branches that actually build a record.
+                let (inst_slot, _) = read_vdb_slot(ctx.root, &key.0, &key.1, version);
+                let slot_key = (key.0.clone(), key.1.clone(), inst_slot.clone());
+                if let Some(&existing_idx) = state.resolved_slots.get(&slot_key)
+                    && let Some(existing_version) =
+                        merge_bound_version(&state.entries[existing_idx].outcome).cloned()
+                {
+                    // Same sub-slot-carrying match string the
+                    // merge-outcome check below builds, for the same
+                    // reason (a built `cat/pkg:0/2=` puller matches no
+                    // `:slot`-only string).
+                    let existing_sub =
+                        slot_conflict_meta(&ctx.repos, &key.0, &key.1, &existing_version).0;
+                    let existing_str = if existing_sub.is_empty() {
+                        format!("{}/{}-{existing_version}:{inst_slot}", key.0, key.1)
+                    } else {
+                        format!(
+                            "{}/{}-{existing_version}:{inst_slot}/{existing_sub}",
+                            key.0, key.1
+                        )
+                    };
+                    if portage_dep::match_from_list(&current_atom, &[existing_str.as_str()])
+                        .is_none_or(|m| m.is_empty())
+                    {
+                        record_slot_conflict(
+                            &mut state.slot_conflicts,
+                            build_slot_conflict(
+                                &ctx.repos,
+                                config,
+                                ctx.root,
+                                &key.0,
+                                &key.1,
+                                &inst_slot,
+                                &existing_version,
+                                &current_atom,
+                                version,
+                                &state.slot_pullers,
+                                Some(InstalledSide::Current),
+                            ),
+                        );
+                    }
+                }
+                state
+                    .installed_slots
+                    .entry(slot_key)
+                    .or_insert_with(|| version.clone());
+            }
             // AlreadyInstalled / NoVisibleCandidate: no slot to key a
             // repeat by, so dedup on category/package alone, same as v1
             // always did before slot-aware resolution existed.
             if !state.other_outcomes.insert(key.clone()) {
+                // #57: the dedup is cp-keyed, so an `AlreadyInstalled`
+                // reached by one atom shadows a *later* atom's
+                // `NoVisibleCandidate` for the same package and no NVC
+                // entry is ever pushed. Harmless for an ordinary pass
+                // (long-standing display behaviour), but a *masked*
+                // backtracking attempt must not be mistaken for a
+                // success: real's `_create_graph` returns 0 on an
+                // unsatisfiable dep and the attempt is abandoned in
+                // favour of `get_best_run`. Without this the argv order
+                // `othermod needer` settled on the try that masked
+                // `paired-2.0` -- dropping the upgrade from the merge
+                // list and the block with it -- while the mirror order
+                // (whose NVC happened to be graphed first) correctly
+                // fell back to the reported conflict. Gated on an active
+                // mask so no unmasked pass changes behaviour.
+                if matches!(outcome, PretendOutcome::NoVisibleCandidate)
+                    && !bp.runtime_pkg_mask.is_empty()
+                {
+                    state.suppressed_nvc = true;
+                }
                 continue;
             }
             // `--deep`: an AlreadyInstalled package's own further
@@ -18673,6 +18894,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     build_slot_conflict(
                         &ctx.repos,
                         config,
+                        ctx.root,
                         &key.0,
                         &key.1,
                         &slot,
@@ -18680,6 +18902,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                         &current_atom,
                         &version,
                         &state.slot_pullers,
+                        None,
                     ),
                 );
                 continue;
@@ -18742,6 +18965,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                             build_slot_conflict(
                                 &ctx.repos,
                                 config,
+                                ctx.root,
                                 &key.0,
                                 &key.1,
                                 &slot,
@@ -18749,6 +18973,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                                 &current_atom,
                                 &version,
                                 &state.slot_pullers,
+                                None,
                             ),
                         );
                     }
@@ -18875,6 +19100,50 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 }
             }
             continue;
+        }
+        // #57, direction 2 (the mirror of the `AlreadyInstalled` check
+        // above, for the opposite argv order): this slot is free of
+        // merge-bound instances but an `AlreadyInstalled` node already
+        // holds it, and this atom rejects that node's version. Real's
+        // tracker holds both and reports the collision either way round
+        // (S0 cells a/b are the same block); portuale's slot check only
+        // ever looked at `resolved_slots`, which indexes merge outcomes
+        // only. Falls through -- the merge is still graphed, exactly as
+        // real merges `paired-2.0` while reporting the block.
+        if let Some(installed_version) = state.installed_slots.get(&slot_key).cloned() {
+            let installed_sub = installed_refs(ctx.root, &key.0, &key.1)
+                .into_iter()
+                .find(|r| r.version == installed_version)
+                .map(|r| r.sub_slot)
+                .unwrap_or_default();
+            let installed_str = if installed_sub.is_empty() {
+                format!("{}/{}-{installed_version}:{slot}", key.0, key.1)
+            } else {
+                format!(
+                    "{}/{}-{installed_version}:{slot}/{installed_sub}",
+                    key.0, key.1
+                )
+            };
+            if portage_dep::match_from_list(&current_atom, &[installed_str.as_str()])
+                .is_none_or(|m| m.is_empty())
+            {
+                record_slot_conflict(
+                    &mut state.slot_conflicts,
+                    build_slot_conflict(
+                        &ctx.repos,
+                        config,
+                        ctx.root,
+                        &key.0,
+                        &key.1,
+                        &slot,
+                        &installed_version,
+                        &current_atom,
+                        &version,
+                        &state.slot_pullers,
+                        Some(InstalledSide::Existing),
+                    ),
+                );
+            }
         }
         let entry_idx = state.entries.len();
         state.resolved_slots.insert(slot_key, entry_idx);
@@ -19802,6 +20071,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
 
     let pass = PassResult {
         entries: state.entries,
+        suppressed_nvc: state.suppressed_nvc,
         slot_conflicts: state.slot_conflicts,
         slot_want: state.slot_want,
         slot_pullers: state.slot_pullers,
@@ -19904,6 +20174,36 @@ fn collect_feedback(
         }
     }
     grown.autounmask_use_broke |= pass.use_broke;
+
+    // #57 S1: the *dropped* half of the reverse-dependency scan (#54,
+    // documented at its enforcement site further down) is not feedback
+    // at all -- it is the input `assemble_result` renders the residual
+    // installed-instance block from. A pass that ends in slot-conflict
+    // mask feedback returns long before the scan's own site, so those
+    // pins never reached `grown` and a later `get_best_run` re-pass
+    // reported the collision without its installed consumers (the
+    // keeper-reachable triangle lost keeper's `=dev-libs/paired-1.0`
+    // parent line the moment the walk started recording that collision
+    // itself). Collected here for exactly that case -- a pass that found
+    // a slot conflict -- so the ordinary settle path pays for one scan,
+    // as it always did, not two.
+    if !pass.slot_conflicts.is_empty() {
+        let (_, dropped) = reverse_dependency_constraints(
+            &ctx.repos,
+            ctx.root,
+            &pass.entries,
+            ctx.with_bdeps,
+            ctx.excluded,
+            &pass.slot_want,
+            &ctx.slot_op_reachable,
+        );
+        for pin in dropped {
+            if !grown.dropped_pins.contains(&pin) {
+                grown.dropped_pins.push(pin);
+            }
+        }
+    }
+
     // Backtracking (real `backtracking.py` retry loop driven by
     // `_process_slot_conflicts`): if this attempt left any slot conflicts,
     // check each one for solvability -- is there a single version of the
@@ -20153,10 +20453,11 @@ fn collect_feedback(
     // here would abort on the masked graph instead of the best run.
     // A conflict-only fall-through still settles (standing informational
     // convention, exit 0).
-    let has_nvc = pass
-        .entries
-        .iter()
-        .any(|e| matches!(e.outcome, PretendOutcome::NoVisibleCandidate));
+    let has_nvc = pass.suppressed_nvc
+        || pass
+            .entries
+            .iter()
+            .any(|e| matches!(e.outcome, PretendOutcome::NoVisibleCandidate));
 
     // #24 S3: real `_process_slot_conflicts` -> `_slot_operator_trigger_reinstalls`
     // (2131-2132, gated on `_allow_backtracking`) -> `_slot_operator_*_backtrack`
@@ -20458,14 +20759,26 @@ fn assemble_result(
     // instance -- real's nomerge-node collision report. Appended
     // after every merge-vs-merge record, so those keep their
     // long-standing order.
-    pass.slot_conflicts.extend(build_residual_slot_conflicts(
+    //
+    // #57: fed through `record_slot_conflict`, not appended blind. The
+    // walker's own installed-instance check can now produce a record for
+    // the very same `(package, merge version, installed version)` triple
+    // (the keeper-reachable triangle: othermod's `<2.0` against the
+    // merged 2.0, *and* keeper's dropped pin against the same pair).
+    // Real renders one block whose installed side lists both parents,
+    // which is exactly the residual record -- it carries the dropped
+    // consumer pins on top of the same hard pullers -- so letting it
+    // replace the walker's record keeps the union and the single block.
+    for sc in build_residual_slot_conflicts(
         &ctx.repos,
         config,
         ctx.root,
         &pass.entries,
         &pass.slot_pullers,
         &params.dropped_pins,
-    ));
+    ) {
+        record_slot_conflict(&mut pass.slot_conflicts, sc);
+    }
 
     // Masked-dependency chains are walked out of the final entries
     // (`required_by` is only complete post-pass); the atom+masked
@@ -31212,6 +31525,14 @@ mod tests {
     }
 
     fn graph_result_real_backtrack(atom_str: &str, backtrack_max: u32) -> GraphResult {
+        graph_result_real_atoms(&[atom_str.to_string()], backtrack_max)
+    }
+
+    /// `graph_result_real_backtrack` for more than one top-level atom --
+    /// #57's collisions need two arguments to disagree about one slot,
+    /// in both argv orders.
+    fn graph_result_real_atoms(atoms: &[String], backtrack_max: u32) -> GraphResult {
+        let atom_str = atoms.join(" ");
         let root = fixtures_root();
         let config = portage_profile::resolve_config(
             &root,
@@ -31226,7 +31547,7 @@ mod tests {
         resolve_pretend_graph(
             &root,
             &root,
-            &[atom_str.to_string()],
+            atoms,
             &config,
             false,
             false,
@@ -32503,6 +32824,145 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// #57 S1: one shared assertion for the triangle's conflict record --
+    /// the installed instance is `paired-1.0` and the merge instance
+    /// `paired-2.0`, each filed under the hard atom that pulled it,
+    /// whichever argv order produced the collision.
+    fn assert_triangle_conflict(result: &GraphResult, installed_first: bool) {
+        assert_eq!(
+            result.slot_conflicts.len(),
+            1,
+            "expected exactly one slot conflict, got {:?}",
+            result.slot_conflicts
+        );
+        let c = &result.slot_conflicts[0];
+        assert_eq!(
+            (c.category.as_str(), c.package.as_str()),
+            ("dev-libs", "paired")
+        );
+        assert_eq!(c.slot, "0");
+        let (installed, merge) = if installed_first {
+            (&c.instances[0], &c.instances[1])
+        } else {
+            (&c.instances[1], &c.instances[0])
+        };
+        assert_eq!(c.resolved_version, c.instances[0].version);
+        assert_eq!(
+            (installed.version.as_str(), installed.installed),
+            ("1.0", true)
+        );
+        assert_eq!((merge.version.as_str(), merge.installed), ("2.0", false));
+        let atoms = |i: &SlotConflictInstance| -> Vec<(String, String)> {
+            i.parents
+                .iter()
+                .map(|p| (p.parent_cpv.clone(), p.atom.clone()))
+                .collect()
+        };
+        assert_eq!(
+            atoms(installed),
+            vec![(
+                "dev-libs/othermod-1.0:0/0::testrepo".to_string(),
+                "<dev-libs/paired-2.0".to_string()
+            )]
+        );
+        assert_eq!(
+            atoms(merge),
+            vec![(
+                "dev-libs/needer-1.0:0/0::testrepo".to_string(),
+                ">=dev-libs/paired-2.0".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn installed_instance_then_merge_records_an_unsolvable_slot_conflict() {
+        // #57 direction 2: `othermod`'s `<paired-2.0` settles on the
+        // installed 1.0 first (an `AlreadyInstalled` outcome, invisible to
+        // `resolved_slots`), then `needer`'s `>=paired-2.0` graphs 2.0 in
+        // the same slot. Real's `_package_tracker` holds both nodes and
+        // reports the collision; portuale used to merge all three
+        // silently. The two atoms are jointly unsatisfiable, so the
+        // backtracker's mask trials all fail and `get_best_run` reports
+        // the original shape -- exactly real's `backtrack: 4/20` run,
+        // whose block is byte-identical to its own `--backtrack=0` one
+        // (`TEST/findings/l0-fixture-oracle.md` "#57 S0" cells b/c).
+        let result = graph_result_real_atoms(
+            &[
+                "dev-libs/othermod".to_string(),
+                "dev-libs/needer".to_string(),
+            ],
+            10,
+        );
+        assert_triangle_conflict(&result, true);
+        // The upgrade still merges, like real's merge list.
+        let paired = result
+            .entries
+            .iter()
+            .find(|e| e.package == "paired")
+            .expect("paired entry");
+        assert_eq!(
+            paired.outcome,
+            PretendOutcome::Upgrade {
+                from: "1.0".to_string(),
+                to: "2.0".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn merge_then_installed_instance_records_the_same_slot_conflict() {
+        // #57 direction 1, the mirror argv order: `needer`'s
+        // `>=paired-2.0` graphs 2.0 first, then `othermod`'s `<paired-2.0`
+        // takes the walker's `AlreadyInstalled` early branch -- which
+        // never consulted `resolved_slots` at all before this slice.
+        let result = graph_result_real_atoms(
+            &[
+                "dev-libs/needer".to_string(),
+                "dev-libs/othermod".to_string(),
+            ],
+            10,
+        );
+        assert_triangle_conflict(&result, false);
+    }
+
+    #[test]
+    fn solvable_installed_instance_collision_records_nothing() {
+        // #57 K2: `plainuser`'s bare `dev-libs/paired` is satisfied by
+        // the installed 1.0 *and* by the 2.0 `needer` forces, so one
+        // graphed instance satisfies every hard parent atom -- real
+        // `_solve_non_slot_operator_slot_conflicts` reconciles it
+        // silently. Portuale reaches the same place through
+        // `collect_feedback`'s existing `slot_want` solvability check
+        // (the merge-vs-merge reconciliation reused, not a second
+        // solver), so no record survives to the settled pass.
+        for argv in [
+            [
+                "dev-libs/plainuser".to_string(),
+                "dev-libs/needer".to_string(),
+            ],
+            [
+                "dev-libs/needer".to_string(),
+                "dev-libs/plainuser".to_string(),
+            ],
+        ] {
+            let result = graph_result_real_atoms(&argv, 10);
+            assert_eq!(result.slot_conflicts, vec![], "argv {argv:?}");
+            let paired = result
+                .entries
+                .iter()
+                .find(|e| e.package == "paired")
+                .expect("paired entry");
+            assert_eq!(
+                paired.outcome,
+                PretendOutcome::Upgrade {
+                    from: "1.0".to_string(),
+                    to: "2.0".to_string()
+                },
+                "argv {argv:?}"
+            );
+        }
     }
 
     #[test]

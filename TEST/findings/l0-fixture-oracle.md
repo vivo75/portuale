@@ -311,6 +311,117 @@ control.
 Commit: `stage.sh` `FX_DROP_VDB` knob + `plainuser` fixture (ebuild +
 md5-cache entry) + this section (no resolver code change).
 
+## #57 S1 — installed-instance slot tracking
+
+`docs/06.057-directly_requested_hard_atom_conflict.opus.md` §S1, built on
+the S0 verdict above (tracker collision + slot-conflict backtracking
+exhausted; no K4 trigger). The walker now indexes `AlreadyInstalled`
+graph nodes by `(cat, pkg, slot)` in a new `PassState::installed_slots`
+and checks the slot from **both** sides — the `AlreadyInstalled` early
+branch against `resolved_slots`, and the merge-outcome slot check
+against `installed_slots` — so an installed instance is a slot-conflict
+party whichever argv order graphs it first. Neither check `continue`s:
+real keeps the installed node and still merges the other instance.
+
+Solvable vs unsolvable is **not** a second solver: the record is fed to
+the existing backtracker, whose `collect_feedback` `slot_want`
+solvability check is portuale's `_solve_non_slot_operator_slot_conflicts`
+(the merge-vs-merge machinery behind
+`fixture_solvable_slot_conflict_is_reconciled_by_backtracking`). A
+jointly-satisfiable slot reconciles on the retry and the record
+disappears with it; an unsatisfiable one exhausts the mask trials and
+`get_best_run` reports the original shape, matching real's
+`backtrack: 4/20` run byte-for-byte modulo the two residues below.
+
+| cell | before S1 | after S1 |
+|---|---|---|
+| a `needer othermod` | no block, rc 0 | block (installed 1.0 ← othermod, merge 2.0 ← needer), rc 0 |
+| b `othermod needer` | no block, rc 0 | same block, rc 0 |
+| c `--backtrack=0` | no block | same block as cell a |
+| e `plainuser needer` / reverse | silent | **still silent** (K2 guard holds) |
+| f singles | unchanged | unchanged |
+
+Residues, both deliberate and both pre-existing:
+
+* **rc** stays 0 (K1). Allowlist entry `triangle-residual-conflict-exit`
+  reworded to cite the convention, owner `portuale-bug` →
+  `claude-opus-5`; `-suppressed-merge-list` likewise; the two
+  `-missing-block-*` entries are deleted.
+* **instance order** inside the block is inverted vs real in every case:
+  portuale's queue is FIFO and lists the first-graphed instance first,
+  real's `_dep_stack` is LIFO and lists the other one first. Cell d
+  (merge-vs-merge, neither instance installed) shows the same inversion
+  *without* any S1 code, so this is not new. The comparator compares
+  `!!!` lines as a set, so it is invisible to the oracle.
+
+Three side findings:
+
+1. **The `--debug` `Parent Dep` misfiling is NOT fixed** by step 1's
+   `slot_pullers` change (the doc said "check, don't assume" — checked,
+   and it is not). `slot_pullers` already carried both parents with
+   their atoms, which is why `build_slot_conflict` files them correctly;
+   the trace reads `GraphEntry::required_by` instead — a `(cat, pkg)`
+   map with no atom text and no per-instance attribution — and prints
+   the bare `cat/pkg`, not the pulling atom. The installed `paired-1.0`
+   node is not even in the entry list `dump_resolution_walk` iterates
+   (the cluster-I `mergebound_cp_slots` retain drops an
+   `AlreadyInstalled` entry whose cp/slot is also merge-bound), so there
+   is no second child to file anything under. `--debug` trace fidelity,
+   not the block: belongs with backlog #59.
+2. **`test_oracle_slotop_rebuild_order` pinned real's merge list against
+   the wrong fixture.** Upstream re-uses the name `app-misc/C` for two
+   different ebuilds — `test_slot_operator_rebuild.py` case 1's
+   `|| ( app-misc/X app-misc/A:= )` and `test_slot_conflict_rebuild.py`'s
+   `<app-misc/A-2` cap — and portuale's tree has one ebuild per name,
+   carrying the cap. The rebuild-order case therefore rebuilt its
+   consumer against the *cap*, whose `<app-misc/A-2` only installed
+   `A-1` satisfies; before S1 nothing looked at the installed instance's
+   slot, so the cap was silently ignored and the case passed for the
+   wrong reason. New fixture `app-misc/Cor` carries upstream's ebuild,
+   the case points at it, and real's `[A-2, (B-0, Cor-0)]` is
+   reproduced exactly.
+3. **`build_residual_slot_conflicts` needed two plumbing fixes** for the
+   #54 interplay (step 5): its records now go through
+   `record_slot_conflict` instead of `extend` (the walker and the
+   residual builder can produce the same `(package, merge version,
+   installed version)` triple — the keeper-reachable triangle — and real
+   renders one block carrying both parents, which is the residual
+   record); and the dropped reverse-dep pins are collected *before* a
+   slot-conflict mask feedback can return, with the current node
+   adopting the pass's merged accumulators the way `DeadEnd` already
+   does, or `get_best_run` came back to a node that had never seen them
+   and keeper's `=dev-libs/paired-1.0` parent line vanished.
+
+One more S1-only resolver fix fell out of the K2 guard: the two
+`avoid_update` shortcuts in `resolve_pretend` returned
+`AlreadyInstalled` without consulting `extra_constraints`, so the
+solvable retry re-derived the same collision forever (the plainuser
+control looped and then reported a block). Both are now gated on the
+constraint set, which is what real's `_select_pkg_highest_available`
+weighing the whole atom set means.
+
+Verification: workspace-root `cargo build/test/clippy --release` clean
+(378 portage-repo unit tests incl. three new ones next to
+`reverse_dependency_constraints_skips_an_unreachable_installed_consumer`);
+full `pytest tests -q` 1693 passed / 0 failed / 5 xfailed. Corpus drift
+was exactly two contract rows, both reviewed:
+`test_oracle_slotop_complete` (`socc-2` → `socc-1`, i.e. **K3
+alternative A**: the bug-614390 strict xfail XPASSed, the full merge
+list now equals real's, the marker is removed and the test is a
+permanent pin) and `test_oracle_slotop_rebuild_order` (`C-0` → `Cor-0`,
+side finding 2). `tests/corpus/expanded.json.xz` — the whole fixture
+atom × option grid — did not drift at all.
+
+Live regression check on this host's real tree: `emerge -pu --deep
+@world` (71 lines, blockers and slot-op rebuilds) is **byte-identical**
+before and after. It is also ~37 % slower (30.7 s → 42.4 s); an ablation
+build that keeps every new vdb read but skips the two
+`record_slot_conflict` calls times 31.0 s, so the whole delta is extra
+resolver passes — a solvable installed-vs-merge collision somewhere in
+`@world` now takes the same reconcile-and-restart route real takes.
+Correct work, not overhead; flagged here for S2 to confirm against the
+120-probe L0 bed.
+
 ## What a fixture addition must not break
 
 A new fixture that real will read needs: a digest for **every** ebuild in

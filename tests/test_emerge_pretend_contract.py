@@ -82,8 +82,23 @@ CASES = [
         0,
     ),
     (
-        "the needer/othermod triangle merges cleanly when the pin is unreachable (#54)",
+        "the needer/othermod triangle reports the installed-instance conflict (#57)",
         ["--pretend", "dev-libs/needer", "dev-libs/othermod"],
+        0,
+    ),
+    (
+        "the same triangle, argv reversed, reports the same conflict (#57)",
+        ["--pretend", "dev-libs/othermod", "dev-libs/needer"],
+        0,
+    ),
+    (
+        "a solvable installed-instance slot collision stays silent (#57 K2)",
+        ["--pretend", "dev-libs/plainuser", "dev-libs/needer"],
+        0,
+    ),
+    (
+        "the same solvable collision, argv reversed, stays silent (#57 K2)",
+        ["--pretend", "dev-libs/needer", "dev-libs/plainuser"],
         0,
     ),
     (
@@ -12860,37 +12875,86 @@ def test_unreachable_installed_pin_does_not_block_a_hard_dependency_requirement(
     ]
 
 
-def test_needer_othermod_triangle_merges_cleanly_when_the_pin_is_unreachable(
-    emerge_binary, fixture_env
+@pytest.mark.parametrize("reversed_argv", [False, True], ids=["needer-first", "othermod-first"])
+def test_needer_othermod_triangle_reports_the_installed_instance_conflict(
+    emerge_binary, fixture_env, reversed_argv
 ):
-    """#54, the triangle case: needer requires `>=paired-2.0`, othermod
-    requires `<paired-2.0` -- directly conflicting hard requirements on
-    the same package, with no installed vdb consumer (keeper) reachable
-    to report against. Real 3.0.82.2 still reports a residual conflict
-    here (installed 1.0 pulled in by othermod alone, exit 1 -- "#54 S0"
-    hermetic row); portuale merges all three with **no block at all**,
-    a known, narrower divergence than before the #54 fix (which showed a
-    block, just with the wrong parents -- keeper *and* othermod, where
-    real names only othermod).
+    """#57 S1, the triangle case: needer requires `>=paired-2.0`,
+    othermod requires `<paired-2.0` -- directly conflicting hard
+    requirements on the same package, with no installed vdb consumer
+    (keeper) reachable to report against. Real 3.0.82.2 merges the 2.0
+    upgrade plus both consumers *and* reports the slot conflict pairing
+    the merge instance against installed `paired-1.0` (pulled in by
+    othermod alone), in **both** argv orders -- byte-identical blocks,
+    captured in `TEST/logs/l0-fx-057-main-20260915T195546Z/real/`
+    (`#57 S0` cells a/b/c; `--backtrack=0` gives the same block, so no
+    backtrack step shapes it).
 
-    Root cause: portuale's residual-conflict block
-    (`build_residual_slot_conflicts`) is entirely driven by
-    `reverse_dependency_constraints`'s *dropped* pins, which come only
-    from installed vdb consumers outside the requested atoms' own tree
-    (like keeper). Two directly-requested atoms disagreeing on the same
-    transitive dependency -- with no installed consumer involved -- have
-    no reporting path at all once keeper's now-correctly-gated pin can no
-    longer accidentally cover for it. Filed as a new backlog follow-up
-    (see `docs/scope-backlog.md`); intentionally not fixed here (#54's
-    scope is the reachability gate, not a second conflict-detection
-    mechanism)."""
+    Before #57 S1 portuale printed no block at all: the walker's
+    `AlreadyInstalled` early branch never consulted `resolved_slots`, so
+    an installed instance was invisible to slot tracking from both sides
+    (othermod's `<2.0` settling on installed 1.0 after needer graphed
+    2.0, and the mirror order). Exit stays 0 per #57 K1 (portuale's
+    standing "slot-conflict notice is informational" convention; backlog
+    #58 tracks revisiting it).
+
+    Instance *order* inside the block is portuale's own (the first
+    instance graphed is listed first): real walks its dep stack LIFO and
+    lists them the other way round. That is a pre-existing FIFO-vs-LIFO
+    artifact shared with the merge-vs-merge path (`#57 S0` cell d shows
+    the same inversion with neither instance installed) and the L0
+    comparator is insensitive to it, so the asserts here are structural,
+    like every other slot-collision pin."""
     args = ["--pretend", "dev-libs/needer", "dev-libs/othermod"]
+    if reversed_argv:
+        args = ["--pretend", "dev-libs/othermod", "dev-libs/needer"]
     rust = _run([str(emerge_binary)], args, fixture_env)
     assert rust.returncode == 0
-    assert rust.stdout.splitlines() == [
-        "[ebuild     U  ] dev-libs/paired-2.0 [1.0]",
+    merges = [ln for ln in rust.stdout.splitlines() if ln.startswith("[ebuild")]
+    assert merges[0] == "[ebuild     U  ] dev-libs/paired-2.0 [1.0]"
+    assert sorted(merges[1:]) == [
         "[ebuild  N     ] dev-libs/needer-1.0 ",
         "[ebuild  N     ] dev-libs/othermod-1.0 ",
+    ]
+    _assert_residual_slot_conflict_block(
+        rust.stdout,
+        fixture_env["ROOT"],
+        "dev-libs/paired:0",
+        "dev-libs/paired-2.0:0/0::testrepo",
+        [("dev-libs/needer-1.0:0/0::testrepo", ">=dev-libs/paired-2.0", False)],
+        "dev-libs/paired-1.0:0/0::testrepo",
+        [("dev-libs/othermod-1.0:0/0::testrepo", "<dev-libs/paired-2.0", False)],
+    )
+
+
+@pytest.mark.parametrize("reversed_argv", [False, True], ids=["plainuser-first", "needer-first"])
+def test_solvable_installed_instance_collision_stays_silent(
+    emerge_binary, fixture_env, reversed_argv
+):
+    """#57 K2's regression guard (`#57 S0` cell e): `dev-libs/plainuser`
+    depends on a bare, unversioned `dev-libs/paired`, which the installed
+    1.0 satisfies, while `dev-libs/needer` forces `>=paired-2.0`. One
+    graphed instance (2.0) satisfies *every* hard parent atom, so real
+    `_solve_non_slot_operator_slot_conflicts` reconciles it silently --
+    real merges `U paired-2.0` plus both consumers, no block, rc 0, in
+    both argv orders (verified in the S0 run dir).
+
+    Portuale reaches the same output through the backtracker: the walk
+    records the collision, `collect_feedback`'s `slot_want` solvability
+    check finds 2.0 satisfies both wants, and the retry re-resolves the
+    bare atom under both constraints at once. This is the shape S1's new
+    installed-instance check must NOT turn into a block."""
+    args = ["--pretend", "dev-libs/plainuser", "dev-libs/needer"]
+    if reversed_argv:
+        args = ["--pretend", "dev-libs/needer", "dev-libs/plainuser"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    assert rust.returncode == 0
+    assert _SLOT_COLLISION_PREAMBLE not in rust.stdout
+    lines = rust.stdout.splitlines()
+    assert lines[0] == "[ebuild     U  ] dev-libs/paired-2.0 [1.0]"
+    assert sorted(lines[1:]) == [
+        "[ebuild  N     ] dev-libs/needer-1.0 ",
+        "[ebuild  N     ] dev-libs/plainuser-1.0 ",
     ]
 
 
@@ -15389,17 +15453,30 @@ def test_oracle_slotop_rebuild_order(
     `--dynamic-deps=n`): installed `A-1`, `B-0` (`A:0/1=`), `C-0`
     (`|| ( X A:0/1= )`); world `[B, C]`. Real merges `[A-2, (B-0, C-0)]`
     -- the unsatisfiable `X` arm lands in `_initially_unsatisfied_deps`
-    and the `A:=` arm still rebuilds `C-0`. Tree `C-0` is
-    `fixtures/repo/app-misc/C/C-0.ebuild` (`X` exists nowhere)."""
+    and the `A:=` arm still rebuilds `C-0` (`X` exists nowhere).
+
+    Upstream's `C` is `fixtures/repo/app-misc/Cor` here, not
+    `app-misc/C` (#57 S1): upstream re-uses the name `app-misc/C` for
+    *two* different ebuilds -- this case's `|| ( app-misc/X
+    app-misc/A:= )` and `testSlotConflictRebuild`'s `<app-misc/A-2` cap
+    (`test_oracle_slotop_conflict_rebuild`) -- while portuale's fixture
+    tree has one ebuild per name, and the checked-in `C-0.ebuild`
+    carries the cap. Pointing this case at `C` therefore rebuilt the
+    consumer against the *cap*, whose `<app-misc/A-2` is satisfied only
+    by installed `A-1`; before #57 S1 nothing looked at the installed
+    instance's slot, so that cap was silently ignored and the case
+    passed for the wrong reason. It now correctly reports/reconciles the
+    collision, which is `testSlotConflictRebuild`'s outcome, not this
+    one's -- so the upstream ebuild gets its own fixture name."""
     root = _b1_root(
         tmp_path,
-        ["app-misc/B", "app-misc/C"],
+        ["app-misc/B", "app-misc/Cor"],
         [
             ("app-misc", "A", "1", "0/1", {}),
             ("app-misc", "B", "0", "0", {"RDEPEND": "app-misc/A:0/1="}),
             (
                 "app-misc",
-                "C",
+                "Cor",
                 "0",
                 "0",
                 {"RDEPEND": "|| ( app-misc/X app-misc/A:0/1= )"},
@@ -15420,27 +15497,11 @@ def test_oracle_slotop_rebuild_order(
     assert app[0].startswith("[ebuild  r  U  ] app-misc/A-2 ")
     assert {ln.split("] ", 1)[1].split(" ", 1)[0] for ln in app[1:]} == {
         "app-misc/B-0",
-        "app-misc/C-0",
+        "app-misc/Cor-0",
     }
     assert all(ln.startswith("[ebuild  rR    ] ") for ln in app[1:])
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="bug 614390 stays divergent on SELECTION, not on the rebuild "
-    "route or the undo (both landed: S3 walked node, S4 "
-    "_eliminate_rebuilds). The top-level bare `dev-libs/socc` resolves "
-    "socc-2 first; meta's later `=socc-1` dep then lands on the "
-    "already-scheduled slot through the already-installed fast path, "
-    "which never consults `resolved_slots` -- real's `_add_pkg` "
-    "slot-parent check (depgraph.py:2160-2185) turns that into a slot "
-    "conflict, and the solvable-conflict feedback enforces "
-    "`{dev-libs/socc, =socc-1}` -> socc-1. Portuale's installed-side "
-    "slot check is the #36-overlap gap (mask-aware selection); the undo "
-    "rules themselves are correct on this shape (rule 5 keeps socc-1's "
-    "AtomArg rebuild, rule 8 keeps socd-1/socb-2's graph-bound := with "
-    "`socfoo:0/2=`).",
-)
 def test_oracle_slotop_complete(
     emerge_binary, fixture_env, tmp_path
 ):
@@ -15452,7 +15513,18 @@ def test_oracle_slotop_complete(
     `test_oracle_slotop_runtime_pkg_mask`). Installed `socmeta-1`,
     `socb-1`/`socc-1`/`socd-1` (`socfoo:0/1=`), `socfoo-1` (`0/1`);
     world `[socmeta]`. Real merges
-    `[socfoo-2, (socd-1, socc-1, socb-2), socmeta-2]`."""
+    `[socfoo-2, (socd-1, socc-1, socb-2), socmeta-2]`.
+
+    Was a strict xfail on SELECTION until #57 S1 (K3): the top-level
+    bare `dev-libs/socc` resolved socc-2 first and socmeta's later
+    `=socc-1` dep landed on the already-scheduled slot through the
+    already-installed fast path, which never consulted `resolved_slots`
+    -- exactly the gap #57 closes. With the installed-instance slot
+    check in place the collision is recorded, the solvable-conflict
+    feedback enforces `{dev-libs/socc, =dev-libs/socc-1}`, and the full
+    merge list now matches real. The undo rules were already correct on
+    this shape (rule 5 keeps socc-1's AtomArg rebuild, rule 8 keeps
+    socd-1/socb-2's graph-bound `:=` with `socfoo:0/2=`)."""
     root = _b1_root(
         tmp_path,
         ["dev-libs/socmeta"],

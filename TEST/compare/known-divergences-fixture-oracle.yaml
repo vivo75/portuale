@@ -71,19 +71,17 @@
   slugs: ["dev-libs_needer_dev-libs_othermod"]
   match: "real rc=1 portuale rc=0"
   reason: >
-    #54 S1 gated the installed-consumer reverse scan on required-set
-    reachability, so keeper's pin (outside every reachable set here) no
-    longer applies -- but portuale's residual-conflict block for this
-    shape was entirely driven by that scan's dropped pins, and there is
-    no independent mechanism for two directly-requested hard atoms
-    (needer's `>=2.0`, othermod's `<2.0`) disagreeing on the same
-    transitive dependency with no installed vdb consumer involved. Real
-    still reports the conflict (installed 1.0 pulled in by othermod
-    alone, exit 1); portuale merges all three silently, exit 0. Filed as
-    backlog #57 (a second, narrower conflict-detection gap, out of #54's
-    scope). See `triangle-residual-conflict-missing-block-*` for the
-    block-content findings this same gap causes.
-  owner: portuale-bug
+    Deliberate convention, not a bug: portuale renders the slot-conflict
+    notice as *informational* and keeps exit 0, where real exits 1 (see
+    the `pretend.rs` slot-conflict renderer's own doc comment and #54 K1
+    / #57 K1, decided 2026-09-16). Since #57 S1 the block itself matches
+    -- portuale reports the same `dev-libs/paired:0` collision between
+    installed 1.0 (pulled in by othermod) and merge 2.0 (pulled in by
+    needer), in both argv orders -- so only the exit status differs.
+    Backlog #58 tracks revisiting the convention in a future release
+    (breaking change, needs a migration story for anything relying on
+    rc 0).
+  owner: claude-opus-5
 
 - id: triangle-residual-conflict-suppressed-merge-list
   category: exit
@@ -91,28 +89,8 @@
   match: "merge-list comparison suppressed"
   reason: >
     The comparator suppresses merge-list comparison on the rc mismatch
-    above; the two merge lists are identical (3 entries each, verified in
-    the saved outputs).
-  owner: portuale-bug
-
-- id: triangle-residual-conflict-missing-block-header
-  category: error
-  slugs: ["dev-libs_needer_dev-libs_othermod"]
-  match: "Multiple package instances within a single package slot have been pulled"
-  reason: >
-    Backlog #57 (see `triangle-residual-conflict-exit`): real reports the
-    needer/othermod residual conflict via its ordinary two-hard-atom
-    slot-conflict mechanism, independent of any installed vdb consumer;
-    portuale's equivalent block is gated on `reverse_dependency_
-    constraints`'s dropped pins only, so with keeper correctly excluded
-    (#54 S1) it renders nothing for this shape.
-  owner: portuale-bug
-
-- id: triangle-residual-conflict-missing-block-second-line
-  category: error
-  slugs: ["dev-libs_needer_dev-libs_othermod"]
-  match: "into the dependency graph, resulting in a slot conflict:"
-  reason: >
-    The second line of the #57 missing block (see
-    `triangle-residual-conflict-missing-block-header`).
-  owner: portuale-bug
+    above (`triangle-residual-conflict-exit`, the K1 convention); the two
+    merge lists are identical (3 entries each, verified in the saved
+    outputs and pinned by
+    `test_needer_othermod_triangle_reports_the_installed_instance_conflict`).
+  owner: claude-opus-5
