@@ -439,3 +439,45 @@ fn find_hard_cycles_ignores_a_suppressed_disjunctive_slot_op_branch() {
         .is_empty()
     );
 }
+
+#[test]
+fn find_virtual_cycles_ignores_a_suppressed_disjunctive_branch() {
+    // The walk keeps the first written branch, so `O → D` is suppressed and the
+    // loop never closes through it (a documented cut: Portage may probe the
+    // suppressed branch during choice evaluation and fail instead).
+    let alt_edge = |pkg: &str, branch: u32| DepEdge {
+        atom: format!("virtual/{pkg}"),
+        evaluated: format!("virtual/{pkg}"),
+        category: "virtual".to_string(),
+        package: pkg.to_string(),
+        priority: DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        },
+        disjunctive: true,
+        alt: Some((0, branch)),
+        key: 0,
+    };
+    let plain_edge = |pkg: &str| DepEdge {
+        atom: format!("virtual/{pkg}"),
+        evaluated: format!("virtual/{pkg}"),
+        category: "virtual".to_string(),
+        package: pkg.to_string(),
+        priority: DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        },
+        disjunctive: false,
+        alt: None,
+        key: 0,
+    };
+    let mut o = graph_entry("virtual", "O", "1");
+    o.deps = vec![alt_edge("plain", 0), alt_edge("D", 1)];
+    let plain = graph_entry("virtual", "plain", "1");
+    let mut d = graph_entry("virtual", "D", "1");
+    d.deps = vec![plain_edge("O")];
+    let mut p = graph_entry("dev-libs", "P", "1");
+    p.deps = vec![plain_edge("D")];
+    let entries = vec![o, plain, d, p];
+    assert!(find_virtual_cycles(&entries, Path::new("/nonexistent-root")).is_empty());
+}

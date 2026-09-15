@@ -36,3 +36,107 @@ fn resolved_dep_targets_reports_an_installed_target_as_no_tree_edge() {
     let children: Vec<usize> = g.children[0].iter().map(|&(c, _)| c).collect();
     assert_eq!(children, vec![1], "the scheduling graph keeps the edge");
 }
+
+#[test]
+fn kept_alt_branches_agrees_with_build_digraph_on_a_multi_branch_group() {
+    // All-in-graph outranks all-installed, so the merge-bound branch is kept.
+    // Portage: dep_check.py, dep_zapdeps
+    let owner_deps = vec![
+        DepEdge {
+            atom: "~dev-libs/newdep-2".to_string(),
+            evaluated: "~dev-libs/newdep-2".to_string().clone(),
+            category: "dev-libs".to_string(),
+            package: "newdep".to_string(),
+            priority: DepPriority {
+                runtime: true,
+                ..DepPriority::default()
+            },
+            disjunctive: true,
+            alt: Some((0, 0)),
+            key: 3,
+        },
+        DepEdge {
+            atom: "dev-libs/olddep".to_string(),
+            evaluated: "dev-libs/olddep".to_string().clone(),
+            category: "dev-libs".to_string(),
+            package: "olddep".to_string(),
+            priority: DepPriority {
+                runtime: true,
+                ..DepPriority::default()
+            },
+            disjunctive: true,
+            alt: Some((0, 1)),
+            key: 3,
+        },
+    ];
+    let mut olddep = new_entry("dev-libs", "olddep", "1.0", Vec::new());
+    olddep.outcome = PretendOutcome::AlreadyInstalled {
+        version: "1.0".into(),
+    };
+    let entries = vec![
+        new_entry("app-misc", "owner", "1.0", owner_deps),
+        new_entry("dev-libs", "newdep", "2", Vec::new()),
+        olddep,
+    ];
+    let root = Path::new("/nonexistent-root-for-unit-test");
+    let kept = kept_alt_branches(&entries, root, &HashMap::new());
+    assert_eq!(
+        kept[0],
+        HashSet::from([0usize]),
+        "the in-graph branch is kept over the installed one"
+    );
+    let g = build_digraph(
+        &entries,
+        &["app-misc/owner".to_string()],
+        root,
+        &HashMap::new(),
+    );
+    let children: Vec<usize> = g.children[0].iter().map(|&(c, _)| c).collect();
+    assert!(
+        children.contains(&1),
+        "an edge to the kept branch must exist: {children:?}"
+    );
+    assert!(
+        !children.contains(&2),
+        "no edge to the suppressed branch: {children:?}"
+    );
+    // The self-branch exclusion the helper shares.
+    let mogo_deps = vec![
+        DepEdge {
+            atom: ">=dev-lang/mogo-1.24".to_string(),
+            evaluated: ">=dev-lang/mogo-1.24".to_string().clone(),
+            category: "dev-lang".to_string(),
+            package: "mogo".to_string(),
+            priority: DepPriority {
+                buildtime: true,
+                ..DepPriority::default()
+            },
+            disjunctive: true,
+            alt: Some((0, 0)),
+            key: 4,
+        },
+        DepEdge {
+            atom: ">=dev-lang/mogoboot-1.24".to_string(),
+            evaluated: ">=dev-lang/mogoboot-1.24".to_string().clone(),
+            category: "dev-lang".to_string(),
+            package: "mogoboot".to_string(),
+            priority: DepPriority {
+                buildtime: true,
+                ..DepPriority::default()
+            },
+            disjunctive: true,
+            alt: Some((0, 1)),
+            key: 4,
+        },
+    ];
+    let entries = vec![
+        new_entry("dev-lang", "mogo", "1.26", mogo_deps),
+        new_entry("dev-lang", "mogoboot", "1.24", Vec::new()),
+    ];
+    let kept = kept_alt_branches(&entries, root, &HashMap::new());
+    assert_eq!(
+        kept[0],
+        HashSet::from([1usize]),
+        "the circular self branch is not kept (#53)"
+    );
+}
