@@ -687,3 +687,16 @@ the latter's first divergence at #304 (`TEST/findings/l0.md` "R3b").
 Full wave verification: fmt/clippy/test green, pytest 1594 passed, L2
 tracks rc 0, L0 as above. R3c/R3d resume the #25 line with the
 installed-nomerge model.
+
+**Wave 5 progress 2026-09-15:** **H4** — `entry_metadata_env`'s
+per-build-entry metadata read now goes through
+`mrg_director::RepoCache`/`Md5Cache`, whose `metadata()` delegates to
+the #41 decision point `portage_repo::repo_aux_metadata` (repo cache ->
+depcachedir -> depend phase); behaviour-neutral (L1 porttest
+`l1-20260915T012229Z` hard 0 / UNEXPLAINED 0), 7/8 slots on production
+traffic, `Director` left for H5. **R3c not started** in this session:
+the satisfied-at-add recording plus the superseded-edge drop touches
+every `DepEdge` construction site and the scheduler's priority ladder,
+and needs fresh gedit/nautilus `--debug` digraph oracles and the
+`MULTI_deep-update-world` guard run; it is the next slice.
+
