@@ -4,7 +4,7 @@ PROJ: readability-relaxed semantic projection (BabelTele, arXiv:2606.19857); gly
 LEGEND (PY/CT-byte-identical refs below = pre-2026-09-15 rules, superseded by PYREF-REMOVED): `∷`is `;`fence `|`field `→`leads/causes `⇒`decision `←`from `∈`in `∉`not-in `¬`not `∧`and `∨`or `:=`def `!`must-not `?`unverified `+`add `-`remove `@`anchor file:sym:line `F/M/S`=tiers(F Opus5/Fable5.1, M Sonnet5, S Haiku4.5; Frev=F reads full diff pre-user-commit) `U`=user-owned `D#`=owner decision §3 `PR`=rust/portage-repo/src/lib.rs `MO`=rust/portage-repo/src/merge_order.rs `PT`=rust/portuale/src/pretend.rs `EP`=rust/portuale/src/ebuild_phases.rs `EM`=rust/portuale/src/ebuild_merge.rs `MD`=rust/mrg-director/src/lib.rs `PY`=python/emerge_pretend_reference.py `CT`=tests/test_emerge_pretend_contract.py `F25`=docs/025-tier2-closeout.deepseek.md §11 `L3F`=TEST/findings/l3.md `L2F`=TEST/findings/l2.md
 
 PYREF-REMOVED 2026-09-15 (branch backlog/python-copy-removal; docs/second_python_copy_removal.md) ⇒ R3b..R5 ¬PY ¬Rust==PY: pin Rust vs real oracle ∧ tests/test_output_invariants.py green ∧ reviewed corpus drift blessed (PORTUALE_CORPUS_BLESS=1) same commit ∷ #26 F-A1 w/ PORTUALE_DYNAMIC_DEPS_APPEND=1 ⇒ only test_oracle_slotop_undo_cascade fails (PY half gone) ∷ found+fixed C2 race dc8022b (concurrent cache-miss shared depend metadata file)
-STATUS: proposed 2026-09-14 ∷ D1-D6 ANSWERED ∷ R0 DONE (#21 cut) ∷ W1 DONE ∷ W2 DONE (R2 rescoped per (a): #36 not-reproducible-as-framed, genuine upstream oracle captured) ∷ W3 DONE: P2b (env rows 0) ∥ C2 (depend-phase fallback) ∥ R3a (025b design, owner read pending before R3b) ∥ H3 (6/8 slots) ∷ W4 ¬started (R3b gates on the owner reading 025b)
+STATUS: proposed 2026-09-14 ∷ D1-D7 ANSWERED ∷ R0 DONE (#21 cut) ∷ W1 DONE ∷ W2 DONE (R2 rescoped per (a): #36 not-reproducible-as-framed, genuine upstream oracle captured) ∷ W3 DONE: P2b (env rows 0) ∥ C2 (depend-phase fallback) ∥ R3a (025b design, owner read pending before R3b) ∥ H3 (6/8 slots) ∷ W4 DONE (P3 C3 R3b) ∷ W5 H4 DONE ∷ W6 R3c STOPPED→REVALIDATED 2026-09-15 ⇒ R3c∧R3d WITHDRAWN ∷ D7 ANS opt1 ⇒ W6 R3e′ DONE (#25 DONE-PARTIAL) ∷ W7 next
 SCOPE: docs/backlog-tasks.md OPEN only: T5{41,44,45} T2{17,20,21,25,28,35,36} ∷ DONE/DONE-PARTIAL ∉scope
 RF: AGENTS.md(step8 verify); docs/agent-context.md; docs/scope-backlog.md §A §H §I §K; per-track plan/finding below
 
@@ -35,6 +35,7 @@ RF: AGENTS.md(step8 verify); docs/agent-context.md; docs/scope-backlog.md §A §
   D4 #25 ⇒ ANS yes: per-slice L0 order may move ±; net after R3e ¬worse; log every flipped probe ∷ R3b+
   D5 #17 ⇒ ANS time-box R5 = 600 s; limit hit ⇒ STOP + residue→deliberate cut w/ lever table so far ∷ R5
   D6 #28 ⇒ ANS slots only (¬Director as production entry) ∷ H5
+  D7 #25 post-revalidation ⇒ ANS 2026-09-15 opt1: close #25 on this evidence (new slice R3e′) ∷ +gedit/nautilus entry ∈known-divergences.yaml like gnome-shell ∷ correct F-B4 ∧ #25 DONE-PARTIAL w/ 2 small residues ∷ verify 2-probe L0 run ⇒ unexplained order 17→15 ∷ R3e′
 
 §4 TRACK-P L3 producer (#44 #45)
   GOAL: L3 smoke (TEST/atomlists/l3-smoke.txt) OWNER+VDB environment 0 unexplained ⇒ l3-core(344) startable
@@ -87,12 +88,13 @@ RF: AGENTS.md(step8 verify); docs/agent-context.md; docs/scope-backlog.md §A §
   R3 #25 _complete_graph installed nomerge nodes — OWNS: F-B4 (initially-satisfied-by-installed ⇒ no edge; same-slot merge supersedes installed ⇒ drop its in-edges; nghttp2→systemd; gedit #5 nautilus #8; ¬static build_digraph rule since MULTI_deep-update-world needs opposite edge ⇒ walk order is the info) ∷ F-B3 (-pe @system tie-break = real _create_graph LIFO insertion vs MO:build_digraph:1314 DFS from top atoms; _system #11 _world #14 MULTI_emptytree-system #13) ∷ orig (real keeps every @world/@system-reachable installed pkg as node; portuale reverse-dep atoms only MO:add_installed_dependency_closure:1044)
     R3a(F,4h,docs,Frev, U reads) docs/025b-complete-graph-nodes.md: real _create_graph/_add_pkg/_complete_graph node+edge recording (insertion order, DepPriority.satisfied, superseded in-edge removal) vs portuale resolver→GraphEntry→build_digraph ∷ data to hand over: (1) per-node insertion seq (2) per-edge satisfied-by-installed-at-add flag (3) installed nodes first-class ∷ acceptance probes via TEST/scripts/mo-trace/: gtk:4, gedit, -pe @system, MULTI_deep-update-world
     R3b(F,4-6h) insertion seq → GraphEntry → pre-bias order ∈build_digraph (replace DFS) ¬edge change ∷ ACCEPT: MO_ORDER -pe @system = real (368==368 same seq) + D4 flip log
-    R3c(F,4-6h) record satisfied-by-installed at edge add ⇒ drop like real priority ∷ ACCEPT: gedit nghttp2 only virtual/pkgconfig edge ∧ MULTI_deep-update-world portage/gentoolkit order kept (B2 guard)
-    R3d(F,4-6h) reachable installed ⇒ nodes; same-slot supersede ⇒ move/drop in-edges; retire reverse-dep atom approximation at parity ∷ ACCEPT: gtk:4/gedit/nautilus node+edge sets = real --debug digraph dump ∧ MO_NODES equal all 4 probes
-    R3e(M,2h+container) full L0; TEST/findings/l0.md "## I" + F25 F-B3/F-B4 resolved∨residue explained + backlog-tasks ∷ net L0 order count ¬rise (D4)
+    R3c WITHDRAWN (premise false, see REVAL) was: (F,4-6h) record satisfied-by-installed at edge add ⇒ drop like real priority ∷ ACCEPT: gedit nghttp2 only virtual/pkgconfig edge ∧ MULTI_deep-update-world portage/gentoolkit order kept (B2 guard)
+    R3d WITHDRAWN (node sets already = real 16/18) was: (F,4-6h) reachable installed ⇒ nodes; same-slot supersede ⇒ move/drop in-edges; retire reverse-dep atom approximation at parity ∷ ACCEPT: gtk:4/gedit/nautilus node+edge sets = real --debug digraph dump ∧ MO_NODES equal all 4 probes
+    R3e′(M,2h+L0 subset,D7) known-divergences.yaml `gedit-nautilus-cluster-a-rewalk-abort` [order] gedit+nautilus ∷ 025 §11 F-B4 correct ∷ backlog-tasks #25 DONE-PARTIAL residue {virtual/man ||-bundle pop timing, docbook-xml-dtd hash swap} ∷ ACCEPT subset: 2 slugs explained ∧ nothing else moves ∷ L0 order 17→15
+    R3e(superseded by R3e′) full L0; TEST/findings/l0.md "## I" + F25 F-B3/F-B4 resolved∨residue explained + backlog-tasks ∷ net L0 order count ¬rise (D4)
   R4(F,4-6h) #35 downgrade_probe + live graph_db
     real dep_zapdeps conflict_downgrade/installed_downgrade 3rdparty/portage/lib/portage/dep/dep_check.py soft 476-521 bug 531656 ∷ seam PR:9069 ∷ plan docs/023-backtracking_resolve.md B2
-    after R3: live graph_db = read resolver current node set + slot index ¬new parallel structure
+    ¬wait R3d (withdrawn): live graph_db = resolver in-progress entries + best_installed_for_atom ∷ was: after R3: live graph_db = read resolver current node set + slot index ¬new parallel structure
     oracle fixture (build if plan only describes): || group, 1st alt conflicts w/ installed higher version same slot ∷ implement downgrade_probe (config/CLI accept downgrade?) + 2 guards; pin vs oracle (¬PY)
     ACCEPT: fixture == real ∧ L0 ≥ before
   R5(F,time-box 600s,D5) #17 F-B1 drain timing
@@ -116,8 +118,8 @@ RF: AGENTS.md(step8 verify); docs/agent-context.md; docs/scope-backlog.md §A §
   W2 P1 ∥ P2a ∥ C1 ∥ R2 ∥ H2 ⇒ gate: P2a root cause reviewed
   W3 P2b ∥ C2 ∥ R3a ∥ H3 ⇒ gate: R3a approved ∧ D4
   W4 P3 ∥ C3 ∥ R3b ⇒ gate: L3 smoke clean ∧ L2F #41 FIXED
-  W5 R3c ∥ H4
-  W6 R3d → R3e ⇒ gate: full L0
+  W5 H4 (R3c withdrawn)
+  W6 R3e′ (D7 ANS opt1) ⇒ gate: 2-slug L0 subset
   W7 R4 ∥ H5
   W8 R5 600s ⇒ D5
   sizes = agent-hours excl container runs (L0 longest)
@@ -126,3 +128,17 @@ RF: AGENTS.md(step8 verify); docs/agent-context.md; docs/scope-backlog.md §A §
   T5: #41 #44 #45 DONE ∧ L3 smoke 0 unexplained ∧ l3-core unblocked (run=U)
   T2: #20 #36 #25 #35 DONE ∧ #21 deliberate cut ∧ #17 DONE∨cut w/ evidence ∧ #28 DONE per D6
   ∀commit: ¬L0/L1/L2 regression ∧ CT green ∧ backlog-tasks/scope-backlog/findings updated in closing commits
+
+REVAL 2026-09-15 (W6; SRC §9 "Wave 6 revalidated"; TEST/findings/l0.md "R3c revalidation"; artefacts TEST/logs/r3c-revalidate-20260915/)
+  oracle: real --debug stdout+stderr merged unbuffered ⇒ walk+solver+digraph one stream
+  mech: nghttp2 >=systemd-209 → installed systemd @add (=portuale) ∷ polkit systemd[policykit] → merge same slot ∷ _solve_non_slot_operator_slot_conflicts depgraph.py:1774 ⇒ _remove_pkg(installed) drops ALL in-edges ⇒ broken parents → _dep_stack → _create_graph re-walk ⇒ edges redirected → merge
+  gedit∧nautilus: re-walk returns 0 @gnome-keyring >=gcr-3.27.90:0=[gtk] unsat (rc1 autounmask) ⇒ return ignored ⇒ unwalked parents {nghttp2 pam shadow pambase service-manager} lose edge ∷ walked {gvfs gcr p11-kit dbus util-linux procps} keep → merge ∷ split := CPython set order PYTHONHASHSEED=0 ⇒ ¬portable ∷ real nondeterministic w/ random seed
+  complete re-walk (networkmanager kdecore-meta vlc wireshark libreoffice) ⇒ in-edges redirected = portuale today ⇒ "satisfied-at-add ⇒ no edge" FALSE (why variant1 broke _system/_world)
+  18 [order] probes: node sets (incl n:) identical 16/18 (exc MULTI_emptytree-system portage-version row ∧ gnome-shell cluster-A nasm) ∷ re-walk abort only gedit nautilus gnome-shell
+  ⇒ F-B4 := cluster-A abort residue (F-B5 family) ∷ ¬code change
+  ALT (D7 ANS opt1 2026-09-15): 1 REC+CHOSEN R3e′ close #25 on evidence ∷ 2 faithful port (solver re-walk + SipHash13/tuple-hash/set-probe emulation) = deliberate cut ∷ 3 abort-state heuristic drop REJECTED (drops gvfs/gcr/dbus→systemd real keeps)
+  knock-on: R4 ¬gated on R3d ∧ W7 startable (D7 answered) ∷ R5 owns 15 non-abort order rows (equal node sets ⇒ frontier/edge timing; families pyproject-metadata {gtk:4 gtk+:3 networkmanager wireshark kdecore-meta} ∧ freetype {firefox thunderbird gimp i3}) ∷ R5 step1 (re-measure post-R3) DONE
+
+W6 CLOSED 2026-09-15 R3e′ DONE: known-divergences.yaml gedit-nautilus-cluster-a-rewalk-abort [order] ∷ L0 subset l0-20260915T063724Z both explained ∧ portuale out byte-identical ∧ advice/error unchanged ⇒ order unexplained 17→15 ∷ F-B4 corrected ∈025 §11 ∷ #25 DONE-PARTIAL residue {virtual/man bundle timing, docbook-xml-dtd hash swap, 023 btnr (installed instance ∉resolved_slots ⇒ ¬slot-conflict party; resolver-level, ¬touched by R3)}
+  ⇒ R4 graph_db: installed matches via best_installed_for_atom ! assume resolved_slots covers installed ∷ NEXT W7 R4 ∥ H5
+

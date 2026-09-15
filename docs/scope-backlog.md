@@ -854,7 +854,8 @@ merge, unmerge, world management, all real. The gap to a full drop-in is:
    `docs/023-oracle.md` and `what-this-proves.md`). What's
     left is depth on other pieces already built: the follow-ups that own
     the remaining resolver divergences (`#25` installed-nomerge
-    instances for btnr, `#24` `:=` rebuild for the a522084 `B-0`,
+    instances for btnr -- #25 DONE-PARTIAL 2026-09-15: F-B3 fixed by R3b,
+    F-B4 explained as cluster-A re-walk-abort residue, btnr still open -- `#24` `:=` rebuild for the a522084 `B-0`,
     `#36` closed 2026-09-14 (rescoped against the genuine upstream oracle: no selection gap, only the documented budget accounting);
     slot conflicts keep the standing informational exit 0 --
     reconciled explicitly under the #19 Slice-5 entry above, not
@@ -864,7 +865,8 @@ merge, unmerge, world management, all real. The gap to a full drop-in is:
     slightly-off sequence; the 025 B-series committed the trace harness
     and cut the count from 22 with parity 0.800 -> 0.817, residue
     adjudicated in `docs/025-tier2-closeout.deepseek.md` §11
-    F-B1/F-B3/F-B4 and #25).
+    F-B1/F-B3/F-B4 and #25; after #25's R3e′ the L0 unexplained order
+    count is 15).
 2. **The Part 2 tails** — F's `--info` host-state
    half, G's brush re-pin, §J's `--solver=` real-tree bugs (E's fetch
    ordering and §J's notices/markers/doc cuts shipped as Tier-1

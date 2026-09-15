@@ -277,3 +277,28 @@ R3d.** The insertion instant must be carried per entry (the §4.3
 first-class installed nodes and their walk positions) before the
 `satisfied` bit can decide the edge target. The work-tree changes were
 reverted; the tree is at the R3b/H4 state.
+
+## 9. §8 corrected — revalidation (2026-09-15)
+
+§8's conclusion ("carry the insertion instant per entry; R3c and R3d are
+one change") does not hold. A merged-stream real `--debug` oracle
+(`TEST/findings/l0.md` "R3c revalidation",
+`TEST/logs/r3c-revalidate-20260915/`) shows real's edge to a superseded
+installed node is removed by `_solve_non_slot_operator_slot_conflicts`
+(`_remove_pkg`) and **re-created towards the merge** by re-walking the
+broken parents. gedit/nautilus lose `nghttp2 → systemd` only because
+that re-walk aborts at gnome-keyring's unsatisfiable `gcr[gtk]`, and the
+parents that miss out are picked by CPython set order. When the re-walk
+completes (networkmanager and others), in-edges are redirected, which is
+portuale's current behaviour. §2.3 and §4.2's "satisfied edge stays
+soft/absent" reading is wrong for the same reason. Scheduler node sets
+already equal real's on 16/18 L0 order probes, so §4.3 has no L0-visible
+payoff left. R3c/R3d are withdrawn. The re-plan (R3e′, owner decision
+D7) is in `backlog_tier_5_and_2_sliced.opus.md` §9 "Wave 6 revalidated".
+
+R3e′ (2026-09-15, D7 option 1) closed #25 on that evidence: the gedit/nautilus
+`[order]` rows are allowlisted as `gedit-nautilus-cluster-a-rewalk-abort`
+(two-probe L0 `l0-20260915T063724Z`). Residues are listed under backlog #25:
+the §7 `virtual/man` bundle timing and `docbook-xml-dtd` swap, plus the 023
+`btnr` case. btnr needs installed instances as resolver-side slot-conflict
+parties, which this note's §4.3 scheduler-graph model never addressed.

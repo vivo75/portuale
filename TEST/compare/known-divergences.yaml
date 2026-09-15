@@ -34,6 +34,27 @@
 #  entry that stood here is gone. The L1-f phase-env-inheritance residue
 #  is handled by normalize.py's ENV_DROP, not an allowlist entry.)
 
+- id: gedit-nautilus-cluster-a-rewalk-abort
+  categories: [order]
+  slugs: ["app-editors_gedit", "gnome-base_nautilus"]
+  match: "real net-libs/nghttp2 vs portuale"
+  reason: >
+    Cluster-A abort residue (the F-B5 family), not a #17/#25 order bug.
+    Real's `_solve_non_slot_operator_slot_conflicts` removes the installed
+    systemd that polkit's `systemd[policykit]` supersedes, then re-walks
+    the removed node's parents to point their edges at the merge. In
+    these two probes that re-walk aborts at gnome-keyring's unsatisfiable
+    `>=app-crypt/gcr-3.27.90:0=[gtk]` (the probe's own rc-1 failure), so
+    the parents still on the stack (nghttp2, pam, shadow, pambase,
+    service-manager) lose their systemd edge; nghttp2 then merges early
+    (#5 / #8). Which parents miss out is CPython set order under
+    PYTHONHASHSEED=0 and cannot be ported; completed re-walks
+    (networkmanager and others) redirect the edges exactly as portuale
+    does. Only the `[order]` row is covered: the `[advice]`/`[error]`
+    rows are portuale's still-open masked-dependency disclosure gap.
+    Evidence: TEST/findings/l0.md "R3c revalidation" (backlog #25, D7).
+  owner: claude-opus-5
+
 - id: gnome-shell-cluster-a-abort
   categories: [order, extra, totals, advice, error]
   slugs: ["gnome-base_gnome-shell"]

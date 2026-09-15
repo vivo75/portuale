@@ -159,9 +159,9 @@ to a call site only); **H4 × C** by design.
 
 ---
 
-## 3. Owner decisions (answered 2026-09-14)
+## 3. Owner decisions (D1–D6 answered 2026-09-14, D7 answered 2026-09-15)
 
-All six are answered; the **Owner answer** column is binding for the
+All seven are answered; the **Owner answer** column is binding for the
 slices it blocks. The recommendation column is kept as the rationale.
 
 | # | Question | Recommendation | Owner answer (2026-09-14) | Blocks |
@@ -172,6 +172,7 @@ slices it blocks. The recommendation column is kept as the rationale.
 | **D4** | #25 is allowed to move L0 merge-order rows in both directions during its slices, provided the net after R3e is not worse? | Yes, with a per-slice log of every flipped probe. | **Yes** — individual slices may move L0 order up or down; the net after R3e must not be worse. | R3b+ |
 | **D5** | #17 stop rule: time box R5, file the residue as a deliberate cut if no lever closes it? | Yes, with a time box. | **Time box = 600 seconds.** At the limit, stop and file the residue (with the lever table so far) as a deliberate cut. | R5 |
 | **D6** | #28 end state: is "all 8 slots dispatched on the production path" enough, or does `Director` itself become the production entry point? | Slots only; the `action_build` decomposition is a separate, later decision. | **Slots only.** | H5 |
+| **D7** | #25 after the wave-6 revalidation: close on evidence (R3e′: F-B4 → cluster-A abort residue via `known-divergences.yaml`, node-set goal recorded as met), or fund a faithful port of real's aborted slot-conflict re-walk incl. CPython set order? | Close on evidence (alternative 1 in §9 "Wave 6 revalidated"); alternative 2 is a deliberate cut. | **Answered 2026-09-15: option 1, close #25 on this evidence (new slice R3e′).** Add a gedit/nautilus entry to `known-divergences.yaml`, like the existing gnome-shell one. Correct the F-B4 finding and mark #25 partly done, with two small residues. Verify with a two-probe L0 run; the unexplained order count should drop from 17 to 15. | R3e′, R4 start |
 
 ---
 
@@ -478,7 +479,13 @@ No edge changes yet.
 (368 == 368 nodes, same sequence); record every L0 probe that flips
 (D4).
 
-#### R3c (F, 4–6h) — "initially satisfied → no edge"
+#### R3c (F, 4–6h) — "initially satisfied → no edge" — **WITHDRAWN 2026-09-15**
+
+> Premise disproved by the wave-6 revalidation (see "Wave 6 revalidated"
+> at the end of §9): real *redirects* a superseded installed node's
+> in-edges through the slot-conflict solver's re-walk; the gedit/nautilus
+> "no edge" is that re-walk aborting at an unsatisfiable dep. Kept below
+> for the record only.
 
 Record, at the moment the resolver adds an edge, whether the atom was
 satisfied by an installed package; drop those edges from the scheduler
@@ -488,7 +495,12 @@ graph the way real's priority does.
 `MULTI_deep-update-world` keeps `portage`/`gentoolkit` order (the B2
 regression guard).
 
-#### R3d (F, 4–6h) — installed nomerge nodes + superseded in-edges
+#### R3d (F, 4–6h) — installed nomerge nodes + superseded in-edges — **WITHDRAWN 2026-09-15**
+
+> Node-set goal already met: scheduler node sets (installed nodes
+> included) equal real's on 16/18 L0 order probes, the other two being
+> known non-#25 rows. The superseded-in-edge half is the same disproved
+> premise as R3c. Replaced by R3e′ (see "Wave 6 revalidated").
 
 Promote reachable installed packages to nodes; when a same-slot merge
 supersedes one, move/drop in-edges as real does. Retire the reverse-dep
@@ -617,10 +629,12 @@ Close #28 per D6.
 | 2 | P1, P2a, C1, R2, H2 | P2a root cause reviewed |
 | 3 | P2b, C2, R3a (design, user reads), H3 | R3a approved (D4 answered: yes) |
 | 4 | P3, C3, R3b | L3 smoke clean; C finding FIXED |
-| 5 | R3c, H4 | — |
-| 6 | R3d → R3e | full L0 |
+| 5 | ~~R3c~~, H4 | — |
+| 6 | ~~R3d → R3e~~ → **R3e′** (close #25, owner decision D7) | 2-slug L0 subset |
 | 7 | R4, H5 | — |
 | 8 | R5 (600 s time box) | D5 |
+
+(Rows 5–6 revised 2026-09-15 by the wave-6 revalidation; see §9.)
 
 Sizes are agent-hours of focused work, excluding container runs (L0 is
 the long one).
@@ -713,4 +727,100 @@ nghttp2 `.order` 9336 < systemd-merge 9740; portuale DFS: systemd 96 <
 nghttp2 274). Conclusion: **R3c and R3d are one change** -- carry the
 per-entry insertion instant (first-class installed nodes) first; R3d
 and R3e have not started. Tree is at the R3b/H4 state, R3b's gedit/nautilus rows back to their pre-attempt `#5`/`#8` divergences.
+*(Superseded by the next paragraph: the "insertion instant" diagnosis
+above did not survive a merged-stream oracle.)*
+
+**Wave 6 revalidated 2026-09-15: R3c/R3d withdrawn, #25 re-planned.**
+Fresh real `--debug` oracles, with stdout+stderr merged unbuffered so
+the walk, the solver and the digraph dump are one ordered stream
+(`TEST/findings/l0.md` "R3c revalidation", artefacts
+`TEST/logs/r3c-revalidate-20260915/`), show the wave-6 stop was right
+but its conclusion wasn't:
+
+- Real draws `nghttp2 → installed systemd` at add time, like
+  portuale's walk. The edge disappears later, in
+  `_solve_non_slot_operator_slot_conflicts`: the installed node is
+  `_remove_pkg`ed (all in-edges gone) and its parents are re-walked so
+  their edges point at the merge. In gedit and nautilus that re-walk
+  **aborts** at gnome-keyring's unsatisfiable `gcr[gtk]` (the probe's
+  own rc-1 autounmask failure). Parents still on the stack (nghttp2,
+  pam, shadow, pambase, service-manager) never get their edge back;
+  parents walked earlier (gvfs, gcr, p11-kit, dbus, …) do. Which is
+  which comes down to CPython `set` order under `PYTHONHASHSEED=0`.
+- When the re-walk completes (`networkmanager`, `kdecore-meta`, `vlc`,
+  `wireshark`, `libreoffice`: rc 0 or no abort), every in-edge is
+  **redirected** to the merge, which is portuale's current graph. So
+  "satisfied-at-add ⇒ no edge" is wrong in general, and that is why
+  variant 1 broke `_system`/`_world`. No per-entry insertion model
+  would rescue it.
+- Over all 18 L0 `[order]` probes the scheduler node sets (installed
+  `n:` nodes included) are **identical on 16**. The two exceptions are
+  the known portage-version row (`MULTI_emptytree-system`) and
+  gnome-shell's cluster-A `nasm` extra. R3d's node goal is already met.
+  Only gedit, nautilus and gnome-shell show the aborted re-walk.
+
+Alternatives, recommendation first (owner decision **D7**, **answered 2026-09-15: option 1**, R3e′ as below):
+
+1. **(Recommended) R3e′: close #25 on evidence.** R3b shipped the F-B3
+   fix. F-B4 moves to the cluster-A abort family (F-B5) as an explained
+   residue. "Installed nodes first-class" closes as met at the scheduler
+   level (16/18 node-set equality). Work (M, ~2h + a 2-slug L0 subset):
+   extend `TEST/compare/known-divergences.yaml` with a
+   `gedit-nautilus-cluster-a-rewalk-abort` entry (`[order]` only,
+   same shape as `gnome-shell-cluster-a-abort`); correct
+   `docs/025-tier2-closeout.deepseek.md` §11 F-B4; `backlog-tasks.md` #25
+   → DONE-PARTIAL with the two named residues (`virtual/man` `||`-bundle
+   pop timing and `docbook-xml-dtd` hash-order swap on `-pe @system`,
+   both from §7 of `docs/025b`). Expected L0: order 17 → 15
+   unexplained, clean/parity unchanged. **Accept:** subset run shows
+   both slugs explained, nothing else moves.
+2. **Faithful port of the aborted re-walk (not recommended; deliberate
+   cut).** Portuale would need real's non-slot-operator conflict solver
+   as a second walk phase, *plus* emulation of CPython `set`
+   iteration order over `Package` objects (SipHash-1-3 string hashes
+   under seed 0, tuple-hash combination, set-table probing and
+   resize history) to know which broken parents are re-walked before
+   the failing one. Real itself is nondeterministic here under the
+   default random seed, so this only chases L0's pinned seed. Effort
+   F, multi-day, fragile across CPython versions.
+3. **Heuristic "abort-state" edge drop (rejected).** For example,
+   "in an autounmask-abort resolve, drop every in-edge that pointed at a
+   superseded installed node". It fixes nghttp2 but wrongly drops
+   gvfs/gcr/dbus → systemd, which real keeps. Without the set order it
+   is a coin toss per parent. Listed only so nobody re-derives it.
+
+Knock-on for the rest of track R:
+
+- **R4 (#35)** no longer waits on R3d. Real's `graph_db.match_pkgs`
+  answers from the depgraph's current package set, and portuale's
+  resolver already holds that set (merge entries plus installed
+  lookups). Build the live `graph_db` view over the resolver's
+  in-progress entries plus `best_installed_for_atom`, not over a new
+  installed-node structure. Wave 7 can start (D7 answered).
+- **R5 (#17)** becomes the owner of every non-abort `[order]` row: 15
+  rows, all with equal node sets, so what's left is frontier/edge timing
+  (first merge-pick divergences in `analysis.txt`, e.g. the
+  `dev-python/pyproject-metadata` early-pick family on
+  gtk:4/gtk+:3/networkmanager/wireshark/kdecore-meta and the
+  `media-libs/freetype` family on firefox/thunderbird/gimp/i3). Step 1
+  of R5 ("re-measure post-R3") is done by this revalidation. D5's
+  600 s box still applies.
+
+**Wave 6 closed 2026-09-15: R3e′ done (D7 option 1).** #25 is
+DONE-PARTIAL. `known-divergences.yaml`
+`gedit-nautilus-cluster-a-rewalk-abort` explains the two `[order]`
+rows. The two-probe L0 subset `l0-20260915T063724Z` shows both
+explained, portuale output byte-identical to the baseline, and
+advice/error rows unchanged, so L0 unexplained order goes 17 -> 15.
+F-B4 is corrected in `docs/025-tier2-closeout.deepseek.md` §11.
+Residues (backlog #25): `virtual/man` bundle timing and the
+`docbook-xml-dtd` hash swap. One further residue surfaced while
+closing: the 023 `btnr` oracle row (installed instances as
+resolver-side slot-conflict parties) was also owned by #25, and the
+scheduler-graph work never touched it. It stays open under #25.
+**It matters for R4.** Real's `graph_db.match_pkgs` sees installed
+packages as graph members, while portuale's `resolved_slots` indexes
+merge-bound outcomes only. R4's live `graph_db` must therefore answer
+installed matches through `best_installed_for_atom`, and must not
+assume `resolved_slots` covers them. Next: wave 7 (R4 ∥ H5).
 

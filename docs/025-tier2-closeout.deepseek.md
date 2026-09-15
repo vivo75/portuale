@@ -731,7 +731,9 @@ sides; patcher round-trip re-verified).
 ### F-B4 — B4: superseded installed in-edges are walk-order dependent (2026-09-12)
 
 **Status:** adjudicated — moved to #25 (`_complete_graph` installed
-nomerge nodes), per the plan's Gate 0.2 recommendation.
+nomerge nodes), per the plan's Gate 0.2 recommendation. **Resolved
+2026-09-15 as explained residue** (see the correction below):
+`known-divergences.yaml` `gedit-nautilus-cluster-a-rewalk-abort`.
 
 Harness on `-puvD app-editors/gedit`: node sets match (427 == 427);
 first merge divergence #5, real `net-libs/nghttp2` vs portuale
@@ -753,6 +755,14 @@ distinguishing information is real's walk order (which atom forced the
 merge first), i.e. the resolver must record `initially-satisfied ->
 no edge` and drop a superseded installed node's in-edges -- the #25
 architecture item. B4's probes (gedit #5, nautilus #8) stay residue.
+
+**Correction 2026-09-15:** the mechanism above is wrong. Real re-creates
+the in-edges towards the merge when `_solve_non_slot_operator_slot_conflicts`
+re-walks the removed installed node's parents; gedit/nautilus lose
+`nghttp2 -> systemd` because that re-walk aborts at gnome-keyring's
+unsatisfiable `gcr[gtk]`, so B4 is cluster-A abort residue (the F-B5
+family), not a walk-order model. Evidence: `TEST/findings/l0.md`
+"R3c revalidation".
 
 ### F-B5 — B5: gnome-shell's `order #0` explained as cluster-A abort residue (2026-09-12)
 
