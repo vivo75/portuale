@@ -1,0 +1,8 @@
+BDEPEND=>=dev-go/momd2manok-2.0
+DEFINED_PHASES=-
+DESCRIPTION=#53 fixture: nearest-passing pin -- mocommon analogue
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+SLOT=0/0.64
+_md5_=b3f1c5385bbddbe5bc0b50c379cfa4da

@@ -1,0 +1,8 @@
+BDEPEND=>=dev-lang/mogo-1.24:= app-misc/mounzip
+DEFINED_PHASES=-
+DESCRIPTION=#53 fixture: go-md2man analogue -- a hard buildtime slot-op dependency on the fixture's mogo, plus a second BDEPEND
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+SLOT=0/2.0
+_md5_=085c8492f42b5500209070ce37040fbf

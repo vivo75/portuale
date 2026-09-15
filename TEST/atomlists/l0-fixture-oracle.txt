@@ -29,3 +29,11 @@ dev-libs/needer dev-libs/othermod
 dev-libs/blockusedeptarget
 # unsatisfiable REQUIRED_USE
 dev-libs/requiredusebadpkg
+# #53: go-style || ( self other-bootstrap ) BDEPEND self-branch, with two
+# hard BDEPEND consumers of the md2man-analogue -- portuale misorders the
+# merge list (mogo after its owner); real resolves the || to itself
+# (already merge-bound) and aborts with a circular-dependency error
+# (known resolution difference, not a new portuale bug -- see L0 finding D)
+app-misc/mopodman
+# #53: nearest-passing pin -- same chain without the self-branch
+app-misc/mopodmanok
