@@ -159,7 +159,11 @@ Write-once per event (`pf:timestamp.log` under `elog/<cat>/`,
    buys cheaper iteration / `get_matches` but pays with `database is
    locked` timeouts (15 s, `sqlite.py:50`) and pid-aware reconnects.
    ~40k tiny files per repo is acceptable, and a reimplementation
-   only needs to *read* `md5-cache` and memoise in memory.
+   *reads* `md5-cache` (memoised in memory) after real's own
+   `validate_entry` rung: a present entry whose `_md5_`/`_eclasses_`/
+   EAPI no longer match the ebuild is treated as a miss and regenerated
+   through the depcachedir/depend-phase rungs (#46, `portage-repo::
+   md5_dict`).
 3. **Fix two genuine scaling bugs instead of redesigning:** (a)
    `Packages` full rewrite per inject — append + periodic compaction
    (or a per-package sidecar index) removes the only O(n)-per-package

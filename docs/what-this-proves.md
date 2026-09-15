@@ -16763,3 +16763,23 @@ export PATH="$HOME/.cargo/bin:$PATH"
 cargo mutants -p portage-repo --file portage-repo/src/solver_bridge.rs --in-place --timeout 300
 # -> 86 mutants tested in 7m: 26 missed, 44 caught, 16 unviable
 ```
+
+**A present `metadata/md5-cache` entry is validated against its ebuild, and a stale one regenerates exactly like real Portage (backlog #46, 2026-09-15).** Real `portdbapi._pull_valid_cache` walks the repo's pregen cache, the depcachedir and the `depend` phase, validating each rung's `_md5_`/`_eclasses_`/EAPI before trusting it; portuale used to read the file verbatim. `repo_aux_metadata` now checks `portage_repo::md5_dict::entry_is_valid` first (raw text -- not the `apply_updates_to_dep_string` rewrite -- memoised per path, masters resolved lazily) and treats a rejected entry as a miss: the depcachedir rung, then the depend phase, then the best-effort write-back; a provider failure returns an unusable-entry error rather than stale data (new `Error::StaleMd5Cache`), no provider returns the entry as-is, and an ebuild-less entry is trusted. The oracle work paid for itself twice: the depcachedir writes `_eclasses_` as `name\tpath\tmd5` triples while the repo cache writes pairs (S0 cell a; `mtime_md5_database` vs `md5_database`), and portuale's writer emitted an `INHERITED=` key real pops before the cache write. Both are fixed, and the writer is now byte-identical: real `egencache --update` vs `portuale emerge --regen` differ on 0 of 565 entries. Before any of that could land, every hand-written fixture entry (565, all carrying a 31-zero placeholder `_md5_`) was reconciled with real `egencache` as the authority; two ebuilds with backquoted `DESCRIPTION`s (real's depend phase runs them as command substitution) and two with shell-interpolated prose were fixed on the ebuild side, six missing `IUSE` declarations were restored, and the 21 deliberately cache-less fixture ebuilds stayed cache-less. A fast guard, `test_committed_fixture_md5_cache_entries_match_their_ebuilds`, keeps the tree valid (it failed 5 of 6 roots before S1). Real-scale beds: `L2_STALECACHE=1` (both builders stale `porttest/docs-1.0`; archive pairs hard=0), the #49 fixture oracle with a staled `dev-libs/common` (13 cases, 0 unexplained), the L0 image's own repo cache (gentoo 33227 valid / 0 stale, so L0 is untouched by construction) and L1 porttest (0 findings). Perf on the documented benchmark is unchanged within noise.
+
+```sh
+# read path: stale cache regenerates, valid cache is trusted (C0 P6/P7/P8)
+python3 -m pytest tests/test_portuale.py -q -k "stale_md5_cache_entry or valid_md5_cache_entry"
+# -> 2 passed
+python3 -m pytest tests/test_fixture_caches.py -q
+# -> 6 passed  (guard: every committed entry's _md5_ matches its ebuild)
+python3 scripts/md5_cache_audit.py
+# -> fixtures 565/565 valid, porttest 10/10
+
+# real-scale differentials
+L2_STALECACHE=1 L2_REBUILD=1 TEST/run/l2-portuale-builder.sh TEST/atomlists/l1-porttest.txt
+# -> TEST/logs/l2-20260915T161134Z: archive pairs hard=0, 0 unexplained, rc 0
+TEST/run/l0-fixture-oracle.sh
+# -> TEST/logs/l0-fx-20260915T160454Z: 13 cases, 6 clean, 0 unexplained
+TEST/run/l1-merge-from-binpkg.sh TEST/atomlists/l1-porttest.txt
+# -> TEST/logs/l1-20260915T161521Z: hard findings 0, UNEXPLAINED 0, rc 0
+```

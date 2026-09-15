@@ -249,6 +249,22 @@ are filed with repros in `TEST/findings/l3.md`. Per the S4 stop rule,
 `l3-core` (344 ebuilds) and `@system` (368) are not started until those
 two are fixed.
 
+**2026-09-15 memory note:** backlog #46 (md5-cache validation) is
+**closed**. The read path now validates a present `metadata/md5-cache`
+entry the way real `_pull_valid_cache` does (`portage-repo::md5_dict`:
+`_md5_`, EAPI, `_eclasses_` -- pairs for the pregen cache, triples for
+the depcachedir) and falls through to the depcachedir/depend-phase
+rungs on a reject; no provider returns it as-is, an ebuild-less entry is
+trusted, and a provider failure never falls back to stale data. All 565
+committed fixture entries were regenerated with real `egencache` first
+(byte-identical to `portuale emerge --regen`), the 21 deliberately
+cache-less ebuilds stay cache-less, and the guard
+`test_committed_fixture_md5_cache_entries_match_their_ebuilds` keeps
+them valid. L2_STALECACHE=1, the #49 fixture-oracle stale case, the L0
+image audit (gentoo 0 stale) and L1 porttest are green. Detail:
+[`05.046-metadata_md5-cache.opus.md`](05.046-metadata_md5-cache.opus.md),
+`TEST/findings/l2.md` S0-S4, `docs/on-disk-caches.md` §2.
+
 For what is **genuinely still open** — real portage behaviour not ported
 to either side, the deliberate cuts, the standing non-goals — see
 **[`scope-backlog.md`](scope-backlog.md)** (Part 2 = remaining work,
