@@ -2416,6 +2416,101 @@ def test_cache_less_repo_metadata_falls_back_to_the_depend_phase(
     assert again.stdout == result.stdout
 
 
+def test_cache_less_repo_metadata_is_written_to_the_depcache(emerge_binary, tmp_path):
+    """#41 C3: real keeps a regenerated `depend`-phase metadata dict in the
+    writable `depcachedir` in its flat `md5-dict` layout
+    (`<depcachedir>/<repo path without the leading '/'>/<cat>/<pf>`,
+    `cache/flat_hash.py:20-22`, C0's oracle) and `_pull_valid_cache`
+    reads it back before re-running the phase; an ebuild whose content
+    no longer matches the entry's `_md5_` invalidates it. Rust-only
+    (D2); the same staged cache-less overlay as the C2 test, with
+    `PORTAGE_DEPCACHEDIR` under `tmp_path` so the write-back is
+    observable."""
+    import hashlib
+    import shutil
+
+    repo_root = Path(__file__).resolve().parents[1]
+    overlay = repo_root / "TEST" / "images" / "overlay" / "porttest"
+    repo = tmp_path / "porttest-repo"
+    shutil.copytree(overlay, repo)
+    layout = repo / "metadata" / "layout.conf"
+    if "masters" in layout.read_text():
+        layout.write_text(
+            "\n".join(
+                ln
+                for ln in layout.read_text().splitlines()
+                if not ln.startswith("masters")
+            )
+            + "\n"
+        )
+    shutil.rmtree(repo / "metadata" / "md5-cache")
+
+    cfg = tmp_path / "cfg"
+    shutil.copytree(Path(FIXTURES_ROOT), cfg, symlinks=True)
+    with (cfg / "etc" / "portage" / "repos.conf" / "repos.conf").open("a") as fh:
+        fh.write(f"\n[porttest]\nlocation = {repo}\n")
+
+    depcache = tmp_path / "depcache"
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = str(cfg)
+    env["ROOT"] = FIXTURES_ROOT
+    env["PORTAGE_RUNNING_ROOT"] = FIXTURES_ROOT
+    env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "pt")
+    env["PORTAGE_DEPCACHEDIR"] = str(depcache)
+
+    def resolve():
+        return subprocess.run(
+            [str(emerge_binary), "--pretend", "porttest/docs"],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+        )
+
+    ebuild = repo / "porttest" / "docs" / "docs-1.0.ebuild"
+    entry = depcache / str(repo).lstrip("/") / "porttest" / "docs-1.0"
+    builddir = tmp_path / "pt" / "portage" / "porttest" / "docs-1.0"
+
+    # First run: no repo cache, no depcache -> the depend phase runs and
+    # the result is written back. Real flat_hash `_setitem`: sorted keys,
+    # empty values skipped, the synthetic `_md5_` last (0x5F sorts after
+    # every uppercase letter).
+    first = resolve()
+    assert first.returncode == 0, (first.stdout, first.stderr)
+    assert first.stdout.splitlines() == ["[ebuild  N     ] porttest/docs-1.0 "]
+    assert entry.is_file(), list(depcache.rglob("*"))
+    body = entry.read_text()
+    assert body.splitlines() == sorted(body.splitlines()), body
+    assert f"_md5_={hashlib.md5(ebuild.read_bytes()).hexdigest()}" in body
+    assert "SLOT=0\n" in body
+    assert "EAPI=8\n" in body
+
+    # Second run: the depcache entry satisfies `_pull_valid_cache`, so the
+    # depend phase must not run at all. The phase is the only thing that
+    # creates the builddir (`run_depend_phase` -> `create_directories`);
+    # deleting it after the first run and asserting it stays gone is the
+    # process-free "no phase" signal.
+    assert builddir.is_dir(), builddir
+    shutil.rmtree(builddir)
+    second = resolve()
+    assert second.returncode == 0, (second.stdout, second.stderr)
+    assert second.stdout == first.stdout
+    assert not builddir.exists(), "second run re-ran the depend phase"
+    assert entry.read_text() == body
+
+    # Third: content change -> `_md5_` mismatch -> phase re-runs and the
+    # entry is rewritten.
+    ebuild.write_text(ebuild.read_text() + "\n# cache-less bump\n")
+    third = resolve()
+    assert third.returncode == 0, (third.stdout, third.stderr)
+    assert third.stdout == first.stdout
+    assert builddir.is_dir(), "changed ebuild must re-run the depend phase"
+    rewritten = entry.read_text()
+    assert f"_md5_={hashlib.md5(ebuild.read_bytes()).hexdigest()}" in rewritten
+    assert rewritten != body
+
+
 def test_emerge_regen_prunes_a_stale_cache_entry(emerge_binary, tmp_path):
     """Real `MetadataRegen._cleanup`'s "global cleanse"
     (`MetadataRegen.py:142-189`): a plain, unfiltered `--regen` diffs the

@@ -16687,3 +16687,19 @@ L3_CONTROL=1 TEST/run/l3-source-parity.sh TEST/atomlists/l3-smoke.txt
 ```
 
 Both pairs are 0 unexplained with no `layer: l3` allowlist entries at all, so the S4 stop rule (>3 systemic producer classes) is lifted and `l3-core` (344 ebuilds) is unblocked for a user-triggered run. Detail: `TEST/findings/l3.md` "P3", `docs/030_L3-source-build-parity.deepseek.md`.
+
+**A cache-less repo's regenerated metadata goes to the `depcachedir`, and the second run never re-runs the depend phase (backlog #41 C3, 2026-09-15).** Real `_pull_valid_cache` has three rungs before it gives up: the repo's pregen `metadata/md5-cache` (validated), the writable `depcachedir` (`/var/cache/edb/dep/<repo path without the leading '/'>/<cat>/<pf>` -- `cache/flat_hash.py:20-22`; C0's oracle), and only then `doebuild(mydo="depend")`, whose result `EbuildMetadataPhase` hands to `portdb._write_cache` (`porttree.py:578-596`). C1/C2 built the first and third rungs; C3 adds the middle one inside the registered provider: a depcache entry whose `_md5_`/`_eclasses_`/EAPI still validate is returned without touching the ebuild, and a successful depend run is rendered with the *same* writer `--regen` uses (`regen::render_entry`/`write_entry` -- real's tempfile-then-rename with a unique name, so concurrent resolvers cannot collide) and written to the flat layout when the directory is writable; an unwritable depcachedir keeps the dict in the process memo, exactly real's `secpass < 1` read-only branch. The Rust-only pin stages the porttest overlay with its cache removed and `PORTAGE_DEPCACHEDIR` under `tmp_path`:
+
+```sh
+python3 -m pytest tests -q -k depcache
+# -> 1 passed: the first run writes <depcache>/<repo>/porttest/docs-1.0
+#    (sorted flat_hash lines, _md5_ = the ebuild's md5); deleting the
+#    builddir and resolving again leaves it absent (the depend phase is
+#    what creates it, and it did not run); bumping the ebuild invalidates
+#    _md5_, re-runs the phase and rewrites the entry.
+L2_CACHELESS=1 TEST/run/l2-portuale-builder.sh TEST/atomlists/l1-porttest.txt
+# -> TEST/logs/l2-20260915T004923Z/l2-report.txt: all ten archive pairs
+#    hard=0 soft=0; cross-install and control 0 unexplained
+```
+
+The committed `metadata/md5-cache` under the porttest overlay is now an L2-speed optimisation rather than a workaround, and `L2_CACHELESS=1` is the variant that proves it. Detail: `TEST/findings/l2.md` "C3", `docs/backlog_tasks.md` #41.

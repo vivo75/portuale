@@ -44,6 +44,17 @@ if [ -d /porttest-overlay ] && grep -q '^porttest/' "$ATOMLIST"; then
   log "porttest overlay staged at /var/db/repos/porttest"
 fi
 
+# Cache-less variant (#41 C3): delete the overlay's committed md5-cache so
+# both PMs regenerate metadata through their ebuild-fallback path --
+# Portage's `metadata/md5-cache` pregen cache is absent, so its depcache
+# rung plus `doebuild(mydo="depend")` produce the metadata; portuale's
+# C2 provider plus C3 depcachedir write-back does the same. The committed
+# cache stays in the overlay as an L2 speed optimisation.
+if [ "${L2_CACHELESS:-0}" = 1 ] && [ -d /var/db/repos/porttest/metadata/md5-cache ]; then
+  rm -rf /var/db/repos/porttest/metadata/md5-cache
+  log "porttest metadata/md5-cache removed (L2_CACHELESS=1)"
+fi
+
 # Same base state as the portage builder (portuale doesn't use the
 # installed portage, but the package set / profile resolution must match).
 if [ "${L2_SKIP_PORTAGE_UPGRADE:-0}" != 1 ]; then

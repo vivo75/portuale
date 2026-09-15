@@ -552,6 +552,24 @@ fn cache_entry_is_valid(
         Ok(t) => t,
         Err(_) => return false,
     };
+    entry_is_valid(&text, ebuild_path, repo_location, masters)
+}
+
+/// The path-independent half of [`cache_entry_is_valid`]: one entry's
+/// bytes in real's `flat_hash` format, accepted or not against the
+/// current ebuild (the same `validate_entry` rungs, see the doc comment
+/// above). Shared with C3's depcachedir rung
+/// (`ebuild_phases::depend_phase_metadata`): real `_pull_valid_cache`
+/// consults the repo's pregen `metadata/md5-cache` and the depcachedir
+/// cache with the *same* validator -- both are the `md5-dict` format
+/// (`flat_hash.database`), the depcache only differing in its location
+/// and in being written through `_write_cache` on a miss.
+pub(crate) fn entry_is_valid(
+    text: &str,
+    ebuild_path: &Path,
+    repo_location: &Path,
+    masters: &[PathBuf],
+) -> bool {
     let mut fields: HashMap<&str, &str> = HashMap::new();
     for line in text.lines() {
         let Some((k, v)) = line.split_once('=') else {
@@ -637,8 +655,29 @@ fn regen_one(
     let md = ebuild_phases::run_depend_phase(&env, root, config_root, debug)
         .map_err(|e| fail(e.code, e.message))?;
 
-    let ebuild_bytes = std::fs::read(ebuild_path)
-        .map_err(|e| fail(1, format!("{}: {e}", ebuild_path.display())))?;
+    let out = render_entry(&md, ebuild_path, repo_location, masters).map_err(|e| fail(1, e))?;
+    let cache_dir = repo_location.join("metadata/md5-cache").join(category);
+    write_entry(&cache_dir, pf, &out).map_err(|e| fail(1, e))?;
+    Ok(())
+}
+
+/// Render one `depend`-phase result as the bytes real
+/// `flat_hash._setitem` writes (`portage.cache.flat_hash.database`):
+/// `for k in self._write_keys: v = values.get(k); if not v: continue;
+/// write f"{k}={v}\n"` -- sorted keys, empty values skipped, with the two
+/// synthetic keys `_eclasses_`/`_md5_` added exactly like real's
+/// `EbuildMetadataPhase` + `_write_cache` do. Shared by `--regen` (the
+/// repo's `metadata/md5-cache`) and C3's depcachedir write-back
+/// (`ebuild_phases::depend_phase_metadata`): same format, different
+/// destination directory.
+pub(crate) fn render_entry(
+    md: &std::collections::HashMap<String, String>,
+    ebuild_path: &Path,
+    repo_location: &Path,
+    masters: &[PathBuf],
+) -> Result<String, String> {
+    let ebuild_bytes =
+        std::fs::read(ebuild_path).map_err(|e| format!("{}: {e}", ebuild_path.display()))?;
     let ebuild_md5 = format!("{:x}", Md5::digest(&ebuild_bytes));
 
     // Real `flat_hash._setitem`: `for k in self._write_keys: v =
@@ -655,7 +694,7 @@ fn regen_one(
             fields.insert(key, v.clone());
         }
     }
-    if let Some(ec) = eclasses_field(&md, repo_location, masters) {
+    if let Some(ec) = eclasses_field(md, repo_location, masters) {
         fields.insert("_eclasses_", ec);
     }
     fields.insert("_md5_", ebuild_md5);
@@ -669,15 +708,29 @@ fn regen_one(
             out.push('\n');
         }
     }
+    Ok(out)
+}
 
-    let cache_dir = repo_location.join("metadata/md5-cache").join(category);
-    std::fs::create_dir_all(&cache_dir)
-        .map_err(|e| fail(1, format!("{}: {e}", cache_dir.display())))?;
-    let cache_file = cache_dir.join(pf);
-    let tmp = cache_dir.join(format!(".{pf}.regen"));
-    std::fs::write(&tmp, out.as_bytes()).map_err(|e| fail(1, format!("{}: {e}", tmp.display())))?;
-    std::fs::rename(&tmp, &cache_file)
-        .map_err(|e| fail(1, format!("{}: {e}", cache_file.display())))?;
+/// Write one rendered cache entry into `dir` (`<...>/<category>`), real
+/// `flat_hash._setitem`'s tempfile-then-`os.rename` dance: a unique
+/// temporary sibling first so concurrent writers (C3's provider can run
+/// in several `portuale` processes at once -- the C2 concurrency pin
+/// spawns sixteen) never collide, then an atomic rename over the final
+/// name. The caller decides whether a failure is fatal (`--regen`) or
+/// best-effort (the depcachedir write-back, whose fallback is the
+/// in-process memo).
+pub(crate) fn write_entry(dir: &Path, pf: &str, body: &str) -> Result<(), String> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let tmp = dir.join(format!(
+        ".{pf}.{}.{}.regen",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::write(&tmp, body.as_bytes()).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    let final_path = dir.join(pf);
+    std::fs::rename(&tmp, &final_path).map_err(|e| format!("{}: {e}", final_path.display()))?;
     Ok(())
 }
 

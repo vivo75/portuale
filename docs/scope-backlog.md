@@ -551,8 +551,10 @@ ANSI USE colour all shipped 2026-09-05, see `what-this-proves.md`'s
    parse-at-all), *not* a `portage_dep` EAPI parametrization, so no
    Part 3 non-goal is crossed (the backlog's earlier "needs EAPI
    parametrization" premise turned out stale);
-- `--metadata` is an architectural no-op (portuale reads
-  `metadata/md5-cache` directly, models no `depcachedir`);
+- `--metadata` is a functional no-op (portuale reads
+  `metadata/md5-cache` directly; since #41 C3 the only depcache entries
+  it writes are the ebuild-fallback ones it generated itself, so there
+  is no `metadata-transfer` pass to run);
 - `--sync` is a permanent non-goal (points at `emaint sync`); GLSA /
   `@security` is not in scope.
 
@@ -757,8 +759,11 @@ Fixed while building the bed: `l2-pkgindex-version-missing` (the
 `pkgdir-index-trusted` silently rebuilt from source) and
 `l2-filesdir-symlink-missing` (`FILESDIR` linked to the ebuild's repo
 `files/`, without which every `eapply` died); plus the harness-side
-`metadata/md5-cache` for the cache-less `porttest` overlay (portuale
-has no ebuild fallback for a cache-less repo, `l2-no-md5-cache-ebuild-fallback`).
+`metadata/md5-cache` for the `porttest` overlay, which since #41 C3 is
+an L2-speed optimisation rather than a workaround -- both PMs resolve a
+cache-less repo through their ebuild fallback, and `L2_CACHELESS=1
+TEST/run/l2-portuale-builder.sh TEST/atomlists/l1-porttest.txt`
+exercises that path (`l2-no-md5-cache-ebuild-fallback`).
 
 
 ---

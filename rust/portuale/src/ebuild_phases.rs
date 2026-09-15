@@ -3072,13 +3072,7 @@ pub(crate) fn run_depend_phase(
         message: format!("{}: {e}", meta_path.display()),
     })?;
     let _ = std::fs::remove_file(&meta_path);
-    let mut md = std::collections::HashMap::new();
-    for line in text.lines() {
-        if let Some((k, v)) = line.split_once('=') {
-            md.insert(k.to_string(), v.to_string());
-        }
-    }
-    Ok(md)
+    Ok(parse_aux_entry(&text))
 }
 
 /// C2's registered cache-miss provider (see
@@ -3088,6 +3082,20 @@ pub(crate) fn run_depend_phase(
 /// entry (`_pull_valid_cache` miss -> `doebuild(mydo="depend")`, C0's
 /// oracle). The result is the same `HashMap` shape `read_md5_cache`
 /// returns, so the resolver cannot tell the difference.
+///
+/// C3 adds the **depcachedir rung** around that phase run, exactly where
+/// real `_pull_valid_cache` has it (`porttree.py:603-651`): before
+/// running the phase, a depcachedir entry whose `_md5_` still matches
+/// the ebuild is used as-is; after a successful run, the result is
+/// written to the depcachedir (real `EbuildMetadataPhase` ->
+/// `portdb._write_cache`, `porttree.py:578-596`) in real's flat layout
+/// (`<depcachedir>/<repo path without the leading '/'>/<cat>/<pf>`,
+/// `cache/flat_hash.py:20-22`). When that write cannot happen -- an
+/// unwritable depcachedir, real's `secpass < 1` read-only branch -- the
+/// result still lives for the process in `repo_aux_metadata`'s own memo
+/// (C2). The write is best-effort; the read/validate/render/write
+/// helpers live in `regen.rs` because `--regen` writes the identical
+/// `flat_hash` format into the repo's `metadata/md5-cache`.
 ///
 /// Layering: this lives in `portuale` (the binary that owns real phase
 /// execution) and is registered once from `main`; `portage-repo` only
@@ -3111,15 +3119,97 @@ pub(crate) fn depend_phase_metadata(
     if !ebuild.is_file() {
         return Err(format!("{}: no ebuild", ebuild.display()));
     }
+    let config_root = portage_repo::config_root_from_env();
+    let root = portage_repo::root_from_env();
+    let masters = repo_masters(repo_location, &config_root);
+
+    // Real `_pull_valid_cache`: the depcachedir auxdb is consulted after
+    // the repo's pregen `metadata/md5-cache` (C1's `read_md5_cache`) and
+    // before `EbuildMetadataPhase` runs. Same validator as the repo
+    // cache (real `template.validate_entry` for `md5_database`).
+    let depcache = depcache_entry_path(repo_location, category, pf);
+    if let Ok(text) = std::fs::read_to_string(&depcache)
+        && crate::regen::entry_is_valid(&text, &ebuild, repo_location, &masters)
+    {
+        return Ok(parse_aux_entry(&text));
+    }
+
     let portage_tmpdir = portage_repo::portage_tmpdir_from_env();
     let env = compute_environment(&ebuild, &portage_tmpdir)?;
-    run_depend_phase(
-        &env,
-        &portage_repo::root_from_env(),
-        &portage_repo::config_root_from_env(),
-        false,
-    )
-    .map_err(|e| e.message)
+    let md = run_depend_phase(&env, &root, &config_root, false).map_err(|e| e.message)?;
+
+    // Real `_write_cache`: `metadata["_md5_"] = ebuild_hash.md5` then
+    // `cache[cpv] = metadata` -- the md5-dict/`flat_hash` writer.
+    // Best-effort: a read-only depcachedir keeps the result in memory
+    // (C2's memo) exactly like real's volatile `_ro_auxdb` branch.
+    if let Ok(body) = crate::regen::render_entry(&md, &ebuild, repo_location, &masters)
+        && let Some(dir) = depcache.parent()
+    {
+        let _ = crate::regen::write_entry(dir, pf, &body);
+    }
+    Ok(md)
+}
+
+/// Split the `KEY=value` lines the `depend` phase pipe (and a
+/// depcachedir entry) carries into the map `read_md5_cache` also
+/// returns. Lines without `=` are skipped (real's
+/// `_parse_data` raises `CacheCorruption` for those from the cache
+/// reader; the phase pipe is written by `bin/ebuild.sh` and never emits
+/// one).
+fn parse_aux_entry(text: &str) -> std::collections::HashMap<String, String> {
+    let mut md = std::collections::HashMap::new();
+    for line in text.lines() {
+        if let Some((k, v)) = line.split_once('=') {
+            md.insert(k.to_string(), v.to_string());
+        }
+    }
+    md
+}
+
+/// Real `flat_hash.FsBased.__init__` (`cache/flat_hash.py:20-22`) with
+/// the `md5_database`/`md5-dict` label: `os.path.join(depcachedir,
+/// repo_path.lstrip('/').rstrip('/'))/<category>/<pf>` -- a flat tree
+/// keyed by the repo's absolute path minus the leading separator (C0's
+/// oracle: `/var/cache/edb/dep/var/db/repos/porttest/porttest/docs-1.0`).
+fn depcache_entry_path(repo_location: &Path, category: &str, pf: &str) -> std::path::PathBuf {
+    let location = repo_location.to_string_lossy();
+    depcachedir()
+        .join(location.trim_start_matches('/').trim_end_matches('/'))
+        .join(category)
+        .join(pf)
+}
+
+/// Real `settings.depcachedir` (`config.py:1114-1128`): the
+/// `PORTAGE_DEPCACHEDIR` setting when present, else
+/// `portage.const.DEPCACHE_PATH` = `/var/cache/edb/dep`. Not relative to
+/// `ROOT` (real rebases it under `eroot` only in the unprivileged
+/// non-`/` target-root fallback, which portuale's root runs never take).
+/// Narrowing: real resolves the setting through the full config stack
+/// (so a `make.conf` assignment wins over the environment); portuale
+/// reads the process environment only, the same CLI-boundary default
+/// the phase env's own whitelist (`ENVIRON_WHITELIST`) already carries.
+fn depcachedir() -> std::path::PathBuf {
+    std::env::var_os("PORTAGE_DEPCACHEDIR")
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("/var/cache/edb/dep"))
+}
+
+/// The `masters`-then-self chain the depcache validator needs for
+/// `_eclasses_` (`regen::entry_is_valid`). A repo the resolved config
+/// does not describe (or an unreadable config) yields an empty chain:
+/// `_eclasses_` then fails validation, so the depend phase re-runs --
+/// the safe direction.
+fn repo_masters(repo_location: &Path, config_root: &Path) -> Vec<std::path::PathBuf> {
+    portage_repo::find_repos(config_root)
+        .ok()
+        .and_then(|repos| {
+            repos
+                .into_iter()
+                .find(|r| r.location == repo_location)
+                .map(|r| r.masters)
+        })
+        .unwrap_or_default()
 }
 
 /// Real `bin/misc-functions.sh`'s own invocation shape -- unlike

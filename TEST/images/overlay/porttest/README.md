@@ -14,12 +14,15 @@ portuale each merge that binpkg; `diff.py` compares. All build in
 seconds (no `SRC_URI`).
 
 `metadata/md5-cache/` is committed (generated with `egencache --repo
-porttest --update` from the pinned portage) because real Portage parses
-a cache-less repo but portuale's reader
-(`portage-repo/src/lib.rs::read_md5_cache`) only consults the cache —
-without it the L2 `builder-portuale` cannot resolve any `porttest/*`
-atom (finding `l2-no-md5-cache-ebuild-fallback`). Keep the cache in
-sync when an ebuild here changes (`egencache --repo porttest --update`).
+porttest --update` from the pinned portage) as an **optimisation**, not
+a workaround: both PMs resolve a cache-less repo through their ebuild
+fallback (real: `metadata/md5-cache` pregen miss -> `depcachedir` ->
+`doebuild(mydo="depend")`; portuale: the same three rungs, #41 C1–C3),
+so `L2_CACHELESS=1 TEST/run/l2-portuale-builder.sh
+TEST/atomlists/l1-porttest.txt` exercises that path. Keeping the cache
+avoids re-running a `depend` phase per fixture on every L2 run. Keep it
+in sync when an ebuild here changes (`egencache --repo porttest
+--update`).
 
 ## Shipped (slice 3)
 
