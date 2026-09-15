@@ -664,3 +664,26 @@ before R3b); **H3** (remote `Packages` via
 `RemoteBinhostIndex::metadata_with_source`; #28 now 6/8 slots). Full
 wave verification: cargo fmt/clippy/test green, L1 `l1-20260914T215056Z`
 0 findings, full pytest green (count in the wave report).
+
+**Wave 4 progress 2026-09-15:** **P3** — full candidate+control L3 smoke
+`TEST/logs/l3-20260914T234404Z` is **0 hard / 0 unexplained on both**
+(the last 12 rows were #47's `BUILD_TIME`/`metadata` gap, fixed at
+`write_post_install_metadata` like real `doebuild.py:2727-2732`), so the
+#30 S4 stop rule is lifted and `l3-core` is unblocked. **C3** —
+`depcachedir` write-back in the C2 provider (validated read through the
+shared `regen::entry_is_valid`, real `flat_hash` write-back through
+`regen::render_entry`/`write_entry`, best-effort on an unwritable
+directory) plus the `L2_CACHELESS=1` variant: normal
+`l2-20260915T004600Z` rc 0 and cache-less `l2-20260915T004923Z` rc 0
+with all ten archive pairs `hard=0 soft=0`, cross-install/control 0
+unexplained; #41 closed, finding FIXED. **R3b** — the F-B3 pre-bias
+order was the `SetArg` seed order, not a missing `insertion` field:
+real `_resolve` sorts each set's atoms (`depgraph.py:5500`), so sorting
+the `@system` segment brings `-pe @system`'s 368-node `MO_ORDER` to
+three localized residues (`TEST/logs/r3b-20260915T000000Z/`) and L0 to
+clean 100 / parity 0.833 / order 17 (from 98 / 0.817 / 19), with
+`_system` #11, `_world` #14 and `MULTI_emptytree-system` #13 fixed and
+the latter's first divergence at #304 (`TEST/findings/l0.md` "R3b").
+Full wave verification: fmt/clippy/test green, pytest 1594 passed, L2
+tracks rc 0, L0 as above. R3c/R3d resume the #25 line with the
+installed-nomerge model.

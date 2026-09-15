@@ -16703,3 +16703,16 @@ L2_CACHELESS=1 TEST/run/l2-portuale-builder.sh TEST/atomlists/l1-porttest.txt
 ```
 
 The committed `metadata/md5-cache` under the porttest overlay is now an L2-speed optimisation rather than a workaround, and `L2_CACHELESS=1` is the variant that proves it. Detail: `TEST/findings/l2.md` "C3", `docs/backlog_tasks.md` #41.
+
+**The `-pe @system` pre-bias order is real's `_create_graph` insertion order once the set atoms are seeded the way real seeds them (backlog #25 R3b, 2026-09-15).** F-B3's divergence at index 1 was not the scheduler's DFS walk: real `_resolve` processes every `SetArg`'s atom list `sorted(arg.pset.getAtoms(), key=str)` (`depgraph.py:5500`) -- a `>=`-prefixed atom sorts before every plain one -- while portuale expanded `@world`/`@system` in the profile `packages` order, so every dependency of the first atoms was discovered in a different order. Sorting each appended `@system` segment (per arg; explicit atoms keep the user's order) needs no `GraphEntry::insertion` field: `build_digraph`'s DFS already reproduces real's LIFO insertion order once the seeds do. The probe (real side patched by `TEST/scripts/mo-trace/real-trace.py`, portuale side `PORTUALE_MO_SEL=1`):
+
+```sh
+# in the L0 container, for both PMs:
+emerge --pretend -e @system --debug 2>&1 | grep '^MO_ORDER'
+# before: 368 nodes, divergence at index 2 (findutils, patch, eselect vs awk, bzip2, gzip)
+# after : 368 == 368, three localized residues in TEST/logs/r3b-20260915T000000Z/mo_order.diff
+#         (real's own hash-seeded _minimize_children set swap, depgraph.py:4751-4781;
+#          one sys-apps/portage visibility row; a virtual/man ||-bundle 22 positions later)
+```
+
+At real-tree scale the slice is a pure win: L0 `TEST/logs/l0-20260915T005709Z` moves clean 98 -> 100, parity 0.817 -> 0.833, UNEXPLAINED 38 -> 36, order 19 -> 17 -- the three F-B3 rows (`_system` #11, `_world` #14, `MULTI_emptytree-system` #13) now match real, and `MULTI_emptytree-system`'s first divergence moved from #13 to #304. The pre-existing 18 invariant "merges after its owner" rows are unchanged (verified with a pre-slice subset run). Detail: `TEST/findings/l0.md` "R3b", `docs/025b-complete-graph-nodes.md` §7.

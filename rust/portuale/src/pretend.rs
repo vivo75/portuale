@@ -10098,10 +10098,27 @@ pub fn run(args: &[String]) -> ExitCode {
             // non-empty (`@world` == `@system`). `@selected` alone stays
             // the world file.
             if *atom_str == "@world" {
-                expanded_atoms.extend(config.system_packages.iter().cloned());
+                // Real `_resolve` (`depgraph.py:5500`) processes each
+                // `SetArg`'s atom list `sorted(arg.pset.getAtoms(),
+                // key=str)`; the nested `@system` set is one such arg.
+                let mut atoms = config.system_packages.clone();
+                atoms.sort();
+                expanded_atoms.extend(atoms);
             }
         } else if *atom_str == "@system" {
-            expanded_atoms.extend(config.system_packages.iter().cloned());
+            // Real `_resolve` (`depgraph.py:5500`): `for atom in
+            // sorted(arg.pset.getAtoms(), key=str)`. A `>=`-prefixed
+            // atom sorts before every plain one (`>` is 0x3E), which is
+            // exactly why real's `-pe @system` pre-bias order starts
+            // `>=sys-apps/baselayout-2`, `>=sys-apps/findutils-4.4`,
+            // `>=sys-devel/patch-2.7`, `app-admin/eselect`,
+            // `app-alternatives/awk`, … (F-B3's probe). Portuale used
+            // the profile's raw `packages` order, so the resolver walk
+            // -- and therefore the pre-bias order the scheduler's stable
+            // `_merge_order_bias` preserves -- diverged from index 1.
+            let mut atoms = config.system_packages.clone();
+            atoms.sort();
+            expanded_atoms.extend(atoms);
         } else if *atom_str == "@installed" {
             expanded_atoms.extend(installed_set_atoms(&root));
         } else if *atom_str == "@preserved-rebuild" {

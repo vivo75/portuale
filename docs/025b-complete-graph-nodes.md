@@ -1,6 +1,10 @@
 # 025b — `_complete_graph` installed nomerge nodes: design note (#25, R3a)
 
-Status: design, 2026-09-14, against `backlog/tier_2_e_5`. This is the
+Status: design, 2026-09-14, against `backlog/tier_2_e_5`, plus the
+**R3b outcome** (§7, 2026-09-15): the pre-bias order fix landed as the
+per-`SetArg` atom sort real `_resolve` uses, not as a new
+`insertion` field -- see §7 for the re-check and the measured residue.
+This is the
 R3a slice of
 [`backlog_tier_5_and_2_sliced.opus.md`](backlog_tier_5_and_2_sliced.opus.md)
 §6; R3b–R3e implement it. Grounding: the F-B3/F-B4 findings in
@@ -212,3 +216,43 @@ separate field or can be the entries index; whether the supersede rule
 needs real's full `_remove_pkg` recursion or only in-edge removal for
 the probes at hand. Both are settled by the first `MO_ORDER`/`MO_NODES`
 runs, not by this note.
+
+---
+
+## 7. R3b outcome (2026-09-15, wave 4 of the Tier5/2 slicing)
+
+Landed as `pretend.rs`'s per-`SetArg` atom sort, **not** as a new
+`GraphEntry::insertion` field. The first `MO_ORDER` comparison against
+real (`TEST/logs/r3b-20260915T000000Z/real.mo_order.tsv` vs
+`ptl2.mo_order.tsv`, probe scripts beside them) showed the resolver walk
+itself already is real's LIFO insertion order -- `build_digraph`'s DFS
+was built to mirror it -- and the entire divergence came from the
+**seed** order: real `_resolve` processes every `SetArg`'s atoms
+`sorted(arg.pset.getAtoms(), key=str)` (`depgraph.py:5500`; a
+`>=`-prefixed atom sorts before every plain one), while portuale
+expanded `@world`/`@system` in profile `packages` order. Sorting just
+each appended `@system` segment (per arg, leaving explicit atoms where
+the user put them -- the earlier "sort the whole flattened list"
+attempt's fixture breakage does not apply) took the `-pe @system`
+MO_ORDER from "diverges at index 2" to **three localized residues in
+368 nodes** (`mo_order.diff`, 34 diff lines):
+
+- `app-text/docbook-xml-dtd-4.5-r2` / `-4.2-r3` swapped: real inserts
+  4.5 first although systemd's BDEPEND spells `:4.2` then `:4.5`.
+  Real's `_minimize_children` groups same-`cp` children through Python
+  **sets** (`depgraph.py:4751-4781`), so the emitted order is
+  hash-seeded (`PYTHONHASHSEED=0` in the bed) and not derivable from
+  the dep string. Not ported.
+- `m:sys-apps/portage-3.0.81.3` (real) vs `3.0.82.2` (portuale): a
+  visibility/keyword divergence of the installed portage under the
+  container's stable keywords, unrelated to walk order (already inside
+  L0's `version` residue family).
+- a 12-node `virtual/man` `||`-bundle block (`man-db`, `libpipeline`,
+  `groff`, the `man` account/alternatives, `libXaw`/`libXmu`/`libXext`/
+  `libXpm`, `ncompress`, `virtual/tmpfiles`) inserted 22 positions
+  later by portuale: the disjunctive bundle's pop timing, residue for
+  R3c/d.
+
+So the pre-bias order is real's insertion order up to real's own
+hash-seeded set iteration; `GraphEntry::insertion` is unnecessary. The
+L0 run's flipped-probe log (D4) is in `TEST/findings/l0.md` "R3b".
