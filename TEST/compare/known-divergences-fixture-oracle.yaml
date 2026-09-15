@@ -1,0 +1,137 @@
+# Known, justified portuale-vs-real-Portage divergences on the
+# *fixture* tree (TEST/run/l0-fixture-oracle.sh, backlog #49). Same
+# schema as `known-divergences.yaml` (see its header for the field
+# documentation); findings land here only after adjudication, and an
+# `owner: portuale-bug` entry is a filed bug being suppressed so the
+# layer can gate everything else.
+#
+# Keep this file sorted by id.
+
+# -- presentation: the staging makes ROOT != "/", real appends
+#    ` for <configroot>/` to its masked/unmet messages while portuale
+#    (whose fixture env never has that suffix) does not.
+
+- id: fixture-masked-path-suffix
+  categories: [advice, error]
+  slugs: ["*"]
+  match: "for /tmp/l0-fixture-oracle/fixtures/"
+  reason: >
+    Real's masked-atom / unmet-requirements messages append the target
+    configroot path when it is not "/"; the staged oracle copy must live
+    outside / for the fixture vdb to be the target root, and portuale's
+    own fixture harness has no such suffix. The compared content (atom,
+    reason) is identical.
+  owner: portuale-oracle
+
+- id: fixture-masked-atom-synthesis
+  category: advice
+  slugs: ["*"]
+  match: "masked-atom:"
+  reason: >
+    The comparator derives `masked-atom: <atom>` from the `"<atom>" have
+    been masked` line; real's copy of that line carries the staging path
+    suffix, so only portuale's yield the derived atom. Real's line is
+    itself explained by `fixture-masked-path-suffix`; the atom set is the
+    same.
+  owner: portuale-oracle
+
+- id: fixture-unmet-requirements-wording
+  categories: [error]
+  slugs: ["*"]
+  match: "has unmet requirements."
+  reason: >
+    Real's unmet-requirements line carries the staged root suffix; both
+    sides print the same sentence otherwise (the real-only `Problem
+    resolving dependencies for X` header is covered by the same entry's
+    sibling).
+  owner: portuale-oracle
+
+- id: fixture-problem-resolving-header
+  categories: [error]
+  slugs: ["*"]
+  match: "Problem resolving dependencies for"
+  reason: >
+    Real prints a `!!! Problem resolving dependencies for <atom>` header
+    before the unmet-requirements line; portuale prints the same failure
+    without that header. Output wording, not resolver behaviour.
+  owner: portuale-oracle
+
+- id: fixture-masked-message-unsuffixed
+  categories: [advice, error]
+  slugs: ["*"]
+  match: "All ebuilds that could satisfy"
+  reason: >
+    Portuale's copy of the masked-atom message has no staging-path suffix
+    (real's is explained by `fixture-masked-path-suffix`); the atom and
+    the masked package set are the same.
+  owner: portuale-oracle
+
+# -- resolver behaviour: filed as backlog #54. portuale applies the
+#    installed-consumer pin/residual-conflict machinery even when the
+#    installed instance is replaced and never enters the graph; real
+#    only sees such a consumer when a competing constraint keeps the
+#    installed instance as a graph node (which enables complete mode).
+#    Delete these two entries when #54 lands.
+
+- id: portuale-bug-installed-pin-holds-an-upgrade
+  category: missing
+  slugs: ["--update_dev-libs_paired"]
+  match: "ebuild dev-libs/paired-2.0 present for real, absent for portuale"
+  reason: >
+    Portuale backlog #54. `emerge -p --update dev-libs/paired` holds the
+    installed 1.0 because keeper's `=paired-1.0` pin is applied from
+    outside every target closure; real 3.0.82.2 merges the 2.0 upgrade
+    (the installed instance is replaced, so the pin is never walked).
+    The pinned contract case `test_satisfiable_installed_pin_still_holds_
+    the_upgrade` encodes the divergent behaviour and must change with the
+    fix.
+  owner: portuale-bug
+
+- id: portuale-bug-residual-conflict-without-a-graph-node
+  category: error
+  slugs: ["dev-libs_needer", "_dev-libs_paired-2.0"]
+  match: "Multiple package instances within a single package slot have been pulled"
+  reason: >
+    Portuale backlog #54. Real prints the residual installed-instance
+    conflict only when the installed 1.0 is itself a graph node (the
+    needer+othermod triangle, where `<paired-2.0` keeps it in the graph
+    and its slot conflict enables complete mode); for `needer` or
+    `=paired-2.0` alone real 3.0.82.2 upgrades silently and prints no
+    block. Portuale prints the block in all three. Pinned contract cases
+    `test_explicitly_pinned_upgrade_breaks_an_installed_pin_and_reports_
+    it` and `test_hard_dependency_requirement_breaks_an_installed_pin_
+    and_reports_it` encode the divergent behaviour.
+  owner: portuale-bug
+
+- id: portuale-bug-residual-conflict-second-line
+  category: error
+  slugs: ["dev-libs_needer", "_dev-libs_paired-2.0"]
+  match: "into the dependency graph, resulting in a slot conflict:"
+  reason: >
+    The second line of the #54 residual-conflict block (see
+    `portuale-bug-residual-conflict-without-a-graph-node`).
+  owner: portuale-bug
+
+- id: triangle-residual-conflict-exit
+  category: exit
+  slugs: ["dev-libs_needer_dev-libs_othermod"]
+  match: "real rc=1 portuale rc=0"
+  reason: >
+    In the one shape where real also reports the residual conflict
+    (needer+othermod: the competing `<paired-2.0` keeps installed 1.0 in
+    the graph), real exits 1 while portuale reports it informationally at
+    exit 0 -- the standing convention of the Tier 2.25 port. The merge
+    lists themselves are identical; the block content is under #54 (real
+    names only othermod as the installed instance's parent, portuale also
+    lists keeper).
+  owner: portuale-bug
+
+- id: triangle-residual-conflict-suppressed-merge-list
+  category: exit
+  slugs: ["dev-libs_needer_dev-libs_othermod"]
+  match: "merge-list comparison suppressed"
+  reason: >
+    The comparator suppresses merge-list comparison on the rc mismatch
+    above; the two merge lists are identical (3 entries each, verified in
+    the saved outputs).
+  owner: portuale-bug

@@ -4335,15 +4335,15 @@ fn print_unmerge_row(label: &str, versions: &[String], color: &Colorizer) {
 fn installed_cp_versions(root: &Path) -> Vec<(String, String, String, String)> {
     let mut out = Vec::new();
     let vdb = root.join("var/db/pkg");
-    let Ok(cats) = std::fs::read_dir(&vdb) else {
+    let Ok(cats) = portage_util::read_dir_entries(&vdb) else {
         return out;
     };
-    for cat in cats.filter_map(Result::ok).filter(|e| e.path().is_dir()) {
+    for cat in cats.into_iter().filter(|e| e.path().is_dir()) {
         let category = cat.file_name().to_string_lossy().to_string();
-        let Ok(pkgs) = std::fs::read_dir(cat.path()) else {
+        let Ok(pkgs) = portage_util::read_dir_entries(&cat.path()) else {
             continue;
         };
-        for pkg in pkgs.filter_map(Result::ok).filter(|e| e.path().is_dir()) {
+        for pkg in pkgs.into_iter().filter(|e| e.path().is_dir()) {
             let dirname = pkg.file_name().to_string_lossy().to_string();
             // Split `name-version` on the version boundary via the atom
             // parser's own knowledge -- reuse `installed_candidates`
@@ -5267,8 +5267,8 @@ fn defined_set_names(config_root: &Path) -> Vec<String> {
             names.push(prev);
         }
     }
-    if let Ok(entries) = std::fs::read_dir(config_root.join("etc/portage/sets")) {
-        for e in entries.flatten() {
+    if let Ok(entries) = portage_util::read_dir_entries(&config_root.join("etc/portage/sets")) {
+        for e in entries {
             if e.path().is_file()
                 && let Some(n) = e.file_name().to_str()
             {
@@ -5670,7 +5670,7 @@ impl FilesystemNews<'_> {
     /// nothing to write back).
     pub fn evaluate(&self) -> Option<NewsEvaluation> {
         let news_dir = self.repo_location.join("metadata/news");
-        let Ok(entries) = std::fs::read_dir(&news_dir) else {
+        let Ok(entries) = portage_util::read_dir_entries(&news_dir) else {
             return None;
         };
         // `.read` (eselect news read) + `.skip` (updateItems' permanent
@@ -5695,12 +5695,11 @@ impl FilesystemNews<'_> {
             .chain(skip_orig.iter().cloned())
             .collect();
 
-        let mut ids: Vec<String> = entries
-            .filter_map(|e| e.ok())
+        let ids: Vec<String> = entries
+            .into_iter()
             .filter(|e| e.path().is_dir())
             .filter_map(|e| e.file_name().to_str().map(String::from))
             .collect();
-        ids.sort();
 
         // Real `NewsManager.updateItems` (`news.py:112-190`): every item
         // not already in `.skip` is (re-)evaluated; a valid, relevant one
@@ -6864,10 +6863,9 @@ fn run_info(
                         &crate::binpkg::GpgVerify::from_env(),
                     ) {
                         Ok(()) => {
-                            let extracted = std::fs::read_dir(&build_info)
+                            let extracted = portage_util::read_dir_entries(&build_info)
                                 .ok()
                                 .into_iter()
-                                .flatten()
                                 .flatten()
                                 .map(|e| e.path())
                                 .find(|p| p.extension().is_some_and(|x| x == "ebuild"));

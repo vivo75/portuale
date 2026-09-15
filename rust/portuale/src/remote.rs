@@ -1619,15 +1619,15 @@ impl VdbShadow {
     /// and the client driver still gates every collision for real.
     fn load(dir: &std::path::Path) -> Self {
         let mut owners = std::collections::HashMap::new();
-        let Ok(cats) = std::fs::read_dir(dir) else {
+        let Ok(cats) = portage_util::read_dir_entries(dir) else {
             return Self { owners };
         };
-        for cat in cats.filter_map(|e| e.ok()) {
+        for cat in cats {
             let category = cat.file_name().to_string_lossy().into_owned();
-            let Ok(pfs) = std::fs::read_dir(cat.path()) else {
+            let Ok(pfs) = portage_util::read_dir_entries(&cat.path()) else {
                 continue;
             };
-            for pf in pfs.filter_map(|e| e.ok()) {
+            for pf in pfs {
                 let pfname = pf.file_name().to_string_lossy().into_owned();
                 let contents = pf.path().join("CONTENTS");
                 let Ok(text) = std::fs::read_to_string(&contents) else {

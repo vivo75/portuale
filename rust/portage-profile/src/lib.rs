@@ -1834,15 +1834,14 @@ fn read_config_lines(path: &Path) -> Result<Vec<String>, Error> {
 
     let mut lines = Vec::new();
     if path.is_dir() {
-        let mut entries: Vec<PathBuf> = fs::read_dir(path)
+        let entries: Vec<PathBuf> = portage_util::read_dir_paths(path)
             .map_err(|e| Error::ReadFile {
                 path: path.display().to_string(),
                 source: e,
             })?
-            .filter_map(|e| e.ok().map(|e| e.path()))
+            .into_iter()
             .filter(|p| p.is_file())
             .collect();
-        entries.sort();
         for entry in entries {
             lines.extend(read_file_lines(&entry)?);
         }

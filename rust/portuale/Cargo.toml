@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 
 [dependencies]
+portage-util = { path = "../portage-util" }
 portage-dep = { path = "../portage-dep" }
 portage-repo = { path = "../portage-repo" }
 portage-profile = { path = "../portage-profile" }

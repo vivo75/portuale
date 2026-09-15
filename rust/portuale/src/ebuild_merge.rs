@@ -561,8 +561,8 @@ fn new_protect_filename(dest: &Path, newmd5: &str) -> Result<PathBuf, String> {
 
     let mut max_num: i64 = -1;
     let mut last_pfile: Option<PathBuf> = None;
-    if let Ok(entries) = std::fs::read_dir(parent) {
-        for entry in entries.filter_map(|e| e.ok()) {
+    if let Ok(entries) = portage_util::read_dir_entries(parent) {
+        for entry in entries {
             let name = entry.file_name();
             let name = name.to_string_lossy();
             if let Some(rest) = name.strip_prefix("._cfg")
@@ -1538,12 +1538,11 @@ fn merge_tree(
     let mut stack: Vec<PathBuf> = vec![PathBuf::new()];
     while let Some(relative_dir) = stack.pop() {
         let src_dir = d.join(&relative_dir);
-        let mut children: Vec<PathBuf> = std::fs::read_dir(&src_dir)
+        let children: Vec<PathBuf> = portage_util::read_dir_entries(&src_dir)
             .map_err(|e| format!("{}: {e}", src_dir.display()))?
-            .filter_map(|e| e.ok())
+            .into_iter()
             .map(|e| relative_dir.join(e.file_name()))
             .collect();
-        children.sort();
 
         for relative_path in children {
             let src = d.join(&relative_path);
@@ -2213,8 +2212,8 @@ pub(crate) fn write_vdb_entry_from_dir(
 
     // Real `treewalk()`: copy every regular file from `build-info` into
     // the vdb entry (`vartree.py:4911-4913`).
-    if let Ok(entries) = std::fs::read_dir(build_info_dir) {
-        for entry in entries.flatten() {
+    if let Ok(entries) = portage_util::read_dir_entries(build_info_dir) {
+        for entry in entries {
             let src = entry.path();
             if src.is_file()
                 && let Some(name) = src.file_name()
@@ -2557,16 +2556,15 @@ fn blocked_installed_packages(
 fn blockers_from_flat_deps(root: &Path, flat_deps: &[String]) -> HashSet<(String, String)> {
     (|| -> Option<HashSet<(String, String)>> {
         let pkg_root = root.join("var/db/pkg");
-        let categories = std::fs::read_dir(&pkg_root).ok()?;
+        let categories = portage_util::read_dir_entries(&pkg_root).ok()?;
         let installed: Vec<(String, String, String)> = categories
-            .filter_map(|e| e.ok())
+            .into_iter()
             .filter(|e| e.path().is_dir())
             .flat_map(|category_entry| {
                 let category_name = category_entry.file_name().to_string_lossy().to_string();
-                std::fs::read_dir(category_entry.path())
+                portage_util::read_dir_entries(&category_entry.path())
                     .into_iter()
                     .flatten()
-                    .filter_map(|e| e.ok())
                     .filter(|e| e.path().is_dir())
                     .filter_map(move |pkg_entry| {
                         let pf = pkg_entry.file_name().to_string_lossy().to_string();
@@ -2663,12 +2661,11 @@ fn find_collisions(
     let mut stack: Vec<PathBuf> = vec![PathBuf::new()];
     while let Some(relative_dir) = stack.pop() {
         let src_dir = d.join(&relative_dir);
-        let mut children: Vec<PathBuf> = std::fs::read_dir(&src_dir)
+        let children: Vec<PathBuf> = portage_util::read_dir_entries(&src_dir)
             .map_err(|e| format!("{}: {e}", src_dir.display()))?
-            .filter_map(|e| e.ok())
+            .into_iter()
             .map(|e| relative_dir.join(e.file_name()))
             .collect();
-        children.sort();
 
         for relative_path in children {
             let src = d.join(&relative_path);
@@ -2742,19 +2739,19 @@ fn find_owners(root: &Path, collisions: &[String]) -> BTreeMap<String, Vec<Strin
     let mut owners: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let db = mrg_director::VdbReader::new(root);
     let pkg_root = root.join("var/db/pkg");
-    let Ok(categories) = std::fs::read_dir(&pkg_root) else {
+    let Ok(categories) = portage_util::read_dir_entries(&pkg_root) else {
         return owners;
     };
-    for category_entry in categories.filter_map(|e| e.ok()) {
+    for category_entry in categories {
         let category_path = category_entry.path();
         if !category_path.is_dir() {
             continue;
         }
         let category_name = category_entry.file_name().to_string_lossy().to_string();
-        let Ok(packages) = std::fs::read_dir(&category_path) else {
+        let Ok(packages) = portage_util::read_dir_entries(&category_path) else {
             continue;
         };
-        for pkg_entry in packages.filter_map(|e| e.ok()) {
+        for pkg_entry in packages {
             let pkg_path = pkg_entry.path();
             if !pkg_path.is_dir() {
                 continue;
@@ -3323,8 +3320,8 @@ pub(crate) fn unmerge_replaced_same_slot(
     // match; exclude the just-written new entry.
     let vdb_cat = root.join("var/db/pkg").join(category);
     let mut replaced: Vec<String> = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&vdb_cat) {
-        for e in entries.flatten() {
+    if let Ok(entries) = portage_util::read_dir_entries(&vdb_cat) {
+        for e in entries {
             let name = e.file_name().to_string_lossy().to_string();
             let is_this_cp = name.starts_with(&format!("{package}-"))
                 && name[package.len() + 1..].starts_with(|c: char| c.is_ascii_digit());

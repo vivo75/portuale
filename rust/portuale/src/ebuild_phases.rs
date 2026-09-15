@@ -686,12 +686,10 @@ fn build_bin_overlay(overlay: &Path, checkout: &Path, vendored: &Path) -> std::i
     use std::os::unix::fs::symlink;
     let _ = std::fs::remove_dir_all(overlay);
     std::fs::create_dir_all(overlay)?;
-    for entry in std::fs::read_dir(checkout)? {
-        let entry = entry?;
+    for entry in portage_util::read_dir_entries(checkout)? {
         symlink(entry.path(), overlay.join(entry.file_name()))?;
     }
-    for entry in std::fs::read_dir(vendored)? {
-        let entry = entry?;
+    for entry in portage_util::read_dir_entries(vendored)? {
         let dest = overlay.join(entry.file_name());
         let _ = std::fs::remove_file(&dest);
         symlink(entry.path(), dest)?;
@@ -1544,9 +1542,9 @@ fn dir_size_bytes(dir: &Path) -> Result<u64, String> {
     use std::os::unix::fs::MetadataExt;
     fn walk(dir: &Path, seen: &mut std::collections::HashSet<u64>) -> Result<u64, String> {
         let mut total = 0;
-        let entries = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        let entries =
+            portage_util::read_dir_entries(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         for entry in entries {
-            let entry = entry.map_err(|e| format!("{}: {e}", dir.display()))?;
             let path = entry.path();
             let md =
                 std::fs::symlink_metadata(&path).map_err(|e| format!("{}: {e}", path.display()))?;

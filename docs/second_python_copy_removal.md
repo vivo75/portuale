@@ -188,16 +188,16 @@ pinned against stored goldens only; §1 and §2 still apply to `--json`.
 
 | § | Check | State | Where |
 |---|---|---|---|
-| 1 | Output invariants | **Done.** All 479 `--json`-capable `CASES`, every fixture package under `-p`/`-puD`/`-pe`, the last L0 run and this host's `emerge -puD @world` (1770 entries): 0 violations. Merge-order edges an installed instance satisfies are exempt (real `DepPriority.satisfied`; the host `@world` run showed the need). Checker self-tests plant each past bug class. | `tests/output_invariants.py`, `tests/test_output_invariants.py`, `TEST/compare/check-invariants.py` |
+| 1 | Output invariants | **Done.** All 479 `--json`-capable `CASES`, every fixture package under `-p`/`-puD`/`-pe` and this host's `emerge -puD @world` (1770 entries): 0 violations. Full L0 `l0-20260915T092215Z` (with `vdb-list.txt` + `dep-classes.tsv` snapshots): the 18 baseline rows triaged to 14 cp-level multi-instance fan-out and 3 soft (RDEPEND/PDEPEND) edges real's `ignore_priority` ladder may relax, leaving 1 genuine violation filed as backlog #53. Merge-order edges an installed instance satisfies are exempt (real `DepPriority.satisfied`); checker self-tests plant each past bug class and each exemption. | `tests/output_invariants.py`, `tests/test_output_invariants.py`, `TEST/compare/check-invariants.py`, `TEST/layers/l0/in-container.sh` |
 | 2 | Cross-mode consistency | **Done**, same tests: plain / `--tree` / `--quiet` entry sets equal `--json`; `--tree` nesting agrees with `required_by` (through non-displayed owners). `--onlydeps` and `--autounmask-only` handled; `--columns` skipped. | same |
 | 3 | Tree-wide primitive differential | **Done.** Whole gentoo md5-cache: 46165 atoms, 136575 `use_reduce`, 13464 `REQUIRED_USE` inputs. One mismatch, in the *Python harness* (explicit `-r0` reported as no revision); fixed and pinned. Re-run on every `3rdparty/portage` re-pin. | `scripts/primitive_tree_differential.py`, `tests/primitive_regressions/` |
 | 4 | No silent drops | **Done** for the two dependency walks (resolver queue, merge-order digraph): `note_unparsed_dep_token` counts, `PORTUALE_REPORT_UNPARSED_DEP_TOKENS` reports, the invariant tests and L0 require 0. Fixtures and host `@world`: 0. Other `parse_atom` call sites (config files, sets) are not dependency tokens and are not counted. | `portage_repo::note_unparsed_dep_token` |
-| 5 | Metamorphic tests | **Not started.** | — |
-| 6 | Real `emerge` as fixture oracle | **Spiked, blocked on staging.** Real `emerge -p dev-libs/diamond` on a copy of `fixtures/` needs: absolute `repos.conf` locations (real rejects the relative `location = repo`), `PORTAGE_REPOSITORIES` to hide the host's repos, and a clean `/etc/portage` (real still read the host `make.profile` for the running root); several fixture inputs are portuale-only syntax real rejects (`${PORTAGE_CONFIGROOT}` in `binrepos.conf`, comment lines in `profiles/updates`, `*/pkg` in `package.use.force`). Run it inside the test container with a staging step. | — |
+| 5 | Metamorphic tests | **Done.** `tests/test_metamorphic.py`: five transforms (duplicate IUSE token, unrelated package, empty overlay, consistent category rename, reordered `package.use`) × 13 representative `CASES`, each on a private `fixtures/` copy, byte-identical output required; 65 passed, and every transform is asserted to have changed the tree. | `tests/test_metamorphic.py` |
+| 6 | Real `emerge` as fixture oracle | **Done-PARTIAL, layer green.** `TEST/run/l0-fixture-oracle.sh` stages `fixtures/` in the container (`stage.sh`: 12 documented deltas incl. absolute repo locations, `PORTAGE_REPOSITORIES`, categories, per-ebuild Manifests, running-root vdb swap) and compares real `emerge -p` to portuale through `resolve-compare.py`. `l0-fx-20260915T101508Z`: 12 cases, 5 clean, 20 explained, **0 unexplained** — and it caught **backlog #54** (installed-consumer pin over-approximation: `--update paired` / `needer` / `=paired-2.0` diverge from real), suppressed by two `owner: portuale-bug` allowlist entries until fixed. Evidence: `TEST/findings/l0-fixture-oracle.md`. | `TEST/run/l0-fixture-oracle.sh`, `TEST/layers/l0-fixture-oracle/`, `TEST/compare/known-divergences-fixture-oracle.yaml` |
 | 7 | Upstream resolver test translation | **Not started.** `docs/history/023-oracle.md` "R2 — genuine upstream oracle" shows the `ResolverPlayground` route works for single cases. | — |
 | 8 | Re-pin diff review | **Done.** Lists changed functions between two pins and the Rust lines citing them (by line range or distinctive name). `portage-3.0.81.3 → 3.0.82.2`: 693 changed functions. | `scripts/portage_repin_review.py` |
-| 9 | Determinism | **Done** for repeated runs (every `CASES` entry ×3). It found a real race: concurrent cache-miss resolutions shared the depend phase's metadata file (`dc8022b`). Shuffling directory-read and `repos.conf` section order in a test mode is **not started** (≈56 `read_dir` sites). | `test_repeated_runs_are_byte_identical` |
-| 10 | Mutation testing | **Not started** (`cargo-mutants` is not installed on this host). | — |
+| 9 | Determinism | **Done.** Repeated runs (every `CASES` entry ×3) found a real race (`dc8022b`: concurrent cache-miss resolutions shared the depend phase's metadata file). The shuffle half: `portage-util::read_dir_entries` is the single seam all 56 production `read_dir` sites now use — sorted by default, seeded Fisher-Yates under `PORTUALE_SHUFFLE_DIRS` (test/CI-only) — and `test_output_is_identical_under_shuffled_directory_order` runs every `CASES` entry under 3 seeds, byte-identical. `test_repos_conf_section_order_does_not_change_output` runs them against a configroot whose `repos.conf` sections are reversed. | `rust/portage-util`, `tests/test_output_invariants.py` |
+| 10 | Mutation testing | **Started** (`cargo-mutants` v27.1.0 installed). First runs: `resolver_trace.rs` 35/35 missed (trace instrumentation, no unit-test surface), `solver_bridge.rs` 44 caught / 26 missed / 16 unviable; all 26 survivors are in the parked `--solver=pubgrub`/`resolvo` bridge (#33/#34) and were triaged as a Tier-4 test gap, not a default-resolver gap. `merge_order.rs`/`lib.rs` not yet run. | `TEST/findings/mutants.md` |
 | 11 | Harvest before deletion | **Done.** 1057 contract calls and 4900 grid cases (510 fixture packages/sets × 10 option sets) where Rust and Python agreed. 13 contract disagreements (`--info` host state the tests normalise, the known F-A2 trailer, one `--debug` narration case where Rust matches real) and 200 grid disagreements (all cache-less fixtures, D2) were not stored. Drift is a warning; `_assert_harvested` is a strict pin at the 20 call sites whose only check was Rust == Python. | `tests/corpus.py`, `tests/corpus/`, `tests/test_harvested_corpus.py`; harvest tooling in commit `2738e9c` |
 
 What the removal changed in the contract suite: 222 test functions lost
@@ -217,10 +217,14 @@ Follow-up doc changes listed above: done in the same branch
 
 ## Implementation plan for the open items (Tier 6, plan added 2026-09-15)
 
-**Tier 6 is not done.** `docs/backlog-tasks.md` "Tier 6" lists five open
-items (#48-#52); they map onto §1/§2's L0 confirmation run, §5, §6, §7,
-and the second half of §9 plus §10 above. §1-4, 8, 9 (repeated-run half)
-and 11 are Done per the table; this section is the plan for the rest.
+**Tier 6 is in progress** (2026-09-15: #48 done; #49 done-partial
+with the bed green and #54 filed; #50 tooled with its verdict recorded;
+#51 and #52 §5 landed; #52 §10 running; #50's batch translation and
+#52 §10's ongoing upkeep are the open halves).
+`docs/backlog-tasks.md` "Tier 6" lists the five items (#48-#52); they map
+onto §1/§2's L0 confirmation run, §5, §6, §7, and the second half of §9
+plus §10 above. §1-4, 8, 9 (repeated-run half) and 11 are Done per the
+table; this section is the plan for the rest.
 Read `AGENTS.md` (steps 1, 4's real-execution carve-out, 5, 8) and this
 whole file first. Model tiers follow the repo convention (**F** frontier
 Opus 5/Fable 5.1, **M** mid Sonnet 5, **S** small Haiku 4.5; "F review" =
@@ -298,6 +302,23 @@ checker correctly caught — **don't assume either without evidence.**
 at the time) has a written explanation with evidence, not silence;
 `docs/backlog-tasks.md` #48 updated either way.
 
+**Done 2026-09-15.** Full run `TEST/logs/l0-20260915T092215Z`
+reproduced the 18 (0 control). The `installed_child` hypothesis was
+**disproven** — the new `vdb-list.txt` snapshot (320 packages) contains
+none of the 18 child cps. Instead: 14 rows were the cp-level
+`required_by`/per-instance mismatch (another instance of the child cp
+already merged before the owner; `check_json` gained the mirror of its
+multi-slot-owner exemption), 3 were soft edges on a checker that passed
+no repo roots (2 PDEPEND, 1 RDEPEND; the new in-container
+`dep-classes.tsv` snapshot supplies the md5-cache variable classes, and
+soft-only edges are exempt), and **1 is a genuine portuale order bug**:
+`app-containers_podman`'s `dev-lang/go` merges after `dev-go/go-md2man`
+despite a hard `BDEPEND=>=dev-lang/go-1.24.11:=` edge and the `--tree`
+nesting. Filed as backlog #53 (its fixture repro is blocked on the
+probe's whole-resolution divergence; next step is a minimal
+`:=`-BDEPEND fixture). Evidence: `TEST/findings/l0.md` "#48";
+`check-invariants.py` is now at 1 violation on that run. `[I]`
+
 ### #49 / §6 — real `emerge` as a fixture oracle (F for the staging step, M for the rest; 6-12 h)
 
 **State:** spiked, blocked exactly as recorded: real `emerge -p` on a
@@ -351,6 +372,29 @@ different resolver shapes) run clean under real inside a staged
 and its four fixture-syntax workarounds are documented so a future
 fixture addition doesn't silently break it again.
 
+**Done 2026-09-15, with a find.** The harness shipped
+(`TEST/run/l0-fixture-oracle.sh` + `TEST/layers/l0-fixture-oracle/` +
+`TEST/atomlists/l0-fixture-oracle.txt` + its own allowlist) and the 12
+staging deltas are documented in `TEST/findings/l0-fixture-oracle.md`
+(the four known ones plus eight more: per-ebuild Manifests, backquoted
+fixture descriptions real's depend phase executes as shell, categories,
+`repo_name`, the running-root vdb swap, comment lines in
+`profiles/updates`, `*/pkg` atoms, `masters` in overlay `layout.conf`).
+`l0-fx-20260915T101508Z` is green: 12 cases, 5 clean, 20 explained, 0
+unexplained — diamond, `anyof`, `iusedefaultpkg`, `dualslotpkg` and
+`blockusedeptarget` produce byte-identical merge lists; the rest differ
+only in staging-path/wording
+(allowlisted). The oracle immediately earned its keep: it caught
+**backlog #54**, the installed-consumer pin over-approximation from the
+Tier 2.25 port — real 3.0.82.2 only walks an installed consumer when a
+competing constraint keeps the installed instance in the graph (complete
+mode is enabled on an existing slot conflict, `depgraph.py:9446`), so
+`--update paired`, `needer` and `=paired-2.0` behave differently in
+portuale, and the triangle's block names keeper where real names only
+`othermod`. Filed as #54 with two `owner: portuale-bug` allowlist entries
+suppressing it until fixed; the contract pins that encode the divergent
+behavior are named in `TEST/findings/l0-fixture-oracle.md` "#54".
+
 ### #50 / §7 — bulk translation of upstream resolver tests (M with F review; time-boxed, see step 1)
 
 **State:** not started as *bulk* translation, but the *manual* pattern
@@ -402,6 +446,30 @@ way (bulk translation attempted-and-worked, or attempted-and-not-worth-it
 with the reason); if it proceeds, a running count of upstream files
 translated vs remaining, kept in this table.
 
+**Verdict 2026-09-15: GO.** `scripts/upstream_resolver_translate.py`
+captures the whole corpus without parsing test sources: it wraps the
+real `ResolverPlayground` (constructor inputs + every `run()` result) and
+dumps JSON, so the oracle is the executed resolution, not the source's
+`mergelist` literal. A full sweep of the pinned checkout:
+
+```sh
+scripts/upstream_resolver_translate.py --all --stats
+# -> 99 test_*.py files (the directory's other 7 entries are the
+#    playground/package files), 99 captured, 95 with cases, 1032 oracle
+#    cases, 0 upstream test errors, 0 import errors, 0 crashes
+```
+
+`--emit-fixtures DIR` writes a `fixtures/`-shaped tree per playground
+(ebuilds + md5-cache from `ebuilds{}`, vdb entries from `installed{}`, a
+world file) plus `cases.json` with the recorded mergelists; a shape
+report marks what needs hand translation. A 12-file sample: of 32
+playgrounds, 4 are ebuilds-only, 17 carry `installed`/`world` (emitted),
+and 11 need `user_config`/`repo_configs`/`profiles`/`sets`/`binpkgs`
+mapped by hand per batch. Running count: **99 upstream files / 1032
+cases captured, 0 bulk-emitted into the contract suite** (the ~34
+hand-translated cases predate this tool). Each batch still needs the
+`AGENTS.md` step-5 collision check and its own pins.
+
 ### #51 / §9 (second half) — determinism under shuffled input order (M, 4-8 h)
 
 **State:** repeated-run determinism (§9 first half — the same `CASES`
@@ -447,6 +515,20 @@ production `read_dir` site (grep-verifiable, the same style §4's "one
 producer site" acceptance uses elsewhere in this repo); the extended
 determinism test passes across multiple shuffle seeds; any bug the
 shuffle found is fixed and cited in this file's table.
+
+**Done 2026-09-15.** `rust/portage-util` is the new seam:
+`read_dir_entries` sorts by file name and Fisher-Yates-shuffles under
+`PORTUALE_SHUFFLE_DIRS` (seeded per (seed, directory); unit test pins
+sorted-default, same-seed reproducibility and different-seed
+difference). **All 56 production `read_dir(` sites across
+`portage-repo`, `portage-profile`, `mrg-director` and `portuale` now call
+it** (the only remaining `std::fs::read_dir` is inside the helper), so
+the grep-verifiable acceptance holds. `repos.conf` section order: the
+repo list was already priority-sorted; `test_repos_conf_section_order_
+does_not_change_output` now pins it (reversed sections in a copied
+configroot, symlinked repos). The shuffle found no
+order-dependence bug — every `CASES` entry × 3 seeds is byte-identical,
+as is the reversed-`repos.conf` run.
 
 ### #52 / §5 + §10 — metamorphic tests and mutation testing (M for §5, S for the §10 install step + F review of survivors; §5 4-8 h, §10 ongoing)
 
@@ -507,3 +589,13 @@ finds nothing) or apparently anywhere it's been checked before.
 `cargo-mutants` runs at least once against `portage-repo` with a
 recorded survivor count and at least the top few survivors triaged into
 one of the categories above.
+
+**§5 done 2026-09-15.** `tests/test_metamorphic.py` applies the five
+transforms to 13 representative `CASES` (at most three per IUSE-heavy
+fixture atom), each on a private `fixtures/` copy with the transform
+asserted to have changed the tree; pristine output is cached per case.
+65 passed, no transform changed the output — including the duplicated
+IUSE token, which is exactly the class the removed mirror shared. The
+sixth item (same command twice) is §9's existing repeated-run test.
+**§10 in progress:** `cargo-mutants` v27.1.0 installed on this host;
+first-run results are recorded in the table above / backlog #52.

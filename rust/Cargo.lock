@@ -1273,6 +1273,7 @@ dependencies = [
  "portage-fetch",
  "portage-profile",
  "portage-repo",
+ "portage-util",
  "portage-versions",
 ]
 
@@ -1551,6 +1552,7 @@ dependencies = [
 name = "portage-profile"
 version = "0.1.0"
 dependencies = [
+ "portage-util",
  "regex",
 ]
 
@@ -1567,6 +1569,7 @@ dependencies = [
  "portage-required-use",
  "portage-solver",
  "portage-use-reduce",
+ "portage-util",
  "portage-versions",
  "resolvo",
 ]
@@ -1593,6 +1596,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "portage-util"
+version = "0.1.0"
+
+[[package]]
 name = "portage-versions"
 version = "0.1.0"
 dependencies = [
@@ -1617,6 +1624,7 @@ dependencies = [
  "portage-profile",
  "portage-repo",
  "portage-use-reduce",
+ "portage-util",
  "portage-versions",
  "regex",
  "sha1",

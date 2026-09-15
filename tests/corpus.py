@@ -59,12 +59,21 @@ def denormalize(text: str) -> str:
     return text.replace("<TMP>", _basetemp[0]) if _basetemp else text
 
 
+def trim_padding(text: str) -> str:
+    """Drop per-line trailing whitespace. Conflict-block caret markers pad
+    to a width that encodes the checkout path length (`installed in
+    '<root>'` lines), so an entry harvested at a different path length can
+    never match byte-for-byte; trailing whitespace carries no semantics."""
+    return "\n".join(line.rstrip() for line in text.split("\n"))
+
+
 def normalize(text: str) -> str:
     # Longest prefixes first: the fixtures root lives under the repo root.
     for base in _basetemp:
         text = text.replace(base, "<TMP>")
     text = text.replace(str(FIXTURES_ROOT), "<FIXTURES>")
-    return text.replace(str(REPO_ROOT), "<REPO>")
+    text = text.replace(str(REPO_ROOT), "<REPO>")
+    return trim_padding(text)
 
 
 # The host environment at import time; a case's identity is only what the
@@ -171,7 +180,12 @@ def compare(key: str, stored: dict, args, env, result) -> str | None:
     if ident["args"] != stored["args"] or ident["env"] != stored["env"]:
         return None
     now = result_record(result.returncode, result.stdout, result.stderr)
-    changed = [s for s in ("rc", "stdout", "stderr") if now[s] != stored[s]]
+    if now["rc"] != stored["rc"]:
+        return f"{key}: rc changed"
+    changed = [
+        s for s in ("stdout", "stderr")
+        if trim_padding(now[s]) != trim_padding(stored[s])
+    ]
     if not changed:
         return None
     return f"{key}: {', '.join(changed)} changed"

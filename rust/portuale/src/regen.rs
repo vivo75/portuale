@@ -214,10 +214,10 @@ pub fn run(
         };
         for repo in &repos {
             let pkg_dir = repo.location.join(category).join(package);
-            let Ok(entries) = std::fs::read_dir(&pkg_dir) else {
+            let Ok(entries) = portage_util::read_dir_entries(&pkg_dir) else {
                 continue;
             };
-            for entry in entries.filter_map(Result::ok) {
+            for entry in entries {
                 let name = entry.file_name();
                 let name = name.to_string_lossy();
                 let Some(pf) = name.strip_suffix(".ebuild") else {
@@ -459,18 +459,18 @@ fn prune_stale_entries(repo_location: &Path, valid: Option<&HashSet<(String, Str
     let empty = HashSet::new();
     let valid = valid.unwrap_or(&empty);
     let cache_root = repo_location.join("metadata/md5-cache");
-    let Ok(cats) = std::fs::read_dir(&cache_root) else {
+    let Ok(cats) = portage_util::read_dir_entries(&cache_root) else {
         return;
     };
-    for cat_entry in cats.filter_map(Result::ok) {
+    for cat_entry in cats {
         if !cat_entry.file_type().is_ok_and(|t| t.is_dir()) {
             continue;
         }
         let category = cat_entry.file_name().to_string_lossy().to_string();
-        let Ok(files) = std::fs::read_dir(cat_entry.path()) else {
+        let Ok(files) = portage_util::read_dir_entries(&cat_entry.path()) else {
             continue;
         };
-        for f in files.filter_map(Result::ok) {
+        for f in files {
             if !f.file_type().is_ok_and(|t| t.is_file()) {
                 continue;
             }

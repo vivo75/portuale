@@ -127,13 +127,12 @@ pub fn info_dirs_inodes(root: &Path) -> std::collections::BTreeSet<(u64, u64)> {
 
     let mut candidates: Vec<String> = Vec::new();
     let envd_dir = root.join("etc/env.d");
-    if let Ok(entries) = std::fs::read_dir(&envd_dir) {
-        let mut filenames: Vec<String> = entries
-            .filter_map(|e| e.ok())
+    if let Ok(entries) = portage_util::read_dir_entries(&envd_dir) {
+        let filenames: Vec<String> = entries
+            .into_iter()
             .map(|e| e.file_name().to_string_lossy().to_string())
             .filter(|name| is_env_d_filename(name))
             .collect();
-        filenames.sort();
         for fname in &filenames {
             let Ok(text) = std::fs::read_to_string(envd_dir.join(fname)) else {
                 continue;
@@ -171,16 +170,16 @@ fn candidate_lib_dirs(root: &Path, ldpath_entries: &[String]) -> Vec<PathBuf> {
     dirs.insert("usr/lib".to_string());
     dirs.insert("lib".to_string());
 
-    if let Ok(entries) = std::fs::read_dir(root) {
-        for e in entries.filter_map(|e| e.ok()) {
+    if let Ok(entries) = portage_util::read_dir_entries(root) {
+        for e in entries {
             let name = e.file_name().to_string_lossy().to_string();
             if name.starts_with("lib") && name != "libexec" && e.path().is_dir() {
                 dirs.insert(name);
             }
         }
     }
-    if let Ok(entries) = std::fs::read_dir(root.join("usr")) {
-        for e in entries.filter_map(|e| e.ok()) {
+    if let Ok(entries) = portage_util::read_dir_entries(&root.join("usr")) {
+        for e in entries {
             let name = e.file_name().to_string_lossy().to_string();
             if name.starts_with("lib") && name != "libexec" && e.path().is_dir() {
                 dirs.insert(format!("usr/{name}"));
@@ -241,13 +240,12 @@ pub fn run_env_update(root: &Path) -> Result<(), String> {
     let envd_dir = root.join("etc/env.d");
     std::fs::create_dir_all(&envd_dir).map_err(|e| format!("{}: {e}", envd_dir.display()))?;
 
-    let mut filenames: Vec<String> = std::fs::read_dir(&envd_dir)
+    let filenames: Vec<String> = portage_util::read_dir_entries(&envd_dir)
         .map_err(|e| format!("{}: {e}", envd_dir.display()))?
-        .filter_map(|e| e.ok())
+        .into_iter()
         .map(|e| e.file_name().to_string_lossy().to_string())
         .filter(|name| is_env_d_filename(name))
         .collect();
-    filenames.sort();
 
     let mut space_values: BTreeMap<&str, Vec<String>> =
         SPACE_SEPARATED.iter().map(|k| (*k, Vec::new())).collect();

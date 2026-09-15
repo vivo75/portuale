@@ -1495,9 +1495,9 @@ mod tests {
                 // save: one <cat>:<pf>:<stamp>.log, `fulltext` only has the
                 // LOG line (QA filtered out by PORTAGE_ELOG_CLASSES).
                 let elog = logs.join("elog");
-                let saved: Vec<_> = std::fs::read_dir(&elog)
+                let saved: Vec<_> = portage_util::read_dir_entries(&elog)
                     .unwrap()
-                    .filter_map(Result::ok)
+                    .into_iter()
                     .map(|e| e.file_name().to_string_lossy().into_owned())
                     .filter(|n| n.starts_with("dev-libs:foo-1.0:"))
                     .collect();

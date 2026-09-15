@@ -95,6 +95,15 @@ cat > "$WORLD" <<-'EOF'
 log "seeded @world:"; sed 's/^/  /' "$WORLD" | tee -a "$OUTDIR/run.log"
 cp "$WORLD" "$OUTDIR/world.txt"
 
+# -- installed-package snapshot (backlog #48) ---------------------------
+# The host-side invariant checker cannot see this container's vdb, but
+# "is there an installed version of this cp" is what decides the
+# merge-order exemption (real `DepPriority.satisfied`). One line per
+# installed package: `cat/pkg-version`.
+find /var/db/pkg -mindepth 2 -maxdepth 2 -type d -printf '%P\n' | sort \
+  > "$OUTDIR/vdb-list.txt"
+log "vdb snapshot: $(wc -l < "$OUTDIR/vdb-list.txt") installed package(s)"
+
 slug() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_' ; }
 
 probe() {
@@ -132,6 +141,68 @@ while IFS= read -r line || [ -n "$line" ]; do
   esac
   n=$((n+1))
 done < "$ATOMLIST"
+
+# -- dependency-class snapshot for the host invariant checker (#48) -----
+# For every (child, owner) edge portuale's `--json` reports, record which
+# dependency variables of the owner's md5-cache entry name the child.
+# The host checker uses it for real's own soft-edge rule: RDEPEND /
+# PDEPEND edges may be dropped by the `ignore_priority` ladder, while
+# DEPEND / BDEPEND / IDEPEND force order. The container's repo checkout
+# is not visible from the host, so this is snapshotted alongside the
+# outputs.
+if [ "${L0_SKIP_INVARIANTS:-0}" != 1 ]; then
+python3 - "$OUTDIR" <<'PY'
+import json
+import re
+import sys
+from collections import defaultdict
+from pathlib import Path
+
+out = Path(sys.argv[1])
+VARS = ("DEPEND", "RDEPEND", "BDEPEND", "IDEPEND", "PDEPEND")
+repos = [Path("/var/db/repos") / name for name in ("gentoo", "buildovl", "porttest")]
+
+def vars_for(child, cat, pkg, pv):
+    atom = re.compile(
+        rf"(?<![\w/.-]){re.escape(child[0])}/{re.escape(child[1])}"
+        rf"(?=$|[^\w.+-]|-\d)")
+    found = set()
+    for repo in repos:
+        entry = repo / "metadata" / "md5-cache" / cat / f"{pkg}-{pv}"
+        if not entry.is_file():
+            continue
+        for line in entry.read_text(errors="replace").splitlines():
+            for var in VARS:
+                if line.startswith(var + "=") and atom.search(line[len(var) + 1:]):
+                    found.add(var)
+        break
+    return found
+
+edges = defaultdict(set)
+for json_file in sorted((out / "portuale-modes").glob("*.json.txt")):
+    for line in json_file.read_text(errors="replace").splitlines():
+        if not line.startswith('{"entries":'):
+            continue
+        doc = json.loads(line)
+        versions = defaultdict(set)
+        for e in doc["entries"]:
+            versions[(e["category"], e["package"])].add(e["version"])
+        for e in doc["entries"]:
+            child = (e["category"], e["package"])
+            for owner in e["required_by"]:
+                owner_cp = (owner["category"], owner["package"])
+                found = set()
+                for pv in versions.get(owner_cp, ()):
+                    found |= vars_for(child, owner_cp[0], owner_cp[1], pv)
+                key = (f"{child[0]}/{child[1]}", f"{owner_cp[0]}/{owner_cp[1]}")
+                edges[key] |= found
+
+lines = [f"{child}\t{owner}\t{','.join(sorted(found))}"
+         for (child, owner), found in sorted(edges.items())]
+(out / "dep-classes.tsv").write_text("\n".join(lines) + "\n")
+print(f"dep-classes: {len(lines)} (child, owner) edge(s)")
+PY
+fi
 
 # -- a few whole-graph runs on top of the per-atom probes --------------
 if [ "${L0_SKIP_MULTI:-0}" = 1 ]; then

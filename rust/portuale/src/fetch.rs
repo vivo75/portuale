@@ -2232,10 +2232,11 @@ mod tests {
             "fetch should fail after 2 checksum failures"
         );
 
-        let entries = fs::read_dir(&distdir).unwrap();
+        let entries = portage_util::read_dir_entries(&distdir).unwrap();
         let mut bad_files: Vec<_> = entries
+            .into_iter()
             .filter_map(|e| {
-                let path = e.unwrap().path();
+                let path = e.path();
                 if path
                     .file_name()
                     .and_then(|n| n.to_str())

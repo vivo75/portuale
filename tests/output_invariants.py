@@ -18,6 +18,14 @@ from pathlib import Path
 
 MERGE_BOUND = {"new", "upgrade", "downgrade", "reinstall"}
 
+# Dependency variables that force merge order. Real's `_serialize_tasks`
+# `ignore_priority` ladder (DepPriorityNormalRange) may drop `RDEPEND`
+# (runtime) and `PDEPEND` (runtime_post) edges when a pass stalls; only
+# buildtime edges (DEPEND/BDEPEND/IDEPEND, and `:=` slot-operator deps)
+# are never ignored.
+HARD_DEP_VARS = {"DEPEND", "BDEPEND", "IDEPEND"}
+DEP_VARS = ("DEPEND", "RDEPEND", "BDEPEND", "IDEPEND", "PDEPEND")
+
 _VERSION = re.compile(
     r"-(\d+(?:\.\d+)*[a-z]?(?:_(?:alpha|beta|pre|rc|p)\d*)*(?:-r\d+)?)$"
 )
@@ -80,7 +88,9 @@ def parse_plain(stdout: str) -> list[dict]:
     return rows
 
 
-def _installed(root: Path | None, cp: tuple[str, str]) -> bool:
+def _installed(root: Path | None, cp: tuple[str, str], installed=None) -> bool:
+    if installed is not None:
+        return cp in installed
     if root is None:
         return True  # cannot tell; don't flag
     vdb = root / "var" / "db" / "pkg" / cp[0]
@@ -89,24 +99,41 @@ def _installed(root: Path | None, cp: tuple[str, str]) -> bool:
     return any(_VERSION.sub("", d.name) == cp[1] for d in vdb.iterdir())
 
 
-def _pdepend_cps(repo_roots: list[Path], cat: str, pkg: str, version: str) -> set[tuple[str, str]]:
-    """Every `cat/pkg` named anywhere in the owner's PDEPEND (conditionals
-    ignored -- a superset is fine for an exemption)."""
+def parse_vdb_list(text: str) -> set[tuple[str, str]]:
+    """`cat/pkg-version` lines (the L0 run's `vdb-list.txt` snapshot) ->
+    the set of installed `(cat, pkg)` pairs -- what `_installed` checks
+    with a real `root`, without needing the container's vdb on the host."""
     cps: set[tuple[str, str]] = set()
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or "/" not in line:
+            continue
+        cat, _, pv = line.partition("/")
+        cps.add((cat, _VERSION.sub("", pv)))
+    return cps
+
+
+def _dep_vars_for_atom(repo_roots: list[Path], child_cp: tuple[str, str],
+                       cat: str, pkg: str, version: str) -> set[str]:
+    """Which dependency variables of the owner's md5-cache entry name
+    `child_cp` (any atom form; conditionals ignored -- a mention in any
+    branch marks the variable). Empty when the entry is absent."""
+    found: set[str] = set()
+    # `cat/pkg`, `cat/pkg:slot`, `>=cat/pkg-1.2` match; `cat/pkg-other`
+    # (a longer package name) does not: a `-` boundary must start a
+    # version digit.
+    atom = re.compile(
+        rf"(?<![\w/.-]){re.escape(child_cp[0])}/{re.escape(child_cp[1])}"
+        rf"(?=$|[^\w.+-]|-\d)")
     for repo in repo_roots:
         entry = repo / "metadata" / "md5-cache" / cat / f"{pkg}-{version}"
         if not entry.is_file():
             continue
         for line in entry.read_text(errors="replace").splitlines():
-            if line.startswith("PDEPEND="):
-                for tok in line[len("PDEPEND="):].split():
-                    tok = tok.lstrip("!<>=~")
-                    m = re.match(r"([\w+.-]+)/([\w+.-]+)", tok)
-                    if m:
-                        c, p, _ = split_cpv(f"{m.group(1)}/{m.group(2)}")
-                        cps.add((c, p))
-                        cps.add((m.group(1), m.group(2)))
-    return cps
+            for var in DEP_VARS:
+                if line.startswith(var + "=") and atom.search(line[len(var) + 1:]):
+                    found.add(var)
+    return found
 
 
 def _cyclic_edges(edges: set[tuple[int, int]], n: int) -> set[tuple[int, int]]:
@@ -158,9 +185,15 @@ def _cyclic_edges(edges: set[tuple[int, int]], n: int) -> set[tuple[int, int]]:
 
 def check_json(doc: dict, root: Path | None = None,
                repo_roots: list[Path] | None = None,
-               args: list[str] | None = None) -> list[str]:
+               args: list[str] | None = None,
+               installed: set[tuple[str, str]] | None = None,
+               dep_vars: dict[tuple, set[str]] | None = None) -> list[str]:
     """`args` is the command line; `--rebuild-if-*` reinstalls are seeds
-    (real adds them as rebuild arguments, so they have no parent)."""
+    (real adds them as rebuild arguments, so they have no parent).
+    `installed` is a `parse_vdb_list` set (the L0 run cannot expose a
+    `root`); `dep_vars` maps `(child_cp, owner_cp)` to the owner's
+    dependency variables naming the child (L0's `dep-classes.tsv`),
+    letting the soft-edge exemption work without repo access."""
     problems: list[str] = []
     rebuild_seeds = any(a.startswith("--rebuild-if-") for a in args or [])
 
@@ -185,7 +218,7 @@ def check_json(doc: dict, root: Path | None = None,
             problems.append(f"{name}: not requested and required_by is empty")
         for owner in e["required_by"]:
             ocp = (owner["category"], owner["package"])
-            if ocp not in by_cp and not _installed(root, ocp):
+            if ocp not in by_cp and not _installed(root, ocp, installed):
                 problems.append(f"{name}: owner {ocp[0]}/{ocp[1]} is neither an entry nor installed")
 
     # Reachability from the seeds (requested entries; an installed owner
@@ -241,17 +274,42 @@ def check_json(doc: dict, root: Path | None = None,
             # Real `_serialize_tasks` may ignore an edge whose dependency an
             # installed instance already satisfies (`DepPriority.satisfied`),
             # so a child with any installed instance is not held to it.
-            installed_child = any(
-                entries[k]["outcome"] != "new" for k in by_cp[child_cp]
-            ) or (root is not None and _installed(root, child_cp))
+            # `_installed(root=None)` degrades to "cannot tell", which must
+            # not exempt here: the original `root is not None and ...` guard.
+            if installed is not None:
+                installed_child = child_cp in installed
+            else:
+                installed_child = root is not None and _installed(root, child_cp)
+            installed_child = installed_child or any(
+                entries[k]["outcome"] != "new" for k in by_cp[child_cp])
             if installed_child:
                 continue
             for ocp, js in by_owner_cp.items():
                 if any(j > i for j in js) or any((i, j) in cyclic for j in js):
                     continue
+                # Another merge-bound instance of a multi-instance child cp
+                # before the owner satisfies the cp-level edge: the JSON
+                # aggregates `required_by` by cp, while real's constraint is
+                # per package instance (e.g. the clang:21 entry carrying an
+                # edge that clang:22 already satisfied).
+                if len(by_cp[child_cp]) > 1 and any(
+                        k != i and entries[k]["outcome"] in MERGE_BOUND
+                        and any(k < j for j in js)
+                        for k in by_cp[child_cp]):
+                    continue
                 o = entries[js[0]]
-                if repo_roots and (e["category"], e["package"]) in _pdepend_cps(
-                        repo_roots, o["category"], o["package"], o["version"]):
+                vars_found: set[str] = set()
+                if dep_vars is not None:
+                    vars_found = dep_vars.get((child_cp, ocp), set())
+                elif repo_roots:
+                    for j in js:
+                        vars_found |= _dep_vars_for_atom(
+                            repo_roots, child_cp, entries[j]["category"],
+                            entries[j]["package"], entries[j]["version"])
+                # A soft edge (RDEPEND/PDEPEND only) may legally be
+                # relaxed by the scheduler's ignore ladder. Unknown
+                # metadata stays strict.
+                if vars_found and not (vars_found & HARD_DEP_VARS):
                     continue
                 problems.append(
                     f"merge order: {e['category']}/{e['package']} (#{i}) merges after "

@@ -58,6 +58,21 @@ step), `L0_SKIP_MULTI=1` (skip the `@system`/`@world` whole-graph runs),
 `L0_SKIP_INVARIANTS=1` (skip the extra portuale mode runs),
 `L0_EMERGE_OPTS`, `PORTTEST_IMAGE`, `PORTTEST_PODMAN`.
 
+### L0 fixture oracle — real `emerge` on the checked-in fixture tree
+
+```sh
+TEST/run/l0-fixture-oracle.sh        # TEST/atomlists/l0-fixture-oracle.txt
+```
+
+Stages a copy of `fixtures/` inside the container (absolute repo
+locations, `PORTAGE_REPOSITORIES`, categories, per-ebuild Manifests, the
+fixture vdb as the running root — 12 documented deltas in
+`layers/l0-fixture-oracle/stage.sh`) and runs real `emerge -p` and
+portuale on the same cases through the same comparator as L0, against
+`compare/known-divergences-fixture-oracle.yaml`. Real-execution-only:
+no contract `CASES` entry, no Python mirror. Findings and their
+adjudication: `TEST/findings/l0-fixture-oracle.md` (backlog #49).
+
 ### L1 — merge parity from an identical prebuilt binpkg set
 
 ```sh
@@ -156,15 +171,18 @@ methodology critique stay there).
 ### Layout
 
 ```
-run/          host orchestrators (l0-resolver.sh, l1-merge-from-binpkg.sh,
-              l2-portuale-builder.sh, lib.sh)
+run/          host orchestrators (l0-resolver.sh, l0-fixture-oracle.sh,
+              l1-merge-from-binpkg.sh, l2-portuale-builder.sh,
+              l3-source-parity.sh, lib.sh)
 layers/l0/    in-container.sh — the per-atom probe driver
+layers/l0-fixture-oracle/  stage.sh + in-container.sh (real emerge on fixtures)
 layers/l1/    build.sh (Portage, from source) + consume.sh (one PM, merge + snapshot)
 layers/l2/    build-portage.sh + build-portuale.sh (archive-only / deep)
+layers/l3/    source-build parity (build-and-merge.sh)
 atomlists/    curated atom / package lists
 compare/      resolve-compare.py (L0), snapshot.sh + normalize.py + diff.py (L1/L2),
               gpkg-structure.sh + gpkg-diff.sh (L2), test-*.sh, normalize.md,
-              known-divergences.yaml
+              known-divergences.yaml, known-divergences-fixture-oracle.yaml
 net/          up.sh / down.sh
 images/       Containerfile material + overlay/porttest/ (incl. metadata/md5-cache)
 logs/         run output (git-ignored)  — incl. _l1-pkgcache/, _l2-*

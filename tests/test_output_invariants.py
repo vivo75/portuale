@@ -17,6 +17,8 @@ group, so the whole grid stays a few seconds.
 from __future__ import annotations
 
 import os
+import re
+import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
@@ -126,6 +128,67 @@ def test_repeated_runs_are_byte_identical(emerge_binary, fixture_env):
     assert not lines, "non-deterministic output for:\n" + "\n".join(lines)
 
 
+def test_output_is_identical_under_shuffled_directory_order(emerge_binary, fixture_env):
+    """§9's shuffle half (backlog #51): `PORTUALE_SHUFFLE_DIRS` makes every
+    production directory read return a seeded, deliberately shuffled order
+    (`portage-util`'s `read_dir_entries`). Output must not depend on it."""
+
+    seeds = ("1", "17", "4242")
+
+    def one(args):
+        runs = [
+            _run(emerge_binary, args, {**fixture_env, "PORTUALE_SHUFFLE_DIRS": seed})
+            for seed in seeds
+        ]
+        first = runs[0]
+        same = all((r.returncode, r.stdout, r.stderr) ==
+                   (first.returncode, first.stdout, first.stderr) for r in runs[1:])
+        return " ".join(args), None if same else [
+            "output differs between PORTUALE_SHUFFLE_DIRS seeds " + ", ".join(seeds)]
+
+    with ThreadPoolExecutor(WORKERS) as pool:
+        results = list(pool.map(one, _determinism_args()))
+    lines = [label for label, problems in results if problems]
+    assert not lines, "readdir-order-dependent output for:\n" + "\n".join(lines)
+
+
+def _reversed_repos_conf(tmp_path):
+    """A configroot copy of `fixtures/` whose `repos.conf` `[section]`
+    blocks are in reverse order (the `[DEFAULT]` header stays first); the
+    repos themselves are symlinked, so ROOT can stay the real fixtures."""
+    root = tmp_path / "configroot"
+    shutil.copytree(FIXTURES_ROOT / "etc", root / "etc", symlinks=True)
+    for entry in FIXTURES_ROOT.iterdir():
+        if entry.name != "etc":
+            (root / entry.name).symlink_to(entry)
+    conf = root / "etc" / "portage" / "repos.conf" / "repos.conf"
+    sections = re.split(r"(?m)^(?=\[)", conf.read_text())
+    header, blocks = sections[0], sections[1:]
+    assert len(blocks) > 1, "fixture repos.conf must define several repos"
+    conf.write_text(header + "".join(reversed(blocks)))
+    return root
+
+
+def test_repos_conf_section_order_does_not_change_output(emerge_binary, fixture_env, tmp_path):
+    """Backlog #51 S1: the repo list is priority-sorted, not file-order
+    dependent, so reversing the `[repo]` sections changes nothing."""
+    configroot = _reversed_repos_conf(tmp_path)
+    env = dict(fixture_env)
+    env["PORTAGE_CONFIGROOT"] = str(configroot)
+
+    def one(args):
+        want = _run(emerge_binary, args, fixture_env)
+        got = _run(emerge_binary, args, env)
+        same = (got.returncode, got.stdout, got.stderr) == \
+               (want.returncode, want.stdout, want.stderr)
+        return " ".join(args), None if same else ["output differs with repos.conf sections reversed"]
+
+    with ThreadPoolExecutor(WORKERS) as pool:
+        results = list(pool.map(one, _determinism_args()))
+    lines = [label for label, problems in results if problems]
+    assert not lines, "repos.conf file-order-dependent output for:\n" + "\n".join(lines)
+
+
 # -- the checker itself --------------------------------------------------
 # Each synthetic output below carries exactly one past bug class; the
 # checker must flag it (a checker that goes blind passes everything).
@@ -173,6 +236,50 @@ def test_checker_flags_a_duplicate_slot_without_a_conflict():
 def test_checker_flags_a_dependency_merged_after_its_owner():
     doc = _doc(_entry("root", 0, requested=True), _entry("leaf", 1, ("root",)))
     assert any("merges after its owner" in p for p in inv.check_json(doc))
+
+
+def test_checker_tolerates_a_multi_instance_child_satisfied_earlier():
+    # The cp-level required_by can't say which instance owns the edge: the
+    # L0 firefox/thunderbird clang/llvm/rust-bin rows are the later
+    # instance of a cp whose earlier instance already merged before the
+    # owner (backlog #48).
+    doc = _doc(
+        _entry("multi", 0, ("root",), slot="22"),
+        _entry("root", 1, requested=True),
+        _entry("multi", 2, ("root",), slot="21"),
+    )
+    assert not [p for p in inv.check_json(doc) if "merge order" in p]
+    # Neither instance before the owner: still flagged.
+    late = _doc(_entry("root", 0, requested=True),
+                _entry("multi", 2, ("root",), slot="21"),
+                _entry("multi", 3, ("root",), slot="22"))
+    assert len([p for p in inv.check_json(late) if "merge order" in p]) == 2
+
+
+def test_checker_tolerates_soft_edges_only():
+    # Real's `ignore_priority` ladder may relax RDEPEND (runtime) and
+    # PDEPEND (runtime_post) edges; DEPEND/BDEPEND/IDEPEND never.
+    doc = _doc(_entry("root", 0, requested=True), _entry("leaf", 1, ("root",)))
+    key = (("dev-libs", "leaf"), ("dev-libs", "root"))
+    assert not [p for p in inv.check_json(doc, dep_vars={key: {"RDEPEND"}})
+                if "merge order" in p]
+    assert not [p for p in inv.check_json(doc, dep_vars={key: {"PDEPEND"}})
+                if "merge order" in p]
+    assert [p for p in inv.check_json(doc, dep_vars={key: {"BDEPEND"}})
+            if "merge order" in p]
+    assert [p for p in inv.check_json(doc, dep_vars={key: {"RDEPEND", "BDEPEND"}})
+            if "merge order" in p]
+    # No metadata: stays strict.
+    assert [p for p in inv.check_json(doc, dep_vars={}) if "merge order" in p]
+
+
+def test_checker_honours_a_vdb_list_snapshot():
+    # L0 cannot expose the container's vdb; `parse_vdb_list` is the
+    # snapshot the checker takes `installed` from (backlog #48).
+    installed = inv.parse_vdb_list("dev-libs/leaf-1.0\ndev-libs/other-2.0-r1\n")
+    assert installed == {("dev-libs", "leaf"), ("dev-libs", "other")}
+    doc = _doc(_entry("root", 0, requested=True), _entry("leaf", 1, ("root",)))
+    assert not [p for p in inv.check_json(doc, installed=installed) if "merge order" in p]
 
 
 def test_checker_tolerates_a_cycle():

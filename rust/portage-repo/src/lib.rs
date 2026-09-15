@@ -314,11 +314,11 @@ fn quarter_sort_key(name: &str) -> (i32, i32, String) {
 /// scandir order / `prev_mtimes` logic -- see the module cut note).
 fn grab_updates_for_repo(repo_location: &Path) -> Vec<UpdateCmd> {
     let updpath = repo_location.join("profiles").join("updates");
-    let Ok(rd) = fs::read_dir(&updpath) else {
+    let Ok(rd) = portage_util::read_dir_entries(&updpath) else {
         return Vec::new();
     };
     let mut files: Vec<(PathBuf, (i32, i32, String))> = rd
-        .filter_map(|e| e.ok())
+        .into_iter()
         .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().to_string();
@@ -1094,15 +1094,14 @@ pub fn find_repos(config_root: &Path) -> Result<Vec<RepoConfig>, Error> {
     }
 
     if repos_conf_path.is_dir() {
-        let mut entries: Vec<PathBuf> = fs::read_dir(&repos_conf_path)
+        let entries: Vec<PathBuf> = portage_util::read_dir_paths(&repos_conf_path)
             .map_err(|e| Error::ReadFile {
                 path: repos_conf_path.display().to_string(),
                 source: e,
             })?
-            .filter_map(|e| e.ok().map(|e| e.path()))
+            .into_iter()
             .filter(|p| p.is_file())
             .collect();
-        entries.sort();
         for path in entries {
             let text = fs::read_to_string(&path).map_err(|e| Error::ReadFile {
                 path: path.display().to_string(),
@@ -1707,13 +1706,12 @@ fn list_candidates_uncached(
         if !pkg_dir.is_dir() {
             continue;
         }
-        let entries = fs::read_dir(&pkg_dir).map_err(|e| Error::ReadFile {
+        let entries = portage_util::read_dir_entries(&pkg_dir).map_err(|e| Error::ReadFile {
             path: pkg_dir.display().to_string(),
             source: e,
         })?;
 
         for entry in entries {
-            let entry = entry.map_err(|e| Error::ReadEntry { source: e })?;
             let file_name = entry.file_name();
             let file_name = file_name.to_string_lossy();
             let Some(stem) = file_name.strip_suffix(".ebuild") else {
@@ -5098,10 +5096,10 @@ pub fn installed_candidates(
     let pkgdir = root.join("var/db/pkg");
     let mut out = Vec::new();
     for (src_cat, src_pkg) in installed_cp_sources(category, package) {
-        let Ok(entries) = fs::read_dir(pkgdir.join(&src_cat)) else {
+        let Ok(entries) = portage_util::read_dir_entries(&pkgdir.join(&src_cat)) else {
             continue;
         };
-        for e in entries.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()) {
+        for e in entries.into_iter().filter(|e| e.path().is_dir()) {
             let name = e.file_name().to_string_lossy().to_string();
             let Some(version) = strip_version_prefix(&name, &src_pkg) else {
                 continue;
@@ -5812,12 +5810,12 @@ fn vdb_fingerprint(vdb: &Path) -> u64 {
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map_or(0, |d| d.as_nanos() as u64)
     }
-    let Ok(cats) = fs::read_dir(vdb) else {
+    let Ok(cats) = portage_util::read_dir_entries(vdb) else {
         return 0;
     };
     let mut acc = mtime_nanos(vdb);
     let mut count: u64 = 0;
-    for cat in cats.filter_map(Result::ok).filter(|e| e.path().is_dir()) {
+    for cat in cats.into_iter().filter(|e| e.path().is_dir()) {
         acc ^= mtime_nanos(&cat.path()).rotate_left((count % 61) as u32 + 1);
         count += 1;
     }
@@ -5863,15 +5861,15 @@ pub fn all_installed_packages(root: &Path) -> Vec<InstalledPackage> {
 
 fn all_installed_packages_uncached(vdb: &Path) -> Vec<InstalledPackage> {
     let mut out = Vec::new();
-    let Ok(cats) = fs::read_dir(vdb) else {
+    let Ok(cats) = portage_util::read_dir_entries(vdb) else {
         return out;
     };
-    for cat in cats.filter_map(Result::ok).filter(|e| e.path().is_dir()) {
+    for cat in cats.into_iter().filter(|e| e.path().is_dir()) {
         let category = cat.file_name().to_string_lossy().to_string();
-        let Ok(pkgs) = fs::read_dir(cat.path()) else {
+        let Ok(pkgs) = portage_util::read_dir_entries(&cat.path()) else {
             continue;
         };
-        for pkg in pkgs.filter_map(Result::ok).filter(|e| e.path().is_dir()) {
+        for pkg in pkgs.into_iter().filter(|e| e.path().is_dir()) {
             let dirname = pkg.file_name().to_string_lossy().to_string();
             let Some((name, version)) = split_installed_dir(&dirname) else {
                 continue;
@@ -5905,10 +5903,10 @@ fn all_installed_packages_uncached(vdb: &Path) -> Vec<InstalledPackage> {
 pub fn all_cp(repos: &[RepoConfig]) -> Vec<String> {
     let mut out: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for repo in repos {
-        let Ok(cats) = fs::read_dir(&repo.location) else {
+        let Ok(cats) = portage_util::read_dir_entries(&repo.location) else {
             continue;
         };
-        for cat in cats.filter_map(Result::ok).filter(|e| e.path().is_dir()) {
+        for cat in cats.into_iter().filter(|e| e.path().is_dir()) {
             let category = cat.file_name().to_string_lossy().to_string();
             // Skip the non-category top-level dirs of a repo checkout.
             if matches!(
@@ -5917,21 +5915,19 @@ pub fn all_cp(repos: &[RepoConfig]) -> Vec<String> {
             ) {
                 continue;
             }
-            let Ok(pkgs) = fs::read_dir(cat.path()) else {
+            let Ok(pkgs) = portage_util::read_dir_entries(&cat.path()) else {
                 continue;
             };
-            for pkg in pkgs.filter_map(Result::ok).filter(|e| e.path().is_dir()) {
+            for pkg in pkgs.into_iter().filter(|e| e.path().is_dir()) {
                 let package = pkg.file_name().to_string_lossy().to_string();
-                let has_ebuild = fs::read_dir(pkg.path())
-                    .map(|mut d| {
-                        d.any(|e| {
-                            e.ok()
-                                .and_then(|e| e.file_name().to_str().map(str::to_owned))
-                                .is_some_and(|n| {
-                                    n.strip_suffix(".ebuild")
-                                        .and_then(|s| strip_version_prefix(s, &package))
-                                        .is_some()
-                                })
+                let has_ebuild = portage_util::read_dir_entries(&pkg.path())
+                    .map(|d| {
+                        d.into_iter().any(|e| {
+                            e.file_name().to_str().is_some_and(|n| {
+                                n.strip_suffix(".ebuild")
+                                    .and_then(|s| strip_version_prefix(s, &package))
+                                    .is_some()
+                            })
                         })
                     })
                     .unwrap_or(false);

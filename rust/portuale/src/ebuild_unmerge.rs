@@ -400,11 +400,11 @@ fn cleanup_info_dir(dest: &Path, inode_key: (u64, u64), infodirs_inodes: &BTreeS
     if !is_info_dir {
         return;
     }
-    let Ok(entries) = std::fs::read_dir(dest) else {
+    let Ok(entries) = portage_util::read_dir_entries(dest) else {
         return;
     };
     let names: Vec<String> = entries
-        .filter_map(|e| e.ok())
+        .into_iter()
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect();
     if names.is_empty()

@@ -352,18 +352,19 @@ pub(crate) fn resolve_local_binpkg(
 
     // Fallback: any `<pf>-<id>.{gpkg.tar,xpak}` in the instance dir,
     // highest numeric `<id>` first.
-    let mut candidates: Vec<(u64, std::path::PathBuf)> = std::fs::read_dir(&instance_dir)
-        .ok()?
-        .flatten()
-        .filter_map(|e| {
-            let name = e.file_name().into_string().ok()?;
-            let stem = name
-                .strip_suffix(".gpkg.tar")
-                .or_else(|| name.strip_suffix(".xpak"))?;
-            let id = stem.strip_prefix(&format!("{pf}-"))?;
-            Some((id.parse::<u64>().ok()?, e.path()))
-        })
-        .collect();
+    let mut candidates: Vec<(u64, std::path::PathBuf)> =
+        portage_util::read_dir_entries(&instance_dir)
+            .ok()?
+            .into_iter()
+            .filter_map(|e| {
+                let name = e.file_name().into_string().ok()?;
+                let stem = name
+                    .strip_suffix(".gpkg.tar")
+                    .or_else(|| name.strip_suffix(".xpak"))?;
+                let id = stem.strip_prefix(&format!("{pf}-"))?;
+                Some((id.parse::<u64>().ok()?, e.path()))
+            })
+            .collect();
     candidates.sort_by_key(|(id, _)| std::cmp::Reverse(*id));
     candidates.into_iter().map(|(_, p)| p).next()
 }
@@ -647,8 +648,7 @@ mod tests {
     fn test_gpg_home() -> std::path::PathBuf {
         fn copy_dir(src: &std::path::Path, dest: &std::path::Path) {
             std::fs::create_dir_all(dest).unwrap();
-            for entry in std::fs::read_dir(src).unwrap() {
-                let entry = entry.unwrap();
+            for entry in portage_util::read_dir_entries(src).unwrap() {
                 let to = dest.join(entry.file_name());
                 if entry.file_type().unwrap().is_dir() {
                     copy_dir(&entry.path(), &to);
@@ -1706,7 +1706,7 @@ mod tests {
             "must not mention the index, got: {err}"
         );
         assert!(
-            std::fs::read_dir(&pkgdir).unwrap().next().is_none(),
+            portage_util::read_dir_entries(&pkgdir).unwrap().is_empty(),
             "nothing may be downloaded into $PKGDIR"
         );
         let _ = std::fs::remove_dir_all(&tmp);

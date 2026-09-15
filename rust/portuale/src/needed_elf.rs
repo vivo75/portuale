@@ -491,27 +491,25 @@ pub fn generate_soname_deps(
 pub fn read_all_needed_entries(root: &Path) -> Vec<(String, Vec<NeededEntry>)> {
     let mut result = Vec::new();
     let pkg_root = root.join("var/db/pkg");
-    let Ok(categories) = std::fs::read_dir(&pkg_root) else {
+    let Ok(categories) = portage_util::read_dir_entries(&pkg_root) else {
         return result;
     };
-    let mut category_names: Vec<String> = categories
-        .filter_map(|e| e.ok())
+    let category_names: Vec<String> = categories
+        .into_iter()
         .filter(|e| e.path().is_dir())
         .map(|e| e.file_name().to_string_lossy().to_string())
         .collect();
-    category_names.sort();
 
     for category in category_names {
         let category_path = pkg_root.join(&category);
-        let Ok(packages) = std::fs::read_dir(&category_path) else {
+        let Ok(packages) = portage_util::read_dir_entries(&category_path) else {
             continue;
         };
-        let mut pf_names: Vec<String> = packages
-            .filter_map(|e| e.ok())
+        let pf_names: Vec<String> = packages
+            .into_iter()
             .filter(|e| e.path().is_dir())
             .map(|e| e.file_name().to_string_lossy().to_string())
             .collect();
-        pf_names.sort();
 
         for pf in pf_names {
             let cpv = format!("{category}/{pf}");

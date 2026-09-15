@@ -236,12 +236,11 @@ pub fn collect_filemeta(image: &Path) -> Result<Vec<FileMeta>, String> {
     let mut stack = vec![PathBuf::new()];
     while let Some(relative_dir) = stack.pop() {
         let src_dir = image.join(&relative_dir);
-        let mut children: Vec<PathBuf> = std::fs::read_dir(&src_dir)
+        let children: Vec<PathBuf> = portage_util::read_dir_entries(&src_dir)
             .map_err(|e| format!("{}: {e}", src_dir.display()))?
-            .filter_map(|e| e.ok())
+            .into_iter()
             .map(|e| relative_dir.join(e.file_name()))
             .collect();
-        children.sort();
         for relative_path in children {
             let src = image.join(&relative_path);
             let meta =

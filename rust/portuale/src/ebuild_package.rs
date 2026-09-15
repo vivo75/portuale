@@ -830,8 +830,8 @@ fn allocate_binpkg_build_id(
     let prefix = format!("{pf}-");
     let dot_suffix = format!(".{suffix}");
     let mut max_existing: u64 = 0;
-    if let Ok(entries) = std::fs::read_dir(&dir) {
-        for entry in entries.flatten() {
+    if let Ok(entries) = portage_util::read_dir_entries(&dir) {
+        for entry in entries {
             let Some(name) = entry.file_name().to_str().map(str::to_string) else {
                 continue;
             };
@@ -1268,8 +1268,9 @@ pub(crate) fn quickpkg_from_vdb(
 /// `${PORTAGE_BUILDDIR}/build-info` for `quickpkg_from_vdb`.
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dst).map_err(|e| format!("{}: {e}", dst.display()))?;
-    for entry in std::fs::read_dir(src).map_err(|e| format!("{}: {e}", src.display()))? {
-        let entry = entry.map_err(|e| format!("{}: {e}", src.display()))?;
+    for entry in
+        portage_util::read_dir_entries(src).map_err(|e| format!("{}: {e}", src.display()))?
+    {
         let ft = entry.file_type().map_err(|e| format!("{e}"))?;
         let from = entry.path();
         let to = dst.join(entry.file_name());
@@ -1956,9 +1957,9 @@ mod tests {
             "a failed packaging phase must not touch the final binpkg path"
         );
         // No stray temp file left behind either.
-        let leftovers: Vec<_> = std::fs::read_dir(binpkg_path.parent().unwrap())
+        let leftovers: Vec<_> = portage_util::read_dir_entries(binpkg_path.parent().unwrap())
             .unwrap()
-            .filter_map(|e| e.ok())
+            .into_iter()
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .filter(|n| n.contains(".tmp"))
             .collect();

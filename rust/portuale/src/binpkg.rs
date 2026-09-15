@@ -855,13 +855,9 @@ pub fn populate_local_pkgdir(pkgdir: &Path) -> Result<Vec<HashMap<String, String
     }
 
     let mut out: Vec<HashMap<String, String>> = Vec::new();
-    let Ok(categories) = fs::read_dir(pkgdir) else {
+    let Ok(cat_paths) = portage_util::read_dir_paths(pkgdir) else {
         return Ok(out);
     };
-    let mut cat_paths: Vec<PathBuf> = categories
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .collect();
-    cat_paths.sort();
     for cat_path in cat_paths {
         if !cat_path.is_dir() {
             continue;
@@ -1035,12 +1031,7 @@ fn lossy(p: &Path) -> String {
 }
 
 fn read_dir_sorted(dir: &Path) -> Result<Vec<PathBuf>, String> {
-    let mut entries: Vec<PathBuf> = fs::read_dir(dir)
-        .map_err(|e| format!("{}: {e}", dir.display()))?
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .collect();
-    entries.sort();
-    Ok(entries)
+    portage_util::read_dir_paths(dir).map_err(|e| format!("{}: {e}", dir.display()))
 }
 
 /// Real GPG binpkg signature policy + verification (real
@@ -1794,8 +1785,7 @@ mod tests {
     fn test_gpg_home(tag: &str) -> PathBuf {
         fn copy_dir(src: &Path, dest: &Path) {
             fs::create_dir_all(dest).unwrap();
-            for entry in fs::read_dir(src).unwrap() {
-                let entry = entry.unwrap();
+            for entry in portage_util::read_dir_entries(src).unwrap() {
                 let to = dest.join(entry.file_name());
                 if entry.file_type().unwrap().is_dir() {
                     copy_dir(&entry.path(), &to);

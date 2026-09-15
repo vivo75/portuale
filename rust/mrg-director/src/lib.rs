@@ -830,15 +830,12 @@ impl RepoCache for Md5Cache<'_> {
                 .join("metadata")
                 .join("md5-cache")
                 .join(category);
-            std::fs::read_dir(&dir)
+            portage_util::read_dir_entries(&dir)
                 .map(|it| {
-                    let mut names: Vec<String> = it
-                        .filter_map(|e| e.ok())
+                    it.into_iter()
                         .map(|e| e.file_name().to_string_lossy().into_owned())
                         .filter(|n| !n.contains('.'))
-                        .collect();
-                    names.sort();
-                    names
+                        .collect()
                 })
                 .unwrap_or_default()
         } else {
@@ -846,15 +843,15 @@ impl RepoCache for Md5Cache<'_> {
             // the only source of `pf` names, so walk it and yield each
             // ebuild file's `<pkg>-<version>` stem.
             let dir = self.repo_location.join(category);
-            let mut names: Vec<String> = std::fs::read_dir(&dir)
+            let mut names: Vec<String> = portage_util::read_dir_entries(&dir)
                 .map(|it| {
-                    it.filter_map(|e| e.ok())
+                    it.into_iter()
                         .filter(|e| e.path().is_dir())
                         .flat_map(|pkg_dir| {
-                            std::fs::read_dir(pkg_dir.path())
+                            portage_util::read_dir_entries(&pkg_dir.path())
                                 .map(|files| {
                                     files
-                                        .filter_map(|f| f.ok())
+                                        .into_iter()
                                         .filter(|f| f.path().is_file())
                                         .filter_map(|f| {
                                             let name = f.file_name().to_string_lossy().into_owned();

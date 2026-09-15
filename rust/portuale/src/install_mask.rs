@@ -124,11 +124,11 @@ pub(crate) fn install_mask_dir(base_dir: &Path, mask: &InstallMask) -> std::io::
     let mut todo: Vec<std::path::PathBuf> = vec![base_dir.to_path_buf()];
     while let Some(parent) = todo.pop() {
         dir_stack.push(parent.clone());
-        let entries = match std::fs::read_dir(&parent) {
+        let entries = match portage_util::read_dir_entries(&parent) {
             Ok(e) => e,
             Err(_) => continue,
         };
-        for entry in entries.flatten() {
+        for entry in entries {
             let abs_path = entry.path();
             let file_type = match entry.file_type() {
                 Ok(ft) => ft,

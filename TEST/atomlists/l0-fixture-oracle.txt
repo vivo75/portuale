@@ -1,0 +1,31 @@
+# Fixture-oracle cases (backlog #49): real `emerge -p` on the staged
+# fixture tree, compared to portuale's own output. One case per line,
+# shell words are emerge arguments. The set spans the resolver shapes
+# the contract suite already covers, so each divergence is a real
+# behavioural difference, not a new scenario.
+#
+# multi-package diamond
+dev-libs/diamond
+# || any-of group
+dev-libs/anyof
+# REQUIRED_USE with IUSE defaults
+dev-libs/iusedefaultpkg
+# multi-slot package
+dev-libs/dualslotpkg
+# installed pin vs an explicit upgrade
+--update dev-libs/paired
+# autounmask keyword change
+dev-libs/autounmaskkeywordpkg
+# keyword-masked dependency
+dev-libs/kwneedpkg
+# installed consumer's hard dependency breaks a pin
+dev-libs/needer
+# the same, with the competing othermod constraint present (real prints
+# the residual conflict only in this shape; backlog #54)
+dev-libs/needer dev-libs/othermod
+# explicit request against an installed pin (same #54 shape)
+=dev-libs/paired-2.0
+# USE-dep blocker
+dev-libs/blockusedeptarget
+# unsatisfiable REQUIRED_USE
+dev-libs/requiredusebadpkg

@@ -16718,3 +16718,48 @@ emerge --pretend -e @system --debug 2>&1 | grep '^MO_ORDER'
 At real-tree scale the slice is a pure win: L0 `TEST/logs/l0-20260915T005709Z` moves clean 98 -> 100, parity 0.817 -> 0.833, UNEXPLAINED 38 -> 36, order 19 -> 17 -- the three F-B3 rows (`_system` #11, `_world` #14, `MULTI_emptytree-system` #13) now match real, and `MULTI_emptytree-system`'s first divergence moved from #13 to #304. The pre-existing 18 invariant "merges after its owner" rows are unchanged (verified with a pre-slice subset run). Detail: `TEST/findings/l0.md` "R3b", `docs/025b-complete-graph-nodes.md` §7.
 
 **The repo-metadata slot carries production traffic, fallback included (backlog #28 H4, 2026-09-15).** `mrg_director::RepoCache` was the last scaffolded slot without a production caller. The source-build path's `entry_metadata_env` (the `DEFINED_PHASES`/`KEYWORDS`/`LICENSE` a build entry exports, real `config.setcpv`'s aux keys) now constructs an `Md5Cache` for the candidate's repo and reads through the trait; `Md5Cache::metadata` delegates to `portage_repo::repo_aux_metadata`, which since #41 C1–C3 *is* the repo-metadata decision point (repo `metadata/md5-cache` -> depcachedir -> depend phase), so the trait call replaces the direct call with the same implementation underneath and the fallback comes along unchanged. `Md5Cache::new(repo_location, repo_name)` is the public constructor; the trait's `category` lister and `repo` provenance stay as they were. Behaviour-neutral by construction -- the H-slot invariant -- and verified by `cargo test --release`, the contract suite and an L1 porttest run. Detail: `docs/backlog_tasks.md` #28, `docs/backlog_tier_5_and_2_sliced.opus.md` §7 H4.
+
+**The L0 invariant run is confirmed and its 18-violation residue adjudicated: 17 were checker gaps, 1 is a filed resolver bug (backlog #48, 2026-09-15).** A full `TEST/logs/l0-20260915T092215Z` run (portage 3.0.82.2, same binary as the R5 baseline) reproduced the documented 18 portuale "merges after its owner" rows with 0 violations on real's own output. The plan's recorded lead -- a missing installed-package exemption -- was disproven: the run's new `vdb-list.txt` snapshot lists 320 installed packages and none of the 18 child cps is among them. The real gaps were (a) `--json`'s `required_by` aggregates by `cat/pkg` while real's constraint is per package instance, so `clang:21`, `llvm:21`, `rust-bin:1.94` and `gcr:3` each carried an edge its earlier slot already satisfied -- `check_json` now mirrors its own multi-slot-owner exemption for the child side (14 rows); and (b) `check-invariants.py` passed no repo roots, so it could not tell a hard `DEPEND`/`BDEPEND`/`IDEPEND` edge from an `RDEPEND`/`PDEPEND` one that real's `_serialize_tasks` ignore ladder may legally drop (`DepPriorityNormalRange`, which portuale's `merge_order.rs` mirrors) -- the container now snapshots `dep-classes.tsv` from the repo metadata and soft-only edges are exempt (2 PDEPEND + 1 RDEPEND row). One genuine bug remains: in the `app-containers_podman` probe, portuale's `dev-lang/go` merges at #100 after `dev-go/go-md2man` at #94 even though the edge is a hard `BDEPEND=>=dev-lang/go-1.24.11:=` and portuale's own `--tree` nests go underneath it; real merges go first. Filed as backlog #53 with the L0 row as the repro and a minimal `:=`-BDEPEND fixture as the next step.
+
+```sh
+TEST/run/l0-resolver.sh
+python3 TEST/compare/check-invariants.py TEST/logs/l0-20260915T092215Z
+# -> invariants: 120 probes, 1 portuale violation(s), 0 control violation(s)
+#    (portuale app-containers_podman: dev-lang/go (#100) merges after its
+#     owner dev-go/go-md2man (#94) -- backlog #53)
+python3 -m pytest tests/test_output_invariants.py -q -k "checker or vdb"
+# -> 12 passed
+```
+
+**Directory-read order is now a single seam, deliberately shakable, and the output is identical under it (backlog #51, 2026-09-15).** Every production directory listing now goes through `rust/portage-util`'s `read_dir_entries`: entries sorted by file name by default, and Fisher-Yates-shuffled per (seed, directory) when the test-only `PORTUALE_SHUFFLE_DIRS=<seed>` is set. All 56 `read_dir(` call sites across `portage-repo` (vdb walks, repo scans, `profiles/updates`), `portage-profile` (config directories), `mrg-director` (md5-cache and ebuild listings) and `portuale` (merge trees, env.d, elog, fetch, binpkg helpers) were migrated; the only remaining `std::fs::read_dir` in the workspace is inside the helper. The seam's unit test pins the sorted default, same-seed reproducibility and different-seed divergence. Two contract-level properties ride on it: every `CASES` entry run under three shuffle seeds must be byte-identical (`test_output_is_identical_under_shuffled_directory_order`), and a configroot whose `repos.conf` `[section]` blocks are reversed must give the same output (`test_repos_conf_section_order_does_not_change_output`, repos symlinked, `ROOT` still the real fixtures). Neither found an order-dependence bug — the repeated-run determinism half had already caught the one real race (`dc8022b`).
+
+```sh
+cargo test --release -p portage-util read_dir
+# -> 1 passed (sorted default, same seed reproducible, other seed differs)
+python3 -m pytest tests/test_output_invariants.py -q -k "shuffled or repos_conf"
+# -> 2 passed (every CASES entry x 3 seeds; reversed repos.conf sections)
+```
+
+**Five input transforms that must not change the resolver's output pass over the IUSE-heavy contract cases (backlog #52 §5, 2026-09-15).** `tests/test_metamorphic.py` builds each transform on a private copy of `fixtures/` and requires byte-identical `(rc, stdout, stderr)` to the pristine run: duplicate an IUSE token in the case's package (the motivating bug class — the removed Python mirror shared the IUSE-dedup bug, so it could never catch it), add an unrelated `dev-libs/mtunrelated` package, add an empty overlay repo to `repos.conf`, consistently rename `dev-libs` to `dev-libs-rn` everywhere including the vdb and the case's atoms (output normalised back), and swap two non-overlapping `package.use` lines. The subset is 13 `CASES` (at most three per IUSE/IUSE_EXPAND-heavy fixture atom), a property test rather than an exhaustive one; each transform asserts it actually changed the tree, so a no-op cannot pass silently. All 65 pass.
+
+```sh
+python3 -m pytest tests/test_metamorphic.py -q
+# -> 65 passed (13 cases x 5 transforms; pristine outputs cached per case)
+```
+
+**Real `emerge` now runs on the checked-in fixture tree and immediately caught a resolver over-approximation (backlog #49, 2026-09-15).** `TEST/run/l0-fixture-oracle.sh` stages a copy of `fixtures/` inside the test container -- `TEST/layers/l0-fixture-oracle/stage.sh` applies the 12 deltas real needs, from absolute `repos.conf` locations and `PORTAGE_REPOSITORIES` through per-ebuild `Manifest`s (real masks a digest-less ebuild and executes backquoted fixture prose as shell in its depend phase), an `etc/portage/categories` list, and a swap of the container's `/var/db/pkg` for the fixture vdb so the running root's installed set stops leaking "installed packages are masked" notices -- and then runs real `emerge -p` and portuale side by side through the L0 comparator. `TEST/logs/l0-fx-20260915T101508Z` is green (12 cases, 5 clean, 20 explained, 0 unexplained): `diamond`, `anyof`, `iusedefaultpkg`, `dualslotpkg` and `blockusedeptarget` produce identical merge lists. The oracle's first catch is **backlog #54**: the Tier 2.25 installed-consumer pin port applies keeper's `=paired-1.0` pin from outside every target closure, but real only walks such a consumer when a competing constraint keeps the installed instance in the graph -- complete mode is enabled on an existing slot conflict (`depgraph.py:9446-9453`) and the end-of-walk loop only visits deps of graph nodes. Real upgrades `--update dev-libs/paired` and prints no residual block for `needer` or `=paired-2.0` alone; portuale holds the upgrade in the first and prints blocks in all three. Filed with the contract pins that encode the divergent behaviour, suppressed by two `owner: portuale-bug` allowlist entries until the fix.
+
+```sh
+TEST/run/l0-fixture-oracle.sh
+# -> TEST/logs/l0-fx-20260915T101508Z/l0-report.txt: probes 12, clean 5,
+#    explained 20, UNEXPLAINED 0, rc 0
+#    (the two suppressed findings are backlog #54)
+```
+
+**Mutation testing is running: the default resolver's module list is the next target, the parked solver backends own the first survivors (backlog #52 §10, 2026-09-15).** `cargo-mutants` v27.1.0 runs with `--in-place` because its sandbox copy breaks the crate's manifest-relative fixture paths (the unmutated baseline fails there and no mutant is tested). First runs: `resolver_trace.rs` 35/35 missed -- it is the `PORTUALE_MO_SEL` trace instrumentation, whose "tests" are the L0 `MO_ORDER` traces, so no unit test is expected to distinguish its internals; `solver_bridge.rs` 44 caught / 26 missed / 16 unviable, with every survivor in the `--solver=pubgrub`/`resolvo` bridge (`graph_result_from_order` guards, `BridgeRepo`, `cp_exists`, `target_slot`). Triage per the plan's order (§1/§5/§6/§7): none of the broader checks reach those backends -- they are parked non-functional on real targets (#33/#34) -- so the survivors are a real Tier-4 test gap and become the acceptance list for the slice that wires those backends up. `merge_order.rs` (456 mutants) and `lib.rs` (2207) are the next useful runs.
+
+```sh
+export PATH="$HOME/.cargo/bin:$PATH"
+cargo mutants -p portage-repo --file portage-repo/src/solver_bridge.rs --in-place --timeout 300
+# -> 86 mutants tested in 7m: 26 missed, 44 caught, 16 unviable
+```
