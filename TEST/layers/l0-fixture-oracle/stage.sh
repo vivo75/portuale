@@ -29,6 +29,12 @@
 #   8. a `metadata/layout.conf` with `masters = testrepo` is added where
 #      the fixture repo lacks one (real warns on every run otherwise).
 #
+# `FX_WORLD_EXTRA` (backlog #54 S0): space-separated atoms appended to
+# the staged `var/lib/portage/world` before either package manager runs
+# -- lets a probe test a world state the checked-in fixture world does
+# not encode (e.g. a consumer package added to world) without touching
+# the shared fixture.
+#
 # Usage: stage.sh <stage-dir>   (fixtures must be mounted at /fixtures)
 set -euo pipefail
 
@@ -47,6 +53,14 @@ sed -i "s|\${PORTAGE_CONFIGROOT}|$FX|g" "$FX/etc/portage/binrepos.conf"
 touch /etc/make.local
 # 5. real rejects the fixture news format
 rm -rf "$FX/repo/metadata/news"
+
+# FX_WORLD_EXTRA: append atoms to the staged world (#54 S0)
+if [ -n "${FX_WORLD_EXTRA:-}" ]; then
+  mkdir -p "$FX/var/lib/portage"
+  for atom in $FX_WORLD_EXTRA; do
+    printf '%s\n' "$atom" >> "$FX/var/lib/portage/world"
+  done
+fi
 
 # 3. categories real will accept. Written to /etc/portage/categories
 #    *and* to each staged repo's own profiles/categories: a BDEPEND
