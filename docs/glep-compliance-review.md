@@ -27,7 +27,7 @@ whole-archive), OpenPGP detached signatures per member plus a Manifest
 signature to prevent replace/reuse attacks, duplicate-file rejection, and
 regular-files-only extraction.
 
-**Status: Full**, with one minor hardening gap.
+**Status: Full.**
 
 - Implemented in `rust/portuale/src/binpkg.rs`: `gpkg-1` marker detection
   (`binpkg.rs:151-170`), per-member compression classification including zstd
@@ -40,16 +40,23 @@ regular-files-only extraction.
   (`binpkg.rs:106-135`), gated by a `binpkg-ignore-signature`-style knob.
   Hash support is BLAKE2B + SHA512 (`binpkg.rs:1594,1601`), matching real's
   own `MANIFEST2_HASH_DEFAULTS`.
-- Gap: on the **outer** container tar (the one holding `gpkg-1`,
-  `metadata.tar`, `image.tar`, `Manifest`), nothing in `binpkg.rs` checks
-  `entry.header().entry_type()` before trusting a member's name — only
-  `is_dir()` is checked (`binpkg.rs:413`). A maliciously crafted outer tar
-  could in principle name a symlink `metadata.tar` pointing outside the
-  extraction root. Real's own `gpkg.py` has the same rationale section
-  ("only regular files are permitted inside the container") but this isn't a
-  divergence from real's actual enforcement level, which is why this is
-  minor rather than a correctness bug — flagging as hardening, not a
-  divergence-from-real bug.
+- **Regular-files-only extraction is enforced since 2026-09-15 (#56).**
+  `outer_regular_member`/`outer_prefix_dir` (`binpkg.rs:102-169`,
+  `symlink_metadata`/`FileType`, no follow) and the shared
+  `walk_outer_members` run at all three outer-container sites
+  (`read_gpkg_metadata`, `verify_gpkg_manifest`, `extract_gpkg_member`):
+  the prefix must be a real directory and every trusted name (`gpkg-1`,
+  `Manifest`, `metadata.tar*`, `image.tar*`, `.sig`) must be a regular
+  file — anything else is an error naming the member and its type. The
+  three outer `tar -xf` calls also pass `--no-same-owner`.
+- The audit's own follow-up ("real's enforcement wasn't independently
+  re-verified") is answered by #56 S0's crafted-archive matrix
+  (`TEST/findings/l2.md` "## #56 S0"): real's `tarfile.extractfile` never
+  leaves the archive (a symlink resolves inside it or raises `KeyError`;
+  every special member fails the Manifest size/structure checks first),
+  while the pre-fix portuale listed the host `/etc` through a symlinked
+  prefix and blocked on a FIFO member — so this closed a real divergence,
+  not just theoretical hardening.
 
 ## GLEP 82 — Repository configuration file (layout.conf)
 
@@ -293,8 +300,7 @@ comment content as meaningful).
 
 Two genuine, narrow gaps survived cross-referencing against what real
 `emerge` itself actually consults (as opposed to `repoman`/`pkgcheck`/
-`--sync`/gemato territory, all out of scope). The first is now closed;
-the second remains open:
+`--sync`/gemato territory, all out of scope). Both are now closed:
 
 1. **`cache-formats` layout.conf key (GLEP 82) — DONE 2026-09-15 (#55).**
    `RepoConfig::cache_formats` resolves the key exactly like real
@@ -305,17 +311,23 @@ the second remains open:
    depcachedir/depend fallback (same metadata, no pregen speedup). Evidence:
    `TEST/findings/l2.md` "## #55 S0"; `docs/backlog-tasks.md` #55.
 
-2. **Outer gpkg container tar entry-type check (GLEP 78 hardening).**
-   `binpkg.rs`'s outer-container walk (around `binpkg.rs:413`) checks
-   `is_dir()` but not that named members (`gpkg-1`, `metadata.tar*`,
-   `image.tar*`, `Manifest`) are regular files before trusting them. Cheap,
-   self-contained hardening: reject non-regular entries at that same walk
-   site. Not a correctness-vs-real divergence (real's own enforcement here
-   wasn't independently re-verified against `gpkg.py`'s actual extraction
-   code, only against its rationale prose), so this is defense-in-depth
-   rather than a differential-test-bed finding — worth confirming against
-   `gpkg.py`'s real extraction code before treating it as more than
-   optional hardening.
+2. **Outer gpkg container tar entry-type check (GLEP 78) — DONE
+   2026-09-15 (#56).** The three outer-container sites now require a real
+   prefix directory and regular files at every trusted name, via
+   `outer_regular_member`/`outer_prefix_dir` and the shared
+   `walk_outer_members` (`read_gpkg_metadata`, `verify_gpkg_manifest`,
+   `extract_gpkg_member`); non-regular members are errors naming the
+   member and its type. The audit's "real's enforcement wasn't
+   independently re-verified" caveat was resolved by #56 S0's
+   crafted-archive matrix: real's in-archive `tarfile.extractfile` never
+   leaves the container (`KeyError` for a symlink target, size/structure
+   failures for every special member), while the pre-fix portuale followed
+   a symlinked prefix to the host `/etc`, read a host file through a
+   symlinked `Manifest`, and blocked on a FIFO member — so this closed a
+   real divergence, not just theoretical hardening. Evidence:
+   `TEST/findings/l2.md` "## #56 S0"; `scripts/gpkg_crafted_members.py`;
+   `docs/backlog-tasks.md` #56 (whose close-out also files the inner
+   `metadata.tar` member-type residue as #58).
 
 Everything else — GLEP 74/59/61's full-tree/hash/compression machinery
 (delegated to `gemato` inside real's own `--sync`, itself a portuale
