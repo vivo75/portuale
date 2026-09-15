@@ -791,13 +791,27 @@ impl PackagesDb for MemoryDb {
     }
 }
 
-/// The current, only `RepoCache` implementation: the flat md5-cache
+/// The filesystem-backed `RepoCache` implementation: the flat md5-cache
 /// directory. Delegate to `portage_repo::repo_aux_metadata` (identical to
 /// real `flat_hash.py`'s layout on disk) and, when the repo has no usable
 /// cache, enumerate the category's ebuilds instead of cache-dir entries.
+/// Because `repo_aux_metadata` is the #41 decision point, this also
+/// carries the ebuild fallback (depcachedir + depend phase) for a
+/// cache-less repo.
 pub struct Md5Cache<'a> {
     repo_location: &'a Path,
     repo_name: &'a str,
+}
+
+impl<'a> Md5Cache<'a> {
+    /// Wrap one repo location under its `repos.conf` name (the
+    /// `::reponame` provenance `RepoCache::repo` reports).
+    pub fn new(repo_location: &'a Path, repo_name: &'a str) -> Self {
+        Self {
+            repo_location,
+            repo_name,
+        }
+    }
 }
 impl RepoCache for Md5Cache<'_> {
     fn metadata(

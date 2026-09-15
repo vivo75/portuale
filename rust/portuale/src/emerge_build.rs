@@ -708,9 +708,15 @@ const EXPORTED_PKG_METADATA: [&str; 3] = ["DEFINED_PHASES", "KEYWORDS", "LICENSE
 
 fn entry_metadata_env(entry: &GraphEntry, candidate: &Candidate) -> Vec<(String, String)> {
     let pf = format!("{}-{}", entry.package, candidate.version);
-    let Ok(metadata) =
-        portage_repo::repo_aux_metadata(&candidate.repo_location, &entry.category, &pf)
-    else {
+    // H4: the repo-metadata decision point (#41's `repo_aux_metadata`:
+    // repo md5-cache -> depcachedir -> depend phase) is reached through
+    // the `RepoCache` slot on this production path, the same
+    // interchangeable-traits seam the scheduler/merge/news/fetch/
+    // packages/binpkg slots use. `Md5Cache::metadata` delegates to the
+    // identical function the direct call used, so this is
+    // behaviour-neutral.
+    let cache = mrg_director::Md5Cache::new(&candidate.repo_location, &candidate.repo_name);
+    let Ok(metadata) = mrg_director::RepoCache::metadata(&cache, &entry.category, &pf) else {
         return Vec::new();
     };
     EXPORTED_PKG_METADATA
