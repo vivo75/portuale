@@ -694,9 +694,23 @@ per-build-entry metadata read now goes through
 the #41 decision point `portage_repo::repo_aux_metadata` (repo cache ->
 depcachedir -> depend phase); behaviour-neutral (L1 porttest
 `l1-20260915T012229Z` hard 0 / UNEXPLAINED 0), 7/8 slots on production
-traffic, `Director` left for H5. **R3c not started** in this session:
-the satisfied-at-add recording plus the superseded-edge drop touches
-every `DepEdge` construction site and the scheduler's priority ladder,
-and needs fresh gedit/nautilus `--debug` digraph oracles and the
-`MULTI_deep-update-world` guard run; it is the next slice.
+traffic, `Director` left for H5.
+
+**Wave 6 attempted 2026-09-15, R3c STOPPED.** R3c's satisfied-at-add
+drop was implemented in two shapes and reverted (full detail
+`TEST/findings/l0.md` "R3c attempt", `docs/025b` §8,
+`TEST/logs/r3c-20260915/`): real's edge target is decided by
+`_select_package` at the atom's *insertion instant*, not by a bit
+re-evaluated later. The blunt drop fixes gedit's `nghttp2 -> systemd`
+(the F-B4 acceptance) but regresses `_system`/`_world` to a #1
+divergence and `MULTI_emptytree-system` to #0 (L0 `l0-20260915T051103Z`:
+clean 97 / parity 0.808 / order 20, was 100 / 0.833 / 17 -- D4 permits
+per-slice movement, but this is strictly worse with no net R3e in
+sight). Gating the drop on `build_digraph`'s DFS discovery rank
+preserves L0 but does not fix gedit, because the DFS disagrees with
+real's insertion order for the polkit/systemd/nghttp2 sub-walk (real:
+nghttp2 `.order` 9336 < systemd-merge 9740; portuale DFS: systemd 96 <
+nghttp2 274). Conclusion: **R3c and R3d are one change** -- carry the
+per-entry insertion instant (first-class installed nodes) first; R3d
+and R3e have not started. Tree is at the R3b/H4 state, R3b's gedit/nautilus rows back to their pre-attempt `#5`/`#8` divergences.
 

@@ -256,3 +256,24 @@ MO_ORDER from "diverges at index 2" to **three localized residues in
 So the pre-bias order is real's insertion order up to real's own
 hash-seeded set iteration; `GraphEntry::insertion` is unnecessary. The
 L0 run's flipped-probe log (D4) is in `TEST/findings/l0.md` "R3b".
+
+## 8. R3c attempt — stopped (2026-09-15, wave 6)
+
+R3c's drop was implemented twice and reverted; the measurements are in
+`TEST/findings/l0.md` "R3c attempt" and `TEST/logs/r3c-20260915/`.
+Summary: real's edge target is decided by `_select_package` at the
+atom's **insertion instant** (`depgraph.py:4400-4425`; the installed
+instance when no merge-bound node for the `cat/pkg` is in the graph
+yet, the merge node otherwise). A blunt "drop every satisfied-at-add
+edge" fixes gedit's nghttp2 but hollows the all-installed-rebuild
+graphs (`_system`/`_world` regress to #1); gating on
+`build_digraph`'s DFS discovery rank preserves those probes but does
+not fix gedit, because the DFS disagrees with real's insertion order
+for the polkit/systemd/nghttp2 sub-walk (real: nghttp2 9336 <
+systemd-merge 9740; portuale DFS: systemd 96 < nghttp2 274).
+
+Conclusion recorded for the next attempt: **R3c is not separable from
+R3d.** The insertion instant must be carried per entry (the §4.3
+first-class installed nodes and their walk positions) before the
+`satisfied` bit can decide the edge target. The work-tree changes were
+reverted; the tree is at the R3b/H4 state.
