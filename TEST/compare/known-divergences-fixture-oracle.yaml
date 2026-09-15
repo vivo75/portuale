@@ -68,7 +68,7 @@
 
 - id: triangle-residual-conflict-exit
   category: exit
-  slugs: ["dev-libs_needer_dev-libs_othermod"]
+  slugs: ["dev-libs_needer_dev-libs_othermod", "dev-libs_othermod_dev-libs_needer"]
   match: "real rc=1 portuale rc=0"
   reason: >
     Deliberate convention, not a bug: portuale renders the slot-conflict
@@ -85,7 +85,7 @@
 
 - id: triangle-residual-conflict-suppressed-merge-list
   category: exit
-  slugs: ["dev-libs_needer_dev-libs_othermod"]
+  slugs: ["dev-libs_needer_dev-libs_othermod", "dev-libs_othermod_dev-libs_needer"]
   match: "merge-list comparison suppressed"
   reason: >
     The comparator suppresses merge-list comparison on the rc mismatch

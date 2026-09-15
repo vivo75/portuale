@@ -422,6 +422,63 @@ resolver passes — a solvable installed-vs-merge collision somewhere in
 Correct work, not overhead; flagged here for S2 to confirm against the
 120-probe L0 bed.
 
+## #57 S2 — fixture oracle + full L0 verification
+
+`docs/06.057-directly_requested_hard_atom_conflict.opus.md` §S2, after
+S1 (`d1dbf10`).
+
+**Fixture oracle** (`TEST/run/l0-fixture-oracle.sh`, run
+`l0-fx-20260915T215704Z`): first pass (`l0-fx-20260915T215557Z`) found
+one **unexplained** finding — `dev-libs_othermod_dev-libs_needer` (the
+reversed-argv triangle S1 added to the atomlist) hit the same K1
+exit/suppressed-merge-list divergence as the forward order, but the two
+`triangle-residual-conflict-*` allowlist entries only listed the
+forward-order slug. Fixed by adding the reversed-order slug to both
+entries' `slugs:` list (allowlist-only, no code change) — re-run is
+**0 unexplained**: 18 probes, 13 clean, parity 0.722, 17 explained. The
+two `triangle-residual-conflict-missing-block-*` entries are gone (S1);
+both `dev-libs_needer_dev-libs_othermod` and `dev-libs_othermod_dev-libs_needer`
+now explain identically (K1 exit + suppressed-merge-list only); the
+`plainuser` solvable-control cases (cell e, both orders) are clean with
+no findings at all.
+
+**Full L0** (`TEST/run/l0-resolver.sh`, run `l0-20260915T215756Z`, same
+120-probe atomlist as the `#54` S2 baseline `l0-20260915T173332Z`):
+**100/120 clean, parity 0.833 — identical topline to the baseline**, 0
+portuale invariant violations, 0 control violations. A full line-by-line
+diff of both runs' `## unexplained findings` sections shows **exactly
+two new lines, both on the same already-non-clean probe**:
+
+```
+MULTI_emptytree-system
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [flags] sys-apps/portage: real flags [UD] vs portuale [R ~]
+```
+
+This is the pre-existing, already-documented environmental flake where
+the container's own real-portage self-upgrade doesn't always "take"
+before the `-pe @system` multi-probe runs (`TEST/findings/l0.md` line
+~953, "environmental — the container's pin upgrade did not take on
+this run. Unchanged pattern.") — confirmed here by checking the raw
+`real/MULTI_emptytree-system.txt` output directly: real's own vdb still
+reports `sys-apps/portage-3.0.81.3` at probe time even though the
+in-container setup log says `portage now 3.0.82.2` earlier in the same
+run. Nothing else changed: the set of 19 probes carrying any
+unexplained finding is byte-identical between the two runs (`diff` on
+the sorted `### <probe>` headers is empty), and the entire `## explained
+(allowlisted) findings` section is byte-identical too. `media-libs/libdisplay-info`
+does not appear in either report (stays clean); the `#54` triangle/pin
+probes are not part of this atomlist (real-tree only) and are
+unaffected.
+
+**Verdict: zero regressions from #57 S1 on the 120-probe real-tree
+bed.** The reachability/solvable-split machinery S1 reuses (K2) does
+not fire spuriously anywhere on this corpus — no probe gained a block,
+lost a block, or changed its merge list.
+
+Commit: allowlist reversed-argv slug fix + this section (no code
+change).
+
 ## What a fixture addition must not break
 
 A new fixture that real will read needs: a digest for **every** ebuild in
