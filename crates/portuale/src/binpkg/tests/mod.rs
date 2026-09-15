@@ -133,6 +133,35 @@ fn build_gpkg_entries(entries: &[(&str, GpkgEntry)]) -> PathBuf {
     root.join("out.gpkg.tar")
 }
 
+/// Every one of the three outer-container sites must reject `g`, and
+/// every error must contain each of `needles`.
+fn assert_rejects_everywhere(g: &Path, needles: &[&str]) {
+    let check = |site: &str, err: &str| {
+        for needle in needles {
+            assert!(
+                err.contains(needle),
+                "{site}: error {err:?} does not name {needle:?}"
+            );
+        }
+    };
+    check(
+        "read_gpkg_metadata",
+        &read_gpkg_metadata(g).unwrap_err().to_string(),
+    );
+    check(
+        "verify_gpkg_manifest",
+        &verify_gpkg_manifest(g, &GpgVerify::default()).unwrap_err(),
+    );
+    let dest = TempDir::new("portuale-56-reject").keep();
+    let _ = fs::remove_dir_all(&dest);
+    fs::create_dir_all(&dest).unwrap();
+    check(
+        "extract_gpkg_member",
+        &extract_gpkg_member(g, "metadata", &dest).unwrap_err(),
+    );
+    let _ = fs::remove_dir_all(&dest);
+}
+
 fn blake2b_hex(bytes: &[u8]) -> String {
     use blake2::Digest as _;
     blake2::Blake2b512::digest(bytes)
@@ -372,3 +401,4 @@ mod inner;
 mod local_index;
 mod manifest;
 mod metadata;
+mod outer;
