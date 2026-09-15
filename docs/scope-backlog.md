@@ -237,6 +237,18 @@ can't grow into these incrementally:
   validation showed the nodes are not needed for ordering; nothing
   observed needs them for membership beyond what the pins +
   residuals now cover).
+
+  **Correction, 2026-09-16 (#57):** the "needer/othermod triangle" probe
+  shape listed above was never actually covered by this residual-
+  conflict mechanism in the hermetic case — #54 S1 found the "verified
+  live" docstring came from a probe where `keeper` was reachable from
+  `@world`, and #54's own fix (gating the reverse-dep scan on
+  reachability) made the hermetic triangle's block disappear entirely,
+  since it has no installed vdb consumer for this mechanism to see. The
+  hermetic triangle's block is produced by a separate, now-shipped
+  installed-instance slot-tracking check (backlog #57,
+  `docs/06.057-directly_requested_hard_atom_conflict.opus.md`), not by
+  a dropped reverse-dep pin.
 - **`--root-deps` / multi-root, remaining edges.** *Mostly a non-gap for
   this fork* — the ebuilds are all EAPI 7+, where `--root-deps=rdeps` is
   a complete no-op and `BDEPEND`/`IDEPEND` always resolve against the
