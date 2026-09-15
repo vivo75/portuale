@@ -66,52 +66,6 @@
     the masked package set are the same.
   owner: portuale-oracle
 
-# -- resolver behaviour: filed as backlog #54. portuale applies the
-#    installed-consumer pin/residual-conflict machinery even when the
-#    installed instance is replaced and never enters the graph; real
-#    only sees such a consumer when a competing constraint keeps the
-#    installed instance as a graph node (which enables complete mode).
-#    Delete these two entries when #54 lands.
-
-- id: portuale-bug-installed-pin-holds-an-upgrade
-  category: missing
-  slugs: ["--update_dev-libs_paired"]
-  match: "ebuild dev-libs/paired-2.0 present for real, absent for portuale"
-  reason: >
-    Portuale backlog #54. `emerge -p --update dev-libs/paired` holds the
-    installed 1.0 because keeper's `=paired-1.0` pin is applied from
-    outside every target closure; real 3.0.82.2 merges the 2.0 upgrade
-    (the installed instance is replaced, so the pin is never walked).
-    The pinned contract case `test_satisfiable_installed_pin_still_holds_
-    the_upgrade` encodes the divergent behaviour and must change with the
-    fix.
-  owner: portuale-bug
-
-- id: portuale-bug-residual-conflict-without-a-graph-node
-  category: error
-  slugs: ["dev-libs_needer", "_dev-libs_paired-2.0"]
-  match: "Multiple package instances within a single package slot have been pulled"
-  reason: >
-    Portuale backlog #54. Real prints the residual installed-instance
-    conflict only when the installed 1.0 is itself a graph node (the
-    needer+othermod triangle, where `<paired-2.0` keeps it in the graph
-    and its slot conflict enables complete mode); for `needer` or
-    `=paired-2.0` alone real 3.0.82.2 upgrades silently and prints no
-    block. Portuale prints the block in all three. Pinned contract cases
-    `test_explicitly_pinned_upgrade_breaks_an_installed_pin_and_reports_
-    it` and `test_hard_dependency_requirement_breaks_an_installed_pin_
-    and_reports_it` encode the divergent behaviour.
-  owner: portuale-bug
-
-- id: portuale-bug-residual-conflict-second-line
-  category: error
-  slugs: ["dev-libs_needer", "_dev-libs_paired-2.0"]
-  match: "into the dependency graph, resulting in a slot conflict:"
-  reason: >
-    The second line of the #54 residual-conflict block (see
-    `portuale-bug-residual-conflict-without-a-graph-node`).
-  owner: portuale-bug
-
 - id: triangle-residual-conflict-exit
   category: exit
   slugs: ["dev-libs_needer_dev-libs_othermod"]

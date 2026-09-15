@@ -51,7 +51,7 @@ import corpus
 CASES = [
     ("new install", ["--pretend", "dev-libs/newpkg"], 0),
     (
-        "an installed consumer's version bound blocks an upgrade",
+        "an unreachable installed consumer's version bound does not block an upgrade (#54)",
         ["--pretend", "--update", "dev-libs/revdeptarget"],
         0,
     ),
@@ -71,22 +71,22 @@ CASES = [
         1,
     ),
     (
-        "an explicitly pinned upgrade breaks an installed pin and reports the residual conflict",
+        "an unreachable installed pin does not block an explicit upgrade (#54)",
         ["--pretend", "=dev-libs/paired-2.0"],
         0,
     ),
     (
-        "a hard dependency requirement breaks an installed pin and reports the residual conflict",
+        "an unreachable installed pin does not block a hard dependency requirement (#54)",
         ["--pretend", "dev-libs/needer"],
         0,
     ),
     (
-        "the needer triangle reports the installed instance with both parents",
+        "the needer/othermod triangle merges cleanly when the pin is unreachable (#54)",
         ["--pretend", "dev-libs/needer", "dev-libs/othermod"],
         0,
     ),
     (
-        "a satisfiable installed pin still holds the upgrade",
+        "an unreachable installed pin does not block a plain update (#54)",
         ["--pretend", "--update", "dev-libs/paired"],
         0,
     ),
@@ -12549,33 +12549,70 @@ def test_emptytree_reinstalls_the_whole_deep_dependency_tree(
     assert "requires --pretend" not in nonexistent.stderr
 
 
-def test_installed_consumer_version_bound_blocks_an_upgrade(
+def test_unreachable_installed_consumer_does_not_block_an_upgrade(
     emerge_binary, fixture_env
+):
+    """#54: an installed consumer's recorded atom only blocks an upgrade
+    when real's `_complete_graph` required-set walk actually reaches it
+    (`@world ∪ @selected ∪ @system`, deep over the installed dependency
+    graph) -- not merely because it is installed.
+
+    dev-libs/revdeptarget is installed at 1.0 with 2.0 visible, so a bare
+    `--update` would upgrade it. dev-libs/revdepconsumer-1.0 (installed,
+    and not otherwise part of this resolve) records
+    RDEPEND="<dev-libs/revdeptarget-2.0" -- but it is in neither
+    @world/@selected nor @system in the checked-in fixture, so the
+    reachable-consumer gate excludes it and the upgrade proceeds
+    unblocked. See
+    `test_reachable_installed_consumer_version_bound_blocks_an_upgrade`
+    for the shape once revdepconsumer *is* reachable (the scenario this
+    test used to assert unconditionally, before #54's gate: real leaves
+    media-libs/libdisplay-info at 0.3.0 because of dev-libs/weston's own
+    <media-libs/libdisplay-info-0.4.0 bound only because weston is
+    @world-reachable on that live tree -- memory
+    `complete-graph-reverse-dep-atoms`)."""
+    args = ["--pretend", "--update", "dev-libs/revdeptarget"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout.splitlines() == [
+        "[ebuild     U  ] dev-libs/revdeptarget-2.0 [1.0]",
+    ]
+
+
+def test_reachable_installed_consumer_version_bound_blocks_an_upgrade(
+    emerge_binary, fixture_env, tmp_path, fixtures_root
 ):
     """Real depgraph._complete_graph reaching
     _slot_operator_check_reverse_dependencies: an upgrade has to satisfy
     every atom recorded against it, including one recorded by an
     *installed* package that is nowhere in the requested atom's own
-    dependency tree.
+    dependency tree -- as long as real's required-set walk reaches that
+    consumer (#54; see
+    `test_unreachable_installed_consumer_does_not_block_an_upgrade` for
+    the unreachable case, the checked-in fixture's actual default).
 
     Real reaches those atoms because complete mode -- auto-enabled by any
     installed-package version/USE change (depgraph.py:8592-8648) --
-    re-seeds the walk from @world/@selected/@system and pulls the whole
-    installed universe into the graph as nomerge nodes, each contributing
-    its recorded *DEPEND to _parent_atoms. portuale/the reference find
-    the same atoms with a direct vdb reverse scan and feed them into the
-    backtrack loop's slot_constraints, which is what parent atoms are.
+    re-seeds the walk from @world/@selected/@system and pulls the
+    *reachable* installed closure into the graph as nomerge nodes, each
+    contributing its recorded *DEPEND to _parent_atoms. portuale finds
+    the same atoms with a direct vdb reverse scan, gated the same way,
+    and feeds them into the backtrack loop's slot_constraints, which is
+    what parent atoms are.
 
     dev-libs/revdeptarget is installed at 1.0 with 2.0 visible, so a bare
     --update would upgrade it -- except dev-libs/revdepconsumer-1.0
-    (installed, and not otherwise part of this resolve) records
+    (installed, and not otherwise part of this resolve, made reachable
+    here by putting it directly in a copied `@world` -- K2/K3) records
     RDEPEND="<dev-libs/revdeptarget-2.0". The upgrade is therefore
     rejected and the entry settles as already-installed, exactly as real
     leaves media-libs/libdisplay-info at 0.3.0 because of
     dev-libs/weston's own <media-libs/libdisplay-info-0.4.0 bound (the
-    live divergence this was written for)."""
+    live divergence this was originally written for, memory
+    `complete-graph-reverse-dep-atoms`)."""
+    env = _world_extra_env(fixture_env, tmp_path, fixtures_root, "dev-libs/revdepconsumer")
     args = ["--pretend", "--update", "dev-libs/revdeptarget"]
-    rust = _run([str(emerge_binary)], args, fixture_env)
+    rust = _run([str(emerge_binary)], args, env)
     assert rust.returncode == 0
     assert rust.stdout.splitlines() == [
     ]
@@ -12735,34 +12772,144 @@ def _assert_residual_slot_conflict_block(
     )
 
 
-def test_explicitly_pinned_upgrade_breaks_an_installed_pin_and_reports_it(
+def _world_extra_env(fixture_env, tmp_path, fixtures_root, *atoms):
+    """#54 K2/K3: a full `tmp_path` copy of `fixtures/` with `atoms`
+    appended to `var/lib/portage/world`, leaving the shared fixture
+    `world` untouched (many other tests read it).
+
+    Unlike the container fixture-oracle bed -- where real needs absolute
+    `repos.conf` locations and an absolute `make.profile` symlink target
+    -- portuale accepts the fixture tree's relative `location = repo`
+    and relative `make.profile` symlink unchanged, so a plain
+    `copytree` is enough; no rewriting needed."""
+    dest = tmp_path / "fixtures"
+    shutil.copytree(fixtures_root, dest, symlinks=True)
+    world = dest / "var" / "lib" / "portage" / "world"
+    with world.open("a") as f:
+        for atom in atoms:
+            f.write(f"{atom}\n")
+    env = dict(fixture_env)
+    env["PORTAGE_CONFIGROOT"] = str(dest)
+    env["ROOT"] = str(dest)
+    env["PORTAGE_RUNNING_ROOT"] = str(dest)
+    env["DISTDIR"] = str(dest / "distfiles")
+    return env
+
+
+def test_unreachable_installed_pin_does_not_block_a_plain_update(
     emerge_binary, fixture_env
 ):
-    """Real _complete_graph's end-of-walk unsatisfied-dep loop
-    (depgraph.py:8770+): an installed consumer's recorded atom that the
-    hard requirements cannot satisfy does not veto the upgrade -- real
-    merges the hard-required version anyway and reports the broken
-    consumer as a slot collision against the installed instance (exit 1
-    in real; informational, exit 0, by portuale's standing convention).
+    """#54: dev-libs/keeper-1.0 (installed) records RDEPEND=
+    "=dev-libs/paired-1.0", but it is in neither @world/@selected nor
+    @system in the checked-in fixture, so real's `_complete_graph`
+    required-set walk never reaches it and the pin is never applied --
+    `--update dev-libs/paired` upgrades to 2.0 exactly like an ordinary
+    update (verified live against real 3.0.82.2,
+    `TEST/findings/l0-fixture-oracle.md` "#54 S0" hermetic row). Before
+    the #54 fix portuale applied keeper's pin unconditionally (any
+    installed consumer, reachable or not) and stayed silent here,
+    silently holding 1.0 where real upgrades -- see
+    `test_keeper_reachable_pin_breaks_an_explicit_upgrade_and_reports_it`
+    for the shape once keeper *is* reachable."""
+    args = ["--pretend", "--update", "dev-libs/paired"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout.splitlines() == [
+        "[ebuild     U  ] dev-libs/paired-2.0 [1.0]",
+    ]
 
-    dev-libs/keeper-1.0 (installed, outside every target closure)
-    records RDEPEND="=dev-libs/paired-1.0". An explicit
-    `=dev-libs/paired-2.0` request upgrades anyway: the merge list keeps
-    `[ebuild U] paired-2.0`, and the notice pairs the merge instance
-    (pulled in by the `(Argument)`) against the installed 1.0 (pulled in
-    by keeper). Verified live against real 3.0.82.2, which prints the
-    same merge list plus the same-shaped block on stderr. Before this
-    slice portuale failed the top-level atom outright ("there are no
-    ebuilds to satisfy")."""
+
+def test_unreachable_installed_pin_does_not_block_an_explicit_upgrade(
+    emerge_binary, fixture_env
+):
+    """Same #54 rule, explicit version request: `=dev-libs/paired-2.0`
+    upgrades cleanly with no residual conflict -- keeper's pin is outside
+    every reachable set in the hermetic fixture (verified live, "#54 S0"
+    hermetic row). Before the fix portuale applied the unreachable pin
+    anyway and reported a residual slot conflict real never shows here."""
     args = ["--pretend", "=dev-libs/paired-2.0"]
     rust = _run([str(emerge_binary)], args, fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout.splitlines() == [
+        "[ebuild     U  ] dev-libs/paired-2.0 [1.0]",
+    ]
+
+
+def test_unreachable_installed_pin_does_not_block_a_hard_dependency_requirement(
+    emerge_binary, fixture_env
+):
+    """Same #54 rule, the hard requirement coming from a dependency
+    instead of an argument: dev-libs/needer-1.0 requires
+    `>=dev-libs/paired-2.0`. Real merges needer + the 2.0 upgrade with no
+    block (verified live, "#54 S0" hermetic row); before the fix
+    portuale reported a residual conflict against keeper's unreachable
+    pin here too."""
+    args = ["--pretend", "dev-libs/needer"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout.splitlines() == [
+        "[ebuild     U  ] dev-libs/paired-2.0 [1.0]",
+        "[ebuild  N     ] dev-libs/needer-1.0 ",
+    ]
+
+
+def test_needer_othermod_triangle_merges_cleanly_when_the_pin_is_unreachable(
+    emerge_binary, fixture_env
+):
+    """#54, the triangle case: needer requires `>=paired-2.0`, othermod
+    requires `<paired-2.0` -- directly conflicting hard requirements on
+    the same package, with no installed vdb consumer (keeper) reachable
+    to report against. Real 3.0.82.2 still reports a residual conflict
+    here (installed 1.0 pulled in by othermod alone, exit 1 -- "#54 S0"
+    hermetic row); portuale merges all three with **no block at all**,
+    a known, narrower divergence than before the #54 fix (which showed a
+    block, just with the wrong parents -- keeper *and* othermod, where
+    real names only othermod).
+
+    Root cause: portuale's residual-conflict block
+    (`build_residual_slot_conflicts`) is entirely driven by
+    `reverse_dependency_constraints`'s *dropped* pins, which come only
+    from installed vdb consumers outside the requested atoms' own tree
+    (like keeper). Two directly-requested atoms disagreeing on the same
+    transitive dependency -- with no installed consumer involved -- have
+    no reporting path at all once keeper's now-correctly-gated pin can no
+    longer accidentally cover for it. Filed as a new backlog follow-up
+    (see `docs/scope-backlog.md`); intentionally not fixed here (#54's
+    scope is the reachability gate, not a second conflict-detection
+    mechanism)."""
+    args = ["--pretend", "dev-libs/needer", "dev-libs/othermod"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout.splitlines() == [
+        "[ebuild     U  ] dev-libs/paired-2.0 [1.0]",
+        "[ebuild  N     ] dev-libs/needer-1.0 ",
+        "[ebuild  N     ] dev-libs/othermod-1.0 ",
+    ]
+
+
+def test_keeper_reachable_pin_breaks_an_explicit_upgrade_and_reports_it(
+    emerge_binary, fixture_env, tmp_path, fixtures_root
+):
+    """#54 K3: once keeper is reachable (here, directly in `@world`, on a
+    copied configroot -- K2, so the shared fixture `world` stays
+    untouched), real's `_complete_graph` walk *does* reach it and its
+    `=dev-libs/paired-1.0` pin -- the exact shape 511e659 originally
+    pinned as the (then-mistaken) default: `=dev-libs/paired-2.0` still
+    upgrades, but the run also reports the residual conflict pairing the
+    merge instance (pulled in by the `(Argument)`) against installed 1.0
+    (pulled in by keeper). Verified live against real 3.0.82.2 with
+    keeper world-listed ("#54 S0" keeper-in-world row, byte-identical
+    module the volatile timing line)."""
+    env = _world_extra_env(fixture_env, tmp_path, fixtures_root, "dev-libs/keeper")
+    args = ["--pretend", "=dev-libs/paired-2.0"]
+    rust = _run([str(emerge_binary)], args, env)
     assert rust.returncode == 0
     assert rust.stdout.splitlines()[:1] == [
         "[ebuild     U  ] dev-libs/paired-2.0 [1.0]",
     ]
     _assert_residual_slot_conflict_block(
         rust.stdout,
-        fixture_env["ROOT"],
+        env["ROOT"],
         "dev-libs/paired:0",
         "dev-libs/paired-2.0:0/0::testrepo",
         [(None, "=dev-libs/paired-2.0", False)],
@@ -12771,19 +12918,18 @@ def test_explicitly_pinned_upgrade_breaks_an_installed_pin_and_reports_it(
     )
 
 
-def test_hard_dependency_requirement_breaks_an_installed_pin_and_reports_it(
-    emerge_binary, fixture_env
+def test_keeper_reachable_pin_breaks_a_hard_dependency_requirement_and_reports_it(
+    emerge_binary, fixture_env, tmp_path, fixtures_root
 ):
-    """Same real rule as above, with the hard requirement coming from a
-    dependency instead of an argument: dev-libs/needer-1.0 requires
-    `>=dev-libs/paired-2.0`, which the keeper pin (`=paired-1.0`) cannot
-    satisfy. Real merges needer + the 2.0 upgrade and reports the
-    residual conflict (verified live); portuale used to merge needer
-    alone with `!!! no visible ebuild for dependency "dev-libs/paired"`.
-    The merge instance's parent is the needer dep (with `^^` markers),
-    the installed instance's the keeper pin."""
+    """Same #54 K3 shape, the hard requirement coming from a dependency:
+    dev-libs/needer-1.0 requires `>=dev-libs/paired-2.0`, which the
+    now-reachable keeper pin (`=paired-1.0`) cannot satisfy. Real merges
+    needer + the 2.0 upgrade and reports the residual conflict ("#54 S0"
+    keeper-in-world row, verified live). The merge instance's parent is
+    the needer dep, the installed instance's the keeper pin."""
+    env = _world_extra_env(fixture_env, tmp_path, fixtures_root, "dev-libs/keeper")
     args = ["--pretend", "dev-libs/needer"]
-    rust = _run([str(emerge_binary)], args, fixture_env)
+    rust = _run([str(emerge_binary)], args, env)
     assert rust.returncode == 0
     assert rust.stdout.splitlines()[:2] == [
         "[ebuild     U  ] dev-libs/paired-2.0 [1.0]",
@@ -12791,7 +12937,7 @@ def test_hard_dependency_requirement_breaks_an_installed_pin_and_reports_it(
     ]
     _assert_residual_slot_conflict_block(
         rust.stdout,
-        fixture_env["ROOT"],
+        env["ROOT"],
         "dev-libs/paired:0",
         "dev-libs/paired-2.0:0/0::testrepo",
         [("dev-libs/needer-1.0:0/0::testrepo", ">=dev-libs/paired-2.0", False)],
@@ -12800,17 +12946,19 @@ def test_hard_dependency_requirement_breaks_an_installed_pin_and_reports_it(
     )
 
 
-def test_needer_triangle_reports_the_installed_instance_with_both_parents(
-    emerge_binary, fixture_env
+def test_keeper_reachable_needer_triangle_reports_the_installed_instance_with_both_parents(
+    emerge_binary, fixture_env, tmp_path, fixtures_root
 ):
-    """Both hard sides at once: needer requires `>=paired-2.0` while
-    othermod requires `<paired-2.0`, and keeper pins `=paired-1.0` from
-    outside. Real merges all three with the 2.0 upgrade and reports one
-    conflict pairing it against installed 1.0, whose parents are the
-    othermod dep *and* the keeper pin (verified live). Portuale used to
-    drop paired from the merge list entirely here."""
+    """Both hard sides at once, keeper reachable: needer requires
+    `>=paired-2.0` while othermod requires `<paired-2.0`, and the
+    now-reachable keeper pins `=paired-1.0`. Real merges all three with
+    the 2.0 upgrade and reports one conflict pairing it against installed
+    1.0, whose parents are the othermod dep *and* the keeper pin ("#54
+    S0" keeper-in-world row, verified live, byte-identical to the
+    hermetic-triangle real output plus the keeper parent line)."""
+    env = _world_extra_env(fixture_env, tmp_path, fixtures_root, "dev-libs/keeper")
     args = ["--pretend", "dev-libs/needer", "dev-libs/othermod"]
-    rust = _run([str(emerge_binary)], args, fixture_env)
+    rust = _run([str(emerge_binary)], args, env)
     assert rust.returncode == 0
     assert rust.stdout.splitlines()[:3] == [
         "[ebuild     U  ] dev-libs/paired-2.0 [1.0]",
@@ -12819,7 +12967,7 @@ def test_needer_triangle_reports_the_installed_instance_with_both_parents(
     ]
     _assert_residual_slot_conflict_block(
         rust.stdout,
-        fixture_env["ROOT"],
+        env["ROOT"],
         "dev-libs/paired:0",
         "dev-libs/paired-2.0:0/0::testrepo",
         [("dev-libs/needer-1.0:0/0::testrepo", ">=dev-libs/paired-2.0", False)],
@@ -12829,20 +12977,6 @@ def test_needer_triangle_reports_the_installed_instance_with_both_parents(
             ("dev-libs/keeper-1.0:0/0::testrepo", "=dev-libs/paired-1.0", True),
         ],
     )
-
-
-def test_satisfiable_installed_pin_still_holds_the_upgrade(
-    emerge_binary, fixture_env
-):
-    """The other side of the same rule: a bare `--update dev-libs/paired`
-    is satisfiable together with the keeper pin (1.0 satisfies the
-    unversioned request), so the pin holds and the entry settles as
-    already-installed -- silent, exactly like the revdeptarget case
-    above and like real, which also keeps 1.0 here (verified live)."""
-    args = ["--pretend", "--update", "dev-libs/paired"]
-    rust = _run([str(emerge_binary)], args, fixture_env)
-    assert rust.returncode == 0
-    assert rust.stdout.splitlines() == []
 
 
 def test_reinstall_atoms_forces_one_deep_dependency_to_reinstall(
