@@ -233,14 +233,8 @@ pub fn repo_masters_for_location(repo_location: &Path) -> Vec<PathBuf> {
     {
         return masters.clone();
     }
-    let masters = crate::find_repos(&crate::config_root_from_env())
-        .ok()
-        .and_then(|repos| {
-            repos
-                .into_iter()
-                .find(|r| r.location == repo_location)
-                .map(|r| r.masters)
-        })
+    let masters = crate::repo_config_for_location(repo_location)
+        .map(|repo| repo.masters)
         .unwrap_or_default();
     if let Ok(mut guard) = memo.write() {
         guard.insert(repo_location.to_path_buf(), masters.clone());

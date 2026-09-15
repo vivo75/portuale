@@ -61,7 +61,13 @@ Defines the `metadata/layout.conf` key-value format and a fixed set of keys:
 `sign-commits`, `sign-manifests`, `properties-allowed`, `restrict-allowed`,
 `profile-formats`.
 
-**Status: Partial.**
+**Status: Partial — every key real `emerge` itself consults is now
+honoured.** `masters`, `aliases`, `repo-name` and `profile-formats` were
+already read; `cache-formats` was the last genuinely actionable gap and is
+closed since 2026-09-15 (#55, below). Every other key is parsed as raw
+text and ignored, matching the GLEP's own "unknown keys should be
+ignored" rule; their real-world effect is nil for `emerge` (dead in the
+vendored tree, or `repoman`/`pkgcheck`/`--sync` territory).
 
 - `parse_layout_conf` (`rust/portage-repo/src/lib.rs:1036`) only extracts
   `masters`, `aliases`, `repo-name`, and `profile-formats`
@@ -78,13 +84,20 @@ Defines the `metadata/layout.conf` key-value format and a fixed set of keys:
     scope). **Not a real backlog candidate.**
   - `cache-formats` (`config.py:578,1564-1577`) genuinely affects real's
     cache-format selection (`md5-dict` vs legacy `pms`) — portuale's
-    `has_usable_md5_cache` (`lib.rs:1497`) instead auto-detects by probing
-    for a `metadata/md5-cache` directory. This matches real's own
+    `has_usable_md5_cache` (`lib.rs:1497`) instead auto-detected by probing
+    for a `metadata/md5-cache` directory. This matched real's own
     implementation-defined default and the near-universal state of the
     Gentoo repo (every mainstream repo has used `md5-dict` since ~2012), so
-    practical risk is low, but an explicit `cache-formats = pms` repo
-    (forcing legacy cache) would silently diverge. Worth a small backlog
-    item (see below).
+    practical risk was low, but an explicit `cache-formats = pms` repo
+    (forcing legacy cache) would have silently diverged. **Closed
+    2026-09-15 by #55:** the key is resolved on `RepoConfig` (lowercase +
+    split; empty -> auto-detect `md5-dict` then `pms`), the read path takes
+    the first **known** format and skips the md5-cache rung when it is not
+    `md5-dict` (or `FEATURES=metadata-transfer`), and `--regen` refuses to
+    write `metadata/md5-cache` for a `pms`-only repo. The one narrowing is
+    the absent `pms` reader: a `pms`-first repo falls back to the
+    depcachedir/depend phase, which yields the same metadata a valid `pms`
+    cache would (slower, not different).
   - `thin-manifests` (defaulting `false` in the GLEP, but `true` in the
     Gentoo repo and virtually every modern repo) governs whether per-package
     Manifests list `EBUILD`/`AUX`/`MISC` entries. portuale's
@@ -278,20 +291,19 @@ comment content as meaningful).
 
 ## Prioritized backlog candidates
 
-Only two genuine, narrow gaps survived cross-referencing against what real
+Two genuine, narrow gaps survived cross-referencing against what real
 `emerge` itself actually consults (as opposed to `repoman`/`pkgcheck`/
-`--sync`/gemato territory, all out of scope):
+`--sync`/gemato territory, all out of scope). The first is now closed;
+the second remains open:
 
-1. **`cache-formats` layout.conf key (GLEP 82).** `parse_layout_conf`
-   (`rust/portage-repo/src/lib.rs:1036`) never reads it; portuale always
-   auto-probes for `metadata/md5-cache`. Low real-world impact (every
-   mainstream repo uses `md5-dict` today) but a genuine, if rare, divergence
-   from real for a repo that explicitly sets `cache-formats = pms` to force
-   the legacy format. Cheap to add: read the key in
-   `parse_layout_conf`, and when it's set and excludes `md5-dict`, skip the
-   `has_usable_md5_cache` probe and fall back to the legacy `metadata/cache`
-   reader path (if portuale has one — worth checking as part of scoping
-   this before committing to it).
+1. **`cache-formats` layout.conf key (GLEP 82) — DONE 2026-09-15 (#55).**
+   `RepoConfig::cache_formats` resolves the key exactly like real
+   (`parse_layout`), the read path honours the first known format plus
+   `FEATURES=metadata-transfer` (`porttree.py:322`), and `--regen` follows
+   `egencache`'s writer targets for the `md5-dict` half. A `pms`-first repo
+   is a documented narrowing: no `pms` reader, so it takes the
+   depcachedir/depend fallback (same metadata, no pregen speedup). Evidence:
+   `TEST/findings/l2.md` "## #55 S0"; `docs/backlog-tasks.md` #55.
 
 2. **Outer gpkg container tar entry-type check (GLEP 78 hardening).**
    `binpkg.rs`'s outer-container walk (around `binpkg.rs:413`) checks

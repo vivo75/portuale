@@ -89,6 +89,14 @@ pub enum Error {
     /// unsupported EAPI) that no provider could replace: a nested read
     /// from inside the depend phase, or a provider whose phase failed.
     StaleMd5Cache { path: String },
+    /// `{path}: no usable pregenerated cache` -- the repo's first known
+    /// `cache-formats` entry is not `md5-dict` (#55 L1: no `pms` reader)
+    /// or `FEATURES` names `metadata-transfer` (#55 L2), and no
+    /// depend-phase provider could supply the metadata the pregen cache
+    /// would have. The pregen rung is skipped exactly like real
+    /// `_pull_valid_cache` falling through its rungs to the depcachedir
+    /// and `doebuild(mydo="depend")`.
+    PregenCacheUnavailable { path: String },
     /// `{source}` -- an `io::Error` reading a single directory entry.
     ReadEntry { source: std::io::Error },
     /// `no repos.conf found at {path}`
@@ -134,6 +142,9 @@ impl std::fmt::Display for Error {
             Error::ReadFile { path, source } => write!(f, "reading {path}: {source}"),
             Error::StaleMd5Cache { path } => {
                 write!(f, "{path}: stale metadata/md5-cache entry")
+            }
+            Error::PregenCacheUnavailable { path } => {
+                write!(f, "{path}: no usable pregenerated cache")
             }
             Error::ReadEntry { source } => write!(f, "{source}"),
             Error::NoReposConf { path } => write!(f, "no repos.conf found at {path}"),
@@ -914,6 +925,18 @@ pub struct RepoConfig {
     /// simplification; every real Gentoo repo that uses the syntax
     /// declares it explicitly).
     pub profile_formats: Vec<String>,
+    /// The repo's resolved `cache-formats` (real `parse_layout`,
+    /// `config.py:1564-1577`): `layout.conf`'s value lowercased and
+    /// split, or -- when that is empty -- auto-detected from directory
+    /// presence, `md5-dict` first, then `pms`. Real
+    /// `iter_pregenerated_caches` (`config.py:576-605`) yields a
+    /// database per **known** name (`pms` -> `metadata/cache`,
+    /// `md5-dict` -> `metadata/md5-cache`) in list order, ignoring
+    /// unknown names, and `get_pregenerated_cache` (`config.py:607-616`)
+    /// keeps only the **first** one -- so downstream, see
+    /// [`pregen_md5_cache_enabled`]. Empty when neither directory exists
+    /// and the key is unset.
+    pub cache_formats: Vec<String>,
     /// This repo's own `aliases` (real `config.py:216-224`/`492-499`):
     /// `layout.conf`'s `aliases =` first, then `repos.conf`'s appended.
     /// Portuale acts on aliases in exactly one place -- the
@@ -1038,10 +1061,10 @@ fn parse_ini(text: &str, sections: &mut HashMap<String, HashMap<String, String>>
 /// `lib/portage/repository/config.py:1516`) -- a section-less `key =
 /// value` file. Returns an empty map when the file is absent (every key
 /// portuale reads has a real "absent" default). Portuale reads
-/// exactly four keys -- `masters`, `repo-name`, `profile-formats`,
-/// `aliases` -- out of the ~20 real ones (`sign-manifests`,
-/// `manifest-hashes`, `cache-formats`, `eapis-banned`, `use-manifests`,
-/// ...); the rest are real but out of portuale's scope.
+/// exactly five keys -- `masters`, `repo-name`, `profile-formats`,
+/// `cache-formats`, `aliases` -- out of the ~20 real ones
+/// (`sign-manifests`, `manifest-hashes`, `eapis-banned`,
+/// `use-manifests`, ...); the rest are real but out of portuale's scope.
 fn parse_layout_conf(repo_location: &Path) -> HashMap<String, String> {
     let Ok(text) = fs::read_to_string(repo_location.join("metadata/layout.conf")) else {
         return HashMap::new();
@@ -1084,6 +1107,19 @@ fn read_repo_name_file(repo_location: &Path) -> Option<String> {
 /// providing the identical version is broken toward the higher-priority
 /// one.
 pub fn find_repos(config_root: &Path) -> Result<Vec<RepoConfig>, Error> {
+    find_repos_impl(config_root, true)
+}
+
+/// [`find_repos`] without the user-facing "Section ... has name different
+/// from repository name" line, for the internal location-keyed lookups
+/// (`repo_config_for_location` -- and therefore `repo_masters_for_location`
+/// -- and `metadata_transfer_in_config`): the CLI layers already report a
+/// mismatch once, and repeating it on every internal config probe is pure
+/// noise (the pre-existing note at the `eprintln` site).
+fn find_repos_impl(
+    config_root: &Path,
+    report_section_mismatch: bool,
+) -> Result<Vec<RepoConfig>, Error> {
     let repos_conf_path = config_root.join("etc/portage/repos.conf");
     let mut sections: HashMap<String, HashMap<String, String>> = HashMap::new();
 
@@ -1199,6 +1235,7 @@ pub fn find_repos(config_root: &Path) -> Result<Vec<RepoConfig>, Error> {
             is_main: *name == main_repo,
             masters: Vec::new(),
             profile_formats: Vec::new(),
+            cache_formats: Vec::new(),
             aliases: Vec::new(),
             sync_type,
             sync_uri,
@@ -1231,6 +1268,29 @@ pub fn find_repos(config_root: &Path) -> Result<Vec<RepoConfig>, Error> {
             .get("profile-formats")
             .map(|v| v.split_whitespace().map(String::from).collect())
             .unwrap_or_default();
+        // Real `parse_layout` (`config.py:1564-1577`): lowercase the
+        // whole value, split, then -- only when empty -- auto-detect
+        // `md5-dict` before `pms` from directory presence. An explicit
+        // unknown format stays in the list (real keeps it and
+        // `iter_pregenerated_caches` skips it).
+        let mut cache_formats: Vec<String> = layout
+            .get("cache-formats")
+            .map(|v| {
+                v.to_lowercase()
+                    .split_whitespace()
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if cache_formats.is_empty() {
+            if repo.location.join("metadata/md5-cache").is_dir() {
+                cache_formats.push("md5-dict".to_string());
+            }
+            if repo.location.join("metadata/cache").is_dir() {
+                cache_formats.push("pms".to_string());
+            }
+        }
+        repo.cache_formats = cache_formats;
         let mut aliases: Vec<String> = layout
             .get("aliases")
             .map(|v| v.split_whitespace().map(String::from).collect())
@@ -1256,12 +1316,14 @@ pub fn find_repos(config_root: &Path) -> Result<Vec<RepoConfig>, Error> {
     // -- `find_repos` is called both at the CLI layer (to build
     // `resolve_config`'s inputs) and again inside `resolve_pretend_graph`;
     // a pre-existing double-call, harmless except for the repeated line.
+    // Internal probes (`find_repos_impl(.., false)`) stay quiet so the
+    // #55 config lookups do not add to the repeats.
     let keep: Vec<bool> = repos
         .iter()
         .zip(&sect)
         .map(|(repo, s)| {
             let ok = repo.name == s.section_name || repo.aliases.contains(&s.section_name);
-            if !ok {
+            if !ok && report_section_mismatch {
                 eprintln!(
                     "!!! Section '{}' in repos.conf has name different from repository name '{}' set inside repository",
                     s.section_name, repo.name
@@ -1436,11 +1498,36 @@ pub fn register_aux_metadata_provider(provider: AuxMetadataProvider) {
 /// Provider results are memoised per cp for the process lifetime (the
 /// resolver reads one entry many times; C3 layers the cross-process
 /// `depcachedir` write-back on top).
+///
+/// #55 adds the rung-selection gate in front: when
+/// [`has_usable_md5_cache`] is false the md5-cache rung is skipped
+/// outright -- real's first known `cache-formats` entry is `pms` (no
+/// portuale reader, L1) or `FEATURES=metadata-transfer` removed the
+/// pregen rung (`porttree.py:322`) -- and the provider path is entered
+/// directly, exactly like `_pull_valid_cache` walking on to the
+/// depcachedir and `depend` phase (S0 cells c/d/f/g). The entry bytes
+/// are then never read: a `pms`-first repo's `metadata/md5-cache` is
+/// ignored even when present and valid.
 pub fn repo_aux_metadata(
     repo_location: &Path,
     category: &str,
     pf: &str,
 ) -> Result<std::sync::Arc<HashMap<String, String>>, Error> {
+    if !has_usable_md5_cache(repo_location) {
+        return provide_aux_metadata(
+            repo_location,
+            category,
+            pf,
+            Error::PregenCacheUnavailable {
+                path: repo_location
+                    .join("metadata/md5-cache")
+                    .join(category)
+                    .join(pf)
+                    .display()
+                    .to_string(),
+            },
+        );
+    }
     match read_md5_cache(repo_location, category, pf) {
         Ok(map) => {
             if md5_cache_entry_is_valid(repo_location, category, pf) {
@@ -1461,6 +1548,32 @@ pub fn repo_aux_metadata(
         }
         Err(read_err) => provide_aux_metadata(repo_location, category, pf, read_err),
     }
+}
+
+/// The resolved [`RepoConfig`] for one repo location, memoised per path
+/// (config files are immutable for the process lifetime -- `find_repos`
+/// is a pure read). `None` when the process's own config
+/// (`PORTAGE_CONFIGROOT` + `repos.conf`) does not describe that location
+/// at all -- direct fixture/unit-test callers of the location-keyed
+/// functions, which then keep their pre-#55 local fallbacks. The same
+/// lookup `md5_dict::repo_masters_for_location` used to do inline.
+pub(crate) fn repo_config_for_location(repo_location: &Path) -> Option<RepoConfig> {
+    type Memo = HashMap<PathBuf, Option<RepoConfig>>;
+    static MEMO: OnceLock<RwLock<Memo>> = OnceLock::new();
+    let memo = MEMO.get_or_init(|| RwLock::new(HashMap::new()));
+
+    if let Ok(guard) = memo.read()
+        && let Some(hit) = guard.get(repo_location)
+    {
+        return hit.clone();
+    }
+    let found = find_repos_impl(&config_root_from_env(), false)
+        .ok()
+        .and_then(|repos| repos.into_iter().find(|r| r.location == repo_location));
+    if let Ok(mut guard) = memo.write() {
+        guard.insert(repo_location.to_path_buf(), found.clone());
+    }
+    found
 }
 
 /// The C2 fallback shared by a missing entry (`failure` is the
@@ -1591,19 +1704,139 @@ fn md5_cache_entry_is_valid(repo_location: &Path, category: &str, pf: &str) -> b
     is_valid
 }
 
-/// Whether `repo_location` ships a usable `metadata/md5-cache` (i.e. the
-/// path is a real directory), memoised per repo path.
+/// Whether real portage would read this repo's pregenerated aux metadata
+/// from `metadata/md5-cache` rather than falling through to the
+/// writable depcachedir / `depend` phase: the **first known** entry of
+/// [`RepoConfig::cache_formats`] is `md5-dict`.
+///
+/// Real's chain: `parse_layout` resolves `cache-formats` (lowercased +
+/// split, auto-detect `md5-dict` then `pms`) into the repo's list
+/// (`config.py:1564-1577`); `iter_pregenerated_caches`
+/// (`config.py:576-605`) yields one database per known format in list
+/// order, skipping unknown names; `get_pregenerated_cache`
+/// (`config.py:607-616`) keeps only the first. So `cache-formats = pms
+/// md5-dict` resolves to `metadata/cache` even when only
+/// `metadata/md5-cache` exists -- every lookup misses and falls through
+/// -- and `foo` yields no pregen cache at all. Portuale has no `pms`
+/// reader (#55 decision L1, a documented narrowing -- slower, not
+/// different: the depcachedir rung and `depend` phase produce the same
+/// metadata real reads from a valid `pms` cache), so "the first known
+/// format is `md5-dict`" is exactly "portuale may read
+/// `metadata/md5-cache`". Pure, so the read-path gate and `--regen`'s
+/// writer both resolve the same way; memoised per path only by callers.
+pub fn pregen_md5_cache_enabled(repo: &RepoConfig) -> bool {
+    repo.cache_formats
+        .iter()
+        .find(|f| f.as_str() == "md5-dict" || f.as_str() == "pms")
+        .is_some_and(|f| f.as_str() == "md5-dict")
+}
+
+/// Whether real `egencache --update` would write this repo's
+/// `metadata/md5-cache`: `md5-dict` is among the **known** resolved
+/// `cache-formats`, in any position, or the list is empty -- egencache
+/// always passes `force=True`, which defaults an empty list to
+/// `("md5-dict",)`.
+///
+/// Real `egencache` builds its target list with
+/// `conf.iter_pregenerated_caches(force=True, readonly=False)`
+/// (`bin/egencache:350-362`), which yields every known format in list
+/// order (and `("md5-dict",)` when the list is empty), then writes each
+/// -- S0 cell h1/h3: `pms` alone writes `metadata/cache` only, `pms
+/// md5-dict` writes both dirs. Portuale's `--regen` is egencache-shaped
+/// but has no `pms` writer (#55 L3), so this predicate decides where it
+/// may write: the md5-dict half when real would write that dir
+/// (including the fresh-tree default), skipping the repo otherwise
+/// (never the wrong dir). Note the reader's mirror
+/// ([`pregen_md5_cache_enabled`]) is *not* the same for an empty list:
+/// `get_pregenerated_cache` uses `force=False`, so a repo with no
+/// `cache-formats` and no cache dir reads from the ebuild, while
+/// egencache still creates `metadata/md5-cache` for it.
+pub fn regen_writes_md5_cache(repo: &RepoConfig) -> bool {
+    repo.cache_formats.is_empty() || repo.cache_formats.iter().any(|f| f == "md5-dict")
+}
+
+/// Whether the process's resolved `FEATURES` names `metadata-transfer`
+/// (real `porttree.py:322`: `if "metadata-transfer" not in
+/// self.settings.features: self._create_pregen_cache()` -- the token
+/// removes the pregen repo cache rung entirely), resolved once per
+/// process. `false` whenever the config cannot be resolved (fail open:
+/// the pre-#55 behaviour).
+fn metadata_transfer_enabled() -> bool {
+    static FLAG: OnceLock<bool> = OnceLock::new();
+    *FLAG.get_or_init(|| metadata_transfer_in_config(&config_root_from_env(), &root_from_env()))
+}
+
+/// The resolved-config half of [`metadata_transfer_enabled`], split out
+/// so a unit test can point it at a fixture config root without touching
+/// the process environment. Builds the same `repos.conf` + profile /
+/// `make.conf` / `env`-layer stack the CLI layers pass to
+/// `portage_profile::resolve_config` (the `env` layer includes a
+/// `FEATURES=… emerge` override, which real treats as incremental --
+/// `const.INCREMENTALS`).
+fn metadata_transfer_in_config(config_root: &Path, root: &Path) -> bool {
+    let Ok(repos) = find_repos_impl(config_root, false) else {
+        return false;
+    };
+    let Some(main_repo) = repos.iter().find(|r| r.is_main) else {
+        return false;
+    };
+    let overlay_repos: Vec<(String, PathBuf)> = repos
+        .iter()
+        .filter(|r| !r.is_main)
+        .map(|r| (r.name.clone(), r.location.clone()))
+        .collect();
+    let repo_masters: HashMap<String, Vec<PathBuf>> = repos
+        .iter()
+        .map(|r| (r.name.clone(), r.masters.clone()))
+        .collect();
+    let repo_aliases: Vec<(String, PathBuf)> = repos
+        .iter()
+        .flat_map(|r| r.aliases.iter().map(|a| (a.clone(), r.location.clone())))
+        .collect();
+    portage_profile::resolve_config(
+        config_root,
+        &main_repo.location,
+        &overlay_repos,
+        &repo_aliases,
+        &main_repo.name,
+        &repo_masters,
+        root,
+    )
+    .map(|config| {
+        config
+            .resolved_incremental("FEATURES")
+            .or_else(|| {
+                config
+                    .other_vars
+                    .get("FEATURES")
+                    .cloned()
+                    .map(|f| f.split_whitespace().map(String::from).collect::<Vec<_>>())
+            })
+            .unwrap_or_default()
+            .iter()
+            .any(|f| f == "metadata-transfer")
+    })
+    .unwrap_or(false)
+}
+
+/// Whether `repo_location` ships a usable `metadata/md5-cache`, memoised
+/// per repo path: the resolved rung-selection predicate #55 wires into
+/// every md5-cache reader.
 ///
 /// Grounding: real portage's auxdb/cache-format selection
 /// (`repository/config.py::iter_pregenerated_caches`, driven by
 /// `porttree.py:392`'s `_create_pregen_cache`) treats the md5-cache as one
 /// *cache format* among several (`pms`'s `metadata/cache`, `md5-dict`'s
-/// `metadata/md5-cache`); when no format is available, `aux_get` falls
-/// back to generating metadata from the ebuild via the depend phase. The
-/// same split here: `true` means aux metadata can be read from the
-/// cache-dir; `false` means it must come from the ebuild itself (C2).
+/// `metadata/md5-cache`); when the first known format is not `md5-dict`,
+/// or `FEATURES=metadata-transfer` removed the rung (`porttree.py:322`),
+/// `aux_get` falls back to the writable depcachedir and then to
+/// generating metadata from the ebuild via the depend phase. The same
+/// split here: `true` means aux metadata can be read from the md5-cache
+/// dir; `false` means it must come from the provider path (C2/C3). A
+/// location the process config does not describe (direct fixture /
+/// unit-test callers) keeps the pre-#55 "the directory exists" fallback.
 /// A written directory may still hold entries #46 S3 rejects; this flag
-/// only says the format is in use.
+/// only says the rung is in use.
 pub fn has_usable_md5_cache(repo_location: &Path) -> bool {
     type UsableFlags = HashMap<PathBuf, bool>;
     static FLAGS: OnceLock<RwLock<UsableFlags>> = OnceLock::new();
@@ -1615,7 +1848,12 @@ pub fn has_usable_md5_cache(repo_location: &Path) -> bool {
         return *usable;
     }
 
-    let usable = repo_location.join("metadata").join("md5-cache").is_dir();
+    let usable = match repo_config_for_location(repo_location) {
+        // `pregen_md5_cache_enabled` first so a `pms`-first repo skips
+        // the (memoised, but full-config) FEATURES resolution.
+        Some(repo) => pregen_md5_cache_enabled(&repo) && !metadata_transfer_enabled(),
+        None => repo_location.join("metadata").join("md5-cache").is_dir(),
+    };
     if let Ok(mut guard) = flags.write() {
         guard.insert(repo_location.to_path_buf(), usable);
     }
@@ -21639,6 +21877,142 @@ mod tests {
         let repos = find_repos(&root).expect("repos.conf resolves");
         let overlay = repos.iter().find(|r| r.name == "overlay").unwrap();
         assert_eq!(overlay.masters, Vec::<PathBuf>::new());
+    }
+
+    /// #55 S0 cells a-f (`TEST/findings/l2.md` "## #55 S0"): real
+    /// lowercases and splits `cache-formats`, auto-detects
+    /// `md5-dict` then `pms` from directory presence when it is empty,
+    /// and `get_pregenerated_cache` keeps only the **first known**
+    /// format -- an unknown name is skipped, no known name means no
+    /// pregen cache at all.
+    #[test]
+    fn pregen_md5_cache_follows_the_first_known_cache_format() {
+        let root = masters_test_root("cache-formats");
+        std::fs::create_dir_all(root.join("etc/portage")).unwrap();
+        std::fs::write(
+            root.join("etc/portage/repos.conf"),
+            "[DEFAULT]\nmain-repo = main\n\n[main]\nlocation = main\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("main/metadata")).unwrap();
+        let layout = root.join("main/metadata/layout.conf");
+        let formats = || {
+            let repos = find_repos(&root).expect("repos.conf resolves");
+            let main = repos.iter().find(|r| r.is_main).unwrap();
+            (main.cache_formats.clone(), pregen_md5_cache_enabled(main))
+        };
+
+        // Cell a: no key, `metadata/md5-cache` present -> auto `md5-dict`.
+        std::fs::create_dir_all(root.join("main/metadata/md5-cache")).unwrap();
+        std::fs::write(&layout, "masters = \n").unwrap();
+        assert_eq!(formats(), (vec!["md5-dict".to_string()], true));
+        // Both directories present -> `md5-dict` still first.
+        std::fs::create_dir_all(root.join("main/metadata/cache")).unwrap();
+        assert_eq!(
+            formats(),
+            (vec!["md5-dict".to_string(), "pms".to_string()], true)
+        );
+        // Only `metadata/cache` -> auto `pms`, no md5-cache read.
+        std::fs::remove_dir_all(root.join("main/metadata/md5-cache")).unwrap();
+        assert_eq!(formats(), (vec!["pms".to_string()], false));
+        // Neither directory -> empty list, no pregen cache at all.
+        std::fs::remove_dir_all(root.join("main/metadata/cache")).unwrap();
+        assert_eq!(formats(), (Vec::<String>::new(), false));
+
+        // Cells b/e: explicit `md5-dict`, and `md5-dict pms` -> used
+        // (`MD5-DICT` proves the value is lowercased first).
+        std::fs::write(&layout, "cache-formats = MD5-DICT\n").unwrap();
+        assert_eq!(formats(), (vec!["md5-dict".to_string()], true));
+        std::fs::write(&layout, "cache-formats = md5-dict pms\n").unwrap();
+        assert_eq!(
+            formats(),
+            (vec!["md5-dict".to_string(), "pms".to_string()], true)
+        );
+        // Cells c/d: `pms` first, with or without a following
+        // `md5-dict` -> real reads `metadata/cache`; portuale (no pms
+        // reader, L1) falls through to depcache/depend.
+        std::fs::write(&layout, "cache-formats = pms\n").unwrap();
+        assert_eq!(formats(), (vec!["pms".to_string()], false));
+        std::fs::write(&layout, "cache-formats = pms md5-dict\n").unwrap();
+        assert_eq!(
+            formats(),
+            (vec!["pms".to_string(), "md5-dict".to_string()], false)
+        );
+        // Cell f: only unknown names -> kept in the list (real skips
+        // them at yield time) and no pregen cache.
+        std::fs::write(&layout, "cache-formats = foo\n").unwrap();
+        assert_eq!(formats(), (vec!["foo".to_string()], false));
+    }
+
+    /// #55 S0 cell g: `FEATURES=metadata-transfer` in the resolved
+    /// config stack disables the pregen cache rung (real
+    /// `porttree.py:322`), independent of `cache-formats`. The process
+    /// env is the same incremental layer (`const.INCREMENTALS`), so a
+    /// `FEATURES=… emerge` override resolves through here too.
+    #[test]
+    fn metadata_transfer_is_read_from_the_resolved_features() {
+        let root = masters_test_root("metadata-transfer");
+        std::fs::create_dir_all(root.join("etc/portage")).unwrap();
+        std::fs::write(
+            root.join("etc/portage/repos.conf"),
+            "[DEFAULT]\nmain-repo = main\n\n[main]\nlocation = main\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("etc/portage/make.conf"),
+            "FEATURES=\"metadata-transfer -parallel-fetch\"\n",
+        )
+        .unwrap();
+        assert!(metadata_transfer_in_config(&root, &root));
+        std::fs::write(
+            root.join("etc/portage/make.conf"),
+            "FEATURES=\"parallel-fetch\"\n",
+        )
+        .unwrap();
+        assert!(!metadata_transfer_in_config(&root, &root));
+    }
+
+    /// #55 L3 (S0 cell h): real `egencache --update` writes
+    /// `metadata/cache` for `pms`, both dirs for `pms md5-dict`, and
+    /// errors when no known format remains; portuale's egencache-shaped
+    /// `--regen` may write the md5-cache half exactly when `md5-dict`
+    /// is among the resolved known formats, in any position.
+    #[test]
+    fn regen_writes_md5_cache_when_md5_dict_is_among_the_resolved_formats() {
+        let root = masters_test_root("regen-formats");
+        std::fs::create_dir_all(root.join("etc/portage")).unwrap();
+        std::fs::write(
+            root.join("etc/portage/repos.conf"),
+            "[DEFAULT]\nmain-repo = main\n\n[main]\nlocation = main\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("main/metadata")).unwrap();
+        let layout = root.join("main/metadata/layout.conf");
+        let writes = |root: &Path| {
+            let repos = find_repos(root).expect("repos.conf resolves");
+            let main = repos.iter().find(|r| r.is_main).unwrap();
+            regen_writes_md5_cache(main)
+        };
+        for (value, expected) in [
+            ("pms", false),
+            ("pms md5-dict", true),
+            ("md5-dict pms", true),
+            ("md5-dict", true),
+            ("foo", false),
+            ("foo md5-dict", true),
+        ] {
+            std::fs::write(&layout, format!("cache-formats = {value}\n")).unwrap();
+            assert_eq!(writes(&root), expected, "cache-formats = {value}");
+        }
+        // No key, no directories -> empty list -> egencache's
+        // `force=True` default `("md5-dict",)` still writes the cache
+        // (unlike the reader, `get_pregenerated_cache(force=False)`).
+        std::fs::write(&layout, "masters = \n").unwrap();
+        assert!(writes(&root));
+        // An auto-detected `pms` (the directory, no key) is the
+        // skip case again.
+        std::fs::create_dir_all(root.join("main/metadata/cache")).unwrap();
+        assert!(!writes(&root));
     }
 
     #[test]

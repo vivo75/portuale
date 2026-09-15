@@ -265,6 +265,24 @@ image audit (gentoo 0 stale) and L1 porttest are green. Detail:
 [`05.046-metadata_md5-cache.opus.md`](05.046-metadata_md5-cache.opus.md),
 `TEST/findings/l2.md` S0-S4, `docs/on-disk-caches.md` §2.
 
+**2026-09-15 (later) memory note:** backlog #55 (GLEP 82
+`layout.conf` `cache-formats`) is **closed**. The key is resolved on
+`RepoConfig` with real's rule (lowercase + split; empty -> auto-detect
+`md5-dict` then `pms`), and the read path honours it: the pregen
+`metadata/md5-cache` rung is used only when the first **known** format is
+`md5-dict` and `FEATURES=metadata-transfer` is absent (real
+`porttree.py:322`); otherwise `repo_aux_metadata` goes straight to the
+depcachedir/depend provider, and `mrg-director`'s `Md5Cache::category`
+lists `*.ebuild`. `--regen` follows `egencache`'s writer targets -- it
+skips a `pms`-only repo with a message and exit 1 instead of writing the
+wrong directory. The one narrowing: no `pms` reader exists, so a
+`pms`-first repo takes the depend-phase fallback (same metadata as real
+reads from a valid `pms` cache; slower, not different). Container oracle:
+`TEST/findings/l2.md` "## #55 S0" (cells a-h, run
+`c55-20260915T172758Z`); L0 after the change is byte-identical to the
+pre-change baseline (clean 100 / parity 0.833). Detail and decisions:
+[`07.55-layout_conf_cache_formats.opus.md`](07.55-layout_conf_cache_formats.opus.md).
+
 For what is **genuinely still open** — real portage behaviour not ported
 to either side, the deliberate cuts, the standing non-goals — see
 **[`scope-backlog.md`](scope-backlog.md)** (Part 2 = remaining work,

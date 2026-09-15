@@ -2517,10 +2517,11 @@ def test_cache_less_repo_metadata_is_written_to_the_depcache(emerge_binary, tmp_
 
 
 def _stage_md5_validation_repo(emerge_binary, tmp_path, ebuild_text, *,
-                               cache_text=None, eclass=None):
-    """A one-package `md5test` repo (optionally with an eclass and a
-    committed `metadata/md5-cache` entry), the fixtures configroot plus a
-    `[md5test]` section, and a tmp `PORTAGE_DEPCACHEDIR`. Returns
+                               cache_text=None, eclass=None, cache_formats=None):
+    """A one-package `md5test` repo (optionally with an eclass, a
+    committed `metadata/md5-cache` entry, and a `metadata/layout.conf`
+    `cache-formats` value), the fixtures configroot plus a `[md5test]`
+    section, and a tmp `PORTAGE_DEPCACHEDIR`. Returns
     `(repo, ebuild, entry, env, resolve)`."""
     import hashlib
     import shutil
@@ -2532,6 +2533,11 @@ def _stage_md5_validation_repo(emerge_binary, tmp_path, ebuild_text, *,
     pkg.mkdir(parents=True)
     (repo / "profiles").mkdir(parents=True)
     (repo / "profiles" / "repo_name").write_text("md5test\n")
+    if cache_formats is not None:
+        (repo / "metadata").mkdir(parents=True)
+        (repo / "metadata" / "layout.conf").write_text(
+            f"cache-formats = {cache_formats}\n"
+        )
     if eclass is not None:
         (repo / "eclass").mkdir(parents=True)
         (repo / "eclass" / "md5eclass.eclass").write_text(eclass)
@@ -2664,6 +2670,122 @@ def test_stale_entry_whose_depend_phase_fails_is_not_a_candidate(emerge_binary, 
     assert 'emerge: there are no ebuilds to satisfy "dev-libs/md5pkg".' in result.stderr
     assert "[ebuild" not in result.stdout
     assert not entry.exists(), "a failed phase must not fall back to the stale entry"
+
+
+def test_pms_first_cache_formats_ignores_a_valid_md5_cache_entry(
+    emerge_binary, tmp_path
+):
+    """#55 S2, S0 cells c/e: `cache-formats = pms` makes the repo's first
+    known pregen format `metadata/cache` (`iter_pregenerated_caches`;
+    `get_pregenerated_cache` keeps only the first yield), so a *valid*
+    md5-cache entry -- `_md5_` matches the ebuild -- must still be
+    ignored: portuale has no `pms` reader (L1), so every read falls to
+    the depcachedir/depend provider and the ebuild's own `KEYWORDS=amd64`
+    wins. With `cache-formats = md5-dict pms` the same entry is the
+    pregen rung again and its masking `~amd64` hides the package. The
+    depend-phase fallback makes this Rust-only (same rule as C2/C3)."""
+    import hashlib
+
+    ebuild_text = 'EAPI=8\nDESCRIPTION="#55 cells c/e"\nSLOT="0"\nKEYWORDS="amd64"\n'
+    cache_text = (
+        "EAPI=8\nKEYWORDS=~amd64\nSLOT=0\n"
+        f"_md5_={hashlib.md5(ebuild_text.encode()).hexdigest()}\n"
+    )
+    repo, _, entry, _, resolve = _stage_md5_validation_repo(
+        emerge_binary, tmp_path, ebuild_text,
+        cache_text=cache_text, cache_formats="pms",
+    )
+
+    # Cell c: the entry is not the pregen rung -> the depend phase runs
+    # and its metadata is written back to the depcachedir.
+    result = resolve()
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert result.stdout.splitlines() == ["[ebuild  N     ] dev-libs/md5pkg-1.0 "], result.stdout
+    assert entry.is_file(), list(entry.parent.rglob("*"))
+    assert "KEYWORDS=amd64\n" in entry.read_text()
+
+    # Cell e: `md5-dict` first -> the same valid entry is trusted and its
+    # `~amd64` masks the package, with no depcache rewrite.
+    entry.unlink()
+    (repo / "metadata" / "layout.conf").write_text("cache-formats = md5-dict pms\n")
+    second = resolve()
+    assert second.returncode == 1, (second.stdout, second.stderr)
+    assert "masked by: ~amd64 keyword" in second.stderr, (second.stdout, second.stderr)
+    assert "[ebuild" not in second.stdout
+    assert not entry.exists(), "the pregen rung hit must not run the depend phase"
+
+
+def test_metadata_transfer_features_ignores_a_valid_md5_cache_entry(
+    emerge_binary, tmp_path
+):
+    """#55 S2, S0 cell g: real `porttree.py:322` skips
+    `_create_pregen_cache` when `FEATURES` names `metadata-transfer`, so
+    a valid md5-cache entry with masking `KEYWORDS` is ignored and the
+    ebuild's metadata (depend phase, written back to the depcachedir)
+    resolves the package. The token rides the calling env, real's
+    highest-priority `env` layer. Rust-only (the fallback needs the
+    phase)."""
+    import hashlib
+
+    ebuild_text = 'EAPI=8\nDESCRIPTION="#55 cell g"\nSLOT="0"\nKEYWORDS="amd64"\n'
+    _, _, entry, env, resolve = _stage_md5_validation_repo(
+        emerge_binary, tmp_path, ebuild_text,
+        cache_text=(
+            "EAPI=8\nKEYWORDS=~amd64\nSLOT=0\n"
+            f"_md5_={hashlib.md5(ebuild_text.encode()).hexdigest()}\n"
+        ),
+        cache_formats="md5-dict",
+    )
+    env["FEATURES"] = "metadata-transfer"
+
+    result = resolve()
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert result.stdout.splitlines() == ["[ebuild  N     ] dev-libs/md5pkg-1.0 "], result.stdout
+    assert entry.is_file(), list(entry.parent.rglob("*"))
+    assert "KEYWORDS=amd64\n" in entry.read_text()
+
+
+def test_emerge_regen_skips_a_repo_whose_cache_formats_have_no_md5_dict(
+    emerge_binary, tmp_path
+):
+    """#55 S2 (L3), S0 cell h1: real `egencache --update` writes
+    `metadata/cache` for `cache-formats = pms` and never touches
+    `metadata/md5-cache`; portuale has no pms writer, so `--regen` skips
+    the repo with a message and exit 1 instead of writing the wrong
+    directory."""
+    repo = tmp_path / "repo"
+    (repo / "dev-libs" / "pmsregenpkg").mkdir(parents=True)
+    (repo / "profiles").mkdir(parents=True)
+    (repo / "profiles" / "repo_name").write_text("pmsregen\n")
+    (repo / "metadata").mkdir(parents=True)
+    (repo / "metadata" / "layout.conf").write_text("cache-formats = pms\n")
+    (repo / "dev-libs" / "pmsregenpkg" / "pmsregenpkg-1.0.ebuild").write_text(
+        'EAPI=8\nSLOT="0"\nKEYWORDS="amd64"\n'
+    )
+
+    cfg = tmp_path / "cfg"
+    (cfg / "etc" / "portage").mkdir(parents=True)
+    (cfg / "etc" / "portage" / "repos.conf").write_text(
+        f"[DEFAULT]\nmain-repo = pmsregen\n\n[pmsregen]\nlocation = {repo}\n"
+    )
+
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = str(cfg)
+    env["ROOT"] = str(cfg)
+    env["PORTAGE_RUNNING_ROOT"] = "/"
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "pt")
+
+    result = subprocess.run(
+        [str(emerge_binary), "--regen"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 1, (result.stdout, result.stderr)
+    assert "cache-formats = 'pms' has no md5-dict format" in result.stderr, result.stderr
+    assert "Regenerating cache entries..." not in result.stdout
+    assert not (repo / "metadata" / "md5-cache").exists()
 
 
 def test_emerge_regen_prunes_a_stale_cache_entry(emerge_binary, tmp_path):
