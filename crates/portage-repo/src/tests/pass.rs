@@ -44,6 +44,30 @@ fn run_pass_reinstall_with_only_repo_drift_carries_oldbest() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// The `needer`/`othermod` triangle records its slot conflict on the pass.
+#[test]
+fn run_pass_records_the_needer_othermod_slot_conflict() {
+    let fixture_root = fixtures_root();
+    let atoms = vec![
+        "dev-libs/needer".to_string(),
+        "dev-libs/othermod".to_string(),
+    ];
+    let config = test_config();
+    let repos = find_repos(&fixture_root).expect("fixture repos");
+    let opts = CtxOpts161 {
+        backtrack_max: 10,
+        atoms: atoms.clone(),
+        ..Default::default()
+    };
+    let ctx = ctx_161(&fixture_root, &config, repos, &opts);
+    let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+    assert!(
+        pass.slot_conflicts.iter().any(|sc| sc.package == "paired"),
+        "the paired triangle records a slot conflict"
+    );
+    let _ = fixture_root;
+}
+
 /// Top-level atoms matched by `package.provided` ride out sorted in argument
 /// order instead of resolving.
 #[test]

@@ -1258,6 +1258,55 @@ fn slotundo_temp_dir(tag: &str) -> std::path::PathBuf {
     TempDir::new(&format!("portage-repo-{tag}")).keep()
 }
 
+/// One shared assertion for the triangle's conflict record: installed
+/// `paired-1.0` and merge `paired-2.0`, each filed under the hard atom that
+/// pulled it, whichever argv order produced the collision.
+fn assert_triangle_conflict(result: &GraphResult, installed_first: bool) {
+    assert_eq!(
+        result.slot_conflicts.len(),
+        1,
+        "expected exactly one slot conflict, got {:?}",
+        result.slot_conflicts
+    );
+    let c = &result.slot_conflicts[0];
+    assert_eq!(
+        (c.category.as_str(), c.package.as_str()),
+        ("dev-libs", "paired")
+    );
+    assert_eq!(c.slot, "0");
+    let (installed, merge) = if installed_first {
+        (&c.instances[0], &c.instances[1])
+    } else {
+        (&c.instances[1], &c.instances[0])
+    };
+    assert_eq!(c.resolved_version, c.instances[0].version);
+    assert_eq!(
+        (installed.version.as_str(), installed.installed),
+        ("1.0", true)
+    );
+    assert_eq!((merge.version.as_str(), merge.installed), ("2.0", false));
+    let atoms = |i: &SlotConflictInstance| -> Vec<(String, String)> {
+        i.parents
+            .iter()
+            .map(|p| (p.parent_cpv.clone(), p.atom.clone()))
+            .collect()
+    };
+    assert_eq!(
+        atoms(installed),
+        vec![(
+            "dev-libs/othermod-1.0:0/0::testrepo".to_string(),
+            "<dev-libs/paired-2.0".to_string()
+        )]
+    );
+    assert_eq!(
+        atoms(merge),
+        vec![(
+            "dev-libs/needer-1.0:0/0::testrepo".to_string(),
+            ">=dev-libs/paired-2.0".to_string()
+        )]
+    );
+}
+
 /// Arguments of [`euf_flat`].
 struct EufFlatArgs<'a> {
     iuse: &'a str,
