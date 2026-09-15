@@ -55,6 +55,20 @@ if [ "${L2_CACHELESS:-0}" = 1 ] && [ -d /var/db/repos/porttest/metadata/md5-cach
   log "porttest metadata/md5-cache removed (L2_CACHELESS=1)"
 fi
 
+# Stale-cache variant (#46 S4): leave the committed entry in place but
+# make it stale -- a wrong `_md5_` and a resolution-visible
+# `DESCRIPTION` sentinel. Both PMs must ignore it and regenerate from the
+# ebuild; without #46 S3 portuale would trust the stale DESCRIPTION and
+# bake it into the gpkg metadata (a hard row in the archive diff).
+if [ "${L2_STALECACHE:-0}" = 1 ] && [ -f /var/db/repos/porttest/metadata/md5-cache/porttest/docs-1.0 ]; then
+  entry=/var/db/repos/porttest/metadata/md5-cache/porttest/docs-1.0
+  sed -i \
+    -e 's/^DESCRIPTION=.*/DESCRIPTION=stale cache sentinel: #46 S4/' \
+    -e 's/^_md5_=.*/_md5_=00000000000000000000000000000000/' \
+    "$entry"
+  log "porttest/docs-1.0 cache entry staled (L2_STALECACHE=1)"
+fi
+
 # Same base state as the portage builder (portuale doesn't use the
 # installed portage, but the package set / profile resolution must match).
 if [ "${L2_SKIP_PORTAGE_UPGRADE:-0}" != 1 ]; then

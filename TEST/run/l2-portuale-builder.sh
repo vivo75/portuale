@@ -14,6 +14,8 @@
 #          wants payload-tolerant -- compiled bytes legitimately differ)
 #      L2_REBUILD=1 (wipe the two pkgcaches), L2_SKIP_BUILD=1 (reuse),
 #      L2_JOBS, L2_SKIP_PORTAGE_UPGRADE, L2_KEEP_UNKNOWN=1 (report-only)
+#      L2_STALECACHE=1 (stale the porttest/docs entry: wrong _md5_ +
+#      a DESCRIPTION sentinel; #46 S4)
 #      L2_CACHELESS=1 (delete the porttest overlay's committed
 #          metadata/md5-cache in both build containers, so the ebuild
 #          fallback -- Portage depcache / portuale C2+C3 -- is what
@@ -110,6 +112,7 @@ if [ "${L2_SKIP_BUILD:-0}" != 1 ]; then
     -e "L2_PORTAGE_PIN=${L2_PORTAGE_PIN:-3.0.82.2}" \
     -e "L2_BUILD_MODE=${L2_BUILD_MODE:-bpkgonly}" \
     -e "L2_CACHELESS=${L2_CACHELESS:-0}" \
+    -e "L2_STALECACHE=${L2_STALECACHE:-0}" \
     --entrypoint /bin/bash "$IMAGE" \
     /TEST/layers/l2/build-portage.sh "$REL_ATOMLIST" 2>&1 | tee "$OUT/build-portage.log"
 
@@ -123,6 +126,7 @@ if [ "${L2_SKIP_BUILD:-0}" != 1 ]; then
     -e "L2_PORTAGE_PIN=${L2_PORTAGE_PIN:-3.0.82.2}" \
     -e "L2_BUILD_MODE=${L2_BUILD_MODE:-bpkgonly}" \
     -e "L2_CACHELESS=${L2_CACHELESS:-0}" \
+    -e "L2_STALECACHE=${L2_STALECACHE:-0}" \
     --entrypoint /bin/bash "$IMAGE" \
     /TEST/layers/l2/build-portuale.sh "$REL_ATOMLIST" 2>&1 | tee "$OUT/build-portuale.log"
 else

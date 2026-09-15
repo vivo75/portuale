@@ -22,10 +22,12 @@
 #   6. an empty `/etc/make.local` is created in the container, because
 #      the fixture `make.conf` sources it (the only host-root path the
 #      staged run touches, and only in the throwaway container);
-#   7. backquotes in staged ebuilds become single quotes: fixture
-#      DESCRIPTIONS use `` `flag` `` for prose, which bash evaluates as
-#      command substitution when real's depend phase sources the ebuild
-#      (metadata is prose, so this does not change any resolution input);
+#   7. the committed `common-1.0` entry is staled (wrong `_md5_`, a
+#      resolution-visible `KEYWORDS=~amd64`) so both PMs must regenerate
+#      it from the ebuild (#46 S4). Replaces the old backquote rewrite,
+#      moot since #46 S1 fixed the two backquoted ebuilds -- staging no
+#      longer touches ebuild bytes, so the S1-valid committed entries
+#      keep validating;
 #   8. a `metadata/layout.conf` with `masters = testrepo` is added where
 #      the fixture repo lacks one (real warns on every run otherwise).
 #
@@ -73,13 +75,19 @@ for repo in repo overlay independentoverlay layoutmasteroverlay repnamerepo; do
   printf '%s\n' "$CATEGORIES" > "$FX/$repo/profiles/categories"
 done
 
-# 7. backquotes -> single quotes in staged ebuilds
-for ebuild in "$FX"/*/*/*/*.ebuild; do
-  [ -f "$ebuild" ] || continue
-  if grep -q '`' "$ebuild"; then
-    sed -i "s/\`/'/g" "$ebuild"
-  fi
-done
+# 7. stale-entry case (#46 S4): the committed `common-1.0` entry is
+#    valid (#46 S1), so make it stale on purpose -- wrong `_md5_` and a
+#    resolution-visible `KEYWORDS=~amd64` against the ebuild's `amd64`.
+#    Both PMs must ignore it and regenerate from the ebuild (#46 S3;
+#    real's `_pull_valid_cache` always did). Staging-only; the committed
+#    tree stays valid.
+stale="$FX/repo/metadata/md5-cache/dev-libs/common-1.0"
+if [ -f "$stale" ]; then
+  sed -i \
+    -e 's/^KEYWORDS=.*/KEYWORDS=~amd64/' \
+    -e 's/^_md5_=.*/_md5_=00000000000000000000000000000000/' \
+    "$stale"
+fi
 
 # 8. layout.conf masters (the fixture repos omit it; real warns otherwise)
 for repo in overlay independentoverlay layoutmasteroverlay repnamerepo; do

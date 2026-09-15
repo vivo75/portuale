@@ -36,10 +36,12 @@ fixture tree does not satisfy; the checked-in tree stays untouched):
    rejects them);
 6. `/etc/make.local` touched in the throwaway container (fixture
    `make.conf` sources it);
-7. backquotes in staged ebuilds become single quotes (fixture
-   `DESCRIPTION`s use `` `flag` `` prose, which bash evaluates as command
-   substitution when real's depend phase sources the ebuild; metadata is
-   prose, no resolution input changes);
+7. the committed `common-1.0` entry is staled (wrong `_md5_`, plus a
+   resolution-visible `KEYWORDS=~amd64` against the ebuild's `amd64`) so
+   both PMs must regenerate it from the ebuild (#46 S4). This replaced
+   the old backquote-rewrite delta, moot once #46 S1 fixed the two
+   backquoted ebuilds: staging no longer touches ebuild bytes, so the
+   S1-valid committed entries keep validating;
 8. `masters = testrepo` appended to the overlay repos' `layout.conf`
    (real warns otherwise; `repnamerepo` has a `layout.conf` without it);
 9. comment lines stripped from staged `profiles/updates/*` (real's parser
@@ -57,14 +59,19 @@ fixture tree does not satisfy; the checked-in tree stays untouched):
 Portage is pinned/upgraded to `3.0.82.2` before the cases run, like the
 L0 bed.
 
-## Result (2026-09-15, `TEST/logs/l0-fx-20260915T101508Z`)
+## Result (2026-09-15, `TEST/logs/l0-fx-20260915T160454Z`)
 
-12 cases, **5 clean** (no findings at all), 20 findings explained, 0
-unexplained:
+(`l0-fx-20260915T101508Z` is the pre-#46 S4 baseline.)
+
+13 cases, **6 clean** (no findings at all), 20 findings explained, 0
+unexplained. The added `dev-libs/common` case exercises staging delta 7
+(stale `_md5_` + `KEYWORDS=~amd64`): both PMs regenerate it from the
+ebuild and resolve identically (`#46 S4`, `TEST/findings/l2.md`).
 
 - clean: `dev-libs/diamond`, `dev-libs/anyof` (`||` group),
   `dev-libs/iusedefaultpkg` (REQUIRED_USE), `dev-libs/dualslotpkg`
-  (multi-slot), `dev-libs/blockusedeptarget`;
+  (multi-slot), `dev-libs/blockusedeptarget`, `dev-libs/common` (the
+  stale-entry case);
 - explanation-only (wording/staging path, see the allowlist):
   `dev-libs/autounmaskkeywordpkg`, `dev-libs/kwneedpkg`,
   `dev-libs/requiredusebadpkg`;
@@ -106,10 +113,8 @@ names only `othermod`.
 
 ## What a fixture addition must not break
 
-A new fixture that real will read needs: valid bash in its ebuild
-description (no backquotes), a digest for **every** ebuild in its package
-dir, a category in `etc/portage/categories`, and no `*/pkg` atoms or
-`profiles/updates` comments. `dev-libs/blockusedeptarget`'s description
-was the backquote case (fixed in staging); a new fixture that trips one
-of these shows up as a real-only staging diagnostic, not as a portuale
+A new fixture that real will read needs: a digest for **every** ebuild in
+its package dir, a category in `etc/portage/categories`, and no `*/pkg`
+atoms or `profiles/updates` comments. A new fixture that trips one of
+these shows up as a real-only staging diagnostic, not as a portuale
 difference — check `stage.sh`'s header before filing a finding.

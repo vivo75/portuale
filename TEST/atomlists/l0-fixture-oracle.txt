@@ -6,6 +6,9 @@
 #
 # multi-package diamond
 dev-libs/diamond
+# the diamond leaf, whose staged cache entry is deliberately stale (#46
+# S4): regenerated from the ebuild by both PMs, resolution unchanged
+dev-libs/common
 # || any-of group
 dev-libs/anyof
 # REQUIRED_USE with IUSE defaults
