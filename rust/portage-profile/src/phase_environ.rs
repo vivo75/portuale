@@ -2,7 +2,7 @@
 //! **export set** a source build's every phase (and the `install_qa_check`
 //! misc-functions call after it) must see, built from the resolved
 //! [`Config`] instead of a curated allowlist. Backlog #37, slice S1
-//! (`docs/037_Build-phase-env-completeness.plan.md`, gates G1/G2/G3 as
+//! (`docs/history/037_Build-phase-env-completeness.plan.md`, gates G1/G2/G3 as
 //! decided 2026-09-13); the S0 recon that fixed the spec is
 //! `TEST/findings/l2.md` "S0 recon (#37, 2026-09-13)".
 //!

@@ -726,7 +726,7 @@ fn next_alternative<'a>(
 /// (`other_*`, reached when some atom is only available via a masked /
 /// force path), which real still *returns* on its `allow_masked` second
 /// pass -- ported as of slice 2/4 of backlog #22
-/// (`docs/022-agent-task-22-zapdeps.fable.md`): `resolve_disjunctions`
+/// (`docs/history/022-agent-task-22-zapdeps.fable.md`): `resolve_disjunctions`
 /// runs a first pass considering only [`is_selectable`](AltPreference::is_selectable)
 /// ranks (real's `allow_masked=False`), and only when THAT finds nothing
 /// at all does a second pass consider the `other_*` bins too (real's
@@ -850,7 +850,7 @@ impl AltPreference {
 /// 738-802: prefer an upgrade via `vercmp` over the intersecting
 /// `cp_map`, or `all_installed_slots`, or `all_in_graph`, unless doing so
 /// would sacrifice an upgrade). `portage-use-reduce` stays atom-agnostic
-/// (design rule 2, `docs/022-agent-task-22-zapdeps.fable.md`): it hands
+/// (design rule 2, `docs/history/022-agent-task-22-zapdeps.fable.md`): it hands
 /// the caller the tied alternatives' own flattened atom lists, in
 /// original left-to-right order, and the caller (which owns candidate
 /// lookup, `cp`/version parsing and `vercmp`) returns which original

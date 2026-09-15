@@ -3517,7 +3517,7 @@ def test_or_group_in_bin_ordering_promotes_all_installed_slots_over_any_slot(
 def test_or_group_other_installed_bin_beats_plain_other_in_the_allow_masked_pass(
     emerge_binary, fixture_env
 ):
-    """Backlog #22 slice 4 (`docs/022-agent-task-22-zapdeps.fable.md` §4,
+    """Backlog #22 slice 4 (`docs/history/022-agent-task-22-zapdeps.fable.md` §4,
     dep_check.py soft 715-724 + the two-pass `allow_masked` return, soft
     812-816): when NO alternative anywhere is `all_available`, real
     still picks one instead of falling back to the literal `||` --
@@ -12887,7 +12887,7 @@ def test_dynamic_deps_default_appends_the_vdb_built_binding_dropped_by_the_ebuil
     The append is gated `PORTUALE_DYNAMIC_DEPS_APPEND` (default off)
     until the resolver can reconcile the vdb-built + ebuild-unbound pair
     (two #24 oracle pins regress otherwise -- see
-    docs/025-tier2-closeout.deepseek.md); the default-off output is
+    docs/history/025-tier2-closeout.deepseek.md); the default-off output is
     pinned too, so both sides of the gate are covered."""
     base = ["--pretend", "-D", "--noreplace", "dev-libs/builtbindpkg"]
     default = _run([str(emerge_binary)], base, fixture_env)
@@ -14548,7 +14548,7 @@ def test_genuinely_unrecognized_option_gets_a_distinct_message(emerge_binary, fi
 
 
 def _b1_root(tmp_path, world_atoms, installed):
-    """Ad-hoc ROOT for the 023 oracle cases (`docs/023-oracle.md`): a world
+    """Ad-hoc ROOT for the 023 oracle cases (`docs/history/023-oracle.md`): a world
     file plus vdb entries. `installed` is a list of
     `(category, package, version, slot, {file: content})`."""
     root = tmp_path / "b1root"
@@ -14793,7 +14793,7 @@ def test_oracle_virtual_subslot_upgrade_avoids_missed_update(
 def test_oracle_backtrack_masks_are_discarded_with_their_reason(
     emerge_binary, fixture_env, tmp_path
 ):
-    """023 oracle, case btnr -- oracle-DIVERGENT, see `docs/023-oracle.md`
+    """023 oracle, case btnr -- oracle-DIVERGENT, see `docs/history/023-oracle.md`
     (upstream `test_backtracking.py::testBacktrackNoWrongRebuilds`,
     `--backtrack 6`): `btrd` needs `<btra-2`, `btrc-2` needs `>=btra-2`.
     Real explores several mask nodes, discards masks whose reason got
@@ -14873,7 +14873,7 @@ def test_oracle_no_aggressive_downgrade(
 def test_oracle_non_slot_operator_update_selects_new_slot(
     emerge_binary, fixture_env, tmp_path
 ):
-    """023 oracle, case a522084 -- MATCH, see `docs/023-oracle.md`
+    """023 oracle, case a522084 -- MATCH, see `docs/history/023-oracle.md`
     (upstream `test_solve_non_slot_operator_slot_conflicts.py`, bug
     522084): `app-misc/A` 1 (`:0/1`) -> 2 (`:0/2`) with installed `B-0`
     recording `A:0/1=`. Real merges `[A-2, B-0]`. The version choice
@@ -15022,7 +15022,7 @@ def test_oracle_missed_update_siblings_masked_together(
     the downgrade costs a second mask step through missing-dep feedback.
     At the default budget both converge to all-`1.0` (pinned). The
     former claim that real settles at `--backtrack=1` was falsified
-    2026-09-14 (real aborts there and at `<=3`; see `docs/023-oracle.md`
+    2026-09-14 (real aborts there and at `<=3`; see `docs/history/023-oracle.md`
     "R2 — genuine upstream oracle"): the upstream-shaped `btgp` pin now
     carries that oracle, and the `--backtrack=1` block below pins
     portuale's low-budget conflict shape only. #36 is closed as
@@ -15151,8 +15151,8 @@ def test_or_choice_avoids_downgrade_into_the_graphed_update(
 
 # ---------------------------------------------------------------------------
 # Backlog #24 Slice 2 oracle pins: the slot-operator family, one
-# `test_oracle_slotop_*` per upstream shape (method: `docs/023-oracle.md`;
-# verdict table: `docs/024-oracle.md`). Every pin runs portuale
+# `test_oracle_slotop_*` per upstream shape (method: `docs/history/023-oracle.md`;
+# verdict table: `docs/history/024-oracle.md`). Every pin runs portuale
 # (`_b1_run`); real's mergelist is the expectation, under
 # `xfail(strict=True)` where portuale still diverges. Fixture ebuilds live
 # under `fixtures/repo/` (+ `metadata/md5-cache/`); vdb + world come from
@@ -16053,7 +16053,7 @@ def test_oracle_slotop_autounmask_ignorebuilt(
     world `[libxml2]`. Real merges `[icu-49]`. MATCHES real (the flag
     skips the scan; the masked consumer stays out). The remaining
     autounmask/keyword/binpkg cases of that file are v2 rows in
-    `docs/024-oracle.md` (autounmask + keyword-unmask machinery)."""
+    `docs/history/024-oracle.md` (autounmask + keyword-unmask machinery)."""
     root = _b1_root(
         tmp_path,
         ["dev-libs/libxml2"],
@@ -16200,7 +16200,7 @@ def test_oracle_slotop_undo_changed_slot_flag(
     (standalone `slot_changed` trigger + `-u` provider upgrade) already
     matched; S5 pinned it and landed real's rule 3 (`depgraph.py:
     3898-3899`) in its position, behaviour-neutral for ebuilds (rule 6
-    is the equivalent -- see `docs/024-oracle.md`'s S2 correction)."""
+    is the equivalent -- see `docs/history/024-oracle.md`'s S2 correction)."""
     root = _b1_root(
         tmp_path,
         ["dev-libs/souneedslot", "dev-libs/souprov"],

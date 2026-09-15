@@ -43,7 +43,7 @@ Re-pinned 2026-09-14 (Tier 1, Track B): upstream `main` moved `812336dd`
 → `25bffd54` (reedline 0.51; MSRV 1.95 for the interactive crates only)
 and every fix branch was rebased onto it. This re-pin carries three new
 fixes over the previous one: 02's quoted-here-tag terminator repair (B1
-of `backlog_tier_1_sliced.opus.md`), the `source`-parse-error status fix
+of `history/backlog_tier_1_sliced.opus.md`), the `source`-parse-error status fix
 (B2), and IFS-independent brace expansion (B3). Verified on the new pin:
 brush's own `brush-compat-tests` 2504 ran, 2023 succeeded / 0 unexpected
 failures / 481 known-fail / 29 skipped — one previously-known failure

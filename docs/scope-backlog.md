@@ -142,7 +142,7 @@ can't grow into these incrementally:
     append, and `GraphEntry::deps` for an installed entry still reads
     the ebuild under `=n`; installed-parent atoms are also never
     recorded in `slot_pullers`, which is the actual `need_rebuild`
-    blocker (see `docs/025-tier2-closeout.deepseek.md`);
+    blocker (see `docs/history/025-tier2-closeout.deepseek.md`);
     literal bound `:=` atoms in ebuilds -- **investigated (Tier 1),
     premise contradicted, not a gap**: no "improper context for
     slot-operator built atom syntax" masking exists in the vendored
@@ -254,7 +254,7 @@ can't grow into these incrementally:
   see `history/scope-backlog-2026-09-05.md` for the full citations.
   **Shipped:** S1 the complete-mode gate under `--deep` (the a522084
   `B-0` miss was the missing auto-enabled pass); S2 22 oracle pins over
-  the `test_slot_operator_*` family (`docs/024-oracle.md`); S3 the
+  the `test_slot_operator_*` family (`docs/history/024-oracle.md`); S3 the
   rebuild is a **walked graph node** routed through the `Backtracker`
   (`slot_operator_rebuild_scan` → `BacktrackParams::
   slot_operator_replace_installed` → in-walk seed + flip, real's
@@ -434,7 +434,7 @@ candidate ordering / `RESTRICT=primaryuri` **shipped (Tier 1)**:
 local flat-layout mirrors, public `GENTOO_MIRRORS`, inline
 `mirror://` expansions, literals (appended, or prepended with the
 third-party group under `primaryuri`), plus `FEATURES=force-mirror`.
-2026-09-14 (backlog #14, `backlog_tier_1_sliced.opus.md` §4): per-mirror
+2026-09-14 (backlog #14, `history/backlog_tier_1_sliced.opus.md` §4): per-mirror
 `layout.conf` + `.mirror-cache.json` (the real Gentoo mirrors are
 `filename-hash` only -- flat 404s), `tried_locations`, the checksum-failure
 primary-uri switch + `PORTAGE_FETCH_CHECKSUM_TRY_MIRRORS` cap, `fsmirrors`
@@ -632,7 +632,7 @@ risks, metrics), are not built:
   versa). Both PMs build the whole real closure, every archive pair is
   `gpkg-diff strict hard=0`, and both cross-install directions are 0
   unexplained (`TEST/findings/l2.md`; plan
-  `docs/029_portuale-as-builder.deepseek.md`).
+  `docs/history/029_portuale-as-builder.deepseek.md`).
 - **IN PROGRESS 2026-09-14 — L3** — full source-build parity: both PMs
   build `@system` / a desktop `@world` from source with
   `SOURCE_DATE_EPOCH` + `-j1`; diff VDB metadata + CONTENTS structure
@@ -640,7 +640,7 @@ risks, metrics), are not built:
   portage-vs-portage control pair is 0 unexplained on `l3-smoke`; the
   candidate surfaced four producer classes (two fixed with tests, two
   filed) and `l3-core`/`@system` are not started per the S4 stop rule.
-  `TEST/findings/l3.md`; plan `docs/030_L3-source-build-parity.deepseek.md`.
+  `TEST/findings/l3.md`; plan `docs/history/030_L3-source-build-parity.deepseek.md`.
 - **L4** — `mrg` remote merge over SSH (`remote-merge.md` §6).
 - **L5** — lifecycle & failure injection: `-C` / `--depclean` diffs,
   soname bump → preserved-libs, `CONFIG_PROTECT`, `--resume` after
@@ -704,7 +704,7 @@ blockers are the #39 entries plus the test-bed GPG check below.
   `--buildpkgonly`; the allowlist row is deleted, porttest is green
   from a clean run, archives' `environment.bz2` normalise equal, and
   oniguruma lands in `/usr/lib64` (evidence: `TEST/findings/l2.md`
-  S4/S5; plan: `docs/037_Build-phase-env-completeness.plan.md`).
+  S4/S5; plan: `docs/history/037_Build-phase-env-completeness.plan.md`).
 - **FIXED 2026-09-13 (#38 S0-S5) — no packaging transforms**
   (`l2-gpkg-dostrip-splitdebug`, HIGH). The gates were already the real
   `install_qa_check` ones; #37's resolved env made them fire, and the
@@ -716,7 +716,7 @@ blockers are the #39 entries plus the test-bed GPG check below.
   cell; the merge-time complement (`__dyn_instprep`) is now run on
   every merge from the resolved phase env. Allowlists narrowed to the
   one genuinely nondeterministic `porttest/setuid` build-id link race
-  (real disagrees with itself). Plan: `docs/038_Packaging-transforms.plan.md`;
+  (real disagrees with itself). Plan: `docs/history/038_Packaging-transforms.plan.md`;
   evidence: `TEST/findings/l2.md` "#38 S0-S5".
 - **FIXED 2026-09-13 (backlog #39) — incomplete gpkg metadata**
   (`l2-gpkg-metadata-members`/`l2-pkgindex-eapi-missing`/
@@ -810,7 +810,7 @@ Standing decisions, not oversights.
   tree model dedups by design (Gate G0.2); the flat cycle re-display,
   elementary-cycle enumeration and `large_cycle_count` trailer already
   match real (Part 2.A circular-dep entry, `cyc4a` pin). Decided
-  2026-09-14 (D1 of `backlog_tier_5_and_2_sliced.opus.md`, former
+  2026-09-14 (D1 of `history/backlog_tier_5_and_2_sliced.opus.md`, former
   backlog #21).
 - **Switching CLI option parsing to `clap`** — evaluated 2026-09-02,
   rejected. The parser (`pretend.rs`'s parse loop + `emerge_options.rs`
@@ -852,7 +852,7 @@ merge, unmerge, world management, all real. The gap to a full drop-in is:
    search itself is **done** (2026-09-11, backlog #23: real's node-stack
    search with ranked one-node-per-choice masks, similar grouping,
    mask-step budget, `get_best_run`, and dead-end abandonment -- see
-   `docs/023-oracle.md` and `what-this-proves.md`). What's
+   `docs/history/023-oracle.md` and `what-this-proves.md`). What's
     left is depth on other pieces already built: the follow-ups that own
     the remaining resolver divergences (`#25` installed-nomerge
     instances for btnr -- #25 DONE-PARTIAL 2026-09-15: F-B3 fixed by R3b,
@@ -865,7 +865,7 @@ merge, unmerge, world management, all real. The gap to a full drop-in is:
     -- 19 after the B5 gnome-shell cluster-A explanation -- correct set /
     slightly-off sequence; the 025 B-series committed the trace harness
     and cut the count from 22 with parity 0.800 -> 0.817, residue
-    adjudicated in `docs/025-tier2-closeout.deepseek.md` §11
+    adjudicated in `docs/history/025-tier2-closeout.deepseek.md` §11
     F-B1/F-B3/F-B4 and #25; after #25's R3e′ the L0 unexplained order
     count is 15). **#17 (F-B1) closed as a deliberate cut 2026-09-15**
     (D5 600s time box): one further lever (the R3b seed-sort fix ported

@@ -193,8 +193,8 @@ path, S1–S7) is **closed** — the rebuild is a walked graph node, the
 detector are in, L0 is regression-free, and the v2 residue
 (`#24b`–`#24f`, `IUSE_EFFECTIVE`, `--rebuild-if-*` through the same
 path) is filed in `scope-backlog.md` §A with its upstream tests. The
-one open judgment call (G0.4's S4 acceptance bar, `docs/024-S4-review.md`
-D-1) is recorded in `docs/024-oracle.md` §"Verdict", awaiting the
+one open judgment call (G0.4's S4 acceptance bar, `docs/history/024-S4-review.md`
+D-1) is recorded in `docs/history/024-oracle.md` §"Verdict", awaiting the
 owner.
 
 **2026-09-13 memory note:** backlogs #37 (build-phase env completeness)
@@ -211,8 +211,8 @@ bytes; the only residue is real's own `setuid` link nondeterminism), and
 source and binary merge. L2 porttest is green from a
 clean run with the `l2-bpkgonly-env`, `l2-gpkg-dostrip-splitdebug` and
 `l2-gpkg-docompress` allowlists gone (evidence: `TEST/findings/l2.md`
-"#38 S0-S5"; plans: `docs/037_Build-phase-env-completeness.plan.md`,
-`docs/038_Packaging-transforms.plan.md`). The L2 real set's next
+"#38 S0-S5"; plans: `docs/history/037_Build-phase-env-completeness.plan.md`,
+`docs/history/038_Packaging-transforms.plan.md`). The L2 real set's next
 blockers are **#39** (gpkg metadata/`Packages` index, incl. the
 install-time `*DEPEND` rewrite) and the test-bed GPG check
 (`l2-binpkg-gpg-check`, backlog #43) — not env or transform parity.

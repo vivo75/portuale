@@ -22,19 +22,19 @@ that replace it so the bugs it used to catch are still caught, and (in
   real Portage is reused only for primitives (`Atom`, `match_from_list`,
   `use_reduce`, `vercmp`; ~175 call sites over 472 functions).
 - **In practice the flow is Portage → Rust → Python.**
-  `024-slot-operator-plan.md:455` ("Python mirror from the finished Rust
-  diff (M may write it)"), `024-oracle.md:53` ("mirrors the Rust cuts"),
-  `023-backtracking_resolve.md:96` (Rust-only Phase A). Of 337 commits
+  `history/024-slot-operator-plan.md:455` ("Python mirror from the finished Rust
+  diff (M may write it)"), `history/024-oracle.md:53` ("mirrors the Rust cuts"),
+  `history/023-backtracking_resolve.md:96` (Rust-only Phase A). Of 337 commits
   touching `python/`, none leaves `rust/` untouched.
 - **The contract suite proved Rust == mirror, not Rust == Portage**
-  (`022_dep_zapdeps.fable.md:27`). Shared mistakes pass: the IUSE-dedup
+  (`history/022_dep_zapdeps.fable.md:27`). Shared mistakes pass: the IUSE-dedup
   bug went uncaught because the reference "mirrored the bug".
 - **It blocked work for reasons unrelated to Portage.** Backlog #26's
   built-`:=` append stays off partly because the mirror folds a solvable
-  slot conflict (F-A1, `025-tier2-closeout.deepseek.md:525-540`).
+  slot conflict (F-A1, `history/025-tier2-closeout.deepseek.md:525-540`).
 - **Cost:** roughly doubles implementation per resolver slice
-  (`022_dep_zapdeps.fable.md:15`); complete-mode real-tree graphs take
-  minutes in Python (`025-tier2-closeout.deepseek.md:495`).
+  (`history/022_dep_zapdeps.fable.md:15`); complete-mode real-tree graphs take
+  minutes in Python (`history/025-tier2-closeout.deepseek.md:495`).
 - **Contradicts hard goal 1** in `agent-context.md:46-52` ("portability of
   change, not of source … not structural mirroring").
 - **Coexistence with Portage** needs an oracle tied to real Portage. The
@@ -127,7 +127,7 @@ catches bugs portuale would share with any portuale-authored copy.
 
 `3rdparty/portage/lib/portage/tests/resolver/` has 106 files
 (112 `ResolverPlayground` references); ~34 cases are hand-translated so far
-(`023-oracle.md`, `024-oracle.md`). The tests are data-shaped (ebuilds,
+(`history/023-oracle.md`, `history/024-oracle.md`). The tests are data-shaped (ebuilds,
 installed, world, expected mergelist), so a script can emit `fixtures/`
 trees plus an expected-mergelist pin. Upstream's mergelist is the oracle.
 
@@ -194,7 +194,7 @@ pinned against stored goldens only; §1 and §2 still apply to `--json`.
 | 4 | No silent drops | **Done** for the two dependency walks (resolver queue, merge-order digraph): `note_unparsed_dep_token` counts, `PORTUALE_REPORT_UNPARSED_DEP_TOKENS` reports, the invariant tests and L0 require 0. Fixtures and host `@world`: 0. Other `parse_atom` call sites (config files, sets) are not dependency tokens and are not counted. | `portage_repo::note_unparsed_dep_token` |
 | 5 | Metamorphic tests | **Not started.** | — |
 | 6 | Real `emerge` as fixture oracle | **Spiked, blocked on staging.** Real `emerge -p dev-libs/diamond` on a copy of `fixtures/` needs: absolute `repos.conf` locations (real rejects the relative `location = repo`), `PORTAGE_REPOSITORIES` to hide the host's repos, and a clean `/etc/portage` (real still read the host `make.profile` for the running root); several fixture inputs are portuale-only syntax real rejects (`${PORTAGE_CONFIGROOT}` in `binrepos.conf`, comment lines in `profiles/updates`, `*/pkg` in `package.use.force`). Run it inside the test container with a staging step. | — |
-| 7 | Upstream resolver test translation | **Not started.** `docs/023-oracle.md` "R2 — genuine upstream oracle" shows the `ResolverPlayground` route works for single cases. | — |
+| 7 | Upstream resolver test translation | **Not started.** `docs/history/023-oracle.md` "R2 — genuine upstream oracle" shows the `ResolverPlayground` route works for single cases. | — |
 | 8 | Re-pin diff review | **Done.** Lists changed functions between two pins and the Rust lines citing them (by line range or distinctive name). `portage-3.0.81.3 → 3.0.82.2`: 693 changed functions. | `scripts/portage_repin_review.py` |
 | 9 | Determinism | **Done** for repeated runs (every `CASES` entry ×3). It found a real race: concurrent cache-miss resolutions shared the depend phase's metadata file (`dc8022b`). Shuffling directory-read and `repos.conf` section order in a test mode is **not started** (≈56 `read_dir` sites). | `test_repeated_runs_are_byte_identical` |
 | 10 | Mutation testing | **Not started** (`cargo-mutants` is not installed on this host). | — |

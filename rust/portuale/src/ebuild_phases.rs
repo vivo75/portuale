@@ -2706,7 +2706,7 @@ async fn run_one_phase_brush(
         // exit code (not just a printed error) is what makes this a hard
         // stop -- a broken saved environment must fail the phase, never
         // silently skip the ebuild's own functions (see B2 of
-        // `backlog_tier_1_sliced.opus.md`). `Ok(nonzero)`, like
+        // `history/backlog_tier_1_sliced.opus.md`). `Ok(nonzero)`, like
         // `run_one_phase_bash`'s own child status: a phase failure, not a
         // spawn failure.
         if !setup_result.is_success() {

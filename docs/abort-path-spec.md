@@ -11,7 +11,7 @@ Slice 1 commit.
 
 `git branch -a` shows exactly one DFS branch with code intent,
 `backlog/019-DFS-partial`, and it contains **no product code** — only the
-three plan/analysis docs (`docs/019_DFS-partial.plan.md`,
+three plan/analysis docs (`docs/history/019_DFS-partial.plan.md`,
 `.chatgpt.md`, `.fable.md`, commit `9c1e66f` "Add plan"). The actual
 parked *work* is the `explore/dfs-graph-backtracker` investigation plus
 three main-line doc commits:

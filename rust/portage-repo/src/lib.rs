@@ -524,7 +524,7 @@ pub fn unparsed_dep_tokens() -> usize {
 /// behind this gate, exactly like `PORTUALE_ABORT_PATH` gated backlog
 /// #19. Process-global, env-free -- `pretend.rs` sets it once from the
 /// env, and `--dynamic-deps=n` never appends regardless (Effective
-/// collapses to Raw). Finding: `docs/025-tier2-closeout.deepseek.md`.
+/// collapses to Raw). Finding: `docs/history/025-tier2-closeout.deepseek.md`.
 static DYNAMIC_DEPS_APPEND: AtomicBool = AtomicBool::new(false);
 
 /// Set by `pretend.rs` from `PORTUALE_DYNAMIC_DEPS_APPEND` before
@@ -9673,7 +9673,7 @@ fn disjunction_preference(
     if alternative_downgrade_demoted(repos, config, entries, self_cp, constraints, atoms) {
         return portage_use_reduce::AltPreference::Other;
     }
-    // Backlog #22 slice 5 (`docs/022-agent-task-22-zapdeps.fable.md` §4):
+    // Backlog #22 slice 5 (`docs/history/022-agent-task-22-zapdeps.fable.md` §4):
     // one further demotion stays a documented cut, needing inputs
     // portuale's architecture doesn't have:
     //   - `circular_atom` (soft 649-682): needs `circular_dependency`
@@ -9761,7 +9761,7 @@ fn candidate_version(candidate_str: &str, category: &str, package: &str) -> Opti
 /// index into `alts` (`tie_break`'s own contract).
 ///
 /// Two of real's per-choice facts are deliberate, documented cuts (§2 of
-/// the design brief, `docs/022-agent-task-22-zapdeps.fable.md`):
+/// the design brief, `docs/history/022-agent-task-22-zapdeps.fable.md`):
 /// `minimize_slots` (only applies after `_overlap_dnf`'s DNF rewrite,
 /// which portuale doesn't do -- skipped entirely, matching the brief's
 /// own "cut it and document" fallback for slice 2) and `want_update`
@@ -23838,7 +23838,7 @@ mod tests {
         // Real `Backtracker._check_runtime_pkg_mask` (bug 375573),
         // C3 oracle for the discard predicate itself (no fixture can
         // reach it end to end yet -- needs a 3-pass parent-masking
-        // chain, see `docs/023-oracle.md`).
+        // chain, see `docs/history/023-oracle.md`).
         let entry = |neg: &str, reason: MaskReason| MaskEntry {
             neg: neg.to_string(),
             reason,
