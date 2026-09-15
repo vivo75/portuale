@@ -68,6 +68,19 @@
 //! (real `_task_exit`'s `_valid_pkgs.discard`), so a failed ebuild
 //! never leaves a (stale) cache entry behind.
 //!
+//! #55 L3: a repo whose resolved `cache-formats` name another known
+//! format but not `md5-dict` (e.g. `pms`, including an auto-detected
+//! `metadata/cache`) is skipped (with a stderr message and exit 1)
+//! before any `depend` phase runs. Real `egencache --update` writes
+//! every known resolved format, so `cache-formats = pms` would write
+//! `metadata/cache` -- a directory portuale has no writer for -- and
+//! never touches `metadata/md5-cache` (S0 cell h1); writing the
+//! md5-cache there would be the wrong directory. An empty list (a fresh
+//! tree) keeps egencache's `force=True` `("md5-dict",)` default. No
+//! repo-cache writer here runs on `FEATURES=metadata-transfer` (real
+//! `egencache` still writes the pregen targets; only the writable
+//! depcachedir changes).
+//!
 //! Like every real filesystem-mutating `emerge` action, this rejects
 //! `--pretend` (real `actions.py:4106-4111`) at the CLI layer before
 //! reaching here.
@@ -175,6 +188,34 @@ pub fn run(
             return ExitCode::from(1);
         }
     };
+
+    // #55 L3: real `egencache --update` builds its write targets with
+    // `iter_pregenerated_caches(force=True)` -- every known resolved
+    // format, defaulting an empty list to `("md5-dict",)`
+    // (`bin/egencache:350-362`) -- so `cache-formats = pms` writes
+    // `metadata/cache` only and `pms md5-dict` writes both dirs (S0
+    // cell h1/h3). Portuale has no `pms` writer (L1), so a repo whose
+    // resolved formats name `pms` (or only unknown names) without
+    // `md5-dict` is skipped with a message instead of writing a
+    // directory real would leave alone; it still exits non-zero because
+    // the requested regeneration was not performed.
+    let mut skipped_repo = false;
+    let repos: Vec<portage_repo::RepoConfig> = repos
+        .into_iter()
+        .filter(|repo| {
+            if portage_repo::regen_writes_md5_cache(repo) {
+                return true;
+            }
+            eprintln!(
+                "emerge: --regen: repository '{}': cache-formats = '{}' has no md5-dict \
+                 format; skipping (no pms cache writer)",
+                repo.name,
+                repo.cache_formats.join(" ")
+            );
+            skipped_repo = true;
+            false
+        })
+        .collect();
 
     let portage_tmpdir = portage_repo::portage_tmpdir_from_env();
 
@@ -324,7 +365,7 @@ pub fn run(
     }
 
     println!("done!");
-    if failures == 0 {
+    if failures == 0 && !skipped_repo {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)
