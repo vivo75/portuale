@@ -2511,6 +2511,161 @@ def test_cache_less_repo_metadata_is_written_to_the_depcache(emerge_binary, tmp_
     assert rewritten != body
 
 
+# -- #46 S3: a present-but-stale metadata/md5-cache entry is validated
+# in the read path (real `_pull_valid_cache`) -- C0's P6/P7/P8 and S0's
+# cells (a)/(d)/(f). Rust-only (E7).
+
+
+def _stage_md5_validation_repo(emerge_binary, tmp_path, ebuild_text, *,
+                               cache_text=None, eclass=None):
+    """A one-package `md5test` repo (optionally with an eclass and a
+    committed `metadata/md5-cache` entry), the fixtures configroot plus a
+    `[md5test]` section, and a tmp `PORTAGE_DEPCACHEDIR`. Returns
+    `(repo, ebuild, entry, env, resolve)`."""
+    import hashlib
+    import shutil
+
+    assert hashlib  # documented dependency of the callers
+
+    repo = tmp_path / "md5test-repo"
+    pkg = repo / "dev-libs" / "md5pkg"
+    pkg.mkdir(parents=True)
+    (repo / "profiles").mkdir(parents=True)
+    (repo / "profiles" / "repo_name").write_text("md5test\n")
+    if eclass is not None:
+        (repo / "eclass").mkdir(parents=True)
+        (repo / "eclass" / "md5eclass.eclass").write_text(eclass)
+    ebuild = pkg / "md5pkg-1.0.ebuild"
+    ebuild.write_text(ebuild_text)
+    if cache_text is not None:
+        cache_dir = repo / "metadata" / "md5-cache" / "dev-libs"
+        cache_dir.mkdir(parents=True)
+        (cache_dir / "md5pkg-1.0").write_text(cache_text)
+    cfg = tmp_path / "cfg"
+    shutil.copytree(Path(FIXTURES_ROOT), cfg, symlinks=True)
+    with (cfg / "etc" / "portage" / "repos.conf" / "repos.conf").open("a") as fh:
+        fh.write(f"\n[md5test]\nlocation = {repo}\n")
+    depcache = tmp_path / "depcache"
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = str(cfg)
+    env["ROOT"] = FIXTURES_ROOT
+    env["PORTAGE_RUNNING_ROOT"] = FIXTURES_ROOT
+    env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "pt")
+    env["PORTAGE_DEPCACHEDIR"] = str(depcache)
+    entry = depcache / str(repo).lstrip("/") / "dev-libs" / "md5pkg-1.0"
+
+    def resolve():
+        return subprocess.run(
+            [str(emerge_binary), "--pretend", "dev-libs/md5pkg"],
+            capture_output=True, text=True, check=False, env=env,
+        )
+
+    return repo, ebuild, entry, env, resolve
+
+
+def test_stale_md5_cache_entry_is_regenerated_from_the_ebuild(emerge_binary, tmp_path):
+    """#46 S3, cell (f) of the S0 oracle: the committed cache says
+    `KEYWORDS=~amd64` with a placeholder `_md5_`, the ebuild says
+    `amd64` -- real ignores the stale entry, runs the depend phase and
+    resolves per the *ebuild* (C0's P8 shape with a visible
+    consequence). Portuale must not resolve the `~amd64` mask."""
+    import hashlib
+
+    ebuild_text = 'EAPI=8\nDESCRIPTION="s3 stale"\nSLOT="0"\nKEYWORDS="amd64"\n'
+    _, ebuild, entry, _, resolve = _stage_md5_validation_repo(
+        emerge_binary, tmp_path, ebuild_text,
+        cache_text="EAPI=8\nKEYWORDS=~amd64\nSLOT=0\n"
+                   "_md5_=00000000000000000000000000000000\n",
+    )
+
+    result = resolve()
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert result.stdout.splitlines() == ["[ebuild  N     ] dev-libs/md5pkg-1.0 "]
+    body = entry.read_text()
+    assert f"_md5_={hashlib.md5(ebuild.read_bytes()).hexdigest()}" in body
+    assert "KEYWORDS=amd64\n" in body
+    assert "~amd64" not in body
+
+
+def test_valid_md5_cache_entry_is_trusted_even_when_the_ebuild_differs(
+    emerge_binary, tmp_path
+):
+    """#46 S3, C0's P6/P7: a *valid* entry (`_md5_` matches the ebuild) is
+    trusted as-is -- content and `touch`ed mtime alike. Here the entry's
+    `KEYWORDS=~amd64` differs from the ebuild's `amd64`, and the package
+    is masked, proving the cache won and the depend phase never ran
+    (nothing is written to the depcachedir)."""
+    import hashlib
+
+    ebuild_text = 'EAPI=8\nDESCRIPTION="s3 trusted"\nSLOT="0"\nKEYWORDS="amd64"\n'
+    _, ebuild, entry, _, resolve = _stage_md5_validation_repo(
+        emerge_binary, tmp_path, ebuild_text,
+        cache_text=f"EAPI=8\nKEYWORDS=~amd64\nSLOT=0\n"
+                   f"_md5_={hashlib.md5(ebuild_text.encode()).hexdigest()}\n",
+    )
+    # P7: mtime alone never invalidates.
+    os.utime(ebuild, None)
+
+    result = resolve()
+    assert result.returncode == 1
+    assert "masked by: ~amd64 keyword" in result.stderr, (result.stdout, result.stderr)
+    assert "[ebuild" not in result.stdout
+    assert not entry.exists(), "a valid entry must not trigger the depend phase"
+
+
+def test_eclass_change_invalidates_the_md5_cache_entry(emerge_binary, tmp_path):
+    """#46 S3, cell (a) of the S0 oracle: the entry validates against the
+    old eclass, the eclass content changes, and real re-runs the depend
+    phase. The depcachedir write-back carries the *depcache* format
+    (`name\tdir\tmd5` triples, S0's `mtime_md5_database` shape)."""
+    import hashlib
+
+    eclass_text = "# probe eclass\n"
+    ebuild_text = (
+        'EAPI=8\ninherit md5eclass\nDESCRIPTION="s3 eclass"\n'
+        'SLOT="0"\nKEYWORDS="amd64"\n'
+    )
+    repo, _, entry, _, resolve = _stage_md5_validation_repo(
+        emerge_binary, tmp_path, ebuild_text, eclass=eclass_text,
+        cache_text=f"EAPI=8\nINHERIT=md5eclass\nSLOT=0\nKEYWORDS=amd64\n"
+                   f"_eclasses_=md5eclass\t{hashlib.md5(eclass_text.encode()).hexdigest()}\n"
+                   f"_md5_={hashlib.md5(ebuild_text.encode()).hexdigest()}\n",
+    )
+    eclass = repo / "eclass" / "md5eclass.eclass"
+    eclass.write_text("# changed\n")
+
+    result = resolve()
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert result.stdout.splitlines() == ["[ebuild  N     ] dev-libs/md5pkg-1.0 "]
+    body = entry.read_text()
+    new_md5 = hashlib.md5(b"# changed\n").hexdigest()
+    assert f"_eclasses_=md5eclass\t{eclass.parent}\t{new_md5}\n" in body, body
+
+
+def test_stale_entry_whose_depend_phase_fails_is_not_a_candidate(emerge_binary, tmp_path):
+    """#46 S3, cell (d) of the S0 oracle: a stale entry whose ebuild
+    fails the depend phase (a backquoted `DESCRIPTION` is command
+    substitution) is treated as a miss that cannot be replaced -- never
+    a fall-back to the stale data (E5). Real prints the phase's ERROR
+    block and reports `masked by: corruption`; portuale drops the
+    candidate and reports real's no-ebuilds-to-satisfy shape, exit 1
+    (documented narrowing), and writes nothing to the depcachedir."""
+    ebuild_text = 'EAPI=8\nDESCRIPTION="clean at write time"\nSLOT="0"\nKEYWORDS="amd64"\n'
+    _, ebuild, entry, _, resolve = _stage_md5_validation_repo(
+        emerge_binary, tmp_path, ebuild_text,
+        cache_text="EAPI=8\nSLOT=0\nKEYWORDS=amd64\n"
+                   "_md5_=00000000000000000000000000000000\n",
+    )
+    ebuild.write_text('EAPI=8\nDESCRIPTION="`flag` boom"\nSLOT="0"\nKEYWORDS="amd64"\n')
+
+    result = resolve()
+    assert result.returncode == 1, (result.stdout, result.stderr)
+    assert 'emerge: there are no ebuilds to satisfy "dev-libs/md5pkg".' in result.stderr
+    assert "[ebuild" not in result.stdout
+    assert not entry.exists(), "a failed phase must not fall back to the stale entry"
+
+
 def test_emerge_regen_prunes_a_stale_cache_entry(emerge_binary, tmp_path):
     """Real `MetadataRegen._cleanup`'s "global cleanse"
     (`MetadataRegen.py:142-189`): a plain, unfiltered `--regen` diffs the

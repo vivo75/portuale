@@ -84,6 +84,11 @@ pub enum Error {
         path: String,
         source: std::io::Error,
     },
+    /// `{path}: stale metadata/md5-cache entry` -- an entry real's
+    /// `_pull_valid_cache` rejects (stale `_md5_`/`_eclasses_` or an
+    /// unsupported EAPI) that no provider could replace: a nested read
+    /// from inside the depend phase, or a provider whose phase failed.
+    StaleMd5Cache { path: String },
     /// `{source}` -- an `io::Error` reading a single directory entry.
     ReadEntry { source: std::io::Error },
     /// `no repos.conf found at {path}`
@@ -127,6 +132,9 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::ReadFile { path, source } => write!(f, "reading {path}: {source}"),
+            Error::StaleMd5Cache { path } => {
+                write!(f, "{path}: stale metadata/md5-cache entry")
+            }
             Error::ReadEntry { source } => write!(f, "{source}"),
             Error::NoReposConf { path } => write!(f, "no repos.conf found at {path}"),
             Error::NoMainRepo => write!(f, "no [DEFAULT] main-repo in repos.conf"),
@@ -1337,6 +1345,8 @@ pub fn find_repos(config_root: &Path) -> Result<Vec<RepoConfig>, Error> {
 /// immutable for the process lifetime (real portage's `portdbapi` keeps
 /// the same entries in its own `_aux_cache`); `--regen`, portuale's only
 /// md5-cache writer, is a separate process. No caller mutates the map.
+/// Validation is a sibling memo (`md5_cache_entry_is_valid`), so this
+/// reader stays a reader (#46 S3).
 fn read_md5_cache(
     repo_location: &Path,
     category: &str,
@@ -1412,13 +1422,17 @@ pub fn register_aux_metadata_provider(provider: AuxMetadataProvider) {
 /// `read_md5_cache` call site in this crate and in `portuale`/`mrg-director`
 /// goes through here.
 ///
-/// This is the C2 hook site: a per-cp cache miss (no
-/// `metadata/md5-cache/<category>/<pf>` file) asks the registered
-/// depend-phase provider for the metadata the cache lacks -- real
-/// `porttree.py`'s ebuild fallback (`_pull_valid_cache` miss ->
-/// `doebuild(mydo="depend")`, C0's oracle). With no provider registered
-/// (unit tests, `mrg`-only builds) a miss keeps the same `Error::ReadFile`
-/// as before, so cached repos -- every L0/L1 probe -- are untouched.
+/// This is the C2 hook site, and since #46 S3 the #46 validation site:
+/// a per-cp cache **miss** (no `metadata/md5-cache/<category>/<pf>`
+/// file) *or an entry real's `validate_entry` rejects* (stale `_md5_`,
+/// stale `_eclasses_`, unsupported EAPI -- `md5_cache_entry_is_valid`)
+/// asks the registered depend-phase provider for the metadata the cache
+/// cannot supply -- real `porttree.py`'s `_pull_valid_cache` falling
+/// through its rungs to `doebuild(mydo="depend")` (C0's P8 oracle).
+/// With no provider registered (unit tests, `mrg`-only builds) a miss
+/// keeps the same `Error::ReadFile` as before and an invalid entry is
+/// returned as-is (E3), so cached repos -- every L0/L1 probe -- are
+/// untouched. An entry whose ebuild is gone is trusted outright (E4).
 /// Provider results are memoised per cp for the process lifetime (the
 /// resolver reads one entry many times; C3 layers the cross-process
 /// `depcachedir` write-back on top).
@@ -1428,10 +1442,43 @@ pub fn repo_aux_metadata(
     pf: &str,
 ) -> Result<std::sync::Arc<HashMap<String, String>>, Error> {
     match read_md5_cache(repo_location, category, pf) {
-        Ok(map) => Ok(map),
-        Err(read_err) => {
+        Ok(map) => {
+            if md5_cache_entry_is_valid(repo_location, category, pf) {
+                return Ok(map);
+            }
+            if AUX_METADATA_PROVIDER.get().is_none() {
+                return Ok(map);
+            }
+            let invalid = Error::StaleMd5Cache {
+                path: repo_location
+                    .join("metadata/md5-cache")
+                    .join(category)
+                    .join(pf)
+                    .display()
+                    .to_string(),
+            };
+            provide_aux_metadata(repo_location, category, pf, invalid)
+        }
+        Err(read_err) => provide_aux_metadata(repo_location, category, pf, read_err),
+    }
+}
+
+/// The C2 fallback shared by a missing entry (`failure` is the
+/// `read_md5_cache` error) and an entry real's validator rejects
+/// (`failure` is `Error::StaleMd5Cache`): fallback memo, recursion
+/// guard, provider. The provider failure always surfaces as `failure`
+/// (E5: never fall back to stale data), which reads as an unusable
+/// entry for the caller.
+fn provide_aux_metadata(
+    repo_location: &Path,
+    category: &str,
+    pf: &str,
+    failure: Error,
+) -> Result<std::sync::Arc<HashMap<String, String>>, Error> {
+    {
+        {
             let Some(provider) = AUX_METADATA_PROVIDER.get() else {
-                return Err(read_err);
+                return Err(failure);
             };
             type FallbackCache =
                 HashMap<(PathBuf, String, String), std::sync::Arc<HashMap<String, String>>>;
@@ -1452,7 +1499,7 @@ pub fn repo_aux_metadata(
                 static IN_PROVIDER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
             }
             if IN_PROVIDER.with(|flag| flag.get()) {
-                return Err(read_err);
+                return Err(failure);
             }
             if let Ok(guard) = cache.read()
                 && let Some(map) = guard.get(&key)
@@ -1476,11 +1523,72 @@ pub fn repo_aux_metadata(
                     Ok(map)
                 }
                 // The provider already reported its own failure; the
-                // caller's contract (a missing entry) is the read error.
-                Err(_) => Err(read_err),
+                // caller's contract (an unusable entry) is `failure`.
+                Err(_) => Err(failure),
             }
         }
     }
+}
+
+/// Whether the on-disk `metadata/md5-cache/<category>/<pf>` entry passes
+/// real `validate_entry` for the `md5_database` (pairs) format,
+/// memoised per path -- real `_pull_valid_cache` validates each rung
+/// once and the resolver reads the same cp many times. Raw text, not the
+/// `read_md5_cache` map: `apply_updates_to_dep_string` rewrites the
+/// `*DEPEND` values, and while the validator does not look at them the
+/// raw bytes are what real reads.
+///
+/// `true` when the ebuild is missing (E4: trust the entry -- real would
+/// report the package as non-existent, but no portuale reader reaches an
+/// ebuild-less entry) and when `pf` is not a `package-version` name at
+/// all.
+fn md5_cache_entry_is_valid(repo_location: &Path, category: &str, pf: &str) -> bool {
+    let cache_path = repo_location
+        .join("metadata")
+        .join("md5-cache")
+        .join(category)
+        .join(pf);
+    type Validity = HashMap<PathBuf, bool>;
+    static VALID: OnceLock<RwLock<Validity>> = OnceLock::new();
+    let validity = VALID.get_or_init(|| RwLock::new(HashMap::new()));
+    if let Ok(guard) = validity.read()
+        && let Some(valid) = guard.get(&cache_path)
+    {
+        return *valid;
+    }
+    let is_valid = (|| {
+        let Some((package, _version)) = split_pf(pf) else {
+            return true;
+        };
+        let ebuild = repo_location
+            .join(category)
+            .join(&package)
+            .join(format!("{pf}.ebuild"));
+        if !ebuild.is_file() {
+            return true;
+        }
+        let Ok(text) = fs::read_to_string(&cache_path) else {
+            // `read_md5_cache` already failed; keep the trust direction.
+            return true;
+        };
+        // Only `_eclasses_` validation needs the masters chain; resolving
+        // it loads the repo config, so keep the common eclass-less entry
+        // (most of them) off that path.
+        let needs_eclasses = text.lines().any(|line| {
+            line.strip_prefix("_eclasses_=")
+                .is_some_and(|value| !value.trim().is_empty())
+        });
+        let masters = if needs_eclasses {
+            md5_dict::repo_masters_for_location(repo_location)
+        } else {
+            Vec::new()
+        };
+        md5_dict::entry_is_valid(&text, &ebuild, repo_location, &masters, false)
+    })();
+    if let Ok(mut guard) = validity.write() {
+        guard.insert(cache_path, is_valid);
+    }
+    is_valid
 }
 
 /// Whether `repo_location` ships a usable `metadata/md5-cache` (i.e. the
@@ -1494,6 +1602,8 @@ pub fn repo_aux_metadata(
 /// back to generating metadata from the ebuild via the depend phase. The
 /// same split here: `true` means aux metadata can be read from the
 /// cache-dir; `false` means it must come from the ebuild itself (C2).
+/// A written directory may still hold entries #46 S3 rejects; this flag
+/// only says the format is in use.
 pub fn has_usable_md5_cache(repo_location: &Path) -> bool {
     type UsableFlags = HashMap<PathBuf, bool>;
     static FLAGS: OnceLock<RwLock<UsableFlags>> = OnceLock::new();
@@ -1643,6 +1753,27 @@ fn strip_version_prefix<'a>(dir_name: &'a str, package: &str) -> Option<&'a str>
     } else {
         None
     }
+}
+
+/// Split `package-version` (`PF` without category) into `(PN, PVR)` the
+/// way real `_pkgsplit` does: the version is the longest trailing
+/// `-`-separated suffix that `ververify` accepts, so a package name may
+/// itself contain digit-led words (`foo-1bar-2.0` -> `foo-1bar`).
+/// Needed by the md5-cache validator to find an entry's ebuild
+/// (`<repo>/<cat>/<pn>/<pf>.ebuild`); the inverse of
+/// [`strip_version_prefix`].
+pub fn split_pf(pf: &str) -> Option<(String, String)> {
+    let words: Vec<&str> = pf.split('-').collect();
+    for i in 1..words.len() {
+        let candidate = words[i..].join("-");
+        // A `-r<digits>` revision belongs to the version, not the name --
+        // but only when the rest still verifies (else `foo-r1-2.0` would
+        // mis-split; real `_pkgsplit` has the same shape).
+        if portage_versions::ververify(&candidate) {
+            return Some((words[..i].join("-"), candidate));
+        }
+    }
+    None
 }
 
 /// Lists every version of `category/package` that has an ebuild in ANY of
@@ -20885,6 +21016,40 @@ mod tests {
         ));
         std::fs::create_dir_all(&bare).unwrap();
         assert!(!has_usable_md5_cache(&bare));
+    }
+
+    /// #46 S3 E3: with no provider registered (unit tests, `mrg`-only
+    /// builds) a present-but-stale entry is returned as-is -- the
+    /// pre-C2 contract; the read-path validation must not turn it into
+    /// an error.
+    #[test]
+    fn stale_md5_cache_entry_is_returned_without_a_provider() {
+        let repo = masters_test_root("stale-md5");
+        std::fs::create_dir_all(repo.join("dev-libs/pkg")).unwrap();
+        std::fs::write(repo.join("dev-libs/pkg/pkg-1.0.ebuild"), "EAPI=8\n").unwrap();
+        let cache_dir = repo.join("metadata/md5-cache/dev-libs");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        std::fs::write(
+            cache_dir.join("pkg-1.0"),
+            "EAPI=8\nKEYWORDS=~amd64\nSLOT=0\n_md5_=00000000000000000000000000000000\n",
+        )
+        .unwrap();
+        let map = repo_aux_metadata(&repo, "dev-libs", "pkg-1.0").unwrap();
+        assert_eq!(map.get("KEYWORDS").map(String::as_str), Some("~amd64"));
+    }
+
+    /// #46 S3 E4: an entry whose ebuild is gone is trusted outright --
+    /// no validation can run, and every resolver reader reaches this
+    /// through an ebuild walk, so the entry is unreachable from
+    /// `list_candidates` anyway.
+    #[test]
+    fn md5_cache_entry_without_an_ebuild_is_returned() {
+        let repo = masters_test_root("no-ebuild-md5");
+        let cache_dir = repo.join("metadata/md5-cache/dev-libs");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        std::fs::write(cache_dir.join("pkg-1.0"), "EAPI=8\nSLOT=0\n").unwrap();
+        let map = repo_aux_metadata(&repo, "dev-libs", "pkg-1.0").unwrap();
+        assert_eq!(map.get("SLOT").map(String::as_str), Some("0"));
     }
 
     fn masters_test_root(name: &str) -> PathBuf {

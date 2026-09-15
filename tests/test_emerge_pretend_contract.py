@@ -31,6 +31,7 @@ where nothing else was asserted), and `tests/test_output_invariants.py`
 runs expectation-free checks over the same cases.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -5833,13 +5834,13 @@ def test_useoldpkg_atoms_picks_the_newest_multi_instance_old_binary(
     (repo / "profiles/repo_name").write_text("main\n")
     (repo / "profiles/make.defaults").write_text('ACCEPT_KEYWORDS="amd64"\n')
     (repo / "dev-libs/oldmi").mkdir(parents=True)
-    (repo / "dev-libs/oldmi/oldmi-2.0.ebuild").write_text(
-        'EAPI=8\nDESCRIPTION="uo"\nSLOT="0"\nKEYWORDS="amd64"\n'
-    )
+    oldmi_ebuild = 'EAPI=8\nDESCRIPTION="uo"\nSLOT="0"\nKEYWORDS="amd64"\n'
+    (repo / "dev-libs/oldmi/oldmi-2.0.ebuild").write_text(oldmi_ebuild)
     (repo / "metadata/md5-cache/dev-libs").mkdir(parents=True)
+    # A *valid* entry: #46 S3 validates `_md5_` in the read path.
     (repo / "metadata/md5-cache/dev-libs/oldmi-2.0").write_text(
         "DEFINED_PHASES=-\nEAPI=8\nIUSE=\nKEYWORDS=amd64\nSLOT=0\n"
-        "_md5_=0000000000000000000000000000000\n"
+        f"_md5_={hashlib.md5(oldmi_ebuild.encode()).hexdigest()}\n"
     )
     (cfg / "etc/portage/repos.conf").write_text(
         f"[DEFAULT]\nmain-repo = main\n\n[main]\nlocation = {repo}\n"
@@ -8120,12 +8121,13 @@ def test_repo_name_section_mismatch_drops_the_repo_with_a_warning(
     (cfg / "etc/portage/make.profile").symlink_to(repo / "profiles")
     pkgdir = repo / "dev-libs/mainpkg"
     pkgdir.mkdir(parents=True)
-    (pkgdir / "mainpkg-1.0.ebuild").write_text(
-        'EAPI=8\nDESCRIPTION="x"\nSLOT="0"\nKEYWORDS="amd64"\n'
-    )
+    mainpkg_ebuild = 'EAPI=8\nDESCRIPTION="x"\nSLOT="0"\nKEYWORDS="amd64"\n'
+    (pkgdir / "mainpkg-1.0.ebuild").write_text(mainpkg_ebuild)
+    # A *valid* entry: #46 S3 validates `_md5_` in the read path.
     (repo / "metadata/md5-cache/dev-libs/mainpkg-1.0").write_text(
         "DEFINED_PHASES=-\nDEPEND=\nDESCRIPTION=x\nEAPI=8\nIUSE=\n"
-        "KEYWORDS=amd64\nRDEPEND=\nSLOT=0\n_md5_=0000000000000000000000000000000\n"
+        "KEYWORDS=amd64\nRDEPEND=\nSLOT=0\n"
+        f"_md5_={hashlib.md5(mainpkg_ebuild.encode()).hexdigest()}\n"
     )
     env = {"PORTAGE_CONFIGROOT": str(cfg), "ROOT": str(cfg)}
 
@@ -8184,12 +8186,17 @@ def test_profile_parent_resolves_an_aliased_repo_name(
 
     (main / "profiles/default/eapi").write_text("8\n")
     (main / "dev-libs/aliasusepkg").mkdir(parents=True)
-    (main / "dev-libs/aliasusepkg/aliasusepkg-1.0.ebuild").write_text(
+    aliasusepkg_ebuild = (
         'EAPI=8\nDESCRIPTION="x"\nSLOT="0"\nKEYWORDS="amd64"\nIUSE="aliasflag"\n'
     )
+    (main / "dev-libs/aliasusepkg/aliasusepkg-1.0.ebuild").write_text(
+        aliasusepkg_ebuild
+    )
+    # A *valid* entry: #46 S3 validates `_md5_` in the read path.
     (main / "metadata/md5-cache/dev-libs/aliasusepkg-1.0").write_text(
         "DEFINED_PHASES=-\nDESCRIPTION=x\nEAPI=8\nIUSE=aliasflag\n"
-        "KEYWORDS=amd64\nSLOT=0\n_md5_=0000000000000000000000000000000\n"
+        "KEYWORDS=amd64\nSLOT=0\n"
+        f"_md5_={hashlib.md5(aliasusepkg_ebuild.encode()).hexdigest()}\n"
     )
 
     env = {"PORTAGE_CONFIGROOT": str(cfg), "ROOT": str(cfg)}

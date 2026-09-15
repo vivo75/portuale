@@ -3136,6 +3136,26 @@ pub(crate) fn depend_phase_metadata(
         return Ok(parse_aux_entry(&text));
     }
 
+    // Real `EbuildMetadataPhase._async_start` (`:61-75`): the ebuild
+    // head's EAPI is parsed before anything runs, and an unsupported one
+    // skips the phase entirely -- the package is then masked by EAPI
+    // visibility (S0 cell (e): `masked by: EAPI 9999`). Portuale returns
+    // a failure instead of real's synthesized `{"EAPI": ...}` map (a
+    // documented narrowing): the cp is dropped from candidates rather
+    // than rendered as an EAPI mask.
+    let head_eapi = parse_eapi(&std::fs::read_to_string(&ebuild).unwrap_or_default());
+    let head_eapi = if head_eapi.is_empty() {
+        "0".to_string()
+    } else {
+        head_eapi
+    };
+    if !portage_repo::md5_dict::eapi_is_supported(&head_eapi) {
+        return Err(format!(
+            "{}: EAPI {head_eapi} is unsupported",
+            ebuild.display()
+        ));
+    }
+
     let portage_tmpdir = portage_repo::portage_tmpdir_from_env();
     let env = compute_environment(&ebuild, &portage_tmpdir)?;
     let md = run_depend_phase(&env, &root, &config_root, false).map_err(|e| e.message)?;
