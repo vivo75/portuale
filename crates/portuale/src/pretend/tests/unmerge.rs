@@ -1,6 +1,30 @@
 use super::*;
 
 #[test]
+fn unmerge_end_notice_skips_an_empty_removal_list() {
+    // Portage: post_emerge.py. An empty removal changes nothing, so no notice and no evaluation.
+    let color = crate::color::Colorizer::new(false);
+    let (base, root, repos, config) = news_notice_test_tree("unmerge_empty");
+    let rc = execute_unmerge(ExecuteUnmergeArgs {
+        removal_list: &[],
+        root: &root,
+        shell: crate::ebuild_phases::ShellBackend::default(),
+        debug: false,
+        color: &color,
+        quiet: true,
+        noinfo: true,
+        repos: &repos,
+        config: &config,
+    });
+    assert_eq!(format!("{rc:?}"), format!("{:?}", ExitCode::SUCCESS));
+    assert!(
+        !root.join("var/lib/gentoo/news").exists(),
+        "an empty removal list must not evaluate news at all"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
 fn still_listed_parents_applies_the_higher_slot_refinement() {
     // A higher different slot still matching the set atom suppresses the parent warning.
     let root = fixtures_root();

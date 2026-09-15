@@ -19,6 +19,48 @@ fn test_news_context() -> NewsContext {
     }
 }
 
+/// An isolated ROOT sharing the fixtures' vdb read-only, with `news` in the
+/// resolved `FEATURES`. Returns the scratch base, the ROOT, the repos, and the config.
+fn news_notice_test_tree(
+    tag: &str,
+) -> (
+    std::path::PathBuf,
+    std::path::PathBuf,
+    Vec<portage_repo::RepoConfig>,
+    portage_profile::Config,
+) {
+    let fixtures = fixtures_root();
+    let base = TempDir::new(&format!("pretend-test-news_notice_{tag}")).keep();
+    let _ = std::fs::remove_dir_all(&base);
+    let root = base.join("root");
+    std::fs::create_dir_all(root.join("var/lib")).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(fixtures.join("var/db"), root.join("var/db")).unwrap();
+    let repo_config = |name: &str, dir: &str| portage_repo::RepoConfig {
+        name: name.to_string(),
+        location: fixtures.join(dir),
+        priority: 0,
+        is_main: name == "testrepo",
+        masters: Vec::new(),
+        profile_formats: Vec::new(),
+        cache_formats: Vec::new(),
+        aliases: Vec::new(),
+        sync_type: None,
+        sync_uri: None,
+        volatile: false,
+        module_specific_options: Vec::new(),
+    };
+    let repos = vec![
+        repo_config("testrepo", "repo"),
+        repo_config("overlay", "overlay"),
+    ];
+    let mut config = portage_profile::Config::default();
+    config
+        .other_vars
+        .insert("FEATURES".to_string(), "sandbox news userpriv".to_string());
+    (base, root, repos, config)
+}
+
 /// A scratch `ROOT` with a single-item stale resume list, so
 /// `--resume --skipfirst` exits with nothing to do and no merge.
 fn single_resume_root(tag: &str) -> std::path::PathBuf {
