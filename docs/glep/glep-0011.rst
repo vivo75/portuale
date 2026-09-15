@@ -1,0 +1,340 @@
+---
+GLEP: 11
+Title: Web Application Installation
+Author: Troy Dack <tad@gentoo.org>,
+        Stuart Herbert <stuart@gentoo.org>
+Type: Standards Track
+Status: Final
+Version: 1
+Created: 2003-08-02
+Last-Modified: 2022-11-02
+Post-History: 2003-08-07, 2003-08-12, 2003-08-13, 2006-09-03
+Content-Type: text/x-rst
+---
+
+Status
+======
+
+As of 2006-09-03 the webapp eclass has existed for some time.
+
+Credits
+=======
+
+Based on comments posted to gentoo-dev mailing list [#WebAppPost1]_
+[#WebAppPost2]_ [#WebAppPost3]_ by:
+
+	Stuart Herbert <stuart at gentoo.org>, Max Kalika <max at gentoo.org>,
+	Robin H.Johnson <robbat2 at gentoo.org> and others
+
+Definitions
+===========
+
+	*Web Application*
+		an application that requires a web server to function and interacts with
+		the user via a browser
+
+	*Web Application Instance*
+		An apparent install of the Web Application that is served up via the
+		webserver.  There may be any number of instances per Web Application.
+		This is a major use for web applications.  Our Gentoo Zope setup
+		already provides instances and can be used for some concepts on this
+		matter.
+
+	*Web Application Setup Program*
+		A script similar in function to zope-config that sets up instances.
+
+	*Document Root*
+		a location in the file system that forms the main document tree visible from
+		the web
+
+Conventions
+===========
+
+	When describing the location of a directory in the file system it
+	will be shown *with* a trailing slash, eg::
+
+		/foo/bar/
+
+	When describing the location of a specific file (irrespective of any
+	file extension) it will shown *without* a trailing slash, eg::
+
+		/foo/blah
+
+Abstract
+========
+
+To define where and how web based applications should be installed by Gentoo.
+
+Motivation
+==========
+
+Currently there is no standard defined regarding the installation of web
+based applications in Gentoo.  This leads to ebuild authors creating a
+variety of methods to determine:
+
+	* where the application should be installed
+	* what user and permissions the application should be given
+	* where any configuration files related to the application should be
+	  installed.
+
+Due to a lack of standard install method configuration files are at
+risk of being overwritten during upgrade, potentially causing system
+administrators downtime as they have to reconfigure web applications
+after an upgrade.
+
+Rationale
+=========
+
+A discussion on the gentoo-dev mailing list [#WebAppPost1]_ raised the
+following points regarding how Gentoo handles the installation of web based
+applications:
+
+	1. Gentoo installed web applications (eg: horde, phpbb, cacti,
+	   phpmysql) should not be installed in the Document Root of a web server.
+	2. Web applications should not have their configuration files installed
+	   under the Document Root of a web server.
+
+		i. Web Application must be slotted by their full version numbers to
+		   further avoid downtime when true configuration changes are required.
+
+	3. Web applications should not be owned by the same user as the web server.
+	4. It should be easily possible to have multiple instances of a web
+	   application without any duplication of source files.
+	5. It should be immediately apparent how to control instances of a web
+	   application.
+
+Implementation
+==============
+
+Max Kalika <max at gentoo.org> stated that he has a preliminary eclass that
+implements a good deal of this GLEP.
+
+Stuart Herbert <stuart at gentoo.org> has committed::
+
+	webapp-apache.eclass
+
+to CVS, this is a stop-gap measure whilst this GLEP is being finalised.
+
+
+1. Web Server
+-------------
+
+A common default web server should be selected.  Selection of a default web 
+server will help to reduce the number of bugs that are reported.
+
+Given the popularity of the Apache webserver it is suggested that Apache be
+selected as the Gentoo default web server.
+
+The Virtual Host Configuration tool (see below) will transparently support
+different web servers, thus enabling web applications to be installed on a 
+Gentoo system irrespective of the installed web server.
+
+1.1 Default Document Root
+'''''''''''''''''''''''''
+
+The current default Document Root for Gentoo is /home/httpd/, this is
+unsuitable for a couple of reasons:
+
+	* /home/ may be exported via nfs to numerous other hosts, it is not
+	  acceptable to share publicly accessible files with numerous hosts.
+
+	* There is a potential (albeit small) for a user name clash
+
+To ensure the greatest flexibility when installing applications the following
+*Document Root* locations are to be used:
+
+	* For single host installations::
+
+		/var/www/localhost/
+
+	* For multiple virtual host installations::
+
+		/var/www/<fully qualified domain name>/
+
+		eg:
+			/var/www/www.gentoo.org/
+
+Additionally the chosen location ( /var/www/ ) appears to be becoming a de facto
+standard for Linux distributions.
+
+1.2 Apache 2
+''''''''''''
+
+All web application .ebuilds will honour any USE flags that are intended to
+add support for Apache 2 as well as supporting Apache 1 installations.
+
+2. Application Installation
+---------------------------
+
+The current accepted standard Document Root in Gentoo is /home/httpd/.  The
+discussion suggest that this is not the best location to install web based
+applications.
+
+2.1 Application SLOTs
+'''''''''''''''''''''
+
+All ebuilds are to set the SLOT variable as follows::
+
+	SLOT="${PV}"
+
+Setting the SLOT variable as shown will enable different versions of the same
+web application to be served concurrently by one server.
+
+2.2 Installation Paths
+''''''''''''''''''''''
+
+Web applications should be installed outside of the Document Root using the following
+defaults:
+
+	* for files to be served to clients::
+
+		/usr/share/webapps/${PF}/htdocs/
+
+		/usr/share/webapps/${PF}/cgi-bin/
+
+	* install *site default* configuration files in::
+
+		/etc/webapps/${PF}/
+
+	* for documentation files (not served to clients)::
+
+		/usr/share/doc/${PF}/
+
+3. Virtual Host Support
+-----------------------
+
+The ability to easily configure and administer multiple virtual hosts is a
+must.
+
+3.1 New "vhost" USE Flag
+''''''''''''''''''''''''
+
+To enable support for multiple virtual host installations a new USE flag is
+to be added to Portage.  The use flag will be::
+
+	vhost
+
+When *vhost* is _set_ the installation location and configuration for the web
+application will be affected, see below for more details.
+
+3.2 VHost Configuration Tool
+''''''''''''''''''''''''''''
+
+To assist administration of multiple virtual hosts a "VHost Configuration Tool"
+needs to be developed and implemented.	 Initial discussion regarding the VHost
+Config tool and proposed usage can be found at [#VHost-Config-Tool]_.
+
+It's the job of the VHost Config toolset to make a local instance of the web
+application run under a specific web server.
+
+The VHost Configuration Utility will need to be a separate package, maintained by Gentoo.
+
+Web Server .ebuilds will require the VHost Config tool as a dependency (DEPEND).
+
+`Bug #26293`_ will be used to track the initial progress of the VHost
+Configuration Tool.
+
+.. _Bug #26293: http://bugs.gentoo.org/show_bug.cgi?id=26293
+
+
+The vhost-config must do three main things:
+
+	- creates directories (copies a skeleton directory for the most part).
+	- create web server vhost config files.
+	- HUP web server so it reads in the new config without stopping.
+
+Initially the VHost Config tool should provide support for the Apache web
+server.  As the tool matures support for other web servers can be added.
+
+3.3 Single Host Installation
+''''''''''''''''''''''''''''
+
+For single host installations the .ebuild will make the required
+configurations changes and symlinks using the VHost Config tool to ensure
+that the web application is available to be served from::
+
+	/var/www/localhost/htdocs/${PF}/
+
+In this case it may be feasible for the VHost Config tool to simply symlink the
+directories from /usr/share/webapps/${PF}/ as is appropriate.
+
+3.4 Virtual Host Installation
+'''''''''''''''''''''''''''''
+
+For installations that support multiple virtual hosts the .ebuild will
+install the web application into the default location and then leave configuration
+to the user through the VHost Config tool.
+
+In this case the web application files will be copied from
+/usr/share/webapps/${PF}/ to /var/www/<FQDN>/ by the VHost Config tool.
+
+3.5 Configuration Files
+'''''''''''''''''''''''
+
+As stated above web application *site default* configuration files are to be
+installed into::
+
+	/etc/webapps/${PF}/
+
+The files in this directory are then copied (not symlinked!) by the VHost
+Config tool to the Document Root for each instance of the app that is installed.
+
+This will require the VHost Config toolset to emulate Portage's CONFIG_PROTECT
+behaviour for the web applications.
+
+4. Application Permissions
+--------------------------
+
+Installing web applications and giving the web server ownership of the files
+is a security risk.  This can possibly lead to application configuration
+files being accessed by unwanted third parties.
+
+All web applications should be owned by *root* unless the application
+absolutely requires write access to its installation directories at execution
+time.
+
+Backwards Compatibility
+=======================
+
+There may be some issues regarding compatibility with existing installs of
+web applications.  This is particularly true if the default Document Root is
+moved from what is accepted as the current standard (/home/httpd/).
+
+The main issues are:
+	* transition of existing configuration files to the
+	  /etc/webapps/${PF}/ directory.
+	* modification/reconfiguration of applications so that they
+	  are aware of the location of configuration files.
+	* creating the VHost Config toolset to enable installation and
+	  configuration of web applications irrespective of web server.
+
+
+References
+==========
+
+.. [#WebAppPost1] Stuart Herbert.  "Poll: Where should web applications be
+   installed?"  gentoo-dev mailing list, 2003-07-23,
+   Message-ID 200307231512.51710.stuart\@gentoo.org,
+   https://archives.gentoo.org/gentoo-dev/message/18e8a6aacd202e117d1876d249d51af8
+
+.. [#WebAppPost2] Troy Dack.  "[GLEP] Web Application Installation".
+   gentoo-dev mailing list, 2003-08-02,
+   Message-ID 1059843010.5023.80.camel\@carbon.internal.lan,
+   https://archives.gentoo.org/gentoo-dev/message/a94608da1bd57f387fb1091764f5226c
+
+.. [#WebAppPost3] Max Kalika.  "Re: [GLEP] Web Application Installation".
+   gentoo-dev mailing list, 2003-08-04,
+   Message-ID 86960000.1060038977\@valkyrie.lsit.ucsb.edu,
+   https://archives.gentoo.org/gentoo-dev/message/523c8123b7e4a179f6ae3aab74db66e2
+
+.. [#VHost-Config-Tool] Robin H. Johnson.  "Re: [GLEP] Web Application
+   Installation.  Plotting a VHOST config tool".  gentoo-dev mailing list,
+   2003-08-06, Message-ID 20030806043741.GF27029\@cherenkov.orbis-terrarum.net,
+   https://archives.gentoo.org/gentoo-dev/message/1386ab5e25ee17f3a72490145877d124.
+
+Copyright
+=========
+
+This work is licensed under the Creative Commons Attribution-ShareAlike 3.0
+Unported License.  To view a copy of this license, visit
+https://creativecommons.org/licenses/by-sa/3.0/.

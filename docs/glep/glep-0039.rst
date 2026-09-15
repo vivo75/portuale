@@ -1,0 +1,267 @@
+---
+GLEP: 39
+Title: Gentoo metastructure
+Author: Grant Goodyear <g2boojum@gentoo.org>,
+        Ciaran McCreesh <ciaranm@gentoo.org>
+Type: Informational
+Status: Final
+Version: 3
+Created: 2005-09-01
+Last-Modified: 2023-05-08
+Post-History: 2005-09-01, 2006-02-09, 2007-10-12, 2008-01-19, 2022-11-25,
+              2023-04-10, 2023-04-16
+Content-Type: text/x-rst
+Replaces: 4
+---
+
+Status
+======
+
+Implemented.  The metastructure proposal was accepted by a vote of all
+Gentoo developers on 2005-06-14 [#Metastructure_vote]_.
+GLEP amended on 2006-02-09 to add the final bullet point to list B in
+`Specification`_.
+
+Updated by an all-developers vote on 2023-05-08:
+
+* Replace leaving council members by next in line [#Council2007]_.
+* Updating this document requires an all-developers vote [#Council2009]_.
+* Council members must be developers [#Council2013]_.
+* An inquorate council meeting cannot take any substantive action.
+* Drop hard requirement of yearly project lead elections.
+
+Abstract
+========
+
+GLEP 4 is replaced with a new "metastructure" that retains established
+projects (and makes new projects easier to create), but adds a new "Gentoo
+Council" to handle global (cross-project) issues.
+
+Motivation
+==========
+
+The Fosdem and subsequent reform proposals shepherded by Koon are thorough,
+extremely detailed, and somewhat complicated.  They have a lot of good ideas.
+For many who have been with Gentoo a long time, though, there's just something
+about them that they don't really like.  More than a few Gentoo devs are
+almost entirely uninterested in metastructure as long as it doesn't get in
+their way, and because the current proposals impose at least some order on our
+unruly devs these proposals are guaranteed to "get in the way" to some degree.
+For example, a frequent comment that has been heard is that many Gentoo devs
+don't know who his/her manager (or project lead) is, which is a clear
+indication that our current system is broken.  The existing proposals solve
+the problem by requiring that each dev belong to a project.  Perhaps the part
+that is broken, though, is the belief that every dev should have a manager.
+The history of Gentoo is such that traditionally big advances have often been
+implemented by a single or a small number of dedicated devs (thus our
+long-standing tradition that devs have access to the entire tree), and surely
+we do not want to make things harder (or less fun) for such people.  So here's
+a minimal proposal for those who remembers the "good ol' days" and thinks
+things aren't really so different now.
+
+Synopsis of the current system
+------------------------------
+
+*  There are 13-15 top-level projects (TLPs).  Top-level projects are
+   comprised of sub-projects, and the goal was that every Gentoo
+   project would be a sub-project of one of the TLPs.  Supposedly each
+   dev therefore belongs to one or more TLPs.
+*  Each TLP has at least a "strategic" manager, and potentially also an
+   "operational" manager.  Only the strategic managers vote on global
+   Gentoo issues.
+*  The managers of each TLP were appointed by drobbins, the other
+   TLP managers, or elected by their project members.  These managers
+   have no set term.
+*  Within each TLP the managers are responsible for making decisions
+   about the project, defining clear goals, roadmaps, and timelines
+   for the project, and solving problems that arise within the TLP
+   (see GLEP 4 for the specific list).
+*  The strategic TLP managers are also responsible for deciding issues that
+   affect Gentoo across project lines.  The primary mechanism for
+   handling global-scope issues is the managers' meetings.
+*  Disciplinary action taken against erring devs is handled by the
+   "devrel" TLP, unless the dev is a strategic TLP manager.  In that
+   case disciplinary action must be enacted by the other strategic TLP
+   managers.
+
+Problems with the existing system
+---------------------------------
+
+1. The assumption that TLPs are complete is either incorrect (there
+   still is no "server" TLP) or just plain weird (but the lack of a
+   server TLP is technically okay because all devs who don't have an
+   obvious TLP belong to the "base" TLP by default).
+2. There is nothing at all to ensure that project leads actually do
+   represent the devs they supposedly lead or satisfy their
+   responsibilities.  Indeed, should a TLP manager go AWOL it is not at
+   all obvious how the situation should be resolved.
+3. Nothing is being decided at global scope right now.  Some TLP strategic
+   managers rarely attend the managers' meetings, and the managers as a
+   whole certainly are not providing any sort of global vision for
+   Gentoo right now.
+4. Even if the strategic TLP managers were making global decisions for
+   Gentoo, the TLP structure is such that almost all devs fall under
+   only one or two TLPs.  Thus voting on global issues is hardly
+   proportional, and thus many devs feel disenfranchised.
+5. Regardless of whether or not it is justified, devrel is loathed by
+   many in its enforcement role.
+
+Additional problems identified by the current metastructure reform proposals
+----------------------------------------------------------------------------
+
+6. The current system has no mechanism for identifying either projects
+   or devs that have gone inactive.
+7. Bugs that cut across projects often remain unresolved.
+8. GLEPs often linger in an undetermined state.
+
+Specification
+=============
+
+A. A project is a group of developers working towards a goal (or a set
+   of goals).
+
+   *  A project exists if it has a maintained Wiki
+      project page as described below.  ("Maintained" means
+      that the information on the page is factually correct and not
+      out-of-date.)  If the Wiki page isn't maintained, it is presumed
+      dead.
+   *  It should have at least one lead, and the leads are selected by
+      the members of the project.  This selection should occur at least
+      once every 12 months, and may occur at any time.  Any member can
+      demand a lead election if the last election was more than
+      12 months ago.
+   *  It may have zero or more sub-projects.  Sub-projects are
+      just projects that provide some additional structure, and their
+      Wiki pages are defined as sub-projects of the parent project.
+   *  Not everything (or everyone) needs a project.
+   *  Projects need not be long-term.
+   *  Projects may well conflict with other projects.  That's okay.
+   *  Any dev may create a new project just by creating a new project
+      page on the wiki.gentoo.org (see [#Project_pages]_) and sending
+      a Request For Comments (RFC) e-mail to gentoo-dev.  Note that
+      this GLEP does not provide for a way for the community at large
+      to block a new project, even if the comments are wholly negative.
+
+B. Global issues will be decided by an elected Gentoo council.
+
+   *  There will be a set number of council members.  (For the
+      first election that number was set to 7 by acclamation.)
+   *  Council members will be chosen by a general election of all
+      devs once per year.
+   *  Council members (and their proxies) must be Gentoo developers.
+   *  The council must hold an open meeting at least once per month.
+   *  Council decisions are by majority vote of those who show up (or
+      their proxies).
+   *  If a council member (or their appointed proxy) fails to show up for
+      two consecutive meetings, they are marked as a slacker.
+   *  If a council member who has been marked a slacker misses any further
+      meeting (or their appointed proxy doesn't show up), they lose their
+      position.
+   *  Whenever a member of the council loses their position (the reason
+      is irrelevant; e.g. they resign or they are booted for slacking),
+      then the next person in line from the previous council election
+      is offered the position.  If they accept and the current council
+      unanimously accepts the new person, they get the position.
+      Otherwise, it is offered to the next person in line, and so forth.
+      If the council does not accept that person, then a new election is
+      held to choose a new member.  The new member gets a 'reduced' term
+      so that the yearly elections still elect a full group.
+   *  Council members who have previously been booted for excessive slacking
+      may stand for future elections, including the election for their
+      replacement. They should, however, justify their slackerness, and
+      should expect to have it pointed out if they don't do so themselves.
+   *  The 'slacker' marker is reset when a member is elected.
+   *  If any meeting has less than 50% attendance by council members, a new
+      election for *all* places must be held within a month. The 'one year'
+      is then reset from that point.  No substantive action can be taken
+      in any such meeting.
+   *  Disciplinary actions may be appealed to the council.
+   *  A proxy must not be an existing council member, and any single person
+      may not be a proxy for more than one council member at any given
+      meeting.
+
+Rationale
+=========
+
+So, does this proposal solve any of the previously-mentioned problems?
+
+1. There is no longer any requirement that the project structure be
+   complete.  Some devs work on very specific parts of the tree, while
+   some work on practically everything; neither should be shoehorned into
+   an ad-hoc project structure.  Moreover, it should be easy to create new
+   projects where needed (and remove them when they are not), which this
+   proposal should enable.
+
+2. By having the members choose their project leads periodically, the
+   project leads are necessarily at least somewhat responsible (and
+   hopefully responsive) to the project members.  This proposal has
+   removed the list of responsibilities that project leads were supposed
+   to satisfy, since hardly anybody has ever looked at the original list
+   since it was written.  Instead the practical responsibility of a lead
+   is "whatever the members require", and if that isn't satisfied, the
+   members can get a new lead (if they can find somebody to take the job!).
+
+3. If the council does a lousy job handling global issues (or has no
+   global vision), vote out the bums.
+
+4. Since everybody gets to vote for the council members, at least in
+   principle the council members represent all developers, not just a
+   particular subset.
+
+5. An appeal process should make disciplinary enforcement both less
+   capricious and more palatable.
+
+6. This proposal doesn't help find inactive devs or projects.  It really
+   should not be that much of a problem.  We already have a script
+   for identifying devs who haven't made a CVS commit within a certain
+   period of time.  As for moribund projects, if the project page isn't
+   maintained, it's dead, and we should remove it.  That, too, could be
+   automated.  A much bigger problem is understaffed herds, but more
+   organization is not necessarily a solution.
+
+7. The metabug project is a great idea.  Let's do that!  Adding a useful
+   project shouldn't require "metastructure reform", although with the
+   current system it does.  With this proposal it wouldn't.
+
+8. This proposal has nothing to say about GLEPs.
+
+Updates to this document
+========================
+
+Any major updates to this document (that is, those that change its
+content rather than just fixing typos or adding small clarifications)
+require a vote of all developers.  Eligible voters are all developers
+at the time when the proposed update is published.  The vote passes if
+both of the following conditions are fulfilled:
+
+* The ratio of positive to negative votes is at least two to one, and
+* the number of positive votes is no less than one quarter of the number
+  of eligible voters.
+
+References
+==========
+
+.. [#Metastructure_vote] Grant Goodyear, "Metastructure vote preliminary
+   results", posted to ``gentoo-dev`` mailing list on 2005-06-14,
+   Message-ID 20050614035141.GC15256\@dst.grantgoodyear.org
+   (https://archives.gentoo.org/gentoo-dev/message/f5ab9ccca62a5d5e0b7b7ab0156f19b3)
+
+.. [#Council2007] 2007-02-08 council meeting
+   (https://projects.gentoo.org/council/meeting-logs/20070208-summary.txt)
+
+.. [#Council2009] 2009-07-20 council meeting
+   (https://projects.gentoo.org/council/meeting-logs/20090720-summary.txt),
+   confirmed on 2011-07-15
+   (https://projects.gentoo.org/council/meeting-logs/20110715-summary.txt)
+
+.. [#Council2013] 2013-02-12 council meeting
+   (https://projects.gentoo.org/council/meeting-logs/20130212-summary.txt)
+
+.. [#Project_pages] https://wiki.gentoo.org/wiki/Gentoo_Wiki:Developer_Central/Project_pages
+
+Copyright
+=========
+
+This work is licensed under the Creative Commons Attribution-ShareAlike 4.0
+International License.  To view a copy of this license, visit
+https://creativecommons.org/licenses/by-sa/4.0/.

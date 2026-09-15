@@ -1,0 +1,170 @@
+---
+GLEP: 40
+Title: Standardizing "arch" keywording across all archs.
+Author: Grant Goodyear <g2boojum@gentoo.org>
+Type: Standards Track
+Status: Final
+Version: 1
+Created: 2005-09-03
+Last-Modified: 2019-11-07
+Post-History: 2005-09-06, 2005-09-15, 2006-09-03
+Content-Type: text/x-rst
+---
+
+Status
+======
+
+Approved by the Gentoo Council on 2005-09-15.  As of 2006-09-03 we have
+a robust x86 arch team, so this GLEP is final.
+
+Credits
+=======
+
+This GLEP originated from a rather contentious discussion [#GG]_ on gentoo-dev
+about combining the x86 and amd64 keywords.  This GLEP attempts to get at the
+heart of that discontent.  The proposed stable-keyword guidelines have been
+lifted verbatim from [#Devmanual]_.
+
+.. [#GG] Grant Goodyear.  "Combining x86 and amd64".  gentoo-dev mailing list,
+   2005-09-01, Message-ID 20050901171028.GW18440\@bmb24.uth.tmc.edu,
+   https://archives.gentoo.org/gentoo-dev/message/c8ae985881502e2ff9a523b1db57fb55
+.. [#Devmanual] https://devmanual.gentoo.org/
+
+Abstract
+========
+
+It is time for x86 to no longer be an exception to the standard
+keywording guidelines.  Thus, an x86 arch team should be responsible 
+for moving packages from ~x86 to x86.
+
+Motivation
+==========
+
+The original, informal x86 keywording policy, where almost any x86 dev (which
+were the vast majority of devs) who used a package could mark it stable, arose
+from a time when there were relatively few Gentoo devs.  Adding packages to
+the tree was the principal concern, as opposed to maintaining existing
+packages. QA considerations have since modified that policy slightly, and now
+it is the package maintainers who should mark an x86 package stable.  Of
+course, that policy presumes that package maintainers are generally x86 devs,
+which is slowly becoming less and less true.
+
+This policy for x86 is quite different from how every other arch marks
+packages stable.  For the non-x86 archs, each arch has a specific "arch team"
+which is responsible for moving packages from ``~arch`` to ``arch``, although
+vapier notes that "arch teams generally defer to maintainers (and rightly so)
+as to *when* newer versions should go stable."  This approach has worked quite
+well for the non-x86 archs, and this GLEP asserts that the same approach would
+benefit x86 as well.
+
+Specification
+=============
+
+Stabling guidelines for all archs
+---------------------------------
+
+For a package to move to stable, the following guidelines must be met:
+
+*  The package has spent a reasonable amount of time in ``~arch`` first.
+   Thirty days is the usual figure, although this is clearly only a guideline.
+   For critical packages, a much longer duration is expected.  For small
+   packages which have only minor changes between versions, a shorter period
+   is sometimes appropriate.
+*  The package must not have any non-``arch`` dependencies.
+*  The package must not have any severe outstanding bugs or issues.
+*  The package must be widely tested.
+*  If the package is a library, it should be known not to break any package
+   which depends upon it.
+*  The relevant ``arch`` team must agree to it.
+
+x86 arch team
+-------------
+
+A robust x86 arch team needs to be created.  The x86@gentoo.org alias already
+exists, and it merely needs to be used.  This team, with the aid of potential
+non-dev ``arch testers``, has the responsibility of stabling all x86 packages.
+Current x86 devs who wish to mark their own packages stable must therefore
+either be members of or make individual arrangements with the x86 arch team.
+
+
+Rationale
+=========
+
+There will be a considerable one-time cost involved in establishing a robust
+x86 arch team--a good number of bodies (the amd64 arch team has 19 active devs
+and 12 active non-dev arch testers) need to be recruited to be part of the
+new arch team, and convincing devs that it is in their best interests to work
+in a new fashion is likely to be even harder.  Certainly the benefit of
+consistency between the various archs is obvious, but is it worth the cost
+involved?  Here are the arguments for enduring the pain involved:
+
+*  Over time, x86 is likely to become a minority arch as 64-bit systems
+   become the norm.  The implicit assumptions that underly the current
+   system (that most devs, users, and package maintainers use x86)
+   will become increasingly less valid.
+*  Markedly improved QA for x86.  Assuming that the author's own  is
+   behavior is representative, most x86 devs run ``~x86`` systems. 
+   Thus, the assumption that devs are good ``x86`` testers is not really
+   valid.  One obvious consequence is that packages tend to languish in
+   ``~x86`` for a very long time, since x86 devs running ``~x86`` have little
+   cause to notice that a package has not been marked stable.  The much larger
+   effect, though, is that it is rare for ``x86`` packages to be stabled in
+   the context of a full ``x86`` tree, so the big picture of a stable
+   *system*, not just a stable package, is lost.  This approach of stabling
+   in the context of a full stable ``arch`` tree, it has been argued [#OC]_,
+   is the fundamental reason why the non-x86 archs have notably better QA
+   than does the x86 arch.
+
+.. [#OC] Olivier Crête.  "imlate x86 Editon and more x86 fun".
+   gentoo-dev mailing list, 2005-08-12,
+   Message-ID 1123816517.8746.18.camel\@TesterBox.tester.ca,
+   https://archives.gentoo.org/gentoo-dev/message/a072950ff62e9a5ddb791c88a2aca377
+
+Implementation
+==============
+
+Creation of a robust x86 team is already underway.  The more vital step 
+is the official change in policy, along with a sustained effort to get
+existing x86 devs to go along with it.
+
+Alternative Ideas
+=================
+
+Stuart [#SH]_ has suggested the creation of a new arch keyword: "[-]maint",
+which would exist in tandem with the normal arch keywords, thereby making the
+package maintainer's intention explicit.  Ciaranm has responded that by
+definition a package in ``~arch`` is a candidate for ``arch``, so a package's
+mere presence in the tree (without being in ``package.mask``) should indicate
+the package maintainer's intention.  There was a fair bit of discussion about
+whether the idea should be a "maint" keyword, or named something else, or an
+entirely different variable, etcetera, but the basic gist didn't change much.
+
+Jstubbs notes that it could be a very good idea if all non-arch devs worked in
+overlays, but that new portage (gensync) support would be needed to make it
+truly viable.  Stuart pointed out that php5 support was handled just that way.
+One author's view is that this approach would make the "package in ``~arch``
+means that it's a de-facto candidate for ``arch``" interpretation even more 
+valid.
+
+Ciaranm and weeve have noted that it is occasionally necessary for arch teams
+to override a package maintainer when it comes to stabling a package.  Stuart
+has asserted that in those cases the arch team should be willing to take on
+the support burden for that package.
+
+.. [#SH] Stuart Herbert.  "Re: tentative x86 arch team glep".
+   gentoo-dev mailing list, 2005-09-04,
+   Message-ID 1125863332.11366.89.camel\@mogheiden.gnqs.org,
+   https://archives.gentoo.org/gentoo-dev/message/d0c5ea28545059d9d5d0b27bdf778fa5
+
+Backwards Compatibility
+=======================
+
+Not really an issue here.
+
+
+Copyright
+=========
+
+This work is licensed under the Creative Commons Attribution-ShareAlike 3.0
+Unported License.  To view a copy of this license, visit
+https://creativecommons.org/licenses/by-sa/3.0/.

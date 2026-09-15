@@ -1,0 +1,413 @@
+---
+GLEP: 76
+Title: Copyright Policy
+Author: Richard Freeman <rich0@gentoo.org>,
+        Alice Ferrazzi <alicef@gentoo.org>,
+        Ulrich Müller <ulm@gentoo.org>,
+        Robin H. Johnson <robbat2@gentoo.org>,
+        Michał Górny <mgorny@gentoo.org>
+Type: Informational
+Status: Active
+Version: 2
+Created: 2013-04-23
+Last-Modified: 2026-05-20
+Post-History: 2018-06-10, 2018-06-19, 2018-08-31, 2018-09-26, 2023-03-02,
+              2024-04-04
+Content-Type: text/x-rst
+---
+
+
+Status
+======
+
+Accepted by the Gentoo Council on 2018-09-09 and approved by the
+Gentoo Board of Trustees on 2018-09-15.  Reapproved with clarified
+real name requirement on 2018-10-19.  Marked as Active on 2018-10-21.
+Reapproved with relaxed real name policy on 2023-04-01.
+
+Version 2 transferred responsibilities from Trustees to Council,
+approved on 2024-04-16.
+
+
+Abstract
+========
+
+This GLEP introduces a copyright and licensing policy for Gentoo
+projects.  It requires all contributions of software or documentation
+to be released under a free license, and to be accompanied by a
+certificate of origin.
+
+
+Motivation
+==========
+
+The copyright ownership of Gentoo materials is ambiguous due to
+historical factors, and this GLEP attempts to improve the process
+going forward.
+
+In the beginning (2000 or earlier), the copyright header stated that
+*Gentoo Technologies, Inc.* was the copyright holder, without any
+formal paperwork.  The formal assignment document was however only
+introduced in late 2003.  The assignment had many objectors (mostly
+on the ``gentoo-core`` mailing list).  The developer recruiting
+procedures attempted to require signing of the document as a condition
+for becoming a developer, but it was not applied to pre-existing
+developers, or those that objected.
+
+Later, the *Gentoo Foundation* was established, and copyrights were
+formally transferred (including nullifying original developer
+assignments to *Gentoo Technologies, Inc.*), and the copyright header
+was updated.  The formal assignment document text was updated in 2006,
+but the formal assignment process had already been abandoned in
+mid-2004.
+
+Throughout this, the presence of copyright headers existed as a
+policy, and continues to exist to this day.  Some files also still
+contain or have in the past contained additional copyright headers,
+attributing ownership to other parties.
+
+The policy to have copyright notices ascribing copyright ownership to
+the Gentoo Foundation caused an issue when Gentoo developers forked
+another project and hosted the fork on Gentoo infrastructure.  To
+comply with the previous policy the copyright notices were modified,
+which caused concerns with the project the files were forked from.
+Our previous policy completely neglected the possibility that Gentoo
+might want to host files that were not created internally.
+
+Finally, since the early days of Gentoo new ideas around copyright
+licensing have become more popular, such as the FSFE's Fiduciary
+License Agreement [#FLA]_, which takes a copyleft approach to
+copyright licensing, while also better complying with copyright laws
+in nations that have author's rights.
+
+The goal here was to create a policy that was flexible enough to cover
+forks and situations where Gentoo would not own the majority of the
+copyright in a file.
+
+
+Specification
+=============
+
+Purpose / Scope
+---------------
+
+This policy documents how Gentoo contributors comply and document
+copyright for any contributions made to Gentoo.  Anyone committing
+documentation or sources to any repository hosted on Gentoo
+infrastructure or to any official Gentoo project (independently
+of hosting) must comply with this policy.  Unofficial Gentoo projects
+are also recommended to use this policy.
+
+Questions regarding this policy should be directed to the Council
+or the ``gentoo-dev`` mailing list.  Any concerns over possible
+copyright violations should be directed to the Council if they cannot
+be worked out with the appropriate maintainer.
+
+
+Licensing of Gentoo Projects
+----------------------------
+
+Every Gentoo project must abide by the Gentoo Social Contract
+[#SOCIAL-CONTRACT]_ and release its work under one or more of the
+following:
+
+a) The GNU General Public License, version 2 or later (GPL-2+)
+   [#GPL-2]_.
+
+b) The Creative Commons Attribution-ShareAlike 4.0 License
+   (CC-BY-SA-4.0, only for documentation) [#CC-BY-SA-4.0]_.
+   Existing projects may also stay with CC-BY-SA-3.0 [#CC-BY-SA-3.0]_.
+
+c) A license approved as GPL compatible by the Free Software
+   Foundation [#GPL-COMPAT]_.
+
+Exceptions for other free software licenses will be granted by the
+Gentoo Council on a case by case basis.
+
+
+Certificate of Origin
+---------------------
+
+All commits to Gentoo project repositories shall be accompanied by a
+certificate of origin.  The purpose of the certificate is to declare
+that the contribution can be modified and redistributed in accordance
+with the project's license.
+
+For commits made using a VCS, the committer shall certify agreement to
+the Certificate of Origin by adding ::
+
+    Signed-off-by: Name <e-mail>
+
+to the commit message as a separate line, using a known identity
+as a natural person.  This could be the committer's real name
+or an established online identity.
+
+The following is the current Gentoo Certificate of Origin, revision 1:
+
+    By making a contribution to this project, I certify that:
+
+    1. The contribution was created in whole or in part by me, and I
+       have the right to submit it under the free software license
+       indicated in the file; or
+
+    2. The contribution is based upon previous work that, to the best
+       of my knowledge, is covered under an appropriate free software
+       license, and I have the right under that license to submit that
+       work with modifications, whether created in whole or in part by
+       me, under the same free software license (unless I am permitted
+       to submit under a different license), as indicated in the file;
+       or
+
+    3. The contribution is a license text (or a file of similar nature),
+       and verbatim distribution is allowed; or
+
+    4. The contribution was provided directly to me by some other
+       person who certified 1., 2., 3., or 4., and I have not modified
+       it.
+
+    I understand and agree that this project and the contribution
+    are public and that a record of the contribution (including all
+    personal information I submit with it, including my sign-off) is
+    maintained indefinitely and may be redistributed consistent with
+    this project or the free software license(s) involved.
+
+The Gentoo Certificate of Origin is licensed under a Creative Commons
+Attribution-ShareAlike 4.0 International License [#CC-BY-SA-4.0]_.
+It is based on the Linux Kernel DCO [#OSDL-DCO]_, released by Open
+Source Development Labs, Inc. in 2005 under a CC-BY-SA-2.5 License.
+
+Alternatively, and if it is applicable, committers can certify their
+commits with the Linux Kernel DCO 1.1 [#DCO-1.1]_.  This shall be
+indicated by adding ``(DCO-1.1)`` at the end of the ``Signed-off-by``
+line.  Using the Gentoo Certificate of Origin is strongly preferred.
+
+
+Copyright Attribution
+---------------------
+
+All copyrightable files included in Gentoo projects must contain
+appropriate copyright and license notices, as defined by this policy.
+For files in textual format, these notices normally appear near the
+top of the file.  When technical limitations do not allow for text
+notices in the file itself (e.g., for binary image file formats),
+copyright and license can be stated in an accompanying text file in
+the same directory.
+
+A proper copyright notice reads::
+
+    Copyright YEARS MAIN-CONTRIBUTOR [OTHER-CONTRIBUTOR]... [and others]
+
+It must list the main copyright holder, who is usually the original
+author, or the contributor holding copyright to the largest portion
+of the file.  Additional copyright holders can be listed, but this is
+normally not required.  The "and others" text may be omitted if the
+explicitly listed contributors hold copyright to the entire file.
+In some jurisdictions, the copyright holder can also be a company or
+other legal entity, and therefore be different from the original
+author.
+
+Any requirement (e.g., by law, or by the file's license) to keep
+existing copyright notices intact is not affected by this policy.
+
+Anyone finding a file out of compliance should file a bug against the
+associated project/package providing as much information as possible.
+Files that are not brought into compliance within 60 days or upon a
+request for removal by a aggrieved copyright holder will be removed.
+Any concerns not addressed by a maintainer can be appealed to the
+Council.
+
+
+Simplified Attribution
+----------------------
+
+Alternatively, projects are welcome to use a simplified form of the
+copyright notice, which reads::
+
+    Copyright YEARS Gentoo Authors
+
+Projects using this scheme must track authorship in a VCS, unless they
+list all authors of copyrightable contributions in an ``AUTHORS`` file.
+
+
+Rationale
+=========
+
+Policy
+------
+
+This document aims to provide a single consistent copyright policy for
+all Gentoo projects.  It is explicitly enforced for all official Gentoo
+projects in order to protect the interests of Gentoo as a whole,
+including its contributors, developers and users.  Additionally, it is
+enforced for all other projects hosted on Gentoo infrastructure in order
+to protect the Gentoo infrastructure owners and improve consistency.
+
+The copyright model is built on the DCO model used by the Linux kernel
+and requires all contributors to certify the legitimacy of their
+contributions.  This also requires that they use a known identity for
+signing; an anonymous certification would not mean anything.
+This policy is derived from the Linux project's policy as of 2023-02-27
+[#SUBMITTING-PATCHES]_.
+
+In the future, a second stage of this policy may use a combination of
+the DCO model and an FLA model [#FLA]_ as it is used by different open
+source projects.  Contributors would be able to freely choose whether
+they sign the FLA document or not.
+
+After Gentoo Linux has become an associated project of Software in the
+Public Interest (SPI) [#SPI]_, the Gentoo Council will be responsible
+for granting of license exceptions and resolution of copyright issues,
+instead of the Gentoo Foundation Trustees.  The Council may confer
+with SPI for issues that it cannot resolve itself.
+
+
+Licensing of Projects
+---------------------
+
+The Social Contract mentions GPL-2 and CC-BY-SA-2.0, both with the
+option to use them in a later version ("at our discretion").  In order
+to facilitate interchange of software between different projects, we
+aim for uniformity of their licensing.  Therefore, items a) and b)
+explicitly recommend the use of GPL-2+ and CC-BY-SA-4.0.  The latter
+is restricted to be used for documentation, because Creative Commons
+themselves recommend against using their licenses for software
+[#CC-SOFTWARE]_.
+
+Other GPL-compatible free software licenses that are not explicitly
+listed are allowed by item c).  This covers cases where compatibility
+to licenses used by upstream projects is necessary.  (For example,
+the Gentoo BSD project may want to use the 2-clause or 3-clause BSD
+license.)
+
+By default, GPL-incompatible licenses (e.g., the CDDL) are not
+allowed, because their use would hinder interchange of code between
+Gentoo projects.  However, the Council can grant exceptions to this,
+as long as the license in question is a free software or open source
+license.
+
+
+Changes to the Certificate of Origin
+------------------------------------
+
+The Gentoo Certificate of Origin rev. 1 has been based on Linux Kernel
+DCO 1.1 [#OSDL-DCO]_.  It features the following modifications from
+the original:
+
+i.   The enumeration has been modified to use numeric points.
+
+ii.  Additional point 3. has been inserted:
+
+         3. The contribution is a license text (or a file of similar
+            nature), and verbatim distribution is allowed; or
+
+iii. The original point (c) has shifted to become point 4., and has
+     been updated to account for the additional point 3.
+
+iv.  The original point (d) has been transformed into a stand-alone
+     paragraph following the enumeration.
+
+v.   The term "open source" has been replaced by "free software"
+     throughout.
+
+The new point was deemed necessary to allow committing license files
+into the Gentoo repository, since those files usually do not permit
+modification.  It has been established that adding a clear provision
+for this case is better than excluding those commits from compliance
+with the Certificate of Origin.  Debian was facing a similar problem
+[#DEBIAN-LICENSE]_.
+
+The update of point (c) was necessary to allow the new clause being
+certified by the person providing the contribution.
+
+The term "free software" is used for consistency with the language
+of the Gentoo Social Contract [#SOCIAL-CONTRACT]_.
+
+The remaining changes were merely editorial.  The original point (d)
+is not part of the *or* statement joining the other points, so keeping
+it in a paragraph separate from the enumeration is more appropriate.
+
+Addition of another point for public domain material was also
+considered.  However, it is preferred if all contributions carry
+an explicit license notice that allows their certification under
+point 1. or 2.  If necessary, license tools like Creative Commons
+CC0 [#CC0-1.0]_ or Public Domain Mark [#CC-PDM-1.0]_ can be used.
+
+
+Copyright Notice
+----------------
+
+Especially for ebuild repositories, constantly keeping track of the
+main copyright holder of any file would be rather inconvenient and
+tedious.  Therefore, projects are free to use either a traditional
+copyright notice listing the individual author(s), or a simplified
+notice with an attribution to the "Gentoo Authors".  The latter
+resembles the scheme used by the Chromium project [#CHROMIUM]_.
+
+
+Acknowledgements
+================
+
+Many people have participated in invaluable discussions on this GLEP.
+In particular, the authors would like to thank David Abbott,
+Roy Bamford, Kristian Fiskerstrand, Andreas K. Hüttel, Manuel Rüger,
+Matija Šuklje, Matthew Thode, and Alec Warner for their input.
+
+
+References
+==========
+
+.. [#FLA] FSFE Legal: Fiduciary Licence Agreement (FLA),
+   https://fsfe.org/activities/fla/fla.en.html
+
+.. [#SOCIAL-CONTRACT] Gentoo Social Contract,
+   https://www.gentoo.org/get-started/philosophy/social-contract.html
+
+.. [#GPL-2] GNU General Public License, version 2 or later,
+   https://www.gnu.org/licenses/gpl-2.0.html
+
+.. [#CC-BY-SA-4.0] Creative Commons Attribution-ShareAlike 4.0
+   International License, https://creativecommons.org/licenses/by-sa/4.0/
+
+.. [#CC-BY-SA-3.0] Creative Commons Attribution-ShareAlike 3.0
+   Unported License, https://creativecommons.org/licenses/by-sa/3.0/
+
+.. [#GPL-COMPAT] GPL-compatible free software licenses,
+   https://www.gnu.org/licenses/license-list.en.html#GPLCompatibleLicenses
+
+.. [#OSDL-DCO] Open Source Development Labs, Inc.,
+   Developer's Certificate of Origin 1.1,
+   https://web.archive.org/web/20060524185355/http://www.osdlab.org/newsroom/press_releases/2004/2004_05_24_dco.html
+
+.. [#DCO-1.1] Developer's Certificate of Origin 1.1,
+   https://developercertificate.org/
+
+.. [#SUBMITTING-PATCHES] Submitting patches: the essential guide to
+   getting your code into the kernel,
+   https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/process/submitting-patches.rst?id=d4563201f33a022fc0353033d9dfeb1606a88330#n410
+   https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=d4563201f33a022fc0353033d9dfeb1606a88330
+
+.. [#SPI] Software in the Public Interest,
+   https://www.spi-inc.org/
+
+.. [#CC-SOFTWARE] Can I apply a Creative Commons license to software?
+   https://creativecommons.org/faq/#can-i-apply-a-creative-commons-license-to-software
+
+.. [#DEBIAN-LICENSE] [debian-legal] License of the GPL license,
+   https://lists.debian.org/debian-legal/2018/04/msg00006.html
+
+.. [#CC0-1.0] Creative Commons: CC0 1.0 Universal,
+   https://creativecommons.org/publicdomain/zero/1.0/
+
+.. [#CC-PDM-1.0] Creative Commons: Public Domain Mark 1.0,
+   https://creativecommons.org/publicdomain/mark/1.0/
+
+.. [#CHROMIUM] Contributing to Chromium,
+   https://chromium.googlesource.com/chromium/src/+/main/docs/contributing.md#Legal-stuff
+
+
+Copyright
+=========
+
+This work is licensed under the Creative Commons Attribution-ShareAlike 4.0
+International License.  To view a copy of this license, visit
+https://creativecommons.org/licenses/by-sa/4.0/.

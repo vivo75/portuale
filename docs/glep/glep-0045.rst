@@ -1,0 +1,57 @@
+---
+GLEP: 45
+Title: GLEP date format
+Author: Henrik Brix Andersen <brix@gentoo.org>
+Type: Informational
+Status: Final
+Version: 1
+Created: 2005-12-13
+Last-Modified: 2017-09-14
+Post-History: 2005-12-13
+Content-Type: text/x-rst
+---
+
+Abstract
+========
+
+This GLEP proposes using an ISO-8601 compliant date format in GLEPs.
+
+Motivation
+==========
+
+The current date format used in GLEPs is ``dd-mmm-yyyy``
+(e.g. 14-Aug-2001). This format is not internationalized and not
+easily machine parseable.
+
+This GLEP proposes switching to using an ISO-8601 compliant date
+format ``yyyy-mm-dd`` (e.g. 2001-08-14). This format is international
+and easily machine parseable.
+
+Specification
+=============
+
+An overview of the ISO-8601 specification is available online
+[#iso-8601]_. Note that only the ``yyyy-mm-dd`` subset of the ISO-8601
+specification should be used in GLEPs.
+
+The date(1) utility supports ISO-8601, making it easy for GLEP authors
+to get the format right.
+
+Backwards Compatibility
+=======================
+
+GLEP 1 should be updated to reflect this new date format, and all
+dates in existing GLEPs should be changed to be ISO-8601 compliant.
+
+References
+==========
+
+.. [#iso-8601] Numeric representation of Dates and Time,
+     http://www.iso.org/iso/en/prods-services/popstds/datesandtime.html
+
+Copyright
+=========
+
+This work is licensed under the Creative Commons Attribution-ShareAlike 3.0
+Unported License.  To view a copy of this license, visit
+https://creativecommons.org/licenses/by-sa/3.0/.

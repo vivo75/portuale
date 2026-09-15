@@ -1,0 +1,186 @@
+---
+GLEP: 30
+Title: Planet Gentoo web log aggregator
+Author: Daniel Drake <dsd@gentoo.org>
+Type: Standards Track
+Status: Final
+Version: 1
+Created: 2004-10-24
+Last-Modified: 2019-11-07
+Post-History: 2004-10-25, 2004-11-10, 2005-03-11
+Content-Type: text/x-rst
+---
+
+Status
+======
+
+The new `Planet Gentoo`_ came online 2005-03-10, so this GLEP is now Final.
+
+.. _Planet Gentoo: http://planet.gentoo.org/
+
+
+Credits
+=======
+- `Stuart Herbert`_ for the original idea
+- `Alexander Plank`_ who also has put effort into promoting this
+
+Abstract
+========
+
+This GLEP proposes the creation of "Planet Gentoo", a new section of the
+gentoo.org website.  It would aggregate weblogs (commonly known as "blogs")
+written by contributing Gentoo developers onto this single page, available to
+the public.  I will refer to this new website section as "the planet" in this
+GLEP.
+We would also provide an installation of a weblog engine for developers that
+do not currently have their own weblog.
+
+Motivation
+==========
+
+I'm trying to reduce the gap between the Gentoo user and development
+communities.
+
+Many large open source projects and software distributors have their own
+Planet where contributors weblogs are aggregated.  See the `Planetplanet`_
+homepage for a complete listing.  These other aggregations appear to be
+successful and bring their relevant communities together.
+
+These aggregations are often quite interesting to read, since they contain a
+variation of topics, not all of which are related to the project.
+
+The planet would add another method of user interaction with developers, as
+most weblogs allow readers to post comments.
+
+Readers would get more interested in the Gentoo project, and would get a feel
+for the personalities of the contributing developers.  Although I am not
+suggesting this should be used as an announcement tool, developers could also
+use this to get general messages over to the user community.
+
+This would also benefit our development, as developers would also be able to
+keep track of what other developers are working on and promote more
+collaboration amongst each other.
+
+Specification
+=============
+
+The proposed design is an installation of `Planetplanet`_ at a part of the
+gentoo.org infrastructure, e.g. http://planet.gentoo.org
+
+We would also provide an installation of `Wordpress`_ or a similar weblogging
+engine, for developers that do not have their own weblog or would wish to
+move their log to an official Gentoo hosted website.  This could be provided
+at (e.g.) http://weblogs.gentoo.org
+
+Rationale
+=========
+
+`Planetplanet`_ is simply a weblog aggregator written in python.  It is
+executed as a cronjob and fetches content from all the weblogs it has been
+asked to, postprocesses and aggregates them into a single html file (based on
+a template), and outputs that html content to an area provided by a webserver.
+This should allow for ease of integration with any existing infrastructure.
+
+Planetplanet is configurable through a single configuration file, which lists
+the log feed URL, real name and user name for each contributing developer.
+
+`Wordpress`_ is a weblogging engine written in PHP.  It relies on MySQL for
+the data store.  After the initial setup, all configuration is done through a
+web-based interface.
+
+A group of people would be assigned the responsibility/CVS access to maintain
+these two services.  I would suggest the existing infrastructure team to have
+this responsibility.  If required, I will assist with the initial
+configuration.
+
+The planetplanet installation would fetch and aggregate developers weblogs
+only, we would not accept non-developer logs.
+
+Developers do not have to host their weblogs with us, practically all blogging
+packages provide an XML feed (typically RSS) which planetplanet will happily
+fetch and process.  Other feed formats are also accepted, examine the
+planetplanet documentation for more info.
+In the event of a contributing Gentoo developer leaving the project, their log
+would be removed from the aggregation. If their log was hosted by ourselves,
+it would be closed.  For this reason, some developers may choose to host their
+log elsewhere - this is not a problem and is left to the decision of the
+individual developers.
+
+It is true that the addition of the planet to our website collection would add
+yet another source of Gentoo information to our collection; our users and
+developers are already overwhelmed with IRC, mailing lists, forums, and the
+central website.  In contrast, a lot of information is currently replicated
+over those mediums, but the planet would provide a taste of something new.
+Developers can choose their own topics and are free to write about things that
+perhaps would not fit into our existing communication mediums.  Additionally,
+the planet will attempt to bring some existing content together by linking to
+recent commits, bug lists, and dev.gentoo.org webspace for each contributing
+developer.
+
+It has been suggested that the activity of the planet may be an issue:
+although a lot of activity would make the planet very successful, it may look
+bad on us as a whole if the planet is inactive.
+
+`Alexander Plank`_ started a `gentoo-dev discussion`_ back in August regarding
+this exact idea.  Alexander set up a `Planet Gentoo mini-survey`_ to see which
+developers have weblogs or would be interested in obtaining one to be
+aggregated on the planet.  At the time of writing, the survey yielded a list
+of 21 interested developers.
+
+Looking at the other planets available, a contributor count like this would be
+more than enough to keep the planet active and interesting.  Through my
+experiments of finding developers existing weblogs through google and
+aggregating them on my local Planetplanet installation, I have come to the
+conclusion that just a small quantity of active weblogs is enough to keep the
+planet going strongly.
+
+I also note that the list of 21 interested developers was built up over a
+short space of time, and it was only mentioned once in a rather large thread
+on the gentoo-dev mailing list.  I predict that given more publicity amongst
+the developers, this idea would be even more popular.  I also predict that if
+such a planet were to go live, other developers would be motivated to join in,
+and new developers joining the project would be keen on contributing.
+
+The success of the planet will be evaluated by examining the number of hits to
+the planet. 3 months after launch, one weeks worth of logs will be recorded,
+and hits will be counted. If the hit count for that week is below 1000, the
+planet will be deemed as not having met its target, and appropriate action can
+be taken if the planet appears to be harming our image.
+
+Backwards Compatibility
+=======================
+
+No issues.
+
+Reference Implementation
+========================
+
+See `Bug 63160`_ for a template file mimicking the current gentoo.org design
+plus a sample config file.
+
+References
+==========
+
+.. _Stuart Herbert: stuart@gentoo.org
+
+.. _Alexander Plank: alexander@gentoo.org
+
+.. _Planetplanet: http://www.planetplanet.org
+
+.. _Wordpress: http://packages.gentoo.org/package/wordpress
+
+.. _gentoo-dev discussion:
+    Message-ID 8CE2F5AE-EEC7-11D8-B74D-000A95D36C00\@gentoo.org,
+    https://archives.gentoo.org/gentoo-dev/message/5391d51cd5487423cd18885849074c6a
+
+.. _Planet Gentoo mini-survey: http://penguincluster.com/cgi-bin/wiki.pl/BlogInterest
+
+.. _Bug 63160: http://bugs.gentoo.org/63160
+
+
+Copyright
+=========
+
+This work is licensed under the Creative Commons Attribution-ShareAlike 3.0
+Unported License.  To view a copy of this license, visit
+https://creativecommons.org/licenses/by-sa/3.0/.

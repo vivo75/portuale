@@ -1,0 +1,113 @@
+---
+GLEP: 48
+Title: QA Team's Role and Purpose
+Author: Mark Loeser <halcy0n@gentoo.org>
+Type: Standards Track
+Status: Final
+Version: 2.1
+Created: 2006-04-24
+Last-Modified: 2019-05-13
+Post-History: 2006-04-24, 2006-09-05, 2011-06-08, 2019-04-12
+Content-Type: text/x-rst
+---
+
+
+Abstract
+========
+
+This GLEP outlines the abilities and purpose of the Quality Assurance team
+for Gentoo.
+
+Motivation
+==========
+
+For years now developers have been saying how we need an empowered QA team to
+handle problems concerning the tree.  This GLEP provides the structure for
+such a team and specifies the roles the team would fulfill.
+
+The GLEP has been revised to improve the mandate of the QA team by giving it
+the full backing of the council.
+
+Specification
+=============
+
+The QA team should be given certain abilities to look out for the best
+interests of all developers, as well as our users.  The QA team should also
+work to ensure developers have the information they need, and that packages
+are maintained. The QA team is also tasked with the authority to ensure
+tree policies are respected.
+
+* The QA team's purpose is to provide cross-team assistance in keeping the
+  tree in a good state. This is done primarily by finding and pointing out
+  issues to maintainers and, where necessary, taking direct action.
+* The QA team is directed by a lead, chosen yearly by private or
+  public election among the members of the team, and confirmed by the council.
+  The QA team lead can choose one member as a deputy. The deputy has all of
+  his powers directly delegated from the QA team lead and thus his actions
+  and decisions should be considered equal to those of the QA team lead.
+  The deputy is directly responsible only to the QA team lead.
+* The QA team lead must approve developers who would like to join the project. The
+  applicant must demonstrate a thorough understanding of the duties he would like
+  to perform. By accepting the applicant the QA team lead will accept
+  the responsibility to direct them as part of the team and will be held
+  responsible for any action the team member takes on behalf of the QA team.
+* In case of emergency, or if package maintainers refuse to cooperate,
+  the QA team may take action themselves to fix the problem.  The QA team
+  does not want to override the maintainer's wishes by default, but only
+  wish to do so when the team finds it is in the best interest of users and
+  fellow developers to have the issue addressed as soon as possible.
+* The QA team may also offer to fix obvious typos and similar minor issues,
+  and silence from the package maintainers can be taken as agreement in such
+  situations.  Coding style issues fall under this category, and while they
+  are not severe, they can make automated checks of the tree more difficult.
+* There will be cases when our tools are incapable of handling a certain
+  situation and policy must be broken in order to get something working
+  completely.  This will hopefully not occur very often, but each time it
+  does occur, the QA team and the maintainer will come to some agreement on
+  an interim solution and it is expected that a bug will be opened with the
+  appropriate team to work towards a correct solution.
+* In the case of disagreement among QA members the majority of established
+  QA members must agree with the action.  Some examples of disagreements are:
+  whether the perceived problem violates the policy or whether the solution
+  makes the situation worse.
+* In the event that a developer still insists that a package does not break
+  QA standards, an appeal can be made at the next council meeting. The package
+  should be dealt with per QA's request until such a time that a decision is
+  made by the council.
+* Just because a particular QA violation has yet to cause an issue does not
+  change the fact that it is still a QA violation.
+* If a particular developer persistently causes QA violations (actions that
+  negatively impact the behavior of Gentoo systems, work of other developers
+  or infrastructure facilities), the QA team may issue a temporary revocation
+  of developer's commit access (ban), up to 14 days.  In case of repeated
+  offenses, the QA team may request that ComRel re-evaluate the commit access.
+  All the evidence of the violation, as well as ban length will be evaluated
+  and voted on by the QA team for each case individually.
+* The QA team will maintain a list of current "QA Standards" with explanations
+  as to why they are problems, and how to fix the problem.  The list is not
+  meant by any means to be a comprehensive document, but rather a dynamic
+  document that will be updated as new problems are discovered.  The QA team
+  will also do their best to ensure all developer tools are in line with the
+  current QA standards.
+* The QA team will work with Recruiters to keep related documentation and
+  quizzes up to date, so that up and coming developers will have access to all
+  of the necessary information to avoid past problems.
+* QA will take an active role in cleaning up and removing from the tree
+  unmaintained packages as they are found to be broken.  It is also
+  encouraged of members of the QA team to assist in mentoring new developers
+  that wish to take over unmaintained packages/herds.
+* The QA lead's term expires one year after confirmation, and during any
+  period that the position is vacant the council may appoint an interim lead.
+
+
+Backwards Compatibility
+=======================
+
+Not a problem for this GLEP.
+
+Copyright
+=========
+
+This work is licensed under the Creative Commons Attribution-ShareAlike 3.0
+Unported License.  To view a copy of this license, visit
+https://creativecommons.org/licenses/by-sa/3.0/.

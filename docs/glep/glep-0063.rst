@@ -1,0 +1,253 @@
+---
+GLEP: 63
+Title: Gentoo OpenPGP policies
+Author: Robin H. Johnson <robbat2@gentoo.org>,
+        Andreas K. Hüttel <dilfridge@gentoo.org>,
+        Marissa Fischer <blogtodiffer@gmail.com>,
+        Michał Górny <mgorny@gentoo.org>
+Type: Standards Track
+Status: Final
+Version: 2.3
+Created: 2013-02-18
+Last-Modified: 2025-10-25
+Post-History: 2013-11-10, 2018-07-03, 2018-07-21, 2019-02-24, 2020-12-17,
+              2025-10-25
+Content-Type: text/x-rst
+---
+
+Credits
+=======
+
+Many developers and external sources helped in this GLEP.
+
+Abstract
+========
+
+This GLEP provides both a minimum requirement and a recommended set of
+OpenPGP key management policies for the Gentoo Linux distribution.
+
+Changes
+=======
+
+v2.3
+  Clarified key compatibility with RFC 4880.
+
+v2.2
+  Added information about the Gentoo keyserver.
+
+v2.1
+  A requirement for an encryption key has been added, in order to extend
+  the GLEP beyond commit signing and into use of OpenPGP for dev-to-dev
+  and user-to-dev communications.
+
+  A recommendation for primary key to be certify-only has been added.
+
+v2
+  The distinct minimal and recommended expirations have been replaced
+  by a single requirement. The rules have been simplified to use
+  the same maximum time of 900 days for both the primary key and subkeys.
+
+  An additional rule requesting key renewal 2 weeks before expiration
+  has been added. This is in order to give services and other developers time
+  to refresh the key.
+
+  The usage of DSA keys has been disallowed.
+
+  The ``gpgfingerprint`` LDAP field has been altered to remove optional
+  whitespace.
+
+  The ``gpg.conf`` contents have been removed as they were seriously
+  outdated and decreased security over the modern defaults.
+
+  The requirement of SHA-2 digest has been extended to apply to self-
+  signatures made on subkeys.
+
+  An additional requirement for ``@gentoo.org`` UID has been added.
+
+v1.1
+  The recommended RSA key size has been changed from 4096 bits
+  to 2048 bits to match the GnuPG recommendations [#GNUPG-FAQ-11-4]_.
+  The larger recommendation was unjustified and resulted in people
+  unnecessarily replacing their RSA-2048 keys.
+
+  Minimal specification has been amended to allow for ECC keys.
+
+  The option of using DSA subkey has been removed from recommendations.
+  The section now specifies a single recommendation of using RSA.
+
+Motivation
+==========
+
+Given the increasing use and importance of cryptographic protocols in internet
+transactions of any kind, unified requirements for OpenPGP keys used in Gentoo
+Linux development are sorely needed.  This document provides both a set of
+bare minimum requirements and a set of best practice recommendations for
+the use of GnuPG (or other OpenPGP providers) by Gentoo Linux developers.
+It is intended to provide a basis for future improvements such as, e.g.,
+consistent ebuild or package signing and verification by end users,
+and providing secure and authenticated communication channel between users
+and developers.
+
+Specifications for OpenPGP keys
+===============================
+
+Bare minimum requirements
+-------------------------
+This section specifies obligatory requirements for all OpenPGP keys that
+are used in the context of Gentoo developer actions.  All developers
+are required to have at least one key conforming to those requirements.
+Keys that do not conform to them can not be used to commit.
+
+0. All OpenPGP data must use the v4 message format, as specified
+   in RFC 4880 [#RFC4880]_. In addition to that, ECC curve 25519
+   is permitted as specified as "EdDSALegacy" in RFC 9580 [#RFC9580]_.
+
+1. SHA-2 series output digest (SHA-1 digests internally permitted),
+   at least 256-bit.  All subkey self-signatures must use this digest.
+
+2. a. Signing subkey that is different from the primary key, and does
+      not have any other capabilities enabled.
+
+   b. Encryption subkey that is different from the primary key, and does
+      not have any other capabilities enabled.
+
+3. Primary key and the signing subkey are both of type EITHER:
+
+   a. RSA, >=2048 bits,
+
+   b. ECC curve 25519.
+
+4. Expiration date on key and all subkeys set to no more than 900 days
+   into the future.
+
+5. Key expiration date renewed at least 2 weeks before the previous
+   expiration date.
+
+6. UID using your ``@gentoo.org`` e-mail included in the key.
+
+7. Keys must be uploaded to the Gentoo keyserver.
+
+Recommendations
+---------------
+This section specifies the best practices for Gentoo developers.
+The developers should follow those practices unless there is a strong
+technical reason not to (e.g. hardware limitations, necessity of replacing
+their primary key).
+
+1. Primary key has only ``certify`` capability enabled.
+
+2. Primary key and the signing subkey are both of type RSA, 2048 bits.
+
+3. Key expiration renewed annually to a fixed day of the year.
+
+4. Create a revocation certificate & store it hardcopy offsite securely
+   (it's about ~300 bytes).
+
+5. Encrypted backup of your secret keys.
+
+6. Upload to public keyservers (e.g. Ubuntu [#UBUNTU_KS]_, OpenPGP.org
+   [#OPENPGP_ORG]_).
+
+Gentoo Infrastructure
+=====================
+
+Gentoo LDAP
+-----------
+
+All Gentoo developers must list the complete fingerprint for their primary
+keys in the "``gpgfingerprint``" LDAP field. It must be exactly 40 hex digits,
+uppercase, without whitespace.
+
+The prior "``gpgkey``" field will be removed, as it is a subset
+of the fingerprint field. In any place that presently displays
+the "``gpgkey``" field, the last 16 hex digits of the fingerprint should
+be displayed instead.
+
+Gentoo Keyserver
+----------------
+
+Gentoo infrastructure uses a keyserver that is isolated from the SKS pool.
+This keyserver is restricted to accepting uploads from authorized Gentoo hosts.
+Instructions for uploading keys to this server may be found at
+https://keys.gentoo.org/.
+
+Backwards Compatibility
+=======================
+
+There is no consistent standard for GPG usage in Gentoo to date. There is
+conflicting information in the Devmanual [#DEVMANUAL-MANIFEST]_ and the GnuPG
+Gentoo user guide [#GNUPG-USER]_. As there is little enforcement of Manifest
+signing and very little commit signing to date, there are no backwards
+compatibility concerns.
+
+External documentation
+======================
+
+Much of the above was driven by the following:
+
+* NIST SP 800-57 recommendations [#NISTSP800571]_, [#NISTSP800572]_,
+
+* Debian GPG documentation [#DEBIANGPG]_,
+
+* RiseUp.net OpenPGP best practices [#RISEUP]_,
+
+* ENISA Algorithms, Key Sizes and Parameters Report 2013 [#ENISA2013]_.
+
+References
+==========
+
+.. [#GNUPG-FAQ-11-4] GnuPG FAQ: Why doesn’t GnuPG default to using RSA-4096?
+   (https://www.gnupg.org/faq/gnupg-faq.html#no_default_of_rsa4096)
+
+.. [#RFC4880] RFC 4880: OpenPGP Message Format
+   (https://www.rfc-editor.org/rfc/rfc4880)
+
+.. [#RFC9580] RFC 9580: OpenPGP
+   (https://www.rfc-editor.org/rfc/rfc9580)
+
+.. [#UBUNTU_KS] Ubuntu - OpenPGP Keyserver
+   (https://keyserver.ubuntu.com/)
+
+.. [#OPENPGP_ORG] keys.openpgp.org
+   (https://keys.openpgp.org/)
+
+.. [#DEBIANGPG] Debian GPG documentation
+   (https://wiki.debian.org/Keysigning)
+
+.. [#EKAIA] Ana's blog: Creating a new GPG key
+   (http://ekaia.org/blog/2009/05/10/creating-new-gpgkey/)
+
+.. [#RISEUP] RiseUp.net OpenPGP best practices
+   (https://help.riseup.net/en/security/message-security/openpgp/best-practices)
+
+.. [#DEVMANUAL-MANIFEST] Gentoo Development Guide: Manifest
+   (http://devmanual.gentoo.org/general-concepts/manifest/index.html)
+
+.. [#GNUPG-USER] GnuPG Gentoo User Guide
+   (http://www.gentoo.org/doc/en/gnupg-user.xml)
+
+.. [#NISTSP800571] NIST SP 800-57: Recommendation for Key Management:
+   Part 1: General (Revision 3)
+   (http://csrc.nist.gov/publications/nistpubs/800-57/sp800-57_part1_rev3_general.pdf)
+
+.. [#NISTSP800572] NIST SP 800-57: Recommendation for Key Management:
+   Part 2: Best Practices for Key Management Organization
+   (http://csrc.nist.gov/publications/nistpubs/800-57/SP800-57-Part2.pdf)
+
+.. [#ISSUER-ANNOTATE] David Shaw. "Including the entire fingerprint of the
+   issuer in an OpenPGP certification". ietf-openpgp mailing list, 2011-01-17,
+   Message-ID 2885367E-D215-4BE7-983D-C82C55C64B0F\@jabberwocky.com
+   (https://www.mhonarc.org/archive/html/ietf-openpgp/2011-01/msg00004.html)
+
+.. [#ENISA2013] ENISA Algorithms, Key Sizes and Parameters Report,
+   2013 recommendations, version 1.0 (October 2013)
+   (https://www.enisa.europa.eu/activities/identity-and-trust/library/deliverables/algorithms-key-sizes-and-parameters-report)
+
+Copyright
+=========
+Copyright (c) 2013-2019 by Robin Hugh Johnson, Andreas K. Hüttel,
+Marissa Fischer, Michał Górny.
+
+This work is licensed under the Creative Commons Attribution-ShareAlike 4.0
+International License.  To view a copy of this license, visit
+https://creativecommons.org/licenses/by-sa/4.0/.

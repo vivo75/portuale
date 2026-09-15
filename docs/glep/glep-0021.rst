@@ -1,0 +1,186 @@
+---
+GLEP: 21
+Title: User-defined Package Sets
+Author: Tal Peer <coredumb@gentoo.org>,
+        Alec Warner <antarus@gentoo.org>
+Type: Standards Track
+Status: Final
+Version: 1
+Created: 2004-02-22
+Last-Modified: 2016-02-25
+Post-History: 2004-03-06, 2006-09-03
+Content-Type: text/x-rst
+---
+
+Status
+======
+
+Abandoned. Package set support has been added in portage-2.2, but it 
+doesn't match the description in this document in many cases, and the
+document has several major gaps regarding the behavior and restrictions 
+of package sets.
+
+Abstract
+========
+
+In Portage, package sets (formerly known as 'classes' or 'targets')
+are mere groups of packages, grouped together to allow easier updating
+and handling of them. Currently it is impossible to define sets further
+than the two default ones: "system" and "world".
+
+Motivation
+==========
+
+Over the months, quite a few requests for user-defined sets were
+made by users and developers, either by posting bugs, messages to
+mailing lists or on IRC. Usually the response is that this is an
+awesome idea, but no one ever took the time to actually define it
+properly and implement it.
+
+This document offers a specification for the implementation of
+user-defined sets using configuration files similar to the current
+world/system sets use.
+
+Specification
+=============
+
+The proposed implementation uses a one file per set approach, meaning
+each package set is defined in a single file. All set definition files
+will reside in a directory ``/etc/portage/sets/`` and each set's name
+will be its file name. Therefore, if one defines a set in
+/etc/portage/sets/foo-set, the set name will be 'foo-set'. Usual
+package naming rules [#NAME-RULES]_ also apply to sets.
+
+As it is impossible to create two or more files with identical names
+in the same directory, a theoretic conflict between two different sets
+sharing the same name is impossible. However, users may define a
+package set whose name conflicts with one more or packages (for ambiguity
+resolution, see below).
+
+Syntax for the package list file is the same as the world file syntax,
+as described in the Portage manpage [#PORTAGE-MANPAGE]_, with one
+addition: sets may not be 'inherited' by other sets, only packages may
+be listed. There is no limitation to the number of packages in a set
+or to the number of sets a package may belong to.
+
+Using User-defined Sets With Emerge
+--------------------------------------
+
+The user-defined sets will be available either directly or using
+the --package-set option, As in::
+
+	# Basically the same:
+	emerge foo-set
+	emerge --package-set foo-set
+
+The --package-set option is introduced to bypass ambiguities, as
+illustrated in the next example::
+
+	emerge foo 		  # Where foo is both a set and a one or more
+	          		  # existing packages. This will cause emerge to show
+		   		  # the ambiguity, ask us to be more
+				  # specific, and stop.
+	
+	emerge --package-set foo  # So we specify that what we actually
+				  # meant was the package set.
+
+	emerge cat-bar/foo	  # Or we specify the exact package name.
+
+When running emerge with the --pretend option, sets will be
+expanded to the packages they are comprised off in the output, as with
+the current system-defined sets.
+
+Only one set may be passed to portage at time, and sets can not
+be mixed with ordinary packages. Thus, the following snippets are
+all invalid and will result in an error  (assuming ``foo-set`` and 
+``bar-set`` are defined as sets)::
+
+	emerge foo-set glibc
+	emerge bar-set system
+	emerge world foo-set gcc
+
+Compatibility With Other Portage Features
+-----------------------------------------
+
+* Dependencies:
+  Package sets (both system-defined and user-defined) may not be
+  depended on by ordinary packages and eclasses.
+    
+* package.mask:
+  Masking a package set through the ``package.mask`` file is forbidden.
+  In order to 'mask' a package set, one should move it away from the
+  sets directory.
+
+* package.use:
+  USE flags may not be defined for sets in the ``package.use`` file.
+
+Implementation
+==============
+
+The implementation of the package sets concept in Portage should be
+mostly done in portage.py, and only the interface parts should be
+added to emerge itself, to keep the separation between interface and
+logic.
+
+The amount of work needed for implementation is not trivial, but not
+huge either.
+
+Rationale
+=========
+
+The one file per set approach makes it easy to list the sets which are
+defined on a system by just listing the ``/etc/portage/sets``
+directory contents. Additionally, it makes the set lookup process more
+efficient as it only requires to check if a file exists.
+
+I chose the --package-set option over the --set option for explicitly
+telling portage to emerge a set mostly because --set implies setting
+an environment variable, or such.
+
+Allowing sets' USE flags to be manipulated through the ``package.use``
+file would have done more harm than good, for several reasons:
+
+- If a USE flag is turned on (i.e. 'foo') for a set and the same USE
+  flag is turned off (i.e. '-foo'), for a package which is part of
+  the set, it is unclear which setting should take precedence.
+
+- Similarly, if a USE flag is turned on for a set and the same USE flag
+  is turned off for a set that is a subset of the original set, it is
+  unclear which setting should take precedence.
+
+- If a USE flag is defined (either off or on) for a set and a package
+  that belongs in the set is to be emerged, it is unclear whether the
+  USE flag should be defined when emerging the package in question.
+
+Therefore, I have decided it would be better to disallow setting USE
+flags for sets.
+
+Backwards Compatibility
+=======================
+
+Backwards compatibility with the current situation, in which only two
+system-defined sets exist can be kept in one of two ways:
+
+1. Leaving the situation as is - the 'world' and 'system' sets are
+   hard-coded in Portage.
+2. Distributing default 'system' and 'world' files under the
+   ``/etc/portage/sets/`` directory.
+
+Other than that, there are no other backwards compatibility concerns
+involved.
+
+References
+==========
+
+.. [#NAME-RULES] Gentoo Linux Development Policy - Ebuild Policy
+   (https://devmanual.gentoo.org/ebuild-writing/file-format/)
+   
+.. [#PORTAGE-MANPAGE]
+   https://gitweb.gentoo.org/proj/portage.git/tree/man/portage.5
+
+Copyright
+=========
+
+This work is licensed under the Creative Commons Attribution-ShareAlike 3.0
+Unported License.  To view a copy of this license, visit
+https://creativecommons.org/licenses/by-sa/3.0/.

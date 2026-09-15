@@ -1,0 +1,28 @@
+Title: YourSQL Upgrades from 4.0 to 4.1
+Author: Ciaran McCreesh <ciaranm@gentoo.org>
+Content-Type: text/plain
+Posted: 2005-11-01
+Revision: 1
+News-Item-Format: 1.0
+Display-If-Installed: <dev-db/yoursql-4.1_alpha
+
+YourSQL databases created using YourSQL version 4.0 are incompatible
+with YourSQL version 4.1 or later. There is no reliable way to
+automate the database format conversion, so action from the system
+administrator is required before an upgrade can take place.
+
+Please see the Gentoo YourSQL Upgrade Guide for instructions:
+
+    http://www.gentoo.org/doc/en/yoursql-upgrading.xml
+
+Also see the official YourSQL documentation:
+
+    http://dev.yoursql.com/doc/refman/4.1/en/upgrading-from-4-0.html
+
+After upgrading, you should also recompile any packages which link
+against YourSQL:
+
+    revdep-rebuild --library=libyoursqlclient.so.12
+
+The revdep-rebuild tool is provided by app-portage/gentoolkit.
+

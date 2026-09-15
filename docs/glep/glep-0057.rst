@@ -1,0 +1,435 @@
+---
+GLEP: 57
+Title: Security of distribution of Gentoo software - Overview
+Author: Robin Hugh Johnson <robbat2@gentoo.org>
+Type: Informational
+Status: Final
+Version: 1
+Created: 2008-10-22
+Last-Modified: 2022-04-15
+Post-History: 2009-12-01
+Content-Type: text/x-rst
+---
+
+Abstract
+========
+This is the first in a series of 4 GLEPs. It aims to define the actors
+and problems in the Gentoo software distribution process, with a strong
+emphasis on security. The concepts thus developed, will then be used in
+the following GLEPs to describe a comprehensive security solution for
+this distribution process that prevents trivial attacks and increases
+the difficulty on more complex attacks.
+
+Motivation
+==========
+Since at mid-2002 (see endnote: "History of tree-signing in Gentoo"),
+many discussions have taken place on the gentoo-dev mailing list and in
+many other places to design and implement a security strategy for the
+distribution of files by the Gentoo project.
+
+Usually the goal of such proposals was and is to be able to securely
+identify the data provided by Gentoo and prevent third parties (like a
+compromised mirror) from delivering harmful data (be it as modified
+ebuilds, executable shell code or any other form) to the users of the
+Gentoo MetaDistribution.
+
+These strategies can neither prevent a malicious or compromised upstream
+from injecting "bad" programs, nor can they stop a rogue developer from
+committing malicious ebuilds. What they can do is to reduce the attack
+vectors so that for example a compromised mirror will be detected and no
+tainted data will be executed on user's systems.
+
+Gentoo's software distribution system as it presently stands, contains a
+number of security shortcomings. The last discussion on the gentoo-dev
+mailing list [Lauer06]_ contains a good overview of most of the issues.
+Summarized here:
+
+- Unverifiable executable code distributed:
+  The most obvious instance are eclasses, but there are many other bits
+  of the tree that are not signed at all right now. Modifying that data
+  is trivial.
+- Shortcomings of existing Manifest verification.
+  A lack and enforcement of policies, combined with suboptimal support
+  in portage, makes it trivial to modify or replace the existing
+  Manifests.
+- Vulnerability of existing infrastructure to attacks.
+  The previous two items make it possible for a skilled attacker to
+  design an attack and then execute it against specific portions of
+  existing infrastructure (e.g.: Compromise a country-local rsync
+  mirror, and totally replace a package and its Manifest).
+
+Specification
+=============
+Security is not something that can be considered in isolation. It is
+both an ongoing holistic process and lessons learnt by examining
+previous shortcomings.
+
+System Elements
+---------------
+There are a few entities to be considered:
+
+- Upstream. The people who provide the program(s) or data we wish to
+  distribute.
+- Gentoo Developers. The people that package and test the things
+  provided by Upstream.
+- Gentoo Infrastructure. The people and hardware that allow the revision
+  control of metadata and distribution of the data and metadata provided
+  by Developers and Upstream.
+- Gentoo Mirrors. Hardware provided by external contributors that is not
+  or only marginally controlled by Gentoo Infrastructure. Needed to
+  achieve the scalability and performance needed for the substantial
+  Gentoo user base.
+- Gentoo Users. The people that use the Gentoo MetaDistribution.
+
+The data described here is usually programs and data files provided by
+upstream; as this is a rather large amount of data it is usually
+distributed over http or ftp from Gentoo Mirrors. This data is usually
+labeled as "distfiles". Metadata is all information describing how to
+manipulate that data - it is usually called "The Tree" or "The Portage
+Tree", consists of many ebuilds, eclasses and supporting files and is
+usually distributed over rsync. The central rsync servers are controlled
+by Gentoo Infrastructure, but many third-party rsync mirrors exist that
+help to reduce the load on those central servers. These extra mirrors
+are not maintained by Gentoo Infrastructure.
+
+Attacks may be conducted against any of these entities. Obviously
+direct attacks against Upstream and Users are outside of the scope of
+this series of GLEPs as they are not in any way controlled or
+controllable by Gentoo - however attacks using Gentoo as a conduit
+(including malicious mirrors) must be considered.
+
+Processes
+---------
+There are two major processes in the distribution of Gentoo, where
+security needs to be implemented:
+
+- Developer commits to version control systems controlled by
+  Infrastructure.
+- Tree and distfile distribution from Infrastructure to Users, via the
+  mirrors (this includes both HTTP and rsync distribution).
+
+Both processes need their security improved. In [GLEPxx2]_ we will discuss
+how to improve the security of the first process. The relatively
+speaking simpler process of file distribution will be described in
+[GLEP58]_. Since it can be implemented without having to change the
+workflow and behaviour of developers we hope to get it done in a
+reasonably short timeframe.
+
+Attacks against Processes
+-------------------------
+Attacks against the process #1 may be as complex as a malicious or
+compromised developer (stolen SSH keys, rooted systems), or as simple as
+a patch from a user that does a little more than it claims, and is not
+adequately reviewed.
+
+Attacks against the process #2 may be as simple as a single rooted
+mirror, distributing a modified tree to the users of that mirror - or
+some alteration of upstream sources. These attacks have a low cost and
+are very hard to discover unless all distributed data is transparently
+signed.
+
+A simple example of such an attack and a partial solution for eclasses
+is presented in [Goller05]_.
+It shows quite well that any non-Gentoo controlled rsync mirror can
+modify executable code; as much of this code is per default run as root
+a malicious mirror could compromise hundreds of systems per day - if
+cloaked well enough, such an attack could run for weeks before being
+noticed. As there are no effective safeguards right now users are left
+with the choice of either syncing from the sometimes slow or even
+unresponsive Gentoo-controlled rsync mirrors or risk being compromised
+by syncing from one of the community-provided mirrors. We will show that
+protection against this class of attacks is very easy to implement with
+little added cost.
+
+At the level of mirrors, addition of malicious content is not the only
+attack. As discussed by Cappos et al [C08a]_, [C08b]_, an attacker may use
+exclusion and replay attacks, possibly only on a specific subset of
+user to extend the window of opportunity on another exploit.
+
+Security for Processes
+------------------------
+Protection for process #1 can never be complete (without major
+modifications to our development process), as a malicious developer is
+fully authorized to provide materials for distribution. Partial
+protection can be gained by Portage and Infrastructure changes, but the
+real improvements needed are developer education and continued
+vigilance. This is further discussed in [GLEPxx2]_.
+
+This security is still limited in scope - protection against compromised
+developers is very expensive, and even complex systems like peer review
+/ multiple signatures can be broken by colluding developers. There are many
+issues, be it social or technical, that increase the cost of such
+measures a lot while only providing marginal security gains. Any
+implementation proposal must be carefully analysed to find the best
+security to developer hassle ratio.
+
+Protection for process #2 is a different matter entirely. While it also
+cannot be complete (as the User may be attacked directly), we can ensure
+that Gentoo infrastructure and the mirrors are not a weak point. This
+objective is actually much closer than it seems already - most of the
+work has been completed for other things! This is further discussed in
+[GLEP58]_. As this process has the most to gain in security, and the
+most immediate impact, it should be implemented before or at the same
+time as any changes to process #1. Security at this layer is already
+available in the signed daily snapshots, but we can extend it to cover
+the rsync mirrors as well.
+
+Requirements pertaining to and management of keys (OpenPGP or otherwise)
+is an issue that affects both processes, and is broken out into a
+separate GLEP due to the technical complexity of the subject.
+This deals with everything including: types of keys to use; usage
+guidelines; procedures for managing signatures and trust for keys,
+including cases of lost (destroyed) and stolen (or otherwise turned
+malicious) keys.
+
+Backwards Compatibility
+=======================
+As an informational GLEP, this document has no direct impact on
+backwards compatibility. However the related in-depth documents may
+delve further into any issues of backwards compatibility.
+
+Endnote: History of tree-signing in Gentoo
+==========================================
+This is a brief review of every previous tree-signing discussion, the
+stuff before 2003-04-03 was very hard to come by, so I apologize if I've
+missed a discussion (I would like to hear about it). I think there was
+a very early private discussion with drobbins in 2001, as it's vaguely
+referenced, but I can't find it anywhere.
+
+2002-06-06, gentoo-dev mailing list, users first ask about signing of
+ebuilds:
+Message-ID 92340000.1023389790\@krabat.ahsoftware,
+https://archives.gentoo.org/gentoo-dev/message/c113c603ad9f8fa22ff13b1657cdb84c
+
+2003-01-13, gentoo-dev mailing list, "Re: Verifying portage is from
+Gentoo" - Paul de Vrieze (pauldv):
+Message-ID 200301131124.26792.gentoo-user\@devrieze.net,
+https://archives.gentoo.org/gentoo-dev/message/7062d6765b35406b4b8ed6b7c6e8fc28
+
+2003-04, GWN articles announcing tree signing:
+[ http://www.gentoo.org/news/en/gwn/20030407-newsletter.xml#doc_chap1_sect3 ]
+[ http://www.gentoo.org/news/en/gwn/20030421-newsletter.xml#doc_chap1_sect2 ]
+
+2003-04, gentoo-security mailing list, "The state of ebuild signing
+in portage" - Joshua Brindle (method), the first suggestion of signed
+Manifests, but also an unusual key-trust model:
+Message-ID unknown
+https://marc.info/?l=gentoo-security&m=105073449619892&w=2
+
+2003-04, gentoo-core mailing list, "New Digests and Signing -- Attempted
+Explanation"
+::
+
+    Date: Wed, 2 Apr 2003 23:39:05 -0600
+    From: Nick Jones <carpaski@gentoo.org>
+    Message-ID: <20030402233905.A18948@twobit.net>
+
+2003-06, gentoo-core mailing list, "A quick guide to GPG and key
+signing." - This overview was one of the first to help developers see
+how to use their devs, and was mainly intended for keysigning meetups.
+::
+
+    Date: Mon, 30 Jun 2003 14:32:09 +1000 (EST)
+    From: Troy Dack <tad@gentoo.org>
+    Message-ID: <33220.203.10.231.229.1056947529.squirrel@tkdack.bpa.nu>
+
+2003-08-09, gentoo-core mailing list, "Ebuild signing" - status query,
+with an not very positive response, delayed by Nick Jones (carpaski)
+getting rooted and a safe cleanup taking a long time to affect.
+::
+
+    Date: 06 Aug 2003 15:36:34 -0500
+    From: Chris PeBenito <pebenito@gentoo.org>
+    Message-Id: <1060202193.1532.42.camel@chris.pebenito.net>
+
+2003-12-02, gentoo-core mailing list, "Report: rsync1.it.gentoo.org
+compromised"
+::
+
+    Date: Tue, 2 Dec 2003 20:25:57 +0100
+    From: Andrea Barisani <lcars@gentoo.org>
+    Message-ID: <20031202192557.GA11676@sole.infis.univ.trieste.it>
+
+2003-12-03, gentoo-core mailing list, "Signing of ebuilds"
+::
+
+    Date: Wed, 3 Dec 2003 11:15:09 +0100
+    From: Hanno Böck <hanno@gentoo.org>
+    Message-Id: <20031203111509.6b2e414b.hanno@gentoo.org>
+
+2003-12-07, gentoo-core mailing list, "gpg signing of Manifests", thread
+includes the first GnuPG signing prototype code, by Robin H. Johnson
+(robbat2). Andrew Cowie (rac) also produces a proof-of-concept around
+this time.
+::
+
+    Date: Sun, 7 Dec 2003 21:01:03 +0000
+    From: Douglas Russell <puggy@gentoo.org>
+    Message-Id: <200312072101.08245.puggy@gentoo.org>
+
+2004-03-23, gentoo-dev mailing list, "2004.1 will not include a secure
+portage" - Kurt Lieber (klieber). Signing is nowhere near ready for
+2004.1 release, and it is realized that it there is insufficient traction
+and the problem is very large. Many arguments about the checking and
+verification side. First warning signs that MD5 might be broken in the
+near future.
+Message-ID 20040323100824.GV26101\@mail.lieber.org,
+https://archives.gentoo.org/gentoo-dev/message/20968c7c86cd46458e0e3c2911a8dbd4
+
+2004-03-25, gentoo-dev mailing list, "Redux: 2004.1 will not include a
+secure portage" - Robin H. Johnson (robbat2). Yet another proposal,
+summarizing the points of the previous thread and this time trying to
+track the various weaknesses.
+Message-ID 20040325014525.GC29558\@curie-int.orbis-terrarum.net,
+https://archives.gentoo.org/gentoo-dev/message/fc6fc1c97bfae66806a0bfd9a9cf146f
+
+2004-05-31, Gentoo managers meeting, portage team reports that
+FEATURES=sign is now available, but large questions still exist over
+verification policies and procedures, as well as handing of keys.
+[ http://www.gentoo.org/proj/en/devrel/manager-meetings/logs/2004/20040531.txt ]
+
+2005-01-17, gentoo-core mailing list, "Global objective for 2005 :
+portage signing". Thierry Carrez (koon) suggests that more go into
+tree-signing work. Problems at the time later in the thread show that
+the upstream gpg-agent is not ready, amongst other minor implementation
+issues.
+::
+
+    Date: Mon, 17 Jan 2005 11:04:50 +0100
+    From: Thierry Carrez <koon@gentoo.org>
+    Message-ID: <41EB8DC2.6050003@gentoo.org>
+
+2005-02-20, gentoo-dev mailing list, "post-LWE 2005" - Brian Harring
+(ferringb). A discussion on the ongoing lack of signing, and that
+eclasses and profiles need to be signed as well, but this seems to be
+hanging on GLEP33 in the meantime.
+Message-ID 20050220223340.GA3552\@freedom.wit.com,
+https://marc.info/?l=gentoo-dev&m=110893886214157&w=2
+
+2005-03-08, gentoo-core mailing list, "gpg manifest signing stats".
+Informal statistics show that 26% of packages in the tree include a
+signed Manifest. Questions are raised regarding key types, and key
+policies.
+::
+
+    Date: Tue, 8 Mar 2005 12:21:55 +0100
+    From: Torsten Veller <tove@gentoo.org>
+    Message-ID: <20050308113947.GA4dd7c.tv@veller.net>
+
+2005-11-16, gentoo-core mailing list, "Gentoo key signing practices and
+official Gentoo keyring". A discussion of key handling and other
+outstanding issues, also mentioning partial Manifests, as well as a
+comparision between the signing procedures used in Slackware, Debian and
+RPM-based distros.
+::
+
+    Date: Wed, 16 Nov 2005 12:29:46 -0800
+    From: "Robin H. Johnson" <robbat2@gentoo.org>
+    Message-ID: <20051116202946.GA9658@curie-int.vc.shawcable.net>
+
+2005-11-19, gentoo-portage-dev mailing list, "Manifest signing" - Robin
+H. Johnson (robbat2) follows up the previous -core posting, discussion
+implementation issues.
+Message-ID 20051119060127.GA28413\@curie-int.vc.shawcable.net,
+https://archives.gentoo.org/gentoo-portage-dev/message/1ffa48adfce79105cca532c00533c298
+
+2006-05-18, gentoo-dev mailing list, "Signing everything, for fun and for
+profit" - Patrick Lauer (bonsaikitten). Later brings up that Manifest2
+is needed for getting everything right.
+Message-ID 1147988717.32416.51.camel\@localhost,
+https://archives.gentoo.org/gentoo-dev/message/91a60d78bb4822d89f6fcc7b19fd3588
+
+2006-05-19, gentoo-dev mailing list, "Re: Signing everything, for fun and for
+profit" - Robin H. Johnson (robbat2). An introduction into some of the
+OpenPGP standard, with a focus on how it affects file signing, key
+signing, management of keys, and revocation.
+Message-ID 20060519042638.GB18243\@curie-int.vc.shawcable.net,
+https://archives.gentoo.org/gentoo-dev/message/5625b475f201639577cab33cdec58b47
+
+2007-04-11, gentoo-dev mailing list, "Re: *DEVELOPMENT* mail list,
+right?" - Robin H. Johnson (robbat2). A progress report on these very
+GLEPs.
+Message-ID 20070411064055.GA4502\@curie-int.orbis-terrarum.net,
+https://archives.gentoo.org/gentoo-dev/message/cfb032f3a878bcacfa0c4c3d2a0d3e7a
+
+2007-07-02, gentoo-dev mailing list, "Re: Re: Nominations open for the
+Gentoo Council 2007/08" - Robin H. Johnson (robbat2). Another progress
+report.
+Message-ID 20070702233407.GI18068\@curie-int.orbis-terrarum.net,
+https://archives.gentoo.org/gentoo-dev/message/b25efdb57f973e1f53b38eadc55de1ee
+
+2007-11-30, portage-dev alias, "Manifest2 and Tree-signing" - Robin H.
+Johnson (robbat2). First review thread for these GLEPs, many suggestions
+from Marius Mauch (genone).
+::
+
+    Date: Fri, 30 Nov 2007 22:13:43 -0800
+    From: "Robin H. Johnson" <robbat2@gentoo.org>
+    Message-ID: <20071201061343.GG14557@curie-int.orbis-terrarum.net>
+
+2008-04-03, gentoo-dev mailing list, "Re: Monthly Gentoo Council
+Reminder for April" - Ciaran McCreesh (ciaranm). A thread in which
+Ciaran reminds everybody that simply making all the developers sign the
+tree is not sufficient to prevent all attacks.
+Message-ID 20080403130151.12507f1a\@snowcone,
+https://archives.gentoo.org/gentoo-dev/message/8c492855d6e86b05fa399ad055ad6d18
+
+2008-07-01, gentoo-portage-dev mailing list, "proto-GLEPS for
+Tree-signing" - Robin H. Johnson (robbat2). Thread looking for review
+input from Portage developers.
+Message-ID 20080701091226.GN15101\@curie-int.orbis-terrarum.net,
+https://archives.gentoo.org/gentoo-portage-dev/message/0a4b602eb348ac5bf4940320c4f2f9c6
+
+2008-07-12, gentoo-portage-dev mailing list, "proto-GLEPS for
+Tree-signing, take 2" - Robin H. Johnson (robbat2). Integration of
+changes from previous review, and a prototype for the signing code.
+zmedico also posts a patch for a verification prototype.
+Message-ID 20080712084258.GC31199\@curie-int.orbis-terrarum.net,
+https://archives.gentoo.org/gentoo-portage-dev/message/8d867c110b99e3562736907fa0864877
+
+Thanks
+======
+I'd like to thank Patrick Lauer (bonsaikitten) for prodding me
+to keep working on the tree-signing project, as well helping with
+spelling, grammar, research (esp. tracking down every possible
+vulnerability that has been mentioned in past discussions, and
+integrating them in this overview).
+
+References
+==========
+
+.. [C08a] Cappos, J et al. (2008). "Package Management Security".
+    University of Arizona Technical Report TR08-02. Available online
+    from: ftp://ftp.cs.arizona.edu/reports/2008/TR08-02.pdf
+
+.. [C08b] Cappos, J et al. (2008). "Attacks on Package Managers"
+    Available online at:
+    http://www.cs.arizona.edu/people/justin/packagemanagersecurity/
+
+.. [GLEP58] Security of distribution of Gentoo software - Infrastructure
+   to User distribution - MetaManifest
+   https://www.gentoo.org/glep/glep-0058.html
+
+.. [GLEPxx2] Future GLEP on Developer Process security.
+
+.. [GLEPxx3] Future GLEP on GnuPG Policies and Handling.
+
+.. [Goller05] Daniel Goller (morfic). "[RFC] Versioned eclasses".
+   gentoo-dev mailing list, 2005-01-21,
+   Message-ID 41F08453.5070302\@gentoo.org,
+   https://marc.info/?l=gentoo-dev&m=110628152430403&w=2
+
+.. [Lauer06] Patrick Lauer (patrick). "Signing everything, for fun and
+   for profit". gentoo-dev mailing list, 2006-05-18,
+   Message-ID 1147988717.32416.51.camel\@localhost,
+   https://archives.gentoo.org/gentoo-dev/message/91a60d78bb4822d89f6fcc7b19fd3588
+
+Copyright
+=========
+Copyright (c) 2005-2010 by Robin Hugh Johnson.
+
+This work is licensed under the Creative Commons Attribution-ShareAlike 3.0
+Unported License.  To view a copy of this license, visit
+https://creativecommons.org/licenses/by-sa/3.0/.
+
+.. vim: tw=72 ts=2 expandtab:

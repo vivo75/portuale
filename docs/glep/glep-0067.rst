@@ -1,0 +1,633 @@
+---
+GLEP: 67
+Title: Package maintenance structure
+Author: Michał Górny <mgorny@gentoo.org>
+Type: Standards Track
+Status: Final
+Version: 1.1
+Created: 2015-12-13
+Last-Modified: 2021-02-28
+Post-History: 2015-11-03, 2016-05-29, 2021-02-28
+Content-Type: text/x-rst
+---
+
+Abstract
+========
+
+Within this GLEP, the issues with the current package maintainer description
+system are explained, and a new system that aims to solve those issues is
+proposed. The current complex structure is replaced with two well-defined
+maintainer types — people and projects. Herds are removed in favor
+of projects, and project member listings are provided in XML format.
+Maintainer listings in ``metadata.xml`` become uniform, and can be used
+directly to assign bugs.
+
+
+Change log
+==========
+
+v1.1
+  Added the ``proxied`` attribute to the package ``<maintainer/>``.
+
+
+Motivation
+==========
+
+Introduction
+------------
+
+The current system used to declare maintainers in Gentoo has been criticized
+multiple times. A number of mailing list threads raised various issues with it
+and proposed alternatives. The topic has been brought before the Council,
+and was discussed on 2015-10-25 Council meeting (continuation from
+2015-10-11).
+
+The Council meeting has brought two important decisions:
+
+1. ``herds`` were to be deprecated and eventually removed, both in definition
+   and in machine uses.
+
+2. A replacement structure can not be voted ad-hoc, and therefore a new GLEP
+   was to be written providing a complete proposal.
+
+This GLEP is a response to the second decision, aiming to provide a new
+maintainership structure written with the goals of simplicity, flexibility
+and good backwards compatibility.
+
+Synopsis of the current system
+------------------------------
+
+The current system uses two elements in ``metadata.xml`` to describe
+maintainers:
+
+a. ``<maintainer/>`` element that is identified by e-mail address and can have
+   optional name and description,
+
+b. ``<herd/>`` element that is identified by short herd name, and holds
+   no extra information.
+
+The system stated that ``<maintainer/>`` elements always have higher priority
+than ``<herd/>``, except when maintainer descriptions stated otherwise.
+
+This resulted in four different kinds of maintainers being listed:
+
+1. regular people (developers and proxied maintainers), described
+   using ``<maintainer/>``,
+
+2. projects with matching herds, described either using ``<herd/>``,
+   ``<maintainer/>`` or both,
+
+3. herds subordinate to projects or independent of projects, described
+   using ``<herd/>``,
+
+4. projects without matching herd and other e-mail aliases, described
+   using ``<maintainer/>``.
+
+The herds stated using the ``<herd/>`` tag corresponded to herd maintainer
+listings in ``herds.xml`` file. In the past, this file could either list herd
+maintainers explicitly or copied them from a project; the latter has been
+broken by migrating projects to the wiki, however.
+
+The maintainers stated using the ``<maintainer/>`` tag lack any explicit type
+indicator. Usually, project wiki pages or e-mail alias targets were used
+as a reference maintainer list.
+
+There is a special case of ``maintainer-needed@gentoo.org`` e-mail address
+that — when used as maintainer — indicates that the package has no active
+maintainer.
+
+Issues with the current system
+------------------------------
+
+The issues with the current system expressed so far included:
+
+a. *Redundancy and complexity in structure*. Maintainers can be either grouped
+   as herd maintainers, projects or e-mail aliases that do not correspond to
+   either. Herds can be equivalent, subordinate or independent of projects.
+
+b. *Redundancy in member listings*. It is no longer possible to implicitly
+   copy project members to herd maintainers, or the other way around.
+   Therefore, maintainers of herds corresponding to projects have to be listed
+   twice — in ``herds.xml`` and in project wiki pages. Both listings need to
+   be kept in sync.
+
+c. *Redundancy in maintainer listings*. By using two different elements to
+   express maintainers, herd maintenance could be expressed in up to three
+   different ways.
+
+d. *Implicit ordering rules in maintainer listings*. The importance of
+   maintainers is determined by descriptions, then elements used, then actual
+   occurrence order. It is not fully machine-readable.
+
+e. *Unnecessary indirection for bug assignment.* If a package belongs to
+   a herd, one needs to parse ``herds.xml`` to obtain the bug assignment
+   e-mail address corresponding to the herd name.
+
+f. *Unclear and complex member expansion rules*. Maintainers of herd can be
+   determined using ``herds.xml``, unless the herd corresponds to a project
+   which has different member listing on wiki page. Non-herd maintainers can
+   be either people, projects (members from wiki page) or other groups where
+   member listings can't be clearly obtained.
+
+g. *Unclear cross-repository meaning*. The ``herds.xml`` is not clearly
+   defined throughout multiple repository chain, while ``metadata.xml`` is.
+
+
+Specification
+=============
+
+Package maintenance
+-------------------
+
+Each package defines zero or more *maintainers*. Each maintainer can either be
+a *person* or a *project*. Each maintainer is identified by a unique *e-mail
+address* that must correspond to an active bugs.gentoo.org account.
+Optionally, each maintainer can define a human-readable name and maintenance
+description.
+
+Maintainers are described using metadata.xml ``<maintainer/>`` element.
+The type of the maintainer is defined by ``type`` attribute
+of the ``<maintainer/>`` element. The e-mail address, human-readable name
+and maintenance description are placed in ``<email/>``, ``<name/>``
+and ``<description/>`` sub-elements appropriately.
+
+Optionally, a ``proxied`` attribute can be specified having one
+of the three possible values:
+
+- ``yes`` indicating that the maintainer is a proxied maintainer
+  (i.e. is unable to push changes directly)
+
+- ``no`` indicating that the maintainer is a real maintainer (i.e. can
+  push changes directly)
+
+- ``proxy`` indicating that the listed developer is serving only
+  as a proxy for other maintainers
+
+If the attribute is not specified, the default value of ``no``
+is assumed.  If at least one maintainer is listed as a proxied
+maintainer (``proxied="yes"``), then at least one other maintainer
+should be listed as a proxy (``proxied="proxy"``), and vice versa.
+
+.. code:: xml
+
+    <pkgmetadata>
+      <maintainer type="person" proxied="yes">
+        <email>foo@example.com</email>
+        <name>Foo Barsky</name>
+      </maintainer>
+      <maintainer type="person">
+        <email>example@gentoo.org</email>
+        <name>Example Developer</name>
+      </maintainer>
+      <maintainer type="project" proxied="proxy">
+        <email>proxy-maint@gentoo.org</email>
+      </maintainer>
+    </pkgmetadata>
+
+Project structure
+-----------------
+
+The basic project structure is defined in GLEP 39. However, the projects which
+are going to maintain packages have to meet the additional requirement
+of having a unique e-mail address with a corresponding bugs.gentoo.org
+account.
+
+Each project can have zero or more subprojects, from which it can optionally
+inherit members. It is undefined whether a project can have more than one
+parent project. However, the complete project hierarchy must form an acyclic
+directed graph.
+
+The project structure is exported from wiki.gentoo.org into a ``projects.xml``
+file. The file consists of root ``<projects/>`` element which contains one
+or more ``<project/>`` element. Each ``<project/>`` element contains
+the following sub-elements:
+
+- ``<email/>`` element stating the project contact e-mail (must be registered
+  on bugs.gentoo.org),
+- ``<name/>`` element stating the human-readable project name,
+- ``<url/>`` element stating the project homepage URL,
+- ``<description/>`` element shortly describing the project,
+- zero or more ``<subproject/>`` elements listing subprojects of the particular project,
+- zero or more ``<member/>`` elements listing direct project members.
+
+Each ``<subproject/>`` element has the following attributes:
+
+- obligatory ``ref=""`` attribute referencing the subproject by e-mail address
+  (the e-mail address must be equal to the value of ``<email/>`` element
+  of exactly one other ``<project/>``),
+- optional ``inherit-members=""`` attribute whose non-empty value indicates
+  that subproject members are to be considered members of the parent project
+  as well.
+
+Each ``<member/>`` has the following sub-elements:
+
+- ``<email/>`` stating the member's e-mail address,
+- optional ``<name/>`` stating the member's human-readable name,
+- optional ``<role/>`` stating the member's role in team.
+
+In addition, ``<member/>`` can have optional ``is-lead=""`` attribute whose
+non-empty value indicates that the particular member is the project's lead.
+
+.. code:: xml
+
+    <projects>
+      <project>
+        <email>dev-portage@gentoo.org</email>
+        <name>Portage package manager</name>
+        <url>https://wiki.gentoo.org/wiki/Project:Portage</url>
+        <description>Something about Portage</description>
+        <member is-lead="1">
+          <email>example@gentoo.org</email>
+          <name>Example Developer</name>
+          <role>Lead</role>
+        </member>
+        <member>
+          <email>example2@gentoo.org</email>
+          <name>Another Developer</name>
+        </member>
+        <!-- members are not inherited, purely organizational hierarchy -->
+        <subproject ref="tools-portage@gentoo.org"/>
+      </project>
+      <project>
+        <email>tools-portage@gentoo.org</email>
+        <name>Portage-related utilities</name>
+        <url>https://wiki.gentoo.org/wiki/Project:Tools-Portage</url>
+        <description>Maintainers of various common Portage tools</description>
+        <member is-lead="1">
+          <email>example2@gentoo.org</email>
+          <name>Another Developer</name>
+          <role>Lead</role>
+        </member>
+        <member>
+          <email>example@gentoo.org</email>
+          <name>Example Developer</name>
+        </member>
+        <!-- members are inherited -->
+        <subproject ref="some-portage-tool@gentoo.org" inherit-members="1"/>
+      </project>
+      <project>
+        <email>some-portage-tool@gentoo.org</email>
+        <name>Portage-related utility of some kind</name>
+        <url>https://wiki.gentoo.org/wiki/Project:Some-Portage-Tool</url>
+        <description>My random Portage tool</description>
+        <member is-lead="1">
+          <email>example3@gentoo.org</email>
+          <name>Me!</name>
+          <role>Lead</role>
+        </member>
+      </project>
+    </projects>
+
+projects.xml distribution
+-------------------------
+
+The ``projects.xml`` file is placed inside the ``metadata`` directory inside
+the repository, and applies to the repository and all repositories specifying
+it as a master (either directly or indirectly). Appropriately, when a project
+lookup is performed for package, the ``projects.xml`` from the repository
+containing the package is scanned first, and then its masters are scanned
+recursively.
+
+Each project must not be specified more than once in the effective set
+of ``projects.xml`` files applying to a repository. In particular, it is not
+possible to alter or redefine an inherited project in a sub-repository.
+It is recommended that each repository uses a separate namespace (such
+as the hostname part of an e-mail address) for its projects.
+
+Bug assignment
+--------------
+
+The package metadata description is fully self-sufficient for bug assignment.
+The order in which ``<maintainer/>`` elements occur (after applying
+restrictions) indicates the chain of responsibility. A bug is assigned
+to the first maintainer, while all the remaining maintainers are CC-ed.
+
+For packages which have no maintainers, repository-specific bug assignment
+rules apply. In particular, ::gentoo packages with no maintainer are assigned
+to ``maintainer-needed@gentoo.org``.
+
+Maintainer expansion
+--------------------
+
+In order to determine the effective list of maintainers, all project-type
+maintainers are expanded using ``projects.xml``. Each project is matched by
+e-mail address, and replaced by one or more maintainer objects. Project
+members form person-type maintainers, with project lead (if any) having
+authority over remaining project members. Subproject form project-type
+maintainers which are expanded recursively.
+
+
+Rationale
+=========
+
+<herd/> vs <project/> vs <maintainer/>
+--------------------------------------
+
+The use of ``<herd/>`` element to indicate herd maintenance has been
+deprecated by the Council on 2015-10-25, as an extension of deprecating
+the concept of herds. As an alternative, introducing a ``<project/>`` element
+or modifying ``<maintainer/>`` element has been proposed.
+
+The new ``<project/>`` element has been rejected as it meant reintroducing
+the same structure with a different name yet the same problems. The use
+of ``<maintainer/>`` element to indicate all maintainers has the following
+advantages:
+
+1. **Clean database structure.** Since both person- and project-type
+   maintainers are in fact *maintainers*, they should be derived from a single
+   element rather than two disjoint elements.
+
+2. **Clean ordering for bug assignment.** Before, the two elements were
+   assigned weights which considered ``<maintainer/>`` more important than
+   ``<herd/>`` against their usual ordering. Even if new element was
+   introduced without such implicit weight, developers would mistakenly recall
+   the old rules and keep applying them.
+
+3. **More consistent record format**. In the past, some herds/projects were
+   described using the ``<herd/>`` element, some were using
+   the ``<maintainer/>`` element and some even both. Using a single element
+   avoids this inconsistency.
+
+4. **Backwards compatibility.** Re-using an existing, well-supported element
+   means keeping backwards compatibility with existing tools. While their
+   functionality will be limited until they are updated for the new project
+   structure, they at least won't become completely broken.
+
+E-mail address as project identifier
+------------------------------------
+
+There was a discussion whether projects should be identified by short
+identifiers (alike herds) or their e-mail addresses. The e-mail addresses were
+selected because of the following advantages:
+
+a. **Re-use of existing identifiers.** Since herds were deprecated and old
+   project pages removed, there are no longer any official short project
+   identifiers. The identifiers used on Wiki have forced case and certainly
+   aren't short. Introducing additional identifier just for mapping metadata
+   seems unnecessary.
+
+b. **Stand-alone meaningfulness of metadata.** Using e-mail address provides
+   a meaningful information (useful e.g. for contact or bug assignment)
+   directly in metadata. Using another kind of identifier implies
+   the necessity of some transformation or mapping.
+
+c. **Cross-project correctness.** E-mail addresses are globally unique. This
+   means that non-Gentoo projects can have their own repositories, and declare
+   their own projects without risk of short name collision.
+
+d. **Backwards compatibility.** While current tools won't recognize
+   the project-type maintainers as de-facto projects, they will still be able
+   to correctly recognize their e-mail addresses.
+
+Case of maintainer-needed packages
+----------------------------------
+
+In the previous system, ``maintainer-needed@gentoo.org`` e-mail address was
+used to mark packages lacking active maintainer. This solution no longer fits
+the new system since ``maintainer-needed`` is neither a person, nor a project.
+
+While purely technically, a new ``maintainer-needed`` project could be
+created, it wouldn't really fit the conventional project structure.
+Furthermore, it would still carry the special rules indicating that ownership
+by this project actually indicates no maintainer at all.
+
+Instead, the case of no active maintainer is expressed by not listing any
+maintainers which is cleaner semantically. The bug assignment to
+``maintainer-needed@gentoo.org`` is carried through appropriate bug assignment
+rules.
+
+Project structure
+-----------------
+
+The project structure is defined by GLEP 39 and therefore is outside the scope
+of this specification. The ``projects.xml`` mapping attempts to provide
+an off-line copy of the project information stored on Gentoo Wiki, in a format
+similar to the one used for ``herds.xml``.
+
+The basic goal for the format was to provide means for obtaining list of
+effective project members.
+
+The subproject structure aims at defining collective projects where
+the members of a particular project include all members of subprojects. This
+used to be defined as ``<membersof/>`` in ``herds.xml``
+and ``<subproject inheritmembers=""/>`` attribute in old project XML files.
+
+Specifying type="" vs reference to projects.xml
+-----------------------------------------------
+
+It was pointed out that specifying ``type=""`` of a maintainer is redundant
+since the maintainer type can be determined by matching the maintainer's
+e-mail address against ``projects.xml``.
+
+This information was added explicitly to improve readability and avoid
+unnecessary project database lookups for non-project maintainers. Furthermore,
+mis-sync between the project database and metadata maintainer types is
+unlikely since people and projects are not inter-changeable, and we can't
+expect the person's e-mail address to be reused for a new project, or the
+other way around.
+
+Specifying maintainer names vs reference to another XML
+-------------------------------------------------------
+
+It was pointed out that specifying full names in ``metadata.xml`` is redundant
+since each maintainer has a single name that is commonly shared across all
+``<maintainer/>`` occurrences. Instead, an additional database (dictionary)
+could be used to map maintainer e-mail addresses to real names — or real names
+could be dropped entirely.
+
+The support for optional maintainer names was preserved from the old system.
+Specifying names is kept fully optional, and considered a convenience/matter
+of respect rather than technically important information. Furthermore, names
+change rarely unlike e-mail addresses. In case of proxied maintainers, it is
+not uncommon to reference real name when looking for the new maintainer's
+e-mail address.
+
+While an external database of maintainer names would allow consistently
+assigning real names to maintainers, it seems like an overkill. Furthermore,
+it is quite likely that this database would be forced to reside outside the
+repository which would cause more synchronization issues
+and the proxy-maintainer workflow harder. In particular, currently proxied
+maintainers can add themselves to ``metadata.xml`` in a single commit to
+the repository. If external database was used, the database would have to be
+updated in addition to the repository commit.
+
+Proxied maintainers
+-------------------
+
+As of version 1.1, an additional ``proxied`` attribute has been added
+to the ``<maintainer/>`` element for package maintainers.  This is used
+to explicitly distinguish regular developers, proxied maintainers
+and proxies.
+
+The primary purpose is to resolve false positives in the QA report used
+to report leftover proxy-maint project instances, as well as improve
+detection of maintainers without a proxy.  Currently, these checks
+unconditionally assume that all Gentoo developers have commit access,
+and everyone else is a proxied maintainer.  This does not account for
+developers without commit access that maintain packages via a proxy.
+
+The property is added as a separate attribute in order to ensure
+backwards compatibility.
+
+
+Backwards Compatibility
+=======================
+
+New metadata.xml format
+-----------------------
+
+The GLEP preserves almost full backwards compatibility to the current
+``metadata.xml`` format, with the following changes:
+
+1. ``<herd/>`` element is removed. Since it was fully optional, no tools
+   are broken.
+
+2. ``<maintainer/>`` is used to describe both projects and people. This was
+   already the case sometimes, with the limitation of the tools being unable
+   to expand project members. This limitation is extended to all projects
+   in the existing tools, and can be removed through updating tools to support
+   ``projects.xml``.
+
+3. ``<maintainer/>`` is given new ``type=""`` attribute. No known tools refuse
+   ``metadata.xml`` specifications that have extraneous attributes as long
+   as updated DTD is provided.
+
+projects.xml and herds.xml
+--------------------------
+
+The ``projects.xml`` file provides a replacement for ``herds.xml``, fitting
+the new structure. Since a new file is used, the change is fully compatible to
+existing software. The ``herds.xml`` file must be preserved for a transition
+period until all ``<herd/>`` occurrences are removed.
+
+Removing ``herds.xml`` should cause only very limited breakage. The Gentoo
+systems using e.g. CVS checkouts were already missing the file, and therefore
+the tools needed to handle that case gracefully. For improved compatibility,
+a ``herds.xml`` file listing no herds can be distributed for additional
+transition period.
+
+The new ``projects.xml`` file format provides partial compatibility with
+``herds.xml`` file format, aiming for reduced workload while migrating
+to the new system.
+
+Conversion from current system
+------------------------------
+
+The migration to the new system will require two preparatory steps:
+
+1. all existing projects must be ensured to have unique e-mail addresses.
+   Projects sharing the same e-mail address either need to be merged,
+   or be given unique e-mail addresses.
+
+2. All herds need to be converted into projects, subprojects or disbanded
+   (replaced by person-type maintainers).
+
+Afterwards, ``projects.xml`` can be generated correctly from the Wiki and can
+replace ``herds.xml``.
+
+In order to make the current ``metadata.xml`` files compliant to the new
+format, a two-step conversion needs to be performed:
+
+a. all ``<herd/>`` elements need to be replaced with appropriate
+   ``<maintainer/>`` elements, and the element order need to be adjusted
+   correctly. In particular, new ``<maintainer/>`` elements must be placed
+   after existing ``<maintainer/>`` elements, except when maintainer
+   descriptions request otherwise. During a transition period, ``<herd/>``
+   elements may still be supported.
+
+b. All ``<maintainer/>`` elements need to be given appropriate ``type=""``.
+   This could be done via matching ``<maintainer/>`` e-mail addresses to
+   project addresses, and assuming ``project`` whenever there is a match,
+   ``person`` otherwise.
+
+
+Reference implementation
+========================
+
+DTD files
+---------
+
+The reference document type definition files for XML documents specified
+in this GLEP are stored in ``data/dtd.git`` repository [#DTD]_. The DTD
+for ``projects.xml`` is stored as ``projects.dtd`` in master branch
+of the repository [#PROJECTS-DTD]_. The updated DTD for ``metadata.xml``
+is stored as ``metadata.dtd`` in the glep67 branch of the repository
+[#METADATA-DTD]_.
+
+projects.xml generation
+-----------------------
+
+The code used to generate projects.xml is stored in semantic-data-toolkit
+repository [#SEMANTIC-DATA-TOOLKIT]_. The generated file is available
+from api.gentoo.org [#PROJECTS-XML]_.
+
+metadata.xml migration
+----------------------
+
+The tools used to migrate existing metadata.xml files to the new format
+are provided by the herdfix project [#HERDFIX]_. The current migration results
+can be seen on Gentoo GitHub PR #559 [#MIGRATION]_.
+
+The migration is done in four steps, using separate script for each step:
+
+1. preliminary cleanup (needed because lxml does not preserve original use
+   of single vs double quotes),
+
+2. replacement of all ``<herd/>`` elements,
+
+3. removal of remaining ``maintainer-needed@g.o`` entries (now to be implicit
+   empty maintainer list),
+
+4. setting of ``type=`` on all ``<maintainer/>`` items.
+
+Each ``<herd/>`` will be replaced, based on herd maintainers' decision or lack
+of it, with:
+
+a. a project maintainer,
+
+b. individual inline list of current herd maintainers,
+
+c. no maintainers (effectively leaving the package to the other maintainers
+   or dropping it to maintainer-needed).
+
+Portage
+-------
+
+Due to high backwards compatibility, no changes in Portage are required to use
+the new system. However, the glep67 branch of mgorny's fork of Portage
+[#PORTAGE]_ contains improvements for GLEP 67 support. In particular,
+the branch adds explicit ``maint_type`` attribute to ``_Maintainer`` objects,
+and removes ``herds.xml`` repoman checks (which would be inactive with removed
+``herds.xml`` anyway).
+
+The ``metadata.xml`` conformance with the new system would be checked
+implicitly once ``metadata.dtd`` is updated. Additional type-to-projects.xml
+checks can be added in the future.
+
+
+References
+==========
+
+.. [#DTD] https://gitweb.gentoo.org/data/dtd.git
+
+.. [#PROJECTS-DTD] https://gitweb.gentoo.org/data/dtd.git/tree/projects.dtd
+
+.. [#METADATA-DTD] https://gitweb.gentoo.org/data/dtd.git/tree/metadata.dtd?h=glep67
+
+.. [#SEMANTIC-DATA-TOOLKIT] https://gitweb.gentoo.org/sites/wiki/semantic-data-toolkit.git
+
+.. [#PROJECTS-XML] https://api.gentoo.org/metastructure/projects.xml
+
+.. [#HERDFIX] https://bitbucket.org/mgorny/herdfix
+
+.. [#MIGRATION] https://github.com/gentoo/gentoo/pull/559
+
+.. [#PORTAGE] https://github.com/mgorny/portage/tree/glep67
+
+
+Copyright
+=========
+
+This work is licensed under the Creative Commons Attribution-ShareAlike 3.0
+Unported License.  To view a copy of this license, visit
+https://creativecommons.org/licenses/by-sa/3.0/.

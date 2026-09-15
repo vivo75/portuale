@@ -1,0 +1,360 @@
+---
+GLEP: 79
+Title: Gentoo OpenPGP Authority Keys
+Author: Michał Górny <mgorny@gentoo.org>
+Type: Standards Track
+Status: Final
+Version: 1
+Created: 2019-02-24
+Last-Modified: 2019-05-13
+Post-History: 2019-02-24
+Content-Type: text/x-rst
+Requires: 63
+---
+
+Abstract
+========
+This GLEP proposes using Authority Keys to provide developer key
+validity proofs that are compatible with web of trust.  The signatures
+on ``@gentoo.org`` UIDs are automatically maintained, and user can
+follow the current set of valid keys by importing and trusting a single
+Authority Key.  The system operates within standard features of GnuPG
+and requires only minimal setup from the user.
+
+
+Motivation
+==========
+All the recent efforts on improving OpenPGP usage in Gentoo were focused
+on internal usage and distribution.  The existing policies and tooling
+are sufficient to account for verify specific usage, including commit
+signing (with both internal and user-oriented verification via custom
+tools) or release media verification.  However, they do not provide
+for rapid OpenPGP deployment for secure communications usage.
+
+The Gentoo webservers distribute both convenient key bundles
+and individual keys via Web Key Directory.  While in both cases
+the transfer is secured via HTTPS, providing authenticity verification
+via PKI/DNSSEC, those channels are meant to *distribute* the keys
+and not provide implicit guarantees on their *validity*.  For example,
+they provide no guarantees that the user identifiers on the keys are
+legitimate.  [#KEY-BUNDLES]_
+
+Internally, Gentoo's LDAP directory serves as the canonical source
+of information on key validity.  It stores a list of key fingerprints
+for each Gentoo developers, and therefore allows the system to establish
+which keys are acceptable in context of a specific developer.  However,
+the LDAP directory is not available to the public and therefore is only
+suitable for internal infrastructure use.  [#LDAP-GUIDE]_
+
+The Gentoo website is focused on service keys and not individual
+developer keys.  While it could easily be amended with full fingerprints
+of all developer keys, the necessity of manually verifying such a large
+number of keys would be inconvenient to the end user.
+[#WWW-SIGNATURES]_
+
+The key package provided in the Gentoo repository is also focused
+on service keys, and has limited value in verifying key validity
+(currently, it assumes all UIDs on all keys in the keyring are valid).
+Providing a package with developer keys would both require frequent
+semi-manual updates, and establishing a more precise validity model.
+[#KEY-PACKAGE]_
+
+Gentoo-keys project provides so-called seed files that carry enough
+information to establish key validity, and are authenticated via HTTPS.
+However, they rely on installing custom software that does not integrate
+well with regular use of GnuPG e.g. in mail clients, and that is not
+easily usable in other systems.  [#GENTOO-KEYS]_
+
+The Authority Key proposal aims to provide a more standard way of
+establishing validity of Gentoo developer keys.  It builds upon the web
+of trust model, requiring no special software and minimal setup from end
+users.
+
+
+Specification
+=============
+Purpose and usage
+-----------------
+The purpose of the Authority Keys is to provide an automatically issued
+signatures on Gentoo developer OpenPGP keys, based on the information
+provided internally in the Gentoo LDAP directory.  The service
+is provided for all active Gentoo developers, from the moment of their
+recruitment.
+
+Whenever a developer account is created, reactivated, renamed or has
+a new key fingerprint added, a signature is automatically created
+on the appropriate ``@gentoo.org`` UIDs and pushed to the keyservers.
+Whenever an old signature is about to expire, a new one is automatically
+created.  Whenever a developer account is disabled, renamed or has
+a fingerprint removed, the signatures from obsolete UIDs are
+automatically revoked.
+
+The signatures are issued only on the UIDs matching the Gentoo
+developer's ``@gentoo.org`` mailbox address, on keys whose primary key
+fingerprints are listed in Gentoo LDAP ``gpgfingerprint`` records.  Keys
+missing such an UID are ignored.  *Names on the relevant user
+identifiers are not being verified*.  The signatures are issued with
+an expiration date of 1 year from being issued.
+
+
+L1 and L2 keys
+--------------
+The Authority Keys are issued in two layers, appropriately called L1
+and L2.
+
+The single L1 Authority Key is used only to (manually) certify the L2
+Keys, and is kept securely offline following the Infrastructure policies
+on protecting primary keys.  The fingerprint of this key is published
+on the Gentoo website and users are requested to sign this key to enable
+key validity via Authority Keys.
+
+The L2 Authority Keys are used directly to sign developer keys.  Since
+they are used in an automated service, they are exposed to attacks.
+They are trust-signed by the L1 key and can be revoked and rotated more
+frequently than the L1 key.
+
+This dual-layer model aims to combine improved security with user
+convenience.  While the individual Gentoo keys are signed by the L2 key,
+the users sign only the L1 key and the validity is established via chain
+L1 → L2 → developer key.  This makes it possible to replace the L2 key
+if it ever becomes compromised without requiring the users to
+reestablish trust.  Since the replacement key will be also signed
+by the L1 key (provided that it was not compromised), the validity
+of developer keys will remain established.
+
+
+Validating the L1 key
+---------------------
+Establishing the authenticity of the L1 Authority Key is essential
+to the system.  Initially, the users will be able to determine
+the authenticity via comparing the key fingerprint with the one
+published on the website.  This will shift the authenticity verification
+to HTTPS (PKI/DNSSEC).
+
+However, at the same time users are encouraged to sign the key upon
+verifying it.  This will effectively make it possible to establish key's
+validity via OpenPGP web of trust.
+
+
+Rationale
+=========
+Authority Key model vs web of trust
+-----------------------------------
+The regular web of trust model relies on individuals verifying
+the Gentoo developer identity and access to the particular
+``@gentoo.org`` e-mail address.  The particular UID is considered valid
+if a sufficient number of people trusted by the user in question have
+confirmed the developer's identity.  This specifically relies on being
+able to establish a chain of trust between the developer and user.
+
+At the moment, many of the existing Gentoo developers did not even
+establish a chain of trust between one another, not to mention web
+of trust coverage that would make it feasible for users to reach any
+specific developer.  Efforts towards improving that were rejected
+by the developers, mostly based on argumentation that many developers
+find it impossible to meet any other community member for the purpose
+of identity verification.
+
+The Authority Key model, on the other hand, assumes that there is
+a single trusted authority that verifies Gentoo developers' keys.
+The user verifies the key representing this authority and trusts it.
+The validity of keys used by all developers is established via a single
+point of trust.
+
+The procedure of establishing the validity of a specific key does not
+involve the necessity of meeting anyone or verifying identity.  While
+the validity is exposed in a manner compatible with web of trust, it is
+verified against LDAP which implicitly proves authenticity of the keys.
+
+Therefore, the Authority Key model is much easier to set up.  The user
+merely needs to verify a single key and trust it, while pure WoT would
+probably require trusting multiple third party identities.  It is also
+more secure as it limits the attack vector to a single key rather than
+one of potentially large number of keys that need to be trusted by
+the user.  If the user decides to stop trusting ``@gentoo.org`` UIDs,
+the validity can easily be reverted by disabling the single Authority
+Key.
+
+
+Authority Key vs gentoo-keys
+----------------------------
+The gentoo-keys project provides seed data that is sufficient to verify
+the authenticity of the keys.  However, this data uses entirely custom
+format and therefore requires special tooling to process.  This tooling
+has not been packaged for any other Linux distribution or operating
+system, and is non-trivial to install as unprivileged user.
+
+The Authority Key model is based entirely on built-in GnuPG features.
+It does not require any special tooling to run.  The necessary bootstrap
+can be done manually via GnuPG command-line facilities.  Eventually,
+even that may become unnecessary if the Authority Key is covered via
+web of trust.
+
+Furthermore, gentoo-keys seed data currently requires manual updates.
+The Authority Key system is automated, and therefore subject to smaller
+delays in operation.
+
+
+Developer coverage
+------------------
+In the original proposal, it was debated whether new developers should
+be subject to grace period during which their keys would not be signed.
+However, no arguments were brought to support such a period,
+and therefore the GLEP assumes all developers are covered as long
+as they are considered active Gentoo developers.
+
+Since only ``@gentoo.org`` e-mail addresses are under Gentoo control
+and developer identities outside the distribution are outside the scope
+of this project, only UIDs matching the respective developer addresses
+are signed.  This is meant to prevent the developers from forging
+somebody else's identity.
+
+The developers' real names are not verified.  Firstly, the purpose
+of this project is to establish association between keys and specific
+Gentoo developers, whose primary identification is the nickname used
+in Gentoo.  The exact real name is irrelevant to the validity in this
+context.  Secondly, comparing real names between LDAP and user
+identifiers would be non-trivial and most likely cause a number of
+developers being silently rejected due to e.g. modified name spelling.
+
+
+caff verification model
+-----------------------
+During the initial debate, using a model similar to Debian's caff tool
+was suggested.  In this model, new signatures are sent encrypted
+to the developers rather than uploaded straight to keyservers.
+Developers need to decrypt and add them to their keys themselves.
+[#CAFF]_
+
+The main purpose of the caff model is to assist users in verifying
+e-mail addresses of the UIDs they are about to sign.  By sending
+an encrypted e-mail, this model verifies that the recipient is both
+able to receive mail at a specific address and decrypt messages
+encrypted using the specified key.  Since the message contains complete
+signature ready to be imported, the key signing process can be completed
+entirely by the recipient and the sender does not need to be concerned
+past sending it.
+
+However, there seems to be no clear reason to employ this model here.
+A reasonable assumption can be made that if one is able to access
+the LDAP directory as a particular Gentoo developer, one is also able
+to access the developer's mailbox.  This considered, verifying
+the e-mail address in caff fashion is redundant.
+
+Furthermore, implementing this model increases complexity both server-
+and client-side.  The server would need to be entirely stateful to avoid
+sending duplicate mails, and at the same time it would need to permit
+re-requesting signature e-mails.  The developers would need to manually
+import the signature and send it to keyservers.
+
+It is quite probable that some of the less active developers would be
+permanently excluded by being unaware or uninterested in participating
+in the new system.  Furthermore, signature expirations would cause
+potentially extensive periods of key invalidity to occur (between
+signature expiration and import of the new one).  During those periods,
+users' ability to mail developers securely would be hindered.
+
+
+Dual-layer model
+----------------
+The dual-layer Authority Key model is established in order to combine
+security with needed automation.  The L1 Key provides higher level
+of security, at the cost of requiring manual operation.  The L2 Keys are
+suitable for automated use but that implies they're exposed to attacks.
+
+If the model was based on a single key and that key was compromised,
+the key would have to be revoked and replaced with a new one.  All users
+would have to fetch the new key and validate it independently to restore
+the developer key validity.
+
+Using two keys introduces a middle link in the trust chain that can be
+replaced easily.  Users trust the L1 Key which is unlikely to be
+compromised.  The trust on L2 Key is implicitly provided by the L1 Key,
+and users do not need to be specifically concerned about it.  If L2 Key
+is compromised, the Infrastructure developers can replace it and restore
+the trust via (non-compromised) L1 Key.  Users only have to fetch
+the new key and validity is restored.
+
+
+Security considerations
+-----------------------
+The user needs to be able to verify the authenticity of the L1 Key.
+This can be done in one of two ways:
+
+a. via comparing the fingerprint against the record on Gentoo website.
+   This relies on the security of Gentoo web servers, and the website
+   content repository.  From user side, authenticity relies on PKI
+   and/or DNSSEC, and possibly any other future HTTPS protection
+   mechanisms.
+
+b. via web of trust, provided the user trusts someone who verified
+   the key first.  In this case, the authenticity relies entirely
+   on the web of trust model, and is subject to attacks specific to it
+   (e.g. to wrongly trusting a malicious person).
+
+The L1 Key itself is protected from being compromised via current
+Infrastructure best practices.  At this moment, this involves password
+protection and offline storage.  If the key ever becomes compromised,
+the procedures involve revoking it and announcing the problem.
+
+The L2 Keys lack this kind of protection by design.  If they become
+compromised, the procedure involves revoking the key quickly
+and replacing it with a new one.
+
+In both cases, the revocation procedure relies on the user periodically
+refreshing keys against reliable sources.  Typically this involves using
+SKS keyservers over HKPS which in turn relies on PKI to prevent a third
+party from intercepting propagation of revocations.
+
+The validity of developer key UIDs is established via signatures made
+by the L2 Key.  If UIDs become no longer valid, the signatures are
+revoked in order to invalidate them.  This also relies on users
+periodically pulling keyservers for developer key updates.
+
+Additionally, signatures are made with one year expiration time.
+In the extremely unlikely case of scripts failing to revoke
+the particular signature, it will expire automatically.
+
+
+Backwards Compatibility
+=======================
+This proposal is established independently of existing solutions,
+and does not affect them.
+
+
+Reference Implementation
+========================
+The reference tooling for maintaining Authority Key signatures is
+published as gentoo-authority-key project.  [#GENTOO-AUTHORITY-KEY]_
+
+
+References
+==========
+.. [#KEY-BUNDLES] Directory listing including .gpg key bundles
+   (https://qa-reports.gentoo.org/output/)
+
+.. [#LDAP-GUIDE] Project:Infrastructure/LDAP Guide - Gentoo Wiki
+   (https://wiki.gentoo.org/wiki/Project:Infrastructure/LDAP_Guide)
+
+.. [#WWW-SIGNATURES] Release media signatures - Gentoo Linux
+   (https://www.gentoo.org/downloads/signatures/)
+
+.. [#KEY-PACKAGE] app-crypt/openpgp-keys-gentoo-release – Gentoo Packages
+   (https://packages.gentoo.org/packages/app-crypt/openpgp-keys-gentoo-release)
+
+.. [#GENTOO-KEYS] Project:Gentoo-keys - Gentoo Wiki
+   (https://wiki.gentoo.org/wiki/Project:Gentoo-keys)
+
+.. [#CAFF] caff - Debian Wiki
+   (https://wiki.debian.org/caff)
+
+.. [#GENTOO-AUTHORITY-KEY] mgorny/gentoo-authority-key: Script to
+   automatically sign developer keys using OpenPGP authority key
+   (https://github.com/mgorny/gentoo-authority-key)
+
+
+Copyright
+=========
+This work is licensed under the Creative Commons Attribution-ShareAlike 3.0
+Unported License. To view a copy of this license, visit
+https://creativecommons.org/licenses/by-sa/3.0/.

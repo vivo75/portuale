@@ -1,0 +1,315 @@
+---
+GLEP: 82
+Title: Repository configuration file (layout.conf)
+Author: Michał Górny <mgorny@gentoo.org>
+Type: Standards Track
+Status: Final
+Version: 1.2
+Created: 2021-05-19
+Last-Modified: 2021-09-12
+Post-History: 2021-05-19, 2021-06-18, 2021-08-01
+Content-Type: text/x-rst
+---
+
+Abstract
+========
+
+The ``metadata/layout.conf`` file format is specified as used by Portage
+and pkgcore.  A standard set of configuration keys is described
+including the keys currently used in the Gentoo repository.
+
+
+Motivation
+==========
+
+The ``metadata/layout.conf`` file was first added to the Gentoo
+repository in Oct 2011, to facilitate setting of hashes used
+in Manifest2 files.  In Mar 2012, it was used to indicate the transition
+to the new ``md5-dict`` cache format.  In Jul 2013, it started being
+used to indicate the repository's masters and effectively became
+obligatory for all repositories.
+
+Today, ``layout.conf`` is used for various repository configuration
+knobs that can be expressed as simple values and therefore
+do not justify adding new files to the repository.  This primarily
+involves the configuration of development tools but also includes a few
+keys relevant to the behavior of the package manager.
+
+However, ``layout.conf`` is currently not covered by any formal
+specification.  The PMS neglects its existence entirely, and the keys
+used are roughly defined by their first use of Portage or pkgcore.
+This GLEP aims to overcome this by providing a formal specification
+for the file, as well as an up-to-date list of permitted configuration
+keys.
+
+
+Specification
+=============
+
+layout.conf file format
+-----------------------
+
+Every ebuild repository must contain a ``metadata/layout.conf`` file.
+The file uses a line-oriented key-value format::
+
+    # comments are allowed
+    key = value
+    key2 = value2
+
+Lines starting with a hash sign (``#``) represent comments and are
+ignored, as are lines consisting entirely of whitespace.
+
+Key can be any string and must not contain spaces.  The exact form
+of value depends on the key.  For some keys, the value is permitted
+to contain spaces, and it must not be quoted.  In some cases an empty
+value is permitted.  The whitespace between the elements is optional
+and is ultimately stripped.  Every key must occur no more than once
+in the file.
+
+
+Configuration keys
+------------------
+
+This GLEP specifies a number of standard configuration keys.  New keys
+may be added to it in the future.  It is strongly recommended that any
+new keys are added to the specification before being used.
+
+The package manager can implement a subset of the listed keys.  Unknown
+keys should be ignored.
+
+
+The following keys must be present in a ``layout.conf`` file:
+
+masters = <space-separated repository names>
+  Specifies the master repositories of this repository.  For stand-alone
+  repositories, this must be set to an empty value.  Otherwise, it can
+  list one or more repositories, separated by spaces.  This key must
+  be specified.
+
+  Examples::
+
+      # most common case
+      masters = gentoo
+      # stand-alone repository
+      masters =
+      # multiple masters
+      masters = gentoo python
+
+
+The following keys are optional:
+
+manifest-hashes = <space-separated hash names>
+  Specifies the list of hashes that should be used for new distfiles
+  in the Manifest files.  The development tools may create a subset
+  of the specified hashes if it is not updating the checksums for
+  the specified distfile, or does not support the hash in question.
+  The hash names are specified in GLEP 74.  [#GLEP74]_  The default
+  set of hashes is implementation-defined.
+
+  Example::
+
+      manifest-hashes = BLAKE2B SHA512
+
+manifest-required-hashes = <space-separated hash names>
+  Specifies the list of hashes that must be used in Manifest files.
+  The development tools must support all the hashes listed there,
+  and update distfile checksums to use these hashes (refetching
+  if necessary).  This must be a subset of manifest-hashes.  If not
+  specified, all hashes from manifest-hashes (or the default set)
+  are considered required.
+
+use-manifests = ``strict``, ``true`` or ``false``
+  Indicates the policy for creating and using Manifest files.  If set
+  to ``strict``, Manifest files are created and files are required to
+  match digests found in Manifests.  If set to ``true``, Manifests
+  are created but digest mismatches are ignored.  If set to ``false``,
+  Manifests are not used at all.  The default is ``strict``.
+
+update-changelog = ``true`` or ``false``
+  Indicates whether the development tools should write ChangeLog files.
+  The default is ``false``.
+
+cache-formats = <space-separated format names>
+  Specifies one or more cache formats used by the repository.
+  The currently defined values are ``pms`` for the original format
+  specified in the PMS and ``md5-dict`` for the md5-dict format
+  introduced in Portage 2.2.0_alpha68.  The default is
+  implementation-defined.
+
+  Examples::
+
+      # modern repo
+      cache-formats = md5-dict
+      # backwards compatibility case
+      cache-formats = md5-dict pms
+
+eapis-deprecated = <space-separated EAPI names>
+  Specifies one or more EAPIs that are to be considered deprecated
+  by the development tools for use in ebuilds, i.e. their use should
+  trigger a warning.  If not specified, no EAPIs are deprecated.
+  This key does not apply to EAPI use in profiles.
+
+  Example::
+
+      eapis-deprecated = 0 1 2 3 4
+
+eapis-banned = <space-separated EAPI names>
+  Specifies one or more EAPIs that are to be considered banned
+  by the development tools for use in ebuilds, i.e. their use should
+  be blocked.  If not specified, no EAPIs are banned.  This key
+  does not apply to EAPI use in profiles.
+
+eapis-testing = <space-separated EAPI names>
+  Specifies one or more EAPIs that must not (yet) be used in ebuilds
+  with stable keywords, i.e. development tools should block their use
+  in such ebuilds.
+
+profile-eapis-deprecated = <space-separated EAPI names>
+  Specifies one or more EAPIs that are to be considered deprecated
+  by the development tools for use in profiles, i.e. their use
+  in any of the profiles listed in ``profiles/profiles.desc`` or their
+  parent profiles should trigger a warning.  If not specified, no EAPIs
+  are deprecated.
+
+profile-eapis-banned = <space-separated EAPI names>
+  Specifies one or more EAPIs that are to be considered banned
+  by the development tools for use in profiles, i.e. their use
+  in any of the profiles listed in ``profiles/profiles.desc`` or their
+  parent profiles should be blocked.  If not specified, no EAPIs
+  are banned.
+
+repo-name = <string>
+  Specifies the repository name.  If specified, it must be equal
+  to the contents of ``profiles/repo_name``.  If not specified,
+  it defaults to the same value.  Discouraged.
+
+aliases = <space-separated names>
+  Specified one or more additional names that can be used to reference
+  the repository (e.g. in repository dependencies).  If not specified,
+  no aliases are defined.
+
+  Example::
+
+      # gen2 is a fork of Gentoo that can be used in place of the Gentoo
+      # repository
+      repo-name = gen2
+      aliases = gentoo
+
+thin-manifests = ``true`` or ``false``
+  If enabled, Manifest files in the package directory must contain only
+  ``DIST`` entries.  If disabled, Manifest files in the package
+  directory must list digests for all files found in the package
+  directory and the files directory.  The default is ``false``.
+
+sign-commits = ``true`` or ``false``
+  Indicates whether git commits are to be signed (using ``git commit
+  --gpg-sign``.  The default is ``false``.
+
+sign-manifests = ``true`` or ``false``
+  Indicates whether individual package Manifests should be PGP-signed.
+  Note that this refers to the historical behavior of signing individual
+  Manifests, not the GLEP 74 behavior of signing the top-level Manifest.
+  [#GLEP74]_  The default is ``true`` if PGP signing is configured.
+
+properties-allowed = <space-separated property tokens>
+  Specifies the list of ``PROPERTIES`` tokens that are permitted
+  to be used in ebuilds.  If present, the development tools should issue
+  a warning if ``PROPERTIES`` contains any tokens that are not listed
+  here.  If not specified, all tokens are permitted.
+
+  Example::
+
+      properties-allowed = live
+
+restrict-allowed = <space-separated restrict tokens>
+  Same as properties-allowed, except for ``RESTRICT``.
+
+profile-formats = <space-separated format names>
+  Specifies the format used by profiles and/or extensions to it.
+  The default is ``pms`` indicating the format specified in the PMS.
+  Other values are implementation-defined.
+
+  Examples::
+
+      profile-formats = portage-1
+      profile-formats = portage-2 profile-set
+
+
+Complete example
+----------------
+
+The following is an example configuration for a git repository with
+Gentoo set as a master::
+
+    masters = gentoo
+
+    # git: do not use ChangeLog, use thin, unsigned Manifests
+    update-changelog = false
+    thin-manifests = true
+    sign-manifests = false
+
+    # force the new md5-dict cache format
+    cache-formats = md5-dict
+
+
+Rationale
+=========
+
+This GLEP is written almost 10 years after ``layout.conf`` was
+originally introduced.  This made it necessary to write it in such a way
+that both the modern and historical implementations in Portage
+and pkgcore, as well as the use in the Gentoo repository
+and a reasonably large subset of the other repositories would remain
+compliant.
+
+The historical default of assuming ``masters = gentoo`` when unspecified
+is omitted as it is not portable and verbosely deprecated for many
+years in Portage.  All repositories are required to explicitly specify
+their masters, or an empty value if they are stand-alone.
+
+The default for Manifest hashes and cache formats are left to be
+implementation-defined, as the defaults changed over time and do not
+match between package managers.  In particular, Portage attempts to
+autodetect the cache format currently used in a given repository.
+
+The repo-name key has been originally added as an alternative to
+``profiles/repo_name``.  However, the latter file is still required
+for PMS compliance.  Furthermore, given that it is much easier to parse,
+there seems to be no appealing reason to work towards replacing that
+file.  This means that for all practical reasons, the repo-name key
+is redundant and is listed here for completeness only.
+
+The profile-formats key has been introduced to permit Portage-specific
+extensions to the profile directory without having to introduce custom
+EAPIs.  The exact extensions are considered outside the scope of this
+specification.
+
+
+Backwards Compatibility
+=======================
+
+The existing implementations found in Portage and pkgcore conform
+to this specification, so does the ``metadata/layout.conf`` file
+found in the Gentoo repository.
+
+
+Reference Implementation
+========================
+
+The support for ``metadata/layout.conf`` is already a part of Portage
+and pkgcore.
+
+
+References
+==========
+
+.. [#GLEP74] GLEP 74: Full-tree verification using Manifest files
+   (https://www.gentoo.org/glep/glep-0074.html)
+
+
+Copyright
+=========
+
+This work is licensed under the Creative Commons Attribution-ShareAlike 4.0
+International License. To view a copy of this license, visit
+https://creativecommons.org/licenses/by-sa/4.0/.

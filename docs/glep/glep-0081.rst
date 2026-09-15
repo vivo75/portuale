@@ -1,0 +1,221 @@
+---
+GLEP: 81
+Title: User and group management via dedicated packages
+Author: Michał Górny <mgorny@gentoo.org>,
+        Michael Orlitzky <mjo@gentoo.org>
+Type: Standards Track
+Status: Final
+Version: 1.1
+Created: 2019-05-29
+Last-Modified: 2019-12-21
+Post-History: 2019-05-29, 2019-07-08, 2019-12-10
+Content-Type: text/x-rst
+Replaces: 27
+---
+
+Abstract
+========
+
+A new approach for user/group management is proposed.  Regular packages
+in dedicated categories are used to represent and create user and group
+accounts.  Dependencies are used to request users and group from within
+regular packages, and to track their usage.
+
+
+Changes
+=======
+
+v1.1
+  The policy part was removed from the GLEP, in order to make it a tree
+  policy.  The GLEP is now purely technical specification.
+
+
+Motivation
+==========
+
+User management in Gentoo is currently ad-hoc.  Users and groups are
+created through calling system tools directly in packages needing them.
+There is no systematic way of tracking which packages need specific
+users or groups, and determining which ones are obsolete.  Coordinating
+properties of users and groups used by multiple packages must be done
+manually by developers.
+
+GLEP 27 originally attempted to address the problem.  Posted in 2004,
+it never had reached the reference implementation state, and became
+obsolete.  [#GLEP27]_
+
+A good system user and group management proposal should address:
+
+1. Tracking usage of users and groups, and determining which ones
+   are obsolete.
+
+2. Sharing users and groups reliably between different packages.
+
+3. Maintaining fixed UIDs/GIDs that are consistent between different
+   systems.
+
+4. Providing local overrides for user/group properties.
+
+5. Ensuring that users and groups are not created unnecessarily
+   at build time.
+
+6. Providing support for centralized account management (e.g. LDAP).
+
+At the same time, the proposal should avoid unnecessary complexity
+to avoid sharing the fate of GLEP 27.  This proposal aims to address
+those points without requiring a new EAPI or any changes in the package
+manager.
+
+
+Specification
+=============
+
+Logical structure
+-----------------
+
+In this proposal, system users and groups are represented by regular
+packages.  Those packages logically represent the ownership of
+the respective users and group, and technically implement their
+creation.
+
+User packages are placed in ``acct-user`` category.  Each user package
+defines the properties of the particular user, and must be named after
+the user it creates.  It must depend at build and run time on the groups
+the user belongs to.
+
+Group packages are placed in ``acct-group`` category.  Each group
+package defines the properties of the particular group, and must be
+named after the group it creates.
+
+All user and group packages must define preferred fixed UIDs/GIDs,
+and they must be unique within the repository.  The packages should
+indicate whether the value needs to be strictly enforced, or whether
+another UID/GID is acceptable when the user exists already or requested
+UID/GID is taken.
+
+Packages needing a specific user or group use dependencies to pull
+the required user/group packages.  If the user is needed at build time,
+a build time dependency (``DEPEND``) must be used.  If the user is
+needed at install and/or run time, a run time dependency (``RDEPEND``)
+must be used.
+
+
+Maintaining users/groups
+------------------------
+
+The primary technical function of user and group packages is to create
+the users and groups.  This is done via invoking the respective system
+tools at ``pkg_preinst`` phase.  This is done only if the user/group
+does not exist on the system already.
+
+If the user or group exists already, the package performs necessary
+modifications in order to meet requested properties.  This includes
+updating user's home directory path (but not moving the directory
+itself), shell and/or group membership.  However, UID/GID is not
+modified.
+
+The package must not remove users/groups.  When the account is no longer
+needed, the tooling must ensure that it is locked from access.
+Appropriately, the packages must be able to reenable users when they
+are installed again.
+
+Additional tools may be provided to help users remove groups and users.
+However, such actions need to be explicitly confirmed by the system
+administrator.
+
+
+Home directory ownership
+------------------------
+
+If the user in question uses a regular home directory (i.e. not
+``/dev/null``), the user package should maintain the directory
+via ``keepdir`` command.  This allows for clean removal of the home
+directory if it is no longer needed.  The package manager will also
+apply correct permissions if the directory does not exist yet.
+
+Note that since the user is not created until ``pkg_preinst``,
+the permissions to home directory should not be applied earlier than
+that.
+
+
+Rationale
+=========
+
+Satisfied goals
+---------------
+
+Tracking of user/group usage is done through dependencies.  As long
+as any installed package depends on a specific user/group package,
+the respective user/group is assumed to be used.  If no package
+requiring the specific user/group is left, the package manager
+automatically prunes the package clearly indicating it is no longer
+used.
+
+Each user and group has a single respective package creating it.
+If multiple packages need it, they depend on the same package.  This
+ensures that all properties are kept in a single location, and do not
+need to be synced.
+
+Having a single location with all predefined user/group ranges makes it
+possible to maintain fixed UID/GID definitions.  This GLEP makes
+allocating them obligatory.  While this isn't enforced for existing
+users, it provides a way forward for new installations.
+
+Local overrides can be trivially implemented via local repository,
+through overriding the respective user/group ebuilds.  The proposal also
+respects direct sysadmin modifications.
+
+Avoiding unnecessary user/group creation at build time is implemented
+via correct dependency types.  While this was possible with the status
+quo, the dependency model should be more natural to developers and cause
+less mistakes.
+
+
+User/group removal
+------------------
+
+The original proposal attempted to remove user/groups automatically
+when the respective package was unmerged.  This required verifying that
+no files are owned by the user/group in question which was both
+expensive in terms of I/O, and fragile.
+
+This GLEP follows the best practice of leaving obsolete user/groups
+accounts while ensuring that they are locked out properly.  This
+guarantees that no files with stale ownership are left 
+(e.g. on unmounted filesystems) and that the same UID/GID is not reused
+for another user/group.
+
+
+Backwards Compatibility
+=======================
+
+This GLEP preserves backwards compatibility with the existing method
+of user/group management.  Both methods can coexist as long as necessary
+for the transition period, and the same user/group can be governed
+by both in parallel.
+
+However, some of the advantages will only be reliable once the old
+method is phased out, and only on new installations.  This particularly
+applies to fixed UIDs/GIDs.
+
+
+Reference Implementation
+========================
+
+The reference implementation has been committed to the Gentoo repository
+in the form of ``acct-user.eclass`` and ``acct-group.eclass``.  Initial
+user and group packages have been created in order to test the concept.
+
+
+References
+==========
+
+.. [#GLEP27] GLEP 27: Portage Management of UIDs/GIDs
+   (https://www.gentoo.org/glep/glep-0027.html)
+
+
+Copyright
+=========
+This work is licensed under the Creative Commons Attribution-ShareAlike 4.0
+International License. To view a copy of this license, visit
+https://creativecommons.org/licenses/by-sa/4.0/.

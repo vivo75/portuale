@@ -1,0 +1,279 @@
+---
+GLEP: 84
+Title: Standard format for package.mask files
+Author: Arthur Zamarin <arthurzam@gentoo.org>
+Type: Standards Track
+Status: Final
+Version: 1.0
+Created: 2023-11-01
+Last-Modified: 2024-09-26
+Post-History: 2023-10-04, 2023-10-13, 2023-11-01
+Content-Type: text/x-rst
+---
+
+Abstract
+========
+
+This GLEP specifies the format of ``package.mask`` files under profiles
+directory.
+
+Motivation
+==========
+
+At the moment of writing this GLEP, ``package.mask`` files didn't have a full
+format specification. While PMS sections 4.4 [#PMS-4.4]_ and 5.2.8
+[#PMS-5.2.8]_ specifies the raw format which the package manager must support
+for correct behavior, it does not specify how comments must be formatted, how
+entries must be grouped, how last-rite masks should be written, etc.
+
+Various tools have been developed to handle that mask message. A non exhaustive
+list includes ``lr-add-pmask`` [#lr-add-pmask]_, ``pkgdev mask`` [#pkgdev-mask]_,
+and ``soko`` [#soko-mask]_. Those tools have different purposes, filing a new
+mask message with all relevant information, and showing a nice rendered mask
+message to users. Those tools are very complicated (since they need to handle
+various edge cases of existing masks, and try to prepare for future mask
+messages).
+
+For a long time, ``profiles/package.mask`` had a special header [#CURR-MASK]_
+whose purpose was to define the mask message formatting. While it has served
+its purpose for a long time indeed, it still left a lot of wiggle room for the
+message.
+
+Therefore, the motivation for this GLEP is to provide unified, clear and
+complete specification for package.mask entries across the repository.
+
+Specification
+=============
+
+Header
+------
+
+As an opt-in GLEP for files, files which want to use this GLEP format should
+define a special header line which tools should use to know the format of the
+file. This line should appear as the first non empty line after the copyright
+header. The line should be:
+
+    # Uses GLEP 84 format
+
+This header should come instead of the current very long header [#CURR-MASK]_,
+as mentioning the GLEP is enough.
+
+Files can decide to add some extra file documentation, in which case, the
+entries start after the first separation line comment which begins and ends
+with at least 5 "-", matching to the regex:
+
+    # -{5,}.*-{5,}
+
+All comments before the first occurrence of this separation line comment are
+ignored, and should be considered as file documentation. Another separation
+line may appear, after which all comments are also ignored. Those separation
+lines are optional, and are not required for the file to conform to this GLEP.
+
+Entries Grouping
+----------------
+
+Each mask entry consists of 2 parts: `comments block`_ and `packages list`_,
+which aren't separated by a blank line between the 2 parts. Between entries, a
+mandatory blank line must appear.
+
+New entries added to the file must be inserted at the beginning, after the file
+header.
+
+Packages List
+-------------
+
+Must conform to PMS sections 4.4 [#PMS-4.4]_ and 5.2.8 [#PMS-5.2.8]_. This GLEP
+further limits the syntax to one item per line, without any leading or trailing
+whitespace, no comments inside the packages list. Blank lines between items are
+allowed.
+
+Comments Block
+--------------
+
+The lines in the comment block are prefixed with a "#" symbol. The comments
+should be separated with single space from the "#", unless this is trailing
+whitespace, in which case it should be removed (meaning blank lines in comments
+block are just "#\\n").
+
+The comments block consists of 2 mandatory parts (`author line`_ and
+`explanation`_) and one optional part (`last-rite epilogue`_). A blank line to
+separate the parts is optional. Trailing whitespace should be dropped.
+
+The lines of the comments block should use column wrapping of 80 characters
+(including the "#" prefix). The author line is excluded from this maximum
+width.
+
+For simplifying the explanation, we wouldn't mention the "#" prefix.
+Implementations are advised to drop this prefix before further processing the
+block.
+
+Author Line
+'''''''''''
+
+A line of the format: ``${AUTHOR-NAME} <${EMAIL}> (${SINGLE-DATE})``. The author
+name and email should correspond to the mask author, and should confirm to the
+GLEP 76 rules. The date should be of RFC-3339 full-date format, meaning
+``YYYY-MM-DD``. The date is recommended to use the date at UTC timezone at the
+moment of commit push.
+
+Explanation
+'''''''''''
+
+In this block the reasons for the mask should be listed, with extra explanation
+where needed. If referencing bugs, use the `bugs list`_ format (mask rendering
+tools should render mentioned bugs also in this part).
+
+In this part, a paragraph separator is a blank line, similar to ReStructuredText
+format. Using multiple blank lines between paragraphs is prohibited.
+
+Last-Rite Epilogue
+''''''''''''''''''
+
+If the last paragraph starts with "Removal on", then this mask entry is
+considered as last-rite mask, and the last paragraph must conform to the
+last-rite epilogue format.
+
+The paragraph should be of format ``Removal on {DATE}[.,]? +{BUGS-LIST}.?``,
+where the date is RFC-3339 full-date format, meaning ``YYYY-MM-DD``, and the
+bugs list is of the `bugs list`_ format. The listed bugs should include the
+last-rite bug opened, and potentially more relevant bugs which weren't listed
+in the explanation paragraphs.
+
+Bugs List
+'''''''''
+
+A list of bugs should start with a word matching the regular expression
+``"[Bb]ugs?"`` (Bug, Bugs, bug, bugs), a single space, and a comma-separated
+list of bug numbers, where each bug number starts with "#" symbol. For example
+``Bugs #667687, #667689``. Parsers for bugs list should handle bugs list
+wrapping to multiple lines because of its length.
+
+Rationale
+=========
+
+Not using a hard-coded format
+-----------------------------
+
+While using a hard coded format, of some key-value kind (for example TOML, XML,
+INI), might be the correct path in the future, for the moment of writing this
+GLEP, it is preferred to stay with a format resembling most of the masks. Also,
+this GLEP prefers staying with a format close to an organized free-text.
+
+Specific format for bugs list
+-----------------------------
+
+It is preferable to specify the exact expected format for the bugs list, so
+rendering tools (such as ``soko``) can render the bugs numbers as links. Other
+use-cases for extracting the bug numbers exist, for example a new tool for
+tree-cleaning last-rited packages.
+
+UTC time zone for dates
+-----------------------
+
+Specifying a time zone is quite sensible for an international project such as
+Gentoo. While a difference in a date-only timestamp because of time zone is
+quite unlikely, the main purpose of standardizing on UTC is to prevent the case
+of new entries having a date prior to existing one. Since creating a mask entry
+using tools (such as pkgdev mask) is recommended, the tool should generate the
+correct date, which should be transparent to the user.
+
+Disallow "removal in X days"
+----------------------------
+
+Another existing variant of last-rite epilogue is using "removal in X days". It
+complicates the knowledge of the last date, since the user needs to compute
+what is the correct date (consider the amount of days in the same month). The
+existence of tools helping to file mask entries means that computing the
+removal date is simple for the writer. No gain is seen from allowing "removal
+in X days" format.
+
+Backwards Compatibility
+=======================
+
+This specification does not break the raw entries format specified in PMS,
+meaning all existing package managers implementations confirming to PMS will
+also support this new specification.
+
+However, multiple existing entries would need to be manually updated to conform
+to the new specification, so the updated tools can parse and work with all
+existing entries. Only after fixing all entries, the special header should be
+added, opting in the new format. Tools which might be used for overlays are
+recommended to not crash upon non-confirming entries, and verify the existence
+of this special header.
+
+Reference Implementation
+========================
+
+..
+    TODO: add reference implementations for:
+    1. pkgcheck check for confirming format
+    2. pkgdev updated for new format
+    3. soko updated to use new format
+
+BNF Grammar
+-----------
+
+.. code:: bnf
+
+    BUGS-LIST    ::= [Bb]ugs? #\d+(,? #\d+)*
+                 ::= [Bb]ugs? +#\d+(,? +#\d+)*
+    DATE         ::= YYYY-MM-DD
+    LAST-RITE    ::= Removal on {DATE}[.,]? +{BUGS-LIST}.?
+    AUTHOR-LINE  ::= {AUTHOR-NAME} <{AUTHOR-EMAIL}> ({DATE})
+    PARAGRAPH    ::= # [^\n]+(\n# [^\n]+)*
+    EXPLANATION  ::= {PARAGRAPH}(\n#\n{PARAGRAPH})*
+    MASK-COMMENT ::= # {AUTHOR-LINE}\n{EXPLANATION}
+                 ::= # {AUTHOR-LINE}\n{EXPLANATION}\n# {LAST-RITE}
+    PKGS_GROUP   ::= {DEP}(\n{DEP})*
+    MASK-PKGS    ::= {PKGS_GROUP}(\n+{PKGS_GROUP})*
+    ENTRY        ::= {MASK-COMMENT}\n{MASK-PKGS}
+    ENTRIES      ::= {ENTRY}(\n\n{ENTRY})*
+    GLEP-HEADER  ::= # Uses GLEP 84 format
+    SEPARATION   ::= # -{5,}.*-{5,}
+    FILE         ::= {COPYRIGHT}\n+{GLEP-HEADER}\n{ENTRIES}
+                 ::= {COPYRIGHT}\n+{GLEP-HEADER}\n+{COMMENTS}\n+{SEPARATION}\n{ENTRIES}
+                 ::= {COPYRIGHT}\n+{GLEP-HEADER}\n+{COMMENTS}\n+{SEPARATION}\n{ENTRIES}\n{SEPARATION}\n+{COMMENTS}
+
+Example Entries
+---------------
+
+.. code::
+
+    # Arthur Zamarin <arthurzam@gentoo.org> (2023-09-21)
+    # Very broken, no idea why packaged, need to drop ASAP. The project
+    # is done with supporting this package. See for history bug #667889.
+    #
+    # As a better plan, you should migrate to dev-lang/perl, which has
+    # better compatibility with dev-lang/ruby when used with dev-lang/lua
+    # bindings.
+    # Removal on 2023-10-21.  Bugs #667687, #667689.
+    dev-lang/python
+
+    # Arthur Zamarin <arthurzam@gentoo.org> (2023-09-20)
+    # Normal mask for testing
+    dev-lang/lua:5.1
+
+References and Footnotes
+========================
+
+.. [#PMS-4.4] "PMS section 4.4"
+   (https://projects.gentoo.org/pms/8/pms.html#x1-320004.4)
+
+.. [#PMS-5.2.8] "PMS section 5.2.8"
+   (https://projects.gentoo.org/pms/8/pms.html#x1-510005.2.8)
+
+.. [#CURR-MASK] "Existing ``packages.mask`` header before this GLEP"
+   (https://gitweb.gentoo.org/repo/gentoo.git/tree/profiles/package.mask?id=9acaae3e1a70ec6bd72e3c324b115bae1a05ed5f)
+
+.. [#lr-add-pmask] https://github.com/projg2/mgorny-dev-scripts/blob/52ceab3a579b35fb0d92f7a1f060cd7d4659f24f/lr-add-pmask
+
+.. [#pkgdev-mask] https://gitweb.gentoo.org/proj/pkgcore/pkgdev.git/tree/src/pkgdev/scripts/pkgdev_mask.py?h=v0.2.8
+
+.. [#soko-mask] https://gitweb.gentoo.org/sites/soko.git/tree/pkg/portage/repository/mask.go?h=v1.0.3
+
+Copyright
+=========
+
+This work is licensed under the Creative Commons Attribution-ShareAlike 4.0
+International License.  To view a copy of this license, visit
+https://creativecommons.org/licenses/by-sa/4.0/.
