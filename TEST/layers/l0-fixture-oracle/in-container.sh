@@ -53,8 +53,8 @@ FX="$STAGE/fixtures"
 
 # The running root's installed set is what real's "The following installed
 # packages are masked" check reads; replace the image's gentoo set with the
-# fixture vdb so both roots agree (portuale's `fixture_env` pins
-# PORTAGE_RUNNING_ROOT to fixtures for the same reason). The portage
+# fixture vdb so both roots agree even for a case with no BDEPEND (belt
+# and braces alongside the PORTAGE_RUNNING_ROOT pin below). The portage
 # upgrade above already installed 3.0.82.2's code on disk; only its vdb
 # entry disappears, which --pretend does not need.
 rm -rf /var/db/pkg
@@ -64,7 +64,13 @@ if [ -f "$FX/var/lib/portage/world" ]; then
   cp "$FX/var/lib/portage/world" /var/lib/portage/world
 fi
 
-export PORTAGE_CONFIGROOT="$FX" ROOT="$FX" DISTDIR="$FX/distfiles"
+# PORTAGE_RUNNING_ROOT pinned to the same staged tree, matching
+# portuale's own contract-test `fixture_env` fixture: without it, EAPI
+# 7+ BDEPEND/IDEPEND resolution runs against the container's *actual* /
+# for both real and portuale (neither of which has the staged testrepo
+# configured there), not the fixture -- invisible until #53 added the
+# first fixture-oracle case with a BDEPEND chain.
+export PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" DISTDIR="$FX/distfiles"
 # Hide the image's own repository configuration: with PORTAGE_REPOSITORIES
 # set, real parses exactly this INI text and ignores repos.conf on disk
 # (portage/repository/config.py::load_repository_config).

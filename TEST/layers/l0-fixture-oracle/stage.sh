@@ -48,14 +48,30 @@ touch /etc/make.local
 # 5. real rejects the fixture news format
 rm -rf "$FX/repo/metadata/news"
 
-# 3. categories real will accept
+# 3. categories real will accept. Written to /etc/portage/categories
+#    *and* to each staged repo's own profiles/categories: a BDEPEND
+#    resolved against the running root uses a `local_config=False`
+#    settings object (real EAPI 7+ semantics deliberately isolate the
+#    build root's config from the target root's `/etc/portage`
+#    overrides), which never reads /etc/portage/categories at all --
+#    only a repo's own profile-chain categories file, unconditionally
+#    (#53 S3: the go/go-md2man repro is the first fixture-oracle case
+#    with a BDEPEND chain, which is what exposed this).
+CATEGORIES=$(
+  for repo in repo overlay independentoverlay layoutmasteroverlay repnamerepo; do
+    [ -d "$FX/$repo" ] || continue
+    for cat in "$FX/$repo"/*/; do
+      [ -f "$cat" ] && continue
+      basename "$cat"
+    done
+  done | sort -u
+)
+printf '%s\n' "$CATEGORIES" > "$FX/etc/portage/categories"
 for repo in repo overlay independentoverlay layoutmasteroverlay repnamerepo; do
   [ -d "$FX/$repo" ] || continue
-  for cat in "$FX/$repo"/*/; do
-    [ -f "$cat" ] && continue
-    basename "$cat"
-  done
-done | sort -u > "$FX/etc/portage/categories"
+  mkdir -p "$FX/$repo/profiles"
+  printf '%s\n' "$CATEGORIES" > "$FX/$repo/profiles/categories"
+done
 
 # 7. backquotes -> single quotes in staged ebuilds
 for ebuild in "$FX"/*/*/*/*.ebuild; do
