@@ -637,7 +637,13 @@ fn graph_result_from_order(
     // gating, same `match_from_list` semantics), and file each conflict
     // on its owner entry -- mirroring the walk, which resolves blockers
     // after the graph settles and before the merge-order sort.
-    for (owner_key, conflict) in super::resolve_blockers(&req.root, &pending_blockers, &entries) {
+    for (owner_key, conflict) in super::resolve_blockers(
+        &req.root,
+        &pending_blockers,
+        &entries,
+        // The bridge engines have no required-set closure of their own.
+        &std::collections::HashSet::new(),
+    ) {
         if let Some(entry) = entries
             .iter_mut()
             .find(|e| (e.category.clone(), e.package.clone()) == owner_key)

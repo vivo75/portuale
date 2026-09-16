@@ -14613,6 +14613,17 @@ fn resolve_blockers(
     root: &Path,
     pending: &[PendingBlocker],
     entries: &[GraphEntry],
+    // #68 S3 follow-up: cps in real's required-set graph even when
+    // portuale's `entries` never carried their `deps` --
+    // `ResolveCtx::installed_closure`, the `@world`/`@selected`/`@system`
+    // forward-installed closure. Real seeds the required sets even for a
+    // plain single-atom resolve (`--implicit-system-deps` default y), so
+    // a blocked installed instance reachable from them is a digraph node
+    // with the set as parent. L0's `sys-apps/systemd-utils` probe needs
+    // it: installed `systemd` is in `@system`'s closure, real prints
+    // `B`/rc 1, portuale satisfied without it. A non-complete run on a
+    // target outside the sets (S0 cell d) must not use it.
+    installed_closure: &HashSet<(String, String)>,
 ) -> Vec<((String, String), BlockerConflict)> {
     let mut conflicts = Vec::new();
     for pb in pending {
@@ -14788,7 +14799,7 @@ fn resolve_blockers(
                 // outright (cells b, e).
                 merge_bound_match
                     || (installed_match
-                        && graph_has_parent(
+                        && (graph_has_parent(
                             &pb.target_category,
                             &pb.target_package,
                             version,
@@ -14796,7 +14807,7 @@ fn resolve_blockers(
                             sub_slot,
                             &pb.owner_key,
                             entries,
-                        ))
+                        ) || installed_closure.contains(&target_key)))
             } else {
                 // A nomerge parent is uninstall-ordered; it is unresolved
                 // when the *owner* is itself a walked node with parents
@@ -16832,6 +16843,14 @@ struct ResolveCtx<'a> {
     /// the way real produces no slot-op rebuild or reverse-dependency pin
     /// for a plain `emerge -p <atom>` that changes nothing installed.
     slot_op_reachable: HashSet<(String, String)>,
+    /// #68 S3 follow-up: every cp in the `@world`/`@selected`/`@system`
+    /// seeds' forward-installed closure (`complete_seed_atoms ∪ args`,
+    /// plus `config.system_packages`). Computed for every resolve (real
+    /// seeds the required sets even for a plain single-atom resolve via
+    /// `--implicit-system-deps`), unlike `slot_op_reachable` which is
+    /// complete-mode only; `resolve_blockers` uses it as "the blocked
+    /// instance is a graph node with the set as parent".
+    installed_closure: HashSet<(String, String)>,
     /// Real `_complete_graph` swaps package selection to
     /// `_select_pkg_from_graph` (`depgraph.py:8662`) -- graph-or-installed,
     /// never a new merge. Portuale re-resolves the whole graph in complete
@@ -16898,6 +16917,17 @@ impl<'a> ResolveCtx<'a> {
                 seeds.dedup();
                 required_set_reachable_cps(&req.root, &seeds, &[])
             };
+        // #68 S3 follow-up: the required-set closure, computed even when
+        // `complete_seed_atoms` is empty (a plain single-atom resolve)
+        // because real's `@system` seeding is unconditional.
+        let installed_closure: HashSet<(String, String)> = {
+            let mut seeds = req.config.complete_seed_atoms.clone();
+            seeds.extend(req.atoms.iter().cloned());
+            seeds.sort();
+            seeds.dedup();
+            let system = req.config.system_packages.clone();
+            required_set_reachable_cps(&req.root, &seeds, &system)
+        };
         Ok(ResolveCtx {
             root: &req.root,
             atoms: &req.atoms,
@@ -16942,6 +16972,7 @@ impl<'a> ResolveCtx<'a> {
             complete: req.complete,
             repos: find_repos(&req.config_root)?,
             slot_op_reachable,
+            installed_closure,
             complete_locked_merges: req
                 .config
                 .complete_locked_merges
@@ -20283,17 +20314,22 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         !mergebound_cp_slots.contains(&(e.category.clone(), e.package.clone(), slot))
     });
 
-    resolve_blockers(ctx.root, &state.pending_blockers, &state.entries)
-        .into_iter()
-        .for_each(|(owner_key, conflict)| {
-            if let Some(entry) = state
-                .entries
-                .iter_mut()
-                .find(|e| (e.category.clone(), e.package.clone()) == owner_key)
-            {
-                entry.blockers.push(conflict);
-            }
-        });
+    resolve_blockers(
+        ctx.root,
+        &state.pending_blockers,
+        &state.entries,
+        &ctx.installed_closure,
+    )
+    .into_iter()
+    .for_each(|(owner_key, conflict)| {
+        if let Some(entry) = state
+            .entries
+            .iter_mut()
+            .find(|e| (e.category.clone(), e.package.clone()) == owner_key)
+        {
+            entry.blockers.push(conflict);
+        }
+    });
 
     if !state.required_use_violations.is_empty() {
         // Each block is self-delimiting (leading + trailing newline).
@@ -35728,6 +35764,7 @@ mod tests {
             Path::new("/nonexistent-root-for-this-test"),
             &pending,
             &entries,
+            &HashSet::new(),
         );
         assert_eq!(
             conflicts,
@@ -35764,6 +35801,7 @@ mod tests {
             Path::new("/nonexistent-root-for-this-test"),
             &pending,
             &entries,
+            &HashSet::new(),
         );
         assert!(conflicts.is_empty());
     }
@@ -35789,6 +35827,7 @@ mod tests {
                     owner_merging: true,
                 }],
                 &entries,
+                &HashSet::new(),
             )
         };
         assert!(call("!!dev-libs/target[wantblock]").is_empty());
@@ -35823,7 +35862,7 @@ mod tests {
             owner_version: "1.0".to_string(),
             owner_merging: true,
         };
-        let conflicts = resolve_blockers(&dir, &[pending], &[owner, upgrade]);
+        let conflicts = resolve_blockers(&dir, &[pending], &[owner, upgrade], &HashSet::new());
         assert!(
             conflicts.is_empty(),
             "a replaced-in-slot installed match contributes no block row"
@@ -35844,7 +35883,7 @@ mod tests {
             owner_version: "1.0".to_string(),
             owner_merging: true,
         };
-        let conflicts = resolve_blockers(&dir, &[pending], &[owner, other_slot]);
+        let conflicts = resolve_blockers(&dir, &[pending], &[owner, other_slot], &HashSet::new());
         assert_eq!(
             conflicts.len(),
             1,
@@ -35874,7 +35913,7 @@ mod tests {
             owner_version: "1.0".to_string(),
             owner_merging: true,
         };
-        let conflicts = resolve_blockers(&dir, &[pending], &[owner, reinstall]);
+        let conflicts = resolve_blockers(&dir, &[pending], &[owner, reinstall], &HashSet::new());
         assert_eq!(
             conflicts.len(),
             1,
@@ -35932,6 +35971,7 @@ mod tests {
             &dir,
             &[pb("!<dev-libs/blocked-2.0", "bparent")],
             &[graph_entry("dev-libs", "bparent", "1.0"), walker],
+            &HashSet::new(),
         );
         assert_eq!(conflicts.len(), 1);
         assert!(
@@ -35944,9 +35984,29 @@ mod tests {
             &dir,
             &[pb("!<dev-libs/blocked-2.0", "bparent")],
             &[graph_entry("dev-libs", "bparent", "1.0")],
+            &HashSet::new(),
         );
         assert_eq!(conflicts.len(), 1);
         assert!(!conflicts[0].1.unsolvable, "an unwalked consumer does not");
+        // ...but in a complete-mode context real's digraph holds the
+        // installed closure even though portuale's `entries` don't
+        // (L0 `sys-apps/systemd-utils`): the vdb reverse scan is the
+        // documented fallback and marks it unresolved again. The
+        // consumer must be an installed vdb package for it to be found.
+        slotundo_vdb(&dir, "bconsumer", "1.0", "0", "dev-libs/blocked", "");
+        let closure: HashSet<(String, String)> =
+            [("dev-libs".to_string(), "blocked".to_string())].into();
+        let conflicts = resolve_blockers(
+            &dir,
+            &[pb("!<dev-libs/blocked-2.0", "bparent")],
+            &[graph_entry("dev-libs", "bparent", "1.0")],
+            &closure,
+        );
+        assert_eq!(conflicts.len(), 1);
+        assert!(
+            conflicts[0].1.unsolvable,
+            "a required-set closure member is a graph node with parents"
+        );
         let _ = fs::remove_dir_all(&dir);
 
         // Cell e: a merge-bound match with a merging parent is unresolved
@@ -35965,6 +36025,7 @@ mod tests {
                 owner_merging: true,
             }],
             &[bparent3, graph_entry("dev-libs", "blocked", "2.0")],
+            &HashSet::new(),
         );
         assert_eq!(conflicts.len(), 1);
         assert!(
@@ -35989,6 +36050,7 @@ mod tests {
             &dir,
             &[pb("!<dev-libs/blocked-2.0", "bparent")],
             &[graph_entry("dev-libs", "bparent", "1.0"), reinstall],
+            &HashSet::new(),
         );
         assert_eq!(conflicts.len(), 1);
         assert!(conflicts[0].1.unsolvable);
@@ -36002,6 +36064,7 @@ mod tests {
             &dir,
             &[pb("!<dev-libs/blocked-2.0", "bparent")],
             &[installed("bparent")],
+            &HashSet::new(),
         );
         assert!(conflicts.is_empty(), "nomerge parent, installed match");
         // Cell g: same, but a merge-bound match survives; unresolved only
@@ -36010,6 +36073,7 @@ mod tests {
             &dir,
             &[pb("!<dev-libs/blocked-2.0", "bparent")],
             &[installed("bparent"), blocked_upgrade("1.5")],
+            &HashSet::new(),
         );
         assert_eq!(conflicts.len(), 1);
         assert!(
@@ -36022,6 +36086,7 @@ mod tests {
             &dir,
             &[pb("!<dev-libs/blocked-2.0", "bparent")],
             &[installed("bparent"), blocked_upgrade("1.5"), parent_walker],
+            &HashSet::new(),
         );
         assert_eq!(conflicts.len(), 1);
         assert!(
@@ -36044,6 +36109,7 @@ mod tests {
                 owner_merging: true,
             }],
             &[graph_entry("dev-libs", "blocked", "1.0")],
+            &HashSet::new(),
         );
         assert!(soft.is_empty(), "soft same-slot skip");
         let strong = resolve_blockers(
@@ -36058,6 +36124,7 @@ mod tests {
                 owner_merging: true,
             }],
             &[graph_entry("dev-libs", "blocked", "1.0")],
+            &HashSet::new(),
         );
         assert_eq!(strong.len(), 1, "a strong blocker is not skipped");
     }
@@ -36078,6 +36145,7 @@ mod tests {
             Path::new("/nonexistent-root-for-this-test"),
             &pending,
             &entries,
+            &HashSet::new(),
         );
         assert!(conflicts.is_empty());
     }
