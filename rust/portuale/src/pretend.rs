@@ -3771,9 +3771,17 @@ fn apply_scheduling_policy() {
         },
         _ => min_prio.max(0),
     };
-    let param = libc::sched_param {
-        sched_priority: priority,
-    };
+    // Zero-init, then set the one field real's `os.sched_param`
+    // conversion sets: CPython builds `struct sched_param` as a C11
+    // compound literal with only `sched_priority` assigned, so every
+    // other member is zero -- including musl's four SCHED_DEADLINE
+    // fields, which the libc crate's glibc definition does not carry
+    // (a plain struct literal naming only `sched_priority` fails to
+    // compile for musl, backlog #61).
+    // SAFETY: all-zeroes is a valid `sched_param` value; `sched_priority`
+    // is overwritten immediately, and `param` outlives the call below.
+    let mut param: libc::sched_param = unsafe { std::mem::zeroed() };
+    param.sched_priority = priority;
     let pid = std::process::id() as libc::pid_t;
     // SAFETY: `param` outlives the call; `pid` / `policy` are plain ints.
     let rc = unsafe { libc::sched_setscheduler(pid, policy, &param) };
