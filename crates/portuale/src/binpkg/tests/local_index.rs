@@ -90,6 +90,22 @@ fn populate_local_pkgdir_skips_invalid_files_and_keeps_the_pool() {
     );
 }
 
+/// The other class: a `Fatal` file still stops the whole scan.
+#[test]
+fn populate_local_pkgdir_aborts_on_fatal_files() {
+    let scratch = ScratchDir::new("scan-fatal").unwrap();
+    let pkgdir = scratch.path();
+    fs::create_dir_all(pkgdir.join("dev-libs")).unwrap();
+    let fatal = build_gpkg_with_inner_entries(
+        "fatalpkg-1.0",
+        &[inner_symlink("metadata/DESCRIPTION", "/etc/hostname")],
+    );
+    fs::copy(&fatal, pkgdir.join("dev-libs/fatalpkg-1.0.gpkg.tar")).unwrap();
+
+    let err = populate_local_pkgdir(pkgdir, true).expect_err("a fatal file must abort the scan");
+    assert!(err.contains("not in the archive"), "{err}");
+}
+
 #[test]
 fn populate_local_pkgdir_trusts_an_index_entry_even_when_stale() {
     // A stale stanza is reused verbatim (proven by a bogus SLOT the
@@ -138,6 +154,49 @@ fn populate_local_pkgdir_trusts_an_index_entry_even_when_stale() {
         entries[0].get("SLOT").map(String::as_str),
         Some("99-not-the-real-slot"),
         "a stale index entry must still be trusted, not re-derived"
+    );
+}
+
+#[test]
+fn populate_local_pkgdir_accepts_a_truncated_binpkg_the_index_vouches_for() {
+    // A truncated file the index vouches for is selected: the scan
+    // returns the stanza verbatim (stale `SIZE` included) so the merge
+    // path can verify against it.
+    let scratch = ScratchDir::new("index-vouched-truncated").unwrap();
+    let pkgdir = scratch.path();
+    fs::create_dir_all(pkgdir.join("dev-libs")).unwrap();
+    let whole = fs::read(fixture("pkgdir/dev-libs/gpkgreadpkg-1.0.gpkg.tar")).unwrap();
+    let dest = pkgdir.join("dev-libs/gpkgreadpkg-1.0.gpkg.tar");
+    fs::write(&dest, &whole[..whole.len() / 2]).unwrap();
+    let half = fs::metadata(&dest).unwrap().len();
+    assert!(half < whole.len() as u64);
+    use md5::Digest as _;
+    let md5: String = md5::Md5::digest(&whole)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    fs::write(
+        pkgdir.join("Packages"),
+        format!(
+            "TIMESTAMP: 0\n\nCPV: dev-libs/gpkgreadpkg-1.0\nSLOT: 0\nSIZE: {}\nMD5: {md5}\n_mtime_: 1\nPATH: dev-libs/gpkgreadpkg-1.0.gpkg.tar\n",
+            whole.len()
+        ),
+    )
+    .unwrap();
+    let entries = populate_local_pkgdir(pkgdir, true).expect("scan succeeds");
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(
+        entries[0].get("CPV").map(String::as_str),
+        Some("dev-libs/gpkgreadpkg-1.0")
+    );
+    assert_eq!(
+        entries[0].get("SIZE").map(String::as_str),
+        Some(whole.len().to_string()).as_deref(),
+        "the vouched entry keeps the index SIZE, not the truncated file's"
+    );
+    assert_eq!(
+        entries[0].get("MD5").map(String::as_str),
+        Some(md5).as_deref()
     );
 }
 
@@ -294,4 +353,36 @@ fn populate_local_pkgdir_reindex_reparses_a_key_incomplete_stanza() {
         entries[0].get("_mtime_").map(String::as_str),
         Some(real_mtime.to_string()).as_deref(),
     );
+}
+
+#[test]
+fn populate_local_pkgdir_parses_unindexed_files_in_both_modes() {
+    // A file no stanza covers joins the pool in both modes (the walk
+    // runs in trusted mode too, so a `Packages`-less `$PKGDIR` still
+    // resolves).
+    let scratch = ScratchDir::new("reindex-unindexed").unwrap();
+    let pkgdir = scratch.path();
+    let cat_dir = pkgdir.join("dev-libs");
+    fs::create_dir_all(&cat_dir).unwrap();
+    fs::copy(
+        fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+        cat_dir.join("packagepkg-1.0.tbz2"),
+    )
+    .unwrap();
+    assert!(!pkgdir.join("Packages").exists());
+
+    for trust in [true, false] {
+        let entries = populate_local_pkgdir(pkgdir, trust).expect("scan succeeds");
+        assert_eq!(entries.len(), 1, "trust={trust}: {entries:?}");
+        assert_eq!(
+            entries[0].get("CPV").map(String::as_str),
+            Some("dev-libs/packagepkg-1.0"),
+            "trust={trust}: {entries:?}"
+        );
+        assert_eq!(
+            entries[0].get("SLOT").map(String::as_str),
+            Some("0"),
+            "trust={trust}: parsed from the archive: {entries:?}"
+        );
+    }
 }

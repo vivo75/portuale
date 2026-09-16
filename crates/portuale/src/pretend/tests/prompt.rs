@@ -156,6 +156,24 @@ fn ask_read_news_without_eselect_prints_portages_hint() {
 }
 
 #[test]
+fn classify_yes_no_prefix_matches_case_insensitively_and_rejects_garbage() {
+    assert_eq!(classify_yes_no("", false), Some(true));
+    assert_eq!(classify_yes_no("y", false), Some(true));
+    assert_eq!(classify_yes_no("Y", false), Some(true));
+    assert_eq!(classify_yes_no("yes", false), Some(true));
+    assert_eq!(classify_yes_no("YES", false), Some(true));
+    assert_eq!(classify_yes_no("n", false), Some(false));
+    assert_eq!(classify_yes_no("No", false), Some(false));
+    assert_eq!(classify_yes_no("garbage", false), None);
+    assert_eq!(classify_yes_no("yesplease", false), None);
+    // With `--ask-enter-invalid`, bare Enter matches nothing; an actual answer
+    // still matches (Portage `UserQuery.query` gate).
+    assert_eq!(classify_yes_no("", true), None);
+    assert_eq!(classify_yes_no("y", true), Some(true));
+    assert_eq!(classify_yes_no("No", true), Some(false));
+}
+
+#[test]
 fn ask_true_spelling_hits_the_tty_gate_like_portage() {
     // Portage `true_y_or_n`: `--ask=True` parses as ask-on, hitting the tty gate
     // like a bare `--ask`.

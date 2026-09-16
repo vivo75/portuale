@@ -35,6 +35,54 @@ fn shell_split_handles_quotes_and_escapes() {
 }
 
 #[test]
+fn emerge_default_opts_are_prepended_to_argv() {
+    // Portage: main.py. Defaults come first so argv wins.
+    let config = portage_profile::Config {
+        other_vars: [(
+            "EMERGE_DEFAULT_OPTS".to_string(),
+            "--usepkg=n --getbinpkg=y".to_string(),
+        )]
+        .into_iter()
+        .collect(),
+        ..Default::default()
+    };
+    let args: Vec<String> = ["-uDpvN", "@world"].iter().map(|s| s.to_string()).collect();
+    assert_eq!(
+        args_with_emerge_defaults(&config, &args),
+        ["--usepkg=n", "--getbinpkg=y", "-uDpvN", "@world"]
+    );
+
+    // Same shlex-shaped splitter as `PORTAGE_IONICE_COMMAND`, so quoting is honoured.
+    let quoted = portage_profile::Config {
+        other_vars: [(
+            "EMERGE_DEFAULT_OPTS".to_string(),
+            "--exclude 'dev-libs/a b'".to_string(),
+        )]
+        .into_iter()
+        .collect(),
+        ..Default::default()
+    };
+    let bare: Vec<String> = vec!["--pretend".to_string()];
+    assert_eq!(
+        args_with_emerge_defaults(&quoted, &bare),
+        ["--exclude", "dev-libs/a b", "--pretend"]
+    );
+
+    let unset = portage_profile::Config::default();
+    assert_eq!(args_with_emerge_defaults(&unset, &args), args);
+
+    // `--ignore-default-opts` skips the variable entirely.
+    let with_ignore: Vec<String> = ["--ignore-default-opts", "@world"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    assert_eq!(
+        args_with_emerge_defaults(&config, &with_ignore),
+        with_ignore
+    );
+}
+
+#[test]
 fn config_bzip2_command_prefers_the_placed_config() {
     // A configured compressor wins; unset or empty falls back to `bzip2`.
     let configured = portage_profile::Config {
