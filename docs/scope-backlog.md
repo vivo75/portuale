@@ -450,10 +450,15 @@ third-party group under `primaryuri`), plus `FEATURES=force-mirror`.
 `layout.conf` + `.mirror-cache.json` (the real Gentoo mirrors are
 `filename-hash` only -- flat 404s), `tried_locations`, the checksum-failure
 primary-uri switch + `PORTAGE_FETCH_CHECKSUM_TRY_MIRRORS` cap, `fsmirrors`
-copies, and one candidate list per distfile. Still open: renaming a
-corrupt download with a deterministic suffix (owner decision D3,
-2026-09-14, not yet implemented); third-party shuffle confirmed as a
-deliberate cut (owner decision D4, 2026-09-14).
+copies, and one candidate list per distfile. The corrupt-download rename
+**shipped** with the owner-decided deterministic suffix (D3,
+`_checksum_failure_<N>` + real's `Refetching...` line); the third-party
+shuffle stays a deliberate cut (D4). Design + shipped-state
+consolidation: [`01.014-fetch_candidates_mirrors.md`](01.014-fetch_candidates_mirrors.md).
+Remaining transport residue (not part of #14's F-slices, filed as
+backlog #70): `FETCHCOMMAND`/`RESUMECOMMAND` overrides and
+`PORTAGE_RO_DISTDIRS` are not honoured by portuale's own downloads
+(`FEATURES=distlocks` stays a documented cut).
 
 
 ### F. Whole `emerge` actions
