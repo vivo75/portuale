@@ -17030,3 +17030,28 @@ cargo test --release -p portuale fetch_src_uri_runs_a_configured fetch_src_uri_s
 ```
 
 Plan: `docs/01.014-fetch_candidates_mirrors.md` §5. Residue stays the third-party mirror shuffle (F6, deliberate cut) and `distlocks`.
+
+**The fetch commands real resolves from `make.globals` now survive the config parser, and a real download runs end to end (backlog #70 repair, 2026-09-16/17).** The S1–S3 fetch work shipped a correct command *selector* on top of a broken parse: `parse_kv_line` stripped only the outer quote pair, so `\"` kept its backslash and `\${VAR}` reached the `${VAR}` regex, which expanded it — on this host `FETCHCOMMAND` resolved to `wget … -O \"\/var/cache/distfiles/\\" \"\\"` and every fetch was refused. R1 ports real's two stages: `shlex_token` (POSIX `shlex` value token: only `\"`/`\\` lose the backslash inside `"`, `\$` survives) then `substitute` (real `varexpand`: `\$` literal, `\\` -> `\` with its bug-compatible tail, `$VAR`/`${VAR}`, unset -> empty, single-quote suspension). R2 makes an absent `FETCHCOMMAND` the `make.globals` default (real always has that file; a fixture root does not — T2). R3 ports real's `${FILE}` refusal exactly: both the fetch and resume commands are checked, one `!!! <VAR> does not contain the required ${FILE} parameter.` line each plus the make.conf(5) hint, and the abort happens **only** when the distfile name differs from the URL basename (`fetch.py:1713-1715`); on matching names the command still runs. R4 completes the variables (`URI`, `FILE`, `DIGESTS`, `DISTDIR`, `PORTAGE_SSH_OPTS`, unknown -> empty) and fixes `shell_split` to Python `shlex` semantics (inside `"` only `\"`/`\\` unescape). The skipped `FETCH_WRAPPER` port, real's `FILE=<file>.__download__` temp name and the sorted `DIGESTS` order are named cuts in `docs/02.68-74.md` §6.
+
+```sh
+# default make.globals command, through the production ebuild fetch path
+mkdir -p /tmp/p-distdir /tmp/p-tmp
+PORTAGE_TMPDIR=/tmp/p-tmp DISTDIR=/tmp/p-distdir rust/target/release/portuale \
+  ebuild /.gentoo/repos/gentoo/sys-apps/which/which-2.23.ebuild unpack
+ls /tmp/p-distdir/which-2.23.tar.gz   # -> 201930 bytes, digest-verified
+b2sum /tmp/p-distdir/which-2.23.tar.gz | cut -c1-40
+# -> 64a3ae1f23a4c389f945f6c0985e6f6062b46785   (Manifest BLAKE2B)
+
+# a user command from a real config root is what actually runs
+printf 'FETCHCOMMAND="curl -f -o \\"\\${DISTDIR}/\\${FILE}\\" \\"\\${URI}\\""\n' \
+  > /tmp/p-root/etc/portage/make.conf   # plus repos.conf pointing at the tree
+PATH=/tmp/p-fakebin:$PATH PORTAGE_CONFIGROOT=/tmp/p-root DISTDIR=/tmp/p-distdir2 \
+  rust/target/release/portuale ebuild …/which-2.23.ebuild unpack
+cat /tmp/p-fakebin/args   # -> -f / -o /tmp/p-distdir2/which-2.23.tar.gz / …/80/which-2.23.tar.gz
+
+# the six #70 R1 make.globals values are pinned against real portage.settings
+cargo test --release -p portage-profile make_globals_fetch_commands
+# -> 1 passed
+```
+
+Evidence: `TEST/findings/l0.md` "#70 R1"–"#70 R5" (probe before/after, the real `portage.settings` captures, the `.mirror-cache.json` round-trips both ways, the host `@world` re-diff); L2 re-run `TEST/logs/l2-20260916T222355Z` (0 unexplained) in `TEST/findings/l2.md` "#70 R5". Plan: `docs/01.014-fetch_candidates_mirrors.md` §5.
