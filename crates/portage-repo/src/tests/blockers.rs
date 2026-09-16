@@ -275,6 +275,143 @@ fn resolve_blockers_keeps_an_installed_match_replaced_in_its_slot_as_satisfied()
 }
 
 #[test]
+fn resolve_blockers_uninstalls_a_settled_block_when_the_cp_moves_slot() {
+    // The provider moves slot while soft-blocking the old instance: Portage
+    // uninstalls the old slot, so the cp-keyed retry closure must not hold it.
+    let dir = slotundo_temp_dir("blocker-284-moves-slot");
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "blocked",
+        version: "1",
+        slot: "0/1",
+        rdepend: "",
+        installed_use: "",
+    });
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "blocked",
+        version: "2",
+        slot: "1/1",
+        rdepend: "",
+        installed_use: "",
+    });
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "bcons",
+        version: "1",
+        slot: "0",
+        rdepend: "dev-libs/blocked:0/1=",
+        installed_use: "",
+    });
+    let mut upgrade = graph_entry("dev-libs", "blocked", "3");
+    upgrade.outcome = PretendOutcome::Upgrade {
+        from: "2".into(),
+        to: "3".into(),
+    };
+    upgrade.slot = Some("1".to_string());
+    upgrade.sub_slot = Some("2".to_string());
+    let pending = || PendingBlocker {
+        atom_str: "!dev-libs/blocked:0".to_string(),
+        strong: false,
+        buildtime: false,
+        target_category: "dev-libs".to_string(),
+        target_package: "blocked".to_string(),
+        owner_key: ("dev-libs".to_string(), "blocked".to_string()),
+        owner_version: "3".to_string(),
+        owner_merging: true,
+        owner_installed: false,
+    };
+    // The requested cp is always a closure member; only the per-instance rule
+    // below lifts the veto.
+    let closure: HashSet<(String, String)> =
+        [("dev-libs".to_string(), "blocked".to_string())].into();
+    let conflicts = resolve_blockers(&dir, &[pending()], &[upgrade.clone()], &closure, false);
+    assert_eq!(conflicts.len(), 1);
+    assert!(
+        !conflicts[0].conflict.unsolvable,
+        "a parentless old slot uninstalls even though its cp was requested"
+    );
+    assert_eq!(
+        conflicts[0].conflict.satisfied_by,
+        Some(BlockerSatisfiedBy::Uninstall {
+            cpv: "dev-libs/blocked-1".to_string(),
+            anchor: ("dev-libs".to_string(), "blocked".to_string()),
+        })
+    );
+
+    // Case 2: the bound consumer rebuilds (`:=`), so its live dep rebinds to the
+    // new slot and no longer parents the old instance.
+    let edge = DepEdge {
+        atom: "dev-libs/blocked:=".to_string(),
+        evaluated: "dev-libs/blocked:=".to_string(),
+        category: "dev-libs".to_string(),
+        package: "blocked".to_string(),
+        priority: DepPriority {
+            runtime: true,
+            runtime_slot_op: true,
+            ..DepPriority::default()
+        },
+        disjunctive: false,
+        alt: None,
+        key: 0,
+    };
+    let mut rebuild = graph_entry("dev-libs", "bcons", "1");
+    rebuild.outcome = PretendOutcome::Reinstall {
+        version: "1".into(),
+        changed_flags: Vec::new(),
+        deps_changed: false,
+        slot_changed: false,
+        rebuilt_binary: false,
+        new_repo: false,
+        slot_operator_rebuild: true,
+    };
+    rebuild.slot = Some("0".to_string());
+    rebuild.sub_slot = Some("0".to_string());
+    rebuild.deps = vec![edge];
+    let conflicts = resolve_blockers(
+        &dir,
+        &[pending()],
+        &[upgrade.clone(), rebuild],
+        &closure,
+        false,
+    );
+    assert_eq!(conflicts.len(), 1);
+    assert!(
+        !conflicts[0].conflict.unsolvable,
+        "a rebound `:=` consumer does not hold the old slot"
+    );
+
+    // Control: a consumer pinned to the old slot still holds it.
+    let pinned = DepEdge {
+        atom: "dev-libs/blocked:0".to_string(),
+        evaluated: "dev-libs/blocked:0".to_string(),
+        category: "dev-libs".to_string(),
+        package: "blocked".to_string(),
+        priority: DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        },
+        disjunctive: false,
+        alt: None,
+        key: 0,
+    };
+    let mut staying = graph_entry("dev-libs", "bcons", "1");
+    staying.outcome = PretendOutcome::AlreadyInstalled {
+        version: "1".into(),
+    };
+    staying.slot = None;
+    staying.sub_slot = None;
+    staying.deps = vec![pinned];
+    let conflicts = resolve_blockers(&dir, &[pending()], &[upgrade, staying], &closure, false);
+    assert_eq!(conflicts.len(), 1);
+    assert!(
+        conflicts[0].conflict.unsolvable,
+        "a slot-pinned consumer still holds the old instance"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn resolve_blockers_classifies_final_graph_matches_by_parent_operation() {
     // Oracle cells b-h: final graph matches classified by parent operation.
     let edge = |cat: &str, pkg: &str, atom: &str| DepEdge {
