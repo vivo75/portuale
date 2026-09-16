@@ -10,6 +10,14 @@
 # even the most minimal Linux system") and that the portuale dispatch
 # mechanism works when invoked as `emerge`/`ebuild`.
 #
+# The assertions here are **structural** -- exit codes, the exact cpv
+# set/order of the `[ebuild ...]` merge list, and key markers/substrings.
+# The byte-exact output pins are `tests/test_emerge_pretend_contract.py`'s
+# job; this gate's job is "the statically-linked musl binaries resolve and
+# refuse correctly in a container with nothing else in it". Keeping the
+# two apart is deliberate: this script sat unrun behind the #61 builder
+# drift long enough for its pilot-era exact strings to go stale.
+#
 # Requires podman or docker. Exits nonzero on any failure, so it's usable
 # directly as a CI gate.
 
@@ -45,6 +53,91 @@ check() {
     fi
 }
 
+# Runs a command with stdout+stderr merged into OUT and its status in RC.
+# `set -e` would abort the script on the expected-nonzero checks below, so
+# every command goes through here instead of a bare `$(...)`.
+OUT=""
+RC=0
+capture() {
+    RC=0
+    OUT=$("$@" 2>&1) || RC=$?
+}
+
+# Real `emerge` / `ebuild` inside the scratch image, against the fixture
+# tree copied to /fixtures (see fixtures/ and rust/portage-repo).
+run_emerge() {
+    "${ENGINE}" run --rm --entrypoint /bin/emerge \
+        -e PORTAGE_CONFIGROOT=/fixtures -e ROOT=/fixtures \
+        "${IMAGE}" "$@"
+}
+run_ebuild() {
+    "${ENGINE}" run --rm --entrypoint /bin/ebuild "${IMAGE}" "$@"
+}
+emerge_pretend() {
+    run_emerge --pretend "$@"
+}
+
+# The cpvs of every `[ebuild ...]` merge-list line, in order (the masked
+# marker `#` is part of the bracket text and skipped either way).
+merge_list() {
+    printf '%s\n' "$1" | sed -n 's/^\[ebuild[^]]*\] \([^ ]*\).*/\1/p'
+}
+merge_names() {
+    merge_list "$1" | tr '\n' ' ' | sed 's/ $//'
+}
+
+# The successful `--pretend` shape: rc 0, exactly these cpvs in this
+# order, and every needle present somewhere in the output.
+assert_pretend_ok() {
+    local desc="$1" expected="$2"
+    shift 2
+    echo "--- ${desc}"
+    local ok=1 actual needle
+    actual=$(merge_names "${OUT}")
+    if [ "${RC}" -ne 0 ]; then
+        echo "  rc=${RC}, expected 0" >&2
+        ok=0
+    fi
+    if [ "${actual}" != "${expected}" ]; then
+        echo "  merge list: got [${actual}] want [${expected}]" >&2
+        ok=0
+    fi
+    for needle in "$@"; do
+        if ! grep -Fq -- "${needle}" <<<"${OUT}"; then
+            echo "  output is missing: ${needle}" >&2
+            ok=0
+        fi
+    done
+    if [ "${ok}" -eq 0 ]; then
+        echo "FAIL: ${desc}" >&2
+        fail=1
+    fi
+    return 0
+}
+
+# The refusal shape: exactly this exit status plus every needle.
+assert_rc() {
+    local desc="$1" expected_rc="$2"
+    shift 2
+    echo "--- ${desc}"
+    local ok=1 needle
+    if [ "${RC}" -ne "${expected_rc}" ]; then
+        echo "  rc=${RC}, expected ${expected_rc}" >&2
+        ok=0
+    fi
+    for needle in "$@"; do
+        if ! grep -Fq -- "${needle}" <<<"${OUT}"; then
+            echo "  output is missing: ${needle}" >&2
+            ok=0
+        fi
+    done
+    if [ "${ok}" -eq 0 ]; then
+        echo "FAIL: ${desc}" >&2
+        fail=1
+    fi
+    return 0
+}
+
 echo "Building ${IMAGE} with ${ENGINE} (context: ${REPO_DIR})"
 "${ENGINE}" build --no-cache -f "${CONTAINERFILE}" -t "${TAG}" "${REPO_DIR}"
 
@@ -54,154 +147,150 @@ check "versions-harness vercmp via default entrypoint" \
     test "${actual}" = "1"
 
 # emerge --pretend against the fixture tree copied into the image at
-# /fixtures (see fixtures and rust/portage-repo): proves
-# the real emerge --pretend pilot slice, not just dispatch, works in a
-# statically-linked, nothing-but-the-binaries container.
-actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
-    -e PORTAGE_CONFIGROOT=/fixtures -e ROOT=/fixtures \
-    "${IMAGE}" --pretend dev-libs/newpkg)
-check "emerge --pretend resolves a new install inside the scratch container" \
-    test "${actual}" = "[ebuild  N] dev-libs/newpkg-1.0"
+# /fixtures: a real resolution, not just dispatch. Merge order is
+# dependencies-first -- the cpv list below is the order the scheduler
+# would merge in, requested package last.
+capture emerge_pretend dev-libs/newpkg
+assert_pretend_ok \
+    "emerge --pretend resolves a new install inside the scratch container" \
+    "dev-libs/newpkg-1.0"
 
-# emerge --pretend recursion (diamond dependency: dedup + discovery order).
-actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
-    -e PORTAGE_CONFIGROOT=/fixtures -e ROOT=/fixtures \
-    "${IMAGE}" --pretend dev-libs/diamond)
-check "emerge --pretend resolves a dependency graph inside the scratch container" \
-    test "${actual}" = "$(printf '[ebuild  N] dev-libs/diamond-1.0\n[ebuild  N] dev-libs/shared-a-1.0\n[ebuild  N] dev-libs/shared-b-1.0\n[ebuild  N] dev-libs/common-1.0')"
+# emerge --pretend recursion (diamond dependency: dedup + merge order).
+capture emerge_pretend dev-libs/diamond
+assert_pretend_ok \
+    "emerge --pretend resolves a dependency graph inside the scratch container" \
+    "dev-libs/common-1.0 dev-libs/shared-a-1.0 dev-libs/shared-b-1.0 dev-libs/diamond-1.0"
 
 # emerge --pretend against the real profile chain + make.conf (see
 # fixtures/repo/profiles): the multi-parent chain, its
 # make.profile symlink, and make.conf's `source /etc/make.local` must all
 # survive the COPY into the scratch image and resolve real USE flags,
 # which is what gates dev-libs/useflagpkg's dependency on dev-libs/newpkg.
-actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
-    -e PORTAGE_CONFIGROOT=/fixtures -e ROOT=/fixtures \
-    "${IMAGE}" --pretend dev-libs/useflagpkg)
-check "emerge --pretend resolves real profile-derived USE flags inside the scratch container" \
-    test "${actual}" = "$(printf '[ebuild  N] dev-libs/useflagpkg-1.0\n[ebuild  N] dev-libs/newpkg-1.0')"
+capture emerge_pretend dev-libs/useflagpkg
+assert_pretend_ok \
+    "emerge --pretend resolves real profile-derived USE flags inside the scratch container" \
+    "dev-libs/newpkg-1.0 dev-libs/useflagpkg-1.0" \
+    'USE="foo -missingflag"'
 
 # emerge --pretend against package.mask/package.unmask (see
 # fixtures/etc/portage/): a masked package stays hidden, and a
-# masked-then-unmasked one is visible, inside the minimal container.
-if "${ENGINE}" run --rm --entrypoint /bin/emerge \
-    -e PORTAGE_CONFIGROOT=/fixtures -e ROOT=/fixtures \
-    "${IMAGE}" --pretend dev-libs/hardmaskedpkg >/dev/null 2>&1; then
-    masked_exit=0
-else
-    masked_exit=$?
-fi
-check "emerge --pretend hides a package.mask-ed package inside the scratch container" \
-    test "${masked_exit}" -eq 1
+# masked-then-unmasked one is visible (with the `#` marker).
+capture emerge_pretend dev-libs/hardmaskedpkg
+assert_rc \
+    "emerge --pretend hides a package.mask-ed package inside the scratch container" \
+    1 'All ebuilds that could satisfy "dev-libs/hardmaskedpkg" have been masked' \
+    'masked by: package.mask'
 
-actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
-    -e PORTAGE_CONFIGROOT=/fixtures -e ROOT=/fixtures \
-    "${IMAGE}" --pretend dev-libs/maskedandunmaskedpkg)
-check "emerge --pretend respects package.unmask inside the scratch container" \
-    test "${actual}" = "[ebuild  N] dev-libs/maskedandunmaskedpkg-1.0"
+capture emerge_pretend dev-libs/maskedandunmaskedpkg
+assert_pretend_ok \
+    "emerge --pretend respects package.unmask inside the scratch container" \
+    "dev-libs/maskedandunmaskedpkg-1.0" \
+    '#] dev-libs/maskedandunmaskedpkg-1.0'
 
 # emerge --pretend against package.use (see fixtures/etc/portage/):
 # per-package USE overrides, not just the global profile-derived set, must
 # survive the COPY into the scratch image.
-actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
-    -e PORTAGE_CONFIGROOT=/fixtures -e ROOT=/fixtures \
-    "${IMAGE}" --pretend dev-libs/packageuseenablepkg)
-check "emerge --pretend applies a package.use-enabled flag inside the scratch container" \
-    test "${actual}" = "$(printf '[ebuild  N] dev-libs/packageuseenablepkg-1.0\n[ebuild  N] dev-libs/newpkg-1.0')"
+capture emerge_pretend dev-libs/packageuseenablepkg
+assert_pretend_ok \
+    "emerge --pretend applies a package.use-enabled flag inside the scratch container" \
+    "dev-libs/newpkg-1.0 dev-libs/packageuseenablepkg-1.0" \
+    'USE="pkguseflag"'
 
-actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
-    -e PORTAGE_CONFIGROOT=/fixtures -e ROOT=/fixtures \
-    "${IMAGE}" --pretend dev-libs/packageusedisablepkg)
-check "emerge --pretend applies a package.use-disabled flag inside the scratch container" \
-    test "${actual}" = "[ebuild  N] dev-libs/packageusedisablepkg-1.0"
+capture emerge_pretend dev-libs/packageusedisablepkg
+assert_pretend_ok \
+    "emerge --pretend applies a package.use-disabled flag inside the scratch container" \
+    "dev-libs/packageusedisablepkg-1.0" \
+    'USE="-foo"'
 
 # emerge --pretend against blockers (see fixtures/etc/portage/ and
 # the dev-libs/blockerpkg*/weakblockerpkg/graphblockerparent fixture
-# packages): a strong blocker matching an installed package, and a weak
-# blocker matching another package this same run would also newly merge.
-actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
-    -e PORTAGE_CONFIGROOT=/fixtures -e ROOT=/fixtures \
-    "${IMAGE}" --pretend dev-libs/blockerpkg)
-check "emerge --pretend reports a strong blocker against an installed package inside the scratch container" \
-    test "${actual}" = "$(printf '[ebuild  N] dev-libs/blockerpkg-1.0\n[blocks] dev-libs/blockerpkg-1.0 hard blocks dev-libs/samepkg-1.0 ("!!dev-libs/samepkg")')"
+# packages): a strong blocker matching an installed package aborts (rc 1,
+# real's blocked-packages error), while a weak blocker matching another
+# package this same run would also newly merge is reported but does not
+# abort.
+capture emerge_pretend dev-libs/blockerpkg
+assert_rc \
+    "emerge --pretend reports a strong blocker against an installed package inside the scratch container" \
+    1 '[blocks B' 'hard blocking dev-libs/blockerpkg-1.0' \
+    'packages which cannot be' 'installed at the same time'
 
-actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
-    -e PORTAGE_CONFIGROOT=/fixtures -e ROOT=/fixtures \
-    "${IMAGE}" --pretend dev-libs/graphblockerparent)
-check "emerge --pretend reports a weak blocker against an in-graph package inside the scratch container" \
-    test "${actual}" = "$(printf '[ebuild  N] dev-libs/graphblockerparent-1.0\n[ebuild  N] dev-libs/blockerpartnerpkg-1.0\n[ebuild  N] dev-libs/weakblockerpkg-1.0\n[blocks] dev-libs/weakblockerpkg-1.0 soft blocks dev-libs/blockerpartnerpkg-1.0 ("!dev-libs/blockerpartnerpkg")')"
+capture emerge_pretend dev-libs/graphblockerparent
+assert_pretend_ok \
+    "emerge --pretend reports a weak blocker against an in-graph package inside the scratch container" \
+    "dev-libs/blockerpartnerpkg-1.0 dev-libs/weakblockerpkg-1.0 dev-libs/graphblockerparent-1.0" \
+    '[blocks B' 'soft blocking'
 
 # emerge --pretend against the overlay repo (see
 # fixtures/etc/portage/repos.conf, which registers a second,
 # higher-priority repo alongside the main one, and fixtures/overlay):
 # an overlay-only package is found, and a same-version tie across both
 # repos is broken toward the higher-priority overlay copy.
-actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
-    -e PORTAGE_CONFIGROOT=/fixtures -e ROOT=/fixtures \
-    "${IMAGE}" --pretend dev-libs/overlayonlypkg)
-check "emerge --pretend finds an overlay-only package inside the scratch container" \
-    test "${actual}" = "[ebuild  N] dev-libs/overlayonlypkg-1.0"
+capture emerge_pretend dev-libs/overlayonlypkg
+assert_pretend_ok \
+    "emerge --pretend finds an overlay-only package inside the scratch container" \
+    "dev-libs/overlayonlypkg-1.0"
 
-actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
-    -e PORTAGE_CONFIGROOT=/fixtures -e ROOT=/fixtures \
-    "${IMAGE}" --pretend dev-libs/overlaytiepkg)
-check "emerge --pretend breaks a same-version repo tie toward the higher-priority overlay inside the scratch container" \
-    test "${actual}" = "$(printf '[ebuild  N] dev-libs/overlaytiepkg-1.0\n[ebuild  N] dev-libs/newpkg-1.0')"
+capture emerge_pretend dev-libs/overlaytiepkg
+assert_pretend_ok \
+    "emerge --pretend breaks a same-version repo tie toward the higher-priority overlay inside the scratch container" \
+    "dev-libs/newpkg-1.0 dev-libs/overlaytiepkg-1.0"
 
-# emerge --pretend against slot conflicts (see the dev-libs/slotconflict*/
-# multislot* fixture packages): a genuine conflict (two atoms needing the
-# same slot at incompatible versions) is reported, while two atoms
-# needing genuinely different slots of the same package correctly
-# coexist as separate entries, not a conflict.
-actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
-    -e PORTAGE_CONFIGROOT=/fixtures -e ROOT=/fixtures \
-    "${IMAGE}" --pretend dev-libs/slotconflictparent)
-check "emerge --pretend reports a slot conflict inside the scratch container" \
-    test "${actual}" = "$(printf '[ebuild  N] dev-libs/slotconflictparent-1.0\n[ebuild  N] dev-libs/slotconflictnewconsumer-1.0\n[ebuild  N] dev-libs/slotconflictoldconsumer-1.0\n[ebuild  N] dev-libs/slotconflicttarget-2.0\n[slot conflict] dev-libs/slotconflicttarget:0 resolved to dev-libs/slotconflicttarget-2.0, which does not satisfy "<dev-libs/slotconflicttarget-2.0"')"
+# emerge --pretend against the slotconflict* fixtures: the two consumers
+# need slotconflicttarget at >=2.0 and <2.0, but 1.0 satisfies both atoms,
+# so the resolver settles on 1.0 with no conflict (the contract suite
+# pins the same resolution) -- and the multislot* pair needs genuinely
+# different slots of the same package, which coexist as separate entries,
+# not a conflict.
+capture emerge_pretend dev-libs/slotconflictparent
+assert_pretend_ok \
+    "emerge --pretend settles a cross-constraint slot case inside the scratch container" \
+    "dev-libs/slotconflicttarget-1.0 dev-libs/slotconflictnewconsumer-1.0 dev-libs/slotconflictoldconsumer-1.0 dev-libs/slotconflictparent-1.0"
 
-actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
-    -e PORTAGE_CONFIGROOT=/fixtures -e ROOT=/fixtures \
-    "${IMAGE}" --pretend dev-libs/multislotparent)
-check "emerge --pretend lets different slots of the same package coexist inside the scratch container" \
-    test "${actual}" = "$(printf '[ebuild  N] dev-libs/multislotparent-1.0\n[ebuild  N] dev-libs/multislotpkg-1.0\n[ebuild  N] dev-libs/multislotpkg-2.0')"
+capture emerge_pretend dev-libs/multislotparent
+assert_pretend_ok \
+    "emerge --pretend lets different slots of the same package coexist inside the scratch container" \
+    "dev-libs/multislotpkg-1.0 dev-libs/multislotpkg-2.0 dev-libs/multislotparent-1.0"
 
 # emerge --pretend against a virtual (see dev-libs/virtualconsumerpkg and
 # virtual/texteditor, shaped exactly like the real virtual/pager): needs
 # no dedicated code, just the ordinary category + any-of-group machinery.
-actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
-    -e PORTAGE_CONFIGROOT=/fixtures -e ROOT=/fixtures \
-    "${IMAGE}" --pretend dev-libs/virtualconsumerpkg)
-check "emerge --pretend resolves a virtual as a dependency inside the scratch container" \
-    test "${actual}" = "$(printf '[ebuild  N] dev-libs/virtualconsumerpkg-1.0\n[ebuild  N] virtual/texteditor-0\n[ebuild  N] dev-libs/newpkg-1.0')"
+capture emerge_pretend dev-libs/virtualconsumerpkg
+assert_pretend_ok \
+    "emerge --pretend resolves a virtual as a dependency inside the scratch container" \
+    "virtual/texteditor-0 dev-libs/virtualconsumerpkg-1.0"
 
 # emerge --pretend against REQUIRED_USE (see dev-libs/requiredusebadpkg):
 # a genuinely violated REQUIRED_USE constraint aborts the whole run, not
 # just the one package -- real depgraph.py's own severity for this.
-actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
-    -e PORTAGE_CONFIGROOT=/fixtures -e ROOT=/fixtures \
-    "${IMAGE}" --pretend dev-libs/requiredusebadpkg 2>&1 || true)
-check "emerge --pretend reports a REQUIRED_USE violation inside the scratch container" \
-    grep -q 'REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg-1.0' <<<"${actual}"
+capture emerge_pretend dev-libs/requiredusebadpkg
+assert_rc \
+    "emerge --pretend reports a REQUIRED_USE violation inside the scratch container" \
+    1 'has unmet requirements' 'foo? ( bar )' 'USE="foo -bar"'
 
 # CLI surface recognition (see portuale/src/emerge_options.rs): a real
-# emerge option this pilot doesn't implement gets a specific message,
-# not a generic one, even with nothing else in the image to fall back on.
-actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge "${IMAGE}" --jobs dev-libs/newpkg 2>&1 || true)
-check "emerge reports a real, unimplemented option by name inside the scratch container" \
-    grep -q 'option "--jobs" is a real emerge option' <<<"${actual}"
+# emerge option this pilot doesn't implement gets a specific message, not
+# a generic one, even with nothing else in the image to fall back on.
+# (--nobindeps is one such option; if it is ever implemented, pick
+# another from emerge_options.rs's tables -- the assertion is the
+# message shape, not the flag.)
+capture run_emerge --pretend --nobindeps dev-libs/newpkg
+assert_rc \
+    "emerge reports a real, unimplemented option by name inside the scratch container" \
+    2 'is a real emerge option, but is not yet implemented in portuale' \
+    '"--nobindeps"'
 
-actual=$("${ENGINE}" run --rm --entrypoint /bin/ebuild "${IMAGE}" foo-1.0.ebuild merge)
-check "ebuild dispatch prints the ebuild stub" \
-    grep -q "ebuild (pilot stub)" <<<"${actual}"
+# ebuild dispatch: the applet's own usage, and a real command name it
+# recognizes vs a genuinely invalid one rejected by name, with nothing
+# else in the image to fall back on.
+capture run_ebuild --help
+assert_rc "ebuild prints its own usage" 0 \
+    'command-line interface to the Portuale package manager' \
+    'ebuild <ebuild file> <command>'
 
-# ebuild CLI surface recognition (see portuale/src/ebuild_options.rs): a
-# real ebuild command this pilot doesn't implement is still accepted as
-# a no-op (real phase execution is deferred, not this), but a genuinely
-# invalid command name is rejected clearly, even with nothing else in
-# the image to fall back on.
-actual=$("${ENGINE}" run --rm --entrypoint /bin/ebuild "${IMAGE}" foo-1.0.ebuild not-a-real-phase 2>&1 || true)
-check "ebuild rejects an unrecognized command by name inside the scratch container" \
-    grep -q 'not one of the valid ebuild commands' <<<"${actual}"
+capture run_ebuild foo-1.0.ebuild not-a-real-phase
+assert_rc \
+    "ebuild rejects an unrecognized command by name inside the scratch container" \
+    1 'not one of the valid ebuild commands'
 
 # batch mode inside the minimal container, to make sure stdin plumbing
 # works with no shell/coreutils present to help it along.
