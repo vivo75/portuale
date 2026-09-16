@@ -9043,9 +9043,11 @@ behavior, portuale's long-standing stance for the index).
 v1 cuts (at the time of this increment): `.xpak` files and
 multi-instance subdirs were skipped — **since lifted**, see
 "`FEATURES=binpkg-multi-instance` writes and scans the real subdir
-layout" below. A file that fails to parse still aborts the scan (rather
-than real portage's own skip-and-warn — a `$PKGDIR` of unreadable
-binpkgs is worth surfacing).
+layout" below. A file that fails to parse aborted the scan at the time of
+this increment — **since corrected by backlog #60** (2026-09-16): real
+portage's `PortagePackageException` class is now skipped with real's own
+`!!! Invalid binary package: ...` warning while its uncaught class still
+aborts; see the #60 paragraph at the end of this file.
 The Python mirror scans too (`_scan_pkgdir` — `portage.xpak.tbz2` for
 `.tbz2`, a hand-rolled `tarfile` + decompressor-subprocess reader for
 `.gpkg.tar` that matches the Rust reader's cuts, since real
@@ -16863,3 +16865,25 @@ readelf -d /tmp/portuale.musl | grep -c NEEDED   # 0
 ```
 
 Findings: `TEST/findings/musl.md` (the wall matrix, the link-line root cause and the S1-S5 results); plan `docs/07.61-musl-smoke-toolchain-drift.opus.md` (done, with the six commit hashes).
+
+**One unreadable file in `$PKGDIR` no longer hides the whole binary pool: the scan splits its files into real's two caller classes (backlog #60, 2026-09-16).** Real `bintree._populate_local` catches `(PortagePackageException, SignatureException)` around each file's metadata read, prints `!!! Invalid binary package: '<path>', <msg>` (noiselevel=-1) and skips that file (`bintree.py:1185-1199`); every other reader error propagates (a `KeyError`/`AttributeError`/`RecursionError` from `tarfile.extractfile`, an inner `tarfile.ReadError`, an `OSError`). Portuale used to abort the whole `$PKGDIR` walk on any of them (`emerge: scanning <pkgdir>: <e>`, rc 1), so one crafted file removed every valid candidate from the pool — reproduced live: a PKGDIR holding the fixture index plus S0 cell i8 exited 1 and lost `dev-libs/binaryonlypkg`. `BinpkgError { Invalid, Fatal }` now tags every error site of the populate-reachable readers (`read_gpkg_metadata`/`read_xpak_metadata` and their helpers; `Display` + `From<BinpkgError> for String` keep the merge path and `--info` byte-identical), and `populate_local_pkgdir` reports the `Invalid` class with real's own message shape (the reader's messages already embed `'<path>: '` for the merge path, so that prefix is stripped for real's one-path form) while a `Fatal` file still stops the scan. The classification mirrors real site by site: outer structure/marker/duplicates, missing or unsupported metadata member, metadata caps, decompressor missing/failed, unsafe or outside-`metadata/` inner names are `Invalid`; inner-tar parse/read errors, unresolved links, directory/FIFO/device members, link cycles and IO failures are `Fatal` — and **every `.xpak` read error is `Fatal`**, because real's `tbz2.scan()` returns `None` and the caller then raises `AttributeError` on `None.get`.
+
+```sh
+# the crafted cells real itself classifies (S0 capture, live)
+python3 scripts/gpkg_crafted_members.py --out /tmp/portuale-58-crafted \
+    --cells i8,i1 --mode build
+python3 scripts/gpkg_crafted_members.py --out /tmp/portuale-58-crafted \
+    --cells i8,i1 --mode real
+# i8 inner `other/KEY`  -> InvalidBinaryPackageFormat: Invalid metadata path
+# i1 inner symlink      -> KeyError: linkname 'metadata//etc/hostname' not found
+
+# the scan boundary, pinned end to end (warning + rc 0 vs abort + rc 1)
+python3 -m pytest tests/test_emerge_pretend_contract.py -q \
+    -k test_pkgdir_scan_skips_real_invalid_class_and_aborts_the_rest
+# -> 1 passed: i8 -> "!!! Invalid binary package: '<path>', inner metadata
+#    member \"other/KEY\" is outside metadata/" and
+#    "[binary  N     ] dev-libs/binaryonlypkg-1.0-1" (rc 0);
+#    i1 -> "emerge: scanning <pkgdir>:" (rc 1, no merge list)
+```
+
+Findings: `TEST/findings/l2.md` "## #60 S0" (real's classes, the live captures, and the S1-S3 results); plan `docs/07.60-gpkg-populate-read-errors.opus.md` (done, with the commit hashes); Rust tests `binpkg::tests::binpkg_error_classes_mirror_reals_caller`, `populate_local_pkgdir_skips_invalid_files_and_keeps_the_pool`, `populate_local_pkgdir_aborts_on_fatal_files`.
