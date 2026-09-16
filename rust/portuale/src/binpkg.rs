@@ -1621,15 +1621,22 @@ fn extract_gpkg_member(gpkg_path: &Path, want: &str, dest: &Path) -> Result<(), 
 /// the embedded `repository`, `PATH` from the relative path. Entries are
 /// `CPV`-sorted for a deterministic pool order.
 ///
-/// v1 cuts: the old flat `<pkgdir>/All/<pf>.tbz2` layout
-/// (real's own `mydir != "All"` fallback) is not walked; a file that
-/// fails to parse aborts the scan (rather than real portage's own
-/// skip-and-warn) -- a `$PKGDIR` full of unreadable binpkgs is a real
-/// problem worth surfacing, not silently resolving against a partial
-/// pool -- but a *misnamed* multi-instance file (one whose `<pf>-<id>`
-/// stem disagrees with its embedded `PF`, or whose subdir isn't `<pn>`)
-/// is skipped, matching real's own `invalid_name`/`name_split`
-/// `continue`.
+/// A file the reader rejects is split exactly like real's own caller
+/// (`bintree.py:1185-1199`): an `Invalid` file (real's
+/// `PortagePackageException`/`SignatureException` family -- see
+/// [`BinpkgError`]) is reported with real's own
+/// `!!! Invalid binary package: '<path>', <reason>` (noiselevel=-1, so
+/// unconditional) and skipped; a `Fatal` one stops the whole scan, as
+/// real's uncaught `KeyError`/`AttributeError`/`RecursionError` would.
+/// Portuale's reader messages embed the path already (the merge path's
+/// callers rely on that), so the reported reason strips the leading
+/// `'<path>: '` to keep real's one-path shape.
+///
+/// v1 cut: the old flat `<pkgdir>/All/<pf>.tbz2` layout (real's own
+/// `mydir != "All"` fallback) is not walked. A *misnamed* multi-instance
+/// file (one whose `<pf>-<id>` stem disagrees with its embedded `PF`, or
+/// whose subdir isn't `<pn>`) is skipped, matching real's own
+/// `invalid_name`/`name_split` `continue`.
 pub fn populate_local_pkgdir(pkgdir: &Path) -> Result<Vec<HashMap<String, String>>, String> {
     let existing = portage_repo::read_packages_index(pkgdir);
     let mut by_basename: HashMap<&str, Vec<&HashMap<String, String>>> = HashMap::new();
@@ -1640,6 +1647,25 @@ pub fn populate_local_pkgdir(pkgdir: &Path) -> Result<Vec<HashMap<String, String
             by_basename.entry(basename).or_default().push(e);
         }
     }
+
+    // Real's own caller (`bintree.py:1185-1199`): `Invalid` files are
+    // reported with real's exact message shape and skipped; `Fatal` ones
+    // propagate. The reader messages already carry `'<path>: '` (the
+    // merge path reads them that way), so strip that prefix for the
+    // warning -- real's `<e>` is the bare exception text.
+    let record = |file: &Path, scanned: Result<Option<HashMap<String, String>>, BinpkgError>| {
+        match scanned {
+            Ok(entry) => Ok(entry),
+            Err(BinpkgError::Invalid(message)) => {
+                let reason = message
+                    .strip_prefix(&format!("{}: ", file.display()))
+                    .unwrap_or(&message);
+                eprintln!("!!! Invalid binary package: '{}', {reason}", file.display());
+                Ok(None)
+            }
+            Err(BinpkgError::Fatal(message)) => Err(message),
+        }
+    };
 
     let mut out: Vec<HashMap<String, String>> = Vec::new();
     let Ok(cat_paths) = portage_util::read_dir_paths(pkgdir) else {
@@ -1665,8 +1691,10 @@ pub fn populate_local_pkgdir(pkgdir: &Path) -> Result<Vec<HashMap<String, String
                         continue;
                     };
                     let path_field = format!("{category}/{name}/{mname}");
-                    let Some(e) =
-                        scan_binpkg_file(&mfile, mname, category, path_field, &by_basename, true)?
+                    let Some(e) = record(
+                        &mfile,
+                        scan_binpkg_file(&mfile, mname, category, path_field, &by_basename, true),
+                    )?
                     else {
                         continue;
                     };
@@ -1684,9 +1712,10 @@ pub fn populate_local_pkgdir(pkgdir: &Path) -> Result<Vec<HashMap<String, String
                 continue;
             }
             let path_field = format!("{category}/{name}");
-            if let Some(e) =
-                scan_binpkg_file(&entry, name, category, path_field, &by_basename, false)?
-            {
+            if let Some(e) = record(
+                &entry,
+                scan_binpkg_file(&entry, name, category, path_field, &by_basename, false),
+            )? {
                 out.push(e);
             }
         }
@@ -1712,7 +1741,7 @@ fn scan_binpkg_file(
     path_field: String,
     by_basename: &HashMap<&str, Vec<&HashMap<String, String>>>,
     multi_instance: bool,
-) -> Result<Option<HashMap<String, String>>, String> {
+) -> Result<Option<HashMap<String, String>>, BinpkgError> {
     let is_gpkg = basename.ends_with(".gpkg.tar");
     let ext = if is_gpkg {
         ".gpkg.tar"
@@ -2850,6 +2879,52 @@ mod tests {
         );
         let scratch = ScratchDir::new("scan-empty").unwrap();
         assert!(populate_local_pkgdir(scratch.path()).unwrap().is_empty());
+    }
+
+    /// Real `_populate_local`'s two classes at the scan boundary
+    /// (`bintree.py:1185-1199`): an `Invalid` file is skipped (with
+    /// real's warning -- the exact line is pinned by the CLI contract
+    /// test, not here) and the rest of the pool still resolves.
+    #[test]
+    fn populate_local_pkgdir_skips_invalid_files_and_keeps_the_pool() {
+        let scratch = ScratchDir::new("scan-skip-invalid").unwrap();
+        let pkgdir = scratch.path();
+        fs::create_dir_all(pkgdir.join("dev-libs")).unwrap();
+        fs::copy(
+            fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+            pkgdir.join("dev-libs/packagepkg-1.0.tbz2"),
+        )
+        .unwrap();
+        let invalid = build_gpkg_with_inner_entries(
+            "invalidpkg-1.0",
+            &[inner_entry("other/KEY", b"outside\n")],
+        );
+        fs::copy(&invalid, pkgdir.join("dev-libs/invalidpkg-1.0.gpkg.tar")).unwrap();
+
+        let entries =
+            populate_local_pkgdir(pkgdir).expect("an invalid file must not abort the scan");
+        assert_eq!(entries.len(), 1, "{entries:?}");
+        assert_eq!(
+            entries[0].get("CPV").map(String::as_str),
+            Some("dev-libs/packagepkg-1.0")
+        );
+    }
+
+    /// The other class: a `Fatal` file (real would traceback) still stops
+    /// the whole scan.
+    #[test]
+    fn populate_local_pkgdir_aborts_on_fatal_files() {
+        let scratch = ScratchDir::new("scan-fatal").unwrap();
+        let pkgdir = scratch.path();
+        fs::create_dir_all(pkgdir.join("dev-libs")).unwrap();
+        let fatal = build_gpkg_with_inner_entries(
+            "fatalpkg-1.0",
+            &[inner_symlink("metadata/DESCRIPTION", "/etc/hostname")],
+        );
+        fs::copy(&fatal, pkgdir.join("dev-libs/fatalpkg-1.0.gpkg.tar")).unwrap();
+
+        let err = populate_local_pkgdir(pkgdir).expect_err("a fatal file must abort the scan");
+        assert!(err.contains("not in the archive"), "{err}");
     }
 
     // ---- GPG binpkg signatures (`FEATURES=binpkg-signing`) ----
