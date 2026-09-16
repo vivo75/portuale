@@ -6138,6 +6138,98 @@ def test_pkgdir_scan_reads_a_multi_instance_xpak_from_the_cat_pn_subdir(
     ), legacy.stdout
 
 
+def test_pkgdir_scan_skips_real_invalid_class_and_aborts_the_rest(
+    emerge_binary, tmp_path, fixtures_root
+):
+    """Backlog #60: real `bintree._populate_local` catches
+    `(PortagePackageException, SignatureException)` around each file's
+    metadata read, prints real's own
+    `!!! Invalid binary package: '<path>', <msg>` and skips that file
+    (`bintree.py:1185-1199`); anything else propagates (S0 live capture:
+    cell i8's inner `other/KEY` is InvalidBinaryPackageFormat, cell i1's
+    inner symlink to `/etc/hostname` is `KeyError`). Portuale used to
+    abort the whole `$PKGDIR` scan on either -- one crafted file hid
+    every valid candidate. Now the invalid class is skipped with real's
+    message (path once, then the reader's own reason) while the fatal
+    class still aborts, so the warning shape and both exit codes are
+    pinned here.
+
+    The crafted archives are the #58 S0 cells
+    (`scripts/gpkg_crafted_members.py --mode build`: real-writer-shaped
+    with a recomputed Manifest), so real's own reader produces the same
+    classification. Skipped if the host lacks `zstd` for the cells.
+    """
+    if shutil.which("zstd") is None:
+        pytest.skip("zstd not available on the host")
+
+    cfg = tmp_path / "cfg"
+    repo = tmp_path / "repo"
+    pkgdir = tmp_path / "pkgdir"
+    # The fixture PKGDIR (its `Packages` index resolves
+    # `dev-libs/binaryonlypkg` with no ebuild and no dependency walks).
+    shutil.copytree(fixtures_root / "pkgdir", pkgdir)
+    (cfg / "etc/portage").mkdir(parents=True)
+    (repo / "profiles").mkdir(parents=True)
+    (repo / "profiles/repo_name").write_text("main\n")
+    (repo / "profiles/make.defaults").write_text('ACCEPT_KEYWORDS="amd64"\n')
+    (cfg / "etc/portage/repos.conf").write_text(
+        f"[DEFAULT]\nmain-repo = main\n\n[main]\nlocation = {repo}\n"
+    )
+    (cfg / "etc/portage/make.conf").write_text(f'PKGDIR="{pkgdir}"\n')
+    (cfg / "etc/portage/make.profile").symlink_to(repo / "profiles")
+    env = {"PORTAGE_CONFIGROOT": str(cfg), "ROOT": str(cfg)}
+    args = ["--pretend", "--usepkgonly", "dev-libs/binaryonlypkg"]
+    expected = ["[binary  N     ] dev-libs/binaryonlypkg-1.0-1 "]
+
+    # Baseline: the valid pool resolves, no warning.
+    base = _run([str(emerge_binary)], args, env)
+    assert base.returncode == 0, base.stderr
+    assert base.stdout.splitlines() == expected
+    assert "Invalid binary package" not in base.stderr
+
+    cells = tmp_path / "cells"
+    subprocess.run(
+        [
+            "python3",
+            str(Path(fixtures_root).parent / "scripts/gpkg_crafted_members.py"),
+            "--out",
+            str(cells),
+            "--cells",
+            "i8,i1",
+            "--mode",
+            "build",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    # i8 (inner `other/KEY`): real's skip class -> warning, rc 0, and the
+    # valid candidate survives.
+    (i8,) = cells.glob("i8-*.gpkg.tar")
+    invalid = pkgdir / "dev-libs/invalidotherpkg-1.0.gpkg.tar"
+    shutil.copy(i8, invalid)
+    skipped = _run([str(emerge_binary)], args, env)
+    assert skipped.returncode == 0, skipped.stderr
+    assert skipped.stdout.splitlines() == expected
+    assert (
+        f"!!! Invalid binary package: '{invalid}', "
+        'inner metadata member "other/KEY" is outside metadata/'
+    ) in skipped.stderr
+
+    # i1 (inner symlink to a host path): real's abort class -> the scan
+    # still stops (rc 1), and no candidate is resolved.
+    invalid.unlink()
+    (i1,) = cells.glob("i1-*.gpkg.tar")
+    fatal = pkgdir / "dev-libs/invalidfatalpkg-1.0.gpkg.tar"
+    shutil.copy(i1, fatal)
+    aborted = _run([str(emerge_binary)], args, env)
+    assert aborted.returncode == 1
+    assert aborted.stdout.splitlines() == []
+    assert f"emerge: scanning {pkgdir}:" in aborted.stderr
+    assert "not in the archive" in aborted.stderr
+
+
 def test_getbinpkg_makes_a_remote_binhost_binary_eligible(
     emerge_binary, fixture_env
 ):
