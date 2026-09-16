@@ -1426,7 +1426,7 @@ fn apply_env_layer(scalars: &mut HashMap<String, String>, config: &mut Config) {
         };
         match name {
             "USE" => {
-                apply_incremental(&value, &mut config.use_flags);
+                apply_use_incremental(&value, &mut config.use_flags);
                 // Real `USE_ORDER` puts `env` above `pkg` (user
                 // `package.use`) -- the highest tier. `effective_use_flags`
                 // replays `env_use_tokens` after the user-level
@@ -1475,7 +1475,7 @@ fn process_lines(text: &str, scalars: &mut HashMap<String, String>, config: &mut
         note_incremental(config, key, &value);
         match key {
             "USE" => {
-                apply_incremental(&value, &mut config.use_flags);
+                apply_use_incremental(&value, &mut config.use_flags);
                 config.use_tokens.push(value.clone());
             }
             "ACCEPT_KEYWORDS" => apply_incremental(&value, &mut config.accept_keywords),
@@ -1737,7 +1737,7 @@ fn process_make_conf_file(
         note_incremental(config, key, &value);
         match key {
             "USE" => {
-                apply_incremental(&value, &mut config.use_flags);
+                apply_use_incremental(&value, &mut config.use_flags);
                 config.conf_use_tokens.push(value.clone());
             }
             "ACCEPT_KEYWORDS" => apply_incremental(&value, &mut config.accept_keywords),
@@ -2613,7 +2613,7 @@ pub fn resolve_config(
                 continue;
             }
             let joined = expand_use.join(" ");
-            apply_incremental(&joined, &mut config.use_flags);
+            apply_use_incremental(&joined, &mut config.use_flags);
             config.profile_use_layers[i]
                 .make_defaults_use
                 .insert(0, joined);
@@ -2651,7 +2651,7 @@ pub fn resolve_config(
             })
             .collect::<Vec<_>>()
             .join(" ");
-        apply_incremental(&prefixed, &mut config.use_flags);
+        apply_use_incremental(&prefixed, &mut config.use_flags);
         config.conf_use_tokens.push(prefixed);
     }
 
@@ -2676,7 +2676,7 @@ pub fn resolve_config(
         if profile_scalars.get(&var) == scalars.get(&var) {
             continue;
         }
-        apply_incremental(value, &mut config.use_flags);
+        apply_use_incremental(value, &mut config.use_flags);
         config.conf_use_tokens.push(value.clone());
     }
 
@@ -3000,7 +3000,7 @@ pub fn resolve_config(
         toks.join(" ")
     };
     if !global_user_use.is_empty() {
-        apply_incremental(&global_user_use, &mut config.use_flags);
+        apply_use_incremental(&global_user_use, &mut config.use_flags);
         config.conf_use_tokens.push(global_user_use);
     }
 
@@ -4951,7 +4951,7 @@ sync-uri = file:///srv/pkgs
         assert_eq!(config.conf_use_tokens, vec!["baz".to_string()]);
         let mut replayed = HashSet::new();
         for token in config.use_tokens.iter().chain(&config.conf_use_tokens) {
-            apply_incremental(token, &mut replayed);
+            apply_use_incremental(token, &mut replayed);
         }
         assert_eq!(replayed, config.use_flags);
     }
@@ -5138,6 +5138,46 @@ sync-uri = file:///srv/pkgs
         assert!(config.use_flags.contains("video_cards_vesa"));
         // a real `-` in the later level still cancels the earlier value.
         assert!(!config.use_flags.contains("video_cards_radeon"));
+    }
+
+    #[test]
+    fn use_expand_prefix_wildcard_cancels_parent_level_values() {
+        // #67 S2 regression pin: a leaf level's `VIDEO_CARDS="-* intel"`
+        // must cancel the parent levels' `video_cards_*` flags (real
+        // config.py:2925's `-<prefix>_*` removal) while keeping the
+        // leaf's own `intel`. Pre-fix the expanded token was
+        // `-video_cards_*`, which apply_incremental treated as an exact
+        // removal of a flag literally named `video_cards_*` -- a no-op --
+        // so the parent's cards survived.
+        let root = std::env::temp_dir().join("portage-profile-test-use-expand-prefix-wildcard");
+        let repo = root.join("repo");
+        let base = repo.join("profiles/base");
+        let leaf = root.join("leaf-profile");
+        fs::create_dir_all(&base).unwrap();
+        fs::create_dir_all(&leaf).unwrap();
+        fs::write(
+            base.join("make.defaults"),
+            "USE_EXPAND=\"VIDEO_CARDS\"\nVIDEO_CARDS=\"dummy fbdev intel\"\n",
+        )
+        .unwrap();
+        fs::write(leaf.join("parent"), "../repo/profiles/base\n").unwrap();
+        fs::write(leaf.join("make.defaults"), "VIDEO_CARDS=\"-* intel\"\n").unwrap();
+        let portage_dir = root.join("etc/portage");
+        fs::create_dir_all(&portage_dir).unwrap();
+        let make_profile = portage_dir.join("make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
+
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
+            .expect("config must resolve");
+        assert!(config.use_flags.contains("video_cards_intel"));
+        assert!(
+            !config.use_flags.contains("video_cards_dummy"),
+            "the leaf `-*` must cancel the parent's dummy: {:?}",
+            config.use_flags
+        );
+        assert!(!config.use_flags.contains("video_cards_fbdev"));
     }
 
     #[test]

@@ -2977,7 +2977,7 @@ fn any_config_entry_matches<T: ConfigAtomEntry>(
 ///   (`Config::package_use_user`) on top. The strongest layer before
 ///   the final `use.force`/`use.mask` step.
 ///
-/// Every layer is replayed via `apply_incremental` directly -- not a
+/// Every layer is replayed via `apply_use_incremental` directly -- not a
 /// pre-flattened set unioned on top (see the `iuse` paragraph below for
 /// why that distinction matters). The rest of the `env` layer
 /// (`$USE`, `package.env` non-USE vars) and `features`/`env.d` are
@@ -3012,7 +3012,7 @@ fn any_config_entry_matches<T: ConfigAtomEntry>(
 /// `USE_ORDER`) sit even lower/higher than portuale models at all.
 /// Applied here at that same relative position (the `pkginternal` step
 /// of the walk above), with the `repo` `package.use` applied first and
-/// every later layer replayed directly on top via `apply_incremental` --
+/// every later layer replayed directly on top via `apply_use_incremental` --
 /// **not** a plain set union of the already-flattened `use_flags`. An
 /// earlier version of
 /// portuale *did* union a flattened `base` here, which meant `base`
@@ -3239,7 +3239,7 @@ fn effective_use_flags_uncached(
     // the lowest `USE_ORDER` tier -- everything below overrides it.
     // Practically always empty. See `Config::envd_use_tokens`.
     for token in &config.envd_use_tokens {
-        portage_profile::apply_incremental(token, &mut use_flags);
+        portage_profile::apply_use_incremental(token, &mut use_flags);
     }
 
     // `repo` (real `configdict["repo"]`): each repo's own
@@ -3257,13 +3257,13 @@ fn effective_use_flags_uncached(
     for (repo, tokens) in &config.repo_make_defaults_use {
         if repo.is_empty() || repo == candidate_repo {
             for token in tokens {
-                portage_profile::apply_incremental(token, &mut use_flags);
+                portage_profile::apply_use_incremental(token, &mut use_flags);
             }
         }
     }
     let apply_matching = |flags: &mut HashSet<String>, entries: &[(String, Vec<String>)]| {
         for (_, tokens) in config_entries_matching(entries, candidate_str, category, package) {
-            portage_profile::apply_incremental_iter(tokens, flags);
+            portage_profile::apply_use_incremental_iter(tokens, flags);
         }
     };
     apply_matching(&mut use_flags, &config.package_use_repo);
@@ -3280,7 +3280,7 @@ fn effective_use_flags_uncached(
     // use-masked `test` is still dropped by the `use.mask` step below,
     // exactly as real portage's own `regenerate()` filtering intends.
     for token in &config.features_use {
-        portage_profile::apply_incremental(token, &mut use_flags);
+        portage_profile::apply_use_incremental(token, &mut use_flags);
     }
 
     // `pkginternal`: only a token with an explicit "+"/"-" marker
@@ -3293,7 +3293,7 @@ fn effective_use_flags_uncached(
         .filter(|tok| tok.starts_with('+') || tok.starts_with('-'))
         .collect::<Vec<_>>()
         .join(" ");
-    portage_profile::apply_incremental(&iuse_defaults, &mut use_flags);
+    portage_profile::apply_use_incremental(&iuse_defaults, &mut use_flags);
 
     // `defaults` (real `configdict["defaults"]`): real `regenerate()`
     // walks this tier one profile at a time -- that level's
@@ -3305,13 +3305,13 @@ fn effective_use_flags_uncached(
     // helper) that never populated the layers.
     if config.profile_use_layers.is_empty() {
         for token in &config.use_tokens {
-            portage_profile::apply_incremental(token, &mut use_flags);
+            portage_profile::apply_use_incremental(token, &mut use_flags);
         }
         apply_matching(&mut use_flags, &config.package_use);
     } else {
         for layer in &config.profile_use_layers {
             for token in &layer.make_defaults_use {
-                portage_profile::apply_incremental(token, &mut use_flags);
+                portage_profile::apply_use_incremental(token, &mut use_flags);
             }
             apply_matching(&mut use_flags, &layer.package_use);
         }
@@ -3320,7 +3320,7 @@ fn effective_use_flags_uncached(
     // `conf` (real `configdict["conf"]`): `make.conf` USE, then the
     // `USE_EXPAND`/`USE_EXPAND_UNPREFIXED` folded values.
     for token in &config.conf_use_tokens {
-        portage_profile::apply_incremental(token, &mut use_flags);
+        portage_profile::apply_use_incremental(token, &mut use_flags);
     }
 
     // `pkg` (real `configdict["pkg"]`): `package.env`'s own `USE=` first
@@ -3337,7 +3337,7 @@ fn effective_use_flags_uncached(
     // keep their `+`/`-` incremental syntax. This is the strongest layer
     // before the final `use.force`/`use.mask` step below.
     for token in &config.env_use_tokens {
-        portage_profile::apply_incremental(token, &mut use_flags);
+        portage_profile::apply_use_incremental(token, &mut use_flags);
     }
 
     // `--autounmask-use` (real `_dynamic_config._needed_use_config_changes`,
@@ -34534,6 +34534,26 @@ mod tests {
             "pkg",
         );
         assert_eq!(use_flags, HashSet::from(["bar".to_string()]));
+    }
+
+    #[test]
+    fn effective_use_flags_applies_a_use_prefix_wildcard() {
+        // #67 S2: conf-tier USE_EXPAND folding produces
+        // `-video_cards_*`; it shares real's USE loop with the IUSE
+        // defaults, so it cancels an ebuild's `+video_cards_dummy`
+        // default, and the same level's plain `video_cards_intel` token
+        // still lands.
+        let mut config = test_config();
+        config.conf_use_tokens = vec!["-video_cards_* video_cards_intel".to_string()];
+        let flags = effective_use_flags(
+            &config,
+            "+video_cards_dummy video_cards_intel",
+            &["amd64".to_string()],
+            "dev-libs/pkg-1.0::testrepo",
+            "dev-libs",
+            "pkg",
+        );
+        assert_eq!(flags, HashSet::from(["video_cards_intel".to_string()]));
     }
 
     #[test]
