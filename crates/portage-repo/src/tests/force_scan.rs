@@ -247,3 +247,129 @@ fn slot_operator_slot_change_probe_keeps_a_binary_whose_ebuild_is_invisible() {
         "the visible stale binary is masked, the one behind a hidden ebuild is kept"
     );
 }
+
+/// The update force scan forces the installed child's update when the tree has a
+/// newer slot the replacement's `:=` accepts; a second parent's pin or a missing
+/// `--update` refuses it.
+#[test]
+fn slot_operator_update_force_scan_forces_the_installed_childs_update() {
+    use md5::Digest as _;
+    use std::fmt::Write as _;
+    let base = TempDir::new("portage-repo-236-force").keep();
+    for (name, slot, rdepend) in [
+        ("forceprov-1.0", "0/1", ""),
+        ("forcecons-1.0", "0", ">=dev-libs/forceprov-1.0:0/1="),
+        ("forceveto-1.0", "0", "<dev-libs/forceprov-2.0:0/1="),
+    ] {
+        let d = base.join("var/db/pkg/dev-libs").join(name);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+        fs::write(d.join("EAPI"), "8\n").unwrap();
+        fs::write(d.join("repository"), "testrepo\n").unwrap();
+        if !rdepend.is_empty() {
+            fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+        }
+    }
+    let repo = base.join("repo");
+    let write_pkg = |pkg: &str, pv: &str, slot: &str, rdepend: &str| {
+        let dir = repo.join("dev-libs").join(pkg);
+        std::fs::create_dir_all(&dir).unwrap();
+        let body = format!(
+            "EAPI=8\nDESCRIPTION=\"236 probe\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\nRDEPEND=\"{rdepend}\"\n"
+        );
+        std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
+        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+        let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=236 probe\nEAPI=8\n".to_string();
+        writeln!(entry, "KEYWORDS=amd64").unwrap();
+        if !rdepend.is_empty() {
+            writeln!(entry, "RDEPEND={rdepend}").unwrap();
+        }
+        writeln!(entry, "SLOT={slot}\n_md5_={md5}").unwrap();
+        let cachedir = repo.join("metadata/md5-cache/dev-libs");
+        std::fs::create_dir_all(&cachedir).unwrap();
+        std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+    };
+    write_pkg("forceprov", "1.0", "0/1", "");
+    write_pkg("forceprov", "2.0", "0/2", "");
+    write_pkg("forcecons", "1.0", "0", "dev-libs/forceprov:=");
+    write_pkg("forceveto", "1.0", "0", "<dev-libs/forceprov-2.0:=");
+    let repos = vec![RepoConfig {
+        name: "testrepo".to_string(),
+        location: repo.clone(),
+        priority: 0,
+        is_main: true,
+        masters: vec![],
+        profile_formats: vec![],
+        cache_formats: vec![],
+        aliases: vec![],
+        sync_type: None,
+        sync_uri: None,
+        volatile: false,
+        module_specific_options: vec![],
+    }];
+    let installed = |pkg: &str| GraphEntry {
+        outcome: PretendOutcome::AlreadyInstalled {
+            version: "1.0".into(),
+        },
+        ..graph_entry("dev-libs", pkg, "1.0")
+    };
+    let entries = vec![installed("forcecons"), installed("forceprov")];
+    let empty: BTreeSet<(String, String)> = BTreeSet::new();
+    let cons = ("dev-libs".to_string(), "forcecons".to_string());
+    let veto = ("dev-libs".to_string(), "forceveto".to_string());
+    let config = test_config();
+    let scan = |entries: &[GraphEntry], reachable: &HashSet<(String, String)>, update: bool| {
+        slot_operator_update_force_scan(SlotOperatorUpdateForceScanArgs {
+            root: &base,
+            repos: &repos,
+            config: &config,
+            entries,
+            reachable,
+            already: &empty,
+            undone: &empty,
+            with_bdeps: false,
+            update,
+            top_level_cps: &HashSet::new(),
+            excluded: &[],
+        })
+    };
+    let (consumers, forced) = scan(&entries, &HashSet::new(), true);
+    assert_eq!(consumers, BTreeSet::from([cons.clone()]));
+    assert_eq!(
+        forced,
+        BTreeSet::from([(
+            "dev-libs".to_string(),
+            "forceprov".to_string(),
+            "2.0".to_string()
+        )])
+    );
+    // Without `--update` the probe does not run.
+    assert_eq!(
+        scan(&entries, &HashSet::new(), false),
+        (empty.clone(), BTreeSet::new())
+    );
+    // A reachable installed parent pinning `<2.0` refuses the update.
+    let mut with_veto = entries.clone();
+    with_veto.push(installed("forceveto"));
+    assert_eq!(
+        scan(&with_veto, &HashSet::from([veto.clone()]), true),
+        (empty.clone(), BTreeSet::new())
+    );
+    // Already-upgraded child: the walk's own selection owns that case.
+    let upgraded = vec![
+        installed("forcecons"),
+        GraphEntry {
+            outcome: PretendOutcome::Upgrade {
+                from: "1.0".into(),
+                to: "2.0".into(),
+            },
+            ..graph_entry("dev-libs", "forceprov", "2.0")
+        },
+    ];
+    assert_eq!(
+        scan(&upgraded, &HashSet::new(), true),
+        (empty, BTreeSet::new())
+    );
+    let _ = fs::remove_dir_all(&base);
+}

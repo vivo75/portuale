@@ -60,6 +60,16 @@ fn installed_163(version: &str) -> PretendOutcome {
     }
 }
 
+fn masked_163(cat: &str, pkg: &str, atom: &str) -> MaskedDepReport {
+    MaskedDepReport {
+        category: cat.to_string(),
+        package: pkg.to_string(),
+        atom: atom.to_string(),
+        masked: Vec::new(),
+        chain: Vec::new(),
+    }
+}
+
 /// A merge-bound requirer whose cp is absent still completes, even
 /// with a same-category merge-bound decoy present.
 #[test]
@@ -826,6 +836,16 @@ fn change_163(atom: &str, token: &str, chain: &[&str]) -> AutounmaskChange {
         token: token.to_string(),
         dep_chain: chain.iter().map(|s| s.to_string()).collect(),
         trigger: None,
+    }
+}
+
+fn use_unsat_163(cat: &str, pkg: &str, atom: &str) -> UseUnsatDepReport {
+    UseUnsatDepReport {
+        category: cat.to_string(),
+        package: pkg.to_string(),
+        atom: atom.to_string(),
+        rows: vec![("x".to_string(), vec!["y".to_string()])],
+        chain: Vec::new(),
     }
 }
 

@@ -1,6 +1,60 @@
 use super::*;
 
 #[test]
+fn resolved_dep_targets_ranks_by_vercmp_not_by_string_order() {
+    // Ranks by vercmp, not string order (`1.10` beats `1.9`).
+    // Portage: depgraph.py, _select_pkg_highest_available
+    let plain = |cat: &str, pkg: &str| DepEdge {
+        atom: format!("{cat}/{pkg}"),
+        evaluated: format!("{cat}/{pkg}").clone(),
+        category: cat.to_string(),
+        package: pkg.to_string(),
+        priority: DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        },
+        disjunctive: false,
+        alt: None,
+        key: 3,
+    };
+    let mut low = new_entry("dev-libs", "slotted", "1.9", Vec::new());
+    low.slot = Some("0".into());
+    low.sub_slot = Some("0".into());
+    let mut high = new_entry("dev-libs", "slotted", "1.10", Vec::new());
+    high.slot = Some("1".into());
+    high.sub_slot = Some("1".into());
+    let user = new_entry(
+        "dev-libs",
+        "user",
+        "1.0",
+        vec![plain("dev-libs", "slotted")],
+    );
+    // `low` first, so "first on ties" would pick it without version ranking.
+    let entries = vec![low, high, user];
+    let root = Path::new("/nonexistent-root-for-unit-test");
+    let targets = resolved_dep_targets(&entries, root, &HashMap::new());
+    assert_eq!(
+        targets[2][0],
+        Some(1),
+        "the unqualified atom resolves to 1.10, not to the \
+         string-highest 1.9"
+    );
+    // `build_digraph` shares the ranking, so its edge agrees.
+    let g = build_digraph(
+        &entries,
+        &["dev-libs/user".to_string()],
+        root,
+        &HashMap::new(),
+    );
+    let children: Vec<usize> = g.children[2].iter().map(|&(c, _)| c).collect();
+    assert_eq!(
+        children,
+        vec![1],
+        "the scheduling graph picks the same instance: {children:?}"
+    );
+}
+
+#[test]
 fn resolved_dep_targets_reports_an_installed_target_as_no_tree_edge() {
     // The one `merge_bound_only` difference: the tree view drops the
     // installed edge, the scheduling graph keeps it.

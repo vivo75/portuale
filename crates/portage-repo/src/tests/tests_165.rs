@@ -500,6 +500,61 @@ fn resolve_blockers_ignores_an_installed_only_match_for_a_nomerge_owner() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A nomerge owner in the required-set closure still blocks on a
+/// merge-bound match (Portage's "digraph node with parents").
+#[test]
+fn resolve_blockers_unblocks_a_nomerge_row_outside_the_required_sets() {
+    let root = dir_165("blocker-sets");
+    install_165(&root, "dev-libs", "target-1.0", "0", &[]);
+    let owner = entry_165(
+        "dev-libs",
+        "owner",
+        PretendOutcome::AlreadyInstalled {
+            version: "1.0".to_string(),
+        },
+        Some("0"),
+    );
+    let entries = vec![
+        owner,
+        entry_165(
+            "dev-libs",
+            "target",
+            PretendOutcome::New {
+                version: "2.0".to_string(),
+            },
+            Some("0"),
+        ),
+    ];
+    let pending = vec![pending_165(Pending165Args {
+        atom: "!dev-libs/target",
+        strong: false,
+        buildtime: false,
+        target: ("dev-libs", "target"),
+        owner: ("dev-libs", "owner"),
+        owner_version: "1.0",
+        owner_merging: false,
+        owner_installed: false,
+    })];
+    // Outside every required set the merge-bound match resolves by
+    // removing the owner.
+    let solvable = resolve_blockers(&root, &pending, &entries, &HashSet::new(), false);
+    let by_version: HashMap<String, &FiledBlocker> = solvable
+        .iter()
+        .map(|c| (c.conflict.matched_version.clone(), c))
+        .collect();
+    assert_eq!(by_version.len(), 2);
+    assert!(!by_version["2.0"].conflict.unsolvable);
+    // Inside the closure the same row is unresolved.
+    let closure = HashSet::from([("dev-libs".to_string(), "owner".to_string())]);
+    let stuck = resolve_blockers(&root, &pending, &entries, &closure, false);
+    let row_2_0 = stuck
+        .iter()
+        .find(|c| c.conflict.matched_version == "2.0")
+        .expect("merge-bound row filed");
+    assert!(row_2_0.conflict.unsolvable);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A use-dep blocker is evaluated against the matched version's own
 /// entry: `targetA` (flag off) does not satisfy, `targetB` (flag
 /// on) does, so only the 2.0 row files.

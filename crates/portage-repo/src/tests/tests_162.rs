@@ -514,6 +514,16 @@ fn disj_circ_162(args: DisjCirc162Args<'_>) -> portage_use_reduce::AltPreference
     })
 }
 
+fn circ_child_162(cat: &str, pkg: &str, ver: &str, slot: &str) -> CircularDepChild {
+    CircularDepChild {
+        category: cat.to_string(),
+        package: pkg.to_string(),
+        version: ver.to_string(),
+        slot: Some(slot.to_string()),
+        sub_slot: Some(slot.to_string()),
+    }
+}
+
 fn circ_map_162(
     parent: &RootCp,
     children: Vec<CircularDepChild>,
