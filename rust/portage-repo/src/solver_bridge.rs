@@ -665,7 +665,13 @@ fn graph_result_from_order(
         if req.ignore_built_slot_operator_deps || !req.rebuild_if_new_slot {
             (Vec::new(), Vec::new())
         } else {
-            super::slot_operator_rebuild_entries(&req.root, repos, &entries, &slot_op_reachable)
+            super::slot_operator_rebuild_entries(
+                &req.root,
+                repos,
+                &entries,
+                &slot_op_reachable,
+                req.with_bdeps,
+            )
         };
     entries.extend(slot_op_rebuilds);
     // Same merge-order sort the walk path applies (real portage's

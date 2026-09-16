@@ -13084,6 +13084,16 @@ type SlotOpRebuildScan = (BTreeSet<(String, String)>, Vec<(String, String)>);
 /// mutates the settled graph in place and does not restart, so its scan
 /// cannot re-fire; portuale's re-runs every pass and needs the latch).
 ///
+/// `with_bdeps` (#65 S1) mirrors real's `bdeps` parameter
+/// (`_emerge/create_depgraph_params.py:97-103`): only when it is true are
+/// an *installed* consumer's `DEPEND`/`BDEPEND` read at all.
+/// `_add_pkg_deps` (`_emerge/depgraph.py:4194-4247`) empties a built
+/// package's `DEPEND`/`BDEPEND` before any dep is registered when `bdeps`
+/// is not `y`/`auto` (real's default under `--usepkg`/`--getbinpkg`), so
+/// no slot-operator dep can ever be registered from them and no rebuild
+/// can fire. `RDEPEND`/`PDEPEND`/`IDEPEND` are runtime/install-time keys
+/// and stay unconditional.
+///
 /// Cuts (unchanged from v1): no `_slot_operator_check_reverse_dependencies`
 /// rejection, no `_slot_operator_update_probe` family (v2 `#24b`), no
 /// `slot_operator_mask_built` for non-installed binaries (v2 `#24c`).
@@ -13094,6 +13104,7 @@ fn slot_operator_rebuild_scan(
     reachable: &HashSet<(String, String)>,
     already: &BTreeSet<(String, String)>,
     undone: &BTreeSet<(String, String)>,
+    with_bdeps: bool,
 ) -> SlotOpRebuildScan {
     // cp -> (new version, new slot, new sub-slot) for every entry that
     // replaces an installed version in that slot.
@@ -13138,7 +13149,15 @@ fn slot_operator_rebuild_scan(
                 continue;
             }
             let consumer_cpv = pkg.cpv();
-            let mut providers: Vec<String> = ["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"]
+            // #65 S1: real empties a built package's DEPEND/BDEPEND when
+            // bdeps is not y/auto, so an installed consumer's build-time
+            // keys are only read when the walk chose to walk them.
+            let dep_keys: &[&str] = if with_bdeps {
+                &["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"]
+            } else {
+                &["RDEPEND", "PDEPEND", "IDEPEND"]
+            };
+            let mut providers: Vec<String> = dep_keys
                 .iter()
                 .flat_map(|key| {
                     read_vdb_string(root, &pkg.category, &pkg.package, &pkg.version, key)
@@ -13621,6 +13640,7 @@ fn slot_operator_rebuild_entries(
     repos: &[RepoConfig],
     entries: &[GraphEntry],
     reachable: &HashSet<(String, String)>,
+    with_bdeps: bool,
 ) -> (Vec<GraphEntry>, Vec<(String, String)>) {
     let installed = all_installed_packages(root);
     let mut scheduled: BTreeSet<(String, String)> = BTreeSet::new();
@@ -13636,6 +13656,7 @@ fn slot_operator_rebuild_entries(
             reachable,
             &scheduled,
             &BTreeSet::new(),
+            with_bdeps,
         );
         abi_rebuilds = pairs;
         if next == scheduled {
@@ -20502,6 +20523,7 @@ fn collect_feedback(
             &ctx.slot_op_reachable,
             &grown.slot_operator_replace_installed,
             &grown.slot_operator_undone,
+            ctx.with_bdeps,
         );
         pass.abi_rebuilds = Some(abi_rebuilds);
         if scheduled != grown.slot_operator_replace_installed {
@@ -20596,6 +20618,7 @@ fn assemble_result(
                 &ctx.slot_op_reachable,
                 &params.slot_operator_replace_installed,
                 &params.slot_operator_undone,
+                ctx.with_bdeps,
             )
             .1
         }
@@ -32126,6 +32149,7 @@ mod tests {
             &reach,
             &empty,
             &empty,
+            true,
         );
         assert_eq!(
             scheduled,
@@ -32142,7 +32166,7 @@ mod tests {
 
         // Nothing changing `bar` -> no rebuilds.
         let (empty_sched, empty_abi) =
-            slot_operator_rebuild_scan(&dir, &[], &[], &reach, &empty, &empty);
+            slot_operator_rebuild_scan(&dir, &[], &[], &reach, &empty, &empty, true);
         assert!(empty_sched.is_empty() && empty_abi.is_empty());
 
         // Not reachable -> the post-walk vdb scan is suppressed entirely
@@ -32156,6 +32180,7 @@ mod tests {
             &HashSet::new(),
             &empty,
             &empty,
+            true,
         );
         assert!(none_sched.is_empty() && none_abi.is_empty());
 
@@ -32187,6 +32212,7 @@ mod tests {
             &reach,
             &already,
             &empty,
+            true,
         );
         assert_eq!(again, already, "the set is stable -- no second restart");
         assert_eq!(
@@ -32200,8 +32226,13 @@ mod tests {
 
         // The `--solver=` bridges keep the pre-S3 synthesiser; it must
         // still build the one entry, flagged `slot_operator_rebuild`.
-        let (out, _) =
-            slot_operator_rebuild_entries(&dir, &[], std::slice::from_ref(&bar_upgrade), &reach);
+        let (out, _) = slot_operator_rebuild_entries(
+            &dir,
+            &[],
+            std::slice::from_ref(&bar_upgrade),
+            &reach,
+            true,
+        );
         let names: Vec<&str> = out.iter().map(|e| e.package.as_str()).collect();
         assert_eq!(names, vec!["stale"]);
         assert!(matches!(
@@ -32211,6 +32242,119 @@ mod tests {
                 ..
             }
         ));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn slot_operator_rebuild_scan_honours_with_bdeps() {
+        // #65 S1: an installed consumer's DEPEND/BDEPEND are read only
+        // when `with_bdeps` is true (real empties them otherwise,
+        // `_emerge/depgraph.py:4194-4247`); RDEPEND/PDEPEND/IDEPEND are
+        // runtime/install-time keys and stay unconditional.
+        let dir = std::env::temp_dir().join(format!(
+            "portage-repo-slotop-bdeps-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mk = |name: &str, key: &str| {
+            let d = dir.join("var/db/pkg/dev-libs").join(name);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+            fs::write(d.join("SLOT"), "0\n").unwrap();
+            fs::write(d.join(key), "dev-libs/bar:2/2=\n").unwrap();
+        };
+        mk("rdep-1.0", "RDEPEND");
+        mk("dep-1.0", "DEPEND");
+        mk("bdep-1.0", "BDEPEND");
+        mk("pdep-1.0", "PDEPEND");
+        mk("idep-1.0", "IDEPEND");
+
+        // `bar` moves to slot 2 sub-slot 9 this run.
+        let bar_upgrade = GraphEntry {
+            category: "dev-libs".into(),
+            package: "bar".into(),
+            outcome: PretendOutcome::Upgrade {
+                from: "1.0".into(),
+                to: "2.0".into(),
+            },
+            slot: Some("2".into()),
+            sub_slot: Some("9".into()),
+            ..graph_entry("dev-libs", "bar", "2.0")
+        };
+        let reach: HashSet<(String, String)> = ["rdep", "dep", "bdep", "pdep", "idep"]
+            .iter()
+            .map(|p| ("dev-libs".to_string(), (*p).to_string()))
+            .collect();
+        let empty: BTreeSet<(String, String)> = BTreeSet::new();
+        let cp = |name: &str| ("dev-libs".to_string(), name.to_string());
+
+        // bdeps off: runtime/install-time keys only.
+        let (scheduled, abi) = slot_operator_rebuild_scan(
+            &dir,
+            &[],
+            std::slice::from_ref(&bar_upgrade),
+            &reach,
+            &empty,
+            &empty,
+            false,
+        );
+        assert_eq!(
+            scheduled,
+            BTreeSet::from([cp("rdep"), cp("pdep"), cp("idep")]),
+            "DEPEND/BDEPEND are skipped without with_bdeps"
+        );
+        assert!(
+            !abi.iter()
+                .any(|(_, c)| c == "dev-libs/dep-1.0" || c == "dev-libs/bdep-1.0")
+        );
+
+        // bdeps on (the explicit --with-bdeps=y / default-without-usepkg
+        // case): every key is scanned, as before this slice.
+        let (scheduled, abi) = slot_operator_rebuild_scan(
+            &dir,
+            &[],
+            std::slice::from_ref(&bar_upgrade),
+            &reach,
+            &empty,
+            &empty,
+            true,
+        );
+        assert_eq!(
+            scheduled,
+            BTreeSet::from([cp("rdep"), cp("dep"), cp("bdep"), cp("pdep"), cp("idep")])
+        );
+        assert_eq!(
+            abi,
+            vec![
+                (
+                    "dev-libs/bar-2.0".to_string(),
+                    "dev-libs/bdep-1.0".to_string()
+                ),
+                (
+                    "dev-libs/bar-2.0".to_string(),
+                    "dev-libs/dep-1.0".to_string()
+                ),
+                (
+                    "dev-libs/bar-2.0".to_string(),
+                    "dev-libs/idep-1.0".to_string()
+                ),
+                (
+                    "dev-libs/bar-2.0".to_string(),
+                    "dev-libs/pdep-1.0".to_string()
+                ),
+                (
+                    "dev-libs/bar-2.0".to_string(),
+                    "dev-libs/rdep-1.0".to_string()
+                ),
+            ]
+        );
+
+        // The slot-change probe (`slot_operator_slot_change_probe`) reads
+        // merge-bound parents' tree metadata, not the vdb, and must not
+        // gain a with_bdeps gate -- covered by its own test above.
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -32699,6 +32843,7 @@ mod tests {
             &reach,
             &BTreeSet::new(),
             &latched,
+            true,
         );
         assert!(
             rescheduled.is_empty(),
