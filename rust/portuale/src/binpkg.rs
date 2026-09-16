@@ -1190,6 +1190,98 @@ fn extract_gpkg_metadata(
     Ok(())
 }
 
+/// `#58` K2 / S4: real `gpkg.tar_safe_extract`'s member rules, applied
+/// to the already-decompressed scratch `image.tar` **before** GNU `tar`
+/// unpacks it -- so nothing reaches the filesystem until the whole
+/// member list is accepted (real validates the same way inside
+/// `gpkg.decompress`, `gpkg.py:1071-1103`, but only as it extracts).
+/// Real's own check order (`gpkg.py:690-724`): duplicate name, absolute
+/// name, `..` traversal, `isdev()` (Python 3.14 includes FIFOs), and a
+/// hard link whose target is not an earlier member; symlinks are allowed
+/// (a real image carries them legitimately).
+///
+/// One deliberate addition beyond real's rule set (owner-approved
+/// 2026-09-16 from S0 cell i18): a member whose path traverses an
+/// earlier symlink member is refused. Real's `tar_safe_extract` would
+/// extract through that symlink -- as root straight into the host --
+/// while GNU `tar` refuses at unpack time; refusing before unpacking
+/// makes the guarantee independent of the unpacker. A real tree can
+/// never produce the shape (a symlink has no children on disk).
+fn scan_image_tar(image_tar: &Path, gpkg: &Path) -> Result<(), String> {
+    let file = fs::File::open(image_tar).map_err(|e| format!("{}: {e}", image_tar.display()))?;
+    let mut archive = tar::Archive::new(file);
+    let entries = archive
+        .entries()
+        .map_err(|e| format!("{}: reading image.tar: {e}", gpkg.display()))?;
+    // Real `tar_safe_extract.file_list`, one entry per accepted member
+    // (trailing `/` trimmed the way Python `tarfile` trims it).
+    let mut names: Vec<Vec<u8>> = Vec::new();
+    let mut symlinks: Vec<Vec<u8>> = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("{}: reading image.tar: {e}", gpkg.display()))?;
+        let mut name = entry.path_bytes().to_vec();
+        while name.last() == Some(&b'/') {
+            name.pop();
+        }
+        let shown = String::from_utf8_lossy(&name);
+        let entry_type = entry.header().entry_type();
+        let hard_link_target = entry.link_name_bytes().map(|bytes| bytes.to_vec());
+
+        if names.iter().any(|seen| seen == &name) {
+            return Err(format!(
+                "{}: image.tar member {shown:?} is a duplicate",
+                gpkg.display()
+            ));
+        }
+        if name.starts_with(b"/") {
+            return Err(format!(
+                "{}: image.tar member {shown:?} has an absolute name",
+                gpkg.display()
+            ));
+        }
+        if name.starts_with(b"../") || name.windows(4).any(|window| window == b"/../") {
+            return Err(format!(
+                "{}: image.tar member {shown:?} has a path traversal",
+                gpkg.display()
+            ));
+        }
+        if entry_type.is_character_special()
+            || entry_type.is_block_special()
+            || entry_type.is_fifo()
+        {
+            return Err(format!(
+                "{}: image.tar member {shown:?} is {}",
+                gpkg.display(),
+                inner_entry_type_phrase(entry_type)
+            ));
+        }
+        if entry_type.is_hard_link() {
+            let target = hard_link_target.clone().unwrap_or_default();
+            if !names.iter().any(|seen| seen == &target) {
+                return Err(format!(
+                    "{}: image.tar member {shown:?} hard link target {:?} is not an earlier member",
+                    gpkg.display(),
+                    String::from_utf8_lossy(&target)
+                ));
+            }
+        }
+        if let Some(symlink) = symlinks.iter().find(|symlink| {
+            name.starts_with(symlink.as_slice()) && name.get(symlink.len()) == Some(&b'/')
+        }) {
+            return Err(format!(
+                "{}: image.tar member {shown:?} is inside the symlink member {:?}",
+                gpkg.display(),
+                String::from_utf8_lossy(symlink)
+            ));
+        }
+        if entry_type.is_symlink() {
+            symlinks.push(name.clone());
+        }
+        names.push(name);
+    }
+    Ok(())
+}
+
 /// The xpak `[image tarball]` prefix -> `dest`. Real
 /// `xpak.tbz2.decompose`: the image is everything before the
 /// `XPAKPACK…STOP` trailer.
@@ -1307,6 +1399,12 @@ fn extract_gpkg_member(gpkg_path: &Path, want: &str, dest: &Path) -> Result<(), 
             }
         }
     }
+    // Real `gpkg.decompress` validates the image stream with
+    // `tar_safe_extract` as it extracts (`gpkg.py:1094-1096`); portuale
+    // validates the whole scratch `image.tar` first (`#58` S4,
+    // [`scan_image_tar`]) so a rejected member never reaches the
+    // filesystem, then lets GNU `tar` do the actual unpack below.
+    scan_image_tar(&inner_tar, gpkg_path)?;
     // Real `gpkg.tar_safe_extract.extractall(dest)`: the inner tarball's
     // members all live under a single `<want>/` top-level directory
     // (real `gpkg._add_data`: `image_tar.add(root_dir, "image",
@@ -3312,21 +3410,29 @@ mod tests {
         metadata_entries: &[InnerTestEntry<'_>],
         image_entries: &[InnerTestEntry<'_>],
     ) -> PathBuf {
-        let inner = build_inner_tar(metadata_entries);
-        let image = build_inner_tar(image_entries);
+        build_gpkg_with_tar_bytes(
+            prefix,
+            &build_inner_tar(metadata_entries),
+            &build_inner_tar(image_entries),
+        )
+    }
+
+    /// The outer-container builder for raw inner-tar bytes (the S4
+    /// sparse/xattr image comes from GNU `tar`, not `tar::Builder`).
+    fn build_gpkg_with_tar_bytes(prefix: &str, meta: &[u8], image: &[u8]) -> PathBuf {
         let gpkg1: &[u8] = b"";
         let manifest = format!(
             "{}{}{}",
             data_line("gpkg-1", gpkg1),
-            data_line("metadata.tar", &inner),
-            data_line("image.tar", &image),
+            data_line("metadata.tar", meta),
+            data_line("image.tar", image),
         );
         build_gpkg(
             prefix,
             &[
                 ("gpkg-1", gpkg1),
-                ("metadata.tar", &inner),
-                ("image.tar", &image),
+                ("metadata.tar", meta),
+                ("image.tar", image),
             ],
             Some(&manifest),
         )
@@ -3530,6 +3636,194 @@ mod tests {
             fs::read(image.join("usr/lib/libreal.so")).unwrap(),
             b"real\n"
         );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    // ---- #58 S4: the image.tar pre-scan ----
+
+    /// Stage a real directory tree, let GNU `tar --sparse --xattrs` write
+    /// the image member (S0 cell i19's shape), and return its bytes.
+    fn build_gnu_sparse_image(stage: &Path) -> Vec<u8> {
+        use std::io::{Seek, SeekFrom, Write};
+        let img = stage.join("image");
+        fs::create_dir_all(img.join("usr/lib")).unwrap();
+        fs::create_dir_all(img.join("usr/bin")).unwrap();
+        fs::create_dir_all(img.join("usr/share")).unwrap();
+        fs::write(img.join("usr/lib/libreal.so"), b"real library\n").unwrap();
+        std::os::unix::fs::symlink("libreal.so", img.join("usr/lib/liblink.so")).unwrap();
+        fs::write(img.join("usr/bin/realbin"), b"#!/bin/sh\nexit 0\n").unwrap();
+        fs::hard_link(img.join("usr/bin/realbin"), img.join("usr/bin/hardlink")).unwrap();
+        let mut sparse = fs::File::create(img.join("usr/share/sparse.bin")).unwrap();
+        sparse.write_all(b"head").unwrap();
+        sparse.seek(SeekFrom::Start(1024 * 1024)).unwrap();
+        sparse.write_all(b"tail").unwrap();
+        drop(sparse);
+        let xattr_file = img.join("usr/share/xattr.txt");
+        fs::write(&xattr_file, b"xattr carrier\n").unwrap();
+        let path = std::ffi::CString::new(xattr_file.as_os_str().as_encoded_bytes()).unwrap();
+        // Best effort: the filesystem may refuse `user.*` xattrs.
+        // SAFETY: `setxattr` takes a valid NUL-terminated path, a valid
+        // NUL-terminated key and a length-delimited value.
+        unsafe {
+            libc::setxattr(
+                path.as_ptr(),
+                c"user.portuale".as_ptr(),
+                b"s0".as_ptr() as *const libc::c_void,
+                2,
+                0,
+            );
+        }
+        let tar_path = stage.join("image.tar");
+        run_tar(&[
+            "-cf",
+            &lossy(&tar_path),
+            "--sparse",
+            "--xattrs",
+            "-C",
+            &lossy(stage),
+            "image",
+        ])
+        .unwrap();
+        fs::read(&tar_path).unwrap()
+    }
+
+    #[test]
+    fn extract_binpkg_rejects_unsafe_image_tars_before_unpacking() {
+        let check = |image: &[InnerTestEntry<'_>], needle: &str| {
+            let g = build_gpkg_with_inner_tars(
+                "gen-1.0",
+                &[inner_entry("metadata/SLOT", b"0\n")],
+                image,
+            );
+            verify_gpkg_manifest(&g, &GpgVerify::default()).expect("verifies");
+            let tmp =
+                std::env::temp_dir().join(format!("binpkg-gpkg-imgreject-{}", std::process::id()));
+            let err = extract_binpkg(
+                &g,
+                &tmp.join("image"),
+                &tmp.join("build-info"),
+                &GpgVerify::default(),
+            )
+            .unwrap_err();
+            assert!(err.contains(needle), "expected {needle:?} in {err:?}");
+            // The pre-scan runs before the unpack: the image dest stays
+            // empty (a FIFO/device member never reaches the filesystem).
+            assert!(
+                !tmp.join("image").exists()
+                    || read_dir_sorted(&tmp.join("image")).unwrap().is_empty()
+            );
+            let _ = fs::remove_dir_all(&tmp);
+        };
+        // S0 i13/i13b: a char device (real `isdev()`; 3.14 includes FIFO).
+        check(
+            &[inner_special("image/dev/null0", tar::EntryType::Char)],
+            "a character device",
+        );
+        check(
+            &[inner_special("image/dev/pipe0", tar::EntryType::Fifo)],
+            "a FIFO",
+        );
+        // S0 i14/i15: a hard link to a non-member or a later member.
+        check(
+            &[inner_hardlink("image/usr/bin/x", "/etc/hostname")],
+            "not an earlier member",
+        );
+        check(
+            &[
+                inner_hardlink("image/usr/bin/x", "image/usr/bin/y"),
+                inner_entry("image/usr/bin/y", b"later\n"),
+            ],
+            "not an earlier member",
+        );
+        // S0 i16: duplicate names (GNU tar used to last-wins silently).
+        check(
+            &[
+                inner_entry("image/usr/lib/libfoo.so", b"first\n"),
+                inner_entry("image/usr/lib/libfoo.so", b"second\n"),
+            ],
+            "is a duplicate",
+        );
+        // S0 i17/i17b: traversal / absolute member names.
+        check(
+            &[inner_entry("image/../etc/x", b"traversal\n")],
+            "has a path traversal",
+        );
+        check(
+            &[inner_entry("/image/etc/x", b"absolute\n")],
+            "has an absolute name",
+        );
+        // S0 i18: a member under an earlier symlink member (the
+        // owner-approved rule beyond real's own set).
+        check(
+            &[
+                inner_symlink("image/usr/lib/x", "/etc"),
+                inner_entry("image/usr/lib/x/passwd", b"pwned\n"),
+            ],
+            "inside the symlink member",
+        );
+    }
+
+    #[test]
+    fn extract_binpkg_keeps_a_valid_sparse_xattr_image_working() {
+        // S0 cell i19: the regression shape -- legitimate symlink,
+        // hardlink-to-earlier, GNU sparse file, PAX xattr records -- must
+        // still extract exactly as before S4 (the pre-scan only rejects).
+        let tmp = std::env::temp_dir().join(format!("binpkg-gpkg-i19-{}", std::process::id()));
+        let stage = tmp.join("stage");
+        fs::create_dir_all(&stage).unwrap();
+        let image_bytes = build_gnu_sparse_image(&stage);
+        let meta = build_inner_tar(&[inner_entry("metadata/SLOT", b"0\n")]);
+        let g = build_gpkg_with_tar_bytes("gen-1.0", &meta, &image_bytes);
+        verify_gpkg_manifest(&g, &GpgVerify::default()).expect("verifies");
+        let image = tmp.join("image");
+        let bi = tmp.join("build-info");
+        extract_binpkg(&g, &image, &bi, &GpgVerify::default()).expect("extract succeeds");
+
+        use std::os::unix::fs::MetadataExt;
+        let link = image.join("usr/lib/liblink.so");
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(fs::read_link(&link).unwrap(), Path::new("libreal.so"));
+        // The hard link pair keeps one inode.
+        let realbin = image.join("usr/bin/realbin");
+        let hardlink = image.join("usr/bin/hardlink");
+        assert_eq!(
+            fs::metadata(&realbin).unwrap().ino(),
+            fs::metadata(&hardlink).unwrap().ino(),
+            "the hard link target stays hard-linked"
+        );
+        assert_eq!(fs::read(&realbin).unwrap(), b"#!/bin/sh\nexit 0\n");
+        // The sparse file stays sparse (1 MiB, a handful of blocks).
+        let sparse = fs::metadata(image.join("usr/share/sparse.bin")).unwrap();
+        assert_eq!(sparse.len(), 1024 * 1024 + 4);
+        assert!(
+            sparse.blocks() * 512 < sparse.len() / 2,
+            "sparseness lost: {} blocks for {} bytes",
+            sparse.blocks(),
+            sparse.len()
+        );
+        assert_eq!(
+            fs::read(image.join("usr/share/xattr.txt")).unwrap(),
+            b"xattr carrier\n"
+        );
+        // GNU `tar -xpf` (no `--xattrs`) ignores the PAX xattr records,
+        // exactly as before the pre-scan and as real's own `decompress`
+        // (`TEST/findings/l2.md` "## #58 S0" cell i19).
+        let xpath = std::ffi::CString::new(
+            image
+                .join("usr/share/xattr.txt")
+                .as_os_str()
+                .as_encoded_bytes(),
+        )
+        .unwrap();
+        // SAFETY: `listxattr` takes a valid NUL-terminated path and a
+        // size-0/null buffer returns the needed size.
+        let xattr_size = unsafe { libc::listxattr(xpath.as_ptr(), std::ptr::null_mut(), 0) };
+        assert_eq!(xattr_size, 0, "extraction must not invent xattrs");
         let _ = fs::remove_dir_all(&tmp);
     }
 }
