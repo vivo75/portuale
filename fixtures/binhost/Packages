@@ -162,3 +162,17 @@ REQUIRED_USE: ^^ ( rqa rqb )
 SIZE: 4096
 SLOT: 0
 USE: rqa
+
+CPV: dev-libs/binnew-1.0
+DEFINED_PHASES: -
+DESCRIPTION: fixture package: installed binnew; the tree ebuild gained newflag -- --newuse/--binpkg-respect-use (#69)
+EAPI: 8
+IUSE: foo
+KEYWORDS: amd64
+REPO: testrepo
+SIZE: 40960
+SLOT: 0
+USE: foo
+BUILD_ID: 1
+BUILD_TIME: 1000
+

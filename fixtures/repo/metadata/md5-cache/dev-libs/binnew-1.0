@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: installed binnew, tree ebuild gained newflag -- --newuse/--binpkg-respect-use (#69)
+EAPI=8
+IUSE=foo newflag
+KEYWORDS=amd64
+SLOT=0
+_md5_=ff43f2d7205c54982117074a9fddb569
