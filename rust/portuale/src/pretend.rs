@@ -1981,6 +1981,11 @@ fn print_circular_block(
 #[allow(clippy::too_many_arguments)]
 fn print_json(
     entries: &[GraphEntry],
+    // #59 S2 (K1 option (a)): the deterministic `(backtrack: N/M)` count
+    // real's `_show_resolution_report` prints on every run -- `--json`
+    // only, no stdout line (the timing half is a deliberate cut).
+    backtrack_restarts: u64,
+    backtrack_max: u32,
     slot_conflicts: &[SlotConflict],
     changed_deps_report: &[ChangedDepsReportEntry],
     autounmask_keyword_changes: &[portage_repo::AutounmaskChange],
@@ -2037,8 +2042,10 @@ fn print_json(
     // consumer sees the same rows the text list shows.
     let aborted_json = abort_outcome_to_json(outcome);
     println!(
-        "{{\"entries\":[{}],\"slot_conflicts\":[{}],\"changed_deps_report\":[{}],\"autounmask_keyword_changes\":[{}],\"autounmask_use_changes\":[{}],\"autounmask_license_changes\":[{}],\"autounmask_mask_changes\":[{}],\"abi_rebuilds\":[{}],\"aborted\":{}}}",
+        "{{\"entries\":[{}],\"backtrack\":{{\"restarts\":{},\"max\":{}}},\"slot_conflicts\":[{}],\"changed_deps_report\":[{}],\"autounmask_keyword_changes\":[{}],\"autounmask_use_changes\":[{}],\"autounmask_license_changes\":[{}],\"autounmask_mask_changes\":[{}],\"abi_rebuilds\":[{}],\"aborted\":{}}}",
         entries_json.join(","),
+        backtrack_restarts,
+        backtrack_max,
         conflicts_json.join(","),
         changed_deps_report_json.join(","),
         autounmask_kw_json.join(","),
@@ -10806,6 +10813,8 @@ pub fn run(args: &[String]) -> ExitCode {
     if json {
         print_json(
             display_entries,
+            result.backtrack_restarts,
+            result.backtrack_max,
             &result.slot_conflicts,
             &result.changed_deps_report,
             &result.autounmask_keyword_changes,

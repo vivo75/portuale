@@ -15724,6 +15724,15 @@ pub struct GraphResult {
     /// otherwise. `entries` is still the full graph either way; the
     /// renderer switches to `partial` in Slice 4.
     pub outcome: ResolveOutcome,
+    /// #59 S2 (K1 option (a)): real `_backtrack_depgraph`'s
+    /// `backtracked` counter -- the number of loop restarts the search
+    /// made (`passes - 1`), reported by `_show_resolution_report` as
+    /// `(backtrack: N/M)`. The wall-clock timing half stays a deliberate
+    /// cut (non-deterministic); the count rides out in `--json` only.
+    pub backtrack_restarts: u64,
+    /// Real's `--backtrack` budget `M` (`max_retries`, the `--backtrack`
+    /// option's value).
+    pub backtrack_max: u32,
     pub slot_conflicts: Vec<SlotConflict>,
     pub changed_deps_report: Vec<ChangedDepsReportEntry>,
     /// `--buildpkgonly`'s own real depgraph check
@@ -20801,6 +20810,10 @@ fn assemble_result(
     params: &BacktrackParams,
     mut pass: PassResult,
     config: &portage_profile::Config,
+    // #59 S2: the search's restart count (`passes - 1` inside
+    // `backtracking_resolve`'s loop), real `_backtrack_depgraph`'s
+    // `backtracked`.
+    backtrack_restarts: u64,
 ) -> GraphResult {
     // Real depgraph's slot-operator auto-rebuild (#24 S3): the consumers
     // themselves are walked nodes now (seeded + flipped in `run_pass`
@@ -21041,6 +21054,8 @@ fn assemble_result(
 
     GraphResult {
         entries: pass.entries,
+        backtrack_restarts,
+        backtrack_max: ctx.backtrack_max,
         outcome,
         slot_conflicts: pass.slot_conflicts,
         changed_deps_report: pass.changed_deps_report_entries,
@@ -21068,8 +21083,16 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
     let ctx = ResolveCtx::new(req)?;
     let mut bt = Backtracker::new(ctx.backtrack_max, BacktrackParams::initial(req));
     let mut first_pass = true;
+    // #59 S2: real `_backtrack_depgraph`'s `backtracked` counter -- one
+    // per loop iteration beyond the first (`passes - 1`). The final
+    // best-run re-pass after the loop shares the value, exactly as
+    // real's counter is frozen before its own best-run re-pass.
+    let mut passes: u64 = 0;
+    let mut restarts: u64 = 0;
     while let Some(params) = bt.get() {
         let mut pass = run_pass(&ctx, &params, first_pass)?;
+        passes += 1;
+        restarts = passes - 1;
         first_pass = false;
         // The per-pass config view: the accumulator's autounmask-use
         // changes layered on as the top USE tier (see `Config::
@@ -21080,7 +21103,7 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
         let config: &portage_profile::Config = config_owned.as_ref().unwrap_or(ctx.config);
         match collect_feedback(&ctx, &params, &mut pass, config) {
             PassDecision::Settle { params } => {
-                return Ok(assemble_result(&ctx, &params, pass, config));
+                return Ok(assemble_result(&ctx, &params, pass, config, restarts));
             }
             PassDecision::DeadEnd { params } => {
                 // Real's abandoned `_create_graph` attempt: the node is
@@ -21100,7 +21123,7 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
                         BacktrackFeedback::SlotConflict { base, .. } => *base,
                         BacktrackFeedback::MissingDep { base, .. } => *base,
                     };
-                    return Ok(assemble_result(&ctx, &grown, pass, config));
+                    return Ok(assemble_result(&ctx, &grown, pass, config, restarts));
                 }
                 bt.feedback(kind);
             }
@@ -21113,7 +21136,7 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
     let pass = run_pass(&ctx, &best, false)?;
     let config_owned: Option<portage_profile::Config> = best.backtrack_config.clone();
     let config: &portage_profile::Config = config_owned.as_ref().unwrap_or(ctx.config);
-    Ok(assemble_result(&ctx, &best, pass, config))
+    Ok(assemble_result(&ctx, &best, pass, config, restarts))
 }
 
 /// Historical entry point, kept at its original 44-argument signature so

@@ -740,6 +740,10 @@ fn graph_result_from_order(
     };
     GraphResult {
         entries,
+        // The bridge engines have no `Backtracker` loop: no restarts,
+        // and `--backtrack` is not consumed by them.
+        backtrack_restarts: 0,
+        backtrack_max: req.backtrack_max,
         // A solved engine plan admits no same-slot divergence and no
         // relaxation loop ran, so it cannot abort either (no
         // `_create_graph` 0-return, no `_serialize_tasks` give-up, no

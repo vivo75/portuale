@@ -2421,6 +2421,38 @@ def test_debug_parent_dep_names_the_atom_and_the_child_instance(
     assert "Parent Dep:    dev-libs/paired required by" not in out
 
 
+def test_json_exposes_the_backtrack_restart_count(emerge_binary, fixture_env):
+    """Backlog #59 S2, K1 option (a): the deterministic half of real's
+    `_show_resolution_report` footer (`Dependency resolution took <T> s
+    (backtrack: N/M).`, printed on **every** non-quiet run,
+    `depgraph.py:12135-12145`) rides out as
+    `"backtrack":{"restarts":N,"max":M}` in portuale's `--json`. No
+    stdout line is added (real's timing is non-deterministic, and a
+    plain-output line would move every contract pin); K2 keeps the
+    static `These are the packages...` / `Calculating dependencies...
+    done!` preamble a recorded cut.
+
+    `restarts` is portuale's own pass count minus one, so it is
+    deterministic but not expected to equal real's `N` (the two search
+    orders differ; real's triangle capture is `4/20`). `max` is
+    portuale's resolved `--backtrack` budget."""
+    plain = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--json", "dev-libs/needer", "dev-libs/othermod"],
+        fixture_env,
+    )
+    assert plain.returncode == 0
+    data = json.loads(plain.stdout)
+    assert data["backtrack"] == {"restarts": 2, "max": 10}
+
+    simple = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--json", "dev-libs/newpkg"],
+        fixture_env,
+    )
+    assert json.loads(simple.stdout)["backtrack"]["restarts"] == 0
+
+
 def test_missing_repos_conf_pinned_output(
     emerge_binary
 ):
@@ -13848,7 +13880,7 @@ def test_json_is_not_a_real_emerge_option(emerge_binary, fixture_env):
     assert result.stderr == ""
     assert result.stdout == (
         (
-        '{"entries":[{"category":"dev-libs","package":"newpkg","merge_order":0,"outcome":"new","version":"1.0","new_slot":false,"interactive":false,"fetch_restrict":false,"fetch_restrict_satisfied":false,"slot":"0","source":"ebuild","provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},"requested":true,"required_by":[],"builds_against_running_root":null,"blockers":[]}],"slot_conflicts":[],"changed_deps_report":[],"autounmask_keyword_changes":[],"autounmask_use_changes":[],"autounmask_license_changes":[],"autounmask_mask_changes":[],"abi_rebuilds":[],"aborted":null}\n'
+        '{"entries":[{"category":"dev-libs","package":"newpkg","merge_order":0,"outcome":"new","version":"1.0","new_slot":false,"interactive":false,"fetch_restrict":false,"fetch_restrict_satisfied":false,"slot":"0","source":"ebuild","provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},"requested":true,"required_by":[],"builds_against_running_root":null,"blockers":[]}],"backtrack":{"restarts":0,"max":10},"slot_conflicts":[],"changed_deps_report":[],"autounmask_keyword_changes":[],"autounmask_use_changes":[],"autounmask_license_changes":[],"autounmask_mask_changes":[],"abi_rebuilds":[],"aborted":null}\n'
         )
     )
 
@@ -13862,7 +13894,7 @@ def test_json_upgrade_includes_from_version(emerge_binary, fixture_env):
     assert result.returncode == 0
     assert result.stdout == (
         (
-        '{"entries":[{"category":"dev-libs","package":"upgradepkg","merge_order":0,"outcome":"upgrade","version":"2.0","from_version":"1.0","interactive":false,"fetch_restrict":false,"fetch_restrict_satisfied":false,"slot":"0","source":"ebuild","provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},"requested":true,"required_by":[],"builds_against_running_root":null,"blockers":[]}],"slot_conflicts":[],"changed_deps_report":[],"autounmask_keyword_changes":[],"autounmask_use_changes":[],"autounmask_license_changes":[],"autounmask_mask_changes":[],"abi_rebuilds":[],"aborted":null}\n'
+        '{"entries":[{"category":"dev-libs","package":"upgradepkg","merge_order":0,"outcome":"upgrade","version":"2.0","from_version":"1.0","interactive":false,"fetch_restrict":false,"fetch_restrict_satisfied":false,"slot":"0","source":"ebuild","provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},"requested":true,"required_by":[],"builds_against_running_root":null,"blockers":[]}],"backtrack":{"restarts":0,"max":10},"slot_conflicts":[],"changed_deps_report":[],"autounmask_keyword_changes":[],"autounmask_use_changes":[],"autounmask_license_changes":[],"autounmask_mask_changes":[],"abi_rebuilds":[],"aborted":null}\n'
         )
     )
 

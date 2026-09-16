@@ -16998,3 +16998,23 @@ python3 -m pytest tests/test_emerge_pretend_contract.py -q -k binnew
 ```
 
 Tests: `binpkg_respect_use_checks_the_ebuild_at_the_same_version` (Rust, every arm) and `test_oracle_binnew_rejects_a_binary_missing_the_ebuilds_iuse_flag` (contract, all six option sets). The existing `--usepkg`/`--getbinpkg`/respect-use/exclude pins stayed green unchanged. Plan: `docs/01.069-getbinpkg_newuse_rebuild.md`.
+
+**`--debug`'s `Parent Dep:` narration now names the dependency atom and files it under the child instance the atom actually resolved to, and the deterministic backtrack count rides out in `--json` (backlog #59, 2026-09-16).** Real `_add_pkg` prints `Parent Dep: <atom>[(<unevaluated>)] required by <parent>` per **child instance** (`_emerge/depgraph.py:3583-3604`); portuale read the cp-keyed `GraphEntry::required_by`, which carries no atom text and no installed-node entry, so on the `needer`/`othermod` triangle it filed `othermod`'s `<dev-libs/paired-2.0` under the merge-bound `paired-2.0` and printed `dev-libs/paired (Argument)` for arguments. The walker now collects real's per-instance parent-atom rows as each queue item resolves — after the reinstall/autounmask flips, before the `other_outcomes` dedup, so an `AlreadyInstalled` child later shadowed by a same-slot merge keeps its own row — and `dump_resolution_walk` renders them, emitting a synthetic `Child:` block for the shadowed installed instance (`paired-1.0`) after the entries loop. A container capture against real 3.0.82.2 pinned every line first: argument rows are the bare argument atom (real has no `(Argument)` suffix), the two atom-carrying rows sit under their own instances, and the footer is `Dependency resolution took 0.29 s (backtrack: 4/20).`. K1 was decided as option (a): the deterministic count is exposed as `"backtrack":{"restarts":N,"max":M}` in portuale's `--json` only — no stdout line is added (real prints the footer on every non-quiet run, but its time is non-deterministic and a line would move every display pin) — and K2 keeps the static `These are the packages…` / `Calculating dependencies … done!` preamble a recorded deliberate cut (`backlog-tasks.md` "Deliberate cuts"). Portuale's `restarts` is its own pass count minus one (triangle: 2; real: 4) — deterministic, not parity-equal, because the two searches differ; the field is for diffing backtracking behaviour over time.
+
+```sh
+# the atom-carrying rows and the installed child block (real-captured)
+rust/target/release/portuale emerge -p --debug dev-libs/needer dev-libs/othermod \
+  | grep -E 'Parent Dep|paired-1.0.*installed'
+# -> Parent Dep:    dev-libs/needer
+# -> Parent Dep:    dev-libs/othermod
+# -> Parent Dep:    >=dev-libs/paired-2.0 required by (dev-libs/needer-1.0:0/0::testrepo, ebuild scheduled for merge)
+# -> Child:         (dev-libs/paired-1.0:0/0::testrepo, installed) USE=""
+# -> Parent Dep:    <dev-libs/paired-2.0 required by (dev-libs/othermod-1.0:0/0::testrepo, ebuild scheduled for merge)
+
+# the JSON counter
+rust/target/release/portuale emerge -p --json dev-libs/needer dev-libs/othermod \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["backtrack"])'
+# -> {'restarts': 2, 'max': 10}
+```
+
+Tests: `test_debug_parent_dep_names_the_atom_and_the_child_instance` and `test_json_exposes_the_backtrack_restart_count`; the `--debug`/`--json` corpus rows were reviewed and re-blessed in the two commits. Plan: `docs/02.059-debug_narration_fidelity.md` (K1/K2 recorded).
