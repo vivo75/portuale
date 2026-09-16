@@ -2672,6 +2672,7 @@ pub fn find_remote_binpkg<'a>(
 ///
 /// `forced_flags` (the ebuild's own `use.force`/`use.mask`) is
 /// deliberately not subtracted yet -- plan question (c) was dropped.
+#[allow(clippy::too_many_arguments)]
 fn binpkg_respect_use_ok(
     candidate: &Candidate,
     ebuild_at_version: Option<&Candidate>,

@@ -16668,6 +16668,71 @@ def test_use_expand_prefix_wildcard_cancels_the_iuse_default(
     assert _b1_merges(wildcard.stdout) == []
 
 
+def test_oracle_binnew_rejects_a_binary_missing_the_ebuilds_iuse_flag(
+    emerge_binary, fixture_env, tmp_path
+):
+    """Backlog #69 S2: real's binary rejection gate
+    (`reinstall_use or (not installed and respect_use)`,
+    `depgraph.py:8259-8294`) with `_reinstall_for_flags`' IUSE-set arm.
+    Installed `dev-libs/binnew-1.0` and the `$PKGDIR` binary agree
+    (`IUSE=foo`, baked `USE=foo`, BUILD_TIME 1000); the tree ebuild
+    gained `newflag`, so only the ebuild's IUSE knows it.
+
+    Real 3.0.82.2 oracle (container, real-built binary pipeline:
+    `emerge --buildpkgonly` + `--usepkgonly`, then the ebuild gains the
+    flag -- the committed crafted `.tbz2`s are portuale-only, real's
+    local bintree rejects them):
+
+    - `--usepkg` / `--getbinpkg`: respect-use auto rejects the binary ->
+      `[ebuild R] ... USE="-newflag%"`.
+    - `--usepkg --newuse` (+/- respect-use): `--newuse` opens the gate
+      on its own -> `[ebuild R]` (pre-#69 portuale dropped the entry).
+    - `--binpkg-respect-use=n` without `--newuse`: the binary wins ->
+      `[binary R] dev-libs/binnew-1.0-1`.
+    """
+    root = _b1_root(
+        tmp_path,
+        [],
+        [
+            (
+                "dev-libs",
+                "binnew",
+                "1.0",
+                "0",
+                {
+                    "IUSE": "foo",
+                    "USE": "foo",
+                    "BUILD_TIME": "1000",
+                },
+            )
+        ],
+    )
+    env = _b1_env(fixture_env, root)
+
+    ebuild_r = "[ebuild   R    ] dev-libs/binnew-1.0  USE=\"-newflag%\""
+    binary_r = "[binary   R    ] dev-libs/binnew-1.0-1 "
+
+    for args, expected in (
+        (["--usepkg"], [ebuild_r]),
+        (["--usepkg", "--newuse"], [ebuild_r]),
+        (
+            ["--usepkg", "--newuse", "--binpkg-respect-use=n"],
+            [ebuild_r],
+        ),
+        (["--getbinpkg"], [ebuild_r]),
+        (["--usepkg", "--binpkg-respect-use=n"], [binary_r]),
+        (["--getbinpkg", "--binpkg-respect-use=n"], [binary_r]),
+    ):
+        rust = _run(
+            [str(emerge_binary)],
+            ["--pretend", *args, "dev-libs/binnew"],
+            env,
+        )
+        assert rust.returncode == 0, (args, rust.stderr)
+        lines = [ln for ln in rust.stdout.splitlines() if ln.startswith("[")]
+        assert lines == expected, (args, rust.stdout)
+
+
 def test_oracle_blocker_replaced_version_satisfied_and_unsatisfied_twin(
     emerge_binary, fixture_env, tmp_path
 ):

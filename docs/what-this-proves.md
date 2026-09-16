@@ -16982,3 +16982,19 @@ rust/target/release/portuale emerge -uDpvN @world | grep -c '^\['
 ```
 
 Tests: `apply_use_incremental_removes_a_prefix_wildcard`, `use_expand_prefix_wildcard_cancels_parent_level_values` (a two-level synthetic profile chain), `effective_use_flags_applies_a_use_prefix_wildcard` (an IUSE `+` default cancelled by the folded conf token), and the copied-configroot contract pin above. Evidence: `TEST/findings/l0.md` "#67 S3". Plan: `docs/01.067-use_incremental_prefix_wildcard.md`.
+
+**A binary package is rejected against the same-version ebuild's USE, and the gate is real's `reinstall_use or respect-use` — so `--newuse`/`--getbinpkg` no longer drop a rebuild (backlog #69, 2026-09-16).** Real's `_wrapped_select_pkg_highest_available_imp` rejects a built candidate when `reinstall_use or (not installed and respect_use)` (`_emerge/depgraph.py:8259-8294`), where `reinstall_use` is `--newuse` or any `--reinstall`; `_reinstall_for_flags` (`:3134-3162`) compares the binary's baked IUSE/USE against the **same-version ebuild's** profile view, counting an IUSE-set difference under `--newuse` or plain respect-use. Portuale only ran the check under respect-use and evaluated the binary's own IUSE, so `llvm_slot_23` — a flag only the ebuild's IUSE gained — was invisible and the remote binary stayed `best`, after which the vdb-vs-binary diff was empty and `dev-qt/qttools` vanished from `-uDpvN --oneshot` and `@world`. The fixture oracle first used the crafted `dev-libs/binnew` tbz2, but real's local bintree rejects every crafted fixture binary, so the matrix is a **real-built** pipeline: `emerge --buildpkgonly` + `--usepkgonly`, then the ebuild gains `newflag` (the capture and both corrections are in `TEST/findings/l0.md` "#69 S0"). Real there shows the gate exactly: `--binpkg-respect-use=n` without `--newuse` keeps the binary (`[binary R]`), while plain respect-use and every `--newuse` shape reject it and fall back to the ebuild (`[ebuild R] … USE="-newflag%"`). `binpkg_respect_use_ok` now takes the same-version ebuild as its comparison side (`candidate_iuse_and_use`), falls back to the binary's own sets without one (`--usepkgonly`), implements both `_reinstall_for_flags` arms, and is opened at both call sites by `respect_use || newuse || changed_use` (plus any `--reinstall` atom in the graph walk); `forced_flags` stays unsubtracted (plan question (c) dropped).
+
+```sh
+# host: qttools is rebuilt, exactly like real (evidence capture in docs/evidence/)
+rust/target/release/portuale emerge -uDpvN --oneshot dev-qt/qttools | grep qttools
+# -> [ebuild   R    ] dev-qt/qttools-6.11.2:6/6.11.2::gentoo … LLVM_SLOT="22 -17 … (-23%)"
+rust/target/release/portuale emerge -uDpvN @world | grep -c '^\['
+# -> 27 (was 26, +qttools)
+
+# the six real-built cells, pinned hermetically against the crafted fixture
+python3 -m pytest tests/test_emerge_pretend_contract.py -q -k binnew
+# -> 1 passed
+```
+
+Tests: `binpkg_respect_use_checks_the_ebuild_at_the_same_version` (Rust, every arm) and `test_oracle_binnew_rejects_a_binary_missing_the_ebuilds_iuse_flag` (contract, all six option sets). The existing `--usepkg`/`--getbinpkg`/respect-use/exclude pins stayed green unchanged. Plan: `docs/01.069-getbinpkg_newuse_rebuild.md`.
