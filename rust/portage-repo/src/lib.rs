@@ -17628,6 +17628,9 @@ struct PassResult {
     abi_rebuilds: Option<Vec<(String, String)>>,
     /// See `PassState::suppressed_nvc` (#57).
     suppressed_nvc: bool,
+    /// #59 S1: the walk's per-instance `Parent Dep:` rows (real
+    /// `_add_parent_atom`), rendered by `resolver_trace`.
+    parent_atoms: Vec<resolver_trace::ParentAtom>,
 }
 
 /// Phase A3 (023): the walk's-Everything per-pass `let mut`s, moved out of
@@ -17805,6 +17808,9 @@ struct PassState {
     /// `collect_feedback`'s `has_nvc` scan cannot see it. Set only under
     /// a non-empty `runtime_pkg_mask`, so an ordinary pass is unaffected.
     suppressed_nvc: bool,
+    /// #59 S1: real `_add_pkg`'s per-instance `Parent Dep:` rows
+    /// (`_add_parent_atom`), collected as each queue item resolves.
+    parent_atoms: Vec<resolver_trace::ParentAtom>,
 }
 
 /// Phase A3 (023): the effective value of one autounmask flag for the
@@ -18099,6 +18105,38 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     new_repo: false,
                     slot_operator_rebuild: true,
                 };
+            }
+        }
+
+        // #59 S1: real `_add_pkg`'s per-instance parent-atom record
+        // (`_add_parent_atom`, depgraph.py:3583-3604), taken here --
+        // after the reinstall/autounmask outcome flips, before the
+        // `other_outcomes` dedup below -- so the child instance is the
+        // one this atom actually resolved to. An `AlreadyInstalled`
+        // instance shadowed later by a same-slot merge keeps its own
+        // row (`paired-1.0` under othermod's `<paired-2.0`).
+        if resolver_debug()
+            && let Some((child_version, child_installed)) = match &outcome {
+                PretendOutcome::AlreadyInstalled { version } => Some((version.clone(), true)),
+                PretendOutcome::New { version } => Some((version.clone(), false)),
+                PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
+                    Some((to.clone(), false))
+                }
+                PretendOutcome::Reinstall { version, .. } => Some((version.clone(), false)),
+                PretendOutcome::NoVisibleCandidate => None,
+            }
+        {
+            let row = resolver_trace::ParentAtom {
+                child_category: key.0.clone(),
+                child_package: key.1.clone(),
+                child_version,
+                child_installed,
+                parent: owner.clone(),
+                atom: current_atom.clone(),
+                unevaluated: unevaluated_atom.clone(),
+            };
+            if !state.parent_atoms.contains(&row) {
+                state.parent_atoms.push(row);
             }
         }
 
@@ -20275,6 +20313,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         use_change_overlay: state.use_change_overlay,
         use_broke: state.use_broke,
         abi_rebuilds: None,
+        parent_atoms: state.parent_atoms,
     };
     Ok(pass)
 }
@@ -20808,7 +20847,7 @@ fn assemble_result(
     // `resolver_trace::dump_resolution_walk`. Before the merge-order
     // sort / `digraph:` dump, matching real's order (walk, then
     // graph).
-    resolver_trace::dump_resolution_walk(&pass.entries, ctx.root);
+    resolver_trace::dump_resolution_walk(&pass.entries, ctx.root, &pass.parent_atoms);
 
     // Real portage's `mylist` is dependency-first (its Scheduler installs
     // a package only after everything it depends on); portuale's BFS

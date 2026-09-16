@@ -2370,6 +2370,57 @@ def test_debug_resolver_trace_stage5_rebuild_summaries(
     assert "forced rebuilds:\n" in rust.stdout
 
 
+def test_debug_parent_dep_names_the_atom_and_the_child_instance(
+    emerge_binary, fixture_env, tmp_path
+):
+    """Backlog #59 S1: `Parent Dep:` carries the dependency **atom** and
+    is filed under the **child instance** the atom actually resolved to,
+    exactly as real `_add_pkg` does (`depgraph.py:3583-3604`). On the
+    `needer`/`othermod` triangle `othermod`'s `<dev-libs/paired-2.0`
+    resolves to the *installed* `paired-1.0`, while `needer`'s
+    `>=dev-libs/paired-2.0` resolves to the merge-bound `paired-2.0`;
+    the old cp-keyed narration filed both under `paired-2.0` and printed
+    `(Argument)` on the argument rows.
+
+    Real 3.0.82.2 capture (container, 2026-09-16): the argument rows are
+    the bare atom (`Parent Dep:    dev-libs/needer`), the installed
+    child block is
+    `Child: (dev-libs/paired-1.0:0/0::testrepo, installed in '<root>')`,
+    and the two atoms sit under their own instances. Portuale's
+    `installed` label omits real's `in '<root>'` (pre-existing, all
+    installed labels do) and its block comes after the entries loop
+    (documented BFS-order divergence), so the assertions are per-line.
+    """
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--debug", "dev-libs/needer", "dev-libs/othermod"],
+        fixture_env,
+    )
+    out = result.stdout
+    # Argument rows: the bare argument atom, never `(Argument)`.
+    assert "Parent Dep:    dev-libs/needer\n" in out
+    assert "Parent Dep:    dev-libs/othermod\n" in out
+    assert "(Argument)\n" not in out
+    # The dependency atom and its parent, under the merge-bound child.
+    assert (
+        "Parent Dep:    >=dev-libs/paired-2.0 required by "
+        "(dev-libs/needer-1.0:0/0::testrepo, ebuild scheduled for merge)\n" in out
+    )
+    # The installed child instance keeps its own block even though the
+    # merged `paired-2.0` is the entry.
+    assert (
+        "Child:         (dev-libs/paired-1.0:0/0::testrepo, installed) USE=\"\"\n"
+        in out
+    )
+    assert (
+        "Parent Dep:    <dev-libs/paired-2.0 required by "
+        "(dev-libs/othermod-1.0:0/0::testrepo, ebuild scheduled for merge)\n" in out
+    )
+    # The old cp-keyed rows are gone.
+    assert "Parent Dep:    dev-libs/paired (Argument)" not in out
+    assert "Parent Dep:    dev-libs/paired required by" not in out
+
+
 def test_missing_repos_conf_pinned_output(
     emerge_binary
 ):

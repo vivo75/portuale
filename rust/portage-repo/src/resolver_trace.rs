@@ -8,7 +8,7 @@
 //! exploited once (the 2026-09-06 `_serialize_tasks` port was validated
 //! by replaying real's dumped `digraph:`). Emitting the same shapes
 //! makes the two implementations directly diffable. Design note and the
-//! full message inventory: `docs/emerge-pretend-debug.md`.
+//! full message inventory: `docs/history/emerge-pretend-debug.md`.
 //!
 //! **Stream split, matching real exactly** (real `writemsg_level`,
 //! `portage/util/__init__.py:119`: `level >= logging.WARNING` -> stderr,
@@ -261,12 +261,60 @@ pub(crate) fn dump_atom_candidates(
     }
 }
 
+/// #59 S1: one `Parent Dep:` narration row -- real `_add_pkg`'s own
+/// per-package parent-atom list (`_add_parent_atom`,
+/// `depgraph.py:3583-3604`). Collected during the walk, where the child
+/// instance an atom actually resolved to is known -- including an
+/// `AlreadyInstalled` instance that a later merge-bound visit of the
+/// same cp shadows in `entries` (the #57 `paired-1.0` case).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParentAtom {
+    pub child_category: String,
+    pub child_package: String,
+    pub child_version: String,
+    pub child_installed: bool,
+    /// `None` for a top-level argument / internal set seed.
+    pub parent: Option<(String, String)>,
+    pub atom: String,
+    /// Real's `unevaluated_atom` -- present only when evaluating the
+    /// parent's conditional use-deps rewrote the atom.
+    pub unevaluated: Option<String>,
+}
+
+/// `USE="flag -flag …"` for an installed-only child (`read_vdb_iuse` /
+/// `USE`), the vdb equivalent of `use_str` in bare-name-sorted order.
+fn installed_use_str(root: &Path, cat: &str, pkg: &str, ver: &str) -> String {
+    let iuse = crate::read_vdb_flag_set(root, cat, pkg, ver, "IUSE");
+    let enabled = crate::read_vdb_flag_set(root, cat, pkg, ver, "USE");
+    let mut names: Vec<&String> = iuse.iter().collect();
+    names.sort();
+    names
+        .iter()
+        .map(|f| {
+            if enabled.contains(*f) {
+                (*f).clone()
+            } else {
+                format!("-{f}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// `emerge --pretend --debug` stages 2 / 4 / 6: the per-package
 /// resolution narration -- real `_add_pkg` (`Child:`/`Parent Dep:`),
 /// `_add_pkg_deps` (`Parent:`/`Depstring:`/`Priority:`/`Candidates:`),
 /// `dep_check` (`Virtual Parent:`/`Virtual Depstring:`) and the
 /// `\nExiting... <pkg>\n` end marker (`depgraph.py:3568/4298/4747`,
 /// `dep/dep_check.py:225`).
+///
+/// `parent_atoms` (#59 S1) carries the walk's own per-instance
+/// `Parent Dep:` data. Each entry's rows are looked up by its resolved
+/// instance; an installed child the walk created but `entries` no longer
+/// holds (shadowed by a same-slot merge) gets its own `Child:` block
+/// after the entries loop. Real interleaves that block at the atom's
+/// LIFO position; appending keeps portuale's documented BFS-order
+/// divergence while emitting the same content.
 ///
 /// **Divergence from real** (see this module's header, stated once as a
 /// comment line at the top of the block): real interleaves these as a
@@ -275,7 +323,11 @@ pub(crate) fn dump_atom_candidates(
 /// on the successful backtracking pass only. The information is the
 /// same; the interleaving is not, which is why the Stage 1 `digraph:`
 /// dump (emitted from `.order`) is the authoritative diff surface.
-pub(crate) fn dump_resolution_walk(entries: &[GraphEntry], root: &Path) {
+pub(crate) fn dump_resolution_walk(
+    entries: &[GraphEntry],
+    root: &Path,
+    parent_atoms: &[ParentAtom],
+) {
     if !crate::resolver_debug() {
         return;
     }
@@ -287,30 +339,94 @@ pub(crate) fn dump_resolution_walk(entries: &[GraphEntry], root: &Path) {
             .map(|e| node_label(e, root, is_nomerge(e)))
             .unwrap_or_else(|| format!("({cat}/{pkg})"))
     };
+    // #59 S1: per-instance rows, keyed by `(cat, pkg, version,
+    // installed)`; a BTreeMap keeps the block order deterministic while
+    // each key's rows stay in walk order. Dedup by
+    // `(child, parent, atom, unevaluated)`.
+    let mut rows: std::collections::BTreeMap<(String, String, String, bool), Vec<&ParentAtom>> =
+        std::collections::BTreeMap::new();
+    for pa in parent_atoms {
+        let list = rows
+            .entry((
+                pa.child_category.clone(),
+                pa.child_package.clone(),
+                pa.child_version.clone(),
+                pa.child_installed,
+            ))
+            .or_default();
+        if !list.contains(&pa) {
+            list.push(pa);
+        }
+    }
+    let render_rows = |child_cat: &str,
+                       child_pkg: &str,
+                       child_ver: &str,
+                       child_installed: bool,
+                       fallback: &dyn Fn()| {
+        match rows.get(&(
+            child_cat.to_string(),
+            child_pkg.to_string(),
+            child_ver.to_string(),
+            child_installed,
+        )) {
+            Some(list) if !list.is_empty() => {
+                for pa in list {
+                    match &pa.parent {
+                        None => out(format_args!("Parent Dep:    {}\n", pa.atom)),
+                        Some((pc, pp)) => {
+                            let unevaluated = pa
+                                .unevaluated
+                                .as_deref()
+                                .map(|u| format!(" ({u})"))
+                                .unwrap_or_default();
+                            out(format_args!(
+                                "Parent Dep:    {}{unevaluated} required by {}\n",
+                                pa.atom,
+                                label_of(pc, pp)
+                            ));
+                        }
+                    }
+                }
+            }
+            _ => fallback(),
+        }
+    };
     out(format_args!(
         "\n# resolution walk (portuale BFS order, not real's LIFO _create_graph order)\n"
     ));
+    let mut consumed: std::collections::BTreeSet<(String, String, String, bool)> =
+        std::collections::BTreeSet::new();
     for e in entries {
         let node = node_label(e, root, is_nomerge(e));
         out(format_args!(
             "\nChild:         {node} USE=\"{}\"\n",
             use_str(e)
         ));
-        if e.required_by.is_empty() {
-            out(format_args!(
-                "Parent Dep:    {}/{} (Argument)\n",
-                e.category, e.package
-            ));
-        } else {
-            for (pc, pp) in &e.required_by {
+        let ver = entry_version(e).unwrap_or("").to_string();
+        let installed = is_nomerge(e);
+        consumed.insert((
+            e.category.clone(),
+            e.package.clone(),
+            ver.clone(),
+            installed,
+        ));
+        render_rows(&e.category, &e.package, &ver, installed, &|| {
+            if e.required_by.is_empty() {
                 out(format_args!(
-                    "Parent Dep:    {}/{} required by {}\n",
-                    e.category,
-                    e.package,
-                    label_of(pc, pp)
+                    "Parent Dep:    {}/{} (Argument)\n",
+                    e.category, e.package
                 ));
+            } else {
+                for (pc, pp) in &e.required_by {
+                    out(format_args!(
+                        "Parent Dep:    {}/{} required by {}\n",
+                        e.category,
+                        e.package,
+                        label_of(pc, pp)
+                    ));
+                }
             }
-        }
+        });
         // Stage 6: a new-style virtual's own RDEPEND recursion, which
         // real's `dep_check` traces as a distinct step. Portuale walks a
         // `virtual/*` entry like any other, so synthesise the pair.
@@ -357,5 +473,45 @@ pub(crate) fn dump_resolution_walk(entries: &[GraphEntry], root: &Path) {
             ));
         }
         out(format_args!("\nExiting... {node}\n"));
+    }
+    // #59 S1: installed children the walk created but `entries` no
+    // longer holds (a same-slot merge shadows them). Real adds both
+    // instances; this block reproduces the one portuale's `entries`
+    // lost. `paired-1.0` under `<dev-libs/paired-2.0` is the canonical
+    // case.
+    for (key, list) in &rows {
+        if consumed.contains(key) {
+            continue;
+        }
+        let (cat, pkg, ver, installed) = key;
+        let (slot, sub_slot) = crate::read_vdb_slot(root, cat, pkg, ver);
+        let repo = installed_pkg_repo(root, cat, pkg, ver);
+        let state = if *installed {
+            "installed".to_string()
+        } else {
+            "ebuild scheduled for merge".to_string()
+        };
+        out(format_args!(
+            "\nChild:         ({cat}/{pkg}-{ver}:{slot}/{sub_slot}::{repo}, {state}) USE=\"{}\"\n",
+            installed_use_str(root, cat, pkg, ver)
+        ));
+        for pa in list {
+            match &pa.parent {
+                None => out(format_args!("Parent Dep:    {}\n", pa.atom)),
+                Some((pc, pp)) => {
+                    let unevaluated = pa
+                        .unevaluated
+                        .as_deref()
+                        .map(|u| format!(" ({u})"))
+                        .unwrap_or_default();
+                    out(format_args!(
+                        "Parent Dep:    {}{unevaluated} required by {}\n",
+                        pa.atom,
+                        label_of(pc, pp)
+                    ));
+                }
+            }
+        }
+        out(format_args!("\nExiting... ({cat}/{pkg}-{ver})\n"));
     }
 }
