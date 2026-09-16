@@ -2644,44 +2644,69 @@ pub fn find_remote_binpkg<'a>(
 /// on then. Applied only to binary candidates: real `usepkg_exclude`/
 /// `usepkg_include` gate binary-candidate eligibility specifically
 /// (`built and not installed`), never ebuild candidates.
-/// Real `--binpkg-respect-use` (default "auto" -- effectively on unless
-/// `--usepkgonly`): whether a *binary* candidate's baked-in USE
-/// (`Candidate::binary_use`, the `USE:` field of its `Packages` record)
-/// matches what USE would currently be selected for it, over its own
-/// declared `IUSE` only. A mismatch means real
-/// `_wrapped_select_pkg_highest_available_imp` rejects the binary
-/// (`ignored_binaries[...]["respect_use"]`, "continue searching") and
-/// falls back to the same-version ebuild. An ebuild candidate (no
-/// `binary_use`) always passes. Shared by `resolve_pretend`'s own
-/// candidate filter and the post-resolution source re-derivation in
-/// `backtracking_resolve`, so the two can never disagree about whether a
-/// binary was eligible.
+/// Real `_wrapped_select_pkg_highest_available_imp`'s binary-rejection
+/// block (`depgraph.py:8259-8294`) with `_reinstall_for_flags`'s two
+/// arms (`:3134-3162`): should this *binary* candidate be rejected so
+/// the search falls back to the same-version ebuild?
+///
+/// The caller opens real's gate -- `reinstall_use or (not installed and
+/// respect_use)` -- and this function implements the comparison. Real
+/// compares the binary's own baked `IUSE`/`USE` (`old_*`) against the
+/// **same-version ebuild's** profile-computed sets (`cur_*`; for a
+/// binary, `pkg.iuse.all`/`_pkg_use_enabled(pkg)`), never against the
+/// binary's own selection: a flag that only the ebuild declares is
+/// visible. Without an ebuild at that version (`--usepkgonly`, or a
+/// binary whose ebuild left the tree) `cur_*` falls back to the binary's
+/// own sets, which makes the comparison empty -- exactly real's `cur_iuse
+/// = pkg.iuse.all` / `pkgsettings.setcpv(pkg)` arm.
+///
+/// Arms, in real's order:
+/// - `newuse || (respect_use && !changed_use)`: the IUSE symmetric
+///   difference plus the enabled-within-IUSE difference. This is why
+///   plain `--binpkg-respect-use=auto` rejects a binary whose *IUSE* is
+///   missing a flag the ebuild gained even when the two enabled sets
+///   agree, and why `--newuse` rejects it regardless of respect-use.
+/// - `changed_use || respect_use` (without `newuse`): enabled-only.
+/// - neither (gate opened only by a non-`changed-use` `--reinstall`):
+///   no comparison at all, the binary survives.
+///
+/// `forced_flags` (the ebuild's own `use.force`/`use.mask`) is
+/// deliberately not subtracted yet -- plan question (c) was dropped.
 fn binpkg_respect_use_ok(
     candidate: &Candidate,
+    ebuild_at_version: Option<&Candidate>,
     category: &str,
     package: &str,
     config: &portage_profile::Config,
+    newuse: bool,
+    changed_use: bool,
+    respect_use: bool,
 ) -> bool {
     let Some(binary_use) = &candidate.binary_use else {
         return true;
     };
-    let candidate_str = format!(
-        "{category}/{package}-{}:{}/{}::{}",
-        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
-    );
-    let would_select = effective_use_flags(
-        config,
-        &candidate.iuse,
-        &candidate.keywords,
-        &candidate_str,
-        category,
-        package,
-    );
-    candidate
+    let old_iuse: HashSet<String> = candidate
         .iuse
         .split_whitespace()
-        .map(|tok| tok.trim_start_matches(['+', '-']))
-        .all(|flag| would_select.contains(flag) == binary_use.contains(flag))
+        .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
+        .collect();
+    let (cur_iuse, cur_use) = match ebuild_at_version {
+        Some(ebuild) if ebuild.source != CandidateSource::Binary => {
+            candidate_iuse_and_use(ebuild, category, package, config)
+                .unwrap_or_else(|| (old_iuse.clone(), binary_use.clone()))
+        }
+        _ => (old_iuse.clone(), binary_use.clone()),
+    };
+    let old_enabled: HashSet<String> = old_iuse.intersection(binary_use).cloned().collect();
+    let cur_enabled: HashSet<String> = cur_iuse.intersection(&cur_use).cloned().collect();
+    let mut flags: HashSet<String> = HashSet::new();
+    if newuse || (respect_use && !changed_use) {
+        flags.extend(old_iuse.symmetric_difference(&cur_iuse).cloned());
+        flags.extend(old_enabled.symmetric_difference(&cur_enabled).cloned());
+    } else if changed_use || respect_use {
+        flags.extend(old_enabled.symmetric_difference(&cur_enabled).cloned());
+    }
+    flags.is_empty()
 }
 
 fn filter_usepkg_exclude_include(
@@ -11582,9 +11607,30 @@ pub fn resolve_pretend(
         // downstream (`by_str`), so a USE-mismatched binary left in the
         // pool would take that key and, when it's dropped, take the
         // same-version ebuild with it.
-        if binpkg_respect_use {
-            binary_candidates
-                .retain(|c| binpkg_respect_use_ok(c, &atom.category, &atom.package, config));
+        // #69 S1: real's gate is `reinstall_use or (not installed and
+        // respect_use)` -- `--newuse`/`--reinstall` open it on their
+        // own, which is what makes a `newflag`-only IUSE difference
+        // reject the binary under `--newuse` even with
+        // `--binpkg-respect-use=n`. A same-version ebuild (when the
+        // pool has one) is the comparison's `cur_` side.
+        if binpkg_respect_use || newuse || changed_use {
+            let ebuild_at_version = |version: &str| {
+                candidates
+                    .iter()
+                    .find(|e| e.source == CandidateSource::Ebuild && e.version == version)
+            };
+            binary_candidates.retain(|c| {
+                binpkg_respect_use_ok(
+                    c,
+                    ebuild_at_version(&c.version),
+                    &atom.category,
+                    &atom.package,
+                    config,
+                    newuse,
+                    changed_use,
+                    binpkg_respect_use,
+                )
+            });
         }
         // `--binpkg-changed-deps` (real `create_depgraph_params.py:196-203`:
         // auto-enabled whenever `--usepkgonly` is not given): reject a
@@ -18902,8 +18948,28 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             // gates `resolve_pretend` applied when it chose this
             // version -- a binary that was never eligible then can't
             // be re-derived as the source here either.
-            if ctx.binpkg_respect_use {
-                binary_candidates.retain(|c| binpkg_respect_use_ok(c, &key.0, &key.1, config));
+            if ctx.binpkg_respect_use
+                || ctx.newuse
+                || ctx.changed_use
+                || !ctx.reinstall_atoms.is_empty()
+            {
+                let ebuild_at_version = |version: &str| {
+                    repo_candidates
+                        .iter()
+                        .find(|e| e.source == CandidateSource::Ebuild && e.version == version)
+                };
+                binary_candidates.retain(|c| {
+                    binpkg_respect_use_ok(
+                        c,
+                        ebuild_at_version(&c.version),
+                        &key.0,
+                        &key.1,
+                        config,
+                        ctx.newuse,
+                        ctx.changed_use,
+                        ctx.binpkg_respect_use,
+                    )
+                });
             }
             if binpkg_changed_deps_active(ctx.usepkgonly) {
                 binary_candidates.retain(|c| {
@@ -21937,6 +22003,129 @@ mod tests {
             HashSet::from(["feat".to_string(), "other".to_string()])
         );
         assert_eq!(use_flags, HashSet::from(["feat".to_string()]));
+    }
+
+    #[test]
+    fn binpkg_respect_use_checks_the_ebuild_at_the_same_version() {
+        // #69 S1: real compares a binary's baked IUSE/USE against the
+        // *same-version ebuild's* profile view, not against the binary's
+        // own selection. Binary: IUSE=foo, baked USE=foo.
+        let dir = slotundo_temp_dir("binpkg-respect-use");
+        let binary = || {
+            let mut c = candidate("1.0", &["amd64"]);
+            c.source = CandidateSource::Binary;
+            c.iuse = "foo".to_string();
+            c.binary_use = Some(HashSet::from(["foo".to_string()]));
+            c
+        };
+        // Each call gets a fresh repo dir: `repo_aux_metadata` memoises
+        // by path, and the cells rewrite the same cpv's IUSE.
+        let ebuild_at = |tag: &str, iuse: &str| {
+            let repo = dir.join(format!("repo-{tag}"));
+            fs::create_dir_all(repo.join("metadata/md5-cache/dev-libs")).unwrap();
+            fs::write(
+                repo.join("metadata/md5-cache/dev-libs/x-1.0"),
+                format!("EAPI=8\nIUSE={iuse}\nKEYWORDS=amd64\nSLOT=0\n"),
+            )
+            .unwrap();
+            let mut c = candidate("1.0", &["amd64"]);
+            c.repo_location = repo;
+            c.iuse = iuse.to_string();
+            c
+        };
+
+        let mut config = test_config();
+        // The profile selects foo, matching the binary's baked USE.
+        config.conf_use_tokens = vec!["foo".to_string()];
+
+        // Matching sets: kept.
+        let ebuild = ebuild_at("match", "foo");
+        assert!(binpkg_respect_use_ok(
+            &binary(),
+            Some(&ebuild),
+            "dev-libs",
+            "x",
+            &config,
+            false,
+            false,
+            true
+        ));
+
+        // The ebuild gained newflag: rejected by plain respect-use alone
+        // (the IUSE-set difference), the regression pin.
+        let ebuild = ebuild_at("newflag", "foo newflag");
+        assert!(!binpkg_respect_use_ok(
+            &binary(),
+            Some(&ebuild),
+            "dev-libs",
+            "x",
+            &config,
+            false,
+            false,
+            true
+        ));
+        // ...and by --newuse even with respect-use off.
+        assert!(!binpkg_respect_use_ok(
+            &binary(),
+            Some(&ebuild),
+            "dev-libs",
+            "x",
+            &config,
+            true,
+            false,
+            false
+        ));
+        // --reinstall=changed-use (respect-use off) only counts enabled
+        // differences: both sides enable foo -> kept.
+        assert!(binpkg_respect_use_ok(
+            &binary(),
+            Some(&ebuild),
+            "dev-libs",
+            "x",
+            &config,
+            false,
+            true,
+            false
+        ));
+        // No gate (respect-use off, no reinstall form): nothing compared.
+        assert!(binpkg_respect_use_ok(
+            &binary(),
+            Some(&ebuild),
+            "dev-libs",
+            "x",
+            &config,
+            false,
+            false,
+            false
+        ));
+        // No same-version ebuild (--usepkgonly): own sets stand in, so
+        // the comparison is empty.
+        assert!(binpkg_respect_use_ok(
+            &binary(),
+            None,
+            "dev-libs",
+            "x",
+            &config,
+            false,
+            false,
+            true
+        ));
+
+        // Enabled-state flip: the profile no longer selects foo while
+        // the binary was built with it -> rejected under respect-use.
+        let ebuild = ebuild_at("flip", "foo");
+        config.conf_use_tokens.clear();
+        assert!(!binpkg_respect_use_ok(
+            &binary(),
+            Some(&ebuild),
+            "dev-libs",
+            "x",
+            &config,
+            false,
+            false,
+            true
+        ));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
