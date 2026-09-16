@@ -1,5 +1,5 @@
 # Forces a fully static, non-PIE musl binary (no dynamic section at all,
-# not even the musl dynamic loader) -- see musl/README.md and
+# not even the musl dynamic loader) -- see musl/Containerfile and
 # docs/agent-context.md hard goal 3 ("must run on even the most minimal Linux OS").
 # `+crt-static` alone still leaves a PT_INTERP entry pointing at
 # ld-musl-*.so.1 on some musl targets; `relocation-model=static` drops it.
@@ -7,8 +7,16 @@
 [target.x86_64-unknown-linux-musl]
 rustflags = ["-C", "target-feature=+crt-static", "-C", "relocation-model=static"]
 
+# Alpine's rustc target is dynamic-musl by default (the target spec has
+# no `crt-static-default`), so `+crt-static` makes rustc emit
+# `-Wl,-Bstatic ... -Wl,-Bdynamic` around its system-lib section -- and
+# gcc then appends its own `-lc` *after* that `-Wl,-Bdynamic`, while the
+# global `-static` is in force. GNU ld refuses with "attempted static
+# link of dynamic object .../libc.so" (#61). The trailing `-Wl,-Bstatic`
+# lands last among rustc's link args (before gcc's appended libraries),
+# so the final `-lc`, `-lgcc`, `-lgcc_eh` resolve to their `.a` files.
 [target.x86_64-alpine-linux-musl]
-rustflags = ["-C", "target-feature=+crt-static", "-C", "relocation-model=static"]
+rustflags = ["-C", "target-feature=+crt-static", "-C", "relocation-model=static", "-C", "link-arg=-Wl,-Bstatic"]
 
 [target.aarch64-unknown-linux-musl]
 rustflags = ["-C", "target-feature=+crt-static", "-C", "relocation-model=static"]

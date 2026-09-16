@@ -5,20 +5,24 @@
 # also gates on a musl static build smoke-tested inside a minimal
 # (scratch/busybox-level) container").
 #
-# Build context is PORTING/ (not PORTING/rust/) so the fixture tree at
-# PORTING/fixtures can be copied into the runtime image too, letting the
-# smoke test exercise real `emerge --pretend` against it.
+# Build context is the repo root (not rust/) so the fixture tree at
+# fixtures/ can be copied into the runtime image too, letting the smoke
+# test exercise real `emerge --pretend` against it.
 #
 # Build stage uses Alpine (musl-based) purely for its `rust`/`cargo` apk
 # packages -- no rustup/target-add needed, since Alpine's own rustc targets
-# musl (x86_64-alpine-linux-musl) natively. PORTING/rust/.cargo/config.toml
-# forces relocation-model=static so the output has no dynamic section at
-# all, not even a reference to musl's own dynamic loader.
+# musl (x86_64-alpine-linux-musl) natively. 3.24.1 is the first stable
+# Alpine whose rustc (1.96.1) clears the workspace's 1.95 MSRV floor
+# (gentoo-interner / portage-atom*; see backlog #61).
+# rust/.cargo/config.toml forces
+# relocation-model=static plus the trailing -Wl,-Bstatic that keeps gcc's
+# own -lc static, so the output has no dynamic section at all, not even a
+# reference to musl's own dynamic loader.
 #
 # Runtime stage is `FROM scratch`: the strictest possible check that the
 # binaries have zero runtime dependencies, not even a libc.
 
-FROM docker.io/library/alpine:3.22.1 AS builder
+FROM docker.io/library/alpine:3.24.1 AS builder
 RUN apk add --no-cache rust cargo
 WORKDIR /work
 COPY rust/ rust/
@@ -33,7 +37,7 @@ COPY --from=builder /work/rust/target/x86_64-alpine-linux-musl/release/use-reduc
 COPY --from=builder /work/rust/target/x86_64-alpine-linux-musl/release/required-use-harness /bin/required-use-harness
 # Real deployment would install this binary once and create `emerge`/
 # `ebuild` symlinks (proven on the host filesystem by
-# PORTING/tests/test_portuale.py); scratch has no shell to `ln` at image
+# tests/test_portuale.py); scratch has no shell to `ln` at image
 # build time, so the smoke test copies the same binary under each applet
 # name instead. Dispatch is by argv[0] basename either way -- the binary
 # can't tell a symlink from a hardlink from a separate copy.
@@ -41,6 +45,6 @@ COPY --from=builder /work/rust/target/x86_64-alpine-linux-musl/release/portuale 
 COPY --from=builder /work/rust/target/x86_64-alpine-linux-musl/release/portuale /bin/emerge
 COPY --from=builder /work/rust/target/x86_64-alpine-linux-musl/release/portuale /bin/ebuild
 # The synthetic repo/vdb tree emerge --pretend is exercised against inside
-# the container (see PORTING/fixtures and PORTING/rust/portage-repo).
+# the container (see fixtures/ and rust/portage-repo).
 COPY fixtures/ /fixtures/
 ENTRYPOINT ["/bin/versions-harness"]
