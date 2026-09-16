@@ -231,7 +231,11 @@ pub trait RepoCache {
 /// pre-download step of that one call-site sequence, not a swappable
 /// transport, so it is no second `Fetcher` implementation either;
 /// Manifest digest verification stays at the `fetch_src_uri` call site,
-/// which holds the `Manifest` entry -- see [`WgetFetcher`].
+/// which holds the `Manifest` entry -- see [`WgetFetcher`]. The one
+/// Manifest-derived value the transport *does* need is real's
+/// `DIGESTS` command variable (`fetch.py:1797-1803`), carried
+/// pre-formatted in [`FetchRequest::vars`] so the seam still never sees
+/// a `Manifest`.
 pub trait Fetcher {
     /// Download `request.uri` to `request.dest`, continuing a non-empty
     /// partial when `request.resume` is set (real `RESUMECOMMAND`) and
@@ -266,6 +270,12 @@ pub struct FetchRequest<'a> {
     /// `fetch.py:1652-1700`); `None` uses the `make.globals` defaults
     /// (`portage_fetch::default_commands`).
     pub commands: Option<&'a portage_fetch::FetchCommands>,
+    /// Real `fetch.py:1795-1811`'s `DIGESTS` and `PORTAGE_SSH_OPTS`
+    /// substitution inputs, pre-formatted by the caller (the `DIGESTS`
+    /// string needs the file's `Manifest` entry, which the request
+    /// deliberately does not carry). `Default` leaves both unset; an
+    /// unset variable expands to empty, same as real.
+    pub vars: portage_fetch::FetchCommandVars<'a>,
 }
 
 // ---------------------------------------------------------------------------
@@ -994,6 +1004,7 @@ impl Fetcher for WgetFetcher {
             request.dest,
             request.resume,
             distdir,
+            request.vars,
             request
                 .commands
                 .unwrap_or_else(|| portage_fetch::default_commands()),
@@ -1359,6 +1370,7 @@ where
             dest: &dest,
             resume: false,
             commands,
+            vars: Default::default(),
         })?;
         Ok(dest)
     }
@@ -1757,6 +1769,7 @@ mod tests {
             dest: &dest,
             resume: false,
             commands: None,
+            vars: Default::default(),
         };
         // Unfetchable host, no partial: the shared `wget` transport
         // fails, and the seam reports it (no panic, no half-written file

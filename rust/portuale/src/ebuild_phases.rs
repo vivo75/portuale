@@ -1058,17 +1058,17 @@ fn depend_use_set(
     .unwrap_or_default()
 }
 
-/// The resolved config's `FETCHCOMMAND` family, for the distfile fetch
-/// path: real `fetch.py` reads `FETCHCOMMAND`/`RESUMECOMMAND` (and the
-/// `_<PROTO>` variants) out of the same `mysettings` the phases run
-/// with, so portuale resolves the same chain here (the
-/// `depend_use_set` resolution above, kept as a sibling rather than
-/// factored, since this needs the whole `Config`, not just `use_flags`).
-fn resolved_fetch_commands(
+/// The resolved config for the distfile fetch path: real `fetch.py` reads
+/// `FETCHCOMMAND`/`RESUMECOMMAND` (and the `_<PROTO>` variants) and
+/// `PORTAGE_SSH_OPTS` out of the same `mysettings` the phases run with,
+/// so portuale resolves the same chain once here (the `depend_use_set`
+/// resolution above is kept as a sibling rather than factored, since
+/// this needs the whole `Config`, not just `use_flags`).
+fn resolved_fetch_config(
     env: &Environment,
     config_root: &Path,
     eroot: &Path,
-) -> Option<portage_fetch::FetchCommands> {
+) -> Option<portage_profile::Config> {
     let _ = repo_root_for(&env.pkg_dir)?;
     let repos = portage_repo::find_repos(config_root).ok()?;
     let main_repo = repos.iter().find(|r| r.is_main)?;
@@ -1095,7 +1095,6 @@ fn resolved_fetch_commands(
         eroot,
     )
     .ok()
-    .map(|config| fetch::fetch_commands_from_config(&config))
 }
 
 /// Real `fetch.py:1055-1059`: `shlex.split(PORTAGE_RO_DISTDIRS)` filtered
@@ -1188,6 +1187,9 @@ async fn fetch_sources(
             aa.push(entry.filename);
         }
     }
+    // Real `fetch.py` reads its commands and `PORTAGE_SSH_OPTS` out of
+    // the same settings object the phases use; resolve the chain once.
+    let fetch_config = resolved_fetch_config(env, config_root, root);
     let a = fetch::fetch_src_uri(
         &env.pkg_dir,
         &src_uri,
@@ -1212,9 +1214,13 @@ async fn fetch_sources(
             // path), defaulting to real `false`.
             force_mirror: features.split_whitespace().any(|tok| tok == "force-mirror"),
             use_flags: use_flags.split_whitespace().map(String::from).collect(),
-            // Real `fetch.py` reads its commands out of the same settings
-            // object the phases use; resolve the same chain for them.
-            fetch_commands: resolved_fetch_commands(env, config_root, root),
+            // Real `fetch.py:1652-1700`'s command family out of the same
+            // settings object the phases use.
+            fetch_commands: fetch_config.as_ref().map(fetch::fetch_commands_from_config),
+            // Real `mysettings.get("PORTAGE_SSH_OPTS")` (`fetch.py:1806`).
+            portage_ssh_opts: fetch_config
+                .as_ref()
+                .and_then(fetch::portage_ssh_opts_from_config),
             // Real `fetch.py:1055-1059`: existing directories only.
             ro_distdirs: resolved_ro_distdirs(env, config_root, root),
             mirror_cache_now: None,

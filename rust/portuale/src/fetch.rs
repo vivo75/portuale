@@ -210,6 +210,12 @@ pub struct FetchOptions {
     /// `isdir` at option-build time), each layout-resolved and
     /// digest-checked, then **symlinked** into a writable DISTDIR.
     pub ro_distdirs: Vec<std::path::PathBuf>,
+    /// Real `mysettings.get("PORTAGE_SSH_OPTS")` (`fetch.py:1806-1810`):
+    /// the `FETCHCOMMAND_SSH`/`_SFTP` templates' `"${PORTAGE_SSH_OPTS}"`
+    /// argument; `None` (the unset setting) expands to empty, same as
+    /// real. Built from the resolved config via
+    /// [`portage_ssh_opts_from_config`].
+    pub portage_ssh_opts: Option<String>,
 }
 
 impl Default for FetchOptions {
@@ -228,6 +234,7 @@ impl Default for FetchOptions {
             checksum_failure_max_tries: 5,
             fetch_commands: None,
             ro_distdirs: Vec::new(),
+            portage_ssh_opts: None,
         }
     }
 }
@@ -249,6 +256,14 @@ impl Default for FetchOptions {
 /// real's fresh-vs-resume split through the seam.
 pub(crate) fn wget_fetch(uri: &str, dest: &Path) -> Result<(), String> {
     portage_fetch::download_via_wget(uri, dest, false)
+}
+
+/// Real `mysettings.get("PORTAGE_SSH_OPTS")` (`fetch.py:1806-1810`):
+/// the resolved scalar when the config carries it, else `None` (absent
+/// expands to empty in the fetch command, exactly like real's missing
+/// settings key).
+pub fn portage_ssh_opts_from_config(config: &portage_profile::Config) -> Option<String> {
+    config.other_vars.get("PORTAGE_SSH_OPTS").cloned()
 }
 
 /// Real's `FETCHCOMMAND` family out of a resolved config: the plain
@@ -839,7 +854,12 @@ pub fn fetch_src_uri(
             // The download half is the director's `Fetcher` seam: one
             // resolved candidate URI -> `dest`, fresh or resumed, with no
             // Manifest context -- digest verification stays right below
-            // at this call site, which holds the `Manifest` entry.
+            // at this call site, which holds the `Manifest` entry. The
+            // one Manifest-derived value the transport needs is real's
+            // `DIGESTS` substitution (`fetch.py:1797-1803`), formatted
+            // here (this is where the entry lives) and carried
+            // pre-formatted.
+            let digests_var = portage_fetch::digests_variable(digests);
             let fetcher: &dyn Fetcher = &WgetFetcher;
             while let Some(candidate) = uri_list.pop() {
                 let candidate = match &candidate {
@@ -871,6 +891,10 @@ pub fn fetch_src_uri(
                     dest: &dest,
                     resume: has_partial,
                     commands: options.fetch_commands.as_ref(),
+                    vars: portage_fetch::FetchCommandVars {
+                        digests: Some(&digests_var),
+                        portage_ssh_opts: options.portage_ssh_opts.as_deref(),
+                    },
                 });
                 match attempt {
                     Ok(()) => match verify_digests(&dest, digests) {
@@ -1251,6 +1275,26 @@ mod tests {
         // reachable from a hand-built `FetchCommands`.
         let commands = fetch_commands_from_config(&portage_profile::Config::default());
         assert_eq!(commands, portage_fetch::FetchCommands::default());
+    }
+
+    #[test]
+    fn portage_ssh_opts_from_config_reads_the_scalar() {
+        // #70 R4: the FETCHCOMMAND_SSH/SFTP templates' `"${PORTAGE_SSH_OPTS}"`
+        // argument comes from the resolved settings; absent stays None
+        // (which expands to empty, like real).
+        let mut config = portage_profile::Config::default();
+        config.other_vars.insert(
+            "PORTAGE_SSH_OPTS".to_string(),
+            "-o User=portage".to_string(),
+        );
+        assert_eq!(
+            portage_ssh_opts_from_config(&config).as_deref(),
+            Some("-o User=portage")
+        );
+        assert_eq!(
+            portage_ssh_opts_from_config(&portage_profile::Config::default()),
+            None
+        );
     }
 
     #[test]

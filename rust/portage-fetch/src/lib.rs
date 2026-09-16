@@ -483,6 +483,43 @@ pub fn default_commands() -> &'static FetchCommands {
     &DEFAULT
 }
 
+/// Real `fetch.py:1795-1811`'s non-path substitution inputs: the
+/// distfile's `DIGESTS` string and the `PORTAGE_SSH_OPTS` setting. Real
+/// inserts each into `variables` only when the settings carry it; an
+/// unset key still expands to empty in `varexpand`, so `None` and
+/// `Some("")` produce the same command line.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FetchCommandVars<'a> {
+    /// `" ".join(f"{k.lower()}:{v}" ...)` over the Manifest hashes, size
+    /// excluded -- build it with [`digests_variable`].
+    pub digests: Option<&'a str>,
+    /// Real `mysettings.get("PORTAGE_SSH_OPTS")` (used by the shipped
+    /// `FETCHCOMMAND_SSH`/`_SFTP` templates as `"${PORTAGE_SSH_OPTS}"`).
+    pub portage_ssh_opts: Option<&'a str>,
+}
+
+/// The `DIGESTS` fetch-command variable for one Manifest entry, real
+/// `fetch.py:1797-1803`: `" ".join(f"{k.lower()}:{v}")` over every hash
+/// (the `size` entry excluded), e.g.
+/// `blake2b:<hex> sha512:<hex>`.
+///
+/// Real preserves the `Manifest` line's hash order (`portage.manifest`'s
+/// parser builds an insertion-ordered dict); portuale's
+/// [`DistfileDigests`] carries a `HashMap`, so the names are sorted
+/// instead. The shipped tree's `BLAKE2B`-then-`SHA512` order matches the
+/// sort (200/200 sampled `DIST` lines, 2026-09-16) -- a hand-written
+/// reverse-order Manifest would differ; recorded in `docs/02.68-74.md`
+/// §6.
+pub fn digests_variable(digests: &DistfileDigests) -> String {
+    let mut names: Vec<&String> = digests.hashes.keys().collect();
+    names.sort();
+    names
+        .iter()
+        .map(|name| format!("{}:{}", name.to_ascii_lowercase(), digests.hashes[*name]))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 impl FetchCommands {
     /// Real's selection (`fetch.py:1652-1662` for fetch, `:1680-1690` for
     /// resume): the protocol variant first, then the plain name.
@@ -515,43 +552,111 @@ impl FetchCommands {
     }
 }
 
-/// Real `varexpand` + `shlex.split` over the selected command
-/// (`fetch.py:1789-1810`): `${DISTDIR}`/`${URI}`/`${FILE}` (and the bare
-/// `$VAR` form) are substituted with the config values, then the string
-/// is split into argv with POSIX quoting rules -- real never runs it
-/// through a shell.
-fn expand_and_split(command: &str, distdir: &Path, uri: &str, file: &str) -> Vec<String> {
-    let vars = [
-        ("DISTDIR", distdir.display().to_string()),
-        ("URI", uri.to_string()),
-        ("FILE", file.to_string()),
-    ];
-    let mut expanded = command.to_string();
-    for (name, value) in &vars {
-        expanded = expanded.replace(&format!("${{{name}}}"), value);
-        // The bare `$VAR` form, on a name boundary.
-        let mut out = String::with_capacity(expanded.len());
-        let bytes = expanded.as_bytes();
-        let mut i = 0;
-        while i < bytes.len() {
-            if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] != b'{' {
-                let rest = &expanded[i + 1..];
-                let name_len = rest
-                    .chars()
-                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
-                    .count();
-                if name_len > 0 && rest[..name_len] == **name {
-                    out.push_str(value);
-                    i += 1 + name_len;
-                    continue;
+/// Real `varexpand` (`portage/util/__init__.py:885-1015`) over a
+/// fetch-command template, with `mydict = variables`
+/// (`fetch.py:1795-1820`): `${VARNAME}`/`$VARNAME` expand from `vars`
+/// and an **unknown name expands to empty** (the shell's unset-variable
+/// default), an escaped `\$` is a literal `$`, `\\` is a literal `\`
+/// (plus real's bug-compatible extra character when the next one is a
+/// quote or `$`), an escaped newline disappears, any other `\x` keeps
+/// both characters, and a surviving single quote suspends expansion.
+///
+/// Same algorithm as `portage_profile`'s config-value `substitute`
+/// (R1); the difference is the lookup: no process-environment fallback
+/// here, matching real's fetch-time `mydict`.
+fn varexpand(template: &str, vars: &HashMap<String, String>) -> String {
+    let chars: Vec<char> = template.chars().collect();
+    let mut out = String::new();
+    let mut pos = 0;
+    let mut in_single = false;
+    let mut in_double = false;
+    while pos < chars.len() {
+        let current = chars[pos];
+        match current {
+            '\'' => {
+                out.push('\'');
+                if !in_double {
+                    in_single = !in_single;
+                }
+                pos += 1;
+            }
+            '"' => {
+                out.push('"');
+                if !in_single {
+                    in_double = !in_double;
+                }
+                pos += 1;
+            }
+            '\\' if !in_single => {
+                if pos + 1 >= chars.len() {
+                    out.push('\\');
+                    break;
+                }
+                let next = chars[pos + 1];
+                pos += 2;
+                match next {
+                    '$' => out.push('$'),
+                    '\\' => {
+                        out.push('\\');
+                        if pos < chars.len() && matches!(chars[pos], '\'' | '"' | '$') {
+                            out.push(chars[pos]);
+                            pos += 1;
+                        }
+                    }
+                    '\n' => {}
+                    other => {
+                        out.push('\\');
+                        out.push(other);
+                    }
                 }
             }
-            out.push(bytes[i] as char);
-            i += 1;
+            '$' if !in_single => {
+                pos += 1;
+                if pos == chars.len() {
+                    out.push('$');
+                    continue;
+                }
+                let braced = chars[pos] == '{';
+                if braced {
+                    pos += 1;
+                    if pos == chars.len() {
+                        return String::new();
+                    }
+                }
+                let start = pos;
+                while pos < chars.len() && (chars[pos].is_ascii_alphanumeric() || chars[pos] == '_')
+                {
+                    pos += 1;
+                }
+                let name: String = chars[start..pos].iter().collect();
+                if braced {
+                    if pos == chars.len() || chars[pos] != '}' {
+                        return String::new();
+                    }
+                    pos += 1;
+                }
+                if name.is_empty() {
+                    return String::new();
+                }
+                if let Some(value) = vars.get(&name) {
+                    out.push_str(value);
+                }
+            }
+            _ => {
+                out.push(current);
+                pos += 1;
+            }
         }
-        expanded = out;
     }
-    shell_split(&expanded)
+    out
+}
+
+/// Real `varexpand` + `shlex.split` over the selected command
+/// (`fetch.py:1813-1820`): the variables are substituted, then the string
+/// is split into argv with POSIX quoting rules -- real never runs it
+/// through a shell.
+fn expand_and_split(command: &str, vars: &HashMap<String, String>) -> Vec<String> {
+    shell_split(&varexpand(command, vars))
 }
 
 /// POSIX-ish argv splitting, public for callers parsing a config value
@@ -560,9 +665,11 @@ pub fn split_shell_words(s: &str) -> Vec<String> {
     shell_split(s)
 }
 
-/// POSIX-ish argv splitting (real `shlex.split`): whitespace separates,
-/// single quotes are literal, double quotes group with backslash escapes,
-/// and a backslash escapes the next character outside single quotes.
+/// Python `shlex.split` (posix) argv splitting: whitespace separates,
+/// single quotes are literal, a backslash escapes the next character
+/// outside single quotes, and inside double quotes only `\"`/`\\` lose
+/// the backslash (`\$`, `` \` ``, `\ ` keep it -- see the in-double
+/// branch).
 fn shell_split(s: &str) -> Vec<String> {
     let mut args = Vec::new();
     let mut cur = String::new();
@@ -585,8 +692,13 @@ fn shell_split(s: &str) -> Vec<String> {
                 in_double = false;
             } else if c == '\\'
                 && let Some(&next) = chars.peek()
-                && matches!(next, '"' | '\\' | '$' | '`')
+                && matches!(next, '"' | '\\')
             {
+                // Python `shlex` (posix) removes the backslash only
+                // before the closing quote and before another
+                // backslash; `\$`, `` \` `` and `\ ` keep it (real
+                // fetch commands run through `shlex.split`, not a
+                // shell).
                 cur.push(chars.next().unwrap());
             } else {
                 cur.push(c);
@@ -631,11 +743,11 @@ fn shell_split(s: &str) -> Vec<String> {
 /// its protocol variant) and `RESUMECOMMAND` (both are selected and
 /// checked, regardless of which one this attempt runs), warn about a
 /// command without `${FILE}`, substitute
-/// `${DISTDIR}`/`${URI}`/`${FILE}`, and spawn the real subprocess (never
-/// an in-process HTTP client). A failed fresh fetch removes whatever
-/// partial file it left behind; a failed resume keeps it for the next
-/// candidate -- the split `portuale::fetch::fetch_src_uri`'s candidate
-/// loop relies on.
+/// `${URI}`/`${FILE}`/`${DIGESTS}`/`${DISTDIR}`/`${PORTAGE_SSH_OPTS}`,
+/// and spawn the real subprocess (never an in-process HTTP client). A
+/// failed fresh fetch removes whatever partial file it left behind; a
+/// failed resume keeps it for the next candidate -- the split
+/// `portuale::fetch::fetch_src_uri`'s candidate loop relies on.
 ///
 /// The `${FILE}` refusal is real's, not a blanket one: each command
 /// missing the parameter prints its own
@@ -645,11 +757,19 @@ fn shell_split(s: &str) -> Vec<String> {
 /// (`fetch.py:1713-1715`: `if myfile != os.path.basename(loc): return 0`).
 /// When the names match, real falls through and runs the command anyway
 /// -- `wget -P "${DISTDIR}" "${URI}"` still lands the right file.
+///
+/// `FILE` is `dest`'s own basename, **not** real's
+/// `basename(download_path)`: real downloads to
+/// `<myfile>.__download__` (`_download_suffix`, `fetch.py:63`) and
+/// renames after verification, while portuale writes `dest` directly.
+/// This slice deliberately does not change portuale's download path --
+/// recorded in `docs/02.68-74.md` §6.
 pub fn download_with_commands(
     uri: &str,
     dest: &Path,
     resume: bool,
     distdir: &Path,
+    vars: FetchCommandVars<'_>,
     commands: &FetchCommands,
 ) -> Result<(), String> {
     let proto = uri
@@ -686,7 +806,17 @@ pub fn download_with_commands(
     } else {
         (fetch_var, fetch_command)
     };
-    let argv = expand_and_split(&command, distdir, uri, &file);
+    let mut variables: HashMap<String, String> = HashMap::new();
+    variables.insert("URI".to_string(), uri.to_string());
+    variables.insert("FILE".to_string(), file.clone());
+    variables.insert("DISTDIR".to_string(), distdir.display().to_string());
+    if let Some(digests) = vars.digests {
+        variables.insert("DIGESTS".to_string(), digests.to_string());
+    }
+    if let Some(opts) = vars.portage_ssh_opts {
+        variables.insert("PORTAGE_SSH_OPTS".to_string(), opts.to_string());
+    }
+    let argv = expand_and_split(&command, &variables);
     let Some((prog, rest)) = argv.split_first() else {
         return Err(format!("!!! {var} is empty.\n"));
     };
@@ -705,14 +835,21 @@ pub fn download_with_commands(
 
 /// The `make.globals` default transport, for callers with no resolved
 /// config in hand: `download_with_commands` over [`FetchCommands`]'s
-/// defaults. `resume` selects `RESUMECOMMAND` (byte-for-byte
-/// `FETCHCOMMAND` plus `-c`). This is the one `wget` invocation both the
-/// `portuale` fetch path and the `mrg-director` `Fetcher` seam run when
-/// no override is configured; it lives here so the transport is shared,
-/// not duplicated per caller.
+/// defaults and no extra variables. `resume` selects `RESUMECOMMAND`
+/// (byte-for-byte `FETCHCOMMAND` plus `-c`). This is the one `wget`
+/// invocation both the `portuale` fetch path and the `mrg-director`
+/// `Fetcher` seam run when no override is configured; it lives here so
+/// the transport is shared, not duplicated per caller.
 pub fn download_via_wget(uri: &str, dest: &Path, resume: bool) -> Result<(), String> {
     let distdir = dest.parent().unwrap_or_else(|| Path::new("."));
-    download_with_commands(uri, dest, resume, distdir, &FetchCommands::default())
+    download_with_commands(
+        uri,
+        dest,
+        resume,
+        distdir,
+        FetchCommandVars::default(),
+        &FetchCommands::default(),
+    )
 }
 
 /// Real digest verification: file size (a cheap, real `_check_distfile`
@@ -886,13 +1023,22 @@ mod tests {
         assert!(err.contains("FETCHCOMMAND is unset"), "{err}");
     }
 
+    fn vars(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
     #[test]
     fn expand_and_split_substitutes_and_quotes_like_shlex() {
         let argv = expand_and_split(
             "wget -O \"${DISTDIR}/${FILE}\" \"${URI}\" -U 'Mozilla x'",
-            std::path::Path::new("/var/cache/distfiles"),
-            "https://example.com/foo-1.0.tar.gz",
-            "foo-1.0.tar.gz",
+            &vars(&[
+                ("DISTDIR", "/var/cache/distfiles"),
+                ("FILE", "foo-1.0.tar.gz"),
+                ("URI", "https://example.com/foo-1.0.tar.gz"),
+            ]),
         );
         assert_eq!(
             argv,
@@ -908,11 +1054,102 @@ mod tests {
         // The bare `$VAR` form is real `varexpand`'s too.
         let argv = expand_and_split(
             "cp $URI ${DISTDIR}/${FILE}",
-            std::path::Path::new("/d"),
-            "file:///src/foo",
-            "foo",
+            &vars(&[
+                ("URI", "file:///src/foo"),
+                ("DISTDIR", "/d"),
+                ("FILE", "foo"),
+            ]),
         );
         assert_eq!(argv, vec!["cp", "file:///src/foo", "/d/foo"]);
+    }
+
+    /// #70 R4 oracle: the real `FETCHCOMMAND_SSH`
+    /// (`make.globals:70`, resolved by R1) expanded with the fetch
+    /// variables, captured 2026-09-16 (portage 3.0.82.2) with
+    /// `python3 -c "from portage.util import varexpand; import shlex;
+    /// print(shlex.split(varexpand(CMD, mydict=VARS)))"`:
+    ///
+    /// unset `PORTAGE_SSH_OPTS`:
+    /// ['bash', '-c', 'x=${2#ssh://} ; host=${x%%/*} ;
+    ///  port=${host##*:} ; host=${host%:*} ; [[ ${host} = ${port} ]] &&
+    ///  port= ; exec rsync --rsh="ssh ${port:+-p${port}} ${3}" -avP
+    ///  "${host}:/${x#*/}" "$1"', 'rsync',
+    ///  '/var/cache/distfiles/foo-1.0.tar.gz',
+    ///  'https://example.org/distfiles/foo-1.0.tar.gz', '']
+    ///
+    /// set to `-o ServerAliveInterval=5 -o User=portage`: same argv with
+    /// that string as the last element.
+    #[test]
+    fn expand_and_split_matches_real_varexpand_on_fetchcommand_ssh() {
+        let command = r#"bash -c "x=\${2#ssh://} ; host=\${x%%/*} ; port=\${host##*:} ; host=\${host%:*} ; [[ \${host} = \${port} ]] && port= ; exec rsync --rsh=\"ssh \${port:+-p\${port}} \${3}\" -avP \"\${host}:/\${x#*/}\" \"\$1\"" rsync "${DISTDIR}/${FILE}" "${URI}" "${PORTAGE_SSH_OPTS}""#;
+        let base = vars(&[
+            ("DISTDIR", "/var/cache/distfiles"),
+            ("URI", "https://example.org/distfiles/foo-1.0.tar.gz"),
+            ("FILE", "foo-1.0.tar.gz"),
+            ("DIGESTS", "blake2b:aa sha512:bb"),
+        ]);
+        let bash_script = r#"x=${2#ssh://} ; host=${x%%/*} ; port=${host##*:} ; host=${host%:*} ; [[ ${host} = ${port} ]] && port= ; exec rsync --rsh="ssh ${port:+-p${port}} ${3}" -avP "${host}:/${x#*/}" "$1""#;
+        let mut unset = base.clone();
+        assert_eq!(
+            expand_and_split(command, &unset),
+            vec![
+                "bash",
+                "-c",
+                bash_script,
+                "rsync",
+                "/var/cache/distfiles/foo-1.0.tar.gz",
+                "https://example.org/distfiles/foo-1.0.tar.gz",
+                "",
+            ]
+        );
+        unset.insert(
+            "PORTAGE_SSH_OPTS".to_string(),
+            "-o ServerAliveInterval=5 -o User=portage".to_string(),
+        );
+        assert_eq!(
+            expand_and_split(command, &unset),
+            vec![
+                "bash",
+                "-c",
+                bash_script,
+                "rsync",
+                "/var/cache/distfiles/foo-1.0.tar.gz",
+                "https://example.org/distfiles/foo-1.0.tar.gz",
+                "-o ServerAliveInterval=5 -o User=portage",
+            ]
+        );
+    }
+
+    /// The rest of real's fetch-time `varexpand` over a command
+    /// template: unknown names empty, `\$` literal, `\\` unescaped,
+    /// single-quote suspension (captured with the same python command;
+    /// `['cp', 'x']` for the unknown-vars line).
+    #[test]
+    fn expand_and_split_varexpand_unknown_vars_and_escapes_match_real() {
+        assert_eq!(
+            expand_and_split("cp $NOSUCH ${ALSO_MISSING} x", &vars(&[("FILE", "f")])),
+            vec!["cp", "x"]
+        );
+        assert_eq!(
+            expand_and_split(
+                r#"cp "\$FILE" "\${URI}" "\\$FILE""#,
+                &vars(&[("FILE", "f"), ("URI", "u")]),
+            ),
+            vec!["cp", "$FILE", "${URI}", "\\$FILE"]
+        );
+        assert_eq!(
+            expand_and_split("cp '$FILE' x", &vars(&[("FILE", "f")])),
+            vec!["cp", "$FILE", "x"]
+        );
+    }
+
+    #[test]
+    fn digests_variable_formats_like_real_and_skips_size() {
+        let mut hashes = HashMap::new();
+        hashes.insert("SHA512".to_string(), "bb".to_string());
+        hashes.insert("BLAKE2B".to_string(), "aa".to_string());
+        let digests = DistfileDigests { size: 11, hashes };
+        assert_eq!(digests_variable(&digests), "blake2b:aa sha512:bb");
     }
 
     /// A stub "fetch command": `cp <uri-path> <dest>` (the URI is a
@@ -943,13 +1180,29 @@ mod tests {
             ..FetchCommands::default()
         };
         let uri = format!("file://{}", source.display());
-        download_with_commands(&uri, &dest, false, &dir, &commands).unwrap();
+        download_with_commands(
+            &uri,
+            &dest,
+            false,
+            &dir,
+            FetchCommandVars::default(),
+            &commands,
+        )
+        .unwrap();
         assert_eq!(fs::read(&dest).unwrap(), b"payload");
 
         // A command without ${FILE} is refused with real's message and
         // never spawned.
         commands.fetchcommand = Some(format!("{} \"${{URI}}\"", script.display()));
-        let err = download_with_commands(&uri, &dest, false, &dir, &commands).unwrap_err();
+        let err = download_with_commands(
+            &uri,
+            &dest,
+            false,
+            &dir,
+            FetchCommandVars::default(),
+            &commands,
+        )
+        .unwrap_err();
         assert!(
             err.contains("does not contain the required ${FILE} parameter"),
             "{err}"
@@ -965,7 +1218,15 @@ mod tests {
         );
         commands.fetchcommand = Some("false".to_string());
         let dest2 = dir.join("dest2.tar.gz");
-        download_with_commands(&uri, &dest2, false, &dir, &commands).unwrap();
+        download_with_commands(
+            &uri,
+            &dest2,
+            false,
+            &dir,
+            FetchCommandVars::default(),
+            &commands,
+        )
+        .unwrap();
         assert!(dest2.exists());
     }
 
@@ -998,7 +1259,15 @@ mod tests {
             fetchcommand: Some(no_file.clone()),
             ..FetchCommands::default()
         };
-        download_with_commands(&uri, &dest, false, &dldir, &commands).unwrap();
+        download_with_commands(
+            &uri,
+            &dest,
+            false,
+            &dldir,
+            FetchCommandVars::default(),
+            &commands,
+        )
+        .unwrap();
         assert!(marker.is_file(), "the ${{FILE}}-less command ran");
         assert_eq!(fs::read(&dest).unwrap(), b"payload");
         fs::remove_file(&marker).unwrap();
@@ -1006,7 +1275,15 @@ mod tests {
         // (b) a renamed distfile differs from the URL basename: real
         // aborts before spawning.
         let renamed = dldir.join("renamed.tar.gz");
-        let err = download_with_commands(&uri, &renamed, false, &dldir, &commands).unwrap_err();
+        let err = download_with_commands(
+            &uri,
+            &renamed,
+            false,
+            &dldir,
+            FetchCommandVars::default(),
+            &commands,
+        )
+        .unwrap_err();
         assert!(
             err.contains("FETCHCOMMAND does not contain the required ${FILE} parameter"),
             "{err}"
@@ -1022,7 +1299,15 @@ mod tests {
             resumecommand: Some(no_file),
             ..FetchCommands::default()
         };
-        let err = download_with_commands(&uri, &renamed, false, &dldir, &commands).unwrap_err();
+        let err = download_with_commands(
+            &uri,
+            &renamed,
+            false,
+            &dldir,
+            FetchCommandVars::default(),
+            &commands,
+        )
+        .unwrap_err();
         assert!(
             err.contains("RESUMECOMMAND does not contain the required ${FILE} parameter"),
             "{err}"
@@ -1043,9 +1328,25 @@ mod tests {
             ..FetchCommands::default()
         };
         commands.resumecommand = commands.fetchcommand.clone();
-        download_with_commands("file:///nonexistent", &dest, false, &dir, &commands).unwrap_err();
+        download_with_commands(
+            "file:///nonexistent",
+            &dest,
+            false,
+            &dir,
+            FetchCommandVars::default(),
+            &commands,
+        )
+        .unwrap_err();
         assert!(!dest.exists(), "a failed fresh fetch removes the partial");
-        download_with_commands("file:///nonexistent", &dest, true, &dir, &commands).unwrap_err();
+        download_with_commands(
+            "file:///nonexistent",
+            &dest,
+            true,
+            &dir,
+            FetchCommandVars::default(),
+            &commands,
+        )
+        .unwrap_err();
         assert!(
             dest.exists(),
             "a failed resume keeps it for the next candidate"
