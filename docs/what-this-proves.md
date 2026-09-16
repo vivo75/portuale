@@ -16962,3 +16962,23 @@ python3 -m pytest tests/test_emerge_pretend_contract.py -q -k "blocker or blocke
 ```
 
 Residues, both real-captured and filed: #72 — real's `[uninstall] <cpv>` merge-list row is not modelled, so cells d and the `blockerpkg`/`blockerorderpkg` shapes differ by that one line (the `b`/rc 0 match); #73 — a `@world`-member owner counts as having a graph parent in real's digraph, which portuale's parents test does not model (cell g: real `B` rc 1, portuale no row rc 0). Tests: `resolve_blockers_drops_an_installed_match_replaced_in_its_slot`, `resolve_blockers_classifies_final_graph_matches_by_parent_operation` (cells a–h), `test_oracle_blocker_replaced_version_satisfied_and_unsatisfied_twin`, plus the moved `blockerpkg`/`blockerorderpkg`/`graphblockerparent` pins and the three bridge-engine pins. Plan: `docs/01.068-blocker_replaced_version.md`.
+
+**The USE `-<prefix>_*` wildcard now removes accumulated flags, so the host's `VIDEO_CARDS="-* intel"`/`SANE_BACKENDS="-* hp …"` clear their parents and the ebuilds' `+`-defaults (backlog #67, 2026-09-16).** Real expands each profile level's `USE_EXPAND` variable (`config.py:2837-2866`), then its single USE loop treats `-<prefix>_*` as "remove every accumulated flag with that prefix" (`config.py:2925`). Portuale's expansion produced the same `-video_cards_*` token but `apply_incremental` only knew literal `-*` and exact `-flag` removal, so the clear was a no-op: parent levels' `VIDEO_CARDS` and the ebuild's `+sane_backends_*`/`+video_cards_*` IUSE defaults survived, making portuale reinstall `x11-base/xorg-drivers`, pull `xf86-video-{dummy,fbdev,vesa}` and reinstall `media-gfx/sane-backends` with every backend on. S1 (`c1447df`) added the USE-scoped `apply_use_incremental(_iter)` — the wildcard arm lives inside real's USE loop, so generic incrementals keep `apply_incremental` — and S2 (`1065ecc`) migrated every USE token-list call site: the three `"USE" =>` arms in `portage-profile`, the per-level and conf/env `USE_EXPAND` folds, `USE_EXPAND_UNPREFIXED`, the global `*/*` user USE, and every layer of `portage-repo::effective_use_flags_uncached`. `ACCEPT_KEYWORDS`/`USE_EXPAND*` name lists, `specificity_ordered_flags`, the `use.mask`/`use.force` fold and the `package.accept_keywords` seed deliberately stay on the generic applier (real has no wildcard arm there). The checked-in fixture profiles use no `_*`, so no existing pin moved; the new pin copies the tree and appends `VIDEO_CARDS="-* intel"` to the copy, with real-oracle cells for the inverse (the `+video_cards_dummy` default still stands) and wildcard (no merge) shapes.
+
+```sh
+# fixture pin: copied configroot, both cells, real-captured
+python3 -m pytest tests/test_emerge_pretend_contract.py -q \
+    -k test_use_expand_prefix_wildcard_cancels_the_iuse_default
+# -> 1 passed
+
+# host: the ~newuse reinstall and the three drivers are gone
+rust/target/release/portuale emerge -pv --newuse --oneshot x11-base/xorg-drivers
+# -> Total: 0 packages, Size of downloads: 0 KiB
+rust/target/release/portuale emerge -pv --newuse --oneshot media-gfx/sane-backends
+# -> Total: 0 packages, Size of downloads: 0 KiB
+rust/target/release/portuale emerge -uDpvN @world | grep -c '^\['
+# -> 26 (was 31): exactly xorg-drivers, xf86-video-{dummy,fbdev,vesa},
+#    sane-backends removed, nothing added
+```
+
+Tests: `apply_use_incremental_removes_a_prefix_wildcard`, `use_expand_prefix_wildcard_cancels_parent_level_values` (a two-level synthetic profile chain), `effective_use_flags_applies_a_use_prefix_wildcard` (an IUSE `+` default cancelled by the folded conf token), and the copied-configroot contract pin above. Evidence: `TEST/findings/l0.md` "#67 S3". Plan: `docs/01.067-use_incremental_prefix_wildcard.md`.

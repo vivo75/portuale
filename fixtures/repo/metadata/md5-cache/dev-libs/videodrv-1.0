@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: VIDEO_CARDS USE_EXPAND prefix-wildcard cancellation (#67)
+EAPI=8
+IUSE=+video_cards_dummy video_cards_intel
+KEYWORDS=amd64
+SLOT=0
+_md5_=64d72494f1eac3074ffd8621ac5a4d94

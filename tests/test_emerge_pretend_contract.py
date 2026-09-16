@@ -16601,6 +16601,73 @@ def test_oracle_slotop_rebuild_scan_honours_with_bdeps(
         ] == [], name
 
 
+def test_use_expand_prefix_wildcard_cancels_the_iuse_default(
+    emerge_binary, tmp_path
+):
+    """Backlog #67 S3: a profile level's `VIDEO_CARDS="-* intel"` cancels
+    both the parent levels' `video_cards_*` flags and the ebuild's own
+    `+video_cards_dummy` IUSE default (real `config.py:2925`'s
+    `-<prefix>_*` arm running over the same accumulated set the IUSE
+    defaults fed). Fixture `dev-libs/videodrv` declares
+    `IUSE="+video_cards_dummy video_cards_intel"`; the installed vdb
+    record has `USE="video_cards_intel"`, so a stale default shows up as
+    a `--newuse` reinstall.
+
+    The checked-in shared profile is untouched: the test copies the whole
+    fixture tree and appends the wildcard line to the copied leaf profile.
+    Container oracle (real 3.0.82.2, 2026-09-16): without the append both
+    sides print `[ebuild R] dev-libs/videodrv-1.0 … VIDEO_CARDS="dummy*
+    -intel*"`; with it neither merges anything.
+    """
+    cfg = tmp_path / "cfg"
+    shutil.copytree(Path(__file__).resolve().parents[1] / "fixtures", cfg,
+                    symlinks=True)
+    root = _b1_root(
+        tmp_path,
+        ["dev-libs/videodrv"],
+        [
+            (
+                "dev-libs",
+                "videodrv",
+                "1.0",
+                "0",
+                {
+                    "USE": "video_cards_intel",
+                    "IUSE": "video_cards_dummy video_cards_intel",
+                },
+            )
+        ],
+    )
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = str(cfg)
+    env["ROOT"] = str(root)
+    env["PORTAGE_RUNNING_ROOT"] = str(root)
+    env["DISTDIR"] = str(cfg / "distfiles")
+
+    # Inverse cell: the stock profile leaves the `+` IUSE default
+    # standing, exactly as real on the same tree.
+    inverse = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--newuse", "--oneshot", "dev-libs/videodrv"],
+        env,
+    )
+    assert inverse.returncode == 0
+    inverses = _b1_merges(inverse.stdout)
+    assert len(inverses) == 1
+    assert inverses[0].startswith("[ebuild   R    ] dev-libs/videodrv-1.0 ")
+    assert 'VIDEO_CARDS="dummy* -intel*"' in inverse.stdout
+
+    with (cfg / "repo" / "profiles" / "default" / "make.defaults").open("a") as f:
+        f.write('VIDEO_CARDS="-* intel"\n')
+    wildcard = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--newuse", "--oneshot", "dev-libs/videodrv"],
+        env,
+    )
+    assert wildcard.returncode == 0
+    assert _b1_merges(wildcard.stdout) == []
+
+
 def test_oracle_blocker_replaced_version_satisfied_and_unsatisfied_twin(
     emerge_binary, fixture_env, tmp_path
 ):
