@@ -212,7 +212,9 @@ can't grow into these incrementally:
   plain scans; pure perf, no behaviour change -- see
   `what-this-proves.md` for the numbers). Still open: blocker/uninstall
   interleaving (a `--pretend` merge graph has no uninstall nodes to
-  interleave).
+  interleave). #68 (2026-09-16) closed the blocker *classification*,
+  exit code and the host `@world` abort; the `[uninstall]` merge-list
+  row real prints for a satisfied block is filed as backlog #72.
 - **`_complete_graph` as graph *nodes*.** Its reverse-dependency
   **atoms** shipped 2026-09-07 (`reverse_dependency_constraints` — a vdb
   reverse scan fed into the `'backtrack` loop's `slot_constraints`,

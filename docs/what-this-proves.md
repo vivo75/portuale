@@ -16940,3 +16940,25 @@ FX_SLOTOP_BDEP=1 TEST/run/l0-fixture-oracle.sh TEST/atomlists/l0-fixture-oracle-
 ```
 
 Host re-diff against the post-#63 capture: exactly the 19 Go consumers disappeared from `-uDpvN @world` and nothing else moved. Tests: `slot_operator_rebuild_scan_honours_with_bdeps` (Rust: five keys × bdeps off/on × walked/reachable) and `test_oracle_slotop_rebuild_scan_honours_with_bdeps` (contract: the world/argument × `--usepkg`/`--with-bdeps=y` cells from the real capture). Residue: the runtime-key `IDEPEND` graph-completion quirk filed as #71 and allowlisted; the bdeps-on `--deep` walk divergences (`rust-1.94.0` `NS`, missing `gtk-doc-am`/`mdit-py-plugins`/`myst-parser`) stay #65 §7 residue, pursued as the #65 follow-up. Plan: `docs/02.065-slot_operator_buildtime_deps.md`.
+
+**A soft block is satisfied when the blocked installed version is replaced, and every other `_validate_blockers` arm is now classified from the walked graph (backlog #68, 2026-09-16).** The host bug was one shape: `<dev-util/gtk-doc-1.36.1` from `gtk-doc-am` matches installed `gtk-doc-1.34.0` while `1.36.1` upgrades it in the same run, and real prints `b`/`Conflict: 1 block (all satisfied)` with rc 0 — portuale's `unsolvable = blocked_installed && installed_has_foreign_dependents(...)` had no replaced-in-slot check and aborted `emerge -uDvN @world` with `[blocks B]`/rc 1. The container oracle first pinned real's full model (`_validate_blockers`, `depgraph.py:9095-9255`; nine cells in `TEST/findings/l0.md` "#68 S0"): the package tracker drops an installed instance superseded in its own slot, so the block never fires (cell a); a merge-bound match with a merging parent is unresolved outright (cells b/e); an installed parent's `blocked_initial` matches are ignored (cell f); a nomerge owner's merge-bound match is uninstall-ordered unless the owner is a graph node with parents (cell g, with the set-argument wrinkle filed as #73); soft same-slot matches are skipped unless the blocker is `!!` (cell h); and the uninstall itself is abandoned only when the instance is a walked digraph node with parents (cell c) — not when its installed consumers were never walked (cell d). S1 (`9da318f`) drops an installed match replaced in its slot by a merge-bound entry at a different version (a same-version `Reinstall` is itself merge-bound and stays). S2/S3 (`6e2f743`) read the owner's operation from its final entry (merge for New/Upgrade/Downgrade/Reinstall, nomerge for `AlreadyInstalled`; the `PendingBlocker` producer bit is a bridge fallback only), mark merge-bound matches with merging owners unsolvable, ignore a nomerge parent's installed matches, and replace the vdb reverse scan with `graph_has_parent`, a scan of the walked entries' own `deps` atoms (the old `installed_has_foreign_dependents` is deleted); the renderer now selects the red `B` vs teal `b` branch and the counters' `(N unsatisfied)` vs `(all satisfied)` suffix, which the doc comments had declared unclassifiable.
+
+```sh
+# host shape: host defaults, real 3.0.82.2 @world now exits 0 like real
+env -u EMERGE_DEFAULT_OPTS rust/target/release/portuale emerge -uDpvN @world --color=n
+echo $?                                    # -> 0 (was 1); no [blocks B] line
+grep 'gtk-doc' <<< "$(env -u EMERGE_DEFAULT_OPTS rust/target/release/portuale emerge -uDpvN @world --color=n)"
+# -> [ebuild U] dev-util/gtk-doc-1.36.1 [1.34.0-r2] + gtk-doc-am-1.36.1
+
+# the fixture shapes, real-captured (container, 2026-09-16)
+env PORTAGE_CONFIGROOT=fixtures ROOT=fixtures PORTAGE_RUNNING_ROOT=fixtures \
+    DISTDIR=fixtures/distfiles rust/target/release/portuale emerge -p dev-libs/blockerpkg
+# -> [ebuild N] dev-libs/blockerpkg-1.0 + [blocks b] dev-libs/samepkg (...), rc 0
+env PORTAGE_CONFIGROOT=fixtures ROOT=fixtures PORTAGE_RUNNING_ROOT=fixtures \
+    DISTDIR=fixtures/distfiles rust/target/release/portuale emerge -p dev-libs/graphblockerparent
+# -> [blocks B] dev-libs/blockerpartnerpkg (...), rc 1
+python3 -m pytest tests/test_emerge_pretend_contract.py -q -k "blocker or blocker_replaced"
+# -> 12 passed (plus the moved CASES/corpus rows)
+```
+
+Residues, both real-captured and filed: #72 — real's `[uninstall] <cpv>` merge-list row is not modelled, so cells d and the `blockerpkg`/`blockerorderpkg` shapes differ by that one line (the `b`/rc 0 match); #73 — a `@world`-member owner counts as having a graph parent in real's digraph, which portuale's parents test does not model (cell g: real `B` rc 1, portuale no row rc 0). Tests: `resolve_blockers_drops_an_installed_match_replaced_in_its_slot`, `resolve_blockers_classifies_final_graph_matches_by_parent_operation` (cells a–h), `test_oracle_blocker_replaced_version_satisfied_and_unsatisfied_twin`, plus the moved `blockerpkg`/`blockerorderpkg`/`graphblockerparent` pins and the three bridge-engine pins. Plan: `docs/01.068-blocker_replaced_version.md`.

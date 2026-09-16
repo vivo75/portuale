@@ -16601,6 +16601,81 @@ def test_oracle_slotop_rebuild_scan_honours_with_bdeps(
         ] == [], name
 
 
+def test_oracle_blocker_replaced_version_satisfied_and_unsatisfied_twin(
+    emerge_binary, fixture_env, tmp_path
+):
+    """Backlog #68 host shape and its unsatisfied twin, cells a and c.
+
+    `dev-libs/bparent` soft-blocks `<dev-libs/blocked-2.0`; installed
+    `blocked` is `1.0`. Real `_validate_blockers` (`depgraph.py:9095-9255`)
+    drops an installed match replaced in its slot by a merge-bound entry,
+    so when `blocked` upgrades to `2.0` in the same run the block is
+    satisfied even though an installed `bconsumer` depends on `blocked`
+    (the host `@world` rc-1 bug); with the replacement suppressed the
+    walked consumer makes it unresolved. Container oracle, real 3.0.82.2
+    (2026-09-16): `--dynamic-deps=n` retains `bconsumer`'s
+    `=dev-libs/blocked-1.0` pin, `blocked-1.0` survives (as a `flip`
+    reinstall) and real prints `[blocks B]` + `Conflict: 1 block
+    (1 unsatisfied)` and exits 1. The satisfied host shape prints no
+    block row at all and exits 0.
+    """
+    # Host shape: bconsumer tracks the plain `dev-libs/blocked`, so the
+    # upgrade replaces the installed match and the block is satisfied.
+    host_root = _b1_root(
+        tmp_path / "host",
+        ["dev-libs/bparent", "dev-libs/blocked", "dev-libs/bconsumer"],
+        [
+            ("dev-libs", "blocked", "1.0", "0", {}),
+            ("dev-libs", "bconsumer", "1.0", "0", {"RDEPEND": "dev-libs/blocked"}),
+        ],
+    )
+    host = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--update", "--deep", "--newuse", "@world"],
+        _b1_env(fixture_env, host_root),
+    )
+    assert host.returncode == 0
+    assert "[blocks" not in host.stdout
+    assert "[ebuild     U  ] dev-libs/blocked-2.0 [1.0]" in host.stdout
+
+    # Unsatisfied twin: the walked consumer pins the old version, so the
+    # installed match survives and is a graph node with parents.
+    twin_root = _b1_root(
+        tmp_path / "twin",
+        ["dev-libs/bparent", "dev-libs/blocked", "dev-libs/bconsumer"],
+        [
+            ("dev-libs", "blocked", "1.0", "0", {}),
+            (
+                "dev-libs",
+                "bconsumer",
+                "1.0",
+                "0",
+                {"RDEPEND": "=dev-libs/blocked-1.0"},
+            ),
+        ],
+    )
+    twin = _run(
+        [str(emerge_binary)],
+        [
+            "--pretend",
+            "-v",
+            "--dynamic-deps=n",
+            "--update",
+            "--deep",
+            "--newuse",
+            "@world",
+        ],
+        _b1_env(fixture_env, twin_root),
+    )
+    assert twin.returncode == 1
+    assert (
+        '[blocks B      ] <dev-libs/blocked-2.0 ("<dev-libs/blocked-2.0" is soft '
+        "blocking dev-libs/bparent-1.0)" in twin.stdout
+    )
+    assert "Conflict: 1 block (1 unsatisfied)" in twin.stdout
+    assert "installed at the same time" in twin.stderr
+
+
 def test_oracle_slotop_runtime_pkg_mask(
     emerge_binary, fixture_env, tmp_path
 ):
