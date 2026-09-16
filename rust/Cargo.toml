@@ -20,6 +20,13 @@ members = [
 
 [workspace.package]
 edition = "2024"
+# The MSRV floor, not a preference: portage-atom* / gentoo-interner /
+# portage-solver declare rust-version = 1.95 (pubgrub 1.92, smol_str
+# 1.89 behind them). Each member inherits via
+# `rust-version.workspace = true`, so an older toolchain gets Cargo's
+# own "requires rustc 1.95" message instead of a downstream compile or
+# link error (backlog #61: the musl builder drifted to 1.87).
+rust-version = "1.95"
 
 [profile.release]
 panic = "abort"
