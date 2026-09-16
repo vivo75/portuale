@@ -284,11 +284,9 @@
 // anyway for fidelity with the real algorithm, since it's cheap to do and
 // it's what real portage actually does.
 
-use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 
 mod phase_environ;
 pub use phase_environ::{
@@ -1171,33 +1169,196 @@ impl BinRepo {
     }
 }
 
-fn var_ref_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}").unwrap())
+/// Real `portage.util.getconfig` tokenizes a `KEY=VALUE` line with a
+/// POSIX `shlex` lexer (`shlex.py:read_token`, `posix=True`,
+/// `wordchars` extended by getconfig to `~!@#$%*_\:;?,./-+{}`,
+/// `quotes = "'"`, `escape = \`); the value token is quote-removed and
+/// backslash-processed *before* `varexpand`
+/// (`portage/util/__init__.py:885`) ever sees it. Portuale used to strip
+/// only the outer quote pair, so an escaped `\"` kept its backslash and
+/// `\$` reached the `${VAR}` regex, which expanded it. On this host that
+/// corrupted every `make.globals` fetch command: real resolves
+/// `wget ... -O "${DISTDIR}/${FILE}" "${URI}"`, portuale's value was
+/// `wget ... -O \"\/var/cache/distfiles/\\" \"\\"` (backlog #70).
+///
+/// Mirrors shlex's states:
+///   - the token ends at unquoted whitespace (or `#`, shlex's commenter);
+///   - inside `"` only `\"` -> `"` and `\\` -> `\` lose the backslash;
+///     every other `\x` (notably `\$`) survives to [`substitute`];
+///   - inside `'` every character is literal until the closing `'`;
+///   - outside quotes `\x` -> `x`, and a quote adjacent to a token opens
+///     its quoted state and continues the same token.
+fn shlex_token(raw: &str) -> String {
+    const WHITESPACE: [char; 4] = [' ', '\t', '\r', '\n'];
+    let chars: Vec<char> = raw.chars().collect();
+    let mut out = String::new();
+    let mut pos = 0;
+    while pos < chars.len() && WHITESPACE.contains(&chars[pos]) {
+        pos += 1;
+    }
+    let mut quote: Option<char> = None;
+    while pos < chars.len() {
+        let current = chars[pos];
+        match quote {
+            Some(q) => {
+                if current == q {
+                    quote = None;
+                    pos += 1;
+                } else if q == '"' && current == '\\' && pos + 1 < chars.len() {
+                    // shlex's escape state inside `"`: only the quote
+                    // itself and the escape character are consumed.
+                    let next = chars[pos + 1];
+                    if next == '\\' || next == '"' {
+                        out.push(next);
+                    } else {
+                        out.push('\\');
+                        out.push(next);
+                    }
+                    pos += 2;
+                } else {
+                    out.push(current);
+                    pos += 1;
+                }
+            }
+            None => {
+                if WHITESPACE.contains(&current) || current == '#' {
+                    break;
+                }
+                if current == '"' || current == '\'' {
+                    quote = Some(current);
+                    pos += 1;
+                } else if current == '\\' {
+                    if pos + 1 < chars.len() {
+                        out.push(chars[pos + 1]);
+                        pos += 2;
+                    } else {
+                        out.push('\\');
+                        pos += 1;
+                    }
+                } else {
+                    out.push(current);
+                    pos += 1;
+                }
+            }
+        }
+    }
+    out
 }
 
-/// Substitutes `${VARNAME}` references: a name already set earlier in the
-/// config wins, else the process environment (as bash sees it when it
-/// sources `make.conf`), else empty (bash's default for an unset var).
-/// The environment fallback is what lets a fixture write a relocatable
-/// `PKGDIR="${PORTAGE_CONFIGROOT}/pkgdir"` instead of an absolute path.
+/// Real `varexpand` (`portage/util/__init__.py:885-1015`) over the
+/// [`shlex_token`]-processed value: while not inside a surviving single
+/// quote (e.g. the `'`s of a `"'${VAR}'"` value), an escaped `\$` is a
+/// literal `$`, `\\` is a literal `\` (plus real's bug-compatible extra
+/// character when the next one is a quote or `$`), an escaped newline
+/// disappears, any other `\x` keeps both characters, and
+/// `${VARNAME}`/`$VARNAME` expand (a name already set earlier in the
+/// config wins, else the process environment -- as bash sees it when it
+/// sources `make.conf` -- else empty; real warns and returns an empty
+/// value for a malformed reference, which this mirrors without the
+/// warning). The environment fallback is what lets a fixture write a
+/// relocatable `PKGDIR="${PORTAGE_CONFIGROOT}/pkgdir"` instead of an
+/// absolute path.
 fn substitute(value: &str, scalars: &HashMap<String, String>) -> String {
-    var_ref_re()
-        .replace_all(value, |caps: &regex::Captures| {
-            scalars
-                .get(&caps[1])
-                .cloned()
-                .or_else(|| std::env::var(&caps[1]).ok())
-                .unwrap_or_default()
-        })
-        .into_owned()
+    let chars: Vec<char> = value.chars().collect();
+    let mut out = String::new();
+    let mut pos = 0;
+    let mut in_single = false;
+    let mut in_double = false;
+    while pos < chars.len() {
+        let current = chars[pos];
+        match current {
+            '\'' => {
+                out.push('\'');
+                if !in_double {
+                    in_single = !in_single;
+                }
+                pos += 1;
+            }
+            '"' => {
+                out.push('"');
+                if !in_single {
+                    in_double = !in_double;
+                }
+                pos += 1;
+            }
+            '\\' if !in_single => {
+                if pos + 1 >= chars.len() {
+                    out.push('\\');
+                    break;
+                }
+                let next = chars[pos + 1];
+                pos += 2;
+                match next {
+                    '$' => out.push('$'),
+                    '\\' => {
+                        out.push('\\');
+                        // Real's bug-compatible tail (`varexpand`'s own
+                        // "BUG" comment): after `\\` it also emits a
+                        // following quote or `$` (which then cannot
+                        // start a reference).
+                        if pos < chars.len() && matches!(chars[pos], '\'' | '"' | '$') {
+                            out.push(chars[pos]);
+                            pos += 1;
+                        }
+                    }
+                    '\n' => {}
+                    other => {
+                        out.push('\\');
+                        out.push(other);
+                    }
+                }
+            }
+            '$' if !in_single => {
+                pos += 1;
+                if pos == chars.len() {
+                    // Shells handle a trailing `$` like an escaped one.
+                    out.push('$');
+                    continue;
+                }
+                let braced = chars[pos] == '{';
+                if braced {
+                    pos += 1;
+                    if pos == chars.len() {
+                        return String::new();
+                    }
+                }
+                let start = pos;
+                while pos < chars.len() && (chars[pos].is_ascii_alphanumeric() || chars[pos] == '_')
+                {
+                    pos += 1;
+                }
+                let name: String = chars[start..pos].iter().collect();
+                if braced {
+                    if pos == chars.len() || chars[pos] != '}' {
+                        return String::new();
+                    }
+                    pos += 1;
+                }
+                if name.is_empty() {
+                    return String::new();
+                }
+                if let Some(v) = scalars.get(&name) {
+                    out.push_str(v);
+                } else if let Ok(v) = std::env::var(&name) {
+                    out.push_str(&v);
+                }
+            }
+            _ => {
+                out.push(current);
+                pos += 1;
+            }
+        }
+    }
+    out
 }
 
-/// Parses one `KEY="value"` / `KEY='value'` / `KEY=value` line. Returns
-/// `None` for comments, blank lines, or anything that isn't a simple
-/// assignment (conditionals, function defs, etc. -- out of scope; real
-/// make.defaults/make.conf files don't use them).
-fn parse_kv_line(line: &str) -> Option<(&str, &str)> {
+/// Parses one `KEY="value"` / `KEY='value'` / `KEY=value` line, returning
+/// the value as the `shlex`-tokenized text ([`shlex_token`]; real
+/// `getconfig` runs this even with `expand=False`). `None` for comments,
+/// blank lines, or anything that isn't a simple assignment (conditionals,
+/// function defs, etc. -- out of scope; real make.defaults/make.conf
+/// files don't use them).
+fn parse_kv_line(line: &str) -> Option<(&str, String)> {
     let line = line.trim();
     if line.is_empty() || line.starts_with('#') {
         return None;
@@ -1210,16 +1371,7 @@ fn parse_kv_line(line: &str) -> Option<(&str, &str)> {
     {
         return None;
     }
-    let mut value = line[eq + 1..].trim();
-    if value.len() >= 2 {
-        let bytes = value.as_bytes();
-        if (bytes[0] == b'"' && bytes[value.len() - 1] == b'"')
-            || (bytes[0] == b'\'' && bytes[value.len() - 1] == b'\'')
-        {
-            value = &value[1..value.len() - 1];
-        }
-    }
-    Some((key, value))
+    Some((key, shlex_token(&line[eq + 1..])))
 }
 
 /// Applies real incremental-variable token semantics: `-*` clears
@@ -1471,7 +1623,7 @@ fn process_lines(text: &str, scalars: &mut HashMap<String, String>, config: &mut
         let Some((key, raw_value)) = parse_kv_line(&line) else {
             continue;
         };
-        let value = substitute(raw_value, scalars);
+        let value = substitute(&raw_value, scalars);
         note_incremental(config, key, &value);
         match key {
             "USE" => {
@@ -1733,7 +1885,7 @@ fn process_make_conf_file(
         let Some((key, raw_value)) = parse_kv_line(trimmed) else {
             continue;
         };
-        let value = substitute(raw_value, scalars);
+        let value = substitute(&raw_value, scalars);
         note_incremental(config, key, &value);
         match key {
             "USE" => {
@@ -1795,7 +1947,7 @@ fn read_env_file_kv(
             continue;
         }
         if let Some((key, raw_value)) = parse_kv_line(trimmed) {
-            out.push((key.to_string(), raw_value.to_string()));
+            out.push((key.to_string(), raw_value));
         }
     }
     out
@@ -1846,7 +1998,7 @@ fn read_repo_make_defaults_use(path: &Path, scalars: &HashMap<String, String>) -
     text.lines()
         .filter_map(|line| {
             let (key, raw_value) = parse_kv_line(line.trim())?;
-            (key == "USE").then(|| substitute(raw_value, scalars))
+            (key == "USE").then(|| substitute(&raw_value, scalars))
         })
         .collect()
 }
@@ -2380,7 +2532,7 @@ pub fn resolve_config(
                 // (globals, profile chain, `make.conf`, `package.env`
                 // files) expands against them -- real's
                 // `expand_map = env_d.copy()` seeding.
-                let value = substitute(raw_value, &scalars);
+                let value = substitute(&raw_value, &scalars);
                 note_incremental(&mut config, key, &value);
                 if key == "PATH" {
                     config.envd_sets_path = true;
@@ -6163,5 +6315,101 @@ sync-uri = file:///srv/pkgs
             config.resolved_incremental("FEATURES"),
             Some(vec!["b".to_string(), "d".to_string()])
         );
+    }
+
+    /// #70 R1 oracle -- the host `cnf/make.globals` fetch-command block
+    /// (`/usr/share/portage/config/make.globals`, portage 3.0.82.2,
+    /// lines 63-74 plus line 153) fed through the production
+    /// [`process_lines`], asserted against `python3 -c "import portage;
+    /// print(repr(portage.settings[K]))"` on the same host, captured
+    /// 2026-09-16. Before the fix every value here kept the `\"` escape
+    /// and had `\${VAR}` wrongly expanded (the #70 bug).
+    #[test]
+    fn make_globals_fetch_commands_match_real_varexpand() {
+        let text = r#"FETCHCOMMAND="wget -t 3 -T 60 --passive-ftp -U \"Portage (Gentoo, https://www.gentoo.org) distfile-fetch\" -O \"\${DISTDIR}/\${FILE}\" \"\${URI}\""
+RESUMECOMMAND="wget -c -t 3 -T 60 --passive-ftp -U \"Portage (Gentoo, https://www.gentoo.org) distfile-fetch\" -O \"\${DISTDIR}/\${FILE}\" \"\${URI}\""
+
+FETCHCOMMAND_RSYNC="rsync -LtvP \"\${URI}\" \"\${DISTDIR}/\${FILE}\""
+RESUMECOMMAND_RSYNC="rsync -LtvP \"\${URI}\" \"\${DISTDIR}/\${FILE}\""
+
+# NOTE: rsync will evaluate quotes embedded inside PORTAGE_SSH_OPTS
+FETCHCOMMAND_SSH="bash -c \"x=\\\${2#ssh://} ; host=\\\${x%%/*} ; port=\\\${host##*:} ; host=\\\${host%:*} ; [[ \\\${host} = \\\${port} ]] && port= ; exec rsync --rsh=\\\"ssh \\\${port:+-p\\\${port}} \\\${3}\\\" -avP \\\"\\\${host}:/\\\${x#*/}\\\" \\\"\\\$1\\\"\" rsync \"\${DISTDIR}/\${FILE}\" \"\${URI}\" \"\${PORTAGE_SSH_OPTS}\""
+RESUMECOMMAND_SSH=${FETCHCOMMAND_SSH}
+
+# NOTE: bash eval is used to evaluate quotes embedded inside PORTAGE_SSH_OPTS
+FETCHCOMMAND_SFTP="bash -c \"x=\\\${2#sftp://} ; host=\\\${x%%/*} ; port=\\\${host##*:} ; host=\\\${host%:*} ; [[ \\\${host} = \\\${port} ]] && port= ; eval \\\"declare -a ssh_opts=(\\\${3})\\\" ; exec sftp \\\${port:+-P \\\${port}} \\\"\\\${ssh_opts[@]}\\\" \\\"\\\${host}:/\\\${x#*/}\\\" \\\"\\\$1\\\"\" sftp \"\${DISTDIR}/\${FILE}\" \"\${URI}\" \"\${PORTAGE_SSH_OPTS}\""
+PORTAGE_GPG_SIGNING_COMMAND="gpg --sign --digest-algo SHA256 --clearsign --yes --default-key \"\${PORTAGE_GPG_KEY}\" --homedir \"\${PORTAGE_GPG_DIR}\" \"\${FILE}\""
+"#;
+        let mut scalars = HashMap::new();
+        let mut config = Config::default();
+        process_lines(text, &mut scalars, &mut config);
+        for (key, want) in [
+            (
+                "FETCHCOMMAND",
+                r#"wget -t 3 -T 60 --passive-ftp -U "Portage (Gentoo, https://www.gentoo.org) distfile-fetch" -O "${DISTDIR}/${FILE}" "${URI}""#,
+            ),
+            (
+                "RESUMECOMMAND",
+                r#"wget -c -t 3 -T 60 --passive-ftp -U "Portage (Gentoo, https://www.gentoo.org) distfile-fetch" -O "${DISTDIR}/${FILE}" "${URI}""#,
+            ),
+            (
+                "FETCHCOMMAND_RSYNC",
+                r#"rsync -LtvP "${URI}" "${DISTDIR}/${FILE}""#,
+            ),
+            (
+                "RESUMECOMMAND_RSYNC",
+                r#"rsync -LtvP "${URI}" "${DISTDIR}/${FILE}""#,
+            ),
+            (
+                "FETCHCOMMAND_SSH",
+                r#"bash -c "x=\${2#ssh://} ; host=\${x%%/*} ; port=\${host##*:} ; host=\${host%:*} ; [[ \${host} = \${port} ]] && port= ; exec rsync --rsh=\"ssh \${port:+-p\${port}} \${3}\" -avP \"\${host}:/\${x#*/}\" \"\$1\"" rsync "${DISTDIR}/${FILE}" "${URI}" "${PORTAGE_SSH_OPTS}""#,
+            ),
+            (
+                "RESUMECOMMAND_SSH",
+                r#"bash -c "x=\${2#ssh://} ; host=\${x%%/*} ; port=\${host##*:} ; host=\${host%:*} ; [[ \${host} = \${port} ]] && port= ; exec rsync --rsh=\"ssh \${port:+-p\${port}} \${3}\" -avP \"\${host}:/\${x#*/}\" \"\$1\"" rsync "${DISTDIR}/${FILE}" "${URI}" "${PORTAGE_SSH_OPTS}""#,
+            ),
+            (
+                "FETCHCOMMAND_SFTP",
+                r#"bash -c "x=\${2#sftp://} ; host=\${x%%/*} ; port=\${host##*:} ; host=\${host%:*} ; [[ \${host} = \${port} ]] && port= ; eval \"declare -a ssh_opts=(\${3})\" ; exec sftp \${port:+-P \${port}} \"\${ssh_opts[@]}\" \"\${host}:/\${x#*/}\" \"\$1\"" sftp "${DISTDIR}/${FILE}" "${URI}" "${PORTAGE_SSH_OPTS}""#,
+            ),
+            (
+                "PORTAGE_GPG_SIGNING_COMMAND",
+                r#"gpg --sign --digest-algo SHA256 --clearsign --yes --default-key "${PORTAGE_GPG_KEY}" --homedir "${PORTAGE_GPG_DIR}" "${FILE}""#,
+            ),
+        ] {
+            assert_eq!(scalars.get(key).map(String::as_str), Some(want), "{key}");
+        }
+    }
+
+    /// The escape matrix of real `getconfig` + `varexpand`, captured with
+    /// `portage.util.getconfig` on portage 3.0.82.2 (2026-09-16); the
+    /// `expand` map held `B=HELLO`. `\"`/`\\` lose their backslash in
+    /// the shlex stage, `\$` survives it and becomes a literal `$`, and
+    /// a quote that survives shlex (here from the opposite quote kind)
+    /// suspends expansion.
+    #[test]
+    fn shlex_and_varexpand_escape_handling_matches_real_getconfig() {
+        let scalars: HashMap<String, String> = [("B".to_string(), "HELLO".to_string())]
+            .into_iter()
+            .collect();
+        let expand = |line: &str| {
+            let (_, raw) = parse_kv_line(line).expect("kv line");
+            substitute(&raw, &scalars)
+        };
+        assert_eq!(expand(r##"A="x \$y""##), "x $y");
+        assert_eq!(expand(r##"A="x \"y\"""##), "x \"y\"");
+        assert_eq!(expand(r##"A="x \\y""##), "x \\y");
+        assert_eq!(expand(r##"A="x \\${B} z""##), "x ${B} z");
+        assert_eq!(expand(r##"A='x \$y'"##), "x $y");
+        assert_eq!(expand(r##"A='${B}'"##), "HELLO");
+        assert_eq!(expand(r##"A="'${B}'""##), "'${B}'");
+        assert_eq!(expand(r##"A=${B}"##), "HELLO");
+        assert_eq!(expand(r##"A=$B"##), "HELLO");
+        assert_eq!(expand(r##"A="$B""##), "HELLO");
+        assert_eq!(expand(r##"A="\$""##), "$");
+        assert_eq!(expand(r##"A="\\""##), "\\");
+        assert_eq!(expand(r##"A="\$B""##), "$B");
+        assert_eq!(expand(r##"A="\\$B""##), "$B");
+        assert_eq!(expand(r##"A="a\nb""##), "a\\nb");
     }
 }
