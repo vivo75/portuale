@@ -13094,6 +13094,18 @@ type SlotOpRebuildScan = (BTreeSet<(String, String)>, Vec<(String, String)>);
 /// can fire. `RDEPEND`/`PDEPEND`/`IDEPEND` are runtime/install-time keys
 /// and stay unconditional.
 ///
+/// #65 S2: with `with_bdeps` true, `DEPEND`/`BDEPEND` are still read only
+/// for a consumer this pass actually **walked** (`entries`), not for one
+/// only *reachable* in complete mode. Real registers an installed
+/// parent's build-time slot-op dep with `optional=pkg.built`
+/// (`depgraph.py:4277/4287`) and `_slot_operator_trigger_reinstalls` only
+/// probes `want_update` parents (`:3114`), which complete-mode-only
+/// reachability never satisfies (`:3802-3806`) -- so a world-only
+/// build-time consumer stays untouched while the same consumer, walked
+/// (an `@world` seed or an argument), rebuilds. The runtime keys keep the
+/// `reachable` gate: the slot-conflict path rebuilds graph-node runtime
+/// consumers in both shapes.
+///
 /// Cuts (unchanged from v1): no `_slot_operator_check_reverse_dependencies`
 /// rejection, no `_slot_operator_update_probe` family (v2 `#24b`), no
 /// `slot_operator_mask_built` for non-installed binaries (v2 `#24c`).
@@ -13134,6 +13146,20 @@ fn slot_operator_rebuild_scan(
     let installed = all_installed_packages(root);
     let mut scheduled: BTreeSet<(String, String)> = already.clone();
     let mut abi_rebuilds: Vec<(String, String)> = Vec::new();
+    // #65 S2: every cp this pass actually walked (any outcome, installed
+    // nodes included). Real only registers a slot-operator dep for a
+    // *built* parent's `DEPEND`/`BDEPEND` when the walk reaches it
+    // non-optionally (`_add_pkg_deps`' `optional=pkg.built`,
+    // `depgraph.py:4277/4287` combined with `dep.want_update`,
+    // `:3802-3806`), so a consumer that complete mode merely *reaches*
+    // (`slot_op_reachable`) never rebuilds through a build-time key. The
+    // world shape still qualifies: there the consumers are walked nodes
+    // (complete-mode seeds), not reachability-only. `RDEPEND`/`PDEPEND`/
+    // `IDEPEND` keep the wider `reachable` gate.
+    let walked: HashSet<(String, String)> = entries
+        .iter()
+        .map(|e| (e.category.clone(), e.package.clone()))
+        .collect();
     // #24 S5: the rest of this function is the post-walk vdb scan, which
     // stays behind the `reachable` gate (complete mode). The
     // `_slot_change_probe` half below is *not* complete-mode gated in
@@ -13149,13 +13175,12 @@ fn slot_operator_rebuild_scan(
                 continue;
             }
             let consumer_cpv = pkg.cpv();
-            // #65 S1: real empties a built package's DEPEND/BDEPEND when
-            // bdeps is not y/auto, so an installed consumer's build-time
-            // keys are only read when the walk chose to walk them.
-            let dep_keys: &[&str] = if with_bdeps {
-                &["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"]
-            } else {
-                &["RDEPEND", "PDEPEND", "IDEPEND"]
+            // #65 S1/S2: real empties a built package's DEPEND/BDEPEND
+            // when bdeps is not y/auto, and only the consumers the walk
+            // reached non-optionally can fire through them.
+            let dep_keys: &[&str] = match with_bdeps && walked.contains(&cp) {
+                true => &["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"],
+                false => &["RDEPEND", "PDEPEND", "IDEPEND"],
             };
             let mut providers: Vec<String> = dep_keys
                 .iter()
@@ -32291,7 +32316,18 @@ mod tests {
         let empty: BTreeSet<(String, String)> = BTreeSet::new();
         let cp = |name: &str| ("dev-libs".to_string(), name.to_string());
 
-        // bdeps off: runtime/install-time keys only.
+        let runtime_only = BTreeSet::from([cp("rdep"), cp("pdep"), cp("idep")]);
+        let all_five = BTreeSet::from([cp("rdep"), cp("dep"), cp("bdep"), cp("pdep"), cp("idep")]);
+        // `walked` entries: what the pass actually visited (an
+        // `AlreadyInstalled` node per consumer, the @world shape).
+        let walked_entry = |name: &str| GraphEntry {
+            outcome: PretendOutcome::AlreadyInstalled {
+                version: "1.0".into(),
+            },
+            ..graph_entry("dev-libs", name, "1.0")
+        };
+
+        // bdeps off, consumers only reachable: runtime/install-time keys.
         let (scheduled, abi) = slot_operator_rebuild_scan(
             &dir,
             &[],
@@ -32302,8 +32338,7 @@ mod tests {
             false,
         );
         assert_eq!(
-            scheduled,
-            BTreeSet::from([cp("rdep"), cp("pdep"), cp("idep")]),
+            scheduled, runtime_only,
             "DEPEND/BDEPEND are skipped without with_bdeps"
         );
         assert!(
@@ -32311,9 +32346,12 @@ mod tests {
                 .any(|(_, c)| c == "dev-libs/dep-1.0" || c == "dev-libs/bdep-1.0")
         );
 
-        // bdeps on (the explicit --with-bdeps=y / default-without-usepkg
-        // case): every key is scanned, as before this slice.
-        let (scheduled, abi) = slot_operator_rebuild_scan(
+        // bdeps on (--with-bdeps=y / the default without --usepkg) but
+        // consumers only *reachable*, not walked: S2 keeps the build-time
+        // keys off. Real's complete-mode-only reachability never probes
+        // an installed parent's optional build-time dep
+        // (depgraph.py:3114,3802-3806,4277/4287).
+        let (scheduled, _) = slot_operator_rebuild_scan(
             &dir,
             &[],
             std::slice::from_ref(&bar_upgrade),
@@ -32323,9 +32361,19 @@ mod tests {
             true,
         );
         assert_eq!(
-            scheduled,
-            BTreeSet::from([cp("rdep"), cp("dep"), cp("bdep"), cp("pdep"), cp("idep")])
+            scheduled, runtime_only,
+            "build-time keys need a walked consumer even with bdeps on"
         );
+
+        // bdeps on and every consumer walked (@world complete-mode
+        // seeds): every key is scanned, as before this slice.
+        let mut walked: Vec<GraphEntry> = vec![bar_upgrade.clone()];
+        for name in ["rdep", "dep", "bdep", "pdep", "idep"] {
+            walked.push(walked_entry(name));
+        }
+        let (scheduled, abi) =
+            slot_operator_rebuild_scan(&dir, &[], &walked, &reach, &empty, &empty, true);
+        assert_eq!(scheduled, all_five);
         assert_eq!(
             abi,
             vec![
@@ -32351,6 +32399,12 @@ mod tests {
                 ),
             ]
         );
+
+        // The S1 gate beats the S2 walk test: even a walked consumer's
+        // build-time keys stay out when bdeps is off.
+        let (scheduled, _) =
+            slot_operator_rebuild_scan(&dir, &[], &walked, &reach, &empty, &empty, false);
+        assert_eq!(scheduled, runtime_only);
 
         // The slot-change probe (`slot_operator_slot_change_probe`) reads
         // merge-bound parents' tree metadata, not the vdb, and must not

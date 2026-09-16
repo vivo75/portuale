@@ -16923,3 +16923,20 @@ python3 -m pytest tests/test_emerge_pretend_contract.py -q \
 ```
 
 Plan: `docs/02.066-installed_buildtime_optional.md` (S1 pin, withdrawn main slice).
+
+**The slot-operator ABI rebuild scan now honours `--with-bdeps`, and build-time keys rebuild only consumers the walk reached (backlog #65, 2026-09-16).** Real only registers an installed parent's `DEPEND`/`BDEPEND` slot-operator dep when the `bdeps` parameter walks them (`_emerge/create_depgraph_params.py:97-103`: `auto` when `--with-bdeps` is unset, `--with-bdeps-auto != n` and `--usepkg` is not in effect — `--getbinpkg` implies it; `_emerge/depgraph.py:4194-4247` empties the keys otherwise), and `_slot_operator_trigger_reinstalls` probes only `want_update` parents (`:3114`, `:3802-3806`), with a built parent's build-time deps marked `optional` (`:4277/4287`). Portuale's `slot_operator_rebuild_scan` read all five keys of every reachable consumer unconditionally, so the host's `--getbinpkg` defaults produced 20 spurious Go-consumer rebuilds and a bogus `r` on `dev-lang/go`; with build deps walked it also rebuilt 18 world-only Go consumers where real rebuilds only the argument-reached ones (`runc`, `go-md2man`). The scan now takes `with_bdeps` (all three call sites: the two backtracking passes and the `--solver=` bridge fixpoint) and, when build deps are on, reads `DEPEND`/`BDEPEND` only for a consumer this pass actually walked (`entries`) rather than one merely reachable in complete mode; `RDEPEND`/`PDEPEND`/`IDEPEND` stay unconditional, and `slot_operator_slot_change_probe` (merge-bound parents' tree metadata) stays five-key. The oracle matrix (`fixtures/repo/dev-libs/provpkg-*` + five `cons{rdep,dep,bdep,pdep,idep}` consumers, all in world; `TEST/atomlists/l0-fixture-oracle-slotop.txt`, `FX_SLOTOP_BDEP=1` staging, `TEST/findings/l0.md` "#65 S0") pinned real's per-key × bdeps × reach matrix first: the two staging requirements were real's own versioned built atom in the vdb (`>=dev-libs/provpkg-1.0:0/1=`; a bare `:0/1=` is dropped by dynamic deps) and `EAPI=8` in the vdb record. The bed went 49 unexplained (pre-fix, `l0-fx-20260916T152216Z`) → 34 after S1 → 22 after S2, then 0 with the two adjudicated entries: a display-only totals row (real lists each rebuilt consumer twice under `-v`) and the runtime-key residue filed as #71.
+
+```sh
+# before/after on this host, host defaults (--getbinpkg = bdeps off)
+env -u EMERGE_DEFAULT_OPTS rust/target/release/portuale emerge -uDpvN @world --color=n \
+  | grep -c 'rR'                      # -> 19 before #65 S1, 0 after
+env -u EMERGE_DEFAULT_OPTS rust/target/release/portuale emerge -uDpvN @world --color=n \
+  | grep 'dev-lang/go-1.27'
+# -> [binary    gU  ] dev-lang/go-1.27.1-1:0/1.27.1::gentoo [1.26.5:…]   (no `r`)
+
+# the fixture-oracle matrix, green with the two adjudicated entries
+FX_SLOTOP_BDEP=1 TEST/run/l0-fixture-oracle.sh TEST/atomlists/l0-fixture-oracle-slotop.txt
+# -> TEST/logs/l0-fx-20260916T153958Z: 22 explained, 0 UNEXPLAINED, rc 0
+```
+
+Host re-diff against the post-#63 capture: exactly the 19 Go consumers disappeared from `-uDpvN @world` and nothing else moved. Tests: `slot_operator_rebuild_scan_honours_with_bdeps` (Rust: five keys × bdeps off/on × walked/reachable) and `test_oracle_slotop_rebuild_scan_honours_with_bdeps` (contract: the world/argument × `--usepkg`/`--with-bdeps=y` cells from the real capture). Residue: the runtime-key `IDEPEND` graph-completion quirk filed as #71 and allowlisted; the bdeps-on `--deep` walk divergences (`rust-1.94.0` `NS`, missing `gtk-doc-am`/`mdit-py-plugins`/`myst-parser`) stay #65 §7 residue, pursued as the #65 follow-up. Plan: `docs/02.065-slot_operator_buildtime_deps.md`.

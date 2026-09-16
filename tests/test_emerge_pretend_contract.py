@@ -16464,6 +16464,133 @@ def test_oracle_bdeps_default_of_an_installed_parent_drives_dependency_updates(
         assert _b1_merges(rust.stdout) == expected, extra
 
 
+def test_oracle_slotop_rebuild_scan_honours_with_bdeps(
+    emerge_binary, fixture_env, tmp_path
+):
+    """Backlog #65 S1/S2 contract pin: the slot-operator ABI rebuild scan
+    reads an installed consumer's build-time keys (`DEPEND`/`BDEPEND`)
+    only when the walk walked that consumer *and* build-time deps are on.
+
+    Installed `dev-libs/provpkg-1.0` (`SLOT=0/1`) is upgraded to the
+    tree's `2.0` (`0/2`); five installed consumers each bind it through
+    one key with real's versioned built atom
+    (`>=dev-libs/provpkg-1.0:0/1=`, the shape real's vdb records for a
+    `:=` dep). Names `cons{rdep,dep,bdep,pdep,idep}`; world holds all
+    six, so the `@world` shape walks every consumer while the
+    `--oneshot consdep` shape walks only the argument plus the runtime
+    world.
+
+    Real 3.0.82.2 source: `create_depgraph_params.py:97-103` sets
+    `bdeps` from `--with-bdeps`/`--with-bdeps-auto`/`--usepkg`;
+    `depgraph.py:4194-4247` empties a built package's
+    `DEPEND`/`BDEPEND` first; `:4277/4287` mark them `optional`;
+    `:3114,3802-3806` probe only `want_update` parents. Oracle: the
+    fixture-oracle capture in
+    `TEST/logs/l0-fx-20260916T153720Z/` (`FX_SLOTOP_BDEP=1`,
+    `TEST/atomlists/l0-fixture-oracle-slotop.txt`; findings
+    `TEST/findings/l0.md` "#65 S0"), which also records the one
+    remaining runtime-key residue (IDEPEND world-only in the
+    `consrdep`/`conspdep` argument shapes) filed as backlog #71 and not
+    pinned here."""
+    installed = [
+        ("dev-libs", "provpkg", "1.0", "0/1", {}),
+    ] + [
+        (
+            "dev-libs",
+            name,
+            "1.0",
+            "0",
+            {key: ">=dev-libs/provpkg-1.0:0/1="},
+        )
+        for name, key in (
+            ("consrdep", "RDEPEND"),
+            ("consdep", "DEPEND"),
+            ("consbdep", "BDEPEND"),
+            ("conspdep", "PDEPEND"),
+            ("considep", "IDEPEND"),
+        )
+    ]
+    world = [
+        "dev-libs/provpkg",
+        "dev-libs/consrdep",
+        "dev-libs/consdep",
+        "dev-libs/consbdep",
+        "dev-libs/conspdep",
+        "dev-libs/considep",
+    ]
+    root = _b1_root(tmp_path, world, installed)
+    env = _b1_env(fixture_env, root)
+
+    def run(*args):
+        return _b1_run(["--pretend", *args], env, emerge_binary).stdout
+
+    def rebuilds(stdout):
+        # `@system` (the fixture profile's starred packages) merges along
+        # with `@world`; only the matrix packages are asserted.
+        return [
+            ln.split("] ", 1)[1].split(" ")[0]
+            for ln in _b1_merges(stdout)
+            if ln.startswith("[ebuild  rR") and "dev-libs/cons" in ln
+        ]
+
+    provider = "[ebuild  r  U  ] dev-libs/provpkg-2.0 [1.0]"
+    # @world, bdeps auto: every key rebuilds (all five consumers walked).
+    out = run("--update", "--deep", "--newuse", "@world")
+    assert provider in _b1_merges(out)
+    assert rebuilds(out) == [
+        "dev-libs/consrdep-1.0",
+        "dev-libs/consdep-1.0",
+        "dev-libs/consbdep-1.0",
+        "dev-libs/conspdep-1.0",
+        "dev-libs/considep-1.0",
+    ]
+    # @world --usepkg: bdeps off, runtime/install-time keys only.
+    out = run("--update", "--deep", "--newuse", "--usepkg", "@world")
+    assert rebuilds(out) == [
+        "dev-libs/consrdep-1.0",
+        "dev-libs/conspdep-1.0",
+        "dev-libs/considep-1.0",
+    ]
+    # @world --with-bdeps=y: same as the default (S1's explicit arm).
+    out = run(
+        "--update", "--deep", "--newuse", "--with-bdeps=y", "@world"
+    )
+    assert rebuilds(out) == [
+        "dev-libs/consrdep-1.0",
+        "dev-libs/consdep-1.0",
+        "dev-libs/consbdep-1.0",
+        "dev-libs/conspdep-1.0",
+        "dev-libs/considep-1.0",
+    ]
+    # Argument shape, bdeps on: the walked build-time consumer rebuilds,
+    # the world-only build-time consumers do not (S2).
+    for name in ("consdep", "consbdep"):
+        out = run("--update", "--deep", "--newuse", "--oneshot", f"dev-libs/{name}")
+        assert rebuilds(out) == [
+            f"dev-libs/{name}-1.0",
+            "dev-libs/considep-1.0",
+            "dev-libs/conspdep-1.0",
+            "dev-libs/consrdep-1.0",
+        ], name
+    # Argument shape, bdeps off: a DEPEND/BDEPEND argument produces no
+    # provider/consumer merge at all (the provider is only reachable
+    # through the build-time dep) -- MATCHES real.
+    for name in ("consdep", "consbdep"):
+        out = run(
+            "--update",
+            "--deep",
+            "--newuse",
+            "--oneshot",
+            "--usepkg",
+            f"dev-libs/{name}",
+        )
+        assert [
+            ln
+            for ln in _b1_merges(out)
+            if "dev-libs/cons" in ln or "dev-libs/provpkg" in ln
+        ] == [], name
+
+
 def test_oracle_slotop_runtime_pkg_mask(
     emerge_binary, fixture_env, tmp_path
 ):

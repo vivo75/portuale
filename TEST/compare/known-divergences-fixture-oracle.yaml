@@ -94,3 +94,36 @@
     outputs and pinned by
     `test_needer_othermod_triangle_reports_the_installed_instance_conflict`).
   owner: claude-opus-5
+
+# -- #65 S0/S1/S2: the slot-operator bdeps matrix (FX_SLOTOP_BDEP=1,
+#    TEST/atomlists/l0-fixture-oracle-slotop.txt). Both entries exist so
+#    the bed can gate the matrix while the runtime-key residue is open.
+
+- id: slotop-bdeps-rebuild-totals
+  category: totals
+  slugs: ["-uDvN*"]
+  match: "real Total"
+  reason: >
+    The staged matrix's `-uDvN` (verbose) runs make real print every
+    rebuilt consumer twice -- once in the merge list, once in its ABI
+    rebuild listing -- so the comparator's Total counts exceed the merge
+    set. Portuale prints each rebuilt consumer once. The merge sets,
+    order and flags are asserted independently (extra/missing/order
+    findings), which is what matters; the totals row itself is display
+    duplication only.
+  owner: portuale-oracle
+
+- id: slotop-idepend-world-only-arg-consumer
+  category: extra
+  slugs: ["-uDvN_--oneshot*consrdep", "-uDvN_--oneshot*conspdep"]
+  match: "ebuild dev-libs/considep-1.0 present for portuale, absent for real"
+  reason: >
+    Known gap, filed as backlog #71: in the argument shape real rebuilds
+    the world-only IDEPEND consumer (`considep`) only when the argument
+    is a build-time or IDEPEND consumer, not when it is an RDEPEND/
+    PDEPEND consumer. Portuale's runtime-key scan rebuilds every
+    reachable runtime consumer, so it adds `considep` in the two shapes
+    real leaves alone. The runtime keys were deliberately kept
+    unscanned in #65 S2 (TEST/findings/l0.md "#65 S0" residue 1); the
+    entry must be deleted when #71 closes.
+  owner: portuale-bug
