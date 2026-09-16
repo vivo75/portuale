@@ -58,6 +58,54 @@ fn apply_incremental_is_reusable_for_per_package_use_overrides() {
 }
 
 #[test]
+fn apply_use_incremental_removes_a_prefix_wildcard() {
+    // `-video_cards_*` drops every accumulated `video_cards_` flag (Portage
+    // config.py prefix-wildcard removal). Tokens arrive already prefixed by the
+    // USE_EXPAND fold, so the positive token here is the full flag name.
+    let mut set = HashSet::from([
+        "X".to_string(),
+        "video_cards_dummy".to_string(),
+        "video_cards_intel".to_string(),
+    ]);
+    apply_use_incremental("-video_cards_* video_cards_intel", &mut set);
+    assert_eq!(
+        set,
+        HashSet::from(["X".to_string(), "video_cards_intel".to_string()])
+    );
+
+    // No accumulated match -> no-op (the literal `video_cards_*` is
+    // discarded, not added).
+    let mut set = HashSet::from(["X".to_string()]);
+    apply_use_incremental("-video_cards_*", &mut set);
+    assert_eq!(set, HashSet::from(["X".to_string()]));
+
+    // The generic applier keeps its exact-removal semantics: it must
+    // NOT expand `_*` (the wildcard arm is USE-scoped in Portage).
+    let mut set = HashSet::from(["video_cards_dummy".to_string()]);
+    apply_incremental("-video_cards_*", &mut set);
+    assert_eq!(set, HashSet::from(["video_cards_dummy".to_string()]));
+
+    // Plain tokens are unchanged: `-*` clears, `-flag` removes,
+    // `+flag`/`flag` add.
+    let mut set = HashSet::from(["a".to_string(), "b".to_string()]);
+    apply_use_incremental("-* b +c d", &mut set);
+    assert_eq!(
+        set,
+        HashSet::from(["b".to_string(), "c".to_string(), "d".to_string()])
+    );
+    apply_use_incremental("-b -c", &mut set);
+    assert_eq!(set, HashSet::from(["d".to_string()]));
+
+    // The iter variant behaves identically.
+    let mut set = HashSet::from([
+        "sane_backends_hp".to_string(),
+        "sane_backends_hp3500".to_string(),
+    ]);
+    apply_use_incremental_iter(&["-sane_backends_*", "sane_backends_hp"], &mut set);
+    assert_eq!(set, HashSet::from(["sane_backends_hp".to_string()]));
+}
+
+#[test]
 fn resolved_incremental_folds_stacked_sources_with_negation_and_sorts() {
     let mut config = Config::default();
     note_incremental(&mut config, "FEATURES", "b a merge-sync");
