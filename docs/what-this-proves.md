@@ -17018,3 +17018,15 @@ rust/target/release/portuale emerge -p --json dev-libs/needer dev-libs/othermod 
 ```
 
 Tests: `test_debug_parent_dep_names_the_atom_and_the_child_instance` and `test_json_exposes_the_backtrack_restart_count`; the `--debug`/`--json` corpus rows were reviewed and re-blessed in the two commits. Plan: `docs/02.059-debug_narration_fidelity.md` (K1/K2 recorded).
+
+**Fetch transport overrides are honoured: `FETCHCOMMAND`/`RESUMECOMMAND` (and their per-protocol variants) plus `PORTAGE_RO_DISTDIRS` (backlog #70, 2026-09-16).** `portage_fetch::download_via_wget` hardcoded `make.globals`'s wget template, so a user's `FETCHCOMMAND="curl …"` (or `FETCHCOMMAND_<PROTO>`/`RESUMECOMMAND*`) was never used and `PORTAGE_RO_DISTDIRS` was only a name in `phase_environ`. Real selects `FETCHCOMMAND_<PROTO>` first and falls back to `FETCHCOMMAND` (`fetch.py:1652-1700`), refuses a command without `${FILE}`, and substitutes `${DISTDIR}`/`${URI}`/`${FILE}` before `shlex.split`ping the command (no shell); `PORTAGE_RO_DISTDIRS` entries are `shlex.split`, filtered to existing directories, each layout-resolved and digest-checked, and on a match **symlinked** into a writable `DISTDIR` before any download (`:1055-1059`, `:1456-1475`). Portuale now carries real's family in `portage_fetch::FetchCommands`, selects and expands it in `download_with_commands` (with the public `split_shell_words` matching real's POSIX split), and both transports use it: `WgetFetcher` honours `FetchRequest::commands` (and `Director::fetch` passes them through), while `fetch_src_uri` reads them from the resolved config scalars via `fetch_commands_from_config`/`resolved_fetch_commands`, the same chain `ebuild_phases` resolves for the phases. `FetchOptions::ro_distdirs` is filled by `resolved_ro_distdirs` and checked at real's position (before the fsmirrors copy); a verified read-only copy is symlinked, never copied. `FEATURES=distlocks` stays the documented single-run cut.
+
+```sh
+# the selection/substitution/refusal and the RO symlink are pinned by unit tests
+cargo test --release -p portage-fetch fetch_commands expand_and_split download_with_commands
+# -> 4 passed (protocol variant, shlex quoting, ${FILE} refusal, partial cleanup)
+cargo test --release -p portuale fetch_src_uri_runs_a_configured fetch_src_uri_symlinks
+# -> 2 passed (a configured FETCHCOMMAND runs end-to-end; the RO copy is a symlink)
+```
+
+Plan: `docs/01.014-fetch_candidates_mirrors.md` §5. Residue stays the third-party mirror shuffle (F6, deliberate cut) and `distlocks`.

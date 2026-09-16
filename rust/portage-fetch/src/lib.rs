@@ -436,40 +436,254 @@ fn to_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Real `make.globals`'s own default `FETCHCOMMAND` transport: `wget -t 3
-/// -T 60 --passive-ftp -U "Portage (Gentoo, https://www.gentoo.org)
-/// distfile-fetch" -O <dest> <uri>` as a real subprocess (never an
-/// in-process HTTP client). `resume` selects real `RESUMECOMMAND`
-/// (byte-for-byte `FETCHCOMMAND` plus `-c`, continuing a partial `dest`
-/// rather than restarting). A failed fresh fetch removes whatever partial
-/// file `wget` left behind; a failed resume keeps it for the next
-/// candidate -- the same split `portuale::fetch::fetch_src_uri`'s own
-/// candidate loop relies on. This is the one `wget` invocation both the
-/// `portuale` fetch path and the `mrg-director` `Fetcher` seam run; it
-/// lives here so the transport is shared, not duplicated per caller.
-pub fn download_via_wget(uri: &str, dest: &Path, resume: bool) -> Result<(), String> {
-    let mut cmd = std::process::Command::new("wget");
-    if resume {
-        cmd.arg("-c");
+/// Real `make.globals`'s own default `FETCHCOMMAND` template, verbatim.
+pub const DEFAULT_FETCHCOMMAND: &str = concat!(
+    "wget -t 3 -T 60 --passive-ftp -U \"Portage (Gentoo, https://www.gentoo.org) ",
+    "distfile-fetch\" -O \"${DISTDIR}/${FILE}\" \"${URI}\""
+);
+
+/// Real `make.globals`'s `RESUMECOMMAND`, byte-for-byte the
+/// `FETCHCOMMAND` template plus `-c`.
+pub const DEFAULT_RESUMECOMMAND: &str = concat!(
+    "wget -c -t 3 -T 60 --passive-ftp -U \"Portage (Gentoo, https://www.gentoo.org) ",
+    "distfile-fetch\" -O \"${DISTDIR}/${FILE}\" \"${URI}\""
+);
+
+/// Real `fetch.py:1652-1700`'s fetch-command family, resolved from the
+/// config (`FETCHCOMMAND`, `RESUMECOMMAND`, and the per-protocol
+/// `FETCHCOMMAND_<PROTO>` / `RESUMECOMMAND_<PROTO>` variants). `None`
+/// (and an absent protocol key) means the `make.globals` default.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FetchCommands {
+    pub fetchcommand: Option<String>,
+    pub resumecommand: Option<String>,
+    /// Keys are the upper-cased URI scheme (`HTTP`, `HTTPS`, ...).
+    pub fetchcommand_proto: std::collections::HashMap<String, String>,
+    pub resumecommand_proto: std::collections::HashMap<String, String>,
+}
+
+impl Default for FetchCommands {
+    /// The `make.globals` defaults, no overrides.
+    fn default() -> Self {
+        Self {
+            fetchcommand: Some(DEFAULT_FETCHCOMMAND.to_string()),
+            resumecommand: Some(DEFAULT_RESUMECOMMAND.to_string()),
+            fetchcommand_proto: std::collections::HashMap::new(),
+            resumecommand_proto: std::collections::HashMap::new(),
+        }
     }
-    let status = cmd
-        .args(["-t", "3", "-T", "60", "--passive-ftp"])
-        .args([
-            "-U",
-            "Portage (Gentoo, https://www.gentoo.org) distfile-fetch",
-        ])
-        .arg("-O")
-        .arg(dest)
-        .arg(uri)
+}
+
+/// A process-wide [`FetchCommands`] holding only the `make.globals`
+/// defaults, for callers with no resolved config (`WgetFetcher`'s absent
+/// override).
+pub fn default_commands() -> &'static FetchCommands {
+    static DEFAULT: std::sync::LazyLock<FetchCommands> =
+        std::sync::LazyLock::new(FetchCommands::default);
+    &DEFAULT
+}
+
+impl FetchCommands {
+    /// Real's selection (`fetch.py:1652-1662` for fetch, `:1680-1690` for
+    /// resume): the protocol variant first, then the plain name.
+    fn select(&self, proto: &str, resume: bool) -> Result<(String, String), String> {
+        let (plain_var, plain, proto_var, proto_map) = if resume {
+            (
+                "RESUMECOMMAND",
+                &self.resumecommand,
+                format!("RESUMECOMMAND_{proto}"),
+                &self.resumecommand_proto,
+            )
+        } else {
+            (
+                "FETCHCOMMAND",
+                &self.fetchcommand,
+                format!("FETCHCOMMAND_{proto}"),
+                &self.fetchcommand_proto,
+            )
+        };
+        if let Some(cmd) = proto_map.get(proto) {
+            return Ok((proto_var, cmd.clone()));
+        }
+        match plain {
+            Some(cmd) => Ok((plain_var.to_string(), cmd.clone())),
+            None => Err(format!(
+                "!!! {plain_var} is unset. It should have been defined in\n\
+                 !!! /usr/share/portage/config/make.globals.\n"
+            )),
+        }
+    }
+}
+
+/// Real `varexpand` + `shlex.split` over the selected command
+/// (`fetch.py:1789-1810`): `${DISTDIR}`/`${URI}`/`${FILE}` (and the bare
+/// `$VAR` form) are substituted with the config values, then the string
+/// is split into argv with POSIX quoting rules -- real never runs it
+/// through a shell.
+fn expand_and_split(command: &str, distdir: &Path, uri: &str, file: &str) -> Vec<String> {
+    let vars = [
+        ("DISTDIR", distdir.display().to_string()),
+        ("URI", uri.to_string()),
+        ("FILE", file.to_string()),
+    ];
+    let mut expanded = command.to_string();
+    for (name, value) in &vars {
+        expanded = expanded.replace(&format!("${{{name}}}"), value);
+        // The bare `$VAR` form, on a name boundary.
+        let mut out = String::with_capacity(expanded.len());
+        let bytes = expanded.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] != b'{' {
+                let rest = &expanded[i + 1..];
+                let name_len = rest
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .count();
+                if name_len > 0 && rest[..name_len] == **name {
+                    out.push_str(value);
+                    i += 1 + name_len;
+                    continue;
+                }
+            }
+            out.push(bytes[i] as char);
+            i += 1;
+        }
+        expanded = out;
+    }
+    shell_split(&expanded)
+}
+
+/// POSIX-ish argv splitting, public for callers parsing a config value
+/// real runs through `shlex.split` (e.g. `PORTAGE_RO_DISTDIRS`).
+pub fn split_shell_words(s: &str) -> Vec<String> {
+    shell_split(s)
+}
+
+/// POSIX-ish argv splitting (real `shlex.split`): whitespace separates,
+/// single quotes are literal, double quotes group with backslash escapes,
+/// and a backslash escapes the next character outside single quotes.
+fn shell_split(s: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut cur = String::new();
+    let mut has_cur = false;
+    let mut chars = s.chars().peekable();
+    let mut in_single = false;
+    let mut in_double = false;
+    while let Some(c) = chars.next() {
+        if in_single {
+            if c == '\'' {
+                in_single = false;
+            } else {
+                cur.push(c);
+            }
+            has_cur = true;
+            continue;
+        }
+        if in_double {
+            if c == '"' {
+                in_double = false;
+            } else if c == '\\'
+                && let Some(&next) = chars.peek()
+                && matches!(next, '"' | '\\' | '$' | '`')
+            {
+                cur.push(chars.next().unwrap());
+            } else {
+                cur.push(c);
+            }
+            has_cur = true;
+            continue;
+        }
+        match c {
+            ' ' | '\t' | '\n' => {
+                if has_cur {
+                    args.push(std::mem::take(&mut cur));
+                    has_cur = false;
+                }
+            }
+            '\'' => {
+                in_single = true;
+                has_cur = true;
+            }
+            '"' => {
+                in_double = true;
+                has_cur = true;
+            }
+            '\\' => {
+                if let Some(next) = chars.next() {
+                    cur.push(next);
+                    has_cur = true;
+                }
+            }
+            _ => {
+                cur.push(c);
+                has_cur = true;
+            }
+        }
+    }
+    if has_cur {
+        args.push(cur);
+    }
+    args
+}
+
+/// Real `fetch.py:1652-1700` through `:1830`: select `FETCHCOMMAND` (or
+/// its protocol variant / `RESUMECOMMAND`), refuse a command without
+/// `${FILE}`, substitute `${DISTDIR}`/`${URI}`/`${FILE}`, and spawn the
+/// real subprocess (never an in-process HTTP client). A failed fresh
+/// fetch removes whatever partial file it left behind; a failed resume
+/// keeps it for the next candidate -- the split
+/// `portuale::fetch::fetch_src_uri`'s candidate loop relies on.
+pub fn download_with_commands(
+    uri: &str,
+    dest: &Path,
+    resume: bool,
+    distdir: &Path,
+    commands: &FetchCommands,
+) -> Result<(), String> {
+    let proto = uri
+        .split_once("://")
+        .map(|(p, _)| p.to_ascii_uppercase())
+        .unwrap_or_default();
+    let (var, command) = commands.select(&proto, resume)?;
+    if !command.contains("${FILE}") {
+        return Err(format!(
+            "!!! {var} does not contain the required ${{FILE}} parameter.\n\
+             !!! Refer to the make.conf(5) man page for information about how to\n\
+             !!! correctly specify FETCHCOMMAND and RESUMECOMMAND.\n"
+        ));
+    }
+    let file = dest
+        .file_name()
+        .map(|f| f.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let argv = expand_and_split(&command, distdir, uri, &file);
+    let Some((prog, rest)) = argv.split_first() else {
+        return Err(format!("!!! {var} is empty.\n"));
+    };
+    let status = std::process::Command::new(prog)
+        .args(rest)
         .status()
-        .map_err(|e| format!("failed to spawn wget: {e}"))?;
+        .map_err(|e| format!("failed to spawn {prog}: {e}"))?;
     if !status.success() {
         if !resume {
             let _ = std::fs::remove_file(dest);
         }
-        return Err(format!("wget failed to fetch {uri:?} ({status})"));
+        return Err(format!("{prog} failed to fetch {uri:?} ({status})"));
     }
     Ok(())
+}
+
+/// The `make.globals` default transport, for callers with no resolved
+/// config in hand: `download_with_commands` over [`FetchCommands`]'s
+/// defaults. `resume` selects `RESUMECOMMAND` (byte-for-byte
+/// `FETCHCOMMAND` plus `-c`). This is the one `wget` invocation both the
+/// `portuale` fetch path and the `mrg-director` `Fetcher` seam run when
+/// no override is configured; it lives here so the transport is shared,
+/// not duplicated per caller.
+pub fn download_via_wget(uri: &str, dest: &Path, resume: bool) -> Result<(), String> {
+    let distdir = dest.parent().unwrap_or_else(|| Path::new("."));
+    download_with_commands(uri, dest, resume, distdir, &FetchCommands::default())
 }
 
 /// Real digest verification: file size (a cheap, real `_check_distfile`
@@ -589,6 +803,147 @@ mod tests {
         ));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn fetch_commands_select_the_protocol_variant_then_the_plain_name() {
+        let mut commands = FetchCommands::default();
+        commands
+            .fetchcommand_proto
+            .insert("HTTP".to_string(), "curl ${URI}".to_string());
+        commands.fetchcommand = Some("wget ${FILE}".to_string());
+        assert_eq!(
+            commands.select("HTTP", false).unwrap(),
+            ("FETCHCOMMAND_HTTP".to_string(), "curl ${URI}".to_string())
+        );
+        assert_eq!(
+            commands.select("HTTPS", false).unwrap(),
+            ("FETCHCOMMAND".to_string(), "wget ${FILE}".to_string())
+        );
+        // Resume picks the RESUMECOMMAND family.
+        commands
+            .resumecommand_proto
+            .insert("HTTPS".to_string(), "curl -C - ${URI}".to_string());
+        assert_eq!(
+            commands.select("HTTPS", true).unwrap(),
+            (
+                "RESUMECOMMAND_HTTPS".to_string(),
+                "curl -C - ${URI}".to_string()
+            )
+        );
+        // An unset plain command is real's own error.
+        let empty = FetchCommands {
+            fetchcommand: None,
+            resumecommand: None,
+            ..FetchCommands::default()
+        };
+        let err = empty.select("HTTPS", false).unwrap_err();
+        assert!(err.contains("FETCHCOMMAND is unset"), "{err}");
+    }
+
+    #[test]
+    fn expand_and_split_substitutes_and_quotes_like_shlex() {
+        let argv = expand_and_split(
+            "wget -O \"${DISTDIR}/${FILE}\" \"${URI}\" -U 'Mozilla x'",
+            std::path::Path::new("/var/cache/distfiles"),
+            "https://example.com/foo-1.0.tar.gz",
+            "foo-1.0.tar.gz",
+        );
+        assert_eq!(
+            argv,
+            vec![
+                "wget",
+                "-O",
+                "/var/cache/distfiles/foo-1.0.tar.gz",
+                "https://example.com/foo-1.0.tar.gz",
+                "-U",
+                "Mozilla x",
+            ]
+        );
+        // The bare `$VAR` form is real `varexpand`'s too.
+        let argv = expand_and_split(
+            "cp $URI ${DISTDIR}/${FILE}",
+            std::path::Path::new("/d"),
+            "file:///src/foo",
+            "foo",
+        );
+        assert_eq!(argv, vec!["cp", "file:///src/foo", "/d/foo"]);
+    }
+
+    /// A stub "fetch command": `cp <uri-path> <dest>` (the URI is a
+    /// `file://` path in the tests below). Spawned directly, exactly the
+    /// way a real `FETCHCOMMAND` is.
+    fn stub_fetch_script(dir: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
+        let path = dir.join(name);
+        fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        let mut perms = fs::metadata(&path).unwrap().permissions();
+        use std::os::unix::fs::PermissionsExt;
+        perms.set_mode(0o755);
+        fs::set_permissions(&path, perms).unwrap();
+        path
+    }
+
+    #[test]
+    fn download_with_commands_runs_a_stub_command_and_refuses_one_without_file() {
+        let dir = tempdir();
+        let source = dir.join("source.tar.gz");
+        fs::write(&source, b"payload").unwrap();
+        let dest = dir.join("dest.tar.gz");
+        let script = stub_fetch_script(&dir, "fetch.sh", "cp \"${2#file://}\" \"$1\"");
+        let mut commands = FetchCommands {
+            fetchcommand: Some(format!(
+                "{} \"${{DISTDIR}}/${{FILE}}\" \"${{URI}}\"",
+                script.display()
+            )),
+            ..FetchCommands::default()
+        };
+        let uri = format!("file://{}", source.display());
+        download_with_commands(&uri, &dest, false, &dir, &commands).unwrap();
+        assert_eq!(fs::read(&dest).unwrap(), b"payload");
+
+        // A command without ${FILE} is refused with real's message and
+        // never spawned.
+        commands.fetchcommand = Some(format!("{} \"${{URI}}\"", script.display()));
+        let err = download_with_commands(&uri, &dest, false, &dir, &commands).unwrap_err();
+        assert!(
+            err.contains("does not contain the required ${FILE} parameter"),
+            "{err}"
+        );
+
+        // The protocol variant wins for a file:// URI.
+        commands.fetchcommand_proto.insert(
+            "FILE".to_string(),
+            format!(
+                "{} \"${{DISTDIR}}/${{FILE}}\" \"${{URI}}\"",
+                script.display()
+            ),
+        );
+        commands.fetchcommand = Some("false".to_string());
+        let dest2 = dir.join("dest2.tar.gz");
+        download_with_commands(&uri, &dest2, false, &dir, &commands).unwrap();
+        assert!(dest2.exists());
+    }
+
+    #[test]
+    fn download_with_commands_removes_a_fresh_partial_but_keeps_a_resumed_one() {
+        let dir = tempdir();
+        let dest = dir.join("dest.tar.gz");
+        let script = stub_fetch_script(&dir, "fail.sh", "echo partial > \"$1\"; exit 1");
+        let mut commands = FetchCommands {
+            fetchcommand: Some(format!(
+                "{} \"${{DISTDIR}}/${{FILE}}\" \"${{URI}}\"",
+                script.display()
+            )),
+            ..FetchCommands::default()
+        };
+        commands.resumecommand = commands.fetchcommand.clone();
+        download_with_commands("file:///nonexistent", &dest, false, &dir, &commands).unwrap_err();
+        assert!(!dest.exists(), "a failed fresh fetch removes the partial");
+        download_with_commands("file:///nonexistent", &dest, true, &dir, &commands).unwrap_err();
+        assert!(
+            dest.exists(),
+            "a failed resume keeps it for the next candidate"
+        );
     }
 
     #[test]

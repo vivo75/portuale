@@ -200,6 +200,16 @@ pub struct FetchOptions {
     /// many downloads of a file fail digest verification, no further
     /// location is tried (`checksum_failure_max_tries`).
     pub checksum_failure_max_tries: usize,
+    /// The resolved `FETCHCOMMAND`/`RESUMECOMMAND` family (real
+    /// `fetch.py:1652-1700`); `None` keeps the `make.globals` defaults.
+    /// Built by the caller from the resolved config scalars via
+    /// [`fetch_commands_from_config`].
+    pub fetch_commands: Option<portage_fetch::FetchCommands>,
+    /// Real `PORTAGE_RO_DISTDIRS` (`fetch.py:1055-1059`): read-only
+    /// distdir sources, existing directories only (`shlex.split` +
+    /// `isdir` at option-build time), each layout-resolved and
+    /// digest-checked, then **symlinked** into a writable DISTDIR.
+    pub ro_distdirs: Vec<std::path::PathBuf>,
 }
 
 impl Default for FetchOptions {
@@ -216,6 +226,8 @@ impl Default for FetchOptions {
             use_flags: std::collections::HashSet::new(),
             mirror_cache_now: None,
             checksum_failure_max_tries: 5,
+            fetch_commands: None,
+            ro_distdirs: Vec::new(),
         }
     }
 }
@@ -237,6 +249,33 @@ impl Default for FetchOptions {
 /// real's fresh-vs-resume split through the seam.
 pub(crate) fn wget_fetch(uri: &str, dest: &Path) -> Result<(), String> {
     portage_fetch::download_via_wget(uri, dest, false)
+}
+
+/// Real's `FETCHCOMMAND` family out of a resolved config: the plain
+/// scalars (`other_vars`, where `make.globals`/`make.conf` scalars land)
+/// plus every `FETCHCOMMAND_<PROTO>`/`RESUMECOMMAND_<PROTO>` override.
+/// `None` entries mean "use the `make.globals` default" and are left for
+/// [`portage_fetch::FetchCommands`]'s selection to fall back on.
+pub fn fetch_commands_from_config(
+    config: &portage_profile::Config,
+) -> portage_fetch::FetchCommands {
+    let mut commands = portage_fetch::FetchCommands {
+        fetchcommand: config.other_vars.get("FETCHCOMMAND").cloned(),
+        resumecommand: config.other_vars.get("RESUMECOMMAND").cloned(),
+        ..Default::default()
+    };
+    for (key, value) in &config.other_vars {
+        if let Some(proto) = key.strip_prefix("FETCHCOMMAND_") {
+            commands
+                .fetchcommand_proto
+                .insert(proto.to_string(), value.clone());
+        } else if let Some(proto) = key.strip_prefix("RESUMECOMMAND_") {
+            commands
+                .resumecommand_proto
+                .insert(proto.to_string(), value.clone());
+        }
+    }
+    commands
 }
 
 /// Real `doebuild()`'s own `SRC_URI`-vs-`DISTDIR` fetch check, run once
@@ -670,6 +709,38 @@ pub fn fetch_src_uri(
 
         let mut already_verified = dest.is_file() && verify_digests(&dest, digests).is_ok();
 
+        // Real `fetch.py:1456-1475`: `PORTAGE_RO_DISTDIRS` -- a
+        // read-only distdir source is layout-resolved and
+        // digest-checked, and on a match **symlinked** into DISTDIR
+        // (never copied), only when DISTDIR itself is writable. Runs
+        // before the local fsmirrors copy and every download candidate.
+        if !already_verified
+            && distdir_writable(&options.distdir)
+            && !options.ro_distdirs.is_empty()
+        {
+            for dir in &options.ro_distdirs {
+                if !dir.is_dir() {
+                    continue;
+                }
+                let source = mirror_url(
+                    &dir.to_string_lossy(),
+                    &entry.filename,
+                    &digests.hashes,
+                    &options.distdir,
+                    None,
+                    0.0,
+                );
+                let source = std::path::PathBuf::from(source);
+                if verify_digests(&source, digests).is_ok() {
+                    let _ = std::fs::remove_file(&dest);
+                    if std::os::unix::fs::symlink(&source, &dest).is_ok() {
+                        already_verified = true;
+                        break;
+                    }
+                }
+            }
+        }
+
         // Real `fetch.py:1503-1513`: before any download (and regardless
         // of `RESTRICT=fetch`/`mirror`, which only shape the download
         // list), a missing file is copied from the first on-filesystem
@@ -791,6 +862,7 @@ pub fn fetch_src_uri(
                     uri: candidate,
                     dest: &dest,
                     resume: has_partial,
+                    commands: options.fetch_commands.as_ref(),
                 });
                 match attempt {
                     Ok(()) => match verify_digests(&dest, digests) {
@@ -1105,6 +1177,106 @@ mod tests {
         // Manifest entry), the enabled-only file is not.
         let err = fetch_src_uri(&pkg_dir, src_uri, &with_use(&[])).unwrap_err();
         assert!(err.contains("unlisted-1.0.tar.gz"), "{err}");
+    }
+
+    #[test]
+    fn fetch_src_uri_runs_a_configured_fetchcommand() {
+        // #70 S1: FETCHCOMMAND from the config replaces the built-in
+        // `wget` template; `${DISTDIR}`/`${FILE}`/`${URI}` are
+        // substituted and the command is spawned directly.
+        let (uri_base, handle) = serve_once(b"hello world".to_vec());
+        let uri = format!("{uri_base} -> hello-1.0.tar.gz");
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+        let marker = distdir.join("marker");
+        let script = distdir.join("fetch.sh");
+        fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\ntouch {}\nwget -q -O \"$1\" \"$2\"\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script, perms).unwrap();
+
+        let fetch_commands = portage_fetch::FetchCommands {
+            fetchcommand: Some(format!(
+                "{} \"${{DISTDIR}}/${{FILE}}\" \"${{URI}}\"",
+                script.display()
+            )),
+            resumecommand: Some(format!(
+                "{} \"${{DISTDIR}}/${{FILE}}\" \"${{URI}}\"",
+                script.display()
+            )),
+            ..portage_fetch::FetchCommands::default()
+        };
+        let result = fetch_src_uri(
+            &pkg_dir,
+            &uri,
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![],
+                fetch_commands: Some(fetch_commands),
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(result, vec!["hello-1.0.tar.gz".to_string()]);
+        assert!(marker.is_file(), "the configured FETCHCOMMAND ran");
+        assert_eq!(
+            fs::read(distdir.join("hello-1.0.tar.gz")).unwrap(),
+            b"hello world"
+        );
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_src_uri_symlinks_a_verified_portage_ro_distdirs_file() {
+        // #70 S2: PORTAGE_RO_DISTDIRS -- a verified read-only copy is
+        // symlinked into a writable DISTDIR, never downloaded.
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        let ro = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+        fs::write(ro.join("hello-1.0.tar.gz"), b"hello world").unwrap();
+        let result = fetch_src_uri(
+            &pkg_dir,
+            "https://192.0.2.1/hello-1.0.tar.gz",
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![],
+                ro_distdirs: vec![ro.clone()],
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(result, vec!["hello-1.0.tar.gz".to_string()]);
+        let dest = distdir.join("hello-1.0.tar.gz");
+        assert!(
+            fs::symlink_metadata(&dest)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the RO distdir copy is symlinked, not copied"
+        );
+        assert_eq!(fs::read(&dest).unwrap(), b"hello world");
+        // A non-existent RO entry is skipped, not an error.
+        let err = fetch_src_uri(
+            &pkg_dir,
+            "https://192.0.2.1/hello-1.0.tar.gz",
+            &FetchOptions {
+                distdir: tempdir(),
+                gentoo_mirrors: vec![],
+                ro_distdirs: vec![distdir.join("does-not-exist")],
+                ..FetchOptions::default()
+            },
+        );
+        assert!(err.is_err(), "no other candidate can serve the file");
     }
 
     #[test]

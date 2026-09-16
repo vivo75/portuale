@@ -1058,6 +1058,95 @@ fn depend_use_set(
     .unwrap_or_default()
 }
 
+/// The resolved config's `FETCHCOMMAND` family, for the distfile fetch
+/// path: real `fetch.py` reads `FETCHCOMMAND`/`RESUMECOMMAND` (and the
+/// `_<PROTO>` variants) out of the same `mysettings` the phases run
+/// with, so portuale resolves the same chain here (the
+/// `depend_use_set` resolution above, kept as a sibling rather than
+/// factored, since this needs the whole `Config`, not just `use_flags`).
+fn resolved_fetch_commands(
+    env: &Environment,
+    config_root: &Path,
+    eroot: &Path,
+) -> Option<portage_fetch::FetchCommands> {
+    let _ = repo_root_for(&env.pkg_dir)?;
+    let repos = portage_repo::find_repos(config_root).ok()?;
+    let main_repo = repos.iter().find(|r| r.is_main)?;
+    let overlay_repos: Vec<(String, std::path::PathBuf)> = repos
+        .iter()
+        .filter(|r| !r.is_main)
+        .map(|r| (r.name.clone(), r.location.clone()))
+        .collect();
+    let repo_aliases: Vec<(String, std::path::PathBuf)> = repos
+        .iter()
+        .flat_map(|r| r.aliases.iter().map(|a| (a.clone(), r.location.clone())))
+        .collect();
+    let repo_masters: std::collections::HashMap<String, Vec<std::path::PathBuf>> = repos
+        .iter()
+        .map(|r| (r.name.clone(), r.masters.clone()))
+        .collect();
+    portage_profile::resolve_config(
+        config_root,
+        &main_repo.location,
+        &overlay_repos,
+        &repo_aliases,
+        &main_repo.name,
+        &repo_masters,
+        eroot,
+    )
+    .ok()
+    .map(|config| fetch::fetch_commands_from_config(&config))
+}
+
+/// Real `fetch.py:1055-1059`: `shlex.split(PORTAGE_RO_DISTDIRS)` filtered
+/// to directories that exist (each candidate is re-checked at fetch
+/// time, but real filters the list up front).
+fn resolved_ro_distdirs(
+    env: &Environment,
+    config_root: &Path,
+    eroot: &Path,
+) -> Vec<std::path::PathBuf> {
+    let _ = repo_root_for(&env.pkg_dir);
+    let Some(repos) = portage_repo::find_repos(config_root).ok() else {
+        return Vec::new();
+    };
+    let Some(main_repo) = repos.iter().find(|r| r.is_main) else {
+        return Vec::new();
+    };
+    let overlay_repos: Vec<(String, std::path::PathBuf)> = repos
+        .iter()
+        .filter(|r| !r.is_main)
+        .map(|r| (r.name.clone(), r.location.clone()))
+        .collect();
+    let repo_aliases: Vec<(String, std::path::PathBuf)> = repos
+        .iter()
+        .flat_map(|r| r.aliases.iter().map(|a| (a.clone(), r.location.clone())))
+        .collect();
+    let repo_masters: std::collections::HashMap<String, Vec<std::path::PathBuf>> = repos
+        .iter()
+        .map(|r| (r.name.clone(), r.masters.clone()))
+        .collect();
+    portage_profile::resolve_config(
+        config_root,
+        &main_repo.location,
+        &overlay_repos,
+        &repo_aliases,
+        &main_repo.name,
+        &repo_masters,
+        eroot,
+    )
+    .ok()
+    .and_then(|config| config.other_vars.get("PORTAGE_RO_DISTDIRS").cloned())
+    .map(|value| {
+        portage_fetch::split_shell_words(&value)
+            .into_iter()
+            .map(std::path::PathBuf::from)
+            .filter(|p| p.is_dir())
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn fetch_sources(
     env: &Environment,
@@ -1123,6 +1212,11 @@ async fn fetch_sources(
             // path), defaulting to real `false`.
             force_mirror: features.split_whitespace().any(|tok| tok == "force-mirror"),
             use_flags: use_flags.split_whitespace().map(String::from).collect(),
+            // Real `fetch.py` reads its commands out of the same settings
+            // object the phases use; resolve the same chain for them.
+            fetch_commands: resolved_fetch_commands(env, config_root, root),
+            // Real `fetch.py:1055-1059`: existing directories only.
+            ro_distdirs: resolved_ro_distdirs(env, config_root, root),
             mirror_cache_now: None,
             // Real `PORTAGE_FETCH_CHECKSUM_TRY_MIRRORS` -- same env-var
             // shortcut as `distlocks` above.

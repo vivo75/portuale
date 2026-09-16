@@ -262,6 +262,10 @@ pub struct FetchRequest<'a> {
     /// `make.globals`'s default `RESUMECOMMAND`, byte-for-byte
     /// `FETCHCOMMAND` plus `-c` -- or `false` for `FETCHCOMMAND`.
     pub resume: bool,
+    /// The resolved `FETCHCOMMAND`/`RESUMECOMMAND` family (real
+    /// `fetch.py:1652-1700`); `None` uses the `make.globals` defaults
+    /// (`portage_fetch::default_commands`).
+    pub commands: Option<&'a portage_fetch::FetchCommands>,
 }
 
 // ---------------------------------------------------------------------------
@@ -984,7 +988,16 @@ impl RepoCache for VolatileCache {
 pub struct WgetFetcher;
 impl Fetcher for WgetFetcher {
     fn fetch(&self, request: &FetchRequest<'_>) -> Result<(), String> {
-        portage_fetch::download_via_wget(request.uri, request.dest, request.resume)
+        let distdir = request.dest.parent().unwrap_or_else(|| Path::new("."));
+        portage_fetch::download_with_commands(
+            request.uri,
+            request.dest,
+            request.resume,
+            distdir,
+            request
+                .commands
+                .unwrap_or_else(|| portage_fetch::default_commands()),
+        )
     }
 }
 
@@ -1333,6 +1346,7 @@ where
         &self,
         entry: &portage_fetch::SrcUriEntry,
         distdir: &Path,
+        commands: Option<&portage_fetch::FetchCommands>,
     ) -> Result<PathBuf, String> {
         std::fs::create_dir_all(distdir).map_err(|e| format!("{}: {e}", distdir.display()))?;
         let dest = distdir.join(&entry.filename);
@@ -1344,6 +1358,7 @@ where
             uri: &entry.uri,
             dest: &dest,
             resume: false,
+            commands,
         })?;
         Ok(dest)
     }
@@ -1741,6 +1756,7 @@ mod tests {
             uri: "https://example.invalid/x.tgz",
             dest: &dest,
             resume: false,
+            commands: None,
         };
         // Unfetchable host, no partial: the shared `wget` transport
         // fails, and the seam reports it (no panic, no half-written file
@@ -2091,7 +2107,7 @@ mod tests {
             override_fetch: false,
         };
         assert_eq!(
-            director.fetch(&entry, &distdir).unwrap(),
+            director.fetch(&entry, &distdir, None).unwrap(),
             distdir.join("w.tgz")
         );
     }
