@@ -816,11 +816,95 @@ mod tests {
         dir
     }
 
+    #[test]
+    fn fetch_commands_select_the_protocol_variant_then_the_plain_name() {
+        let mut commands = FetchCommands::default();
+        commands
+            .fetchcommand_proto
+            .insert("HTTP".to_string(), "curl ${URI}".to_string());
+        commands.fetchcommand = Some("wget ${FILE}".to_string());
+        assert_eq!(
+            commands.select("HTTP", false).unwrap(),
+            ("FETCHCOMMAND_HTTP".to_string(), "curl ${URI}".to_string())
+        );
+        assert_eq!(
+            commands.select("HTTPS", false).unwrap(),
+            ("FETCHCOMMAND".to_string(), "wget ${FILE}".to_string())
+        );
+        // Resume picks the RESUMECOMMAND family.
+        commands
+            .resumecommand_proto
+            .insert("HTTPS".to_string(), "curl -C - ${URI}".to_string());
+        assert_eq!(
+            commands.select("HTTPS", true).unwrap(),
+            (
+                "RESUMECOMMAND_HTTPS".to_string(),
+                "curl -C - ${URI}".to_string()
+            )
+        );
+        // A default-constructed family selects the shipped make.globals
+        // templates: an absent config key means "default", never "unset".
+        let defaults = FetchCommands::default();
+        assert_eq!(
+            defaults.select("HTTPS", false).unwrap(),
+            ("FETCHCOMMAND".to_string(), DEFAULT_FETCHCOMMAND.to_string())
+        );
+        assert_eq!(
+            defaults.select("HTTPS", true).unwrap(),
+            (
+                "RESUMECOMMAND".to_string(),
+                DEFAULT_RESUMECOMMAND.to_string()
+            )
+        );
+        // An unset plain command is Portage's own error, reachable only
+        // from a hand-built family.
+        let empty = FetchCommands {
+            fetchcommand: None,
+            resumecommand: None,
+            ..FetchCommands::default()
+        };
+        let err = empty.select("HTTPS", false).unwrap_err();
+        assert!(err.contains("FETCHCOMMAND is unset"), "{err}");
+    }
+
     fn vars(pairs: &[(&str, &str)]) -> HashMap<String, String> {
         pairs
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
+    }
+
+    #[test]
+    fn expand_and_split_substitutes_and_quotes_like_shlex() {
+        let argv = expand_and_split(
+            "wget -O \"${DISTDIR}/${FILE}\" \"${URI}\" -U 'Mozilla x'",
+            &vars(&[
+                ("DISTDIR", "/var/cache/distfiles"),
+                ("FILE", "foo-1.0.tar.gz"),
+                ("URI", "https://example.com/foo-1.0.tar.gz"),
+            ]),
+        );
+        assert_eq!(
+            argv,
+            vec![
+                "wget",
+                "-O",
+                "/var/cache/distfiles/foo-1.0.tar.gz",
+                "https://example.com/foo-1.0.tar.gz",
+                "-U",
+                "Mozilla x",
+            ]
+        );
+        // The bare `$VAR` form is Portage `varexpand`'s too.
+        let argv = expand_and_split(
+            "cp $URI ${DISTDIR}/${FILE}",
+            &vars(&[
+                ("URI", "file:///src/foo"),
+                ("DISTDIR", "/d"),
+                ("FILE", "foo"),
+            ]),
+        );
+        assert_eq!(argv, vec!["cp", "file:///src/foo", "/d/foo"]);
     }
 
     #[test]
@@ -877,6 +961,154 @@ mod tests {
             vars,
             commands,
         })
+    }
+
+    #[test]
+    fn download_with_commands_runs_a_stub_command_and_refuses_one_without_file() {
+        let dir = tempdir();
+        let source = dir.join("source.tar.gz");
+        fs::write(&source, b"payload").unwrap();
+        let dest = dir.join("dest.tar.gz");
+        let script = stub_fetch_script(&dir, "fetch.sh", "cp \"${2#file://}\" \"$1\"");
+        let mut commands = FetchCommands {
+            fetchcommand: Some(format!(
+                "{} \"${{DISTDIR}}/${{FILE}}\" \"${{URI}}\"",
+                script.display()
+            )),
+            ..FetchCommands::default()
+        };
+        let uri = format!("file://{}", source.display());
+        download_serialized(DownloadSerializedArgs {
+            uri: &uri,
+            dest: &dest,
+            resume: false,
+            distdir: &dir,
+            vars: FetchCommandVars::default(),
+            commands: &commands,
+        })
+        .unwrap();
+        assert_eq!(fs::read(&dest).unwrap(), b"payload");
+
+        // A command without ${FILE} is refused with Portage's message and
+        // never spawned.
+        commands.fetchcommand = Some(format!("{} \"${{URI}}\"", script.display()));
+        let err = download_serialized(DownloadSerializedArgs {
+            uri: &uri,
+            dest: &dest,
+            resume: false,
+            distdir: &dir,
+            vars: FetchCommandVars::default(),
+            commands: &commands,
+        })
+        .unwrap_err();
+        assert!(
+            err.contains("does not contain the required ${FILE} parameter"),
+            "{err}"
+        );
+
+        // The protocol variant wins for a file:// URI.
+        commands.fetchcommand_proto.insert(
+            "FILE".to_string(),
+            format!(
+                "{} \"${{DISTDIR}}/${{FILE}}\" \"${{URI}}\"",
+                script.display()
+            ),
+        );
+        commands.fetchcommand = Some("false".to_string());
+        let dest2 = dir.join("dest2.tar.gz");
+        download_serialized(DownloadSerializedArgs {
+            uri: &uri,
+            dest: &dest2,
+            resume: false,
+            distdir: &dir,
+            vars: FetchCommandVars::default(),
+            commands: &commands,
+        })
+        .unwrap();
+        assert!(dest2.exists());
+    }
+
+    /// Portage checks both fetch and resume commands for `${FILE}`
+    /// and aborts only when the distfile name differs from the URL
+    /// basename (see notes).
+    #[test]
+    fn download_with_commands_warns_for_both_commands_and_aborts_only_when_renamed() {
+        let srcdir = tempdir();
+        let dldir = tempdir();
+        let source = srcdir.join("source.tar.gz");
+        fs::write(&source, b"payload").unwrap();
+        let marker = dldir.join("spawned");
+        let script = stub_fetch_script(
+            &dldir,
+            "wget-p.sh",
+            // The stub of `wget -P "${DISTDIR}" "${URI}"`: copy the URI's
+            // basename into the directory, no ${FILE} anywhere.
+            &format!("touch {}\ncp \"${{2#file://}}\" \"$1/\"", marker.display()),
+        );
+        let uri = format!("file://{}", source.display());
+        let no_file = format!("{} \"${{DISTDIR}}\" \"${{URI}}\"", script.display());
+
+        // (a) the distfile name equals the URL basename: the warning is
+        // printed to stderr and the command still runs.
+        let dest = dldir.join("source.tar.gz");
+        let commands = FetchCommands {
+            fetchcommand: Some(no_file.clone()),
+            ..FetchCommands::default()
+        };
+        download_serialized(DownloadSerializedArgs {
+            uri: &uri,
+            dest: &dest,
+            resume: false,
+            distdir: &dldir,
+            vars: FetchCommandVars::default(),
+            commands: &commands,
+        })
+        .unwrap();
+        assert!(marker.is_file(), "the ${{FILE}}-less command ran");
+        assert_eq!(fs::read(&dest).unwrap(), b"payload");
+        fs::remove_file(&marker).unwrap();
+
+        // (b) a renamed distfile differs from the URL basename: Portage
+        // aborts before spawning.
+        let renamed = dldir.join("renamed.tar.gz");
+        let err = download_serialized(DownloadSerializedArgs {
+            uri: &uri,
+            dest: &renamed,
+            resume: false,
+            distdir: &dldir,
+            vars: FetchCommandVars::default(),
+            commands: &commands,
+        })
+        .unwrap_err();
+        assert!(
+            err.contains("FETCHCOMMAND does not contain the required ${FILE} parameter"),
+            "{err}"
+        );
+        assert!(err.contains("make.conf(5)"), "{err}");
+        assert!(!marker.exists(), "no spawn after the abort");
+        assert!(!renamed.exists());
+
+        // (c) only RESUMECOMMAND lacks ${FILE}: it is selected and named
+        // even though this is a fresh fetch, and it aborts the renamed
+        // case.
+        let commands = FetchCommands {
+            resumecommand: Some(no_file),
+            ..FetchCommands::default()
+        };
+        let err = download_serialized(DownloadSerializedArgs {
+            uri: &uri,
+            dest: &renamed,
+            resume: false,
+            distdir: &dldir,
+            vars: FetchCommandVars::default(),
+            commands: &commands,
+        })
+        .unwrap_err();
+        assert!(
+            err.contains("RESUMECOMMAND does not contain the required ${FILE} parameter"),
+            "{err}"
+        );
+        assert!(!marker.exists(), "no spawn after the abort");
     }
 
     #[test]
