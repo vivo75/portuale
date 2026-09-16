@@ -1261,6 +1261,52 @@ fn apply_incremental_token(tok: &str, set: &mut HashSet<String>) {
     }
 }
 
+/// Real `config.py:2888-2945`'s **USE loop** token semantics: exactly
+/// [`apply_incremental_token`], plus the negative prefix wildcard
+/// `-<prefix>_*`, which removes every flag accumulated so far whose name
+/// starts with `<prefix>_`. Real's per-token order is wildcard removal
+/// first, then `discard(token[1..])` -- for `-foo_*` that second step is
+/// a no-op on a flag literally named `foo_*` (which is why
+/// `apply_incremental`'s exact-removal arm could never express this).
+///
+/// The wildcard arm lives **inside real's USE loop**, not in the generic
+/// incremental loop: non-USE incrementals (`FEATURES`, `CONFIG_PROTECT`,
+/// `ACCEPT_KEYWORDS`, the name lists, …) keep using
+/// [`apply_incremental`] and have no `_*` semantics. The positive
+/// `foo_*` form is deliberately out of scope here too: it expands
+/// against a package's `IUSE`, which only the IUSE-aware
+/// `effective_use_flags` path has.
+pub fn apply_use_incremental(tokens: &str, set: &mut HashSet<String>) {
+    for tok in tokens.split_whitespace() {
+        apply_use_incremental_token(tok, set);
+    }
+}
+
+/// Like [`apply_use_incremental`], but over an already-split token slice
+/// (the same `Vec::join(" ")` round-trip avoidance as
+/// [`apply_incremental_iter`]).
+pub fn apply_use_incremental_iter<S: AsRef<str>>(tokens: &[S], set: &mut HashSet<String>) {
+    for tok in tokens {
+        for t in tok.as_ref().split_whitespace() {
+            apply_use_incremental_token(t, set);
+        }
+    }
+}
+
+fn apply_use_incremental_token(tok: &str, set: &mut HashSet<String>) {
+    // `-<prefix>_*`: real `x[-2:] == "_*"`, `prefix = x[1:-1]` (the
+    // trailing underscore is part of the prefix).
+    if let Some(rest) = tok.strip_prefix('-')
+        && let Some(stem) = rest.strip_suffix("_*")
+    {
+        let prefix = format!("{stem}_");
+        set.retain(|flag| !flag.starts_with(&prefix));
+        set.remove(rest);
+        return;
+    }
+    apply_incremental_token(tok, set);
+}
+
 /// Config variables portuale honours from the **process environment** --
 /// real `config.regenerate()`'s `env` `USE_ORDER` layer, the
 /// highest-priority config source (`ACCEPT_KEYWORDS=~amd64 emerge foo`,
@@ -5971,6 +6017,56 @@ sync-uri = file:///srv/pkgs
             set,
             HashSet::from(["flag1".to_string(), "flag2".to_string()])
         );
+    }
+
+    #[test]
+    fn apply_use_incremental_removes_a_prefix_wildcard() {
+        // Real `config.py:2925`: `-video_cards_*` drops every accumulated
+        // `video_cards_` flag; unrelated flags survive. Tokens reach this
+        // applier already `video_cards_`-prefixed (the USE_EXPAND fold,
+        // real `config.py:2837-2866`, runs before the USE loop), so the
+        // positive token here is the full flag name.
+        let mut set = HashSet::from([
+            "X".to_string(),
+            "video_cards_dummy".to_string(),
+            "video_cards_intel".to_string(),
+        ]);
+        apply_use_incremental("-video_cards_* video_cards_intel", &mut set);
+        assert_eq!(
+            set,
+            HashSet::from(["X".to_string(), "video_cards_intel".to_string()])
+        );
+
+        // No accumulated match -> no-op (the literal `video_cards_*` is
+        // discarded, not added).
+        let mut set = HashSet::from(["X".to_string()]);
+        apply_use_incremental("-video_cards_*", &mut set);
+        assert_eq!(set, HashSet::from(["X".to_string()]));
+
+        // The generic applier keeps its exact-removal semantics: it must
+        // NOT expand `_*` (the wildcard arm is USE-scoped in real).
+        let mut set = HashSet::from(["video_cards_dummy".to_string()]);
+        apply_incremental("-video_cards_*", &mut set);
+        assert_eq!(set, HashSet::from(["video_cards_dummy".to_string()]));
+
+        // Plain tokens are unchanged: `-*` clears, `-flag` removes,
+        // `+flag`/`flag` add.
+        let mut set = HashSet::from(["a".to_string(), "b".to_string()]);
+        apply_use_incremental("-* b +c d", &mut set);
+        assert_eq!(
+            set,
+            HashSet::from(["b".to_string(), "c".to_string(), "d".to_string()])
+        );
+        apply_use_incremental("-b -c", &mut set);
+        assert_eq!(set, HashSet::from(["d".to_string()]));
+
+        // The iter variant behaves identically.
+        let mut set = HashSet::from([
+            "sane_backends_hp".to_string(),
+            "sane_backends_hp3500".to_string(),
+        ]);
+        apply_use_incremental_iter(&["-sane_backends_*", "sane_backends_hp"], &mut set);
+        assert_eq!(set, HashSet::from(["sane_backends_hp".to_string()]));
     }
 
     #[test]
