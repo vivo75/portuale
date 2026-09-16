@@ -154,6 +154,136 @@ fn binpkg_respect_use_checks_the_ebuild_at_the_same_version() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// The memo is transparent and separates every key axis.
+#[test]
+fn binpkg_respect_use_memo_hits_on_repeat_and_separates_its_inputs() {
+    let dir = slotundo_temp_dir("binpkg-respect-use-memo");
+    let repo = dir.join("repo");
+    fs::create_dir_all(repo.join("metadata/md5-cache/dev-libs")).unwrap();
+    fs::write(
+        repo.join("metadata/md5-cache/dev-libs/memo-1.0"),
+        "EAPI=8\nIUSE=foo newflag\nKEYWORDS=amd64\nSLOT=0\n",
+    )
+    .unwrap();
+    let mut ebuild = candidate("1.0", &["amd64"]);
+    ebuild.repo_location = repo;
+    ebuild.iuse = "foo newflag".to_string();
+    let binary = |iuse: &str, baked: &[&str]| {
+        let mut c = candidate("1.0", &["amd64"]);
+        c.source = CandidateSource::Binary;
+        c.iuse = iuse.to_string();
+        c.binary_use = Some(baked.iter().map(|s| s.to_string()).collect());
+        c
+    };
+    let mut config = portage_profile::Config {
+        conf_use_tokens: vec!["foo".to_string()],
+        ..Default::default()
+    };
+    let call = |config: &portage_profile::Config, binary_iuse: &str, baked: &[&str]| {
+        binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+            candidate: &binary(binary_iuse, baked),
+            ebuild_at_version: Some(&ebuild),
+            category: "dev-libs",
+            package: "memo",
+            config,
+            newuse: false,
+            changed_use: false,
+            respect_use: true,
+        })
+    };
+
+    // Unique inputs: a miss; newflag rejects.
+    let before = binpkg_respect_use_ok_uncached_calls();
+    assert!(!call(&config, "foo", &["foo"]));
+    let after_first = binpkg_respect_use_ok_uncached_calls();
+    assert_eq!(after_first, before + 1, "first call is a miss");
+    assert!(!call(&config, "foo", &["foo"]));
+    assert_eq!(
+        binpkg_respect_use_ok_uncached_calls(),
+        after_first,
+        "a repeat with identical arguments must hit the memo"
+    );
+    // Differing binary IUSE misses (only the counter proves it).
+    assert!(!call(&config, "foo newflag", &["foo newflag"]));
+    assert_eq!(binpkg_respect_use_ok_uncached_calls(), after_first + 1);
+    // A differing baked USE misses.
+    assert!(!call(&config, "foo", &[]));
+    assert_eq!(binpkg_respect_use_ok_uncached_calls(), after_first + 2);
+    // Two repo_locations with different md5 IUSE behind the same candidate iuse
+    // must not share.
+    let ebuild_at_same_iuse = |tag: &str, md5_iuse: &str| {
+        let repo = dir.join(format!("repo-same-iuse-{tag}"));
+        fs::create_dir_all(repo.join("metadata/md5-cache/dev-libs")).unwrap();
+        fs::write(
+            repo.join("metadata/md5-cache/dev-libs/memo-1.0"),
+            format!("EAPI=8\nIUSE={md5_iuse}\nKEYWORDS=amd64\nSLOT=0\n"),
+        )
+        .unwrap();
+        let mut e = candidate("1.0", &["amd64"]);
+        e.repo_location = repo;
+        e.iuse = "foo".to_string();
+        e
+    };
+    let keep = ebuild_at_same_iuse("keep", "foo");
+    assert!(binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+        candidate: &binary("foo", &["foo"]),
+        ebuild_at_version: Some(&keep),
+        category: "dev-libs",
+        package: "memo",
+        config: &config,
+        newuse: false,
+        changed_use: false,
+        respect_use: true
+    }));
+    assert_eq!(binpkg_respect_use_ok_uncached_calls(), after_first + 3);
+    let reject = ebuild_at_same_iuse("reject", "foo newflag");
+    assert!(!binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+        candidate: &binary("foo", &["foo"]),
+        ebuild_at_version: Some(&reject),
+        category: "dev-libs",
+        package: "memo",
+        config: &config,
+        newuse: false,
+        changed_use: false,
+        respect_use: true
+    }));
+    assert_eq!(binpkg_respect_use_ok_uncached_calls(), after_first + 4);
+    // The build identity separates instances: a miss, then a hit.
+    let mut other_build = binary("foo", &["foo"]);
+    other_build.build_id = Some("2".to_string());
+    assert!(binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+        candidate: &other_build,
+        ebuild_at_version: Some(&keep),
+        category: "dev-libs",
+        package: "memo",
+        config: &config,
+        newuse: false,
+        changed_use: false,
+        respect_use: true
+    }));
+    assert_eq!(binpkg_respect_use_ok_uncached_calls(), after_first + 5);
+    assert!(binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+        candidate: &other_build,
+        ebuild_at_version: Some(&keep),
+        category: "dev-libs",
+        package: "memo",
+        config: &config,
+        newuse: false,
+        changed_use: false,
+        respect_use: true
+    }));
+    assert_eq!(
+        binpkg_respect_use_ok_uncached_calls(),
+        after_first + 5,
+        "a repeat with identical arguments must hit the memo"
+    );
+    // A differing config misses.
+    config.conf_use_tokens.clear();
+    assert!(!call(&config, "foo", &["foo"]));
+    assert_eq!(binpkg_respect_use_ok_uncached_calls(), after_first + 6);
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// A profile forced/masked flag never rejects through the IUSE presence
 /// difference alone: masked keeps, forced rejects on enabled state.
 #[test]
@@ -238,6 +368,96 @@ fn binpkg_respect_use_subtracts_forced_and_masked_flags_like_portage() {
         changed_use: false,
         respect_use: false
     }));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The subtraction input is not intersected with the ebuild's IUSE: a masked flag
+/// the ebuild dropped is forgiven on the presence term.
+#[test]
+fn binpkg_respect_use_forgives_a_profile_masked_flag_the_ebuild_iuse_dropped() {
+    let dir = slotundo_temp_dir("binpkg-respect-use-dropped-masked");
+    let binary = {
+        let mut c = candidate("1.0", &["amd64"]);
+        c.source = CandidateSource::Binary;
+        // Baked IUSE carries the dropped flag; baked USE does not enable it.
+        c.iuse = "foo removed".to_string();
+        c.binary_use = Some(HashSet::from(["foo".to_string()]));
+        c
+    };
+    let repo = dir.join("repo-dropped");
+    fs::create_dir_all(repo.join("metadata/md5-cache/dev-libs")).unwrap();
+    fs::write(
+        repo.join("metadata/md5-cache/dev-libs/x-1.0"),
+        "EAPI=8\nIUSE=foo\nKEYWORDS=amd64\nSLOT=0\n",
+    )
+    .unwrap();
+    let mut ebuild = candidate("1.0", &["amd64"]);
+    ebuild.repo_location = repo;
+    ebuild.iuse = "foo".to_string();
+    let mut config = test_config();
+    config.conf_use_tokens = vec!["foo".to_string()];
+    config.use_mask_force_levels = vec![portage_profile::UseMaskForceLevel {
+        use_mask: vec!["removed".to_string()],
+        ..Default::default()
+    }];
+
+    // Portage forgives `removed` despite the IUSE difference: kept under both gates.
+    assert!(binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+        candidate: &binary,
+        ebuild_at_version: Some(&ebuild),
+        category: "dev-libs",
+        package: "x",
+        config: &config,
+        newuse: true,
+        changed_use: false,
+        respect_use: false
+    }));
+    assert!(binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+        candidate: &binary,
+        ebuild_at_version: Some(&ebuild),
+        category: "dev-libs",
+        package: "x",
+        config: &config,
+        newuse: false,
+        changed_use: false,
+        respect_use: true
+    }));
+
+    // Control: unmasked, the presence difference rejects.
+    let mut config_unmasked = config.clone();
+    config_unmasked.use_mask_force_levels.clear();
+    assert!(!binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+        candidate: &binary,
+        ebuild_at_version: Some(&ebuild),
+        category: "dev-libs",
+        package: "x",
+        config: &config_unmasked,
+        newuse: true,
+        changed_use: false,
+        respect_use: false
+    }));
+    let mut enabled_binary = binary.clone();
+    enabled_binary
+        .binary_use
+        .as_mut()
+        .unwrap()
+        .insert("removed".to_string());
+    for (newuse, changed_use, respect_use) in [
+        (true, false, false),
+        (false, false, true),
+        (false, true, true),
+    ] {
+        assert!(!binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+            candidate: &enabled_binary,
+            ebuild_at_version: Some(&ebuild),
+            category: "dev-libs",
+            package: "x",
+            config: &config,
+            newuse,
+            changed_use,
+            respect_use
+        }));
+    }
     let _ = fs::remove_dir_all(&dir);
 }
 
