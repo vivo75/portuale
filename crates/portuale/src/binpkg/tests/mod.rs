@@ -394,6 +394,129 @@ fn inner_entry<'a>(name: &'a str, data: &'a [u8]) -> InnerTestEntry<'a> {
     }
 }
 
+fn inner_symlink<'a>(name: &'a str, target: &'a str) -> InnerTestEntry<'a> {
+    InnerTestEntry {
+        name,
+        entry_type: tar::EntryType::Symlink,
+        link_name: target,
+        data: b"",
+    }
+}
+
+fn inner_hardlink<'a>(name: &'a str, target: &'a str) -> InnerTestEntry<'a> {
+    InnerTestEntry {
+        name,
+        entry_type: tar::EntryType::Link,
+        link_name: target,
+        data: b"",
+    }
+}
+
+fn inner_special(name: &str, entry_type: tar::EntryType) -> InnerTestEntry<'_> {
+    InnerTestEntry {
+        name,
+        entry_type,
+        link_name: "",
+        data: b"",
+    }
+}
+
+fn build_inner_tar(entries: &[InnerTestEntry<'_>]) -> Vec<u8> {
+    let mut builder = tar::Builder::new(Vec::new());
+    for entry in entries {
+        let mut header = tar::Header::new_ustar();
+        header.set_size(entry.data.len() as u64);
+        header.set_mode(0o644);
+        header.set_entry_type(entry.entry_type);
+        // Raw name bytes: `Header::set_path` refuses `..`/absolute
+        // names, which the crafted cells need to carry.
+        let name = entry.name.as_bytes();
+        header.as_ustar_mut().unwrap().name[..name.len()].copy_from_slice(name);
+        if !entry.link_name.is_empty() {
+            header.set_link_name(entry.link_name).unwrap();
+        }
+        if matches!(entry.entry_type.as_byte(), b'3' | b'4') {
+            header.set_device_major(1).unwrap();
+            header.set_device_minor(5).unwrap();
+        }
+        header.set_cksum();
+        builder.append(&header, entry.data).unwrap();
+    }
+    builder.into_inner().unwrap()
+}
+
+/// Write the crafted tar to a scratch file and read it back.
+fn read_inner(entries: &[InnerTestEntry<'_>]) -> Result<InnerMetadata, BinpkgError> {
+    let bytes = build_inner_tar(entries);
+    read_inner_metadata(
+        Path::new("/test/pkg.gpkg.tar"),
+        "metadata.tar",
+        &bytes,
+        None,
+    )
+}
+
+fn inner_pairs(metadata: &InnerMetadata) -> Vec<(String, Vec<u8>)> {
+    metadata
+        .entries
+        .iter()
+        .map(|entry| (entry.key.clone(), entry.bytes.clone()))
+        .collect()
+}
+
+fn inner_values(metadata: &InnerMetadata) -> HashMap<&str, &[u8]> {
+    metadata
+        .entries
+        .iter()
+        .map(|entry| (entry.key.as_str(), entry.bytes.as_slice()))
+        .collect()
+}
+
+/// A valid outer gpkg whose inner `metadata.tar` carries
+/// `inner_entries` and whose Manifest is recomputed, so `verify`
+/// passes and a metadata error can only come from the inner check.
+fn build_gpkg_with_inner_entries(prefix: &str, inner_entries: &[InnerTestEntry<'_>]) -> PathBuf {
+    build_gpkg_with_inner_tars(
+        prefix,
+        inner_entries,
+        &[inner_entry("image/hello.txt", b"hi\n")],
+    )
+}
+
+/// The same with both inner tars under test (image side).
+fn build_gpkg_with_inner_tars(
+    prefix: &str,
+    metadata_entries: &[InnerTestEntry<'_>],
+    image_entries: &[InnerTestEntry<'_>],
+) -> PathBuf {
+    build_gpkg_with_tar_bytes(
+        prefix,
+        &build_inner_tar(metadata_entries),
+        &build_inner_tar(image_entries),
+    )
+}
+
+/// The outer-container builder for raw inner-tar bytes (the
+/// sparse/xattr image comes from GNU `tar`, not `tar::Builder`).
+fn build_gpkg_with_tar_bytes(prefix: &str, meta: &[u8], image: &[u8]) -> PathBuf {
+    let gpkg1: &[u8] = b"";
+    let manifest = format!(
+        "{}{}{}",
+        data_line("gpkg-1", gpkg1),
+        data_line("metadata.tar", meta),
+        data_line("image.tar", image),
+    );
+    build_gpkg(
+        prefix,
+        &[
+            ("gpkg-1", gpkg1),
+            ("metadata.tar", meta),
+            ("image.tar", image),
+        ],
+        Some(&manifest),
+    )
+}
+
 mod digest;
 mod extract;
 mod gpg;

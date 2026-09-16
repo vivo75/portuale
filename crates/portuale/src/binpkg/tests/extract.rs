@@ -92,3 +92,193 @@ fn extract_binpkg_rejects_a_gpkg_with_a_bad_manifest() {
     assert!(err.contains("size mismatch"), "{err}");
     let _ = fs::remove_dir_all(&tmp);
 }
+
+// The merge-path metadata extraction.
+
+#[test]
+fn extract_binpkg_writes_an_inner_metadata_symlink_as_a_regular_file() {
+    // An in-archive symlink yields the resolved target bytes as a
+    // regular file with the header mode.
+    let g = build_gpkg_with_inner_entries(
+        "gen-1.0",
+        &[
+            inner_entry("metadata/SLOT", b"0\n"),
+            inner_symlink("metadata/DESCRIPTION", "SLOT"),
+        ],
+    );
+    let tmp = TempDir::new("binpkg-gpkg-meta").keep();
+    let image = tmp.join("image");
+    let bi = tmp.join("build-info");
+    extract_binpkg(
+        &g,
+        &image,
+        &bi,
+        &GpgVerify::default(),
+        &crate::ebuild_merge::XattrPolicy::default(),
+    )
+    .expect("extract succeeds");
+    use std::os::unix::fs::PermissionsExt;
+    let desc = fs::symlink_metadata(bi.join("DESCRIPTION")).unwrap();
+    assert!(
+        desc.file_type().is_file(),
+        "the resolved bytes are a regular file, not a symlink"
+    );
+    assert_eq!(fs::read(bi.join("DESCRIPTION")).unwrap(), b"0\n");
+    assert_eq!(desc.permissions().mode() & 0o7777, 0o644);
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn extract_binpkg_rejects_unsafe_inner_metadata_archives() {
+    let check = |entries: &[InnerTestEntry<'_>], needle: &str| {
+        let g = build_gpkg_with_inner_entries("gen-1.0", entries);
+        verify_gpkg_manifest(&g, &GpgVerify::default()).expect("verifies");
+        let tmp = TempDir::new("binpkg-gpkg-reject").keep();
+        let err = extract_binpkg(
+            &g,
+            &tmp.join("image"),
+            &tmp.join("build-info"),
+            &GpgVerify::default(),
+            &crate::ebuild_merge::XattrPolicy::default(),
+        )
+        .unwrap_err();
+        assert!(err.contains(needle), "expected {needle:?} in {err:?}");
+        let _ = fs::remove_dir_all(&tmp);
+    };
+    // An escaping symlink is rejected: it would land in build-info
+    // where later readers follow it.
+    check(
+        &[
+            inner_entry("metadata/SLOT", b"0\n"),
+            inner_symlink("metadata/DESCRIPTION", "/etc/hostname"),
+        ],
+        "not in the archive",
+    );
+    // A FIFO is rejected on merge too.
+    check(
+        &[inner_special("metadata/DESCRIPTION", tar::EntryType::Fifo)],
+        "a FIFO",
+    );
+    // Nested keys.
+    check(
+        &[
+            inner_special("metadata/sub/", tar::EntryType::Directory),
+            inner_entry("metadata/sub/KEY", b"nested\n"),
+        ],
+        "a directory",
+    );
+    check(&[inner_entry("metadata/sub/KEY", b"nested\n")], "is nested");
+    // Duplicates are rejected.
+    check(
+        &[
+            inner_entry("metadata/SLOT", b"0\n"),
+            inner_entry("metadata/SLOT", b"1\n"),
+        ],
+        "duplicate members: SLOT",
+    );
+}
+
+#[test]
+fn extract_binpkg_keeps_extracting_image_symlinks() {
+    // A legitimate relative image symlink still lands as a symlink;
+    // only devices/dups/abs/traversal/escaping hardlinks are rejected.
+    let g = build_gpkg_with_inner_tars(
+        "gen-1.0",
+        &[inner_entry("metadata/SLOT", b"0\n")],
+        &[
+            inner_entry("image/usr/lib/libreal.so", b"real\n"),
+            inner_symlink("image/usr/lib/liblink.so", "libreal.so"),
+        ],
+    );
+    let tmp = TempDir::new("binpkg-gpkg-imgsym").keep();
+    let image = tmp.join("image");
+    let bi = tmp.join("build-info");
+    extract_binpkg(
+        &g,
+        &image,
+        &bi,
+        &GpgVerify::default(),
+        &crate::ebuild_merge::XattrPolicy::default(),
+    )
+    .expect("extract succeeds");
+    let link = image.join("usr/lib/liblink.so");
+    let meta = fs::symlink_metadata(&link).unwrap();
+    assert!(meta.file_type().is_symlink(), "image symlink kept");
+    assert_eq!(fs::read_link(&link).unwrap(), Path::new("libreal.so"));
+    assert_eq!(
+        fs::read(image.join("usr/lib/libreal.so")).unwrap(),
+        b"real\n"
+    );
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn extract_binpkg_rejects_unsafe_image_tars_before_unpacking() {
+    let check = |image: &[InnerTestEntry<'_>], needle: &str| {
+        let g =
+            build_gpkg_with_inner_tars("gen-1.0", &[inner_entry("metadata/SLOT", b"0\n")], image);
+        verify_gpkg_manifest(&g, &GpgVerify::default()).expect("verifies");
+        let tmp = TempDir::new("binpkg-gpkg-imgreject").keep();
+        let err = extract_binpkg(
+            &g,
+            &tmp.join("image"),
+            &tmp.join("build-info"),
+            &GpgVerify::default(),
+            &crate::ebuild_merge::XattrPolicy::default(),
+        )
+        .unwrap_err();
+        assert!(err.contains(needle), "expected {needle:?} in {err:?}");
+        // The pre-scan runs before the unpack: the image dest stays
+        // empty (a FIFO/device member never reaches the filesystem).
+        assert!(
+            !tmp.join("image").exists() || read_dir_sorted(&tmp.join("image")).unwrap().is_empty()
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    };
+    // A char device or FIFO.
+    check(
+        &[inner_special("image/dev/null0", tar::EntryType::Char)],
+        "a character device",
+    );
+    check(
+        &[inner_special("image/dev/pipe0", tar::EntryType::Fifo)],
+        "a FIFO",
+    );
+    // A hard link to a non-member or a later member.
+    check(
+        &[inner_hardlink("image/usr/bin/x", "/etc/hostname")],
+        "not an earlier member",
+    );
+    check(
+        &[
+            inner_hardlink("image/usr/bin/x", "image/usr/bin/y"),
+            inner_entry("image/usr/bin/y", b"later\n"),
+        ],
+        "not an earlier member",
+    );
+    // Duplicate names.
+    check(
+        &[
+            inner_entry("image/usr/lib/libfoo.so", b"first\n"),
+            inner_entry("image/usr/lib/libfoo.so", b"second\n"),
+        ],
+        "is a duplicate",
+    );
+    // Traversal / absolute member names.
+    check(
+        &[inner_entry("image/../etc/x", b"traversal\n")],
+        "has a path traversal",
+    );
+    check(
+        &[inner_entry("/image/etc/x", b"absolute\n")],
+        "has an absolute name",
+    );
+    // A member under an earlier symlink member.
+    check(
+        &[
+            inner_symlink("image/usr/lib/x", "/etc"),
+            inner_entry("image/usr/lib/x/passwd", b"pwned\n"),
+        ],
+        "inside the symlink member",
+    );
+}

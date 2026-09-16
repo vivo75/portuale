@@ -128,6 +128,15 @@ struct FileRec {
     mtime_ns: i64,
 }
 
+/// Arguments of [`Rd::chunks`].
+struct ChunksArgs<'a> {
+    id: u64,
+    name: &'a str,
+    len: u64,
+    first: u32,
+    last: u32,
+}
+
 // ---------------------------------------------------------------------
 
 #[cfg(test)]

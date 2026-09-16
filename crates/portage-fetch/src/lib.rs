@@ -1115,6 +1115,36 @@ mod tests {
     }
 
     #[test]
+    fn verify_digests_reader_matches_verify_digests_on_the_same_bytes() {
+        // The gpkg outer-container path streams a member through this
+        // variant; same "hello world" vectors as the file tests above.
+        let mut hashes = HashMap::new();
+        hashes.insert(
+            "BLAKE2B".to_string(),
+            "021ced8799296ceca557832ab941a50b4a11f83478cf141f51f933f653ab9fbcc05a037cddbed06e309bf334942c4e58cdf1a46e237911ccd7fcf9787cbc7fd0".to_string(),
+        );
+        hashes.insert(
+            "SHA512".to_string(),
+            "309ecc489c12d6eb4cc40f50c902f2b4d0ed77ee511a7c7a9bcd3ca86d4cd86f989dd35bc5ff499670da34255b45b0cfd830e81f605dcf7dc5542e93ae9cd76f".to_string(),
+        );
+        let digests = DistfileDigests { size: 11, hashes };
+        assert!(verify_digests_reader("member", &b"hello world"[..], &digests).is_ok());
+        // A size mismatch is reported before hashing.
+        let wrong_size = DistfileDigests {
+            size: 999,
+            hashes: HashMap::new(),
+        };
+        let err = verify_digests_reader("member", &b"hello world"[..], &wrong_size).unwrap_err();
+        assert!(err.to_string().contains("size mismatch"), "{err}");
+        // A hash mismatch names the member and the algorithm.
+        let mut hashes = HashMap::new();
+        hashes.insert("SHA512".to_string(), "0".repeat(128));
+        let digests = DistfileDigests { size: 11, hashes };
+        let err = verify_digests_reader("member", &b"hello world"[..], &digests).unwrap_err();
+        assert!(err.to_string().contains("member: SHA512 mismatch"), "{err}");
+    }
+
+    #[test]
     fn parse_thirdpartymirrors_reads_a_real_grabdict_style_file() {
         let dir = tempdir();
         let path = dir.join("thirdpartymirrors");

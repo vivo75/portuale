@@ -97,6 +97,82 @@ fn read_xpak_metadata_reads_a_real_ebuild_package_tbz2() {
 }
 
 #[test]
+fn read_gpkg_metadata_reads_a_crafted_inner_tar_in_process() {
+    // An in-archive symlink yields the target member's bytes.
+    let g = build_gpkg_with_inner_entries(
+        "gen-1.0",
+        &[
+            inner_entry("metadata/SLOT", b"0\n"),
+            inner_entry("metadata/EAPI", b"8\n"),
+            inner_symlink("metadata/DESCRIPTION", "SLOT"),
+        ],
+    );
+    verify_gpkg_manifest(&g, &GpgVerify::default()).expect("the crafted container verifies");
+    let metadata = read_gpkg_metadata(&g).expect("reads");
+    assert_eq!(metadata.get("DESCRIPTION").map(String::as_str), Some("0"));
+    assert_eq!(metadata.get("SLOT").map(String::as_str), Some("0"));
+}
+
+#[test]
+fn read_gpkg_metadata_rejects_an_inner_symlink_to_a_host_path() {
+    // The old walk read the host file's bytes as the value.
+    let host = std::fs::read("/etc/hostname")
+        .map(|bytes| String::from_utf8_lossy(&bytes).trim().to_string())
+        .unwrap_or_default();
+    let g = build_gpkg_with_inner_entries(
+        "gen-1.0",
+        &[
+            inner_entry("metadata/SLOT", b"0\n"),
+            inner_symlink("metadata/DESCRIPTION", "/etc/hostname"),
+        ],
+    );
+    verify_gpkg_manifest(&g, &GpgVerify::default()).expect("the crafted container verifies");
+    let err = read_gpkg_metadata(&g).unwrap_err();
+    assert!(err.is_fatal(), "{err:?}");
+    assert!(err.message().contains("not in the archive"), "{err}");
+    assert!(
+        host.is_empty() || !err.message().contains(&host),
+        "the host file's bytes leaked into {err:?}"
+    );
+}
+
+#[test]
+fn read_gpkg_metadata_rejects_inner_fifo_and_outside_names() {
+    // A FIFO errors; the old walk silently skipped the member.
+    let g = build_gpkg_with_inner_entries(
+        "gen-1.0",
+        &[inner_special("metadata/DESCRIPTION", tar::EntryType::Fifo)],
+    );
+    verify_gpkg_manifest(&g, &GpgVerify::default()).expect("verifies");
+    let err = read_gpkg_metadata(&g).unwrap_err();
+    assert!(err.is_fatal(), "{err:?}");
+    assert!(err.message().contains("a FIFO"), "{err}");
+    // An outside name: the old walk ignored the member entirely.
+    let g = build_gpkg_with_inner_entries("gen-1.0", &[inner_entry("other/KEY", b"outside\n")]);
+    verify_gpkg_manifest(&g, &GpgVerify::default()).expect("verifies");
+    let err = read_gpkg_metadata(&g).unwrap_err();
+    assert!(err.is_invalid(), "{err:?}");
+    assert!(err.message().contains("outside metadata/"), "{err}");
+}
+
+#[test]
+fn read_gpkg_metadata_reads_nested_keys_and_last_wins_duplicates() {
+    // Nested keys read; last duplicate wins (the merge path refuses it).
+    let g = build_gpkg_with_inner_entries(
+        "gen-1.0",
+        &[
+            inner_entry("metadata/sub/KEY", b"nested\n"),
+            inner_entry("metadata/SLOT", b"0\n"),
+            inner_entry("metadata/SLOT", b"1\n"),
+        ],
+    );
+    verify_gpkg_manifest(&g, &GpgVerify::default()).expect("verifies");
+    let metadata = read_gpkg_metadata(&g).expect("reads");
+    assert_eq!(metadata.get("sub/KEY").map(String::as_str), Some("nested"));
+    assert_eq!(metadata.get("SLOT").map(String::as_str), Some("1"));
+}
+
+#[test]
 fn read_gpkg_metadata_reads_the_regenerated_fixture_without_a_directory_member() {
     // The committed fixture has no inner `metadata/` directory member.
     let m = read_gpkg_metadata(&fixture("pkgdir/dev-libs/gpkgreadpkg-1.0.gpkg.tar"))

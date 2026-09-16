@@ -63,6 +63,33 @@ fn populate_local_pkgdir_of_a_missing_or_empty_dir_is_empty() {
     );
 }
 
+/// An `Invalid` file is skipped and the rest of the pool still
+/// resolves; the exact warning line is pinned by the CLI contract
+/// test, not here.
+// Portage: bintree.py, _populate_local
+#[test]
+fn populate_local_pkgdir_skips_invalid_files_and_keeps_the_pool() {
+    let scratch = ScratchDir::new("scan-skip-invalid").unwrap();
+    let pkgdir = scratch.path();
+    fs::create_dir_all(pkgdir.join("dev-libs")).unwrap();
+    fs::copy(
+        fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+        pkgdir.join("dev-libs/packagepkg-1.0.tbz2"),
+    )
+    .unwrap();
+    let invalid =
+        build_gpkg_with_inner_entries("invalidpkg-1.0", &[inner_entry("other/KEY", b"outside\n")]);
+    fs::copy(&invalid, pkgdir.join("dev-libs/invalidpkg-1.0.gpkg.tar")).unwrap();
+
+    let entries =
+        populate_local_pkgdir(pkgdir, true).expect("an invalid file must not abort the scan");
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(
+        entries[0].get("CPV").map(String::as_str),
+        Some("dev-libs/packagepkg-1.0")
+    );
+}
+
 #[test]
 fn populate_local_pkgdir_trusts_an_index_entry_even_when_stale() {
     // A stale stanza is reused verbatim (proven by a bogus SLOT the
