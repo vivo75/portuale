@@ -34,6 +34,7 @@ ensure_image
 echo ">>> running fixture-oracle cases in $IMAGE  (out: $OUT)"
 podman_run_portuale "porttest-l0fx-$$" \
   -v "$REPO_ROOT/fixtures:/fixtures:ro" \
+  -e "FX_SLOTOP_BDEP=${FX_SLOTOP_BDEP:-}" \
   --entrypoint /bin/bash "$IMAGE" \
   /TEST/layers/l0-fixture-oracle/in-container.sh "$REL_ATOMLIST" "/TEST/logs/$RUN"
 

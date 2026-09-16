@@ -1,0 +1,37 @@
+# #65 slot-operator ABI rebuild scan vs --with-bdeps: oracle matrix.
+# Run with FX_SLOTOP_BDEP=1 (stage.sh installs the matrix: installed
+# provpkg-1.0:0/1 + tree 2.0:0/2, and five installed consumers
+# cons{rdep,dep,bdep,pdep,idep}-1.0 each bound to provpkg through one dep
+# key with real's versioned built atom `>=dev-libs/provpkg-1.0:0/1=`,
+# all six in world).
+#
+# Keys: RDEPEND/PDEPEND/IDEPEND are runtime keys (always walked); DEPEND/
+# BDEPEND are build-time keys (walked only when bdeps is auto/y).
+# Shapes: @world (every consumer a complete-mode seed) and one consumer
+# as the argument (the other four world-only).
+
+# --- world shape, three option sets (`--dynamic-deps=n` is a manual
+# control only -- portuale has no dynamic-deps model, #26; see the
+# findings note)
+-uDvN @world
+-uDvN --usepkg @world
+-uDvN --with-bdeps=y @world
+
+# --- argument shape, one case per dep key, four option sets each
+-uDvN --oneshot dev-libs/consrdep
+-uDvN --oneshot dev-libs/consdep
+-uDvN --oneshot dev-libs/consbdep
+-uDvN --oneshot dev-libs/conspdep
+-uDvN --oneshot dev-libs/considep
+
+-uDvN --oneshot --usepkg dev-libs/consrdep
+-uDvN --oneshot --usepkg dev-libs/consdep
+-uDvN --oneshot --usepkg dev-libs/consbdep
+-uDvN --oneshot --usepkg dev-libs/conspdep
+-uDvN --oneshot --usepkg dev-libs/considep
+
+-uDvN --oneshot --with-bdeps=y dev-libs/consrdep
+-uDvN --oneshot --with-bdeps=y dev-libs/consdep
+-uDvN --oneshot --with-bdeps=y dev-libs/consbdep
+-uDvN --oneshot --with-bdeps=y dev-libs/conspdep
+-uDvN --oneshot --with-bdeps=y dev-libs/considep

@@ -167,6 +167,20 @@ for repo in overlay independentoverlay layoutmasteroverlay; do
   fi
 done
 
+# 12. FX_SLOTOP_BDEP=1 (#65 S0/S3): install the slot-operator build-time
+#     deps matrix -- provpkg-1.0 (sub-slot 0/1, upgraded to 2.0/0/2 in the
+#     tree) plus five installed consumers, one per dep key, each bound to
+#     `>=dev-libs/provpkg-1.0:0/1=` (real's own versioned built-atom shape;
+#     a bare `:0/1=` is dropped by real's dynamic-deps apply), all six in
+#     world. The fragment lives outside the shared fixture vdb so the
+#     standard runs are untouched.
+if [ "${FX_SLOTOP_BDEP:-}" = 1 ]; then
+  HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  cp -r "$HERE/slotop-bdeps/vdb/." "$FX/var/db/pkg/"
+  mkdir -p "$FX/var/lib/portage"
+  cat "$HERE/slotop-bdeps/world" >> "$FX/var/lib/portage/world"
+fi
+
 # 4. one EBUILD record per staged ebuild (all versions in one Manifest)
 python3 - "$FX" <<'PY'
 import hashlib

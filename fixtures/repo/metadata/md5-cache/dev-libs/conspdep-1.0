@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: installed consumer bound to provpkg through PDEPEND (:=) (#65 S0)
+EAPI=8
+KEYWORDS=amd64
+PDEPEND=dev-libs/provpkg:=
+SLOT=0
+_md5_=d46c3dc88c279cd3fdfd69657b164715
