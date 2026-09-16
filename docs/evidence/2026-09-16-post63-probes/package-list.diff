@@ -1,0 +1,33 @@
+0a1,2
+> app-admin/helm-4.2.4-2
+> app-admin/mongo-tools-100.9.4-20
+1a4,12
+> app-containers/buildah-1.45.0-5
+> app-containers/flannel-0.26.3-22
+> app-containers/k3d-5.9.0-6
+> app-containers/podman-6.1.0-4
+> app-containers/runc-1.4.3-6
+> app-containers/skopeo-1.24.0-5
+> app-containers/snapd-2.63-21
+> app-crypt/cfssl-1.6.5-16
+> app-crypt/gocryptfs-2.6.1-r1-19
+7a19
+> dev-go/go-md2man-2.0.7-20
+15d26
+< dev-qt/qttools-6.11.2:6/6.11.2
+16a28
+> dev-vcs/lab-0.25.1-21
+20a33,34
+> media-gfx/sane-backends-1.3.1-r2
+> net-fs/mc-2025.08.13.08.35.41-20
+21a36,40
+> sys-cluster/cilium-cli-0.18.2-15
+> sys-cluster/hubble-1.17.5-13
+> sys-cluster/kubeadm-1.37.0-2
+> sys-cluster/kubectl-1.37.0-2
+> sys-cluster/kubelogin-1.36.3-5
+25a45,48
+> x11-base/xorg-drivers-21.1-r2
+> x11-drivers/xf86-video-dummy-0.4.1-21
+> x11-drivers/xf86-video-fbdev-0.5.1-15
+> x11-drivers/xf86-video-vesa-2.6.0-20

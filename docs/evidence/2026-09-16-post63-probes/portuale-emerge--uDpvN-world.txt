@@ -1,0 +1,64 @@
+[ebuild     U  ] app-arch/unrar-7.3.1:0/7::gentoo [7.2.7:0/7::gentoo]
+[ebuild     U  ] sys-libs/timezone-data-2026d::gentoo [2026c::gentoo] USE="nls -leaps-timezone -verify-sig% -zic-slim"
+[ebuild     U  ] dev-build/gtk-doc-am-1.36.1::gentoo [1.34.0::gentoo]
+[ebuild   R    ] x11-base/xorg-drivers-21.1-r2::gentoo  INPUT_DEVICES="evdev libinput synaptics wacom -elographics -joystick -vmmouse -void" VIDEO_CARDS="amdgpu dummy* fbdev* intel nouveau qxl radeon radeonsi vesa* -ast (-freedreno) (-geode) -i915 -mga -nvidia -r128 -siliconmotion (-tegra) (-vc4)"
+[binary  N g   ] x11-drivers/xf86-video-dummy-0.4.1-21::gentoo  50 KiB
+[binary  N g   ] x11-drivers/xf86-video-fbdev-0.5.1-15::gentoo  60 KiB
+[binary  N g   ] x11-drivers/xf86-video-vesa-2.6.0-20::gentoo  70 KiB
+[ebuild     U  ] sys-kernel/linux-firmware-20260910::gentoo [20260810::gentoo] USE="initramfs redistributable -bindist -compress-xz -compress-zstd -deduplicate -dist-kernel -savedconfig"
+[binary  r gU  ] dev-lang/go-1.27.1-1:0/1.27.1::gentoo [1.26.5:0/1.26.5::gentoo] CPU_FLAGS_X86="sse2" 45160 KiB
+[binary  rRg   ] app-containers/runc-1.4.3-6::gentoo  USE="seccomp -apparmor (-selinux) -test" 7860 KiB
+[binary  rRg   ] app-crypt/gocryptfs-2.6.1-r1-19::gentoo  USE="(-selinux) -test -verify-sig" 7650 KiB
+[binary  rRg   ] app-admin/helm-4.2.4-2::gentoo  37180 KiB
+[binary  rRg   ] app-admin/mongo-tools-100.9.4-20::gentoo  USE="ssl -kerberos -sasl" 47550 KiB
+[binary  rRg   ] app-containers/k3d-5.9.0-6::gentoo  USE="-doc" 8570 KiB
+[binary  rRg   ] app-crypt/cfssl-1.6.5-16::gentoo  56950 KiB
+[binary  rRg   ] net-fs/mc-2025.08.13.08.35.41-20::gentoo  19370 KiB
+[binary  rRg   ] sys-cluster/cilium-cli-0.18.2-15::gentoo  49450 KiB
+[binary  rRg   ] sys-cluster/hubble-1.17.5-13::gentoo  22970 KiB
+[binary  rRg   ] sys-cluster/kubeadm-1.37.0-2::gentoo  USE="(-selinux)" 16820 KiB
+[binary  rRg   ] sys-cluster/kubectl-1.37.0-2::gentoo  15900 KiB
+[binary  rRg   ] sys-cluster/kubelogin-1.36.3-5::gentoo  5520 KiB
+[binary  rRg   ] dev-go/go-md2man-2.0.7-20::gentoo  2040 KiB
+[ebuild     U  ] dev-libs/libgcrypt-1.12.4:0/20::gentoo [1.12.3-r1:0/20::gentoo] USE="asm getentropy -doc -static-libs (-verify-sig)" ABI_X86="32 (64) (-x32)" CPU_FLAGS_X86="aes avx avx2 sha sse4_1 -avx512f -padlock"
+[ebuild     U  ] app-crypt/gpgme-2.2.0:1/45.0::gentoo [2.1.2:1/45.0::gentoo] USE="-common-lisp -static-libs -test -verify-sig"
+[binary  rRg   ] app-containers/skopeo-1.24.0-5::gentoo  USE="-btrfs -rootless (-selinux)" 17600 KiB
+[binary    gU  ] dev-build/cmake-4.3.5-1::gentoo [4.3.4::gentoo] USE="ncurses -dap -doc -gui -test -verify-sig" 650950 KiB
+[ebuild     U  ] dev-cpp/gpgmepp-2.2.0:0/7::gentoo [2.1.0:0/7::gentoo] USE="-test -verify-sig"
+[ebuild     U  ] dev-python/ensurepip-pip-26.2.1::gentoo [26.1.2::gentoo] USE="(test-rust) -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 -python3_14t (-python3_15) (-python3_15t)"
+[ebuild     U  ] app-portage/gemato-20.14::gentoo [20.13::gentoo] USE="gpg -pretty-log -test -tools" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)"
+[ebuild     U  ] dev-python/pip-26.2.1::gentoo [26.1.2-r1::gentoo] USE="(test-rust) -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)"
+[ebuild     U  ] sys-fs/cryptsetup-2.8.8:0/12::gentoo [2.8.7:0/12::gentoo] USE="argon2 nls openssl udev -fips -gcrypt -kernel -nettle -passwdqc -pwquality -ssh -static -static-libs -test -urandom -verify-sig"
+[ebuild     U  ] sys-fs/xfsprogs-7.1.1::gentoo [7.0.1::gentoo] USE="icu nls -libedit (-selinux) -static-libs"
+[binary  rRg   ] app-containers/flannel-0.26.3-22::gentoo  26510 KiB
+[binary  rRg   ] app-containers/snapd-2.63-21::gentoo  USE="forced-devmode gtk kde systemd -apparmor" 32100 KiB
+[ebuild     U  ] dev-util/gtk-doc-1.36.1::gentoo [1.34.0-r2::gentoo] USE="-emacs -test" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13"
+[binary  rRg   ] app-containers/buildah-1.45.0-5::gentoo  USE="seccomp systemd -apparmor -btrfs (-selinux) -test" 22820 KiB
+[binary  rRg   ] app-containers/podman-6.1.0-4::gentoo  USE="seccomp systemd -apparmor -btrfs -cron (-selinux) -wrapper" 54110 KiB
+[binary  rRg   ] dev-vcs/lab-0.25.1-21::gentoo  11480 KiB
+[ebuild     U  ] dev-libs/libdex-1.2.0:0/1::gentoo [1.0.0:0/1::gentoo] USE="eventfd introspection liburing sysprof -gtk-doc -test -vala"
+[ebuild     U  ] net-misc/rclone-1.75.1::gentoo [1.75.0::gentoo]
+[ebuild     U  ] x11-libs/pango-1.58.2::gentoo [1.57.1::gentoo] USE="X introspection -debug -examples -gtk-doc -libthai -sysprof -test" ABI_X86="32 (64) (-x32)"
+[ebuild     U  ] dev-cpp/pangomm-2.46.5:1.4::gentoo [2.46.4:1.4::gentoo] USE="-gtk-doc" ABI_X86="32 (64) (-x32)"
+[ebuild     U  ] gui-libs/gtk-4.22.5:4::gentoo [4.20.4:4::gentoo] USE="X cups introspection vulkan wayland (-aqua) -broadway -cloudproviders -colord -examples -gstreamer -gtk-doc -sysprof -test" CPU_FLAGS_X86="f16c"
+[ebuild     U  ] gui-libs/libadwaita-1.9.3:1::gentoo [1.8.7:1::gentoo] USE="introspection vala -examples -gtk-doc -test"
+[ebuild     U  ] gui-libs/vte-common-0.84.1:2.91::gentoo [0.82.4:2.91::gentoo] USE="systemd"
+[ebuild     U  ] gnome-base/gnome-keyring-50.0::gentoo [48.0-r1::gentoo] USE="pam ssh-agent systemd -caps (-selinux) -test"
+[ebuild     U  ] dev-libs/qgpgme-2.2.0:0/7::gentoo [2.1.0:0/7::gentoo] USE="-test -verify-sig"
+[ebuild     U  ] x11-libs/vte-0.84.1:2.91::gentoo [0.82.4:2.91::gentoo] USE="X crypt icu introspection systemd vala wayland -debug -gtk-doc"
+[ebuild   R    ] dev-qt/qtdeclarative-6.11.2-r1:6/6.11.2::gentoo  USE="custom-cflags jit network opengl qmlls sql ssl svg vulkan wayland%* widgets -accessibility"
+[ebuild   R    ] media-gfx/sane-backends-1.3.1-r2::gentoo  USE="systemd threads usb zeroconf -gphoto2 -snmp -v4l -xinetd" ABI_X86="32 (64) (-x32)" SANE_BACKENDS="abaton* agfafocus* apple* artec* artec_eplus48u* as6e* avision* bh* canon* canon630u* canon_dr* canon_lide70* cardscan* coolscan* coolscan2* coolscan3* dc25* dc210* dc240* dell1600n_net* dmc* epjitsu* epson* epson2* epsonds* escl* fujitsu* genesys* gt68xx* hp hp3500 hp3900 hp4200 hp5400 hp5590 hpljm1005 hs2p* ibm* kodak* kodakaio* kvs20xx* kvs1025* leo* lexmark* ma1509* magicolor* matsushita* microtek* microtek2* mustek* mustek_usb* nec* net* niash* p5* pie* pieusb* pixma* plustek* plustek_pp* qcam* ricoh* ricoh2* rts8891* s9036* sceptre* sharp* sm3600* sm3840* snapscan* sp15c* st400* stv680* tamarack* teco1* teco2* teco3* test* u12* umax* umax1220u* umax_pp* xerox_mfp* -canon_pp -hpsj5s -kvs40xx -mustek_pp -mustek_usb2 -pnm"
+[blocks B      ] <dev-util/gtk-doc-1.36.1 ("<dev-util/gtk-doc-1.36.1" is soft blocking dev-build/gtk-doc-am-1.36.1)
+
+Total: 50 packages (25 upgrades, 3 new, 22 reinstalls, 24 binaries), Size of downloads: 1935289 KiB
+Conflict: 1 block (1 unsatisfied)
+
+ * Error: The above package list contains packages which cannot be
+ * installed at the same time on the same system.
+
+For more information about Blocked Packages, please refer to the following
+section of the Gentoo Linux x86 Handbook (architecture is irrelevant):
+
+https://wiki.gentoo.org/wiki/Handbook:X86/Working/Portage#Blocked_packages
+
+rc=1
