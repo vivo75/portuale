@@ -281,13 +281,13 @@ def test_solver_backends_report_engine_native_conflicts(emerge_binary, fixture_e
 
 def test_solver_backends_report_matched_blockers(emerge_binary, fixture_env):
     """H.15c (blockers): blocker atoms met in a solved bridge plan are
-    matched by the shared walk-path `resolve_blockers` and rendered as
-    `[blocks B]` lines -- byte-identical to the walk. A weak in-graph
-    block (pubgrub solves it) and a strong block against installed
-    `samepkg` (both engines solve it). Resolvo reads weak blockers as
-    hard conflicts and refuses `graphblockerparent` outright -- an
-    engine-model divergence, out of scope (its H.15a text already
-    renders the refusal readably)."""
+    matched by the shared walk-path `resolve_blockers` and rendered
+    byte-identically to the walk. A weak merge-vs-merge block (`B`, rc 1
+    since #68 S2) and a strong block against installed `samepkg` that no
+    walked node pulls in (`b`, rc 0 since #68 S3; real 3.0.82.2 oracle
+    2026-09-16). Resolvo reads weak blockers as hard conflicts and
+    refuses `graphblockerparent` outright -- an engine-model divergence,
+    out of scope (its H.15a text already renders the refusal readably)."""
     portage_graph = subprocess.run(
         [str(emerge_binary), "--pretend", "--solver=portage", "dev-libs/graphblockerparent"],
         capture_output=True,
@@ -302,7 +302,8 @@ def test_solver_backends_report_matched_blockers(emerge_binary, fixture_env):
         check=False,
         env=fixture_env,
     )
-    assert pubgrub_graph.returncode == 0
+    assert portage_graph.returncode == 1
+    assert pubgrub_graph.returncode == 1
     assert pubgrub_graph.stdout == portage_graph.stdout
     assert (
         '[blocks B      ] dev-libs/blockerpartnerpkg ("dev-libs/blockerpartnerpkg"'
@@ -317,15 +318,15 @@ def test_solver_backends_report_matched_blockers(emerge_binary, fixture_env):
             check=False,
             env=fixture_env,
         )
-        # Unsolvable (samepkg is installed and depended-on, so the block
-        # cannot be resolved by unmerging): the walk and both engines
-        # print the [blocks B] line plus the Error block and exit 1.
-        assert result.returncode == 1, solver
+        # Satisfied (no walked graph node pulls samepkg in, so real
+        # uninstalls it): the walk and both engines print the satisfied
+        # `b` line and exit 0 -- #68 S2/S3, real 3.0.82.2 oracle.
+        assert result.returncode == 0, solver
         assert (
-            '[blocks B      ] dev-libs/samepkg ("dev-libs/samepkg"'
+            '[blocks b      ] dev-libs/samepkg ("dev-libs/samepkg"'
             " is hard blocking dev-libs/blockerpkg-1.0)" in result.stdout
         ), solver
-        assert "cannot be\n * installed at the same time" in result.stderr, solver
+        assert "installed at the same time" not in result.stderr, solver
     portage_err = subprocess.run(
         [str(emerge_binary), "--pretend", "--solver=portage", "dev-libs/blockerpkg"],
         capture_output=True,

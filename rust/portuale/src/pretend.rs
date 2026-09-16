@@ -648,10 +648,10 @@ fn localized_size(bytes: u64) -> String {
 /// like real `myfetchlist`) and the `\nFetch Restriction: N package[s][
 /// (M unsatisfied)]` line (from `GraphEntry::fetch_restrict` /
 /// `fetch_restrict_satisfied`). The `Conflict:` line's own `(N
-/// unsatisfied)`/`(all satisfied)` suffix is still dropped -- portuale
-/// resolves no blocker (its whole blocker story is "report, don't
-/// enforce", see `resolve_pretend_graph`'s doc comment, portage-repo),
-/// so it can't honestly classify one. A top-level package suppressed by
+/// unsatisfied)`/`(all satisfied)` suffix is classified per
+/// `BlockerConflict::unsolvable` (#68 S2/S3); the resolution is still
+/// report-only, never an enforcement, as `resolve_pretend_graph`'s doc
+/// comment (portage-repo) explains. A top-level package suppressed by
 /// `--onlydeps` isn't in real's merge list at all (`pkg_info.ordered`),
 /// so it isn't counted here either.
 fn package_counters_summary(
@@ -785,9 +785,13 @@ fn package_counters_summary(
         out.push_str(&format!("\nConflict: {blocks} block{}", plural(blocks)));
         // Real `_PackageCounters.__str__`: `bad(f" ({N} unsatisfied)")`
         // when the resolver left any `_unsolvable_blockers` -- a blocked
-        // installed package it could neither replace nor unmerge.
+        // installed package it could neither replace nor unmerge -- and
+        // `good(" (all satisfied)")` when every block resolved since
+        // #68 S2/S3 gave the rows a satisfied state.
         if blocks_unsolvable > 0 {
             out.push_str(&color.c("BAD", &format!(" ({blocks_unsolvable} unsatisfied)")));
+        } else {
+            out.push_str(&color.c("GOOD", " (all satisfied)"));
         }
     }
     out
@@ -803,17 +807,17 @@ fn package_counters_summary(
 /// package line (real `output.py::display` -> `print_messages()` then
 /// `print_blockers()`).
 ///
-/// Portuale only ever reports an *unsatisfied* blocker (it never
-/// resolves one away), so real `blocker.satisfied` is always `false`
-/// here: the bracket letter is always the red `B` / style `PKG_BLOCKER`,
-/// never the teal `b` / `PKG_BLOCKER_SATISFIED` branch. `resolved` is
+/// Since #68 S2/S3 a row can be *satisfied* (real
+/// `blocker.satisfied`): the red `B` / `PKG_BLOCKER` branch is the
+/// unresolved one (`BlockerConflict::unsolvable`), the teal `b` /
+/// `PKG_BLOCKER_SATISFIED` branch the satisfied one. `resolved` is
 /// real `dep_expand(str(atom).lstrip("!"))` -- a category-qualification
-/// only, and every portuale blocker atom is already `cat/pkg[...]`, so it
-/// reduces to stripping the leading `!`/`!!`. Real's `(is <desc>
+/// only, and every portuale blocker atom is already `cat/pkg[...]`, so
+/// it reduces to stripping the leading `!`/`!!`. Real's `(is <desc>
 /// <parents>)` alternative (`self.resolved == blocker.atom`) is
 /// unreachable -- `resolved` drops the `!` while `blocker.atom` keeps
 /// it. Real `_blockers` appends `empty_space_in_brackets()` after the
-/// five-space `B     ` pad, and that adds the mask column's own space
+/// five-space pad, and that adds the mask column's own space
 /// whenever `verbosity > 1` -- true at real portage's default `emerge
 /// -p` verbosity of 2, dropped only under `--quiet` (verbosity 1), which
 /// `include_mask` carries.
@@ -823,12 +827,16 @@ fn format_blocker_lines(
     include_mask: bool,
     color: &Colorizer,
 ) -> Vec<String> {
-    let style = "PKG_BLOCKER";
     let pad = if include_mask { "      " } else { "     " };
     entry
         .blockers
         .iter()
         .map(|b| {
+            let (style, letter) = if b.unsolvable {
+                ("PKG_BLOCKER", "B")
+            } else {
+                ("PKG_BLOCKER_SATISFIED", "b")
+            };
             let resolved = b.atom_str.trim_start_matches('!');
             let desc = if b.strong {
                 "hard blocking"
@@ -839,7 +847,7 @@ fn format_blocker_lines(
             format!(
                 "[{} {}{pad}] {}{}",
                 color.c(style, "blocks"),
-                color.c(style, "B"),
+                color.c(style, letter),
                 color.c(style, resolved),
                 color.c(style, &format!(" (\"{resolved}\" is {desc} {parents})")),
             )

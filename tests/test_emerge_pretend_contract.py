@@ -402,7 +402,7 @@ CASES = [
     ("--json: with --verbose, includes use_flags", ["--pretend", "-v", "--json", "dev-libs/useflagpkg"], 0),
     ("--json: diamond dependency, required_by lists both owners", ["--pretend", "--json", "dev-libs/diamond"], 0),
     ("--json: upgrade includes from_version", ["--pretend", "--update", "--json", "dev-libs/upgradepkg"], 0),
-    ("--json: blocker match (unsolvable -> rc 1)", ["--pretend", "--json", "dev-libs/blockerpkg"], 1),
+    ("--json: blocker match (satisfied -> rc 0, real `b`)", ["--pretend", "--json", "dev-libs/blockerpkg"], 0),
     ("--json: solvable slot conflict reconciled", ["--pretend", "--json", "dev-libs/slotconflictparent"], 0),
     ("--json: unsolvable slot conflict reported", ["--pretend", "--json", "dev-libs/slotconflictunsolvable"], 0),
     ("--json: combined with --deep", ["--pretend", "--update", "--deep", "--json", "dev-libs/deeppkg"], 0),
@@ -1460,15 +1460,15 @@ CASES = [
     ("bare name + version, ambiguous: still rejected after stripping the version", ["--pretend", "ambigpkg-1.0"], 1),
     ("profile defaults walk: a leaf make.defaults cancels a parent package.use", ["--pretend", "-v", "dev-libs/interleavepkg"], 0),
     ("profile USE_EXPAND default is folded per-level, so a same-level package.use satisfies `^^`", ["--pretend", "-v", "dev-libs/singletargetpkg"], 0),
-    ("blocker: strong (!!) blocker vs an installed+depended-on package is unsolvable (rc 1)", ["--pretend", "dev-libs/blockerpkg"], 1),
-    ("blocker: weak (!) blocker matches another new package in the graph", ["--pretend", "dev-libs/graphblockerparent"], 0),
-    ("blocker: -v widens the [blocks B ] bracket by the mask column", ["--pretend", "-v", "dev-libs/blockerpkg"], 1),
-    ("blocker: line prints after every package line, not inline", ["--pretend", "dev-libs/blockerorderpkg"], 1),
+    ("blocker: strong (!!) blocker vs an installed package no walk pulls in is satisfied (rc 0, real `b`)", ["--pretend", "dev-libs/blockerpkg"], 0),
+    ("blocker: weak (!) merge-vs-merge match is unsolvable (real `B`, rc 1)", ["--pretend", "dev-libs/graphblockerparent"], 1),
+    ("blocker: -v widens the [blocks b ] bracket by the mask column", ["--pretend", "-v", "dev-libs/blockerpkg"], 0),
+    ("blocker: line prints after every package line, not inline", ["--pretend", "dev-libs/blockerorderpkg"], 0),
     ("blocker: a [use]-dep blocker the blocked package doesn't satisfy is dropped, not printed", ["--pretend", "dev-libs/blockusedepconsumer"], 0),
-    ("blocker: --color=y colours the [blocks B ] line (PKG_BLOCKER red)", ["--pretend", "--color=y", "dev-libs/blockerpkg"], 1),
-    ("blocker: --color=y -v coloured + widened", ["--pretend", "--color=y", "-v", "dev-libs/blockerorderpkg"], 1),
-    ("blocker: --tree still ends with the deferred [blocks B ] line", ["--pretend", "--tree", "dev-libs/blockerorderpkg"], 1),
-    ("blocker: --json blocker payload is unchanged by the line reformat", ["--pretend", "--json", "dev-libs/blockerorderpkg"], 1),
+    ("blocker: --color=y colours the [blocks b ] line (PKG_BLOCKER_SATISFIED teal)", ["--pretend", "--color=y", "dev-libs/blockerpkg"], 0),
+    ("blocker: --color=y -v coloured + widened", ["--pretend", "--color=y", "-v", "dev-libs/blockerorderpkg"], 0),
+    ("blocker: --tree still ends with the deferred [blocks b ] line", ["--pretend", "--tree", "dev-libs/blockerorderpkg"], 0),
+    ("blocker: --json blocker payload is unchanged by the line reformat", ["--pretend", "--json", "dev-libs/blockerorderpkg"], 0),
     ("overlay: package exists only in the overlay repo", ["--pretend", "dev-libs/overlayonlypkg"], 0),
     ("overlay: best version wins across repos", ["--pretend", "dev-libs/overlaynewerpkg"], 0),
     ("overlay: same-version tie broken toward higher priority", ["--pretend", "dev-libs/overlaytiepkg"], 0),
@@ -1970,7 +1970,7 @@ CASES = [
     (
         "Total: counters line (-v) with a blocker Conflict: line",
         ["--pretend", "-v", "dev-libs/blockerpkg"],
-        1,
+        0,
     ),
     (
         "Total: counters line survives --columns",
@@ -8003,24 +8003,26 @@ def test_package_use_mask_and_force_with_atom_specificity_ordering(emerge_binary
 def test_strong_blocker_matches_an_installed_package(emerge_binary, fixture_env):
     """dev-libs/blockerpkg's RDEPEND is "!!dev-libs/samepkg", and
     dev-libs/samepkg-1.0 is already installed per the fixture vdb.
-    Real ResolverOutput._blockers (output.py:75-123): a `[blocks B      ]`
-    fixed-width bracket, the `!`-stripped (real dep_expand'd) atom, then
-    `("<atom>" is hard blocking <parent cpv>)` -- `hard` for a `!!`
-    blocker (real blocker.atom.blocker.overlap.forbid).
+    Real ResolverOutput._blockers (output.py:75-123): a fixed-width
+    `[blocks <letter>]` bracket, the `!`-stripped (real dep_expand'd)
+    atom, then `("<atom>" is hard blocking <parent cpv>)` -- `hard` for a
+    `!!` blocker (real blocker.atom.blocker.overlap.forbid).
 
-    Other installed fixtures (changeddepspkg, movedkeydepspkg, ...)
-    RDEPEND dev-libs/samepkg, so it can't be unmerged to resolve the
-    block -> real `_serialize_tasks`' `unresolved_blocks`: the
-    `Conflict:` line gains `(1 unsatisfied)`, the `* Error: The above
-    package list ...` block prints, and `actions.py` returns 1."""
+    Real 3.0.82.2 oracle (container, 2026-09-16): other installed
+    fixtures (changeddepspkg, movedkeydepspkg, ...) RDEPEND on
+    dev-libs/samepkg, but a plain `emerge -p dev-libs/blockerpkg` does not
+    walk them into the graph, so real uninstall-orders samepkg and
+    reports the block **satisfied**: the teal lowercase `b`, rc 0. (#68
+    S3 replaced the old vdb reverse scan, under which this was `B`/rc 1.)
+    Real also prints an `[uninstall] dev-libs/samepkg-1.0` merge-list row
+    that portuale does not yet model -- backlog #72."""
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/blockerpkg"], fixture_env)
-    assert result.returncode == 1
+    assert result.returncode == 0
     # plain --pretend (verbosity 2) shows no Total:/Conflict: line
     assert result.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/blockerpkg-1.0 ',
-        '[blocks B      ] dev-libs/samepkg ("dev-libs/samepkg" is hard blocking dev-libs/blockerpkg-1.0)',
+        '[blocks b      ] dev-libs/samepkg ("dev-libs/samepkg" is hard blocking dev-libs/blockerpkg-1.0)',
     ]
-    assert "cannot be\n" in result.stderr or "cannot be " in result.stderr
 
 
 def test_weak_blocker_matches_another_new_package_in_the_same_graph(emerge_binary, fixture_env):
@@ -8030,11 +8032,14 @@ def test_weak_blocker_matches_another_new_package_in_the_same_graph(emerge_binar
     blocker is matched against blockerpartnerpkg's graph-resolved version,
     not just the (empty, for this package) vdb. `soft blocking` for a `!`
     blocker; the line is printed after every `[ebuild ...]` line (real
-    Display.print_blockers, called after print_messages)."""
+    Display.print_blockers, called after print_messages).
+
+    Real 3.0.82.2 oracle (container, 2026-09-16): merge-bound match with a
+    merging parent -> unresolved `B`, rc 1 (#68 S2)."""
     result = _run(
         [str(emerge_binary)], ["--pretend", "dev-libs/graphblockerparent"], fixture_env
     )
-    assert result.returncode == 0
+    assert result.returncode == 1
     assert result.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/blockerpartnerpkg-1.0 ',
         '[ebuild  N     ] dev-libs/weakblockerpkg-1.0 ',
@@ -8050,31 +8055,35 @@ def test_blocker_lines_print_after_every_package_line_not_inline(
     dev-libs/newpkg, so its blocker's owner (blockerorderpkg itself) is
     the first graph entry while a non-blocker dep follows it. Real
     Display collects blocker lines and prints them as one group after
-    print_messages() -- so the `[blocks B ...]` line lands after
-    dev-libs/newpkg, not interleaved right after its owner."""
+    print_messages() -- so the block line lands after dev-libs/newpkg,
+    not interleaved right after its owner. Real 3.0.82.2 oracle
+    (container, 2026-09-16): samepkg is unwalked -> satisfied `b`, rc 0
+    (+ real's `[uninstall]` row, backlog #72)."""
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/blockerorderpkg"], fixture_env)
-    assert result.returncode == 1
+    assert result.returncode == 0
     assert result.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/newpkg-1.0 ',
         '[ebuild  N     ] dev-libs/blockerorderpkg-1.0 ',
-        '[blocks B      ] dev-libs/samepkg ("dev-libs/samepkg" is hard blocking dev-libs/blockerorderpkg-1.0)',
+        '[blocks b      ] dev-libs/samepkg ("dev-libs/samepkg" is hard blocking dev-libs/blockerorderpkg-1.0)',
     ]
 
 
 def test_blocker_line_is_coloured_under_color_y(emerge_binary, fixture_env):
-    """Real _blockers wraps `blocks`, the `B`, the resolved atom, and the
-    parenthetical in colorize(PKG_BLOCKER, ...) -- style "red"
-    (\\x1b[31;01m). `-v` widens the bracket by the mask column's own
-    space (real empty_space_in_brackets)."""
+    """Real _blockers wraps `blocks`, the letter, the resolved atom, and
+    the parenthetical in colorize(PKG_BLOCKER, ...) -- style "red"
+    (\\x1b[31;01m) for the unresolved `B`, "teal" (\\x1b[36m) for the
+    satisfied `b` (real PKG_BLOCKER_SATISFIED; #68 S2/S3). `-v` widens
+    the bracket by the mask column's own space (real
+    empty_space_in_brackets)."""
     result = _run(
         [str(emerge_binary)], ["--pretend", "--color=y", "-v", "dev-libs/blockerpkg"], fixture_env
     )
-    assert result.returncode == 1
-    R = "\x1b[31;01m"
+    assert result.returncode == 0
+    T = "\x1b[36m"
     Z = "\x1b[39;49;00m"
     assert result.stdout.splitlines()[1] == (
-        f"[{R}blocks{Z} {R}B{Z}      ] {R}dev-libs/samepkg{Z}"
-        f'{R} ("dev-libs/samepkg" is hard blocking dev-libs/blockerpkg-1.0){Z}'
+        f"[{T}blocks{Z} {T}b{Z}      ] {T}dev-libs/samepkg{Z}"
+        f'{T} ("dev-libs/samepkg" is hard blocking dev-libs/blockerpkg-1.0){Z}'
     )
 
 
@@ -9472,9 +9481,9 @@ def test_pv_totals_summary_line(emerge_binary, fixture_env):
     -- the trailing `Total: N packages (...)` line, only under `-v`,
     including `, Size of downloads: N KiB` (real `_calc_size` /
     `localized_size`, KiB-only, no locale grouping) and the `Fetch
-    Restriction: N package[s][ (M unsatisfied)]` line. Ported minus the
-    `Conflict:` line's `(N unsatisfied)`/`(all satisfied)` suffix (this
-    portuale resolves no blocker)."""
+    Restriction: N package[s][ (M unsatisfied)]` line, and the
+    `Conflict:` line's `(N unsatisfied)`/`(all satisfied)` suffix (#68
+    S2/S3 classified it from `BlockerConflict::unsolvable`)."""
     # Plain `-p` (no -v): no Total line at all.
     plain = _run([str(emerge_binary)], ["--pretend", "dev-libs/newpkg"], fixture_env)
     assert "Total:" not in plain.stdout
@@ -9497,13 +9506,14 @@ def test_pv_totals_summary_line(emerge_binary, fixture_env):
     )
     assert installed.stdout.splitlines()[-1] == "Total: 0 packages, Size of downloads: 0 KiB"
 
-    # An unsolvable blocker (samepkg is installed and other installed
-    # packages RDEPEND it) adds a trailing `Conflict: N block (M
-    # unsatisfied)` line.
+    # A satisfied blocker (samepkg is installed but nothing walked pulls
+    # it in; real uninstalls it) adds a trailing `Conflict: N block (all
+    # satisfied)` line -- real 3.0.82.2 oracle, 2026-09-16.
     blk = _run([str(emerge_binary)], ["--pretend", "-v", "dev-libs/blockerpkg"], fixture_env)
+    assert blk.returncode == 0
     assert blk.stdout.splitlines()[-2:] == [
         "Total: 1 package (1 new), Size of downloads: 0 KiB",
-        "Conflict: 1 block (1 unsatisfied)",
+        "Conflict: 1 block (all satisfied)",
     ]
 
     # RESTRICT=fetch: `Size of downloads` counts the Manifest bytes of

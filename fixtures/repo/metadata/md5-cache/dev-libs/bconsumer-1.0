@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: installed consumer whose RDEPEND pins blocked (#68 cell c/d)
+EAPI=8
+KEYWORDS=amd64
+RDEPEND=dev-libs/blocked
+SLOT=0
+_md5_=4d358d55cb70c0d7b03dfe8df0fd78e8

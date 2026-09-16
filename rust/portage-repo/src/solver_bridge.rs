@@ -596,6 +596,7 @@ fn graph_result_from_order(
                         target_package: dep_atom.package,
                         owner_key: (record.category.clone(), record.package.clone()),
                         owner_version: version.clone(),
+                        owner_merging: true,
                     });
                 }
             }
@@ -1376,7 +1377,8 @@ mod tests {
                 matched_category: "dev-libs".to_string(),
                 matched_package: "blockerpartnerpkg".to_string(),
                 matched_version: "1.0".to_string(),
-                unsolvable: false,
+                // #68 S2: merge-bound match, merging parent -> unresolved.
+                unsolvable: true,
             }]
         );
 
@@ -1402,7 +1404,11 @@ mod tests {
                     matched_category: "dev-libs".to_string(),
                     matched_package: "samepkg".to_string(),
                     matched_version: "1.0".to_string(),
-                    unsolvable: true,
+                    // #68 S3: the installed fixtures that RDEPEND on
+                    // samepkg are not walked graph nodes here, so real
+                    // uninstalls it (`b`, rc 0); pre-S3 this was `true`
+                    // from the vdb reverse scan.
+                    unsolvable: false,
                 }]
             );
         }

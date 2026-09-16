@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: soft-blocker parent, !<dev-libs/blocked-2.0 (#68)
+EAPI=8
+KEYWORDS=amd64
+RDEPEND=!<dev-libs/blocked-2.0
+SLOT=0
+_md5_=2e287a6f29fa3d10d2aeb5b2250ffe4f

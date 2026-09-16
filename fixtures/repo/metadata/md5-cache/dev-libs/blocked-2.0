@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: soft-block target, newer version (#68)
+EAPI=8
+IUSE=+flip
+KEYWORDS=amd64
+SLOT=0
+_md5_=0f96c41dd3a78ce4bf973e3389af905f
