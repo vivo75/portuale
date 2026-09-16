@@ -2178,6 +2178,8 @@ Build scheduling:
   -j, --jobs[=N]             run up to N package builds in parallel
   -l, --load-average N       hold new builds while the load average exceeds N
   -a, --ask[=y|n]            prompt for confirmation before a real merge or removal
+      --ask-enter-invalid    with --ask: a bare Enter is not accepted as Yes
+      --ignore-default-opts  ignore the EMERGE_DEFAULT_OPTS variable for this run
       --keep-going           on a build failure, drop that package's dependents and carry on
       --quiet-build[=y|n]    redirect a build's phase output to ${T}/build.log (implied by -j >1 and -q)
 
@@ -2246,11 +2248,12 @@ fn read_world_atoms(root: &Path) -> Result<Vec<String>, String> {
 /// Real `@selected` (`WorldSelectedSet` -- `cnf/sets/portage.conf`): the
 /// world file's own package atoms unioned with every nested set named in
 /// `world_sets` (real `chain(WorldSelectedPackagesSet,
-/// WorldSelectedSetsSet)`). Portuale's `@world` expands to exactly
-/// this too -- real `@world = @profile @selected @system` and the
-/// `@profile`/`@system` union is a pre-existing documented simplification
-/// (see `read_world_atoms`/`read_world_sets`). Errors carry their own
-/// `emerge: ` prefix so every caller can just `eprintln!("{e}")`.
+/// WorldSelectedSetsSet)`). Real `@world` is `@profile ∪ @selected ∪
+/// @system` (`_sets/__init__.py:97-98`); the callers that expand `@world`
+/// add the `@profile` (`Config::profile_packages`) and `@system`
+/// (`Config::system_packages`) halves themselves, sorted per real's
+/// `_resolve` (`depgraph.py:5500`). Errors carry their own `emerge: `
+/// prefix so every caller can just `eprintln!("{e}")`.
 fn expand_selected(root: &Path, config_root: &Path) -> Result<Vec<String>, String> {
     let mut atoms = read_world_atoms(root).map_err(|e| format!("emerge: {e}"))?;
     for name in read_world_sets(root).map_err(|e| format!("emerge: {e}"))? {
@@ -3207,6 +3210,7 @@ fn run_unmerge_pretend(
                     return ExitCode::from(1);
                 }
             },
+            "@profile" => expanded.extend(config.profile_packages.iter().cloned()),
             "@system" => expanded.extend(config.system_packages.iter().cloned()),
             "@installed" => expanded.extend(installed_set_atoms(root)),
             "@preserved-rebuild" => expanded.extend(preserved_rebuild_atoms(root)),
@@ -3638,6 +3642,31 @@ fn shell_split(s: &str) -> Vec<String> {
     words
 }
 
+/// Real `_emerge/main.py`'s second `parse_opts` pass (`:1352-1360`):
+/// `shlex.split(settings["EMERGE_DEFAULT_OPTS"])` is **prepended** to
+/// argv, so a command-line option always wins over the same option in the
+/// variable. The value is read from the resolved config
+/// (`config.other_vars`, where `portage-profile`'s `ENV_SCALAR_VARS`
+/// stores it -- process env over `make.conf`, including `source`d
+/// files), matching real's `emerge_config.target_config.settings.get(...)`.
+/// An unset variable yields an empty prefix (the input args unchanged,
+/// same allocation-wise shape as before this existed).
+fn args_with_emerge_defaults(config: &portage_profile::Config, args: &[String]) -> Vec<String> {
+    // Real `main.py:1352-1353`: `--ignore-default-opts` comes from the
+    // command line (the first parse pass, before defaults exist), and
+    // skips the whole variable.
+    if args.iter().any(|arg| arg == "--ignore-default-opts") {
+        return args.to_vec();
+    }
+    let mut out = config
+        .other_vars
+        .get("EMERGE_DEFAULT_OPTS")
+        .map(|value| shell_split(value))
+        .unwrap_or_default();
+    out.extend(args.iter().cloned());
+    out
+}
+
 /// Real `_emerge/actions.py::apply_priorities` (via `run_action`, before
 /// any action): applies `PORTAGE_NICENESS` (`renice -n <n> <pid>`),
 /// `PORTAGE_IONICE_COMMAND` (`shlex.split`, `${PID}`-expanded, spawned)
@@ -3817,9 +3846,9 @@ fn stdin_is_tty() -> bool {
 /// right after CLI parsing) -- by the time this runs, stdin is already
 /// known to be a real terminal.
 ///
-/// v1 cut: no `--ask-enter-invalid` (bare Enter always accepted as
-/// "Yes" -- real's own `enter_invalid` flag, when set, makes even a
-/// bare Enter loop back for a real answer instead).
+/// `--ask-enter-invalid` (real `UserQuery.query`'s `enter_invalid`)
+/// makes a bare Enter loop back for a real answer instead of matching
+/// "Yes"; see `classify_yes_no`.
 fn ask_confirm(color: &Colorizer, question: &str) -> bool {
     use std::io::Write;
     print!("\n{} ", color.c("bold", question));
@@ -3840,7 +3869,7 @@ fn ask_confirm(color: &Colorizer, question: &str) -> bool {
                 println!("Interrupted.");
                 return false;
             }
-            Ok(_) => match classify_yes_no(line.trim()) {
+            Ok(_) => match classify_yes_no(line.trim(), ask_enter_invalid()) {
                 Some(true) => return true,
                 Some(false) => {
                     println!("\nQuitting.\n");
@@ -3852,17 +3881,36 @@ fn ask_confirm(color: &Colorizer, question: &str) -> bool {
     }
 }
 
+/// `--ask-enter-invalid` (real `main.py`'s boolean flag, consumed by
+/// `UserQuery.query`'s `enter_invalid` argument): process-wide because
+/// the flag is CLI-global and only read by the interactive prompts, and
+/// threading it through every unmerge/config/deselect helper would buy
+/// nothing. `run` resets it at entry and sets it while parsing, so
+/// in-process callers can't leak the flag between invocations.
+static ASK_ENTER_INVALID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn ask_enter_invalid() -> bool {
+    ASK_ENTER_INVALID.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// The matching half of `ask_confirm`'s own loop, split out so it's
 /// directly unit-testable without any stdin involvement (the loop
 /// itself, and `ask_confirm`'s own real `--ask` TTY gate, can't be
 /// driven from a test -- feeding it piped input would trip the very
 /// `stdin_is_tty` check this backlog item added, matching real
-/// portage's own identical limitation). Real `response.upper() ==
-/// key[:len(response)].upper()`: a case-insensitive prefix match, `Yes`
-/// first so a bare empty answer (an already-trimmed line) matches it.
-fn classify_yes_no(answer: &str) -> Option<bool> {
+/// portage's own identical limitation). Real `UserQuery.query`
+/// (`_emerge/UserQuery.py:63-72`): the response is only matched against
+/// the responses when it is non-empty **or** `enter_invalid` is off
+/// (`if response or not enter_invalid:`), then by case-insensitive
+/// prefix (`response.upper() == key[:len(response)].upper()`), `Yes`
+/// first. So a bare Enter (an already-trimmed empty line) matches `Yes`
+/// unless `--ask-enter-invalid` is set.
+fn classify_yes_no(answer: &str, enter_invalid: bool) -> Option<bool> {
+    if answer.is_empty() {
+        return if enter_invalid { None } else { Some(true) };
+    }
     let lower = answer.to_ascii_lowercase();
-    if answer.is_empty() || "yes".starts_with(lower.as_str()) {
+    if "yes".starts_with(lower.as_str()) {
         Some(true)
     } else if "no".starts_with(lower.as_str()) {
         Some(false)
@@ -3897,6 +3945,16 @@ fn ask_select(n: usize) -> Option<usize> {
             return None;
         }
         let a = line.trim();
+        if a.is_empty() {
+            // Real `UserQuery.query`'s prefix match makes an empty
+            // response match the first response ("1"), unless
+            // `--ask-enter-invalid` rejects it.
+            if ask_enter_invalid() {
+                print!("Sorry, response '' not understood.");
+                continue;
+            }
+            return Some(0);
+        }
         match a.parse::<usize>() {
             Ok(i) if i >= 1 && i <= n => return Some(i - 1),
             _ => {
@@ -7497,6 +7555,100 @@ pub fn run(args: &[String]) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
+    // `--ask-enter-invalid` is process-wide state for the prompt
+    // helpers; reset per invocation so an in-process caller can't leak it
+    // (the CLI parse below sets it again from argv or the defaults).
+    ASK_ENTER_INVALID.store(false, std::sync::atomic::Ordering::Relaxed);
+
+    // Config resolution comes before argv parsing, matching real
+    // `emerge`'s own order: its first pass only finds `--config-root`,
+    // then it loads the config and re-parses with
+    // `EMERGE_DEFAULT_OPTS` prepended (`_emerge/main.py:1221-1232`,
+    // `:1352-1360`). Portuale has no `--config-root` CLI
+    // (`PORTAGE_CONFIGROOT` is the only config-root source), so the two
+    // passes collapse into this one: resolve, then prepend the
+    // variable's tokens to argv. `--help` above still short-circuits
+    // before any config load, exactly like real's early
+    // `myaction == "help"` return (`main.py:1254`).
+
+    // resolve_config needs the main repo's own location for
+    // package.mask/.unmask's repo-level source (see its doc comment) --
+    // found via the same find_repos repos.conf parsing
+    // resolve_pretend_graph uses internally a few lines down; called
+    // again here since portage-profile can't depend back on portage-repo
+    // (portage-repo already depends on portage-profile). Resolved before
+    // @world/@system expansion below: @system's own atom list lives in
+    // `config` (see portage-profile's `system_packages`), so the config
+    // must already exist by the time a "@system" token is seen.
+    let root = root_from_env();
+    let config_root = config_root_from_env();
+
+    let repos = match portage_repo::find_repos(&config_root) {
+        Ok(repos) => repos,
+        Err(e) => {
+            eprintln!("emerge: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    let Some(main_repo) = repos.iter().find(|r| r.is_main) else {
+        eprintln!("emerge: no main repo found in repos.conf");
+        return ExitCode::from(1);
+    };
+
+    // Every non-main repo's own (name, location) -- portage-profile's
+    // own package.mask/.unmask reading needs each overlay's own name to
+    // scope its repo-level entries via "::name" (see resolve_config's
+    // own doc comment); ascending-priority order, same as find_repos'
+    // own order, which only matters if two overlays' own entries could
+    // otherwise interfere, and the "::name" scoping already rules that
+    // out regardless. The same list, plus the main repo's own name
+    // below, also lets resolve_config follow a profile's own cross-repo
+    // "parent" entries (reponame:path syntax).
+    let overlay_repos: Vec<(String, std::path::PathBuf)> = repos
+        .iter()
+        .filter(|r| !r.is_main)
+        .map(|r| (r.name.clone(), r.location.clone()))
+        .collect();
+
+    // Real `masters` (see `portage_repo::RepoConfig::masters`'s own doc
+    // comment): each repo's own already-resolved masters chain, keyed by
+    // name, for `resolve_config`'s own package.mask stacking.
+    let repo_masters: std::collections::HashMap<String, Vec<std::path::PathBuf>> = repos
+        .iter()
+        .map(|r| (r.name.clone(), r.masters.clone()))
+        .collect();
+
+    // Every repo's own `aliases` (`repos.conf`/`layout.conf`), each
+    // paired with that repo's location -- real
+    // `repositories.get_location_for_name` resolves an aliased
+    // `reponame:path` profile `parent` (see `resolve_config`'s own doc
+    // comment).
+    let repo_aliases: Vec<(String, std::path::PathBuf)> = repos
+        .iter()
+        .flat_map(|r| r.aliases.iter().map(|a| (a.clone(), r.location.clone())))
+        .collect();
+
+    let mut config = match portage_profile::resolve_config(
+        &config_root,
+        &main_repo.location,
+        &overlay_repos,
+        &repo_aliases,
+        &main_repo.name,
+        &repo_masters,
+        &root,
+    ) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("emerge: {e}");
+            return ExitCode::from(1);
+        }
+    };
+
+    // Real `main.py:1352-1360`: `EMERGE_DEFAULT_OPTS` is prepended to
+    // argv before the real parse, so argv wins for last-wins options.
+    let effective_args = args_with_emerge_defaults(&config, args);
+    let args: &[String] = &effective_args;
+
     let mut atom_args: Vec<&str> = Vec::new();
     let mut pretend = false;
     // --ask/-a (real `true_y_or_n`): after the merge/removal list is
@@ -7907,6 +8059,17 @@ pub fn run(args: &[String]) -> ExitCode {
         let arg = args[i].as_str();
         if arg == "--pretend" || arg == "-p" {
             pretend = true;
+            i += 1;
+        } else if arg == "--ask-enter-invalid" {
+            // Real boolean flag (no value): `UserQuery.query`'s
+            // `enter_invalid` gate. Stored process-wide for the prompt
+            // helpers, reset at `run` entry.
+            ASK_ENTER_INVALID.store(true, std::sync::atomic::Ordering::Relaxed);
+            i += 1;
+        } else if arg == "--ignore-default-opts" {
+            // Real `main.py:1352`: skip `EMERGE_DEFAULT_OPTS` entirely.
+            // The skip itself happens on the raw argv in
+            // `args_with_emerge_defaults`; accepted here as a no-op.
             i += 1;
         } else if arg == "--ask" || arg == "-a" {
             // Real `true_y_or_n`: a bare flag, or `--ask=y`/`--ask=n`.
@@ -9789,79 +9952,6 @@ pub fn run(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     }
 
-    let root = root_from_env();
-    let config_root = config_root_from_env();
-
-    // resolve_config needs the main repo's own location for
-    // package.mask/.unmask's repo-level source (see its doc comment) --
-    // found via the same find_repos repos.conf parsing
-    // resolve_pretend_graph uses internally a few lines down; called
-    // again here since portage-profile can't depend back on portage-repo
-    // (portage-repo already depends on portage-profile). Resolved before
-    // @world/@system expansion below: @system's own atom list lives in
-    // `config` (see portage-profile's `system_packages`), so the config
-    // must already exist by the time a "@system" token is seen.
-    let repos = match portage_repo::find_repos(&config_root) {
-        Ok(repos) => repos,
-        Err(e) => {
-            eprintln!("emerge: {e}");
-            return ExitCode::from(1);
-        }
-    };
-    let Some(main_repo) = repos.iter().find(|r| r.is_main) else {
-        eprintln!("emerge: no main repo found in repos.conf");
-        return ExitCode::from(1);
-    };
-
-    // Every non-main repo's own (name, location) -- portage-profile's
-    // own package.mask/.unmask reading needs each overlay's own name to
-    // scope its repo-level entries via "::name" (see resolve_config's
-    // own doc comment); ascending-priority order, same as find_repos'
-    // own order, which only matters if two overlays' own entries could
-    // otherwise interfere, and the "::name" scoping already rules that
-    // out regardless. The same list, plus the main repo's own name
-    // below, also lets resolve_config follow a profile's own cross-repo
-    // "parent" entries (reponame:path syntax).
-    let overlay_repos: Vec<(String, std::path::PathBuf)> = repos
-        .iter()
-        .filter(|r| !r.is_main)
-        .map(|r| (r.name.clone(), r.location.clone()))
-        .collect();
-
-    // Real `masters` (see `portage_repo::RepoConfig::masters`'s own doc
-    // comment): each repo's own already-resolved masters chain, keyed by
-    // name, for `resolve_config`'s own package.mask stacking.
-    let repo_masters: std::collections::HashMap<String, Vec<std::path::PathBuf>> = repos
-        .iter()
-        .map(|r| (r.name.clone(), r.masters.clone()))
-        .collect();
-
-    // Every repo's own `aliases` (`repos.conf`/`layout.conf`), each
-    // paired with that repo's location -- real
-    // `repositories.get_location_for_name` resolves an aliased
-    // `reponame:path` profile `parent` (see `resolve_config`'s own doc
-    // comment).
-    let repo_aliases: Vec<(String, std::path::PathBuf)> = repos
-        .iter()
-        .flat_map(|r| r.aliases.iter().map(|a| (a.clone(), r.location.clone())))
-        .collect();
-
-    let mut config = match portage_profile::resolve_config(
-        &config_root,
-        &main_repo.location,
-        &overlay_repos,
-        &repo_aliases,
-        &main_repo.name,
-        &repo_masters,
-        &root,
-    ) {
-        Ok(config) => config,
-        Err(e) => {
-            eprintln!("emerge: {e}");
-            return ExitCode::from(1);
-        }
-    };
-
     // Real `actions.py::adjust_configs` colour gate -- resolved once here
     // so every action path (the standalone cleanup actions below and the
     // ordinary resolve-graph path) shares one `Colorizer`.
@@ -10090,6 +10180,21 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut selected_set_args: Vec<String> = Vec::new();
     for atom_str in &atom_args {
         if *atom_str == "@world" || *atom_str == "@selected" {
+            // Real `@world` (`_sets/__init__.py:97-98`) is
+            // `@profile ∪ @selected ∪ @system` -- not just the world
+            // file. `emerge @world` / `-uD @world` re-emerges / updates
+            // every `@profile` and `@system` member too; on an empty
+            // world it is still non-empty. `@selected` alone stays the
+            // world file.
+            if *atom_str == "@world" {
+                // Real `_resolve` (`depgraph.py:5500`) processes each
+                // `SetArg`'s atom list `sorted(arg.pset.getAtoms(),
+                // key=str)`, and the world set lists its nested sets as
+                // `@profile @selected @system`.
+                let mut atoms = config.profile_packages.clone();
+                atoms.sort();
+                expanded_atoms.extend(atoms);
+            }
             match expand_selected(&root, &config_root) {
                 Ok(atoms) => expanded_atoms.extend(atoms),
                 Err(e) => {
@@ -10097,12 +10202,6 @@ pub fn run(args: &[String]) -> ExitCode {
                     return ExitCode::from(1);
                 }
             }
-            // Real `@world` (`_sets/base.py::WorldSet`) is
-            // `@selected ∪ @system ∪ @profile` -- not just the world
-            // file. `emerge @world` / `-uD @world` re-emerges / updates
-            // every `@system` member too; on an empty world it is still
-            // non-empty (`@world` == `@system`). `@selected` alone stays
-            // the world file.
             if *atom_str == "@world" {
                 // Real `_resolve` (`depgraph.py:5500`) processes each
                 // `SetArg`'s atom list `sorted(arg.pset.getAtoms(),
@@ -10111,6 +10210,13 @@ pub fn run(args: &[String]) -> ExitCode {
                 atoms.sort();
                 expanded_atoms.extend(atoms);
             }
+        } else if *atom_str == "@profile" {
+            // The `@profile` set on its own (real
+            // `ProfilePackageSet.load`); same sorted-arg shape as
+            // `@system` above.
+            let mut atoms = config.profile_packages.clone();
+            atoms.sort();
+            expanded_atoms.extend(atoms);
         } else if *atom_str == "@system" {
             // Real `_resolve` (`depgraph.py:5500`): `for atom in
             // sorted(arg.pset.getAtoms(), key=str)`. A `>=`-prefixed
@@ -10459,13 +10565,15 @@ pub fn run(args: &[String]) -> ExitCode {
     let complete_if_new_ver = complete_if_new_ver != Some(false);
 
     // Real `_complete_graph`'s required sets (`@world ∪ @selected ∪
-    // @system`): the resolver walks their installed closure in complete
-    // mode to gate the slot-operator-rebuild scan (real only
-    // slot-op-rebuilds a consumer reachable from these). Computed once;
-    // `run_resolve` injects it into a cloned `Config` only for the
-    // `complete = true` pass.
+    // @system`, and real `@world` itself is `@profile ∪ @selected ∪
+    // @system` -- `_sets/__init__.py:97-98`): the resolver walks their
+    // installed closure in complete mode to gate the
+    // slot-operator-rebuild scan (real only slot-op-rebuilds a consumer
+    // reachable from these). Computed once; `run_resolve` injects it into
+    // a cloned `Config` only for the `complete = true` pass.
     let complete_seed_atoms: Vec<String> = {
         let mut v = expand_selected(&root, &config_root).unwrap_or_default();
+        v.extend(config.profile_packages.iter().cloned());
         v.extend(config.system_packages.iter().cloned());
         v.sort();
         v.dedup();
@@ -12189,15 +12297,21 @@ mod tests {
 
     #[test]
     fn classify_yes_no_prefix_matches_case_insensitively_and_rejects_garbage() {
-        assert_eq!(classify_yes_no(""), Some(true));
-        assert_eq!(classify_yes_no("y"), Some(true));
-        assert_eq!(classify_yes_no("Y"), Some(true));
-        assert_eq!(classify_yes_no("yes"), Some(true));
-        assert_eq!(classify_yes_no("YES"), Some(true));
-        assert_eq!(classify_yes_no("n"), Some(false));
-        assert_eq!(classify_yes_no("No"), Some(false));
-        assert_eq!(classify_yes_no("garbage"), None);
-        assert_eq!(classify_yes_no("yesplease"), None);
+        assert_eq!(classify_yes_no("", false), Some(true));
+        assert_eq!(classify_yes_no("y", false), Some(true));
+        assert_eq!(classify_yes_no("Y", false), Some(true));
+        assert_eq!(classify_yes_no("yes", false), Some(true));
+        assert_eq!(classify_yes_no("YES", false), Some(true));
+        assert_eq!(classify_yes_no("n", false), Some(false));
+        assert_eq!(classify_yes_no("No", false), Some(false));
+        assert_eq!(classify_yes_no("garbage", false), None);
+        assert_eq!(classify_yes_no("yesplease", false), None);
+        // --ask-enter-invalid: a bare Enter is not a match, a real
+        // answer still is (real UserQuery.query's own `if response or
+        // not enter_invalid` gate).
+        assert_eq!(classify_yes_no("", true), None);
+        assert_eq!(classify_yes_no("y", true), Some(true));
+        assert_eq!(classify_yes_no("No", true), Some(false));
     }
 
     #[test]
@@ -12488,6 +12602,58 @@ mod tests {
         assert_eq!(shell_split("   "), Vec::<String>::new());
         // Unterminated quote: consume the rest.
         assert_eq!(shell_split("foo 'bar baz"), ["foo", "bar baz"]);
+    }
+
+    #[test]
+    fn emerge_default_opts_are_prepended_to_argv() {
+        // Real `main.py:1352-1360`: `EMERGE_DEFAULT_OPTS` tokens come
+        // first, argv after -- so a command-line option wins.
+        let config = portage_profile::Config {
+            other_vars: [(
+                "EMERGE_DEFAULT_OPTS".to_string(),
+                "--usepkg=n --getbinpkg=y".to_string(),
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        let args: Vec<String> = ["-uDpvN", "@world"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(
+            args_with_emerge_defaults(&config, &args),
+            ["--usepkg=n", "--getbinpkg=y", "-uDpvN", "@world"]
+        );
+
+        // The splitter is the same shlex-shaped one `PORTAGE_IONICE_COMMAND`
+        // uses, so quoting in the variable is honoured.
+        let quoted = portage_profile::Config {
+            other_vars: [(
+                "EMERGE_DEFAULT_OPTS".to_string(),
+                "--exclude 'dev-libs/a b'".to_string(),
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        let bare: Vec<String> = vec!["--pretend".to_string()];
+        assert_eq!(
+            args_with_emerge_defaults(&quoted, &bare),
+            ["--exclude", "dev-libs/a b", "--pretend"]
+        );
+
+        // Unset variable: argv unchanged.
+        let unset = portage_profile::Config::default();
+        assert_eq!(args_with_emerge_defaults(&unset, &args), args);
+
+        // `--ignore-default-opts` on the command line skips the variable
+        // entirely (real `main.py:1352-1353`).
+        let with_ignore: Vec<String> = ["--ignore-default-opts", "@world"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            args_with_emerge_defaults(&config, &with_ignore),
+            with_ignore
+        );
     }
 
     fn world_entry(category: &str, package: &str, slot: &str) -> GraphEntry {

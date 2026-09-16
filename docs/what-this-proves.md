@@ -16887,3 +16887,29 @@ python3 -m pytest tests/test_emerge_pretend_contract.py -q \
 ```
 
 Findings: `TEST/findings/l2.md` "## #60 S0" (real's classes, the live captures, and the S1-S3 results); plan `docs/07.60-gpkg-populate-read-errors.opus.md` (done, with the commit hashes); Rust tests `binpkg::tests::binpkg_error_classes_mirror_reals_caller`, `populate_local_pkgdir_skips_invalid_files_and_keeps_the_pool`, `populate_local_pkgdir_aborts_on_fatal_files`.
+
+**`EMERGE_DEFAULT_OPTS` is applied as prepended CLI defaults, and `@world` now includes the profile `packages` set (backlog #63/#64, 2026-09-16).** Real `emerge` parses argv twice: a first pass only for early options such as `--config-root`, then after loading the settings a second `parse_opts` whose line is `shlex.split(settings["EMERGE_DEFAULT_OPTS"]) + args` (`_emerge/main.py:1221-1232,1352-1360`), skipped entirely under `--ignore-default-opts`. Portuale stored the variable (`portage-profile` `ENV_SCALAR_VARS` → `config.other_vars`) but never parsed it, so this host's `/etc/make.local` (`--usepkg=n --getbinpkg=y --binpkg-respect-use=y --load-average=11 --autounmask=y --ask-enter-invalid`) was inert: `portuale emerge -uDpvN @world` listed `dev-lang/go`/`dev-build/cmake` as source while real used `[binary gU]`. `pretend::run` now resolves the config before argv parsing — the two-pass dance collapses to one because portuale has no `--config-root` CLI, and `--help` still returns first, like real's early help — then `args_with_emerge_defaults` prepends the shell-split tokens unless `--ignore-default-opts` appears on the command line. `--ask-enter-invalid` and `--ignore-default-opts` moved out of the recognized-but-unimplemented boolean table into the parser; the former gates a bare Enter at the prompts exactly like real `UserQuery.query`'s `if response or not enter_invalid` (the prompt loop is the one host default that had no implementation at all).
+
+The second half is the world set: real `@world` is `@profile ∪ @selected ∪ @system` (`portage/_sets/__init__.py:97-98`), where `@profile` is the **unstarred** `packages` lines of only those profile levels whose repo declares `profile-set` in `metadata/layout.conf` (`_sets/profiles.py:13-41`) while `@system` keeps the starred lines of every level. `Config::profile_packages` now stacks the qualifying levels only (the committed fixture repo declares just `portage-2`, so every existing pin is byte-identical), the `@world` expansions add it in real's order (`@profile`, sorted `@selected`, sorted `@system`), the complete-mode seeds include it, and `@profile` is a first-class target. On this host the buildovl profile's 100-line `packages` file had been dropped: real updates `net-misc/rclone`, `sys-kernel/linux-firmware`, `x11-libs/vte`, `gui-libs/vte-common`; portuale omitted all four, and without `dev-libs/weston` it never saw weston's `<media-libs/libdisplay-info-0.4.0:=` bound, so it upgraded libdisplay-info and cascaded `rR` onto `kde-plasma/kwin`, `kwin-x11` and `media-libs/mesa`. After both fixes the host `-uDpvN @world` list is 50 packages with 24 binaries (was 68/0) and the KDE/libdisplay-info cascade is gone; the remaining differences are the separately filed #65 (Go ABI cascade), #67 (`VIDEO_CARDS`/`SANE_BACKENDS`) and #68 (gtk-doc block), plus a `--getbinpkg`+newuse residue filed as #69.
+
+```sh
+FIX=fixtures
+# the defaults plumbing, hermetically against the fixture binhost
+env PORTAGE_CONFIGROOT=$FIX ROOT=$FIX PORTAGE_RUNNING_ROOT=$FIX DISTDIR=$FIX/distfiles \
+    EMERGE_DEFAULT_OPTS="--pretend --getbinpkg" \
+    rust/target/release/portuale emerge dev-libs/remotebinpkg
+# -> [binary  N g   ] dev-libs/remotebinpkg-1.0-1  USE="-rbfoo"
+
+# and argv still wins over the prepended defaults
+env PORTAGE_CONFIGROOT=$FIX ROOT=$FIX PORTAGE_RUNNING_ROOT=$FIX DISTDIR=$FIX/distfiles \
+    EMERGE_DEFAULT_OPTS="--pretend --getbinpkg=y" \
+    rust/target/release/portuale emerge --getbinpkg=n dev-libs/remotebinpkg
+# -> emerge: there are no ebuilds to satisfy "dev-libs/remotebinpkg". (rc 1)
+
+# the profile-set gate and @profile as a target (copied configroot)
+python3 -m pytest tests/test_emerge_pretend_contract.py -q \
+    -k "emerge_default_opts or profile_set"
+# -> 3 passed
+```
+
+Tests: `pretend::tests::emerge_default_opts_are_prepended_to_argv`, the extended `classify_yes_no_*` unit test, `portage-profile`'s `profile_packages_are_the_unstarred_lines_of_profile_set_repo_levels` / `profile_packages_require_the_profile_set_format`, and the three contract tests above. Evidence: `docs/evidence/2026-09-16-world-uDpvN/` (the frozen real-vs-portuale outputs). Plans: `docs/01.063-emerge_default_opts.md`, `docs/01.064-world_profile_set.md`.

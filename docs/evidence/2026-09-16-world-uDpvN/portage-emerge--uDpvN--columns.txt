@@ -1,0 +1,37 @@
+[f1r] Local copy of remote index is up-to-date and will be used.
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 34.73 s (backtrack: 0/20).
+
+[ebuild     U  ] app-arch/unrar                                        [7.3.1:0/7::gentoo]          [7.2.7:0/7::gentoo] 268 KiB
+[ebuild     U  ] sys-libs/timezone-data                                [2026d::gentoo]              [2026c::gentoo] USE="nls -leaps-timezone -verify-sig% -zic-slim" 555 KiB
+[ebuild     U  ] sys-kernel/linux-firmware                             [20260910::gentoo]           [20260810::gentoo] USE="initramfs redistributable -bindist -compress-xz -compress-zstd -deduplicate -dist-kernel -savedconfig" 641287 KiB
+[ebuild     U  ] dev-build/gtk-doc-am                                  [1.36.1::gentoo]             [1.34.0::gentoo] 581 KiB
+[binary    gU  ] dev-lang/go                                           [1.27.1-1:0/1.27.1::gentoo]  [1.26.5:0/1.26.5::gentoo] CPU_FLAGS_X86="sse2" 45160 KiB
+[ebuild     U  ] dev-libs/libgcrypt                                    [1.12.4:0/20::gentoo]        [1.12.3-r1:0/20::gentoo] USE="asm getentropy -doc -static-libs (-verify-sig)" ABI_X86="32 (64) (-x32)" CPU_FLAGS_X86="aes avx avx2 sha sse4_1 -avx512f -padlock" 4369 KiB
+[ebuild     U  ] app-crypt/gpgme                                       [2.2.0:1/45.0::gentoo]       [2.1.2:1/45.0::gentoo] USE="-common-lisp -static-libs -test -verify-sig" 1389 KiB
+[binary    gU  ] dev-build/cmake                                       [4.3.5-1::gentoo]            [4.3.4::gentoo] USE="ncurses -dap -doc -gui -test -verify-sig" 650950 KiB
+[ebuild     U  ] dev-cpp/gpgmepp                                       [2.2.0:0/7::gentoo]          [2.1.0:0/7::gentoo] USE="-test -verify-sig" 122 KiB
+[ebuild     U  ] dev-python/ensurepip-pip                              [26.2.1::gentoo]             [26.1.2::gentoo] USE="(test-rust) -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 -python3_14t (-python3_15) (-python3_15t)" 9084 KiB
+[ebuild     U  ] app-portage/gemato                                    [20.14::gentoo]              [20.13::gentoo] USE="gpg -pretty-log -test -tools" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 95 KiB
+[ebuild     U  ] dev-python/pip                                        [26.2.1::gentoo]             [26.1.2-r1::gentoo] USE="(test-rust) -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 0 KiB
+[ebuild     U  ] sys-fs/cryptsetup                                     [2.8.8:0/12::gentoo]         [2.8.7:0/12::gentoo] USE="argon2 nls openssl udev -fips -gcrypt -kernel -nettle -passwdqc -pwquality -ssh -static -static-libs -test -urandom -verify-sig" 11671 KiB
+[ebuild     U  ] dev-util/gtk-doc                                      [1.36.1::gentoo]             [1.34.0-r2::gentoo] USE="-emacs -test" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 0 KiB
+[ebuild     U  ] sys-fs/xfsprogs                                       [7.1.1::gentoo]              [7.0.1::gentoo] USE="icu nls -libedit (-selinux) -static-libs" 1559 KiB
+[ebuild     U  ] dev-libs/libdex                                       [1.2.0:0/1::gentoo]          [1.0.0:0/1::gentoo] USE="eventfd introspection liburing sysprof -gtk-doc -test -vala" 178 KiB
+[ebuild     U  ] net-misc/rclone                                       [1.75.1::gentoo]             [1.75.0::gentoo] 33801 KiB
+[ebuild     U  ] gnome-base/gnome-keyring                              [50.0::gentoo]               [48.0-r1::gentoo] USE="pam ssh-agent systemd -caps (-selinux) -test" 752 KiB
+[ebuild     U  ] x11-libs/pango                                        [1.58.2::gentoo]             [1.57.1::gentoo] USE="X introspection -debug -examples -gtk-doc -libthai -sysprof -test" ABI_X86="32 (64) (-x32)" 1874 KiB
+[ebuild     U  ] dev-cpp/pangomm                                       [2.46.5:1.4::gentoo]         [2.46.4:1.4::gentoo] USE="-gtk-doc" ABI_X86="32 (64) (-x32)" 619 KiB
+[ebuild     U  ] gui-libs/gtk                                          [4.22.5:4::gentoo]           [4.20.4:4::gentoo] USE="X cups introspection vulkan wayland (-aqua) -broadway -cloudproviders -colord -examples -gstreamer -gtk-doc -sysprof -test" CPU_FLAGS_X86="f16c" 16609 KiB
+[ebuild     U  ] gui-libs/libadwaita                                   [1.9.3:1::gentoo]            [1.8.7:1::gentoo] USE="introspection vala -examples -gtk-doc -test" 2827 KiB
+[ebuild     U  ] gui-libs/vte-common                                   [0.84.1:2.91::gentoo]        [0.82.4:2.91::gentoo] USE="systemd" 6552 KiB
+[ebuild     U  ] x11-libs/vte                                          [0.84.1:2.91::gentoo]        [0.82.4:2.91::gentoo] USE="X crypt icu introspection systemd vala wayland -debug -gtk-doc" 0 KiB
+[ebuild     U  ] dev-libs/qgpgme                                       [2.2.0:0/7::gentoo]          [2.1.0:0/7::gentoo] USE="-test -verify-sig" 190 KiB
+[ebuild   R    ] dev-qt/qtdeclarative                                  [6.11.2-r1:6/6.11.2::gentoo]  USE="custom-cflags jit network opengl qmlls sql ssl svg vulkan wayland%* widgets -accessibility" 37872 KiB
+[ebuild   R    ] dev-qt/qttools                                        [6.11.2:6/6.11.2::gentoo]     USE="assistant custom-cflags designer linguist opengl qdbus qml qmlls vulkan widgets (zstd) -distancefieldgenerator -gles2-only -kmap2qmap -pixeltool -qdoc -qtattributionsscanner -qtdiag -qtplugininfo" LLVM_SLOT="22 -17 -18 -19 -20 -21 (-23%)" 9992 KiB
+
+Total: 27 packages (25 upgrades, 2 reinstalls, 2 binaries), Size of downloads: 1478345 KiB
+Conflict: 1 block (all satisfied)

@@ -1,0 +1,103 @@
+[f1r] Local copy of remote index is up-to-date and will be used.
+
+These are the packages that would be merged, in reverse order:
+
+Calculating dependencies ... done!
+Dependency resolution took 34.90 s (backtrack: 0/20).
+
+[nomerge       ] kde-apps/kmail-26.08.1:6::gentoo  USE="activities -debug -handbook -speech -telemetry -test" 
+[ebuild     U  ]  dev-libs/qgpgme-2.2.0:0/7::gentoo [2.1.0:0/7::gentoo] USE="-test -verify-sig" 190 KiB
+[nomerge       ] app-emulation/virt-manager-5.1.0-r1::gentoo  USE="gui (policykit) -sasl -verify-sig" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 
+[ebuild     U  ]  x11-libs/vte-0.84.1:2.91::gentoo [0.82.4:2.91::gentoo] USE="X crypt icu introspection systemd vala wayland -debug -gtk-doc" 6552 KiB
+[nomerge       ] media-gfx/rawtherapee-5.13::gentoo  USE="jpegxl openmp -tcmalloc" 
+[ebuild     U  ]  dev-cpp/pangomm-2.46.5:1.4::gentoo [2.46.4:1.4::gentoo] USE="-gtk-doc" ABI_X86="32 (64) (-x32)" 619 KiB
+[ebuild     U  ] sys-fs/xfsprogs-7.1.1::gentoo [7.0.1::gentoo] USE="icu nls -libedit (-selinux) -static-libs" 1559 KiB
+[ebuild     U  ] net-misc/rclone-1.75.1::gentoo [1.75.0::gentoo] 33801 KiB
+[nomerge       ] x11-libs/vte-0.84.1:2.91::gentoo [0.82.4:2.91::gentoo] USE="X crypt icu introspection systemd vala wayland -debug -gtk-doc" 
+[ebuild     U  ]  gui-libs/vte-common-0.84.1:2.91::gentoo [0.82.4:2.91::gentoo] USE="systemd" 0 KiB
+[nomerge       ] app-office/libreoffice-25.2.7.2-r1::gentoo  USE="bluetooth branding cups dbus gtk3 kde ldap mariadb qt6 vulkan -accessibility -base -coinmp -custom-cflags -debug -eds -googledrive -gstreamer -gtk4 -java -odk -pdfimport -postgres -test -valgrind" LIBREOFFICE_EXTENSIONS="-nlpsolver -scripting-beanshell -scripting-javascript -wiki-publisher" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 
+[nomerge       ]  media-libs/zxing-cpp-3.1.1:0/4::gentoo  USE="-test -tools" 
+[nomerge       ]   media-libs/zint-2.16.0:0/2.16::gentoo  USE="gui png -test" 
+[ebuild   R    ]    dev-qt/qttools-6.11.2:6/6.11.2::gentoo  USE="assistant custom-cflags designer linguist opengl qdbus qml qmlls vulkan widgets (zstd) -distancefieldgenerator -gles2-only -kmap2qmap -pixeltool -qdoc -qtattributionsscanner -qtdiag -qtplugininfo" LLVM_SLOT="22 -17 -18 -19 -20 -21 (-23%)" 9992 KiB
+[ebuild   R    ]     dev-qt/qtdeclarative-6.11.2-r1:6/6.11.2::gentoo  USE="custom-cflags jit network opengl qmlls sql ssl svg vulkan wayland%* widgets -accessibility" 37872 KiB
+[nomerge       ] kde-plasma/plasma-meta-6.7.5:6::gentoo  USE="X bluetooth browser-integration crash-handler crypt cups display-manager firewall flatpak grub gtk kwallet networkmanager ocr pulseaudio rdp smart systemd thunderbolt wallpapers xwayland -accessibility -discover (-elogind) -oxygen-theme -plymouth -sddm -sdk -unsupported -virtualkeyboard -wacom -webengine" 
+[nomerge       ]  kde-plasma/kwin-x11-6.7.5:6::gentoo  USE="lock nightlight shortcuts systemd -accessibility -debug -gles2-only -handbook (-selinux) -test" 
+[nomerge       ]   kde-frameworks/kauth-6.30.0:6/6.30::gentoo  USE="(policykit) -debug -test" 
+[nomerge       ]    sys-auth/polkit-qt-0.201.1::gentoo 
+[nomerge       ]     sys-auth/polkit-126-r3::gentoo  USE="gtk introspection kde nls pam systemd (-elogind) -examples (-selinux) -test" 
+[nomerge       ]      kde-plasma/polkit-kde-agent-6.7.5:6::gentoo  USE="-debug" 
+[nomerge       ]       kde-frameworks/kf-env-6:6::gentoo 
+[nomerge       ]        x11-misc/xdg-utils-1.2.1-r11::gentoo  USE="X dbus plasma -doc -gnome -perl" 
+[nomerge       ]         kde-plasma/kde-cli-tools-6.7.5:6::gentoo  USE="X -debug -kdesu" 
+[nomerge       ]          kde-frameworks/kio-6.30.0:6/6.30::gentoo  USE="X acl kwallet wayland -debug -designer -handbook -test" 
+[nomerge       ]           kde-frameworks/solid-6.30.0:6/6.30::gentoo  USE="-debug -ios -test" 
+[nomerge       ]            sys-fs/udisks-2.11.2:2::gentoo  USE="acl daemon introspection nls systemd -debug (-elogind) -lvm (-selinux) -smart" 
+[nomerge       ]             sys-apps/systemd-261.3:0/2::gentoo  USE="acl boot bpf cryptsetup curl dns-over-tls elfutils fido2 gcrypt kernel-install kmod libarchive lz4 openssl pam pcre pkcs11 (policykit) qrcode resolvconf seccomp sysv-utils tpm zstd -apparmor -audit -gnutls -homed -idn -imds -importd -lzma -passwdqc -pwquality -remote -secureboot (-selinux) -test -ukify -vanilla -xkb" ABI_X86="32 (64) (-x32)" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 
+[nomerge       ]              dev-libs/elfutils-0.195::gentoo  USE="bzip2 debuginfod libarchive lzma nls stacktrace utils zstd -static-libs -test -valgrind -verify-sig" ABI_X86="32 (64) (-x32)" 
+[nomerge       ]               dev-util/sysprof-50.0-r1:0/4::gentoo  USE="gtk systemd -debuginfod -test" 
+[ebuild     U  ]                gui-libs/libadwaita-1.9.3:1::gentoo [1.8.7:1::gentoo] USE="introspection vala -examples -gtk-doc -test" 2827 KiB
+[ebuild     U  ]                 gui-libs/gtk-4.22.5:4::gentoo [4.20.4:4::gentoo] USE="X cups introspection vulkan wayland (-aqua) -broadway -cloudproviders -colord -examples -gstreamer -gtk-doc -sysprof -test" CPU_FLAGS_X86="f16c" 16609 KiB
+[nomerge       ] dev-util/gtk-doc-1.36.1::gentoo [1.34.0-r2::gentoo] USE="-emacs -test" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 
+[nomerge       ]  dev-build/gtk-doc-am-1.36.1::gentoo [1.34.0::gentoo]
+[blocks b      ]   <dev-util/gtk-doc-1.36.1 ("<dev-util/gtk-doc-1.36.1" is soft blocking dev-build/gtk-doc-am-1.36.1)
+[ebuild     U  ]    dev-util/gtk-doc-1.36.1::gentoo [1.34.0-r2::gentoo] USE="-emacs -test" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 581 KiB
+[nomerge       ] kde-plasma/plasma-meta-6.7.5:6::gentoo  USE="X bluetooth browser-integration crash-handler crypt cups display-manager firewall flatpak grub gtk kwallet networkmanager ocr pulseaudio rdp smart systemd thunderbolt wallpapers xwayland -accessibility -discover (-elogind) -oxygen-theme -plymouth -sddm -sdk -unsupported -virtualkeyboard -wacom -webengine" 
+[nomerge       ]  kde-plasma/polkit-kde-agent-6.7.5:6::gentoo  USE="-debug" 
+[nomerge       ]   kde-frameworks/knotifications-6.30.0:6/6.30::gentoo  USE="-debug" 
+[nomerge       ]    media-libs/libcanberra-0.30-r8::gentoo  USE="alsa pulseaudio udev -gstreamer -oss -tdb" ABI_X86="32 (64) (-x32)" 
+[nomerge       ]     media-libs/libpulse-17.0::gentoo  USE="X asyncns dbus glib gtk systemd -doc (-selinux) -test -valgrind" ABI_X86="32 (64) (-x32)" 
+[nomerge       ]      x11-libs/gtk+-3.24.52:3::gentoo  USE="X cups introspection wayland xinerama (-aqua) -broadway -cloudproviders -colord -examples -gtk-doc -sysprof -test -vim-syntax" ABI_X86="32 (64) (-x32)" 
+[ebuild     U  ]       x11-libs/pango-1.58.2::gentoo [1.57.1::gentoo] USE="X introspection -debug -examples -gtk-doc -libthai -sysprof -test" ABI_X86="32 (64) (-x32)" 1874 KiB
+[nomerge       ] kde-plasma/plasma-meta-6.7.5:6::gentoo  USE="X bluetooth browser-integration crash-handler crypt cups display-manager firewall flatpak grub gtk kwallet networkmanager ocr pulseaudio rdp smart systemd thunderbolt wallpapers xwayland -accessibility -discover (-elogind) -oxygen-theme -plymouth -sddm -sdk -unsupported -virtualkeyboard -wacom -webengine" 
+[nomerge       ]  kde-plasma/plasma-firewall-6.7.5:6::gentoo  USE="ufw -debug -firewalld -test" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13 (-python3_15)" 
+[nomerge       ]   kde-frameworks/kauth-6.30.0:6/6.30::gentoo  USE="(policykit) -debug -test" 
+[nomerge       ]    kde-plasma/polkit-kde-agent-6.7.5:6::gentoo  USE="-debug" 
+[nomerge       ]     dev-qt/qtdeclarative-6.11.2-r1:6/6.11.2::gentoo  USE="custom-cflags jit network opengl qmlls sql ssl svg vulkan wayland%* widgets -accessibility" 
+[nomerge       ]      dev-lang/perl-5.44.0:0/5.44::gentoo  USE="gdbm -berkdb -doc -minimal" PERL_FEATURES="ithreads (-debug) -quadmath" 
+[nomerge       ]       app-admin/perl-cleaner-2.31-r3::gentoo  USE="-pkgcore" 
+[nomerge       ]        sys-apps/portage-3.0.82.2::gentoo  USE="(ipc) native-extensions rsync-verify xattr -apidoc -build -doc -gentoo-dev (-selinux) -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 
+[nomerge       ]         app-alternatives/gpg-1-r3::gentoo  USE="nls reference ssl -freepg -sequoia" 
+[nomerge       ]          app-crypt/gnupg-2.5.22::gentoo  USE="alternatives bzip2 ldap nls readline smartcard ssl tofu tpm usb -doc (-selinux) -test -tools -user-socket (-verify-sig) -wks-server" 
+[nomerge       ]           app-crypt/pinentry-1.3.3::gentoo  USE="X gtk ncurses qt6 wayland -caps -efl -emacs -keyring (-selinux) (-verify-sig)" 
+[ebuild     U  ]            gnome-base/gnome-keyring-50.0::gentoo [48.0-r1::gentoo] USE="pam ssh-agent systemd -caps (-selinux) -test" 752 KiB
+[nomerge       ] dev-util/sysprof-50.0-r1:0/4::gentoo  USE="gtk systemd -debuginfod -test" 
+[ebuild     U  ]  dev-libs/libdex-1.2.0:0/1::gentoo [1.0.0:0/1::gentoo] USE="eventfd introspection liburing sysprof -gtk-doc -test -vala" 178 KiB
+[ebuild     U  ] sys-fs/cryptsetup-2.8.8:0/12::gentoo [2.8.7:0/12::gentoo] USE="argon2 nls openssl udev -fips -gcrypt -kernel -nettle -passwdqc -pwquality -ssh -static -static-libs -test -urandom -verify-sig" 11671 KiB
+[ebuild     U  ] dev-python/pip-26.2.1::gentoo [26.1.2-r1::gentoo] USE="(test-rust) -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 9084 KiB
+[nomerge       ] dev-python/virtualenv-21.7.9::gentoo  USE="-test -verify-provenance" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 -python3_14t (-python3_15) (-python3_15t)" 
+[ebuild     U  ]  dev-python/ensurepip-pip-26.2.1::gentoo [26.1.2::gentoo] USE="(test-rust) -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 -python3_14t (-python3_15) (-python3_15t)" 0 KiB
+[nomerge       ] dev-java/maven-bin-3.9.16:3.9::gentoo  USE="-verify-sig" 
+[nomerge       ]  dev-java/java-config-2.3.4:2::gentoo  USE="compat -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13" 
+[nomerge       ]   sys-apps/portage-3.0.82.2::gentoo  USE="(ipc) native-extensions rsync-verify xattr -apidoc -build -doc -gentoo-dev (-selinux) -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 
+[ebuild     U  ]    app-portage/gemato-20.14::gentoo [20.13::gentoo] USE="gpg -pretty-log -test -tools" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 95 KiB
+[nomerge       ] app-office/libreoffice-25.2.7.2-r1::gentoo  USE="bluetooth branding cups dbus gtk3 kde ldap mariadb qt6 vulkan -accessibility -base -coinmp -custom-cflags -debug -eds -googledrive -gstreamer -gtk4 -java -odk -pdfimport -postgres -test -valgrind" LIBREOFFICE_EXTENSIONS="-nlpsolver -scripting-beanshell -scripting-javascript -wiki-publisher" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 
+[ebuild     U  ]  dev-cpp/gpgmepp-2.2.0:0/7::gentoo [2.1.0:0/7::gentoo] USE="-test -verify-sig" 122 KiB
+[binary    gU  ]   dev-build/cmake-4.3.5-1::gentoo [4.3.4::gentoo] USE="ncurses -dap -doc -gui -test -verify-sig" 650950 KiB
+[ebuild     U  ]   app-crypt/gpgme-2.2.0:1/45.0::gentoo [2.1.2:1/45.0::gentoo] USE="-common-lisp -static-libs -test -verify-sig" 1389 KiB
+[nomerge       ] net-misc/rclone-1.75.1::gentoo [1.75.0::gentoo]
+[binary    gU  ]  dev-lang/go-1.27.1-1:0/1.27.1::gentoo [1.26.5:0/1.26.5::gentoo] CPU_FLAGS_X86="sse2" 45160 KiB
+[nomerge       ] sys-apps/flatpak-1.18.1::gentoo  USE="X (policykit) seccomp systemd -doc -introspection -test" 
+[nomerge       ]  sys-apps/xdg-desktop-portal-1.20.4-r1::gentoo  USE="seccomp systemd udev -flatpak -geolocation -gstreamer -test" 
+[nomerge       ]   media-video/pipewire-1.6.8:0/0.4::gentoo  USE="X bluetooth dbus extra ffmpeg pipewire-alsa pulseaudio readline sound-server ssl systemd v4l -doc -echo-cancel (-elogind) -fftw -flatpak -gsettings -gstreamer -ieee1394 -jack-client -jack-sdk -libcamera -loudness -lv2 -man -modemmanager -roc (-selinux) -sofa (-system-service) -test -zeroconf" ABI_X86="32 (64) (-x32)" 
+[nomerge       ]    media-video/ffmpeg-8.1.2:0/60.62.62::gentoo  USE="X alsa bzip2 cairo dav1d drm dvd fdk fontconfig gnutls gpl jpegxl lcms libass lzma opengl openh264 opus pulseaudio sdl svg theora truetype v4l vaapi vorbis vpx vulkan webp x264 x265 xml xvid zlib -amf -amr -amrenc (-appkit) -bluray -bs2b -cdio -chromaprint -chromium -codec2 -cuda-clang -doc -flite -frei0r -fribidi -gcrypt -gme -gmp -gsm -iec61883 -ieee1394 -jack -jpeg2k -kvazaar -ladspa -lame -libaom -libaribb24 -libcaca -libilbc -liblc3 -libplacebo -librtmp -libsoxr -lv2 -modplug -nvenc -ocr -openal -opencl -opencolorio -openmpt -openssl -qrcode -qsv -quirc -rabbitmq -rav1e -rist -rubberband -samba -snappy -sndio -soc -speex -srt -ssh -svt-av1 -twolame -vdpau -verify-sig -vidstab -vmaf -zeromq -zimg -zvbi" ABI_X86="32 (64) (-x32)" 
+[nomerge       ]     media-libs/libpulse-17.0::gentoo  USE="X asyncns dbus glib gtk systemd -doc (-selinux) -test -valgrind" ABI_X86="32 (64) (-x32)" 
+[nomerge       ]      sys-apps/systemd-261.3:0/2::gentoo  USE="acl boot bpf cryptsetup curl dns-over-tls elfutils fido2 gcrypt kernel-install kmod libarchive lz4 openssl pam pcre pkcs11 (policykit) qrcode resolvconf seccomp sysv-utils tpm zstd -apparmor -audit -gnutls -homed -idn -imds -importd -lzma -passwdqc -pwquality -remote -secureboot (-selinux) -test -ukify -vanilla -xkb" ABI_X86="32 (64) (-x32)" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 
+[ebuild     U  ]       dev-libs/libgcrypt-1.12.4:0/20::gentoo [1.12.3-r1:0/20::gentoo] USE="asm getentropy -doc -static-libs (-verify-sig)" ABI_X86="32 (64) (-x32)" CPU_FLAGS_X86="aes avx avx2 sha sse4_1 -avx512f -padlock" 4369 KiB
+[ebuild     U  ] sys-kernel/linux-firmware-20260910::gentoo [20260810::gentoo] USE="initramfs redistributable -bindist -compress-xz -compress-zstd -deduplicate -dist-kernel -savedconfig" 641287 KiB
+[ebuild     U  ] dev-build/gtk-doc-am-1.36.1::gentoo [1.34.0::gentoo] 0 KiB
+[ebuild     U  ] app-arch/unrar-7.3.1:0/7::gentoo [7.2.7:0/7::gentoo] 268 KiB
+[nomerge       ] kde-plasma/plasma-meta-6.7.5:6::gentoo  USE="X bluetooth browser-integration crash-handler crypt cups display-manager firewall flatpak grub gtk kwallet networkmanager ocr pulseaudio rdp smart systemd thunderbolt wallpapers xwayland -accessibility -discover (-elogind) -oxygen-theme -plymouth -sddm -sdk -unsupported -virtualkeyboard -wacom -webengine" 
+[nomerge       ]  kde-plasma/kwallet-pam-6.7.5:6::gentoo  USE="-debug" 
+[nomerge       ]   kde-frameworks/kwallet-runtime-6.30.0:6/6.30::gentoo  USE="X (keyring) (legacy-kwallet) man -debug -gpg -test" 
+[nomerge       ]    app-crypt/libsecret-0.21.7::gentoo  USE="crypt gcrypt introspection pam (test-rust) tpm vala -gnutls -gtk-doc -test" ABI_X86="32 (64) (-x32)" 
+[nomerge       ]     virtual/secret-service-0-r1::gentoo 
+[nomerge       ]      gnome-base/gnome-keyring-50.0::gentoo [48.0-r1::gentoo] USE="pam ssh-agent systemd -caps (-selinux) -test" 
+[nomerge       ]       app-crypt/gcr-3.41.2-r2:0/1::gentoo  USE="X gtk introspection systemd vala wayland -gtk-doc -test" 
+[nomerge       ]        x11-libs/gtk+-3.24.52:3::gentoo  USE="X cups introspection wayland xinerama (-aqua) -broadway -cloudproviders -colord -examples -gtk-doc -sysprof -test -vim-syntax" ABI_X86="32 (64) (-x32)" 
+[nomerge       ]         net-print/cups-2.4.19::gentoo  USE="X acl dbus pam systemd usb -debug -kerberos -openssl (-selinux) -static-libs -test -xinetd -zeroconf" ABI_X86="32 (64) (-x32)" 
+[nomerge       ]          sys-apps/systemd-261.3:0/2::gentoo  USE="acl boot bpf cryptsetup curl dns-over-tls elfutils fido2 gcrypt kernel-install kmod libarchive lz4 openssl pam pcre pkcs11 (policykit) qrcode resolvconf seccomp sysv-utils tpm zstd -apparmor -audit -gnutls -homed -idn -imds -importd -lzma -passwdqc -pwquality -remote -secureboot (-selinux) -test -ukify -vanilla -xkb" ABI_X86="32 (64) (-x32)" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 
+[nomerge       ]           sys-libs/glibc-2.43-r4:2.2::gentoo  USE="cet multiarch (multilib) ssp (static-libs) systemd -audit -caps (-clang) -compile-locales (-custom-cflags) -doc -gd -hash-sysv-compat -headers-only -multilib-bootstrap -nscd -perl -profile (-selinux) -sframe (-stack-realign) -suid -systemtap -test (-vanilla) -verify-sig" 
+[ebuild     U  ]            sys-libs/timezone-data-2026d::gentoo [2026c::gentoo] USE="nls -leaps-timezone -verify-sig% -zic-slim" 555 KiB
+
+Total: 27 packages (25 upgrades, 2 reinstalls, 2 binaries), Size of downloads: 1478345 KiB
+Conflict: 1 block (all satisfied)

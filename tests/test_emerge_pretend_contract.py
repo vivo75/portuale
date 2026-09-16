@@ -6285,6 +6285,126 @@ def test_getbinpkg_makes_a_remote_binhost_binary_eligible(
                                        ]
 
 
+def test_emerge_default_opts_env_applies_and_argv_wins(emerge_binary, fixture_env):
+    """Real `_emerge/main.py:1352-1360` parses `EMERGE_DEFAULT_OPTS` tokens
+    before argv, so a bare invocation picks them up and a command-line
+    option still wins. Backlog #63."""
+    # Defaults alone: `--pretend --getbinpkg` on the environment turns a
+    # bare `emerge dev-libs/remotebinpkg` into the same remote-binary
+    # selection the explicit-option test pins.
+    env = dict(fixture_env)
+    env["EMERGE_DEFAULT_OPTS"] = "--pretend --getbinpkg"
+    defaulted = _run([str(emerge_binary)], ["dev-libs/remotebinpkg"], env)
+    explicit = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--getbinpkg", "dev-libs/remotebinpkg"],
+        fixture_env,
+    )
+    assert defaulted.returncode == explicit.returncode == 0
+    assert defaulted.stdout == explicit.stdout
+    assert defaulted.stderr == explicit.stderr
+
+    # Precedence: argv `--getbinpkg=n` overrides the default's `=y`,
+    # falling back to the ebuild-only failure (`remotebinpkg` has no
+    # ebuild), exactly like the explicit `--getbinpkg=n` CASES entry.
+    env_override = dict(fixture_env)
+    env_override["EMERGE_DEFAULT_OPTS"] = "--pretend --getbinpkg=y"
+    overridden = _run(
+        [str(emerge_binary)], ["--getbinpkg=n", "dev-libs/remotebinpkg"], env_override
+    )
+    assert overridden.returncode == 1
+    assert 'no ebuilds to satisfy "dev-libs/remotebinpkg"' in overridden.stderr
+
+
+def test_emerge_default_opts_from_a_sourced_make_conf(
+    emerge_binary, fixture_env, fixtures_root, tmp_path
+):
+    """The reported shape: `/etc/portage/make.conf` does `source
+    /etc/make.local`, which sets `EMERGE_DEFAULT_OPTS`. A copied configroot
+    with the variable appended to its own `make.local` must behave exactly
+    like passing the option on argv. Backlog #63."""
+    configroot = tmp_path / "configroot"
+    shutil.copytree(fixtures_root / "etc", configroot / "etc", symlinks=True)
+    for entry in fixtures_root.iterdir():
+        if entry.name != "etc":
+            (configroot / entry.name).symlink_to(entry)
+    make_local = configroot / "etc" / "make.local"
+    make_local.write_text(
+        make_local.read_text() + '\nEMERGE_DEFAULT_OPTS="--pretend"\n'
+    )
+
+    env = dict(fixture_env)
+    env["PORTAGE_CONFIGROOT"] = str(configroot)
+    sourced = _run([str(emerge_binary)], ["dev-libs/samepkg"], env)
+    explicit = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/samepkg"], fixture_env
+    )
+    assert sourced.returncode == explicit.returncode == 0
+    assert sourced.stdout == explicit.stdout
+    assert sourced.stderr == explicit.stderr
+
+
+def _configroot_with_profile_set(tmp_path, fixtures_root):
+    """A real copy of the fixture configroot whose main repo declares
+    `profile-formats = portage-2 profile-set`, with the base profile's
+    non-ebuild `dev-libs/hintonly` hint line replaced by a real, not
+    otherwise selected atom (`dev-libs/diamond`). The active profile
+    chain lives in the main repo, so it must be a real copy; the other
+    repos can stay symlinks."""
+    root = tmp_path / "configroot"
+    shutil.copytree(fixtures_root / "etc", root / "etc", symlinks=True)
+    shutil.copytree(fixtures_root / "repo", root / "repo", symlinks=True)
+    for entry in fixtures_root.iterdir():
+        if entry.name not in ("etc", "repo"):
+            (root / entry.name).symlink_to(entry)
+    layout = root / "repo" / "metadata" / "layout.conf"
+    layout.write_text(layout.read_text().strip() + " profile-set\n")
+    packages = root / "repo" / "profiles" / "base" / "packages"
+    packages.write_text(
+        packages.read_text().replace("dev-libs/hintonly\n", "dev-libs/diamond\n")
+    )
+    return root
+
+
+def test_profile_set_packages_join_world_and_are_a_target(
+    emerge_binary, fixture_env, fixtures_root, tmp_path
+):
+    """Backlog #64: real `@world` is `@profile @selected @system`
+    (`portage/_sets/__init__.py:97-98`), and `@profile` is the unstarred
+    `packages` lines of levels whose repo declares `profile-set`
+    (`_sets/profiles.py:13-41`). The committed fixture repo declares only
+    `portage-2`, so its behavior is unchanged; a copy that adds
+    `profile-set` must move the unstarred atom into `@world` and `@profile`
+    while `@system` stays starred-only."""
+    # Without profile-set nothing changes: `dev-libs/diamond` is not a
+    # world member (this is the committed fixture's own contract).
+    env = dict(fixture_env)
+    env["PORTAGE_CONFIGROOT"] = str(fixtures_root)
+    plain = _run([str(emerge_binary)], ["--pretend", "@world"], env)
+    assert "dev-libs/diamond" not in plain.stdout
+
+    # With profile-set, the unstarred package is part of @world and
+    # @profile -- and not of @system.
+    env = dict(fixture_env)
+    env["PORTAGE_CONFIGROOT"] = str(
+        _configroot_with_profile_set(tmp_path, fixtures_root)
+    )
+    world = _run([str(emerge_binary)], ["--pretend", "@world"], env)
+    assert "[ebuild  N     ] dev-libs/diamond-1.0" in world.stdout
+
+    # `@profile` resolves the unstarred atom (plus its own dependency
+    # closure); the starred @system-only atom is not part of it.
+    profile = _run([str(emerge_binary)], ["--pretend", "@profile"], env)
+    assert profile.returncode == 0
+    assert "[ebuild  N     ] dev-libs/diamond-1.0" in profile.stdout
+    assert "dev-libs/newpkg" not in profile.stdout
+
+    system = _run([str(emerge_binary)], ["--pretend", "@system"], env)
+    assert system.returncode == 0
+    assert "dev-libs/diamond" not in system.stdout
+    assert "dev-libs/newpkg" in system.stdout
+
+
 def test_getbinpkg_slot_repo_decoration_on_a_remote_binary_line(
     emerge_binary, fixture_env
 ):
@@ -9973,6 +10093,8 @@ Build scheduling:
   -j, --jobs[=N]             run up to N package builds in parallel
   -l, --load-average N       hold new builds while the load average exceeds N
   -a, --ask[=y|n]            prompt for confirmation before a real merge or removal
+      --ask-enter-invalid    with --ask: a bare Enter is not accepted as Yes
+      --ignore-default-opts  ignore the EMERGE_DEFAULT_OPTS variable for this run
       --keep-going           on a build failure, drop that package's dependents and carry on
       --quiet-build[=y|n]    redirect a build's phase output to ${T}/build.log (implied by -j >1 and -q)
 
@@ -10135,9 +10257,11 @@ def test_custom_set_as_a_top_level_target_expands_to_its_members(
 def test_selected_set_expands_the_same_as_world(emerge_binary, fixture_env):
     """Real cnf/sets/portage.conf: @world = @profile @selected @system,
     and @selected = WorldSelectedSet (the world file's atoms + world_sets'
-    nested sets). Portuale's @world already IS that (the @profile /
-    @system union is a pre-existing simplification), so @selected is the
-    exact same expansion."""
+    nested sets). On this fixture @world and @selected coincide because
+    every @system member is also a world-file member and the fixture
+    repo declares no `profile-set` (so @profile is empty) -- backlog #64
+    covers the non-empty-profile case in
+    `test_profile_set_packages_join_world_and_are_a_target`."""
     a = _run([str(emerge_binary)], ["--pretend", "--update", "@selected"], fixture_env)
     b = _run([str(emerge_binary)], ["--pretend", "--update", "@world"], fixture_env)
     assert a.returncode == 0

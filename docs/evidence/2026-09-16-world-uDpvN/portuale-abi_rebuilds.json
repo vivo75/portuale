@@ -1,0 +1,90 @@
+[
+ {
+  "provider": "dev-lang/go-1.27.1",
+  "consumer": "app-admin/helm-4.2.4"
+ },
+ {
+  "provider": "dev-lang/go-1.27.1",
+  "consumer": "app-admin/mongo-tools-100.9.4"
+ },
+ {
+  "provider": "dev-lang/go-1.27.1",
+  "consumer": "app-containers/buildah-1.45.0"
+ },
+ {
+  "provider": "dev-lang/go-1.27.1",
+  "consumer": "app-containers/flannel-0.26.3"
+ },
+ {
+  "provider": "dev-lang/go-1.27.1",
+  "consumer": "app-containers/k3d-5.9.0"
+ },
+ {
+  "provider": "dev-lang/go-1.27.1",
+  "consumer": "app-containers/podman-6.1.0"
+ },
+ {
+  "provider": "dev-lang/go-1.27.1",
+  "consumer": "app-containers/runc-1.4.3"
+ },
+ {
+  "provider": "dev-lang/go-1.27.1",
+  "consumer": "app-containers/skopeo-1.24.0"
+ },
+ {
+  "provider": "dev-lang/go-1.27.1",
+  "consumer": "app-containers/snapd-2.63"
+ },
+ {
+  "provider": "dev-lang/go-1.27.1",
+  "consumer": "app-crypt/cfssl-1.6.5"
+ },
+ {
+  "provider": "dev-lang/go-1.27.1",
+  "consumer": "app-crypt/gocryptfs-2.6.1-r1"
+ },
+ {
+  "provider": "dev-lang/go-1.27.1",
+  "consumer": "dev-go/go-md2man-2.0.7"
+ },
+ {
+  "provider": "dev-lang/go-1.27.1",
+  "consumer": "dev-vcs/lab-0.25.1"
+ },
+ {
+  "provider": "dev-lang/go-1.27.1",
+  "consumer": "net-fs/mc-2025.08.13.08.35.41"
+ },
+ {
+  "provider": "dev-lang/go-1.27.1",
+  "consumer": "sys-cluster/cilium-cli-0.18.2"
+ },
+ {
+  "provider": "dev-lang/go-1.27.1",
+  "consumer": "sys-cluster/hubble-1.17.5"
+ },
+ {
+  "provider": "dev-lang/go-1.27.1",
+  "consumer": "sys-cluster/kubeadm-1.37.0"
+ },
+ {
+  "provider": "dev-lang/go-1.27.1",
+  "consumer": "sys-cluster/kubectl-1.37.0"
+ },
+ {
+  "provider": "dev-lang/go-1.27.1",
+  "consumer": "sys-cluster/kubelogin-1.36.3"
+ },
+ {
+  "provider": "media-libs/libdisplay-info-0.4.0",
+  "consumer": "kde-plasma/kwin-6.7.5"
+ },
+ {
+  "provider": "media-libs/libdisplay-info-0.4.0",
+  "consumer": "kde-plasma/kwin-x11-6.7.5"
+ },
+ {
+  "provider": "media-libs/libdisplay-info-0.4.0",
+  "consumer": "media-libs/mesa-26.2.2"
+ }
+]

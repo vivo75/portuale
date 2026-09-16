@@ -621,6 +621,17 @@ pub struct Config {
     /// (the `*` stripped) -- see the module doc comment's `packages`
     /// bullet and `PackagesSystemSet.load`.
     pub system_packages: Vec<String>,
+    /// `@profile`'s real atom source (`ProfilePackageSet.load`,
+    /// `portage/_sets/profiles.py:13-38`): the **unstarred** lines of the
+    /// `packages` files of only those profile levels whose repo declares
+    /// `profile-set` in `metadata/layout.conf`, stacked in chain order
+    /// with the same `-atom` removal `@system` uses. Real `@world` is
+    /// `@profile @selected @system` (`_sets/__init__.py:97-98`), so this
+    /// set is part of every `@world` expansion. A level not inside any
+    /// configured repo contributes nothing (real gates on the level's own
+    /// repo `profile_formats`; the user-config profile node is the same
+    /// deliberate narrowing).
+    pub profile_packages: Vec<String>,
     /// `package.provided` -- real `config.py:970-1027`'s `pprovideddict`,
     /// flattened: every profile level's own `package.provided` file
     /// (chain order) + the user-level
@@ -3167,6 +3178,35 @@ pub fn resolve_config(
         .filter_map(|line| line.strip_prefix('*').map(String::from))
         .collect();
 
+    // packages (@profile): the *same* files and the same
+    // stack_lists(incremental=1) stacking, but (a) only profile levels
+    // whose own repo declares `profile-set` in metadata/layout.conf are a
+    // source at all, and (b) the *unstarred* stacked lines are the atoms
+    // -- real `ProfilePackageSet.load` (`_sets/profiles.py:13-41`):
+    //   for y in self._profiles if "profile-set" in y.profile_formats
+    //   ... if str(x)[:1] != "*"
+    // `@system` above deliberately has neither filter. A level outside
+    // every configured repo (e.g. a bare synthetic profile dir in a unit
+    // test, or the user-config profile node) does not qualify --
+    // see `Config::profile_packages`'s own doc comment.
+    let mut profile_sources: Vec<Vec<String>> = Vec::new();
+    for level in &chain {
+        let qualifies = repo_containing(level, &all_repos)
+            .map(|(_, location)| {
+                repo_profile_formats(&location)
+                    .iter()
+                    .any(|format| format == "profile-set")
+            })
+            .unwrap_or(false);
+        if qualifies {
+            profile_sources.push(read_config_lines(&level.join("packages"))?);
+        }
+    }
+    config.profile_packages = stack_mask_lines(&profile_sources)
+        .into_iter()
+        .filter(|line| !line.starts_with('*'))
+        .collect();
+
     // package.provided (real config.py:970-1027): every profile level's
     // own file (chain order) + the user-level
     // /etc/portage/profile/package.provided, stacked with the same
@@ -4589,6 +4629,108 @@ sync-uri = file:///srv/pkgs
         let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
             .expect("config must resolve");
         assert_eq!(config.system_packages, vec!["dev-libs/b".to_string()]);
+    }
+
+    #[test]
+    fn profile_packages_are_the_unstarred_lines_of_profile_set_repo_levels() {
+        // Both levels live in a repo whose layout.conf declares
+        // `profile-set`, so their own `packages` files are @profile
+        // sources: unstarred lines stack (with cross-level -atom
+        // removal), starred lines still go to @system only.
+        // base: "*dev-libs/sysbase" + "dev-libs/baseonly"
+        // leaf (parent -> ../base): "-dev-libs/baseonly" +
+        //        "dev-libs/leafonly" + "*dev-libs/sysleaf"
+        // @profile: ["dev-libs/leafonly"] (baseonly removed)
+        // @system:  ["dev-libs/sysbase", "dev-libs/sysleaf"]
+        let root = std::env::temp_dir().join("portage-profile-test-profile-packages");
+        let repo = root.join("repo");
+        let base = repo.join("profiles/base");
+        let leaf = repo.join("profiles/leaf");
+        fs::create_dir_all(&base).unwrap();
+        fs::create_dir_all(&leaf).unwrap();
+        fs::create_dir_all(repo.join("metadata")).unwrap();
+        fs::write(
+            repo.join("metadata/layout.conf"),
+            "profile-formats = portage-2 profile-set\n",
+        )
+        .unwrap();
+        fs::write(
+            base.join("packages"),
+            "*dev-libs/sysbase\ndev-libs/baseonly\n",
+        )
+        .unwrap();
+        fs::write(leaf.join("parent"), "../base\n").unwrap();
+        fs::write(
+            leaf.join("packages"),
+            "-dev-libs/baseonly\ndev-libs/leafonly\n*dev-libs/sysleaf\n",
+        )
+        .unwrap();
+
+        let portage_dir = root.join("etc/portage");
+        fs::create_dir_all(&portage_dir).unwrap();
+        let make_profile = portage_dir.join("make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
+
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
+            .expect("config must resolve");
+        assert_eq!(
+            config.profile_packages,
+            vec!["dev-libs/leafonly".to_string()]
+        );
+        assert_eq!(
+            config.system_packages,
+            vec![
+                "dev-libs/sysbase".to_string(),
+                "dev-libs/sysleaf".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn profile_packages_require_the_profile_set_format() {
+        // The committed fixture repo's shape: `profile-formats =
+        // portage-2` without `profile-set`, so nothing is an @profile
+        // source and the whole `packages` file stays @system-only (real
+        // `ProfilePackageSet.load`'s own gate). @system is unaffected.
+        let root = std::env::temp_dir().join("portage-profile-test-no-profile-set");
+        let repo = root.join("repo");
+        let base = repo.join("profiles/base");
+        let leaf = repo.join("profiles/leaf");
+        fs::create_dir_all(&base).unwrap();
+        fs::create_dir_all(&leaf).unwrap();
+        fs::create_dir_all(repo.join("metadata")).unwrap();
+        fs::write(
+            repo.join("metadata/layout.conf"),
+            "profile-formats = portage-2\n",
+        )
+        .unwrap();
+        fs::write(
+            base.join("packages"),
+            "*dev-libs/sysbase\ndev-libs/hintonly\n",
+        )
+        .unwrap();
+        fs::write(leaf.join("parent"), "../base\n").unwrap();
+        fs::write(leaf.join("packages"), "*dev-libs/sysleaf\n").unwrap();
+
+        let portage_dir = root.join("etc/portage");
+        fs::create_dir_all(&portage_dir).unwrap();
+        let make_profile = portage_dir.join("make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
+
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
+            .expect("config must resolve");
+        assert!(config.profile_packages.is_empty());
+        assert_eq!(
+            config.system_packages,
+            vec![
+                "dev-libs/sysbase".to_string(),
+                "dev-libs/sysleaf".to_string()
+            ]
+        );
     }
 
     #[test]

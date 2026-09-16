@@ -1,0 +1,81 @@
+[ebuild     U  ] app-arch/unrar-7.3.1:0/7::gentoo [7.2.7:0/7::gentoo]
+[ebuild     U  ]                                   sys-libs/timezone-data-2026d::gentoo [2026c::gentoo] USE="nls -leaps-timezone -verify-sig% -zic-slim"
+[ebuild     UD ]                                                 dev-python/flit-core-3.12.0::gentoo [4.0.2::gentoo] USE="-test -verify-provenance" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 -python3_14t (-python3_15) (-python3_15t)"
+[ebuild     U  ]                                                   dev-libs/libgcrypt-1.12.4:0/20::gentoo [1.12.3-r1:0/20::gentoo] USE="asm getentropy -doc -static-libs (-verify-sig)" ABI_X86="32 (64) (-x32)" CPU_FLAGS_X86="aes avx avx2 sha sse4_1 -avx512f -padlock"
+[ebuild     U  ]                                                           dev-build/gtk-doc-am-1.36.1::gentoo [1.34.0::gentoo]
+[ebuild     U  ]                                                         dev-build/cmake-4.3.5::gentoo [4.3.4::gentoo] USE="ncurses -dap -doc -gui -test -verify-sig"
+[ebuild  rR    ]                                                             media-libs/mesa-26.2.2::gentoo  USE="X llvm (opengl) proprietary-codecs vaapi vulkan wayland zstd -debug -lm-sensors -opencl -sysprof -test -unwind -valgrind" ABI_X86="32 (64) (-x32)" CPU_FLAGS_X86="sse2" LLVM_SLOT="22 -18 -19 -20 -21" VIDEO_CARDS="nouveau radeon radeonsi virgl -asahi -d3d12 (-freedreno) -i915 (-imagination) -intel -lavapipe (-lima) -nvk (-panfrost) -r300 -r600 (-v3d) (-vc4) (-vivante) -vmware -zink"
+[ebuild  r  U  ]                                                               media-libs/libdisplay-info-0.4.0:0/4::gentoo [0.3.0:0/3::gentoo] USE="-verify-sig" ABI_X86="32 (64) (-x32)"
+[ebuild     U  ]                                                             x11-libs/pango-1.58.2::gentoo [1.57.1::gentoo] USE="X introspection -debug -examples -gtk-doc -libthai -sysprof -test" ABI_X86="32 (64) (-x32)"
+[ebuild  NS    ]                                                                 dev-lang/rust-1.94.0:1.94.0::gentoo [1.94.1:1.94.1::gentoo, 1.98.1:1.98.1::gentoo] USE="clippy doc lto rust-analyzer rust-src rustfmt system-llvm (-big-endian) -debug -dist (-llvm-libunwind) -test -verify-sig" ABI_X86="32 (64) (-x32)" CPU_FLAGS_X86="sse2" LLVM_SLOT="(21)" LLVM_TARGETS="AArch64 AMDGPU BPF SPIRV WebAssembly (X86) -ARC -ARM -AVR -CSKY -DirectX -Hexagon -Lanai -LoongArch -M68k -MSP430 -Mips -NVPTX -PowerPC -RISCV -Sparc -SystemZ -VE -XCore -Xtensa" RUST_SYSROOTS="bpf wasm"
+[ebuild     U  ]                                                               dev-util/cargo-c-0.10.25::gentoo [0.10.23::gentoo] USE="-debug"
+[ebuild     U  ]                                                                 dev-libs/libgit2-1.9.7:0/1.9::gentoo [1.9.6:0/1.9::gentoo] USE="ssh -examples -gssapi -test -trace"
+[ebuild   R    ]                                                                     dev-qt/qttools-6.11.2:6/6.11.2::gentoo  USE="assistant custom-cflags designer linguist opengl qdbus qml qmlls vulkan widgets (zstd) -distancefieldgenerator -gles2-only -kmap2qmap -pixeltool -qdoc -qtattributionsscanner -qtdiag -qtplugininfo" LLVM_SLOT="22 -17 -18 -19 -20 -21 (-23%)"
+[ebuild   R    ]                                                                       dev-qt/qtdeclarative-6.11.2-r1:6/6.11.2::gentoo  USE="custom-cflags jit network opengl qmlls sql ssl svg vulkan wayland%* widgets -accessibility"
+[ebuild     U  ]                                                                   kde-frameworks/extra-cmake-modules-6.30.0::gentoo [6.29.0::gentoo] USE="-doc -test"
+[ebuild  N     ]                                                                   kde-frameworks/kdoctools-6.30.0:6/6.30::gentoo  USE="nls -debug -test"
+[ebuild     U  ]                                                                       dev-libs/plasma-wayland-protocols-1.22.0::gentoo [1.21.0::gentoo] USE="-test"
+[ebuild     U  ]                                                                           sys-fs/cryptsetup-2.8.8:0/12::gentoo [2.8.7:0/12::gentoo] USE="argon2 nls openssl udev -fips -gcrypt -kernel -nettle -passwdqc -pwquality -ssh -static -static-libs -test -urandom -verify-sig"
+[ebuild     U  ]                                                                               sys-fs/xfsprogs-7.1.1::gentoo [7.0.1::gentoo] USE="icu nls -libedit (-selinux) -static-libs"
+[ebuild     U  ]                                                                             gnome-base/gnome-keyring-50.0::gentoo [48.0-r1::gentoo] USE="pam ssh-agent systemd -caps (-selinux) -test"
+[ebuild     U  ]                                                                                 gui-libs/gtk-4.22.5:4::gentoo [4.20.4:4::gentoo] USE="X cups introspection vulkan wayland (-aqua) -broadway -cloudproviders -colord -examples -gstreamer -gtk-doc -sysprof -test" CPU_FLAGS_X86="f16c"
+[ebuild     U  ]                                           dev-libs/libdex-1.2.0:0/1::gentoo [1.0.0:0/1::gentoo] USE="eventfd introspection liburing sysprof -gtk-doc -test -vala"
+[ebuild     U  ]                                           gui-libs/libadwaita-1.9.3:1::gentoo [1.8.7:1::gentoo] USE="introspection vala -examples -gtk-doc -test"
+[ebuild     U  ]                                 app-crypt/gpgme-2.2.0:1/45.0::gentoo [2.1.2:1/45.0::gentoo] USE="-common-lisp -static-libs -test -verify-sig"
+[ebuild     U  ]                                 app-portage/gemato-20.14::gentoo [20.13::gentoo] USE="gpg -pretty-log -test -tools" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)"
+[ebuild     U  ]             dev-python/ensurepip-pip-26.2.1::gentoo [26.1.2::gentoo] USE="(test-rust) -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 -python3_14t (-python3_15) (-python3_15t)"
+[ebuild  rR    ] app-admin/mongo-tools-100.9.4::gentoo  USE="ssl -kerberos -sasl"
+[ebuild  r  U  ]   dev-lang/go-1.27.1:0/1.27.1::gentoo [1.26.5:0/1.26.5::gentoo] CPU_FLAGS_X86="sse2"
+[ebuild  rR    ] app-admin/helm-4.2.4::gentoo 
+[ebuild  rR    ] app-containers/k3d-5.9.0::gentoo  USE="-doc"
+[ebuild  rR    ] app-crypt/cfssl-1.6.5::gentoo 
+[ebuild  rR    ] net-fs/mc-2025.08.13.08.35.41::gentoo 
+[ebuild  rR    ] sys-cluster/cilium-cli-0.18.2::gentoo 
+[ebuild  rR    ] sys-cluster/hubble-1.17.5::gentoo 
+[ebuild  rR    ] sys-cluster/kubeadm-1.37.0::gentoo  USE="(-selinux)"
+[ebuild  rR    ] sys-cluster/kubectl-1.37.0::gentoo 
+[ebuild  rR    ] sys-cluster/kubelogin-1.36.3::gentoo 
+[ebuild  rR    ]   dev-go/go-md2man-2.0.7::gentoo 
+[ebuild  rR    ]   app-containers/runc-1.4.3::gentoo  USE="seccomp -apparmor (-selinux) -test"
+[ebuild  rR    ] app-containers/skopeo-1.24.0::gentoo  USE="-btrfs -rootless (-selinux)"
+[ebuild     U  ]   dev-python/meson-python-0.21.1::gentoo [0.20.0::gentoo] USE="-test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)"
+[ebuild     U  ]       dev-util/maturin-1.15.0::gentoo [1.14.1::gentoo] USE="ssl -debug -doc -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 -python3_14t (-python3_15) (-python3_15t)"
+[ebuild     U  ] dev-python/pip-26.2.1::gentoo [26.1.2-r1::gentoo] USE="(test-rust) -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)"
+[ebuild  N     ]       dev-cpp/rapidfuzz-cpp-3.3.4::gentoo  USE="-test"
+[ebuild     U  ]         dev-python/sip-6.16.1-r1:5::gentoo [6.16.0:5::gentoo] USE="-doc -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)"
+[ebuild     U  ] dev-util/gtk-doc-1.36.1::gentoo [1.34.0-r2::gentoo] USE="-emacs -test" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13"
+[ebuild  rR    ] app-containers/flannel-0.26.3::gentoo 
+[ebuild  rR    ] app-containers/buildah-1.45.0::gentoo  USE="seccomp systemd -apparmor -btrfs (-selinux) -test"
+[ebuild  rR    ] app-containers/podman-6.1.0::gentoo  USE="seccomp systemd -apparmor -btrfs -cron (-selinux) -wrapper"
+[ebuild     U  ]   dev-python/pythran-0.19.0::gentoo [0.18.1-r1::gentoo] USE="-test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)"
+[ebuild     U  ]     dev-cpp/xsimd-14.3.0::gentoo [14.2.0::gentoo] USE="-doc -test"
+[ebuild  rR    ] app-containers/snapd-2.63::gentoo  USE="forced-devmode gtk kde systemd -apparmor"
+[ebuild     U  ]     dev-python/uv-build-0.12.13::gentoo [0.12.3::gentoo] USE="-test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)"
+[ebuild     U  ]       dev-python/uv-0.12.13::gentoo [0.12.3::gentoo] USE="-debug -test"
+[ebuild  rR    ] dev-vcs/lab-0.25.1::gentoo 
+[ebuild     U  ]     dev-cpp/pangomm-2.46.5:1.4::gentoo [2.46.4:1.4::gentoo] USE="-gtk-doc" ABI_X86="32 (64) (-x32)"
+[ebuild     U  ]     dev-python/pbr-7.1.2::gentoo [7.0.3-r2::gentoo] USE="-test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)"
+[ebuild  N     ]     dev-util/source-highlight-3.1.9-r2::gentoo  USE="-doc -static-libs -test"
+[ebuild   R    ]   media-gfx/sane-backends-1.3.1-r2::gentoo  USE="systemd threads usb zeroconf -gphoto2 -snmp -v4l -xinetd" ABI_X86="32 (64) (-x32)" SANE_BACKENDS="abaton* agfafocus* apple* artec* artec_eplus48u* as6e* avision* bh* canon* canon630u* canon_dr* canon_lide70* cardscan* coolscan* coolscan2* coolscan3* dc25* dc210* dc240* dell1600n_net* dmc* epjitsu* epson* epson2* epsonds* escl* fujitsu* genesys* gt68xx* hp hp3500 hp3900 hp4200 hp5400 hp5590 hpljm1005 hs2p* ibm* kodak* kodakaio* kvs20xx* kvs1025* leo* lexmark* ma1509* magicolor* matsushita* microtek* microtek2* mustek* mustek_usb* nec* net* niash* p5* pie* pieusb* pixma* plustek* plustek_pp* qcam* ricoh* ricoh2* rts8891* s9036* sceptre* sharp* sm3600* sm3840* snapscan* sp15c* st400* stv680* tamarack* teco1* teco2* teco3* test* u12* umax* umax1220u* umax_pp* xerox_mfp* -canon_pp -hpsj5s -kvs40xx -mustek_pp -mustek_usb2 -pnm"
+[ebuild  rR    ]             kde-plasma/kwin-6.7.5:6::gentoo  USE="(X) (filecaps) lock screencast shortcuts systemd -accessibility -debug -gamepad -gles2-only -handbook (-selinux) -test"
+[ebuild  rR    ]               kde-plasma/kwin-x11-6.7.5:6::gentoo  USE="lock nightlight shortcuts systemd -accessibility -debug -gles2-only -handbook (-selinux) -test"
+[ebuild     U  ]     dev-cpp/gpgmepp-2.2.0:0/7::gentoo [2.1.0:0/7::gentoo] USE="-test -verify-sig"
+[ebuild     U  ]     dev-libs/qgpgme-2.2.0:0/7::gentoo [2.1.0:0/7::gentoo] USE="-test -verify-sig"
+[ebuild  rR    ]     app-crypt/gocryptfs-2.6.1-r1::gentoo  USE="(-selinux) -test -verify-sig"
+[ebuild   R    ]     x11-base/xorg-drivers-21.1-r2::gentoo  INPUT_DEVICES="evdev libinput synaptics wacom -elographics -joystick -vmmouse -void" VIDEO_CARDS="amdgpu dummy* fbdev* intel nouveau qxl radeon radeonsi vesa* -ast (-freedreno) (-geode) -i915 -mga -nvidia -r128 -siliconmotion (-tegra) (-vc4)"
+[ebuild  N     ]       x11-drivers/xf86-video-dummy-0.4.1::gentoo 
+[ebuild  N     ]       x11-drivers/xf86-video-fbdev-0.5.1::gentoo 
+[ebuild  N     ]       x11-drivers/xf86-video-vesa-2.6.0::gentoo 
+[blocks B      ] <dev-util/gtk-doc-1.36.1 ("<dev-util/gtk-doc-1.36.1" is soft blocking dev-build/gtk-doc-am-1.36.1)
+
+Total: 68 packages (34 upgrades, 1 downgrade, 6 new, 1 in new slot, 26 reinstalls), Size of downloads: 953725 KiB
+Conflict: 1 block (1 unsatisfied)
+
+ * Error: The above package list contains packages which cannot be
+ * installed at the same time on the same system.
+
+For more information about Blocked Packages, please refer to the following
+section of the Gentoo Linux x86 Handbook (architecture is irrelevant):
+
+https://wiki.gentoo.org/wiki/Handbook:X86/Working/Portage#Blocked_packages
+

@@ -239,7 +239,6 @@ pub struct Lookup {
 /// implemented" table.
 pub const BOOLEAN_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--alphabetical", None),
-    ("--ask-enter-invalid", None),
     ("--buildpkgonly", Some("-B")),
     ("--columns", None),
     ("--debug", Some("-d")),
@@ -248,7 +247,6 @@ pub const BOOLEAN_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--verbose-conflicts", None),
     ("--fetchonly", Some("-f")),
     ("--fetch-all-uri", Some("-F")),
-    ("--ignore-default-opts", None),
     ("--noconfmem", None),
     ("--newrepo", None),
     ("--nobindeps", None),
