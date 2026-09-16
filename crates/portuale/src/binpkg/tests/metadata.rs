@@ -66,6 +66,50 @@ fn read_xpak_metadata_rejects_a_file_with_no_xpak_trailer() {
     assert!(err.message().contains("XPAKSTOP"), "{err}");
 }
 
+/// The two-class error split the scan caller makes. The inner-member
+/// cells' classes are asserted in their own tests; this pins the
+/// outer-container and xpak rows.
+// Portage: bintree.py, _populate_local
+#[test]
+fn binpkg_error_classes_mirror_portages_caller() {
+    // A trusted outer member that is not a regular file.
+    let g = build_gpkg_entries(&[
+        ("pre/gpkg-1", GpkgEntry::File(b"")),
+        ("pre/metadata.tar", GpkgEntry::Fifo),
+    ]);
+    let err = read_gpkg_metadata(&g).unwrap_err();
+    assert!(err.is_invalid(), "{err:?}");
+    assert!(err.message().contains("not a regular file"), "{err}");
+
+    // A container with no `metadata.tar` member.
+    let g = build_gpkg_entries(&[
+        ("pre/gpkg-1", GpkgEntry::File(b"")),
+        ("pre/image.tar", GpkgEntry::File(b"x")),
+    ]);
+    let err = read_gpkg_metadata(&g).unwrap_err();
+    assert!(err.is_invalid(), "{err:?}");
+    assert!(err.message().contains("no `metadata.tar` member"), "{err}");
+
+    // A file that is not a tar at all: the skip class too.
+    let scratch = ScratchDir::new("gpkg-notar").unwrap();
+    let junk = scratch.path().join("junk.gpkg.tar");
+    fs::write(&junk, vec![0xffu8; 2048]).unwrap();
+    let err = read_gpkg_metadata(&junk).unwrap_err();
+    assert!(err.is_invalid(), "{err:?}");
+
+    // An xpak trailer pointing at a segment that is not an xpak.
+    let scratch = ScratchDir::new("xpak-badpack").unwrap();
+    let path = scratch.path().join("bad.tbz2");
+    let mut bytes = vec![0u8; 16];
+    bytes.extend_from_slice(b"XPAKSTOP");
+    bytes.extend_from_slice(&8u32.to_be_bytes());
+    bytes.extend_from_slice(b"STOP");
+    fs::write(&path, &bytes).unwrap();
+    let err = read_xpak_metadata(&path).unwrap_err();
+    assert!(err.is_fatal(), "{err:?}");
+    assert!(err.message().contains("XPAKPACK"), "{err}");
+}
+
 /// Reads a genuine `.tbz2` built once by portuale's own
 /// `ebuild <file> package`. Kept as a committed fixture rather than
 /// rebuilt per-test: the read side doesn't need reproducible bytes.

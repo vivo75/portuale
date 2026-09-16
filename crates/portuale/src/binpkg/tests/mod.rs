@@ -517,6 +517,54 @@ fn build_gpkg_with_tar_bytes(prefix: &str, meta: &[u8], image: &[u8]) -> PathBuf
     )
 }
 
+// The image.tar pre-scan.
+
+/// Stage a directory tree, let GNU `tar --sparse --xattrs` write the
+/// image member, and return its bytes.
+fn build_gnu_sparse_image(stage: &Path) -> Vec<u8> {
+    use std::io::{Seek, SeekFrom, Write};
+    let img = stage.join("image");
+    fs::create_dir_all(img.join("usr/lib")).unwrap();
+    fs::create_dir_all(img.join("usr/bin")).unwrap();
+    fs::create_dir_all(img.join("usr/share")).unwrap();
+    fs::write(img.join("usr/lib/libreal.so"), b"real library\n").unwrap();
+    std::os::unix::fs::symlink("libreal.so", img.join("usr/lib/liblink.so")).unwrap();
+    fs::write(img.join("usr/bin/realbin"), b"#!/bin/sh\nexit 0\n").unwrap();
+    fs::hard_link(img.join("usr/bin/realbin"), img.join("usr/bin/hardlink")).unwrap();
+    let mut sparse = fs::File::create(img.join("usr/share/sparse.bin")).unwrap();
+    sparse.write_all(b"head").unwrap();
+    sparse.seek(SeekFrom::Start(1024 * 1024)).unwrap();
+    sparse.write_all(b"tail").unwrap();
+    drop(sparse);
+    let xattr_file = img.join("usr/share/xattr.txt");
+    fs::write(&xattr_file, b"xattr carrier\n").unwrap();
+    let path = std::ffi::CString::new(xattr_file.as_os_str().as_encoded_bytes()).unwrap();
+    // Best effort: the filesystem may refuse `user.*` xattrs.
+    // SAFETY: `setxattr` takes a valid NUL-terminated path, a valid
+    // NUL-terminated key and a length-delimited value.
+    unsafe {
+        libc::setxattr(
+            path.as_ptr(),
+            c"user.portuale".as_ptr(),
+            b"s0".as_ptr() as *const libc::c_void,
+            2,
+            0,
+        );
+    }
+    let tar_path = stage.join("image.tar");
+    run_tar(&[
+        "-cf",
+        &lossy(&tar_path),
+        "--sparse",
+        "--xattrs",
+        "-C",
+        &lossy(stage),
+        "image",
+    ])
+    .unwrap();
+    fs::read(&tar_path).unwrap()
+}
+
 mod digest;
 mod extract;
 mod gpg;

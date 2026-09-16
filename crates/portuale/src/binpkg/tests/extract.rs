@@ -282,3 +282,72 @@ fn extract_binpkg_rejects_unsafe_image_tars_before_unpacking() {
         "inside the symlink member",
     );
 }
+
+#[test]
+fn extract_binpkg_keeps_a_valid_sparse_xattr_image_working() {
+    // The regression shape: legitimate symlink, hardlink-to-earlier,
+    // sparse file and PAX xattr records must still extract (the
+    // pre-scan only rejects).
+    let tmp = TempDir::new("binpkg-gpkg-i19").keep();
+    let stage = tmp.join("stage");
+    fs::create_dir_all(&stage).unwrap();
+    let image_bytes = build_gnu_sparse_image(&stage);
+    let meta = build_inner_tar(&[inner_entry("metadata/SLOT", b"0\n")]);
+    let g = build_gpkg_with_tar_bytes("gen-1.0", &meta, &image_bytes);
+    verify_gpkg_manifest(&g, &GpgVerify::default()).expect("verifies");
+    let image = tmp.join("image");
+    let bi = tmp.join("build-info");
+    extract_binpkg(
+        &g,
+        &image,
+        &bi,
+        &GpgVerify::default(),
+        &crate::ebuild_merge::XattrPolicy::default(),
+    )
+    .expect("extract succeeds");
+
+    use std::os::unix::fs::MetadataExt;
+    let link = image.join("usr/lib/liblink.so");
+    assert!(
+        fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read_link(&link).unwrap(), Path::new("libreal.so"));
+    // The hard link pair keeps one inode.
+    let realbin = image.join("usr/bin/realbin");
+    let hardlink = image.join("usr/bin/hardlink");
+    assert_eq!(
+        fs::metadata(&realbin).unwrap().ino(),
+        fs::metadata(&hardlink).unwrap().ino(),
+        "the hard link target stays hard-linked"
+    );
+    assert_eq!(fs::read(&realbin).unwrap(), b"#!/bin/sh\nexit 0\n");
+    // The sparse file stays sparse (1 MiB, a handful of blocks).
+    let sparse = fs::metadata(image.join("usr/share/sparse.bin")).unwrap();
+    assert_eq!(sparse.len(), 1024 * 1024 + 4);
+    assert!(
+        sparse.blocks() * 512 < sparse.len() / 2,
+        "sparseness lost: {} blocks for {} bytes",
+        sparse.blocks(),
+        sparse.len()
+    );
+    assert_eq!(
+        fs::read(image.join("usr/share/xattr.txt")).unwrap(),
+        b"xattr carrier\n"
+    );
+    // GNU `tar -xpf` (no `--xattrs`) ignores the PAX xattr records.
+    let xpath = std::ffi::CString::new(
+        image
+            .join("usr/share/xattr.txt")
+            .as_os_str()
+            .as_encoded_bytes(),
+    )
+    .unwrap();
+    // SAFETY: `listxattr` takes a valid NUL-terminated path and a
+    // size-0/null buffer returns the needed size.
+    let xattr_size = unsafe { libc::listxattr(xpath.as_ptr(), std::ptr::null_mut(), 0) };
+    assert_eq!(xattr_size, 0, "extraction must not invent xattrs");
+    let _ = fs::remove_dir_all(&tmp);
+}
