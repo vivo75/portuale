@@ -16812,4 +16812,28 @@ TEST/run/l2-portuale-builder.sh TEST/atomlists/l1-porttest.txt
 # -> TEST/logs/l2-20260915T195259Z: hard=0 UNEXPLAINED=0 both directions, rc 0
 ```
 
-The cell-by-cell real-vs-portuale table (including GNU tar's `Cannot open: Not a directory` refusal for members *under* a symlinked prefix, and the `Cannot hard link` refusal for the escaping hardlink) is in `TEST/findings/l2.md` "## #56 S0". The same class one level down — a symlinked `metadata/<KEY>` member inside the inner `metadata.tar` — is filed as backlog #58 (real's `unpack_metadata` raises there; portuale's `metadata/<KEY>` walk still follows), since GLEP 78's "inside the container" names the outer gpkg that #56 scoped to.
+The cell-by-cell real-vs-portuale table (including GNU tar's `Cannot open: Not a directory` refusal for members *under* a symlinked prefix, and the `Cannot hard link` refusal for the escaping hardlink) is in `TEST/findings/l2.md` "## #56 S0". The same class one level down — a symlinked `metadata/<KEY>` member inside the inner `metadata.tar` — **was closed by backlog #58 (2026-09-16)**, which also widened to the inner `image.tar` and the outer container; the helpers named above (`outer_regular_member`/`outer_prefix_dir`/`walk_outer_members`) were deleted in #58 S5 when the outer container moved in-process (see the #58 paragraph below).
+
+**No gpkg member — outer container, inner `metadata.tar` or inner `image.tar` — can make portuale read or write a host path, open a FIFO, or create a device node; every container is read in process with the `tar` crate and GNU `tar` only unpacks the image (backlog #58, 2026-09-16).** The S0 crafted-cell matrix (extended `scripts/gpkg_crafted_members.py`: `#56` outer cells a-h plus inner cells i0-i19 built by rebuilding one inner tar with Python `tarfile` and recomputing the outer `Manifest`, so every `#56` outer check passes) pinned real 3.0.82.2's behaviour per cell before any code moved. Real reads inner members with `tarfile.extractfile` and never leaves the archive: a regular/unknown member yields bytes, a symlink resolves `dirname/linkname` normalized over the whole archive (last match wins), a hardlink resolves earlier members only, and directory/FIFO/device/unresolved-link raise or return `None`; its merge path runs `tar_safe_extract` (duplicate/absolute/traversal/`isdev()` — Python 3.14 includes FIFOs —/hardlink-escape). The pre-#58 portuale returned the host `/etc/hostname` bytes for an inner `metadata/DESCRIPTION -> /etc/hostname` symlink (`read_host_bytes=YES`), skipped a FIFO member the read path, left symlinks/FIFOs in build-info on merge, and silently accepted duplicate and absolute image members. S1 (`1507808`) added the in-process reader (`tar = 0.4.46`, `default-features = false`: zero new transitive crates, no C linkage), S2 (`28f83cf`) wired `read_gpkg_metadata` to it and regenerated the committed fixture without its inner `metadata/` directory member (real's writer never emits one and real's `get_metadata()` rejects it with `InvalidBinaryPackageFormat`; real now reads the fixture 13/13), S3 (`ebe1286`) made `extract_gpkg_member(metadata)` write only resolved regular files (`create_new`, header mode masked to `0o7777` minus setuid/setgid), S4 (`f96804c`) added real `tar_safe_extract`'s rules as a pre-scan of the scratch `image.tar` before GNU `tar -xpf` (plus one owner-approved rule beyond real: a member whose path traverses an earlier symlink member — as root real itself writes through i18 into the host), and S5 (`c33137b`) moved the outer container in-process, deleting `#56`'s filesystem-walk helpers and every outer `tar -xf --no-same-owner`; `verify_gpkg_manifest` streams each member's digest through the new `portage_fetch::verify_digests_reader` (no scratch copy). Documented differences from real (all stricter, none reachable from real's writer): an in-archive metadata symlink is written as a **regular file** holding the target's bytes (real extracts the symlink), nested keys error on merge (K4), and a `..` component errors on read (K5). The seven `#56` crafted-cell tests keep their assertions on the new path (cell c's needle moved to real's own structure error, `f.count("/") != 1`, which fires before any type check).
+
+```sh
+# S0: build every crafted cell and probe real, GNU tar and portuale
+python3 scripts/gpkg_crafted_members.py --mode build
+PYTHONPATH=3rdparty/portage/lib python3 scripts/gpkg_crafted_members.py --mode real
+python3 scripts/gpkg_crafted_members.py --mode extract
+python3 scripts/gpkg_crafted_members.py --mode extract --cells e,i6,i13 --sudo
+
+# the reader + the whole path (S1-S5), including the crafted real columns
+cargo test --release -p portuale binpkg::
+# -> 78 passed (S1 reader, S2 read path, S3 metadata merge, S4 image
+#    pre-scan, S5 outer container + the re-pointed #56 cells)
+cargo test --release -p portage-fetch verify_digests
+# -> 5 passed (the streamed outer-member digest variant)
+
+# L2 porttest both directions (real merging portuale-built archives and
+# portuale merging portage-built ones): 0 unexplained, rc 0
+TEST/run/l2-portuale-builder.sh TEST/atomlists/l1-porttest.txt
+# -> TEST/logs/l2-20260916T004658Z (S4), l2-20260916T063732Z (S5)
+```
+
+Findings: `TEST/findings/l2.md` "## #58 S0"-"S5"; plan `docs/07.058-check_metadata_member_types.md` (DONE, with the seven commit hashes); deferred residue filed as `docs/backlog-tasks.md` #60 (real's skip-vs-abort caller classification) and #61 (the pre-existing musl smoke toolchain rot).
