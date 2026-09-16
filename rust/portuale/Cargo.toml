@@ -98,6 +98,19 @@ filetime = "0.2"
 # relying on that, the same "don't depend on an undeclared transitive"
 # reasoning that applies to any direct API use of another crate.
 libc = "0.2"
+# Real `gpkg.unpack_metadata` reads the inner `metadata.tar` with Python
+# `tarfile` -- in process, resolving a symlink/hardlink *inside* the
+# archive and returning `None` for a FIFO/device, so no host file can be
+# reached (#58). The `tar` crate does the same for portuale: every inner
+# member is judged from its own header (type, link name, bytes) before
+# anything touches the filesystem. `default-features = false` drops the
+# `xattr` feature; the remaining `filetime`/`libc` (plus their `cfg-if`)
+# are already in Cargo.lock via brush/tokio, so this adds no new
+# transitive crate and no C linkage -- the musl-static story is
+# untouched. GNU `tar` keeps unpacking the inner `image.tar`
+# (ownership/permission/xattr/sparse semantics); `#58` S5 moves the
+# outer container over too.
+tar = { version = "0.4", default-features = false }
 # The `mrg` applet (module mrg.rs) is deliberately allowed to use major,
 # mainstream crates -- its requirements are NOT the tight emerge/ebuild
 # ones (see mrg.rs's own module doc comment for the full waiver): clap

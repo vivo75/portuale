@@ -40,15 +40,24 @@ regular-files-only extraction.
   (`binpkg.rs:106-135`), gated by a `binpkg-ignore-signature`-style knob.
   Hash support is BLAKE2B + SHA512 (`binpkg.rs:1594,1601`), matching real's
   own `MANIFEST2_HASH_DEFAULTS`.
-- **Regular-files-only extraction is enforced since 2026-09-15 (#56).**
-  `outer_regular_member`/`outer_prefix_dir` (`binpkg.rs:102-169`,
-  `symlink_metadata`/`FileType`, no follow) and the shared
-  `walk_outer_members` run at all three outer-container sites
-  (`read_gpkg_metadata`, `verify_gpkg_manifest`, `extract_gpkg_member`):
-  the prefix must be a real directory and every trusted name (`gpkg-1`,
-  `Manifest`, `metadata.tar*`, `image.tar*`, `.sig`) must be a regular
-  file — anything else is an error naming the member and its type. The
-  three outer `tar -xf` calls also pass `--no-same-owner`.
+- **Regular-files-only extraction is enforced since 2026-09-15 (#56),
+  widened to every gpkg container by #58 (2026-09-16).** Since #56 a
+  non-regular member at a trusted name (`gpkg-1`, `Manifest`,
+  `metadata.tar*`, `image.tar*`, `.sig`) was an error naming the member
+  and its type. #58 S5 moved the outer container in process: the `tar`
+  crate reads its headers (`read_outer_members`, `binpkg.rs`), applying
+  real `_verify_binpkg`'s structure rules (relative names, exactly one
+  level deep, one common prefix, no duplicates) and the same
+  trusted-name regular-member check as a header-type test; the former
+  `outer_regular_member`/`outer_prefix_dir`/`walk_outer_members` helpers
+  and the outer `tar -xf --no-same-owner` calls are gone. The inner
+  `metadata.tar` is read in process with `tarfile.extractfile` semantics
+  (a symlink resolves **inside** the archive or errors; directory/FIFO/
+  device members error) and the inner `image.tar` gets real
+  `tar_safe_extract`'s rule set as a pre-scan before GNU `tar` unpacks —
+  plus one hardening rule beyond real's set (a member whose path
+  traverses an earlier symlink member). See `TEST/findings/l2.md`
+  "## #58 S0" for the full crafted-cell matrix.
 - The audit's own follow-up ("real's enforcement wasn't independently
   re-verified") is answered by #56 S0's crafted-archive matrix
   (`TEST/findings/l2.md` "## #56 S0"): real's `tarfile.extractfile` never
@@ -320,23 +329,27 @@ Two genuine, narrow gaps survived cross-referencing against what real
    depcachedir/depend fallback (same metadata, no pregen speedup). Evidence:
    `TEST/findings/l2.md` "## #55 S0"; `docs/backlog-tasks.md` #55.
 
-2. **Outer gpkg container tar entry-type check (GLEP 78) — DONE
-   2026-09-15 (#56).** The three outer-container sites now require a real
-   prefix directory and regular files at every trusted name, via
-   `outer_regular_member`/`outer_prefix_dir` and the shared
-   `walk_outer_members` (`read_gpkg_metadata`, `verify_gpkg_manifest`,
-   `extract_gpkg_member`); non-regular members are errors naming the
-   member and its type. The audit's "real's enforcement wasn't
-   independently re-verified" caveat was resolved by #56 S0's
-   crafted-archive matrix: real's in-archive `tarfile.extractfile` never
-   leaves the container (`KeyError` for a symlink target, size/structure
-   failures for every special member), while the pre-fix portuale followed
-   a symlinked prefix to the host `/etc`, read a host file through a
-   symlinked `Manifest`, and blocked on a FIFO member — so this closed a
-   real divergence, not just theoretical hardening. Evidence:
-   `TEST/findings/l2.md` "## #56 S0"; `scripts/gpkg_crafted_members.py`;
-   `docs/backlog-tasks.md` #56 (whose close-out also files the inner
-   `metadata.tar` member-type residue as #58).
+2. **gpkg container tar entry-type / member safety (GLEP 78) — DONE
+   2026-09-15 (#56), widened and superseded by #58 2026-09-16.** #56
+   required a real prefix directory and regular files at every trusted
+   outer name (then via `outer_regular_member`/`outer_prefix_dir` and
+   `walk_outer_members`). #58 replaced that whole mechanism: the outer
+   container, the inner `metadata.tar` and the inner `image.tar` are all
+   read with the `tar` crate, and no member can make portuale read or
+   write a host path, open a FIFO, or create a device node — outer and
+   metadata by construction, image by real `tar_safe_extract`'s rules
+   applied before unpacking (plus one documented hardening rule). The
+   audit's "real's enforcement wasn't independently re-verified" caveat
+   was resolved by the S0 crafted-archive matrices (#56 and #58 S0):
+   real's in-archive `tarfile.extractfile` never leaves the container
+   (`KeyError` for a symlink target, size/structure failures for every
+   special member), while the pre-fix portuale followed a symlinked
+   prefix to the host `/etc`, read a host file through a symlinked
+   `Manifest`, blocked on a FIFO member, and read a host file through an
+   inner `metadata/DESCRIPTION` symlink — so this closed real
+   divergences, not just theoretical hardening. Evidence:
+   `TEST/findings/l2.md` "## #56 S0" and "## #58 S0"-"S5";
+   `scripts/gpkg_crafted_members.py`; `docs/backlog-tasks.md` #56 and #58.
 
 Everything else — GLEP 74/59/61's full-tree/hash/compression machinery
 (delegated to `gemato` inside real's own `--sync`, itself a portuale
