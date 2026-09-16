@@ -976,6 +976,14 @@ mod tests {
     }
 
     #[test]
+    fn fetch_commands_from_config_defaults_an_absent_fetchcommand() {
+        // Without FETCHCOMMAND/RESUMECOMMAND the shipped defaults resolve,
+        // never `None`.
+        let commands = fetch_commands_from_config(&portage_profile::Config::default());
+        assert_eq!(commands, portage_fetch::FetchCommands::default());
+    }
+
+    #[test]
     fn fetch_src_uri_uses_the_make_globals_default_without_a_config_value() {
         // A config root without make.globals still downloads via the default
         // template.
