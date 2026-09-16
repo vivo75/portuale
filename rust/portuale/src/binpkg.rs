@@ -8,12 +8,19 @@
 // real per-format reader -- this module has both:
 //
 //   - `read_gpkg_metadata`: real `gpkg.get_metadata()` -- a `.gpkg.tar`
-//     is a plain tar container; find/decompress the inner `metadata.tar`.
-//     Shells out to `tar` + the matching decompressor rather than parsing
-//     natively or adding a Rust tar/compression crate -- consistent with
-//     every other real-execution path here (`wget`/`ldconfig`/`scanelf`/
-//     `bash`/`brush`/the compressors `ebuild_package.rs` already runs),
-//     and `tar` + these compressors are hard Gentoo requirements anyway.
+//     is a plain tar container; find/decompress the inner `metadata.tar`
+//     and read each `metadata/<KEY>` member. The inner tar is read **in
+//     process** with the `tar` crate (`#58`, K0): a member is judged
+//     from its own header -- regular/unknown type -> bytes, symlink/
+//     hardlink -> the target member resolved inside the archive, and
+//     anything else is an error -- exactly real `tarfile.extractfile`,
+//     so no symlink is followed and no FIFO/device is opened before the
+//     member is accepted. The outer container and the `image.tar` unpack
+//     still shell out to `tar` (the compressors stay subprocesses), the
+//     same "shell out to the real tool" stance every other real-
+//     execution path here takes (`wget`/`ldconfig`/`scanelf`/`bash`/
+//     `brush`/the compressors `ebuild_package.rs` already runs); `tar`
+//     and these compressors are hard Gentoo requirements anyway.
 //   - `read_xpak_metadata`: real `xpak.tbz2.scan` -- the self-describing
 //     `XPAKPACK…XPAKSTOP…STOP` trailer appended after the image tarball.
 //     Pure Rust, no subprocess, reads only the bounded file tail.
@@ -28,8 +35,9 @@
 
 use std::collections::HashMap;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 /// The `.tar<ext>` suffixes real `gpkg.gpkg.ext_list`
 /// (`lib/portage/gpkg.py:821-829`) maps to a compression method, paired
@@ -229,6 +237,319 @@ fn walk_outer_members(outer: &Path, gpkg: &Path) -> Result<(bool, Vec<(String, P
         }
     }
     Ok((gpkg_marker, members))
+}
+
+// `#58` S1 lands helper + unit tests only; S2 wires it into the read
+// path and S4 reuses `collect_inner_members` for the image pre-scan.
+// Until then every item here is dead code outside `cfg(test)`.
+/// `#58` K0: the inner `metadata.tar` is read in process with the `tar`
+/// crate. Real reads the whole tar into memory too (`unpack_metadata`'s
+/// `io.BytesIO(metadata_reader.read())`), so the bound is on the total
+/// member bytes: 64 MiB is far above any real `metadata.tar` (a few
+/// KiB-MiB) and still bounds a decompression bomb.
+#[allow(dead_code)]
+const MAX_INNER_METADATA_BYTES: u64 = 64 * 1024 * 1024;
+/// A tar of millions of empty members is the same allocation attack with
+/// no bytes to count; real's writer emits ~15.
+#[allow(dead_code)]
+const MAX_INNER_METADATA_ENTRIES: usize = 100_000;
+/// Real `tarfile.extractfile` follows links recursively until Python's
+/// recursion limit (`RecursionError` on a cycle). Portuale stops at a
+/// fixed depth with an error naming the member (`#58` K1).
+#[allow(dead_code)]
+const MAX_INNER_LINK_DEPTH: usize = 40;
+
+/// The `tar` entry types Python's `tarfile` lists in `SUPPORTED_TYPES`
+/// (`lib/python3.14/tarfile.py`); any other byte is treated as a regular
+/// file by `extractfile` (`tarinfo.isreg() or tarinfo.type not in
+/// SUPPORTED_TYPES`) and must be here too.
+#[allow(dead_code)]
+fn known_inner_entry_type(entry_type: tar::EntryType) -> bool {
+    matches!(
+        entry_type.as_byte(),
+        b'\0' | b'0' | b'1' | b'2' | b'3' | b'4' | b'5' | b'6' | b'7' | b'L' | b'K' | b'S'
+    )
+}
+
+/// The type phrase for a member that cannot yield bytes (real's own
+/// `None.read()` -> error cases), for the `#58` K6 error message.
+#[allow(dead_code)]
+fn inner_entry_type_phrase(entry_type: tar::EntryType) -> &'static str {
+    match entry_type.as_byte() {
+        b'3' => "a character device",
+        b'4' => "a block device",
+        b'5' => "a directory",
+        b'6' => "a FIFO",
+        b'1' => "a hard link",
+        b'2' => "a symbolic link",
+        _ => "not a regular file",
+    }
+}
+
+/// `os.path.normpath` for the archive-relative names real's
+/// `_find_link_target` compares: collapses `//`, drops `.` components,
+/// resolves `..` lexically, keeps a leading `/` (an absolute link target
+/// can then never match a relative member, exactly like real).
+#[allow(dead_code)]
+fn normpath(name: &str) -> String {
+    let absolute = name.starts_with('/');
+    let mut parts: Vec<&str> = Vec::new();
+    for component in name.split('/') {
+        match component {
+            "" | "." => {}
+            ".." => {
+                if parts.last().is_some_and(|last| *last != "..") {
+                    parts.pop();
+                } else {
+                    parts.push("..");
+                }
+            }
+            other => parts.push(other),
+        }
+    }
+    let joined = parts.join("/");
+    if absolute {
+        format!("/{joined}")
+    } else if joined.is_empty() {
+        ".".to_string()
+    } else {
+        joined
+    }
+}
+
+/// One inner `metadata.tar` member: its header fields plus bytes, read
+/// before anything is written anywhere.
+#[allow(dead_code)]
+struct InnerMember {
+    /// The raw member name with a trailing `/` stripped -- Python
+    /// `tarfile` strips it before real ever sees the name.
+    name: Vec<u8>,
+    /// `name` with the `metadata/` prefix stripped (real
+    /// `_strip_metadata_prefix`), lossy-decoded for the value map.
+    key: String,
+    entry_type: tar::EntryType,
+    link_name: Option<Vec<u8>>,
+    /// Present only for regular/unknown types; a link resolves to its
+    /// target's bytes instead.
+    data: Option<Vec<u8>>,
+}
+
+/// `#58` S1: the resolved inner metadata. `entries` is first-appearance
+/// order with last-wins values (real's own `dict` comprehension over
+/// `getmembers()`, `gpkg.py:855-862`); `duplicate_keys` names the keys
+/// seen more than once so the merge path (`#58` S3) can refuse an
+/// archive real's own `tar_safe_extract` rejects as "Duplicate files
+/// detected".
+#[derive(Debug)]
+#[allow(dead_code)]
+struct InnerMetadata {
+    entries: Vec<(String, Vec<u8>)>,
+    duplicate_keys: Vec<String>,
+}
+
+/// Collect every inner member in archive order, validating its name and
+/// reading bytes only for regular/unknown types. `#58` K3/K5: a name
+/// outside `metadata/`, an absolute name, or any `..` component is an
+/// error (real `_strip_metadata_prefix` / its own `tar_safe_extract`);
+/// the zip-bomb guards cap the member count and the total bytes.
+#[allow(dead_code)]
+fn collect_inner_members<R: Read>(gpkg: &Path, reader: R) -> Result<Vec<InnerMember>, String> {
+    let mut archive = tar::Archive::new(reader);
+    let entries = archive
+        .entries()
+        .map_err(|e| format!("{}: reading inner metadata.tar: {e}", gpkg.display()))?;
+    let mut members: Vec<InnerMember> = Vec::new();
+    let mut total_bytes: u64 = 0;
+    for entry in entries {
+        let mut entry =
+            entry.map_err(|e| format!("{}: reading inner metadata.tar: {e}", gpkg.display()))?;
+        if members.len() >= MAX_INNER_METADATA_ENTRIES {
+            return Err(format!(
+                "{}: inner metadata.tar has more than {MAX_INNER_METADATA_ENTRIES} members",
+                gpkg.display()
+            ));
+        }
+        let raw = entry.path_bytes();
+        let mut name = raw.to_vec();
+        while name.last() == Some(&b'/') {
+            name.pop();
+        }
+        let shown = String::from_utf8_lossy(&name);
+        if name.starts_with(b"/")
+            || name
+                .split(|byte| *byte == b'/')
+                .any(|component| component == b"..")
+        {
+            return Err(format!(
+                "{}: inner metadata member {shown:?} has an unsafe name",
+                gpkg.display()
+            ));
+        }
+        let Some(key_bytes) = name.strip_prefix(b"metadata/") else {
+            return Err(format!(
+                "{}: inner metadata member {shown:?} is outside metadata/",
+                gpkg.display()
+            ));
+        };
+        let key = String::from_utf8_lossy(key_bytes).into_owned();
+        let entry_type = entry.header().entry_type();
+        let link_name = entry.link_name_bytes().map(|bytes| bytes.to_vec());
+        let data = if entry_type.is_file()
+            || entry_type.is_contiguous()
+            || !known_inner_entry_type(entry_type)
+        {
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).map_err(|e| {
+                format!(
+                    "{}: reading inner metadata member {shown:?}: {e}",
+                    gpkg.display()
+                )
+            })?;
+            total_bytes = total_bytes.saturating_add(bytes.len() as u64);
+            if total_bytes > MAX_INNER_METADATA_BYTES {
+                return Err(format!(
+                    "{}: inner metadata.tar is larger than {MAX_INNER_METADATA_BYTES} bytes",
+                    gpkg.display()
+                ));
+            }
+            Some(bytes)
+        } else {
+            None
+        };
+        members.push(InnerMember {
+            name,
+            key,
+            entry_type,
+            link_name,
+            data,
+        });
+    }
+    Ok(members)
+}
+
+/// Resolve one member to bytes exactly as real `tarfile.extractfile`
+/// does (`#58` K1): a regular/unknown type yields its own bytes; a
+/// symlink resolves `dirname(name)/linkname` normalized over the whole
+/// archive (last match wins); a hardlink resolves `linkname` among
+/// earlier members only; both recurse through further links with a
+/// depth cap. A directory/FIFO/device is an error naming the member and
+/// its type; an unresolved link is an error naming the target. A link
+/// can therefore only ever yield **another member's** bytes.
+#[allow(dead_code)]
+fn resolve_inner_member(
+    gpkg: &Path,
+    members: &[InnerMember],
+    index: usize,
+    depth: usize,
+) -> Result<Vec<u8>, String> {
+    let member = &members[index];
+    let shown = String::from_utf8_lossy(&member.name);
+    let entry_type = member.entry_type;
+    if entry_type.is_file() || entry_type.is_contiguous() || !known_inner_entry_type(entry_type) {
+        return Ok(member.data.clone().unwrap_or_default());
+    }
+    if depth > MAX_INNER_LINK_DEPTH {
+        return Err(format!(
+            "{}: inner metadata member {shown:?} link chain is deeper than {MAX_INNER_LINK_DEPTH}",
+            gpkg.display()
+        ));
+    }
+    let link = member.link_name.clone().unwrap_or_default();
+    let shown_link = String::from_utf8_lossy(&link);
+    let (target, search_len) = if entry_type.is_symlink() {
+        let name = String::from_utf8_lossy(&member.name);
+        let dirname = name.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
+        let joined = if dirname.is_empty() {
+            shown_link.to_string()
+        } else {
+            format!("{dirname}/{shown_link}")
+        };
+        // The whole archive, last match wins (`_getmember` bottom-to-top).
+        (normpath(&joined), members.len())
+    } else if entry_type.is_hard_link() {
+        // Only members *before* the link can be its target.
+        (normpath(&shown_link), index)
+    } else {
+        return Err(format!(
+            "{}: inner metadata member {shown:?} is {}, not a regular file",
+            gpkg.display(),
+            inner_entry_type_phrase(entry_type)
+        ));
+    };
+    let found = members[..search_len]
+        .iter()
+        .rposition(|candidate| normpath(&String::from_utf8_lossy(&candidate.name)) == target);
+    let Some(target_index) = found else {
+        return Err(format!(
+            "{}: inner metadata member {shown:?} link target {shown_link:?} not in the archive",
+            gpkg.display()
+        ));
+    };
+    resolve_inner_member(gpkg, members, target_index, depth + 1)
+}
+
+/// `#58` S1: real `tarfile.extractfile` over the inner `metadata.tar`.
+/// `member` is the outer container's `metadata.tar[.<comp>]` member:
+/// opened directly when `comp` is `None`, else its bytes are piped
+/// through the matching decompressor (`gpkg_compressions`) straight into
+/// the `tar` crate -- no `<scratch>/metadata.tar`, no second `tar`
+/// process. Returns every resolved `(key, bytes)` in first-appearance
+/// order with last-wins values.
+#[allow(dead_code)]
+fn read_inner_metadata(
+    gpkg: &Path,
+    member: &Path,
+    comp: Option<&[&str]>,
+) -> Result<InnerMetadata, String> {
+    let members = match comp {
+        None => {
+            let file = fs::File::open(member).map_err(|e| format!("{}: {e}", member.display()))?;
+            collect_inner_members(gpkg, file)?
+        }
+        Some(argv) => {
+            let mut child = Command::new(argv[0])
+                .args(&argv[1..])
+                .arg(member)
+                .stdout(Stdio::piped())
+                .spawn()
+                .map_err(|e| format!("failed to spawn {}: {e}", argv[0]))?;
+            let stdout = child.stdout.take().expect("stdout is piped");
+            // Dropping the reader closes the pipe if collection stopped
+            // early, so a blocked child gets EPIPE before the wait.
+            let collected = collect_inner_members(gpkg, stdout);
+            let status = child
+                .wait()
+                .map_err(|e| format!("waiting for {}: {e}", argv[0]))?;
+            if !status.success() {
+                return Err(format!(
+                    "{} failed to decompress {} ({status})",
+                    argv[0],
+                    member.display()
+                ));
+            }
+            collected?
+        }
+    };
+
+    let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut duplicate_keys: Vec<String> = Vec::new();
+    for index in 0..members.len() {
+        let bytes = resolve_inner_member(gpkg, &members, index, 0)?;
+        let key = members[index].key.clone();
+        match entries.iter_mut().find(|(existing, _)| *existing == key) {
+            Some((_, value)) => {
+                *value = bytes;
+                if !duplicate_keys.contains(&key) {
+                    duplicate_keys.push(key);
+                }
+            }
+            None => entries.push((key, bytes)),
+        }
+    }
+    Ok(InnerMetadata {
+        entries,
+        duplicate_keys,
+    })
 }
 
 /// Real `portage.gpkg.gpkg.get_metadata()` / `unpack_metadata(want=None)`
@@ -2579,5 +2900,314 @@ mod tests {
             Some("0"),
             "a stale index entry must be re-derived from the real file"
         );
+    }
+
+    // ---- #58 S1: the in-process inner metadata.tar reader ----
+
+    /// One inner-tar member for the S1 unit tests: the same raw fields
+    /// the crafted S0 cells set, written through `tar::Builder`.
+    struct InnerTestEntry<'a> {
+        name: &'a str,
+        entry_type: tar::EntryType,
+        link_name: &'a str,
+        data: &'a [u8],
+    }
+
+    fn inner_entry<'a>(name: &'a str, data: &'a [u8]) -> InnerTestEntry<'a> {
+        InnerTestEntry {
+            name,
+            entry_type: tar::EntryType::Regular,
+            link_name: "",
+            data,
+        }
+    }
+
+    fn inner_symlink<'a>(name: &'a str, target: &'a str) -> InnerTestEntry<'a> {
+        InnerTestEntry {
+            name,
+            entry_type: tar::EntryType::Symlink,
+            link_name: target,
+            data: b"",
+        }
+    }
+
+    fn inner_hardlink<'a>(name: &'a str, target: &'a str) -> InnerTestEntry<'a> {
+        InnerTestEntry {
+            name,
+            entry_type: tar::EntryType::Link,
+            link_name: target,
+            data: b"",
+        }
+    }
+
+    fn inner_special(name: &str, entry_type: tar::EntryType) -> InnerTestEntry<'_> {
+        InnerTestEntry {
+            name,
+            entry_type,
+            link_name: "",
+            data: b"",
+        }
+    }
+
+    fn build_inner_tar(entries: &[InnerTestEntry<'_>]) -> Vec<u8> {
+        let mut builder = tar::Builder::new(Vec::new());
+        for entry in entries {
+            let mut header = tar::Header::new_ustar();
+            header.set_size(entry.data.len() as u64);
+            header.set_mode(0o644);
+            header.set_entry_type(entry.entry_type);
+            // Raw name bytes: `Header::set_path` refuses `..`/absolute
+            // names, which is exactly what the crafted cells need to
+            // carry.
+            let name = entry.name.as_bytes();
+            header.as_ustar_mut().unwrap().name[..name.len()].copy_from_slice(name);
+            if !entry.link_name.is_empty() {
+                header.set_link_name(entry.link_name).unwrap();
+            }
+            if matches!(entry.entry_type.as_byte(), b'3' | b'4') {
+                header.set_device_major(1).unwrap();
+                header.set_device_minor(5).unwrap();
+            }
+            header.set_cksum();
+            builder.append(&header, entry.data).unwrap();
+        }
+        builder.into_inner().unwrap()
+    }
+
+    /// Write the crafted tar to a scratch file (the shape
+    /// `read_inner_metadata` gets when the outer member is uncompressed)
+    /// and read it back.
+    fn read_inner(entries: &[InnerTestEntry<'_>]) -> Result<InnerMetadata, String> {
+        let scratch = ScratchDir::new("inner-reader-test").unwrap();
+        let path = scratch.path().join("metadata.tar");
+        fs::write(&path, build_inner_tar(entries)).unwrap();
+        read_inner_metadata(Path::new("/test/pkg.gpkg.tar"), &path, None)
+    }
+
+    #[test]
+    fn read_inner_metadata_round_trips_regular_members() {
+        let metadata = read_inner(&[
+            inner_entry("metadata/SLOT", b"0\n"),
+            inner_entry("metadata/EAPI", b"8\n"),
+        ])
+        .expect("reads");
+        assert_eq!(
+            metadata.entries,
+            vec![
+                ("SLOT".to_string(), b"0\n".to_vec()),
+                ("EAPI".to_string(), b"8\n".to_vec()),
+            ]
+        );
+        assert!(metadata.duplicate_keys.is_empty());
+    }
+
+    #[test]
+    fn read_inner_metadata_resolves_symlinks_in_archive() {
+        // S0 i2 plus a `../`-normalized target and a link chain: real
+        // joins `dirname(name)/linkname` and normpaths it, and recurses
+        // through further links.
+        let metadata = read_inner(&[
+            inner_entry("metadata/SLOT", b"0\n"),
+            inner_symlink("metadata/DESCRIPTION", "SLOT"),
+            inner_symlink("metadata/A", "B"),
+            inner_symlink("metadata/B", "SLOT"),
+            inner_symlink("metadata/sub/L", "../SLOT"),
+        ])
+        .expect("reads");
+        let by_key: HashMap<&str, &[u8]> = metadata
+            .entries
+            .iter()
+            .map(|(key, bytes)| (key.as_str(), bytes.as_slice()))
+            .collect();
+        assert_eq!(by_key["DESCRIPTION"], b"0\n");
+        assert_eq!(by_key["A"], b"0\n");
+        assert_eq!(by_key["sub/L"], b"0\n");
+    }
+
+    #[test]
+    fn read_inner_metadata_rejects_a_symlink_out_of_the_archive() {
+        // S0 i1: real raises `KeyError: linkname ... not found`; the
+        // host file must never be read (the old walk followed it).
+        let err = read_inner(&[
+            inner_entry("metadata/SLOT", b"0\n"),
+            inner_symlink("metadata/DESCRIPTION", "/etc/hostname"),
+        ])
+        .unwrap_err();
+        assert!(err.contains("not in the archive"), "{err}");
+        assert!(err.contains("DESCRIPTION"), "{err}");
+    }
+
+    #[test]
+    fn read_inner_metadata_resolves_hardlinks_to_earlier_members() {
+        // S0 i3: the target has to be *earlier* than the link.
+        let metadata = read_inner(&[
+            inner_entry("metadata/SLOT", b"0\n"),
+            inner_hardlink("metadata/DESCRIPTION", "metadata/SLOT"),
+        ])
+        .expect("reads");
+        assert_eq!(
+            metadata.entries,
+            vec![
+                ("SLOT".to_string(), b"0\n".to_vec()),
+                ("DESCRIPTION".to_string(), b"0\n".to_vec()),
+            ]
+        );
+    }
+
+    #[test]
+    fn read_inner_metadata_rejects_hardlinks_to_later_or_missing_members() {
+        // S0 i3b: target comes later.
+        let err = read_inner(&[
+            inner_hardlink("metadata/AAA", "metadata/SLOT"),
+            inner_entry("metadata/SLOT", b"0\n"),
+        ])
+        .unwrap_err();
+        assert!(err.contains("not in the archive"), "{err}");
+        // S0 i4: target is not a member at all.
+        let err =
+            read_inner(&[inner_hardlink("metadata/DESCRIPTION", "etc/hostname")]).unwrap_err();
+        assert!(err.contains("not in the archive"), "{err}");
+    }
+
+    #[test]
+    fn read_inner_metadata_rejects_fifo_and_device_members() {
+        // S0 i5/i6: real's `extractfile` returns `None` -> error; the
+        // type is named.
+        let err =
+            read_inner(&[inner_special("metadata/DESCRIPTION", tar::EntryType::Fifo)]).unwrap_err();
+        assert!(err.contains("a FIFO"), "{err}");
+        let err =
+            read_inner(&[inner_special("metadata/DESCRIPTION", tar::EntryType::Char)]).unwrap_err();
+        assert!(err.contains("a character device"), "{err}");
+        let err = read_inner(&[inner_special("metadata/DESCRIPTION", tar::EntryType::Block)])
+            .unwrap_err();
+        assert!(err.contains("a block device"), "{err}");
+    }
+
+    #[test]
+    fn read_inner_metadata_rejects_directory_members_and_outside_names() {
+        // The committed fixture's inner `metadata/` directory member:
+        // Python tarfile strips the trailing slash, real
+        // `_strip_metadata_prefix` rejects the bare `metadata` name.
+        let err = read_inner(&[
+            inner_special("metadata/", tar::EntryType::Directory),
+            inner_entry("metadata/SLOT", b"0\n"),
+        ])
+        .unwrap_err();
+        assert!(err.contains("outside metadata/"), "{err}");
+        // S0 i7: a nested directory member is a `None.read()` error for
+        // real; the `sub/KEY` member after it never resolves.
+        let err = read_inner(&[
+            inner_special("metadata/sub/", tar::EntryType::Directory),
+            inner_entry("metadata/sub/KEY", b"nested\n"),
+        ])
+        .unwrap_err();
+        assert!(err.contains("a directory"), "{err}");
+        // S0 i8: a name outside `metadata/` (real
+        // `InvalidBinaryPackageFormat`).
+        let err = read_inner(&[inner_entry("other/KEY", b"outside\n")]).unwrap_err();
+        assert!(err.contains("outside metadata/"), "{err}");
+    }
+
+    #[test]
+    fn read_inner_metadata_reads_nested_keys_without_a_directory() {
+        // S0 i7b: real's own key is the remainder after `metadata/`.
+        let metadata = read_inner(&[inner_entry("metadata/sub/KEY", b"nested\n")]).expect("reads");
+        assert_eq!(
+            metadata.entries,
+            vec![("sub/KEY".to_string(), b"nested\n".to_vec())]
+        );
+    }
+
+    #[test]
+    fn read_inner_metadata_errors_on_symlink_cycles() {
+        // S0 i10: real hits Python's `RecursionError`; portuale stops at
+        // its own depth cap with a named error.
+        let err = read_inner(&[
+            inner_symlink("metadata/A", "B"),
+            inner_symlink("metadata/B", "A"),
+        ])
+        .unwrap_err();
+        assert!(err.contains("link chain is deeper than"), "{err}");
+    }
+
+    #[test]
+    fn read_inner_metadata_last_wins_and_flags_duplicate_keys() {
+        // S0 i11: real's dict comprehension keeps the last member with a
+        // name; S3 refuses the archive on the flagged duplicate.
+        let metadata = read_inner(&[
+            inner_entry("metadata/SLOT", b"0\n"),
+            inner_entry("metadata/SLOT", b"1\n"),
+        ])
+        .expect("reads");
+        assert_eq!(
+            metadata.entries,
+            vec![("SLOT".to_string(), b"1\n".to_vec())]
+        );
+        assert_eq!(metadata.duplicate_keys, vec!["SLOT".to_string()]);
+    }
+
+    #[test]
+    fn read_inner_metadata_rejects_traversal_and_absolute_names() {
+        // S0 i12/i12b: real's read path would produce a `../KEY` key and
+        // its merge path rejects both; portuale refuses both everywhere.
+        for name in ["metadata/../KEY", "/metadata/KEY"] {
+            let err = read_inner(&[inner_entry(name, b"x\n")]).unwrap_err();
+            assert!(err.contains("unsafe name"), "{name}: {err}");
+        }
+    }
+
+    #[test]
+    fn read_inner_metadata_reads_unknown_entry_types_as_regular_files() {
+        // Real: `tarinfo.isreg() or tarinfo.type not in SUPPORTED_TYPES`
+        // -> bytes.
+        let metadata =
+            read_inner(&[inner_special("metadata/ODD", tar::EntryType::new(b'X'))]).expect("reads");
+        assert_eq!(metadata.entries, vec![("ODD".to_string(), Vec::new())]);
+    }
+
+    #[test]
+    fn read_inner_metadata_decompresses_through_the_pipe() {
+        use std::io::Write;
+        let tar = build_inner_tar(&[
+            inner_entry("metadata/SLOT", b"0\n"),
+            inner_entry("metadata/RDEPEND", b"dev-libs/newpkg\n"),
+        ]);
+        let scratch = ScratchDir::new("inner-zstd-test").unwrap();
+        let path = scratch.path().join("metadata.tar.zst");
+        let mut child = Command::new("zstd")
+            .args(["-q", "-c"])
+            .stdin(Stdio::piped())
+            .stdout(fs::File::create(&path).unwrap())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(&tar).unwrap();
+        assert!(child.wait().unwrap().success());
+
+        let metadata = read_inner_metadata(
+            Path::new("/test/pkg.gpkg.tar"),
+            &path,
+            Some(&["zstd", "-dc", "--long=31"]),
+        )
+        .expect("the zstd pipe reads");
+        let by_key: HashMap<&str, &[u8]> = metadata
+            .entries
+            .iter()
+            .map(|(key, bytes)| (key.as_str(), bytes.as_slice()))
+            .collect();
+        assert_eq!(by_key["SLOT"], b"0\n");
+        assert_eq!(by_key["RDEPEND"], b"dev-libs/newpkg\n");
+
+        // A failing decompressor is still an error (the old path
+        // reported zstd's own `({status})`).
+        let broken = scratch.path().join("broken.tar.zst");
+        fs::write(&broken, b"this is not a zstd stream").unwrap();
+        let err = read_inner_metadata(
+            Path::new("/test/pkg.gpkg.tar"),
+            &broken,
+            Some(&["zstd", "-dc", "--long=31"]),
+        )
+        .unwrap_err();
+        assert!(err.contains("zstd"), "{err}");
     }
 }
