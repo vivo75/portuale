@@ -16837,3 +16837,29 @@ TEST/run/l2-portuale-builder.sh TEST/atomlists/l1-porttest.txt
 ```
 
 Findings: `TEST/findings/l2.md` "## #58 S0"-"S5"; plan `docs/07.058-check_metadata_member_types.md` (DONE, with the seven commit hashes); deferred residue filed as `docs/backlog-tasks.md` #60 (real's skip-vs-abort caller classification) and #61 (the pre-existing musl smoke toolchain rot).
+
+**The musl static-build smoke gate is green again: the builder moved to `alpine:3.24.1`, the `x86_64-alpine-linux-musl` link is re-flipped static at its tail, `libc::sched_param` is built the way CPython builds it, and the script's assertions are structural now (backlog #61, 2026-09-16).** The gate had been red since the workspace's MSRV floor — 1.95, declared by `gentoo-interner` / `portage-atom*` / `portage-solver` — outgrew the pinned Alpine 3.22.1's rustc 1.87, and two more walls sat behind it: Alpine's `x86_64-alpine-linux-musl` target is *dynamic*-musl (`crt-static-default` absent), so `+crt-static`'s `-Wl,-Bstatic … -Wl,-Bdynamic` wrapper left gcc's own appended `-lc` searched dynamically while the global `-static` was in force (GNU ld: `attempted static link of dynamic object .../libc.so`), and `pretend.rs::apply_scheduling_policy` built a glibc-shaped `libc::sched_param` literal that musl rejects (`E0063`; musl's struct carries the four `SCHED_DEADLINE` members). The fixes: base `alpine:3.24.1` (rustc 1.96.1, first stable release over the floor; Alpine's own `rust`/`cargo` apks kept, no rustup), a trailing `-C link-arg=-Wl,-Bstatic` in `rust/.cargo/config.toml` that lands after rustc's `-Wl,-Bdynamic` and before gcc's appended libraries, `unsafe { std::mem::zeroed() }` + field assignment for the sched param (exactly CPython's `os.sched_param` → `struct sched_param` conversion behind real `actions.py:3379`), and a workspace-wide `rust-version = "1.95"` so an old builder now fails with Cargo's own message instead of a downstream link error. The script's pilot-era exact strings (`[ebuild  N]`, target-first order, no USE column, `[blocks] a hard blocks b`, a `[slot conflict]` the resolver no longer produces, an `--jobs` "unimplemented" check on an implemented flag, a deleted `ebuild` stub) were replaced by structural assertions — exit codes, exact cpv order, key markers — with byte-exact output left to the contract suite; every command goes through a `capture` helper so `set -e` can no longer abort the run at the first expected-nonzero check.
+
+```sh
+bash musl/smoke_test.sh
+# -> musl smoke test: PASS (image localhost/portage-rust-musl-smoke:pilot)
+#    23/23 checks, builder warning-free
+
+# the same image, live: the diamond resolves deps-first in the scratch
+# container, with the pytest suite's own merge order
+podman run --rm --entrypoint /bin/emerge \
+    -e PORTAGE_CONFIGROOT=/fixtures -e ROOT=/fixtures \
+    localhost/portage-rust-musl-smoke:pilot --pretend dev-libs/diamond
+# [ebuild  N     ] dev-libs/common-1.0
+# [ebuild  N     ] dev-libs/shared-a-1.0
+# [ebuild  N     ] dev-libs/shared-b-1.0
+# [ebuild  N     ] dev-libs/diamond-1.0
+
+# statically linked, zero runtime dependencies (no INTERP, no NEEDED)
+cid=$(podman create localhost/portage-rust-musl-smoke:pilot)
+podman cp "$cid:/bin/portuale" /tmp/portuale.musl && podman rm "$cid"
+readelf -l /tmp/portuale.musl | grep -c INTERP   # 0
+readelf -d /tmp/portuale.musl | grep -c NEEDED   # 0
+```
+
+Findings: `TEST/findings/musl.md` (the wall matrix, the link-line root cause and the S1-S5 results); plan `docs/07.61-musl-smoke-toolchain-drift.opus.md` (done, with the six commit hashes).

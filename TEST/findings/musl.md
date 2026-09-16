@@ -139,4 +139,100 @@ One warning remains on musl only: `portuale/src/elog.rs:595` casts to
 the two candidates for the flag fix. `3.24.1` chosen: newest **stable**
 release clearing the floor, so the base stays a stable pin.
 
-## S1/S2/S4 results — to be appended by the close-out slice
+## S1 — builder fix (alpine:3.24.1 + trailing `-Wl,-Bstatic`)
+
+On a replica of the S1 tree in `alpine:3.24.1` (rustc 1.96.1), the four
+harnesses build and link fully static; `portuale` stops at the known
+wall 3 (`E0063 sched_param`, fixed in S2):
+
+```
+$ cargo build --release --target x86_64-alpine-linux-musl \
+    --package versions-harness --package atom-harness \
+    --package use-reduce-harness --package required-use-harness
+    Finished `release` profile [optimized] target(s) in 20.22s
+harness RC=0
+versions-harness       INTERP=0 NEEDED=0
+atom-harness           INTERP=0 NEEDED=0
+use-reduce-harness     INTERP=0 NEEDED=0
+required-use-harness   INTERP=0 NEEDED=0
+$ cargo build ... --package portuale
+error[E0063]: missing fields `sched_ss_init_budget`, `sched_ss_low_priority`,
+              `sched_ss_max_repl` and 1 other field in initializer of `sched_param`
+```
+
+## S2 — `sched_param` portability
+
+Same command with S2 applied: full five-package build, rc 0, all static:
+
+```
+    Finished `release` profile [optimized] target(s) in 3m 15s
+RC=0
+versions-harness       INTERP=0 NEEDED=0
+atom-harness           INTERP=0 NEEDED=0
+use-reduce-harness     INTERP=0 NEEDED=0
+required-use-harness   INTERP=0 NEEDED=0
+portuale               INTERP=0 NEEDED=0
+```
+
+`std::mem::zeroed()` + `param.sched_priority = priority` is byte-for-byte
+CPython's own conversion: real passes `os.sched_param(priority)` to
+`os.sched_setscheduler` (`actions.py:3379`) and CPython builds the C
+struct as a compound literal with only `sched_priority` set. The
+existing host test `test_emerge_applies_portage_scheduling_policy`
+covers the runtime path unchanged.
+
+## S3 — MSRV guard
+
+With `rust-version = "1.95"` workspace-wide, the minimal
+`versions-harness` build on `alpine:3.22.1` (rustc 1.87) now fails at
+the member level, before any dependency resolution or compile:
+
+```
+error: rustc 1.87.0 is not supported by the following packages:
+  harness-common@0.1.0 requires rustc 1.95
+  portage-versions@0.1.0 requires rustc 1.95
+  versions-harness@0.1.0 requires rustc 1.95
+```
+
+## S4/S5 — full smoke gate green, warning-free
+
+```
+$ bash musl/smoke_test.sh
+...
+musl smoke test: PASS (image localhost/portage-rust-musl-smoke:pilot)
+```
+
+23/23 checks, zero `FAIL` lines; the 3m16s builder log has zero
+`warning:` lines (S5 removed the musl-only `libc::time_t` deprecation).
+The static claim on the shipped artifact, from the same image:
+
+```
+$ cid=$(podman create localhost/portage-rust-musl-smoke:pilot)
+$ podman cp "$cid:/bin/portuale" /tmp/portuale.musl && podman rm "$cid"
+$ readelf -l /tmp/portuale.musl | grep -c INTERP   # 0
+$ readelf -d /tmp/portuale.musl | grep -c NEEDED   # 0
+```
+
+### The stale assertions S4 replaced
+
+`smoke_test.sh` had not run end to end since the builder broke; its
+exact-match pins were pilot-era. The table is what S4 rewrote from
+(structural: rc + exact cpv order + markers):
+
+| check | script expected (pilot) | current binary |
+|---|---|---|
+| merge list | `[ebuild  N] pkg-1.0` | `[ebuild  N     ] pkg-1.0 ` (padded, trailing space) |
+| order | target first | dependencies first, target last |
+| USE | no column | `USE="foo -missingflag"` / `USE="-foo"` |
+| masked+unmasked | `[ebuild  N]` | `[ebuild  N    #]` |
+| blocks | `[blocks] a hard blocks b ("!!b")` | `[blocks B      ] b ("b" is hard blocking a)`, rc 1 + real's blocked-packages error |
+| slot conflict | a `[slot conflict]` block | settles on `slotconflicttarget-1.0` (contract-pinned) |
+| virtual | 3 entries incl. newpkg | `virtual/texteditor-0`, `virtualconsumerpkg` |
+| REQUIRED_USE | old single-line grep | real's `!!! The ebuild selected … has unmet requirements` block |
+| `--jobs` | "real option, unimplemented" | implemented; now checks `--nobindeps`' refusal instead |
+| ebuild `merge` | "pilot stub" text | `ebuild --help` usage + the bad-phase refusal |
+
+`set -e` aborted the old script at the first expected-nonzero rc
+(`blockerpkg`); every command now goes through `capture()`, so later
+checks always run. Byte-exact output stays
+`tests/test_emerge_pretend_contract.py`'s job.
