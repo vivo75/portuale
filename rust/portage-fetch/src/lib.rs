@@ -515,6 +515,64 @@ pub fn verify_digests(path: &Path, digests: &DistfileDigests) -> Result<(), Erro
     Ok(())
 }
 
+/// The streaming sibling of [`verify_digests`]: the same size-first
+/// check and the same BLAKE2B/SHA512 set, but the bytes come from a
+/// reader -- the gpkg outer-container member stream (`#58` S5), so a
+/// large member is neither buffered in memory nor copied to a scratch
+/// file. `name` labels the member in the error messages (the `path`
+/// field the file variant fills with the on-disk path).
+pub fn verify_digests_reader<R: std::io::Read>(
+    name: &str,
+    mut reader: R,
+    digests: &DistfileDigests,
+) -> Result<(), Error> {
+    // `blake2`/`sha2` both re-export the same underlying `digest::Digest`
+    // trait; see `verify_digests`.
+    use blake2::Digest as _;
+
+    let mut blake2b = blake2::Blake2b512::new();
+    let mut sha512 = sha2::Sha512::new();
+    let mut buffer = [0u8; 64 * 1024];
+    let mut size: u64 = 0;
+    loop {
+        let n = reader.read(&mut buffer).map_err(|source| Error::Io {
+            path: name.to_string(),
+            source,
+        })?;
+        if n == 0 {
+            break;
+        }
+        size += n as u64;
+        blake2b.update(&buffer[..n]);
+        sha512.update(&buffer[..n]);
+    }
+    if size != digests.size {
+        return Err(Error::SizeMismatch {
+            path: name.to_string(),
+            expected: digests.size,
+            got: size as usize,
+        });
+    }
+    let blake2b_hex = to_hex(&blake2b.finalize());
+    let sha512_hex = to_hex(&sha512.finalize());
+    for (algo, expected) in &digests.hashes {
+        let actual = match algo.as_str() {
+            "BLAKE2B" => blake2b_hex.clone(),
+            "SHA512" => sha512_hex.clone(),
+            _ => continue,
+        };
+        if !actual.eq_ignore_ascii_case(expected) {
+            return Err(Error::HashMismatch {
+                path: name.to_string(),
+                algo: algo.to_string(),
+                expected: expected.to_string(),
+                actual,
+            });
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -734,6 +792,37 @@ mod tests {
         hashes.insert("MD5".to_string(), "not-even-hex".to_string());
         let digests = DistfileDigests { size: 11, hashes };
         assert!(verify_digests(&path, &digests).is_ok());
+    }
+
+    #[test]
+    fn verify_digests_reader_matches_verify_digests_on_the_same_bytes() {
+        // The gpkg outer-container path (`#58` S5) streams a member
+        // through this variant; the bytes and the two digests are the
+        // same real "hello world" vectors as the file tests above.
+        let mut hashes = HashMap::new();
+        hashes.insert(
+            "BLAKE2B".to_string(),
+            "021ced8799296ceca557832ab941a50b4a11f83478cf141f51f933f653ab9fbcc05a037cddbed06e309bf334942c4e58cdf1a46e237911ccd7fcf9787cbc7fd0".to_string(),
+        );
+        hashes.insert(
+            "SHA512".to_string(),
+            "309ecc489c12d6eb4cc40f50c902f2b4d0ed77ee511a7c7a9bcd3ca86d4cd86f989dd35bc5ff499670da34255b45b0cfd830e81f605dcf7dc5542e93ae9cd76f".to_string(),
+        );
+        let digests = DistfileDigests { size: 11, hashes };
+        assert!(verify_digests_reader("member", &b"hello world"[..], &digests).is_ok());
+        // A size mismatch is reported before hashing.
+        let wrong_size = DistfileDigests {
+            size: 999,
+            hashes: HashMap::new(),
+        };
+        let err = verify_digests_reader("member", &b"hello world"[..], &wrong_size).unwrap_err();
+        assert!(err.to_string().contains("size mismatch"), "{err}");
+        // A hash mismatch names the member and the algorithm.
+        let mut hashes = HashMap::new();
+        hashes.insert("SHA512".to_string(), "0".repeat(128));
+        let digests = DistfileDigests { size: 11, hashes };
+        let err = verify_digests_reader("member", &b"hello world"[..], &digests).unwrap_err();
+        assert!(err.to_string().contains("member: SHA512 mismatch"), "{err}");
     }
 
     #[test]

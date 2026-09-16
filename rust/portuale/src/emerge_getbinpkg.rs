@@ -737,14 +737,18 @@ mod tests {
         bytes[mid] ^= 0xff;
         std::fs::write(&member, bytes).unwrap();
         let tampered = tmp.join("tampered.gpkg.tar");
-        let status = std::process::Command::new("tar")
-            .args(["-cf"])
-            .arg(&tampered)
-            .args(["-C"])
-            .arg(&outer)
-            .arg("gpgsignedpkg-1.0")
-            .status()
-            .unwrap();
+        // List the prefix's files, not the prefix dir: a `<prefix>/`
+        // directory member would be refused by real's one-level
+        // structure check (`#58` S5).
+        let mut pack = std::process::Command::new("tar");
+        pack.args(["-cf"]).arg(&tampered).args(["-C"]).arg(&outer);
+        for file in std::fs::read_dir(outer.join("gpgsignedpkg-1.0")).unwrap() {
+            pack.arg(format!(
+                "gpgsignedpkg-1.0/{}",
+                file.unwrap().file_name().to_string_lossy()
+            ));
+        }
+        let status = pack.status().unwrap();
         assert!(status.success());
 
         let root = tmp.join("root");
