@@ -588,6 +588,11 @@ fn base64_wrapped(text: &str) -> String {
 /// (`Thu, 10 Sep 2026 07:45:00 +0200`). `%a`/`%b` follow the process
 /// locale like any C `strftime` (real Python always renders English --
 /// portuale runs under the C locale in practice, same result).
+// `libc::time_t` is deprecated in the libc crate's musl definitions
+// ("changed to 64-bit in musl 1.2.0, we'll follow that change in a
+// future release", libc#1848) while `localtime_r` still takes it. Keep
+// the ABI-correct alias for this one call; the value is epoch seconds.
+#[allow(deprecated)]
 fn rfc2822_now() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
