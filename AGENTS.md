@@ -68,6 +68,28 @@ the next slice") and expects the same rhythm every time:
    `Co-Authored-By: …` replace `…` with actual model name
 10. **Track slices as tasks** — one per shipped slice, `completed` only
     once step 8 is green and the docs are updated.
+11. **Close out a multi-slice plan in one commit.** When the last slice
+    of a `docs/<tier>.<nnn>-*.opus.md` plan lands, the same commit that
+    flips its `backlog-tasks.md` entry to `DONE <date>` must also flip
+    the **plan file's own `Status:` header** from `proposed` to
+    `done <date>` (with the slice range, branch and commits). A plan's
+    §0 tells the next agent to read the plan first, so a plan left
+    saying "proposed" after it shipped is the single most misleading
+    staleness this repo produces — it happened to four of six plans in
+    the 2026-09-15/16 batch. Same commit: correct any commit hash the
+    entry cites if the branch was rebased before merging (cite hashes
+    reachable from `main`, not pre-rebase ones), and give every residue
+    you defer a real backlog number, checking the number is free first.
+
+### Numbering new backlog items
+
+Backlog item numbers are global across tiers and **never reused**. Before
+filing, take the next free number by scanning *all* tiers
+(`grep -nE '^[0-9]+\. \*\*' docs/backlog-tasks.md`), not just the tier
+you are writing in — two items filed 13 minutes apart into different
+tiers both claimed #58 on 2026-09-15. Plan filenames are
+`<tier>.<item>-<slug>.opus.md`, so the numeric prefix must match the tier
+the item actually sits in.
 
 <!-- graft:start -->
 ## Graft — repo context graph

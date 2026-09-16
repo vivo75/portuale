@@ -12896,7 +12896,7 @@ def test_needer_othermod_triangle_reports_the_installed_instance_conflict(
     (othermod's `<2.0` settling on installed 1.0 after needer graphed
     2.0, and the mirror order). Exit stays 0 per #57 K1 (portuale's
     standing "slot-conflict notice is informational" convention; backlog
-    #58 tracks revisiting it).
+    #60 tracks revisiting it).
 
     Instance *order* inside the block is portuale's own (the first
     instance graphed is listed first): real walks its dep stack LIFO and

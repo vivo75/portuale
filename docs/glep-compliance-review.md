@@ -57,6 +57,13 @@ regular-files-only extraction.
   while the pre-fix portuale listed the host `/etc` through a symlinked
   prefix and blocked on a FIFO member — so this closed a real divergence,
   not just theoretical hardening.
+- **Scope note on "Full":** GLEP 78's "only regular files are permitted"
+  names the **outer** container, which is what #56 hardened and what this
+  status covers. The same class one level down — a symlinked
+  `metadata/<KEY>` member *inside* the inner `metadata.tar`, which
+  portuale's `Path::is_file` + `fs::read` walk still follows while real's
+  `unpack_metadata` raises — is outside the GLEP's wording but is a live
+  portuale-only host read, open as backlog **#58** (branch `backlog/58`).
 
 ## GLEP 82 — Repository configuration file (layout.conf)
 
@@ -76,11 +83,13 @@ text and ignored, matching the GLEP's own "unknown keys should be
 ignored" rule; their real-world effect is nil for `emerge` (dead in the
 vendored tree, or `repoman`/`pkgcheck`/`--sync` territory).
 
-- `parse_layout_conf` (`rust/portage-repo/src/lib.rs:1036`) only extracts
-  `masters`, `aliases`, `repo-name`, and `profile-formats`
-  (`lib.rs:1205-1237`). Every other key is silently ignored (parsed as raw
-  text, per the GLEP's own "unknown keys should be ignored" rule, but never
-  consulted).
+- `parse_layout_conf` (`rust/portage-repo/src/lib.rs:1036`) returns the
+  raw `key = value` map; the repo-config pass that consumes it
+  (`lib.rs:1259-1300`) extracts `masters`, `aliases`, `repo-name`,
+  `profile-formats` and — since #55, 2026-09-15 — `cache-formats`
+  (`lib.rs:1276-1293`, resolved onto `RepoConfig::cache_formats`). Every
+  other key is silently ignored (parsed as raw text, per the GLEP's own
+  "unknown keys should be ignored" rule, but never consulted).
 - Verified in the vendored real source that the effect of this is uneven:
   - `eapis-deprecated`/`eapis-banned`/`eapis-testing` and their `profile-`
     counterparts are **dead code in real `emerge` itself** — grepping all of
@@ -91,7 +100,7 @@ vendored tree, or `repoman`/`pkgcheck`/`--sync` territory).
     scope). **Not a real backlog candidate.**
   - `cache-formats` (`config.py:578,1564-1577`) genuinely affects real's
     cache-format selection (`md5-dict` vs legacy `pms`) — portuale's
-    `has_usable_md5_cache` (`lib.rs:1497`) instead auto-detected by probing
+    `has_usable_md5_cache` (now `lib.rs:1840`) instead auto-detected by probing
     for a `metadata/md5-cache` directory. This matched real's own
     implementation-defined default and the near-universal state of the
     Gentoo repo (every mainstream repo has used `md5-dict` since ~2012), so

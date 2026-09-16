@@ -78,7 +78,7 @@
     -- portuale reports the same `dev-libs/paired:0` collision between
     installed 1.0 (pulled in by othermod) and merge 2.0 (pulled in by
     needer), in both argv orders -- so only the exit status differs.
-    Backlog #58 tracks revisiting the convention in a future release
+    Backlog #60 tracks revisiting the convention in a future release
     (breaking change, needs a migration story for anything relying on
     rc 0).
   owner: claude-opus-5

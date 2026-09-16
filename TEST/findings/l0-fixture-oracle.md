@@ -113,7 +113,7 @@ names only `othermod`.
 
 ## #54 S0 — oracle matrix: world state × case × complete-graph gate
 
-`docs/05.054-residual_conflict.opus.md` §S0's hypothesis H: the 511e659
+`docs/06.054-residual_conflict.opus.md` §S0's hypothesis H: the 511e659
 docstrings ("verified live") came from a probe where `keeper` was
 reachable from `@world`; both oracles are right under different world
 states, and the fix is to restrict the consumer scan to reachable
@@ -425,7 +425,7 @@ Correct work, not overhead; flagged here for S2 to confirm against the
 ## #57 S2 — fixture oracle + full L0 verification
 
 `docs/06.057-directly_requested_hard_atom_conflict.opus.md` §S2, after
-S1 (`d1dbf10`).
+S1 (`ec09c66`).
 
 **Fixture oracle** (`TEST/run/l0-fixture-oracle.sh`, run
 `l0-fx-20260915T215704Z`): first pass (`l0-fx-20260915T215557Z`) found
