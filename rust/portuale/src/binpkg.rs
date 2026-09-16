@@ -39,6 +39,64 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+/// Why reading one binpkg file failed, in the two classes real's
+/// `bintree._populate_local` caller distinguishes (`bintree.py:1185`):
+///
+/// - `Invalid`: the file is readable but is not a valid/usable binpkg --
+///   real's `(PortagePackageException, SignatureException)` catch. The
+///   `$PKGDIR` scan prints real's own
+///   `!!! Invalid binary package: '<path>', <msg>` and skips the file
+///   (`populate_local_pkgdir`).
+/// - `Fatal`: the read itself failed -- real lets these propagate (a
+///   `KeyError`/`AttributeError`/`RecursionError` from `tarfile`, an
+///   inner `tarfile.ReadError`, an `OSError`). The scan aborts.
+///
+/// The classification mirrors real's exception families site by site;
+/// the per-site table is `docs/07.60-gpkg-populate-read-errors.opus.md`
+/// section 4. Every `.xpak` read error is `Fatal`: real's
+/// `tbz2.get_data()` returns `None` on any scan failure and the caller
+/// then raises `AttributeError` on `None.get`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BinpkgError {
+    /// Real's skip class: warn (real's own message) and drop the file.
+    Invalid(String),
+    /// Real's abort class: the scan stops with the message.
+    Fatal(String),
+}
+
+impl BinpkgError {
+    /// `true` for real's skip class.
+    pub fn is_invalid(&self) -> bool {
+        matches!(self, BinpkgError::Invalid(_))
+    }
+
+    /// `true` for real's abort class.
+    pub fn is_fatal(&self) -> bool {
+        matches!(self, BinpkgError::Fatal(_))
+    }
+
+    /// The message, without the class.
+    pub fn message(&self) -> &str {
+        match self {
+            BinpkgError::Invalid(message) | BinpkgError::Fatal(message) => message,
+        }
+    }
+}
+
+impl std::fmt::Display for BinpkgError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.message())
+    }
+}
+
+/// Existing `Result<_, String>` callers (the merge path, `--info`) keep
+/// working through `?`; only the populate scan inspects the class.
+impl From<BinpkgError> for String {
+    fn from(error: BinpkgError) -> String {
+        error.to_string()
+    }
+}
+
 /// The `.tar<ext>` suffixes real `gpkg.gpkg.ext_list`
 /// (`lib/portage/gpkg.py:821-829`) maps to a compression method, paired
 /// with that method's own real `_compressors` decompress argv
@@ -141,19 +199,21 @@ struct OuterMember {
 /// tar or a `.sig` sidecar is an error naming the member and its type,
 /// and the member's data is never read through it. Returns the members
 /// and whether the `gpkg-1` marker is present.
-fn read_outer_members(gpkg: &Path) -> Result<(Vec<OuterMember>, bool), String> {
-    let file = fs::File::open(gpkg).map_err(|e| format!("{}: {e}", gpkg.display()))?;
+fn read_outer_members(gpkg: &Path) -> Result<(Vec<OuterMember>, bool), BinpkgError> {
+    let file =
+        fs::File::open(gpkg).map_err(|e| BinpkgError::Fatal(format!("{}: {e}", gpkg.display())))?;
     let mut archive = tar::Archive::new(file);
-    let entries = archive
-        .entries()
-        .map_err(|e| format!("{}: reading gpkg container: {e}", gpkg.display()))?;
+    let entries = archive.entries().map_err(|e| {
+        BinpkgError::Invalid(format!("{}: reading gpkg container: {e}", gpkg.display()))
+    })?;
     let mut members: Vec<OuterMember> = Vec::new();
     let mut seen: Vec<Vec<u8>> = Vec::new();
     let mut prefix: Option<Vec<u8>> = None;
     let mut gpkg_marker = false;
     for entry in entries {
-        let entry =
-            entry.map_err(|e| format!("{}: reading gpkg container: {e}", gpkg.display()))?;
+        let entry = entry.map_err(|e| {
+            BinpkgError::Invalid(format!("{}: reading gpkg container: {e}", gpkg.display()))
+        })?;
         // Python `tarfile` strips a trailing `/` before real ever sees
         // the name (so a directory member is a depth error, exactly as
         // real's `f.count("/") != 1` check would say).
@@ -163,10 +223,10 @@ fn read_outer_members(gpkg: &Path) -> Result<(Vec<OuterMember>, bool), String> {
         }
         let shown = String::from_utf8_lossy(&raw);
         if raw.starts_with(b"/") || raw.iter().filter(|byte| **byte == b'/').count() != 1 {
-            return Err(format!(
+            return Err(BinpkgError::Invalid(format!(
                 "{}: gpkg file structure mismatch {shown:?}",
                 gpkg.display()
-            ));
+            )));
         }
         let slash = raw
             .iter()
@@ -175,10 +235,10 @@ fn read_outer_members(gpkg: &Path) -> Result<(Vec<OuterMember>, bool), String> {
         let (this_prefix, name_bytes) = (&raw[..slash], &raw[slash + 1..]);
         match &prefix {
             Some(prefix) if prefix.as_slice() != this_prefix => {
-                return Err(format!(
+                return Err(BinpkgError::Invalid(format!(
                     "{}: gpkg file structure mismatch {shown:?}, more than one prefix directory",
                     gpkg.display()
-                ));
+                )));
             }
             None => prefix = Some(this_prefix.to_vec()),
             _ => {}
@@ -186,17 +246,17 @@ fn read_outer_members(gpkg: &Path) -> Result<(Vec<OuterMember>, bool), String> {
         let name = String::from_utf8_lossy(name_bytes).into_owned();
         let entry_type = entry.header().entry_type();
         if trusted_outer_member_name(&name) && !entry_type.is_file() {
-            return Err(format!(
+            return Err(BinpkgError::Invalid(format!(
                 "{}: gpkg container member {name:?} is {}, not a regular file",
                 gpkg.display(),
                 inner_entry_type_phrase(entry_type)
-            ));
+            )));
         }
         if seen.contains(&raw) {
-            return Err(format!(
+            return Err(BinpkgError::Invalid(format!(
                 "{}: gpkg container member {shown:?} is a duplicate",
                 gpkg.display()
-            ));
+            )));
         }
         seen.push(raw.clone());
         if name == "gpkg-1" {
@@ -216,19 +276,24 @@ fn read_outer_members(gpkg: &Path) -> Result<(Vec<OuterMember>, bool), String> {
 /// real's `container.extractfile` does the same, and re-opening beats
 /// buffering a member -- so `raw_name` comes from
 /// [`read_outer_members`].
-fn outer_member_read<T>(
+fn outer_member_read<T, E>(
     gpkg: &Path,
     raw_name: &[u8],
-    mut consume: impl FnMut(tar::Entry<'_, fs::File>) -> Result<T, String>,
-) -> Result<T, String> {
-    let file = fs::File::open(gpkg).map_err(|e| format!("{}: {e}", gpkg.display()))?;
+    mut consume: impl FnMut(tar::Entry<'_, fs::File>) -> Result<T, E>,
+) -> Result<T, E>
+where
+    E: From<BinpkgError>,
+{
+    let file =
+        fs::File::open(gpkg).map_err(|e| BinpkgError::Fatal(format!("{}: {e}", gpkg.display())))?;
     let mut archive = tar::Archive::new(file);
-    let entries = archive
-        .entries()
-        .map_err(|e| format!("{}: reading gpkg container: {e}", gpkg.display()))?;
+    let entries = archive.entries().map_err(|e| {
+        BinpkgError::Invalid(format!("{}: reading gpkg container: {e}", gpkg.display()))
+    })?;
     for entry in entries {
-        let entry =
-            entry.map_err(|e| format!("{}: reading gpkg container: {e}", gpkg.display()))?;
+        let entry = entry.map_err(|e| {
+            BinpkgError::Invalid(format!("{}: reading gpkg container: {e}", gpkg.display()))
+        })?;
         let mut raw = entry.path_bytes().to_vec();
         while raw.last() == Some(&b'/') {
             raw.pop();
@@ -237,11 +302,12 @@ fn outer_member_read<T>(
             return consume(entry);
         }
     }
-    Err(format!(
+    Err(BinpkgError::Invalid(format!(
         "{}: gpkg container member {:?} not found",
         gpkg.display(),
         String::from_utf8_lossy(raw_name)
     ))
+    .into())
 }
 
 /// `#58` K0: the inner `metadata.tar` is read in process with the `tar`
@@ -364,22 +430,34 @@ struct InnerMetadata {
 /// outside `metadata/`, an absolute name, or any `..` component is an
 /// error (real `_strip_metadata_prefix` / its own `tar_safe_extract`);
 /// the zip-bomb guards cap the member count and the total bytes.
-fn collect_inner_members<R: Read>(gpkg: &Path, mut reader: R) -> Result<Vec<InnerMember>, String> {
+fn collect_inner_members<R: Read>(
+    gpkg: &Path,
+    mut reader: R,
+) -> Result<Vec<InnerMember>, BinpkgError> {
     let mut members: Vec<InnerMember> = Vec::new();
     let mut total_bytes: u64 = 0;
     {
         let mut archive = tar::Archive::new(&mut reader);
-        let entries = archive
-            .entries()
-            .map_err(|e| format!("{}: reading inner metadata.tar: {e}", gpkg.display()))?;
+        // An inner tar that will not parse: real's `tarfile.open(mode=
+        // "r:", fileobj=metadata_tar)` raises ReadError uncaught -> Fatal.
+        let entries = archive.entries().map_err(|e| {
+            BinpkgError::Fatal(format!(
+                "{}: reading inner metadata.tar: {e}",
+                gpkg.display()
+            ))
+        })?;
         for entry in entries {
-            let mut entry = entry
-                .map_err(|e| format!("{}: reading inner metadata.tar: {e}", gpkg.display()))?;
+            let mut entry = entry.map_err(|e| {
+                BinpkgError::Fatal(format!(
+                    "{}: reading inner metadata.tar: {e}",
+                    gpkg.display()
+                ))
+            })?;
             if members.len() >= MAX_INNER_METADATA_ENTRIES {
-                return Err(format!(
+                return Err(BinpkgError::Invalid(format!(
                     "{}: inner metadata.tar has more than {MAX_INNER_METADATA_ENTRIES} members",
                     gpkg.display()
-                ));
+                )));
             }
             let raw = entry.path_bytes();
             let mut name = raw.to_vec();
@@ -392,16 +470,16 @@ fn collect_inner_members<R: Read>(gpkg: &Path, mut reader: R) -> Result<Vec<Inne
                     .split(|byte| *byte == b'/')
                     .any(|component| component == b"..")
             {
-                return Err(format!(
+                return Err(BinpkgError::Invalid(format!(
                     "{}: inner metadata member {shown:?} has an unsafe name",
                     gpkg.display()
-                ));
+                )));
             }
             let Some(key_bytes) = name.strip_prefix(b"metadata/") else {
-                return Err(format!(
+                return Err(BinpkgError::Invalid(format!(
                     "{}: inner metadata member {shown:?} is outside metadata/",
                     gpkg.display()
-                ));
+                )));
             };
             let key = String::from_utf8_lossy(key_bytes).into_owned();
             let entry_type = entry.header().entry_type();
@@ -413,17 +491,17 @@ fn collect_inner_members<R: Read>(gpkg: &Path, mut reader: R) -> Result<Vec<Inne
             {
                 let mut bytes = Vec::new();
                 entry.read_to_end(&mut bytes).map_err(|e| {
-                    format!(
+                    BinpkgError::Fatal(format!(
                         "{}: reading inner metadata member {shown:?}: {e}",
                         gpkg.display()
-                    )
+                    ))
                 })?;
                 total_bytes = total_bytes.saturating_add(bytes.len() as u64);
                 if total_bytes > MAX_INNER_METADATA_BYTES {
-                    return Err(format!(
+                    return Err(BinpkgError::Invalid(format!(
                         "{}: inner metadata.tar is larger than {MAX_INNER_METADATA_BYTES} bytes",
                         gpkg.display()
-                    ));
+                    )));
                 }
                 Some(bytes)
             } else {
@@ -443,8 +521,15 @@ fn collect_inner_members<R: Read>(gpkg: &Path, mut reader: R) -> Result<Vec<Inne
     // the trailing zero padding. When the reader is a decompressor's
     // stdout pipe (`#58` S5), dropping it now would send the child a
     // SIGPIPE; drain to EOF so it can exit cleanly.
-    std::io::copy(&mut reader, &mut std::io::sink())
-        .map_err(|e| format!("{}: reading inner metadata.tar: {e}", gpkg.display()))?;
+    // Draining the decompressor's stream failed: real's whole-stream
+    // `metadata_reader.read()` errors are wrapped as
+    // `CompressorOperationFailed` (skip class).
+    std::io::copy(&mut reader, &mut std::io::sink()).map_err(|e| {
+        BinpkgError::Invalid(format!(
+            "{}: reading inner metadata.tar: {e}",
+            gpkg.display()
+        ))
+    })?;
     Ok(members)
 }
 
@@ -461,18 +546,19 @@ fn resolve_inner_member(
     members: &[InnerMember],
     index: usize,
     depth: usize,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, BinpkgError> {
     let member = &members[index];
     let shown = String::from_utf8_lossy(&member.name);
     let entry_type = member.entry_type;
     if entry_type.is_file() || entry_type.is_contiguous() || !known_inner_entry_type(entry_type) {
         return Ok(member.data.clone().unwrap_or_default());
     }
+    // real RecursionError -> Fatal.
     if depth > MAX_INNER_LINK_DEPTH {
-        return Err(format!(
+        return Err(BinpkgError::Fatal(format!(
             "{}: inner metadata member {shown:?} link chain is deeper than {MAX_INNER_LINK_DEPTH}",
             gpkg.display()
-        ));
+        )));
     }
     let link = member.link_name.clone().unwrap_or_default();
     let shown_link = String::from_utf8_lossy(&link);
@@ -490,20 +576,23 @@ fn resolve_inner_member(
         // Only members *before* the link can be its target.
         (normpath(&shown_link), index)
     } else {
-        return Err(format!(
+        // real `extractfile` returns None for a directory/FIFO/device,
+        // and `None.read()` is an AttributeError -> Fatal.
+        return Err(BinpkgError::Fatal(format!(
             "{}: inner metadata member {shown:?} is {}, not a regular file",
             gpkg.display(),
             inner_entry_type_phrase(entry_type)
-        ));
+        )));
     };
     let found = members[..search_len]
         .iter()
         .rposition(|candidate| normpath(&String::from_utf8_lossy(&candidate.name)) == target);
     let Some(target_index) = found else {
-        return Err(format!(
+        // real `_find_link_target` raises KeyError -> Fatal.
+        return Err(BinpkgError::Fatal(format!(
             "{}: inner metadata member {shown:?} link target {shown_link:?} not in the archive",
             gpkg.display()
-        ));
+        )));
     };
     resolve_inner_member(gpkg, members, target_index, depth + 1)
 }
@@ -566,16 +655,18 @@ fn read_inner_metadata(
     member_label: &str,
     member_bytes: &[u8],
     comp: Option<&[&str]>,
-) -> Result<InnerMetadata, String> {
+) -> Result<InnerMetadata, BinpkgError> {
     let members = match comp {
         None => collect_inner_members(gpkg, member_bytes)?,
         Some(argv) => {
+            // A missing decompressor is real's `CompressorNotFound`
+            // (PortagePackageException) -> skip class.
             let mut child = Command::new(argv[0])
                 .args(&argv[1..])
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .spawn()
-                .map_err(|e| format!("failed to spawn {}: {e}", argv[0]))?;
+                .map_err(|e| BinpkgError::Invalid(format!("failed to spawn {}: {e}", argv[0])))?;
             let mut stdin = child.stdin.take().expect("stdin is piped");
             let stdout = child.stdout.take().expect("stdout is piped");
             // Feed the member bytes in on a scope thread: the child's
@@ -593,18 +684,19 @@ fn read_inner_metadata(
             });
             let status = child
                 .wait()
-                .map_err(|e| format!("waiting for {}: {e}", argv[0]))?;
+                .map_err(|e| BinpkgError::Fatal(format!("waiting for {}: {e}", argv[0])))?;
             match (collected, status.success()) {
                 (Ok(members), true) => members,
                 // A decompressor that failed with a readable tar behind
-                // it is still an error, as the old shell-out path
-                // reported; a member-level error (an unsafe name, a
-                // truncated stream) speaks for itself.
+                // it is real's `CompressorOperationFailed`
+                // (PortagePackageException) -> skip class; a member-level
+                // error (an unsafe name, a truncated stream) speaks for
+                // itself.
                 (Ok(_), false) => {
-                    return Err(format!(
+                    return Err(BinpkgError::Invalid(format!(
                         "{} failed to decompress {member_label} ({status})",
                         argv[0]
-                    ));
+                    )));
                 }
                 (Err(error), _) => return Err(error),
             }
@@ -681,9 +773,13 @@ fn read_inner_metadata(
 /// `.sig` + Manifest), so a corrupt-or-foreign-signed binpkg resolves
 /// in portuale's pool but fails at merge; the resolve side stays
 /// deterministic and `gpg`-free on purpose.
-pub fn read_gpkg_metadata(gpkg_path: &Path) -> Result<HashMap<String, String>, String> {
+pub fn read_gpkg_metadata(gpkg_path: &Path) -> Result<HashMap<String, String>, BinpkgError> {
     if !gpkg_path.is_file() {
-        return Err(format!("{}: not a file", gpkg_path.display()));
+        // real `_verify_binpkg`'s FileNotFound (PortagePackageException).
+        return Err(BinpkgError::Invalid(format!(
+            "{}: not a file",
+            gpkg_path.display()
+        )));
     }
 
     // 1. Read the outer container in process (`#58` K7/S5): the `gpkg-1`
@@ -692,10 +788,10 @@ pub fn read_gpkg_metadata(gpkg_path: &Path) -> Result<HashMap<String, String>, S
     //    written or decompressed.
     let (members, gpkg_marker) = read_outer_members(gpkg_path)?;
     if !gpkg_marker {
-        return Err(format!(
+        return Err(BinpkgError::Invalid(format!(
             "{}: not a gpkg container (no `gpkg-1` version marker)",
             gpkg_path.display()
-        ));
+        )));
     }
     let (metadata_member, comp) = members
         .iter()
@@ -703,10 +799,10 @@ pub fn read_gpkg_metadata(gpkg_path: &Path) -> Result<HashMap<String, String>, S
             classify_inner_member("metadata", &member.name).map(|comp| (member, comp))
         })
         .ok_or_else(|| {
-            format!(
+            BinpkgError::Invalid(format!(
                 "{}: no `metadata.tar` member in the gpkg",
                 gpkg_path.display()
-            )
+            ))
         })?;
 
     // 2. Read the inner `metadata.tar` in process (`#58` S1/K0): the
@@ -757,7 +853,7 @@ pub fn read_gpkg_metadata(gpkg_path: &Path) -> Result<HashMap<String, String>, S
 /// does this binpkg carry", the same narrow question `read_gpkg_metadata`
 /// does for gpkg). Codec-agnostic: the trailer is raw, whatever
 /// compressor produced the tarball.
-pub fn read_xpak_metadata(binpkg_path: &Path) -> Result<HashMap<String, String>, String> {
+pub fn read_xpak_metadata(binpkg_path: &Path) -> Result<HashMap<String, String>, BinpkgError> {
     let seg = read_xpak_segment(binpkg_path)?;
     Ok(parse_xpak_members(&seg)?
         .into_iter()
@@ -771,7 +867,7 @@ pub fn read_xpak_metadata(binpkg_path: &Path) -> Result<HashMap<String, String>,
 /// saved `environment.bz2` (needed verbatim so it can be `bunzip2`'d
 /// into `${T}/environment` for a real `pkg_preinst`/`pkg_postinst`) and
 /// the `<pf>.ebuild` source. Reads only the bounded `infosize + 8` tail.
-fn read_xpak_member_raw(binpkg_path: &Path, want: &str) -> Result<Option<Vec<u8>>, String> {
+fn read_xpak_member_raw(binpkg_path: &Path, want: &str) -> Result<Option<Vec<u8>>, BinpkgError> {
     let seg = read_xpak_segment(binpkg_path)?;
     Ok(parse_xpak_members(&seg)?
         .into_iter()
@@ -783,44 +879,49 @@ fn read_xpak_member_raw(binpkg_path: &Path, want: &str) -> Result<Option<Vec<u8>
 /// the last 16 bytes (`"XPAKSTOP" be32(infosize) "STOP"`), then the
 /// `infosize + 8` byte segment they point back to. Only this bounded
 /// tail of the file is ever touched.
-fn read_xpak_segment(binpkg_path: &Path) -> Result<Vec<u8>, String> {
+fn read_xpak_segment(binpkg_path: &Path) -> Result<Vec<u8>, BinpkgError> {
     use std::io::{Read, Seek, SeekFrom};
 
-    let mut f =
-        fs::File::open(binpkg_path).map_err(|e| format!("{}: {e}", binpkg_path.display()))?;
+    // Every xpak read error is Fatal: real's `tbz2.scan()` swallows the
+    // failure and returns falsy, `get_data()` then returns None, and the
+    // caller raises AttributeError on `None.get` -- real *aborts*, it
+    // never skips a broken `.tbz2`/`.xpak`.
+    let fatal = |e: String| BinpkgError::Fatal(e);
+    let mut f = fs::File::open(binpkg_path)
+        .map_err(|e| fatal(format!("{}: {e}", binpkg_path.display())))?;
     let file_len = f
         .seek(SeekFrom::End(0))
-        .map_err(|e| format!("{}: {e}", binpkg_path.display()))?;
+        .map_err(|e| fatal(format!("{}: {e}", binpkg_path.display())))?;
     if file_len < 16 {
-        return Err(format!(
+        return Err(fatal(format!(
             "{}: too small to be an xpak binpkg",
             binpkg_path.display()
-        ));
+        )));
     }
 
     let mut trailer = [0u8; 16];
     f.seek(SeekFrom::End(-16))
         .and_then(|_| f.read_exact(&mut trailer))
-        .map_err(|e| format!("{}: {e}", binpkg_path.display()))?;
+        .map_err(|e| fatal(format!("{}: {e}", binpkg_path.display())))?;
     if &trailer[12..16] != b"STOP" || &trailer[0..8] != b"XPAKSTOP" {
-        return Err(format!(
+        return Err(fatal(format!(
             "{}: not an xpak binary package (no XPAKSTOP trailer)",
             binpkg_path.display()
-        ));
+        )));
     }
     let infosize = be32(&trailer[8..12]) as u64;
     let xpaksize = infosize + 8;
     if xpaksize > file_len {
-        return Err(format!(
+        return Err(fatal(format!(
             "{}: xpak trailer size exceeds the file",
             binpkg_path.display()
-        ));
+        )));
     }
 
     let mut seg = vec![0u8; xpaksize as usize];
     f.seek(SeekFrom::End(-(xpaksize as i64)))
         .and_then(|_| f.read_exact(&mut seg))
-        .map_err(|e| format!("{}: {e}", binpkg_path.display()))?;
+        .map_err(|e| fatal(format!("{}: {e}", binpkg_path.display())))?;
     Ok(seg)
 }
 
@@ -829,16 +930,20 @@ fn read_xpak_segment(binpkg_path: &Path) -> Result<Vec<u8>, String> {
 /// `while startpos + 8 < len` over `be32(namelen) name be32(datapos)
 /// be32(datalen)` records into `<data>`). Returns every member as
 /// `(name, &data bytes)`, borrowing from `seg`.
-fn parse_xpak_members(seg: &[u8]) -> Result<Vec<(String, &[u8])>, String> {
+fn parse_xpak_members(seg: &[u8]) -> Result<Vec<(String, &[u8])>, BinpkgError> {
     if seg.len() < 16 || &seg[0..8] != b"XPAKPACK" {
-        return Err("not an xpak binary package (no XPAKPACK header)".to_string());
+        return Err(BinpkgError::Fatal(
+            "not an xpak binary package (no XPAKPACK header)".to_string(),
+        ));
     }
     let indexsize = be32(&seg[8..12]) as usize;
     let datasize = be32(&seg[12..16]) as usize;
     let index_start = 16;
     let data_start = index_start + indexsize;
     if data_start + datasize > seg.len() {
-        return Err("xpak index/data segments overrun the file".to_string());
+        return Err(BinpkgError::Fatal(
+            "xpak index/data segments overrun the file".to_string(),
+        ));
     }
     let index = &seg[index_start..data_start];
     let data = &seg[data_start..data_start + datasize];
@@ -1129,15 +1234,19 @@ fn read_member_bytes_capped(
     mut reader: impl Read,
     cap: u64,
     label: &str,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, BinpkgError> {
     let mut bytes = Vec::new();
+    // A truncated/corrupt member would fail real's Manifest size+digest
+    // check on the metadata member first (DigestException -> skip).
     reader
         .by_ref()
         .take(cap + 1)
         .read_to_end(&mut bytes)
-        .map_err(|e| format!("{label}: {e}"))?;
+        .map_err(|e| BinpkgError::Invalid(format!("{label}: {e}")))?;
     if bytes.len() as u64 > cap {
-        return Err(format!("{label}: larger than {cap} bytes"));
+        return Err(BinpkgError::Invalid(format!(
+            "{label}: larger than {cap} bytes"
+        )));
     }
     Ok(bytes)
 }
@@ -2047,13 +2156,18 @@ mod tests {
         let flat = scratch.path().join("plain.tar");
         run_tar(&["-cf", &lossy(&flat), "-C", &lossy(scratch.path()), "a.txt"]).unwrap();
         let err = read_gpkg_metadata(&flat).unwrap_err();
-        assert!(err.contains("gpkg file structure mismatch"), "{err}");
+        assert!(err.is_invalid(), "{err:?}");
+        assert!(
+            err.message().contains("gpkg file structure mismatch"),
+            "{err}"
+        );
 
         // A structurally valid container with no `gpkg-1` marker is the
         // real `_get_inner_tarinfo` guard.
         let g = build_gpkg("foo-1.0", &[("metadata.tar", b"x")], None);
         let err = read_gpkg_metadata(&g).unwrap_err();
-        assert!(err.contains("gpkg-1"), "{err}");
+        assert!(err.is_invalid(), "{err:?}");
+        assert!(err.message().contains("gpkg-1"), "{err}");
     }
 
     /// `usize -> u32` narrowing that panics (like Python's
@@ -2133,7 +2247,59 @@ mod tests {
         )
         .unwrap();
         let err = read_xpak_metadata(&path).unwrap_err();
-        assert!(err.contains("XPAKSTOP"), "{err}");
+        assert!(err.is_fatal(), "{err:?}");
+        assert!(err.message().contains("XPAKSTOP"), "{err}");
+    }
+
+    /// The two-class split real's `_populate_local` caller has
+    /// (`bintree.py:1185`, per-site table in
+    /// `docs/07.60-gpkg-populate-read-errors.opus.md` section 4). The
+    /// inner-member cells' classes are asserted in their own tests
+    /// above; this pins the outer-container and xpak rows.
+    #[test]
+    fn binpkg_error_classes_mirror_reals_caller() {
+        // A trusted outer member that is not a regular file: real's
+        // `_verify_binpkg` -> InvalidBinaryPackageFormat -> Invalid.
+        let g = build_gpkg_entries(&[
+            ("pre/gpkg-1", GpkgEntry::File(b"")),
+            ("pre/metadata.tar", GpkgEntry::Fifo),
+        ]);
+        let err = read_gpkg_metadata(&g).unwrap_err();
+        assert!(err.is_invalid(), "{err:?}");
+        assert!(err.message().contains("not a regular file"), "{err}");
+
+        // A container with no `metadata.tar` member: real's
+        // `_get_inner_tarinfo` -> InvalidBinaryPackageFormat -> Invalid.
+        let g = build_gpkg_entries(&[
+            ("pre/gpkg-1", GpkgEntry::File(b"")),
+            ("pre/image.tar", GpkgEntry::File(b"x")),
+        ]);
+        let err = read_gpkg_metadata(&g).unwrap_err();
+        assert!(err.is_invalid(), "{err:?}");
+        assert!(err.message().contains("no `metadata.tar` member"), "{err}");
+
+        // A file that is not a tar at all: real's `_verify_binpkg` catches
+        // `tarfile.ReadError` and re-raises InvalidBinaryPackageFormat
+        // (`getnames()`), so it is the skip class too.
+        let scratch = ScratchDir::new("gpkg-notar").unwrap();
+        let junk = scratch.path().join("junk.gpkg.tar");
+        fs::write(&junk, vec![0xffu8; 2048]).unwrap();
+        let err = read_gpkg_metadata(&junk).unwrap_err();
+        assert!(err.is_invalid(), "{err:?}");
+
+        // An xpak trailer pointing at a segment that is not an xpak:
+        // real's `tbz2.scan()` returns falsy, `get_data()` returns None,
+        // and `None.get` is an AttributeError -> Fatal.
+        let scratch = ScratchDir::new("xpak-badpack").unwrap();
+        let path = scratch.path().join("bad.tbz2");
+        let mut bytes = vec![0u8; 16];
+        bytes.extend_from_slice(b"XPAKSTOP");
+        bytes.extend_from_slice(&8u32.to_be_bytes());
+        bytes.extend_from_slice(b"STOP");
+        fs::write(&path, &bytes).unwrap();
+        let err = read_xpak_metadata(&path).unwrap_err();
+        assert!(err.is_fatal(), "{err:?}");
+        assert!(err.message().contains("XPAKPACK"), "{err}");
     }
 
     /// Reads a **genuine** `.tbz2` -- checked in at
@@ -2340,7 +2506,7 @@ mod tests {
     /// `g`, and every error must contain each of `needles` (the member
     /// name and, for the type checks, its type).
     fn assert_rejects_everywhere(g: &Path, needles: &[&str]) {
-        let check = |site: &str, err: String| {
+        let check = |site: &str, err: &str| {
             for needle in needles {
                 assert!(
                     err.contains(needle),
@@ -2348,10 +2514,13 @@ mod tests {
                 );
             }
         };
-        check("read_gpkg_metadata", read_gpkg_metadata(g).unwrap_err());
+        check(
+            "read_gpkg_metadata",
+            &read_gpkg_metadata(g).unwrap_err().to_string(),
+        );
         check(
             "verify_gpkg_manifest",
-            verify_gpkg_manifest(g, &GpgVerify::default()).unwrap_err(),
+            &verify_gpkg_manifest(g, &GpgVerify::default()).unwrap_err(),
         );
         let dest = std::env::temp_dir().join(format!(
             "portuale-56-reject-{}-{}",
@@ -2365,7 +2534,7 @@ mod tests {
         fs::create_dir_all(&dest).unwrap();
         check(
             "extract_gpkg_member",
-            extract_gpkg_member(g, "metadata", &dest).unwrap_err(),
+            &extract_gpkg_member(g, "metadata", &dest).unwrap_err(),
         );
         let _ = fs::remove_dir_all(&dest);
     }
@@ -3214,7 +3383,7 @@ mod tests {
     /// Write the crafted tar to a scratch file (the shape
     /// `read_inner_metadata` gets when the outer member is uncompressed)
     /// and read it back.
-    fn read_inner(entries: &[InnerTestEntry<'_>]) -> Result<InnerMetadata, String> {
+    fn read_inner(entries: &[InnerTestEntry<'_>]) -> Result<InnerMetadata, BinpkgError> {
         let bytes = build_inner_tar(entries);
         read_inner_metadata(
             Path::new("/test/pkg.gpkg.tar"),
@@ -3285,8 +3454,9 @@ mod tests {
             inner_symlink("metadata/DESCRIPTION", "/etc/hostname"),
         ])
         .unwrap_err();
-        assert!(err.contains("not in the archive"), "{err}");
-        assert!(err.contains("DESCRIPTION"), "{err}");
+        assert!(err.is_fatal(), "{err:?}");
+        assert!(err.message().contains("not in the archive"), "{err}");
+        assert!(err.message().contains("DESCRIPTION"), "{err}");
     }
 
     #[test]
@@ -3314,11 +3484,13 @@ mod tests {
             inner_entry("metadata/SLOT", b"0\n"),
         ])
         .unwrap_err();
-        assert!(err.contains("not in the archive"), "{err}");
+        assert!(err.is_fatal(), "{err:?}");
+        assert!(err.message().contains("not in the archive"), "{err}");
         // S0 i4: target is not a member at all.
         let err =
             read_inner(&[inner_hardlink("metadata/DESCRIPTION", "etc/hostname")]).unwrap_err();
-        assert!(err.contains("not in the archive"), "{err}");
+        assert!(err.is_fatal(), "{err:?}");
+        assert!(err.message().contains("not in the archive"), "{err}");
     }
 
     #[test]
@@ -3327,13 +3499,16 @@ mod tests {
         // type is named.
         let err =
             read_inner(&[inner_special("metadata/DESCRIPTION", tar::EntryType::Fifo)]).unwrap_err();
-        assert!(err.contains("a FIFO"), "{err}");
+        assert!(err.is_fatal(), "{err:?}");
+        assert!(err.message().contains("a FIFO"), "{err}");
         let err =
             read_inner(&[inner_special("metadata/DESCRIPTION", tar::EntryType::Char)]).unwrap_err();
-        assert!(err.contains("a character device"), "{err}");
+        assert!(err.is_fatal(), "{err:?}");
+        assert!(err.message().contains("a character device"), "{err}");
         let err = read_inner(&[inner_special("metadata/DESCRIPTION", tar::EntryType::Block)])
             .unwrap_err();
-        assert!(err.contains("a block device"), "{err}");
+        assert!(err.is_fatal(), "{err:?}");
+        assert!(err.message().contains("a block device"), "{err}");
     }
 
     #[test]
@@ -3346,7 +3521,8 @@ mod tests {
             inner_entry("metadata/SLOT", b"0\n"),
         ])
         .unwrap_err();
-        assert!(err.contains("outside metadata/"), "{err}");
+        assert!(err.is_invalid(), "{err:?}");
+        assert!(err.message().contains("outside metadata/"), "{err}");
         // S0 i7: a nested directory member is a `None.read()` error for
         // real; the `sub/KEY` member after it never resolves.
         let err = read_inner(&[
@@ -3354,11 +3530,13 @@ mod tests {
             inner_entry("metadata/sub/KEY", b"nested\n"),
         ])
         .unwrap_err();
-        assert!(err.contains("a directory"), "{err}");
+        assert!(err.is_fatal(), "{err:?}");
+        assert!(err.message().contains("a directory"), "{err}");
         // S0 i8: a name outside `metadata/` (real
         // `InvalidBinaryPackageFormat`).
         let err = read_inner(&[inner_entry("other/KEY", b"outside\n")]).unwrap_err();
-        assert!(err.contains("outside metadata/"), "{err}");
+        assert!(err.is_invalid(), "{err:?}");
+        assert!(err.message().contains("outside metadata/"), "{err}");
     }
 
     #[test]
@@ -3380,7 +3558,8 @@ mod tests {
             inner_symlink("metadata/B", "A"),
         ])
         .unwrap_err();
-        assert!(err.contains("link chain is deeper than"), "{err}");
+        assert!(err.is_fatal(), "{err:?}");
+        assert!(err.message().contains("link chain is deeper than"), "{err}");
     }
 
     #[test]
@@ -3405,7 +3584,8 @@ mod tests {
         // its merge path rejects both; portuale refuses both everywhere.
         for name in ["metadata/../KEY", "/metadata/KEY"] {
             let err = read_inner(&[inner_entry(name, b"x\n")]).unwrap_err();
-            assert!(err.contains("unsafe name"), "{name}: {err}");
+            assert!(err.is_invalid(), "{name}: {err:?}");
+            assert!(err.message().contains("unsafe name"), "{name}: {err}");
         }
     }
 
@@ -3462,7 +3642,8 @@ mod tests {
             Some(&["zstd", "-dc", "--long=31"]),
         )
         .unwrap_err();
-        assert!(err.contains("zstd"), "{err}");
+        assert!(err.is_invalid(), "{err:?}");
+        assert!(err.message().contains("zstd"), "{err}");
     }
 
     /// `#58` S2: a valid outer gpkg whose inner `metadata.tar` carries
@@ -3548,9 +3729,10 @@ mod tests {
         );
         verify_gpkg_manifest(&g, &GpgVerify::default()).expect("the crafted container verifies");
         let err = read_gpkg_metadata(&g).unwrap_err();
-        assert!(err.contains("not in the archive"), "{err}");
+        assert!(err.is_fatal(), "{err:?}");
+        assert!(err.message().contains("not in the archive"), "{err}");
         assert!(
-            host.is_empty() || !err.contains(&host),
+            host.is_empty() || !err.message().contains(&host),
             "the host file's bytes leaked into {err:?}"
         );
     }
@@ -3565,13 +3747,15 @@ mod tests {
         );
         verify_gpkg_manifest(&g, &GpgVerify::default()).expect("verifies");
         let err = read_gpkg_metadata(&g).unwrap_err();
-        assert!(err.contains("a FIFO"), "{err}");
+        assert!(err.is_fatal(), "{err:?}");
+        assert!(err.message().contains("a FIFO"), "{err}");
         // S0 i8: real `InvalidBinaryPackageFormat`; the old walk ignored
         // the member entirely.
         let g = build_gpkg_with_inner_entries("gen-1.0", &[inner_entry("other/KEY", b"outside\n")]);
         verify_gpkg_manifest(&g, &GpgVerify::default()).expect("verifies");
         let err = read_gpkg_metadata(&g).unwrap_err();
-        assert!(err.contains("outside metadata/"), "{err}");
+        assert!(err.is_invalid(), "{err:?}");
+        assert!(err.message().contains("outside metadata/"), "{err}");
     }
 
     #[test]
