@@ -831,7 +831,23 @@ mod tests {
                 "curl -C - ${URI}".to_string()
             )
         );
-        // An unset plain command is real's own error.
+        // A default-constructed family selects the shipped make.globals
+        // templates: an absent config key means "default", never "unset"
+        // (#70 R2 / T2).
+        let defaults = FetchCommands::default();
+        assert_eq!(
+            defaults.select("HTTPS", false).unwrap(),
+            ("FETCHCOMMAND".to_string(), DEFAULT_FETCHCOMMAND.to_string())
+        );
+        assert_eq!(
+            defaults.select("HTTPS", true).unwrap(),
+            (
+                "RESUMECOMMAND".to_string(),
+                DEFAULT_RESUMECOMMAND.to_string()
+            )
+        );
+        // An unset plain command is real's own error, reachable only
+        // from a hand-built family.
         let empty = FetchCommands {
             fetchcommand: None,
             resumecommand: None,

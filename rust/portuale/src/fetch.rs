@@ -254,25 +254,33 @@ pub(crate) fn wget_fetch(uri: &str, dest: &Path) -> Result<(), String> {
 /// Real's `FETCHCOMMAND` family out of a resolved config: the plain
 /// scalars (`other_vars`, where `make.globals`/`make.conf` scalars land)
 /// plus every `FETCHCOMMAND_<PROTO>`/`RESUMECOMMAND_<PROTO>` override.
-/// `None` entries mean "use the `make.globals` default" and are left for
-/// [`portage_fetch::FetchCommands`]'s selection to fall back on.
+///
+/// An absent `FETCHCOMMAND`/`RESUMECOMMAND` means the `make.globals`
+/// default (T2): real always reads `GLOBAL_CONFIG_PATH`'s `make.globals`
+/// (`config.py:446-480`), which a fixture config root does not carry, so
+/// the resolved value here is the shipped default template -- never
+/// `None`. A `None` field (the "unset" error real `fetch.py:1652-1660`
+/// prints when `make.globals` itself is missing) is only reachable from
+/// a hand-built [`portage_fetch::FetchCommands`].
 pub fn fetch_commands_from_config(
     config: &portage_profile::Config,
 ) -> portage_fetch::FetchCommands {
-    let mut commands = portage_fetch::FetchCommands {
-        fetchcommand: config.other_vars.get("FETCHCOMMAND").cloned(),
-        resumecommand: config.other_vars.get("RESUMECOMMAND").cloned(),
-        ..Default::default()
-    };
+    let mut commands = portage_fetch::FetchCommands::default();
     for (key, value) in &config.other_vars {
-        if let Some(proto) = key.strip_prefix("FETCHCOMMAND_") {
-            commands
-                .fetchcommand_proto
-                .insert(proto.to_string(), value.clone());
-        } else if let Some(proto) = key.strip_prefix("RESUMECOMMAND_") {
-            commands
-                .resumecommand_proto
-                .insert(proto.to_string(), value.clone());
+        match key.as_str() {
+            "FETCHCOMMAND" => commands.fetchcommand = Some(value.clone()),
+            "RESUMECOMMAND" => commands.resumecommand = Some(value.clone()),
+            _ => {
+                if let Some(proto) = key.strip_prefix("FETCHCOMMAND_") {
+                    commands
+                        .fetchcommand_proto
+                        .insert(proto.to_string(), value.clone());
+                } else if let Some(proto) = key.strip_prefix("RESUMECOMMAND_") {
+                    commands
+                        .resumecommand_proto
+                        .insert(proto.to_string(), value.clone());
+                }
+            }
         }
     }
     commands
@@ -1228,6 +1236,66 @@ mod tests {
         .unwrap();
         assert_eq!(result, vec!["hello-1.0.tar.gz".to_string()]);
         assert!(marker.is_file(), "the configured FETCHCOMMAND ran");
+        assert_eq!(
+            fs::read(distdir.join("hello-1.0.tar.gz")).unwrap(),
+            b"hello world"
+        );
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_commands_from_config_defaults_an_absent_fetchcommand() {
+        // #70 R2 / T2: a config without FETCHCOMMAND/RESUMECOMMAND (every
+        // fixture config root, which has no make.globals) resolves to the
+        // shipped default templates -- never `None`. `None` is only
+        // reachable from a hand-built `FetchCommands`.
+        let commands = fetch_commands_from_config(&portage_profile::Config::default());
+        assert_eq!(commands, portage_fetch::FetchCommands::default());
+    }
+
+    #[test]
+    fn fetch_src_uri_uses_the_make_globals_default_without_a_config_value() {
+        // #70 R2 end-to-end through the production parser: the config
+        // comes from `resolve_config` on a root with no
+        // `usr/share/portage/config/make.globals` (T2's fixture shape);
+        // the default `wget` template must still download `serve_once`'s
+        // file.
+        let (uri_base, handle) = serve_once(b"hello world".to_vec());
+        let uri = format!("{uri_base} -> hello-1.0.tar.gz");
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+
+        let config_root = tempdir();
+        let eroot = tempdir();
+        let config = portage_profile::resolve_config(
+            &config_root,
+            &config_root,
+            &[],
+            &[],
+            "gentoo",
+            &std::collections::HashMap::new(),
+            &eroot,
+        )
+        .unwrap();
+        assert!(
+            !config_root
+                .join("usr/share/portage/config/make.globals")
+                .exists(),
+            "fixture root must have no make.globals"
+        );
+        let result = fetch_src_uri(
+            &pkg_dir,
+            &uri,
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![],
+                fetch_commands: Some(fetch_commands_from_config(&config)),
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(result, vec!["hello-1.0.tar.gz".to_string()]);
         assert_eq!(
             fs::read(distdir.join("hello-1.0.tar.gz")).unwrap(),
             b"hello world"
