@@ -14481,6 +14481,18 @@ struct PendingBlocker {
     owner_version: String,
 }
 
+/// #68 S1 (2026-09-16): an installed match whose slot is targeted by a
+/// merge-bound entry at a **different** version is dropped before any
+/// row is built -- real's package tracker discards an installed instance
+/// superseded in its own slot, so `blocked_final` no longer holds it and
+/// `_validate_blockers` uninstall-orders it away (the replacement merge
+/// removes it); real prints no block row for it. This is the host
+/// `@world` shape: `dev-build/gtk-doc-am`'s `<dev-util/gtk-doc-1.36.1`
+/// against installed `gtk-doc-1.34.0` while 1.36.1 upgrades it in the
+/// same run. The same-version `Reinstall` case is deliberately *not*
+/// considered a replacement (it is merge-bound in the tracker), and a
+/// replacement in a different slot leaves the installed row untouched.
+///
 /// Matches each `pending` blocker's target `category/package` against
 /// both currently-installed candidates (`installed_candidates`, sub-slot
 /// included -- see `Candidate::sub_slot`'s own doc comment) and this
@@ -14569,7 +14581,8 @@ fn resolve_blockers(
     let mut conflicts = Vec::new();
     for pb in pending {
         let target_key = (pb.target_category.clone(), pb.target_package.clone());
-        let mut candidates = installed_candidates(root, &pb.target_category, &pb.target_package);
+        let installed_matches = installed_candidates(root, &pb.target_category, &pb.target_package);
+        let mut candidates = installed_matches.clone();
         for entry in entries {
             if entry.category != pb.target_category || entry.package != pb.target_package {
                 continue;
@@ -14664,14 +14677,37 @@ fn resolve_blockers(
                 });
             portage_dep::use_deps_satisfied(&blocker_use_deps, &iuse, &enabled)
         };
+        // #68 S1: real's package tracker drops an installed instance that
+        // a merge-bound entry replaces **in its own slot**
+        // (`_package_tracker.add_pkg` discards the superseded installed
+        // node), so the blocker atom never matches it there. The installed
+        // match still exists in `blocked_initial`, but real
+        // uninstall-orders it and, when it is not a graph node (the
+        // replacement is), resolves the block to the satisfied `b` --
+        // rendered as no block row at all, because the replacement merge
+        // removes it. This is the host `@world` shape: `<gtk-doc-1.36.1`
+        // matching installed `gtk-doc-1.34.0` while 1.36.1 upgrades it.
         for m in matched {
-            let Some((version, _slot, _sub_slot)) = by_str.get(m).copied() else {
+            let Some((version, slot, _sub_slot)) = by_str.get(m).copied() else {
                 continue;
             };
             if target_key == pb.owner_key && *version == pb.owner_version {
                 continue;
             }
             if !use_deps_apply(version) {
+                continue;
+            }
+            let installed_match = installed_matches
+                .iter()
+                .any(|(v, s, _ss)| v == version && s == slot);
+            if installed_match
+                && entries.iter().any(|e| {
+                    e.category == pb.target_category
+                        && e.package == pb.target_package
+                        && e.slot.as_deref() == Some(slot.as_str())
+                        && merge_bound_version(&e.outcome).is_some_and(|v2| v2 != version)
+                })
+            {
                 continue;
             }
             // Real `_serialize_tasks` `unresolved_blocks`: the blocked
@@ -35444,6 +35480,85 @@ mod tests {
         assert_eq!(call("!!dev-libs/target").len(), 1);
         // and a use-dep the target DOES satisfy fires too.
         assert_eq!(call("!!dev-libs/target[-wantblock]").len(), 1);
+    }
+
+    #[test]
+    fn resolve_blockers_drops_an_installed_match_replaced_in_its_slot() {
+        // #68 S1 (cell a): installed `blocked-1.0:0` is replaced by the
+        // merge-bound `blocked-2.0:0`, so real's tracker no longer holds
+        // it and the block does not fire at all.
+        let dir = slotundo_temp_dir("blocker-s1-a");
+        slotundo_vdb(&dir, "blocked", "1.0", "0", "", "");
+        let owner = graph_entry("dev-libs", "bparent", "1.0");
+        let mut upgrade = graph_entry("dev-libs", "blocked", "2.0");
+        upgrade.outcome = PretendOutcome::Upgrade {
+            from: "1.0".into(),
+            to: "2.0".into(),
+        };
+        let pending = PendingBlocker {
+            atom_str: "!<dev-libs/blocked-2.0".to_string(),
+            strong: false,
+            target_category: "dev-libs".to_string(),
+            target_package: "blocked".to_string(),
+            owner_key: ("dev-libs".to_string(), "bparent".to_string()),
+            owner_version: "1.0".to_string(),
+        };
+        let conflicts = resolve_blockers(&dir, &[pending], &[owner, upgrade]);
+        assert!(
+            conflicts.is_empty(),
+            "a replaced-in-slot installed match contributes no block row"
+        );
+
+        // Cell a': the replacement targets a *different* slot, so the
+        // installed row survives (real's same-slot replacement rule).
+        let owner = graph_entry("dev-libs", "bparent", "1.0");
+        let mut other_slot = graph_entry("dev-libs", "blocked", "2.0");
+        other_slot.slot = Some("1".to_string());
+        other_slot.sub_slot = Some("1".to_string());
+        let pending = PendingBlocker {
+            atom_str: "!<dev-libs/blocked-2.0".to_string(),
+            strong: false,
+            target_category: "dev-libs".to_string(),
+            target_package: "blocked".to_string(),
+            owner_key: ("dev-libs".to_string(), "bparent".to_string()),
+            owner_version: "1.0".to_string(),
+        };
+        let conflicts = resolve_blockers(&dir, &[pending], &[owner, other_slot]);
+        assert_eq!(
+            conflicts.len(),
+            1,
+            "a different-slot replacement keeps the row"
+        );
+        assert!(!conflicts[0].1.unsolvable);
+
+        // Cell b: a same-version reinstall is merge-bound in the tracker,
+        // so it must not be treated as "replaced" -- the row survives.
+        let owner = graph_entry("dev-libs", "bparent", "1.0");
+        let mut reinstall = graph_entry("dev-libs", "blocked", "1.0");
+        reinstall.outcome = PretendOutcome::Reinstall {
+            version: "1.0".into(),
+            changed_flags: Vec::new(),
+            deps_changed: false,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: false,
+            slot_operator_rebuild: false,
+        };
+        let pending = PendingBlocker {
+            atom_str: "!<dev-libs/blocked-2.0".to_string(),
+            strong: false,
+            target_category: "dev-libs".to_string(),
+            target_package: "blocked".to_string(),
+            owner_key: ("dev-libs".to_string(), "bparent".to_string()),
+            owner_version: "1.0".to_string(),
+        };
+        let conflicts = resolve_blockers(&dir, &[pending], &[owner, reinstall]);
+        assert_eq!(
+            conflicts.len(),
+            1,
+            "a same-version reinstall is merge-bound"
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
