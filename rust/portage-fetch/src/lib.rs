@@ -627,13 +627,24 @@ fn shell_split(s: &str) -> Vec<String> {
     args
 }
 
-/// Real `fetch.py:1652-1700` through `:1830`: select `FETCHCOMMAND` (or
-/// its protocol variant / `RESUMECOMMAND`), refuse a command without
-/// `${FILE}`, substitute `${DISTDIR}`/`${URI}`/`${FILE}`, and spawn the
-/// real subprocess (never an in-process HTTP client). A failed fresh
-/// fetch removes whatever partial file it left behind; a failed resume
-/// keeps it for the next candidate -- the split
-/// `portuale::fetch::fetch_src_uri`'s candidate loop relies on.
+/// Real `fetch.py:1652-1716` through `:1830`: select `FETCHCOMMAND` (or
+/// its protocol variant) and `RESUMECOMMAND` (both are selected and
+/// checked, regardless of which one this attempt runs), warn about a
+/// command without `${FILE}`, substitute
+/// `${DISTDIR}`/`${URI}`/`${FILE}`, and spawn the real subprocess (never
+/// an in-process HTTP client). A failed fresh fetch removes whatever
+/// partial file it left behind; a failed resume keeps it for the next
+/// candidate -- the split `portuale::fetch::fetch_src_uri`'s candidate
+/// loop relies on.
+///
+/// The `${FILE}` refusal is real's, not a blanket one: each command
+/// missing the parameter prints its own
+/// `!!! <VAR> does not contain the required ${FILE} parameter.` line,
+/// then the shared make.conf(5) hint, and the fetch aborts **only when
+/// the distfile name differs from the URL basename**
+/// (`fetch.py:1713-1715`: `if myfile != os.path.basename(loc): return 0`).
+/// When the names match, real falls through and runs the command anyway
+/// -- `wget -P "${DISTDIR}" "${URI}"` still lands the right file.
 pub fn download_with_commands(
     uri: &str,
     dest: &Path,
@@ -645,18 +656,36 @@ pub fn download_with_commands(
         .split_once("://")
         .map(|(p, _)| p.to_ascii_uppercase())
         .unwrap_or_default();
-    let (var, command) = commands.select(&proto, resume)?;
-    if !command.contains("${FILE}") {
-        return Err(format!(
-            "!!! {var} does not contain the required ${{FILE}} parameter.\n\
-             !!! Refer to the make.conf(5) man page for information about how to\n\
-             !!! correctly specify FETCHCOMMAND and RESUMECOMMAND.\n"
-        ));
-    }
+    let (fetch_var, fetch_command) = commands.select(&proto, false)?;
+    let (resume_var, resume_command) = commands.select(&proto, true)?;
     let file = dest
         .file_name()
         .map(|f| f.to_string_lossy().into_owned())
         .unwrap_or_default();
+    let missing_file_param: String = [(&fetch_var, &fetch_command), (&resume_var, &resume_command)]
+        .iter()
+        .filter(|(_, command)| !command.contains("${FILE}"))
+        .map(|(var, _)| format!("!!! {var} does not contain the required ${{FILE}} parameter.\n"))
+        .collect();
+    if !missing_file_param.is_empty() {
+        let hint = "!!! Refer to the make.conf(5) man page for information about how to\n\
+                    !!! correctly specify FETCHCOMMAND and RESUMECOMMAND.\n";
+        let message = format!("{missing_file_param}{hint}");
+        let url_basename = uri.rsplit('/').next().unwrap_or("");
+        if file != url_basename {
+            // Real `return 0`: abort the fetch, never spawn.
+            return Err(message);
+        }
+        // Names match: real still prints the warning before running the
+        // command; there is no `Err` to carry it here, so it goes to
+        // stderr.
+        eprint!("{message}");
+    }
+    let (var, command) = if resume {
+        (resume_var, resume_command)
+    } else {
+        (fetch_var, fetch_command)
+    };
     let argv = expand_and_split(&command, distdir, uri, &file);
     let Some((prog, rest)) = argv.split_first() else {
         return Err(format!("!!! {var} is empty.\n"));
@@ -938,6 +967,67 @@ mod tests {
         let dest2 = dir.join("dest2.tar.gz");
         download_with_commands(&uri, &dest2, false, &dir, &commands).unwrap();
         assert!(dest2.exists());
+    }
+
+    /// #70 R3: real checks **both** the fetch and resume commands for
+    /// `${FILE}` (`fetch.py:1667-1716`) and aborts only when the distfile
+    /// name differs from the URL basename; on matching names it warns and
+    /// runs anyway. The abort's messages travel in the `Err` (that is
+    /// where this crate's callers surface command diagnostics).
+    #[test]
+    fn download_with_commands_warns_for_both_commands_and_aborts_only_when_renamed() {
+        let srcdir = tempdir();
+        let dldir = tempdir();
+        let source = srcdir.join("source.tar.gz");
+        fs::write(&source, b"payload").unwrap();
+        let marker = dldir.join("spawned");
+        let script = stub_fetch_script(
+            &dldir,
+            "wget-p.sh",
+            // The stub of `wget -P "${DISTDIR}" "${URI}"`: copy the URI's
+            // basename into the directory, no ${FILE} anywhere.
+            &format!("touch {}\ncp \"${{2#file://}}\" \"$1/\"", marker.display()),
+        );
+        let uri = format!("file://{}", source.display());
+        let no_file = format!("{} \"${{DISTDIR}}\" \"${{URI}}\"", script.display());
+
+        // (a) the distfile name equals the URL basename: the warning is
+        // printed to stderr and the command still runs.
+        let dest = dldir.join("source.tar.gz");
+        let commands = FetchCommands {
+            fetchcommand: Some(no_file.clone()),
+            ..FetchCommands::default()
+        };
+        download_with_commands(&uri, &dest, false, &dldir, &commands).unwrap();
+        assert!(marker.is_file(), "the ${{FILE}}-less command ran");
+        assert_eq!(fs::read(&dest).unwrap(), b"payload");
+        fs::remove_file(&marker).unwrap();
+
+        // (b) a renamed distfile differs from the URL basename: real
+        // aborts before spawning.
+        let renamed = dldir.join("renamed.tar.gz");
+        let err = download_with_commands(&uri, &renamed, false, &dldir, &commands).unwrap_err();
+        assert!(
+            err.contains("FETCHCOMMAND does not contain the required ${FILE} parameter"),
+            "{err}"
+        );
+        assert!(err.contains("make.conf(5)"), "{err}");
+        assert!(!marker.exists(), "no spawn after the abort");
+        assert!(!renamed.exists());
+
+        // (c) only RESUMECOMMAND lacks ${FILE}: it is selected and named
+        // even though this is a fresh fetch, and it aborts the renamed
+        // case.
+        let commands = FetchCommands {
+            resumecommand: Some(no_file),
+            ..FetchCommands::default()
+        };
+        let err = download_with_commands(&uri, &renamed, false, &dldir, &commands).unwrap_err();
+        assert!(
+            err.contains("RESUMECOMMAND does not contain the required ${FILE} parameter"),
+            "{err}"
+        );
+        assert!(!marker.exists(), "no spawn after the abort");
     }
 
     #[test]
