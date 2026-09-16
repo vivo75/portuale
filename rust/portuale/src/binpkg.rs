@@ -318,10 +318,24 @@ struct InnerMember {
     /// `_strip_metadata_prefix`), lossy-decoded for the value map.
     key: String,
     entry_type: tar::EntryType,
+    /// The member's own header mode (`#58` K2: the merge path masks it
+    /// to `0o7777` and strips setuid/setgid before writing).
+    mode: u32,
     link_name: Option<Vec<u8>>,
     /// Present only for regular/unknown types; a link resolves to its
     /// target's bytes instead.
     data: Option<Vec<u8>>,
+}
+
+/// One resolved inner-metadata member for the caller: the key real's
+/// `_strip_metadata_prefix` yields, the bytes `extractfile` would
+/// return (the target's own bytes for a link), and the member's header
+/// mode.
+#[derive(Debug)]
+struct InnerEntry {
+    key: String,
+    bytes: Vec<u8>,
+    mode: u32,
 }
 
 /// `#58` S1: the resolved inner metadata. `entries` is first-appearance
@@ -332,7 +346,7 @@ struct InnerMember {
 /// detected".
 #[derive(Debug)]
 struct InnerMetadata {
-    entries: Vec<(String, Vec<u8>)>,
+    entries: Vec<InnerEntry>,
     /// `#58` S3 refuses these on the merge path (the read path above
     /// last-wins like real); read only by S3 and the unit tests until
     /// then.
@@ -385,6 +399,7 @@ fn collect_inner_members<R: Read>(gpkg: &Path, reader: R) -> Result<Vec<InnerMem
         };
         let key = String::from_utf8_lossy(key_bytes).into_owned();
         let entry_type = entry.header().entry_type();
+        let mode = entry.header().mode().unwrap_or(0o644) & 0o7777;
         let link_name = entry.link_name_bytes().map(|bytes| bytes.to_vec());
         let data = if entry_type.is_file()
             || entry_type.is_contiguous()
@@ -412,6 +427,7 @@ fn collect_inner_members<R: Read>(gpkg: &Path, reader: R) -> Result<Vec<InnerMem
             name,
             key,
             entry_type,
+            mode,
             link_name,
             data,
         });
@@ -521,19 +537,21 @@ fn read_inner_metadata(
         }
     };
 
-    let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut entries: Vec<InnerEntry> = Vec::new();
     let mut duplicate_keys: Vec<String> = Vec::new();
     for index in 0..members.len() {
         let bytes = resolve_inner_member(gpkg, &members, index, 0)?;
         let key = members[index].key.clone();
-        match entries.iter_mut().find(|(existing, _)| *existing == key) {
-            Some((_, value)) => {
-                *value = bytes;
+        let mode = members[index].mode;
+        match entries.iter_mut().find(|entry| entry.key == key) {
+            Some(entry) => {
+                entry.bytes = bytes;
+                entry.mode = mode;
                 if !duplicate_keys.contains(&key) {
                     duplicate_keys.push(key);
                 }
             }
-            None => entries.push((key, bytes)),
+            None => entries.push(InnerEntry { key, bytes, mode }),
         }
     }
     Ok(InnerMetadata {
@@ -639,11 +657,11 @@ pub fn read_gpkg_metadata(gpkg_path: &Path) -> Result<HashMap<String, String>, S
     //    aren't valid UTF-8 (e.g. `environment.bz2`) is skipped, not an
     //    error.
     let mut out = HashMap::new();
-    for (key, bytes) in metadata.entries {
-        let Ok(text) = String::from_utf8(bytes) else {
+    for entry in metadata.entries {
+        let Ok(text) = String::from_utf8(entry.bytes) else {
             continue; // e.g. environment.bz2 -- not a scalar value
         };
-        out.insert(key, text.trim().to_string());
+        out.insert(entry.key, text.trim().to_string());
     }
     Ok(out)
 }
@@ -1113,6 +1131,65 @@ pub fn extract_binpkg(
     Ok(())
 }
 
+/// `#58` K2: the metadata half of `extract_gpkg_member` -- real
+/// `bintree.dbapi.unpack_metadata` -> `gpkg().unpack_metadata(dest_dir)`
+/// extracts every inner `metadata/` member into build-info. Portuale
+/// resolves the S1 reader and writes each member as a **regular file**
+/// with its header mode (masked to `0o7777`, setuid/setgid stripped).
+/// Real would extract an in-archive symlink as a symlink there, which
+/// every later reader of build-info (`write_vdb_entry_from_dir`,
+/// `BINPKGMD5`, the saved-`environment.bz2` extractor, the `pkg_*`
+/// phases) would then follow -- a documented difference, and real's
+/// writer never emits one. Duplicates (`tar_safe_extract`'s "Duplicate
+/// files detected") are refused (K5), and so are nested keys (K4: they
+/// would need directory creation real's writer never necessitates). The
+/// `dest` directory exists by the time `extract_binpkg` calls this.
+fn extract_gpkg_metadata(
+    gpkg: &Path,
+    dest: &Path,
+    member: &Path,
+    comp: Option<&[&str]>,
+) -> Result<(), String> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let metadata = read_inner_metadata(gpkg, member, comp)?;
+    if !metadata.duplicate_keys.is_empty() {
+        return Err(format!(
+            "{}: inner metadata.tar has duplicate members: {}",
+            gpkg.display(),
+            metadata.duplicate_keys.join(", ")
+        ));
+    }
+    for entry in &metadata.entries {
+        if entry.key.contains('/') {
+            return Err(format!(
+                "{}: inner metadata member {:?} is nested, which real's writer never emits",
+                gpkg.display(),
+                entry.key
+            ));
+        }
+        let path = dest.join(&entry.key);
+        let mode = entry.mode & 0o7777 & !0o6000;
+        // `create_new`: never overwrite a file another member (or the
+        // image side) already placed.
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(mode)
+            .open(&path)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        std::io::Write::write_all(&mut file, &entry.bytes)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        drop(file);
+        // `OpenOptions::mode` passes through the process umask; real's
+        // `tarfile.extract` chmods the header mode on afterwards, so set
+        // it explicitly for a umask-independent result.
+        fs::set_permissions(&path, fs::Permissions::from_mode(mode))
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+    }
+    Ok(())
+}
+
 /// The xpak `[image tarball]` prefix -> `dest`. Real
 /// `xpak.tbz2.decompose`: the image is everything before the
 /// `XPAKPACK…STOP` trailer.
@@ -1162,6 +1239,12 @@ fn extract_xpak_image(binpkg_path: &Path, dest: &Path) -> Result<(), String> {
 /// decompress it if needed, and extract it into `dest`. Shares the outer
 /// unpack, the `#56` trusted-name regular-file walk and the `gpkg-1`
 /// validity guard with `read_gpkg_metadata`.
+///
+/// The `image` half keeps GNU `tar` (`-xpf --strip-components=1`) for
+/// its ownership/permission/xattr/sparse semantics, with real
+/// `tar_safe_extract`'s rules applied by a pre-scan first (`#58` K2,
+/// S4). The `metadata` half is resolved in process (`#58` S3,
+/// [`extract_gpkg_metadata`]).
 fn extract_gpkg_member(gpkg_path: &Path, want: &str, dest: &Path) -> Result<(), String> {
     if !gpkg_path.is_file() {
         return Err(format!("{}: not a file", gpkg_path.display()));
@@ -1194,6 +1277,12 @@ fn extract_gpkg_member(gpkg_path: &Path, want: &str, dest: &Path) -> Result<(), 
     }
     let (member, comp) =
         member.ok_or_else(|| format!("{}: no `{want}.tar` member", gpkg_path.display()))?;
+
+    if want == "metadata" {
+        // `#58` K2/S3: the inner metadata tar is resolved in process and
+        // written as regular files only (no scratch copy, no `tar -xpf`).
+        return extract_gpkg_metadata(gpkg_path, dest, &member, comp);
+    }
 
     let inner_tar = scratch.path().join(format!("{want}.tar"));
     match comp {
@@ -1989,6 +2078,18 @@ mod tests {
         assert!(!image.join("image").exists(), "no leftover image/ dir");
         assert!(bi.join("SLOT").is_file(), "metadata prefix stripped");
         assert!(!bi.join("metadata").exists(), "no leftover metadata/ dir");
+        // `#58` S3: the metadata side now writes the resolved member
+        // bytes verbatim as regular files with the header mode (0o644 in
+        // the fixture), the same bytes and modes the former `tar -xpf`
+        // left (captured on `main`).
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(fs::read(bi.join("SLOT")).unwrap(), b"0\n");
+        assert_eq!(fs::read(bi.join("EAPI")).unwrap(), b"8\n");
+        assert_eq!(fs::read(bi.join("RDEPEND")).unwrap(), b"dev-libs/newpkg\n");
+        let slot = fs::symlink_metadata(bi.join("SLOT")).unwrap();
+        assert!(slot.file_type().is_file(), "a regular file, never a link");
+        assert_eq!(slot.permissions().mode() & 0o7777, 0o644);
+        assert_eq!(bi.join("DESCRIPTION").metadata().unwrap().len(), 78);
         let _ = fs::remove_dir_all(&tmp);
     }
 
@@ -2952,6 +3053,22 @@ mod tests {
         read_inner_metadata(Path::new("/test/pkg.gpkg.tar"), &path, None)
     }
 
+    fn inner_pairs(metadata: &InnerMetadata) -> Vec<(String, Vec<u8>)> {
+        metadata
+            .entries
+            .iter()
+            .map(|entry| (entry.key.clone(), entry.bytes.clone()))
+            .collect()
+    }
+
+    fn inner_values(metadata: &InnerMetadata) -> HashMap<&str, &[u8]> {
+        metadata
+            .entries
+            .iter()
+            .map(|entry| (entry.key.as_str(), entry.bytes.as_slice()))
+            .collect()
+    }
+
     #[test]
     fn read_inner_metadata_round_trips_regular_members() {
         let metadata = read_inner(&[
@@ -2960,7 +3077,7 @@ mod tests {
         ])
         .expect("reads");
         assert_eq!(
-            metadata.entries,
+            inner_pairs(&metadata),
             vec![
                 ("SLOT".to_string(), b"0\n".to_vec()),
                 ("EAPI".to_string(), b"8\n".to_vec()),
@@ -2982,11 +3099,7 @@ mod tests {
             inner_symlink("metadata/sub/L", "../SLOT"),
         ])
         .expect("reads");
-        let by_key: HashMap<&str, &[u8]> = metadata
-            .entries
-            .iter()
-            .map(|(key, bytes)| (key.as_str(), bytes.as_slice()))
-            .collect();
+        let by_key = inner_values(&metadata);
         assert_eq!(by_key["DESCRIPTION"], b"0\n");
         assert_eq!(by_key["A"], b"0\n");
         assert_eq!(by_key["sub/L"], b"0\n");
@@ -3014,7 +3127,7 @@ mod tests {
         ])
         .expect("reads");
         assert_eq!(
-            metadata.entries,
+            inner_pairs(&metadata),
             vec![
                 ("SLOT".to_string(), b"0\n".to_vec()),
                 ("DESCRIPTION".to_string(), b"0\n".to_vec()),
@@ -3082,7 +3195,7 @@ mod tests {
         // S0 i7b: real's own key is the remainder after `metadata/`.
         let metadata = read_inner(&[inner_entry("metadata/sub/KEY", b"nested\n")]).expect("reads");
         assert_eq!(
-            metadata.entries,
+            inner_pairs(&metadata),
             vec![("sub/KEY".to_string(), b"nested\n".to_vec())]
         );
     }
@@ -3109,7 +3222,7 @@ mod tests {
         ])
         .expect("reads");
         assert_eq!(
-            metadata.entries,
+            inner_pairs(&metadata),
             vec![("SLOT".to_string(), b"1\n".to_vec())]
         );
         assert_eq!(metadata.duplicate_keys, vec!["SLOT".to_string()]);
@@ -3131,7 +3244,10 @@ mod tests {
         // -> bytes.
         let metadata =
             read_inner(&[inner_special("metadata/ODD", tar::EntryType::new(b'X'))]).expect("reads");
-        assert_eq!(metadata.entries, vec![("ODD".to_string(), Vec::new())]);
+        assert_eq!(
+            inner_pairs(&metadata),
+            vec![("ODD".to_string(), Vec::new())]
+        );
     }
 
     #[test]
@@ -3158,11 +3274,7 @@ mod tests {
             Some(&["zstd", "-dc", "--long=31"]),
         )
         .expect("the zstd pipe reads");
-        let by_key: HashMap<&str, &[u8]> = metadata
-            .entries
-            .iter()
-            .map(|(key, bytes)| (key.as_str(), bytes.as_slice()))
-            .collect();
+        let by_key = inner_values(&metadata);
         assert_eq!(by_key["SLOT"], b"0\n");
         assert_eq!(by_key["RDEPEND"], b"dev-libs/newpkg\n");
 
@@ -3187,8 +3299,21 @@ mod tests {
         prefix: &str,
         inner_entries: &[InnerTestEntry<'_>],
     ) -> PathBuf {
-        let inner = build_inner_tar(inner_entries);
-        let image = build_inner_tar(&[inner_entry("image/hello.txt", b"hi\n")]);
+        build_gpkg_with_inner_tars(
+            prefix,
+            inner_entries,
+            &[inner_entry("image/hello.txt", b"hi\n")],
+        )
+    }
+
+    /// The same with both inner tars under test (`#58` S3/S4 image side).
+    fn build_gpkg_with_inner_tars(
+        prefix: &str,
+        metadata_entries: &[InnerTestEntry<'_>],
+        image_entries: &[InnerTestEntry<'_>],
+    ) -> PathBuf {
+        let inner = build_inner_tar(metadata_entries);
+        let image = build_inner_tar(image_entries);
         let gpkg1: &[u8] = b"";
         let manifest = format!(
             "{}{}{}",
@@ -3295,5 +3420,116 @@ mod tests {
             .expect("the regenerated fixture reads");
         assert_eq!(m.len(), 13);
         assert_eq!(m.get("SLOT").map(String::as_str), Some("0"));
+    }
+
+    // ---- #58 S3: the merge-path metadata extraction ----
+
+    #[test]
+    fn extract_binpkg_writes_an_inner_metadata_symlink_as_a_regular_file() {
+        // S0 i2: real's unpack extracts the symlink as a symlink (its
+        // own writer never emits one); portuale writes the *resolved
+        // target bytes* as a regular file, with the member's header
+        // mode. `pretend.rs::run_info` calls extract_binpkg with no
+        // prior read, so this path is what protects it.
+        let g = build_gpkg_with_inner_entries(
+            "gen-1.0",
+            &[
+                inner_entry("metadata/SLOT", b"0\n"),
+                inner_symlink("metadata/DESCRIPTION", "SLOT"),
+            ],
+        );
+        let tmp = std::env::temp_dir().join(format!("binpkg-gpkg-meta-{}", std::process::id()));
+        let image = tmp.join("image");
+        let bi = tmp.join("build-info");
+        extract_binpkg(&g, &image, &bi, &GpgVerify::default()).expect("extract succeeds");
+        use std::os::unix::fs::PermissionsExt;
+        let desc = fs::symlink_metadata(bi.join("DESCRIPTION")).unwrap();
+        assert!(
+            desc.file_type().is_file(),
+            "the resolved bytes are a regular file, not a symlink"
+        );
+        assert_eq!(fs::read(bi.join("DESCRIPTION")).unwrap(), b"0\n");
+        assert_eq!(desc.permissions().mode() & 0o7777, 0o644);
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn extract_binpkg_rejects_unsafe_inner_metadata_archives() {
+        let check = |entries: &[InnerTestEntry<'_>], needle: &str| {
+            let g = build_gpkg_with_inner_entries("gen-1.0", entries);
+            verify_gpkg_manifest(&g, &GpgVerify::default()).expect("verifies");
+            let tmp =
+                std::env::temp_dir().join(format!("binpkg-gpkg-reject-{}", std::process::id()));
+            let err = extract_binpkg(
+                &g,
+                &tmp.join("image"),
+                &tmp.join("build-info"),
+                &GpgVerify::default(),
+            )
+            .unwrap_err();
+            assert!(err.contains(needle), "expected {needle:?} in {err:?}");
+            let _ = fs::remove_dir_all(&tmp);
+        };
+        // S0 i1: an escaping symlink (the old `tar -xpf` extracted the
+        // symlink itself into build-info, where later readers follow it).
+        check(
+            &[
+                inner_entry("metadata/SLOT", b"0\n"),
+                inner_symlink("metadata/DESCRIPTION", "/etc/hostname"),
+            ],
+            "not in the archive",
+        );
+        // S0 i5: real's 3.14 `isdev()` rejects a FIFO on merge too; the
+        // old `tar -xpf` created one in build-info.
+        check(
+            &[inner_special("metadata/DESCRIPTION", tar::EntryType::Fifo)],
+            "a FIFO",
+        );
+        // S0 i7/i7b: nested keys (K4).
+        check(
+            &[
+                inner_special("metadata/sub/", tar::EntryType::Directory),
+                inner_entry("metadata/sub/KEY", b"nested\n"),
+            ],
+            "a directory",
+        );
+        check(&[inner_entry("metadata/sub/KEY", b"nested\n")], "is nested");
+        // S0 i11: duplicates (real `tar_safe_extract`).
+        check(
+            &[
+                inner_entry("metadata/SLOT", b"0\n"),
+                inner_entry("metadata/SLOT", b"1\n"),
+            ],
+            "duplicate members: SLOT",
+        );
+    }
+
+    #[test]
+    fn extract_binpkg_keeps_extracting_image_symlinks() {
+        // K2 does not touch the image until S4's pre-scan: a legitimate
+        // relative symlink must still land as a symlink (real extracts
+        // image symlinks as-is; only devices/dup/abs/traversal/escaping
+        // hardlinks are rejected).
+        let g = build_gpkg_with_inner_tars(
+            "gen-1.0",
+            &[inner_entry("metadata/SLOT", b"0\n")],
+            &[
+                inner_entry("image/usr/lib/libreal.so", b"real\n"),
+                inner_symlink("image/usr/lib/liblink.so", "libreal.so"),
+            ],
+        );
+        let tmp = std::env::temp_dir().join(format!("binpkg-gpkg-imgsym-{}", std::process::id()));
+        let image = tmp.join("image");
+        let bi = tmp.join("build-info");
+        extract_binpkg(&g, &image, &bi, &GpgVerify::default()).expect("extract succeeds");
+        let link = image.join("usr/lib/liblink.so");
+        let meta = fs::symlink_metadata(&link).unwrap();
+        assert!(meta.file_type().is_symlink(), "image symlink kept");
+        assert_eq!(fs::read_link(&link).unwrap(), Path::new("libreal.so"));
+        assert_eq!(
+            fs::read(image.join("usr/lib/libreal.so")).unwrap(),
+            b"real\n"
+        );
+        let _ = fs::remove_dir_all(&tmp);
     }
 }
