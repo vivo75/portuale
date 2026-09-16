@@ -984,6 +984,24 @@ mod tests {
     }
 
     #[test]
+    fn portage_ssh_opts_from_config_reads_the_scalar() {
+        // Absent `PORTAGE_SSH_OPTS` stays None (expands to empty, like Portage).
+        let mut config = portage_profile::Config::default();
+        config.other_vars.insert(
+            "PORTAGE_SSH_OPTS".to_string(),
+            "-o User=portage".to_string(),
+        );
+        assert_eq!(
+            portage_ssh_opts_from_config(&config).as_deref(),
+            Some("-o User=portage")
+        );
+        assert_eq!(
+            portage_ssh_opts_from_config(&portage_profile::Config::default()),
+            None
+        );
+    }
+
+    #[test]
     fn fetch_src_uri_uses_the_make_globals_default_without_a_config_value() {
         // A config root without make.globals still downloads via the default
         // template.

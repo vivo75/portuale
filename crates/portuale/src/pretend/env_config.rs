@@ -400,3 +400,16 @@ pub(crate) fn resolve_config_for_root(
     .map_err(|e| e.to_string())?;
     Ok(config)
 }
+
+/// Running root's profile for per-node USE paint; `None` on single-root runs and
+/// load failure (target paint is the fallback).
+pub(crate) fn load_running_config(
+    target_root: &std::path::Path,
+    running_root: &std::path::Path,
+    repos: &[portage_repo::RepoConfig],
+) -> Option<portage_profile::Config> {
+    if running_root == target_root {
+        return None;
+    }
+    resolve_config_for_root(running_root, repos, running_root).ok()
+}

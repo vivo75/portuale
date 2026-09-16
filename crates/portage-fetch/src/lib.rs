@@ -907,6 +907,70 @@ mod tests {
         assert_eq!(argv, vec!["cp", "file:///src/foo", "/d/foo"]);
     }
 
+    /// Oracle: Portage's `FETCHCOMMAND_SSH` expanded with the fetch
+    /// variables (see notes for the verbatim vectors).
+    #[test]
+    fn expand_and_split_matches_portage_varexpand_on_fetchcommand_ssh() {
+        let command = r#"bash -c "x=\${2#ssh://} ; host=\${x%%/*} ; port=\${host##*:} ; host=\${host%:*} ; [[ \${host} = \${port} ]] && port= ; exec rsync --rsh=\"ssh \${port:+-p\${port}} \${3}\" -avP \"\${host}:/\${x#*/}\" \"\$1\"" rsync "${DISTDIR}/${FILE}" "${URI}" "${PORTAGE_SSH_OPTS}""#;
+        let base = vars(&[
+            ("DISTDIR", "/var/cache/distfiles"),
+            ("URI", "https://example.org/distfiles/foo-1.0.tar.gz"),
+            ("FILE", "foo-1.0.tar.gz"),
+            ("DIGESTS", "blake2b:aa sha512:bb"),
+        ]);
+        let bash_script = r#"x=${2#ssh://} ; host=${x%%/*} ; port=${host##*:} ; host=${host%:*} ; [[ ${host} = ${port} ]] && port= ; exec rsync --rsh="ssh ${port:+-p${port}} ${3}" -avP "${host}:/${x#*/}" "$1""#;
+        let mut unset = base.clone();
+        assert_eq!(
+            expand_and_split(command, &unset),
+            vec![
+                "bash",
+                "-c",
+                bash_script,
+                "rsync",
+                "/var/cache/distfiles/foo-1.0.tar.gz",
+                "https://example.org/distfiles/foo-1.0.tar.gz",
+                "",
+            ]
+        );
+        unset.insert(
+            "PORTAGE_SSH_OPTS".to_string(),
+            "-o ServerAliveInterval=5 -o User=portage".to_string(),
+        );
+        assert_eq!(
+            expand_and_split(command, &unset),
+            vec![
+                "bash",
+                "-c",
+                bash_script,
+                "rsync",
+                "/var/cache/distfiles/foo-1.0.tar.gz",
+                "https://example.org/distfiles/foo-1.0.tar.gz",
+                "-o ServerAliveInterval=5 -o User=portage",
+            ]
+        );
+    }
+
+    /// Portage fetch-time `varexpand` over a command template: unknown
+    /// names empty, `\$` literal, `\\` unescaped, single-quote suspension.
+    #[test]
+    fn expand_and_split_varexpand_unknown_vars_and_escapes_match_portage() {
+        assert_eq!(
+            expand_and_split("cp $NOSUCH ${ALSO_MISSING} x", &vars(&[("FILE", "f")])),
+            vec!["cp", "x"]
+        );
+        assert_eq!(
+            expand_and_split(
+                r#"cp "\$FILE" "\${URI}" "\\$FILE""#,
+                &vars(&[("FILE", "f"), ("URI", "u")]),
+            ),
+            vec!["cp", "$FILE", "${URI}", "\\$FILE"]
+        );
+        assert_eq!(
+            expand_and_split("cp '$FILE' x", &vars(&[("FILE", "f")])),
+            vec!["cp", "$FILE", "x"]
+        );
+    }
+
     #[test]
     fn digests_variable_formats_like_portage_and_skips_size() {
         let mut hashes = HashMap::new();
