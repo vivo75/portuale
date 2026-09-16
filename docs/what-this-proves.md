@@ -16913,3 +16913,13 @@ python3 -m pytest tests/test_emerge_pretend_contract.py -q \
 ```
 
 Tests: `pretend::tests::emerge_default_opts_are_prepended_to_argv`, the extended `classify_yes_no_*` unit test, `portage-profile`'s `profile_packages_are_the_unstarred_lines_of_profile_set_repo_levels` / `profile_packages_require_the_profile_set_format`, and the three contract tests above. Evidence: `docs/evidence/2026-09-16-world-uDpvN/` (the frozen real-vs-portuale outputs). Plans: `docs/01.063-emerge_default_opts.md`, `docs/01.064-world_profile_set.md`.
+
+**Backlog #14 is closed out and #66 was withdrawn with a both-ways pin: an installed parent's `BDEPEND` drives a dependency update only when real's `bdeps` parameter walks build-time deps (2026-09-16).** `#14`'s F1–F5 shipped 2026-09-14; the close-out found only bookkeeping left (the stale `scope-backlog.md` §E "rename not yet implemented" sentence, fixed in `8682735`) and the transport residue was filed as #70, so the backlog entry is now marked DONE. `#66` claimed "a built package's build-time deps are optional and never drive installs/updates"; the re-probe showed that was an option mismatch captured before #63: real ran with the host's `--getbinpkg` (⇒ `--usepkg` ⇒ `bdeps` unset) while portuale ignored `EMERGE_DEFAULT_OPTS`. The rule is `create_depgraph_params.py:97-103` — `bdeps="auto"` only when `--with-bdeps` is unset and `--usepkg` is not in effect — then `_add_pkg_deps` (`depgraph.py:4194-4247`) empties a built package's `DEPEND`/`BDEPEND`; `optional` (`:3396-3398`) only matters when no child is selectable, so the original S1 ("never queue build-time atoms of installed parents") would have introduced a divergence and was **not** implemented. It is now pinned both ways through a new fixture pair (`bdepcascadepkg` `BDEPEND=">=dev-libs/bdepcascadedep-2"`, installed `dep-1.0`, visible `dep-2.0`): real merged `dep-2.0` under default `-uDN` and under `--with-bdeps=y --usepkg`, and merged nothing under `--usepkg`, `--getbinpkg`, `--with-bdeps-auto=n` and `--with-bdeps=n`, in a container capture against real 3.0.82.2; portuale matched all six cells before any code change.
+
+```sh
+python3 -m pytest tests/test_emerge_pretend_contract.py -q \
+    -k test_oracle_bdeps_default_of_an_installed_parent_drives_dependency_updates
+# -> 1 passed (six cells, real-oracle-confirmed)
+```
+
+Plan: `docs/02.066-installed_buildtime_optional.md` (S1 pin, withdrawn main slice).

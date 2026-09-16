@@ -16399,6 +16399,71 @@ def test_oracle_slotop_bdeps(
         assert "The following packages are causing rebuilds:" in rust.stdout
 
 
+def test_oracle_bdeps_default_of_an_installed_parent_drives_dependency_updates(
+    emerge_binary, fixture_env, tmp_path
+):
+    """Backlog #66 pin (withdrawn: not a bug, fixed by #63) -- real's
+    `bdeps` parameter, both ways, on a shape where it is observable.
+
+    Installed `dev-libs/bdepcascadepkg-1.0` carries
+    `BDEPEND=">=dev-libs/bdepcascadedep-2"`, with
+    `bdepcascadedep-1.0` installed and `bdepcascadedep-2.0` in the tree.
+    Real `create_depgraph_params.py:97-103` sets `bdeps="auto"` only when
+    `--with-bdeps` is unset and `--usepkg` is not in effect
+    (`--getbinpkg` implies `--usepkg`, `actions.py:3719-3720`); with
+    `bdeps` neither `y` nor `auto`, `_add_pkg_deps`
+    (`depgraph.py:4194-4247`) empties a built package's
+    `DEPEND`/`BDEPEND` before any dep is registered, so the update
+    disappears. `optional` (`:3396-3398`) is *not* the mechanism: the
+    original #66 report read the pre-#63 option mismatch as "built deps
+    are optional", which would have meant the update never happens.
+
+    Oracle: container fixture-oracle capture 2026-09-16 (real 3.0.82.2,
+    staged `/tmp/fx66` tree; the re-probe of the same rule on the host is
+    in `docs/evidence/2026-09-16-post63-probes/`), six cells:
+    default `-uDN`, `--with-bdeps=y --usepkg` -> `dep-2.0` merged;
+    `--usepkg`, `--getbinpkg`, `--with-bdeps-auto=n`, `--with-bdeps=n`
+    -> no merge list. Every cell MATCHES real, before any code change --
+    the pin exists so the rule cannot silently regress."""
+    root = _b1_root(
+        tmp_path,
+        [],
+        [
+            (
+                "dev-libs",
+                "bdepcascadepkg",
+                "1.0",
+                "0",
+                {"BDEPEND": ">=dev-libs/bdepcascadedep-2"},
+            ),
+            ("dev-libs", "bdepcascadedep", "1.0", "0", {}),
+        ],
+    )
+    env = _b1_env(fixture_env, root)
+    updated = ["[ebuild     U  ] dev-libs/bdepcascadedep-2.0 [1.0]"]
+    for extra, expected in (
+        ([], updated),
+        (["--with-bdeps=y", "--usepkg"], updated),
+        (["--usepkg"], []),
+        (["--getbinpkg"], []),
+        (["--with-bdeps-auto=n"], []),
+        (["--with-bdeps=n"], []),
+    ):
+        rust = _b1_run(
+            [
+                "--pretend",
+                *extra,
+                "--update",
+                "--deep",
+                "--oneshot",
+                "dev-libs/bdepcascadepkg",
+            ],
+            env,
+            emerge_binary,
+        )
+        assert _b1_merges(rust.stdout) == expected, extra
+
+
 def test_oracle_slotop_runtime_pkg_mask(
     emerge_binary, fixture_env, tmp_path
 ):
