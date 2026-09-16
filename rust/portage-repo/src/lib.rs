@@ -2652,13 +2652,36 @@ pub fn find_remote_binpkg<'a>(
 /// The caller opens real's gate -- `reinstall_use or (not installed and
 /// respect_use)` -- and this function implements the comparison. Real
 /// compares the binary's own baked `IUSE`/`USE` (`old_*`) against the
-/// **same-version ebuild's** profile-computed sets (`cur_*`; for a
-/// binary, `pkg.iuse.all`/`_pkg_use_enabled(pkg)`), never against the
-/// binary's own selection: a flag that only the ebuild declares is
-/// visible. Without an ebuild at that version (`--usepkgonly`, or a
-/// binary whose ebuild left the tree) `cur_*` falls back to the binary's
-/// own sets, which makes the comparison empty -- exactly real's `cur_iuse
-/// = pkg.iuse.all` / `pkgsettings.setcpv(pkg)` arm.
+/// **same-version ebuild's** profile-computed sets (`cur_*`), never
+/// against the binary's own selection: a flag that only the ebuild
+/// declares is visible.
+///
+/// Without an ebuild at that version the `cur_*` side is real's own
+/// `else` arm (`depgraph.py:8265-8271`):
+///
+/// ```python
+///             if myeb:
+///                 now_use = self._pkg_use_enabled(myeb)
+///                 forced_flags = set(chain(myeb.use.force, myeb.use.mask))
+///             else:
+///                 pkgsettings.setcpv(pkg)
+///                 now_use = pkgsettings["PORTAGE_USE"].split()
+///                 forced_flags = set(
+///                     chain(pkgsettings.useforce, pkgsettings.usemask)
+///                 )
+///             cur_iuse = iuses
+/// ```
+///
+/// `pkgsettings.setcpv(pkg)` computes the *profile's* selection for the
+/// binary's own cpv over its own IUSE -- **not** the binary's baked
+/// USE. The #69 R0 oracle (real 3.0.82.2, `TEST/findings/l0.md`
+/// "#69 R0") captured it: binary baked `USE=elibc_glibc r0flag`, the
+/// profile selection after dropping the package's `r0flag` selection is
+/// `['elibc_glibc']`, and real rejects (`{'r0flag'}`), while the old
+/// "own sets stand in" fallback made the comparison empty. Reachability
+/// is real's own: the respect-use half of the gate is off under
+/// `--usepkgonly` (`create_depgraph_params.py:47-55`, modelled by
+/// `pretend.rs`'s `binpkg_respect_use.unwrap_or(!usepkgonly)`).
 ///
 /// Arms, in real's order:
 /// - `newuse || (respect_use && !changed_use)`: the IUSE symmetric
@@ -2670,8 +2693,9 @@ pub fn find_remote_binpkg<'a>(
 /// - neither (gate opened only by a non-`changed-use` `--reinstall`):
 ///   no comparison at all, the binary survives.
 ///
-/// `forced_flags` (the ebuild's own `use.force`/`use.mask`) is
-/// deliberately not subtracted yet -- plan question (c) was dropped.
+/// `forced_flags` (the ebuild's own `use.force`/`use.mask`, or -- in
+/// the no-ebuild arm -- the binary cpv's) is not subtracted yet; the
+/// #69 R2 slice adds it.
 #[allow(clippy::too_many_arguments)]
 fn binpkg_respect_use_ok(
     candidate: &Candidate,
@@ -2696,7 +2720,25 @@ fn binpkg_respect_use_ok(
             candidate_iuse_and_use(ebuild, category, package, config)
                 .unwrap_or_else(|| (old_iuse.clone(), binary_use.clone()))
         }
-        _ => (old_iuse.clone(), binary_use.clone()),
+        // Real's no-`myeb` arm (`depgraph.py:8265-8271`):
+        // `pkgsettings.setcpv(pkg)` -- the profile's selection for the
+        // binary's own cpv over its own IUSE, never the baked USE. See
+        // this function's own doc comment for the #69 R0 capture.
+        _ => {
+            let candidate_str = format!(
+                "{category}/{package}-{}:{}/{}::{}",
+                candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
+            );
+            let cur_use = effective_use_flags(
+                config,
+                &candidate.iuse,
+                &candidate.keywords,
+                &candidate_str,
+                category,
+                package,
+            );
+            (old_iuse.clone(), cur_use)
+        }
     };
     let old_enabled: HashSet<String> = old_iuse.intersection(binary_use).cloned().collect();
     let cur_enabled: HashSet<String> = cur_iuse.intersection(&cur_use).cloned().collect();
@@ -22197,9 +22239,25 @@ mod tests {
             false,
             false
         ));
-        // No same-version ebuild (--usepkgonly): own sets stand in, so
-        // the comparison is empty.
+        // No same-version ebuild: real `depgraph.py:8265-8271`
+        // (`pkgsettings.setcpv(pkg)`) compares against the *profile's*
+        // selection for the binary cpv over the binary's own IUSE. The
+        // profile still selects foo here, so the binary is kept.
         assert!(binpkg_respect_use_ok(
+            &binary(),
+            None,
+            "dev-libs",
+            "x",
+            &config,
+            false,
+            false,
+            true
+        ));
+        // The profile no longer selects foo while the binary's baked USE
+        // has it (the #69 R0 n1 shape) -> rejected, even though there is
+        // no ebuild to compare against.
+        config.conf_use_tokens.clear();
+        assert!(!binpkg_respect_use_ok(
             &binary(),
             None,
             "dev-libs",
