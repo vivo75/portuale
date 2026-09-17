@@ -17125,3 +17125,28 @@ TEST/run/l0-fixture-oracle.sh
 ```
 
 Evidence: `TEST/findings/l0.md` "#71 S0" (the trace and both matrices) and "#71 S1" (the bed fix, run ids `l0-fx-20260917T174011Z`/`l0-fx-20260917T174105Z`); plans `docs/02.071-runtime_key_slotop_rebuilds.md` (done, re-scoped) and `docs/02.68-74.md` Phase E.
+
+**The bdeps-on `--deep` walk keeps the installed instance real keeps, and treats each installed slot as its own node (#74, Phase F, 2026-09-17).** The `#65` slice-15 follow-up had two residues on the bdeps-on probe: portuale merged `dev-lang/rust-1.94.0` `NS` where real merged no rust at all, and portuale missed real's `myst-parser`/`mdit-py-plugins` chain. S0's diagnosis (real `--debug` + a patched `dep_zapdeps` bin dump in the container) showed both are `||`/installed-instance semantics: real's `mydbapi_match_pkgs` is the composite graph db, whose `_select_package` matches an installed instance through its *recorded vdb* USE (`dbapi._match_use`'s built branch) while an ebuild candidate is matched through the profile USE; and real keys installed nodes by `pkg.slot_atom`, so `llvm-core/clang:22` and `:23` are two nodes with their own dep walks. S1 fixed the `||` bin (`disjunction_preference` now accepts an installed instance's built USE), the selection (`resolve_pretend` prefers it before the autounmask flip path), the REQUIRED_USE gate (`not pkg.built`) and the self-dep walk; S2a keyed the `AlreadyInstalled` dedup by vdb slot. Two new fixtures pin both: `dev-libs/altprov`/`altconsumer` (installed `altprov:1.1[flip]` beats the uninstalled `:1.0` slot) and `dev-libs/slotdedup`/`slotdedupconsumer`/`slotdedupmarker` (both installed slots get their deps walked). The remaining class B2 residue (a blocker-carrying candidate backtracked away instead of reported) is diagnosed and filed as backlog #79.
+
+```sh
+# the probe: the portuale extra is gone, no rust row at all
+rust/target/release/portuale emerge -puDvN --ignore-default-opts --oneshot app-containers/runc | grep -E '^\[|^Total'
+# -> Total: 25 packages (18 upgrades, 3 new, 4 reinstalls), Size of downloads: 191143 KiB
+# real: Total: 26 packages …; the only difference left is dev-build/gtk-doc-am-1.36.1 + [blocks B] (backlog #79)
+
+# the two fixture oracles (real captures in the findings note and the bed)
+python3 -m pytest tests -q -k "installed_alternative_use_dep or every_installed_slot"
+# -> 2 passed
+
+# both differential beds, plus the @world re-diff (identical sets, same Total/Conflict)
+TEST/run/l0-fixture-oracle.sh
+# -> summary: probes 20, clean 15, explained 17, UNEXPLAINED 0   (rc 0)
+FX_SLOTOP_BDEP=1 FX_HOST_ROOTS=1 TEST/run/l0-fixture-oracle.sh TEST/atomlists/l0-fixture-oracle-slotop.txt
+# -> summary: probes 18, clean 15, explained 3, UNEXPLAINED 0   (rc 0)
+diff <(emerge -uDpvN --ignore-default-opts @world | grep '^\[' | sed 's/ *[0-9]* KiB$//;s/ *$//' | sort) \
+     <(rust/target/release/portuale emerge -uDpvN --ignore-default-opts @world | grep '^\[' | sed 's/ *[0-9]* KiB$//;s/ *$//' | sort)
+# -> empty; both print Total: 73 packages (37 upgrades, 1 downgrade, 9 new, 5 in new slots, 21 reinstalls), Size of downloads: 1282430 KiB
+#    and Conflict: 1 block (all satisfied)
+```
+
+Evidence: `TEST/findings/l0.md` "#74 S0"–"#74 S3"; plans `docs/02.68-74.md` Phase F and `docs/02.074-bdeps_deep_walk.md` (now done); backlog #74 (done) and #79 (the filed B2 residue).
