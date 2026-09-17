@@ -70,7 +70,22 @@ fi
 # for both real and portuale (neither of which has the staged testrepo
 # configured there), not the fixture -- invisible until #53 added the
 # first fixture-oracle case with a BDEPEND chain.
-export PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" DISTDIR="$FX/distfiles"
+#
+# FX_HOST_ROOTS=1 switches to the *host-exact* shape: ROOT=/ with the
+# fixture tree as PORTAGE_CONFIGROOT only. Real's `create_trees`
+# (portage/__init__.py:497-529) equates the running root with the target
+# root only when `ROOT == "/"`; with the default `ROOT=$FX` real resolves
+# BDEPEND against a second tree at the container's `/`, and a slot-op
+# cascade splits across both (B0b; `TEST/findings/l0.md` "#68/#72 B0b",
+# "#71 S0"). The target root's vdb/world are the fixture copies written
+# just above, so `/` carries the same installed set. Used by the
+# slotop matrix run (`FX_SLOTOP_BDEP=1 FX_HOST_ROOTS=1 ...`); every
+# other atomlist keeps the default.
+if [ "${FX_HOST_ROOTS:-}" = 1 ]; then
+  export PORTAGE_CONFIGROOT="$FX" ROOT="/" PORTAGE_RUNNING_ROOT="/" DISTDIR="$FX/distfiles"
+else
+  export PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" DISTDIR="$FX/distfiles"
+fi
 # Hide the image's own repository configuration: with PORTAGE_REPOSITORIES
 # set, real parses exactly this INI text and ignores repos.conf on disk
 # (portage/repository/config.py::load_repository_config).

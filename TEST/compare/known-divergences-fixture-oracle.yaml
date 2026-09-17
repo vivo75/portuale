@@ -95,37 +95,28 @@
     `test_needer_othermod_triangle_reports_the_installed_instance_conflict`).
   owner: claude-opus-5
 
-# -- #65 S0/S1/S2: the slot-operator bdeps matrix (FX_SLOTOP_BDEP=1,
-#    TEST/atomlists/l0-fixture-oracle-slotop.txt). Both entries exist so
-#    the bed can gate the matrix while the runtime-key residue is open.
+# -- #65 S0/S1/S2 + #71: the slot-operator bdeps matrix (FX_SLOTOP_BDEP=1
+#    FX_HOST_ROOTS=1, TEST/atomlists/l0-fixture-oracle-slotop.txt). The
+#    two artifact entries (totals duplication, the considep extra) were
+#    deleted by the #71 S1 re-scope: with host-exact roots real and
+#    portuale agree on set and Total: in every argument/option cell.
+#    What remains is a genuine merge-order divergence in the three
+#    @world cells (below).
 
-- id: slotop-bdeps-rebuild-totals
-  category: totals
-  slugs: ["-uDvN*"]
-  match: "real Total"
+- id: slotop-world-complete-graph-order
+  category: order
+  slugs:
+    ["-uDvN__world", "-uDvN_--usepkg__world", "-uDvN_--with-bdeps_y__world"]
+  match: "merge order diverges"
   reason: >
-    BED ARTIFACT (#71 S0, 2026-09-17): with the bed's `ROOT=$FX`
-    (real's `create_trees` gives a second tree at `/`), the staged
-    matrix's rebuild rows split across the two roots, so the comparator
-    sees the target-root subset as the merge set and the root-`/` rows
-    as extra -- and real's Total counts the duplicates. Host-exact
-    (`ROOT=/`, `PORTAGE_CONFIGROOT=$FX`) real prints each consumer once
-    and `Total:` matches portuale byte for byte. Entry stays only until
-    the slotop matrix runs host-exact; see `TEST/findings/l0.md`
-    "#71 S0".
-  owner: portuale-oracle
-
-- id: slotop-idepend-world-only-arg-consumer
-  category: extra
-  slugs: ["-uDvN_--oneshot*consrdep", "-uDvN_--oneshot*conspdep"]
-  match: "ebuild dev-libs/considep-1.0 present for portuale, absent for real"
-  reason: >
-    BED ARTIFACT (#71 S0, 2026-09-17): the two cells were captured with
-    `ROOT=$FX`, where real's slot-op cascade splits across the target
-    root and `/`; `considep` is rebuilt by real in root `/` and the
-    comparator's target-root merge set misses it. Host-exact (`ROOT=/`,
-    `PORTAGE_CONFIGROOT=$FX`) real rebuilds exactly portuale's set in
-    every argument cell, so there is no portuale divergence to fix.
-    Entry stays only until the slotop matrix runs host-exact; see
-    `TEST/findings/l0.md` "#71 S0".
-  owner: portuale-oracle
+    Standing merge-order class (#17, deliberate cut): in the staged
+    matrix's `@world` shape real's complete-graph rebuild order is
+    `consbdep, consdep, considep, conspdep, consrdep` (the order its
+    `_complete_graph` `_unsatisfied_deps` re-probe reaches them) while
+    portuale emits them in dependency-discovery order
+    `consrdep, consdep, consbdep, conspdep, considep`. The set and the
+    `Total:` row match; only the sequence differs, the same family as
+    the host L0 "order" findings. Adjudicated here so the slotop matrix
+    can run host-exact; a merge-order port is #17's parked work, not
+    #71's. See `TEST/findings/l0.md` "#71 S1".
+  owner: portuale

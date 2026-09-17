@@ -1,9 +1,14 @@
 # #65 slot-operator ABI rebuild scan vs --with-bdeps: oracle matrix.
-# Run with FX_SLOTOP_BDEP=1 (stage.sh installs the matrix: installed
-# provpkg-1.0:0/1 + tree 2.0:0/2, and five installed consumers
+# Run with FX_SLOTOP_BDEP=1 FX_HOST_ROOTS=1 (stage.sh installs the matrix:
+# installed provpkg-1.0:0/1 + tree 2.0:0/2, and five installed consumers
 # cons{rdep,dep,bdep,pdep,idep}-1.0 each bound to provpkg through one dep
 # key with real's versioned built atom `>=dev-libs/provpkg-1.0:0/1=`,
 # all six in world).
+#
+# FX_HOST_ROOTS=1 is required for this list: without it the bed's
+# ROOT=$FX != "/" splits real's slot-op cascade across two trees and the
+# comparison is meaningless (the #71 S0 finding, TEST/findings/l0.md
+# "#71 S0"; the two former artifact allowlist entries are gone).
 #
 # Keys: RDEPEND/PDEPEND/IDEPEND are runtime keys (always walked); DEPEND/
 # BDEPEND are build-time keys (walked only when bdeps is auto/y).
