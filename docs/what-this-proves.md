@@ -17091,3 +17091,22 @@ rust/target/release/portuale emerge -uDpvN @world | grep -c '^\['
 ```
 
 Evidence: `TEST/findings/l0.md` "#73 S0" and "#73 S1" (container cells with exact bytes). Plan: `docs/02.073-blocker_set_parents.md`.
+
+**The host `@world` satisfied blocker, the `[uninstall]` rows and their inline `b` lines now match real (backlog #68 display repair + #72, 2026-09-17).** #68's classification fix made the host plan rc 0 but the satisfied row was simply dropped. Real prints it **inline right after** the replacement, and only when its serializer is *stuck*: `_serialize_tasks` schedules the blocker's uninstall only when no merge node is selectable (`depgraph.py:9998`, `:10190`) and appends the solved blocker when the replacement is selected (`:10351-10358`). The B0 stop was right to distrust "the owner happens to be earlier"; B0b re-staged the host shape host-exactly (the replacement version-pins its `BDEPEND` on the *new* owner, so the installed owner cannot satisfy it — `~gtk-doc-am-${PV}` vs installed 1.34.0) and confirmed the model on p2c/p2d/p2e while flat p2b (installed-satisfied edge) correctly shows nothing. The port: `BlockerSatisfiedBy` carries *why* a row is satisfied (B1, `Replacement`/`Uninstall`), `replacement_wait_index` walks the replacement's `GraphEntry::deps` through merge-bound entries on edges the leaf scan cannot relax and no installed package matches (B2, sharing `build_digraph`'s `satisfied` rule; `--columns` suppresses the line but keeps the count), uninstall-resolved blocks see real's complete-mode retry closure `@selected ∪ @profile ∪ @system` without switching the slot-operator gate on (B2c), the removal becomes a real `PretendOutcome::Uninstall` entry with `required_by` = owner (B3, every merge/execution site skips it), and B4 renders `[uninstall     ] <cpv>` (red, `-q` pad, `--columns` skip, `-pv` vdb decoration), prints the satisfied `b` inline after it and counts `uninst` in `Total:` after `binary` (outside `total_installs`).
+
+```sh
+# the host shape: owner merges first, replacement waits, row prints inline
+rust/target/release/portuale emerge -uDpvN @world | grep -A1 '^\[ebuild.*dev-util/gtk-doc-1.36.1::'
+# -> [ebuild     U  ] dev-util/gtk-doc-1.36.1::gentoo [1.34.0-r2::gentoo] USE="-emacs -test" …
+#    [blocks b      ] <dev-util/gtk-doc-1.36.1 ("<dev-util/gtk-doc-1.36.1" is soft blocking dev-build/gtk-doc-am-1.36.1)
+
+# the removal row and its inline satisfied blocker (u1/u2/u3/u6 + the colour pin)
+python3 -m pytest tests -q -k "b4 or strong_blocker or blocker_lines"
+# -> 4 passed
+
+# the B0b host-exact ordering cells (p1/p1b/p2b/p2c/p2d/p2e)
+python3 -m pytest tests -q -k b0b
+# -> 5 passed
+```
+
+Evidence: `TEST/findings/l0.md` "#68/#72 B0b" (the model confirmation) and "#68/#72 B1"–"B4" (each slice's pins and the host re-diff); plans `docs/02.68-74.md` Phase D and `docs/02.072-uninstall_merge_rows.md` (now done).
