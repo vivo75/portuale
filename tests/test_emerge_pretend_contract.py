@@ -17018,6 +17018,88 @@ def _b0b_env(fixture_env, root, configroot):
     return env
 
 
+def test_oracle_b2c_uninstall_resolved_block_sees_the_complete_mode_sets(
+    emerge_binary, fixture_env, tmp_path
+):
+    """Backlog #68/#72 B2c, B0 u4: when a block resolves by an uninstall,
+    real re-runs `_serialize_tasks` in complete mode
+    (`depgraph.py:10365-10383`), which walks `@selected ∪ @profile ∪
+    @system`. Installed `bconsumer` (world) depends on installed
+    `blocked-1.0`, so the retry makes it a digraph node with parents and
+    `--oneshot dev-libs/bparent` prints `[blocks B]` + `Conflict: 1 block
+    (1 unsatisfied)` and exits 1. With the consumer *not* in world (the
+    #68 S0 cell d control: no retry parent) the block stays satisfied --
+    `b`, rc 0.
+
+    Container oracle, real 3.0.82.2 (`TEST/findings/l0.md` "#68/#72 B0"
+    u4 and "#68 S0" cell d).
+    """
+    root = _b1_root(
+        tmp_path,
+        ["dev-libs/bconsumer"],
+        [
+            ("dev-libs", "blocked", "1.0", "0", {"IUSE": "flip", "USE": "flip"}),
+            ("dev-libs", "bconsumer", "1.0", "0", {"RDEPEND": "dev-libs/blocked"}),
+        ],
+    )
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "-v", "--oneshot", "dev-libs/bparent"],
+        _b1_env(fixture_env, root),
+    )
+    assert result.returncode == 1
+    assert result.stdout.splitlines() == [
+        "[ebuild  N     ] dev-libs/bparent-1.0::testrepo ",
+        '[blocks B      ] <dev-libs/blocked-2.0 ("<dev-libs/blocked-2.0" is soft '
+        "blocking dev-libs/bparent-1.0)",
+        "",
+        "Total: 1 package (1 new), Size of downloads: 0 KiB",
+        "Conflict: 1 block (1 unsatisfied)",
+    ], result.stdout
+    assert "installed at the same time" in result.stderr
+
+    # Control (#68 cell d): the consumer is installed but unreachable from
+    # any required set, so the retry finds no parent.
+    control_tmp = tmp_path / "control"
+    control_tmp.mkdir()
+    control = _run(
+        [str(emerge_binary)],
+        ["--pretend", "-v", "--oneshot", "dev-libs/bparent"],
+        _b1_env(
+            fixture_env,
+            _b1_root(
+                control_tmp,
+                [],
+                [
+                    (
+                        "dev-libs",
+                        "blocked",
+                        "1.0",
+                        "0",
+                        {"IUSE": "flip", "USE": "flip"},
+                    ),
+                    (
+                        "dev-libs",
+                        "bconsumer",
+                        "1.0",
+                        "0",
+                        {"RDEPEND": "dev-libs/blocked"},
+                    ),
+                ],
+            ),
+        ),
+    )
+    assert control.returncode == 0
+    assert control.stdout.splitlines() == [
+        "[ebuild  N     ] dev-libs/bparent-1.0::testrepo ",
+        '[blocks b      ] <dev-libs/blocked-2.0 ("<dev-libs/blocked-2.0" is soft '
+        "blocking dev-libs/bparent-1.0)",
+        "",
+        "Total: 1 package (1 new), Size of downloads: 0 KiB",
+        "Conflict: 1 block (all satisfied)",
+    ], control.stdout
+
+
 def test_oracle_b0b_satisfied_replacement_p1_p1b_no_row(
     emerge_binary, fixture_env, fixtures_root, tmp_path
 ):

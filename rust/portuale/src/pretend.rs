@@ -10897,10 +10897,19 @@ pub fn run(args: &[String]) -> ExitCode {
     };
     let run_resolve = |complete: bool, locked: &[String], with_seeds: bool| {
         let cfg: std::borrow::Cow<portage_profile::Config> =
-            if with_seeds && (!complete_seed_atoms.is_empty() || !locked.is_empty()) {
+            if !complete_seed_atoms.is_empty() || !locked.is_empty() {
                 let mut c = config.clone();
-                c.complete_seed_atoms = complete_seed_atoms.clone();
-                c.complete_locked_merges = locked.to_vec();
+                // #72 B2c: the blocker classification follows real's
+                // complete-mode retry even on a non-complete pass
+                // (`blocker_retry_seed_atoms`), while `complete_seed_atoms`
+                // stays gated on `with_seeds` -- filling *that* field here
+                // would switch the slot-operator-rebuild scan on for every
+                // plain resolve (the trap the plan calls out).
+                c.blocker_retry_seed_atoms = complete_seed_atoms.clone();
+                if with_seeds {
+                    c.complete_seed_atoms = complete_seed_atoms.clone();
+                    c.complete_locked_merges = locked.to_vec();
+                }
                 std::borrow::Cow::Owned(c)
             } else {
                 std::borrow::Cow::Borrowed(&config)

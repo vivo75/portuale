@@ -567,6 +567,20 @@ pub struct Config {
     /// entirely, matching real (`emerge -p <atom>` with no installed
     /// change triggers no slot-op rebuild).
     pub complete_seed_atoms: Vec<String>,
+    /// The same `@world ∪ @selected ∪ @system` atom list as
+    /// [`Config::complete_seed_atoms`], but populated by the CLI layer on
+    /// **every** pass, complete or not (#68/#72 B2c). Real's
+    /// `_serialize_tasks` re-runs the whole serialization in complete mode
+    /// when the first pass selected an uninstall task
+    /// (`depgraph.py:10365-10383`), which walks the required sets -- so a
+    /// block resolved by an uninstall sees those sets' installed closure
+    /// even on a plain `emerge -p <atom>` run, where the surrounding
+    /// resolution is *not* complete. The resolver uses it only for that
+    /// blocker classification (`ResolveCtx::blocker_retry_closure`); it
+    /// deliberately does not feed `complete_seed_atoms`, which gates the
+    /// slot-operator-rebuild scan (filling it here would switch #24/#65
+    /// behaviour on for non-complete runs).
+    pub blocker_retry_seed_atoms: Vec<String>,
     /// `"category/package"` of every package the **first, non-complete**
     /// resolve pass would actually merge. Real `_complete_graph` runs
     /// after the normal graph is built and swaps package selection to

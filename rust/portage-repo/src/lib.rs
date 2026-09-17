@@ -14737,9 +14737,10 @@ fn graph_has_parent(
 /// `@system` (or reached from one of those sets' installed dependency
 /// walk) has at least one parent node. Portuale's `entries` only carry
 /// the walked *dependency edges*, so that set/argument parent is
-/// invisible to [`graph_has_parent`]; `installed_closure`
-/// (`ResolveCtx::installed_closure`, the same forward-installed closure
-/// the target arm consults) is exactly real's set-parent membership.
+/// invisible to [`graph_has_parent`]; the retry closure
+/// (`ResolveCtx::blocker_retry_closure`, the same forward-installed
+/// closure the target arm consults) is exactly real's set-parent
+/// membership.
 ///
 /// The set is **cp-keyed** (`(category, package)`), not per-instance
 /// (T10): real's `digraph.parent_nodes(inst_pkg)` is per-instance and
@@ -14753,37 +14754,41 @@ fn graph_has_parent(
 /// #73 S0 (`TEST/findings/l0.md` "#73 S0") had real print `B`/rc 1 in
 /// every shape -- owner in `@world` (g), owner as a plain `--oneshot`
 /// argument (g2), owner reachable only through a world member's
-/// installed dependency edge (g3), owner in `@system` (g4) -- and
-/// `installed_closure` contained the owner in all four; `top_level_cps`
+/// installed dependency edge (g3), owner in `@system` (g4) -- and the
+/// retry closure contained the owner in all four; `top_level_cps`
 /// alone would have missed g3.
 fn owner_set_parent(
     owner_key: &(String, String),
-    installed_closure: &HashSet<(String, String)>,
+    blocker_retry_closure: &HashSet<(String, String)>,
 ) -> bool {
-    installed_closure.contains(owner_key)
+    blocker_retry_closure.contains(owner_key)
 }
 
 fn resolve_blockers(
     root: &Path,
     pending: &[PendingBlocker],
     entries: &[GraphEntry],
-    // #68 S3 follow-up: cps in real's required-set graph even when
-    // portuale's `entries` never carried their `deps` --
-    // `ResolveCtx::installed_closure`, the `@world`/`@selected`/`@system`
-    // forward-installed closure. Real seeds the required sets even for a
-    // plain single-atom resolve (`--implicit-system-deps` default y), so
-    // a blocked installed instance reachable from them is a digraph node
-    // with the set as parent. L0's `sys-apps/systemd-utils` probe needs
-    // it: installed `systemd` is in `@system`'s closure, real prints
-    // `B`/rc 1, portuale satisfied without it. A non-complete run on a
-    // target outside the sets (S0 cell d) must not use it.
+    // #68 S3 follow-up / #72 B2c: cps in real's required-set graph even
+    // when portuale's `entries` never carried their `deps` --
+    // `ResolveCtx::blocker_retry_closure`, the `@world`/`@selected`/
+    // `@system` forward-installed closure. Real seeds the required sets
+    // even for a plain single-atom resolve (`--implicit-system-deps`
+    // default y), so a blocked installed instance reachable from them is
+    // a digraph node with the set as parent. L0's `sys-apps/systemd-utils`
+    // probe needs it: installed `systemd` is in `@system`'s closure, real
+    // prints `B`/rc 1, portuale satisfied without it. B2c adds the retry
+    // half: when a block resolves by an uninstall, real re-runs the whole
+    // serialization in complete mode (`depgraph.py:10365-10383`), whose
+    // required-set walk is what makes B0's u4 (`--oneshot bparent`, world
+    // `{bconsumer}`) `B`/rc 1. A target outside the sets (S0 cell d)
+    // still sees no parents.
     //
     // #73 extends the same set test to the *owner* side of the nomerge
     // arm (see `owner_set_parent`): a nomerge owner that is set-reachable
     // is real's "digraph node with parents" even when portuale's
     // `entries` never carried the edge (S0 cell g; g3 proves the
     // closure-through-a-world-member half).
-    installed_closure: &HashSet<(String, String)>,
+    blocker_retry_closure: &HashSet<(String, String)>,
 ) -> Vec<((String, String), BlockerConflict)> {
     let mut conflicts = Vec::new();
     for pb in pending {
@@ -14989,7 +14994,7 @@ fn resolve_blockers(
                             sub_slot,
                             &pb.owner_key,
                             entries,
-                        ) || installed_closure.contains(&target_key)))
+                        ) || blocker_retry_closure.contains(&target_key)))
             } else {
                 // A nomerge parent is uninstall-ordered; it is unresolved
                 // when the *owner* is a digraph node with parents
@@ -15011,7 +15016,7 @@ fn resolve_blockers(
                             &pb.owner_key,
                             entries,
                         )
-                    }) || owner_set_parent(&pb.owner_key, installed_closure))
+                    }) || owner_set_parent(&pb.owner_key, blocker_retry_closure))
             };
             conflicts.push((
                 pb.owner_key.clone(),
@@ -17040,14 +17045,18 @@ struct ResolveCtx<'a> {
     /// the way real produces no slot-op rebuild or reverse-dependency pin
     /// for a plain `emerge -p <atom>` that changes nothing installed.
     slot_op_reachable: HashSet<(String, String)>,
-    /// #68 S3 follow-up: every cp in the `@world`/`@selected`/`@system`
-    /// seeds' forward-installed closure (`complete_seed_atoms ∪ args`,
-    /// plus `config.system_packages`). Computed for every resolve (real
-    /// seeds the required sets even for a plain single-atom resolve via
-    /// `--implicit-system-deps`), unlike `slot_op_reachable` which is
-    /// complete-mode only; `resolve_blockers` uses it as "the blocked
-    /// instance is a graph node with the set as parent".
-    installed_closure: HashSet<(String, String)>,
+    /// #68 S3 follow-up / #72 B2c: every cp in the
+    /// `@world`/`@selected`/`@system` seeds' forward-installed closure
+    /// (`config.blocker_retry_seed_atoms ∪ args`, plus
+    /// `config.system_packages`). Computed for every resolve, unlike
+    /// `slot_op_reachable` which stays complete-mode only. Real's
+    /// serializer re-runs in complete mode when an uninstall task was
+    /// selected (`depgraph.py:10365-10383`), so `resolve_blockers` uses
+    /// this closure as "the blocked instance is a graph node with the set
+    /// as parent" even on a non-complete pass. The widening is inert for
+    /// an `@world` argument (its members are already in `args`) and for
+    /// the slot-operator scan (which reads `slot_op_reachable`, not this).
+    blocker_retry_closure: HashSet<(String, String)>,
     /// Real `_complete_graph` swaps package selection to
     /// `_select_pkg_from_graph` (`depgraph.py:8662`) -- graph-or-installed,
     /// never a new merge. Portuale re-resolves the whole graph in complete
@@ -17114,11 +17123,17 @@ impl<'a> ResolveCtx<'a> {
                 seeds.dedup();
                 required_set_reachable_cps(&req.root, &seeds, &[])
             };
-        // #68 S3 follow-up: the required-set closure, computed even when
+        // #68 S3 follow-up / #72 B2c: the required-set closure the blocker
+        // classification reads, computed even when
         // `complete_seed_atoms` is empty (a plain single-atom resolve)
-        // because real's `@system` seeding is unconditional.
-        let installed_closure: HashSet<(String, String)> = {
-            let mut seeds = req.config.complete_seed_atoms.clone();
+        // because real's `@system` seeding is unconditional and its
+        // complete-mode retry for uninstall-resolved blocks
+        // (`depgraph.py:10365-10383`) re-walks `@selected ∪ @profile ∪
+        // @system` regardless. `blocker_retry_seed_atoms` carries those
+        // sets on every pass; it is deliberately *not* copied into
+        // `complete_seed_atoms`, which gates the slot-operator scan.
+        let blocker_retry_closure: HashSet<(String, String)> = {
+            let mut seeds = req.config.blocker_retry_seed_atoms.clone();
             seeds.extend(req.atoms.iter().cloned());
             seeds.sort();
             seeds.dedup();
@@ -17169,7 +17184,7 @@ impl<'a> ResolveCtx<'a> {
             complete: req.complete,
             repos: find_repos(&req.config_root)?,
             slot_op_reachable,
-            installed_closure,
+            blocker_retry_closure,
             complete_locked_merges: req
                 .config
                 .complete_locked_merges
@@ -20515,7 +20530,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         ctx.root,
         &state.pending_blockers,
         &state.entries,
-        &ctx.installed_closure,
+        &ctx.blocker_retry_closure,
     )
     .into_iter()
     .for_each(|(owner_key, conflict)| {
@@ -32316,6 +32331,74 @@ mod tests {
         graph_result_real(atom_str).entries
     }
 
+    /// Like `graph_result_real`, but with `blocker_retry_seed_atoms` set
+    /// (#68/#72 B2c): the `@world ∪ @selected ∪ @system` atom list real's
+    /// complete-mode retry walks after an uninstall task was selected
+    /// (`depgraph.py:10365-10383`).
+    fn graph_entries_with_retry_seeds(atom_str: &str, seeds: &[&str]) -> Vec<GraphEntry> {
+        let root = fixtures_root();
+        let mut config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+            &root,
+        )
+        .expect("fixture config resolves");
+        config.blocker_retry_seed_atoms = seeds.iter().map(|s| s.to_string()).collect();
+        #[allow(clippy::fn_params_excessive_bools)]
+        resolve_pretend_graph(
+            &root,
+            &root,
+            &[atom_str.to_string()],
+            &config,
+            false,
+            false,
+            false,
+            false,
+            Deep::NotRequested,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            false,
+            None,
+            false,
+            false,
+            None,
+            &fixtures_root().join("distfiles"),
+            false,
+            false,
+            false,
+            10,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            true,
+            false,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+        .entries
+    }
+
     /// Like `graph_result_real`, but with `--autounmask` keyword
     /// resolution enabled (`autounmask_suggest_keywords = true`).
     fn graph_result_autounmask(atom_str: &str) -> GraphResult {
@@ -34262,6 +34345,32 @@ mod tests {
                 // #72 B1 leaves the not-yet-classified arms at `None`.
                 satisfied_by: None,
             }]
+        );
+    }
+
+    #[test]
+    fn blocker_retry_seeds_make_an_uninstall_resolved_block_unsolvable() {
+        // #68/#72 B2c, B0 cell u4: real re-runs `_serialize_tasks` in
+        // complete mode when the first pass selected an uninstall task
+        // (`depgraph.py:10365-10383`), and that walk covers
+        // `@selected ∪ @profile ∪ @system` -- so an installed blocked
+        // instance reachable from a world member is a digraph node with
+        // parents and the block is `B` (rc 1), even though the resolve
+        // itself is not complete.
+        //
+        // `dev-libs/blockerpkg` (`!!dev-libs/samepkg`) with installed
+        // `samepkg-1.0`: with no seeds the block is uninstall-resolved
+        // (`b`, the `test_strong_blocker_matches_an_installed_package`
+        // pin); with installed `dev-libs/changeddepspkg` (vdb
+        // `RDEPEND=dev-libs/samepkg`) as the world seed, the retry
+        // closure reaches `samepkg` -> unresolved.
+        let entries = graph_entries_with_retry_seeds("dev-libs/blockerpkg", &[]);
+        assert!(!entries[0].blockers[0].unsolvable);
+        let entries =
+            graph_entries_with_retry_seeds("dev-libs/blockerpkg", &["dev-libs/changeddepspkg"]);
+        assert!(
+            entries[0].blockers[0].unsolvable,
+            "the world member's installed closure is a parent"
         );
     }
 
