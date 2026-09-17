@@ -2695,13 +2695,26 @@ pub fn find_remote_binpkg<'a>(
 ///
 /// `forced_flags` (the ebuild's own `use.force`/`use.mask`, or -- in
 /// the no-ebuild arm -- the binary cpv's, both via
-/// [`forced_or_masked_flags`]) is subtracted from the IUSE symmetric
-/// difference only (`depgraph.py:3149-3150`, the #69 R2 slice): a flag
-/// the profile forces or masks never rejects a binary by its *presence*
-/// alone. It can still reject through the enabled-within-IUSE term --
+/// [`forced_or_masked_flags_unfiltered`]) is subtracted from the IUSE
+/// symmetric difference only (`depgraph.py:3149-3150`, the #69 R2
+/// slice): a flag the profile forces or masks never rejects a binary by
+/// its *presence* alone. It can still reject through the
+/// enabled-within-IUSE term --
 /// real's own n3b oracle cell (a newly added *forced* flag is enabled on
 /// the ebuild side and absent from the binary's baked USE, so
 /// `orig_iuse ∩ orig_use ^ cur_iuse ∩ cur_use` is non-empty).
+///
+/// The subtraction input is **not** intersected with the ebuild's IUSE
+/// (audit D1, `docs/02.68-74-review-through-B5.md`): real's
+/// `forced_flags` is `chain(myeb.use.force, myeb.use.mask)` /
+/// `chain(pkgsettings.useforce, pkgsettings.usemask)` verbatim, and
+/// `myeb.use.force` comes from `config.setcpv`'s per-cpv
+/// `getUseForce(cpv_slot)`/`getUseMask(cpv_slot)`
+/// (`portage/package/ebuild/config.py:1973-1980`) with no IUSE filter.
+/// A flag the profile masks but the new ebuild's IUSE has **dropped**
+/// must still be forgiven: real keeps the binary (probed live against
+/// 3.0.82.2; `_reinstall_for_flags` returns `None`), so the presence
+/// term must lose it too.
 #[allow(clippy::too_many_arguments)]
 fn binpkg_respect_use_ok(
     candidate: &Candidate,
@@ -2727,8 +2740,7 @@ fn binpkg_respect_use_ok(
                 "{category}/{package}-{}:{}/{}::{}",
                 ebuild.version, ebuild.slot, ebuild.sub_slot, ebuild.repo_name
             );
-            let forced = forced_or_masked_flags(
-                &ebuild.iuse,
+            let forced = forced_or_masked_flags_unfiltered(
                 &ebuild.keywords,
                 &ebuild_str,
                 category,
@@ -2750,8 +2762,7 @@ fn binpkg_respect_use_ok(
                 "{category}/{package}-{}:{}/{}::{}",
                 candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
             );
-            let forced = forced_or_masked_flags(
-                &candidate.iuse,
+            let forced = forced_or_masked_flags_unfiltered(
                 &candidate.keywords,
                 &candidate_str,
                 category,
@@ -2778,9 +2789,9 @@ fn binpkg_respect_use_ok(
         // union: a flag the profile force/masks never triggers a
         // rebuild *by its presence alone*, though it can still
         // contribute through the enabled-within-IUSE term below (the
-        // #69 R0 n3b forced cell rejects exactly that way). Restricted
-        // to the two IUSEs by `forced_or_masked_flags` -- a no-op for
-        // the subtraction, whose input is already a subset of them.
+        // #69 R0 n3b forced cell rejects exactly that way). Not
+        // intersected with the ebuild's IUSE (audit D1): a masked/forced
+        // flag the new ebuild's IUSE dropped must still be forgiven.
         let mut presence_diff: HashSet<String> =
             old_iuse.symmetric_difference(&cur_iuse).cloned().collect();
         for forced in &forced_flags {
@@ -3649,6 +3660,30 @@ pub fn forced_or_masked_flags(
         .split_whitespace()
         .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
         .collect();
+    let mut result =
+        forced_or_masked_flags_unfiltered(keywords, candidate_str, category, package, config);
+    result.retain(|f| iuse_names.contains(f));
+    result
+}
+
+/// The same per-level force/mask stack **without** the IUSE
+/// intersection -- real `depgraph.py:8264`/`:8268-8270` passes
+/// `chain(myeb.use.force, myeb.use.mask)` / `chain(pkgsettings.useforce,
+/// pkgsettings.usemask)` to `_reinstall_for_flags` verbatim
+/// (`config.setcpv`'s `getUseForce(cpv_slot)`/`getUseMask(cpv_slot)`,
+/// `portage/package/ebuild/config.py:1973-1980`, never filters by the
+/// package's IUSE), and `:3151`'s `flags -= forced_flags` must forgive a
+/// profile-masked flag the new ebuild's IUSE has dropped (audit D1,
+/// `docs/02.68-74-review-through-B5.md`; probed live against
+/// 3.0.82.2). The [`forced_or_masked_flags`] IUSE filter stays for the
+/// display paths that render `( … )` over a package's own IUSE.
+fn forced_or_masked_flags_unfiltered(
+    keywords: &[String],
+    candidate_str: &str,
+    category: &str,
+    package: &str,
+    config: &portage_profile::Config,
+) -> HashSet<String> {
     let stable = is_stable(
         keywords,
         candidate_str,
@@ -3657,8 +3692,6 @@ pub fn forced_or_masked_flags(
         &config.accept_keywords,
         &config.package_accept_keywords,
     );
-    // Real `pkg.use.force | pkg.use.mask` -- each an independent
-    // per-level interleaved stack (`getUseForce(pkg)` / `getUseMask(pkg)`).
     let mut result = resolved_use_mask_or_force(
         MaskOrForce::Force,
         config,
@@ -3675,7 +3708,6 @@ pub fn forced_or_masked_flags(
         package,
         stable,
     ));
-    result.retain(|f| iuse_names.contains(f));
     result
 }
 
@@ -22795,6 +22827,109 @@ mod tests {
             false,
             false
         ));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Audit D1 (`docs/02.68-74-review-through-B5.md`): the subtraction
+    /// input is not intersected with the ebuild's IUSE. A flag the
+    /// profile masks that the new ebuild's IUSE has **dropped** is
+    /// forgiven on the presence term -- real keeps the binary (probed
+    /// live against 3.0.82.2: `_reinstall_for_flags` returns `None`;
+    /// `depgraph.py:8264` chains `myeb.use.force/mask` unfiltered, and
+    /// `config.setcpv`'s `getUseMask(cpv_slot)` never filters by IUSE).
+    /// The old filtered set (R2's `forced_or_masked_flags`) lost the
+    /// flag, so the presence difference rejected the binary.
+    #[test]
+    fn binpkg_respect_use_forgives_a_profile_masked_flag_the_ebuild_iuse_dropped() {
+        let dir = slotundo_temp_dir("binpkg-respect-use-dropped-masked");
+        let binary = {
+            let mut c = candidate("1.0", &["amd64"]);
+            c.source = CandidateSource::Binary;
+            // Baked IUSE carries the flag the ebuild dropped; the baked
+            // USE does *not* enable it (a masked flag cannot be baked
+            // enabled -- the live probe's `orig_use` is `{"foo"}`).
+            c.iuse = "foo removed".to_string();
+            c.binary_use = Some(HashSet::from(["foo".to_string()]));
+            c
+        };
+        let repo = dir.join("repo-dropped");
+        fs::create_dir_all(repo.join("metadata/md5-cache/dev-libs")).unwrap();
+        fs::write(
+            repo.join("metadata/md5-cache/dev-libs/x-1.0"),
+            "EAPI=8\nIUSE=foo\nKEYWORDS=amd64\nSLOT=0\n",
+        )
+        .unwrap();
+        let mut ebuild = candidate("1.0", &["amd64"]);
+        ebuild.repo_location = repo;
+        ebuild.iuse = "foo".to_string();
+        let mut config = test_config();
+        config.conf_use_tokens = vec!["foo".to_string()];
+        config.use_mask_force_levels = vec![portage_profile::UseMaskForceLevel {
+            use_mask: vec!["removed".to_string()],
+            ..Default::default()
+        }];
+
+        // Real's subtraction forgives `removed` despite the IUSE
+        // difference (binary had it, ebuild does not): the binary is
+        // kept under --newuse and under respect-use alike.
+        assert!(binpkg_respect_use_ok(
+            &binary,
+            Some(&ebuild),
+            "dev-libs",
+            "x",
+            &config,
+            true,
+            false,
+            false
+        ));
+        assert!(binpkg_respect_use_ok(
+            &binary,
+            Some(&ebuild),
+            "dev-libs",
+            "x",
+            &config,
+            false,
+            false,
+            true
+        ));
+
+        // Control, the pre-D1 shape: without the profile masking the
+        // flag the presence difference does reject -- the profile
+        // masking, not the filter, is what carries the keep.
+        let mut config_unmasked = config.clone();
+        config_unmasked.use_mask_force_levels.clear();
+        assert!(!binpkg_respect_use_ok(
+            &binary,
+            Some(&ebuild),
+            "dev-libs",
+            "x",
+            &config_unmasked,
+            true,
+            false,
+            false
+        ));
+        let mut enabled_binary = binary.clone();
+        enabled_binary
+            .binary_use
+            .as_mut()
+            .unwrap()
+            .insert("removed".to_string());
+        for (newuse, changed_use, respect_use) in [
+            (true, false, false),
+            (false, false, true),
+            (false, true, true),
+        ] {
+            assert!(!binpkg_respect_use_ok(
+                &enabled_binary,
+                Some(&ebuild),
+                "dev-libs",
+                "x",
+                &config,
+                newuse,
+                changed_use,
+                respect_use,
+            ));
+        }
         let _ = fs::remove_dir_all(&dir);
     }
 
