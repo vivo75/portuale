@@ -8107,6 +8107,19 @@ def test_strong_blocker_matches_an_installed_package(emerge_binary, fixture_env)
         '[blocks b      ] dev-libs/samepkg ("dev-libs/samepkg" is hard blocking dev-libs/blockerpkg-1.0)',
     ]
 
+    # --columns suppresses the satisfied line too (real output.py:120
+    # appends a satisfied blocker to print_msg only when `not
+    # self.conf.columns` -- the B0 u5a cell). The unresolved group is
+    # never suppressed.
+    columns = _run(
+        [str(emerge_binary)], ["--pretend", "--columns", "dev-libs/blockerpkg"], fixture_env
+    )
+    assert columns.returncode == 0
+    assert columns.stdout.splitlines() == [
+        "[ebuild  N     ] dev-libs/blockerpkg                                   "
+        "[1.0]                        ",
+    ]
+
 
 def test_weak_blocker_matches_another_new_package_in_the_same_graph(emerge_binary, fixture_env):
     """dev-libs/graphblockerparent pulls in both dev-libs/blockerpartnerpkg
@@ -16819,23 +16832,31 @@ def test_oracle_binnew_rejects_a_binary_missing_the_ebuilds_iuse_flag(
 def test_oracle_blocker_replaced_version_satisfied_and_unsatisfied_twin(
     emerge_binary, fixture_env, tmp_path
 ):
-    """Backlog #68 host shape and its unsatisfied twin, cells a and c.
+    """Backlog #68 cells a and c: the replaced-in-slot **p1 shape** and
+    its unsatisfied twin.
 
-    `dev-libs/bparent` soft-blocks `<dev-libs/blocked-2.0`; installed
-    `blocked` is `1.0`. Real `_validate_blockers` (`depgraph.py:9095-9255`)
-    drops an installed match replaced in its slot by a merge-bound entry,
-    so when `blocked` upgrades to `2.0` in the same run the block is
-    satisfied even though an installed `bconsumer` depends on `blocked`
-    (the host `@world` rc-1 bug); with the replacement suppressed the
-    walked consumer makes it unresolved. Container oracle, real 3.0.82.2
-    (2026-09-16): `--dynamic-deps=n` retains `bconsumer`'s
-    `=dev-libs/blocked-1.0` pin, `blocked-1.0` survives (as a `flip`
-    reinstall) and real prints `[blocks B]` + `Conflict: 1 block
-    (1 unsatisfied)` and exits 1. The satisfied host shape prints no
-    block row at all and exits 0.
+    T6 correction (2026-09-17): the satisfied half here is *not* the host
+    shape. `dev-libs/bparent` soft-blocks `<dev-libs/blocked-2.0`;
+    installed `blocked` is `1.0`. Real `_validate_blockers`
+    (`depgraph.py:9095-9255`) drops an installed match replaced in its
+    slot by a merge-bound entry, and this run has no edge ordering the
+    replacement behind the owner, so real merges the replacement first
+    and prints no block row at all (B0b cell p1, `TEST/findings/l0.md`
+    "#68/#72 B0b"). The *host* shape is B0b cell p2c -- the replacement
+    version-pins its BDEPEND on the owner, forcing the owner's merge
+    first -- pinned by
+    `test_oracle_b0b_satisfied_replacement_p2c_inline_row`.
+
+    With the replacement suppressed (the twin: an installed `bconsumer`
+    pins `=dev-libs/blocked-1.0`) the walked consumer makes the block
+    unresolved. Container oracle, real 3.0.82.2 (2026-09-16):
+    `--dynamic-deps=n` retains the pin, `blocked-1.0` survives (as a
+    `flip` reinstall) and real prints `[blocks B]` + `Conflict: 1 block
+    (1 unsatisfied)` and exits 1.
     """
-    # Host shape: bconsumer tracks the plain `dev-libs/blocked`, so the
-    # upgrade replaces the installed match and the block is satisfied.
+    # p1 shape: bconsumer tracks the plain `dev-libs/blocked`, so the
+    # upgrade replaces the installed match and the block is satisfied --
+    # and with no edge ordering the pair, no `b` row appears either.
     host_root = _b1_root(
         tmp_path / "host",
         ["dev-libs/bparent", "dev-libs/blocked", "dev-libs/bconsumer"],
@@ -16889,6 +16910,308 @@ def test_oracle_blocker_replaced_version_satisfied_and_unsatisfied_twin(
     )
     assert "Conflict: 1 block (1 unsatisfied)" in twin.stdout
     assert "installed at the same time" in twin.stderr
+
+
+_B0B_BPARENT_1_1 = """EAPI=8
+DESCRIPTION="fixture package: soft-blocker parent upgrade (#68/#72 B0b)"
+SLOT="0"
+KEYWORDS="amd64"
+RDEPEND="!<dev-libs/blocked-2.0"
+"""
+
+_B0B_BLOCKED_2_0 = """EAPI=8
+DESCRIPTION="fixture package: soft-block target, newer version (#68/#72 B0b)"
+SLOT="0"
+KEYWORDS="amd64"
+IUSE="+flip"
+{dep}
+"""
+
+_B0B_BMID_1_0 = """EAPI=8
+DESCRIPTION="fixture package: B0b transitive mid (#68/#72 B0b)"
+SLOT="0"
+KEYWORDS="amd64"
+RDEPEND="~dev-libs/bparent-1.1"
+"""
+
+
+def _b0b_write_ebuild(repo, cat, pn, ver, body):
+    """Write one ad-hoc ebuild plus its `metadata/md5-cache` entry into a
+    copied fixture repo.
+
+    Real's md5-cache stores every scalar value **unquoted**
+    (`KEYWORDS=amd64`, `RDEPEND=!<dev-libs/blocked-2.0`), and portuale's
+    visibility check reads `KEYWORDS`/`SLOT` straight out of that entry: a
+    quoted `KEYWORDS` hides the candidate entirely (a scratch probe hit
+    exactly that). `_md5_` is the ebuild's own md5, so the entry validates
+    (`md5_dict::entry_is_valid`), the same recipe `stage.sh` step 4 uses
+    for Manifests -- which these `--pretend`-only pins don't need.
+    """
+    d = repo / cat / pn
+    d.mkdir(parents=True, exist_ok=True)
+    data = body.encode()
+    (d / f"{pn}-{ver}.ebuild").write_bytes(data)
+    fields = []
+    for line in body.splitlines():
+        key, sep, value = line.partition("=")
+        if sep and key in (
+            "EAPI",
+            "DESCRIPTION",
+            "SLOT",
+            "KEYWORDS",
+            "IUSE",
+            "RDEPEND",
+            "BDEPEND",
+        ):
+            fields.append(f"{key}={value.strip(chr(34))}")
+    fields.append("DEFINED_PHASES=-")
+    fields.append(f"_md5_={hashlib.md5(data).hexdigest()}")
+    cache = repo / "metadata" / "md5-cache" / cat / f"{pn}-{ver}"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text("\n".join(fields) + "\n")
+
+
+def _b0b_configroot(tmp_path, fixtures_root, replacement_dep, bmid=False):
+    """A real copy of the fixture configroot carrying the #68/#72 B0b
+    ordering cells: the staged `bparent-1.1` upgrade and a `blocked-2.0`
+    whose own dep on that new owner is `replacement_dep` (`p2c`
+    `BDEPEND="~dev-libs/bparent-1.1"`, `p2d` `BDEPEND="dev-libs/bmid"` +
+    `bmid=True`, `p2e` `RDEPEND="~dev-libs/bparent-1.1"`; `""` is plain
+    p1/p1b/p2b). The committed fixtures stay untouched -- `bparent-1.1`
+    and `bmid` would change every existing `bparent` pin's resolution."""
+    root = tmp_path / "configroot"
+    shutil.copytree(fixtures_root / "etc", root / "etc", symlinks=True)
+    shutil.copytree(fixtures_root / "repo", root / "repo")
+    for entry in fixtures_root.iterdir():
+        if entry.name not in ("etc", "repo"):
+            (root / entry.name).symlink_to(entry)
+    repo = root / "repo"
+    _b0b_write_ebuild(
+        repo, "dev-libs", "blocked", "2.0", _B0B_BLOCKED_2_0.format(dep=replacement_dep)
+    )
+    _b0b_write_ebuild(repo, "dev-libs", "bparent", "1.1", _B0B_BPARENT_1_1)
+    if bmid:
+        _b0b_write_ebuild(repo, "dev-libs", "bmid", "1.0", _B0B_BMID_1_0)
+    return root
+
+
+def _b0b_root(tmp_path, bparent_installed=True):
+    """The B0b p1b root: installed `blocked-1.0` + `bparent-1.0` (plus the
+    fixture `@system` members already installed, so the flat list matches
+    the container capture), world `{blocked, bparent}`. With
+    `bparent_installed=False` the owner merges New (cell p1)."""
+    installed = [
+        ("dev-libs", "blocked", "1.0", "0", {"IUSE": "flip", "USE": "flip"}),
+        ("dev-libs", "upgradepkg", "1.0", "0", {}),
+        ("dev-libs", "systempkg", "1.0", "0", {}),
+    ]
+    if bparent_installed:
+        installed.append(
+            ("dev-libs", "bparent", "1.0", "0", {"RDEPEND": "!<dev-libs/blocked-2.0"})
+        )
+    return _b1_root(tmp_path, ["dev-libs/blocked", "dev-libs/bparent"], installed)
+
+
+def _b0b_env(fixture_env, root, configroot):
+    env = _b1_env(fixture_env, root)
+    env["PORTAGE_CONFIGROOT"] = str(configroot)
+    return env
+
+
+def test_oracle_b0b_satisfied_replacement_p1_p1b_no_row(
+    emerge_binary, fixture_env, fixtures_root, tmp_path
+):
+    """Backlog #68/#72 B0b cells p1/p1b: with no dependency edge from the
+    replacement to the owner, real's serializer merges the replacement
+    first and removes the blocker's uninstall before it is ever scheduled,
+    so no `b` row and no `Conflict:` line appear (rc 0). p1 has the owner
+    merging New (`bparent-1.1`), p1b installed `bparent-1.0` upgrading to
+    it; the dep-less `blocked-2.0` is the committed ebuild.
+
+    Container oracle, real 3.0.82.2 (`TEST/findings/l0.md` "#68/#72 B0b",
+    p1/p1b). Real order p1b: newpkg, upgradepkg, withdeps, bparent-1.1,
+    blocked-2.0, rc 0.
+    """
+    configroot = _b0b_configroot(tmp_path, fixtures_root, "")
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "-v", "--update", "--deep", "--newuse", "@world"],
+        _b0b_env(fixture_env, _b0b_root(tmp_path), configroot),
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        "[ebuild  N     ] dev-libs/newpkg-1.0::testrepo ",
+        "[ebuild     U  ] dev-libs/upgradepkg-2.0::testrepo [1.0::testrepo]",
+        "[ebuild     U  ] dev-libs/blocked-2.0::testrepo [1.0::testrepo] USE=\"flip\"",
+        "[ebuild     U  ] dev-libs/bparent-1.1::testrepo [1.0::testrepo]",
+        "[ebuild  N     ] dev-libs/withdeps-1.0::testrepo ",
+        "",
+        "Total: 5 packages (3 upgrades, 2 new), Size of downloads: 0 KiB",
+    ], result.stdout
+    assert "[blocks" not in result.stdout
+
+    # p1: the owner is not installed, so its merge is New and nothing
+    # orders the pair.
+    p1_root = tmp_path / "p1"
+    p1_root.mkdir()
+    configroot_p1 = _b0b_configroot(p1_root, fixtures_root, "")
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "-v", "--update", "--deep", "--newuse", "@world"],
+        _b0b_env(fixture_env, _b0b_root(p1_root, bparent_installed=False), configroot_p1),
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        "[ebuild  N     ] dev-libs/newpkg-1.0::testrepo ",
+        "[ebuild     U  ] dev-libs/upgradepkg-2.0::testrepo [1.0::testrepo]",
+        "[ebuild     U  ] dev-libs/blocked-2.0::testrepo [1.0::testrepo] USE=\"flip\"",
+        "[ebuild  N     ] dev-libs/bparent-1.1::testrepo ",
+        "[ebuild  N     ] dev-libs/withdeps-1.0::testrepo ",
+        "",
+        "Total: 5 packages (2 upgrades, 3 new), Size of downloads: 0 KiB",
+    ], result.stdout
+    assert "[blocks" not in result.stdout
+
+
+def test_oracle_b0b_satisfied_replacement_p2b_installed_dep_no_row(
+    emerge_binary, fixture_env, fixtures_root, tmp_path
+):
+    """Backlog #68/#72 B0b cell p2b: the replacement's plain
+    `BDEPEND="dev-libs/bparent"` **is** satisfied by the installed
+    `bparent-1.0`, so real's leaf scan can ignore the satisfied edge and
+    select the replacement first -- no `b` row, no `Conflict:` (rc 0).
+    This is the flat p2b capture the B0 stop hinged on.
+
+    Container oracle, real 3.0.82.2 (`TEST/findings/l0.md` "#68/#72 B0b",
+    p2b).
+    """
+    configroot = _b0b_configroot(tmp_path, fixtures_root, 'BDEPEND="dev-libs/bparent"')
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "-v", "--update", "--deep", "--newuse", "@world"],
+        _b0b_env(fixture_env, _b0b_root(tmp_path), configroot),
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        "[ebuild  N     ] dev-libs/newpkg-1.0::testrepo ",
+        "[ebuild     U  ] dev-libs/upgradepkg-2.0::testrepo [1.0::testrepo]",
+        "[ebuild     U  ] dev-libs/bparent-1.1::testrepo [1.0::testrepo]",
+        "[ebuild  N     ] dev-libs/withdeps-1.0::testrepo ",
+        "[ebuild     U  ] dev-libs/blocked-2.0::testrepo [1.0::testrepo] USE=\"flip\"",
+        "",
+        "Total: 5 packages (3 upgrades, 2 new), Size of downloads: 0 KiB",
+    ], result.stdout
+    assert "[blocks" not in result.stdout
+
+
+def test_oracle_b0b_satisfied_replacement_p2c_inline_row(
+    emerge_binary, fixture_env, fixtures_root, tmp_path
+):
+    """Backlog #68/#72 B0b cell p2c (the host shape): the replacement
+    version-pins its `BDEPEND="~dev-libs/bparent-1.1"` on the *new* owner,
+    which the installed `bparent-1.0` does not satisfy, so real's
+    serializer is stuck, schedules the blocker's uninstall and appends the
+    solved blocker right after the replacement: the satisfied `b` row
+    prints inline after `blocked-2.0` and counts (`Conflict: 1 block (all
+    satisfied)`), rc 0.
+
+    Container oracle, real 3.0.82.2 (`TEST/findings/l0.md` "#68/#72 B0b",
+    p2c): real order newpkg, upgradepkg, withdeps, bparent-1.1,
+    blocked-2.0. Portuale's independent-package interleave differs
+    (bparent-1.1 before withdeps -- the standing merge-order class); the
+    row and counter bytes are the oracle's.
+    """
+    configroot = _b0b_configroot(
+        tmp_path, fixtures_root, 'BDEPEND="~dev-libs/bparent-1.1"'
+    )
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "-v", "--update", "--deep", "--newuse", "@world"],
+        _b0b_env(fixture_env, _b0b_root(tmp_path), configroot),
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        "[ebuild  N     ] dev-libs/newpkg-1.0::testrepo ",
+        "[ebuild     U  ] dev-libs/upgradepkg-2.0::testrepo [1.0::testrepo]",
+        "[ebuild     U  ] dev-libs/bparent-1.1::testrepo [1.0::testrepo]",
+        "[ebuild  N     ] dev-libs/withdeps-1.0::testrepo ",
+        "[ebuild     U  ] dev-libs/blocked-2.0::testrepo [1.0::testrepo] USE=\"flip\"",
+        '[blocks b      ] <dev-libs/blocked-2.0 ("<dev-libs/blocked-2.0" is soft '
+        "blocking dev-libs/bparent-1.1)",
+        "",
+        "Total: 5 packages (3 upgrades, 2 new), Size of downloads: 0 KiB",
+        "Conflict: 1 block (all satisfied)",
+    ], result.stdout
+
+
+def test_oracle_b0b_satisfied_replacement_p2d_transitive_inline_row(
+    emerge_binary, fixture_env, fixtures_root, tmp_path
+):
+    """Backlog #68/#72 B0b cell p2d: the wait is **transitive** -- the
+    replacement `BDEPEND`s `bmid-1.0` (New, so unsatisfied), and `bmid`
+    `RDEPEND`s `~dev-libs/bparent-1.1`. Real still reaches the stuck state
+    and prints the inline `b` row after `blocked-2.0`, rc 0.
+
+    Container oracle, real 3.0.82.2 (`TEST/findings/l0.md` "#68/#72 B0b",
+    p2d): real order newpkg, upgradepkg, withdeps, bparent-1.1, bmid-1.0,
+    blocked-2.0; `Total: 6 packages (3 upgrades, 3 new)`.
+    """
+    configroot = _b0b_configroot(
+        tmp_path, fixtures_root, 'BDEPEND="dev-libs/bmid"', bmid=True
+    )
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "-v", "--update", "--deep", "--newuse", "@world"],
+        _b0b_env(fixture_env, _b0b_root(tmp_path), configroot),
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        "[ebuild  N     ] dev-libs/newpkg-1.0::testrepo ",
+        "[ebuild     U  ] dev-libs/upgradepkg-2.0::testrepo [1.0::testrepo]",
+        "[ebuild     U  ] dev-libs/bparent-1.1::testrepo [1.0::testrepo]",
+        "[ebuild  N     ] dev-libs/withdeps-1.0::testrepo ",
+        "[ebuild  N     ] dev-libs/bmid-1.0::testrepo ",
+        "[ebuild     U  ] dev-libs/blocked-2.0::testrepo [1.0::testrepo] USE=\"flip\"",
+        '[blocks b      ] <dev-libs/blocked-2.0 ("<dev-libs/blocked-2.0" is soft '
+        "blocking dev-libs/bparent-1.1)",
+        "",
+        "Total: 6 packages (3 upgrades, 3 new), Size of downloads: 0 KiB",
+        "Conflict: 1 block (all satisfied)",
+    ], result.stdout
+
+
+def test_oracle_b0b_satisfied_replacement_p2e_runtime_inline_row(
+    emerge_binary, fixture_env, fixtures_root, tmp_path
+):
+    """Backlog #68/#72 B0b cell p2e: a plain `RDEPEND` wait behaves like
+    the build-time `BDEPEND` one -- real's leaf scan does not ignore
+    `runtime` edges (only `optional`/`runtime_post` are relaxed), so the
+    inline `b` row prints after `blocked-2.0`, rc 0.
+
+    Container oracle, real 3.0.82.2 (`TEST/findings/l0.md` "#68/#72 B0b",
+    p2e).
+    """
+    configroot = _b0b_configroot(
+        tmp_path, fixtures_root, 'RDEPEND="~dev-libs/bparent-1.1"'
+    )
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "-v", "--update", "--deep", "--newuse", "@world"],
+        _b0b_env(fixture_env, _b0b_root(tmp_path), configroot),
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        "[ebuild  N     ] dev-libs/newpkg-1.0::testrepo ",
+        "[ebuild     U  ] dev-libs/upgradepkg-2.0::testrepo [1.0::testrepo]",
+        "[ebuild     U  ] dev-libs/bparent-1.1::testrepo [1.0::testrepo]",
+        "[ebuild  N     ] dev-libs/withdeps-1.0::testrepo ",
+        "[ebuild     U  ] dev-libs/blocked-2.0::testrepo [1.0::testrepo] USE=\"flip\"",
+        '[blocks b      ] <dev-libs/blocked-2.0 ("<dev-libs/blocked-2.0" is soft '
+        "blocking dev-libs/bparent-1.1)",
+        "",
+        "Total: 5 packages (3 upgrades, 2 new), Size of downloads: 0 KiB",
+        "Conflict: 1 block (all satisfied)",
+    ], result.stdout
 
 
 def test_oracle_blocker_nomerge_owner_set_parent(emerge_binary, fixture_env, tmp_path):

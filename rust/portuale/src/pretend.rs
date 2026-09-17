@@ -656,6 +656,7 @@ fn localized_size(bytes: u64) -> String {
 /// so it isn't counted here either.
 fn package_counters_summary(
     entries: &[GraphEntry],
+    root: &Path,
     top_level_pkgs: &HashSet<(String, String)>,
     onlydeps: bool,
     color: &Colorizer,
@@ -663,22 +664,15 @@ fn package_counters_summary(
     let plural = |n: u64| if n > 1 { "s" } else { "" };
     let (mut upgrades, mut downgrades, mut new, mut newslot, mut reinst) =
         (0u64, 0u64, 0u64, 0u64, 0u64);
-    let (mut binary, mut interactive, mut blocks) = (0u64, 0u64, 0u64);
-    let mut blocks_unsolvable = 0u64;
+    let (mut binary, mut interactive) = (0u64, 0u64);
+    // #72 B1/B2: exactly the rows the merge list carries
+    // (`count_blocker_rows`), the same disposition split the line printer
+    // uses.
+    let (blocks, blocks_unsolvable) = count_blocker_rows(entries, root);
     let (mut restrict_fetch, mut restrict_fetch_satisfied) = (0u64, 0u64);
     let mut totalsize: u64 = 0;
     let mut fetched: HashSet<&str> = HashSet::new();
     for entry in entries {
-        // #72 B1: only displayed rows are counted, the same
-        // `blocker_row_hidden` split the line printer uses -- real counts
-        // exactly the blockers it appended to the merge list
-        // (`output_helpers.py:104-160`).
-        for b in entry.blockers.iter().filter(|b| !blocker_row_hidden(b)) {
-            blocks += 1;
-            if b.unsolvable {
-                blocks_unsolvable += 1;
-            }
-        }
         let suppressed =
             onlydeps && top_level_pkgs.contains(&(entry.category.clone(), entry.package.clone()));
         if suppressed {
@@ -805,77 +799,308 @@ fn package_counters_summary(
     out
 }
 
-/// #68/#72 B1: a `Replacement`-satisfied blocker row is carried on its
-/// owner but contributes nothing to the display or the counters yet,
-/// exactly as when `resolve_blockers` dropped it. Real appends such a row
-/// to the merge list only when `_serialize_tasks` is stuck and schedules
-/// the blocker's uninstall (`depgraph.py:9998`, `:10190`, `:10351-10358`;
-/// `TEST/findings/l0.md` "#68/#72 B0b" p2c/p2d/p2e vs flat p2b); #72 B2
-/// ports that mechanism predicate, and only then should this hide the
-/// row. `Uninstall`-satisfied rows keep their current trailing display --
-/// #72 B4 moves them inline with their own `[uninstall]` row.
-fn blocker_row_hidden(b: &BlockerConflict) -> bool {
-    matches!(b.satisfied_by, Some(BlockerSatisfiedBy::Replacement { .. }))
+/// The version `entry`'s own package line displays; `None` for the
+/// non-merging outcomes. `merge_order`'s own `entry_version` is the same
+/// mapping, but it is private to `portage-repo`.
+fn merge_bound_version(entry: &GraphEntry) -> Option<&str> {
+    match &entry.outcome {
+        PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+            Some(version)
+        }
+        PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => Some(to),
+        PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::NoVisibleCandidate => None,
+    }
 }
 
-/// Real `ResolverOutput._blockers` (`output.py:75-123`): one
-/// `[blocks B     ] <resolved> ("<atom>" is {hard,soft} blocking
-/// <parents>)` line per *displayed* blocker on `entry` (a
-/// `Replacement`-satisfied row is skipped -- see `blocker_row_hidden`).
-/// Purely informational (see `resolve_pretend_graph`'s doc comment) -- v1
-/// neither refuses nor changes the exit code for a blocker match.
-/// Collected into a `Vec` rather than printed inline: real `Display`
-/// gathers blocker lines while walking the entries and prints them as one
-/// group *after* every package line (real `output.py::display` ->
-/// `print_messages()` then `print_blockers()`).
+/// The version the blocker parents text uses -- real `_blockers`'
+/// `pnode.cpv`, the version the owner's own package line shows (for an
+/// installed, nomerge owner: the installed version).
+fn entry_display_version(entry: &GraphEntry) -> &str {
+    merge_bound_version(entry).unwrap_or(match &entry.outcome {
+        PretendOutcome::AlreadyInstalled { version } => version,
+        _ => "",
+    })
+}
+
+/// #68/#72 B2: where one blocker row is displayed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum BlockerRowDisposition {
+    /// The trailing group after every package line (real
+    /// `Display.blockers`, `output.py:573-592`): unresolved rows, plus
+    /// the satisfied rows #72 B4 has not moved inline yet.
+    Trailing,
+    /// Not printed, not counted: a `Replacement` row whose replacement
+    /// does not wait on its owner's merge. Real's serializer never
+    /// scheduled the blocker's uninstall, so the solved blocker never
+    /// entered the merge list (`depgraph.py:10351-10358`) and no
+    /// `Conflict:` entry exists for it (flat p2b, B0b).
+    Hidden,
+    /// Printed right after the display-list entry with this index, the
+    /// replacement (`output.py:119-121` appends a satisfied blocker to
+    /// `print_msg` at its `_serialize_tasks` position): B0b's
+    /// p2c/p2d/p2e shape.
+    Inline(usize),
+}
+
+/// #68/#72 B2: the display disposition of one blocker row. `entries` is
+/// the display-ordered list, `owner_index` the entry carrying `b`, and
+/// `root` the vdb root the `satisfied` check reads.
+fn blocker_row_disposition(
+    entries: &[GraphEntry],
+    root: &Path,
+    owner_index: usize,
+    b: &BlockerConflict,
+) -> BlockerRowDisposition {
+    match &b.satisfied_by {
+        Some(BlockerSatisfiedBy::Replacement { .. }) => {
+            match replacement_wait_index(entries, root, owner_index, b) {
+                Some(index) => BlockerRowDisposition::Inline(index),
+                None => BlockerRowDisposition::Hidden,
+            }
+        }
+        // Not-yet-classified satisfied rows (B2c/B3/B4) and unresolved
+        // rows keep the trailing group.
+        _ => BlockerRowDisposition::Trailing,
+    }
+}
+
+/// #68/#72 B2's mechanism predicate: does `b`'s replacement merge wait on
+/// its owner's merge? Returns the replacement's index in `entries` when
+/// it does.
 ///
-/// Since #68 S2/S3 a row can be *satisfied* (real
-/// `blocker.satisfied`): the red `B` / `PKG_BLOCKER` branch is the
-/// unresolved one (`BlockerConflict::unsolvable`), the teal `b` /
-/// `PKG_BLOCKER_SATISFIED` branch the satisfied one. `resolved` is
-/// real `dep_expand(str(atom).lstrip("!"))` -- a category-qualification
-/// only, and every portuale blocker atom is already `cat/pkg[...]`, so
-/// it reduces to stripping the leading `!`/`!!`. Real's `(is <desc>
+/// Real `_serialize_tasks` appends a satisfied blocker to the merge list
+/// only when it was stuck -- no merge node selectable in any priority
+/// range -- and scheduled the blocker's uninstall (`depgraph.py:9998`,
+/// `:10190`); the replacement's own selection then removes that uninstall
+/// and appends the solved blocker after itself (`:10315-10331`,
+/// `:10351-10358`). B0b pinned the shapes: the wait exists when the
+/// replacement depends on the owner's merge through a chain of
+/// merge-bound entries (`BDEPEND` p2c, `BDEPEND -> RDEPEND` p2d, plain
+/// `RDEPEND` p2e), and not when the dependency is satisfied by an
+/// installed package (flat p2b, no row), nor when the owner is not
+/// merging at all (cell g).
+///
+/// The traversal follows only edges real's leaf scan cannot ignore
+/// (`DepPriorityNormalRange`: optional and `runtime_post` edges are
+/// ignored at the first two relaxed rungs, build-time and runtime are
+/// not) that are **not** satisfied by an installed package
+/// (`dep_edge_satisfied_by_installed`, the same rule `build_digraph` uses
+/// for `DepPriority::satisfied`; `GraphEntry::deps` itself never carries
+/// that computed bit). `|| ( … )` branches are not followed -- real
+/// resolves one branch through `dep_zapdeps` and B2 has no oracle for a
+/// disjunctive wait chain (named cut, docs/02.68-74.md §6).
+///
+/// Intermediate hops are matched by **cp**, not per instance (T10):
+/// `DepEdge` carries no resolved slot, real's `_create_graph` resolves
+/// each atom to one package and `build_digraph` narrows with its own
+/// `edge_matches`, so a cp with two merging slots could over-connect
+/// here -- i.e. the predicate can only *over-find* a wait (show a row
+/// real might hide), never miss one. B2's pinned shapes have no
+/// multi-slot intermediates; the `debug_assert!` below still guards the
+/// ordering implication.
+fn replacement_wait_index(
+    entries: &[GraphEntry],
+    root: &Path,
+    owner_index: usize,
+    b: &BlockerConflict,
+) -> Option<usize> {
+    let Some(BlockerSatisfiedBy::Replacement { cp, slot }) = &b.satisfied_by else {
+        return None;
+    };
+    let replacement = entries.iter().position(|e| {
+        (e.category.as_str(), e.package.as_str()) == (cp.0.as_str(), cp.1.as_str())
+            && e.slot.as_deref() == Some(slot.as_str())
+            && merge_bound_version(e).is_some_and(|v| v != b.matched_version)
+    })?;
+    let owner = &entries[owner_index];
+    let owner_cp = (owner.category.as_str(), owner.package.as_str());
+    // "The owner's merge" must exist: a nomerge (installed-only) owner has
+    // no merge to wait on (B0b cell g's row stays hidden).
+    if !entries.iter().any(|e| {
+        (e.category.as_str(), e.package.as_str()) == owner_cp && merge_bound_version(e).is_some()
+    }) {
+        return None;
+    }
+    let mut stack = vec![replacement];
+    let mut seen: HashSet<usize> = HashSet::from([replacement]);
+    while let Some(i) = stack.pop() {
+        for edge in &entries[i].deps {
+            if edge.alt.is_some() || edge.priority.optional || edge.priority.runtime_post {
+                continue;
+            }
+            for (j, candidate) in entries.iter().enumerate() {
+                if (candidate.category.as_str(), candidate.package.as_str())
+                    != (edge.category.as_str(), edge.package.as_str())
+                {
+                    continue;
+                }
+                if merge_bound_version(candidate).is_none() {
+                    continue;
+                }
+                if portage_repo::dep_edge_satisfied_by_installed(root, edge, Some(candidate)) {
+                    continue;
+                }
+                if (candidate.category.as_str(), candidate.package.as_str()) == owner_cp {
+                    // The plan's guard (docs/02.68-74.md §4 D/B2): the
+                    // predicate implies the owner merges before the
+                    // replacement; if portuale's merge order disagrees,
+                    // stop and report (a `merge_order.rs` item) rather
+                    // than print a row real would put elsewhere.
+                    debug_assert!(
+                        owner_index < replacement,
+                        "B2 predicate fired with the owner (#{owner_index} {}/{} {}) \
+                         not before the replacement (#{replacement} {}/{} {}): \
+                         portuale's merge order disagrees with the dependency chain",
+                        owner.category,
+                        owner.package,
+                        entry_display_version(owner),
+                        cp.0,
+                        cp.1,
+                        b.matched_version,
+                    );
+                    return Some(replacement);
+                }
+                if seen.insert(j) {
+                    stack.push(j);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// One `[blocks <letter>     ] <resolved> ("<atom>" is {hard,soft}
+/// blocking <owner cpv>)` line -- real `ResolverOutput._blockers`
+/// (`output.py:75-123`). Purely informational (see
+/// `resolve_pretend_graph`'s doc comment) -- v1 neither refuses nor
+/// changes the exit code for a blocker match.
+///
+/// Since #68 S2/S3 a row can be *satisfied* (real `blocker.satisfied`):
+/// the red `B` / `PKG_BLOCKER` branch is the unresolved one
+/// (`BlockerConflict::unsolvable`), the teal `b` / `PKG_BLOCKER_SATISFIED`
+/// branch the satisfied one. `resolved` is real
+/// `dep_expand(str(atom).lstrip("!"))` -- a category-qualification only,
+/// and every portuale blocker atom is already `cat/pkg[...]`, so it
+/// reduces to stripping the leading `!`/`!!`. Real's `(is <desc>
 /// <parents>)` alternative (`self.resolved == blocker.atom`) is
-/// unreachable -- `resolved` drops the `!` while `blocker.atom` keeps
-/// it. Real `_blockers` appends `empty_space_in_brackets()` after the
-/// five-space pad, and that adds the mask column's own space
-/// whenever `verbosity > 1` -- true at real portage's default `emerge
-/// -p` verbosity of 2, dropped only under `--quiet` (verbosity 1), which
+/// unreachable -- `resolved` drops the `!` while `blocker.atom` keeps it.
+/// Real `_blockers` appends `empty_space_in_brackets()` after the
+/// five-space pad, and that adds the mask column's own space whenever
+/// `verbosity > 1` -- true at real portage's default `emerge -p`
+/// verbosity of 2, dropped only under `--quiet` (verbosity 1), which
 /// `include_mask` carries.
-fn format_blocker_lines(
+fn format_blocker_row(
     entry: &GraphEntry,
-    owner_version: &str,
     include_mask: bool,
     color: &Colorizer,
-) -> Vec<String> {
+    b: &BlockerConflict,
+) -> String {
     let pad = if include_mask { "      " } else { "     " };
+    let (style, letter) = if b.unsolvable {
+        ("PKG_BLOCKER", "B")
+    } else {
+        ("PKG_BLOCKER_SATISFIED", "b")
+    };
+    let resolved = b.atom_str.trim_start_matches('!');
+    let desc = if b.strong {
+        "hard blocking"
+    } else {
+        "soft blocking"
+    };
+    let parents = format!(
+        "{}/{}-{}",
+        entry.category,
+        entry.package,
+        entry_display_version(entry)
+    );
+    format!(
+        "[{} {}{pad}] {}{}",
+        color.c(style, "blocks"),
+        color.c(style, letter),
+        color.c(style, resolved),
+        color.c(style, &format!(" (\"{resolved}\" is {desc} {parents})")),
+    )
+}
+
+/// The `[blocks …]` lines `print_entry_line` collects into the trailing
+/// group for `entries[owner_index]`: `Trailing` rows only, and satisfied
+/// ones are dropped under `--columns` (real `output.py:120`, `_blockers`
+/// appends a satisfied line to `print_msg` only when `not
+/// self.conf.columns`). Unresolved lines are never column-suppressed.
+fn trailing_blocker_lines(
+    entries: &[GraphEntry],
+    root: &Path,
+    owner_index: usize,
+    include_mask: bool,
+    columns: bool,
+    color: &Colorizer,
+) -> Vec<String> {
+    let entry = &entries[owner_index];
     entry
         .blockers
         .iter()
-        .filter(|b| !blocker_row_hidden(b))
-        .map(|b| {
-            let (style, letter) = if b.unsolvable {
-                ("PKG_BLOCKER", "B")
-            } else {
-                ("PKG_BLOCKER_SATISFIED", "b")
-            };
-            let resolved = b.atom_str.trim_start_matches('!');
-            let desc = if b.strong {
-                "hard blocking"
-            } else {
-                "soft blocking"
-            };
-            let parents = format!("{}/{}-{owner_version}", entry.category, entry.package);
-            format!(
-                "[{} {}{pad}] {}{}",
-                color.c(style, "blocks"),
-                color.c(style, letter),
-                color.c(style, resolved),
-                color.c(style, &format!(" (\"{resolved}\" is {desc} {parents})")),
-            )
+        .filter(|b| {
+            blocker_row_disposition(entries, root, owner_index, b)
+                == BlockerRowDisposition::Trailing
+                && !(columns && !b.unsolvable)
         })
+        .map(|b| format_blocker_row(entry, include_mask, color, b))
         .collect()
+}
+
+/// The compiled inline rows for a whole display list: `(after, line)`
+/// pairs keyed by the display index of the replacement entry the line
+/// follows. Sorted by that index (stable, so several owners waiting on
+/// the same replacement keep display order). Empty under `--columns`
+/// (satisfied lines are suppressed; the counters still count them -- real
+/// counts every `Blocker` node in the merge list, `get_display_list`
+/// `output.py:575-584`).
+fn collect_inline_blocker_lines(
+    entries: &[GraphEntry],
+    root: &Path,
+    quiet: bool,
+    columns: bool,
+    color: &Colorizer,
+) -> Vec<(usize, String)> {
+    if columns {
+        return Vec::new();
+    }
+    let mut out: Vec<(usize, String)> = Vec::new();
+    for (owner_index, entry) in entries.iter().enumerate() {
+        for b in &entry.blockers {
+            if let BlockerRowDisposition::Inline(after) =
+                blocker_row_disposition(entries, root, owner_index, b)
+            {
+                out.push((after, format_blocker_row(entry, !quiet, color, b)));
+            }
+        }
+    }
+    out.sort_by_key(|(after, _)| *after);
+    out
+}
+
+/// The `blocks`/`blocks_satisfied` counters real `_PackageCounters`
+/// accumulates from the merge list: every `Blocker` node in it counts,
+/// satisfied or not (`get_display_list`, `output.py:575-584`), which is
+/// exactly the rows `Trailing` and `Inline` describe. Hidden rows never
+/// entered the list.
+fn count_blocker_rows(entries: &[GraphEntry], root: &Path) -> (u64, u64) {
+    let mut blocks = 0u64;
+    let mut unsolvable = 0u64;
+    for (owner_index, entry) in entries.iter().enumerate() {
+        for b in &entry.blockers {
+            if blocker_row_disposition(entries, root, owner_index, b)
+                == BlockerRowDisposition::Hidden
+            {
+                continue;
+            }
+            blocks += 1;
+            if b.unsolvable {
+                unsolvable += 1;
+            }
+        }
+    }
+    (blocks, unsolvable)
 }
 
 /// One `GraphEntry`'s own display line, `indent` prepended right before
@@ -894,9 +1119,16 @@ fn format_blocker_lines(
 /// non-empty `indent`), so `columns_line`'s own `indent` parameter is
 /// always `""` in practice here, still threaded through for symmetry
 /// with the non-columns arms.
+///
+/// `entries`/`index`/`root` are what the #68/#72 B2 blocker disposition
+/// needs (see `blocker_row_disposition`): the entry's own trailing
+/// blocker rows are filtered here, the inline ones are printed by the
+/// caller right after this line.
 #[allow(clippy::too_many_arguments)]
 fn print_entry_line(
-    entry: &GraphEntry,
+    entries: &[GraphEntry],
+    root: &Path,
+    index: usize,
     indent: &str,
     top_level_pkgs: &HashSet<(String, String)>,
     onlydeps: bool,
@@ -923,6 +1155,7 @@ fn print_entry_line(
     // `NoVisibleCandidate` arm below does the same.
     use_unsat_deps: &[portage_repo::UseUnsatDepReport],
 ) {
+    let entry = &entries[index];
     // Real `_DisplayConfig` verbosity: `--quiet and 1 or --verbose and 3
     // or 2`. `--quiet` wins over `-v`. `v3` is "verbosity == 3" -- the
     // gate on `::repo`/`:slot` cpv decoration, the `Total:` line, and the
@@ -963,7 +1196,7 @@ fn print_entry_line(
     // coming later on the same line) -- though in practice a
     // `targets_running_root` entry always has an empty `use_flags_display`
     // anyway (a documented cut, see `GraphEntry::targets_running_root`).
-    let root = root_suffix(entry, running_root);
+    let root_annotation = root_suffix(entry, running_root);
     // Real --pretend's own bracket word: literally `pkg.type_name`
     // (`lib/_emerge/RootConfig.py`'s own `pkg_tree_map`, the exact
     // two strings `"ebuild"`/`"binary"` portuale's own
@@ -1107,10 +1340,10 @@ fn print_entry_line(
             }
         };
         if columns {
-            let root_str = if root.is_empty() {
+            let root_str = if root_annotation.is_empty() {
                 String::new()
             } else {
-                format!(" {}", root_col(&root))
+                format!(" {}", root_col(&root_annotation))
             };
             println!(
                 "{}{root_str}{use_str}{size_suffix}",
@@ -1144,11 +1377,11 @@ fn print_entry_line(
         if !oldbest.is_empty() {
             tail.push_str(&color.c("blue", &oldbest));
         }
-        if !root.is_empty() {
+        if !root_annotation.is_empty() {
             if !oldbest.is_empty() {
                 tail.push(' ');
             }
-            tail.push_str(&root_col(&root));
+            tail.push_str(&root_col(&root_annotation));
         }
         tail.push_str(&use_str);
         tail.push_str(&size_suffix);
@@ -1165,7 +1398,9 @@ fn print_entry_line(
             // (portuale doesn't carry the other-slot versions on the
             // entry yet).
             emit(&field(true, entry.new_slot, false, false, false), version);
-            blocker_lines.extend(format_blocker_lines(entry, version, !quiet, color));
+            blocker_lines.extend(trailing_blocker_lines(
+                entries, root, index, !quiet, columns, color,
+            ));
         }
         PretendOutcome::Upgrade { from: _, to } => {
             // Real: an in-slot version bump -> `attr.new_version` only
@@ -1173,13 +1408,17 @@ fn print_entry_line(
             // stays clear -> `U`, no `R`). oldbest = the in-slot
             // installed version(s) (`myinslotlist`), from `entry.oldbest`.
             emit(&field(false, false, false, true, false), to);
-            blocker_lines.extend(format_blocker_lines(entry, to, !quiet, color));
+            blocker_lines.extend(trailing_blocker_lines(
+                entries, root, index, !quiet, columns, color,
+            ));
         }
         PretendOutcome::Downgrade { from: _, to } => {
             // Real: in-slot downgrade -> `attr.new_version` *and*
             // `attr.downgrade` (`U` and `D`). oldbest as for `Upgrade`.
             emit(&field(false, false, false, true, true), to);
-            blocker_lines.extend(format_blocker_lines(entry, to, !quiet, color));
+            blocker_lines.extend(trailing_blocker_lines(
+                entries, root, index, !quiet, columns, color,
+            ));
         }
         PretendOutcome::Reinstall {
             version,
@@ -1200,9 +1439,11 @@ fn print_entry_line(
             // `--changed-use`; `--changed-deps`/`--changed-slot` reasons
             // are genuinely invisible in real `-pv` too).
             emit(&field(false, false, true, false, false), version);
-            blocker_lines.extend(format_blocker_lines(entry, version, !quiet, color));
+            blocker_lines.extend(trailing_blocker_lines(
+                entries, root, index, !quiet, columns, color,
+            ));
         }
-        PretendOutcome::AlreadyInstalled { version } => {
+        PretendOutcome::AlreadyInstalled { .. } => {
             // Nothing on stdout: real `emerge -p` / `-pu` simply omits an
             // already-satisfied package from the merge list, whether it
             // was reached as a dependency or requested directly (and
@@ -1222,16 +1463,13 @@ fn print_entry_line(
             // merge list, real still prints `[blocks B]`); the satisfied
             // `b` rows of such an owner are not part of the group (real
             // appends those inline on a *scheduled uninstall*, #72), so
-            // only `unsolvable` blockers are collected here.
-            // The zip pairs each line with its own blocker, so it must
-            // use the same filter `format_blocker_lines` applies.
-            for (line, b) in format_blocker_lines(entry, version, !quiet, color)
-                .into_iter()
-                .zip(entry.blockers.iter().filter(|b| !blocker_row_hidden(b)))
-            {
-                if b.unsolvable {
-                    blocker_lines.push(line);
-                }
+            // only `unsolvable` trailing rows are collected here.
+            for b in entry.blockers.iter().filter(|b| {
+                b.unsolvable
+                    && blocker_row_disposition(entries, root, index, b)
+                        == BlockerRowDisposition::Trailing
+            }) {
+                blocker_lines.push(format_blocker_row(entry, !quiet, color, b));
             }
         }
         PretendOutcome::NoVisibleCandidate => {
@@ -1402,6 +1640,7 @@ fn print_entry_line(
 #[allow(clippy::too_many_arguments)]
 fn print_tree(
     entries: &[GraphEntry],
+    root: &Path,
     top_level_pkgs: &HashSet<(String, String)>,
     onlydeps: bool,
     oneshot: bool,
@@ -1440,6 +1679,13 @@ fn print_tree(
     // state.
     struct TreeCtx<'a> {
         entries: &'a [GraphEntry],
+        root: &'a Path,
+        // #68/#72 B2: the satisfied `b` rows whose replacement waits on
+        // its owner, keyed by the replacement's display index -- printed
+        // right after that entry's line, flat placement even in tree mode
+        // (docs/02.68-74.md §6 records real's tree-mode placement as a
+        // named cut).
+        inline_blockers: &'a [(usize, String)],
         children: &'a HashMap<(String, String), Vec<usize>>,
         top_level_pkgs: &'a HashSet<(String, String)>,
         onlydeps: bool,
@@ -1472,7 +1718,9 @@ fn print_tree(
         // --columns off; `columnwidth` is a dummy value, unused whenever
         // `columns` is false.
         print_entry_line(
-            &ctx.entries[i],
+            ctx.entries,
+            ctx.root,
+            i,
             &indent,
             ctx.top_level_pkgs,
             ctx.onlydeps,
@@ -1491,6 +1739,9 @@ fn print_tree(
             ctx.masked_deps,
             ctx.use_unsat_deps,
         );
+        for (_, line) in ctx.inline_blockers.iter().filter(|(after, _)| *after == i) {
+            println!("{line}");
+        }
         let key = (
             ctx.entries[i].category.clone(),
             ctx.entries[i].package.clone(),
@@ -1502,8 +1753,11 @@ fn print_tree(
         }
     }
 
+    let inline_blockers = collect_inline_blocker_lines(entries, root, quiet, false, color);
     let ctx = TreeCtx {
         entries,
+        root,
+        inline_blockers: &inline_blockers,
         children: &children,
         top_level_pkgs,
         onlydeps,
@@ -1529,10 +1783,12 @@ fn print_tree(
     // Safety net, not expected to ever trigger in practice (see this
     // function's own doc comment) -- prints anything the tree walk
     // somehow never reached, flat, rather than silently dropping it.
-    for (i, entry) in entries.iter().enumerate() {
+    for i in 0..entries.len() {
         if !rendered.contains(&i) {
             print_entry_line(
-                entry,
+                entries,
+                root,
+                i,
                 "",
                 top_level_pkgs,
                 onlydeps,
@@ -4159,9 +4415,11 @@ fn run_resume(
     if pretend {
         let color = Colorizer::new(color::resolve_havecolor(color_opt));
         let mut blocker_lines: Vec<String> = Vec::new();
-        for entry in &entries {
+        for (i, _entry) in entries.iter().enumerate() {
             print_entry_line(
-                entry,
+                &entries,
+                root,
+                i,
                 "",
                 &HashSet::new(),
                 false,
@@ -10940,6 +11198,7 @@ pub fn run(args: &[String]) -> ExitCode {
         if tree {
             print_tree(
                 display_entries,
+                &root,
                 &top_level_pkgs,
                 onlydeps,
                 oneshot,
@@ -10957,9 +11216,17 @@ pub fn run(args: &[String]) -> ExitCode {
                 &result.use_unsat_deps,
             );
         } else {
-            for entry in display_entries {
+            // #68/#72 B2: rows whose replacement waits on its owner print
+            // right after that replacement's package line (real appends
+            // them to `print_msg` at the solved blocker's merge-list
+            // position, `output.py:119-121`).
+            let inline_blockers =
+                collect_inline_blocker_lines(display_entries, &root, quiet, columns, &color);
+            for i in 0..display_entries.len() {
                 print_entry_line(
-                    entry,
+                    display_entries,
+                    &root,
+                    i,
                     "",
                     &top_level_pkgs,
                     onlydeps,
@@ -10978,6 +11245,9 @@ pub fn run(args: &[String]) -> ExitCode {
                     &result.masked_deps,
                     &result.use_unsat_deps,
                 );
+                for (_, line) in inline_blockers.iter().filter(|(after, _)| *after == i) {
+                    println!("{line}");
+                }
             }
         }
 
@@ -11004,13 +11274,15 @@ pub fn run(args: &[String]) -> ExitCode {
             )
         {
             let mut thrown_away: Vec<String> = Vec::new();
-            for entry in &result.entries {
+            for (i, entry) in result.entries.iter().enumerate() {
                 if matches!(
                     entry.outcome,
                     portage_repo::PretendOutcome::NoVisibleCandidate
                 ) {
                     print_entry_line(
-                        entry,
+                        &result.entries,
+                        &root,
+                        i,
                         "",
                         &top_level_pkgs,
                         onlydeps,
@@ -11053,7 +11325,7 @@ pub fn run(args: &[String]) -> ExitCode {
         println!();
         println!(
             "{}",
-            package_counters_summary(display_entries, &top_level_pkgs, onlydeps, &color)
+            package_counters_summary(display_entries, &root, &top_level_pkgs, onlydeps, &color)
         );
     }
 
@@ -11089,7 +11361,7 @@ pub fn run(args: &[String]) -> ExitCode {
         println!();
         let mut thrown_away: Vec<String> = Vec::new();
         for cpv in &result.cycle_display {
-            let Some(entry) = display_entries.iter().find(|e| {
+            let Some((idx, _entry)) = display_entries.iter().enumerate().find(|(_, e)| {
                 let ver = match &e.outcome {
                     portage_repo::PretendOutcome::New { version }
                     | portage_repo::PretendOutcome::Reinstall { version, .. } => version,
@@ -11102,7 +11374,9 @@ pub fn run(args: &[String]) -> ExitCode {
                 continue;
             };
             print_entry_line(
-                entry,
+                display_entries,
+                &root,
+                idx,
                 "",
                 &top_level_pkgs,
                 onlydeps,
@@ -13092,22 +13366,25 @@ mod tests {
     }
 
     #[test]
-    fn replacement_satisfied_blocker_rows_are_hidden_and_uncounted() {
-        // #72 B1: a `Replacement`-satisfied row is carried on the entry
-        // but contributes neither a `[blocks]` line nor a `Conflict:`
-        // count (real appends it to the merge list only when
-        // `_serialize_tasks` scheduled the blocker's uninstall, which B2
-        // models); an `Uninstall`-satisfied row keeps its current
-        // trailing display.
-        let mut entry = entry_with_use(
-            PretendOutcome::New {
-                version: "2.0".into(),
-            },
-            "",
-            "",
-        );
-        entry.blockers = vec![
-            BlockerConflict {
+    fn replacement_satisfied_blocker_rows_are_hidden_or_inline() {
+        // #72 B1/B2: a `Replacement`-satisfied row is carried on the
+        // entry; it prints inline right after the replacement's line and
+        // counts only when the replacement waits on the owner's merge
+        // (`replacement_wait_index`); otherwise it contributes neither a
+        // `[blocks]` line nor a `Conflict:` count. An `Uninstall`-tagged
+        // row keeps its current trailing display.
+        let nc = Colorizer::new(false);
+        let replacement_owner = |entries: &[GraphEntry]| {
+            let mut owner = entry_with_use(
+                PretendOutcome::Upgrade {
+                    from: "1.0".into(),
+                    to: "1.1".into(),
+                },
+                "",
+                "",
+            );
+            owner.package = "bparent".into();
+            owner.blockers = vec![BlockerConflict {
                 atom_str: "!<dev-libs/blocked-2.0".into(),
                 strong: false,
                 matched_category: "dev-libs".into(),
@@ -13118,7 +13395,46 @@ mod tests {
                     cp: ("dev-libs".into(), "blocked".into()),
                     slot: "0".into(),
                 }),
+            }];
+            let _ = entries;
+            owner
+        };
+        let replacement = || {
+            let mut e = entry_with_use(
+                PretendOutcome::Upgrade {
+                    from: "1.0".into(),
+                    to: "2.0".into(),
+                },
+                "",
+                "",
+            );
+            e.package = "blocked".into();
+            e.deps = vec![portage_repo::DepEdge {
+                atom: "~dev-libs/bparent-1.1".into(),
+                category: "dev-libs".into(),
+                package: "bparent".into(),
+                priority: portage_repo::DepPriority {
+                    buildtime: true,
+                    ..portage_repo::DepPriority::default()
+                },
+                disjunctive: false,
+                alt: None,
+                key: 4,
+            }];
+            e
+        };
+
+        // The uninstall-tagged row trails, the replacement row hides
+        // (there is no replacement entry in this list at all).
+        let mut entry = entry_with_use(
+            PretendOutcome::New {
+                version: "2.0".into(),
             },
+            "",
+            "",
+        );
+        entry.blockers = vec![
+            replacement_owner(&[]).blockers[0].clone(),
             BlockerConflict {
                 atom_str: "!dev-libs/other".into(),
                 strong: false,
@@ -13131,17 +13447,70 @@ mod tests {
                 }),
             },
         ];
-        let nc = Colorizer::new(false);
-        let lines = format_blocker_lines(&entry, "2.0", true, &nc);
-        assert_eq!(lines.len(), 1, "only the uninstall-satisfied row prints");
+        let entries = [entry];
+        let lines =
+            trailing_blocker_lines(&entries, Path::new("/nonexistent"), 0, true, false, &nc);
+        assert_eq!(lines.len(), 1, "only the uninstall-satisfied row trails");
         assert!(
             lines[0].starts_with("[blocks b      ] dev-libs/other ("),
-            "the printed row is the Uninstall one: {lines:?}"
+            "the trailing row is the Uninstall one: {lines:?}"
         );
-        let summary = package_counters_summary(&[entry], &HashSet::new(), false, &nc);
+        assert!(
+            collect_inline_blocker_lines(&entries, Path::new("/nonexistent"), false, false, &nc)
+                .is_empty()
+        );
+        let summary = package_counters_summary(
+            &entries,
+            Path::new("/nonexistent"),
+            &HashSet::new(),
+            false,
+            &nc,
+        );
         assert!(
             summary.contains("Conflict: 1 block (all satisfied)"),
             "the hidden row is not counted: {summary}"
+        );
+
+        // The B0b p2c shape: the replacement's `~dev-libs/bparent-1.1`
+        // BDEPEND is unsatisfied (no installed bparent in
+        // `/nonexistent`), so the row prints inline after the replacement
+        // (display index 2) and counts.
+        let entries = [
+            replacement_owner(&[]),
+            entry_with_use(
+                PretendOutcome::New {
+                    version: "1.0".into(),
+                },
+                "",
+                "",
+            ),
+            replacement(),
+        ];
+        let inline =
+            collect_inline_blocker_lines(&entries, Path::new("/nonexistent"), false, false, &nc);
+        assert_eq!(inline.len(), 1, "the wait prints one inline row");
+        assert_eq!(inline[0].0, 2, "after the replacement entry");
+        assert!(
+            inline[0]
+                .1
+                .starts_with("[blocks b      ] <dev-libs/blocked-2.0 ("),
+            "{inline:?}"
+        );
+        assert_eq!(
+            count_blocker_rows(&entries, Path::new("/nonexistent")),
+            (1, 0)
+        );
+
+        // `--columns` suppresses the line but the counter still sees it
+        // (real counts every Blocker node in the merge list).
+        let entries = [replacement_owner(&[]), replacement()];
+        assert!(
+            collect_inline_blocker_lines(&entries, Path::new("/nonexistent"), false, true, &nc)
+                .is_empty()
+        );
+        assert_eq!(
+            count_blocker_rows(&entries, Path::new("/nonexistent")),
+            (1, 0)
         );
     }
 

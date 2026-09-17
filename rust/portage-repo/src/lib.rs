@@ -59,7 +59,7 @@ mod merge_order;
 mod resolver_trace;
 mod solver_bridge;
 
-pub use merge_order::{DepEdge, DepPriority};
+pub use merge_order::{DepEdge, DepPriority, dep_edge_satisfied_by_installed};
 
 use portage_versions::vercmp;
 use std::cell::RefCell;

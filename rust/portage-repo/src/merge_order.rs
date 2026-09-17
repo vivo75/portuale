@@ -950,6 +950,62 @@ fn is_leaf_via(
     }
 }
 
+/// Real `mypriority.satisfied = inst_pkg`: whether an installed package
+/// matches `edge`'s atom (`installed_by_cp` is `installed_candidates_by_cp`
+/// -- real `vardb.match_pkgs(atom)`), with the `:=`/`:*`-style narrowing
+/// `build_digraph` documents: for a `buildtime_slot_op`/`runtime_slot_op`
+/// edge the match must carry the resolved child's own slot/sub-slot, so a
+/// sub-slot bump doesn't read as satisfied. `child_slot` `None` means the
+/// caller has no resolved child (plain atom check).
+///
+/// Extracted from `build_digraph` so the #68/#72 B2 satisfied-blocker
+/// predicate (`portuale`'s `replacement_wait_index`) reads exactly the
+/// same rule instead of re-deriving it (T4).
+fn edge_satisfied_with(
+    installed_by_cp: &HashMap<(String, String), Vec<String>>,
+    edge: &DepEdge,
+    child_slot: Option<(&str, &str)>,
+) -> bool {
+    let Some(cands) = installed_by_cp.get(&(edge.category.clone(), edge.package.clone())) else {
+        return false;
+    };
+    let refs: Vec<&str> = cands.iter().map(String::as_str).collect();
+    let Some(matched) = portage_dep::match_from_list(&edge.atom, &refs) else {
+        return false;
+    };
+    if matched.is_empty() {
+        return false;
+    }
+    if edge.priority.buildtime_slot_op || edge.priority.runtime_slot_op {
+        let Some((slot, sub_slot)) = child_slot else {
+            return true;
+        };
+        return matched.iter().any(|m| {
+            portage_dep::parse_candidate(m).is_some_and(|c| {
+                c.slot.as_deref() == Some(slot) && c.sub_slot.as_deref() == Some(sub_slot)
+            })
+        });
+    }
+    true
+}
+
+/// The [`edge_satisfied_with`] rule against the live vdb, for callers that
+/// did not already cache `installed_candidates_by_cp`. #68/#72 B2 is the
+/// first such caller: `GraphEntry::deps` never carries the computed
+/// `DepPriority::satisfied` bit (`build_digraph` sets it on its own edge
+/// copies only), so the satisfied-blocker predicate must ask this itself.
+pub fn dep_edge_satisfied_by_installed(
+    root: &Path,
+    edge: &DepEdge,
+    child: Option<&GraphEntry>,
+) -> bool {
+    edge_satisfied_with(
+        &installed_candidates_by_cp(root),
+        edge,
+        child.and_then(|c| c.slot.as_deref().zip(c.sub_slot.as_deref())),
+    )
+}
+
 /// Every installed package's `cat/pkg-version:slot/sub_slot` candidate
 /// string, grouped by `cat/pkg` -- the input `DepPriority::satisfied`
 /// needs (real `vardb.match_pkgs(atom)`).
@@ -1358,36 +1414,19 @@ fn build_digraph(entries: &[GraphEntry], top_level_atoms: &[String], root: &Path
     };
 
     // Real `mypriority.satisfied`: an installed package matching the
-    // atom. For a `:=` atom real additionally narrows the match to the
-    // resolved child's own slot/sub-slot, so a sub-slot bump doesn't
-    // read as satisfied -- `entry_slot` supplies that.
+    // atom, via the shared `edge_satisfied_with` rule (see its doc).
     let installed_by_cp = installed_candidates_by_cp(root);
     let satisfied = |edge: &DepEdge, child: Option<usize>| -> bool {
-        let Some(cands) = installed_by_cp.get(&(edge.category.clone(), edge.package.clone()))
-        else {
-            return false;
-        };
-        let refs: Vec<&str> = cands.iter().map(String::as_str).collect();
-        let Some(matched) = portage_dep::match_from_list(&edge.atom, &refs) else {
-            return false;
-        };
-        if matched.is_empty() {
-            return false;
-        }
-        if edge.priority.buildtime_slot_op || edge.priority.runtime_slot_op {
-            let Some(ci) = child else { return true };
-            let (Some(slot), Some(sub_slot)) =
-                (entries[ci].slot.as_deref(), entries[ci].sub_slot.as_deref())
-            else {
-                return true;
-            };
-            return matched.iter().any(|m| {
-                portage_dep::parse_candidate(m).is_some_and(|c| {
-                    c.slot.as_deref() == Some(slot) && c.sub_slot.as_deref() == Some(sub_slot)
-                })
-            });
-        }
-        true
+        edge_satisfied_with(
+            &installed_by_cp,
+            edge,
+            child.and_then(|ci| {
+                entries[ci]
+                    .slot
+                    .as_deref()
+                    .zip(entries[ci].sub_slot.as_deref())
+            }),
+        )
     };
 
     // Real `_create_graph` resolves every dep atom to a single package
