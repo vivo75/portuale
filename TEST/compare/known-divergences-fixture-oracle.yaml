@@ -104,13 +104,15 @@
   slugs: ["-uDvN*"]
   match: "real Total"
   reason: >
-    The staged matrix's `-uDvN` (verbose) runs make real print every
-    rebuilt consumer twice -- once in the merge list, once in its ABI
-    rebuild listing -- so the comparator's Total counts exceed the merge
-    set. Portuale prints each rebuilt consumer once. The merge sets,
-    order and flags are asserted independently (extra/missing/order
-    findings), which is what matters; the totals row itself is display
-    duplication only.
+    BED ARTIFACT (#71 S0, 2026-09-17): with the bed's `ROOT=$FX`
+    (real's `create_trees` gives a second tree at `/`), the staged
+    matrix's rebuild rows split across the two roots, so the comparator
+    sees the target-root subset as the merge set and the root-`/` rows
+    as extra -- and real's Total counts the duplicates. Host-exact
+    (`ROOT=/`, `PORTAGE_CONFIGROOT=$FX`) real prints each consumer once
+    and `Total:` matches portuale byte for byte. Entry stays only until
+    the slotop matrix runs host-exact; see `TEST/findings/l0.md`
+    "#71 S0".
   owner: portuale-oracle
 
 - id: slotop-idepend-world-only-arg-consumer
@@ -118,12 +120,12 @@
   slugs: ["-uDvN_--oneshot*consrdep", "-uDvN_--oneshot*conspdep"]
   match: "ebuild dev-libs/considep-1.0 present for portuale, absent for real"
   reason: >
-    Known gap, filed as backlog #71: in the argument shape real rebuilds
-    the world-only IDEPEND consumer (`considep`) only when the argument
-    is a build-time or IDEPEND consumer, not when it is an RDEPEND/
-    PDEPEND consumer. Portuale's runtime-key scan rebuilds every
-    reachable runtime consumer, so it adds `considep` in the two shapes
-    real leaves alone. The runtime keys were deliberately kept
-    unscanned in #65 S2 (TEST/findings/l0.md "#65 S0" residue 1); the
-    entry must be deleted when #71 closes.
-  owner: portuale-bug
+    BED ARTIFACT (#71 S0, 2026-09-17): the two cells were captured with
+    `ROOT=$FX`, where real's slot-op cascade splits across the target
+    root and `/`; `considep` is rebuilt by real in root `/` and the
+    comparator's target-root merge set misses it. Host-exact (`ROOT=/`,
+    `PORTAGE_CONFIGROOT=$FX`) real rebuilds exactly portuale's set in
+    every argument cell, so there is no portuale divergence to fix.
+    Entry stays only until the slotop matrix runs host-exact; see
+    `TEST/findings/l0.md` "#71 S0".
+  owner: portuale-oracle
