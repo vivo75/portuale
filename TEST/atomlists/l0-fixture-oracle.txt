@@ -11,6 +11,10 @@ dev-libs/diamond
 dev-libs/common
 # || any-of group
 dev-libs/anyof
+# #74 S1: an installed || alternative's [use] dep is checked against its
+# recorded vdb USE -- real keeps the installed altprov:1.1[flip] (vdb USE)
+# over the uninstalled :1.0 slot, so the group contributes no merge
+dev-libs/altconsumer
 # REQUIRED_USE with IUSE defaults
 dev-libs/iusedefaultpkg
 # multi-slot package

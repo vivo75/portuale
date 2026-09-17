@@ -519,6 +519,11 @@ CASES = [
         0,
     ),
     (
+        "recursion: an installed || alternative's [use] dep matches its vdb USE (#74 S1)",
+        ["--pretend", "dev-libs/altconsumer"],
+        0,
+    ),
+    (
         "recursion: || group in-bin ordering promotes all_installed_slots over any-slot, avoiding an unwanted new-slot merge",
         ["--pretend", "dev-libs/oranyslot"],
         0,
@@ -3627,6 +3632,32 @@ def test_or_group_in_bin_ordering_promotes_all_installed_slots_over_any_slot(
     assert rust.stdout.splitlines() == ["[ebuild  N     ] dev-libs/oranyslot-1.0 "]
     assert "oranyslotalt" not in rust.stdout, (
         "the already-installed slot must satisfy the || group with no new merge at all"
+    )
+
+
+def test_or_group_installed_alternative_use_dep_matches_its_vdb_use(
+    emerge_binary, fixture_env
+):
+    """#74 S1 (real `dep_check.dep_zapdeps`'s `_dep_check_composite_db` +
+    `dbapi._match_use`'s built-package branch): an installed `||`
+    alternative's `[use]` deps are checked against its recorded vdb USE,
+    not the current tree's profile-derived USE. dev-libs/altconsumer's
+    BDEPEND is `|| ( dev-libs/altprov:1.1[flip] dev-libs/altprov:1.0 )`;
+    `fixtures/var/db/pkg/dev-libs/altprov-1.1` is installed with
+    `USE=flip` while the fixture profile never enables `flip`, so the
+    *tree* candidate for `:1.1` fails the atom's use-dep and the
+    *uninstalled* `:1.0` slot used to win with a spurious `[ebuild NS]
+    dev-libs/altprov-1.0 [1.1]` -- the #74 host probe's
+    `dev-lang/rust-1.94.0` class. Real keeps the installed `:1.1` (its
+    own container capture is the fixture-oracle bed entry for
+    `dev-libs/altconsumer`), so the whole group contributes no merge at
+    all."""
+    args = ["--pretend", "dev-libs/altconsumer"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    assert rust.returncode == 0, rust.stdout + rust.stderr
+    assert rust.stdout.splitlines() == ['[ebuild  N     ] dev-libs/altconsumer-1.0 ']
+    assert "altprov" not in rust.stdout, (
+        "the installed altprov:1.1[flip] must satisfy the || group with no merge"
     )
 
 

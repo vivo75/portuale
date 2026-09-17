@@ -9705,12 +9705,23 @@ fn atom_cp_installed(root: &Path, atom_str: &str) -> bool {
 /// `if not atom.blocker`-filtered atoms (the caller's job), and this
 /// exact code path has no virtual short-circuit in real either.
 fn atom_matches_installed(root: &Path, atom_str: &str, config: &portage_profile::Config) -> bool {
-    let Some(atom) = portage_dep::parse_atom(atom_str) else {
-        return false;
-    };
+    best_installed_matching(root, atom_str, config).is_some()
+}
+
+/// The highest installed version matching `atom_str` whose recorded vdb
+/// `USE` satisfies its `[use]` deps -- the version [`atom_matches_installed`]
+/// reports. Split out so `resolve_pretend` can return that exact version
+/// (real's selection returns the installed `inst_pkg`, not merely "some
+/// installed instance exists").
+fn best_installed_matching(
+    root: &Path,
+    atom_str: &str,
+    config: &portage_profile::Config,
+) -> Option<String> {
+    let atom = portage_dep::parse_atom(atom_str)?;
     let installed = installed_candidates(root, &atom.category, &atom.package);
     if installed.is_empty() {
-        return false;
+        return None;
     }
     let cpv_strs: Vec<String> = installed
         .iter()
@@ -9724,27 +9735,24 @@ fn atom_matches_installed(root: &Path, atom_str: &str, config: &portage_profile:
         })
         .collect();
     let refs: Vec<&str> = cpv_strs.iter().map(String::as_str).collect();
-    let Some(matched) = portage_dep::match_from_list(atom_str, &refs) else {
-        return false;
-    };
-    if matched.is_empty() {
-        return false;
-    }
-    let Some(use_deps) = atom.use_deps.as_ref().filter(|d| !d.is_empty()) else {
-        return true;
-    };
+    let matched = portage_dep::match_from_list(atom_str, &refs)?;
+    let use_deps = atom.use_deps.as_ref().filter(|d| !d.is_empty());
     let by_str: HashMap<&str, &(String, String, String)> =
         refs.iter().copied().zip(installed.iter()).collect();
-    matched.into_iter().any(|m| {
-        let Some((version, _slot, _sub)) = by_str.get(m) else {
-            return false;
-        };
-        let vdb_iuse = read_vdb_flag_set(root, &atom.category, &atom.package, version, "IUSE");
-        let vdb_use = read_vdb_flag_set(root, &atom.category, &atom.package, version, "USE");
-        let mut valid = valid_iuse(&vdb_iuse, config);
-        valid.extend(vdb_use.iter().cloned());
-        portage_dep::use_deps_satisfied(use_deps, &valid, &vdb_use)
-    })
+    matched
+        .into_iter()
+        .filter_map(|m| by_str.get(m).map(|(version, _slot, _sub)| version.clone()))
+        .filter(|version| {
+            let Some(use_deps) = use_deps else {
+                return true;
+            };
+            let vdb_iuse = read_vdb_flag_set(root, &atom.category, &atom.package, version, "IUSE");
+            let vdb_use = read_vdb_flag_set(root, &atom.category, &atom.package, version, "USE");
+            let mut valid = valid_iuse(&vdb_iuse, config);
+            valid.extend(vdb_use.iter().cloned());
+            portage_dep::use_deps_satisfied(use_deps, &valid, &vdb_use)
+        })
+        .max_by(|a, b| vercmp_ordering(a, b))
 }
 
 /// Real `dep_zapdeps`'s `all_installed_slots` predicate (`dep_check.py`
@@ -10101,6 +10109,23 @@ fn disjunction_preference(
             true
         } else {
             atom_currently_satisfiable(repos, a, config, extra_constraints)
+                // #74 S1 (T10): real's `mydbapi_match_pkgs(atom)` in
+                // `dep_zapdeps` is `_dep_check_composite_db` over the
+                // graph/installed/ebuild dbs, and a *built* package's
+                // `[use]` deps are matched against its recorded vdb USE
+                // (`dbapi._match_use`'s `not self._use_mutable` branch,
+                // `portage/dbapi/__init__.py:298-327`) -- not against
+                // the tree candidate's profile-derived USE. Without this
+                // disjunct an alternative satisfied by an installed
+                // instance whose flag the current profile does not
+                // enable (`dev-lang/rust:1.94.1[llvm_slot_21]`,
+                // `dev-libs/altprov:1.1[flip]`) failed
+                // `all_use_satisfied`, was demoted to `unsat_use_*`,
+                // and lost bin 0 to the *uninstalled* slot's cp-level
+                // `Installed` -- real keeps the installed alternative
+                // (fixture `altprov`/`altconsumer` and the #74 host
+                // probe).
+                || atom_matches_installed(root, a, config)
                 || root_deps_running_root
                     .is_some_and(|running_root| running_root_satisfies_atom(a, running_root))
         };
@@ -12182,6 +12207,28 @@ pub fn resolve_pretend(
                 version: installed_best.version.clone(),
             });
         }
+    }
+
+    // #74 S1, selection half (real `_wrapped_select_pkg_highest_available_imp`'s
+    // no-autounmask pass): the ebuild candidate is matched against the
+    // profile-effective USE and the installed instance against its own
+    // built USE (`_iter_match_pkgs`'s `pkg.with_use(self._pkg_use_enabled(pkg))`,
+    // `dbapi._match_use`'s built-package branch). When only the *installed*
+    // instance satisfies the atom's `[use]` deps, real's first selection
+    // returns it (`_want_installed_pkg` keeps an installed package the user
+    // did not name on the command line as a nomerge selection) and the
+    // autounmask flip path never runs; the tree candidate's flip-away path
+    // below is what turns this into a `--newuse` Reinstall otherwise.
+    // Host probe: `dev-lang/rust:1.94.1[llvm_slot_21]` (installed with the
+    // flag; the current profile's `LLVM_SLOT` expand turns it off for the
+    // ebuild) must stay `AlreadyInstalled` under `-puDvN`, exactly as real
+    // keeps it.
+    if !is_top_level
+        && atom.use_deps.as_ref().is_some_and(|d| !d.is_empty())
+        && !atom_currently_satisfiable(repos, atom_str, config, extra_constraints)
+        && let Some(version) = best_installed_matching(root, atom_str, config)
+    {
+        return Ok(PretendOutcome::AlreadyInstalled { version });
     }
 
     // --update/-u: see this function's own doc comment. Skipped
@@ -19872,6 +19919,11 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         // `resolve_pretend`, so `New` here means nothing in *this* slot).
         let new_slot = matches!(outcome, PretendOutcome::New { .. })
             && !installed_candidates(ctx.root, &key.0, &key.1).is_empty();
+        // Kept before `outcome` moves into the entry below: real's
+        // REQUIRED_USE gate is `not pkg.built` (`depgraph.py:3629-3632`),
+        // and an `AlreadyInstalled` outcome is exactly portuale's
+        // installed ("built") case.
+        let already_installed_outcome = matches!(outcome, PretendOutcome::AlreadyInstalled { .. });
         let candidate_str = format!(
             "{}/{}-{version}:{slot}/{sub_slot}::{repo_name}",
             key.0, key.1
@@ -20154,7 +20206,17 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         // explicit `if not required_use_is_sat:` branch that the delayed
         // collection above lives in -- so portuale keeps that one
         // immediately fatal, same as before.
-        if let Some(required_use) = metadata.get("REQUIRED_USE")
+        // Real's own gate is `not pkg.built` (`depgraph.py:3629-3632`):
+        // an installed (`built`) package's REQUIRED_USE was already
+        // satisfied at build time and is never re-validated against a
+        // later profile. #74 S1: once the `||` selection legitimately
+        // picks an installed instance whose current-profile USE no longer
+        // enables a REQUIRED_USE flag (`dev-lang/rust-1.94.1`'s
+        // `llvm_slot_21`, built with it, `LLVM_SLOT=22` now), the
+        // re-validation turned the whole run into a bogus
+        // "ebuild selected ... has unmet requirements" failure.
+        if !already_installed_outcome
+            && let Some(required_use) = metadata.get("REQUIRED_USE")
             && !required_use.trim().is_empty()
         {
             // Real `check_required_use` validates a referenced flag
@@ -22130,6 +22192,28 @@ fn enqueue_dependencies(
             // new `targets_running_root` entry, or silently dropped on
             // failure/cycle -- see `resolve_root_deps_build_entries`'s own
             // doc comment).
+            continue;
+        }
+        // #74 S1: a dependency the installed parent itself satisfies is
+        // the graph node real's `_add_dep` -> `_select_package` returns
+        // from `find_existing_node` (`depgraph.py:8183-8203`) -- no
+        // New/Upgrade/Reinstall decision is ever made for it (the
+        // `_reinstall_for_flags` comparison lives in the candidate loop
+        // *below* that early return, and `_add_dep` then drops the edge
+        // at `:3765` unless it is an unsatisfied buildtime dep).
+        // `dev-lang/rust-1.94.1`'s own current-ebuild BDEPEND is
+        // `... || ( dev-lang/rust-bin:1.94.1 dev-lang/rust:1.94.1 ... )`;
+        // without this, `--newuse` resolved the self alternative to a
+        // Reinstall whose REQUIRED_USE re-check (see the
+        // `already_installed_outcome` gate at the queue loop) failed the
+        // whole run. A self atom on a *different* slot
+        // (`dev-lang/rust:stable`, the RDEPEND form) is not satisfied by
+        // this instance and still queues normally.
+        if let Some(dep_atom) = portage_dep::parse_atom(&tok)
+            && (dep_atom.category, dep_atom.package) == owner_key
+            && best_installed_matching(root, &tok, config)
+                .is_some_and(|version| version == owner_version)
+        {
             continue;
         }
         // This path never calls `evaluate_atom_conditionals` at all (a
@@ -27009,6 +27093,48 @@ mod tests {
         .into_iter()
         .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
         .collect()
+    }
+
+    /// #74 S1: an installed `||` alternative's `[use]` deps are matched
+    /// against its recorded vdb USE, not the tree candidate's
+    /// profile-derived USE (real `dep_check.dep_zapdeps`'s
+    /// `_dep_check_composite_db` covers the vardb, and `dbapi._match_use`
+    /// has a separate built-package branch that reads `metadata["USE"]`).
+    /// `fixtures/repo/dev-libs/altconsumer-1.0` BDEPENDs
+    /// `|| ( dev-libs/altprov:1.1[flip] dev-libs/altprov:1.0 )`;
+    /// `fixtures/var/db/pkg/dev-libs/altprov-1.1` is installed with
+    /// `USE=flip` while the fixture profile/environment never enables
+    /// `flip`. Before the fix the installed alternative ranked
+    /// `UnsatUseInstalled` and the uninstalled slot's cp-level
+    /// `Installed` won, so portuale merged `dev-libs/altprov-1.0`; real's
+    /// own container capture (findings "#74 S0") keeps the installed
+    /// `:1.1` (bin 0 plus the `all_installed_slots` promotion).
+    #[test]
+    fn disjunction_preference_matches_an_installed_alternatives_vdb_use() {
+        let entries = graph("dev-libs/altconsumer");
+        assert!(
+            entries
+                .iter()
+                .any(|(name, _)| name == "dev-libs/altconsumer"),
+            "{entries:?}"
+        );
+        let altprov_merges: Vec<&(String, PretendOutcome)> = entries
+            .iter()
+            .filter(|(name, outcome)| {
+                name == "dev-libs/altprov"
+                    && matches!(
+                        outcome,
+                        PretendOutcome::New { .. }
+                            | PretendOutcome::Upgrade { .. }
+                            | PretendOutcome::Downgrade { .. }
+                            | PretendOutcome::Reinstall { .. }
+                    )
+            })
+            .collect();
+        assert!(
+            altprov_merges.is_empty(),
+            "the installed altprov:1.1[flip] must win the || group: {entries:?}"
+        );
     }
 
     /// Like `graph`, but with `--nodeps` enabled.
