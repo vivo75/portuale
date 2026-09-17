@@ -18126,10 +18126,16 @@ struct PassState {
     /// branch, which never consulted `resolved_slots` at all -- the whole
     /// of backlog #57.
     installed_slots: HashMap<(String, String, String), String>,
-    /// (category, package) -> already added an AlreadyInstalled/
-    /// NoVisibleCandidate entry for it. Separate from `resolved_slots`
-    /// since neither outcome carries a slot to usefully key repeats by.
-    other_outcomes: HashSet<(String, String)>,
+    /// `(category, package, slot)` -> already added an
+    /// `AlreadyInstalled` entry for that installed instance; a
+    /// `NoVisibleCandidate` has no instance, so it uses `None` there and
+    /// keeps the old cp-scoped dedup. Real's installed nodes are keyed by
+    /// `pkg.slot_atom` (`_package_tracker`), so two installed instances
+    /// of one cp in different slots are two nodes with deps walked
+    /// independently -- `llvm-core/clang:22` and `:23` coexisting is
+    /// exactly the #74 S2a shape. Separate from `resolved_slots` (which
+    /// keys merge-bound instances).
+    other_outcomes: HashSet<(String, String, Option<String>)>,
     /// (category, package) -> already added a `targets_running_root`
     /// entry for it (see `resolve_root_deps_build_entries`'s own doc
     /// comment). Deliberately separate from `resolved_slots`/
@@ -18254,10 +18260,10 @@ struct PassState {
     /// and off); `collect_feedback` + driver latches it into `bp.autounmask_use_broke`.
     use_broke: bool,
     /// #57: this pass dropped a `NoVisibleCandidate` on the
-    /// `other_outcomes` cp dedup while a mask was active -- an
-    /// unsatisfiable dependency that leaves no NVC entry behind, so
-    /// `collect_feedback`'s `has_nvc` scan cannot see it. Set only under
-    /// a non-empty `runtime_pkg_mask`, so an ordinary pass is unaffected.
+    /// `other_outcomes` dedup while a mask was active -- an
+    /// unsatisfiable dependency whose entry `collect_feedback`'s
+    /// `has_nvc` scan therefore cannot see. Set only under a non-empty
+    /// `runtime_pkg_mask`, so an ordinary pass is unaffected.
     suppressed_nvc: bool,
     /// #59 S1: real `_add_pkg`'s per-instance `Parent Dep:` rows
     /// (`_add_parent_atom`), collected as each queue item resolves.
@@ -19066,14 +19072,22 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             // solvability check reconciles a jointly-satisfiable slot on
             // the retry and this record disappears with it; only a slot
             // no single version can satisfy survives to be reported.
+            // The vdb `SLOT` file only -- one read per installed node,
+            // reused by the slot-conflict record below and the
+            // `other_outcomes` dedup key. `installed_refs` would re-list
+            // every version and read each one's `repository` too, and
+            // this runs for every `AlreadyInstalled` outcome in the walk
+            // (thousands on a `-puD @world`); the fuller lookup is
+            // deferred to the two rare branches that actually build a
+            // record.
+            let installed_node_slot = match &outcome {
+                PretendOutcome::AlreadyInstalled { version } => {
+                    Some(read_vdb_slot(ctx.root, &key.0, &key.1, version).0)
+                }
+                _ => None,
+            };
             if let PretendOutcome::AlreadyInstalled { version } = &outcome {
-                // The vdb `SLOT` file only -- one read per installed
-                // node. `installed_refs` would re-list every version and
-                // read each one's `repository` too, and this runs for
-                // every `AlreadyInstalled` outcome in the walk (thousands
-                // on a `-puD @world`); the fuller lookup is deferred to
-                // the two rare branches that actually build a record.
-                let (inst_slot, _) = read_vdb_slot(ctx.root, &key.0, &key.1, version);
+                let inst_slot = installed_node_slot.clone().unwrap_or_default();
                 let slot_key = (key.0.clone(), key.1.clone(), inst_slot.clone());
                 if let Some(&existing_idx) = state.resolved_slots.get(&slot_key)
                     && let Some(existing_version) =
@@ -19119,25 +19133,24 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     .entry(slot_key)
                     .or_insert_with(|| version.clone());
             }
-            // AlreadyInstalled / NoVisibleCandidate: no slot to key a
-            // repeat by, so dedup on category/package alone, same as v1
-            // always did before slot-aware resolution existed.
-            if !state.other_outcomes.insert(key.clone()) {
-                // #57: the dedup is cp-keyed, so an `AlreadyInstalled`
-                // reached by one atom shadows a *later* atom's
-                // `NoVisibleCandidate` for the same package and no NVC
-                // entry is ever pushed. Harmless for an ordinary pass
-                // (long-standing display behaviour), but a *masked*
-                // backtracking attempt must not be mistaken for a
-                // success: real's `_create_graph` returns 0 on an
-                // unsatisfiable dep and the attempt is abandoned in
-                // favour of `get_best_run`. Without this the argv order
-                // `othermod needer` settled on the try that masked
-                // `paired-2.0` -- dropping the upgrade from the merge
-                // list and the block with it -- while the mirror order
-                // (whose NVC happened to be graphed first) correctly
-                // fell back to the reported conflict. Gated on an active
-                // mask so no unmasked pass changes behaviour.
+            // AlreadyInstalled repeats are keyed by the installed
+            // instance's own slot (real's `pkg.slot_atom` node identity):
+            // a *second* installed instance of the same cp in another
+            // slot is a distinct node whose deps must still be walked
+            // (#74 S2a -- the old cp key let the first slot processed
+            // shadow the rest, dropping `llvm-core/clang:23`'s own build
+            // deps). NoVisibleCandidate has no instance to key by: `None`
+            // keeps the old cp-scoped repeat dedup.
+            let other_key = (key.0.clone(), key.1.clone(), installed_node_slot);
+            if !state.other_outcomes.insert(other_key) {
+                // #57: a deduped `NoVisibleCandidate` never gets its own
+                // entry, so under an active `runtime_pkg_mask` the
+                // `has_nvc` scan must still treat the pass as a dead end
+                // (real's `_create_graph` returns 0 on an unsatisfiable
+                // dep and the attempt is abandoned in favour of
+                // `get_best_run`; the argv order `othermod needer` used
+                // to settle on the masked try otherwise). Gated on an
+                // active mask so no unmasked pass changes behaviour.
                 if matches!(outcome, PretendOutcome::NoVisibleCandidate)
                     && !bp.runtime_pkg_mask.is_empty()
                 {
@@ -27093,6 +27106,28 @@ mod tests {
         .into_iter()
         .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
         .collect()
+    }
+
+    /// #74 S2a: the `AlreadyInstalled` dedup is keyed by the installed
+    /// instance's own slot (real's `pkg.slot_atom` node identity), not
+    /// the cp. `fixtures/var/db/pkg` has `dev-libs/slotdedup-1.0` (slot
+    /// 1, no deps) and `slotdedup-2.0` (slot 2, RDEPEND
+    /// `dev-libs/slotdedupmarker`) installed;
+    /// `fixtures/repo/dev-libs/slotdedupconsumer-1.0` RDEPENDs
+    /// `dev-libs/slotdedup:1 dev-libs/slotdedup:2` (slot 1 first). With
+    /// the old cp-keyed dedup the slot-2 visit was dropped, so its deps
+    /// were never walked and `slotdedupmarker` never entered the graph --
+    /// the #74 class B1 shape (`llvm-core/clang:22` shadowing `:23`,
+    /// losing myst-parser).
+    #[test]
+    fn other_outcomes_dedups_installed_instances_by_slot_not_cp() {
+        let entries = graph_deep("dev-libs/slotdedupconsumer", Deep::Unlimited);
+        let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(names.contains(&"dev-libs/slotdedupconsumer"), "{names:?}");
+        assert!(
+            names.contains(&"dev-libs/slotdedupmarker"),
+            "slot 2's own deps must be walked: {names:?}"
+        );
     }
 
     /// #74 S1: an installed `||` alternative's `[use]` deps are matched

@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: #74 S2a RDEPENDs both installed slots of slotdedup, slot 1 first
+EAPI=8
+KEYWORDS=amd64
+RDEPEND=dev-libs/slotdedup:1 dev-libs/slotdedup:2
+SLOT=0
+_md5_=3e69d663b24358c4018ba91049adfe08

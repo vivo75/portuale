@@ -524,6 +524,11 @@ CASES = [
         0,
     ),
     (
+        "recursion: both installed slots of one cp are nodes with their own dep walks (#74 S2a)",
+        ["--pretend", "-D", "dev-libs/slotdedupconsumer"],
+        0,
+    ),
+    (
         "recursion: || group in-bin ordering promotes all_installed_slots over any-slot, avoiding an unwanted new-slot merge",
         ["--pretend", "dev-libs/oranyslot"],
         0,
@@ -3659,6 +3664,30 @@ def test_or_group_installed_alternative_use_dep_matches_its_vdb_use(
     assert "altprov" not in rust.stdout, (
         "the installed altprov:1.1[flip] must satisfy the || group with no merge"
     )
+
+
+def test_deep_walk_visits_every_installed_slot_of_a_dependency(
+    emerge_binary, fixture_env
+):
+    """#74 S2a: real's installed nodes are per `pkg.slot_atom`
+    (`_package_tracker`), so two installed instances of one cp in
+    different slots are two nodes whose deps are both walked. The
+    fixture installs `dev-libs/slotdedup-1.0` (slot 1, no deps) and
+    `slotdedup-2.0` (slot 2, RDEPEND `dev-libs/slotdedupmarker`);
+    `dev-libs/slotdedupconsumer` RDEPENDs `dev-libs/slotdedup:1
+    dev-libs/slotdedup:2` (slot 1 first). The old cp-keyed
+    `AlreadyInstalled` dedup let slot 1's visit claim the cp and dropped
+    slot 2's, so `slotdedupmarker` never entered the graph -- the #74
+    class B1 shape (`llvm-core/clang:22` shadowing `:23`, losing
+    myst-parser/mdit-py-plugins). Real's fixture-oracle capture agrees
+    byte for byte (bed case `-D dev-libs/slotdedupconsumer`)."""
+    args = ["--pretend", "-D", "dev-libs/slotdedupconsumer"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    assert rust.returncode == 0, rust.stdout + rust.stderr
+    assert rust.stdout.splitlines() == [
+        "[ebuild  N     ] dev-libs/slotdedupmarker-1.0 ",
+        "[ebuild  N     ] dev-libs/slotdedupconsumer-1.0 ",
+    ]
 
 
 def test_or_group_other_installed_bin_beats_plain_other_in_the_allow_masked_pass(

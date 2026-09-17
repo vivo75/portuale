@@ -1,0 +1,6 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: #74 S2a installed slot 1 (no further deps)
+EAPI=8
+KEYWORDS=amd64
+SLOT=1
+_md5_=af6c666649dd481e0cf853aff851ee3b

@@ -15,6 +15,9 @@ dev-libs/anyof
 # recorded vdb USE -- real keeps the installed altprov:1.1[flip] (vdb USE)
 # over the uninstalled :1.0 slot, so the group contributes no merge
 dev-libs/altconsumer
+# #74 S2a: both installed slots of slotdedup are real nodes, so the deep
+# walk reaches slot 2's own RDEPEND marker
+-D dev-libs/slotdedupconsumer
 # REQUIRED_USE with IUSE defaults
 dev-libs/iusedefaultpkg
 # multi-slot package
