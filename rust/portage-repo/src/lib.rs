@@ -2694,8 +2694,14 @@ pub fn find_remote_binpkg<'a>(
 ///   no comparison at all, the binary survives.
 ///
 /// `forced_flags` (the ebuild's own `use.force`/`use.mask`, or -- in
-/// the no-ebuild arm -- the binary cpv's) is not subtracted yet; the
-/// #69 R2 slice adds it.
+/// the no-ebuild arm -- the binary cpv's, both via
+/// [`forced_or_masked_flags`]) is subtracted from the IUSE symmetric
+/// difference only (`depgraph.py:3149-3150`, the #69 R2 slice): a flag
+/// the profile forces or masks never rejects a binary by its *presence*
+/// alone. It can still reject through the enabled-within-IUSE term --
+/// real's own n3b oracle cell (a newly added *forced* flag is enabled on
+/// the ebuild side and absent from the binary's baked USE, so
+/// `orig_iuse ∩ orig_use ^ cur_iuse ∩ cur_use` is non-empty).
 #[allow(clippy::too_many_arguments)]
 fn binpkg_respect_use_ok(
     candidate: &Candidate,
@@ -2715,19 +2721,42 @@ fn binpkg_respect_use_ok(
         .split_whitespace()
         .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
         .collect();
-    let (cur_iuse, cur_use) = match ebuild_at_version {
+    let (cur_iuse, cur_use, forced_flags) = match ebuild_at_version {
         Some(ebuild) if ebuild.source != CandidateSource::Binary => {
-            candidate_iuse_and_use(ebuild, category, package, config)
-                .unwrap_or_else(|| (old_iuse.clone(), binary_use.clone()))
+            let ebuild_str = format!(
+                "{category}/{package}-{}:{}/{}::{}",
+                ebuild.version, ebuild.slot, ebuild.sub_slot, ebuild.repo_name
+            );
+            let forced = forced_or_masked_flags(
+                &ebuild.iuse,
+                &ebuild.keywords,
+                &ebuild_str,
+                category,
+                package,
+                config,
+            );
+            let (iuse, use_flags) = candidate_iuse_and_use(ebuild, category, package, config)
+                .unwrap_or_else(|| (old_iuse.clone(), binary_use.clone()));
+            (iuse, use_flags, forced)
         }
         // Real's no-`myeb` arm (`depgraph.py:8265-8271`):
         // `pkgsettings.setcpv(pkg)` -- the profile's selection for the
-        // binary's own cpv over its own IUSE, never the baked USE. See
-        // this function's own doc comment for the #69 R0 capture.
+        // binary's own cpv over its own IUSE, never the baked USE; its
+        // `forced_flags` are the same settings object's
+        // `useforce`/`usemask`. See this function's own doc comment for
+        // the #69 R0 capture.
         _ => {
             let candidate_str = format!(
                 "{category}/{package}-{}:{}/{}::{}",
                 candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
+            );
+            let forced = forced_or_masked_flags(
+                &candidate.iuse,
+                &candidate.keywords,
+                &candidate_str,
+                category,
+                package,
+                config,
             );
             let cur_use = effective_use_flags(
                 config,
@@ -2737,14 +2766,27 @@ fn binpkg_respect_use_ok(
                 category,
                 package,
             );
-            (old_iuse.clone(), cur_use)
+            (old_iuse.clone(), cur_use, forced)
         }
     };
     let old_enabled: HashSet<String> = old_iuse.intersection(binary_use).cloned().collect();
     let cur_enabled: HashSet<String> = cur_iuse.intersection(&cur_use).cloned().collect();
     let mut flags: HashSet<String> = HashSet::new();
     if newuse || (respect_use && !changed_use) {
-        flags.extend(old_iuse.symmetric_difference(&cur_iuse).cloned());
+        // Real's `flags -= forced_flags` (`depgraph.py:3149-3150`) sits
+        // between the IUSE symmetric difference and the enabled-set
+        // union: a flag the profile force/masks never triggers a
+        // rebuild *by its presence alone*, though it can still
+        // contribute through the enabled-within-IUSE term below (the
+        // #69 R0 n3b forced cell rejects exactly that way). Restricted
+        // to the two IUSEs by `forced_or_masked_flags` -- a no-op for
+        // the subtraction, whose input is already a subset of them.
+        let mut presence_diff: HashSet<String> =
+            old_iuse.symmetric_difference(&cur_iuse).cloned().collect();
+        for forced in &forced_flags {
+            presence_diff.remove(forced);
+        }
+        flags.extend(presence_diff);
         flags.extend(old_enabled.symmetric_difference(&cur_enabled).cloned());
     } else if changed_use || respect_use {
         flags.extend(old_enabled.symmetric_difference(&cur_enabled).cloned());
@@ -22281,6 +22323,104 @@ mod tests {
             false,
             false,
             true
+        ));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// #69 R2 / real `depgraph.py:3148-3150` (`flags -= forced_flags`):
+    /// a flag the profile force/masks never rejects a binary through the
+    /// IUSE *presence* difference alone. The ebuild gained a **masked**
+    /// flag (`mflag`, disabled on the ebuild side) and, in the second
+    /// cell, a **forced** one (`fflag`, enabled): the masked cell keeps
+    /// the binary (this is the R0 n3a shape and the regression pin for
+    /// the subtraction), the forced cell rejects through the
+    /// enabled-within-IUSE term instead (R0 n3b).
+    #[test]
+    fn binpkg_respect_use_subtracts_forced_and_masked_flags_like_real() {
+        let dir = slotundo_temp_dir("binpkg-respect-use-forced");
+        let binary = || {
+            let mut c = candidate("1.0", &["amd64"]);
+            c.source = CandidateSource::Binary;
+            c.iuse = "foo".to_string();
+            c.binary_use = Some(HashSet::from(["foo".to_string()]));
+            c
+        };
+        let ebuild_at = |tag: &str, iuse: &str| {
+            let repo = dir.join(format!("repo-{tag}"));
+            fs::create_dir_all(repo.join("metadata/md5-cache/dev-libs")).unwrap();
+            fs::write(
+                repo.join("metadata/md5-cache/dev-libs/x-1.0"),
+                format!("EAPI=8\nIUSE={iuse}\nKEYWORDS=amd64\nSLOT=0\n"),
+            )
+            .unwrap();
+            let mut c = candidate("1.0", &["amd64"]);
+            c.repo_location = repo;
+            c.iuse = iuse.to_string();
+            c
+        };
+        let mut config = test_config();
+        config.conf_use_tokens = vec!["foo".to_string()];
+        config.use_mask_force_levels = vec![portage_profile::UseMaskForceLevel {
+            use_mask: vec!["mflag".to_string()],
+            use_force: vec!["fflag".to_string()],
+            ..Default::default()
+        }];
+
+        // Masked flag added to the ebuild's IUSE: presence difference is
+        // subtracted, enabled states agree (disabled on both sides).
+        let ebuild = ebuild_at("masked", "foo mflag");
+        assert!(binpkg_respect_use_ok(
+            &binary(),
+            Some(&ebuild),
+            "dev-libs",
+            "x",
+            &config,
+            true,
+            false,
+            false
+        ));
+        assert!(binpkg_respect_use_ok(
+            &binary(),
+            Some(&ebuild),
+            "dev-libs",
+            "x",
+            &config,
+            false,
+            false,
+            true
+        ));
+
+        // Forced flag added to the ebuild's IUSE: presence difference is
+        // subtracted too, but the ebuild side now *enables* it, so the
+        // enabled-within-IUSE term rejects -- exactly real's n3b cell.
+        let ebuild = ebuild_at("forced", "foo fflag");
+        assert!(!binpkg_respect_use_ok(
+            &binary(),
+            Some(&ebuild),
+            "dev-libs",
+            "x",
+            &config,
+            true,
+            false,
+            false
+        ));
+
+        // The no-ebuild arm passes the binary cpv's own force/mask set
+        // (real's `pkgsettings.useforce ∪ usemask`), though its presence
+        // term is empty by construction there (`cur_iuse = old_iuse`),
+        // so the outcome is the same keep either way.
+        let mut masked_binary = binary();
+        masked_binary.iuse = "foo mflag".to_string();
+        masked_binary.binary_use = Some(HashSet::from(["foo".to_string()]));
+        assert!(binpkg_respect_use_ok(
+            &masked_binary,
+            None,
+            "dev-libs",
+            "x",
+            &config,
+            true,
+            false,
+            false
         ));
         let _ = fs::remove_dir_all(&dir);
     }
