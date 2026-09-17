@@ -209,6 +209,7 @@ mod build;
 mod cycles;
 mod debug;
 mod digraph;
+mod prelude;
 mod priority;
 mod serialize;
 mod tree_display;

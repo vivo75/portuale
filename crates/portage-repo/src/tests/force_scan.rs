@@ -150,6 +150,118 @@ fn slot_operator_slot_change_probe_schedules_a_moved_installed_child() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// The probe fires for an `Upgrade` parent too; a slot-only `:0` dep never
+/// probes (not a slot-operator atom).
+#[test]
+fn slot_operator_slot_change_probe_fires_for_upgrade_and_ignores_plain_slot_deps() {
+    use md5::Digest as _;
+    use std::fmt::Write as _;
+    let base = slotundo_temp_dir("161-probe");
+    let repo = base.join("repo");
+    let write_pkg = |cp: &str, pv: &str, slot: &str, rdepend: &str| {
+        let (cat, pkg) = cp.split_once('/').expect("category/package");
+        let dir = repo.join(cat).join(pkg);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut body =
+            format!("EAPI=8\nDESCRIPTION=\"161 probe\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\n");
+        if !rdepend.is_empty() {
+            writeln!(body, "RDEPEND=\"{rdepend}\"").unwrap();
+        }
+        std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
+        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+        let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=161 probe\nEAPI=8\n".to_string();
+        if !rdepend.is_empty() {
+            writeln!(entry, "RDEPEND={rdepend}").unwrap();
+        }
+        writeln!(entry, "KEYWORDS=amd64\nSLOT={slot}\n_md5_={md5}").unwrap();
+        let cachedir = repo.join("metadata/md5-cache").join(cat);
+        std::fs::create_dir_all(&cachedir).unwrap();
+        std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+    };
+    write_pkg("dev-libs/probeparentA", "1.0", "0", "dev-libs/probechild:=");
+    write_pkg("dev-libs/probeparentB", "1.0", "0", "dev-libs/probechild:0");
+    write_pkg("dev-libs/probechild", "2.0", "0/1", "");
+    let repos = vec![RepoConfig {
+        name: "testrepo".to_string(),
+        location: repo.clone(),
+        priority: 0,
+        is_main: true,
+        masters: vec![],
+        profile_formats: vec![],
+        cache_formats: vec![],
+        aliases: vec![],
+        sync_type: None,
+        sync_uri: None,
+        volatile: false,
+        module_specific_options: vec![],
+    }];
+    // Installed child moved: vdb 0/9 vs tree 0/1.
+    let vd = base.join("var/db/pkg/dev-libs/probechild-2.0");
+    std::fs::create_dir_all(&vd).unwrap();
+    std::fs::write(vd.join("CATEGORY"), "dev-libs\n").unwrap();
+    std::fs::write(vd.join("SLOT"), "0/9\n").unwrap();
+    std::fs::write(vd.join("repository"), "testrepo\n").unwrap();
+    let child = GraphEntry {
+        discovery: 0,
+        outcome: PretendOutcome::AlreadyInstalled {
+            version: "2.0".into(),
+        },
+        slot: Some("0".into()),
+        sub_slot: Some("9".into()),
+        ..graph_entry("dev-libs", "probechild", "2.0")
+    };
+    let child_cp = ("dev-libs".to_string(), "probechild".to_string());
+    let empty = BTreeSet::new();
+
+    // An `Upgrade` parent probes like a `Reinstall` one.
+    let upgrade_a = GraphEntry {
+        discovery: 0,
+        outcome: PretendOutcome::Upgrade {
+            from: "0.9".into(),
+            to: "1.0".into(),
+        },
+        slot: Some("0".into()),
+        sub_slot: Some("0".into()),
+        ..graph_entry("dev-libs", "probeparentA", "1.0")
+    };
+    let mut scheduled = BTreeSet::new();
+    let mut masked: BTreeSet<(String, String, String)> = BTreeSet::new();
+    slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
+        root: &base,
+        repos: &repos,
+        entries: &[upgrade_a, child.clone()],
+        undone: &empty,
+        scheduled: &mut scheduled,
+        excluded: &[],
+        masked: &mut masked,
+        config: &test_config(),
+    });
+    assert_eq!(
+        scheduled,
+        BTreeSet::from([child_cp.clone()]),
+        "an Upgrade parent probes the moved child"
+    );
+
+    // A plain `:0` dep is not a slot-operator atom: no probe.
+    let new_b = graph_entry("dev-libs", "probeparentB", "1.0");
+    let mut scheduled_b = BTreeSet::new();
+    slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
+        root: &base,
+        repos: &repos,
+        entries: &[new_b, child],
+        undone: &empty,
+        scheduled: &mut scheduled_b,
+        excluded: &[],
+        masked: &mut BTreeSet::new(),
+        config: &test_config(),
+    });
+    assert!(
+        scheduled_b.is_empty(),
+        "a slot-only dep without `=` never probes"
+    );
+    let _ = fs::remove_dir_all(&base);
+}
+
 /// The binary arm masks only when the same-version ebuild is visible (Portage's
 /// `_slot_change_probe`).
 #[test]

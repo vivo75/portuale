@@ -104,3 +104,87 @@ fn replacement_wait_follows_the_selected_disjunctive_branch() {
         "a suppressed wait branch is not followed"
     );
 }
+
+#[test]
+fn kept_alt_for_display_is_derived_once_and_shared() {
+    // The shared kept set must equal the per-call derivation it replaces,
+    // and stays empty when no `Replacement` row can consult it.
+    let root = Path::new("/nonexistent");
+    let plain = entry_with_use(
+        PretendOutcome::New {
+            version: "1.0".into(),
+        },
+        "",
+        "",
+    );
+    assert!(
+        kept_alt_for_display(&[plain], root, 0..1, &HashMap::new()).is_empty(),
+        "no Replacement row means no derivation"
+    );
+
+    let mut owner = entry_with_use(
+        PretendOutcome::Upgrade {
+            from: "1.0".into(),
+            to: "1.1".into(),
+        },
+        "",
+        "",
+    );
+    owner.package = "bparent".into();
+    let blocker = BlockerConflict {
+        atom_str: "!<dev-libs/blocked-2.0".into(),
+        strong: false,
+        matched_category: "dev-libs".into(),
+        matched_package: "blocked".into(),
+        matched_version: "1.0".into(),
+        unsolvable: false,
+        satisfied_by: Some(BlockerSatisfiedBy::Replacement {
+            cp: ("dev-libs".into(), "blocked".into()),
+            slot: "0".into(),
+        }),
+        tree_scheduled_uninstall: false,
+    };
+    owner.blockers = vec![blocker.clone()];
+    let mut replacement = entry_with_use(
+        PretendOutcome::Upgrade {
+            from: "1.0".into(),
+            to: "2.0".into(),
+        },
+        "",
+        "",
+    );
+    replacement.package = "blocked".into();
+    replacement.deps = vec![portage_repo::DepEdge {
+        atom: "~dev-libs/bparent-1.1".to_string(),
+        evaluated: "~dev-libs/bparent-1.1".to_string().clone(),
+        category: "dev-libs".into(),
+        package: "bparent".into(),
+        priority: portage_repo::DepPriority {
+            runtime: true,
+            ..portage_repo::DepPriority::default()
+        },
+        disjunctive: true,
+        alt: Some((0, 0)),
+        key: 4,
+    }];
+    let entries = [owner, replacement];
+    let shared = kept_alt_for_display(&entries, root, 0..entries.len(), &HashMap::new());
+    assert_eq!(
+        kept_alt_for_display(&entries, root, [0], &HashMap::new()),
+        shared
+    );
+    assert!(kept_alt_for_display(&entries, root, [1], &HashMap::new()).is_empty());
+    let on_demand = portage_repo::kept_alt_branches(&entries, root, &HashMap::new());
+    assert_eq!(
+        shared, on_demand,
+        "the shared set is the derivation it replaces"
+    );
+    assert_eq!(
+        replacement_wait_index(&entries, root, 0, &blocker, &shared),
+        Some(1)
+    );
+    assert_eq!(
+        replacement_wait_index(&entries, root, 0, &blocker, &[]),
+        None
+    );
+}
