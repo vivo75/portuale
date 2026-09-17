@@ -14800,19 +14800,25 @@ fn owner_set_parent(
 /// site treats it as a non-merge (`PretendOutcome::Uninstall`'s own doc
 /// comment). `deps` stays empty -- the removal has no dependency walk.
 fn uninstall_entry(
+    root: &Path,
     category: String,
     package: String,
     version: String,
     owners: Vec<(String, String)>,
 ) -> GraphEntry {
+    // The removed instance's own slot/sub-slot/repo, so `-pv` decorates
+    // the row the way real's vardb-backed uninstall `Package` does
+    // (`output.py:523-524`; repo falls back to `__unknown__`).
+    let (slot, sub_slot) = read_vdb_slot(root, &category, &package, &version);
+    let repo_name = installed_pkg_repo(root, &category, &package, &version);
     GraphEntry {
         category,
         package,
         outcome: PretendOutcome::Uninstall { version },
         blockers: Vec::new(),
-        slot: None,
-        sub_slot: None,
-        repo_name: None,
+        slot: Some(slot),
+        sub_slot: Some(sub_slot),
+        repo_name: Some(repo_name),
         oldbest: Vec::new(),
         use_flags_display: Vec::new(),
         use_expand_display: Vec::new(),
@@ -14858,6 +14864,7 @@ struct PendingRemoval {
 /// installed package itself.
 fn file_blocker_conflicts(
     entries: &mut Vec<GraphEntry>,
+    root: &Path,
     conflicts: Vec<((String, String), BlockerConflict)>,
 ) {
     let mut removals: Vec<PendingRemoval> = Vec::new();
@@ -14897,7 +14904,7 @@ fn file_blocker_conflicts(
     entries.extend(
         removals
             .into_iter()
-            .map(|r| uninstall_entry(r.category, r.package, r.version, r.owners)),
+            .map(|r| uninstall_entry(root, r.category, r.package, r.version, r.owners)),
     );
 }
 
@@ -20678,7 +20685,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         &state.entries,
         &ctx.blocker_retry_closure,
     );
-    file_blocker_conflicts(&mut state.entries, conflicts);
+    file_blocker_conflicts(&mut state.entries, ctx.root, conflicts);
 
     if !state.required_use_violations.is_empty() {
         // Each block is self-delimiting (leading + trailing newline).

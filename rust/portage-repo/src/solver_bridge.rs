@@ -644,7 +644,7 @@ fn graph_result_from_order(
         // The bridge engines have no required-set closure of their own.
         &std::collections::HashSet::new(),
     );
-    super::file_blocker_conflicts(&mut entries, conflicts);
+    super::file_blocker_conflicts(&mut entries, &req.root, conflicts);
     // ABI rebuilds (H.15, last slice): an installed consumer whose
     // built `cat/pkg:S/SS=` dep no longer matches how this plan leaves
     // that slot is scheduled for a reinstall -- the walk's own

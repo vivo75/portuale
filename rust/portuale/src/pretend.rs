@@ -664,7 +664,7 @@ fn package_counters_summary(
     let plural = |n: u64| if n > 1 { "s" } else { "" };
     let (mut upgrades, mut downgrades, mut new, mut newslot, mut reinst) =
         (0u64, 0u64, 0u64, 0u64, 0u64);
-    let (mut binary, mut interactive) = (0u64, 0u64);
+    let (mut binary, mut interactive, mut uninst) = (0u64, 0u64, 0u64);
     // #72 B1/B2: exactly the rows the merge list carries
     // (`count_blocker_rows`), the same disposition split the line printer
     // uses.
@@ -699,12 +699,15 @@ fn package_counters_summary(
                 reinst += 1;
                 true
             }
-            // #72 B3: a removal counts nothing yet -- B4 adds real's
-            // `counters.uninst` (after `binary`, before `interactive`, not
-            // part of `total_installs`).
-            PretendOutcome::AlreadyInstalled { .. }
-            | PretendOutcome::NoVisibleCandidate
-            | PretendOutcome::Uninstall { .. } => false,
+            // #72 B4: real `set_pkg_info` counts an ordered uninstall
+            // node (`output.py:619-621`); it is rendered in the `Total:`
+            // details after `binary`, before `interactive`, and is not
+            // part of `total_installs`.
+            PretendOutcome::Uninstall { .. } => {
+                uninst += 1;
+                false
+            }
+            PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::NoVisibleCandidate => false,
         };
         if merge_bound {
             if entry.source == portage_repo::CandidateSource::Binary {
@@ -756,6 +759,9 @@ fn package_counters_summary(
             "{binary} {}",
             if binary > 1 { "binaries" } else { "binary" }
         ));
+    }
+    if uninst > 0 {
+        details.push(format!("{uninst} uninstall{}", plural(uninst)));
     }
     if interactive > 0 {
         // Real `_PackageCounters.__str__`: `colorize("WARN", "interactive")`
@@ -866,9 +872,24 @@ fn blocker_row_disposition(
                 None => BlockerRowDisposition::Hidden,
             }
         }
-        // Not-yet-classified satisfied rows (B2c/B3/B4) and unresolved
-        // rows keep the trailing group.
-        _ => BlockerRowDisposition::Trailing,
+        // #72 B4: a row resolved by a removal prints inline right after
+        // that removal's `[uninstall]` row (real appends the solved
+        // blocker when the uninstall node is selected, `depgraph.py:
+        // 10351-10358`; B0 u6 has the `b` between the uninstall row and
+        // the trailing unsatisfied group). If the removal entry is
+        // missing (an owner the bridge dropped) the row keeps the
+        // trailing group, the pre-B4 shape.
+        Some(BlockerSatisfiedBy::Uninstall { cpv }) => {
+            match entries.iter().position(|e| {
+                matches!(&e.outcome, PretendOutcome::Uninstall { version }
+                    if format!("{}/{}-{version}", e.category, e.package) == *cpv)
+            }) {
+                Some(index) => BlockerRowDisposition::Inline(index),
+                None => BlockerRowDisposition::Trailing,
+            }
+        }
+        // Unresolved rows keep the trailing group.
+        None => BlockerRowDisposition::Trailing,
     }
 }
 
@@ -1480,10 +1501,40 @@ fn print_entry_line(
                 blocker_lines.push(format_blocker_row(entry, !quiet, color, b));
             }
         }
-        PretendOutcome::Uninstall { .. } => {
-            // #72 B3: the removal row is not rendered yet -- the display
-            // skip keeps every pin byte-identical; #72 B4 prints real's
-            // `[uninstall     ] <cpv>` line here.
+        PretendOutcome::Uninstall { version } => {
+            // Real `_set_no_columns`' non-merge bracket arm
+            // (`output.py:514-529`) with `PKG_UNINSTALL` (`:285-286`):
+            // `[uninstall     ] <cpv> `, one fewer pad space under `-q`
+            // (verbosity 1 -> `empty_space_in_brackets()` is empty,
+            // u5b), and skipped entirely under `--columns`
+            // (`output.py:869`, u5a). `-pv` decorates the cpv like every
+            // other row (`_append_slot`/`_append_repository`, `:523-524`);
+            // a non-"/" ROOT's `to <root>` stays the pre-existing
+            // divergence portuale has on every row (only `--root-deps`
+            // build entries carry it, `root_suffix`).
+            if columns {
+                return;
+            }
+            let pad = if quiet { "    " } else { "     " };
+            let mut tail = String::from(" ");
+            if !root_annotation.is_empty() {
+                // `darkgreen("to " + pkg.root)`, same as `root_col` inside
+                // the merge `emit` closure.
+                tail.push_str(&color.c("darkgreen", &root_annotation));
+            }
+            println!(
+                "[{}{pad}] {indent}{}{tail}",
+                color.c("PKG_UNINSTALL", "uninstall"),
+                color.c(
+                    "PKG_UNINSTALL",
+                    &format!(
+                        "{}/{}-{}",
+                        entry.category,
+                        entry.package,
+                        disp_version(version)
+                    ),
+                ),
+            );
         }
         PretendOutcome::NoVisibleCandidate => {
             // USE-unsatisfied dependency disclosure (backlog #20, real
@@ -2315,12 +2366,8 @@ fn print_json(
     verbose: bool,
     running_root: Option<&Path>,
 ) {
-    // #72 B3: a blocker-removal entry is skipped in `--json` until B4
-    // adds its outcome string (real has no `--json` equivalent; the
-    // filter keeps every existing `--json` pin byte-identical).
     let entries_json: Vec<String> = entries
         .iter()
-        .filter(|e| !matches!(e.outcome, PretendOutcome::Uninstall { .. }))
         .enumerate()
         .map(|(i, e)| entry_to_json(e, i, top_level_pkgs, verbose, running_root))
         .collect();

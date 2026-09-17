@@ -8101,9 +8101,13 @@ def test_strong_blocker_matches_an_installed_package(emerge_binary, fixture_env)
     that portuale does not yet model -- backlog #72."""
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/blockerpkg"], fixture_env)
     assert result.returncode == 0
-    # plain --pretend (verbosity 2) shows no Total:/Conflict: line
+    # plain --pretend (verbosity 2) shows no Total:/Conflict: line. #72 B4
+    # adds real's `[uninstall     ]` row between the owner and the blocker
+    # line (B0 u1; real's own row also carries `to <root>` for a non-"/"
+    # ROOT, the pre-existing portuale-wide divergence).
     assert result.stdout.splitlines() == [
-        '[ebuild  N     ] dev-libs/blockerpkg-1.0 ',
+        "[ebuild  N     ] dev-libs/blockerpkg-1.0 ",
+        "[uninstall     ] dev-libs/samepkg-1.0 ",
         '[blocks b      ] dev-libs/samepkg ("dev-libs/samepkg" is hard blocking dev-libs/blockerpkg-1.0)',
     ]
 
@@ -8149,17 +8153,20 @@ def test_blocker_lines_print_after_every_package_line_not_inline(
 ):
     """dev-libs/blockerorderpkg RDEPENDs "!!dev-libs/samepkg" *and*
     dev-libs/newpkg, so its blocker's owner (blockerorderpkg itself) is
-    the first graph entry while a non-blocker dep follows it. Real
-    Display collects blocker lines and prints them as one group after
-    print_messages() -- so the block line lands after dev-libs/newpkg,
-    not interleaved right after its owner. Real 3.0.82.2 oracle
-    (container, 2026-09-16): samepkg is unwalked -> satisfied `b`, rc 0
-    (+ real's `[uninstall]` row, backlog #72)."""
+    the first graph entry while a non-blocker dep follows it. The
+    **unsatisfied** group still prints after every package line (real
+    Display.print_blockers) -- but a **satisfied** `b` line is inline
+    (T7): #72 B4 pins it right after the `[uninstall     ]` row real
+    appends when the uninstall task is selected, exactly B0 u3
+    (`newpkg`, `blockerorderpkg`, `[uninstall] samepkg`, `[blocks b]`).
+    Real 3.0.82.2 oracle (container, 2026-09-16/17): samepkg is
+    unwalked -> satisfied `b` + uninstall row, rc 0."""
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/blockerorderpkg"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        '[ebuild  N     ] dev-libs/newpkg-1.0 ',
-        '[ebuild  N     ] dev-libs/blockerorderpkg-1.0 ',
+        "[ebuild  N     ] dev-libs/newpkg-1.0 ",
+        "[ebuild  N     ] dev-libs/blockerorderpkg-1.0 ",
+        "[uninstall     ] dev-libs/samepkg-1.0 ",
         '[blocks b      ] dev-libs/samepkg ("dev-libs/samepkg" is hard blocking dev-libs/blockerorderpkg-1.0)',
     ]
 
@@ -8177,10 +8184,84 @@ def test_blocker_line_is_coloured_under_color_y(emerge_binary, fixture_env):
     assert result.returncode == 0
     T = "\x1b[36m"
     Z = "\x1b[39;49;00m"
+    R = "\x1b[31;01m"
+    # #72 B4: the uninstall row's `uninstall` word and cpv are red
+    # (PKG_UNINSTALL, real output.py:285-286; B0 u5c), the satisfied `b`
+    # line stays teal right after it.
     assert result.stdout.splitlines()[1] == (
+        f"[{R}uninstall{Z}     ] {R}dev-libs/samepkg-1.0::__unknown__{Z} "
+    )
+    assert result.stdout.splitlines()[2] == (
         f"[{T}blocks{Z} {T}b{Z}      ] {T}dev-libs/samepkg{Z}"
         f'{T} ("dev-libs/samepkg" is hard blocking dev-libs/blockerpkg-1.0){Z}'
     )
+
+
+def test_oracle_b4_uninstall_row_counters_and_quiet_shape(emerge_binary, fixture_env):
+    """Backlog #72 B4, B0 u2/u5b: the `-pv` row set is the B0 u2 capture --
+    `[uninstall     ] dev-libs/samepkg-1.0::__unknown__ ` (the removed
+    instance's vdb repo decoration, real `_append_repository`), the
+    `uninstall` detail right after `new` in `Total:` and outside
+    `total_installs`, and `Conflict: 1 block (all satisfied)`. Under `-q`
+    the bracket loses one pad space (`[uninstall    ]`, real
+    `empty_space_in_brackets()` at verbosity 1).
+
+    Container oracle, real 3.0.82.2 (`TEST/findings/l0.md` "#68/#72 B0",
+    u2/u5b).
+    """
+    result = _run([str(emerge_binary)], ["--pretend", "-v", "dev-libs/blockerpkg"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N     ] dev-libs/blockerpkg-1.0::testrepo ",
+        "[uninstall     ] dev-libs/samepkg-1.0::__unknown__ ",
+        '[blocks b      ] dev-libs/samepkg ("dev-libs/samepkg" is hard blocking dev-libs/blockerpkg-1.0)',
+        "",
+        "Total: 1 package (1 new, 1 uninstall), Size of downloads: 0 KiB",
+        "Conflict: 1 block (all satisfied)",
+    ], result.stdout
+
+    quiet = _run(
+        [str(emerge_binary)], ["--pretend", "-q", "dev-libs/blockerpkg"], fixture_env
+    )
+    assert quiet.returncode == 0
+    assert quiet.stdout.splitlines() == [
+        "[ebuild  N    ] dev-libs/blockerpkg-1.0 ",
+        "[uninstall    ] dev-libs/samepkg-1.0 ",
+        '[blocks b     ] dev-libs/samepkg ("dev-libs/samepkg" is hard blocking dev-libs/blockerpkg-1.0)',
+    ], quiet.stdout
+
+
+def test_oracle_b4_satisfied_blocker_prints_after_the_uninstall_row(
+    emerge_binary, fixture_env
+):
+    """Backlog #72 B4, B0 u6: with a satisfied block and an unsatisfied one
+    in the same run, the satisfied `b` line prints **inline right after
+    its uninstall row** (real `_serialize_tasks` appends the solved
+    blocker when it selects the uninstall node,
+    `depgraph.py:10351-10358`), while the unresolved `B` stays in the
+    trailing group after every package and satisfied line; rc 1 with the
+    Error block on stderr.
+
+    Container oracle, real 3.0.82.2 (`TEST/findings/l0.md` "#68/#72 B0",
+    u6).
+    """
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "dev-libs/blockerpkg", "dev-libs/graphblockerparent"],
+        fixture_env,
+    )
+    assert result.returncode == 1
+    assert result.stdout.splitlines() == [
+        "[ebuild  N     ] dev-libs/blockerpkg-1.0 ",
+        "[ebuild  N     ] dev-libs/blockerpartnerpkg-1.0 ",
+        "[ebuild  N     ] dev-libs/weakblockerpkg-1.0 ",
+        "[ebuild  N     ] dev-libs/graphblockerparent-1.0 ",
+        "[uninstall     ] dev-libs/samepkg-1.0 ",
+        '[blocks b      ] dev-libs/samepkg ("dev-libs/samepkg" is hard blocking dev-libs/blockerpkg-1.0)',
+        '[blocks B      ] dev-libs/blockerpartnerpkg ("dev-libs/blockerpartnerpkg" is soft '
+        "blocking dev-libs/weakblockerpkg-1.0)",
+    ], result.stdout
+    assert "installed at the same time" in result.stderr
 
 
 def test_unrelated_package_reports_no_blockers(emerge_binary, fixture_env):
@@ -9603,12 +9684,14 @@ def test_pv_totals_summary_line(emerge_binary, fixture_env):
     assert installed.stdout.splitlines()[-1] == "Total: 0 packages, Size of downloads: 0 KiB"
 
     # A satisfied blocker (samepkg is installed but nothing walked pulls
-    # it in; real uninstalls it) adds a trailing `Conflict: N block (all
-    # satisfied)` line -- real 3.0.82.2 oracle, 2026-09-16.
+    # it in; real uninstalls it) adds the `1 uninstall` detail (#72 B4,
+    # real `counters.uninst`, not part of `total_installs`) and a
+    # trailing `Conflict: N block (all satisfied)` line -- real 3.0.82.2
+    # oracle, 2026-09-16/17 (B0 u2).
     blk = _run([str(emerge_binary)], ["--pretend", "-v", "dev-libs/blockerpkg"], fixture_env)
     assert blk.returncode == 0
     assert blk.stdout.splitlines()[-2:] == [
-        "Total: 1 package (1 new), Size of downloads: 0 KiB",
+        "Total: 1 package (1 new, 1 uninstall), Size of downloads: 0 KiB",
         "Conflict: 1 block (all satisfied)",
     ]
 
@@ -17092,10 +17175,11 @@ def test_oracle_b2c_uninstall_resolved_block_sees_the_complete_mode_sets(
     assert control.returncode == 0
     assert control.stdout.splitlines() == [
         "[ebuild  N     ] dev-libs/bparent-1.0::testrepo ",
+        "[uninstall     ] dev-libs/blocked-1.0::testrepo ",
         '[blocks b      ] <dev-libs/blocked-2.0 ("<dev-libs/blocked-2.0" is soft '
         "blocking dev-libs/bparent-1.0)",
         "",
-        "Total: 1 package (1 new), Size of downloads: 0 KiB",
+        "Total: 1 package (1 new, 1 uninstall), Size of downloads: 0 KiB",
         "Conflict: 1 block (all satisfied)",
     ], control.stdout
 
