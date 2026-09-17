@@ -12412,6 +12412,33 @@ pub fn resolve_pretend(
     }
 }
 
+/// What resolves a blocker row that is not
+/// [`BlockerConflict::unsolvable`] (#68/#72 B1). Real's
+/// `_serialize_tasks` only *appends* a solved blocker to the merge list
+/// when its uninstall task was scheduled (`depgraph.py:10190`,
+/// `:10351-10358`), and a `--columns` display suppresses it regardless
+/// (`output.py:120`); carrying the reason lets the renderer decide
+/// placement without re-deriving it from the entries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BlockerSatisfiedBy {
+    /// A merge-bound entry of the blocked cp replaces the installed match
+    /// **in its own slot** (`_package_tracker.add_pkg` discards the
+    /// superseded installed node), so the replacement merge resolves the
+    /// block. `cp` is `(category, package)`; `slot` is the replaced
+    /// instance's slot. `TEST/findings/l0.md` "#68/#72 B0b": real prints
+    /// the inline `b` for this shape exactly when the replacement waits
+    /// on the owner's merge (p2c/p2d/p2e), never otherwise (flat p2b).
+    Replacement { cp: (String, String), slot: String },
+    /// An uninstall task resolves the block: the installed match survives
+    /// as the graph's blocked instance and is removed instead of being
+    /// replaced (real's `scheduled_uninstalls`/`_blocker_uninstalls`
+    /// path). Reserved: #72 B2c/B3/B4 classify these arms (the uninstall
+    /// target's cpv is the D1 `PretendOutcome::Uninstall` entry's own
+    /// cpv, so B1 deliberately does not guess it) and B4 renders its
+    /// `[uninstall]` row and the inline `b`.
+    Uninstall { cpv: String },
+}
+
 /// A blocker atom (from a package's own dependency strings) that matches
 /// either a currently-installed package or another package this same
 /// `resolve_pretend_graph` run would also newly merge/upgrade. Purely
@@ -12434,6 +12461,14 @@ pub struct BlockerConflict {
     /// counts it in `Conflict: N blocks (M unsatisfied)`, prints the
     /// `* Error: The above package list …` block, and exits 1.
     pub unsolvable: bool,
+    /// What resolves this row (#68/#72 B1). Only the `Replacement` arm is
+    /// classified in B1, so today this is `Some(Replacement { .. })` for a
+    /// replaced-in-slot installed match and `None` for every other row
+    /// (unsolvable and not-yet-classified alike); #72 B2/B2c/B3/B4 narrow
+    /// `None` to the unsolvable rows and tag the uninstall-resolved ones.
+    /// `Replacement` rows are carried on the owner but hidden by the
+    /// renderer until B2 models real's scheduling predicate.
+    pub satisfied_by: Option<BlockerSatisfiedBy>,
 }
 
 /// One installed package portuale's renderer needs to name in an
@@ -14855,10 +14890,17 @@ fn resolve_blockers(
         // node), so the blocker atom never matches it there. The installed
         // match still exists in `blocked_initial`, but real
         // uninstall-orders it and, when it is not a graph node (the
-        // replacement is), resolves the block to the satisfied `b` --
-        // rendered as no block row at all, because the replacement merge
-        // removes it. This is the host `@world` shape: `<gtk-doc-1.36.1`
-        // matching installed `gtk-doc-1.34.0` while 1.36.1 upgrades it.
+        // replacement is), resolves the block to the satisfied `b`. This
+        // is the host `@world` shape: `<gtk-doc-1.36.1` matching installed
+        // `gtk-doc-1.34.0` while 1.36.1 upgrades it, and the B0b
+        // p2c/p2d/p2e cells. #72 B1: the row is *kept* with
+        // `satisfied_by: Replacement` instead of being dropped, because
+        // real does display it when `_serialize_tasks` is stuck and
+        // schedules the uninstall (`depgraph.py:9998`, `:10190`,
+        // `:10351-10358`; `TEST/findings/l0.md` "#68/#72 B0b"). Whether
+        // it displays is B2's mechanism predicate; until then the
+        // renderer hides `Replacement` rows, exactly reproducing the old
+        // dropped-row bytes.
         for m in matched {
             let Some((version, slot, sub_slot)) = by_str.get(m).copied() else {
                 continue;
@@ -14875,14 +14917,29 @@ fn resolve_blockers(
                     && e.slot.as_deref() == Some(slot.as_str())
                     && merge_bound_version(&e.outcome).is_some_and(|v2| v2 == version)
             });
-            if installed_match
+            let replaced_in_slot = installed_match
                 && entries.iter().any(|e| {
                     e.category == pb.target_category
                         && e.package == pb.target_package
                         && e.slot.as_deref() == Some(slot.as_str())
                         && merge_bound_version(&e.outcome).is_some_and(|v2| v2 != version)
-                })
-            {
+                });
+            if replaced_in_slot {
+                conflicts.push((
+                    pb.owner_key.clone(),
+                    BlockerConflict {
+                        atom_str: pb.atom_str.clone(),
+                        strong: pb.strong,
+                        matched_category: pb.target_category.clone(),
+                        matched_package: pb.target_package.clone(),
+                        matched_version: version.clone(),
+                        unsolvable: false,
+                        satisfied_by: Some(BlockerSatisfiedBy::Replacement {
+                            cp: (pb.target_category.clone(), pb.target_package.clone()),
+                            slot: slot.clone(),
+                        }),
+                    },
+                ));
                 continue;
             }
             // #68 S2: real's `parent.operation` for this blocker owner --
@@ -14964,6 +15021,15 @@ fn resolve_blockers(
                     matched_category: pb.target_category.clone(),
                     matched_package: pb.target_package.clone(),
                     matched_version: version.clone(),
+                    // #72 B1 is deliberately narrow: only the
+                    // `replaced_in_slot` arm above tags its row
+                    // (`Replacement`). Every other row -- including the
+                    // installed-only matches a later slice will resolve
+                    // through an uninstall task -- stays exactly as
+                    // before (`satisfied_by: None`), so this slice moves
+                    // no existing pin (#72 B2c/B3/B4 own the tagging and
+                    // the `[uninstall]` row's target cpv).
+                    satisfied_by: None,
                     unsolvable,
                 },
             ));
@@ -34193,6 +34259,8 @@ mod tests {
                 matched_package: "samepkg".to_string(),
                 matched_version: "1.0".to_string(),
                 unsolvable: false,
+                // #72 B1 leaves the not-yet-classified arms at `None`.
+                satisfied_by: None,
             }]
         );
     }
@@ -34234,6 +34302,7 @@ mod tests {
                 // `[blocks B]` for this merge-vs-merge shape -- a
                 // merge-bound match with a merging parent is unresolved.
                 unsolvable: true,
+                satisfied_by: None,
             }]
         );
     }
@@ -36025,6 +36094,7 @@ mod tests {
                     // parent is unresolved outright -- real prints `B`
                     // and exits 1. The pre-S2 expectation was `false`.
                     unsolvable: true,
+                    satisfied_by: None,
                 }
             )]
         );
@@ -36086,10 +36156,12 @@ mod tests {
     }
 
     #[test]
-    fn resolve_blockers_drops_an_installed_match_replaced_in_its_slot() {
-        // #68 S1 (cell a): installed `blocked-1.0:0` is replaced by the
-        // merge-bound `blocked-2.0:0`, so real's tracker no longer holds
-        // it and the block does not fire at all.
+    fn resolve_blockers_keeps_an_installed_match_replaced_in_its_slot_as_satisfied() {
+        // #68 S1 / #72 B1 (cell a): installed `blocked-1.0:0` is replaced
+        // by the merge-bound `blocked-2.0:0`, so real's tracker no longer
+        // holds it and the block resolves to the replacement merge. Since
+        // B1 the row is kept, tagged `Replacement`; the renderer hides it
+        // until B2 models real's scheduling predicate.
         let dir = slotundo_temp_dir("blocker-s1-a");
         slotundo_vdb(&dir, "blocked", "1.0", "0", "", "");
         let owner = graph_entry("dev-libs", "bparent", "1.0");
@@ -36108,13 +36180,23 @@ mod tests {
             owner_merging: true,
         };
         let conflicts = resolve_blockers(&dir, &[pending], &[owner, upgrade], &HashSet::new());
-        assert!(
-            conflicts.is_empty(),
-            "a replaced-in-slot installed match contributes no block row"
+        assert_eq!(
+            conflicts.len(),
+            1,
+            "a replaced-in-slot installed match keeps its row"
+        );
+        assert!(!conflicts[0].1.unsolvable);
+        assert_eq!(
+            conflicts[0].1.satisfied_by,
+            Some(BlockerSatisfiedBy::Replacement {
+                cp: ("dev-libs".to_string(), "blocked".to_string()),
+                slot: "0".to_string(),
+            })
         );
 
         // Cell a': the replacement targets a *different* slot, so the
-        // installed row survives (real's same-slot replacement rule).
+        // installed match is not replaced (real's same-slot replacement
+        // rule); the block is resolved by uninstalling it instead.
         let owner = graph_entry("dev-libs", "bparent", "1.0");
         let mut other_slot = graph_entry("dev-libs", "blocked", "2.0");
         other_slot.slot = Some("1".to_string());
@@ -36135,9 +36217,14 @@ mod tests {
             "a different-slot replacement keeps the row"
         );
         assert!(!conflicts[0].1.unsolvable);
+        assert_eq!(
+            conflicts[0].1.satisfied_by, None,
+            "a non-replacement satisfied row is unchanged in B1"
+        );
 
         // Cell b: a same-version reinstall is merge-bound in the tracker,
-        // so it must not be treated as "replaced" -- the row survives.
+        // so it must not be treated as "replaced" -- the row survives
+        // unresolved.
         let owner = graph_entry("dev-libs", "bparent", "1.0");
         let mut reinstall = graph_entry("dev-libs", "blocked", "1.0");
         reinstall.outcome = PretendOutcome::Reinstall {
@@ -36164,6 +36251,8 @@ mod tests {
             1,
             "a same-version reinstall is merge-bound"
         );
+        assert!(conflicts[0].1.unsolvable);
+        assert_eq!(conflicts[0].1.satisfied_by, None);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -36314,15 +36403,37 @@ mod tests {
         assert!(conflicts.is_empty(), "nomerge parent, installed match");
         // Cell g: same, but a merge-bound match survives; unresolved only
         // when the owner itself is a walked node with parents.
+        //
+        // #72 B1: the atom matches **two** instances here -- the installed
+        // 1.0 (replaced in-slot by the 1.5, so it now carries a hidden
+        // `Replacement` row) and the merge-bound 1.5 (the row real's
+        // tracker still holds, whose state the owner's parents decide).
         let conflicts = resolve_blockers(
             &dir,
             &[pb("!<dev-libs/blocked-2.0", "bparent")],
             &[installed("bparent"), blocked_upgrade("1.5")],
             &HashSet::new(),
         );
-        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts.len(), 2, "installed 1.0 + merge-bound 1.5");
+        assert_eq!(
+            conflicts
+                .iter()
+                .find(|(_, c)| c.matched_version == "1.0")
+                .expect("installed 1.0 row")
+                .1
+                .satisfied_by,
+            Some(BlockerSatisfiedBy::Replacement {
+                cp: ("dev-libs".to_string(), "blocked".to_string()),
+                slot: "0".to_string(),
+            })
+        );
         assert!(
-            !conflicts[0].1.unsolvable,
+            !conflicts
+                .iter()
+                .find(|(_, c)| c.matched_version == "1.5")
+                .expect("merge-bound 1.5 row")
+                .1
+                .unsolvable,
             "nomerge parent, no graph parents"
         );
         let mut parent_walker = installed("consumer");
@@ -36333,9 +36444,14 @@ mod tests {
             &[installed("bparent"), blocked_upgrade("1.5"), parent_walker],
             &HashSet::new(),
         );
-        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts.len(), 2);
         assert!(
-            conflicts[0].1.unsolvable,
+            conflicts
+                .iter()
+                .find(|(_, c)| c.matched_version == "1.5")
+                .expect("merge-bound 1.5 row")
+                .1
+                .unsolvable,
             "nomerge parent with graph parents"
         );
         // #73 cell g: the owner has no walked parent entry, but it is in
@@ -36349,9 +36465,14 @@ mod tests {
             &[installed("bparent"), blocked_upgrade("1.5")],
             &closure,
         );
-        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts.len(), 2);
         assert!(
-            conflicts[0].1.unsolvable,
+            conflicts
+                .iter()
+                .find(|(_, c)| c.matched_version == "1.5")
+                .expect("merge-bound 1.5 row")
+                .1
+                .unsolvable,
             "#73 cell g: the required-set closure is a parent"
         );
         // #73 S0 cell f / T11: the same closure membership must NOT make

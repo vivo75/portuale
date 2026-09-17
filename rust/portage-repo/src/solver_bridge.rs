@@ -1389,6 +1389,7 @@ mod tests {
                 matched_version: "1.0".to_string(),
                 // #68 S2: merge-bound match, merging parent -> unresolved.
                 unsolvable: true,
+                satisfied_by: None,
             }]
         );
 
@@ -1417,8 +1418,10 @@ mod tests {
                     // #68 S3: the installed fixtures that RDEPEND on
                     // samepkg are not walked graph nodes here, so real
                     // uninstalls it (`b`, rc 0); pre-S3 this was `true`
-                    // from the vdb reverse scan.
+                    // from the vdb reverse scan. #72 B1 leaves the
+                    // uninstall-resolved arms untagged.
                     unsolvable: false,
+                    satisfied_by: None,
                 }]
             );
         }

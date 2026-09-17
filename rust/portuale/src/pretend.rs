@@ -217,9 +217,9 @@ use portage_dep::{
     Atom, Blocker, Operator, SlotOperator, match_from_list, parse_atom, use_mismatch_flags,
 };
 use portage_repo::{
-    ChangedDepsReportEntry, GraphEntry, PretendOutcome, ResolveRequest, SlotConflict,
-    active_resolver_for, all_installed_packages, config_root_from_env, ebuild_visible_at,
-    root_from_env, slot_conflict_flag_sets,
+    BlockerConflict, BlockerSatisfiedBy, ChangedDepsReportEntry, GraphEntry, PretendOutcome,
+    ResolveRequest, SlotConflict, active_resolver_for, all_installed_packages,
+    config_root_from_env, ebuild_visible_at, root_from_env, slot_conflict_flag_sets,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -669,8 +669,16 @@ fn package_counters_summary(
     let mut totalsize: u64 = 0;
     let mut fetched: HashSet<&str> = HashSet::new();
     for entry in entries {
-        blocks += entry.blockers.len() as u64;
-        blocks_unsolvable += entry.blockers.iter().filter(|b| b.unsolvable).count() as u64;
+        // #72 B1: only displayed rows are counted, the same
+        // `blocker_row_hidden` split the line printer uses -- real counts
+        // exactly the blockers it appended to the merge list
+        // (`output_helpers.py:104-160`).
+        for b in entry.blockers.iter().filter(|b| !blocker_row_hidden(b)) {
+            blocks += 1;
+            if b.unsolvable {
+                blocks_unsolvable += 1;
+            }
+        }
         let suppressed =
             onlydeps && top_level_pkgs.contains(&(entry.category.clone(), entry.package.clone()));
         if suppressed {
@@ -797,15 +805,29 @@ fn package_counters_summary(
     out
 }
 
+/// #68/#72 B1: a `Replacement`-satisfied blocker row is carried on its
+/// owner but contributes nothing to the display or the counters yet,
+/// exactly as when `resolve_blockers` dropped it. Real appends such a row
+/// to the merge list only when `_serialize_tasks` is stuck and schedules
+/// the blocker's uninstall (`depgraph.py:9998`, `:10190`, `:10351-10358`;
+/// `TEST/findings/l0.md` "#68/#72 B0b" p2c/p2d/p2e vs flat p2b); #72 B2
+/// ports that mechanism predicate, and only then should this hide the
+/// row. `Uninstall`-satisfied rows keep their current trailing display --
+/// #72 B4 moves them inline with their own `[uninstall]` row.
+fn blocker_row_hidden(b: &BlockerConflict) -> bool {
+    matches!(b.satisfied_by, Some(BlockerSatisfiedBy::Replacement { .. }))
+}
+
 /// Real `ResolverOutput._blockers` (`output.py:75-123`): one
 /// `[blocks B     ] <resolved> ("<atom>" is {hard,soft} blocking
-/// <parents>)` line per blocker on `entry`. Purely informational (see
-/// `resolve_pretend_graph`'s doc comment) -- v1 neither refuses nor
-/// changes the exit code for a blocker match. Collected into a `Vec`
-/// rather than printed inline: real `Display` gathers blocker lines
-/// while walking the entries and prints them as one group *after* every
-/// package line (real `output.py::display` -> `print_messages()` then
-/// `print_blockers()`).
+/// <parents>)` line per *displayed* blocker on `entry` (a
+/// `Replacement`-satisfied row is skipped -- see `blocker_row_hidden`).
+/// Purely informational (see `resolve_pretend_graph`'s doc comment) -- v1
+/// neither refuses nor changes the exit code for a blocker match.
+/// Collected into a `Vec` rather than printed inline: real `Display`
+/// gathers blocker lines while walking the entries and prints them as one
+/// group *after* every package line (real `output.py::display` ->
+/// `print_messages()` then `print_blockers()`).
 ///
 /// Since #68 S2/S3 a row can be *satisfied* (real
 /// `blocker.satisfied`): the red `B` / `PKG_BLOCKER` branch is the
@@ -831,6 +853,7 @@ fn format_blocker_lines(
     entry
         .blockers
         .iter()
+        .filter(|b| !blocker_row_hidden(b))
         .map(|b| {
             let (style, letter) = if b.unsolvable {
                 ("PKG_BLOCKER", "B")
@@ -1200,12 +1223,15 @@ fn print_entry_line(
             // `b` rows of such an owner are not part of the group (real
             // appends those inline on a *scheduled uninstall*, #72), so
             // only `unsolvable` blockers are collected here.
-            for line in format_blocker_lines(entry, version, !quiet, color)
+            // The zip pairs each line with its own blocker, so it must
+            // use the same filter `format_blocker_lines` applies.
+            for (line, b) in format_blocker_lines(entry, version, !quiet, color)
                 .into_iter()
-                .zip(entry.blockers.iter())
-                .filter_map(|(line, b)| b.unsolvable.then_some(line))
+                .zip(entry.blockers.iter().filter(|b| !blocker_row_hidden(b)))
             {
-                blocker_lines.push(line);
+                if b.unsolvable {
+                    blocker_lines.push(line);
+                }
             }
         }
         PretendOutcome::NoVisibleCandidate => {
@@ -13063,6 +13089,60 @@ mod tests {
             build_id: None,
             deps: Vec::new(),
         }
+    }
+
+    #[test]
+    fn replacement_satisfied_blocker_rows_are_hidden_and_uncounted() {
+        // #72 B1: a `Replacement`-satisfied row is carried on the entry
+        // but contributes neither a `[blocks]` line nor a `Conflict:`
+        // count (real appends it to the merge list only when
+        // `_serialize_tasks` scheduled the blocker's uninstall, which B2
+        // models); an `Uninstall`-satisfied row keeps its current
+        // trailing display.
+        let mut entry = entry_with_use(
+            PretendOutcome::New {
+                version: "2.0".into(),
+            },
+            "",
+            "",
+        );
+        entry.blockers = vec![
+            BlockerConflict {
+                atom_str: "!<dev-libs/blocked-2.0".into(),
+                strong: false,
+                matched_category: "dev-libs".into(),
+                matched_package: "blocked".into(),
+                matched_version: "1.0".into(),
+                unsolvable: false,
+                satisfied_by: Some(BlockerSatisfiedBy::Replacement {
+                    cp: ("dev-libs".into(), "blocked".into()),
+                    slot: "0".into(),
+                }),
+            },
+            BlockerConflict {
+                atom_str: "!dev-libs/other".into(),
+                strong: false,
+                matched_category: "dev-libs".into(),
+                matched_package: "other".into(),
+                matched_version: "1.0".into(),
+                unsolvable: false,
+                satisfied_by: Some(BlockerSatisfiedBy::Uninstall {
+                    cpv: "dev-libs/other-1.0".into(),
+                }),
+            },
+        ];
+        let nc = Colorizer::new(false);
+        let lines = format_blocker_lines(&entry, "2.0", true, &nc);
+        assert_eq!(lines.len(), 1, "only the uninstall-satisfied row prints");
+        assert!(
+            lines[0].starts_with("[blocks b      ] dev-libs/other ("),
+            "the printed row is the Uninstall one: {lines:?}"
+        );
+        let summary = package_counters_summary(&[entry], &HashSet::new(), false, &nc);
+        assert!(
+            summary.contains("Conflict: 1 block (all satisfied)"),
+            "the hidden row is not counted: {summary}"
+        );
     }
 
     #[test]
