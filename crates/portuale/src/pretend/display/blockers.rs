@@ -320,3 +320,42 @@ pub(crate) fn collect_inline_blocker_lines(
     out.sort_by_key(|(after, _)| *after);
     out
 }
+
+/// The `blocks` counters: every `Blocker` node in the merge list counts,
+/// satisfied or not -- the `Trailing` + `Inline` rows. In tree mode a
+/// flat-Hidden row the simulation solves counts too.
+/// Portage: output.py, get_display_list
+pub(crate) fn count_blocker_rows(
+    entries: &[GraphEntry],
+    root: &Path,
+    tree: bool,
+    // The settling pass's recorded cycle edges.
+    circular: &HashMap<(bool, String, String), Vec<portage_repo::CircularDepChild>>,
+) -> (u64, u64) {
+    let mut blocks = 0u64;
+    let mut unsolvable = 0u64;
+    // One kept-branch derivation for the whole counter scan.
+    let kept_alt = kept_alt_for_display(entries, root, 0..entries.len(), circular);
+    for (owner_index, entry) in entries.iter().enumerate() {
+        for b in &entry.blockers {
+            // In tree mode a flat-Hidden row the simulation solves counts
+            // like a shown row (mirrors `print_tree`'s node set).
+            let tree_shown = tree
+                && b.tree_scheduled_uninstall
+                && matches!(b.satisfied_by, Some(BlockerSatisfiedBy::Replacement { .. }))
+                && blocker_row_disposition(entries, root, owner_index, b, &kept_alt)
+                    == BlockerRowDisposition::Hidden;
+            if !tree_shown
+                && blocker_row_disposition(entries, root, owner_index, b, &kept_alt)
+                    == BlockerRowDisposition::Hidden
+            {
+                continue;
+            }
+            blocks += 1;
+            if b.unsolvable {
+                unsolvable += 1;
+            }
+        }
+    }
+    (blocks, unsolvable)
+}

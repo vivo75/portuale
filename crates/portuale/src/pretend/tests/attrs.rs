@@ -1,6 +1,48 @@
 use super::*;
 
 #[test]
+fn root_suffix_annotates_each_entry_with_its_own_root() {
+    // Portage: output.py. Each merge row carries its own non-`/` root as unquoted `to <EROOT>`.
+    use std::path::Path;
+    let target_entry = || {
+        entry_with_use(
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+            "",
+            "",
+        )
+    };
+    let running_entry = || {
+        let mut e = entry_with_use(
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+            "",
+            "",
+        );
+        e.targets_running_root = true;
+        e
+    };
+    let stage = Path::new("/mnt/stage3");
+    let slash = Path::new("/");
+    let running = Path::new("/tmp/running");
+
+    assert_eq!(root_suffix(&target_entry(), slash, None), "");
+    assert_eq!(root_suffix(&target_entry(), stage, None), "to /mnt/stage3");
+    assert_eq!(
+        root_suffix(&target_entry(), stage, Some(running)),
+        "to /mnt/stage3"
+    );
+    assert_eq!(
+        root_suffix(&running_entry(), stage, Some(running)),
+        "to /tmp/running"
+    );
+    assert_eq!(root_suffix(&running_entry(), stage, Some(slash)), "");
+    assert_eq!(root_suffix(&running_entry(), stage, None), "");
+}
+
+#[test]
 fn attr_display_field_carries_the_seventh_mask_column_unless_quiet() {
     // Portage: output.py, set_pkg_info. The mask column shows unless `--quiet`.
     let nc = Colorizer::new(false);

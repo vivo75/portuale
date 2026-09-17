@@ -20,6 +20,16 @@ use std::process::{ChildStdin, Command, Stdio};
 use blake2::Blake2b512;
 use sha2::{Digest, Sha512};
 
+// ---------------------------------------------------------------------
+// tarfile.TarInfo.tobuf
+// ---------------------------------------------------------------------
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Fmt {
+    Ustar,
+    Gnu,
+}
+
 /// `gpkg.checksums` and `_record_checksum`.
 #[derive(Default)]
 struct Checksums {

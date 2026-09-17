@@ -5,6 +5,99 @@ use portage_profile::Config;
 use portage_repo::GraphResult;
 use portage_repo::RepoConfig;
 
+/// The values [`show_merge_list_summary`] reads from its caller.
+pub(crate) struct ShowMergeListSummaryArgs<'a> {
+    pub(crate) opts: &'a EmergeOpts<'a>,
+    pub(crate) circular_forced_display: bool,
+    pub(crate) rendered_rows: &'a [(usize, bool)],
+    pub(crate) display_entries: &'a [GraphEntry],
+    pub(crate) show_merge_list: bool,
+    pub(crate) disp_verbose: bool,
+    pub(crate) disp_quiet: bool,
+    pub(crate) display_list_suppressed: bool,
+    pub(crate) root: &'a Path,
+    pub(crate) top_level_pkgs: &'a HashSet<(String, String)>,
+    pub(crate) color: &'a Colorizer,
+    pub(crate) result: &'a GraphResult,
+    pub(crate) disp_tree: bool,
+}
+
+/// The counts and summary lines under the merge list, and the redisplay before a merge.
+pub(crate) fn show_merge_list_summary(args: ShowMergeListSummaryArgs<'_>) {
+    let ShowMergeListSummaryArgs {
+        opts,
+        circular_forced_display,
+        rendered_rows,
+        display_entries,
+        show_merge_list,
+        disp_verbose,
+        disp_quiet,
+        display_list_suppressed,
+        root,
+        top_level_pkgs,
+        color,
+        result,
+        disp_tree,
+    } = args;
+    let &EmergeOpts {
+        onlydeps,
+        pretend,
+        ask,
+        ..
+    } = opts;
+    // The `Total: …` counters line: only under `-v` (never with `-q`), after
+    // every entry line. The circular display runs forced-verbose, so the gate
+    // reads the effective flags and counts rendered rows, not entries: repeats
+    // count again, `[nomerge]` rows never count.
+    // Portage: output.py, display
+    let disp_count_entries: Option<Vec<GraphEntry>> = if circular_forced_display {
+        let mut counted: Vec<GraphEntry> = Vec::new();
+        for (i, ordered) in rendered_rows {
+            if !ordered {
+                continue;
+            }
+            let e = &display_entries[*i];
+            match &e.outcome {
+                portage_repo::PretendOutcome::New { .. }
+                | portage_repo::PretendOutcome::Upgrade { .. }
+                | portage_repo::PretendOutcome::Downgrade { .. }
+                | portage_repo::PretendOutcome::Reinstall { .. }
+                | portage_repo::PretendOutcome::Uninstall { .. } => {
+                    counted.push(e.clone());
+                }
+                portage_repo::PretendOutcome::AlreadyInstalled { .. }
+                | portage_repo::PretendOutcome::NoVisibleCandidate => {}
+            }
+        }
+        Some(counted)
+    } else {
+        None
+    };
+    if show_merge_list && disp_verbose && !disp_quiet && !display_list_suppressed {
+        println!();
+        println!(
+            "{}",
+            package_counters_summary(PackageCountersSummaryArgs {
+                entries: disp_count_entries.as_deref().unwrap_or(display_entries),
+                root,
+                top_level_pkgs,
+                onlydeps,
+                color,
+                orphans: &result.orphan_blockers,
+                tree: disp_tree,
+                circular: &result.circular_dependency
+            })
+        );
+    }
+
+    // One blank line after the merge list when it printed on a non-`--pretend`
+    // run without `--ask` (`ask_confirm` already opens with that blank line).
+    // Portage: _emerge/actions.py, action_build
+    if !pretend && show_merge_list && !ask {
+        println!();
+    }
+}
+
 /// The values [`print_json_result`] reads from its caller.
 pub(crate) struct PrintJsonResultArgs<'a> {
     pub(crate) plan: &'a ResolvePlan,
