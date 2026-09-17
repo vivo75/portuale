@@ -17055,3 +17055,21 @@ cargo test --release -p portage-profile make_globals_fetch_commands
 ```
 
 Evidence: `TEST/findings/l0.md` "#70 R1"–"#70 R5" (probe before/after, the real `portage.settings` captures, the `.mirror-cache.json` round-trips both ways, the host `@world` re-diff); L2 re-run `TEST/logs/l2-20260916T222355Z` (0 unexplained) in `TEST/findings/l2.md` "#70 R5". Plan: `docs/01.014-fetch_candidates_mirrors.md` §5.
+
+**The binary USE-rejection gate's no-ebuild and forced-flag arms now match real (backlog #69 repair, 2026-09-16/17).** The #69 S1 gate was right, but two arms of the comparison were not: with no same-version ebuild the binary was compared **with itself** (always kept), and the IUSE presence difference was never reduced by the profile's `use.force`/`use.mask`. The R0 oracle first fixed the plan's own premise — real's no-ebuild arm (`pkgsettings.setcpv(pkg)`, `depgraph.py:8265-8271`) is reached under `--usepkg` (where respect-use defaults to auto) and **not** under plain `--usepkgonly` (`create_depgraph_params.py:47-55` leaves it unset; a `sys.settrace` of the real gate shows `respect_use=False`) — then R1 made the fallback the profile's selection over the binary's own IUSE, R2 subtracted `forced_or_masked_flags` from the presence difference (`:3149`), and R3 closed the docs. The R0/R1/R2 bed matrix (`TEST/findings/l0.md` "#69 R0"–"#69 R2") is real 3.0.82.2 vs portuale on the same real-built binary: n1 (`--usepkg`, ebuild gone, selection dropped) now rejects and exits 1 like real (message residue: real prints its masked-packages block, portuale "there are no ebuilds to satisfy"), n2 (`--usepkgonly`) stays `[binary R]` on both sides, n3a/n3b (masked/forced flag) and n4 (pinned atom) identical. The subtraction's observable shape is a non-installed binary, pinned hermetically (a contract pin could not discriminate; see `docs/02.68-74.md` §6).
+
+```sh
+# the no-ebuild and forced/masked arms, per real's own cells
+cargo test --release -p portage-repo binpkg_respect_use
+# -> 2 passed (the same-version test + the R2 subtraction test)
+
+# the six #69 S2 contract cells stay byte-identical
+python3 -m pytest tests/test_emerge_pretend_contract.py -q -k binnew
+# -> 1 passed
+
+# host: nothing moved on the whole-world plan
+rust/target/release/portuale emerge -uDpvN @world | grep -c '^\['
+# -> 27 (same package set as real)
+```
+
+Evidence: `TEST/findings/l0.md` "#69 R0"–"#69 R2". Plan: `docs/01.069-getbinpkg_newuse_rebuild.md`.
