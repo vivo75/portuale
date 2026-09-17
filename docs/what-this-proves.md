@@ -17110,3 +17110,18 @@ python3 -m pytest tests -q -k b0b
 ```
 
 Evidence: `TEST/findings/l0.md` "#68/#72 B0b" (the model confirmation) and "#68/#72 B1"–"B4" (each slice's pins and the host re-diff); plans `docs/02.68-74.md` Phase D and `docs/02.072-uninstall_merge_rows.md` (now done).
+
+**The slot-operator matrix's "runtime-key residue" was a bed artifact, and the matrix is now a host-exact gate (backlog #71, re-scoped, 2026-09-17).** The item claimed portuale rebuilt more runtime-key `:=` consumers than real. S0's trace of real's pipeline (`_add_slot_operator_dep` → `want_update_probe = dep.want_update or not dep.parent.installed` → `_complete_graph`'s LIFO `_unsatisfied_deps` re-probe, `depgraph.py:3805-3809`, `:3118`, `:8760-8794`) showed the extras are not a key rule at all: they exist only because the bed ran `ROOT=$FX ≠ /`, where real's `create_trees` (`portage/__init__.py:497-529`) opens a second tree at `/` and distributes the slot-op cascade over both roots — the same split B0b found for the p2c ordering cells. Re-run host-exact (`ROOT=/`, `PORTAGE_CONFIGROOT=$FX`), real's merge sets and `Total:` rows match portuale's current scan in all 15 argument/option cells. So the fix is the oracle, not the product: `FX_HOST_ROOTS=1` switches the slotop matrix to host-exact roots, both artifact allowlist entries are deleted, and the three remaining `@world` findings (real's complete-graph order vs portuale's discovery order) are adjudicated as the standing #17 merge-order class. No product code changed.
+
+```sh
+# host-exact matrix: 18 probes, 15 clean, 3 explained order findings, 0 unexplained
+FX_SLOTOP_BDEP=1 FX_HOST_ROOTS=1 TEST/run/l0-fixture-oracle.sh \
+  TEST/atomlists/l0-fixture-oracle-slotop.txt
+# -> summary: probes 18, clean 15, explained 3, UNEXPLAINED 0   (rc 0)
+
+# the default bed is untouched by the knob
+TEST/run/l0-fixture-oracle.sh
+# -> rc 0
+```
+
+Evidence: `TEST/findings/l0.md` "#71 S0" (the trace and both matrices) and "#71 S1" (the bed fix, run ids `l0-fx-20260917T174011Z`/`l0-fx-20260917T174105Z`); plans `docs/02.071-runtime_key_slotop_rebuilds.md` (done, re-scoped) and `docs/02.68-74.md` Phase E.
