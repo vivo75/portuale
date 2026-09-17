@@ -1179,7 +1179,7 @@ fn print_entry_line(
             emit(&field(false, false, true, false, false), version);
             blocker_lines.extend(format_blocker_lines(entry, version, !quiet, color));
         }
-        PretendOutcome::AlreadyInstalled { version: _ } => {
+        PretendOutcome::AlreadyInstalled { version } => {
             // Nothing on stdout: real `emerge -p` / `-pu` simply omits an
             // already-satisfied package from the merge list, whether it
             // was reached as a dependency or requested directly (and
@@ -1190,6 +1190,23 @@ fn print_entry_line(
             // and matched nothing in real, so it was dropped. The
             // `already_installed` JSON status still carries the outcome
             // for `--json` consumers.
+            //
+            // #73: an already-installed *blocker owner* still contributes
+            // its **unresolved** rows to real's trailing
+            // `Display.blockers` group (`output.py:573-592`), which does
+            // not depend on the owner printing a package line. Cell g/g3/
+            // g4 are exactly that (installed `bparent` kept out of the
+            // merge list, real still prints `[blocks B]`); the satisfied
+            // `b` rows of such an owner are not part of the group (real
+            // appends those inline on a *scheduled uninstall*, #72), so
+            // only `unsolvable` blockers are collected here.
+            for line in format_blocker_lines(entry, version, !quiet, color)
+                .into_iter()
+                .zip(entry.blockers.iter())
+                .filter_map(|(line, b)| b.unsolvable.then_some(line))
+            {
+                blocker_lines.push(line);
+            }
         }
         PretendOutcome::NoVisibleCandidate => {
             // USE-unsatisfied dependency disclosure (backlog #20, real

@@ -14693,6 +14693,41 @@ fn graph_has_parent(
     })
 }
 
+/// #73: the owner-side half of real's "a digraph node with parents" test
+/// (`_validate_blockers` step 4, `depgraph.py:9216-9224`). Real's
+/// `_complete_graph` (`:8660-8745`) walks `_initial_arg_list` plus the
+/// required sets appended as `SetArg`s and `_expand_set_args(...,
+/// add_to_digraph=True)` (`:3271`) puts every set/argument node into the
+/// digraph, so an installed owner selected from `@world`/`@selected`/
+/// `@system` (or reached from one of those sets' installed dependency
+/// walk) has at least one parent node. Portuale's `entries` only carry
+/// the walked *dependency edges*, so that set/argument parent is
+/// invisible to [`graph_has_parent`]; `installed_closure`
+/// (`ResolveCtx::installed_closure`, the same forward-installed closure
+/// the target arm consults) is exactly real's set-parent membership.
+///
+/// The set is **cp-keyed** (`(category, package)`), not per-instance
+/// (T10): real's `digraph.parent_nodes(inst_pkg)` is per-instance and
+/// its own `_parent_atoms` edge records are cp-level too (see
+/// `required_set_reachable_cps`'s doc comment -- "matched by `cat/pkg`").
+/// For this arm that granularity is sufficient and exact: the owner is
+/// the blocker's own single installed instance at
+/// `PendingBlocker::owner_version`, and cp membership in this closure is
+/// precisely what real's per-cp parent edge records.
+///
+/// #73 S0 (`TEST/findings/l0.md` "#73 S0") had real print `B`/rc 1 in
+/// every shape -- owner in `@world` (g), owner as a plain `--oneshot`
+/// argument (g2), owner reachable only through a world member's
+/// installed dependency edge (g3), owner in `@system` (g4) -- and
+/// `installed_closure` contained the owner in all four; `top_level_cps`
+/// alone would have missed g3.
+fn owner_set_parent(
+    owner_key: &(String, String),
+    installed_closure: &HashSet<(String, String)>,
+) -> bool {
+    installed_closure.contains(owner_key)
+}
+
 fn resolve_blockers(
     root: &Path,
     pending: &[PendingBlocker],
@@ -14707,6 +14742,12 @@ fn resolve_blockers(
     // it: installed `systemd` is in `@system`'s closure, real prints
     // `B`/rc 1, portuale satisfied without it. A non-complete run on a
     // target outside the sets (S0 cell d) must not use it.
+    //
+    // #73 extends the same set test to the *owner* side of the nomerge
+    // arm (see `owner_set_parent`): a nomerge owner that is set-reachable
+    // is real's "digraph node with parents" even when portuale's
+    // `entries` never carried the edge (S0 cell g; g3 proves the
+    // closure-through-a-world-member half).
     installed_closure: &HashSet<(String, String)>,
 ) -> Vec<((String, String), BlockerConflict)> {
     let mut conflicts = Vec::new();
@@ -14894,10 +14935,16 @@ fn resolve_blockers(
                         ) || installed_closure.contains(&target_key)))
             } else {
                 // A nomerge parent is uninstall-ordered; it is unresolved
-                // when the *owner* is itself a walked node with parents
-                // (cell g).
+                // when the *owner* is a digraph node with parents
+                // (`depgraph.py:9216-9224`): either a walked entry
+                // depends on it (`graph_has_parent`, cell g's
+                // consumer-walk shape) or it is in the required sets'
+                // own parent membership (`owner_set_parent`, #73 S0 cells
+                // g/g3/g4). Parenthesised: the set term must not be
+                // reachable when `merge_bound_match` is false (T11; cell
+                // f).
                 merge_bound_match
-                    && owner_entry.is_some_and(|e| {
+                    && (owner_entry.is_some_and(|e| {
                         graph_has_parent(
                             &pb.owner_key.0,
                             &pb.owner_key.1,
@@ -14907,7 +14954,7 @@ fn resolve_blockers(
                             &pb.owner_key,
                             entries,
                         )
-                    })
+                    }) || owner_set_parent(&pb.owner_key, installed_closure))
             };
             conflicts.push((
                 pb.owner_key.clone(),
@@ -36290,6 +36337,35 @@ mod tests {
         assert!(
             conflicts[0].1.unsolvable,
             "nomerge parent with graph parents"
+        );
+        // #73 cell g: the owner has no walked parent entry, but it is in
+        // the `@world`/`@selected`/`@system` closure (real's SetArg
+        // parent) -> unresolved.
+        let closure: HashSet<(String, String)> =
+            [("dev-libs".to_string(), "bparent".to_string())].into();
+        let conflicts = resolve_blockers(
+            &dir,
+            &[pb("!<dev-libs/blocked-2.0", "bparent")],
+            &[installed("bparent"), blocked_upgrade("1.5")],
+            &closure,
+        );
+        assert_eq!(conflicts.len(), 1);
+        assert!(
+            conflicts[0].1.unsolvable,
+            "#73 cell g: the required-set closure is a parent"
+        );
+        // #73 S0 cell f / T11: the same closure membership must NOT make
+        // an *installed-only* match unresolved -- `merge_bound_match`
+        // gates the whole nomerge arm.
+        let conflicts = resolve_blockers(
+            &dir,
+            &[pb("!<dev-libs/blocked-2.0", "bparent")],
+            &[installed("bparent")],
+            &closure,
+        );
+        assert!(
+            conflicts.is_empty(),
+            "#73 cell f: no merge-bound match, closure membership is not enough"
         );
         let _ = fs::remove_dir_all(&dir);
 
