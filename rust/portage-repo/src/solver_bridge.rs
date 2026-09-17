@@ -637,20 +637,14 @@ fn graph_result_from_order(
     // gating, same `match_from_list` semantics), and file each conflict
     // on its owner entry -- mirroring the walk, which resolves blockers
     // after the graph settles and before the merge-order sort.
-    for (owner_key, conflict) in super::resolve_blockers(
+    let conflicts = super::resolve_blockers(
         &req.root,
         &pending_blockers,
         &entries,
         // The bridge engines have no required-set closure of their own.
         &std::collections::HashSet::new(),
-    ) {
-        if let Some(entry) = entries
-            .iter_mut()
-            .find(|e| (e.category.clone(), e.package.clone()) == owner_key)
-        {
-            entry.blockers.push(conflict);
-        }
-    }
+    );
+    super::file_blocker_conflicts(&mut entries, conflicts);
     // ABI rebuilds (H.15, last slice): an installed consumer whose
     // built `cat/pkg:S/SS=` dep no longer matches how this plan leaves
     // that slot is scheduled for a reinstall -- the walk's own
@@ -1418,10 +1412,12 @@ mod tests {
                     // #68 S3: the installed fixtures that RDEPEND on
                     // samepkg are not walked graph nodes here, so real
                     // uninstalls it (`b`, rc 0); pre-S3 this was `true`
-                    // from the vdb reverse scan. #72 B1 leaves the
-                    // uninstall-resolved arms untagged.
+                    // from the vdb reverse scan. #72 B3: resolved by
+                    // removing the installed match.
                     unsolvable: false,
-                    satisfied_by: None,
+                    satisfied_by: Some(super::super::BlockerSatisfiedBy::Uninstall {
+                        cpv: "dev-libs/samepkg-1.0".to_string(),
+                    }),
                 }]
             );
         }

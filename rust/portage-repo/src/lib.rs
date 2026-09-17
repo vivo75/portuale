@@ -6004,6 +6004,19 @@ pub enum PretendOutcome {
         new_repo: bool,
         slot_operator_rebuild: bool,
     },
+    /// #68/#72 B3: a blocker resolved by *removing* an installed package
+    /// -- real `_validate_blockers`' `operation="uninstall"` task
+    /// (`depgraph.py:9226-9246`), part of the merge list (`mylist`) and
+    /// counted by `counters.uninst` (`output.py:619-621`). The `version`
+    /// is the installed version being removed; `required_by` carries the
+    /// blocker owner so `build_digraph`'s fallback edge orders the row
+    /// before it (`serialize_merge_order`). Never a merge target or an
+    /// execution unit: #72 B4 renders the `[uninstall     ]` row, every
+    /// scheduling/merge site skips it (execution is a documented
+    /// non-goal, `docs/02.072-uninstall_merge_rows.md` §7).
+    Uninstall {
+        version: String,
+    },
 }
 
 /// Reads `<root>/var/db/pkg/<category>/<package>-<version>/<filename>`
@@ -9572,7 +9585,8 @@ fn masked_dep_chain(
             }
             PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to.clone(),
             PretendOutcome::AlreadyInstalled { version } => version.clone(),
-            PretendOutcome::NoVisibleCandidate => return None,
+            // #72 B3: a removal is not a dependency-chain node.
+            PretendOutcome::NoVisibleCandidate | PretendOutcome::Uninstall { .. } => return None,
         };
         let (repo, ty) = match &entry.outcome {
             PretendOutcome::AlreadyInstalled { .. } => (
@@ -9973,7 +9987,8 @@ fn alternative_downgrade_demoted(
                 PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
                     Some(to.clone())
                 }
-                PretendOutcome::NoVisibleCandidate => None,
+                // #72 B3: a removal installs nothing into the slot.
+                PretendOutcome::NoVisibleCandidate | PretendOutcome::Uninstall { .. } => None,
             })
             .collect();
         let Some(highest_in_graph) = in_slot.iter().max_by(|x, y| vercmp_ordering(x, y)) else {
@@ -11281,7 +11296,8 @@ fn resolve_root_deps_build_entries(
         PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
             Some(to.clone())
         }
-        PretendOutcome::NoVisibleCandidate => None,
+        // #72 B3: a removal is never walked (it has no deps).
+        PretendOutcome::NoVisibleCandidate | PretendOutcome::Uninstall { .. } => None,
         PretendOutcome::AlreadyInstalled { .. } => return Vec::new(),
     };
 
@@ -13289,9 +13305,14 @@ fn slot_operator_rebuild_scan(
     let mut new_slot: HashMap<(String, String), (String, String, String)> = HashMap::new();
     let mut in_graph: HashSet<(String, String)> = HashSet::new();
     for e in entries {
+        // #72 B3: a removal installs nothing, so it is not "in graph" for
+        // the slot-operator rebuild scan (real only rebuilds consumers of
+        // a package this run actually leaves at a new slot).
         if !matches!(
             e.outcome,
-            PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::NoVisibleCandidate
+            PretendOutcome::AlreadyInstalled { .. }
+                | PretendOutcome::NoVisibleCandidate
+                | PretendOutcome::Uninstall { .. }
         ) {
             in_graph.insert((e.category.clone(), e.package.clone()));
         }
@@ -14065,7 +14086,10 @@ fn rebuild_if_entries(
                 Some(version)
             }
             PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => Some(to),
-            PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::NoVisibleCandidate => None,
+            // #72 B3: a removal merges nothing.
+            PretendOutcome::AlreadyInstalled { .. }
+            | PretendOutcome::NoVisibleCandidate
+            | PretendOutcome::Uninstall { .. } => None,
         };
         if let Some(v) = version {
             in_graph.insert(cp.clone());
@@ -14196,15 +14220,18 @@ fn rebuild_if_entries(
 }
 
 /// The version a merge-bound `PretendOutcome` would install, or `None`
-/// for `AlreadyInstalled`/`NoVisibleCandidate` (which merge nothing).
-/// Exactly the four outcomes `PassState::resolved_slots` ever indexes.
+/// for `AlreadyInstalled`/`NoVisibleCandidate`/`Uninstall` (which merge
+/// nothing). Exactly the four outcomes `PassState::resolved_slots` ever
+/// indexes; a #72 B3 removal is deliberately not one of them.
 fn merge_bound_version(outcome: &PretendOutcome) -> Option<&String> {
     match outcome {
         PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
             Some(version)
         }
         PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => Some(to),
-        PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::NoVisibleCandidate => None,
+        PretendOutcome::AlreadyInstalled { .. }
+        | PretendOutcome::NoVisibleCandidate
+        | PretendOutcome::Uninstall { .. } => None,
     }
 }
 
@@ -14764,6 +14791,116 @@ fn owner_set_parent(
     blocker_retry_closure.contains(owner_key)
 }
 
+/// #68/#72 B3: the `GraphEntry` real `_validate_blockers` models as a
+/// `Package(operation="uninstall")` task (`depgraph.py:9226-9246`): an
+/// installed package a blocker resolves by removing. `version` is the
+/// installed version being removed and `required_by` names the blocker
+/// owner(s) that pull the removal in; `merge_order::build_digraph` gives
+/// it its dedicated after-the-owner edge, and every merge/scheduling
+/// site treats it as a non-merge (`PretendOutcome::Uninstall`'s own doc
+/// comment). `deps` stays empty -- the removal has no dependency walk.
+fn uninstall_entry(
+    category: String,
+    package: String,
+    version: String,
+    owners: Vec<(String, String)>,
+) -> GraphEntry {
+    GraphEntry {
+        category,
+        package,
+        outcome: PretendOutcome::Uninstall { version },
+        blockers: Vec::new(),
+        slot: None,
+        sub_slot: None,
+        repo_name: None,
+        oldbest: Vec::new(),
+        use_flags_display: Vec::new(),
+        use_expand_display: Vec::new(),
+        use_expand_display_p: Vec::new(),
+        keyword_mask: None,
+        new_slot: false,
+        interactive: false,
+        fetch_restrict: false,
+        fetch_restrict_satisfied: false,
+        download_files: Vec::new(),
+        required_by: owners,
+        source: CandidateSource::Ebuild,
+        provenance: VisibilityProvenance::default(),
+        keyword_suggestion: None,
+        use_suggestion: None,
+        parent_use_suggestion: None,
+        targets_running_root: false,
+        remote_binary: false,
+        build_id: None,
+        deps: Vec::new(),
+    }
+}
+
+/// Working set for `file_blocker_conflicts`: one removed `cpv` and every
+/// owner that pulled it in.
+struct PendingRemoval {
+    category: String,
+    package: String,
+    version: String,
+    owners: Vec<(String, String)>,
+}
+
+/// File each blocker conflict on its owner entry and append the
+/// `Uninstall` removal entries (#68/#72 B3) the satisfied
+/// `satisfied_by: Uninstall` rows describe. The old filing loop dropped
+/// a conflict whose owner is absent from `entries` (the solver-bridge
+/// path); that stays, and no removal is fabricated for such a row (the
+/// owner is the removal's ordering anchor).
+///
+/// One removal entry per removed `cpv`, carrying every owner that pulled
+/// it in -- real creates one uninstall task per `(parent, blocked)` pair
+/// in `_validate_blockers`, but the merge list's uninstall node is the
+/// installed package itself.
+fn file_blocker_conflicts(
+    entries: &mut Vec<GraphEntry>,
+    conflicts: Vec<((String, String), BlockerConflict)>,
+) {
+    let mut removals: Vec<PendingRemoval> = Vec::new();
+    for (owner_key, conflict) in conflicts {
+        let removal_cpv = match &conflict.satisfied_by {
+            Some(BlockerSatisfiedBy::Uninstall { cpv }) => Some(cpv.clone()),
+            _ => None,
+        };
+        let Some(entry) = entries
+            .iter_mut()
+            .find(|e| (e.category.clone(), e.package.clone()) == owner_key)
+        else {
+            continue;
+        };
+        entry.blockers.push(conflict);
+        let Some(cpv) = removal_cpv else { continue };
+        let Some((category, package, version)) = split_cpv(&cpv) else {
+            continue;
+        };
+        match removals
+            .iter_mut()
+            .find(|r| r.category == category && r.package == package && r.version == version)
+        {
+            Some(removal) => {
+                if !removal.owners.contains(&owner_key) {
+                    removal.owners.push(owner_key);
+                }
+            }
+            None => removals.push(PendingRemoval {
+                category,
+                package,
+                version,
+                owners: vec![owner_key],
+            }),
+        }
+    }
+    entries.extend(
+        removals
+            .into_iter()
+            .map(|r| uninstall_entry(r.category, r.package, r.version, r.owners)),
+    );
+}
+
 fn resolve_blockers(
     root: &Path,
     pending: &[PendingBlocker],
@@ -15026,15 +15163,23 @@ fn resolve_blockers(
                     matched_category: pb.target_category.clone(),
                     matched_package: pb.target_package.clone(),
                     matched_version: version.clone(),
-                    // #72 B1 is deliberately narrow: only the
-                    // `replaced_in_slot` arm above tags its row
-                    // (`Replacement`). Every other row -- including the
-                    // installed-only matches a later slice will resolve
-                    // through an uninstall task -- stays exactly as
-                    // before (`satisfied_by: None`), so this slice moves
-                    // no existing pin (#72 B2c/B3/B4 own the tagging and
-                    // the `[uninstall]` row's target cpv).
-                    satisfied_by: None,
+                    // #72 B3: a satisfied *merging-owner* row is resolved
+                    // by removing the matched installed instance
+                    // (`_validate_blockers`' `operation="uninstall"`
+                    // task, `depgraph.py:9226-9246`), so it names that
+                    // cpv; `run_pass`/the bridge turn the tag into the
+                    // removal `GraphEntry`. The nomerge-owner arm's
+                    // satisfied row is resolved by removing the **owner**
+                    // (real `:9204-9206`, `depends_on_order.add((parent,
+                    // pkg))`) -- no oracle captures that row, so it stays
+                    // `None` (named cut, `docs/02.68-74.md` §6).
+                    satisfied_by: if !unsolvable && owner_merging {
+                        Some(BlockerSatisfiedBy::Uninstall {
+                            cpv: format!("{}/{}-{version}", pb.target_category, pb.target_package),
+                        })
+                    } else {
+                        None
+                    },
                     unsolvable,
                 },
             ));
@@ -18375,7 +18520,8 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     Some((to.clone(), false))
                 }
                 PretendOutcome::Reinstall { version, .. } => Some((version.clone(), false)),
-                PretendOutcome::NoVisibleCandidate => None,
+                // #72 B3: a removal never resolves a dependency atom.
+                PretendOutcome::NoVisibleCandidate | PretendOutcome::Uninstall { .. } => None,
             }
         {
             let row = resolver_trace::ParentAtom {
@@ -20526,22 +20672,13 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         !mergebound_cp_slots.contains(&(e.category.clone(), e.package.clone(), slot))
     });
 
-    resolve_blockers(
+    let conflicts = resolve_blockers(
         ctx.root,
         &state.pending_blockers,
         &state.entries,
         &ctx.blocker_retry_closure,
-    )
-    .into_iter()
-    .for_each(|(owner_key, conflict)| {
-        if let Some(entry) = state
-            .entries
-            .iter_mut()
-            .find(|e| (e.category.clone(), e.package.clone()) == owner_key)
-        {
-            entry.blockers.push(conflict);
-        }
-    });
+    );
+    file_blocker_conflicts(&mut state.entries, conflicts);
 
     if !state.required_use_violations.is_empty() {
         // Each block is self-delimiting (leading + trailing newline).
@@ -21135,9 +21272,13 @@ fn assemble_result(
             .entries
             .iter()
             .filter(|e| {
+                // #72 B3: a removal is not an action that satisfies a
+                // buildpkgonly dependency.
                 !matches!(
                     e.outcome,
-                    PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::NoVisibleCandidate
+                    PretendOutcome::AlreadyInstalled { .. }
+                        | PretendOutcome::NoVisibleCandidate
+                        | PretendOutcome::Uninstall { .. }
                 )
             })
             .map(|e| (e.category.clone(), e.package.clone()))
@@ -34332,7 +34473,9 @@ mod tests {
         // unmerge. (Pre-S3 this expected `unsolvable: true` from the vdb
         // reverse scan.)
         let entries = graph_entries_real("dev-libs/blockerpkg");
-        assert_eq!(entries.len(), 1);
+        // #72 B3: the satisfied block also produces the removal entry
+        // real models as an uninstall task (display of it is B4).
+        assert_eq!(entries.len(), 2);
         assert_eq!(
             entries[0].blockers,
             vec![BlockerConflict {
@@ -34342,10 +34485,47 @@ mod tests {
                 matched_package: "samepkg".to_string(),
                 matched_version: "1.0".to_string(),
                 unsolvable: false,
-                // #72 B1 leaves the not-yet-classified arms at `None`.
-                satisfied_by: None,
+                // #72 B3: resolved by removing the installed match.
+                satisfied_by: Some(BlockerSatisfiedBy::Uninstall {
+                    cpv: "dev-libs/samepkg-1.0".to_string(),
+                }),
             }]
         );
+    }
+
+    #[test]
+    fn uninstall_entries_follow_their_owner_in_merge_order() {
+        // #68/#72 B3 / B0 u1: `blockerpkg` blocks installed `samepkg-1.0`,
+        // resolved by removing it -- the removal entry real serializes
+        // right after its owner (real capture: ebuild row, `[uninstall]`
+        // row, `[blocks b]`).
+        let entries = graph_entries_real("dev-libs/blockerpkg");
+        let names: Vec<(&str, Option<&str>)> = entries
+            .iter()
+            .map(|e| (e.package.as_str(), merge_order::entry_version(e)))
+            .collect();
+        assert_eq!(
+            names,
+            vec![("blockerpkg", Some("1.0")), ("samepkg", Some("1.0"))]
+        );
+        assert!(matches!(
+            entries[1].outcome,
+            PretendOutcome::Uninstall { .. }
+        ));
+        assert_eq!(
+            entries[1].required_by,
+            vec![("dev-libs".to_string(), "blockerpkg".to_string())]
+        );
+
+        // B0 u3: the owner's own dependency still merges first, then the
+        // owner, then the removal.
+        let entries = graph_entries_real("dev-libs/blockerorderpkg");
+        let names: Vec<&str> = entries.iter().map(|e| e.package.as_str()).collect();
+        assert_eq!(names, vec!["newpkg", "blockerorderpkg", "samepkg"]);
+        assert!(matches!(
+            entries[2].outcome,
+            PretendOutcome::Uninstall { .. }
+        ));
     }
 
     #[test]
@@ -36327,8 +36507,11 @@ mod tests {
         );
         assert!(!conflicts[0].1.unsolvable);
         assert_eq!(
-            conflicts[0].1.satisfied_by, None,
-            "a non-replacement satisfied row is unchanged in B1"
+            conflicts[0].1.satisfied_by,
+            Some(BlockerSatisfiedBy::Uninstall {
+                cpv: "dev-libs/blocked-1.0".to_string(),
+            }),
+            "a different-slot installed match is removed (#72 B3)"
         );
 
         // Cell b: a same-version reinstall is merge-bound in the tracker,

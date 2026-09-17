@@ -699,7 +699,12 @@ fn package_counters_summary(
                 reinst += 1;
                 true
             }
-            PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::NoVisibleCandidate => false,
+            // #72 B3: a removal counts nothing yet -- B4 adds real's
+            // `counters.uninst` (after `binary`, before `interactive`, not
+            // part of `total_installs`).
+            PretendOutcome::AlreadyInstalled { .. }
+            | PretendOutcome::NoVisibleCandidate
+            | PretendOutcome::Uninstall { .. } => false,
         };
         if merge_bound {
             if entry.source == portage_repo::CandidateSource::Binary {
@@ -808,7 +813,10 @@ fn merge_bound_version(entry: &GraphEntry) -> Option<&str> {
             Some(version)
         }
         PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => Some(to),
-        PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::NoVisibleCandidate => None,
+        // #72 B3: a removal is not a merge target.
+        PretendOutcome::AlreadyInstalled { .. }
+        | PretendOutcome::NoVisibleCandidate
+        | PretendOutcome::Uninstall { .. } => None,
     }
 }
 
@@ -1472,6 +1480,11 @@ fn print_entry_line(
                 blocker_lines.push(format_blocker_row(entry, !quiet, color, b));
             }
         }
+        PretendOutcome::Uninstall { .. } => {
+            // #72 B3: the removal row is not rendered yet -- the display
+            // skip keeps every pin byte-identical; #72 B4 prints real's
+            // `[uninstall     ] <cpv>` line here.
+        }
         PretendOutcome::NoVisibleCandidate => {
             // USE-unsatisfied dependency disclosure (backlog #20, real
             // `_show_unsatisfied_dep`'s "no ebuilds built with USE flags
@@ -1895,10 +1908,15 @@ fn entry_to_json(
         PretendOutcome::Reinstall { .. } => "reinstall",
         PretendOutcome::AlreadyInstalled { .. } => "already_installed",
         PretendOutcome::NoVisibleCandidate => "no_visible_candidate",
+        // #72 B3: `--json` filters these entries out (see `print_json`);
+        // the tag exists for B4's real outcome string.
+        PretendOutcome::Uninstall { .. } => "uninstall",
     };
     fields.push(format!("\"outcome\":{}", json_string(outcome_tag)));
     match &entry.outcome {
-        PretendOutcome::New { version } | PretendOutcome::AlreadyInstalled { version } => {
+        PretendOutcome::New { version }
+        | PretendOutcome::AlreadyInstalled { version }
+        | PretendOutcome::Uninstall { version } => {
             fields.push(format!("\"version\":{}", json_string(version)));
         }
         PretendOutcome::Upgrade { from, to } | PretendOutcome::Downgrade { from, to } => {
@@ -2297,8 +2315,12 @@ fn print_json(
     verbose: bool,
     running_root: Option<&Path>,
 ) {
+    // #72 B3: a blocker-removal entry is skipped in `--json` until B4
+    // adds its outcome string (real has no `--json` equivalent; the
+    // filter keeps every existing `--json` pin byte-identical).
     let entries_json: Vec<String> = entries
         .iter()
+        .filter(|e| !matches!(e.outcome, PretendOutcome::Uninstall { .. }))
         .enumerate()
         .map(|(i, e)| entry_to_json(e, i, top_level_pkgs, verbose, running_root))
         .collect();

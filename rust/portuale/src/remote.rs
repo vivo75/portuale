@@ -1089,7 +1089,9 @@ pub(crate) fn run_remote_plan(
     let mut merged: u32 = 0;
     for entry in entries {
         let version = match &entry.outcome {
-            PretendOutcome::AlreadyInstalled { .. } => continue,
+            // #72 B3: a removal is not remotely merged (execution is a
+            // non-goal).
+            PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::Uninstall { .. } => continue,
             PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
                 version.clone()
             }

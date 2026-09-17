@@ -61,7 +61,10 @@ fn entry_version(outcome: &PretendOutcome) -> Option<&str> {
         PretendOutcome::Upgrade { to, .. } => Some(to),
         PretendOutcome::Downgrade { to, .. } => Some(to),
         PretendOutcome::Reinstall { version, .. } => Some(version),
-        PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::NoVisibleCandidate => None,
+        // #72 B3: a removal builds nothing.
+        PretendOutcome::AlreadyInstalled { .. }
+        | PretendOutcome::NoVisibleCandidate
+        | PretendOutcome::Uninstall { .. } => None,
     }
 }
 
@@ -526,7 +529,12 @@ pub(crate) fn merge_one_source_entry(
 ) -> Result<(), String> {
     let cp = format!("{}/{}", entry.category, entry.package);
     let version = match &entry.outcome {
-        PretendOutcome::AlreadyInstalled { .. } => return Ok(()),
+        // #72 B3: a blocker-removal task is not a merge. Executing it is
+        // a documented non-goal (`docs/02.072-uninstall_merge_rows.md`
+        // §7); the entry is skipped exactly like an installed no-op.
+        PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::Uninstall { .. } => {
+            return Ok(());
+        }
         PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
             version.clone()
         }
@@ -805,7 +813,11 @@ fn scheduler_cp_version(entry: &GraphEntry) -> Result<(String, String), String> 
             version.clone()
         }
         PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to.clone(),
-        PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::NoVisibleCandidate => {
+        // #72 B3: unreachable via `scheduler_needs_build` (a removal is
+        // never scheduled); kept explicit so no wildcard hides it.
+        PretendOutcome::AlreadyInstalled { .. }
+        | PretendOutcome::NoVisibleCandidate
+        | PretendOutcome::Uninstall { .. } => {
             return Err(format!("{cp}: not a buildable entry"));
         }
     };

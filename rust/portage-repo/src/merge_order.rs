@@ -857,8 +857,9 @@ fn mo_sel_enabled() -> bool {
 }
 
 /// The version an entry is resolved at (the merge target for an
-/// upgrade/downgrade, the current version otherwise). `None` only for
-/// `NoVisibleCandidate`.
+/// upgrade/downgrade, the current version otherwise). `None` for
+/// `NoVisibleCandidate` and for a `Uninstall` removal (#72 B3), which is
+/// never a merge target.
 fn outcome_version(e: &GraphEntry) -> Option<&str> {
     match &e.outcome {
         PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
@@ -866,7 +867,7 @@ fn outcome_version(e: &GraphEntry) -> Option<&str> {
         }
         PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => Some(to),
         PretendOutcome::AlreadyInstalled { version } => Some(version),
-        PretendOutcome::NoVisibleCandidate => None,
+        PretendOutcome::NoVisibleCandidate | PretendOutcome::Uninstall { .. } => None,
     }
 }
 
@@ -1681,15 +1682,25 @@ fn build_digraph(entries: &[GraphEntry], top_level_atoms: &[String], root: &Path
             // matches prefer a merge-bound entry (the node real's
             // scheduler graph actually edges to when the cp is being
             // rebuilt/updated), then the highest version; first on ties.
+            // A `Uninstall` removal (#72 B3) is never a merge target: its
+            // only ordering edge is the dedicated one added below, and it
+            // must not be picked as a dependency node by `best` above.
             let merge_bound = |e: &GraphEntry| {
                 !matches!(
                     e.outcome,
-                    PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::NoVisibleCandidate
+                    PretendOutcome::AlreadyInstalled { .. }
+                        | PretendOutcome::NoVisibleCandidate
+                        | PretendOutcome::Uninstall { .. }
                 )
             };
             let mut best: Option<usize> = None;
             for &j in idxs {
                 if !edge_matches(&edge.atom, j) {
+                    continue;
+                }
+                // #72 B3: an `Uninstall` removal is never a merge target;
+                // its ordering edge is added by the dedicated pass below.
+                if matches!(entries[j].outcome, PretendOutcome::Uninstall { .. }) {
                     continue;
                 }
                 best = Some(match best {
@@ -1726,6 +1737,40 @@ fn build_digraph(entries: &[GraphEntry], top_level_atoms: &[String], root: &Path
     // Fallback edges from `required_by` for owner relationships the
     // forward walk has no `deps` entry for.
     for (j, e) in entries.iter().enumerate() {
+        // #72 B3: a `Uninstall` removal's `required_by` names the blocker
+        // owner it removes *for*, which real orders the removal **after**
+        // (u1/u3: the owner's row, then `[uninstall]`). The generic
+        // fallback would add owner -> removal (removal first), so the
+        // dedicated pass below adds the reversed edge instead and this
+        // loop skips the removal.
+        if matches!(e.outcome, PretendOutcome::Uninstall { .. }) {
+            for owner in &e.required_by {
+                let Some(owner_indices) = cp_indices.get(&(owner.0.as_str(), owner.1.as_str()))
+                else {
+                    continue;
+                };
+                for &i in owner_indices {
+                    if i == j || g.children[i].iter().any(|(c, _)| *c == j) {
+                        continue;
+                    }
+                    // `add_edge(j, i)`: the owner is the removal's child,
+                    // so the owner is selected first (real's
+                    // `_serialize_tasks` defers every uninstall node until
+                    // it is scheduled, `get_nodes` `depgraph.py:9539-9549`).
+                    g.add_edge(
+                        j,
+                        i,
+                        DepPriority {
+                            buildtime: true,
+                            runtime: true,
+                            satisfied: false,
+                            ..DepPriority::default()
+                        },
+                    );
+                }
+            }
+            continue;
+        }
         for owner in &e.required_by {
             let Some(owner_indices) = cp_indices.get(&(owner.0.as_str(), owner.1.as_str())) else {
                 continue;
@@ -1928,12 +1973,14 @@ fn seed_toolchain_asap(entries: &[GraphEntry]) -> Vec<usize> {
 
 /// The version a `GraphEntry` resolves to, whatever its outcome -- real
 /// `Package.version`, which `find_smallest_cycle`'s `sorted(nodes)`
-/// compares after `cp`.
+/// compares after `cp`. A `Uninstall` removal (#72 B3) carries the
+/// installed version it removes, like real's uninstall `Package`.
 pub(crate) fn entry_version(e: &GraphEntry) -> Option<&str> {
     match &e.outcome {
         PretendOutcome::New { version }
         | PretendOutcome::Reinstall { version, .. }
-        | PretendOutcome::AlreadyInstalled { version } => Some(version),
+        | PretendOutcome::AlreadyInstalled { version }
+        | PretendOutcome::Uninstall { version } => Some(version),
         PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => Some(to),
         PretendOutcome::NoVisibleCandidate => None,
     }

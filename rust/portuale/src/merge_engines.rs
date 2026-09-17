@@ -36,7 +36,10 @@ use std::path::Path;
 /// merge -- the caller reports it, same as before).
 pub fn merge_unit_for_entry(entry: &GraphEntry, root: &Path) -> Option<MergeUnit> {
     let version = match &entry.outcome {
-        PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::NoVisibleCandidate => {
+        // #72 B3: a blocker-removal task is not a merge unit.
+        PretendOutcome::AlreadyInstalled { .. }
+        | PretendOutcome::NoVisibleCandidate
+        | PretendOutcome::Uninstall { .. } => {
             return None;
         }
         PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {

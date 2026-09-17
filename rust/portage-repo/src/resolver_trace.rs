@@ -173,10 +173,18 @@ pub(crate) fn node_label(e: &GraphEntry, root: &Path, installed: bool) -> String
 /// Whether a `GraphEntry` is a nomerge (installed / no-visible-candidate)
 /// node -- real `pkg.operation == "nomerge"`, the same test
 /// `merge_order::build_digraph` makes for `Digraph::installed`.
+///
+/// #72 B3: a `Uninstall` removal reports `true` as well. Real's uninstall
+/// node has its own `operation`, but every *merge-list* consumer of this
+/// helper treats "not a merge" the same way (`is_nomerge` gates the
+/// merge-order trace's merge set and the `_serialize_tasks` port's
+/// selection), and portuale's removal must never be selected as a merge.
 pub(crate) fn is_nomerge(e: &GraphEntry) -> bool {
     matches!(
         e.outcome,
-        PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::NoVisibleCandidate
+        PretendOutcome::AlreadyInstalled { .. }
+            | PretendOutcome::NoVisibleCandidate
+            | PretendOutcome::Uninstall { .. }
     )
 }
 

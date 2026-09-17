@@ -199,7 +199,8 @@ pub(crate) fn merge_one_binary_entry(
 ) -> Result<(), String> {
     let cp = format!("{}/{}", entry.category, entry.package);
     let version = match &entry.outcome {
-        PretendOutcome::AlreadyInstalled { .. } => return Ok(()),
+        // #72 B3: a removal installs no binary (execution is a non-goal).
+        PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::Uninstall { .. } => return Ok(()),
         PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
             version.clone()
         }
