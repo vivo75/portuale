@@ -16891,6 +16891,55 @@ def test_oracle_blocker_replaced_version_satisfied_and_unsatisfied_twin(
     assert "installed at the same time" in twin.stderr
 
 
+def test_oracle_blocker_nomerge_owner_set_parent(emerge_binary, fixture_env, tmp_path):
+    """Backlog #73 cell g: a nomerge blocker owner that is a required-set
+    member is a digraph node with parents, even though no walked entry
+    depends on it. Real `_validate_blockers` step 4 refuses to uninstall
+    a digraph node with `parent_nodes` (`depgraph.py:9216-9224`), and
+    `_expand_set_args(..., add_to_digraph=True)` (`:3271`) makes the
+    `@world` `SetArg` that parent.
+
+    Container oracle (real 3.0.82.2, `TEST/findings/l0.md` "#73 S0" cell
+    g / "#73 S1"): installed `bparent` + installed `blocked-1.0`, world
+    {bparent, blocked}, `--update --deep @world =dev-libs/blocked-1.5`
+    -> real prints the `[blocks B]` row and `Conflict: 1 block
+    (1 unsatisfied)` and exits 1 (the row comes from real's trailing
+    `Display.blockers` group; the installed owner itself prints no
+    package line). The control pins the target at the installed version
+    -- no merge-bound match, #68 cell f -- and stays quiet, rc 0.
+    """
+    root = _b1_root(
+        tmp_path,
+        ["dev-libs/bparent", "dev-libs/blocked"],
+        [
+            ("dev-libs", "blocked", "1.0", "0", {}),
+            ("dev-libs", "bparent", "1.0", "0", {}),
+        ],
+    )
+    env = _b1_env(fixture_env, root)
+
+    hit = _run(
+        [str(emerge_binary)],
+        ["--pretend", "-v", "--update", "--deep", "@world", "=dev-libs/blocked-1.5"],
+        env,
+    )
+    assert hit.returncode == 1, hit.stderr
+    assert (
+        '[blocks B      ] <dev-libs/blocked-2.0 ("<dev-libs/blocked-2.0" is soft '
+        "blocking dev-libs/bparent-1.0)" in hit.stdout
+    ), hit.stdout
+    assert "Conflict: 1 block (1 unsatisfied)" in hit.stdout
+    assert "installed at the same time" in hit.stderr
+
+    control = _run(
+        [str(emerge_binary)],
+        ["--pretend", "-v", "--update", "--deep", "@world", "=dev-libs/blocked-1.0"],
+        env,
+    )
+    assert control.returncode == 0, control.stderr
+    assert "[blocks" not in control.stdout, control.stdout
+
+
 def test_oracle_slotop_runtime_pkg_mask(
     emerge_binary, fixture_env, tmp_path
 ):

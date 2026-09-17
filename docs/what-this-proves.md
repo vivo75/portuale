@@ -17073,3 +17073,21 @@ rust/target/release/portuale emerge -uDpvN @world | grep -c '^\['
 ```
 
 Evidence: `TEST/findings/l0.md` "#69 R0"–"#69 R2". Plan: `docs/01.069-getbinpkg_newuse_rebuild.md`.
+
+**A blocker owner kept by `@world`/`@selected`/`@system` is a digraph node with parents, so its block stays unresolved like real's (backlog #73, 2026-09-17).** Real's `_validate_blockers` step 4 refuses to uninstall an instance that is a digraph node with `parent_nodes` (`depgraph.py:9216-9224`), and `_expand_set_args(..., add_to_digraph=True)` (`:3271`) makes the set/argument node that parent. Portuale's `graph_has_parent` only scans walked entries' `deps`, so an installed (nomerge) owner with no consumer edge looked parentless and the block was classified satisfied (`Conflict: 1 block (all satisfied)`, rc 0) where real prints `B` and exits 1. The R0 oracle captured every shape before the code changed: owner in `@world` (g), owner as a plain `--oneshot` argument (g2), owner reachable only through a world member's installed dependency edge (g3), owner in `@system` (g4) — real prints `B`/rc 1 in all four, and `ResolveCtx::installed_closure` (the same `@world`/`@selected`/`@system` forward-installed closure `#68` S3 gave the target arm) contains the owner in all four, while `top_level_cps` alone would have missed g3. The nomerge arm is now `merge_bound_match && (graph_has_parent(owner) || owner_set_parent(owner, installed_closure))`, with the parentheses the `#73` plan's T11 trap required, and the installed owner's unresolved rows also reach real's trailing `[blocks B]` group (the owner itself prints no package line). The host `-uDpvN @world` re-diff is unchanged (this was not the host abort shape; `#68` fixed that); the container cells g/g2/g3/g4 now match real's block row, `Conflict:` counter and rc byte for byte, and f stays quiet/rc 0.
+
+```sh
+# the pinned cell: installed owner in @world, merge-bound target
+python3 -m pytest tests/test_emerge_pretend_contract.py -q -k nomerge_owner_set_parent
+# -> 1 passed
+
+# the classification unit tests (cell g via the closure, cell f's T11 guard)
+cargo test --release -p portage-repo resolve_blockers
+# -> 6 passed
+
+# host @world unchanged (27 packages, including the #68 gtk-doc shape)
+rust/target/release/portuale emerge -uDpvN @world | grep -c '^\['
+# -> 27
+```
+
+Evidence: `TEST/findings/l0.md` "#73 S0" and "#73 S1" (container cells with exact bytes). Plan: `docs/02.073-blocker_set_parents.md`.
