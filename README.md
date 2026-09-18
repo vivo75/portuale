@@ -65,7 +65,8 @@ rust/                      Rust workspace
   portage-fetch/           shared lib: SRC_URI fetch (Manifest digests, mirrors)
   *-harness/               neutral CLI harnesses (contract + benchmark testing)
   portuale/                the real emerge / ebuild multicall binary
-fixtures/                  synthetic repo + vdb + profile tree the Rust tests run against
+fixtures/                  -> ../pmtest/fixtures (symlink): the one fixture tree,
+                           read by the Rust tests here and by the contract suite there
 musl/                      musl static-build smoke test (minimal-Linux CI gate)
 docs/                      all project documentation (see below)
 ```
@@ -89,7 +90,7 @@ automatically).
 ## Test
 
 ```sh
-# in this repo: the whole Rust workspace (reads ./fixtures)
+# in this repo: the whole Rust workspace (reads ./fixtures -> ../pmtest/fixtures)
 cd rust && cargo test --release
 
 # in the sibling pmtest repo: the black-box contract suite
@@ -99,9 +100,10 @@ cd ../../pmtest && python3 -m pytest pytests-contract-suite -q
 The contract suite, the container differential bed, the benchmark and
 the primitive-differential scripts live in the sibling `pmtest` repo,
 which resolves this tree through its `managers/managers.yaml` registry
-(`PMTEST_PM=portuale`, the default) and rebuilds the binary itself. What
-stays here is `fixtures/`, which the Rust `#[cfg(test)]` tests read
-through a compile-time path, so `cargo test` needs no second repo.
+(`PMTEST_PM=portuale`, the default) and rebuilds the binary itself. The
+fixture tree lives there too: `fixtures/` here is a symlink to it, so
+`cargo test` reads the same files the contract suite does — and needs
+the sibling checkout to be present.
 
 Full pre-slice verification also runs `cargo fmt --check` and
 `cargo clippy --release --all-targets` (zero warnings).

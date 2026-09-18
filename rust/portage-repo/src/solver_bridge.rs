@@ -1202,7 +1202,7 @@ mod tests {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures")
             .canonicalize()
-            .expect("fixtures must exist");
+            .expect("fixtures/ does not resolve: it is a symlink to ../pmtest/fixtures, so the sibling pmtest repo has to be checked out next to this one");
         // The fixture profile's own ACCEPT_KEYWORDS (arch/amd64/make.defaults
         // `ACCEPT_KEYWORDS="${ARCH}"` -> amd64), so `is_visible` in the pool
         // sees the same keyword set a real resolve does.

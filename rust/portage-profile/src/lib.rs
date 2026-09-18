@@ -3745,7 +3745,7 @@ sync-uri = file:///srv/pkgs
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures")
             .canonicalize()
-            .expect("fixtures must exist")
+            .expect("fixtures/ does not resolve: it is a symlink to ../pmtest/fixtures, so the sibling pmtest repo has to be checked out next to this one")
     }
 
     #[test]

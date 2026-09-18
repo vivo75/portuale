@@ -32,12 +32,13 @@ the next slice") and expects the same rhythm every time:
    `lib/portage/tests/resolver/` case — and says which in the test's
    docstring. Real-execution features
    (merge/unmerge/package/fetch/phases) are checked the same way (L1–L3).
-5. **Add fixtures by hand** under `fixtures/repo/…` (+ `metadata/md5-cache/…`)
-   — **in both trees**: this repo's `fixtures/` (read by the Rust
-   `#[cfg(test)]` tests through a compile-time path) and
-   `../pmtest/fixtures/` (read by the contract suite). Nothing syncs the
-   two. Check for name collisions with existing fixtures first. A fixture
-   that "passes" without isolating the new behaviour is worse than none.
+5. **Add fixtures by hand** under `fixtures/repo/…` (+ `metadata/md5-cache/…`).
+   There is one fixture tree and it lives in pmtest: `fixtures/` here is
+   a symlink to `../pmtest/fixtures`, so the file you add is pmtest's
+   and belongs in pmtest's commit, while the Rust tests read it through
+   the symlink. Check for name collisions with existing fixtures first.
+   A fixture that "passes" without isolating the new behaviour is worse
+   than none.
 6. **Add tests**. The black-box suite lives in the sibling `pmtest`
    repo (see `docs/agent-context.md`, "Where the tests live"): a `CASES`
    entry there (Rust exit code; the output invariants in

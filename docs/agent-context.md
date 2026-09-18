@@ -107,6 +107,7 @@ operating manual; read it before running or changing anything there.
 | Was, in this tree | Is now |
 |---|---|
 | `tests/` | `../pmtest/pytests-contract-suite/` |
+| `fixtures/` | `../pmtest/fixtures/` (this tree's `fixtures` is a symlink to it) |
 | `TEST/` | `../pmtest/differential-test-bed/` |
 | `python/*_harness.py` | `../pmtest/python-harness/` |
 | `bench/` | `../pmtest/bench/` |
@@ -117,16 +118,21 @@ operating manual; read it before running or changing anything there.
 `../pmtest/differential-test-bed/findings/l2.md` today. Those records are
 history and are not rewritten; this table is the map.
 
-Two things did **not** move:
+`fixtures/` moved too (`335543e`), but reads the same from here: it is
+now a **symlink to `../pmtest/fixtures`**, gitignored, so the ~55 Rust
+`#[cfg(test)]` reads that resolve it through a compile-time
+`CARGO_MANIFEST_DIR/../../fixtures` path keep working and `cargo test`
+still needs no second checkout — it needs the sibling repo. There is one
+copy and it is pmtest's: **every new or corrected fixture is added
+there**. A missing or wrong tree fails loudly rather than quietly
+testing less, on both sides: `fixtures_tree_is_the_pmtest_checkout`
+(portage-repo) and the `_require_fixture_tree` session fixture in
+pmtest's conftest check the symlink resolves *and* that what it points
+at really is the fixture tree.
 
-- `fixtures/` is duplicated. This tree keeps it because ~55 Rust
-  `#[cfg(test)]` reads resolve it through a compile-time
-  `CARGO_MANIFEST_DIR/../../fixtures` path, so `cargo test` needs no
-  second repo; pmtest has its own copy for the contract suite. The two
-  are identical today and **nothing syncs them**: a new fixture has to be
-  added on both sides, or the side that misses it silently tests less.
-- `3rdparty/` stays here, and pmtest symlinks to it — it is where the
-  pinned real-Portage checkout and its gpg test keyring come from.
+`3rdparty/` is the one thing that stays here, and pmtest symlinks to it
+— it is where the pinned real-Portage checkout and its gpg test keyring
+come from. The two repos therefore expect to sit next to each other.
 
 pmtest never builds against a stale binary: every run rebuilds the PM
 from the `repo` in its registry entry. Nothing in pmtest is edited to

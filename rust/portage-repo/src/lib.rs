@@ -22605,11 +22605,46 @@ fn enqueue_dependencies(
 mod tests {
     use super::*;
 
+    /// The fixture tree is not in this repository: `fixtures/` is a
+    /// symlink to `../pmtest/fixtures`, the single copy, which the
+    /// contract suite reads too (`docs/agent-context.md`, "Where the
+    /// tests live"). Every `#[cfg(test)]` reader in the workspace
+    /// resolves it through a compile-time `CARGO_MANIFEST_DIR/../..`
+    /// path, so a missing or half-checked-out sibling would otherwise
+    /// surface as a pile of unrelated file-not-found failures. This
+    /// test is the one that says why.
+    #[test]
+    fn fixtures_tree_is_the_pmtest_checkout() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+        assert!(
+            root.is_dir(),
+            "{} does not resolve -- `fixtures/` is a symlink to ../pmtest/fixtures: \
+             check out the sibling pmtest repo next to this one",
+            root.display()
+        );
+        // Markers, not a full inventory: enough to catch a tree that is
+        // there but is not the fixture tree (a stale mount, an empty
+        // clone, a symlink retargeted by hand).
+        for marker in [
+            "repo/profiles/make.defaults",
+            "repo/metadata/md5-cache",
+            "etc/portage/make.conf",
+            "var/db/pkg",
+        ] {
+            assert!(
+                root.join(marker).exists(),
+                "fixtures tree at {} is missing {marker}: it resolves, but it is \
+                 not the pmtest fixture tree",
+                root.display()
+            );
+        }
+    }
+
     fn fixtures_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures")
             .canonicalize()
-            .expect("fixtures must exist")
+            .expect("fixtures/ does not resolve: it is a symlink to ../pmtest/fixtures, so the sibling pmtest repo has to be checked out next to this one")
     }
 
     /// These unit tests exercise portage-repo's own resolution logic in
