@@ -1479,6 +1479,11 @@ CASES = [
     ("blocker: --color=y -v coloured + widened", ["--pretend", "--color=y", "-v", "dev-libs/blockerorderpkg"], 0),
     ("blocker: --tree still ends with the deferred [blocks b ] line", ["--pretend", "--tree", "dev-libs/blockerorderpkg"], 0),
     ("blocker: --json blocker payload is unchanged by the line reformat", ["--pretend", "--json", "dev-libs/blockerorderpkg"], 0),
+    (
+        "blocker: an unwalked installed owner's merge-bound match adds its removal row (#77 A0)",
+        ["--pretend", "=dev-libs/nomtarget-1.5"],
+        0,
+    ),
     ("overlay: package exists only in the overlay repo", ["--pretend", "dev-libs/overlayonlypkg"], 0),
     ("overlay: best version wins across repos", ["--pretend", "dev-libs/overlaynewerpkg"], 0),
     ("overlay: same-version tie broken toward higher priority", ["--pretend", "dev-libs/overlaytiepkg"], 0),
@@ -17053,6 +17058,129 @@ def test_oracle_blocker_replaced_version_satisfied_and_unsatisfied_twin(
     )
     assert "Conflict: 1 block (1 unsatisfied)" in twin.stdout
     assert "installed at the same time" in twin.stderr
+
+
+def test_oracle_77_nomerge_owner_removal_row(emerge_binary, fixture_env, tmp_path):
+    """Backlog #77 A0/A1: a blocker whose owner is installed but never
+    walked still uninstall-orders that owner against its merge-bound
+    match.
+
+    Real `_validate_blockers` scans **every** installed package's
+    recorded runtime deps (`Package._runtime_keys`, `depgraph.py:
+    8919-9078`) and registers their blockers with the vardb `Package` as
+    parent; the nomerge arm (`parent.operation == "nomerge"`,
+    `:9204-9206`) removes that owner, ordered after the merge-bound
+    blocked instance (`inst_task`, `:9240-9242`). Installed
+    `nomowner-1.0`'s vdb `RDEPEND="!<dev-libs/nomtarget-2.0"` matches the
+    merge-bound `nomtarget-1.5`, and `nomowner` is not in @world and no
+    graph entry depends on it.
+
+    Container oracle, real 3.0.82.2, `TEST/findings/l0.md` "#77 A0" cells
+    n1 (`-p`), n2 (`-pv`), n3 (`--columns`) and n4 (`-q`): real's bytes
+    are the `[uninstall]` row, the inline satisfied `b`, and
+    `Total: 1 package (1 upgrade, 1 uninstall)` /
+    `Conflict: 1 block (all satisfied)`. Two real-vs-portuale display
+    cuts predate this slice and are deliberately not in these pins: the
+    `-pv` per-row ` 0 KiB` size suffix (documented in `pretend.rs`'s
+    `verbose_size`) and the trailing space real leaves after a plain `-p`
+    `USE="…"` field. n5 (`--tree`) belongs to Phase C; the n6 control
+    (owner set-reachable -> `[blocks B]`, rc 1) is pinned below on a
+    test-local root, because the shared fixture world cannot carry
+    `nomowner` without perturbing every world/removal pin.
+    """
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "=dev-libs/nomtarget-1.5"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild     U  ] dev-libs/nomtarget-1.5 [1.0]",
+        "[uninstall     ] dev-libs/nomowner-1.0 ",
+        '[blocks b      ] <dev-libs/nomtarget-2.0 ("<dev-libs/nomtarget-2.0" is '
+        "soft blocking dev-libs/nomowner-1.0)",
+    ], result.stdout
+
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "-v", "=dev-libs/nomtarget-1.5"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild     U  ] dev-libs/nomtarget-1.5::testrepo [1.0::testrepo]",
+        "[uninstall     ] dev-libs/nomowner-1.0::testrepo ",
+        '[blocks b      ] <dev-libs/nomtarget-2.0 ("<dev-libs/nomtarget-2.0" is '
+        "soft blocking dev-libs/nomowner-1.0)",
+        "",
+        "Total: 1 package (1 upgrade, 1 uninstall), Size of downloads: 0 KiB",
+        "Conflict: 1 block (all satisfied)",
+    ], result.stdout
+
+    # n3: --columns suppresses the satisfied rows (real `output.py:120`).
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--columns", "=dev-libs/nomtarget-1.5"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild     U  ] dev-libs/nomtarget                                    "
+        "[1.5]                        [1.0]",
+    ], result.stdout
+
+    # n4: -q narrows every bracket pad by one space.
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "-q", "=dev-libs/nomtarget-1.5"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild     U ] dev-libs/nomtarget-1.5 [1.0]",
+        "[uninstall    ] dev-libs/nomowner-1.0 ",
+        '[blocks b     ] <dev-libs/nomtarget-2.0 ("<dev-libs/nomtarget-2.0" is '
+        "soft blocking dev-libs/nomowner-1.0)",
+    ], result.stdout
+
+    # n6 control (A0 n6 / #73 cell g): the owner is a world member and
+    # @world is expanded, so it is a digraph node with parents and the
+    # removal never happens -- unresolved `B`, rc 1.
+    n6_tmp = tmp_path / "n6"
+    n6_tmp.mkdir()
+    root = _b1_root(
+        n6_tmp,
+        ["dev-libs/nomtarget", "dev-libs/nomowner"],
+        [
+            ("dev-libs", "nomtarget", "1.0", "0", {}),
+            (
+                "dev-libs",
+                "nomowner",
+                "1.0",
+                "0",
+                {"RDEPEND": "!<dev-libs/nomtarget-2.0"},
+            ),
+        ],
+    )
+    control = _run(
+        [str(emerge_binary)],
+        [
+            "--pretend",
+            "-v",
+            "--update",
+            "--deep",
+            "@world",
+            "=dev-libs/nomtarget-1.5",
+        ],
+        _b1_env(fixture_env, root),
+    )
+    assert control.returncode == 1
+    assert (
+        '[blocks B      ] <dev-libs/nomtarget-2.0 ("<dev-libs/nomtarget-2.0" is '
+        "soft blocking dev-libs/nomowner-1.0)" in control.stdout
+    )
+    assert "Conflict: 1 block (1 unsatisfied)" in control.stdout
+    assert "installed at the same time" in control.stderr
 
 
 _B0B_BPARENT_1_1 = """EAPI=8

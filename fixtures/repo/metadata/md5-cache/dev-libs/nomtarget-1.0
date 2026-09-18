@@ -1,0 +1,6 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: nomerge blocker owner's removal target, older version (#77 A0)
+EAPI=8
+KEYWORDS=amd64
+SLOT=0
+_md5_=ee8f98ff5b4a1c8f50caba1c2bb5fcba
