@@ -36,8 +36,8 @@ COPY --from=builder /work/rust/target/x86_64-alpine-linux-musl/release/atom-harn
 COPY --from=builder /work/rust/target/x86_64-alpine-linux-musl/release/use-reduce-harness /bin/use-reduce-harness
 COPY --from=builder /work/rust/target/x86_64-alpine-linux-musl/release/required-use-harness /bin/required-use-harness
 # Real deployment would install this binary once and create `emerge`/
-# `ebuild` symlinks (proven on the host filesystem by
-# tests/test_portuale.py); scratch has no shell to `ln` at image
+# `ebuild` symlinks (proven on the host filesystem by the contract
+# suite's test_portuale.py); scratch has no shell to `ln` at image
 # build time, so the smoke test copies the same binary under each applet
 # name instead. Dispatch is by argv[0] basename either way -- the binary
 # can't tell a symlink from a hardlink from a separate copy.

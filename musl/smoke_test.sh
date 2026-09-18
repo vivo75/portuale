@@ -12,8 +12,8 @@
 #
 # The assertions here are **structural** -- exit codes, the exact cpv
 # set/order of the `[ebuild ...]` merge list, and key markers/substrings.
-# The byte-exact output pins are `tests/test_emerge_pretend_contract.py`'s
-# job; this gate's job is "the statically-linked musl binaries resolve and
+# The byte-exact output pins are the contract suite's job
+# (`pmtest/pytests-contract-suite/test_emerge_pretend_contract.py`); this gate's job is "the statically-linked musl binaries resolve and
 # refuse correctly in a container with nothing else in it". Keeping the
 # two apart is deliberate: this script sat unrun behind the #61 builder
 # drift long enough for its pilot-era exact strings to go stale.
@@ -86,16 +86,18 @@ merge_names() {
     merge_list "$1" | tr '\n' ' ' | sed 's/ $//'
 }
 
-# The successful `--pretend` shape: rc 0, exactly these cpvs in this
-# order, and every needle present somewhere in the output.
-assert_pretend_ok() {
-    local desc="$1" expected="$2"
-    shift 2
+# A `--pretend` shape: this exit status, exactly these cpvs in this
+# order, and every needle present somewhere in the output. A refusal can
+# still have a merge list -- real prints the plan it cannot carry out,
+# then the blocked-packages error -- so the status is a parameter.
+assert_pretend_rc() {
+    local desc="$1" expected_rc="$2" expected="$3"
+    shift 3
     echo "--- ${desc}"
     local ok=1 actual needle
     actual=$(merge_names "${OUT}")
-    if [ "${RC}" -ne 0 ]; then
-        echo "  rc=${RC}, expected 0" >&2
+    if [ "${RC}" -ne "${expected_rc}" ]; then
+        echo "  rc=${RC}, expected ${expected_rc}" >&2
         ok=0
     fi
     if [ "${actual}" != "${expected}" ]; then
@@ -113,6 +115,13 @@ assert_pretend_ok() {
         fail=1
     fi
     return 0
+}
+
+# The successful `--pretend` shape: the above, with rc 0.
+assert_pretend_ok() {
+    local desc="$1" expected="$2"
+    shift 2
+    assert_pretend_rc "${desc}" 0 "${expected}" "$@"
 }
 
 # The refusal shape: exactly this exit status plus every needle.
@@ -204,21 +213,33 @@ assert_pretend_ok \
 
 # emerge --pretend against blockers (see fixtures/etc/portage/ and
 # the dev-libs/blockerpkg*/weakblockerpkg/graphblockerparent fixture
-# packages): a strong blocker matching an installed package aborts (rc 1,
-# real's blocked-packages error), while a weak blocker matching another
-# package this same run would also newly merge is reported but does not
-# abort.
+# packages). Which of the two aborts is the opposite of what it looks
+# like, and both shapes come from the real-3.0.82.2 oracle the contract
+# suite pins (`test_emerge_pretend_contract.py`, "strong (!!) blocker vs
+# an installed package ... is satisfied (rc 0, real `b`)" and
+# `test_weak_blocker_matches_another_new_package_in_the_same_graph`):
+#
+# - a strong blocker matching an *installed* package nothing else pulls
+#   in is **satisfied** by uninstalling it: real prints the lowercase
+#   `b` line next to an `[uninstall ]` row and exits 0;
+# - a weak blocker matching a package this same run would newly merge
+#   has no such out -- the parent is merging, not installed -- so it is
+#   **unresolved**: uppercase `B`, the blocked-packages error, rc 1.
+#
+# (The pre-oracle pins here had these two swapped, and the gate sat
+# unrun long enough for nobody to notice: see the header note.)
 capture emerge_pretend dev-libs/blockerpkg
-assert_rc \
-    "emerge --pretend reports a strong blocker against an installed package inside the scratch container" \
-    1 '[blocks B' 'hard blocking dev-libs/blockerpkg-1.0' \
-    'packages which cannot be' 'installed at the same time'
+assert_pretend_rc \
+    "emerge --pretend satisfies a strong blocker by uninstalling it inside the scratch container" \
+    0 "dev-libs/blockerpkg-1.0" \
+    '[blocks b' 'hard blocking dev-libs/blockerpkg-1.0' '[uninstall'
 
 capture emerge_pretend dev-libs/graphblockerparent
-assert_pretend_ok \
-    "emerge --pretend reports a weak blocker against an in-graph package inside the scratch container" \
-    "dev-libs/blockerpartnerpkg-1.0 dev-libs/weakblockerpkg-1.0 dev-libs/graphblockerparent-1.0" \
-    '[blocks B' 'soft blocking'
+assert_pretend_rc \
+    "emerge --pretend refuses an unresolved weak blocker against an in-graph package inside the scratch container" \
+    1 "dev-libs/blockerpartnerpkg-1.0 dev-libs/weakblockerpkg-1.0 dev-libs/graphblockerparent-1.0" \
+    '[blocks B' 'soft blocking' \
+    'packages which cannot be' 'installed at the same time'
 
 # emerge --pretend against the overlay repo (see
 # fixtures/etc/portage/repos.conf, which registers a second,
