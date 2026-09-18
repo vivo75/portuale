@@ -17150,3 +17150,24 @@ diff <(emerge -uDpvN --ignore-default-opts @world | grep '^\[' | sed 's/ *[0-9]*
 ```
 
 Evidence: `TEST/findings/l0.md` "#74 S0"–"#74 S3"; plans `docs/02.68-74.md` Phase F and `docs/02.074-bdeps_deep_walk.md` (now done); backlog #74 (done) and #79 (the filed B2 residue).
+
+**A blocker whose installed owner the run never walks still uninstall-orders that owner, and the row matches real (backlog #77, 2026-09-18).** A0's container capture showed the filed "one line: tag the nomerge arm" was insufficient: real's `_validate_blockers` scans **every** installed package's recorded runtime deps (`Package._runtime_keys` = `IDEPEND PDEPEND RDEPEND`, `depgraph.py:8919-9078`) and registers their blockers with the vardb `Package` as nomerge parent, while portuale only ever collected blockers from owners its walk reached — so installed `nomowner-1.0`'s `!<dev-libs/nomtarget-2.0` was invisible and real's `[uninstall] nomowner-1.0` + inline satisfied `b` had no portuale counterpart. A1 adds `collect_unwalked_installed_blockers` (the same dynamic-deps / `use_reduce_flat_disjunctive` pipeline the walk uses, skipped only under `--nodeps`, real's own early exit `:8908-8910`), tags the nomerge satisfied arm `Uninstall { cpv: owner, anchor: <merge-bound blocked cp> }` (real `depends_on_order.add((parent, pkg))` `:9204-9206`, `addnode(uninst_task, inst_task)` `:9240-9242`), and gives an absent owner's row its own removal entry as its display home. No `merge_order.rs` change was needed: `Uninstall.required_by`'s edge is already generic. A2 commits the fixture (`dev-libs/nomowner` / `dev-libs/nomtarget`) so the shared `fixture_env` reaches the shape, adds the bed cell and pins n1–n4 plus the n6 `B`/rc 1 control.
+
+```sh
+# the committed fixture shape, run from the repo root
+PORTAGE_CONFIGROOT=$PWD/fixtures ROOT=$PWD/fixtures PORTAGE_RUNNING_ROOT=$PWD/fixtures \
+  DISTDIR=$PWD/fixtures/distfiles rust/target/release/portuale emerge -p =dev-libs/nomtarget-1.5
+# -> [ebuild     U  ] dev-libs/nomtarget-1.5 [1.0]
+#    [uninstall     ] dev-libs/nomowner-1.0
+#    [blocks b      ] <dev-libs/nomtarget-2.0 ("<dev-libs/nomtarget-2.0" is soft blocking dev-libs/nomowner-1.0)
+
+# the pinned cells (n1/n2/n3/n4 + the n6 control)
+python3 -m pytest tests -q -k 77_nomerge
+# -> 1 passed
+
+# the container bed, including the new cell: 21 probes / 16 clean / 17 explained / 0 unexplained
+TEST/run/l0-fixture-oracle.sh
+# -> rc 0
+```
+
+Evidence: `TEST/findings/l0.md` "#77 A0"–"#77 A3"; plan `docs/02.75-79.md` Phase A. The unresolved half of the same scan (an absent owner's `[blocks B]` row) is filed as backlog #80.
