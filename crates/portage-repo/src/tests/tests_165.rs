@@ -950,6 +950,48 @@ fn file_blocker_conflicts_orphans_an_unsolvable_ownerless_row() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// The scan files an unwalked installed package's strong blocker.
+#[test]
+fn collect_unwalked_installed_blockers_files_an_unwalked_strong_blocker() {
+    let root = dir_165("scan-basic");
+    install_165(
+        &root,
+        "dev-libs",
+        "blk-1.0",
+        "0",
+        &[("RDEPEND", "!!dev-libs/victim")],
+    );
+    let entries = vec![new_165("dev-libs", "victim", "2.0")];
+    let mut pending = Vec::new();
+    let mut memo = HashMap::new();
+    collect_unwalked_installed_blockers(CollectUnwalkedInstalledBlockersArgs {
+        repos: &[],
+        root: &root,
+        config: &cfg_165(),
+        dynamic_deps: false,
+        ignore_built_slot_operator_deps: false,
+        disj_constraints: &HashMap::new(),
+        root_deps_running_root: None,
+        entries: &entries,
+        pending_blockers: &mut pending,
+        installed_meta_memo: &mut memo,
+    });
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].atom_str, "!!dev-libs/victim");
+    assert!(pending[0].strong);
+    assert!(!pending[0].buildtime);
+    assert_eq!(pending[0].target_category, "dev-libs");
+    assert_eq!(pending[0].target_package, "victim");
+    assert_eq!(
+        pending[0].owner_key,
+        ("dev-libs".to_string(), "blk".to_string())
+    );
+    assert_eq!(pending[0].owner_version, "1.0");
+    assert!(!pending[0].owner_merging);
+    assert!(pending[0].owner_installed);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// An already-walked cp is never scanned, and with nothing
 /// merge-bound the scan is a no-op.
 #[test]
@@ -1174,5 +1216,46 @@ fn enqueue_dependencies_drops_a_dep_satisfied_by_the_instance_itself() {
     });
     assert!(queue.is_empty());
     assert!(pending.is_empty());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Plains queue before `||` choices (the main walk's
+/// plains-reversed + `||`-last split).
+#[test]
+fn enqueue_dependencies_queues_plains_before_disjunction_choices() {
+    let root = dir_165("enqueue-order");
+    install_165(
+        &root,
+        "dev-libs",
+        "consumer-1.0",
+        "0",
+        &[("RDEPEND", "dev-libs/plain || ( dev-libs/only )")],
+    );
+    let repos = repo_165(
+        &root,
+        &[
+            ("dev-libs/consumer", "1.0", "0", "", "", "", ""),
+            ("dev-libs/plain", "1.0", "0", "", "", "", ""),
+            ("dev-libs/only", "1.0", "0", "", "", "", ""),
+        ],
+    );
+    let mut entries = Vec::new();
+    let mut queue = std::collections::VecDeque::new();
+    let mut pending = Vec::new();
+    enqueue_165(Enqueue165Args {
+        repos: &repos,
+        root: &root,
+        config: &cfg_165(),
+        cat: "dev-libs",
+        pkg: "consumer",
+        ver: "1.0",
+        with_bdeps: false,
+        entries: &mut entries,
+        queue: &mut queue,
+        pending: &mut pending,
+    });
+    assert!(pending.is_empty());
+    let atoms: Vec<String> = queue.iter().map(|q| q.atom.clone()).collect();
+    assert_eq!(atoms, vec!["dev-libs/plain", "dev-libs/only"]);
     let _ = std::fs::remove_dir_all(&root);
 }
