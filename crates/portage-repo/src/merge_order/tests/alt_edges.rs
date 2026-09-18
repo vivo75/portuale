@@ -55,6 +55,57 @@ fn resolved_dep_targets_ranks_by_vercmp_not_by_string_order() {
 }
 
 #[test]
+fn unqualified_atom_collapses_onto_the_slot_qualified_sibling_target() {
+    // Eliminates the redundant bare-atom selection (matches only via `:0`).
+    // Portage: depgraph.py, _minimize_children
+    let plain = |atom: &str| DepEdge {
+        atom: atom.to_string(),
+        evaluated: atom.to_string().clone(),
+        category: "dev-libs".to_string(),
+        package: "slotted".to_string(),
+        priority: DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        },
+        disjunctive: false,
+        alt: None,
+        key: 3,
+    };
+    let mut low = new_entry("dev-libs", "slotted", "1.9", Vec::new());
+    low.slot = Some("0".into());
+    low.sub_slot = Some("0".into());
+    let mut high = new_entry("dev-libs", "slotted", "1.10", Vec::new());
+    high.slot = Some("1".into());
+    high.sub_slot = Some("1".into());
+    let user = new_entry(
+        "dev-libs",
+        "user",
+        "1.0",
+        vec![plain("dev-libs/slotted:0"), plain("dev-libs/slotted")],
+    );
+    let entries = vec![low, high, user];
+    let root = Path::new("/nonexistent-root-for-unit-test");
+    let targets = resolved_dep_targets(&entries, root, &HashMap::new());
+    assert_eq!(
+        targets[2],
+        vec![Some(0), Some(0)],
+        "both atoms resolve to 1.9: the bare atom's 1.10 selection is redundant"
+    );
+    let g = build_digraph(
+        &entries,
+        &["dev-libs/user".to_string()],
+        root,
+        &HashMap::new(),
+    );
+    let children: Vec<usize> = g.children[2].iter().map(|&(c, _)| c).collect();
+    assert_eq!(
+        children,
+        vec![0],
+        "one edge, to 1.9 -- no extra parent for 1.10: {children:?}"
+    );
+}
+
+#[test]
 fn resolved_dep_targets_reports_an_installed_target_as_no_tree_edge() {
     // The one `merge_bound_only` difference: the tree view drops the
     // installed edge, the scheduling graph keeps it.
@@ -192,5 +243,62 @@ fn kept_alt_branches_agrees_with_build_digraph_on_a_multi_branch_group() {
         kept[0],
         HashSet::from([1usize]),
         "the circular self branch is not kept (#53)"
+    );
+}
+
+#[test]
+fn select_dep_target_eliminates_with_suppressed_sibling_sets() {
+    // A suppressed `||` sibling stays out of the minimize universe.
+    let runtime = DepPriority {
+        runtime: true,
+        ..DepPriority::default()
+    };
+    let mut x1 = new_entry("dev-libs", "x", "1.0", Vec::new());
+    x1.slot = Some("0".into());
+    x1.sub_slot = Some("0".into());
+    let mut x2 = new_entry("dev-libs", "x", "2.0", Vec::new());
+    x2.slot = Some("1".into());
+    x2.sub_slot = Some("1".into());
+    let bare = DepEdge {
+        atom: "dev-libs/x".to_string(),
+        evaluated: "dev-libs/x".to_string(),
+        category: "dev-libs".to_string(),
+        package: "x".to_string(),
+        priority: runtime,
+        disjunctive: true,
+        alt: Some((0, 0)),
+        key: 3,
+    };
+    let qualified = DepEdge {
+        atom: "dev-libs/x:0".to_string(),
+        evaluated: "dev-libs/x:0".to_string(),
+        category: "dev-libs".to_string(),
+        package: "x".to_string(),
+        priority: runtime,
+        disjunctive: true,
+        alt: Some((0, 1)),
+        key: 3,
+    };
+    let user = new_entry("dev-libs", "user", "1.0", vec![bare, qualified]);
+    let entries = vec![x1, x2, user];
+    let root = Path::new("/nonexistent-root-for-unit-test");
+    let pre = digraph_prelude(&entries, root);
+    let suppressed = suppressed_alt_edges(&entries, &pre, root, &HashMap::new());
+    assert_eq!(
+        suppressed[2],
+        HashSet::from([1usize]),
+        "the qualified branch is the suppressed one"
+    );
+    assert_eq!(
+        pre.select_dep_target(SelectDepTargetArgs {
+            entries: &entries,
+            from: 2,
+            from_deps: &entries[2].deps,
+            ei: 0,
+            suppressed: &suppressed[2],
+            merge_bound_only: false
+        }),
+        Some(1),
+        "the suppressed sibling's set must not enter the elimination"
     );
 }

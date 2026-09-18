@@ -206,6 +206,109 @@ fn build_digraph_walks_inline_before_deferred_disjunctive_edges() {
 }
 
 #[test]
+fn build_digraph_uninstall_pairs_the_owner_before_the_removal() {
+    let root = Path::new("/nonexistent-root-for-unit-test");
+    let runtime = DepPriority {
+        runtime: true,
+        ..DepPriority::default()
+    };
+    let owner = new_entry(
+        "dev-libs",
+        "owner",
+        "1.0",
+        vec![plain_edge("dev-libs/leaf", "dev-libs", "leaf", runtime)],
+    );
+    let leaf = new_entry("dev-libs", "leaf", "1.0", Vec::new());
+    let mut removal = new_entry("dev-libs", "old", "1.0", Vec::new());
+    removal.outcome = PretendOutcome::Uninstall {
+        version: "1.0".into(),
+    };
+    removal.required_by = vec![("dev-libs".to_string(), "owner".to_string())];
+    let entries = vec![owner, leaf, removal];
+    let g = build_digraph(
+        &entries,
+        &["dev-libs/owner".to_string()],
+        root,
+        &HashMap::new(),
+    );
+    assert_eq!(
+        g.children[0].iter().map(|(c, _)| *c).collect::<Vec<_>>(),
+        vec![1],
+        "the forward edge is the owner's only child: {:?}",
+        g.children[0]
+    );
+    let reverse = g.children[2]
+        .iter()
+        .find(|(c, _)| *c == 0)
+        .expect("the removal must carry the owner as its child");
+    assert_eq!(reverse.1.len(), 1);
+    assert!(
+        reverse.1[0].buildtime && reverse.1[0].runtime && !reverse.1[0].satisfied,
+        "the reverse edge is the hard buildtime+runtime one: {:?}",
+        reverse.1
+    );
+}
+
+#[test]
+fn build_digraph_fallback_skips_a_cp_the_owner_already_edged() {
+    let root = Path::new("/nonexistent-root-for-unit-test");
+    let runtime = DepPriority {
+        runtime: true,
+        ..DepPriority::default()
+    };
+    // The owner's forward edge resolves `x:1` to slot 1; the cp-level
+    // fallback must not add a second edge to slot 2.
+    let owner = new_entry(
+        "dev-libs",
+        "owner",
+        "1.0",
+        vec![plain_edge("dev-libs/x:1", "dev-libs", "x", runtime)],
+    );
+    let mut x1 = new_entry("dev-libs", "x", "1.0", Vec::new());
+    x1.slot = Some("1".into());
+    x1.sub_slot = Some("1".into());
+    let mut x2 = new_entry("dev-libs", "x", "2.0", Vec::new());
+    x2.slot = Some("2".into());
+    x2.sub_slot = Some("2".into());
+    x2.required_by = vec![("dev-libs".to_string(), "owner".to_string())];
+    let entries = vec![owner, x1, x2];
+    let g = build_digraph(
+        &entries,
+        &["dev-libs/owner".to_string()],
+        root,
+        &HashMap::new(),
+    );
+    assert_eq!(
+        g.children[0].iter().map(|(c, _)| *c).collect::<Vec<_>>(),
+        vec![1],
+        "no fallback edge to the other slot of the same cp: {:?}",
+        g.children[0]
+    );
+    // A same-category different-package child is not the same cp.
+    let owner = new_entry(
+        "dev-libs",
+        "owner",
+        "1.0",
+        vec![plain_edge("dev-libs/y", "dev-libs", "y", runtime)],
+    );
+    let y = new_entry("dev-libs", "y", "1.0", Vec::new());
+    let mut x = new_entry("dev-libs", "x", "1.0", Vec::new());
+    x.required_by = vec![("dev-libs".to_string(), "owner".to_string())];
+    let entries = vec![owner, y, x];
+    let g = build_digraph(
+        &entries,
+        &["dev-libs/owner".to_string(), "dev-libs/y".to_string()],
+        root,
+        &HashMap::new(),
+    );
+    assert!(
+        g.children[0].iter().any(|(c, _)| *c == 2),
+        "an unrelated same-category child is not the same cp: {:?}",
+        g.children[0]
+    );
+}
+
+#[test]
 fn deep_system_deps_follows_only_runtime_edges() {
     let config = portage_profile::Config {
         system_packages: vec!["dev-libs/sys".to_string()],

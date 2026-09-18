@@ -57,3 +57,44 @@ fn select_dep_target_elimination_orders_installed_before_merge_bound() {
         "the merge-bound candidate survives elimination"
     );
 }
+
+#[test]
+fn select_dep_target_keeps_nvc_out_of_the_elimination() {
+    // An NVC candidate neither eliminates nor is eliminated.
+    let runtime = DepPriority {
+        runtime: true,
+        ..DepPriority::default()
+    };
+    let mut nvc = new_entry("dev-libs", "x", "1.0", Vec::new());
+    nvc.outcome = PretendOutcome::NoVisibleCandidate;
+    let mut a = new_entry("dev-libs", "x", "1.0", Vec::new());
+    a.outcome = PretendOutcome::AlreadyInstalled {
+        version: "1.0".into(),
+    };
+    let mut b = new_entry("dev-libs", "x", "1.0", Vec::new());
+    b.outcome = PretendOutcome::AlreadyInstalled {
+        version: "1.0".into(),
+    };
+    let user = new_entry(
+        "dev-libs",
+        "user",
+        "1.0",
+        vec![plain_edge("dev-libs/x", "dev-libs", "x", runtime)],
+    );
+    let entries = vec![nvc, a, b, user];
+    let root = Path::new("/nonexistent-root-for-unit-test");
+    let pre = digraph_prelude(&entries, root);
+    let none = HashSet::new();
+    assert_eq!(
+        pre.select_dep_target(SelectDepTargetArgs {
+            entries: &entries,
+            from: 3,
+            from_deps: &entries[3].deps,
+            ei: 0,
+            suppressed: &none,
+            merge_bound_only: false
+        }),
+        Some(0),
+        "the NVC candidate stays in the ranking"
+    );
+}

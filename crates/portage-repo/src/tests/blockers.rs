@@ -153,6 +153,59 @@ fn resolve_blockers_buildpkgonly_gate() {
 }
 
 #[test]
+fn resolve_blockers_drops_a_blocker_from_a_superseded_walk_candidate() {
+    // Portage only sees blockers of graph nodes: a pending blocker from a
+    // walked-but-unmerged candidate is stale and files nothing.
+    let dir = slotundo_temp_dir("blocker-stale-owner");
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "blk0y",
+        version: "3",
+        slot: "3",
+        rdepend: "",
+        installed_use: "",
+    });
+    let entries = vec![graph_entry("dev-libs", "blk0x", "2")];
+    let stale = PendingBlocker {
+        atom_str: "!=dev-libs/blk0y-3".to_string(),
+        strong: false,
+        buildtime: false,
+        target_category: "dev-libs".to_string(),
+        target_package: "blk0y".to_string(),
+        owner_key: ("dev-libs".to_string(), "blk0x".to_string()),
+        owner_version: "3".to_string(),
+        owner_merging: true,
+        owner_installed: false,
+    };
+    assert!(
+        resolve_blockers(&dir, &[stale], &entries, &HashSet::new(), false).is_empty(),
+        "a walked-but-unmerged candidate's blocker is stale"
+    );
+    // Control: the merged instance's own blocker still files.
+    let current = PendingBlocker {
+        atom_str: "!=dev-libs/blk0y-3".to_string(),
+        strong: false,
+        buildtime: false,
+        target_category: "dev-libs".to_string(),
+        target_package: "blk0y".to_string(),
+        owner_key: ("dev-libs".to_string(), "blk0x".to_string()),
+        owner_version: "2".to_string(),
+        owner_merging: true,
+        owner_installed: false,
+    };
+    let filed = resolve_blockers(&dir, &[current], &entries, &HashSet::new(), false);
+    assert_eq!(filed.len(), 1);
+    assert_eq!(
+        filed[0].conflict.satisfied_by,
+        Some(BlockerSatisfiedBy::Uninstall {
+            cpv: "dev-libs/blk0y-3".to_string(),
+            anchor: ("dev-libs".to_string(), "blk0x".to_string()),
+        })
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn resolve_blockers_keeps_an_installed_match_replaced_in_its_slot_as_satisfied() {
     // Installed match replaced in-slot: the row is kept as `Replacement`.
     let dir = slotundo_temp_dir("blocker-s1-a");
@@ -729,6 +782,119 @@ fn resolve_blockers_classifies_final_graph_matches_by_parent_operation() {
         false,
     );
     assert_eq!(strong.len(), 1, "a strong blocker is not skipped");
+}
+
+#[test]
+fn resolve_blockers_tags_a_scanned_nomerge_owner_with_its_own_removal() {
+    // Never-walked scanned owner: Portage removes the owner, ordered after the
+    // merge-bound blocked instance.
+    let dir = slotundo_temp_dir("blocker-77-scan");
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "bparent",
+        version: "1.0",
+        slot: "0",
+        rdepend: "!<dev-libs/blocked-2.0",
+        installed_use: "flip",
+    });
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "blocked",
+        version: "1.0",
+        slot: "0",
+        rdepend: "",
+        installed_use: "flip",
+    });
+    let pb = || PendingBlocker {
+        atom_str: "!<dev-libs/blocked-2.0".to_string(),
+        strong: false,
+        buildtime: false,
+        target_category: "dev-libs".to_string(),
+        target_package: "blocked".to_string(),
+        owner_key: ("dev-libs".to_string(), "bparent".to_string()),
+        owner_version: "1.0".to_string(),
+        owner_merging: false,
+        owner_installed: true,
+    };
+    let mut upgrade = graph_entry("dev-libs", "blocked", "1.5");
+    upgrade.outcome = PretendOutcome::Upgrade {
+        from: "1.0".into(),
+        to: "1.5".into(),
+    };
+    // The atom matches installed 1.0 (a hidden `Replacement` twin) and 1.5.
+    let conflicts = resolve_blockers(&dir, &[pb()], &[upgrade.clone()], &HashSet::new(), false);
+    assert_eq!(conflicts.len(), 2);
+    let removal = conflicts
+        .iter()
+        .find(|f| f.conflict.matched_version == "1.5")
+        .expect("merge-bound 1.5 row");
+    assert!(!removal.conflict.unsolvable);
+    assert_eq!(
+        removal.conflict.satisfied_by,
+        Some(BlockerSatisfiedBy::Uninstall {
+            cpv: "dev-libs/bparent-1.0".to_string(),
+            anchor: ("dev-libs".to_string(), "blocked".to_string()),
+        })
+    );
+    // The Replacement twin drops for the absent owner; the Uninstall twin creates
+    // the removal entry and the row rides it.
+    let mut entries = vec![upgrade];
+    let mut orphans: Vec<OrphanBlocker> = Vec::new();
+    file_blocker_conflicts(&mut entries, &dir, conflicts, &mut orphans);
+    assert_eq!(entries.len(), 2);
+    let removal_entry = entries
+        .iter()
+        .find(|e| e.package == "bparent")
+        .expect("bparent-1.0 removal entry");
+    assert!(matches!(
+        &removal_entry.outcome,
+        PretendOutcome::Uninstall { version } if version == "1.0"
+    ));
+    assert_eq!(
+        removal_entry.required_by,
+        vec![("dev-libs".to_string(), "blocked".to_string())],
+        "ordered after the merge-bound blocked instance, not the owner"
+    );
+    assert_eq!(removal_entry.blockers.len(), 1);
+    assert_eq!(removal_entry.blockers[0].matched_version, "1.5");
+
+    // A closure member makes the block unresolved with no fabricated removal; the
+    // row rides out as an orphan for the trailing blocker group.
+    let closure: HashSet<(String, String)> =
+        [("dev-libs".to_string(), "bparent".to_string())].into();
+    let mut upgrade = graph_entry("dev-libs", "blocked", "1.5");
+    upgrade.outcome = PretendOutcome::Upgrade {
+        from: "1.0".into(),
+        to: "1.5".into(),
+    };
+    let conflicts = resolve_blockers(&dir, &[pb()], &[upgrade.clone()], &closure, false);
+    assert!(
+        conflicts
+            .iter()
+            .find(|f| f.conflict.matched_version == "1.5")
+            .expect("merge-bound 1.5 row")
+            .conflict
+            .unsolvable
+    );
+    let mut entries = vec![upgrade];
+    let mut orphans: Vec<OrphanBlocker> = Vec::new();
+    file_blocker_conflicts(&mut entries, &dir, conflicts, &mut orphans);
+    assert!(
+        entries.iter().all(|e| e.package != "bparent"),
+        "an unresolved absent-owner row fabricates no removal"
+    );
+    assert_eq!(orphans.len(), 1, "the n1b row survives as an orphan");
+    let orphan = &orphans[0];
+    assert_eq!(
+        (
+            orphan.owner_category.as_str(),
+            orphan.owner_package.as_str()
+        ),
+        ("dev-libs", "bparent")
+    );
+    assert!(orphan.conflict.unsolvable);
+    assert_eq!(orphan.conflict.matched_version, "1.5");
+    let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]

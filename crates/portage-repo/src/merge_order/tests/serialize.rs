@@ -1,6 +1,48 @@
 use super::*;
 
 #[test]
+fn serialize_merge_order_returns_a_permutation_in_dependency_order() {
+    let root = Path::new("/nonexistent-root-for-unit-test");
+    let config = portage_profile::Config::default();
+    let entries = vec![
+        new_entry(
+            "dev-libs",
+            "top",
+            "1.0",
+            vec![runtime_edge("dev-libs/dep", "dev-libs", "dep")],
+        ),
+        new_entry("dev-libs", "dep", "1.0", Vec::new()),
+        new_entry("dev-libs", "isolated", "1.0", Vec::new()),
+    ];
+    let (order, _) = serialize_merge_order(SerializeMergeOrderArgs {
+        entries: &entries,
+        top_level_atoms: &["dev-libs/top".to_string()],
+        config: &config,
+        root,
+        implicit_system_deps: true,
+        repos: &[],
+        dynamic_deps: true,
+        circular: &HashMap::new(),
+    });
+    assert_eq!(
+        order.len(),
+        3,
+        "every entry is scheduled exactly once: {order:?}"
+    );
+    let mut sorted = order.clone();
+    sorted.sort_unstable();
+    assert_eq!(
+        sorted,
+        vec![0, 1, 2],
+        "a permutation of the entries: {order:?}"
+    );
+    assert!(
+        order.iter().position(|&i| i == 1) < order.iter().position(|&i| i == 0),
+        "the dependency merges before its owner: {order:?}"
+    );
+}
+
+#[test]
 fn schedule_graph_prunes_rootless_synthetic_nodes_and_gates_complete_mode() {
     let root = mo_tmp_vdb(
         "schedule",

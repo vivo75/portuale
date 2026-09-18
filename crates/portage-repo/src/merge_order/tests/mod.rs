@@ -204,6 +204,14 @@ fn runtime_edge(atom: &str, cat: &str, pkg: &str) -> DepEdge {
     )
 }
 
+/// A runtime edge tagged as Portage's `RDEPEND` key (`key == 0`), which
+/// `seed_toolchain_asap` reads providers from.
+fn rdepend_edge(atom: &str, cat: &str, pkg: &str) -> DepEdge {
+    let mut edge = runtime_edge(atom, cat, pkg);
+    edge.key = 0;
+    edge
+}
+
 mod alt_edges;
 mod build;
 mod cycles;
@@ -211,5 +219,6 @@ mod debug;
 mod digraph;
 mod prelude;
 mod priority;
+mod select_nodes;
 mod serialize;
 mod tree_display;
