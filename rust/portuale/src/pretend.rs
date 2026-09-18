@@ -919,9 +919,16 @@ fn blocker_row_disposition(
 /// not) that are **not** satisfied by an installed package
 /// (`dep_edge_satisfied_by_installed`, the same rule `build_digraph` uses
 /// for `DepPriority::satisfied`; `GraphEntry::deps` itself never carries
-/// that computed bit). `|| ( … )` branches are not followed -- real
-/// resolves one branch through `dep_zapdeps` and B2 has no oracle for a
-/// disjunctive wait chain (named cut, docs/02.68-74.md §6).
+/// that computed bit).
+///
+/// `|| ( … )` branches: `dep_zapdeps` collapses each group during graph
+/// construction, so the serializer operates on the one branch this run
+/// kept -- the predicate must therefore follow kept alternatives exactly
+/// like plain edges and skip only the suppressed ones
+/// (`portage_repo::kept_alt_branches`, the same `choice_bins` ranking
+/// `build_digraph` uses; #76 B0 captured real waiting through a
+/// disjunctive `BDEPEND` and an `RDEPEND` group, q1/q2/q3 in
+/// `TEST/findings/l0.md` "#76 B0").
 ///
 /// Intermediate hops are matched by **cp**, not per instance (T10):
 /// `DepEdge` carries no resolved slot, real's `_create_graph` resolves
@@ -954,11 +961,18 @@ fn replacement_wait_index(
     }) {
         return None;
     }
+    // #76 B2: the alternatives real's serializer actually sees. Computed
+    // once, after the early returns, so a graph with no Replacement row
+    // never pays for the derivation.
+    let kept_alt = portage_repo::kept_alt_branches(entries, root);
     let mut stack = vec![replacement];
     let mut seen: HashSet<usize> = HashSet::from([replacement]);
     while let Some(i) = stack.pop() {
-        for edge in &entries[i].deps {
-            if edge.alt.is_some() || edge.priority.optional || edge.priority.runtime_post {
+        for (ei, edge) in entries[i].deps.iter().enumerate() {
+            if edge.priority.optional || edge.priority.runtime_post {
+                continue;
+            }
+            if edge.alt.is_some() && !kept_alt[i].contains(&ei) {
                 continue;
             }
             for (j, candidate) in entries.iter().enumerate() {
@@ -13594,6 +13608,102 @@ mod tests {
         assert_eq!(
             count_blocker_rows(&entries, Path::new("/nonexistent")),
             (1, 0)
+        );
+    }
+
+    #[test]
+    fn replacement_wait_follows_the_selected_disjunctive_branch() {
+        // #76 B2 / B0 q1-q3: `dep_zapdeps` collapses a `|| ( … )` group
+        // before the serializer runs, so a wait chain through the **kept**
+        // branch is a wait, and a suppressed branch is not followed.
+        let nc = Colorizer::new(false);
+        let owner = || {
+            let mut e = entry_with_use(
+                PretendOutcome::Upgrade {
+                    from: "1.0".into(),
+                    to: "1.1".into(),
+                },
+                "",
+                "",
+            );
+            e.package = "bparent".into();
+            e.blockers = vec![BlockerConflict {
+                atom_str: "!<dev-libs/blocked-2.0".into(),
+                strong: false,
+                matched_category: "dev-libs".into(),
+                matched_package: "blocked".into(),
+                matched_version: "1.0".into(),
+                unsolvable: false,
+                satisfied_by: Some(BlockerSatisfiedBy::Replacement {
+                    cp: ("dev-libs".into(), "blocked".into()),
+                    slot: "0".into(),
+                }),
+            }];
+            e
+        };
+        let replacement = |deps: Vec<portage_repo::DepEdge>| {
+            let mut e = entry_with_use(
+                PretendOutcome::Upgrade {
+                    from: "1.0".into(),
+                    to: "2.0".into(),
+                },
+                "",
+                "",
+            );
+            e.package = "blocked".into();
+            e.deps = deps;
+            e
+        };
+        let alt_edge = |pkg: &str, version: &str, branch: u32| portage_repo::DepEdge {
+            atom: format!("~dev-libs/{pkg}-{version}"),
+            category: "dev-libs".into(),
+            package: pkg.into(),
+            priority: portage_repo::DepPriority {
+                runtime: true,
+                ..portage_repo::DepPriority::default()
+            },
+            disjunctive: true,
+            alt: Some((0, branch)),
+            key: 4,
+        };
+
+        // `|| ( ~bparent-1.1 absent )`: the wait branch is the kept one
+        // (B0 q1), so the row prints inline after the replacement.
+        let entries = [
+            owner(),
+            replacement(vec![
+                alt_edge("bparent", "1.1", 0),
+                alt_edge("absent", "1.0", 1),
+            ]),
+        ];
+        let inline =
+            collect_inline_blocker_lines(&entries, Path::new("/nonexistent"), false, false, &nc);
+        assert_eq!(inline.len(), 1, "the kept disjunctive wait prints a row");
+        assert_eq!(inline[0].0, 1, "after the replacement entry");
+
+        // `|| ( ~other-1.0 ~bparent-1.1 )`: both branches are in graph,
+        // the first wins (B0 q2's all-in-graph ranking), so the
+        // bparent alternative is suppressed and the row hides.
+        let mut other = entry_with_use(
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+            "",
+            "",
+        );
+        other.package = "other".into();
+        let entries = [
+            owner(),
+            replacement(vec![
+                alt_edge("other", "1.0", 0),
+                alt_edge("bparent", "1.1", 1),
+            ]),
+            other,
+        ];
+        assert!(
+            collect_inline_blocker_lines(&entries, Path::new("/nonexistent"), false, false, &nc)
+                .is_empty(),
+            "a suppressed wait branch is not followed"
         );
     }
 
