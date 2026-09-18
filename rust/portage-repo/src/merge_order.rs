@@ -1376,18 +1376,40 @@ fn add_installed_dependency_closure(
     }
 }
 
-/// Builds the merge-order digraph out of the resolved `entries`.
-///
-/// Nodes are the entries themselves (portuale's own graph is already
-/// one node per resolved `cat/pkg` slot); edges come from
-/// `GraphEntry::deps`, which carries real's own per-key `DepPriority`.
-/// `required_by` supplies a fallback edge for any owner relationship the
-/// forward `deps` walk didn't record (a diamond dependency's second
-/// owner, a synthetic rebuild entry, an entry whose metadata was
-/// unreadable) so the new scheduler is never *less* constrained than the
-/// `required_by`-only one it replaces.
-fn build_digraph(entries: &[GraphEntry], top_level_atoms: &[String], root: &Path) -> Digraph {
-    let n = entries.len();
+/// Shared prelude of `build_digraph` and the public
+/// [`kept_alt_branches`]: `cat/pkg` -> entry indices, the installed-node
+/// flags (`AlreadyInstalled`/`NoVisibleCandidate`), and the per-entry
+/// candidate strings `edge_matches` narrows atoms against.
+struct DigraphPrelude<'a> {
+    cp_indices: HashMap<(&'a str, &'a str), Vec<usize>>,
+    installed: Vec<bool>,
+    entry_candidate: Vec<Option<String>>,
+}
+
+impl DigraphPrelude<'_> {
+    /// Real `_create_graph` resolves every dep atom to a single package
+    /// (`_select_pkg_highest_available`) before `_add_pkg` records the
+    /// edge. Portuale looked each atom's `cat/pkg` up in `cp_indices` and
+    /// connected it to *every* scheduled instance of that `cp` -- so a
+    /// slot-qualified atom (`app-text/docbook-sgml-dtd:3.0`) wrongly
+    /// gained an edge to a sibling slot also being merged, and the extra
+    /// parent skewed `_merge_order_bias`'s parent-count ordering. Narrow
+    /// every edge to the entries its atom actually matches (version /
+    /// slot / repo); keep the edge whenever the candidate string can't be
+    /// built or the atom won't parse, so this only ever removes a
+    /// provably-wrong edge.
+    fn edge_matches(&self, atom: &str, j: usize) -> bool {
+        let Some(cand) = self.entry_candidate[j].as_deref() else {
+            return true;
+        };
+        match portage_dep::match_from_list(atom, &[cand]) {
+            Some(m) => !m.is_empty(),
+            None => true,
+        }
+    }
+}
+
+fn digraph_prelude<'a>(entries: &'a [GraphEntry], root: &Path) -> DigraphPrelude<'a> {
     let mut cp_indices: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
     for (i, e) in entries.iter().enumerate() {
         cp_indices
@@ -1404,43 +1426,6 @@ fn build_digraph(entries: &[GraphEntry], top_level_atoms: &[String], root: &Path
             )
         })
         .collect();
-
-    let mut g = Digraph {
-        n,
-        children: vec![Vec::new(); n],
-        parents: vec![Vec::new(); n],
-        order: Vec::new(),
-        installed,
-        alive: vec![true; n],
-    };
-
-    // Real `mypriority.satisfied`: an installed package matching the
-    // atom, via the shared `edge_satisfied_with` rule (see its doc).
-    let installed_by_cp = installed_candidates_by_cp(root);
-    let satisfied = |edge: &DepEdge, child: Option<usize>| -> bool {
-        edge_satisfied_with(
-            &installed_by_cp,
-            edge,
-            child.and_then(|ci| {
-                entries[ci]
-                    .slot
-                    .as_deref()
-                    .zip(entries[ci].sub_slot.as_deref())
-            }),
-        )
-    };
-
-    // Real `_create_graph` resolves every dep atom to a single package
-    // (`_select_pkg_highest_available`) before `_add_pkg` records the
-    // edge. Portuale looked each atom's `cat/pkg` up in `cp_indices` and
-    // connected it to *every* scheduled instance of that `cp` -- so a
-    // slot-qualified atom (`app-text/docbook-sgml-dtd:3.0`) wrongly
-    // gained an edge to a sibling slot also being merged, and the extra
-    // parent skewed `_merge_order_bias`'s parent-count ordering. Narrow
-    // every edge to the entries its atom actually matches (version /
-    // slot / repo); keep the edge whenever the candidate string can't be
-    // built or the atom won't parse, so this only ever removes a
-    // provably-wrong edge.
     let entry_candidate: Vec<Option<String>> = entries
         .iter()
         .map(|e| {
@@ -1456,30 +1441,27 @@ fn build_digraph(entries: &[GraphEntry], top_level_atoms: &[String], root: &Path
             ))
         })
         .collect();
-    let edge_matches = |atom: &str, j: usize| -> bool {
-        let Some(cand) = entry_candidate[j].as_deref() else {
-            return true;
-        };
-        match portage_dep::match_from_list(atom, &[cand]) {
-            Some(m) => !m.is_empty(),
-            None => true,
-        }
-    };
+    DigraphPrelude {
+        cp_indices,
+        installed,
+        entry_candidate,
+    }
+}
 
-    // Real `dep_zapdeps` (`dep_check.py`): a `|| ( … )` group resolves to
-    // one alternative, not all. Portuale keeps every branch's atoms in
-    // `GraphEntry::deps` and picks here, per `(key, group)`, following
-    // real's `choice_bins` ordering: the first branch (written order)
-    // *all* of whose atoms already match a merge-bound graph node
-    // (`preferred_in_graph`, and real's line-793 promotion of the
-    // all-in-graph choice ahead of an all-installed one in the same
-    // bin), else the first all of whose atoms match an installed entry
-    // (`preferred_installed`), else the first all of whose atoms match
-    // anything at all. Every other branch's `deps` index is then
-    // suppressed from the discovery walk and the edge loop. If *no*
-    // branch fully resolves, nothing is suppressed (keep the
-    // over-inclusive stopgap).
-    let alt_suppressed: Vec<HashSet<usize>> = entries
+/// Real `dep_zapdeps` (`dep_check.py`): a `|| ( … )` group resolves to
+/// one alternative, not all. Portuale keeps every branch's atoms in
+/// `GraphEntry::deps` and picks here, per `(key, group)`, following
+/// real's `choice_bins` ordering: the first branch (written order)
+/// *all* of whose atoms already match a merge-bound graph node
+/// (`preferred_in_graph`, and real's line-793 promotion of the
+/// all-in-graph choice ahead of an all-installed one in the same bin),
+/// else the first all of whose atoms match an installed entry
+/// (`preferred_installed`), else the first all of whose atoms match
+/// anything at all. Returns, per entry, the `deps` indices of the
+/// branches **not** picked. If *no* branch fully resolves, nothing is
+/// suppressed (keep the over-inclusive stopgap).
+fn suppressed_alt_edges(entries: &[GraphEntry], pre: &DigraphPrelude<'_>) -> Vec<HashSet<usize>> {
+    entries
         .iter()
         .enumerate()
         .map(|(i, e)| {
@@ -1504,8 +1486,9 @@ fn build_digraph(entries: &[GraphEntry], top_level_atoms: &[String], root: &Path
                 for &(b, ei) in members {
                     let edge = &e.deps[ei];
                     let (mut graph_m, mut inst_m, mut any_m) = (false, false, false);
-                    if let Some(idxs) =
-                        cp_indices.get(&(edge.category.as_str(), edge.package.as_str()))
+                    if let Some(idxs) = pre
+                        .cp_indices
+                        .get(&(edge.category.as_str(), edge.package.as_str()))
                     {
                         for &j in idxs {
                             // Real `dep_zapdeps` treats a `||` alternative
@@ -1522,12 +1505,12 @@ fn build_digraph(entries: &[GraphEntry], top_level_atoms: &[String], root: &Path
                             // adding a phantom self-edge that can never
                             // be satisfied and stalls the owner's own
                             // merge-order position (#53).
-                            if j == i && !g.installed[j] {
+                            if j == i && !pre.installed[j] {
                                 continue;
                             }
-                            if edge_matches(&edge.atom, j) {
+                            if pre.edge_matches(&edge.atom, j) {
                                 any_m = true;
-                                if g.installed[j] {
+                                if pre.installed[j] {
                                     inst_m = true;
                                 } else {
                                     graph_m = true;
@@ -1555,7 +1538,85 @@ fn build_digraph(entries: &[GraphEntry], top_level_atoms: &[String], root: &Path
             }
             suppressed
         })
-        .collect();
+        .collect()
+}
+
+/// #76 B1: the `GraphEntry::deps` indices of every `|| ( … )` alternative
+/// this run **kept** -- the branch `dep_zapdeps` resolved the group to,
+/// per `suppressed_alt_edges`' real `choice_bins` ranking. Exposed for
+/// the satisfied-blocker wait predicate (`pretend.rs::
+/// replacement_wait_index`): the serializer runs over the collapsed
+/// graph, so a wait chain through a disjunctive edge is a wait exactly
+/// when that edge's branch was the kept one (`TEST/findings/l0.md`
+/// "#76 B0"). The #53 circular-self-branch exclusion is preserved
+/// because both callers share `suppressed_alt_edges`.
+pub fn kept_alt_branches(entries: &[GraphEntry], root: &Path) -> Vec<HashSet<usize>> {
+    let pre = digraph_prelude(entries, root);
+    let suppressed = suppressed_alt_edges(entries, &pre);
+    entries
+        .iter()
+        .enumerate()
+        .map(|(i, e)| {
+            e.deps
+                .iter()
+                .enumerate()
+                .filter(|(ei, edge)| edge.alt.is_some() && !suppressed[i].contains(ei))
+                .map(|(ei, _)| ei)
+                .collect()
+        })
+        .collect()
+}
+
+/// Builds the merge-order digraph out of the resolved `entries`.
+///
+/// Nodes are the entries themselves (portuale's own graph is already
+/// one node per resolved `cat/pkg` slot); edges come from
+/// `GraphEntry::deps`, which carries real's own per-key `DepPriority`.
+/// `required_by` supplies a fallback edge for any owner relationship the
+/// forward `deps` walk didn't record (a diamond dependency's second
+/// owner, a synthetic rebuild entry, an entry whose metadata was
+/// unreadable) so the new scheduler is never *less* constrained than the
+/// `required_by`-only one it replaces.
+fn build_digraph(entries: &[GraphEntry], top_level_atoms: &[String], root: &Path) -> Digraph {
+    let n = entries.len();
+    let pre = digraph_prelude(entries, root);
+    let cp_indices = &pre.cp_indices;
+    let installed = &pre.installed;
+
+    let mut g = Digraph {
+        n,
+        children: vec![Vec::new(); n],
+        parents: vec![Vec::new(); n],
+        order: Vec::new(),
+        installed: installed.clone(),
+        alive: vec![true; n],
+    };
+
+    // Real `mypriority.satisfied`: an installed package matching the
+    // atom, via the shared `edge_satisfied_with` rule (see its doc).
+    let installed_by_cp = installed_candidates_by_cp(root);
+    let satisfied = |edge: &DepEdge, child: Option<usize>| -> bool {
+        edge_satisfied_with(
+            &installed_by_cp,
+            edge,
+            child.and_then(|ci| {
+                entries[ci]
+                    .slot
+                    .as_deref()
+                    .zip(entries[ci].sub_slot.as_deref())
+            }),
+        )
+    };
+
+    // The per-entry candidate strings `edge_matches` narrows atoms
+    // against -- see `digraph_prelude` for the full real grounding.
+    let edge_matches = |atom: &str, j: usize| pre.edge_matches(atom, j);
+
+    // Real `dep_zapdeps` (`dep_check.py`): a `|| ( … )` group resolves to
+    // one alternative, not all. The derivation lives in
+    // `suppressed_alt_edges` so the public `kept_alt_branches` used by the
+    // #76 wait predicate cannot drift from this internal use.
+    let alt_suppressed = suppressed_alt_edges(entries, &pre);
 
     // Real `_create_graph`: an explicit LIFO `dep_stack` seeded from the
     // top-level atoms. A node is recorded into `.order` the moment its
@@ -3398,6 +3459,104 @@ mod tests {
             prios.iter().any(|p| p.buildtime),
             "the mogo -> mogoboot edge must be the real buildtime one, \
              not the weaker required_by-fallback edge: {prios:?}"
+        );
+    }
+
+    #[test]
+    fn kept_alt_branches_agrees_with_build_digraph_on_a_multi_branch_group() {
+        // #76 B1: real `dep_zapdeps`' all-in-graph bin outranks
+        // all-installed, so the kept branch is the merge-bound one; the
+        // public helper must report exactly that (B0 q2), and
+        // `build_digraph` -- which shares `suppressed_alt_edges` -- must
+        // record an edge only to it.
+        let owner_deps = vec![
+            DepEdge {
+                atom: "~dev-libs/newdep-2".to_string(),
+                category: "dev-libs".to_string(),
+                package: "newdep".to_string(),
+                priority: DepPriority {
+                    runtime: true,
+                    ..DepPriority::default()
+                },
+                disjunctive: true,
+                alt: Some((0, 0)),
+                key: 3,
+            },
+            DepEdge {
+                atom: "dev-libs/olddep".to_string(),
+                category: "dev-libs".to_string(),
+                package: "olddep".to_string(),
+                priority: DepPriority {
+                    runtime: true,
+                    ..DepPriority::default()
+                },
+                disjunctive: true,
+                alt: Some((0, 1)),
+                key: 3,
+            },
+        ];
+        let mut olddep = new_entry("dev-libs", "olddep", "1.0", Vec::new());
+        olddep.outcome = PretendOutcome::AlreadyInstalled {
+            version: "1.0".into(),
+        };
+        let entries = vec![
+            new_entry("app-misc", "owner", "1.0", owner_deps),
+            new_entry("dev-libs", "newdep", "2", Vec::new()),
+            olddep,
+        ];
+        let root = Path::new("/nonexistent-root-for-unit-test");
+        let kept = kept_alt_branches(&entries, root);
+        assert_eq!(
+            kept[0],
+            HashSet::from([0usize]),
+            "the in-graph branch is kept over the installed one"
+        );
+        let g = build_digraph(&entries, &["app-misc/owner".to_string()], root);
+        let children: Vec<usize> = g.children[0].iter().map(|&(c, _)| c).collect();
+        assert!(
+            children.contains(&1),
+            "an edge to the kept branch must exist: {children:?}"
+        );
+        assert!(
+            !children.contains(&2),
+            "no edge to the suppressed branch: {children:?}"
+        );
+        // The #53 self-branch exclusion the helper shares.
+        let mogo_deps = vec![
+            DepEdge {
+                atom: ">=dev-lang/mogo-1.24".to_string(),
+                category: "dev-lang".to_string(),
+                package: "mogo".to_string(),
+                priority: DepPriority {
+                    buildtime: true,
+                    ..DepPriority::default()
+                },
+                disjunctive: true,
+                alt: Some((0, 0)),
+                key: 4,
+            },
+            DepEdge {
+                atom: ">=dev-lang/mogoboot-1.24".to_string(),
+                category: "dev-lang".to_string(),
+                package: "mogoboot".to_string(),
+                priority: DepPriority {
+                    buildtime: true,
+                    ..DepPriority::default()
+                },
+                disjunctive: true,
+                alt: Some((0, 1)),
+                key: 4,
+            },
+        ];
+        let entries = vec![
+            new_entry("dev-lang", "mogo", "1.26", mogo_deps),
+            new_entry("dev-lang", "mogoboot", "1.24", Vec::new()),
+        ];
+        let kept = kept_alt_branches(&entries, root);
+        assert_eq!(
+            kept[0],
+            HashSet::from([1usize]),
+            "the circular self branch is not kept (#53)"
         );
     }
 }
