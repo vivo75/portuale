@@ -9631,7 +9631,7 @@ def test_different_slots_of_the_same_package_coexist_without_conflict(emerge_bin
     # real capture has 1.0 first (`TEST/findings/l0.md` "#75 C1"), a
     # tree-mode serializer ordering difference C2 owns (the tree retlist
     # differs from the flat one) and stops on, filing the remainder as
-    # backlog #80. The nesting itself (both slots, depth 1) is real's.
+    # backlog #81. The nesting itself (both slots, depth 1) is real's.
     tree = _run(
         [str(emerge_binary)], ["--pretend", "--tree", "dev-libs/multislotparent"], fixture_env
     )
