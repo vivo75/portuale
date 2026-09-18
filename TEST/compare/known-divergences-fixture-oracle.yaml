@@ -120,3 +120,34 @@
     can run host-exact; a merge-order port is #17's parked work, not
     #71's. See `TEST/findings/l0.md` "#71 S1".
   owner: portuale
+
+# -- #79 D1: the reverse-dependency pin fixture
+#    (FX_WORLD_EXTRA=dev-libs/rdctarget,
+#    TEST/atomlists/l0-fixture-oracle-rdcpin.txt). A filed portuale bug
+#    being suppressed so the layer stays green until D2 fixes it; the
+#    `owner: portuale-bug` entries are removed in D2.
+
+- id: d1-rdcpin-drops-the-blocker-merge
+  category: exit
+  slugs: ["--update_--deep_--newuse_--oneshot_dev-libs_rdcpuller"]
+  match: "real rc=1 portuale rc=0"
+  reason: >
+    Portuale's `reverse_dependency_constraints` scan enforces the
+    installed `dev-libs/rdctarget-1.0`'s recorded
+    `~dev-libs/rdcblocker-1.0` pin when `rdcblocker` is upgrading, so
+    `rdcblocker-2.0` is dropped and no block is reported (rc 0). Real
+    keeps the merge and reports `[blocks B] <dev-libs/rdctarget-2.0`
+    (the installed consumer is an @selected digraph node, so it cannot
+    be uninstalled), rc 1. Backlog #79; D2 removes this entry.
+  owner: portuale-bug
+
+- id: d1-rdcpin-suppressed-merge-list
+  category: exit
+  slugs: ["--update_--deep_--newuse_--oneshot_dev-libs_rdcpuller"]
+  match: "merge-list comparison suppressed"
+  reason: >
+    The comparator suppresses merge-list comparison on the rc mismatch
+    above; real's list is `rdcblocker-2.0` + `rdcpuller-2.0` + the
+    `[blocks B]` row, portuale's is `rdcpuller-2.0` alone. Backlog #79;
+    D2 removes this entry.
+  owner: portuale-bug
