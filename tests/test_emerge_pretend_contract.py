@@ -1499,6 +1499,16 @@ CASES = [
         ["--pretend", "--tree", "=dev-libs/nomtarget-1.5"],
         0,
     ),
+    (
+        "tree: a slot-unqualified atom resolves to the vercmp-highest merge-bound slot (#82)",
+        ["--pretend", "--tree", "dev-libs/treeslotuser"],
+        0,
+    ),
+    (
+        "tree: the same shape flat, for the merge-order comparison (#82 / #85)",
+        ["--pretend", "-v", "dev-libs/treeslotuser"],
+        0,
+    ),
     ("overlay: package exists only in the overlay repo", ["--pretend", "dev-libs/overlayonlypkg"], 0),
     ("overlay: best version wins across repos", ["--pretend", "dev-libs/overlaynewerpkg"], 0),
     ("overlay: same-version tie broken toward higher priority", ["--pretend", "dev-libs/overlaytiepkg"], 0),
@@ -9631,7 +9641,7 @@ def test_different_slots_of_the_same_package_coexist_without_conflict(emerge_bin
     # real capture has 1.0 first (`TEST/findings/l0.md` "#75 C1"), a
     # tree-mode serializer ordering difference C2 owns (the tree retlist
     # differs from the flat one) and stops on, filing the remainder as
-    # backlog #80. The nesting itself (both slots, depth 1) is real's.
+    # backlog #81. The nesting itself (both slots, depth 1) is real's.
     tree = _run(
         [str(emerge_binary)], ["--pretend", "--tree", "dev-libs/multislotparent"], fixture_env
     )
@@ -17313,6 +17323,37 @@ def test_oracle_75_tree_blocker_rows_match_real(emerge_binary, fixture_env):
         "blocking dev-libs/nomowner-1.0)",
         "[uninstall     ]  dev-libs/nomowner-1.0 ",
         "[ebuild     U  ] dev-libs/nomtarget-1.5 [1.0]",
+    ], result.stdout
+
+
+def test_oracle_82_tree_edges_follow_the_resolved_dep_target(emerge_binary, fixture_env):
+    """Backlog #82: `--tree` nests a package under the entry whose own
+    atom resolved to it, never under a same-cp sibling's owner.
+
+    `dev-libs/slotorderroot` RDEPENDs `dev-libs/slotorderdual:2`
+    explicitly while the sibling slot `:1` is reached only through
+    `dev-libs/slotorderb`. `required_by` is cp-keyed, so before #82 the
+    deps-less-entry fallback gave `slotorderdual-2.0` a second, phantom
+    owner (`slotorderb`) and the tree nested it there. Real's digraph has
+    one edge per atom (`_select_pkg_highest_available`), so it nests
+    `2.0` directly under the root.
+
+    Container oracle, real 3.0.82.2, byte-identical apart from real's
+    `to <root>/` suffix on a non-"/" ROOT (the standing fixture cut):
+    `TEST/findings/l0.md` "#82".
+    """
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--tree", "dev-libs/slotorderroot"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N     ] dev-libs/slotorderroot-1.0 ",
+        "[ebuild  N     ]  dev-libs/slotorderb-1.0 ",
+        "[ebuild  N     ]   dev-libs/slotorderdual-1.0 ",
+        "[ebuild  N     ]  dev-libs/slotorderdual-2.0 ",
+        "[ebuild  N     ]  dev-libs/slotordera-1.0 ",
     ], result.stdout
 
 

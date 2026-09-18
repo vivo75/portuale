@@ -59,7 +59,9 @@ mod merge_order;
 mod resolver_trace;
 mod solver_bridge;
 
-pub use merge_order::{DepEdge, DepPriority, dep_edge_satisfied_by_installed, kept_alt_branches};
+pub use merge_order::{
+    DepEdge, DepPriority, dep_edge_satisfied_by_installed, kept_alt_branches, resolved_dep_targets,
+};
 
 use portage_versions::vercmp;
 use std::cell::RefCell;
@@ -15087,14 +15089,35 @@ fn collect_unwalked_installed_blockers(
     pending_blockers: &mut Vec<PendingBlocker>,
     installed_meta_memo: &mut HashMap<(String, String, String, String), String>,
 ) {
+    // #83: with nothing merge-bound in `entries` the scan cannot
+    // contribute a single row, so it is skipped outright. Every blocker
+    // it produces is `owner_installed`, i.e. `owner_merging == false` in
+    // `resolve_blockers`; the target candidate list is then the installed
+    // matches alone (the merge-bound arm that extends it is empty), so
+    // every match takes the `!owner_merging && installed_match &&
+    // !merge_bound_match` early `continue` -- real's "an installed
+    // parent's `blocked_initial` matches are ignored outright" cell.
+    // The `Replacement` arm needs a same-slot merge-bound entry and the
+    // `unsolvable` arm is `merge_bound_match && …`, so neither can fire
+    // either. Exact shortcut, not an approximation.
+    if !entries
+        .iter()
+        .any(|e| merge_bound_version(&e.outcome).is_some())
+    {
+        return;
+    }
+    // #83: the walked-cp test below ran a linear `entries` scan for every
+    // installed package (O(installed x entries)); the set is the same
+    // cp-keyed test, hoisted.
+    let walked: HashSet<(&str, &str)> = entries
+        .iter()
+        .map(|e| (e.category.as_str(), e.package.as_str()))
+        .collect();
     for pkg in all_installed_packages(root) {
         // Already walked (any outcome): the walk's own blockers are
         // pending, and the cp-keyed owner lookup in `resolve_blockers`
         // ties them to the right entry.
-        if entries
-            .iter()
-            .any(|e| e.category == pkg.category && e.package == pkg.package)
-        {
+        if walked.contains(&(pkg.category.as_str(), pkg.package.as_str())) {
             continue;
         }
         let pf = format!("{}-{}", pkg.package, pkg.version);
@@ -15133,6 +15156,17 @@ fn collect_unwalked_installed_blockers(
                 installed_meta_memo,
             ));
             depstr.push(' ');
+        }
+        // #83: this loop exists only to find blocker tokens, and a
+        // blocker token always starts with `!` (`portage_dep::Blocker`).
+        // `use_reduce` never introduces one -- it drops and expands
+        // tokens, it does not rewrite them -- so a dep string with no `!`
+        // anywhere cannot produce a blocker, and the reduce (with its
+        // `dep_zapdeps` closures, the expensive half of the scan) can be
+        // skipped outright. On this host that is 1804 of 2084 unwalked
+        // installed packages; see `TEST/findings/l0.md` "#83".
+        if !depstr.contains('!') {
+            continue;
         }
         let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
         let self_cp = (pkg.category.clone(), pkg.package.clone());
@@ -37506,6 +37540,79 @@ mod tests {
             entries.iter().all(|e| e.package != "bparent"),
             "an unresolved absent-owner row fabricates no removal"
         );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unwalked_scan_skips_without_merge_bound_entries_and_blocker_free_owners() {
+        // #83: the two cheap guards in front of the scan. (a) with
+        // nothing merge-bound the whole scan is a no-op even when an
+        // installed owner records a blocker (`resolve_blockers` would
+        // drop every row it could produce); (b) an owner whose effective
+        // runtime deps carry no `!` token cannot contribute a blocker,
+        // so it never reaches the USE reduction.
+        let dir = slotundo_temp_dir("blocker-83-scan");
+        slotundo_vdb(&dir, "bparent", "1.0", "0", "!<dev-libs/blocked-2.0", "");
+        slotundo_vdb(&dir, "plain", "1.0", "0", "dev-libs/blocked", "");
+        let config = portage_profile::Config::default();
+        let constraints: HashMap<(String, String), Vec<String>> = HashMap::new();
+        let mut memo: HashMap<(String, String, String, String), String> = HashMap::new();
+
+        // (a): the only entry is installed-only -- the recorded blocker
+        // stays invisible, and the scan returns before touching the vdb.
+        let mut installed = graph_entry("dev-libs", "blocked", "1.0");
+        installed.outcome = PretendOutcome::AlreadyInstalled {
+            version: "1.0".into(),
+        };
+        let mut pending = Vec::new();
+        collect_unwalked_installed_blockers(
+            &[],
+            &dir,
+            &config,
+            false,
+            false,
+            &constraints,
+            None,
+            &[installed],
+            &mut pending,
+            &mut memo,
+        );
+        assert!(
+            pending.is_empty(),
+            "nothing merge-bound means nothing to satisfy"
+        );
+
+        // (b): a merge-bound upgrade of another cp collects the recorded
+        // blocker but not the blocker-free owner.
+        let mut upgrade = graph_entry("dev-libs", "blocked", "1.5");
+        upgrade.outcome = PretendOutcome::Upgrade {
+            from: "1.0".into(),
+            to: "1.5".into(),
+        };
+        let mut pending = Vec::new();
+        collect_unwalked_installed_blockers(
+            &[],
+            &dir,
+            &config,
+            false,
+            false,
+            &constraints,
+            None,
+            &[upgrade],
+            &mut pending,
+            &mut memo,
+        );
+        assert_eq!(
+            pending.len(),
+            1,
+            "only the blocker-recorded owner is collected"
+        );
+        assert_eq!(
+            pending[0].owner_key,
+            ("dev-libs".to_string(), "bparent".to_string())
+        );
+        assert_eq!(pending[0].atom_str, "!<dev-libs/blocked-2.0");
+        assert!(pending[0].owner_installed);
         let _ = fs::remove_dir_all(&dir);
     }
 
