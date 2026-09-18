@@ -90,6 +90,27 @@ Produces `target/release/portuale`; create `emerge` and `ebuild`
 symlinks next to it for multicall dispatch (the tests do this
 automatically).
 
+## Test
+
+```sh
+# in this repo: the whole Rust workspace (reads ./fixtures -> ../pmtest/fixtures)
+cargo test --release
+
+# in the sibling pmtest repo: the black-box contract suite
+cd ../pmtest && python3 -m pytest pytests-contract-suite -q
+```
+
+The contract suite, the container differential bed, the benchmark and
+the primitive-differential scripts live in the sibling `pmtest` repo,
+which resolves this tree through its `managers/managers.yaml` registry
+(`PMTEST_PM=portuale`, the default) and rebuilds the binary itself. The
+fixture tree lives there too: `fixtures/` here is a symlink to it, so
+`cargo test` reads the same files the contract suite does — and needs
+the sibling checkout to be present.
+
+Full pre-slice verification also runs `cargo fmt --check` and
+`cargo clippy --release --all-targets` (zero warnings).
+
 ## Documentation
 
 | Doc | What it is |

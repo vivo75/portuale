@@ -95,6 +95,54 @@ one-line description and exits 0; an unrecognized applet name still
 errors. `emerge --help` is a grouped tour of every action/option portuale
 implements (`pretend.rs`'s `HELP_TEXT`, pinned by the contract suite).
 
+## Where the tests live
+
+Since `f982876` (2026-09-18) the test suite is **not in this tree**. It
+lives in the sibling repository `../pmtest`, which exists to test and
+compare several package managers against the same harness, portuale
+being one entry in its `managers/managers.yaml` registry
+(`PMTEST_PM=portuale` is the default). Its own `USAGE.AGENTS.md` is the
+operating manual; read it before running or changing anything there.
+
+| Was, in this tree | Is now |
+|---|---|
+| `tests/` | `../pmtest/pytests-contract-suite/` |
+| `fixtures/` | `../pmtest/fixtures/` (this tree's `fixtures` is a symlink to it) |
+| `TEST/` | `../pmtest/differential-test-bed/` |
+| `python/*_harness.py` | `../pmtest/python-harness/` |
+| `bench/` | `../pmtest/bench/` |
+| `scripts/primitive_tree_differential.py`, `scripts/portage_repin_review.py` | `../pmtest/scripts/` |
+
+**Older prose in this repo's docs still spells the old paths** — a
+`TEST/findings/l2.md` citation in a record of past work means
+`../pmtest/differential-test-bed/findings/l2.md` today. Those records are
+history and are not rewritten; this table is the map.
+
+`fixtures/` moved too (`335543e`), but reads the same from here: it is
+now a **symlink to `../pmtest/fixtures`**, gitignored, so the ~55 Rust
+`#[cfg(test)]` reads that resolve it through a compile-time
+`CARGO_MANIFEST_DIR/../../fixtures` path keep working and `cargo test`
+still needs no second checkout — it needs the sibling repo. There is one
+copy and it is pmtest's: **every new or corrected fixture is added
+there**. A missing or wrong tree fails loudly rather than quietly
+testing less, on both sides: `fixtures_tree_is_the_pmtest_checkout`
+(portage-repo) and the `_require_fixture_tree` session fixture in
+pmtest's conftest check the symlink resolves *and* that what it points
+at really is the fixture tree.
+
+`3rdparty/` is the one thing that stays here (pmtest keeps a separate
+`3rdparty/` of its own for its harness checkouts) — it is where the
+pinned Portage checkout lives (the `PORTUALE_PYTHON_HELPERS=real`
+oracle and the fixture-generator / re-sync source since #326 S2–S7; the
+gpg test keyring the signing tests use is vendored in pmtest's own
+fixture tree, `fixtures/helpers/gpg-keyring/`). The two repos therefore
+expect to sit next to each other.
+
+pmtest never builds against a stale binary: every run rebuilds the PM
+from the `repo` in its registry entry. Nothing in pmtest is edited to
+make a PM pass — a red is fixed in the PM, an accepted divergence is
+recorded in `../pmtest/differential-test-bed/compare/known-divergences.yaml`.
+
 ## Test/benchmark harness architecture
 
 - For pure-library-level parity (versions, atom parsing, etc.), define a
