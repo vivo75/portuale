@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: package.mask'd, so a dependency on it reports the 'All ebuilds ... have been masked' block
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=45bfd3fa6a8907da695c1d25bb6f266d

@@ -1,8 +1,0 @@
-DEFINED_PHASES=-
-DEPEND=<app-misc/A-2
-DESCRIPTION=024 oracle fixture: version cap blocking A upgrade (bug 439688)
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=<app-misc/A-2
-SLOT=0
-_md5_=9188130a20ec416fb13de790a1e4d2ea

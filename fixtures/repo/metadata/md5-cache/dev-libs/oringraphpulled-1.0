@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: slice 2 in-bin ordering -- not installed, but pulled into the graph directly by dev-libs/oringraph's own RDEPEND before its sibling || group is resolved
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=d4ac43ad4c8d886da2218d646975db83

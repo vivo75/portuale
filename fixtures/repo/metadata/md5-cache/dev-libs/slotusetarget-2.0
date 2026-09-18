@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: slot 0, newer version with x default-off and y gone from IUSE -- resolved first, then USE-mismatching parents pull 1.0 alongside (real re-verifies USE on slot reuse)
-EAPI=8
-IUSE=-x
-KEYWORDS=amd64
-SLOT=0
-_md5_=3a8b9d7ae387e9a28274dfd5328541f3

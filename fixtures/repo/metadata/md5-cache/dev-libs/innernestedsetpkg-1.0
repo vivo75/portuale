@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: reached only via @nestedtestset's own nested @innernestedset reference
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=b7f46fbed10b3a9cd6c2460918244315

@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: --root-deps recursion -- leaf RDEPEND of rdrtool (proves RDEPEND of a running-root build entry recurses too)
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=5c229950a1690e74f18bd4f777e61349

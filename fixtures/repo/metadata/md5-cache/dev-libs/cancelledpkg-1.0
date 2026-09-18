@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: profile-level -flag genuinely cancels an IUSE +default
-EAPI=8
-IUSE=+cancelme
-KEYWORDS=amd64
-SLOT=0
-_md5_=ff7dfc81b03de87afb64f4e181ed18bc

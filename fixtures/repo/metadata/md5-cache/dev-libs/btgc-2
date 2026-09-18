@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=023 oracle fixture: upstream backtracking good-version-first (C-2)
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=39ed9d5bf0849cf3b82075a67245ef8e

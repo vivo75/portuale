@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: RDEPENDs on the package.mask'd dev-libs/hardmaskedpkg -- for --autounmask-keep-masks=n
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-libs/hardmaskedpkg
-SLOT=0
-_md5_=11e13bd04753ec41a39cddaa5320c654

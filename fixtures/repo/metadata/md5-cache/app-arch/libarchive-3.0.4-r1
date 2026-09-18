@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=024 oracle fixture: old sub-slot (bug 456208)
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=2389ed8adfb43da331e53c2255b5906b

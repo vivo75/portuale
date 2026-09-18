@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: treeorderpkg's own second-listed RDEPEND child (deliberately named to sort alphabetically FIRST)
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=b5fdccd6b948c3f1bf29c64a164ea91d

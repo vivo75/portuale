@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: only ~amd64, visible only via a */wildcardkeywordpkg package.accept_keywords entry
-EAPI=8
-KEYWORDS=~amd64
-SLOT=0
-_md5_=28dc79ebd7fc38ead076cd55e2195cc6

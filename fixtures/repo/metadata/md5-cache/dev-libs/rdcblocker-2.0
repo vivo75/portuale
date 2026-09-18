@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: #79 blocker-carrying dependency, newer version
-EAPI=8
-RDEPEND=!<dev-libs/rdctarget-2.0
-KEYWORDS=amd64
-SLOT=0
-_md5_=27fc1ff0125a7b2ee5dc91f2b6080ed7

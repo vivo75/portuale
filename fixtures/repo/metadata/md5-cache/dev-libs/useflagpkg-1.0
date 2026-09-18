@@ -1,8 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: real USE flags (not the old hardcoded empty set) drive use_reduce
-EAPI=8
-IUSE=foo missingflag
-KEYWORDS=amd64
-RDEPEND=foo? ( dev-libs/newpkg ) missingflag? ( dev-libs/hiddendep )
-SLOT=0
-_md5_=bd582743dfa0cc8c6dc7520d25c63478

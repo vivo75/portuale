@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: --root-deps real recursive-build-against-running-root -- the build tool itself, a plain, real, tree-visible ebuild with no vdb entry anywhere
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=b69cbe14087fddbb6ffb7b1beeddd835

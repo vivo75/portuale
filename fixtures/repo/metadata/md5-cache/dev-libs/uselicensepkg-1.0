@@ -1,8 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: USE-conditional LICENSE -- nonfreeflag off by default leaves it visible
-EAPI=8
-IUSE=nonfreeflag
-KEYWORDS=amd64
-LICENSE=GPL-2 nonfreeflag? ( SomeEula )
-SLOT=0
-_md5_=f712cd400621d3b2c963c6ecabd954ae

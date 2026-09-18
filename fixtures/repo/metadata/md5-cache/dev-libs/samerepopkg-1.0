@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: installed with a vdb repository file matching the repo that currently provides this version -- --newrepo's own reinstall trigger must NOT fire
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=2cc10d898fd85e606634a76c456fb821

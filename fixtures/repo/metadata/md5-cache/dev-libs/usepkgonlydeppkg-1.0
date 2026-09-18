@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: a binary package whose RDEPEND (dev-libs/samepkg) is installed but has no binpkg -- --usepkgonly must treat it as satisfied
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-libs/samepkg
-SLOT=0
-_md5_=3f8f01bf89b78d92b45c7466fbe1217a

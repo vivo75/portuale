@@ -1,8 +1,0 @@
-DEFINED_PHASES=-
-DEPEND=dev-libs/socfoo:=
-DESCRIPTION=024 oracle fixture: := consumer rebuilt (bug 614390)
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-libs/socfoo:=
-SLOT=0
-_md5_=c407e1094033efc294ba127fd9fffa51

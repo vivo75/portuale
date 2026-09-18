@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: backlog #22 slice 4 other_installed bin -- masked in the tree (see profiles/package.mask) but genuinely installed; real still prefers this over an alternative with no vdb match at all
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=61d68266adf73f03b4bd9956c005e24c

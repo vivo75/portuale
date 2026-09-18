@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: profiles/repo_name is the canonical name source (section [repnamesection] != file repnamefromfile, kept via aliases)
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=a0fcfd8d620693192a1a89eeeeb5e9b3

@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: #74 S0 class A uninstalled provider slot (1.0)
-EAPI=8
-IUSE=flip
-KEYWORDS=amd64
-SLOT=1.0
-_md5_=b311dcd0437e633074d693d630bddfd7

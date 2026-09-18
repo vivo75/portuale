@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: renamed from dev-libs/oldmovepkg via profiles/updates
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-libs/newpkg
-SLOT=0
-_md5_=1408adc26f5d10ea6b39562e99afee21

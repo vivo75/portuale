@@ -1,3 +1,0 @@
-# fixture env file: per-package build-var override (non-USE half of package.env)
-CFLAGS="-Os -march=fixturepkgenv"
-MAKEOPTS="-j7"

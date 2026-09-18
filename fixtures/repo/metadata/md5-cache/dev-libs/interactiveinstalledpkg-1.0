@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: PROPERTIES=interactive AND installed -> [ebuild Ir] on a bare reinstall
-EAPI=8
-KEYWORDS=amd64
-PROPERTIES=interactive
-SLOT=0
-_md5_=d4eef4c4e020cc262aa4e2d827aec496

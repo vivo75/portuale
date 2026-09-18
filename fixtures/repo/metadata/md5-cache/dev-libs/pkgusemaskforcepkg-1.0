@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: package.use.mask/package.use.force, plus atom-specificity ordering
-EAPI=8
-IUSE=forceflag maskflag specflag
-KEYWORDS=amd64
-SLOT=0
-_md5_=df5ef6c9306a34cb40268c331da5482e

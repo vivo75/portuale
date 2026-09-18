@@ -1,8 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: USE_EXPAND_UNPREFIXED (ARCH="amd64" in profiles/arch/amd64/make.defaults contributes the bare pseudo-USE flag amd64, no prefix at all) drives a dependency exactly like a normal USE flag would
-EAPI=8
-IUSE=amd64 riscv
-KEYWORDS=amd64
-RDEPEND=amd64? ( dev-libs/newpkg ) riscv? ( dev-libs/hiddendep )
-SLOT=0
-_md5_=536f2bc5d767ea740b53c82f05df98f6

@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: --rebuild-if-* dep whose only/best version equals the installed one
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=9f1c0e3127b757a64d6c8e892cf2de87

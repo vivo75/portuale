@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: slot-operator provider, sub-slot 0/2 (upgrade)
-EAPI=8
-KEYWORDS=amd64
-SLOT=0/2
-_md5_=06e60d15088cd4873bbe6e9ca64f3995

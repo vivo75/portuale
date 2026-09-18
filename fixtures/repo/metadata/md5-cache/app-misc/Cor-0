@@ -1,8 +1,0 @@
-DEFINED_PHASES=-
-DEPEND=|| ( app-misc/X app-misc/A:= )
-DESCRIPTION=023 oracle fixture: C with the upstream || ( X A:= ) rebuild dep
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=|| ( app-misc/X app-misc/A:= )
-SLOT=0
-_md5_=41be91bc139a2c0f627e7e0a8ed075ae

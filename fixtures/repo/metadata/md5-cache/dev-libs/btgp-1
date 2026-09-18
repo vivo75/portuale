@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DEPEND==dev-libs/btgc-1 dev-libs/btgb
-DESCRIPTION=023 oracle fixture: upstream test_backtracking.py::testBacktrackingGoodVersionFirst (A): =C-1 + B
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=e9e7e4523d11d0b77f303afb6b861877

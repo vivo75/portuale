@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: PROPERTIES=live, visible under the real default ACCEPT_PROPERTIES=*
-EAPI=8
-KEYWORDS=amd64
-PROPERTIES=live
-SLOT=0
-_md5_=f09be4d7ebe9e56beac128a31e8d4386

@@ -1,7 +1,0 @@
-BDEPEND=dev-libs/rdrcyca
-DEFINED_PHASES=-
-DESCRIPTION=fixture: --root-deps recursion -- top-level entry into a mutual-BDEPEND cycle
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=90e853967de723698ec4ee07124247b1

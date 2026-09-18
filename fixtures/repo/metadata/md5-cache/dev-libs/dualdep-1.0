@@ -1,8 +1,0 @@
-DEFINED_PHASES=-
-DEPEND=dev-libs/newpkg
-DESCRIPTION=fixture package: same atom in both DEPEND and RDEPEND -> resolved once
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-libs/newpkg
-SLOT=0
-_md5_=14aa9be8f82996d82899dbcf1f5497cd

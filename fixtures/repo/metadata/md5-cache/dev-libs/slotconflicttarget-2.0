@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: slot 0, newer version, used to trigger a slot conflict against a consumer that wants <2.0
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=5fb8c574d962903bd4c01a3de2143453

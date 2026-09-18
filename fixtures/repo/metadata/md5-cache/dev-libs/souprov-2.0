@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=024 oracle fixture: slot-shifting provider (slotundo)
-EAPI=8
-KEYWORDS=amd64
-SLOT=0/2
-_md5_=cbedb1846abe8afd39982714efba21d6

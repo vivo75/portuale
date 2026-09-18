@@ -1,8 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: --newuse reinstall detection (installed with foo off, now on)
-EAPI=8
-IUSE=foo
-KEYWORDS=amd64
-RDEPEND=dev-libs/newpkg
-SLOT=0
-_md5_=034291470c59910e1a35f868c3bf508a

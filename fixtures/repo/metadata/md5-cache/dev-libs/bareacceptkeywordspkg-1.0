@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: testing-only KEYWORDS, visible only via a bare package.accept_keywords entry's own implicit ~arch default
-EAPI=8
-KEYWORDS=~amd64
-SLOT=0
-_md5_=fddabc46027ea994a302b28d7d4f1c4e

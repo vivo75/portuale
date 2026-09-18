@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: #79 newer consumer pulling the blocker-carrying rdcblocker
-EAPI=8
-BDEPEND=~dev-libs/rdcblocker-2.0
-KEYWORDS=amd64
-SLOT=0
-_md5_=636b98911bc9aad4fdb8896b41c93299

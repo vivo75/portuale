@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: older version (1.0) lives in the main repo, newer version (2.0) lives in the overlay -- see dev-libs/overlaynewerpkg in the overlay
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=3f724e83e20e84d3161f06c40e0e5f5e

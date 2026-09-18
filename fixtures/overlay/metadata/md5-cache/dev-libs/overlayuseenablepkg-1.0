@@ -1,8 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: its overlayuseflag?-gated dependency is pulled in only because the OVERLAY's own profiles/package.use enables it -- the main repo has no such entry
-EAPI=8
-IUSE=overlayuseflag
-KEYWORDS=amd64
-RDEPEND=overlayuseflag? ( dev-libs/newpkg )
-SLOT=0
-_md5_=ca0668ec0a2a8137476d01de98bc0074

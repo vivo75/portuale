@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=024 oracle fixture: llvm with clang PDEPEND (bug 584626)
-EAPI=8
-KEYWORDS=amd64
-PDEPEND==sys-devel/clang-3.7.1-r100
-SLOT=0/3.7.1
-_md5_=2590a1b02e76e87ba41e3f0e190b991b

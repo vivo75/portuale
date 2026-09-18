@@ -1,7 +1,0 @@
-BDEPEND=>=dev-libs/bdepcascadedep-2
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: installed parent whose BDEPEND update depends on --with-bdeps
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=36b05e26e226907d8cca0d35c01b38d1

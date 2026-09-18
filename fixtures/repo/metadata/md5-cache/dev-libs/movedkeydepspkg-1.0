@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: --changed-deps per-key -- dep moved RDEPEND->PDEPEND, same net atom set
-EAPI=8
-KEYWORDS=amd64
-PDEPEND=dev-libs/samepkg
-SLOT=0
-_md5_=01e8bf156610062cbf89626c8b1937b6

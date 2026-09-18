@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=023 oracle fixture: libmysqlclient
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-db/mysql-connector-c:0/21
-SLOT=0/21
-_md5_=bcf84bc1dae6714a34ff0c553dfe9fba

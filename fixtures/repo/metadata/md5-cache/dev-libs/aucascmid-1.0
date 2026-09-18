@@ -1,8 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: IUSE cascade (default off); cascade? ( dev-libs/aucascleaf )
-EAPI=8
-IUSE=cascade
-KEYWORDS=amd64
-RDEPEND=cascade? ( dev-libs/aucascleaf )
-SLOT=0
-_md5_=41012d81d13f4a03ae4e5c26606a79d5

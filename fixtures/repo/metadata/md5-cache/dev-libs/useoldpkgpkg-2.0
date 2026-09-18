@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: newer ebuild 2.0; an old binary 1.0 exists in PKGDIR -- --useoldpkg-atoms
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=8b4f4f5b6cf1b1f725173be75332a1dd

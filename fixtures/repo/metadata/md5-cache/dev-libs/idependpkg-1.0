@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: IDEPEND is walked by dependency recursion, same as DEPEND/RDEPEND
-EAPI=8
-IDEPEND=dev-libs/newpkg
-KEYWORDS=amd64
-SLOT=0
-_md5_=16db5fcd7f685de662f066e1499cd37c

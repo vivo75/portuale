@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DEPEND=dev-libs/fucyclea[x?]
-DESCRIPTION=fixture: build-depends on dev-libs/fucyclea[x?] with a conditional USE-dep -- the 'grandparent' that does not disqualify _find_suggestions' 'disable x on fucyclea' fix but flags followup_change (circular_dependency.py step 9)
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=f55f9716d66a5c04bd509e93967fb4e7

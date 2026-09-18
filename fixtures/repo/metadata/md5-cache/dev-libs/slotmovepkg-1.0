@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: SLOT moved 0 -> 1 via profiles/updates
-EAPI=8
-KEYWORDS=amd64
-SLOT=1
-_md5_=6753dd931a65dfec3d950ec9ba5ed333

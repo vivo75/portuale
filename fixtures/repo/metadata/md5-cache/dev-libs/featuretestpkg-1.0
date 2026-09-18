@@ -1,8 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: FEATURES=test enables the test USE flag (configdict[features])
-EAPI=8
-IUSE=test other
-KEYWORDS=amd64
-RDEPEND=test? ( dev-libs/newpkg )
-SLOT=0
-_md5_=7870e7f38bdc6bf262c629099c61a226

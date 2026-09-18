@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: merge target requiring >=dev-libs/paired-2.0, against the keeper pin below 2.0
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=>=dev-libs/paired-2.0
-SLOT=0
-_md5_=8bd0205c557cb389a8c75acc83fb3eb8

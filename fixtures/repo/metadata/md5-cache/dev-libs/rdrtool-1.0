@@ -1,8 +1,0 @@
-BDEPEND=dev-libs/rdrtooldep
-DEFINED_PHASES=-
-DESCRIPTION=fixture: --root-deps recursion -- a running-root build tool whose own BDEPEND and RDEPEND must both be walked against the running root
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-libs/rdrlib
-SLOT=0
-_md5_=00d95f46709e8fd2995aee4825a5c122

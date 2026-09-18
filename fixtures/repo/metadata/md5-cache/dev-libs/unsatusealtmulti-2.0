@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: latest of the two visible USE-unsatisfiable versions; real _show_unsatisfied_dep's 'Only show the latest version' rule lists this one
-EAPI=8
-IUSE=unsatuseorflag
-KEYWORDS=amd64
-SLOT=0
-_md5_=066f74c67b43f6a385ef3fe9254ee81d

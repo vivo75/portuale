@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DEPEND=dev-libs/btba
-DESCRIPTION=023 oracle fixture: btbb
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=583f1955830b57695029a3bf3ec7b5ac

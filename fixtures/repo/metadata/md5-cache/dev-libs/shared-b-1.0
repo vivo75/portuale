@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: diamond dependency, right branch
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-libs/common
-SLOT=0
-_md5_=79110b36bd8b9346dcfb560187789f2e

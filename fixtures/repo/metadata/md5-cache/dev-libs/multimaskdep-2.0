@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: ~amd64 keyword-masked AND @EULA-license-masked -- needs level 2 (+~arch +license) together
-EAPI=8
-KEYWORDS=~amd64
-LICENSE=SomeEula
-SLOT=0
-_md5_=ba07f706f8621058bf91a3b680e1c796

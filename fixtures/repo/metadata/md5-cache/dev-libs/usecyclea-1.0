@@ -1,8 +1,0 @@
-DEFINED_PHASES=-
-DEPEND=x? ( dev-libs/usecycleb )
-DESCRIPTION=fixture: build-cycle with dev-libs/usecycleb gated behind USE=x -- disabling x breaks the cycle (_find_suggestions)
-EAPI=8
-IUSE=+x
-KEYWORDS=amd64
-SLOT=0
-_md5_=13ba37585b29ce73240c42a5d5ca1f72

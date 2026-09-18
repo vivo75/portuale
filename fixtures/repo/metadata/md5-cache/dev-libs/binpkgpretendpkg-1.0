@@ -1,6 +1,0 @@
-DEFINED_PHASES=install postinst preinst pretend setup
-DESCRIPTION=fixture package: pkg_pretend runs on a binary-package merge, before pkg_setup
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=73bf3fea8a74af569d41f827593d8b95

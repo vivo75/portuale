@@ -1,8 +1,0 @@
-DEFINED_PHASES=install
-DESCRIPTION=fixture package: real inherit()/PORTAGE_ECLASS_LOCATIONS resolution
-EAPI=8
-INHERIT=pilotcheck
-KEYWORDS=amd64
-SLOT=0
-_eclasses_=pilotcheck	e9b28d0ea8a4f1d83fcc81993ffd8744
-_md5_=79c73409ff5e9388478a7bc880e1e60f

@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DEPEND=dev-libs/usecyclea
-DESCRIPTION=fixture: unconditionally build-depends on dev-libs/usecyclea -- the other half of the USE-gated build cycle
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=5d434289534fe7120dbb2e465183ec02

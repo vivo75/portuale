@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: PROPERTIES=interactive, visible and mergeable -> the [ebuild I..] bracket column
-EAPI=8
-KEYWORDS=amd64
-PROPERTIES=interactive
-SLOT=0
-_md5_=3150b44b6dcce697e21e84671b1a1b67

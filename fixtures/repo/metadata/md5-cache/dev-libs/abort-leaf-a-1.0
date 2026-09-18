@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: dependency leaf for the DFS-partial abort fixtures, no deps of its own
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=49f15d20249ce9542150bb7325bc1698

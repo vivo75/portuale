@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: || group with no in-graph/installed branch -> first-listed wins (control for ingraphany)
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-libs/ingraphsvc
-SLOT=0
-_md5_=cccc8e0d38976bb38855d3e03d43158e

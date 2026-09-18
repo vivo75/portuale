@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: a @system member (via profiles/base/packages) that IS installed -- for -pC's system-profile warning
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=5a3d4225eb4b40c4acfcd8673390a77e

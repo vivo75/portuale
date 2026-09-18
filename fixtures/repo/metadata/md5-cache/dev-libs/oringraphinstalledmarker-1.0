@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: marker pulled in only if the || group wrongly chose the installed-only (not in-graph) losing alternative
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=8971dfd6aa770b4b769971f8b2495348

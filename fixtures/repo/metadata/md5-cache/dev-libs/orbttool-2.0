@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: ||-backtrack -- tool slot 0, v2
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=0eafb5406d7a3e7b68e03969f43929c7

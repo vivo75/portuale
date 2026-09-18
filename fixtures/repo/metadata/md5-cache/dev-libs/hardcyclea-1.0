@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DEPEND=dev-libs/hardcycleb
-DESCRIPTION=fixture package: unbreakable build-time dependency cycle
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=f61efb4a6e1ebd5d9fed06c6de15a1a4

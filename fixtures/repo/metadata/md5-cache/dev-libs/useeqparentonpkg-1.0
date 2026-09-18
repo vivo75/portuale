@@ -1,8 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: own IUSE default-enables eqflag; RDEPENDs on a [eqflag=] use-dep, which evaluates to [eqflag] since eqflag is ON here
-EAPI=8
-IUSE=+eqflag
-KEYWORDS=amd64
-RDEPEND=dev-libs/useeqchildpkg[eqflag=]
-SLOT=0
-_md5_=d1ff48b8e3477830b89c6e85d52948f0

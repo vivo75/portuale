@@ -1,9 +1,0 @@
-Title: Portuale news: a general item with no restrictions
-Author: Portuale Test <portuale@example.org>
-Content-Type: text/plain
-Posted: 2026-09-01
-Revision: 1
-News-Item-Format: 2.0
-
-A GLEP 42 news item with no Display-If-* restriction headers is
-relevant to everyone, so `emerge --check-news` always counts it.

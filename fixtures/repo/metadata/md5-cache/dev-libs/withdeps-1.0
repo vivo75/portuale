@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: recursion basic chain -> pulls in newpkg (New) and upgradepkg (Upgrade)
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-libs/newpkg dev-libs/upgradepkg
-SLOT=0
-_md5_=fcf08418e9aa161543f911b002337f83

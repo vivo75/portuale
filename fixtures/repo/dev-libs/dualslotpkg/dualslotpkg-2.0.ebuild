@@ -1,4 +1,0 @@
-EAPI=8
-DESCRIPTION="fixture package: installed in two slots, for the -pC higher-slot set-protection refinement"
-SLOT="2"
-KEYWORDS="amd64"

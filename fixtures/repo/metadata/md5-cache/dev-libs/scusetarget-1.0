@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: slot 0, older version, IUSE carries flags so the slot-conflict notice renders a non-empty pkg_use_display
-EAPI=8
-IUSE=+scuon scuoff
-KEYWORDS=amd64
-SLOT=0
-_md5_=4748c140a0465a895a7d57f199ccaaf0

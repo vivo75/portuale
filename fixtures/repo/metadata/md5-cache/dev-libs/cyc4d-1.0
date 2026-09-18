@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DEPEND=dev-libs/cyc4a
-DESCRIPTION=fixture package: four-ring build-time cycle with a USE-gated edge, for the large_cycle_count trailer
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=39dcbcac4829c15c38604e4744077272

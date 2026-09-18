@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: libc-asap merge-order
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=affe807f7e3d38481f88de47257fd64c

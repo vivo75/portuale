@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: --changed-slot -> vdb-recorded SLOT differs from this current ebuild's own
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-libs/newpkg
-SLOT=0/2
-_md5_=4c68e3108b461e51d58d749ecfb9534c

@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: built-binding target, not installed -> New
-EAPI=8
-KEYWORDS=amd64
-SLOT=0/1
-_md5_=f91e9a37963a9aa1bdb683e78c4255f0

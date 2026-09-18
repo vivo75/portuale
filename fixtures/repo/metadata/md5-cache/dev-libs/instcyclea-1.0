@@ -1,7 +1,0 @@
-BDEPEND=dev-libs/instcycleb
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: build-time cycle where both ends are already installed (--emptytree)
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=4005a84ad44cce594a9206801238f342

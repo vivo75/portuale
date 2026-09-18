@@ -1,7 +1,0 @@
-DEFINED_PHASES=install
-DESCRIPTION=fixture package: Scheduler / parallel-build test (schedparent)
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-libs/schedleaf-a dev-libs/schedleaf-b
-SLOT=0
-_md5_=ae200858ccba4e3031cdc1ed8f60b0c7

@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=024 oracle fixture: consumer gaining a new dep (slotundo-rebind)
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-libs/souprov:= dev-libs/sounewdep
-SLOT=0
-_md5_=678e380972f07204f686eaaddc2f1ade

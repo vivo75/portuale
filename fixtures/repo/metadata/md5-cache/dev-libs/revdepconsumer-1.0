@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: installed consumer whose recorded RDEPEND constrains its target
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=4890edfe04484c23bb724523a94a8074

@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: USE_EXPAND_IMPLICIT -- implicitiusepkg
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-libs/implicitiuseprov[elibc_glibc]
-SLOT=0
-_md5_=24455395995c8e4d813dfdf56d60936d

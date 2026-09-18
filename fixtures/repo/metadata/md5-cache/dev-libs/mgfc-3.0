@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=023 oracle fixture: unpulled same-slot missed-update sibling
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=86e527c24d4b2606302f25b409bbbde9

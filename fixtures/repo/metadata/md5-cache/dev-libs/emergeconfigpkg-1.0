@@ -1,6 +1,0 @@
-DEFINED_PHASES=config install
-DESCRIPTION=fixture package: emerge --config runs pkg_config from the vdb-saved env
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=d9436a2f51080d4d378d6ece081a71ef

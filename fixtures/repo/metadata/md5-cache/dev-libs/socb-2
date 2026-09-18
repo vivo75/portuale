@@ -1,8 +1,0 @@
-DEFINED_PHASES=-
-DEPEND=dev-libs/socfoo:=
-DESCRIPTION=024 oracle fixture: := consumer upgraded by meta (bug 614390)
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-libs/socfoo:=
-SLOT=0
-_md5_=bf24f98fe96dbaf0f8c9930736c08bd6

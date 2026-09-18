@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=024 oracle fixture: openldap-like old (bug 528610)
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=sys-libs/sodb
-_md5_=5df99ac739d4867a4222e18943ea5d13

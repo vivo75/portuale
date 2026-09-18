@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: libc-asap merge-order
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-libs/plainleaf virtual/libc
-SLOT=0
-_md5_=e9011ab229be3e6298f54a92b064668c

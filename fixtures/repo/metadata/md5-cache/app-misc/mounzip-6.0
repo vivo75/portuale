@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=#53 fixture: unzip analogue -- leaf BDEPEND of dev-go/momd2man and app-misc/mopodman
-EAPI=8
-IUSE=
-KEYWORDS=amd64
-SLOT=0/6.0
-_md5_=f276e12efff7284433269d9d7f0eeaaf

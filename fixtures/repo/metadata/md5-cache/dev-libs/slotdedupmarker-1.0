@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: #74 S2a marker only reachable through installed slotdedup-2.0's deps
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=aee27b9cf08a6135ed9c838290c07106

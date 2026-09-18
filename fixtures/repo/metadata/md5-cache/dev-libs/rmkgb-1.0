@@ -1,7 +1,0 @@
-DEFINED_PHASES=install
-DESCRIPTION=remote keep-going fixture B (depends on A, so A's failure skips it)
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-libs/rmkga
-SLOT=0
-_md5_=3780584e2eb832e685081f0db41f2004

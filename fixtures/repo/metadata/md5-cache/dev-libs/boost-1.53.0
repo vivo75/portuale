@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=023 oracle fixture: boost
-EAPI=8
-KEYWORDS=amd64
-RDEPEND==dev-util/boost-build-1.53.0
-SLOT=0/1.53
-_md5_=dea09100f46f92c36eed053e99271a5b

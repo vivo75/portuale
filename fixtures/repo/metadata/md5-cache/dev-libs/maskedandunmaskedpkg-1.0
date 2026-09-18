@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: masked via package.mask, but package.unmask cancels it -> visible
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=c2aae2637f98811974db4426ebfd6d44

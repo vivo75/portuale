@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: --changed-deps ignores a libc-only dependency change (strip_libc_deps)
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=sys-libs/musl dev-libs/samepkg
-SLOT=0
-_md5_=843a383ba100b1aecf726ad8ae53f028

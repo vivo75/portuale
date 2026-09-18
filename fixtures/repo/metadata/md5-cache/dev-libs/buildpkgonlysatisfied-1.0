@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: --buildpkgonly negative case -> New, RDEPENDs on already-installed samepkg
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-libs/samepkg
-SLOT=0
-_md5_=5ef3b97b6b5cee3069b6623b61a495cf

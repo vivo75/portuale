@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: has an ebuild AND is listed in package.provided
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=7ac055eb50a7911df5dbdbb6bc1fd3a6

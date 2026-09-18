@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: layout.conf masters= (middle tier) + repo-name= override -- exists only in this overlay, masked only by its layout.conf-declared master overlay
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=8268f25fd92035994c7e7e50d0574096

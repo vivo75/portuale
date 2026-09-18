@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: libc-asap merge-order
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=sys-libs/fakeglibc
-SLOT=0
-_md5_=9362bee74c52adfe25bb15395e12b373

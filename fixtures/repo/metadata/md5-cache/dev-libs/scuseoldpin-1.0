@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: RDEPEND <dev-libs/scusetarget-2.0 conflicts with scusenewpin; declares no IUSE so its parent line stays a bare USE=""
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=<dev-libs/scusetarget-2.0
-SLOT=0
-_md5_=9073d14ee3ae7b00b83d14043b53d041

@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: LICENSE only in @EULA once the overlay's own cross-repo-reached license_groups entry extends it
-EAPI=8
-KEYWORDS=amd64
-LICENSE=CrossRepoNonfree
-SLOT=0
-_md5_=33e712e980f7783c9d880e26cf39801b

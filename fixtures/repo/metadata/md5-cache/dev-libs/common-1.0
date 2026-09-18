@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: diamond dependency, shared leaf -> must be resolved only once
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=9445bbe3f32eddb3750c80fb8f1476f5

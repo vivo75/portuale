@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: testing-only KEYWORDS, visible only via a package.accept_keywords "~*" entry
-EAPI=8
-KEYWORDS=~arm64
-SLOT=0
-_md5_=bb31c7298365a5e6e5965c852cd07a5b

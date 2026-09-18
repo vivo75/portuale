@@ -1,7 +1,0 @@
-BDEPEND=dev-libs/rdrtool
-DEFINED_PHASES=-
-DESCRIPTION=fixture: --root-deps recursion -- top-level, BDEPENDs a build tool that itself has further build+runtime deps
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=7cbdd84bac2fa14da504556e22bb4023

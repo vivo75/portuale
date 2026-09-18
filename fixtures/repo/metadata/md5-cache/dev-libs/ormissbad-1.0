@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: ||-missing-dep -- visible, but RDEPENDs on something with no candidate
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-libs/ormiss-nonexistent
-SLOT=0
-_md5_=57d4486ac82b63930139f9d1cd0d6217

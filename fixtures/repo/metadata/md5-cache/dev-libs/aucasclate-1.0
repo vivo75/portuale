@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: RDEPEND dev-libs/aucascmid[cascade] -- reached after aucascmid already resolved cascade-off
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-libs/aucascmid[cascade]
-SLOT=0
-_md5_=aae8c675789142a1bd4462c25d3b5fa4

@@ -1,7 +1,0 @@
-BDEPEND=|| ( dev-libs/altprov:1.1[flip] dev-libs/altprov:1.0 )
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: #74 S0 class A || over two provider slots (installed 1.1[flip] vs uninstalled 1.0)
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=b2890c2008b168249add34242ccbe8ae

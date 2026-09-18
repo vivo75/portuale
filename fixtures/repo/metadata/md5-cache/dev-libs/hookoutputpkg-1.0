@@ -1,6 +1,0 @@
-DEFINED_PHASES=install postinst preinst
-DESCRIPTION=fixture package: pkg_preinst/pkg_postinst print observable markers, to prove their own output reaches a captured build.log under -jN/--quiet-build (docs/scope-backlog.md's B.1)
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=b70cd35b34aafde9dd8563a00a98ced3

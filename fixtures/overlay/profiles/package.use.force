@@ -1,3 +1,0 @@
-# fixture overlay package.use.force: forces overlayforceflag on for
-# dev-libs/overlayuseforcepkg -- same auto-scoping proof as package.use.
-dev-libs/overlayuseforcepkg overlayforceflag

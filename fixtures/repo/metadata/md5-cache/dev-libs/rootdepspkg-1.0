@@ -1,7 +1,0 @@
-BDEPEND=dev-libs/rootdepsprovider
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: --root-deps real running-root (ESYSROOT) satisfiability
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=4d7ab62cdd44df1d95aaa4a3a3068958

@@ -1,9 +1,0 @@
-# profile-level packages file: contributes dev-libs/newpkg to @system
-# (the "*" prefix is what makes a line a real @system atom -- see
-# portage-profile's own doc comment), plus a non-"*"-prefixed hint line
-# that must never contribute an atom of its own.
-*dev-libs/newpkg
-dev-libs/hintonly
-# dev-libs/systempkg: an installed @system member, exercising -pC's
-# "is part of your system profile" warning (README's unmerge slice).
-*dev-libs/systempkg

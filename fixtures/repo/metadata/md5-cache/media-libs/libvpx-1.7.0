@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=023 oracle fixture: libvpx
-EAPI=8
-IUSE=+postproc
-KEYWORDS=amd64
-SLOT=0/5
-_md5_=cdd4040751130f9a8a5662049449c624
