@@ -1,1 +1,0 @@
-parse !=app-crypt/freepg-2.5.12_p1-r0

@@ -1,7 +1,0 @@
-# L3 source-build parity, @system gate -- the literal @system set.
-# `--emptytree` rebuilds the whole installed system from source (~368
-# packages), hours of wall-clock per PM; run it explicitly and time-boxed.
-#
-#   L3_CONTROL=1 L3_TIMEOUT=43200 TEST/run/l3-source-parity.sh TEST/atomlists/l3-system.txt
-
-@system

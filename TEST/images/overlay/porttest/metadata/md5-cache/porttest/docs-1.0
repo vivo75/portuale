@@ -1,8 +1,0 @@
-DEFINED_PHASES=install
-DESCRIPTION=porttest: dodoc tree -> docompress, newdoc, doman, doinfo
-EAPI=8
-HOMEPAGE=https://example.invalid/porttest
-KEYWORDS=amd64
-LICENSE=GPL-2
-SLOT=0
-_md5_=826c89749c74736c927da4498c1984c4
