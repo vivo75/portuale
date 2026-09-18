@@ -1,5 +1,34 @@
 use super::*;
 
+/// The fixture tree lives in the sibling pmtest checkout: `fixtures/` is a
+/// symlink to `../pmtest/fixtures` (see `LLM/agent-context.md`, "Where the
+/// tests live"). This test says why when the sibling is missing.
+#[test]
+fn fixtures_tree_is_the_pmtest_checkout() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+    assert!(
+        root.is_dir(),
+        "{} does not resolve -- `fixtures/` is a symlink to ../pmtest/fixtures: \
+         check out the sibling pmtest repo next to this one",
+        root.display()
+    );
+    // Markers, not a full inventory: enough to catch a tree that resolves but
+    // is not the fixture tree.
+    for marker in [
+        "repo/profiles/make.defaults",
+        "repo/metadata/md5-cache",
+        "etc/portage/make.conf",
+        "var/db/pkg",
+    ] {
+        assert!(
+            root.join(marker).exists(),
+            "fixtures tree at {} is missing {marker}: it resolves, but it is \
+             not the pmtest fixture tree",
+            root.display()
+        );
+    }
+}
+
 /// The shared field set is Portage's own 23 names (format version 1),
 /// listed literally so a drift fails loudly.
 #[test]
