@@ -1,0 +1,16 @@
+# #79 D1 — the reverse-dependency pin fixture, run with
+# `FX_WORLD_EXTRA=dev-libs/rdctarget` (the installed consumer must be a
+# world member so the required-set closure reaches it without walking
+# its upgrade):
+#
+#   FX_WORLD_EXTRA=dev-libs/rdctarget \
+#     TEST/run/l0-fixture-oracle.sh TEST/atomlists/l0-fixture-oracle-rdcpin.txt
+#
+# Real keeps the blocker-carrying `rdcblocker-2.0` merge and reports
+# `[blocks B] <dev-libs/rdctarget-2.0` (the installed consumer cannot be
+# uninstalled, rc 1); portuale's `reverse_dependency_constraints` scan
+# enforces the installed `rdctarget-1.0`'s recorded
+# `~dev-libs/rdcblocker-1.0` and silently settles on `1.0` (rc 0). The
+# cell is expected to be explained-not-clean until D2 removes the
+# allowlist entry (`TEST/compare/known-divergences-fixture-oracle.yaml`).
+--update --deep --newuse --oneshot dev-libs/rdcpuller

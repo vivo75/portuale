@@ -17150,3 +17150,84 @@ diff <(emerge -uDpvN --ignore-default-opts @world | grep '^\[' | sed 's/ *[0-9]*
 ```
 
 Evidence: `TEST/findings/l0.md` "#74 S0"–"#74 S3"; plans `docs/02.68-74.md` Phase F and `docs/02.074-bdeps_deep_walk.md` (now done); backlog #74 (done) and #79 (the filed B2 residue).
+
+**A blocker whose installed owner the run never walks still uninstall-orders that owner, and the row matches real (backlog #77, 2026-09-18).** A0's container capture showed the filed "one line: tag the nomerge arm" was insufficient: real's `_validate_blockers` scans **every** installed package's recorded runtime deps (`Package._runtime_keys` = `IDEPEND PDEPEND RDEPEND`, `depgraph.py:8919-9078`) and registers their blockers with the vardb `Package` as nomerge parent, while portuale only ever collected blockers from owners its walk reached — so installed `nomowner-1.0`'s `!<dev-libs/nomtarget-2.0` was invisible and real's `[uninstall] nomowner-1.0` + inline satisfied `b` had no portuale counterpart. A1 adds `collect_unwalked_installed_blockers` (the same dynamic-deps / `use_reduce_flat_disjunctive` pipeline the walk uses, skipped only under `--nodeps`, real's own early exit `:8908-8910`), tags the nomerge satisfied arm `Uninstall { cpv: owner, anchor: <merge-bound blocked cp> }` (real `depends_on_order.add((parent, pkg))` `:9204-9206`, `addnode(uninst_task, inst_task)` `:9240-9242`), and gives an absent owner's row its own removal entry as its display home. No `merge_order.rs` change was needed: `Uninstall.required_by`'s edge is already generic. A2 commits the fixture (`dev-libs/nomowner` / `dev-libs/nomtarget`) so the shared `fixture_env` reaches the shape, adds the bed cell and pins n1–n4 plus the n6 `B`/rc 1 control.
+
+```sh
+# the committed fixture shape, run from the repo root
+PORTAGE_CONFIGROOT=$PWD/fixtures ROOT=$PWD/fixtures PORTAGE_RUNNING_ROOT=$PWD/fixtures \
+  DISTDIR=$PWD/fixtures/distfiles rust/target/release/portuale emerge -p =dev-libs/nomtarget-1.5
+# -> [ebuild     U  ] dev-libs/nomtarget-1.5 [1.0]
+#    [uninstall     ] dev-libs/nomowner-1.0
+#    [blocks b      ] <dev-libs/nomtarget-2.0 ("<dev-libs/nomtarget-2.0" is soft blocking dev-libs/nomowner-1.0)
+
+# the pinned cells (n1/n2/n3/n4 + the n6 control)
+python3 -m pytest tests -q -k 77_nomerge
+# -> 1 passed
+
+# the container bed, including the new cell: 21 probes / 16 clean / 17 explained / 0 unexplained
+TEST/run/l0-fixture-oracle.sh
+# -> rc 0
+```
+
+Evidence: `TEST/findings/l0.md` "#77 A0"–"#77 A3"; plan `docs/02.75-79.md` Phase A. The unresolved half of the same scan (an absent owner's `[blocks B]` row) is filed as backlog #80.
+
+**The satisfied-blocker wait predicate follows the `|| ( … )` branch the run actually kept (backlog #76, 2026-09-18).** Phase D's B2 pinned the wait predicate to the mechanism (`depgraph.py:9998`/`:10190`/`:10351-10358`) but skipped every `alt` edge, because real resolves one `||` branch through `dep_zapdeps` during graph construction while the predicate models the serializer, which only ever sees the collapsed edge. B0's container capture settled it: with `blocked-2.0`'s dependency on the owner's merge routed through `|| ( … )` — the wait branch first (q1), the installed-satisfied branch losing to the in-graph one (q2, `dep_zapdeps`' all-in-graph bin), and the `RDEPEND` control (q3) — real prints the satisfied `[blocks b]` row and `Conflict: 1 block (all satisfied)`, and the `sys.settrace` dump shows the same stuck-serializer path as a direct edge (retlist's satisfied `Blocker` right after `blocked-2.0`, `scheduled_uninstalls=[blocked-1.0]`). B1 factored `build_digraph`'s branch selection into a shared prelude so `kept_alt_branches` and its internal use cannot drift (the #53 circular-self-branch exclusion included), and B2 makes `replacement_wait_index` follow kept alternatives exactly like plain edges while still skipping suppressed ones.
+
+```sh
+# the committed fixture: the replacement waits through the kept || branch
+PORTAGE_CONFIGROOT=$PWD/fixtures ROOT=$PWD/fixtures PORTAGE_RUNNING_ROOT=$PWD/fixtures \
+  DISTDIR=$PWD/fixtures/distfiles rust/target/release/portuale emerge -p =dev-libs/disjtarget-2.0
+# -> [ebuild     U  ] dev-libs/disjowner-1.1 [1.0]
+#    [ebuild     U  ] dev-libs/disjtarget-2.0 [1.0]
+#    [blocks b      ] <dev-libs/disjtarget-2.0 ("<dev-libs/disjtarget-2.0" is soft blocking dev-libs/disjowner-1.1)
+
+# the pinned cells (row/counters; the kept and suppressed branch cases)
+python3 -m pytest tests -q -k 76_wait
+# -> 1 passed
+
+# the host-exact bed cell (q1's BDEPEND splits across roots under the
+# default bed's ROOT=$FX -- B0b's staging artifact)
+FX_HOST_ROOTS=1 TEST/run/l0-fixture-oracle.sh TEST/atomlists/l0-fixture-oracle-host.txt
+# -> 1 probe, 1 clean, 0 unexplained
+```
+
+Evidence: `TEST/findings/l0.md` "#76 B0"–"#76 B3"; plan `docs/02.75-79.md` Phase B; backlog #76 (done).
+
+**Tree mode now lays blocker and removal rows out exactly where real's `_tree_display` puts them (backlog #75 display half, 2026-09-18).** Phase D had pinned the flat placement but tree mode still used the flat predicate *and* the flat layout. C0's oracle matrix captured every row kind in tree mode (u1, u6, n5, p2c, p2b, the disjunctive q1-t, `--tree --unordered-display`) plus the flat-vs-tree `sys.settrace` dumps, and showed the two halves clearly: `output_helpers.py::_tree_display` (`:341-407`) rewrites the serializer's blocker edges — `Package -> Blocker -> Uninstall` (`:377-390`), `upgrade_node -> blocker` for a replacement that removed the uninstall (`:392-398`) — before `_ordered_tree_display` (`:434-495`) walks the reversed merge list with real's `depth`-space indent, rendering a merge node met as an ancestor through `_set_no_columns`' non-merge arm as `[nomerge       ]`; and tree mode's serializer itself differs (no greedy leaf pop), which is a scheduling effect C2 owns. C1 ports the display half over a virtual graph of entries and satisfied blocker rows (kept `||` branches via `kept_alt_branches`, the #77 absent-owner row already on its removal, deps-less synthetic entries falling back to `required_by`); C2 then stopped per its own rule because p2b's tree-only row needs `scheduled_uninstalls` as serializer state, filed as backlog #81.
+
+```sh
+# the deterministic tree layouts, run from the repo root
+PORTAGE_CONFIGROOT=$PWD/fixtures ROOT=$PWD/fixtures PORTAGE_RUNNING_ROOT=$PWD/fixtures \
+  DISTDIR=$PWD/fixtures/distfiles rust/target/release/portuale emerge -p --tree dev-libs/blockerpkg
+# -> [nomerge       ] dev-libs/blockerpkg-1.0
+#    [blocks b      ]  dev-libs/samepkg ("dev-libs/samepkg" is hard blocking dev-libs/blockerpkg-1.0)
+#    [uninstall     ]   dev-libs/samepkg-1.0
+#    [ebuild  N     ] dev-libs/blockerpkg-1.0
+
+# the pinned cells (u1 + the #77 nomerge-owner chain n5)
+python3 -m pytest tests -q -k 75_tree
+# -> 1 passed
+
+# the bed, including the four new tree cells: 25 probes / 20 clean / 17 explained / 0 unexplained
+TEST/run/l0-fixture-oracle.sh
+# -> rc 0
+```
+
+Evidence: `TEST/findings/l0.md` "#75 C0"–"#75 C4"; plan `docs/02.75-79.md` Phase C; backlog #75 (`DONE-PARTIAL`) and #81 (the tree-mode serializer residue).
+
+**The `--backtrack=0` slot-op divergence is not the dynamic-deps append gate (backlog #78 E0, verdict (b), 2026-09-18).** The item was filed as "real relies on `FakeVartree._apply_dynamic_deps`, which portuale does not model". Portuale does model it (`installed_dep_string` + `built_slot_operator_atoms`, unit-tested) behind `PORTUALE_DYNAMIC_DEPS_APPEND`, and the plan's five-minute control had never been run: E0 staged the #71 S0 slotop fixtures host-exactly and ran `-uDvN [--backtrack=0] --oneshot dev-libs/consrdep|considep` on both sides, plus portuale with the flag on. Real's `--debug` shows why the bt0 cell is empty: `_slot_operator_trigger_reinstalls` is gated by `_allow_backtracking` (`depgraph.py:2131-2132`), which `--backtrack=0` clears (`:12188-12190`), so neither the rebuilds nor the provider update can happen. The flag does not reproduce real either way -- with backtracking off it only re-tags the provider row (`r U`), with backtracking on it makes portuale print an empty plan where real rebuilds all three consumers -- and both #24 pins named in the gate's comment fail with it on. The item is re-scoped into the #26 family instead of flipping the default.
+
+```sh
+# real, --backtrack=0: empty list; --debug shows no "causing rebuilds"
+# portuale + flag: re-tagged provider at bt0, empty plan at bt20 (diverges)
+PORTUALE_DYNAMIC_DEPS_APPEND=1 python3 -m pytest tests -q -k "slotchange_case4 or undo_cascade"
+# -> 2 failed: the libarchive / soccascb rR rows disappear (as the gate comment predicts)
+
+# the host re-diff is unchanged from the plan baseline
+rust/target/release/portuale emerge -uDpvN --ignore-default-opts @world | grep -E '^(Total|Conflict)'
+# -> Total: 73 packages (37 upgrades, 1 downgrade, 9 new, 5 in new slots, 21 reinstalls), Size of downloads: 1282430 KiB
+#    Conflict: 1 block (all satisfied)
+```
+
+Evidence: `TEST/findings/l0.md` "#71 S0" and "#78 E0"/"#78 E3"; plan `docs/02.75-79.md` Phase E; backlog #78 (re-scoped).

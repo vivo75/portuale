@@ -1,0 +1,6 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: #79 blocker-carrying dependency, older version
+EAPI=8
+KEYWORDS=amd64
+SLOT=0
+_md5_=85790fa06c91fe3d7bb4bd9ce24312e7

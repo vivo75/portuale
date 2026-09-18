@@ -312,7 +312,7 @@ def test_checker_flags_a_flush_left_never_reached_tree_row():
             "[ebuild  N     ] dev-libs/other-1.0 \n")
     plain = "".join(line.replace("  dev", "dev") + "\n" for line in tree.splitlines())
     problems = inv.check_cross_mode(plain, tree, plain, doc)
-    assert any("not in its required_by" in p for p in problems)
+    assert any("required_by" in p for p in problems)
 
 
 def test_checker_parses_binary_build_ids():

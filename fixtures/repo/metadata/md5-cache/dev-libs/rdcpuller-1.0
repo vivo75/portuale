@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: #79 installed updater pulling rdcblocker by a plain >= atom
+EAPI=8
+BDEPEND=>=dev-libs/rdcblocker-1
+KEYWORDS=amd64
+SLOT=0
+_md5_=d1000862fd3652f07a0ccd0835ddbf64

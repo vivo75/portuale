@@ -55,3 +55,18 @@ dev-libs/requiredusebadpkg
 app-misc/mopodman
 # #53: nearest-passing pin -- same chain without the self-branch
 app-misc/mopodmanok
+# #77 A0: installed nomowner's vdb RDEPEND soft-blocks `<nomtarget-2.0`,
+# nomowner is not walked (not in world, no dependency edge), and the
+# explicit `=nomtarget-1.5` merges -- real uninstall-orders the owner and
+# prints the satisfied row (n1)
+=dev-libs/nomtarget-1.5
+# #75 C3: the same shape in tree mode -- the satisfied row hangs under
+# the removal (`[blocks b]`, `[uninstall]`, then the merge; C0 n5)
+--tree =dev-libs/nomtarget-1.5
+# #75 C3: the merging-owner removal row in tree mode --
+# `[nomerge] blockerpkg`, `[blocks b]`, `[uninstall]`, `[ebuild N]`
+--tree dev-libs/blockerpkg
+# #75 C3: a plain tree (reversed-list layout, depth spaces)
+--tree dev-libs/diamond
+# #75 C3: the unordered DFS keeps the RDEPEND order
+--tree --unordered-display dev-libs/treeorderpkg

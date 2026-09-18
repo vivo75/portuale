@@ -1479,6 +1479,26 @@ CASES = [
     ("blocker: --color=y -v coloured + widened", ["--pretend", "--color=y", "-v", "dev-libs/blockerorderpkg"], 0),
     ("blocker: --tree still ends with the deferred [blocks b ] line", ["--pretend", "--tree", "dev-libs/blockerorderpkg"], 0),
     ("blocker: --json blocker payload is unchanged by the line reformat", ["--pretend", "--json", "dev-libs/blockerorderpkg"], 0),
+    (
+        "blocker: an unwalked installed owner's merge-bound match adds its removal row (#77 A0)",
+        ["--pretend", "=dev-libs/nomtarget-1.5"],
+        0,
+    ),
+    (
+        "blocker: a satisfied replacement waits through the selected || branch (#76 B0 q1)",
+        ["--pretend", "=dev-libs/disjtarget-2.0"],
+        0,
+    ),
+    (
+        "blocker: --tree hangs a merging owner's removal chain under the blocker (#75 C0 u1)",
+        ["--pretend", "--tree", "dev-libs/blockerpkg"],
+        0,
+    ),
+    (
+        "blocker: --tree hangs a nomerge owner's removal chain under the blocker (#75 C0 n5)",
+        ["--pretend", "--tree", "=dev-libs/nomtarget-1.5"],
+        0,
+    ),
     ("overlay: package exists only in the overlay repo", ["--pretend", "dev-libs/overlayonlypkg"], 0),
     ("overlay: best version wins across repos", ["--pretend", "dev-libs/overlaynewerpkg"], 0),
     ("overlay: same-version tie broken toward higher priority", ["--pretend", "dev-libs/overlaytiepkg"], 0),
@@ -2650,7 +2670,7 @@ def test_root_deps_build_entry_output_marks_the_running_root(
     rust_tree = _run([str(emerge_binary)], [*base, "--tree"], env)
     assert rust_tree.stdout == (
         "[ebuild  N     ] dev-libs/rootdepsbuildpkg-1.0 \n"
-        "[ebuild  N     ]   dev-libs/rootdepsbuildtool-1.0 to /\n"
+        "[ebuild  N     ]  dev-libs/rootdepsbuildtool-1.0 to /\n"
     )
 
 
@@ -2683,9 +2703,9 @@ def test_root_deps_recursion_walks_the_build_entrys_own_deps(
     rust_tree = _run([str(emerge_binary)], [*base, "--tree"], env)
     assert rust_tree.stdout == (
         "[ebuild  N     ] dev-libs/rdrapp-1.0 \n"
-        "[ebuild  N     ]   dev-libs/rdrtool-1.0 to /\n"
-        "[ebuild  N     ]     dev-libs/rdrlib-1.0 to /\n"
-        "[ebuild  N     ]     dev-libs/rdrtooldep-1.0 to /\n"
+        "[ebuild  N     ]  dev-libs/rdrtool-1.0 to /\n"
+        "[ebuild  N     ]   dev-libs/rdrlib-1.0 to /\n"
+        "[ebuild  N     ]   dev-libs/rdrtooldep-1.0 to /\n"
     )
 
 
@@ -9098,45 +9118,50 @@ def test_use_dep_equal_parent_mismatches_when_parent_flag_is_disabled(emerge_bin
 
 
 def test_tree_indents_a_diamond_dependency_and_shows_it_once(emerge_binary, fixture_env):
-    """--tree/-t: portuale-specific simplified indentation (real
-    output_helpers.py's own _tree_display needs a genuine merge
-    scheduler portuale doesn't have -- see pretend.rs's own print_tree
-    docstring for the full grounding). dev-libs/diamond's own two
-    children (shared-a, shared-b) both RDEPEND on dev-libs/common -- the
-    diamond dependency must be shown exactly once, nested under whichever
-    parent's own subtree reaches it first (shared-a, the alphabetically
-    first child), not silently duplicated under both and not silently
-    dropped either -- real _unordered_tree_display's own "seen_nodes"
-    behavior, ported exactly."""
+    """--tree/-t: real's `_tree_display` layout (`output_helpers.py:
+    341-495`): the reversed retlist walked with the deepest-child rule,
+    each node once (`seen_nodes`). dev-libs/diamond's own two children
+    both RDEPEND on dev-libs/common; real's merge list is
+    [common, shared-a, shared-b, diamond], so the reversed scan puts
+    shared-b before shared-a and nests the shared common under the
+    first chain parent (shared-a).
+
+    Container oracle, real 3.0.82.2, `TEST/findings/l0.md` "#75 C0"
+    (diamond) / "#75 C1" (exploration). Portuale omits real's
+    `to <root>/` suffix on a non-"/" ROOT -- the same pre-existing
+    divergence every row has."""
     result = _run([str(emerge_binary)], ["--pretend", "--tree", "dev-libs/diamond"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/diamond-1.0 ',
-        '[ebuild  N     ]   dev-libs/shared-a-1.0 ',
-        '[ebuild  N     ]     dev-libs/common-1.0 ',
-        '[ebuild  N     ]   dev-libs/shared-b-1.0 ',
+        '[ebuild  N     ]  dev-libs/shared-b-1.0 ',
+        '[ebuild  N     ]  dev-libs/shared-a-1.0 ',
+        '[ebuild  N     ]   dev-libs/common-1.0 ',
     ]
 
 
 def test_tree_unordered_display_preserves_discovery_order(emerge_binary, fixture_env):
     """--unordered-display (only meaningful together with --tree): real
-    portage's own man page wording -- does NOT sort the tree in merging
-    order. dev-libs/treeorderpkg's own RDEPEND deliberately lists its
-    two children in reverse-alphabetical order
-    ("dev-libs/ztreechild dev-libs/atreechild"). The default (--tree
-    alone) sorts children alphabetically, portuale's own deterministic
-    stand-in for real portage's genuine merge-order sort (no scheduler
-    exists to be more faithful than that) -- --unordered-display instead
-    preserves the RDEPEND string's own literal order, using
-    already-existing BFS discovery-order data, not sorted at all."""
+    `_unordered_tree_display` (`output_helpers.py:410-431`) DFSes the
+    graph from its roots in graph insertion order, so both the root and
+    its children follow the merge list's own dependency order rather
+    than the reversed-list tree walk. dev-libs/treeorderpkg's RDEPEND
+    deliberately lists its two children in reverse-alphabetical order
+    ("dev-libs/ztreechild dev-libs/atreechild"): ordered tree shows them
+    reversed by the mylist walk (atreechild first), unordered keeps the
+    RDEPEND order (ztreechild first).
+
+    Container oracle, real 3.0.82.2, `TEST/findings/l0.md` "#75 C0"
+    (the u1 unordered cell) / "#75 C1" (treeorder).
+    """
     ordered = _run(
         [str(emerge_binary)], ["--pretend", "--tree", "dev-libs/treeorderpkg"], fixture_env
     )
     assert ordered.returncode == 0
     assert ordered.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/treeorderpkg-1.0 ',
-        '[ebuild  N     ]   dev-libs/atreechild-1.0 ',
-        '[ebuild  N     ]   dev-libs/ztreechild-1.0 ',
+        '[ebuild  N     ]  dev-libs/atreechild-1.0 ',
+        '[ebuild  N     ]  dev-libs/ztreechild-1.0 ',
     ]
 
     unordered = _run(
@@ -9147,17 +9172,22 @@ def test_tree_unordered_display_preserves_discovery_order(emerge_binary, fixture
     assert unordered.returncode == 0
     assert unordered.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/treeorderpkg-1.0 ',
-        '[ebuild  N     ]   dev-libs/ztreechild-1.0 ',
-        '[ebuild  N     ]   dev-libs/atreechild-1.0 ',
+        '[ebuild  N     ]  dev-libs/ztreechild-1.0 ',
+        '[ebuild  N     ]  dev-libs/atreechild-1.0 ',
     ]
 
 
-def test_tree_onlydeps_suppresses_only_the_root_line(emerge_binary, fixture_env):
-    """--tree combined with --onlydeps: the same suppression rule flat
-    mode already has (a directly-requested top-level atom's own line is
-    hidden, its dependencies print normally) applies per-node in tree
-    mode too -- only the root's own line disappears, its children still
-    render, at their own normal indent."""
+def test_tree_onlydeps_shows_the_root_as_a_nomerge_ancestor(emerge_binary, fixture_env):
+    """--tree combined with --onlydeps: real's retlist omits the
+    suppressed root, but the graph still holds it, so the ancestor walk
+    brings it back as a `[nomerge       ]` occurrence with no attr
+    columns (`set_pkg_info`'s ordered=False rule, `output.py:612-614`)
+    while its dependencies render normally.
+
+    Container oracle, real 3.0.82.2, `TEST/findings/l0.md` "#75 C1"
+    (onlydeps exploration). Flat `--onlydeps` still hides the root line
+    entirely (unchanged, and portuale's flat pins cover it).
+    """
     result = _run(
         [str(emerge_binary)],
         ["--pretend", "--tree", "--onlydeps", "dev-libs/diamond"],
@@ -9165,9 +9195,10 @@ def test_tree_onlydeps_suppresses_only_the_root_line(emerge_binary, fixture_env)
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        '[ebuild  N     ]   dev-libs/shared-a-1.0 ',
-        '[ebuild  N     ]     dev-libs/common-1.0 ',
-        '[ebuild  N     ]   dev-libs/shared-b-1.0 ',
+        '[nomerge       ] dev-libs/diamond-1.0',
+        '[ebuild  N     ]  dev-libs/shared-b-1.0 ',
+        '[ebuild  N     ]  dev-libs/shared-a-1.0 ',
+        '[ebuild  N     ]   dev-libs/common-1.0 ',
     ]
 
 
@@ -9595,14 +9626,20 @@ def test_different_slots_of_the_same_package_coexist_without_conflict(emerge_bin
     # (Regression: a destructive required_by merge used to hand the owner
     # to only the first slot's entry, so the second fell through to the
     # flush-left safety net.)
+    #
+    # Sibling order: portuale's reversed merge list puts 2.0 first; the
+    # real capture has 1.0 first (`TEST/findings/l0.md` "#75 C1"), a
+    # tree-mode serializer ordering difference C2 owns (the tree retlist
+    # differs from the flat one) and stops on, filing the remainder as
+    # backlog #80. The nesting itself (both slots, depth 1) is real's.
     tree = _run(
         [str(emerge_binary)], ["--pretend", "--tree", "dev-libs/multislotparent"], fixture_env
     )
     assert tree.returncode == 0
     assert tree.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/multislotparent-1.0 ',
-        '[ebuild  N     ]   dev-libs/multislotpkg-1.0 ',
-        '[ebuild  N     ]   dev-libs/multislotpkg-2.0 ',
+        '[ebuild  N     ]  dev-libs/multislotpkg-2.0 ',
+        '[ebuild  N     ]  dev-libs/multislotpkg-1.0 ',
     ]
 
     # --json: every slot's entry names the same owner in required_by.
@@ -17053,6 +17090,230 @@ def test_oracle_blocker_replaced_version_satisfied_and_unsatisfied_twin(
     )
     assert "Conflict: 1 block (1 unsatisfied)" in twin.stdout
     assert "installed at the same time" in twin.stderr
+
+
+def test_oracle_77_nomerge_owner_removal_row(emerge_binary, fixture_env, tmp_path):
+    """Backlog #77 A0/A1: a blocker whose owner is installed but never
+    walked still uninstall-orders that owner against its merge-bound
+    match.
+
+    Real `_validate_blockers` scans **every** installed package's
+    recorded runtime deps (`Package._runtime_keys`, `depgraph.py:
+    8919-9078`) and registers their blockers with the vardb `Package` as
+    parent; the nomerge arm (`parent.operation == "nomerge"`,
+    `:9204-9206`) removes that owner, ordered after the merge-bound
+    blocked instance (`inst_task`, `:9240-9242`). Installed
+    `nomowner-1.0`'s vdb `RDEPEND="!<dev-libs/nomtarget-2.0"` matches the
+    merge-bound `nomtarget-1.5`, and `nomowner` is not in @world and no
+    graph entry depends on it.
+
+    Container oracle, real 3.0.82.2, `TEST/findings/l0.md` "#77 A0" cells
+    n1 (`-p`), n2 (`-pv`), n3 (`--columns`) and n4 (`-q`): real's bytes
+    are the `[uninstall]` row, the inline satisfied `b`, and
+    `Total: 1 package (1 upgrade, 1 uninstall)` /
+    `Conflict: 1 block (all satisfied)`. Two real-vs-portuale display
+    cuts predate this slice and are deliberately not in these pins: the
+    `-pv` per-row ` 0 KiB` size suffix (documented in `pretend.rs`'s
+    `verbose_size`) and the trailing space real leaves after a plain `-p`
+    `USE="…"` field. n5 (`--tree`) belongs to Phase C; the n6 control
+    (owner set-reachable -> `[blocks B]`, rc 1) is pinned below on a
+    test-local root, because the shared fixture world cannot carry
+    `nomowner` without perturbing every world/removal pin.
+    """
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "=dev-libs/nomtarget-1.5"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild     U  ] dev-libs/nomtarget-1.5 [1.0]",
+        "[uninstall     ] dev-libs/nomowner-1.0 ",
+        '[blocks b      ] <dev-libs/nomtarget-2.0 ("<dev-libs/nomtarget-2.0" is '
+        "soft blocking dev-libs/nomowner-1.0)",
+    ], result.stdout
+
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "-v", "=dev-libs/nomtarget-1.5"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild     U  ] dev-libs/nomtarget-1.5::testrepo [1.0::testrepo]",
+        "[uninstall     ] dev-libs/nomowner-1.0::testrepo ",
+        '[blocks b      ] <dev-libs/nomtarget-2.0 ("<dev-libs/nomtarget-2.0" is '
+        "soft blocking dev-libs/nomowner-1.0)",
+        "",
+        "Total: 1 package (1 upgrade, 1 uninstall), Size of downloads: 0 KiB",
+        "Conflict: 1 block (all satisfied)",
+    ], result.stdout
+
+    # n3: --columns suppresses the satisfied rows (real `output.py:120`).
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--columns", "=dev-libs/nomtarget-1.5"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild     U  ] dev-libs/nomtarget                                    "
+        "[1.5]                        [1.0]",
+    ], result.stdout
+
+    # n4: -q narrows every bracket pad by one space.
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "-q", "=dev-libs/nomtarget-1.5"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild     U ] dev-libs/nomtarget-1.5 [1.0]",
+        "[uninstall    ] dev-libs/nomowner-1.0 ",
+        '[blocks b     ] <dev-libs/nomtarget-2.0 ("<dev-libs/nomtarget-2.0" is '
+        "soft blocking dev-libs/nomowner-1.0)",
+    ], result.stdout
+
+    # n6 control (A0 n6 / #73 cell g): the owner is a world member and
+    # @world is expanded, so it is a digraph node with parents and the
+    # removal never happens -- unresolved `B`, rc 1.
+    n6_tmp = tmp_path / "n6"
+    n6_tmp.mkdir()
+    root = _b1_root(
+        n6_tmp,
+        ["dev-libs/nomtarget", "dev-libs/nomowner"],
+        [
+            ("dev-libs", "nomtarget", "1.0", "0", {}),
+            (
+                "dev-libs",
+                "nomowner",
+                "1.0",
+                "0",
+                {"RDEPEND": "!<dev-libs/nomtarget-2.0"},
+            ),
+        ],
+    )
+    control = _run(
+        [str(emerge_binary)],
+        [
+            "--pretend",
+            "-v",
+            "--update",
+            "--deep",
+            "@world",
+            "=dev-libs/nomtarget-1.5",
+        ],
+        _b1_env(fixture_env, root),
+    )
+    assert control.returncode == 1
+    assert (
+        '[blocks B      ] <dev-libs/nomtarget-2.0 ("<dev-libs/nomtarget-2.0" is '
+        "soft blocking dev-libs/nomowner-1.0)" in control.stdout
+    )
+    assert "Conflict: 1 block (1 unsatisfied)" in control.stdout
+    assert "installed at the same time" in control.stderr
+
+
+def test_oracle_76_wait_follows_the_selected_disjunctive_branch(emerge_binary, fixture_env):
+    """Backlog #76 B0 q1/B2: a satisfied replacement's wait chain through
+    a `|| ( … )` group follows the branch `dep_zapdeps` kept.
+
+    `disjtarget-2.0`'s `BDEPEND="|| ( ~dev-libs/disjowner-1.1
+    dev-libs/absent )"` has only the owner-merge branch satisfiable, so
+    the group collapses to it; `disjowner-1.1`'s own
+    `RDEPEND="!<dev-libs/disjtarget-2.0"` soft-blocks the installed
+    `disjtarget-1.0` that the merge replaces in-slot. Real's serializer
+    is stuck on the kept edge and appends the solved blocker after
+    `disjtarget-2.0` (container oracle, real 3.0.82.2, host-exact roots
+    per `TEST/findings/l0.md` "#76 B0" q1; the sys.settrace dump shows
+    the retlist's satisfied `Blocker` and
+    `scheduled_uninstalls=[disjtarget-1.0]`). The same shape under the
+    bed's default `ROOT=$FX` splits real's `BDEPEND` across two trees
+    (the B0b staging artifact), so the permanent bed cell lives in
+    `TEST/atomlists/l0-fixture-oracle-host.txt` and is run with
+    `FX_HOST_ROOTS=1`; this pin uses the shared fixture root, where
+    portuale's logical target-root state is the host-exact one.
+    """
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "=dev-libs/disjtarget-2.0"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild     U  ] dev-libs/disjowner-1.1 [1.0]",
+        "[ebuild     U  ] dev-libs/disjtarget-2.0 [1.0]",
+        '[blocks b      ] <dev-libs/disjtarget-2.0 ("<dev-libs/disjtarget-2.0" is '
+        "soft blocking dev-libs/disjowner-1.1)",
+    ], result.stdout
+
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "-v", "=dev-libs/disjtarget-2.0"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild     U  ] dev-libs/disjowner-1.1::testrepo [1.0::testrepo]",
+        "[ebuild     U  ] dev-libs/disjtarget-2.0::testrepo [1.0::testrepo]",
+        '[blocks b      ] <dev-libs/disjtarget-2.0 ("<dev-libs/disjtarget-2.0" is '
+        "soft blocking dev-libs/disjowner-1.1)",
+        "",
+        "Total: 2 packages (2 upgrades), Size of downloads: 0 KiB",
+        "Conflict: 1 block (all satisfied)",
+    ], result.stdout
+
+
+def test_oracle_75_tree_blocker_rows_match_real(emerge_binary, fixture_env):
+    """Backlog #75 C0/C1/C3: the two deterministic tree-mode blocker
+    layouts.
+
+    Real `_tree_display` (`output_helpers.py:341-407`) rewrites the
+    blocker edges before laying the tree out: a satisfied row resolved
+    by a removal becomes `Package -> Blocker -> Uninstall` (`:377-390`),
+    with the display list walked from the reversed retlist. u1 (merging
+    owner) and n5 (#77's absent-owner nomerge arm) are the two shapes
+    whose flat merge order already coincides with real's, so their tree
+    bytes are deterministic; the container captures are
+    `TEST/findings/l0.md` "#75 C0" (u1/n5), and portuale omits real's
+    `to <root>/` suffix on a non-"/" ROOT like every other fixture pin.
+
+    Not pinned here, by C2's stop (`#75 C2`, backlog #81): p2b's
+    tree-only satisfied row (the tree-mode serializer schedules an
+    uninstall flat mode never reaches -- `scheduled_uninstalls` as
+    serializer state), and the tree-mode sibling order of u6 /
+    multislotparent (`dev-libs/multislotparent`'s own test records the
+    ordering residue next to its pin). The
+    `--tree --unordered-display` DFS is pinned by
+    `test_tree_unordered_display_preserves_discovery_order`.
+    """
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--tree", "dev-libs/blockerpkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[nomerge       ] dev-libs/blockerpkg-1.0",
+        '[blocks b      ]  dev-libs/samepkg ("dev-libs/samepkg" is hard '
+        "blocking dev-libs/blockerpkg-1.0)",
+        "[uninstall     ]   dev-libs/samepkg-1.0 ",
+        "[ebuild  N     ] dev-libs/blockerpkg-1.0 ",
+    ], result.stdout
+
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--tree", "=dev-libs/nomtarget-1.5"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[blocks b      ] <dev-libs/nomtarget-2.0 (\"<dev-libs/nomtarget-2.0\" is soft "
+        "blocking dev-libs/nomowner-1.0)",
+        "[uninstall     ]  dev-libs/nomowner-1.0 ",
+        "[ebuild     U  ] dev-libs/nomtarget-1.5 [1.0]",
+    ], result.stdout
 
 
 _B0B_BPARENT_1_1 = """EAPI=8
