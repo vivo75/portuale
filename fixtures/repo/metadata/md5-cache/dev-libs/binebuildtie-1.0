@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: ebuild + a USE-matching binhost binary at the same version -- binary wins the tie (real matched_packages[-1])
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=ff575dc27c8c3d720d564e2f0a8a9a4a

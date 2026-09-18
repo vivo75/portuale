@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DEPEND==dev-libs/mgxc-2
-DESCRIPTION=023 oracle fixture: mgxb
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=2e54a0ecbb4d149adfa323237d9fe0e2

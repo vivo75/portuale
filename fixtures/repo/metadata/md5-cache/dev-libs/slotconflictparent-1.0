@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: pulls in both dev-libs/slotconflictnewconsumer and dev-libs/slotconflictoldconsumer, whose own RDEPENDs disagree about which version of dev-libs/slotconflicttarget:0 they need
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-libs/slotconflictnewconsumer dev-libs/slotconflictoldconsumer
-SLOT=0
-_md5_=c9636815a46638ec90478c0bf07b1e19

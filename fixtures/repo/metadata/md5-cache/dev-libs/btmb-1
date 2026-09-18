@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=023 oracle fixture: btmb
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=<=dev-libs/btma-1
-SLOT=0
-_md5_=ee6eb89c9f71c50d6061b500ab6dbc17

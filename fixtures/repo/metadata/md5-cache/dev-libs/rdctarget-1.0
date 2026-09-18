@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: #79 installed consumer pinned to rdcblocker-1.0
-EAPI=8
-BDEPEND=~dev-libs/rdcblocker-1.0
-KEYWORDS=amd64
-SLOT=0
-_md5_=ae70cb92c0f5f119ad8354f828173e11

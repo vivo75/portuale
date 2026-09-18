@@ -1,8 +1,0 @@
-DEFINED_PHASES=-
-DEPEND=>=dev-libs/mlocaml-4.02:=
-DESCRIPTION=R4 (#35) oracle fixture: upstream test_or_choices.py::testConflictMissedUpdate (labltk)
-EAPI=5
-KEYWORDS=amd64
-RDEPEND=>=dev-libs/mlocaml-4.02:=
-SLOT=0/8.06.0
-_md5_=8126a5c8b3a8f77b98fa22169028293c

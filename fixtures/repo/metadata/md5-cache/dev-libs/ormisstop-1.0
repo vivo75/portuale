@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: ||-missing-dep -- top, || over a bad and a good alternative
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=|| ( dev-libs/ormissbad dev-libs/ormissgood )
-SLOT=0
-_md5_=5ffab93a90f65603b8c285bd351ffc19

@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: license-masked (@EULA), stable keyword
-EAPI=8
-KEYWORDS=amd64
-LICENSE=SomeEula
-SLOT=0
-_md5_=29dbd038fd8547786a46381f5e305942

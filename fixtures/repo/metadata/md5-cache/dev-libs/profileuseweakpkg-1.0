@@ -1,8 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: a profile level's own package.use enables profweakflag, but make.conf disables it -- real configdict[defaults] is weaker than configdict[conf], so the flag ends up OFF
-EAPI=8
-IUSE=profweakflag
-KEYWORDS=amd64
-RDEPEND=profweakflag? ( dev-libs/newpkg )
-SLOT=0
-_md5_=6a262a2f03bfa9c231b012fb6b04c170

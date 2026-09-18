@@ -1,9 +1,0 @@
-# fixture: an overlay's own profiles/license_groups. Real
-# LicenseManager._read_license_groups reads license_groups from
-# LocationsManager.profile_locations -- the profiles/ base of the main
-# repo AND every configured overlay (LocationsManager.py:432), NOT the
-# individual profile-chain levels. This extends the main repo's own EULA
-# entry (repo/profiles/license_groups: "SomeEula") with one more member,
-# to prove the two stack (main first, then overlay) rather than one
-# replacing the other.
-EULA CrossRepoNonfree

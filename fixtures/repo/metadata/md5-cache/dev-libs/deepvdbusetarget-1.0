@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: dep gated behind deepvdbusepkg's wantdep; must NOT be pulled on a --deep walk (vdb USE lacks wantdep)
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=fc902b1d1ed3057b52708534f7eb77cb

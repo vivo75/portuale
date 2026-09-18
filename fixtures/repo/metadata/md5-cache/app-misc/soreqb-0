@@ -1,9 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=024 oracle fixture: := consumer with REQUIRED_USE (bug 523048)
-EAPI=8
-IUSE=x y
-KEYWORDS=amd64
-RDEPEND=app-misc/A:=
-REQUIRED_USE=|| ( x y )
-SLOT=0
-_md5_=73061b1b920dbe0c9cd6ece5402793ca

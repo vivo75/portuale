@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=024 oracle fixture: go installed sub-slot (slot-op BDEPEND rebuild)
-EAPI=8
-KEYWORDS=amd64
-SLOT=0/1.14.12
-_md5_=37d17e2da6727941ce84aff47899981d

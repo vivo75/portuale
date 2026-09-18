@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: 1.0 installed, 2.0 visible -> Upgrade
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=3fd1953563fcbf19f86304d491e2c6a6

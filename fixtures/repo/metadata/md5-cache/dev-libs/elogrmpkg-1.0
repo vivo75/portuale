@@ -1,6 +1,0 @@
-DEFINED_PHASES=install postrm prerm
-DESCRIPTION=fixture package: pkg_prerm/pkg_postrm emit elog/ewarn, for elog on unmerge
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=451dfb86d34da82cfd095c97574b321b

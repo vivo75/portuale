@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: dependency with no visible candidate must not fail the whole graph
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-libs/doesnotexist-anywhere
-SLOT=0
-_md5_=451441e44bec286798a19eb2272d5c72

@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: proves --with-test-deps only applies to a top-level (depth 0) atom, not a dependency reached at depth 1
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-libs/withtestdeppkg
-SLOT=0
-_md5_=0fc6bf0bbddb25863caa9ff207ce2caf

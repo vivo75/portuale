@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: bdepcascadepkg's BDEPEND target, newer visible version
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=4464562a0677c0a5140d358e326124ed

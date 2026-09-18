@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: binary build's own baked-in USE mismatches what would currently be selected -- --binpkg-respect-use
-EAPI=8
-IUSE=foo
-KEYWORDS=amd64
-SLOT=0
-_md5_=420450d1babcc7424376f542da9faf7a

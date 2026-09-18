@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: F4 all_installed_slots -- installed in slot 0, the same slot as the visible ebuild
-EAPI=8
-IUSE=unsatuseorflag
-KEYWORDS=amd64
-SLOT=0
-_md5_=48299772f613207b9565e9502390091e

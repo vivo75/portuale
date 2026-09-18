@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=024 oracle fixture: sub-slot-shifting provider (bug 614390)
-EAPI=8
-KEYWORDS=amd64
-SLOT=0/2
-_md5_=e6f26f6ab938d037a02f80f63b921b7a

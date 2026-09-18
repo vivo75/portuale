@@ -1,5 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: no KEYWORDS at all (like a live/9999 ebuild), visible only via a ** package.accept_keywords entry
-EAPI=8
-SLOT=0
-_md5_=036df9d68b9c94f738dd3ef7e3fdd600

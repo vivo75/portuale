@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: pulls dev-libs/treeslotpkg:0 and the slot-1 parent, plus a slot-unqualified dev-libs/treeslotpkg atom that both merge-bound slots match
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-libs/treeslotpkg:0 dev-libs/treeslotparent dev-libs/treeslotpkg
-SLOT=0
-_md5_=ea885da3f0c165173abefe2f782c8e89

@@ -1,7 +1,0 @@
-BDEPEND=dev-libs/newpkg
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: BDEPEND is walked by dependency recursion, same as DEPEND/RDEPEND
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=045ac6c558025d323436724e541fc355

@@ -1,7 +1,0 @@
-BDEPEND=dev-libs/rootdepsbuildtool
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: --root-deps real recursive-build-against-running-root -- BDEPENDs on a package with a real, tree-visible ebuild that isn't installed in the running root
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=26e28b21ca0007c94b506649f9e43108

@@ -1,8 +1,0 @@
-DEFINED_PHASES=-
-DEPEND=dev-libs/socfoo:= dev-libs/socb
-DESCRIPTION=024 oracle fixture: := consumer pinned by meta (bug 614390)
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-libs/socfoo:= dev-libs/socb
-SLOT=0
-_md5_=7dd7428c00fe360a924b710883da10c5

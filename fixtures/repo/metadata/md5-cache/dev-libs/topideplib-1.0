@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: --root-deps -- leaf IDEPEND of dev-libs/topidepapp
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=76e0a60767fea81f2f45491f593ebde2

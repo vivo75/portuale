@@ -1,7 +1,0 @@
-BDEPEND=dev-libs/rdrnothere
-DEFINED_PHASES=-
-DESCRIPTION=fixture: --root-deps recursion -- a running-root build tool whose own BDEPEND (rdrnothere) has no ebuild anywhere and isn't installed
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=0f2f2dfb8d2c472fd7ebf0bdbdf2c09b

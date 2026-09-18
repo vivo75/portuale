@@ -1,7 +1,0 @@
-DEFINED_PHASES=install
-DESCRIPTION=fixture package: the resolved USE reaches the build phase (bin/ebuild.sh use())
-EAPI=8
-IUSE=buildflag
-KEYWORDS=amd64
-SLOT=0
-_md5_=af872d783446ab6e28a7d1988dd45e0d

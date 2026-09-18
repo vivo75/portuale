@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: || any-of LICENSE group, visible via the accepted GPL-2 alternative
-EAPI=8
-KEYWORDS=amd64
-LICENSE=|| ( GPL-2 SomeEula )
-SLOT=0
-_md5_=80513e2f58372af7192d79404cfc4532

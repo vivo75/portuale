@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DEPEND==dev-libs/mgfc-1 dev-libs/mgfb
-DESCRIPTION=023 oracle fixture: mgfa
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=4b706a854bf10e76163fefd6e9ecff8d

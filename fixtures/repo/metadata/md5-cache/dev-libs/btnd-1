@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DEPEND==dev-libs/btna-1 =dev-libs/btnb-1
-DESCRIPTION=023 oracle fixture: btnd
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=1479af43b0a1e391ee75b2878bda3c89

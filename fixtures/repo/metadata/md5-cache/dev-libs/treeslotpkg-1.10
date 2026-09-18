@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: SLOT 1, version 1.10 -- the highest available, so a slot-unqualified atom must resolve here
-EAPI=8
-KEYWORDS=amd64
-SLOT=1
-_md5_=fa7bcbfd28d10231e4f7b7d3c21d750d

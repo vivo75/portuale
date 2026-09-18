@@ -1,8 +1,0 @@
-DEFINED_PHASES=-
-DEPEND=app-misc/somassb:=
-DESCRIPTION=024 oracle fixture: mass-rebuild leaf 3 (bug 486580)
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=app-misc/somassb:=
-SLOT=0
-_md5_=f6ae774695c932092ebe3067ef9bb7ae

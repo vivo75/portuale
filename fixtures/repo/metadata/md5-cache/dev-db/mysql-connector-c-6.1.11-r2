@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=023 oracle fixture: mysql-connector-c
-EAPI=8
-KEYWORDS=amd64
-SLOT=0/18
-_md5_=dab900b614e04987c8a50c2bc3f39b76

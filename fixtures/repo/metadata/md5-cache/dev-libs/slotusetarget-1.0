@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: slot 0, older version with IUSE=+x +y -- the USE-satisfying side of a slot conflict whose other instance cannot satisfy its parents' USE-deps
-EAPI=8
-IUSE=+x +y
-KEYWORDS=amd64
-SLOT=0
-_md5_=977d922cc050fe1bebaff5b1842102a2

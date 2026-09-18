@@ -1,6 +1,0 @@
-DEFINED_PHASES=install
-DESCRIPTION=fixture package: #37 S2 resolved phase env reaches keepdir (SLOT) and the phase itself (USE/FEATURES)
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=62715d43d85f62eae3d08f017fdcdc57

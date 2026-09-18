@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: bare (unversioned) RDEPEND on dev-libs/paired, satisfied by either 1.0 or 2.0 -- the solvable slot-conflict control for #57 K2
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-libs/paired
-SLOT=0
-_md5_=54ad1af7dade97097e77109c36e20988

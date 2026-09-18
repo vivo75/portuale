@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: RESTRICT=bindist, masked once package.accept_restrict revokes it for this package despite the real default ACCEPT_RESTRICT=*
-EAPI=8
-KEYWORDS=amd64
-RESTRICT=bindist
-SLOT=0
-_md5_=fbab8e2a3aa3fa9cdc2a14b5c7ec7636

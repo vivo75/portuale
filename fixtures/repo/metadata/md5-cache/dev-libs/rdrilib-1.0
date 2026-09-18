@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: --root-deps recursion -- leaf IDEPEND of rdritool
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=bf8c94843e0812aee5af92e9e86c747b

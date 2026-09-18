@@ -1,7 +1,0 @@
-BDEPEND=dev-libs/rdrcycb
-DEFINED_PHASES=-
-DESCRIPTION=fixture: --root-deps recursion -- cycle node A, BDEPENDs B
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=6ac70db8e9736af4cd21062322f03c64

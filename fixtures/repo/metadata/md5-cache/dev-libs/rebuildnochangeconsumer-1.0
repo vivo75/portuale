@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DEPEND=dev-libs/rebuildnochange
-DESCRIPTION=fixture: installed pkg DEPENDing on rebuildnochange
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=694293b9e519a828902b485414ad8f32

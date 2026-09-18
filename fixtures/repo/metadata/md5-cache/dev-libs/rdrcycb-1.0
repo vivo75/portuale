@@ -1,7 +1,0 @@
-BDEPEND=dev-libs/rdrcyca
-DEFINED_PHASES=-
-DESCRIPTION=fixture: --root-deps recursion -- cycle node B, BDEPENDs A (the cycle guard must cut this)
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=73306f727d5cca00fe98937ae93c1b04

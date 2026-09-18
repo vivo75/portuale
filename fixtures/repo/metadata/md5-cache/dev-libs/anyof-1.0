@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: any-of group -> v1 resolves every alternative, not just the first
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=|| ( dev-libs/newpkg dev-libs/samepkg )
-SLOT=0
-_md5_=4abf4da43c95d0db5f2bcdb9c71b4e7c

@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: RDEPENDs on virtual/texteditor, proving a virtual/ atom resolves through the exact same category+any-of-group machinery as any other package
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=virtual/texteditor
-SLOT=0
-_md5_=4c0a7458c4d6e47686494453e42e5e02

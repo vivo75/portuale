@@ -1,8 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: package.env env-file USE= enables a flag, pulling in a dependency
-EAPI=8
-IUSE=penvflag penvother
-KEYWORDS=amd64
-RDEPEND=penvflag? ( dev-libs/newpkg )
-SLOT=0
-_md5_=f398f58213b4e92b28d4a32904d8c0d6

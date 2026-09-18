@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: forced_flags (use.mask) suppresses a spurious --newuse reinstall
-EAPI=8
-IUSE=masked_newly_added_flag
-KEYWORDS=amd64
-SLOT=0
-_md5_=f16597b286adc52403e89daa51e53cd0

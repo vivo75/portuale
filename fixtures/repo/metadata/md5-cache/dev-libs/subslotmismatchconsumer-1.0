@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: RDEPEND restricted on a sub-slot (:0/3) that dev-libs/subslotpkg's own SLOT (0/2) does NOT satisfy
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-libs/subslotpkg:0/3
-SLOT=0
-_md5_=d5b23dc085852c4d94fa02cad32bfba2

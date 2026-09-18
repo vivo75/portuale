@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: leaf pulled in when linguas_de is enabled by the _* wildcard
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=36aed350518e680c5f4347da5881e018

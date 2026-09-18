@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: PDEPEND is walked by dependency recursion, same as DEPEND/RDEPEND
-EAPI=8
-KEYWORDS=amd64
-PDEPEND=dev-libs/newpkg
-SLOT=0
-_md5_=ee736990d07453592693a51f3303e57e

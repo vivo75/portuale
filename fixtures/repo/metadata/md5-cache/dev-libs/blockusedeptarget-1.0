@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: installed target of a use-dep blocker; built with wantblock OFF and no 'gone' flag
-EAPI=8
-IUSE=wantblock
-KEYWORDS=amd64
-SLOT=0
-_md5_=52e980d0939b71102a384ca08224a75b

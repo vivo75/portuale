@@ -1,8 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: per-level defaults walk -- base package.use enables interleaveflag, leaf make.defaults cancels it
-EAPI=8
-IUSE=interleaveflag other
-KEYWORDS=amd64
-RDEPEND=interleaveflag? ( dev-libs/newpkg )
-SLOT=0
-_md5_=22c0fcacbc0ba25853515b08041f79ad

@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: bare name also exists as virtual/ -> the non-virtual is chosen silently
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=cdd00e7d13a72fc4b52c2c02b4c23310

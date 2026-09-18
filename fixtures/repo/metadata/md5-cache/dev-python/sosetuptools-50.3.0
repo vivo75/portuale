@@ -1,8 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=024 oracle fixture: setuptools newer (bug 743115 compact)
-EAPI=8
-IUSE=+soflag
-KEYWORDS=amd64
-RDEPEND=soflag? ( dev-python/sopypy:= )
-SLOT=0
-_md5_=fbbaa624024c013489c1ecfa45f786e2

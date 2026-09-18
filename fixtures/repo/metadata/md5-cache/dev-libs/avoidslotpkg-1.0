@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: dependency_avoid_update_candidate slot-awareness -- SLOT=1
-EAPI=8
-KEYWORDS=amd64
-SLOT=1
-_md5_=2c039f1c770c3f9c37e378994b4309fb

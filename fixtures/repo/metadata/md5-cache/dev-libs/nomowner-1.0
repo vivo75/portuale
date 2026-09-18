@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: installed nomerge owner whose blocker targets nomtarget (#77 A0)
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=!<dev-libs/nomtarget-2.0
-SLOT=0
-_md5_=bd56469d5fd6f539bf1a328101914f21

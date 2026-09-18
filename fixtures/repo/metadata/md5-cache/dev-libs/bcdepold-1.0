@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: leaf dep for the --binpkg-changed-deps test
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=29bf933015b073b3bada57a810c271ad

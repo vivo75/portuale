@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=023 oracle fixture: mg2top
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-libs/mgfa dev-libs/mgxa
-SLOT=0
-_md5_=f697f9d565e2d24ecb371e3fff93789d

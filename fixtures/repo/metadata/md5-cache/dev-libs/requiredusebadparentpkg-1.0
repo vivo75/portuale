@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: RDEPENDs on dev-libs/requiredusebadpkg, whose own REQUIRED_USE is violated -- proves a REQUIRED_USE violation reached only as a dependency still aborts the whole run, not just a top-level atom's own
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-libs/requiredusebadpkg
-SLOT=0
-_md5_=e27e3b508b0375f0c89a9ed12e2c7838

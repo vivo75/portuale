@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: older of the two visible USE-unsatisfiable versions; must NOT be listed (real shows only the latest)
-EAPI=8
-IUSE=unsatuseorflag
-KEYWORDS=amd64
-SLOT=0
-_md5_=52d3b2df96f02c1d683f3bd3b3b67e77

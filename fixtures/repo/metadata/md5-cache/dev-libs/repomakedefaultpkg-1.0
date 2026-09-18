@@ -1,8 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: repo profiles/make.defaults USE enables a flag, pulling in a dependency
-EAPI=8
-IUSE=repomakedefaultflag repo_amd64 other
-KEYWORDS=amd64
-RDEPEND=repomakedefaultflag? ( dev-libs/newpkg )
-SLOT=0
-_md5_=f2d4bd865f4194cfe5052596d7cdc743

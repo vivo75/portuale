@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: pulls in dev-libs/scusenewpin and dev-libs/scuseoldpin, whose RDEPENDs on dev-libs/scusetarget:0 (>=2.0 vs <2.0) form an unsolvable slot conflict -- used to check pkg_use_display in the slot-collision notice
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-libs/scusenewpin dev-libs/scuseoldpin
-SLOT=0
-_md5_=5da5dca6c56b8a5a55382965618c104f

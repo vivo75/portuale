@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: RDEPENDs dev-libs/aubreaksub[-brk]
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-libs/aubreaksub[-brk]
-SLOT=0
-_md5_=4235e9f8743ee4c3d96ec33791c8a940

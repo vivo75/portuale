@@ -1,7 +1,0 @@
-BDEPEND=|| ( dev-libs/rootdepsnonexistent dev-libs/rootdepsprovider )
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: --root-deps disjunctive (||) branch-selection feed-in
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=e50218c955af64c75d2557f0760b2cf6

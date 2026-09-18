@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=023 oracle fixture: B
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=app-misc/A:=
-SLOT=0
-_md5_=dea1ee0850ab84c0d03f42a6ce751b71

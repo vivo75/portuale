@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: depends on the ~amd64-only dev-libs/kwmaskeddep
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-libs/kwmaskeddep
-SLOT=0
-_md5_=c7d1bcf43810dd05b3f61471269837b0

@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: masked then unmasked by this same overlay's own repo-level files
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=efbeb3e4d1d4296e5845b85ff670160a

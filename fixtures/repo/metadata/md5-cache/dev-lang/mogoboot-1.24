@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=#53 fixture: the non-circular bootstrap branch of dev-lang/mogo's BDEPEND
-EAPI=8
-IUSE=
-KEYWORDS=amd64
-SLOT=0/1.24
-_md5_=790bece888d7aefa944e1c9b2f120afd

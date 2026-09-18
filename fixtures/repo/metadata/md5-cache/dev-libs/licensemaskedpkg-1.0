@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: LICENSE in the @EULA group, no package.license unmask -- for --autounmask-license
-EAPI=8
-KEYWORDS=amd64
-LICENSE=SomeEula
-SLOT=0
-_md5_=bbe776782a828bd05ebcc496558cc21f

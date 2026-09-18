@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: masked by repo-level profiles/package.mask, unmasked by the leaf profile's own package.unmask
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=ce3feb5e97b6b13bbca55c3a9fb79986

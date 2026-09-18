@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: already installed at the only visible version -> AlreadyInstalled
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=0dca5c0cbdbfc9e5c9329d8e0633e630

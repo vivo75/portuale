@@ -1,7 +1,0 @@
-DEFINED_PHASES=install
-DESCRIPTION=fixture package: real binary-package building (ebuild <file> package)
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-libs/samepkg
-SLOT=0
-_md5_=040f5202f5775bd2e6da85179b11ba69

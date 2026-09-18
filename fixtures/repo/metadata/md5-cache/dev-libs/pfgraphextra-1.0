@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: leaf pulled only by dev-libs/pfgraphparent's pf? ( ... ) -- must vanish once the parent flip turns pf off
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=fc73773e908f6253830498cd7aecca58

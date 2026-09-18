@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: SLOT 0 installed; requesting :1 (or the bare atom) is a new-slot install, real [ebuild NS]
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=c32a74c8db4e0deb3471157b75d4e27c

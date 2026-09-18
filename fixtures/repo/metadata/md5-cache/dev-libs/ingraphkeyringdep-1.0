@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: dep_zapdeps all_in_graph choice-bin-0 for || groups
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=e7650eb15dd0bc6415149b10961f7d53

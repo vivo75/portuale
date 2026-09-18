@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: reached only via world_sets' own @nestedtestset custom set
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=5fbddbad1a4354b54cf0549d83db4208

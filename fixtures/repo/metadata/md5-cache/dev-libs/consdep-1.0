@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DEPEND=dev-libs/provpkg:=
-DESCRIPTION=fixture package: installed consumer bound to provpkg through DEPEND (:=) (#65 S0)
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=28419e7f58f0dce181cdbe9ece0300ba

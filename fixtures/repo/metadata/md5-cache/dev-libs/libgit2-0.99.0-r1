@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=024 oracle fixture: libgit2 installed slot (bug 717140)
-EAPI=8
-KEYWORDS=amd64
-SLOT=0/0.99
-_md5_=1280191569bbafebaaae8535360cb152

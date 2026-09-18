@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: target of unsatuseiuse's [noiuse] dep; declares only 'other' in IUSE, so the required flag is Missing IUSE (not a Change USE flip)
-EAPI=8
-IUSE=other
-KEYWORDS=amd64
-SLOT=0
-_md5_=94940b1b0a866971769c53130ccc50fb

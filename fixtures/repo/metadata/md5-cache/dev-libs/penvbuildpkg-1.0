@@ -1,6 +1,0 @@
-DEFINED_PHASES=install
-DESCRIPTION=fixture package: package.env's non-USE half overrides the build-phase flags
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=6fc4462fe7882e9a211de402b744d93f

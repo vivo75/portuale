@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: masked by repo-level profiles/package.mask, the mask atom itself removed via a -atom line in the user-level package.mask (cross-source -atom removal, not just within one file)
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=4b4a1de797a961b6d333b8dd780a93eb

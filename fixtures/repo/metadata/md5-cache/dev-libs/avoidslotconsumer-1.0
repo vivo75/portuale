@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: consumer with a slot-restricted dep on avoidslotpkg:1
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-libs/avoidslotpkg:1
-SLOT=0
-_md5_=d3ecd0caf642aa2a0ce385bf646a624b

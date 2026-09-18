@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: RDEPEND wants an older dev-libs/slotconflicttarget (<2.0), conflicting with the 2.0 slotconfgroupnew already resolved -- one of three parents sharing this same collision reason
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=<dev-libs/slotconflicttarget-2.0
-SLOT=0
-_md5_=94d240310582e59737781b3f6e9cd3e6

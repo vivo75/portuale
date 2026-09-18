@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: a strong (!!) blocker against dev-libs/samepkg, which is already installed
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=!!dev-libs/samepkg
-SLOT=0
-_md5_=d0cd449804be2892a29682939413640d

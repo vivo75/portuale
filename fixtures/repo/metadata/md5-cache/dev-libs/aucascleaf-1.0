@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: plain leaf, only pulled in when aucascmid's cascade flag is on
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=ec7f7be7060447b6af9f14bac5f325b6

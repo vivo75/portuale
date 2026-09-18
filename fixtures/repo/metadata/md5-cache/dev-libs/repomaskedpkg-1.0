@@ -1,6 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture package: masked only by the repo-level profiles/package.mask, stays hidden
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=d2b00604c0f9a98e3caa21db41f1815b

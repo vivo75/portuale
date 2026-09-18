@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: F4 all_installed_slots -- visible in slot 2, but slot 2 is NOT installed (only slot 1 is)
-EAPI=8
-IUSE=unsatuseorflag
-KEYWORDS=amd64
-SLOT=2
-_md5_=4bc17fd5db07dbc2104cd4feca35e465

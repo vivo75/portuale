@@ -1,7 +1,0 @@
-DEFINED_PHASES=-
-DESCRIPTION=fixture: --changed-deps structured -- RDEPEND atoms reordered vs vdb
-EAPI=8
-KEYWORDS=amd64
-RDEPEND=dev-libs/reorderdepb dev-libs/reorderdepa
-SLOT=0
-_md5_=d24887964fbed9b38269352088ab54c9

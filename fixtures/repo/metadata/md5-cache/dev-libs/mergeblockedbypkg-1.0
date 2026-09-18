@@ -1,6 +1,0 @@
-DEFINED_PHASES=install
-DESCRIPTION=fixture package: real merge-time blocker collision exclusion -- the pre-existing 'owner' a blocker atom will exclude
-EAPI=8
-KEYWORDS=amd64
-SLOT=0
-_md5_=02546d722cb64ed495b522cabea29162

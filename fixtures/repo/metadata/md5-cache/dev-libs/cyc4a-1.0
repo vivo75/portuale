@@ -1,8 +1,0 @@
-DEFINED_PHASES=-
-DEPEND=x? ( dev-libs/cyc4b )
-DESCRIPTION=fixture package: four-ring build-time cycle with a USE-gated edge, for the large_cycle_count trailer
-EAPI=8
-IUSE=+x
-KEYWORDS=amd64
-SLOT=0
-_md5_=453037ded936ad05fb37d49d8e533610
