@@ -17215,3 +17215,19 @@ TEST/run/l0-fixture-oracle.sh
 ```
 
 Evidence: `TEST/findings/l0.md` "#75 C0"–"#75 C4"; plan `docs/02.75-79.md` Phase C; backlog #75 (`DONE-PARTIAL`) and #81 (the tree-mode serializer residue).
+
+**The `--backtrack=0` slot-op divergence is not the dynamic-deps append gate (backlog #78 E0, verdict (b), 2026-09-18).** The item was filed as "real relies on `FakeVartree._apply_dynamic_deps`, which portuale does not model". Portuale does model it (`installed_dep_string` + `built_slot_operator_atoms`, unit-tested) behind `PORTUALE_DYNAMIC_DEPS_APPEND`, and the plan's five-minute control had never been run: E0 staged the #71 S0 slotop fixtures host-exactly and ran `-uDvN [--backtrack=0] --oneshot dev-libs/consrdep|considep` on both sides, plus portuale with the flag on. Real's `--debug` shows why the bt0 cell is empty: `_slot_operator_trigger_reinstalls` is gated by `_allow_backtracking` (`depgraph.py:2131-2132`), which `--backtrack=0` clears (`:12188-12190`), so neither the rebuilds nor the provider update can happen. The flag does not reproduce real either way -- with backtracking off it only re-tags the provider row (`r U`), with backtracking on it makes portuale print an empty plan where real rebuilds all three consumers -- and both #24 pins named in the gate's comment fail with it on. The item is re-scoped into the #26 family instead of flipping the default.
+
+```sh
+# real, --backtrack=0: empty list; --debug shows no "causing rebuilds"
+# portuale + flag: re-tagged provider at bt0, empty plan at bt20 (diverges)
+PORTUALE_DYNAMIC_DEPS_APPEND=1 python3 -m pytest tests -q -k "slotchange_case4 or undo_cascade"
+# -> 2 failed: the libarchive / soccascb rR rows disappear (as the gate comment predicts)
+
+# the host re-diff is unchanged from the plan baseline
+rust/target/release/portuale emerge -uDpvN --ignore-default-opts @world | grep -E '^(Total|Conflict)'
+# -> Total: 73 packages (37 upgrades, 1 downgrade, 9 new, 5 in new slots, 21 reinstalls), Size of downloads: 1282430 KiB
+#    Conflict: 1 block (all satisfied)
+```
+
+Evidence: `TEST/findings/l0.md` "#71 S0" and "#78 E0"/"#78 E3"; plan `docs/02.75-79.md` Phase E; backlog #78 (re-scoped).
