@@ -1407,6 +1407,73 @@ impl DigraphPrelude<'_> {
             None => true,
         }
     }
+
+    /// B2: real resolves every dep atom to a *single* package
+    /// (`_select_pkg_highest_available`) before `_add_pkg` records the
+    /// edge. A bare multi-slot atom (`llvm-runtimes/clang-runtime[...]`
+    /// in clang-common's PDEPEND) matches every scheduled slot, and
+    /// edging it to all of them gave the older slot an extra
+    /// `runtime_post` parent -- which promoted it into `asap` and split
+    /// the clang-runtime drain. Among the matches prefer a merge-bound
+    /// entry (the node real's scheduler graph actually edges to when the
+    /// cp is being rebuilt/updated), then the highest version by
+    /// `vercmp`; first on ties. A `Uninstall` removal (#72 B3) is never a
+    /// merge target: its only ordering edge is `build_digraph`'s
+    /// dedicated one.
+    ///
+    /// `merge_bound_only` is the **one** difference between this
+    /// function's two callers (#82). `build_digraph` says `false`: real's
+    /// scheduler digraph holds nomerge nodes, and an installed target is
+    /// a legitimate edge there. `pretend.rs::print_tree` says `true`: it
+    /// renders no line at all for an `AlreadyInstalled` /
+    /// `NoVisibleCandidate` entry, so an edge to one would open a hole in
+    /// the tree. Everything else -- the candidate strings, the atom
+    /// narrowing and the ranking -- is literally this code for both, so
+    /// the ranking cannot drift between them again (#82: `print_tree`'s
+    /// private copy ranked with a **string** compare, under which `1.9`
+    /// outranks `1.10` and slot `9` outranks slot `10`).
+    fn select_dep_target(
+        &self,
+        entries: &[GraphEntry],
+        from: usize,
+        edge: &DepEdge,
+        merge_bound_only: bool,
+    ) -> Option<usize> {
+        let idxs = self
+            .cp_indices
+            .get(&(edge.category.as_str(), edge.package.as_str()))?;
+        // Uninstall entries are skipped below, so among the survivors
+        // "merge-bound" is exactly "not an installed node".
+        let merge_bound = |j: usize| !self.installed[j];
+        let mut best: Option<usize> = None;
+        for &j in idxs {
+            if !self.edge_matches(&edge.atom, j) {
+                continue;
+            }
+            if matches!(entries[j].outcome, PretendOutcome::Uninstall { .. }) {
+                continue;
+            }
+            if merge_bound_only && (j == from || !merge_bound(j)) {
+                continue;
+            }
+            best = Some(match best {
+                None => j,
+                Some(b) => {
+                    let better = match (merge_bound(j), merge_bound(b)) {
+                        (true, false) => true,
+                        (false, true) => false,
+                        _ => {
+                            let bv = outcome_version(&entries[b]).unwrap_or("");
+                            let jv = outcome_version(&entries[j]).unwrap_or("");
+                            portage_versions::vercmp(jv, bv).is_some_and(|o| o > 0)
+                        }
+                    };
+                    if better { j } else { b }
+                }
+            });
+        }
+        best
+    }
 }
 
 fn digraph_prelude<'a>(entries: &'a [GraphEntry], root: &Path) -> DigraphPrelude<'a> {
@@ -1562,6 +1629,38 @@ pub fn kept_alt_branches(entries: &[GraphEntry], root: &Path) -> Vec<HashSet<usi
                 .enumerate()
                 .filter(|(ei, edge)| edge.alt.is_some() && !suppressed[i].contains(ei))
                 .map(|(ei, _)| ei)
+                .collect()
+        })
+        .collect()
+}
+
+/// #82: for every entry, the entry index each of its `GraphEntry::deps`
+/// edges resolves to -- `None` when the atom has no target in this
+/// graph, when the target is the entry itself, or when the edge is a
+/// `|| ( … )` alternative this run did not keep (`suppressed_alt_edges`,
+/// the #76 B1 set, so a caller needs no second `kept_alt_branches` pass).
+///
+/// Exposed for `pretend.rs::print_tree`, whose tree display needs the
+/// same "one package per atom" narrowing real's `_create_graph` does.
+/// It shares `DigraphPrelude::select_dep_target` with `build_digraph`
+/// (see that function's doc for the single `merge_bound_only`
+/// difference and for why the sharing matters).
+pub fn resolved_dep_targets(entries: &[GraphEntry], root: &Path) -> Vec<Vec<Option<usize>>> {
+    let pre = digraph_prelude(entries, root);
+    let suppressed = suppressed_alt_edges(entries, &pre);
+    entries
+        .iter()
+        .enumerate()
+        .map(|(i, e)| {
+            e.deps
+                .iter()
+                .enumerate()
+                .map(|(ei, edge)| {
+                    if suppressed[i].contains(&ei) {
+                        return None;
+                    }
+                    pre.select_dep_target(entries, i, edge, true)
+                })
                 .collect()
         })
         .collect()
@@ -1729,58 +1828,12 @@ fn build_digraph(entries: &[GraphEntry], top_level_atoms: &[String], root: &Path
             if alt_suppressed[i].contains(&ei) {
                 continue;
             }
-            let Some(idxs) = cp_indices.get(&(edge.category.as_str(), edge.package.as_str()))
-            else {
-                continue;
-            };
-            // B2: real resolves every dep atom to a *single* package
-            // (`_select_pkg_highest_available`) before `_add_pkg` records
-            // the edge. A bare multi-slot atom (`llvm-runtimes/
-            // clang-runtime[...]` in clang-common's PDEPEND) matches
-            // every scheduled slot, and edging it to all of them gave the
-            // older slot an extra `runtime_post` parent -- which promoted
-            // it into `asap` and split the clang-runtime drain. Among the
-            // matches prefer a merge-bound entry (the node real's
-            // scheduler graph actually edges to when the cp is being
-            // rebuilt/updated), then the highest version; first on ties.
-            // A `Uninstall` removal (#72 B3) is never a merge target: its
-            // only ordering edge is the dedicated one added below, and it
-            // must not be picked as a dependency node by `best` above.
-            let merge_bound = |e: &GraphEntry| {
-                !matches!(
-                    e.outcome,
-                    PretendOutcome::AlreadyInstalled { .. }
-                        | PretendOutcome::NoVisibleCandidate
-                        | PretendOutcome::Uninstall { .. }
-                )
-            };
-            let mut best: Option<usize> = None;
-            for &j in idxs {
-                if !edge_matches(&edge.atom, j) {
-                    continue;
-                }
-                // #72 B3: an `Uninstall` removal is never a merge target;
-                // its ordering edge is added by the dedicated pass below.
-                if matches!(entries[j].outcome, PretendOutcome::Uninstall { .. }) {
-                    continue;
-                }
-                best = Some(match best {
-                    None => j,
-                    Some(b) => {
-                        let better = match (merge_bound(&entries[j]), merge_bound(&entries[b])) {
-                            (true, false) => true,
-                            (false, true) => false,
-                            _ => {
-                                let bv = outcome_version(&entries[b]).unwrap_or("");
-                                let jv = outcome_version(&entries[j]).unwrap_or("");
-                                portage_versions::vercmp(jv, bv).is_some_and(|o| o > 0)
-                            }
-                        };
-                        if better { j } else { b }
-                    }
-                });
-            }
-            if let Some(j) = best {
+            // The single package the atom resolves to -- shared with
+            // `pretend.rs::print_tree` through `resolved_dep_targets`
+            // (#82), so the ranking cannot drift between the scheduling
+            // graph and the tree display. `merge_bound_only = false`:
+            // real's scheduler digraph edges to nomerge nodes too.
+            if let Some(j) = pre.select_dep_target(entries, i, edge, false) {
                 // Real `_add_pkg`: a direct self-edge is dropped unless
                 // it is an unsatisfied build-time dependency, "since
                 // otherwise it can skew the merge order calculation in
@@ -3460,6 +3513,91 @@ mod tests {
             "the mogo -> mogoboot edge must be the real buildtime one, \
              not the weaker required_by-fallback edge: {prios:?}"
         );
+    }
+
+    #[test]
+    fn resolved_dep_targets_ranks_by_vercmp_not_by_string_order() {
+        // #82: `print_tree` carried a private copy of this narrowing
+        // whose tie-break was `jv.cmp(bv)`, a **string** compare, under
+        // which `1.9` outranks `1.10`. Real resolves a slot-unqualified
+        // atom through `_select_pkg_highest_available`, i.e. the
+        // vercmp-highest of the matching graph nodes -- the container
+        // oracle for the shape is `TEST/findings/l0.md` "#82"
+        // (`dev-libs/treeslotuser`).
+        let plain = |cat: &str, pkg: &str| DepEdge {
+            atom: format!("{cat}/{pkg}"),
+            category: cat.to_string(),
+            package: pkg.to_string(),
+            priority: DepPriority {
+                runtime: true,
+                ..DepPriority::default()
+            },
+            disjunctive: false,
+            alt: None,
+            key: 3,
+        };
+        let mut low = new_entry("dev-libs", "slotted", "1.9", Vec::new());
+        low.slot = Some("0".into());
+        low.sub_slot = Some("0".into());
+        let mut high = new_entry("dev-libs", "slotted", "1.10", Vec::new());
+        high.slot = Some("1".into());
+        high.sub_slot = Some("1".into());
+        let user = new_entry(
+            "dev-libs",
+            "user",
+            "1.0",
+            vec![plain("dev-libs", "slotted")],
+        );
+        // `low` first in the array, so "first on ties" would pick it if
+        // the ranking were not comparing versions at all.
+        let entries = vec![low, high, user];
+        let root = Path::new("/nonexistent-root-for-unit-test");
+        let targets = resolved_dep_targets(&entries, root);
+        assert_eq!(
+            targets[2][0],
+            Some(1),
+            "the unqualified atom resolves to 1.10, not to the \
+             string-highest 1.9"
+        );
+        // `build_digraph` shares the ranking, so its edge agrees.
+        let g = build_digraph(&entries, &["dev-libs/user".to_string()], root);
+        let children: Vec<usize> = g.children[2].iter().map(|&(c, _)| c).collect();
+        assert_eq!(
+            children,
+            vec![1],
+            "the scheduling graph picks the same instance: {children:?}"
+        );
+    }
+
+    #[test]
+    fn resolved_dep_targets_reports_an_installed_target_as_no_tree_edge() {
+        // #82: the single `merge_bound_only` difference between the two
+        // callers. `build_digraph` edges to an installed (nomerge) node
+        // the way real's digraph does; `print_tree` must not, because
+        // portuale renders no line for one and the edge would open a
+        // hole in the tree.
+        let dep = DepEdge {
+            atom: "dev-libs/onlyinstalled".to_string(),
+            category: "dev-libs".to_string(),
+            package: "onlyinstalled".to_string(),
+            priority: DepPriority {
+                runtime: true,
+                ..DepPriority::default()
+            },
+            disjunctive: false,
+            alt: None,
+            key: 3,
+        };
+        let mut installed = new_entry("dev-libs", "onlyinstalled", "1.0", Vec::new());
+        installed.outcome = PretendOutcome::AlreadyInstalled {
+            version: "1.0".into(),
+        };
+        let entries = vec![new_entry("dev-libs", "user", "1.0", vec![dep]), installed];
+        let root = Path::new("/nonexistent-root-for-unit-test");
+        assert_eq!(resolved_dep_targets(&entries, root)[0][0], None);
+        let g = build_digraph(&entries, &["dev-libs/user".to_string()], root);
+        let children: Vec<usize> = g.children[0].iter().map(|&(c, _)| c).collect();
+        assert_eq!(children, vec![1], "the scheduling graph keeps the edge");
     }
 
     #[test]

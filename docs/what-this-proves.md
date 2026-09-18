@@ -17231,3 +17231,13 @@ rust/target/release/portuale emerge -uDpvN --ignore-default-opts @world | grep -
 ```
 
 Evidence: `TEST/findings/l0.md` "#71 S0" and "#78 E0"/"#78 E3"; plan `docs/02.75-79.md` Phase E; backlog #78 (re-scoped).
+
+**`--tree` nests each package under the entry whose own atom resolved to it, the way real's digraph does (backlog #82, 2026-09-18).** `pretend.rs::print_tree` carried a private copy of `merge_order.rs::build_digraph`'s dep-edge narrowing, and the copy had drifted: it ranked the tie with a **string** version compare (so `1.9` outranked `1.10`, and slot `9` outranked slot `10`) where `build_digraph` uses `portage_versions::vercmp`, and its `merge_bound` tie-break arms were dead code. Building the fixture that exposes it turned up the larger half: `print_tree`'s `required_by` fallback for a deps-less entry is cp-keyed, and `required_by` lists every owner that pulled *any* slot of the cp — so a slot an owner never asked for still gained that owner as a tree parent, where real's `_select_pkg_highest_available` gives each atom exactly one edge. Both are gone: `DigraphPrelude::select_dep_target` holds the narrowing once, `build_digraph` calls it with `merge_bound_only = false` and the new public `resolved_dep_targets` with `true` (the single documented difference — portuale renders no line for an installed entry, so such an edge would open a hole in the tree), and the fallback skips an owner whose own atom already resolved to another instance of the cp. `resolved_dep_targets` also reports a suppressed `|| ( … )` alternative as `None`, so `print_tree` no longer runs its own `kept_alt_branches` pass. The container oracle (`TEST/findings/l0.md` "#82") shows `dev-libs/slotorderroot` — whose `slotorderdual:2` dep was being nested under `slotorderb` instead — now byte-identical to real 3.0.82.2, pinned by `test_oracle_82_tree_edges_follow_the_resolved_dep_target`; the new `dev-libs/treeslotpkg`/`treeslotparent`/`treeslotuser` fixtures pin the vercmp tie-break, and the merge-order residue they expose is filed as backlog #84. The cross-mode invariant checker also lost the `--tree` row dedupe `#75 C1` had added: `rows_key` already drops every `[nomerge]` row, so the dedupe was dead and only hid a duplicated merge row — `test_checker_flags_a_merge_row_printed_twice_in_tree_mode` now proves that case is caught.
+
+```
+# the tree edge set, against real in the container bed
+TEST/run/l0-fixture-oracle.sh                       # 28 probes / 22 clean / 0 unexplained
+python3 -m pytest tests/test_emerge_pretend_contract.py -k oracle_82 -q
+python3 -m pytest tests/test_output_invariants.py -k printed_twice -q
+cd rust && cargo test --release -p portage-repo resolved_dep_targets
+```

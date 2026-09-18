@@ -70,3 +70,12 @@ app-misc/mopodmanok
 --tree dev-libs/diamond
 # #75 C3: the unordered DFS keeps the RDEPEND order
 --tree --unordered-display dev-libs/treeorderpkg
+# #82: a slot-unqualified atom matching two merge-bound slots must
+# resolve to the vercmp-highest (1.10, SLOT 1), not the string-highest
+# (1.9, SLOT 0) -- the tree nesting is what shows which one won
+-v dev-libs/treeslotuser
+--tree dev-libs/treeslotuser
+# #82: the slot-blind-edge fixture in tree mode -- `slotorderdual:2` is
+# slotorderroot's own dep, so the cp-keyed `required_by` fallback must
+# not nest it under slotorderb instead
+--tree dev-libs/slotorderroot

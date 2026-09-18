@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: pulls dev-libs/treeslotpkg:1 only, so slot 1 is merge-bound with a parent that is not the unqualified consumer
+EAPI=8
+KEYWORDS=amd64
+RDEPEND=dev-libs/treeslotpkg:1
+SLOT=0
+_md5_=fe2627214b3b6b204f3f286e9a506378
