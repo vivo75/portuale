@@ -15136,6 +15136,17 @@ fn collect_unwalked_installed_blockers(
             ));
             depstr.push(' ');
         }
+        // #83: this loop exists only to find blocker tokens, and a
+        // blocker token always starts with `!` (`portage_dep::Blocker`).
+        // `use_reduce` never introduces one -- it drops and expands
+        // tokens, it does not rewrite them -- so a dep string with no `!`
+        // anywhere cannot produce a blocker, and the reduce (with its
+        // `dep_zapdeps` closures, the expensive half of the scan) can be
+        // skipped outright. On this host that is 1804 of 2084 unwalked
+        // installed packages; see `TEST/findings/l0.md` "#83".
+        if !depstr.contains('!') {
+            continue;
+        }
         let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
         let self_cp = (pkg.category.clone(), pkg.package.clone());
         let Ok(flat_deps) = portage_use_reduce::use_reduce_flat_disjunctive(

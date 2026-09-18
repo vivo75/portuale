@@ -17241,3 +17241,12 @@ python3 -m pytest tests/test_emerge_pretend_contract.py -k oracle_82 -q
 python3 -m pytest tests/test_output_invariants.py -k printed_twice -q
 cd rust && cargo test --release -p portage-repo resolved_dep_targets
 ```
+
+**The all-installed blocker scan skips the packages that cannot carry a blocker (backlog #83, 2026-09-18).** `#77 A1` gave portuale real's "pull in blockers from all installed packages that haven't already been pulled into the depgraph" pass (`_validate_blockers`, `depgraph.py:8919-9078`), and measured its cost only on `@world` — the one shape where it is nearly free, because a complete-mode walk already has a graph entry for almost every installed package. Profiling the opposite shape (a narrow `emerge -p <pkg>`, where the walk reaches four packages and the scan visits 2084) split the cost in two halves: 391 ms locating each package's live ebuild metadata and 435 ms reducing its dep string. The reduce is now skipped outright when the dep string contains no `!`: a blocker token always begins with one (`portage_dep::Blocker`), and `use_reduce` drops and expands tokens but never rewrites them, so a string without `!` cannot produce a blocker — 1804 of the 2084 packages on this host. `emerge -p --oneshot app-editors/nano` goes 1.22–1.30 s → **0.99–1.01 s**, against real 3.0.82.2's 2.23–2.61 s for the same query; `-puDvN --oneshot app-containers/runc` 13.86 → 13.3 s. The remaining single-pass cost is `list_candidates`' cold cache fill, which is free from the second backtracking pass on; the two further mitigations (hoisting the per-pass metadata memo, and following real's `myrepo=pkg.repo` instead of searching the repos) were measured and recorded rather than taken here — the second is filed as backlog #85 because it is a fidelity change that would have to move every `installed_dep_string` call site together.
+
+```
+# the profile and the before/after, reproducible on any host
+time rust/target/release/portuale emerge -p --ignore-default-opts --oneshot app-editors/nano
+time emerge -p --ignore-default-opts --oneshot app-editors/nano      # real, same argv
+grep -c '!' /var/db/pkg/*/*/RDEPEND /var/db/pkg/*/*/PDEPEND /var/db/pkg/*/*/IDEPEND | grep -cv ':0$'
+```
