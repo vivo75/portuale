@@ -2660,7 +2660,7 @@ def test_root_deps_build_entry_output_marks_the_running_root(
     rust_tree = _run([str(emerge_binary)], [*base, "--tree"], env)
     assert rust_tree.stdout == (
         "[ebuild  N     ] dev-libs/rootdepsbuildpkg-1.0 \n"
-        "[ebuild  N     ]   dev-libs/rootdepsbuildtool-1.0 to /\n"
+        "[ebuild  N     ]  dev-libs/rootdepsbuildtool-1.0 to /\n"
     )
 
 
@@ -2693,9 +2693,9 @@ def test_root_deps_recursion_walks_the_build_entrys_own_deps(
     rust_tree = _run([str(emerge_binary)], [*base, "--tree"], env)
     assert rust_tree.stdout == (
         "[ebuild  N     ] dev-libs/rdrapp-1.0 \n"
-        "[ebuild  N     ]   dev-libs/rdrtool-1.0 to /\n"
-        "[ebuild  N     ]     dev-libs/rdrlib-1.0 to /\n"
-        "[ebuild  N     ]     dev-libs/rdrtooldep-1.0 to /\n"
+        "[ebuild  N     ]  dev-libs/rdrtool-1.0 to /\n"
+        "[ebuild  N     ]   dev-libs/rdrlib-1.0 to /\n"
+        "[ebuild  N     ]   dev-libs/rdrtooldep-1.0 to /\n"
     )
 
 
@@ -9108,45 +9108,50 @@ def test_use_dep_equal_parent_mismatches_when_parent_flag_is_disabled(emerge_bin
 
 
 def test_tree_indents_a_diamond_dependency_and_shows_it_once(emerge_binary, fixture_env):
-    """--tree/-t: portuale-specific simplified indentation (real
-    output_helpers.py's own _tree_display needs a genuine merge
-    scheduler portuale doesn't have -- see pretend.rs's own print_tree
-    docstring for the full grounding). dev-libs/diamond's own two
-    children (shared-a, shared-b) both RDEPEND on dev-libs/common -- the
-    diamond dependency must be shown exactly once, nested under whichever
-    parent's own subtree reaches it first (shared-a, the alphabetically
-    first child), not silently duplicated under both and not silently
-    dropped either -- real _unordered_tree_display's own "seen_nodes"
-    behavior, ported exactly."""
+    """--tree/-t: real's `_tree_display` layout (`output_helpers.py:
+    341-495`): the reversed retlist walked with the deepest-child rule,
+    each node once (`seen_nodes`). dev-libs/diamond's own two children
+    both RDEPEND on dev-libs/common; real's merge list is
+    [common, shared-a, shared-b, diamond], so the reversed scan puts
+    shared-b before shared-a and nests the shared common under the
+    first chain parent (shared-a).
+
+    Container oracle, real 3.0.82.2, `TEST/findings/l0.md` "#75 C0"
+    (diamond) / "#75 C1" (exploration). Portuale omits real's
+    `to <root>/` suffix on a non-"/" ROOT -- the same pre-existing
+    divergence every row has."""
     result = _run([str(emerge_binary)], ["--pretend", "--tree", "dev-libs/diamond"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/diamond-1.0 ',
-        '[ebuild  N     ]   dev-libs/shared-a-1.0 ',
-        '[ebuild  N     ]     dev-libs/common-1.0 ',
-        '[ebuild  N     ]   dev-libs/shared-b-1.0 ',
+        '[ebuild  N     ]  dev-libs/shared-b-1.0 ',
+        '[ebuild  N     ]  dev-libs/shared-a-1.0 ',
+        '[ebuild  N     ]   dev-libs/common-1.0 ',
     ]
 
 
 def test_tree_unordered_display_preserves_discovery_order(emerge_binary, fixture_env):
     """--unordered-display (only meaningful together with --tree): real
-    portage's own man page wording -- does NOT sort the tree in merging
-    order. dev-libs/treeorderpkg's own RDEPEND deliberately lists its
-    two children in reverse-alphabetical order
-    ("dev-libs/ztreechild dev-libs/atreechild"). The default (--tree
-    alone) sorts children alphabetically, portuale's own deterministic
-    stand-in for real portage's genuine merge-order sort (no scheduler
-    exists to be more faithful than that) -- --unordered-display instead
-    preserves the RDEPEND string's own literal order, using
-    already-existing BFS discovery-order data, not sorted at all."""
+    `_unordered_tree_display` (`output_helpers.py:410-431`) DFSes the
+    graph from its roots in graph insertion order, so both the root and
+    its children follow the merge list's own dependency order rather
+    than the reversed-list tree walk. dev-libs/treeorderpkg's RDEPEND
+    deliberately lists its two children in reverse-alphabetical order
+    ("dev-libs/ztreechild dev-libs/atreechild"): ordered tree shows them
+    reversed by the mylist walk (atreechild first), unordered keeps the
+    RDEPEND order (ztreechild first).
+
+    Container oracle, real 3.0.82.2, `TEST/findings/l0.md` "#75 C0"
+    (the u1 unordered cell) / "#75 C1" (treeorder).
+    """
     ordered = _run(
         [str(emerge_binary)], ["--pretend", "--tree", "dev-libs/treeorderpkg"], fixture_env
     )
     assert ordered.returncode == 0
     assert ordered.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/treeorderpkg-1.0 ',
-        '[ebuild  N     ]   dev-libs/atreechild-1.0 ',
-        '[ebuild  N     ]   dev-libs/ztreechild-1.0 ',
+        '[ebuild  N     ]  dev-libs/atreechild-1.0 ',
+        '[ebuild  N     ]  dev-libs/ztreechild-1.0 ',
     ]
 
     unordered = _run(
@@ -9157,17 +9162,22 @@ def test_tree_unordered_display_preserves_discovery_order(emerge_binary, fixture
     assert unordered.returncode == 0
     assert unordered.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/treeorderpkg-1.0 ',
-        '[ebuild  N     ]   dev-libs/ztreechild-1.0 ',
-        '[ebuild  N     ]   dev-libs/atreechild-1.0 ',
+        '[ebuild  N     ]  dev-libs/ztreechild-1.0 ',
+        '[ebuild  N     ]  dev-libs/atreechild-1.0 ',
     ]
 
 
-def test_tree_onlydeps_suppresses_only_the_root_line(emerge_binary, fixture_env):
-    """--tree combined with --onlydeps: the same suppression rule flat
-    mode already has (a directly-requested top-level atom's own line is
-    hidden, its dependencies print normally) applies per-node in tree
-    mode too -- only the root's own line disappears, its children still
-    render, at their own normal indent."""
+def test_tree_onlydeps_shows_the_root_as_a_nomerge_ancestor(emerge_binary, fixture_env):
+    """--tree combined with --onlydeps: real's retlist omits the
+    suppressed root, but the graph still holds it, so the ancestor walk
+    brings it back as a `[nomerge       ]` occurrence with no attr
+    columns (`set_pkg_info`'s ordered=False rule, `output.py:612-614`)
+    while its dependencies render normally.
+
+    Container oracle, real 3.0.82.2, `TEST/findings/l0.md` "#75 C1"
+    (onlydeps exploration). Flat `--onlydeps` still hides the root line
+    entirely (unchanged, and portuale's flat pins cover it).
+    """
     result = _run(
         [str(emerge_binary)],
         ["--pretend", "--tree", "--onlydeps", "dev-libs/diamond"],
@@ -9175,9 +9185,10 @@ def test_tree_onlydeps_suppresses_only_the_root_line(emerge_binary, fixture_env)
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        '[ebuild  N     ]   dev-libs/shared-a-1.0 ',
-        '[ebuild  N     ]     dev-libs/common-1.0 ',
-        '[ebuild  N     ]   dev-libs/shared-b-1.0 ',
+        '[nomerge       ] dev-libs/diamond-1.0',
+        '[ebuild  N     ]  dev-libs/shared-b-1.0 ',
+        '[ebuild  N     ]  dev-libs/shared-a-1.0 ',
+        '[ebuild  N     ]   dev-libs/common-1.0 ',
     ]
 
 
@@ -9605,14 +9616,20 @@ def test_different_slots_of_the_same_package_coexist_without_conflict(emerge_bin
     # (Regression: a destructive required_by merge used to hand the owner
     # to only the first slot's entry, so the second fell through to the
     # flush-left safety net.)
+    #
+    # Sibling order: portuale's reversed merge list puts 2.0 first; the
+    # real capture has 1.0 first (`TEST/findings/l0.md` "#75 C1"), a
+    # tree-mode serializer ordering difference C2 owns (the tree retlist
+    # differs from the flat one) and stops on, filing the remainder as
+    # backlog #80. The nesting itself (both slots, depth 1) is real's.
     tree = _run(
         [str(emerge_binary)], ["--pretend", "--tree", "dev-libs/multislotparent"], fixture_env
     )
     assert tree.returncode == 0
     assert tree.stdout.splitlines() == [
         '[ebuild  N     ] dev-libs/multislotparent-1.0 ',
-        '[ebuild  N     ]   dev-libs/multislotpkg-1.0 ',
-        '[ebuild  N     ]   dev-libs/multislotpkg-2.0 ',
+        '[ebuild  N     ]  dev-libs/multislotpkg-2.0 ',
+        '[ebuild  N     ]  dev-libs/multislotpkg-1.0 ',
     ]
 
     # --json: every slot's entry names the same owner in required_by.

@@ -1039,6 +1039,11 @@ fn replacement_wait_index(
 fn format_blocker_row(
     entry: &GraphEntry,
     include_mask: bool,
+    // #75 C1: real `_blockers` (`output.py:93-96`) places `self.indent`
+    // between the bracket and the resolved atom, so a tree-mode row gets
+    // the same `depth + 1`-space pad a package line does; flat callers
+    // pass `""`.
+    indent: &str,
     color: &Colorizer,
     b: &BlockerConflict,
 ) -> String {
@@ -1061,7 +1066,7 @@ fn format_blocker_row(
         entry_display_version(entry)
     );
     format!(
-        "[{} {}{pad}] {}{}",
+        "[{} {}{pad}] {indent}{}{}",
         color.c(style, "blocks"),
         color.c(style, letter),
         color.c(style, resolved),
@@ -1091,7 +1096,7 @@ fn trailing_blocker_lines(
                 == BlockerRowDisposition::Trailing
                 && !(columns && !b.unsolvable)
         })
-        .map(|b| format_blocker_row(entry, include_mask, color, b))
+        .map(|b| format_blocker_row(entry, include_mask, "", color, b))
         .collect()
 }
 
@@ -1118,7 +1123,7 @@ fn collect_inline_blocker_lines(
             if let BlockerRowDisposition::Inline(after) =
                 blocker_row_disposition(entries, root, owner_index, b)
             {
-                out.push((after, format_blocker_row(entry, !quiet, color, b)));
+                out.push((after, format_blocker_row(entry, !quiet, "", color, b)));
             }
         }
     }
@@ -1177,6 +1182,13 @@ fn print_entry_line(
     root: &Path,
     index: usize,
     indent: &str,
+    // #75 C1: real `set_pkg_info` (`output.py:612-614`): a merge node
+    // reached as a tree **ancestor** (`_ordered_tree_display`'s
+    // `add_parents` passes `ordered=False`) is re-labelled `nomerge` and
+    // rendered through `_set_no_columns`' non-merge arm, with no attr
+    // columns and no USE display. Flat callers (and every occurrence the
+    // reversed display list reaches directly) pass `true`.
+    ordered: bool,
     top_level_pkgs: &HashSet<(String, String)>,
     onlydeps: bool,
     oneshot: bool,
@@ -1348,6 +1360,15 @@ fn print_entry_line(
             .collect();
         format!("[{}]", parts.join(", "))
     };
+    // Real `output.py:856-861`: `darkgreen("to " + pkg.root)`, shared by
+    // the merge, `nomerge` and uninstall arms.
+    let root_col = |r: &str| {
+        if r.is_empty() {
+            String::new()
+        } else {
+            color.c("darkgreen", r)
+        }
+    };
     // One merge line, shared by `New`/`Upgrade`/`Downgrade`/`Reinstall`.
     // Real `_set_no_columns`: `f"[{type} {attr}] {indent}{pkg_str}
     // {oldbest}"` -- the space before `oldbest` is always there even when
@@ -1376,15 +1397,6 @@ fn print_entry_line(
             format!(" {}", localized_size(bytes))
         } else {
             String::new()
-        };
-        // Real `output.py:856-861`: the running-root suffix is
-        // `darkgreen("to " + pkg.root)`.
-        let root_col = |r: &str| {
-            if r.is_empty() {
-                String::new()
-            } else {
-                color.c("darkgreen", r)
-            }
         };
         if columns {
             let root_str = if root_annotation.is_empty() {
@@ -1434,6 +1446,33 @@ fn print_entry_line(
         tail.push_str(&size_suffix);
         println!("[{bword} {f}] {indent}{pkg_str}{tail}");
     };
+    // #75 C1: real `_set_no_columns`' non-merge arm for a tree ancestor
+    // occurrence of a merge node (`set_pkg_info` re-labels it `nomerge`,
+    // `output.py:612-614`): `[<operation ljust 13><empty_space_in_brackets>]
+    // <indent><cpv> <oldbest>` -- no attr columns, no USE, no size
+    // suffix; the running-root suffix is appended like every other row.
+    let emit_nomerge = |version: &str| {
+        let oldbest = oldbest_str();
+        let mut tail = String::new();
+        if !oldbest.is_empty() {
+            tail.push(' ');
+            tail.push_str(&color.c("blue", &oldbest));
+        }
+        if !root_annotation.is_empty() {
+            if !oldbest.is_empty() {
+                tail.push(' ');
+            }
+            tail.push_str(&root_col(&root_annotation));
+        }
+        // `"nomerge".ljust(13)` + `empty_space_in_brackets()`.
+        let pad = if quiet { "      " } else { "       " };
+        println!(
+            "[nomerge{pad}] {indent}{}/{}-{}{tail}",
+            entry.category,
+            entry.package,
+            disp_version(version),
+        );
+    };
     match &entry.outcome {
         PretendOutcome::New { version } => {
             // Real `_get_installed_best`: brand-new -> `attr.new`; into a
@@ -1444,6 +1483,10 @@ fn print_entry_line(
             // installed_versions`) is deferred to a follow-up increment
             // (portuale doesn't carry the other-slot versions on the
             // entry yet).
+            if !ordered {
+                emit_nomerge(version);
+                return;
+            }
             emit(&field(true, entry.new_slot, false, false, false), version);
             blocker_lines.extend(trailing_blocker_lines(
                 entries, root, index, !quiet, columns, color,
@@ -1454,6 +1497,10 @@ fn print_entry_line(
             // (the exact new cpv isn't installed, so `attr.replace`
             // stays clear -> `U`, no `R`). oldbest = the in-slot
             // installed version(s) (`myinslotlist`), from `entry.oldbest`.
+            if !ordered {
+                emit_nomerge(to);
+                return;
+            }
             emit(&field(false, false, false, true, false), to);
             blocker_lines.extend(trailing_blocker_lines(
                 entries, root, index, !quiet, columns, color,
@@ -1462,6 +1509,10 @@ fn print_entry_line(
         PretendOutcome::Downgrade { from: _, to } => {
             // Real: in-slot downgrade -> `attr.new_version` *and*
             // `attr.downgrade` (`U` and `D`). oldbest as for `Upgrade`.
+            if !ordered {
+                emit_nomerge(to);
+                return;
+            }
             emit(&field(false, false, false, true, true), to);
             blocker_lines.extend(trailing_blocker_lines(
                 entries, root, index, !quiet, columns, color,
@@ -1485,6 +1536,10 @@ fn print_entry_line(
             // USE diff still shows in the `USE="…"` section for
             // `--changed-use`; `--changed-deps`/`--changed-slot` reasons
             // are genuinely invisible in real `-pv` too).
+            if !ordered {
+                emit_nomerge(version);
+                return;
+            }
             emit(&field(false, false, true, false, false), version);
             blocker_lines.extend(trailing_blocker_lines(
                 entries, root, index, !quiet, columns, color,
@@ -1516,7 +1571,7 @@ fn print_entry_line(
                     && blocker_row_disposition(entries, root, index, b)
                         == BlockerRowDisposition::Trailing
             }) {
-                blocker_lines.push(format_blocker_row(entry, !quiet, color, b));
+                blocker_lines.push(format_blocker_row(entry, !quiet, "", color, b));
             }
         }
         PretendOutcome::Uninstall { version } => {
@@ -1672,53 +1727,41 @@ fn print_entry_line(
     }
 }
 
-/// `--tree`/`-t`: indents each entry under whichever other entry's own
-/// dependency string reached it, real `output_helpers.py`'s own
-/// `_tree_display` -- but not a faithful port of it. Real
-/// `_ordered_tree_display` walks a genuine topologically-*scheduled*
-/// merge order (`mylist`) and a real bidirectional digraph
-/// (`parent_nodes`/`child_nodes`) to decide, for each node, exactly
-/// which already-placed node to nest it under (including cycle-avoiding
-/// parent-chasing when a fresh top-level branch needs to attach
-/// somewhere) -- machinery portuale has no equivalent of at all (no
-/// merge scheduler exists, see task #55's own "real merge/install"
-/// scope boundary), so this is a deliberate, portuale-specific
-/// simplification instead, confirmed acceptable in place of a faithful
-/// port given that boundary.
+/// `--tree`/`-t` and `--unordered-display`: real's tree display
+/// (`output.py:585-586` routes tree mode through
+/// `output_helpers.py::_tree_display`, `:341-407`, then
+/// `_ordered_tree_display` `:434-495` / `_unordered_tree_display`
+/// `:410-431`, pruned by `_prune_tree_display` `:497-535`). This is a
+/// display-only port: *which* rows exist is still the flat predicate's
+/// call (`blocker_row_disposition`), so a row the flat predicate hides
+/// stays hidden here too -- C2 owns the tree-mode serializer that can
+/// schedule extra uninstalls (`TEST/findings/l0.md` "#75 C0", p2b).
 ///
-/// The only edges portuale has are `GraphEntry::required_by` (already
-/// "every distinct owner, sorted" -- see its own doc comment,
-/// portage-repo); this function inverts that into a `children` map
-/// (owner key -> the entries it pulled in) and walks it from the
-/// top-level/requested entries as roots, in their own `entries` order
-/// (now real portage's dependency-first merge order, per
-/// `topological_merge_order` -- so top-level roots that depend on each
-/// other appear dep-first here too; real portage feeds `_tree_display`
-/// `reversed(mylist)`, an implementation detail this top-down walk from
-/// roots doesn't need). A node already rendered once (anywhere in the tree,
-/// diamond dependencies included) is never rendered or recursed into
-/// again -- real `_unordered_tree_display`'s own `seen_nodes` behavior,
-/// ported exactly (and, as a side effect, what keeps this recursion
-/// from looping forever on a genuine dependency cycle). Since
-/// `required_by` only ever tracks `(category, package)`, not slot, a
-/// multi-slot package's own dependents can't be disambiguated between
-/// its slot-entries any more precisely than `required_by`/`--json`
-/// already can't -- an existing imprecision, not a new one.
+/// Real's graph rewrite (`:341-407`) is modelled on top of portuale's
+/// entries and their blocker rows:
 ///
-/// `unordered_display` (`--unordered-display`, only ever meaningful
-/// together with `--tree` -- real portage's own `_tree_display` is
-/// never even called otherwise, and portuale mirrors that: given
-/// alone it's accepted but does nothing) chooses the child order at
-/// each level: `entries`' own order when true (now merge order rather
-/// than raw BFS discovery -- still "not sorted" per se, just whatever
-/// `topological_merge_order` produced) versus
-/// alphabetical-by-`(category, package)` when false, portuale's own
-/// deterministic default. Any entry never reached from a root at all
-/// (shouldn't normally happen -- every non-root entry's own
-/// `required_by` should trace back to one) is still printed, unindented,
-/// after the tree itself, rather than silently dropped -- portuale's
-/// own "never silently lose information" invariant, seen already for
-/// slot conflicts and unresolvable dependencies.
+/// - `Package -> Blocker -> Uninstall` (`:377-390`): a satisfied row
+///   resolved by a removal hangs the blocker under the row's owner and
+///   the removal entry under the blocker. For the absent-owner scan arm
+///   (#77 A1) the row already lives on the removal entry, so it has no
+///   separate parent -- exactly real's "the vardb owner is not a graph
+///   node" shape (`[blocks b]`, then `[uninstall]`, then the merge).
+/// - `upgrade_node -> blocker` (`:392-398`): a satisfied `Replacement`
+///   row (the uninstall was not executed) hangs the blocker under the
+///   replacement; the blocker keeps the owner as its parent.
+///
+/// `dep_zapdeps`' branch selection is honoured through
+/// `portage_repo::kept_alt_branches`, so a suppressed `||` alternative
+/// contributes no tree edge (the same set `build_digraph` uses).
+/// `ordered` is real's `set_pkg_info` flag (`output.py:612-614`): a node
+/// first met as an ancestor is rendered `nomerge` with no attr columns.
+/// The indent is real's own: `depth + 1` spaces for depth >= 1, none at
+/// depth 0 (B0b's p2c-t capture has depth 2 at three spaces).
+///
+/// `--onlydeps`: real's retlist excludes the suppressed root but the
+/// graph still holds it, so ordered mode prints it as a `nomerge`
+/// ancestor occurrence; portuale excludes it from the ordered node list
+/// for the same effect.
 #[allow(clippy::too_many_arguments)]
 fn print_tree(
     entries: &[GraphEntry],
@@ -1739,139 +1782,335 @@ fn print_tree(
     masked_deps: &[portage_repo::MaskedDepReport],
     use_unsat_deps: &[portage_repo::UseUnsatDepReport],
 ) {
-    let mut children: HashMap<(String, String), Vec<usize>> = HashMap::new();
-    for (i, entry) in entries.iter().enumerate() {
-        for owner in &entry.required_by {
-            children.entry(owner.clone()).or_default().push(i);
+    /// One node of the display graph: an entry, or a satisfied blocker
+    /// row `entries[owner].blockers[index]`.
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+    enum TreeNode {
+        Entry(usize),
+        Blocker { owner: usize, index: usize },
+    }
+
+    // Real `_tree_display`'s rewritten graph: `children` = real's
+    // `child_nodes` (dependencies / blocker-uninstall), `parents` = real's
+    // `parent_nodes`. Insertion order of each Vec is real's edge order
+    // (dep-key/atom order), which `--unordered-display` preserves.
+    let mut node_order: Vec<TreeNode> = Vec::new();
+    let mut children: HashMap<TreeNode, Vec<TreeNode>> = HashMap::new();
+    let mut parents: HashMap<TreeNode, Vec<TreeNode>> = HashMap::new();
+    let mut add_edge = |child: TreeNode, parent: TreeNode| {
+        if !children.get(&parent).is_some_and(|v| v.contains(&child)) {
+            children.entry(parent).or_default().push(child);
+        }
+        if !parents.get(&child).is_some_and(|v| v.contains(&parent)) {
+            parents.entry(child).or_default().push(parent);
+        }
+    };
+
+    // Real `_create_graph` resolves each dep atom to one package;
+    // portuale's `build_digraph` narrows the same way (merge-bound
+    // preferred, then highest version). `deps` carries every `||` branch,
+    // so the kept-branch set filters suppressed alternatives out.
+    let kept_alt = portage_repo::kept_alt_branches(entries, root);
+    let candidate = |e: &GraphEntry| -> Option<String> {
+        let ver = merge_bound_version(e)?;
+        let slot = e.slot.as_deref().unwrap_or("0").to_string();
+        let sub_slot = e.sub_slot.as_deref().unwrap_or("0").to_string();
+        let repo = e.repo_name.as_deref().unwrap_or("gentoo");
+        Some(format!(
+            "{}/{}-{ver}:{slot}/{sub_slot}::{repo}",
+            e.category, e.package
+        ))
+    };
+    let merge_bound = |e: &GraphEntry| merge_bound_version(e).is_some();
+    for (i, e) in entries.iter().enumerate() {
+        node_order.push(TreeNode::Entry(i));
+        for (ei, d) in e.deps.iter().enumerate() {
+            if d.alt.is_some() && !kept_alt[i].contains(&ei) {
+                continue;
+            }
+            let mut best: Option<usize> = None;
+            for (j, t) in entries.iter().enumerate() {
+                if j == i
+                    || t.category != d.category
+                    || t.package != d.package
+                    || merge_bound_version(t).is_none()
+                {
+                    continue;
+                }
+                let Some(cand) = candidate(t) else { continue };
+                if !match_from_list(&d.atom, &[cand.as_str()]).is_some_and(|m| !m.is_empty()) {
+                    continue;
+                }
+                best = Some(match best {
+                    None => j,
+                    Some(b) => {
+                        let better = match (merge_bound(&entries[j]), merge_bound(&entries[b])) {
+                            (true, false) => true,
+                            (false, true) => false,
+                            _ => {
+                                let bv = merge_bound_version(&entries[b]).unwrap_or("");
+                                let jv = merge_bound_version(&entries[j]).unwrap_or("");
+                                jv.cmp(bv) == std::cmp::Ordering::Greater
+                            }
+                        };
+                        if better { j } else { b }
+                    }
+                });
+            }
+            if let Some(j) = best {
+                add_edge(TreeNode::Entry(j), TreeNode::Entry(i));
+            }
         }
     }
-    if !unordered_display {
-        for kids in children.values_mut() {
-            kids.sort_by(|&a, &b| {
-                (&entries[a].category, &entries[a].package)
-                    .cmp(&(&entries[b].category, &entries[b].package))
-            });
+    // `required_by` fallback edges for a deps-less synthetic entry
+    // (`--root-deps` build entries and their recursion): the resolver
+    // records owners but no `deps`, and real's digraph still nests the
+    // entry under them. Deliberately *not* applied to an entry with
+    // `deps`: the forward walk already narrowed those edges and a second
+    // cp-keyed pass would over-connect (multi-slot cps, `||` branches).
+    for (i, e) in entries.iter().enumerate() {
+        if !e.deps.is_empty() {
+            continue;
+        }
+        for owner in &e.required_by {
+            for (j, t) in entries.iter().enumerate() {
+                if t.category == owner.0 && t.package == owner.1 && j != i {
+                    add_edge(TreeNode::Entry(i), TreeNode::Entry(j));
+                    break;
+                }
+            }
+        }
+    }
+    // Blocker nodes: a satisfied row hangs its removal/replacement under
+    // the blocker, and the blocker under the row's owner (unless the row
+    // already lives on that same removal entry -- the #77 absent-owner
+    // arm, whose owner is real's non-node vardb `Package`).
+    for (owner, entry) in entries.iter().enumerate() {
+        for (index, b) in entry.blockers.iter().enumerate() {
+            let BlockerRowDisposition::Inline(after) =
+                blocker_row_disposition(entries, root, owner, b)
+            else {
+                continue;
+            };
+            let node = TreeNode::Blocker { owner, index };
+            node_order.push(node);
+            if owner != after {
+                add_edge(node, TreeNode::Entry(owner));
+            }
+            add_edge(TreeNode::Entry(after), node);
         }
     }
 
-    // Bundles print_tree's own mostly-invariant parameters together
-    // purely to keep render's own recursive calls readable (7+
-    // positional args tripped clippy::too_many_arguments) -- not a
-    // reusable abstraction, just this one function's own recursion
-    // state.
-    struct TreeCtx<'a> {
-        entries: &'a [GraphEntry],
-        root: &'a Path,
-        // #68/#72 B2: the satisfied `b` rows whose replacement waits on
-        // its owner, keyed by the replacement's display index -- printed
-        // right after that entry's line, flat placement even in tree mode
-        // (docs/02.68-74.md §6 records real's tree-mode placement as a
-        // named cut).
-        inline_blockers: &'a [(usize, String)],
-        children: &'a HashMap<(String, String), Vec<usize>>,
-        top_level_pkgs: &'a HashSet<(String, String)>,
-        onlydeps: bool,
-        oneshot: bool,
-        verbose: bool,
-        quiet: bool,
-        alphabetical: bool,
-        running_root: Option<&'a Path>,
-        color: &'a Colorizer,
-        system_atoms: &'a [String],
-        world_atoms: &'a [String],
-        force_reinstall_cps: &'a HashSet<(String, String)>,
-        masked_deps: &'a [portage_repo::MaskedDepReport],
-        use_unsat_deps: &'a [portage_repo::UseUnsatDepReport],
+    // `--onlydeps`: real's retlist omits the suppressed root while the
+    // graph keeps it (ordered mode re-prints it as a nomerge ancestor).
+    let node_order: Vec<TreeNode> = node_order
+        .into_iter()
+        .filter(|n| {
+            !matches!(n, TreeNode::Entry(i)
+            if onlydeps && top_level_pkgs.contains(&(
+                entries[*i].category.clone(),
+                entries[*i].package.clone(),
+            )))
+        })
+        .collect();
+
+    let set_nodes: HashSet<TreeNode> = entries
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| top_level_pkgs.contains(&(e.category.clone(), e.package.clone())))
+        .map(|(i, _)| TreeNode::Entry(i))
+        .collect();
+
+    fn children_of(children: &HashMap<TreeNode, Vec<TreeNode>>, n: TreeNode) -> &[TreeNode] {
+        children.get(&n).map_or(&[][..], Vec::as_slice)
+    }
+    fn parents_of(parents: &HashMap<TreeNode, Vec<TreeNode>>, n: TreeNode) -> &[TreeNode] {
+        parents.get(&n).map_or(&[][..], Vec::as_slice)
     }
 
-    fn render(
-        i: usize,
-        depth: u32,
-        ctx: &TreeCtx,
-        rendered: &mut HashSet<usize>,
-        blocker_lines: &mut Vec<String>,
+    // `_unordered_tree_display` (`output_helpers.py:410-431`): DFS from
+    // every root (no parents) in graph insertion order, each node once.
+    fn unordered_walk(
+        roots: &[TreeNode],
+        children: &HashMap<TreeNode, Vec<TreeNode>>,
+        seen: &mut HashSet<TreeNode>,
+        out: &mut Vec<(TreeNode, usize, bool)>,
     ) {
-        if !rendered.insert(i) {
-            return;
+        fn print_node(
+            node: TreeNode,
+            depth: usize,
+            children: &HashMap<TreeNode, Vec<TreeNode>>,
+            seen: &mut HashSet<TreeNode>,
+            out: &mut Vec<(TreeNode, usize, bool)>,
+        ) {
+            if !seen.insert(node) {
+                return;
+            }
+            out.push((node, depth, true));
+            for &child in children_of(children, node) {
+                print_node(child, depth + 1, children, seen, out);
+            }
         }
-        let indent = "  ".repeat(depth as usize);
-        // `columns` is always false here -- the CLI layer refuses
-        // --tree+--columns together, so print_tree only ever runs with
-        // --columns off; `columnwidth` is a dummy value, unused whenever
-        // `columns` is false.
-        print_entry_line(
-            ctx.entries,
-            ctx.root,
-            i,
-            &indent,
-            ctx.top_level_pkgs,
-            ctx.onlydeps,
-            ctx.oneshot,
-            ctx.verbose,
-            ctx.quiet,
-            ctx.alphabetical,
-            false,
-            130,
-            ctx.running_root,
-            ctx.color,
-            ctx.system_atoms,
-            ctx.world_atoms,
-            ctx.force_reinstall_cps,
-            blocker_lines,
-            ctx.masked_deps,
-            ctx.use_unsat_deps,
-        );
-        for (_, line) in ctx.inline_blockers.iter().filter(|(after, _)| *after == i) {
-            println!("{line}");
+        for &root in roots {
+            print_node(root, 0, children, seen, out);
         }
-        let key = (
-            ctx.entries[i].category.clone(),
-            ctx.entries[i].package.clone(),
-        );
-        if let Some(kids) = ctx.children.get(&key) {
-            for &child in kids {
-                render(child, depth + 1, ctx, rendered, blocker_lines);
+    }
+
+    // `_ordered_tree_display` (`output_helpers.py:434-495`): walk the
+    // reversed list; a node that is a child of the current chain continues
+    // it, otherwise `add_parents` fills the ancestor chain in first. The
+    // `ordered` flag is `False` for every ancestor-walk occurrence
+    // (`:453`), which is what renders a merge node as `nomerge`.
+    #[allow(clippy::too_many_arguments)]
+    fn add_parents(
+        current: TreeNode,
+        ordered: bool,
+        children: &HashMap<TreeNode, Vec<TreeNode>>,
+        parents: &HashMap<TreeNode, Vec<TreeNode>>,
+        set_nodes: &HashSet<TreeNode>,
+        traversed: &mut HashSet<TreeNode>,
+        shown_edges: &mut HashSet<(TreeNode, TreeNode)>,
+        tree_nodes: &mut Vec<TreeNode>,
+        out: &mut Vec<(TreeNode, usize, bool)>,
+    ) {
+        let parent_nodes: &[TreeNode] = if !set_nodes.contains(&current) {
+            parents_of(parents, current)
+        } else {
+            &[]
+        };
+        if !parent_nodes.is_empty() {
+            let child_nodes: HashSet<TreeNode> =
+                children_of(children, current).iter().copied().collect();
+            let mut selected: Option<TreeNode> = None;
+            for &node in parent_nodes {
+                if !traversed.contains(&node) && !child_nodes.contains(&node) {
+                    let edge = (current, node);
+                    if shown_edges.contains(&edge) {
+                        continue;
+                    }
+                    selected = Some(node);
+                    break;
+                }
+            }
+            if selected.is_none() {
+                // A direct cycle is unavoidable.
+                for &node in parent_nodes {
+                    if !traversed.contains(&node) {
+                        let edge = (current, node);
+                        if shown_edges.contains(&edge) {
+                            continue;
+                        }
+                        selected = Some(node);
+                        break;
+                    }
+                }
+            }
+            if let Some(parent) = selected {
+                shown_edges.insert((current, parent));
+                traversed.insert(parent);
+                add_parents(
+                    parent,
+                    false,
+                    children,
+                    parents,
+                    set_nodes,
+                    traversed,
+                    shown_edges,
+                    tree_nodes,
+                    out,
+                );
+            }
+        }
+        out.push((current, tree_nodes.len(), ordered));
+        tree_nodes.push(current);
+    }
+
+    let mut display: Vec<(TreeNode, usize, bool)> = Vec::new();
+    if unordered_display {
+        let mut seen: HashSet<TreeNode> = HashSet::new();
+        let roots: Vec<TreeNode> = node_order
+            .iter()
+            .copied()
+            .filter(|&n| parents_of(&parents, n).is_empty())
+            .collect();
+        unordered_walk(&roots, &children, &mut seen, &mut display);
+        // Any node the DFS never reached (e.g. a cycle's remainder) is
+        // appended flat, real's own "never silently lose information".
+        for &n in &node_order {
+            if !seen.contains(&n) {
+                display.push((n, 0, true));
+            }
+        }
+    } else {
+        let mut tree_nodes: Vec<TreeNode> = Vec::new();
+        let mut shown_edges: HashSet<(TreeNode, TreeNode)> = HashSet::new();
+        for &x in node_order.iter().rev() {
+            let mut depth = tree_nodes.len();
+            while depth > 0 && !children_of(&children, tree_nodes[depth - 1]).contains(&x) {
+                depth -= 1;
+            }
+            if depth > 0 {
+                tree_nodes.truncate(depth);
+                let parent = tree_nodes[depth - 1];
+                tree_nodes.push(x);
+                display.push((x, depth, true));
+                shown_edges.insert((x, parent));
+            } else {
+                let mut traversed: HashSet<TreeNode> = HashSet::from([x]);
+                tree_nodes.clear();
+                add_parents(
+                    x,
+                    true,
+                    &children,
+                    &parents,
+                    &set_nodes,
+                    &mut traversed,
+                    &mut shown_edges,
+                    &mut tree_nodes,
+                    &mut display,
+                );
             }
         }
     }
 
-    let inline_blockers = collect_inline_blocker_lines(entries, root, quiet, false, color);
-    let ctx = TreeCtx {
-        entries,
-        root,
-        inline_blockers: &inline_blockers,
-        children: &children,
-        top_level_pkgs,
-        onlydeps,
-        oneshot,
-        verbose,
-        quiet,
-        alphabetical,
-        running_root,
-        color,
-        system_atoms,
-        world_atoms,
-        force_reinstall_cps,
-        masked_deps,
-        use_unsat_deps,
-    };
-    let mut rendered: HashSet<usize> = HashSet::new();
-    for (i, entry) in entries.iter().enumerate() {
-        if top_level_pkgs.contains(&(entry.category.clone(), entry.package.clone())) {
-            render(i, 0, &ctx, &mut rendered, blocker_lines);
+    // `_prune_tree_display` (`output_helpers.py:497-535`).
+    let mut last_merge_depth = 0usize;
+    let mut i = display.len();
+    while i > 0 {
+        i -= 1;
+        let (node, depth, ordered) = display[i];
+        if !ordered && depth == 0 && i > 0 && node == display[i - 1].0 && display[i - 1].1 == 0 {
+            display.remove(i);
+            continue;
+        }
+        let is_merge_or_uninstall = matches!(
+            node,
+            TreeNode::Entry(j)
+                if merge_bound_version(&entries[j]).is_some()
+                    || matches!(entries[j].outcome, PretendOutcome::Uninstall { .. })
+        );
+        if ordered && is_merge_or_uninstall {
+            last_merge_depth = depth;
+            continue;
+        }
+        if depth >= last_merge_depth || (i < display.len() - 1 && depth >= display[i + 1].1) {
+            display.remove(i);
         }
     }
 
-    // Safety net, not expected to ever trigger in practice (see this
-    // function's own doc comment) -- prints anything the tree walk
-    // somehow never reached, flat, rather than silently dropping it.
-    for i in 0..entries.len() {
-        if !rendered.contains(&i) {
-            print_entry_line(
+    for (node, depth, ordered) in display {
+        // Real `output_helpers.py`'s `self.indent` is exactly `depth`
+        // spaces (`_ordered_tree_display`'s depth is passed straight to
+        // `_display_tree`); every real format string already carries the
+        // one literal space after `]`, so portuale's formats do too.
+        let indent = " ".repeat(depth);
+        match node {
+            TreeNode::Entry(i) => print_entry_line(
                 entries,
                 root,
                 i,
-                "",
+                &indent,
+                ordered,
                 top_level_pkgs,
                 onlydeps,
                 oneshot,
@@ -1888,7 +2127,19 @@ fn print_tree(
                 blocker_lines,
                 masked_deps,
                 use_unsat_deps,
-            );
+            ),
+            TreeNode::Blocker { owner, index } => {
+                println!(
+                    "{}",
+                    format_blocker_row(
+                        &entries[owner],
+                        !quiet,
+                        &indent,
+                        color,
+                        &entries[owner].blockers[index],
+                    )
+                );
+            }
         }
     }
 }
@@ -4508,6 +4759,7 @@ fn run_resume(
                 root,
                 i,
                 "",
+                true,
                 &HashSet::new(),
                 false,
                 opts.oneshot,
@@ -11324,6 +11576,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     &root,
                     i,
                     "",
+                    true,
                     &top_level_pkgs,
                     onlydeps,
                     oneshot,
@@ -11380,6 +11633,7 @@ pub fn run(args: &[String]) -> ExitCode {
                         &root,
                         i,
                         "",
+                        true,
                         &top_level_pkgs,
                         onlydeps,
                         oneshot,
@@ -11474,6 +11728,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 &root,
                 idx,
                 "",
+                true,
                 &top_level_pkgs,
                 onlydeps,
                 oneshot,
