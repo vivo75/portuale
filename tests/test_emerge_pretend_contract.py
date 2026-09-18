@@ -1489,6 +1489,16 @@ CASES = [
         ["--pretend", "=dev-libs/disjtarget-2.0"],
         0,
     ),
+    (
+        "blocker: --tree hangs a merging owner's removal chain under the blocker (#75 C0 u1)",
+        ["--pretend", "--tree", "dev-libs/blockerpkg"],
+        0,
+    ),
+    (
+        "blocker: --tree hangs a nomerge owner's removal chain under the blocker (#75 C0 n5)",
+        ["--pretend", "--tree", "=dev-libs/nomtarget-1.5"],
+        0,
+    ),
     ("overlay: package exists only in the overlay repo", ["--pretend", "dev-libs/overlayonlypkg"], 0),
     ("overlay: best version wins across repos", ["--pretend", "dev-libs/overlaynewerpkg"], 0),
     ("overlay: same-version tie broken toward higher priority", ["--pretend", "dev-libs/overlaytiepkg"], 0),
@@ -17252,6 +17262,57 @@ def test_oracle_76_wait_follows_the_selected_disjunctive_branch(emerge_binary, f
         "",
         "Total: 2 packages (2 upgrades), Size of downloads: 0 KiB",
         "Conflict: 1 block (all satisfied)",
+    ], result.stdout
+
+
+def test_oracle_75_tree_blocker_rows_match_real(emerge_binary, fixture_env):
+    """Backlog #75 C0/C1/C3: the two deterministic tree-mode blocker
+    layouts.
+
+    Real `_tree_display` (`output_helpers.py:341-407`) rewrites the
+    blocker edges before laying the tree out: a satisfied row resolved
+    by a removal becomes `Package -> Blocker -> Uninstall` (`:377-390`),
+    with the display list walked from the reversed retlist. u1 (merging
+    owner) and n5 (#77's absent-owner nomerge arm) are the two shapes
+    whose flat merge order already coincides with real's, so their tree
+    bytes are deterministic; the container captures are
+    `TEST/findings/l0.md` "#75 C0" (u1/n5), and portuale omits real's
+    `to <root>/` suffix on a non-"/" ROOT like every other fixture pin.
+
+    Not pinned here, by C2's stop (`#75 C2`, backlog #81): p2b's
+    tree-only satisfied row (the tree-mode serializer schedules an
+    uninstall flat mode never reaches -- `scheduled_uninstalls` as
+    serializer state), and the tree-mode sibling order of u6 /
+    multislotparent (`dev-libs/multislotparent`'s own test records the
+    ordering residue next to its pin). The
+    `--tree --unordered-display` DFS is pinned by
+    `test_tree_unordered_display_preserves_discovery_order`.
+    """
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--tree", "dev-libs/blockerpkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[nomerge       ] dev-libs/blockerpkg-1.0",
+        '[blocks b      ]  dev-libs/samepkg ("dev-libs/samepkg" is hard '
+        "blocking dev-libs/blockerpkg-1.0)",
+        "[uninstall     ]   dev-libs/samepkg-1.0 ",
+        "[ebuild  N     ] dev-libs/blockerpkg-1.0 ",
+    ], result.stdout
+
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--tree", "=dev-libs/nomtarget-1.5"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[blocks b      ] <dev-libs/nomtarget-2.0 (\"<dev-libs/nomtarget-2.0\" is soft "
+        "blocking dev-libs/nomowner-1.0)",
+        "[uninstall     ]  dev-libs/nomowner-1.0 ",
+        "[ebuild     U  ] dev-libs/nomtarget-1.5 [1.0]",
     ], result.stdout
 
 
