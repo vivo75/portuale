@@ -315,6 +315,22 @@ def test_checker_flags_a_flush_left_never_reached_tree_row():
     assert any("required_by" in p for p in problems)
 
 
+def test_checker_flags_a_merge_row_printed_twice_in_tree_mode():
+    """#82: a merge node's ancestor occurrence is a `[nomerge]` row, which
+    `rows_key` drops, so a *second* `[ebuild]` row for the same package is
+    a genuine duplicate -- `--tree` would print the package twice while
+    the merge list has it once. The cross-mode check briefly deduped the
+    tree rows and could not see this; it compares the list again."""
+    doc = _doc(_entry("leaf", 0, ("root",)), _entry("root", 1, requested=True))
+    tree = ("[ebuild  N     ] dev-libs/root-1.0 \n"
+            "[ebuild  N     ]  dev-libs/leaf-1.0 \n"
+            "[ebuild  N     ]  dev-libs/leaf-1.0 \n")
+    plain = ("[ebuild  N     ] dev-libs/root-1.0 \n"
+             "[ebuild  N     ] dev-libs/leaf-1.0 \n")
+    problems = inv.check_cross_mode(plain, tree, plain, doc)
+    assert any("--tree merge list != --json entries" in p for p in problems)
+
+
 def test_checker_parses_binary_build_ids():
     assert inv.split_cpv("dev-libs/foo-1.0-3") == ("dev-libs", "foo", "1.0")
     assert inv.split_cpv("dev-libs/foo-1.0-r3:0::repo") == ("dev-libs", "foo", "1.0-r3")

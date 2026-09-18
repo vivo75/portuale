@@ -151,3 +151,25 @@
     `[blocks B]` row, portuale's is `rdcpuller-2.0` alone. Backlog #79;
     D2 removes this entry.
   owner: portuale-bug
+
+# -- #84: two new slots of one cp, pulled by different parents, merge in
+#    the opposite order. Found while building #82's tree fixture; the
+#    tree edge set itself matches real after #82, only the sequence the
+#    reversed display list walks does not.
+
+- id: treeslot-new-slot-merge-order
+  category: order
+  slugs: ["-v_dev-libs_treeslotuser"]
+  match: "merge order diverges"
+  reason: >
+    Real merges `dev-libs/treeslotpkg-1.9` (SLOT 0, reached through
+    `treeslotuser`'s own `:0` atom) before `-1.10` (SLOT 1, reached
+    through `treeslotparent`); portuale's `build_digraph` discovery order
+    reaches the slot-1 node first and emits `1.10, 1.9`. Set, versions,
+    flags and `Total:` all match -- only the sequence differs, the
+    standing #17 merge-order class. It is what keeps the `--tree` cell
+    of the same shape from being byte-equal to real (the reversed
+    display list walks the merge order), so #82's tree fix cannot be
+    pinned end-to-end until this closes. Backlog #84; see
+    `TEST/findings/l0.md` "#82".
+  owner: portuale-bug

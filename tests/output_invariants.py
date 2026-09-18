@@ -394,13 +394,14 @@ def check_cross_mode(plain: str, tree: str, quiet: str, doc: dict,
     )
     for mode, text in (("plain", plain), ("--tree", tree), ("--quiet", quiet)):
         got = rows_key(parse_plain(text))
-        # #75 C1: tree mode prints a merge node twice when it is first met
-        # as an ancestor occurrence (`set_pkg_info`'s `ordered=False`
-        # relabelling gives it the `nomerge` tag), so the tree's row *set*
-        # is what must equal the JSON entries; plain/quiet keep the exact
-        # list comparison.
-        if mode == "--tree":
-            got = sorted(set(got))
+        # #82: this used to dedupe the `--tree` rows, on the grounds that
+        # a merge node appears twice there (its own row plus the ancestor
+        # occurrence). It does not reach here: `rows_key` already drops
+        # every `kind == "nomerge"` row, and the ancestor occurrence *is*
+        # that row (`set_pkg_info`'s `ordered=False` relabelling,
+        # `output.py:612-614`). No case in the suite needed the dedupe,
+        # and it hid exactly the duplicate-row bug this check exists to
+        # catch, so tree mode compares the row list like the others.
         if got != want:
             missing = sorted(set(want) - set(got))
             extra = sorted(set(got) - set(want))
@@ -441,13 +442,17 @@ def check_cross_mode(plain: str, tree: str, quiet: str, doc: dict,
                 if not has_hidden_owner(r["cp"]):
                     problems.append(f"--tree: {name} at depth {r['depth']} has no parent row")
             elif not (
-                # #75 C1: real `_tree_display`'s ancestor walk can print a
-                # node's **owner** above it (the root/argument occurrence,
-                # `_ordered_tree_display`'s `add_parents`), so the nearest
-                # shallower row may be either the row's owner
-                # (`required_by`, the dependency nesting) or a row this
-                # row owns (the ancestor occurrence) -- through unshown
-                # owners either way.
+                # #75 C1 / #82: a `[blocks …]` or `[uninstall …]` row is
+                # not matched by `_LINE`, so a row nested under one of
+                # those collapses onto whatever parsed row precedes it --
+                # which, in real's `_tree_display` rewrite, can be a
+                # package this row **owns** rather than one that owns it
+                # (B0b's p2c: `blocked-2.0` sits under the blocker row
+                # under `bparent-1.1`, and `bparent-1.1` is `blocked`'s
+                # own dependency). So the nearest shallower parsed row may
+                # be the row's owner or its dependent -- through unshown
+                # owners either way. Narrowing this to the `[nomerge]`
+                # ancestor rows alone would reject that shape.
                 hidden_path_to(r["cp"], stack[-1][1])
                 or hidden_path_to(stack[-1][1], r["cp"])
             ):
