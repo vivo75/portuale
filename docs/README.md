@@ -28,8 +28,8 @@ holds everything else.
 | [`on-disk-caches.md`](on-disk-caches.md) | Source-grounded audit of every on-disk cache/database (`/var/db/pkg`, `/var/cache/edb`, `$PKGDIR`, `/var/lib/portage`, logs) and which alternative backends are worth it — informs the `mrg-director` DB/cache slots. |
 | [`performances-tuning.md`](performances-tuning.md) | The `perf` + call-counter investigation that took `emerge -puD --getbinpkg` from 77 s to 4.5 s (17×, ~3.5× faster than real `emerge`), with the remaining incremental items. |
 | [`solver-backends-analysis.md`](solver-backends-analysis.md) | The `--solver=portage\|pubgrub\|resolvo` backend comparison and why the lu-zero bridges are reused. Real-tree gaps: `scope-backlog.md` §J. |
-| [`../TEST/README.md`](../TEST/README.md) | The container-based real-system differential test beds (L0 resolver parity, L1 merge parity). Controls, triage, and the L2–L5 designs: [`real-world-testing.md`](real-world-testing.md). |
-| [`real-world-testing.md`](real-world-testing.md) | Determinism controls, report-triage guidance, archive-comparison and forward-layer (L2–L5) designs extracted from `history/real-world-testing.md` — the live companion to `TEST/README.md`. |
+| [`../../pmtest/differential-test-bed/README.md`](../../pmtest/differential-test-bed/README.md) | The container-based real-system differential test beds (L0 resolver parity, L1 merge parity), in the sibling `pmtest` repo since `f982876`. Controls, triage, and the L2–L5 designs stay here: [`real-world-testing.md`](real-world-testing.md). |
+| [`real-world-testing.md`](real-world-testing.md) | Determinism controls, report-triage guidance, archive-comparison and forward-layer (L2–L5) designs extracted from `history/real-world-testing.md` — the live companion to the differential bed's own `README.md` (now in the sibling `pmtest` repo). |
 
 ## History (`history/`)
 
@@ -46,5 +46,6 @@ early per-feature plan docs.
 
 Co-located READMEs stay next to their code:
 [`../bin/README.md`](../bin/README.md),
-[`../3rdparty/README.md`](../3rdparty/README.md),
-[`../TEST/README.md`](../TEST/README.md).
+[`../3rdparty/README.md`](../3rdparty/README.md). The differential test
+bed's own README moved with it, to
+[`../../pmtest/differential-test-bed/README.md`](../../pmtest/differential-test-bed/README.md).

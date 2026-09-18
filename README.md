@@ -65,15 +65,16 @@ rust/                      Rust workspace
   portage-fetch/           shared lib: SRC_URI fetch (Manifest digests, mirrors)
   *-harness/               neutral CLI harnesses (contract + benchmark testing)
   portuale/                the real emerge / ebuild multicall binary
-python/
-  *_harness.py             thin CLI wrappers around the real portage.* modules
-fixtures/                  synthetic repo + vdb + profile tree the contract suite runs against
-bench/                     benchmark-mode timing comparison (CI perf gate)
+fixtures/                  synthetic repo + vdb + profile tree the Rust tests run against
 musl/                      musl static-build smoke test (minimal-Linux CI gate)
-tests/                     shared, black-box pytest contract suite (+ output invariants, harvested corpus)
-TEST/                      real-Gentoo-tree validation harness (container; see TEST/README.md)
 docs/                      all project documentation (see below)
 ```
+
+The test suite itself is **not** in this tree: it lives in the sibling
+`pmtest` repository, which tests portuale as one of several package
+managers. See "Test" below and
+[`docs/agent-context.md`](docs/agent-context.md) ("Where the tests
+live") for the old-path → new-home map.
 
 ## Build
 
@@ -88,9 +89,19 @@ automatically).
 ## Test
 
 ```sh
-cd rust && cargo test --release          # whole Rust workspace
-python3 -m pytest tests -q               # shared black-box contract suite
+# in this repo: the whole Rust workspace (reads ./fixtures)
+cd rust && cargo test --release
+
+# in the sibling pmtest repo: the black-box contract suite
+cd ../../pmtest && python3 -m pytest pytests-contract-suite -q
 ```
+
+The contract suite, the container differential bed, the benchmark and
+the primitive-differential scripts live in the sibling `pmtest` repo,
+which resolves this tree through its `managers/managers.yaml` registry
+(`PMTEST_PM=portuale`, the default) and rebuilds the binary itself. What
+stays here is `fixtures/`, which the Rust `#[cfg(test)]` tests read
+through a compile-time path, so `cargo test` needs no second repo.
 
 Full pre-slice verification also runs `cargo fmt --check` and
 `cargo clippy --release --all-targets` (zero warnings).

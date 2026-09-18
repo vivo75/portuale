@@ -95,6 +95,44 @@ one-line description and exits 0; an unrecognized applet name still
 errors. `emerge --help` is a grouped tour of every action/option portuale
 implements (`pretend.rs`'s `HELP_TEXT`, pinned by the contract suite).
 
+## Where the tests live
+
+Since `f982876` (2026-09-18) the test suite is **not in this tree**. It
+lives in the sibling repository `../pmtest`, which exists to test and
+compare several package managers against the same harness, portuale
+being one entry in its `managers/managers.yaml` registry
+(`PMTEST_PM=portuale` is the default). Its own `USAGE.AGENTS.md` is the
+operating manual; read it before running or changing anything there.
+
+| Was, in this tree | Is now |
+|---|---|
+| `tests/` | `../pmtest/pytests-contract-suite/` |
+| `TEST/` | `../pmtest/differential-test-bed/` |
+| `python/*_harness.py` | `../pmtest/python-harness/` |
+| `bench/` | `../pmtest/bench/` |
+| `scripts/primitive_tree_differential.py`, `scripts/portage_repin_review.py` | `../pmtest/scripts/` |
+
+**Older prose in this repo's docs still spells the old paths** — a
+`TEST/findings/l2.md` citation in a record of past work means
+`../pmtest/differential-test-bed/findings/l2.md` today. Those records are
+history and are not rewritten; this table is the map.
+
+Two things did **not** move:
+
+- `fixtures/` is duplicated. This tree keeps it because ~55 Rust
+  `#[cfg(test)]` reads resolve it through a compile-time
+  `CARGO_MANIFEST_DIR/../../fixtures` path, so `cargo test` needs no
+  second repo; pmtest has its own copy for the contract suite. The two
+  are identical today and **nothing syncs them**: a new fixture has to be
+  added on both sides, or the side that misses it silently tests less.
+- `3rdparty/` stays here, and pmtest symlinks to it — it is where the
+  pinned real-Portage checkout and its gpg test keyring come from.
+
+pmtest never builds against a stale binary: every run rebuilds the PM
+from the `repo` in its registry entry. Nothing in pmtest is edited to
+make a PM pass — a red is fixed in the PM, an accepted divergence is
+recorded in `../pmtest/differential-test-bed/compare/known-divergences.yaml`.
+
 ## Test/benchmark harness architecture
 
 - For pure-library-level parity (versions, atom parsing, etc.), define a
@@ -110,15 +148,16 @@ implements (`pretend.rs`'s `HELP_TEXT`, pinned by the contract suite).
   `emerge --pretend` slice and the contract suite asserted Rust == Python;
   it proved agreement with a portuale-authored copy, not with Portage,
   and was removed ([`second_python_copy_removal.md`](second_python_copy_removal.md)).
-  Expected `emerge` output now comes from real Portage (the `TEST/` beds,
-  this host's `emerge`, upstream `lib/portage/tests/resolver/` cases).
-  In its place: expectation-free output invariants and cross-mode checks
-  (`tests/test_output_invariants.py`, also run over L0), repeated-run
-  determinism, the tree-wide primitive differential
-  (`scripts/primitive_tree_differential.py`), the unparsed-dependency-token
-  counter, the re-pin review checklist (`scripts/portage_repin_review.py`),
-  and the corpus harvested from the last Rust/Python agreement
-  (`tests/corpus/`, drift is a warning). The primitive harnesses above
+  Expected `emerge` output now comes from real Portage (the differential
+  beds, this host's `emerge`, upstream `lib/portage/tests/resolver/`
+  cases). In its place: expectation-free output invariants and cross-mode
+  checks (`pmtest/pytests-contract-suite/test_output_invariants.py`, also
+  run over L0), repeated-run determinism, the tree-wide primitive
+  differential (`pmtest/scripts/primitive_tree_differential.py`), the
+  unparsed-dependency-token counter, the re-pin review checklist
+  (`pmtest/scripts/portage_repin_review.py`), and the corpus harvested
+  from the last Rust/Python agreement
+  (`pmtest/pytests-contract-suite/corpus/`, drift is a warning). The primitive harnesses above
   stay: they wrap real `portage.versions`/`portage.dep`.
 - The harness needs **two modes**:
   - *Correctness mode*: one operation per process invocation, pytest-driven,
@@ -127,7 +166,7 @@ implements (`pretend.rs`'s `HELP_TEXT`, pinned by the contract suite).
     invocation) to avoid fork/exec overhead dominating the measurement.
 - Benchmark data: a **real, vendored Gentoo tree snapshot** (not purely
   synthetic stress data) — realistic scale and distribution of versions/
-  atoms/deps. `bench/extract_snapshot.py` refreshes
+  atoms/deps. `pmtest/bench/extract_snapshot.py` refreshes
   `gentoo_snapshot.json` against a live tree using real
   `portage.versions.pkgsplit` as the authority.
 - CI gates on both: correctness suite must pass on both implementations;
@@ -135,27 +174,28 @@ implements (`pretend.rs`'s `HELP_TEXT`, pinned by the contract suite).
   over time.
 - Rust CI also gates on a **musl static build** smoke-tested inside a
   minimal (`scratch`/busybox-level) container.
-- **Container-based real-system differential test bed** (`TEST/`, see
-  [`TEST/README.md`](../TEST/README.md) and
+- **Container-based real-system differential test bed**
+  (`pmtest/differential-test-bed/`, see its own `README.md` and
   [`history/real-world-testing.md`](history/real-world-testing.md)): runs portuale
   *and* the real `emerge` against a pinned real Gentoo tree inside
   throwaway `podman` containers and diffs the results. **L0**
-  (`TEST/run/l0-resolver.sh`) — `emerge -pv` for ~120 real atoms
+  (`differential-test-bed/run/l0-resolver.sh`) — `emerge -pv` for ~120 real atoms
   (firefox, plasma-meta, `@world`, …), comparing merge lists / USE /
   order / errors / exit codes. **L1**
-  (`TEST/run/l1-merge-from-binpkg.sh`) — both PMs merge an identical
+  (`differential-test-bed/run/l1-merge-from-binpkg.sh`) — both PMs merge an identical
   prebuilt binpkg set into a fresh `/` and the resulting filesystem + VDB
   snapshots are diffed. It is **live and exercised** — the only check
   that catches resolver / merge-path regressions at real-tree scale (the
   fixture-based pytest contract suite cannot). Needs the
-  `localhost/test-portuale:latest` image (`sudo TEST/create-container.bash`).
+  `localhost/test-portuale:latest` image
+  (`sudo differential-test-bed/create-container.bash`, run from pmtest).
   It is **slower and heavier** than the pytest/`cargo test` pass, so it
   is not part of every slice's verification — but running L0 (and L1
   where merge behaviour changed) is **advisable periodically, and
   especially after a big merge from another branch or a change to the
   resolver / merge-order / phase code**, to confirm nothing regressed at
-  scale. Findings go in `TEST/findings/`; adjudicated non-bugs in
-  `TEST/compare/known-divergences.yaml`. **L1 must run *with* the portage
+  scale. Findings go in `differential-test-bed/findings/`; adjudicated
+  non-bugs in `differential-test-bed/compare/known-divergences.yaml`. **L1 must run *with* the portage
   upgrade** (do not pass `L1_SKIP_PORTAGE_UPGRADE=1`) — the image's base
   portage predates the VDB consolidated `metadata` file portuale mirrors,
   so skipping the upgrade makes every merged package show a spurious
@@ -178,8 +218,8 @@ portuale is a **working package manager**, used on real systems. It
 resolves, builds, merges, unmerges, and manages the world file for real
 Gentoo packages, with real ebuild-phase execution and real filesystem
 mutation. The `--pretend` resolver is validated against real `emerge`
-at real-tree scale (`TEST/` L0: ~120 real atoms, 96/120 byte-identical
-plans; L1: filesystem+VDB merge parity, clean).
+at real-tree scale (pmtest's differential bed, L0: ~120 real atoms,
+96/120 byte-identical plans; L1: filesystem+VDB merge parity, clean).
 
 For the authoritative, cited-source record of every shipped capability
 read **[`what-this-proves.md`](what-this-proves.md)** (the living

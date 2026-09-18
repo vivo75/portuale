@@ -9,9 +9,14 @@ notes under
 
 Rules that apply to every task: take expected output from real Portage
 (container bed, host `emerge`, or an upstream resolver test), pin it in
-`tests/test_emerge_pretend_contract.py` / `tests/test_portuale.py`, keep
-`tests/test_output_invariants.py` green, and run the full verification
-pass (`AGENTS.md` step 8). The Python mirror
+`pytests-contract-suite/test_emerge_pretend_contract.py` /
+`test_portuale.py`, keep `test_output_invariants.py` green, and run the
+full verification pass (`AGENTS.md` step 8). The suite and the container
+bed live in the sibling `pmtest` repo since 2026-09-18
+(`agent-context.md`, "Where the tests live"); `TEST/...` and `tests/...`
+paths in the entries below are the pre-move spelling of what is now
+`../pmtest/differential-test-bed/...` and
+`../pmtest/pytests-contract-suite/...`. The Python mirror
 (`python/emerge_pretend_reference.py`) was removed 2026-09-15 —
 [`second_python_copy_removal.md`](second_python_copy_removal.md); older
 entries below that say "dual-language" / "Rust==Python" describe how

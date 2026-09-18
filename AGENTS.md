@@ -27,21 +27,29 @@ the next slice") and expects the same rhythm every time:
    There is no Python mirror any more
    ([`docs/second_python_copy_removal.md`](docs/second_python_copy_removal.md)).
    A slice that changes `emerge` output takes its expected value from real
-   Portage — the container test bed (`TEST/`), this host's real `emerge`,
-   or an upstream `lib/portage/tests/resolver/` case — and says which in
-   the test's docstring. Real-execution features
+   Portage — the container test bed (`../pmtest/differential-test-bed/`),
+   this host's real `emerge`, or an upstream
+   `lib/portage/tests/resolver/` case — and says which in the test's
+   docstring. Real-execution features
    (merge/unmerge/package/fetch/phases) are checked the same way (L1–L3).
-5. **Add fixtures by hand** under `fixtures/repo/…` (+ `metadata/md5-cache/…`).
-   Check for name collisions with existing fixtures first. A fixture that
-   "passes" without isolating the new behaviour is worse than none.
-6. **Add tests**: a `CASES` entry (Rust exit code; the output invariants
-   in `tests/test_output_invariants.py` run over it automatically) *and*
-   a pinned-output test function in `tests/test_emerge_pretend_contract.py`,
-   plus a Rust unit test in the relevant crate. Real-execution features
-   get Rust fixture-driven end-to-end tests instead. If a change moves an
-   output recorded in the harvested corpus (`tests/corpus/`), the run
-   reports `corpus drift`: review it, then accept it with
-   `PORTUALE_CORPUS_BLESS=1` in the same commit.
+5. **Add fixtures by hand** under `fixtures/repo/…` (+ `metadata/md5-cache/…`)
+   — **in both trees**: this repo's `fixtures/` (read by the Rust
+   `#[cfg(test)]` tests through a compile-time path) and
+   `../pmtest/fixtures/` (read by the contract suite). Nothing syncs the
+   two. Check for name collisions with existing fixtures first. A fixture
+   that "passes" without isolating the new behaviour is worse than none.
+6. **Add tests**. The black-box suite lives in the sibling `pmtest`
+   repo (see `docs/agent-context.md`, "Where the tests live"): a `CASES`
+   entry there (Rust exit code; the output invariants in
+   `pytests-contract-suite/test_output_invariants.py` run over it
+   automatically) *and* a pinned-output test function in
+   `pytests-contract-suite/test_emerge_pretend_contract.py`, plus a Rust
+   unit test in the relevant crate **here**. Real-execution features get
+   Rust fixture-driven end-to-end tests instead. If a change moves an
+   output recorded in the harvested corpus
+   (`pytests-contract-suite/corpus/`), the run reports `corpus drift`:
+   review it, then accept it with `PORTUALE_CORPUS_BLESS=1` — in pmtest's
+   own commit, which stays separate from this repo's.
 7. **Update the docs**: append a paragraph to
    [`docs/what-this-proves.md`](docs/what-this-proves.md) (never rewrite
    prior slices' paragraphs — they are history; fix one only to correct a
@@ -49,18 +57,21 @@ the next slice") and expects the same rhythm every time:
    [`docs/scope-backlog.md`](docs/scope-backlog.md) if the slice closes or
    changes an open entry. Update other docs only if the slice makes them
    stale.
-8. **Run the full verification pass** before a slice is done:
+8. **Run the full verification pass** before a slice is done. Here:
    `cargo fmt --check`, `cargo clippy --release --all-targets` (zero
-   warnings), `cargo test --release` (whole workspace),
-   `python3 -m pytest tests -q` (whole suite). **Periodically — and
-   always after a big merge from another branch, or a change to the
-   resolver / merge-order / ebuild-phase / merge code — also run the
-   container differential test bed** (`TEST/run/l0-resolver.sh`, plus
-   `TEST/run/l1-merge-from-binpkg.sh` if merge behaviour changed). It
-   compares portuale against the real `emerge` on a real Gentoo tree and
-   is the only thing that catches regressions the fixture suite can't;
-   it's heavier, so it's not part of every slice. See
-   [`TEST/README.md`](TEST/README.md).
+   warnings), `cargo test --release` (whole workspace). Then in
+   `../pmtest`: `python3 -m pytest pytests-contract-suite -q` (whole
+   suite; it rebuilds this tree's binary itself through its registry).
+   **Periodically — and always after a big merge from another branch, or
+   a change to the resolver / merge-order / ebuild-phase / merge code —
+   also run the container differential test bed**
+   (`differential-test-bed/run/l0-resolver.sh`, plus
+   `differential-test-bed/run/l1-merge-from-binpkg.sh` if merge behaviour
+   changed, both from pmtest). It compares portuale against the real
+   `emerge` on a real Gentoo tree and is the only thing that catches
+   regressions the fixture suite can't; it's heavier, so it's not part of
+   every slice. See pmtest's `USAGE.AGENTS.md` and
+   `differential-test-bed/README.md`.
 9. **Only `git commit` / `git push` when explicitly asked** — separate,
    later requests each time, never implied by finishing a slice. Commit
    title `<what changed>: <short description>`; wrapped body explaining

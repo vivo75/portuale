@@ -1,14 +1,15 @@
 # Real-world testing: controls, triage, and the forward layers
 
-Live companion to [`../TEST/README.md`](../TEST/README.md) (the L0/L1
-operating guide) and [`scope-backlog.md`](scope-backlog.md) §I (the
+Live companion to the bed's own `README.md` (the L0/L1 operating guide,
+now [`../../pmtest/differential-test-bed/README.md`](../../pmtest/differential-test-bed/README.md)
+— see `agent-context.md`, "Where the tests live") and [`scope-backlog.md`](scope-backlog.md) §I (the
 L2–L5 one-liners). L0 (resolver parity) + L1 (merge parity) are shipped
 and run live; what follows is the information needed to *run* the bed
 correctly and to *build* the forward layers — extracted from the
 retired planning doc [`history/real-world-testing.md`](history/real-world-testing.md),
 which stays as the historical record (methodology critique, image
-specs, slice history). Nothing here duplicates `TEST/README.md`'s
-runbook, `TEST/compare/normalize.md`'s ruleset, or
+specs, slice history). Nothing here duplicates that
+runbook, `differential-test-bed/compare/normalize.md`'s ruleset, or
 [`remote-merge.md`](remote-merge.md)'s `mrg` design (cited, not copied).
 
 ## 1. What each layer checks
@@ -67,18 +68,18 @@ a run that skips one is not comparable):
 Every unexplained hard diff is triaged into exactly one of: **Portuale
 bug** (fix it, never allowlist), **Portage bug** (report upstream,
 allowlist with ticket), **environmental** (allowlist with `reason:`).
-That triage — recorded in `TEST/compare/known-divergences.yaml` and
-`TEST/findings/` — is the deliverable, not the green run.
+That triage — recorded in `pmtest/differential-test-bed/compare/known-divergences.yaml` and
+`pmtest/differential-test-bed/findings/` — is the deliverable, not the green run.
 
 ## 4. Archive-level comparison (L2 tooling spec)
 
 Complements the `$ROOT`+VDB diff; the L0/L1 bed does not need it.
 
-- `TEST/compare/gpkg-structure.sh`: per-`.gpkg.tar` structural
+- `pmtest/differential-test-bed/compare/gpkg-structure.sh`: per-`.gpkg.tar` structural
   validation — member list, path prefixes, `build-info/` file set,
   `metadata` consolidation, embedded `Manifest`, MD5 in the `Packages`
   index, multi-instance `<cat>/<pn>/<pf>-<BUILD_ID>.gpkg.tar` layout.
-- `TEST/compare/gpkg-diff.sh <a> <b>`: unpack both archives
+- `pmtest/differential-test-bed/compare/gpkg-diff.sh <a> <b>`: unpack both archives
   (gpkg's nested `image.tar` + `metadata.tar`, xpak's trailing-segment
   layout), strip the volatile set (`build-info/BUILD_TIME`,
   `build-info/BUILD_ID`, `build-info/COUNTER`,
@@ -98,7 +99,7 @@ Complements the `$ROOT`+VDB diff; the L0/L1 bed does not need it.
 ### L2 — Portuale as builder, structural + cross-install
 
 > **Status 2026-09-14: the bed is shipped and both tracks are green.**
-> `TEST/run/l2-portuale-builder.sh` +
+> `pmtest/differential-test-bed/run/l2-portuale-builder.sh` +
 > `layers/l2/*` + `compare/gpkg-structure.sh` / `gpkg-diff.sh`, with
 > `diff.py --layer l2 [--tolerate-payload]`. The `porttest` fixture
 > track is green from a clean run with every `l2-*` allowlist gone
@@ -107,7 +108,7 @@ Complements the `$ROOT`+VDB diff; the L0/L1 bed does not need it.
 > (`l2-20260914T032915Z`: cross-install direction A 0 unexplained,
 > control 0/0, payload tolerated as recorded), with #37/#38/#39/#40/#43
 > all closed. Every open finding is in
-> [`../TEST/findings/l2.md`](../TEST/findings/l2.md), adjudicated via
+> [`../../pmtest/differential-test-bed/findings/l2.md`](../../pmtest/differential-test-bed/findings/l2.md), adjudicated via
 > `known-divergences.yaml` (`layer: l2`). The steps below are the
 > original design and still describe the run.
 
@@ -168,7 +169,7 @@ diff the wreckage. Needs the deferred fixtures below
 
 ## 6. Deferred `porttest` fixtures
 
-Shipped (see `TEST/images/overlay/porttest/README.md`): `setuid`,
+Shipped (see `pmtest/differential-test-bed/images/overlay/porttest/README.md`): `setuid`,
 `hardlinks`, `symfarm`, `emptydirs`, `docs`, `installmask`,
 `phases`, `splitdebug`, `unicode`. Still to add (each an `EAPI=8`
 ebuild with a trivial `src_install`), in the order L2/L5 need them:
@@ -199,7 +200,7 @@ postinst → non-fatal handling).
 
 ## 8. Metrics (for the L3 soak and trend tracking)
 
-Per run, `TEST/logs/metrics/<date>-<layer>.json`: `parity_rate`
+Per run, `pmtest/differential-test-bed/logs/metrics/<date>-<layer>.json`: `parity_rate`
 (packages with zero unexplained diff / total), divergences grouped by
 `diff.py` category and package, `allowlist_hits` (plus allowlist
 entries that matched nothing — removal candidates), wall time per

@@ -2,8 +2,9 @@
 
 What real portage does that portuale doesn't, the standing non-goals, and
 the honest distance to a drop-in replacement. Expected behaviour comes
-from real Portage (the `TEST/` beds, the host's `emerge`, upstream
-resolver tests). The second Python copy of the resolver
+from real Portage (the differential beds, now in the sibling `pmtest`
+repo — `agent-context.md`, "Where the tests live" — the host's `emerge`,
+upstream resolver tests). The second Python copy of the resolver
 (`python/emerge_pretend_reference.py`) was **removed 2026-09-15**
 ([`second_python_copy_removal.md`](second_python_copy_removal.md)); its
 checks were replaced by output invariants, determinism runs, a
@@ -26,7 +27,7 @@ before trusting it.
 
 The `emerge` / `ebuild` loop is real and live — it resolves, builds,
 merges, and unmerges real Gentoo packages (verified end to end against a
-real tree in `TEST/`). At a capability level:
+real tree in the differential bed). At a capability level:
 
 - **`--pretend` resolution** — the full atom / slot / sub-slot / USE-dep
   grammar; `||` groups; every `*DEPEND` key; the `--update` / `--deep` /
@@ -634,7 +635,7 @@ single by design).
 ### I. Container test bed — L2–L5
 
 L0 (resolver parity) + L1 (merge parity) are shipped and run live
-(`TEST/README.md`). **L2 shipped 2026-09-13**: `layers/l2/*`,
+(`pmtest/differential-test-bed/README.md`). **L2 shipped 2026-09-13**: `layers/l2/*`,
 `TEST/run/l2-portuale-builder.sh`, `compare/gpkg-structure.sh` +
 `gpkg-diff.sh`, `diff.py --layer l2/--tolerate-payload`. The `porttest`
 fixture track is green with every `l2-*` allowlist entry deleted
@@ -703,7 +704,7 @@ backend comparison.
 
 The L2 container bed (`TEST/run/l2-portuale-builder.sh`) exposed what
 portuale cannot yet produce. Evidence, repro commands and adjudications:
-[`TEST/findings/l2.md`](../TEST/findings/l2.md). The `porttest` fixture
+[`differential-test-bed/findings/l2.md`](../../pmtest/differential-test-bed/findings/l2.md). The `porttest` fixture
 track runs green modulo these (temporary `owner: portuale-bug`
 allowlist entries in `known-divergences.yaml`, `layer: l2`); the
 `l2-bpkgonly-env` (#37) and `l2-gpkg-dostrip-splitdebug`/`-docompress`
@@ -781,7 +782,8 @@ Fixed while building the bed: `l2-pkgindex-version-missing` (the
 `metadata/md5-cache` for the `porttest` overlay, which since #41 C3 is
 an L2-speed optimisation rather than a workaround -- both PMs resolve a
 cache-less repo through their ebuild fallback, and `L2_CACHELESS=1
-TEST/run/l2-portuale-builder.sh TEST/atomlists/l1-porttest.txt`
+differential-test-bed/run/l2-portuale-builder.sh
+differential-test-bed/atomlists/l1-porttest.txt` (from pmtest)
 exercises that path (`l2-no-md5-cache-ebuild-fallback`).
 
 
