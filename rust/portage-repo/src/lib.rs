@@ -12524,14 +12524,27 @@ pub enum BlockerSatisfiedBy {
     /// the inline `b` for this shape exactly when the replacement waits
     /// on the owner's merge (p2c/p2d/p2e), never otherwise (flat p2b).
     Replacement { cp: (String, String), slot: String },
-    /// An uninstall task resolves the block: the installed match survives
-    /// as the graph's blocked instance and is removed instead of being
-    /// replaced (real's `scheduled_uninstalls`/`_blocker_uninstalls`
-    /// path). Reserved: #72 B2c/B3/B4 classify these arms (the uninstall
-    /// target's cpv is the D1 `PretendOutcome::Uninstall` entry's own
-    /// cpv, so B1 deliberately does not guess it) and B4 renders its
-    /// `[uninstall]` row and the inline `b`.
-    Uninstall { cpv: String },
+    /// An uninstall task resolves the block: `cpv` is the installed
+    /// package real's `operation="uninstall"` task removes, and is the
+    /// `PretendOutcome::Uninstall` entry's own cpv. Two arms produce one
+    /// (`_validate_blockers`' `depends_on_order` step):
+    ///
+    /// - a **merging** owner with an installed match removes the match
+    ///   (`depends_on_order.add((pkg, parent))`, `depgraph.py:9195-9197`);
+    ///   `anchor` is then the owner.
+    /// - a **nomerge** (installed) owner whose blocker meets a merge-bound
+    ///   package removes the *owner* (`depends_on_order.add((parent,
+    ///   pkg))`, `:9204-9206`); `anchor` is the merge-bound blocked
+    ///   instance. #77 A1 adds this arm (the vdb-scan owner is never
+    ///   walked, so its row rides its own removal entry).
+    Uninstall {
+        cpv: String,
+        /// Real's `inst_task` (`:9226-9242`): the `cat/pkg` the removal is
+        /// ordered after. `merge_order::build_digraph`'s dedicated
+        /// `Uninstall.required_by` pass adds the owner-first edge, so this
+        /// is exactly which side must be selected before the removal.
+        anchor: (String, String),
+    },
 }
 
 /// A blocker atom (from a package's own dependency strings) that matches
@@ -14759,6 +14772,15 @@ struct PendingBlocker {
     /// `entries` when the owner is in the graph (an installed argument
     /// walked through `enqueue_flat_deps` is a `nomerge` node).
     owner_merging: bool,
+    /// #77 A1: `true` when this blocker came from the all-installed-
+    /// packages runtime-dep scan (`collect_unwalked_installed_blockers`,
+    /// real `_validate_blockers`' `for pkg in vardb` loop,
+    /// `depgraph.py:8919-9078`). That owner is the **vardb `Package`**,
+    /// always `operation == "nomerge"` and a distinct instance from any
+    /// same-cp merge entry, so `resolve_blockers` must not override its
+    /// nomerge state from the cp's entry the way it does for a walked
+    /// owner.
+    owner_installed: bool,
 }
 
 /// #68 S1 (2026-09-16): an installed match whose slot is targeted by a
@@ -14873,17 +14895,19 @@ fn owner_set_parent(
 /// #68/#72 B3: the `GraphEntry` real `_validate_blockers` models as a
 /// `Package(operation="uninstall")` task (`depgraph.py:9226-9246`): an
 /// installed package a blocker resolves by removing. `version` is the
-/// installed version being removed and `required_by` names the blocker
-/// owner(s) that pull the removal in; `merge_order::build_digraph` gives
-/// it its dedicated after-the-owner edge, and every merge/scheduling
-/// site treats it as a non-merge (`PretendOutcome::Uninstall`'s own doc
-/// comment). `deps` stays empty -- the removal has no dependency walk.
+/// installed version being removed and `required_by` names the ordering
+/// anchor(s) (`BlockerSatisfiedBy::Uninstall::anchor`): the blocker owner
+/// for a merging owner, the merge-bound blocked instance for a nomerge
+/// one. `merge_order::build_digraph` gives the removal its dedicated
+/// after-the-anchor edge, and every merge/scheduling site treats it as a
+/// non-merge (`PretendOutcome::Uninstall`'s own doc comment). `deps` stays
+/// empty -- the removal has no dependency walk.
 fn uninstall_entry(
     root: &Path,
     category: String,
     package: String,
     version: String,
-    owners: Vec<(String, String)>,
+    anchors: Vec<(String, String)>,
 ) -> GraphEntry {
     // The removed instance's own slot/sub-slot/repo, so `-pv` decorates
     // the row the way real's vardb-backed uninstall `Package` does
@@ -14908,7 +14932,7 @@ fn uninstall_entry(
         fetch_restrict: false,
         fetch_restrict_satisfied: false,
         download_files: Vec::new(),
-        required_by: owners,
+        required_by: anchors,
         source: CandidateSource::Ebuild,
         provenance: VisibilityProvenance::default(),
         keyword_suggestion: None,
@@ -14921,26 +14945,38 @@ fn uninstall_entry(
     }
 }
 
-/// Working set for `file_blocker_conflicts`: one removed `cpv` and every
-/// owner that pulled it in.
+/// Working set for `file_blocker_conflicts`: one removed `cpv`, its
+/// ordering anchor(s) and the blocker rows that ride it when the owner
+/// has no entry of its own (#77).
 struct PendingRemoval {
     category: String,
     package: String,
     version: String,
-    owners: Vec<(String, String)>,
+    anchors: Vec<(String, String)>,
+    /// #77 A1: rows whose owner is absent from `entries` (the
+    /// all-installed-packages scan's vardb `Package`). Real appends the
+    /// solved blocker when the uninstall node is selected
+    /// (`depgraph.py:10351-10358`), so the removal entry carries them and
+    /// `blocker_row_disposition`'s `Uninstall` arm prints them inline
+    /// right after its `[uninstall]` row.
+    blockers: Vec<BlockerConflict>,
 }
 
 /// File each blocker conflict on its owner entry and append the
 /// `Uninstall` removal entries (#68/#72 B3) the satisfied
-/// `satisfied_by: Uninstall` rows describe. The old filing loop dropped
-/// a conflict whose owner is absent from `entries` (the solver-bridge
-/// path); that stays, and no removal is fabricated for such a row (the
-/// owner is the removal's ordering anchor).
+/// `satisfied_by: Uninstall` rows describe.
 ///
-/// One removal entry per removed `cpv`, carrying every owner that pulled
-/// it in -- real creates one uninstall task per `(parent, blocked)` pair
-/// in `_validate_blockers`, but the merge list's uninstall node is the
-/// installed package itself.
+/// A conflict whose owner is absent from `entries` keeps its row only
+/// when it resolves by a removal: the removal entry is then the row's
+/// home (#77 A1, the vdb-scan nomerge owner). Any other absent-owner row
+/// (the solver-bridge path, or an unresolved B row) is still dropped --
+/// real prints unresolved rows in its trailing group, but portuale has
+/// no owner entry to hang them on yet (named cut).
+///
+/// One removal entry per removed `cpv`, carrying every ordering anchor
+/// and row that pulled it in -- real creates one uninstall task per
+/// `(parent, blocked)` pair in `_validate_blockers`, but the merge list's
+/// uninstall node is the installed package itself.
 fn file_blocker_conflicts(
     entries: &mut Vec<GraphEntry>,
     root: &Path,
@@ -14948,18 +14984,42 @@ fn file_blocker_conflicts(
 ) {
     let mut removals: Vec<PendingRemoval> = Vec::new();
     for (owner_key, conflict) in conflicts {
-        let removal_cpv = match &conflict.satisfied_by {
-            Some(BlockerSatisfiedBy::Uninstall { cpv }) => Some(cpv.clone()),
+        let removal = match &conflict.satisfied_by {
+            Some(BlockerSatisfiedBy::Uninstall { cpv, anchor }) => {
+                Some((cpv.clone(), anchor.clone()))
+            }
             _ => None,
         };
-        let Some(entry) = entries
+        if let Some(entry) = entries
             .iter_mut()
             .find(|e| (e.category.clone(), e.package.clone()) == owner_key)
-        else {
+        {
+            entry.blockers.push(conflict);
+        } else if let Some((cpv, _)) = &removal {
+            // #77 A1: no owner entry -- attach the row to its removal.
+            let Some((category, package, version)) = split_cpv(cpv) else {
+                continue;
+            };
+            if let Some(removal) = removals
+                .iter_mut()
+                .find(|r| r.category == category && r.package == package && r.version == version)
+            {
+                removal.blockers.push(conflict);
+            } else {
+                removals.push(PendingRemoval {
+                    category,
+                    package,
+                    version,
+                    anchors: Vec::new(),
+                    blockers: vec![conflict],
+                });
+            }
+        } else {
+            continue;
+        }
+        let Some((cpv, anchor)) = removal else {
             continue;
         };
-        entry.blockers.push(conflict);
-        let Some(cpv) = removal_cpv else { continue };
         let Some((category, package, version)) = split_cpv(&cpv) else {
             continue;
         };
@@ -14968,23 +15028,161 @@ fn file_blocker_conflicts(
             .find(|r| r.category == category && r.package == package && r.version == version)
         {
             Some(removal) => {
-                if !removal.owners.contains(&owner_key) {
-                    removal.owners.push(owner_key);
+                if !removal.anchors.contains(&anchor) {
+                    removal.anchors.push(anchor);
                 }
             }
             None => removals.push(PendingRemoval {
                 category,
                 package,
                 version,
-                owners: vec![owner_key],
+                anchors: vec![anchor],
+                blockers: Vec::new(),
             }),
         }
     }
-    entries.extend(
-        removals
-            .into_iter()
-            .map(|r| uninstall_entry(root, r.category, r.package, r.version, r.owners)),
-    );
+    entries.extend(removals.into_iter().map(|r| {
+        let mut entry = uninstall_entry(root, r.category, r.package, r.version, r.anchors);
+        entry.blockers = r.blockers;
+        entry
+    }));
+}
+
+/// #77 A1: real `_validate_blockers`' collection step -- "Pull in blockers
+/// from all installed packages that haven't already been pulled into the
+/// depgraph, in order to ensure that they are respected (bug 128809)"
+/// (`depgraph.py:8919-9078`). For every installed instance the walk never
+/// reached, the recorded runtime deps (`Package._runtime_keys` =
+/// `IDEPEND PDEPEND RDEPEND`, `depgraph.py:8923`) are flattened and every
+/// blocker token becomes a [`PendingBlocker`] owned by that vardb
+/// `Package` (`:9071-9078`): `operation == "nomerge"`, a distinct parent
+/// from any same-cp merge entry. A0 (`TEST/findings/l0.md` "#77 A0")
+/// captures the shape: installed `bparent-1.0` absent from the run's graph
+/// still uninstall-orders itself against the merge-bound `blocked-1.5`.
+///
+/// The dynamic-deps view and USE evaluation are exactly
+/// `enqueue_dependencies`' (live ebuild metadata plus the vdb's built
+/// `:=` atoms appended, flattened against the recorded vdb USE;
+/// `installed_dep_string` falls back to the raw record when the version
+/// is no longer in the tree, real `_DynamicDepsNotApplicable`). The
+/// disjunction closures are the same shared helpers, so a `||` branch is
+/// resolved exactly as the walk would.
+///
+/// v1 approximations, both deliberate: an installed instance whose
+/// `cat/pkg` already has an entry is skipped (real keys its reuse branch
+/// `pkg_deps_added` per instance -- portuale's cp-keyed entries cannot
+/// tell two slots apart here), and only the target root is scanned (real
+/// iterates every tree; portuale's running-root split is the separate
+/// `root_deps_running_root` concern).
+#[allow(clippy::too_many_arguments)]
+fn collect_unwalked_installed_blockers(
+    repos: &[RepoConfig],
+    root: &Path,
+    config: &portage_profile::Config,
+    dynamic_deps: bool,
+    ignore_built_slot_operator_deps: bool,
+    disj_constraints: &HashMap<(String, String), Vec<String>>,
+    root_deps_running_root: Option<&Path>,
+    entries: &[GraphEntry],
+    pending_blockers: &mut Vec<PendingBlocker>,
+    installed_meta_memo: &mut HashMap<(String, String, String, String), String>,
+) {
+    for pkg in all_installed_packages(root) {
+        // Already walked (any outcome): the walk's own blockers are
+        // pending, and the cp-keyed owner lookup in `resolve_blockers`
+        // ties them to the right entry.
+        if entries
+            .iter()
+            .any(|e| e.category == pkg.category && e.package == pkg.package)
+        {
+            continue;
+        }
+        let pf = format!("{}-{}", pkg.package, pkg.version);
+        let live = list_candidates(repos, &pkg.category, &pkg.package)
+            .ok()
+            .and_then(|cs| {
+                cs.iter()
+                    .filter(|c| c.version == pkg.version)
+                    .max_by_key(|c| c.repo_priority)
+                    .cloned()
+            })
+            .and_then(|c| {
+                repo_aux_metadata(&c.repo_location, &pkg.category, &pf)
+                    .ok()
+                    .map(|m| (c, m))
+            });
+        let use_flags = read_vdb_flag_set(root, &pkg.category, &pkg.package, &pkg.version, "USE");
+        let mut depstr = String::new();
+        for key in ["IDEPEND", "PDEPEND", "RDEPEND"] {
+            let layer = if dynamic_deps {
+                InstalledMetaLayer::Effective
+            } else {
+                InstalledMetaLayer::Raw
+            };
+            depstr.push_str(&installed_dep_string(
+                root,
+                dynamic_deps,
+                dynamic_deps_append_enabled(),
+                ignore_built_slot_operator_deps,
+                &pkg.category,
+                &pkg.package,
+                &pkg.version,
+                live.as_ref().map(|(_, m)| m.as_ref()),
+                key,
+                layer,
+                installed_meta_memo,
+            ));
+            depstr.push(' ');
+        }
+        let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
+        let self_cp = (pkg.category.clone(), pkg.package.clone());
+        let Ok(flat_deps) = portage_use_reduce::use_reduce_flat_disjunctive(
+            &tokens,
+            &use_flags,
+            portage_use_reduce::MatchMode::Normal,
+            &mut |atoms: &[String]| {
+                disjunction_preference(
+                    repos,
+                    config,
+                    root,
+                    entries,
+                    &self_cp,
+                    disj_constraints,
+                    root_deps_running_root,
+                    atoms,
+                )
+            },
+            &mut |alts: &[Vec<String>]| {
+                promote_tied_alternative(repos, config, root, entries, disj_constraints, alts)
+            },
+        ) else {
+            continue;
+        };
+        for tok in flat_deps {
+            if tok == "||" {
+                continue;
+            }
+            if let Some(dep_atom) = portage_dep::parse_atom(&tok)
+                && dep_atom.blocker != portage_dep::Blocker::None
+            {
+                let duplicate = pending_blockers.iter().any(|p| {
+                    p.owner_key == self_cp && p.owner_version == pkg.version && p.atom_str == tok
+                });
+                if !duplicate {
+                    pending_blockers.push(PendingBlocker {
+                        atom_str: tok,
+                        strong: dep_atom.blocker == portage_dep::Blocker::Strong,
+                        target_category: dep_atom.category,
+                        target_package: dep_atom.package,
+                        owner_key: self_cp.clone(),
+                        owner_version: pkg.version.clone(),
+                        owner_merging: false,
+                        owner_installed: true,
+                    });
+                }
+            }
+        }
+    }
 }
 
 fn resolve_blockers(
@@ -15175,20 +15373,34 @@ fn resolve_blockers(
             // (New/Upgrade/Downgrade/Reinstall) merges, an installed
             // (`AlreadyInstalled`) node is a `nomerge`. The producer bit
             // is only a fallback for an owner absent from `entries` (the
-            // bridge path).
+            // bridge path). #77 A1: a blocker from the all-installed scan
+            // (`owner_installed`) is the vardb `Package` itself, always
+            // `nomerge` -- a same-cp merge entry must not override it.
             let owner_entry = entries.iter().find(|e| {
                 (e.category.as_str(), e.package.as_str())
                     == (pb.owner_key.0.as_str(), pb.owner_key.1.as_str())
             });
-            let owner_merging = owner_entry
-                .map(|e| merge_bound_version(&e.outcome).is_some())
-                .unwrap_or(pb.owner_merging);
+            let owner_merging = if pb.owner_installed {
+                false
+            } else {
+                owner_entry
+                    .map(|e| merge_bound_version(&e.outcome).is_some())
+                    .unwrap_or(pb.owner_merging)
+            };
+            // The owner instance's own slot, from its entry when walked,
+            // from the vdb when the scan produced it (the owner may have
+            // no entry at all).
+            let owner_slot = if pb.owner_installed {
+                Some(read_vdb_slot(root, &pb.owner_key.0, &pb.owner_key.1, &pb.owner_version).0)
+            } else {
+                owner_entry.and_then(|e| e.slot.clone())
+            };
             // Soft same-slot skip (cell h): real skips a soft blocker
             // whose target slot is the owner's own slot; a strong `!!`
             // blocker is exempt.
             if !pb.strong
                 && target_key == pb.owner_key
-                && owner_entry.and_then(|e| e.slot.as_deref()) == Some(slot.as_str())
+                && owner_slot.as_deref() == Some(slot.as_str())
             {
                 continue;
             }
@@ -15227,9 +15439,22 @@ fn resolve_blockers(
                 // own parent membership (`owner_set_parent`, #73 S0 cells
                 // g/g3/g4). Parenthesised: the set term must not be
                 // reachable when `merge_bound_match` is false (T11; cell
-                // f).
-                merge_bound_match
-                    && (owner_entry.is_some_and(|e| {
+                // f). #77 A1: a scan-sourced owner has no entry, so its
+                // instance slot comes from the vdb.
+                let owner_has_parent = if pb.owner_installed {
+                    let (slot, sub_slot) =
+                        read_vdb_slot(root, &pb.owner_key.0, &pb.owner_key.1, &pb.owner_version);
+                    graph_has_parent(
+                        &pb.owner_key.0,
+                        &pb.owner_key.1,
+                        &pb.owner_version,
+                        &slot,
+                        &sub_slot,
+                        &pb.owner_key,
+                        entries,
+                    )
+                } else {
+                    owner_entry.is_some_and(|e| {
                         graph_has_parent(
                             &pb.owner_key.0,
                             &pb.owner_key.1,
@@ -15239,7 +15464,10 @@ fn resolve_blockers(
                             &pb.owner_key,
                             entries,
                         )
-                    }) || owner_set_parent(&pb.owner_key, blocker_retry_closure))
+                    })
+                };
+                merge_bound_match
+                    && (owner_has_parent || owner_set_parent(&pb.owner_key, blocker_retry_closure))
             };
             conflicts.push((
                 pb.owner_key.clone(),
@@ -15254,17 +15482,31 @@ fn resolve_blockers(
                     // (`_validate_blockers`' `operation="uninstall"`
                     // task, `depgraph.py:9226-9246`), so it names that
                     // cpv; `run_pass`/the bridge turn the tag into the
-                    // removal `GraphEntry`. The nomerge-owner arm's
-                    // satisfied row is resolved by removing the **owner**
-                    // (real `:9204-9206`, `depends_on_order.add((parent,
-                    // pkg))`) -- no oracle captures that row, so it stays
-                    // `None` (named cut, `docs/02.68-74.md` §6).
-                    satisfied_by: if !unsolvable && owner_merging {
+                    // removal `GraphEntry`. #77 A1: the nomerge-owner
+                    // arm's satisfied row is resolved by removing the
+                    // **owner** (real `:9204-9206`,
+                    // `depends_on_order.add((parent, pkg))`, own cpv from
+                    // `owner_version`), and real orders the removal after
+                    // the merge-bound blocked instance (`inst_task`,
+                    // `:9240-9242`) -- hence the anchor. The all-installed
+                    // scan that reaches this arm for an unwalked owner is
+                    // `collect_unwalked_installed_blockers`; the capture
+                    // is `TEST/findings/l0.md` "#77 A0" (n1).
+                    satisfied_by: if unsolvable {
+                        None
+                    } else if owner_merging {
                         Some(BlockerSatisfiedBy::Uninstall {
                             cpv: format!("{}/{}-{version}", pb.target_category, pb.target_package),
+                            anchor: pb.owner_key.clone(),
                         })
                     } else {
-                        None
+                        Some(BlockerSatisfiedBy::Uninstall {
+                            cpv: format!(
+                                "{}/{}-{}",
+                                pb.owner_key.0, pb.owner_key.1, pb.owner_version
+                            ),
+                            anchor: (pb.target_category.clone(), pb.target_package.clone()),
+                        })
                     },
                     unsolvable,
                 },
@@ -16715,6 +16957,9 @@ fn enqueue_flat_deps(
                 owner_key: key.clone(),
                 owner_version: version.to_string(),
                 owner_merging: true,
+                // A merged candidate's own dependency string -- not the
+                // vdb-scan producer (`collect_unwalked_installed_blockers`).
+                owner_installed: false,
             });
             continue;
         }
@@ -20786,6 +21031,25 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         !mergebound_cp_slots.contains(&(e.category.clone(), e.package.clone(), slot))
     });
 
+    // #77 A1: real's all-installed-packages blocker collection runs after
+    // the graph is complete and before `_validate_blockers` classifies
+    // (`depgraph.py:8919-9078`), and `--nodeps` is its only early exit
+    // (`:8908-8910`).
+    if !ctx.nodeps {
+        collect_unwalked_installed_blockers(
+            &ctx.repos,
+            ctx.root,
+            config,
+            ctx.dynamic_deps,
+            ctx.ignore_built_slot_operator_deps,
+            &union_constraints,
+            ctx.root_deps_running_root,
+            &state.entries,
+            &mut state.pending_blockers,
+            &mut state.installed_meta_memo,
+        );
+    }
+
     let conflicts = resolve_blockers(
         ctx.root,
         &state.pending_blockers,
@@ -22221,6 +22485,9 @@ fn enqueue_dependencies(
                 owner_key: owner_key.clone(),
                 owner_version: owner_version.clone(),
                 owner_merging: false,
+                // A walked installed owner (`enqueue_dependencies`), not
+                // the all-vdb scan producer.
+                owner_installed: false,
             });
             continue;
         }
@@ -34791,6 +35058,7 @@ mod tests {
                 // #72 B3: resolved by removing the installed match.
                 satisfied_by: Some(BlockerSatisfiedBy::Uninstall {
                     cpv: "dev-libs/samepkg-1.0".to_string(),
+                    anchor: ("dev-libs".to_string(), "blockerpkg".to_string()),
                 }),
             }]
         );
@@ -36665,6 +36933,7 @@ mod tests {
             owner_key: ("dev-libs".to_string(), "owner".to_string()),
             owner_version: "1.0".to_string(),
             owner_merging: true,
+            owner_installed: false,
         }];
         let conflicts = resolve_blockers(
             Path::new("/nonexistent-root-for-this-test"),
@@ -36703,6 +36972,7 @@ mod tests {
             owner_key: ("dev-libs".to_string(), "owner".to_string()),
             owner_version: "1.0".to_string(),
             owner_merging: true,
+            owner_installed: false,
         }];
         let conflicts = resolve_blockers(
             Path::new("/nonexistent-root-for-this-test"),
@@ -36732,6 +37002,7 @@ mod tests {
                     owner_key: ("dev-libs".to_string(), "owner".to_string()),
                     owner_version: "1.0".to_string(),
                     owner_merging: true,
+                    owner_installed: false,
                 }],
                 &entries,
                 &HashSet::new(),
@@ -36770,6 +37041,7 @@ mod tests {
             owner_key: ("dev-libs".to_string(), "bparent".to_string()),
             owner_version: "1.0".to_string(),
             owner_merging: true,
+            owner_installed: false,
         };
         let conflicts = resolve_blockers(&dir, &[pending], &[owner, upgrade], &HashSet::new());
         assert_eq!(
@@ -36801,6 +37073,7 @@ mod tests {
             owner_key: ("dev-libs".to_string(), "bparent".to_string()),
             owner_version: "1.0".to_string(),
             owner_merging: true,
+            owner_installed: false,
         };
         let conflicts = resolve_blockers(&dir, &[pending], &[owner, other_slot], &HashSet::new());
         assert_eq!(
@@ -36813,6 +37086,7 @@ mod tests {
             conflicts[0].1.satisfied_by,
             Some(BlockerSatisfiedBy::Uninstall {
                 cpv: "dev-libs/blocked-1.0".to_string(),
+                anchor: ("dev-libs".to_string(), "bparent".to_string()),
             }),
             "a different-slot installed match is removed (#72 B3)"
         );
@@ -36839,6 +37113,7 @@ mod tests {
             owner_key: ("dev-libs".to_string(), "bparent".to_string()),
             owner_version: "1.0".to_string(),
             owner_merging: true,
+            owner_installed: false,
         };
         let conflicts = resolve_blockers(&dir, &[pending], &[owner, reinstall], &HashSet::new());
         assert_eq!(
@@ -36874,6 +37149,7 @@ mod tests {
             owner_key: ("dev-libs".to_string(), owner.to_string()),
             owner_version: "1.0".to_string(),
             owner_merging: true,
+            owner_installed: false,
         };
         let installed = |pkg: &str| GraphEntry {
             outcome: PretendOutcome::AlreadyInstalled {
@@ -36952,6 +37228,7 @@ mod tests {
                 owner_key: ("dev-libs".to_string(), "bparent3".to_string()),
                 owner_version: "1.0".to_string(),
                 owner_merging: true,
+                owner_installed: false,
             }],
             &[bparent3, graph_entry("dev-libs", "blocked", "2.0")],
             &HashSet::new(),
@@ -37031,6 +37308,20 @@ mod tests {
                 .unsolvable,
             "nomerge parent, no graph parents"
         );
+        // #77 A1: the satisfied nomerge arm removes the **owner** and is
+        // ordered after the merge-bound blocked instance (`anchor`).
+        assert_eq!(
+            conflicts
+                .iter()
+                .find(|(_, c)| c.matched_version == "1.5")
+                .expect("merge-bound 1.5 row")
+                .1
+                .satisfied_by,
+            Some(BlockerSatisfiedBy::Uninstall {
+                cpv: "dev-libs/bparent-1.0".to_string(),
+                anchor: ("dev-libs".to_string(), "blocked".to_string()),
+            })
+        );
         let mut parent_walker = installed("consumer");
         parent_walker.deps = vec![edge("dev-libs", "bparent", "dev-libs/bparent")];
         let conflicts = resolve_blockers(
@@ -37097,6 +37388,7 @@ mod tests {
                 owner_key: ("dev-libs".to_string(), "blocked".to_string()),
                 owner_version: "1.0".to_string(),
                 owner_merging: true,
+                owner_installed: false,
             }],
             &[graph_entry("dev-libs", "blocked", "1.0")],
             &HashSet::new(),
@@ -37112,11 +37404,109 @@ mod tests {
                 owner_key: ("dev-libs".to_string(), "blocked".to_string()),
                 owner_version: "1.0".to_string(),
                 owner_merging: true,
+                owner_installed: false,
             }],
             &[graph_entry("dev-libs", "blocked", "1.0")],
             &HashSet::new(),
         );
         assert_eq!(strong.len(), 1, "a strong blocker is not skipped");
+    }
+
+    #[test]
+    fn resolve_blockers_tags_a_scanned_nomerge_owner_with_its_own_removal() {
+        // #77 A1 / A0 n1: the owner is the vardb `Package` the
+        // all-installed scan registered (`owner_installed: true`). It was
+        // never walked, so it has no entry -- even when the target cp's
+        // merge entry exists -- and real removes the **owner**, ordered
+        // after the merge-bound blocked instance (`inst_task`).
+        let dir = slotundo_temp_dir("blocker-77-scan");
+        slotundo_vdb(
+            &dir,
+            "bparent",
+            "1.0",
+            "0",
+            "!<dev-libs/blocked-2.0",
+            "flip",
+        );
+        slotundo_vdb(&dir, "blocked", "1.0", "0", "", "flip");
+        let pb = || PendingBlocker {
+            atom_str: "!<dev-libs/blocked-2.0".to_string(),
+            strong: false,
+            target_category: "dev-libs".to_string(),
+            target_package: "blocked".to_string(),
+            owner_key: ("dev-libs".to_string(), "bparent".to_string()),
+            owner_version: "1.0".to_string(),
+            owner_merging: false,
+            owner_installed: true,
+        };
+        let mut upgrade = graph_entry("dev-libs", "blocked", "1.5");
+        upgrade.outcome = PretendOutcome::Upgrade {
+            from: "1.0".into(),
+            to: "1.5".into(),
+        };
+        // The atom matches the installed 1.0 (replaced in-slot, a hidden
+        // `Replacement` twin) and the merge-bound 1.5.
+        let conflicts = resolve_blockers(&dir, &[pb()], &[upgrade.clone()], &HashSet::new());
+        assert_eq!(conflicts.len(), 2);
+        let removal = conflicts
+            .iter()
+            .find(|(_, c)| c.matched_version == "1.5")
+            .expect("merge-bound 1.5 row");
+        assert!(!removal.1.unsolvable);
+        assert_eq!(
+            removal.1.satisfied_by,
+            Some(BlockerSatisfiedBy::Uninstall {
+                cpv: "dev-libs/bparent-1.0".to_string(),
+                anchor: ("dev-libs".to_string(), "blocked".to_string()),
+            })
+        );
+        // `file_blocker_conflicts`: the Replacement twin (no removal) is
+        // dropped for the absent owner, the Uninstall twin creates the
+        // removal entry and the row rides it.
+        let mut entries = vec![upgrade];
+        file_blocker_conflicts(&mut entries, &dir, conflicts);
+        assert_eq!(entries.len(), 2);
+        let removal_entry = entries
+            .iter()
+            .find(|e| e.package == "bparent")
+            .expect("bparent-1.0 removal entry");
+        assert!(matches!(
+            &removal_entry.outcome,
+            PretendOutcome::Uninstall { version } if version == "1.0"
+        ));
+        assert_eq!(
+            removal_entry.required_by,
+            vec![("dev-libs".to_string(), "blocked".to_string())],
+            "ordered after the merge-bound blocked instance, not the owner"
+        );
+        assert_eq!(removal_entry.blockers.len(), 1);
+        assert_eq!(removal_entry.blockers[0].matched_version, "1.5");
+
+        // A required-set closure member (the owner is in @selected) makes
+        // the block unresolved: no tag, no fabricated removal (A0 n1b).
+        let closure: HashSet<(String, String)> =
+            [("dev-libs".to_string(), "bparent".to_string())].into();
+        let mut upgrade = graph_entry("dev-libs", "blocked", "1.5");
+        upgrade.outcome = PretendOutcome::Upgrade {
+            from: "1.0".into(),
+            to: "1.5".into(),
+        };
+        let conflicts = resolve_blockers(&dir, &[pb()], &[upgrade.clone()], &closure);
+        assert!(
+            conflicts
+                .iter()
+                .find(|(_, c)| c.matched_version == "1.5")
+                .expect("merge-bound 1.5 row")
+                .1
+                .unsolvable
+        );
+        let mut entries = vec![upgrade];
+        file_blocker_conflicts(&mut entries, &dir, conflicts);
+        assert!(
+            entries.iter().all(|e| e.package != "bparent"),
+            "an unresolved absent-owner row fabricates no removal"
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -37130,6 +37520,7 @@ mod tests {
             owner_key: ("dev-libs".to_string(), "owner".to_string()),
             owner_version: "1.0".to_string(),
             owner_merging: true,
+            owner_installed: false,
         }];
         let conflicts = resolve_blockers(
             Path::new("/nonexistent-root-for-this-test"),

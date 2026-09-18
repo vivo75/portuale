@@ -597,6 +597,7 @@ fn graph_result_from_order(
                         owner_key: (record.category.clone(), record.package.clone()),
                         owner_version: version.clone(),
                         owner_merging: true,
+                        owner_installed: false,
                     });
                 }
             }
@@ -1417,6 +1418,7 @@ mod tests {
                     unsolvable: false,
                     satisfied_by: Some(super::super::BlockerSatisfiedBy::Uninstall {
                         cpv: "dev-libs/samepkg-1.0".to_string(),
+                        anchor: ("dev-libs".to_string(), "blockerpkg".to_string()),
                     }),
                 }]
             );

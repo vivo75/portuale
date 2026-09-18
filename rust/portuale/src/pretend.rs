@@ -832,6 +832,10 @@ fn merge_bound_version(entry: &GraphEntry) -> Option<&str> {
 fn entry_display_version(entry: &GraphEntry) -> &str {
     merge_bound_version(entry).unwrap_or(match &entry.outcome {
         PretendOutcome::AlreadyInstalled { version } => version,
+        // #77 A1: an absent-owner nomerge row rides its own removal entry
+        // (the removal target **is** the owner), so the parents text is
+        // the removal's own cpv.
+        PretendOutcome::Uninstall { version } => version,
         _ => "",
     })
 }
@@ -879,7 +883,7 @@ fn blocker_row_disposition(
         // the trailing unsatisfied group). If the removal entry is
         // missing (an owner the bridge dropped) the row keeps the
         // trailing group, the pre-B4 shape.
-        Some(BlockerSatisfiedBy::Uninstall { cpv }) => {
+        Some(BlockerSatisfiedBy::Uninstall { cpv, .. }) => {
             match entries.iter().position(|e| {
                 matches!(&e.outcome, PretendOutcome::Uninstall { version }
                     if format!("{}/{}-{version}", e.category, e.package) == *cpv)
@@ -13522,6 +13526,7 @@ mod tests {
                 unsolvable: false,
                 satisfied_by: Some(BlockerSatisfiedBy::Uninstall {
                     cpv: "dev-libs/other-1.0".into(),
+                    anchor: ("dev-libs".into(), "owner".into()),
                 }),
             },
         ];
