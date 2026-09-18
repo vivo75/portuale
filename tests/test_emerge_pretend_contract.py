@@ -1505,7 +1505,7 @@ CASES = [
         0,
     ),
     (
-        "tree: the same shape flat, for the merge-order comparison (#82 / #84)",
+        "tree: the same shape flat, for the merge-order comparison (#82 / #85)",
         ["--pretend", "-v", "dev-libs/treeslotuser"],
         0,
     ),
