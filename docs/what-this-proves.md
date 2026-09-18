@@ -17171,3 +17171,25 @@ TEST/run/l0-fixture-oracle.sh
 ```
 
 Evidence: `TEST/findings/l0.md` "#77 A0"–"#77 A3"; plan `docs/02.75-79.md` Phase A. The unresolved half of the same scan (an absent owner's `[blocks B]` row) is filed as backlog #80.
+
+**The satisfied-blocker wait predicate follows the `|| ( … )` branch the run actually kept (backlog #76, 2026-09-18).** Phase D's B2 pinned the wait predicate to the mechanism (`depgraph.py:9998`/`:10190`/`:10351-10358`) but skipped every `alt` edge, because real resolves one `||` branch through `dep_zapdeps` during graph construction while the predicate models the serializer, which only ever sees the collapsed edge. B0's container capture settled it: with `blocked-2.0`'s dependency on the owner's merge routed through `|| ( … )` — the wait branch first (q1), the installed-satisfied branch losing to the in-graph one (q2, `dep_zapdeps`' all-in-graph bin), and the `RDEPEND` control (q3) — real prints the satisfied `[blocks b]` row and `Conflict: 1 block (all satisfied)`, and the `sys.settrace` dump shows the same stuck-serializer path as a direct edge (retlist's satisfied `Blocker` right after `blocked-2.0`, `scheduled_uninstalls=[blocked-1.0]`). B1 factored `build_digraph`'s branch selection into a shared prelude so `kept_alt_branches` and its internal use cannot drift (the #53 circular-self-branch exclusion included), and B2 makes `replacement_wait_index` follow kept alternatives exactly like plain edges while still skipping suppressed ones.
+
+```sh
+# the committed fixture: the replacement waits through the kept || branch
+PORTAGE_CONFIGROOT=$PWD/fixtures ROOT=$PWD/fixtures PORTAGE_RUNNING_ROOT=$PWD/fixtures \
+  DISTDIR=$PWD/fixtures/distfiles rust/target/release/portuale emerge -p =dev-libs/disjtarget-2.0
+# -> [ebuild     U  ] dev-libs/disjowner-1.1 [1.0]
+#    [ebuild     U  ] dev-libs/disjtarget-2.0 [1.0]
+#    [blocks b      ] <dev-libs/disjtarget-2.0 ("<dev-libs/disjtarget-2.0" is soft blocking dev-libs/disjowner-1.1)
+
+# the pinned cells (row/counters; the kept and suppressed branch cases)
+python3 -m pytest tests -q -k 76_wait
+# -> 1 passed
+
+# the host-exact bed cell (q1's BDEPEND splits across roots under the
+# default bed's ROOT=$FX -- B0b's staging artifact)
+FX_HOST_ROOTS=1 TEST/run/l0-fixture-oracle.sh TEST/atomlists/l0-fixture-oracle-host.txt
+# -> 1 probe, 1 clean, 0 unexplained
+```
+
+Evidence: `TEST/findings/l0.md` "#76 B0"–"#76 B3"; plan `docs/02.75-79.md` Phase B; backlog #76 (done).

@@ -1484,6 +1484,11 @@ CASES = [
         ["--pretend", "=dev-libs/nomtarget-1.5"],
         0,
     ),
+    (
+        "blocker: a satisfied replacement waits through the selected || branch (#76 B0 q1)",
+        ["--pretend", "=dev-libs/disjtarget-2.0"],
+        0,
+    ),
     ("overlay: package exists only in the overlay repo", ["--pretend", "dev-libs/overlayonlypkg"], 0),
     ("overlay: best version wins across repos", ["--pretend", "dev-libs/overlaynewerpkg"], 0),
     ("overlay: same-version tie broken toward higher priority", ["--pretend", "dev-libs/overlaytiepkg"], 0),
@@ -17181,6 +17186,56 @@ def test_oracle_77_nomerge_owner_removal_row(emerge_binary, fixture_env, tmp_pat
     )
     assert "Conflict: 1 block (1 unsatisfied)" in control.stdout
     assert "installed at the same time" in control.stderr
+
+
+def test_oracle_76_wait_follows_the_selected_disjunctive_branch(emerge_binary, fixture_env):
+    """Backlog #76 B0 q1/B2: a satisfied replacement's wait chain through
+    a `|| ( … )` group follows the branch `dep_zapdeps` kept.
+
+    `disjtarget-2.0`'s `BDEPEND="|| ( ~dev-libs/disjowner-1.1
+    dev-libs/absent )"` has only the owner-merge branch satisfiable, so
+    the group collapses to it; `disjowner-1.1`'s own
+    `RDEPEND="!<dev-libs/disjtarget-2.0"` soft-blocks the installed
+    `disjtarget-1.0` that the merge replaces in-slot. Real's serializer
+    is stuck on the kept edge and appends the solved blocker after
+    `disjtarget-2.0` (container oracle, real 3.0.82.2, host-exact roots
+    per `TEST/findings/l0.md` "#76 B0" q1; the sys.settrace dump shows
+    the retlist's satisfied `Blocker` and
+    `scheduled_uninstalls=[disjtarget-1.0]`). The same shape under the
+    bed's default `ROOT=$FX` splits real's `BDEPEND` across two trees
+    (the B0b staging artifact), so the permanent bed cell lives in
+    `TEST/atomlists/l0-fixture-oracle-host.txt` and is run with
+    `FX_HOST_ROOTS=1`; this pin uses the shared fixture root, where
+    portuale's logical target-root state is the host-exact one.
+    """
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "=dev-libs/disjtarget-2.0"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild     U  ] dev-libs/disjowner-1.1 [1.0]",
+        "[ebuild     U  ] dev-libs/disjtarget-2.0 [1.0]",
+        '[blocks b      ] <dev-libs/disjtarget-2.0 ("<dev-libs/disjtarget-2.0" is '
+        "soft blocking dev-libs/disjowner-1.1)",
+    ], result.stdout
+
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "-v", "=dev-libs/disjtarget-2.0"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild     U  ] dev-libs/disjowner-1.1::testrepo [1.0::testrepo]",
+        "[ebuild     U  ] dev-libs/disjtarget-2.0::testrepo [1.0::testrepo]",
+        '[blocks b      ] <dev-libs/disjtarget-2.0 ("<dev-libs/disjtarget-2.0" is '
+        "soft blocking dev-libs/disjowner-1.1)",
+        "",
+        "Total: 2 packages (2 upgrades), Size of downloads: 0 KiB",
+        "Conflict: 1 block (all satisfied)",
+    ], result.stdout
 
 
 _B0B_BPARENT_1_1 = """EAPI=8

@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: disjunctive wait-chain replacement (#76 B0 q1)
+EAPI=8
+BDEPEND=|| ( ~dev-libs/disjowner-1.1 dev-libs/absent )
+KEYWORDS=amd64
+SLOT=0
+_md5_=422a7c150389be37ed56b1ec2d4f23f5

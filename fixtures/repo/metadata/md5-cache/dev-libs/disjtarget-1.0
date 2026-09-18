@@ -1,0 +1,6 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: disjunctive wait-chain blocked target, older version (#76 B0)
+EAPI=8
+KEYWORDS=amd64
+SLOT=0
+_md5_=00121516248033d309489bc7c3ea75f9
