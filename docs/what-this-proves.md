@@ -17193,3 +17193,25 @@ FX_HOST_ROOTS=1 TEST/run/l0-fixture-oracle.sh TEST/atomlists/l0-fixture-oracle-h
 ```
 
 Evidence: `TEST/findings/l0.md` "#76 B0"–"#76 B3"; plan `docs/02.75-79.md` Phase B; backlog #76 (done).
+
+**Tree mode now lays blocker and removal rows out exactly where real's `_tree_display` puts them (backlog #75 display half, 2026-09-18).** Phase D had pinned the flat placement but tree mode still used the flat predicate *and* the flat layout. C0's oracle matrix captured every row kind in tree mode (u1, u6, n5, p2c, p2b, the disjunctive q1-t, `--tree --unordered-display`) plus the flat-vs-tree `sys.settrace` dumps, and showed the two halves clearly: `output_helpers.py::_tree_display` (`:341-407`) rewrites the serializer's blocker edges — `Package -> Blocker -> Uninstall` (`:377-390`), `upgrade_node -> blocker` for a replacement that removed the uninstall (`:392-398`) — before `_ordered_tree_display` (`:434-495`) walks the reversed merge list with real's `depth`-space indent, rendering a merge node met as an ancestor through `_set_no_columns`' non-merge arm as `[nomerge       ]`; and tree mode's serializer itself differs (no greedy leaf pop), which is a scheduling effect C2 owns. C1 ports the display half over a virtual graph of entries and satisfied blocker rows (kept `||` branches via `kept_alt_branches`, the #77 absent-owner row already on its removal, deps-less synthetic entries falling back to `required_by`); C2 then stopped per its own rule because p2b's tree-only row needs `scheduled_uninstalls` as serializer state, filed as backlog #81.
+
+```sh
+# the deterministic tree layouts, run from the repo root
+PORTAGE_CONFIGROOT=$PWD/fixtures ROOT=$PWD/fixtures PORTAGE_RUNNING_ROOT=$PWD/fixtures \
+  DISTDIR=$PWD/fixtures/distfiles rust/target/release/portuale emerge -p --tree dev-libs/blockerpkg
+# -> [nomerge       ] dev-libs/blockerpkg-1.0
+#    [blocks b      ]  dev-libs/samepkg ("dev-libs/samepkg" is hard blocking dev-libs/blockerpkg-1.0)
+#    [uninstall     ]   dev-libs/samepkg-1.0
+#    [ebuild  N     ] dev-libs/blockerpkg-1.0
+
+# the pinned cells (u1 + the #77 nomerge-owner chain n5)
+python3 -m pytest tests -q -k 75_tree
+# -> 1 passed
+
+# the bed, including the four new tree cells: 25 probes / 20 clean / 17 explained / 0 unexplained
+TEST/run/l0-fixture-oracle.sh
+# -> rc 0
+```
+
+Evidence: `TEST/findings/l0.md` "#75 C0"–"#75 C4"; plan `docs/02.75-79.md` Phase C; backlog #75 (`DONE-PARTIAL`) and #81 (the tree-mode serializer residue).
