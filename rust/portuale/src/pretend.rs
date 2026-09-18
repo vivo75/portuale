@@ -860,18 +860,44 @@ enum BlockerRowDisposition {
     Inline(usize),
 }
 
+/// #82: the kept-`||`-branch set for one display list, derived once and
+/// shared by every disposition call below. `replacement_wait_index` used
+/// to derive it on every call, so a list with N `Replacement` rows paid
+/// the O(graph) derivation ~3N times (once per row in each of
+/// `collect_inline_blocker_lines`, `trailing_blocker_lines` and
+/// `count_blocker_rows`). The derivation itself is untouched -- still the
+/// one `suppressed_alt_edges` ranking `build_digraph` shares -- only its
+/// placement moved. Empty when no row can consult it (no `Replacement`
+/// arm present), so a graph with no such row never pays for the
+/// derivation; `replacement_wait_index` treats a missing entry as
+/// "suppressed" via `get`, so the empty case cannot panic.
+fn kept_alt_for_display(entries: &[GraphEntry], root: &Path) -> Vec<HashSet<usize>> {
+    let has_replacement_row = entries.iter().any(|e| {
+        e.blockers
+            .iter()
+            .any(|b| matches!(b.satisfied_by, Some(BlockerSatisfiedBy::Replacement { .. })))
+    });
+    if has_replacement_row {
+        portage_repo::kept_alt_branches(entries, root)
+    } else {
+        Vec::new()
+    }
+}
+
 /// #68/#72 B2: the display disposition of one blocker row. `entries` is
 /// the display-ordered list, `owner_index` the entry carrying `b`, and
-/// `root` the vdb root the `satisfied` check reads.
+/// `root` the vdb root the `satisfied` check reads. `kept_alt` is the
+/// display list's shared set from [`kept_alt_for_display`].
 fn blocker_row_disposition(
     entries: &[GraphEntry],
     root: &Path,
     owner_index: usize,
     b: &BlockerConflict,
+    kept_alt: &[HashSet<usize>],
 ) -> BlockerRowDisposition {
     match &b.satisfied_by {
         Some(BlockerSatisfiedBy::Replacement { .. }) => {
-            match replacement_wait_index(entries, root, owner_index, b) {
+            match replacement_wait_index(entries, root, owner_index, b, kept_alt) {
                 Some(index) => BlockerRowDisposition::Inline(index),
                 None => BlockerRowDisposition::Hidden,
             }
@@ -930,8 +956,7 @@ fn blocker_row_disposition(
 /// disjunctive `BDEPEND` and an `RDEPEND` group, q1/q2/q3 in
 /// `TEST/findings/l0.md` "#76 B0").
 ///
-/// Intermediate hops are matched by **cp**, not per instance (T10):
-/// `DepEdge` carries no resolved slot, real's `_create_graph` resolves
+/// Intermediate hops are matched by **cp**, not per instance (T10):/// `DepEdge` carries no resolved slot, real's `_create_graph` resolves
 /// each atom to one package and `build_digraph` narrows with its own
 /// `edge_matches`, so a cp with two merging slots could over-connect
 /// here -- i.e. the predicate can only *over-find* a wait (show a row
@@ -943,6 +968,7 @@ fn replacement_wait_index(
     root: &Path,
     owner_index: usize,
     b: &BlockerConflict,
+    kept_alt: &[HashSet<usize>],
 ) -> Option<usize> {
     let Some(BlockerSatisfiedBy::Replacement { cp, slot }) = &b.satisfied_by else {
         return None;
@@ -961,10 +987,12 @@ fn replacement_wait_index(
     }) {
         return None;
     }
-    // #76 B2: the alternatives real's serializer actually sees. Computed
-    // once, after the early returns, so a graph with no Replacement row
-    // never pays for the derivation.
-    let kept_alt = portage_repo::kept_alt_branches(entries, root);
+    // #76 B2: the alternatives real's serializer actually sees are the
+    // display list's shared kept set (#82 `kept_alt_for_display`): a wait
+    // chain through a disjunctive edge is a wait exactly when that edge's
+    // branch was the kept one. A missing entry reads as suppressed, so an
+    // empty set (no `Replacement` row could have produced this call other
+    // than a direct test) hides the row.
     let mut stack = vec![replacement];
     let mut seen: HashSet<usize> = HashSet::from([replacement]);
     while let Some(i) = stack.pop() {
@@ -972,7 +1000,7 @@ fn replacement_wait_index(
             if edge.priority.optional || edge.priority.runtime_post {
                 continue;
             }
-            if edge.alt.is_some() && !kept_alt[i].contains(&ei) {
+            if edge.alt.is_some() && !kept_alt.get(i).is_some_and(|kept| kept.contains(&ei)) {
                 continue;
             }
             for (j, candidate) in entries.iter().enumerate() {
@@ -1088,11 +1116,13 @@ fn trailing_blocker_lines(
     color: &Colorizer,
 ) -> Vec<String> {
     let entry = &entries[owner_index];
+    // #82: one kept-branch derivation for the whole owner scan.
+    let kept_alt = kept_alt_for_display(entries, root);
     entry
         .blockers
         .iter()
         .filter(|b| {
-            blocker_row_disposition(entries, root, owner_index, b)
+            blocker_row_disposition(entries, root, owner_index, b, &kept_alt)
                 == BlockerRowDisposition::Trailing
                 && !(columns && !b.unsolvable)
         })
@@ -1117,11 +1147,13 @@ fn collect_inline_blocker_lines(
     if columns {
         return Vec::new();
     }
+    // #82: one kept-branch derivation for the whole display list.
+    let kept_alt = kept_alt_for_display(entries, root);
     let mut out: Vec<(usize, String)> = Vec::new();
     for (owner_index, entry) in entries.iter().enumerate() {
         for b in &entry.blockers {
             if let BlockerRowDisposition::Inline(after) =
-                blocker_row_disposition(entries, root, owner_index, b)
+                blocker_row_disposition(entries, root, owner_index, b, &kept_alt)
             {
                 out.push((after, format_blocker_row(entry, !quiet, "", color, b)));
             }
@@ -1139,9 +1171,11 @@ fn collect_inline_blocker_lines(
 fn count_blocker_rows(entries: &[GraphEntry], root: &Path) -> (u64, u64) {
     let mut blocks = 0u64;
     let mut unsolvable = 0u64;
+    // #82: one kept-branch derivation for the whole counter scan.
+    let kept_alt = kept_alt_for_display(entries, root);
     for (owner_index, entry) in entries.iter().enumerate() {
         for b in &entry.blockers {
-            if blocker_row_disposition(entries, root, owner_index, b)
+            if blocker_row_disposition(entries, root, owner_index, b, &kept_alt)
                 == BlockerRowDisposition::Hidden
             {
                 continue;
@@ -1567,8 +1601,13 @@ fn print_entry_line(
             // appends those inline on a *scheduled uninstall*, #72), so
             // only `unsolvable` trailing rows are collected here.
             for b in entry.blockers.iter().filter(|b| {
+                // Only `unsolvable` rows reach this filter, and an
+                // unresolved row never carries a `Replacement` arm
+                // (`satisfied_by` is `None` when `unsolvable`), so the
+                // wait predicate cannot fire here: the empty kept set is
+                // sufficient and costs nothing (#82).
                 b.unsolvable
-                    && blocker_row_disposition(entries, root, index, b)
+                    && blocker_row_disposition(entries, root, index, b, &[])
                         == BlockerRowDisposition::Trailing
             }) {
                 blocker_lines.push(format_blocker_row(entry, !quiet, "", color, b));
@@ -1885,10 +1924,12 @@ fn print_tree(
     // the blocker, and the blocker under the row's owner (unless the row
     // already lives on that same removal entry -- the #77 absent-owner
     // arm, whose owner is real's non-node vardb `Package`).
+    // #82: one kept-branch derivation for the whole node walk.
+    let kept_alt = kept_alt_for_display(entries, root);
     for (owner, entry) in entries.iter().enumerate() {
         for (index, b) in entry.blockers.iter().enumerate() {
             let BlockerRowDisposition::Inline(after) =
-                blocker_row_disposition(entries, root, owner, b)
+                blocker_row_disposition(entries, root, owner, b, &kept_alt)
             else {
                 continue;
             };
@@ -13959,6 +14000,87 @@ mod tests {
             collect_inline_blocker_lines(&entries, Path::new("/nonexistent"), false, false, &nc)
                 .is_empty(),
             "a suppressed wait branch is not followed"
+        );
+    }
+
+    #[test]
+    fn kept_alt_for_display_is_derived_once_and_shared() {
+        // #82: the display list's shared kept set must equal the
+        // per-call `kept_alt_branches` derivation it replaces, and must
+        // be empty (free) when no `Replacement` row can consult it.
+        let root = Path::new("/nonexistent");
+        let plain = entry_with_use(
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+            "",
+            "",
+        );
+        assert!(
+            kept_alt_for_display(&[plain], root).is_empty(),
+            "no Replacement row means no derivation"
+        );
+
+        let mut owner = entry_with_use(
+            PretendOutcome::Upgrade {
+                from: "1.0".into(),
+                to: "1.1".into(),
+            },
+            "",
+            "",
+        );
+        owner.package = "bparent".into();
+        let blocker = BlockerConflict {
+            atom_str: "!<dev-libs/blocked-2.0".into(),
+            strong: false,
+            matched_category: "dev-libs".into(),
+            matched_package: "blocked".into(),
+            matched_version: "1.0".into(),
+            unsolvable: false,
+            satisfied_by: Some(BlockerSatisfiedBy::Replacement {
+                cp: ("dev-libs".into(), "blocked".into()),
+                slot: "0".into(),
+            }),
+        };
+        owner.blockers = vec![blocker.clone()];
+        let mut replacement = entry_with_use(
+            PretendOutcome::Upgrade {
+                from: "1.0".into(),
+                to: "2.0".into(),
+            },
+            "",
+            "",
+        );
+        replacement.package = "blocked".into();
+        replacement.deps = vec![portage_repo::DepEdge {
+            atom: "~dev-libs/bparent-1.1".to_string(),
+            category: "dev-libs".into(),
+            package: "bparent".into(),
+            priority: portage_repo::DepPriority {
+                runtime: true,
+                ..portage_repo::DepPriority::default()
+            },
+            disjunctive: true,
+            alt: Some((0, 0)),
+            key: 4,
+        }];
+        let entries = [owner, replacement];
+        let shared = kept_alt_for_display(&entries, root);
+        let on_demand = portage_repo::kept_alt_branches(&entries, root);
+        assert_eq!(
+            shared, on_demand,
+            "the shared set is the derivation it replaces"
+        );
+        // The predicate consults exactly the shared set: the kept branch
+        // waits on the replacement.
+        assert_eq!(
+            replacement_wait_index(&entries, root, 0, &blocker, &shared),
+            Some(1)
+        );
+        // And an empty set (no derivation) suppresses the same edge.
+        assert_eq!(
+            replacement_wait_index(&entries, root, 0, &blocker, &[]),
+            None
         );
     }
 
