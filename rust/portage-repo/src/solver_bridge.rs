@@ -645,7 +645,16 @@ fn graph_result_from_order(
         // The bridge engines have no required-set closure of their own.
         &std::collections::HashSet::new(),
     );
-    super::file_blocker_conflicts(&mut entries, &req.root, conflicts);
+    let mut orphan_blockers = Vec::new();
+    super::file_blocker_conflicts(
+        &mut entries,
+        &req.root,
+        conflicts,
+        // The bridge has no scan-collected owners of its own; orphans
+        // can still arise from walk-pending owners without entries, so
+        // they ride the same field rather than being dropped.
+        &mut orphan_blockers,
+    );
     // ABI rebuilds (H.15, last slice): an installed consumer whose
     // built `cat/pkg:S/SS=` dep no longer matches how this plan leaves
     // that slot is scheduled for a reinstall -- the walk's own
@@ -753,6 +762,7 @@ fn graph_result_from_order(
         // of the BFS walk + backtrack loop in `lib.rs`, not the bridge.
         outcome: super::ResolveOutcome::Complete,
         slot_conflicts: Vec::new(),
+        orphan_blockers,
         changed_deps_report: Vec::new(),
         buildpkgonly_deps_unsatisfied: false,
         pprovided_atoms: Vec::new(),

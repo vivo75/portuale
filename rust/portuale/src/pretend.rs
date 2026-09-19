@@ -660,6 +660,10 @@ fn package_counters_summary(
     top_level_pkgs: &HashSet<(String, String)>,
     onlydeps: bool,
     color: &Colorizer,
+    // Backlog #80: unresolved rows with no owner entry count in
+    // `Conflict:` exactly like entry-owned rows (real counts every
+    // `Blocker` node in the merge list).
+    orphans: &[portage_repo::OrphanBlocker],
 ) -> String {
     let plural = |n: u64| if n > 1 { "s" } else { "" };
     let (mut upgrades, mut downgrades, mut new, mut newslot, mut reinst) =
@@ -667,8 +671,12 @@ fn package_counters_summary(
     let (mut binary, mut interactive, mut uninst) = (0u64, 0u64, 0u64);
     // #72 B1/B2: exactly the rows the merge list carries
     // (`count_blocker_rows`), the same disposition split the line printer
-    // uses.
+    // uses -- plus the #80 orphans, which print in the same trailing
+    // group (unsolvable ones are never suppressed anywhere).
     let (blocks, blocks_unsolvable) = count_blocker_rows(entries, root);
+    let orphan_unsolvable = orphans.iter().filter(|o| o.conflict.unsolvable).count() as u64;
+    let blocks = blocks + orphans.len() as u64;
+    let blocks_unsolvable = blocks_unsolvable + orphan_unsolvable;
     let (mut restrict_fetch, mut restrict_fetch_satisfied) = (0u64, 0u64);
     let mut totalsize: u64 = 0;
     let mut fetched: HashSet<&str> = HashSet::new();
@@ -1080,7 +1088,11 @@ fn replacement_wait_index(
 /// verbosity of 2, dropped only under `--quiet` (verbosity 1), which
 /// `include_mask` carries.
 fn format_blocker_row(
-    entry: &GraphEntry,
+    // The row's owner cpv (`cat/pkg-ver`) for the trailing
+    // `("…" is … blocking <owner>)` text -- an entry's own cpv at the
+    // four entry-owned call sites, the orphan's recorded cpv for a
+    // scan-collected owner with no entry (backlog #80).
+    owner_cpv: &str,
     include_mask: bool,
     // #75 C1: real `_blockers` (`output.py:93-96`) places `self.indent`
     // between the bracket and the resolved atom, so a tree-mode row gets
@@ -1102,12 +1114,7 @@ fn format_blocker_row(
     } else {
         "soft blocking"
     };
-    let parents = format!(
-        "{}/{}-{}",
-        entry.category,
-        entry.package,
-        entry_display_version(entry)
-    );
+    let parents = owner_cpv;
     format!(
         "[{} {}{pad}] {indent}{}{}",
         color.c(style, "blocks"),
@@ -1143,7 +1150,20 @@ fn trailing_blocker_lines(
                 == BlockerRowDisposition::Trailing
                 && !(columns && !b.unsolvable)
         })
-        .map(|b| format_blocker_row(entry, include_mask, "", color, b))
+        .map(|b| {
+            format_blocker_row(
+                &format!(
+                    "{}/{}-{}",
+                    entry.category,
+                    entry.package,
+                    entry_display_version(entry)
+                ),
+                include_mask,
+                "",
+                color,
+                b,
+            )
+        })
         .collect()
 }
 
@@ -1172,7 +1192,21 @@ fn collect_inline_blocker_lines(
             if let BlockerRowDisposition::Inline(after) =
                 blocker_row_disposition(entries, root, owner_index, b, &kept_alt)
             {
-                out.push((after, format_blocker_row(entry, !quiet, "", color, b)));
+                out.push((
+                    after,
+                    format_blocker_row(
+                        &format!(
+                            "{}/{}-{}",
+                            entry.category,
+                            entry.package,
+                            entry_display_version(entry)
+                        ),
+                        !quiet,
+                        "",
+                        color,
+                        b,
+                    ),
+                ));
             }
         }
     }
@@ -1628,7 +1662,18 @@ fn print_entry_line(
                     && blocker_row_disposition(entries, root, index, b, &[])
                         == BlockerRowDisposition::Trailing
             }) {
-                blocker_lines.push(format_blocker_row(entry, !quiet, "", color, b));
+                blocker_lines.push(format_blocker_row(
+                    &format!(
+                        "{}/{}-{}",
+                        entry.category,
+                        entry.package,
+                        entry_display_version(entry)
+                    ),
+                    !quiet,
+                    "",
+                    color,
+                    b,
+                ));
             }
         }
         PretendOutcome::Uninstall { version } => {
@@ -2165,10 +2210,16 @@ fn print_tree(
                 use_unsat_deps,
             ),
             TreeNode::Blocker { owner, index } => {
+                let owner_entry = &entries[owner];
                 println!(
                     "{}",
                     format_blocker_row(
-                        &entries[owner],
+                        &format!(
+                            "{}/{}-{}",
+                            owner_entry.category,
+                            owner_entry.package,
+                            entry_display_version(owner_entry)
+                        ),
                         !quiet,
                         &indent,
                         color,
@@ -11528,11 +11579,28 @@ pub fn run(args: &[String]) -> ExitCode {
         }
         // An unsolvable blocker fails the run for a `--json` consumer's
         // `$?` check too (real `actions.py` returns 1 regardless of
-        // output format).
+        // output format) -- entry-owned rows and #80 orphans alike.
         if result
             .entries
             .iter()
             .any(|e| e.blockers.iter().any(|b| b.unsolvable))
+            || !result.orphan_blockers.is_empty()
+        {
+            return ExitCode::from(1);
+        }
+        // Backlog #62: same slot-conflict rule as the text path below
+        // (real `actions.py:460-462` runs before any format split, and
+        // `--json` has no real counterpart -- it follows the same rule
+        // for consistency): a recorded conflict fails the run unless an
+        // escape holds. `--autounmask-only` is escape 1 (its whole point
+        // is "just show the changes", exit 0); backtracking disabled
+        // plus `--buildpkgonly`/`--nodeps` is escape 2
+        // (`_accept_blocker_conflicts`). See the text-path gate for the
+        // full grounding and the `--fetchonly`/`--fetch-all-uri`
+        // carve-out.
+        if !autounmask_only
+            && !result.slot_conflicts.is_empty()
+            && !(backtrack_max == 0 && (buildpkgonly || nodeps))
         {
             return ExitCode::from(1);
         }
@@ -11693,7 +11761,22 @@ pub fn run(args: &[String]) -> ExitCode {
 
         // Real `Display.print_blockers()`: the collected `[blocks B ...]`
         // lines, printed as one group after every package line and before
-        // the counters.
+        // the counters. Backlog #80: unresolved rows with no owner entry
+        // join the same group (flat and tree alike -- real's
+        // `Display.blockers` is mode-independent). Unresolved rows are
+        // never column-suppressed, so no `columns` gate here.
+        for orphan in &result.orphan_blockers {
+            blocker_lines.push(format_blocker_row(
+                &format!(
+                    "{}/{}-{}",
+                    orphan.owner_category, orphan.owner_package, orphan.owner_version
+                ),
+                !quiet,
+                "",
+                &color,
+                &orphan.conflict,
+            ));
+        }
         for line in &blocker_lines {
             println!("{line}");
         }
@@ -11711,7 +11794,14 @@ pub fn run(args: &[String]) -> ExitCode {
         println!();
         println!(
             "{}",
-            package_counters_summary(display_entries, &root, &top_level_pkgs, onlydeps, &color)
+            package_counters_summary(
+                display_entries,
+                &root,
+                &top_level_pkgs,
+                onlydeps,
+                &color,
+                &result.orphan_blockers
+            )
         );
     }
 
@@ -11807,8 +11897,11 @@ pub fn run(args: &[String]) -> ExitCode {
     // None)` key. The one deliberate divergence in this block: real
     // drifts its `^` markers once ANSI codes lengthen the line under
     // `--color y` (genuine upstream bug); portuale wraps the same spans
-    // but keeps the markers aligned. Purely informational -- v1 neither
-    // refuses nor changes the exit code.
+    // but keeps the markers aligned. The block is display-only: the
+    // exit-code consequence lives below in the "display, then fail the
+    // action" band next to `unsolvable_blockers` (real `actions.py:
+    // 460-462` -- a slot conflict fails the run with rc 1, `--pretend`
+    // included; see that gate's own comment for the two escapes).
     if !result.slot_conflicts.is_empty() {
         let mut any_omitted = false;
         // Real `need_rebuild`: installed parents with built slot-operator
@@ -12281,7 +12374,12 @@ pub fn run(args: &[String]) -> ExitCode {
     let unsolvable_blockers = result
         .entries
         .iter()
-        .any(|e| e.blockers.iter().any(|b| b.unsolvable));
+        .any(|e| e.blockers.iter().any(|b| b.unsolvable))
+        // Backlog #80: an orphan row is unsolvable by construction
+        // (`file_blocker_conflicts` only orphans `unsolvable` rows), so
+        // it fails the run exactly like an entry-owned one -- real
+        // prints the same `* Error` block for the n1b shape.
+        || !result.orphan_blockers.is_empty();
     if unsolvable_blockers && show_merge_list {
         eprintln!();
         for line in [
@@ -12296,6 +12394,55 @@ pub fn run(args: &[String]) -> ExitCode {
         );
         eprintln!("section of the Gentoo Linux x86 Handbook (architecture is irrelevant):\n");
         eprintln!("https://wiki.gentoo.org/wiki/Handbook:X86/Working/Portage#Blocked_packages\n");
+        return ExitCode::from(1);
+    }
+
+    // Backlog #62: a recorded slot conflict fails the whole action with
+    // rc 1, matching real Portage 3.0.82.2. Real's rule, verified against
+    // the source and host-side oracles before coding (the obvious "notice
+    // printed => rc 1" formulation is wrong in the escape cases, and the
+    // first draft of the plan had it wrong too):
+    //
+    // - The notice itself is unconditional on the conflict existing
+    //   (`display_problems` prints it whenever
+    //   `any(_package_tracker.slot_conflicts())`, `depgraph.py:
+    //   11117-11120`); it says nothing about the exit code.
+    // - The exit code comes from `action_build`'s `if not success:
+    //   display_problems(); return 1` (`actions.py:460-462`), and
+    //   `success` is False exactly when a conflict is recorded and not
+    //   tolerated (`_resolve` tail, `depgraph.py:5685-5691`).
+    // - Escape 1 -- `--autounmask-only` returns 0 first (`actions.py:
+    //   456-458`), notice printed and all. Preserved for free: this gate
+    //   sits after that early return above. Host oracle: the
+    //   needer/othermod triangle with `--autounmask-only` prints the
+    //   notice and exits 0.
+    // - Escape 2 -- `_accept_blocker_conflicts()` (`depgraph.py:
+    //   9259-9271`): backtracking disabled plus one of `--buildpkgonly`,
+    //   `--fetchonly`, `--fetch-all-uri`, `--nodeps` tolerates the
+    //   conflict. Host oracles: `--backtrack=0 --nodeps` and
+    //   `--backtrack=0 --buildpkgonly` on the triangle exit 0 (in fact
+    //   real records no conflict at all there -- `--nodeps` never walks
+    //   the deps that would pull it in, `--buildpkgonly` resolves the
+    //   shape without the upgrade -- so no "notice with rc 0" shape was
+    //   reproducible; the gate still matters because portuale's resolver
+    //   *does* record the conflict there). `--fetchonly`/
+    //   `--fetch-all-uri` are still portuale-unimplemented options (rc 2
+    //   before reaching here), so they need no parsed flag yet -- extend
+    //   this condition when that surface lands. `--fetchonly` shapes
+    //   could not be oracled hermetically anyway: real attempts the fetch
+    //   phase past resolution and fails on the fixture's unexpanded
+    //   `file://${PORTAGE_CONFIGROOT}` binhost URL (rc 1 even with no
+    //   conflict anywhere).
+    //
+    // Gated on the data (`!result.slot_conflicts.is_empty()`), never on
+    // "the notice was printed", so `-q`/`--json`/`--columns` cannot change
+    // the rc -- `--json` has no real counterpart (real rejects it, rc 2)
+    // and follows the same rule for consistency. The blocker path is
+    // untouched: its `all satisfied` -> rc 0 / `unsolvable` -> rc 1 split
+    // already matches real.
+    let backtracking_disabled = backtrack_max == 0;
+    let slot_conflict_tolerated = backtracking_disabled && (buildpkgonly || nodeps);
+    if !result.slot_conflicts.is_empty() && !slot_conflict_tolerated {
         return ExitCode::from(1);
     }
 
@@ -13853,6 +14000,7 @@ mod tests {
             &HashSet::new(),
             false,
             &nc,
+            &[],
         );
         assert!(
             summary.contains("Conflict: 1 block (all satisfied)"),

@@ -44,7 +44,7 @@ use std::path::Path;
 
 use crate::{
     CandidateSource, GraphEntry, PretendOutcome, RepoConfig, VisibilityProvenance,
-    all_installed_packages, list_candidates, read_vdb_flag_set, read_vdb_slot, repo_aux_metadata,
+    all_installed_packages, read_vdb_flag_set, read_vdb_slot,
 };
 
 /// Real `_emerge/DepPriority.py::DepPriority` -- the per-edge dependency
@@ -1192,16 +1192,10 @@ fn add_installed_dependency_closure(
     };
 
     let vdb_edges = |cat: &str, pkg: &str, ver: &str| -> Vec<DepEdge> {
-        // Live md5-cache metadata for this exact installed cpv (None when
-        // the version is gone from every repo -- the Raw fallback).
-        let live = list_candidates(repos, cat, pkg).ok().and_then(|cs| {
-            cs.iter()
-                .filter(|c| c.version == ver)
-                .max_by_key(|c| c.repo_priority)
-                .and_then(|c| {
-                    repo_aux_metadata(&c.repo_location, cat, &format!("{pkg}-{ver}")).ok()
-                })
-        });
+        // Live md5-cache metadata for this exact installed cpv, from the
+        // vdb-recorded repo (backlog #86: never a priority search) --
+        // `None` when the version is gone there (the Raw fallback).
+        let live = crate::live_metadata_for_installed(repos, root, cat, pkg, ver);
         let mut md: HashMap<String, String> = HashMap::new();
         let mut memo: HashMap<(String, String, String, String), String> = HashMap::new();
         // A2 follow-up: the closure only moves to the Effective view when
@@ -1432,30 +1426,172 @@ impl DigraphPrelude<'_> {
     /// the ranking cannot drift between them again (#82: `print_tree`'s
     /// private copy ranked with a **string** compare, under which `1.9`
     /// outranks `1.10` and slot `9` outranks slot `10`).
+    ///
+    /// #85: the ranking above runs *after* real's `_minimize_children`
+    /// (`depgraph.py:4751-4856`). When several of one parent's atoms
+    /// select different instances of the same cp, real eliminates the
+    /// redundant selections first: installed instances first, then
+    /// ascending version, dropping a package every one of whose atoms is
+    /// also matched by another surviving package. The surviving target
+    /// per atom is then the highest-ranked remainder -- which is NOT
+    /// always the vercmp-highest match. Live shape: `treeslotuser`'s
+    /// `:0` selects 1.9 while the bare `treeslotpkg` atom selects 1.10;
+    /// real eliminates 1.10 (`:0` matches only 1.9, the bare atom matches
+    /// both), so the scheduler graph holds no `user → 1.10` edge at all
+    /// (verified in real's own `--debug` digraph dump) and the bias
+    /// parent-count ties 1-1, settling by discovery order `1.9, 1.10`.
+    /// Without the elimination the extra edge doubles 1.10's parent
+    /// count and the bias flips the pair. Fully-redundant atom sets
+    /// collapse to the highest version, exactly today's ranking, so only
+    /// partially-overlapping shapes like this one move.
     fn select_dep_target(
+        &self,
+        entries: &[GraphEntry],
+        from: usize,
+        from_deps: &[DepEdge],
+        ei: usize,
+        suppressed: &HashSet<usize>,
+        merge_bound_only: bool,
+    ) -> Option<usize> {
+        let edge = &from_deps[ei];
+        // Sibling edges selecting the same cp: the minimize universe.
+        // Suppressed `||` branches never become edges, so they don't
+        // participate (same exclusion the edge loops apply).
+        let cp = (edge.category.as_str(), edge.package.as_str());
+        let sib_eis: Vec<usize> = from_deps
+            .iter()
+            .enumerate()
+            .filter(|(si, se)| {
+                (se.category.as_str(), se.package.as_str()) == cp && !suppressed.contains(si)
+            })
+            .map(|(si, _)| si)
+            .collect();
+        let sib_sets: Vec<Vec<usize>> = sib_eis
+            .iter()
+            .map(|&si| self.match_candidates(entries, from, &from_deps[si], merge_bound_only))
+            .collect();
+        let own = sib_eis
+            .iter()
+            .position(|&si| si == ei)
+            .map(|pos| &sib_sets[pos]);
+        let own = own?;
+        if own.len() < 2 {            return Self::rank_best(entries, &self.installed, own.iter().copied());
+        }
+        // A `NoVisibleCandidate` entry is never a *selected* package:
+        // real's `_select_package` returns None for its atom and
+        // `_minimize_children` yields `(atom, None)` without any
+        // elimination. So NVC entries neither eliminate other
+        // candidates nor are eliminated themselves here -- but they
+        // stay rankable below, preserving the pre-#85 fallback that
+        // picked them (e.g. the `opartlya` NVC disclosure row, whose
+        // dep-string order the contract suite pins). Without this,
+        // the ascending-version elimination order drops an NVC entry
+        // before a same-cp installed one and flips disclosure order.
+        let is_nvc = |j: &usize| matches!(entries[*j].outcome, PretendOutcome::NoVisibleCandidate);
+        // Real's elimination order (bug 631894 determinism note):
+        // installed instances first, then ascending version.
+        let mut union: Vec<usize> = Vec::new();
+        for set in &sib_sets {
+            for &j in set {
+                if !union.contains(&j) {
+                    union.push(j);
+                }
+            }
+        }
+        union.sort_by(|&a, &b| {
+            // Installed sorts before merge-bound so installed
+            // candidates are eliminated first, like real.
+            match (self.installed[a], self.installed[b]) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => {
+                    let av = outcome_version(&entries[a]).unwrap_or("");
+                    let bv = outcome_version(&entries[b]).unwrap_or("");
+                    portage_versions::vercmp(av, bv)
+                        .map(|o| o.cmp(&0))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                }
+            }
+        });
+        let mut alive: HashSet<usize> = union.iter().copied().collect();
+        for &p in &union {
+            if is_nvc(&p) || !alive.contains(&p) {
+                continue;
+            }
+            let mut shared_by_all = false;
+            for set in &sib_sets {
+                if set.contains(&p) {
+                    if set
+                        .iter()
+                        .filter(|q| alive.contains(q) && !is_nvc(q))
+                        .count()
+                        < 2
+                    {
+                        shared_by_all = false;
+                        break;
+                    }
+                    shared_by_all = true;
+                }
+            }
+            if shared_by_all {
+                alive.remove(&p);
+            }
+        }
+        Self::rank_best(
+            entries,
+            &self.installed,
+            own.iter().copied().filter(|j| alive.contains(j)),
+        )
+    }
+
+    /// The per-atom candidate entries `select_dep_target` narrows and
+    /// ranks: every same-cp entry the atom matches (version / slot /
+    /// repo), minus `Uninstall` removals, minus (under
+    /// `merge_bound_only`) the parent itself and installed nodes.
+    fn match_candidates(
         &self,
         entries: &[GraphEntry],
         from: usize,
         edge: &DepEdge,
         merge_bound_only: bool,
-    ) -> Option<usize> {
-        let idxs = self
+    ) -> Vec<usize> {
+        let Some(idxs) = self
             .cp_indices
-            .get(&(edge.category.as_str(), edge.package.as_str()))?;
+            .get(&(edge.category.as_str(), edge.package.as_str()))
+        else {
+            return Vec::new();
+        };
         // Uninstall entries are skipped below, so among the survivors
         // "merge-bound" is exactly "not an installed node".
         let merge_bound = |j: usize| !self.installed[j];
+        idxs.iter()
+            .copied()
+            .filter(|&j| {
+                if !self.edge_matches(&edge.atom, j) {
+                    return false;
+                }
+                if matches!(entries[j].outcome, PretendOutcome::Uninstall { .. }) {
+                    return false;
+                }
+                if merge_bound_only && (j == from || !merge_bound(j)) {
+                    return false;
+                }
+                true
+            })
+            .collect()
+    }
+
+    /// `select_dep_target`'s ranking over a fixed candidate set: prefer a
+    /// merge-bound entry, then the highest version by `vercmp`; first on
+    /// ties.
+    fn rank_best(
+        entries: &[GraphEntry],
+        installed: &[bool],
+        cands: impl Iterator<Item = usize>,
+    ) -> Option<usize> {
+        let merge_bound = |j: usize| !installed[j];
         let mut best: Option<usize> = None;
-        for &j in idxs {
-            if !self.edge_matches(&edge.atom, j) {
-                continue;
-            }
-            if matches!(entries[j].outcome, PretendOutcome::Uninstall { .. }) {
-                continue;
-            }
-            if merge_bound_only && (j == from || !merge_bound(j)) {
-                continue;
-            }
+        for j in cands {
             best = Some(match best {
                 None => j,
                 Some(b) => {
@@ -1655,11 +1791,11 @@ pub fn resolved_dep_targets(entries: &[GraphEntry], root: &Path) -> Vec<Vec<Opti
             e.deps
                 .iter()
                 .enumerate()
-                .map(|(ei, edge)| {
+                .map(|(ei, _edge)| {
                     if suppressed[i].contains(&ei) {
                         return None;
                     }
-                    pre.select_dep_target(entries, i, edge, true)
+                    pre.select_dep_target(entries, i, &e.deps, ei, &suppressed[i], true)
                 })
                 .collect()
         })
@@ -1833,7 +1969,9 @@ fn build_digraph(entries: &[GraphEntry], top_level_atoms: &[String], root: &Path
             // (#82), so the ranking cannot drift between the scheduling
             // graph and the tree display. `merge_bound_only = false`:
             // real's scheduler digraph edges to nomerge nodes too.
-            if let Some(j) = pre.select_dep_target(entries, i, edge, false) {
+            if let Some(j) =
+                pre.select_dep_target(entries, i, &entry.deps, ei, &alt_suppressed[i], false)
+            {
                 // Real `_add_pkg`: a direct self-edge is dropped unless
                 // it is an unsatisfied build-time dependency, "since
                 // otherwise it can skew the merge order calculation in
@@ -3566,6 +3704,109 @@ mod tests {
             children,
             vec![1],
             "the scheduling graph picks the same instance: {children:?}"
+        );
+    }
+
+    #[test]
+    fn unqualified_atom_collapses_onto_the_slot_qualified_sibling_target() {
+        // #85: real's `_minimize_children` (`depgraph.py:4751-4856`).
+        // `user` pulls slot `:0` (selects 1.9) and the bare cp (selects
+        // 1.10, the vercmp-highest). Real eliminates the redundant 1.10
+        // selection -- the `:0` atom matches only 1.9 while the bare atom
+        // matches both -- so the bare atom resolves to 1.9 and the
+        // scheduler graph holds no `user → 1.10` edge (real's own
+        // `--debug` digraph dump for `dev-libs/treeslotuser` shows only
+        // the 1.9 and parent edges). Without the elimination the extra
+        // edge doubles 1.10's parent count and `_merge_order_bias` flips
+        // the pair to `1.10, 1.9`.
+        let plain = |atom: &str| DepEdge {
+            atom: atom.to_string(),
+            category: "dev-libs".to_string(),
+            package: "slotted".to_string(),
+            priority: DepPriority {
+                runtime: true,
+                ..DepPriority::default()
+            },
+            disjunctive: false,
+            alt: None,
+            key: 3,
+        };
+        let mut low = new_entry("dev-libs", "slotted", "1.9", Vec::new());
+        low.slot = Some("0".into());
+        low.sub_slot = Some("0".into());
+        let mut high = new_entry("dev-libs", "slotted", "1.10", Vec::new());
+        high.slot = Some("1".into());
+        high.sub_slot = Some("1".into());
+        let user = new_entry(
+            "dev-libs",
+            "user",
+            "1.0",
+            vec![plain("dev-libs/slotted:0"), plain("dev-libs/slotted")],
+        );
+        let entries = vec![low, high, user];
+        let root = Path::new("/nonexistent-root-for-unit-test");
+        let targets = resolved_dep_targets(&entries, root);
+        assert_eq!(
+            targets[2],
+            vec![Some(0), Some(0)],
+            "both atoms resolve to 1.9: the bare atom's 1.10 selection is redundant"
+        );
+        let g = build_digraph(&entries, &["dev-libs/user".to_string()], root);
+        let children: Vec<usize> = g.children[2].iter().map(|&(c, _)| c).collect();
+        assert_eq!(
+            children,
+            vec![0],
+            "one edge, to 1.9 -- no extra parent for 1.10: {children:?}"
+        );
+    }
+
+    #[test]
+    fn nvc_entries_do_not_participate_in_minimize_elimination() {
+        // #85 follow-up (`opartlya` disclosure order): a
+        // `NoVisibleCandidate` entry is never a *selected* package --
+        // real's `_select_package` returns None for its atom, so it
+        // never enters `_minimize_children`'s elimination. Here the
+        // bare atom matches both the NVC entry and the installed 1.0;
+        // without the NVC exclusion the ascending-version elimination
+        // drops the NVC entry (its empty version sorts first) and the
+        // edge moves to the installed entry, flipping the merge order
+        // of the disclosure rows. With it, the pre-#85 ranking stands
+        // and the NVC entry keeps the edge.
+        let plain = |atom: &str| DepEdge {
+            atom: atom.to_string(),
+            category: "dev-libs".to_string(),
+            package: "partly".to_string(),
+            priority: DepPriority {
+                runtime: true,
+                ..DepPriority::default()
+            },
+            disjunctive: false,
+            alt: None,
+            key: 3,
+        };
+        let mut nvc = new_entry("dev-libs", "partly", "1.0", Vec::new());
+        nvc.outcome = PretendOutcome::NoVisibleCandidate;
+        nvc.slot = Some("0".into());
+        nvc.sub_slot = Some("0".into());
+        let mut installed = new_entry("dev-libs", "partly", "1.0", Vec::new());
+        installed.outcome = PretendOutcome::AlreadyInstalled {
+            version: "1.0".into(),
+        };
+        installed.slot = Some("0".into());
+        installed.sub_slot = Some("0".into());
+        let user = new_entry("dev-libs", "user", "1.0", vec![plain("dev-libs/partly")]);
+        // NVC first, like the resolver records it. `resolved_dep_targets`
+        // is the tree view (`merge_bound_only`), which never edges to an
+        // installed node -- assert on `build_digraph`, the scheduler
+        // view, where the edge lives.
+        let entries = vec![nvc, installed, user];
+        let root = Path::new("/nonexistent-root-for-unit-test");
+        let g = build_digraph(&entries, &["dev-libs/user".to_string()], root);
+        let children: Vec<usize> = g.children[2].iter().map(|&(c, _)| c).collect();
+        assert_eq!(
+            children,
+            vec![0],
+            "the NVC entry keeps the edge: {children:?}"
         );
     }
 

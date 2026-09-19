@@ -1140,15 +1140,16 @@ fn find_repos_impl(
         parse_ini(&text, &mut sections);
     }
 
-    if repos_conf_path.is_dir() {
-        let entries: Vec<PathBuf> = portage_util::read_dir_paths(&repos_conf_path)
+    // Real `RepoConfigLoader._parse` reads every path through
+    // `_recursive_file_list` (`repository/config.py:943-950`): a
+    // `repos.conf` directory is walked recursively with the same
+    // file/dir exclusion and in-place ordering as `package.*`.
+    if repos_conf_path.symlink_metadata().is_ok() {
+        let entries: Vec<PathBuf> = portage_util::recursive_config_files(&repos_conf_path)
             .map_err(|e| Error::ReadFile {
                 path: repos_conf_path.display().to_string(),
                 source: e,
-            })?
-            .into_iter()
-            .filter(|p| p.is_file())
-            .collect();
+            })?;
         for path in entries {
             let text = fs::read_to_string(&path).map_err(|e| Error::ReadFile {
                 path: path.display().to_string(),
@@ -1156,12 +1157,6 @@ fn find_repos_impl(
             })?;
             parse_ini(&text, &mut sections);
         }
-    } else if repos_conf_path.is_file() {
-        let text = fs::read_to_string(&repos_conf_path).map_err(|e| Error::ReadFile {
-            path: repos_conf_path.display().to_string(),
-            source: e,
-        })?;
-        parse_ini(&text, &mut sections);
     } else {
         return Err(Error::NoReposConf {
             path: repos_conf_path.display().to_string(),
@@ -13293,6 +13288,24 @@ fn reverse_dependency_constraints(
                     slots.insert(slot.clone());
                     rev_dep_pin_holdable(repos, &cp, &pin.atom, pin_slot, &slots, hard)
                 });
+                // Backlog #79 (D0 + the shared S0 with #78): real only
+                // ever consults such a pin from the slot-operator update
+                // probe (`_slot_operator_check_reverse_dependencies`,
+                // `depgraph.py:2472-2538` -- which parents that probe
+                // visits, which it skips). A holdable *plain* pin (no
+                // built `:=`) is therefore ignored entirely: real merges
+                // the upgrade without filtering on it and without
+                // reporting it (D1: `rdctarget-1.0`'s recorded
+                // `~rdcblocker-1.0` neither drops `rdcblocker-2.0` nor
+                // leaves a residual row -- the only `B` is the new
+                // version's own `RDEPEND` blocker). Enforcing it here is
+                // what silently settled the old version (D0's trace).
+                // Still enforced: built slot-operator pins (the probe's
+                // own domain, #24's rebuilds) and every not-holdable pin
+                // (dropped for the residual report, keeper's shape).
+                if holds && !built_slot_op {
+                    continue;
+                }
                 if holds {
                     enforced.push(pin);
                 } else {
@@ -14785,6 +14798,30 @@ struct PendingBlocker {
     owner_installed: bool,
 }
 
+/// A resolved blocker together with the owner version its renderer
+/// needs: `resolve_blockers` files these, `file_blocker_conflicts`
+/// hangs them on entries, removals, or (backlog #80) the orphan list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FiledBlocker {
+    pub owner: (String, String),
+    pub owner_version: String,
+    pub conflict: BlockerConflict,
+}
+
+/// Backlog #80: an unresolved blocker row whose owner has no display
+/// entry anywhere -- a scan-collected owner absent from the graph, whose
+/// block real still reports (`[blocks B]`, `Conflict: 1 block (1
+/// unsatisfied)`, rc 1; A0 controls n1b/n6b). `file_blocker_conflicts`
+/// used to drop these; now they ride out on `GraphResult::orphan_blockers`
+/// and the renderer prints them in the trailing blocker group.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrphanBlocker {
+    pub owner_category: String,
+    pub owner_package: String,
+    pub owner_version: String,
+    pub conflict: BlockerConflict,
+}
+
 /// #68 S1 (2026-09-16): an installed match whose slot is targeted by a
 /// merge-bound entry at a **different** version is dropped before any
 /// row is built -- real's package tracker discards an installed instance
@@ -14982,10 +15019,16 @@ struct PendingRemoval {
 fn file_blocker_conflicts(
     entries: &mut Vec<GraphEntry>,
     root: &Path,
-    conflicts: Vec<((String, String), BlockerConflict)>,
+    conflicts: Vec<FiledBlocker>,
+    orphans: &mut Vec<OrphanBlocker>,
 ) {
     let mut removals: Vec<PendingRemoval> = Vec::new();
-    for (owner_key, conflict) in conflicts {
+    for filed in conflicts {
+        let FiledBlocker {
+            owner: owner_key,
+            owner_version,
+            conflict,
+        } = filed;
         let removal = match &conflict.satisfied_by {
             Some(BlockerSatisfiedBy::Uninstall { cpv, anchor }) => {
                 Some((cpv.clone(), anchor.clone()))
@@ -15016,6 +15059,22 @@ fn file_blocker_conflicts(
                     blockers: vec![conflict],
                 });
             }
+        } else if conflict.unsolvable {
+            // Backlog #80: no owner entry and no removal -- an
+            // unresolved row of a scan-collected owner (A0 controls
+            // n1b/n6b). Real still reports it (`[blocks B]`,
+            // `Conflict: 1 block (1 unsatisfied)`, rc 1); dropping it
+            // here is what made portuale print only the ebuild row.
+            // A `Replacement` row can never land here: it always
+            // carries `satisfied_by`, so it takes the removal branch
+            // above (or an entry branch) instead.
+            orphans.push(OrphanBlocker {
+                owner_category: owner_key.0.clone(),
+                owner_package: owner_key.1.clone(),
+                owner_version,
+                conflict,
+            });
+            continue;
         } else {
             continue;
         }
@@ -15120,20 +15179,10 @@ fn collect_unwalked_installed_blockers(
         if walked.contains(&(pkg.category.as_str(), pkg.package.as_str())) {
             continue;
         }
-        let pf = format!("{}-{}", pkg.package, pkg.version);
-        let live = list_candidates(repos, &pkg.category, &pkg.package)
-            .ok()
-            .and_then(|cs| {
-                cs.iter()
-                    .filter(|c| c.version == pkg.version)
-                    .max_by_key(|c| c.repo_priority)
-                    .cloned()
-            })
-            .and_then(|c| {
-                repo_aux_metadata(&c.repo_location, &pkg.category, &pf)
-                    .ok()
-                    .map(|m| (c, m))
-            });
+        // Backlog #86: the live view comes from the vdb-recorded repo
+        // (`live_metadata_for_installed`), never a priority search.
+        let live =
+            live_metadata_for_installed(repos, root, &pkg.category, &pkg.package, &pkg.version);
         let use_flags = read_vdb_flag_set(root, &pkg.category, &pkg.package, &pkg.version, "USE");
         let mut depstr = String::new();
         for key in ["IDEPEND", "PDEPEND", "RDEPEND"] {
@@ -15150,7 +15199,7 @@ fn collect_unwalked_installed_blockers(
                 &pkg.category,
                 &pkg.package,
                 &pkg.version,
-                live.as_ref().map(|(_, m)| m.as_ref()),
+                live.as_deref(),
                 key,
                 layer,
                 installed_meta_memo,
@@ -15244,7 +15293,7 @@ fn resolve_blockers(
     // `entries` never carried the edge (S0 cell g; g3 proves the
     // closure-through-a-world-member half).
     blocker_retry_closure: &HashSet<(String, String)>,
-) -> Vec<((String, String), BlockerConflict)> {
+) -> Vec<FiledBlocker> {
     let mut conflicts = Vec::new();
     for pb in pending {
         let target_key = (pb.target_category.clone(), pb.target_package.clone());
@@ -15385,9 +15434,10 @@ fn resolve_blockers(
                         && merge_bound_version(&e.outcome).is_some_and(|v2| v2 != version)
                 });
             if replaced_in_slot {
-                conflicts.push((
-                    pb.owner_key.clone(),
-                    BlockerConflict {
+                conflicts.push(FiledBlocker {
+                    owner: pb.owner_key.clone(),
+                    owner_version: pb.owner_version.clone(),
+                    conflict: BlockerConflict {
                         atom_str: pb.atom_str.clone(),
                         strong: pb.strong,
                         matched_category: pb.target_category.clone(),
@@ -15399,7 +15449,7 @@ fn resolve_blockers(
                             slot: slot.clone(),
                         }),
                     },
-                ));
+                });
                 continue;
             }
             // #68 S2: real's `parent.operation` for this blocker owner --
@@ -15503,9 +15553,10 @@ fn resolve_blockers(
                 merge_bound_match
                     && (owner_has_parent || owner_set_parent(&pb.owner_key, blocker_retry_closure))
             };
-            conflicts.push((
-                pb.owner_key.clone(),
-                BlockerConflict {
+            conflicts.push(FiledBlocker {
+                owner: pb.owner_key.clone(),
+                owner_version: pb.owner_version.clone(),
+                conflict: BlockerConflict {
                     atom_str: pb.atom_str.clone(),
                     strong: pb.strong,
                     matched_category: pb.target_category.clone(),
@@ -15544,7 +15595,7 @@ fn resolve_blockers(
                     },
                     unsolvable,
                 },
-            ));
+            });
         }
     }
     conflicts
@@ -16454,6 +16505,11 @@ pub struct GraphResult {
     /// option's value).
     pub backtrack_max: u32,
     pub slot_conflicts: Vec<SlotConflict>,
+    /// Backlog #80: unresolved blocker rows whose owner has no display
+    /// entry (scan-collected, absent from the graph). The renderer
+    /// prints them in the trailing blocker group, counts them in
+    /// `Conflict:`, and fails the run -- real's n1b/n6b shape.
+    pub orphan_blockers: Vec<OrphanBlocker>,
     pub changed_deps_report: Vec<ChangedDepsReportEntry>,
     /// `--buildpkgonly`'s own real depgraph check
     /// (`lib/_emerge/depgraph.py:5706-5717`): `true` when some entry
@@ -18362,6 +18418,9 @@ impl BacktrackParams {
 struct PassResult {
     entries: Vec<GraphEntry>,
     slot_conflicts: Vec<SlotConflict>,
+    /// Backlog #80: unresolved blocker rows with no owner entry,
+    /// filed by `file_blocker_conflicts` (this pass's scan).
+    orphan_blockers: Vec<OrphanBlocker>,
     slot_want: HashMap<(String, String), Vec<String>>,
     slot_pullers: SlotPullers,
     masked_deps: Vec<MaskedDepReport>,
@@ -19493,62 +19552,56 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 // the vdb's built `:=` atoms with the append gate on. So
                 // `--debug`'s `Depstring` line and `--tree`'s edges can no
                 // longer contradict the child the walk actually queued.
-                if let Some(resolved) =
-                    list_candidates(&ctx.repos, &key.0, &key.1)
-                        .ok()
-                        .and_then(|cs| {
-                            cs.iter()
-                                .filter(|c| &c.version == version)
-                                .max_by_key(|c| c.repo_priority)
-                                .cloned()
-                        })
+                // Backlog #86: the display list reads the same
+                // recorded-repo view the recursion walks (never a
+                // priority search), so `--debug`/`--tree` cannot
+                // contradict the queued child.
+                if let Some(metadata) =
+                    live_metadata_for_installed(&ctx.repos, ctx.root, &key.0, &key.1, version)
                 {
-                    let pf = format!("{}-{version}", key.1);
-                    if let Ok(metadata) = repo_aux_metadata(&resolved.repo_location, &key.0, &pf) {
-                        // Installed recorded USE, not effective profile
-                        // USE -- see `enqueue_dependencies`'s own note
-                        // just below; a `flag?`-gated dep this display
-                        // list shows must match what the recursion
-                        // actually queued.
-                        let use_flags = read_vdb_flag_set(ctx.root, &key.0, &key.1, version, "USE");
-                        let real_order_keys: &[&str] = if ctx.with_bdeps {
-                            &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"]
-                        } else {
-                            &["RDEPEND", "IDEPEND", "PDEPEND"]
-                        };
-                        let layer = if ctx.dynamic_deps {
-                            InstalledMetaLayer::Effective
-                        } else {
-                            InstalledMetaLayer::Raw
-                        };
-                        let mut effective: HashMap<String, String> = HashMap::new();
-                        for k in real_order_keys {
-                            let s = installed_dep_string(
-                                ctx.root,
-                                ctx.dynamic_deps,
-                                dynamic_deps_append_enabled(),
-                                ctx.ignore_built_slot_operator_deps,
-                                &key.0,
-                                &key.1,
-                                version,
-                                Some(&metadata),
-                                k,
-                                layer,
-                                &mut state.installed_meta_memo,
-                            );
-                            if !s.trim().is_empty() {
-                                effective.insert((*k).to_string(), s);
-                            }
-                        }
-                        // An installed package is `pkg.built`, so
-                        // real marks its build-time deps `optional`.
-                        already_installed_deps = merge_order::dep_edges_from_metadata(
-                            &effective,
-                            &use_flags,
-                            real_order_keys,
-                            true,
+                    // Installed recorded USE, not effective profile
+                    // USE -- see `enqueue_dependencies`'s own note
+                    // just below; a `flag?`-gated dep this display
+                    // list shows must match what the recursion
+                    // actually queued.
+                    let use_flags = read_vdb_flag_set(ctx.root, &key.0, &key.1, version, "USE");
+                    let real_order_keys: &[&str] = if ctx.with_bdeps {
+                        &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"]
+                    } else {
+                        &["RDEPEND", "IDEPEND", "PDEPEND"]
+                    };
+                    let layer = if ctx.dynamic_deps {
+                        InstalledMetaLayer::Effective
+                    } else {
+                        InstalledMetaLayer::Raw
+                    };
+                    let mut effective: HashMap<String, String> = HashMap::new();
+                    for k in real_order_keys {
+                        let s = installed_dep_string(
+                            ctx.root,
+                            ctx.dynamic_deps,
+                            dynamic_deps_append_enabled(),
+                            ctx.ignore_built_slot_operator_deps,
+                            &key.0,
+                            &key.1,
+                            version,
+                            Some(&metadata),
+                            k,
+                            layer,
+                            &mut state.installed_meta_memo,
                         );
+                        if !s.trim().is_empty() {
+                            effective.insert((*k).to_string(), s);
+                        }
                     }
+                    // An installed package is `pkg.built`, so
+                    // real marks its build-time deps `optional`.
+                    already_installed_deps = merge_order::dep_edges_from_metadata(
+                        &effective,
+                        &use_flags,
+                        real_order_keys,
+                        true,
+                    );
                 }
                 enqueue_dependencies(
                     &ctx.repos,
@@ -21090,7 +21143,15 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         &state.entries,
         &ctx.blocker_retry_closure,
     );
-    file_blocker_conflicts(&mut state.entries, ctx.root, conflicts);
+    // Backlog #80: unresolved rows whose owner has no display entry
+    // ride out on the result instead of being dropped.
+    let mut orphan_blockers: Vec<OrphanBlocker> = Vec::new();
+    file_blocker_conflicts(
+        &mut state.entries,
+        ctx.root,
+        conflicts,
+        &mut orphan_blockers,
+    );
 
     if !state.required_use_violations.is_empty() {
         // Each block is self-delimiting (leading + trailing newline).
@@ -21101,6 +21162,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         entries: state.entries,
         suppressed_nvc: state.suppressed_nvc,
         slot_conflicts: state.slot_conflicts,
+        orphan_blockers,
         slot_want: state.slot_want,
         slot_pullers: state.slot_pullers,
         masked_deps: state.masked_deps,
@@ -21859,6 +21921,7 @@ fn assemble_result(
         backtrack_max: ctx.backtrack_max,
         outcome,
         slot_conflicts: pass.slot_conflicts,
+        orphan_blockers: pass.orphan_blockers,
         changed_deps_report: pass.changed_deps_report_entries,
         buildpkgonly_deps_unsatisfied,
         pprovided_atoms: pass.pprovided_atoms,
@@ -22192,6 +22255,51 @@ fn built_slot_operator_atoms(raw_depstr: &str, use_flags: &HashSet<String>) -> V
         .collect()
 }
 
+/// The live ebuild metadata for one installed `cat/pkg-version` --
+/// real `FakeVartree._aux_get_wrapper` (`FakeVartree.py:136`), which
+/// passes `myrepo=pkg.repo` (the vdb-recorded `repository`) straight to
+/// `portdb.aux_get`, so the dynamic-deps view of an installed package
+/// always comes from the repo it was built from, never from a
+/// repo-priority search. `None` when the version is gone from the
+/// recorded repo (real's `_DynamicDepsNotApplicable` fallback: the
+/// caller reads the raw vdb record instead).
+///
+/// Two deliberate narrowings, both documented at the call sites' shared
+/// shape: when the vdb carries no `repository` file (minimal fixture
+/// vdbs predate it -- e.g. `samepkg-1.0` has only `CATEGORY`/`SLOT`) or
+/// the recorded repo is no longer configured, this falls back to the
+/// pre-#86 `list_candidates` priority search instead of failing --
+/// stranding every installed package's metadata on a removed repo (or
+/// regressing every repo-less fixture vdb to the Raw view) is the worse
+/// failure. Every `installed_dep_string` call site reads through this
+/// one helper, so the four paths can never disagree on which repo is
+/// authoritative (backlog #86).
+pub(crate) fn live_metadata_for_installed(
+    repos: &[RepoConfig],
+    root: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> Option<std::sync::Arc<HashMap<String, String>>> {
+    let pf = format!("{package}-{version}");
+    let recorded = read_vdb_string(root, category, package, version, "repository");
+    let recorded = recorded.trim();
+    if !recorded.is_empty()
+        && let Some(repo) = repos.iter().find(|r| r.name == recorded)
+        && let Ok(meta) = repo_aux_metadata(&repo.location, category, &pf)
+    {
+        return Some(meta);
+    }
+    list_candidates(repos, category, package)
+        .ok()
+        .and_then(|cs| {
+            cs.iter()
+                .filter(|c| c.version == version)
+                .max_by_key(|c| c.repo_priority)
+                .and_then(|c| repo_aux_metadata(&c.repo_location, category, &pf).ok())
+        })
+}
+
 /// One installed package's `*DEPEND` string for `key`, at `layer` --
 /// real `Package._raw_metadata[key]` vs `Package._metadata[key]`.
 ///
@@ -22347,20 +22455,11 @@ fn enqueue_dependencies(
     // the first pass, so a strict no-op there.
     disj_constraints: &HashMap<(String, String), Vec<String>>,
 ) {
-    let Ok(repo_candidates) = list_candidates(repos, category, package) else {
-        return;
-    };
-    let Some(resolved) = repo_candidates
-        .iter()
-        .filter(|c| c.version == version)
-        .max_by_key(|c| c.repo_priority)
+    // Backlog #86: the walk reads the vdb-recorded repo's current
+    // metadata (never a priority search); `None` when the version is
+    // gone there, same tolerance as the old search miss.
+    let Some(metadata) = live_metadata_for_installed(repos, root, category, package, version)
     else {
-        return;
-    };
-    let repo_location = resolved.repo_location.clone();
-
-    let pf = format!("{package}-{version}");
-    let Ok(metadata) = repo_aux_metadata(&repo_location, category, &pf) else {
         return;
     };
 
@@ -24228,6 +24327,102 @@ mod tests {
             std::fs::write(dir.join(name), bytes).unwrap();
         }
         root
+    }
+
+    /// Backlog #86 S1: `live_metadata_for_installed` reads the
+    /// vdb-recorded repo's copy of the exact installed cpv, never the
+    /// priority winner's -- real `FakeVartree._aux_get_wrapper`
+    /// (`FakeVartree.py:136`, `myrepo=pkg.repo`).
+    #[test]
+    fn live_metadata_for_installed_prefers_the_recorded_repo() {
+        use md5::Digest as _;
+        use std::fmt::Write as _;
+        let base = std::env::temp_dir().join(format!(
+            "portuale-live-meta-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        // Two scratch repos, same cpv, different RDEPEND.
+        for (repo, rdepend) in [("lowrepo", ""), ("highrepo", "dev-libs/blocked")] {
+            let dir = base.join(repo).join("dev-libs").join("twounit");
+            std::fs::create_dir_all(&dir).unwrap();
+            let mut body =
+                "EAPI=8\nDESCRIPTION=\"scratch recorded-repo unit\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\n"
+                    .to_string();
+            if !rdepend.is_empty() {
+                writeln!(body, "RDEPEND=\"{rdepend}\"").unwrap();
+            }
+            std::fs::write(dir.join("twounit-1.0.ebuild"), &body).unwrap();
+            let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+            let mut entry =
+                "DEFINED_PHASES=-\nDESCRIPTION=scratch recorded-repo unit\nEAPI=8\n".to_string();
+            if !rdepend.is_empty() {
+                writeln!(entry, "RDEPEND={rdepend}").unwrap();
+            }
+            writeln!(entry, "KEYWORDS=amd64\nSLOT=0\n_md5_={md5}").unwrap();
+            let cachedir = base.join(repo).join("metadata/md5-cache/dev-libs");
+            std::fs::create_dir_all(&cachedir).unwrap();
+            std::fs::write(cachedir.join("twounit-1.0"), entry).unwrap();
+        }
+        let repo_config = |name: &str, priority: i32| RepoConfig {
+            name: name.to_string(),
+            location: base.join(name),
+            priority,
+            is_main: name == "lowrepo",
+            masters: vec![],
+            profile_formats: vec![],
+            cache_formats: vec![],
+            aliases: vec![],
+            sync_type: None,
+            sync_uri: None,
+            volatile: false,
+            module_specific_options: vec![],
+        };
+        let repos = vec![repo_config("lowrepo", -1000), repo_config("highrepo", 10)];
+
+        // Recorded repo wins over priority: the vdb says `lowrepo`.
+        let root = tmp_vdb(
+            "dev-libs",
+            "twounit-1.0",
+            &[("repository", b"lowrepo\n"), ("USE", b"\n")],
+        );
+        let meta = live_metadata_for_installed(&repos, &root, "dev-libs", "twounit", "1.0")
+            .expect("recorded repo carries the version");
+        assert_eq!(meta.get("RDEPEND").map(String::as_str), None);
+        let _ = std::fs::remove_dir_all(&root);
+
+        // No `repository` file: the pre-#86 priority search is the
+        // fallback, so minimal fixture vdbs keep their live view.
+        let root = tmp_vdb("dev-libs", "twounit-1.0", &[("USE", b"\n")]);
+        let meta = live_metadata_for_installed(&repos, &root, "dev-libs", "twounit", "1.0")
+            .expect("fallback search finds the version");
+        assert_eq!(
+            meta.get("RDEPEND").map(String::as_str),
+            Some("dev-libs/blocked")
+        );
+        let _ = std::fs::remove_dir_all(&root);
+
+        // Recorded repo no longer configured: same fallback.
+        let root = tmp_vdb(
+            "dev-libs",
+            "twounit-1.0",
+            &[("repository", b"gone-overlay\n"), ("USE", b"\n")],
+        );
+        let meta = live_metadata_for_installed(&repos, &root, "dev-libs", "twounit", "1.0")
+            .expect("fallback search finds the version");
+        assert_eq!(
+            meta.get("RDEPEND").map(String::as_str),
+            Some("dev-libs/blocked")
+        );
+        let _ = std::fs::remove_dir_all(&root);
+
+        // Gone from every repo: `None` (the caller's Raw fallback).
+        assert!(live_metadata_for_installed(&repos, &root, "dev-libs", "twounit", "9.9").is_none());
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     fn bz2(bytes: &[u8]) -> Vec<u8> {
@@ -37012,9 +37207,10 @@ mod tests {
         );
         assert_eq!(
             conflicts,
-            vec![(
-                ("dev-libs".to_string(), "owner".to_string()),
-                BlockerConflict {
+            vec![FiledBlocker {
+                owner: ("dev-libs".to_string(), "owner".to_string()),
+                owner_version: "1.0".to_string(),
+                conflict: BlockerConflict {
                     atom_str: "!!dev-libs/target".to_string(),
                     strong: true,
                     matched_category: "dev-libs".to_string(),
@@ -37025,8 +37221,8 @@ mod tests {
                     // and exits 1. The pre-S2 expectation was `false`.
                     unsolvable: true,
                     satisfied_by: None,
-                }
-            )]
+                },
+            }]
         );
     }
 
@@ -37118,9 +37314,9 @@ mod tests {
             1,
             "a replaced-in-slot installed match keeps its row"
         );
-        assert!(!conflicts[0].1.unsolvable);
+        assert!(!conflicts[0].conflict.unsolvable);
         assert_eq!(
-            conflicts[0].1.satisfied_by,
+            conflicts[0].conflict.satisfied_by,
             Some(BlockerSatisfiedBy::Replacement {
                 cp: ("dev-libs".to_string(), "blocked".to_string()),
                 slot: "0".to_string(),
@@ -37150,9 +37346,9 @@ mod tests {
             1,
             "a different-slot replacement keeps the row"
         );
-        assert!(!conflicts[0].1.unsolvable);
+        assert!(!conflicts[0].conflict.unsolvable);
         assert_eq!(
-            conflicts[0].1.satisfied_by,
+            conflicts[0].conflict.satisfied_by,
             Some(BlockerSatisfiedBy::Uninstall {
                 cpv: "dev-libs/blocked-1.0".to_string(),
                 anchor: ("dev-libs".to_string(), "bparent".to_string()),
@@ -37190,8 +37386,8 @@ mod tests {
             1,
             "a same-version reinstall is merge-bound"
         );
-        assert!(conflicts[0].1.unsolvable);
-        assert_eq!(conflicts[0].1.satisfied_by, None);
+        assert!(conflicts[0].conflict.unsolvable);
+        assert_eq!(conflicts[0].conflict.satisfied_by, None);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -37249,7 +37445,7 @@ mod tests {
         );
         assert_eq!(conflicts.len(), 1);
         assert!(
-            conflicts[0].1.unsolvable,
+            conflicts[0].conflict.unsolvable,
             "a walked consumer blocks the unmerge"
         );
         // Cell d: the same state without the walked consumer -> the
@@ -37261,7 +37457,10 @@ mod tests {
             &HashSet::new(),
         );
         assert_eq!(conflicts.len(), 1);
-        assert!(!conflicts[0].1.unsolvable, "an unwalked consumer does not");
+        assert!(
+            !conflicts[0].conflict.unsolvable,
+            "an unwalked consumer does not"
+        );
         // ...but in a complete-mode context real's digraph holds the
         // installed closure even though portuale's `entries` don't
         // (L0 `sys-apps/systemd-utils`): the vdb reverse scan is the
@@ -37278,7 +37477,7 @@ mod tests {
         );
         assert_eq!(conflicts.len(), 1);
         assert!(
-            conflicts[0].1.unsolvable,
+            conflicts[0].conflict.unsolvable,
             "a required-set closure member is a graph node with parents"
         );
         let _ = fs::remove_dir_all(&dir);
@@ -37304,7 +37503,7 @@ mod tests {
         );
         assert_eq!(conflicts.len(), 1);
         assert!(
-            conflicts[0].1.unsolvable,
+            conflicts[0].conflict.unsolvable,
             "merge-bound match, merging parent"
         );
 
@@ -37328,7 +37527,7 @@ mod tests {
             &HashSet::new(),
         );
         assert_eq!(conflicts.len(), 1);
-        assert!(conflicts[0].1.unsolvable);
+        assert!(conflicts[0].conflict.unsolvable);
         let _ = fs::remove_dir_all(&dir);
 
         // Cell f: an installed (nomerge) parent's installed match is
@@ -37359,9 +37558,9 @@ mod tests {
         assert_eq!(
             conflicts
                 .iter()
-                .find(|(_, c)| c.matched_version == "1.0")
+                .find(|f| f.conflict.matched_version == "1.0")
                 .expect("installed 1.0 row")
-                .1
+                .conflict
                 .satisfied_by,
             Some(BlockerSatisfiedBy::Replacement {
                 cp: ("dev-libs".to_string(), "blocked".to_string()),
@@ -37371,9 +37570,9 @@ mod tests {
         assert!(
             !conflicts
                 .iter()
-                .find(|(_, c)| c.matched_version == "1.5")
+                .find(|f| f.conflict.matched_version == "1.5")
                 .expect("merge-bound 1.5 row")
-                .1
+                .conflict
                 .unsolvable,
             "nomerge parent, no graph parents"
         );
@@ -37382,9 +37581,9 @@ mod tests {
         assert_eq!(
             conflicts
                 .iter()
-                .find(|(_, c)| c.matched_version == "1.5")
+                .find(|f| f.conflict.matched_version == "1.5")
                 .expect("merge-bound 1.5 row")
-                .1
+                .conflict
                 .satisfied_by,
             Some(BlockerSatisfiedBy::Uninstall {
                 cpv: "dev-libs/bparent-1.0".to_string(),
@@ -37403,9 +37602,9 @@ mod tests {
         assert!(
             conflicts
                 .iter()
-                .find(|(_, c)| c.matched_version == "1.5")
+                .find(|f| f.conflict.matched_version == "1.5")
                 .expect("merge-bound 1.5 row")
-                .1
+                .conflict
                 .unsolvable,
             "nomerge parent with graph parents"
         );
@@ -37424,9 +37623,9 @@ mod tests {
         assert!(
             conflicts
                 .iter()
-                .find(|(_, c)| c.matched_version == "1.5")
+                .find(|f| f.conflict.matched_version == "1.5")
                 .expect("merge-bound 1.5 row")
-                .1
+                .conflict
                 .unsolvable,
             "#73 cell g: the required-set closure is a parent"
         );
@@ -37519,11 +37718,11 @@ mod tests {
         assert_eq!(conflicts.len(), 2);
         let removal = conflicts
             .iter()
-            .find(|(_, c)| c.matched_version == "1.5")
+            .find(|f| f.conflict.matched_version == "1.5")
             .expect("merge-bound 1.5 row");
-        assert!(!removal.1.unsolvable);
+        assert!(!removal.conflict.unsolvable);
         assert_eq!(
-            removal.1.satisfied_by,
+            removal.conflict.satisfied_by,
             Some(BlockerSatisfiedBy::Uninstall {
                 cpv: "dev-libs/bparent-1.0".to_string(),
                 anchor: ("dev-libs".to_string(), "blocked".to_string()),
@@ -37533,7 +37732,8 @@ mod tests {
         // dropped for the absent owner, the Uninstall twin creates the
         // removal entry and the row rides it.
         let mut entries = vec![upgrade];
-        file_blocker_conflicts(&mut entries, &dir, conflicts);
+        let mut orphans: Vec<OrphanBlocker> = Vec::new();
+        file_blocker_conflicts(&mut entries, &dir, conflicts, &mut orphans);
         assert_eq!(entries.len(), 2);
         let removal_entry = entries
             .iter()
@@ -37552,7 +37752,9 @@ mod tests {
         assert_eq!(removal_entry.blockers[0].matched_version, "1.5");
 
         // A required-set closure member (the owner is in @selected) makes
-        // the block unresolved: no tag, no fabricated removal (A0 n1b).
+        // the block unresolved: no tag, no fabricated removal -- but
+        // (backlog #80) the row is no longer dropped: it rides out as an
+        // orphan for the trailing blocker group (A0 n1b).
         let closure: HashSet<(String, String)> =
             [("dev-libs".to_string(), "bparent".to_string())].into();
         let mut upgrade = graph_entry("dev-libs", "blocked", "1.5");
@@ -37564,17 +37766,29 @@ mod tests {
         assert!(
             conflicts
                 .iter()
-                .find(|(_, c)| c.matched_version == "1.5")
+                .find(|f| f.conflict.matched_version == "1.5")
                 .expect("merge-bound 1.5 row")
-                .1
+                .conflict
                 .unsolvable
         );
         let mut entries = vec![upgrade];
-        file_blocker_conflicts(&mut entries, &dir, conflicts);
+        let mut orphans: Vec<OrphanBlocker> = Vec::new();
+        file_blocker_conflicts(&mut entries, &dir, conflicts, &mut orphans);
         assert!(
             entries.iter().all(|e| e.package != "bparent"),
             "an unresolved absent-owner row fabricates no removal"
         );
+        assert_eq!(orphans.len(), 1, "the n1b row survives as an orphan");
+        let orphan = &orphans[0];
+        assert_eq!(
+            (
+                orphan.owner_category.as_str(),
+                orphan.owner_package.as_str()
+            ),
+            ("dev-libs", "bparent")
+        );
+        assert!(orphan.conflict.unsolvable);
+        assert_eq!(orphan.conflict.matched_version, "1.5");
         let _ = fs::remove_dir_all(&dir);
     }
 

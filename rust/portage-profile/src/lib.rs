@@ -2038,9 +2038,14 @@ fn read_envd_use_tokens(eroot: &Path) -> Vec<String> {
 }
 
 /// Reads every non-comment, non-blank, trimmed line from `path`, which
-/// may be a single file or (like `repos.conf` elsewhere in portuale) a
-/// directory of files merged in sorted-filename order. A missing path
-/// yields an empty list, not an error.
+/// may be a single file or a directory of fragments. A directory is read
+/// with real `_recursive_file_list` semantics
+/// (`lib/portage/util/__init__.py`, via `portage_util::recursive_config_files`):
+/// arbitrary depth, one ascending sort per directory over files and
+/// subdirectories together with each subdirectory expanded in place,
+/// skipping `VCS_DIRS` directories, dot-prefixed names and `~`-suffixed
+/// backups at every level including the root path itself, following
+/// symlinks. A missing path yields an empty list, not an error.
 fn read_config_lines(path: &Path) -> Result<Vec<String>, Error> {
     fn read_file_lines(path: &Path) -> Result<Vec<String>, Error> {
         let text = fs::read_to_string(path).map_err(|e| Error::ReadFile {
@@ -2056,20 +2061,16 @@ fn read_config_lines(path: &Path) -> Result<Vec<String>, Error> {
     }
 
     let mut lines = Vec::new();
-    if path.is_dir() {
-        let entries: Vec<PathBuf> = portage_util::read_dir_paths(path)
-            .map_err(|e| Error::ReadFile {
-                path: path.display().to_string(),
-                source: e,
-            })?
-            .into_iter()
-            .filter(|p| p.is_file())
-            .collect();
-        for entry in entries {
-            lines.extend(read_file_lines(&entry)?);
-        }
-    } else if path.is_file() {
-        lines.extend(read_file_lines(path)?);
+    // Missing paths stay empty (not an error); unreadable ones report.
+    if path.symlink_metadata().is_err() {
+        return Ok(lines);
+    }
+    let files = portage_util::recursive_config_files(path).map_err(|e| Error::ReadFile {
+        path: path.display().to_string(),
+        source: e,
+    })?;
+    for entry in files {
+        lines.extend(read_file_lines(&entry)?);
     }
     Ok(lines)
 }

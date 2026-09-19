@@ -17259,3 +17259,57 @@ cd rust && cargo test --release -p portuale kept_alt_for_display
 # no regression on the host shapes the hoist touches
 time rust/target/release/portuale emerge -p --ignore-default-opts @world
 ```
+
+**`/etc/portage/package.*` directory fragments recurse with real's name filters (backlog #89, 2026-09-18).** Real reads every one of these paths through `_recursive_file_list`: arbitrary depth, one ascending sort per directory over files and subdirectories together with each subdirectory expanded in place, skipping `VCS_DIRS` directories, dot-prefixed names and `~`-suffixed backups at every level including the root path itself, following symlinks. Portuale's `read_config_lines` did a single non-recursive `read_dir` with no name filter, so a nested fragment was silently dropped while an editor backup was live config. `portage_util::recursive_config_files` ports the traversal exactly (each level listed through `read_dir_entries`, so the `PORTUALE_SHUFFLE_DIRS` determinism hook keeps working through it) and both readers — `read_config_lines` and the `repos.conf` scan, which real also reads recursively — share it. Both halves had to land together: recursion without the filters would activate `.git/` and `*~` files as live configuration, strictly worse than today. No committed fixture uses the directory form, so the fix moves zero existing pins.
+
+```
+# the traversal against real's own function, on a staged tree
+python3 -c "from portage.util import _recursive_file_list; print('\n'.join(_recursive_file_list('package.use')))"
+cd rust && cargo test -p portage-util recursive_config_files
+```
+
+**A slot-conflict/residual notice exits 1, like real (backlog #62, 2026-09-18).** This retires the #57 K1 standing convention ("the notice is informational", exit 0). The gate sits in the existing display-then-fail band next to `unsolvable_blockers` — after the `--autounmask-only` early return, before any merge dispatch — and reads the data (`!result.slot_conflicts.is_empty()`), never "the notice was printed", so `-q`/`--json`/`--columns` follow the same rule. Both of real's escapes are ported, and both were verified against real 3.0.82.2 before coding because the naive rule is wrong in exactly these cases: `--autounmask-only` returns 0 first (`actions.py:456-458`), and backtracking-off plus one of `--buildpkgonly`/`--fetchonly`/`--fetch-all-uri`/`--nodeps` tolerates the conflict (`_accept_blocker_conflicts`, `depgraph.py:9259-9271`). Every existing rc-0-with-notice pin was re-pinned against a real capture, not bulk-blessed. One residue filed as backlog #90: at `--backtrack=0` real *silently reconciles* the solvable shape (`_solve_non_slot_operator_slot_conflicts` needs no backtracking) while portuale records it and exits 1 — a recording divergence, which is a different item from the exit-code rule.
+
+```
+# the triangle both sides now fail like real; the escapes still pass
+emerge -p dev-libs/needer dev-libs/othermod; echo $?          # 1, both PMs
+emerge -p --autounmask-only dev-libs/needer dev-libs/othermod; echo $?   # 0, both PMs
+```
+
+**One bed runner for all four fixture-oracle atomlists, and default-bed coverage for the `||` wait path (backlog #87, 2026-09-18).** The bed had grown four atomlists and three env knobs with only the first list running by default, so the `#76 B3` and `#79 D1` cells depended on a human remembering the exact `FX_*` invocation. `run/l0-fixture-oracle-all.sh` runs all four lists with their documented knobs and is the standard bed step from here on. The q3 `RDEPEND` control of the #76 disjunctive-wait shape (`rdisjtarget`/`rdisjowner`: the same satisfied-replacement wait as q1's `BDEPEND` group, but resolvable against the target root) survives the default bed's `ROOT=$FX` split, so it lives in the default atomlist with a `CASES` entry and a contract pin — real and portuale agree byte-for-byte — while q1's `BDEPEND` cell stays on the host list.
+
+```
+../pmtest/differential-test-bed/run/l0-fixture-oracle-all.sh
+python3 -m pytest ../pmtest/pytests-contract-suite/test_emerge_pretend_contract.py -k "oracle_87 or oracle_76" -q
+```
+
+**Installed-package live metadata comes from the vdb-recorded repository, not a repo search (backlog #86, 2026-09-18).** Real's `FakeVartree._aux_get_wrapper` passes `myrepo=pkg.repo` straight to `portdb.aux_get`, so the dynamic-deps view of an installed package always comes from the repo it was built from. Portuale searched the repos by priority at every `installed_dep_string` call site, which disagrees whenever the same version exists in two repos and the recorded one is lower priority — and costs a `read_dir` per installed package where the recorded repo needs one file read (the #83 scan's biggest remaining cost; the measured upper bound for removing it is 0.99–1.00 s → 0.60 s on `emerge -p --oneshot app-editors/nano`, via the unfaithful raw-record route this replaces). All four call sites (blocker scan, resolver loop, `--deep` recursion, merge-order closure) read through one helper, `live_metadata_for_installed`, so they can never disagree; a missing `repository` file (minimal fixture vdbs predate it) or an unconfigured recorded repo falls back to the old search rather than stranding the package, and a version gone from the recorded repo falls back to Raw. The two-repo fixture (`tworepoowner`/`tworepotarget`: overlay copy carries a blocker the testrepo copy lacks, vdb records testrepo) pins it: the old code printed a spurious `[uninstall]` + `[blocks b]` pair, real and the new code print the clean upgrade.
+
+```
+emerge -p =dev-libs/tworepotarget-1.5        # clean upgrade, both PMs
+python3 -m pytest ../pmtest/pytests-contract-suite/test_emerge_pretend_contract.py -k oracle_86 -q
+cd rust && cargo test --release -p portage-repo live_metadata_for_installed
+```
+
+**An unresolved scan-collected blocker row has a display home (backlog #80, 2026-09-18).** The #77 all-installed scan collects blockers from owners the run never walks; when such a blocker is unresolved and the owner is a digraph node with parents (a world member, but no `@world` argument — A0 controls n1b/n6b), real still prints `[blocks B]` with `Conflict: 1 block (1 unsatisfied)` and exits 1. Portuale dropped the row in `file_blocker_conflicts` because no entry owned it. `resolve_blockers` now returns the owner version alongside each conflict (`FiledBlocker`), and entry-less *unsolvable* rows ride out as `GraphResult::orphan_blockers`: printed in the trailing blocker group (flat and tree alike — real's `Display.blockers` is mode-independent), counted in `Conflict:`, firing the `* Error` block and rc 1. No removal is fabricated — the owner stays installed. `Replacement` rows can never orphan (they always carry `satisfied_by`).
+
+```
+# on a root with dev-libs/nomowner world-listed (the n1b shape)
+emerge -p =dev-libs/nomtarget-1.5            # U + [blocks B] + (1 unsatisfied), rc 1, both PMs
+```
+
+**A holdable plain pin from the reverse-dependency scan is ignored, not enforced (backlog #79, 2026-09-18).** The D0 trace proved the producer: `reverse_dependency_constraints` enforced an installed consumer's plain `~` BDEPEND pin where real's `_slot_operator_check_reverse_dependencies` is never even consulted — it runs only from the slot-operator update probe and skips parents whose cp has another tracker instance. The fix ports the actual gating: a holdable non-built-`:=` pin is ignored entirely (real merges the upgrade with no filter and no report), while built slot-operator pins (#24's rebuilds) and every not-holdable pin (dropped for the residual report — keeper's shape) behave as before. The D1 hermetic cell now matches the container oracle byte-for-byte (`rdcblocker-2.0` + `rdcpuller-2.0` + `[blocks B]`, rc 1) and both `portuale-bug` allowlist entries are deleted. Along the way the hermetic probe corrected a stale premise the old pin encoded: a holdable RDEPEND pin from a world-reachable consumer does *not* block a bare `--update` in real either (clean upgrade, verified `--deep` too), so `test_reachable_installed_consumer_version_bound_blocks_an_upgrade` is rewritten as `..._holdable_pin_does_not_block_an_upgrade`.
+
+```
+FX_WORLD_EXTRA=dev-libs/rdctarget ../pmtest/differential-test-bed/run/l0-fixture-oracle.sh ../pmtest/differential-test-bed/atomlists/l0-fixture-oracle-rdcpin.txt
+```
+
+**`--backtrack=0`'s empty merge list is #26 work, not the append gate (backlog #78, re-scoped 2026-09-18, no product change).** The shared S0 with #79 re-confirmed E0 verdict (b) on a staged installed matrix: the `PORTUALE_DYNAMIC_DEPS_APPEND` gate only re-tags the provider at `--backtrack=0` and, with backtracking on, empties the plan where real rebuilds the consumers and upgrades the provider — and the two #24 pins named in the gate's own comment fail with it on. The real gap is selection-time: portuale never uses the appended built-atom dep string as a satisfaction check during candidate selection, while real's resting graph reads the consumer's recorded `provpkg:0/1=`, satisfied by the installed provider. That is the #26-family slot-op probe ordering the filing already names, so #78 closes here and re-opens there.
+
+**Two new slots of one cp merge in real's order via `_minimize_children` (backlog #85, 2026-09-18 — not the #17 wall).** The bounded S0 proved the standing attribution wrong: real's `--debug` digraph dump shows `treeslotuser` has *no edge at all* to 1.10 — real's `_minimize_children` (`depgraph.py:4751-4856`) eliminates the redundant 1.10 selection (`:0` matches only 1.9, the bare atom matches both), so the bias parent-count ties 1-1 and discovery order emits `1.9, 1.10`. Portuale ranked the bare atom vercmp-highest independently, adding the extra `user → 1.10` edge that flipped the bias. The elimination is ported into the shared `select_dep_target` (both `build_digraph` and `print_tree` through `resolved_dep_targets`, per the #82 lesson), with one deliberate narrowing: `NoVisibleCandidate` entries never participate (real yields `(atom, None)` without elimination for them) — without it the ascending elimination drops the `opartlya` NVC entry before its installed twin and flips the disclosure order the contract suite pins. Fully-redundant atom sets still collapse to the highest version, so only partially-overlapping shapes move. The bed cell is byte-equal flat and tree; the `treeslot-new-slot-merge-order` allowlist entry is deleted.
+
+```
+emerge -pv dev-libs/treeslotuser             # 1.9, 1.10, treeslotparent, treeslotuser, both PMs
+emerge --tree dev-libs/treeslotuser          # same nesting, both PMs
+cd rust && cargo test --release -p portage-repo minimize
+```
