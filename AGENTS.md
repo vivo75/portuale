@@ -73,11 +73,13 @@ the next slice") and expects the same rhythm every time:
    regressions the fixture suite can't; it's heavier, so it's not part of
    every slice. See pmtest's `USAGE.AGENTS.md` and
    `differential-test-bed/README.md`.
-9. **Only `git commit` / `git push` when explicitly asked** — separate,
-   later requests each time, never implied by finishing a slice. Commit
-   title `<what changed>: <short description>`; wrapped body explaining
-   the *why* and the real-source grounding; trailer
-   `Co-Authored-By: …` replace `…` with actual model name
+ 9. **Only `git commit` / `git push` when explicitly asked** — separate,
+    later requests each time, never implied by finishing a slice. Commit
+    title `<what changed>: <short description>`; wrapped body explaining
+    the *why* and the real-source grounding; trailer
+    `Co-Authored-By: …` replace `…` with actual model name. Commits and
+    pushes are paired across the two repos — see "Two repos, one
+    project" below; one ask covers both repos unless stated otherwise.
 10. **Track slices as tasks** — one per shipped slice, `completed` only
     once step 8 is green and the docs are updated.
 11. **Close out a multi-slice plan in one commit.** When the last slice
@@ -92,6 +94,38 @@ the next slice") and expects the same rhythm every time:
     entry cites if the branch was rebased before merging (cite hashes
     reachable from `main`, not pre-rebase ones), and give every residue
     you defer a real backlog number, checking the number is free first.
+
+## Two repos, one project
+
+`portuale` (this repo: product code, unit tests, `docs/`) and `pmtest`
+(the sibling checkout at `../pmtest`: the contract suite, fixtures, the
+test bed, the harvested corpus) are **one project in two repositories**.
+Every rule above that says "this repo" applies to the pair, split by
+content, never duplicated:
+
+- **Branches open in both repos at the same time, under the same name.**
+  Before starting work, `git checkout -b <name>` here *and* in
+  `../pmtest` — even if the slice looks like it will touch only one
+  side (fixtures added mid-slice are the norm, not the exception). A
+  branch that exists in only one repo is already drifted; if you find
+  one, say so instead of working around it.
+- **Commits are paired.** A slice that touches both sides lands as two
+  commits, one per repo, on the same-named branch: product change here,
+  fixtures / bed cells / contract pins / corpus bless there (step 5's
+  split). The two messages quote each other so the pair stays traceable
+  with nothing else linking them: the pmtest commit names the portuale
+  branch and slice, and the portuale commit quotes the pmtest short sha
+  (so commit pmtest first). A corpus bless (`PORTUALE_CORPUS_BLESS=1`)
+  always rides in the pmtest commit, reviewed drift first, never in this
+  repo's.
+- **Standalone commits stay single.** Work that genuinely touches one
+  repo only (e.g. a pmtest-only fixture correction) commits in that repo
+  alone, on `main` or its own branch, with no counterpart — but the
+  message says so explicitly, so the next agent doesn't go hunting for
+  the missing half.
+- **Pushes go together.** Rule 9's ask covers both repos at once unless
+  stated otherwise; push portuale first, then pmtest, and report both
+  shas. Never push one half of a pair and leave the other local.
 
 ### Numbering new backlog items
 
