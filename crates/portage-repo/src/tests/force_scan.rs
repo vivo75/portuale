@@ -360,6 +360,148 @@ fn slot_operator_slot_change_probe_keeps_a_binary_whose_ebuild_is_invisible() {
     );
 }
 
+/// The backtrack arm masks a merge-bound stale binary so the restart resolves the
+/// dep to the tree ebuild instead.
+#[test]
+fn slot_operator_slot_change_probe_masks_a_stale_binary() {
+    use md5::Digest as _;
+    use std::fmt::Write as _;
+    let base = slotundo_temp_dir("212-probe");
+    let repo = base.join("repo");
+    let write_pkg = |cp: &str, pv: &str, slot: &str, rdepend: &str| {
+        let (cat, pkg) = cp.split_once('/').expect("category/package");
+        let dir = repo.join(cat).join(pkg);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut body =
+            format!("EAPI=8\nDESCRIPTION=\"212 probe\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\n");
+        if !rdepend.is_empty() {
+            writeln!(body, "RDEPEND=\"{rdepend}\"").unwrap();
+        }
+        std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
+        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+        let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=212 probe\nEAPI=8\n".to_string();
+        if !rdepend.is_empty() {
+            writeln!(entry, "RDEPEND={rdepend}").unwrap();
+        }
+        writeln!(entry, "KEYWORDS=amd64\nSLOT={slot}\n_md5_={md5}").unwrap();
+        let cachedir = repo.join("metadata/md5-cache").join(cat);
+        std::fs::create_dir_all(&cachedir).unwrap();
+        std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+    };
+    write_pkg(
+        "dev-libs/maskparent",
+        "1.0",
+        "0",
+        "dev-libs/maskchild:= dev-libs/samechild:= dev-libs/notreechild:=",
+    );
+    // Stale: tree moved 0/1 -> 0/2, the binary below was built at 0/1.
+    write_pkg("dev-libs/maskchild", "1.0", "0/2", "");
+    // Unmoved: tree and binary agree on 0/1.
+    write_pkg("dev-libs/samechild", "1.0", "0/1", "");
+    // `notreechild` has no tree ebuild at all (no write_pkg call).
+    let repos = vec![RepoConfig {
+        name: "testrepo".to_string(),
+        location: repo.clone(),
+        priority: 0,
+        is_main: true,
+        masters: vec![],
+        profile_formats: vec![],
+        cache_formats: vec![],
+        aliases: vec![],
+        sync_type: None,
+        sync_uri: None,
+        volatile: false,
+        module_specific_options: vec![],
+    }];
+    let parent = GraphEntry {
+        discovery: 0,
+        outcome: PretendOutcome::New {
+            version: "1.0".into(),
+        },
+        ..graph_entry("dev-libs", "maskparent", "1.0")
+    };
+    let binary_child = |package: &str, slot: &str, sub: &str| GraphEntry {
+        discovery: 0,
+        outcome: PretendOutcome::New {
+            version: "1.0".into(),
+        },
+        slot: Some(slot.into()),
+        sub_slot: Some(sub.into()),
+        source: CandidateSource::Binary,
+        ..graph_entry("dev-libs", package, "1.0")
+    };
+    let entries = vec![
+        parent.clone(),
+        binary_child("maskchild", "0", "1"),
+        binary_child("samechild", "0", "1"),
+        binary_child("notreechild", "0", "1"),
+    ];
+    let empty = BTreeSet::new();
+
+    // Only the slot-moved binary reports; nothing schedules here.
+    let mut scheduled = BTreeSet::new();
+    let mut masked: BTreeSet<(String, String, String)> = BTreeSet::new();
+    slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
+        root: &base,
+        repos: &repos,
+        entries: &entries,
+        undone: &empty,
+        scheduled: &mut scheduled,
+        excluded: &[],
+        masked: &mut masked,
+        config: &test_config(),
+    });
+    assert!(scheduled.is_empty());
+    assert_eq!(
+        masked,
+        BTreeSet::from([(
+            "dev-libs".to_string(),
+            "maskchild".to_string(),
+            "1.0".to_string()
+        )]),
+        "the stale binary is masked; the unmoved one, the ebuild-less \
+         one and the scheduled set are untouched"
+    );
+
+    // `--exclude` on the tree ebuild vetoes the mask (Portage).
+    let mut masked_excl: BTreeSet<(String, String, String)> = BTreeSet::new();
+    let mut scheduled_excl = BTreeSet::new();
+    slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
+        root: &base,
+        repos: &repos,
+        entries: &entries,
+        undone: &empty,
+        scheduled: &mut scheduled_excl,
+        excluded: &["dev-libs/maskchild".to_string()],
+        masked: &mut masked_excl,
+        config: &test_config(),
+    });
+    assert!(
+        masked_excl.is_empty(),
+        "an excluded tree ebuild is no replacement"
+    );
+
+    // A binary parent never probes (Portage's `not dep.parent.built` gate).
+    let binary_parent = GraphEntry {
+        source: CandidateSource::Binary,
+        ..parent.clone()
+    };
+    let mut masked_bpar: BTreeSet<(String, String, String)> = BTreeSet::new();
+    let mut scheduled_bpar = BTreeSet::new();
+    slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
+        root: &base,
+        repos: &repos,
+        entries: &[binary_parent, binary_child("maskchild", "0", "1")],
+        undone: &empty,
+        scheduled: &mut scheduled_bpar,
+        excluded: &[],
+        masked: &mut masked_bpar,
+        config: &test_config(),
+    });
+    assert!(masked_bpar.is_empty(), "a binary parent never probes");
+    let _ = fs::remove_dir_all(&base);
+}
+
 /// The update force scan forces the installed child's update when the tree has a
 /// newer slot the replacement's `:=` accepts; a second parent's pin or a missing
 /// `--update` refuses it.

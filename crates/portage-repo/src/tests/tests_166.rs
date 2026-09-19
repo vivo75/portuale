@@ -85,6 +85,19 @@ struct ArgInput166Args<'a> {
     config: &'a portage_profile::Config,
 }
 
+// ---- `direct_solve_instance_use` (Portage per-instance USE). ----
+
+/// Arguments of [`write_pkg_166`].
+struct WritePkg166Args<'a> {
+    repo: &'a Path,
+    cp: &'a str,
+    pv: &'a str,
+    slot: &'a str,
+    iuse: &'a str,
+    depend: &'a str,
+    required_use: &'a str,
+}
+
 /// One installed instance with the given `USE` record.
 fn use_install_166(root: &Path, cat: &str, pf: &str, use_flags: &str) {
     let d = root.join("var/db/pkg").join(cat).join(pf);

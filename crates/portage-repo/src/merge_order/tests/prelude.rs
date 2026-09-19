@@ -1,6 +1,111 @@
 use super::*;
 
 #[test]
+fn select_dep_target_narrows_and_ranks_like_portage() {
+    let runtime = DepPriority {
+        runtime: true,
+        ..DepPriority::default()
+    };
+    let mut installed = new_entry("dev-libs", "slotted", "1.0", Vec::new());
+    installed.outcome = PretendOutcome::AlreadyInstalled {
+        version: "1.0".into(),
+    };
+    installed.slot = Some("0".into());
+    installed.sub_slot = Some("0".into());
+    let mut merged = new_entry("dev-libs", "slotted", "2.0", Vec::new());
+    merged.slot = Some("0".into());
+    merged.sub_slot = Some("0".into());
+    let root = Path::new("/nonexistent-root-for-unit-test");
+    let none = HashSet::new();
+    // A version-qualified atom matches only the merge-bound 2.0.
+    let entries = vec![
+        installed.clone(),
+        merged.clone(),
+        new_entry(
+            "dev-libs",
+            "user",
+            "1.0",
+            vec![plain_edge(
+                ">=dev-libs/slotted-2",
+                "dev-libs",
+                "slotted",
+                runtime,
+            )],
+        ),
+    ];
+    let pre = digraph_prelude(&entries, root);
+    assert_eq!(
+        pre.select_dep_target(SelectDepTargetArgs {
+            entries: &entries,
+            from: 2,
+            from_deps: &entries[2].deps,
+            ei: 0,
+            suppressed: &none,
+            merge_bound_only: false
+        }),
+        Some(1)
+    );
+    // A bare atom matches both, but `merge_bound_only` drops the
+    // installed candidate.
+    let entries = vec![
+        installed.clone(),
+        merged,
+        new_entry(
+            "dev-libs",
+            "user",
+            "1.0",
+            vec![plain_edge(
+                "dev-libs/slotted",
+                "dev-libs",
+                "slotted",
+                runtime,
+            )],
+        ),
+    ];
+    let pre = digraph_prelude(&entries, root);
+    assert_eq!(
+        pre.select_dep_target(SelectDepTargetArgs {
+            entries: &entries,
+            from: 2,
+            from_deps: &entries[2].deps,
+            ei: 0,
+            suppressed: &none,
+            merge_bound_only: true
+        }),
+        Some(1),
+        "both candidates match; merge_bound_only still prefers the merged one"
+    );
+    // The only match is installed and `merge_bound_only` drops it.
+    let entries = vec![
+        installed,
+        new_entry(
+            "dev-libs",
+            "user",
+            "1.0",
+            vec![plain_edge(
+                "dev-libs/slotted",
+                "dev-libs",
+                "slotted",
+                runtime,
+            )],
+        ),
+    ];
+    let pre = digraph_prelude(&entries, root);
+    assert_eq!(
+        pre.select_dep_target(SelectDepTargetArgs {
+            entries: &entries,
+            from: 1,
+            from_deps: &entries[1].deps,
+            ei: 0,
+            suppressed: &none,
+            merge_bound_only: true
+        }),
+        None,
+        "the only match is installed and merge_bound_only drops it"
+    );
+}
+
+#[test]
 fn select_dep_target_elimination_orders_installed_before_merge_bound() {
     let runtime = DepPriority {
         runtime: true,

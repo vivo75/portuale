@@ -1,5 +1,91 @@
 use super::*;
 
+/// `live_metadata_for_installed` reads the vdb-recorded repo's copy, never the
+/// priority winner's (Portage's `FakeVartree`).
+#[test]
+fn live_metadata_for_installed_prefers_the_recorded_repo() {
+    use md5::Digest as _;
+    use std::fmt::Write as _;
+    let base = TempDir::new("portuale-live-meta").keep();
+    // Two scratch repos, same cpv, different RDEPEND.
+    for (repo, rdepend) in [("lowrepo", ""), ("highrepo", "dev-libs/blocked")] {
+        let dir = base.join(repo).join("dev-libs").join("twounit");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut body =
+            "EAPI=8\nDESCRIPTION=\"scratch recorded-repo unit\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\n"
+                .to_string();
+        if !rdepend.is_empty() {
+            writeln!(body, "RDEPEND=\"{rdepend}\"").unwrap();
+        }
+        std::fs::write(dir.join("twounit-1.0.ebuild"), &body).unwrap();
+        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+        let mut entry =
+            "DEFINED_PHASES=-\nDESCRIPTION=scratch recorded-repo unit\nEAPI=8\n".to_string();
+        if !rdepend.is_empty() {
+            writeln!(entry, "RDEPEND={rdepend}").unwrap();
+        }
+        writeln!(entry, "KEYWORDS=amd64\nSLOT=0\n_md5_={md5}").unwrap();
+        let cachedir = base.join(repo).join("metadata/md5-cache/dev-libs");
+        std::fs::create_dir_all(&cachedir).unwrap();
+        std::fs::write(cachedir.join("twounit-1.0"), entry).unwrap();
+    }
+    let repo_config = |name: &str, priority: i32| RepoConfig {
+        name: name.to_string(),
+        location: base.join(name),
+        priority,
+        is_main: name == "lowrepo",
+        masters: vec![],
+        profile_formats: vec![],
+        cache_formats: vec![],
+        aliases: vec![],
+        sync_type: None,
+        sync_uri: None,
+        volatile: false,
+        module_specific_options: vec![],
+    };
+    let repos = vec![repo_config("lowrepo", -1000), repo_config("highrepo", 10)];
+
+    // Recorded repo wins over priority: the vdb says `lowrepo`.
+    let root = tmp_vdb(
+        "dev-libs",
+        "twounit-1.0",
+        &[("repository", b"lowrepo\n"), ("USE", b"\n")],
+    );
+    let meta = live_metadata_for_installed(&repos, &root, "dev-libs", "twounit", "1.0")
+        .expect("recorded repo carries the version");
+    assert_eq!(meta.get("RDEPEND").map(String::as_str), None);
+    let _ = std::fs::remove_dir_all(&root);
+
+    // No `repository` file: the priority search is the fallback.
+    let root = tmp_vdb("dev-libs", "twounit-1.0", &[("USE", b"\n")]);
+    let meta = live_metadata_for_installed(&repos, &root, "dev-libs", "twounit", "1.0")
+        .expect("fallback search finds the version");
+    assert_eq!(
+        meta.get("RDEPEND").map(String::as_str),
+        Some("dev-libs/blocked")
+    );
+    let _ = std::fs::remove_dir_all(&root);
+
+    // Recorded repo no longer configured: same fallback.
+    let root = tmp_vdb(
+        "dev-libs",
+        "twounit-1.0",
+        &[("repository", b"gone-overlay\n"), ("USE", b"\n")],
+    );
+    let meta = live_metadata_for_installed(&repos, &root, "dev-libs", "twounit", "1.0")
+        .expect("fallback search finds the version");
+    assert_eq!(
+        meta.get("RDEPEND").map(String::as_str),
+        Some("dev-libs/blocked")
+    );
+    let _ = std::fs::remove_dir_all(&root);
+
+    // Gone from every repo: `None` (the caller's Raw fallback).
+    assert!(live_metadata_for_installed(&repos, &root, "dev-libs", "twounit", "9.9").is_none());
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 #[test]
 fn installed_dep_string_effective_is_the_live_ebuild_value() {
     // The built-`:=` append is EAPI-gated like Portage (`FakeVartree`); a vdb

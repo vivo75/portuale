@@ -1665,6 +1665,68 @@ mod tests_164 {
         ));
     }
 
+    /// Scratch repo writer with per-version KEYWORDS/LICENSE/SLOT.
+    fn repo_164(base: &Path, pkgs: &[(&str, &str, &str, &str, &str)]) -> Vec<RepoConfig> {
+        // (cp, pv, slot, keywords, license).
+        use md5::Digest as _;
+        use std::fmt::Write as _;
+        let repo = base.join("repo164");
+        for (cp, pv, slot, keywords, license) in pkgs {
+            let (cat, pkg) = cp.split_once('/').expect("category/package");
+            let dir = repo.join(cat).join(pkg);
+            std::fs::create_dir_all(&dir).unwrap();
+            let body = format!(
+                "EAPI=8\nDESCRIPTION=\"164 visibility\"\nSLOT=\"{slot}\"\nKEYWORDS=\"{keywords}\"\nLICENSE=\"{license}\"\n"
+            );
+            std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
+            let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+            let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=164 visibility\nEAPI=8\n".to_string();
+            writeln!(entry, "KEYWORDS={keywords}").unwrap();
+            writeln!(entry, "LICENSE={license}").unwrap();
+            writeln!(entry, "SLOT={slot}\n_md5_={md5}").unwrap();
+            let cachedir = repo.join("metadata/md5-cache").join(cat);
+            std::fs::create_dir_all(&cachedir).unwrap();
+            std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+        }
+        vec![RepoConfig {
+            name: "testrepo".to_string(),
+            location: repo,
+            priority: 0,
+            is_main: true,
+            masters: vec![],
+            profile_formats: vec![],
+            cache_formats: vec![],
+            aliases: vec![],
+            sync_type: None,
+            sync_uri: None,
+            volatile: false,
+            module_specific_options: vec![],
+        }]
+    }
+
+    #[test]
+    fn visible_tree_matches_164_license_masked_versions_stay_out() {
+        // Portage `LicenseManager.getMissingLicenses` verdict inside the
+        // visible set: 1.0 declares an unaccepted license, 2.0 an
+        // accepted one.
+        let dir = slotundo_temp_dir("164-vtm-lic");
+        let repos = repo_164(
+            &dir,
+            &[
+                ("dev-libs/vtmlic", "1.0", "0", "amd64", "GPL-2"),
+                ("dev-libs/vtmlic", "2.0", "0", "amd64", "MIT"),
+            ],
+        );
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            accept_license: vec!["MIT".to_string()],
+            ..Default::default()
+        };
+        let got = visible_tree_matches(&repos, "dev-libs/vtmlic", &config, &[]);
+        assert_eq!(got, vec![("2.0".to_string(), "0".to_string())]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     /// Arguments of [`entry_164`].
     struct Entry164Args<'a> {
         category: &'a str,
@@ -2345,6 +2407,7 @@ mod license;
 mod masked_deps;
 mod metadata_cache;
 mod pass;
+mod pass_helpers;
 mod pretend;
 mod queue;
 mod rebuild_scan;
