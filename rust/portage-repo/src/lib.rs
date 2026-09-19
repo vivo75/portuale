@@ -9844,6 +9844,7 @@ fn atoms_all_in_graph(
     atoms: &[String],
     entries: &[GraphEntry],
     config: &portage_profile::Config,
+    queued: &[QueueItem],
 ) -> bool {
     let non_blocker: Vec<&String> = atoms
         .iter()
@@ -9854,9 +9855,29 @@ fn atoms_all_in_graph(
     if non_blocker.is_empty() {
         return false;
     }
+    // Backlog #90 (S1): real resolves `||` groups off
+    // `_dep_disjunctive_stack`, i.e. only after the main `dep_stack`
+    // has drained -- so by resolution time every plain dep this run
+    // will ever graph is already graphed. Portuale resolves `||`
+    // eagerly at pop time; a queued-but-unresolved atom approximates
+    // that drain state (cp-level, mirroring `atom_cp_installed`'s
+    // own cp-level style beside it -- version/USE precision would
+    // need the not-yet-selected instance). Residual risk: a queued
+    // dep that later proves unresolvable mispredicts the branch;
+    // the backtrack loop bounds that the way it bounds every
+    // speculative selection.
+    let queued_cps: HashSet<(String, String)> = queued
+        .iter()
+        .filter_map(|q| {
+            portage_dep::parse_atom(&q.atom).map(|a| (a.category.clone(), a.package.clone()))
+        })
+        .collect();
     non_blocker.iter().all(|a| {
         let Some(parsed) = portage_dep::parse_atom(a) else {
             return false;
+        };
+        if queued_cps.contains(&(parsed.category.clone(), parsed.package.clone())) {
+            return true;
         };
         let use_deps = parsed.use_deps.unwrap_or_default();
         entries.iter().any(|e| {
@@ -9982,13 +10003,17 @@ fn downgrade_probe(
 ///     needs the update mode threaded to this depth and is left out.
 ///   - `replacing` (`will_replace_child`): an atom of the entry's own
 ///     `cat/pkg` (`self_cp`) is never demoted.
+#[allow(clippy::too_many_arguments)]
 fn alternative_downgrade_demoted(
     repos: &[RepoConfig],
+    root: &Path,
     config: &portage_profile::Config,
     entries: &[GraphEntry],
     self_cp: &(String, String),
     constraints: &HashMap<(String, String), Vec<String>>,
     atoms: &[String],
+    queued: &[QueueItem],
+    update: bool,
 ) -> bool {
     atoms.iter().any(|a| {
         let Some(at) = portage_dep::parse_atom(a) else {
@@ -10010,7 +10035,7 @@ fn alternative_downgrade_demoted(
         };
         // Graph nodes in `cat/pkg:avail_slot`: merge-bound versions, and the
         // installed version when an `AlreadyInstalled` node holds the slot.
-        let in_slot: Vec<String> = entries
+        let mut in_slot: Vec<String> = entries
             .iter()
             .filter(|e| {
                 e.category == at.category
@@ -10028,6 +10053,53 @@ fn alternative_downgrade_demoted(
                 PretendOutcome::NoVisibleCandidate | PretendOutcome::Uninstall { .. } => None,
             })
             .collect();
+        // Backlog #90 (S1): real selects every world/argv atom inline
+        // and forward before walking anything, so by the time a
+        // `||` alternative is judged the pending update is already a
+        // graph node. Portuale walks last-declared-first and judges
+        // eagerly: a queued atom on the same cp stands in for the
+        // not-yet-graphed selection. The hypothetical is what that
+        // selection would pick -- tree-best under `--update`
+        // (the update real already graphed), installed-best otherwise
+        // (real selected the installed instance) -- evaluated against
+        // the queued atom's own text, with that cp's hard constraints.
+        if in_slot.is_empty() {
+            let mut hypothetical: Vec<String> = Vec::new();
+            for q in queued {
+                let Some(qat) = portage_dep::parse_atom(&q.atom) else {
+                    continue;
+                };
+                if qat.category != at.category || qat.package != at.package {
+                    continue;
+                }
+                let qextra = constraints
+                    .get(&(qat.category.clone(), qat.package.clone()))
+                    .map_or(&[][..], Vec::as_slice);
+                if update {
+                    hypothetical.extend(
+                        visible_tree_matches(repos, &q.atom, config, qextra)
+                            .into_iter()
+                            .map(|(v, _)| v),
+                    );
+                } else {
+                    hypothetical.extend(
+                        installed_candidates(root, &qat.category, &qat.package)
+                            .into_iter()
+                            .filter_map(|(v, _, _)| {
+                                let probe = format!("{}/{}-{v}", qat.category, qat.package);
+                                if portage_dep::match_from_list(&q.atom, &[probe.as_str()])
+                                    .is_some_and(|m| !m.is_empty())
+                                {
+                                    Some(v)
+                                } else {
+                                    None
+                                }
+                            }),
+                    );
+                }
+            }
+            in_slot = hypothetical;
+        }
         let Some(highest_in_graph) = in_slot.iter().max_by(|x, y| vercmp_ordering(x, y)) else {
             return false;
         };
@@ -10091,6 +10163,8 @@ fn disjunction_preference(
     constraints: &HashMap<(String, String), Vec<String>>,
     root_deps_running_root: Option<&Path>,
     atoms: &[String],
+    queued: &[QueueItem],
+    update: bool,
 ) -> portage_use_reduce::AltPreference {
     let constraints_for = |a: &str| -> &[String] {
         portage_dep::parse_atom(a)
@@ -10215,7 +10289,17 @@ fn disjunction_preference(
     // `installed_downgrade` fires (dep_check.py soft 634, bug 531656) --
     // backlog #35, see `alternative_downgrade_demoted`. `entries` is the
     // resolver's live in-progress set at both call sites.
-    if alternative_downgrade_demoted(repos, config, entries, self_cp, constraints, atoms) {
+    if alternative_downgrade_demoted(
+        repos,
+        root,
+        config,
+        entries,
+        self_cp,
+        constraints,
+        atoms,
+        queued,
+        update,
+    ) {
         return portage_use_reduce::AltPreference::Other;
     }
     // Backlog #22 slice 5 (`docs/history/022-agent-task-22-zapdeps.fable.md` §4):
@@ -10241,7 +10325,7 @@ fn disjunction_preference(
         // first-listed `gnome-keyring`) ranks above one that would need a
         // fresh merge.
         return if atoms.iter().all(|a| atom_cp_installed(root, a))
-            || atoms_all_in_graph(atoms, entries, config)
+            || atoms_all_in_graph(atoms, entries, config, queued)
         {
             portage_use_reduce::AltPreference::Installed
         } else {
@@ -10259,7 +10343,7 @@ fn disjunction_preference(
     if !all_use_unmasked {
         return portage_use_reduce::AltPreference::Other;
     }
-    if atoms_all_in_graph(atoms, entries, config) {
+    if atoms_all_in_graph(atoms, entries, config, queued) {
         return portage_use_reduce::AltPreference::UnsatUseInGraph;
     }
     // Real `unsat_use_installed`'s `all_installed_slots` (dep_check.py
@@ -10336,6 +10420,7 @@ fn promote_tied_alternative(
     entries: &[GraphEntry],
     constraints: &HashMap<(String, String), Vec<String>>,
     alts: &[Vec<String>],
+    queued: &[QueueItem],
 ) -> usize {
     struct Choice {
         id: usize,
@@ -10385,7 +10470,7 @@ fn promote_tied_alternative(
                     && atoms.iter().all(|a| {
                         atom_installed_in_slot_of(root, repos, config, a, constraints_for(a))
                     }),
-                all_in_graph: atoms_all_in_graph(atoms, entries, config),
+                all_in_graph: atoms_all_in_graph(atoms, entries, config, queued),
                 cp_map,
             }
         })
@@ -13743,6 +13828,81 @@ fn bind_slot_operator_deps(depstr: &str, entries: &[GraphEntry], root: &Path) ->
         .join(" ")
 }
 
+/// Backlog #90 (S1): does a bare `cat/pkg:=` atom's built binding point
+/// at a different sub-slot than `existing_sub`? Real binds `:=` to the
+/// sub-slot of the *installed* instance (the ABI it was built against),
+/// never to whatever version this walk happened to select first: under
+/// reversed walk order the raw `:=` would match the just-selected
+/// 3.0.4:0/0 and swallow the genuine sub-slot shift the installed
+/// 3.1.1:0/13 reports (the need_rebuild-trailer shape: ark's built
+/// `:0/0=` alongside the ebuild `:=`). The binding's sub-slot is the
+/// tree metadata's for the highest installed version (the vdb `SLOT`
+/// file of a minimal root need not carry it); no installed instance --
+/// or no tree sub-slot for it -- falls back to "not shifted" (the raw
+/// match above stands).
+fn built_equals_binding(
+    root: &Path,
+    repos: &[RepoConfig],
+    category: &str,
+    package: &str,
+) -> Option<(String, String)> {
+    let inst_ver = installed_candidates(root, category, package)
+        .into_iter()
+        .map(|(v, _, _)| v)
+        .max_by(|x, y| vercmp_ordering(x, y))?;
+    let (bound_sub, _, _) = slot_conflict_meta(repos, category, package, &inst_ver);
+    if bound_sub.is_empty() {
+        return None;
+    }
+    Some((inst_ver, bound_sub))
+}
+
+fn built_equals_shifted_slot(
+    root: &Path,
+    repos: &[RepoConfig],
+    category: &str,
+    package: &str,
+    existing_sub: &str,
+) -> bool {
+    built_equals_binding(root, repos, category, package)
+        .is_some_and(|(_, bound_sub)| bound_sub != existing_sub)
+}
+
+/// Backlog #90 (S1), second half: a `:=` shift is only a *conflict* when
+/// the bound consumer cannot be rebuilt -- real rebuilds a rebuildable
+/// consumer in place (`R`, no conflict, no trailer) and only the
+/// `--exclude` / `--useoldpkg-atoms` consumer is stuck (the two
+/// need_rebuild-trailer reasons this pins; the masked-or-unavailable
+/// ebuild reason stays the filed follow-up). Without this gate the
+/// shift rule above would record a phantom conflict on every ordinary
+/// sub-slotted update (mlocaml-4.02.1: the update IS the bound
+/// version's move, mllablgl rebuilds), which backtracking then masks
+/// into invisibility.
+fn built_equals_shift_unrebuildable(
+    root: &Path,
+    repos: &[RepoConfig],
+    category: &str,
+    package: &str,
+    existing_sub: &str,
+    pullers: &SlotPullers,
+    excluded: &[String],
+) -> bool {
+    if !built_equals_shifted_slot(root, repos, category, package, existing_sub) {
+        return false;
+    }
+    pullers
+        .get(&(category.to_string(), package.to_string()))
+        .is_some_and(|ps| {
+            ps.iter().any(|(pcat, ppkg, pver, _)| {
+                let cpv = format!("{pcat}/{ppkg}-{pver}");
+                excluded
+                    .iter()
+                    .any(|ex| matches_config_entry(ex, &cpv, pcat, ppkg))
+                    || useoldpkg_atom_matches(pcat, ppkg, pver)
+            })
+        })
+}
+
 /// One token of [`bind_slot_operator_deps`]. The rewrite is string
 /// surgery on the atom's own slot-dep substring (`:=` / `:2=` /
 /// `:2/3=`), the same reconstruction `ebuild_phases.rs::bind_slot_operator`
@@ -15324,10 +15484,12 @@ fn collect_unwalked_installed_blockers(
                     disj_constraints,
                     root_deps_running_root,
                     atoms,
+                    &[],
+                    false,
                 )
             },
             &mut |alts: &[Vec<String>]| {
-                promote_tied_alternative(repos, config, root, entries, disj_constraints, alts)
+                promote_tied_alternative(repos, config, root, entries, disj_constraints, alts, &[])
             },
         ) else {
             continue;
@@ -17045,6 +17207,7 @@ impl Deep {
 /// -- see `suggested_parent_use_candidate`'s own doc comment) to recover
 /// the original conditional form after evaluation has already replaced
 /// it in the queued atom text itself.
+#[derive(Clone)]
 struct QueueItem {
     atom: String,
     depth: u32,
@@ -17072,6 +17235,46 @@ struct QueueItem {
 /// triples to build each choice's `conflict_atoms`. See
 /// `resolve_pretend_graph`'s `slot_pullers`.
 type SlotPullers = HashMap<(String, String), Vec<(String, String, String, String)>>;
+
+/// Tokens of a pre-reduce dependency list that sit inside an `|| ( ...
+/// )` group (any depth). Backlog #90 (S1): real drains the plain
+/// `dep_stack` fully before popping one entry off
+/// `_dep_disjunctive_stack` (`depgraph.py:3257-3268`), so a `||`-chosen
+/// atom enters the graph strictly after every plain dep -- including
+/// ones declared *after* the group. `enqueue_flat_deps` needs that
+/// split because the flattened list no longer says which tokens a
+/// `||` produced. `flag? ( ... )` bodies are NOT `||` groups (their
+/// members stay plain); a token occurring both inside and outside a
+/// group classifies as group-chosen (pathological overlap, documented
+/// here rather than handled).
+fn or_group_universe(tokens: &[String]) -> HashSet<String> {
+    let mut out = HashSet::new();
+    let mut stack: Vec<bool> = Vec::new();
+    let mut pending_or = false;
+    for tok in tokens {
+        match tok.as_str() {
+            "||" => pending_or = true,
+            "(" => {
+                stack.push(pending_or);
+                pending_or = false;
+            }
+            ")" => {
+                stack.pop();
+            }
+            _ => {
+                if tok.ends_with('?') {
+                    pending_or = false;
+                } else {
+                    if stack.iter().any(|b| *b) {
+                        out.insert(tok.clone());
+                    }
+                    pending_or = false;
+                }
+            }
+        }
+    }
+    out
+}
 
 /// Queues every atom in `flat_deps` (a `use_reduce_flat`/
 /// `use_reduce_flat_subset` result) onto `queue` at `depth + 1`, owned by
@@ -17111,8 +17314,25 @@ fn enqueue_flat_deps(
     // dep is `DepPriority.optional`, never a hard cycle contributor.
     buildtime_atoms: &HashSet<String>,
     runtime_atoms: &HashSet<String>,
+    or_universe: &HashSet<String>,
 ) {
-    for tok in flat_deps {
+    // Backlog #90 (S1): real pops each deplist last-declared-first
+    // (stack discipline), BUT drains every plain dep before touching a
+    // `||` group (`_dep_disjunctive_stack` only pops on an empty
+    // `dep_stack`). So: plains in reverse declaration order first, then
+    // the `||`-chosen tokens (reversed among themselves, the same
+    // stack discipline one level out). A blanket `.rev()` would schedule
+    // a `||` choice ahead of a later-declared plain dep -- the
+    // orbtblocked shape (`|| (...) =1.0` must file 1.0 first, staged
+    // oracle). `flat_deps` itself already serializes plains before
+    // `||`-chosen (`resolve_disjunctions`); the partition only has to
+    // re-split them.
+    let (mut disj, mut plains): (Vec<String>, Vec<String>) = flat_deps
+        .into_iter()
+        .partition(|t| t != "||" && or_universe.contains(t));
+    plains.reverse();
+    disj.reverse();
+    for tok in plains.into_iter().chain(disj) {
         if tok == "||" {
             continue;
         }
@@ -18773,11 +18993,19 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             resolver_trace::tr!("\n      Arg: {a}\n     Atom: {a}\n");
         }
     }
-    for a in ctx.atoms {
+    for a in ctx.atoms.iter().rev() {
         // A top-level atom has no "unevaluated" form distinct from
         // itself (no parent to ever flip a flag on), matching real
         // portage, which never suggests a parent-flag fix for a
         // top-level atom either.
+        // Backlog #90 (S1): reversed declaration order -- real feeds
+        // same-level atoms through a stack (`_dep_stack`), so the last
+        // declared resolves first. Selection is order-sensitive (an
+        // already-graphed instance satisfying the dep is reused,
+        // `_select_package:8370`): forward order graphs `2.0` for a
+        // bare dep and then records a conflict real never sees (the
+        // `slotconflictparent` bt0 silence). `top_level_cps` still
+        // comes from `req.atoms` in declaration order, untouched.
         state.queue.push_back(QueueItem {
             atom: a.clone(),
             depth: 0,
@@ -19717,6 +19945,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     &mut state.installed_meta_memo,
                     &mut state.slot_pullers,
                     &union_constraints,
+                    ctx.update,
                 );
             }
             // `--autounmask`'s own keyword-suggestion sub-feature,
@@ -20031,7 +20260,19 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 )
             };
             let satisfied = portage_dep::match_from_list(&current_atom, &[existing_str.as_str()])
-                .is_some_and(|m| !m.is_empty());
+                .is_some_and(|m| !m.is_empty())
+                && !(atom.slot_operator == Some(portage_dep::SlotOperator::Equals)
+                    && atom.slot.is_none()
+                    && atom.sub_slot.is_none()
+                    && built_equals_shift_unrebuildable(
+                        ctx.root,
+                        &ctx.repos,
+                        &key.0,
+                        &key.1,
+                        &existing_sub,
+                        &state.slot_pullers,
+                        ctx.excluded,
+                    ));
             if !satisfied {
                 record_slot_conflict(
                     &mut state.slot_conflicts,
@@ -20050,6 +20291,53 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     ),
                 );
                 continue;
+            }
+            // Backlog #90 (S1): a bare `:=` that *matches* the
+            // already-resolved version still hides a sub-slot shift
+            // when its built binding points elsewhere and the bound
+            // consumer cannot be rebuilt -- the installed-bound
+            // instance never gets pulled (the raw `:=` reuses the
+            // just-selected one), so the two-instance record above
+            // never fires. Record the bound installed instance
+            // alongside instead of swallowing it: existing stays the
+            // merge, the bound version files as the installed side
+            // (the #57 installed-instance pattern), and the
+            // need_rebuild scan sees the stuck parent. Rebuildable
+            // consumers skip this (their update proceeds with a
+            // rebuild, like real) -- see
+            // `built_equals_shift_unrebuildable`.
+            if atom.slot_operator == Some(portage_dep::SlotOperator::Equals)
+                && atom.slot.is_none()
+                && atom.sub_slot.is_none()
+                && let Some((inst_ver, _)) =
+                    built_equals_binding(ctx.root, &ctx.repos, &key.0, &key.1)
+                && inst_ver != existing_version
+                && built_equals_shift_unrebuildable(
+                    ctx.root,
+                    &ctx.repos,
+                    &key.0,
+                    &key.1,
+                    &existing_sub,
+                    &state.slot_pullers,
+                    ctx.excluded,
+                )
+            {
+                record_slot_conflict(
+                    &mut state.slot_conflicts,
+                    build_slot_conflict(
+                        &ctx.repos,
+                        config,
+                        ctx.root,
+                        &key.0,
+                        &key.1,
+                        &slot,
+                        &existing_version,
+                        &current_atom,
+                        &inst_ver,
+                        &state.slot_pullers,
+                        Some(InstalledSide::Current),
+                    ),
+                );
             }
 
             // `match_from_list` above matched version + slot only. If
@@ -20981,6 +21269,11 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         // `enqueue_dependencies`'s used to be two independently
         // hand-maintained copies, and only this one got the fine
         // `unsat_use_*` bins).
+        // Backlog #90 (S1): the queued-atom snapshot for the
+        // drain-state approximation in `atoms_all_in_graph` -- real
+        // resolves `||` only after the dep stack drains, so a
+        // queued-but-unresolved dep counts as will-be-in-graph.
+        let queued: Vec<QueueItem> = state.queue.iter().cloned().collect();
         let Ok(flat_deps) = portage_use_reduce::use_reduce_flat_disjunctive(
             &tokens,
             &use_flags,
@@ -20995,6 +21288,8 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     &union_constraints,
                     ctx.root_deps_running_root,
                     atoms,
+                    &queued,
+                    ctx.update,
                 )
             },
             &mut |alts: &[Vec<String>]| {
@@ -21005,6 +21300,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     &state.entries,
                     &union_constraints,
                     alts,
+                    &queued,
                 )
             },
         ) else {
@@ -21100,6 +21396,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             &mut state.pending_blockers,
             &buildtime_atoms,
             &runtime_atoms,
+            &or_group_universe(&tokens),
         );
 
         // --with-test-deps: additive on top of the normal deps just
@@ -21146,6 +21443,10 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                         // A `test?` dep is `DepPriority.optional` --
                         // never a hard cycle contributor.
                         &HashSet::new(),
+                        &HashSet::new(),
+                        // `test?`-gated deps are plain atoms, never a
+                        // `||` choice (the subset filter drops the
+                        // group structure) -- empty universe.
                         &HashSet::new(),
                     );
                 }
@@ -21298,7 +21599,18 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         autounmask_grew: state.autounmask_grew,
         edge_kind_map: state.edge_kind_map,
         changed_deps_report_entries: state.changed_deps_report_entries,
-        pprovided_atoms: state.pprovided_atoms,
+        // Backlog #90 (S1): the walk resolves last-declared-first
+        // (real's stack), but real's `WARNING: … package.provided:`
+        // block lists the requested atoms in requested order (staged
+        // oracle: providedpkg before providedpkg2) -- restore argv
+        // order here; atoms absent from argv (shouldn't happen:
+        // only depth-0 pushes record) sort last, stably.
+        pprovided_atoms: {
+            let mut v = state.pprovided_atoms;
+            let pos = |a: &String| ctx.atoms.iter().position(|x| x == a).unwrap_or(usize::MAX);
+            v.sort_by_key(pos);
+            v
+        },
         autounmask_keyword_changes: state.autounmask_keyword_changes,
         autounmask_use_changes: state.autounmask_use_changes,
         autounmask_license_changes: state.autounmask_license_changes,
@@ -22584,6 +22896,10 @@ fn enqueue_dependencies(
     // selection the same way the main New/Upgrade loop's is -- empty on
     // the first pass, so a strict no-op there.
     disj_constraints: &HashMap<(String, String), Vec<String>>,
+    // Backlog #90 (S1): `--update`, for the downgrade-guard's
+    // queued-update lookahead (same feed as the main walk's
+    // `ctx.update` at its own `disjunction_preference` call).
+    update: bool,
 ) {
     // Backlog #86: the walk reads the vdb-recorded repo's current
     // metadata (never a priority search); `None` when the version is
@@ -22655,6 +22971,9 @@ fn enqueue_dependencies(
     // comment (2026-09-11 review F1/F2: this closure used to be its own,
     // unfixed copy that never got the fine `unsat_use_*` bins the main
     // New/Upgrade walk's closure did).
+    // Backlog #90 (S1): same drain-state snapshot as the main walk --
+    // `queue` here is `enqueue_dependencies`' own `&mut VecDeque`.
+    let queued: Vec<QueueItem> = queue.iter().cloned().collect();
     let Ok(flat_deps) = portage_use_reduce::use_reduce_flat_disjunctive(
         &tokens,
         &use_flags,
@@ -22669,10 +22988,20 @@ fn enqueue_dependencies(
                 disj_constraints,
                 root_deps_running_root,
                 atoms,
+                &queued,
+                update,
             )
         },
         &mut |alts: &[Vec<String>]| {
-            promote_tied_alternative(repos, config, root, entries, disj_constraints, alts)
+            promote_tied_alternative(
+                repos,
+                config,
+                root,
+                entries,
+                disj_constraints,
+                alts,
+                &queued,
+            )
         },
     ) else {
         return;
@@ -22733,7 +23062,16 @@ fn enqueue_dependencies(
         }
     }
 
-    for tok in flat_deps {
+    // Backlog #90 (S1): same plains-reversed + `||`-last split as the
+    // main walk's `enqueue_flat_deps` -- one deplist, one stack in
+    // real, walked or not.
+    let universe = or_group_universe(&tokens);
+    let (mut disj, mut plains): (Vec<String>, Vec<String>) = flat_deps
+        .into_iter()
+        .partition(|t| t != "||" && universe.contains(t));
+    plains.reverse();
+    disj.reverse();
+    for tok in plains.into_iter().chain(disj) {
         if tok == "||" {
             continue;
         }
@@ -26434,14 +26772,18 @@ mod tests {
     #[test]
     fn fixture_solvable_slot_conflict_is_reconciled_by_backtracking() {
         // dev-libs/slotconflictparent pulls in slotconflictnewconsumer
-        // (bare RDEPEND on slotconflicttarget, resolves the best version,
-        // 2.0, first) and slotconflictoldconsumer (RDEPEND
-        // "<dev-libs/slotconflicttarget-2.0"). The first pass hits a slot
-        // conflict on slotconflicttarget:0, but the two atoms *are* jointly
-        // satisfiable (1.0 matches both the bare atom and "<2.0"), so the
-        // backtracking retry re-resolves the whole graph with both
-        // constraints enforced together and slotconflicttarget settles on
-        // 1.0 with no conflict left -- real _process_slot_conflicts.
+        // (bare RDEPEND on slotconflicttarget) and slotconflictoldconsumer
+        // (RDEPEND "<dev-libs/slotconflicttarget-2.0"). Backlog #90 (S1):
+        // the walk resolves last-declared-first (real's stack), so the
+        // old consumer's `<2.0` graphs 1.0 before the bare dep is even
+        // visited -- and the bare dep reuses the already-graphed 1.0
+        // (real `_select_package`'s existing-node return), so no slot
+        // conflict ever forms, at any backtrack budget. The backtracking
+        // retry path this test used to exercise (2.0 graphed first, then
+        // reconciled to 1.0) no longer triggers here; the unsolvable twin
+        // below still covers the recorded-conflict shape. Real
+        // `--debug` never prints `Slot conflict handler started.` for
+        // this fixture (S0 matrix oracle).
         let result = graph_result_real("dev-libs/slotconflictparent");
         let full_names: Vec<String> = result
             .entries
@@ -26474,16 +26816,23 @@ mod tests {
     #[test]
     fn fixture_backtrack_max_zero_disables_slot_conflict_reconciliation() {
         // Same solvable fixture, but `backtrack_max == 0` (real
-        // `--backtrack=0`): the retry loop never runs, so the conflict is
-        // reported exactly as it was before backtracking existed.
+        // `--backtrack=0`): Backlog #90 (S1) -- no conflict forms at all
+        // (the old consumer graphs 1.0 first, the bare dep reuses it),
+        // so bt0 settles silently on 1.0 with rc 0, exactly real's S0
+        // matrix row. The pre-S1 expectation (one recorded conflict) is
+        // retired: that conflict was the forward-order phantom.
         let result = graph_result_real_backtrack("dev-libs/slotconflictparent", 0);
-        assert_one_conflict(
-            &result,
-            "dev-libs",
-            "slotconflicttarget",
-            "0",
-            "2.0",
-            "<dev-libs/slotconflicttarget-2.0",
+        assert_eq!(result.slot_conflicts, vec![]);
+        let target = result
+            .entries
+            .iter()
+            .find(|e| e.package == "slotconflicttarget")
+            .expect("slotconflicttarget entry");
+        assert_eq!(
+            target.outcome,
+            PretendOutcome::New {
+                version: "1.0".to_string()
+            }
         );
         // A single retry is enough to reconcile this one-step conflict.
         let one = graph_result_real_backtrack("dev-libs/slotconflictparent", 1);
@@ -26695,15 +27044,17 @@ mod tests {
         // slotconflicttarget:0 have a single version, so masking
         // slotconflicttarget-2.0 only turns the >=2.0 dependency into a
         // NoVisibleCandidate -- strictly worse. Slice 3 must revert the
-        // trial and report the original slot conflict unchanged.
+        // trial and report the original slot conflict unchanged
+        // (Backlog #90 S1: instances now file oldpin's 1.0 first --
+        // real's own notice order on the staged oracle).
         let result = graph_result_real("dev-libs/slotconflictunsolvable");
         assert_one_conflict(
             &result,
             "dev-libs",
             "slotconflicttarget",
             "0",
-            "2.0",
-            "<dev-libs/slotconflicttarget-2.0",
+            "1.0",
+            ">=dev-libs/slotconflicttarget-2.0",
         );
         assert!(
             !result
@@ -26728,7 +27079,7 @@ mod tests {
                 .iter()
                 .map(|i| i.version.as_str())
                 .collect::<Vec<_>>(),
-            vec!["2.0", "1.0"]
+            vec!["1.0", "2.0"]
         );
         assert_eq!(
             c.instances[0]
@@ -26737,8 +27088,8 @@ mod tests {
                 .map(|p| (p.parent_cpv.as_str(), p.atom.as_str()))
                 .collect::<Vec<_>>(),
             vec![(
-                "dev-libs/slotconflictnewpin-1.0:0/0::testrepo",
-                ">=dev-libs/slotconflicttarget-2.0"
+                "dev-libs/slotconflictoldpin-1.0:0/0::testrepo",
+                "<dev-libs/slotconflicttarget-2.0"
             )]
         );
         assert_eq!(
@@ -26748,8 +27099,8 @@ mod tests {
                 .map(|p| (p.parent_cpv.as_str(), p.atom.as_str()))
                 .collect::<Vec<_>>(),
             vec![(
-                "dev-libs/slotconflictoldpin-1.0:0/0::testrepo",
-                "<dev-libs/slotconflicttarget-2.0"
+                "dev-libs/slotconflictnewpin-1.0:0/0::testrepo",
+                ">=dev-libs/slotconflicttarget-2.0"
             )]
         );
         // slotconflicttarget and both pins declare no IUSE -> every
@@ -26774,29 +27125,39 @@ mod tests {
                 vec![("USE".to_string(), "scuon -scuoff".to_string())]
             );
         }
+        // Backlog #90 (S1): instance order follows the walk -- the
+        // oldpin's `<2.0` resolves first (reversed declaration order,
+        // real's stack discipline), so 1.0 sorts first, exactly real's
+        // own notice order (staged oracle: 1.0 pulled by oldpin, then
+        // 2.0 by newpin).
         assert_eq!(
             c.instances[0].parents[0].use_display,
+            Vec::<(String, String)>::new()
+        );
+        assert_eq!(
+            c.instances[1].parents[0].use_display,
             vec![("USE".to_string(), "scupin".to_string())]
         );
-        assert!(c.instances[1].parents[0].use_display.is_empty());
     }
 
     #[test]
     fn fixture_unsolvable_slot_conflict_survives_backtracking_and_is_reported() {
         // dev-libs/slotconflictunsolvable pulls in slotconflictnewpin
-        // (RDEPEND ">=dev-libs/slotconflicttarget-2.0", resolves 2.0 first)
-        // and slotconflictoldpin (RDEPEND "<dev-libs/slotconflicttarget-
+        // (RDEPEND ">=dev-libs/slotconflicttarget-2.0") and
+        // slotconflictoldpin (RDEPEND "<dev-libs/slotconflicttarget-
         // 2.0"). No single version of slotconflicttarget satisfies both,
         // so the backtracking solvability pre-check fails, no retry is
-        // attempted, and the SlotConflict is reported exactly as before.
+        // attempted, and the SlotConflict is reported exactly as before
+        // (Backlog #90 S1: oldpin's instance files first -- real's
+        // notice order -- since the walk resolves it first).
         let result = graph_result_real("dev-libs/slotconflictunsolvable");
         assert_one_conflict(
             &result,
             "dev-libs",
             "slotconflicttarget",
             "0",
-            "2.0",
-            "<dev-libs/slotconflicttarget-2.0",
+            "1.0",
+            ">=dev-libs/slotconflicttarget-2.0",
         );
     }
 
@@ -32606,6 +32967,12 @@ mod tests {
         // because the first atom already failed. Confirmed live against
         // both portuale's own Rust and Python implementations
         // (byte-identical joined output) before this test was written.
+        // Backlog #90 (S1): report order follows the walk, which
+        // resolves last-declared-first (real's stack discipline) -- so
+        // badpkg2's block now leads. (Real itself stops at the first
+        // violation, argv order -- staged oracle shows only badpkg --
+        // but collecting both stays portuale's own established,
+        // separately-pinned behavior; only the order moves here.)
         let root = fixtures_root();
         let config = portage_profile::resolve_config(
             &root,
@@ -32669,16 +33036,16 @@ mod tests {
         .expect_err("both atoms should fail their own REQUIRED_USE");
         assert_eq!(
             err.to_string(),
-            "\n!!! The ebuild selected to satisfy \"dev-libs/requiredusebadpkg\" \
-             has unmet requirements.\n\
-             - dev-libs/requiredusebadpkg-1.0::testrepo USE=\"foo -bar\"\n\
-             \n  The following REQUIRED_USE flag constraints are unsatisfied:\n\
-             \x20   foo? ( bar )\n\n\
-             \n!!! The ebuild selected to satisfy \"dev-libs/requiredusebadpkg2\" \
+            "\n!!! The ebuild selected to satisfy \"dev-libs/requiredusebadpkg2\" \
              has unmet requirements.\n\
              - dev-libs/requiredusebadpkg2-1.0::testrepo USE=\"baz -qux\"\n\
              \n  The following REQUIRED_USE flag constraints are unsatisfied:\n\
-             \x20   baz? ( qux )\n\n"
+             \x20   baz? ( qux )\n\n\
+             \n!!! The ebuild selected to satisfy \"dev-libs/requiredusebadpkg\" \
+             has unmet requirements.\n\
+             - dev-libs/requiredusebadpkg-1.0::testrepo USE=\"foo -bar\"\n\
+             \n  The following REQUIRED_USE flag constraints are unsatisfied:\n\
+             \x20   foo? ( bar )\n\n"
         );
     }
 
@@ -35006,15 +35373,18 @@ mod tests {
 
     #[test]
     fn installed_instance_then_merge_records_an_unsolvable_slot_conflict() {
-        // #57 direction 2: `othermod`'s `<paired-2.0` settles on the
-        // installed 1.0 first (an `AlreadyInstalled` outcome, invisible to
-        // `resolved_slots`), then `needer`'s `>=paired-2.0` graphs 2.0 in
-        // the same slot. Real's `_package_tracker` holds both nodes and
-        // reports the collision; portuale used to merge all three
-        // silently. The two atoms are jointly unsatisfiable, so the
-        // backtracker's mask trials all fail and `get_best_run` reports
-        // the original shape -- exactly real's `backtrack: 4/20` run,
-        // whose block is byte-identical to its own `--backtrack=0` one
+        // #57 direction 2: argv `[othermod, needer]`. Backlog #90 (S1):
+        // the walk resolves last-declared-first (real's stack), so
+        // `needer`'s `>=paired-2.0` graphs 2.0 first and `othermod`'s
+        // `<paired-2.0` then collides with the installed 1.0 -- the
+        // merge instance files first, exactly real's notice order for
+        // this argv order (staged oracle: 2.0 by needer, then 1.0).
+        // Real's `_package_tracker` holds both nodes and reports the
+        // collision; portuale used to merge all three silently. The two
+        // atoms are jointly unsatisfiable, so the backtracker's mask
+        // trials all fail and `get_best_run` reports the original
+        // shape -- exactly real's `backtrack: 4/20` run, whose block is
+        // byte-identical to its own `--backtrack=0` one
         // (`TEST/findings/l0-fixture-oracle.md` "#57 S0" cells b/c).
         let result = graph_result_real_atoms(
             &[
@@ -35023,7 +35393,7 @@ mod tests {
             ],
             10,
         );
-        assert_triangle_conflict(&result, true);
+        assert_triangle_conflict(&result, false);
         // The upgrade still merges, like real's merge list.
         let paired = result
             .entries
@@ -35041,10 +35411,13 @@ mod tests {
 
     #[test]
     fn merge_then_installed_instance_records_the_same_slot_conflict() {
-        // #57 direction 1, the mirror argv order: `needer`'s
-        // `>=paired-2.0` graphs 2.0 first, then `othermod`'s `<paired-2.0`
-        // takes the walker's `AlreadyInstalled` early branch -- which
-        // never consulted `resolved_slots` at all before this slice.
+        // #57 direction 1, the mirror argv order: argv `[needer,
+        // othermod]`. Backlog #90 (S1): last-declared-first, so
+        // `othermod`'s `<paired-2.0` meets the installed 1.0 (the
+        // walker's `AlreadyInstalled` early branch) before `needer`'s
+        // `>=paired-2.0` graphs 2.0 -- the installed instance files
+        // first, exactly real's notice order for this argv order
+        // (staged oracle: 1.0, then 2.0 by needer).
         let result = graph_result_real_atoms(
             &[
                 "dev-libs/needer".to_string(),
@@ -35052,7 +35425,7 @@ mod tests {
             ],
             10,
         );
-        assert_triangle_conflict(&result, false);
+        assert_triangle_conflict(&result, true);
     }
 
     #[test]
