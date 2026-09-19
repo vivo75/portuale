@@ -401,6 +401,56 @@ fn cand_162(version: &str, keywords: &[&str], slot: &str) -> Candidate {
     }
 }
 
+/// Single scratch repo in the `blocker_161` shape (name
+/// `testrepo`, priority 0, main) holding `(cp, version, slot, iuse)`
+/// ebuilds with `KEYWORDS="amd64"`.
+fn repo_pkgs_162(dir: &Path, pkgs: &[(&str, &str, &str, &str)]) -> Vec<RepoConfig> {
+    let repo = dir.join("repo");
+    for (cp, pv, slot, iuse) in pkgs {
+        write_pkg_162(&repo, cp, pv, slot, iuse);
+    }
+    vec![RepoConfig {
+        name: "testrepo".to_string(),
+        location: repo,
+        priority: 0,
+        is_main: true,
+        masters: vec![],
+        profile_formats: vec![],
+        cache_formats: vec![],
+        aliases: vec![],
+        sync_type: None,
+        sync_uri: None,
+        volatile: false,
+        module_specific_options: vec![],
+    }]
+}
+
+/// One scratch ebuild plus its md5-cache entry, in the
+/// `blocker_161_write_pkg_full` shape with an `IUSE` line.
+fn write_pkg_162(repo: &Path, cp: &str, pv: &str, slot: &str, iuse: &str) {
+    use md5::Digest as _;
+    use std::fmt::Write as _;
+    let (cat, pkg) = cp.split_once('/').expect("category/package");
+    let dir = repo.join(cat).join(pkg);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut body = format!(
+        "EAPI=8\nDESCRIPTION=\"162 selection predicates\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\n"
+    );
+    if !iuse.is_empty() {
+        writeln!(body, "IUSE=\"{iuse}\"").unwrap();
+    }
+    std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
+    let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+    let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=162 selection predicates\nEAPI=8\n".to_string();
+    if !iuse.is_empty() {
+        writeln!(entry, "IUSE={iuse}").unwrap();
+    }
+    writeln!(entry, "KEYWORDS=amd64\nSLOT={slot}\n_md5_={md5}").unwrap();
+    let cachedir = repo.join("metadata/md5-cache").join(cat);
+    std::fs::create_dir_all(&cachedir).unwrap();
+    std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+}
+
 /// One queued-but-unresolved atom for the drain-state legs
 /// (`atoms_all_in_graph`'s `queued_cps` shortcut).
 fn qatom_162(atom: &str) -> QueueItem {
@@ -430,6 +480,28 @@ struct Disj162Args<'a> {
     self_cp: &'a RootCp,
     atoms: &'a [&'a str],
     queued: &'a [QueueItem],
+}
+
+fn disj_162(args: Disj162Args<'_>) -> portage_use_reduce::AltPreference {
+    let Disj162Args {
+        repos,
+        config,
+        root,
+        entries,
+        self_cp,
+        atoms,
+        queued,
+    } = args;
+    disj_162_circ(Disj162CircArgs {
+        repos,
+        config,
+        root,
+        entries,
+        self_cp,
+        atoms,
+        queued,
+        circular_dependency: &HashMap::new(),
+    })
 }
 
 /// Arguments of [`disj_162_circ`].
@@ -472,6 +544,496 @@ fn disj_162_circ(args: Disj162CircArgs<'_>) -> portage_use_reduce::AltPreference
         gate_entries: entries,
         gate_queued: queued,
     })
+}
+
+/// A resolvable but uninstalled alternative ranks `Available`.
+#[test]
+fn disjunction_preference_ranks_a_fresh_alternative_available() {
+    let dir = dir_162("disj-avail");
+    let repos = repo_pkgs_162(&dir, &[("test/pkgA", "1.0", "0", "")]);
+    let config = cfg_162();
+    assert_eq!(
+        disj_162(Disj162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            self_cp: &self_162("test", "consumer"),
+            atoms: &["test/pkgA"],
+            queued: &[]
+        }),
+        portage_use_reduce::AltPreference::Available
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An installed alternative ranks `Installed`.
+#[test]
+fn disjunction_preference_ranks_an_installed_alternative_installed() {
+    let dir = dir_162("disj-inst");
+    let repos = repo_pkgs_162(&dir, &[("test/pkgA", "1.0", "0", "")]);
+    install_162(&dir, "test", "pkgA-1.0", "0", &[]);
+    let config = cfg_162();
+    assert_eq!(
+        disj_162(Disj162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            self_cp: &self_162("test", "consumer"),
+            atoms: &["test/pkgA"],
+            queued: &[]
+        }),
+        portage_use_reduce::AltPreference::Installed
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An alternative on the resolving package itself, not installed and
+/// matching nothing in-graph, is circular and ranks `Unsatisfiable`.
+/// Portage: pass-1 preferred_in_graph pick
+#[test]
+fn disjunction_preference_rejects_a_circular_self_alternative() {
+    let dir = dir_162("disj-circ");
+    let repos = repo_pkgs_162(&dir, &[("test/pkgA", "1.0", "0", "")]);
+    let config = cfg_162();
+    assert_eq!(
+        disj_162(Disj162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            self_cp: &self_162("test", "pkgA"),
+            atoms: &["test/pkgA"],
+            queued: &[]
+        }),
+        portage_use_reduce::AltPreference::Unsatisfiable
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The same self alternative with the package installed is no
+/// circle and ranks `Installed`.
+#[test]
+fn disjunction_preference_keeps_an_installed_self_alternative() {
+    let dir = dir_162("disj-circ-inst");
+    let repos = repo_pkgs_162(&dir, &[("test/pkgA", "1.0", "0", "")]);
+    install_162(&dir, "test", "pkgA-1.0", "0", &[]);
+    let config = cfg_162();
+    assert_eq!(
+        disj_162(Disj162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            self_cp: &self_162("test", "pkgA"),
+            atoms: &["test/pkgA"],
+            queued: &[]
+        }),
+        portage_use_reduce::AltPreference::Installed
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The same self alternative with the package already merge-bound
+/// in-graph is no circle and ranks `Installed`.
+/// Portage: pass-1 preferred_in_graph pick
+#[test]
+fn disjunction_preference_keeps_an_in_graph_self_alternative() {
+    let dir = dir_162("disj-circ-graph");
+    let repos = repo_pkgs_162(&dir, &[("test/pkgA", "1.0", "0", "")]);
+    let config = cfg_162();
+    let entries = vec![entry_162(
+        "test",
+        "pkgA",
+        PretendOutcome::New {
+            version: "1.0".to_string(),
+        },
+        Some("0"),
+        false,
+    )];
+    assert_eq!(
+        disj_162(Disj162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &entries,
+            self_cp: &self_162("test", "pkgA"),
+            atoms: &[">=test/pkgA-1.0"],
+            queued: &[]
+        }),
+        portage_use_reduce::AltPreference::Installed
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A `:slot` atom naming a different slot than the graphed instance
+/// is NOT in-graph: the older-slot branch ranks `Available`.
+/// Portage: graph_db.match_pkgs checks the slot
+#[test]
+fn disjunction_preference_cross_slot_atom_is_not_in_graph() {
+    let dir = dir_162("disj-crossslot");
+    let repos = repo_pkgs_162(
+        &dir,
+        &[("test/pkgB", "1.0", "0", ""), ("test/pkgB", "2.0", "1", "")],
+    );
+    let config = cfg_162();
+    let entries = vec![entry_162(
+        "test",
+        "pkgB",
+        PretendOutcome::New {
+            version: "2.0".to_string(),
+        },
+        Some("1"),
+        false,
+    )];
+    assert_eq!(
+        disj_162(Disj162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &entries,
+            self_cp: &self_162("test", "consumer"),
+            atoms: &["test/pkgB:0"],
+            queued: &[]
+        }),
+        portage_use_reduce::AltPreference::Available
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The same-slot `:slot` atom still matches the graphed instance --
+/// the g221c precision must not over-narrow to `Available`.
+#[test]
+fn disjunction_preference_same_slot_atom_stays_in_graph() {
+    let dir = dir_162("disj-sameslot");
+    let repos = repo_pkgs_162(
+        &dir,
+        &[("test/pkgB", "1.0", "0", ""), ("test/pkgB", "2.0", "1", "")],
+    );
+    let config = cfg_162();
+    let entries = vec![entry_162(
+        "test",
+        "pkgB",
+        PretendOutcome::New {
+            version: "2.0".to_string(),
+        },
+        Some("1"),
+        false,
+    )];
+    assert_eq!(
+        disj_162(Disj162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &entries,
+            self_cp: &self_162("test", "consumer"),
+            atoms: &["test/pkgB:1"],
+            queued: &[]
+        }),
+        portage_use_reduce::AltPreference::Installed
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The circular-self gate still lets a cross-slot self atom through:
+/// the gate asks cp-presence, not instance identity (Portage merges
+/// the second instance as an ordinary dependency).
+#[test]
+fn disjunction_preference_cross_slot_self_atom_still_proceeds() {
+    let dir = dir_162("disj-crossself");
+    let repos = repo_pkgs_162(
+        &dir,
+        &[("test/pkgB", "1.0", "0", ""), ("test/pkgB", "2.0", "1", "")],
+    );
+    let config = cfg_162();
+    let entries = vec![entry_162(
+        "test",
+        "pkgB",
+        PretendOutcome::New {
+            version: "2.0".to_string(),
+        },
+        Some("1"),
+        false,
+    )];
+    assert_eq!(
+        disj_162(Disj162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &entries,
+            self_cp: &self_162("test", "pkgB"),
+            atoms: &["test/pkgB:0"],
+            queued: &[]
+        }),
+        portage_use_reduce::AltPreference::Available
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// With the self edge recorded in the `circular_dependency` map, the
+/// in-graph self alternative demotes to `Other`.
+/// Portage: dep_check.py, dep_zapdeps circular_atom
+#[test]
+fn disjunction_preference_demotes_a_recorded_circular_self_alternative() {
+    let dir = dir_162("disj-circ-demote");
+    let repos = repo_pkgs_162(&dir, &[("test/pkgA", "1.0", "0", "")]);
+    let config = cfg_162();
+    let entries = vec![entry_162(
+        "test",
+        "pkgA",
+        PretendOutcome::New {
+            version: "1.0".to_string(),
+        },
+        Some("0"),
+        false,
+    )];
+    let mut circular: HashMap<RootCp, Vec<CircularDepChild>> = HashMap::new();
+    circular.insert(
+        self_162("test", "pkgA"),
+        vec![CircularDepChild {
+            category: "test".to_string(),
+            package: "pkgA".to_string(),
+            version: "1.0".to_string(),
+            slot: Some("0".to_string()),
+            sub_slot: None,
+        }],
+    );
+    assert_eq!(
+        disj_162_circ(Disj162CircArgs {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &entries,
+            self_cp: &self_162("test", "pkgA"),
+            atoms: &[">=test/pkgA-1.0"],
+            queued: &[],
+            circular_dependency: &circular
+        }),
+        portage_use_reduce::AltPreference::Other
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The demotion spares an atom an installed instance satisfies (a
+/// "cycle" through an installed package is no deadlock).
+/// Portage: vardb.match
+#[test]
+fn disjunction_preference_circular_demotion_spares_an_installed_atom() {
+    let dir = dir_162("disj-circ-exempt");
+    let repos = repo_pkgs_162(&dir, &[("test/pkgA", "1.0", "0", "")]);
+    install_162(&dir, "test", "pkgA-1.0", "0", &[]);
+    let config = cfg_162();
+    let entries = vec![entry_162(
+        "test",
+        "pkgA",
+        PretendOutcome::New {
+            version: "1.0".to_string(),
+        },
+        Some("0"),
+        false,
+    )];
+    let mut circular: HashMap<RootCp, Vec<CircularDepChild>> = HashMap::new();
+    circular.insert(
+        self_162("test", "pkgA"),
+        vec![CircularDepChild {
+            category: "test".to_string(),
+            package: "pkgA".to_string(),
+            version: "1.0".to_string(),
+            slot: Some("0".to_string()),
+            sub_slot: None,
+        }],
+    );
+    assert_eq!(
+        disj_162_circ(Disj162CircArgs {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &entries,
+            self_cp: &self_162("test", "pkgA"),
+            atoms: &["test/pkgA"],
+            queued: &[],
+            circular_dependency: &circular
+        }),
+        portage_use_reduce::AltPreference::Installed
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An uninstalled alternative on another package is not circular.
+#[test]
+fn disjunction_preference_keeps_an_uninstalled_other_alternative() {
+    let dir = dir_162("disj-other");
+    let repos = repo_pkgs_162(&dir, &[("test/pkgB", "1.0", "0", "")]);
+    let config = cfg_162();
+    assert_eq!(
+        disj_162(Disj162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            self_cp: &self_162("test", "pkgA"),
+            atoms: &["test/pkgB"],
+            queued: &[]
+        }),
+        portage_use_reduce::AltPreference::Available
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A queued-but-unresolved atom counts as in-graph, promoting the
+/// alternative to `Installed`.
+#[test]
+fn disjunction_preference_counts_a_queued_atom_as_in_graph() {
+    let dir = dir_162("disj-queued");
+    let repos = repo_pkgs_162(&dir, &[("test/pkgA", "1.0", "0", "")]);
+    let config = cfg_162();
+    assert_eq!(
+        disj_162(Disj162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            self_cp: &self_162("test", "consumer"),
+            atoms: &["test/pkgA"],
+            queued: &[qatom_162("test/pkgA")]
+        }),
+        portage_use_reduce::AltPreference::Installed
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An alternative whose USE-dep the tree cannot satisfy (and no
+/// installed instance helps) ranks `UnsatUseNonInstalled`.
+#[test]
+fn disjunction_preference_ranks_a_use_unsatisfiable_alternative() {
+    let dir = dir_162("disj-unsat");
+    let repos = repo_pkgs_162(&dir, &[("test/useflag", "1.0", "0", "flip")]);
+    let config = cfg_162();
+    assert_eq!(
+        disj_162(Disj162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            self_cp: &self_162("test", "consumer"),
+            atoms: &["test/useflag[flip]"],
+            queued: &[]
+        }),
+        portage_use_reduce::AltPreference::UnsatUseNonInstalled
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The same alternative with the violated flag in `use.mask`
+/// demotes to plain `Other` (Portage soft 705).
+#[test]
+fn disjunction_preference_demotes_a_masked_use_violation_to_other() {
+    let dir = dir_162("disj-masked");
+    let repos = repo_pkgs_162(&dir, &[("test/useflag", "1.0", "0", "flip")]);
+    let mut config = cfg_162();
+    config.use_mask_force_levels = vec![portage_profile::UseMaskForceLevel {
+        use_mask: vec!["flip".to_string()],
+        use_force: Vec::new(),
+        ..Default::default()
+    }];
+    assert_eq!(
+        disj_162(Disj162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            self_cp: &self_162("test", "consumer"),
+            atoms: &["test/useflag[flip]"],
+            queued: &[]
+        }),
+        portage_use_reduce::AltPreference::Other
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An alternative satisfied by an installed instance's recorded vdb
+/// USE keeps bin 0 even when the profile leaves the flag off.
+/// Portage: _dep_check_composite_db / dbapi._match_use
+#[test]
+fn disjunction_preference_matches_an_installed_alternatives_vdb_use_direct() {
+    let dir = dir_162("disj-vdbuse");
+    let repos = repo_pkgs_162(&dir, &[("test/vdbuse", "1.0", "0", "flip")]);
+    install_162(
+        &dir,
+        "test",
+        "vdbuse-1.0",
+        "0",
+        &[("USE", b"flip\n"), ("IUSE", b"flip\n")],
+    );
+    let config = cfg_162();
+    assert_eq!(
+        disj_162(Disj162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            self_cp: &self_162("test", "consumer"),
+            atoms: &["test/vdbuse[flip]"],
+            queued: &[]
+        }),
+        portage_use_reduce::AltPreference::Installed
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An alternative satisfiable only in an uninstalled slot ranks
+/// `UnsatUseNonInstalled`, not `UnsatUseInstalled` (Portage soft
+/// 599-607).
+#[test]
+fn disjunction_preference_needs_the_target_slot_installed() {
+    let dir = dir_162("disj-slot");
+    let repos = repo_pkgs_162(
+        &dir,
+        &[
+            ("test/slotpkg", "1.0", "0", "flip"),
+            ("test/slotpkg", "2.0", "1", "flip"),
+        ],
+    );
+    install_162(&dir, "test", "slotpkg-1.0", "0", &[]);
+    let config = cfg_162();
+    assert_eq!(
+        disj_162(Disj162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            self_cp: &self_162("test", "consumer"),
+            atoms: &["test/slotpkg:1[flip]"],
+            queued: &[]
+        }),
+        portage_use_reduce::AltPreference::UnsatUseNonInstalled
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// No tree candidate but an installed cp behind a blocker-shaped
+/// group ranks `Other`: blockers stay out of the installed fold.
+/// Portage: dep_check.py (if not atom.blocker, soft 715-724)
+#[test]
+fn disjunction_preference_ranks_an_unavailable_group_other() {
+    let dir = dir_162("disj-other2");
+    let repos = repo_pkgs_162(&dir, &[("test/bystander", "1.0", "0", "")]);
+    install_162(&dir, "test", "victim-1.0", "0", &[]);
+    let config = cfg_162();
+    assert_eq!(
+        disj_162(Disj162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            self_cp: &self_162("test", "consumer"),
+            atoms: &["!test/victim", "test/nonexistent"],
+            queued: &[]
+        }),
+        portage_use_reduce::AltPreference::Other
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ---- S5b: `disjunction_preference`'s `circular_atom` demotion. ---- (Portage `dep_zapdeps`) /// Arguments of [`disj_circ_162`].
@@ -531,6 +1093,126 @@ fn circ_map_162(
     let mut map = HashMap::new();
     map.insert(parent.clone(), children);
     map
+}
+
+/// An alternative matching the parent's recorded in-cycle child
+/// ranks `Other` (the bug-703440 `|| ( bootstrap cmake )` re-pick).
+#[test]
+fn disjunction_preference_demotes_a_recorded_circular_child_to_other() {
+    let dir = dir_162("disj-circ-hit");
+    let repos = repo_pkgs_162(&dir, &[("test/pkgB", "1.0", "0", "")]);
+    let config = cfg_162();
+    let entries = vec![entry_162(
+        "test",
+        "pkgB",
+        PretendOutcome::New {
+            version: "1.0".to_string(),
+        },
+        Some("0"),
+        false,
+    )];
+    let parent = self_162("test", "consumer");
+    assert_eq!(
+        disj_circ_162(DisjCirc162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &entries,
+            self_cp: &parent,
+            atoms: &["test/pkgB"],
+            queued: &[],
+            circular: &HashMap::new()
+        }),
+        portage_use_reduce::AltPreference::Installed
+    );
+    let recorded = circ_map_162(&parent, vec![circ_child_162("test", "pkgB", "1.0", "0")]);
+    assert_eq!(
+        disj_circ_162(DisjCirc162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &entries,
+            self_cp: &parent,
+            atoms: &["test/pkgB"],
+            queued: &[],
+            circular: &recorded
+        }),
+        portage_use_reduce::AltPreference::Other
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A recorded child for another parent, or for a version the atom
+/// does not match, leaves the rank alone.
+#[test]
+fn disjunction_preference_ignores_a_non_matching_circular_record() {
+    let dir = dir_162("disj-circ-miss");
+    let repos = repo_pkgs_162(
+        &dir,
+        &[("test/pkgB", "1.0", "0", ""), ("test/pkgB", "2.0", "1", "")],
+    );
+    let config = cfg_162();
+    let parent = self_162("test", "consumer");
+    let other_parent = self_162("test", "stranger");
+    let wrong_parent = circ_map_162(
+        &other_parent,
+        vec![circ_child_162("test", "pkgB", "1.0", "0")],
+    );
+    assert_eq!(
+        disj_circ_162(DisjCirc162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            self_cp: &parent,
+            atoms: &["test/pkgB:0"],
+            queued: &[],
+            circular: &wrong_parent
+        }),
+        portage_use_reduce::AltPreference::Available
+    );
+    let wrong_slot = circ_map_162(&parent, vec![circ_child_162("test", "pkgB", "2.0", "1")]);
+    assert_eq!(
+        disj_circ_162(DisjCirc162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            self_cp: &parent,
+            atoms: &["test/pkgB:0"],
+            queued: &[],
+            circular: &wrong_slot
+        }),
+        portage_use_reduce::AltPreference::Available
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An atom satisfied by an installed version is not a circular dep:
+/// the exemption holds `Installed` even with a matching record.
+/// Portage: vardb.match
+#[test]
+fn disjunction_preference_exempts_an_installed_satisfying_circular_atom() {
+    let dir = dir_162("disj-circ-inst");
+    let repos = repo_pkgs_162(&dir, &[("test/pkgB", "1.0", "0", "")]);
+    install_162(&dir, "test", "pkgB-1.0", "0", &[]);
+    let config = cfg_162();
+    let parent = self_162("test", "consumer");
+    let recorded = circ_map_162(&parent, vec![circ_child_162("test", "pkgB", "1.0", "0")]);
+    assert_eq!(
+        disj_circ_162(DisjCirc162Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            self_cp: &parent,
+            atoms: &["test/pkgB"],
+            queued: &[],
+            circular: &recorded
+        }),
+        portage_use_reduce::AltPreference::Installed
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
 /// Arguments of [`promote_162`].
 struct Promote162Args<'a> {
