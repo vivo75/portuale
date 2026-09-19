@@ -24,11 +24,12 @@ flowchart TD
     argv -->|"invoked as emerge"| run["emerge::run(args)<br/>(pretend::run, pretend.rs)"]
     run --> help{"--help / -h ?"}
     help -->|yes| printhelp["print_help() → exit 0"]:::done
-    help -->|no| parse["parse the full option surface<br/>(emerge_options.rs recognises every<br/>real flag/action by name)"]
+    help -->|no| cfg["resolve config FIRST<br/>find_repos() + resolve_config()<br/>(repos.conf, profile chain, make.conf,<br/>package.mask/.use/.accept_keywords)"]
+    cfg --> defaults["prepend EMERGE_DEFAULT_OPTS tokens<br/>to argv (argv wins)"]
+    defaults --> parse["parse the full option surface<br/>(emerge_options.rs recognises every<br/>real flag/action by name)"]
     parse --> early{"early standalone action?<br/>--deselect (alone), --list-sets"}
     early -->|yes| earlyact["run_deselect() / run_list_sets()"]:::branch
-    early -->|no| cfg["resolve config<br/>find_repos() + resolve_config()<br/>(repos.conf, profile chain, make.conf,<br/>package.mask/.use/.accept_keywords)"]
-    cfg --> standalone{"standalone action?<br/>--unmerge/-C, --depclean/-c, --prune,<br/>--config, --search, --info, --resume,<br/>--clean, --rage-clean"}
+    early -->|no| standalone{"standalone action?<br/>--unmerge/-C, --depclean/-c, --prune,<br/>--config, --search, --info, --resume,<br/>--clean, --rage-clean"}
     standalone -->|yes| action["dispatch to that action's handler<br/>(see per-action diagrams)"]:::branch
     standalone -->|no| expand["expand set tokens in place<br/>@world/@selected/@system/@installed/@&lt;name&gt;<br/>+ apply profiles/updates/ package moves"]
     expand --> resolve["resolve_pretend_graph()<br/>(portage-repo): candidate selection per repo,<br/>recursive slot-aware DEPEND/RDEPEND/BDEPEND walk,<br/>outcome classification, blocker + slot-conflict<br/>reporting, topological merge order"]
@@ -42,9 +43,10 @@ flowchart TD
     classDef branch fill:#8a5a1a,color:#fff
 ```
 
-The execution branch (`if !pretend`, `pretend.rs:7127`) picks exactly one
+The execution branch (`if !pretend`, `pretend.rs` dispatch) picks exactly one
 of:
 
 - `emerge_build::run_buildpkgonly` — `--buildpkgonly` / `-B`
-- `emerge_getbinpkg::run_merge_plan` — `--getbinpkg` / `--getbinpkgonly`
+- `emerge_getbinpkg::run_merge_plan` — `--getbinpkg` / `--getbinpkgonly`,
+  and any run whose plan holds a `Binary` entry (e.g. `-k`)
 - `emerge_build::run_source_merge` — plain `emerge <atom>`

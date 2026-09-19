@@ -23,8 +23,8 @@ holds everything else.
 |---|---|
 | [`brush-pin.md`](brush-pin.md) | The `brush` (embedded bash) dependency pin, the staged upstream fixes, and the re-pin checklist. |
 | [`remote-merge.md`](remote-merge.md) | The `mrg`-only remote binary-package merge over SSH: design, real-code grounding, the six-slice plan (all shipped), the open questions. |
-| [`operation-diagrams.md`](operation-diagrams.md) | Block diagrams tracing four representative `emerge` invocations through the code; per-operation detail in `emerge-*.md`. |
-| [`emerge-source-merge.md`](emerge-source-merge.md), [`emerge-unmerge.md`](emerge-unmerge.md), [`emerge-getbinpkgonly.md`](emerge-getbinpkgonly.md), [`emerge-pretend-world.md`](emerge-pretend-world.md) | Per-operation code walkthroughs (companions to `operation-diagrams.md`). |
+| [`diagrams/operation-diagrams.md`](diagrams/operation-diagrams.md) | Block diagrams tracing four representative `emerge` invocations through the code; per-operation detail in `diagrams/emerge-*.md`. |
+| [`diagrams/emerge-source-merge.md`](diagrams/emerge-source-merge.md), [`diagrams/emerge-unmerge.md`](diagrams/emerge-unmerge.md), [`diagrams/emerge-getbinpkgonly.md`](diagrams/emerge-getbinpkgonly.md), [`diagrams/emerge-pretend-world.md`](diagrams/emerge-pretend-world.md) | Per-operation code walkthroughs (companions to `diagrams/operation-diagrams.md`). |
 | [`on-disk-caches.md`](on-disk-caches.md) | Source-grounded audit of every on-disk cache/database (`/var/db/pkg`, `/var/cache/edb`, `$PKGDIR`, `/var/lib/portage`, logs) and which alternative backends are worth it — informs the `mrg-director` DB/cache slots. |
 | [`performances-tuning.md`](performances-tuning.md) | The `perf` + call-counter investigation that took `emerge -puD --getbinpkg` from 77 s to 4.5 s (17×, ~3.5× faster than real `emerge`), with the remaining incremental items. |
 | [`solver-backends-analysis.md`](solver-backends-analysis.md) | The `--solver=portage\|pubgrub\|resolvo` backend comparison and why the lu-zero bridges are reused. Real-tree gaps: `scope-backlog.md` §J. |

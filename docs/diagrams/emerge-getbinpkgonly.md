@@ -6,19 +6,19 @@ binhost index is refreshed live, the graph is resolved against the
 binary pool, and every entry is downloaded and merged as a prebuilt
 package.
 
-Entry: `pretend::run` (`rust/portuale/src/pretend.rs:4859`).
+Entry: `pretend::run` (`rust/portuale/src/pretend.rs:8356`).
 
 ```mermaid
 flowchart TD
     start["emerge -v --getbinpkgonly=y sys-apps/portage"]:::entry --> parse["parse options<br/>pretend = false, verbose = true<br/>getbinpkgonly = true"]
 
-    parse --> cfg["config resolution<br/>find_repos() + resolve_config()<br/>+ parse binrepos.conf / PORTAGE_BINHOST"]
+    parse --> cfg["config resolution FIRST<br/>find_repos() + resolve_config()<br/>+ parse binrepos.conf / PORTAGE_BINHOST<br/>then prepend EMERGE_DEFAULT_OPTS to argv"]
     cfg --> expand["expand atoms + apply_updates_to_atom()"]
 
     expand --> fold["fold the --getbinpkg family:<br/>usepkgonly = true (binary only)<br/>usepkg = true<br/>getbinpkg = true (remote candidates)"]
     fold --> scan["if no $PKGDIR/Packages index:<br/>binpkg::scan_pkgdir() — synthesize an index<br/>from each local binpkg's embedded metadata"]
 
-    scan --> refresh["!pretend && getbinpkg →<br/>emerge_getbinpkg::refresh_binhost_indexes()<br/>wget each http(s) binhost's Packages[.gz/.zst]<br/>into var/cache/edb/binhost/&lt;host&gt;/&lt;path&gt;/Packages<br/>(file:// binhosts need no refresh)"]
+    scan --> refresh["!pretend && getbinpkg →<br/>emerge_getbinpkg::refresh_binhost_indexes()<br/>fetch each http(s) binhost's Packages[.gz/.zst]<br/>via the shared wget transport into<br/>var/cache/edb/binhost/&lt;host&gt;/&lt;path&gt;/Packages<br/>(file:// binhosts need no refresh)"]
 
     refresh --> resolve["resolve_pretend_graph()  (usepkgonly)<br/>candidates come ONLY from the binary pool<br/>(local $PKGDIR + refreshed remote indexes)<br/>→ every entry has source = Binary<br/>'g' bracket column = remote binary not yet in $PKGDIR"]
     resolve --> unsat{"any dep with no binary candidate?"}
@@ -30,7 +30,7 @@ flowchart TD
     ask -->|"no"| dispatch
     ask -->|"yes, declined"| exit130["exit 130"]:::done
 
-    dispatch{"execution dispatch (pretend.rs:7127)<br/>getbinpkg = true"} --> rmp
+    dispatch{"execution dispatch<br/>(pretend.rs: buildpkgonly → getbinpkg → source)"} --> rmp
 
     subgraph RMP["emerge_getbinpkg::run_merge_plan()"]
         rmp["for each entry in topological order<br/>(shared run_merge_loop)"]
@@ -39,11 +39,11 @@ flowchart TD
         srcq -->|yes| binentry["merge_one_binary_entry()"]
     end
 
-    binentry --> aiq{"outcome == AlreadyInstalled?"}
+    binentry --> aiq{"outcome == AlreadyInstalled<br/>or Uninstall (removal)?"}
     aiq -->|yes| noop["silent no-op"]
     aiq -->|no| remoteq{"entry.remote_binary?"}
 
-    remoteq -->|yes| dl["find_remote_binpkg() in a binhost Packages record<br/>download_and_verify(): wget into $PKGDIR,<br/>check SIZE, check the record's MD5<br/>(gpkg: also verify internal Manifest BLAKE2B/SHA512)"]
+    remoteq -->|yes| dl["find_remote_binpkg() in a binhost Packages record<br/>download_and_verify(): fetch into $PKGDIR via the<br/>shared wget transport, check SIZE, check the<br/>record's MD5/SHA1 digests<br/>(gpkg: also verify internal Manifest BLAKE2B/SHA512)"]
     remoteq -->|"no (local PKGDIR)"| local["resolve_local_binpkg()<br/>PKGDIR/cat/pf.tbz2 or pf.gpkg.tar"]
 
     dl --> mb
@@ -75,8 +75,12 @@ flowchart TD
   simply never produces a non-`Binary` entry, so the `merge_one_source_entry`
   arm in `run_merge_plan` is unreachable under `-G` (it exists to serve
   the mixed `--getbinpkg` case).
-- Digest verification covers `SIZE` + `MD5` for a tbz2 and the internal
-  `Manifest` hashes for a gpkg; the GPG `.sig` layer is a documented v1
-  cut.
+- Digest verification covers `SIZE` + every present `MD5`/`SHA1`
+  field for a tbz2 and the internal `Manifest` hashes for a gpkg; a
+  mismatch deletes the file and fails. Detached `.sig` verification
+  follows each binrepo's own `verify-signature` policy via the system
+  `gpg` (`GpgVerify::from_binrepo`, honouring
+  `binpkg-request/ignore-signature`); the populate-path scan still
+  skips `.sig` checks by deliberate cut.
 - `-v` is display-only; `--getbinpkgonly` binary merges are always
   serial (nothing to build in parallel).

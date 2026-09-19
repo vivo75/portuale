@@ -4301,11 +4301,12 @@ fn run_unmerge_pretend(
 /// `WorldSelectedPackagesSet.cleanPackage`, called per-package right
 /// after its removal).
 ///
-/// **v1 cuts:** no `CLEAN_DELAY` countdown (real `countdown(5,
-/// ">>> Unmerging")`); no `--ask` prompt; `FEATURES=unmerge-backup` not
-/// honored; the trailing `for s in setconfig.active: selected.remove(@s)`
-/// pass is a no-op here (portuale's world writer already drops `@set`
-/// lines on any rewrite). A `pkg_prerm`/`pkg_postrm` failure is logged
+/// The caller (`run_unmerge_pretend`) already handled `--ask` (exit 130
+/// on decline) and the `CLEAN_DELAY` countdown before reaching here;
+/// `FEATURES=unmerge-backup` is honored inside `execute_unmerge` (a
+/// `quickpkg` of each package first). The trailing
+/// `for s in setconfig.active: selected.remove(@s)` pass is a no-op here
+/// (portuale's world writer already drops `@set` lines on any rewrite). A `pkg_prerm`/`pkg_postrm` failure is logged
 /// and removal continues (`unmerge_one_installed`); real `unmerge()`
 /// `sys.exit`s on a `portage.unmerge()` non-zero, but that return only
 /// tracks the file-removal core, which portuale still surfaces as a

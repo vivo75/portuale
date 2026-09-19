@@ -7,7 +7,7 @@ packages, shows a `selected` / `protected` / `omitted` preview, then
 it from the world file. `-v` has no effect on this path.
 
 Entry: `pretend::run` → `run_unmerge_pretend`
-(`rust/portuale/src/pretend.rs:2636`).
+(`rust/portuale/src/pretend.rs:3950`).
 
 ```mermaid
 flowchart TD
@@ -45,7 +45,7 @@ flowchart TD
 
     delay --> exec
 
-    subgraph EXEC["execute_unmerge()  (pretend.rs:3246)"]
+    subgraph EXEC["execute_unmerge()  (pretend.rs:5053)"]
         exec["for (idx, cpv) in removal_list<br/>>>> Unmerging (N of M) cat/pf..."]
         exec --> backup{"FEATURES=unmerge-backup?"}
         backup -->|yes| quickpkg["quickpkg the package first"]
@@ -80,5 +80,5 @@ flowchart TD
 - `--rage-clean` is the same path with `action = "rage-clean"`: it skips
   the `CLEAN_DELAY` countdown and the prerm/postrm hooks.
 - v1 cuts on the real removal loop: no `--ask` prompt inside
-  `execute_unmerge` itself (handled by the caller), `CLEAN_DELAY` is a
-  fixed countdown.
+  `execute_unmerge` itself (handled by the caller), `CLEAN_DELAY` is
+  the env value (default 5, `0` skips).

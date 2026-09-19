@@ -4,11 +4,12 @@ Read-only. Expands the world set, resolves the full deep dependency
 graph for every world member, prints the merge list, and exits without
 touching anything.
 
-Entry: `pretend::run` (`rust/portuale/src/pretend.rs:4859`).
+Entry: `pretend::run` (`rust/portuale/src/pretend.rs:8356`).
 
 ```mermaid
 flowchart TD
-    start["emerge --pretend @world"]:::entry --> parse["parse options<br/>pretend = true, atom_args = ['@world']"]
+    start["emerge --pretend @world"]:::entry --> help["--help? no → resolve config FIRST<br/>find_repos() + resolve_config(),<br/>then prepend EMERGE_DEFAULT_OPTS to argv"]
+    help --> parse["parse options<br/>pretend = true, atom_args = ['@world']"]
 
     parse --> guard{"standalone action flag set?<br/>(--unmerge, --depclean, --config, ...)"}
     guard -->|no| cfg
@@ -18,7 +19,7 @@ flowchart TD
         cfg --> rc["resolve_config()<br/>profile inheritance chain + make.conf<br/>→ USE, ACCEPT_KEYWORDS, package.mask/.unmask,<br/>package.use, package.accept_keywords, system set"]
     end
 
-    rc --> world["expand '@world'<br/>expand_selected(): var/lib/portage/world atoms<br/>+ nested world_sets<br/>(@system → profile packages files,<br/>@installed → one cat/pkg:slot per vdb entry)"]
+    rc --> world["expand '@world' = sorted @profile<br/>+ @selected (var/lib/portage/world atoms<br/>+ nested world_sets) + sorted @system<br/>(@installed → one cat/pkg:slot per vdb entry)"]
     world --> moves["apply_updates_to_atom()<br/>rewrite each atom through profiles/updates/ moves"]
     moves --> empty{"atom list empty?"}
     empty -->|yes| err2["error → exit 2"]:::done
@@ -41,7 +42,9 @@ flowchart TD
     tree --> extra
     lines --> extra
     extra["blocker lines, slot-conflict block,<br/>'Total: N packages' counters (at -v),<br/>autounmask / changed-deps advisories"]
-    extra --> done["exit 0 — no vdb, no filesystem, no network touched"]:::done
+    extra --> failq{"blockers or slot conflicts?"}
+    failq -->|yes| exit1["exit 1 — nothing touched"]:::done
+    failq -->|no| done["exit 0 — no vdb, no filesystem, no network touched"]:::done
 
     classDef entry fill:#1f6f43,color:#fff
     classDef done fill:#4a4a4a,color:#fff
@@ -51,9 +54,12 @@ flowchart TD
 
 - `--pretend` never hits the network: even with the `--getbinpkg`
   family it resolves against whatever binhost index is already cached
-  (`pretend.rs:6753`, the `!pretend && getbinpkg` guard).
-- `@world` = `@selected` here: the world file's atoms plus the sets
-  named in `var/lib/portage/world_sets`, expanded recursively.
-- The execution branch (`if !pretend`, `pretend.rs:7127`) is skipped
+  (the `!pretend && getbinpkg` refresh guard in `pretend::run`).
+- `@world` = sorted `@profile` + `@selected` + sorted `@system`
+  (real `_sets/__init__.py:97-98`): the world file's atoms plus the
+  sets named in `var/lib/portage/world_sets`, expanded recursively,
+  plus the profile's unstarred `packages` lines and the system's
+  starred ones.
+- The execution branch (`if !pretend`, `pretend.rs` dispatch) is skipped
   entirely — `pretend` is `true`, so `run` returns right after the
-  display.
+  display-then-fail band (exit 1 on blockers / slot conflicts).

@@ -128,5 +128,5 @@ rust/target/release/versions-harness vercmp 1.0-r1 1.0
 | [`docs/scope-backlog.md`](docs/scope-backlog.md) | What real portage behaviour is *not* yet ported (either side), the standing non-goals, and the distance to a drop-in replacement. |
 | [`docs/history/running-it.md`](docs/history/running-it.md) | Runnable per-slice examples (historical). |
 | [`docs/brush-pin.md`](docs/brush-pin.md) | The `brush` (embedded bash) dependency pin and its re-pin checklist. |
-| [`docs/operation-diagrams.md`](docs/operation-diagrams.md) | Block diagrams tracing four representative `emerge` invocations through the code. |
+| [`docs/diagrams/operation-diagrams.md`](docs/diagrams/operation-diagrams.md) | Block diagrams tracing four representative `emerge` invocations through the code. |
 | [`docs/history/`](docs/history/) | Superseded planning documents (the original derivation) and pre-compaction snapshots of docs that get periodically purged (e.g. the scope-backlog's shipped-item narrative). |

@@ -5,13 +5,13 @@ packages (this is also the default), so every resolved entry is built
 from an ebuild and merged into the vdb. `-v` only makes the merge-list
 display verbose; it does not change resolution or execution.
 
-Entry: `pretend::run` (`rust/portuale/src/pretend.rs:4859`).
+Entry: `pretend::run` (`rust/portuale/src/pretend.rs:8356`).
 
 ```mermaid
 flowchart TD
     start["emerge -v --getbinpkg=n sys-apps/portage"]:::entry --> parse["parse options<br/>pretend = false, verbose = true<br/>getbinpkg = false (explicit =n)<br/>atom_args = ['sys-apps/portage']"]
 
-    parse --> cfg["config resolution<br/>find_repos() + resolve_config()"]
+    parse --> cfg["config resolution FIRST<br/>find_repos() + resolve_config(),<br/>then prepend EMERGE_DEFAULT_OPTS to argv"]
     cfg --> expand["expand atoms (no @set here)<br/>apply_updates_to_atom()"]
     expand --> usepkg["fold --getbinpkg family into --usepkg<br/>getbinpkg=n → usepkg stays false → source only"]
 
@@ -23,7 +23,7 @@ flowchart TD
     ask -->|"no (default)"| dispatch
     ask -->|"yes, declined"| exit130["exit 130"]:::done
 
-    dispatch{"execution dispatch<br/>(pretend.rs:7127)"}
+    dispatch{"execution dispatch<br/>(pretend.rs: buildpkgonly → getbinpkg → source)"}
     dispatch -->|"not buildpkgonly, not getbinpkg"| rsm
 
     subgraph RSM["emerge_build::run_source_merge()"]
@@ -38,7 +38,7 @@ flowchart TD
 
     subgraph RM["ebuild_merge::run_merge()"]
         runmerge["run_commands(['install'])<br/>→ phase_prerequisites chain (ebuild_phases.rs)"]
-        runmerge --> phases["pretend → setup → unpack → prepare →<br/>configure → compile → test → install<br/>(real bash src_* phases via embedded brush)"]
+        runmerge --> phases["pretend → setup → unpack → prepare →<br/>configure → compile → test → install<br/>(real bash src_* phases via the selected<br/>shell backend: default bash, --shell brush opt-in)"]
         phases --> bpq{"FEATURES=buildpkg / --buildpkg ?"}
         bpq -->|yes| binpkg["package_after_install()<br/>write a binpkg into $PKGDIR before the vdb merge"]
         bpq -->|no| mai
