@@ -13060,6 +13060,16 @@ fn rev_dep_pin_holdable(
         })
     })
 }
+/// Backlog #91 (S1): the dep-key axis of the reverse-dependency pin
+/// scan. Real empties (or marks `optional`) the *build-time* keys of a
+/// built package (`DEPEND`/`BDEPEND`, `depgraph.py:4194-4247`) while the
+/// runtime keys (`RDEPEND`/`IDEPEND`/`PDEPEND`) always form hard parent
+/// edges -- so only a build-time pin is unconditionally ignorable (D1);
+/// a runtime pin from an in-graph consumer withholds (host qemu/edk2,
+/// hermetic `whblocker` cell).
+fn is_build_time_dep_key(key: impl AsRef<str>) -> bool {
+    matches!(key.as_ref(), "DEPEND" | "BDEPEND")
+}
 /// Real `depgraph._complete_graph` reaching
 /// `_slot_operator_check_reverse_dependencies`: the dependency atoms an
 /// **installed** package records against a package this run wants to
@@ -13121,7 +13131,10 @@ fn rev_dep_pin_holdable(
 /// Consumers real would not enforce are skipped: one whose own `cat/pkg`
 /// this run is already replacing (real's "this parent may need to be
 /// eliminated due to a slot conflict, so its dependencies aren't
-/// necessarily relevant", `depgraph.py:2512-2522`) and one matched by
+/// necessarily relevant", `depgraph.py:2512-2522`), one this run
+/// uninstalls to solve a blocker conflict (real's `parent.installed and
+/// self._in_blocker_conflict(parent)`, bug 612772 -- its pin cannot
+/// veto the upgrade whose blocker removes it), and one matched by
 /// `--exclude`. Real's further `_upgrade_available` / direct-cycle
 /// escapes sit behind `if not self._too_deep(parent.depth)`, and a
 /// consumer that only entered via `_complete_graph` carries
@@ -13138,6 +13151,7 @@ fn rev_dep_pin_holdable(
 /// requirements -- see `rev_dep_pin_holdable`) feed the residual
 /// installed-instance conflict report instead of masking the
 /// hard-required version into invisibility.
+#[allow(clippy::too_many_arguments)]
 fn reverse_dependency_constraints(
     repos: &[RepoConfig],
     root: &Path,
@@ -13146,11 +13160,22 @@ fn reverse_dependency_constraints(
     excluded: &[String],
     hard_want: &HashMap<(String, String), Vec<String>>,
     reachable: &HashSet<(String, String)>,
+    dynamic_deps: bool,
+    ignore_built_slot_operator_deps: bool,
 ) -> (Vec<RevDepPin>, Vec<RevDepPin>) {
     // (`cat/pkg`, slot) -> the candidate string this run would install,
     // for every entry that replaces an installed version in its own slot.
     let mut upgrading: HashMap<((String, String), String), String> = HashMap::new();
     let mut being_replaced: HashSet<(String, String)> = HashSet::new();
+    // Backlog #91 (S1): consumers this pass uninstalls (bug 612772 --
+    // real skips a parent that `is installed and _in_blocker_conflict`,
+    // since it will be uninstalled to solve the conflict). A removal
+    // entry lands in `entries` through the blocker phase before this
+    // scan runs, which would otherwise make the removed consumer look
+    // "walked" (`graph_cps`) and let its runtime pin veto the very
+    // upgrade whose blocker removes it (the `whpuller`-only twin:
+    // `whtarget-1.0`'s `Uninstall` entry vs its `~whblocker-1.0` pin).
+    let mut being_removed: HashSet<(String, String)> = HashSet::new();
     // Every `cat/pkg` this pass walked, any outcome -- real's "or is a dep
     // of a node already in the graph" reachability path (`_complete_graph`
     // deep-walks the required sets, but a package the requested atoms'
@@ -13161,6 +13186,9 @@ fn reverse_dependency_constraints(
         graph_cps.insert(cp.clone());
         if merge_bound_cpv(e).is_some() {
             being_replaced.insert(cp.clone());
+        }
+        if matches!(e.outcome, PretendOutcome::Uninstall { .. }) {
+            being_removed.insert(cp.clone());
         }
         let to = match &e.outcome {
             PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to,
@@ -13198,9 +13226,12 @@ fn reverse_dependency_constraints(
     // pass.
     type SeenPin = ((String, String), String, (String, String, String));
     let mut seen: HashSet<SeenPin> = HashSet::new();
+    // Per-pass `Effective`-layer cache, mirroring real's once-per-instance
+    // `FakeVartree` overlay (`installed_dep_string`'s own doc comment).
+    let mut meta_memo: HashMap<(String, String, String, String), String> = HashMap::new();
     for consumer in all_installed_packages(root) {
         let consumer_cp = (consumer.category.clone(), consumer.package.clone());
-        if being_replaced.contains(&consumer_cp) {
+        if being_replaced.contains(&consumer_cp) || being_removed.contains(&consumer_cp) {
             continue;
         }
         // #54: real only ever sees this consumer if `_complete_graph`'s
@@ -13225,13 +13256,40 @@ fn reverse_dependency_constraints(
             &consumer.version,
             "USE",
         );
+        // Backlog #91 (S1): real walks an installed consumer's
+        // *effective* deps -- the live ebuild metadata when the
+        // installed version is still in the tree
+        // (`FakeVartree._apply_dynamic_deps`, bug #368725), the raw vdb
+        // record only when it is gone -- so a pin the live ebuild no
+        // longer carries is invisible to real (the #79 `revdepconsumer`
+        // shape: vdb `RDEPEND="<revdeptarget-2.0"`, live ebuild empty,
+        // real upgrades). Same layer choice as
+        // `collect_unwalked_installed_blockers` (#77).
+        let live = live_metadata_for_installed(
+            repos,
+            root,
+            &consumer.category,
+            &consumer.package,
+            &consumer.version,
+        );
         for dep_key in dep_keys {
-            let depstr = read_vdb_string(
+            let layer = if dynamic_deps {
+                InstalledMetaLayer::Effective
+            } else {
+                InstalledMetaLayer::Raw
+            };
+            let depstr = installed_dep_string(
                 root,
+                dynamic_deps,
+                dynamic_deps_append_enabled(),
+                ignore_built_slot_operator_deps,
                 &consumer.category,
                 &consumer.package,
                 &consumer.version,
+                live.as_deref(),
                 dep_key,
+                layer,
+                &mut meta_memo,
             );
             if depstr.trim().is_empty() {
                 continue;
@@ -13303,17 +13361,40 @@ fn reverse_dependency_constraints(
                 // probe (`_slot_operator_check_reverse_dependencies`,
                 // `depgraph.py:2472-2538` -- which parents that probe
                 // visits, which it skips). A holdable *plain* pin (no
-                // built `:=`) is therefore ignored entirely: real merges
-                // the upgrade without filtering on it and without
-                // reporting it (D1: `rdctarget-1.0`'s recorded
-                // `~rdcblocker-1.0` neither drops `rdcblocker-2.0` nor
-                // leaves a residual row -- the only `B` is the new
-                // version's own `RDEPEND` blocker). Enforcing it here is
-                // what silently settled the old version (D0's trace).
+                // built `:=`) from a *build-time* key (`DEPEND`/`BDEPEND`)
+                // is therefore ignored entirely: a built package's
+                // build-time deps are `optional` edges (real
+                // `depgraph.py:4194-4247`, `optional=(pkg.built or ...)`
+                // at `:4277-4287`), emptied outright when `bdeps` is off,
+                // and never withhold an upgrade -- real merges without
+                // filtering on the pin and without reporting it (D1:
+                // `rdctarget-1.0`'s recorded `~rdcblocker-1.0` neither
+                // drops `rdcblocker-2.0` nor leaves a residual row -- the
+                // only `B` is the new version's own `RDEPEND` blocker).
+                // Enforcing it here is what silently settled the old
+                // version (D0's trace).
+                //
+                // Backlog #91 (S1) narrows that ignore to build-time
+                // keys: a holdable plain pin from a *runtime* key
+                // (`RDEPEND`/`IDEPEND`/`PDEPEND`, never emptied as a
+                // class) IS a slot-conflict parent edge once its
+                // consumer is in the graph, and real's direct solve
+                // keeps the installed instance (host qemu/edk2:
+                // `Slot conflict ... remove: ...-202608 / keep:
+                // ...-202408-5`; hermetic oracle: the `whblocker`/
+                // `whtarget`/`whpuller` fixtures -- runtime `~` pin from
+                // a non-replaced consumer withholds `whblocker-2.0`,
+                // while the unreachable-consumer twin merges with the
+                // uninstall/`b` rows). Enforcing it here as an ordinary
+                // slot constraint settles the same answer through the
+                // re-resolve. The three rejections of #91 §1 stand: no
+                // use-dep gating (qemu's own pin carries use-deps and
+                // withholds), no operator narrowing (any operator holds
+                // when runtime + in-graph), only the key axis moves.
                 // Still enforced: built slot-operator pins (the probe's
                 // own domain, #24's rebuilds) and every not-holdable pin
                 // (dropped for the residual report, keeper's shape).
-                if holds && !built_slot_op {
+                if holds && !built_slot_op && is_build_time_dep_key(dep_key) {
                     continue;
                 }
                 if holds {
@@ -21332,6 +21413,8 @@ fn collect_feedback(
             ctx.excluded,
             &pass.slot_want,
             &ctx.slot_op_reachable,
+            ctx.dynamic_deps,
+            ctx.ignore_built_slot_operator_deps,
         );
         for pin in dropped {
             if !grown.dropped_pins.contains(&pin) {
@@ -21550,6 +21633,8 @@ fn collect_feedback(
         ctx.excluded,
         &pass.slot_want,
         &ctx.slot_op_reachable,
+        ctx.dynamic_deps,
+        ctx.ignore_built_slot_operator_deps,
     );
     // #24 S4: rule 4 of `_eliminate_rebuilds` checks every parent atom of
     // the rebuilt pkg, and real's complete-graph nomerge consumers are
@@ -34776,6 +34861,8 @@ mod tests {
             &[],
             &hard_want,
             &HashSet::new(),
+            true,
+            false,
         );
         assert!(
             enforced.is_empty() && dropped.is_empty(),
@@ -34788,8 +34875,17 @@ mod tests {
         // only "found at all" matters here.
         let reachable: HashSet<(String, String)> =
             HashSet::from([("dev-libs".to_string(), "pinner".to_string())]);
-        let (enforced, dropped) =
-            reverse_dependency_constraints(&[], &dir, &entries, false, &[], &hard_want, &reachable);
+        let (enforced, dropped) = reverse_dependency_constraints(
+            &[],
+            &dir,
+            &entries,
+            false,
+            &[],
+            &hard_want,
+            &reachable,
+            true,
+            false,
+        );
         assert_eq!(
             enforced.len() + dropped.len(),
             1,
@@ -34797,6 +34893,65 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reverse_dependency_constraints_enforces_a_runtime_pin_but_ignores_a_build_time_pin() {
+        // #91 S1, on the committed fixtures: `whtarget-1.0` records a
+        // runtime-key `~whblocker-1.0` pin (the hermetic host-qemu
+        // shape) while `rdctarget-1.0` records the build-time-key
+        // `~rdcblocker-1.0` pin (D1, #79). Both consumers reachable,
+        // both upgrades otherwise selected: the runtime pin must be
+        // enforced as a slot constraint, the build-time pin ignored
+        // entirely (neither enforced nor dropped).
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+        let upgrade = |pkg: &str| GraphEntry {
+            category: "dev-libs".into(),
+            package: pkg.into(),
+            outcome: PretendOutcome::Upgrade {
+                from: "1.0".into(),
+                to: "2.0".into(),
+            },
+            ..graph_entry("dev-libs", pkg, "2.0")
+        };
+        let entries = [upgrade("whblocker"), upgrade("rdcblocker")];
+        let hard_want: HashMap<(String, String), Vec<String>> = HashMap::from([
+            (
+                ("dev-libs".to_string(), "whblocker".to_string()),
+                vec![">=dev-libs/whblocker-1".to_string()],
+            ),
+            (
+                ("dev-libs".to_string(), "rdcblocker".to_string()),
+                vec![">=dev-libs/rdcblocker-1".to_string()],
+            ),
+        ]);
+        let reachable: HashSet<(String, String)> = HashSet::from([
+            ("dev-libs".to_string(), "whtarget".to_string()),
+            ("dev-libs".to_string(), "rdctarget".to_string()),
+        ]);
+        let (enforced, dropped) = reverse_dependency_constraints(
+            &repos,
+            &root,
+            &entries,
+            true,
+            &[],
+            &hard_want,
+            &reachable,
+            true,
+            false,
+        );
+        assert_eq!(
+            enforced.len(),
+            1,
+            "the reachable runtime-key pin must be enforced, got {enforced:?}"
+        );
+        assert_eq!(enforced[0].consumer.1, "whtarget");
+        assert!(
+            enforced.iter().all(|p| p.consumer.1 != "rdctarget")
+                && dropped.iter().all(|p| p.consumer.1 != "rdctarget"),
+            "the build-time-key pin must be ignored entirely, got enforced={enforced:?} dropped={dropped:?}"
+        );
     }
 
     /// #57 S1: one shared assertion for the triangle's conflict record --
