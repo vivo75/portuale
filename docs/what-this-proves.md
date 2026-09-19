@@ -17322,3 +17322,12 @@ emerge --pretend --tree --update dev-libs/p2btarget dev-libs/p2bowner dev-libs/n
 cd rust && cargo test --release -p portage-repo tree_simulation
 python3 -m pytest ../pmtest/pytests-contract-suite/test_emerge_pretend_contract.py -k oracle_81 -q
 ```
+
+**2026-09-19 close-out note:** the paragraph above said "unmerged pending
+review" — the human review has since happened, the owner accepted the
+branch as built (including the walk-sequence residue staying out of
+scope), and it merged to `main` as `fc07b88` (pmtest companion on
+`main`). No code changed in that step; `docs/backlog-tasks.md` #81 is
+`DONE`, and `docs/02.78-87-tier2-closeout.md` `Status:` is `done`. The
+batch's residues are #90 (#62's `--backtrack=0` reconciliation gap) and
+#91 (#79's host-`@world` edk2 extra).
