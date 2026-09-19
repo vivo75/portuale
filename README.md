@@ -1,3 +1,5 @@
+<img src="docs/images/logo.svg" alt="portuale logo" width="120" />
+
 # portuale — a Rust reimplementation of Portage
 
 `portuale` is a drop-in Rust reimplementation of Gentoo's package
