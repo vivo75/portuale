@@ -17331,3 +17331,36 @@ scope), and it merged to `main` as `fc07b88` (pmtest companion on
 `DONE`, and `docs/history/02.78-87-tier2-closeout.md` `Status:` is `done`. The
 batch's residues are #90 (#62's `--backtrack=0` reconciliation gap) and
 #91 (#79's host-`@world` edk2 extra).
+
+## 2026-09-19 — backlog #91: installed-consumer runtime pin withholds the upgrade (qemu/edk2)
+
+`reverse_dependency_constraints` ignored every holdable plain pin (the
+#79 blanket rule), so portuale upgraded `sys-firmware/edk2-bin` to
+`202608` over installed qemu's `~202408` RDEPEND pin while real
+3.0.82.2 withholds it -- the only stable host-`@world` delta. S0's
+first-ever `--debug` capture of the shape showed the mechanism: the
+installed pin is a slot-conflict parent edge and the direct solve
+keeps the installed instance (`remove: ...-202608 / keep:
+...-202408-5`, persisting at `--backtrack=0`, hence the #90 link).
+S1 ports the gating in three parts, each oracle-grounded: only
+build-time-key pins stay ignored (D1's `BDEPEND` shape still merges +
+`[blocks B]` rc 1); the scan reads the *effective* dep layer
+(`FakeVartree._apply_dynamic_deps`, bug #368725), so a pin the live
+ebuild dropped is invisible (the #79 `revdepconsumer` shape: vdb
+`RDEPEND="<revdeptarget-2.0"`, live ebuild empty, real upgrades); and
+a consumer this pass uninstalls is skipped (bug 612772), so its pin
+cannot veto the upgrade whose blocker removes it. Hermetic fixtures
+`dev-libs/whblocker`/`whtarget`/`whpuller` (md5-cache by real
+`egencache`): world-member consumer withholds `whblocker-2.0` (bed
+cell `l0-fixture-oracle-whpin.txt`), unreachable consumer merges with
+`[uninstall]` + satisfied `b` (CASES + `test_oracle_91_…`). Host
+`@world` re-diff: `edk2-bin` held, package set otherwise identical to
+real on two consecutive runs. Residue filed as #92: real's
+`WARNING: updates skipped due to a dependency conflict` notice has no
+portuale rendering yet (silent withhold, rc 0 both sides).
+
+```
+emerge --pretend --update --deep --newuse --oneshot dev-libs/whpuller
+cd rust && cargo test --release -p portage-repo reverse_dependency
+python3 -m pytest ../pmtest/pytests-contract-suite/test_emerge_pretend_contract.py -k "oracle_91 or needer_othermod_triangle or keeper_reachable" -q
+```
