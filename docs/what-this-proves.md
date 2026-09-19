@@ -17313,3 +17313,12 @@ emerge -pv dev-libs/treeslotuser             # 1.9, 1.10, treeslotparent, treesl
 emerge --tree dev-libs/treeslotuser          # same nesting, both PMs
 cd rust && cargo test --release -p portage-repo minimize
 ```
+
+**Tree mode solves the stuck-serializer blocker row (backlog #81 S1/S2, 2026-09-19, branch `backlog/81-tree-scheduled-uninstall`, unmerged pending review).** Real's tree serializer disables the greedy leaf pop, so it can stall with a satisfied blocker pending, schedule the replaced instance's uninstall (`scheduled_uninstalls`) and append the solved row -- while flat mode drains past the same shape silently (C0 p2b). Portuale models the state, not just the predicate: `select_nodes` takes real's `not tree_mode` greedy gate plus the stuck branch (synthetic uninstall-leaf nodes, solved recorded at selection), sharing digraph, bias, ladder and cycle code with the flat path, and the verdict rides `BlockerConflict::tree_scheduled_uninstall` into `--tree` Blocker nodes and the tree `-v` counters only. Two porting details the oracle forced: Blocker nodes sit right after their `after` entry in `node_order`, mirroring retlist adjacency (appended-last broke it and the prune ate the row); and `NoVisibleCandidate` entries never participate in `_minimize_children` elimination (they are never selected packages -- without the exclusion the ascending elimination drops the `opartlya` NVC entry and flips disclosure order, caught by the suite). The p2b row bytes, nesting and counters match real; flat output, `--json` and exit codes are untouched (1208-test contract run moves nothing). Walk-sequence residue stays out of this branch: real's leading merge-owner line, trailing nested new-slot occurrence, nested `[N]` vs `[U]`, and u6's one line position (multislotparent is byte-identical).
+
+```
+# branch backlog/81-tree-scheduled-uninstall
+emerge --pretend --tree --update dev-libs/p2btarget dev-libs/p2bowner dev-libs/newpkg
+cd rust && cargo test --release -p portage-repo tree_simulation
+python3 -m pytest ../pmtest/pytests-contract-suite/test_emerge_pretend_contract.py -k oracle_81 -q
+```

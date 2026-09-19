@@ -12574,6 +12574,16 @@ pub struct BlockerConflict {
     /// `Replacement` rows are carried on the owner but hidden by the
     /// renderer until B2 models real's scheduling predicate.
     pub satisfied_by: Option<BlockerSatisfiedBy>,
+    /// Backlog #81: whether tree-mode serialization solves this row.
+    /// Real's tree serializer disables the greedy leaf pop, so it can
+    /// stall with this blocker pending and schedule the replaced
+    /// instance's uninstall (`scheduled_uninstalls`), appending the
+    /// solved row -- while the flat greedy pop drains past it and the
+    /// row stays hidden. Set resolve-side by the tree-mode simulation
+    /// (`merge_order::tree_solved_replacements`); read only by `--tree`
+    /// display (row visibility) and the tree counters. Flat display,
+    /// `--json` and exit codes never consult it.
+    pub tree_scheduled_uninstall: bool,
 }
 
 /// One installed package portuale's renderer needs to name in an
@@ -15448,6 +15458,7 @@ fn resolve_blockers(
                             cp: (pb.target_category.clone(), pb.target_package.clone()),
                             slot: slot.clone(),
                         }),
+                        tree_scheduled_uninstall: false,
                     },
                 });
                 continue;
@@ -15594,6 +15605,7 @@ fn resolve_blockers(
                         })
                     },
                     unsolvable,
+                    tree_scheduled_uninstall: false,
                 },
             });
         }
@@ -21152,6 +21164,39 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         conflicts,
         &mut orphan_blockers,
     );
+
+    // Backlog #81: tree-mode solved verdicts. Only Replacement rows can
+    // be solved by a scheduled uninstall, and the simulation is gated on
+    // at least one existing (it returns immediately otherwise), so the
+    // common no-blocker resolve pays nothing for the second scheduling
+    // pass. Flags ride the conflicts into `GraphResult`; `--tree`
+    // display reads them, everything else ignores them.
+    let needs_tree_sim = state.entries.iter().any(|e| {
+        e.blockers.iter().any(|b| {
+            !b.unsolvable && matches!(b.satisfied_by, Some(BlockerSatisfiedBy::Replacement { .. }))
+        })
+    });
+    if needs_tree_sim {
+        for (owner, blocker) in merge_order::tree_solved_replacements(
+            &state.entries,
+            ctx.atoms,
+            ctx.config,
+            ctx.root,
+            ctx.implicit_system_deps,
+            &ctx.repos,
+            ctx.dynamic_deps,
+            dynamic_deps_append_enabled(),
+            ctx.ignore_built_slot_operator_deps,
+        ) {
+            if let Some(b) = state
+                .entries
+                .get_mut(owner)
+                .and_then(|e| e.blockers.get_mut(blocker))
+            {
+                b.tree_scheduled_uninstall = true;
+            }
+        }
+    }
 
     if !state.required_use_violations.is_empty() {
         // Each block is self-delimiting (leading + trailing newline).
@@ -35324,6 +35369,7 @@ mod tests {
                     cpv: "dev-libs/samepkg-1.0".to_string(),
                     anchor: ("dev-libs".to_string(), "blockerpkg".to_string()),
                 }),
+                tree_scheduled_uninstall: false,
             }]
         );
     }
@@ -35427,6 +35473,7 @@ mod tests {
                 // merge-bound match with a merging parent is unresolved.
                 unsolvable: true,
                 satisfied_by: None,
+                tree_scheduled_uninstall: false,
             }]
         );
     }
@@ -37221,6 +37268,7 @@ mod tests {
                     // and exits 1. The pre-S2 expectation was `false`.
                     unsolvable: true,
                     satisfied_by: None,
+                    tree_scheduled_uninstall: false,
                 },
             }]
         );

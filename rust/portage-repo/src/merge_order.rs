@@ -1475,7 +1475,8 @@ impl DigraphPrelude<'_> {
             .position(|&si| si == ei)
             .map(|pos| &sib_sets[pos]);
         let own = own?;
-        if own.len() < 2 {            return Self::rank_best(entries, &self.installed, own.iter().copied());
+        if own.len() < 2 {
+            return Self::rank_best(entries, &self.installed, own.iter().copied());
         }
         // A `NoVisibleCandidate` entry is never a *selected* package:
         // real's `_select_package` returns None for its atom and
@@ -2579,7 +2580,225 @@ pub(crate) fn cycle_report(
 
 /// Returns the alive nodes in scheduling order (installed "nomerge"
 /// nodes included -- the caller drops them).
-fn select_nodes(g: &mut Digraph, entries: &[GraphEntry], root: &Path) -> Vec<usize> {
+/// Backlog #81: tree-mode stuck-branch state for [`select_nodes`].
+///
+/// Real's tree serializer keeps `scheduled_uninstalls` as live scheduler
+/// state: when a round selects nothing and blockers are pending, it
+/// schedules an uninstall for the blocked package, reverses the edges so
+/// the blocked package merges on top of it, and appends the solved
+/// blocker when the blocked package (or the uninstall itself) is later
+/// selected (`depgraph.py:9998`, `:10190`, `:10315-10358`). The flat
+/// greedy pop drains past the same shape, so the row stays hidden there.
+///
+/// Portuale's scheduler graph has no uninstall nodes, so a scheduled
+/// uninstall is a synthetic node: childless, with the blocked
+/// (replacement) entry as its one parent and a hard (never-ignored)
+/// edge. Selection and removal flow through the normal loop; only the
+/// verdicts (`solved`) escape.
+struct TreeStuck {
+    /// One pending scheduling per unsatisfied Replacement row:
+    /// the replacement entry, the installed instance it replaces,
+    /// and the row's address for the verdict.
+    pending: Vec<PendingUninstall>,
+    /// Synthetic uninstall node indices already scheduled.
+    scheduled: HashSet<usize>,
+    /// Verdicts: `(owner entry, blocker index)` rows tree mode solves.
+    solved: Vec<(usize, usize)>,
+    /// Set by [`tree_schedule_stuck`] when it schedules something, so
+    /// the loop resets state and retries selection like real's
+    /// `continue`.
+    progressed: bool,
+}
+
+/// One install-replacing satisfied row awaiting tree-mode scheduling.
+#[derive(Debug)]
+struct PendingUninstall {
+    /// The merge-bound replacement entry.
+    repl: usize,
+    /// The installed instance it replaces (cp, slot, version).
+    inst_cp: (String, String),
+    inst_slot: String,
+    inst_version: String,
+    /// Verdict address.
+    owner: usize,
+    blocker: usize,
+    /// Real applies overlap guards to strong (`!!`) blockers
+    /// (`forbid_overlap`, portage-essential); v1 schedules soft (`!`)
+    /// rows only and leaves strong rows hidden (current behavior).
+    strong: bool,
+    /// Synthetic uninstall node once scheduled.
+    node: Option<usize>,
+}
+
+/// The stuck branch: schedule one pending uninstall.
+///
+/// Mirrors real's choice loop in narrowed form: among pending rows whose
+/// uninstall is not yet scheduled, whose installed instance is not
+/// itself a graph node (real `digraph.contains(inst_pkg)` skips those),
+/// and whose blocker is soft, take the first in entry order (real picks
+/// by fewest parent-deps with an early break at one; single-pending
+/// shapes -- every oracle here -- decide identically). Creates the
+/// synthetic uninstall node as the replacement's child with a hard edge
+/// (real's edge reversal: the blocked package merges on top of it).
+fn tree_schedule_stuck(g: &mut Digraph, entries: &[GraphEntry], ts: &mut TreeStuck) {
+    for p in ts.pending.iter_mut() {
+        if p.node.is_some() {
+            continue;
+        }
+        if p.strong {
+            continue;
+        }
+        let walked_installed = entries.iter().any(|e| {
+            (e.category.as_str(), e.package.as_str()) == (p.inst_cp.0.as_str(), p.inst_cp.1.as_str())
+                && e.slot.as_deref() == Some(p.inst_slot.as_str())
+                && matches!(&e.outcome, crate::PretendOutcome::AlreadyInstalled { version } if version == &p.inst_version)
+        });
+        if walked_installed {
+            continue;
+        }
+        // Synthetic uninstall node: no children of its own (a leaf), the
+        // replacement as its one parent. Appended to `order` like real's
+        // `mygraph.add` appends new nodes.
+        let u = g.n;
+        g.n += 1;
+        g.children.push(Vec::new());
+        g.parents.push(vec![p.repl]);
+        g.order.push(u);
+        g.installed.push(true);
+        g.alive.push(true);
+        g.children[p.repl].push((u, vec![DepPriority::default()]));
+        p.node = Some(u);
+        ts.scheduled.insert(u);
+        ts.progressed = true;
+        return;
+    }
+}
+
+/// Record solved verdicts at selection time.
+///
+/// Real appends a solved blocker when the blocked package merges while
+/// its uninstall is scheduled, and discards it when the uninstall node
+/// itself is selected (`:10315-10358`). Either selection orders the same
+/// verdict here.
+fn tree_note_selection(
+    g: &mut Digraph,
+    entries: &[GraphEntry],
+    ts: &mut TreeStuck,
+    selected: usize,
+) {
+    let _ = entries;
+    for p in &ts.pending {
+        let Some(u) = p.node else {
+            continue;
+        };
+        if !ts.scheduled.contains(&u) {
+            continue;
+        }
+        if selected == p.repl || selected == u {
+            if selected == p.repl {
+                // The replacement merged on top: the uninstall task is
+                // gone (real `mygraph.remove`), like the flat loop's
+                // removal site.
+                g.alive[u] = false;
+            }
+            if !ts.solved.contains(&(p.owner, p.blocker)) {
+                ts.solved.push((p.owner, p.blocker));
+            }
+        }
+    }
+}
+
+/// Backlog #81 S1: which satisfied Replacement rows tree-mode
+/// serialization solves.
+///
+/// Runs the shared scheduler loop in tree mode (greedy pop disabled,
+/// one non-root leaf per round) with the stuck branch enabled, and
+/// returns the solved `(owner entry, blocker index)` rows. Callers pass
+/// resolver-indexed `entries`; verdicts address the same indexing.
+///
+/// Shares `schedule_graph` (closure, prune, bias) and every selection
+/// helper with the flat path -- the only differences from
+/// [`serialize_merge_order`] are the `not tree_mode` gate and the stuck
+/// branch, exactly like real. Returns empty without running the loop
+/// when no Replacement row is pending (the common case pays nothing).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn tree_solved_replacements(
+    entries: &[GraphEntry],
+    top_level_atoms: &[String],
+    config: &portage_profile::Config,
+    root: &Path,
+    implicit_system_deps: bool,
+    repos: &[RepoConfig],
+    dynamic_deps: bool,
+    dynamic_deps_append: bool,
+    ignore_built_slot_operator_deps: bool,
+) -> Vec<(usize, usize)> {
+    // Pending rows: unsatisfied Replacement arms (the uninstall-solving
+    // Uninstall arms and the unsolvable rows already have display homes
+    // everywhere; strong blockers stay hidden per the v1 narrowing).
+    let mut pending = Vec::new();
+    for (owner, entry) in entries.iter().enumerate() {
+        for (blocker, b) in entry.blockers.iter().enumerate() {
+            if b.unsolvable {
+                continue;
+            }
+            let Some(crate::BlockerSatisfiedBy::Replacement { cp, slot }) = &b.satisfied_by else {
+                continue;
+            };
+            let Some(repl) = entries.iter().position(|e| {
+                (e.category.as_str(), e.package.as_str()) == (cp.0.as_str(), cp.1.as_str())
+                    && e.slot.as_deref() == Some(slot.as_str())
+                    && crate::merge_bound_version(&e.outcome)
+                        .is_some_and(|v| v != b.matched_version.as_str())
+            }) else {
+                continue;
+            };
+            pending.push(PendingUninstall {
+                repl,
+                inst_cp: (b.matched_category.clone(), b.matched_package.clone()),
+                inst_slot: slot.clone(),
+                inst_version: b.matched_version.clone(),
+                owner,
+                blocker,
+                strong: b.strong,
+                node: None,
+            });
+        }
+    }
+    if pending.is_empty() {
+        return Vec::new();
+    }
+    let (ext, mut g, _real_n, _discovery_rank) = schedule_graph(
+        entries,
+        top_level_atoms,
+        config,
+        root,
+        implicit_system_deps,
+        repos,
+        dynamic_deps,
+        dynamic_deps_append,
+        ignore_built_slot_operator_deps,
+    );
+    // NOTE: `ext` may append synthetic closure entries; `pending`
+    // addresses resolver indexing, which is a prefix of `ext` (the
+    // closure only appends), so indices stay valid.
+    let _ = &ext;
+    let mut ts = TreeStuck {
+        pending,
+        scheduled: HashSet::new(),
+        solved: Vec::new(),
+        progressed: false,
+    };
+    select_nodes(&mut g, &ext, root, Some(&mut ts));
+    ts.solved
+}
+
+fn select_nodes(
+    g: &mut Digraph,
+    entries: &[GraphEntry],
+    root: &Path,
+    mut tree: Option<&mut TreeStuck>,
+) -> Vec<usize> {
     let mut retlist: Vec<usize> = Vec::new();
     let mut asap: Vec<usize> = seed_toolchain_asap(entries);
     let mut prefer_asap = true;
@@ -2637,12 +2856,14 @@ fn select_nodes(g: &mut Digraph, entries: &[GraphEntry], root: &Path) -> Vec<usi
                 // Real: "Greedily pop all of these nodes since no
                 // relationship has been ignored." Real additionally
                 // gates this on `not tree_mode`, because the batch
-                // "destroys --tree output" -- portuale's `--tree`
-                // re-derives its own nesting from `required_by` top-down
-                // instead of consuming the serialized list, so that gate
-                // has nothing to protect here and is deliberately not
-                // ported (see `pretend.rs::print_tree`).
-                if nodes.len() == 1 || (ig.is_none() && asap.is_empty()) {
+                // "destroys --tree output" (`depgraph.py:9764-9777`).
+                // The flat caller (`tree == None`) keeps portuale's
+                // standing port (its `--tree` re-derives nesting from
+                // `required_by` top-down instead of consuming the
+                // serialized list); the #81 tree simulation passes
+                // `Some` and takes real's gate, popping one non-root
+                // node per round so the stuck branch below can fire.
+                if nodes.len() == 1 || (ig.is_none() && asap.is_empty() && tree.is_none()) {
                     selected = Some(nodes);
                 } else {
                     // "For optimal merge order: only pop one node;
@@ -2754,6 +2975,27 @@ fn select_nodes(g: &mut Digraph, entries: &[GraphEntry], root: &Path) -> Vec<usi
             }
         }
 
+        // Backlog #81: the stuck branch (`depgraph.py:9998`), tree-mode
+        // only. When no leaf is selectable and replacement rows are still
+        // pending, real schedules an uninstall for the blocked package
+        // (`scheduled_uninstalls`, `:10190`) and reverses its edges so the
+        // blocked package merges on top of it; the solved blocker is
+        // appended when the blocked package is later selected
+        // (`:10351-10358`). It sits here -- after the cycle harvest and
+        // the PDEPEND promotion, before the roots-last-resort -- exactly
+        // like real's. The flat caller never takes it (`tree == None`).
+        if selected.is_none()
+            && let Some(ts) = tree.as_mut()
+        {
+            tree_schedule_stuck(g, entries, ts);
+            if ts.progressed {
+                ts.progressed = false;
+                prefer_asap = true;
+                drop_satisfied = false;
+                continue;
+            }
+        }
+
         // Real `_serialize_tasks` (`depgraph.py:10230-10231`): "Only
         // select root nodes as a last resort. This case should only
         // trigger when the graph is nearly empty and the only remaining
@@ -2851,6 +3093,15 @@ fn select_nodes(g: &mut Digraph, entries: &[GraphEntry], root: &Path) -> Vec<usi
             // the adjacency as it stands.
             if let Some(fr) = frontier.as_mut() {
                 fr.remove(i, &g.children[i], &g.parents[i]);
+            }
+            // Backlog #81: selecting the blocked package while its
+            // uninstall is scheduled solves the blocker (real
+            // `:10351-10358` appends it to the retlist here); selecting
+            // the synthetic uninstall itself discards it the same way
+            // (`myblocker_uninstalls.remove`). Either way the row's
+            // verdict is recorded once.
+            if let Some(ts) = tree.as_mut() {
+                tree_note_selection(g, entries, ts, i);
             }
             retlist.push(i);
         }
@@ -3019,6 +3270,88 @@ pub(crate) fn serialize_merge_order(
     dynamic_deps_append: bool,
     ignore_built_slot_operator_deps: bool,
 ) -> Vec<usize> {
+    let (ext, mut g, real_n, discovery_rank) = schedule_graph(
+        entries,
+        top_level_atoms,
+        config,
+        root,
+        implicit_system_deps,
+        repos,
+        dynamic_deps,
+        dynamic_deps_append,
+        ignore_built_slot_operator_deps,
+    );
+    let entries: &[GraphEntry] = &ext;
+
+    debug_dump_graph(&g, entries, top_level_atoms, root);
+
+    // B3: post-prune, pre-bias insertion order -- the tie-break real's
+    // stable `_merge_order_bias` preserves when parent counts are equal.
+    if mo_sel_enabled() {
+        let nodes: Vec<String> = g
+            .order
+            .iter()
+            .map(|&i| mo_sel_cpv(&entries[i], g.installed[i]))
+            .collect();
+        eprintln!("MO_ORDER count={} {}", nodes.len(), nodes.join(" "));
+    }
+
+    merge_order_bias(&mut g, entries, config, implicit_system_deps);
+    let scheduled: Vec<usize> = select_nodes(&mut g, entries, root, None)
+        .into_iter()
+        .filter(|&i| i < real_n)
+        .collect();
+
+    // Real's own retlist skips every "nomerge" node (`if node.operation
+    // == "nomerge": continue`), because real never displays one. Portuale
+    // keeps its `AlreadyInstalled`/`NoVisibleCandidate` entries -- its
+    // `--tree`/`--emptytree`/"already installed" rendering needs them --
+    // so a nomerge node that survived the prune keeps the position the
+    // scheduler gave it: it is a genuine graph node there, ordered ahead
+    // of everything that depends on it, exactly as real orders it before
+    // dropping it from the display.
+    //
+    // Only the entries the scheduler never saw are woven back in
+    // afterwards: the pruned "nomerge" *roots* (real drops those from
+    // scheduling outright -- a top-level already-installed target) and
+    // any entry with no node at all. Each goes on its own unbiased
+    // discovery rank, so such an entry is never bias-promoted past a
+    // merge task it was behind in plain discovery order.
+    let placed: HashSet<usize> = scheduled.iter().copied().collect();
+    let mut leftover: Vec<usize> = (0..real_n).filter(|i| !placed.contains(i)).collect();
+    leftover.sort_by_key(|&i| discovery_rank[i]);
+
+    let mut out: Vec<usize> = Vec::with_capacity(real_n);
+    let mut ti = 0;
+    for &m in &scheduled {
+        while ti < leftover.len() && discovery_rank[leftover[ti]] < discovery_rank[m] {
+            out.push(leftover[ti]);
+            ti += 1;
+        }
+        out.push(m);
+    }
+    out.extend(&leftover[ti..]);
+    debug_assert_eq!(out.len(), real_n);
+    out
+}
+/// The shared scheduler-graph setup for [`serialize_merge_order`]
+/// and the #81 tree-mode simulation: the installed-dependency closure,
+/// `build_digraph`, the nomerge-root prune and `_merge_order_bias`.
+/// Returns the extended entries, the biased graph, the real-entry count
+/// and the unbiased discovery rank. Diagnostics (`debug_dump_graph`,
+/// the `MO_ORDER` print) stay with the flat caller, not here.
+#[allow(clippy::too_many_arguments)]
+fn schedule_graph(
+    entries: &[GraphEntry],
+    top_level_atoms: &[String],
+    config: &portage_profile::Config,
+    root: &Path,
+    implicit_system_deps: bool,
+    repos: &[RepoConfig],
+    dynamic_deps: bool,
+    dynamic_deps_append: bool,
+    ignore_built_slot_operator_deps: bool,
+) -> (Vec<GraphEntry>, Digraph, usize, Vec<usize>) {
     let real_n = entries.len();
     // Real `_complete_graph` auto-enables (a merge changes an
     // already-installed package -> real re-walks the whole `@world` /
@@ -3106,55 +3439,8 @@ pub(crate) fn serialize_merge_order(
         }
     }
     g.order.retain(|&i| g.alive[i]);
-
-    // B3: post-prune, pre-bias insertion order -- the tie-break real's
-    // stable `_merge_order_bias` preserves when parent counts are equal.
-    if mo_sel_enabled() {
-        let nodes: Vec<String> = g
-            .order
-            .iter()
-            .map(|&i| mo_sel_cpv(&entries[i], g.installed[i]))
-            .collect();
-        eprintln!("MO_ORDER count={} {}", nodes.len(), nodes.join(" "));
-    }
-
     merge_order_bias(&mut g, entries, config, implicit_system_deps);
-    let scheduled: Vec<usize> = select_nodes(&mut g, entries, root)
-        .into_iter()
-        .filter(|&i| i < real_n)
-        .collect();
-
-    // Real's own retlist skips every "nomerge" node (`if node.operation
-    // == "nomerge": continue`), because real never displays one. Portuale
-    // keeps its `AlreadyInstalled`/`NoVisibleCandidate` entries -- its
-    // `--tree`/`--emptytree`/"already installed" rendering needs them --
-    // so a nomerge node that survived the prune keeps the position the
-    // scheduler gave it: it is a genuine graph node there, ordered ahead
-    // of everything that depends on it, exactly as real orders it before
-    // dropping it from the display.
-    //
-    // Only the entries the scheduler never saw are woven back in
-    // afterwards: the pruned "nomerge" *roots* (real drops those from
-    // scheduling outright -- a top-level already-installed target) and
-    // any entry with no node at all. Each goes on its own unbiased
-    // discovery rank, so such an entry is never bias-promoted past a
-    // merge task it was behind in plain discovery order.
-    let placed: HashSet<usize> = scheduled.iter().copied().collect();
-    let mut leftover: Vec<usize> = (0..real_n).filter(|i| !placed.contains(i)).collect();
-    leftover.sort_by_key(|&i| discovery_rank[i]);
-
-    let mut out: Vec<usize> = Vec::with_capacity(real_n);
-    let mut ti = 0;
-    for &m in &scheduled {
-        while ti < leftover.len() && discovery_rank[leftover[ti]] < discovery_rank[m] {
-            out.push(leftover[ti]);
-            ti += 1;
-        }
-        out.push(m);
-    }
-    out.extend(&leftover[ti..]);
-    debug_assert_eq!(out.len(), real_n);
-    out
+    (ext, g, real_n, discovery_rank)
 }
 
 #[cfg(test)]
@@ -3704,6 +3990,80 @@ mod tests {
             children,
             vec![1],
             "the scheduling graph picks the same instance: {children:?}"
+        );
+    }
+
+    #[test]
+    fn tree_simulation_solves_a_stalled_replacement_row() {
+        // Backlog #81 S1: the C0 p2b shape in miniature. Owner O merges
+        // (1.0 -> 1.1) carrying a satisfied Replacement row for the
+        // installed 1.0 that R=blocked-2.0 replaces in-slot. Both nodes
+        // are roots, so tree mode's one-at-a-time selection stalls on
+        // round one with the blocker pending, schedules the uninstall,
+        // and solves the row when the uninstall is selected -- while the
+        // flat greedy pop would drain both without stalling. (Real's
+        // verdict for the full shape is in `TEST/findings/l0.md` "#75
+        // C0"; the flat-hidden half is `replacement_wait_index`'s call.)
+        let plain = |atom: &str, cat: &str, pkg: &str| DepEdge {
+            atom: atom.to_string(),
+            category: cat.to_string(),
+            package: pkg.to_string(),
+            priority: DepPriority {
+                runtime: true,
+                ..DepPriority::default()
+            },
+            disjunctive: false,
+            alt: None,
+            key: 3,
+        };
+        let mut owner = new_entry("dev-libs", "bparent", "1.1", Vec::new());
+        owner.slot = Some("0".into());
+        owner.sub_slot = Some("0".into());
+        owner.blockers = vec![crate::BlockerConflict {
+            atom_str: "!<dev-libs/blocked-2.0".to_string(),
+            strong: false,
+            matched_category: "dev-libs".to_string(),
+            matched_package: "blocked".to_string(),
+            matched_version: "1.0".to_string(),
+            unsolvable: false,
+            satisfied_by: Some(crate::BlockerSatisfiedBy::Replacement {
+                cp: ("dev-libs".to_string(), "blocked".to_string()),
+                slot: "0".to_string(),
+            }),
+            tree_scheduled_uninstall: false,
+        }];
+        let mut replacement = new_entry(
+            "dev-libs",
+            "blocked",
+            "2.0",
+            vec![plain("dev-libs/bparent", "dev-libs", "bparent")],
+        );
+        replacement.slot = Some("0".into());
+        replacement.sub_slot = Some("0".into());
+        // A third, unrelated root merge: without it the replacement
+        // would be the lone leaf of round two and real's len==1 shortcut
+        // would take it immediately (no stall, no row -- same as real).
+        // With two roots left, tree mode's one-at-a-time scan skips both
+        // and the stuck branch fires while the blocker is pending.
+        let other = new_entry("dev-libs", "other", "1.0", Vec::new());
+        let entries = vec![owner, replacement, other];
+        let root = Path::new("/nonexistent-root-for-unit-test");
+        let config = portage_profile::Config::default();
+        let solved = tree_solved_replacements(
+            &entries,
+            &["dev-libs/blocked".to_string()],
+            &config,
+            root,
+            true,
+            &[],
+            true,
+            false,
+            false,
+        );
+        assert_eq!(
+            solved,
+            vec![(0, 0)],
+            "the stalled Replacement row is solved in tree mode: {solved:?}"
         );
     }
 

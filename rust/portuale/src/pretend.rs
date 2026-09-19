@@ -664,6 +664,9 @@ fn package_counters_summary(
     // `Conflict:` exactly like entry-owned rows (real counts every
     // `Blocker` node in the merge list).
     orphans: &[portage_repo::OrphanBlocker],
+    // Backlog #81: in tree mode the solved-stuck rows count too (C0 p2b:
+    // `Conflict: 1 block (all satisfied)` under `--tree -v`).
+    tree: bool,
 ) -> String {
     let plural = |n: u64| if n > 1 { "s" } else { "" };
     let (mut upgrades, mut downgrades, mut new, mut newslot, mut reinst) =
@@ -673,7 +676,7 @@ fn package_counters_summary(
     // (`count_blocker_rows`), the same disposition split the line printer
     // uses -- plus the #80 orphans, which print in the same trailing
     // group (unsolvable ones are never suppressed anywhere).
-    let (blocks, blocks_unsolvable) = count_blocker_rows(entries, root);
+    let (blocks, blocks_unsolvable) = count_blocker_rows(entries, root, tree);
     let orphan_unsolvable = orphans.iter().filter(|o| o.conflict.unsolvable).count() as u64;
     let blocks = blocks + orphans.len() as u64;
     let blocks_unsolvable = blocks_unsolvable + orphan_unsolvable;
@@ -987,6 +990,24 @@ fn blocker_row_disposition(
 /// real might hide), never miss one. B2's pinned shapes have no
 /// multi-slot intermediates; the `debug_assert!` below still guards the
 /// ordering implication.
+/// The merge-bound entry a `Replacement` row's blocker resolves against:
+/// same cp and slot as the row's `satisfied_by`, merge-bound, at a
+/// version other than the matched installed one. Shared by
+/// `replacement_wait_index` (the flat wait predicate) and the #81
+/// tree-stuck row placement (which hangs the row under the same
+/// replacement real's solved-blocker append follows).
+fn replacement_entry_index(entries: &[GraphEntry], b: &BlockerConflict) -> Option<usize> {
+    let (cp, slot) = match &b.satisfied_by {
+        Some(BlockerSatisfiedBy::Replacement { cp, slot }) => (cp, slot),
+        _ => return None,
+    };
+    entries.iter().position(|e| {
+        (e.category.as_str(), e.package.as_str()) == (cp.0.as_str(), cp.1.as_str())
+            && e.slot.as_deref() == Some(slot.as_str())
+            && merge_bound_version(e).is_some_and(|v| v != b.matched_version)
+    })
+}
+
 fn replacement_wait_index(
     entries: &[GraphEntry],
     root: &Path,
@@ -994,14 +1015,7 @@ fn replacement_wait_index(
     b: &BlockerConflict,
     kept_alt: &[HashSet<usize>],
 ) -> Option<usize> {
-    let Some(BlockerSatisfiedBy::Replacement { cp, slot }) = &b.satisfied_by else {
-        return None;
-    };
-    let replacement = entries.iter().position(|e| {
-        (e.category.as_str(), e.package.as_str()) == (cp.0.as_str(), cp.1.as_str())
-            && e.slot.as_deref() == Some(slot.as_str())
-            && merge_bound_version(e).is_some_and(|v| v != b.matched_version)
-    })?;
+    let replacement = replacement_entry_index(entries, b)?;
     let owner = &entries[owner_index];
     let owner_cp = (owner.category.as_str(), owner.package.as_str());
     // "The owner's merge" must exist: a nomerge (installed-only) owner has
@@ -1044,6 +1058,12 @@ fn replacement_wait_index(
                     // replacement; if portuale's merge order disagrees,
                     // stop and report (a `merge_order.rs` item) rather
                     // than print a row real would put elsewhere.
+                    let (rpcp, rpslot) = match &b.satisfied_by {
+                        Some(BlockerSatisfiedBy::Replacement { cp, slot }) => {
+                            (cp.0.as_str(), slot.as_str())
+                        }
+                        _ => ("?", "?"),
+                    };
                     debug_assert!(
                         owner_index < replacement,
                         "B2 predicate fired with the owner (#{owner_index} {}/{} {}) \
@@ -1052,8 +1072,8 @@ fn replacement_wait_index(
                         owner.category,
                         owner.package,
                         entry_display_version(owner),
-                        cp.0,
-                        cp.1,
+                        rpcp,
+                        rpslot,
                         b.matched_version,
                     );
                     return Some(replacement);
@@ -1218,16 +1238,29 @@ fn collect_inline_blocker_lines(
 /// accumulates from the merge list: every `Blocker` node in it counts,
 /// satisfied or not (`get_display_list`, `output.py:575-584`), which is
 /// exactly the rows `Trailing` and `Inline` describe. Hidden rows never
-/// entered the list.
-fn count_blocker_rows(entries: &[GraphEntry], root: &Path) -> (u64, u64) {
+/// entered the list -- except in tree mode (`tree == true`), where a
+/// flat-Hidden Replacement row the #81 simulation solves DOES enter it
+/// (C0 p2b: `Conflict: 1 block (all satisfied)` under `--tree -v` and
+/// nothing under flat `-v`).
+fn count_blocker_rows(entries: &[GraphEntry], root: &Path, tree: bool) -> (u64, u64) {
     let mut blocks = 0u64;
     let mut unsolvable = 0u64;
     // #84: one kept-branch derivation for the whole counter scan.
     let kept_alt = kept_alt_for_display(entries, root, 0..entries.len());
     for (owner_index, entry) in entries.iter().enumerate() {
         for b in &entry.blockers {
-            if blocker_row_disposition(entries, root, owner_index, b, &kept_alt)
-                == BlockerRowDisposition::Hidden
+            // Backlog #81: in tree mode a flat-Hidden Replacement row
+            // the simulation solves counts like a shown satisfied row.
+            // This mirrors `print_tree`'s Blocker-node set exactly (same
+            // flag, same arm): anything counted here has a node there.
+            let tree_shown = tree
+                && b.tree_scheduled_uninstall
+                && matches!(b.satisfied_by, Some(BlockerSatisfiedBy::Replacement { .. }))
+                && blocker_row_disposition(entries, root, owner_index, b, &kept_alt)
+                    == BlockerRowDisposition::Hidden;
+            if !tree_shown
+                && blocker_row_disposition(entries, root, owner_index, b, &kept_alt)
+                    == BlockerRowDisposition::Hidden
             {
                 continue;
             }
@@ -1968,13 +2001,42 @@ fn print_tree(
     let kept_alt = kept_alt_for_display(entries, root, 0..entries.len());
     for (owner, entry) in entries.iter().enumerate() {
         for (index, b) in entry.blockers.iter().enumerate() {
-            let BlockerRowDisposition::Inline(after) =
-                blocker_row_disposition(entries, root, owner, b, &kept_alt)
-            else {
+            // Backlog #81: a flat-Hidden Replacement row the tree-mode
+            // simulation solves hangs under the same replacement real's
+            // solved-blocker append follows (C0 p2b). Flat display never
+            // reaches this arm (disposition is Hidden there); it only
+            // changes which rows become tree Blocker nodes.
+            let stuck_after = if b.tree_scheduled_uninstall
+                && matches!(b.satisfied_by, Some(BlockerSatisfiedBy::Replacement { .. }))
+                && blocker_row_disposition(entries, root, owner, b, &kept_alt)
+                    != BlockerRowDisposition::Trailing
+            {
+                replacement_entry_index(entries, b)
+            } else {
+                None
+            };
+            let after = match blocker_row_disposition(entries, root, owner, b, &kept_alt) {
+                BlockerRowDisposition::Inline(after) => Some(after),
+                _ => stuck_after,
+            };
+            let Some(after) = after else {
                 continue;
             };
             let node = TreeNode::Blocker { owner, index };
-            node_order.push(node);
+            // Real appends a solved blocker to the retlist right after
+            // the blocked package that solved it, and the display walk
+            // consumes the reversed retlist -- so the walk meets the
+            // Blocker immediately before its `after` entry and nests the
+            // replacement under it. Appending every Blocker node last
+            // instead breaks that adjacency (the walk reaches the
+            // replacement through another chain first) and the prune
+            // then drops the Blocker for exceeding the merge depth set
+            // by shallower later merges (C0 p2b). Insert after `after`.
+            if let Some(pos) = node_order.iter().position(|&n| n == TreeNode::Entry(after)) {
+                node_order.insert(pos + 1, node);
+            } else {
+                node_order.push(node);
+            }
             if owner != after {
                 add_edge(node, TreeNode::Entry(owner));
             }
@@ -11800,7 +11862,8 @@ pub fn run(args: &[String]) -> ExitCode {
                 &top_level_pkgs,
                 onlydeps,
                 &color,
-                &result.orphan_blockers
+                &result.orphan_blockers,
+                tree
             )
         );
     }
@@ -13929,6 +13992,7 @@ mod tests {
                     cp: ("dev-libs".into(), "blocked".into()),
                     slot: "0".into(),
                 }),
+                tree_scheduled_uninstall: false,
             }];
             let _ = entries;
             owner
@@ -13980,6 +14044,7 @@ mod tests {
                     cpv: "dev-libs/other-1.0".into(),
                     anchor: ("dev-libs".into(), "owner".into()),
                 }),
+                tree_scheduled_uninstall: false,
             },
         ];
         let entries = [entry];
@@ -14001,6 +14066,7 @@ mod tests {
             false,
             &nc,
             &[],
+            false,
         );
         assert!(
             summary.contains("Conflict: 1 block (all satisfied)"),
@@ -14033,7 +14099,7 @@ mod tests {
             "{inline:?}"
         );
         assert_eq!(
-            count_blocker_rows(&entries, Path::new("/nonexistent")),
+            count_blocker_rows(&entries, Path::new("/nonexistent"), false),
             (1, 0)
         );
 
@@ -14045,7 +14111,7 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(
-            count_blocker_rows(&entries, Path::new("/nonexistent")),
+            count_blocker_rows(&entries, Path::new("/nonexistent"), false),
             (1, 0)
         );
     }
@@ -14077,6 +14143,7 @@ mod tests {
                     cp: ("dev-libs".into(), "blocked".into()),
                     slot: "0".into(),
                 }),
+                tree_scheduled_uninstall: false,
             }];
             e
         };
@@ -14184,6 +14251,7 @@ mod tests {
                 cp: ("dev-libs".into(), "blocked".into()),
                 slot: "0".into(),
             }),
+            tree_scheduled_uninstall: false,
         };
         owner.blockers = vec![blocker.clone()];
         let mut replacement = entry_with_use(

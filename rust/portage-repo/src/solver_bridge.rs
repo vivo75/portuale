@@ -1395,6 +1395,7 @@ mod tests {
                 // #68 S2: merge-bound match, merging parent -> unresolved.
                 unsolvable: true,
                 satisfied_by: None,
+                tree_scheduled_uninstall: false,
             }]
         );
 
@@ -1430,6 +1431,7 @@ mod tests {
                         cpv: "dev-libs/samepkg-1.0".to_string(),
                         anchor: ("dev-libs".to_string(), "blockerpkg".to_string()),
                     }),
+                    tree_scheduled_uninstall: false,
                 }]
             );
         }
