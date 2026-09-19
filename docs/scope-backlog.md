@@ -6,7 +6,7 @@ from real Portage (the differential beds, now in the sibling `pmtest`
 repo — `agent-context.md`, "Where the tests live" — the host's `emerge`,
 upstream resolver tests). The second Python copy of the resolver
 (`python/emerge_pretend_reference.py`) was **removed 2026-09-15**
-([`second_python_copy_removal.md`](second_python_copy_removal.md)); its
+([`history/second_python_copy_removal.md`](history/second_python_copy_removal.md)); its
 checks were replaced by output invariants, determinism runs, a
 tree-wide primitive differential and a harvested corpus. Entries below
 that say "dual-language" / "Rust==Python" record how a slice shipped.
@@ -304,7 +304,7 @@ can't grow into these incrementally:
   no v1 oracle).
 
 - **DFS-partial abort path (#19) — Gate-0 decisions recorded 2026-09-11
-  (Slice 1 oracle: `docs/abort-path-spec.md`, fixtures
+  (Slice 1 oracle: `docs/history/abort-path-spec.md`, fixtures
   `dev-libs/abort-*-mid/-last`, captures `fixtures/abort-captures/`,
   24 strict-xfail contract tests).** Owner answers: (G0.1) adopt real's
   **exit 1 on abort** for all three oracled shapes (masked-only,
@@ -697,7 +697,7 @@ real-tree scale** (smoke-tested 2026-09-10, not fixed):
   markers, circular deps all named as wired).
 
 These predate the current merge — the `--solver=` bridge has been this
-way since it was added. `docs/solver-backends-analysis.md` has the
+way since it was added. `docs/history/solver-backends-analysis.md` has the
 backend comparison.
 
 ### K. L2 producer parity — portuale as *builder* (filed 2026-09-13)

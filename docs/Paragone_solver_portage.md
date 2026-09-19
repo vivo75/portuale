@@ -351,12 +351,12 @@ Lo Scheduler chiede invece in che ordine eseguire il lavoro. Il depgraph seriali
 
 La differenza pratica è che lo Scheduler non ragiona più su DEPEND, RDEPEND o BDEPEND. Per questo, nell'esempio, xen-tools aspetta anche la merge di bridge-utils, che è solo una RDEPEND: il tipo ha già svolto il suo ruolo durante la serializzazione.
 
-![xen_tools_4193_dipendenze_per_tipo](/home/vivo/repo/PORTUALE/portuale/docs/xen_tools_4193_dipendenze_per_tipo.svg)
+![xen_tools_4193_dipendenze_per_tipo](./images/xen_tools_4193_dipendenze_per_tipo.svg)
 
 
-![xen_tools_valutazione_use_e_slot_operator](/home/vivo/repo/PORTUALE/portuale/docs/xen_tools_valutazione_use_e_slot_operator.svg)
+![xen_tools_valutazione_use_e_slot_operator](./images/xen_tools_valutazione_use_e_slot_operator.svg)
 
-![xen_tools_grafo_vs_modello_scheduler](/home/vivo/repo/PORTUALE/portuale/docs/xen_tools_grafo_vs_modello_scheduler.svg)
+![xen_tools_grafo_vs_modello_scheduler](./images/xen_tools_grafo_vs_modello_scheduler.svg)
 
 # Portuale
 
@@ -366,9 +366,13 @@ Rispetto ai grafici precedenti le differenze sono cinque.
 
 **2. I gruppi `||` non sono una scelta libera.** `dep_zapdeps` segue un ordine di preferenza: prima le alternative già installate e non mascherate, poi quelle interamente non mascherate. Per `|| ( seabios seabios-bin )` vince quindi quella che hai già. Se non ne hai nessuna, vince la prima scritta nell'ebuild. Il solver non cerca l'alternativa «migliore» per il grafo complessivo.
 
+*Nota (2026-09-19): la regola sopra è la forma semplificata. La classifica reale ha otto contenitori (`preferred_in_graph`, `preferred_non_installed`, `unsat_use_*`, `other_*`, con le guardie `conflict_downgrade`/`installed_downgrade`), portati in portuale dai backlog #22 e #35 (`disjunction_preference`). Lo spirito resta: nessuna ricerca dell'ottimo globale.*
+
 **3. Il grafo è parziale.** Senza `--deep` Portage non attraversa le dipendenze dei pacchetti già installati, mentre il mio primo grafico mostrava l'albero intero. Due opzioni allargano il grafo. `--with-bdeps` si attiva da solo nelle azioni di installazione. `--complete-graph-if-new-ver` è attivo di default. È questa seconda opzione che, passando da 4.19 a 4.20, porta nel grafo le dipendenze inverse come qemu e libvirt. Solo così Portage trova i rebuild da `xen-tools:=`.
 
 **4. Non c'è un solver SAT: c'è un loop greedy con backtracking.** Se emerge un conflitto, per esempio due versioni nello stesso slot o una USE dep non soddisfatta, Portage non ritratta la singola scelta. Butta via il depgraph e ne costruisce uno nuovo con vincoli aggiuntivi: pacchetti mascherati a runtime, installati da sostituire per slot operator, rebuild forzati. Esplora un albero di tentativi fino a `--backtrack` volte (default 20). Quindi può fallire anche quando una soluzione esiste.
+
+*Nota (2026-09-19): il punto descrive il Portage reale, che resta così. Portuale dal 2026-09-10 offre in più i backend `--solver=pubgrub|resolvo` (backlog Tier-1 #2, `solver_bridge.rs`); il walk con backtracking resta il default.*
 
 Alcuni problemi fermano il loop invece di alimentarlo. Con `USE=system-qemu` l'ebuild richiede `app-emulation/qemu[xen]`. Se il tuo qemu non ha `xen`, Portage non cambia la flag da solo: `--autounmask-use` (attivo di default) propone la riga per `package.use` e si ferma. Le violazioni di `REQUIRED_USE`, come `?? ( qemu system-qemu )`, vengono segnalate e non risolte.
 
@@ -376,4 +380,4 @@ Alcuni problemi fermano il loop invece di alimentarlo. Con `USE=system-qemu` l'e
 
 Proprio xen-tools offre un esempio concreto di ciclo che il mio schema lineare non mostrava. Con `system-qemu` xen-tools ha in DEPEND `qemu[xen]`, e qemu con `USE=xen` dipende da `xen-tools:=`. Se uno dei due è già installato, l'arco risulta soddisfatto e la serializzazione può ignorarlo. In un'installazione da zero entrambi sono da compilare, quindi il ciclo non si spezza: Portage si ferma con un errore di dipendenza circolare e suggerisce una modifica di USE. Nel caso tipico propone di disattivare `xen` su qemu per il primo giro.
 
-![portage_solver_reale_con_backtracking](/home/vivo/repo/PORTUALE/portuale/docs/portage_solver_reale_con_backtracking.svg)
+![portage_solver_reale_con_backtracking](./images/portage_solver_reale_con_backtracking.svg)

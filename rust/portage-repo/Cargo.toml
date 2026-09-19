@@ -42,7 +42,7 @@ bzip2 = "0.6"
 # class as `portuale`'s `brush`/`regex` waivers, and `mrg`'s `clap` one):
 # the engines plus their Portage mappings are ~10 pure-Rust crates with
 # zero C linkage, so the musl-static story is untouched. Pinned to exact
-# crates.io releases (tracked in `docs/solver-backends-analysis.md`; the
+# crates.io releases (tracked in `docs/history/solver-backends-analysis.md`; the
 # reference checkout lives at `3rdparty/portage-cli`).
 portage-solver = "=0.3.0"
 portage-atom-pubgrub = "=0.8.0"

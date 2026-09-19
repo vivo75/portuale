@@ -25,7 +25,7 @@ the next slice") and expects the same rhythm every time:
    constraint (e.g. contract-suite determinism), stop and surface it.
 4. **Ground expected output in real Portage, not in a second copy.**
    There is no Python mirror any more
-   ([`docs/second_python_copy_removal.md`](docs/second_python_copy_removal.md)).
+   ([`docs/history/second_python_copy_removal.md`](docs/history/second_python_copy_removal.md)).
    A slice that changes `emerge` output takes its expected value from real
    Portage — the container test bed (`../pmtest/differential-test-bed/`),
    this host's real `emerge`, or an upstream

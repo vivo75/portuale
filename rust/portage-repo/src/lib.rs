@@ -510,7 +510,7 @@ pub fn resolver_debug() -> bool {
 }
 
 /// Dependency tokens the resolver dropped because `portage_dep::parse_atom`
-/// could not read them (`docs/second_python_copy_removal.md` §4). Real
+/// could not read them (`docs/history/second_python_copy_removal.md` §4). Real
 /// `use_reduce(token_class=Atom)` raises `InvalidDependString` on such a
 /// token; portuale skips it, so a grammar gap in `portage-dep` would
 /// otherwise vanish silently from the graph. Every skip goes through
@@ -16340,7 +16340,7 @@ pub struct ChangedDepsReportEntry {
     pub repo_name: String,
 }
 
-/// Why a resolve was abandoned (backlog #19, `docs/abort-path-spec.md`):
+/// Why a resolve was abandoned (backlog #19, `docs/history/abort-path-spec.md`):
 /// real's `_create_graph` returns 0 the moment a required dep cannot be
 /// satisfied (`depgraph.py:3254-3271`) or `_serialize_tasks` gives up on
 /// an unserializable cycle (`:10262-10294`) — and `action_build` then
@@ -33110,7 +33110,7 @@ mod tests {
 
     #[test]
     fn abort_outcome_membership_and_order() {
-        // Slice 3 pins (docs/abort-path-spec.md §6, live captures in
+        // Slice 3 pins (docs/history/abort-path-spec.md §6, live captures in
         // fixtures/abort-captures/): the outcome is produced on the
         // settled graph while `entries` stays the full graph (the
         // renderer switches to `partial` in Slice 4).

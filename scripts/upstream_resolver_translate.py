@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Capture upstream resolver tests as data for portuale fixture translation
-(backlog #50 / `docs/second_python_copy_removal.md` §7).
+(backlog #50 / `docs/history/second_python_copy_removal.md` §7).
 
 Loads an upstream `lib/portage/tests/resolver/test_*.py` module, runs its
 real `ResolverPlayground` against the vendored portage (pinned in

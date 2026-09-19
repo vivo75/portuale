@@ -3,7 +3,7 @@
 //! Portuale-only (real `emerge` has no `--solver`): [`super::SolverKind`]'s
 //! `PubGrub`/`Resolvo` variants land here. Both backends drive lu-zero's
 //! `portage-atom-pubgrub` / `portage-atom-resolvo` bridges (see
-//! `docs/solver-backends-analysis.md` and the `3rdparty/portage-cli`
+//! `docs/history/solver-backends-analysis.md` and the `3rdparty/portage-cli`
 //! checkout) instead of the backtracking walk -- the same md5-cache facts
 //! in, a [`super::GraphResult`] out, so `pretend.rs` never knows which
 //! algorithm resolved the graph.

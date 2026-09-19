@@ -29,10 +29,15 @@
 - Bed staging lies: `ROOT=$FX` splits cascades across two roots — a
   whole item was an artifact; the host-exact control (`ROOT=/`) is
   mandatory before any code. A partial run is not a parity run: mark
-  `partial`, keep the log, never diff it.
+  `partial`, keep the log, never diff it. Run L1 *with* the portage
+  upgrade — skipping it fakes a `metadata` finding on every package.
 - Real disagrees with itself (parallel-`estrip` race, hash-seeded
   sets): one allowlist row, never chased to zero. Compiled-payload
   bytes never gate except hand-written fixtures.
+- Masked/unsat aborts show no list at all — a "partial list" premise
+  is false for 2 of 3 abort shapes; no list also means no `Total:`
+  line (`display()` is never reached). A mid-vs-last sibling pair is
+  the control proving unobservability, not two behaviours.
 
 ## Before writing code
 
@@ -73,9 +78,22 @@
   only `\"`/`\\` inside quotes. Test parsers through `resolve_config`
   + live `portage.settings`, never hand-built structs (hid a bug for
   a full slice).
+- Dead versions are dead: EAPI 0–4 and 6 have no live consumers, so
+  EAPI-conditional branches for them are skipped, not ported — and
+  within the live floor (5+) portuale treats every EAPI identically
+  rather than parametrizing. Check the floor before porting any
+  version-gated logic from a future Portage.
 - `get_pregenerated_cache` takes the first format only; empty layout
   means auto (`md5-dict` then `pms`); lowercase + split before
   comparing anything from `layout.conf`.
+- Walk order is not merge order: the merge list derives from graph
+  structure (DFS replay), so never "fix" truncation by flipping
+  BFS→LIFO. A cycle list is the serialize-stuck remainder (drained
+  leaves excluded), never a discovery prefix; its counters count
+  displayed rows, duplicates included. Walk-time failure beats
+  serialize-time failure — order abort arms accordingly; error blocks
+  print circular → slot → blockers → autounmask even if another arm
+  fired first.
 - Shared on-disk formats must round-trip both directions (real reads
   portuale's output and vice versa) — verify live, not by schema.
   Where every candidate is digest-verified, deterministic order
@@ -100,9 +118,17 @@
   explicitly. Oracle cells need per-cpv granularity. Re-run L0 after
   touching resolver/merge code, recording mtime + HEAD. Corpus bless
   rides only in the pmtest commit after line-by-line drift review.
+- Never edit the harness to make a PM pass: a red is fixed in the
+  product, an accepted divergence goes in `known-divergences.yaml`.
 - Name a shared-mechanism link both ways from the start; one fix
   closes both residues or evidence splits them. A later slice that
   supersedes a DONE must amend that DONE entry — never two truths.
+- Model one abort outcome with N consumers, not one shape per
+  trigger (autounmask+cycle is the same remainder, not a fourth
+  shape). Hook the outcome around the retry loop — the final pass
+  decides; read `backtrack: N/M` as a signal, never pin it. An
+  exit-code change breaks standing conventions: gate it by owner
+  decision and update every affected pin in the same slice.
 
 ## Display vs mechanism
 

@@ -19,7 +19,7 @@ and is not repeated here. Full pre-work docs are in `docs/history/`.
 
 ## #19 — abort-path model — DONE 2026-09-11
 
-- Live spec: `docs/abort-path-spec.md`.
+- Live spec: `docs/history/abort-path-spec.md`.
 - Residue (not #19): plasma-meta/podman truncation = `||`-selection
   gap (`get_best_run`), parked separately.
 - Trap: do not byte-match real's truncation *point* (DFS visit order);

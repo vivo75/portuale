@@ -11548,7 +11548,7 @@ pub fn run(args: &[String]) -> ExitCode {
     // the outcome's partial list *instead of* the full entries — real
     // never calls `display()` on the abort path (`actions.py:460-462`),
     // so masked/unsat shapes (empty partial) show no list at all and the
-    // cycle shape shows the stuck remainder only (`abort-path-spec.md`
+    // cycle shape shows the stuck remainder only (`docs/history/abort-path-spec.md`
     // §4). Everything else (resolver trace, abi-rebuild maps, the
     // complete-graph decisions above, the unsolvable-blocker scan below)
     // keeps the full graph. With the gate off

@@ -153,12 +153,14 @@ recorded in `../pmtest/differential-test-bed/compare/known-divergences.yaml`.
   reference (`python/emerge_pretend_reference.py`) mirrored every
   `emerge --pretend` slice and the contract suite asserted Rust == Python;
   it proved agreement with a portuale-authored copy, not with Portage,
-  and was removed ([`second_python_copy_removal.md`](second_python_copy_removal.md)).
+  and was removed ([`history/second_python_copy_removal.md`](history/second_python_copy_removal.md)).
   Expected `emerge` output now comes from real Portage (the differential
   beds, this host's `emerge`, upstream `lib/portage/tests/resolver/`
   cases). In its place: expectation-free output invariants and cross-mode
   checks (`pmtest/pytests-contract-suite/test_output_invariants.py`, also
-  run over L0), repeated-run determinism, the tree-wide primitive
+  run over L0), repeated-run determinism (all directory reads go through
+  the single `portage_util::read_dir_entries` seam — sorted by default,
+  seeded shuffle only under test-only `PORTUALE_SHUFFLE_DIRS`), the tree-wide primitive
   differential (`pmtest/scripts/primitive_tree_differential.py`), the
   unparsed-dependency-token counter, the re-pin review checklist
   (`pmtest/scripts/portage_repin_review.py`), and the corpus harvested
@@ -192,7 +194,9 @@ recorded in `../pmtest/differential-test-bed/compare/known-divergences.yaml`.
   prebuilt binpkg set into a fresh `/` and the resulting filesystem + VDB
   snapshots are diffed. It is **live and exercised** — the only check
   that catches resolver / merge-path regressions at real-tree scale (the
-  fixture-based pytest contract suite cannot). Needs the
+  fixture-based pytest contract suite cannot). The fixture-oracle bed
+  (`differential-test-bed/run/l0-fixture-oracle-all.sh`) covers the same
+  ground per-fixture with real-Portage oracles — it caught backlog #54. Needs the
   `localhost/test-portuale:latest` image
   (`sudo differential-test-bed/create-container.bash`, run from pmtest).
   It is **slower and heavier** than the pytest/`cargo test` pass, so it

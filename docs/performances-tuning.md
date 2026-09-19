@@ -364,3 +364,33 @@ different, slower algorithm is now all memoised; what's left is ordinary
 allocation overhead with no hot loop, so further work is incremental
 (items 1–3, ~1–2 % each). The Rust graph walk itself was never the
 bottleneck.
+
+## Re-measurement 2026-09-19 (commit `e7f4ec8`, release rebuilt same day)
+
+Same workload, same host (now 2088 installed packages):
+
+| command | wall | user | sys | RSS |
+|---|---|---|---|---|
+| `portuale emerge -puD --getbinpkg net-libs/rest` (×2, identical) | **6.75 s** | 4.95 s | 1.79 s | ~158 MB |
+| real `emerge -puD --getbinpkg net-libs/rest` (×2) | **5.2–5.5 s** | ~4.7 s | ~0.25 s | ~183 MB |
+
+Honest delta vs the 4.5 s / 3.5× days: user time is now at parity
+(4.95 vs ~4.7 s) and the wall gap is almost entirely sys time plus a
+faster real (5.5 s today vs 16 s then — tree, host and real-Portage
+drift cut both ways). Since the 4.5 s run the resolver gained real
+work: the all-installed blocker scan (#77), kept-branch derivation
+(#76/#84), live-metadata reads (#86), the respect-use repair (#69 R1),
+`installed_closure` backing (#68 S3) — none of it memoised away yet.
+
+`perf record -F 400` on the 6.75 s run: still no hot loop. Top frames
+are SipHash `write` (~14 % total), `__memmove` 7.2 %, malloc family
+~20 %+, `HashMap::clone/reserve/insert` ~5 %; the top *named* frame is
+`apply_updates_to_cp` 3.1 % reached via `installed_cp_sources` →
+`installed_candidates` → `installed_versions` → `binary_deps_changed`
+— i.e. "What to change next" item 2 (cache `installed_candidates`
+per cp) is now the single biggest named cost. `parse_atom` +
+backtracker combined are <1.5 %: the memo caches hold.
+
+Next step, in order: item 2 first (per-cp installed cache), then
+re-profile; items 1/3 stay ~1–2 % each. Re-run this section's table
+after any resolver-shape change, not just perf work.

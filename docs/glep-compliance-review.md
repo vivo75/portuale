@@ -29,17 +29,16 @@ regular-files-only extraction.
 
 **Status: Full.**
 
-- Implemented in `rust/portuale/src/binpkg.rs`: `gpkg-1` marker detection
-  (`binpkg.rs:151-170`), per-member compression classification including zstd
-  and xz (`classify_inner_member`, tested `binpkg.rs:1331-1344`), Manifest
-  `DATA` line parsing with a **duplicate-name reject**
-  (`binpkg.rs:526` `"Manifest lists {name} more than once"`), a **member-not-
-  in-Manifest reject** (`binpkg.rs:540`), and full OpenPGP verification of
-  both the clear-signed Manifest (`verify_clearsigned_manifest`,
-  `binpkg.rs:1308`) and detached member `.sig` files via `GpgVerify`
-  (`binpkg.rs:106-135`), gated by a `binpkg-ignore-signature`-style knob.
-  Hash support is BLAKE2B + SHA512 (`binpkg.rs:1594,1601`), matching real's
-  own `MANIFEST2_HASH_DEFAULTS`.
+- Implemented in `rust/portuale/src/binpkg.rs` (symbol names; line
+  numbers drift — grep them): `gpkg-1` marker detection, per-member
+  compression classification including zstd and xz
+  (`classify_inner_member`), Manifest `DATA` line parsing with a
+  **duplicate-name reject** and a **member-not-in-Manifest reject**,
+  and full OpenPGP verification of both the clear-signed Manifest
+  (`verify_clearsigned_manifest`) and detached member `.sig` files
+  via `GpgVerify`, gated by a `binpkg-ignore-signature`-style knob.
+  Hash support is BLAKE2B + SHA512, matching real's own
+  `MANIFEST2_HASH_DEFAULTS`.
 - **Regular-files-only extraction is enforced since 2026-09-15 (#56),
   widened to every gpkg container by #58 (2026-09-16).** Since #56 a
   non-regular member at a trusted name (`gpkg-1`, `Manifest`,
@@ -66,13 +65,13 @@ regular-files-only extraction.
   while the pre-fix portuale listed the host `/etc` through a symlinked
   prefix and blocked on a FIFO member — so this closed a real divergence,
   not just theoretical hardening.
-- **Scope note on "Full":** GLEP 78's "only regular files are permitted"
-  names the **outer** container, which is what #56 hardened and what this
-  status covers. The same class one level down — a symlinked
-  `metadata/<KEY>` member *inside* the inner `metadata.tar`, which
-  portuale's `Path::is_file` + `fs::read` walk still follows while real's
-  `unpack_metadata` raises — is outside the GLEP's wording but is a live
-  portuale-only host read, open as backlog **#58** (branch `backlog/58`).
+- **Scope note on "Full", closed 2026-09-16 (#58):** GLEP 78's "only
+  regular files are permitted" names the **outer** container, which is
+  what #56 hardened. The same class one level down — a symlinked
+  `metadata/<KEY>` member *inside* the inner `metadata.tar` — is now
+  read in process with `tarfile.extractfile` semantics (a symlink
+  resolves **inside** the archive or errors; directory/FIFO/device
+  members error), so no host read remains.
 
 ## GLEP 82 — Repository configuration file (layout.conf)
 
@@ -92,11 +91,11 @@ text and ignored, matching the GLEP's own "unknown keys should be
 ignored" rule; their real-world effect is nil for `emerge` (dead in the
 vendored tree, or `repoman`/`pkgcheck`/`--sync` territory).
 
-- `parse_layout_conf` (`rust/portage-repo/src/lib.rs:1036`) returns the
+- `parse_layout_conf` (`rust/portage-repo/src/lib.rs`) returns the
   raw `key = value` map; the repo-config pass that consumes it
-  (`lib.rs:1259-1300`) extracts `masters`, `aliases`, `repo-name`,
+  extracts `masters`, `aliases`, `repo-name`,
   `profile-formats` and — since #55, 2026-09-15 — `cache-formats`
-  (`lib.rs:1276-1293`, resolved onto `RepoConfig::cache_formats`). Every
+  (resolved onto `RepoConfig::cache_formats`). Every
   other key is silently ignored (parsed as raw text, per the GLEP's own
   "unknown keys should be ignored" rule, but never consulted).
 - Verified in the vendored real source that the effect of this is uneven:
@@ -109,7 +108,7 @@ vendored tree, or `repoman`/`pkgcheck`/`--sync` territory).
     scope). **Not a real backlog candidate.**
   - `cache-formats` (`config.py:578,1564-1577`) genuinely affects real's
     cache-format selection (`md5-dict` vs legacy `pms`) — portuale's
-    `has_usable_md5_cache` (now `lib.rs:1840`) instead auto-detected by probing
+    `pregen_md5_cache_enabled` gate instead auto-detected by probing
     for a `metadata/md5-cache` directory. This matched real's own
     implementation-defined default and the near-universal state of the
     Gentoo repo (every mainstream repo has used `md5-dict` since ~2012), so
@@ -126,7 +125,7 @@ vendored tree, or `repoman`/`pkgcheck`/`--sync` territory).
   - `thin-manifests` (defaulting `false` in the GLEP, but `true` in the
     Gentoo repo and virtually every modern repo) governs whether per-package
     Manifests list `EBUILD`/`AUX`/`MISC` entries. portuale's
-    `parse_manifest` (`rust/portage-fetch/src/lib.rs:184`) only ever reads
+    `parse_manifest` (`rust/portage-fetch/src/lib.rs`) only ever reads
     `DIST` lines and ignores everything else — this happens to match
     `thin-manifests = true` behavior unconditionally, which is correct for
     every repo layout portuale is validated against, so **not a gap** in

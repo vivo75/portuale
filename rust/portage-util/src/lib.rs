@@ -1,7 +1,7 @@
 //! Filesystem helpers shared by the portage-* crates.
 //!
 //! `read_dir_entries` is the single directory-listing seam the whole
-//! workspace reads through (`docs/second_python_copy_removal.md` §9's
+//! workspace reads through (`docs/history/second_python_copy_removal.md` §9's
 //! second half, backlog #51): sorted by file name by default, and
 //! deliberately shuffled when `PORTUALE_SHUFFLE_DIRS` is set, so the
 //! determinism test can prove no consumer depends on readdir order.
