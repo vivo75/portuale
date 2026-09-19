@@ -250,7 +250,7 @@ can't grow into these incrementally:
   since it has no installed vdb consumer for this mechanism to see. The
   hermetic triangle's block is produced by a separate, now-shipped
   installed-instance slot-tracking check (backlog #57,
-  `docs/06.057-directly_requested_hard_atom_conflict.opus.md`), not by
+  `docs/history/06.057-directly_requested_hard_atom_conflict.opus.md`), not by
   a dropped reverse-dep pin.
 - **`--root-deps` / multi-root, remaining edges.** *Mostly a non-gap for
   this fork* — the ebuilds are all EAPI 7+, where `--root-deps=rdeps` is
@@ -457,7 +457,7 @@ copies, and one candidate list per distfile. The corrupt-download rename
 **shipped** with the owner-decided deterministic suffix (D3,
 `_checksum_failure_<N>` + real's `Refetching...` line); the third-party
 shuffle stays a deliberate cut (D4). Design + shipped-state
-consolidation: [`01.014-fetch_candidates_mirrors.md`](01.014-fetch_candidates_mirrors.md).
+consolidation: [`history/01.014-fetch_candidates_mirrors.md`](history/01.014-fetch_candidates_mirrors.md).
 Remaining transport residue (not part of #14's F-slices, filed as
 backlog #70): `FETCHCOMMAND`/`RESUMECOMMAND` overrides and
 `PORTAGE_RO_DISTDIRS` are not honoured by portuale's own downloads

@@ -308,7 +308,7 @@ cache-less ebuilds stay cache-less, and the guard
 `test_committed_fixture_md5_cache_entries_match_their_ebuilds` keeps
 them valid. L2_STALECACHE=1, the #49 fixture-oracle stale case, the L0
 image audit (gentoo 0 stale) and L1 porttest are green. Detail:
-[`05.046-metadata_md5-cache.opus.md`](05.046-metadata_md5-cache.opus.md),
+[`history/05.046-metadata_md5-cache.opus.md`](history/05.046-metadata_md5-cache.opus.md),
 `TEST/findings/l2.md` S0-S4, `docs/on-disk-caches.md` §2.
 
 **2026-09-15 (later) memory note:** backlog #55 (GLEP 82
@@ -327,7 +327,7 @@ reads from a valid `pms` cache; slower, not different). Container oracle:
 `TEST/findings/l2.md` "## #55 S0" (cells a-h, run
 `c55-20260915T172758Z`); L0 after the change is byte-identical to the
 pre-change baseline (clean 100 / parity 0.833). Detail and decisions:
-[`07.55-layout_conf_cache_formats.opus.md`](07.55-layout_conf_cache_formats.opus.md).
+[`history/07.55-layout_conf_cache_formats.opus.md`](history/07.55-layout_conf_cache_formats.opus.md).
 
 For what is **genuinely still open** — real portage behaviour not ported
 to either side, the deliberate cuts, the standing non-goals — see

@@ -1053,7 +1053,7 @@ fn replacement_wait_index(
                     continue;
                 }
                 if (candidate.category.as_str(), candidate.package.as_str()) == owner_cp {
-                    // The plan's guard (docs/02.68-74.md §4 D/B2): the
+                    // The plan's guard (docs/history/02.68-74.md §4 D/B2): the
                     // predicate implies the owner merges before the
                     // replacement; if portuale's merge order disagrees,
                     // stop and report (a `merge_order.rs` item) rather

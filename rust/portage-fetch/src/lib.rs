@@ -508,7 +508,7 @@ pub struct FetchCommandVars<'a> {
 /// [`DistfileDigests`] carries a `HashMap`, so the names are sorted
 /// instead. The shipped tree's `BLAKE2B`-then-`SHA512` order matches the
 /// sort (200/200 sampled `DIST` lines, 2026-09-16) -- a hand-written
-/// reverse-order Manifest would differ; recorded in `docs/02.68-74.md`
+/// reverse-order Manifest would differ; recorded in `docs/history/02.68-74.md`
 /// §6.
 pub fn digests_variable(digests: &DistfileDigests) -> String {
     let mut names: Vec<&String> = digests.hashes.keys().collect();
@@ -763,7 +763,7 @@ fn shell_split(s: &str) -> Vec<String> {
 /// `<myfile>.__download__` (`_download_suffix`, `fetch.py:63`) and
 /// renames after verification, while portuale writes `dest` directly.
 /// This slice deliberately does not change portuale's download path --
-/// recorded in `docs/02.68-74.md` §6.
+/// recorded in `docs/history/02.68-74.md` §6.
 pub fn download_with_commands(
     uri: &str,
     dest: &Path,
