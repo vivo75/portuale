@@ -98,6 +98,85 @@ struct WritePkg166Args<'a> {
     required_use: &'a str,
 }
 
+/// One scratch ebuild plus its md5-cache entry, in the
+/// `write_pkg_162` shape extended with `DEPEND`/`REQUIRED_USE` lines.
+fn write_pkg_166(args: WritePkg166Args<'_>) {
+    let WritePkg166Args {
+        repo,
+        cp,
+        pv,
+        slot,
+        iuse,
+        depend,
+        required_use,
+    } = args;
+    use md5::Digest as _;
+    use std::fmt::Write as _;
+    let (cat, pkg) = cp.split_once('/').expect("category/package");
+    let dir = repo.join(cat).join(pkg);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut body = format!(
+        "EAPI=8\nDESCRIPTION=\"166 circular/instance-use\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\n"
+    );
+    if !iuse.is_empty() {
+        writeln!(body, "IUSE=\"{iuse}\"").unwrap();
+    }
+    if !depend.is_empty() {
+        writeln!(body, "DEPEND=\"{depend}\"").unwrap();
+    }
+    if !required_use.is_empty() {
+        writeln!(body, "REQUIRED_USE=\"{required_use}\"").unwrap();
+    }
+    std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
+    let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+    let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=166 circular/instance-use\nEAPI=8\n".to_string();
+    if !iuse.is_empty() {
+        writeln!(entry, "IUSE={iuse}").unwrap();
+    }
+    if !depend.is_empty() {
+        writeln!(entry, "DEPEND={depend}").unwrap();
+    }
+    if !required_use.is_empty() {
+        writeln!(entry, "REQUIRED_USE={required_use}").unwrap();
+    }
+    writeln!(entry, "KEYWORDS=amd64\nSLOT={slot}\n_md5_={md5}").unwrap();
+    let cachedir = repo.join("metadata/md5-cache").join(cat);
+    std::fs::create_dir_all(&cachedir).unwrap();
+    std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+}
+
+/// Single scratch repo (`testrepo`, priority 0, main) holding
+/// `(cp, version, slot, IUSE, DEPEND, REQUIRED_USE)` ebuilds with
+/// `KEYWORDS="amd64"`.
+fn repo_pkgs_166(dir: &Path, pkgs: &[(&str, &str, &str, &str, &str, &str)]) -> Vec<RepoConfig> {
+    let repo = dir.join("repo");
+    for (cp, pv, slot, iuse, depend, required_use) in pkgs {
+        write_pkg_166(WritePkg166Args {
+            repo: &repo,
+            cp,
+            pv,
+            slot,
+            iuse,
+            depend,
+            required_use,
+        });
+    }
+    vec![RepoConfig {
+        name: "testrepo".to_string(),
+        location: repo,
+        priority: 0,
+        is_main: true,
+        masters: vec![],
+        profile_formats: vec![],
+        cache_formats: vec![],
+        aliases: vec![],
+        sync_type: None,
+        sync_uri: None,
+        volatile: false,
+        module_specific_options: vec![],
+    }]
+}
+
 /// One installed instance with the given `USE` record.
 fn use_install_166(root: &Path, cat: &str, pf: &str, use_flags: &str) {
     let d = root.join("var/db/pkg").join(cat).join(pf);

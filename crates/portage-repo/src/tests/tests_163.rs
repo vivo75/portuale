@@ -169,8 +169,111 @@ struct WritePkg163RuArgs<'a> {
     required_use: &'a str,
 }
 
+/// Same shape with a `REQUIRED_USE` line instead of `RDEPEND`
+/// (the parent-flip legs' writer).
+fn write_pkg_163_ru(args: WritePkg163RuArgs<'_>) {
+    let WritePkg163RuArgs {
+        repo,
+        cp,
+        pv,
+        slot,
+        iuse,
+        required_use,
+    } = args;
+    use md5::Digest as _;
+    use std::fmt::Write as _;
+    let (cat, pkg) = cp.split_once('/').expect("category/package");
+    let dir = repo.join(cat).join(pkg);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut body = format!(
+        "EAPI=8\nDESCRIPTION=\"163 result assembly\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\n"
+    );
+    if !iuse.is_empty() {
+        writeln!(body, "IUSE=\"{iuse}\"").unwrap();
+    }
+    if !required_use.is_empty() {
+        writeln!(body, "REQUIRED_USE=\"{required_use}\"").unwrap();
+    }
+    std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
+    let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+    let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=163 result assembly\nEAPI=8\n".to_string();
+    if !iuse.is_empty() {
+        writeln!(entry, "IUSE={iuse}").unwrap();
+    }
+    if !required_use.is_empty() {
+        writeln!(entry, "REQUIRED_USE={required_use}").unwrap();
+    }
+    writeln!(entry, "KEYWORDS=amd64\nSLOT={slot}\n_md5_={md5}").unwrap();
+    let cachedir = repo.join("metadata/md5-cache").join(cat);
+    std::fs::create_dir_all(&cachedir).unwrap();
+    std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+}
+
+/// Same shape with `(cp, version, slot, iuse, required_use)`
+/// ebuilds (the parent-flip legs' repo).
+fn repo_pkgs_163_ru(dir: &Path, pkgs: &[(&str, &str, &str, &str, &str)]) -> Vec<RepoConfig> {
+    let repo = dir.join("repo");
+    for (cp, pv, slot, iuse, required_use) in pkgs {
+        write_pkg_163_ru(WritePkg163RuArgs {
+            repo: &repo,
+            cp,
+            pv,
+            slot,
+            iuse,
+            required_use,
+        });
+    }
+    vec![RepoConfig {
+        name: "testrepo".to_string(),
+        location: repo,
+        priority: 0,
+        is_main: true,
+        masters: vec![],
+        profile_formats: vec![],
+        cache_formats: vec![],
+        aliases: vec![],
+        sync_type: None,
+        sync_uri: None,
+        volatile: false,
+        module_specific_options: vec![],
+    }]
+}
+
 fn owner_163(cat: &str, pkg: &str) -> (String, String) {
     (cat.to_string(), pkg.to_string())
+}
+
+/// No owner, and a display atom with no conditional use-deps, both
+/// return `None`.
+#[test]
+fn use_unsat_parent_row_returns_none_without_an_owner_or_conditional_flags() {
+    let dir = dir_163("parent-none");
+    let repos = repo_pkgs_163_ru(&dir, &[("dev-libs/parent", "1.0", "0", "flipme", "")]);
+    let config = cfg_163();
+    let entries = vec![entry_163("dev-libs", "parent", new_163("1.0"), &[])];
+    assert_eq!(
+        use_unsat_parent_row(UseUnsatParentRowArgs {
+            repos: &repos,
+            root: dir.as_path(),
+            entries: &entries,
+            display_atom: "dev-libs/child[flipme?]",
+            owner: None,
+            config: &config
+        }),
+        None
+    );
+    assert_eq!(
+        use_unsat_parent_row(UseUnsatParentRowArgs {
+            repos: &repos,
+            root: dir.as_path(),
+            entries: &entries,
+            display_atom: "dev-libs/child[flipme]",
+            owner: Some(&owner_163("dev-libs", "parent")),
+            config: &config
+        }),
+        None
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
 /// Arguments of [`write_pkg_163`].
 struct WritePkg163Args<'a> {
@@ -266,6 +369,53 @@ fn install_163(root: &Path, cat: &str, pf: &str, slot: &str, files: &[(&str, &st
     for (name, contents) in files {
         std::fs::write(d.join(name), contents.as_bytes()).unwrap();
     }
+}
+
+/// A `Reinstall` entry whose trigger flag the new ebuild dropped
+/// from IUSE still shows the `(-flag%*)` removed row at plain `-p`
+/// through the trigger set.
+#[test]
+fn refresh_entry_use_display_force_shows_a_dropped_reinstall_trigger_flag() {
+    let dir = dir_163("refresh-reinst");
+    let repos = repo_pkgs_163(&dir, &[("dev-libs/rdisp", "1.0", "0", "keep", "", "amd64")]);
+    let config = cfg_163();
+    install_163(
+        &dir,
+        "dev-libs",
+        "rdisp-1.0",
+        "0",
+        &[("IUSE", "gone keep"), ("USE", "gone")],
+    );
+    let mut entries = vec![entry_163(
+        "dev-libs",
+        "rdisp",
+        PretendOutcome::Reinstall {
+            version: "1.0".to_string(),
+            changed_flags: vec!["gone".to_string()],
+            deps_changed: false,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: false,
+            slot_operator_rebuild: false,
+        },
+        &[],
+    )];
+    refresh_entry_use_display(
+        &mut entries,
+        &repos,
+        &dir,
+        &owner_163("dev-libs", "rdisp"),
+        &config,
+    );
+    assert_eq!(
+        entries[0].use_flags_display,
+        vec![("keep".to_string(), false)]
+    );
+    assert_eq!(
+        entries[0].use_expand_display_p,
+        vec![("USE".to_string(), "(-gone%*)".to_string())]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
 // ---- shared resolve_pretend harness ----
 
@@ -374,6 +524,71 @@ fn binpkg_163(cpv: &str, slot: &str, extra: &[(&str, &str)]) -> HashMap<String, 
         m.insert(k.to_string(), v.to_string());
     }
     m
+}
+
+/// `--newuse` with a gained flag reinstalls with the trigger set:
+/// the gained flag plus the dropped effective flag.
+#[test]
+fn resolve_pretend_newuse_with_a_gained_flag_reinstalls() {
+    let dir = dir_163("rp-newuse");
+    let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "a b", "", "amd64")]);
+    install_163(
+        &dir,
+        "dev-libs",
+        "rp-1.0",
+        "0",
+        &[("IUSE", "a"), ("USE", "a")],
+    );
+    let config = cfg_163();
+    let mut o = RpOpts163::dep();
+    o.newuse = true;
+    o.selective = false;
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+        PretendOutcome::Reinstall {
+            version: "1.0".to_string(),
+            changed_flags: vec!["a".to_string(), "b".to_string()],
+            deps_changed: false,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: false,
+            slot_operator_rebuild: false,
+        }
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A dependency atom whose installed version lacks the requested
+/// `[flag]` reinstalls it (Portage never calls that "already
+/// installed").
+#[test]
+fn resolve_pretend_installed_version_missing_the_flag_reinstalls() {
+    let dir = dir_163("rp-flip");
+    let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "a b", "", "amd64")]);
+    install_163(
+        &dir,
+        "dev-libs",
+        "rp-1.0",
+        "0",
+        &[("IUSE", "a b"), ("USE", "a")],
+    );
+    let config = cfg_163();
+    let mut o = RpOpts163::dep();
+    o.selective = false;
+    o.autounmask_use = true;
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/rp[b]", &o),
+        PretendOutcome::Reinstall {
+            version: "1.0".to_string(),
+            changed_flags: Vec::new(),
+            deps_changed: false,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: false,
+            slot_operator_rebuild: false,
+        }
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Each reinstall trigger also fires through the best-version

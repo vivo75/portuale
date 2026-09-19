@@ -191,6 +191,53 @@ fn new_165(cat: &str, pkg: &str, ver: &str) -> GraphEntry {
     )
 }
 
+/// `Upgrade`, `Downgrade` and `Reinstall` parents resolve through
+/// their own `to`/`version` fields.
+#[test]
+fn parent_use_state_resolves_upgrade_downgrade_and_reinstall_parents() {
+    let dir = dir_165("parent-outcomes");
+    let repos = repo_165(
+        &dir,
+        &[
+            ("test/pkg", "1.0", "0", "foo", "", "", ""),
+            ("test/pkg", "2.0", "0", "foo", "", "", ""),
+        ],
+    );
+    let config = cfg_165();
+    let owner = ("test".to_string(), "pkg".to_string());
+    for outcome in [
+        PretendOutcome::Upgrade {
+            from: "1.0".to_string(),
+            to: "2.0".to_string(),
+        },
+        PretendOutcome::Downgrade {
+            from: "2.0".to_string(),
+            to: "1.0".to_string(),
+        },
+        PretendOutcome::Reinstall {
+            version: "1.0".to_string(),
+            changed_flags: Vec::new(),
+            deps_changed: false,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: false,
+            slot_operator_rebuild: false,
+        },
+    ] {
+        let entries = vec![entry_165("test", "pkg", outcome.clone(), Some("0"))];
+        let (resolved, _, _, _) = parent_use_state(&repos, &entries, &owner, &config)
+            .expect("every merge-bound outcome resolves");
+        let want = match &outcome {
+            PretendOutcome::Upgrade { to, .. } => to,
+            PretendOutcome::Downgrade { to, .. } => to,
+            PretendOutcome::Reinstall { version, .. } => version,
+            _ => unreachable!(),
+        };
+        assert_eq!(&resolved.version, want);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 fn ipkg_165(cat: &str, pkg: &str, ver: &str, slot: &str) -> InstalledPackage {
     InstalledPackage {
         category: cat.to_string(),

@@ -95,6 +95,102 @@ fn filesystem_news_selector_evaluates_one_repo_through_the_seam() {
 }
 
 #[test]
+fn news_profile_path_strips_the_main_repo_profiles_prefix() {
+    // Portage: news.py, NewsManager. The profile is the symlinked path minus the
+    // main repo's `profiles/` prefix.
+    let fixtures = fixtures_root();
+    let repos = vec![portage_repo::RepoConfig {
+        name: "testrepo".to_string(),
+        location: std::fs::canonicalize(fixtures.join("repo")).unwrap(),
+        priority: 0,
+        is_main: true,
+        masters: Vec::new(),
+        profile_formats: Vec::new(),
+        cache_formats: Vec::new(),
+        aliases: Vec::new(),
+        sync_type: None,
+        sync_uri: None,
+        volatile: false,
+        module_specific_options: Vec::new(),
+    }];
+    assert_eq!(
+        news_profile_path(&repos, &fixtures).as_deref(),
+        Some("default")
+    );
+    let mut not_main = repos.clone();
+    not_main[0].is_main = false;
+    assert_eq!(news_profile_path(&not_main, &fixtures), None);
+    assert_eq!(
+        news_profile_path(&repos, &fixtures.join("no-such-config-root")),
+        None
+    );
+}
+
+#[test]
+fn news_counts_follow_portage_count_unread_news_gates() {
+    // Portage: news.py. No profile counts nothing; an unusable state dir returns
+    // early; the count reads `.unread` as it stands.
+    let base = TempDir::new("pretend-test-news_gates").keep();
+    let _ = std::fs::remove_dir_all(&base);
+    let root = base.join("root");
+    let repo = portage_repo::RepoConfig {
+        name: "testrepo".to_string(),
+        location: base.join("no-news-repo"),
+        priority: 0,
+        is_main: true,
+        masters: Vec::new(),
+        profile_formats: Vec::new(),
+        cache_formats: Vec::new(),
+        aliases: Vec::new(),
+        sync_type: None,
+        sync_uri: None,
+        volatile: false,
+        module_specific_options: Vec::new(),
+    };
+    let repos = vec![repo];
+    let no_profile = NewsContext {
+        profile: None,
+        has_profile: false,
+        ..test_news_context()
+    };
+    assert!(unread_news_counts(&repos, &root, &no_profile).is_empty());
+    assert!(!root.join("var/lib/gentoo/news").exists());
+
+    // A stale `.unread` in an unwritable state dir still counts for a non-root caller.
+    use std::os::unix::fs::PermissionsExt;
+    let state = root.join("var/lib/gentoo/news");
+    std::fs::create_dir_all(&state).unwrap();
+    std::fs::write(
+        state.join("news-testrepo.unread"),
+        "2026-09-01-a\n2026-09-02-b\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o555)).unwrap();
+    // SAFETY: `geteuid` has no preconditions.
+    if unsafe { libc::geteuid() } != 0 {
+        assert_eq!(
+            unread_news_counts(&repos, &root, &test_news_context()),
+            vec![("testrepo".to_string(), 2)]
+        );
+    }
+    std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(
+        grab_news_state_file(&base.join("missing")),
+        Vec::<String>::new()
+    );
+    std::fs::write(
+        base.join("unread"),
+        "# header\n2026-09-01-a\n\n  2026-09-02-b  # note\n",
+    )
+    .unwrap();
+    assert_eq!(
+        grab_news_state_file(&base.join("unread")),
+        vec!["2026-09-01-a".to_string(), "2026-09-02-b".to_string()]
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
 fn unread_news_counts_reuses_the_check_news_evaluation() {
     // Counts reuse the `--check-news` evaluation, over an isolated ROOT sharing
     // the fixture vdb read-only. Nothing is written into the fixtures tree itself.

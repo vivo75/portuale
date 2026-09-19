@@ -3,6 +3,55 @@
 use crate::*;
 use portage_util::TempDir;
 
+/// One scratch ebuild plus a valid md5-cache entry (the md5-cache
+/// validation guard fails otherwise).
+fn write_pkg_184(repo: &Path, cp: &str, pv: &str, slot: &str, iuse: &str) {
+    use md5::Digest as _;
+    use std::fmt::Write as _;
+    let (cat, pkg) = cp.split_once('/').expect("category/package");
+    let dir = repo.join(cat).join(pkg);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut body = format!(
+        "EAPI=8\nDESCRIPTION=\"184 shadowed instance-use\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\n"
+    );
+    if !iuse.is_empty() {
+        writeln!(body, "IUSE=\"{iuse}\"").unwrap();
+    }
+    std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
+    let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+    let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=184 shadowed instance-use\nEAPI=8\n".to_string();
+    if !iuse.is_empty() {
+        writeln!(entry, "IUSE={iuse}").unwrap();
+    }
+    writeln!(entry, "KEYWORDS=amd64\nSLOT={slot}\n_md5_={md5}").unwrap();
+    let cachedir = repo.join("metadata/md5-cache").join(cat);
+    std::fs::create_dir_all(&cachedir).unwrap();
+    std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+}
+
+/// Single scratch repo (`testrepo`, priority 0, main) holding
+/// `(cp, version, slot, IUSE)` ebuilds with `KEYWORDS="amd64"`.
+fn repo_pkgs_184(dir: &Path, pkgs: &[(&str, &str, &str, &str)]) -> Vec<RepoConfig> {
+    let repo = dir.join("repo");
+    for (cp, pv, slot, iuse) in pkgs {
+        write_pkg_184(&repo, cp, pv, slot, iuse);
+    }
+    vec![RepoConfig {
+        name: "testrepo".to_string(),
+        location: repo,
+        priority: 0,
+        is_main: true,
+        masters: vec![],
+        profile_formats: vec![],
+        cache_formats: vec![],
+        aliases: vec![],
+        sync_type: None,
+        sync_uri: None,
+        volatile: false,
+        module_specific_options: vec![],
+    }]
+}
+
 /// Minimal visibility config (amd64-only, no overrides).
 fn cfg_184() -> portage_profile::Config {
     portage_profile::Config {

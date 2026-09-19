@@ -158,4 +158,75 @@ mod tests {
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
+
+    fn rels(root: &Path) -> Vec<String> {
+        recursive_config_files(root)
+            .unwrap()
+            .into_iter()
+            .map(|p| p.strip_prefix(root).unwrap().to_string_lossy().into_owned())
+            .collect()
+    }
+
+    // Expected value from Portage's `_recursive_file_list` (staged oracle tree).
+    #[test]
+    fn recursive_config_files_matches_portages_traversal_and_filters() {
+        let root = TempDir::new("portage-util-recursive").keep();
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("aa")).unwrap();
+        std::fs::create_dir_all(root.join("zz")).unwrap();
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::create_dir_all(root.join("CVS")).unwrap();
+        std::fs::create_dir_all(root.join(".hiddendir")).unwrap();
+        for (rel, body) in [
+            ("00-first", "x"),
+            ("aa/inner", "x"),
+            ("nn-mid", "x"),
+            ("zz/inner", "x"),
+            ("zz-last", "x"),
+            ("zz-flat~", "backup"),
+            (".hidden-frag", "dot"),
+            (".git/frag", "vcs"),
+            ("CVS/frag", "cvs"),
+            (".hiddendir/frag", "hiddendir"),
+        ] {
+            std::fs::write(root.join(rel), body).unwrap();
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            symlink(root.join("00-first"), root.join("link-frag")).unwrap();
+            symlink("aa", root.join("linkdir")).unwrap();
+        }
+
+        #[cfg(unix)]
+        let expected = vec![
+            "00-first",
+            "aa/inner",
+            "link-frag",
+            "linkdir/inner",
+            "nn-mid",
+            "zz/inner",
+            "zz-last",
+        ];
+        #[cfg(not(unix))]
+        let expected = vec!["00-first", "aa/inner", "nn-mid", "zz/inner", "zz-last"];
+        assert_eq!(rels(&root), expected);
+
+        assert_eq!(
+            recursive_config_files(&root.join("00-first")).unwrap(),
+            vec![root.join("00-first")]
+        );
+        assert!(
+            recursive_config_files(&root.join(".hidden-frag"))
+                .unwrap()
+                .is_empty()
+        );
+        // A `~`-suffixed root directory also yields nothing.
+        let tilted = root.join("tilted~");
+        std::fs::create_dir_all(&tilted).unwrap();
+        std::fs::write(tilted.join("frag"), "x").unwrap();
+        assert!(recursive_config_files(&tilted).unwrap().is_empty());
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }
