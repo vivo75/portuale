@@ -9,6 +9,7 @@ fn portuale_exe() -> PathBuf {
 
 mod commands;
 mod environment;
+mod package_env;
 mod phase_env;
 mod phase_runs;
 mod phase_table;
