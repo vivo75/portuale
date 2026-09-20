@@ -383,3 +383,65 @@ pub(crate) fn skipped_node_suffix(
         _ => String::new(),
     }
 }
+
+/// The `^` marker line under a skip-conflict pin: operator chars plus version,
+/// plus a `:slot[/sub-slot][op]` span when the atom carries one the missed
+/// package lacks. USE-token spans are cut.
+/// Portage: resolver/output.py, format_unmatched_atom
+pub(crate) fn skip_conflict_caret_line(
+    atom: &str,
+    pkg_slot: &str,
+    pkg_sub_slot: &str,
+    highlight_version: bool,
+) -> String {
+    // Collect spans first, then render once: spans may abut, so incremental
+    // rendering would misplace the later one.
+    let mut spans: Vec<(usize, usize)> = Vec::new();
+    let op_len: usize = atom
+        .chars()
+        .take_while(|c| matches!(c, '=' | '<' | '>' | '~' | '!'))
+        .map(|c| c.len_utf8())
+        .sum();
+    if op_len > 0 && highlight_version {
+        spans.push((0, op_len));
+    }
+    let parsed = portage_dep::parse_atom(atom);
+    if highlight_version && let Some(ver) = parsed.as_ref().and_then(|a| a.version.clone()) {
+        // Last occurrence: a package name itself may hold digits (`foo-2-bar-1.0`).
+        if let Some(start) = atom.rfind(ver.as_str()) {
+            spans.push((start, start + ver.len()));
+        }
+    }
+    // The span covers `:slot`, the `/sub-slot` half, and a trailing operator.
+    if let Some(a) = parsed.as_ref() {
+        let slot_mismatch = a.slot.as_deref().is_some_and(|s| s != pkg_slot);
+        let sub_mismatch = a.sub_slot.as_deref().is_some_and(|s| s != pkg_sub_slot);
+        if (slot_mismatch || sub_mismatch)
+            && let Some(slot) = a.slot.as_deref()
+        {
+            let mut slot_str = format!(":{slot}");
+            if let Some(sub) = a.sub_slot.as_deref() {
+                slot_str.push('/');
+                slot_str.push_str(sub);
+            }
+            match a.slot_operator {
+                Some(portage_dep::SlotOperator::Star) => slot_str.push('*'),
+                Some(portage_dep::SlotOperator::Equals) => slot_str.push('='),
+                None => {}
+            }
+            if let Some(start) = atom.find(slot_str.as_str()) {
+                spans.push((start, start + slot_str.len()));
+            }
+        }
+    }
+    let end = spans.iter().map(|(_, e)| *e).max().unwrap_or(0);
+    let mut line = String::new();
+    for i in 0..end {
+        if spans.iter().any(|(s, e)| *s <= i && i < *e) {
+            line.push('^');
+        } else {
+            line.push(' ');
+        }
+    }
+    line
+}
