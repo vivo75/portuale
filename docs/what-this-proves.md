@@ -17423,3 +17423,29 @@ TMPDIR=/tmp/88meas cargo test --release -p portuale phase_setup_script_exports_e
 ls -d /tmp/88meas/portuale-bin.* | wc -l   # 0 (was 1)
 cd rust && cargo test --release -p portuale remove_bin_overlay -q
 ```
+
+## 2026-09-20 — backlog #93: `${PORTAGE_BUILDDIR}/files` is always a symlink, so post-merge cleanup finishes
+
+Host `emerge -1 =sys-libs/timezone-data-2026d` merged fine but ended with
+`rm: cannot remove '.../files': Is a directory`, leaving empty dirs under
+`/var/tmp/portage/`. Root cause in two halves: portuale linked
+builddir/`files` to the repo `files/` only when the latter existed as a
+real dir (timezone-data has none), letting `create_directories` make a
+plain directory instead -- while real `prepare_build_dirs` links
+unconditionally, even dangling, and never creates that dir. Upstream
+`__dyn_clean` then does `rm -f .../files`, which fails on a real
+directory and aborts the rest of the cleanup under `set -e`. The fix
+mirrors real exactly (same self-loop guard; `create_directories` skips
+the symlink via `symlink_metadata`); stale plain dirs are replaced by
+the link, with removal strictly scoped to that one known
+inside-the-builddir path and never following the link. Shell-level
+repro of both shapes (`rm -f` rc 1 on the dir, rc 0 on the link),
+three `filesdir` unit tests, workspace + pretend suite green.
+
+```
+rm -rf /tmp/94clean && mkdir -p /tmp/94clean/old/files /tmp/94clean/new
+ln -s /nonexistent-repo-files /tmp/94clean/new/files
+rm -f /tmp/94clean/old/files  # rc 1: the reported error, verbatim
+rm -f /tmp/94clean/new/files  # rc 0: the fixed shape
+cd rust && cargo test --release -p portuale filesdir -q
+```

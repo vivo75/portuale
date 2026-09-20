@@ -459,36 +459,30 @@ pub(crate) fn compute_environment(
     // Real `prepare_build_dirs._prepare_fake_filesdir`
     // (`lib/portage/package/ebuild/prepare_build_dirs.py:504-515`):
     // `${PORTAGE_BUILDDIR}/files` is always a symlink to the ebuild's own
-    // `O/files` (the repo package dir's `files/`). The phase env's
-    // `FILESDIR` is `Environment::filesdir()` = builddir/files (matching
-    // real `doebuild.py:527`), so without this link every `eapply`/
+    // `O/files` (the repo package dir's `files/`), even when that target
+    // does not exist -- real links unconditionally (a dangling link is
+    // fine: `FILESDIR` consumers fail loudly on a missing path either
+    // way, and crucially the `clean` phase's `rm -f .../files` only
+    // works on a link). The phase env's `FILESDIR` is
+    // `Environment::filesdir()` = builddir/files (matching real
+    // `doebuild.py:527`), so without this link every `eapply`/
     // `FILESDIR` reference in a real ebuild (app-misc/jq's
     // `jq-1.6-r3-never-bundle-oniguruma.patch` is what surfaced it) dies
     // on a missing path -- L2 S5 finding `l2-filesdir-symlink-missing`.
     // A binary merge's ebuild is copied *into* the builddir (pkg_dir ==
-    // portage_builddir), where the link would be a self-loop; and a
-    // scratch ebuild with no `files/` dir would make it a dangling link
-    // that `create_directories`' `create_dir_all` then rejects. Link
-    // only a real, existing repo `files/` dir; otherwise
-    // `create_directories` makes a plain dir as before.
+    // portage_builddir), where the link would be a self-loop.
+    //
+    // Backlog #94 (host `emerge -1 sys-libs/timezone-data` residue):
+    // portuale used to link only when the repo `files/` was a real dir
+    // and otherwise let `create_directories` make a plain directory --
+    // whose `rm -f` in `__dyn_clean` then fails with "Is a directory"
+    // and, under the phase's `set -e`, aborts the rest of the cleanup,
+    // leaving `.../files` (+ parents) behind in `/var/tmp/portage`.
+    // Link unconditionally now; `create_directories` skips the symlink
+    // (it must not `create_dir_all` through a dangling link).
     let real_filesdir = pkg_dir.join("files");
-    if pkg_dir != portage_builddir && real_filesdir.is_dir() {
-        let fake_filesdir = portage_builddir.join("files");
-        if std::fs::create_dir_all(&portage_builddir).is_ok() {
-            match std::fs::read_link(&fake_filesdir) {
-                Ok(target) => {
-                    if target != real_filesdir {
-                        let _ = std::fs::remove_file(&fake_filesdir);
-                        let _ = std::os::unix::fs::symlink(&real_filesdir, &fake_filesdir);
-                    }
-                }
-                Err(_) => {
-                    if !fake_filesdir.exists() {
-                        let _ = std::os::unix::fs::symlink(&real_filesdir, &fake_filesdir);
-                    }
-                }
-            }
-        }
+    if pkg_dir != portage_builddir {
+        ensure_fake_filesdir_link(&real_filesdir, &portage_builddir.join("files"));
     }
 
     Ok(Environment {
@@ -582,6 +576,43 @@ impl Environment {
 /// real fetch+unpack support, its own separately-scoped follow-up); this
 /// pre-creation only matters for exactly the empty-`SRC_URI` case this
 /// slice's own fixture (and any similarly source-less ebuild) exercises.
+/// Real `_prepare_fake_filesdir` (`prepare_build_dirs.py:504-515`) as a
+/// standalone step: `link_path` (`${PORTAGE_BUILDDIR}/files`) becomes a
+/// symlink to `target` (the repo package dir's `files/`), unconditionally
+/// -- dangling included, exactly like real.
+///
+/// Removal safety (the link target may live anywhere, including the repo
+/// itself): `symlink_metadata` never follows the link, so only the link
+/// entry (or a plain file) is ever `remove_file`d; a real directory --
+/// the pre-fix leftover shape, or anything a phase dropped -- is removed
+/// with `remove_dir_all`, but strictly bounded to this one known
+/// inside-the-builddir path (never a user path, never followed). The
+/// parent builddir is `create_dir_all`ed first so a first-ever build has
+/// somewhere to put the link.
+fn ensure_fake_filesdir_link(target: &Path, link_path: &Path) {
+    if link_path
+        .parent()
+        .is_some_and(|parent| std::fs::create_dir_all(parent).is_err())
+    {
+        return;
+    }
+    match std::fs::read_link(link_path) {
+        Ok(current) if current == target => {}
+        _ => {
+            match std::fs::symlink_metadata(link_path) {
+                Ok(meta) if meta.file_type().is_symlink() || meta.file_type().is_file() => {
+                    let _ = std::fs::remove_file(link_path);
+                }
+                Ok(_) => {
+                    let _ = std::fs::remove_dir_all(link_path);
+                }
+                Err(_) => {}
+            }
+            let _ = std::os::unix::fs::symlink(target, link_path);
+        }
+    }
+}
+
 fn create_directories(env: &Environment) -> Result<(), String> {
     for dir in [
         env.t(),
@@ -603,6 +634,16 @@ fn create_directories(env: &Environment) -> Result<(), String> {
         // `elog`/`ewarn`/`eerror` message if the dir doesn't exist.
         env.t().join("logging"),
     ] {
+        // `${PORTAGE_BUILDDIR}/files` is a symlink (possibly dangling --
+        // see `ensure_fake_filesdir_link`), never a directory to create:
+        // `create_dir_all` would follow a dangling link and fail (or
+        // worse, materialise the target). `symlink_metadata` does not
+        // follow. Anything else in this list is always a real dir.
+        if dir == env.filesdir()
+            && std::fs::symlink_metadata(&dir).is_ok_and(|m| m.file_type().is_symlink())
+        {
+            continue;
+        }
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
     Ok(())
@@ -5895,6 +5936,78 @@ mod tests {
         // Re-running must be idempotent (real unlinks a stale target).
         let env2 = compute_environment(&pkg_dir.join("patchpkg-1.0.ebuild"), &portage_tmp).unwrap();
         assert_eq!(std::fs::read_link(env2.filesdir()).unwrap(), expected);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn compute_environment_links_builddir_files_even_without_a_repo_filesdir() {
+        // Backlog #94: real `_prepare_fake_filesdir` links
+        // unconditionally -- a missing repo `files/` must yield a
+        // dangling symlink, never a plain directory (whose `rm -f` in
+        // `__dyn_clean` fails with "Is a directory" and aborts the
+        // rest of the cleanup under `set -e`, leaving `/var/tmp`
+        // residue -- host `emerge -1 sys-libs/timezone-data`).
+        let tmp = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-filesdir-missing",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let pkg_dir = tmp.join("repo/sys-libs/notimezonefiles");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(
+            pkg_dir.join("notimezonefiles-1.0.ebuild"),
+            "EAPI=8\nSLOT=0\n",
+        )
+        .unwrap();
+        assert!(!pkg_dir.join("files").exists());
+        let portage_tmp = tmp.join("ptmp");
+        let env =
+            compute_environment(&pkg_dir.join("notimezonefiles-1.0.ebuild"), &portage_tmp).unwrap();
+        assert_eq!(
+            std::fs::read_link(env.filesdir()).unwrap(),
+            pkg_dir.join("files")
+        );
+        assert!(
+            std::fs::symlink_metadata(env.filesdir())
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        // ... and `create_directories` must leave the dangling link
+        // alone instead of failing on it (or materialising the target).
+        create_directories(&env).unwrap();
+        assert!(
+            std::fs::symlink_metadata(env.filesdir())
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(!pkg_dir.join("files").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn compute_environment_replaces_a_stale_plain_filesdir_with_the_link() {
+        // Migration path for pre-fix residue: a plain directory left at
+        // builddir/files (the shape `__dyn_clean` choked on) becomes the
+        // symlink again instead of erroring.
+        let tmp = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-filesdir-stale-dir",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let pkg_dir = tmp.join("repo/dev-libs/dirpkg");
+        std::fs::create_dir_all(pkg_dir.join("files")).unwrap();
+        std::fs::write(pkg_dir.join("dirpkg-1.0.ebuild"), "EAPI=8\nSLOT=0\n").unwrap();
+        let portage_tmp = tmp.join("ptmp");
+        // Pre-seed the stale plain dir where the builddir will be.
+        let builddir = portage_tmp.join("portage/dev-libs/dirpkg-1.0");
+        std::fs::create_dir_all(builddir.join("files")).unwrap();
+        let env = compute_environment(&pkg_dir.join("dirpkg-1.0.ebuild"), &portage_tmp).unwrap();
+        assert_eq!(
+            std::fs::read_link(env.filesdir()).unwrap(),
+            pkg_dir.join("files")
+        );
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
