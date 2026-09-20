@@ -753,6 +753,36 @@ pub fn apply_updates_to_cp(category: &str, package: &str) -> (String, String) {
     }
 }
 
+/// Inverted `move` map: fully-resolved destination -> the `Move`
+/// commands' `old` cps that land on it, in command order.
+type InstalledCpSourcesMap = HashMap<(String, String), Vec<(String, String)>>;
+
+/// Inverted [`move_chain_map`]: `installed_cp_sources` used to replay the
+/// whole `profiles/updates/` list (one `apply_updates_to_cp` per command)
+/// on every call -- 6 M calls on a deep `emerge -pu`; this is built once,
+/// so the lookup is a single `HashMap` get. Same
+/// `OnceLock`-over-`global_package_updates()` shape as `move_chain_map`
+/// (so `--package-moves=n` -> empty list -> empty map).
+fn installed_cp_sources_map() -> &'static InstalledCpSourcesMap {
+    static MAP: OnceLock<InstalledCpSourcesMap> = OnceLock::new();
+    MAP.get_or_init(|| {
+        let mut map: InstalledCpSourcesMap = HashMap::new();
+        for cmd in global_package_updates() {
+            if let UpdateCmd::Move { old, .. } = cmd {
+                // `installed_cp_sources` pushes `old` exactly when its
+                // fully-resolved chain lands on the queried cp; group by
+                // that destination up front, in command order, deduped.
+                let dest = apply_updates_to_cp(&old.0, &old.1);
+                let bucket = map.entry(dest).or_default();
+                if !bucket.contains(old) {
+                    bucket.push(old.clone());
+                }
+            }
+        }
+        map
+    })
+}
+
 /// Every `cat/pkg` whose forward-`move` chain lands on `(category,
 /// package)` -- including `(category, package)` itself. Lets a vdb query
 /// for the *new* name also scan the *old*, not-yet-renamed directory
@@ -760,16 +790,8 @@ pub fn apply_updates_to_cp(category: &str, package: &str) -> (String, String) {
 pub fn installed_cp_sources(category: &str, package: &str) -> Vec<(String, String)> {
     let target = (category.to_string(), package.to_string());
     let mut out = vec![target.clone()];
-    for cmd in global_package_updates() {
-        if let UpdateCmd::Move { old, new } = cmd {
-            // If `old` currently maps (via the chain so far) to the
-            // target, its source dir is also a place to look.
-            let mapped = apply_updates_to_cp(&old.0, &old.1);
-            if mapped == target && !out.contains(old) {
-                out.push(old.clone());
-            }
-            let _ = new;
-        }
+    if let Some(extra) = installed_cp_sources_map().get(&target) {
+        out.extend(extra.iter().cloned());
     }
     out
 }
@@ -5592,8 +5614,67 @@ fn vercmp_ordering(a: &str, b: &str) -> Ordering {
 /// itself only ever uses `version`/`slot` from this (real
 /// `Atom(f"{pkg.cp}:{pkg.slot}")` never includes sub-slot either), so
 /// adding `sub_slot` here doesn't change its behavior at all.
+/// `st_mtime` of `p` in nanos, 0 when the path is missing or unreadable.
+/// The invalidation signal for the [`installed_candidates`] cache below:
+/// every portuale vdb mutation replaces or removes a package dir
+/// (`ebuild_merge::write_vdb_entry_from_dir` `remove_dir_all` + `rename`;
+/// unmerge removes the dir), so the *category* dir mtime catches all of
+/// them. An external in-place rewrite of a file inside a running process
+/// is not caught -- the same in-process-cache property real's `vardb`
+/// dbapi has; no portuale writer does it.
+fn dir_mtime_nanos(p: &Path) -> u64 {
+    fs::metadata(p)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_nanos() as u64)
+}
+
 pub fn installed_candidates(
     root: &Path,
+    category: &str,
+    package: &str,
+) -> Vec<(String, String, String)> {
+    // Per-`(root, cat, pkg)` memo of the scan below: a deep `emerge -pu`
+    // asks for the same few thousand cps over and over (12,684 calls on
+    // the reference workload), and every miss re-reads a whole category
+    // directory plus one `SLOT` file per entry. Validated by the mtime of
+    // each scanned category dir (1–2 `statx`, not ~80); negative results
+    // are cached too. Thread-local so the lookup stays lock-free.
+    type CandidatesCache =
+        HashMap<(PathBuf, String, String), (Vec<(PathBuf, u64)>, Vec<(String, String, String)>)>;
+    thread_local! {
+        static CANDIDATES_CACHE: RefCell<CandidatesCache> = RefCell::new(HashMap::new());
+    }
+    let sources = installed_cp_sources(category, package);
+    let pkgdir = root.join("var/db/pkg");
+    let mut fps: Vec<(PathBuf, u64)> = Vec::with_capacity(sources.len());
+    for (src_cat, _) in &sources {
+        let dir = pkgdir.join(src_cat);
+        if !fps.iter().any(|(d, _)| d == &dir) {
+            fps.push((dir.clone(), dir_mtime_nanos(&dir)));
+        }
+    }
+    let key = (
+        root.to_path_buf(),
+        category.to_string(),
+        package.to_string(),
+    );
+    if let Some((old_fps, out)) = CANDIDATES_CACHE.with(|c| c.borrow().get(&key).cloned())
+        && old_fps == fps
+    {
+        return out;
+    }
+    let out = installed_candidates_uncached(root, sources, category, package);
+    CANDIDATES_CACHE.with(|c| {
+        c.borrow_mut().insert(key, (fps, out.clone()));
+    });
+    out
+}
+
+fn installed_candidates_uncached(
+    root: &Path,
+    sources: Vec<(String, String)>,
     category: &str,
     package: &str,
 ) -> Vec<(String, String, String)> {
@@ -5604,11 +5685,16 @@ pub fn installed_candidates(
     // rewrites each hit's `(slot, sub_slot)`.
     let pkgdir = root.join("var/db/pkg");
     let mut out = Vec::new();
-    for (src_cat, src_pkg) in installed_cp_sources(category, package) {
+    for (src_cat, src_pkg) in sources {
         let Ok(entries) = portage_util::read_dir_entries(&pkgdir.join(&src_cat)) else {
             continue;
         };
-        for e in entries.into_iter().filter(|e| e.path().is_dir()) {
+        for e in entries.into_iter().filter(|e| {
+            // `d_type` fast path: a real directory needs no `statx`. The
+            // `path().is_dir()` fallback keeps exact semantics for
+            // symlinked entries and `DT_UNKNOWN` filesystems.
+            e.file_type().is_ok_and(|t| t.is_dir()) || e.path().is_dir()
+        }) {
             let name = e.file_name().to_string_lossy().to_string();
             let Some(version) = strip_version_prefix(&name, &src_pkg) else {
                 continue;
@@ -25675,6 +25761,62 @@ mod tests {
             std::fs::write(dir.join(name), bytes).unwrap();
         }
         root
+    }
+
+    /// Backlog #102 S1: `installed_candidates` serves repeats from its
+    /// per-cp cache and invalidates when the vdb changes (the category
+    /// dir mtime moves on every add/remove/replace of a package dir).
+    #[test]
+    fn installed_candidates_caches_per_cp_and_invalidates_on_vdb_change() {
+        let root = tmp_vdb("dev-libs", "cachetest-1.0", &[]);
+        let one = vec![("1.0".to_string(), "0".to_string(), "0".to_string())];
+        // First call scans; the repeat is a cache hit.
+        assert_eq!(installed_candidates(&root, "dev-libs", "cachetest"), one);
+        assert_eq!(installed_candidates(&root, "dev-libs", "cachetest"), one);
+        // A negative result is cached too.
+        assert!(installed_candidates(&root, "dev-libs", "nocachetest").is_empty());
+        // Adding a version bumps the category mtime and invalidates.
+        let dir = root
+            .join("var/db/pkg")
+            .join("dev-libs")
+            .join("cachetest-2.0");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("SLOT"), "0\n").unwrap();
+        let mut got = installed_candidates(&root, "dev-libs", "cachetest");
+        got.sort();
+        assert_eq!(
+            got,
+            vec![
+                ("1.0".to_string(), "0".to_string(), "0".to_string()),
+                ("2.0".to_string(), "0".to_string(), "0".to_string()),
+            ]
+        );
+        // Removing it invalidates back.
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(installed_candidates(&root, "dev-libs", "cachetest"), one);
+    }
+
+    /// Backlog #102 S1: the inverted `installed_cp_sources` map answers
+    /// exactly what the old per-call command loop did, on whatever
+    /// `profiles/updates/` the ambient repos carry (possibly none).
+    #[test]
+    fn installed_cp_sources_map_matches_the_command_loop() {
+        for (cat, pkg) in [
+            ("dev-libs", "cachetest-src"),
+            ("sys-libs", "glibc"),
+            ("virtual", "libc"),
+        ] {
+            let mut expected = vec![(cat.to_string(), pkg.to_string())];
+            for cmd in global_package_updates() {
+                if let UpdateCmd::Move { old, .. } = cmd {
+                    let mapped = apply_updates_to_cp(&old.0, &old.1);
+                    if mapped == expected[0] && !expected.contains(old) {
+                        expected.push(old.clone());
+                    }
+                }
+            }
+            assert_eq!(installed_cp_sources(cat, pkg), expected);
+        }
     }
 
     /// Backlog #86 S1: `live_metadata_for_installed` reads the
