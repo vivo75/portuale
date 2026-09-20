@@ -40,18 +40,20 @@ url = "https://github.com/vivo75/brush"
 kind = "cargo-git-dependency"
 checkout_path = "3rdparty/brush"
 ref = "main"
-commit = "b9524ad51de5c8231eb5dcaf79ca982841117385"
+commit = "4edb1f432b332c9f15377e4867ae686c4243f27c"
 pinned_in = "rust/portuale/Cargo.toml"
-pinned_at = "2026-09-14"
+pinned_at = "2026-09-20"
 tracking_doc = "docs/brush-pin.md"
 # Thin fork (since 2026-09-05): vivo75/brush `main` = upstream
-# reubeno/brush `main` (25bffd54) + the five staged docs/brush-pr/
-# fixes, nothing else; exact-commit pinned (no released crates.io
-# version carries them, nor reubeno/brush#1274, which portuale's use of
-# bin/eapi.sh needs). Drop the fork once the PRs land. Cargo.toml
-# fetches this via git; the 3rdparty/brush checkout (origin = vivo75,
-# upstream = reubeno) holds the per-bug fix/* branches. Re-pin
-# periodically -- see docs/brush-pin.md's checklist.
+# reubeno/brush `main` (6bada559) + the four still-carried
+# docs/brush-pr/ fixes + fix 05's regression test (its implementation
+# is upstream now, reubeno/brush#988), nothing else; exact-commit
+# pinned (no released crates.io version carries them, nor
+# reubeno/brush#1274, which portuale's use of bin/eapi.sh needs). Drop
+# the fork once the PRs land. Cargo.toml fetches this via git; the
+# 3rdparty/brush checkout (origin = vivo75, upstream = reubeno) holds
+# the per-bug fix/* branches. Re-pin periodically -- see
+# docs/brush-pin.md's checklist.
 notes = "Back to vivo75/brush (a fork) Operator will manually follow upstream at reubeno/brush"
 
 [portage-cli]

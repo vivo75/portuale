@@ -592,28 +592,36 @@ ANSI USE colour all shipped 2026-09-05, see `what-this-proves.md`'s
 
 ### G. Shell backend
 
-- **Track B shipped (2026-09-14).** Five `brush` bugs found running real
-  portage phases — here-tag tokenizer corruption, `declare -f`
-  here-document serialization (incl. quoted tags), the pipeline-function
-  deadlock, fatal-on-parse-error `source`, and IFS-dependent brace
-  expansion — are fixed on per-bug `fix/*` branches, carried in the
-  thin-fork pin `b9524ad5`, and written up with `git format-patch`
-  exports in `docs/brush-pr/`. The compiled-ebuild smoke that motivated
-  it is green (see `docs/brush-pin.md` "Current pin" and
-  `what-this-proves.md`'s Track-B section). **Open:** open the five
-  upstream PRs (user's GitHub auth, B6), then drop the fork and revisit
-  the `--shell` default.
+- **Track B shipped (2026-09-14; re-pinned 2026-09-20).** Five `brush`
+  bugs found running real portage phases — here-tag tokenizer
+  corruption, `declare -f` here-document serialization (incl. quoted
+  tags), the pipeline-function deadlock, fatal-on-parse-error `source`,
+  and IFS-dependent brace expansion — are fixed on per-bug `fix/*`
+  branches, written up with `git format-patch` exports in
+  `docs/brush-pr/`. The re-pin moved the thin fork to upstream
+  `6bada559`: fixes 01–04 are carried (`4edb1f43`) and fix 05's
+  implementation was superseded by upstream's own IFS rework
+  ([#988](https://github.com/reubeno/brush/pull/988)), so only its
+  `IFS=` regression test remains. The compiled-ebuild smoke that
+  motivated Track B is green (see `docs/brush-pin.md` "Current pin" and
+  `what-this-proves.md`'s Track-B section). **Open:** open the four
+  still-relevant upstream PRs (user's GitHub auth, B6), then drop the
+  fork and revisit the `--shell` default.
 - the phase-execution default stays `bash`, not the embedded `brush`:
   flipping it back is a separate owner decision after the PRs land.
 - **Sixth brush incompatibility found 2026-09-20 (backlog #94):**
   declaration builtins (`export`/`declare`/`local`) never
   assignment-expand a non-literal name, so `export ${var}=value` is a
-  silent no-op (upstream `reubeno/brush` main `6bada559` still
-  affected). Real `toolchain-funcs.eclass::_tc-getPROG` sets the
-  compiler vars this way, so `--shell brush` fails `tc-check-openmp`
-  consumers in `pkg_pretend` (live: `media-gfx/gimp`). Another
-  independent blocker to the default flip; details in `brush-pin.md`
-  "What is *not* tracked here".
+  silent no-op (upstream `reubeno/brush` main `6bada559` — the current
+  pin's base — still affected). Real
+  `toolchain-funcs.eclass::_tc-getPROG` sets the compiler vars this
+  way, so `--shell brush` fails `tc-check-openmp` consumers in
+  `pkg_pretend` (live: `media-gfx/gimp`). Upstream's open, breaking
+  [#1280](https://github.com/reubeno/brush/pull/1280) ("centralize
+  assignment expansion + overhaul declaration builtins") is the fix
+  path; it is not carried in the fork. Another independent blocker to
+  the default flip; details in `brush-pin.md` "What is *not* tracked
+  here".
 - periodic re-pin to keep up with upstream `reubeno/brush` `main` (see
   `brush-pin.md`'s checklist).
 

@@ -1,5 +1,12 @@
 # 05 — brace expansion: fields must not depend on IFS
 
+> **Status 2026-09-20: superseded by upstream
+> [#988](https://github.com/reubeno/brush/pull/988) "improve IFS support"
+> (`411b9a32`), which reworked brace expansion to produce its fields on
+> its own. The fork no longer carries this patch — only its
+> `IFS=`/`IFS=:` regression case remains (`4edb1f43`, test-only) — and
+> no upstream PR is needed. Kept as the bug's write-up and patch record.**
+
 **Crate:** `brush-core` · **Files:** `src/expansion.rs`, `src/braceexpansion.rs` (unchanged) (+ `brush-shell/tests/cases/compat/word_expansion/braces.yaml`, `tilde.yaml`) · **Patch:** [`patches/05-brace-expansion-ifs.patch`](patches/05-brace-expansion-ifs.patch)
 
 ## Symptom

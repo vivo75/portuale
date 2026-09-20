@@ -1,33 +1,41 @@
 # brush upstream fixes — staged for submission
 
-Five independent fixes for [`reubeno/brush`](https://github.com/reubeno/brush),
+Four independent fixes for [`reubeno/brush`](https://github.com/reubeno/brush),
 found while running real Gentoo `bin/*.sh` / eclasses through brush as portuale's
-bash backend. **Not yet submitted upstream** — review, then open PRs.
+bash backend. **Not yet submitted upstream** — review, then open PRs. (A fifth
+fix, 05, was superseded by upstream's own IFS rework, #988; see its row.)
 
-In the local `3rdparty/brush` checkout (rebased 2026-09-14 onto upstream
-`main` `25bffd54`, `brush-v0.4.0-*`):
+In the local `3rdparty/brush` checkout (fixes rebased 2026-09-20 onto
+upstream `main` `6bada559`, `brush-v0.4.0-*`):
 
 | # | branch | commit | Area | One-liner |
 |---|--------|--------|------|-----------|
-| [01](01-tokenizer-nested-construct-heredoc.md) | `fix/tokenizer-nested-construct-heredoc` | `bc99e6c1` | `brush-parser` tokenizer | A `${…}` / `$(…)` / `$((…))` on a here-tag line has its sub-tokens stolen by the pending here-document, corrupting the enclosing word (and, for `<<${VAR}`, the tag). |
-| [02](02-ast-heredoc-serialization.md) | `fix/declare-f-heredoc-serialization` | `df830c59` | `brush-parser` AST `Display` | `declare -f` of a function with a here-document produces output that neither bash nor brush can re-parse (redirect ordering, body indentation, quoted terminators), + smaller mismatches that make `declare -f` non-idempotent. Also drops the now-unused `indenter` dep. |
-| [03](03-pipeline-function-deadlock.md) | `fix/function-pipeline-stage-deadlock` | `962051c9` | `brush-core` command exec | A function used as a non-last pipeline stage runs to completion inline before the next stage spawns → deadlocks past one pipe buffer. (Re-do of the never-merged #1276.) |
-| [04](04-dot-parse-error-status.md) | `fix/dot-parse-error-status` | `dfbca97c` | `brush-core` `source` | A parse error in a *sourced* file was fatal to the calling shell (and its `source … \|\| …` guard never ran). bash returns 2 and keeps going. |
-| [05](05-brace-expansion-ifs.md) | `fix/brace-expansion-ifs-independent` | `2073877d` | `brush-core` expansion | Brace expansion joined its alternatives with spaces and relied on IFS field splitting, so `{A..C}` collapsed to one word under `IFS=`/`IFS=:`. |
+| [01](01-tokenizer-nested-construct-heredoc.md) | `fix/tokenizer-nested-construct-heredoc` | `995cfbf4` | `brush-parser` tokenizer | A `${…}` / `$(…)` / `$((…))` on a here-tag line has its sub-tokens stolen by the pending here-document, corrupting the enclosing word (and, for `<<${VAR}`, the tag). |
+| [02](02-ast-heredoc-serialization.md) | `fix/declare-f-heredoc-serialization` | `fa046cc5` | `brush-parser` AST `Display` | `declare -f` of a function with a here-document produces output that neither bash nor brush can re-parse (redirect ordering, body indentation, quoted terminators), + smaller mismatches that make `declare -f` non-idempotent. Also drops the now-unused `indenter` dep. |
+| [03](03-pipeline-function-deadlock.md) | `fix/function-pipeline-stage-deadlock` | `2173b730` | `brush-core` command exec | A function used as a non-last pipeline stage runs to completion inline before the next stage spawns → deadlocks past one pipe buffer. (Re-do of the never-merged #1276.) |
+| [04](04-dot-parse-error-status.md) | `fix/dot-parse-error-status` | `d0249524` | `brush-core` `source` | A parse error in a *sourced* file was fatal to the calling shell (and its `source … \|\| …` guard never ran). bash returns 2 and keeps going. |
+| [05](05-brace-expansion-ifs.md) | ~~`fix/brace-expansion-ifs-independent`~~ | `4edb1f43` | `brush-core` expansion | **Superseded by upstream [#988](https://github.com/reubeno/brush/pull/988) "improve IFS support" (`411b9a32`), which made brace expansion produce its fields independently of IFS.** No PR needed; only the `IFS=`/`IFS=:` regression case that rework missed remains on the fork (`4edb1f43`, test-only). |
 
-Each branch is exactly one commit on current upstream `main`. `vivo75/brush`'s
-`main` carries all five cherry-picked (`840ea40f` → `1132297d` → `10a455d8` →
-`8850b943` → `b9524ad5`); **portuale is pinned to that main, `b9524ad5`**
-(re-pinned 2026-09-14), so it already builds against these fixes. See
-[`../brush-pin.md`](../brush-pin.md) "Current pin".
+Each fix commit is exactly one commit on current upstream `main`. `vivo75/brush`'s
+`main` carries the four fixes plus 05's regression test (`995cfbf4` → `fa046cc5`
+→ `2173b730` → `d0249524` → `4edb1f43`); **portuale is pinned to that main,
+`4edb1f43`** (re-pinned 2026-09-20), so it already builds against these fixes.
+See [`../brush-pin.md`](../brush-pin.md) "Current pin".
+
+The per-bug `fix/*` branches on `vivo75/brush` still point at their old
+`25bffd54`-based commits (`bc99e6c1`, `df830c59`, `962051c9`, `dfbca97c`,
+`2073877d`); rebase each onto current `upstream/main` before opening its PR
+(the rebased commits already exist on the fork's `main`).
 
 `patches/*.patch` are `git format-patch` exports of the branch commits (carry the
 full messages; `git am` them, or submit each branch as its own PR — still to do).
 
 ## Opening the PRs (user-owned; B6)
 
-One PR per branch, from the already-pushed `vivo75/brush` refs. Run from this
-repo root (or adjust `--body-file` paths):
+Four PRs — fix 05 is superseded by #988 and needs none. Rebase each `fix/*`
+branch onto current `upstream/main` first (or push the already-rebased commits
+from the fork's `main` as the branch), then run from this repo root (or adjust
+`--body-file` paths):
 
 ```sh
 gh pr create -R reubeno/brush --head vivo75:fix/tokenizer-nested-construct-heredoc \
@@ -42,9 +50,6 @@ gh pr create -R reubeno/brush --head vivo75:fix/function-pipeline-stage-deadlock
 gh pr create -R reubeno/brush --head vivo75:fix/dot-parse-error-status \
   --title "fix(core): don't exit the calling shell on a \`source\` parse error" \
   --body-file docs/brush-pr/04-dot-parse-error-status.md
-gh pr create -R reubeno/brush --head vivo75:fix/brace-expansion-ifs-independent \
-  --title "fix(expansion): make brace expansion produce fields independently of IFS" \
-  --body-file docs/brush-pr/05-brace-expansion-ifs.md
 ```
 
 Also decide [#1276](https://github.com/reubeno/brush/pull/1276) (the old,
@@ -53,22 +58,24 @@ superseded by fix 03; the branch `fix/pipeline-function-stage-deadlock2` is
 still on `vivo75/brush` for reference. Record the resulting PR URLs here and
 in [`../brush-pin.md`](../brush-pin.md).
 
-## Verification (all five applied)
+## Verification (2026-09-20 re-pin, fixes 01–04 + 05's regression test)
 
 - `cargo test -p brush-parser` / `-p brush-core` — green.
 - `cargo clippy -p brush-parser -p brush-core --all-targets` — clean.
-- `cargo test --test brush-compat-tests` — **2504 ran, 2023 succeeded,
-  0 unexpected failures**, 481 known-to-fail, 29 skipped. The delta over the
-  previous pin is the new regression cases (quoted here-tags, `source` parse
-  errors, brace expansion under empty IFS) plus one previously-known failure
-  (`echo ~/{a,b}`) that now passes and was unmarked.
-- Ad-hoc: every function in all **211** Gentoo eclasses round-trips through
-  `declare -f` → `eval` → `declare -f` with **0** parse failures, **0** eval
-  failures, **0** non-idempotent results, plus one synthetic function per
-  quoted here-tag form. Sweep on pristine upstream `25bffd54`: 41 eclasses
-  never parsed, 20 round-trip failures among the 1407 functions that did.
+- `cargo test --test brush-compat-tests` — **2568 ran, 2099 succeeded,
+  0 unexpected failures**, 469 known-to-fail, 29 skipped. The delta over the
+  2026-09-14 pin (2504 / 2023 / 0 / 481 / 29) is upstream's new cases and
+  its #988 IFS rework (which unmarked more known failures).
+- Ad-hoc (2026-09-14 pin): every function in all **211** Gentoo eclasses
+  round-trips through `declare -f` → `eval` → `declare -f` with **0** parse
+  failures, **0** eval failures, **0** non-idempotent results, plus one
+  synthetic function per quoted here-tag form. Sweep on pristine upstream
+  `25bffd54`: 41 eclasses never parsed, 20 round-trip failures among the
+  1407 functions that did.
+- `cargo test --release -p portuale` — 542 passed / 0 failed, incl. the
+  `install_does_not_deadlock…` guard.
 
-## Before / after (pristine `25bffd54` worktree vs. `main` with all five)
+## Before / after (pristine `25bffd54` worktree vs. `main` with the fixes)
 
 Real portage phase-boundary flow — `source` a stack of eclasses
 (`multilib` / `toolchain-funcs` / `flag-o-matic`; ~170 functions),

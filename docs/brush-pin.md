@@ -30,41 +30,65 @@ portage's own upstream base included) in sync too.
 | | |
 |---|---|
 | Repo | `https://github.com/vivo75/brush` (thin fork of `reubeno/brush`) |
-| Rev | `b9524ad51de5c8231eb5dcaf79ca982841117385` |
+| Rev | `4edb1f432b332c9f15377e4867ae686c4243f27c` |
 
-`b9524ad5` = `reubeno/brush@25bffd54` + the five `brush-pr/` fixes,
-cherry-picked in order (`840ea40f`, `1132297d`, `10a455d8`, `8850b943`,
-`b9524ad5`; the per-bug branches carry the same patches as single commits
-— `bc99e6c1`, `df830c59`, `962051c9`, `dfbca97c`, `2073877d`). Frozen in
-`Cargo.lock` too (`brush-core` 0.5.0 / `brush-builtins` / `brush-parser`,
-three `git+https://github.com/vivo75/brush?rev=b9524ad5…` source lines).
+`4edb1f43` = `reubeno/brush@6bada559` + the four still-carried
+`brush-pr/` fixes, cherry-picked in order (`995cfbf4` fix 01, `fa046cc5`
+fix 02, `2173b730` fix 03, `d0249524` fix 04) + fix 05's regression
+coverage (`4edb1f43`). Fix 05's *implementation* is no longer carried:
+upstream's own IFS rework (`411b9a32`,
+[#988](https://github.com/reubeno/brush/pull/988) "improve IFS
+support") superseded it, and the fork keeps only the `IFS=`/`IFS=:`
+regression case that rework did not cover. Frozen in `Cargo.lock` too
+(`brush-core` 0.5.0 / `brush-builtins` / `brush-parser`, three
+`git+https://github.com/vivo75/brush?rev=4edb1f43…` source lines).
 
 Re-pinned 2026-09-14 (Tier 1, Track B): upstream `main` moved `812336dd`
 → `25bffd54` (reedline 0.51; MSRV 1.95 for the interactive crates only)
-and every fix branch was rebased onto it. This re-pin carries three new
+and every fix branch was rebased onto it. That re-pin carried three new
 fixes over the previous one: 02's quoted-here-tag terminator repair (B1
 of `history/backlog_tier_1_sliced.opus.md`), the `source`-parse-error status fix
-(B2), and IFS-independent brace expansion (B3). Verified on the new pin:
+(B2), and IFS-independent brace expansion (B3). Verified on that pin:
 brush's own `brush-compat-tests` 2504 ran, 2023 succeeded / 0 unexpected
 failures / 481 known-fail / 29 skipped — one previously-known failure
 (`echo ~/{a,b}`) now passes and was unmarked; the ad-hoc eclass sweep
 round-trips 2054 functions in all 211 eclasses plus one synthetic
 function per quoted here-tag form with 0 failures (same sweep on
 upstream `main`: 20 round-trip failures among 1407 functions, 41
-eclasses never parsed). `cargo test --release -p portuale` and the full
-pytest suite are green (details in the slice notes below). The five
-staged fixes are still unmerged upstream (checked each branch tip), so
-the thin fork stays; the per-bug `fix/*` branches are staged for the
-unopened upstream PRs.
+eclasses never parsed).
+
+Re-pinned 2026-09-20 (recurring, `backlog-tasks.md` #6): upstream `main`
+moved `25bffd54` → `6bada559` (#988 IFS rework, `--` end-of-options,
+`kill -0`, e2e suites, uucore 0.12) and every still-needed fix was
+rebased onto it. `git range-diff` shows fixes 01–04 byte-identical to
+their old commits. Verified on the new pin: brush's own
+`brush-compat-tests` 2568 ran, 2099 succeeded / **0 unexpected
+failures** / 469 known-fail / 29 skipped (previous pin: 2504 / 2023 / 0
+/ 481 / 29); `cargo test --release -p portuale` 542 passed / 0 failed
+(incl. the deadlock guard), the whole-workspace `cargo test --release`
+1186 passed / 0 failed, `cargo fmt --check` and `cargo clippy --release
+--all-targets` clean, and the pmtest contract suite 1737 passed / 3
+failed — the three being the pre-existing `--package-moves=n`
+pinned-output red on current `main`, reproduced identically with the
+pre-re-pin binary and unrelated to brush. The four staged fixes are
+still unmerged upstream (checked each branch tip), so the thin fork
+stays. Backlog #94 (`export ${var}=value` is a silent no-op) is still
+unfixed on this pin — upstream's open, breaking
+[#1280](https://github.com/reubeno/brush/pull/1280) ("centralize
+assignment expansion + overhaul declaration builtins") is its fix path
+and is deliberately not carried here.
 
 > The gitignored **`3rdparty/brush/` working checkout** tracks the same
 > `main` (`origin` = `vivo75/brush`, `upstream` = `reubeno/brush`), plus
-> the five per-bug branches
+> the per-bug branches
 > `fix/tokenizer-nested-construct-heredoc` /
 > `fix/declare-f-heredoc-serialization` /
 > `fix/function-pipeline-stage-deadlock` /
 > `fix/dot-parse-error-status` /
 > `fix/brace-expansion-ifs-independent` staged for upstream submission.
+> Their tips still sit on the old `25bffd54` base — rebase each onto
+> current `upstream/main` before opening its PR. Fix 05 is superseded by
+> #988 and no longer needs one.
 
 ## The two fixes the fork used to carry
 
@@ -233,9 +257,11 @@ failures among 1407 functions, 41 eclasses never parsed); `cargo test
 --release -p portuale` green against the new pin (incl. the
 `install_does_not_deadlock…` guard and the new B2/B3 regressions).
 
-**Still to do:** open the five upstream PRs; once merged, re-pin to
-`reubeno/brush` directly (dropping the thin fork) and reconsider flipping
-the `--shell` default back to `brush`.
+**Still to do:** open the four upstream PRs (fix 05 is superseded by
+#988 and no longer needs one); once merged, re-pin to `reubeno/brush`
+directly (dropping the thin fork) and reconsider flipping the `--shell`
+default back to `brush` — which also waits on #94's upstream fix
+([#1280](https://github.com/reubeno/brush/pull/1280), open).
 
 ## What is *not* tracked here
 
@@ -265,11 +291,16 @@ construct, `brush strategy #2` style — and get recorded here.
   "#38 S2" and `docs/what-this-proves.md`'s Track-B slice note.
 
 - **2026-09-20 — declaration builtins never assignment-expand an expanded
-  name (`export ${var}=value`). OPEN upstream; sixth staged-fix
-  candidate, backlog #94.** `var=CC; prog=( gcc ); export
-  ${var}="${prog[*]}"` leaves `CC` empty (exit 0) instead of `gcc`, on
-  the pin (`b9524ad5`) and on upstream `reubeno/brush` main
-  (`6bada559`, built and run 2026-09-20) alike. brush's parser only
+  name (`export ${var}=value`). OPEN upstream; backlog #94.** `var=CC;
+  prog=( gcc ); export ${var}="${prog[*]}"` leaves `CC` empty (exit 0)
+  instead of `gcc`, on the old pin (`b9524ad5`) and on upstream
+  `reubeno/brush` main (`6bada559`, built and run 2026-09-20) alike —
+  and still on the current pin (`4edb1f43`), which is the same upstream
+  base. Upstream's open, breaking
+  [#1280](https://github.com/reubeno/brush/pull/1280) ("fix(core)!:
+  centralize assignment expansion + overhaul declaration builtins") is
+  the fix path; it is deliberately not carried in the fork. brush's
+  parser only
   recognizes a syntactically literal assignment name
   (`brush-parser/src/word.rs:1263`), so the word reaches the builtin as
   `CommandArg::String`; `export`'s `String` branch

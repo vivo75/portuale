@@ -16573,6 +16573,40 @@ unparsed and fails 20 of the 1407 functions it does parse. Evidence:
 `docs/brush-pin.md` "Current pin", `docs/brush-pr/` (five write-ups +
 patches), `TEST/findings/l2.md` "#38 S2".
 
+**brush re-pin to upstream `6bada559` (recurring, backlog #6, 2026-09-20).**
+The thin fork's `main` was rebased from upstream `25bffd54` to `6bada559`
+and portuale re-pinned to `4edb1f43`; `git range-diff` shows fixes 01–04
+byte-identical to their old commits, and fix 05's implementation is no
+longer carried because upstream's own IFS rework (`411b9a32`,
+[#988](https://github.com/reubeno/brush/pull/988) "improve IFS support")
+superseded it — only its `IFS=`/`IFS=:` regression case stays, and it
+passes on the new pin. The new base brings the `--` end-of-options fix,
+`kill -0`, the e2e suites and uucore 0.12 transitively; backlog #94
+(`export ${var}=value` is a silent no-op under brush: the declaration
+builtins never assignment-expand an expanded name) is still unfixed on
+it, with upstream's open, breaking
+[#1280](https://github.com/reubeno/brush/pull/1280) as its fix path —
+deliberately not carried in the fork. Verified: `cargo fmt --check`
+clean, `cargo clippy --release --all-targets` zero warnings,
+whole-workspace `cargo test --release` 1186 passed / 0 failed (incl.
+`cargo test --release -p portuale` 542/0 and the
+`install_does_not_deadlock…` guard), brush's own `brush-compat-tests`
+2568 ran / 2099 succeeded / **0 unexpected failures** / 469 known-fail /
+29 skipped (previous pin: 2504 / 2023 / 0 / 481 / 29), and the pmtest
+contract suite 1737 passed / 3 failed — the three are the pre-existing
+`--package-moves=n` pinned-output red on current `main`, reproduced
+identically with the pre-re-pin binary and unrelated to brush.
+
+```sh
+grep -A1 'name = "brush-core"' rust/Cargo.lock | grep source
+# -> git+https://github.com/vivo75/brush?rev=4edb1f432b332c9f15377e4867ae686c4243f27c#4edb1f432b332c9f15377e4867ae686c4243f27c
+
+cargo test --release -p portuale install_does_not_deadlock
+# (from 3rdparty/brush, the checkout of the same rev)
+cargo test --release -p brush-core test_brace_expansion_does_not_depend_on_ifs
+# -> both green
+```
+
 **`[use]`-dep unsat diagnostics: real's separate "no ebuilds built with USE flags" block (backlog #20, 2026-09-14).** Real `_show_unsatisfied_dep` has two dependency-failure disclosures: the masked block (shipped with #19) and, for a `[use]`-dep atom no autounmask flip can fix, the separate `emerge: there are no ebuilds built with USE flags to satisfy "<atom>".` + `!!! One of the following packages is required…` block with `- <cpv>::<repo> (<reason>)` rows (`Change USE: +flag -flag` for flags the candidate could flip; `Missing IUSE: <flags>` when a required flag is not a valid IUSE flag at all), real's "only show the latest version" reduction for the `Change USE:` path (`depgraph.py:6876-6890`), and the shared `(dependency required by …)` chain. Both languages in lockstep: `portage-repo::UseUnsatDepReport` + the `use_unsat_candidates_for_atom` scan (version/slot match with USE ignored, visible candidates only, real's descending-version order, the `use.mask`/`use.force`-pinned skip, declaration-order flags), carried on `GraphResult::use_unsat_deps`, rendered ahead of the masked block (real's precedence) in `pretend.rs`/`emerge_pretend_reference.py`, chain walked by the existing `masked_dep_chain`. Oracle captures against real 3.0.81.3 on the fixture tree for both reason kinds and the latest-only rule; the two existing pins were re-pinned to the block text and two new fixtures (`dev-libs/unsatuseiuse` → `Missing IUSE: noiuse`; `dev-libs/unsatusealtmultidep` → only `unsatusealtmulti-2.0`). Six pre-existing pins whose fixtures hit the USE path were re-pinned too, two of them after the oracle showed the parent-conditional row (implemented: `use_unsat_parent_row`, the `[eqflag=]`/`useeqparentoffpkg` shape) and one after repairing `dev-libs/useflagpkg`'s ebuild, which had lost the `IUSE` line its committed cache still carried (real regenerated the fixture metadata, parsed the ebuild as invalid and showed the masked block). A dependency's block prints on exit 1 whenever its requirer is merge-bound, matching real; the `--deep` walk into an *installed* requirer keeps its pre-existing divergence (real still prints the block and exits 1, portuale prints the block and exits 0 with the list -- the #19 merge-bound abort rule, pinned as such by `test_deep_walk_dispatches_or_group_through_the_same_unsat_use_bins_as_the_main_walk`). Documented narrowings (same #19 park): no parent-conditional `Change USE:` row on the *requirer*, no masked-candidate suppression of the `Missing IUSE:` fallback, no `for <root>` atom suffix.
 
 ```sh

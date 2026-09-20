@@ -448,19 +448,24 @@ Rust bash (`reubeno/brush`). Outcome:
   vs embedded `brush_core::Shell`). **The default is `bash`** — brush's
   `declare -f` used to corrupt real eclass functions with redirected
   here-docs (`toolchain-funcs`), breaking `emerge <atom>` for compiled
-  packages. The fixes are staged and in the pin (2026-09-14), but flipping
-  the default back to brush stays a separate owner decision until the
-  upstream PRs land; brush remains opt-in and static-musl-friendly.
+  packages. The fixes are staged and in the pin (re-pinned 2026-09-20 to
+  upstream `6bada559`: fixes 01–04 carried, fix 05 superseded by
+  upstream #988 and kept as regression coverage only), but flipping the
+  default back to brush stays a separate owner decision until the
+  upstream PRs land and backlog #94's upstream fix
+  ([#1280](https://github.com/reubeno/brush/pull/1280)) is in; brush
+  remains opt-in and static-musl-friendly.
 - Upstream brush bugs found running real phases (all fixed on per-bug
   `fix/*` branches, staged for upstream, carried in the pin): brace-less
   function definitions — **merged** as
   [#1274](https://github.com/reubeno/brush/pull/1274); here-tag tokenizer
   corruption; `declare -f` here-document serialization (incl. quoted
   tags); a pipeline-function-stage deadlock; a `source` parse error
-  exiting the caller; and IFS-dependent brace expansion. The pin is a
-  **thin `vivo75/brush` fork** = upstream `main` + the five cherry-picked
-  fixes (`docs/brush-pr/`), merged from upstream periodically; drop the
-  fork once the PRs land.
+  exiting the caller; and IFS-dependent brace expansion (whose
+  implementation upstream's own #988 superseded — only its regression
+  test is still carried). The pin is a **thin `vivo75/brush` fork** =
+  upstream `main` + the four still-cherry-picked fixes (`docs/brush-pr/`),
+  merged from upstream periodically; drop the fork once the PRs land.
 - `rusty_bash` was ruled out (not an embeddable library).
 
 **[`brush-pin.md`](brush-pin.md) is the source of truth for the current
