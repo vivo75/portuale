@@ -218,6 +218,32 @@ needs to), is in `docs/glep-compliance-review.md`. Two genuine, narrow gaps:
 
 ---
 
+## Tier 8 — resolver performance (filed 2026-09-20)
+
+Profile of `portuale emerge -puD --getbinpkg net-libs/rest` on this host
+(2088 installed packages; real Portage 3.0.82.2) at `ce68f77`: portuale
+7.71–7.92 s wall / 5.79–6.00 s user / 1.83–1.92 s sys vs real
+5.70–5.89 s / 4.97–5.00 s / 0.19–0.24 s. The remaining cost is not the
+graph walk but per-visit recomputation and vdb re-scanning: 1.20 M
+`statx` (906,881 of them from `installed_candidates` scans), 6.05 M
+`apply_updates_to_cp`, 71,572 `effective_use_flags` calls each cloning
+its memoised set. Every entry is **output-preserving** — byte-identical
+output over the existing contract suite + harvested corpus is the guard
+— and re-measures the same workload; `performances-tuning.md` carries
+the numbers. Plan for #102–#104:
+[`08.102-107-perf-memoisation.md`](08.102-107-perf-memoisation.md).
+Tag [P] = performance; detail lives in `performances-tuning.md`, not a
+`scope-backlog.md` section.
+
+102. **`installed_candidates` re-scans the vdb on every call (12,684 calls → 906,881 dir entries stat'ed, ~110 k `SLOT` reads, 6.05 M `apply_updates_to_cp`).** `portage-repo/src/lib.rs::installed_candidates` (`:5595`) does `read_dir_entries(var/db/pkg/<cat>)` + `e.path().is_dir()` (one `statx` per entry) + `SLOT` reads, and `installed_cp_sources` (`:760`) replays every `profiles/updates/` move through `apply_updates_to_cp` (`:749`) on every call — the whole ~1.9 s sys plus ~0.5–1.0 s user (`binary_deps_changed` 10.7 % + direct `installed_candidates` 4.5 %). Fix: cache per `(root, cat, pkg)` validated by the scanned category dirs' mtimes (every portuale vdb mutation replaces or removes the package dir: `ebuild_merge::write_vdb_entry_from_dir` `ebuild_merge.rs:2387-2390`), invert `installed_cp_sources` to a one-time reverse map, and use `DirEntry::file_type()` instead of `path().is_dir()`. The merge path reads it (`bind_slot_operator`, `inject_libc_dep`), so the glibc+bash safety gate applies. Plan S1. [P]
+103. **`effective_use_flags` clones its memoised `HashSet` on every call.** 71,572 calls / 70,237 hits × ~200 flags ≈ 14 M `String` clones (`portage-repo/src/lib.rs:3178`: `hit.as_ref().clone()`); `HashSet<String>::clone` is 2.46 % flat plus a large malloc/memmove/SipHash share. Fix: return `Rc<HashSet<String>>` (the shape `read_md5_cache`/`list_candidates` already use with `Arc`), auditing the ~31 call sites (~15 production). Plan S2. [P]
+104. **`resolved_use_mask_or_force` is recomputed per candidate (29,774 calls → 826,643 `config_entries_matching`).** `portage-repo/src/lib.rs:3602` walks every `use_mask_force_levels` entry and rebuilds the set each time (twice per `forced_or_masked_flags_unfiltered`, 13,433 calls); 23 % of the run sits under `binpkg_respect_use_ok`, 9.9 % in this function. Fix: memoise on `(which, stable, candidate_str, config fingerprint)` — `use_mask_force_levels` is fixed at config resolution (`portage-profile/src/lib.rs:3373`) and only `autounmask_use` mutates during backtracking (not read here). Plan S3. [P]
+105. **`use_context_fingerprint` re-hashes ~20 config fields on every `effective_use_flags` call (71,572 calls, ~8 % of the run: closure 3.4 + `hash_sampled` 2.6 + 2.0).** `portage-repo/src/lib.rs:3239`; cache the immutable part per config generation (bump it on the `'backtrack` loop's `autounmask_use` mutation) instead of re-hashing the big `HashSet`s for every EUF key. Plan §5. [P]
+106. **`candidate_positions` allocates, extends and sorts per call (826,643 calls, 99.99 % `cp_bucket_index` hits).** `portage-repo/src/lib.rs:2939` does `format!("{category}/{package}")` + `Vec` clone + `extend_from_slice(other)` + `sort_unstable` on every lookup while the index itself is already cached. Fix: key `by_cp` by `(String, String)` (or a stack `cat/pkg` buffer) and/or return a borrowed iterator. Fold into #104 if cheap. Plan §5. [P]
+107. **The backtracking loop runs a second full `run_pass` where real reports `backtrack: 0/20` (≈30 % of the run).** On the §1 workload portuale's feedback loop restarts (`--backtrack=0` cuts user 5.87 → 4.11 s) while real resolves in one pass; the trigger is the libdisplay-info blocker the #68 blocker family already owns. This is an **algorithmic/parity** item, not memoisation: do not win it by skipping the pass (that silently changes which run is reported). Diagnose the feedback trigger against real's `_backtrack_depgraph` and decide with the owner. Plan §5 (rule in §4). [P]
+
+---
+
 ## Deliberate cuts — do NOT pick these (documented non-goals)
 
 - Backtrack **timing** report line `Dependency resolution took X s (backtrack: N/M)` — non-deterministic, portuale is a deterministic tool. [A]

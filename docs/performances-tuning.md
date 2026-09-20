@@ -394,3 +394,16 @@ backtracker combined are <1.5 %: the memo caches hold.
 Next step, in order: item 2 first (per-cp installed cache), then
 re-profile; items 1/3 stay ~1–2 % each. Re-run this section's table
 after any resolver-shape change, not just perf work.
+
+## 2026-09-20 baseline + plan
+
+Re-profiled 2026-09-20 (release `ce68f77`, same workload, now 2088
+installed packages): portuale 7.71–7.92 s wall / 5.79–6.00 s user /
+1.83–1.92 s sys vs real 3.0.82.2 5.70–5.89 s / 4.97–5.00 s /
+0.19–0.24 s. The profile above still holds — SipHash ~19 %, malloc/free
+~30 %, `HashSet::clone` 2.46 % — and item 2 is now a scoped plan:
+[`08.102-107-perf-memoisation.md`](08.102-107-perf-memoisation.md)
+(#102 per-cp `installed_candidates` cache, #103 `Rc` from
+`effective_use_flags`, #104 `resolved_use_mask_or_force` memo; #105–#107
+filed as follow-ups). The call counts and the temporary-counter recipe
+are in the plan's §1.
