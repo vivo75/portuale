@@ -54,6 +54,26 @@ pub(crate) fn replay_use_of(
     })
 }
 
+/// Portage's `_create_graph` walk over `entries` (see
+/// `merge_order::replay_create_graph`), with the USE model above.
+// Portage: _emerge/depgraph.py, _create_graph
+pub(crate) fn replay_walk(
+    ctx: &ResolveCtx<'_>,
+    entries: &[GraphEntry],
+    allow_flips: bool,
+    needed_init: &HashMap<(String, String), HashMap<String, bool>>,
+) -> merge_order::WalkReplay {
+    let use_of = |i: usize| replay_use_of(ctx, &entries[i]);
+    merge_order::replay_create_graph(merge_order::ReplayCreateGraphArgs {
+        entries,
+        top_level_atoms: ctx.atoms,
+        root: ctx.root,
+        allow_flips,
+        needed_init,
+        use_of: &use_of,
+    })
+}
+
 /// The params of the one final clean pass: every autounmask change dropped
 /// and suggestion fully off.
 // Portage: depgraph.py, _autounmask_breakage

@@ -128,6 +128,45 @@ fn direct_solve_reports_an_argument_parent_with_the_cli_text() {
 }
 
 #[test]
+fn direct_solve_keeps_an_unsolvable_conflict_untouched() {
+    // Both instances forced: the conflict survives with no skip rows.
+    let root = fixtures_root();
+    let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+    let config = test_config();
+    let new_cpv = "dev-libs/slotconflictnewpin-1.0:0/0::testrepo";
+    let old_cpv = "dev-libs/slotconflictoldpin-1.0:0/0::testrepo";
+    let conflicts = [s2_conflict(vec![
+        (
+            "1.0",
+            false,
+            vec![(old_cpv, "<dev-libs/slotconflicttarget-2.0", false)],
+        ),
+        (
+            "2.0",
+            false,
+            vec![(new_cpv, ">=dev-libs/slotconflicttarget-2.0", false)],
+        ),
+    ])];
+    let entries = s2_entries(vec!["1.0", "2.0"]);
+    let top: HashSet<(String, String)> =
+        HashSet::from([("dev-libs".to_string(), "slotconflictunsolvable".to_string())]);
+    let empty_replace: BTreeSet<(String, String)> = BTreeSet::new();
+    let out = direct_solve_slot_conflicts(s2_input(S2InputArgs {
+        conflicts: &conflicts,
+        entries: &entries,
+        top_level: &top,
+        replace_cps: &empty_replace,
+        root: &root,
+        repos: &repos,
+        config: &config,
+    }));
+    assert!(out.removed.is_empty());
+    assert!(out.skipped.is_empty());
+    assert_eq!(out.surviving.len(), 1);
+    assert_eq!(out.surviving[0].instances.len(), 2);
+}
+
+#[test]
 fn direct_solve_skips_slot_operator_rebuild_conflicts() {
     // Rebuild conflicts never reach the direct solve (Portage).
     let root = fixtures_root();

@@ -30,6 +30,14 @@ fn cand_166(version: &str) -> Candidate {
     }
 }
 
+// ---- `rebuilt_binary_changed` (Portage's two rebuilt_binary triggers). ----
+
+/// Fresh unique scratch dir per test (vdb lives under it, so the
+/// per-root aux caches never see a reused path).
+fn dir_166(tag: &str) -> std::path::PathBuf {
+    TempDir::new(&format!("portuale-166-{tag}")).keep()
+}
+
 /// One installed instance with the given `BUILD_TIME` (plus `SLOT`,
 /// which the vdb scan expects beside every instance).
 fn install_166(root: &Path, cat: &str, pf: &str, build_time: &str) {
@@ -83,6 +91,61 @@ struct ArgInput166Args<'a> {
     root: &'a Path,
     repos: &'a [RepoConfig],
     config: &'a portage_profile::Config,
+}
+
+/// Eight-arg input builder (same shape as `ds_input_161`).
+fn arg_input_166<'a>(args: ArgInput166Args<'a>) -> DirectSolveInput<'a> {
+    let ArgInput166Args {
+        conflicts,
+        top_level,
+        excluded,
+        selective,
+        replace_cps,
+        root,
+        repos,
+        config,
+    } = args;
+    DirectSolveInput {
+        conflicts,
+        entries: &[],
+        top_level,
+        excluded,
+        selective,
+        replace_cps,
+        root,
+        repos,
+        config,
+    }
+}
+
+fn arg_top_166() -> HashSet<(String, String)> {
+    HashSet::from([("dev-libs".to_string(), "argpkg".to_string())])
+}
+
+/// The argued shape (installed instance, top-level names the cp, no
+/// exclude, not selective) is the only `true`.
+#[test]
+fn direct_solve_arg_mode_166_argues_the_requested_installed() {
+    let root = dir_166("arg-true");
+    let repos = Vec::new();
+    let config = cfg_166();
+    let conflicts = [conflict_166(vec![("2.0", false), ("1.0", true)])];
+    let top = arg_top_166();
+    let replace = BTreeSet::new();
+    assert!(direct_solve_arg_mode(
+        &arg_input_166(ArgInput166Args {
+            conflicts: &conflicts,
+            top_level: &top,
+            excluded: &[],
+            selective: false,
+            replace_cps: &replace,
+            root: &root,
+            repos: &repos,
+            config: &config
+        }),
+        &conflicts[0]
+    ));
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 // ---- `direct_solve_instance_use` (Portage per-instance USE). ----
@@ -232,6 +295,32 @@ fn inst_166(version: &str, installed: bool) -> SlotConflictInstance {
         installed,
     }
 }
+
+fn iu_input_166<'a>(
+    entries: &'a [GraphEntry],
+    replace_cps: &'a BTreeSet<(String, String)>,
+    root: &'a Path,
+    repos: &'a [RepoConfig],
+    config: &'a portage_profile::Config,
+) -> DirectSolveInput<'a> {
+    let conflicts: &'a [SlotConflict] = &[];
+    let top: &'a HashSet<(String, String)> = &EMPTY_TOP_166;
+    DirectSolveInput {
+        conflicts,
+        entries,
+        top_level: top,
+        excluded: &[],
+        selective: false,
+        replace_cps,
+        root,
+        repos,
+        config,
+    }
+}
+
+/// Empty top-level set for inputs whose verdict never consults it.
+static EMPTY_TOP_166: std::sync::LazyLock<HashSet<(String, String)>> =
+    std::sync::LazyLock::new(HashSet::new);
 
 // ---- `synthesize_surviving_conflict_entries` (files instances adjacently). ----
 

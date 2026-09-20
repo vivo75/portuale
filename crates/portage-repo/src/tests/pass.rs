@@ -191,6 +191,33 @@ fn run_pass_deep_walk_recurses_into_installed_deps() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// A solved in-walk slot conflict records its skipped update. Seed order
+/// matters: `newconsumer` first pulls 2.0, then `oldconsumer` collides it.
+#[test]
+fn run_pass_records_skipped_updates_for_solved_conflicts() {
+    let fixture_root = fixtures_root();
+    let atoms = vec![
+        "dev-libs/slotconflictoldconsumer".to_string(),
+        "dev-libs/slotconflictnewconsumer".to_string(),
+    ];
+    let config = test_config();
+    let repos = find_repos(&fixture_root).expect("fixture repos");
+    let opts = CtxOpts161 {
+        backtrack_max: 10,
+        atoms: atoms.clone(),
+        ..Default::default()
+    };
+    let ctx = ctx_161(&fixture_root, &config, repos, &opts);
+    let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+    assert!(
+        pass.skipped_updates
+            .iter()
+            .any(|s| s.skipped_version == "2.0"),
+        "the dropped 2.0 rides out as a skipped update"
+    );
+    let _ = fixture_root;
+}
+
 /// Two owners blocking the same package file two rows: the dedup keys on the
 /// full triple, so a second owner is never swallowed.
 #[test]

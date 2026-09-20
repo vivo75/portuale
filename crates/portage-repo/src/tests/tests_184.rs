@@ -71,6 +71,32 @@ fn inst_184(version: &str, installed: bool) -> SlotConflictInstance {
     }
 }
 
+/// Empty top-level set for inputs whose verdict never consults it.
+static EMPTY_TOP_184: std::sync::LazyLock<HashSet<(String, String)>> =
+    std::sync::LazyLock::new(HashSet::new);
+
+fn iu_input_184<'a>(
+    entries: &'a [GraphEntry],
+    replace_cps: &'a BTreeSet<(String, String)>,
+    root: &'a Path,
+    repos: &'a [RepoConfig],
+    config: &'a portage_profile::Config,
+) -> DirectSolveInput<'a> {
+    let conflicts: &'a [SlotConflict] = &[];
+    let top: &'a HashSet<(String, String)> = &EMPTY_TOP_184;
+    DirectSolveInput {
+        conflicts,
+        entries,
+        top_level: top,
+        excluded: &[],
+        selective: false,
+        replace_cps,
+        root,
+        repos,
+        config,
+    }
+}
+
 /// One conflict with a single merge-bound (non-installed) instance.
 fn conflict_184() -> SlotConflict {
     SlotConflict {
