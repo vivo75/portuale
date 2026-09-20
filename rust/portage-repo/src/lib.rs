@@ -13062,6 +13062,9 @@ struct RevDepPin {
     /// The consumer's recorded atom, normalised by
     /// `reverse_dep_constraint_atom`.
     atom: String,
+    /// The verbatim recorded atom text (with `[use]` deps), for the
+    /// skip-conflict notice only -- matching always uses `atom`.
+    raw_atom: String,
     /// The installed consumer `(category, package, version)`.
     consumer: (String, String, String),
 }
@@ -13413,6 +13416,12 @@ fn reverse_dependency_constraints(
                 let pin = RevDepPin {
                     cp: cp.clone(),
                     atom: constraint,
+                    // The verbatim recorded atom (with `[use]` deps):
+                    // `atom` above is normalised for matching, but the
+                    // skip-conflict notice renders what real renders --
+                    // the consumer's own recorded text (S2/#92 oracle:
+                    // qemu's `~...-202408[qemu_softmmu_targets_x86_64(+)]`).
+                    raw_atom: atom_str.clone(),
                     consumer: (
                         consumer.category.clone(),
                         consumer.package.clone(),
@@ -16562,6 +16571,719 @@ fn build_residual_slot_conflicts(
         .collect()
 }
 
+/// Backlog #90 (S2): one withheld upgrade for real's
+/// `WARNING: One or more updates/rebuilds have been skipped due to a
+/// dependency conflict:` block (`depgraph.py`'s `_conflict_missed_update[
+/// "slot conflict"]`, rendered after the merge list, rc 0). Two
+/// producers feed it: the direct solve below (a formed slot conflict
+/// whose non-forced instance is removed) and the reverse-pin withhold
+/// (an enforced holdable pin that settles the installed version while a
+/// higher visible candidate exists). Both render through the same
+/// `pretend.rs` block; both are silent under `-q`/`--json`/`--columns`
+/// (display-only data, like the slot notice's own cut -- the rc stays 0
+/// either way since no `SlotConflict` survives).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkippedUpdate {
+    pub category: String,
+    pub package: String,
+    pub slot: String,
+    pub skipped_version: String,
+    pub skipped_sub_slot: String,
+    pub skipped_repo: String,
+    pub skipped_use: Vec<(String, String)>,
+    pub atom: String,
+    pub consumer_cpv: String,
+    pub consumer_installed: bool,
+    pub consumer_use: Vec<(String, String)>,
+}
+
+/// Backlog #90 (S2): real `_solve_non_slot_operator_slot_conflicts`
+/// (`depgraph.py:1774-2106`), run unconditionally by
+/// `_process_slot_conflicts` (`:2108-2116`) -- no backtracking gate
+/// (the bt0 capture says `backtrack: 0/0`, zero retries, yet
+/// reconciled). Portuale used to reconcile solvable shapes only
+/// through its backtrack retry loop, so at `--backtrack=0` it recorded
+/// the conflict (notice + rc 1 since #62) where real is silent.
+///
+/// A conflict package with no non-conflict parent edge is unforced and
+/// removed (`_remove_pkg`), its parents re-walked (`_dep_stack` +
+/// `_create_graph`), and the removed instance reported via
+/// `_conflict_missed_update["slot conflict"]`. Portuale mirrors the
+/// verdict computation (forced/non-forced sets, `or_tuple`
+/// first-pulled, `non_matching_forced` protection, the `is_arg_parent`
+/// installed exclusion, the `_slot_operator_replace_installed` skip)
+/// over its own recorded `SlotConflict`s; removal drops the merge
+/// entries and prunes single-instance survivors, and the re-walk is
+/// folded into the settle (the walk already resolved every remaining
+/// entry -- S2 cells carry no blockers on removed instances, so no
+/// `_validate_blockers` rerun is owed).
+///
+/// Deliberate narrowings, all documented at the use sites:
+/// - indirect conflict candidates (children reachable only through
+///   conflict packages, `:1808-1829`) are not modelled -- every S2
+///   oracle cell holds leaf instances, so the set is empty there.
+/// - no orphan cascade (`_remove_pkg`'s parentless removal): removed S2
+///   instances are leaves; lingering orphans, if any, stay listed.
+/// - removal runs after the blocker filing (real validates blockers
+///   after solving): blocker rows anchored to a removed entry are out
+///   of scope -- no S2 cell has them.
+pub(crate) struct DirectSolveInput<'a> {
+    pub conflicts: &'a [SlotConflict],
+    pub entries: &'a [GraphEntry],
+    pub top_level: &'a HashSet<(String, String)>,
+    pub excluded: &'a [String],
+    pub selective: bool,
+    pub replace_cps: &'a BTreeSet<(String, String)>,
+    pub root: &'a Path,
+    pub repos: &'a [RepoConfig],
+    pub config: &'a portage_profile::Config,
+}
+
+pub(crate) struct DirectSolveOutput {
+    /// Merge instances to drop, each with the surviving same-slot
+    /// version that takes over its merge row (`(category, package,
+    /// removed_version, kept_version)`). The row is repointed rather
+    /// than deleted: real merges the kept instance (its row stays),
+    /// while the removed one vanishes -- and portuale holds one row
+    /// per cp anyway.
+    pub removed: Vec<(String, String, String, String)>,
+    pub skipped: Vec<SkippedUpdate>,
+    /// Conflicts with >= 2 surviving instances (the rest dissolve with
+    /// the removal -- their story is the skip notice, not a block).
+    pub surviving: Vec<SlotConflict>,
+}
+
+/// A conflict-graph node: a package instance, the shared
+/// non-conflict sink, or a multi-match `or_tuple`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum DirectSolveNode {
+    NonConflict,
+    Instance(usize, usize),
+    OrTuple(usize),
+}
+
+/// Whether `atom_text` accepts conflict `c`'s instance `inst_idx`,
+/// real `(parent, atom)` matching (`atom.match(pkg.with_use(...))`,
+/// `:1921-1930`) with portuale's display-grade metadata: the
+/// structural probe carries the tree slot/sub-slot (the same
+/// `slot_conflict_meta` convention the record path uses), and
+/// `[use]` deps are checked against the instance's own resolved flags
+/// (merge entry display, else tree-effective, else vdb -- see
+/// `direct_solve_instance_use`). `for_skipped` selects real's
+/// plain-match form used for the missed-update recording (`:2083-2094`,
+/// no `is_arg_parent` gate there).
+fn direct_solve_atom_matches(
+    input: &DirectSolveInput<'_>,
+    c: &SlotConflict,
+    inst_idx: usize,
+    atom_text: &str,
+    arg_mode: bool,
+) -> bool {
+    let inst = &c.instances[inst_idx];
+    if arg_mode && inst.installed {
+        return false;
+    }
+    let Some(atom) = portage_dep::parse_atom(atom_text) else {
+        return false;
+    };
+    // A bare `cat/pkg:=` matches its own conflict's every instance:
+    // real matches the raw atom structurally (`atom.match(...)` has no
+    // built-binding step -- the `:=` only narrows by slot linkage),
+    // while portuale's list matcher does not implement the built
+    // operator at all (it would match nothing and wrongly dissolve
+    // the need_rebuild-trailer conflict). Slot and cp always agree
+    // here (edges are per-conflict); version/USE never discriminate
+    // a same-slot `:=` pull.
+    if atom.slot_operator == Some(portage_dep::SlotOperator::Equals)
+        && atom.slot.is_none()
+        && atom.sub_slot.is_none()
+        && atom.category == c.category
+        && atom.package == c.package
+    {
+        return true;
+    }
+    let probe_atom: String = if atom.use_deps.as_ref().is_some_and(|d| !d.is_empty()) {
+        portage_dep::without_use(atom_text).to_string()
+    } else {
+        atom_text.to_string()
+    };
+    let (sub, repo, slot_of_ver) =
+        slot_conflict_meta(input.repos, &c.category, &c.package, &inst.version);
+    let probe = format!(
+        "{}/{}-{}:{}/{}::{}",
+        c.category, c.package, inst.version, slot_of_ver, sub, repo
+    );
+    if portage_dep::match_from_list(&probe_atom, &[probe.as_str()]).is_none_or(|m| m.is_empty()) {
+        return false;
+    }
+    let use_deps = atom.use_deps.unwrap_or_default();
+    if use_deps.is_empty() {
+        return true;
+    }
+    let (enabled, declared) = direct_solve_instance_use(input, &c.category, &c.package, inst);
+    portage_dep::use_deps_satisfied(&use_deps, &valid_iuse(&declared, input.config), &enabled)
+}
+
+/// Resolved USE (enabled) + declared IUSE for a conflict instance --
+/// real `pkg.with_use(self._pkg_use_enabled(pkg))`: a merge instance
+/// with an entry reads its resolved display flags, a merge instance
+/// without one (shadowed second instance) reads the tree candidate
+/// effectively, an installed instance reads its vdb record.
+fn direct_solve_instance_use(
+    input: &DirectSolveInput<'_>,
+    category: &str,
+    package: &str,
+    inst: &SlotConflictInstance,
+) -> (HashSet<String>, HashSet<String>) {
+    if inst.installed {
+        let enabled = read_vdb_flag_set(input.root, category, package, &inst.version, "USE");
+        let declared = list_candidates(input.repos, category, package)
+            .ok()
+            .and_then(|cs| {
+                cs.iter().find(|c| c.version == inst.version).map(|c| {
+                    c.iuse
+                        .split_whitespace()
+                        .map(|t| t.trim_start_matches(['+', '-']).to_string())
+                        .collect()
+                })
+            })
+            .unwrap_or_else(|| enabled.clone());
+        return (enabled, declared);
+    }
+    if let Some(entry) = input.entries.iter().find(|e| {
+        e.category.as_str() == category
+            && e.package.as_str() == package
+            && merge_bound_version(&e.outcome) == Some(&inst.version)
+    }) {
+        let enabled: HashSet<String> = entry
+            .use_flags_display
+            .iter()
+            .filter(|(_, on)| *on)
+            .map(|(f, _)| f.clone())
+            .collect();
+        let declared: HashSet<String> = entry
+            .use_flags_display
+            .iter()
+            .map(|(f, _)| f.clone())
+            .collect();
+        return (enabled, declared);
+    }
+    slot_conflict_flag_sets(input.repos, input.config, category, package, &inst.version)
+}
+
+/// Real `_want_installed_pkg` (`depgraph.py:7280-7302`) folded to what
+/// the direct solve needs: the installed instance is "argued" (excluded
+/// from every parent's match list) exactly when the user explicitly
+/// requested that cp (a top-level atom targets it) without `--exclude`
+/// and outside selective mode. Excluded/selective runs want the
+/// installed package (`True`), as does a cp nobody asked for.
+fn direct_solve_arg_mode(input: &DirectSolveInput<'_>, c: &SlotConflict) -> bool {
+    if !c.instances.iter().any(|i| i.installed) || input.selective {
+        return false;
+    }
+    if !input
+        .top_level
+        .contains(&(c.category.clone(), c.package.clone()))
+    {
+        return false;
+    }
+    let inst_ver = c
+        .instances
+        .iter()
+        .find(|i| i.installed)
+        .map(|i| i.version.clone())
+        .unwrap_or_default();
+    let probe = format!("{}/{}-{inst_ver}", c.category, c.package);
+    !input
+        .excluded
+        .iter()
+        .any(|ex| matches_config_entry(ex, &probe, &c.category, &c.package))
+}
+
+pub(crate) fn direct_solve_slot_conflicts(input: DirectSolveInput<'_>) -> DirectSolveOutput {
+    // Insertion order for `or_tuple` first-pulled (`:1998-2006`):
+    // merge instances in walk (entries) order, installed ones after
+    // (real's tracker order for installed nodes is walk-dependent;
+    // every S2 oracle tuple is all-merge, so this is untested beyond
+    // that -- documented here, not silently assumed).
+    let mut order: HashMap<(usize, usize), usize> = HashMap::new();
+    for (ci, c) in input.conflicts.iter().enumerate() {
+        let mut rank = 0;
+        for e in input.entries.iter() {
+            for (ii, inst) in c.instances.iter().enumerate() {
+                if !inst.installed
+                    && e.category == c.category
+                    && e.package == c.package
+                    && merge_bound_version(&e.outcome) == Some(&inst.version)
+                {
+                    order.entry((ci, ii)).or_insert_with(|| {
+                        rank += 1;
+                        rank
+                    });
+                }
+            }
+        }
+        for (ii, inst) in c.instances.iter().enumerate() {
+            if inst.installed {
+                order.entry((ci, ii)).or_insert_with(|| {
+                    rank += 1;
+                    rank
+                });
+            }
+        }
+    }
+    // All conflict members, for the non-conflict test (`:1897-1901`):
+    // a parent whose (cp, version, installedness) names a conflict
+    // instance draws a package-to-package edge instead of the
+    // `non_conflict_node` substitution.
+    let member_of = |cp: &(String, String), ver: &str, installed: bool| -> Option<(usize, usize)> {
+        for (ci, c) in input.conflicts.iter().enumerate() {
+            if (c.category.clone(), c.package.clone()) != *cp {
+                continue;
+            }
+            for (ii, inst) in c.instances.iter().enumerate() {
+                if inst.version == ver && inst.installed == installed {
+                    return Some((ci, ii));
+                }
+            }
+        }
+        None
+    };
+    let parent_identity = |parent_cpv: &str| -> Option<(String, String, String)> {
+        // Full `cat/pkg-ver:slot/sub::repo` form (see the gate below):
+        // strip the slot/repo suffix `split_cpv` cannot read.
+        split_cpv(parent_cpv.split(':').next().unwrap_or(""))
+    };
+    let mut removed: Vec<(String, String, String, String)> = Vec::new();
+    let mut skipped: Vec<SkippedUpdate> = Vec::new();
+    let mut surviving: Vec<SlotConflict> = Vec::new();
+    for (ci, c) in input.conflicts.iter().enumerate() {
+        // Slot-operator rebuild conflicts never enter the direct solve
+        // (`:1784-1788`): their key is `(root, slot_atom)`; portuale's
+        // replace set is cp-keyed, which is the same gate at our
+        // granularity (#24/#78 territory, not #90).
+        //
+        // Neither do conflicts that feed the need_rebuild trailer: an
+        // installed parent whose built slot-operator atom (`:=` with a
+        // sub-slot, real `Atom.slot_operator_built`) cannot rebuild
+        // (`--exclude` / `--useoldpkg-atoms`) is real's rebuild-path
+        // residue, not remove-path material -- removing the reinstall
+        // would silence the trailer the F-A2 gate exists to print.
+        // (The masked-or-unavailable-ebuild reason stays the filed
+        // follow-up: this gate only knows the two pinned reasons.)
+        let stuck_rebuild_parent = c.instances.iter().flat_map(|i| &i.parents).any(|p| {
+            let Some(atom) = portage_dep::parse_atom(&p.atom) else {
+                return false;
+            };
+            if !is_built_slot_op(&atom) {
+                return false;
+            }
+            // `parent_cpv` carries real's full
+            // `cat/pkg-ver:slot/sub::repo` form, which `split_cpv`
+            // cannot read (it validates the trailing version) --
+            // strip the slot/repo suffix first.
+            let bare = p.parent_cpv.split(':').next().unwrap_or("");
+            let Some((pc, pp, pv)) = split_cpv(bare) else {
+                return false;
+            };
+            if !installed_candidates(input.root, &pc, &pp)
+                .iter()
+                .any(|(v, _, _)| v == &pv)
+            {
+                return false;
+            }
+            let cpv = format!("{pc}/{pp}-{pv}");
+            input
+                .excluded
+                .iter()
+                .any(|ex| matches_config_entry(ex, &cpv, &pc, &pp))
+                || useoldpkg_atom_matches(&pc, &pp, &pv)
+        });
+        if stuck_rebuild_parent
+            || input
+                .replace_cps
+                .contains(&(c.category.clone(), c.package.clone()))
+        {
+            surviving.push(c.clone());
+            continue;
+        }
+        let arg_mode = direct_solve_arg_mode(&input, c);
+        // Edges: (parent node, matched instance indices).
+        let mut edges: Vec<(DirectSolveNode, Vec<usize>)> = Vec::new();
+        let mut protect_all = false;
+        for (ii, inst) in c.instances.iter().enumerate() {
+            let _ = ii;
+            for p in &inst.parents {
+                let parent_node = match parent_identity(&p.parent_cpv) {
+                    Some((pc, pp, pv)) => member_of(&(pc.clone(), pp.clone()), &pv, p.installed)
+                        .map_or(DirectSolveNode::NonConflict, |(mci, mii)| {
+                            DirectSolveNode::Instance(mci, mii)
+                        }),
+                    // A top-level `(Argument)` pull (empty cpv): no
+                    // package parent, so the shared sink. Its atom
+                    // still matches normally below.
+                    None => DirectSolveNode::NonConflict,
+                };
+                let mut matched: Vec<usize> = Vec::new();
+                for (jj, _) in c.instances.iter().enumerate() {
+                    if direct_solve_atom_matches(&input, c, jj, &p.atom, arg_mode) {
+                        matched.push(jj);
+                    }
+                }
+                if matched.is_empty() {
+                    // Autounmask-broken USE or multislot (`:1926-1931`,
+                    // bug 220341): protect the whole conflict from
+                    // removal instead of solving it wrong.
+                    protect_all = true;
+                } else if matched.len() > 1 {
+                    matched.sort_by_key(|jj| order.get(&(ci, *jj)).copied().unwrap_or(usize::MAX));
+                    edges.push((parent_node, matched));
+                } else {
+                    edges.push((parent_node, matched));
+                }
+            }
+        }
+        // Children adjacency for the forced exploration.
+        let mut children: HashMap<DirectSolveNode, Vec<DirectSolveNode>> = HashMap::new();
+        // or_tuple bodies, by edge index.
+        let mut tuples: Vec<Vec<(usize, usize)>> = Vec::new();
+        for (parent, matched) in &edges {
+            if matched.len() > 1 {
+                let id = tuples.len();
+                tuples.push(matched.iter().map(|jj| (ci, *jj)).collect());
+                children
+                    .entry(parent.clone())
+                    .or_default()
+                    .push(DirectSolveNode::OrTuple(id));
+            } else {
+                children
+                    .entry(parent.clone())
+                    .or_default()
+                    .push(DirectSolveNode::Instance(ci, matched[0]));
+            }
+        }
+        let mut forced: HashSet<DirectSolveNode> = HashSet::new();
+        if !protect_all {
+            forced.insert(DirectSolveNode::NonConflict);
+            let mut unexplored = vec![DirectSolveNode::NonConflict];
+            let mut explored: HashSet<DirectSolveNode> = HashSet::new();
+            let mut pending_tuples: Vec<usize> = Vec::new();
+            while let Some(node) = unexplored.pop() {
+                if let Some(kids) = children.get(&node) {
+                    for child in kids {
+                        if !explored.insert(child.clone()) {
+                            continue;
+                        }
+                        forced.insert(child.clone());
+                        match child {
+                            DirectSolveNode::Instance(_, _) => unexplored.push(child.clone()),
+                            DirectSolveNode::OrTuple(id) => pending_tuples.push(*id),
+                            DirectSolveNode::NonConflict => {}
+                        }
+                    }
+                }
+            }
+            // `or_tuple`s resolve only once every plain package had its
+            // chance (`:1994-2006`): an already-forced member satisfies
+            // the dependency, otherwise the first-pulled member wins
+            // ("the package that was pulled first, as this should be
+            // the most desirable choice").
+            while let Some(id) = pending_tuples.pop() {
+                let members = &tuples[id];
+                if members
+                    .iter()
+                    .any(|m| forced.contains(&DirectSolveNode::Instance(m.0, m.1)))
+                {
+                    continue;
+                }
+                let mut first = members.clone();
+                first.sort_by_key(|m| order.get(m).copied().unwrap_or(usize::MAX));
+                if let Some(winner) = first.first() {
+                    forced.insert(DirectSolveNode::Instance(winner.0, winner.1));
+                    unexplored.push(DirectSolveNode::Instance(winner.0, winner.1));
+                }
+            }
+            // Dependencies of forced packages join the set (`:2012-2020`;
+            // portuale models no indirect candidates -- see the fn docs).
+            while let Some(node) = unexplored.pop() {
+                if let Some(kids) = children.get(&node) {
+                    for child in kids {
+                        if explored.insert(child.clone()) {
+                            forced.insert(child.clone());
+                            unexplored.push(child.clone());
+                        }
+                    }
+                }
+            }
+        } else {
+            // Protected: every instance is forced, nothing is removed.
+            for (jj, _) in c.instances.iter().enumerate() {
+                forced.insert(DirectSolveNode::Instance(ci, jj));
+            }
+        }
+        let mut dropped_versions: Vec<String> = Vec::new();
+        for (jj, inst) in c.instances.iter().enumerate() {
+            if inst.installed {
+                continue;
+            }
+            if forced.contains(&DirectSolveNode::Instance(ci, jj)) {
+                continue;
+            }
+            // The take-over version: the first surviving same-cp
+            // instance (installed, or a forced merge) in conflict
+            // order -- never the removed instance itself. Empty when
+            // every instance drops (degenerate: no edge reached
+            // anything); then the entry is deleted outright with no
+            // notice owed (there is no keeper to report against).
+            let kept = c.instances.iter().enumerate().find(|(kk, i)| {
+                *kk != jj && (i.installed || forced.contains(&DirectSolveNode::Instance(ci, *kk)))
+            });
+            dropped_versions.push(inst.version.clone());
+            if let Some((_, k)) = kept {
+                removed.push((
+                    c.category.clone(),
+                    c.package.clone(),
+                    inst.version.clone(),
+                    k.version.clone(),
+                ));
+            } else {
+                removed.push((
+                    c.category.clone(),
+                    c.package.clone(),
+                    inst.version.clone(),
+                    String::new(),
+                ));
+            }
+            // Missed-update recording (`:2063-2106`): for the removed
+            // instance, every parent of every *other* instance whose
+            // atom does not accept it. No `is_arg_parent` gate here,
+            // exactly like real.
+            for (kk, other) in c.instances.iter().enumerate() {
+                if kk == jj {
+                    continue;
+                }
+                for p in &other.parents {
+                    if direct_solve_atom_matches(&input, c, jj, &p.atom, false) {
+                        continue;
+                    }
+                    skipped.push(SkippedUpdate {
+                        category: c.category.clone(),
+                        package: c.package.clone(),
+                        slot: c.slot.clone(),
+                        skipped_version: inst.version.clone(),
+                        skipped_sub_slot: inst.sub_slot.clone(),
+                        skipped_repo: inst.repo_name.clone(),
+                        skipped_use: inst.use_display.clone(),
+                        atom: p.atom.clone(),
+                        consumer_cpv: p.parent_cpv.clone(),
+                        consumer_installed: p.installed,
+                        consumer_use: p.use_display.clone(),
+                    });
+                }
+            }
+        }
+        let kept: Vec<SlotConflictInstance> = c
+            .instances
+            .iter()
+            .filter(|i| i.installed || !dropped_versions.iter().any(|v| v == &i.version))
+            .cloned()
+            .collect();
+        if kept.len() >= 2 {
+            let mut rest = c.clone();
+            rest.instances = kept;
+            rest.resolved_version = rest.instances[0].version.clone();
+            surviving.push(rest);
+        }
+    }
+    skipped.sort_by(|a, b| {
+        (
+            &a.category,
+            &a.package,
+            &a.skipped_version,
+            &a.atom,
+            &a.consumer_cpv,
+        )
+            .cmp(&(
+                &b.category,
+                &b.package,
+                &b.skipped_version,
+                &b.atom,
+                &b.consumer_cpv,
+            ))
+    });
+    skipped.dedup();
+    DirectSolveOutput {
+        removed,
+        skipped,
+        surviving,
+    }
+}
+
+/// Backlog #90 (S2) + #92: an enforced holdable pin that settles the
+/// installed version while a higher visible candidate exists is a
+/// withhold real reports through the same skip-conflict block (host
+/// qemu/edk2, hermetic whpin cell) -- no slot conflict ever forms on
+/// this path (the re-resolve picks the installed version up front),
+/// so the direct solve above never sees it. For every enforced pin
+/// whose cp settles without an upgrade, the highest same-slot visible
+/// candidate the pin excludes becomes a `SkippedUpdate` (same shape as
+/// the removal rows; the renderer cannot tell the producers apart and
+/// real does not distinguish them either).
+pub(crate) fn constraint_withheld_updates(
+    repos: &[RepoConfig],
+    root: &Path,
+    config: &portage_profile::Config,
+    entries: &[GraphEntry],
+    enforced: &[RevDepPin],
+) -> Vec<SkippedUpdate> {
+    let mut out: Vec<SkippedUpdate> = Vec::new();
+    let mut seen: HashSet<((String, String), String)> = HashSet::new();
+    for pin in enforced {
+        if !seen.insert((pin.cp.clone(), pin.atom.clone())) {
+            continue;
+        }
+        // An upgrade went through: nothing was withheld.
+        if entries.iter().any(|e| {
+            (e.category.clone(), e.package.clone()) == pin.cp
+                && matches!(
+                    e.outcome,
+                    PretendOutcome::Upgrade { .. } | PretendOutcome::Downgrade { .. }
+                )
+        }) {
+            continue;
+        }
+        let settled = entries.iter().find_map(|e| {
+            if (e.category.clone(), e.package.clone()) == pin.cp {
+                match &e.outcome {
+                    PretendOutcome::AlreadyInstalled { version } => Some(version.clone()),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        });
+        let (settled_ver, settled_slot) = match settled {
+            Some(v) => {
+                let (s, _) = read_vdb_slot(root, &pin.cp.0, &pin.cp.1, &v);
+                (v, s)
+            }
+            None => continue,
+        };
+        let mut withheld: Vec<(String, String, String)> = Vec::new();
+        if let Ok(cands) = list_candidates(repos, &pin.cp.0, &pin.cp.1) {
+            for cand in cands.iter() {
+                if cand.slot != settled_slot
+                    || vercmp_ordering(&cand.version, &settled_ver) != std::cmp::Ordering::Greater
+                {
+                    continue;
+                }
+                let probe = format!(
+                    "{}/{}-{}:{}/{}::{}",
+                    pin.cp.0, pin.cp.1, cand.version, cand.slot, cand.sub_slot, cand.repo_name
+                );
+                let structurally_excluded =
+                    portage_dep::match_from_list(&pin.atom, &[probe.as_str()])
+                        .is_none_or(|m| m.is_empty());
+                // A structural match is not enough when the recorded pin
+                // carries `[use]` deps: re-check them against the
+                // candidate's own effective flags (the same probe the
+                // autounmask path runs). Parsed from the verbatim
+                // recorded text -- `pin.atom` is normalised for
+                // matching and never carries them. A structural miss
+                // withholds regardless of USE (the branch below only
+                // ever excuses a structural hit).
+                let mut use_ok = true;
+                if !structurally_excluded {
+                    if let Some(atom) = portage_dep::parse_atom(&pin.raw_atom) {
+                        let use_deps = atom.use_deps.unwrap_or_default();
+                        if !use_deps.is_empty() {
+                            let cpv = format!(
+                                "{}/{}-{}:{}/{}::{}",
+                                pin.cp.0,
+                                pin.cp.1,
+                                cand.version,
+                                cand.slot,
+                                cand.sub_slot,
+                                cand.repo_name
+                            );
+                            let enabled = effective_use_flags(
+                                config,
+                                &cand.iuse,
+                                &cand.keywords,
+                                &cpv,
+                                &pin.cp.0,
+                                &pin.cp.1,
+                            );
+                            let declared: HashSet<String> = cand
+                                .iuse
+                                .split_whitespace()
+                                .map(|t| t.trim_start_matches(['+', '-']).to_string())
+                                .collect();
+                            use_ok = portage_dep::use_deps_satisfied(
+                                &use_deps,
+                                &valid_iuse(&declared, config),
+                                &enabled,
+                            );
+                        }
+                    }
+                    if use_ok {
+                        continue;
+                    }
+                }
+                withheld.push((
+                    cand.version.clone(),
+                    cand.sub_slot.clone(),
+                    cand.repo_name.clone(),
+                ));
+            }
+        }
+        if let Some((wver, wsub, wrepo)) = withheld
+            .into_iter()
+            .max_by(|x, y| vercmp_ordering(&x.0, &y.0))
+        {
+            let (cc, cp2, cv) = &pin.consumer;
+            let (cslot, csub, crepo) = match installed_refs(root, cc, cp2)
+                .into_iter()
+                .find(|r| &r.version == cv)
+            {
+                Some(r) => (r.slot, r.sub_slot, r.repo),
+                None => ("0".to_string(), "0".to_string(), "__unknown__".to_string()),
+            };
+            out.push(SkippedUpdate {
+                category: pin.cp.0.clone(),
+                package: pin.cp.1.clone(),
+                slot: settled_slot,
+                skipped_version: wver.clone(),
+                skipped_sub_slot: wsub,
+                skipped_repo: wrepo.clone(),
+                skipped_use: pkg_use_display_for(repos, config, &pin.cp.0, &pin.cp.1, &wver),
+                atom: pin.raw_atom.clone(),
+                consumer_cpv: format!("{cc}/{cp2}-{cv}:{cslot}/{csub}::{crepo}"),
+                consumer_installed: true,
+                consumer_use: installed_use_display_for(root, config, cc, cp2, cv),
+            });
+        }
+    }
+    out.sort_by(|a, b| {
+        (
+            &a.category,
+            &a.package,
+            &a.skipped_version,
+            &a.atom,
+            &a.consumer_cpv,
+        )
+            .cmp(&(
+                &b.category,
+                &b.package,
+                &b.skipped_version,
+                &b.atom,
+                &b.consumer_cpv,
+            ))
+    });
+    out.dedup();
+    out
+}
+
 /// `--changed-deps-report`: an installed package, still in the graph at
 /// `version`, whose vdb-recorded dependency strings differ from the
 /// repo's current ebuild for that exact version (`deps_changed`) -- but
@@ -16760,6 +17482,12 @@ pub struct GraphResult {
     /// option's value).
     pub backtrack_max: u32,
     pub slot_conflicts: Vec<SlotConflict>,
+    /// Backlog #90 (S2) + #92: withheld upgrades real reports through
+    /// `WARNING: One or more updates/rebuilds have been skipped due to
+    /// a dependency conflict:` (merge list keeps the keeper, the
+    /// skipped version does not merge, rc 0). Rendered after the merge
+    /// list by `pretend.rs`; silent under `-q`/`--json`/`--columns`.
+    pub skipped_updates: Vec<SkippedUpdate>,
     /// Backlog #80: unresolved blocker rows whose owner has no display
     /// entry (scan-collected, absent from the graph). The renderer
     /// prints them in the trailing blocker group, counts them in
@@ -18126,6 +18854,7 @@ fn params_equal(a: &BacktrackParams, b: &BacktrackParams) -> bool {
         && a.missing_dep_masked == b.missing_dep_masked
         && a.reverse_dep_masked == b.reverse_dep_masked
         && a.dropped_pins == b.dropped_pins
+        && a.reverse_dep_pins == b.reverse_dep_pins
         && a.slot_constraints == b.slot_constraints
         && a.runtime_pkg_mask == b.runtime_pkg_mask
         && a.autounmask_use_config == b.autounmask_use_config
@@ -18587,6 +19316,11 @@ struct BacktrackParams {
     /// by `(cp, atom, consumer)`; stale entries (a later pass picked a
     /// compatible version after all) simply yield no record.
     dropped_pins: Vec<RevDepPin>,
+    /// Backlog #90 (S2) + #92: enforced holdable pins, accumulated
+    /// across passes like `dropped_pins`, so `assemble_result` can
+    /// report the upgrades they withhold (no conflict ever forms on
+    /// that path) through the same skip-conflict `WARNING`.
+    reverse_dep_pins: Vec<RevDepPin>,
     /// Real `_emerge/resolver/backtracking.py`: the resolver runs the whole
     /// graph walk, and if the first pass hits a *solvable* slot conflict
     /// (real `_process_slot_conflicts` -- a single version can satisfy
@@ -18731,6 +19465,12 @@ impl BacktrackParams {
 struct PassResult {
     entries: Vec<GraphEntry>,
     slot_conflicts: Vec<SlotConflict>,
+    /// Backlog #90 (S2): withheld upgrades for the skip-conflict
+    /// `WARNING` (rc 0): removal rows from the direct solve (run_pass
+    /// tail) plus constraint-withhold rows (collect_feedback's
+    /// reverse-pin site). Merged into `GraphResult::skipped_updates`
+    /// by `assemble_result`.
+    skipped_updates: Vec<SkippedUpdate>,
     /// Backlog #80: unresolved blocker rows with no owner entry,
     /// filed by `file_blocker_conflicts` (this pass's scan).
     orphan_blockers: Vec<OrphanBlocker>,
@@ -18778,6 +19518,11 @@ struct PassResult {
 /// them (today the walk writes `bp` directly).
 #[derive(Default)]
 struct PassState {
+    /// Backlog #90 (S2): skip-conflict rows produced by the direct-solve
+    /// hook at this pass's tail (removal verdicts). The
+    /// constraint-withhold rows join in `collect_feedback`; both ride
+    /// out through `PassResult::skipped_updates`.
+    skipped_updates: Vec<SkippedUpdate>,
     /// Guards against infinite requeuing (e.g. a dependency cycle): the
     /// exact same atom *text* is only ever resolved once. This is
     /// deliberately coarser than the (category, package, slot) dedup
@@ -21512,6 +22257,102 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         !mergebound_cp_slots.contains(&(e.category.clone(), e.package.clone(), slot))
     });
 
+    // Backlog #90 (S2): the direct solve runs on the walked graph
+    // before the blocker phases -- real `_process_slot_conflicts`
+    // solves first, then `_validate_blockers` (`depgraph.py:2116-2125`).
+    // Gated on recorded conflicts (the common conflict-free pass pays
+    // nothing). Removal drops merge entries and dissolves
+    // single-survivor conflicts; the skip rows ride `skipped_updates`
+    // to the renderer (rc stays 0: no `SlotConflict` survives a
+    // removal, and untouched conflicts keep their #62 rc 1).
+    if !state.slot_conflicts.is_empty() {
+        let solved = direct_solve_slot_conflicts(DirectSolveInput {
+            conflicts: &state.slot_conflicts,
+            entries: &state.entries,
+            top_level: &ctx.top_level_cps,
+            excluded: ctx.excluded,
+            selective: ctx.selective,
+            replace_cps: &bp.slot_operator_replace_installed,
+            root: ctx.root,
+            repos: &ctx.repos,
+            config,
+        });
+        if !solved.removed.is_empty() {
+            // The kept instance takes over the removed instance's
+            // merge row (real merges it; portuale holds one row per
+            // cp). A removal with no keeper deletes the row outright
+            // (degenerate all-unforced shape -- no notice was recorded
+            // for it either). Repointing keeps `required_by`, merge
+            // order and USE wiring stable; the removed version's own
+            // walked deps stay attached (all S2 oracle removals are
+            // leaves -- a non-leaf removal keeps stale deps, filed in
+            // the fn docs).
+            for (c, p, r, k) in &solved.removed {
+                let at = state.entries.iter().position(|e| {
+                    e.category == *c
+                        && e.package == *p
+                        && merge_bound_version(&e.outcome) == Some(r)
+                });
+                let Some(idx) = at else {
+                    continue;
+                };
+                if k.is_empty() {
+                    state.entries.remove(idx);
+                    continue;
+                }
+                // Repoint the row at the kept version. An installed
+                // keeper becomes AlreadyInstalled (no row, like real's
+                // kept installed node); a merge keeper stays New. Slot
+                // data comes from the vdb for an installed keeper,
+                // from the tree metadata otherwise.
+                let vdb_hit = installed_candidates(ctx.root, c, p)
+                    .into_iter()
+                    .find(|(v, _, _)| v == k);
+                let (slot, sub_slot, repo) = match &vdb_hit {
+                    Some((_, s, ss)) => {
+                        let repo = installed_pkg_repo(ctx.root, c, p, k);
+                        (s.clone(), ss.clone(), repo)
+                    }
+                    None => {
+                        let (sub, repo, slot) = slot_conflict_meta(&ctx.repos, c, p, k);
+                        (slot, sub, repo)
+                    }
+                };
+                let entry = &mut state.entries[idx];
+                entry.slot = Some(slot);
+                entry.sub_slot = Some(sub_slot);
+                entry.repo_name = Some(repo);
+                // Per-flag `(flag, enabled)` pairs (the entry shape),
+                // not the `(VAR, body)` display pairs: vdb record for
+                // an installed keeper, tree candidate + effective USE
+                // for a merge keeper.
+                if vdb_hit.is_some() {
+                    let (iuse, use_flags) = installed_pkg_iuse_and_use(ctx.root, c, p, k);
+                    entry.use_flags_display = iuse
+                        .into_iter()
+                        .map(|f| {
+                            let on = use_flags.contains(&f);
+                            (f, on)
+                        })
+                        .collect();
+                    entry.outcome = PretendOutcome::AlreadyInstalled { version: k.clone() };
+                } else {
+                    let (declared, enabled) = slot_conflict_flag_sets(&ctx.repos, config, c, p, k);
+                    entry.use_flags_display = declared
+                        .into_iter()
+                        .map(|f| {
+                            let on = enabled.contains(&f);
+                            (f, on)
+                        })
+                        .collect();
+                    entry.outcome = PretendOutcome::New { version: k.clone() };
+                }
+            }
+            state.slot_conflicts = solved.surviving;
+            state.skipped_updates.extend(solved.skipped);
+        }
+    }
+
     // #77 A1: real's all-installed-packages blocker collection runs after
     // the graph is complete and before `_validate_blockers` classifies
     // (`depgraph.py:8919-9078`), and `--nodeps` is its only early exit
@@ -21589,6 +22430,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         entries: state.entries,
         suppressed_nvc: state.suppressed_nvc,
         slot_conflicts: state.slot_conflicts,
+        skipped_updates: state.skipped_updates,
         orphan_blockers,
         slot_want: state.slot_want,
         slot_pullers: state.slot_pullers,
@@ -21954,6 +22796,13 @@ fn collect_feedback(
     // Cloned before the loops consume the vectors.
     let reverse_pins: Vec<RevDepPin> = enforced.iter().chain(dropped.iter()).cloned().collect();
     for pin in enforced {
+        // Backlog #90 (S2) + #92: retain every enforced pin (deduped
+        // like `dropped_pins`) so `assemble_result` can report the
+        // upgrades they withhold -- no conflict ever forms on that
+        // path, so without this the withhold would stay silent.
+        if !grown.reverse_dep_pins.contains(&pin) {
+            grown.reverse_dep_pins.push(pin.clone());
+        }
         if grown
             .reverse_dep_masked
             .insert((pin.cp.clone(), pin.atom.clone()))
@@ -22323,6 +23172,36 @@ fn assemble_result(
         record_slot_conflict(&mut pass.slot_conflicts, sc);
     }
 
+    // Backlog #90 (S2) + #92: enforced holdable pins that withhold an
+    // upgrade join the direct solve's removal rows in the same skip
+    // block (same shape, same rc 0; the renderer cannot tell the
+    // producers apart). Exact-dedupe against the removal rows covers
+    // the pathological both-paths shape.
+    pass.skipped_updates.extend(constraint_withheld_updates(
+        &ctx.repos,
+        ctx.root,
+        config,
+        &pass.entries,
+        &params.reverse_dep_pins,
+    ));
+    pass.skipped_updates.sort_by(|a, b| {
+        (
+            &a.category,
+            &a.package,
+            &a.skipped_version,
+            &a.atom,
+            &a.consumer_cpv,
+        )
+            .cmp(&(
+                &b.category,
+                &b.package,
+                &b.skipped_version,
+                &b.atom,
+                &b.consumer_cpv,
+            ))
+    });
+    pass.skipped_updates.dedup();
+
     // Masked-dependency chains are walked out of the final entries
     // (`required_by` is only complete post-pass); the atom+masked
     // data was recorded at each `NoVisibleCandidate` push above.
@@ -22363,6 +23242,7 @@ fn assemble_result(
         backtrack_max: ctx.backtrack_max,
         outcome,
         slot_conflicts: pass.slot_conflicts,
+        skipped_updates: pass.skipped_updates,
         orphan_blockers: pass.orphan_blockers,
         changed_deps_report: pass.changed_deps_report_entries,
         buildpkgonly_deps_unsatisfied,
@@ -26837,6 +27717,375 @@ mod tests {
         // A single retry is enough to reconcile this one-step conflict.
         let one = graph_result_real_backtrack("dev-libs/slotconflictparent", 1);
         assert_eq!(one.slot_conflicts, vec![]);
+    }
+
+    /// Backlog #90 (S2) shared builders: a synthetic `SlotConflict`
+    /// over `dev-libs/slotconflicttarget:0` from `(version, installed,
+    /// [(parent_cpv, atom, parent_installed)])` rows, plus merge `New`
+    /// entries in walk order for the `or_tuple` first-pulled rule.
+    type S2Row<'x> = (&'x str, bool, Vec<(&'x str, &'x str, bool)>);
+    fn s2_conflict(rows: Vec<S2Row<'_>>) -> SlotConflict {
+        SlotConflict {
+            category: "dev-libs".to_string(),
+            package: "slotconflicttarget".to_string(),
+            slot: "0".to_string(),
+            resolved_version: rows[0].0.to_string(),
+            conflicting_atom: rows
+                .get(1)
+                .map(|r| {
+                    r.2.first()
+                        .map(|(_, a, _)| a.to_string())
+                        .unwrap_or_default()
+                })
+                .unwrap_or_default(),
+            instances: rows
+                .into_iter()
+                .map(|(v, installed, parents)| SlotConflictInstance {
+                    version: v.to_string(),
+                    sub_slot: "0".to_string(),
+                    repo_name: "testrepo".to_string(),
+                    use_display: Vec::new(),
+                    parents: parents
+                        .into_iter()
+                        .map(|(cpv, atom, pinst)| SlotConflictParent {
+                            parent_cpv: cpv.to_string(),
+                            atom: atom.to_string(),
+                            use_display: Vec::new(),
+                            installed: pinst,
+                        })
+                        .collect(),
+                    installed,
+                })
+                .collect(),
+        }
+    }
+
+    fn s2_entries(versions: Vec<&str>) -> Vec<GraphEntry> {
+        versions
+            .into_iter()
+            .map(|v| {
+                let mut e = graph_entry("dev-libs", "slotconflicttarget", v);
+                e.outcome = PretendOutcome::New {
+                    version: v.to_string(),
+                };
+                e
+            })
+            .collect()
+    }
+
+    fn s2_input<'a>(
+        conflicts: &'a [SlotConflict],
+        entries: &'a [GraphEntry],
+        top_level: &'a HashSet<(String, String)>,
+        replace_cps: &'a BTreeSet<(String, String)>,
+        root: &'a Path,
+        repos: &'a [RepoConfig],
+        config: &'a portage_profile::Config,
+    ) -> DirectSolveInput<'a> {
+        DirectSolveInput {
+            conflicts,
+            entries,
+            top_level,
+            excluded: &[],
+            selective: false,
+            replace_cps,
+            root,
+            repos,
+            config,
+        }
+    }
+
+    #[test]
+    fn direct_solve_removes_the_unforced_merge_and_reports_the_skip() {
+        // The 2-atom old/new shape (S0 matrix): `oldconsumer`'s `<2.0`
+        // singles out 1.0 while `newconsumer`'s bare atom matches both
+        // (an `or_tuple`); 1.0 is forced through the old edge, so the
+        // tuple is satisfied without 2.0 and 2.0 drops with a skip row
+        // against oldconsumer's pin -- real's `remove: 2.0 /
+        // keep: 1.0` verdict and `WARNING` text (staged oracle).
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+        let config = test_config();
+        let new_cpv = "dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo";
+        let old_cpv = "dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo";
+        let conflicts = [s2_conflict(vec![
+            (
+                "2.0",
+                false,
+                vec![(new_cpv, "dev-libs/slotconflicttarget", false)],
+            ),
+            (
+                "1.0",
+                false,
+                vec![(old_cpv, "<dev-libs/slotconflicttarget-2.0", false)],
+            ),
+        ])];
+        let entries = s2_entries(vec!["2.0", "1.0"]);
+        let top: HashSet<(String, String)> = HashSet::from([
+            (
+                "dev-libs".to_string(),
+                "slotconflictnewconsumer".to_string(),
+            ),
+            (
+                "dev-libs".to_string(),
+                "slotconflictoldconsumer".to_string(),
+            ),
+        ]);
+        let empty_replace: BTreeSet<(String, String)> = BTreeSet::new();
+        let out = direct_solve_slot_conflicts(s2_input(
+            &conflicts,
+            &entries,
+            &top,
+            &empty_replace,
+            &root,
+            &repos,
+            &config,
+        ));
+        assert_eq!(
+            out.removed,
+            vec![(
+                "dev-libs".to_string(),
+                "slotconflicttarget".to_string(),
+                "2.0".to_string(),
+                "1.0".to_string()
+            )]
+        );
+        assert_eq!(out.surviving, vec![]);
+        assert_eq!(out.skipped.len(), 1);
+        let s = &out.skipped[0];
+        assert_eq!(s.skipped_version, "2.0");
+        assert_eq!(s.atom, "<dev-libs/slotconflicttarget-2.0");
+        assert_eq!(s.consumer_cpv, old_cpv);
+        assert!(!s.consumer_installed);
+    }
+
+    #[test]
+    fn direct_solve_keeps_an_unsolvable_conflict_untouched() {
+        // Both instances singly forced (newpin's `>=2.0`, oldpin's
+        // `<2.0`): nothing is unforced, the conflict survives with no
+        // skip rows -- rc 1, like real.
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+        let config = test_config();
+        let new_cpv = "dev-libs/slotconflictnewpin-1.0:0/0::testrepo";
+        let old_cpv = "dev-libs/slotconflictoldpin-1.0:0/0::testrepo";
+        let conflicts = [s2_conflict(vec![
+            (
+                "1.0",
+                false,
+                vec![(old_cpv, "<dev-libs/slotconflicttarget-2.0", false)],
+            ),
+            (
+                "2.0",
+                false,
+                vec![(new_cpv, ">=dev-libs/slotconflicttarget-2.0", false)],
+            ),
+        ])];
+        let entries = s2_entries(vec!["1.0", "2.0"]);
+        let top: HashSet<(String, String)> =
+            HashSet::from([("dev-libs".to_string(), "slotconflictunsolvable".to_string())]);
+        let empty_replace: BTreeSet<(String, String)> = BTreeSet::new();
+        let out = direct_solve_slot_conflicts(s2_input(
+            &conflicts,
+            &entries,
+            &top,
+            &empty_replace,
+            &root,
+            &repos,
+            &config,
+        ));
+        assert!(out.removed.is_empty());
+        assert!(out.skipped.is_empty());
+        assert_eq!(out.surviving.len(), 1);
+        assert_eq!(out.surviving[0].instances.len(), 2);
+    }
+
+    #[test]
+    fn direct_solve_skips_slot_operator_rebuild_conflicts() {
+        // Same shape as the unsolvable cell, but keyed in
+        // `slot_operator_replace_installed`: real never feeds those to
+        // the direct solve (`:1784-1788`) -- #24 territory, not #90.
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+        let config = test_config();
+        let conflicts = [s2_conflict(vec![
+            (
+                "1.0",
+                false,
+                vec![(
+                    "dev-libs/slotconflictoldpin-1.0:0/0::testrepo",
+                    "<dev-libs/slotconflicttarget-2.0",
+                    false,
+                )],
+            ),
+            (
+                "2.0",
+                false,
+                vec![(
+                    "dev-libs/slotconflictnewpin-1.0:0/0::testrepo",
+                    ">=dev-libs/slotconflicttarget-2.0",
+                    false,
+                )],
+            ),
+        ])];
+        let entries = s2_entries(vec!["1.0", "2.0"]);
+        let top: HashSet<(String, String)> = HashSet::new();
+        let replace: BTreeSet<(String, String)> =
+            BTreeSet::from([("dev-libs".to_string(), "slotconflicttarget".to_string())]);
+        let out = direct_solve_slot_conflicts(s2_input(
+            &conflicts, &entries, &top, &replace, &root, &repos, &config,
+        ));
+        assert!(out.removed.is_empty());
+        assert!(out.skipped.is_empty());
+        assert_eq!(out.surviving.len(), 1);
+    }
+
+    #[test]
+    fn direct_solve_arg_parents_protect_the_triangle() {
+        // The #57 triangle: the installed 1.0 is excluded from every
+        // argv parent's match list (`is_arg_parent`: top-level pull
+        // with an update wanted), so `othermod`'s `<2.0` matches
+        // nothing and protects the whole conflict -- rc 1, like real
+        // (staged oracle both argv orders).
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+        let config = test_config();
+        let conflicts = [SlotConflict {
+            category: "dev-libs".to_string(),
+            package: "paired".to_string(),
+            slot: "0".to_string(),
+            resolved_version: "1.0".to_string(),
+            conflicting_atom: "<dev-libs/paired-2.0".to_string(),
+            instances: vec![
+                SlotConflictInstance {
+                    version: "1.0".to_string(),
+                    sub_slot: "0".to_string(),
+                    repo_name: "testrepo".to_string(),
+                    use_display: Vec::new(),
+                    parents: vec![SlotConflictParent {
+                        parent_cpv: "dev-libs/othermod-1.0:0/0::testrepo".to_string(),
+                        atom: "<dev-libs/paired-2.0".to_string(),
+                        use_display: Vec::new(),
+                        installed: false,
+                    }],
+                    installed: true,
+                },
+                SlotConflictInstance {
+                    version: "2.0".to_string(),
+                    sub_slot: "0".to_string(),
+                    repo_name: "testrepo".to_string(),
+                    use_display: Vec::new(),
+                    parents: vec![SlotConflictParent {
+                        parent_cpv: "dev-libs/needer-1.0:0/0::testrepo".to_string(),
+                        atom: ">=dev-libs/paired-2.0".to_string(),
+                        use_display: Vec::new(),
+                        installed: false,
+                    }],
+                    installed: false,
+                },
+            ],
+        }];
+        let entries = vec![graph_entry("dev-libs", "paired", "2.0")];
+        let top: HashSet<(String, String)> = HashSet::from([
+            ("dev-libs".to_string(), "needer".to_string()),
+            ("dev-libs".to_string(), "othermod".to_string()),
+        ]);
+        let empty_replace: BTreeSet<(String, String)> = BTreeSet::new();
+        let out = direct_solve_slot_conflicts(s2_input(
+            &conflicts,
+            &entries,
+            &top,
+            &empty_replace,
+            &root,
+            &repos,
+            &config,
+        ));
+        assert!(out.removed.is_empty());
+        assert!(out.skipped.is_empty());
+        assert_eq!(out.surviving.len(), 1);
+    }
+
+    #[test]
+    fn two_atom_old_new_withholds_with_a_skip_notice_at_any_budget() {
+        // Walk-level S0 matrix cells (old,new): at `--backtrack=0` and
+        // at the default budget alike, no `SlotConflict` survives (the
+        // direct solve removes 2.0 in-pass, so the retry has nothing to
+        // do), the merge list settles on 1.0, and exactly one skip row
+        // names oldconsumer's pin -- real's rows + `WARNING`, rc 0
+        // (staged oracle both budgets).
+        for bt in [0, 10] {
+            let result = graph_result_real_atoms(
+                &[
+                    "dev-libs/slotconflictoldconsumer".to_string(),
+                    "dev-libs/slotconflictnewconsumer".to_string(),
+                ],
+                bt,
+            );
+            assert!(
+                result.slot_conflicts.is_empty(),
+                "bt={bt}: expected no surviving conflict, got {:?}",
+                result.slot_conflicts
+            );
+            let target = result
+                .entries
+                .iter()
+                .find(|e| e.package == "slotconflicttarget")
+                .expect("slotconflicttarget entry");
+            assert_eq!(
+                target.outcome,
+                PretendOutcome::New {
+                    version: "1.0".to_string()
+                }
+            );
+            assert_eq!(result.skipped_updates.len(), 1, "bt={bt}");
+            let s = &result.skipped_updates[0];
+            assert_eq!(s.skipped_version, "2.0");
+            assert_eq!(s.atom, "<dev-libs/slotconflicttarget-2.0");
+            assert!(s.consumer_cpv.contains("slotconflictoldconsumer-1.0"));
+        }
+    }
+
+    #[test]
+    fn reverse_pin_withhold_reports_a_skip_notice() {
+        // Walk-level #92 shape on the committed wh fixtures: the
+        // installed `whtarget-1.0` runtime pin is enforced (S1), the
+        // upgrade settles installed, and the withheld 2.0 is reported
+        // -- no conflict ever forms. Grounded on the staged real
+        // capture (merge `whpuller-2.0` + `WARNING`, rc 0).
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+        let config = test_config();
+        let mut puller = graph_entry("dev-libs", "whpuller", "2.0");
+        puller.outcome = PretendOutcome::Upgrade {
+            from: "1.0".into(),
+            to: "2.0".into(),
+        };
+        let mut blocker = graph_entry("dev-libs", "whblocker", "1.0");
+        blocker.outcome = PretendOutcome::AlreadyInstalled {
+            version: "1.0".into(),
+        };
+        let entries = vec![puller, blocker];
+        let enforced = vec![RevDepPin {
+            cp: ("dev-libs".to_string(), "whblocker".to_string()),
+            atom: "~dev-libs/whblocker-1.0".to_string(),
+            raw_atom: "~dev-libs/whblocker-1.0".to_string(),
+            consumer: (
+                "dev-libs".to_string(),
+                "whtarget".to_string(),
+                "1.0".to_string(),
+            ),
+        }];
+        let skipped = constraint_withheld_updates(&repos, &root, &config, &entries, &enforced);
+        assert_eq!(skipped.len(), 1);
+        let s = &skipped[0];
+        assert_eq!(
+            (s.category.as_str(), s.package.as_str()),
+            ("dev-libs", "whblocker")
+        );
+        assert_eq!(s.skipped_version, "2.0");
+        assert_eq!(s.atom, "~dev-libs/whblocker-1.0");
+        assert!(s.consumer_cpv.contains("whtarget-1.0"));
+        assert!(s.consumer_installed);
     }
 
     #[test]
