@@ -17364,3 +17364,38 @@ emerge --pretend --update --deep --newuse --oneshot dev-libs/whpuller
 cd rust && cargo test --release -p portage-repo reverse_dependency
 python3 -m pytest ../pmtest/pytests-contract-suite/test_emerge_pretend_contract.py -k "oracle_91 or needer_othermod_triangle or keeper_reachable" -q
 ```
+
+## 2026-09-20 — backlog #90: `--backtrack=0` reconciles the solvable slot conflict silently, like real (+ #92 skip notice)
+
+`--backtrack=0 dev-libs/slotconflictparent` printed a slot-conflict
+notice with rc 1 where real 3.0.82.2 is silent with rc 0 (real's
+`_solve_non_slot_operator_slot_conflicts` is not gated on
+backtracking). S0's first-ever `--debug` matrix of the shape showed
+the silence does NOT come from that solver for the titular case: with
+no `Slot conflict handler started.` anywhere, the walk itself avoids
+the conflict (last-declared-first stack discipline + existing-node
+reuse). S1 ports that discipline (reversed argv/world seeding,
+plains-reversed + `||`-last enqueue with drain-state snapshots for
+`||` and the bug-531656 downgrade guard, installed-first `:=`
+binding, argv-ordered `package.provided` reporting) and S2 the solver
+itself for conflicts that do form: forced/non-forced sets over the
+recorded `SlotConflict`s (`or_tuple` first-pulled, `non_matching`
+protection, the `is_arg_parent` installed exclusion, the slot-op
+skip, need_rebuild-trailer protection), removal with row repointing
+at the kept instance, and real's `WARNING: ... skipped due to a
+dependency conflict:` block (operator + version `^` spans). The same
+block covers the reverse-pin withholds that never form a conflict
+(host qemu/edk2, hermetic whpin cell) -- closing #92 as filed.
+Hermetic pins: reversed two-target order merges 1.0 + `WARNING` rc 0
+at both budgets (forward order stays silent); unsolvable, triangle,
+btparent and orbtblocked keep block + rc 1 with real's 1.0-first
+instance order. Host `@world` re-diff unchanged from #91 (edk2 held
+by pin + notice now, nothing else moved). Residue: one merge row per
+cp for dual-instance conflicts (real lists both), and the container
+L0 re-run (no image on this host).
+
+```
+emerge --pretend --backtrack=0 dev-libs/slotconflictoldconsumer dev-libs/slotconflictnewconsumer
+cd rust && cargo test --release -p portage-repo direct_solve
+python3 -m pytest ../pmtest/pytests-contract-suite/test_emerge_pretend_contract.py -k "oracle_90_reversed or backtrack_zero" -q
+```
