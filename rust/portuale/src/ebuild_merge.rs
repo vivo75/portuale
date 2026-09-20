@@ -68,10 +68,18 @@
 // `EbuildPhase(phase="preinst")` block, not after), walks the real
 // install image (`${D}`) the same way `merge_tree` does but read-only,
 // checking each real file/symlink entry (never directories -- real
-// `_collision_protect` only ever checks `file_list`/`symlink_list`)
-// against the real, on-disk destination: real PMS 13.4's own
-// symlink-over-directory ban is checked unconditionally (regardless of
-// `FEATURES`); an ordinary collision (destination exists, isn't owned
+// `_collision_protect` only ever checks `file_list`/`symlink_list`,
+// which real builds with `os.walk`: a symlink pointing to a directory
+// lands in `dirs`, never in `file_list`/`symlink_list`, so it is never
+// collision-checked at all) against the real, on-disk destination:
+// real PMS 13.4's own symlink-over-directory ban covers only the
+// checked symlinks (file-target/dangling ones) and is unconditional
+// (regardless of `FEATURES`); a directory-target symlink over a real
+// directory is ignored by the check and, at merge time, lands at the
+// first `dest.backup.NNNN` instead (real `mergeme()`'s own
+// symlink-over-directory branch), keeping the directory -- e.g.
+// linux-firmware's `nvidia/ad10x` symlinks over installed directories
+// merge with exit 0 under plain `protect-owned`. An ordinary collision (destination exists, isn't owned
 // by an older installed version of this exact package in the same slot
 // -- the one this merge is about to replace -- and isn't
 // `CONFIG_PROTECT`'d) only aborts when `FEATURES=collision-protect`
@@ -595,6 +603,24 @@ fn new_protect_filename(dest: &Path, newmd5: &str) -> Result<PathBuf, String> {
         }
     }
     Ok(parent.join(format!("._cfg{:04}_{basename}", max_num + 1)))
+}
+
+/// Real `dblink._new_backup_path` (`vartree.py:_new_backup_path`): the
+/// first `dest.backup.NNNN` (zero-padded 4 digits from `0000`) whose
+/// `lstat` fails -- i.e. no file, symlink, or directory there yet.
+/// Used by `merge_tree`'s own symlink-over-directory branch below: real
+/// `mergeme()` never overwrites a real directory with a symlink, it
+/// merges the symlink under the backup name and keeps the directory.
+fn new_backup_path(dest: &Path) -> PathBuf {
+    let dest_str = dest.display().to_string();
+    let mut n = 0;
+    loop {
+        let candidate = PathBuf::from(format!("{dest_str}.backup.{n:04}"));
+        if std::fs::symlink_metadata(&candidate).is_err() {
+            return candidate;
+        }
+        n += 1;
+    }
 }
 
 /// Real `dblink._protect()`'s own decision, shared by `merge_tree`'s
@@ -1565,7 +1591,8 @@ fn merge_tree(
                 // (see that function's own doc comment).
                 let mut write_dest = dest.clone();
                 let mut moveme = true;
-                if is_protected(root, config_protect, config_protect_mask, &dest) {
+                let protected_path = is_protected(root, config_protect, config_protect_mask, &dest);
+                if protected_path {
                     let src_md5 = md5_hex_bytes(target_str.as_bytes());
                     (write_dest, moveme) = protect_decision(
                         root,
@@ -1578,6 +1605,32 @@ fn merge_tree(
                         cfgfiledict,
                         noconfmem,
                     )?;
+                }
+                // Real `mergeme()`'s own symlink-over-directory branch
+                // (`vartree.py`: `if mydmode is not None and S_ISDIR and
+                // not protected`): a symlink can never replace a real
+                // directory -- the symlink lands at the first
+                // `dest.backup.NNNN` instead and the directory is kept.
+                // This is the merge-time half of the `find_collisions`
+                // exclusion above: directory-target symlinks are never
+                // collision-checked (real `os.walk` puts them in `dirs`),
+                // so they always reach here, and real still exits 0.
+                // (File-target symlinks never reach here: they always
+                // aborted in `_collision_protect` first.) `CONTENTS`
+                // below still records the logical `abs_path`, like real.
+                if moveme
+                    && !protected_path
+                    && write_dest == dest
+                    && std::fs::symlink_metadata(&dest)
+                        .map(|m| m.file_type().is_dir())
+                        .unwrap_or(false)
+                {
+                    write_dest = new_backup_path(&dest);
+                    eprintln!("Installation of a symlink is blocked by a directory:");
+                    eprintln!("  '{}'", dest.display());
+                    eprintln!("This symlink will be merged with a different name:");
+                    eprintln!("  '{}'", write_dest.display());
+                    eprintln!();
                 }
 
                 let mtime = mtime_secs(
@@ -2614,7 +2667,10 @@ fn blockers_from_flat_deps(root: &Path, flat_deps: &[String]) -> HashSet<(String
 }
 
 /// Real PMS 13.4's own symlink-over-directory ban (checked
-/// unconditionally, regardless of `FEATURES`) plus real `FEATURES=
+/// unconditionally, regardless of `FEATURES`, but only for the symlinks
+/// real actually checks -- file-target/dangling ones; a symlink whose
+/// target is a directory is in real `os.walk`'s `dirs`, never in
+/// `file_list`/`symlink_list`, so it is skipped here, like real) plus real `FEATURES=
 /// collision-protect`'s own ordinary-collision detection, plus real
 /// preserve-libs collision exclusion and real blocker exclusion (`mypkglist
 /// = others_in_slot + blockers` -- see `blocked_installed_packages`'s own
@@ -2677,6 +2733,26 @@ fn find_collisions(
 
             if file_type.is_dir() {
                 stack.push(relative_path);
+                continue;
+            }
+
+            // Real `os.walk(srcroot)` (which builds real `filelist`/
+            // `linklist`, `vartree.py:4625-4681`) puts a symlink that
+            // points to a directory into the `dirs` list, not `files` --
+            // so it never reaches `filelist`/`linklist` and is never
+            // collision-checked at all (verified: `link_to_dir` lands in
+            // `dirs`, `link_to_file`/dangling land in `files`). A
+            // directory-target symlink colliding with a real directory
+            // (e.g. linux-firmware's `nvidia/ad10x` symlinks over
+            // installed directories) is therefore ignored here, matching
+            // real: no `symlink_collisions` entry, no abort. Only
+            // file-target/dangling symlinks are checked below. `metadata`
+            // follows the link exactly like `os.walk`'s own `is_dir()`
+            // does (image-relative for relative targets); a dangling
+            // link errors here and falls through to the check, like real.
+            if file_type.is_symlink()
+                && std::fs::metadata(&src).map(|m| m.is_dir()).unwrap_or(false)
+            {
                 continue;
             }
 
@@ -3134,7 +3210,10 @@ fn merge_after_install(
     )?;
     // Real `dblink.merge()`'s own abort condition (`vartree.py:4830-
     // 4838`, Python operator precedence: `collision_protect or
-    // (protect_owned and owners)`): a symlink-over-directory violation
+    // (protect_owned and owners)`): a checked symlink-over-directory
+    // violation (file-target/dangling symlink over a real directory;
+    // directory-target symlinks never reach `symlink_collisions` --
+    // see `find_collisions`)
     // always aborts; otherwise `collision_protect` alone aborts on any
     // collision, but `protect_owned` alone only aborts when an actual
     // owning package was identified for at least one collision (real
@@ -5649,10 +5728,14 @@ mod tests {
     }
 
     /// Real PMS 13.4's own symlink-over-directory ban: unconditional,
-    /// regardless of `FEATURES` -- `collisionpkg-b` installs a symlink
-    /// exactly where `collisionpkg-a` already installed a real
-    /// directory (`adir`), which aborts the merge even with
-    /// `collision_protect: false` (`MergeOptions::default()`).
+    /// regardless of `FEATURES` -- `collisionpkg-b` installs a
+    /// file-target (dangling `nowhere`) symlink exactly where
+    /// `collisionpkg-a` already installed a real directory (`adir`),
+    /// which aborts the merge even with `collision_protect: false`
+    /// (`MergeOptions::default()`). Dangling/file-target symlinks are
+    /// the ones real `os.walk` lists in `files` (hence in `linklist`);
+    /// directory-target symlinks are in `dirs` and never checked -- see
+    /// the next test.
     #[test]
     fn symlink_over_directory_always_aborts_regardless_of_collision_protect() {
         let tmp = tempdir();
@@ -5684,6 +5767,98 @@ mod tests {
         // The real directory collisionpkg-a installed is still a real
         // directory -- never replaced by collisionpkg-b's own symlink.
         assert!(root.join("usr/share/collisiontest/adir").is_dir());
+    }
+
+    /// Real `os.walk` puts a symlink pointing to a directory into `dirs`,
+    /// never into `filelist`/`linklist` (`vartree.py:4625-4681` comment) --
+    /// so it is never collision-checked. `find_collisions` mirrors that:
+    /// a directory-target symlink over an installed real directory (the
+    /// linux-firmware `nvidia/ad10x` shape: new image symlinks, live
+    /// filesystem directories) yields no `symlink_collisions` entry, and
+    /// `merge_tree` lands the symlink at the first `dest.backup.NNNN`
+    /// (real `mergeme()`'s own symlink-over-directory branch) keeping
+    /// the directory, exiting 0 -- even with `protect_owned` on (the
+    /// reporter's own `FEATURES`, which has `protect-owned` but not
+    /// `collision-protect`) and an additional unclaimed ordinary
+    /// collision present (which alone never aborts under `protect-owned`
+    /// either).
+    #[test]
+    fn directory_target_symlink_over_a_real_directory_is_ignored_and_backed_up() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let image = tmp.join("image");
+        std::fs::create_dir_all(root.join("lib/firmware/nvidia/ad103")).unwrap();
+        std::fs::write(
+            root.join("lib/firmware/nvidia/ad103/some.bin"),
+            b"installed",
+        )
+        .unwrap();
+        // An unclaimed ordinary collision alongside (a stray file the new
+        // image also ships): must not abort under `protect_owned` alone.
+        std::fs::create_dir_all(root.join("lib/firmware/brcm")).unwrap();
+        std::fs::write(root.join("lib/firmware/brcm/stray.txt"), b"stray on disk").unwrap();
+
+        std::fs::create_dir_all(image.join("lib/firmware/nvidia/real")).unwrap();
+        std::fs::write(image.join("lib/firmware/nvidia/real/some.bin"), b"new").unwrap();
+        std::os::unix::fs::symlink("real", image.join("lib/firmware/nvidia/ad103")).unwrap();
+        std::fs::create_dir_all(image.join("lib/firmware/brcm")).unwrap();
+        std::fs::write(image.join("lib/firmware/brcm/stray.txt"), b"new stray").unwrap();
+
+        let empty_plib = HashMap::new();
+        let empty_blocked = HashSet::new();
+        let (collisions, symlink_collisions, _) = find_collisions(
+            &image,
+            &root,
+            "sys-kernel",
+            "linux-firmware",
+            "0",
+            "/etc",
+            "/etc/env.d",
+            &empty_plib,
+            &empty_blocked,
+        )
+        .expect("find_collisions succeeds");
+        assert!(
+            symlink_collisions.is_empty(),
+            "a directory-target symlink is not a PMS 13.4 collision: {symlink_collisions:?}"
+        );
+        // The ordinary stray-file collision is reported...
+        assert_eq!(collisions, vec!["/lib/firmware/brcm/stray.txt".to_string()]);
+        // ...but aborts under neither `collision-protect` (off) nor
+        // `protect-owned` alone (no owner claims it).
+        assert!(
+            find_owners(&root, &collisions).is_empty(),
+            "the stray file is unclaimed"
+        );
+
+        let mut cfgfiledict = BTreeMap::new();
+        merge_tree(
+            &image,
+            &root,
+            "sys-kernel",
+            None,
+            true,
+            "/etc",
+            "/etc/env.d",
+            false,
+            &mut cfgfiledict,
+        )
+        .expect("merge_tree succeeds");
+
+        // The installed directory survives; the new symlink lands at the
+        // first backup name, exactly like real `mergeme()`.
+        assert!(root.join("lib/firmware/nvidia/ad103").is_dir());
+        assert_eq!(
+            std::fs::read_link(root.join("lib/firmware/nvidia/ad103.backup.0000")).unwrap(),
+            PathBuf::from("real")
+        );
+        // The unclaimed ordinary file is merged over, like real's
+        // "merged despite file collisions" path.
+        assert_eq!(
+            std::fs::read_to_string(root.join("lib/firmware/brcm/stray.txt")).unwrap(),
+            "new stray"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// `FEATURES=protect-owned` alone (no `collision-protect`): real
