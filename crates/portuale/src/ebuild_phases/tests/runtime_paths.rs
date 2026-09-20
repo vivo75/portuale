@@ -1,5 +1,18 @@
 use super::*;
 
+#[test]
+fn remove_bin_overlay_dir_is_idempotent() {
+    // Double exit paths must never fail: remove, then tolerate missing.
+    let dir = TempDir::new("portuale-bin-overlay-test").keep();
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::write(dir.join("sub").join("f"), "x").unwrap();
+    remove_bin_overlay_dir(&dir);
+    assert!(!dir.exists());
+    remove_bin_overlay_dir(&dir);
+    assert!(!dir.exists());
+}
+
 /// `extra_env` `FEATURES` is exported last so it wins over the
 /// process-env base.
 #[test]
