@@ -8354,6 +8354,38 @@ fn render_pkg_use_display(disp: &[(String, String)]) -> String {
     out
 }
 
+/// Backlog #90 (S2): the `^` marker line under a skip-conflict pin --
+/// real marks the leading operator chars plus the version token
+/// (`~` + `1.0` in `~dev-libs/whblocker-1.0`, staged oracle). The
+/// spans are computed on the raw atom text (no color realignment --
+/// same deliberate divergence as the slot block's own markers).
+fn skip_conflict_caret_line(atom: &str) -> String {
+    let op_len: usize = atom
+        .chars()
+        .take_while(|c| matches!(c, '=' | '<' | '>' | '~' | '!'))
+        .map(|c| c.len_utf8())
+        .sum();
+    let mut line = String::new();
+    for _ in 0..op_len {
+        line.push('^');
+    }
+    if let Some(ver) = portage_dep::parse_atom(atom).and_then(|a| a.version.clone()) {
+        // Last occurrence: a package name itself may contain digits
+        // (`foo-2-bar-1.0`), so anchoring on the first would mark the
+        // wrong span. A trailing `-rN` revision is left out of the
+        // span (no oracle covers it).
+        if let Some(start) = atom.rfind(ver.as_str()) {
+            while line.len() < start {
+                line.push(' ');
+            }
+            for _ in 0..ver.len() {
+                line.push('^');
+            }
+        }
+    }
+    line
+}
+
 pub fn run(args: &[String]) -> ExitCode {
     if wants_help(args) {
         print_help();
@@ -12296,6 +12328,55 @@ pub fn run(args: &[String]) -> ExitCode {
         println!();
         println!("For more information, see MASKED PACKAGES section in the emerge man");
         println!("page or refer to the Gentoo Handbook.");
+        println!();
+    }
+
+    // Backlog #90 (S2) + #92: real `_conflict_missed_update[
+    // "slot conflict"]` (`depgraph.py:2063-2106`) -- `WARNING: One or
+    // more updates/rebuilds have been skipped due to a dependency
+    // conflict:` plus one `conflicts with` group per withheld upgrade,
+    // printed after the merge list, rc 0. Two producers, one shape:
+    // the direct solve's removed instances and the reverse-pin
+    // withholds (`GraphResult::skipped_updates`; the renderer cannot
+    // tell them apart and real does not distinguish them either).
+    // Root suffixes (`for <root>`, `to/in '<root>'`) are omitted like
+    // every other portuale notice row. The `^` marker line mirrors
+    // real's operator + version spans (approximation: leading operator
+    // chars plus the version token; real derives them from its
+    // collision-reason keys). Silent under `-q`/`--json`/`--columns`
+    // (display-only, like the slot block's own cut).
+    if !result.skipped_updates.is_empty() {
+        println!(
+            "WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:"
+        );
+        for s in &result.skipped_updates {
+            println!();
+            println!("{}/{}:{}", s.category, s.package, s.slot);
+            println!();
+            println!(
+                "  ({}/{}-{}:{}/{}::{}, ebuild scheduled for merge) {} conflicts with",
+                s.category,
+                s.package,
+                s.skipped_version,
+                s.slot,
+                s.skipped_sub_slot,
+                s.skipped_repo,
+                render_pkg_use_display(&s.skipped_use),
+            );
+            let consumer_state = if s.consumer_installed {
+                "installed"
+            } else {
+                "ebuild scheduled for merge"
+            };
+            println!(
+                "    {} required by ({}, {}) {}",
+                s.atom,
+                s.consumer_cpv,
+                consumer_state,
+                render_pkg_use_display(&s.consumer_use),
+            );
+            println!("    {}", skip_conflict_caret_line(&s.atom));
+        }
         println!();
     }
 
