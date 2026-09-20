@@ -2291,7 +2291,49 @@ fn cached_binary_index(pkgdir: &Path) -> std::sync::Arc<BinaryIndex> {
 /// `$PKGDIR` directory scan (`config.scanned_binpkgs`) when it did one
 /// -- i.e. `<pkgdir>/Packages` was absent -- otherwise the parsed
 /// `<pkgdir>/Packages` file.
-fn local_binpkg_index(config: &portage_profile::Config) -> BinaryIndex {
+fn local_binpkg_index(config: &portage_profile::Config) -> std::sync::Arc<BinaryIndex> {
+    // Memoised per inputs: 3,056 calls per resolve on the reference
+    // workload, each cloning `scanned_binpkgs` and rebuilding the whole
+    // `by_cp` map (2.45 % of the run). Key is `(pkgdir, scanned
+    // identity, quickpkg root)` where the scanned identity is the vec's
+    // (address, length) plus its first/last CPV -- the same fingerprint
+    // `cp_bucket_index` uses for its own `(ptr, len)`-keyed cache.
+    // Sound: `scanned_binpkgs` is set once by the CLI layer before
+    // resolution (`pretend.rs`) and never mutated after, `pkgdir` is
+    // fixed at config resolution, and `quickpkg_direct_root()` is a
+    // set-once process global -- so the key is stable within a run and
+    // any change rebuilds (correctness preserved by construction).
+    // Thread-local so the lookup stays lock-free.
+    type BinpkgIndexKey = (
+        String,
+        Option<(usize, usize, String, String)>,
+        Option<PathBuf>,
+    );
+    thread_local! {
+        static BINPKG_CACHE: RefCell<Option<(BinpkgIndexKey, std::sync::Arc<BinaryIndex>)>> =
+            const { RefCell::new(None) };
+    }
+    fn scanned_id(entries: &[HashMap<String, String>]) -> (usize, usize, String, String) {
+        let cpv = |e: Option<&HashMap<String, String>>| {
+            e.and_then(|m| m.get("CPV")).cloned().unwrap_or_default()
+        };
+        (
+            entries.as_ptr() as usize,
+            entries.len(),
+            cpv(entries.first()),
+            cpv(entries.last()),
+        )
+    }
+    let key: BinpkgIndexKey = (
+        config.pkgdir.clone(),
+        config.scanned_binpkgs.as_ref().map(|v| scanned_id(v)),
+        quickpkg_direct_root(),
+    );
+    if let Some((old_key, idx)) = BINPKG_CACHE.with(|c| c.borrow().clone())
+        && old_key == key
+    {
+        return idx;
+    }
     let mut entries = match &config.scanned_binpkgs {
         Some(entries) => entries.clone(),
         None => read_packages_index(Path::new(&config.pkgdir)),
@@ -2319,7 +2361,11 @@ fn local_binpkg_index(config: &portage_profile::Config) -> BinaryIndex {
             }
         }
     }
-    BinaryIndex::from_entries(entries)
+    let idx = std::sync::Arc::new(BinaryIndex::from_entries(entries));
+    BINPKG_CACHE.with(|c| {
+        *c.borrow_mut() = Some((key, std::sync::Arc::clone(&idx)));
+    });
+    idx
 }
 
 /// `--quickpkg-direct-root` (real `actions.py:134-149`): the root whose
@@ -18854,8 +18900,8 @@ struct ResolveCtx<'a> {
     /// `<pkgdir>/Packages` -- see `local_binpkg_index`). Only consulted
     /// under `--usepkg`/`--usepkgonly`, but cheap to build unconditionally
     /// (an absent/empty `Packages` and a `None` scan both yield an empty
-    /// index).
-    local_binpkg: BinaryIndex,
+    /// index). Shared (`local_binpkg_index` memoises per inputs).
+    local_binpkg: std::sync::Arc<BinaryIndex>,
 }
 
 impl<'a> ResolveCtx<'a> {
@@ -24415,6 +24461,32 @@ mod tests {
 
         // A missing pkgdir is an empty index (unchanged tolerance).
         assert!(BinaryIndex::from_pkgdir(Path::new("/nonexistent")).is_empty());
+    }
+
+    /// Backlog #108 S4: `local_binpkg_index` memoises per inputs -- a
+    /// repeat call shares the allocation, changed inputs rebuild.
+    #[test]
+    fn local_binpkg_index_memoises_per_inputs() {
+        let config = portage_profile::Config::default();
+        let a = local_binpkg_index(&config);
+        let b = local_binpkg_index(&config);
+        assert!(std::sync::Arc::ptr_eq(&a, &b));
+        let changed = portage_profile::Config {
+            scanned_binpkgs: Some(vec![HashMap::from([
+                ("CPV".to_string(), "dev-libs/memo-1.0".to_string()),
+                ("SLOT".to_string(), "0".to_string()),
+            ])]),
+            ..portage_profile::Config::default()
+        };
+        let c = local_binpkg_index(&changed);
+        assert!(!std::sync::Arc::ptr_eq(&a, &c));
+        assert_eq!(
+            list_binary_candidates(&c, "dev-libs", "memo")
+                .iter()
+                .map(|cand| cand.version.as_str())
+                .collect::<Vec<_>>(),
+            vec!["1.0"]
+        );
     }
 
     #[test]
