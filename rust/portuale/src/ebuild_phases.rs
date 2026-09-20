@@ -657,6 +657,15 @@ pub(crate) fn portage_checkout() -> PathBuf {
 pub(crate) fn bin_dir() -> &'static Path {
     use std::sync::OnceLock;
     static DIR: OnceLock<PathBuf> = OnceLock::new();
+    // Backlog #88: the overlay this process created (if any), removed
+    // at process exit. `DIR` itself cannot own the cleanup: statics
+    // never run destructors, and `bin_dir()` has seven call sites
+    // across three files with independent exit paths, so per-site
+    // removal would both sprawl and rot. One `atexit` registration,
+    // made exactly where the directory is created, covers every
+    // command (and the test harness's subprocess runs) on all normal
+    // exits; signal kills still leak, like any tmp dir.
+    static CREATED: OnceLock<PathBuf> = OnceLock::new();
     DIR.get_or_init(|| {
         let vendored = repo_root().join("bin");
         let checkout = portage_checkout().join("bin");
@@ -665,7 +674,20 @@ pub(crate) fn bin_dir() -> &'static Path {
         }
         let overlay = std::env::temp_dir().join(format!("portuale-bin.{}", std::process::id()));
         match build_bin_overlay(&overlay, &checkout, &vendored) {
-            Ok(()) => overlay,
+            Ok(()) => {
+                let _ = CREATED.set(overlay.clone());
+                // `extern "C"`, no closure capture: the handler reads
+                // `CREATED` itself. A failed registration keeps the
+                // old leak rather than breaking the run (best effort,
+                // like the overlay fallback below it).
+                extern "C" fn cleanup_created_bin_overlay() {
+                    if let Some(dir) = CREATED.get() {
+                        remove_bin_overlay_dir(dir);
+                    }
+                }
+                let _ = unsafe { libc::atexit(cleanup_created_bin_overlay) };
+                overlay
+            }
             Err(e) => {
                 eprintln!(
                     "portuale: bin/ overlay setup failed ({e}); \
@@ -677,6 +699,14 @@ pub(crate) fn bin_dir() -> &'static Path {
         }
     })
     .as_path()
+}
+
+/// Removes a `bin_dir()` overlay directory, ignoring every failure
+/// (a partially-removed or already-gone overlay is not an error worth
+/// failing a phase -- or process exit -- over). Called by the `atexit`
+/// handler; factored out so the idempotency contract is unit-pinned.
+fn remove_bin_overlay_dir(dir: &Path) {
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 /// Populates `overlay` with a symlink to every entry of `checkout`, then
@@ -4331,6 +4361,23 @@ pub(crate) fn run_phase_from_saved_env(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remove_bin_overlay_dir_is_idempotent() {
+        // Backlog #88: the `atexit` handler's contract -- removes a
+        // populated overlay, then silently tolerates the missing dir
+        // (double exit paths, or an overlay a previous run already
+        // reclaimed, must never fail).
+        let dir =
+            std::env::temp_dir().join(format!("portuale-bin-overlay-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("sub").join("f"), "x").unwrap();
+        remove_bin_overlay_dir(&dir);
+        assert!(!dir.exists());
+        remove_bin_overlay_dir(&dir);
+        assert!(!dir.exists());
+    }
 
     #[test]
     fn bind_slot_operator_binds_a_matched_equals_dep_and_leaves_the_rest_alone() {

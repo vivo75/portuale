@@ -762,6 +762,7 @@ fn graph_result_from_order(
         // of the BFS walk + backtrack loop in `lib.rs`, not the bridge.
         outcome: super::ResolveOutcome::Complete,
         slot_conflicts: Vec::new(),
+        skipped_updates: Vec::new(),
         orphan_blockers,
         changed_deps_report: Vec::new(),
         buildpkgonly_deps_unsatisfied: false,
