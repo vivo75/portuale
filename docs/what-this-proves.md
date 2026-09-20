@@ -17449,3 +17449,55 @@ rm -f /tmp/94clean/old/files  # rc 1: the reported error, verbatim
 rm -f /tmp/94clean/new/files  # rc 0: the fixed shape
 cd rust && cargo test --release -p portuale filesdir -q
 ```
+
+## 2026-09-20 — backlog #96: merge writes are atomic, so a running system survives its own glibc/bash upgrade
+
+Merging `sys-libs/readline` with portuale killed every running `bash` on
+this host. `merge_tree` replaced regular files with `std::fs::copy` — an
+`O_TRUNC` rewrite of the **existing inode**. The kernel refuses to open a
+running *executable* for write (`ETXTBSY`, which is what aborted
+portuale's own `app-shells/bash` merge mid-copy, leaving the new files
+unowned and the vdb unwritten), but an mmap'd *shared library* opens
+fine: portuale's `readline-8.3_p6` merge rewrote
+`/usr/lib64/libreadline.so.8.3` underneath every running bash
+(`ctime=13:05:22` on an inode whose `mtime=11:39:01` was the binpkg's),
+and the first coredump landed four seconds later — `SIGSEGV` in
+`_rl_forward_char_internal (libreadline.so.8+0x40616)`, then seven more
+across the next minutes, each surfacing as Konsole's
+`Program '/bin/bash' crashed.` The same write on `libc.so.6` would have
+taken down every process on the machine.
+
+Real `movefile` never touches the old inode: same-device `os.rename`
+(`3rdparty/portage/lib/portage/util/movefile.py:231`), cross-device copy
+to `dest#new` then rename (`:346`). Portuale now does the same:
+`replace_file_atomic`/`replace_symlink_atomic` (with
+`unique_sibling_path`'s `.{name}._portage_merge_.{pid}` temporary,
+cleaned up on failure) materialize the new content/link at a sibling and
+`rename(2)` it over the destination, for both `merge_tree`'s obj and sym
+branches. The destination's inode is never written to, so every open or
+mapped process keeps its old, valid pages.
+
+Pinned three ways: `merge_tree_never_writes_the_existing_inode` (an open
+fd still reads the old bytes after the merge while the path carries the
+new content on a fresh inode — the mmap'd-library property, which fails
+under the old copy), `merge_tree_replaces_a_running_executable_atomically`
+(a live `/bin/sleep` copy survives the replacement the old code aborted
+with `ETXTBSY`), and `merge_tree_replaces_a_symlink_without_temporaries`.
+The new **merge-path safety gate** (`docs/agent-context.md`, `AGENTS.md`
+step 8) requires a successful test merge of `sys-libs/glibc` and
+`app-shells/bash`; the bed cell is pmtest's
+`differential-test-bed/atomlists/l1-merge-gate.txt` with
+`L1_CONSUME_REINSTALL=1` (forces `--reinstall-atoms` and records
+same-cpv reinstalls). Live run `l1-20260920T141149Z`: portuale re-merged
+`sys-libs/glibc-2.43-r2` + `app-shells/bash-5.3_p15` over its own running
+system — `merge_rc 0`, 4006 files compared against real Portage,
+**0 hard / 0 unexplained**.
+
+```
+cd rust && cargo test --release -p portuale merge_tree_ -q
+# merge-path gate (pmtest): build glibc+bash into the pkgcache once,
+# then re-merge both over the running container with each PM
+differential-test-bed/run/l1-merge-from-binpkg.sh differential-test-bed/atomlists/l1-merge-gate.txt
+L1_SKIP_BUILD=1 L1_CONSUME_REINSTALL=1 \
+  differential-test-bed/run/l1-merge-from-binpkg.sh differential-test-bed/atomlists/l1-merge-gate.txt
+```

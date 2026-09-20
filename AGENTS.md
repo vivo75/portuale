@@ -72,7 +72,11 @@ the next slice") and expects the same rhythm every time:
    `emerge` on a real Gentoo tree and is the only thing that catches
    regressions the fixture suite can't; it's heavier, so it's not part of
    every slice. See pmtest's `USAGE.AGENTS.md` and
-   `differential-test-bed/README.md`.
+   `differential-test-bed/README.md`. **Merge-path safety gate:** any
+   change to the merge path (per `agent-context.md` "Merge-path safety
+   gate") must additionally be verified by a **successful test merge of
+   `sys-libs/glibc` and `app-shells/bash`** — the two packages whose
+   running files every process maps — before the slice is done.
  9. **Only `git commit` / `git push` when explicitly asked** — separate,
     later requests each time, never implied by finishing a slice. Commit
     title `<what changed>: <short description>`; wrapped body explaining

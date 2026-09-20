@@ -163,10 +163,23 @@
 //     module) and unmerge (`preserve_libs_on_unmerge`, this module) are
 //     real now -- see `docs/what-this-proves.md`'s own "`preserve-libs`" sections for
 //     the full grounding of each slice.
-//   - `merge_tree`'s regular-file copy mirrors real `movefile()`'s
-//     explicit `os.chmod(dest, sstat.st_mode)` with a
-//     `std::fs::set_permissions` after the copy (on top of the mode bits
-//     `std::fs::copy` already carries over on Unix). **Shipped
+//   - `merge_tree`'s regular-file and symlink writes mirror real
+//     `movefile()`'s **atomic replacement**: the new file/link is
+//     materialized at a temporary sibling (`.{name}._portage_merge_.{pid}`)
+//     and `rename(2)`d over the destination, so the existing inode is
+//     never written to. That is load-bearing, not cosmetic (backlog #96):
+//     a `std::fs::copy` in place truncates the live inode, and while the
+//     kernel refuses to open a running *executable* for write (`ETXTBSY`
+//     -- which is what used to abort a `/bin/bash` merge mid-copy), an
+//     mmap'd *shared library* opens fine, so every running process
+//     mapping it would execute the rewritten pages. Real is safe for the
+//     same reason -- `os.rename` same-device (`movefile.py:231`),
+//     copy-to-`#new`-then-rename cross-device (`:346`); see this file's
+//     own `replace_file_atomic`/`replace_symlink_atomic`. Attribute
+//     parity is real `movefile()`'s own explicit `os.chmod`/`os.chown`,
+//     reproduced with `std::fs::set_permissions` on the temporary file
+//     before the rename (on top of the mode bits `std::fs::copy` already
+//     carries over on Unix). **Shipped
 //     2026-09-05:** real `movefile()`'s `os.lchown`/`os.chown` (symlink,
 //     regular file) and real `mergeme()`'s own directory
 //     `os.chown`/`os.chmod` (a *newly created* directory only -- an
@@ -621,6 +634,118 @@ fn new_backup_path(dest: &Path) -> PathBuf {
         }
         n += 1;
     }
+}
+
+/// A free temporary sibling of `dest`, in the same directory (so the
+/// final `rename(2)` is always same-filesystem), named like real
+/// `movefile()`'s own merge temporary: `.{basename}._portage_merge_.{pid}`
+/// (`lib/portage/util/movefile.py:322`'s `NamedTemporaryFile` prefix),
+/// with a counter suffix only on the (pid-reuse / parallel-merge)
+/// collision case. Checks with `symlink_metadata`, so an existing
+/// symlink or directory at the candidate counts as taken.
+fn unique_sibling_path(dest: &Path) -> Result<PathBuf, String> {
+    let parent = dest
+        .parent()
+        .ok_or_else(|| format!("{}: has no parent directory", dest.display()))?;
+    let name = dest
+        .file_name()
+        .ok_or_else(|| format!("{}: not a valid filename", dest.display()))?
+        .to_string_lossy();
+    let base = parent.join(format!(".{name}._portage_merge_.{}", std::process::id()));
+    if std::fs::symlink_metadata(&base).is_err() {
+        return Ok(base);
+    }
+    for n in 0.. {
+        let candidate = parent.join(format!(
+            ".{name}._portage_merge_.{}.{n}",
+            std::process::id()
+        ));
+        if std::fs::symlink_metadata(&candidate).is_err() {
+            return Ok(candidate);
+        }
+    }
+    unreachable!("the counter loop always finds a free name")
+}
+
+/// Real `movefile()`'s own **atomic replacement** for a regular file:
+/// copy the source's bytes to [`unique_sibling_path`]'s temporary, apply
+/// real `movefile()`'s `_apply_stat` (owner/group, mode) and the
+/// source's own mtime, then `rename(2)` it over `dest`. The existing
+/// `dest` inode is never opened for write -- see this module's own doc
+/// comment ("KNOWN, DOCUMENTED GAPS") and backlog #96 for why that is
+/// load-bearing: an in-place `std::fs::copy` truncates the live inode,
+/// which is `ETXTBSY` for a running executable but succeeds for an
+/// mmap'd shared library, so a `sys-libs/readline` merge rewrote
+/// `libreadline.so.8.3` underneath every running bash and a `glibc`
+/// merge would rewrite `libc.so.6` underneath the entire system. Real is
+/// safe by construction: same-device `os.rename` (`movefile.py:231`),
+/// cross-device copy to `dest + "#new"` then rename (`:346`).
+///
+/// `mtime` is the source's own mtime in seconds (already computed by the
+/// caller for `CONTENTS`), so the temporary gets exactly the value the
+/// caller will record -- never a second stat that could disagree. On any
+/// failure the temporary is removed before returning; the destination is
+/// left untouched.
+fn replace_file_atomic(src: &Path, dest: &Path, mtime: i64) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = unique_sibling_path(dest)?;
+    let outcome = (|| -> Result<(), String> {
+        std::fs::copy(src, &tmp).map_err(|e| format!("{}: {e}", src.display()))?;
+        let src_meta = std::fs::metadata(src).map_err(|e| format!("{}: {e}", src.display()))?;
+        // `std::fs::copy` already carries the mode bits over on Unix;
+        // the explicit chmod fixes up a umask-masked temporary. The
+        // chown is not redundant -- `std::fs::copy` never touches
+        // ownership. See `lchown_or_chown`'s own doc comment.
+        lchown_or_chown(&tmp, src_meta.uid(), src_meta.gid(), false)?;
+        std::fs::set_permissions(
+            &tmp,
+            std::fs::Permissions::from_mode(src_meta.permissions().mode()),
+        )
+        .map_err(|e| format!("{}: {e}", tmp.display()))?;
+        filetime::set_file_mtime(&tmp, filetime::FileTime::from_unix_time(mtime, 0))
+            .map_err(|e| format!("{}: {e}", tmp.display()))?;
+        std::fs::rename(&tmp, dest)
+            .map_err(|e| format!("{} -> {}: {e}", tmp.display(), dest.display()))
+    })();
+    if outcome.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    outcome
+}
+
+/// Real `movefile()`'s atomic replacement for a symlink
+/// (`lib/portage/util/movefile.py:213-265`): create the new link at
+/// [`unique_sibling_path`]'s temporary, apply `lchown` + the source's
+/// own mtime, then `rename(2)` it over `dest`. The remove-then-symlink
+/// pair this replaces could leave the path briefly absent and, more
+/// importantly, was the second in-place mutation `merge_tree` had; one
+/// rule now covers both branches: never write through an existing
+/// inode. `rename(2)` replaces an existing file or symlink atomically
+/// (a real directory cannot appear here: the symlink-over-directory case
+/// is diverted to `new_backup_path` by the caller).
+fn replace_symlink_atomic(
+    target: &Path,
+    src: &Path,
+    dest: &Path,
+    mtime: i64,
+) -> Result<(), String> {
+    let tmp = unique_sibling_path(dest)?;
+    let outcome = (|| -> Result<(), String> {
+        std::os::unix::fs::symlink(target, &tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
+        let src_meta =
+            std::fs::symlink_metadata(src).map_err(|e| format!("{}: {e}", src.display()))?;
+        lchown_or_chown(&tmp, src_meta.uid(), src_meta.gid(), true)?;
+        let ft = filetime::FileTime::from_unix_time(mtime, 0);
+        filetime::set_symlink_file_times(&tmp, ft, ft)
+            .map_err(|e| format!("{}: {e}", tmp.display()))?;
+        std::fs::rename(&tmp, dest)
+            .map_err(|e| format!("{} -> {}: {e}", tmp.display(), dest.display()))
+    })();
+    if outcome.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    outcome
 }
 
 /// Real `dblink._protect()`'s own decision, shared by `merge_tree`'s
@@ -1650,28 +1775,10 @@ fn merge_tree(
                         std::fs::create_dir_all(parent)
                             .map_err(|e| format!("{}: {e}", parent.display()))?;
                     }
-                    if write_dest.exists() || write_dest.symlink_metadata().is_ok() {
-                        let _ = std::fs::remove_file(&write_dest);
-                    }
-                    std::os::unix::fs::symlink(&target, &write_dest)
-                        .map_err(|e| format!("{}: {e}", write_dest.display()))?;
-                    // Real movefile(): `lchown(dest, sstat.st_uid,
-                    // sstat.st_gid)` right after creating the symlink --
-                    // preserves the source's own recorded owner/group onto
-                    // the merged destination. See `lchown_or_chown`'s own
-                    // doc comment for the root/non-root behavior.
-                    let src_meta = std::fs::symlink_metadata(&src)
-                        .map_err(|e| format!("{}: {e}", src.display()))?;
-                    lchown_or_chown(&write_dest, src_meta.uid(), src_meta.gid(), true)?;
-                    // Real movefile() preserves the source's own mtime onto
-                    // the merged destination -- without this, the freshly
-                    // created symlink would get its own "now" mtime, never
-                    // matching what's about to be recorded in CONTENTS below
-                    // (see ebuild_unmerge.rs's own "!mtime" staleness check,
-                    // which relies on this actually holding).
-                    let ft = filetime::FileTime::from_unix_time(mtime, 0);
-                    filetime::set_symlink_file_times(&write_dest, ft, ft)
-                        .map_err(|e| format!("{}: {e}", write_dest.display()))?;
+                    // Real `movefile()` installs a symlink by an atomic
+                    // rename too -- see `replace_symlink_atomic`'s own
+                    // doc comment (backlog #96).
+                    replace_symlink_atomic(&target, &src, &write_dest, mtime)?;
                 }
                 // Real CONTENTS always records the package's own logical
                 // path/target (`abs_path`/`target_str`), never the
@@ -1771,41 +1878,13 @@ fn merge_tree(
                         )
                         .map_err(|e| format!("{}: {e}", write_dest.display()))?;
                     } else {
-                        std::fs::copy(&src, &write_dest)
-                            .map_err(|e| format!("{}: {e}", src.display()))?;
-                        // Real `movefile()`'s `_apply_stat`: `os.chown(dest,
-                        // sstat.st_uid, sstat.st_gid)` then `os.chmod(dest,
-                        // sstat.st_mode)` after the copy/rename -- preserves
-                        // the source's own recorded owner/group and mode.
-                        // `std::fs::copy` already carries a regular file's
-                        // permission bits over on Unix, so the chmod here is
-                        // belt-and-suspenders that also fixes up a
-                        // pre-existing `._cfgNNNN_` sibling should the umask
-                        // have masked a bit; the chown is not redundant --
-                        // `std::fs::copy` never touches ownership. See
-                        // `lchown_or_chown`'s own doc comment for the
-                        // root/non-root behavior.
-                        {
-                            use std::os::unix::fs::PermissionsExt;
-                            let src_meta = std::fs::metadata(&src)
-                                .map_err(|e| format!("{}: {e}", src.display()))?;
-                            lchown_or_chown(&write_dest, src_meta.uid(), src_meta.gid(), false)?;
-                            std::fs::set_permissions(
-                                &write_dest,
-                                std::fs::Permissions::from_mode(src_meta.permissions().mode()),
-                            )
-                            .map_err(|e| format!("{}: {e}", write_dest.display()))?;
-                        }
-                        // Real movefile() preserves the source's own mtime onto
-                        // the destination -- std::fs::copy doesn't (the copy
-                        // gets a fresh "now" mtime), which would otherwise never
-                        // match what's recorded in CONTENTS below (see
-                        // ebuild_unmerge.rs's own "!mtime" staleness check).
-                        filetime::set_file_mtime(
-                            &write_dest,
-                            filetime::FileTime::from_unix_time(mtime, 0),
-                        )
-                        .map_err(|e| format!("{}: {e}", write_dest.display()))?;
+                        // Real `movefile()`'s atomic replacement -- the
+                        // destination's existing inode is never opened for
+                        // write (backlog #96): see
+                        // `replace_file_atomic`'s own doc comment for why
+                        // that is a safety requirement, not an
+                        // optimization.
+                        replace_file_atomic(&src, &write_dest, mtime)?;
                     }
                 }
                 // Real CONTENTS always records the package's own logical
@@ -4223,6 +4302,220 @@ mod tests {
                 .any(|l| l.starts_with("obj /usr/share/x/hello.txt "))
         );
         assert!(contents.contains("sym /usr/share/x/link.txt -> hello.txt"));
+    }
+
+    /// Backlog #96's core invariant: replacing a file must **never write
+    /// the existing inode**. The test holds the destination open and
+    /// checks that its bytes are untouched after the merge, while the
+    /// path itself carries the new content (a fresh inode). An in-place
+    /// `std::fs::copy` fails this (the open fd would read the new bytes);
+    /// the rename-based `replace_file_atomic` passes. This is the
+    /// property that keeps an mmap'd `libc.so.6`/`libreadline.so.8` alive
+    /// through its own merge, where `ETXTBSY` does **not** protect the
+    /// running process.
+    #[test]
+    fn merge_tree_never_writes_the_existing_inode() {
+        use std::io::Read;
+
+        let tmp = tempdir();
+        let d = tmp.join("D");
+        let root = tmp.join("ROOT");
+        std::fs::create_dir_all(d.join("lib")).unwrap();
+        std::fs::create_dir_all(root.join("lib")).unwrap();
+        std::fs::write(root.join("lib/libx.so.1"), b"old library bytes").unwrap();
+        std::fs::write(d.join("lib/libx.so.1"), b"new library bytes, longer").unwrap();
+        let old_inode = std::fs::metadata(root.join("lib/libx.so.1")).unwrap().ino();
+
+        // Stand-in for a process that has the file open/mapped: the fd
+        // must keep reading the old inode after the merge.
+        let mut old_fd = std::fs::File::open(root.join("lib/libx.so.1")).unwrap();
+
+        let mut cfgfiledict = BTreeMap::new();
+        merge_tree(
+            &d,
+            &root,
+            "sys-libs",
+            None,
+            false,
+            "/etc",
+            "/etc/env.d",
+            false,
+            &mut cfgfiledict,
+        )
+        .expect("merge_tree succeeds");
+
+        let mut still_open = Vec::new();
+        old_fd
+            .read_to_end(&mut still_open)
+            .expect("the old fd is still readable");
+        assert_eq!(
+            still_open, b"old library bytes",
+            "the existing inode must never be written to"
+        );
+        assert_eq!(
+            std::fs::read(root.join("lib/libx.so.1")).unwrap(),
+            b"new library bytes, longer",
+            "the path must carry the new content"
+        );
+        assert_ne!(
+            std::fs::metadata(root.join("lib/libx.so.1")).unwrap().ino(),
+            old_inode,
+            "the destination must be a fresh inode"
+        );
+        let leftovers: Vec<String> = std::fs::read_dir(root.join("lib"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .filter(|n| n.contains("_portage_merge_"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "no merge temporary may remain: {leftovers:?}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// The live shape of backlog #96: a package upgrading a binary that
+    /// is **currently executing** (`/bin/bash` on every shell upgrade).
+    /// The old code's `std::fs::copy` hit `ETXTBSY` and aborted the merge
+    /// mid-copy (leaving the new files unowned, the vdb unwritten); the
+    /// rename-based replacement succeeds and the running process keeps
+    /// its old inode. `/bin/sleep` stands in for the shell: it is the
+    /// same execve-protected kernel path.
+    #[test]
+    fn merge_tree_replaces_a_running_executable_atomically() {
+        let sleep = ["/bin/sleep", "/usr/bin/sleep"]
+            .iter()
+            .map(Path::new)
+            .find(|p| p.is_file())
+            .expect("a system sleep binary");
+        let true_bin = ["/bin/true", "/usr/bin/true"]
+            .iter()
+            .map(Path::new)
+            .find(|p| p.is_file())
+            .expect("a system true binary");
+
+        let tmp = tempdir();
+        let d = tmp.join("D");
+        let root = tmp.join("ROOT");
+        std::fs::create_dir_all(d.join("bin")).unwrap();
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        std::fs::copy(sleep, root.join("bin/prog")).unwrap();
+        std::fs::copy(true_bin, d.join("bin/prog")).unwrap();
+        let old_inode = std::fs::metadata(root.join("bin/prog")).unwrap().ino();
+
+        let mut child = match std::process::Command::new(root.join("bin/prog"))
+            .arg("60")
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(first) => {
+                // A fully loaded test machine (the whole-workspace run
+                // executes every crate's tests) can transiently fail a
+                // fork/exec with EAGAIN; retry once before giving up.
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                std::process::Command::new(root.join("bin/prog"))
+                    .arg("60")
+                    .spawn()
+                    .unwrap_or_else(|e| panic!("spawn the old binary ({first}, {e})"))
+            }
+        };
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(
+            child.try_wait().expect("try_wait").is_none(),
+            "the old binary must still be executing before the merge"
+        );
+
+        let mut cfgfiledict = BTreeMap::new();
+        let outcome = merge_tree(
+            &d,
+            &root,
+            "app-shells",
+            None,
+            false,
+            "/etc",
+            "/etc/env.d",
+            false,
+            &mut cfgfiledict,
+        );
+
+        let alive = child.try_wait().expect("try_wait").is_none();
+        let _ = child.kill();
+        let _ = child.wait();
+        outcome.expect(
+            "replacing a running executable must not write its inode (ETXTBSY would abort)",
+        );
+        assert!(alive, "the running process must survive the merge");
+        assert_eq!(
+            std::fs::read(root.join("bin/prog")).unwrap(),
+            std::fs::read(true_bin).unwrap(),
+            "the path must carry the new binary"
+        );
+        assert_ne!(
+            std::fs::metadata(root.join("bin/prog")).unwrap().ino(),
+            old_inode,
+            "the destination must be a fresh inode"
+        );
+        let leftovers: Vec<String> = std::fs::read_dir(root.join("bin"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .filter(|n| n.contains("_portage_merge_"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "no merge temporary may remain: {leftovers:?}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A symlink replacement uses the same rename-based atomic path (no
+    /// remove-then-create window, no temporaries left behind), and the
+    /// destination is still a symlink pointing at the new target.
+    #[test]
+    fn merge_tree_replaces_a_symlink_without_temporaries() {
+        let tmp = tempdir();
+        let d = tmp.join("D");
+        let root = tmp.join("ROOT");
+        std::fs::create_dir_all(d.join("usr/lib")).unwrap();
+        std::fs::create_dir_all(root.join("usr/lib")).unwrap();
+        std::fs::write(root.join("usr/lib/libx.so.1"), b"lib").unwrap();
+        std::fs::write(d.join("usr/lib/libx.so.1"), b"lib").unwrap();
+        std::os::unix::fs::symlink("libx.so.0", root.join("usr/lib/libx.so")).unwrap();
+        std::os::unix::fs::symlink("libx.so.1", d.join("usr/lib/libx.so")).unwrap();
+
+        let mut cfgfiledict = BTreeMap::new();
+        merge_tree(
+            &d,
+            &root,
+            "sys-libs",
+            None,
+            false,
+            "/etc",
+            "/etc/env.d",
+            false,
+            &mut cfgfiledict,
+        )
+        .expect("merge_tree succeeds");
+
+        assert_eq!(
+            std::fs::read_link(root.join("usr/lib/libx.so")).unwrap(),
+            PathBuf::from("libx.so.1")
+        );
+        assert!(
+            std::fs::symlink_metadata(root.join("usr/lib/libx.so"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        let leftovers: Vec<String> = std::fs::read_dir(root.join("usr/lib"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .filter(|n| n.contains("_portage_merge_"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "no merge temporary may remain: {leftovers:?}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// Directly `libc::lchown`/`libc::chown`s a test-source path to an
