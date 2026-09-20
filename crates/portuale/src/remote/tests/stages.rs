@@ -56,6 +56,133 @@ fn merge_driver_protects_a_modified_config() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// Replacing a file must never write the existing inode: an open fd keeps
+/// the old bytes while the path carries the new content on a fresh inode.
+#[test]
+fn merge_driver_never_writes_the_existing_inode() {
+    use std::io::Read;
+    use std::os::unix::fs::MetadataExt as _;
+
+    let tmp = TempDir::new("portuale-remote-atomic-fd").keep();
+    let root = tmp.join("root");
+    std::fs::create_dir_all(root.join("lib")).unwrap();
+    std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+    std::fs::write(root.join("lib/libx.so.1"), b"old library bytes").unwrap();
+    let old_inode = std::fs::metadata(root.join("lib/libx.so.1")).unwrap().ino();
+    let mut old_fd = std::fs::File::open(root.join("lib/libx.so.1")).unwrap();
+
+    let (unit, staged) =
+        synthetic_unit_bytes(&tmp, &[("lib/libx.so.1", b"new library bytes, longer")]);
+    let ctx = local_ctx(root.to_str().unwrap(), tmp.join("work").to_str().unwrap());
+    let markers = run_merge_stage(&ctx, None, &unit, &staged, None).expect("merge succeeds");
+    assert!(markers.iter().any(|m| m == "MERGE_COPY=ok"), "{markers:?}");
+
+    let mut still_open = Vec::new();
+    old_fd.read_to_end(&mut still_open).unwrap();
+    assert_eq!(
+        still_open, b"old library bytes",
+        "the existing inode must never be written to"
+    );
+    assert_eq!(
+        std::fs::read(root.join("lib/libx.so.1")).unwrap(),
+        b"new library bytes, longer"
+    );
+    assert_ne!(
+        std::fs::metadata(root.join("lib/libx.so.1")).unwrap().ino(),
+        old_inode,
+        "the destination must be a fresh inode"
+    );
+    let leftovers: Vec<String> = std::fs::read_dir(root.join("lib"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .filter(|n| n.contains("_portage_merge_"))
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "no merge temporary may remain: {leftovers:?}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Re-merging a currently-executing binary succeeds, and the running
+/// process keeps its old inode while the path carries the new binary.
+#[test]
+fn merge_driver_replaces_a_running_executable_atomically() {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let sleep = ["/bin/sleep", "/usr/bin/sleep"]
+        .iter()
+        .map(std::path::Path::new)
+        .find(|p| p.is_file())
+        .expect("a system sleep binary");
+    let true_bin = ["/bin/true", "/usr/bin/true"]
+        .iter()
+        .map(std::path::Path::new)
+        .find(|p| p.is_file())
+        .expect("a system true binary");
+
+    let tmp = TempDir::new("portuale-remote-atomic-exec").keep();
+    let root = tmp.join("root");
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+    std::fs::copy(sleep, root.join("bin/prog")).unwrap();
+    let old_inode = std::fs::metadata(root.join("bin/prog")).unwrap().ino();
+    let new_bytes = std::fs::read(true_bin).unwrap();
+    let (unit, staged) = synthetic_unit_bytes(&tmp, &[("bin/prog", new_bytes.as_slice())]);
+
+    let spawn = || {
+        std::process::Command::new(root.join("bin/prog"))
+            .arg("60")
+            .spawn()
+    };
+    let mut child = match spawn() {
+        Ok(child) => child,
+        Err(first) => {
+            // A loaded test machine can transiently fail a fork/exec
+            // with EAGAIN; retry once before giving up.
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            spawn().unwrap_or_else(|e| panic!("spawn the old binary ({first}, {e})"))
+        }
+    };
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert!(
+        child.try_wait().expect("try_wait").is_none(),
+        "the old binary must still be executing before the merge"
+    );
+
+    let ctx = local_ctx(root.to_str().unwrap(), tmp.join("work").to_str().unwrap());
+    let outcome = run_merge_stage(&ctx, None, &unit, &staged, None);
+
+    let alive = child.try_wait().expect("try_wait").is_none();
+    let _ = child.kill();
+    let _ = child.wait();
+    let markers = outcome.expect(
+        "replacing a running executable must not write its inode (ETXTBSY would fail the copy)",
+    );
+    assert!(markers.iter().any(|m| m == "MERGE_COPY=ok"), "{markers:?}");
+    assert!(alive, "the running process must survive the merge");
+    assert_eq!(
+        std::fs::read(root.join("bin/prog")).unwrap(),
+        new_bytes,
+        "the path must carry the new binary"
+    );
+    assert_ne!(
+        std::fs::metadata(root.join("bin/prog")).unwrap().ino(),
+        old_inode,
+        "the destination must be a fresh inode"
+    );
+    let leftovers: Vec<String> = std::fs::read_dir(root.join("bin"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .filter(|n| n.contains("_portage_merge_"))
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "no merge temporary may remain: {leftovers:?}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 #[test]
 fn merge_driver_aborts_on_unowned_collision() {
     let tmp = TempDir::new("portuale-remote-collide").keep();

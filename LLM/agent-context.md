@@ -384,6 +384,62 @@ to end. Per-feature cited-source detail + v1 cuts:
 The prior per-slice narrative of this section is in
 `history/agent-context-current-state-2026-09-10.md` (git history).
 
+### Merge-path safety gate (mandatory)
+
+Any change that touches the merge path — `ebuild_merge.rs` (particularly
+`merge_tree`'s file-writing branches, collision handling, vdb writes) or
+the ordering around it in `emerge_build.rs`/`emerge_getbinpkg.rs` — must
+be verified by a **successful test merge of `sys-libs/glibc` and
+`app-shells/bash`** before the slice is considered done, in addition to
+the normal verification pass. These are the two packages whose running
+files every process on the system maps: a wrong write there does not
+fail cleanly, it kills live processes. The bed cell is pmtest's
+`differential-test-bed/atomlists/l1-merge-gate.txt`, run with
+`L1_CONSUME_REINSTALL=1` (it forces `--reinstall-atoms`, so both PMs
+re-merge the already-installed pair over their own running container):
+
+```sh
+# from ../pmtest; the first run builds glibc+bash into the shared pkgcache
+differential-test-bed/run/l1-merge-from-binpkg.sh differential-test-bed/atomlists/l1-merge-gate.txt
+L1_SKIP_BUILD=1 L1_CONSUME_REINSTALL=1 \
+  differential-test-bed/run/l1-merge-from-binpkg.sh differential-test-bed/atomlists/l1-merge-gate.txt
+```
+
+The gate runs with **no Portage checkout**: every phase helper is
+native since #326 S2–S7 (the `portuale-python` dispatcher,
+`chmod-lite`, `filter-bash-environment`, the gpkg/xpak writers,
+`doins`, the xattr helpers), and `has_version`/`best_version` go
+through the vendored `bin/portageq-wrapper` shim, which execs the
+native `portuale portageq` (feat#157 S6). The old death — an opaque
+`has_version: unexpected portageq exit code: 127` in `pkg_preinst`
+(backlog #151), from when `ebuild_phases::bin_dir()` served the
+portage-importing bin helpers (`portageq-wrapper`, `portageq`,
+`ebuild-pyhelper`) only from that checkout, never from the vendored
+`bin/` — is gone with it. The checkout (`3rdparty/portage` in the
+portuale checkout under test, gitignored) is now only the
+`PORTUALE_PYTHON_HELPERS=real` oracle and the fixture-generator /
+re-sync source. The L1 runner still pre-flights it
+(`portuale_phase_helpers_preflight`), but only in `real` mode, exiting
+2 with `!!! [preflight] …` before any container starts; a fresh clone
+or a worktree without the checkout runs the gate as-is. Only an
+oracle run needs `./3rdparty/setup.sh portage` in that tree, or
+`PORTUALE_PORTAGE_CHECKOUT=…` (the L1 container mounts `$PM_REPO` only,
+so it must point under it).
+
+This rule exists because of backlog #96 (2026-09-20): `merge_tree` wrote
+regular files with `std::fs::copy`, an in-place `O_TRUNC` rewrite of the
+existing inode. `ETXTBSY` protects a running *executable* (the merge
+aborts), but an mmap'd *shared library* opens for write fine — so
+portuale's `sys-libs/readline` merge rewrote `libreadline.so.8.3`
+underneath every running `bash` and all of them segfaulted
+(`_rl_forward_char_internal`), while a `glibc` merge would have taken
+down every process. Portage's `movefile` never touches the old inode
+(`os.rename` same-device, copy-to-`#new`-then-rename cross-device); the
+fix ports exactly that (see the #96 entry for the full evidence chain and
+the regression tests). When adding a new file type to `merge_tree` (or a
+new merge driver, e.g. remote/`mrg`), state in the commit message why the
+old inode is never written to.
+
 ### What "install a package into the filesystem" actually is
 
 Splits into two separable pieces, grounded in Portage's Python source (still

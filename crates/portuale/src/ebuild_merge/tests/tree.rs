@@ -81,6 +81,153 @@ fn merge_tree_copies_files_dirs_and_symlinks_and_writes_matching_contents() {
     assert!(contents.contains("sym /usr/share/x/link.txt -> hello.txt"));
 }
 
+/// Replacing a file must never write the existing inode: the path gets the new
+/// content on a fresh inode while an already-open fd still reads the old bytes.
+#[test]
+fn merge_tree_never_writes_the_existing_inode() {
+    use std::io::Read;
+
+    let tmp = tempdir();
+    let d = tmp.join("D");
+    let root = tmp.join("ROOT");
+    std::fs::create_dir_all(d.join("lib")).unwrap();
+    std::fs::create_dir_all(root.join("lib")).unwrap();
+    std::fs::write(root.join("lib/libx.so.1"), b"old library bytes").unwrap();
+    std::fs::write(d.join("lib/libx.so.1"), b"new library bytes, longer").unwrap();
+    let old_inode = std::fs::metadata(root.join("lib/libx.so.1")).unwrap().ino();
+
+    let mut old_fd = std::fs::File::open(root.join("lib/libx.so.1")).unwrap();
+
+    let mut cfgfiledict = BTreeMap::new();
+    merge_tree(MergeTreeArgs {
+        d: &d,
+        root: &root,
+        category: "sys-libs",
+        installed_instance_pf: None,
+        protect_if_modified: false,
+        config_protect: "/etc",
+        config_protect_mask: "/etc/env.d",
+        noconfmem: false,
+        cfgfiledict: &mut cfgfiledict,
+        xattrs: &XattrPolicy::default(),
+    })
+    .expect("merge_tree succeeds");
+
+    let mut still_open = Vec::new();
+    old_fd
+        .read_to_end(&mut still_open)
+        .expect("the old fd is still readable");
+    assert_eq!(
+        still_open, b"old library bytes",
+        "the existing inode must never be written to"
+    );
+    assert_eq!(
+        std::fs::read(root.join("lib/libx.so.1")).unwrap(),
+        b"new library bytes, longer",
+        "the path must carry the new content"
+    );
+    assert_ne!(
+        std::fs::metadata(root.join("lib/libx.so.1")).unwrap().ino(),
+        old_inode,
+        "the destination must be a fresh inode"
+    );
+    let leftovers: Vec<String> = std::fs::read_dir(root.join("lib"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .filter(|n| n.contains("_portage_merge_"))
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "no merge temporary may remain: {leftovers:?}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Replacing a currently-executing binary succeeds and the running process keeps
+/// its old inode (`/bin/sleep` stands in for the shell).
+#[test]
+fn merge_tree_replaces_a_running_executable_atomically() {
+    let sleep = ["/bin/sleep", "/usr/bin/sleep"]
+        .iter()
+        .map(Path::new)
+        .find(|p| p.is_file())
+        .expect("a system sleep binary");
+    let true_bin = ["/bin/true", "/usr/bin/true"]
+        .iter()
+        .map(Path::new)
+        .find(|p| p.is_file())
+        .expect("a system true binary");
+
+    let tmp = tempdir();
+    let d = tmp.join("D");
+    let root = tmp.join("ROOT");
+    std::fs::create_dir_all(d.join("bin")).unwrap();
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::copy(sleep, root.join("bin/prog")).unwrap();
+    std::fs::copy(true_bin, d.join("bin/prog")).unwrap();
+    let old_inode = std::fs::metadata(root.join("bin/prog")).unwrap().ino();
+
+    let mut child = match std::process::Command::new(root.join("bin/prog"))
+        .arg("60")
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(first) => {
+            // A loaded machine can transiently fail fork/exec with EAGAIN; retry once.
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            std::process::Command::new(root.join("bin/prog"))
+                .arg("60")
+                .spawn()
+                .unwrap_or_else(|e| panic!("spawn the old binary ({first}, {e})"))
+        }
+    };
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert!(
+        child.try_wait().expect("try_wait").is_none(),
+        "the old binary must still be executing before the merge"
+    );
+
+    let mut cfgfiledict = BTreeMap::new();
+    let outcome = merge_tree(MergeTreeArgs {
+        d: &d,
+        root: &root,
+        category: "app-shells",
+        installed_instance_pf: None,
+        protect_if_modified: false,
+        config_protect: "/etc",
+        config_protect_mask: "/etc/env.d",
+        noconfmem: false,
+        cfgfiledict: &mut cfgfiledict,
+        xattrs: &XattrPolicy::default(),
+    });
+
+    let alive = child.try_wait().expect("try_wait").is_none();
+    let _ = child.kill();
+    let _ = child.wait();
+    outcome.expect("replacing a running executable must not write its inode (ETXTBSY would abort)");
+    assert!(alive, "the running process must survive the merge");
+    assert_eq!(
+        std::fs::read(root.join("bin/prog")).unwrap(),
+        std::fs::read(true_bin).unwrap(),
+        "the path must carry the new binary"
+    );
+    assert_ne!(
+        std::fs::metadata(root.join("bin/prog")).unwrap().ino(),
+        old_inode,
+        "the destination must be a fresh inode"
+    );
+    let leftovers: Vec<String> = std::fs::read_dir(root.join("bin"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .filter(|n| n.contains("_portage_merge_"))
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "no merge temporary may remain: {leftovers:?}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// A symlink replacement uses the same atomic rename path and stays a symlink.
 #[test]
 fn merge_tree_replaces_a_symlink_without_temporaries() {
