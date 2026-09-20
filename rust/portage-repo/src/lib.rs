@@ -3542,6 +3542,8 @@ fn effective_use_flags_uncached(
     // global `use.mask` `-flag` at a later profile level cancels an
     // earlier level's `package.use.mask` entry, which the old flat
     // `config.use_mask` ∪ `package_use_mask` application could not.
+    // Uncached-build path only (EUF misses): the shared sets are read,
+    // the few forced/masked flags cloned in.
     for flag in resolved_use_mask_or_force(
         MaskOrForce::Force,
         config,
@@ -3549,8 +3551,10 @@ fn effective_use_flags_uncached(
         category,
         package,
         stable,
-    ) {
-        use_flags.insert(flag);
+    )
+    .iter()
+    {
+        use_flags.insert(flag.clone());
     }
     for flag in resolved_use_mask_or_force(
         MaskOrForce::Mask,
@@ -3559,8 +3563,10 @@ fn effective_use_flags_uncached(
         category,
         package,
         stable,
-    ) {
-        use_flags.remove(&flag);
+    )
+    .iter()
+    {
+        use_flags.remove(flag);
     }
     // The `k_*` pseudo-flags themselves are not real USE flags -- real
     // portage strips every `_*`-suffixed token from `PORTAGE_USE`
@@ -3608,7 +3614,7 @@ fn specificity_ordered_flags(
 
 /// Whether `mask` (rather than `force`) sources are being resolved --
 /// picks the file set inside `resolved_use_mask_or_force`.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum MaskOrForce {
     Mask,
     Force,
@@ -3626,6 +3632,50 @@ enum MaskOrForce {
 /// ordered within the level via `specificity_ordered_flags`),
 /// `package.use.stable.mask` (stable only).
 fn resolved_use_mask_or_force(
+    which: MaskOrForce,
+    config: &portage_profile::Config,
+    candidate_str: &str,
+    category: &str,
+    package: &str,
+    stable: bool,
+) -> Rc<HashSet<String>> {
+    // Memoise per (which, stable, config USE context, candidate): the
+    // per-level walk below rebuilds the same small set tens of thousands
+    // of times per resolve (29,774 calls on the reference workload, each
+    // fanning into `specificity_ordered_flags` /
+    // `config_entries_matching`). Sound because `use_mask_force_levels`
+    // is built once at config resolution and the `'backtrack` loop
+    // mutates only `autounmask_use`, which this function never reads --
+    // the fingerprint is included for defence in depth. Thread-local so
+    // the lookup stays lock-free.
+    type RumfCache = HashMap<(MaskOrForce, bool, u64, String), Rc<HashSet<String>>>;
+    thread_local! {
+        static RUMF_CACHE: RefCell<RumfCache> = RefCell::new(HashMap::new());
+    }
+    let key = (
+        which,
+        stable,
+        use_context_fingerprint(config),
+        candidate_str.to_string(),
+    );
+    if let Some(hit) = RUMF_CACHE.with(|c| c.borrow().get(&key).cloned()) {
+        return hit;
+    }
+    let result = Rc::new(resolved_use_mask_or_force_uncached(
+        which,
+        config,
+        candidate_str,
+        category,
+        package,
+        stable,
+    ));
+    RUMF_CACHE.with(|c| {
+        c.borrow_mut().insert(key, Rc::clone(&result));
+    });
+    result
+}
+
+fn resolved_use_mask_or_force_uncached(
     which: MaskOrForce,
     config: &portage_profile::Config,
     candidate_str: &str,
@@ -3715,6 +3765,8 @@ fn forced_or_masked_flags_unfiltered(
         &config.accept_keywords,
         &config.package_accept_keywords,
     );
+    // Owned union of the two shared sets (both usually cache hits now);
+    // the union itself is small (a handful of forced/masked flags).
     let mut result = resolved_use_mask_or_force(
         MaskOrForce::Force,
         config,
@@ -3722,15 +3774,21 @@ fn forced_or_masked_flags_unfiltered(
         category,
         package,
         stable,
+    )
+    .as_ref()
+    .clone();
+    result.extend(
+        resolved_use_mask_or_force(
+            MaskOrForce::Mask,
+            config,
+            candidate_str,
+            category,
+            package,
+            stable,
+        )
+        .iter()
+        .cloned(),
     );
-    result.extend(resolved_use_mask_or_force(
-        MaskOrForce::Mask,
-        config,
-        candidate_str,
-        category,
-        package,
-        stable,
-    ));
     result
 }
 
@@ -9583,6 +9641,8 @@ fn use_unsat_candidates_for_atom(
             &config.accept_keywords,
             &config.package_accept_keywords,
         );
+        // Owned union of the two shared sets (display path; the union
+        // is small).
         let mut untouchable = resolved_use_mask_or_force(
             MaskOrForce::Mask,
             config,
@@ -9590,15 +9650,21 @@ fn use_unsat_candidates_for_atom(
             &display.category,
             &display.package,
             stable,
+        )
+        .as_ref()
+        .clone();
+        untouchable.extend(
+            resolved_use_mask_or_force(
+                MaskOrForce::Force,
+                config,
+                &candidate_str,
+                &display.category,
+                &display.package,
+                stable,
+            )
+            .iter()
+            .cloned(),
         );
-        untouchable.extend(resolved_use_mask_or_force(
-            MaskOrForce::Force,
-            config,
-            &candidate_str,
-            &display.category,
-            &display.package,
-            stable,
-        ));
         if need_enable
             .iter()
             .chain(need_disable.iter())
@@ -38735,6 +38801,40 @@ mod tests {
             "bar",
         );
         assert_eq!(use_flags, HashSet::from(["baz".to_string()]));
+    }
+
+    /// Backlog #104 S3: the `resolved_use_mask_or_force` memo is
+    /// transparent -- a second identical call shares the allocation.
+    #[test]
+    fn resolved_use_mask_or_force_memo_shares_the_allocation() {
+        let config = portage_profile::Config::default();
+        let a = resolved_use_mask_or_force(
+            MaskOrForce::Mask,
+            &config,
+            "dev-libs/pkg-1.0:0/0::testrepo",
+            "dev-libs",
+            "pkg",
+            true,
+        );
+        let b = resolved_use_mask_or_force(
+            MaskOrForce::Mask,
+            &config,
+            "dev-libs/pkg-1.0:0/0::testrepo",
+            "dev-libs",
+            "pkg",
+            true,
+        );
+        assert!(Rc::ptr_eq(&a, &b));
+        // A different `which` is a different entry.
+        let c = resolved_use_mask_or_force(
+            MaskOrForce::Force,
+            &config,
+            "dev-libs/pkg-1.0:0/0::testrepo",
+            "dev-libs",
+            "pkg",
+            true,
+        );
+        assert!(!Rc::ptr_eq(&a, &c));
     }
 
     #[test]
