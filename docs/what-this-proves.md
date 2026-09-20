@@ -17501,3 +17501,31 @@ differential-test-bed/run/l1-merge-from-binpkg.sh differential-test-bed/atomlist
 L1_SKIP_BUILD=1 L1_CONSUME_REINSTALL=1 \
   differential-test-bed/run/l1-merge-from-binpkg.sh differential-test-bed/atomlists/l1-merge-gate.txt
 ```
+
+## 2026-09-20 — backlog #97: the `mrg` client merge driver replaces files atomically too
+
+The remote merge driver generates a client shell (`remote.rs`'s
+`MERGE_HELPERS`/`MERGE_FLOW`) and its obj branch did
+`cp -p "$src" "$dest"` -- the same in-place inode rewrite #96 removed
+from `merge_tree`, with the same failure mode on the client: `ETXTBSY`
+on a running executable, silent page rewrite for an mmap'd shared
+library (glibc/bash again). The sym branch did `rm -f "$dest"` then
+`ln -s`, leaving the path briefly absent and losing the rename.
+
+Both branches now do what real `movefile` does: build the new file/link
+at `.${basename}._portage_merge_.$$` in the destination directory
+(`cp -p` + `chmod`/`chown --reference`, or `ln -s` + `touch -h -r` +
+`chown -h`), then `mv -f` it over the destination. Only a symlink
+destination is unlinked first (real's `os.unlink(dest)` for a symlink
+dest), so `mv` can never resolve a symlink-to-directory as a directory
+and a regular-file destination is never written through. Pinned by
+`merge_driver_never_writes_the_existing_inode` (open fd keeps the old
+bytes; fresh inode; no temporary left) and
+`merge_driver_replaces_a_running_executable_atomically` (a live
+`/bin/sleep` copy survives the merge), both of which execute the real
+generated driver locally via `run_merge_stage` -- the old `cp` failed
+the second with `ETXTBSY` and the first by truncating the held inode.
+
+```
+cd rust && cargo test --release -p portuale merge_driver -q
+```

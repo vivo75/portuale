@@ -2299,12 +2299,22 @@ while read -r line; do
         else dest=$(alloc_cfg "$dest"); fi
       fi
       mkdir -p "${dest%/*}" || mfail copy "mkdir parent of $apath"
-      # A symlink at dest would make `cp` follow it and clobber the
-      # target: drop the link first (local removes before writing too).
+      # A symlink at dest would make `mv` treat a symlink-to-directory as
+      # a destination directory (and `cp` follow it): drop the link
+      # first, exactly like real movefile's `os.unlink(dest)` for a
+      # symlink destination.
       [ -L "$dest" ] && rm -f "$dest"
-      cp -p "$src" "$dest" || mfail copy "$apath"
-      chmod --reference "$src" "$dest" || mfail copy "chmod $apath"
-      [ "$ROOTUID" = 0 ] && chown --reference "$src" "$dest" || true
+      # Real movefile / local replace_file_atomic (portuale #96/#97):
+      # materialize the new file at a temporary sibling and rename(2) it
+      # over the destination. Never `cp` into the live inode -- ETXTBSY
+      # protects a running executable, but an mmap'd shared library
+      # opens fine, and rewriting it kills every process mapping it.
+      tmp="${dest%/*}/.${dest##*/}._portage_merge_.$$"
+      rm -f "$tmp"
+      cp -p "$src" "$tmp" || { rm -f "$tmp"; mfail copy "$apath"; }
+      chmod --reference "$src" "$tmp" || { rm -f "$tmp"; mfail copy "chmod $apath"; }
+      [ "$ROOTUID" = 0 ] && chown --reference "$src" "$tmp" || true
+      mv -f "$tmp" "$dest" || { rm -f "$tmp"; mfail copy "$apath"; }
       echo "obj $apath $md5 $mtime" >> "$NEWCONTENTS"
       ;;
     sym)
@@ -2313,10 +2323,17 @@ while read -r line; do
         [ "$cur" = "$target" ] || dest=$(alloc_cfg "$dest")
       fi
       mkdir -p "${dest%/*}" || mfail copy "mkdir parent of $apath"
-      rm -f "$dest"
-      ln -s "$target" "$dest" || mfail copy "symlink $apath"
-      touch -h -r "$src" "$dest" 2>/dev/null || true
-      if [ "$ROOTUID" = 0 ]; then chown -h --reference "$src" "$dest" 2>/dev/null || true; fi
+      # Same atomic replacement for the link: a symlink destination is
+      # unlinked first (so `mv` cannot resolve it as a directory), then
+      # the new link is built at a temporary sibling and renamed over
+      # the destination -- never `rm` then `ln` on the live path.
+      [ -L "$dest" ] && rm -f "$dest"
+      tmp="${dest%/*}/.${dest##*/}._portage_merge_.$$"
+      rm -f "$tmp"
+      ln -s "$target" "$tmp" || { rm -f "$tmp"; mfail copy "symlink $apath"; }
+      touch -h -r "$src" "$tmp" 2>/dev/null || true
+      if [ "$ROOTUID" = 0 ]; then chown -h --reference "$src" "$tmp" 2>/dev/null || true; fi
+      mv -f "$tmp" "$dest" || { rm -f "$tmp"; mfail copy "$apath"; }
       echo "sym $apath -> $target $mtime" >> "$NEWCONTENTS"
       ;;
   esac
@@ -3161,6 +3178,16 @@ mod tests {
         tmp: &std::path::Path,
         files: &[(&str, &str)],
     ) -> (String, crate::remote_bundle::StagedBundle) {
+        let bytes: Vec<(&str, &[u8])> = files.iter().map(|(r, c)| (*r, c.as_bytes())).collect();
+        synthetic_unit_bytes(tmp, &bytes)
+    }
+
+    /// [`synthetic_unit`] with binary payloads (a real executable in the
+    /// image, for the atomic-replacement pins).
+    fn synthetic_unit_bytes(
+        tmp: &std::path::Path,
+        files: &[(&str, &[u8])],
+    ) -> (String, crate::remote_bundle::StagedBundle) {
         let unit = tmp.join("work/probe-1.0");
         let image = unit.join("image");
         let build_info = unit.join("build-info");
@@ -3290,6 +3317,155 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(root.join("etc/probe.conf")).unwrap(),
             "incoming\n"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #97's core invariant for the remote driver: replacing a
+    /// file must never write the existing inode. An open fd must keep
+    /// reading the old bytes after the merge while the path carries the
+    /// new content on a fresh inode. The old `cp -p "$src" "$dest"`
+    /// truncates that inode -- fatal for an mmap'd `libc.so.6` /
+    /// `libreadline.so.8` in a running client (backlog #96).
+    #[test]
+    fn merge_driver_never_writes_the_existing_inode() {
+        use std::io::Read;
+        use std::os::unix::fs::MetadataExt as _;
+
+        let tmp = std::env::temp_dir().join(format!(
+            "portuale-remote-atomic-fd-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("lib")).unwrap();
+        std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+        std::fs::write(root.join("lib/libx.so.1"), b"old library bytes").unwrap();
+        let old_inode = std::fs::metadata(root.join("lib/libx.so.1")).unwrap().ino();
+        let mut old_fd = std::fs::File::open(root.join("lib/libx.so.1")).unwrap();
+
+        let (unit, staged) =
+            synthetic_unit_bytes(&tmp, &[("lib/libx.so.1", b"new library bytes, longer")]);
+        let ctx = local_ctx(root.to_str().unwrap(), tmp.join("work").to_str().unwrap());
+        let markers = run_merge_stage(&ctx, None, &unit, &staged, None).expect("merge succeeds");
+        assert!(markers.iter().any(|m| m == "MERGE_COPY=ok"), "{markers:?}");
+
+        let mut still_open = Vec::new();
+        old_fd.read_to_end(&mut still_open).unwrap();
+        assert_eq!(
+            still_open, b"old library bytes",
+            "the existing inode must never be written to"
+        );
+        assert_eq!(
+            std::fs::read(root.join("lib/libx.so.1")).unwrap(),
+            b"new library bytes, longer"
+        );
+        assert_ne!(
+            std::fs::metadata(root.join("lib/libx.so.1")).unwrap().ino(),
+            old_inode,
+            "the destination must be a fresh inode"
+        );
+        let leftovers: Vec<String> = std::fs::read_dir(root.join("lib"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .filter(|n| n.contains("_portage_merge_"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "no merge temporary may remain: {leftovers:?}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// The live shape of backlog #97: a client re-merging a binary that
+    /// is currently executing (its own `/bin/bash`, or glibc's ld.so).
+    /// The old `cp -p` hit `ETXTBSY` and failed the copy step; the
+    /// temp+rename replacement succeeds and the running process keeps
+    /// its old inode. `/bin/sleep` stands in for the shell: the same
+    /// execve-protected kernel path.
+    #[test]
+    fn merge_driver_replaces_a_running_executable_atomically() {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let sleep = ["/bin/sleep", "/usr/bin/sleep"]
+            .iter()
+            .map(std::path::Path::new)
+            .find(|p| p.is_file())
+            .expect("a system sleep binary");
+        let true_bin = ["/bin/true", "/usr/bin/true"]
+            .iter()
+            .map(std::path::Path::new)
+            .find(|p| p.is_file())
+            .expect("a system true binary");
+
+        let tmp = std::env::temp_dir().join(format!(
+            "portuale-remote-atomic-exec-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+        std::fs::copy(sleep, root.join("bin/prog")).unwrap();
+        let old_inode = std::fs::metadata(root.join("bin/prog")).unwrap().ino();
+        let new_bytes = std::fs::read(true_bin).unwrap();
+        let (unit, staged) = synthetic_unit_bytes(&tmp, &[("bin/prog", new_bytes.as_slice())]);
+
+        let spawn = || {
+            std::process::Command::new(root.join("bin/prog"))
+                .arg("60")
+                .spawn()
+        };
+        let mut child = match spawn() {
+            Ok(child) => child,
+            Err(first) => {
+                // A loaded test machine can transiently fail a fork/exec
+                // with EAGAIN; retry once before giving up.
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                spawn().unwrap_or_else(|e| panic!("spawn the old binary ({first}, {e})"))
+            }
+        };
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(
+            child.try_wait().expect("try_wait").is_none(),
+            "the old binary must still be executing before the merge"
+        );
+
+        let ctx = local_ctx(root.to_str().unwrap(), tmp.join("work").to_str().unwrap());
+        let outcome = run_merge_stage(&ctx, None, &unit, &staged, None);
+
+        let alive = child.try_wait().expect("try_wait").is_none();
+        let _ = child.kill();
+        let _ = child.wait();
+        let markers = outcome.expect(
+            "replacing a running executable must not write its inode (ETXTBSY would fail the copy)",
+        );
+        assert!(markers.iter().any(|m| m == "MERGE_COPY=ok"), "{markers:?}");
+        assert!(alive, "the running process must survive the merge");
+        assert_eq!(
+            std::fs::read(root.join("bin/prog")).unwrap(),
+            new_bytes,
+            "the path must carry the new binary"
+        );
+        assert_ne!(
+            std::fs::metadata(root.join("bin/prog")).unwrap().ino(),
+            old_inode,
+            "the destination must be a fresh inode"
+        );
+        let leftovers: Vec<String> = std::fs::read_dir(root.join("bin"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .filter(|n| n.contains("_portage_merge_"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "no merge temporary may remain: {leftovers:?}"
         );
         let _ = std::fs::remove_dir_all(&tmp);
     }
