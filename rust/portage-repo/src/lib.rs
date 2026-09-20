@@ -2404,10 +2404,10 @@ fn quickpkg_direct_index_entries(source_root: &Path) -> Vec<HashMap<String, Stri
         );
         let read = |key: &str| read_vdb_string(source_root, cat, name, ver, key);
         let raw_slot = read("SLOT");
-        let slot = if raw_slot.trim().is_empty() {
+        let slot = if raw_slot.is_empty() {
             "0".to_string()
         } else {
-            raw_slot.trim().to_string()
+            raw_slot
         };
         let mut entry: HashMap<String, String> = HashMap::new();
         entry.insert("CPV".to_string(), format!("{cat}/{name}-{ver}"));
@@ -2426,16 +2426,13 @@ fn quickpkg_direct_index_entries(source_root: &Path) -> Vec<HashMap<String, Stri
             "IDEPEND",
         ] {
             let v = read(key);
-            if !v.trim().is_empty() {
-                entry.insert(
-                    key.to_string(),
-                    v.split_whitespace().collect::<Vec<_>>().join(" "),
-                );
+            if !v.is_empty() {
+                entry.insert(key.to_string(), v);
             }
         }
         let repo = read("repository");
-        if !repo.trim().is_empty() {
-            entry.insert("REPO".to_string(), repo.trim().to_string());
+        if !repo.is_empty() {
+            entry.insert("REPO".to_string(), repo);
         }
         out.push(entry);
     }
@@ -5831,11 +5828,10 @@ fn installed_candidates_uncached(
 /// `portage.versions._unknown_repo`) when that file is absent or empty.
 pub fn installed_pkg_repo(root: &Path, category: &str, package: &str, version: &str) -> String {
     let repo = read_vdb_string(root, category, package, version, "repository");
-    let repo = repo.trim();
     if repo.is_empty() {
         "__unknown__".to_string()
     } else {
-        repo.to_string()
+        repo
     }
 }
 
@@ -6441,6 +6437,17 @@ fn vdb_pkg_dir(root: &Path, category: &str, package: &str, version: &str) -> Pat
 /// entry with nothing recorded for this key, e.g. `DEPEND=""` at merge
 /// time, is indistinguishable from -- and handled the same as -- one
 /// that's simply missing the file).
+///
+/// The value is whitespace-normalised exactly like real `_aux_get`
+/// (`vartree.py:1044-1046`): `" ".join(myd.split())`, i.e.
+/// `split_whitespace().join(" ")` here. Real applies this on the
+/// individual-file path too, so the bytes are the same whether the
+/// consolidated `metadata` snapshot validated or not. The multi-line
+/// exception (`_aux_multi_line_re`, `^(CONTENTS|NEEDED\..*)$`) is not
+/// needed: every caller passes a single-line member of real's 23-field
+/// `_METADATA_FILE_FIELDS` (audited for #109 S1 -- `CONTENTS` and
+/// `NEEDED.*` are read through their own paths), and a future caller
+/// with a line-oriented key must not use this helper.
 fn read_vdb_string(
     root: &Path,
     category: &str,
@@ -6449,6 +6456,7 @@ fn read_vdb_string(
     filename: &str,
 ) -> String {
     fs::read_to_string(vdb_pkg_dir(root, category, package, version).join(filename))
+        .map(|raw| raw.split_whitespace().collect::<Vec<_>>().join(" "))
         .unwrap_or_default()
 }
 
@@ -8398,7 +8406,7 @@ fn split_slot(raw: &str) -> (String, String) {
 /// (main-slot-only) parsing already reads from the repo side, just with
 /// the sub-slot component kept too instead of discarded.
 fn read_vdb_slot(root: &Path, category: &str, package: &str, version: &str) -> (String, String) {
-    split_slot(read_vdb_string(root, category, package, version, "SLOT").trim())
+    split_slot(&read_vdb_string(root, category, package, version, "SLOT"))
 }
 
 /// `--changed-slot`: whether `version`'s own vdb-recorded `SLOT`
@@ -8489,11 +8497,10 @@ fn new_repo_changed(
     current_repo_name: &str,
 ) -> bool {
     let vdb_repo = read_vdb_string(root, category, package, version, "repository");
-    let vdb_repo = vdb_repo.trim();
     let vdb_repo = if vdb_repo.is_empty() {
         "__unknown__"
     } else {
-        vdb_repo
+        &vdb_repo
     };
     vdb_repo != current_repo_name
 }
@@ -8548,7 +8555,6 @@ fn rebuilt_binary_changed(
         return false;
     };
     let Some(installed_timestamp) = read_vdb_string(root, category, package, version, "BUILD_TIME")
-        .trim()
         .parse::<i64>()
         .ok()
     else {
@@ -23823,7 +23829,6 @@ pub(crate) fn live_metadata_for_installed(
 ) -> Option<std::sync::Arc<HashMap<String, String>>> {
     let pf = format!("{package}-{version}");
     let recorded = read_vdb_string(root, category, package, version, "repository");
-    let recorded = recorded.trim();
     if !recorded.is_empty()
         && let Some(repo) = repos.iter().find(|r| r.name == recorded)
         && let Ok(meta) = repo_aux_metadata(&repo.location, category, &pf)
@@ -23873,9 +23878,7 @@ pub(crate) fn installed_dep_string(
     layer: InstalledMetaLayer,
     memo: &mut HashMap<(String, String, String, String), String>,
 ) -> String {
-    let raw = read_vdb_string(root, category, package, version, key)
-        .trim()
-        .to_string();
+    let raw = read_vdb_string(root, category, package, version, key);
     if layer == InstalledMetaLayer::Raw || !dynamic_deps {
         return raw;
     }
@@ -25919,6 +25922,68 @@ mod tests {
             std::fs::write(dir.join(name), bytes).unwrap();
         }
         root
+    }
+
+    /// #109 S1: real `_aux_get` normalises every field that is not
+    /// `CONTENTS`/`NEEDED.*` with `" ".join(myd.split())`
+    /// (`vartree.py:1044-1046`), on the individual-file path too. A
+    /// multi-line vdb field must come back as one space-separated line.
+    #[test]
+    fn read_vdb_string_collapses_multiline_values_to_one_space_separated_line() {
+        let root = tmp_vdb(
+            "dev-libs",
+            "multiline-1.0",
+            &[("RDEPEND", b"dev-libs/a\n\n  dev-libs/b\tdev-libs/c  \n")],
+        );
+        assert_eq!(
+            read_vdb_string(&root, "dev-libs", "multiline", "1.0", "RDEPEND"),
+            "dev-libs/a dev-libs/b dev-libs/c"
+        );
+    }
+
+    /// #109 S1: the trailing newline real's writer leaves in every
+    /// per-field file must not survive the read.
+    #[test]
+    fn read_vdb_string_drops_the_trailing_newline() {
+        let root = tmp_vdb("dev-libs", "newline-1.0", &[("repository", b"gentoo\n")]);
+        assert_eq!(
+            read_vdb_string(&root, "dev-libs", "newline", "1.0", "repository"),
+            "gentoo"
+        );
+    }
+
+    /// #109 S1: an absent field file is still `""`, not a panic and not
+    /// a normalised-away error.
+    #[test]
+    fn read_vdb_string_missing_file_is_still_empty() {
+        let root = tmp_vdb("dev-libs", "absent-1.0", &[]);
+        assert_eq!(
+            read_vdb_string(&root, "dev-libs", "absent", "1.0", "RDEPEND"),
+            ""
+        );
+    }
+
+    /// #109 S1: the committed `dev-libs/multilinevdb-1.0` fixture (pmtest)
+    /// is the integration half of the same contract -- its `IUSE`,
+    /// `DEFINED_PHASES` and `RDEPEND` files all carry embedded newlines,
+    /// and `read_vdb_string` must serve them exactly like real `_aux_get`
+    /// would. Keeps the fixture load-bearing for an isolating test, not
+    /// only for the whitespace-insensitive `--info` pin.
+    #[test]
+    fn read_vdb_string_normalises_the_committed_multiline_fixture() {
+        let root = fixtures_root();
+        assert_eq!(
+            read_vdb_string(&root, "dev-libs", "multilinevdb", "1.0", "IUSE"),
+            "alpha beta"
+        );
+        assert_eq!(
+            read_vdb_string(&root, "dev-libs", "multilinevdb", "1.0", "RDEPEND"),
+            "dev-libs/samepkg virtual/libc"
+        );
+        assert_eq!(
+            read_vdb_string(&root, "dev-libs", "multilinevdb", "1.0", "DEFINED_PHASES"),
+            "install info"
+        );
     }
 
     /// Backlog #102 S1: `installed_candidates` serves repeats from its
