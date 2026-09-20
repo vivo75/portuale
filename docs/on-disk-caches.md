@@ -48,6 +48,14 @@ Authoritative state. One dir per `CAT/PF` with ~20 one-line files
   `vartree.py:570-587`). Locking: `lockdir(dbroot)` for counter/merge,
   per-`cp:slot` `lockfile` (`_slot_lock`), `lockfile(_conf_mem_file)`
   for config-protect state.
+- **Portuale (backlog #102 S1):** `installed_candidates` keeps a
+  per-`(root, cat, pkg)` in-process memo validated by the scanned
+  category dirs' mtimes -- the same signal `_bump_mtime` maintains for
+  real's consumers -- plus a one-time inverted `move` map, instead of
+  re-scanning `var/db/pkg/<cat>` per query (12,684 scans, 906,881
+  entries stat'ed on the reference workload). Same in-process-cache
+  property as real's `_aux_cache`: an external in-place file rewrite
+  inside a running process is not picked up.
 
 ## 2. `/var/cache/edb/dep` — ebuild metadata cache (`dbapi/porttree.py:236,266-321`)
 

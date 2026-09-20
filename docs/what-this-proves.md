@@ -17600,3 +17600,28 @@ cd rust && cargo test --release -p portuale package_env -q
 # the tc-getCC/tc-is-lto-shaped end-to-end pin (pmtest)
 python3 -m pytest pytests-contract-suite/test_portuale.py -q -k tc_is_lto
 ```
+
+**Resolver performance batch (Tier 8 #102–#104 + #108, 2026-09-20).**
+`portuale emerge -puD --getbinpkg net-libs/rest` had drifted to
+7.7–7.9 s wall against real `emerge`'s 5.7–5.9 s; a `perf` + `strace` +
+call-counter profile showed per-visit recomputation, not the graph walk:
+12,684 `installed_candidates` scans (906,881 entries stat'ed),
+6.05 M `apply_updates_to_cp`, 71,572 `effective_use_flags` calls each
+cloning its memoised set, 29,774 uncached `resolved_use_mask_or_force`
+builds, 3,056 `local_binpkg_index` rebuilds. Four output-preserving
+slices removed them — a per-cp vdb cache validated by category-dir
+mtimes (the same signal real's `_bump_mtime` maintains) plus a one-time
+inverted move map, `Rc<HashSet>` out of `effective_use_flags` (and
+through `candidate_iuse_and_use`), a memo on
+`resolved_use_mask_or_force`, and a memoised `Arc<BinaryIndex>` — with
+the full contract suite byte-identical throughout (the one mid-batch
+diff bisected to new `-1` binhost revisions, not to any slice).
+Final, interleaved with real: portuale 4.0–4.2 s wall / ~3.0 s user vs
+real 4.5–5.1 s / ~4.1 s user. Detail:
+`docs/08.102-108-perf-memoisation.md`; numbers:
+`performances-tuning.md`.
+
+```sh
+/usr/bin/time -v rust/target/release/emerge -puD --getbinpkg net-libs/rest
+# best of 3 warm: ~4.1 s wall / ~3.0 s user / ~1.0 s sys (real: ~4.8 / ~4.1 / ~0.2)
+```
