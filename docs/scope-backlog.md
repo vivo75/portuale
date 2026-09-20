@@ -435,7 +435,15 @@ passthrough to the phase env; `Packages`-index `USE` back-fill;
 per-package `package.env` on standalone `ebuild <file> <phase>` runs
 (Tier 1: atom-matched on the ebuild's md5-cache identity) and
 `PORTAGE_RESTRICT` / `PROPERTIES` reduction on the config-`USE`
-`depend` phase (Tier 1). SELinux sandbox,
+`depend` phase (Tier 1). **Open, filed as #95 (2026-09-20):** the
+per-package env-var set is narrowed to `pretend::BUILD_VARS`, so
+`CC`/`CXX`/`CPP`/`AR`/`NM`/`RANLIB`/`LD`/`RUSTFLAGS`/`CGO_*`/…
+(and the incrementals `FEATURES`/`ACCEPT_KEYWORDS`/…) are silently
+dropped while `CFLAGS` from the same file lands — live failure:
+`mail-client/thunderbird` `tc-is-lto` runs gcc with `-flto=thin`.
+Real's acceptance set is everything except `_non_user_variables`
+(`PROFILE_ONLY_VARIABLES` ∪ `env_blacklist` ∪ `CONFIG_PROTECT`) and
+protected `PKGUSE`. SELinux sandbox,
 `userpriv`/`fakeroot` — non-goals (Part 3).
 
 **E. Binary packages / fetch** (substantially complete 2026-09-04..09):
@@ -593,6 +601,15 @@ ANSI USE colour all shipped 2026-09-05, see `what-this-proves.md`'s
   the `--shell` default.
 - the phase-execution default stays `bash`, not the embedded `brush`:
   flipping it back is a separate owner decision after the PRs land.
+- **Sixth brush incompatibility found 2026-09-20 (backlog #94):**
+  declaration builtins (`export`/`declare`/`local`) never
+  assignment-expand a non-literal name, so `export ${var}=value` is a
+  silent no-op (upstream `reubeno/brush` main `6bada559` still
+  affected). Real `toolchain-funcs.eclass::_tc-getPROG` sets the
+  compiler vars this way, so `--shell brush` fails `tc-check-openmp`
+  consumers in `pkg_pretend` (live: `media-gfx/gimp`). Another
+  independent blocker to the default flip; details in `brush-pin.md`
+  "What is *not* tracked here".
 - periodic re-pin to keep up with upstream `reubeno/brush` `main` (see
   `brush-pin.md`'s checklist).
 

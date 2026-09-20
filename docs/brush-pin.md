@@ -264,6 +264,31 @@ construct, `brush strategy #2` style — and get recorded here.
   corrupt-saved-environment regression test. See `TEST/findings/l2.md`
   "#38 S2" and `docs/what-this-proves.md`'s Track-B slice note.
 
+- **2026-09-20 — declaration builtins never assignment-expand an expanded
+  name (`export ${var}=value`). OPEN upstream; sixth staged-fix
+  candidate, backlog #94.** `var=CC; prog=( gcc ); export
+  ${var}="${prog[*]}"` leaves `CC` empty (exit 0) instead of `gcc`, on
+  the pin (`b9524ad5`) and on upstream `reubeno/brush` main
+  (`6bada559`, built and run 2026-09-20) alike. brush's parser only
+  recognizes a syntactically literal assignment name
+  (`brush-parser/src/word.rs:1263`), so the word reaches the builtin as
+  `CommandArg::String`; `export`'s `String` branch
+  (`brush-builtins/src/export.rs:72-95`) only marks an existing variable
+  exported (silent no-op) and `declare`/`local` reject it with `not a
+  valid variable name` (`declare.rs:299`). bash assigns after expansion
+  for declaration builtins (POSIX XCU 2.9.1). Impact: real
+  `toolchain-funcs.eclass` `_tc-getPROG` (`:25-45`) sets the compiler
+  vars this way whenever `CC`/… is unset, so under `--shell brush`
+  `tc-getCC` echoes empty and every `tc-check-openmp` consumer dies in
+  `pkg_pretend` (live: `emerge --shell brush media-gfx/gimp` —
+  `Your current compiler does not support OpenMP!` plus two
+  `command not found: -E` from the failure diagnostics). Fix upstream
+  first (split on the first `=` in the declaration builtins, or defer
+  assignment detection for them), add a compat case for the
+  literal/`${var}`/quoted/append × `export`/`declare`/`local` forms, and
+  a pin guard if the fork carries it. A second, independent blocker to
+  revisiting the `--shell` default.
+
 ## References
 
 - [`reubeno/brush`](https://github.com/reubeno/brush) — the embedded
