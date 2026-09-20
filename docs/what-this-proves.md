@@ -17529,3 +17529,40 @@ the second with `ETXTBSY` and the first by truncating the held inode.
 ```
 cd rust && cargo test --release -p portuale merge_driver -q
 ```
+
+## 2026-09-20 — backlog #95: `package.env` vars use real's acceptance set, not `BUILD_VARS`
+
+`match_package_env_vars` kept only `pretend::BUILD_VARS`, so a
+`/etc/portage/package.env` env file's `CC`/`CXX`/`CPP`/`AR`/`NM`/
+`RANLIB`/`LD`/`RUSTFLAGS`/`CGO_*`/`GOFLAGS`/`NINJAOPTS`/`COMMON_FLAGS`/
+`INSTALL_MASK`/`PORTAGE_NICENESS` never reached the phase while `CFLAGS`
+from the same file did. Live failure: `toolchain-funcs.eclass`'s
+`_tc-getPROG` exports `CC` from the env, the drop made `tc-getCC` fall
+back to `gcc`, and `tc-is-lto`'s gcc branch died on `-flto=thin`
+(`mail-client/thunderbird` under the host `llvm-lto` package.env).
+
+Real `_grab_pkg_env` (`config.py:2269-2300`) accepts **every** key of a
+matching env file except `_non_user_variables` (the profile's dynamic
+`PROFILE_ONLY_VARIABLES` ∪ `env_blacklist` ∪ `CONFIG_PROTECT`) and
+protected `PKGUSE`; `INCREMENTALS` (`const.py:125`) append and are then
+folded by `regenerate()` (`config.py:2778-2825`: `-*` clears, `-tok`
+removes, sorted union), and `config.environ()` drops `environ_filter`
+keys from the export set only. Portuale now ports that gate: `USE`
+stays on the `package_env_use` path, `ENVIRON_FILTER`/`PORTUALE_COMPUTED`
+keys stay out (the layer only exists in the phase env), empty values
+are kept (real blanks with `VAR=""`), and incrementals fold onto the
+caller's base env (merge: `options.build_env`; standalone:
+`build_config_env`). Live on the S0 scratch tree, the pre-fix phase env
+was `CC= CXX= RUSTFLAGS= ENV_UNSET=`; post-fix it is
+`CC=fixture-cc CXX=fixture-cxx RUSTFLAGS=-C target-cpu=fixture
+ENV_UNSET=PKG_UNSET` with rejected `SLOT=0`. Residues filed: #98
+(per-package `FEATURES`), #99 (per-package `PORTAGE_TMPDIR`), #100
+(standalone run-wide config env), #101 (calling-env vs `pkg` layer
+precedence). Expected values are the host real-Portage 3.0.82.2
+captures in pmtest `differential-test-bed/findings/l2.md` "## #95 S0".
+
+```
+cd rust && cargo test --release -p portuale package_env -q
+# the tc-getCC/tc-is-lto-shaped end-to-end pin (pmtest)
+python3 -m pytest pytests-contract-suite/test_portuale.py -q -k tc_is_lto
+```

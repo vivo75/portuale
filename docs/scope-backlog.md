@@ -435,15 +435,19 @@ passthrough to the phase env; `Packages`-index `USE` back-fill;
 per-package `package.env` on standalone `ebuild <file> <phase>` runs
 (Tier 1: atom-matched on the ebuild's md5-cache identity) and
 `PORTAGE_RESTRICT` / `PROPERTIES` reduction on the config-`USE`
-`depend` phase (Tier 1). **Open, filed as #95 (2026-09-20):** the
-per-package env-var set is narrowed to `pretend::BUILD_VARS`, so
-`CC`/`CXX`/`CPP`/`AR`/`NM`/`RANLIB`/`LD`/`RUSTFLAGS`/`CGO_*`/…
-(and the incrementals `FEATURES`/`ACCEPT_KEYWORDS`/…) are silently
-dropped while `CFLAGS` from the same file lands — live failure:
-`mail-client/thunderbird` `tc-is-lto` runs gcc with `-flto=thin`.
-Real's acceptance set is everything except `_non_user_variables`
-(`PROFILE_ONLY_VARIABLES` ∪ `env_blacklist` ∪ `CONFIG_PROTECT`) and
-protected `PKGUSE`. SELinux sandbox,
+`depend` phase (Tier 1). **#95 closed 2026-09-20** (branch
+`backlog/95-package-env`, plan
+[`history/01.95-package_env_acceptance.opus.md`](history/01.95-package_env_acceptance.opus.md)):
+the per-package env-var set now uses real `_grab_pkg_env`'s acceptance
+set — everything except `_non_user_variables` (`PROFILE_ONLY_VARIABLES`
+∪ `env_blacklist` ∪ `CONFIG_PROTECT`) and protected `PKGUSE`, minus the
+keys portuale's own phase pipeline owns (`ENVIRON_FILTER`,
+`PORTUALE_COMPUTED`), with empty values kept (real blanks) and
+incrementals appended within the container then folded onto the
+run-wide base (`regenerate()`'s `-*`/`-tok` sorted union). Residues
+filed: #98 (per-package `FEATURES`), #99 (per-package
+`PORTAGE_TMPDIR`), #100 (standalone run-wide config env), #101 (real's
+calling-env-over-`pkg` precedence). SELinux sandbox,
 `userpriv`/`fakeroot` — non-goals (Part 3).
 
 **E. Binary packages / fetch** (substantially complete 2026-09-04..09):
