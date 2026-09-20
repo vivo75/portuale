@@ -619,9 +619,10 @@ fn build_use_env(entry: &GraphEntry) -> Vec<(String, String)> {
 
 /// The per-package `package.env` build vars that match `entry`'s cpv --
 /// real `_grab_pkg_env` folding a matching `/etc/portage/package.env`
-/// entry's env file into `configdict["pkg"]`, narrowed to the
-/// deterministic `pretend::BUILD_VARS` set. Later `env` files (and later
-/// matching atoms) win, matching the caller's last-wins env application.
+/// entry's env file into `configdict["pkg"]`, with real's acceptance set
+/// (`match_package_env_vars`). Incrementals fold onto `options.build_env`
+/// (the run-wide resolved env) instead of replacing it, matching
+/// `regenerate()`'s layer stacking.
 fn entry_package_env_vars(
     options: &ebuild_merge::MergeOptions,
     entry: &GraphEntry,
@@ -638,7 +639,17 @@ fn entry_package_env_vars(
         "{}/{}-{version}:{slot}/{sub_slot}",
         entry.category, entry.package
     );
-    crate::ebuild_phases::match_package_env_vars(&options.package_env_vars, &cpv_slot)
+    let profile_only_variables = options
+        .resolved_config
+        .as_deref()
+        .and_then(|config| config.resolved_incremental("PROFILE_ONLY_VARIABLES"))
+        .unwrap_or_default();
+    crate::ebuild_phases::match_package_env_vars(
+        &options.package_env_vars,
+        &cpv_slot,
+        &profile_only_variables,
+        &options.build_env,
+    )
 }
 
 /// `SLOT`, `PORTAGE_REPO_NAME`, `PORTAGE_REPO_REVISIONS` for `entry` --

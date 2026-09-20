@@ -619,12 +619,11 @@ pub struct Config {
     /// from [`Config::package_env`]: for each entry, every referenced
     /// `/etc/portage/env/<name>` file's **non-`USE`** `KEY=value`
     /// assignments, concatenated in file order. Real `_grab_pkg_env`
-    /// folds every key into `configdict["pkg"]`; portuale consumes the
-    /// deterministic build-var subset (`CFLAGS`, `CXXFLAGS`, `LDFLAGS`,
-    /// `MAKEOPTS`, `CHOST`, …) as a per-package override of the run-wide
-    /// build-phase env. `FEATURES` and other incrementals are a
-    /// documented cut (portuale models `FEATURES` via its own
-    /// `feature_enabled`). Not consumed by `--pretend` (a build-phase
+    /// folds every key into `configdict["pkg"]`; portuale's
+    /// `ebuild_phases::match_package_env_vars` applies real's acceptance
+    /// gate to this list and layers the survivors onto the build-phase
+    /// env (incrementals folded, not replaced). `FEATURES`/`PORTAGE_TMPDIR`
+    /// are residues #98/#99. Not consumed by `--pretend` (a build-phase
     /// concern only), so unlike [`Config::package_env_use`] it has no
     /// Python-reference mirror.
     pub package_env_vars: Vec<(String, Vec<(String, String)>)>,

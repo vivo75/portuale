@@ -1002,7 +1002,19 @@ fn phase_standalone_base_env(
             env.category, env.split.pn, env.split.pvr, slot, sub_slot
         );
         let mut flags = flags;
-        flags.extend(match_package_env_vars(&config.package_env_vars, &cpv_slot));
+        // Real's layer stacking: the run-wide base is the caller's own
+        // flag set here (`build_config_env`), and an incremental
+        // `package.env` value folds onto it rather than replacing it.
+        let profile_only_variables = config
+            .resolved_incremental("PROFILE_ONLY_VARIABLES")
+            .unwrap_or_default();
+        let base = flags.clone();
+        flags.extend(match_package_env_vars(
+            &config.package_env_vars,
+            &cpv_slot,
+            &profile_only_variables,
+            &base,
+        ));
         Some((display, flags))
     })() else {
         return (String::new(), Vec::new());
@@ -1048,30 +1060,147 @@ fn restrict_and_properties(
     )
 }
 
+/// Real `const.INCREMENTALS` (`3rdparty/portage/lib/portage/const.py:125`):
+/// a key in this list is appended to the container's current value by
+/// `_grab_pkg_env`, then folded onto the lower layers by `regenerate()`
+/// (`config.py:2778-2825`: `-*` clears the set, `-tok` removes, sorted
+/// union). Kept complete even though the acceptance gate below drops most
+/// of them, so a future gate change cannot silently lose the semantics.
+const PACKAGE_ENV_INCREMENTALS: [&str; 12] = [
+    "ACCEPT_KEYWORDS",
+    "CONFIG_PROTECT",
+    "CONFIG_PROTECT_MASK",
+    "ENV_UNSET",
+    "FEATURES",
+    "IUSE_IMPLICIT",
+    "PROFILE_ONLY_VARIABLES",
+    "USE",
+    "USE_EXPAND",
+    "USE_EXPAND_HIDDEN",
+    "USE_EXPAND_IMPLICIT",
+    "USE_EXPAND_UNPREFIXED",
+];
+
+fn is_package_env_incremental(key: &str) -> bool {
+    PACKAGE_ENV_INCREMENTALS.contains(&key)
+}
+
+/// Real `_grab_pkg_env`'s per-key acceptance gate
+/// (`config.py:2269-2300`), minus the keys portuale's own phase pipeline
+/// owns:
+///
+/// * `USE` is real's special case (popped before the call, re-appended
+///   after `package.use`); portuale folds it via
+///   `Config::package_env_use`, so it must not also appear here.
+/// * `ENV_BLACKLIST` is real's `env_blacklist` (it already covers
+///   `PKGUSE`, the only `protected_pkg_keys` member).
+/// * `ENVIRON_FILTER` keys real accepts into the config but never exports
+///   to a phase (`config.environ()`, `config.py:3263-3350`); portuale's
+///   `package_env_vars` layer only exists in the phase env, so they are
+///   dropped.
+/// * `PORTUALE_COMPUTED` keys portuale's own phase runner computes and
+///   must always win (`FEATURES` and `PORTAGE_TMPDIR` are filed residues
+///   #98/#99; `PATH`, `DISTDIR`, `D`, … are owned by design).
+/// * `profile_only_variables` is the profile's dynamic
+///   `PROFILE_ONLY_VARIABLES` (`config.py:724-733`; `ARCH`, `ELIBC`,
+///   `IUSE_IMPLICIT`, `USE_EXPAND*`, …).
+///
+/// Everything else is accepted, including empty values (real blanks a
+/// variable with `VAR=""`) and `__`-prefixed names (real does not strip
+/// them here).
+fn package_env_key_allowed(key: &str, profile_only_variables: &[String]) -> bool {
+    !key.is_empty()
+        && key != "USE"
+        && !portage_profile::ENV_BLACKLIST.contains(&key)
+        && !portage_profile::ENVIRON_FILTER.contains(&key)
+        && !portage_profile::PORTUALE_COMPUTED.contains(&key)
+        && !profile_only_variables.iter().any(|k| k == key)
+}
+
+/// Real `regenerate()`'s incremental fold (`config.py:2778-2825`) for one
+/// key: the base layer's tokens, then the package.env overlay's tokens in
+/// order (`-*` clears, `-tok` removes), sorted and space-joined. `base`
+/// is the caller's own already-folded value for the key (`""` when the
+/// run-wide env doesn't carry it).
+fn fold_package_env_incremental(base: &str, overlay: &str) -> String {
+    let mut set: std::collections::BTreeSet<String> =
+        base.split_whitespace().map(String::from).collect();
+    for tok in overlay.split_whitespace() {
+        if tok == "-*" {
+            set.clear();
+        } else if let Some(rest) = tok.strip_prefix('-') {
+            set.remove(rest);
+        } else {
+            set.insert(tok.to_string());
+        }
+    }
+    set.into_iter().collect::<Vec<_>>().join(" ")
+}
+
 /// Atom-match `package_env_vars` (real `_grab_pkg_env` folding a
 /// matching `/etc/portage/package.env` entry's env file into
-/// `configdict["pkg"]`) against one `cat/pkg-ver:slot/sub` string,
-/// narrowed to the deterministic `pretend::BUILD_VARS` set. Later `env`
-/// files (and later matching atoms) win, matching the phase env's own
-/// last-wins application. Shared by the merge path
-/// (`emerge_build::entry_package_env_vars`, matching a resolved graph
-/// entry) and the standalone path below (matching the ebuild's own
-/// md5-cache identity -- no resolved graph needed).
+/// `configdict["pkg"]`) against one `cat/pkg-ver:slot/sub` string.
+///
+/// The container follows real exactly: files of one entry in order,
+/// matching entries in list order (portuale keeps parse order; real
+/// applies `ordered_by_atom_specificity`, a pre-existing narrowing), an
+/// incremental appends, a scalar replaces, an empty value blanks.
+/// Incrementals are then folded onto `base_env` (`regenerate()`'s layer
+/// stacking) instead of replacing it, so e.g. `ENV_UNSET` from an env
+/// file merges with the run-wide list.
+///
+/// Shared by the merge path (`emerge_build::entry_package_env_vars`,
+/// matching a resolved graph entry and passing `options.build_env`) and
+/// the standalone path below (matching the ebuild's own md5-cache
+/// identity and passing `build_config_env`'s base -- no resolved graph
+/// needed).
 pub(crate) fn match_package_env_vars(
     package_env_vars: &[(String, Vec<(String, String)>)],
     cpv_slot: &str,
+    profile_only_variables: &[String],
+    base_env: &[(String, String)],
 ) -> Vec<(String, String)> {
-    let mut out: Vec<(String, String)> = Vec::new();
+    let mut container: Vec<(String, String)> = Vec::new();
     for (atom, vars) in package_env_vars {
-        if portage_dep::match_from_list(atom, &[cpv_slot]).is_some_and(|m| !m.is_empty()) {
-            for (k, v) in vars {
-                if crate::pretend::BUILD_VARS.contains(&k.as_str()) && !v.is_empty() {
-                    out.push((k.clone(), v.clone()));
+        if !portage_dep::match_from_list(atom, &[cpv_slot]).is_some_and(|m| !m.is_empty()) {
+            continue;
+        }
+        for (k, v) in vars {
+            if !package_env_key_allowed(k, profile_only_variables) {
+                continue;
+            }
+            if is_package_env_incremental(k) {
+                match container.iter_mut().rev().find(|(ck, _)| ck == k) {
+                    Some((_, current)) => {
+                        if !current.is_empty() && !v.is_empty() {
+                            current.push(' ');
+                        }
+                        current.push_str(v);
+                    }
+                    None => container.push((k.clone(), v.clone())),
                 }
+            } else {
+                container.retain(|(ck, _)| ck != k);
+                container.push((k.clone(), v.clone()));
             }
         }
     }
-    out
+    container
+        .into_iter()
+        .map(|(k, v)| {
+            if is_package_env_incremental(&k) {
+                let base = base_env
+                    .iter()
+                    .rev()
+                    .find(|(bk, _)| *bk == k)
+                    .map(|(_, bv)| bv.as_str())
+                    .unwrap_or("");
+                (k, fold_package_env_incremental(base, &v))
+            } else {
+                (k, v)
+            }
+        })
+        .collect()
 }
 
 /// The config-`USE` set the `depend` phase reduces `RESTRICT`/
@@ -6419,6 +6548,171 @@ mod tests {
                 .iter()
                 .any(|(_, v)| v.contains("-march=fixturepkgenv")),
             "depend keeps its empty base"
+        );
+    }
+
+    /// Real `_grab_pkg_env`'s acceptance gate (`config.py:2269-2300`):
+    /// every non-`USE` key is accepted unless it is in `env_blacklist`,
+    /// `environ_filter`, the profile's dynamic `PROFILE_ONLY_VARIABLES`,
+    /// or portuale's own `PORTUALE_COMPUTED` set. The live host capture
+    /// behind this matrix is pmtest's `findings/l2.md` "#95 S0".
+    #[test]
+    fn package_env_accepts_real_scalars_and_rejects_non_user_variables() {
+        let profile_only = vec![
+            "ARCH".to_string(),
+            "ELIBC".to_string(),
+            "IUSE_IMPLICIT".to_string(),
+            "USE_EXPAND".to_string(),
+        ];
+        let vars: Vec<(String, String)> = [
+            ("CC", "clang"),
+            ("CXX", "clang++"),
+            ("CPP", "clang-cpp"),
+            ("AR", "llvm-ar"),
+            ("NM", "llvm-nm"),
+            ("RANLIB", "llvm-ranlib"),
+            ("LD", "ld.lld"),
+            ("RUSTFLAGS", "-C target-cpu=znver3"),
+            ("CGO_CFLAGS", "-O2"),
+            ("GOFLAGS", "-mod=mod"),
+            ("NINJAOPTS", "-j13"),
+            ("COMMON_FLAGS", "-O2"),
+            ("INSTALL_MASK", "/usr/share/mask"),
+            ("PORTAGE_NICENESS", "7"),
+            ("__PROBE_LOCAL", "secret"),
+            // rejected: env_blacklist
+            ("SLOT", "bogus"),
+            ("DEPEND", "dev-libs/bogus"),
+            ("RDEPEND", "dev-libs/bogus"),
+            ("EAPI", "8"),
+            ("ROOT", "/"),
+            ("PKGUSE", "x"),
+            // rejected: global_only_vars + environ_filter
+            ("CONFIG_PROTECT", "/protect"),
+            // rejected: environ_filter (accepted into real's config,
+            // never exported to a phase)
+            ("ACCEPT_KEYWORDS", "~amd64"),
+            ("CONFIG_PROTECT_MASK", "/mask"),
+            ("USE_ORDER", "env"),
+            // rejected: `USE` has its own `package_env_use` path
+            ("USE", "lto"),
+            // rejected: the profile's dynamic PROFILE_ONLY_VARIABLES
+            ("ARCH", "x86"),
+            ("ELIBC", "musl"),
+            ("IUSE_IMPLICIT", "x"),
+            ("USE_EXPAND", "VIDEO_CARDS"),
+            // rejected: PORTUALE_COMPUTED (FEATURES/PORTAGE_TMPDIR are
+            // residues #98/#99; the rest are portuale-owned)
+            ("FEATURES", "probe-feature"),
+            ("PORTAGE_TMPDIR", "/tmp/probe"),
+            ("DISTDIR", "/d"),
+            ("PATH", "/bin"),
+            ("D", "/d"),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let out = match_package_env_vars(
+            &[("dev-libs/penvccpkg".to_string(), vars)],
+            "dev-libs/penvccpkg-1.0:0/0",
+            &profile_only,
+            &[],
+        );
+        let keys: Vec<&str> = out.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(
+            keys,
+            vec![
+                "CC",
+                "CXX",
+                "CPP",
+                "AR",
+                "NM",
+                "RANLIB",
+                "LD",
+                "RUSTFLAGS",
+                "CGO_CFLAGS",
+                "GOFLAGS",
+                "NINJAOPTS",
+                "COMMON_FLAGS",
+                "INSTALL_MASK",
+                "PORTAGE_NICENESS",
+                "__PROBE_LOCAL",
+            ]
+        );
+        assert_eq!(
+            out.iter().find(|(k, _)| k == "CC").map(|(_, v)| v.as_str()),
+            Some("clang")
+        );
+    }
+
+    /// Real's two-level incremental semantics: `_grab_pkg_env` appends
+    /// within the container (`container[k] += " " + v`), then
+    /// `regenerate()` folds the container onto the lower layers with
+    /// `-*`/`-tok` pruning and a sorted union (`config.py:2778-2825`).
+    /// The three host captures in pmtest's `findings/l2.md` "#95 S0" are
+    /// the expected values.
+    #[test]
+    fn package_env_incrementals_fold_onto_the_base_like_regenerate() {
+        let cpv = "dev-libs/penvccpkg-1.0:0/0";
+        let base = vec![(
+            "ENV_UNSET".to_string(),
+            "BASE_UNSET PROFILE_UNSET".to_string(),
+        )];
+        let one_file = |v: &str| {
+            vec![(
+                "dev-libs/penvccpkg".to_string(),
+                vec![("ENV_UNSET".to_string(), v.to_string())],
+            )]
+        };
+        // pkg prunes a base token, then the union is sorted.
+        let out = match_package_env_vars(&one_file("-PROFILE_UNSET PKG_UNSET"), cpv, &[], &base);
+        assert_eq!(
+            out,
+            vec![("ENV_UNSET".to_string(), "BASE_UNSET PKG_UNSET".to_string())]
+        );
+        // `-*` clears every base token.
+        let out = match_package_env_vars(&one_file("-* ONLY"), cpv, &[], &base);
+        assert_eq!(out, vec![("ENV_UNSET".to_string(), "ONLY".to_string())]);
+        // Several matching files of one entry append in order.
+        let two_files = vec![(
+            "dev-libs/penvccpkg".to_string(),
+            vec![
+                ("ENV_UNSET".to_string(), "ONE".to_string()),
+                ("ENV_UNSET".to_string(), "TWO".to_string()),
+            ],
+        )];
+        let out = match_package_env_vars(&two_files, cpv, &[], &[]);
+        assert_eq!(out, vec![("ENV_UNSET".to_string(), "ONE TWO".to_string())]);
+    }
+
+    /// Scalars are set, not appended: a later file replaces, and an empty
+    /// value blanks the variable (real `CC=""` in an env file leaves the
+    /// phase's `CC` empty, S0 capture). A non-matching atom contributes
+    /// nothing.
+    #[test]
+    fn package_env_scalars_last_wins_and_empty_blanks() {
+        let cpv = "dev-libs/penvccpkg-1.0:0/0";
+        let files = vec![
+            (
+                "dev-libs/otherpkg".to_string(),
+                vec![("CC".to_string(), "not-me".to_string())],
+            ),
+            (
+                "dev-libs/penvccpkg".to_string(),
+                vec![
+                    ("CC".to_string(), "first".to_string()),
+                    ("CC".to_string(), String::new()),
+                    ("CXX".to_string(), "clang++".to_string()),
+                ],
+            ),
+        ];
+        let out = match_package_env_vars(&files, cpv, &[], &[]);
+        assert_eq!(
+            out,
+            vec![
+                ("CC".to_string(), String::new()),
+                ("CXX".to_string(), "clang++".to_string()),
+            ]
         );
     }
 }

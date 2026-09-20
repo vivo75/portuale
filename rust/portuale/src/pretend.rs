@@ -6853,13 +6853,16 @@ fn news_item_relevant(text: &str, root: &Path) -> bool {
     })
 }
 
-/// The deterministic compiler / make-flag set portuale threads into
-/// the ebuild build-phase env -- real portage's `settings["CFLAGS"]` /
-/// `["MAKEOPTS"]` / … reaching `bin/ebuild.sh`. Read run-wide from
-/// `Config::other_vars` by `build_config_env`, and per-package from
-/// `Config::package_env_vars` by `emerge_build::entry_package_env_vars`.
-/// `FEATURES` is deliberately not here -- portuale models it via
-/// `feature_enabled`, forcing `""` in the phase env.
+/// The deterministic compiler / make-flag set `build_config_env` reads
+/// run-wide from `Config::other_vars` for the **standalone** `ebuild
+/// <file> <phase>` base env -- real portage's `settings["CFLAGS"]` /
+/// `["MAKEOPTS"]` / … reaching `bin/ebuild.sh` from `make.conf`/profile.
+/// Per-package `package.env` values are no longer narrowed to this set
+/// (#95): `match_package_env_vars` applies real `_grab_pkg_env`'s full
+/// acceptance gate instead. `FEATURES` is deliberately not here --
+/// portuale models it via `feature_enabled`, forcing `""` in the phase
+/// env (per-package `FEATURES` is residue #98; the standalone run-wide
+/// env is residue #100).
 pub(crate) const BUILD_VARS: &[&str] = &[
     "CFLAGS", "CXXFLAGS", "CPPFLAGS", "LDFLAGS", "FFLAGS", "FCFLAGS", "ASFLAGS", "MAKEOPTS",
     "CHOST", "CBUILD", "CTARGET",
