@@ -230,8 +230,8 @@ graph walk but per-visit recomputation and vdb re-scanning: 1.20 M
 its memoised set. Every entry is **output-preserving** — byte-identical
 output over the existing contract suite + harvested corpus is the guard
 — and re-measures the same workload; `performances-tuning.md` carries
-the numbers. Plan for #102–#104:
-[`08.102-107-perf-memoisation.md`](08.102-107-perf-memoisation.md).
+the numbers. Plan for #102–#104 + #108:
+[`08.102-108-perf-memoisation.md`](08.102-108-perf-memoisation.md).
 Tag [P] = performance; detail lives in `performances-tuning.md`, not a
 `scope-backlog.md` section.
 
@@ -241,6 +241,8 @@ Tag [P] = performance; detail lives in `performances-tuning.md`, not a
 105. **`use_context_fingerprint` re-hashes ~20 config fields on every `effective_use_flags` call (71,572 calls, ~8 % of the run: closure 3.4 + `hash_sampled` 2.6 + 2.0).** `portage-repo/src/lib.rs:3239`; cache the immutable part per config generation (bump it on the `'backtrack` loop's `autounmask_use` mutation) instead of re-hashing the big `HashSet`s for every EUF key. Plan §5. [P]
 106. **`candidate_positions` allocates, extends and sorts per call (826,643 calls, 99.99 % `cp_bucket_index` hits).** `portage-repo/src/lib.rs:2939` does `format!("{category}/{package}")` + `Vec` clone + `extend_from_slice(other)` + `sort_unstable` on every lookup while the index itself is already cached. Fix: key `by_cp` by `(String, String)` (or a stack `cat/pkg` buffer) and/or return a borrowed iterator. Fold into #104 if cheap. Plan §5. [P]
 107. **The backtracking loop runs a second full `run_pass` where real reports `backtrack: 0/20` (≈30 % of the run).** On the §1 workload portuale's feedback loop restarts (`--backtrack=0` cuts user 5.87 → 4.11 s) while real resolves in one pass; the trigger is the libdisplay-info blocker the #68 blocker family already owns. This is an **algorithmic/parity** item, not memoisation: do not win it by skipping the pass (that silently changes which run is reported). Diagnose the feedback trigger against real's `_backtrack_depgraph` and decide with the owner. Plan §5 (rule in §4). [P]
+
+108. **`local_binpkg_index` rebuilds the whole binary index per call (3,056 calls, 2.45 % of the run).** `portage-repo/src/lib.rs:2272` clones `config.scanned_binpkgs` (or re-reads `$PKGDIR/Packages`) and rebuilds the `by_cp` map on every call from 3 sites. Fix: thread-local memo keyed by `(pkgdir, scanned identity, quickpkg root)` — the `cp_bucket_index` `(ptr, len)` + first/last fingerprint pattern — returning `Arc<BinaryIndex>`; the `None` arm should use the existing `cached_binary_index`. All inputs are set once before resolution, so the key is stable within a run. Plan S4. [P]
 
 ---
 

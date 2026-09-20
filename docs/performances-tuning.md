@@ -402,8 +402,8 @@ installed packages): portuale 7.71–7.92 s wall / 5.79–6.00 s user /
 1.83–1.92 s sys vs real 3.0.82.2 5.70–5.89 s / 4.97–5.00 s /
 0.19–0.24 s. The profile above still holds — SipHash ~19 %, malloc/free
 ~30 %, `HashSet::clone` 2.46 % — and item 2 is now a scoped plan:
-[`08.102-107-perf-memoisation.md`](08.102-107-perf-memoisation.md)
+[`08.102-108-perf-memoisation.md`](08.102-108-perf-memoisation.md)
 (#102 per-cp `installed_candidates` cache, #103 `Rc` from
-`effective_use_flags`, #104 `resolved_use_mask_or_force` memo; #105–#107
-filed as follow-ups). The call counts and the temporary-counter recipe
-are in the plan's §1.
+`effective_use_flags`, #104 `resolved_use_mask_or_force` memo, #108
+`local_binpkg_index` memo; #105–#107 filed as follow-ups). The call
+counts and the temporary-counter recipe are in the plan's §1.
