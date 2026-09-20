@@ -2767,7 +2767,7 @@ fn binpkg_respect_use_ok(
                 config,
             );
             let (iuse, use_flags) = candidate_iuse_and_use(ebuild, category, package, config)
-                .unwrap_or_else(|| (old_iuse.clone(), binary_use.clone()));
+                .unwrap_or_else(|| (old_iuse.clone(), Rc::new(binary_use.clone())));
             (iuse, use_flags, forced)
         }
         // Real's no-`myeb` arm (`depgraph.py:8265-8271`):
@@ -3204,7 +3204,7 @@ pub fn effective_use_flags(
     candidate_str: &str,
     category: &str,
     package: &str,
-) -> HashSet<String> {
+) -> Rc<HashSet<String>> {
     // Memoise per (config USE context, candidate). A deep `emerge -pu`
     // calls this ~20k times for a few hundred distinct candidates -- once
     // in `is_visible`, then again for `keywords_accepted`, `is_stable`,
@@ -3239,7 +3239,11 @@ pub fn effective_use_flags(
         (h.finish(), candidate_str.to_string())
     };
     if let Some(hit) = EUF_CACHE.with(|c| c.borrow().get(&key).cloned()) {
-        return hit.as_ref().clone();
+        // The shared set, not a clone of it: callers only read (backlog
+        // #103 -- the per-call `HashSet` clone was ~14 M `String` clones
+        // on a deep `emerge -pu`). Clone at the call site only where
+        // ownership is genuinely needed.
+        return hit;
     }
     let result = Rc::new(effective_use_flags_uncached(
         config,
@@ -3252,7 +3256,7 @@ pub fn effective_use_flags(
     EUF_CACHE.with(|c| {
         c.borrow_mut().insert(key, Rc::clone(&result));
     });
-    result.as_ref().clone()
+    result
 }
 
 /// A cheap content fingerprint of every `Config` field
@@ -4039,6 +4043,8 @@ fn use_flags_if_conditional(
     if !value_str.contains('?') {
         return HashSet::new();
     }
+    // Owned (not the shared `Rc`): cold path, one clone per call -- the
+    // same cost as before #103.
     effective_use_flags(
         config,
         &candidate.iuse,
@@ -4047,6 +4053,8 @@ fn use_flags_if_conditional(
         category,
         package,
     )
+    .as_ref()
+    .clone()
 }
 
 /// A candidate's own `PROPERTIES` (or `RESTRICT`) tokens after real
@@ -5069,7 +5077,12 @@ fn implicit_iuse_set(iuse: &str, config: &portage_profile::Config) -> HashSet<St
 /// autounmask-use`'s own `opt?` mechanism never triggers for it), or its
 /// own metadata can't be read.
 /// `(candidate, implicit_iuse, effective_use, REQUIRED_USE)`.
-type ParentUseState = (Candidate, HashSet<String>, HashSet<String>, Option<String>);
+type ParentUseState = (
+    Candidate,
+    HashSet<String>,
+    Rc<HashSet<String>>,
+    Option<String>,
+);
 
 fn parent_use_state(
     repos: &[RepoConfig],
@@ -5222,7 +5235,7 @@ fn suggested_parent_use_candidate(
         return None;
     }
 
-    let mut hypothetical_use = parent_use.clone();
+    let mut hypothetical_use = parent_use.as_ref().clone();
     for (flag, desired) in &target_use {
         if *desired {
             hypothetical_use.insert(flag.clone());
@@ -6288,7 +6301,7 @@ pub fn candidate_effective_use_flags(
         category,
         package,
     );
-    let mut sorted: Vec<String> = use_flags.into_iter().collect();
+    let mut sorted: Vec<String> = use_flags.iter().cloned().collect();
     sorted.sort_by_key(|f| alnum_sort_key(f));
     sorted
 }
@@ -8562,7 +8575,7 @@ fn candidate_iuse_and_use(
     category: &str,
     package: &str,
     config: &portage_profile::Config,
-) -> Option<(HashSet<String>, HashSet<String>)> {
+) -> Option<(HashSet<String>, Rc<HashSet<String>>)> {
     // A binary candidate has no `repo_location` md5-cache entry to read,
     // and -- unlike an ebuild -- its USE isn't recomputed from the
     // profile: it carries the flags it was *actually built with*
@@ -8575,7 +8588,10 @@ fn candidate_iuse_and_use(
             .split_whitespace()
             .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
             .collect();
-        let use_flags = candidate.binary_use.clone().unwrap_or_default();
+        // Owned inside a fresh `Rc` (no shared source exists for the
+        // baked set): one small allocation, no content clone saved or
+        // added versus before #103.
+        let use_flags = Rc::new(candidate.binary_use.clone().unwrap_or_default());
         return Some((iuse, use_flags));
     }
     let pf = format!("{package}-{}", candidate.version);
@@ -9038,7 +9054,7 @@ type CandidateUseProbe = (
     String,
     Vec<String>,
     HashSet<String>,
-    HashSet<String>,
+    Rc<HashSet<String>>,
     String,
 );
 
@@ -9362,7 +9378,7 @@ fn use_unsat_parent_row(
     }
     let (parent_candidate, parent_iuse, parent_use, parent_required_use) =
         parent_use_state(repos, entries, owner, config)?;
-    let mut hypothetical = parent_use.clone();
+    let mut hypothetical = parent_use.as_ref().clone();
     let mut changes: Vec<String> = Vec::new();
     for flag in &involved_flags {
         let desired = !parent_use.contains(flag);
@@ -11402,9 +11418,9 @@ fn resolved_version_meta_and_use(
     let pf = format!("{package}-{version}");
     let metadata = repo_aux_metadata(&resolved.repo_location, category, &pf).ok()?;
     let (_iuse, use_flags) = candidate_iuse_and_use(resolved, category, package, config)?;
-    // Cold path (`--root-deps` only); the shared `Arc` isn't worth
+    // Cold path (`--root-deps` only); the shared `Rc` isn't worth
     // threading through `unsatisfied_root_deps_atoms`'s `&HashMap`.
-    Some(((*metadata).clone(), use_flags))
+    Some(((*metadata).clone(), use_flags.as_ref().clone()))
 }
 
 /// Real "recursively pull in and build new packages against the running
@@ -14974,7 +14990,7 @@ pub fn circular_dep_solutions(
         let n_aff = affecting.len();
         let mut solutions: HashSet<Vec<(String, bool)>> = HashSet::new();
         for mask in 0u32..(1u32 << n_aff) {
-            let mut cur = parent_use.clone();
+            let mut cur = parent_use.as_ref().clone();
             for (i, f) in affecting.iter().enumerate() {
                 if mask & (1 << i) != 0 {
                     cur.insert(f.clone());
@@ -16175,7 +16191,8 @@ pub fn slot_conflict_flag_sets(
         return (HashSet::new(), HashSet::new());
     };
     match candidate_iuse_and_use(&cand, category, package, config) {
-        Some((iuse, use_flags)) => (iuse, use_flags),
+        // Render-time only (slot-collision messages); one clone here.
+        Some((iuse, use_flags)) => (iuse, use_flags.as_ref().clone()),
         None => (HashSet::new(), HashSet::new()),
     }
 }
@@ -20164,7 +20181,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             else {
                 break 'parent_flip (current_atom, atom);
             };
-            let mut new_parent_use = parent_use.clone();
+            let mut new_parent_use = parent_use.as_ref().clone();
             for (flag, want) in &target_use {
                 if *want {
                     new_parent_use.insert(flag.clone());
@@ -21636,6 +21653,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         let mut use_flags = if candidate_source == CandidateSource::Binary {
             resolved.binary_use.clone().unwrap_or_default()
         } else {
+            // Owned: adjusted in place below -- one clone, as before #103.
             effective_use_flags(
                 config,
                 metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
@@ -21644,6 +21662,8 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 &key.0,
                 &key.1,
             )
+            .as_ref()
+            .clone()
         };
 
         // Real `--autounmask-use` USE resolution: `resolve_pretend` kept
@@ -24459,7 +24479,7 @@ mod tests {
             iuse,
             HashSet::from(["feat".to_string(), "other".to_string()])
         );
-        assert_eq!(use_flags, HashSet::from(["feat".to_string()]));
+        assert_eq!(*use_flags, HashSet::from(["feat".to_string()]));
     }
 
     #[test]
@@ -37460,7 +37480,10 @@ mod tests {
             }],
             ..Default::default()
         };
+        // Test helper keeps the owned return; the `Rc` is unwrapped here.
         effective_use_flags(&config, iuse, keywords, candidate_str, category, package)
+            .as_ref()
+            .clone()
     }
 
     fn candidate(version: &str, keywords: &[&str]) -> Candidate {
@@ -38245,7 +38268,7 @@ mod tests {
             "dev-libs",
             "pkg",
         );
-        assert_eq!(flags, HashSet::from(["video_cards_intel".to_string()]));
+        assert_eq!(*flags, HashSet::from(["video_cards_intel".to_string()]));
     }
 
     #[test]
@@ -38304,6 +38327,8 @@ mod tests {
             "dev-libs",
             "pkg",
         )
+        .as_ref()
+        .clone()
     }
 
     fn pu(flag: &str) -> Vec<(String, Vec<String>)> {
@@ -39103,8 +39128,8 @@ mod tests {
         assert!(with_bar.contains("bar") && !with_bar.contains("foo"));
         // And the memo is transparent: a second call matches the uncached body.
         assert_eq!(
-            call(&base("foo")),
-            effective_use_flags_uncached(
+            call(&base("foo")).as_ref(),
+            &effective_use_flags_uncached(
                 &base("foo"),
                 "foo bar",
                 &["amd64".to_string()],

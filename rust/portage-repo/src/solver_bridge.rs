@@ -285,8 +285,10 @@ impl LazyRepo {
             &version.category,
             &version.package,
         );
-        self.uses.borrow_mut().insert(cpv, use_set.clone());
-        use_set
+        // Owned: the parked-bridge memo keeps its own copy (cold path;
+        // one clone per miss, as before #103).
+        self.uses.borrow_mut().insert(cpv, use_set.as_ref().clone());
+        use_set.as_ref().clone()
     }
 
     /// The closure as parsed CPNs (unparsable names dropped).
