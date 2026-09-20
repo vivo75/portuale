@@ -6494,9 +6494,11 @@ mod tests {
     /// file over the base flags -- atom-matched against the ebuild's own
     /// md5-cache identity, with no resolved graph entry anywhere.
     /// `dev-libs/penvbuildpkg` (mapped to `penv-buildflags`) carries the
-    /// env file's `CFLAGS`/`MAKEOPTS`; `dev-libs/newpkg` (unmapped)
-    /// doesn't; the `depend` phase never does (its empty base is
-    /// deliberate -- metadata extraction must not see config values).
+    /// env file's `CFLAGS`/`MAKEOPTS` plus real's toolchain selectors
+    /// `CC`/`CXX`/`AR`/`RUSTFLAGS` and the `ENV_UNSET` incremental
+    /// (backlog #95); `dev-libs/newpkg` (unmapped) doesn't; the `depend`
+    /// phase never does (its empty base is deliberate -- metadata
+    /// extraction must not see config values).
     #[test]
     fn standalone_phase_env_layers_matching_package_env_build_vars() {
         let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
@@ -6535,6 +6537,14 @@ mod tests {
             Some("-Os -march=fixturepkgenv")
         );
         assert_eq!(get(&setup_vars, "MAKEOPTS").as_deref(), Some("-j7"));
+        assert_eq!(get(&setup_vars, "CC").as_deref(), Some("fixture-cc"));
+        assert_eq!(get(&setup_vars, "CXX").as_deref(), Some("fixture-cxx"));
+        assert_eq!(get(&setup_vars, "AR").as_deref(), Some("fixture-ar"));
+        assert_eq!(
+            get(&setup_vars, "RUSTFLAGS").as_deref(),
+            Some("-C target-cpu=fixturepkg")
+        );
+        assert_eq!(get(&setup_vars, "ENV_UNSET").as_deref(), Some("PENV_UNSET"));
         let plain_vars = vars_for("newpkg", "newpkg-1.0", "setup");
         assert!(
             !plain_vars
