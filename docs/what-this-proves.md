@@ -17399,3 +17399,26 @@ emerge --pretend --backtrack=0 dev-libs/slotconflictoldconsumer dev-libs/slotcon
 cd rust && cargo test --release -p portage-repo direct_solve
 python3 -m pytest ../pmtest/pytests-contract-suite/test_emerge_pretend_contract.py -k "oracle_90_reversed or backtrack_zero" -q
 ```
+
+## 2026-09-20 — backlog #88: the per-process `bin/` overlay is removed at exit
+
+Every process that ran real ebuild phases leaked its `$TMPDIR/portuale-bin.<pid>`
+symlink overlay (`ebuild_phases.rs::bin_dir()`, resolved once per process via
+`OnceLock`, read from seven call sites in three files) -- ~500 stale dirs per
+full contract-suite run, which pmtest could only sweep from the outside
+(`conftest.py::_reclaim_portuale_bin_overlays`). The fix is one
+`libc::atexit` registration made exactly where the overlay is created:
+normal exits of every command clean up after themselves, fallback paths
+(vendored/checkout used directly) register nothing, and a failed
+registration keeps the old leak rather than breaking the run. Signal
+kills still leak, like any tmp dir. Measured on a dedicated `TMPDIR`
+with a phase-touching test process: 1 leftover dir before, 0 after;
+`remove_bin_overlay_dir` idempotency is unit-pinned. The harness sweep
+stays as defense in depth.
+
+```
+rm -rf /tmp/88meas && mkdir -p /tmp/88meas
+TMPDIR=/tmp/88meas cargo test --release -p portuale phase_setup_script_exports_extra_env_features_last
+ls -d /tmp/88meas/portuale-bin.* | wc -l   # 0 (was 1)
+cd rust && cargo test --release -p portuale remove_bin_overlay -q
+```
