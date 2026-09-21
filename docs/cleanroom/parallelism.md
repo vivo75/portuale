@@ -182,9 +182,11 @@ any single merge.
    `elog.rs`'s hook-env apply/restore and `remote.rs`'s
    `ConfigRootGuard` (`PORTAGE_CONFIGROOT`). Under edition 2024
    `set_var` is `unsafe` precisely because it races concurrent readers,
-   and `read_dir_entries` reads `PORTUALE_SHUFFLE_DIRS` via
-   `std::env::var` on **every call**. This binds §3/§4 (merge and build
-   paths), not §2.
+   and `read_dir_entries` used to read `PORTUALE_SHUFFLE_DIRS` via
+   `std::env::var` on **every call** — backlog #113 (2026-09-21) froze
+   that read in a `OnceLock` at first use, removing the only env reader
+   that ran inside the merge/build paths this rule binds. This binds
+   §3/§4 (merge and build paths), not §2.
 
 ## 2. Resolver: `emerge --pretend` / `--ask`
 
