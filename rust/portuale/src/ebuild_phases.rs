@@ -1035,6 +1035,34 @@ fn phase_standalone_base_env(
             &base,
             &portage_profile::config_env_all(),
         ));
+        // Per-package `FEATURES` (#98): an incremental, so a flat pair
+        // would *replace* the run-wide folded list. Fold the matched
+        // raw value onto the resolved run-wide list in `[run-wide, pkg,
+        // calling-env]` order instead, and export both computed keys —
+        // the same treatment the merge path's `entry_build_env` gives.
+        // No append when nothing matched, so fixtures without a
+        // `package.env` `FEATURES` entry keep byte-identical output.
+        let pkg_features =
+            match_package_env_incremental_raw(&config.package_env_vars, &cpv_slot, "FEATURES");
+        if !pkg_features.is_empty() {
+            let run_wide = config
+                .resolved_incremental("FEATURES")
+                .or_else(|| {
+                    config
+                        .other_vars
+                        .get("FEATURES")
+                        .map(|f| f.split_whitespace().map(String::from).collect())
+                })
+                .unwrap_or_default()
+                .join(" ");
+            let folded = fold_package_env_incremental(
+                &run_wide,
+                &pkg_features,
+                &std::env::var("FEATURES").unwrap_or_default(),
+            );
+            flags.push(("FEATURES".to_string(), folded.clone()));
+            flags.push(("PORTAGE_FEATURES".to_string(), folded));
+        }
         Some((display, flags))
     })() else {
         return (String::new(), Vec::new());
@@ -1285,6 +1313,27 @@ fn match_package_env_scalar_raw(
     matched.map(String::from)
 }
 
+pub(crate) fn match_package_env_incremental_raw(
+    package_env_vars: &[(String, Vec<(String, String)>)],
+    cpv_slot: &str,
+    key: &str,
+) -> String {
+    let mut container = String::new();
+    for (atom, vars) in package_env_vars {
+        if !portage_dep::match_from_list(atom, &[cpv_slot]).is_some_and(|m| !m.is_empty()) {
+            continue;
+        }
+        for (k, v) in vars {
+            if k == key {
+                if !container.is_empty() && !v.is_empty() {
+                    container.push(' ');
+                }
+                container.push_str(v);
+            }
+        }
+    }
+    container
+}
 /// Real per-package `PORTAGE_TMPDIR` (backlog #99): `_grab_pkg_env`
 /// accepts the key into `configdict["pkg"]` (it is not in
 /// `env_blacklist`, `environ_filter`, `global_only_vars` or the
@@ -2768,7 +2817,6 @@ fn phase_env_vars(
             }
             .to_string(),
         ),
-        ("FEATURES".to_string(), phase_features_value()),
         // Real `doebuild_environment()` exports the package's effective
         // `USE` into every phase. Merge builds override this base value
         // downstream via `extra_env` (see `run_commands_async`); a
@@ -2786,6 +2834,18 @@ fn phase_env_vars(
         ),
         ("EBUILD_PHASE".to_string(), ebuild_phase_value.to_string()),
     ]);
+
+    // Real `FEATURES` for the phase's own bash environment: the resolved
+    // list whenever one is already in `vars` — the merge path's
+    // `extra_env`-independent base is empty so the process value below
+    // stands (and `extra_env` still overrides it downstream), while the
+    // standalone `phase_environ` base already folds the run-wide list
+    // with the per-entry package.env value and the calling env
+    // (#98/#100), which a raw process-env literal must not clobber.
+    // (No-config standalone runs keep the process value, as before.)
+    if !vars.iter().any(|(k, _)| k == "FEATURES") {
+        vars.push(("FEATURES".to_string(), phase_features_value()));
+    }
 
     // Real `doebuild_environment()`: `PORTAGE_RESTRICT`/
     // `PORTAGE_PROPERTIES` are set for every phase, always, from the
@@ -6928,6 +6988,57 @@ mod tests {
         let calling = vec![("CFLAGS".to_string(), "-O2 -pipe".to_string())];
         let out = match_package_env_vars(&files, cpv, &[], &[], &calling);
         assert_eq!(out, vec![("CC".to_string(), "pkg-cc".to_string())]);
+    }
+
+    /// The raw single-key matchers behind the `PORTUALE_COMPUTED`
+    /// recomputes (#98/#99): scalars replace (last matching file wins),
+    /// incrementals append across matching files in order, non-matching
+    /// atoms and other keys contribute nothing — real `_grab_pkg_env`'s
+    /// container behaviour without the acceptance gate or the fold.
+    #[test]
+    fn package_env_raw_matchers_follow_the_container_semantics() {
+        let cpv = "dev-libs/penvccpkg-1.0:0/0";
+        let files = vec![
+            (
+                "dev-libs/otherpkg".to_string(),
+                vec![
+                    ("FEATURES".to_string(), "not-me".to_string()),
+                    ("PORTAGE_TMPDIR".to_string(), "/not-me".to_string()),
+                ],
+            ),
+            (
+                "dev-libs/penvccpkg".to_string(),
+                vec![
+                    ("FEATURES".to_string(), "ONE".to_string()),
+                    ("PORTAGE_TMPDIR".to_string(), "/first".to_string()),
+                    ("CC".to_string(), "ignored".to_string()),
+                ],
+            ),
+            (
+                "dev-libs/penvccpkg".to_string(),
+                vec![
+                    ("FEATURES".to_string(), "TWO".to_string()),
+                    ("PORTAGE_TMPDIR".to_string(), "/second".to_string()),
+                ],
+            ),
+        ];
+        assert_eq!(
+            match_package_env_scalar_raw(&files, cpv, "PORTAGE_TMPDIR"),
+            Some("/second".to_string())
+        );
+        assert_eq!(
+            match_package_env_incremental_raw(&files, cpv, "FEATURES"),
+            "ONE TWO".to_string()
+        );
+        assert_eq!(match_package_env_scalar_raw(&files, cpv, "MISSING"), None);
+        assert_eq!(
+            match_package_env_incremental_raw(&files, cpv, "MISSING"),
+            String::new()
+        );
+        assert_eq!(
+            match_package_env_scalar_raw(&files, "dev-libs/other-1.0:0/0", "PORTAGE_TMPDIR"),
+            None
+        );
     }
 
     /// Real per-package `PORTAGE_TMPDIR` (backlog #99, S0 cells D/E):

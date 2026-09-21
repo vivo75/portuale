@@ -569,6 +569,16 @@ pub(crate) fn merge_one_source_entry(
     // not the implicit/arch part of the effective set.
     let mut per_entry = options.clone();
     per_entry.build_env = entry_build_env(options, entry, repos);
+    // Real per-package `FEATURES` (#98): this entry's gates (Rust-side
+    // `feature_enabled` and the vdb-environment regeneration) read the
+    // per-entry folded list. `None` (no match) keeps the run-wide value.
+    if let Some(features) = entry_resolved_features(
+        options,
+        entry,
+        &std::env::var("FEATURES").unwrap_or_default(),
+    ) {
+        per_entry.set_resolved_features(&features);
+    }
     // Real per-package `PORTAGE_TMPDIR` (#99): this entry's build
     // directories live under the matched value, so the pre-clean and
     // the merge below share the resolved root.
@@ -622,6 +632,40 @@ fn entry_portage_tmpdir(
         portage_tmpdir,
         options.process_tmpdir.as_deref(),
     )
+}
+
+/// Real per-package `FEATURES` (backlog #98) for one scheduler entry:
+/// `FEATURES` is an incremental, so the matched env-file value folds
+/// onto the run-wide resolved list in `[run-wide, pkg, calling-env]`
+/// order (`regenerate()`, `config.py:2735`, `:2778-2825`) instead of
+/// replacing it. `calling_features` is the raw calling-environment
+/// value (a parameter, not an ambient read, so the fold stays
+/// unit-testable); the run-wide base is `options.features` (the
+/// resolved list on `emerge` paths, the raw process fallback
+/// elsewhere). `None` when nothing matched (or the entry is not
+/// buildable) — the caller then keeps the run-wide value untouched, so
+/// entries without a `package.env` `FEATURES` entry keep
+/// byte-identical output.
+pub(crate) fn entry_resolved_features(
+    options: &ebuild_merge::MergeOptions,
+    entry: &GraphEntry,
+    calling_features: &str,
+) -> Option<String> {
+    let version = entry_version(&entry.outcome)?;
+    let cpv_slot = entry_cpv_slot(entry, version);
+    let pkg_raw = crate::ebuild_phases::match_package_env_incremental_raw(
+        &options.package_env_vars,
+        &cpv_slot,
+        "FEATURES",
+    );
+    if pkg_raw.is_empty() {
+        return None;
+    }
+    Some(crate::ebuild_phases::fold_package_env_incremental(
+        &options.features,
+        &pkg_raw,
+        calling_features,
+    ))
 }
 
 /// `[("USE", "<space-joined enabled IUSE flags>")]` for `entry` -- the
@@ -842,6 +886,16 @@ fn entry_build_env(
         .and_then(|version| locate_candidate(repos, &entry.category, &entry.package, version));
     let mut env = options.build_env.clone();
     env.extend(entry_package_env_vars(options, entry));
+    // Per-package `FEATURES` (#98): the folded per-entry list overrides
+    // the run-wide `FEATURES`/`PORTAGE_FEATURES` pair downstream
+    // (last-wins), so the phase env and every `extra_env` gate see it.
+    // `None` (no match) appends nothing, so entries without a
+    // `package.env` `FEATURES` entry keep byte-identical output.
+    let calling_features = std::env::var("FEATURES").unwrap_or_default();
+    if let Some(features) = entry_resolved_features(options, entry, &calling_features) {
+        env.push(("FEATURES".to_string(), features.clone()));
+        env.push(("PORTAGE_FEATURES".to_string(), features));
+    }
     env.extend(entry_phase_env_tail(
         options.resolved_config.as_deref(),
         repos,
@@ -1262,6 +1316,18 @@ fn merge_one_built_entry(
     // entry's resolved `USE` too (see `merge_one_source_entry`).
     let mut per_entry = options.clone();
     per_entry.build_env = entry_build_env(options, entry, repos);
+    // Real per-package `FEATURES` (#98): the merge half's gates
+    // (`feature_enabled`, the vdb-environment regeneration) read the
+    // per-entry folded list, not the run-wide one. `set_resolved_features`
+    // re-derives the merge-time tokens from it; `None` (no match) keeps
+    // the run-wide value untouched.
+    if let Some(features) = entry_resolved_features(
+        options,
+        entry,
+        &std::env::var("FEATURES").unwrap_or_default(),
+    ) {
+        per_entry.set_resolved_features(&features);
+    }
     // Real per-package `PORTAGE_TMPDIR` (#99): the merge half runs under
     // the same resolved root the build half used (resolved again here so
     // this function keeps its standalone `portage_tmpdir` contract).
@@ -2138,6 +2204,71 @@ mod tests {
             get(&env, "PORTAGE_REPO_NAME").is_some_and(|v| !v.is_empty()),
             "repo fallback missing"
         );
+    }
+
+    /// Backlog #98: the per-entry folded `FEATURES` list. A matched env
+    /// file value folds onto the run-wide list in `[run-wide, pkg,
+    /// calling-env]` order (S0 cells B/C); no match returns `None`, so
+    /// the run-wide value — and every gate reading it — stays untouched.
+    #[allow(clippy::field_reassign_with_default)]
+    #[test]
+    fn entry_resolved_features_folds_the_matched_env_file_value() {
+        let options_for = |features: &str, pkg_raw: &str| {
+            let mut options = ebuild_merge::MergeOptions::default();
+            options.features = features.to_string();
+            if !pkg_raw.is_empty() {
+                options.package_env_vars = vec![(
+                    "dev-libs/penvccpkg".to_string(),
+                    vec![("FEATURES".to_string(), pkg_raw.to_string())],
+                )];
+            }
+            options
+        };
+        let entry = source_entry(
+            "penvccpkg",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        // No match: None, the run-wide value stands.
+        assert_eq!(
+            entry_resolved_features(&options_for("sandbox", ""), &entry, ""),
+            None
+        );
+        // Env file only: the token joins the folded, sorted list (S0 C).
+        assert_eq!(
+            entry_resolved_features(
+                &options_for("sandbox userfetch", "probe-feature"),
+                &entry,
+                ""
+            ),
+            Some("probe-feature sandbox userfetch".to_string())
+        );
+        // A `-tok` in the calling env prunes the pkg token (S0 B).
+        assert_eq!(
+            entry_resolved_features(
+                &options_for("sandbox userfetch", "probe-feature"),
+                &entry,
+                "-probe-feature"
+            ),
+            Some("sandbox userfetch".to_string())
+        );
+        // A pkg `-tok` does not prune a calling-env token.
+        assert_eq!(
+            entry_resolved_features(
+                &options_for("sandbox", "-userfetch probe-feature"),
+                &entry,
+                "userfetch"
+            ),
+            Some("probe-feature sandbox userfetch".to_string())
+        );
+        // A non-matching atom contributes nothing.
+        let mut options = options_for("sandbox", "probe-feature");
+        options.package_env_vars = vec![(
+            "dev-libs/otherpkg".to_string(),
+            vec![("FEATURES".to_string(), "probe-feature".to_string())],
+        )];
+        assert_eq!(entry_resolved_features(&options, &entry, ""), None);
     }
 
     /// #37 S2 end-to-end: a real source merge with a resolved config
