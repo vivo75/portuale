@@ -302,6 +302,9 @@ comparisons only):
 4. **`#111` — the real-abort tree divergence** (parity, not performance):
    real aborts `-uD --getbinpkg` where portuale resolves on the
    2026-09-21 tree; blocks the interleaved real comparison until fixed.
+   **Unblocked 2026-09-22 by #132** (Phase 3b S0–S7): portuale now
+   evaluates installed parents' conditional use-deps and aborts the
+   unfixable deep miss, rc 0 → rc 1 on the two probe commands.
 
 Deprioritised: `#106` (`candidate_positions`, 0.31 % — closed by
 `#102`–`#108`), `#113` (`shuffle_seed`'s per-call env read, trivial).
