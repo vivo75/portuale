@@ -286,11 +286,14 @@ workload:
    atoms at selection lost an update and the withheld-update warning —
    see the #107 backlog entry). Algorithmic/parity; do not win it by
    skipping the pass. Revisit only with the complete-graph model.
-2. **`list_remote_binary_candidates` (13.79 % with children) and
-   `repo_aux_metadata` (13.67 %)** — the top two named functions now:
-   per-cp remote-candidate materialisation and cold md5-cache fills /
-   validation respectively. Then `binpkg_respect_use_ok` (12.52 %,
-   residual key hashing on its 13 k calls).
+2. **`repo_aux_metadata` (13.06 % with children)** — the top named cost
+   now: cold md5-cache fills + validation, plus `apply_updates_to_dep_string`
+   (6.66 %) rebuilding every token of a cache-miss dep string even when no
+   `profiles/updates/` move matches. Then `binpkg_respect_use_ok`
+   (12.48 %, its memo's residual key hashing on ~13 k calls) and
+   `binary_deps_changed` (10.58 %). **`list_remote_binary_candidates` was
+   tried and withdrawn** (`#118`, honest non-result: sharing its pools
+   measured within noise at +16 MB RSS).
 3. **`#112` — the two `statx` per `vdb_aux_get` call.** `statx` is 9.51 %
    with `std::sys::fs::metadata` 9.92 % and `vdb_aux_get` 9.29 %; sys is
    ~0.6 s, the last I/O-shaped cost.
@@ -574,3 +577,20 @@ Interleaved, same tree: 2.50-2.64 s wall / 1.91-1.98 s user -> **2.08-2.09 s /
 1.47-1.52 s** (second shape `sys-devel/gcc`: 2.44-2.52 -> 2.03-2.07);
 `is_visible` leaves the profile's top list. Byte-identical over the full
 contract suite + corpus.
+
+### Withdrawn: sharing the binary-candidate pools (#118, honest non-result)
+
+The profile made `list_remote_binary_candidates` look like the next
+memoisation target (13.79 % with children; 7.92 % in
+`binary_candidates_from_index`). Implemented the sharing -- thread-local
+`Rc<Vec<Candidate>>` pools per `(index, cp, remote)` with the
+`cp_bucket_index`-style `(ptr, len)` + first/last guard, borrowed
+filtering at the two hot call sites, pools cleared per `run_pass` to
+bound retention -- and measured it: 2.11-2.13 s -> 2.07-2.10 s median
+over 8 alternating pairs (~0.03 s, inside the run-to-run spread) at
+**+16 MB RSS** (183 -> 199 MB). Keeping the pools process-lifetime
+reached ~0.06-0.1 s in one batch but +22 MB with no reliable repeat. So
+the 7.92 % is the first materialisation per `(cp, visit)`, not redundant
+repeats -- a memo cannot amortise it, only cheaper construction could.
+Reverted; the backlog entry records the non-result so it is not
+re-attempted.
