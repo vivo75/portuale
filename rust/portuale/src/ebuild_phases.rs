@@ -923,6 +923,68 @@ fn flat_field_on(raw: &str, use_set: &std::collections::HashSet<String>) -> Stri
 /// `type_complexity` lint.
 type StandaloneBaseEnv = (Vec<(String, bool)>, Vec<(String, String)>);
 
+/// The resolved config for the standalone `ebuild <file>` paths: real
+/// `portage` reads `repos.conf` and the profile chain once per
+/// `doebuild` call, so every standalone helper below loads it the same
+/// way (shared with `depend_use_set`/`resolved_fetch_config`'s own
+/// sibling loaders, kept separate since this needs the whole `Config`).
+/// `None` outside any real repo checkout (same tolerance as
+/// `restrict_and_properties`): no md5-cache to read IUSE from, no
+/// `package.env` to match.
+fn resolve_standalone_config(
+    pkg_dir: &Path,
+    config_root: &Path,
+    eroot: &Path,
+) -> Option<portage_profile::Config> {
+    let _ = repo_root_for(pkg_dir)?;
+    let repos = portage_repo::find_repos(config_root).ok()?;
+    let main_repo = repos.iter().find(|r| r.is_main)?;
+    let overlay_repos: Vec<(String, PathBuf)> = repos
+        .iter()
+        .filter(|r| !r.is_main)
+        .map(|r| (r.name.clone(), r.location.clone()))
+        .collect();
+    let repo_aliases: Vec<(String, PathBuf)> = repos
+        .iter()
+        .flat_map(|r| r.aliases.iter().map(|a| (a.clone(), r.location.clone())))
+        .collect();
+    let repo_masters: std::collections::HashMap<String, Vec<PathBuf>> = repos
+        .iter()
+        .map(|r| (r.name.clone(), r.masters.clone()))
+        .collect();
+    portage_profile::resolve_config(
+        config_root,
+        &main_repo.location,
+        &overlay_repos,
+        &repo_aliases,
+        &main_repo.name,
+        &repo_masters,
+        eroot,
+    )
+    .ok()
+}
+
+/// The `cat/pkg-ver:slot/sub` identity real `_grab_pkg_env` matches
+/// against, for an ebuild that has no resolved graph entry: the md5
+/// cache's own `SLOT` (`slot/sub_slot` when a sub-slot is declared, bare
+/// slot otherwise, `"0"` when the key is missing — the same fallback
+/// shape the merge path's `entry_package_env_vars` uses).
+fn standalone_cpv_slot(pkg_dir: &Path, category: &str, pf: &str) -> Option<String> {
+    let repo_root = repo_root_for(pkg_dir)?;
+    let slot_raw = portage_repo::repo_aux_metadata(&repo_root, category, pf)
+        .ok()
+        .and_then(|m| m.get("SLOT").cloned())
+        .unwrap_or_default();
+    let (slot, sub_slot) = match slot_raw.split_once('/') {
+        Some((s, ss)) => (s.to_string(), ss.to_string()),
+        None if slot_raw.is_empty() => ("0".to_string(), "0".to_string()),
+        None => (slot_raw.clone(), slot_raw),
+    };
+    // `pf` already carries `name-version`; the category + slot complete
+    // the match string.
+    Some(format!("{category}/{pf}:{slot}/{sub_slot}"))
+}
+
 fn phase_standalone_base_env(
     env: &Environment,
     config_root: &Path,
@@ -934,35 +996,8 @@ fn phase_standalone_base_env(
         return (String::new(), Vec::new());
     }
     let Some((display, flags)) = (|| -> Option<StandaloneBaseEnv> {
-        // Gate on a real repo checkout (same tolerance as
-        // `restrict_and_properties` below): outside one there is no
-        // md5-cache to read IUSE from.
-        repo_root_for(&env.pkg_dir)?;
+        let config = resolve_standalone_config(&env.pkg_dir, config_root, eroot)?;
         let repos = portage_repo::find_repos(config_root).ok()?;
-        let main_repo = repos.iter().find(|r| r.is_main)?;
-        let overlay_repos: Vec<(String, PathBuf)> = repos
-            .iter()
-            .filter(|r| !r.is_main)
-            .map(|r| (r.name.clone(), r.location.clone()))
-            .collect();
-        let repo_aliases: Vec<(String, PathBuf)> = repos
-            .iter()
-            .flat_map(|r| r.aliases.iter().map(|a| (a.clone(), r.location.clone())))
-            .collect();
-        let repo_masters: std::collections::HashMap<String, Vec<PathBuf>> = repos
-            .iter()
-            .map(|r| (r.name.clone(), r.masters.clone()))
-            .collect();
-        let config = portage_profile::resolve_config(
-            config_root,
-            &main_repo.location,
-            &overlay_repos,
-            &repo_aliases,
-            &main_repo.name,
-            &repo_masters,
-            eroot,
-        )
-        .ok()?;
         let display = portage_repo::candidate_use_flags_display(
             &repos,
             &config,
@@ -982,25 +1017,7 @@ fn phase_standalone_base_env(
         // `USE=` half needs no separate step: `candidate_use_flags_display`
         // above already folds `package_env_use` in via
         // `effective_use_flags`' own atom matching.
-        let slot_raw = portage_repo::repo_aux_metadata(
-            &repo_root_for(&env.pkg_dir)?,
-            &env.category,
-            &env.split.pf,
-        )
-        .ok()
-        .and_then(|m| m.get("SLOT").cloned())
-        .unwrap_or_default();
-        // Same `slot`/`sub_slot` fallback shape as the merge path's
-        // `entry_package_env_vars` (missing `SLOT` means slot `0`).
-        let (slot, sub_slot) = match slot_raw.split_once('/') {
-            Some((s, ss)) => (s.to_string(), ss.to_string()),
-            None if slot_raw.is_empty() => ("0".to_string(), "0".to_string()),
-            None => (slot_raw.clone(), slot_raw),
-        };
-        let cpv_slot = format!(
-            "{}/{}-{}:{}/{}",
-            env.category, env.split.pn, env.split.pvr, slot, sub_slot
-        );
+        let cpv_slot = standalone_cpv_slot(&env.pkg_dir, &env.category, &env.split.pf)?;
         let mut flags = flags;
         // Real's layer stacking: the run-wide base is the full resolved
         // config env here (`phase_environ`), an incremental `package.env`
@@ -1235,6 +1252,115 @@ pub(crate) fn match_package_env_vars(
             }
         })
         .collect()
+}
+
+/// Atom-match a single `package.env` key against `cpv_slot` and return
+/// the container value with real `_grab_pkg_env`'s append semantics but
+/// WITHOUT the acceptance gate and WITHOUT folding: matching entries in
+/// list order, files of one entry in order.
+///
+/// Two flavours, mirroring real's container behaviour exactly: scalars
+/// replace (last matching file wins; `None` when nothing matched),
+/// incrementals append (`container[k] += " " + v`). The caller owns the
+/// key choice and the fold: `match_package_env_vars` (the gated,
+/// phase-env export path) keeps its own loop, while per-key recomputes
+/// a flat pair would corrupt — `PORTAGE_TMPDIR` (#99) and `FEATURES`
+/// (#98), both `PORTUALE_COMPUTED` — match raw and re-derive instead.
+fn match_package_env_scalar_raw(
+    package_env_vars: &[(String, Vec<(String, String)>)],
+    cpv_slot: &str,
+    key: &str,
+) -> Option<String> {
+    let mut matched: Option<&str> = None;
+    for (atom, vars) in package_env_vars {
+        if !portage_dep::match_from_list(atom, &[cpv_slot]).is_some_and(|m| !m.is_empty()) {
+            continue;
+        }
+        for (k, v) in vars {
+            if k == key {
+                matched = Some(v.as_str());
+            }
+        }
+    }
+    matched.map(String::from)
+}
+
+/// Real per-package `PORTAGE_TMPDIR` (backlog #99): `_grab_pkg_env`
+/// accepts the key into `configdict["pkg"]` (it is not in
+/// `env_blacklist`, `environ_filter`, `global_only_vars` or the
+/// profile-only set), and `doebuild_environment` re-derives
+/// `PORTAGE_TMPDIR`/`BUILD_PREFIX`/`PORTAGE_BUILDDIR` from the resolved
+/// value (`doebuild.py:435-458`, `:504-506`).
+///
+/// Atom-match just this key against `package_env_vars` (last matching
+/// file wins — scalar semantics; an empty value blanks to absent) and,
+/// when the calling environment does NOT carry `PORTAGE_TMPDIR` itself
+/// (real's `env` layer outranks `pkg`, #101), re-derive the tmpdir from
+/// the matched value. `run_tmpdir` is the caller's otherwise-resolved
+/// tmpdir and stands whenever nothing matched. `process_tmpdir` is
+/// `Some` iff the process environment carries the key — a CLI-boundary
+/// read threaded in as a parameter (never an ambient read here), so the
+/// precedence is unit-testable without touching process-global state.
+/// A matched directory that does not exist is real's `_check_temp_dir`
+/// failure (`doebuild.py:1682`), byte for byte; the caller maps the
+/// `Err` to exit 1.
+pub(crate) fn resolve_entry_portage_tmpdir(
+    package_env_vars: &[(String, Vec<(String, String)>)],
+    cpv_slot: &str,
+    run_tmpdir: &Path,
+    process_tmpdir: Option<&Path>,
+) -> Result<PathBuf, String> {
+    if let Some(process) = process_tmpdir {
+        return Ok(process.to_path_buf());
+    }
+    let matched = match_package_env_scalar_raw(package_env_vars, cpv_slot, "PORTAGE_TMPDIR");
+    let Some(dir) = matched.as_deref().filter(|v| !v.is_empty()) else {
+        return Ok(run_tmpdir.to_path_buf());
+    };
+    if !Path::new(dir).is_dir() {
+        return Err(format!(
+            "The directory specified in your PORTAGE_TMPDIR variable, '{dir}',\n\
+             does not exist.  Please create this directory or correct your PORTAGE_TMPDIR setting."
+        ));
+    }
+    Ok(PathBuf::from(dir))
+}
+
+/// Standalone half of the above, for an `ebuild <file>` run with no
+/// resolved graph entry: load the resolved config the same way
+/// `phase_standalone_base_env` does, rebuild the ebuild's own
+/// `cat/pkg-ver:slot/sub` identity from its path + md5-cache `SLOT`,
+/// and resolve. `None` config (outside any repo checkout) or an
+/// unparsable path keeps `run_tmpdir` — the later `compute_environment`
+/// owns those errors, not this resolver. No process-global reads: the
+/// caller (`ebuild.rs`) owns the `PORTAGE_TMPDIR` presence check.
+pub(crate) fn resolve_standalone_portage_tmpdir(
+    ebuild_path: &Path,
+    config_root: &Path,
+    eroot: &Path,
+    run_tmpdir: &Path,
+    process_tmpdir: Option<&Path>,
+) -> Result<PathBuf, String> {
+    if process_tmpdir.is_some() {
+        return Ok(run_tmpdir.to_path_buf());
+    }
+    let Some((pkg_dir, category, pf)) = (|| -> Option<(PathBuf, String, String)> {
+        let ebuild_abs = ebuild_path.canonicalize().ok()?;
+        let pkg_dir = ebuild_abs.parent()?.to_path_buf();
+        let file_name = ebuild_abs.file_name()?.to_str()?;
+        let pf = file_name.strip_suffix(".ebuild")?.to_string();
+        let category = pkg_dir.parent()?.file_name()?.to_str()?.to_string();
+        Some((pkg_dir, category, pf))
+    })() else {
+        return Ok(run_tmpdir.to_path_buf());
+    };
+    let (Some(config), Some(cpv_slot)) = (
+        resolve_standalone_config(&pkg_dir, config_root, eroot),
+        standalone_cpv_slot(&pkg_dir, &category, &pf),
+    ) else {
+        return Ok(run_tmpdir.to_path_buf());
+    };
+    resolve_entry_portage_tmpdir(&config.package_env_vars, &cpv_slot, run_tmpdir, None)
 }
 
 /// The config-`USE` set the `depend` phase reduces `RESTRICT`/
@@ -6802,5 +6928,121 @@ mod tests {
         let calling = vec![("CFLAGS".to_string(), "-O2 -pipe".to_string())];
         let out = match_package_env_vars(&files, cpv, &[], &[], &calling);
         assert_eq!(out, vec![("CC".to_string(), "pkg-cc".to_string())]);
+    }
+
+    /// Real per-package `PORTAGE_TMPDIR` (backlog #99, S0 cells D/E):
+    /// the matched env-file value re-derives the tmpdir when the calling
+    /// environment does not carry the key itself; a matched directory
+    /// that does not exist is real's `_check_temp_dir` failure byte for
+    /// byte (`doebuild.py:1682`); the process value wins otherwise (#101
+    /// precedence); an empty matched value blanks to absent.
+    #[test]
+    fn per_package_portage_tmpdir_feeds_the_build_directory() {
+        let cpv = "dev-libs/envdumppkg-1.0:0/0";
+        let run = Path::new("/var/tmp/portage-test-default");
+        let files = |v: &str| {
+            vec![(
+                "dev-libs/envdumppkg".to_string(),
+                vec![("PORTAGE_TMPDIR".to_string(), v.to_string())],
+            )]
+        };
+        // No match: the run tmpdir stands.
+        let out = resolve_entry_portage_tmpdir(
+            &files("/tmp/probe-tmp"),
+            "dev-libs/other-1.0:0/0",
+            run,
+            None,
+        )
+        .expect("no match keeps the run tmpdir");
+        assert_eq!(out, run);
+        // No entry at all: the run tmpdir stands.
+        let out = resolve_entry_portage_tmpdir(&[], cpv, run, None)
+            .expect("no entry keeps the run tmpdir");
+        assert_eq!(out, run);
+        // Matched, directory exists: re-derived.
+        let probe = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-per_package_portage_tmpdir",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&probe).expect("probe tmpdir is creatable");
+        let out = resolve_entry_portage_tmpdir(
+            &files(probe.to_str().expect("probe path is UTF-8")),
+            cpv,
+            run,
+            None,
+        )
+        .expect("matched dir resolves");
+        assert_eq!(out, probe);
+        // A later matching file wins (scalar semantics).
+        let probe2 = probe.join("second");
+        std::fs::create_dir_all(&probe2).expect("second probe tmpdir is creatable");
+        let mut two = files(probe.to_str().expect("probe path is UTF-8"));
+        two.push((
+            "dev-libs/envdumppkg".to_string(),
+            vec![(
+                "PORTAGE_TMPDIR".to_string(),
+                probe2.to_str().expect("probe path is UTF-8").to_string(),
+            )],
+        ));
+        let out = resolve_entry_portage_tmpdir(&two, cpv, run, None).expect("later match wins");
+        assert_eq!(out, probe2);
+        // Matched, directory missing: real's `_check_temp_dir` failure.
+        let missing = probe.join("no-such-dir");
+        let err = resolve_entry_portage_tmpdir(
+            &files(missing.to_str().expect("probe path is UTF-8")),
+            cpv,
+            run,
+            None,
+        )
+        .expect_err("missing dir must fail");
+        assert_eq!(
+            err,
+            format!(
+                "The directory specified in your PORTAGE_TMPDIR variable, '{}',\n\
+                 does not exist.  Please create this directory or correct your PORTAGE_TMPDIR setting.",
+                missing.display()
+            )
+        );
+        // The calling environment wins over the env file (#101).
+        let out = resolve_entry_portage_tmpdir(
+            &files(probe.to_str().expect("probe path is UTF-8")),
+            cpv,
+            run,
+            Some(run),
+        )
+        .expect("process tmpdir wins");
+        assert_eq!(out, run);
+        // Empty matched value blanks to absent: the run tmpdir stands.
+        let out = resolve_entry_portage_tmpdir(&files(""), cpv, run, None)
+            .expect("empty match keeps the run tmpdir");
+        assert_eq!(out, run);
+        std::fs::remove_dir_all(&probe).ok();
+    }
+
+    /// `compute_environment` derives `PORTAGE_BUILDDIR` as
+    /// `<tmpdir>/portage/<cat>/<pf>`, so a matched per-package tmpdir
+    /// puts the whole build tree under it (S0 cell D's
+    /// `PORTAGE_BUILDDIR` half).
+    #[test]
+    fn compute_environment_builds_the_builddir_under_the_given_tmpdir() {
+        let probe = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-compute_environment_builddir",
+            std::process::id()
+        ));
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let env = compute_environment(
+            &repo_root.join("dev-libs/envdumppkg/envdumppkg-1.0.ebuild"),
+            &probe,
+        )
+        .expect("fixture parses");
+        assert_eq!(
+            env.portage_builddir,
+            probe.join("portage/dev-libs/envdumppkg-1.0")
+        );
+        assert_eq!(
+            env.portage_tmpdir, probe,
+            "the resolved tmpdir is what the phase exports as PORTAGE_TMPDIR"
+        );
+        std::fs::remove_dir_all(&probe).ok();
     }
 }

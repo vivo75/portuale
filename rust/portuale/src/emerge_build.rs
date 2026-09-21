@@ -569,6 +569,11 @@ pub(crate) fn merge_one_source_entry(
     // not the implicit/arch part of the effective set.
     let mut per_entry = options.clone();
     per_entry.build_env = entry_build_env(options, entry, repos);
+    // Real per-package `PORTAGE_TMPDIR` (#99): this entry's build
+    // directories live under the matched value, so the pre-clean and
+    // the merge below share the resolved root.
+    let entry_tmpdir = entry_portage_tmpdir(options, entry, &version, portage_tmpdir)?;
+    let portage_tmpdir = entry_tmpdir.as_path();
     // Real `_emerge/EbuildBuild._start_pre_clean` (`EbuildBuild.py:207-
     // 229`) and `Scheduler.py:969-981`/`:1119-1139`: the `clean` phase
     // runs before every build, unconditionally (`noclean` only skips the
@@ -597,6 +602,28 @@ pub(crate) fn merge_one_source_entry(
     Ok(())
 }
 
+/// Real per-package `PORTAGE_TMPDIR` (backlog #99) for one scheduler
+/// entry: re-derive the tmpdir this entry's build directories live under
+/// from its matched `package.env` value
+/// (`ebuild_phases::resolve_entry_portage_tmpdir`), so the pre-clean,
+/// the phase chain, the build log and the post-merge clean all share
+/// the same per-entry root. A missing matched directory is real's
+/// `_check_temp_dir` failure and aborts the entry before anything runs.
+fn entry_portage_tmpdir(
+    options: &ebuild_merge::MergeOptions,
+    entry: &GraphEntry,
+    version: &str,
+    portage_tmpdir: &Path,
+) -> Result<PathBuf, String> {
+    let cpv_slot = entry_cpv_slot(entry, version);
+    crate::ebuild_phases::resolve_entry_portage_tmpdir(
+        &options.package_env_vars,
+        &cpv_slot,
+        portage_tmpdir,
+        options.process_tmpdir.as_deref(),
+    )
+}
+
 /// `[("USE", "<space-joined enabled IUSE flags>")]` for `entry` -- the
 /// build-phase env every `emerge <atom>` source build/merge passes so
 /// `bin/ebuild.sh`'s `use()` sees the resolved flags. Empty vec (no
@@ -617,6 +644,19 @@ fn build_use_env(entry: &GraphEntry) -> Vec<(String, String)> {
     }
 }
 
+/// The `cat/pkg-ver:slot/sub` identity real `_grab_pkg_env` matches a
+/// build-bound entry against (`entry_package_env_vars` and the
+/// per-package `PORTAGE_TMPDIR` resolution below share it). Missing
+/// `SLOT` means slot `0`, and a missing sub-slot repeats the slot.
+fn entry_cpv_slot(entry: &GraphEntry, version: &str) -> String {
+    let slot = entry.slot.as_deref().unwrap_or("0");
+    let sub_slot = entry.sub_slot.as_deref().unwrap_or(slot);
+    format!(
+        "{}/{}-{version}:{slot}/{sub_slot}",
+        entry.category, entry.package
+    )
+}
+
 /// The per-package `package.env` build vars that match `entry`'s cpv --
 /// real `_grab_pkg_env` folding a matching `/etc/portage/package.env`
 /// entry's env file into `configdict["pkg"]`, with real's acceptance set
@@ -633,12 +673,7 @@ fn entry_package_env_vars(
     let Some(version) = entry_version(&entry.outcome) else {
         return Vec::new();
     };
-    let slot = entry.slot.as_deref().unwrap_or("0");
-    let sub_slot = entry.sub_slot.as_deref().unwrap_or(slot);
-    let cpv_slot = format!(
-        "{}/{}-{version}:{slot}/{sub_slot}",
-        entry.category, entry.package
-    );
+    let cpv_slot = entry_cpv_slot(entry, version);
     let profile_only_variables = options
         .resolved_config
         .as_deref()
@@ -1106,6 +1141,10 @@ fn build_one_source_entry(
     };
     let path = ebuild_path(&candidate, &entry.category, &entry.package, &version);
     println!(">>> Emerging ({cp}-{version})...");
+    // Real per-package `PORTAGE_TMPDIR` (#99): this entry's build log,
+    // pre-clean and phase chain all live under the matched value.
+    let entry_tmpdir = entry_portage_tmpdir(options, entry, &version, portage_tmpdir)?;
+    let portage_tmpdir = entry_tmpdir.as_path();
 
     let log_path = capture_log.then(|| {
         build_log_path(
@@ -1223,6 +1262,11 @@ fn merge_one_built_entry(
     // entry's resolved `USE` too (see `merge_one_source_entry`).
     let mut per_entry = options.clone();
     per_entry.build_env = entry_build_env(options, entry, repos);
+    // Real per-package `PORTAGE_TMPDIR` (#99): the merge half runs under
+    // the same resolved root the build half used (resolved again here so
+    // this function keeps its standalone `portage_tmpdir` contract).
+    let entry_tmpdir = entry_portage_tmpdir(options, entry, &version, portage_tmpdir)?;
+    let portage_tmpdir = entry_tmpdir.as_path();
     // This function is only ever reached once `build_one_source_entry`
     // already captured the same package's own `install` phase to this
     // exact path (both callers only route here when `capture_log` is
