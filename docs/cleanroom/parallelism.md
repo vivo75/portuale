@@ -145,6 +145,9 @@ any single merge.
      thread-local cell
    - `cp_bucket_index`'s `CACHE` → `Rc<CpBucketIndex>`
    - `portage_dep`'s `ATOM_CACHE` / `CANDIDATE_CACHE`
+   - `AUX_CACHE` (`vdb_aux_get`'s per-instance aux memo, `#109` S4) →
+     `Rc<HashMap<String, String>>`
+   - `MKA_CACHE` (`metadata_key_accepted`, `#110`) → `bool`
 
    Only `read_md5_cache`, `list_candidates`, `cached_binary_index`,
    `md5_dict`'s two `MEMO`s and the vdb `InstalledCache` are

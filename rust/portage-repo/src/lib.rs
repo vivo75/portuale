@@ -4475,9 +4475,10 @@ fn metadata_key_accepted(
     if value_str.trim().is_empty() {
         return true;
     }
-    // Memoised per (which, config USE context, candidate, value, accept
-    // lists): the body runs `use_flags_if_conditional` (-> the already
-    // memoised `effective_use_flags`), `resolve_accept_tokens`,
+    // Memoised per (which, config USE context **and the candidate's own
+    // IUSE/KEYWORDS**, candidate, value, accept lists): the body runs
+    // `use_flags_if_conditional` (-> the already memoised
+    // `effective_use_flags`), `resolve_accept_tokens`,
     // `all_mentioned_tokens` (a `MatchMode::All` use-reduce),
     // `resolve_acceptable_tokens` and `use_reduce_flat`, and it was the
     // last remaining hot function of that shape after #102-#108 (23.30 %
@@ -4485,13 +4486,26 @@ fn metadata_key_accepted(
     // in its arguments; thread-local so the lookup stays lock-free, the
     // `RUMF_CACHE` shape (#104). The empty-value early return above stays
     // *before* the lookup: it is cheaper than hashing the key.
+    //
+    // `iuse`/`keywords` go in the key for the same reason `EUF_CACHE`
+    // hashes them: `candidate_str` does not encode them, and a binary
+    // candidate from a `Packages` index shares it with the ebuild for the
+    // same CPV while carrying its build-time IUSE/KEYWORDS.
     type MkaCache = HashMap<(MetadataKey, u64, String, String, u64), bool>;
     thread_local! {
         static MKA_CACHE: RefCell<MkaCache> = RefCell::new(HashMap::new());
     }
+    let use_context = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        use_context_fingerprint(config).hash(&mut h);
+        candidate.iuse.hash(&mut h);
+        candidate.keywords.hash(&mut h);
+        h.finish()
+    };
     let key = (
         which,
-        use_context_fingerprint(config),
+        use_context,
         candidate_str.to_string(),
         value_str.to_string(),
         accept_lists_fingerprint(global_accept, package_accept),
@@ -38761,6 +38775,51 @@ mod tests {
         assert!(
             !call(&interactive),
             "a differing accept_properties must not reuse the memo entry"
+        );
+    }
+
+    /// #110 (review fix): the memo key must include the candidate's own
+    /// `IUSE`/`KEYWORDS` -- `use_flags_if_conditional` derives the USE set
+    /// from them whenever the value is conditional, and `candidate_str`
+    /// does **not** encode them (a binary candidate from a `Packages`
+    /// index and the ebuild for the same CPV can share it). Same reason
+    /// `EUF_CACHE` hashes `iuse`/`keywords` into its key.
+    #[test]
+    fn metadata_key_accepted_memo_does_not_leak_between_differing_candidate_iuse() {
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            accept_properties: vec![],
+            ..Default::default()
+        };
+        let value = "!test? ( test )";
+        let candidate_str = "dev-libs/memoiuse-1.0:0/0::test";
+        let call = |iuse: &str| {
+            let c = Candidate {
+                iuse: iuse.to_string(),
+                properties: value.to_string(),
+                ..candidate("1.0", &["amd64"])
+            };
+            metadata_key_accepted(
+                &c.properties,
+                &c,
+                "dev-libs",
+                "memoiuse",
+                candidate_str,
+                &config,
+                MetadataKey::Properties,
+                &config.accept_properties,
+                &config.package_properties,
+            )
+        };
+        // IUSE="+test" enables the flag through its own default marker, so
+        // `!test?` is false and the group is dropped -> true.
+        assert!(call("+test"));
+        // IUSE="test" carries no default marker, so the flag stays off,
+        // `!test?` holds, the group yields "test" and nothing accepts it
+        // -> false. Only the candidate's own IUSE separates the two calls.
+        assert!(
+            !call("test"),
+            "a differing candidate IUSE must not reuse the memo entry"
         );
     }
 
