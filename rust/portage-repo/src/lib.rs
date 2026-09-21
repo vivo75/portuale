@@ -761,33 +761,34 @@ fn apply_updates_to_dep_string_with(
 /// Same `OnceLock`-over-`global_package_updates()` shape as
 /// `update_move_targets` (so `--package-moves=n` -> empty list -> empty
 /// map -> identity, matching the old loop's no-op).
-fn move_chain_map() -> &'static HashMap<(String, String), (String, String)> {
-    static MAP: OnceLock<HashMap<(String, String), (String, String)>> = OnceLock::new();
-    MAP.get_or_init(|| {
-        let cmds = global_package_updates();
-        let olds: HashSet<&(String, String)> = cmds
-            .iter()
-            .filter_map(|c| match c {
-                UpdateCmd::Move { old, .. } => Some(old),
-                UpdateCmd::SlotMove { .. } => None,
-            })
-            .collect();
-        let mut map = HashMap::new();
-        for old in olds {
-            let mut cur = old.clone();
-            for cmd in cmds {
-                if let UpdateCmd::Move { old: cmd_old, new } = cmd
-                    && cur == *cmd_old
-                {
-                    cur = new.clone();
-                }
-            }
-            if cur != *old {
-                map.insert(old.clone(), cur);
+fn move_chain_map_with(cmds: &[UpdateCmd]) -> HashMap<(String, String), (String, String)> {
+    let olds: HashSet<&(String, String)> = cmds
+        .iter()
+        .filter_map(|c| match c {
+            UpdateCmd::Move { old, .. } => Some(old),
+            UpdateCmd::SlotMove { .. } => None,
+        })
+        .collect();
+    let mut map = HashMap::new();
+    for old in olds {
+        let mut cur = old.clone();
+        for cmd in cmds {
+            if let UpdateCmd::Move { old: cmd_old, new } = cmd
+                && cur == *cmd_old
+            {
+                cur = new.clone();
             }
         }
-        map
-    })
+        if cur != *old {
+            map.insert(old.clone(), cur);
+        }
+    }
+    map
+}
+
+fn move_chain_map() -> &'static HashMap<(String, String), (String, String)> {
+    static MAP: OnceLock<HashMap<(String, String), (String, String)>> = OnceLock::new();
+    MAP.get_or_init(|| move_chain_map_with(global_package_updates()))
 }
 
 /// The forward `move` destination for a `cat/pkg` (chains applied), for an
@@ -810,24 +811,33 @@ type InstalledCpSourcesMap = HashMap<(String, String), Vec<(String, String)>>;
 /// so the lookup is a single `HashMap` get. Same
 /// `OnceLock`-over-`global_package_updates()` shape as `move_chain_map`
 /// (so `--package-moves=n` -> empty list -> empty map).
-fn installed_cp_sources_map() -> &'static InstalledCpSourcesMap {
-    static MAP: OnceLock<InstalledCpSourcesMap> = OnceLock::new();
-    MAP.get_or_init(|| {
-        let mut map: InstalledCpSourcesMap = HashMap::new();
-        for cmd in global_package_updates() {
-            if let UpdateCmd::Move { old, .. } = cmd {
-                // `installed_cp_sources` pushes `old` exactly when its
-                // fully-resolved chain lands on the queried cp; group by
-                // that destination up front, in command order, deduped.
-                let dest = apply_updates_to_cp(&old.0, &old.1);
-                let bucket = map.entry(dest).or_default();
-                if !bucket.contains(old) {
-                    bucket.push(old.clone());
-                }
+fn installed_cp_sources_map_with(cmds: &[UpdateCmd]) -> InstalledCpSourcesMap {
+    let chain = move_chain_map_with(cmds);
+    let mut map: InstalledCpSourcesMap = HashMap::new();
+    for cmd in cmds {
+        if let UpdateCmd::Move { old, .. } = cmd {
+            // `installed_cp_sources` pushes `old` exactly when its
+            // fully-resolved chain lands on the queried cp; group by
+            // that destination up front, in command order, deduped.
+            // A `move` cycle replays back to its start (`dest == old`);
+            // the target is already `out[0]`, so skipping keeps the old
+            // per-call loop's `!out.contains(old)` invariant.
+            let dest = chain.get(old).cloned().unwrap_or_else(|| old.clone());
+            if dest == *old {
+                continue;
+            }
+            let bucket = map.entry(dest).or_default();
+            if !bucket.contains(old) {
+                bucket.push(old.clone());
             }
         }
-        map
-    })
+    }
+    map
+}
+
+fn installed_cp_sources_map() -> &'static InstalledCpSourcesMap {
+    static MAP: OnceLock<InstalledCpSourcesMap> = OnceLock::new();
+    MAP.get_or_init(|| installed_cp_sources_map_with(global_package_updates()))
 }
 
 /// Every `cat/pkg` whose forward-`move` chain lands on `(category,
@@ -838,6 +848,24 @@ pub fn installed_cp_sources(category: &str, package: &str) -> Vec<(String, Strin
     let target = (category.to_string(), package.to_string());
     let mut out = vec![target.clone()];
     if let Some(extra) = installed_cp_sources_map().get(&target) {
+        out.extend(extra.iter().cloned());
+    }
+    out
+}
+
+/// Test seam for [`installed_cp_sources`] (the
+/// `apply_updates_to_dep_string_with` precedent): the same lookup against
+/// an explicit command list, so a synthetic `move` cycle can be tested
+/// without global state.
+#[cfg(test)]
+fn installed_cp_sources_with(
+    category: &str,
+    package: &str,
+    cmds: &[UpdateCmd],
+) -> Vec<(String, String)> {
+    let target = (category.to_string(), package.to_string());
+    let mut out = vec![target.clone()];
+    if let Some(extra) = installed_cp_sources_map_with(cmds).get(&target) {
         out.extend(extra.iter().cloned());
     }
     out
@@ -2206,7 +2234,7 @@ fn list_candidates_uncached(
 /// this function as its own fast-path cache and re-derives fresh
 /// metadata via `read_xpak_metadata`/`read_gpkg_metadata` for anything
 /// stale) -- this function alone is pub, format-parsing-only, with no
-/// opinion on trust; `local_binpkg_index`'s own remote-binhost callers
+/// opinion on trust; `build_local_binpkg_index`'s own remote-binhost callers
 /// still use it directly, unrevalidated, matching real (a synced remote
 /// index has no local file to revalidate against). A missing `Packages`
 /// file is an empty list, not an error -- same "PKGDIR simply has
@@ -2337,49 +2365,16 @@ fn cached_binary_index(pkgdir: &Path) -> std::sync::Arc<BinaryIndex> {
 /// `$PKGDIR` directory scan (`config.scanned_binpkgs`) when it did one
 /// -- i.e. `<pkgdir>/Packages` was absent -- otherwise the parsed
 /// `<pkgdir>/Packages` file.
-fn local_binpkg_index(config: &portage_profile::Config) -> std::sync::Arc<BinaryIndex> {
-    // Memoised per inputs: 3,056 calls per resolve on the reference
-    // workload, each cloning `scanned_binpkgs` and rebuilding the whole
-    // `by_cp` map (2.45 % of the run). Key is `(pkgdir, scanned
-    // identity, quickpkg root)` where the scanned identity is the vec's
-    // (address, length) plus its first/last CPV -- the same fingerprint
-    // `cp_bucket_index` uses for its own `(ptr, len)`-keyed cache.
-    // Sound: `scanned_binpkgs` is set once by the CLI layer before
-    // resolution (`pretend.rs`) and never mutated after, `pkgdir` is
-    // fixed at config resolution, and `quickpkg_direct_root()` is a
-    // set-once process global -- so the key is stable within a run and
-    // any change rebuilds (correctness preserved by construction).
-    // Thread-local so the lookup stays lock-free.
-    type BinpkgIndexKey = (
-        String,
-        Option<(usize, usize, String, String)>,
-        Option<PathBuf>,
-    );
-    thread_local! {
-        static BINPKG_CACHE: RefCell<Option<(BinpkgIndexKey, std::sync::Arc<BinaryIndex>)>> =
-            const { RefCell::new(None) };
-    }
-    fn scanned_id(entries: &[HashMap<String, String>]) -> (usize, usize, String, String) {
-        let cpv = |e: Option<&HashMap<String, String>>| {
-            e.and_then(|m| m.get("CPV")).cloned().unwrap_or_default()
-        };
-        (
-            entries.as_ptr() as usize,
-            entries.len(),
-            cpv(entries.first()),
-            cpv(entries.last()),
-        )
-    }
-    let key: BinpkgIndexKey = (
-        config.pkgdir.clone(),
-        config.scanned_binpkgs.as_ref().map(|v| scanned_id(v)),
-        quickpkg_direct_root(),
-    );
-    if let Some((old_key, idx)) = BINPKG_CACHE.with(|c| c.borrow().clone())
-        && old_key == key
-    {
-        return idx;
-    }
+///
+/// Backlog #123: built, not memoised. The old per-inputs memo keyed on
+/// the scanned `Vec`'s raw pointer (an ABA hazard the moment a second
+/// `scanned_binpkgs` assignment exists in one process), never re-read
+/// `<pkgdir>/Packages` once `None` was cached, and ignored the
+/// quickpkg-direct vdb entirely -- so the index is built once per
+/// resolution (`ResolveCtx::new`) and the resulting `Arc` is threaded
+/// to every consumer instead of being re-derived from `&Config` at each
+/// call site.
+pub fn build_local_binpkg_index(config: &portage_profile::Config) -> std::sync::Arc<BinaryIndex> {
     let mut entries = match &config.scanned_binpkgs {
         Some(entries) => entries.clone(),
         None => read_packages_index(Path::new(&config.pkgdir)),
@@ -2407,11 +2402,7 @@ fn local_binpkg_index(config: &portage_profile::Config) -> std::sync::Arc<Binary
             }
         }
     }
-    let idx = std::sync::Arc::new(BinaryIndex::from_entries(entries));
-    BINPKG_CACHE.with(|c| {
-        *c.borrow_mut() = Some((key, std::sync::Arc::clone(&idx)));
-    });
-    idx
+    std::sync::Arc::new(BinaryIndex::from_entries(entries))
 }
 
 /// `--quickpkg-direct-root` (real `actions.py:134-149`): the root whose
@@ -2419,7 +2410,7 @@ fn local_binpkg_index(config: &portage_profile::Config) -> std::sync::Arc<Binary
 /// `None` = not active (the default, or `--usepkg` absent, or the source
 /// root coincides with the target `ROOT` -- all resolved by the CLI
 /// layer). A process-global so it needn't thread through `resolve_pretend`'s
-/// / `local_binpkg_index`'s signatures.
+/// / `build_local_binpkg_index`'s signatures.
 static QUICKPKG_DIRECT_ROOT: RwLock<Option<PathBuf>> = RwLock::new(None);
 
 /// Set by `pretend.rs` from `--quickpkg-direct[-root]` before any
@@ -2845,10 +2836,27 @@ fn binpkg_respect_use_ok(
     // and the reference workload repeats it 10x (12,000 calls, 1,197
     // distinct inputs, measured). Pure in its arguments; thread-local so
     // the lookup stays lock-free (`EUF_CACHE`'s shape).
-    type BruCache = HashMap<(u64, bool, bool, bool), bool>;
+    //
+    // Backlog #122: the `e.repo_location` hash (the uncached body reads
+    // the ebuild's md5-cache entry through `candidate_iuse_and_use`, so
+    // two `repo_location`s differing only behind identical candidate
+    // `iuse` must not share), and the literal candidate strings bounding
+    // any 64-bit digest collision to same-candidate inputs (`EUF_CACHE`'s
+    // shape).
+    type BruCache = HashMap<(u64, String, Option<String>, bool, bool, bool), bool>;
     thread_local! {
         static BRU_CACHE: RefCell<BruCache> = RefCell::new(HashMap::new());
     }
+    let candidate_str = format!(
+        "{category}/{package}-{}:{}/{}::{}",
+        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
+    );
+    let ebuild_str = ebuild_at_version.map(|e| {
+        format!(
+            "{category}/{package}-{}:{}/{}::{}",
+            e.version, e.slot, e.sub_slot, e.repo_name
+        )
+    });
     let key = {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -2861,16 +2869,35 @@ fn binpkg_respect_use_ok(
         candidate.repo_name.hash(&mut h);
         candidate.iuse.hash(&mut h);
         candidate.keywords.hash(&mut h);
-        // The baked USE set: order-independent xor-fold (its iteration
-        // order is not stable across instances).
-        binary_use.len().hash(&mut h);
-        let mut acc: u64 = 0;
-        for v in binary_use {
-            let mut e = std::collections::hash_map::DefaultHasher::new();
-            v.hash(&mut e);
-            acc ^= e.finish();
+        // The baked USE set (backlog #124 E3): a `Some(BUILD_ID)` names
+        // the build, and the baked USE is that build's recorded property
+        // -- so two pool candidates sharing `(CPV, repo_name, build_id)`
+        // are the same build with the same baked USE, while `build_id`
+        // is precisely what distinguishes two binpkg-multi-instance
+        // instances of one CPV (`dedup_binary_instances` groups by
+        // `(version, slot, sub_slot, repo_name)` and ranks within by
+        // `(BUILD_TIME, BUILD_ID)`). That makes the id an exact O(1)
+        // stand-in for the set, replacing the old order-independent
+        // xor-fold -- which built a fresh SipHash hasher per element
+        // (~200 per call x 12,000 calls) on every call, hit or miss. (A
+        // single shared hasher would not do: the set's iteration order
+        // is not stable, which is why the fold existed.) A `None`
+        // `build_id` (a `Packages` entry without `BUILD_ID`) names no
+        // build, so those candidates keep the exact fold -- same cost as
+        // before, never a wrong key.
+        match &candidate.build_id {
+            Some(id) => id.hash(&mut h),
+            None => {
+                binary_use.len().hash(&mut h);
+                let mut acc: u64 = 0;
+                for v in binary_use {
+                    let mut e = std::collections::hash_map::DefaultHasher::new();
+                    v.hash(&mut e);
+                    acc ^= e.finish();
+                }
+                acc.hash(&mut h);
+            }
         }
-        acc.hash(&mut h);
         match ebuild_at_version {
             Some(e) => {
                 1u8.hash(&mut h);
@@ -2878,13 +2905,21 @@ fn binpkg_respect_use_ok(
                 e.slot.hash(&mut h);
                 e.sub_slot.hash(&mut h);
                 e.repo_name.hash(&mut h);
+                e.repo_location.hash(&mut h);
                 e.iuse.hash(&mut h);
                 e.keywords.hash(&mut h);
                 (e.source == CandidateSource::Binary).hash(&mut h);
             }
             None => 0u8.hash(&mut h),
         }
-        (h.finish(), newuse, changed_use, respect_use)
+        (
+            h.finish(),
+            candidate_str.clone(),
+            ebuild_str.clone(),
+            newuse,
+            changed_use,
+            respect_use,
+        )
     };
     if let Some(hit) = BRU_CACHE.with(|c| c.borrow().get(&key).copied()) {
         return hit;
@@ -3401,13 +3436,9 @@ pub fn effective_use_flags(
     // `candidate_str`, but `--dynamic-deps=n` can pass vdb-built
     // `iuse`/`keywords` for a cpv that also exists in the tree, so all
     // three go in the key. `config` is captured by
-    // `use_context_fingerprint` -- a sampled hash (len + first/mid/last of
-    // every USE-relevant field, `autounmask_use` hashed in full since the
-    // `'backtrack` loop mutates just that one). Two genuinely different
-    // configs colliding needs identical length + identical first/mid/last
-    // entries in ~20 fields: impossible in production (one config per
-    // process) and not hit by any test. Thread-local so the lookup stays
-    // lock-free.
+    // `use_context_fingerprint` -- the exact frozen USE-context digest
+    // plus the live `autounmask_use` (the one field the `'backtrack`
+    // loop mutates). Thread-local so the lookup stays lock-free.
     // key: (hash of config USE context + iuse + keywords, candidate_str)
     type EufCache = HashMap<(u64, String), Rc<HashSet<String>>>;
     thread_local! {
@@ -3442,9 +3473,8 @@ pub fn effective_use_flags(
     result
 }
 
-/// A cheap content fingerprint of every `Config` field
-/// [`effective_use_flags`] reads -- see its cache comment for why sampling
-/// (not a full hash) is sound here.
+/// A content fingerprint of every `Config` field
+/// [`effective_use_flags`] reads.
 ///
 /// `#105`: the immutable part is frozen by `resolve_config` into
 /// [`portage_profile::Config::use_context_base`], so the production path
@@ -3455,12 +3485,25 @@ pub fn effective_use_flags(
 /// base and falls back to the full content hash,
 /// `portage_profile::use_context_base_fingerprint`, so an in-place edit
 /// of any context field is still seen.
+///
+/// Backlog #121: on the frozen path a `debug_assert_eq!` recomputes the
+/// base and fails loudly if any USE-context field was mutated after
+/// `resolve_config` froze its digest -- silent memo poisoning otherwise.
+/// Zero cost in release.
 fn use_context_fingerprint(config: &portage_profile::Config) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    let base = config
-        .use_context_base
-        .unwrap_or_else(|| portage_profile::use_context_base_fingerprint(config));
+    let base = match config.use_context_base {
+        Some(base) => {
+            debug_assert_eq!(
+                base,
+                portage_profile::use_context_base_fingerprint(config),
+                "a USE-context field was mutated after resolve_config froze its digest"
+            );
+            base
+        }
+        None => portage_profile::use_context_base_fingerprint(config),
+    };
     base.hash(&mut h);
     config.autounmask_use.hash(&mut h);
     h.finish()
@@ -3749,8 +3792,12 @@ fn resolved_use_mask_or_force(
     // is built once at config resolution and the `'backtrack` loop
     // mutates only `autounmask_use`, which this function never reads --
     // the fingerprint is included for defence in depth. Thread-local so
-    // the lookup stays lock-free.
-    type RumfCache = HashMap<(MaskOrForce, bool, u64, String), Rc<HashSet<String>>>;
+    // the lookup stays lock-free. Backlog #122: `category`/`package` are
+    // key components in their own right, not merely implied by
+    // `candidate_str` -- every current caller builds that string from
+    // these same two values, but the coupling was conventional rather
+    // than structural.
+    type RumfCache = HashMap<(MaskOrForce, bool, u64, String, String, String), Rc<HashSet<String>>>;
     thread_local! {
         static RUMF_CACHE: RefCell<RumfCache> = RefCell::new(HashMap::new());
     }
@@ -3759,6 +3806,8 @@ fn resolved_use_mask_or_force(
         stable,
         use_context_fingerprint(config),
         candidate_str.to_string(),
+        category.to_string(),
+        package.to_string(),
     );
     if let Some(hit) = RUMF_CACHE.with(|c| c.borrow().get(&key).cloned()) {
         return hit;
@@ -4680,11 +4729,22 @@ fn metadata_key_accepted_uncached(
 /// plus the USE-context base) and the live `autounmask_use`, which the
 /// visibility check reaches through `use_flags_if_conditional`. A
 /// hand-built config without a base falls back to the live digest.
+/// Backlog #121: same frozen-base `debug_assert_eq!` as
+/// `use_context_fingerprint` -- a post-resolve mutation of any covered
+/// field fails loudly instead of poisoning the memo.
 fn is_visible_fingerprint(config: &portage_profile::Config) -> u64 {
     use std::hash::{Hash, Hasher};
-    let base = config
-        .is_visible_base
-        .unwrap_or_else(|| portage_profile::is_visible_base_fingerprint(config));
+    let base = match config.is_visible_base {
+        Some(base) => {
+            debug_assert_eq!(
+                base,
+                portage_profile::is_visible_base_fingerprint(config),
+                "a visibility field was mutated after resolve_config froze its digest"
+            );
+            base
+        }
+        None => portage_profile::is_visible_base_fingerprint(config),
+    };
     let mut h = std::collections::hash_map::DefaultHasher::new();
     base.hash(&mut h);
     config.autounmask_use.hash(&mut h);
@@ -4710,17 +4770,23 @@ fn is_visible_fingerprint(config: &portage_profile::Config) -> u64 {
 /// thread-local so the lookup stays lock-free (`EUF_CACHE`'s shape). The
 /// candidate's `license`/`properties`/`restrict`/`iuse`/`keywords` are
 /// part of the key because a `Packages`-index binary and the ebuild for
-/// the same `candidate_str` can carry different metadata.
+/// the same `candidate_str` can carry different metadata. Backlog #122:
+/// the literal `candidate_str` bounds any 64-bit digest collision to
+/// same-candidate inputs (`EUF_CACHE`'s shape).
 pub fn is_visible(
     candidate: &Candidate,
     category: &str,
     package: &str,
     config: &portage_profile::Config,
 ) -> bool {
-    type IvCache = HashMap<(u64, u64), bool>;
+    type IvCache = HashMap<(u64, u64, String), bool>;
     thread_local! {
         static IV_CACHE: RefCell<IvCache> = RefCell::new(HashMap::new());
     }
+    let candidate_str = format!(
+        "{category}/{package}-{}:{}/{}::{}",
+        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
+    );
     let key = {
         use std::hash::{Hash, Hasher};
         let config_fp = is_visible_fingerprint(config);
@@ -4737,7 +4803,7 @@ pub fn is_visible(
         candidate.restrict.hash(&mut h);
         candidate.iuse.hash(&mut h);
         candidate.keywords.hash(&mut h);
-        (config_fp, h.finish())
+        (config_fp, h.finish(), candidate_str.clone())
     };
     if let Some(hit) = IV_CACHE.with(|c| c.borrow().get(&key).copied()) {
         return hit;
@@ -6022,7 +6088,8 @@ pub fn installed_candidates(
     for (src_cat, _) in &sources {
         let dir = pkgdir.join(src_cat);
         if !fps.iter().any(|(d, _)| d == &dir) {
-            fps.push((dir.clone(), dir_mtime_nanos(&dir)));
+            let mtime = dir_mtime_nanos(&dir);
+            fps.push((dir, mtime));
         }
     }
     let key = (
@@ -6030,9 +6097,15 @@ pub fn installed_candidates(
         category.to_string(),
         package.to_string(),
     );
-    if let Some((old_fps, out)) = CANDIDATES_CACHE.with(|c| c.borrow().get(&key).cloned())
-        && old_fps == fps
-    {
+    // Backlog #124 E1: compare inside the borrow and clone only the hit
+    // -- the old `.get(&key).cloned()` deep-cloned `Vec<(PathBuf, u64)>`
+    // solely to compare it and drop it, on every one of the 12,684 hits.
+    if let Some(out) = CANDIDATES_CACHE.with(|c| {
+        c.borrow()
+            .get(&key)
+            .filter(|(old, _)| *old == fps)
+            .map(|(_, out)| out.clone())
+    }) {
         return out;
     }
     let out = installed_candidates_uncached(root, sources, category, package);
@@ -6623,20 +6696,21 @@ fn read_metadata_file(path: &Path, dir_mtime_ns: i128) -> Option<HashMap<String,
 ///   the 23-set. Every key any caller passes is a
 ///   [`METADATA_FILE_FIELDS`] member (audited for #109 S1; `CONTENTS` and
 ///   `NEEDED.*` read through their own paths), so the search is
-///   unreachable. The debug assertion below keeps a future out-of-set
-///   caller from silently getting `""` where real would search the saved
-///   environment.
+///   unreachable. Backlog #125: instead of a `debug_assert!` (which left
+///   a future out-of-set caller silently served `""` -- or worse, a
+///   whitespace-collapsed read -- in release), an out-of-set key now
+///   structurally bypasses the snapshot and the cache and reads the raw
+///   file with no normalisation at all (real never `" ".join()`s a
+///   line-oriented key).
 ///
 /// Real's `aux_get` `EAPI == "" -> "0"` and invalid-`SLOT` -> `"0"`
 /// translations are also not here: portuale's callers default
 /// individually and that parity question is a filed residue, not this
 /// slice's.
 fn vdb_aux_get(root: &Path, category: &str, package: &str, version: &str, key: &str) -> String {
-    debug_assert!(
-        in_metadata_file(key),
-        "vdb_aux_get({key:?}): key is outside real's _METADATA_FILE_FIELDS; real would search \
-         environment.bz2 for it, which this helper does not implement"
-    );
+    if !in_metadata_file(key) {
+        return read_vdb_raw_file(&vdb_pkg_dir(root, category, package, version).join(key));
+    }
     // #112: one `statx` for both the path resolution and the
     // validity/`st_mtime_ns` check below.
     let (dir, st) = vdb_pkg_dir_meta(root, category, package, version);
@@ -6728,9 +6802,28 @@ fn vdb_aux_get(root: &Path, category: &str, package: &str, version: &str, key: &
 /// `_aux_get` (`" ".join(myd.split())`, `vartree.py:1044-1046`), with an
 /// absent file as `""`. Real applies the same normalisation on this path,
 /// so the bytes are the same whether the snapshot validated or not.
+/// Invalid UTF-8 decodes lossy (`U+FFFD`), matching real's
+/// `encoding="utf-8", errors="replace"` (`vartree.py:1035-1039`) instead
+/// of collapsing to `""` (backlog #125, audit O15).
 fn read_vdb_file(path: &Path) -> String {
-    fs::read_to_string(path)
-        .map(|raw| raw.split_whitespace().collect::<Vec<_>>().join(" "))
+    fs::read(path)
+        .map(|bytes| {
+            String::from_utf8_lossy(&bytes)
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .unwrap_or_default()
+}
+
+/// The out-of-set read for [`vdb_aux_get`]: a key outside real's
+/// 23-field `_METADATA_FILE_FIELDS` (`CONTENTS`, `NEEDED.*`, ...) is a
+/// line-oriented file real never whitespace-normalises, so it is read
+/// raw -- no `split_whitespace` collapse, no snapshot, no cache.
+/// Invalid UTF-8 decodes lossy, like the in-set path.
+fn read_vdb_raw_file(path: &Path) -> String {
+    fs::read(path)
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
         .unwrap_or_default()
 }
 
@@ -6951,12 +7044,10 @@ fn vdb_pkg_dir_meta(
 /// (`vartree.py:1044-1046`): `" ".join(myd.split())`, i.e.
 /// `split_whitespace().join(" ")` here. Real applies this on the
 /// individual-file path too, so the bytes are the same whether the
-/// consolidated `metadata` snapshot validated or not. The multi-line
-/// exception (`_aux_multi_line_re`, `^(CONTENTS|NEEDED\..*)$`) is not
-/// needed: every caller passes a single-line member of real's 23-field
-/// `_METADATA_FILE_FIELDS` (audited for #109 S1 -- `CONTENTS` and
-/// `NEEDED.*` are read through their own paths), and a future caller
-/// with a line-oriented key must not use this helper.
+/// consolidated `metadata` snapshot validated or not. A line-oriented
+/// key (`CONTENTS`, `NEEDED.*`) bypasses the normalisation structurally
+/// -- [`vdb_aux_get`] routes anything outside real's 23-field
+/// `_METADATA_FILE_FIELDS` to the raw, un-normalised read (backlog #125).
 ///
 /// Since #109 S3 the value comes from [`vdb_aux_get`]: a validated
 /// consolidated `metadata` snapshot serves it with no per-key `open()`,
@@ -11446,11 +11537,16 @@ pub struct InfoBinaryCandidate {
 /// (`actions.py:1883`), which (unlike `resolve_info_binary_candidate`)
 /// does not gate on `pkg_info()`: a binary-only package still isn't a
 /// "no ebuilds to satisfy" error even if it can't be `pkg_info()`'d.
-pub fn has_local_binary_candidate(config: &portage_profile::Config, atom_str: &str) -> bool {
+/// Takes the run's already-built index (backlog #123) instead of
+/// re-deriving it from `&Config`.
+pub fn has_local_binary_candidate(
+    local_binpkg: &std::sync::Arc<BinaryIndex>,
+    atom_str: &str,
+) -> bool {
     let Some(atom) = portage_dep::parse_atom(atom_str) else {
         return false;
     };
-    !list_binary_candidates(&local_binpkg_index(config), &atom.category, &atom.package).is_empty()
+    !list_binary_candidates(local_binpkg, &atom.category, &atom.package).is_empty()
 }
 
 /// Real `action_info`'s `(portdb, "ebuild"), (bindb, "binary")` search
@@ -11461,16 +11557,18 @@ pub fn has_local_binary_candidate(config: &portage_profile::Config, atom_str: &s
 /// its `DEFINED_PHASES` names `info` -- real never lists a binary
 /// candidate it couldn't run `pkg_info()` for, so unlike the ebuild
 /// path there is no separate "list but don't run" state. `None` when no
-/// such build exists.
+/// such build exists. Takes the run's already-built index (backlog #123)
+/// instead of re-deriving it from `&Config`.
 pub fn resolve_info_binary_candidate(
     config: &portage_profile::Config,
     atom_str: &str,
+    local_binpkg: &std::sync::Arc<BinaryIndex>,
 ) -> Result<Option<InfoBinaryCandidate>, Error> {
     let atom = portage_dep::parse_atom(atom_str).ok_or_else(|| Error::InvalidAtom {
         atom: atom_str.to_string(),
     })?;
-    let index = local_binpkg_index(config);
-    let candidates = list_binary_candidates(&index, &atom.category, &atom.package);
+    let index = local_binpkg;
+    let candidates = list_binary_candidates(index, &atom.category, &atom.package);
     if candidates.is_empty() {
         return Ok(None);
     }
@@ -11497,7 +11595,7 @@ pub fn resolve_info_binary_candidate(
     ranked.sort_by(|a, b| vercmp_ordering(&b.version, &a.version));
     for best in ranked {
         let Some(metadata) =
-            read_binary_metadata(&index, &atom.category, &atom.package, &best.version)
+            read_binary_metadata(index, &atom.category, &atom.package, &best.version)
         else {
             continue;
         };
@@ -12109,6 +12207,9 @@ fn resolve_root_deps_build_entries(
     config: &portage_profile::Config,
     owner: (String, String),
     seen: &mut HashSet<(String, String)>,
+    // Threaded through to `resolve_pretend` (backlog #123); unconsulted
+    // here since `usepkg`/`usepkgonly` are both `false` below.
+    local_binpkg: &std::sync::Arc<BinaryIndex>,
 ) -> Vec<GraphEntry> {
     let Some(atom) = portage_dep::parse_atom(atom_str) else {
         return Vec::new();
@@ -12155,6 +12256,7 @@ fn resolve_root_deps_build_entries(
         false,
         false,
         &[],
+        local_binpkg,
     ) else {
         return Vec::new();
     };
@@ -12226,6 +12328,7 @@ fn resolve_root_deps_build_entries(
                 config,
                 key.clone(),
                 seen,
+                local_binpkg,
             ));
         }
     }
@@ -12524,6 +12627,11 @@ pub fn resolve_pretend(
     // candidate must NOT match the atom after the `!`. Empty (`&[]`) at
     // every ordinary call site.
     extra_constraints: &[String],
+    // The run's already-built local `$PKGDIR` binary index (backlog #123:
+    // threaded as an `Arc` from `ResolveCtx`, never re-derived from
+    // `&Config` here -- the old per-call memo keyed on the scanned
+    // `Vec`'s raw pointer). Consulted only under `--usepkg`/`--usepkgonly`.
+    local_binpkg: &std::sync::Arc<BinaryIndex>,
 ) -> Result<PretendOutcome, Error> {
     // Real `create_depgraph_params.py:179`: `--emptytree` does
     // `myparams.pop("selective", None)`.
@@ -12556,9 +12664,8 @@ pub fn resolve_pretend(
         list_candidates(repos, &atom.category, &atom.package)?.to_vec()
     };
     if usepkg || usepkgonly {
-        let local_binpkg = local_binpkg_index(config);
         let mut binary_candidates =
-            list_binary_candidates(&local_binpkg, &atom.category, &atom.package);
+            list_binary_candidates(local_binpkg, &atom.category, &atom.package);
         // `--getbinpkg`/`-g`: remote binary candidates from each
         // `config.binrepos` binrepo's own on-disk `Packages` index. A
         // remote build of a cpv the local `$PKGDIR` also has is treated
@@ -12569,7 +12676,7 @@ pub fn resolve_pretend(
             binary_candidates.extend(list_remote_binary_candidates(
                 &config.binrepos,
                 root,
-                &local_binpkg,
+                local_binpkg,
                 &atom.category,
                 &atom.package,
             ));
@@ -19417,10 +19524,11 @@ struct ResolveCtx<'a> {
     top_level_cps: HashSet<(String, String)>,
     /// The local `$PKGDIR` binary index, built once for the whole walk
     /// (either the CLI layer's `$PKGDIR` directory scan or the parsed
-    /// `<pkgdir>/Packages` -- see `local_binpkg_index`). Only consulted
+    /// `<pkgdir>/Packages` -- see `build_local_binpkg_index`). Only consulted
     /// under `--usepkg`/`--usepkgonly`, but cheap to build unconditionally
     /// (an absent/empty `Packages` and a `None` scan both yield an empty
-    /// index). Shared (`local_binpkg_index` memoises per inputs).
+    /// index). Shared by `Clone`-free `Arc` threading, never re-derived
+    /// from `&Config` at a call site (backlog #123).
     local_binpkg: std::sync::Arc<BinaryIndex>,
 }
 
@@ -19543,7 +19651,7 @@ impl<'a> ResolveCtx<'a> {
                 .filter_map(|a| portage_dep::parse_atom(a))
                 .map(|a| (a.category, a.package))
                 .collect(),
-            local_binpkg: local_binpkg_index(&req.config),
+            local_binpkg: build_local_binpkg_index(&req.config),
         })
     }
 }
@@ -20692,6 +20800,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 bp.autounmask_suggest_license,
                 bp.autounmask_suggest_masks,
                 extra_constraints,
+                &ctx.local_binpkg,
             )?
         };
 
@@ -20858,6 +20967,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 bp.autounmask_suggest_license,
                 bp.autounmask_suggest_masks,
                 &[],
+                &ctx.local_binpkg,
             )?;
             if matches!(re_outcome, PretendOutcome::NoVisibleCandidate) {
                 break 'parent_flip (current_atom, atom);
@@ -21426,6 +21536,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     &mut state.slot_pullers,
                     &union_constraints,
                     ctx.update,
+                    &ctx.local_binpkg,
                 );
             }
             // `--autounmask`'s own keyword-suggestion sub-feature,
@@ -22851,6 +22962,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     config,
                     key.clone(),
                     &mut state.root_deps_build_seen,
+                    &ctx.local_binpkg,
                 ));
             }
         }
@@ -24515,6 +24627,9 @@ fn enqueue_dependencies(
     // queued-update lookahead (same feed as the main walk's
     // `ctx.update` at its own `disjunction_preference` call).
     update: bool,
+    // The run's already-built local `$PKGDIR` binary index (backlog #123),
+    // threaded through to `resolve_root_deps_build_entries`.
+    local_binpkg: &std::sync::Arc<BinaryIndex>,
 ) {
     // Backlog #86: the walk reads the vdb-recorded repo's current
     // metadata (never a priority search); `None` when the version is
@@ -24673,6 +24788,7 @@ fn enqueue_dependencies(
                 config,
                 owner_key.clone(),
                 root_deps_build_seen,
+                local_binpkg,
             ));
         }
     }
@@ -24980,25 +25096,23 @@ mod tests {
         assert!(BinaryIndex::from_pkgdir(Path::new("/nonexistent")).is_empty());
     }
 
-    /// Backlog #108 S4: `local_binpkg_index` memoises per inputs -- a
-    /// repeat call shares the allocation, changed inputs rebuild.
+    /// Backlog #123: `build_local_binpkg_index` honours the CLI layer's
+    /// `$PKGDIR` directory scan (`config.scanned_binpkgs`) when one
+    /// exists. (The old per-inputs memo is gone: the index is built once
+    /// per resolution and threaded as an `Arc`, never re-derived from
+    /// `&Config` at a call site.)
     #[test]
-    fn local_binpkg_index_memoises_per_inputs() {
-        let config = portage_profile::Config::default();
-        let a = local_binpkg_index(&config);
-        let b = local_binpkg_index(&config);
-        assert!(std::sync::Arc::ptr_eq(&a, &b));
-        let changed = portage_profile::Config {
+    fn build_local_binpkg_index_uses_the_cli_scanned_binpkgs() {
+        let config = portage_profile::Config {
             scanned_binpkgs: Some(vec![HashMap::from([
                 ("CPV".to_string(), "dev-libs/memo-1.0".to_string()),
                 ("SLOT".to_string(), "0".to_string()),
             ])]),
             ..portage_profile::Config::default()
         };
-        let c = local_binpkg_index(&changed);
-        assert!(!std::sync::Arc::ptr_eq(&a, &c));
+        let index = build_local_binpkg_index(&config);
         assert_eq!(
-            list_binary_candidates(&c, "dev-libs", "memo")
+            list_binary_candidates(&index, "dev-libs", "memo")
                 .iter()
                 .map(|cand| cand.version.as_str())
                 .collect::<Vec<_>>(),
@@ -25338,10 +25452,83 @@ mod tests {
         // A differing baked USE misses.
         assert!(!call(&config, "foo", &[]));
         assert_eq!(binpkg_respect_use_ok_uncached_calls(), after_first + 2);
+        // Backlog #122 (audit O4): two `repo_location`s with different
+        // md5-cache `IUSE` behind identical candidate `iuse` must not
+        // share -- the uncached body reads the ebuild's md5-cache entry
+        // through `candidate_iuse_and_use`. The old key hashed only the
+        // candidate's own `iuse` and would have served the first call's
+        // `true` for the second.
+        let ebuild_at_same_iuse = |tag: &str, md5_iuse: &str| {
+            let repo = dir.join(format!("repo-same-iuse-{tag}"));
+            fs::create_dir_all(repo.join("metadata/md5-cache/dev-libs")).unwrap();
+            fs::write(
+                repo.join("metadata/md5-cache/dev-libs/memo-1.0"),
+                format!("EAPI=8\nIUSE={md5_iuse}\nKEYWORDS=amd64\nSLOT=0\n"),
+            )
+            .unwrap();
+            let mut e = candidate("1.0", &["amd64"]);
+            e.repo_location = repo;
+            e.iuse = "foo".to_string();
+            e
+        };
+        let keep = ebuild_at_same_iuse("keep", "foo");
+        assert!(binpkg_respect_use_ok(
+            &binary("foo", &["foo"]),
+            Some(&keep),
+            "dev-libs",
+            "memo",
+            &config,
+            false,
+            false,
+            true
+        ));
+        assert_eq!(binpkg_respect_use_ok_uncached_calls(), after_first + 3);
+        let reject = ebuild_at_same_iuse("reject", "foo newflag");
+        assert!(!binpkg_respect_use_ok(
+            &binary("foo", &["foo"]),
+            Some(&reject),
+            "dev-libs",
+            "memo",
+            &config,
+            false,
+            false,
+            true
+        ));
+        assert_eq!(binpkg_respect_use_ok_uncached_calls(), after_first + 4);
+        // Backlog #124 E3: the build identity separates instances -- the
+        // same CPV at a different BUILD_ID is a miss, and a repeat hits.
+        let mut other_build = binary("foo", &["foo"]);
+        other_build.build_id = Some("2".to_string());
+        assert!(binpkg_respect_use_ok(
+            &other_build,
+            Some(&keep),
+            "dev-libs",
+            "memo",
+            &config,
+            false,
+            false,
+            true
+        ));
+        assert_eq!(binpkg_respect_use_ok_uncached_calls(), after_first + 5);
+        assert!(binpkg_respect_use_ok(
+            &other_build,
+            Some(&keep),
+            "dev-libs",
+            "memo",
+            &config,
+            false,
+            false,
+            true
+        ));
+        assert_eq!(
+            binpkg_respect_use_ok_uncached_calls(),
+            after_first + 5,
+            "a repeat with identical arguments must hit the memo"
+        );
         // A differing config misses.
         config.conf_use_tokens.clear();
         assert!(!call(&config, "foo", &["foo"]));
-        assert_eq!(binpkg_respect_use_ok_uncached_calls(), after_first + 3);
+        assert_eq!(binpkg_respect_use_ok_uncached_calls(), after_first + 6);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -26192,6 +26379,7 @@ mod tests {
             false,
             false,
             &[],
+            &build_local_binpkg_index(&test_config()),
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -26230,6 +26418,7 @@ mod tests {
             false,
             false,
             &[],
+            &build_local_binpkg_index(&test_config()),
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -26275,6 +26464,7 @@ mod tests {
                 false,
                 false,
                 &[],
+                &build_local_binpkg_index(&test_config()),
             )
             .expect("resolve_pretend(dev-libs/samepkg) failed")
         };
@@ -26339,6 +26529,7 @@ mod tests {
                 false,
                 false,
                 &[],
+                &build_local_binpkg_index(&test_config()),
             )
             .expect("resolve_pretend(flipinstdep[wantflag]) failed")
         };
@@ -26543,6 +26734,48 @@ mod tests {
         assert_eq!(
             read_vdb_string(&root, "dev-libs", "absent", "1.0", "RDEPEND"),
             ""
+        );
+    }
+
+    /// Backlog #125 (audit O11): a key outside real's 23-field set is
+    /// served raw, never whitespace-collapsed -- a multi-line `CONTENTS`
+    /// comes back line-for-line, even though a validated snapshot exists
+    /// for the entry. (Before, the `debug_assert!`-only guard let it fall
+    /// into the snapshot path and corrupt it in release.)
+    #[test]
+    fn vdb_aux_get_reads_an_out_of_set_key_raw() {
+        let root = tmp_vdb(
+            "dev-libs",
+            "rawkey-1.0",
+            &[(
+                "CONTENTS",
+                b"obj /usr/lib/foo.so abc123 123\nsym /usr/lib/bar.so\n",
+            )],
+        );
+        assert_eq!(
+            vdb_aux_get(&root, "dev-libs", "rawkey", "1.0", "CONTENTS"),
+            "obj /usr/lib/foo.so abc123 123\nsym /usr/lib/bar.so\n"
+        );
+        // Absent out-of-set file is still `""`.
+        assert_eq!(
+            vdb_aux_get(&root, "dev-libs", "rawkey", "1.0", "NEEDED.ELF.2"),
+            ""
+        );
+    }
+
+    /// Backlog #125 (audit O15): real decodes field files with
+    /// `errors="replace"` -- a stray non-UTF-8 byte becomes `U+FFFD`,
+    /// not a wholesale `""`.
+    #[test]
+    fn read_vdb_string_decodes_invalid_utf8_lossy_like_real() {
+        let root = tmp_vdb(
+            "dev-libs",
+            "latin1-1.0",
+            &[("DESCRIPTION", b"caf\xe9 package\n")],
+        );
+        assert_eq!(
+            read_vdb_string(&root, "dev-libs", "latin1", "1.0", "DESCRIPTION"),
+            "caf\u{fffd} package"
         );
     }
 
@@ -26969,6 +27202,35 @@ mod tests {
         }
     }
 
+    /// Backlog #120 (audit O1): a two-command `move` cycle replays back
+    /// to its start, so neither side files the other as a source -- the
+    /// target is already `out[0]`, and emitting it again would scan the
+    /// same vdb entry twice.
+    #[test]
+    fn installed_cp_sources_cycle_emits_no_duplicate() {
+        let cmds = vec![
+            UpdateCmd::Move {
+                old: ("a".to_string(), "x".to_string()),
+                new: ("b".to_string(), "x".to_string()),
+            },
+            UpdateCmd::Move {
+                old: ("b".to_string(), "x".to_string()),
+                new: ("a".to_string(), "x".to_string()),
+            },
+        ];
+        assert_eq!(
+            installed_cp_sources_with("a", "x", &cmds),
+            vec![
+                ("a".to_string(), "x".to_string()),
+                ("b".to_string(), "x".to_string())
+            ]
+        );
+        assert_eq!(
+            installed_cp_sources_with("b", "x", &cmds),
+            vec![("b".to_string(), "x".to_string())]
+        );
+    }
+
     /// Backlog #86 S1: `live_metadata_for_installed` reads the
     /// vdb-recorded repo's copy of the exact installed cpv, never the
     /// priority winner's -- real `FakeVartree._aux_get_wrapper`
@@ -27195,7 +27457,8 @@ mod tests {
                 .into_owned(),
             ..test_config()
         };
-        let got = resolve_info_binary_candidate(&config, "dev-libs/binaryinfopkg")
+        let local_binpkg = build_local_binpkg_index(&config);
+        let got = resolve_info_binary_candidate(&config, "dev-libs/binaryinfopkg", &local_binpkg)
             .expect("no error")
             .expect("a candidate");
         assert_eq!(got.cpv, "dev-libs/binaryinfopkg-1.0");
@@ -27209,12 +27472,12 @@ mod tests {
         // A binary with DEFINED_PHASES="-" (binaryonlypkg) is not a
         // pkg_info() candidate.
         assert!(
-            resolve_info_binary_candidate(&config, "dev-libs/binaryonlypkg")
+            resolve_info_binary_candidate(&config, "dev-libs/binaryonlypkg", &local_binpkg)
                 .expect("no error")
                 .is_none()
         );
         assert!(has_local_binary_candidate(
-            &config,
+            &local_binpkg,
             "dev-libs/binaryonlypkg"
         ));
     }
@@ -27308,6 +27571,7 @@ mod tests {
             false,
             false,
             &[],
+            &build_local_binpkg_index(&test_config()),
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -27350,6 +27614,7 @@ mod tests {
             false,
             false,
             &[],
+            &build_local_binpkg_index(&test_config()),
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -27392,6 +27657,7 @@ mod tests {
             false,
             false,
             &[],
+            &build_local_binpkg_index(&test_config()),
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -27484,6 +27750,7 @@ mod tests {
             false,
             false,
             &[],
+            &build_local_binpkg_index(&test_config()),
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -27575,6 +27842,7 @@ mod tests {
                 false,
                 false,
                 &[],
+                &build_local_binpkg_index(&test_config()),
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::NoVisibleCandidate
@@ -27823,6 +28091,7 @@ mod tests {
             false,
             false,
             &[],
+            &build_local_binpkg_index(&config),
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -27872,6 +28141,7 @@ mod tests {
             false,
             false,
             &[],
+            &build_local_binpkg_index(&config),
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -27920,6 +28190,7 @@ mod tests {
             false,
             false,
             &[],
+            &build_local_binpkg_index(&config),
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -28036,6 +28307,7 @@ mod tests {
             false,
             false,
             &[],
+            &build_local_binpkg_index(&config),
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -28362,6 +28634,7 @@ mod tests {
             false,
             false,
             &[],
+            &build_local_binpkg_index(&config),
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -28428,6 +28701,7 @@ mod tests {
             false,
             false,
             &[],
+            &build_local_binpkg_index(&config),
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -28543,6 +28817,7 @@ mod tests {
                 false,
                 false,
                 &[],
+                &build_local_binpkg_index(&config),
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::AlreadyInstalled {
@@ -28612,6 +28887,7 @@ mod tests {
             false,
             false,
             &[],
+            &build_local_binpkg_index(&test_config()),
         )
         .expect("resolve_pretend must succeed");
         assert_eq!(
@@ -28658,6 +28934,7 @@ mod tests {
             false,
             false,
             &[],
+            &build_local_binpkg_index(&test_config()),
         )
         .expect("resolve_pretend must succeed");
         assert_eq!(outcome, PretendOutcome::NoVisibleCandidate);
@@ -28713,6 +28990,7 @@ mod tests {
                 false,
                 false,
                 &[],
+                &build_local_binpkg_index(&config),
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::Reinstall {
@@ -28869,6 +29147,7 @@ mod tests {
                 false,
                 false,
                 &[],
+                &build_local_binpkg_index(&config),
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::New {
@@ -28905,6 +29184,7 @@ mod tests {
                 false,
                 false,
                 &[],
+                &build_local_binpkg_index(&config),
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::NoVisibleCandidate
@@ -39208,11 +39488,18 @@ mod tests {
         proprietary.license = "Proprietary".to_string();
         assert!(!is_visible(&proprietary, "dev-libs", "vismemo", &config));
         assert_eq!(is_visible_uncached_calls(), after_first + 1);
+        // A differing candidate version misses (the literal
+        // `candidate_str` in the key bounds any digest collision to
+        // same-candidate inputs).
+        let mut v2 = c.clone();
+        v2.version = "2.0".to_string();
+        assert!(is_visible(&v2, "dev-libs", "vismemo", &config));
+        assert_eq!(is_visible_uncached_calls(), after_first + 2);
         // A differing config accept_license misses.
         let mut nothing_accepted = config.clone();
         nothing_accepted.accept_license = Vec::new();
         assert!(!is_visible(&c, "dev-libs", "vismemo", &nothing_accepted));
-        assert_eq!(is_visible_uncached_calls(), after_first + 2);
+        assert_eq!(is_visible_uncached_calls(), after_first + 3);
     }
 
     #[test]
@@ -40088,6 +40375,24 @@ mod tests {
             true,
         );
         assert!(!Rc::ptr_eq(&a, &c));
+        // Backlog #122: `category`/`package` are key components, not
+        // merely implied by `candidate_str` -- the same string with a
+        // different package is a different entry with its own value.
+        let config = portage_profile::Config {
+            use_mask_force_levels: vec![portage_profile::UseMaskForceLevel {
+                package_use_mask: vec![("dev-libs/pkg".to_string(), vec!["special".to_string()])],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let s = "dev-libs/pkg-1.0:0/0::testrepo";
+        let for_pkg =
+            resolved_use_mask_or_force(MaskOrForce::Mask, &config, s, "dev-libs", "pkg", false);
+        assert!(for_pkg.contains("special"));
+        let for_other =
+            resolved_use_mask_or_force(MaskOrForce::Mask, &config, s, "dev-libs", "other", false);
+        assert!(!for_other.contains("special"));
+        assert!(!Rc::ptr_eq(&for_pkg, &for_other));
     }
 
     #[test]
@@ -40452,8 +40757,7 @@ mod tests {
     fn effective_use_flags_memo_does_not_leak_between_differing_configs() {
         // The `use_context_fingerprint` cache key must distinguish two
         // configs that differ only in a *middle* `package_use` entry
-        // (same length, same first + last) -- the case the sampled hash
-        // could miss without the mid-point sample. Same candidate / iuse /
+        // (same length, same first + last). Same candidate / iuse /
         // keywords, so only the config content can produce a different
         // answer.
         let base = |mid_flag: &str| portage_profile::Config {
@@ -40500,9 +40804,10 @@ mod tests {
     /// a base falls back to the full content hash.
     #[test]
     fn use_context_fingerprint_uses_the_frozen_base_and_separates_autounmask_use() {
+        let base_config = portage_profile::Config::default();
         let frozen = portage_profile::Config {
-            use_context_base: Some(0x1234_5678_9abc_def0),
-            ..Default::default()
+            use_context_base: Some(portage_profile::use_context_base_fingerprint(&base_config)),
+            ..base_config
         };
         let plain = use_context_fingerprint(&frozen);
         // A clone carrying the frozen base is identical...
@@ -40521,6 +40826,38 @@ mod tests {
         let before = use_context_fingerprint(&unfrozen);
         unfrozen.accept_keywords.insert("~amd64".to_string());
         assert_ne!(before, use_context_fingerprint(&unfrozen));
+    }
+
+    /// Backlog #121 (audit O6): mutating a USE-context field after
+    /// `resolve_config` froze its digest trips the frozen-base
+    /// `debug_assert_eq!` instead of silently poisoning the memo.
+    #[test]
+    #[should_panic(expected = "mutated after resolve_config")]
+    #[cfg(debug_assertions)]
+    fn use_context_fingerprint_debug_asserts_on_post_freeze_mutation() {
+        let base_config = portage_profile::Config::default();
+        let mut frozen = portage_profile::Config {
+            use_context_base: Some(portage_profile::use_context_base_fingerprint(&base_config)),
+            ..base_config
+        };
+        frozen.accept_keywords.insert("~amd64".to_string());
+        let _ = use_context_fingerprint(&frozen);
+    }
+
+    /// Backlog #121 (audit O6): same post-freeze guard on the visibility
+    /// path -- mutating a mask field trips instead of poisoning `IV_CACHE`.
+    #[test]
+    #[should_panic(expected = "mutated after resolve_config")]
+    #[cfg(debug_assertions)]
+    fn is_visible_fingerprint_debug_asserts_on_post_freeze_mutation() {
+        let base_config = portage_profile::Config::default();
+        let mut frozen = portage_profile::Config {
+            use_context_base: Some(portage_profile::use_context_base_fingerprint(&base_config)),
+            is_visible_base: Some(portage_profile::is_visible_base_fingerprint(&base_config)),
+            ..base_config
+        };
+        frozen.package_mask.push("dev-libs/foo".to_string());
+        let _ = is_visible_fingerprint(&frozen);
     }
 
     fn graph_entry(category: &str, package: &str, version: &str) -> GraphEntry {

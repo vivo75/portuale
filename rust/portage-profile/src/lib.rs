@@ -2517,15 +2517,18 @@ fn parse_package_use_lines(
 /// own `/etc/profile.env` would leak host state into
 /// fixture-deterministic resolution.
 #[allow(clippy::too_many_arguments)]
-/// A cheap content fingerprint of every USE-context `Config` field the
-/// `portage-repo` memo keys read (see `use_context_fingerprint` there for
-/// why sampling, not a full hash, is sound). `autounmask_use` is
-/// deliberately **excluded**: it is the one field the `'backtrack` loop
-/// mutates, and the caller hashes it separately against this frozen base
-/// (`#105`).
+/// An exact content fingerprint of every USE-context `Config` field the
+/// `portage-repo` memo keys read (see `use_context_fingerprint` there).
+/// `autounmask_use` is deliberately **excluded**: it is the one field the
+/// `'backtrack` loop mutates, and the caller hashes it separately against
+/// this frozen base (`#105`).
 ///
 /// `resolve_config` computes this once and stores it in
 /// [`Config::use_context_base`]; callers use that instead of recomputing.
+/// Every ordered field is hashed in full; the `HashSet` fields use the
+/// order-independent xor-fold below (their iteration order is not stable),
+/// which is already exact. Computed once per process, so a full hash
+/// costs microseconds (backlog #121).
 pub fn use_context_base_fingerprint(config: &Config) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -2542,19 +2545,6 @@ pub fn use_context_base_fingerprint(config: &Config) -> u64 {
         }
         acc.hash(h);
     };
-    // Sample a slice: length + first/middle/last element.
-    fn hash_sampled<T: Hash>(items: &[T], h: &mut std::collections::hash_map::DefaultHasher) {
-        items.len().hash(h);
-        if let Some(f) = items.first() {
-            f.hash(h);
-        }
-        if items.len() > 2 {
-            items[items.len() / 2].hash(h);
-        }
-        if let Some(l) = items.last() {
-            l.hash(h);
-        }
-    }
 
     hash_set(&config.accept_keywords, &mut h);
     hash_set(&config.use_force, &mut h);
@@ -2562,61 +2552,42 @@ pub fn use_context_base_fingerprint(config: &Config) -> u64 {
     hash_set(&config.use_stable_force, &mut h);
     hash_set(&config.use_stable_mask, &mut h);
 
-    hash_sampled(&config.use_tokens, &mut h);
-    hash_sampled(&config.conf_use_tokens, &mut h);
-    hash_sampled(&config.env_use_tokens, &mut h);
-    hash_sampled(&config.envd_use_tokens, &mut h);
-    hash_sampled(&config.features_use, &mut h);
+    config.use_tokens.hash(&mut h);
+    config.conf_use_tokens.hash(&mut h);
+    config.env_use_tokens.hash(&mut h);
+    config.envd_use_tokens.hash(&mut h);
+    config.features_use.hash(&mut h);
 
-    hash_sampled(&config.package_use, &mut h);
-    hash_sampled(&config.package_use_user, &mut h);
-    hash_sampled(&config.package_use_repo, &mut h);
-    hash_sampled(&config.package_env_use, &mut h);
-    hash_sampled(&config.package_use_force, &mut h);
-    hash_sampled(&config.package_use_mask, &mut h);
-    hash_sampled(&config.package_use_stable_force, &mut h);
-    hash_sampled(&config.package_use_stable_mask, &mut h);
+    config.package_use.hash(&mut h);
+    config.package_use_user.hash(&mut h);
+    config.package_use_repo.hash(&mut h);
+    config.package_env_use.hash(&mut h);
+    config.package_use_force.hash(&mut h);
+    config.package_use_mask.hash(&mut h);
+    config.package_use_stable_force.hash(&mut h);
+    config.package_use_stable_mask.hash(&mut h);
     // Per-level view drives `effective_use_flags`/`forced_or_masked_flags`;
     // two configs could share a flat `use_mask` set yet differ in the
-    // interleaving, so hash the ordered structure too. Level count +
-    // per-level line/entry counts are a cheap, order-sensitive digest.
+    // interleaving, so hash the ordered structure in full.
     config.use_mask_force_levels.len().hash(&mut h);
     for lvl in &config.use_mask_force_levels {
-        (
-            lvl.use_mask.len(),
-            lvl.use_force.len(),
-            lvl.use_stable_mask.len(),
-            lvl.use_stable_force.len(),
-            lvl.package_use_mask.len(),
-            lvl.package_use_force.len(),
-            lvl.package_use_stable_mask.len(),
-            lvl.package_use_stable_force.len(),
-        )
-            .hash(&mut h);
-        hash_sampled(&lvl.use_mask, &mut h);
-        hash_sampled(&lvl.package_use_mask, &mut h);
+        lvl.use_mask.hash(&mut h);
+        lvl.use_force.hash(&mut h);
+        lvl.use_stable_mask.hash(&mut h);
+        lvl.use_stable_force.hash(&mut h);
+        lvl.package_use_mask.hash(&mut h);
+        lvl.package_use_force.hash(&mut h);
+        lvl.package_use_stable_mask.hash(&mut h);
+        lvl.package_use_stable_force.hash(&mut h);
     }
-    hash_sampled(&config.package_accept_keywords, &mut h);
-    hash_sampled(&config.repo_make_defaults_use, &mut h);
+    config.package_accept_keywords.hash(&mut h);
+    config.repo_make_defaults_use.hash(&mut h);
 
-    // `profile_use_layers` -- sample the outer Vec, and within the
-    // sampled layers sample each inner list.
+    // `profile_use_layers` -- every layer in full, each inner list in full.
     config.profile_use_layers.len().hash(&mut h);
-    let sample_layer = |l: &ProfileUseLayer, h: &mut std::collections::hash_map::DefaultHasher| {
-        hash_sampled(&l.make_defaults_use, h);
-        hash_sampled(&l.package_use, h);
-    };
-    if let Some(f) = config.profile_use_layers.first() {
-        sample_layer(f, &mut h);
-    }
-    if config.profile_use_layers.len() > 2 {
-        sample_layer(
-            &config.profile_use_layers[config.profile_use_layers.len() / 2],
-            &mut h,
-        );
-    }
-    if let Some(l) = config.profile_use_layers.last() {
-        sample_layer(l, &mut h);
+    for l in &config.profile_use_layers {
+        l.make_defaults_use.hash(&mut h);
+        l.package_use.hash(&mut h);
     }
 
     h.finish()
@@ -2625,8 +2596,7 @@ pub fn use_context_base_fingerprint(config: &Config) -> u64 {
 /// #114: a content fingerprint of every `is_visible`-relevant config
 /// field the USE-context base does not already cover -- `package.mask`/
 /// `package.unmask`, the `LICENSE`/`PROPERTIES`/`RESTRICT` accept lists,
-/// `package.accept_keywords` (the USE-context base samples it; the
-/// visibility memo hashes it in full) and `license_groups`.
+/// `package.accept_keywords` and `license_groups`.
 ///
 /// `resolve_config` computes this once and stores it in
 /// [`Config::is_visible_base`]; the `is_visible` memo hashes that `u64`

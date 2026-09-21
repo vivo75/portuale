@@ -7323,6 +7323,12 @@ fn run_info(
     debug: bool,
     color: &Colorizer,
 ) -> ExitCode {
+    // The local binary index, built once for the whole `--info` run and
+    // shared by the existence probe below and the binary half further
+    // down (backlog #123: threaded as an `Arc`, never re-derived from
+    // `&Config` per atom). Built lazily: without `--usepkg` neither
+    // consumer runs.
+    let local_binpkg = usepkg.then(|| portage_repo::build_local_binpkg_index(config));
     // Real `action_info`'s `myfiles` loop: a target with no ebuild
     // anywhere **and** nothing installed is fatal (exit 1) and printed
     // *before* the config block. `list_candidates` (all versions, masked
@@ -7338,7 +7344,9 @@ fn run_info(
             // Real `action_info` also checks `bindb.match(x.cp)` when
             // `--usepkg` is on (`actions.py:1877-1885`): a package only
             // ever available as a binary isn't a "no ebuilds" error.
-            || (usepkg && portage_repo::has_local_binary_candidate(config, atom_str));
+            || local_binpkg.as_ref().is_some_and(|idx| {
+                portage_repo::has_local_binary_candidate(idx, atom_str)
+            });
         if !exists {
             let mut xinfo = format!("\"{atom_str}\"");
             if root != Path::new("/") {
@@ -7607,8 +7615,8 @@ fn run_info(
         }
         // Real `(bindb, "binary")`: only when `--usepkg` and the ebuild
         // half yielded nothing (`actions.py:1876`).
-        if usepkg
-            && let Some(b) = portage_repo::resolve_info_binary_candidate(config, a)
+        if let Some(idx) = local_binpkg.as_ref()
+            && let Some(b) = portage_repo::resolve_info_binary_candidate(config, a, idx)
                 .ok()
                 .flatten()
         {
@@ -11313,7 +11321,7 @@ pub fn run(args: &[String]) -> ExitCode {
     // the running root). When active, every package installed in the
     // source root joins the binary-candidate pool for the target build
     // (`portage_repo::set_quickpkg_direct_root` ->
-    // `local_binpkg_index`). Path comparison is `canonicalize`-based --
+    // `build_local_binpkg_index`). Path comparison is `canonicalize`-based --
     // real portage's full `os.path.abspath` (cwd-relative, non-existent
     // paths) is a minor documented cut; a real source root always exists.
     let quickpkg_source = if usepkg && quickpkg_direct == Some(true) {
