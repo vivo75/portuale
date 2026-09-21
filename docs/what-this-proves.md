@@ -17678,3 +17678,22 @@ Detail: `docs/performances-tuning.md` "#105 follow-up".
 # best of 3 warm: 2.44-2.50 s wall / 1.89-1.97 s user / ~0.5 s sys
 # (#109/#110 baseline: 3.07-3.30 / 2.51-2.63; pre-batch: 3.93-3.98)
 ```
+
+**`binpkg_respect_use_ok` memo (Tier 8 #117, 2026-09-21).** After #105
+the binary-candidate USE check was the top named function (24.78 % with
+children) even though all its children are already-memoised; the
+residual was rebuilding the downstream memo keys and the per-call
+`old_iuse`/enabled-set allocations. A temporary counter measured ~13 k
+calls against 1,197 distinct inputs on the reference workload, so the
+pure function memoises per `(config USE context, both candidates' full
+metadata, the three flags)` in a thread-local map (baked USE hashed
+order-independently). Interleaved, same tree: 2.58-2.69 s -> 2.22-2.28 s
+wall (user 1.96-2.02 -> 1.62-1.65); second shape `sys-devel/gcc`
+2.51-2.58 -> 2.18-2.24; output byte-identical over the full contract
+suite + corpus. Detail: `docs/performances-tuning.md` "#117 follow-up".
+
+```sh
+/usr/bin/time -v rust/target/release/emerge -puD --getbinpkg net-libs/rest
+# best of 3 warm: 2.22-2.28 s wall / 1.62-1.65 s user / ~0.6 s sys
+# (#109/#110 baseline: 3.07-3.30 / 2.51-2.63; pre-#105: 3.00-3.16)
+```

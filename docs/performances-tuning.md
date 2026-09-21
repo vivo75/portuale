@@ -22,11 +22,12 @@
 | + `read_md5_cache` / `list_candidates` return shared `Arc` | **~4.5 s** | **17×** |
 | + `#102`–`#108` memoisation batch (vdb scan, `Rc` EUF, mask/force, binpkg index) | **~4.0 s** | 19× |
 | + `#109`–`#110` vdb `metadata` snapshot + aux memo + `metadata_key_accepted` memo | **~3.1 s** | 25× |
-| + `#105` USE-context fingerprint frozen at config resolution | **~2.45 s** | **31×** |
+| + `#105` USE-context fingerprint frozen at config resolution | **~2.45 s** | 31× |
+| + `#117` `binpkg_respect_use_ok` memo | **~2.25 s** | **34×** |
 
-All nine changes are **shipped** and keep byte-identical output with the
+All ten changes are **shipped** and keep byte-identical output with the
 full suite green (`portage-dep` / `portage-repo` / `portuale` unit tests +
-contract tests). portuale is now ~2.45 s wall / ~1.9 s user / ~0.5 s sys
+contract tests). portuale is now ~2.25 s wall / ~1.6 s user / ~0.6 s sys
 on this workload, against real's last measured 4.50–5.11 s (real aborts
 there today, backlog #111). None of them alters the resolver algorithm —
 they remove redundant work the algorithm was doing.
@@ -271,34 +272,27 @@ smaller blast radius.
 
 ## What to change next, in priority order
 
-**Re-ranked 2026-09-21 after `#105`** (`perf record -F 400 -g` on the
+**Re-ranked 2026-09-21 after `#117`** (`perf record -F 400 -g` on the
 post-slice binary; the numbers are in "2026-09-21 batch" below). The
-resolver is now ~2.45 s wall / ~1.9 s user / ~0.5 s sys on the reference
+resolver is now ~2.25 s wall / ~1.6 s user / ~0.6 s sys on the reference
 workload:
 
 1. **`#107` — the second `run_pass` (parked 2026-09-21).** `run_pass` is
-   81.20 % with children and the loop still restarts where real reports
+   77.83 % with children and the loop still restarts where real reports
    `backtrack: 0/20`. Diagnosed: the restart is the reverse-dependency
    pin feedback, and removing it needs real's complete-graph
    parent-atom model (a prototype that applied the reachable consumers'
    atoms at selection lost an update and the withheld-update warning —
    see the #107 backlog entry). Algorithmic/parity; do not win it by
    skipping the pass. Revisit only with the complete-graph model.
-2. **`#117` — `binpkg_respect_use_ok`** (24.78 % with children, 0.25 %
-   self): now the top named function. Its children are the memoised USE
-   machinery, so the residual is key construction + allocation per
-   binary candidate; investigate a per-candidate memo or restructuring
-   before reaching for threads.
-3. **`#114` — `is_visible`** (11.81 % with children after `#105`).
-4. **`#112` — the two `statx` per `vdb_aux_get` call** (`statx` is no
-   longer the top syscall share but is still ~340 k/run).
-5. **Allocation churn** — `String::clone` 12.79 %, `memmove` 9.85 %,
-   `malloc` 7.98 %, `parse_atom` 7.68 % (memo hits cloning the parsed
-   struct), `repo_aux_metadata` 9.84 % / `list_remote_binary_candidates`
-   8.83 % (cold md5-cache / remote-index fills). The old "stop
-   deep-cloning `Candidate` / return `Rc<Atom>`" notes below are now
-   the aggregate-level cost; no single item is above ~5 %.
-6. **`#111` — the real-abort tree divergence** (parity, not performance):
+2. **`#114` — `is_visible`** (13.12 % with children): the top named
+   function now, with `repo_aux_metadata` 11.38 % (cold md5-cache fills
+   and validation), `list_remote_binary_candidates` 11.00 % (per-cp
+   remote-candidate materialisation), `parse_atom` 9.23 % (memo-hit
+   clones) and `disjunction_preference` 9.01 % close behind. All
+   single-threaded allocation/key-construction work, no hot loop.
+3. **`#112` — the two `statx` per `vdb_aux_get` call** (~340 k/run).
+4. **`#111` — the real-abort tree divergence** (parity, not performance):
    real aborts `-uD --getbinpkg` where portuale resolves on the
    2026-09-21 tree; blocks the interleaved real comparison until fixed.
 
@@ -537,3 +531,22 @@ profile's top list; `run_pass` is now 81.20 % with children and
 `binpkg_respect_use_ok` 24.78 %. Full contract suite byte-identical
 (1739 passed, same 3 pre-existing movepkg failures, corpus drift list
 unchanged).
+
+### #117 follow-up (same day): memoise `binpkg_respect_use_ok`
+
+After #105 the binary-candidate USE check was the top named function
+(24.78 % with children, 0.25 % self) even though its children are the
+already-memoised USE machinery: the residual is rebuilding each
+downstream memo key plus the `old_iuse`/enabled-set allocations. A
+temporary counter showed the reference workload calls it ~13 k times
+with only **1,197 distinct inputs** (10x repetition: the two retain
+loops in `resolve_pretend`/the pass re-derivation, across passes). The
+function is pure in its eight arguments, so it now memoises per
+`(config USE context, both candidates' full metadata, the three flags)`
+in a thread-local map, hashing the baked USE set with an order-independent
+fold.
+
+Interleaved, same tree: 2.58-2.69 s wall / 1.96-2.02 s user -> **2.22-2.28 s /
+1.62-1.65 s** (second shape `sys-devel/gcc`: 2.51-2.58 -> 2.18-2.24);
+`binpkg_respect_use_ok` falls from 24.78 % to 10.16 % with children.
+Byte-identical over the full contract suite + corpus.

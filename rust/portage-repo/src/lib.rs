@@ -2791,6 +2791,100 @@ fn binpkg_respect_use_ok(
     let Some(binary_use) = &candidate.binary_use else {
         return true;
     };
+    // #117: memoised per (config USE context, both candidates' full
+    // metadata, the three flags). The function was the top named cost
+    // after #105 (24.78 % with children) even though its children are the
+    // already-memoised USE machinery: the residual is building each
+    // downstream memo key plus the `old_iuse`/enabled-set allocations,
+    // and the reference workload repeats it 10x (12,000 calls, 1,197
+    // distinct inputs, measured). Pure in its arguments; thread-local so
+    // the lookup stays lock-free (`EUF_CACHE`'s shape).
+    type BruCache = HashMap<(u64, bool, bool, bool), bool>;
+    thread_local! {
+        static BRU_CACHE: RefCell<BruCache> = RefCell::new(HashMap::new());
+    }
+    let key = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        use_context_fingerprint(config).hash(&mut h);
+        category.hash(&mut h);
+        package.hash(&mut h);
+        candidate.version.hash(&mut h);
+        candidate.slot.hash(&mut h);
+        candidate.sub_slot.hash(&mut h);
+        candidate.repo_name.hash(&mut h);
+        candidate.iuse.hash(&mut h);
+        candidate.keywords.hash(&mut h);
+        // The baked USE set: order-independent xor-fold (its iteration
+        // order is not stable across instances).
+        binary_use.len().hash(&mut h);
+        let mut acc: u64 = 0;
+        for v in binary_use {
+            let mut e = std::collections::hash_map::DefaultHasher::new();
+            v.hash(&mut e);
+            acc ^= e.finish();
+        }
+        acc.hash(&mut h);
+        match ebuild_at_version {
+            Some(e) => {
+                1u8.hash(&mut h);
+                e.version.hash(&mut h);
+                e.slot.hash(&mut h);
+                e.sub_slot.hash(&mut h);
+                e.repo_name.hash(&mut h);
+                e.iuse.hash(&mut h);
+                e.keywords.hash(&mut h);
+                (e.source == CandidateSource::Binary).hash(&mut h);
+            }
+            None => 0u8.hash(&mut h),
+        }
+        (h.finish(), newuse, changed_use, respect_use)
+    };
+    if let Some(hit) = BRU_CACHE.with(|c| c.borrow().get(&key).copied()) {
+        return hit;
+    }
+    let result = binpkg_respect_use_ok_uncached(
+        candidate,
+        ebuild_at_version,
+        category,
+        package,
+        config,
+        newuse,
+        changed_use,
+        respect_use,
+    );
+    BRU_CACHE.with(|c| {
+        c.borrow_mut().insert(key, result);
+    });
+    result
+}
+
+#[cfg(test)]
+thread_local! {
+    static BRU_UNCACHED_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn binpkg_respect_use_ok_uncached_calls() -> u64 {
+    BRU_UNCACHED_CALLS.with(std::cell::Cell::get)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn binpkg_respect_use_ok_uncached(
+    candidate: &Candidate,
+    ebuild_at_version: Option<&Candidate>,
+    category: &str,
+    package: &str,
+    config: &portage_profile::Config,
+    newuse: bool,
+    changed_use: bool,
+    respect_use: bool,
+) -> bool {
+    #[cfg(test)]
+    BRU_UNCACHED_CALLS.with(|c| c.set(c.get() + 1));
+    let Some(binary_use) = &candidate.binary_use else {
+        return true;
+    };
     let old_iuse: HashSet<String> = candidate
         .iuse
         .split_whitespace()
@@ -25035,6 +25129,75 @@ mod tests {
             false,
             true
         ));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// #117: the `binpkg_respect_use_ok` memo is transparent (a repeated
+    /// call runs the body once) and must distinguish every key axis: the
+    /// ebuild's own metadata, the binary's IUSE and baked USE, the three
+    /// flags, and the config.
+    #[test]
+    fn binpkg_respect_use_memo_hits_on_repeat_and_separates_its_inputs() {
+        let dir = slotundo_temp_dir("binpkg-respect-use-memo");
+        let repo = dir.join("repo");
+        fs::create_dir_all(repo.join("metadata/md5-cache/dev-libs")).unwrap();
+        fs::write(
+            repo.join("metadata/md5-cache/dev-libs/memo-1.0"),
+            "EAPI=8\nIUSE=foo newflag\nKEYWORDS=amd64\nSLOT=0\n",
+        )
+        .unwrap();
+        let mut ebuild = candidate("1.0", &["amd64"]);
+        ebuild.repo_location = repo;
+        ebuild.iuse = "foo newflag".to_string();
+        let binary = |iuse: &str, baked: &[&str]| {
+            let mut c = candidate("1.0", &["amd64"]);
+            c.source = CandidateSource::Binary;
+            c.iuse = iuse.to_string();
+            c.binary_use = Some(baked.iter().map(|s| s.to_string()).collect());
+            c
+        };
+        let mut config = portage_profile::Config {
+            conf_use_tokens: vec!["foo".to_string()],
+            ..Default::default()
+        };
+        let call = |config: &portage_profile::Config, binary_iuse: &str, baked: &[&str]| {
+            binpkg_respect_use_ok(
+                &binary(binary_iuse, baked),
+                Some(&ebuild),
+                "dev-libs",
+                "memo",
+                config,
+                false,
+                false,
+                true,
+            )
+        };
+
+        // Unique inputs -> certainly a miss; the ebuild gained newflag, so
+        // the binary is rejected.
+        let before = binpkg_respect_use_ok_uncached_calls();
+        assert!(!call(&config, "foo", &["foo"]));
+        let after_first = binpkg_respect_use_ok_uncached_calls();
+        assert_eq!(after_first, before + 1, "first call is a miss");
+        assert!(!call(&config, "foo", &["foo"]));
+        assert_eq!(
+            binpkg_respect_use_ok_uncached_calls(),
+            after_first,
+            "a repeat with identical arguments must hit the memo"
+        );
+        // A differing binary IUSE misses. Here the baked USE enables
+        // newflag while the ebuild's effective USE does not, so the
+        // enabled-state term rejects: false, like the first call (only
+        // the counter can prove the miss, which is exactly why it exists).
+        assert!(!call(&config, "foo newflag", &["foo newflag"]));
+        assert_eq!(binpkg_respect_use_ok_uncached_calls(), after_first + 1);
+        // A differing baked USE misses.
+        assert!(!call(&config, "foo", &[]));
+        assert_eq!(binpkg_respect_use_ok_uncached_calls(), after_first + 2);
+        // A differing config misses.
+        config.conf_use_tokens.clear();
+        assert!(!call(&config, "foo", &["foo"]));
+        assert_eq!(binpkg_respect_use_ok_uncached_calls(), after_first + 3);
         let _ = fs::remove_dir_all(&dir);
     }
 
