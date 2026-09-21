@@ -4468,12 +4468,108 @@ fn metadata_key_accepted(
     package: &str,
     candidate_str: &str,
     config: &portage_profile::Config,
+    which: MetadataKey,
     global_accept: &[String],
     package_accept: &[(String, Vec<String>)],
 ) -> bool {
     if value_str.trim().is_empty() {
         return true;
     }
+    // Memoised per (which, config USE context, candidate, value, accept
+    // lists): the body runs `use_flags_if_conditional` (-> the already
+    // memoised `effective_use_flags`), `resolve_accept_tokens`,
+    // `all_mentioned_tokens` (a `MatchMode::All` use-reduce),
+    // `resolve_acceptable_tokens` and `use_reduce_flat`, and it was the
+    // last remaining hot function of that shape after #102-#108 (23.30 %
+    // of the reference workload with children in S0's re-profile). Pure
+    // in its arguments; thread-local so the lookup stays lock-free, the
+    // `RUMF_CACHE` shape (#104). The empty-value early return above stays
+    // *before* the lookup: it is cheaper than hashing the key.
+    type MkaCache = HashMap<(MetadataKey, u64, String, String, u64), bool>;
+    thread_local! {
+        static MKA_CACHE: RefCell<MkaCache> = RefCell::new(HashMap::new());
+    }
+    let key = (
+        which,
+        use_context_fingerprint(config),
+        candidate_str.to_string(),
+        value_str.to_string(),
+        accept_lists_fingerprint(global_accept, package_accept),
+    );
+    if let Some(hit) = MKA_CACHE.with(|c| c.borrow().get(&key).copied()) {
+        return hit;
+    }
+    let result = metadata_key_accepted_uncached(
+        value_str,
+        candidate,
+        category,
+        package,
+        candidate_str,
+        config,
+        global_accept,
+        package_accept,
+    );
+    MKA_CACHE.with(|c| {
+        c.borrow_mut().insert(key, result);
+    });
+    result
+}
+
+/// Which accept-list pair a [`metadata_key_accepted`] call resolves:
+/// `PROPERTIES` uses `accept_properties`/`package_properties`,
+/// `RESTRICT` uses `accept_restrict`/`package_accept_restrict`. Every
+/// call site passes exactly one of the two pairs (audited for #110), so
+/// this discriminant -- rather than inferring the pair from the slices --
+/// is the memo's identity for them.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum MetadataKey {
+    Properties,
+    Restrict,
+}
+
+/// A content fingerprint of the two accept-list arguments. The
+/// `MKA_CACHE` key hashes them because `use_context_fingerprint` covers
+/// only the USE-relevant fields: two configs that differ *only* in
+/// `accept_properties` (or `accept_restrict`) share a fingerprint, and
+/// the crate's own masking unit tests build exactly such pairs in one
+/// process -- without this they would collide and become test-order
+/// dependent. Production has one config per process, so the cost is a
+/// handful of short strings per call; hashing fully (not sampled) keeps
+/// the key exact for the sizes these lists actually have.
+fn accept_lists_fingerprint(
+    global_accept: &[String],
+    package_accept: &[(String, Vec<String>)],
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    global_accept.hash(&mut h);
+    package_accept.hash(&mut h);
+    h.finish()
+}
+
+#[cfg(test)]
+thread_local! {
+    static MKA_UNCACHED_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn metadata_key_accepted_uncached_calls() -> u64 {
+    MKA_UNCACHED_CALLS.with(std::cell::Cell::get)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn metadata_key_accepted_uncached(
+    value_str: &str,
+    candidate: &Candidate,
+    category: &str,
+    package: &str,
+    candidate_str: &str,
+    config: &portage_profile::Config,
+    global_accept: &[String],
+    package_accept: &[(String, Vec<String>)],
+) -> bool {
+    #[cfg(test)]
+    MKA_UNCACHED_CALLS.with(|c| c.set(c.get() + 1));
     let use_flags = use_flags_if_conditional(
         value_str,
         candidate,
@@ -4543,6 +4639,7 @@ pub fn is_visible(
         package,
         &candidate_str,
         config,
+        MetadataKey::Properties,
         &config.accept_properties,
         &config.package_properties,
     ) {
@@ -4556,6 +4653,7 @@ pub fn is_visible(
         package,
         &candidate_str,
         config,
+        MetadataKey::Restrict,
         &config.accept_restrict,
         &config.package_accept_restrict,
     ) {
@@ -4622,6 +4720,7 @@ fn visible_with_relax(
         package,
         &candidate_str,
         config,
+        MetadataKey::Properties,
         &config.accept_properties,
         &config.package_properties,
     ) {
@@ -4635,6 +4734,7 @@ fn visible_with_relax(
         package,
         &candidate_str,
         config,
+        MetadataKey::Restrict,
         &config.accept_restrict,
         &config.package_accept_restrict,
     ) {
@@ -4696,6 +4796,7 @@ fn keyword_masked_only(
         package,
         &candidate_str,
         config,
+        MetadataKey::Properties,
         &config.accept_properties,
         &config.package_properties,
     ) {
@@ -4709,6 +4810,7 @@ fn keyword_masked_only(
         package,
         &candidate_str,
         config,
+        MetadataKey::Restrict,
         &config.accept_restrict,
         &config.package_accept_restrict,
     ) {
@@ -4769,6 +4871,7 @@ fn mask_masked_only(
         package,
         &candidate_str,
         config,
+        MetadataKey::Properties,
         &config.accept_properties,
         &config.package_properties,
     ) {
@@ -4781,6 +4884,7 @@ fn mask_masked_only(
         package,
         &candidate_str,
         config,
+        MetadataKey::Restrict,
         &config.accept_restrict,
         &config.package_accept_restrict,
     )
@@ -4846,6 +4950,7 @@ fn license_masked_only(
         package,
         &candidate_str,
         config,
+        MetadataKey::Properties,
         &config.accept_properties,
         &config.package_properties,
     ) {
@@ -4859,6 +4964,7 @@ fn license_masked_only(
         package,
         &candidate_str,
         config,
+        MetadataKey::Restrict,
         &config.accept_restrict,
         &config.package_accept_restrict,
     ) {
@@ -9529,6 +9635,7 @@ fn candidate_masking_reasons(
         package,
         &candidate_str,
         config,
+        MetadataKey::Properties,
         &config.accept_properties,
         &config.package_properties,
     ) {
@@ -9542,6 +9649,7 @@ fn candidate_masking_reasons(
         package,
         &candidate_str,
         config,
+        MetadataKey::Restrict,
         &config.accept_restrict,
         &config.package_accept_restrict,
     ) {
@@ -38616,6 +38724,112 @@ mod tests {
             ..candidate("1.0", &["amd64"])
         };
         assert!(!is_visible(&c, "dev-libs", "foo", &config));
+    }
+
+    /// #110: the memo key must distinguish two configs that differ only
+    /// in their accept lists -- the fields `use_context_fingerprint` does
+    /// not cover. Two configs with the same USE context, candidate and
+    /// value but opposite `accept_properties` must not collide.
+    #[test]
+    fn metadata_key_accepted_memo_does_not_leak_between_differing_accept_lists() {
+        let base = |accept: &str| portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            accept_properties: vec![accept.to_string()],
+            ..Default::default()
+        };
+        let star = base("*");
+        let interactive = base("interactive");
+        let c = Candidate {
+            properties: "live".to_string(),
+            ..candidate("1.0", &["amd64"])
+        };
+        let candidate_str = "dev-libs/memoaccept-1.0:0/0::test";
+        let call = |config: &portage_profile::Config| {
+            metadata_key_accepted(
+                &c.properties,
+                &c,
+                "dev-libs",
+                "memoaccept",
+                candidate_str,
+                config,
+                MetadataKey::Properties,
+                &config.accept_properties,
+                &config.package_properties,
+            )
+        };
+        assert!(call(&star));
+        assert!(
+            !call(&interactive),
+            "a differing accept_properties must not reuse the memo entry"
+        );
+    }
+
+    /// #110: a repeated call with identical arguments is served from the
+    /// memo (the uncached body runs once), and the explicit `MetadataKey`
+    /// discriminant keeps `PROPERTIES` and `RESTRICT` apart even when the
+    /// value string and every other key component are identical.
+    #[test]
+    fn metadata_key_accepted_memo_hits_on_a_repeat_and_separates_metadata_keys() {
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            accept_properties: vec!["*".to_string()],
+            accept_restrict: vec![],
+            ..Default::default()
+        };
+        let c = Candidate {
+            properties: "test".to_string(),
+            restrict: "test".to_string(),
+            ..candidate("1.0", &["amd64"])
+        };
+        let candidate_str = "dev-libs/memokey-1.0:0/0::test";
+        let call = |which: MetadataKey,
+                    value: &str,
+                    global: &[String],
+                    package: &[(String, Vec<String>)]| {
+            metadata_key_accepted(
+                value,
+                &c,
+                "dev-libs",
+                "memokey",
+                candidate_str,
+                &config,
+                which,
+                global,
+                package,
+            )
+        };
+        let properties = || {
+            call(
+                MetadataKey::Properties,
+                &c.properties,
+                &config.accept_properties,
+                &config.package_properties,
+            )
+        };
+        let restrict = || {
+            call(
+                MetadataKey::Restrict,
+                &c.restrict,
+                &config.accept_restrict,
+                &config.package_accept_restrict,
+            )
+        };
+
+        let before = metadata_key_accepted_uncached_calls();
+        assert!(properties());
+        let after_first = metadata_key_accepted_uncached_calls();
+        assert_eq!(after_first, before + 1, "first call is a miss");
+        assert!(properties());
+        assert_eq!(
+            metadata_key_accepted_uncached_calls(),
+            after_first,
+            "a repeat with identical arguments must hit the memo"
+        );
+        // Same value string, same candidate, same config: only the
+        // `MetadataKey` discriminant separates the two accept-list pairs,
+        // and `accept_restrict=[]` rejects "test" while
+        // `accept_properties=["*"]` accepts it.
+        assert!(!restrict());
     }
 
     #[test]
