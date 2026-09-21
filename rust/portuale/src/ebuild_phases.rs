@@ -891,10 +891,10 @@ fn flat_field_on(raw: &str, use_set: &std::collections::HashSet<String>) -> Stri
 /// flags: the package's effective USE and the resolved `BUILD_VARS`
 /// (`CFLAGS`/`MAKEOPTS`/..., make.conf + profile + env layer) from one
 /// config load, exported as base vars into every phase. Merge builds
-/// pass their fully-resolved flags via `extra_env` (appended after these
-/// base vars downstream, so it keeps overriding them), which means this
-/// computation only ever surfaces for standalone `ebuild <file> <phase>`
-/// runs -- resolved the same way `ebuild_merge::
+/// pass their fully-resolved flags via `extra_env`
+/// (appended after these base vars downstream, so it keeps overriding
+/// them), which means this computation only ever surfaces for standalone
+/// `ebuild <file> <phase>` runs -- resolved the same way `ebuild_merge::
 /// blocked_installed_packages`' own standalone resolution does
 /// (`find_repos` + `resolve_config` + md5-cache `IUSE` +
 /// `effective_use_flags`, via `candidate_use_flags_display` for USE and
@@ -1003,8 +1003,10 @@ fn phase_standalone_base_env(
         );
         let mut flags = flags;
         // Real's layer stacking: the run-wide base is the caller's own
-        // flag set here (`build_config_env`), and an incremental
-        // `package.env` value folds onto it rather than replacing it.
+        // flag set here (`build_config_env`), an incremental
+        // `package.env` value folds onto it in `[base, pkg, calling-env]`
+        // order, and a scalar loses to the calling environment when it
+        // carries the same key (#101).
         let profile_only_variables = config
             .resolved_incremental("PROFILE_ONLY_VARIABLES")
             .unwrap_or_default();
@@ -1014,6 +1016,7 @@ fn phase_standalone_base_env(
             &cpv_slot,
             &profile_only_variables,
             &base,
+            &portage_profile::config_env_all(),
         ));
         Some((display, flags))
     })() else {
@@ -1117,15 +1120,25 @@ fn package_env_key_allowed(key: &str, profile_only_variables: &[String]) -> bool
         && !profile_only_variables.iter().any(|k| k == key)
 }
 
-/// Real `regenerate()`'s incremental fold (`config.py:2778-2825`) for one
-/// key: the base layer's tokens, then the package.env overlay's tokens in
-/// order (`-*` clears, `-tok` removes), sorted and space-joined. `base`
-/// is the caller's own already-folded value for the key (`""` when the
-/// run-wide env doesn't carry it).
-fn fold_package_env_incremental(base: &str, overlay: &str) -> String {
+/// Real `regenerate()`'s incremental fold (`config.py:2735`, `:2778-2825`)
+/// for one key, in real's layer order `[base-lower, pkg, calling-env]`:
+/// the already-folded lower layers' tokens, then the package.env value's
+/// tokens in order, then the calling environment's tokens in order
+/// (`-*` clears, `-tok` removes), sorted and space-joined. The calling
+/// env folds **last**, so a `-tok` there prunes a token a package.env
+/// file added (backlog #101, S0 cell B), while a package.env `-tok`
+/// cannot prune a calling-env token. Re-applying the calling-env tokens
+/// after a base that already folded them in is idempotent (set
+/// add/remove), so `base_lower` may be the caller's own already-folded
+/// value for the key (`""` when the run-wide env doesn't carry it).
+pub(crate) fn fold_package_env_incremental(
+    base_lower: &str,
+    pkg: &str,
+    calling_env: &str,
+) -> String {
     let mut set: std::collections::BTreeSet<String> =
-        base.split_whitespace().map(String::from).collect();
-    for tok in overlay.split_whitespace() {
+        base_lower.split_whitespace().map(String::from).collect();
+    for tok in pkg.split_whitespace().chain(calling_env.split_whitespace()) {
         if tok == "-*" {
             set.clear();
         } else if let Some(rest) = tok.strip_prefix('-') {
@@ -1145,20 +1158,30 @@ fn fold_package_env_incremental(base: &str, overlay: &str) -> String {
 /// matching entries in list order (portuale keeps parse order; real
 /// applies `ordered_by_atom_specificity`, a pre-existing narrowing), an
 /// incremental appends, a scalar replaces, an empty value blanks.
-/// Incrementals are then folded onto `base_env` (`regenerate()`'s layer
-/// stacking) instead of replacing it, so e.g. `ENV_UNSET` from an env
-/// file merges with the run-wide list.
+/// Incrementals are then folded in real's layer order
+/// `[base-lower, pkg, calling-env]` (`regenerate()`), and a package.env
+/// **scalar is dropped when the calling environment carries the same
+/// key**: real's `USE_ORDER` puts the `env` layer above `pkg`
+/// (`config.py:1031-1035`), so the process value wins (backlog #101, S0
+/// cell A). `calling_env` is the same source `phase_environ`'s step 2
+/// uses (`portage_profile::config_env_all()`), compared by key presence
+/// — *not* `base_env` as a whole, which also contains config scalars a
+/// package.env value legitimately outranks.
 ///
 /// Shared by the merge path (`emerge_build::entry_package_env_vars`,
 /// matching a resolved graph entry and passing `options.build_env`) and
 /// the standalone path below (matching the ebuild's own md5-cache
-/// identity and passing `build_config_env`'s base -- no resolved graph
-/// needed).
+/// identity and passing the narrow base -- no resolved graph needed).
+/// Both paths thread the real calling environment, so the precedence
+/// rule holds on both: the S0 capture shows the standalone path is
+/// inverted today too, the same bug in this shared function (S2's base
+/// replacement is a separate change and is untouched here).
 pub(crate) fn match_package_env_vars(
     package_env_vars: &[(String, Vec<(String, String)>)],
     cpv_slot: &str,
     profile_only_variables: &[String],
     base_env: &[(String, String)],
+    calling_env: &[(String, String)],
 ) -> Vec<(String, String)> {
     let mut container: Vec<(String, String)> = Vec::new();
     for (atom, vars) in package_env_vars {
@@ -1187,7 +1210,7 @@ pub(crate) fn match_package_env_vars(
     }
     container
         .into_iter()
-        .map(|(k, v)| {
+        .filter_map(|(k, v)| {
             if is_package_env_incremental(&k) {
                 let base = base_env
                     .iter()
@@ -1195,9 +1218,20 @@ pub(crate) fn match_package_env_vars(
                     .find(|(bk, _)| *bk == k)
                     .map(|(_, bv)| bv.as_str())
                     .unwrap_or("");
-                (k, fold_package_env_incremental(base, &v))
+                let calling = calling_env
+                    .iter()
+                    .rev()
+                    .find(|(ck, _)| *ck == k)
+                    .map(|(_, cv)| cv.as_str())
+                    .unwrap_or("");
+                Some((k, fold_package_env_incremental(base, &v, calling)))
+            } else if calling_env.iter().any(|(ck, _)| *ck == k) {
+                // Real's `env` layer outranks `pkg` for a scalar: the
+                // process value (already in the caller's base env) wins,
+                // so the package.env value is dropped, not layered.
+                None
             } else {
-                (k, v)
+                Some((k, v))
             }
         })
         .collect()
@@ -6627,6 +6661,7 @@ mod tests {
             "dev-libs/penvccpkg-1.0:0/0",
             &profile_only,
             &[],
+            &[],
         );
         let keys: Vec<&str> = out.iter().map(|(k, _)| k.as_str()).collect();
         assert_eq!(
@@ -6655,12 +6690,14 @@ mod tests {
         );
     }
 
-    /// Real's two-level incremental semantics: `_grab_pkg_env` appends
+    /// Real's three-layer incremental semantics: `_grab_pkg_env` appends
     /// within the container (`container[k] += " " + v`), then
-    /// `regenerate()` folds the container onto the lower layers with
-    /// `-*`/`-tok` pruning and a sorted union (`config.py:2778-2825`).
-    /// The three host captures in pmtest's `findings/l2.md` "#95 S0" are
-    /// the expected values.
+    /// `regenerate()` folds `[lower layers, pkg, calling-env]` with
+    /// `-*`/`-tok` pruning and a sorted union (`config.py:2735`,
+    /// `:2778-2825`) — the calling env folds last, so its `-tok` prunes
+    /// a package.env token (S0 cell B) but not vice versa. The three
+    /// host captures in pmtest's `findings/l2.md` "#95 S0" are the
+    /// expected values for the first three arms (empty calling env).
     #[test]
     fn package_env_incrementals_fold_onto_the_base_like_regenerate() {
         let cpv = "dev-libs/penvccpkg-1.0:0/0";
@@ -6675,13 +6712,14 @@ mod tests {
             )]
         };
         // pkg prunes a base token, then the union is sorted.
-        let out = match_package_env_vars(&one_file("-PROFILE_UNSET PKG_UNSET"), cpv, &[], &base);
+        let out =
+            match_package_env_vars(&one_file("-PROFILE_UNSET PKG_UNSET"), cpv, &[], &base, &[]);
         assert_eq!(
             out,
             vec![("ENV_UNSET".to_string(), "BASE_UNSET PKG_UNSET".to_string())]
         );
         // `-*` clears every base token.
-        let out = match_package_env_vars(&one_file("-* ONLY"), cpv, &[], &base);
+        let out = match_package_env_vars(&one_file("-* ONLY"), cpv, &[], &base, &[]);
         assert_eq!(out, vec![("ENV_UNSET".to_string(), "ONLY".to_string())]);
         // Several matching files of one entry append in order.
         let two_files = vec![(
@@ -6691,8 +6729,30 @@ mod tests {
                 ("ENV_UNSET".to_string(), "TWO".to_string()),
             ],
         )];
-        let out = match_package_env_vars(&two_files, cpv, &[], &[]);
+        let out = match_package_env_vars(&two_files, cpv, &[], &[], &[]);
         assert_eq!(out, vec![("ENV_UNSET".to_string(), "ONE TWO".to_string())]);
+        // A `-tok` in the calling-env layer prunes a pkg-layer token
+        // (S0 cell B: `FEATURES="-probe-feature"` beats the env file).
+        let calling = vec![("ENV_UNSET".to_string(), "-PKG_UNSET".to_string())];
+        let out = match_package_env_vars(&one_file("PKG_UNSET"), cpv, &[], &base, &calling);
+        assert_eq!(
+            out,
+            vec![(
+                "ENV_UNSET".to_string(),
+                "BASE_UNSET PROFILE_UNSET".to_string()
+            )]
+        );
+        // A pkg-layer `-tok` does NOT prune a calling-env token: the
+        // calling env folds last and re-adds it (S0 cell B's mirror).
+        let calling = vec![("ENV_UNSET".to_string(), "KEEP".to_string())];
+        let out = match_package_env_vars(&one_file("-KEEP PKG_UNSET"), cpv, &[], &base, &calling);
+        assert_eq!(
+            out,
+            vec![(
+                "ENV_UNSET".to_string(),
+                "BASE_UNSET KEEP PKG_UNSET PROFILE_UNSET".to_string()
+            )]
+        );
     }
 
     /// Scalars are set, not appended: a later file replaces, and an empty
@@ -6716,7 +6776,7 @@ mod tests {
                 ],
             ),
         ];
-        let out = match_package_env_vars(&files, cpv, &[], &[]);
+        let out = match_package_env_vars(&files, cpv, &[], &[], &[]);
         assert_eq!(
             out,
             vec![
@@ -6724,5 +6784,25 @@ mod tests {
                 ("CXX".to_string(), "clang++".to_string()),
             ]
         );
+    }
+
+    /// Real's `env`-over-`pkg` scalar precedence (`USE_ORDER`,
+    /// `config.py:1031-1035`): a package.env scalar is dropped when the
+    /// calling environment carries the same key, so the process value
+    /// the caller already layered wins (backlog #101, S0 cell A). Keys
+    /// the calling env does not carry still arrive.
+    #[test]
+    fn package_env_scalar_loses_to_the_calling_environment() {
+        let cpv = "dev-libs/penvccpkg-1.0:0/0";
+        let files = vec![(
+            "dev-libs/penvccpkg".to_string(),
+            vec![
+                ("CFLAGS".to_string(), "-Os -march=pkg".to_string()),
+                ("CC".to_string(), "pkg-cc".to_string()),
+            ],
+        )];
+        let calling = vec![("CFLAGS".to_string(), "-O2 -pipe".to_string())];
+        let out = match_package_env_vars(&files, cpv, &[], &[], &calling);
+        assert_eq!(out, vec![("CC".to_string(), "pkg-cc".to_string())]);
     }
 }

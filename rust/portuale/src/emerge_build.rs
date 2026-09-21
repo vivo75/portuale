@@ -649,6 +649,7 @@ fn entry_package_env_vars(
         &cpv_slot,
         &profile_only_variables,
         &options.build_env,
+        &portage_profile::config_env_all(),
     )
 }
 

@@ -1588,7 +1588,13 @@ fn config_env_var(name: &str) -> Option<String> {
 /// environment, not the `ENV_*_VARS` allowlist `resolve_config` reads
 /// for `emerge --info`. Non-UTF-8 entries are dropped (real's are
 /// `str` already).
-pub(crate) fn config_env_all() -> Vec<(String, String)> {
+///
+/// `pub` (not `pub(crate)`) so the `package.env` layering
+/// (`portuale::ebuild_phases::match_package_env_vars`, backlog #101) can
+/// compare against the same source `phase_environ`'s step 2 uses: real's
+/// `env` layer outranks its `pkg` layer for a scalar
+/// (`config.py:1031-1035`).
+pub fn config_env_all() -> Vec<(String, String)> {
     #[cfg(test)]
     {
         if TEST_ENV_OVERRIDE.with(|o| o.borrow().is_some()) {
