@@ -5814,8 +5814,14 @@ fn installed_candidates_uncached(
                 continue;
             };
             let version = version.to_string();
-            let raw_slot = fs::read_to_string(e.path().join("SLOT")).unwrap_or_default();
-            let (slot, sub_slot) = split_slot(raw_slot.trim());
+            // #109 S3: the same `vdb_aux_get` seam the other vdb readers
+            // use, so a validated consolidated snapshot serves `SLOT`
+            // too. `vdb_pkg_dir` resolves this same entry path back from
+            // `(src_cat, src_pkg, version)`, so the value is unchanged on
+            // the fallback path (the old read `.trim()`ed, the helper
+            // normalises).
+            let (slot, sub_slot) =
+                split_slot(&vdb_aux_get(root, &src_cat, &src_pkg, &version, "SLOT"));
             let (slot, sub_slot) = apply_updates_to_slot(category, package, &slot, &sub_slot);
             out.push((version, slot, sub_slot));
         }
@@ -6300,6 +6306,108 @@ pub fn in_metadata_file(name: &str) -> bool {
     METADATA_FILE_FIELDS.contains(&name)
 }
 
+/// Real `_read_metadata_file(path, dir_st)` (`vartree.py:115-187`): parse
+/// and validate a consolidated `metadata` snapshot. `None` unless
+/// `#format=` parses to [`METADATA_FILE_FORMAT_VERSION`] **and**
+/// `#dir_mtime=` parses and equals the package directory's `st_mtime_ns`.
+/// A `#format=` this version does not know is rejected immediately (real
+/// abandons the file on the version line, before parsing the rest); other
+/// `#` lines are ignored; a line without `=` is skipped;
+/// `k, v = line.split("=", 1)` with the last duplicate winning. Real
+/// writes `#dir_mtime=` last, so a file left truncated by an interrupted
+/// write lacks it and is rejected rather than read as a short snapshot.
+fn read_metadata_file(path: &Path, dir_mtime_ns: i128) -> Option<HashMap<String, String>> {
+    let raw = fs::read_to_string(path).ok()?;
+    let mut result: HashMap<String, String> = HashMap::new();
+    let mut version: Option<u32> = None;
+    let mut dir_mtime: Option<i128> = None;
+    for line in raw.lines() {
+        if let Some(rest) = line.strip_prefix('#') {
+            if let Some(v) = rest.strip_prefix("format=") {
+                version = Some(v.parse::<u32>().ok()?);
+                if version != Some(METADATA_FILE_FORMAT_VERSION) {
+                    return None;
+                }
+            } else if let Some(v) = rest.strip_prefix("dir_mtime=") {
+                dir_mtime = Some(v.parse::<i128>().ok()?);
+            }
+            continue;
+        }
+        if let Some((k, v)) = line.split_once('=') {
+            result.insert(k.to_string(), v.to_string());
+        }
+    }
+    if version.is_none() || dir_mtime.is_none() || dir_mtime != Some(dir_mtime_ns) {
+        return None;
+    }
+    Some(result)
+}
+
+/// Real `_aux_get(cpv, wants, st)` (`vartree.py:975-1053`) for one key:
+/// `stat` the package dir once, try the consolidated `metadata` snapshot,
+/// and serve an in-set key from it with **no** `open()`; otherwise read
+/// the individual file (the pre-#109 path).
+///
+/// The snapshot rule is real's own (`vartree.py:1010-1017`): a validated
+/// snapshot is *complete*, so a field missing from it had no individual
+/// file either and is served as `""` instead of paying an `open()` that
+/// would just fail. Safe by construction for added fields -- adding a
+/// per-field file bumps the package dir's mtime, which invalidates the
+/// snapshot -- and the residual in-place-rewrite hole is real's own
+/// documented one (why it calls `_bump_mtime` on both sides of
+/// `aux_update`), the same in-process property `#102`'s
+/// `installed_candidates` cache has.
+///
+/// Two real behaviours are deliberately absent, both audited:
+///
+/// - **No `KeyError`.** A missing or non-directory entry is `""`, today's
+///   `unwrap_or_default()` behaviour; portuale has no caller that wants a
+///   raise.
+/// - **No `environment.bz2` search** (real bug 395463) for a key outside
+///   the 23-set. Every key any caller passes is a
+///   [`METADATA_FILE_FIELDS`] member (audited for #109 S1; `CONTENTS` and
+///   `NEEDED.*` read through their own paths), so the search is
+///   unreachable. The debug assertion below keeps a future out-of-set
+///   caller from silently getting `""` where real would search the saved
+///   environment.
+///
+/// Real's `aux_get` `EAPI == "" -> "0"` and invalid-`SLOT` -> `"0"`
+/// translations are also not here: portuale's callers default
+/// individually and that parity question is a filed residue, not this
+/// slice's.
+fn vdb_aux_get(root: &Path, category: &str, package: &str, version: &str, key: &str) -> String {
+    debug_assert!(
+        in_metadata_file(key),
+        "vdb_aux_get({key:?}): key is outside real's _METADATA_FILE_FIELDS; real would search \
+         environment.bz2 for it, which this helper does not implement"
+    );
+    let dir = vdb_pkg_dir(root, category, package, version);
+    let Ok(st) = fs::metadata(&dir) else {
+        return String::new();
+    };
+    if !st.is_dir() {
+        return String::new();
+    }
+    if in_metadata_file(key) {
+        use std::os::unix::fs::MetadataExt as _;
+        let dir_mtime_ns = st.mtime() as i128 * 1_000_000_000 + st.mtime_nsec() as i128;
+        if let Some(snapshot) = read_metadata_file(&dir.join("metadata"), dir_mtime_ns) {
+            return snapshot.get(key).cloned().unwrap_or_default();
+        }
+    }
+    read_vdb_file(&dir.join(key))
+}
+
+/// The per-key fallback read: the raw file normalised exactly like real
+/// `_aux_get` (`" ".join(myd.split())`, `vartree.py:1044-1046`), with an
+/// absent file as `""`. Real applies the same normalisation on this path,
+/// so the bytes are the same whether the snapshot validated or not.
+fn read_vdb_file(path: &Path) -> String {
+    fs::read_to_string(path)
+        .map(|raw| raw.split_whitespace().collect::<Vec<_>>().join(" "))
+        .unwrap_or_default()
+}
+
 /// Reads `<root>/var/db/pkg/<category>/<package>-<version>/<filename>`
 /// (a vdb aux file, e.g. `USE` or `IUSE` -- same directory `SLOT`/
 /// `CATEGORY` already come from) as a set of flag names, one per
@@ -6309,7 +6417,8 @@ pub fn in_metadata_file(name: &str) -> bool {
 /// (e.g. an older vdb entry from before portuale's fixtures modeled
 /// USE/IUSE at all) is an empty set, not an error -- same "absence is a
 /// real, valid state" precedent `read_world_atoms` (pretend.rs) already
-/// established.
+/// established. The value comes from [`vdb_aux_get`], so a validated
+/// consolidated snapshot serves it without an `open()`.
 fn read_vdb_flag_set(
     root: &Path,
     category: &str,
@@ -6317,8 +6426,7 @@ fn read_vdb_flag_set(
     version: &str,
     filename: &str,
 ) -> HashSet<String> {
-    fs::read_to_string(vdb_pkg_dir(root, category, package, version).join(filename))
-        .unwrap_or_default()
+    vdb_aux_get(root, category, package, version, filename)
         .split_whitespace()
         .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
         .collect()
@@ -6501,6 +6609,10 @@ fn vdb_pkg_dir(root: &Path, category: &str, package: &str, version: &str) -> Pat
 /// `_METADATA_FILE_FIELDS` (audited for #109 S1 -- `CONTENTS` and
 /// `NEEDED.*` are read through their own paths), and a future caller
 /// with a line-oriented key must not use this helper.
+///
+/// Since #109 S3 the value comes from [`vdb_aux_get`]: a validated
+/// consolidated `metadata` snapshot serves it with no per-key `open()`,
+/// falling back to the individual file otherwise.
 fn read_vdb_string(
     root: &Path,
     category: &str,
@@ -6508,9 +6620,7 @@ fn read_vdb_string(
     version: &str,
     filename: &str,
 ) -> String {
-    fs::read_to_string(vdb_pkg_dir(root, category, package, version).join(filename))
-        .map(|raw| raw.split_whitespace().collect::<Vec<_>>().join(" "))
-        .unwrap_or_default()
+    vdb_aux_get(root, category, package, version, filename)
 }
 
 /// Flattens `depstr` (one or more concatenated dependency-string keys)
@@ -6635,7 +6745,7 @@ pub fn all_installed_packages(root: &Path) -> Vec<InstalledPackage> {
     {
         return packages.as_ref().clone();
     }
-    let packages = std::sync::Arc::new(all_installed_packages_uncached(&vdb));
+    let packages = std::sync::Arc::new(all_installed_packages_uncached(root));
     if let Ok(mut guard) = cache.write() {
         guard.insert(
             root.to_path_buf(),
@@ -6645,9 +6755,10 @@ pub fn all_installed_packages(root: &Path) -> Vec<InstalledPackage> {
     packages.as_ref().clone()
 }
 
-fn all_installed_packages_uncached(vdb: &Path) -> Vec<InstalledPackage> {
+fn all_installed_packages_uncached(root: &Path) -> Vec<InstalledPackage> {
     let mut out = Vec::new();
-    let Ok(cats) = portage_util::read_dir_entries(vdb) else {
+    let vdb = root.join("var/db/pkg");
+    let Ok(cats) = portage_util::read_dir_entries(&vdb) else {
         return out;
     };
     for cat in cats.into_iter().filter(|e| e.path().is_dir()) {
@@ -6660,11 +6771,11 @@ fn all_installed_packages_uncached(vdb: &Path) -> Vec<InstalledPackage> {
             let Some((name, version)) = split_installed_dir(&dirname) else {
                 continue;
             };
-            let (slot, sub) = split_slot(
-                fs::read_to_string(pkg.path().join("SLOT"))
-                    .unwrap_or_default()
-                    .trim(),
-            );
+            // #109 S3: through the shared `vdb_aux_get` seam, so a valid
+            // consolidated snapshot serves `SLOT` without the per-entry
+            // `open()`. `vdb_pkg_dir` resolves the entry being scanned
+            // back from `(category, name, version)`.
+            let (slot, sub) = split_slot(&vdb_aux_get(root, &category, &name, &version, "SLOT"));
             // Real `profiles/updates/` package moves: present each vdb
             // entry under its post-`move`/`slotmove` identity, the way
             // real global-updates rewrites the vdb on sync (portuale
@@ -26090,6 +26201,193 @@ mod tests {
         assert!(!in_metadata_file("_mtime_"));
         assert!(in_metadata_file("RDEPEND"));
         assert!(in_metadata_file("repository"));
+    }
+
+    /// Write a consolidated `metadata` snapshot body into `root`'s entry
+    /// for `<cat>/<pf>` and, when `stamp`, append
+    /// `#dir_mtime=<dir's st_mtime_ns>` **after** the body write -- real
+    /// `_write_metadata_file` + `_stamp_metadata_file` order. A committed
+    /// fixture can never carry a valid stamp (`git checkout` sets the
+    /// package dir's mtime), so every positive-path test stamps at
+    /// runtime. Returns the `metadata` path for tests that append a
+    /// custom (stale/garbage) stamp themselves.
+    fn write_snapshot(root: &Path, cat: &str, pf: &str, body: &str, stamp: bool) -> PathBuf {
+        let dir = root.join("var/db/pkg").join(cat).join(pf);
+        let path = dir.join("metadata");
+        std::fs::write(&path, body).unwrap();
+        if stamp {
+            let ns = dir_mtime_ns(&dir);
+            append_line(&path, &format!("#dir_mtime={ns}"));
+        }
+        path
+    }
+
+    fn append_line(path: &Path, line: &str) {
+        use std::io::Write as _;
+        let mut f = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+        writeln!(f, "{line}").unwrap();
+    }
+
+    /// The directory's own `st_mtime_ns`, for stamping a runtime snapshot.
+    fn dir_mtime_ns(dir: &Path) -> i128 {
+        use std::os::unix::fs::MetadataExt as _;
+        let st = std::fs::metadata(dir).unwrap();
+        st.mtime() as i128 * 1_000_000_000 + st.mtime_nsec() as i128
+    }
+
+    /// #109 S3 (a): a validated snapshot serves a field with **no** open
+    /// of the individual file -- proved by writing a different value into
+    /// that file and getting the snapshot's.
+    #[test]
+    fn vdb_aux_get_serves_a_valid_snapshot_without_opening_the_field_file() {
+        let root = tmp_vdb(
+            "dev-libs",
+            "snap-1.0",
+            &[("RDEPEND", b"dev-libs/individual\n")],
+        );
+        write_snapshot(
+            &root,
+            "dev-libs",
+            "snap-1.0",
+            "#format=1\nRDEPEND=dev-libs/snapshot\n",
+            true,
+        );
+        assert_eq!(
+            read_vdb_string(&root, "dev-libs", "snap", "1.0", "RDEPEND"),
+            "dev-libs/snapshot"
+        );
+    }
+
+    /// #109 S3 (b): a validated snapshot is **complete** -- a field it
+    /// lacks reads as `""` even when an individual file exists (real's
+    /// own rule, `vartree.py:1010-1017`: no `open()` that would fail).
+    #[test]
+    fn vdb_aux_get_serves_empty_for_a_field_absent_from_a_valid_snapshot() {
+        let root = tmp_vdb(
+            "dev-libs",
+            "snapabsent-1.0",
+            &[("RDEPEND", b"dev-libs/individual\n")],
+        );
+        write_snapshot(
+            &root,
+            "dev-libs",
+            "snapabsent-1.0",
+            "#format=1\nSLOT=0\n",
+            true,
+        );
+        assert_eq!(
+            read_vdb_string(&root, "dev-libs", "snapabsent", "1.0", "RDEPEND"),
+            ""
+        );
+    }
+
+    /// #109 S3 (c): a snapshot whose `#format=` is not 1 is rejected
+    /// immediately (real's reader abandons the file on the version line
+    /// before parsing the rest), falling back to the individual files.
+    #[test]
+    fn vdb_aux_get_rejects_a_wrong_format_version() {
+        let root = tmp_vdb(
+            "dev-libs",
+            "snapfmt-1.0",
+            &[("RDEPEND", b"dev-libs/individual\n")],
+        );
+        write_snapshot(
+            &root,
+            "dev-libs",
+            "snapfmt-1.0",
+            "#format=2\nRDEPEND=dev-libs/snapshot\n",
+            true,
+        );
+        assert_eq!(
+            read_vdb_string(&root, "dev-libs", "snapfmt", "1.0", "RDEPEND"),
+            "dev-libs/individual"
+        );
+    }
+
+    /// #109 S3 (d,e,f): a missing, stale or unparsable `#dir_mtime=`, or
+    /// a garbage `#format=`, rejects the snapshot -- real's freshness
+    /// signal and the reason an interrupted write cannot be read as a
+    /// short snapshot.
+    #[test]
+    fn vdb_aux_get_falls_back_on_a_missing_stale_or_garbage_stamp() {
+        let dir = |root: &Path| root.join("var/db/pkg/dev-libs/snapbad-1.0");
+        let body = "#format=1\nRDEPEND=dev-libs/snapshot\n";
+        let individual = "dev-libs/individual";
+        // Missing `#dir_mtime=` entirely.
+        let root = tmp_vdb(
+            "dev-libs",
+            "snapbad-1.0",
+            &[("RDEPEND", b"dev-libs/individual\n")],
+        );
+        write_snapshot(&root, "dev-libs", "snapbad-1.0", body, false);
+        assert_eq!(
+            read_vdb_string(&root, "dev-libs", "snapbad", "1.0", "RDEPEND"),
+            individual
+        );
+        // Off-by-one stamp.
+        let path = write_snapshot(&root, "dev-libs", "snapbad-1.0", body, false);
+        append_line(
+            &path,
+            &format!("#dir_mtime={}", dir_mtime_ns(&dir(&root)) + 1),
+        );
+        assert_eq!(
+            read_vdb_string(&root, "dev-libs", "snapbad", "1.0", "RDEPEND"),
+            individual
+        );
+        // Garbage in the mtime header.
+        let path = write_snapshot(&root, "dev-libs", "snapbad-1.0", body, false);
+        append_line(&path, "#dir_mtime=not-a-number");
+        assert_eq!(
+            read_vdb_string(&root, "dev-libs", "snapbad", "1.0", "RDEPEND"),
+            individual
+        );
+        // Garbage in the format header.
+        write_snapshot(
+            &root,
+            "dev-libs",
+            "snapbad-1.0",
+            "#format=one\nRDEPEND=dev-libs/snapshot\n",
+            true,
+        );
+        assert_eq!(
+            read_vdb_string(&root, "dev-libs", "snapbad", "1.0", "RDEPEND"),
+            individual
+        );
+    }
+
+    /// #109 S3 (g): no `metadata` file at all -- every existing fixture,
+    /// and the state a pre-consolidation vdb entry is in -- falls back to
+    /// the individual files, unchanged.
+    #[test]
+    fn vdb_aux_get_falls_back_without_a_metadata_file() {
+        let root = tmp_vdb(
+            "dev-libs",
+            "snapnone-1.0",
+            &[("RDEPEND", b"dev-libs/individual\n")],
+        );
+        assert_eq!(
+            read_vdb_string(&root, "dev-libs", "snapnone", "1.0", "RDEPEND"),
+            "dev-libs/individual"
+        );
+    }
+
+    /// #109 S3: the snapshot parse is real's `_read_metadata_file` --
+    /// other `#` lines ignored, `=`-less lines skipped, `split("=", 1)`
+    /// with the last duplicate winning.
+    #[test]
+    fn vdb_aux_get_snapshot_parse_ignores_comments_and_lets_the_last_key_win() {
+        let root = tmp_vdb("dev-libs", "snapparse-1.0", &[]);
+        write_snapshot(
+            &root,
+            "dev-libs",
+            "snapparse-1.0",
+            "#format=1\n#comment\nno-equals-line\nRDEPEND=first\nRDEPEND=last=with=equals\n",
+            true,
+        );
+        assert_eq!(
+            read_vdb_string(&root, "dev-libs", "snapparse", "1.0", "RDEPEND"),
+            "last=with=equals"
+        );
     }
 
     /// Backlog #102 S1: `installed_candidates` serves repeats from its
