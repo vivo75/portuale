@@ -13,12 +13,22 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 /// The seed from `PORTUALE_SHUFFLE_DIRS` (test/CI-only), if set.
+///
+/// Read once at first use and frozen for the life of the process
+/// (backlog #113): the variable is fixed per process in test/CI use, so
+/// caching it removes a `std::env::var` and a `String` allocation from
+/// every directory read, and removes the `set_var` race surface
+/// `cleanroom/parallelism.md` §1.6 names from the hot path.
 pub fn shuffle_seed() -> Option<u64> {
-    std::env::var("PORTUALE_SHUFFLE_DIRS")
-        .ok()?
-        .trim()
-        .parse()
-        .ok()
+    use std::sync::OnceLock;
+    static SEED: OnceLock<Option<u64>> = OnceLock::new();
+    *SEED.get_or_init(|| {
+        std::env::var("PORTUALE_SHUFFLE_DIRS")
+            .ok()?
+            .trim()
+            .parse()
+            .ok()
+    })
 }
 
 /// Every entry of `dir`, sorted by file name; shuffled (Fisher-Yates,
@@ -137,33 +147,34 @@ mod tests {
     // One test for the whole seam: cargo runs tests in parallel and the
     // shuffle is process-global, so a second env-mutating test could
     // race the default-order assertion.
+    //
+    // #113 freezes the value at first use, so a mid-process `set_var` is
+    // ignored -- the candidate value can only be *changed* before the
+    // binary's first `shuffle_seed()` call, which this test cannot
+    // control. The first call here pins `None` (the harness never sets
+    // the variable), which is also what keeps this test from leaking a
+    // shuffled order into the sibling traversal test. The seeded half
+    // lives in `tests/shuffle_seed_freeze.rs`, where a fresh process owns
+    // the variable from its first instruction.
     #[test]
-    fn read_dir_is_sorted_by_default_and_seed_shuffled_in_test_mode() {
+    fn shuffle_seed_is_frozen_at_first_use_and_read_dir_is_sorted_by_default() {
         let dir = std::env::temp_dir().join(format!("portage-util-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         for name in ["g", "a", "h", "c", "b", "f", "d", "e"] {
             std::fs::write(dir.join(name), b"").unwrap();
         }
 
-        let sorted = ["a", "b", "c", "d", "e", "f", "g", "h"];
-        assert_eq!(names(&dir), sorted);
-
-        // SAFETY: this is the only test touching the variable, and the
-        // harness holds it for the whole test body.
+        let first = shuffle_seed();
+        // SAFETY: this is the only test touching the variable, and a
+        // value set after the first read is ignored by the freeze.
         unsafe { std::env::set_var("PORTUALE_SHUFFLE_DIRS", "7") };
-        let first = names(&dir);
-        let second = names(&dir);
-        unsafe { std::env::set_var("PORTUALE_SHUFFLE_DIRS", "8") };
-        let other_seed = names(&dir);
+        let second = shuffle_seed();
         unsafe { std::env::remove_var("PORTUALE_SHUFFLE_DIRS") };
 
-        assert_eq!(first, second, "same seed must reproduce the same order");
-        assert_ne!(first, sorted, "an 8-entry shuffle must not stay sorted");
-        assert_ne!(
-            first, other_seed,
-            "different seeds must shuffle differently"
-        );
-        assert_eq!(names(&dir), sorted, "unset must go back to sorted order");
+        assert_eq!(first, second, "the first use pins the value");
+        assert_eq!(first, None, "the harness never sets the variable");
+        let sorted = ["a", "b", "c", "d", "e", "f", "g", "h"];
+        assert_eq!(names(&dir), sorted, "unset must be sorted");
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
