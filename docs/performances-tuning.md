@@ -23,14 +23,15 @@
 | + `#102`–`#108` memoisation batch (vdb scan, `Rc` EUF, mask/force, binpkg index) | **~4.0 s** | 19× |
 | + `#109`–`#110` vdb `metadata` snapshot + aux memo + `metadata_key_accepted` memo | **~3.1 s** | 25× |
 | + `#105` USE-context fingerprint frozen at config resolution | **~2.45 s** | 31× |
-| + `#117` `binpkg_respect_use_ok` memo | **~2.25 s** | **34×** |
+| + `#117` `binpkg_respect_use_ok` memo | **~2.25 s** | 34× |
+| + `#114` `is_visible` memo | **~2.08 s** | **37×** |
 
-All ten changes are **shipped** and keep byte-identical output with the
-full suite green (`portage-dep` / `portage-repo` / `portuale` unit tests +
-contract tests). portuale is now ~2.25 s wall / ~1.6 s user / ~0.6 s sys
-on this workload, against real's last measured 4.50–5.11 s (real aborts
-there today, backlog #111). None of them alters the resolver algorithm —
-they remove redundant work the algorithm was doing.
+All eleven changes are **shipped** and keep byte-identical output with
+the full suite green (`portage-dep` / `portage-repo` / `portuale` unit
+tests + contract tests). portuale is now ~2.08 s wall / ~1.5 s user /
+~0.6 s sys on this workload, against real's last measured 4.50–5.11 s
+(real aborts there today, backlog #111). None of them alters the
+resolver algorithm — they remove redundant work the algorithm was doing.
 
 1. **`parse_atom` / `parse_candidate` memo cache** (`rust/portage-dep/src/
    lib.rs`): a `thread_local!` `HashMap<String, Option<…>>` in front of each
@@ -272,26 +273,27 @@ smaller blast radius.
 
 ## What to change next, in priority order
 
-**Re-ranked 2026-09-21 after `#117`** (`perf record -F 400 -g` on the
+**Re-ranked 2026-09-21 after `#114`** (`perf record -F 400 -g` on the
 post-slice binary; the numbers are in "2026-09-21 batch" below). The
-resolver is now ~2.25 s wall / ~1.6 s user / ~0.6 s sys on the reference
+resolver is now ~2.08 s wall / ~1.5 s user / ~0.6 s sys on the reference
 workload:
 
 1. **`#107` — the second `run_pass` (parked 2026-09-21).** `run_pass` is
-   77.83 % with children and the loop still restarts where real reports
+   75.52 % with children and the loop still restarts where real reports
    `backtrack: 0/20`. Diagnosed: the restart is the reverse-dependency
    pin feedback, and removing it needs real's complete-graph
    parent-atom model (a prototype that applied the reachable consumers'
    atoms at selection lost an update and the withheld-update warning —
    see the #107 backlog entry). Algorithmic/parity; do not win it by
    skipping the pass. Revisit only with the complete-graph model.
-2. **`#114` — `is_visible`** (13.12 % with children): the top named
-   function now, with `repo_aux_metadata` 11.38 % (cold md5-cache fills
-   and validation), `list_remote_binary_candidates` 11.00 % (per-cp
-   remote-candidate materialisation), `parse_atom` 9.23 % (memo-hit
-   clones) and `disjunction_preference` 9.01 % close behind. All
-   single-threaded allocation/key-construction work, no hot loop.
-3. **`#112` — the two `statx` per `vdb_aux_get` call** (~340 k/run).
+2. **`list_remote_binary_candidates` (13.79 % with children) and
+   `repo_aux_metadata` (13.67 %)** — the top two named functions now:
+   per-cp remote-candidate materialisation and cold md5-cache fills /
+   validation respectively. Then `binpkg_respect_use_ok` (12.52 %,
+   residual key hashing on its 13 k calls).
+3. **`#112` — the two `statx` per `vdb_aux_get` call.** `statx` is 9.51 %
+   with `std::sys::fs::metadata` 9.92 % and `vdb_aux_get` 9.29 %; sys is
+   ~0.6 s, the last I/O-shaped cost.
 4. **`#111` — the real-abort tree divergence** (parity, not performance):
    real aborts `-uD --getbinpkg` where portuale resolves on the
    2026-09-21 tree; blocks the interleaved real comparison until fixed.
@@ -550,3 +552,25 @@ Interleaved, same tree: 2.58-2.69 s wall / 1.96-2.02 s user -> **2.22-2.28 s /
 1.62-1.65 s** (second shape `sys-devel/gcc`: 2.51-2.58 -> 2.18-2.24);
 `binpkg_respect_use_ok` falls from 24.78 % to 10.16 % with children.
 Byte-identical over the full contract suite + corpus.
+
+### #114 follow-up (same day): memoise `is_visible`
+
+After #117 `is_visible` was the top named function (13.12 % with
+children, 0.43 % self). A temporary counter measured ~40 k calls against
+**1,503 distinct inputs** and one config (96 % repeat), each re-formatting
+the candidate string, walking `package.mask`/`.unmask` and re-deriving
+the license/keyword/property/restrict verdicts. It now memoises per
+`(visibility fingerprint, candidate identity + full metadata)` in a
+thread-local map. The config side is a second frozen base
+(`portage-profile::is_visible_base_fingerprint`: `package.mask`/`.unmask`,
+the LICENSE/PROPERTIES/RESTRICT accept lists, `package.accept_keywords`
+hashed in full, `license_groups`) plus the live `autounmask_use`; a
+hand-built config falls back to the live digest. The candidate's
+`license`/`properties`/`restrict`/`iuse`/`keywords` are in the key
+because a `Packages`-index binary and the ebuild for the same
+`candidate_str` can carry different metadata.
+
+Interleaved, same tree: 2.50-2.64 s wall / 1.91-1.98 s user -> **2.08-2.09 s /
+1.47-1.52 s** (second shape `sys-devel/gcc`: 2.44-2.52 -> 2.03-2.07);
+`is_visible` leaves the profile's top list. Byte-identical over the full
+contract suite + corpus.

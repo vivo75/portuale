@@ -214,21 +214,23 @@ own masking fixtures).
 
 **Verdict on the thread question (2026-09-21).** Both landed, and the
 re-profile answers the section's own question: the resolver is now
-~2.25 s wall / ~1.6 s user / ~0.6 s sys after the same-day #105
-(USE-context digest frozen at config resolution) and #117
-(`binpkg_respect_use_ok` memo) follow-ups, whose residual is mostly
-`statx` (#112, ~340 k/run), `is_visible` (13.12 % with children, #114)
-and the second `run_pass` (#107, 77.83 % subtree — diagnosed 2026-09-21:
-the restart is the reverse-dependency pin feedback, and removing it
-needs real's complete-graph parent-atom model, so it is parked, not a
-thread target) — **none of it parallel-friendly**: #112 is
-single-threaded stat work and #107 is a parity question that must not be
-papered over. §2.2's visibility pool is blocked on §1.4 and would now buy
-well under a second of mostly-serial work at the cost of the `Rc → Arc`
-migration; **do not write it.** §2.1 was already demoted to "not worth
-~600 cold reads" and the batches confirm it. The next resolver items are
-#114, #112 — single-threaded. The only pool still worth considering is
-§3.1's merge copy loop, which these batches did not touch.
+~2.08 s wall / ~1.5 s user / ~0.6 s sys after the same-day #105
+(USE-context digest frozen), #117 (`binpkg_respect_use_ok` memo) and
+#114 (`is_visible` memo) follow-ups. The residual is
+`list_remote_binary_candidates` / `repo_aux_metadata` (~13–14 % each,
+cold remote-index and md5-cache work), `statx` (#112, ~340 k/run) and
+the second `run_pass` (#107, 75.52 % subtree — diagnosed 2026-09-21: the
+restart is the reverse-dependency pin feedback, and removing it needs
+real's complete-graph parent-atom model, so it is parked, not a thread
+target) — **none of it parallel-friendly**: #112 is single-threaded stat
+work and #107 is a parity question that must not be papered over. §2.2's
+visibility pool is blocked on §1.4 and would now buy well under a second
+of mostly-serial work at the cost of the `Rc → Arc` migration; **do not
+write it.** §2.1 was already demoted to "not worth ~600 cold reads" and
+the batches confirm it. The next resolver items are #112 and the two
+named functions above — single-threaded. The only pool still worth
+considering is §3.1's merge copy loop, which these batches did not
+touch.
 
 ### 2.1 Parallel metadata prefetch (was the first slice — now demoted)
 

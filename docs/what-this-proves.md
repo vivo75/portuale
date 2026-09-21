@@ -17697,3 +17697,22 @@ suite + corpus. Detail: `docs/performances-tuning.md` "#117 follow-up".
 # best of 3 warm: 2.22-2.28 s wall / 1.62-1.65 s user / ~0.6 s sys
 # (#109/#110 baseline: 3.07-3.30 / 2.51-2.63; pre-#105: 3.00-3.16)
 ```
+
+**`is_visible` memo (Tier 8 #114, 2026-09-21).** After #117 the candidate
+visibility check was the top named function (13.12 % with children); a
+temporary counter measured ~40 k calls against 1,503 distinct inputs
+(96 % repeat), each re-formatting the candidate string and re-deriving
+the mask/license/keyword/property/restrict verdicts. It now memoises per
+`(visibility fingerprint, candidate identity + metadata)`, with a second
+frozen config base (`package.mask`/`.unmask`, the accept lists,
+`license_groups`, full `package.accept_keywords`) plus the live
+`autounmask_use`. Interleaved, same tree: 2.50-2.64 s -> 2.08-2.09 s
+wall (user 1.91-1.98 -> 1.47-1.52); second shape `sys-devel/gcc`
+2.44-2.52 -> 2.03-2.07; byte-identical over the full contract suite +
+corpus. Detail: `docs/performances-tuning.md` "#114 follow-up".
+
+```sh
+/usr/bin/time -v rust/target/release/emerge -puD --getbinpkg net-libs/rest
+# best of 3 warm: 2.08-2.09 s wall / 1.47-1.52 s user / ~0.6 s sys
+# (session start: 3.93-3.98 / 2.86-2.90)
+```

@@ -564,6 +564,18 @@ pub struct Config {
     /// clones differ only in `autounmask_use` -- the one field the base
     /// deliberately excludes.
     pub use_context_base: Option<u64>,
+
+    /// #114: the visibility base -- the immutable `is_visible`-relevant
+    /// config fields the USE-context base does not cover: `package.mask`/
+    /// `package.unmask`, the `LICENSE`/`PROPERTIES`/`RESTRICT` accept
+    /// lists, `package.accept_keywords`, and `license_groups`. Frozen by
+    /// [`resolve_config`] (`is_visible_base_fingerprint`); the
+    /// `portage-repo` `is_visible` memo hashes it plus the live
+    /// `autounmask_use` (which the check reaches through
+    /// `use_flags_if_conditional`) instead of re-hashing those lists per
+    /// call. Same `None`-means-fall-back contract as
+    /// [`use_context_base`](Self::use_context_base).
+    pub is_visible_base: Option<u64>,
     /// `--autounmask-backtrack` (real `emerge` option, `choices: ("y",
     /// "n")`, **disabled by default** -- `man emerge`). When off (the
     /// default), real portage collects autounmask config changes but does
@@ -2610,6 +2622,43 @@ pub fn use_context_base_fingerprint(config: &Config) -> u64 {
     h.finish()
 }
 
+/// #114: a content fingerprint of every `is_visible`-relevant config
+/// field the USE-context base does not already cover -- `package.mask`/
+/// `package.unmask`, the `LICENSE`/`PROPERTIES`/`RESTRICT` accept lists,
+/// `package.accept_keywords` (the USE-context base samples it; the
+/// visibility memo hashes it in full) and `license_groups`.
+///
+/// `resolve_config` computes this once and stores it in
+/// [`Config::is_visible_base`]; the `is_visible` memo hashes that `u64`
+/// plus the live `autounmask_use` instead of re-hashing these lists per
+/// call.
+pub fn is_visible_base_fingerprint(config: &Config) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    use_context_base_fingerprint(config).hash(&mut h);
+    config.package_mask.hash(&mut h);
+    config.package_unmask.hash(&mut h);
+    config.accept_license.hash(&mut h);
+    config.package_license.hash(&mut h);
+    // `license_groups` is a `HashMap` (iteration order not stable):
+    // hash its keys sorted, values in their own order.
+    {
+        let mut keys: Vec<&String> = config.license_groups.keys().collect();
+        keys.sort();
+        keys.len().hash(&mut h);
+        for k in keys {
+            k.hash(&mut h);
+            config.license_groups[k].hash(&mut h);
+        }
+    }
+    config.package_accept_keywords.hash(&mut h);
+    config.accept_properties.hash(&mut h);
+    config.package_properties.hash(&mut h);
+    config.accept_restrict.hash(&mut h);
+    config.package_accept_restrict.hash(&mut h);
+    h.finish()
+}
+
 pub fn resolve_config(
     config_root: &Path,
     main_repo_location: &Path,
@@ -3682,6 +3731,8 @@ pub fn resolve_config(
     // is complete. The `'backtrack` loop mutates only `autounmask_use`
     // (on clones), which the memo keys hash against this base.
     config.use_context_base = Some(use_context_base_fingerprint(&config));
+    // #114: and the visibility base (masks + accept lists).
+    config.is_visible_base = Some(is_visible_base_fingerprint(&config));
 
     Ok(config)
 }
@@ -4178,6 +4229,46 @@ sync-uri = file:///srv/pkgs
         assert_eq!(
             use_context_base_fingerprint(&config),
             use_context_base_fingerprint(&with_autounmask)
+        );
+    }
+
+    /// #114: `resolve_config` also freezes the visibility base (masks +
+    /// the license/keyword/property/restrict acceptance lists +
+    /// `license_groups`) and it is content-derived.
+    #[test]
+    fn is_visible_base_fingerprint_is_frozen_at_resolution_and_content_derived() {
+        let root = fixtures_root();
+        let config = resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+            &root,
+        )
+        .expect("fixture config must resolve");
+        assert!(
+            config.is_visible_base.is_some(),
+            "resolve_config must freeze the visibility base"
+        );
+        assert_ne!(
+            config.is_visible_base, config.use_context_base,
+            "the visibility base must not just repeat the USE-context base"
+        );
+        // Content-derived: masks...
+        let mut masked = config.clone();
+        masked.package_mask.push("dev-libs/foo".to_string());
+        assert_ne!(
+            is_visible_base_fingerprint(&config),
+            is_visible_base_fingerprint(&masked)
+        );
+        // ...and the accept lists.
+        let mut accepted = config.clone();
+        accepted.accept_license.push("SomeEula".to_string());
+        assert_ne!(
+            is_visible_base_fingerprint(&config),
+            is_visible_base_fingerprint(&accepted)
         );
     }
 

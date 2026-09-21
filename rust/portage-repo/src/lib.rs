@@ -4628,6 +4628,23 @@ fn metadata_key_accepted_uncached(
     }
 }
 
+/// #114: the config side of the `is_visible` memo key -- the frozen
+/// visibility base (`portage_profile::is_visible_base_fingerprint`:
+/// masks, accept lists, `package.accept_keywords`, `license_groups`,
+/// plus the USE-context base) and the live `autounmask_use`, which the
+/// visibility check reaches through `use_flags_if_conditional`. A
+/// hand-built config without a base falls back to the live digest.
+fn is_visible_fingerprint(config: &portage_profile::Config) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let base = config
+        .is_visible_base
+        .unwrap_or_else(|| portage_profile::is_visible_base_fingerprint(config));
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    base.hash(&mut h);
+    config.autounmask_use.hash(&mut h);
+    h.finish()
+}
+
 /// A candidate is visible if it isn't masked (matches a `package.mask`
 /// entry and no `package.unmask` entry), its KEYWORDS intersect the
 /// accepted set -- the global `config.accept_keywords`, plus any extra
@@ -4638,12 +4655,72 @@ fn metadata_key_accepted_uncached(
 /// (see `license_accepted`/`metadata_key_accepted`) -- real `Package.py`'s
 /// own `_masks` dict collects `package.mask`, `LICENSE`, `PROPERTIES`,
 /// and `RESTRICT` as four independent masking reasons the same way.
+///
+/// Memoised per (config visibility fingerprint, candidate identity and
+/// full metadata): the reference workload calls it ~40 k times against
+/// 1,503 distinct inputs (`#114`), and each call re-formats the
+/// candidate string, walks `package.mask`/`.unmask` and re-derives the
+/// license/keyword/property/restrict verdicts. Pure in its arguments;
+/// thread-local so the lookup stays lock-free (`EUF_CACHE`'s shape). The
+/// candidate's `license`/`properties`/`restrict`/`iuse`/`keywords` are
+/// part of the key because a `Packages`-index binary and the ebuild for
+/// the same `candidate_str` can carry different metadata.
 pub fn is_visible(
     candidate: &Candidate,
     category: &str,
     package: &str,
     config: &portage_profile::Config,
 ) -> bool {
+    type IvCache = HashMap<(u64, u64), bool>;
+    thread_local! {
+        static IV_CACHE: RefCell<IvCache> = RefCell::new(HashMap::new());
+    }
+    let key = {
+        use std::hash::{Hash, Hasher};
+        let config_fp = is_visible_fingerprint(config);
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        config_fp.hash(&mut h);
+        category.hash(&mut h);
+        package.hash(&mut h);
+        candidate.version.hash(&mut h);
+        candidate.slot.hash(&mut h);
+        candidate.sub_slot.hash(&mut h);
+        candidate.repo_name.hash(&mut h);
+        candidate.license.hash(&mut h);
+        candidate.properties.hash(&mut h);
+        candidate.restrict.hash(&mut h);
+        candidate.iuse.hash(&mut h);
+        candidate.keywords.hash(&mut h);
+        (config_fp, h.finish())
+    };
+    if let Some(hit) = IV_CACHE.with(|c| c.borrow().get(&key).copied()) {
+        return hit;
+    }
+    let result = is_visible_uncached(candidate, category, package, config);
+    IV_CACHE.with(|c| {
+        c.borrow_mut().insert(key, result);
+    });
+    result
+}
+
+#[cfg(test)]
+thread_local! {
+    static IV_UNCACHED_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn is_visible_uncached_calls() -> u64 {
+    IV_UNCACHED_CALLS.with(std::cell::Cell::get)
+}
+
+fn is_visible_uncached(
+    candidate: &Candidate,
+    category: &str,
+    package: &str,
+    config: &portage_profile::Config,
+) -> bool {
+    #[cfg(test)]
+    IV_UNCACHED_CALLS.with(|c| c.set(c.get() + 1));
     let candidate_str = format!(
         "{category}/{package}-{}:{}/{}::{}",
         candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
@@ -39002,6 +39079,44 @@ mod tests {
             "foo",
             &config
         ));
+    }
+
+    /// #114: the `is_visible` memo is transparent (a repeat runs the body
+    /// once) and must distinguish the candidate's own metadata and the
+    /// config's visibility fields.
+    #[test]
+    fn is_visible_memo_hits_on_repeat_and_separates_its_inputs() {
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            accept_license: vec!["GPL-2".to_string()],
+            accept_properties: vec!["*".to_string()],
+            accept_restrict: vec!["*".to_string()],
+            ..Default::default()
+        };
+        let c = Candidate {
+            license: "GPL-2".to_string(),
+            ..candidate("1.0", &["amd64"])
+        };
+        let before = is_visible_uncached_calls();
+        assert!(is_visible(&c, "dev-libs", "vismemo", &config));
+        let after_first = is_visible_uncached_calls();
+        assert_eq!(after_first, before + 1, "first call is a miss");
+        assert!(is_visible(&c, "dev-libs", "vismemo", &config));
+        assert_eq!(
+            is_visible_uncached_calls(),
+            after_first,
+            "a repeat with identical arguments must hit the memo"
+        );
+        // A differing candidate LICENSE misses (and flips the answer).
+        let mut proprietary = c.clone();
+        proprietary.license = "Proprietary".to_string();
+        assert!(!is_visible(&proprietary, "dev-libs", "vismemo", &config));
+        assert_eq!(is_visible_uncached_calls(), after_first + 1);
+        // A differing config accept_license misses.
+        let mut nothing_accepted = config.clone();
+        nothing_accepted.accept_license = Vec::new();
+        assert!(!is_visible(&c, "dev-libs", "vismemo", &nothing_accepted));
+        assert_eq!(is_visible_uncached_calls(), after_first + 2);
     }
 
     #[test]
