@@ -24821,6 +24821,41 @@ fn enqueue_dependencies(
         if tok == "||" {
             continue;
         }
+        // #132: real evaluates every token's PMS 8.3.4 conditional
+        // use-deps (`flag?`/`!flag?`/`flag=`/`!flag=`) against the
+        // *parent's* USE before the token is ever classified or queued
+        // -- `use_reduce(..., token_class=Atom)`'s own per-token
+        // `token.evaluate_conditionals(uselist)` step, with `uselist` =
+        // `_pkg_use_enabled(pkg)`, which for a built package is its vdb
+        // `USE`. `use_flags` above is exactly that set (the same one
+        // this function already flattens the dep string with). Without
+        // this an installed parent's `foo[bar=]` reached the candidate
+        // filters verbatim, where a conditional form imposes no state
+        // constraint at all (`use_deps_satisfied`), so every such dep
+        // was vacuously satisfied by whatever happened to be installed
+        // (#111 S0: installed qtdeclarative built `-wayland` accepted
+        // installed qtbase built `+wayland`, rc 0, where real aborts).
+        // Applied before the blocker split, like `enqueue_flat_deps`
+        // and like real -- a blocker atom can carry use-deps too.
+        //
+        // `raw` is kept for the two `root_deps_*` membership tests
+        // below **only**: those sets come from
+        // `root_deps_satisfied_atoms`/`unsatisfied_root_deps_atoms`,
+        // which flatten the same metadata without evaluating, so they
+        // are raw-keyed. Looking an evaluated token up in a raw-keyed
+        // set silently stops matching and re-queues an already
+        // satisfied build dep. Evaluating those two producers as well
+        // is real's own shape but widens this slice into the
+        // `--root-deps` path; it is filed as a residue instead.
+        let raw = tok;
+        let evaluated = portage_dep::evaluate_atom_conditionals(&raw, &use_flags)
+            .unwrap_or_else(|| raw.clone());
+        let unevaluated = if evaluated != raw {
+            Some(raw.clone())
+        } else {
+            None
+        };
+        let tok = evaluated;
         if let Some(dep_atom) = portage_dep::parse_atom(&tok)
             && dep_atom.blocker != portage_dep::Blocker::None
         {
@@ -24838,13 +24873,13 @@ fn enqueue_dependencies(
             });
             continue;
         }
-        if root_deps_satisfied.contains(&tok) {
+        if root_deps_satisfied.contains(&raw) {
             // Real "no separate graph node needed for an
             // already-satisfied dep": ESYSROOT (here, the real running
             // root) already has it.
             continue;
         }
-        if root_deps_unsatisfied.contains(&tok) {
+        if root_deps_unsatisfied.contains(&raw) {
             // Real `DEPEND`/`BDEPEND` never targets `ROOT`/`ESYSROOT` at
             // all under portuale's own established `--root-deps`
             // simplification -- already handled above instead (either a
@@ -24875,12 +24910,6 @@ fn enqueue_dependencies(
         {
             continue;
         }
-        // This path never calls `evaluate_atom_conditionals` at all (a
-        // real, pre-existing gap unrelated to `--autounmask-use`: an
-        // `AlreadyInstalled` package's own further-dependency walk under
-        // `--deep` doesn't evaluate conditional use-deps against its own
-        // USE either) -- so there's never an "unevaluated" form to
-        // preserve here.
         // The `--deep` walk only ever reaches an already-installed
         // package's deps, which are satisfied edges -- never a `hard`
         // build-time cycle contributor (real `_ignore_runtime` would drop
@@ -24908,7 +24937,7 @@ fn enqueue_dependencies(
             atom: tok,
             depth: child_depth,
             owner: Some(owner_key.clone()),
-            unevaluated: None,
+            unevaluated,
             buildtime_hard: false,
         });
     }
