@@ -17655,3 +17655,26 @@ wall, sys 1.07 → 0.6 s. Detail:
 # (baseline 3.93-3.98 / 2.86-2.90 / 1.07-1.08; real aborts on today's
 #  tree -- backlog #111)
 ```
+
+**USE-context fingerprint frozen at config resolution (Tier 8 #105,
+2026-09-21).** Every USE-cache key
+(`effective_use_flags`/`resolved_use_mask_or_force`/`metadata_key_accepted`)
+rebuilt a ~20-field content digest of the resolved `Config` on every
+call -- big `HashSet` folds included -- 23.77 % of the reference workload
+with children and the top named single-threaded cost after #109/#110.
+`resolve_config` now computes that immutable digest once and stores it in
+`Config::use_context_base`; the key hashes the frozen `u64` plus the live
+`autounmask_use`, the one field the backtracking loop mutates on a
+`Config` clone (so clones correctly share the base). A hand-built
+`Config` (tests, `Config::default()`) has no base and falls back to the
+full content hash, so an in-place edit of any context field is still
+seen. Output byte-identical over the full contract suite + corpus.
+Interleaved, same tree: 3.00-3.16 s -> 2.44-2.50 s wall (user 2.46-2.56
+-> 1.89-1.97); second shape `sys-devel/gcc` 3.00-3.08 -> 2.43-2.47.
+Detail: `docs/performances-tuning.md` "#105 follow-up".
+
+```sh
+/usr/bin/time -v rust/target/release/emerge -puD --getbinpkg net-libs/rest
+# best of 3 warm: 2.44-2.50 s wall / 1.89-1.97 s user / ~0.5 s sys
+# (#109/#110 baseline: 3.07-3.30 / 2.51-2.63; pre-batch: 3.93-3.98)
+```

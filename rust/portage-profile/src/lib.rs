@@ -545,6 +545,25 @@ pub struct Config {
     /// so a hand-built `Config` literal never sets it and gets the
     /// pre-autounmask behaviour.
     pub autounmask_use: Vec<(String, Vec<String>)>,
+
+    /// A frozen digest of every USE-context field **except**
+    /// [`autounmask_use`](Self::autounmask_use), computed by
+    /// [`resolve_config`] once the config is complete
+    /// (`use_context_base_fingerprint`). The memo keys in `portage-repo`
+    /// (`effective_use_flags`, `resolved_use_mask_or_force`,
+    /// `metadata_key_accepted`) rebuild their fingerprint from this base
+    /// plus the live `autounmask_use`, instead of re-hashing the big
+    /// `HashSet`s and `Vec`s on every call (backlog `#105`: 23.77 % of
+    /// the reference workload with children).
+    ///
+    /// `None` until `resolve_config` freezes it: a hand-built `Config`
+    /// (tests, `Config::default()`, a partial resolve) keeps `None` and
+    /// the caller falls back to the full content hash, so a later
+    /// in-place edit of a context field is still seen. `Clone` carries
+    /// the value, which is correct because the `'backtrack` loop's
+    /// clones differ only in `autounmask_use` -- the one field the base
+    /// deliberately excludes.
+    pub use_context_base: Option<u64>,
     /// `--autounmask-backtrack` (real `emerge` option, `choices: ("y",
     /// "n")`, **disabled by default** -- `man emerge`). When off (the
     /// default), real portage collects autounmask config changes but does
@@ -2486,6 +2505,111 @@ fn parse_package_use_lines(
 /// own `/etc/profile.env` would leak host state into
 /// fixture-deterministic resolution.
 #[allow(clippy::too_many_arguments)]
+/// A cheap content fingerprint of every USE-context `Config` field the
+/// `portage-repo` memo keys read (see `use_context_fingerprint` there for
+/// why sampling, not a full hash, is sound). `autounmask_use` is
+/// deliberately **excluded**: it is the one field the `'backtrack` loop
+/// mutates, and the caller hashes it separately against this frozen base
+/// (`#105`).
+///
+/// `resolve_config` computes this once and stores it in
+/// [`Config::use_context_base`]; callers use that instead of recomputing.
+pub fn use_context_base_fingerprint(config: &Config) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+
+    // Order-independent digest of a `HashSet<String>` (its iteration order
+    // is not stable): count + xor-fold of per-element hashes.
+    let hash_set = |s: &HashSet<String>, h: &mut std::collections::hash_map::DefaultHasher| {
+        s.len().hash(h);
+        let mut acc: u64 = 0;
+        for v in s {
+            let mut e = std::collections::hash_map::DefaultHasher::new();
+            v.hash(&mut e);
+            acc ^= e.finish();
+        }
+        acc.hash(h);
+    };
+    // Sample a slice: length + first/middle/last element.
+    fn hash_sampled<T: Hash>(items: &[T], h: &mut std::collections::hash_map::DefaultHasher) {
+        items.len().hash(h);
+        if let Some(f) = items.first() {
+            f.hash(h);
+        }
+        if items.len() > 2 {
+            items[items.len() / 2].hash(h);
+        }
+        if let Some(l) = items.last() {
+            l.hash(h);
+        }
+    }
+
+    hash_set(&config.accept_keywords, &mut h);
+    hash_set(&config.use_force, &mut h);
+    hash_set(&config.use_mask, &mut h);
+    hash_set(&config.use_stable_force, &mut h);
+    hash_set(&config.use_stable_mask, &mut h);
+
+    hash_sampled(&config.use_tokens, &mut h);
+    hash_sampled(&config.conf_use_tokens, &mut h);
+    hash_sampled(&config.env_use_tokens, &mut h);
+    hash_sampled(&config.envd_use_tokens, &mut h);
+    hash_sampled(&config.features_use, &mut h);
+
+    hash_sampled(&config.package_use, &mut h);
+    hash_sampled(&config.package_use_user, &mut h);
+    hash_sampled(&config.package_use_repo, &mut h);
+    hash_sampled(&config.package_env_use, &mut h);
+    hash_sampled(&config.package_use_force, &mut h);
+    hash_sampled(&config.package_use_mask, &mut h);
+    hash_sampled(&config.package_use_stable_force, &mut h);
+    hash_sampled(&config.package_use_stable_mask, &mut h);
+    // Per-level view drives `effective_use_flags`/`forced_or_masked_flags`;
+    // two configs could share a flat `use_mask` set yet differ in the
+    // interleaving, so hash the ordered structure too. Level count +
+    // per-level line/entry counts are a cheap, order-sensitive digest.
+    config.use_mask_force_levels.len().hash(&mut h);
+    for lvl in &config.use_mask_force_levels {
+        (
+            lvl.use_mask.len(),
+            lvl.use_force.len(),
+            lvl.use_stable_mask.len(),
+            lvl.use_stable_force.len(),
+            lvl.package_use_mask.len(),
+            lvl.package_use_force.len(),
+            lvl.package_use_stable_mask.len(),
+            lvl.package_use_stable_force.len(),
+        )
+            .hash(&mut h);
+        hash_sampled(&lvl.use_mask, &mut h);
+        hash_sampled(&lvl.package_use_mask, &mut h);
+    }
+    hash_sampled(&config.package_accept_keywords, &mut h);
+    hash_sampled(&config.repo_make_defaults_use, &mut h);
+
+    // `profile_use_layers` -- sample the outer Vec, and within the
+    // sampled layers sample each inner list.
+    config.profile_use_layers.len().hash(&mut h);
+    let sample_layer = |l: &ProfileUseLayer, h: &mut std::collections::hash_map::DefaultHasher| {
+        hash_sampled(&l.make_defaults_use, h);
+        hash_sampled(&l.package_use, h);
+    };
+    if let Some(f) = config.profile_use_layers.first() {
+        sample_layer(f, &mut h);
+    }
+    if config.profile_use_layers.len() > 2 {
+        sample_layer(
+            &config.profile_use_layers[config.profile_use_layers.len() / 2],
+            &mut h,
+        );
+    }
+    if let Some(l) = config.profile_use_layers.last() {
+        sample_layer(l, &mut h);
+    }
+
+    h.finish()
+}
+
 pub fn resolve_config(
     config_root: &Path,
     main_repo_location: &Path,
@@ -3554,6 +3678,11 @@ pub fn resolve_config(
 
     config.other_vars = scalars;
 
+    // #105: freeze the immutable USE-context digest now that the config
+    // is complete. The `'backtrack` loop mutates only `autounmask_use`
+    // (on clones), which the memo keys hash against this base.
+    config.use_context_base = Some(use_context_base_fingerprint(&config));
+
     Ok(config)
 }
 
@@ -4010,6 +4139,45 @@ sync-uri = file:///srv/pkgs
                 "SomeEula".to_string(),
                 "CrossRepoNonfree".to_string()
             ])
+        );
+    }
+
+    /// #105: `resolve_config` freezes the immutable USE-context digest
+    /// into `use_context_base`, and `use_context_base_fingerprint` is
+    /// content-derived while excluding `autounmask_use` -- the one field
+    /// the `'backtrack` loop mutates, which the memo keys hash
+    /// separately.
+    #[test]
+    fn use_context_base_fingerprint_is_frozen_at_resolution_and_excludes_autounmask_use() {
+        let root = fixtures_root();
+        let config = resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+            &root,
+        )
+        .expect("fixture config must resolve");
+        assert!(
+            config.use_context_base.is_some(),
+            "resolve_config must freeze the immutable USE-context digest"
+        );
+        // Content-derived: changing a hashed field changes the digest.
+        let mut other = config.clone();
+        other.accept_keywords.insert("~amd64".to_string());
+        assert_ne!(
+            use_context_base_fingerprint(&config),
+            use_context_base_fingerprint(&other)
+        );
+        // `autounmask_use` is not part of the base.
+        let mut with_autounmask = config.clone();
+        with_autounmask.autounmask_use =
+            vec![("dev-libs/foo".to_string(), vec!["flag".to_string()])];
+        assert_eq!(
+            use_context_base_fingerprint(&config),
+            use_context_base_fingerprint(&with_autounmask)
         );
     }
 

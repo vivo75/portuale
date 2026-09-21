@@ -21,14 +21,15 @@
 | + `effective_use_flags` memoised per (config, candidate) | **~4.6 s** | 17× |
 | + `read_md5_cache` / `list_candidates` return shared `Arc` | **~4.5 s** | **17×** |
 | + `#102`–`#108` memoisation batch (vdb scan, `Rc` EUF, mask/force, binpkg index) | **~4.0 s** | 19× |
-| + `#109`–`#110` vdb `metadata` snapshot + aux memo + `metadata_key_accepted` memo | **~3.1 s** | **25×** |
+| + `#109`–`#110` vdb `metadata` snapshot + aux memo + `metadata_key_accepted` memo | **~3.1 s** | 25× |
+| + `#105` USE-context fingerprint frozen at config resolution | **~2.45 s** | **31×** |
 
-All eight changes are **shipped** and keep byte-identical output with the
+All nine changes are **shipped** and keep byte-identical output with the
 full suite green (`portage-dep` / `portage-repo` / `portuale` unit tests +
-contract tests). portuale is now **~3.5× faster than real `emerge`** on
-this workload (real was 4.50–5.11 s before the 2026-09-21 tree change;
-it aborts there today, backlog #111). None of them alters the resolver
-algorithm — they remove redundant work the algorithm was doing.
+contract tests). portuale is now ~2.45 s wall / ~1.9 s user / ~0.5 s sys
+on this workload, against real's last measured 4.50–5.11 s (real aborts
+there today, backlog #111). None of them alters the resolver algorithm —
+they remove redundant work the algorithm was doing.
 
 1. **`parse_atom` / `parse_candidate` memo cache** (`rust/portage-dep/src/
    lib.rs`): a `thread_local!` `HashMap<String, Option<…>>` in front of each
@@ -270,33 +271,36 @@ smaller blast radius.
 
 ## What to change next, in priority order
 
-**Re-ranked 2026-09-21 after `#109`/`#110`** (`perf record -F 400 -g` on
-the post-batch binary; the batch's numbers are in "2026-09-21 batch"
-below). The resolver is now ~3.1 s wall / ~2.5 s user / ~0.6 s sys on the
-reference workload:
+**Re-ranked 2026-09-21 after `#105`** (`perf record -F 400 -g` on the
+post-slice binary; the numbers are in "2026-09-21 batch" below). The
+resolver is now ~2.45 s wall / ~1.9 s user / ~0.5 s sys on the reference
+workload:
 
-1. **`#105` — cache `use_context_fingerprint`.** 23.77 % with children
-   (0.38 % self; closure 9.29 + `hash_sampled` 7.23). Every
-   `effective_use_flags` / `resolved_use_mask_or_force` /
-   `metadata_key_accepted` memo key re-hashes ~20 config fields, and
-   `binpkg_respect_use_ok`'s 28.82 % subtree is largely this plus the
-   already-memoised USE machinery. The single biggest named cost left.
-2. **`#107` — the second `run_pass`.** `run_pass` is 85.44 % with
+1. **`#107` — the second `run_pass`.** `run_pass` is 81.20 % with
    children and the loop still restarts where real reports
-   `backtrack: 0/20`; the batch removed the I/O around it, so its share
-   only grew. Algorithmic/parity, not memoisation — do not win it by
-   skipping the pass.
-3. **`#112` — collapse the two `statx` per `vdb_aux_get` call.**
-   `statx` is now the top syscall (339,804/run, 48.9 % of in-kernel
-   time); ~126 k are `vdb_pkg_dir`'s `is_dir()` plus the validity stat.
-4. **`#114` — memoise `is_visible` per `(candidate, config)`**
-   (19.63 % with children), if a re-profile after `#105` still shows it.
-5. **`#106` — `candidate_positions`** is 0.31 % now (effectively closed
-   by `#102`–`#108`); **`#113` — `shuffle_seed`'s per-call env read**
-   (42,524/run) is trivial.
+   `backtrack: 0/20`; every memoisation batch leaves its share higher.
+   Algorithmic/parity, not memoisation — do not win it by skipping the
+   pass.
+2. **`#117` — `binpkg_respect_use_ok`** (24.78 % with children, 0.25 %
+   self): now the top named function. Its children are the memoised USE
+   machinery, so the residual is key construction + allocation per
+   binary candidate; investigate a per-candidate memo or restructuring
+   before reaching for threads.
+3. **`#114` — `is_visible`** (11.81 % with children after `#105`).
+4. **`#112` — the two `statx` per `vdb_aux_get` call** (`statx` is no
+   longer the top syscall share but is still ~340 k/run).
+5. **Allocation churn** — `String::clone` 12.79 %, `memmove` 9.85 %,
+   `malloc` 7.98 %, `parse_atom` 7.68 % (memo hits cloning the parsed
+   struct), `repo_aux_metadata` 9.84 % / `list_remote_binary_candidates`
+   8.83 % (cold md5-cache / remote-index fills). The old "stop
+   deep-cloning `Candidate` / return `Rc<Atom>`" notes below are now
+   the aggregate-level cost; no single item is above ~5 %.
 6. **`#111` — the real-abort tree divergence** (parity, not performance):
    real aborts `-uD --getbinpkg` where portuale resolves on the
    2026-09-21 tree; blocks the interleaved real comparison until fixed.
+
+Deprioritised: `#106` (`candidate_positions`, 0.31 % — closed by
+`#102`–`#108`), `#113` (`shuffle_seed`'s per-call env read, trivial).
 
 The pre-batch ranking (diminishing returns at the 4.5 s run: deep-clone
 `Candidate`, `installed_candidates` per cp — since shipped as `#102` —
@@ -507,3 +511,26 @@ Next, in order: #105 (`use_context_fingerprint`, 23.77 % with children),
 then #107 (`run_pass`, 85.44 %, still the algorithmic item), then #112
 (the remaining `statx`). #106 (`candidate_positions`) is 0.31 % now —
 effectively closed by #102–#108.
+
+### #105 follow-up (same day): freeze the USE-context digest
+
+`use_context_fingerprint` re-hashed ~20 config fields (big `HashSet`
+folds included) for every `effective_use_flags` /
+`resolved_use_mask_or_force` / `metadata_key_accepted` memo key --
+23.77 % with children on the post-#109/#110 profile and the top named
+single-threaded cost. `resolve_config` now freezes the immutable part
+once into `Config::use_context_base` (new
+`use_context_base_fingerprint` in `portage-profile`); the memo key
+hashes that `u64` plus the live `autounmask_use`, the one field the
+`'backtrack` loop mutates (clones carry the base, which is correct
+because they differ only there). A hand-built config (tests) has no base
+and falls back to the full content hash, so an in-place edit of a
+context field is still seen.
+
+Interleaved, same tree: 3.00-3.16 s wall / 2.46-2.56 s user -> **2.44-2.50 s /
+1.89-1.97 s** (second shape `sys-devel/gcc`: 3.00-3.08 -> 2.43-2.47).
+`use_context_fingerprint` and `metadata_key_accepted` both leave the
+profile's top list; `run_pass` is now 81.20 % with children and
+`binpkg_respect_use_ok` 24.78 %. Full contract suite byte-identical
+(1739 passed, same 3 pre-existing movepkg failures, corpus drift list
+unchanged).

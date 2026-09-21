@@ -3305,105 +3305,24 @@ pub fn effective_use_flags(
 /// A cheap content fingerprint of every `Config` field
 /// [`effective_use_flags`] reads -- see its cache comment for why sampling
 /// (not a full hash) is sound here.
+///
+/// `#105`: the immutable part is frozen by `resolve_config` into
+/// [`portage_profile::Config::use_context_base`], so the production path
+/// only hashes that `u64` plus the live `autounmask_use` -- the one field
+/// the `'backtrack` loop mutates (each tier / `flag_is_settable` probe
+/// adds an entry), hashed in full so a single added entry always changes
+/// the key. A hand-built `Config` (tests, `Config::default()`) has no
+/// base and falls back to the full content hash,
+/// `portage_profile::use_context_base_fingerprint`, so an in-place edit
+/// of any context field is still seen.
 fn use_context_fingerprint(config: &portage_profile::Config) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
-
-    // Order-independent digest of a `HashSet<String>` (its iteration order
-    // is not stable): count + xor-fold of per-element hashes.
-    let hash_set = |s: &HashSet<String>, h: &mut std::collections::hash_map::DefaultHasher| {
-        s.len().hash(h);
-        let mut acc: u64 = 0;
-        for v in s {
-            let mut e = std::collections::hash_map::DefaultHasher::new();
-            v.hash(&mut e);
-            acc ^= e.finish();
-        }
-        acc.hash(h);
-    };
-    // Sample a slice: length + first/middle/last element.
-    fn hash_sampled<T: Hash>(items: &[T], h: &mut std::collections::hash_map::DefaultHasher) {
-        items.len().hash(h);
-        if let Some(f) = items.first() {
-            f.hash(h);
-        }
-        if items.len() > 2 {
-            items[items.len() / 2].hash(h);
-        }
-        if let Some(l) = items.last() {
-            l.hash(h);
-        }
-    }
-
-    hash_set(&config.accept_keywords, &mut h);
-    hash_set(&config.use_force, &mut h);
-    hash_set(&config.use_mask, &mut h);
-    hash_set(&config.use_stable_force, &mut h);
-    hash_set(&config.use_stable_mask, &mut h);
-
-    hash_sampled(&config.use_tokens, &mut h);
-    hash_sampled(&config.conf_use_tokens, &mut h);
-    hash_sampled(&config.env_use_tokens, &mut h);
-    hash_sampled(&config.envd_use_tokens, &mut h);
-    hash_sampled(&config.features_use, &mut h);
-
-    hash_sampled(&config.package_use, &mut h);
-    hash_sampled(&config.package_use_user, &mut h);
-    hash_sampled(&config.package_use_repo, &mut h);
-    hash_sampled(&config.package_env_use, &mut h);
-    hash_sampled(&config.package_use_force, &mut h);
-    hash_sampled(&config.package_use_mask, &mut h);
-    hash_sampled(&config.package_use_stable_force, &mut h);
-    hash_sampled(&config.package_use_stable_mask, &mut h);
-    // Per-level view drives `effective_use_flags`/`forced_or_masked_flags`;
-    // two configs could share a flat `use_mask` set yet differ in the
-    // interleaving, so hash the ordered structure too. Level count +
-    // per-level line/entry counts are a cheap, order-sensitive digest.
-    config.use_mask_force_levels.len().hash(&mut h);
-    for lvl in &config.use_mask_force_levels {
-        (
-            lvl.use_mask.len(),
-            lvl.use_force.len(),
-            lvl.use_stable_mask.len(),
-            lvl.use_stable_force.len(),
-            lvl.package_use_mask.len(),
-            lvl.package_use_force.len(),
-            lvl.package_use_stable_mask.len(),
-            lvl.package_use_stable_force.len(),
-        )
-            .hash(&mut h);
-        hash_sampled(&lvl.use_mask, &mut h);
-        hash_sampled(&lvl.package_use_mask, &mut h);
-    }
-    hash_sampled(&config.package_accept_keywords, &mut h);
-    hash_sampled(&config.repo_make_defaults_use, &mut h);
-
-    // `autounmask_use` is the one field the `'backtrack` loop mutates
-    // (each tier / `flag_is_settable` probe adds an entry) -- hash it in
-    // full, not sampled, so a single added entry always changes the key.
+    let base = config
+        .use_context_base
+        .unwrap_or_else(|| portage_profile::use_context_base_fingerprint(config));
+    base.hash(&mut h);
     config.autounmask_use.hash(&mut h);
-
-    // `profile_use_layers` -- sample the outer Vec, and within the
-    // sampled layers sample each inner list.
-    config.profile_use_layers.len().hash(&mut h);
-    let sample_layer = |l: &portage_profile::ProfileUseLayer,
-                        h: &mut std::collections::hash_map::DefaultHasher| {
-        hash_sampled(&l.make_defaults_use, h);
-        hash_sampled(&l.package_use, h);
-    };
-    if let Some(f) = config.profile_use_layers.first() {
-        sample_layer(f, &mut h);
-    }
-    if config.profile_use_layers.len() > 2 {
-        sample_layer(
-            &config.profile_use_layers[config.profile_use_layers.len() / 2],
-            &mut h,
-        );
-    }
-    if let Some(l) = config.profile_use_layers.last() {
-        sample_layer(l, &mut h);
-    }
-
     h.finish()
 }
 
@@ -40198,6 +40117,36 @@ mod tests {
                 "pkg",
             )
         );
+    }
+
+    /// #105: the composed fingerprint uses a frozen `use_context_base`
+    /// when one is present (the production path, set by `resolve_config`)
+    /// and still separates `autounmask_use` -- the one field the
+    /// backtracking loop mutates on a clone. A hand-built config without
+    /// a base falls back to the full content hash.
+    #[test]
+    fn use_context_fingerprint_uses_the_frozen_base_and_separates_autounmask_use() {
+        let frozen = portage_profile::Config {
+            use_context_base: Some(0x1234_5678_9abc_def0),
+            ..Default::default()
+        };
+        let plain = use_context_fingerprint(&frozen);
+        // A clone carrying the frozen base is identical...
+        assert_eq!(plain, use_context_fingerprint(&frozen.clone()));
+        // ...until `autounmask_use` changes, which the key must see.
+        let mut with_autounmask = frozen.clone();
+        with_autounmask.autounmask_use =
+            vec![("dev-libs/foo".to_string(), vec!["flag".to_string()])];
+        assert_ne!(plain, use_context_fingerprint(&with_autounmask));
+
+        // No base (hand-built config): full content hash, content-sensitive.
+        let mut unfrozen = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            ..Default::default()
+        };
+        let before = use_context_fingerprint(&unfrozen);
+        unfrozen.accept_keywords.insert("~amd64".to_string());
+        assert_ne!(before, use_context_fingerprint(&unfrozen));
     }
 
     fn graph_entry(category: &str, package: &str, version: &str) -> GraphEntry {

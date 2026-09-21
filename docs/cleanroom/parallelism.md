@@ -213,18 +213,19 @@ accept-list fingerprint (the plan's literal key collided on the crate's
 own masking fixtures).
 
 **Verdict on the thread question (2026-09-21).** Both landed, and the
-re-profile answers the section's own question: the resolver's residual
-is now ~0.6 s of mostly `statx` (#112, 339,804/run), plus the
-`use_context_fingerprint` hashing (#105, 23.77 % with children) and the
-second `run_pass` (#107, 85.44 % subtree) — **none of it
-parallel-friendly**: #105/#112 are single-threaded cache/stat work and
-#107 is a parity bug that must not be papered over. §2.2's visibility
-pool is blocked on §1.4 and would now buy ~0.6 s of mostly-serial work
-at the cost of the `Rc → Arc` migration; **do not write it.** §2.1 was
-already demoted to "not worth ~600 cold reads" and the batch confirms
-it. The next resolver items are #105, #107, #112 — all single-threaded.
-The only pool still worth considering is §3.1's merge copy loop, which
-this batch did not touch.
+re-profile answers the section's own question: the resolver is now
+~2.45 s wall / ~1.9 s user / ~0.5 s sys after the same-day #105
+follow-up (the USE-context digest frozen at config resolution), whose
+residual is mostly `statx` (#112, ~340 k/run), the second `run_pass`
+(#107, 81.20 % subtree) and `binpkg_respect_use_ok` (24.78 % with
+children) — **none of it parallel-friendly**: #112 is single-threaded
+stat work and #107 is a parity bug that must not be papered over. §2.2's
+visibility pool is blocked on §1.4 and would now buy well under a second
+of mostly-serial work at the cost of the `Rc → Arc` migration; **do not
+write it.** §2.1 was already demoted to "not worth ~600 cold reads" and
+the two batches confirm it. The next resolver items are #107, #117,
+#114, #112 — all single-threaded. The only pool still worth considering
+is §3.1's merge copy loop, which these batches did not touch.
 
 ### 2.1 Parallel metadata prefetch (was the first slice — now demoted)
 
