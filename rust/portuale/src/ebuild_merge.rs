@@ -335,9 +335,10 @@ pub struct MergeOptions {
     /// `/etc/portage/package.env`'s non-`USE` scalar half
     /// (`Config::package_env_vars`): `(atom, [(KEY, value)])` pairs.
     /// `emerge_build::entry_build_env` matches a build-bound entry's cpv
-    /// against each atom and layers the matching build vars
-    /// (`pretend::BUILD_VARS`) over `build_env` -- real `_grab_pkg_env`
-    /// into `configdict["pkg"]`. Empty (`Default`) everywhere else.
+    /// against each atom and layers the matching vars over `build_env`
+    /// (scalars lose to the calling environment, incrementals fold in
+    /// `[base, pkg, calling-env]` order) -- real `_grab_pkg_env` into
+    /// `configdict["pkg"]`. Empty (`Default`) everywhere else.
     pub package_env_vars: Vec<(String, Vec<(String, String)>)>,
     /// Real `Scheduler._background_mode`'s own `PORTAGE_LOG_FILE`
     /// redirection, extended to this merge's own `pkg_preinst`/

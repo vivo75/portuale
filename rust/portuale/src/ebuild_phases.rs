@@ -887,20 +887,20 @@ fn flat_field_on(raw: &str, use_set: &std::collections::HashSet<String>) -> Stri
         .unwrap_or_default()
 }
 
-/// Real `doebuild_environment()`'s own `USE` plus the compiler/make
-/// flags: the package's effective USE and the resolved `BUILD_VARS`
-/// (`CFLAGS`/`MAKEOPTS`/..., make.conf + profile + env layer) from one
-/// config load, exported as base vars into every phase. Merge builds
-/// pass their fully-resolved flags via `extra_env`
+/// Real `config.environ()` for a standalone `ebuild <file> <phase>`:
+/// the package's effective `USE` plus the whole resolved config env --
+/// `phase_environ(config, None)` (make.conf + profile + env layer, with
+/// the same `PORTUALE_COMPUTED` exclusions the merge path's run-wide env
+/// already carries) -- exported as base vars into every phase. Merge builds pass their fully-resolved flags via `extra_env`
 /// (appended after these base vars downstream, so it keeps overriding
 /// them), which means this computation only ever surfaces for standalone
 /// `ebuild <file> <phase>` runs -- resolved the same way `ebuild_merge::
 /// blocked_installed_packages`' own standalone resolution does
 /// (`find_repos` + `resolve_config` + md5-cache `IUSE` +
 /// `effective_use_flags`, via `candidate_use_flags_display` for USE and
-/// `pretend::build_config_env` for the flags), and empty on any failure
-/// (missing `repos.conf`, unreadable cache, an ebuild path outside any
-/// real repo).
+/// `phase_environ` for the flags), and empty on any failure (missing
+/// `repos.conf`, unreadable cache, an ebuild path outside any real
+/// repo).
 ///
 /// Two gates, both load-bearing. When `extra_env` already carries `USE`
 /// the whole computation is skipped (zero cost and zero behavior change
@@ -970,7 +970,7 @@ fn phase_standalone_base_env(
             &env.split.pn,
             &env.split.pvr,
         );
-        let flags = crate::pretend::build_config_env(&config);
+        let flags = portage_profile::phase_environ(&config, None);
         // Per-package `package.env` build vars, atom-matched against
         // the ebuild's own md5-cache identity (real `_grab_pkg_env`
         // folding a matching entry into `configdict["pkg"]`): the
@@ -1002,11 +1002,11 @@ fn phase_standalone_base_env(
             env.category, env.split.pn, env.split.pvr, slot, sub_slot
         );
         let mut flags = flags;
-        // Real's layer stacking: the run-wide base is the caller's own
-        // flag set here (`build_config_env`), an incremental
-        // `package.env` value folds onto it in `[base, pkg, calling-env]`
-        // order, and a scalar loses to the calling environment when it
-        // carries the same key (#101).
+        // Real's layer stacking: the run-wide base is the full resolved
+        // config env here (`phase_environ`), an incremental `package.env`
+        // value folds onto it in `[base, pkg, calling-env]` order, and a
+        // scalar loses to the calling environment when it carries the
+        // same key (#101).
         let profile_only_variables = config
             .resolved_incremental("PROFILE_ONLY_VARIABLES")
             .unwrap_or_default();
@@ -2564,14 +2564,20 @@ fn phase_env_vars(
     let root_value = eapi_path_var(&env.eapi, &format!("{}/", root.display()));
     let resolved_features = features_string(extra_env);
     let path = phase_path(helpers_dir, extra_env);
-    // Config-derived base env for standalone runs (USE + compiler/make
-    // flags), computed once here so the single config load serves both
-    // the `USE` entry below and the flag entries pushed after the
-    // literal. `("", [])` for merge builds (their `extra_env` carries
+    // Config-derived base env for standalone runs (USE + the whole
+    // resolved config env), computed once here so the single config load
+    // serves both the `USE` entry below and the base pairs seeding
+    // `vars`. `("", [])` for merge builds (their `extra_env` carries
     // everything) and the `depend` phase -- see the helper.
     let standalone_base_env =
         phase_standalone_base_env(env, config_root, root, ebuild_phase_value, extra_env);
-    let mut vars = vec![
+    // Real `doebuild_environment()` assigns its computed values *after*
+    // the config is built, so they win over a same-named config key:
+    // the resolved-config base pairs seed `vars` first and the computed
+    // literal below overrides them (downstream `cmd.envs` is last-wins),
+    // while the merge path's `extra_env` still overrides both at the end.
+    let mut vars: Vec<(String, String)> = standalone_base_env.1;
+    vars.extend(vec![
         ("EAPI".to_string(), env.eapi.clone()),
         ("PN".to_string(), env.split.pn.clone()),
         ("PV".to_string(), env.split.pv.clone()),
@@ -2638,16 +2644,12 @@ fn phase_env_vars(
         ),
         ("FEATURES".to_string(), phase_features_value()),
         // Real `doebuild_environment()` exports the package's effective
-        // `USE` plus the resolved compiler/make flags into every phase.
-        // Merge builds override these base values downstream via
-        // `extra_env` (see `run_commands_async`); a standalone `ebuild
-        // <file> <phase>` has no `extra_env` flags, so the config-derived
-        // base is what its `use()` calls and `${CFLAGS}` see.
+        // `USE` into every phase. Merge builds override this base value
+        // downstream via `extra_env` (see `run_commands_async`); a
+        // standalone `ebuild <file> <phase>` has no `extra_env` flags, so
+        // the config-derived base is what its `use()` calls see.
         // `phase_standalone_base_env` returns `("", [])` for the
         // `depend` phase and whenever `extra_env` already carries `USE`.
-        // Computed once here (one config load): the flags join `vars`
-        // below, ahead of the `extra_env` override, so merge builds keep
-        // their resolved values.
         ("USE".to_string(), standalone_base_env.0.clone()),
         ("EPREFIX".to_string(), String::new()),
         ("EMERGE_FROM".to_string(), "ebuild".to_string()),
@@ -2657,7 +2659,7 @@ fn phase_env_vars(
             if debug { "1" } else { "0" }.to_string(),
         ),
         ("EBUILD_PHASE".to_string(), ebuild_phase_value.to_string()),
-    ];
+    ]);
 
     // Real `doebuild_environment()`: `PORTAGE_RESTRICT`/
     // `PORTAGE_PROPERTIES` are set for every phase, always, from the
@@ -2680,10 +2682,6 @@ fn phase_env_vars(
     let (restrict, properties) = restrict_and_properties(env, &restrict_use_set);
     vars.push(("PORTAGE_RESTRICT".to_string(), restrict));
     vars.push(("PORTAGE_PROPERTIES".to_string(), properties));
-    // The config-derived compiler/make flags: base values only, ahead of
-    // the `extra_env` override below, so merge builds keep their resolved
-    // per-entry values and standalone phases gain make.conf's.
-    vars.extend(standalone_base_env.1);
 
     // Real `INHERITED` (`porttree.py:872`): exported into every phase so
     // that when a non-`depend` phase re-sources the ebuild,
