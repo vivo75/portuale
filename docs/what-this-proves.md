@@ -17748,3 +17748,40 @@ profile subtree falls to 4.38 % and `repo_aux_metadata` from 14.42 % to
 (+0.020 s median, 9/15 wins), user neutral. Output byte-identical over
 the full suite + corpus. Detail: `docs/performances-tuning.md` "#119
 follow-up".
+
+**`package.env` layer order and the three missing keys (Tier 1
+#98/#99/#100/#101, 2026-09-21).** A `package.env` scalar loses to the
+calling environment (real `USE_ORDER` `env` over `pkg`), incrementals
+fold `[run-wide, pkg, calling-env]` so a calling `-tok` prunes an
+env-file token, standalone `ebuild` exports the full resolved config
+env, per-package `PORTAGE_TMPDIR` re-derives the build directory (with
+real's exact missing-directory failure), and per-package `FEATURES`
+folds into the merge gates and the phase env instead of replacing the
+run-wide list. Live, against a scratch copy of the fixture configroot
+with `dev-libs/envdumppkg penv-doc` in `package.env` and
+`etc/portage/env/penv-doc` holding `FEATURES="splitdebug"` plus
+`PORTAGE_TMPDIR="/tmp/doc-ex/probe-tmp"` (directory created, calling
+env carrying neither key):
+
+```sh
+PORTAGE_CONFIGROOT=/tmp/doc-pin portuale ebuild \
+  /tmp/doc-pin/repo/dev-libs/envdumppkg/envdumppkg-1.0.ebuild setup
+#  * FEATURES=splitdebug
+#  * PORTAGE_TMPDIR=/tmp/doc-ex/probe-tmp
+#  * PORTAGE_BUILDDIR=/tmp/doc-ex/probe-tmp/portage/dev-libs/envdumppkg-1.0
+```
+
+while the same run with `PORTAGE_TMPDIR` set in the calling shell
+reports the shell's directory (precedence), and with the directory
+absent fails with real's `The directory specified in your
+PORTAGE_TMPDIR variable, '...', does not exist.` text and exit 1. The
+merge-path twin is pinned end to end: `FEATURES="splitdebug"` for
+`dev-libs/splitdbgpkg` splits only its binary (the neighbour built in
+the same run stays unsplit), and `PORTAGE_TMPDIR` moves the whole
+per-entry build root. Residues filed as #129 (`--buildpkgonly`
+ignores `package.env` wholesale) and #130 (per-entry `FEATURES`
+stops at `PackageOptions`/standalone-merge gates). Detail:
+`docs/01.98-101-package-env-layers.md` (done), oracle
+`../pmtest/differential-test-bed/findings/l2.md` "## #98-#101 S0", L0
+`l0-20260921T172340Z` 101 clean / parity 0.842 with only the standing
+order/tree rows.
