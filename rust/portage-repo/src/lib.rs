@@ -6247,6 +6247,59 @@ pub enum PretendOutcome {
     },
 }
 
+/// Real `vartree.py`'s `_METADATA_FILE_FIELDS` (`lib/portage/dbapi/
+/// vartree.py:79-104`): the single-line vdb fields real folds into the
+/// consolidated `metadata` file. `CONTENTS`/`NEEDED*` are line-oriented
+/// and deliberately excluded (real `_in_metadata_file()`).
+///
+/// **The field set is part of the format.** Real sets
+/// `self._aux_cache_keys = set(_METADATA_FILE_FIELDS)` so the cached set
+/// and the snapshot set are identical by construction, and its module
+/// docstring says to bump [`METADATA_FILE_FORMAT_VERSION`] on any change
+/// to this set, in either direction: a field added here would otherwise
+/// make an older file lacking it read as saying it is empty, and a field
+/// dropped would do the same to an older reader. A key outside this set
+/// **and** outside `^NEEDED\..*$` falls back to an `environment.bz2`
+/// search (real bug 395463), which the snapshot must never silently
+/// answer with `""`.
+pub const METADATA_FILE_FIELDS: &[&str] = &[
+    "BDEPEND",
+    "BUILD_ID",
+    "BUILD_TIME",
+    "CHOST",
+    "COUNTER",
+    "DEFINED_PHASES",
+    "DEPEND",
+    "DESCRIPTION",
+    "EAPI",
+    "HOMEPAGE",
+    "IDEPEND",
+    "IUSE",
+    "KEYWORDS",
+    "LICENSE",
+    "PDEPEND",
+    "PROPERTIES",
+    "PROVIDES",
+    "RDEPEND",
+    "REQUIRES",
+    "RESTRICT",
+    "SLOT",
+    "USE",
+    "repository",
+];
+
+/// Real `_METADATA_FILE_FORMAT_VERSION` (`vartree.py:105`): the
+/// `#format=` value real's reader accepts and its writer stamps. Portuale
+/// writes and real reads the same live vdb, so this must not change
+/// unless [`METADATA_FILE_FIELDS`] does (see its own doc comment).
+pub const METADATA_FILE_FORMAT_VERSION: u32 = 1;
+
+/// Real `_in_metadata_file(fname)` (`vartree.py:110`): whether `name` is
+/// one of the fields the consolidated `metadata` snapshot carries.
+pub fn in_metadata_file(name: &str) -> bool {
+    METADATA_FILE_FIELDS.contains(&name)
+}
+
 /// Reads `<root>/var/db/pkg/<category>/<package>-<version>/<filename>`
 /// (a vdb aux file, e.g. `USE` or `IUSE` -- same directory `SLOT`/
 /// `CATEGORY` already come from) as a set of flag names, one per
@@ -25984,6 +26037,59 @@ mod tests {
             read_vdb_string(&root, "dev-libs", "multilinevdb", "1.0", "DEFINED_PHASES"),
             "install info"
         );
+    }
+
+    /// #109 S2: the shared field set is real's own 23 names, listed
+    /// literally so a drift fails loudly, and the format version stays 1
+    /// (real's `_METADATA_FILE_FORMAT_VERSION`; changing either the set
+    /// or the version breaks interoperability with real's reader/writer
+    /// on a live vdb in both directions).
+    #[test]
+    fn metadata_file_fields_match_reals_literal_set() {
+        assert_eq!(METADATA_FILE_FORMAT_VERSION, 1);
+        let mut got: Vec<&str> = METADATA_FILE_FIELDS.to_vec();
+        got.sort_unstable();
+        assert_eq!(
+            got,
+            vec![
+                "BDEPEND",
+                "BUILD_ID",
+                "BUILD_TIME",
+                "CHOST",
+                "COUNTER",
+                "DEFINED_PHASES",
+                "DEPEND",
+                "DESCRIPTION",
+                "EAPI",
+                "HOMEPAGE",
+                "IDEPEND",
+                "IUSE",
+                "KEYWORDS",
+                "LICENSE",
+                "PDEPEND",
+                "PROPERTIES",
+                "PROVIDES",
+                "RDEPEND",
+                "REQUIRES",
+                "RESTRICT",
+                "SLOT",
+                "USE",
+                "repository",
+            ]
+        );
+    }
+
+    /// #109 S2: `in_metadata_file` is real's `_in_metadata_file()` --
+    /// membership in the 23-set, so the line-oriented `CONTENTS` and
+    /// `NEEDED.*` fields are rejected (they must never be answered from
+    /// the snapshot).
+    #[test]
+    fn in_metadata_file_rejects_contents_and_needed() {
+        assert!(!in_metadata_file("CONTENTS"));
+        assert!(!in_metadata_file("NEEDED.ELF.2"));
+        assert!(!in_metadata_file("_mtime_"));
+        assert!(in_metadata_file("RDEPEND"));
+        assert!(in_metadata_file("repository"));
     }
 
     /// Backlog #102 S1: `installed_candidates` serves repeats from its

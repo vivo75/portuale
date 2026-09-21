@@ -2242,47 +2242,26 @@ fn apply_install_mask(d: &Path, build_info: &Path, options: &MergeOptions) -> Re
 }
 
 /// Real `vartree.py`'s `_METADATA_FILE_FIELDS` (`lib/portage/dbapi/
-/// vartree.py:78-104`): the single-line vdb fields real folds into the
-/// consolidated `metadata` file. `CONTENTS`/`NEEDED*` are line-oriented
-/// and deliberately excluded (real `_in_metadata_file()`).
-const METADATA_FILE_FIELDS: &[&str] = &[
-    "BDEPEND",
-    "BUILD_ID",
-    "BUILD_TIME",
-    "CHOST",
-    "COUNTER",
-    "DEFINED_PHASES",
-    "DEPEND",
-    "DESCRIPTION",
-    "EAPI",
-    "HOMEPAGE",
-    "IDEPEND",
-    "IUSE",
-    "KEYWORDS",
-    "LICENSE",
-    "PDEPEND",
-    "PROPERTIES",
-    "PROVIDES",
-    "RDEPEND",
-    "REQUIRES",
-    "RESTRICT",
-    "SLOT",
-    "USE",
-    "repository",
-];
-
+/// vartree.py:78-104`) lives in `portage_repo` now -- reader and writer
+/// must agree on the field set (it is part of the format version), and
+/// two copies of a 23-element list that must never drift is the bug
+/// real's own module comment warns about. See
+/// [`portage_repo::METADATA_FILE_FIELDS`] and
+/// [`portage_repo::in_metadata_file`].
+///
 /// Real `_write_metadata_file` + `_stamp_metadata_file` (`vartree.py:
 /// 188-229`), driven by `_consolidate_to_metadata_file`'s own
 /// `not delete_individual` path (portuale always keeps the per-field
-/// files, matching real's default): every [`METADATA_FILE_FIELDS`] file
-/// present in `dbdir`, whitespace-normalized (`" ".join(v.split())`),
-/// sorted, under a `#format=1` header, then a `#dir_mtime=<st_mtime_ns>`
-/// line **appended** last so it records the directory's mtime *after*
-/// the body write (real's reader validates the two against each other).
-/// A no-op when `dbdir` holds none of the fields.
+/// files, matching real's default): every [`portage_repo::
+/// METADATA_FILE_FIELDS`] file present in `dbdir`, whitespace-normalized
+/// (`" ".join(v.split())`), sorted, under a `#format=1` header, then a
+/// `#dir_mtime=<st_mtime_ns>` line **appended** last so it records the
+/// directory's mtime *after* the body write (real's reader validates the
+/// two against each other). A no-op when `dbdir` holds none of the
+/// fields.
 fn write_consolidated_metadata_file(dbdir: &Path) -> Result<(), String> {
     let mut data: Vec<(String, String)> = Vec::new();
-    for &field in METADATA_FILE_FIELDS {
+    for &field in portage_repo::METADATA_FILE_FIELDS {
         let path = dbdir.join(field);
         let Ok(raw) = std::fs::read_to_string(&path) else {
             continue;
@@ -2298,7 +2277,7 @@ fn write_consolidated_metadata_file(dbdir: &Path) -> Result<(), String> {
     data.sort();
 
     let metadata_path = dbdir.join("metadata");
-    let mut body = String::from("#format=1\n");
+    let mut body = format!("#format={}\n", portage_repo::METADATA_FILE_FORMAT_VERSION);
     for (k, v) in &data {
         body.push_str(&format!("{k}={v}\n"));
     }
