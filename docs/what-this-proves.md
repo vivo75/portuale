@@ -17716,3 +17716,20 @@ corpus. Detail: `docs/performances-tuning.md` "#114 follow-up".
 # best of 3 warm: 2.08-2.09 s wall / 1.47-1.52 s user / ~0.6 s sys
 # (session start: 3.93-3.98 / 2.86-2.90)
 ```
+
+**One `statx` per vdb lookup (Tier 8 #112, 2026-09-21).** `vdb_aux_get`
+resolved the package directory (one `is_dir()` stat) and then stat'ed it
+again for the mtime validity signal -- two `statx` per key lookup, ~126 k
+of the ~340 k per run. `vdb_pkg_dir_meta` now hands back the `Metadata`
+the resolution already paid, `vdb_aux_get` consumes it, and
+`vdb_pkg_dir` remains a thin wrapper for its other callers. Interleaved,
+same tree: 2.09-2.23 s -> 2.01-2.03 s wall (sys 0.58-0.69 -> 0.50-0.52);
+`statx` 340,008 -> 211,165; second shape `sys-devel/gcc` 2.07-2.11 ->
+2.00-2.02. Output byte-identical over the full suite + corpus, merge-path
+gate green. Detail: `docs/performances-tuning.md` "#112 follow-up".
+
+```sh
+/usr/bin/time -v rust/target/release/emerge -puD --getbinpkg net-libs/rest
+# best of 3 warm: 2.01-2.03 s wall / 1.48-1.49 s user / ~0.5 s sys
+# (session start: 3.93-3.98 / 2.86-2.90)
+```

@@ -6591,13 +6591,12 @@ fn vdb_aux_get(root: &Path, category: &str, package: &str, version: &str, key: &
         "vdb_aux_get({key:?}): key is outside real's _METADATA_FILE_FIELDS; real would search \
          environment.bz2 for it, which this helper does not implement"
     );
-    let dir = vdb_pkg_dir(root, category, package, version);
-    let Ok(st) = fs::metadata(&dir) else {
+    // #112: one `statx` for both the path resolution and the
+    // validity/`st_mtime_ns` check below.
+    let (dir, st) = vdb_pkg_dir_meta(root, category, package, version);
+    let Some(st) = st else {
         return String::new();
     };
-    if !st.is_dir() {
-        return String::new();
-    }
     use std::os::unix::fs::MetadataExt as _;
     let dir_mtime_ns = st.mtime() as i128 * 1_000_000_000 + st.mtime_nsec() as i128;
 
@@ -6855,18 +6854,40 @@ pub fn candidate_effective_use_flags(
 /// this `cat/pkg`). Returns the direct path unchanged when nothing
 /// matches, so a genuinely-missing entry still reads as empty/absent.
 fn vdb_pkg_dir(root: &Path, category: &str, package: &str, version: &str) -> PathBuf {
+    vdb_pkg_dir_meta(root, category, package, version).0
+}
+
+/// [`vdb_pkg_dir`] plus the `Metadata` the resolution already stat'ed
+/// (`Some` only when the returned path is a real directory). Backlog
+/// `#112`: `vdb_aux_get` needs the directory's `is_dir()` and its
+/// `st_mtime_ns`, so resolving the path and then stat'ing it again paid
+/// two `statx` per lookup (~126 k `statx`/run on the reference workload).
+/// `fs::metadata` follows symlinks exactly like the `is_dir()` it
+/// replaces, and `None` means the unresolved direct path -- absent, a
+/// file, or a broken symlink -- which every caller already treats as an
+/// absent entry.
+fn vdb_pkg_dir_meta(
+    root: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> (PathBuf, Option<std::fs::Metadata>) {
     let pkgdir = root.join("var/db/pkg");
     let direct = pkgdir.join(category).join(format!("{package}-{version}"));
-    if direct.is_dir() || global_package_updates().is_empty() {
-        return direct;
+    match fs::metadata(&direct) {
+        Ok(st) if st.is_dir() => return (direct, Some(st)),
+        _ if global_package_updates().is_empty() => return (direct, None),
+        _ => {}
     }
     for (c, p) in installed_cp_sources(category, package) {
         let cand = pkgdir.join(&c).join(format!("{p}-{version}"));
-        if cand.is_dir() {
-            return cand;
+        if let Ok(st) = fs::metadata(&cand)
+            && st.is_dir()
+        {
+            return (cand, Some(st));
         }
     }
-    direct
+    (direct, None)
 }
 
 /// Reads `<root>/var/db/pkg/<category>/<package>-<version>/<filename>`
@@ -26740,6 +26761,35 @@ mod tests {
             read_vdb_string(&root, "dev-libs", "snapparse", "1.0", "RDEPEND"),
             "last=with=equals"
         );
+    }
+
+    /// #112: the resolution helper hands back the `Metadata` it already
+    /// stat'ed, so `vdb_aux_get` does not pay a second `statx` for the
+    /// validity/mtime check.
+    #[test]
+    fn vdb_pkg_dir_meta_returns_the_stat_it_used() {
+        let root = tmp_vdb("dev-libs", "statmeta-1.0", &[]);
+        let dir = root.join("var/db/pkg/dev-libs/statmeta-1.0");
+        let (got, st) = vdb_pkg_dir_meta(&root, "dev-libs", "statmeta", "1.0");
+        assert_eq!(got, dir);
+        let st = st.expect("an existing directory must carry its stat");
+        use std::os::unix::fs::MetadataExt as _;
+        assert!(st.is_dir());
+        assert_eq!(
+            st.mtime() as i128 * 1_000_000_000 + st.mtime_nsec() as i128,
+            dir_mtime_ns(&dir)
+        );
+        // A *file* at the entry path is not a directory: no stat served.
+        let file_root = tmp_vdb("dev-libs", "statmeta-2.0", &[]);
+        let file_dir = file_root.join("var/db/pkg/dev-libs/statmeta-2.0");
+        std::fs::remove_dir_all(&file_dir).unwrap();
+        std::fs::write(&file_dir, b"not a dir").unwrap();
+        let (_, st) = vdb_pkg_dir_meta(&file_root, "dev-libs", "statmeta", "2.0");
+        assert!(st.is_none(), "a non-directory must not be served as a stat");
+        // An absent entry: the unresolved direct path, no stat.
+        let (missing, st) = vdb_pkg_dir_meta(&root, "dev-libs", "absent", "1.0");
+        assert_eq!(missing, root.join("var/db/pkg/dev-libs/absent-1.0"));
+        assert!(st.is_none());
     }
 
     /// Bump a package dir's mtime without changing what it holds (create

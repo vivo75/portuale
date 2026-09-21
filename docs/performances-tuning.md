@@ -24,12 +24,13 @@
 | + `#109`–`#110` vdb `metadata` snapshot + aux memo + `metadata_key_accepted` memo | **~3.1 s** | 25× |
 | + `#105` USE-context fingerprint frozen at config resolution | **~2.45 s** | 31× |
 | + `#117` `binpkg_respect_use_ok` memo | **~2.25 s** | 34× |
-| + `#114` `is_visible` memo | **~2.08 s** | **37×** |
+| + `#114` `is_visible` memo | **~2.08 s** | 37× |
+| + `#112` one `statx` per `vdb_aux_get` (was two) | **~2.01 s** | **38×** |
 
-All eleven changes are **shipped** and keep byte-identical output with
+All twelve changes are **shipped** and keep byte-identical output with
 the full suite green (`portage-dep` / `portage-repo` / `portuale` unit
-tests + contract tests). portuale is now ~2.08 s wall / ~1.5 s user /
-~0.6 s sys on this workload, against real's last measured 4.50–5.11 s
+tests + contract tests). portuale is now ~2.01 s wall / ~1.5 s user /
+~0.5 s sys on this workload, against real's last measured 4.50–5.11 s
 (real aborts there today, backlog #111). None of them alters the
 resolver algorithm — they remove redundant work the algorithm was doing.
 
@@ -273,31 +274,31 @@ smaller blast radius.
 
 ## What to change next, in priority order
 
-**Re-ranked 2026-09-21 after `#114`** (`perf record -F 400 -g` on the
+**Re-ranked 2026-09-21 after `#112`** (`perf record -F 400 -g` on the
 post-slice binary; the numbers are in "2026-09-21 batch" below). The
-resolver is now ~2.08 s wall / ~1.5 s user / ~0.6 s sys on the reference
+resolver is now ~2.01 s wall / ~1.5 s user / ~0.5 s sys on the reference
 workload:
 
 1. **`#107` — the second `run_pass` (parked 2026-09-21).** `run_pass` is
-   75.52 % with children and the loop still restarts where real reports
+   75.53 % with children and the loop still restarts where real reports
    `backtrack: 0/20`. Diagnosed: the restart is the reverse-dependency
    pin feedback, and removing it needs real's complete-graph
    parent-atom model (a prototype that applied the reachable consumers'
    atoms at selection lost an update and the withheld-update warning —
    see the #107 backlog entry). Algorithmic/parity; do not win it by
    skipping the pass. Revisit only with the complete-graph model.
-2. **`repo_aux_metadata` (13.06 % with children)** — the top named cost
-   now: cold md5-cache fills + validation, plus `apply_updates_to_dep_string`
-   (6.66 %) rebuilding every token of a cache-miss dep string even when no
-   `profiles/updates/` move matches. Then `binpkg_respect_use_ok`
-   (12.48 %, its memo's residual key hashing on ~13 k calls) and
-   `binary_deps_changed` (10.58 %). **`list_remote_binary_candidates` was
-   tried and withdrawn** (`#118`, honest non-result: sharing its pools
-   measured within noise at +16 MB RSS).
-3. **`#112` — the two `statx` per `vdb_aux_get` call.** `statx` is 9.51 %
-   with `std::sys::fs::metadata` 9.92 % and `vdb_aux_get` 9.29 %; sys is
-   ~0.6 s, the last I/O-shaped cost.
-4. **`#111` — the real-abort tree divergence** (parity, not performance):
+2. **`repo_aux_metadata` (14.69 % with children)** — the top named cost:
+   cold md5-cache fills + validation, plus `apply_updates_to_dep_string`
+   rebuilding every token of a cache-miss dep string even when no
+   `profiles/updates/` move matches (the fast-path slice).
+3. **`list_remote_binary_candidates` (12.08 %)** — its sharing was tried
+   and withdrawn (`#118`, honest non-result: within noise at +16 MB RSS);
+   the remaining cost is first materialisation per `(cp, visit)` and
+   cheaper construction is the only lever, under the noise floor.
+4. **Allocation churn** — `effective_use_flags` 10.19 %,
+   `binpkg_respect_use_ok`'s memo residual 9.70 %, `String::clone` 9.62 %,
+   `parse_atom` 9.38 %, `malloc` 9.84 %: no single item above ~3 %.
+5. **`#111` — the real-abort tree divergence** (parity, not performance):
    real aborts `-uD --getbinpkg` where portuale resolves on the
    2026-09-21 tree; blocks the interleaved real comparison until fixed.
 
@@ -594,3 +595,20 @@ the 7.92 % is the first materialisation per `(cp, visit)`, not redundant
 repeats -- a memo cannot amortise it, only cheaper construction could.
 Reverted; the backlog entry records the non-result so it is not
 re-attempted.
+
+### #112 follow-up (same day): one stat per vdb lookup
+
+`vdb_aux_get` resolved the package dir with `vdb_pkg_dir` (whose
+`is_dir()` was one `statx`) and then stat'ed it again for the
+validity/`st_mtime_ns` signal -- two per key lookup, ~126 k of the
+~340 k `statx`/run. `vdb_pkg_dir_meta` now returns the `Metadata` the
+resolution already paid (`Some` only for a real directory, following
+symlinks exactly like `is_dir()` did), and `vdb_aux_get` consumes it;
+`vdb_pkg_dir` stays a thin wrapper for its other callers.
+
+Interleaved, same tree: 2.09-2.23 s wall / 1.51-1.53 s user -> **2.01-2.03 s /
+1.48-1.49 s** (second shape `sys-devel/gcc`: 2.07-2.11 -> 2.00-2.02);
+`strace`: `statx` 340,008 -> **211,165**, sys 0.58-0.69 -> 0.50-0.52.
+Byte-identical over the full contract suite + corpus; the merge-path
+gate (glibc+bash) is green (`l1-20260921T094230Z`) because the merge
+readers share the helper.
