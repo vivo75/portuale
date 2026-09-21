@@ -54,6 +54,207 @@ fn read_vdb_string_normalises_the_committed_multiline_fixture() {
     );
 }
 
+/// A validated snapshot serves a field with no open of the individual file.
+#[test]
+fn vdb_aux_get_serves_a_valid_snapshot_without_opening_the_field_file() {
+    let root = tmp_vdb(
+        "dev-libs",
+        "snap-1.0",
+        &[("RDEPEND", b"dev-libs/individual\n")],
+    );
+    write_snapshot(
+        &root,
+        "dev-libs",
+        "snap-1.0",
+        "#format=1\nRDEPEND=dev-libs/snapshot\n",
+        true,
+    );
+    assert_eq!(
+        read_vdb_string(&root, "dev-libs", "snap", "1.0", "RDEPEND"),
+        "dev-libs/snapshot"
+    );
+}
+
+/// A validated snapshot is complete: a field it lacks reads as `""`.
+#[test]
+fn vdb_aux_get_serves_empty_for_a_field_absent_from_a_valid_snapshot() {
+    let root = tmp_vdb(
+        "dev-libs",
+        "snapabsent-1.0",
+        &[("RDEPEND", b"dev-libs/individual\n")],
+    );
+    write_snapshot(
+        &root,
+        "dev-libs",
+        "snapabsent-1.0",
+        "#format=1\nSLOT=0\n",
+        true,
+    );
+    assert_eq!(
+        read_vdb_string(&root, "dev-libs", "snapabsent", "1.0", "RDEPEND"),
+        ""
+    );
+}
+
+/// A snapshot whose `#format=` is not 1 is rejected, falling back to files.
+#[test]
+fn vdb_aux_get_rejects_a_wrong_format_version() {
+    let root = tmp_vdb(
+        "dev-libs",
+        "snapfmt-1.0",
+        &[("RDEPEND", b"dev-libs/individual\n")],
+    );
+    write_snapshot(
+        &root,
+        "dev-libs",
+        "snapfmt-1.0",
+        "#format=2\nRDEPEND=dev-libs/snapshot\n",
+        true,
+    );
+    assert_eq!(
+        read_vdb_string(&root, "dev-libs", "snapfmt", "1.0", "RDEPEND"),
+        "dev-libs/individual"
+    );
+}
+
+/// A missing, stale or unparsable `#dir_mtime=`, or a garbage `#format=`,
+/// rejects the snapshot.
+#[test]
+fn vdb_aux_get_falls_back_on_a_missing_stale_or_garbage_stamp() {
+    let dir = |root: &Path| root.join("var/db/pkg/dev-libs/snapbad-1.0");
+    let body = "#format=1\nRDEPEND=dev-libs/snapshot\n";
+    let individual = "dev-libs/individual";
+    // Missing `#dir_mtime=` entirely.
+    let root = tmp_vdb(
+        "dev-libs",
+        "snapbad-1.0",
+        &[("RDEPEND", b"dev-libs/individual\n")],
+    );
+    write_snapshot(&root, "dev-libs", "snapbad-1.0", body, false);
+    assert_eq!(
+        read_vdb_string(&root, "dev-libs", "snapbad", "1.0", "RDEPEND"),
+        individual
+    );
+    // Off-by-one stamp.
+    let path = write_snapshot(&root, "dev-libs", "snapbad-1.0", body, false);
+    append_line(
+        &path,
+        &format!("#dir_mtime={}", dir_mtime_ns(&dir(&root)) + 1),
+    );
+    assert_eq!(
+        read_vdb_string(&root, "dev-libs", "snapbad", "1.0", "RDEPEND"),
+        individual
+    );
+    // Garbage in the mtime header.
+    let path = write_snapshot(&root, "dev-libs", "snapbad-1.0", body, false);
+    append_line(&path, "#dir_mtime=not-a-number");
+    assert_eq!(
+        read_vdb_string(&root, "dev-libs", "snapbad", "1.0", "RDEPEND"),
+        individual
+    );
+    // Garbage in the format header.
+    write_snapshot(
+        &root,
+        "dev-libs",
+        "snapbad-1.0",
+        "#format=one\nRDEPEND=dev-libs/snapshot\n",
+        true,
+    );
+    assert_eq!(
+        read_vdb_string(&root, "dev-libs", "snapbad", "1.0", "RDEPEND"),
+        individual
+    );
+}
+
+/// No `metadata` file at all falls back to the individual files.
+#[test]
+fn vdb_aux_get_falls_back_without_a_metadata_file() {
+    let root = tmp_vdb(
+        "dev-libs",
+        "snapnone-1.0",
+        &[("RDEPEND", b"dev-libs/individual\n")],
+    );
+    assert_eq!(
+        read_vdb_string(&root, "dev-libs", "snapnone", "1.0", "RDEPEND"),
+        "dev-libs/individual"
+    );
+}
+
+/// Snapshot parse (Portage's `_read_metadata_file`): `#` lines ignored,
+/// `=`-less lines skipped, last duplicate wins.
+#[test]
+fn vdb_aux_get_snapshot_parse_ignores_comments_and_lets_the_last_key_win() {
+    let root = tmp_vdb("dev-libs", "snapparse-1.0", &[]);
+    write_snapshot(
+        &root,
+        "dev-libs",
+        "snapparse-1.0",
+        "#format=1\n#comment\nno-equals-line\nRDEPEND=first\nRDEPEND=last=with=equals\n",
+        true,
+    );
+    assert_eq!(
+        read_vdb_string(&root, "dev-libs", "snapparse", "1.0", "RDEPEND"),
+        "last=with=equals"
+    );
+}
+
+/// A second lookup on the same instance does not re-read the snapshot.
+#[test]
+fn vdb_aux_memo_serves_the_cached_snapshot_until_the_dir_mtime_moves() {
+    let root = tmp_vdb("dev-libs", "memofresh-1.0", &[]);
+    write_snapshot(
+        &root,
+        "dev-libs",
+        "memofresh-1.0",
+        "#format=1\nRDEPEND=from-snapshot-1\n",
+        true,
+    );
+    let dir = root.join("var/db/pkg/dev-libs/memofresh-1.0");
+    let read = || read_vdb_string(&root, "dev-libs", "memofresh", "1.0", "RDEPEND");
+    assert_eq!(read(), "from-snapshot-1");
+    // In-place rewrite: the dir mtime does not move -> memo hit.
+    std::fs::write(dir.join("metadata"), "#format=1\nRDEPEND=from-snapshot-2\n").unwrap();
+    assert_eq!(read(), "from-snapshot-1");
+    // A dir mtime change invalidates; the rewritten file is rejected and the
+    // (absent) individual file is served as "".
+    bump_dir_mtime(&dir);
+    assert_eq!(read(), "");
+    // A fresh valid snapshot is picked up on the next lookup, once the dir
+    // mtime moves the way the merge path replaces a whole entry.
+    bump_dir_mtime(&dir);
+    let ns = dir_mtime_ns(&dir);
+    std::fs::write(
+        dir.join("metadata"),
+        format!("#format=1\nRDEPEND=from-snapshot-3\n#dir_mtime={ns}\n"),
+    )
+    .unwrap();
+    assert_eq!(read(), "from-snapshot-3");
+}
+
+/// The fallback path memoises too, per key, lazily, on the same mtime signal.
+#[test]
+fn vdb_aux_memo_caches_the_fallback_path_per_key() {
+    let root = tmp_vdb(
+        "dev-libs",
+        "memofallback-1.0",
+        &[("RDEPEND", b"fallback-one\n"), ("IUSE", b"alpha\n")],
+    );
+    let dir = root.join("var/db/pkg/dev-libs/memofallback-1.0");
+    let read = |key: &str| read_vdb_string(&root, "dev-libs", "memofallback", "1.0", key);
+    assert_eq!(read("RDEPEND"), "fallback-one");
+    // In-place rewrite -> memo hit.
+    std::fs::write(dir.join("RDEPEND"), b"fallback-two\n").unwrap();
+    assert_eq!(read("RDEPEND"), "fallback-one");
+    // A different key resolves and memoises on its own.
+    assert_eq!(read("IUSE"), "alpha");
+    std::fs::write(dir.join("IUSE"), b"beta\n").unwrap();
+    assert_eq!(read("IUSE"), "alpha");
+    // Dir mtime change -> the individual files are re-read.
+    bump_dir_mtime(&dir);
+    std::fs::write(dir.join("RDEPEND"), b"fallback-three\n").unwrap();
+    assert_eq!(read("RDEPEND"), "fallback-three");
+}
+
 /// `installed_candidates` serves repeats from its per-cp cache, invalidated
 /// by the category dir mtime.
 #[test]

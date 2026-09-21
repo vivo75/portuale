@@ -143,6 +143,40 @@ fn tmp_vdb(cat: &str, pf: &str, files: &[(&str, &[u8])]) -> std::path::PathBuf {
     root
 }
 
+/// Write a consolidated `metadata` snapshot body into `root`'s entry for
+/// `<cat>/<pf>` and, when `stamp`, append the `#dir_mtime=` stamp after the
+/// body write (Portage's write-then-stamp order). Returns the `metadata` path.
+fn write_snapshot(root: &Path, cat: &str, pf: &str, body: &str, stamp: bool) -> PathBuf {
+    let dir = root.join("var/db/pkg").join(cat).join(pf);
+    let path = dir.join("metadata");
+    std::fs::write(&path, body).unwrap();
+    if stamp {
+        let ns = dir_mtime_ns(&dir);
+        append_line(&path, &format!("#dir_mtime={ns}"));
+    }
+    path
+}
+
+fn append_line(path: &Path, line: &str) {
+    use std::io::Write as _;
+    let mut f = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+    writeln!(f, "{line}").unwrap();
+}
+
+/// The directory's own `st_mtime_ns`, for stamping a runtime snapshot.
+fn dir_mtime_ns(dir: &Path) -> i128 {
+    use std::os::unix::fs::MetadataExt as _;
+    let st = std::fs::metadata(dir).unwrap();
+    st.mtime() as i128 * 1_000_000_000 + st.mtime_nsec() as i128
+}
+
+/// Bump a package dir's mtime without changing what it holds (create
+/// then remove a scratch entry) -- the memo's invalidation signal.
+fn bump_dir_mtime(dir: &Path) {
+    std::fs::write(dir.join("scratch"), b"").unwrap();
+    std::fs::remove_file(dir.join("scratch")).unwrap();
+}
+
 fn bz2(bytes: &[u8]) -> Vec<u8> {
     use bzip2::write::BzEncoder;
     use std::io::Write as _;
