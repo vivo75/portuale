@@ -6388,14 +6388,85 @@ fn vdb_aux_get(root: &Path, category: &str, package: &str, version: &str, key: &
     if !st.is_dir() {
         return String::new();
     }
-    if in_metadata_file(key) {
-        use std::os::unix::fs::MetadataExt as _;
-        let dir_mtime_ns = st.mtime() as i128 * 1_000_000_000 + st.mtime_nsec() as i128;
-        if let Some(snapshot) = read_metadata_file(&dir.join("metadata"), dir_mtime_ns) {
-            return snapshot.get(key).cloned().unwrap_or_default();
-        }
+    use std::os::unix::fs::MetadataExt as _;
+    let dir_mtime_ns = st.mtime() as i128 * 1_000_000_000 + st.mtime_nsec() as i128;
+
+    // Real `aux_get`'s `_aux_cache["packages"]` (`vartree.py:909-973`):
+    // per-instance metadata keyed on the package dir's `st_mtime_ns`, so
+    // a second key on the same instance costs one `stat` instead of a
+    // snapshot read (and a per-key `open()` on the fallback path).
+    // `cache_these = _aux_cache_keys ∪ wants` is why a validated snapshot
+    // fills **all** 23 fields at once; the fallback path resolves lazily
+    // per key and records each resolved value, including `""`.
+    //
+    // The in-process staleness property is real's own: an in-place rewrite
+    // of a field file leaves the dir mtime alone, so a value read once is
+    // served until the dir changes. Real calls `_bump_mtime` on both sides
+    // of `aux_update` for exactly that reason; the same property is
+    // documented at `installed_candidates` (#102) and is why portuale's
+    // merge path (which replaces the whole entry dir) is safe. Thread-local
+    // so the lookup stays lock-free, like `EUF_CACHE`.
+    type CacheKey = (PathBuf, String, String, String);
+    type AuxCache = HashMap<CacheKey, (i128, Rc<HashMap<String, String>>)>;
+    thread_local! {
+        static AUX_CACHE: RefCell<AuxCache> = RefCell::new(HashMap::new());
     }
-    read_vdb_file(&dir.join(key))
+    let cache_key = (
+        root.to_path_buf(),
+        category.to_string(),
+        package.to_string(),
+        version.to_string(),
+    );
+
+    // The `stat` above is the validity signal, paid on every call (real
+    // stats before consulting `_aux_cache` too); the memo removes the
+    // snapshot read and the per-key `open`.
+    let cached = AUX_CACHE.with(|c| {
+        c.borrow()
+            .get(&cache_key)
+            .filter(|(mtime, _)| *mtime == dir_mtime_ns)
+            .map(|(_, map)| Rc::clone(map))
+    });
+    if let Some(map) = cached {
+        if let Some(v) = map.get(key) {
+            return v.clone();
+        }
+        // Fallback path: this key has not been resolved yet. Drop the
+        // shared handle before mutating so `Rc::make_mut` can reuse it.
+        drop(map);
+        let value = read_vdb_file(&dir.join(key));
+        AUX_CACHE.with(|c| {
+            if let Some((_, map)) = c.borrow_mut().get_mut(&cache_key) {
+                Rc::make_mut(map).insert(key.to_string(), value.clone());
+            }
+        });
+        return value;
+    }
+
+    // Miss or dir-mtime change: read and validate the snapshot once.
+    let mut map: HashMap<String, String> =
+        match read_metadata_file(&dir.join("metadata"), dir_mtime_ns) {
+            Some(snapshot) => {
+                // A validated snapshot is complete for the 23-set: pre-fill
+                // every member so an absent one is `""` with no `open()`.
+                let mut m = snapshot;
+                for &field in METADATA_FILE_FIELDS {
+                    m.entry(field.to_string()).or_default();
+                }
+                m
+            }
+            None => HashMap::new(),
+        };
+    let value = map
+        .get(key)
+        .cloned()
+        .unwrap_or_else(|| read_vdb_file(&dir.join(key)));
+    map.insert(key.to_string(), value.clone());
+    AUX_CACHE.with(|c| {
+        c.borrow_mut()
+            .insert(cache_key, (dir_mtime_ns, Rc::new(map)));
+    });
+    value
 }
 
 /// The per-key fallback read: the raw file normalised exactly like real
@@ -26388,6 +26459,81 @@ mod tests {
             read_vdb_string(&root, "dev-libs", "snapparse", "1.0", "RDEPEND"),
             "last=with=equals"
         );
+    }
+
+    /// Bump a package dir's mtime without changing what it holds (create
+    /// then remove a scratch entry) -- the memo's invalidation signal.
+    fn bump_dir_mtime(dir: &Path) {
+        std::fs::write(dir.join("scratch"), b"").unwrap();
+        std::fs::remove_file(dir.join("scratch")).unwrap();
+    }
+
+    /// #109 S4 (a): a second lookup on the same instance does not re-read
+    /// the snapshot. Proved behaviourally: an in-place rewrite of the
+    /// `metadata` file does not move the dir mtime, so the memo keeps
+    /// serving the validated map (real's own in-process hole, documented
+    /// at the cache), while a dir mtime change invalidates it and a fresh
+    /// snapshot is read.
+    #[test]
+    fn vdb_aux_memo_serves_the_cached_snapshot_until_the_dir_mtime_moves() {
+        let root = tmp_vdb("dev-libs", "memofresh-1.0", &[]);
+        write_snapshot(
+            &root,
+            "dev-libs",
+            "memofresh-1.0",
+            "#format=1\nRDEPEND=from-snapshot-1\n",
+            true,
+        );
+        let dir = root.join("var/db/pkg/dev-libs/memofresh-1.0");
+        let read = || read_vdb_string(&root, "dev-libs", "memofresh", "1.0", "RDEPEND");
+        assert_eq!(read(), "from-snapshot-1");
+        // In-place rewrite: the dir mtime does not move -> memo hit.
+        std::fs::write(dir.join("metadata"), "#format=1\nRDEPEND=from-snapshot-2\n").unwrap();
+        assert_eq!(read(), "from-snapshot-1");
+        // A dir mtime change invalidates; the rewritten file has no
+        // `#dir_mtime=` so it is rejected and the (absent) individual file
+        // is served as "".
+        bump_dir_mtime(&dir);
+        assert_eq!(read(), "");
+        // A fresh valid snapshot is picked up on the next lookup -- after
+        // the dir mtime moves again, the way the merge path replaces a
+        // whole entry (an in-place rewrite with the mtime held is exactly
+        // the documented stale hole above).
+        bump_dir_mtime(&dir);
+        let ns = dir_mtime_ns(&dir);
+        std::fs::write(
+            dir.join("metadata"),
+            format!("#format=1\nRDEPEND=from-snapshot-3\n#dir_mtime={ns}\n"),
+        )
+        .unwrap();
+        assert_eq!(read(), "from-snapshot-3");
+    }
+
+    /// #109 S4 (b,c): the fallback path memoises too -- per key, lazily --
+    /// and is invalidated by the same dir mtime signal. A second key on
+    /// the same instance resolves without re-attempting the snapshot, and
+    /// a resolved key is not re-read while the dir mtime holds.
+    #[test]
+    fn vdb_aux_memo_caches_the_fallback_path_per_key() {
+        let root = tmp_vdb(
+            "dev-libs",
+            "memofallback-1.0",
+            &[("RDEPEND", b"fallback-one\n"), ("IUSE", b"alpha\n")],
+        );
+        let dir = root.join("var/db/pkg/dev-libs/memofallback-1.0");
+        let read = |key: &str| read_vdb_string(&root, "dev-libs", "memofallback", "1.0", key);
+        assert_eq!(read("RDEPEND"), "fallback-one");
+        // In-place rewrite -> memo hit.
+        std::fs::write(dir.join("RDEPEND"), b"fallback-two\n").unwrap();
+        assert_eq!(read("RDEPEND"), "fallback-one");
+        // A different key resolves and memoises on its own.
+        assert_eq!(read("IUSE"), "alpha");
+        std::fs::write(dir.join("IUSE"), b"beta\n").unwrap();
+        assert_eq!(read("IUSE"), "alpha");
+        // Dir mtime change -> the individual files are re-read.
+        bump_dir_mtime(&dir);
+        std::fs::write(dir.join("RDEPEND"), b"fallback-three\n").unwrap();
+        assert_eq!(read("RDEPEND"), "fallback-three");
     }
 
     /// Backlog #102 S1: `installed_candidates` serves repeats from its
