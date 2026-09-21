@@ -958,10 +958,54 @@ mod tests {
     use super::*;
     use std::fs;
 
+    /// Serialises stub-script creation against every stub spawn across
+    /// the parallel test threads (#128).
+    ///
+    /// `ETXTBSY` here is a cross-thread fd race, not a name collision,
+    /// and `fs::write`'s own handle is not the one that matters: it
+    /// closes before the spawn. All threads of one test process share a
+    /// single fd table, so a `Command` fork that happens while *any*
+    /// thread still has a script open `O_WRONLY` copies that fd into the
+    /// child. `fork` shares the file description, so the writer's own
+    /// `close` does not drop the inode's write count — the child's copy
+    /// still pins it until that child itself execs (dropping the
+    /// `O_CLOEXEC` fd). Captured with `strace -f -tt` (2026-09-21):
+    /// thread A opens `wget-p.sh` for write at t0 and closes at t2;
+    /// thread B's `clone3(CLONE_VM|CLONE_VFORK)` for another test's child
+    /// lands at t1, between them; A's own child then `execve`s
+    /// `wget-p.sh` before B's child has exec'd, and the kernel answers
+    /// `Text file busy` even though A's write handle is long closed.
+    ///
+    /// Holding this lock across each script write ([`stub_fetch_script`])
+    /// and across each spawn ([`download_serialized`], which returns only
+    /// after the child has exited) makes fork-during-write impossible: at
+    /// any spawn's fork no script write-fd is open process-wide, so no
+    /// child can inherit one and pin the inode. Data-file writes
+    /// (`source.tar.gz`, manifests, …) stay outside the lock: pinning
+    /// those is harmless, since `execve` only checks the exec'd file.
+    static SPAWN_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn spawn_guard() -> std::sync::MutexGuard<'static, ()> {
+        // Recover from poisoning: a panicking test must not cascade into
+        // every other spawn test.
+        SPAWN_SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn tempdir() -> std::path::PathBuf {
+        // The clock alone cannot discriminate two tests: parallel test
+        // threads in one process share the pid and can start within the
+        // same tick, so two `tempdir()` calls could return the same path
+        // and clobber each other's files. The process-wide counter makes
+        // the name unique by construction whatever the clock resolution
+        // is; the timestamp stays as a run marker only. (Uniqueness alone
+        // does not fix #128's `ETXTBSY` — see `SPAWN_SERIAL` — but a
+        // shared dir would still break the tests' file assertions.)
+        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let dir = std::env::temp_dir().join(format!(
-            "portage_fetch_test_{}_{}",
+            "portage_fetch_test_{}_{}_{}",
             std::process::id(),
+            n,
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -1156,6 +1200,9 @@ mod tests {
     /// `file://` path in the tests below). Spawned directly, exactly the
     /// way a real `FETCHCOMMAND` is.
     fn stub_fetch_script(dir: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
+        // Under the spawn lock: no other test may fork (spawn) while
+        // this write-fd is open — see `SPAWN_SERIAL`.
+        let _guard = spawn_guard();
         let path = dir.join(name);
         fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
         let mut perms = fs::metadata(&path).unwrap().permissions();
@@ -1163,6 +1210,22 @@ mod tests {
         perms.set_mode(0o755);
         fs::set_permissions(&path, perms).unwrap();
         path
+    }
+
+    /// The only way these tests spawn a stub: the real
+    /// [`download_with_commands`] under the spawn lock, so no other test
+    /// thread can fork while this one's contract is scanning the shared
+    /// fd table — see `SPAWN_SERIAL`.
+    fn download_serialized(
+        uri: &str,
+        dest: &std::path::Path,
+        resume: bool,
+        distdir: &std::path::Path,
+        vars: FetchCommandVars<'_>,
+        commands: &FetchCommands,
+    ) -> Result<(), String> {
+        let _guard = spawn_guard();
+        download_with_commands(uri, dest, resume, distdir, vars, commands)
     }
 
     #[test]
@@ -1180,7 +1243,7 @@ mod tests {
             ..FetchCommands::default()
         };
         let uri = format!("file://{}", source.display());
-        download_with_commands(
+        download_serialized(
             &uri,
             &dest,
             false,
@@ -1194,7 +1257,7 @@ mod tests {
         // A command without ${FILE} is refused with real's message and
         // never spawned.
         commands.fetchcommand = Some(format!("{} \"${{URI}}\"", script.display()));
-        let err = download_with_commands(
+        let err = download_serialized(
             &uri,
             &dest,
             false,
@@ -1218,7 +1281,7 @@ mod tests {
         );
         commands.fetchcommand = Some("false".to_string());
         let dest2 = dir.join("dest2.tar.gz");
-        download_with_commands(
+        download_serialized(
             &uri,
             &dest2,
             false,
@@ -1259,7 +1322,7 @@ mod tests {
             fetchcommand: Some(no_file.clone()),
             ..FetchCommands::default()
         };
-        download_with_commands(
+        download_serialized(
             &uri,
             &dest,
             false,
@@ -1275,7 +1338,7 @@ mod tests {
         // (b) a renamed distfile differs from the URL basename: real
         // aborts before spawning.
         let renamed = dldir.join("renamed.tar.gz");
-        let err = download_with_commands(
+        let err = download_serialized(
             &uri,
             &renamed,
             false,
@@ -1299,7 +1362,7 @@ mod tests {
             resumecommand: Some(no_file),
             ..FetchCommands::default()
         };
-        let err = download_with_commands(
+        let err = download_serialized(
             &uri,
             &renamed,
             false,
@@ -1328,7 +1391,7 @@ mod tests {
             ..FetchCommands::default()
         };
         commands.resumecommand = commands.fetchcommand.clone();
-        download_with_commands(
+        download_serialized(
             "file:///nonexistent",
             &dest,
             false,
@@ -1338,7 +1401,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(!dest.exists(), "a failed fresh fetch removes the partial");
-        download_with_commands(
+        download_serialized(
             "file:///nonexistent",
             &dest,
             true,
