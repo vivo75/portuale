@@ -887,20 +887,20 @@ fn flat_field_on(raw: &str, use_set: &std::collections::HashSet<String>) -> Stri
         .unwrap_or_default()
 }
 
-/// Real `doebuild_environment()`'s own `USE` plus the compiler/make
-/// flags: the package's effective USE and the resolved `BUILD_VARS`
-/// (`CFLAGS`/`MAKEOPTS`/..., make.conf + profile + env layer) from one
-/// config load, exported as base vars into every phase. Merge builds
-/// pass their fully-resolved flags via `extra_env` (appended after these
-/// base vars downstream, so it keeps overriding them), which means this
-/// computation only ever surfaces for standalone `ebuild <file> <phase>`
-/// runs -- resolved the same way `ebuild_merge::
+/// Real `config.environ()` for a standalone `ebuild <file> <phase>`:
+/// the package's effective `USE` plus the whole resolved config env --
+/// `phase_environ(config, None)` (make.conf + profile + env layer, with
+/// the same `PORTUALE_COMPUTED` exclusions the merge path's run-wide env
+/// already carries) -- exported as base vars into every phase. Merge builds pass their fully-resolved flags via `extra_env`
+/// (appended after these base vars downstream, so it keeps overriding
+/// them), which means this computation only ever surfaces for standalone
+/// `ebuild <file> <phase>` runs -- resolved the same way `ebuild_merge::
 /// blocked_installed_packages`' own standalone resolution does
 /// (`find_repos` + `resolve_config` + md5-cache `IUSE` +
 /// `effective_use_flags`, via `candidate_use_flags_display` for USE and
-/// `pretend::build_config_env` for the flags), and empty on any failure
-/// (missing `repos.conf`, unreadable cache, an ebuild path outside any
-/// real repo).
+/// `phase_environ` for the flags), and empty on any failure (missing
+/// `repos.conf`, unreadable cache, an ebuild path outside any real
+/// repo).
 ///
 /// Two gates, both load-bearing. When `extra_env` already carries `USE`
 /// the whole computation is skipped (zero cost and zero behavior change
@@ -923,6 +923,68 @@ fn flat_field_on(raw: &str, use_set: &std::collections::HashSet<String>) -> Stri
 /// `type_complexity` lint.
 type StandaloneBaseEnv = (Vec<(String, bool)>, Vec<(String, String)>);
 
+/// The resolved config for the standalone `ebuild <file>` paths: real
+/// `portage` reads `repos.conf` and the profile chain once per
+/// `doebuild` call, so every standalone helper below loads it the same
+/// way (shared with `depend_use_set`/`resolved_fetch_config`'s own
+/// sibling loaders, kept separate since this needs the whole `Config`).
+/// `None` outside any real repo checkout (same tolerance as
+/// `restrict_and_properties`): no md5-cache to read IUSE from, no
+/// `package.env` to match.
+fn resolve_standalone_config(
+    pkg_dir: &Path,
+    config_root: &Path,
+    eroot: &Path,
+) -> Option<portage_profile::Config> {
+    let _ = repo_root_for(pkg_dir)?;
+    let repos = portage_repo::find_repos(config_root).ok()?;
+    let main_repo = repos.iter().find(|r| r.is_main)?;
+    let overlay_repos: Vec<(String, PathBuf)> = repos
+        .iter()
+        .filter(|r| !r.is_main)
+        .map(|r| (r.name.clone(), r.location.clone()))
+        .collect();
+    let repo_aliases: Vec<(String, PathBuf)> = repos
+        .iter()
+        .flat_map(|r| r.aliases.iter().map(|a| (a.clone(), r.location.clone())))
+        .collect();
+    let repo_masters: std::collections::HashMap<String, Vec<PathBuf>> = repos
+        .iter()
+        .map(|r| (r.name.clone(), r.masters.clone()))
+        .collect();
+    portage_profile::resolve_config(
+        config_root,
+        &main_repo.location,
+        &overlay_repos,
+        &repo_aliases,
+        &main_repo.name,
+        &repo_masters,
+        eroot,
+    )
+    .ok()
+}
+
+/// The `cat/pkg-ver:slot/sub` identity real `_grab_pkg_env` matches
+/// against, for an ebuild that has no resolved graph entry: the md5
+/// cache's own `SLOT` (`slot/sub_slot` when a sub-slot is declared, bare
+/// slot otherwise, `"0"` when the key is missing — the same fallback
+/// shape the merge path's `entry_package_env_vars` uses).
+fn standalone_cpv_slot(pkg_dir: &Path, category: &str, pf: &str) -> Option<String> {
+    let repo_root = repo_root_for(pkg_dir)?;
+    let slot_raw = portage_repo::repo_aux_metadata(&repo_root, category, pf)
+        .ok()
+        .and_then(|m| m.get("SLOT").cloned())
+        .unwrap_or_default();
+    let (slot, sub_slot) = match slot_raw.split_once('/') {
+        Some((s, ss)) => (s.to_string(), ss.to_string()),
+        None if slot_raw.is_empty() => ("0".to_string(), "0".to_string()),
+        None => (slot_raw.clone(), slot_raw),
+    };
+    // `pf` already carries `name-version`; the category + slot complete
+    // the match string.
+    Some(format!("{category}/{pf}:{slot}/{sub_slot}"))
+}
+
 fn phase_standalone_base_env(
     env: &Environment,
     config_root: &Path,
@@ -934,35 +996,8 @@ fn phase_standalone_base_env(
         return (String::new(), Vec::new());
     }
     let Some((display, flags)) = (|| -> Option<StandaloneBaseEnv> {
-        // Gate on a real repo checkout (same tolerance as
-        // `restrict_and_properties` below): outside one there is no
-        // md5-cache to read IUSE from.
-        repo_root_for(&env.pkg_dir)?;
+        let config = resolve_standalone_config(&env.pkg_dir, config_root, eroot)?;
         let repos = portage_repo::find_repos(config_root).ok()?;
-        let main_repo = repos.iter().find(|r| r.is_main)?;
-        let overlay_repos: Vec<(String, PathBuf)> = repos
-            .iter()
-            .filter(|r| !r.is_main)
-            .map(|r| (r.name.clone(), r.location.clone()))
-            .collect();
-        let repo_aliases: Vec<(String, PathBuf)> = repos
-            .iter()
-            .flat_map(|r| r.aliases.iter().map(|a| (a.clone(), r.location.clone())))
-            .collect();
-        let repo_masters: std::collections::HashMap<String, Vec<PathBuf>> = repos
-            .iter()
-            .map(|r| (r.name.clone(), r.masters.clone()))
-            .collect();
-        let config = portage_profile::resolve_config(
-            config_root,
-            &main_repo.location,
-            &overlay_repos,
-            &repo_aliases,
-            &main_repo.name,
-            &repo_masters,
-            eroot,
-        )
-        .ok()?;
         let display = portage_repo::candidate_use_flags_display(
             &repos,
             &config,
@@ -970,7 +1005,7 @@ fn phase_standalone_base_env(
             &env.split.pn,
             &env.split.pvr,
         );
-        let flags = crate::pretend::build_config_env(&config);
+        let flags = portage_profile::phase_environ(&config, None);
         // Per-package `package.env` build vars, atom-matched against
         // the ebuild's own md5-cache identity (real `_grab_pkg_env`
         // folding a matching entry into `configdict["pkg"]`): the
@@ -982,29 +1017,13 @@ fn phase_standalone_base_env(
         // `USE=` half needs no separate step: `candidate_use_flags_display`
         // above already folds `package_env_use` in via
         // `effective_use_flags`' own atom matching.
-        let slot_raw = portage_repo::repo_aux_metadata(
-            &repo_root_for(&env.pkg_dir)?,
-            &env.category,
-            &env.split.pf,
-        )
-        .ok()
-        .and_then(|m| m.get("SLOT").cloned())
-        .unwrap_or_default();
-        // Same `slot`/`sub_slot` fallback shape as the merge path's
-        // `entry_package_env_vars` (missing `SLOT` means slot `0`).
-        let (slot, sub_slot) = match slot_raw.split_once('/') {
-            Some((s, ss)) => (s.to_string(), ss.to_string()),
-            None if slot_raw.is_empty() => ("0".to_string(), "0".to_string()),
-            None => (slot_raw.clone(), slot_raw),
-        };
-        let cpv_slot = format!(
-            "{}/{}-{}:{}/{}",
-            env.category, env.split.pn, env.split.pvr, slot, sub_slot
-        );
+        let cpv_slot = standalone_cpv_slot(&env.pkg_dir, &env.category, &env.split.pf)?;
         let mut flags = flags;
-        // Real's layer stacking: the run-wide base is the caller's own
-        // flag set here (`build_config_env`), and an incremental
-        // `package.env` value folds onto it rather than replacing it.
+        // Real's layer stacking: the run-wide base is the full resolved
+        // config env here (`phase_environ`), an incremental `package.env`
+        // value folds onto it in `[base, pkg, calling-env]` order, and a
+        // scalar loses to the calling environment when it carries the
+        // same key (#101).
         let profile_only_variables = config
             .resolved_incremental("PROFILE_ONLY_VARIABLES")
             .unwrap_or_default();
@@ -1014,7 +1033,36 @@ fn phase_standalone_base_env(
             &cpv_slot,
             &profile_only_variables,
             &base,
+            &portage_profile::config_env_all(),
         ));
+        // Per-package `FEATURES` (#98): an incremental, so a flat pair
+        // would *replace* the run-wide folded list. Fold the matched
+        // raw value onto the resolved run-wide list in `[run-wide, pkg,
+        // calling-env]` order instead, and export both computed keys —
+        // the same treatment the merge path's `entry_build_env` gives.
+        // No append when nothing matched, so fixtures without a
+        // `package.env` `FEATURES` entry keep byte-identical output.
+        let pkg_features =
+            match_package_env_incremental_raw(&config.package_env_vars, &cpv_slot, "FEATURES");
+        if !pkg_features.is_empty() {
+            let run_wide = config
+                .resolved_incremental("FEATURES")
+                .or_else(|| {
+                    config
+                        .other_vars
+                        .get("FEATURES")
+                        .map(|f| f.split_whitespace().map(String::from).collect())
+                })
+                .unwrap_or_default()
+                .join(" ");
+            let folded = fold_package_env_incremental(
+                &run_wide,
+                &pkg_features,
+                &std::env::var("FEATURES").unwrap_or_default(),
+            );
+            flags.push(("FEATURES".to_string(), folded.clone()));
+            flags.push(("PORTAGE_FEATURES".to_string(), folded));
+        }
         Some((display, flags))
     })() else {
         return (String::new(), Vec::new());
@@ -1117,15 +1165,25 @@ fn package_env_key_allowed(key: &str, profile_only_variables: &[String]) -> bool
         && !profile_only_variables.iter().any(|k| k == key)
 }
 
-/// Real `regenerate()`'s incremental fold (`config.py:2778-2825`) for one
-/// key: the base layer's tokens, then the package.env overlay's tokens in
-/// order (`-*` clears, `-tok` removes), sorted and space-joined. `base`
-/// is the caller's own already-folded value for the key (`""` when the
-/// run-wide env doesn't carry it).
-fn fold_package_env_incremental(base: &str, overlay: &str) -> String {
+/// Real `regenerate()`'s incremental fold (`config.py:2735`, `:2778-2825`)
+/// for one key, in real's layer order `[base-lower, pkg, calling-env]`:
+/// the already-folded lower layers' tokens, then the package.env value's
+/// tokens in order, then the calling environment's tokens in order
+/// (`-*` clears, `-tok` removes), sorted and space-joined. The calling
+/// env folds **last**, so a `-tok` there prunes a token a package.env
+/// file added (backlog #101, S0 cell B), while a package.env `-tok`
+/// cannot prune a calling-env token. Re-applying the calling-env tokens
+/// after a base that already folded them in is idempotent (set
+/// add/remove), so `base_lower` may be the caller's own already-folded
+/// value for the key (`""` when the run-wide env doesn't carry it).
+pub(crate) fn fold_package_env_incremental(
+    base_lower: &str,
+    pkg: &str,
+    calling_env: &str,
+) -> String {
     let mut set: std::collections::BTreeSet<String> =
-        base.split_whitespace().map(String::from).collect();
-    for tok in overlay.split_whitespace() {
+        base_lower.split_whitespace().map(String::from).collect();
+    for tok in pkg.split_whitespace().chain(calling_env.split_whitespace()) {
         if tok == "-*" {
             set.clear();
         } else if let Some(rest) = tok.strip_prefix('-') {
@@ -1145,20 +1203,30 @@ fn fold_package_env_incremental(base: &str, overlay: &str) -> String {
 /// matching entries in list order (portuale keeps parse order; real
 /// applies `ordered_by_atom_specificity`, a pre-existing narrowing), an
 /// incremental appends, a scalar replaces, an empty value blanks.
-/// Incrementals are then folded onto `base_env` (`regenerate()`'s layer
-/// stacking) instead of replacing it, so e.g. `ENV_UNSET` from an env
-/// file merges with the run-wide list.
+/// Incrementals are then folded in real's layer order
+/// `[base-lower, pkg, calling-env]` (`regenerate()`), and a package.env
+/// **scalar is dropped when the calling environment carries the same
+/// key**: real's `USE_ORDER` puts the `env` layer above `pkg`
+/// (`config.py:1031-1035`), so the process value wins (backlog #101, S0
+/// cell A). `calling_env` is the same source `phase_environ`'s step 2
+/// uses (`portage_profile::config_env_all()`), compared by key presence
+/// — *not* `base_env` as a whole, which also contains config scalars a
+/// package.env value legitimately outranks.
 ///
 /// Shared by the merge path (`emerge_build::entry_package_env_vars`,
 /// matching a resolved graph entry and passing `options.build_env`) and
 /// the standalone path below (matching the ebuild's own md5-cache
-/// identity and passing `build_config_env`'s base -- no resolved graph
-/// needed).
+/// identity and passing the narrow base -- no resolved graph needed).
+/// Both paths thread the real calling environment, so the precedence
+/// rule holds on both: the S0 capture shows the standalone path is
+/// inverted today too, the same bug in this shared function (S2's base
+/// replacement is a separate change and is untouched here).
 pub(crate) fn match_package_env_vars(
     package_env_vars: &[(String, Vec<(String, String)>)],
     cpv_slot: &str,
     profile_only_variables: &[String],
     base_env: &[(String, String)],
+    calling_env: &[(String, String)],
 ) -> Vec<(String, String)> {
     let mut container: Vec<(String, String)> = Vec::new();
     for (atom, vars) in package_env_vars {
@@ -1187,7 +1255,7 @@ pub(crate) fn match_package_env_vars(
     }
     container
         .into_iter()
-        .map(|(k, v)| {
+        .filter_map(|(k, v)| {
             if is_package_env_incremental(&k) {
                 let base = base_env
                     .iter()
@@ -1195,12 +1263,153 @@ pub(crate) fn match_package_env_vars(
                     .find(|(bk, _)| *bk == k)
                     .map(|(_, bv)| bv.as_str())
                     .unwrap_or("");
-                (k, fold_package_env_incremental(base, &v))
+                let calling = calling_env
+                    .iter()
+                    .rev()
+                    .find(|(ck, _)| *ck == k)
+                    .map(|(_, cv)| cv.as_str())
+                    .unwrap_or("");
+                Some((k, fold_package_env_incremental(base, &v, calling)))
+            } else if calling_env.iter().any(|(ck, _)| *ck == k) {
+                // Real's `env` layer outranks `pkg` for a scalar: the
+                // process value (already in the caller's base env) wins,
+                // so the package.env value is dropped, not layered.
+                None
             } else {
-                (k, v)
+                Some((k, v))
             }
         })
         .collect()
+}
+
+/// Atom-match a single `package.env` key against `cpv_slot` and return
+/// the container value with real `_grab_pkg_env`'s append semantics but
+/// WITHOUT the acceptance gate and WITHOUT folding: matching entries in
+/// list order, files of one entry in order.
+///
+/// Two flavours, mirroring real's container behaviour exactly: scalars
+/// replace (last matching file wins; `None` when nothing matched),
+/// incrementals append (`container[k] += " " + v`). The caller owns the
+/// key choice and the fold: `match_package_env_vars` (the gated,
+/// phase-env export path) keeps its own loop, while per-key recomputes
+/// a flat pair would corrupt — `PORTAGE_TMPDIR` (#99) and `FEATURES`
+/// (#98), both `PORTUALE_COMPUTED` — match raw and re-derive instead.
+fn match_package_env_scalar_raw(
+    package_env_vars: &[(String, Vec<(String, String)>)],
+    cpv_slot: &str,
+    key: &str,
+) -> Option<String> {
+    let mut matched: Option<&str> = None;
+    for (atom, vars) in package_env_vars {
+        if !portage_dep::match_from_list(atom, &[cpv_slot]).is_some_and(|m| !m.is_empty()) {
+            continue;
+        }
+        for (k, v) in vars {
+            if k == key {
+                matched = Some(v.as_str());
+            }
+        }
+    }
+    matched.map(String::from)
+}
+
+pub(crate) fn match_package_env_incremental_raw(
+    package_env_vars: &[(String, Vec<(String, String)>)],
+    cpv_slot: &str,
+    key: &str,
+) -> String {
+    let mut container = String::new();
+    for (atom, vars) in package_env_vars {
+        if !portage_dep::match_from_list(atom, &[cpv_slot]).is_some_and(|m| !m.is_empty()) {
+            continue;
+        }
+        for (k, v) in vars {
+            if k == key {
+                if !container.is_empty() && !v.is_empty() {
+                    container.push(' ');
+                }
+                container.push_str(v);
+            }
+        }
+    }
+    container
+}
+/// Real per-package `PORTAGE_TMPDIR` (backlog #99): `_grab_pkg_env`
+/// accepts the key into `configdict["pkg"]` (it is not in
+/// `env_blacklist`, `environ_filter`, `global_only_vars` or the
+/// profile-only set), and `doebuild_environment` re-derives
+/// `PORTAGE_TMPDIR`/`BUILD_PREFIX`/`PORTAGE_BUILDDIR` from the resolved
+/// value (`doebuild.py:435-458`, `:504-506`).
+///
+/// Atom-match just this key against `package_env_vars` (last matching
+/// file wins — scalar semantics; an empty value blanks to absent) and,
+/// when the calling environment does NOT carry `PORTAGE_TMPDIR` itself
+/// (real's `env` layer outranks `pkg`, #101), re-derive the tmpdir from
+/// the matched value. `run_tmpdir` is the caller's otherwise-resolved
+/// tmpdir and stands whenever nothing matched. `process_tmpdir` is
+/// `Some` iff the process environment carries the key — a CLI-boundary
+/// read threaded in as a parameter (never an ambient read here), so the
+/// precedence is unit-testable without touching process-global state.
+/// A matched directory that does not exist is real's `_check_temp_dir`
+/// failure (`doebuild.py:1682`), byte for byte; the caller maps the
+/// `Err` to exit 1.
+pub(crate) fn resolve_entry_portage_tmpdir(
+    package_env_vars: &[(String, Vec<(String, String)>)],
+    cpv_slot: &str,
+    run_tmpdir: &Path,
+    process_tmpdir: Option<&Path>,
+) -> Result<PathBuf, String> {
+    if let Some(process) = process_tmpdir {
+        return Ok(process.to_path_buf());
+    }
+    let matched = match_package_env_scalar_raw(package_env_vars, cpv_slot, "PORTAGE_TMPDIR");
+    let Some(dir) = matched.as_deref().filter(|v| !v.is_empty()) else {
+        return Ok(run_tmpdir.to_path_buf());
+    };
+    if !Path::new(dir).is_dir() {
+        return Err(format!(
+            "The directory specified in your PORTAGE_TMPDIR variable, '{dir}',\n\
+             does not exist.  Please create this directory or correct your PORTAGE_TMPDIR setting."
+        ));
+    }
+    Ok(PathBuf::from(dir))
+}
+
+/// Standalone half of the above, for an `ebuild <file>` run with no
+/// resolved graph entry: load the resolved config the same way
+/// `phase_standalone_base_env` does, rebuild the ebuild's own
+/// `cat/pkg-ver:slot/sub` identity from its path + md5-cache `SLOT`,
+/// and resolve. `None` config (outside any repo checkout) or an
+/// unparsable path keeps `run_tmpdir` — the later `compute_environment`
+/// owns those errors, not this resolver. No process-global reads: the
+/// caller (`ebuild.rs`) owns the `PORTAGE_TMPDIR` presence check.
+pub(crate) fn resolve_standalone_portage_tmpdir(
+    ebuild_path: &Path,
+    config_root: &Path,
+    eroot: &Path,
+    run_tmpdir: &Path,
+    process_tmpdir: Option<&Path>,
+) -> Result<PathBuf, String> {
+    if process_tmpdir.is_some() {
+        return Ok(run_tmpdir.to_path_buf());
+    }
+    let Some((pkg_dir, category, pf)) = (|| -> Option<(PathBuf, String, String)> {
+        let ebuild_abs = ebuild_path.canonicalize().ok()?;
+        let pkg_dir = ebuild_abs.parent()?.to_path_buf();
+        let file_name = ebuild_abs.file_name()?.to_str()?;
+        let pf = file_name.strip_suffix(".ebuild")?.to_string();
+        let category = pkg_dir.parent()?.file_name()?.to_str()?.to_string();
+        Some((pkg_dir, category, pf))
+    })() else {
+        return Ok(run_tmpdir.to_path_buf());
+    };
+    let (Some(config), Some(cpv_slot)) = (
+        resolve_standalone_config(&pkg_dir, config_root, eroot),
+        standalone_cpv_slot(&pkg_dir, &category, &pf),
+    ) else {
+        return Ok(run_tmpdir.to_path_buf());
+    };
+    resolve_entry_portage_tmpdir(&config.package_env_vars, &cpv_slot, run_tmpdir, None)
 }
 
 /// The config-`USE` set the `depend` phase reduces `RESTRICT`/
@@ -2530,14 +2739,20 @@ fn phase_env_vars(
     let root_value = eapi_path_var(&env.eapi, &format!("{}/", root.display()));
     let resolved_features = features_string(extra_env);
     let path = phase_path(helpers_dir, extra_env);
-    // Config-derived base env for standalone runs (USE + compiler/make
-    // flags), computed once here so the single config load serves both
-    // the `USE` entry below and the flag entries pushed after the
-    // literal. `("", [])` for merge builds (their `extra_env` carries
+    // Config-derived base env for standalone runs (USE + the whole
+    // resolved config env), computed once here so the single config load
+    // serves both the `USE` entry below and the base pairs seeding
+    // `vars`. `("", [])` for merge builds (their `extra_env` carries
     // everything) and the `depend` phase -- see the helper.
     let standalone_base_env =
         phase_standalone_base_env(env, config_root, root, ebuild_phase_value, extra_env);
-    let mut vars = vec![
+    // Real `doebuild_environment()` assigns its computed values *after*
+    // the config is built, so they win over a same-named config key:
+    // the resolved-config base pairs seed `vars` first and the computed
+    // literal below overrides them (downstream `cmd.envs` is last-wins),
+    // while the merge path's `extra_env` still overrides both at the end.
+    let mut vars: Vec<(String, String)> = standalone_base_env.1;
+    vars.extend(vec![
         ("EAPI".to_string(), env.eapi.clone()),
         ("PN".to_string(), env.split.pn.clone()),
         ("PV".to_string(), env.split.pv.clone()),
@@ -2602,18 +2817,13 @@ fn phase_env_vars(
             }
             .to_string(),
         ),
-        ("FEATURES".to_string(), phase_features_value()),
         // Real `doebuild_environment()` exports the package's effective
-        // `USE` plus the resolved compiler/make flags into every phase.
-        // Merge builds override these base values downstream via
-        // `extra_env` (see `run_commands_async`); a standalone `ebuild
-        // <file> <phase>` has no `extra_env` flags, so the config-derived
-        // base is what its `use()` calls and `${CFLAGS}` see.
+        // `USE` into every phase. Merge builds override this base value
+        // downstream via `extra_env` (see `run_commands_async`); a
+        // standalone `ebuild <file> <phase>` has no `extra_env` flags, so
+        // the config-derived base is what its `use()` calls see.
         // `phase_standalone_base_env` returns `("", [])` for the
         // `depend` phase and whenever `extra_env` already carries `USE`.
-        // Computed once here (one config load): the flags join `vars`
-        // below, ahead of the `extra_env` override, so merge builds keep
-        // their resolved values.
         ("USE".to_string(), standalone_base_env.0.clone()),
         ("EPREFIX".to_string(), String::new()),
         ("EMERGE_FROM".to_string(), "ebuild".to_string()),
@@ -2623,7 +2833,19 @@ fn phase_env_vars(
             if debug { "1" } else { "0" }.to_string(),
         ),
         ("EBUILD_PHASE".to_string(), ebuild_phase_value.to_string()),
-    ];
+    ]);
+
+    // Real `FEATURES` for the phase's own bash environment: the resolved
+    // list whenever one is already in `vars` — the merge path's
+    // `extra_env`-independent base is empty so the process value below
+    // stands (and `extra_env` still overrides it downstream), while the
+    // standalone `phase_environ` base already folds the run-wide list
+    // with the per-entry package.env value and the calling env
+    // (#98/#100), which a raw process-env literal must not clobber.
+    // (No-config standalone runs keep the process value, as before.)
+    if !vars.iter().any(|(k, _)| k == "FEATURES") {
+        vars.push(("FEATURES".to_string(), phase_features_value()));
+    }
 
     // Real `doebuild_environment()`: `PORTAGE_RESTRICT`/
     // `PORTAGE_PROPERTIES` are set for every phase, always, from the
@@ -2646,10 +2868,6 @@ fn phase_env_vars(
     let (restrict, properties) = restrict_and_properties(env, &restrict_use_set);
     vars.push(("PORTAGE_RESTRICT".to_string(), restrict));
     vars.push(("PORTAGE_PROPERTIES".to_string(), properties));
-    // The config-derived compiler/make flags: base values only, ahead of
-    // the `extra_env` override below, so merge builds keep their resolved
-    // per-entry values and standalone phases gain make.conf's.
-    vars.extend(standalone_base_env.1);
 
     // Real `INHERITED` (`porttree.py:872`): exported into every phase so
     // that when a non-`depend` phase re-sources the ebuild,
@@ -6627,6 +6845,7 @@ mod tests {
             "dev-libs/penvccpkg-1.0:0/0",
             &profile_only,
             &[],
+            &[],
         );
         let keys: Vec<&str> = out.iter().map(|(k, _)| k.as_str()).collect();
         assert_eq!(
@@ -6655,12 +6874,14 @@ mod tests {
         );
     }
 
-    /// Real's two-level incremental semantics: `_grab_pkg_env` appends
+    /// Real's three-layer incremental semantics: `_grab_pkg_env` appends
     /// within the container (`container[k] += " " + v`), then
-    /// `regenerate()` folds the container onto the lower layers with
-    /// `-*`/`-tok` pruning and a sorted union (`config.py:2778-2825`).
-    /// The three host captures in pmtest's `findings/l2.md` "#95 S0" are
-    /// the expected values.
+    /// `regenerate()` folds `[lower layers, pkg, calling-env]` with
+    /// `-*`/`-tok` pruning and a sorted union (`config.py:2735`,
+    /// `:2778-2825`) — the calling env folds last, so its `-tok` prunes
+    /// a package.env token (S0 cell B) but not vice versa. The three
+    /// host captures in pmtest's `findings/l2.md` "#95 S0" are the
+    /// expected values for the first three arms (empty calling env).
     #[test]
     fn package_env_incrementals_fold_onto_the_base_like_regenerate() {
         let cpv = "dev-libs/penvccpkg-1.0:0/0";
@@ -6675,13 +6896,14 @@ mod tests {
             )]
         };
         // pkg prunes a base token, then the union is sorted.
-        let out = match_package_env_vars(&one_file("-PROFILE_UNSET PKG_UNSET"), cpv, &[], &base);
+        let out =
+            match_package_env_vars(&one_file("-PROFILE_UNSET PKG_UNSET"), cpv, &[], &base, &[]);
         assert_eq!(
             out,
             vec![("ENV_UNSET".to_string(), "BASE_UNSET PKG_UNSET".to_string())]
         );
         // `-*` clears every base token.
-        let out = match_package_env_vars(&one_file("-* ONLY"), cpv, &[], &base);
+        let out = match_package_env_vars(&one_file("-* ONLY"), cpv, &[], &base, &[]);
         assert_eq!(out, vec![("ENV_UNSET".to_string(), "ONLY".to_string())]);
         // Several matching files of one entry append in order.
         let two_files = vec![(
@@ -6691,8 +6913,30 @@ mod tests {
                 ("ENV_UNSET".to_string(), "TWO".to_string()),
             ],
         )];
-        let out = match_package_env_vars(&two_files, cpv, &[], &[]);
+        let out = match_package_env_vars(&two_files, cpv, &[], &[], &[]);
         assert_eq!(out, vec![("ENV_UNSET".to_string(), "ONE TWO".to_string())]);
+        // A `-tok` in the calling-env layer prunes a pkg-layer token
+        // (S0 cell B: `FEATURES="-probe-feature"` beats the env file).
+        let calling = vec![("ENV_UNSET".to_string(), "-PKG_UNSET".to_string())];
+        let out = match_package_env_vars(&one_file("PKG_UNSET"), cpv, &[], &base, &calling);
+        assert_eq!(
+            out,
+            vec![(
+                "ENV_UNSET".to_string(),
+                "BASE_UNSET PROFILE_UNSET".to_string()
+            )]
+        );
+        // A pkg-layer `-tok` does NOT prune a calling-env token: the
+        // calling env folds last and re-adds it (S0 cell B's mirror).
+        let calling = vec![("ENV_UNSET".to_string(), "KEEP".to_string())];
+        let out = match_package_env_vars(&one_file("-KEEP PKG_UNSET"), cpv, &[], &base, &calling);
+        assert_eq!(
+            out,
+            vec![(
+                "ENV_UNSET".to_string(),
+                "BASE_UNSET KEEP PKG_UNSET PROFILE_UNSET".to_string()
+            )]
+        );
     }
 
     /// Scalars are set, not appended: a later file replaces, and an empty
@@ -6716,7 +6960,7 @@ mod tests {
                 ],
             ),
         ];
-        let out = match_package_env_vars(&files, cpv, &[], &[]);
+        let out = match_package_env_vars(&files, cpv, &[], &[], &[]);
         assert_eq!(
             out,
             vec![
@@ -6724,5 +6968,192 @@ mod tests {
                 ("CXX".to_string(), "clang++".to_string()),
             ]
         );
+    }
+
+    /// Real's `env`-over-`pkg` scalar precedence (`USE_ORDER`,
+    /// `config.py:1031-1035`): a package.env scalar is dropped when the
+    /// calling environment carries the same key, so the process value
+    /// the caller already layered wins (backlog #101, S0 cell A). Keys
+    /// the calling env does not carry still arrive.
+    #[test]
+    fn package_env_scalar_loses_to_the_calling_environment() {
+        let cpv = "dev-libs/penvccpkg-1.0:0/0";
+        let files = vec![(
+            "dev-libs/penvccpkg".to_string(),
+            vec![
+                ("CFLAGS".to_string(), "-Os -march=pkg".to_string()),
+                ("CC".to_string(), "pkg-cc".to_string()),
+            ],
+        )];
+        let calling = vec![("CFLAGS".to_string(), "-O2 -pipe".to_string())];
+        let out = match_package_env_vars(&files, cpv, &[], &[], &calling);
+        assert_eq!(out, vec![("CC".to_string(), "pkg-cc".to_string())]);
+    }
+
+    /// The raw single-key matchers behind the `PORTUALE_COMPUTED`
+    /// recomputes (#98/#99): scalars replace (last matching file wins),
+    /// incrementals append across matching files in order, non-matching
+    /// atoms and other keys contribute nothing — real `_grab_pkg_env`'s
+    /// container behaviour without the acceptance gate or the fold.
+    #[test]
+    fn package_env_raw_matchers_follow_the_container_semantics() {
+        let cpv = "dev-libs/penvccpkg-1.0:0/0";
+        let files = vec![
+            (
+                "dev-libs/otherpkg".to_string(),
+                vec![
+                    ("FEATURES".to_string(), "not-me".to_string()),
+                    ("PORTAGE_TMPDIR".to_string(), "/not-me".to_string()),
+                ],
+            ),
+            (
+                "dev-libs/penvccpkg".to_string(),
+                vec![
+                    ("FEATURES".to_string(), "ONE".to_string()),
+                    ("PORTAGE_TMPDIR".to_string(), "/first".to_string()),
+                    ("CC".to_string(), "ignored".to_string()),
+                ],
+            ),
+            (
+                "dev-libs/penvccpkg".to_string(),
+                vec![
+                    ("FEATURES".to_string(), "TWO".to_string()),
+                    ("PORTAGE_TMPDIR".to_string(), "/second".to_string()),
+                ],
+            ),
+        ];
+        assert_eq!(
+            match_package_env_scalar_raw(&files, cpv, "PORTAGE_TMPDIR"),
+            Some("/second".to_string())
+        );
+        assert_eq!(
+            match_package_env_incremental_raw(&files, cpv, "FEATURES"),
+            "ONE TWO".to_string()
+        );
+        assert_eq!(match_package_env_scalar_raw(&files, cpv, "MISSING"), None);
+        assert_eq!(
+            match_package_env_incremental_raw(&files, cpv, "MISSING"),
+            String::new()
+        );
+        assert_eq!(
+            match_package_env_scalar_raw(&files, "dev-libs/other-1.0:0/0", "PORTAGE_TMPDIR"),
+            None
+        );
+    }
+
+    /// Real per-package `PORTAGE_TMPDIR` (backlog #99, S0 cells D/E):
+    /// the matched env-file value re-derives the tmpdir when the calling
+    /// environment does not carry the key itself; a matched directory
+    /// that does not exist is real's `_check_temp_dir` failure byte for
+    /// byte (`doebuild.py:1682`); the process value wins otherwise (#101
+    /// precedence); an empty matched value blanks to absent.
+    #[test]
+    fn per_package_portage_tmpdir_feeds_the_build_directory() {
+        let cpv = "dev-libs/envdumppkg-1.0:0/0";
+        let run = Path::new("/var/tmp/portage-test-default");
+        let files = |v: &str| {
+            vec![(
+                "dev-libs/envdumppkg".to_string(),
+                vec![("PORTAGE_TMPDIR".to_string(), v.to_string())],
+            )]
+        };
+        // No match: the run tmpdir stands.
+        let out = resolve_entry_portage_tmpdir(
+            &files("/tmp/probe-tmp"),
+            "dev-libs/other-1.0:0/0",
+            run,
+            None,
+        )
+        .expect("no match keeps the run tmpdir");
+        assert_eq!(out, run);
+        // No entry at all: the run tmpdir stands.
+        let out = resolve_entry_portage_tmpdir(&[], cpv, run, None)
+            .expect("no entry keeps the run tmpdir");
+        assert_eq!(out, run);
+        // Matched, directory exists: re-derived.
+        let probe = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-per_package_portage_tmpdir",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&probe).expect("probe tmpdir is creatable");
+        let out = resolve_entry_portage_tmpdir(
+            &files(probe.to_str().expect("probe path is UTF-8")),
+            cpv,
+            run,
+            None,
+        )
+        .expect("matched dir resolves");
+        assert_eq!(out, probe);
+        // A later matching file wins (scalar semantics).
+        let probe2 = probe.join("second");
+        std::fs::create_dir_all(&probe2).expect("second probe tmpdir is creatable");
+        let mut two = files(probe.to_str().expect("probe path is UTF-8"));
+        two.push((
+            "dev-libs/envdumppkg".to_string(),
+            vec![(
+                "PORTAGE_TMPDIR".to_string(),
+                probe2.to_str().expect("probe path is UTF-8").to_string(),
+            )],
+        ));
+        let out = resolve_entry_portage_tmpdir(&two, cpv, run, None).expect("later match wins");
+        assert_eq!(out, probe2);
+        // Matched, directory missing: real's `_check_temp_dir` failure.
+        let missing = probe.join("no-such-dir");
+        let err = resolve_entry_portage_tmpdir(
+            &files(missing.to_str().expect("probe path is UTF-8")),
+            cpv,
+            run,
+            None,
+        )
+        .expect_err("missing dir must fail");
+        assert_eq!(
+            err,
+            format!(
+                "The directory specified in your PORTAGE_TMPDIR variable, '{}',\n\
+                 does not exist.  Please create this directory or correct your PORTAGE_TMPDIR setting.",
+                missing.display()
+            )
+        );
+        // The calling environment wins over the env file (#101).
+        let out = resolve_entry_portage_tmpdir(
+            &files(probe.to_str().expect("probe path is UTF-8")),
+            cpv,
+            run,
+            Some(run),
+        )
+        .expect("process tmpdir wins");
+        assert_eq!(out, run);
+        // Empty matched value blanks to absent: the run tmpdir stands.
+        let out = resolve_entry_portage_tmpdir(&files(""), cpv, run, None)
+            .expect("empty match keeps the run tmpdir");
+        assert_eq!(out, run);
+        std::fs::remove_dir_all(&probe).ok();
+    }
+
+    /// `compute_environment` derives `PORTAGE_BUILDDIR` as
+    /// `<tmpdir>/portage/<cat>/<pf>`, so a matched per-package tmpdir
+    /// puts the whole build tree under it (S0 cell D's
+    /// `PORTAGE_BUILDDIR` half).
+    #[test]
+    fn compute_environment_builds_the_builddir_under_the_given_tmpdir() {
+        let probe = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-compute_environment_builddir",
+            std::process::id()
+        ));
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let env = compute_environment(
+            &repo_root.join("dev-libs/envdumppkg/envdumppkg-1.0.ebuild"),
+            &probe,
+        )
+        .expect("fixture parses");
+        assert_eq!(
+            env.portage_builddir,
+            probe.join("portage/dev-libs/envdumppkg-1.0")
+        );
+        assert_eq!(
+            env.portage_tmpdir, probe,
+            "the resolved tmpdir is what the phase exports as PORTAGE_TMPDIR"
+        );
+        std::fs::remove_dir_all(&probe).ok();
     }
 }

@@ -239,6 +239,36 @@ pub fn run(args: &[String]) -> ExitCode {
         // builddir adds `portage/<cat>/<pf>` itself); see
         // `portage_repo::portage_tmpdir_from_env`'s own doc comment.
         let portage_tmpdir = portage_repo::portage_tmpdir_from_env();
+        // Real per-package `PORTAGE_TMPDIR` (backlog #99): re-derive the
+        // tmpdir from the matched `package.env` value when the calling
+        // environment does not carry the key itself (`env`-over-`pkg`,
+        // #101). Skipped for `depend` (metadata extraction stays
+        // config-free) and `clean` (which operates on the process
+        // builddir by definition) — real's own `_check_temp_dir`
+        // exempts the same commands (`doebuild.py:756-764`). A missing
+        // matched directory fails here with real's exact message.
+        let portage_tmpdir = if commands
+            .iter()
+            .any(|cmd| *cmd == "depend" || *cmd == "clean")
+        {
+            portage_tmpdir
+        } else {
+            let process_tmpdir = std::env::var_os("PORTAGE_TMPDIR").map(std::path::PathBuf::from);
+            let ebuild_path = std::path::Path::new(ebuild_file);
+            match ebuild_phases::resolve_standalone_portage_tmpdir(
+                ebuild_path,
+                &portage_repo::config_root_from_env(),
+                &root,
+                &portage_tmpdir,
+                process_tmpdir.as_deref(),
+            ) {
+                Ok(resolved) => resolved,
+                Err(e) => {
+                    eprintln!("ebuild: {e}");
+                    return ExitCode::from(1);
+                }
+            }
+        };
         // Same env-var-not-full-config-resolution shortcut as
         // PORTAGE_TMPDIR above -- real make.globals's own defaults (see
         // ebuild_merge::MergeOptions's own Default impl) apply when

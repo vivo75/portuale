@@ -335,9 +335,10 @@ pub struct MergeOptions {
     /// `/etc/portage/package.env`'s non-`USE` scalar half
     /// (`Config::package_env_vars`): `(atom, [(KEY, value)])` pairs.
     /// `emerge_build::entry_build_env` matches a build-bound entry's cpv
-    /// against each atom and layers the matching build vars
-    /// (`pretend::BUILD_VARS`) over `build_env` -- real `_grab_pkg_env`
-    /// into `configdict["pkg"]`. Empty (`Default`) everywhere else.
+    /// against each atom and layers the matching vars over `build_env`
+    /// (scalars lose to the calling environment, incrementals fold in
+    /// `[base, pkg, calling-env]` order) -- real `_grab_pkg_env` into
+    /// `configdict["pkg"]`. Empty (`Default`) everywhere else.
     pub package_env_vars: Vec<(String, Vec<(String, String)>)>,
     /// Real `Scheduler._background_mode`'s own `PORTAGE_LOG_FILE`
     /// redirection, extended to this merge's own `pkg_preinst`/
@@ -395,6 +396,14 @@ pub struct MergeOptions {
     /// `$FEATURES` string (all `ebuild <file> merge` has), and an empty
     /// value leaves the phase env's own `FEATURES` in place.
     pub features: String,
+    /// The calling environment's own `PORTAGE_TMPDIR`, `Some` iff the
+    /// process environment carries the key (a CLI-boundary read).
+    /// Real's `env` layer outranks the `pkg` layer, so a per-package
+    /// `package.env` `PORTAGE_TMPDIR` only re-derives the build directory
+    /// when this is `None` (backlog #99, resolved per entry by
+    /// `ebuild_phases::resolve_entry_portage_tmpdir`). `from_env` reads
+    /// it from the process env; `Default` (tests) carries none.
+    pub process_tmpdir: Option<PathBuf>,
 }
 
 impl Default for MergeOptions {
@@ -422,6 +431,7 @@ impl Default for MergeOptions {
             install_mask_prunes_usr_share: false,
             gpg_verify: crate::binpkg::GpgVerify::default(),
             features: String::new(),
+            process_tmpdir: None,
         }
     }
 }
@@ -489,6 +499,10 @@ impl MergeOptions {
             // (the `emerge` paths overwrite this with the resolved
             // incremental list right after, as with `install_mask`).
             features: std::env::var("FEATURES").unwrap_or_default(),
+            // The calling env's own `PORTAGE_TMPDIR` (presence is the
+            // `env`-over-`pkg` precedence input for #99); the `emerge`
+            // paths keep `from_env`'s value like every other var here.
+            process_tmpdir: std::env::var_os("PORTAGE_TMPDIR").map(PathBuf::from),
         }
     }
 }

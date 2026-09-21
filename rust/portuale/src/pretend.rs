@@ -4948,8 +4948,8 @@ fn run_resume(
         merge_options.install_mask_prunes_usr_share,
     ) = config_install_mask(config);
     merge_options.set_resolved_features(&config_features_string(config));
-    // The compiler / make flags and `package.env` vars the non-resume
-    // `emerge` path resolves (see the `build_config_env` call there):
+    // The run-wide phase env and `package.env` vars the non-resume
+    // `emerge` path resolves (see `run_wide_phase_env` there):
     // a resumed source build is a real build and needs the same phase
     // env -- without these a resumed `src_compile` sees `CFLAGS=""`.
     // (The per-entry resolved `USE` already flows via
@@ -6833,27 +6833,7 @@ fn news_item_relevant(text: &str, root: &Path) -> bool {
     })
 }
 
-/// The deterministic compiler / make-flag set `build_config_env` reads
-/// run-wide from `Config::other_vars` for the **standalone** `ebuild
-/// <file> <phase>` base env -- real portage's `settings["CFLAGS"]` /
-/// `["MAKEOPTS"]` / … reaching `bin/ebuild.sh` from `make.conf`/profile.
-/// Per-package `package.env` values are no longer narrowed to this set
-/// (#95): `match_package_env_vars` applies real `_grab_pkg_env`'s full
-/// acceptance gate instead. `FEATURES` is deliberately not here --
-/// portuale models it via `feature_enabled`, forcing `""` in the phase
-/// env (per-package `FEATURES` is residue #98; the standalone run-wide
-/// env is residue #100).
-pub(crate) const BUILD_VARS: &[&str] = &[
-    "CFLAGS", "CXXFLAGS", "CPPFLAGS", "LDFLAGS", "FFLAGS", "FCFLAGS", "ASFLAGS", "MAKEOPTS",
-    "CHOST", "CBUILD", "CTARGET",
-];
-
-/// The run-wide half of the build-phase flag env: every [`BUILD_VARS`]
-/// entry the resolved config carries (make.conf + profile
-/// `make.defaults` + the `env` layer, all folded into
-/// `Config::other_vars`). An unset var contributes nothing, so
-/// `phase_env_vars`' own absence stands.
-/// Real `preinst_mask()` (`bin/misc-functions.sh`) driven by the
+/// The run-wide half of the build-phase flag env: real `preinst_mask()` (`bin/misc-functions.sh`) driven by the
 /// resolved config rather than the process env: `make.conf`/profile
 /// `INSTALL_MASK` folded with the `no{man,info,doc}` `FEATURES` tokens.
 /// `MergeOptions::from_env` reads the same two from the environment as
@@ -6905,19 +6885,6 @@ fn config_install_mask(config: &portage_profile::Config) -> (String, bool) {
         .or_else(|| config.other_vars.get("INSTALL_MASK").cloned())
         .unwrap_or_default();
     crate::install_mask::resolve(&configured, &features)
-}
-
-pub(crate) fn build_config_env(config: &portage_profile::Config) -> Vec<(String, String)> {
-    BUILD_VARS
-        .iter()
-        .filter_map(|&k| {
-            config
-                .other_vars
-                .get(k)
-                .filter(|v| !v.is_empty())
-                .map(|v| (k.to_string(), v.clone()))
-        })
-        .collect()
 }
 
 /// Real `emerge --info` (`_emerge/actions.py::action_info`), **narrowed
