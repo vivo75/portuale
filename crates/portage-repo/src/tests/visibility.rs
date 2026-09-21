@@ -372,6 +372,50 @@ fn package_unmask_cancels_a_matching_mask() {
     ));
 }
 
+/// The `is_visible` memo is transparent and separates candidate
+/// metadata and config visibility fields.
+#[test]
+fn is_visible_memo_hits_on_repeat_and_separates_its_inputs() {
+    let config = portage_profile::Config {
+        accept_keywords: HashSet::from(["amd64".to_string()]),
+        accept_license: vec!["GPL-2".to_string()],
+        accept_properties: vec!["*".to_string()],
+        accept_restrict: vec!["*".to_string()],
+        ..Default::default()
+    };
+    let c = Candidate {
+        license: "GPL-2".to_string(),
+        ..candidate("1.0", &["amd64"])
+    };
+    let before = is_visible_uncached_calls();
+    assert!(is_visible(&c, "dev-libs", "vismemo", &config));
+    let after_first = is_visible_uncached_calls();
+    assert_eq!(after_first, before + 1, "first call is a miss");
+    assert!(is_visible(&c, "dev-libs", "vismemo", &config));
+    assert_eq!(
+        is_visible_uncached_calls(),
+        after_first,
+        "a repeat with identical arguments must hit the memo"
+    );
+    // A differing candidate LICENSE misses (and flips the answer).
+    let mut proprietary = c.clone();
+    proprietary.license = "Proprietary".to_string();
+    assert!(!is_visible(&proprietary, "dev-libs", "vismemo", &config));
+    assert_eq!(is_visible_uncached_calls(), after_first + 1);
+    // A differing candidate version misses (the literal
+    // `candidate_str` in the key bounds any digest collision to
+    // same-candidate inputs).
+    let mut v2 = c.clone();
+    v2.version = "2.0".to_string();
+    assert!(is_visible(&v2, "dev-libs", "vismemo", &config));
+    assert_eq!(is_visible_uncached_calls(), after_first + 2);
+    // A differing config accept_license misses.
+    let mut nothing_accepted = config.clone();
+    nothing_accepted.accept_license = Vec::new();
+    assert!(!is_visible(&c, "dev-libs", "vismemo", &nothing_accepted));
+    assert_eq!(is_visible_uncached_calls(), after_first + 3);
+}
+
 #[test]
 fn package_mask_wildcard_matches_whole_category() {
     let config = portage_profile::Config {
