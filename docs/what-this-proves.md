@@ -17625,3 +17625,33 @@ real 4.5–5.1 s / ~4.1 s user. Detail:
 /usr/bin/time -v rust/target/release/emerge -puD --getbinpkg net-libs/rest
 # best of 3 warm: ~4.1 s wall / ~3.0 s user / ~1.0 s sys (real: ~4.8 / ~4.1 / ~0.2)
 ```
+
+**VDB `metadata` snapshot + aux memo, and `metadata_key_accepted`
+(Tier 8 #109–#110, 2026-09-21).** After #102–#108 the residual cost was
+the vdb: 160,351 `openat` (40,651 ENOENT) + 202,281 `read` per run, all
+per-key `/var/db/pkg/CAT/PF/{USE,RDEPEND,repository,SLOT,...}` reads.
+Portuale already wrote real's consolidated 23-field `metadata` snapshot
+at merge time but never read it. Four slices ported the read half of
+real `_aux_get` (`vartree.py:115-187`, `:975-1053`): normalise
+`read_vdb_string` like real's `" ".join(myd.split())`; move the field
+set and format version down to `portage-repo` so reader and writer share
+one definition; `vdb_aux_get` validates the snapshot (`#format` == 1,
+`#dir_mtime` == the dir's `st_mtime_ns`) and serves in-set keys with no
+`open()`; a per-instance memo keyed on that mtime fills all 23 fields on
+a miss (real's `_aux_cache`'s shape). S3 alone regressed (per-call
+snapshot reads); S4's memo is the win. #110 memoised
+`metadata_key_accepted` (23.30 % → 13.13 % with children). The full
+contract suite stayed byte-identical throughout (the only drift entries
+are pre-existing fixture-state ones, unchanged by these slices) and the
+merge-path gate (glibc+bash) is green at S2/S3/S4. `openat` 160,351 →
+33,685 (105 ENOENT), `read` 202,281 → 30,041; 3.93–3.98 s → 3.07–3.30 s
+wall, sys 1.07 → 0.6 s. Detail:
+`docs/08.109-110-vdb-metadata-snapshot.md`;
+`performances-tuning.md` "2026-09-21 batch"; `on-disk-caches.md` §1.
+
+```sh
+/usr/bin/time -v rust/target/release/emerge -puD --getbinpkg net-libs/rest
+# best of 3 warm: 3.07-3.30 s wall / 2.51-2.63 s user / 0.56-0.67 s sys
+# (baseline 3.93-3.98 / 2.86-2.90 / 1.07-1.08; real aborts on today's
+#  tree -- backlog #111)
+```

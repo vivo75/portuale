@@ -188,33 +188,40 @@ any single merge.
 Re-ranked: the two single-threaded items in §2.0 come first, because
 they are larger, measured, real-grounded, and carry none of §1.4's risk.
 
-### 2.0 Do these before any thread (recommended, not parallelism)
+### 2.0 Do these before any thread (recommended, not parallelism) — DONE 2026-09-21
 
-**(a) Read the vdb `metadata` snapshot, like real does.** Real
-`vartree.py`'s `_aux_get` tries the consolidated `metadata` file
-**first**, accepting it when `#format=` matches and
-`#dir_mtime == st_mtime_ns`, and falls back to one `open()` per field
-only on a miss (`docs/on-disk-caches.md` §1). Portuale already *writes*
-that snapshot at merge time (`ebuild_merge::write_vdb_entry`'s
-`metadata` path — `#format=1`, sorted `KEY=value`, `#dir_mtime=` last;
-asserted in `emerge_getbinpkg.rs`'s own test) but **never reads it**:
-`read_vdb_string` and `read_vdb_flag_set` do a raw per-key
-`fs::read_to_string` on every call. Reading the snapshot (plus real's
-own mtime-keyed per-instance `_aux_cache["packages"]` equivalent)
-removes the ~88 k opens, ~200 k reads and ~40 k ENOENT probes measured
-in §-1b — the bulk of the residual ~1.0 s sys — with **zero threads**
-and strictly *closer* parity than today. File as backlog `#109`.
+**(a) Read the vdb `metadata` snapshot, like real does. DONE** (#109,
+S1–S4 `bcc69fd`/`c909bfa`/`6f158d7`/`5759a29`, branch `feat/parallel`):
+`vdb_aux_get` validates the consolidated `metadata` file like real
+`_read_metadata_file` and serves in-set keys from it, with a
+per-instance memo keyed on the package dir's `st_mtime_ns`
+(`_aux_cache`'s shape). `strace` on the reference workload: `openat`
+160,351 (**40,651 ENOENT**) → 33,685 (105), `read` 202,281 → 30,041;
+sys 1.07–1.08 → 0.56–0.67 s. S3 alone was a small regression (per-call
+snapshot reads); S4's memo is the win. Full suite byte-identical,
+merge-path gate green at S2/S3/S4. Detail:
+`performances-tuning.md` "2026-09-21 batch", `on-disk-caches.md` §1.
 
-**(b) Memoise `metadata_key_accepted`.** 21.7 % of the run with
-children, pure in its eight arguments, and the one remaining hot
-function of that shape after `#102`–`#108`. Same `EUF_CACHE` shape,
-same guard (byte-identical output over the contract suite + corpus).
+**(b) Memoise `metadata_key_accepted`. DONE** (#110, S5 `d034557`):
+23.30 % with children on S0's re-profile → 13.13 %; wall 3.48 → 3.07–3.30 s,
+user 2.47–2.55 s. Keyed on an explicit `MetadataKey` discriminant plus
+`use_context_fingerprint`, the candidate/value strings and a new
+accept-list fingerprint (the plan's literal key collided on the crate's
+own masking fixtures).
 
-Both are ordinary `[P]` backlog items in the established house style.
-If they land, re-profile before considering anything below: the
-residual may not justify a thread pool at all, and saying so is a
-result (`performances-tuning.md` has the "honest non-result"
-precedent).
+**Verdict on the thread question (2026-09-21).** Both landed, and the
+re-profile answers the section's own question: the resolver's residual
+is now ~0.6 s of mostly `statx` (#112, 339,804/run), plus the
+`use_context_fingerprint` hashing (#105, 23.77 % with children) and the
+second `run_pass` (#107, 85.44 % subtree) — **none of it
+parallel-friendly**: #105/#112 are single-threaded cache/stat work and
+#107 is a parity bug that must not be papered over. §2.2's visibility
+pool is blocked on §1.4 and would now buy ~0.6 s of mostly-serial work
+at the cost of the `Rc → Arc` migration; **do not write it.** §2.1 was
+already demoted to "not worth ~600 cold reads" and the batch confirms
+it. The next resolver items are #105, #107, #112 — all single-threaded.
+The only pool still worth considering is §3.1's merge copy loop, which
+this batch did not touch.
 
 ### 2.1 Parallel metadata prefetch (was the first slice — now demoted)
 
@@ -405,15 +412,20 @@ test mode.
 
 ## 5. Suggested implementation order (revised)
 
-1. **§2.0(a)** — read the vdb `metadata` snapshot (backlog `#109`).
-   Largest measured win, real-parity, single-threaded, no output risk.
-2. **§2.0(b)** — memoise `metadata_key_accepted`. Same shape as
-   `#103`/`#104`, same guard.
-3. **Re-profile.** If pretend's sys time and `is_visible` subtree have
-   collapsed, record it and stop: `#105`/`#106`/`#107` are then the
-   next resolver items, none of them parallelism.
+1. ~~**§2.0(a)** — read the vdb `metadata` snapshot (backlog `#109`).~~
+   **DONE 2026-09-21** (S1–S4 `bcc69fd`/`c909bfa`/`6f158d7`/`5759a29`):
+   3.93–3.98 → 3.48 s at S4, `openat` 160 k → 34 k.
+2. ~~**§2.0(b)** — memoise `metadata_key_accepted`.~~ **DONE 2026-09-21**
+   (#110, S5 `d034557`): 3.48 → 3.07–3.30 s, 23.30 % → 13.13 % with
+   children.
+3. ~~**Re-profile.**~~ **DONE 2026-09-21** (`performances-tuning.md`,
+   "2026-09-21 batch"): sys is 0.56–0.67 s, `is_visible` 19.63 % with
+   children, and the next items are `#105` (fingerprint caching,
+   23.77 %), `#107` (the second `run_pass`) and `#112` (the residual
+   `statx`) — **none of them parallelism**. The resolver thread
+   question is answered: do not write a resolver pool (§2.0's verdict).
 4. **§3.1 + §3.2** — two-phase `merge_tree` with `--install-jobs`.
-   This is now the highest-value *parallelism* slice: the merge copy
+   Still the highest-value *parallelism* slice: the merge copy
    loop is untouched by any memoisation batch, and `#96` already made
    each work item independent (§3.0). Oracle: L1 filesystem+VDB diff
    must stay clean; add a Rust unit test asserting `CONTENTS` order is

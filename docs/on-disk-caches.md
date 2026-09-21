@@ -56,6 +56,25 @@ Authoritative state. One dir per `CAT/PF` with ~20 one-line files
   entries stat'ed on the reference workload). Same in-process-cache
   property as real's `_aux_cache`: an external in-place file rewrite
   inside a running process is not picked up.
+- **Portuale (backlog #109):** the read path now mirrors real's, both
+  halves. `vdb_aux_get` validates `<dir>/metadata` exactly as
+  `_read_metadata_file` (`#format == METADATA_FILE_FORMAT_VERSION`,
+  `#dir_mtime == st_mtime_ns`, both present; `split("=", 1)` last-wins)
+  and serves any of the 23 `METADATA_FILE_FIELDS` from it with **no**
+  per-key `open()` -- a field absent from a validated snapshot is `""`,
+  real's "complete snapshot" rule. A thread-local memo keyed on
+  `(root, cat, pkg, ver)` + the dir's `st_mtime_ns` (`_aux_cache`'s
+  shape) fills all 23 fields on a validated-snapshot miss and resolves
+  the fallback lazily per key; the `stat` stays on every call as the
+  validity signal, and the in-process staleness hole is real's own
+  (in-place field rewrite with the dir mtime held; why real calls
+  `_bump_mtime` around `aux_update`). Writer and reader share one
+  definition of the field set and format version in `portage-repo`
+  (`METADATA_FILE_FIELDS` / `METADATA_FILE_FORMAT_VERSION` /
+  `in_metadata_file`), so the set cannot drift from the format version.
+  Effect on the reference workload: `openat` 160,351 (40,651 ENOENT) →
+  33,685 (105), `read` 202,281 → 30,041; 3.93–3.98 s → 3.07–3.30 s wall
+  (`performances-tuning.md`, "2026-09-21 batch").
 
 ## 2. `/var/cache/edb/dep` — ebuild metadata cache (`dbapi/porttree.py:236,266-321`)
 

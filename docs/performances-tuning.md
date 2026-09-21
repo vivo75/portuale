@@ -20,12 +20,15 @@
 | + `read_md5_cache` memoised per path | **~5.9 s** | 13× |
 | + `effective_use_flags` memoised per (config, candidate) | **~4.6 s** | 17× |
 | + `read_md5_cache` / `list_candidates` return shared `Arc` | **~4.5 s** | **17×** |
+| + `#102`–`#108` memoisation batch (vdb scan, `Rc` EUF, mask/force, binpkg index) | **~4.0 s** | 19× |
+| + `#109`–`#110` vdb `metadata` snapshot + aux memo + `metadata_key_accepted` memo | **~3.1 s** | **25×** |
 
-All six changes are **shipped** and keep byte-identical output with the full
-suite green (`portage-dep` / `portage-repo` / `portuale` unit tests + contract
-tests). portuale is now **~3.5× faster than real `emerge`** on this workload.
-None of them alters the resolver algorithm — they remove redundant work the
-algorithm was doing.
+All eight changes are **shipped** and keep byte-identical output with the
+full suite green (`portage-dep` / `portage-repo` / `portuale` unit tests +
+contract tests). portuale is now **~3.5× faster than real `emerge`** on
+this workload (real was 4.50–5.11 s before the 2026-09-21 tree change;
+it aborts there today, backlog #111). None of them alters the resolver
+algorithm — they remove redundant work the algorithm was doing.
 
 1. **`parse_atom` / `parse_candidate` memo cache** (`rust/portage-dep/src/
    lib.rs`): a `thread_local!` `HashMap<String, Option<…>>` in front of each
@@ -267,24 +270,42 @@ smaller blast radius.
 
 ## What to change next, in priority order
 
-Diminishing returns — the 4.5 s run is ~35 % raw malloc/free with nothing
-above ~3 %. The items below are ~1–2 % each and increasingly invasive.
+**Re-ranked 2026-09-21 after `#109`/`#110`** (`perf record -F 400 -g` on
+the post-batch binary; the batch's numbers are in "2026-09-21 batch"
+below). The resolver is now ~3.1 s wall / ~2.5 s user / ~0.6 s sys on the
+reference workload:
 
-### 1. Stop deep-cloning `Candidate`
+1. **`#105` — cache `use_context_fingerprint`.** 23.77 % with children
+   (0.38 % self; closure 9.29 + `hash_sampled` 7.23). Every
+   `effective_use_flags` / `resolved_use_mask_or_force` /
+   `metadata_key_accepted` memo key re-hashes ~20 config fields, and
+   `binpkg_respect_use_ok`'s 28.82 % subtree is largely this plus the
+   already-memoised USE machinery. The single biggest named cost left.
+2. **`#107` — the second `run_pass`.** `run_pass` is 85.44 % with
+   children and the loop still restarts where real reports
+   `backtrack: 0/20`; the batch removed the I/O around it, so its share
+   only grew. Algorithmic/parity, not memoisation — do not win it by
+   skipping the pass.
+3. **`#112` — collapse the two `statx` per `vdb_aux_get` call.**
+   `statx` is now the top syscall (339,804/run, 48.9 % of in-kernel
+   time); ~126 k are `vdb_pkg_dir`'s `is_dir()` plus the validity stat.
+4. **`#114` — memoise `is_visible` per `(candidate, config)`**
+   (19.63 % with children), if a re-profile after `#105` still shows it.
+5. **`#106` — `candidate_positions`** is 0.31 % now (effectively closed
+   by `#102`–`#108`); **`#113` — `shuffle_seed`'s per-call env read**
+   (42,524/run) is trivial.
+6. **`#111` — the real-abort tree divergence** (parity, not performance):
+   real aborts `-uD --getbinpkg` where portuale resolves on the
+   2026-09-21 tree; blocks the interleaved real comparison until fixed.
 
-`Candidate` carries `binary_deps: HashMap<String,String>` plus a dozen owned
-strings, deep-copied every time a `Candidate` or a `Vec<Candidate>` is cloned
-in the resolver's `retain` / filter passes (~2–3 %). `Arc`-wrap the heavy
-fields, or restructure so the pool filters in place / by index instead of
-cloning candidates out.
+The pre-batch ranking (diminishing returns at the 4.5 s run: deep-clone
+`Candidate`, `installed_candidates` per cp — since shipped as `#102` —
+parse-cache options, whole-graph passes — now `#107` — and the release
+profile, shipped) is kept below as history.
 
-### 2. Cache `installed_candidates` per cp
+### Pre-batch ranking (2026-09-20, kept as history)
 
-`installed_candidates` re-scans `var/db/pkg` per cp per graph-walk visit
-(`list_candidates` and `all_installed_packages` are already cached). Same
-shape — per-process cache keyed by `(category, package)`.
-
-### 3. Parse cache — remaining options (both low-yield)
+#### Parse cache — remaining options (both low-yield)
 
 - **FxHash instead of SipHash on the memo `HashMap`s — measured, ~1 %,
   not worth it.** Prototyped a vendored `FxHasher` (`rustc-hash`'s classic
@@ -308,14 +329,14 @@ shape — per-process cache keyed by `(category, package)`.
   <1 % of the current run. Not worth it unless a workload with far more
   distinct atoms appears.
 
-### 4. Reduce redundant whole-graph passes
+#### Reduce redundant whole-graph passes
 
 The `'backtrack` loop re-ran the entire BFS for a case that produced no
 backtracking-relevant change on pass 2. Confirm each pass is genuinely needed
 (real portage's `_backtrack_depgraph` only re-runs `_create_graph`, reusing
 already-resolved state); a wasted pass doubles everything above.
 
-### 5. Release-profile `lto` + `codegen-units`
+#### Release-profile `lto` + `codegen-units`
 
 `[profile.release]` in `rust/Cargo.toml` sets `panic = "abort"` but leaves
 `lto` and `codegen-units` at their defaults. The `rust-skills` `opt-` audit
@@ -434,3 +455,55 @@ other costs fall), #106 (`candidate_positions`), then the #107
 algorithmic question. The `EUF_CACHE`-style thread-local `Rc`/`Arc`
 memo is now the established shape for per-resolve pure functions --
 reuse it before inventing a new one.
+
+## 2026-09-21 batch (#109–#110): shipped
+
+Re-profiled after the `#102`–`#108` batch (release `662b15d`): 3.88–3.90 s
+wall / 2.85–2.90 s user / 0.99–1.03 s sys, 174 MB RSS — portuale ahead
+of real, and the ~1.0 s sys was the largest identified remaining cost,
+all of it vdb reads (`strace`: 160,351 `openat` with **40,651 ENOENT**
+and 202,281 `read`; the top successful-open paths are per-key
+`/var/db/pkg/CAT/PF/{USE,RDEPEND,repository,SLOT,BDEPEND,...}`). Shipped
+the same day on `feat/parallel` (plan
+[`08.109-110-vdb-metadata-snapshot.md`](08.109-110-vdb-metadata-snapshot.md)),
+each slice re-measured and byte-identical over the full contract suite:
+
+| slice | change | wall (best of 3 warm) |
+|---|---|---|
+| baseline (#102–#108) | — | 3.93–3.98 s |
+| #109 S1 | normalise `read_vdb_string` like real `_aux_get` | 4.06–4.08 s (no change) |
+| #109 S2 | move the field set/version to `portage-repo` | 4.06 s (no change) |
+| #109 S3 | `vdb_aux_get` reads the snapshot | 4.33–4.35 s (**regression**) |
+| #109 S4 | per-instance aux memo keyed on the dir mtime | 3.48 s |
+| #110 S5 | memoise `metadata_key_accepted` | **3.07–3.30 s** |
+
+Final, interleaved on the same tree: portuale **3.07–3.30 s** wall /
+2.51–2.63 s user / 0.56–0.67 s sys / ~182 MB RSS vs baseline
+3.93–3.98 / 2.86–2.90 / 1.07–1.08 / 174 MB. `strace`: `openat` 160,351
+(40,651 ENOENT) → 33,685 (105), `read` 202,281 → 30,041, `close`
+119,772 → 33,652, total syscalls 845,480 → 506,848; `statx` **up**
+294,450 → 339,804 (the per-call validity stat is kept by design, plus
+`vdb_pkg_dir`'s `is_dir()` — #112). The second-shape spot check
+(`sys-devel/gcc`) agrees: 3.97–4.22 s → 3.06–3.17 s wall, sys 1.04–1.23
+→ 0.56–0.58.
+
+**S3 is an honest intermediate regression.** Reading and parsing the
+whole 23-field snapshot per key call costs more than the tiny field read
+it replaced — the ENOENT probes vanish (40,651 → 105) but opens stay
+~160 k and `read` grows — which is exactly why S4's per-instance memo
+follows immediately. The plan's S3 expectation (~0.3–0.5 s sys) did not
+materialise; the pair is what ships.
+
+**Real comparison is blocked today (#111).** Real `emerge -puD
+--getbinpkg net-libs/rest` now exits 1 on this tree
+(`~dev-qt/qtbase-6.11.2:6[...]` USE conflict through the installed
+qtdeclarative chain) while portuale resolves the same 27-package plan
+rc 0; `-pv --getbinpkg dev-qt/qtbase` resolves on both. This is a
+tree-state change, not a #109/#110 effect (the pre-batch baseline binary
+resolves too), but it means the interleaved real wall-time comparison is
+unavailable until #111 is diagnosed.
+
+Next, in order: #105 (`use_context_fingerprint`, 23.77 % with children),
+then #107 (`run_pass`, 85.44 %, still the algorithmic item), then #112
+(the remaining `statx`). #106 (`candidate_positions`) is 0.31 % now —
+effectively closed by #102–#108.
