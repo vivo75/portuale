@@ -85,6 +85,7 @@ fn with_test_env<R>(vars: &[(&str, &str)], f: impl FnOnce() -> R) -> R {
 
 mod binrepo;
 mod env_layer;
+mod fingerprints;
 mod graph;
 mod incrementals;
 mod make_conf;

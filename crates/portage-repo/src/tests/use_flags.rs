@@ -995,3 +995,30 @@ fn effective_use_flags_memo_does_not_leak_between_differing_configs() {
         })
     );
 }
+
+/// The fingerprint uses the frozen `use_context_base` when present
+/// (the production path) and still separates `autounmask_use`.
+#[test]
+fn use_context_fingerprint_uses_the_frozen_base_and_separates_autounmask_use() {
+    let base_config = portage_profile::Config::default();
+    let frozen = portage_profile::Config {
+        use_context_base: Some(portage_profile::use_context_base_fingerprint(&base_config)),
+        ..base_config
+    };
+    let plain = use_context_fingerprint(&frozen);
+    // A clone carrying the frozen base is identical...
+    assert_eq!(plain, use_context_fingerprint(&frozen.clone()));
+    // ...until `autounmask_use` changes, which the key must see.
+    let mut with_autounmask = frozen.clone();
+    with_autounmask.autounmask_use = vec![("dev-libs/foo".to_string(), vec!["flag".to_string()])];
+    assert_ne!(plain, use_context_fingerprint(&with_autounmask));
+
+    // No base (hand-built config): full content hash, content-sensitive.
+    let mut unfrozen = portage_profile::Config {
+        accept_keywords: HashSet::from(["amd64".to_string()]),
+        ..Default::default()
+    };
+    let before = use_context_fingerprint(&unfrozen);
+    unfrozen.accept_keywords.insert("~amd64".to_string());
+    assert_ne!(before, use_context_fingerprint(&unfrozen));
+}

@@ -17566,5 +17566,476 @@ the second with `ETXTBSY` and the first by truncating the held inode.
 cd rust && cargo test --release -p portuale merge_driver -q
 ```
 
+## 2026-09-20 — backlog #95: `package.env` vars use real's acceptance set, not `BUILD_VARS`
+
+`match_package_env_vars` kept only `pretend::BUILD_VARS`, so a
+`/etc/portage/package.env` env file's `CC`/`CXX`/`CPP`/`AR`/`NM`/
+`RANLIB`/`LD`/`RUSTFLAGS`/`CGO_*`/`GOFLAGS`/`NINJAOPTS`/`COMMON_FLAGS`/
+`INSTALL_MASK`/`PORTAGE_NICENESS` never reached the phase while `CFLAGS`
+from the same file did. Live failure: `toolchain-funcs.eclass`'s
+`_tc-getPROG` exports `CC` from the env, the drop made `tc-getCC` fall
+back to `gcc`, and `tc-is-lto`'s gcc branch died on `-flto=thin`
+(`mail-client/thunderbird` under the host `llvm-lto` package.env).
+
+Real `_grab_pkg_env` (`config.py:2269-2300`) accepts **every** key of a
+matching env file except `_non_user_variables` (the profile's dynamic
+`PROFILE_ONLY_VARIABLES` ∪ `env_blacklist` ∪ `CONFIG_PROTECT`) and
+protected `PKGUSE`; `INCREMENTALS` (`const.py:125`) append and are then
+folded by `regenerate()` (`config.py:2778-2825`: `-*` clears, `-tok`
+removes, sorted union), and `config.environ()` drops `environ_filter`
+keys from the export set only. Portuale now ports that gate: `USE`
+stays on the `package_env_use` path, `ENVIRON_FILTER`/`PORTUALE_COMPUTED`
+keys stay out (the layer only exists in the phase env), empty values
+are kept (real blanks with `VAR=""`), and incrementals fold onto the
+caller's base env (merge: `options.build_env`; standalone:
+`build_config_env`). Live on the S0 scratch tree, the pre-fix phase env
+was `CC= CXX= RUSTFLAGS= ENV_UNSET=`; post-fix it is
+`CC=fixture-cc CXX=fixture-cxx RUSTFLAGS=-C target-cpu=fixture
+ENV_UNSET=PKG_UNSET` with rejected `SLOT=0`. Residues filed: #98
+(per-package `FEATURES`), #99 (per-package `PORTAGE_TMPDIR`), #100
+(standalone run-wide config env), #101 (calling-env vs `pkg` layer
+precedence). Expected values are the host real-Portage 3.0.82.2
+captures in pmtest `differential-test-bed/findings/l2.md` "## #95 S0".
+
+```
+cd rust && cargo test --release -p portuale package_env -q
+# the tc-getCC/tc-is-lto-shaped end-to-end pin (pmtest)
+python3 -m pytest pytests-contract-suite/test_portuale.py -q -k tc_is_lto
+```
+
+**Resolver performance batch (Tier 8 #102–#104 + #108, 2026-09-20).**
+`portuale emerge -puD --getbinpkg net-libs/rest` had drifted to
+7.7–7.9 s wall against real `emerge`'s 5.7–5.9 s; a `perf` + `strace` +
+call-counter profile showed per-visit recomputation, not the graph walk:
+12,684 `installed_candidates` scans (906,881 entries stat'ed),
+6.05 M `apply_updates_to_cp`, 71,572 `effective_use_flags` calls each
+cloning its memoised set, 29,774 uncached `resolved_use_mask_or_force`
+builds, 3,056 `local_binpkg_index` rebuilds. Four output-preserving
+slices removed them — a per-cp vdb cache validated by category-dir
+mtimes (the same signal real's `_bump_mtime` maintains) plus a one-time
+inverted move map, `Rc<HashSet>` out of `effective_use_flags` (and
+through `candidate_iuse_and_use`), a memo on
+`resolved_use_mask_or_force`, and a memoised `Arc<BinaryIndex>` — with
+the full contract suite byte-identical throughout (the one mid-batch
+diff bisected to new `-1` binhost revisions, not to any slice).
+Final, interleaved with real: portuale 4.0–4.2 s wall / ~3.0 s user vs
+real 4.5–5.1 s / ~4.1 s user. Detail:
+`docs/08.102-108-perf-memoisation.md`; numbers:
+`performances-tuning.md`.
+
+```sh
+/usr/bin/time -v rust/target/release/emerge -puD --getbinpkg net-libs/rest
+# best of 3 warm: ~4.1 s wall / ~3.0 s user / ~1.0 s sys (real: ~4.8 / ~4.1 / ~0.2)
+```
+
+**VDB `metadata` snapshot + aux memo, and `metadata_key_accepted`
+(Tier 8 #109–#110, 2026-09-21).** After #102–#108 the residual cost was
+the vdb: 160,351 `openat` (40,651 ENOENT) + 202,281 `read` per run, all
+per-key `/var/db/pkg/CAT/PF/{USE,RDEPEND,repository,SLOT,...}` reads.
+Portuale already wrote real's consolidated 23-field `metadata` snapshot
+at merge time but never read it. Four slices ported the read half of
+real `_aux_get` (`vartree.py:115-187`, `:975-1053`): normalise
+`read_vdb_string` like real's `" ".join(myd.split())`; move the field
+set and format version down to `portage-repo` so reader and writer share
+one definition; `vdb_aux_get` validates the snapshot (`#format` == 1,
+`#dir_mtime` == the dir's `st_mtime_ns`) and serves in-set keys with no
+`open()`; a per-instance memo keyed on that mtime fills all 23 fields on
+a miss (real's `_aux_cache`'s shape). S3 alone regressed (per-call
+snapshot reads); S4's memo is the win. #110 memoised
+`metadata_key_accepted` (23.30 % → 13.13 % with children). The full
+contract suite stayed byte-identical throughout (the only drift entries
+are pre-existing fixture-state ones, unchanged by these slices) and the
+merge-path gate (glibc+bash) is green at S2/S3/S4. `openat` 160,351 →
+33,685 (105 ENOENT), `read` 202,281 → 30,041; 3.93–3.98 s → 3.07–3.30 s
+wall, sys 1.07 → 0.6 s. Detail:
+`docs/08.109-110-vdb-metadata-snapshot.md`;
+`performances-tuning.md` "2026-09-21 batch"; `on-disk-caches.md` §1.
+
+```sh
+/usr/bin/time -v rust/target/release/emerge -puD --getbinpkg net-libs/rest
+# best of 3 warm: 3.07-3.30 s wall / 2.51-2.63 s user / 0.56-0.67 s sys
+# (baseline 3.93-3.98 / 2.86-2.90 / 1.07-1.08; real aborts on today's
+#  tree -- backlog #111)
+```
+
+**USE-context fingerprint frozen at config resolution (Tier 8 #105,
+2026-09-21).** Every USE-cache key
+(`effective_use_flags`/`resolved_use_mask_or_force`/`metadata_key_accepted`)
+rebuilt a ~20-field content digest of the resolved `Config` on every
+call -- big `HashSet` folds included -- 23.77 % of the reference workload
+with children and the top named single-threaded cost after #109/#110.
+`resolve_config` now computes that immutable digest once and stores it in
+`Config::use_context_base`; the key hashes the frozen `u64` plus the live
+`autounmask_use`, the one field the backtracking loop mutates on a
+`Config` clone (so clones correctly share the base). A hand-built
+`Config` (tests, `Config::default()`) has no base and falls back to the
+full content hash, so an in-place edit of any context field is still
+seen. Output byte-identical over the full contract suite + corpus.
+Interleaved, same tree: 3.00-3.16 s -> 2.44-2.50 s wall (user 2.46-2.56
+-> 1.89-1.97); second shape `sys-devel/gcc` 3.00-3.08 -> 2.43-2.47.
+Detail: `docs/performances-tuning.md` "#105 follow-up".
+
+```sh
+/usr/bin/time -v rust/target/release/emerge -puD --getbinpkg net-libs/rest
+# best of 3 warm: 2.44-2.50 s wall / 1.89-1.97 s user / ~0.5 s sys
+# (#109/#110 baseline: 3.07-3.30 / 2.51-2.63; pre-batch: 3.93-3.98)
+```
+
+**`binpkg_respect_use_ok` memo (Tier 8 #117, 2026-09-21).** After #105
+the binary-candidate USE check was the top named function (24.78 % with
+children) even though all its children are already-memoised; the
+residual was rebuilding the downstream memo keys and the per-call
+`old_iuse`/enabled-set allocations. A temporary counter measured ~13 k
+calls against 1,197 distinct inputs on the reference workload, so the
+pure function memoises per `(config USE context, both candidates' full
+metadata, the three flags)` in a thread-local map (baked USE hashed
+order-independently). Interleaved, same tree: 2.58-2.69 s -> 2.22-2.28 s
+wall (user 1.96-2.02 -> 1.62-1.65); second shape `sys-devel/gcc`
+2.51-2.58 -> 2.18-2.24; output byte-identical over the full contract
+suite + corpus. Detail: `docs/performances-tuning.md` "#117 follow-up".
+
+```sh
+/usr/bin/time -v rust/target/release/emerge -puD --getbinpkg net-libs/rest
+# best of 3 warm: 2.22-2.28 s wall / 1.62-1.65 s user / ~0.6 s sys
+# (#109/#110 baseline: 3.07-3.30 / 2.51-2.63; pre-#105: 3.00-3.16)
+```
+
+**`is_visible` memo (Tier 8 #114, 2026-09-21).** After #117 the candidate
+visibility check was the top named function (13.12 % with children); a
+temporary counter measured ~40 k calls against 1,503 distinct inputs
+(96 % repeat), each re-formatting the candidate string and re-deriving
+the mask/license/keyword/property/restrict verdicts. It now memoises per
+`(visibility fingerprint, candidate identity + metadata)`, with a second
+frozen config base (`package.mask`/`.unmask`, the accept lists,
+`license_groups`, full `package.accept_keywords`) plus the live
+`autounmask_use`. Interleaved, same tree: 2.50-2.64 s -> 2.08-2.09 s
+wall (user 1.91-1.98 -> 1.47-1.52); second shape `sys-devel/gcc`
+2.44-2.52 -> 2.03-2.07; byte-identical over the full contract suite +
+corpus. Detail: `docs/performances-tuning.md` "#114 follow-up".
+
+```sh
+/usr/bin/time -v rust/target/release/emerge -puD --getbinpkg net-libs/rest
+# best of 3 warm: 2.08-2.09 s wall / 1.47-1.52 s user / ~0.6 s sys
+# (session start: 3.93-3.98 / 2.86-2.90)
+```
+
+**One `statx` per vdb lookup (Tier 8 #112, 2026-09-21).** `vdb_aux_get`
+resolved the package directory (one `is_dir()` stat) and then stat'ed it
+again for the mtime validity signal -- two `statx` per key lookup, ~126 k
+of the ~340 k per run. `vdb_pkg_dir_meta` now hands back the `Metadata`
+the resolution already paid, `vdb_aux_get` consumes it, and
+`vdb_pkg_dir` remains a thin wrapper for its other callers. Interleaved,
+same tree: 2.09-2.23 s -> 2.01-2.03 s wall (sys 0.58-0.69 -> 0.50-0.52);
+`statx` 340,008 -> 211,165; second shape `sys-devel/gcc` 2.07-2.11 ->
+2.00-2.02. Output byte-identical over the full suite + corpus, merge-path
+gate green. Detail: `docs/performances-tuning.md` "#112 follow-up".
+
+```sh
+/usr/bin/time -v rust/target/release/emerge -puD --getbinpkg net-libs/rest
+# best of 3 warm: 2.01-2.03 s wall / 1.48-1.49 s user / ~0.5 s sys
+# (session start: 3.93-3.98 / 2.86-2.90)
+```
+
+**Lazy `*DEPEND` rewrite through `profiles/updates/` (Tier 8 #119,
+2026-09-21).** `apply_updates_to_dep_string` rebuilt every md5-cache-miss
+dep string token by token -- a `format!` per chunk, a `String` per
+unchanged token and two `String` clones per token for the move-target
+check -- 7.50 % of the reference workload with children. It now returns
+`Option<String>` (`None` = unchanged, so callers skip their insert and
+allocate nothing), builds its output buffer only once a token actually
+changes (copying untouched runs verbatim), and checks a
+`category -> package names` map with borrowed lookups. The function's
+profile subtree falls to 4.38 % and `repo_aux_metadata` from 14.42 % to
+10.08 %, but the wall effect is small: paired 15-run delta +0.017 s mean
+(+0.020 s median, 9/15 wins), user neutral. Output byte-identical over
+the full suite + corpus. Detail: `docs/performances-tuning.md` "#119
+follow-up".
+
+**`PORTUALE_SHUFFLE_DIRS` is read once per process, not once per directory read (Tier 8 #113, 2026-09-21).** `portage-util`'s `shuffle_seed` ran a `std::env::var` plus a `String` allocation on every `read_dir_entries` call — 42,524 per reference run — for a value that is test/CI-only and fixed for the life of the process, and it kept a live env read in the hot path that `cleanroom/parallelism.md` §1.6 names as a `set_var` race surface. It now parses once into a `OnceLock<Option<u64>>` (the established `sandbox_binary` shape). The freeze is a pure memoisation for every production caller, which sets the variable before the process starts or never; the old in-process assertions could not survive it (a mid-process `set_var` is inert by construction), so the unit test now pins the frozen value plus the sorted default, and `rust/portage-util/tests/shuffle_seed_freeze.rs` — its own test binary, so it owns the variable from the first instruction — pins both the freeze (`Some(7)` after rewriting the variable to `8`) and that the seeded Fisher-Yates still executes. Output byte-identical over the full contract suite and corpus; no pmtest pin moved.
+
+```sh
+cargo test --release -p portage-util
+# shuffle_seed_is_frozen_at_first_use_and_read_dir_is_sorted_by_default ... ok
+# shuffle_seed_is_frozen_at_first_use_and_still_shuffles ... ok
+```
+
+**Two of the three direct `SLOT` scans in production go through the vdb seam (Tier 8 #116, 2026-09-21).** `pretend.rs`'s `installed_cp_versions` and `ebuild_merge.rs`'s `blockers_from_flat_deps` read `SLOT` with a bare `read_to_string(...).trim()` — an `open`+`read` per installed package (2,090 on this host) that also missed #109's consolidated `metadata` snapshot and `_aux_get`'s whitespace normalisation. Both now call the new `portage_repo::vdb_entry_slot(root, category, pf)`, which splits the directory name with the crate's existing `split_pf` and reads the field through `vdb_aux_get`; each caller keeps its post-processing verbatim (main slot only for the bare-name scan, `slot/sub_slot` with the slot-as-sub-slot fallback for the blocker scan), and `pretend.rs`'s private `split_pf` copy is deleted in favour of the `portage_repo` export. The normalisation is the one semantic difference: a multi-line `SLOT` collapses to one space-separated line (pinned by a unit test) and a `SLOT`-less entry enters the blocker scan as `cat/pf:/` instead of being skipped — both inert on real data (0 of 2,090 `SLOT` files are multi-line, and an empty slot parses to no slot, so the candidate matches nothing). Output-preserving over the full contract suite and corpus, and the merge-path safety gate is green: portuale re-merged `sys-libs/glibc` and `app-shells/bash` from binpkgs (`L1_CONSUME_REINSTALL=1`), `merged_count 2`, 0 hard findings / 0 unexplained. A third production direct `SLOT` read remains (`ebuild_merge::read_installed_slot`, used by `find_collisions` and the merge replace-scan); per the plan's own residue rule it is filed as #126, not folded into this slice.
+
+```sh
+awk 'FNR>1{print FILENAME}' /var/db/pkg/*/*/SLOT   # no output: 0 of 2090 multi-line
+cargo test --release -p portage-repo vdb_entry_slot
+# 3 passed (seam equality, multi-line collapse, unsplittable pf)
+```
+
+**`package.env` layer order and the three missing keys (Tier 1
+#98/#99/#100/#101, 2026-09-21).** A `package.env` scalar loses to the
+calling environment (real `USE_ORDER` `env` over `pkg`), incrementals
+fold `[run-wide, pkg, calling-env]` so a calling `-tok` prunes an
+env-file token, standalone `ebuild` exports the full resolved config
+env, per-package `PORTAGE_TMPDIR` re-derives the build directory (with
+real's exact missing-directory failure), and per-package `FEATURES`
+folds into the merge gates and the phase env instead of replacing the
+run-wide list. Live, against a scratch copy of the fixture configroot
+with `dev-libs/envdumppkg penv-doc` in `package.env` and
+`etc/portage/env/penv-doc` holding `FEATURES="splitdebug"` plus
+`PORTAGE_TMPDIR="/tmp/doc-ex/probe-tmp"` (directory created, calling
+env carrying neither key):
+
+```sh
+PORTAGE_CONFIGROOT=/tmp/doc-pin portuale ebuild \
+  /tmp/doc-pin/repo/dev-libs/envdumppkg/envdumppkg-1.0.ebuild setup
+#  * FEATURES=splitdebug
+#  * PORTAGE_TMPDIR=/tmp/doc-ex/probe-tmp
+#  * PORTAGE_BUILDDIR=/tmp/doc-ex/probe-tmp/portage/dev-libs/envdumppkg-1.0
+```
+
+while the same run with `PORTAGE_TMPDIR` set in the calling shell
+reports the shell's directory (precedence), and with the directory
+absent fails with real's `The directory specified in your
+PORTAGE_TMPDIR variable, '...', does not exist.` text and exit 1. The
+merge-path twin is pinned end to end: `FEATURES="splitdebug"` for
+`dev-libs/splitdbgpkg` splits only its binary (the neighbour built in
+the same run stays unsplit), and `PORTAGE_TMPDIR` moves the whole
+per-entry build root. Residues filed as #129 (`--buildpkgonly`
+ignores `package.env` wholesale) and #130 (per-entry `FEATURES`
+stops at `PackageOptions`/standalone-merge gates). Detail:
+`docs/01.98-101-package-env-layers.md` (done), oracle
+`../pmtest/differential-test-bed/findings/l2.md` "## #98-#101 S0", L0
+`l0-20260921T172340Z` 101 clean / parity 0.842 with only the standing
+order/tree rows.
+
+**An installed parent's `[flag=]` use-deps are evaluated against its vdb USE, and an unfixable deep miss aborts (Tier 2 #132, 2026-09-22).** `enqueue_dependencies` (the `--deep` recursion into an already-installed package) queued every flattened token verbatim, so a conditional form imposed no state constraint and every `[flag=]`/`[flag?]` dep of every installed package was vacuously satisfied; on top of that `abort_outcome` rescued every installed-only `NoVisibleCandidate`, so even a settled miss exited 0. Both are fixed: each token is evaluated with `evaluate_atom_conditionals` against the parent's vdb USE before classification (`unevaluated` carried for display; the raw-keyed `root_deps_*` workaround lasted exactly one slice — #133 below evaluates the producers too and re-keys both walks to evaluated forms), and every NVC aborts. Live-verified: `emerge -puD --getbinpkg net-libs/rest` (and `sys-devel/gcc`) went from rc 0 with a clean plan to rc 1 with real's own `emerge: there are no ebuilds built with USE flags to satisfy "~dev-qt/qtbase-6.11.2:6[...wayland=...]"` block (`Change USE: -wayland`, full installed chain). Regression-pinned by four fixture arms under `PORTAGE_CONFIGROOT=fixtures`:
+`emerge --pretend -D dev-libs/deepusedepconsumer` → rc 1 with the `R deepusedepchild USE="-flip*"` row and the USE-change block; `dev-libs/deepusedepbconsumer` → rc 0 with the child rebuilt flip-off; `dev-libs/deepusedepokconsumer` → the single N row; `dev-libs/deepusedepfconsumer` (flip profile-forced, unfixable) → rc 1 with the list suppressed. Beds: fixture-oracle 34 probes / 29 clean (only the pre-existing p2b residue and arm D's message-class gap), L0 101/120 parity 0.842 with a byte-identical unexplained set. Residues #133–#137 (root_deps asymmetry, debug `USE=""`, abort-display bundle, slotusegroup USE, stale harvest). Detail: `docs/02.132-installed-parent-use-dep-conditionals.md` (done), oracle `../pmtest/differential-test-bed/findings/l0.md` "## #132 S0".
+
+**The two verification gates are trustworthy again (Phase 0b #140/#137, 2026-09-22, pmtest-only).** Three contract tests red on clean `main` (`test_profiles_updates_package_moves_pinned_output[args5,args7]`, `test_package_moves_n_disables_profiles_updates`) traced to a fixture that pre-applied the `profiles/updates` move it was meant to exercise — restored to the pre-move vdb state, plus four run-polluted news markers deleted — and 78 stale harvested-corpus lines (every one predating the last bless) re-grounded line-by-line against real (#90's LIFO walk and skip notice, #62's rc-1 residuals, #132's abort rule, real's own `--debug` digraph dump site) and re-harvested. Runnable proof: `python3 -m pytest pytests-contract-suite -q` reports `1760 passed, 2 skipped, 5 xfailed` with zero drift warnings, so later slices diff "by name" against a green baseline and bless slice-scoped drift only. Detail: `docs/batch-2026-09-21.md` §3b, oracles `../pmtest/differential-test-bed/findings/l0.md` "## Phase 0b H5/H4".
+
+**The `--root-deps` half of the conditional evaluation rule is closed (Tier 2 #133, 2026-09-22; review residue #139 with it).** #132 evaluated each `--deep` token but left the two `root_deps_*` producers raw-keyed (its S5 workaround); worse, the running-root satisfied check matched version-only, so an installed parent's `[flip=]` `BDEPEND` was vacuously satisfied by whatever the running root had installed and the dep vanished under `--root-deps`. Both halves are fixed in `rust/portage-repo/src/lib.rs`: the producers evaluate every flattened token against the parent's USE (real `use_reduce(..., token_class=Atom)`), and `running_root_satisfies_atom` enforces the resulting unconditional use-deps against the running-root instance's recorded vdb `USE`/`IUSE` (the `best_installed_matching` idiom); the deep walk and the main walk compare evaluated forms. The oracle is a new `deeprootdep*` fixture family captured in bed `l0-fx-20260922T082944Z` (real 3.0.82.2 rebuilds `deeprootdepchild` with flip off; pre-fix portuale printed the consumer row alone; the `-D` control without `--root-deps` agrees on both). Runnable proof under `PORTAGE_CONFIGROOT=fixtures` (this repo's `fixtures/` symlink):
+
+```sh
+FX=$PWD/fixtures
+PORTAGE_CONFIGROOT=$FX ROOT=$FX PORTAGE_RUNNING_ROOT=$FX \
+  portuale emerge --pretend -D --root-deps dev-libs/deeprootdepconsumer
+# [ebuild   R    ] dev-libs/deeprootdepchild-1.0 to $FX
+# [ebuild  N     ] dev-libs/deeprootdepconsumer-1.0
+```
+
+Pinned by `test_root_deps_evaluates_conditional_use_deps_before_the_satisfied_check` (plus the `-D` control) and, at the graph level, by two `portage-repo` unit tests: the `deepusedep*` arms #132 never got (#139 — arm A surfaces unsatisfied, arm B rebuilds, arm C moves nothing) and the `--root-deps` arm that fails without this fix. Verification: `cargo test --release` green, contract suite `1762 passed, 2 skipped, 5 xfailed` (+2 new, zero other movement), no corpus drift. Residue filed as #141 (a running-root rebuild entry never shows the `USE` column — resolution converges, display does not; Phase 5b family). Detail: `docs/02.133-root-deps-conditionals.md` (done), oracle `../pmtest/differential-test-bed/findings/l0.md` "## #133 S0/S1".
+
+**The upstream-resolver bulk pipeline is live and the fixture oracle covers its first batch (Phase 4 #50 S1 + #49 S2, 2026-09-22).** `scripts/upstream_resolver_translate.py` captures the real `ResolverPlayground`'s executed oracle (not the source literal) and `--emit-fixtures` writes ebuilds+md5-cache+vdb per playground; batch 1 translates upstream `test_blocker.py` (`testBlocker`, `testBlockerBuildpkgonly`) into 15 ebuilds + 16 cache entries + 4 vdb entries under a per-playground batch namespace (`dev-libs/blk0*`, `dev-libs/blk1*` — the two playgrounds define the same names with different metadata, so they cannot share them; `test_circular_dependencies` is skipped this batch because its `app-misc/A,B` collide with existing fixtures and need their own namespace). Runnable proof under `PORTAGE_CONFIGROOT=fixtures` (real merges X-1 + `[uninstall]Y-1` in every argv order; the bed records that portuale interleaves those rows differently):
+
+```sh
+FX=$PWD/fixtures
+PORTAGE_CONFIGROOT=$FX ROOT=$FX PORTAGE_RUNNING_ROOT=$FX \
+  portuale emerge --pretend --backtrack=0 dev-libs/blk0a dev-libs/blk0c dev-libs/blk0b
+# [ebuild  N     ] dev-libs/blk0x-1
+# [ebuild  N     ] dev-libs/blk0a-1
+# [ebuild  N     ] dev-libs/blk0c-1
+# [ebuild  N     ] dev-libs/blk0b-1
+# [uninstall     ] dev-libs/blk0y-1
+# [blocks b      ] =dev-libs/blk0y-1 ("=dev-libs/blk0y-1" is soft blocking dev-libs/blk0x-1)
+```
+
+Pinned by 10 rc-only `CASES` entries (every exit matches real) plus the exact-bytes test above for the two clean argv orders. The batch paid for itself immediately: 10 of 12 cells diverge and are filed, not pinned — #142 (the uninstall target follows walk order, Y-2/Y-3 instead of Y-1, with a spurious conflict WARNING; one order even merges X-2 against B's `<X-2` bound) and #143 (under `--buildpkgonly` portuale uninstalls installed X for soft `!`, RDEPEND and PDEPEND blockers real ignores, and misses the `!!` abort). The oracle widened with it: four blk cells in the default atomlist, bed `l0-fx-20260922T101821Z` 39 probes / 29 clean with all 11 new findings suppressed as `owner: portuale-bug` and the 4 pre-existing findings byte-identical to baseline (proven by a stashed re-run). The mutation half ran too: `merge_order.rs`, 555 mutants, 272 caught / 233 missed / 31 unviable / 19 timeouts (~3 h) — 16 trace-only, 2 equivalent, 215 real gaps (38.7%, under the 40% stop bar) filed as #144 (scheduler loop), #145 (installed/vdb inputs), #146 (key/priority mapping), no tests added in the measuring slice. Detail: `docs/06.49-50-52-oracle-fixtures-mutants.md` (done), oracles `/tmp/fx-b1-blocker.json` (S1 capture) and `../pmtest/differential-test-bed/findings/l0.md` "## #49 S2".
+
+**The installed-node overlay's built-`:=` append is removed as a documented cut (Phase 5 #26 S1, 2026-09-22; #27 closes with it, #25 stays open on its merge-order residue).** S0 re-ran #78 E0 hermetically and settled the phase's two stale claims: with the gate on *both* #24 pins still fail (gate off: both pass) — #26's "one case away from default-on" line was wrong — and the `btnr` pin passes, so #25 residue (c) was closed by #57 all along. With no downstream `--debug` marker naming a mishandled edge, the verdict was (b) re-scope, and S1 removed `PORTUALE_DYNAMIC_DEPS_APPEND` end to end (gate static, `built_slot_operator_atoms`, the append branch, every pass-through param; the scheduler closure stays Raw, byte-identical to gate-off). Runnable proof under `PORTAGE_CONFIGROOT=fixtures`:
+
+```sh
+FX=$PWD/fixtures
+PORTUALE_DYNAMIC_DEPS_APPEND=1 portuale emerge --pretend -D --noreplace dev-libs/builtbindpkg
+# [ebuild  N     ] dev-libs/newpkg-1.0
+```
+
+— the variable is ignored; the live ebuild alone walks (real would also walk the vdb's `builtbindtarget:0/1=` binding: the cut). Both reworked pins were watched RED pre-removal and GREEN after; both #24 pins pass with the var set; close-out L0 `l0-20260922T183907Z` is cell-by-cell identical to baseline (120 probes / 101 clean / parity 0.842). Detail: `docs/02.25-27-installed-node-overlay.md` (done), oracle `../pmtest/differential-test-bed/findings/l0.md` "## #25-#27 S0/S4".
+
+**The resolver's display rows match real's bytes on five residues (Phase 5b S0–S4, 2026-09-22; #141/#135(d,e,c)/#138/#134 DONE, #135(a,b) + #136 OPEN).** The `--root-deps` rebuild row prints real's `USE="-flip*"` column (the entry constructor was display-blank); the plain-miss abort is real's `emerge: there are no ebuilds to satisfy "<unevaluated atom>"` + chain rows (not the bare `!!! no visible ebuild` line); a masked/unsat abort prints the merge-list preamble first (O7's Slice-4 reversal, seconds omitted for determinism); `--debug` `Candidates:` shows the evaluated atom while `Depstring:` stays raw; installed `Child:` rows show the vdb USE. Runnable proof under `PORTAGE_CONFIGROOT=fixtures`:
+
+```sh
+FX=$PWD/fixtures
+portuale emerge -p -D --root-deps dev-libs/deeprootdepconsumer
+# [ebuild   R    ] dev-libs/deeprootdepchild-1.0 to $FX USE="-flip*"
+# [ebuild  N     ] dev-libs/deeprootdepconsumer-1.0
+portuale emerge -p -D dev-libs/deepusedepfconsumer
+# These are the packages that would be merged, in order:
+# Calculating dependencies ... done!
+# Dependency resolution took (backtrack: 0/10).
+# emerge: there are no ebuilds to satisfy "~dev-libs/deepusedepfchild-1.0[flip=]".
+```
+
+The capture set (`l141-135-s0.txt`, bed `l0-fx-20260922T212815Z`) drops from 5 unexplained to 1; the default bed holds 39/30 with only the pre-existing p2b residue. Two honest stops: #136's item text is contradicted by its own capture (the notice already lists both instances — the gap is the merge list, `build_slot_conflict` is not the site), and #135(a)(b) are live-tree-only shapes with no fixture oracle. Detail: `docs/02.134-141-resolver-display-residues.md` (S5 suspended), oracles `../pmtest/differential-test-bed/findings/l0.md` "## #141/#135/#138/#134/#136 S0" + "## #135 S2 (d)+(e)/(c)".
+
+**Declaration builtins assignment-expand an expanded name under `--shell brush` (Phase 6, 2026-09-23; backlog #94 DONE).** `export ${var}=value` silently no-op'd (and `declare`/`local`/`readonly`/`typeset` rejected it), so `toolchain-funcs` `_tc-getPROG` left `CC` empty and every `tc-check-openmp` consumer died in `pkg_pretend`. The fix re-examines the already-expanded string inside the builtins (split on the first `=`, honour `+=`, compound `name=(…)` values untouched) — deliberately not upstream #1280's shape (still a Draft with breaking changes), so it rebases as a deletion. Runnable proof on a Gentoo host tree (needs the toolchain eclasses; `PORTAGE_TMPDIR` must be writable):
+
+```sh
+PORTAGE_TMPDIR=/tmp/portage-tmp portuale ebuild --shell brush /var/db/repos/gentoo/media-gfx/gimp/gimp-3.2.6.ebuild pretend
+# exit 0: pkg_pretend passes (pre-fix: `Your current compiler does not support OpenMP!` + two `command not found: -E`, then die)
+```
+
+The pin guard is the `exportexpandpkg` fixture (an `export ${var}`-using `src_install` that dies unless the variable arrived — cache-less, direct-path only, like `heredocpkg`) plus `ebuild_phases::tests::expanded_name_export_assigns_in_both_backends`, which installs it under both backends and asserts identical image file sets (watched RED on the old pin: brush `install` exits 1 with `export ${var} did not assign (got [])`). Staged upstream as the sixth thin-fork fix (`docs/brush-pr/06-declaration-assignment-expansion.md`, fork `main` `eb3b6c7b`, re-pinned `4edb1f43` → `eb3b6c7b`); this removes one of the two blockers to flipping `--shell`'s default (the other is #5's now-five unopened PRs). Two honest notes: `$?` after a failed `export` differs between `brush -c` (1, matching bash) and a stdin-fed script (0) — pre-existing, left alone; `export 'ea[0]=1'` matches bash under the harness but reports rc 1 from `-c` where bash reports 0. Detail: `docs/01.94-brush-declaration-assignment.md` (done), oracles `brush-shell/tests/cases/compat/builtins/declaration-assignment-expansion.yaml` (8 new cases, 13 unmarked known-failures; compat 2576 / 2120 / 0 unexpected).
+
+**`package.env` now reaches the third build path and the binpkg-affecting `FEATURES` tokens (Phase 2b #129/#130, 2026-09-23).** #98–#101 wired `package.env` matching into the merge scheduler and the standalone `ebuild <file>` phase-env paths but left two gaps: `emerge_build::run_buildpkgonly` built its per-entry env from the run-wide base alone (no match, no `FEATURES` fold, no `PORTAGE_TMPDIR` recompute), and every `package_after_install` call site — the `-jN` scheduler's build function, `ebuild_merge::run_merge`'s internal packaging, and `run_buildpkgonly`'s own `run_package` call — shared one run-wide `PackageOptions`, so a per-entry `package.env` `FEATURES=binpkg-multi-instance`/`buildpkg-live`/`binpkg-signing` never reached the binpkg it named. Both are fixed: `run_buildpkgonly` now matches `config.package_env_vars` directly (no `MergeOptions` needed — `Config` already carries the table), folds `FEATURES`, and recomputes the per-entry `PORTAGE_TMPDIR`, exactly like the other two paths; and `PackageOptions::set_resolved_features` (mirroring `MergeOptions::set_resolved_features`) re-derives the binpkg-affecting fields from a resolved `FEATURES` list at all three call sites. Live-verified, no oracle capture needed (Phase 2's S0 already established the four-layer model these two items just extend to new call sites):
+
+```sh
+FX=$PWD/fixtures
+PORTAGE_CONFIGROOT=$FX ROOT=/tmp/demo-root PORTAGE_TMPDIR=/tmp/demo-tmp PKGDIR=/tmp/demo-pkgdir \
+  portuale emerge --buildpkgonly dev-libs/penvbuildpkg
+# >>> Building binary for dev-libs/penvbuildpkg-1.0...
+tar xOf /tmp/demo-pkgdir/dev-libs/penvbuildpkg-1.0.tbz2 ./usr/share/penvbuildpkg/flags
+# CFLAGS=-Os -march=fixturepkgenv   (fixtures/etc/portage/env/penv-buildflags, not make.conf's default)
+# CC=fixture-cc
+```
+
+Before this slice the same command built with the run-wide flags, silently ignoring the fixture's own `/etc/portage/package.env` entry for `dev-libs/penvbuildpkg`. Pinned by three `emerge_build.rs` Rust unit tests (`buildpkgonly_entry_build_env_matches_package_env_and_folds_flags`, `_folds_matched_features`, `run_buildpkgonly_recomputes_per_entry_portage_tmpdir_and_fails_on_a_missing_match`) and a per-entry `binpkg-multi-instance` pin (`run_buildpkgonly_resolves_per_entry_binpkg_multi_instance_from_package_env`: one matched package gets real's `<pkgdir>/<cat>/<pn>/<pf>-<id>.xpak` multi-instance layout, its unmatched neighbour in the same run keeps the single-instance default) plus `PackageOptions`/`MergeOptions` `set_resolved_features` unit tests. O4 (whether a per-entry binpkg-artefact-shape change needs an owner ruling before a pmtest pin moves) stands: this slice lands the mechanism and Rust-level proof only, no `2pmtest`/`pmtest` CASES row or contract pin. Detail: `docs/01.129-130-per-entry-env-residues.md`.
+
+**The last direct `SLOT` scan and the last duplicate `PF` splitter are gone (Phase 6b S0–S2, 2026-09-23; #127/#126 DONE).** `portage_repo::split_pf` is the single longest-trailing-version splitter — `portuale::remote_bundle::split_pf` and portage-repo's private `split_installed_dir` are deleted, their five call sites (driver env, collision-owner scan, `depend_phase_metadata`, `same_package`, the installed listing) re-pointed — and `ebuild_merge::read_installed_slot` reads through `vdb_entry_slot`, keeping its main-slot projection verbatim while gaining the snapshot win and `_aux_get`'s multi-line collapse. A missing/empty `SLOT` reads as `Some("0")` per real `aux_get` (O5, owner-ruled 2026-09-23; #115 keeps the invalid-nonempty/`EAPI`/`_mtime_` thirds), which is inert on real data (host probe: 2090/2090 entries single-line `SLOT`, none missing). Runnable proof:
+
+```sh
+cargo test --release -p portage-repo split_pf
+# ok: 2 passed (foo-1bar-2.0 -> foo-1bar/2.0, foo-r1-2.0 -> foo-r1/2.0 — real _pkgsplit values, pinned for the first time)
+cargo test --release -p portuale read_installed_slot
+# ok: 3 passed (SLOT-less -> Some("0"), empty -> Some("0"), multi-line collapse)
+```
+
+Output-preserving over the full contract suite (1773 passed / 0 failed) and corpus; merge-path gate green (L1 glibc+bash reinstall `l1-20260923T020132Z`, merged_count 2, 0 hard / 0 unexplained). One honest note: the plan listed three `remote_bundle::split_pf` callers and grep found a fourth (the collision-owner scan) — consolidated under the same argument, recorded in the commit. Detail: `docs/08.126-127-vdb-slot-residues.md` (done), oracle `08.109-110-vdb-metadata-snapshot.md` §2.
+
+**The merge-order scheduler's unit coverage now sees whole-body no-ops (Phase 8, 2026-09-23; #144/#145/#146 DONE).** Phase 4's mutation run left 233 of `merge_order.rs`'s mutants surviving — 215 of them real unit-test gaps across the scheduler loop (#144), the installed/vdb-backed inputs (#145) and the dep-key/priority mapping (#146) — so Phase 9's #142 and Phase 13's #131 would have moved behaviour inside a file whose `mod tests` could not see a whole-body replacement. Three slices add 52 `mod tests` functions in the existing `test_graph`/`new_entry` synthetic-entry style (predicate truth tables, small synthetic digraphs, the committed fixture vdb plus runtime scratch vdbs for the closure) and take the clusters to:
+
+```sh
+cargo mutants --in-place --file portage-repo/src/merge_order.rs --timeout 300 \
+  --re 'key_priority|dep_edges_from_metadata|split_disjunctive|ignore_|PriorityRange|rank_best|select_dep_target|build_digraph|frontier_enabled'
+# #146 dep-key/priority: 168 mutants tested — 156 caught, 6 missed (all equivalent), 6 unviable
+#      (before the new tests: 83 caught / 79 missed / 6 unviable)
+cargo mutants --in-place --file portage-repo/src/merge_order.rs --timeout 300 \
+  --re 'add_installed_dependency_closure|installed_candidates_by_cp|edge_satisfied_with|dep_edge_satisfied_by_installed|outcome_version'
+# #145 installed/vdb: 62 mutants — 59 caught, 1 missed (equivalent), 1 unviable, 1 timeout
+# #144 scheduler loop: 258 mutants — 201 caught, 17 missed, 21 unviable, 19 timeouts
+```
+
+Every survivor is classified equivalent, trace-only or caught-by-timeout with a one-line reason in `../pmtest/differential-test-bed/findings/mutants.md` "### Phase 8" — including the shape the backlog predicted: a mutant that makes a scheduler loop stop terminating (the closure's `present` dedup guard, the frontier's bit-clearing walk, `schedule_graph`'s prune loop) is *caught by timeout*, recorded rather than pinned around. No fixture was added, no seam was needed, and the phase changes no product byte (`git diff` touches only `merge_order.rs`'s `#[cfg(test)] mod tests`). Detail: `docs/06.144-146-merge-order-unit-tests.md`; the campaign ran with its own `CARGO_TARGET_DIR` while Phase 7a's `l3-core` run held `rust/target/release`.
+
+**Surviving slot conflicts print one merge row per instance (Phase 10, 2026-09-24; #148 DONE, #136's re-scope).** The walk graphs one entry per `(cp, slot)` — the `resolved_slots` conflict arm records the `SlotConflict` and moves on — so every surviving slot conflict printed a single merge row where real prints one per instance (bed `l0-fx-20260922T192350Z`: real schedules both `slotusetarget-1.0` and `-2.0`, portuale only `1.0`, notices identical). Two product changes, both verified against live oracles (real 3.0.82.2 on the fixture tree; host==container verified byte-identical on the oracle cell first): `synthesize_surviving_conflict_entries` adds post-solve rows for record instances without merge entries (display-complete via `refresh_entry_use_display`, no deps walked, no blockers flattened — solver inputs byte-identical, so solved cells don't move), and `match_candidates` narrows multi-instance edges by USE (real matches atoms with use), printing real's 1.0-first order. Live-verified:
+```sh
+emerge --pretend -D dev-libs/slotusegroup
+# [ebuild  N     ] dev-libs/slotusetarget-1.0  USE="x y"
+# [ebuild  N     ] dev-libs/slotusetarget-2.0  USE="(-x)"
+# [ebuild  N     ] dev-libs/slotuseplain-1.0
+# [ebuild  N     ] dev-libs/slotusex-1.0
+# [ebuild  N     ] dev-libs/slotusey-1.0
+# [ebuild  N     ] dev-libs/slotusegroup-1.0
+# !!! Multiple package instances within a single package slot ... (both instances, rc 1)
+```
+Twin pins moved with the same oracles (`slotconflictunsolvable`, `newpin`+`oldpin`, masking `--backtrack=0`, `mgfa --backtrack 1`, `orbtblocked --backtrack=0` corpus only). Beds: fixture-oracle S0 list 2/2 clean, default 39/34 (only the pre-existing p2b-tree residue), L0 120/101/0.842 with a byte-identical unexplained set. Residue filed as #150 (`--tree` shared-child `[nomerge]` artifact; tree surgery belongs to Phase 13). Work ran in sibling worktrees while Phase 7a's `l3-core` campaign held the live checkouts. Detail: `docs/02.148-slot-conflict-merge-list.md` (done).
+
+**Per-entry binpkg artefacts follow real per arm (Phase 11, 2026-09-24; #147 DONE, #130's layout bit superseded).** #130 wired per-entry `FEATURES` into every `package_after_install` call site including the artefact layout — but the Phase 11 oracle (real 3.0.82.2 source plus host `emerge`/`ebuild` probes on a throwaway fixture copy) proved the layout is run-wide-only in both directions: `FEATURES=binpkg-multi-instance` in `package.env` neither moves a single-layout run to multi nor a multi-layout run to single (the bintree binds its allocator once from the run-wide settings). S1 as specified was STOPPED; the owner chose run-wide layout plus the per-package `BUILD_ID` export real actually does (`EbuildBinpkg`'s gate): a negated entry in a multi run takes the multi path with no `BUILD_ID`, a tokened entry in a single run takes the single path with none (real writes index `None`/vdb `-1` there — a documented `str(None)` wart, not mirrored). The two confirmed arms shipped: per-entry `BINPKG_COMPRESS` reaches the xpak pipe on the emerge path (derived into the entry build env, which is what `__dyn_package` reads back through the saved `${T}/environment`) and on standalone `ebuild <file> package` (resolved from the ebuild's md5-cache identity), while gpkg members stay run-wide (real's helper reads the global settings) — and a `package.env` acceptance exemption for exactly the compression family (real's `_grab_pkg_env` accepts it; the shared `ENVIRON_FILTER` gate over-rejected). Live-verified on the committed twin:
+```sh
+BINPKG_FORMAT=xpak emerge --buildpkgonly dev-libs/penvcmppkg dev-libs/packagepkg
+# pkgdir/dev-libs/penvcmppkg-1.0.tbz2 with gzip magic (its penv-compress match)
+# pkgdir/dev-libs/packagepkg-1.0.tbz2 with bzip2 magic (run-wide fallback)
+```
+Rust end-to-end + unit tests per slice, three `test_portuale.py` real-execution pins (twin `dev-libs/penvcmppkg`, overlay `-b` merge for the `BUILD_ID` split). No pretend output moves; the 2 slot-conflict corpus drifts in the worktree are pre-existing on `main` (byte-identical worktree-vs-pristine-`main`, not blessed). 7a's `l3-core` build rev predates S1–S3 — its triage must account for that. Detail: `docs/01.147-per-entry-binpkg-artefact.md` (done).
+
+**Vdb `aux_get` speaks real's invalid-`SLOT` dialect (Phase 12, 2026-09-24; #115 DONE).** Real translates any `SLOT` failing `_get_slot_re` to `"0"` (`vartree.py:967-972`) and empty `EAPI` to `"0"`, and serves `_mtime_` as a float — portuale passed an invalid `SLOT` through raw and had no `EAPI`/`_mtime_` reader at all (probed live: real `aux_get` on hand-edited vdb entries returns `SLOT='0'` for `!!bad slot!!` and `EAPI='0'` for an empty file). The owner ruled port-the-`SLOT`-arm, cut-the-rest (O11): the translation lives in `vdb_aux_get` for the `SLOT` key — the one seam every vdb `SLOT` read flows through — in the operator shape every live EAPI accepts, present values only (empty keeps #126's O5 contracts; repo-side parsing untouched). Live-verified at the seam:
+```sh
+cargo test -p portage-repo --lib vdb_entry_slot
+# vdb_entry_slot_translates_a_present_but_invalid_slot_to_0 ... ok
+# vdb_entry_slot_keeps_a_valid_sub_slot ... ok
+# vdb_entry_slot_translates_a_collapsed_multiline_slot_to_0 ... ok
+```
+Output-preserving on real data (no live invalid `SLOT`; contract suite 1775 passed with only the 3 pre-existing container-environment failures, drift flags byte-identical to baseline); merge-path gate green (L1 glibc+bash reinstall `l1-20260924T083118Z`, merged_count 2, merge_rc 0, 0 hard / 0 unexplained). `EAPI ""→"0"` and `_mtime_` stay documented cuts (no portuale consumer; real's `_mtime_` users are unported bintree/cache machinery), and the gate's missing-`bin/`-helpers gap is filed as #151. Detail: `docs/02.115-vdb-aux-get-translations.md` (done).
+
+**`--tree` walks the tree-mode serialization (Phase 13, 2026-09-24; #131 and #150 DONE).** `print_tree` consumed the flat merge order reversed; real's `_ordered_tree_display` consumes the reversed tree-mode retlist (greedy leaf pop disabled), so p2b interleaved `newpkg` second with a nested `[nomerge]` owner occurrence where portuale trailed it last, and slotusegroup re-descended an already-displayed parent as a `[nomerge]` ancestor. New `merge_order::tree_display_order` (schedule + one-at-a-time select with the stuck branch, shared leftover weave-back) feeds the walk; the synthetic uninstall is the replacement's parent (real's edge reversal), admitted removals wait on owners in tree mode only, and last-resort batches follow graph order. Bed `l0-fx-20260924T104133Z` is 3/3 clean (u6 was already clean via #142); the S1 drift-review bed re-verified every moved `--tree` cell, six byte-identical (rdrcyc, scuseparent, slotconfgroup, slotconflictunsolvable, socmeta, `@selected`).
+```sh
+emerge --pretend --tree --update dev-libs/p2btarget dev-libs/p2bowner dev-libs/newpkg
+# [ebuild     U  ] dev-libs/p2bowner-1.1 [1.0]
+# [ebuild  N     ] dev-libs/newpkg-1.0
+# [nomerge       ] dev-libs/p2bowner-1.1 [1.0]
+# [blocks b      ]  <dev-libs/p2btarget-2.0 ("<dev-libs/p2btarget-2.0" is soft blocking dev-libs/p2bowner-1.1)
+# [ebuild     U  ]   dev-libs/p2btarget-2.0 [1.0]
+emerge --pretend --tree -D dev-libs/slotusegroup
+# [ebuild  N     ] dev-libs/slotusegroup-1.0
+# [ebuild  N     ]  dev-libs/slotuseplain-1.0
+# [ebuild  N     ]   dev-libs/slotusetarget-2.0  USE="(-x)"
+# [ebuild  N     ]  dev-libs/slotusey-1.0
+# [ebuild  N     ]  dev-libs/slotusex-1.0
+# [ebuild  N     ]   dev-libs/slotusetarget-1.0  USE="x y"
+```
+Pins: rewritten `test_oracle_81_…` (full five rows), new `test_oracle_150_…`, two `tree_display_order` Rust unit tests (one Phase-8 test moved as an intended diff: the synthetic edge direction); flat output, rc and notices byte-identical (L0 120/101/0.842 with a byte-identical unexplained set). Residues filed with the S1-bed evidence: #153 (fucyclec invalid-`DEPEND` masking), #154 (gpcyclec nomerge-ancestor USE column), #155 (mg2top backtrack-skip), #156 (`@world` tree order at #3). Detail: `docs/02.131-tree-walk-sequence.md` (done).
+
+**Blockers act like real's blocker machinery under `--buildpkgonly` and in the pg0 pairing dance (batch-2026-09-24 H0 close-out of Phase 9, 2026-09-24; #143 and #142 DONE).** Phase 9's S0 grounded `--buildpkgonly` gate semantics against the upstream executed oracle: real evaluates only DEPEND/BDEPEND blockers — a hard `!!` there aborts with rc 1 and real's two `!!!` lines, a soft `!` there is silently satisfied with X untouched, and RDEPEND/PDEPEND blockers are not evaluated at all — while pg0's installed blocker `!=X-1` uninstall-orders installed Y-1 ahead of X-1's merge in every argv order. #143 (S1) ported the gate (runtime-key blanking + soft-blocker satisfaction + uninstall-anchored abort); #142 (S2) ported the pairing (joint slot solve + stale-owner gate + keeper walk + the uninstall-scheduling dance). This close-out's live re-probe against the shipped binary reproduces both pins exactly:
+```sh
+portuale emerge --pretend --backtrack=0 dev-libs/blk0a dev-libs/blk0b dev-libs/blk0c
+# [ebuild  N     ] dev-libs/blk0x-1
+# [uninstall     ] dev-libs/blk0y-1
+# [blocks b      ] =dev-libs/blk0y-1 ("=dev-libs/blk0y-1" is soft blocking dev-libs/blk0x-1)
+# [ebuild  N     ] dev-libs/blk0a-1
+# [ebuild  N     ] dev-libs/blk0b-1
+# [ebuild  N     ] dev-libs/blk0c-1
+# WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+# dev-libs/blk0x:0
+#   (dev-libs/blk0x-2:0/0::testrepo, ebuild scheduled for merge) USE="" conflicts with
+#     <dev-libs/blk0x-2 required by (dev-libs/blk0b-1:0/0::testrepo, ebuild scheduled for merge) USE=""
+portuale emerge --pretend --buildpkgonly dev-libs/blk1a
+# [ebuild  N     ] dev-libs/blk1a-1
+# [uninstall     ] dev-libs/blk1x-1
+# [blocks b      ] dev-libs/blk1x ("dev-libs/blk1x" is hard blocking dev-libs/blk1a-1)
+# !!! --buildpkgonly requires all dependencies to be merged.
+# !!! Cannot merge requested packages. Merge deps and try again.
+# (rc 1)
+```
+Pins: `test_pretend_case_exit_code[...pg0 order...]` all six argv orders (X-1 merges, exactly Y-1 uninstalls, blocker rows interleaved right after their owner, per-order WARNINGs) + pg1 A–F (A/B rc 1, C–F bare), `test_upstream_blocker_pg0_all_orders_pin_x1_and_uninstall_y1`, `test_upstream_blocker_pg1_buildpkgonly_gate`. Contract suite baseline green (1780 passed / 2 skipped / 5 xfailed); the phase's close-out bed (`l0-fx-20260923T201403Z`) ran the fixture-oracle with the S1/S2 allowlist rows deleted and every blk/u6/whpuller cell clean unsuppressed, L0 120/101/0.842 with zero drift. Detail: `docs/06.142-143-blocker-fidelity.md` (done).
+
+**A computed ebuild `SLOT` is evaluated before the source merge reads it, exactly like real `dblink.treewalk()` (Phase 14, 2026-09-24; #149 DONE).** The source-merge path used to scan the raw ebuild text for a literal `SLOT=` (`parse_slot`), so `SLOT="$(ver_cut 1)"` reached the vdb as the literal `$(ver_cut 1)`: the rebuild then self-collided under real's default `FEATURES=protect-owned` (`Package '...' NOT merged due to file collisions` — the exact `l3-core` abort #149 was filed from) because `find_collisions` compared that literal against the installed vdb slot (`4` for mpdecimal). Real reads `SLOT` from the `build-info` dir instead (`vartree.py:4455-4498`), which the install phase's `__dyn_install` fills with the *evaluated* `${SLOT}`; now so does portuale, with real's full fallback chain (build-info value → `settings["SLOT"]` write-back → `!!! SLOT is undefined` abort, plus the `_eqawarn` QA Notice on a settings divergence). Verified against the real-`ver_cut` semantics on the fixture:
+```sh
+cargo test --release -p portuale computed_slot_is_evaluated_in_the_vdb_and_a_reinstall_does_not_abort_under_protect_owned
+# first merge writes vdb SLOT = "1" (the evaluated ver_cut of "1.0"), not "$(ver_cut 1)"
+# reinstall under MergeOptions::default() (protect_owned: true) completes, rc 0, no collision abort
+```
+and against real Portage on the test-bed image: real `emerge --oneshot --usepkg=n dev-libs/mpdecimal` writes vdb `SLOT = 4` where portuale previously wrote `$(ver_cut 1)`. The L1 merge-path gate re-ran green over the running container (`l1-20260924T135717Z`, glibc-2.43-r2 + bash-5.3_p15, 2/2 merged, 0 hard / 0 unexplained / 0 payload / 1417 mtime-only), and the R5 source-path cell (new pmtest `atomlists/l3-merge-gate.txt` = glibc+bash+mpdecimal built from source, `L3_PM=portuale L3_JOBS=20` — the binpkg L1 gate can never exercise the source-path SLOT read) ran green as `l3-20260924T140811Z`: glibc, bash and mpdecimal all `>>> merged.` from source rc 0, snapshot clean, and the snapshot vdb carries mpdecimal `SLOT=4` (evaluated), bash `0`, glibc `2.2`. `parse_slot` and its two unit tests are gone; the module doc comment now says the evaluated-SLOT truth.
+
+**The differential bed's L3 comparator can grade a real control pair clean when split-debug build-id paths race (Phase 7a close-out, 2026-09-24; #152 DONE-PARTIAL, P16 of batch-2026-09-24).** The portage-vs-portage `l3-core` control (`l3-20260923T080445Z`, both sides 345/345 rc 0) diffed to 64 unexplained hard findings — every one a `/usr/lib/debug/.build-id/<xx>/<hash>[.debug]` symlink, a split-debug `.debug` leaf, or a vdb CONTENTS row recording one — because toolchain content nondeterminism (static-archive member timestamps, ±4–8-byte objects) forces the build-ids, hence the debug paths, to differ between two byte-identical-portage merges. The R3 normalizer (`pmtest/differential-test-bed/compare/normalize.py`) now keys `.build-id` links by the canonical resolved target (`@buildid:` key, `size = len(link)`), renames split-debug twin `.debug` leaves (binutils `ld`/`ld.bfd`, glibc getconf managers, the porttest setuid triple) to the canonical twin basename — mirroring the same renames in the vdb CONTENTS `sym`/`obj`/`dir` lines — and drops the staging rows (`/usr/local/bin` PM bundle, `/etc/hosts`, `/etc/machine-id`, `/root/.bash_history`) that are test-harness artifacts, never merged state. The re-diff of the saved control pair is now **rc 0, 0 unexplained, 1 hard (1 explained), 157 tolerated payload (was 176), 59472 mtime-only** — the `e0/2277` porttest rows are retired. Runnable proof, in contrast to the "strip the paths" alternative, keeps the diff honest: the split-debug *presence* (which files got debug links, #38) stays under test, and the synthetic cases in `compare/test-diff-tolerance.py` reproduce each racy shape as a raw finding and demand it go clean through the normalizer:
+```sh
+python3 compare/test-diff-tolerance.py        # 12 checks green
+python3 compare/normalize.py logs/l3-20260923T080445Z/control-a
+python3 compare/normalize.py logs/l3-20260923T080445Z/control-b
+python3 compare/diff.py --layer l3 --tolerate-payload \
+  logs/l3-20260923T080445Z/control-a logs/l3-20260923T080445Z/control-b \
+  compare/known-divergences.yaml   # rc 0, UNEXPLAINED 0
+```
+
+**A `--tree` `[nomerge]` ancestor row carries the package's `USE` column, exactly like real's display (batch-2026-09-24 P18, 2026-09-24; #154 DONE).** Portuale's nomerge arm (`print_entry_line`'s `ordered == false` path) rendered the row bare, while real prints `USE="x"` — because real's `Display.__call__` runs `_display_use` for every package with no ordered/merge gate and appends `" " + verboseadd` in `print_messages` (`verbose_size` is merge-gated, so no size suffix follows on this arm; verified live against 3.0.82.2 on `--tree dev-libs/gpcyclec` at plain, `-v` and `-vv` verbosity). The arm now appends the same USE suffix as a merge row (empty for USE-less packages, so those rows are byte-unchanged):
+```sh
+portuale emerge --pretend --tree dev-libs/gpcyclec
+# [ebuild  N     ] dev-libs/gpcyclec-1.0
+# [nomerge       ]  dev-libs/gpcyclea-1.0 USE="x"
+# [ebuild  N     ]   dev-libs/gpcycleb-1.0
+# [ebuild  N     ]    dev-libs/gpcyclea-1.0  USE="x"
+```
+Pins: new `CASES` `--tree dev-libs/gpcyclec` (rc 1), `test_tree_nomerge_ancestor_row_carries_the_package_use_column`, Rust `nomerge_row_carries_the_use_suffix_when_the_package_has_one`; six expanded-corpus cycle cells (cyc4a/fucyclea/fucyclec/gpcyclea/gpcyclec/usecyclea) each move by exactly `+ USE="x"` (blessed). Beds: l131-s1 re-run drops the `[use] gpcyclea` finding (only the filed #153/#155/#156 items remain), default fixture-oracle 0 unexplained, L0 byte-identical 41-finding set. Operational lesson recorded in the batch plan: never run a real-`emerge` oracle against the live fixture tree — real applies its global updates (vdb moves) even under `--pretend`; oracles run against a `cp -a` copy.
+
+**Packages whose dep conditionals reference flags outside their own IUSE are masked `invalid`, exactly like real (batch-2026-09-24 P19, 2026-09-24; #153 DONE).** Real `Package._validate_deps` runs every dep key through `use_reduce(matchall=True, is_valid_flag=own-effective-IUSE, token_class=Atom)` at construction: a `flag? ( … )` group *or* a `[flag?]`/`[!flag?]`/`[flag=]`/`[!flag=]` use-dep with an undeclared flag masks the whole candidate, no matter whether the conditional is active (verified live against 3.0.82.2 on three fixture ebuilds -- a tree-wide scan finds no others). Portuale ports that half of the check (`invalid_use_conditional_reasons`, same single-pass order, same key order, same two message shapes) and enforces it in visibility, masking reasons, and every autounmask relaxation level (never relaxed -- real offers no unmask for it):
+```sh
+portuale emerge --pretend dev-libs/fucyclec
+# !!! All ebuilds that could satisfy "dev-libs/fucyclec" have been masked.
+# !!! One of the following masked packages is required to complete your request:
+# - dev-libs/fucyclec-1.0::testrepo (masked by: invalid: DEPEND: USE flag 'x' referenced in conditional 'x?' in atom 'dev-libs/fucyclea[x?]' is not in IUSE)
+```
+The same holds for a defaulted conditional (`dev-libs/usedeppkg`: `[baz(+)?]` is still validated -- the default only matters for matching, not for the owner's IUSE) and for groups (`dev-vcs/somercurial`: `soflag? ( … )`, whose message has no `in atom` part). Two older pins asserted merges real never makes and were rewritten to these reports. Beds: the l131-s1 `fucyclec` cell is fully explained, the default fixture-oracle sits at 0 unexplained, and L0 is byte-identical to baseline.
+
+**Flat `@world` merge order matches real exactly; the `--tree` row-#3 swap is display sequencing from a bias-tie discovery-order difference (batch-2026-09-24 P20, 2026-09-25; #156 CLOSED as a #17 instance, no code).** Bed cell `--tree @world` shows real `dev-libs/withdeps` where portuale shows `dev-libs/systempkg` at row #3, but the flat `@world` list is byte-identical and the merge-scheduler traces (`PORTUALE_MO_SEL=1` vs real's own `_serialize_tasks`, traced in-container) agree iteration for iteration -- including the final 5-node roots-last-resort batch. The batch follows post-bias graph order, and both bias functions tie the pair (0 parents, non-deep, stable sort), so whichever package was *discovered* first wins: real inserts `systempkg` first, portuale `withdeps`. The nested-`newpkg` twin symptom falls out of the same adjacency (no second bug). Recorded as evidence for #17 (bias-tie discovery order), where the fix belongs.
+
+**`--tree` nests backtrack-abandoned parents under the earliest-resolved puller, like real (batch-2026-09-24 P21, 2026-09-25; #155 DONE, notice half split to #129).** On `--tree dev-libs/mg2top` both sides merge the identical graph (flat outputs byte-identical), but portuale nested `mgfc-1` under `[nomerge] mgfb-1` where real nests it under `[nomerge] mgfa-1`: real's digraph parent lists follow resolution edge-insertion order and its tree walk takes the first untraversed parent, while portuale enumerated display edges over merge-sorted array position (merge order sorts the later-discovered `mgfb-1` first). Every display entry now carries its BFS discovery index (`GraphEntry::discovery`, stamped before the merge sort) and the tree walk enumerates edges in that order:
+```sh
+portuale emerge --pretend --tree dev-libs/mg2top
+# [ebuild  N     ] dev-libs/mg2top-1
+# [ebuild  N     ]  dev-libs/mgfa-1
+# [ebuild  N     ]   dev-libs/mgfb-1
+# [ebuild  N     ]  dev-libs/mgxa-1
+# [ebuild  N     ]   dev-libs/mgxb-1
+# [nomerge       ] dev-libs/mgfa-1
+# [ebuild  N     ]  dev-libs/mgfc-1
+# [nomerge       ] dev-libs/mgxa-1
+# [ebuild  N     ]  dev-libs/mgxc-1
+```
+Pins: new `--tree mg2top` CASES entry + pinned test, Rust stamper unit test; the l131-s1 bed cell's row findings are gone (only real's skipped-updates notice lines remain -- synthesizing those needs backtrack-trial state, filed as #129).
+
 # # required by dev-libs/useflagpkg[-foo] (argument)
 # == sqlite
