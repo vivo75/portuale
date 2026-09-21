@@ -219,7 +219,7 @@ use portage_dep::{
 use portage_repo::{
     BlockerConflict, BlockerSatisfiedBy, ChangedDepsReportEntry, GraphEntry, PretendOutcome,
     ResolveRequest, SlotConflict, active_resolver_for, all_installed_packages,
-    config_root_from_env, ebuild_visible_at, root_from_env, slot_conflict_flag_sets,
+    config_root_from_env, ebuild_visible_at, root_from_env, slot_conflict_flag_sets, split_pf,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -5216,16 +5216,11 @@ fn installed_cp_versions(root: &Path) -> Vec<(String, String, String, String)> {
         };
         for pkg in pkgs.into_iter().filter(|e| e.path().is_dir()) {
             let dirname = pkg.file_name().to_string_lossy().to_string();
-            // Split `name-version` on the version boundary via the atom
-            // parser's own knowledge -- reuse `installed_candidates`
-            // once the package name is known. Cheaper: try each `-`
-            // split point and keep the one whose right half version-
-            // parses. `strip_version_prefix` (portage-repo) already does
-            // this, but isn't public; approximate with a scan.
             if let Some((name, version)) = split_pf(&dirname) {
-                let slot = std::fs::read_to_string(pkg.path().join("SLOT"))
-                    .unwrap_or_default()
-                    .trim()
+                // #116: through the vdb seam; the main slot only, as
+                // before (an absent `SLOT` is `""`, like the old
+                // `unwrap_or_default`).
+                let slot = portage_repo::vdb_entry_slot(root, &category, &dirname)
                     .split('/')
                     .next()
                     .unwrap_or("0")
@@ -5235,21 +5230,6 @@ fn installed_cp_versions(root: &Path) -> Vec<(String, String, String, String)> {
         }
     }
     out
-}
-
-/// Splits a vdb directory name (`foo-bar-1.2.3-r1`) into `(package,
-/// version)` -- the last `-`-separated run that `portage_versions::
-/// ververify` accepts as a version (optionally with an `-r<n>` revision)
-/// is the version, everything before it the package name.
-fn split_pf(dirname: &str) -> Option<(String, String)> {
-    let parts: Vec<&str> = dirname.split('-').collect();
-    for i in 1..parts.len() {
-        let candidate = parts[i..].join("-");
-        if portage_versions::ververify(&candidate) {
-            return Some((parts[..i].join("-"), candidate));
-        }
-    }
-    None
 }
 
 /// Real `action_depclean`'s own argument handling (`actions.py:848-863`),

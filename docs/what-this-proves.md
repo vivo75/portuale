@@ -17756,3 +17756,11 @@ cargo test --release -p portage-util
 # shuffle_seed_is_frozen_at_first_use_and_read_dir_is_sorted_by_default ... ok
 # shuffle_seed_is_frozen_at_first_use_and_still_shuffles ... ok
 ```
+
+**Two of the three direct `SLOT` scans in production go through the vdb seam (Tier 8 #116, 2026-09-21).** `pretend.rs`'s `installed_cp_versions` and `ebuild_merge.rs`'s `blockers_from_flat_deps` read `SLOT` with a bare `read_to_string(...).trim()` — an `open`+`read` per installed package (2,090 on this host) that also missed #109's consolidated `metadata` snapshot and `_aux_get`'s whitespace normalisation. Both now call the new `portage_repo::vdb_entry_slot(root, category, pf)`, which splits the directory name with the crate's existing `split_pf` and reads the field through `vdb_aux_get`; each caller keeps its post-processing verbatim (main slot only for the bare-name scan, `slot/sub_slot` with the slot-as-sub-slot fallback for the blocker scan), and `pretend.rs`'s private `split_pf` copy is deleted in favour of the `portage_repo` export. The normalisation is the one semantic difference: a multi-line `SLOT` collapses to one space-separated line (pinned by a unit test) and a `SLOT`-less entry enters the blocker scan as `cat/pf:/` instead of being skipped — both inert on real data (0 of 2,090 `SLOT` files are multi-line, and an empty slot parses to no slot, so the candidate matches nothing). Output-preserving over the full contract suite and corpus, and the merge-path safety gate is green: portuale re-merged `sys-libs/glibc` and `app-shells/bash` from binpkgs (`L1_CONSUME_REINSTALL=1`), `merged_count 2`, 0 hard findings / 0 unexplained. A third production direct `SLOT` read remains (`ebuild_merge::read_installed_slot`, used by `find_collisions` and the merge replace-scan); per the plan's own residue rule it is filed as #126, not folded into this slice.
+
+```sh
+awk 'FNR>1{print FILENAME}' /var/db/pkg/*/*/SLOT   # no output: 0 of 2090 multi-line
+cargo test --release -p portage-repo vdb_entry_slot
+# 3 passed (seam equality, multi-line collapse, unsplittable pf)
+```

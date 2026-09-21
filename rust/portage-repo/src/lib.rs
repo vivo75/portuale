@@ -6184,6 +6184,21 @@ pub fn installed_refs(root: &Path, category: &str, package: &str) -> Vec<Install
         .collect()
 }
 
+/// The `SLOT` of the vdb entry named by its directory name `pf`
+/// (`foo-bar-1.2.3-r1`), read through the same [`vdb_aux_get`] seam
+/// every other installed-metadata consumer uses: the normalised
+/// `"slot/sub_slot"` string, multi-line values collapsed to one
+/// space-separated line, `""` for an entry with no `SLOT` file or a
+/// `pf` [`split_pf`] cannot split. No further splitting or defaulting --
+/// callers keep their own (real's invalid-`SLOT` -> `"0"` translation is
+/// backlog #115's residue, not this helper's).
+pub fn vdb_entry_slot(root: &Path, category: &str, pf: &str) -> String {
+    let Some((package, version)) = split_pf(pf) else {
+        return String::new();
+    };
+    vdb_aux_get(root, category, &package, &version, "SLOT")
+}
+
 /// One row of `emerge --info`'s `info_pkgs` version table (real
 /// `action_info`'s second `myvars` loop): a resolved `cat/pkg` and its
 /// installed versions, each already rendered `<ver>::<repo>` with the
@@ -27021,6 +27036,48 @@ mod tests {
             read_vdb_string(&root, "dev-libs", "snapnone", "1.0", "RDEPEND"),
             "dev-libs/individual"
         );
+    }
+
+    /// #116: the `pf`-addressed wrapper around `vdb_aux_get("SLOT")` used
+    /// by the last two direct `SLOT` scans (`pretend.rs::
+    /// installed_cp_versions` and `ebuild_merge.rs::
+    /// blockers_from_flat_deps`). It returns the normalised
+    /// `slot/sub_slot` exactly as `_aux_get` does -- no splitting, no
+    /// defaulting; callers keep their own post-processing verbatim.
+    #[test]
+    fn vdb_entry_slot_matches_vdb_aux_get_on_a_fixture_entry() {
+        let root = tmp_vdb("dev-libs", "entryslot-1.2.3-r1", &[("SLOT", b"0/1.2\n")]);
+        assert_eq!(
+            vdb_entry_slot(&root, "dev-libs", "entryslot-1.2.3-r1"),
+            vdb_aux_get(&root, "dev-libs", "entryslot", "1.2.3-r1", "SLOT")
+        );
+        assert_eq!(
+            vdb_entry_slot(&root, "dev-libs", "entryslot-1.2.3-r1"),
+            "0/1.2"
+        );
+    }
+
+    /// #116: routing the two scans through the seam is what makes a
+    /// multi-line `SLOT` collapse (`" ".join(myd.split())`, real
+    /// `_aux_get` on the individual-file path); the bare `.trim()` the
+    /// scans used before kept the embedded newline. No live vdb entry has
+    /// one (host probe: 0 of 2090), so this is pinned explicitly here.
+    #[test]
+    fn vdb_entry_slot_collapses_a_multiline_slot_to_one_space_separated_line() {
+        let root = tmp_vdb("dev-libs", "entryslot-2.0", &[("SLOT", b"0/1.2\n0/1.3\n")]);
+        assert_eq!(
+            vdb_entry_slot(&root, "dev-libs", "entryslot-2.0"),
+            "0/1.2 0/1.3"
+        );
+    }
+
+    /// #116: a directory name `split_pf` cannot split yields `""` -- the
+    /// same value the seam serves for an absent `SLOT`, so a caller's
+    /// existing `""` defaulting is untouched.
+    #[test]
+    fn vdb_entry_slot_returns_empty_for_an_unsplittable_pf() {
+        let root = tmp_vdb("dev-libs", "not-a-version-dir", &[]);
+        assert_eq!(vdb_entry_slot(&root, "dev-libs", "not-a-version-dir"), "");
     }
 
     /// #109 S3: the snapshot parse is real's `_read_metadata_file` --

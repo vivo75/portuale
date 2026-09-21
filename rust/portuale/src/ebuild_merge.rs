@@ -2677,17 +2677,17 @@ fn blockers_from_flat_deps(root: &Path, flat_deps: &[String]) -> HashSet<(String
                     .into_iter()
                     .flatten()
                     .filter(|e| e.path().is_dir())
-                    .filter_map(move |pkg_entry| {
+                    .map(move |pkg_entry| {
                         let pf = pkg_entry.file_name().to_string_lossy().to_string();
-                        let slot = std::fs::read_to_string(pkg_entry.path().join("SLOT"))
-                            .ok()?
-                            .trim()
-                            .to_string();
+                        // #116: through the vdb seam, so this scan sees the
+                        // same normalised `SLOT` every other consumer does
+                        // (a missing field is `""` -> `("", "")` here).
+                        let slot = portage_repo::vdb_entry_slot(root, &category_name, &pf);
                         let (slot, sub_slot) = slot
                             .split_once('/')
                             .map(|(s, ss)| (s.to_string(), ss.to_string()))
                             .unwrap_or_else(|| (slot.clone(), slot.clone()));
-                        Some((category_name.clone(), pf, slot, sub_slot))
+                        (category_name.clone(), pf, slot, sub_slot)
                     })
                     .map(|(category, pf, slot, sub_slot)| {
                         let candidate_str = format!("{category}/{pf}:{slot}/{sub_slot}");
@@ -6186,7 +6186,10 @@ mod tests {
     fn blockers_from_flat_deps_matches_only_blocker_atoms_against_the_vdb() {
         let tmp = tempdir();
         let root = tmp.join("root");
-        for (pf, slot) in [("blockedpkg-1.0", "0"), ("normalpkg-2.0", "3")] {
+        // #116: `normalpkg` carries a sub-slot, so the re-point through
+        // the vdb seam must preserve the `split_once('/')` post-processing
+        // -- the expectations below are the pre-slice ones, unchanged.
+        for (pf, slot) in [("blockedpkg-1.0", "0"), ("normalpkg-2.0", "3/3.1")] {
             let vdb = root.join("var/db/pkg/dev-libs").join(pf);
             std::fs::create_dir_all(&vdb).unwrap();
             std::fs::write(vdb.join("SLOT"), format!("{slot}\n")).unwrap();
