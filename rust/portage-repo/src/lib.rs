@@ -18248,11 +18248,21 @@ pub fn abort_path_enabled() -> bool {
 /// (`entries` order) — a deliberate cut, since which failure is "first"
 /// is a walk-order artefact, and the fixtures never carry two.
 ///
-/// A `NoVisibleCandidate` dependency entry aborts only when at least one
-/// requirer is merge-bound: real rescues an *installed* parent's
-/// unsatisfied dep (`_initially_unsatisfied_deps`, `:3425-3437` and
-/// `:3458-3470`, the "error message but do not cause the dependency
-/// calculation to fail" path) and a top-level miss is already fatal via
+/// A `NoVisibleCandidate` dependency entry always aborts: real has no
+/// installed-parent rescue for a settled miss. Its
+/// `_initially_unsatisfied_deps` path (`:3425-3437` complete-mode
+/// beyond-depth, `:3458-3470` masked-parent backward-compat, both
+/// "error message but do not cause the dependency calculation to
+/// fail") is narrow -- a use-constrained miss goes to
+/// `_select_package(without_use)` → rebuild-or-hard-abort instead
+/// (`:3473-3483`, `:6880-6900`), and a nothing-matches miss to the
+/// missing-dependency backtrack. Portuale used to rescue every
+/// installed-only NVC here (no merge-bound requirer → `Complete`),
+/// which is exactly what hid #132 on the live tree: the evaluated
+/// `-wayland` qtbase atom settled `NoVisibleCandidate` with only
+/// installed requirers, the block rendered, and the run exited 0
+/// where real aborts (`#111 S0`, `#132` arm D oracle
+/// `l0-fx-20260921T231520Z`). A top-level miss is already fatal via
 /// the argument path, not this one. Masked-only atoms are those with a
 /// [`MaskedDepReport`]; every other miss — nothing matches, or a
 /// `[use]` dep no autounmask flip resolves — is `UnsatisfiedAtom`
@@ -18271,12 +18281,34 @@ pub fn abort_outcome(
         if !matches!(entry.outcome, PretendOutcome::NoVisibleCandidate) {
             continue;
         }
-        let Some(parent_cpv) = entry.required_by.iter().find_map(|(c, p)| {
-            entries
-                .iter()
-                .find(|o| &o.category == c && &o.package == p)
-                .and_then(merge_bound_cpv)
-        }) else {
+        // The abort's `parent_cpv` is the first merge-bound requirer;
+        // with installed-only requirers it is the first requirer's own
+        // installed cpv (same `cat/pkg-version` shape as
+        // `merge_bound_cpv`). An NVC entry with no resolvable requirer
+        // at all keeps the old rescue -- there is nobody to blame.
+        let Some(parent_cpv) = entry
+            .required_by
+            .iter()
+            .find_map(|(c, p)| {
+                entries
+                    .iter()
+                    .find(|o| &o.category == c && &o.package == p)
+                    .and_then(merge_bound_cpv)
+            })
+            .or_else(|| {
+                entry.required_by.iter().find_map(|(c, p)| {
+                    entries
+                        .iter()
+                        .find(|o| &o.category == c && &o.package == p)
+                        .and_then(|o| match &o.outcome {
+                            PretendOutcome::AlreadyInstalled { version } => {
+                                Some(format!("{c}/{p}-{version}"))
+                            }
+                            _ => None,
+                        })
+                })
+            })
+        else {
             continue;
         };
         let key = (entry.category.clone(), entry.package.clone());
