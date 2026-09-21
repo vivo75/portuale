@@ -35,6 +35,42 @@ fn read_vdb_string_missing_file_is_still_empty() {
     );
 }
 
+/// A key outside Portage's 23-field set is served raw, never collapsed.
+#[test]
+fn vdb_aux_get_reads_an_out_of_set_key_raw() {
+    let root = tmp_vdb(
+        "dev-libs",
+        "rawkey-1.0",
+        &[(
+            "CONTENTS",
+            b"obj /usr/lib/foo.so abc123 123\nsym /usr/lib/bar.so\n",
+        )],
+    );
+    assert_eq!(
+        vdb_aux_get(&root, "dev-libs", "rawkey", "1.0", "CONTENTS"),
+        "obj /usr/lib/foo.so abc123 123\nsym /usr/lib/bar.so\n"
+    );
+    // Absent out-of-set file is still `""`.
+    assert_eq!(
+        vdb_aux_get(&root, "dev-libs", "rawkey", "1.0", "NEEDED.ELF.2"),
+        ""
+    );
+}
+
+/// Field files decode lossy like Portage (`errors="replace"`).
+#[test]
+fn read_vdb_string_decodes_invalid_utf8_lossy_like_portage() {
+    let root = tmp_vdb(
+        "dev-libs",
+        "latin1-1.0",
+        &[("DESCRIPTION", b"caf\xe9 package\n")],
+    );
+    assert_eq!(
+        read_vdb_string(&root, "dev-libs", "latin1", "1.0", "DESCRIPTION"),
+        "caf\u{fffd} package"
+    );
+}
+
 /// The committed multilinevdb fixture is the integration half of the same
 /// contract: embedded newlines served exactly like Portage's `_aux_get`.
 #[test]
@@ -180,6 +216,34 @@ fn vdb_aux_get_falls_back_without_a_metadata_file() {
     );
 }
 
+/// `vdb_entry_slot` is the `pf`-addressed wrapper around `vdb_aux_get("SLOT")`.
+#[test]
+fn vdb_entry_slot_matches_vdb_aux_get_on_a_fixture_entry() {
+    let root = tmp_vdb("dev-libs", "entryslot-1.2.3-r1", &[("SLOT", b"0/1.2\n")]);
+    assert_eq!(
+        vdb_entry_slot(&root, "dev-libs", "entryslot-1.2.3-r1"),
+        vdb_aux_get(&root, "dev-libs", "entryslot", "1.2.3-r1", "SLOT")
+    );
+    assert_eq!(
+        vdb_entry_slot(&root, "dev-libs", "entryslot-1.2.3-r1"),
+        "0/1.2"
+    );
+}
+
+/// A multi-line `SLOT` collapses, then translates to `"0"` as invalid.
+#[test]
+fn vdb_entry_slot_collapses_a_multiline_slot_to_one_space_separated_line() {
+    let root = tmp_vdb("dev-libs", "entryslot-2.0", &[("SLOT", b"0/1.2\n0/1.3\n")]);
+    assert_eq!(vdb_entry_slot(&root, "dev-libs", "entryslot-2.0"), "0");
+}
+
+/// An unsplittable directory name yields `""`, like an absent `SLOT`.
+#[test]
+fn vdb_entry_slot_returns_empty_for_an_unsplittable_pf() {
+    let root = tmp_vdb("dev-libs", "not-a-version-dir", &[]);
+    assert_eq!(vdb_entry_slot(&root, "dev-libs", "not-a-version-dir"), "");
+}
+
 /// Snapshot parse (Portage's `_read_metadata_file`): `#` lines ignored,
 /// `=`-less lines skipped, last duplicate wins.
 #[test]
@@ -196,6 +260,29 @@ fn vdb_aux_get_snapshot_parse_ignores_comments_and_lets_the_last_key_win() {
         read_vdb_string(&root, "dev-libs", "snapparse", "1.0", "RDEPEND"),
         "last=with=equals"
     );
+}
+
+/// `resolve_vdb_entry` returns the direct key for an existing entry,
+/// and the direct key unchanged for a file or an absent entry.
+#[test]
+fn resolve_vdb_entry_returns_the_direct_key() {
+    let root = tmp_vdb("dev-libs", "statmeta-1.0", &[]);
+    let got = resolve_vdb_entry(&root, "dev-libs", "statmeta", "1.0");
+    assert_eq!(got, portage_vdb::EntryKey::new("dev-libs", "statmeta-1.0"));
+    assert!(vdb_entry_is_dir(&root, "dev-libs", "statmeta", "1.0"));
+    // A *file* at the entry path is not a directory.
+    let file_root = tmp_vdb("dev-libs", "statmeta-2.0", &[]);
+    let file_dir = file_root.join("var/db/pkg/dev-libs/statmeta-2.0");
+    std::fs::remove_dir_all(&file_dir).unwrap();
+    std::fs::write(&file_dir, b"not a dir").unwrap();
+    assert!(!vdb_entry_is_dir(&file_root, "dev-libs", "statmeta", "2.0"));
+    // An absent entry: the unresolved direct key.
+    let missing = resolve_vdb_entry(&root, "dev-libs", "absent", "1.0");
+    assert_eq!(
+        missing,
+        portage_vdb::EntryKey::new("dev-libs", "absent-1.0")
+    );
+    assert!(!vdb_entry_is_dir(&root, "dev-libs", "absent", "1.0"));
 }
 
 /// A second lookup on the same instance does not re-read the snapshot.

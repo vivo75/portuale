@@ -667,3 +667,19 @@ fn package_accept_keywords_negative_keyword_never_counts_toward_star() {
         &config
     ));
 }
+
+/// Same post-freeze guard on the visibility path: mutating a mask
+/// field trips instead of poisoning the memo.
+#[test]
+#[should_panic(expected = "mutated after resolve_config")]
+#[cfg(debug_assertions)]
+fn is_visible_fingerprint_debug_asserts_on_post_freeze_mutation() {
+    let base_config = portage_profile::Config::default();
+    let mut frozen = portage_profile::Config {
+        use_context_base: Some(portage_profile::use_context_base_fingerprint(&base_config)),
+        is_visible_base: Some(portage_profile::is_visible_base_fingerprint(&base_config)),
+        ..base_config
+    };
+    frozen.package_mask.push("dev-libs/foo".to_string());
+    let _ = is_visible_fingerprint(&frozen);
+}

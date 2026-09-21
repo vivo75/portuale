@@ -1022,3 +1022,18 @@ fn use_context_fingerprint_uses_the_frozen_base_and_separates_autounmask_use() {
     unfrozen.accept_keywords.insert("~amd64".to_string());
     assert_ne!(before, use_context_fingerprint(&unfrozen));
 }
+
+/// The fingerprint debug-asserts on post-freeze mutation instead of
+/// silently poisoning the memo.
+#[test]
+#[should_panic(expected = "mutated after resolve_config")]
+#[cfg(debug_assertions)]
+fn use_context_fingerprint_debug_asserts_on_post_freeze_mutation() {
+    let base_config = portage_profile::Config::default();
+    let mut frozen = portage_profile::Config {
+        use_context_base: Some(portage_profile::use_context_base_fingerprint(&base_config)),
+        ..base_config
+    };
+    frozen.accept_keywords.insert("~amd64".to_string());
+    let _ = use_context_fingerprint(&frozen);
+}
