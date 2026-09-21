@@ -276,11 +276,14 @@ post-slice binary; the numbers are in "2026-09-21 batch" below). The
 resolver is now ~2.45 s wall / ~1.9 s user / ~0.5 s sys on the reference
 workload:
 
-1. **`#107` — the second `run_pass`.** `run_pass` is 81.20 % with
-   children and the loop still restarts where real reports
-   `backtrack: 0/20`; every memoisation batch leaves its share higher.
-   Algorithmic/parity, not memoisation — do not win it by skipping the
-   pass.
+1. **`#107` — the second `run_pass` (parked 2026-09-21).** `run_pass` is
+   81.20 % with children and the loop still restarts where real reports
+   `backtrack: 0/20`. Diagnosed: the restart is the reverse-dependency
+   pin feedback, and removing it needs real's complete-graph
+   parent-atom model (a prototype that applied the reachable consumers'
+   atoms at selection lost an update and the withheld-update warning —
+   see the #107 backlog entry). Algorithmic/parity; do not win it by
+   skipping the pass. Revisit only with the complete-graph model.
 2. **`#117` — `binpkg_respect_use_ok`** (24.78 % with children, 0.25 %
    self): now the top named function. Its children are the memoised USE
    machinery, so the residual is key construction + allocation per
