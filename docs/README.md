@@ -11,7 +11,7 @@ holds everything else.
 | [`agent-context.md`](agent-context.md) | **Read first for any development work.** Goals, hard constraints, architecture decisions, the bash-backend resolution, and pointers to the live state + backlog. |
 | [`../AGENTS.md`](../AGENTS.md) | The "next slice" workflow and the verification / commit rules. |
 | [`scope-backlog.md`](scope-backlog.md) | What real portage does that portuale doesn't (either side), the standing non-goals, the distance to a drop-in replacement. |
-| [`batch-2026-09-21.md`](batch-2026-09-21.md) | **The current cross-tier batch plan** (16 items over tiers 1/2/3/6/8): the phase order and why, the per-slice runbook, the stop conditions, and pointers to the seven per-cluster plan files. An executing agent reads it plus one cluster file. |
+| [`batch-2026-09-21.md`](batch-2026-09-21.md) | **The current cross-tier batch plan** (22 items over tiers 1/2/3/6/8, grown from the original 16 as each phase filed its residues): the phase order and why, the per-slice runbook, the stop conditions, and pointers to the ten per-cluster plan files. An executing agent reads it plus one cluster file. |
 | [`backlog-tasks.md`](backlog-tasks.md) | The same open work as a flat, one-line-per-task list with code/doc pointers — for picking up a slice without a full context load. |
 | [`history/second_python_copy_removal.md`](history/second_python_copy_removal.md) | Why the Python copy of the resolver was removed (2026-09-15), the checks that replaced it, and which are still open. |
 | [`what-this-proves.md`](what-this-proves.md) | The append-only per-slice record — every shipped feature with its real-portage source grounding, plus a runnable example. Large; `git log` is the same history per-commit. |
