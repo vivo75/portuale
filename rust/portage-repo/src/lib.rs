@@ -638,40 +638,57 @@ fn apply_slotmove_to_token(
 /// string -- for a command-line or world atom.
 /// Every `cat/pkg` that *could* be the first command in the loop to
 /// touch an atom -- the union of every `move` command's `old` and every
-/// `slotmove`'s `cp`. `apply_move_to_token` / `apply_slotmove_to_token`
-/// only ever rewrite a token whose current `cp` equals a command's
-/// `old`/`cp`, and the loop starts from `atom.cp`, so an atom whose `cp`
-/// is not in this set is a guaranteed no-op for the whole loop. On a
-/// real tree `profiles/updates/` holds thousands of accumulated
-/// commands, and this walk runs per atom per pass -- the `format!`
-/// alloc per command per atom was ~17% of `emerge -pt` on a big graph.
-fn update_move_targets() -> &'static HashSet<(String, String)> {
-    static TARGETS: OnceLock<HashSet<(String, String)>> = OnceLock::new();
+/// `slotmove`'s `cp`, grouped `category -> package names`. Grouping keeps
+/// the hot per-token check two **borrowed** lookups (`#119`: the flat
+/// `HashSet<(String, String)>`'s `contains` demanded a
+/// `(category.clone(), package.clone())` tuple, two `String` allocations
+/// per token of every rewritten dep string). On a real tree
+/// `profiles/updates/` holds thousands of accumulated commands, and this
+/// walk runs per token per dep string.
+fn update_move_targets() -> &'static HashMap<String, HashSet<String>> {
+    static TARGETS: OnceLock<HashMap<String, HashSet<String>>> = OnceLock::new();
     TARGETS.get_or_init(|| {
-        global_package_updates()
-            .iter()
-            .map(|cmd| match cmd {
-                UpdateCmd::Move { old, .. } => old.clone(),
-                UpdateCmd::SlotMove { cp, .. } => cp.clone(),
-            })
-            .collect()
+        let mut map: HashMap<String, HashSet<String>> = HashMap::new();
+        for cmd in global_package_updates() {
+            let (cat, pkg) = match cmd {
+                UpdateCmd::Move { old, .. } => old,
+                UpdateCmd::SlotMove { cp, .. } => cp,
+            };
+            map.entry(cat.clone()).or_default().insert(pkg.clone());
+        }
+        map
     })
 }
 
 pub fn apply_updates_to_atom(atom: &str) -> String {
-    let targets = update_move_targets();
+    apply_updates_to_atom_with(atom, global_package_updates(), update_move_targets())
+        .unwrap_or_else(|| atom.to_string())
+}
+
+/// Backlog #119: `Some(rewritten)` only when a command actually changed
+/// the token, `None` when it is byte-identical to the input -- the
+/// unchanged case costs no `String`.
+fn apply_updates_to_atom_with(
+    atom: &str,
+    cmds: &[UpdateCmd],
+    targets: &HashMap<String, HashSet<String>>,
+) -> Option<String> {
     if targets.is_empty() {
-        return atom.to_string();
+        return None;
     }
     // Fast path: if the atom's own `cp` isn't the `old`/`cp` of any
-    // command, nothing in the loop below can ever rewrite it.
+    // command, nothing in the loop below can ever rewrite it. Both
+    // lookups borrow (`HashMap<String,_>::get(&str)`,
+    // `HashSet<String>::contains(&str)`), so this costs no allocation.
     if let Some(parsed) = portage_dep::parse_atom(atom.trim_start_matches('!'))
-        && !targets.contains(&(parsed.category.clone(), parsed.package.clone()))
+        && !targets
+            .get(parsed.category.as_str())
+            .is_some_and(|pkgs| pkgs.contains(parsed.package.as_str()))
     {
-        return atom.to_string();
+        return None;
     }
     let mut cur = atom.to_string();
-    for cmd in global_package_updates() {
+    for cmd in cmds {
         cur = match cmd {
             UpdateCmd::Move { old, new } => apply_move_to_token(&cur, old, new),
             UpdateCmd::SlotMove {
@@ -681,26 +698,56 @@ pub fn apply_updates_to_atom(atom: &str) -> String {
             } => apply_slotmove_to_token(&cur, cp, old_slot, new_slot),
         };
     }
-    cur
+    // A command that matched the cp but left the token unchanged (a
+    // slotmove on another slot, a versioned atom) is reported as
+    // unchanged, exactly like the old `updated != *dep` comparison.
+    if cur == atom { None } else { Some(cur) }
 }
 
 /// Real `update_dbentry`'s whitespace-preserving `re.split(r"(\s+)")` pass
 /// over a `*DEPEND` string: rewrite every atom token, leave separators and
 /// non-atom tokens (`||`, `(`, `)`, `use?`) untouched.
-pub fn apply_updates_to_dep_string(dep: &str) -> String {
+///
+/// Backlog #119: `Some(rewritten)` only when at least one token changed;
+/// `None` means the input is returned as-is, so the caller can skip its
+/// insert and the unchanged case allocates no output at all. The old
+/// shape `format!`ed every chunk and `collect`ed unconditionally, even
+/// when no `profiles/updates/` command matched -- 7.5 % of the reference
+/// workload across the md5-cache misses' dep strings.
+pub fn apply_updates_to_dep_string(dep: &str) -> Option<String> {
     if global_package_updates().is_empty() || dep.trim().is_empty() {
-        return dep.to_string();
+        return None;
     }
-    dep.split_inclusive(char::is_whitespace)
-        .map(|chunk| {
-            let trimmed_len = chunk.trim_end_matches(char::is_whitespace).len();
-            let (tok, ws) = chunk.split_at(trimmed_len);
-            if tok.is_empty() || tok.ends_with('?') || matches!(tok, "||" | "(" | ")") {
-                return chunk.to_string();
-            }
-            format!("{}{ws}", apply_updates_to_atom(tok))
-        })
-        .collect()
+    apply_updates_to_dep_string_with(dep, global_package_updates(), update_move_targets())
+}
+
+fn apply_updates_to_dep_string_with(
+    dep: &str,
+    cmds: &[UpdateCmd],
+    targets: &HashMap<String, HashSet<String>>,
+) -> Option<String> {
+    let mut out: Option<String> = None;
+    let mut consumed = 0usize;
+    let mut copied = 0usize;
+    for chunk in dep.split_inclusive(char::is_whitespace) {
+        let offset = consumed;
+        consumed += chunk.len();
+        let trimmed_len = chunk.trim_end_matches(char::is_whitespace).len();
+        let (tok, ws) = chunk.split_at(trimmed_len);
+        if tok.is_empty() || tok.ends_with('?') || matches!(tok, "||" | "(" | ")") {
+            continue;
+        }
+        if let Some(updated) = apply_updates_to_atom_with(tok, cmds, targets) {
+            let buf = out.get_or_insert_with(|| String::with_capacity(dep.len()));
+            buf.push_str(&dep[copied..offset]);
+            buf.push_str(&updated);
+            buf.push_str(ws);
+            copied = offset + chunk.len();
+        }
+    }
+    let mut buf = out?;
+    buf.push_str(&dep[copied..]);
+    Some(buf)
 }
 
 /// Every `move` chain fully resolved once: `old cat/pkg` -> final
@@ -1465,11 +1512,10 @@ fn read_md5_cache(
     // reads a static fixture cache, so it applies them here on read
     // instead -- real `update_dbentry` over each `*DEPEND` string.
     for key in ["DEPEND", "RDEPEND", "PDEPEND", "BDEPEND", "IDEPEND"] {
-        if let Some(dep) = map.get(key) {
-            let updated = apply_updates_to_dep_string(dep);
-            if updated != *dep {
-                map.insert(key.to_string(), updated);
-            }
+        if let Some(dep) = map.get(key)
+            && let Some(updated) = apply_updates_to_dep_string(dep)
+        {
+            map.insert(key.to_string(), updated);
         }
     }
 
@@ -24362,7 +24408,7 @@ pub(crate) fn installed_dep_string(
     let result = match live {
         // Real `_DynamicDepsNotApplicable`: no live ebuild metadata, so
         // the raw record stands, with global package moves applied.
-        None => apply_updates_to_dep_string(&raw),
+        None => apply_updates_to_dep_string(&raw).unwrap_or(raw),
         Some(live) => {
             let live_value = live.get(key).map(String::as_str).unwrap_or("").trim();
             if ignore_built_slot_operator_deps || !dynamic_deps_append {
@@ -41283,6 +41329,66 @@ mod tests {
         assert_eq!(
             apply_slotmove_to_token("dev-libs/baz:2", &cp, "0", "1"),
             "dev-libs/baz:2"
+        );
+    }
+
+    /// #119: the dep-string rewrite is lazy -- `None` when no
+    /// `move`/`slotmove` touched a token (so the caller can skip its
+    /// insert and no output is allocated), `Some(rewritten)` otherwise,
+    /// with the surrounding whitespace, `||`/`(`/`)` and `use?` tokens
+    /// preserved byte-for-byte.
+    #[test]
+    fn apply_updates_to_dep_string_reports_unchanged_and_rewrites_only_moved_tokens() {
+        let old = ("dev-libs".to_string(), "oldname".to_string());
+        let new = ("dev-libs".to_string(), "newname".to_string());
+        let cmds = vec![UpdateCmd::Move {
+            old: old.clone(),
+            new: new.clone(),
+        }];
+        let targets: HashMap<String, HashSet<String>> =
+            HashMap::from([(old.0.clone(), HashSet::from([old.1.clone()]))]);
+        // No token's cp is a move target: unchanged, no allocation.
+        assert_eq!(
+            apply_updates_to_dep_string_with(
+                "dev-libs/keep >=dev-libs/keep-1.2:0=\n",
+                &cmds,
+                &targets
+            ),
+            None
+        );
+        // The moved token is rewritten; newlines, indentation, operators
+        // and the `|| ( )` group all survive.
+        assert_eq!(
+            apply_updates_to_dep_string_with(
+                "dev-libs/keep\n  >=dev-libs/oldname-1.2:0= || ( dev-libs/oldname:0 )",
+                &cmds,
+                &targets
+            ),
+            Some(
+                "dev-libs/keep\n  >=dev-libs/newname-1.2:0= || ( dev-libs/newname:0 )".to_string()
+            )
+        );
+        // A conditional marker is never parsed as an atom.
+        assert_eq!(
+            apply_updates_to_dep_string_with("foo? ( dev-libs/foo )", &cmds, &targets),
+            None
+        );
+        // A slotmove rewrites only a slot-qualified token.
+        let slot_cp = ("dev-libs".to_string(), "baz".to_string());
+        let slot_cmds = vec![UpdateCmd::SlotMove {
+            cp: slot_cp.clone(),
+            old_slot: "0".to_string(),
+            new_slot: "1".to_string(),
+        }];
+        let slot_targets: HashMap<String, HashSet<String>> =
+            HashMap::from([(slot_cp.0.clone(), HashSet::from([slot_cp.1.clone()]))]);
+        assert_eq!(
+            apply_updates_to_dep_string_with(
+                "dev-libs/baz:0 dev-libs/baz-tools:0",
+                &slot_cmds,
+                &slot_targets
+            ),
+            Some("dev-libs/baz:1 dev-libs/baz-tools:0".to_string())
         );
     }
 

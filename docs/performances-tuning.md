@@ -274,31 +274,32 @@ smaller blast radius.
 
 ## What to change next, in priority order
 
-**Re-ranked 2026-09-21 after `#112`** (`perf record -F 400 -g` on the
+**Re-ranked 2026-09-21 after `#119`** (`perf record -F 400 -g` on the
 post-slice binary; the numbers are in "2026-09-21 batch" below). The
-resolver is now ~2.01 s wall / ~1.5 s user / ~0.5 s sys on the reference
-workload:
+resolver is ~1.9-2.0 s wall / ~1.5 s user / ~0.4-0.5 s sys on the
+reference workload (the host has drifted ±0.05 s across the day; paired
+comparisons only):
 
 1. **`#107` — the second `run_pass` (parked 2026-09-21).** `run_pass` is
-   75.53 % with children and the loop still restarts where real reports
+   75.46 % with children and the loop still restarts where real reports
    `backtrack: 0/20`. Diagnosed: the restart is the reverse-dependency
    pin feedback, and removing it needs real's complete-graph
    parent-atom model (a prototype that applied the reachable consumers'
    atoms at selection lost an update and the withheld-update warning —
    see the #107 backlog entry). Algorithmic/parity; do not win it by
    skipping the pass. Revisit only with the complete-graph model.
-2. **`repo_aux_metadata` (14.69 % with children)** — the top named cost:
-   cold md5-cache fills + validation, plus `apply_updates_to_dep_string`
-   rebuilding every token of a cache-miss dep string even when no
-   `profiles/updates/` move matches (the fast-path slice).
-3. **`list_remote_binary_candidates` (12.08 %)** — its sharing was tried
-   and withdrawn (`#118`, honest non-result: within noise at +16 MB RSS);
-   the remaining cost is first materialisation per `(cp, visit)` and
-   cheaper construction is the only lever, under the noise floor.
-4. **Allocation churn** — `effective_use_flags` 10.19 %,
-   `binpkg_respect_use_ok`'s memo residual 9.70 %, `String::clone` 9.62 %,
-   `parse_atom` 9.38 %, `malloc` 9.84 %: no single item above ~3 %.
-5. **`#111` — the real-abort tree divergence** (parity, not performance):
+2. **`list_remote_binary_candidates` (13.03 %) / `binpkg_respect_use_ok`
+   (12.63 %) / `parse_atom` (10.49 %) / `effective_use_flags` (10.09 %)**
+   — no single item above ~3 % once its memo hits; `#118` showed the
+   remote-pool materialisation is first-visit work a memo cannot
+   amortise, `binpkg_respect_use_ok`'s residual is its memo key on ~13 k
+   calls, and `parse_atom`'s is the memo-hit struct clone (the old
+   `Rc<Atom>` idea, ~40 call sites).
+3. **`repo_aux_metadata` (10.08 % after `#119`)** — what remains is the
+   ~3.2 k cold md5-cache misses (parse + `entry_is_valid`'s ebuild md5 +
+   the rewrite) and two `PathBuf` builds plus lock lookups per hit, not
+   the rewrite any more.
+4. **`#111` — the real-abort tree divergence** (parity, not performance):
    real aborts `-uD --getbinpkg` where portuale resolves on the
    2026-09-21 tree; blocks the interleaved real comparison until fixed.
 
@@ -612,3 +613,31 @@ Interleaved, same tree: 2.09-2.23 s wall / 1.51-1.53 s user -> **2.01-2.03 s /
 Byte-identical over the full contract suite + corpus; the merge-path
 gate (glibc+bash) is green (`l1-20260921T094230Z`) because the merge
 readers share the helper.
+
+### #119 follow-up (same day): lazy dep-string rewrite
+
+`repo_aux_metadata` was the top named cost (14.42 % with children) and
+its biggest sub-cost was `apply_updates_to_dep_string` (7.50 % plus the
+per-chunk closure): on every md5-cache miss it rebuilt each `*DEPEND`
+string token by token -- `format!` per chunk, a `String` per unchanged
+token, and a `(category.clone(), package.clone())` tuple per token just
+to test the move-target set. Now the rewrite is lazy and borrowed:
+
+- `apply_updates_to_dep_string` returns `Option<String>` (`None` = no
+  token changed), so `read_md5_cache` skips its insert and
+  `installed_dep_string` keeps the raw string -- no output allocation at
+  all when no `profiles/updates/` command matches;
+- the output buffer is built only once a token actually changes, copying
+  the untouched runs verbatim (whitespace, `||`/`(`/`)` and `use?`
+  tokens byte-identical);
+- `update_move_targets` is a `category -> package names` map, so the hot
+  per-token check is two borrowed lookups instead of two `String`
+  clones.
+
+Honest size: this is a **small** win. The function's profile subtree
+falls 7.50 % -> 4.38 % and `repo_aux_metadata` 14.42 % -> 10.08 %, but
+the paired 15-run wall delta is only **+0.017 s mean / +0.020 s median
+(9/15 wins)** with user time neutral (the remaining sub-cost is
+`parse_atom`'s memo-hit clone per token, and a literal prefilter for
+whole strings would need a `regex` dependency waiver portage-repo does
+not have). Full contract suite byte-identical; no merge-path involvement.

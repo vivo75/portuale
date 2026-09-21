@@ -17733,3 +17733,18 @@ gate green. Detail: `docs/performances-tuning.md` "#112 follow-up".
 # best of 3 warm: 2.01-2.03 s wall / 1.48-1.49 s user / ~0.5 s sys
 # (session start: 3.93-3.98 / 2.86-2.90)
 ```
+
+**Lazy `*DEPEND` rewrite through `profiles/updates/` (Tier 8 #119,
+2026-09-21).** `apply_updates_to_dep_string` rebuilt every md5-cache-miss
+dep string token by token -- a `format!` per chunk, a `String` per
+unchanged token and two `String` clones per token for the move-target
+check -- 7.50 % of the reference workload with children. It now returns
+`Option<String>` (`None` = unchanged, so callers skip their insert and
+allocate nothing), builds its output buffer only once a token actually
+changes (copying untouched runs verbatim), and checks a
+`category -> package names` map with borrowed lookups. The function's
+profile subtree falls to 4.38 % and `repo_aux_metadata` from 14.42 % to
+10.08 %, but the wall effect is small: paired 15-run delta +0.017 s mean
+(+0.020 s median, 9/15 wins), user neutral. Output byte-identical over
+the full suite + corpus. Detail: `docs/performances-tuning.md` "#119
+follow-up".

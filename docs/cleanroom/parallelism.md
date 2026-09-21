@@ -214,14 +214,16 @@ own masking fixtures).
 
 **Verdict on the thread question (2026-09-21).** Both landed, and the
 re-profile answers the section's own question: the resolver is now
-~2.01 s wall / ~1.5 s user / ~0.5 s sys after the same-day #105
+~1.9–2.0 s wall / ~1.5 s user / ~0.4–0.5 s sys after the same-day #105
 (USE-context digest frozen), #117 (`binpkg_respect_use_ok` memo), #114
-(`is_visible` memo) and #112 (one `statx` per vdb lookup) follow-ups. The
-residual is `repo_aux_metadata` (14.69 %, cold md5-cache fills and the
-per-miss `apply_updates_to_dep_string` rewrite), `list_remote_binary_candidates`
-(12.08 %, first materialisation per `(cp, visit)` -- its sharing was tried
-and withdrawn as #118, an honest non-result), allocation churn, and the
-second `run_pass` (#107, 75.53 % subtree — diagnosed 2026-09-21: the
+(`is_visible` memo), #112 (one `statx` per vdb lookup) and #119 (lazy
+`*DEPEND` rewrite) follow-ups. The residual is
+`list_remote_binary_candidates` (13.03 %, first materialisation per
+`(cp, visit)` -- its sharing was tried and withdrawn as #118, an honest
+non-result), `binpkg_respect_use_ok`'s memo residual (12.63 %),
+`parse_atom` (10.49 %, memo-hit clones), `effective_use_flags` (10.09 %)
+and `repo_aux_metadata` (10.08 % after #119, cold fills/validation), plus
+the second `run_pass` (#107, 75.46 % subtree — diagnosed 2026-09-21: the
 restart is the reverse-dependency pin feedback, and removing it needs
 real's complete-graph parent-atom model, so it is parked, not a thread
 target) — **none of it parallel-friendly**. §2.2's visibility pool is
