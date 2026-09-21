@@ -214,6 +214,70 @@ fn entry_build_env_resolves_full_use_expand_and_entry_identity() {
     );
 }
 
+/// The per-entry folded `FEATURES` list: a matched env-file value folds in
+/// `[run-wide, pkg, calling-env]` order; no match returns `None`, so the
+/// run-wide value stays untouched. Expected value from Portage source.
+#[allow(clippy::field_reassign_with_default)]
+#[test]
+fn entry_resolved_features_folds_the_matched_env_file_value() {
+    let options_for = |features: &str, pkg_raw: &str| {
+        let mut options = ebuild_merge::MergeOptions::default();
+        options.features = features.to_string();
+        if !pkg_raw.is_empty() {
+            options.package_env_vars = vec![(
+                "dev-libs/penvccpkg".to_string(),
+                vec![("FEATURES".to_string(), pkg_raw.to_string())],
+            )];
+        }
+        options
+    };
+    let entry = source_entry(
+        "penvccpkg",
+        PretendOutcome::New {
+            version: "1.0".into(),
+        },
+    );
+    // No match: None, the run-wide value stands.
+    assert_eq!(
+        entry_resolved_features(&options_for("sandbox", ""), &entry, ""),
+        None
+    );
+    // Env file only: the token joins the folded, sorted list.
+    assert_eq!(
+        entry_resolved_features(
+            &options_for("sandbox userfetch", "probe-feature"),
+            &entry,
+            ""
+        ),
+        Some("probe-feature sandbox userfetch".to_string())
+    );
+    // A `-tok` in the calling env prunes the pkg token.
+    assert_eq!(
+        entry_resolved_features(
+            &options_for("sandbox userfetch", "probe-feature"),
+            &entry,
+            "-probe-feature"
+        ),
+        Some("sandbox userfetch".to_string())
+    );
+    // A pkg `-tok` does not prune a calling-env token.
+    assert_eq!(
+        entry_resolved_features(
+            &options_for("sandbox", "-userfetch probe-feature"),
+            &entry,
+            "userfetch"
+        ),
+        Some("probe-feature sandbox userfetch".to_string())
+    );
+    // A non-matching atom contributes nothing.
+    let mut options = options_for("sandbox", "probe-feature");
+    options.package_env_vars = vec![(
+        "dev-libs/otherpkg".to_string(),
+        vec![("FEATURES".to_string(), "probe-feature".to_string())],
+    )];
+    assert_eq!(entry_resolved_features(&options, &entry, ""), None);
+}
+
 /// Once `<eroot>/etc/profile.env` changes after the config was resolved, the
 /// env carries the new variable; untouched, it equals the pre-existing env
 /// exactly. Expected value from Portage source.

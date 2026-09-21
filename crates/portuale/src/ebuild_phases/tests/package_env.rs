@@ -163,3 +163,68 @@ fn package_env_scalars_last_wins_and_empty_blanks() {
         ]
     );
 }
+
+/// A package.env scalar is dropped when the calling environment
+/// carries the same key, so the caller-layered value wins.
+#[test]
+fn package_env_scalar_loses_to_the_calling_environment() {
+    let cpv = "dev-libs/penvccpkg-1.0:0/0";
+    let files = vec![(
+        "dev-libs/penvccpkg".to_string(),
+        vec![
+            ("CFLAGS".to_string(), "-Os -march=pkg".to_string()),
+            ("CC".to_string(), "pkg-cc".to_string()),
+        ],
+    )];
+    let calling = vec![("CFLAGS".to_string(), "-O2 -pipe".to_string())];
+    let out = match_package_env_vars(&files, cpv, &[], &[], &calling);
+    assert_eq!(out, vec![("CC".to_string(), "pkg-cc".to_string())]);
+}
+
+/// The raw single-key matchers behind the `PORTUALE_COMPUTED`
+/// recomputes: scalars replace, incrementals append, other keys add nothing.
+#[test]
+fn package_env_raw_matchers_follow_the_container_semantics() {
+    let cpv = "dev-libs/penvccpkg-1.0:0/0";
+    let files = vec![
+        (
+            "dev-libs/otherpkg".to_string(),
+            vec![
+                ("FEATURES".to_string(), "not-me".to_string()),
+                ("PORTAGE_TMPDIR".to_string(), "/not-me".to_string()),
+            ],
+        ),
+        (
+            "dev-libs/penvccpkg".to_string(),
+            vec![
+                ("FEATURES".to_string(), "ONE".to_string()),
+                ("PORTAGE_TMPDIR".to_string(), "/first".to_string()),
+                ("CC".to_string(), "ignored".to_string()),
+            ],
+        ),
+        (
+            "dev-libs/penvccpkg".to_string(),
+            vec![
+                ("FEATURES".to_string(), "TWO".to_string()),
+                ("PORTAGE_TMPDIR".to_string(), "/second".to_string()),
+            ],
+        ),
+    ];
+    assert_eq!(
+        match_package_env_scalar_raw(&files, cpv, "PORTAGE_TMPDIR"),
+        Some("/second".to_string())
+    );
+    assert_eq!(
+        match_package_env_incremental_raw(&files, cpv, "FEATURES"),
+        "ONE TWO".to_string()
+    );
+    assert_eq!(match_package_env_scalar_raw(&files, cpv, "MISSING"), None);
+    assert_eq!(
+        match_package_env_incremental_raw(&files, cpv, "MISSING"),
+        String::new()
+    );
+    assert_eq!(
+        match_package_env_scalar_raw(&files, "dev-libs/other-1.0:0/0", "PORTAGE_TMPDIR"),
+        None
+    );
+}

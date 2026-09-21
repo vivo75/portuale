@@ -170,3 +170,25 @@ fn prepare_fake_distdir_prunes_and_relinks_like_portage() {
 
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
+
+/// `PORTAGE_BUILDDIR` derives from the given tmpdir, so a matched
+/// per-package tmpdir moves the whole build tree under it.
+#[test]
+fn compute_environment_builds_the_builddir_under_the_given_tmpdir() {
+    let probe = TempDir::new("ebuild-phases-test-compute_environment_builddir").keep();
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+    let env = compute_environment(
+        &repo_root.join("dev-libs/envdumppkg/envdumppkg-1.0.ebuild"),
+        &probe,
+    )
+    .expect("fixture parses");
+    assert_eq!(
+        env.portage_builddir,
+        probe.join("portage/dev-libs/envdumppkg-1.0")
+    );
+    assert_eq!(
+        env.portage_tmpdir, probe,
+        "the resolved tmpdir is what the phase exports as PORTAGE_TMPDIR"
+    );
+    std::fs::remove_dir_all(&probe).ok();
+}

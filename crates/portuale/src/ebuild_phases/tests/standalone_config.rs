@@ -107,3 +107,80 @@ fn depend_phase_standalone_base_env_stays_empty_with_a_real_repo() {
     assert_eq!(use_str, "");
     assert!(flags.is_empty());
 }
+
+/// A matched per-package `PORTAGE_TMPDIR` re-derives the tmpdir when the
+/// calling environment does not carry the key; a missing dir fails.
+#[test]
+fn per_package_portage_tmpdir_feeds_the_build_directory() {
+    let cpv = "dev-libs/envdumppkg-1.0:0/0";
+    let run = Path::new("/var/tmp/portage-test-default");
+    let files = |v: &str| {
+        vec![(
+            "dev-libs/envdumppkg".to_string(),
+            vec![("PORTAGE_TMPDIR".to_string(), v.to_string())],
+        )]
+    };
+    // No match: the run tmpdir stands.
+    let out = resolve_entry_portage_tmpdir(
+        &files("/tmp/probe-tmp"),
+        "dev-libs/other-1.0:0/0",
+        run,
+        None,
+    )
+    .expect("no match keeps the run tmpdir");
+    assert_eq!(out, run);
+    let out =
+        resolve_entry_portage_tmpdir(&[], cpv, run, None).expect("no entry keeps the run tmpdir");
+    assert_eq!(out, run);
+    let probe = TempDir::new("ebuild-phases-test-per_package_portage_tmpdir").keep();
+    let out = resolve_entry_portage_tmpdir(
+        &files(probe.to_str().expect("probe path is UTF-8")),
+        cpv,
+        run,
+        None,
+    )
+    .expect("matched dir resolves");
+    assert_eq!(out, probe);
+    let probe2 = probe.join("second");
+    std::fs::create_dir_all(&probe2).expect("second probe tmpdir is creatable");
+    let mut two = files(probe.to_str().expect("probe path is UTF-8"));
+    two.push((
+        "dev-libs/envdumppkg".to_string(),
+        vec![(
+            "PORTAGE_TMPDIR".to_string(),
+            probe2.to_str().expect("probe path is UTF-8").to_string(),
+        )],
+    ));
+    let out = resolve_entry_portage_tmpdir(&two, cpv, run, None).expect("later match wins");
+    assert_eq!(out, probe2);
+    // Matched, directory missing: Portage's `_check_temp_dir` failure.
+    let missing = probe.join("no-such-dir");
+    let err = resolve_entry_portage_tmpdir(
+        &files(missing.to_str().expect("probe path is UTF-8")),
+        cpv,
+        run,
+        None,
+    )
+    .expect_err("missing dir must fail");
+    assert_eq!(
+        err,
+        format!(
+            "The directory specified in your PORTAGE_TMPDIR variable, '{}',\n\
+             does not exist.  Please create this directory or correct your PORTAGE_TMPDIR setting.",
+            missing.display()
+        )
+    );
+    // The calling environment wins over the env file.
+    let out = resolve_entry_portage_tmpdir(
+        &files(probe.to_str().expect("probe path is UTF-8")),
+        cpv,
+        run,
+        Some(run),
+    )
+    .expect("process tmpdir wins");
+    assert_eq!(out, run);
+    let out = resolve_entry_portage_tmpdir(&files(""), cpv, run, None)
+        .expect("empty match keeps the run tmpdir");
+    assert_eq!(out, run);
+    std::fs::remove_dir_all(&probe).ok();
+}
