@@ -1,5 +1,27 @@
 use super::*;
 
+/// The inverted `installed_cp_sources` map answers what the old
+/// per-call command loop did, on whatever `profiles/updates/` exist.
+#[test]
+fn installed_cp_sources_map_matches_the_command_loop() {
+    for (cat, pkg) in [
+        ("dev-libs", "cachetest-src"),
+        ("sys-libs", "glibc"),
+        ("virtual", "libc"),
+    ] {
+        let mut expected = vec![(cat.to_string(), pkg.to_string())];
+        for cmd in global_package_updates() {
+            if let UpdateCmd::Move { old, .. } = cmd {
+                let mapped = apply_updates_to_cp(&old.0, &old.1);
+                if mapped == expected[0] && !expected.contains(old) {
+                    expected.push(old.clone());
+                }
+            }
+        }
+        assert_eq!(installed_cp_sources(cat, pkg), expected);
+    }
+}
+
 #[test]
 fn parse_updates_content_keeps_move_and_slotmove_drops_the_rest() {
     let cmds = parse_updates_content(

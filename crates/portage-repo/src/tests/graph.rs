@@ -66,6 +66,17 @@ fn metadata_file_fields_match_portages_literal_set() {
     );
 }
 
+/// `in_metadata_file` is Portage's `_in_metadata_file()`: the line-oriented
+/// `CONTENTS` and `NEEDED.*` fields are rejected from the snapshot.
+#[test]
+fn in_metadata_file_rejects_contents_and_needed() {
+    assert!(!in_metadata_file("CONTENTS"));
+    assert!(!in_metadata_file("NEEDED.ELF.2"));
+    assert!(!in_metadata_file("_mtime_"));
+    assert!(in_metadata_file("RDEPEND"));
+    assert!(in_metadata_file("repository"));
+}
+
 #[test]
 fn emptytree_forces_an_installed_atom_to_a_bare_reinstall() {
     // Without --emptytree a selective resolve leaves it AlreadyInstalled;

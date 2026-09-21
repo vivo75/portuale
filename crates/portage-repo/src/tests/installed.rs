@@ -1,5 +1,91 @@
 use super::*;
 
+/// `read_vdb_string` collapses multi-line values to one space-separated line
+/// (Portage's `_aux_get` normalisation).
+#[test]
+fn read_vdb_string_collapses_multiline_values_to_one_space_separated_line() {
+    let root = tmp_vdb(
+        "dev-libs",
+        "multiline-1.0",
+        &[("RDEPEND", b"dev-libs/a\n\n  dev-libs/b\tdev-libs/c  \n")],
+    );
+    assert_eq!(
+        read_vdb_string(&root, "dev-libs", "multiline", "1.0", "RDEPEND"),
+        "dev-libs/a dev-libs/b dev-libs/c"
+    );
+}
+
+/// The trailing newline Portage's writer leaves must not survive the read.
+#[test]
+fn read_vdb_string_drops_the_trailing_newline() {
+    let root = tmp_vdb("dev-libs", "newline-1.0", &[("repository", b"gentoo\n")]);
+    assert_eq!(
+        read_vdb_string(&root, "dev-libs", "newline", "1.0", "repository"),
+        "gentoo"
+    );
+}
+
+/// An absent field file reads as `""`, not a panic.
+#[test]
+fn read_vdb_string_missing_file_is_still_empty() {
+    let root = tmp_vdb("dev-libs", "absent-1.0", &[]);
+    assert_eq!(
+        read_vdb_string(&root, "dev-libs", "absent", "1.0", "RDEPEND"),
+        ""
+    );
+}
+
+/// The committed multilinevdb fixture is the integration half of the same
+/// contract: embedded newlines served exactly like Portage's `_aux_get`.
+#[test]
+fn read_vdb_string_normalises_the_committed_multiline_fixture() {
+    let root = fixtures_root();
+    assert_eq!(
+        read_vdb_string(&root, "dev-libs", "multilinevdb", "1.0", "IUSE"),
+        "alpha beta"
+    );
+    assert_eq!(
+        read_vdb_string(&root, "dev-libs", "multilinevdb", "1.0", "RDEPEND"),
+        "dev-libs/samepkg virtual/libc"
+    );
+    assert_eq!(
+        read_vdb_string(&root, "dev-libs", "multilinevdb", "1.0", "DEFINED_PHASES"),
+        "install info"
+    );
+}
+
+/// `installed_candidates` serves repeats from its per-cp cache, invalidated
+/// by the category dir mtime.
+#[test]
+fn installed_candidates_caches_per_cp_and_invalidates_on_vdb_change() {
+    let root = tmp_vdb("dev-libs", "cachetest-1.0", &[]);
+    let one = vec![("1.0".to_string(), "0".to_string(), "0".to_string())];
+    // First call scans; the repeat is a cache hit.
+    assert_eq!(installed_candidates(&root, "dev-libs", "cachetest"), one);
+    assert_eq!(installed_candidates(&root, "dev-libs", "cachetest"), one);
+    // A negative result is cached too.
+    assert!(installed_candidates(&root, "dev-libs", "nocachetest").is_empty());
+    // Adding a version bumps the category mtime and invalidates.
+    let dir = root
+        .join("var/db/pkg")
+        .join("dev-libs")
+        .join("cachetest-2.0");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("SLOT"), "0\n").unwrap();
+    let mut got = installed_candidates(&root, "dev-libs", "cachetest");
+    got.sort();
+    assert_eq!(
+        got,
+        vec![
+            ("1.0".to_string(), "0".to_string(), "0".to_string()),
+            ("2.0".to_string(), "0".to_string(), "0".to_string()),
+        ]
+    );
+    // Removing it invalidates back.
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(installed_candidates(&root, "dev-libs", "cachetest"), one);
+}
+
 #[test]
 fn candidate_use_flags_display_resolves_use_expand_flags_for_a_resume_entry() {
     // `emerge --resume` rebuilds each entry from a bare `cat/pkg-ver`; this

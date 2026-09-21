@@ -1,5 +1,25 @@
 use super::*;
 
+/// `build_local_binpkg_index` honours the CLI `$PKGDIR` scan when one exists.
+#[test]
+fn build_local_binpkg_index_uses_the_cli_scanned_binpkgs() {
+    let config = portage_profile::Config {
+        scanned_binpkgs: Some(vec![HashMap::from([
+            ("CPV".to_string(), "dev-libs/memo-1.0".to_string()),
+            ("SLOT".to_string(), "0".to_string()),
+        ])]),
+        ..portage_profile::Config::default()
+    };
+    let index = build_local_binpkg_index(&config);
+    assert_eq!(
+        list_binary_candidates(&index, "dev-libs", "memo")
+            .iter()
+            .map(|cand| cand.version.as_str())
+            .collect::<Vec<_>>(),
+        vec!["1.0"]
+    );
+}
+
 #[test]
 fn list_remote_binary_candidates_reads_each_binrepos_own_packages_index() {
     // Only in the binhost index: no ebuild, no local entry.
