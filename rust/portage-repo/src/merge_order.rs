@@ -1106,8 +1106,6 @@ fn add_installed_dependency_closure(
     system_atoms: &[String],
     virtuals_only: bool,
     dynamic_deps: bool,
-    dynamic_deps_append: bool,
-    ignore_built_slot_operator_deps: bool,
 ) {
     // `virtuals_only` (a plain `[ebuild N]` resolve, real not in complete
     // mode): real still expands an installed `virtual/*` node to its
@@ -1166,10 +1164,12 @@ fn add_installed_dependency_closure(
 
     // A2 (#26): the edges come from the same installed-metadata view the
     // walk uses (`installed_dep_string`): with `--dynamic-deps` on (the
-    // default) the *current ebuild*'s deps (+ the vdb's built `:=` atoms
-    // when `PORTUALE_DYNAMIC_DEPS_APPEND` is set), exactly what real's
+    // default) the *current ebuild*'s deps, exactly what real's
     // FakeVartree hands `_serialize_tasks`; `--dynamic-deps=n` reads the
-    // raw vdb snapshot. The injected-libc strip below is therefore only
+    // raw vdb snapshot. (Phase 5 S1 removed the vdb built-`:=` append as
+    // a documented cut, so the scheduler closure stays on Raw -- the
+    // pre-A2 graph minus the injected libc -- rather than the ebuild
+    // view, which would lose the vdb's built :S/SS= atoms.) The injected-libc strip below is therefore only
     // sound on the Raw path (Gate G0.3): `_inject_libc_dep` appends a
     // bare `>=<libc-provider>-<version>` to every installed package's vdb
     // `RDEPEND` (bug #753500), which the ebuild never declared -- real's
@@ -1198,23 +1198,16 @@ fn add_installed_dependency_closure(
         let live = crate::live_metadata_for_installed(repos, root, cat, pkg, ver);
         let mut md: HashMap<String, String> = HashMap::new();
         let mut memo: HashMap<(String, String, String, String), String> = HashMap::new();
-        // A2 follow-up: the closure only moves to the Effective view when
-        // the built-:= append is actually on. With the gate off (and under
-        // `--dynamic-deps=n`), stay on Raw -- the pre-A2 scheduler graph
-        // (raw minus the injected libc) is closer to real's effective view
-        // than the ebuild alone, which would lose the vdb's built :S/SS=
-        // atoms until the append lands.
-        let layer = if dynamic_deps && dynamic_deps_append {
-            crate::InstalledMetaLayer::Effective
-        } else {
-            crate::InstalledMetaLayer::Raw
-        };
+        // A2 follow-up, settled by Phase 5 S1: with the built-`:=`
+        // append removed, the closure stays on Raw under every option
+        // set -- the pre-A2 scheduler graph (raw minus the injected
+        // libc), which is closer to real's effective view than the
+        // ebuild alone.
+        let layer = crate::InstalledMetaLayer::Raw;
         for k in ["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"] {
             let s = crate::installed_dep_string(
                 root,
                 dynamic_deps,
-                dynamic_deps_append,
-                ignore_built_slot_operator_deps,
                 cat,
                 pkg,
                 ver,
@@ -2730,8 +2723,6 @@ pub(crate) fn tree_solved_replacements(
     implicit_system_deps: bool,
     repos: &[RepoConfig],
     dynamic_deps: bool,
-    dynamic_deps_append: bool,
-    ignore_built_slot_operator_deps: bool,
 ) -> Vec<(usize, usize)> {
     // Pending rows: unsatisfied Replacement arms (the uninstall-solving
     // Uninstall arms and the unsolvable rows already have display homes
@@ -2776,8 +2767,6 @@ pub(crate) fn tree_solved_replacements(
         implicit_system_deps,
         repos,
         dynamic_deps,
-        dynamic_deps_append,
-        ignore_built_slot_operator_deps,
     );
     // NOTE: `ext` may append synthetic closure entries; `pending`
     // addresses resolver indexing, which is a prefix of `ext` (the
@@ -3267,8 +3256,6 @@ pub(crate) fn serialize_merge_order(
     implicit_system_deps: bool,
     repos: &[RepoConfig],
     dynamic_deps: bool,
-    dynamic_deps_append: bool,
-    ignore_built_slot_operator_deps: bool,
 ) -> Vec<usize> {
     let (ext, mut g, real_n, discovery_rank) = schedule_graph(
         entries,
@@ -3278,8 +3265,6 @@ pub(crate) fn serialize_merge_order(
         implicit_system_deps,
         repos,
         dynamic_deps,
-        dynamic_deps_append,
-        ignore_built_slot_operator_deps,
     );
     let entries: &[GraphEntry] = &ext;
 
@@ -3349,8 +3334,6 @@ fn schedule_graph(
     implicit_system_deps: bool,
     repos: &[RepoConfig],
     dynamic_deps: bool,
-    dynamic_deps_append: bool,
-    ignore_built_slot_operator_deps: bool,
 ) -> (Vec<GraphEntry>, Digraph, usize, Vec<usize>) {
     let real_n = entries.len();
     // Real `_complete_graph` auto-enables (a merge changes an
@@ -3386,8 +3369,6 @@ fn schedule_graph(
         &config.system_packages,
         !complete,
         dynamic_deps,
-        dynamic_deps_append,
-        ignore_built_slot_operator_deps,
     );
     let entries: &[GraphEntry] = &ext;
     let n = entries.len();
@@ -4057,8 +4038,6 @@ mod tests {
             true,
             &[],
             true,
-            false,
-            false,
         );
         assert_eq!(
             solved,
