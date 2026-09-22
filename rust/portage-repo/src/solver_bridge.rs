@@ -783,6 +783,8 @@ fn graph_result_from_order(
         // Same standing empty: the engine backends have no BFS walk to
         // record a `[use]`-unsatisfied dependency disclosure.
         use_unsat_deps: Vec::new(),
+        // Same standing empty: no BFS walk, no plain-miss disclosure.
+        plain_miss_deps: Vec::new(),
     }
 }
 

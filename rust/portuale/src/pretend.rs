@@ -1331,6 +1331,10 @@ fn print_entry_line(
     // precedence puts this block ahead of the masked one, and the
     // `NoVisibleCandidate` arm below does the same.
     use_unsat_deps: &[portage_repo::UseUnsatDepReport],
+    // Plain-miss disclosures (#135 (d)): real's `emerge: there are no
+    // ebuilds to satisfy "<atom>"` + chain block, rendered last in the
+    // `NoVisibleCandidate` arm (after the two sibling blocks).
+    plain_miss_deps: &[portage_repo::PlainMissDepReport],
 ) {
     let entry = &entries[index];
     // Real `_DisplayConfig` verbosity: `--quiet and 1 or --verbose and 3
@@ -1787,6 +1791,23 @@ fn print_entry_line(
                 }
                 eprintln!("For more information, see the MASKED PACKAGES section in the emerge");
                 eprintln!("man page or refer to the Gentoo Handbook.");
+            } else if let Some(report) = plain_miss_deps
+                .iter()
+                .find(|r| r.category == entry.category && r.package == entry.package)
+            {
+                // #135 (d): real `_show_unsatisfied_dep`'s plain-miss
+                // block -- the unevaluated atom as queued plus the
+                // `_get_dep_chain` rows -- in place of the bare line.
+                // The staging `for <root>.` suffix stays absent (the
+                // `fixture-miss-message-unsuffixed` class), matching
+                // the top-level miss and the two sibling blocks above.
+                eprintln!(
+                    "\nemerge: there are no ebuilds to satisfy {:?}.",
+                    report.atom
+                );
+                for (node, ty) in &report.chain {
+                    eprintln!("(dependency required by \"{node}\" [{ty}])");
+                }
             } else {
                 eprintln!(
                     "!!! no visible ebuild for dependency \"{}/{}\"",
@@ -1919,6 +1940,7 @@ fn print_tree(
     blocker_lines: &mut Vec<String>,
     masked_deps: &[portage_repo::MaskedDepReport],
     use_unsat_deps: &[portage_repo::UseUnsatDepReport],
+    plain_miss_deps: &[portage_repo::PlainMissDepReport],
 ) {
     /// One node of the display graph: an entry, or a satisfied blocker
     /// row `entries[owner].blockers[index]`.
@@ -2270,6 +2292,7 @@ fn print_tree(
                 blocker_lines,
                 masked_deps,
                 use_unsat_deps,
+                plain_miss_deps,
             ),
             TreeNode::Blocker { owner, index } => {
                 let owner_entry = &entries[owner];
@@ -4927,9 +4950,10 @@ fn run_resume(
                 // caveat above.
                 &HashSet::new(),
                 &mut blocker_lines,
-                // No resolve ran, so no masked-dependency or
-                // USE-unsatisfied disclosure either (any NVC entry here
-                // renders the bare line).
+                // No resolve ran, so no masked-dependency,
+                // USE-unsatisfied or plain-miss disclosure either (any
+                // NVC entry here renders the bare line).
+                &[],
                 &[],
                 &[],
             );
@@ -11709,6 +11733,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 &mut blocker_lines,
                 &result.masked_deps,
                 &result.use_unsat_deps,
+                &result.plain_miss_deps,
             );
         } else {
             // #68/#72 B2: rows whose replacement waits on its owner print
@@ -11740,6 +11765,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     &mut blocker_lines,
                     &result.masked_deps,
                     &result.use_unsat_deps,
+                    &result.plain_miss_deps,
                 );
                 for (_, line) in inline_blockers.iter().filter(|(after, _)| *after == i) {
                     println!("{line}");
@@ -11797,6 +11823,7 @@ pub fn run(args: &[String]) -> ExitCode {
                         &mut thrown_away,
                         &result.masked_deps,
                         &result.use_unsat_deps,
+                        &result.plain_miss_deps,
                     );
                 }
             }
@@ -11915,6 +11942,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 &mut thrown_away,
                 &result.masked_deps,
                 &result.use_unsat_deps,
+                &result.plain_miss_deps,
             );
         }
     }

@@ -10033,6 +10033,31 @@ pub struct UseUnsatDepReport {
     pub chain: Vec<(String, String)>,
 }
 
+/// Real `_show_unsatisfied_dep`'s plain-miss disclosure — the
+/// `emerge: there are no ebuilds to satisfy "<unevaluated atom>"`
+/// block plus the `(dependency required by …)` chain — for a dependency
+/// `NoVisibleCandidate` that is neither masked-only nor `[use]`-
+/// unsatisfied (nothing matches the atom by version at all, or every
+/// version-matching candidate is unusable for a reason no
+/// `Change USE:`/`Missing IUSE:` row can name, e.g. a profile-forced
+/// flag). Rendered instead of the bare `!!! no visible ebuild for
+/// dependency "<cp>"` line (#135 (d); oracle bed
+/// `l0-fx-20260922T192350Z` arm D / `libcnoisepkg`). The staging
+/// `for <root>.` suffix real appends when the target root is not `/`
+/// stays absent, matching the top-level miss and the two sibling arms
+/// (the `fixture-miss-message-unsuffixed` class).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlainMissDepReport {
+    pub category: String,
+    pub package: String,
+    /// The requesting atom as queued, unevaluated (real
+    /// `atom.unevaluated_atom`), so a `[flag=]` dep shows as written.
+    pub atom: String,
+    /// Real `_get_dep_chain`, walked post-pass exactly like
+    /// [`MaskedDepReport::chain`].
+    pub chain: Vec<(String, String)>,
+}
+
 /// Real `_show_unsatisfied_dep`'s version match: the candidates an atom
 /// names by version, visibility and USE ignored (real `db.match(atom.
 /// without_use)`). `None` when the atom matches no ebuild at all by
@@ -18558,6 +18583,13 @@ pub struct GraphResult {
     /// (`pretend.rs`) does the same. Empty when no dependency missed
     /// that way.
     pub use_unsat_deps: Vec<UseUnsatDepReport>,
+    /// Plain-miss dependency disclosures (#135 (d), real's
+    /// `emerge: there are no ebuilds to satisfy "<atom>"` block): one
+    /// per dependency `NoVisibleCandidate` that is neither masked-only
+    /// nor `[use]`-unsatisfied. The caller renders each in place of the
+    /// bare `!!! no visible ebuild for dependency` line, after the two
+    /// sibling blocks' precedence.
+    pub plain_miss_deps: Vec<PlainMissDepReport>,
 }
 
 /// One real `--autounmask` change (`depgraph.py::_display_autounmask`):
@@ -18594,39 +18626,99 @@ fn autounmask_dep_chain(
     current_atom: &str,
     top_level: &std::collections::HashSet<&str>,
     entries: &[GraphEntry],
+    root: &Path,
 ) -> Vec<String> {
-    let Some((oc, op)) = owner else {
-        return vec![format!("required by {current_atom} (argument)")];
+    let Some(start) = owner else {
+        // Real `_get_dep_chain_as_comment` for a top-level change prints
+        // the argument atom *as given* (`dev-libs/useflagpkg[-foo]`),
+        // not the change's own `>=<cpv>` left-hand form.
+        let arg = top_level
+            .iter()
+            .find(|t| {
+                portage_dep::parse_atom(t).is_some_and(|a| {
+                    portage_dep::parse_atom(current_atom)
+                        .is_some_and(|c| a.category == c.category && a.package == c.package)
+                })
+            })
+            .copied()
+            .unwrap_or(current_atom);
+        return vec![format!("required by {arg} (argument)")];
     };
-    let mut chain = Vec::new();
-    if let Some(parent) = entries
-        .iter()
-        .find(|e| &e.category == oc && &e.package == op)
-    {
-        let parent_version = match &parent.outcome {
-            PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
-                Some(version.as_str())
+    // Real `_get_dep_chain_as_comment` walks the whole parent chain to
+    // the argument, not just the immediate owner (#135 (e); bed
+    // `l0-fx-20260922T192350Z` arm A prints three rows where portuale
+    // printed one). Each node renders `required by <cpv>::<repo>`
+    // (vdb repo for an installed parent -- real's `installed_use_str`
+    // counterpart) or `required by <atom> (argument)`.
+    let mut chain: Vec<String> = Vec::new();
+    let mut visited: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+    let mut cur = start.clone();
+    loop {
+        if !visited.insert(cur.clone()) {
+            break;
+        }
+        let args: Vec<String> = top_level
+            .iter()
+            .filter(|t| {
+                portage_dep::parse_atom(t).is_some_and(|a| {
+                    a.category == cur.0
+                        && a.package == cur.1
+                        && a.blocker == portage_dep::Blocker::None
+                })
+            })
+            .map(|t| format!("required by {t} (argument)"))
+            .collect();
+        let parent = entries.iter().find(|e| {
+            e.category == cur.0
+                && e.package == cur.1
+                && !matches!(
+                    e.outcome,
+                    PretendOutcome::NoVisibleCandidate | PretendOutcome::Uninstall { .. }
+                )
+        });
+        let mut advanced = false;
+        if let Some(parent) = parent {
+            let (version, installed) = match &parent.outcome {
+                PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+                    (Some(version.clone()), false)
+                }
+                PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
+                    (Some(to.clone()), false)
+                }
+                PretendOutcome::AlreadyInstalled { version } => (Some(version.clone()), true),
+                _ => (None, false),
+            };
+            if let Some(v) = version {
+                let repo = if installed {
+                    installed_pkg_repo(root, &cur.0, &cur.1, &v)
+                } else {
+                    parent.repo_name.clone().unwrap_or_default()
+                };
+                if repo.is_empty() {
+                    chain.push(format!("required by {}/{}-{v}", cur.0, cur.1));
+                } else {
+                    chain.push(format!("required by {}/{}-{v}::{repo}", cur.0, cur.1));
+                }
             }
-            PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
-                Some(to.as_str())
-            }
-            _ => None,
-        };
-        if let Some(v) = parent_version {
-            match &parent.repo_name {
-                Some(repo) => chain.push(format!("required by {oc}/{op}-{v}::{repo}")),
-                None => chain.push(format!("required by {oc}/{op}-{v}")),
+            // Ascend to the parent's own requirer (one hop per loop).
+            match parent.required_by.first() {
+                Some(next) if *next != cur => {
+                    cur = next.clone();
+                    advanced = true;
+                }
+                _ => {}
             }
         }
-    }
-    if let Some(arg) = top_level
-        .iter()
-        .find(|t| portage_dep::parse_atom(t).is_some_and(|a| a.category == *oc && a.package == *op))
-    {
-        chain.push(format!("required by {arg} (argument)"));
-    }
-    if chain.is_empty() {
-        chain.push(format!("required by {oc}/{op}"));
+        if !args.is_empty() {
+            chain.extend(args);
+            break;
+        }
+        if !advanced {
+            if chain.is_empty() {
+                chain.push(format!("required by {}/{}", cur.0, cur.1));
+            }
+            break;
+        }
     }
     chain
 }
@@ -20419,6 +20511,7 @@ struct PassResult {
     slot_pullers: SlotPullers,
     masked_deps: Vec<MaskedDepReport>,
     use_unsat_deps: Vec<UseUnsatDepReport>,
+    plain_miss_deps: Vec<PlainMissDepReport>,
     nvc_dep_atoms: HashMap<(String, String), String>,
     missing_dep_trigger: Option<((String, String), String, String)>,
     autounmask_grew: bool,
@@ -20568,6 +20661,9 @@ struct PassState {
     /// `UseUnsatDepReport`): rebuilt every attempt like `masked_deps`, so
     /// only the final pass's reports are rendered.
     use_unsat_deps: Vec<UseUnsatDepReport>,
+    /// Plain-miss dependency disclosures for this pass (see
+    /// `PlainMissDepReport`): rebuilt every attempt like `masked_deps`.
+    plain_miss_deps: Vec<PlainMissDepReport>,
     /// The unevaluated dep atom behind each dependency
     /// `NoVisibleCandidate` entry (first requirer wins, like the entry
     /// itself), for `abort_outcome`'s `UnsatisfiedAtom` reason.
@@ -21095,6 +21191,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                         "",
                         &ctx.top_level,
                         &state.entries,
+                        ctx.root,
                     ),
                 });
                 let mut disp_seen: HashSet<String> = HashSet::new();
@@ -21200,12 +21297,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     state.use_change_overlay.push(AutounmaskChange {
                         atom: atom_form,
                         token,
-                        dep_chain: autounmask_dep_chain(
-                            &Some((pc.clone(), pp.clone())),
-                            "",
-                            &ctx.top_level,
-                            &state.entries,
-                        ),
+                        dep_chain: Vec::new(),
                     });
                 }
                 state.autounmask_grew = true;
@@ -21752,6 +21844,31 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                         rows,
                         chain: Vec::new(),
                     });
+                } else if !state
+                    .masked_deps
+                    .iter()
+                    .any(|r: &MaskedDepReport| r.category == key.0 && r.package == key.1)
+                    && !state
+                        .use_unsat_deps
+                        .iter()
+                        .any(|r: &UseUnsatDepReport| r.category == key.0 && r.package == key.1)
+                    && !state
+                        .plain_miss_deps
+                        .iter()
+                        .any(|r: &PlainMissDepReport| r.category == key.0 && r.package == key.1)
+                {
+                    // Neither sibling block claimed this miss: nothing
+                    // matches by version at all, or no candidate's
+                    // failure is a `Change USE:`/`Missing IUSE:` one
+                    // (e.g. a profile-forced flag). Real's
+                    // `emerge: there are no ebuilds to satisfy "<atom>"`
+                    // block (#135 (d)).
+                    state.plain_miss_deps.push(PlainMissDepReport {
+                        category: key.0.clone(),
+                        package: key.1.clone(),
+                        atom: display_atom.to_string(),
+                        chain: Vec::new(),
+                    });
                 }
             }
             state.entries.push(GraphEntry {
@@ -22192,12 +22309,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                                 state.use_change_overlay.push(AutounmaskChange {
                                     atom: atom_form,
                                     token,
-                                    dep_chain: autounmask_dep_chain(
-                                        &owner,
-                                        &current_atom,
-                                        &ctx.top_level,
-                                        &state.entries,
-                                    ),
+                                    dep_chain: Vec::new(),
                                 });
                             }
                             // Real `_backtrack_depgraph` finishes
@@ -22305,12 +22417,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             state.autounmask_keyword_changes.push(AutounmaskChange {
                 atom: format!("={}/{}-{version}", key.0, key.1),
                 token: kw.to_string(),
-                dep_chain: autounmask_dep_chain(
-                    &owner,
-                    &current_atom,
-                    &ctx.top_level,
-                    &state.entries,
-                ),
+                dep_chain: Vec::new(),
             });
         }
         // Real `--autounmask-license`: `resolve_pretend` accepted this
@@ -22327,12 +22434,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 state.autounmask_license_changes.push(AutounmaskChange {
                     atom: check_if_latest_atom_form(resolved, &all, &key.0, &key.1, config, false),
                     token: missing.join(" "),
-                    dep_chain: autounmask_dep_chain(
-                        &owner,
-                        &current_atom,
-                        &ctx.top_level,
-                        &state.entries,
-                    ),
+                    dep_chain: Vec::new(),
                 });
             }
         }
@@ -22349,12 +22451,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             state.autounmask_mask_changes.push(AutounmaskChange {
                 atom: format!("={}/{}-{version}", key.0, key.1),
                 token: String::new(),
-                dep_chain: autounmask_dep_chain(
-                    &owner,
-                    &current_atom,
-                    &ctx.top_level,
-                    &state.entries,
-                ),
+                dep_chain: Vec::new(),
             });
         }
         // Real `_get_installed_best`'s `new_slot`: a `New` entry whose
@@ -22548,12 +22645,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                         config,
                     ),
                     token,
-                    dep_chain: autounmask_dep_chain(
-                        &owner,
-                        &current_atom,
-                        &ctx.top_level,
-                        &state.entries,
-                    ),
+                    dep_chain: Vec::new(),
                 });
             }
         }
@@ -23393,6 +23485,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         slot_pullers: state.slot_pullers,
         masked_deps: state.masked_deps,
         use_unsat_deps: state.use_unsat_deps,
+        plain_miss_deps: state.plain_miss_deps,
         nvc_dep_atoms: state.nvc_dep_atoms,
         missing_dep_trigger: state.missing_dep_trigger,
         autounmask_grew: state.autounmask_grew,
@@ -24178,6 +24271,92 @@ fn assemble_result(
             ctx.root,
         );
     }
+    // #135 (d) post-pass: every dependency `NoVisibleCandidate` entry
+    // that neither sibling block claimed gets a plain-miss disclosure.
+    // Placed here, after the walk, so it also catches NVC entries
+    // created outside `run_pass`'s own NVC push (the binary-dep path
+    // creates them at the merge-entry push, where the disclosure block
+    // does not run) -- the reason `--usepkgonly`'s `newpkg` miss used
+    // to fall through to the bare line with `plain_miss_deps` empty.
+    let mut extra_plain_miss: Vec<PlainMissDepReport> = Vec::new();
+    for e in &pass.entries {
+        if !matches!(e.outcome, PretendOutcome::NoVisibleCandidate) {
+            continue;
+        }
+        let cat = e.category.as_str();
+        let pkg = e.package.as_str();
+        if pass
+            .masked_deps
+            .iter()
+            .any(|r| r.category == cat && r.package == pkg)
+            || pass
+                .use_unsat_deps
+                .iter()
+                .any(|r| r.category == cat && r.package == pkg)
+            || pass
+                .plain_miss_deps
+                .iter()
+                .any(|r| r.category == cat && r.package == pkg)
+            || extra_plain_miss
+                .iter()
+                .any(|r| r.category == cat && r.package == pkg)
+        {
+            continue;
+        }
+        let key = (e.category.clone(), e.package.clone());
+        let atom = pass
+            .nvc_dep_atoms
+            .get(&key)
+            .cloned()
+            .unwrap_or_else(|| format!("{}/{}", e.category, e.package));
+        extra_plain_miss.push(PlainMissDepReport {
+            category: e.category.clone(),
+            package: e.package.clone(),
+            atom,
+            chain: Vec::new(),
+        });
+    }
+    pass.plain_miss_deps.extend(extra_plain_miss);
+    // #135 (e): the `#required by …` chain is walked out of the final
+    // entries (post `required_by` fill) exactly like the disclosure
+    // chains above -- the walk-time call sites record `Vec::new()`.
+    for change in pass
+        .autounmask_keyword_changes
+        .iter_mut()
+        .chain(pass.autounmask_use_changes.iter_mut())
+        .chain(pass.autounmask_license_changes.iter_mut())
+        .chain(pass.autounmask_mask_changes.iter_mut())
+    {
+        // Re-derive from the change's own atom: its left-hand `=<cpv>` /
+        // `>=<cpv>` names the package the change is on, whose owner
+        // chain is what real `_get_dep_chain_as_comment` prints.
+        if change.dep_chain.is_empty()
+            && let Some(atom) = portage_dep::parse_atom(&change.atom)
+        {
+            let owner = pass
+                .entries
+                .iter()
+                .find(|e| e.category == atom.category && e.package == atom.package)
+                .and_then(|e| e.required_by.first().cloned());
+            change.dep_chain = autounmask_dep_chain(
+                &owner,
+                &change.atom,
+                &ctx.top_level,
+                &pass.entries,
+                ctx.root,
+            );
+        }
+    }
+    // Same walk for the plain-miss disclosures (#135 (d)).
+    for rep in &mut pass.plain_miss_deps {
+        rep.chain = masked_dep_chain(
+            &pass.entries,
+            &rep.category,
+            &rep.package,
+            ctx.atoms,
+            ctx.root,
+        );
+    }
 
     // Backlog #19 Slice 3: classify the settled graph the way real's
     // abandon sites would have (see `abort_outcome`).
@@ -24208,6 +24387,7 @@ fn assemble_result(
         circular_deps,
         masked_deps: pass.masked_deps,
         use_unsat_deps: pass.use_unsat_deps,
+        plain_miss_deps: pass.plain_miss_deps,
         large_cycle_count,
         cycle_display,
     }
