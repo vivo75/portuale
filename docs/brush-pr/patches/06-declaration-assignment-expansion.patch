@@ -1,0 +1,458 @@
+From dd016ba6ebfc8cdd276df60441f667bc4a379cc6 Mon Sep 17 00:00:00 2001
+From: Francesco Riosa <me@francesco-riosa.com>
+Date: Wed, 23 Sep 2026 01:47:19 +0200
+Subject: [PATCH 1/2] fix(builtins): assignment-expand declaration operands
+ with an expanded name
+
+brush's parser only recognises an assignment word when the name is a
+literal identifier, so `export ${var}=value` arrived at the builtin as
+CommandArg::String. export's String branch then only marked an existing
+variable exported (a silent no-op), while declare/local/readonly
+reported 'not a valid variable name'. bash assigns after expansion for
+declaration builtins (POSIX XCU 2.9.1).
+
+Re-examine the already-expanded string inside the builtins (the small
+half of the choice): split on the first `=`, honour `+=`, and route a
+valid scalar name through the existing CommandArg::Assignment path, so
+scoping, attributes and append semantics are unchanged. A name that is
+not a valid identifier produces the diagnostic (export now reports
+'invalid identifier' with status 1 instead of succeeding silently);
+operands without `=` and compound array values keep their existing
+handling. Shared helper in brush-builtins/src/declaration.rs with unit
+tests, used by export.rs and declare.rs (which also covers local,
+readonly and typeset).
+
+Upstream #1280 reworks this wholesale (centralized word+subscript
+passes, declare split, breaking API changes) and is still a Draft; this
+lands entirely inside the builtins so it rebases onto #1280 as a
+deletion rather than a conflict. Fixes portuale backlog #94 (toolchain-
+funcs _tc-getPROG tc-getCC echoing empty under --shell brush).
+
+Verified: brush-compat-tests 2576 ran / 2120 succeeded / 0 unexpected
+failures (baseline 2568 / 2099 / 0); 13 previously-known failures now
+pass (unmarked in the next commit); unit tests, fmt and clippy clean.
+
+Assisted-by: opencode:muse-spark
+---
+ brush-builtins/src/declaration.rs | 112 ++++++++++++++++++++++++++++++
+ brush-builtins/src/declare.rs     |  17 +++++
+ brush-builtins/src/export.rs      |  12 ++++
+ brush-builtins/src/lib.rs         |   2 +
+ 4 files changed, 143 insertions(+)
+ create mode 100644 brush-builtins/src/declaration.rs
+
+diff --git a/brush-builtins/src/declaration.rs b/brush-builtins/src/declaration.rs
+new file mode 100644
+index 00000000..0e9bd816
+--- /dev/null
++++ b/brush-builtins/src/declaration.rs
+@@ -0,0 +1,112 @@
++//! Post-expansion assignment detection for declaration builtins.
++//!
++//! The parser only recognises an assignment word when the name is a
++//! **literal** identifier (`brush-parser/src/word.rs`, `assigned_scalar_name`),
++//! so `export ${var}=value` arrives at the builtin as a
++//! [`brush_core::CommandArg::String`]. bash performs the assignment
++//! **after** expansion for declaration builtins (`export` / `declare` /
++//! `local` / `readonly` / `typeset`; POSIX XCU 2.9.1), so the builtins
++//! re-examine an expanded string operand here: split on the first `=`
++//! and treat the left side as the name.
++//!
++//! This is the small, builtin-local half of the choice the thin-fork fix
++//! records: upstream [#1280](https://github.com/reubeno/brush/pull/1280)
++//! reworks assignment expansion wholesale (word + subscript passes across
++//! `interp.rs`/`expansion.rs`, a `declare.rs` split, breaking API changes)
++//! and is still a Draft. Re-examining the already-expanded string inside
++//! the builtins fixes the silent no-op without touching the expansion
++//! pipeline, so it rebases onto #1280 as a deletion rather than a conflict.
++
++/// An expanded declaration operand that turned out to be an assignment.
++pub(crate) struct ExpandedAssignment {
++    /// Text before the first `=` (without a trailing `+`, if any).
++    pub(crate) name: String,
++    /// Whether the operand used the `+=` append form.
++    pub(crate) append: bool,
++    /// Text after the first `=`, already expanded; used verbatim.
++    pub(crate) value: String,
++}
++
++impl ExpandedAssignment {
++    /// Re-wrap as the assignment the parser would have produced for a
++    /// literal name, so the builtin's existing `CommandArg::Assignment`
++    /// path handles it. The value is already expanded and must not be
++    /// expanded again: a literal [`brush_parser::ast::Word`] flattens back
++    /// to itself.
++    #[cfg(feature = "builtin.export")]
++    pub(crate) fn into_command_arg(self) -> brush_core::CommandArg {
++        brush_core::CommandArg::Assignment(brush_core::parser::ast::Assignment {
++            name: brush_core::parser::ast::AssignmentName::VariableName(self.name),
++            value: brush_core::parser::ast::AssignmentValue::Scalar(self.value.into()),
++            append: self.append,
++            loc: brush_core::SourceSpan::default(),
++        })
++    }
++}
++
++/// Split an expanded declaration operand on the first `=`.
++///
++/// Returns `None` when there is no `=` at all — the operand is a plain
++/// name (`export ${var}` still just marks exported) — and when the value
++/// is a compound array literal (`name=(…)`): only scalar assignments are
++/// recognised here, so e.g. `declare +a 'arr=(3 4)'` keeps the builtin's
++/// existing handling (bash refuses the conversion; it never becomes a
++/// scalar assignment of the literal text). The caller validates the name:
++/// an invalid one is bash's diagnostic, not a silent no-op.
++pub(crate) fn split_expanded_assignment(s: &str) -> Option<ExpandedAssignment> {
++    let (left, value) = s.split_once('=')?;
++    if value.starts_with('(') {
++        return None;
++    }
++    let (name, append) = left
++        .strip_suffix('+')
++        .map_or((left, false), |name| (name, true));
++    Some(ExpandedAssignment {
++        name: name.to_owned(),
++        append,
++        value: value.to_owned(),
++    })
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn splits_on_the_first_equals() {
++        let assignment = split_expanded_assignment("CC=gcc -E -P").unwrap();
++        assert_eq!(assignment.name, "CC");
++        assert!(!assignment.append);
++        assert_eq!(assignment.value, "gcc -E -P");
++
++        let assignment = split_expanded_assignment("EQ=a=b").unwrap();
++        assert_eq!(assignment.name, "EQ");
++        assert_eq!(assignment.value, "a=b");
++    }
++
++    #[test]
++    fn detects_the_append_form() {
++        let assignment = split_expanded_assignment("MYVAR+=more").unwrap();
++        assert_eq!(assignment.name, "MYVAR");
++        assert!(assignment.append);
++        assert_eq!(assignment.value, "more");
++    }
++
++    #[test]
++    fn no_equals_is_not_an_assignment() {
++        assert!(split_expanded_assignment("CC").is_none());
++    }
++
++    #[test]
++    fn compound_array_value_is_not_a_scalar_assignment() {
++        assert!(split_expanded_assignment("arr=(3 4)").is_none());
++        assert!(split_expanded_assignment("arr+=(3 4)").is_none());
++    }
++
++    #[test]
++    fn empty_name_still_splits_for_the_caller_to_reject() {
++        let assignment = split_expanded_assignment("=v").unwrap();
++        assert_eq!(assignment.name, "");
++        assert_eq!(assignment.value, "v");
++    }
++}
+diff --git a/brush-builtins/src/declare.rs b/brush-builtins/src/declare.rs
+index ed47cafd..6c3a7612 100644
+--- a/brush-builtins/src/declare.rs
++++ b/brush-builtins/src/declare.rs
+@@ -435,6 +435,23 @@ impl DeclareCommand {
+                 static ARRAY_AND_INDEX_RE: LazyLock<fancy_regex::Regex> =
+                     LazyLock::new(|| fancy_regex::Regex::new(r"^(.*?)\[(.*?)\]$").unwrap());
+ 
++                // The parser only recognises an assignment word with a literal name,
++                // so `declare ${var}=value` arrives here as a plain string. bash
++                // assigns after expansion for declaration builtins: split on the
++                // first `=` and treat a valid name as an assignment. An invalid
++                // name falls through below, where the existing validity check
++                // reports it instead of silently ignoring it.
++                if let Some(expanded) = crate::declaration::split_expanded_assignment(s) {
++                    if brush_core::env::valid_variable_name(expanded.name.as_str()) {
++                        name = expanded.name;
++                        assigned_index = None;
++                        initial_value = Some(ShellValueLiteral::Scalar(expanded.value));
++                        name_is_array = false;
++                        append = expanded.append;
++                        return Ok((name, assigned_index, initial_value, name_is_array, append));
++                    }
++                }
++
+                 if let Some(captures) = ARRAY_AND_INDEX_RE.captures(s)? {
+                     name = captures
+                         .get(1)
+diff --git a/brush-builtins/src/export.rs b/brush-builtins/src/export.rs
+index 5e906bd2..98adfc41 100644
+--- a/brush-builtins/src/export.rs
++++ b/brush-builtins/src/export.rs
+@@ -94,6 +94,18 @@ impl ExportCommand {
+                         variable.export();
+                     }
+                 }
++                // The parser only recognises an assignment word with a literal name,
++                // so `export ${var}=value` arrives here as a plain string. bash
++                // assigns after expansion for declaration builtins: split on the
++                // first `=` and handle it as an assignment.
++                else if let Some(expanded) = crate::declaration::split_expanded_assignment(s) {
++                    if !brush_core::env::valid_variable_name(expanded.name.as_str()) {
++                        writeln!(context.stderr(), "export: `{s}': not a valid identifier")?;
++                        return Ok(ExecutionResult::general_error());
++                    }
++                    let assignment = expanded.into_command_arg();
++                    return self.process_decl(context, &assignment);
++                }
+             }
+             brush_core::CommandArg::Assignment(assignment) => {
+                 let name = match &assignment.name {
+diff --git a/brush-builtins/src/lib.rs b/brush-builtins/src/lib.rs
+index 0dd7fab3..540636cc 100644
+--- a/brush-builtins/src/lib.rs
++++ b/brush-builtins/src/lib.rs
+@@ -35,6 +35,8 @@ mod command;
+ mod complete;
+ #[cfg(feature = "builtin.continue")]
+ mod continue_;
++#[cfg(any(feature = "builtin.declare", feature = "builtin.export"))]
++mod declaration;
+ #[cfg(feature = "builtin.declare")]
+ mod declare;
+ #[cfg(feature = "builtin.dirs")]
+-- 
+2.55.0
+
+
+From 38447d84ff631495d1066010aacf809e0e52cf26 Mon Sep 17 00:00:00 2001
+From: Francesco Riosa <me@francesco-riosa.com>
+Date: Wed, 23 Sep 2026 01:47:23 +0200
+Subject: [PATCH 2/2] test(compat): cover declaration builtins with expanded
+ assignment names
+
+New declaration-assignment-expansion.yaml case file for the matrix:
+literal | ${var} | "${var}" | append (+=) | no-value forms over
+export | declare | local | readonly | typeset, diffed against real bash
+(first `=` split, quoted values, invalid-name diagnostic, function
+scoping for local/declare).
+
+Also unmarks 13 previously-known failures the fix heals: the quoted
+scalar/append declare forms, 'command declare/export' forwarding, the
+non-reexpanding generated export assignment, and the array-element
+export rejection (stderr still differs there, so its ignore_stderr
+stays).
+
+Assisted-by: opencode:muse-spark
+---
+ .../tests/cases/compat/builtins/command.yaml  |  4 -
+ .../declaration-assignment-expansion.yaml     | 81 +++++++++++++++++++
+ .../tests/cases/compat/builtins/declare.yaml  |  6 --
+ .../tests/cases/compat/builtins/export.yaml   |  3 -
+ 4 files changed, 81 insertions(+), 13 deletions(-)
+ create mode 100644 brush-shell/tests/cases/compat/builtins/declaration-assignment-expansion.yaml
+
+diff --git a/brush-shell/tests/cases/compat/builtins/command.yaml b/brush-shell/tests/cases/compat/builtins/command.yaml
+index 6519818a..3e348b72 100644
+--- a/brush-shell/tests/cases/compat/builtins/command.yaml
++++ b/brush-shell/tests/cases/compat/builtins/command.yaml
+@@ -110,7 +110,6 @@ cases:
+       command ls --help
+ 
+   - name: "command forwards expanded declaration assignments"
+-    known_failure: true # TODO: command builtin improvements required
+     stdin: |
+       value=world
+       command declare declared=$value
+@@ -118,7 +117,6 @@ cases:
+       declare -p declared exported
+ 
+   - name: "nested wrappers resolve ordinary and declaration targets"
+-    known_failure: true # TODO: command builtin improvements required
+     stdin: |
+       value=world
+       command builtin echo ordinary=$value
+@@ -158,7 +156,6 @@ cases:
+   # syntax that survives.
+   #
+   - name: "command does not preserve assignment splitting semantics"
+-    known_failure: true # TODO: command builtin improvements required
+     ignore_stderr: true
+     stdin: |
+       v="x y"
+@@ -166,7 +163,6 @@ cases:
+       declare -p b y
+ 
+   - name: "command forwards a value with no field separators intact"
+-    known_failure: true # TODO: command builtin improvements required
+     stdin: |
+       value=world
+       command declare declared=$value
+diff --git a/brush-shell/tests/cases/compat/builtins/declaration-assignment-expansion.yaml b/brush-shell/tests/cases/compat/builtins/declaration-assignment-expansion.yaml
+new file mode 100644
+index 00000000..bf788d47
+--- /dev/null
++++ b/brush-shell/tests/cases/compat/builtins/declaration-assignment-expansion.yaml
+@@ -0,0 +1,81 @@
++name: "Builtins: declaration assignment expansion"
++cases:
++  - name: "Export assigns through an expanded name"
++    stdin: |
++      export LIT_CTL=lit
++      var=CC
++      prog=( gcc )
++      export ${var}="${prog[*]}"
++      echo "CC=[${CC}]"
++      export "${var}=quoted"
++      echo "CC=[${CC}]"
++      eqname=EQ
++      export ${eqname}=a=b
++      echo "EQ=[${EQ}]"
++      export Q="${var} and more"
++      echo "Q=[${Q}]"
++      echo "LIT_CTL=[${LIT_CTL}]"
++
++  - name: "Export appends through an expanded name"
++    stdin: |
++      MYVAR="-O3 -pipe"
++      app=MYVAR
++      export ${app}+=" -Wno-foo"
++      echo "MYVAR: $MYVAR"
++      unset NEWAPP
++      new=NEWAPP
++      export ${new}+=first
++      echo "NEWAPP: $NEWAPP"
++
++  - name: "Export with an expanded name but no value just marks exported"
++    stdin: |
++      MARKME=marked
++      mk=MARKME
++      export ${mk}
++      declare -p MARKME
++
++  - name: "Export rejects an expanded invalid name"
++    ignore_stderr: true
++    stdin: |
++      var="foo-bar"
++      export ${var}=v
++      echo "status: $?"
++      echo "CC=[${CC-unset}]"
++
++  - name: "Declare assigns through an expanded name"
++    stdin: |
++      dvar=DL
++      declare ${dvar}=world
++      echo "DL=[$DL]"
++      declare -p DL
++
++  - name: "Local assigns through an expanded name and scopes like bash"
++    stdin: |
++      myfunc() {
++        var=LF
++        local ${var}=hi
++        echo "in: LF=[$LF]"
++      }
++      myfunc
++      echo "out: LF=[${LF-unset}]"
++      myfunc2() {
++        d=DF
++        declare ${d}=inner
++        echo "in: DF=[$DF]"
++      }
++      DF=global
++      myfunc2
++      echo "out: DF=[$DF]"
++
++  - name: "Readonly assigns through an expanded name"
++    stdin: |
++      rvar=RO
++      readonly ${rvar}=ro-val
++      echo "RO=[$RO]"
++      declare -p RO
++
++  - name: "Typeset assigns through an expanded name"
++    stdin: |
++      tvar=TS
++      typeset ${tvar}=ts-val
++      echo "TS=[$TS]"
+diff --git a/brush-shell/tests/cases/compat/builtins/declare.yaml b/brush-shell/tests/cases/compat/builtins/declare.yaml
+index c2926b24..d4ae4af4 100644
+--- a/brush-shell/tests/cases/compat/builtins/declare.yaml
++++ b/brush-shell/tests/cases/compat/builtins/declare.yaml
+@@ -675,20 +675,17 @@ cases:
+       declare -p -n 2>/dev/null | sort
+ 
+   - name: "Single-quoted scalar assignment"
+-    known_failure: true # TODO: declare improvements required
+     stdin: |
+       declare 'x=hello'
+       echo "$x"
+ 
+   - name: "Single-quoted scalar with dollar sign preserved"
+-    known_failure: true # TODO: declare improvements required
+     stdin: |
+       Y=world
+       declare 'x=$Y'
+       echo "$x"
+ 
+   - name: "Double-quoted scalar assignment expands"
+-    known_failure: true # TODO: declare improvements required
+     stdin: |
+       Y=world
+       declare "x=$Y"
+@@ -928,7 +925,6 @@ cases:
+       declare -p map
+ 
+   - name: "Single-quoted append assignment"
+-    known_failure: true # TODO: declare improvements required
+     stdin: |
+       declare 'text=one'
+       declare 'text+=two' 2>/dev/null
+@@ -988,7 +984,6 @@ cases:
+       f
+ 
+   - name: "Function shadowing declare is reached through command"
+-    known_failure: true # TODO: declare improvements required
+     stdin: |
+       declare() { echo "shadow declare: [$*]"; }
+       command declare cx=1
+@@ -1070,7 +1065,6 @@ cases:
+   # like a subscript.
+   #
+   - name: "Assignment value ending in a bracket is not a subscripted name"
+-    known_failure: true # TODO: declare improvements required
+     stdin: |
+       v='[a]'
+       declare "x=$v"
+diff --git a/brush-shell/tests/cases/compat/builtins/export.yaml b/brush-shell/tests/cases/compat/builtins/export.yaml
+index 038954ed..f038f461 100644
+--- a/brush-shell/tests/cases/compat/builtins/export.yaml
++++ b/brush-shell/tests/cases/compat/builtins/export.yaml
+@@ -37,7 +37,6 @@ cases:
+       declare -p result
+ 
+   - name: "Export generated assignment does not expand its value again"
+-    known_failure: true # TODO: export improvements required
+     stdin: |
+       assignment='result=$(printf expanded)'
+       export "$assignment"
+@@ -151,14 +150,12 @@ cases:
+       unset -f export
+ 
+   - name: "Export rejects an array element target"
+-    known_failure: true # TODO: export improvements required
+     ignore_stderr: true
+     stdin: |
+       export 'ea[0]=1'
+       echo "status: $?"
+ 
+   - name: "Export recognizes an assignment produced through command"
+-    known_failure: true # TODO: export improvements required
+     stdin: |
+       value=world
+       command export wrapped=$value
+-- 
+2.55.0
+

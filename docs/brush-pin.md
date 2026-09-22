@@ -72,7 +72,9 @@ failed — the three being the pre-existing `--package-moves=n`
 pinned-output red on current `main`, reproduced identically with the
 pre-re-pin binary and unrelated to brush. The four staged fixes are
 still unmerged upstream (checked each branch tip), so the thin fork
-stays. Backlog #94 (`export ${var}=value` is a silent no-op) is still
+stays (a fifth, fix 06 for #94, is staged on its branch since
+2026-09-23 and joins at the next re-pin). Backlog #94
+(`export ${var}=value` is a silent no-op) is still
 unfixed on this pin — upstream's open, breaking
 [#1280](https://github.com/reubeno/brush/pull/1280) ("centralize
 assignment expansion + overhaul declaration builtins") is its fix path
@@ -85,7 +87,10 @@ and is deliberately not carried here.
 > `fix/declare-f-heredoc-serialization` /
 > `fix/function-pipeline-stage-deadlock` /
 > `fix/dot-parse-error-status` /
-> `fix/brace-expansion-ifs-independent` staged for upstream submission.
+> `fix/brace-expansion-ifs-independent` /
+> `fix/declaration-assignment-expansion` (fix 06, branched 2026-09-23 —
+> joins `main` squashed at the next re-pin, Phase 6 S4) staged for
+> upstream submission.
 > Their tips still sit on the old `25bffd54` base — rebase each onto
 > current `upstream/main` before opening its PR. Fix 05 is superseded by
 > #988 and no longer needs one.
@@ -257,11 +262,35 @@ failures among 1407 functions, 41 eclasses never parsed); `cargo test
 --release -p portuale` green against the new pin (incl. the
 `install_does_not_deadlock…` guard and the new B2/B3 regressions).
 
-**Still to do:** open the four upstream PRs (fix 05 is superseded by
+**Still to do:** open the five upstream PRs (fix 05 is superseded by
 #988 and no longer needs one); once merged, re-pin to `reubeno/brush`
 directly (dropping the thin fork) and reconsider flipping the `--shell`
 default back to `brush` — which also waits on #94's upstream fix
-([#1280](https://github.com/reubeno/brush/pull/1280), open).
+([#1280](https://github.com/reubeno/brush/pull/1280), open, still a
+Draft; the fork carries the small builtin-local fix 06 meanwhile).
+
+### Declaration builtins never assignment-expand an expanded name
+
+**Found 2026-09-20, staged 2026-09-23 as fix 06 (backlog #94).**
+`var=CC; prog=( gcc ); export ${var}="${prog[*]}"` left `CC` empty
+(exit 0) on the pin and on upstream `main` alike — the parser only
+recognises a literal assignment name, so the operand reached the
+builtin as `CommandArg::String` and `export` silently marked nothing.
+`declare`/`local`/`readonly`/`typeset` rejected it instead
+(`not a valid variable name`). bash assigns after expansion (POSIX XCU
+2.9.1). Impact: `toolchain-funcs.eclass` `_tc-getPROG` sets the
+compiler vars exactly this way, so `tc-getCC` echoed empty and every
+`tc-check-openmp` consumer died in `pkg_pretend` under `--shell brush`.
+Fix: re-examine the expanded string inside the builtins (split on the
+first `=`, honour `+=`, route valid scalar names through the existing
+assignment path) — deliberately not upstream
+[#1280](https://github.com/reubeno/brush/pull/1280)'s shape (still a
+Draft with breaking changes). Staged: branch
+`fix/declaration-assignment-expansion`, write-up + patch in
+[`brush-pr/06-declaration-assignment-expansion.md`](brush-pr/06-declaration-assignment-expansion.md),
+compat case + 13 unmarked known-failures on the branch. Removes one of
+the two blockers to revisiting the `--shell` default (the other is #5,
+now five unopened PRs).
 
 ## What is *not* tracked here
 
@@ -291,8 +320,14 @@ construct, `brush strategy #2` style — and get recorded here.
   "#38 S2" and `docs/what-this-proves.md`'s Track-B slice note.
 
 - **2026-09-20 — declaration builtins never assignment-expand an expanded
-  name (`export ${var}=value`). OPEN upstream; backlog #94.** `var=CC;
-  prog=( gcc ); export ${var}="${prog[*]}"` leaves `CC` empty (exit 0)
+  name (`export ${var}=value`). STAGED as fix 06 2026-09-23 (backlog #94,
+  moved to the tracked set above).** Upstream's open, breaking
+  [#1280](https://github.com/reubeno/brush/pull/1280) remains the
+  long-term fix path and is deliberately not carried in the fork; the
+  fork carries the small builtin-local fix instead. Detail:
+  [`brush-pr/06-declaration-assignment-expansion.md`](brush-pr/06-declaration-assignment-expansion.md).
+  The mechanism paragraph below is kept as the derivation trail.
+  `var=CC; prog=( gcc ); export ${var}="${prog[*]}"` leaves `CC` empty (exit 0)
   instead of `gcc`, on the old pin (`b9524ad5`) and on upstream
   `reubeno/brush` main (`6bada559`, built and run 2026-09-20) alike —
   and still on the current pin (`4edb1f43`), which is the same upstream
@@ -310,14 +345,12 @@ construct, `brush strategy #2` style — and get recorded here.
   for declaration builtins (POSIX XCU 2.9.1). Impact: real
   `toolchain-funcs.eclass` `_tc-getPROG` (`:25-45`) sets the compiler
   vars this way whenever `CC`/… is unset, so under `--shell brush`
-  `tc-getCC` echoes empty and every `tc-check-openmp` consumer dies in
+  `tc-getCC` echoes empty and every   `tc-check-openmp` consumer dies in
   `pkg_pretend` (live: `emerge --shell brush media-gfx/gimp` —
   `Your current compiler does not support OpenMP!` plus two
-  `command not found: -E` from the failure diagnostics). Fix upstream
-  first (split on the first `=` in the declaration builtins, or defer
-  assignment detection for them), add a compat case for the
-  literal/`${var}`/quoted/append × `export`/`declare`/`local` forms, and
-  a pin guard if the fork carries it. A second, independent blocker to
+  `command not found: -E` from the failure diagnostics). Done as fix 06
+  (split on the first `=` in the declaration builtins) with the compat
+  case, and the pin guard is Phase 6 S4. A second, independent blocker to
   revisiting the `--shell` default.
 
 ## References

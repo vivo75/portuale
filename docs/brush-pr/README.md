@@ -1,9 +1,10 @@
 # brush upstream fixes — staged for submission
 
-Four independent fixes for [`reubeno/brush`](https://github.com/reubeno/brush),
+Six independent fixes for [`reubeno/brush`](https://github.com/reubeno/brush),
 found while running real Gentoo `bin/*.sh` / eclasses through brush as portuale's
 bash backend. **Not yet submitted upstream** — review, then open PRs. (A fifth
-fix, 05, was superseded by upstream's own IFS rework, #988; see its row.)
+fix, 05, was superseded by upstream's own IFS rework, #988; see its row.
+A sixth, 06, is staged on its branch and joins the pin at the next re-pin.)
 
 In the local `3rdparty/brush` checkout (fixes rebased 2026-09-20 onto
 upstream `main` `6bada559`, `brush-v0.4.0-*`):
@@ -15,11 +16,14 @@ upstream `main` `6bada559`, `brush-v0.4.0-*`):
 | [03](03-pipeline-function-deadlock.md) | `fix/function-pipeline-stage-deadlock` | `2173b730` | `brush-core` command exec | A function used as a non-last pipeline stage runs to completion inline before the next stage spawns → deadlocks past one pipe buffer. (Re-do of the never-merged #1276.) |
 | [04](04-dot-parse-error-status.md) | `fix/dot-parse-error-status` | `d0249524` | `brush-core` `source` | A parse error in a *sourced* file was fatal to the calling shell (and its `source … \|\| …` guard never ran). bash returns 2 and keeps going. |
 | [05](05-brace-expansion-ifs.md) | ~~`fix/brace-expansion-ifs-independent`~~ | `4edb1f43` | `brush-core` expansion | **Superseded by upstream [#988](https://github.com/reubeno/brush/pull/988) "improve IFS support" (`411b9a32`), which made brace expansion produce its fields independently of IFS.** No PR needed; only the `IFS=`/`IFS=:` regression case that rework missed remains on the fork (`4edb1f43`, test-only). |
+| [06](06-declaration-assignment-expansion.md) | `fix/declaration-assignment-expansion` | S1 `dd016ba6` + S2 `38447d84` (squash to one commit on merge to the fork's `main`) | `brush-builtins` declaration builtins | Declaration builtins (`export` / `declare` / `local` / `readonly` / `typeset`) never assignment-expanded an expanded name (`export ${var}=value` was a silent no-op); re-examine the expanded string inside the builtins. Deliberately not upstream [#1280](https://github.com/reubeno/brush/pull/1280)'s shape (still a Draft); see the doc. |
 
 Each fix commit is exactly one commit on current upstream `main`. `vivo75/brush`'s
 `main` carries the four fixes plus 05's regression test (`995cfbf4` → `fa046cc5`
 → `2173b730` → `d0249524` → `4edb1f43`); **portuale is pinned to that main,
 `4edb1f43`** (re-pinned 2026-09-20), so it already builds against these fixes.
+Fix 06 is staged on its branch and joins `main` (squashed to one commit) at the
+next re-pin — the portuale-side guard (Phase 6 S4) re-pins past it.
 See [`../brush-pin.md`](../brush-pin.md) "Current pin".
 
 The per-bug `fix/*` branches on `vivo75/brush` still point at their old
@@ -32,7 +36,7 @@ full messages; `git am` them, or submit each branch as its own PR — still to d
 
 ## Opening the PRs (user-owned; B6)
 
-Four PRs — fix 05 is superseded by #988 and needs none. Rebase each `fix/*`
+Five PRs — fix 05 is superseded by #988 and needs none. Rebase each `fix/*`
 branch onto current `upstream/main` first (or push the already-rebased commits
 from the fork's `main` as the branch), then run from this repo root (or adjust
 `--body-file` paths):
@@ -50,6 +54,9 @@ gh pr create -R reubeno/brush --head vivo75:fix/function-pipeline-stage-deadlock
 gh pr create -R reubeno/brush --head vivo75:fix/dot-parse-error-status \
   --title "fix(core): don't exit the calling shell on a \`source\` parse error" \
   --body-file docs/brush-pr/04-dot-parse-error-status.md
+gh pr create -R reubeno/brush --head vivo75:fix/declaration-assignment-expansion \
+  --title "fix(builtins): assignment-expand declaration operands with an expanded name" \
+  --body-file docs/brush-pr/06-declaration-assignment-expansion.md
 ```
 
 Also decide [#1276](https://github.com/reubeno/brush/pull/1276) (the old,
