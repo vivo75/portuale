@@ -471,3 +471,56 @@ pub(crate) fn show_pprovided_notice(result: &GraphResult, color: &Colorizer) {
         eprintln!();
     }
 }
+
+/// The header printed before the merge list of a non-pretend run.
+pub(crate) fn show_resolution_header(opts: &EmergeOpts<'_>, result: &GraphResult) {
+    let &EmergeOpts {
+        pretend,
+        quiet,
+        ask,
+        tree,
+        verbose,
+        buildpkgonly,
+        unordered_display,
+        nodeps,
+        ..
+    } = opts;
+    // The resolution-phase display for a non-`--pretend` run, printed whether
+    // or not the list itself is shown and whether or not resolution succeeds.
+    // See `resolution_header_shown`/`resolution_notice_shown` for the gates.
+    // Portage: _emerge/depgraph.py, _start_resolution_display
+    if !pretend && !quiet {
+        if resolution_header_shown(ResolutionHeaderShownArgs {
+            ask,
+            tree,
+            verbose,
+            quiet,
+        }) {
+            // `These are the packages that would be ...`: `in reverse order` for
+            // `--tree` (a plain `:` under `--unordered-display`), `built` under
+            // `--buildpkgonly`, else `merged, in order:`.
+            println!();
+            let action = if buildpkgonly { "built" } else { "merged" };
+            if tree {
+                if unordered_display {
+                    println!("These are the packages that would be {action}:");
+                } else {
+                    println!("These are the packages that would be {action}, in reverse order:");
+                }
+            } else {
+                println!("These are the packages that would be {action}, in order:");
+            }
+            println!();
+        }
+        if resolution_notice_shown(quiet, nodeps) {
+            // Ported from the pinned source (one space before `...`).
+            println!("Calculating dependencies ... done!");
+            // The wall-clock seconds are cut (determinism); only the
+            // `backtrack: B/M` signal is kept, plus a trailing blank line.
+            println!(
+                "Dependency resolution took (backtrack: {}/{}).\n",
+                result.backtrack_restarts, result.backtrack_max,
+            );
+        }
+    }
+}
