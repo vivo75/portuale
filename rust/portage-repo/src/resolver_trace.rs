@@ -471,9 +471,19 @@ pub(crate) fn dump_resolution_walk(
                 atoms.join(" "),
                 dep_priority_str(&prio)
             ));
+            // #138: real's `--debug` prints `Depstring:` raw and
+            // `Candidates:` evaluated (`logs/l111-s0-20260921/real-rest-
+            // debug.log`) -- the evaluated form rides `DepEdge` beside
+            // the raw token, so the walk itself is untouched.
+            let evaluated: Vec<&str> = e
+                .deps
+                .iter()
+                .filter(|d| d.key as usize == ki)
+                .map(|d| d.evaluated.as_str())
+                .collect();
             out(format_args!(
                 "Candidates: [{}]\n",
-                atoms
+                evaluated
                     .iter()
                     .map(|a| format!("'{a}'"))
                     .collect::<Vec<_>>()

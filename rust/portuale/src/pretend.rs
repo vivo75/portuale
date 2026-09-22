@@ -11809,14 +11809,15 @@ pub fn run(args: &[String]) -> ExitCode {
             // the line carries real's `backtrack: N/M` signal only.
             // O7's "timing line" is therefore the signal half, not the
             // seconds; re-open with the owner to print real seconds.
-            println!("These are the packages that would be merged, in order:
-");
+            println!(
+                "These are the packages that would be merged, in order:
+"
+            );
             println!("Calculating dependencies ... done!");
             println!(
                 "Dependency resolution took (backtrack: {}/{}).
 ",
-                result.backtrack_restarts,
-                result.backtrack_max,
+                result.backtrack_restarts, result.backtrack_max,
             );
             let mut thrown_away: Vec<String> = Vec::new();
             for (i, entry) in result.entries.iter().enumerate() {
@@ -14090,6 +14091,7 @@ mod tests {
             e.package = "blocked".into();
             e.deps = vec![portage_repo::DepEdge {
                 atom: "~dev-libs/bparent-1.1".into(),
+                evaluated: "~dev-libs/bparent-1.1".to_string(),
                 category: "dev-libs".into(),
                 package: "bparent".into(),
                 priority: portage_repo::DepPriority {
@@ -14243,6 +14245,7 @@ mod tests {
         };
         let alt_edge = |pkg: &str, version: &str, branch: u32| portage_repo::DepEdge {
             atom: format!("~dev-libs/{pkg}-{version}"),
+            evaluated: format!("~dev-libs/{pkg}-{version}").clone(),
             category: "dev-libs".into(),
             package: pkg.into(),
             priority: portage_repo::DepPriority {
@@ -14346,6 +14349,7 @@ mod tests {
         replacement.package = "blocked".into();
         replacement.deps = vec![portage_repo::DepEdge {
             atom: "~dev-libs/bparent-1.1".to_string(),
+            evaluated: "~dev-libs/bparent-1.1".to_string().clone(),
             category: "dev-libs".into(),
             package: "bparent".into(),
             priority: portage_repo::DepPriority {

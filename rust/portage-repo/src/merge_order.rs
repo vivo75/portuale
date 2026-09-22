@@ -87,6 +87,13 @@ pub struct DepPriority {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DepEdge {
     pub atom: String,
+    /// The atom with its conditional use-deps evaluated against the
+    /// parent's USE (`portage_dep::evaluate_atom_conditionals`), for
+    /// real's `--debug` `Candidates:` line -- real prints `Depstring:`
+    /// raw and `Candidates:` evaluated (#138; oracle
+    /// `logs/l111-s0-20260921/real-rest-debug.log`). Falls back to the
+    /// raw token when evaluation returns `None` (unparseable).
+    pub evaluated: String,
     pub category: String,
     pub package: String,
     pub priority: DepPriority,
@@ -319,6 +326,8 @@ pub(crate) fn dep_edges_from_metadata(
             if seen.insert(key) {
                 edges.push(DepEdge {
                     atom: t.clone(),
+                    evaluated: portage_dep::evaluate_atom_conditionals(&t, use_flags)
+                        .unwrap_or_else(|| t.clone()),
                     category: dep_atom.category,
                     package: dep_atom.package,
                     priority,
@@ -3457,6 +3466,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn dep_edges_carry_the_evaluated_atom_for_candidates_display() {
+        // #138 (Phase 5b S3): real's `--debug` prints `Depstring:` raw
+        // and `Candidates:` evaluated -- the *evaluated* form must ride
+        // the edge beside the raw token. The parent was built -flip, so
+        // `~dev-libs/x-1.0[flip=]` evaluates to `[-flip]` (oracle:
+        // `logs/l111-s0-20260921/real-rest-debug.log`, bed
+        // `l0-fx-20260922T192350Z` arm A).
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "RDEPEND".to_string(),
+            "~dev-libs/deepusedepchild-1.0[flip=]".to_string(),
+        );
+        let use_flags: HashSet<String> = HashSet::new();
+        let edges = dep_edges_from_metadata(&metadata, &use_flags, &["RDEPEND"], false);
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].atom, "~dev-libs/deepusedepchild-1.0[flip=]");
+        assert_eq!(edges[0].evaluated, "~dev-libs/deepusedepchild-1.0[-flip]");
+    }
+
     fn prio(word: u64) -> DepPriority {
         DepPriority {
             buildtime: word & 1 != 0,
@@ -3869,6 +3898,7 @@ mod tests {
         let mogo_deps = vec![
             DepEdge {
                 atom: ">=dev-lang/mogo-1.24".to_string(),
+                evaluated: ">=dev-lang/mogo-1.24".to_string().clone(),
                 category: "dev-lang".to_string(),
                 package: "mogo".to_string(),
                 priority: DepPriority {
@@ -3881,6 +3911,7 @@ mod tests {
             },
             DepEdge {
                 atom: ">=dev-lang/mogoboot-1.24".to_string(),
+                evaluated: ">=dev-lang/mogoboot-1.24".to_string(),
                 category: "dev-lang".to_string(),
                 package: "mogoboot".to_string(),
                 priority: DepPriority {
@@ -3931,6 +3962,7 @@ mod tests {
         // (`dev-libs/treeslotuser`).
         let plain = |cat: &str, pkg: &str| DepEdge {
             atom: format!("{cat}/{pkg}"),
+            evaluated: format!("{cat}/{pkg}").clone(),
             category: cat.to_string(),
             package: pkg.to_string(),
             priority: DepPriority {
@@ -3987,6 +4019,7 @@ mod tests {
         // C0"; the flat-hidden half is `replacement_wait_index`'s call.)
         let plain = |atom: &str, cat: &str, pkg: &str| DepEdge {
             atom: atom.to_string(),
+            evaluated: atom.to_string().clone(),
             category: cat.to_string(),
             package: pkg.to_string(),
             priority: DepPriority {
@@ -4060,6 +4093,7 @@ mod tests {
         // the pair to `1.10, 1.9`.
         let plain = |atom: &str| DepEdge {
             atom: atom.to_string(),
+            evaluated: atom.to_string().clone(),
             category: "dev-libs".to_string(),
             package: "slotted".to_string(),
             priority: DepPriority {
@@ -4113,6 +4147,7 @@ mod tests {
         // and the NVC entry keeps the edge.
         let plain = |atom: &str| DepEdge {
             atom: atom.to_string(),
+            evaluated: atom.to_string().clone(),
             category: "dev-libs".to_string(),
             package: "partly".to_string(),
             priority: DepPriority {
@@ -4158,6 +4193,7 @@ mod tests {
         // hole in the tree.
         let dep = DepEdge {
             atom: "dev-libs/onlyinstalled".to_string(),
+            evaluated: "dev-libs/onlyinstalled".to_string().clone(),
             category: "dev-libs".to_string(),
             package: "onlyinstalled".to_string(),
             priority: DepPriority {
@@ -4190,6 +4226,7 @@ mod tests {
         let owner_deps = vec![
             DepEdge {
                 atom: "~dev-libs/newdep-2".to_string(),
+                evaluated: "~dev-libs/newdep-2".to_string().clone(),
                 category: "dev-libs".to_string(),
                 package: "newdep".to_string(),
                 priority: DepPriority {
@@ -4202,6 +4239,7 @@ mod tests {
             },
             DepEdge {
                 atom: "dev-libs/olddep".to_string(),
+                evaluated: "dev-libs/olddep".to_string().clone(),
                 category: "dev-libs".to_string(),
                 package: "olddep".to_string(),
                 priority: DepPriority {
@@ -4243,6 +4281,7 @@ mod tests {
         let mogo_deps = vec![
             DepEdge {
                 atom: ">=dev-lang/mogo-1.24".to_string(),
+                evaluated: ">=dev-lang/mogo-1.24".to_string().clone(),
                 category: "dev-lang".to_string(),
                 package: "mogo".to_string(),
                 priority: DepPriority {
@@ -4255,6 +4294,7 @@ mod tests {
             },
             DepEdge {
                 atom: ">=dev-lang/mogoboot-1.24".to_string(),
+                evaluated: ">=dev-lang/mogoboot-1.24".to_string().clone(),
                 category: "dev-lang".to_string(),
                 package: "mogoboot".to_string(),
                 priority: DepPriority {
