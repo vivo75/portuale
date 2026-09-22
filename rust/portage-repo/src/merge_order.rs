@@ -1162,14 +1162,14 @@ fn add_installed_dependency_closure(
             })
         };
 
-    // A2 (#26): the edges come from the same installed-metadata view the
-    // walk uses (`installed_dep_string`): with `--dynamic-deps` on (the
-    // default) the *current ebuild*'s deps, exactly what real's
-    // FakeVartree hands `_serialize_tasks`; `--dynamic-deps=n` reads the
-    // raw vdb snapshot. (Phase 5 S1 removed the vdb built-`:=` append as
-    // a documented cut, so the scheduler closure stays on Raw -- the
-    // pre-A2 graph minus the injected libc -- rather than the ebuild
-    // view, which would lose the vdb's built :S/SS= atoms.) The injected-libc strip below is therefore only
+    // A2 (#26): the closure edges come from the raw vdb snapshot
+    // (`installed_dep_string`, `InstalledMetaLayer::Raw`) -- deliberately
+    // NOT the same view the walk uses (the walk reads the *current
+    // ebuild*'s deps under `--dynamic-deps`). Phase 5 S1 removed the vdb
+    // built-`:=` append as a documented cut, so the ebuild view would
+    // lose the vdb's built :S/SS= atoms; the pre-A2 Raw graph (minus the
+    // injected libc) stays the closer approximation, exactly as under
+    // the old gate-off default. The injected-libc strip below is therefore only
     // sound on the Raw path (Gate G0.3): `_inject_libc_dep` appends a
     // bare `>=<libc-provider>-<version>` to every installed package's vdb
     // `RDEPEND` (bug #753500), which the ebuild never declared -- real's

@@ -16265,9 +16265,9 @@ fn file_blocker_conflicts(
 /// still uninstall-orders itself against the merge-bound `blocked-1.5`.
 ///
 /// The dynamic-deps view and USE evaluation are exactly
-/// `enqueue_dependencies`' (live ebuild metadata plus the vdb's built
-/// `:=` atoms appended, flattened against the recorded vdb USE;
-/// `installed_dep_string` falls back to the raw record when the version
+/// `enqueue_dependencies`' (the live ebuild metadata by default, the
+/// vdb snapshot under `--dynamic-deps=n`, flattened against the recorded
+/// vdb USE; `installed_dep_string` falls back to the raw record when the version
 /// is no longer in the tree, real `_DynamicDepsNotApplicable`). The
 /// disjunction closures are the same shared helpers, so a `||` branch is
 /// resolved exactly as the walk would.
@@ -21530,9 +21530,9 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 // entry: A2 (#26) builds it from the *same* installed
                 // metadata view the recursion below walks
                 // (`installed_dep_string`): the live ebuild's deps by
-                // default, the vdb snapshot under `--dynamic-deps=n`, and
-                // the vdb's built `:=` atoms with the append gate on. So
-                // `--debug`'s `Depstring` line and `--tree`'s edges can no
+                // default, the vdb snapshot under `--dynamic-deps=n`.
+                // (Phase 5 S1 removed the vdb built-`:=` append, so there
+                // is no third shape any more.) So `--debug`'s `Depstring` line and `--tree`'s edges can no
                 // longer contradict the child the walk actually queued.
                 // Backlog #86: the display list reads the same
                 // recorded-repo view the recursion walks (never a
@@ -24682,9 +24682,9 @@ fn enqueue_dependencies(
     };
 
     // `--dynamic-deps` (default) walks the repo's *current* ebuild
-    // `*DEPEND` strings **plus** the vdb's own built `:=` atoms appended
-    // (real `FakeVartree._apply_dynamic_deps`, see `installed_dep_string`'s
-    // own doc comment); `--dynamic-deps=n` walks the vdb's own
+    // `*DEPEND` strings (real `FakeVartree._apply_dynamic_deps` minus the
+    // built-`:=` append Phase 5 S1 removed as a documented cut, see
+    // `installed_dep_string`'s own doc comment); `--dynamic-deps=n` walks the vdb's own
     // installed-time `*DEPEND` snapshot. Either way the USE conditionals
     // in those strings are evaluated against the package's *installed*
     // recorded USE (`vdb/USE`), never a fresh profile recompute -- real
