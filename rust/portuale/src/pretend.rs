@@ -11795,6 +11795,29 @@ pub fn run(args: &[String]) -> ExitCode {
                 }
             )
         {
+            // #135 (c) (O7: un-suppress): real prints the merge-list
+            // preamble and the timing line and *then* aborts
+            // (`These are the packages ...` + `Calculating dependencies
+            // ... done!` + `Dependency resolution took N s
+            // (backtrack: N/M).` + blank, all on stdout, before the
+            // abort block on stderr). The partial list itself is empty
+            // for these arms, so this is the preamble only.
+            // Determinism cut (lessons-of-backlog-ops: nondeterministic
+            // values ride `--json` only, never stdout; the
+            // byte-identical repeated-run invariant is a jointly-owned
+            // gate): the wall-clock seconds real prints are omitted --
+            // the line carries real's `backtrack: N/M` signal only.
+            // O7's "timing line" is therefore the signal half, not the
+            // seconds; re-open with the owner to print real seconds.
+            println!("These are the packages that would be merged, in order:
+");
+            println!("Calculating dependencies ... done!");
+            println!(
+                "Dependency resolution took (backtrack: {}/{}).
+",
+                result.backtrack_restarts,
+                result.backtrack_max,
+            );
             let mut thrown_away: Vec<String> = Vec::new();
             for (i, entry) in result.entries.iter().enumerate() {
                 if matches!(
