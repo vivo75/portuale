@@ -17844,3 +17844,19 @@ PORTUALE_DYNAMIC_DEPS_APPEND=1 portuale emerge --pretend -D --noreplace dev-libs
 ```
 
 — the variable is ignored; the live ebuild alone walks (real would also walk the vdb's `builtbindtarget:0/1=` binding: the cut). Both reworked pins were watched RED pre-removal and GREEN after; both #24 pins pass with the var set; close-out L0 `l0-20260922T183907Z` is cell-by-cell identical to baseline (120 probes / 101 clean / parity 0.842). Detail: `docs/02.25-27-installed-node-overlay.md` (done), oracle `../pmtest/differential-test-bed/findings/l0.md` "## #25-#27 S0/S4".
+
+**The resolver's display rows match real's bytes on five residues (Phase 5b S0–S4, 2026-09-22; #141/#135(d,e,c)/#138/#134 DONE, #135(a,b) + #136 OPEN).** The `--root-deps` rebuild row prints real's `USE="-flip*"` column (the entry constructor was display-blank); the plain-miss abort is real's `emerge: there are no ebuilds to satisfy "<unevaluated atom>"` + chain rows (not the bare `!!! no visible ebuild` line); a masked/unsat abort prints the merge-list preamble first (O7's Slice-4 reversal, seconds omitted for determinism); `--debug` `Candidates:` shows the evaluated atom while `Depstring:` stays raw; installed `Child:` rows show the vdb USE. Runnable proof under `PORTAGE_CONFIGROOT=fixtures`:
+
+```sh
+FX=$PWD/fixtures
+portuale emerge -p -D --root-deps dev-libs/deeprootdepconsumer
+# [ebuild   R    ] dev-libs/deeprootdepchild-1.0 to $FX USE="-flip*"
+# [ebuild  N     ] dev-libs/deeprootdepconsumer-1.0
+portuale emerge -p -D dev-libs/deepusedepfconsumer
+# These are the packages that would be merged, in order:
+# Calculating dependencies ... done!
+# Dependency resolution took (backtrack: 0/10).
+# emerge: there are no ebuilds to satisfy "~dev-libs/deepusedepfchild-1.0[flip=]".
+```
+
+The capture set (`l141-135-s0.txt`, bed `l0-fx-20260922T212815Z`) drops from 5 unexplained to 1; the default bed holds 39/30 with only the pre-existing p2b residue. Two honest stops: #136's item text is contradicted by its own capture (the notice already lists both instances — the gap is the merge list, `build_slot_conflict` is not the site), and #135(a)(b) are live-tree-only shapes with no fixture oracle. Detail: `docs/02.134-141-resolver-display-residues.md` (S5 suspended), oracles `../pmtest/differential-test-bed/findings/l0.md` "## #141/#135/#138/#134/#136 S0" + "## #135 S2 (d)+(e)/(c)".
