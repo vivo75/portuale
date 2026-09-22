@@ -1,6 +1,23 @@
 use super::*;
 
 #[test]
+fn dep_edges_carry_the_evaluated_atom_for_candidates_display() {
+    // Portage's `--debug` prints `Depstring:` raw and `Candidates:`
+    // evaluated -- the evaluated form rides the edge. Expected value
+    // from Portage's debug log, container bed.
+    let mut metadata = HashMap::new();
+    metadata.insert(
+        "RDEPEND".to_string(),
+        "~dev-libs/deepusedepchild-1.0[flip=]".to_string(),
+    );
+    let use_flags: HashSet<String> = HashSet::new();
+    let edges = dep_edges_from_metadata(&metadata, &use_flags, &["RDEPEND"], false);
+    assert_eq!(edges.len(), 1);
+    assert_eq!(edges[0].atom, "~dev-libs/deepusedepchild-1.0[flip=]");
+    assert_eq!(edges[0].evaluated, "~dev-libs/deepusedepchild-1.0[-flip]");
+}
+
+#[test]
 fn key_priority_pins_each_dep_key_ladder() {
     let runtime = DepPriority {
         runtime: true,
