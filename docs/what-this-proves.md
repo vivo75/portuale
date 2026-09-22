@@ -17818,3 +17818,19 @@ PORTAGE_CONFIGROOT=$FX ROOT=$FX PORTAGE_RUNNING_ROOT=$FX \
 ```
 
 Pinned by `test_root_deps_evaluates_conditional_use_deps_before_the_satisfied_check` (plus the `-D` control) and, at the graph level, by two `portage-repo` unit tests: the `deepusedep*` arms #132 never got (#139 — arm A surfaces unsatisfied, arm B rebuilds, arm C moves nothing) and the `--root-deps` arm that fails without this fix. Verification: `cargo test --release` green, contract suite `1762 passed, 2 skipped, 5 xfailed` (+2 new, zero other movement), no corpus drift. Residue filed as #141 (a running-root rebuild entry never shows the `USE` column — resolution converges, display does not; Phase 5b family). Detail: `docs/02.133-root-deps-conditionals.md` (done), oracle `../pmtest/differential-test-bed/findings/l0.md` "## #133 S0/S1".
+
+**The upstream-resolver bulk pipeline is live and the fixture oracle covers its first batch (Phase 4 #50 S1 + #49 S2, 2026-09-22).** `scripts/upstream_resolver_translate.py` captures the real `ResolverPlayground`'s executed oracle (not the source literal) and `--emit-fixtures` writes ebuilds+md5-cache+vdb per playground; batch 1 translates upstream `test_blocker.py` (`testBlocker`, `testBlockerBuildpkgonly`) into 15 ebuilds + 16 cache entries + 4 vdb entries under a per-playground batch namespace (`dev-libs/blk0*`, `dev-libs/blk1*` — the two playgrounds define the same names with different metadata, so they cannot share them; `test_circular_dependencies` is skipped this batch because its `app-misc/A,B` collide with existing fixtures and need their own namespace). Runnable proof under `PORTAGE_CONFIGROOT=fixtures` (real merges X-1 + `[uninstall]Y-1` in every argv order; the bed records that portuale interleaves those rows differently):
+
+```sh
+FX=$PWD/fixtures
+PORTAGE_CONFIGROOT=$FX ROOT=$FX PORTAGE_RUNNING_ROOT=$FX \
+  portuale emerge --pretend --backtrack=0 dev-libs/blk0a dev-libs/blk0c dev-libs/blk0b
+# [ebuild  N     ] dev-libs/blk0x-1
+# [ebuild  N     ] dev-libs/blk0a-1
+# [ebuild  N     ] dev-libs/blk0c-1
+# [ebuild  N     ] dev-libs/blk0b-1
+# [uninstall     ] dev-libs/blk0y-1
+# [blocks b      ] =dev-libs/blk0y-1 ("=dev-libs/blk0y-1" is soft blocking dev-libs/blk0x-1)
+```
+
+Pinned by 10 rc-only `CASES` entries (every exit matches real) plus the exact-bytes test above for the two clean argv orders. The batch paid for itself immediately: 10 of 12 cells diverge and are filed, not pinned — #142 (the uninstall target follows walk order, Y-2/Y-3 instead of Y-1, with a spurious conflict WARNING; one order even merges X-2 against B's `<X-2` bound) and #143 (under `--buildpkgonly` portuale uninstalls installed X for soft `!`, RDEPEND and PDEPEND blockers real ignores, and misses the `!!` abort). The oracle widened with it: four blk cells in the default atomlist, bed `l0-fx-20260922T101821Z` 39 probes / 29 clean with all 11 new findings suppressed as `owner: portuale-bug` and the 4 pre-existing findings byte-identical to baseline (proven by a stashed re-run). The mutation half ran too: `merge_order.rs`, 555 mutants, 272 caught / 233 missed / 31 unviable / 19 timeouts (~3 h) — 16 trace-only, 2 equivalent, 215 real gaps (38.7%, under the 40% stop bar) filed as #144 (scheduler loop), #145 (installed/vdb inputs), #146 (key/priority mapping), no tests added in the measuring slice. Detail: `docs/06.49-50-52-oracle-fixtures-mutants.md` (done), oracles `/tmp/fx-b1-blocker.json` (S1 capture) and `../pmtest/differential-test-bed/findings/l0.md` "## #49 S2".
