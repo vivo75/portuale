@@ -6492,11 +6492,27 @@ fn best_installed_for_atom(
 /// real host `/` or a fixture's own fake vdb tree, and every automated
 /// test in portuale uses the latter -- only `pretend.rs`'s own real CLI
 /// boundary ever points this at real `/`, matching real portage's own
-/// actual default (`SYSROOT` unset). USE-deps on the atom aren't checked
-/// against the running root's own recorded `USE` (the same simplification
-/// `blocked_installed_packages`'s own blocker-atom matching already
-/// makes) -- a documented v1 scope cut.
-fn running_root_satisfies_atom(atom_str: &str, running_root: &Path) -> bool {
+/// actual default (`SYSROOT` unset).
+///
+/// A version match alone is not enough: the matched instance's recorded
+/// `USE` must also satisfy the atom's use-deps
+/// (`portage_dep::use_deps_satisfied`, the same idiom
+/// `best_installed_matching`'s own USE filter uses for the target root).
+/// The version-only match is USE-blind by construction (the candidate
+/// strings carry no USE at all), so without this an evaluated `[-flip]`
+/// still "matched" an installed `+flip` instance and the dep was wrongly
+/// dropped as running-root-satisfied (#133: real rebuilds it instead).
+/// Conditional forms (`=`/`?`) stay vacuous here exactly as in
+/// `match_from_list` -- they are the caller's to evaluate first (both
+/// `root_deps_*` producers do, against the parent's own USE); what this
+/// enforces is whatever unconditional form the atom already carries,
+/// which is also what makes the `||`-closure call sites real-faithful
+/// (real `dep_zapdeps` matches installed alternatives with USE).
+fn running_root_satisfies_atom(
+    atom_str: &str,
+    running_root: &Path,
+    config: &portage_profile::Config,
+) -> bool {
     let Some(atom) = portage_dep::parse_atom(atom_str) else {
         return false;
     };
@@ -6511,8 +6527,32 @@ fn running_root_satisfies_atom(atom_str: &str, running_root: &Path) -> bool {
         })
         .collect();
     let candidate_str_refs: Vec<&str> = candidate_strs.iter().map(String::as_str).collect();
-    portage_dep::match_from_list(atom_str, &candidate_str_refs)
-        .is_some_and(|matched| !matched.is_empty())
+    let Some(matched) = portage_dep::match_from_list(atom_str, &candidate_str_refs) else {
+        return false;
+    };
+    if matched.is_empty() {
+        return false;
+    }
+    let Some(use_deps) = atom.use_deps.as_ref().filter(|d| !d.is_empty()) else {
+        return true;
+    };
+    let by_str: HashMap<&str, &(String, String, String)> = candidate_str_refs
+        .iter()
+        .copied()
+        .zip(candidates.iter())
+        .collect();
+    matched.into_iter().any(|m| {
+        let Some((version, _, _)) = by_str.get(m) else {
+            return false;
+        };
+        let vdb_iuse =
+            read_vdb_flag_set(running_root, &atom.category, &atom.package, version, "IUSE");
+        let vdb_use =
+            read_vdb_flag_set(running_root, &atom.category, &atom.package, version, "USE");
+        let mut valid = valid_iuse(&vdb_iuse, config);
+        valid.extend(vdb_use.iter().cloned());
+        portage_dep::use_deps_satisfied(use_deps, &valid, &vdb_use)
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -11038,7 +11078,7 @@ fn disjunction_preference(
         // evaluation at this stage (dep_check.py soft 469).
         let avail = atom_currently_satisfiable(repos, stripped, config, extra_constraints)
             || root_deps_running_root
-                .is_some_and(|running_root| running_root_satisfies_atom(a, running_root));
+                .is_some_and(|running_root| running_root_satisfies_atom(a, running_root, config));
         if !avail {
             all_available = false;
             all_use_satisfied = false;
@@ -11070,7 +11110,7 @@ fn disjunction_preference(
                 // probe).
                 || atom_matches_installed(root, a, config)
                 || root_deps_running_root
-                    .is_some_and(|running_root| running_root_satisfies_atom(a, running_root))
+                    .is_some_and(|running_root| running_root_satisfies_atom(a, running_root, config))
         };
         if !use_ok {
             all_use_satisfied = false;
@@ -12009,6 +12049,8 @@ pub struct InstalledInfo {
 /// on the running root, matching real portage's own effective behavior
 /// (a build-time tool that's already present on the host never needs a
 /// *visible* ebuild candidate to satisfy a real `--root-deps` build).
+/// The returned tokens are evaluated against `use_flags` (#133: real
+/// evaluates at every producer), so callers compare evaluated forms.
 /// Returns only the tokens satisfied by `running_root`'s own real vdb
 /// (`running_root_satisfies_atom`) -- callers drop these from their own
 /// already-flattened `flat_deps` before queueing (real "no separate
@@ -12041,7 +12083,7 @@ fn root_deps_satisfied_atoms(
             // build-time `||` group resolved against the running root).
             if atoms.iter().all(|a| {
                 atom_currently_satisfiable(repos, a, config, &[])
-                    || running_root_satisfies_atom(a, running_root)
+                    || running_root_satisfies_atom(a, running_root, config)
             }) {
                 portage_use_reduce::AltPreference::Available
             } else {
@@ -12057,7 +12099,20 @@ fn root_deps_satisfied_atoms(
     .map(|flat| {
         flat.into_iter()
             .filter(|t| t != "||")
-            .filter(|t| running_root_satisfies_atom(t, running_root))
+            // #133: real evaluates every token's conditional use-deps at
+            // the producer itself (`use_reduce(..., token_class=Atom)`'s
+            // own per-token `token.evaluate_conditionals(uselist)` step,
+            // before any branch selection or split) -- without this the
+            // raw `[flip=]` form reached the satisfied check below, where
+            // a conditional form imposes no state constraint at all, and
+            // every conditional build dep was vacuously
+            // running-root-satisfied. Unparseable tokens pass through
+            // as-is (today's tolerance, the same pass-through both
+            // dep-walk loops' own post-passes use).
+            .map(|t| {
+                portage_dep::evaluate_atom_conditionals(&t, use_flags).unwrap_or_else(|| t.clone())
+            })
+            .filter(|t| running_root_satisfies_atom(t, running_root, config))
             .collect()
     })
     .unwrap_or_default()
@@ -12112,7 +12167,7 @@ fn unsatisfied_root_deps_atoms(
             // build-time `||` group resolved against the running root).
             if atoms.iter().all(|a| {
                 atom_currently_satisfiable(repos, a, config, &[])
-                    || running_root_satisfies_atom(a, running_root)
+                    || running_root_satisfies_atom(a, running_root, config)
             }) {
                 portage_use_reduce::AltPreference::Available
             } else {
@@ -12128,10 +12183,16 @@ fn unsatisfied_root_deps_atoms(
     .map(|flat| {
         flat.into_iter()
             .filter(|t| t != "||")
+            // #133: same producer-side evaluation as
+            // `root_deps_satisfied_atoms` above -- real evaluates at every
+            // producer, so the complement set is evaluated-keyed too.
+            .map(|t| {
+                portage_dep::evaluate_atom_conditionals(&t, use_flags).unwrap_or_else(|| t.clone())
+            })
             .filter(|t| {
                 portage_dep::parse_atom(t).is_some_and(|a| a.blocker == portage_dep::Blocker::None)
             })
-            .filter(|t| !running_root_satisfies_atom(t, running_root))
+            .filter(|t| !running_root_satisfies_atom(t, running_root, config))
             .collect()
     })
     .unwrap_or_default()
@@ -22995,10 +23056,25 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 )
             })
             .unwrap_or_default();
+        // #133: the two sets above are evaluated-keyed (real evaluates at
+        // every producer), while `flat_deps` here is still raw --
+        // `enqueue_flat_deps` evaluates later, at queue time -- so the
+        // membership test compares evaluated forms. The surviving tokens
+        // stay raw on purpose: `buildtime_atoms`/`runtime_atoms` below
+        // are raw-keyed flattens, and `enqueue_flat_deps` runs its own
+        // post-pass over whatever survives.
         let flat_deps: Vec<String> = flat_deps
             .into_iter()
-            .filter(|tok| !root_deps_satisfied.contains(tok))
-            .filter(|tok| !root_deps_unsatisfied.contains(tok))
+            .filter(|tok| {
+                let evaluated = portage_dep::evaluate_atom_conditionals(tok, &use_flags)
+                    .unwrap_or_else(|| tok.clone());
+                !root_deps_satisfied.contains(&evaluated)
+            })
+            .filter(|tok| {
+                let evaluated = portage_dep::evaluate_atom_conditionals(tok, &use_flags)
+                    .unwrap_or_else(|| tok.clone());
+                !root_deps_unsatisfied.contains(&evaluated)
+            })
             .collect();
         if let Some(running_root) = ctx.root_deps_running_root {
             for atom_str in &root_deps_unsatisfied {
@@ -24870,15 +24946,11 @@ fn enqueue_dependencies(
         // Applied before the blocker split, like `enqueue_flat_deps`
         // and like real -- a blocker atom can carry use-deps too.
         //
-        // `raw` is kept for the two `root_deps_*` membership tests
-        // below **only**: those sets come from
-        // `root_deps_satisfied_atoms`/`unsatisfied_root_deps_atoms`,
-        // which flatten the same metadata without evaluating, so they
-        // are raw-keyed. Looking an evaluated token up in a raw-keyed
-        // set silently stops matching and re-queues an already
-        // satisfied build dep. Evaluating those two producers as well
-        // is real's own shape but widens this slice into the
-        // `--root-deps` path; it is filed as a residue instead.
+        // `raw` is kept for the `unevaluated` queue field below only.
+        // (#132 left the two `root_deps_*` membership tests keyed on
+        // `raw` because those sets were raw-keyed; #133 evaluates the
+        // producers too, so both sides are evaluated-keyed now and the
+        // tests use `tok`.)
         let raw = tok;
         let evaluated = portage_dep::evaluate_atom_conditionals(&raw, &use_flags)
             .unwrap_or_else(|| raw.clone());
@@ -24905,13 +24977,13 @@ fn enqueue_dependencies(
             });
             continue;
         }
-        if root_deps_satisfied.contains(&raw) {
+        if root_deps_satisfied.contains(&tok) {
             // Real "no separate graph node needed for an
             // already-satisfied dep": ESYSROOT (here, the real running
             // root) already has it.
             continue;
         }
-        if root_deps_unsatisfied.contains(&raw) {
+        if root_deps_unsatisfied.contains(&tok) {
             // Real `DEPEND`/`BDEPEND` never targets `ROOT`/`ESYSROOT` at
             // all under portuale's own established `--root-deps`
             // simplification -- already handled above instead (either a
@@ -32668,21 +32740,26 @@ mod tests {
         // `running_root_satisfies_atom` for why this is deliberately
         // generic on which root it's pointed at.
         let root = fixtures_root();
+        let config = test_config();
         assert!(running_root_satisfies_atom(
             "dev-libs/rootdepsprovider",
-            &root
+            &root,
+            &config
         ));
         assert!(running_root_satisfies_atom(
             "dev-libs/rootdepsprovider:0",
-            &root
+            &root,
+            &config
         ));
         assert!(!running_root_satisfies_atom(
             "dev-libs/rootdepsprovider:1",
-            &root
+            &root,
+            &config
         ));
         assert!(!running_root_satisfies_atom(
             "dev-libs/nonexistentprovider",
-            &root
+            &root,
+            &config
         ));
     }
 
