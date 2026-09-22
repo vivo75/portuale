@@ -371,6 +371,126 @@ fn install_163(root: &Path, cat: &str, pf: &str, slot: &str, files: &[(&str, &st
     }
 }
 
+// ---- `refresh_entry_use_display` (post-walk USE-line re-render). ----
+
+/// A `New` entry's display comes from the resolved candidate's own
+/// IUSE with the profile-effective USE.
+#[test]
+fn refresh_entry_use_display_renders_a_new_entry_from_the_candidate() {
+    let dir = dir_163("refresh-new");
+    let repos = repo_pkgs_163(
+        &dir,
+        &[("dev-libs/rdisp", "2.0", "0", "alpha beta", "", "amd64")],
+    );
+    let config = cfg_163();
+    let mut entries = vec![entry_163("dev-libs", "rdisp", new_163("2.0"), &[])];
+    refresh_entry_use_display(
+        &mut entries,
+        &repos,
+        &dir,
+        &owner_163("dev-libs", "rdisp"),
+        &config,
+    );
+    assert_eq!(
+        entries[0].use_flags_display,
+        vec![("alpha".to_string(), false), ("beta".to_string(), false),]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An `Upgrade` entry renders the target candidate with the
+/// installed instance as the diff base; a `Downgrade` the same in
+/// the other direction.
+#[test]
+fn refresh_entry_use_display_renders_upgrade_and_downgrade_against_the_installed_base() {
+    let dir = dir_163("refresh-updown");
+    let repos = repo_pkgs_163(
+        &dir,
+        &[
+            ("dev-libs/rdisp", "1.0", "0", "alpha", "", "amd64"),
+            ("dev-libs/rdisp", "2.0", "0", "alpha beta", "", "amd64"),
+        ],
+    );
+    let config = cfg_163();
+    install_163(
+        &dir,
+        "dev-libs",
+        "rdisp-1.0",
+        "0",
+        &[("IUSE", "alpha"), ("USE", "alpha")],
+    );
+    let mut entries = vec![entry_163(
+        "dev-libs",
+        "rdisp",
+        PretendOutcome::Upgrade {
+            from: "1.0".to_string(),
+            to: "2.0".to_string(),
+        },
+        &[],
+    )];
+    refresh_entry_use_display(
+        &mut entries,
+        &repos,
+        &dir,
+        &owner_163("dev-libs", "rdisp"),
+        &config,
+    );
+    assert_eq!(
+        entries[0].use_flags_display,
+        vec![("alpha".to_string(), false), ("beta".to_string(), false),]
+    );
+    // The installed base shows in the `-pv` line: `alpha` was on
+    // (`-alpha*`), `beta` is new to IUSE (`-beta%`).
+    assert_eq!(
+        entries[0].use_expand_display,
+        vec![("USE".to_string(), "-alpha* -beta%".to_string())]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let dir = dir_163("refresh-down");
+    let repos = repo_pkgs_163(
+        &dir,
+        &[
+            ("dev-libs/rdisp", "1.0", "0", "alpha", "", "amd64"),
+            ("dev-libs/rdisp", "2.0", "0", "alpha beta", "", "amd64"),
+        ],
+    );
+    install_163(
+        &dir,
+        "dev-libs",
+        "rdisp-2.0",
+        "0",
+        &[("IUSE", "alpha beta"), ("USE", "alpha beta")],
+    );
+    let mut entries = vec![entry_163(
+        "dev-libs",
+        "rdisp",
+        PretendOutcome::Downgrade {
+            from: "2.0".to_string(),
+            to: "1.0".to_string(),
+        },
+        &[],
+    )];
+    refresh_entry_use_display(
+        &mut entries,
+        &repos,
+        &dir,
+        &owner_163("dev-libs", "rdisp"),
+        &config,
+    );
+    assert_eq!(
+        entries[0].use_flags_display,
+        vec![("alpha".to_string(), false)]
+    );
+    // Like above, but `beta` -- dropped from IUSE by the downgrade
+    // target -- renders as removed (`(-beta%*)`).
+    assert_eq!(
+        entries[0].use_expand_display,
+        vec![("USE".to_string(), "-alpha* (-beta%*)".to_string())]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A `Reinstall` entry whose trigger flag the new ebuild dropped
 /// from IUSE still shows the `(-flag%*)` removed row at plain `-p`
 /// through the trigger set.
@@ -414,6 +534,35 @@ fn refresh_entry_use_display_force_shows_a_dropped_reinstall_trigger_flag() {
     assert_eq!(
         entries[0].use_expand_display_p,
         vec![("USE".to_string(), "(-gone%*)".to_string())]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The candidate is picked by exact version: with two versions in
+/// the tree the display comes from the entry's own, not the first
+/// non-matching one.
+#[test]
+fn refresh_entry_use_display_picks_the_candidate_at_the_entry_version() {
+    let dir = dir_163("refresh-ver");
+    let repos = repo_pkgs_163(
+        &dir,
+        &[
+            ("dev-libs/rdisp", "1.0", "0", "oldflag", "", "amd64"),
+            ("dev-libs/rdisp", "2.0", "0", "newflag", "", "amd64"),
+        ],
+    );
+    let config = cfg_163();
+    let mut entries = vec![entry_163("dev-libs", "rdisp", new_163("2.0"), &[])];
+    refresh_entry_use_display(
+        &mut entries,
+        &repos,
+        &dir,
+        &owner_163("dev-libs", "rdisp"),
+        &config,
+    );
+    assert_eq!(
+        entries[0].use_flags_display,
+        vec![("newflag".to_string(), false)]
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
