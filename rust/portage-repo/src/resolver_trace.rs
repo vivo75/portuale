@@ -309,6 +309,21 @@ fn installed_use_str(root: &Path, cat: &str, pkg: &str, ver: &str) -> String {
         .join(" ")
 }
 
+/// The `Child:` row's `USE="…"` column: an installed keep renders
+/// its vdb-recorded USE via [`installed_use_str`] (real's
+/// `installed_use_str`), every other row renders the entry's own
+/// `use_flags_display` via [`use_str`]. #134: the primary printer used
+/// `use_str` unconditionally, so every installed `Child:` row printed
+/// `USE=""` (the resolver never builds display fields for a keep).
+pub(crate) fn child_use_str(e: &GraphEntry, root: &Path) -> String {
+    if is_nomerge(e) {
+        let ver = entry_version(e).unwrap_or("");
+        installed_use_str(root, &e.category, &e.package, ver)
+    } else {
+        use_str(e)
+    }
+}
+
 /// `emerge --pretend --debug` stages 2 / 4 / 6: the per-package
 /// resolution narration -- real `_add_pkg` (`Child:`/`Parent Dep:`),
 /// `_add_pkg_deps` (`Parent:`/`Depstring:`/`Priority:`/`Candidates:`),
@@ -408,7 +423,7 @@ pub(crate) fn dump_resolution_walk(
         let node = node_label(e, root, is_nomerge(e));
         out(format_args!(
             "\nChild:         {node} USE=\"{}\"\n",
-            use_str(e)
+            child_use_str(e, root)
         ));
         let ver = entry_version(e).unwrap_or("").to_string();
         let installed = is_nomerge(e);
