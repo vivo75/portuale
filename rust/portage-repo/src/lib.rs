@@ -12245,10 +12245,17 @@ fn resolved_version_meta_and_use(
 /// narrower check misses), no recursion; a `resolve_pretend` error ->
 /// nothing.
 ///
-/// `blockers`/`use_flags_display`/`slot` are left at their empty/`None`
-/// defaults for every entry this produces -- the `--pretend` renderer
-/// tolerates that (empty `Vec` prints nothing extra, `verbose`'s own USE
-/// display is skipped when `use_flags_display` is empty).
+/// `blockers` stay empty (a running-root build entry's blockers are the
+/// recursion's business, already walked). Since #141 the display fields
+/// (`use_flags_display` / `use_expand_display` / `use_expand_display_p`)
+/// and the slot/repo identity are **populated** through the same
+/// `refresh_entry_use_display` seam the main walk uses, so a running-root
+/// rebuild row prints real's `USE="-flip*"` column instead of skipping
+/// the display -- real's row is `[ebuild   R    ] … to <root>
+/// USE="-flip*"` (bed `l0-fx-20260922T192350Z`). `oldbest` stays empty:
+/// real's `[oldver]` bracket is an Upgrade-row concern and S0's capture
+/// shows none on this shape (`findings/l0.md` "## #141/#135/#138/#134/#136
+/// S0").
 fn resolve_root_deps_build_entries(
     repos: &[RepoConfig],
     running_root: &Path,
@@ -12328,7 +12335,7 @@ fn resolve_root_deps_build_entries(
     // `usepkg`/`usepkgonly` are both `false` in the `resolve_pretend`
     // call above, so `outcome` can only ever have come from an ebuild
     // candidate (real `dbs` never grows a binary entry in that case).
-    let mut result = vec![GraphEntry {
+    let mut entry = GraphEntry {
         category: atom.category.clone(),
         package: atom.package.clone(),
         outcome,
@@ -12356,7 +12363,27 @@ fn resolve_root_deps_build_entries(
         remote_binary: false,
         build_id: None,
         deps: Vec::new(),
-    }];
+    };
+    // #141: the slot/repo identity and the USE-display fields the
+    // renderer's `USE="…"` column reads. `refresh_entry_use_display`
+    // diffs the tree candidate's effective USE against the *running*
+    // root's vdb record (the root `resolve_pretend` just resolved
+    // against), so a Reinstall whose flag flipped renders real's
+    // `-flag*` marker exactly like the non-`--root-deps` rebuild row.
+    if let Some(version) = recurse_version.as_ref() {
+        let (sub, repo, slot) = slot_conflict_meta(repos, &atom.category, &atom.package, version);
+        entry.slot = Some(slot);
+        entry.sub_slot = Some(sub);
+        entry.repo_name = Some(repo);
+    }
+    refresh_entry_use_display(
+        std::slice::from_mut(&mut entry),
+        repos,
+        running_root,
+        &key,
+        config,
+    );
+    let mut result = vec![entry];
 
     if let Some(version) = recurse_version
         && let Some((metadata, use_flags)) =
@@ -32354,6 +32381,84 @@ mod tests {
                     && !*running),
             "control: without --root-deps the same rebuild targets ROOT: {without:?}"
         );
+    }
+
+    /// #141 (Phase 5b S1): a `--root-deps` running-root build entry's
+    /// `use_flags_display` must carry the rebuild's flipped flag, so the
+    /// renderer prints real's `USE="-flip*"` column (bed
+    /// `l0-fx-20260922T192350Z`) instead of skipping the display. The
+    /// contract pin is
+    /// `test_root_deps_evaluates_conditional_use_deps_before_the_satisfied_check`;
+    /// this is the `cargo test` gate over the same constructor.
+    #[test]
+    fn root_deps_build_entry_displays_the_rebuild_use_column() {
+        let root = fixtures_root();
+        let config = test_config();
+        let entries = resolve_pretend_graph(
+            &root,
+            &root,
+            &["dev-libs/deeprootdepconsumer".to_string()],
+            &config,
+            false,
+            false,
+            false,
+            false,
+            Deep::Unlimited,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            false,
+            None,
+            false,
+            false,
+            Some(&root),
+            &fixtures_root().join("distfiles"),
+            false,
+            false,
+            false,
+            10,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            true,
+            false,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
+        .entries;
+
+        let child = entries
+            .iter()
+            .find(|e| e.package == "deeprootdepchild")
+            .expect("the running-root rebuild entry is present");
+        assert!(
+            child.targets_running_root,
+            "the rebuild is the running-root build entry: {child:?}"
+        );
+        // Installed +flip (vdb USE="flip"), rebuilt with flip off -- the
+        // `use_flags_display` pair the renderer's `-flip*` comes from.
+        assert_eq!(
+            child.use_flags_display,
+            vec![("flip".to_string(), false)],
+            "the rebuild's flipped flag must reach the display (#141)"
+        );
+        assert_eq!(child.slot.as_deref(), Some("0"));
     }
 
     #[test]
