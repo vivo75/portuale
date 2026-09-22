@@ -87,12 +87,16 @@ pub struct DepPriority {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DepEdge {
     pub atom: String,
-    /// The atom with its conditional use-deps evaluated against the
-    /// parent's USE (`portage_dep::evaluate_atom_conditionals`), for
-    /// real's `--debug` `Candidates:` line -- real prints `Depstring:`
-    /// raw and `Candidates:` evaluated (#138; oracle
-    /// `logs/l111-s0-20260921/real-rest-debug.log`). Falls back to the
-    /// raw token when evaluation returns `None` (unparseable).
+    /// The token with its use-deps evaluated against the parent's
+    /// USE (`portage_dep::evaluate_atom_conditionals`), for real's
+    /// `--debug` `Candidates:` line (#138; oracle
+    /// `logs/l111-s0-20260921/real-rest-debug.log`). Note the token
+    /// itself is already reduced-raw, not true-raw:
+    /// `dep_edges_from_metadata` runs `use_reduce_structured` first,
+    /// which evaluates `flag?()` conditionals away -- so real's first,
+    /// true-raw `Depstring:` stanza (`Depstring: plasma? ( ... )`) has
+    /// no portuale counterpart (known remainder, unnumbered display
+    /// gap). Falls back to the token when evaluation returns `None`.
     pub evaluated: String,
     pub category: String,
     pub package: String,

@@ -489,7 +489,9 @@ pub(crate) fn dump_resolution_walk(
             // #138: real's `--debug` prints `Depstring:` raw and
             // `Candidates:` evaluated (`logs/l111-s0-20260921/real-rest-
             // debug.log`) -- the evaluated form rides `DepEdge` beside
-            // the raw token, so the walk itself is untouched.
+            // the (already reduced-raw) token, so the walk itself is
+            // untouched. Real's true-raw first stanza has no
+            // counterpart here (see `DepEdge::evaluated`'s doc).
             let evaluated: Vec<&str> = e
                 .deps
                 .iter()

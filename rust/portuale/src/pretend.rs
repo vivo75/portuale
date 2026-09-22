@@ -11814,11 +11814,15 @@ pub fn run(args: &[String]) -> ExitCode {
 "
             );
             println!("Calculating dependencies ... done!");
-            println!(
-                "Dependency resolution took (backtrack: {}/{}).
+            // Real prints the timing line on every non-quiet run
+            // (backlog #59(b)); under `--quiet` it is suppressed.
+            if !quiet {
+                println!(
+                    "Dependency resolution took (backtrack: {}/{}).
 ",
-                result.backtrack_restarts, result.backtrack_max,
-            );
+                    result.backtrack_restarts, result.backtrack_max,
+                );
+            }
             let mut thrown_away: Vec<String> = Vec::new();
             for (i, entry) in result.entries.iter().enumerate() {
                 if matches!(

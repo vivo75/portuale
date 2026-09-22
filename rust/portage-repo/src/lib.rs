@@ -18650,6 +18650,13 @@ fn autounmask_dep_chain(
     // printed one). Each node renders `required by <cpv>::<repo>`
     // (vdb repo for an installed parent -- real's `installed_use_str`
     // counterpart) or `required by <atom> (argument)`.
+    //
+    // Single-branch rule (deliberate, unverified against real on a
+    // multi-parent shape): the owner is re-derived as the first
+    // `required_by` entry and the ascent follows one branch, where the
+    // sibling `masked_dep_chain` discloses every failing branch. All
+    // pinned chains are linear; real's branch choice on a multi-parent
+    // autounmask cell has no oracle.
     let mut chain: Vec<String> = Vec::new();
     let mut visited: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
     let mut cur = start.clone();
@@ -21186,13 +21193,10 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 state.autounmask_use_changes.push(AutounmaskChange {
                     atom: autounmask_use_atom_form(&parent_cand, &parent_all, &pc, &pp, config),
                     token,
-                    dep_chain: autounmask_dep_chain(
-                        &Some((pc.clone(), pp.clone())),
-                        "",
-                        &ctx.top_level,
-                        &state.entries,
-                        ctx.root,
-                    ),
+                    // Walk-time chain would be one row (required_by
+                    // unfilled); the post-loop fill walks the full
+                    // ascent like every other change (#135 (e)).
+                    dep_chain: Vec::new(),
                 });
                 let mut disp_seen: HashSet<String> = HashSet::new();
                 let mut disp: Vec<(String, bool)> = parent_cand
@@ -24333,11 +24337,16 @@ fn assemble_result(
         if change.dep_chain.is_empty()
             && let Some(atom) = portage_dep::parse_atom(&change.atom)
         {
+            // The chain starts at the change's own package (its cpv::repo
+            // row) and ascends through requirers to the argument. For a
+            // change on a top-level package the owner is itself.
+            let own = (atom.category.clone(), atom.package.clone());
             let owner = pass
                 .entries
                 .iter()
                 .find(|e| e.category == atom.category && e.package == atom.package)
-                .and_then(|e| e.required_by.first().cloned());
+                .and_then(|e| e.required_by.first().cloned())
+                .or(Some(own));
             change.dep_chain = autounmask_dep_chain(
                 &owner,
                 &change.atom,
@@ -37526,7 +37535,10 @@ mod tests {
         assert_eq!(result.autounmask_keyword_changes.len(), 1);
         assert_eq!(
             result.autounmask_keyword_changes[0].dep_chain,
-            vec!["required by dev-libs/autounmaskkeywordpkg (argument)".to_string()]
+            vec![
+                "required by dev-libs/autounmaskkeywordpkg-1.0::testrepo".to_string(),
+                "required by dev-libs/autounmaskkeywordpkg (argument)".to_string(),
+            ]
         );
     }
 
@@ -37561,7 +37573,10 @@ mod tests {
         assert_eq!(change.token, "-foo");
         assert_eq!(
             change.dep_chain,
-            vec!["required by dev-libs/useflagpkg[-foo] (argument)".to_string()]
+            vec![
+                "required by dev-libs/useflagpkg-1.0::testrepo".to_string(),
+                "required by dev-libs/useflagpkg[-foo] (argument)".to_string(),
+            ]
         );
     }
 
