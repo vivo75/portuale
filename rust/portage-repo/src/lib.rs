@@ -32294,6 +32294,204 @@ mod tests {
         );
     }
 
+    /// Resolve one consumer atom through the `--deep` walk and return
+    /// `(cat/pkg, outcome-variant, targets_running_root)` per graph entry
+    /// -- the shared probe for the `#132`/`#133` arm tests below (one
+    /// place holds the long `resolve_pretend_graph` argument list, copied
+    /// from the sibling test above). `root_deps` passes the fixture root
+    /// itself as the running root (the unit-level counterpart of the
+    /// contract suite's `PORTAGE_RUNNING_ROOT=$ROOT` pin).
+    fn resolve_deep_consumer(atom: &str, root_deps: bool) -> Vec<(String, String, bool)> {
+        let root = fixtures_root();
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+            &root,
+        )
+        .expect("fixture config resolves");
+        let running_root = root.clone();
+        resolve_pretend_graph(
+            &root,
+            &root,
+            &[atom.to_string()],
+            &config,
+            false,
+            false,
+            false,
+            false,
+            Deep::Unlimited,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            false,
+            None,
+            false,
+            false,
+            if root_deps {
+                Some(running_root.as_path())
+            } else {
+                None
+            },
+            &fixtures_root().join("distfiles"),
+            false,
+            false,
+            false,
+            10,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            true,
+            false,
+        )
+        .unwrap()
+        .entries
+        .into_iter()
+        .map(|e| {
+            let outcome = match &e.outcome {
+                PretendOutcome::NoVisibleCandidate => "NoVisibleCandidate",
+                PretendOutcome::New { .. } => "New",
+                PretendOutcome::Upgrade { .. } => "Upgrade",
+                PretendOutcome::Downgrade { .. } => "Downgrade",
+                PretendOutcome::AlreadyInstalled { .. } => "AlreadyInstalled",
+                PretendOutcome::Reinstall { .. } => "Reinstall",
+                PretendOutcome::Uninstall { .. } => "Uninstall",
+            };
+            (
+                format!("{}/{}", e.category, e.package),
+                outcome.to_string(),
+                e.targets_running_root,
+            )
+        })
+        .collect()
+    }
+
+    #[test]
+    fn deep_walk_evaluates_conditional_use_deps_of_installed_parents() {
+        // #139 (#132's missing Rust-side test): the `deepusedep*` arms
+        // pin `enqueue_dependencies`' evaluation rule at the graph level.
+        // Each installed parent carries `~child-1.0[flip=]`; the token is
+        // evaluated against the parent's recorded vdb USE (real
+        // `_pkg_use_enabled` for a built package) before candidate
+        // selection, so the conditional form never arrives unevaluated
+        // (where it imposes no state constraint at all).
+        //
+        // Arm A (parent built -flip, child installed +flip and
+        // profile-pinned +flip): `[-flip]` is unsatisfiable -- the child
+        // is present as an entry but never as a satisfied install, so the
+        // abort path (pinned at the CLI by the #132 contract test) has
+        // something to report.
+        let arm_a = resolve_deep_consumer("dev-libs/deepusedepconsumer", false);
+        assert!(
+            arm_a
+                .iter()
+                .any(|(n, _, _)| n == "dev-libs/deepusedepconsumer"),
+            "{arm_a:?}"
+        );
+        assert!(
+            arm_a
+                .iter()
+                .any(|(n, _, _)| n == "dev-libs/deepusedepchild"),
+            "evaluated [-flip] is not satisfied by the installed +flip child, \
+             so the child must surface (unsatisfied), not vanish: {arm_a:?}"
+        );
+        assert!(
+            !arm_a.iter().any(|(n, o, _)| n == "dev-libs/deepusedepchild"
+                && (o == "AlreadyInstalled" || o == "New")),
+            "the +flip instance satisfies neither [-flip] nor a fresh build \
+             under the profile pin: {arm_a:?}"
+        );
+        //
+        // Arm B (same parent shape, child not profile-pinned): `[-flip]`
+        // reaches candidate *selection* -- the child rebuilds with flip
+        // off rather than aborting. A fix that only hardened the failure
+        // display would pass arm A and fail here.
+        let arm_b = resolve_deep_consumer("dev-libs/deepusedepbconsumer", false);
+        assert!(
+            arm_b
+                .iter()
+                .any(|(n, o, _)| n == "dev-libs/deepusedepbchild" && o == "Reinstall"),
+            "evaluated [-flip] must rebuild the installed +flip child with \
+             flip off: {arm_b:?}"
+        );
+        //
+        // Arm C (control -- parent built +flip): the same atom evaluates
+        // to `[flip]`, which the installed +flip child satisfies, so
+        // nothing merges. (The graph still records the walked installed
+        // nodes as `AlreadyInstalled` entries -- unlike the CLI merge
+        // list -- so the assertion is "no merging entry", not
+        // single-entry.) Guards against an over-broad fix.
+        let arm_c = resolve_deep_consumer("dev-libs/deepusedepokconsumer", false);
+        assert!(
+            arm_c
+                .iter()
+                .any(|(n, o, _)| n == "dev-libs/deepusedepokconsumer" && o == "New"),
+            "{arm_c:?}"
+        );
+        assert!(
+            !arm_c
+                .iter()
+                .any(|(_, o, _)| o != "New" && o != "AlreadyInstalled"),
+            "control: a satisfied evaluated dep merges nothing: {arm_c:?}"
+        );
+    }
+
+    #[test]
+    fn root_deps_walk_evaluates_conditional_use_deps_before_the_satisfied_check() {
+        // #133 at the graph level (the contract pin is
+        // `test_root_deps_evaluates_conditional_use_deps_before_the_satisfied_check`):
+        // `dev-libs/deeprootdepparent` is installed with vdb USE=""
+        // (built -flip) and BDEPENDs `~dev-libs/deeprootdepchild-1.0[flip=]`;
+        // the running root has the child installed +flip. With `--root-deps`
+        // the producers must evaluate the atom to `[-flip]` *and* enforce it
+        // against the running-root instance -- otherwise the raw form is
+        // vacuously satisfied and the child vanishes (bed
+        // `l0-fx-20260922T082944Z`: real rebuilds it with flip off).
+        let with_root_deps = resolve_deep_consumer("dev-libs/deeprootdepconsumer", true);
+        assert!(
+            with_root_deps
+                .iter()
+                .any(|(n, o, running)| n == "dev-libs/deeprootdepchild"
+                    && o == "Reinstall"
+                    && *running),
+            "evaluated [-flip] is not satisfied by the running root's +flip \
+             child, so it resolves as a running-root rebuild: {with_root_deps:?}"
+        );
+        //
+        // Control without `--root-deps`: the producers are a strict no-op
+        // (`root_deps_running_root` None) and the ordinary S5-evaluated
+        // walk rebuilds the child against the target root instead.
+        let without = resolve_deep_consumer("dev-libs/deeprootdepconsumer", false);
+        assert!(
+            without
+                .iter()
+                .any(|(n, o, running)| n == "dev-libs/deeprootdepchild"
+                    && o == "Reinstall"
+                    && !*running),
+            "control: without --root-deps the same rebuild targets ROOT: {without:?}"
+        );
+    }
+
     #[test]
     fn complete_graph_never_merges_a_missing_deep_dep_of_an_installed_pkg() {
         // deeppkg (installed) -> RDEPEND deeppkg2 (installed) -> RDEPEND
