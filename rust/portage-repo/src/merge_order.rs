@@ -4321,4 +4321,2659 @@ mod tests {
             "the circular self branch is not kept (#53)"
         );
     }
+    // -----------------------------------------------------------------
+    // #146: dep-key / priority mapping
+    // -----------------------------------------------------------------
+
+    fn dep_metadata(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn tokens(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn plain_edge(atom: &str, category: &str, package: &str, priority: DepPriority) -> DepEdge {
+        DepEdge {
+            atom: atom.to_string(),
+            evaluated: atom.to_string().clone(),
+            category: category.to_string(),
+            package: package.to_string(),
+            priority,
+            disjunctive: false,
+            alt: None,
+            key: 3,
+        }
+    }
+
+    #[test]
+    fn key_priority_pins_each_dep_key_ladder() {
+        let runtime = DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        };
+        assert_eq!(key_priority("RDEPEND", false), runtime);
+        assert_eq!(key_priority("RDEPEND", true), runtime);
+        assert_eq!(key_priority("IDEPEND", false), runtime);
+        assert_eq!(key_priority("IDEPEND", true), runtime);
+        assert_eq!(
+            key_priority("PDEPEND", false),
+            DepPriority {
+                runtime_post: true,
+                ..DepPriority::default()
+            }
+        );
+        let buildtime = DepPriority {
+            buildtime: true,
+            ..DepPriority::default()
+        };
+        assert_eq!(key_priority("DEPEND", false), buildtime);
+        assert_eq!(key_priority("BDEPEND", false), buildtime);
+        // `built` only flips the build-time keys' `optional`.
+        assert_eq!(
+            key_priority("DEPEND", true),
+            DepPriority {
+                buildtime: true,
+                optional: true,
+                ..DepPriority::default()
+            }
+        );
+        assert_eq!(
+            key_priority("BDEPEND", true),
+            DepPriority {
+                buildtime: true,
+                optional: true,
+                ..DepPriority::default()
+            }
+        );
+    }
+
+    #[test]
+    fn dep_edges_from_metadata_pins_every_key_and_priority() {
+        let metadata = dep_metadata(&[
+            ("RDEPEND", "dev-libs/rdep"),
+            ("IDEPEND", "dev-libs/idep"),
+            ("PDEPEND", "dev-libs/pdep"),
+            ("DEPEND", "dev-libs/dep"),
+            ("BDEPEND", "dev-libs/bdep"),
+        ]);
+        let keys = ["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"];
+        let edges = dep_edges_from_metadata(&metadata, &HashSet::new(), &keys, false);
+        assert_eq!(edges.len(), 5);
+        // Real's own deps-tuple key order.
+        let by_key: HashMap<u8, &DepEdge> = edges.iter().map(|e| (e.key, e)).collect();
+        assert_eq!(by_key.len(), 5, "one edge per key: {edges:#?}");
+        assert_eq!(by_key[&0].package, "rdep");
+        assert_eq!(by_key[&1].package, "idep");
+        assert_eq!(by_key[&2].package, "pdep");
+        assert_eq!(by_key[&3].package, "dep");
+        assert_eq!(by_key[&4].package, "bdep");
+        assert_eq!(
+            by_key[&0].priority,
+            DepPriority {
+                runtime: true,
+                ..DepPriority::default()
+            }
+        );
+        assert_eq!(
+            by_key[&1].priority,
+            DepPriority {
+                runtime: true,
+                ..DepPriority::default()
+            }
+        );
+        assert_eq!(
+            by_key[&2].priority,
+            DepPriority {
+                runtime_post: true,
+                ..DepPriority::default()
+            }
+        );
+        assert_eq!(
+            by_key[&3].priority,
+            DepPriority {
+                buildtime: true,
+                ..DepPriority::default()
+            }
+        );
+        assert_eq!(
+            by_key[&4].priority,
+            DepPriority {
+                buildtime: true,
+                ..DepPriority::default()
+            }
+        );
+        // `built` marks only the build-time keys optional.
+        let built = dep_edges_from_metadata(&metadata, &HashSet::new(), &keys, true);
+        assert!(
+            built
+                .iter()
+                .filter(|e| e.key >= 3)
+                .all(|e| e.priority.optional)
+        );
+        assert!(
+            built
+                .iter()
+                .filter(|e| e.key < 3)
+                .all(|e| !e.priority.optional)
+        );
+        // The same atom named by two keys keeps both priorities, and a
+        // duplicate within one key is deduped.
+        let metadata = dep_metadata(&[
+            ("RDEPEND", "dev-libs/a dev-libs/a"),
+            ("DEPEND", "dev-libs/a"),
+        ]);
+        let edges =
+            dep_edges_from_metadata(&metadata, &HashSet::new(), &["RDEPEND", "DEPEND"], false);
+        assert_eq!(edges.len(), 2, "two keys keep both priorities: {edges:#?}");
+        assert!(edges.iter().any(|e| e.priority.runtime));
+        assert!(edges.iter().any(|e| e.priority.buildtime));
+    }
+
+    #[test]
+    fn dep_edges_from_metadata_pins_blockers_slot_ops_and_disjunctions() {
+        let metadata = dep_metadata(&[(
+            "RDEPEND",
+            "!dev-libs/blocked dev-libs/plain dev-libs/slotop:= || ( dev-libs/alt-a dev-libs/alt-b )",
+        )]);
+        let edges = dep_edges_from_metadata(&metadata, &HashSet::new(), &["RDEPEND"], false);
+        let atoms: HashSet<&str> = edges.iter().map(|e| e.atom.as_str()).collect();
+        assert!(
+            !atoms.contains("!dev-libs/blocked"),
+            "a blocker is never a merge-order edge: {atoms:?}"
+        );
+        assert_eq!(
+            edges.len(),
+            4,
+            "plain + slot-op + two alternatives: {edges:#?}"
+        );
+        let plain = edges.iter().find(|e| e.atom == "dev-libs/plain").unwrap();
+        assert!(
+            plain.priority.runtime && !plain.priority.runtime_slot_op,
+            "a plain atom is not slot-operator: {:?}",
+            plain.priority
+        );
+        let slotop = edges
+            .iter()
+            .find(|e| e.atom == "dev-libs/slotop:=")
+            .unwrap();
+        assert!(
+            slotop.priority.runtime && slotop.priority.runtime_slot_op,
+            "`:=` promotes the runtime key: {:?}",
+            slotop.priority
+        );
+        let alt_a = edges.iter().find(|e| e.atom == "dev-libs/alt-a").unwrap();
+        let alt_b = edges.iter().find(|e| e.atom == "dev-libs/alt-b").unwrap();
+        assert_eq!(alt_a.alt, Some((0, 0)));
+        assert_eq!(alt_b.alt, Some((0, 1)));
+        assert!(alt_a.disjunctive && alt_b.disjunctive);
+        // A build-time `:=` promotes `buildtime_slot_op`, not runtime.
+        let metadata = dep_metadata(&[("DEPEND", "dev-libs/dep:=")]);
+        let edges = dep_edges_from_metadata(&metadata, &HashSet::new(), &["DEPEND"], false);
+        assert_eq!(edges.len(), 1);
+        assert!(
+            edges[0].priority.buildtime && edges[0].priority.buildtime_slot_op,
+            "{:?}",
+            edges[0].priority
+        );
+        assert!(!edges[0].priority.runtime && !edges[0].priority.runtime_slot_op);
+    }
+
+    #[test]
+    fn split_disjunctive_pins_group_and_branch_bookkeeping() {
+        // Inline atoms only.
+        assert_eq!(
+            split_disjunctive(&tokens(&["dev-libs/a", "dev-libs/b"])),
+            (tokens(&["dev-libs/a", "dev-libs/b"]), vec![])
+        );
+        // One `||` group, bare alternatives: each atom is its own branch.
+        assert_eq!(
+            split_disjunctive(&tokens(&["||", "(", "dev-libs/a", "dev-libs/b", ")"])),
+            (
+                vec![],
+                vec![
+                    ("dev-libs/a".to_string(), 0, 0),
+                    ("dev-libs/b".to_string(), 0, 1),
+                ]
+            )
+        );
+        // A nested multi-atom branch keeps one branch number for every
+        // atom inside it.
+        assert_eq!(
+            split_disjunctive(&tokens(&[
+                "||",
+                "(",
+                "(",
+                "dev-libs/a",
+                "dev-libs/b",
+                ")",
+                "dev-libs/c",
+                ")"
+            ])),
+            (
+                vec![],
+                vec![
+                    ("dev-libs/a".to_string(), 0, 0),
+                    ("dev-libs/b".to_string(), 0, 0),
+                    ("dev-libs/c".to_string(), 0, 1),
+                ]
+            )
+        );
+        // A second `||` group counts separately.
+        assert_eq!(
+            split_disjunctive(&tokens(&[
+                "||",
+                "(",
+                "dev-libs/a",
+                ")",
+                "||",
+                "(",
+                "dev-libs/b",
+                ")"
+            ])),
+            (
+                vec![],
+                vec![
+                    ("dev-libs/a".to_string(), 0, 0),
+                    ("dev-libs/b".to_string(), 1, 0),
+                ]
+            )
+        );
+        // A `virtual/*` atom outside a group is deferred with the
+        // sentinel group/branch; anything else stays inline.
+        assert_eq!(
+            split_disjunctive(&tokens(&["virtual/foo", "dev-libs/a"])),
+            (
+                tokens(&["dev-libs/a"]),
+                vec![("virtual/foo".to_string(), u32::MAX, u32::MAX)]
+            )
+        );
+        // After the group closes, atoms are inline again; a `||` with no
+        // following group is not a deferral.
+        assert_eq!(
+            split_disjunctive(&tokens(&["||", "(", "dev-libs/a", ")", "dev-libs/b"])),
+            (
+                tokens(&["dev-libs/b"]),
+                vec![("dev-libs/a".to_string(), 0, 0)]
+            )
+        );
+        assert_eq!(
+            split_disjunctive(&tokens(&["||", "dev-libs/a"])),
+            (tokens(&["dev-libs/a"]), vec![])
+        );
+    }
+
+    #[test]
+    fn ignore_predicates_pin_every_ladder_rung() {
+        // The expected value of every `ignore_priority` predicate for
+        // every combination of `DepPriority` flags. Mirrors the ladder's
+        // own documented rule; any deleted `!`, flipped connective, or
+        // constant-return mutant disagrees on some word.
+        fn expect_n_optional(p: &DepPriority) -> bool {
+            p.optional
+        }
+        fn expect_n_runtime_post(p: &DepPriority) -> bool {
+            p.optional || p.runtime_post
+        }
+        fn expect_n_runtime(p: &DepPriority) -> bool {
+            !p.runtime_slot_op && (p.optional || !p.buildtime)
+        }
+        fn expect_s_satisfied_runtime_post(p: &DepPriority) -> bool {
+            if p.optional {
+                return true;
+            }
+            if !p.satisfied {
+                return false;
+            }
+            if p.buildtime || p.runtime {
+                return false;
+            }
+            p.runtime_post
+        }
+        fn expect_s_runtime_post(p: &DepPriority) -> bool {
+            if p.optional {
+                return true;
+            }
+            if p.buildtime || p.runtime {
+                return false;
+            }
+            p.runtime_post
+        }
+        fn expect_s_satisfied_runtime(p: &DepPriority) -> bool {
+            if p.optional {
+                return true;
+            }
+            if p.buildtime {
+                return false;
+            }
+            if !p.runtime {
+                return true;
+            }
+            p.satisfied
+        }
+        fn expect_s_satisfied_buildtime(p: &DepPriority) -> bool {
+            if p.optional {
+                return true;
+            }
+            if p.buildtime_slot_op {
+                return false;
+            }
+            p.satisfied
+        }
+        fn expect_s_satisfied_buildtime_slot_op(p: &DepPriority) -> bool {
+            if p.optional {
+                return true;
+            }
+            if p.satisfied {
+                return true;
+            }
+            !p.buildtime && !p.runtime
+        }
+        fn expect_s_runtime(p: &DepPriority) -> bool {
+            (!p.runtime_slot_op || p.satisfied) && (p.satisfied || p.optional || !p.buildtime)
+        }
+        for word in 0..128u64 {
+            let p = prio(word);
+            assert_eq!(
+                n_ignore_optional(&p),
+                expect_n_optional(&p),
+                "n_ignore_optional {word}"
+            );
+            assert_eq!(
+                n_ignore_runtime_post(&p),
+                expect_n_runtime_post(&p),
+                "n_ignore_runtime_post {word}"
+            );
+            assert_eq!(
+                n_ignore_runtime(&p),
+                expect_n_runtime(&p),
+                "n_ignore_runtime {word}"
+            );
+            assert_eq!(
+                s_ignore_optional(&p),
+                expect_n_optional(&p),
+                "s_ignore_optional {word}"
+            );
+            assert_eq!(
+                s_ignore_satisfied_runtime_post(&p),
+                expect_s_satisfied_runtime_post(&p),
+                "s_ignore_satisfied_runtime_post {word}"
+            );
+            assert_eq!(
+                s_ignore_runtime_post(&p),
+                expect_s_runtime_post(&p),
+                "s_ignore_runtime_post {word}"
+            );
+            assert_eq!(
+                s_ignore_satisfied_runtime(&p),
+                expect_s_satisfied_runtime(&p),
+                "s_ignore_satisfied_runtime {word}"
+            );
+            assert_eq!(
+                s_ignore_satisfied_buildtime(&p),
+                expect_s_satisfied_buildtime(&p),
+                "s_ignore_satisfied_buildtime {word}"
+            );
+            assert_eq!(
+                s_ignore_satisfied_buildtime_slot_op(&p),
+                expect_s_satisfied_buildtime_slot_op(&p),
+                "s_ignore_satisfied_buildtime_slot_op {word}"
+            );
+            assert_eq!(
+                s_ignore_runtime(&p),
+                expect_s_runtime(&p),
+                "s_ignore_runtime {word}"
+            );
+        }
+    }
+
+    #[test]
+    fn ignore_name_pins_every_traced_filter() {
+        assert_eq!(ignore_name(None), "none");
+        assert_eq!(ignore_name(Some(n_ignore_optional)), "ignore_optional");
+        assert_eq!(
+            ignore_name(Some(n_ignore_runtime_post)),
+            "ignore_runtime_post"
+        );
+        assert_eq!(ignore_name(Some(n_ignore_runtime)), "ignore_runtime");
+        assert_eq!(ignore_name(Some(s_ignore_optional)), "ignore_optional");
+        assert_eq!(
+            ignore_name(Some(s_ignore_satisfied_runtime_post)),
+            "ignore_satisfied_runtime_post"
+        );
+        assert_eq!(
+            ignore_name(Some(s_ignore_runtime_post)),
+            "ignore_runtime_post"
+        );
+        assert_eq!(
+            ignore_name(Some(s_ignore_satisfied_runtime)),
+            "ignore_satisfied_runtime"
+        );
+        assert_eq!(
+            ignore_name(Some(s_ignore_satisfied_buildtime)),
+            "ignore_satisfied_buildtime"
+        );
+        assert_eq!(
+            ignore_name(Some(s_ignore_satisfied_buildtime_slot_op)),
+            "ignore_satisfied_buildtime_slot_op"
+        );
+        assert_eq!(ignore_name(Some(s_ignore_runtime)), "ignore_runtime");
+    }
+
+    #[test]
+    fn priority_ranges_pin_their_named_rungs() {
+        // Every ladder index resolves to the predicate of its documented
+        // name (behavioral comparison, so a textually-identical pair
+        // folding to one address still agrees).
+        for word in 0..128u64 {
+            let p = prio(word);
+            assert_eq!(
+                NORMAL.ig(1).unwrap()(&p),
+                n_ignore_optional(&p),
+                "NORMAL.ig(1) {word}"
+            );
+            assert_eq!(
+                NORMAL.ig(2).unwrap()(&p),
+                n_ignore_runtime_post(&p),
+                "NORMAL.ig(2) {word}"
+            );
+            assert_eq!(
+                NORMAL.ig(3).unwrap()(&p),
+                n_ignore_runtime(&p),
+                "NORMAL.ig(3) {word}"
+            );
+            assert_eq!(
+                SATISFIED.ig(1).unwrap()(&p),
+                s_ignore_optional(&p),
+                "SATISFIED.ig(1)"
+            );
+            assert_eq!(
+                SATISFIED.ig(2).unwrap()(&p),
+                s_ignore_satisfied_runtime_post(&p),
+                "SATISFIED.ig(2) {word}"
+            );
+            assert_eq!(
+                SATISFIED.ig(3).unwrap()(&p),
+                s_ignore_runtime_post(&p),
+                "SATISFIED.ig(3) {word}"
+            );
+            assert_eq!(
+                SATISFIED.ig(4).unwrap()(&p),
+                s_ignore_satisfied_runtime(&p),
+                "SATISFIED.ig(4) {word}"
+            );
+            assert_eq!(
+                SATISFIED.ig(5).unwrap()(&p),
+                s_ignore_satisfied_buildtime(&p),
+                "SATISFIED.ig(5) {word}"
+            );
+            assert_eq!(
+                SATISFIED.ig(6).unwrap()(&p),
+                s_ignore_satisfied_buildtime_slot_op(&p),
+                "SATISFIED.ig(6) {word}"
+            );
+            assert_eq!(
+                SATISFIED.ig(7).unwrap()(&p),
+                s_ignore_runtime(&p),
+                "SATISFIED.ig(7)"
+            );
+            assert_eq!(
+                NORMAL.ig_medium().unwrap()(&p),
+                n_ignore_runtime(&p),
+                "medium"
+            );
+            assert_eq!(
+                NORMAL.ig_medium_soft().unwrap()(&p),
+                n_ignore_runtime_post(&p),
+                "medium_soft"
+            );
+            assert_eq!(
+                SATISFIED.ig_medium().unwrap()(&p),
+                s_ignore_runtime(&p),
+                "s-medium"
+            );
+            assert_eq!(
+                SATISFIED.ig_medium_soft().unwrap()(&p),
+                s_ignore_satisfied_buildtime_slot_op(&p),
+                "s-medium_soft"
+            );
+        }
+        assert_eq!(
+            (NORMAL.medium, NORMAL.medium_soft, NORMAL.medium_post),
+            (3, 2, 2)
+        );
+        assert_eq!(
+            (
+                SATISFIED.medium,
+                SATISFIED.medium_soft,
+                SATISFIED.medium_post
+            ),
+            (7, 6, 3)
+        );
+        assert!(NORMAL.ig(0).is_none(), "the NORMAL ladder starts at NONE");
+    }
+
+    #[test]
+    fn rank_best_prefers_merge_bound_then_vercmp() {
+        let entries = vec![
+            new_entry("dev-libs", "a", "1.0", Vec::new()),
+            new_entry("dev-libs", "a", "2.0", Vec::new()),
+            new_entry("dev-libs", "a", "1.5", Vec::new()),
+        ];
+        // A merge-bound 1.0 beats an installed 2.0.
+        let installed = vec![false, true, true];
+        assert_eq!(
+            DigraphPrelude::rank_best(&entries, &installed, [0usize, 1].into_iter()),
+            Some(0)
+        );
+        // Among installed candidates, vercmp picks the highest, not the
+        // first or the string-highest.
+        let installed = vec![true, true, true];
+        assert_eq!(
+            DigraphPrelude::rank_best(&entries, &installed, [0usize, 1, 2].into_iter()),
+            Some(1)
+        );
+        assert_eq!(
+            DigraphPrelude::rank_best(&entries, &installed, [1usize, 0].into_iter()),
+            Some(1)
+        );
+        // A version tie keeps the first candidate.
+        let tied = vec![
+            new_entry("dev-libs", "b", "1.0", Vec::new()),
+            new_entry("dev-libs", "b", "1.0", Vec::new()),
+        ];
+        assert_eq!(
+            DigraphPrelude::rank_best(&tied, &[true, true], [0usize, 1].into_iter()),
+            Some(0)
+        );
+        // One candidate, and the empty set.
+        assert_eq!(
+            DigraphPrelude::rank_best(&entries, &installed, [2usize].into_iter()),
+            Some(2)
+        );
+        assert_eq!(
+            DigraphPrelude::rank_best(&entries, &installed, std::iter::empty()),
+            None
+        );
+    }
+
+    #[test]
+    fn select_dep_target_narrows_and_ranks_like_real() {
+        let runtime = DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        };
+        let mut installed = new_entry("dev-libs", "slotted", "1.0", Vec::new());
+        installed.outcome = PretendOutcome::AlreadyInstalled {
+            version: "1.0".into(),
+        };
+        installed.slot = Some("0".into());
+        installed.sub_slot = Some("0".into());
+        let mut merged = new_entry("dev-libs", "slotted", "2.0", Vec::new());
+        merged.slot = Some("0".into());
+        merged.sub_slot = Some("0".into());
+        let root = Path::new("/nonexistent-root-for-unit-test");
+        let none = HashSet::new();
+        // A version-qualified atom matches only the merge-bound 2.0, so
+        // the single-match ranking path picks it.
+        let entries = vec![
+            installed.clone(),
+            merged.clone(),
+            new_entry(
+                "dev-libs",
+                "user",
+                "1.0",
+                vec![plain_edge(
+                    ">=dev-libs/slotted-2",
+                    "dev-libs",
+                    "slotted",
+                    runtime,
+                )],
+            ),
+        ];
+        let pre = digraph_prelude(&entries, root);
+        assert_eq!(
+            pre.select_dep_target(&entries, 2, &entries[2].deps, 0, &none, false),
+            Some(1)
+        );
+        // A bare atom matches both, but `merge_bound_only` drops the
+        // installed candidate and still picks the merge-bound one.
+        let entries = vec![
+            installed.clone(),
+            merged,
+            new_entry(
+                "dev-libs",
+                "user",
+                "1.0",
+                vec![plain_edge(
+                    "dev-libs/slotted",
+                    "dev-libs",
+                    "slotted",
+                    runtime,
+                )],
+            ),
+        ];
+        let pre = digraph_prelude(&entries, root);
+        assert_eq!(
+            pre.select_dep_target(&entries, 2, &entries[2].deps, 0, &none, true),
+            Some(1),
+            "both candidates match; merge_bound_only still prefers the merged one"
+        );
+        // The only match is installed and `merge_bound_only` drops it.
+        let entries = vec![
+            installed,
+            new_entry(
+                "dev-libs",
+                "user",
+                "1.0",
+                vec![plain_edge(
+                    "dev-libs/slotted",
+                    "dev-libs",
+                    "slotted",
+                    runtime,
+                )],
+            ),
+        ];
+        let pre = digraph_prelude(&entries, root);
+        assert_eq!(
+            pre.select_dep_target(&entries, 1, &entries[1].deps, 0, &none, true),
+            None,
+            "the only match is installed and merge_bound_only drops it"
+        );
+    }
+
+    #[test]
+    fn build_digraph_drops_self_edges_except_unsatisfied_buildtime() {
+        let root = Path::new("/nonexistent-root-for-unit-test");
+        let runtime = DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        };
+        // A runtime self-edge is dropped.
+        let entries = vec![new_entry(
+            "dev-libs",
+            "selfish",
+            "1.0",
+            vec![plain_edge(
+                "dev-libs/selfish",
+                "dev-libs",
+                "selfish",
+                runtime,
+            )],
+        )];
+        let g = build_digraph(&entries, &["dev-libs/selfish".to_string()], root);
+        assert!(
+            g.children[0].is_empty(),
+            "runtime self-edge dropped: {:?}",
+            g.children[0]
+        );
+        // An unsatisfied build-time self-edge is kept.
+        let entries = vec![new_entry(
+            "dev-libs",
+            "selfish",
+            "1.0",
+            vec![plain_edge(
+                "dev-libs/selfish",
+                "dev-libs",
+                "selfish",
+                DepPriority {
+                    buildtime: true,
+                    ..DepPriority::default()
+                },
+            )],
+        )];
+        let g = build_digraph(&entries, &["dev-libs/selfish".to_string()], root);
+        assert_eq!(
+            g.children[0].iter().map(|(c, _)| *c).collect::<Vec<_>>(),
+            vec![0],
+            "unsatisfied buildtime self-edge kept: {:?}",
+            g.children[0]
+        );
+    }
+
+    #[test]
+    fn build_digraph_skips_a_blocker_and_a_nonmatching_top_atom() {
+        let root = Path::new("/nonexistent-root-for-unit-test");
+        let a = new_entry("dev-libs", "a", "1.0", Vec::new());
+        let b = new_entry("dev-libs", "b", "1.0", Vec::new());
+        let entries = vec![a, b];
+        // A blocker top-level atom is skipped; the second atom seeds.
+        let g = build_digraph(
+            &entries,
+            &["!dev-libs/a".to_string(), "dev-libs/b".to_string()],
+            root,
+        );
+        assert_eq!(
+            g.order,
+            vec![1, 0],
+            "b seeds, a is appended unwalked: {:?}",
+            g.order
+        );
+        // A version-qualified top atom seeds only its matching instance.
+        let a1 = new_entry("dev-libs", "a", "1.0", Vec::new());
+        let mut a2 = new_entry("dev-libs", "a", "2.0", Vec::new());
+        a2.slot = Some("2".into());
+        a2.sub_slot = Some("2".into());
+        let entries = vec![a1, a2];
+        let g = build_digraph(&entries, &["<dev-libs/a-2".to_string()], root);
+        assert_eq!(
+            g.order,
+            vec![0, 1],
+            "1.0 is seeded, 2.0 appended: {:?}",
+            g.order
+        );
+    }
+
+    #[test]
+    fn build_digraph_walks_inline_before_deferred_disjunctive_edges() {
+        let root = Path::new("/nonexistent-root-for-unit-test");
+        let runtime = DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        };
+        let mut deferred = plain_edge("dev-libs/late", "dev-libs", "late", runtime);
+        deferred.disjunctive = true;
+        deferred.alt = Some((0, 0));
+        let owner = new_entry(
+            "dev-libs",
+            "owner",
+            "1.0",
+            vec![
+                plain_edge("dev-libs/early", "dev-libs", "early", runtime),
+                deferred,
+            ],
+        );
+        let entries = vec![
+            owner,
+            new_entry("dev-libs", "early", "1.0", Vec::new()),
+            new_entry("dev-libs", "late", "1.0", Vec::new()),
+        ];
+        let g = build_digraph(&entries, &["dev-libs/owner".to_string()], root);
+        assert_eq!(
+            g.order,
+            vec![0, 1, 2],
+            "inline edge discovered before the deferred disjunctive bundle: {:?}",
+            g.order
+        );
+    }
+
+    #[test]
+    fn build_digraph_uninstall_pairs_the_owner_before_the_removal() {
+        let root = Path::new("/nonexistent-root-for-unit-test");
+        let runtime = DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        };
+        let owner = new_entry(
+            "dev-libs",
+            "owner",
+            "1.0",
+            vec![plain_edge("dev-libs/leaf", "dev-libs", "leaf", runtime)],
+        );
+        let leaf = new_entry("dev-libs", "leaf", "1.0", Vec::new());
+        let mut removal = new_entry("dev-libs", "old", "1.0", Vec::new());
+        removal.outcome = PretendOutcome::Uninstall {
+            version: "1.0".into(),
+        };
+        removal.required_by = vec![("dev-libs".to_string(), "owner".to_string())];
+        let entries = vec![owner, leaf, removal];
+        let g = build_digraph(&entries, &["dev-libs/owner".to_string()], root);
+        assert_eq!(
+            g.children[0].iter().map(|(c, _)| *c).collect::<Vec<_>>(),
+            vec![1],
+            "the forward edge is the owner's only child: {:?}",
+            g.children[0]
+        );
+        let reverse = g.children[2]
+            .iter()
+            .find(|(c, _)| *c == 0)
+            .expect("the removal must carry the owner as its child");
+        assert_eq!(reverse.1.len(), 1);
+        assert!(
+            reverse.1[0].buildtime && reverse.1[0].runtime && !reverse.1[0].satisfied,
+            "the reverse edge is the hard buildtime+runtime one: {:?}",
+            reverse.1
+        );
+    }
+
+    #[test]
+    fn build_digraph_required_by_fallback_adds_only_the_missing_owner_edge() {
+        let root = Path::new("/nonexistent-root-for-unit-test");
+        // The forward walk missed the owner, so the fallback supplies it.
+        let mut dep = new_entry("dev-libs", "dep", "1.0", Vec::new());
+        dep.required_by = vec![("dev-libs".to_string(), "owner".to_string())];
+        let owner = new_entry("dev-libs", "owner", "1.0", Vec::new());
+        let entries = vec![owner.clone(), dep.clone()];
+        let g = build_digraph(&entries, &["dev-libs/owner".to_string()], root);
+        let fallback = g.children[0]
+            .iter()
+            .find(|(c, _)| *c == 1)
+            .expect("fallback edge owner -> dep");
+        assert!(
+            fallback.1[0].runtime && !fallback.1[0].satisfied,
+            "fallback priority: {:?}",
+            fallback.1
+        );
+        // With an unrelated child already on the owner, the fallback
+        // still appears (the skip is keyed to the removal's own index).
+        let leaf = new_entry("dev-libs", "leaf", "1.0", Vec::new());
+        let entries = vec![owner, dep, leaf];
+        let g = build_digraph(
+            &entries,
+            &["dev-libs/owner".to_string(), "dev-libs/leaf".to_string()],
+            root,
+        );
+        assert!(
+            g.children[0].iter().any(|(c, _)| *c == 1),
+            "fallback edge still added beside an unrelated child: {:?}",
+            g.children[0]
+        );
+    }
+
+    #[test]
+    fn build_digraph_fallback_skips_a_cp_the_owner_already_edged() {
+        let root = Path::new("/nonexistent-root-for-unit-test");
+        let runtime = DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        };
+        // The owner's forward edge resolves the slot-qualified atom to
+        // slot 1; slot 2's own required_by names the owner, but the
+        // cp-level fallback must not add a second edge to it.
+        let owner = new_entry(
+            "dev-libs",
+            "owner",
+            "1.0",
+            vec![plain_edge("dev-libs/x:1", "dev-libs", "x", runtime)],
+        );
+        let mut x1 = new_entry("dev-libs", "x", "1.0", Vec::new());
+        x1.slot = Some("1".into());
+        x1.sub_slot = Some("1".into());
+        let mut x2 = new_entry("dev-libs", "x", "2.0", Vec::new());
+        x2.slot = Some("2".into());
+        x2.sub_slot = Some("2".into());
+        x2.required_by = vec![("dev-libs".to_string(), "owner".to_string())];
+        let entries = vec![owner, x1, x2];
+        let g = build_digraph(&entries, &["dev-libs/owner".to_string()], root);
+        assert_eq!(
+            g.children[0].iter().map(|(c, _)| *c).collect::<Vec<_>>(),
+            vec![1],
+            "no fallback edge to the other slot of the same cp: {:?}",
+            g.children[0]
+        );
+        // A same-category different-package child does not count as the
+        // same cp: the fallback must still be added.
+        let owner = new_entry(
+            "dev-libs",
+            "owner",
+            "1.0",
+            vec![plain_edge("dev-libs/y", "dev-libs", "y", runtime)],
+        );
+        let y = new_entry("dev-libs", "y", "1.0", Vec::new());
+        let mut x = new_entry("dev-libs", "x", "1.0", Vec::new());
+        x.required_by = vec![("dev-libs".to_string(), "owner".to_string())];
+        let entries = vec![owner, y, x];
+        let g = build_digraph(
+            &entries,
+            &["dev-libs/owner".to_string(), "dev-libs/y".to_string()],
+            root,
+        );
+        assert!(
+            g.children[0].iter().any(|(c, _)| *c == 2),
+            "an unrelated same-category child is not the same cp: {:?}",
+            g.children[0]
+        );
+    }
+
+    #[test]
+    fn build_digraph_skips_a_self_named_required_by() {
+        let root = Path::new("/nonexistent-root-for-unit-test");
+        let mut a = new_entry("dev-libs", "a", "1.0", Vec::new());
+        a.required_by = vec![("dev-libs".to_string(), "a".to_string())];
+        let entries = vec![a];
+        let g = build_digraph(&entries, &["dev-libs/a".to_string()], root);
+        assert!(
+            g.children[0].is_empty(),
+            "a self fallback edge is skipped: {:?}",
+            g.children[0]
+        );
+    }
+    // -----------------------------------------------------------------
+    // #146 follow-up: the survivors of the first after-run
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn split_disjunctive_keeps_a_group_when_a_second_group_marker_is_pending() {
+        // A defensive-shape pin: `||` immediately followed by another
+        // group inside an open group must not restart the group
+        // bookkeeping (a structured reduce flattens nested `||`, so this
+        // pins the guard against a future walker change).
+        assert_eq!(
+            split_disjunctive(&tokens(&["||", "(", "||", "(", "dev-libs/a", ")", ")"])),
+            (vec![], vec![("dev-libs/a".to_string(), 0, 0)])
+        );
+    }
+
+    #[test]
+    fn select_dep_target_eliminates_with_suppressed_sibling_sets() {
+        // A suppressed `||` sibling must not join the minimize universe:
+        // with the sibling's set {x1} counted, the shared-by-all test
+        // keeps x1 and drops x2, flipping the pick away from the
+        // vercmp-highest merge-bound target.
+        let runtime = DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        };
+        let mut x1 = new_entry("dev-libs", "x", "1.0", Vec::new());
+        x1.slot = Some("0".into());
+        x1.sub_slot = Some("0".into());
+        let mut x2 = new_entry("dev-libs", "x", "2.0", Vec::new());
+        x2.slot = Some("1".into());
+        x2.sub_slot = Some("1".into());
+        let bare = DepEdge {
+            atom: "dev-libs/x".to_string(),
+            evaluated: "dev-libs/x".to_string(),
+            category: "dev-libs".to_string(),
+            package: "x".to_string(),
+            priority: runtime,
+            disjunctive: true,
+            alt: Some((0, 0)),
+            key: 3,
+        };
+        let qualified = DepEdge {
+            atom: "dev-libs/x:0".to_string(),
+            evaluated: "dev-libs/x:0".to_string(),
+            category: "dev-libs".to_string(),
+            package: "x".to_string(),
+            priority: runtime,
+            disjunctive: true,
+            alt: Some((0, 1)),
+            key: 3,
+        };
+        let user = new_entry("dev-libs", "user", "1.0", vec![bare, qualified]);
+        let entries = vec![x1, x2, user];
+        let root = Path::new("/nonexistent-root-for-unit-test");
+        let pre = digraph_prelude(&entries, root);
+        let suppressed = suppressed_alt_edges(&entries, &pre);
+        assert_eq!(
+            suppressed[2],
+            HashSet::from([1usize]),
+            "the qualified branch is the suppressed one"
+        );
+        assert_eq!(
+            pre.select_dep_target(&entries, 2, &entries[2].deps, 0, &suppressed[2], false),
+            Some(1),
+            "the suppressed sibling's set must not enter the elimination"
+        );
+    }
+
+    #[test]
+    fn select_dep_target_elimination_keeps_the_last_on_a_version_tie() {
+        // Two same-version candidates: elimination drops the first and
+        // keeps the last; the single-match shortcut must keep the
+        // vercmp tie on the first.
+        let runtime = DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        };
+        let mut x1 = new_entry("dev-libs", "x", "1.0", Vec::new());
+        x1.slot = Some("0".into());
+        x1.sub_slot = Some("0".into());
+        let mut x2 = new_entry("dev-libs", "x", "1.0", Vec::new());
+        x2.slot = Some("1".into());
+        x2.sub_slot = Some("1".into());
+        let user = new_entry(
+            "dev-libs",
+            "user",
+            "1.0",
+            vec![plain_edge("dev-libs/x", "dev-libs", "x", runtime)],
+        );
+        let entries = vec![x1, x2, user];
+        let root = Path::new("/nonexistent-root-for-unit-test");
+        let pre = digraph_prelude(&entries, root);
+        let none = HashSet::new();
+        assert_eq!(
+            pre.select_dep_target(&entries, 2, &entries[2].deps, 0, &none, false),
+            Some(1),
+            "two candidates take the elimination path, which keeps the last"
+        );
+    }
+
+    #[test]
+    fn select_dep_target_elimination_orders_installed_before_merge_bound() {
+        let runtime = DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        };
+        // Installed 2.0 first: it is eliminated first, the merge-bound
+        // 1.0 survives -- a version compare would keep the installed one.
+        let mut installed = new_entry("dev-libs", "x", "2.0", Vec::new());
+        installed.outcome = PretendOutcome::AlreadyInstalled {
+            version: "2.0".into(),
+        };
+        let merged = new_entry("dev-libs", "x", "1.0", Vec::new());
+        let user = new_entry(
+            "dev-libs",
+            "user",
+            "1.0",
+            vec![plain_edge("dev-libs/x", "dev-libs", "x", runtime)],
+        );
+        let entries = vec![installed, merged, user.clone()];
+        let root = Path::new("/nonexistent-root-for-unit-test");
+        let pre = digraph_prelude(&entries, root);
+        let none = HashSet::new();
+        assert_eq!(
+            pre.select_dep_target(&entries, 2, &entries[2].deps, 0, &none, false),
+            Some(1),
+            "the installed candidate is eliminated first"
+        );
+        // The mirrored order: merge-bound 1.0 first in the entry array,
+        // installed 2.0 second. The `(false, true)` arm must still sort
+        // the installed one first.
+        let mut installed = new_entry("dev-libs", "x", "2.0", Vec::new());
+        installed.outcome = PretendOutcome::AlreadyInstalled {
+            version: "2.0".into(),
+        };
+        let merged = new_entry("dev-libs", "x", "1.0", Vec::new());
+        let entries = vec![merged, installed, user];
+        let pre = digraph_prelude(&entries, root);
+        assert_eq!(
+            pre.select_dep_target(&entries, 2, &entries[2].deps, 0, &none, false),
+            Some(0),
+            "the merge-bound candidate survives elimination"
+        );
+    }
+
+    #[test]
+    fn select_dep_target_keeps_nvc_out_of_the_elimination() {
+        // An NVC candidate neither eliminates nor is eliminated: it
+        // stays alive and wins the ranking (its empty version ties, and
+        // it is first), where the elimination would otherwise remove it
+        // and leave an installed candidate.
+        let runtime = DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        };
+        let mut nvc = new_entry("dev-libs", "x", "1.0", Vec::new());
+        nvc.outcome = PretendOutcome::NoVisibleCandidate;
+        let mut a = new_entry("dev-libs", "x", "1.0", Vec::new());
+        a.outcome = PretendOutcome::AlreadyInstalled {
+            version: "1.0".into(),
+        };
+        let mut b = new_entry("dev-libs", "x", "1.0", Vec::new());
+        b.outcome = PretendOutcome::AlreadyInstalled {
+            version: "1.0".into(),
+        };
+        let user = new_entry(
+            "dev-libs",
+            "user",
+            "1.0",
+            vec![plain_edge("dev-libs/x", "dev-libs", "x", runtime)],
+        );
+        let entries = vec![nvc, a, b, user];
+        let root = Path::new("/nonexistent-root-for-unit-test");
+        let pre = digraph_prelude(&entries, root);
+        let none = HashSet::new();
+        assert_eq!(
+            pre.select_dep_target(&entries, 3, &entries[3].deps, 0, &none, false),
+            Some(0),
+            "the NVC candidate stays in the ranking"
+        );
+    }
+
+    #[test]
+    fn rank_best_prefers_a_merge_bound_candidate_over_a_newer_installed_one() {
+        let entries = vec![
+            new_entry("dev-libs", "a", "2.0", Vec::new()),
+            new_entry("dev-libs", "a", "1.0", Vec::new()),
+        ];
+        let installed = vec![true, false];
+        // Installed first in the iterator, merge-bound second: the
+        // `(true, false)` arm picks the merge-bound one even though the
+        // installed candidate's version is higher.
+        assert_eq!(
+            DigraphPrelude::rank_best(&entries, &installed, [0usize, 1].into_iter()),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn build_digraph_expands_disjunctive_bundles_by_their_own_key() {
+        // Two deferred bundles from different dep keys must each expand
+        // only their own key's edges: RDEPEND's bundle is queued first,
+        // DEPEND's second, and the LIFO pop expands DEPEND's before
+        // RDEPEND's.
+        let runtime = DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        };
+        let mut rdep = plain_edge("dev-libs/b", "dev-libs", "b", runtime);
+        rdep.disjunctive = true;
+        rdep.alt = Some((0, 0));
+        rdep.key = 0;
+        let mut dep = plain_edge("dev-libs/c", "dev-libs", "c", runtime);
+        dep.disjunctive = true;
+        dep.alt = Some((0, 0));
+        dep.key = 3;
+        let owner = new_entry(
+            "dev-libs",
+            "owner",
+            "1.0",
+            vec![
+                plain_edge("dev-libs/a", "dev-libs", "a", runtime),
+                rdep,
+                dep,
+            ],
+        );
+        let entries = vec![
+            owner,
+            new_entry("dev-libs", "a", "1.0", Vec::new()),
+            new_entry("dev-libs", "b", "1.0", Vec::new()),
+            new_entry("dev-libs", "c", "1.0", Vec::new()),
+        ];
+        let root = Path::new("/nonexistent-root-for-unit-test");
+        let g = build_digraph(&entries, &["dev-libs/owner".to_string()], root);
+        assert_eq!(
+            g.order,
+            vec![0, 1, 3, 2],
+            "inline a, then DEPEND's bundle (c), then RDEPEND's (b)"
+        );
+    }
+
+    #[test]
+    fn build_digraph_required_by_fallback_marks_an_installed_target_satisfied() {
+        let mut dep = new_entry("dev-libs", "dep", "1.0", Vec::new());
+        dep.outcome = PretendOutcome::AlreadyInstalled {
+            version: "1.0".into(),
+        };
+        dep.required_by = vec![("dev-libs".to_string(), "owner".to_string())];
+        let owner = new_entry("dev-libs", "owner", "1.0", Vec::new());
+        let entries = vec![owner, dep];
+        let root = Path::new("/nonexistent-root-for-unit-test");
+        let g = build_digraph(&entries, &["dev-libs/owner".to_string()], root);
+        let fallback = g.children[0]
+            .iter()
+            .find(|(c, _)| *c == 1)
+            .expect("fallback edge owner -> dep");
+        assert!(
+            fallback.1[0].runtime && fallback.1[0].satisfied,
+            "an installed target's fallback edge is satisfied: {:?}",
+            fallback.1
+        );
+    }
+
+    #[test]
+    fn select_dep_target_runs_elimination_for_three_candidates() {
+        // Three matching slots and two kept sibling atoms: elimination
+        // removes the two candidates every sibling set also matches,
+        // leaving x1; the rank-only path would pick the vercmp-highest
+        // x3.
+        let runtime = DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        };
+        let mut x1 = new_entry("dev-libs", "x", "1.0", Vec::new());
+        x1.slot = Some("0".into());
+        x1.sub_slot = Some("0".into());
+        let mut x2 = new_entry("dev-libs", "x", "2.0", Vec::new());
+        x2.slot = Some("1".into());
+        x2.sub_slot = Some("1".into());
+        let mut x3 = new_entry("dev-libs", "x", "3.0", Vec::new());
+        x3.slot = Some("2".into());
+        x3.sub_slot = Some("2".into());
+        // Two separate `||` groups (different keys), so both branches
+        // are kept: the bare atom matches all three slots, the `:0`
+        // atom only x1.
+        let bare = DepEdge {
+            atom: "dev-libs/x".to_string(),
+            evaluated: "dev-libs/x".to_string(),
+            category: "dev-libs".to_string(),
+            package: "x".to_string(),
+            priority: runtime,
+            disjunctive: true,
+            alt: Some((0, 0)),
+            key: 0,
+        };
+        let qualified = DepEdge {
+            atom: "dev-libs/x:0".to_string(),
+            evaluated: "dev-libs/x:0".to_string(),
+            category: "dev-libs".to_string(),
+            package: "x".to_string(),
+            priority: runtime,
+            disjunctive: true,
+            alt: Some((0, 0)),
+            key: 3,
+        };
+        let user = new_entry("dev-libs", "user", "1.0", vec![bare, qualified]);
+        let entries = vec![x1, x2, x3, user];
+        let root = Path::new("/nonexistent-root-for-unit-test");
+        let pre = digraph_prelude(&entries, root);
+        let none = HashSet::new();
+        assert_eq!(
+            pre.select_dep_target(&entries, 3, &entries[3].deps, 0, &none, false),
+            Some(0),
+            "the elimination leaves only the candidate no sibling set fully shares"
+        );
+    }
+    // -----------------------------------------------------------------
+    // #145: installed / vdb-backed inputs
+    // -----------------------------------------------------------------
+
+    /// A scratch vdb: `var/db/pkg/<cat>/<pf>/` with the given files.
+    /// Mirrors `lib.rs`'s own `tmp_vdb` helper; the unique root avoids
+    /// `all_installed_packages`' per-root cache and lets each test build
+    /// the exact installed shape it needs (the committed fixture vdb has
+    /// no injected-libc record).
+    type VdbFile<'a> = (&'a str, &'a str);
+    type VdbEntry<'a> = (&'a str, &'a str, &'a [VdbFile<'a>]);
+
+    fn mo_tmp_vdb(tag: &str, entries: &[VdbEntry<'_>]) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "portuale-mo-vdb-{}-{}-{}",
+            std::process::id(),
+            tag,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        for (cat, pf, files) in entries {
+            let dir = root.join("var/db/pkg").join(cat).join(pf);
+            std::fs::create_dir_all(&dir).unwrap();
+            for (name, value) in *files {
+                std::fs::write(dir.join(name), value.as_bytes()).unwrap();
+            }
+        }
+        root
+    }
+
+    fn fixtures_vdb_root() -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
+    }
+
+    fn installed_by_cp(rows: &[(&str, &str, &[&str])]) -> HashMap<(String, String), Vec<String>> {
+        let mut m = HashMap::new();
+        for (cat, pkg, cands) in rows {
+            m.insert(
+                (cat.to_string(), pkg.to_string()),
+                cands.iter().map(|s| s.to_string()).collect(),
+            );
+        }
+        m
+    }
+
+    fn runtime_edge(atom: &str, cat: &str, pkg: &str) -> DepEdge {
+        plain_edge(
+            atom,
+            cat,
+            pkg,
+            DepPriority {
+                runtime: true,
+                ..DepPriority::default()
+            },
+        )
+    }
+
+    /// A runtime edge tagged as real's `RDEPEND` key (`key == 0`), which
+    /// `seed_toolchain_asap` reads providers from.
+    fn rdepend_edge(atom: &str, cat: &str, pkg: &str) -> DepEdge {
+        let mut edge = runtime_edge(atom, cat, pkg);
+        edge.key = 0;
+        edge
+    }
+
+    #[test]
+    fn outcome_version_pins_every_outcome() {
+        let mut e = new_entry("dev-libs", "x", "1.0", Vec::new());
+        e.outcome = PretendOutcome::NoVisibleCandidate;
+        assert_eq!(outcome_version(&e), None);
+        e.outcome = PretendOutcome::New {
+            version: "1.0".into(),
+        };
+        assert_eq!(outcome_version(&e), Some("1.0"));
+        e.outcome = PretendOutcome::Upgrade {
+            from: "0.9".into(),
+            to: "1.2".into(),
+        };
+        assert_eq!(outcome_version(&e), Some("1.2"));
+        e.outcome = PretendOutcome::Downgrade {
+            from: "2.0".into(),
+            to: "1.0".into(),
+        };
+        assert_eq!(outcome_version(&e), Some("1.0"));
+        e.outcome = PretendOutcome::AlreadyInstalled {
+            version: "1.0".into(),
+        };
+        assert_eq!(outcome_version(&e), Some("1.0"));
+        e.outcome = PretendOutcome::Reinstall {
+            version: "1.0".into(),
+            changed_flags: vec!["flip".into()],
+            deps_changed: false,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: false,
+            slot_operator_rebuild: false,
+        };
+        assert_eq!(outcome_version(&e), Some("1.0"));
+        e.outcome = PretendOutcome::Uninstall {
+            version: "1.0".into(),
+        };
+        assert_eq!(outcome_version(&e), None);
+    }
+
+    #[test]
+    fn edge_satisfied_with_pins_the_slot_operator_narrowing() {
+        let map = installed_by_cp(&[(
+            "dev-libs",
+            "slotted",
+            &["dev-libs/slotted-1.0:0/0", "dev-libs/slotted-2.0:1/1"],
+        )]);
+        let plain = runtime_edge("dev-libs/slotted", "dev-libs", "slotted");
+        assert!(edge_satisfied_with(&map, &plain, None));
+        // No candidates, no atom match, no match at all.
+        assert!(!edge_satisfied_with(&installed_by_cp(&[]), &plain, None));
+        assert!(!edge_satisfied_with(
+            &map,
+            &runtime_edge(">=dev-libs/slotted-3", "dev-libs", "slotted"),
+            None
+        ));
+        assert!(!edge_satisfied_with(
+            &map,
+            &runtime_edge("dev-libs/absent", "dev-libs", "absent"),
+            None
+        ));
+        // A slot-operator edge with no resolved child falls back to the
+        // plain atom check.
+        let slotop = plain_edge(
+            "dev-libs/slotted",
+            "dev-libs",
+            "slotted",
+            DepPriority {
+                runtime: true,
+                runtime_slot_op: true,
+                ..DepPriority::default()
+            },
+        );
+        assert!(edge_satisfied_with(&map, &slotop, None));
+        // With a resolved child it must carry the child's own slot/sub.
+        assert!(edge_satisfied_with(&map, &slotop, Some(("1", "1"))));
+        assert!(edge_satisfied_with(&map, &slotop, Some(("0", "0"))));
+        assert!(
+            !edge_satisfied_with(&map, &slotop, Some(("0", "1"))),
+            "a half-matching slot/sub-slot is not satisfied"
+        );
+        assert!(
+            !edge_satisfied_with(&map, &slotop, Some(("2", "2"))),
+            "no candidate carries the child's slot"
+        );
+        // The build-time slot-operator variant narrows identically.
+        let bslotop = plain_edge(
+            "dev-libs/slotted",
+            "dev-libs",
+            "slotted",
+            DepPriority {
+                buildtime: true,
+                buildtime_slot_op: true,
+                ..DepPriority::default()
+            },
+        );
+        assert!(edge_satisfied_with(&map, &bslotop, Some(("0", "0"))));
+        assert!(!edge_satisfied_with(&map, &bslotop, Some(("2", "2"))));
+    }
+
+    #[test]
+    fn installed_candidates_by_cp_reads_the_fixture_vdb() {
+        let root = fixtures_vdb_root();
+        let map = installed_candidates_by_cp(&root);
+        let mut got = map
+            .get(&("dev-libs".to_string(), "dualslotpkg".to_string()))
+            .cloned()
+            .expect("the fixture vdb carries two dualslotpkg slots");
+        got.sort();
+        assert_eq!(
+            got,
+            vec![
+                "dev-libs/dualslotpkg-1.0:1/1".to_string(),
+                "dev-libs/dualslotpkg-2.0:2/2".to_string()
+            ]
+        );
+        assert!(!map.contains_key(&("dev-libs".to_string(), "definitely-absent".to_string())));
+    }
+
+    #[test]
+    fn dep_edge_satisfied_by_installed_reads_the_vdb() {
+        let root = mo_tmp_vdb(
+            "satisfied",
+            &[(
+                "dev-libs",
+                "inst-1.0",
+                &[("SLOT", "0/1"), ("RDEPEND", "dev-libs/other")],
+            )],
+        );
+        assert!(dep_edge_satisfied_by_installed(
+            &root,
+            &runtime_edge("dev-libs/inst", "dev-libs", "inst"),
+            None
+        ));
+        assert!(!dep_edge_satisfied_by_installed(
+            &root,
+            &runtime_edge(">=dev-libs/inst-2", "dev-libs", "inst"),
+            None
+        ));
+        // A slot-operator edge follows the resolved child's own slot.
+        let slotop = plain_edge(
+            "dev-libs/inst",
+            "dev-libs",
+            "inst",
+            DepPriority {
+                runtime: true,
+                runtime_slot_op: true,
+                ..DepPriority::default()
+            },
+        );
+        let mut child = new_entry("dev-libs", "inst", "2.0", Vec::new());
+        child.slot = Some("1".into());
+        child.sub_slot = Some("1".into());
+        assert!(!dep_edge_satisfied_by_installed(
+            &root,
+            &slotop,
+            Some(&child)
+        ));
+        child.slot = Some("0".into());
+        child.sub_slot = Some("1".into());
+        assert!(dep_edge_satisfied_by_installed(
+            &root,
+            &slotop,
+            Some(&child)
+        ));
+    }
+
+    #[test]
+    fn add_installed_dependency_closure_seeds_and_expands_the_installed_tree() {
+        let root = mo_tmp_vdb(
+            "closure-seed",
+            &[
+                (
+                    "dev-libs",
+                    "one-1.0",
+                    &[("SLOT", "0"), ("RDEPEND", "dev-libs/two")],
+                ),
+                (
+                    "dev-libs",
+                    "two-1.0",
+                    &[("SLOT", "0"), ("RDEPEND", "dev-libs/three")],
+                ),
+                ("dev-libs", "three-1.0", &[("SLOT", "0")]),
+                ("dev-libs", "three-2.0", &[("SLOT", "0")]),
+            ],
+        );
+        // 1 is an installed entry with no deps yet (seed 2 fills it).
+        let mut two = new_entry("dev-libs", "two", "1.0", Vec::new());
+        two.outcome = PretendOutcome::AlreadyInstalled {
+            version: "1.0".into(),
+        };
+        let top = new_entry(
+            "app-misc",
+            "top",
+            "1.0",
+            vec![
+                runtime_edge("<dev-libs/three-2", "dev-libs", "three"),
+                runtime_edge("dev-libs/one", "dev-libs", "one"),
+            ],
+        );
+        let mut entries = vec![top, two];
+        add_installed_dependency_closure(&mut entries, &root, &[], &[], false, true);
+        // top, two, three-1.0 (the version-qualified pick), one, three-2.0
+        // (the highest match of two's bare atom).
+        assert_eq!(
+            entries.len(),
+            5,
+            "{:#?}",
+            entries
+                .iter()
+                .map(|e| (&e.package, outcome_version(e)))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(entries[2].package, "three");
+        assert_eq!(
+            outcome_version(&entries[2]),
+            Some("1.0"),
+            "the qualified atom picks 1.0"
+        );
+        assert_eq!(entries[3].package, "one");
+        assert_eq!(
+            entries[3]
+                .deps
+                .iter()
+                .map(|e| e.atom.as_str())
+                .collect::<Vec<_>>(),
+            vec!["dev-libs/two"],
+            "the seeded node's own vdb deps are filled"
+        );
+        assert_eq!(entries[4].package, "three");
+        assert_eq!(
+            outcome_version(&entries[4]),
+            Some("2.0"),
+            "the bare atom picks the highest"
+        );
+        assert_eq!(
+            entries[1]
+                .deps
+                .iter()
+                .map(|e| e.atom.as_str())
+                .collect::<Vec<_>>(),
+            vec!["dev-libs/three"],
+            "seed 2 fills an installed entry's deps"
+        );
+    }
+
+    #[test]
+    fn add_installed_dependency_closure_virtuals_only_expands_virtuals() {
+        let root = mo_tmp_vdb(
+            "closure-virtuals",
+            &[
+                (
+                    "virtual",
+                    "libc-1.0",
+                    &[("SLOT", "0"), ("RDEPEND", "sys-libs/glibc-mine")],
+                ),
+                (
+                    "sys-libs",
+                    "glibc-mine-2.38",
+                    &[("SLOT", "0"), ("RDEPEND", "dev-libs/glibc-dep")],
+                ),
+                ("dev-libs", "glibc-dep-1.0", &[("SLOT", "0")]),
+                (
+                    "dev-libs",
+                    "plain-1.0",
+                    &[("SLOT", "0"), ("RDEPEND", "dev-libs/plain-dep")],
+                ),
+                ("dev-libs", "plain-dep-1.0", &[("SLOT", "0")]),
+                ("dev-libs", "systemseed-1.0", &[("SLOT", "0")]),
+            ],
+        );
+        let top = new_entry(
+            "app-misc",
+            "top",
+            "1.0",
+            vec![
+                runtime_edge("virtual/libc", "virtual", "libc"),
+                runtime_edge("dev-libs/plain", "dev-libs", "plain"),
+            ],
+        );
+        let mut entries = vec![top];
+        add_installed_dependency_closure(
+            &mut entries,
+            &root,
+            &[],
+            &["dev-libs/systemseed".to_string()],
+            true,
+            true,
+        );
+        let packages: Vec<&str> = entries.iter().map(|e| e.package.as_str()).collect();
+        assert_eq!(
+            packages,
+            vec!["top", "libc", "plain", "glibc-mine"],
+            "{packages:?}"
+        );
+        assert_eq!(
+            entries[1]
+                .deps
+                .iter()
+                .map(|e| e.atom.as_str())
+                .collect::<Vec<_>>(),
+            vec!["sys-libs/glibc-mine"],
+            "the virtual expands to its provider"
+        );
+        assert!(
+            entries[2].deps.is_empty(),
+            "a non-virtual installed node is a leaf under virtuals_only"
+        );
+        assert!(
+            entries[3].deps.is_empty(),
+            "the provider is added as a leaf, not queued: {:?}",
+            entries[3].deps
+        );
+        assert!(
+            !packages.contains(&"glibc-dep") && !packages.contains(&"plain-dep"),
+            "non-virtual nodes are never expanded under virtuals_only: {packages:?}"
+        );
+        assert!(
+            !packages.contains(&"systemseed"),
+            "virtuals_only does not seed @system: {packages:?}"
+        );
+    }
+
+    #[test]
+    fn add_installed_dependency_closure_strips_the_injected_libc_dep() {
+        let files: &[(&str, &str)] = &[
+            ("SLOT", "0"),
+            (
+                "RDEPEND",
+                ">=sys-libs/glibc-mine-2.38 dev-libs/keep \
+                 >sys-libs/glibc-mine-2.38 \
+                 >=sys-libs/glibc-mine-2.38:2.38 >=sys-libs/glibc-mine-2.38[foo] \
+                 =sys-libs/glibc-mine-2.38 >=sys-libs/other-2.38",
+            ),
+        ];
+        let root = mo_tmp_vdb(
+            "closure-libc",
+            &[
+                (
+                    "virtual",
+                    "libc-1.0",
+                    &[("SLOT", "0"), ("RDEPEND", "sys-libs/glibc-mine")],
+                ),
+                ("dev-libs", "inj-1.0", files),
+            ],
+        );
+        let mut entries = vec![new_entry(
+            "app-misc",
+            "top",
+            "1.0",
+            vec![runtime_edge("dev-libs/inj", "dev-libs", "inj")],
+        )];
+        add_installed_dependency_closure(&mut entries, &root, &[], &[], false, true);
+        let inj = entries
+            .iter()
+            .find(|e| e.package == "inj")
+            .expect("the installed dep is seeded");
+        let atoms: HashSet<&str> = inj.deps.iter().map(|e| e.atom.as_str()).collect();
+        assert!(
+            !atoms.contains(">=sys-libs/glibc-mine-2.38"),
+            "the injected bare `>=libc-provider-version` atom is stripped: {atoms:?}"
+        );
+        for kept in [
+            "dev-libs/keep",
+            ">sys-libs/glibc-mine-2.38",
+            ">=sys-libs/glibc-mine-2.38:2.38",
+            ">=sys-libs/glibc-mine-2.38[foo]",
+            "=sys-libs/glibc-mine-2.38",
+            ">=sys-libs/other-2.38",
+        ] {
+            assert!(
+                atoms.contains(kept),
+                "only the exact injected shape is stripped; {kept} must stay: {atoms:?}"
+            );
+        }
+        // Without an installed libc provider there is no injection to
+        // strip: the same atom stays.
+        let root = mo_tmp_vdb("closure-libc-none", &[("dev-libs", "inj-1.0", files)]);
+        let mut entries = vec![new_entry(
+            "app-misc",
+            "top",
+            "1.0",
+            vec![runtime_edge("dev-libs/inj", "dev-libs", "inj")],
+        )];
+        add_installed_dependency_closure(&mut entries, &root, &[], &[], false, true);
+        let inj = entries.iter().find(|e| e.package == "inj").unwrap();
+        assert!(
+            inj.deps
+                .iter()
+                .any(|e| e.atom == ">=sys-libs/glibc-mine-2.38"),
+            "no libc provider means nothing is stripped: {:?}",
+            inj.deps.iter().map(|e| e.atom.as_str()).collect::<Vec<_>>()
+        );
+    }
+    // -----------------------------------------------------------------
+    // #144: the scheduler loop
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn digraph_child_nodes_and_has_parents_pin_the_alive_filter() {
+        let mut g = test_graph(3, &[(0, 1, prio(2)), (0, 2, prio(32))]);
+        assert_eq!(g.child_nodes(0, None), vec![1, 2]);
+        assert!(g.has_parents(1));
+        assert!(!g.has_parents(0));
+        // The optional edge drops under `n_ignore_optional`.
+        assert_eq!(g.child_nodes(0, Some(n_ignore_optional)), vec![1]);
+        // A dead child disappears.
+        g.alive[1] = false;
+        assert_eq!(g.child_nodes(0, None), vec![2]);
+        // A dead parent does not count.
+        g.alive[0] = false;
+        assert!(!g.has_parents(2));
+    }
+
+    #[test]
+    fn digraph_add_edge_merges_priorities_without_duplicates() {
+        let mut g = test_graph(2, &[]);
+        g.add_edge(0, 1, prio(2));
+        g.add_edge(0, 1, prio(2));
+        assert_eq!(g.children[0].len(), 1);
+        assert_eq!(g.children[0][0].1, vec![prio(2)]);
+        g.add_edge(0, 1, prio(1));
+        assert_eq!(g.children[0][0].1, vec![prio(2), prio(1)]);
+        assert_eq!(g.parents[1], vec![0]);
+    }
+
+    #[test]
+    fn deep_system_deps_follows_only_runtime_edges() {
+        let config = portage_profile::Config {
+            system_packages: vec!["dev-libs/sys".to_string()],
+            ..portage_profile::Config::default()
+        };
+        let entries = vec![
+            new_entry("dev-libs", "sys", "1.0", Vec::new()),
+            new_entry("dev-libs", "rt", "1.0", Vec::new()),
+            new_entry("dev-libs", "bt", "1.0", Vec::new()),
+            new_entry("dev-libs", "post", "1.0", Vec::new()),
+        ];
+        let g = test_graph(
+            4,
+            &[
+                (0, 1, prio(2)), // runtime
+                (0, 2, prio(1)), // buildtime
+                (1, 3, prio(4)), // runtime_post
+            ],
+        );
+        assert_eq!(
+            deep_system_deps(&g, &entries, &config),
+            vec![true, true, false, true]
+        );
+    }
+
+    #[test]
+    fn seed_toolchain_asap_pins_the_provider_lookup() {
+        // Two new providers, plus a duplicate atom for the same provider
+        // and an installed one that must not be seeded.
+        let entries = vec![
+            {
+                let mut e = new_entry(
+                    "virtual",
+                    "os-headers",
+                    "1.0",
+                    vec![
+                        rdepend_edge("sys-kernel/headers", "sys-kernel", "headers"),
+                        rdepend_edge(">=sys-kernel/headers-1", "sys-kernel", "headers"),
+                        rdepend_edge("sys-kernel/oldheaders", "sys-kernel", "oldheaders"),
+                    ],
+                );
+                e.outcome = PretendOutcome::AlreadyInstalled {
+                    version: "1.0".into(),
+                };
+                e
+            },
+            new_entry("sys-kernel", "headers", "6.0", Vec::new()),
+            {
+                let mut e = new_entry(
+                    "virtual",
+                    "libc",
+                    "1.0",
+                    vec![
+                        rdepend_edge("sys-kernel/headers", "sys-kernel", "headers"),
+                        rdepend_edge("sys-libs/libc", "sys-libs", "libc"),
+                    ],
+                );
+                e.outcome = PretendOutcome::AlreadyInstalled {
+                    version: "1.0".into(),
+                };
+                e
+            },
+            new_entry("sys-libs", "other", "1.0", Vec::new()),
+            new_entry("sys-libs", "libc", "2.0", Vec::new()),
+            {
+                let mut e = new_entry("sys-kernel", "oldheaders", "5.0", Vec::new());
+                e.outcome = PretendOutcome::AlreadyInstalled {
+                    version: "5.0".into(),
+                };
+                e
+            },
+        ];
+        // os-headers first, then libc; the duplicate atom is deduped and
+        // the installed provider is skipped.
+        assert_eq!(seed_toolchain_asap(&entries), vec![1, 4]);
+        // A reinstall provider is not seeded.
+        let mut entries = entries;
+        entries[1].outcome = PretendOutcome::Reinstall {
+            version: "6.0".into(),
+            changed_flags: vec!["flip".into()],
+            deps_changed: false,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: false,
+            slot_operator_rebuild: false,
+        };
+        assert_eq!(seed_toolchain_asap(&entries), vec![4]);
+    }
+
+    #[test]
+    fn gather_deps_collects_the_filtered_closure_and_rejects_escapes() {
+        let g = test_graph(4, &[(0, 1, prio(2)), (1, 2, prio(2)), (0, 3, prio(32))]);
+        let mergeable: HashSet<usize> = [0, 1, 2, 3].into_iter().collect();
+        assert_eq!(
+            gather_deps(&g, 0, None, &mergeable),
+            Some([0, 1, 2, 3].into_iter().collect())
+        );
+        // The optional child 3 escapes the mergeable set.
+        let mergeable: HashSet<usize> = [0, 1, 2].into_iter().collect();
+        assert_eq!(gather_deps(&g, 0, None, &mergeable), None);
+        // The filter drops the escaping optional edge.
+        assert_eq!(
+            gather_deps(&g, 0, Some(n_ignore_optional), &mergeable),
+            Some([0, 1, 2].into_iter().collect())
+        );
+        // A deeper escape is rejected too.
+        let mergeable: HashSet<usize> = [0].into_iter().collect();
+        assert_eq!(gather_deps(&g, 0, None, &mergeable), None, "1 escapes");
+    }
+
+    #[test]
+    fn find_smallest_cycle_pins_the_ladder_and_smallest_pick() {
+        // A three-ring (names "aa*") and a two-ring ("zz*"): the smaller
+        // closure wins even though the bigger ring sorts first.
+        let g = test_graph(
+            5,
+            &[
+                (0, 1, prio(2)),
+                (1, 2, prio(2)),
+                (2, 0, prio(2)),
+                (3, 4, prio(2)),
+                (4, 3, prio(2)),
+            ],
+        );
+        let entries = vec![
+            new_entry("dev-libs", "aa1", "1.0", Vec::new()),
+            new_entry("dev-libs", "aa2", "1.0", Vec::new()),
+            new_entry("dev-libs", "aa3", "1.0", Vec::new()),
+            new_entry("dev-libs", "zz1", "1.0", Vec::new()),
+            new_entry("dev-libs", "zz2", "1.0", Vec::new()),
+        ];
+        let mut frontier = SerializeFrontier::build(&g);
+        let (sub, ig) = find_smallest_cycle(&g, Some(&mut frontier), &entries, &NORMAL, &[], true)
+            .expect("a mergeable cycle exists");
+        assert_eq!(sub, HashSet::from([3usize, 4]));
+        assert!(ig.is_some());
+        assert_eq!(
+            ig.unwrap()(&prio(4)),
+            n_ignore_runtime_post(&prio(4)),
+            "the lowest relaxed rung that produces a leaf"
+        );
+    }
+
+    #[test]
+    fn harvest_cycle_pins_leaf_order_and_installed_preference() {
+        // 0 -> 1 runtime; 1 has no children, so it is the first leaf and
+        // 0 follows.
+        let g = test_graph(2, &[(0, 1, prio(2))]);
+        let sub: HashSet<usize> = [0, 1].into_iter().collect();
+        assert_eq!(harvest_cycle(&g, &sub), vec![1, 0]);
+        // An installed leaf is preferred over a merge-bound one.
+        let mut g = test_graph(2, &[]);
+        g.installed[0] = true;
+        let sub: HashSet<usize> = [0, 1].into_iter().collect();
+        assert_eq!(
+            harvest_cycle(&g, &sub),
+            vec![0, 1],
+            "the installed leaf is picked first"
+        );
+    }
+
+    #[test]
+    fn cycle_report_reports_the_ring_and_its_requirer_cone() {
+        let mut b = new_entry(
+            "dev-libs",
+            "b",
+            "1.0",
+            vec![runtime_edge("dev-libs/a", "dev-libs", "a")],
+        );
+        b.required_by = vec![("dev-libs".to_string(), "owner".to_string())];
+        let entries = vec![
+            new_entry(
+                "dev-libs",
+                "a",
+                "1.0",
+                vec![runtime_edge("dev-libs/b", "dev-libs", "b")],
+            ),
+            b,
+            new_entry("dev-libs", "owner", "1.0", Vec::new()),
+        ];
+        let root = Path::new("/nonexistent-root-for-unit-test");
+        let (cycles, display) = cycle_report(&entries, &["dev-libs/owner".to_string()], root);
+        assert!(
+            !cycles.is_empty(),
+            "the runtime ring is recorded: {cycles:?}"
+        );
+        assert_eq!(
+            display.len(),
+            3,
+            "the owner's cone joins the drain: {display:?}"
+        );
+        assert_eq!(
+            display.iter().copied().collect::<HashSet<_>>(),
+            HashSet::from([0, 1, 2])
+        );
+    }
+
+    #[test]
+    fn tree_schedule_stuck_pins_guards_and_node_bookkeeping() {
+        let mut walked = new_entry("dev-libs", "walkedinst", "1.0", Vec::new());
+        walked.outcome = PretendOutcome::AlreadyInstalled {
+            version: "1.0".into(),
+        };
+        walked.slot = Some("0".into());
+        let mut otherinst = new_entry("dev-libs", "otherinst", "1.0", Vec::new());
+        otherinst.outcome = PretendOutcome::AlreadyInstalled {
+            version: "1.0".into(),
+        };
+        otherinst.slot = Some("0".into());
+        let entries = vec![
+            new_entry("dev-libs", "bparent", "1.1", Vec::new()),
+            new_entry("dev-libs", "other", "2.0", Vec::new()),
+            walked,
+            otherinst,
+        ];
+        let mut g = test_graph(2, &[]);
+        let row = |repl: usize, cp: (&str, &str), strong: bool| PendingUninstall {
+            repl,
+            inst_cp: (cp.0.to_string(), cp.1.to_string()),
+            inst_slot: "0".to_string(),
+            inst_version: "1.0".to_string(),
+            owner: 1,
+            blocker: 0,
+            strong,
+            node: None,
+        };
+        let mut ts = TreeStuck {
+            pending: vec![
+                // Walked installed instance: skipped.
+                row(2, ("dev-libs", "walkedinst"), false),
+                // Strong row: hidden.
+                row(0, ("dev-libs", "blocked"), true),
+                // Eligible row: schedules.
+                row(0, ("dev-libs", "blocked"), false),
+            ],
+            scheduled: HashSet::new(),
+            solved: Vec::new(),
+            progressed: false,
+        };
+        tree_schedule_stuck(&mut g, &entries, &mut ts);
+        assert!(
+            ts.pending[0].node.is_none(),
+            "a walked installed instance is skipped"
+        );
+        assert!(ts.pending[1].node.is_none(), "a strong row stays hidden");
+        let node = ts.pending[2].node.expect("the soft eligible row schedules");
+        assert_eq!(g.n, 3);
+        assert_eq!(g.parents[node], vec![0]);
+        assert!(g.installed[node]);
+        assert!(ts.scheduled.contains(&node));
+        assert!(ts.progressed);
+        // A second call does not reschedule the same row.
+        ts.progressed = false;
+        tree_schedule_stuck(&mut g, &entries, &mut ts);
+        assert_eq!(g.n, 3);
+        assert!(!ts.progressed);
+    }
+
+    #[test]
+    fn tree_note_selection_pins_the_verdict_lifecycle() {
+        let entries = vec![
+            new_entry("dev-libs", "repl", "1.0", Vec::new()),
+            new_entry("dev-libs", "other", "1.0", Vec::new()),
+        ];
+        let pending = |node: Option<usize>, scheduled: bool| {
+            let mut ts = TreeStuck {
+                pending: vec![PendingUninstall {
+                    repl: 0,
+                    inst_cp: ("dev-libs".to_string(), "inst".to_string()),
+                    inst_slot: "0".to_string(),
+                    inst_version: "1.0".to_string(),
+                    owner: 1,
+                    blocker: 0,
+                    strong: false,
+                    node,
+                }],
+                scheduled: HashSet::new(),
+                solved: Vec::new(),
+                progressed: false,
+            };
+            if scheduled {
+                ts.scheduled.insert(node.unwrap());
+            }
+            ts
+        };
+        // Selecting the synthetic uninstall records the verdict once.
+        let mut g = test_graph(2, &[]);
+        let mut ts = pending(Some(1), true);
+        tree_note_selection(&mut g, &entries, &mut ts, 1);
+        assert_eq!(ts.solved, vec![(1, 0)]);
+        assert!(g.alive[1], "the uninstall selection leaves the node alive");
+        tree_note_selection(&mut g, &entries, &mut ts, 1);
+        assert_eq!(ts.solved, vec![(1, 0)], "the verdict is not duplicated");
+        // Selecting the replacement kills the synthetic node and solves.
+        let mut g = test_graph(2, &[]);
+        let mut ts = pending(Some(1), true);
+        tree_note_selection(&mut g, &entries, &mut ts, 0);
+        assert!(
+            !g.alive[1],
+            "the replacement's merge removes the uninstall node"
+        );
+        assert_eq!(ts.solved, vec![(1, 0)]);
+        // An unscheduled pending node is not touched.
+        let mut g = test_graph(2, &[]);
+        let mut ts = pending(Some(1), false);
+        tree_note_selection(&mut g, &entries, &mut ts, 1);
+        assert!(ts.solved.is_empty(), "an unscheduled row records nothing");
+    }
+
+    #[test]
+    fn select_nodes_pins_the_greedy_batch_and_root_leaf_order() {
+        // 1 -> 2, plus the parentless leaf 0: at rung NONE the batch
+        // pops both leaves in order; the one-at-a-time path would pick
+        // the parented 2 first.
+        let entries: Vec<GraphEntry> = (0..3)
+            .map(|i| new_entry("dev-libs", &format!("p{i}"), "1.0", Vec::new()))
+            .collect();
+        let mut g = test_graph(3, &[(1, 2, prio(2))]);
+        let root = Path::new("/nonexistent-root-for-unit-test");
+        let order = select_nodes(&mut g, &entries, root, None);
+        assert_eq!(order, vec![0, 2, 1], "greedy rung-NONE pops both leaves");
+    }
+
+    #[test]
+    fn select_nodes_harvests_a_runtime_cycle() {
+        // 0 <-> 1 runtime plus 2 -> 0 runtime: no NORMAL rung leaf
+        // exists, so the cycle handler harvests the ring (preferring the
+        // installed node) and the requirer drains afterwards.
+        let entries: Vec<GraphEntry> = (0..3)
+            .map(|i| new_entry("dev-libs", &format!("c{i}"), "1.0", Vec::new()))
+            .collect();
+        let mut g = test_graph(3, &[(0, 1, prio(2)), (1, 0, prio(2)), (2, 0, prio(2))]);
+        g.installed[1] = true;
+        let root = Path::new("/nonexistent-root-for-unit-test");
+        let order = select_nodes(&mut g, &entries, root, None);
+        assert_eq!(
+            order,
+            vec![1, 0, 2],
+            "the ring harvest prefers the installed leaf, then the requirer"
+        );
+    }
+
+    #[test]
+    fn select_nodes_escalates_to_the_satisfied_range() {
+        // A ring of satisfied buildtime edges: NORMAL's cycle search has
+        // no mergeable leaf, so the `drop_satisfied` escalation to
+        // `DepPrioritySatisfiedRange` is what breaks the ring.
+        let entries: Vec<GraphEntry> = (0..2)
+            .map(|i| new_entry("dev-libs", &format!("s{i}"), "1.0", Vec::new()))
+            .collect();
+        let mut g = test_graph(2, &[(0, 1, prio(65)), (1, 0, prio(65))]);
+        g.installed[1] = true;
+        let root = Path::new("/nonexistent-root-for-unit-test");
+        let order = select_nodes(&mut g, &entries, root, None);
+        assert_eq!(
+            order,
+            vec![1, 0],
+            "the satisfied-range harvest prefers the installed leaf"
+        );
+    }
+
+    #[test]
+    fn serialize_merge_order_returns_a_permutation_in_dependency_order() {
+        let root = Path::new("/nonexistent-root-for-unit-test");
+        let config = portage_profile::Config::default();
+        let entries = vec![
+            new_entry(
+                "dev-libs",
+                "top",
+                "1.0",
+                vec![runtime_edge("dev-libs/dep", "dev-libs", "dep")],
+            ),
+            new_entry("dev-libs", "dep", "1.0", Vec::new()),
+            new_entry("dev-libs", "isolated", "1.0", Vec::new()),
+        ];
+        let order = serialize_merge_order(
+            &entries,
+            &["dev-libs/top".to_string()],
+            &config,
+            root,
+            true,
+            &[],
+            true,
+        );
+        assert_eq!(
+            order.len(),
+            3,
+            "every entry is scheduled exactly once: {order:?}"
+        );
+        let mut sorted = order.clone();
+        sorted.sort_unstable();
+        assert_eq!(
+            sorted,
+            vec![0, 1, 2],
+            "a permutation of the entries: {order:?}"
+        );
+        assert!(
+            order.iter().position(|&i| i == 1) < order.iter().position(|&i| i == 0),
+            "the dependency merges before its owner: {order:?}"
+        );
+    }
+
+    #[test]
+    fn schedule_graph_prunes_rootless_synthetic_nodes_and_gates_complete_mode() {
+        let root = mo_tmp_vdb(
+            "schedule",
+            &[
+                ("dev-libs", "sysseed-1.0", &[("SLOT", "0")]),
+                (
+                    "dev-libs",
+                    "dep-1.0",
+                    &[("SLOT", "0"), ("RDEPEND", "dev-libs/grand")],
+                ),
+                ("dev-libs", "grand-1.0", &[("SLOT", "0")]),
+            ],
+        );
+        let repos: &[RepoConfig] = &[];
+        let config = portage_profile::Config {
+            system_packages: vec!["dev-libs/sysseed".to_string()],
+            ..portage_profile::Config::default()
+        };
+        // An all-New resolve is virtuals_only: no installed closure.
+        let entries = vec![new_entry("dev-libs", "top", "1.0", Vec::new())];
+        let (ext, g, real_n, _) = schedule_graph(
+            &entries,
+            &["dev-libs/top".to_string()],
+            &config,
+            &root,
+            true,
+            repos,
+            true,
+        );
+        assert_eq!(
+            ext.len(),
+            1,
+            "no complete-mode closure for an all-New resolve"
+        );
+        assert_eq!(real_n, 1);
+        assert!(g.order.iter().all(|&i| i < real_n));
+        // A Reinstall entry turns complete mode on: the @system seed is
+        // added, walked, and then pruned as a rootless nomerge node.
+        let mut top = new_entry("dev-libs", "top", "1.0", Vec::new());
+        top.outcome = PretendOutcome::Reinstall {
+            version: "1.0".into(),
+            changed_flags: vec!["flip".into()],
+            deps_changed: false,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: false,
+            slot_operator_rebuild: false,
+        };
+        let entries = vec![top];
+        let config = portage_profile::Config {
+            system_packages: vec!["dev-libs/sysseed".to_string()],
+            ..portage_profile::Config::default()
+        };
+        let (ext, g, real_n, _) = schedule_graph(
+            &entries,
+            &["dev-libs/top".to_string()],
+            &config,
+            &root,
+            true,
+            repos,
+            true,
+        );
+        assert_eq!(real_n, 1);
+        let seed = ext
+            .iter()
+            .position(|e| e.package == "sysseed")
+            .expect("the @system seed is added");
+        assert!(seed >= real_n);
+        assert!(!g.alive[seed], "a rootless synthetic node is pruned");
+        assert!(!g.order.contains(&seed));
+    }
+
+    #[test]
+    fn tree_solved_replacements_skips_a_same_version_row() {
+        // A Replacement row whose merge-bound entry resolves at the same
+        // version as the matched installed one is not a pending row.
+        let mut owner = new_entry("dev-libs", "bparent", "1.1", Vec::new());
+        owner.slot = Some("0".into());
+        owner.sub_slot = Some("0".into());
+        owner.blockers = vec![crate::BlockerConflict {
+            atom_str: "!<dev-libs/blocked-2.0".to_string(),
+            strong: false,
+            matched_category: "dev-libs".to_string(),
+            matched_package: "blocked".to_string(),
+            matched_version: "1.0".to_string(),
+            unsolvable: false,
+            satisfied_by: Some(crate::BlockerSatisfiedBy::Replacement {
+                cp: ("dev-libs".to_string(), "blocked".to_string()),
+                slot: "0".to_string(),
+            }),
+            tree_scheduled_uninstall: false,
+        }];
+        let mut replacement = new_entry(
+            "dev-libs",
+            "blocked",
+            "1.0",
+            vec![runtime_edge("dev-libs/bparent", "dev-libs", "bparent")],
+        );
+        replacement.slot = Some("0".into());
+        replacement.sub_slot = Some("0".into());
+        let other = new_entry("dev-libs", "other", "1.0", Vec::new());
+        let entries = vec![owner, replacement, other];
+        let root = Path::new("/nonexistent-root-for-unit-test");
+        let config = portage_profile::Config::default();
+        let solved = tree_solved_replacements(
+            &entries,
+            &["dev-libs/blocked".to_string()],
+            &config,
+            root,
+            true,
+            &[],
+            true,
+        );
+        assert!(
+            solved.is_empty(),
+            "the same-version entry is not a replacement row: {solved:?}"
+        );
+    }
+    // -----------------------------------------------------------------
+    // #144 follow-up: the survivors of the first cluster run
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn suppressed_alt_edges_requires_every_atom_of_a_branch_to_match() {
+        let runtime = DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        };
+        let alt_edge = |atom: &str, cat: &str, pkg: &str, branch: u32| {
+            let mut e = plain_edge(atom, cat, pkg, runtime);
+            e.disjunctive = true;
+            e.alt = Some((0, branch));
+            e.key = 3;
+            e
+        };
+        // Branch 0 is only *partly* installed (one installed atom, one
+        // merge-bound); branch 1 is fully installed. The all-installed
+        // bin must pick branch 1.
+        let mut i1 = new_entry("dev-libs", "i1", "1.0", Vec::new());
+        i1.outcome = PretendOutcome::AlreadyInstalled {
+            version: "1.0".into(),
+        };
+        let mut i2 = new_entry("dev-libs", "i2", "1.0", Vec::new());
+        i2.outcome = PretendOutcome::AlreadyInstalled {
+            version: "1.0".into(),
+        };
+        let mut i3 = new_entry("dev-libs", "i3", "1.0", Vec::new());
+        i3.outcome = PretendOutcome::AlreadyInstalled {
+            version: "1.0".into(),
+        };
+        let owner = new_entry(
+            "app-misc",
+            "owner",
+            "1.0",
+            vec![
+                alt_edge("dev-libs/i1", "dev-libs", "i1", 0),
+                alt_edge("dev-libs/m1", "dev-libs", "m1", 0),
+                alt_edge("dev-libs/i2", "dev-libs", "i2", 1),
+                alt_edge("dev-libs/i3", "dev-libs", "i3", 1),
+            ],
+        );
+        let entries = vec![
+            owner,
+            i1,
+            new_entry("dev-libs", "m1", "1.0", Vec::new()),
+            i2,
+            i3,
+        ];
+        let root = Path::new("/nonexistent-root-for-unit-test");
+        assert_eq!(
+            kept_alt_branches(&entries, root)[0],
+            HashSet::from([2usize, 3]),
+            "only a branch whose every atom matches installed wins the all-installed bin"
+        );
+        // A branch whose second atom matches nothing at all is not an
+        // `all_any` candidate; with no other branch resolving, nothing
+        // is suppressed.
+        let owner = new_entry(
+            "app-misc",
+            "owner",
+            "1.0",
+            vec![
+                alt_edge("dev-libs/i1", "dev-libs", "i1", 0),
+                alt_edge("dev-libs/absent", "dev-libs", "absent", 0),
+                alt_edge("dev-libs/absent2", "dev-libs", "absent2", 1),
+            ],
+        );
+        let mut i1 = new_entry("dev-libs", "i1", "1.0", Vec::new());
+        i1.outcome = PretendOutcome::AlreadyInstalled {
+            version: "1.0".into(),
+        };
+        let entries = vec![owner, i1];
+        assert_eq!(
+            kept_alt_branches(&entries, root)[0],
+            HashSet::from([0usize, 1, 2]),
+            "no branch fully resolves, so every branch is kept"
+        );
+    }
+
+    #[test]
+    fn elementary_cycles_records_only_the_shortest_path_per_node() {
+        // Node 0's first child leads to a length-3 path back to 0, its
+        // second child to a length-2 one: only the shortest is recorded.
+        let g = test_graph(
+            4,
+            &[
+                (0, 1, prio(2)),
+                (1, 2, prio(2)),
+                (2, 0, prio(2)),
+                (0, 3, prio(2)),
+                (3, 0, prio(2)),
+            ],
+        );
+        let cycles = elementary_cycles(&g, None);
+        let to_zero: Vec<Vec<usize>> = cycles
+            .iter()
+            .filter(|c| c.last() == Some(&0))
+            .cloned()
+            .collect();
+        assert_eq!(
+            to_zero,
+            vec![vec![3usize, 0]],
+            "the longer tied candidate is dropped once a shorter one appears"
+        );
+    }
+
+    #[test]
+    fn find_smallest_cycle_keeps_the_first_of_two_equal_rings() {
+        // A 3-ring ("aa*") then two 2-rings ("mm*", "zz*"): the first
+        // smallest closure wins; `<=` would replace it with the later
+        // equal-size one.
+        let g = test_graph(
+            7,
+            &[
+                (0, 1, prio(2)),
+                (1, 2, prio(2)),
+                (2, 0, prio(2)),
+                (3, 4, prio(2)),
+                (4, 3, prio(2)),
+                (5, 6, prio(2)),
+                (6, 5, prio(2)),
+            ],
+        );
+        let entries = vec![
+            new_entry("dev-libs", "aa1", "1.0", Vec::new()),
+            new_entry("dev-libs", "aa2", "1.0", Vec::new()),
+            new_entry("dev-libs", "aa3", "1.0", Vec::new()),
+            new_entry("dev-libs", "mm1", "1.0", Vec::new()),
+            new_entry("dev-libs", "mm2", "1.0", Vec::new()),
+            new_entry("dev-libs", "zz1", "1.0", Vec::new()),
+            new_entry("dev-libs", "zz2", "1.0", Vec::new()),
+        ];
+        let mut frontier = SerializeFrontier::build(&g);
+        let (sub, _) = find_smallest_cycle(&g, Some(&mut frontier), &entries, &NORMAL, &[], true)
+            .expect("a mergeable cycle exists");
+        assert_eq!(
+            sub,
+            HashSet::from([3usize, 4]),
+            "the first of the equal-size rings is kept"
+        );
+    }
+
+    #[test]
+    fn select_nodes_promotes_an_unsatisfied_pdep_child_to_asap() {
+        // virtual/libc is installed and seeds its provider P as asap; P
+        // is selected at the relaxed rung that ignores its runtime_post
+        // edge, and its still alive unsatisfied PDEPEND child C is
+        // promoted ahead of the bias order (which would batch D first).
+        let mut virt = new_entry(
+            "virtual",
+            "libc",
+            "1.0",
+            vec![
+                rdepend_edge("sys-libs/libc-prov", "sys-libs", "libc-prov"),
+                runtime_edge("dev-libs/other", "dev-libs", "other"),
+            ],
+        );
+        virt.outcome = PretendOutcome::AlreadyInstalled {
+            version: "1.0".into(),
+        };
+        let entries = vec![
+            virt,
+            new_entry(
+                "sys-libs",
+                "libc-prov",
+                "1.0",
+                vec![{
+                    let mut e = runtime_edge("dev-libs/consumer", "dev-libs", "consumer");
+                    e.priority = DepPriority {
+                        runtime_post: true,
+                        ..DepPriority::default()
+                    };
+                    e
+                }],
+            ),
+            new_entry("dev-libs", "consumer", "1.0", Vec::new()),
+            new_entry("dev-libs", "other", "1.0", Vec::new()),
+        ];
+        let root = Path::new("/nonexistent-root-for-unit-test");
+        let mut g = build_digraph(&entries, &["virtual/libc".to_string()], root);
+        let order = select_nodes(&mut g, &entries, root, None);
+        assert_eq!(
+            order,
+            vec![1, 2, 3, 0],
+            "the promoted PDEPEND child merges before the unrelated dep"
+        );
+    }
+    // -----------------------------------------------------------------
+    // #144 fix pass: the reviewer's counterexamples
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn select_nodes_prefers_a_leaf_whose_parent_is_an_asap_node() {
+        // The asap block cannot select (every asap node has a child that
+        // survives all SATISFIED rungs), and the cycle search's asap-only
+        // candidate set is empty, so `prefer_asap` flips and the rung
+        // loop reaches the asap-parent preference: leaf 4 (parent 1 is
+        // asap) wins over 2/3, while a mutated gate/predicate picks 2 or
+        // 3 instead.
+        let entries = vec![
+            new_entry(
+                "virtual",
+                "libc",
+                "1.0",
+                vec![rdepend_edge("sys-libs/prov", "sys-libs", "prov")],
+            ),
+            new_entry(
+                "sys-libs",
+                "prov",
+                "1.0",
+                vec![
+                    plain_edge(
+                        "dev-libs/x",
+                        "dev-libs",
+                        "x",
+                        DepPriority {
+                            buildtime: true,
+                            ..DepPriority::default()
+                        },
+                    ),
+                    runtime_edge("dev-libs/leaf", "dev-libs", "leaf"),
+                    {
+                        let mut e = runtime_edge("dev-libs/npost", "dev-libs", "npost");
+                        e.priority = DepPriority {
+                            runtime_post: true,
+                            ..DepPriority::default()
+                        };
+                        e
+                    },
+                ],
+            ),
+            new_entry("dev-libs", "bparented", "1.0", Vec::new()),
+            new_entry("dev-libs", "npost", "1.0", Vec::new()),
+            new_entry("dev-libs", "leaf", "1.0", Vec::new()),
+            new_entry("dev-libs", "x", "1.0", Vec::new()),
+            new_entry(
+                "dev-libs",
+                "cparent",
+                "1.0",
+                vec![runtime_edge("dev-libs/bparented", "dev-libs", "bparented")],
+            ),
+        ];
+        let root = Path::new("/nonexistent-root-for-unit-test");
+        let mut g = test_graph(
+            7,
+            &[
+                (0, 1, prio(1)),
+                (1, 5, prio(1)),
+                (1, 4, prio(2)),
+                (1, 3, prio(4)),
+                (6, 2, prio(2)),
+            ],
+        );
+        let order = select_nodes(&mut g, &entries, root, None);
+        assert_eq!(
+            order,
+            vec![4, 5, 1, 0, 3, 2, 6],
+            "the asap-parent preference picks leaf 4 before the fallback would"
+        );
+    }
+
+    #[test]
+    fn select_nodes_promotes_only_an_unsatisfied_pdep_child() {
+        // The provider is selected at rung 1 (its child's edge is
+        // optional), but that child is already "satisfied" for the
+        // promotion predicate (`optional` returns true), so it must NOT
+        // be promoted; `||` in the predicate promotes it and reorders
+        // the run.
+        let mut virt = new_entry(
+            "virtual",
+            "libc",
+            "1.0",
+            vec![rdepend_edge("sys-libs/prov", "sys-libs", "prov")],
+        );
+        virt.outcome = PretendOutcome::AlreadyInstalled {
+            version: "1.0".into(),
+        };
+        let entries = vec![
+            virt,
+            new_entry(
+                "sys-libs",
+                "prov",
+                "1.0",
+                vec![plain_edge(
+                    "dev-libs/consumer",
+                    "dev-libs",
+                    "consumer",
+                    DepPriority {
+                        buildtime: true,
+                        optional: true,
+                        ..DepPriority::default()
+                    },
+                )],
+            ),
+            new_entry("dev-libs", "consumer", "1.0", Vec::new()),
+            new_entry("dev-libs", "other", "1.0", Vec::new()),
+        ];
+        let root = Path::new("/nonexistent-root-for-unit-test");
+        let mut g = build_digraph(&entries, &["virtual/libc".to_string()], root);
+        let order = select_nodes(&mut g, &entries, root, None);
+        assert_eq!(
+            order,
+            vec![1, 0, 2, 3],
+            "an already-satisfied optional PDEPEND child is not promoted"
+        );
+    }
+
+    #[test]
+    fn add_installed_dependency_closure_keeps_the_first_of_vercmp_equal_versions() {
+        // `1.0` and `1.0-r0` compare equal (a missing revision is 0), so
+        // `pick_installed`'s `best` scan must keep the first installed
+        // version it saw rather than replace it on the equality.
+        let root = mo_tmp_vdb(
+            "closure-vercmp-eq",
+            &[
+                (
+                    "dev-libs",
+                    "eqver-1.0",
+                    &[("SLOT", "0"), ("RDEPEND", "dev-libs/leaf")],
+                ),
+                ("dev-libs", "eqver-1.0-r0", &[("SLOT", "1")]),
+                ("dev-libs", "leaf-1.0", &[("SLOT", "0")]),
+            ],
+        );
+        let mut entries = vec![new_entry(
+            "app-misc",
+            "top",
+            "1.0",
+            vec![runtime_edge("dev-libs/eqver", "dev-libs", "eqver")],
+        )];
+        add_installed_dependency_closure(&mut entries, &root, &[], &[], false, true);
+        let picked = entries
+            .iter()
+            .find(|e| e.package == "eqver")
+            .expect("the installed dependency is seeded");
+        assert_eq!(
+            outcome_version(picked),
+            Some("1.0"),
+            "the first vercmp-equal installed version is kept"
+        );
+    }
+    #[test]
+    fn select_nodes_escalates_to_the_satisfied_range_before_the_roots() {
+        // The reviewer's counterexample for `drop_satisfied && !ptr::eq`
+        // -> `||`: the early SATISFIED escalation steals the selection
+        // from the roots-last-resort fallback that runs in the same
+        // iteration.
+        let entries = vec![
+            new_entry("virtual", "libc", "1.0", Vec::new()),
+            new_entry("dev-libs", "p1", "1.0", Vec::new()),
+            new_entry("dev-libs", "p2", "1.0", Vec::new()),
+            new_entry("dev-libs", "p3", "1.0", Vec::new()),
+            new_entry("dev-libs", "p4", "1.0", Vec::new()),
+        ];
+        let root = Path::new("/nonexistent-root-for-unit-test");
+        let mut g = test_graph(5, &[(0, 4, prio(1)), (3, 2, prio(64)), (4, 0, prio(8))]);
+        let order = select_nodes(&mut g, &entries, root, None);
+        assert_eq!(
+            order,
+            vec![2, 1, 3, 4, 0],
+            "the roots fallback keeps its turn"
+        );
+    }
+    #[test]
+    fn select_nodes_pins_the_normal_range_cycle_pass() {
+        // The reviewer's counterexample for deleting the `!` on
+        // `!ptr::eq(range, &NORMAL)`: when the range is already SATISFIED
+        // the mutant drops the NORMAL cycle pass instead of adding it.
+        let mut virt = new_entry(
+            "virtual",
+            "libc",
+            "1.0",
+            vec![rdepend_edge("sys-libs/p1", "sys-libs", "p1")],
+        );
+        virt.outcome = PretendOutcome::AlreadyInstalled {
+            version: "1.0".into(),
+        };
+        let entries = vec![
+            virt,
+            new_entry("sys-libs", "p1", "1.0", Vec::new()),
+            new_entry("dev-libs", "p2", "1.0", Vec::new()),
+            new_entry("dev-libs", "p3", "1.0", Vec::new()),
+            new_entry("dev-libs", "p4", "1.0", Vec::new()),
+            new_entry("dev-libs", "p5", "1.0", Vec::new()),
+        ];
+        let root = Path::new("/nonexistent-root-for-unit-test");
+        let mut g = test_graph(
+            6,
+            &[
+                (1, 2, prio(6)),
+                (1, 4, prio(6)),
+                (2, 0, prio(4)),
+                (2, 1, prio(32)),
+                (3, 5, prio(64)),
+                (4, 0, prio(6)),
+                (4, 2, prio(33)),
+                (4, 5, prio(1)),
+            ],
+        );
+        let order = select_nodes(&mut g, &entries, root, None);
+        assert_eq!(order, vec![1, 0, 5, 2, 3, 4], "the NORMAL cycle pass runs");
+    }
 }

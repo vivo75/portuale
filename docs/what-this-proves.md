@@ -17894,3 +17894,18 @@ cargo test --release -p portuale read_installed_slot
 ```
 
 Output-preserving over the full contract suite (1773 passed / 0 failed) and corpus; merge-path gate green (L1 glibc+bash reinstall `l1-20260923T020132Z`, merged_count 2, 0 hard / 0 unexplained). One honest note: the plan listed three `remote_bundle::split_pf` callers and grep found a fourth (the collision-owner scan) — consolidated under the same argument, recorded in the commit. Detail: `docs/08.126-127-vdb-slot-residues.md` (done), oracle `08.109-110-vdb-metadata-snapshot.md` §2.
+
+**The merge-order scheduler's unit coverage now sees whole-body no-ops (Phase 8, 2026-09-23; #144/#145/#146 DONE).** Phase 4's mutation run left 233 of `merge_order.rs`'s mutants surviving — 215 of them real unit-test gaps across the scheduler loop (#144), the installed/vdb-backed inputs (#145) and the dep-key/priority mapping (#146) — so Phase 9's #142 and Phase 13's #131 would have moved behaviour inside a file whose `mod tests` could not see a whole-body replacement. Three slices add 52 `mod tests` functions in the existing `test_graph`/`new_entry` synthetic-entry style (predicate truth tables, small synthetic digraphs, the committed fixture vdb plus runtime scratch vdbs for the closure) and take the clusters to:
+
+```sh
+cargo mutants --in-place --file portage-repo/src/merge_order.rs --timeout 300 \
+  --re 'key_priority|dep_edges_from_metadata|split_disjunctive|ignore_|PriorityRange|rank_best|select_dep_target|build_digraph|frontier_enabled'
+# #146 dep-key/priority: 168 mutants tested — 156 caught, 6 missed (all equivalent), 6 unviable
+#      (before the new tests: 83 caught / 79 missed / 6 unviable)
+cargo mutants --in-place --file portage-repo/src/merge_order.rs --timeout 300 \
+  --re 'add_installed_dependency_closure|installed_candidates_by_cp|edge_satisfied_with|dep_edge_satisfied_by_installed|outcome_version'
+# #145 installed/vdb: 62 mutants — 59 caught, 1 missed (equivalent), 1 unviable, 1 timeout
+# #144 scheduler loop: 258 mutants — 201 caught, 17 missed, 21 unviable, 19 timeouts
+```
+
+Every survivor is classified equivalent, trace-only or caught-by-timeout with a one-line reason in `../pmtest/differential-test-bed/findings/mutants.md` "### Phase 8" — including the shape the backlog predicted: a mutant that makes a scheduler loop stop terminating (the closure's `present` dedup guard, the frontier's bit-clearing walk, `schedule_graph`'s prune loop) is *caught by timeout*, recorded rather than pinned around. No fixture was added, no seam was needed, and the phase changes no product byte (`git diff` touches only `merge_order.rs`'s `#[cfg(test)] mod tests`). Detail: `docs/06.144-146-merge-order-unit-tests.md`; the campaign ran with its own `CARGO_TARGET_DIR` while Phase 7a's `l3-core` run held `rust/target/release`.
