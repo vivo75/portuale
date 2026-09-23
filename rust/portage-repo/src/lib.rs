@@ -2065,7 +2065,9 @@ fn strip_version_prefix<'a>(dir_name: &'a str, package: &str) -> Option<&'a str>
 /// itself contain digit-led words (`foo-1bar-2.0` -> `foo-1bar`).
 /// Needed by the md5-cache validator to find an entry's ebuild
 /// (`<repo>/<cat>/<pn>/<pf>.ebuild`); the inverse of
-/// [`strip_version_prefix`].
+/// [`strip_version_prefix`]. Since #127 this is the single copy: the
+/// former `portuale::remote_bundle::split_pf` and this crate's private
+/// `split_installed_dir` were deleted for it.
 pub fn split_pf(pf: &str) -> Option<(String, String)> {
     let words: Vec<&str> = pf.split('-').collect();
     for i in 1..words.len() {
@@ -7235,7 +7237,7 @@ fn all_installed_packages_uncached(root: &Path) -> Vec<InstalledPackage> {
         };
         for pkg in pkgs.into_iter().filter(|e| e.path().is_dir()) {
             let dirname = pkg.file_name().to_string_lossy().to_string();
-            let Some((name, version)) = split_installed_dir(&dirname) else {
+            let Some((name, version)) = split_pf(&dirname) else {
                 continue;
             };
             // #109 S3: through the shared `vdb_aux_get` seam, so a valid
@@ -7302,17 +7304,6 @@ pub fn all_cp(repos: &[RepoConfig]) -> Vec<String> {
         }
     }
     out.into_iter().collect()
-}
-
-fn split_installed_dir(dirname: &str) -> Option<(String, String)> {
-    let parts: Vec<&str> = dirname.split('-').collect();
-    for i in 1..parts.len() {
-        let version = parts[i..].join("-");
-        if portage_versions::ververify(&version) {
-            return Some((parts[..i].join("-"), version));
-        }
-    }
-    None
 }
 
 /// Real `emerge --depclean`'s own removal list (`_calc_depclean` +
@@ -27338,6 +27329,30 @@ mod tests {
     fn vdb_entry_slot_returns_empty_for_an_unsplittable_pf() {
         let root = tmp_vdb("dev-libs", "not-a-version-dir", &[]);
         assert_eq!(vdb_entry_slot(&root, "dev-libs", "not-a-version-dir"), "");
+    }
+
+    /// #127: the public splitter's advertised disambiguation, pinned
+    /// for the first time -- a digit-led word belongs to the name
+    /// (`foo-1bar-2.0` -> `foo-1bar`) and a `-r<digits>` word is not a
+    /// version on its own (`foo-r1-2.0` must not mis-split as
+    /// `("foo", "r1-2.0")`). Expected values are real `_pkgsplit`
+    /// (`pkgsplit('foo-1bar-2.0') == ('foo-1bar', '2.0', 'r0')`,
+    /// `pkgsplit('foo-r1-2.0') == ('foo-r1', '2.0', 'r0')`, system
+    /// Portage 2026-09-23).
+    #[test]
+    fn split_pf_keeps_a_digit_led_word_in_the_package_name() {
+        assert_eq!(
+            split_pf("foo-1bar-2.0"),
+            Some(("foo-1bar".to_string(), "2.0".to_string()))
+        );
+    }
+
+    #[test]
+    fn split_pf_does_not_mis_split_a_revision_led_name() {
+        assert_eq!(
+            split_pf("foo-r1-2.0"),
+            Some(("foo-r1".to_string(), "2.0".to_string()))
+        );
     }
 
     /// #109 S3: the snapshot parse is real's `_read_metadata_file` --

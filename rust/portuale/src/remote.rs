@@ -1651,9 +1651,9 @@ impl VdbShadow {
     }
 
     /// True when `pf` belongs to package `pn` (real `_pkgsplit`
-    /// longest-trailing-version rule via `split_pf`).
+    /// longest-trailing-version rule via `portage_repo::split_pf`).
     fn same_package(pf: &str, pn: &str) -> bool {
-        crate::remote_bundle::split_pf(pf).is_some_and(|(name, _)| name == pn)
+        portage_repo::split_pf(pf).is_some_and(|(name, _)| name == pn)
     }
 }
 

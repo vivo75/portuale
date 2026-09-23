@@ -92,7 +92,7 @@ pub struct StagedBundle {
     pub tarball: PathBuf,
     /// Server-side `_pkgsplit` values, re-exported by the phase driver:
     /// the binary-branch load filter strips `CATEGORY/PVR/PF/PN/PR/PV/P`
-    /// from the saved environment (see `split_pf`), so -- like local
+    /// from the saved environment (see `portage_repo::split_pf`), so -- like local
     /// `phase_env_vars` -- these travel outside the file.
     pub eapi: String,
     pub category: String,
@@ -116,28 +116,6 @@ pub struct StagedBundle {
     /// as `phases`, checked against the `postinst` word). Non-fatal on
     /// failure, like the local merge.
     pub postinst_defined: bool,
-}
-
-/// Split `package-version` (`PF` without category) into `(PN, PVR)`
-/// the way real `_pkgsplit` does: the version is the longest trailing
-/// `-`-separated suffix that `ververify` accepts, so a package name may
-/// itself contain digit-led words (`foo-1bar-2.0` -> `foo-1bar`).
-/// Needed because the binary-branch load filter strips
-/// `CATEGORY/PVR/PF/PN/PR/PV/P` from the saved environment (package
-/// renames must not leak across), so the driver re-exports them from
-/// server-side values -- mirroring local `phase_env_vars`.
-pub fn split_pf(pf: &str) -> Option<(String, String)> {
-    let words: Vec<&str> = pf.split('-').collect();
-    for i in 1..words.len() {
-        let candidate = words[i..].join("-");
-        // A `-r<digits>` revision belongs to the version, not the name --
-        // but only when the rest still verifies (else `foo-r1-2.0` would
-        // mis-split; real `_pkgsplit` has the same shape).
-        if portage_versions::ververify(&candidate) {
-            return Some((words[..i].join("-"), candidate));
-        }
-    }
-    None
 }
 
 /// Split `PVR` into `(PV, PR)`: trailing `-r<digits>` is the revision,
@@ -443,8 +421,8 @@ pub fn build_bundle(
     let byte_count = std::fs::metadata(&tarball)
         .map_err(|e| format!("{}: {e}", tarball.display()))?
         .len();
-    let (pn, pvr) =
-        split_pf(&pf).ok_or_else(|| format!("{}: cannot split package name from version", pf))?;
+    let (pn, pvr) = portage_repo::split_pf(&pf)
+        .ok_or_else(|| format!("{}: cannot split package name from version", pf))?;
     let (pv, pr) = split_pvr(&pvr);
     let p = format!("{pn}-{pv}");
     let ebuild_file = build_info.join(format!("{pf}.ebuild"));

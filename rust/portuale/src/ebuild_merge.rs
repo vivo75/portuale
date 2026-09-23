@@ -2905,7 +2905,7 @@ fn find_owners(root: &Path, collisions: &[String]) -> BTreeMap<String, Vec<Strin
                 continue;
             }
             let pf = pkg_entry.file_name().to_string_lossy().to_string();
-            let Some((package, version)) = crate::remote_bundle::split_pf(&pf) else {
+            let Some((package, version)) = portage_repo::split_pf(&pf) else {
                 continue;
             };
             let mut claimed = Vec::new();
