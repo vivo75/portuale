@@ -141,6 +141,139 @@ fn dep_edges_from_metadata_pins_every_key_and_priority() {
 }
 
 #[test]
+fn dep_edges_from_metadata_pins_blockers_slot_ops_and_disjunctions() {
+    let metadata = dep_metadata(&[(
+        "RDEPEND",
+        "!dev-libs/blocked dev-libs/plain dev-libs/slotop:= || ( dev-libs/alt-a dev-libs/alt-b )",
+    )]);
+    let edges = dep_edges_from_metadata(&metadata, &HashSet::new(), &["RDEPEND"], false);
+    let atoms: HashSet<&str> = edges.iter().map(|e| e.atom.as_str()).collect();
+    assert!(
+        !atoms.contains("!dev-libs/blocked"),
+        "a blocker is never a merge-order edge: {atoms:?}"
+    );
+    assert_eq!(
+        edges.len(),
+        4,
+        "plain + slot-op + two alternatives: {edges:#?}"
+    );
+    let plain = edges.iter().find(|e| e.atom == "dev-libs/plain").unwrap();
+    assert!(
+        plain.priority.runtime && !plain.priority.runtime_slot_op,
+        "a plain atom is not slot-operator: {:?}",
+        plain.priority
+    );
+    let slotop = edges
+        .iter()
+        .find(|e| e.atom == "dev-libs/slotop:=")
+        .unwrap();
+    assert!(
+        slotop.priority.runtime && slotop.priority.runtime_slot_op,
+        "`:=` promotes the runtime key: {:?}",
+        slotop.priority
+    );
+    let alt_a = edges.iter().find(|e| e.atom == "dev-libs/alt-a").unwrap();
+    let alt_b = edges.iter().find(|e| e.atom == "dev-libs/alt-b").unwrap();
+    assert_eq!(alt_a.alt, Some((0, 0)));
+    assert_eq!(alt_b.alt, Some((0, 1)));
+    assert!(alt_a.disjunctive && alt_b.disjunctive);
+    // A build-time `:=` promotes `buildtime_slot_op`, not runtime.
+    let metadata = dep_metadata(&[("DEPEND", "dev-libs/dep:=")]);
+    let edges = dep_edges_from_metadata(&metadata, &HashSet::new(), &["DEPEND"], false);
+    assert_eq!(edges.len(), 1);
+    assert!(
+        edges[0].priority.buildtime && edges[0].priority.buildtime_slot_op,
+        "{:?}",
+        edges[0].priority
+    );
+    assert!(!edges[0].priority.runtime && !edges[0].priority.runtime_slot_op);
+}
+
+#[test]
+fn split_disjunctive_pins_group_and_branch_bookkeeping() {
+    // Inline atoms only.
+    assert_eq!(
+        split_disjunctive(&tokens(&["dev-libs/a", "dev-libs/b"])),
+        (tokens(&["dev-libs/a", "dev-libs/b"]), vec![])
+    );
+    // One `||` group, bare alternatives: each atom is its own branch.
+    assert_eq!(
+        split_disjunctive(&tokens(&["||", "(", "dev-libs/a", "dev-libs/b", ")"])),
+        (
+            vec![],
+            vec![
+                ("dev-libs/a".to_string(), 0, 0),
+                ("dev-libs/b".to_string(), 0, 1),
+            ]
+        )
+    );
+    // A nested multi-atom branch keeps one branch number for every
+    // atom inside it.
+    assert_eq!(
+        split_disjunctive(&tokens(&[
+            "||",
+            "(",
+            "(",
+            "dev-libs/a",
+            "dev-libs/b",
+            ")",
+            "dev-libs/c",
+            ")"
+        ])),
+        (
+            vec![],
+            vec![
+                ("dev-libs/a".to_string(), 0, 0),
+                ("dev-libs/b".to_string(), 0, 0),
+                ("dev-libs/c".to_string(), 0, 1),
+            ]
+        )
+    );
+    // A second `||` group counts separately.
+    assert_eq!(
+        split_disjunctive(&tokens(&[
+            "||",
+            "(",
+            "dev-libs/a",
+            ")",
+            "||",
+            "(",
+            "dev-libs/b",
+            ")"
+        ])),
+        (
+            vec![],
+            vec![
+                ("dev-libs/a".to_string(), 0, 0),
+                ("dev-libs/b".to_string(), 1, 0),
+            ]
+        )
+    );
+    // A `virtual/*` atom outside a group is deferred with the
+    // sentinel group/branch; anything else stays inline.
+    assert_eq!(
+        split_disjunctive(&tokens(&["virtual/foo", "dev-libs/a"])),
+        (
+            tokens(&["dev-libs/a"]),
+            vec![("virtual/foo".to_string(), u32::MAX, u32::MAX)]
+        )
+    );
+    // After the group closes, atoms are inline again; a `||` with no
+    // following group is not a deferral.
+    assert_eq!(
+        split_disjunctive(&tokens(&["||", "(", "dev-libs/a", ")", "dev-libs/b"])),
+        (
+            tokens(&["dev-libs/b"]),
+            vec![("dev-libs/a".to_string(), 0, 0)]
+        )
+    );
+    assert_eq!(
+        split_disjunctive(&tokens(&["||", "dev-libs/a"])),
+        (tokens(&["dev-libs/a"]), vec![])
+    );
+}
+
+#[test]
 fn ignore_predicates_pin_every_ladder_rung() {
     // The expected value of every `ignore_priority` predicate for every
     // combination of `DepPriority` flags.
@@ -260,4 +393,142 @@ fn ignore_predicates_pin_every_ladder_rung() {
             "s_ignore_runtime {word}"
         );
     }
+}
+
+#[test]
+fn ignore_name_pins_every_traced_filter() {
+    assert_eq!(ignore_name(None), "none");
+    assert_eq!(ignore_name(Some(Ignore::NOptional)), "ignore_optional");
+    assert_eq!(
+        ignore_name(Some(Ignore::NRuntimePost)),
+        "ignore_runtime_post"
+    );
+    assert_eq!(ignore_name(Some(Ignore::NRuntime)), "ignore_runtime");
+    assert_eq!(ignore_name(Some(Ignore::SOptional)), "ignore_optional");
+    assert_eq!(
+        ignore_name(Some(Ignore::SSatisfiedRuntimePost)),
+        "ignore_satisfied_runtime_post"
+    );
+    assert_eq!(
+        ignore_name(Some(Ignore::SRuntimePost)),
+        "ignore_runtime_post"
+    );
+    assert_eq!(
+        ignore_name(Some(Ignore::SSatisfiedRuntime)),
+        "ignore_satisfied_runtime"
+    );
+    assert_eq!(
+        ignore_name(Some(Ignore::SSatisfiedBuildtime)),
+        "ignore_satisfied_buildtime"
+    );
+    assert_eq!(
+        ignore_name(Some(Ignore::SSatisfiedBuildtimeSlotOp)),
+        "ignore_satisfied_buildtime_slot_op"
+    );
+    assert_eq!(ignore_name(Some(Ignore::SRuntime)), "ignore_runtime");
+}
+
+#[test]
+fn priority_ranges_pin_their_named_rungs() {
+    // Every ladder index resolves to the predicate of its documented name.
+    for word in 0..128u64 {
+        let p = prio(word);
+        assert_eq!(
+            NORMAL.ig(1).unwrap().ignores(&p),
+            n_ignore_optional(&p),
+            "NORMAL.ig(1) {word}"
+        );
+        assert_eq!(
+            NORMAL.ig(2).unwrap().ignores(&p),
+            n_ignore_runtime_post(&p),
+            "NORMAL.ig(2) {word}"
+        );
+        assert_eq!(
+            NORMAL.ig(3).unwrap().ignores(&p),
+            n_ignore_runtime(&p),
+            "NORMAL.ig(3) {word}"
+        );
+        assert_eq!(
+            SATISFIED.ig(1).unwrap().ignores(&p),
+            s_ignore_optional(&p),
+            "SATISFIED.ig(1)"
+        );
+        assert_eq!(
+            SATISFIED.ig(2).unwrap().ignores(&p),
+            s_ignore_satisfied_runtime_post(&p),
+            "SATISFIED.ig(2) {word}"
+        );
+        assert_eq!(
+            SATISFIED.ig(3).unwrap().ignores(&p),
+            s_ignore_runtime_post(&p),
+            "SATISFIED.ig(3) {word}"
+        );
+        assert_eq!(
+            SATISFIED.ig(4).unwrap().ignores(&p),
+            s_ignore_satisfied_runtime(&p),
+            "SATISFIED.ig(4) {word}"
+        );
+        assert_eq!(
+            SATISFIED.ig(5).unwrap().ignores(&p),
+            s_ignore_satisfied_buildtime(&p),
+            "SATISFIED.ig(5) {word}"
+        );
+        assert_eq!(
+            SATISFIED.ig(6).unwrap().ignores(&p),
+            s_ignore_satisfied_buildtime_slot_op(&p),
+            "SATISFIED.ig(6) {word}"
+        );
+        assert_eq!(
+            SATISFIED.ig(7).unwrap().ignores(&p),
+            s_ignore_runtime(&p),
+            "SATISFIED.ig(7)"
+        );
+        assert_eq!(
+            NORMAL.ig_medium().unwrap().ignores(&p),
+            n_ignore_runtime(&p),
+            "medium"
+        );
+        assert_eq!(
+            NORMAL.ig_medium_soft().unwrap().ignores(&p),
+            n_ignore_runtime_post(&p),
+            "medium_soft"
+        );
+        assert_eq!(
+            SATISFIED.ig_medium().unwrap().ignores(&p),
+            s_ignore_runtime(&p),
+            "s-medium"
+        );
+        assert_eq!(
+            SATISFIED.ig_medium_soft().unwrap().ignores(&p),
+            s_ignore_satisfied_buildtime_slot_op(&p),
+            "s-medium_soft"
+        );
+    }
+    assert_eq!(
+        (NORMAL.medium, NORMAL.medium_soft, NORMAL.medium_post),
+        (3, 2, 2)
+    );
+    assert_eq!(
+        (
+            SATISFIED.medium,
+            SATISFIED.medium_soft,
+            SATISFIED.medium_post
+        ),
+        (7, 6, 3)
+    );
+    assert!(NORMAL.ig(0).is_none(), "the NORMAL ladder starts at NONE");
+}
+
+// -----------------------------------------------------------------
+// Follow-up: survivors of the first after-run
+// -----------------------------------------------------------------
+
+#[test]
+fn split_disjunctive_keeps_a_group_when_a_second_group_marker_is_pending() {
+    // A defensive-shape pin: `||` immediately followed by another group
+    // inside an open group must not restart the bookkeeping.
+    assert_eq!(
+        split_disjunctive(&tokens(&["||", "(", "||", "(", "dev-libs/a", ")", ")"])),
+        (vec![], vec![("dev-libs/a".to_string(), 0, 0)])
+    );
 }

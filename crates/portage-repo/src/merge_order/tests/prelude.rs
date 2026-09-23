@@ -106,6 +106,43 @@ fn select_dep_target_narrows_and_ranks_like_portage() {
 }
 
 #[test]
+fn select_dep_target_elimination_keeps_the_last_on_a_version_tie() {
+    // Two same-version candidates: elimination keeps the last.
+    let runtime = DepPriority {
+        runtime: true,
+        ..DepPriority::default()
+    };
+    let mut x1 = new_entry("dev-libs", "x", "1.0", Vec::new());
+    x1.slot = Some("0".into());
+    x1.sub_slot = Some("0".into());
+    let mut x2 = new_entry("dev-libs", "x", "1.0", Vec::new());
+    x2.slot = Some("1".into());
+    x2.sub_slot = Some("1".into());
+    let user = new_entry(
+        "dev-libs",
+        "user",
+        "1.0",
+        vec![plain_edge("dev-libs/x", "dev-libs", "x", runtime)],
+    );
+    let entries = vec![x1, x2, user];
+    let root = Path::new("/nonexistent-root-for-unit-test");
+    let pre = digraph_prelude(&entries, root);
+    let none = HashSet::new();
+    assert_eq!(
+        pre.select_dep_target(SelectDepTargetArgs {
+            entries: &entries,
+            from: 2,
+            from_deps: &entries[2].deps,
+            ei: 0,
+            suppressed: &none,
+            merge_bound_only: false
+        }),
+        Some(1),
+        "two candidates take the elimination path, which keeps the last"
+    );
+}
+
+#[test]
 fn select_dep_target_elimination_orders_installed_before_merge_bound() {
     let runtime = DepPriority {
         runtime: true,
@@ -201,5 +238,122 @@ fn select_dep_target_keeps_nvc_out_of_the_elimination() {
         }),
         Some(0),
         "the NVC candidate stays in the ranking"
+    );
+}
+
+#[test]
+fn select_dep_target_runs_elimination_for_three_candidates() {
+    // Three matching slots and two kept sibling atoms: elimination leaves
+    // x1; the rank-only path would pick the vercmp-highest x3.
+    let runtime = DepPriority {
+        runtime: true,
+        ..DepPriority::default()
+    };
+    let mut x1 = new_entry("dev-libs", "x", "1.0", Vec::new());
+    x1.slot = Some("0".into());
+    x1.sub_slot = Some("0".into());
+    let mut x2 = new_entry("dev-libs", "x", "2.0", Vec::new());
+    x2.slot = Some("1".into());
+    x2.sub_slot = Some("1".into());
+    let mut x3 = new_entry("dev-libs", "x", "3.0", Vec::new());
+    x3.slot = Some("2".into());
+    x3.sub_slot = Some("2".into());
+    // Two separate `||` groups (different keys), so both branches are
+    // kept.
+    let bare = DepEdge {
+        atom: "dev-libs/x".to_string(),
+        evaluated: "dev-libs/x".to_string(),
+        category: "dev-libs".to_string(),
+        package: "x".to_string(),
+        priority: runtime,
+        disjunctive: true,
+        alt: Some((0, 0)),
+        key: 0,
+    };
+    let qualified = DepEdge {
+        atom: "dev-libs/x:0".to_string(),
+        evaluated: "dev-libs/x:0".to_string(),
+        category: "dev-libs".to_string(),
+        package: "x".to_string(),
+        priority: runtime,
+        disjunctive: true,
+        alt: Some((0, 0)),
+        key: 3,
+    };
+    let user = new_entry("dev-libs", "user", "1.0", vec![bare, qualified]);
+    let entries = vec![x1, x2, x3, user];
+    let root = Path::new("/nonexistent-root-for-unit-test");
+    let pre = digraph_prelude(&entries, root);
+    let none = HashSet::new();
+    assert_eq!(
+        pre.select_dep_target(SelectDepTargetArgs {
+            entries: &entries,
+            from: 3,
+            from_deps: &entries[3].deps,
+            ei: 0,
+            suppressed: &none,
+            merge_bound_only: false
+        }),
+        Some(0),
+        "the elimination leaves only the candidate no sibling set fully shares"
+    );
+}
+
+#[test]
+fn rank_best_prefers_merge_bound_then_vercmp() {
+    let entries = vec![
+        new_entry("dev-libs", "a", "1.0", Vec::new()),
+        new_entry("dev-libs", "a", "2.0", Vec::new()),
+        new_entry("dev-libs", "a", "1.5", Vec::new()),
+    ];
+    // A merge-bound 1.0 beats an installed 2.0.
+    let installed = vec![false, true, true];
+    assert_eq!(
+        DigraphPrelude::rank_best(&entries, &installed, [0usize, 1].into_iter()),
+        Some(0)
+    );
+    // Among installed candidates, vercmp picks the highest, not the
+    // first or the string-highest.
+    let installed = vec![true, true, true];
+    assert_eq!(
+        DigraphPrelude::rank_best(&entries, &installed, [0usize, 1, 2].into_iter()),
+        Some(1)
+    );
+    assert_eq!(
+        DigraphPrelude::rank_best(&entries, &installed, [1usize, 0].into_iter()),
+        Some(1)
+    );
+    // A version tie keeps the first candidate.
+    let tied = vec![
+        new_entry("dev-libs", "b", "1.0", Vec::new()),
+        new_entry("dev-libs", "b", "1.0", Vec::new()),
+    ];
+    assert_eq!(
+        DigraphPrelude::rank_best(&tied, &[true, true], [0usize, 1].into_iter()),
+        Some(0)
+    );
+    // One candidate, and the empty set.
+    assert_eq!(
+        DigraphPrelude::rank_best(&entries, &installed, [2usize].into_iter()),
+        Some(2)
+    );
+    assert_eq!(
+        DigraphPrelude::rank_best(&entries, &installed, std::iter::empty()),
+        None
+    );
+}
+
+#[test]
+fn rank_best_prefers_a_merge_bound_candidate_over_a_newer_installed_one() {
+    let entries = vec![
+        new_entry("dev-libs", "a", "2.0", Vec::new()),
+        new_entry("dev-libs", "a", "1.0", Vec::new()),
+    ];
+    let installed = vec![true, false];
+    // Installed first, merge-bound second: the `(true, false)` arm picks
+    // the merge-bound one despite the higher installed version.
+    assert_eq!(
+        DigraphPrelude::rank_best(&entries, &installed, [0usize, 1].into_iter()),
+        Some(1)
     );
 }

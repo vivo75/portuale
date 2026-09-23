@@ -142,3 +142,35 @@ fn frontier_add_edge_only_grows_survival() {
     fr.add_edge(2, None, &[]);
     assert!(fr.surv.len() > 2);
 }
+
+// -----------------------------------------------------------------
+// The scheduler loop
+// -----------------------------------------------------------------
+
+#[test]
+fn digraph_child_nodes_and_has_parents_pin_the_alive_filter() {
+    let mut g = test_graph(3, &[(0, 1, prio(2)), (0, 2, prio(32))]);
+    assert_eq!(g.child_nodes(0, None), vec![1, 2]);
+    assert!(g.has_parents(1));
+    assert!(!g.has_parents(0));
+    // The optional edge drops under `n_ignore_optional`.
+    assert_eq!(g.child_nodes(0, Some(Ignore::NOptional)), vec![1]);
+    // A dead child disappears.
+    g.alive[1] = false;
+    assert_eq!(g.child_nodes(0, None), vec![2]);
+    // A dead parent does not count.
+    g.alive[0] = false;
+    assert!(!g.has_parents(2));
+}
+
+#[test]
+fn digraph_add_edge_merges_priorities_without_duplicates() {
+    let mut g = test_graph(2, &[]);
+    g.add_edge(0, 1, prio(2));
+    g.add_edge(0, 1, prio(2));
+    assert_eq!(g.children[0].len(), 1);
+    assert_eq!(g.children[0][0].1, vec![prio(2)]);
+    g.add_edge(0, 1, prio(1));
+    assert_eq!(g.children[0][0].1, vec![prio(2), prio(1)]);
+    assert_eq!(g.parents[1], vec![0]);
+}

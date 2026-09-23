@@ -192,6 +192,17 @@ fn fixtures_vdb_root() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
 }
 
+fn installed_by_cp(rows: &[(&str, &str, &[&str])]) -> HashMap<(String, String), Vec<String>> {
+    let mut m = HashMap::new();
+    for (cat, pkg, cands) in rows {
+        m.insert(
+            (cat.to_string(), pkg.to_string()),
+            cands.iter().map(|s| s.to_string()).collect(),
+        );
+    }
+    m
+}
+
 fn runtime_edge(atom: &str, cat: &str, pkg: &str) -> DepEdge {
     plain_edge(
         atom,
@@ -217,6 +228,7 @@ mod build;
 mod cycles;
 mod debug;
 mod digraph;
+mod installed_closure;
 mod prelude;
 mod priority;
 mod select_nodes;
