@@ -168,6 +168,45 @@ fn build_digraph_drops_self_edges_except_unsatisfied_buildtime() {
 }
 
 #[test]
+fn build_digraph_skips_a_blocker_and_a_nonmatching_top_atom() {
+    let root = Path::new("/nonexistent-root-for-unit-test");
+    let a = new_entry("dev-libs", "a", "1.0", Vec::new());
+    let b = new_entry("dev-libs", "b", "1.0", Vec::new());
+    let entries = vec![a, b];
+    // A blocker top-level atom is skipped; the second atom seeds.
+    let g = build_digraph(
+        &entries,
+        &["!dev-libs/a".to_string(), "dev-libs/b".to_string()],
+        root,
+        &HashMap::new(),
+    );
+    assert_eq!(
+        g.order,
+        vec![1, 0],
+        "b seeds, a is appended unwalked: {:?}",
+        g.order
+    );
+    // A version-qualified top atom seeds only its matching instance.
+    let a1 = new_entry("dev-libs", "a", "1.0", Vec::new());
+    let mut a2 = new_entry("dev-libs", "a", "2.0", Vec::new());
+    a2.slot = Some("2".into());
+    a2.sub_slot = Some("2".into());
+    let entries = vec![a1, a2];
+    let g = build_digraph(
+        &entries,
+        &["<dev-libs/a-2".to_string()],
+        root,
+        &HashMap::new(),
+    );
+    assert_eq!(
+        g.order,
+        vec![0, 1],
+        "1.0 is seeded, 2.0 appended: {:?}",
+        g.order
+    );
+}
+
+#[test]
 fn build_digraph_walks_inline_before_deferred_disjunctive_edges() {
     let root = Path::new("/nonexistent-root-for-unit-test");
     let runtime = DepPriority {
@@ -250,6 +289,46 @@ fn build_digraph_uninstall_pairs_the_owner_before_the_removal() {
 }
 
 #[test]
+fn build_digraph_required_by_fallback_adds_only_the_missing_owner_edge() {
+    let root = Path::new("/nonexistent-root-for-unit-test");
+    // The forward walk missed the owner, so the fallback supplies it.
+    let mut dep = new_entry("dev-libs", "dep", "1.0", Vec::new());
+    dep.required_by = vec![("dev-libs".to_string(), "owner".to_string())];
+    let owner = new_entry("dev-libs", "owner", "1.0", Vec::new());
+    let entries = vec![owner.clone(), dep.clone()];
+    let g = build_digraph(
+        &entries,
+        &["dev-libs/owner".to_string()],
+        root,
+        &HashMap::new(),
+    );
+    let fallback = g.children[0]
+        .iter()
+        .find(|(c, _)| *c == 1)
+        .expect("fallback edge owner -> dep");
+    assert!(
+        fallback.1[0].runtime && !fallback.1[0].satisfied,
+        "fallback priority: {:?}",
+        fallback.1
+    );
+    // With an unrelated child already on the owner, the fallback still
+    // appears (the skip is keyed to the removal's own index).
+    let leaf = new_entry("dev-libs", "leaf", "1.0", Vec::new());
+    let entries = vec![owner, dep, leaf];
+    let g = build_digraph(
+        &entries,
+        &["dev-libs/owner".to_string(), "dev-libs/leaf".to_string()],
+        root,
+        &HashMap::new(),
+    );
+    assert!(
+        g.children[0].iter().any(|(c, _)| *c == 1),
+        "fallback edge still added beside an unrelated child: {:?}",
+        g.children[0]
+    );
+}
+
+#[test]
 fn build_digraph_fallback_skips_a_cp_the_owner_already_edged() {
     let root = Path::new("/nonexistent-root-for-unit-test");
     let runtime = DepPriority {
@@ -309,6 +388,93 @@ fn build_digraph_fallback_skips_a_cp_the_owner_already_edged() {
 }
 
 #[test]
+fn build_digraph_skips_a_self_named_required_by() {
+    let root = Path::new("/nonexistent-root-for-unit-test");
+    let mut a = new_entry("dev-libs", "a", "1.0", Vec::new());
+    a.required_by = vec![("dev-libs".to_string(), "a".to_string())];
+    let entries = vec![a];
+    let g = build_digraph(&entries, &["dev-libs/a".to_string()], root, &HashMap::new());
+    assert!(
+        g.children[0].is_empty(),
+        "a self fallback edge is skipped: {:?}",
+        g.children[0]
+    );
+}
+
+#[test]
+fn build_digraph_expands_disjunctive_bundles_by_their_own_key() {
+    // Two deferred bundles from different dep keys each expand only their
+    // own key's edges; the LIFO pop expands DEPEND's before RDEPEND's.
+    let runtime = DepPriority {
+        runtime: true,
+        ..DepPriority::default()
+    };
+    let mut rdep = plain_edge("dev-libs/b", "dev-libs", "b", runtime);
+    rdep.disjunctive = true;
+    rdep.alt = Some((0, 0));
+    rdep.key = 0;
+    let mut dep = plain_edge("dev-libs/c", "dev-libs", "c", runtime);
+    dep.disjunctive = true;
+    dep.alt = Some((0, 0));
+    dep.key = 3;
+    let owner = new_entry(
+        "dev-libs",
+        "owner",
+        "1.0",
+        vec![
+            plain_edge("dev-libs/a", "dev-libs", "a", runtime),
+            rdep,
+            dep,
+        ],
+    );
+    let entries = vec![
+        owner,
+        new_entry("dev-libs", "a", "1.0", Vec::new()),
+        new_entry("dev-libs", "b", "1.0", Vec::new()),
+        new_entry("dev-libs", "c", "1.0", Vec::new()),
+    ];
+    let root = Path::new("/nonexistent-root-for-unit-test");
+    let g = build_digraph(
+        &entries,
+        &["dev-libs/owner".to_string()],
+        root,
+        &HashMap::new(),
+    );
+    assert_eq!(
+        g.order,
+        vec![0, 1, 3, 2],
+        "inline a, then DEPEND's bundle (c), then RDEPEND's (b)"
+    );
+}
+
+#[test]
+fn build_digraph_required_by_fallback_marks_an_installed_target_satisfied() {
+    let mut dep = new_entry("dev-libs", "dep", "1.0", Vec::new());
+    dep.outcome = PretendOutcome::AlreadyInstalled {
+        version: "1.0".into(),
+    };
+    dep.required_by = vec![("dev-libs".to_string(), "owner".to_string())];
+    let owner = new_entry("dev-libs", "owner", "1.0", Vec::new());
+    let entries = vec![owner, dep];
+    let root = Path::new("/nonexistent-root-for-unit-test");
+    let g = build_digraph(
+        &entries,
+        &["dev-libs/owner".to_string()],
+        root,
+        &HashMap::new(),
+    );
+    let fallback = g.children[0]
+        .iter()
+        .find(|(c, _)| *c == 1)
+        .expect("fallback edge owner -> dep");
+    assert!(
+        fallback.1[0].runtime && fallback.1[0].satisfied,
+        "an installed target's fallback edge is satisfied: {:?}",
+        fallback.1
+    );
+}
+
+#[test]
 fn deep_system_deps_follows_only_runtime_edges() {
     let config = portage_profile::Config {
         system_packages: vec!["dev-libs/sys".to_string()],
@@ -332,4 +498,88 @@ fn deep_system_deps_follows_only_runtime_edges() {
         deep_system_deps(&g, &entries, &config),
         vec![true, true, false, true]
     );
+}
+
+#[test]
+fn seed_toolchain_asap_pins_the_provider_lookup() {
+    // Two new providers, plus a duplicate atom and an installed one that
+    // must not be seeded.
+    let entries = vec![
+        {
+            let mut e = new_entry(
+                "virtual",
+                "os-headers",
+                "1.0",
+                vec![
+                    rdepend_edge("sys-kernel/headers", "sys-kernel", "headers"),
+                    rdepend_edge(">=sys-kernel/headers-1", "sys-kernel", "headers"),
+                    rdepend_edge("sys-kernel/oldheaders", "sys-kernel", "oldheaders"),
+                ],
+            );
+            e.outcome = PretendOutcome::AlreadyInstalled {
+                version: "1.0".into(),
+            };
+            e
+        },
+        new_entry("sys-kernel", "headers", "6.0", Vec::new()),
+        {
+            let mut e = new_entry(
+                "virtual",
+                "libc",
+                "1.0",
+                vec![
+                    rdepend_edge("sys-kernel/headers", "sys-kernel", "headers"),
+                    rdepend_edge("sys-libs/libc", "sys-libs", "libc"),
+                ],
+            );
+            e.outcome = PretendOutcome::AlreadyInstalled {
+                version: "1.0".into(),
+            };
+            e
+        },
+        new_entry("sys-libs", "other", "1.0", Vec::new()),
+        new_entry("sys-libs", "libc", "2.0", Vec::new()),
+        {
+            let mut e = new_entry("sys-kernel", "oldheaders", "5.0", Vec::new());
+            e.outcome = PretendOutcome::AlreadyInstalled {
+                version: "5.0".into(),
+            };
+            e
+        },
+    ];
+    // The duplicate atom is deduped and the installed provider skipped.
+    assert_eq!(seed_toolchain_asap(&entries), vec![1, 4]);
+    // A reinstall provider is not seeded.
+    let mut entries = entries;
+    entries[1].outcome = PretendOutcome::Reinstall {
+        version: "6.0".into(),
+        changed_flags: vec!["flip".into()],
+        deps_changed: false,
+        slot_changed: false,
+        rebuilt_binary: false,
+        new_repo: false,
+        slot_operator_rebuild: false,
+    };
+    assert_eq!(seed_toolchain_asap(&entries), vec![4]);
+}
+
+#[test]
+fn gather_deps_collects_the_filtered_closure_and_rejects_escapes() {
+    let g = test_graph(4, &[(0, 1, prio(2)), (1, 2, prio(2)), (0, 3, prio(32))]);
+    let mergeable: HashSet<usize> = [0, 1, 2, 3].into_iter().collect();
+    assert_eq!(
+        gather_deps(&g, 0, None, &mergeable),
+        Some([0, 1, 2, 3].into_iter().collect())
+    );
+    // The optional child 3 escapes the mergeable set.
+    let mergeable: HashSet<usize> = [0, 1, 2].into_iter().collect();
+    assert_eq!(gather_deps(&g, 0, None, &mergeable), None);
+    // The filter drops the escaping optional edge.
+    assert_eq!(
+        gather_deps(&g, 0, Some(Ignore::NOptional), &mergeable),
+        Some([0, 1, 2].into_iter().collect())
+    );
+    // A deeper escape is rejected too.
+    let mergeable: HashSet<usize> = [0].into_iter().collect();
+    assert_eq!(gather_deps(&g, 0, None, &mergeable), None, "1 escapes");
 }

@@ -302,3 +302,81 @@ fn select_dep_target_eliminates_with_suppressed_sibling_sets() {
         "the suppressed sibling's set must not enter the elimination"
     );
 }
+
+// -----------------------------------------------------------------
+// Survivors of the first cluster run
+// -----------------------------------------------------------------
+
+#[test]
+fn suppressed_alt_edges_requires_every_atom_of_a_branch_to_match() {
+    let runtime = DepPriority {
+        runtime: true,
+        ..DepPriority::default()
+    };
+    let alt_edge = |atom: &str, cat: &str, pkg: &str, branch: u32| {
+        let mut e = plain_edge(atom, cat, pkg, runtime);
+        e.disjunctive = true;
+        e.alt = Some((0, branch));
+        e.key = 3;
+        e
+    };
+    // Branch 0 is only partly installed; branch 1 is fully installed.
+    let mut i1 = new_entry("dev-libs", "i1", "1.0", Vec::new());
+    i1.outcome = PretendOutcome::AlreadyInstalled {
+        version: "1.0".into(),
+    };
+    let mut i2 = new_entry("dev-libs", "i2", "1.0", Vec::new());
+    i2.outcome = PretendOutcome::AlreadyInstalled {
+        version: "1.0".into(),
+    };
+    let mut i3 = new_entry("dev-libs", "i3", "1.0", Vec::new());
+    i3.outcome = PretendOutcome::AlreadyInstalled {
+        version: "1.0".into(),
+    };
+    let owner = new_entry(
+        "app-misc",
+        "owner",
+        "1.0",
+        vec![
+            alt_edge("dev-libs/i1", "dev-libs", "i1", 0),
+            alt_edge("dev-libs/m1", "dev-libs", "m1", 0),
+            alt_edge("dev-libs/i2", "dev-libs", "i2", 1),
+            alt_edge("dev-libs/i3", "dev-libs", "i3", 1),
+        ],
+    );
+    let entries = vec![
+        owner,
+        i1,
+        new_entry("dev-libs", "m1", "1.0", Vec::new()),
+        i2,
+        i3,
+    ];
+    let root = Path::new("/nonexistent-root-for-unit-test");
+    assert_eq!(
+        kept_alt_branches(&entries, root, &HashMap::new())[0],
+        HashSet::from([2usize, 3]),
+        "only a branch whose every atom matches installed wins the all-installed bin"
+    );
+    // A branch matching nothing is no `all_any` candidate: with no other
+    // branch resolving, nothing is suppressed.
+    let owner = new_entry(
+        "app-misc",
+        "owner",
+        "1.0",
+        vec![
+            alt_edge("dev-libs/i1", "dev-libs", "i1", 0),
+            alt_edge("dev-libs/absent", "dev-libs", "absent", 0),
+            alt_edge("dev-libs/absent2", "dev-libs", "absent2", 1),
+        ],
+    );
+    let mut i1 = new_entry("dev-libs", "i1", "1.0", Vec::new());
+    i1.outcome = PretendOutcome::AlreadyInstalled {
+        version: "1.0".into(),
+    };
+    let entries = vec![owner, i1];
+    assert_eq!(
+        kept_alt_branches(&entries, root, &HashMap::new())[0],
+        HashSet::from([0usize, 1, 2]),
+        "no branch fully resolves, so every branch is kept"
+    );
+}
