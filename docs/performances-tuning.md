@@ -505,14 +505,15 @@ it replaced — the ENOENT probes vanish (40,651 → 105) but opens stay
 follows immediately. The plan's S3 expectation (~0.3–0.5 s sys) did not
 materialise; the pair is what ships.
 
-**Real comparison is blocked today (#111).** Real `emerge -puD
---getbinpkg net-libs/rest` now exits 1 on this tree
+**Real comparison was blocked by #111 — unblocked 2026-09-23 (#111 DONE).** Real `emerge -puD
+--getbinpkg net-libs/rest` exits 1 on this tree
 (`~dev-qt/qtbase-6.11.2:6[...]` USE conflict through the installed
-qtdeclarative chain) while portuale resolves the same 27-package plan
-rc 0; `-pv --getbinpkg dev-qt/qtbase` resolves on both. This is a
+qtdeclarative chain) while portuale used to resolve the same 27-package plan
+rc 0; `-pv --getbinpkg dev-qt/qtbase` resolves on both. This was a
 tree-state change, not a #109/#110 effect (the pre-batch baseline binary
-resolves too), but it means the interleaved real wall-time comparison is
-unavailable until #111 is diagnosed.
+resolved too). #132 fixed portuale's side, and the #111 close-out re-probe
+confirms both sides now exit 1 with the identical abort line — so the
+interleaved real wall-time comparison is available again (of two aborts).
 
 Next, in order: #105 (`use_context_fingerprint`, 23.77 % with children),
 then #107 (`run_pass`, 85.44 %, still the algorithmic item), then #112
