@@ -1488,6 +1488,40 @@ mod tests {
         TempDir::new("portuale-ebuild-package-test").keep()
     }
 
+    /// Re-derivation from a resolved list is by plain presence, and the layout
+    /// bit stays run-wide.
+    #[test]
+    fn set_resolved_features_rederives_the_binpkg_affecting_tokens() {
+        let mut options = PackageOptions {
+            buildpkg_live: false,
+            binpkg_multi_instance: false,
+            binpkg_signing: false,
+            ..PackageOptions::default()
+        };
+        options
+            .set_resolved_features("binpkg-multi-instance buildpkg-live binpkg-signing splitdebug");
+        assert!(options.buildpkg_live);
+        assert!(options.binpkg_signing);
+        // The layout bit is run-wide-only: a per-entry token doesn't flip it.
+        assert!(!options.binpkg_multi_instance);
+
+        // A folded list that no longer carries a token turns it back off
+        // -- this is a full re-derivation, not an additive merge.
+        options.set_resolved_features("splitdebug");
+        assert!(!options.buildpkg_live);
+        assert!(!options.binpkg_signing);
+
+        // Config scalars are untouched.
+        assert_eq!(
+            options.binpkg_compress,
+            PackageOptions::default().binpkg_compress
+        );
+        assert_eq!(
+            options.binpkg_format,
+            PackageOptions::default().binpkg_format
+        );
+    }
+
     #[test]
     fn compress_template_covers_exactly_the_real_six_compressors() {
         for name in ["bzip2", "gzip", "lz4", "lzip", "lzop", "xz", "zstd"] {
