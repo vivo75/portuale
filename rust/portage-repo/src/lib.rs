@@ -15961,6 +15961,15 @@ fn grandparent_use_conflict(
 struct PendingBlocker {
     atom_str: String,
     strong: bool,
+    /// #143 S1: real's `blocker.priority.buildtime` — the atom came
+    /// from a build-time dep key (`DEPEND`/`BDEPEND`). Under
+    /// `--buildpkgonly` real clears every blocker's uninstall edge
+    /// unless it is hard (`!!`) *and* buildtime
+    /// (`depgraph.py::_validate_blockers`), so `resolve_blockers`
+    /// needs the provenance to apply the same gate. The all-vdb scan
+    /// only reads IDEPEND/PDEPEND/RDEPEND (never buildtime); the two
+    /// walk sites derive it from the key the token came from.
+    buildtime: bool,
     target_category: String,
     target_package: String,
     owner_key: (String, String),
@@ -16440,6 +16449,9 @@ fn collect_unwalked_installed_blockers(
                     pending_blockers.push(PendingBlocker {
                         atom_str: tok,
                         strong: dep_atom.blocker == portage_dep::Blocker::Strong,
+                        // The scan reads IDEPEND/PDEPEND/RDEPEND only --
+                        // never a build-time key (see the field docs).
+                        buildtime: false,
                         target_category: dep_atom.category,
                         target_package: dep_atom.package,
                         owner_key: self_cp.clone(),
@@ -16478,9 +16490,23 @@ fn resolve_blockers(
     // `entries` never carried the edge (S0 cell g; g3 proves the
     // closure-through-a-world-member half).
     blocker_retry_closure: &HashSet<(String, String)>,
+    // #143 S1: real's `--buildpkgonly` blocker gate
+    // (`depgraph.py::_validate_blockers`: `depends_on_order.clear()`
+    // for every blocker that is not hard-`!!` *and* buildtime, on top
+    // of `_add_pkg_dep_string` blanking RDEPEND/PDEPEND/IDEPEND for a
+    // non-built package). `true` drops soft and runtime-keyed blockers
+    // silently (real's irrelevant-blockers arm) and keeps only
+    // strong-buildtime ones, resolved by uninstall — the abort's rows.
+    buildpkgonly: bool,
 ) -> Vec<FiledBlocker> {
     let mut conflicts = Vec::new();
     for pb in pending {
+        // #143 S1: under `--buildpkgonly` a blocker that is not
+        // strong-buildtime never pairs an uninstall (real's
+        // `depends_on_order.clear()` → `_irrelevant_blockers`).
+        if buildpkgonly && !(pb.strong && pb.buildtime) {
+            continue;
+        }
         let target_key = (pb.target_category.clone(), pb.target_package.clone());
         let installed_matches = installed_candidates(root, &pb.target_category, &pb.target_package);
         let mut candidates = installed_matches.clone();
@@ -16646,9 +16672,39 @@ fn resolve_blockers(
             // bridge path). #77 A1: a blocker from the all-installed scan
             // (`owner_installed`) is the vardb `Package` itself, always
             // `nomerge` -- a same-cp merge entry must not override it.
+            // #142 S2 F2: the blocker must come from the merged
+            // instance — a walked-but-unmerged candidate's blockers are
+            // stale (real `_validate_blockers` only ever sees blockers
+            // of graph nodes, so argv/walk order cannot move the
+            // uninstall target). Match the owner entry by merged
+            // version, not just cp; a merge-bound cp entry at another
+            // version means the declaring instance lost. No merge-bound
+            // cp entry at all keeps today's fallbacks (the nomerge and
+            // bridge arms below own those blockers).
             let owner_entry = entries.iter().find(|e| {
                 (e.category.as_str(), e.package.as_str())
                     == (pb.owner_key.0.as_str(), pb.owner_key.1.as_str())
+                    && merge_bound_version(&e.outcome).is_some_and(|v| v == &pb.owner_version)
+            });
+            if !pb.owner_installed
+                && owner_entry.is_none()
+                && entries.iter().any(|e| {
+                    (e.category.as_str(), e.package.as_str())
+                        == (pb.owner_key.0.as_str(), pb.owner_key.1.as_str())
+                        && merge_bound_version(&e.outcome).is_some()
+                })
+            {
+                continue;
+            }
+            // Fallback for owners with no merge-bound entry: a walked
+            // non-merge node (same cp, no merge version), else the
+            // producer bit (the bridge path).
+            let owner_entry = owner_entry.or_else(|| {
+                entries.iter().find(|e| {
+                    (e.category.as_str(), e.package.as_str())
+                        == (pb.owner_key.0.as_str(), pb.owner_key.1.as_str())
+                        && merge_bound_version(&e.outcome).is_none()
+                })
             });
             let owner_merging = if pb.owner_installed {
                 false
@@ -17228,6 +17284,133 @@ fn record_slot_conflict(slot_conflicts: &mut Vec<SlotConflict>, sc: SlotConflict
     } else {
         slot_conflicts.push(sc);
     }
+}
+
+/// #142 S2 F1: merge `SlotConflict` records sharing one
+/// `(category, package, slot)` into a single joint record before the
+/// direct solve. `record_slot_conflict` files one record per
+/// mismatching atom, so a three-version contention lands as two
+/// two-instance records (pg0's `b c a` order: `(X-3,X-2)` +
+/// `(X-3,X-1)`); solving each independently keeps a version a later
+/// atom rejects, and the repoint loop's second removal finds no entry
+/// and vanishes silently — the row settles at X-2 against B's `<X-2`
+/// bound. The joint record carries every contending instance with
+/// per-instance parents re-filed from the live pullers (a puller files
+/// under *every* instance its atom fully satisfies — the pairwise
+/// `hits_a else hits_b` rule of `build_slot_conflict` generalized to
+/// n-way), so the solver sees the whole contention exactly like real's
+/// per-slot collision handler and keeps the uniquely
+/// jointly-satisfying version from any walk order. Singleton groups
+/// pass through untouched; a merged record inherits the first
+/// record's `resolved_version`/`conflicting_atom` (render fields, only
+/// read when the conflict survives the solve).
+fn merge_same_slot_conflicts(
+    conflicts: &[SlotConflict],
+    pullers: &SlotPullers,
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    root: &Path,
+) -> Vec<SlotConflict> {
+    let mut order: Vec<(String, String, String)> = Vec::new();
+    let mut groups: HashMap<(String, String, String), Vec<usize>> = HashMap::new();
+    for (idx, c) in conflicts.iter().enumerate() {
+        let key = (c.category.clone(), c.package.clone(), c.slot.clone());
+        groups
+            .entry(key.clone())
+            .or_insert_with(|| {
+                order.push(key.clone());
+                Vec::new()
+            })
+            .push(idx);
+    }
+    let mut merged = Vec::with_capacity(conflicts.len());
+    for key in order {
+        let idxs = &groups[&key];
+        if idxs.len() == 1 {
+            merged.push(conflicts[idxs[0]].clone());
+            continue;
+        }
+        // Ordered instance union by (version, installed); the first
+        // record's display payload wins per instance.
+        let mut instances: Vec<SlotConflictInstance> = Vec::new();
+        for &idx in idxs {
+            for inst in &conflicts[idx].instances {
+                if !instances
+                    .iter()
+                    .any(|e| e.version == inst.version && e.installed == inst.installed)
+                {
+                    instances.push(inst.clone());
+                }
+            }
+        }
+        let (category, package, slot) = (key.0.as_str(), key.1.as_str(), key.2.as_str());
+        let mut parents_per_inst: Vec<Vec<SlotConflictParent>> = vec![Vec::new(); instances.len()];
+        if let Some(cp_pullers) = pullers.get(&(key.0.clone(), key.1.clone())) {
+            for (pc, pp, pv, atom) in cp_pullers {
+                let parsed = portage_dep::parse_atom(atom);
+                for (ii, inst) in instances.iter().enumerate() {
+                    // The same structural probe
+                    // `direct_solve_atom_matches` matches puller atoms
+                    // against (see its doc comment): tree
+                    // slot/sub-slot, USE checked against the
+                    // instance's own resolved flags.
+                    let (sub, _, _) = slot_conflict_meta(repos, category, package, &inst.version);
+                    let match_str = if sub.is_empty() {
+                        format!("{category}/{package}-{}:{slot}", inst.version)
+                    } else {
+                        format!("{category}/{package}-{}:{slot}/{sub}", inst.version)
+                    };
+                    let (iuse, use_) = if inst.installed {
+                        installed_pkg_iuse_and_use(root, category, package, &inst.version)
+                    } else {
+                        slot_conflict_flag_sets(repos, config, category, package, &inst.version)
+                    };
+                    // USE-aware filing, same as `build_slot_conflict`:
+                    // a puller files under the instance its atom
+                    // *fully* satisfies (version+slot+USE).
+                    let use_ok = match &parsed {
+                        Some(a) => match &a.use_deps {
+                            Some(ud) => portage_dep::use_deps_satisfied(ud, &iuse, &use_),
+                            None => true,
+                        },
+                        None => true,
+                    };
+                    if !use_ok {
+                        continue;
+                    }
+                    if portage_dep::match_from_list(atom, &[match_str.as_str()])
+                        .is_some_and(|m| !m.is_empty())
+                    {
+                        let entry = SlotConflictParent {
+                            parent_cpv: slot_conflict_puller_cpv(repos, pc, pp, pv),
+                            atom: atom.clone(),
+                            use_display: if pc.is_empty() {
+                                Vec::new()
+                            } else {
+                                pkg_use_display_for(repos, config, pc, pp, pv)
+                            },
+                            installed: false,
+                        };
+                        if !parents_per_inst[ii].contains(&entry) {
+                            parents_per_inst[ii].push(entry);
+                        }
+                    }
+                }
+            }
+        }
+        for (ii, inst) in instances.iter_mut().enumerate() {
+            inst.parents = std::mem::take(&mut parents_per_inst[ii]);
+        }
+        merged.push(SlotConflict {
+            category: key.0.clone(),
+            package: key.1.clone(),
+            slot: key.2.clone(),
+            resolved_version: conflicts[idxs[0]].resolved_version.clone(),
+            conflicting_atom: conflicts[idxs[0]].conflicting_atom.clone(),
+            instances,
+        });
+    }
+    merged
 }
 
 /// Residual installed-instance slot conflicts for dropped reverse-dep
@@ -19110,9 +19293,15 @@ fn enqueue_flat_deps(
         if let Some(dep_atom) = portage_dep::parse_atom(&tok)
             && dep_atom.blocker != portage_dep::Blocker::None
         {
+            // #143 S1: real's `blocker.priority.buildtime` — the
+            // token survived the build-time-keys flatten, evaluated
+            // against the same raw text `buildtime_hard` uses below
+            // (bound before `tok` moves into `atom_str`).
+            let buildtime = buildtime_atoms.contains(&tok);
             pending_blockers.push(PendingBlocker {
                 atom_str: tok,
                 strong: dep_atom.blocker == portage_dep::Blocker::Strong,
+                buildtime,
                 target_category: dep_atom.category,
                 target_package: dep_atom.package,
                 owner_key: key.clone(),
@@ -22928,8 +23117,19 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         // (built from that same rule in `pretend.rs`) carries the bit;
         // a binary's recorded `BDEPEND` (e.g. libgweather's `|| ( (
         // python:3.14 pygobject[...] ) ... )`) must not drive a merge.
+        //
+        // #143 S1: real `depgraph.py:4176-4183` (`_add_pkg_dep_string`)
+        // blanks `RDEPEND`/`PDEPEND`/`IDEPEND` for a *non-built*
+        // package under `--buildpkgonly` without `--deep` — runtime
+        // blockers never enter the graph (upstream pg1 E/F). A binary
+        // or installed candidate is `pkg.built` and keeps its keys.
         let dep_keys: &[&str] = if candidate_source == CandidateSource::Binary && !ctx.with_bdeps {
             &["RDEPEND", "PDEPEND", "IDEPEND"]
+        } else if ctx.buildpkgonly
+            && candidate_source != CandidateSource::Binary
+            && matches!(ctx.deep, Deep::NotRequested)
+        {
+            &["DEPEND", "BDEPEND"]
         } else {
             &["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"]
         };
@@ -22956,6 +23156,14 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         let real_order_keys: &[&str] =
             if candidate_source == CandidateSource::Binary && !ctx.with_bdeps {
                 &["RDEPEND", "PDEPEND", "IDEPEND"]
+            } else if ctx.buildpkgonly
+                && candidate_source != CandidateSource::Binary
+                && matches!(ctx.deep, Deep::NotRequested)
+            {
+                // #143 S1: same runtime-key blanking as `dep_keys`
+                // above — runtime edges must not reach the merge-order
+                // digraph under `--buildpkgonly` either.
+                &["DEPEND", "BDEPEND"]
             } else {
                 &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"]
             };
@@ -23307,11 +23515,21 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
     // Backlog #90 (S2): the direct solve runs on the walked graph
     // before the blocker phases -- real `_process_slot_conflicts`
     // solves first, then `_validate_blockers` (`depgraph.py:2116-2125`).
+    // #142 S2 F1: solve one joint record per (category, package,
+    // slot) — `merge_same_slot_conflicts` folds the per-atom records
+    // first, so the solver keeps the jointly-satisfying version.
     // Gated on recorded conflicts (the common conflict-free pass pays
     // nothing). Removal drops merge entries and dissolves
     // single-survivor conflicts; the skip rows ride `skipped_updates`
     // to the renderer (rc stays 0: no `SlotConflict` survives a
     // removal, and untouched conflicts keep their #62 rc 1).
+    state.slot_conflicts = merge_same_slot_conflicts(
+        &state.slot_conflicts,
+        &state.slot_pullers,
+        &ctx.repos,
+        config,
+        ctx.root,
+    );
     if !state.slot_conflicts.is_empty() {
         let solved = direct_solve_slot_conflicts(DirectSolveInput {
             conflicts: &state.slot_conflicts,
@@ -23398,6 +23616,79 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             state.slot_conflicts = solved.surviving;
             state.skipped_updates.extend(solved.skipped);
         }
+        // #142 S2 F3: a repointed row's keeper version was never walked
+        // (losing currents get no entry and no dep flatten), so its own
+        // blockers are not pending — but real's kept graph node carries
+        // them into `_validate_blockers`. Flatten the keeper's ebuild
+        // dep strings for blocker tokens here, before `resolve_blockers`
+        // runs below; the F2 owner-version gate then files exactly the
+        // keeper's blockers and drops the losers'. Only blockers are
+        // collected (a keeper merge dep would need a second walk — the
+        // documented non-leaf staleness in `direct_solve_slot_conflicts`'
+        // repoint arm stands). Installed keepers are exempt: their
+        // blockers come from the vdb scan when unwalked.
+        for (c, p, _removed, k) in &solved.removed {
+            if installed_candidates(ctx.root, c, p)
+                .into_iter()
+                .any(|(v, _, _)| v == *k)
+            {
+                continue;
+            }
+            let Some(keeper_cand) = list_candidates(&ctx.repos, c, p).ok().and_then(|cs| {
+                cs.iter()
+                    .filter(|cand| cand.version == *k && cand.source == CandidateSource::Ebuild)
+                    .max_by_key(|cand| cand.repo_priority)
+                    .cloned()
+            }) else {
+                continue;
+            };
+            let pf = format!("{p}-{k}");
+            let Ok(meta) = repo_aux_metadata(&keeper_cand.repo_location, c, &pf) else {
+                continue;
+            };
+            let (_declared, enabled) = slot_conflict_flag_sets(&ctx.repos, config, c, p, k);
+            let owner_key = (c.clone(), p.clone());
+            for dep_key in ["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"] {
+                let Some(dep_str) = meta.get(dep_key) else {
+                    continue;
+                };
+                let toks: Vec<String> = dep_str.split_whitespace().map(String::from).collect();
+                let Ok(flat) = portage_use_reduce::use_reduce_flat(
+                    &toks,
+                    &enabled,
+                    portage_use_reduce::MatchMode::Normal,
+                ) else {
+                    continue;
+                };
+                for tok in flat {
+                    if tok == "||" {
+                        continue;
+                    }
+                    if let Some(dep_atom) = portage_dep::parse_atom(&tok)
+                        && dep_atom.blocker != portage_dep::Blocker::None
+                    {
+                        let duplicate = state.pending_blockers.iter().any(|pb| {
+                            pb.owner_key == owner_key
+                                && pb.owner_version == *k
+                                && pb.atom_str == tok
+                        });
+                        if !duplicate {
+                            state.pending_blockers.push(PendingBlocker {
+                                atom_str: tok,
+                                strong: dep_atom.blocker == portage_dep::Blocker::Strong,
+                                buildtime: dep_key == "DEPEND" || dep_key == "BDEPEND",
+                                target_category: dep_atom.category,
+                                target_package: dep_atom.package,
+                                owner_key: owner_key.clone(),
+                                owner_version: k.clone(),
+                                owner_merging: true,
+                                owner_installed: false,
+                            });
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // #77 A1: real's all-installed-packages blocker collection runs after
@@ -23423,6 +23714,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         &state.pending_blockers,
         &state.entries,
         &ctx.blocker_retry_closure,
+        ctx.buildpkgonly,
     );
     // Backlog #80: unresolved rows whose owner has no display entry
     // ride out on the result instead of being dropped.
@@ -24089,12 +24381,27 @@ fn assemble_result(
             })
             .map(|e| (e.category.clone(), e.package.clone()))
             .collect();
-        pass.entries.iter().any(|e| {
+        let merge_edge = pass.entries.iter().any(|e| {
             needs_action.contains(&(e.category.clone(), e.package.clone()))
                 && e.required_by
                     .iter()
                     .any(|owner| needs_action.contains(owner))
-        })
+        });
+        // #143 S1: real's hard blocker edge defeats the all-zeros
+        // check the same way — a blocker-paired uninstall ordered
+        // after a merge-bound entry (its `required_by` anchor) is a
+        // pending hard dependency, so `--buildpkgonly` refuses to
+        // resolve (upstream pg1 A/B: the three rows print, then the
+        // two `!!!` lines, rc 1). After the S1 gate the only
+        // uninstalls that can exist under `buildpkgonly` are
+        // strong-buildtime ones, exactly real's abort shape.
+        let blocker_edge = pass.entries.iter().any(|e| {
+            matches!(e.outcome, PretendOutcome::Uninstall { .. })
+                && e.required_by
+                    .iter()
+                    .any(|owner| needs_action.contains(owner))
+        });
+        merge_edge || blocker_edge
     };
 
     // Real `_serialize_tasks` -> `_show_circular_deps`: an
@@ -24929,6 +25236,44 @@ fn enqueue_dependencies(
         depstr
     };
     let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
+    // #143 S1: real's `blocker.priority.buildtime` for this walk's own
+    // blockers — flatten just the build-time keys the same way, so a
+    // blocker token's provenance survives the combined-key flatten
+    // (`depstr` above merges every key). The same `flatten_keys` idea
+    // as the main walk's `buildtime_atoms`. Empty without `with_bdeps`,
+    // when no build-time key is walked at all.
+    let buildtime_tokens: HashSet<String> = if with_bdeps {
+        let mut joined = String::new();
+        for dep_key in ["DEPEND", "BDEPEND"] {
+            let layer = if dynamic_deps {
+                InstalledMetaLayer::Effective
+            } else {
+                InstalledMetaLayer::Raw
+            };
+            joined.push_str(&installed_dep_string(
+                root,
+                dynamic_deps,
+                category,
+                package,
+                version,
+                Some(&metadata),
+                dep_key,
+                layer,
+                installed_meta_memo,
+            ));
+            joined.push(' ');
+        }
+        let toks: Vec<String> = joined.split_whitespace().map(String::from).collect();
+        portage_use_reduce::use_reduce_flat(
+            &toks,
+            &use_flags,
+            portage_use_reduce::MatchMode::Normal,
+        )
+        .map(|v| v.into_iter().filter(|t| t != "||").collect())
+        .unwrap_or_default()
+    } else {
+        HashSet::new()
+    };
     // Real `--root-deps` branch-selection feed-in -- see the main
     // New/Upgrade/Reinstall loop's own identical fix, above, for the
     // full grounding (this is `resolve_pretend_graph`'s own
@@ -25081,9 +25426,13 @@ fn enqueue_dependencies(
         if let Some(dep_atom) = portage_dep::parse_atom(&tok)
             && dep_atom.blocker != portage_dep::Blocker::None
         {
+            // #143 S1: provenance against the build-time-keys flatten
+            // above (bound before `tok` moves into `atom_str`).
+            let buildtime = buildtime_tokens.contains(&tok);
             pending_blockers.push(PendingBlocker {
                 atom_str: tok,
                 strong: dep_atom.blocker == portage_dep::Blocker::Strong,
+                buildtime,
                 target_category: dep_atom.category,
                 target_package: dep_atom.package,
                 owner_key: owner_key.clone(),
@@ -41510,6 +41859,7 @@ mod tests {
         let pending = vec![PendingBlocker {
             atom_str: "!!dev-libs/target".to_string(),
             strong: true,
+            buildtime: true,
             target_category: "dev-libs".to_string(),
             target_package: "target".to_string(),
             owner_key: ("dev-libs".to_string(), "owner".to_string()),
@@ -41522,6 +41872,7 @@ mod tests {
             &pending,
             &entries,
             &HashSet::new(),
+            false,
         );
         assert_eq!(
             conflicts,
@@ -41551,6 +41902,7 @@ mod tests {
         let pending = vec![PendingBlocker {
             atom_str: "!dev-libs/owner".to_string(),
             strong: false,
+            buildtime: false,
             target_category: "dev-libs".to_string(),
             target_package: "owner".to_string(),
             owner_key: ("dev-libs".to_string(), "owner".to_string()),
@@ -41563,6 +41915,7 @@ mod tests {
             &pending,
             &entries,
             &HashSet::new(),
+            false,
         );
         assert!(conflicts.is_empty());
     }
@@ -41581,6 +41934,7 @@ mod tests {
                 &[PendingBlocker {
                     atom_str: atom.to_string(),
                     strong: true,
+                    buildtime: true,
                     target_category: "dev-libs".to_string(),
                     target_package: "target".to_string(),
                     owner_key: ("dev-libs".to_string(), "owner".to_string()),
@@ -41590,6 +41944,7 @@ mod tests {
                 }],
                 &entries,
                 &HashSet::new(),
+                false,
             )
         };
         assert!(call("!!dev-libs/target[wantblock]").is_empty());
@@ -41600,6 +41955,167 @@ mod tests {
         assert_eq!(call("!!dev-libs/target").len(), 1);
         // and a use-dep the target DOES satisfy fires too.
         assert_eq!(call("!!dev-libs/target[-wantblock]").len(), 1);
+    }
+
+    #[test]
+    fn resolve_blockers_buildpkgonly_gate() {
+        // #143 S1: real's `--buildpkgonly` blocker gate (upstream
+        // `test_blocker.py::testBlockerBuildpkgonly`, oracle
+        // `differential-test-bed/logs/fx-b1-blocker.json` cases 6-11):
+        // `depgraph.py::_add_pkg_dep_string` blanks RDEPEND/PDEPEND/
+        // IDEPEND for a non-built package, and `_validate_blockers`
+        // clears `depends_on_order` for every blocker that is not a
+        // hard (`!!`) buildtime one. Under `buildpkgonly` only a
+        // strong buildtime blocker files (resolved by uninstall —
+        // the abort's rows; the exit itself is
+        // `buildpkgonly_deps_unsatisfied`'s); soft and runtime-keyed
+        // blockers are satisfied silently.
+        let dir = slotundo_temp_dir("blocker-buildpkgonly-gate");
+        slotundo_vdb(&dir, "blocked", "1.0", "0", "", "");
+        let owner = graph_entry("dev-libs", "owner", "1.0");
+        let entries = vec![owner];
+        let call = |atom: &str, strong: bool, buildtime: bool, buildpkgonly: bool| {
+            resolve_blockers(
+                &dir,
+                &[PendingBlocker {
+                    atom_str: atom.to_string(),
+                    strong,
+                    buildtime,
+                    target_category: "dev-libs".to_string(),
+                    target_package: "blocked".to_string(),
+                    owner_key: ("dev-libs".to_string(), "owner".to_string()),
+                    owner_version: "1.0".to_string(),
+                    owner_merging: true,
+                    owner_installed: false,
+                }],
+                &entries,
+                &HashSet::new(),
+                buildpkgonly,
+            )
+        };
+        // Soft DEPEND blocker: files normally, dropped under buildpkgonly.
+        assert_eq!(call("!dev-libs/blocked", false, true, false).len(), 1);
+        assert!(call("!dev-libs/blocked", false, true, true).is_empty());
+        // Hard RDEPEND blocker: files normally, dropped under buildpkgonly
+        // (real never even walks it — the RDEPEND blanking).
+        assert_eq!(call("!!dev-libs/blocked", true, false, false).len(), 1);
+        assert!(call("!!dev-libs/blocked", true, false, true).is_empty());
+        // Hard DEPEND blocker: kept under buildpkgonly, resolved by
+        // uninstalling the installed match.
+        let kept = call("!!dev-libs/blocked", true, true, true);
+        assert_eq!(kept.len(), 1);
+        assert!(!kept[0].conflict.unsolvable);
+        assert!(matches!(
+            kept[0].conflict.satisfied_by,
+            Some(BlockerSatisfiedBy::Uninstall { .. })
+        ));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_blockers_drops_a_blocker_from_a_superseded_walk_candidate() {
+        // #142 S2 F2 (upstream `test_blocker.py::testBlocker`, oracle
+        // `differential-test-bed/logs/fx-b1-blocker.json` cases 0-5):
+        // every pg0 order walks several X candidates but merges one, and
+        // real only ever sees blockers of graph nodes
+        // (`_validate_blockers` iterates the digraph). A pending blocker
+        // whose declaring instance is not the merged one is stale and
+        // files nothing — this is what made the uninstall target follow
+        // walk order (Y-2/Y-3) instead of the merged candidate (Y-1).
+        let dir = slotundo_temp_dir("blocker-stale-owner");
+        slotundo_vdb(&dir, "blk0y", "3", "3", "", "");
+        let entries = vec![graph_entry("dev-libs", "blk0x", "2")];
+        let stale = PendingBlocker {
+            atom_str: "!=dev-libs/blk0y-3".to_string(),
+            strong: false,
+            buildtime: false,
+            target_category: "dev-libs".to_string(),
+            target_package: "blk0y".to_string(),
+            owner_key: ("dev-libs".to_string(), "blk0x".to_string()),
+            owner_version: "3".to_string(),
+            owner_merging: true,
+            owner_installed: false,
+        };
+        assert!(
+            resolve_blockers(&dir, &[stale], &entries, &HashSet::new(), false).is_empty(),
+            "a walked-but-unmerged candidate's blocker is stale"
+        );
+        // Control: the merged instance's own blocker still files, paired
+        // against its match.
+        let current = PendingBlocker {
+            atom_str: "!=dev-libs/blk0y-3".to_string(),
+            strong: false,
+            buildtime: false,
+            target_category: "dev-libs".to_string(),
+            target_package: "blk0y".to_string(),
+            owner_key: ("dev-libs".to_string(), "blk0x".to_string()),
+            owner_version: "2".to_string(),
+            owner_merging: true,
+            owner_installed: false,
+        };
+        let filed = resolve_blockers(&dir, &[current], &entries, &HashSet::new(), false);
+        assert_eq!(filed.len(), 1);
+        assert_eq!(
+            filed[0].conflict.satisfied_by,
+            Some(BlockerSatisfiedBy::Uninstall {
+                cpv: "dev-libs/blk0y-3".to_string(),
+                anchor: ("dev-libs".to_string(), "blk0x".to_string()),
+            })
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn blk_pg0_all_orders_merge_x1_and_uninstall_y1() {
+        // #142 S2 (upstream `test_blocker.py::testBlocker`, oracle
+        // `differential-test-bed/logs/fx-b1-blocker.json` cases 0-5 and
+        // the `l0-fx-20260922T101821Z` blk0 cells): real merges X-1 and
+        // uninstall-orders installed Y-1 in all six argv orders
+        // (`--backtrack=0`, rc 0). Joint assertion over the whole
+        // defect: the joint slot solve (F1) must settle the row at the
+        // uniquely jointly-satisfying X-1 from any walk order, the
+        // stale-owner gate (F2) must drop every non-merged candidate's
+        // blocker, and the keeper walk (F3) must file X-1's own
+        // `!=Y-1` so the uninstall pairs Y-1.
+        let orders = [
+            ["dev-libs/blk0a", "dev-libs/blk0b", "dev-libs/blk0c"],
+            ["dev-libs/blk0a", "dev-libs/blk0c", "dev-libs/blk0b"],
+            ["dev-libs/blk0b", "dev-libs/blk0a", "dev-libs/blk0c"],
+            ["dev-libs/blk0b", "dev-libs/blk0c", "dev-libs/blk0a"],
+            ["dev-libs/blk0c", "dev-libs/blk0a", "dev-libs/blk0b"],
+            ["dev-libs/blk0c", "dev-libs/blk0b", "dev-libs/blk0a"],
+        ];
+        for order in orders {
+            let atoms: Vec<String> = order.iter().map(|s| s.to_string()).collect();
+            let result = graph_result_real_atoms(&atoms, 0);
+            let x = result
+                .entries
+                .iter()
+                .find(|e| e.package == "blk0x")
+                .unwrap_or_else(|| panic!("{}: no blk0x entry", atoms.join(" ")));
+            assert_eq!(
+                merge_bound_version(&x.outcome).map(String::as_str),
+                Some("1"),
+                "{}: blk0x must settle at X-1",
+                atoms.join(" ")
+            );
+            let uninstalls: Vec<String> = result
+                .entries
+                .iter()
+                .filter_map(|e| match &e.outcome {
+                    PretendOutcome::Uninstall { version } => {
+                        Some(format!("{}/{}-{version}", e.category, e.package))
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                uninstalls,
+                vec!["dev-libs/blk0y-1".to_string()],
+                "{}: exactly Y-1 uninstalls",
+                atoms.join(" ")
+            );
+        }
     }
 
     #[test]
@@ -41620,6 +42136,7 @@ mod tests {
         let pending = PendingBlocker {
             atom_str: "!<dev-libs/blocked-2.0".to_string(),
             strong: false,
+            buildtime: false,
             target_category: "dev-libs".to_string(),
             target_package: "blocked".to_string(),
             owner_key: ("dev-libs".to_string(), "bparent".to_string()),
@@ -41627,7 +42144,8 @@ mod tests {
             owner_merging: true,
             owner_installed: false,
         };
-        let conflicts = resolve_blockers(&dir, &[pending], &[owner, upgrade], &HashSet::new());
+        let conflicts =
+            resolve_blockers(&dir, &[pending], &[owner, upgrade], &HashSet::new(), false);
         assert_eq!(
             conflicts.len(),
             1,
@@ -41652,6 +42170,7 @@ mod tests {
         let pending = PendingBlocker {
             atom_str: "!<dev-libs/blocked-2.0".to_string(),
             strong: false,
+            buildtime: false,
             target_category: "dev-libs".to_string(),
             target_package: "blocked".to_string(),
             owner_key: ("dev-libs".to_string(), "bparent".to_string()),
@@ -41659,7 +42178,13 @@ mod tests {
             owner_merging: true,
             owner_installed: false,
         };
-        let conflicts = resolve_blockers(&dir, &[pending], &[owner, other_slot], &HashSet::new());
+        let conflicts = resolve_blockers(
+            &dir,
+            &[pending],
+            &[owner, other_slot],
+            &HashSet::new(),
+            false,
+        );
         assert_eq!(
             conflicts.len(),
             1,
@@ -41692,6 +42217,7 @@ mod tests {
         let pending = PendingBlocker {
             atom_str: "!<dev-libs/blocked-2.0".to_string(),
             strong: false,
+            buildtime: false,
             target_category: "dev-libs".to_string(),
             target_package: "blocked".to_string(),
             owner_key: ("dev-libs".to_string(), "bparent".to_string()),
@@ -41699,7 +42225,13 @@ mod tests {
             owner_merging: true,
             owner_installed: false,
         };
-        let conflicts = resolve_blockers(&dir, &[pending], &[owner, reinstall], &HashSet::new());
+        let conflicts = resolve_blockers(
+            &dir,
+            &[pending],
+            &[owner, reinstall],
+            &HashSet::new(),
+            false,
+        );
         assert_eq!(
             conflicts.len(),
             1,
@@ -41729,6 +42261,7 @@ mod tests {
         let pb = |atom: &str, owner: &str| PendingBlocker {
             atom_str: atom.to_string(),
             strong: false,
+            buildtime: false,
             target_category: "dev-libs".to_string(),
             target_package: "blocked".to_string(),
             owner_key: ("dev-libs".to_string(), owner.to_string()),
@@ -41762,6 +42295,7 @@ mod tests {
             &[pb("!<dev-libs/blocked-2.0", "bparent")],
             &[graph_entry("dev-libs", "bparent", "1.0"), walker],
             &HashSet::new(),
+            false,
         );
         assert_eq!(conflicts.len(), 1);
         assert!(
@@ -41775,6 +42309,7 @@ mod tests {
             &[pb("!<dev-libs/blocked-2.0", "bparent")],
             &[graph_entry("dev-libs", "bparent", "1.0")],
             &HashSet::new(),
+            false,
         );
         assert_eq!(conflicts.len(), 1);
         assert!(
@@ -41794,6 +42329,7 @@ mod tests {
             &[pb("!<dev-libs/blocked-2.0", "bparent")],
             &[graph_entry("dev-libs", "bparent", "1.0")],
             &closure,
+            false,
         );
         assert_eq!(conflicts.len(), 1);
         assert!(
@@ -41811,6 +42347,7 @@ mod tests {
             &[PendingBlocker {
                 atom_str: "!<dev-libs/blocked-3".to_string(),
                 strong: false,
+                buildtime: false,
                 target_category: "dev-libs".to_string(),
                 target_package: "blocked".to_string(),
                 owner_key: ("dev-libs".to_string(), "bparent3".to_string()),
@@ -41820,6 +42357,7 @@ mod tests {
             }],
             &[bparent3, graph_entry("dev-libs", "blocked", "2.0")],
             &HashSet::new(),
+            false,
         );
         assert_eq!(conflicts.len(), 1);
         assert!(
@@ -41845,6 +42383,7 @@ mod tests {
             &[pb("!<dev-libs/blocked-2.0", "bparent")],
             &[graph_entry("dev-libs", "bparent", "1.0"), reinstall],
             &HashSet::new(),
+            false,
         );
         assert_eq!(conflicts.len(), 1);
         assert!(conflicts[0].conflict.unsolvable);
@@ -41859,6 +42398,7 @@ mod tests {
             &[pb("!<dev-libs/blocked-2.0", "bparent")],
             &[installed("bparent")],
             &HashSet::new(),
+            false,
         );
         assert!(conflicts.is_empty(), "nomerge parent, installed match");
         // Cell g: same, but a merge-bound match survives; unresolved only
@@ -41873,6 +42413,7 @@ mod tests {
             &[pb("!<dev-libs/blocked-2.0", "bparent")],
             &[installed("bparent"), blocked_upgrade("1.5")],
             &HashSet::new(),
+            false,
         );
         assert_eq!(conflicts.len(), 2, "installed 1.0 + merge-bound 1.5");
         assert_eq!(
@@ -41917,6 +42458,7 @@ mod tests {
             &[pb("!<dev-libs/blocked-2.0", "bparent")],
             &[installed("bparent"), blocked_upgrade("1.5"), parent_walker],
             &HashSet::new(),
+            false,
         );
         assert_eq!(conflicts.len(), 2);
         assert!(
@@ -41938,6 +42480,7 @@ mod tests {
             &[pb("!<dev-libs/blocked-2.0", "bparent")],
             &[installed("bparent"), blocked_upgrade("1.5")],
             &closure,
+            false,
         );
         assert_eq!(conflicts.len(), 2);
         assert!(
@@ -41957,6 +42500,7 @@ mod tests {
             &[pb("!<dev-libs/blocked-2.0", "bparent")],
             &[installed("bparent")],
             &closure,
+            false,
         );
         assert!(
             conflicts.is_empty(),
@@ -41971,6 +42515,7 @@ mod tests {
             &[PendingBlocker {
                 atom_str: "!dev-libs/blocked".to_string(),
                 strong: false,
+                buildtime: false,
                 target_category: "dev-libs".to_string(),
                 target_package: "blocked".to_string(),
                 owner_key: ("dev-libs".to_string(), "blocked".to_string()),
@@ -41980,6 +42525,7 @@ mod tests {
             }],
             &[graph_entry("dev-libs", "blocked", "1.0")],
             &HashSet::new(),
+            false,
         );
         assert!(soft.is_empty(), "soft same-slot skip");
         let strong = resolve_blockers(
@@ -41987,6 +42533,7 @@ mod tests {
             &[PendingBlocker {
                 atom_str: "!!dev-libs/blocked".to_string(),
                 strong: true,
+                buildtime: true,
                 target_category: "dev-libs".to_string(),
                 target_package: "blocked".to_string(),
                 owner_key: ("dev-libs".to_string(), "blocked".to_string()),
@@ -41996,6 +42543,7 @@ mod tests {
             }],
             &[graph_entry("dev-libs", "blocked", "1.0")],
             &HashSet::new(),
+            false,
         );
         assert_eq!(strong.len(), 1, "a strong blocker is not skipped");
     }
@@ -42020,6 +42568,7 @@ mod tests {
         let pb = || PendingBlocker {
             atom_str: "!<dev-libs/blocked-2.0".to_string(),
             strong: false,
+            buildtime: false,
             target_category: "dev-libs".to_string(),
             target_package: "blocked".to_string(),
             owner_key: ("dev-libs".to_string(), "bparent".to_string()),
@@ -42034,7 +42583,7 @@ mod tests {
         };
         // The atom matches the installed 1.0 (replaced in-slot, a hidden
         // `Replacement` twin) and the merge-bound 1.5.
-        let conflicts = resolve_blockers(&dir, &[pb()], &[upgrade.clone()], &HashSet::new());
+        let conflicts = resolve_blockers(&dir, &[pb()], &[upgrade.clone()], &HashSet::new(), false);
         assert_eq!(conflicts.len(), 2);
         let removal = conflicts
             .iter()
@@ -42082,7 +42631,7 @@ mod tests {
             from: "1.0".into(),
             to: "1.5".into(),
         };
-        let conflicts = resolve_blockers(&dir, &[pb()], &[upgrade.clone()], &closure);
+        let conflicts = resolve_blockers(&dir, &[pb()], &[upgrade.clone()], &closure, false);
         assert!(
             conflicts
                 .iter()
@@ -42189,6 +42738,7 @@ mod tests {
         let pending = vec![PendingBlocker {
             atom_str: "!dev-libs/nonexistent".to_string(),
             strong: false,
+            buildtime: false,
             target_category: "dev-libs".to_string(),
             target_package: "nonexistent".to_string(),
             owner_key: ("dev-libs".to_string(), "owner".to_string()),
@@ -42201,6 +42751,7 @@ mod tests {
             &pending,
             &entries,
             &HashSet::new(),
+            false,
         );
         assert!(conflicts.is_empty());
     }
