@@ -243,6 +243,98 @@ fn owner_163(cat: &str, pkg: &str) -> (String, String) {
     (cat.to_string(), pkg.to_string())
 }
 
+/// A merge-bound chain node whose dep sits behind `qml? ( ... )`
+/// renders the `[qml]` qualifier (Portage).
+#[test]
+fn chain_suffix_qualifies_a_flag_gated_merge_bound_edge() {
+    let dir = dir_163("chain-qml");
+    let repos = repo_pkgs_163(
+        &dir,
+        &[(
+            "dev-libs/consumer",
+            "1.0",
+            "0",
+            "+qml",
+            "qml? ( dev-libs/leaf )",
+            "amd64",
+        )],
+    );
+    let config = cfg_163();
+    let entries = vec![
+        entry_163(
+            "dev-libs",
+            "leaf",
+            PretendOutcome::NoVisibleCandidate,
+            &[("dev-libs", "consumer")],
+        ),
+        entry_163("dev-libs", "consumer", new_163("1.0"), &[]),
+    ];
+    let atoms: Vec<String> = Vec::new();
+    assert_eq!(
+        masked_dep_chain(MaskedDepChainArgs {
+            repos: &repos,
+            config: &config,
+            entries: &entries,
+            category: "dev-libs",
+            package: "leaf",
+            atoms: &atoms,
+            root: dir.as_path(),
+            atom: ""
+        }),
+        vec![(
+            "dev-libs/consumer-1.0::testrepo[qml]".to_string(),
+            "ebuild".to_string(),
+        ),]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The same edge ungated renders the bare row (no token names the
+/// child behind a conditional, so there is nothing to qualify).
+#[test]
+fn chain_suffix_stays_bare_on_an_ungated_edge() {
+    let dir = dir_163("chain-bare");
+    let repos = repo_pkgs_163(
+        &dir,
+        &[(
+            "dev-libs/consumer",
+            "1.0",
+            "0",
+            "+qml",
+            "dev-libs/leaf",
+            "amd64",
+        )],
+    );
+    let config = cfg_163();
+    let entries = vec![
+        entry_163(
+            "dev-libs",
+            "leaf",
+            PretendOutcome::NoVisibleCandidate,
+            &[("dev-libs", "consumer")],
+        ),
+        entry_163("dev-libs", "consumer", new_163("1.0"), &[]),
+    ];
+    let atoms: Vec<String> = Vec::new();
+    assert_eq!(
+        masked_dep_chain(MaskedDepChainArgs {
+            repos: &repos,
+            config: &config,
+            entries: &entries,
+            category: "dev-libs",
+            package: "leaf",
+            atoms: &atoms,
+            root: dir.as_path(),
+            atom: ""
+        }),
+        vec![(
+            "dev-libs/consumer-1.0::testrepo".to_string(),
+            "ebuild".to_string(),
+        ),]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// No owner, and a display atom with no conditional use-deps, both
 /// return `None`.
 #[test]

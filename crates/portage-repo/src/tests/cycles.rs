@@ -441,6 +441,71 @@ fn find_hard_cycles_ignores_a_suppressed_disjunctive_slot_op_branch() {
 }
 
 #[test]
+fn find_hard_cycles_slot_op_gate_requires_the_child_slot_like_portage() {
+    // Portage filters `inst_pkgs` to the child's slot for `:=`: a different-slot
+    // installed instance does not satisfy the edge, a same-slot one does.
+    let cp = |p: &str| (false, "dev-libs".to_string(), p.to_string());
+    let runtime_slot_op = DepPriority {
+        runtime: true,
+        runtime_slot_op: true,
+        ..DepPriority::default()
+    };
+    let buildtime = DepPriority {
+        buildtime: true,
+        ..DepPriority::default()
+    };
+    let plain_edge = |pkg: &str, atom: &str, priority: DepPriority, key: u8| DepEdge {
+        atom: atom.to_string(),
+        evaluated: atom.to_string(),
+        category: "dev-libs".to_string(),
+        package: pkg.to_string(),
+        priority,
+        disjunctive: false,
+        alt: None,
+        key,
+    };
+    let make_entries = || {
+        let mut sown = graph_entry("dev-libs", "sown", "1.0");
+        sown.discovery = 0;
+        sown.deps = vec![plain_edge("sdep", "dev-libs/sdep:=", runtime_slot_op, 0)];
+        let mut sdep = graph_entry("dev-libs", "sdep", "1.0");
+        sdep.discovery = 1;
+        sdep.slot = Some("1".to_string());
+        sdep.sub_slot = Some("0".to_string());
+        sdep.deps = vec![plain_edge("sown", "dev-libs/sown", buildtime, 3)];
+        vec![sown, sdep]
+    };
+    let make_map = || {
+        let mut map: EdgeKindMap = HashMap::new();
+        map.insert((cp("sdep"), cp("sown")), (false, true));
+        map.insert((cp("sown"), cp("sdep")), (true, false));
+        map
+    };
+    let make_vdb = |name: &str, slot: &str| {
+        let root = masters_test_root(name);
+        let vdb = root.join("var/db/pkg/dev-libs/sdep-1.0");
+        std::fs::create_dir_all(&vdb).unwrap();
+        std::fs::write(vdb.join("SLOT"), format!("{slot}\n")).unwrap();
+        root
+    };
+    // Installed slot `0`, child slot `1`: unsatisfied (hard). Starts at `sdep`
+    // (earliest-inserted `sown`, so the ring closes through its child).
+    let root = make_vdb("n228-slot-gate-other-slot", "0");
+    assert_eq!(
+        find_hard_cycles(&make_entries(), &make_map(), &root, &HashMap::new(), None),
+        vec![vec![
+            "dev-libs/sdep-1.0".to_string(),
+            "dev-libs/sown-1.0".to_string()
+        ]]
+    );
+    // Installed slot `1/0`, child slot `1/0`: satisfied (soft).
+    let root = make_vdb("n228-slot-gate-same-slot", "1/0");
+    assert!(
+        find_hard_cycles(&make_entries(), &make_map(), &root, &HashMap::new(), None).is_empty()
+    );
+}
+
+#[test]
 fn find_virtual_cycles_ignores_a_suppressed_disjunctive_branch() {
     // The walk keeps the first written branch, so `O → D` is suppressed and the
     // loop never closes through it (a documented cut: Portage may probe the
