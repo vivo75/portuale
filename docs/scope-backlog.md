@@ -604,24 +604,27 @@ ANSI USE colour all shipped 2026-09-05, see `what-this-proves.md`'s
   ([#988](https://github.com/reubeno/brush/pull/988)), so only its
   `IFS=` regression test remains. The compiled-ebuild smoke that
   motivated Track B is green (see `docs/brush-pin.md` "Current pin" and
-  `what-this-proves.md`'s Track-B section). **Open:** open the four
+  `what-this-proves.md`'s Track-B section). **Open:** open the five
   still-relevant upstream PRs (user's GitHub auth, B6), then drop the
   fork and revisit the `--shell` default.
 - the phase-execution default stays `bash`, not the embedded `brush`:
   flipping it back is a separate owner decision after the PRs land.
-- **Sixth brush incompatibility found 2026-09-20 (backlog #94):**
-  declaration builtins (`export`/`declare`/`local`) never
-  assignment-expand a non-literal name, so `export ${var}=value` is a
-  silent no-op (upstream `reubeno/brush` main `6bada559` — the current
-  pin's base — still affected). Real
-  `toolchain-funcs.eclass::_tc-getPROG` sets the compiler vars this
-  way, so `--shell brush` fails `tc-check-openmp` consumers in
-  `pkg_pretend` (live: `media-gfx/gimp`). Upstream's open, breaking
-  [#1280](https://github.com/reubeno/brush/pull/1280) ("centralize
-  assignment expansion + overhaul declaration builtins") is the fix
-  path; it is not carried in the fork. Another independent blocker to
-  the default flip; details in `brush-pin.md` "What is *not* tracked
-  here".
+- **Sixth brush incompatibility found 2026-09-20, fixed 2026-09-23
+  (backlog #94 DONE, Phase 6 S1–S4):** declaration builtins
+  (`export`/`declare`/`local`) never assignment-expanded a non-literal
+  name, so `export ${var}=value` was a silent no-op (upstream
+  `reubeno/brush` main `6bada559` — the previous pin's base — still
+  affected). Real `toolchain-funcs.eclass::_tc-getPROG` sets the
+  compiler vars this way, so `--shell brush` failed `tc-check-openmp`
+  consumers in `pkg_pretend` (live: `media-gfx/gimp`). Upstream's open,
+  breaking [#1280](https://github.com/reubeno/brush/pull/1280)
+  ("centralize assignment expansion + overhaul declaration builtins")
+  remains the long-term fix path and is not carried in the fork; the
+  fork carries the small builtin-local fix 06 instead (re-pinned
+  `4edb1f43` → `eb3b6c7b`, guarded by the `exportexpandpkg` fixture).
+  One of the two blockers to the default flip is gone (the other is
+  #5's now-five unopened PRs); details in `brush-pin.md` and
+  `docs/brush-pr/06-declaration-assignment-expansion.md`.
 - periodic re-pin to keep up with upstream `reubeno/brush` `main` (see
   `brush-pin.md`'s checklist).
 

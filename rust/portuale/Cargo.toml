@@ -27,7 +27,7 @@ portage-versions = { path = "../portage-versions" }
 # dependency (this pilot's own "near-zero dependencies" discipline is
 # explicitly waived here, see that doc's own "bash-execution-backend
 # question" writeup) -- pinned by exact commit to the thin fork
-# `vivo75/brush`: upstream `reubeno/brush` `main` plus the four staged
+# `vivo75/brush`: upstream `reubeno/brush` `main` plus the five staged
 # `docs/brush-pr/` fixes, nothing else. No released crates.io version
 # carries reubeno/brush#1274 (which portuale's use of `bin/eapi.sh`
 # needs) or any of the staged fixes, which is why the pin is a git rev.
@@ -52,13 +52,16 @@ portage-versions = { path = "../portage-versions" }
 #     upstream now (reubeno/brush#988 "improve IFS support"), so the
 #     fork carries only fix 05's regression coverage for the `IFS=`
 #     case.
-# #94 (`export ${var}=value` is a silent no-op: the declaration builtins
-# never assignment-expand an expanded name) is still open upstream --
-# reubeno/brush#1280 is fixing it -- and is deliberately not carried.
+#   - builtins: the declaration builtins (`export`/`declare`/`local`/
+#     `readonly`/`typeset`) assignment-expand an expanded name
+#     (`export ${var}=value` assigned after expansion, per POSIX XCU
+#     2.9.1, instead of silently no-op'ing) (fix 06, backlog #94).
+#     Upstream reubeno/brush#1280 reworks this wholesale and is still a
+#     Draft, so the fork carries the small builtin-local fix instead.
 # See docs/brush-pin.md for the tracking record and the periodic re-pin
 # checklist (bump the rev to a newer `main`, re-run the suite).
-brush-core = { git = "https://github.com/vivo75/brush", rev = "4edb1f432b332c9f15377e4867ae686c4243f27c" }
-brush-builtins = { git = "https://github.com/vivo75/brush", rev = "4edb1f432b332c9f15377e4867ae686c4243f27c" }
+brush-core = { git = "https://github.com/vivo75/brush", rev = "eb3b6c7bfdc3720ae5329f9d3336bbb9576a4c33" }
+brush-builtins = { git = "https://github.com/vivo75/brush", rev = "eb3b6c7bfdc3720ae5329f9d3336bbb9576a4c33" }
 # "rt-multi-thread", not just "rt": a single-threaded runtime deadlocks
 # partway through a real multi-phase run (confirmed empirically -- see
 # ebuild_phases::run_commands's own doc comment) -- brush-core's own

@@ -3,8 +3,7 @@
 Six independent fixes for [`reubeno/brush`](https://github.com/reubeno/brush),
 found while running real Gentoo `bin/*.sh` / eclasses through brush as portuale's
 bash backend. **Not yet submitted upstream** — review, then open PRs. (A fifth
-fix, 05, was superseded by upstream's own IFS rework, #988; see its row.
-A sixth, 06, is staged on its branch and joins the pin at the next re-pin.)
+fix, 05, was superseded by upstream's own IFS rework, #988; see its row.)
 
 In the local `3rdparty/brush` checkout (fixes rebased 2026-09-20 onto
 upstream `main` `6bada559`, `brush-v0.4.0-*`):
@@ -16,14 +15,15 @@ upstream `main` `6bada559`, `brush-v0.4.0-*`):
 | [03](03-pipeline-function-deadlock.md) | `fix/function-pipeline-stage-deadlock` | `2173b730` | `brush-core` command exec | A function used as a non-last pipeline stage runs to completion inline before the next stage spawns → deadlocks past one pipe buffer. (Re-do of the never-merged #1276.) |
 | [04](04-dot-parse-error-status.md) | `fix/dot-parse-error-status` | `d0249524` | `brush-core` `source` | A parse error in a *sourced* file was fatal to the calling shell (and its `source … \|\| …` guard never ran). bash returns 2 and keeps going. |
 | [05](05-brace-expansion-ifs.md) | ~~`fix/brace-expansion-ifs-independent`~~ | `4edb1f43` | `brush-core` expansion | **Superseded by upstream [#988](https://github.com/reubeno/brush/pull/988) "improve IFS support" (`411b9a32`), which made brace expansion produce its fields independently of IFS.** No PR needed; only the `IFS=`/`IFS=:` regression case that rework missed remains on the fork (`4edb1f43`, test-only). |
-| [06](06-declaration-assignment-expansion.md) | `fix/declaration-assignment-expansion` | S1 `dd016ba6` + S2 `38447d84` (squash to one commit on merge to the fork's `main`) | `brush-builtins` declaration builtins | Declaration builtins (`export` / `declare` / `local` / `readonly` / `typeset`) never assignment-expanded an expanded name (`export ${var}=value` was a silent no-op); re-examine the expanded string inside the builtins. Deliberately not upstream [#1280](https://github.com/reubeno/brush/pull/1280)'s shape (still a Draft); see the doc. |
+| [06](06-declaration-assignment-expansion.md) | `fix/declaration-assignment-expansion` | `eb3b6c7b` (squashed from S1 `dd016ba6` + S2 `38447d84`) | `brush-builtins` declaration builtins | Declaration builtins (`export` / `declare` / `local` / `readonly` / `typeset`) never assignment-expanded an expanded name (`export ${var}=value` was a silent no-op); re-examine the expanded string inside the builtins. Deliberately not upstream [#1280](https://github.com/reubeno/brush/pull/1280)'s shape (still a Draft); see the doc. |
 
 Each fix commit is exactly one commit on current upstream `main`. `vivo75/brush`'s
-`main` carries the four fixes plus 05's regression test (`995cfbf4` → `fa046cc5`
-→ `2173b730` → `d0249524` → `4edb1f43`); **portuale is pinned to that main,
-`4edb1f43`** (re-pinned 2026-09-20), so it already builds against these fixes.
-Fix 06 is staged on its branch and joins `main` (squashed to one commit) at the
-next re-pin — the portuale-side guard (Phase 6 S4) re-pins past it.
+`main` carries the five fixes plus 05's regression test (`995cfbf4` → `fa046cc5`
+→ `2173b730` → `d0249524` → `4edb1f43` → `eb3b6c7b`); **portuale is pinned to that main,
+`eb3b6c7b`** (re-pinned 2026-09-23 for fix 06, Phase 6 S4), so it already builds
+against these fixes. Fix 06's branch (`fix/declaration-assignment-expansion`,
+slice commits S1 `dd016ba6` + S2 `38447d84`) is what the `eb3b6c7b` squash came
+from — the portuale-side guard re-pinned past it.
 See [`../brush-pin.md`](../brush-pin.md) "Current pin".
 
 The per-bug `fix/*` branches on `vivo75/brush` still point at their old

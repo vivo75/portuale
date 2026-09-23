@@ -4,8 +4,8 @@
 `src/export.rs`, `src/declare.rs` (+
 `brush-shell/tests/cases/compat/builtins/declaration-assignment-expansion.yaml`)
 · **Branch:** `fix/declaration-assignment-expansion` (slice commits S1
-`dd016ba6` + S2 `38447d84`; squashed to one house-style commit on the
-fork's `main` at re-pin) · **Patch:**
+`dd016ba6` + S2 `38447d84`; carried on the fork's `main` as one
+house-style commit `eb3b6c7b`) · **Patch:**
 [`patches/06-declaration-assignment-expansion.patch`](patches/06-declaration-assignment-expansion.patch)
 
 ## Symptom

@@ -30,18 +30,20 @@ portage's own upstream base included) in sync too.
 | | |
 |---|---|
 | Repo | `https://github.com/vivo75/brush` (thin fork of `reubeno/brush`) |
-| Rev | `4edb1f432b332c9f15377e4867ae686c4243f27c` |
+| Rev | `eb3b6c7bfdc3720ae5329f9d3336bbb9576a4c33` |
 
-`4edb1f43` = `reubeno/brush@6bada559` + the four still-carried
+`eb3b6c7b` = `reubeno/brush@6bada559` + the five still-carried
 `brush-pr/` fixes, cherry-picked in order (`995cfbf4` fix 01, `fa046cc5`
 fix 02, `2173b730` fix 03, `d0249524` fix 04) + fix 05's regression
-coverage (`4edb1f43`). Fix 05's *implementation* is no longer carried:
+coverage (`4edb1f43`) + fix 06 (`eb3b6c7b`, squashed from branch
+`fix/declaration-assignment-expansion` S1 `dd016ba6` + S2 `38447d84`).
+Fix 05's *implementation* is no longer carried:
 upstream's own IFS rework (`411b9a32`,
 [#988](https://github.com/reubeno/brush/pull/988) "improve IFS
 support") superseded it, and the fork keeps only the `IFS=`/`IFS=:`
 regression case that rework did not cover. Frozen in `Cargo.lock` too
 (`brush-core` 0.5.0 / `brush-builtins` / `brush-parser`, three
-`git+https://github.com/vivo75/brush?rev=4edb1f43…` source lines).
+`git+https://github.com/vivo75/brush?rev=eb3b6c7b…` source lines).
 
 Re-pinned 2026-09-14 (Tier 1, Track B): upstream `main` moved `812336dd`
 → `25bffd54` (reedline 0.51; MSRV 1.95 for the interactive crates only)
@@ -79,6 +81,23 @@ unfixed on this pin — upstream's open, breaking
 [#1280](https://github.com/reubeno/brush/pull/1280) ("centralize
 assignment expansion + overhaul declaration builtins") is its fix path
 and is deliberately not carried here.
+
+Re-pinned 2026-09-23 (Phase 6 S4, backlog #94): fork `main` moved
+`4edb1f43` → `eb3b6c7b`, carrying fix 06 (declaration builtins
+assignment-expand an expanded name; branch
+`fix/declaration-assignment-expansion` S1 `dd016ba6` + S2 `38447d84`,
+squashed to the house one-commit shape). No upstream movement (still
+`6bada559`; #1280 still a Draft). Verified on the new pin: brush's own
+`brush-compat-tests` 2576 ran, 2120 succeeded / **0 unexpected
+failures** / 456 known-fail / 29 skipped (delta over the 2026-09-20 pin
+is exactly the 8 new fix-06 cases plus 13 unmarked known failures);
+`cargo test --release -p portuale` green incl. the new
+`expanded_name_export_assigns_in_both_backends` guard, the
+whole-workspace `cargo test --release` green, `cargo fmt --check` and
+`cargo clippy --release --all-targets` clean, and the pmtest contract
+suite diffed by name against the pre-slice baseline (see the S4 commit).
+The five staged fixes (01–04, 06) are still unmerged upstream, so the
+thin fork stays.
 
 > The gitignored **`3rdparty/brush/` working checkout** tracks the same
 > `main` (`origin` = `vivo75/brush`, `upstream` = `reubeno/brush`), plus

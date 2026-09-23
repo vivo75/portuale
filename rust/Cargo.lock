@@ -242,7 +242,7 @@ checksum = "36f64beae40a84da1b4b26ff2761a5b895c12adc41dc25aaee1c4f2bbfe97a6e"
 [[package]]
 name = "brush-builtins"
 version = "0.2.0"
-source = "git+https://github.com/vivo75/brush?rev=4edb1f432b332c9f15377e4867ae686c4243f27c#4edb1f432b332c9f15377e4867ae686c4243f27c"
+source = "git+https://github.com/vivo75/brush?rev=eb3b6c7bfdc3720ae5329f9d3336bbb9576a4c33#eb3b6c7bfdc3720ae5329f9d3336bbb9576a4c33"
 dependencies = [
  "brush-core",
  "brush-parser",
@@ -265,7 +265,7 @@ dependencies = [
 [[package]]
 name = "brush-core"
 version = "0.5.0"
-source = "git+https://github.com/vivo75/brush?rev=4edb1f432b332c9f15377e4867ae686c4243f27c#4edb1f432b332c9f15377e4867ae686c4243f27c"
+source = "git+https://github.com/vivo75/brush?rev=eb3b6c7bfdc3720ae5329f9d3336bbb9576a4c33#eb3b6c7bfdc3720ae5329f9d3336bbb9576a4c33"
 dependencies = [
  "async-recursion",
  "async-trait",
@@ -303,7 +303,7 @@ dependencies = [
 [[package]]
 name = "brush-parser"
 version = "0.4.0"
-source = "git+https://github.com/vivo75/brush?rev=4edb1f432b332c9f15377e4867ae686c4243f27c#4edb1f432b332c9f15377e4867ae686c4243f27c"
+source = "git+https://github.com/vivo75/brush?rev=eb3b6c7bfdc3720ae5329f9d3336bbb9576a4c33#eb3b6c7bfdc3720ae5329f9d3336bbb9576a4c33"
 dependencies = [
  "bon",
  "cached",

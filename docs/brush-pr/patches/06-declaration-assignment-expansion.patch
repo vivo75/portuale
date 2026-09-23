@@ -1,8 +1,8 @@
-From dd016ba6ebfc8cdd276df60441f667bc4a379cc6 Mon Sep 17 00:00:00 2001
+From eb3b6c7bfdc3720ae5329f9d3336bbb9576a4c33 Mon Sep 17 00:00:00 2001
 From: Francesco Riosa <me@francesco-riosa.com>
-Date: Wed, 23 Sep 2026 01:47:19 +0200
-Subject: [PATCH 1/2] fix(builtins): assignment-expand declaration operands
- with an expanded name
+Date: Wed, 23 Sep 2026 01:55:35 +0200
+Subject: [PATCH] fix(builtins): assignment-expand declaration operands with an
+ expanded name
 
 brush's parser only recognises an assignment word when the name is a
 literal identifier, so `export ${var}=value` arrived at the builtin as
@@ -28,18 +28,34 @@ lands entirely inside the builtins so it rebases onto #1280 as a
 deletion rather than a conflict. Fixes portuale backlog #94 (toolchain-
 funcs _tc-getPROG tc-getCC echoing empty under --shell brush).
 
+Developed on branch fix/declaration-assignment-expansion as slice
+commits dd016ba6 (fix) + 38447d84 (compat cases); squashed here to the
+house one-commit-per-fix shape.
+
+Compat coverage: new declaration-assignment-expansion.yaml over the
+matrix (literal | ${var} | "${var}" | append | no-value x export |
+declare | local | readonly | typeset), plus 13 previously-known
+failures unmarked (quoted scalar/append declare forms, command
+declare/export forwarding, the non-reexpanding generated export, the
+array-element export rejection).
+
 Verified: brush-compat-tests 2576 ran / 2120 succeeded / 0 unexpected
-failures (baseline 2568 / 2099 / 0); 13 previously-known failures now
-pass (unmarked in the next commit); unit tests, fmt and clippy clean.
+failures (pre-fix baseline 2568 / 2099 / 0); fmt, clippy and
+brush-builtins unit tests clean.
 
 Assisted-by: opencode:muse-spark
 ---
- brush-builtins/src/declaration.rs | 112 ++++++++++++++++++++++++++++++
- brush-builtins/src/declare.rs     |  17 +++++
- brush-builtins/src/export.rs      |  12 ++++
- brush-builtins/src/lib.rs         |   2 +
- 4 files changed, 143 insertions(+)
+ brush-builtins/src/declaration.rs             | 112 ++++++++++++++++++
+ brush-builtins/src/declare.rs                 |  17 +++
+ brush-builtins/src/export.rs                  |  12 ++
+ brush-builtins/src/lib.rs                     |   2 +
+ .../tests/cases/compat/builtins/command.yaml  |   4 -
+ .../declaration-assignment-expansion.yaml     |  81 +++++++++++++
+ .../tests/cases/compat/builtins/declare.yaml  |   6 -
+ .../tests/cases/compat/builtins/export.yaml   |   3 -
+ 8 files changed, 224 insertions(+), 13 deletions(-)
  create mode 100644 brush-builtins/src/declaration.rs
+ create mode 100644 brush-shell/tests/cases/compat/builtins/declaration-assignment-expansion.yaml
 
 diff --git a/brush-builtins/src/declaration.rs b/brush-builtins/src/declaration.rs
 new file mode 100644
@@ -223,37 +239,6 @@ index 0dd7fab3..540636cc 100644
  #[cfg(feature = "builtin.declare")]
  mod declare;
  #[cfg(feature = "builtin.dirs")]
--- 
-2.55.0
-
-
-From 38447d84ff631495d1066010aacf809e0e52cf26 Mon Sep 17 00:00:00 2001
-From: Francesco Riosa <me@francesco-riosa.com>
-Date: Wed, 23 Sep 2026 01:47:23 +0200
-Subject: [PATCH 2/2] test(compat): cover declaration builtins with expanded
- assignment names
-
-New declaration-assignment-expansion.yaml case file for the matrix:
-literal | ${var} | "${var}" | append (+=) | no-value forms over
-export | declare | local | readonly | typeset, diffed against real bash
-(first `=` split, quoted values, invalid-name diagnostic, function
-scoping for local/declare).
-
-Also unmarks 13 previously-known failures the fix heals: the quoted
-scalar/append declare forms, 'command declare/export' forwarding, the
-non-reexpanding generated export assignment, and the array-element
-export rejection (stderr still differs there, so its ignore_stderr
-stays).
-
-Assisted-by: opencode:muse-spark
----
- .../tests/cases/compat/builtins/command.yaml  |  4 -
- .../declaration-assignment-expansion.yaml     | 81 +++++++++++++++++++
- .../tests/cases/compat/builtins/declare.yaml  |  6 --
- .../tests/cases/compat/builtins/export.yaml   |  3 -
- 4 files changed, 81 insertions(+), 13 deletions(-)
- create mode 100644 brush-shell/tests/cases/compat/builtins/declaration-assignment-expansion.yaml
-
 diff --git a/brush-shell/tests/cases/compat/builtins/command.yaml b/brush-shell/tests/cases/compat/builtins/command.yaml
 index 6519818a..3e348b72 100644
 --- a/brush-shell/tests/cases/compat/builtins/command.yaml

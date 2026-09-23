@@ -6215,6 +6215,94 @@ mod tests {
         let _ = std::fs::remove_dir_all(&portage_tmpdir);
     }
 
+    /// B4: declaration builtins must assignment-expand an expanded name
+    /// (brush fix 06, backlog #94). `export ${var}=value` silently
+    /// no-op'd under brush, so `_tc-getPROG`-shaped code saw empty
+    /// variables; the fixture's `src_install` dies unless the expanded
+    /// export arrived. Both backends must install it and agree on the
+    /// installed file set, not merely on the exit code.
+    #[test]
+    fn expanded_name_export_assigns_in_both_backends() {
+        fn image_file_set(image: &Path) -> Vec<String> {
+            fn walk(dir: &Path, base: &Path, out: &mut Vec<String>) {
+                for entry in std::fs::read_dir(dir)
+                    .unwrap_or_else(|e| panic!("{} should be readable: {e}", dir.display()))
+                {
+                    let path = entry
+                        .unwrap_or_else(|e| panic!("dir entry should read: {e}"))
+                        .path();
+                    if path.is_dir() {
+                        walk(&path, base, out);
+                    } else {
+                        out.push(
+                            path.strip_prefix(base)
+                                .unwrap_or_else(|e| panic!("path should be under image: {e}"))
+                                .to_string_lossy()
+                                .into_owned(),
+                        );
+                    }
+                }
+            }
+            let mut out = Vec::new();
+            walk(image, image, &mut out);
+            out.sort();
+            out
+        }
+
+        let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/repo/dev-libs/exportexpandpkg/exportexpandpkg-1.0.ebuild");
+        let tmp = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-{}",
+            std::process::id(),
+            "expanded_name_export_assigns_in_both_backends"
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        let mut file_sets = Vec::new();
+        for (shell, name) in [(ShellBackend::Bash, "bash"), (ShellBackend::Brush, "brush")] {
+            let portage_tmpdir = tmp.join(name);
+            let status = run_commands(
+                &ebuild_path,
+                &["install"],
+                Path::new("/"),
+                &portage_tmpdir,
+                &portage_tmpdir.join("distfiles"),
+                false,
+                Path::new("/dev/null/no-config-root"),
+                shell,
+                &[],
+            )
+            .expect("run_commands should not itself error");
+            assert_eq!(status, 0, "{name}: install should exit successfully");
+
+            let marker = portage_tmpdir.join(
+                "portage/dev-libs/exportexpandpkg-1.0/image/usr/share/exportexpandpkg/decl-assign-check.txt",
+            );
+            let observed = std::fs::read_to_string(&marker)
+                .unwrap_or_else(|e| panic!("{} should have been written: {e}", marker.display()));
+            assert_eq!(
+                observed, "decl-assign-ok\n",
+                "{name}: the expanded export must arrive"
+            );
+
+            file_sets.push((
+                name,
+                image_file_set(&portage_tmpdir.join("portage/dev-libs/exportexpandpkg-1.0/image")),
+            ));
+        }
+
+        assert!(
+            !file_sets[1].1.is_empty(),
+            "the brush run produced an empty image"
+        );
+        assert_eq!(
+            file_sets[1].1, file_sets[0].1,
+            "brush and bash image file sets differ"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     #[test]
     fn eclass_locations_value_quotes_the_containing_repo_root() {
         // Canonicalized first, matching what `compute_environment`
