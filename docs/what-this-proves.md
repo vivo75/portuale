@@ -17909,3 +17909,16 @@ cargo mutants --in-place --file portage-repo/src/merge_order.rs --timeout 300 \
 ```
 
 Every survivor is classified equivalent, trace-only or caught-by-timeout with a one-line reason in `../pmtest/differential-test-bed/findings/mutants.md` "### Phase 8" — including the shape the backlog predicted: a mutant that makes a scheduler loop stop terminating (the closure's `present` dedup guard, the frontier's bit-clearing walk, `schedule_graph`'s prune loop) is *caught by timeout*, recorded rather than pinned around. No fixture was added, no seam was needed, and the phase changes no product byte (`git diff` touches only `merge_order.rs`'s `#[cfg(test)] mod tests`). Detail: `docs/06.144-146-merge-order-unit-tests.md`; the campaign ran with its own `CARGO_TARGET_DIR` while Phase 7a's `l3-core` run held `rust/target/release`.
+
+**Surviving slot conflicts print one merge row per instance (Phase 10, 2026-09-24; #148 DONE, #136's re-scope).** The walk graphs one entry per `(cp, slot)` — the `resolved_slots` conflict arm records the `SlotConflict` and moves on — so every surviving slot conflict printed a single merge row where real prints one per instance (bed `l0-fx-20260922T192350Z`: real schedules both `slotusetarget-1.0` and `-2.0`, portuale only `1.0`, notices identical). Two product changes, both verified against live oracles (real 3.0.82.2 on the fixture tree; host==container verified byte-identical on the oracle cell first): `synthesize_surviving_conflict_entries` adds post-solve rows for record instances without merge entries (display-complete via `refresh_entry_use_display`, no deps walked, no blockers flattened — solver inputs byte-identical, so solved cells don't move), and `match_candidates` narrows multi-instance edges by USE (real matches atoms with use), printing real's 1.0-first order. Live-verified:
+```sh
+emerge --pretend -D dev-libs/slotusegroup
+# [ebuild  N     ] dev-libs/slotusetarget-1.0  USE="x y"
+# [ebuild  N     ] dev-libs/slotusetarget-2.0  USE="(-x)"
+# [ebuild  N     ] dev-libs/slotuseplain-1.0
+# [ebuild  N     ] dev-libs/slotusex-1.0
+# [ebuild  N     ] dev-libs/slotusey-1.0
+# [ebuild  N     ] dev-libs/slotusegroup-1.0
+# !!! Multiple package instances within a single package slot ... (both instances, rc 1)
+```
+Twin pins moved with the same oracles (`slotconflictunsolvable`, `newpin`+`oldpin`, masking `--backtrack=0`, `mgfa --backtrack 1`, `orbtblocked --backtrack=0` corpus only). Beds: fixture-oracle S0 list 2/2 clean, default 39/34 (only the pre-existing p2b-tree residue), L0 120/101/0.842 with a byte-identical unexplained set. Residue filed as #150 (`--tree` shared-child `[nomerge]` artifact; tree surgery belongs to Phase 13). Work ran in sibling worktrees while Phase 7a's `l3-core` campaign held the live checkouts. Detail: `docs/02.148-slot-conflict-merge-list.md` (done).

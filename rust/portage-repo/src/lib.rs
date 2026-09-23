@@ -17413,6 +17413,124 @@ fn merge_same_slot_conflicts(
     merged
 }
 
+/// Backlog #148: graph the shadowed second instances of *surviving*
+/// slot conflicts beside their records.
+///
+/// The walk graphs one entry per `(category, package, slot)` (the
+/// `resolved_slots` conflict arm records the `SlotConflict` and moves
+/// on), so a surviving conflict's other instances have a notice but no
+/// merge row -- while real prints a row per instance (bed
+/// `l0-fx-20260922T192350Z`, cell `-D dev-libs/slotusegroup`: real
+/// schedules both `slotusetarget-1.0` and `-2.0`, portuale only `1.0`,
+/// notices identical, rc 1 both sides).
+///
+/// Runs after the direct solve, over its survivors only, so the
+/// solver's inputs -- and every solved cell -- are byte-identical to
+/// before: a dissolved conflict has no row owed (the removal
+/// machinery already repoints or deletes the loser's row), and only a
+/// conflict real would print before giving up gains rows.
+///
+/// A synthesized entry is display-complete but walk-light. Slot /
+/// sub-slot / repo / USE come from the same tree-candidate reads the
+/// notice uses (`refresh_entry_use_display` on a one-entry slice, the
+/// #141 precedent -- existing entries are untouched), `required_by`
+/// from the same cp-union the post-walk fill gives its siblings, and
+/// scheduler edges resolve to it through the USE-narrowed
+/// `match_candidates`, so it orders like a walked node. Deliberately
+/// *not* carried over: the instance's own deps (walking them would
+/// need a second walk -- the same documented non-leaf staleness as
+/// the #142 S2 F3 keeper-blocker flattening), its blockers (a
+/// second-instance blocker is a new number, not this item), and the
+/// ebuild-metadata row decorations (`interactive`, fetch-restrict /
+/// `download_files`, `keyword_mask`, `provenance`, binary `source`)
+/// -- all default to the plain-undecorated `New` shape. Each is a
+/// filed-later residue if a bed ever shows a twin that needs it, not
+/// silent scope growth here.
+#[allow(clippy::too_many_arguments)]
+fn synthesize_surviving_conflict_entries(
+    entries: &mut Vec<GraphEntry>,
+    conflicts: &[SlotConflict],
+    required_by_map: &HashMap<(String, String), HashSet<(String, String)>>,
+    repos: &[RepoConfig],
+    root: &Path,
+    config: &portage_profile::Config,
+) {
+    for sc in conflicts {
+        for inst in &sc.instances {
+            if inst.installed {
+                continue;
+            }
+            let already = entries.iter().any(|e| {
+                e.category == sc.category
+                    && e.package == sc.package
+                    && merge_bound_version(&e.outcome).is_some_and(|v| v == &inst.version)
+            });
+            if already {
+                continue;
+            }
+            let owners: Vec<(String, String)> = required_by_map
+                .get(&(sc.category.clone(), sc.package.clone()))
+                .map(|set| {
+                    let mut owners: Vec<(String, String)> = set.iter().cloned().collect();
+                    owners.sort();
+                    owners
+                })
+                .unwrap_or_default();
+            let mut entry = GraphEntry {
+                category: sc.category.clone(),
+                package: sc.package.clone(),
+                outcome: PretendOutcome::New {
+                    version: inst.version.clone(),
+                },
+                blockers: Vec::new(),
+                slot: None,
+                sub_slot: None,
+                repo_name: None,
+                oldbest: Vec::new(),
+                use_flags_display: Vec::new(),
+                use_expand_display: Vec::new(),
+                use_expand_display_p: Vec::new(),
+                keyword_mask: None,
+                new_slot: !installed_candidates(root, &sc.category, &sc.package).is_empty(),
+                interactive: false,
+                fetch_restrict: false,
+                fetch_restrict_satisfied: false,
+                download_files: Vec::new(),
+                required_by: owners,
+                source: CandidateSource::Ebuild,
+                provenance: VisibilityProvenance::default(),
+                keyword_suggestion: None,
+                use_suggestion: None,
+                parent_use_suggestion: None,
+                targets_running_root: false,
+                remote_binary: false,
+                build_id: None,
+                deps: Vec::new(),
+            };
+            refresh_entry_use_display(
+                std::slice::from_mut(&mut entry),
+                repos,
+                root,
+                &(sc.category.clone(), sc.package.clone()),
+                config,
+            );
+            // File beside its siblings: real prints the conflicting
+            // instances adjacently (`1.0` then `2.0` at the head of the
+            // S0.1 capture), and discovery order settles scheduler ties.
+            let at = entries
+                .iter()
+                .rposition(|e| {
+                    e.category == sc.category
+                        && e.package == sc.package
+                        && merge_bound_version(&e.outcome).is_some()
+                })
+                .map(|i| i + 1)
+                .unwrap_or(entries.len());
+            entries.insert(at, entry);
+        }
+    }
+}
+
 /// Residual installed-instance slot conflicts for dropped reverse-dep
 /// pins (see `RevDepPin`): real `_complete_graph`'s end-of-walk
 /// unsatisfied-dep loop (`depgraph.py:8770+`) adds the installed package
@@ -23690,6 +23808,20 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             }
         }
     }
+
+    // Backlog #148: rows for the shadowed second instances of
+    // surviving slot conflicts (see the fn docs -- display-complete,
+    // walk-light). After the solve/removal above, so solved cells are
+    // untouched; before the installed-blocker collection below, so the
+    // new merge nodes participate in it as merge-side nodes.
+    synthesize_surviving_conflict_entries(
+        &mut state.entries,
+        &state.slot_conflicts,
+        &state.required_by_map,
+        &ctx.repos,
+        ctx.root,
+        config,
+    );
 
     // #77 A1: real's all-installed-packages blocker collection runs after
     // the graph is complete and before `_validate_blockers` classifies
@@ -31828,6 +31960,40 @@ mod tests {
         assert!(
             altprov_merges.is_empty(),
             "the installed altprov:1.1[flip] must win the || group: {entries:?}"
+        );
+    }
+
+    /// #148: a *surviving* slot conflict keeps both same-slot
+    /// instances as merge rows (real's `l0-fx-20260922T192350Z` cell
+    /// `-D dev-libs/slotusegroup`: `[ebuild N] slotusetarget-1.0`
+    /// *and* `-2.0`, rc 1). `dev-libs/slotusegroup` RDEPENDs
+    /// `slotuseplain slotusex slotusey`; slotusey/slotusex pull
+    /// `>=slotusetarget-1.0[y]` / `[x]` (2.0 lacks `y` in IUSE and
+    /// has `x` default-off) while slotuseplain pulls
+    /// `>=slotusetarget-2.0`. Before the fix the walk's
+    /// `resolved_slots` conflict arm recorded the `SlotConflict`
+    /// and continued past `GraphEntry` creation, so the graph held
+    /// one `slotusetarget` entry (1.0) and the merge list one row.
+    #[test]
+    fn surviving_slot_conflict_graphs_both_same_slot_instances() {
+        let entries = graph_deep("dev-libs/slotusegroup", Deep::Unlimited);
+        let mut versions: Vec<&str> = entries
+            .iter()
+            .filter(|(name, _)| name == "dev-libs/slotusetarget")
+            .map(|(_, outcome)| match outcome {
+                PretendOutcome::New { version } => version.as_str(),
+                PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
+                    to.as_str()
+                }
+                PretendOutcome::Reinstall { version, .. } => version.as_str(),
+                _ => panic!("slotusetarget entry is not merge-bound: {entries:?}"),
+            })
+            .collect();
+        versions.sort_unstable();
+        assert_eq!(
+            versions,
+            vec!["1.0", "2.0"],
+            "both conflicting instances must be graphed: {entries:?}"
         );
     }
 

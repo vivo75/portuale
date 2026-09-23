@@ -1553,8 +1553,9 @@ impl DigraphPrelude<'_> {
 
     /// The per-atom candidate entries `select_dep_target` narrows and
     /// ranks: every same-cp entry the atom matches (version / slot /
-    /// repo), minus `Uninstall` removals, minus (under
-    /// `merge_bound_only`) the parent itself and installed nodes.
+    /// repo -- plus the #148 USE narrowing below), minus `Uninstall`
+    /// removals, minus (under `merge_bound_only`) the parent itself
+    /// and installed nodes.
     fn match_candidates(
         &self,
         entries: &[GraphEntry],
@@ -1571,7 +1572,8 @@ impl DigraphPrelude<'_> {
         // Uninstall entries are skipped below, so among the survivors
         // "merge-bound" is exactly "not an installed node".
         let merge_bound = |j: usize| !self.installed[j];
-        idxs.iter()
+        let cands: Vec<usize> = idxs
+            .iter()
             .copied()
             .filter(|&j| {
                 if !self.edge_matches(&edge.atom, j) {
@@ -1585,7 +1587,56 @@ impl DigraphPrelude<'_> {
                 }
                 true
             })
-            .collect()
+            .collect();
+        self.narrow_by_use(entries, &edge.atom, cands)
+    }
+
+    /// Backlog #148: USE-aware narrowing of multi-instance matches.
+    /// Real matches dep atoms against pkgs *with* use (`atom.match(pkg.
+    /// with_use(...))`), so `>=slotusetarget-1.0[x]` never edges to an
+    /// x-less instance -- without this, the x/y parents all edge to the
+    /// vercmp-highest instance and `_merge_order_bias`'s parent-count
+    /// ordering prints the surviving conflict's rows in the wrong order
+    /// (2.0 before real's 1.0-first). Applies only when it can decide
+    /// fairly, and only ever removes a provably-wrong edge (same rule
+    /// as `edge_matches`): unparseable atoms, atoms without use-deps,
+    /// singleton sets, any candidate without display USE, and a
+    /// narrowing that would empty the set all keep the unfiltered set.
+    ///
+    /// Deliberate narrowing vs the walk: `valid_iuse`'s
+    /// profile-effective union is not applied (no config reaches this
+    /// seam), so a use-dep on an effective-only flag over sibling
+    /// versions with split IUSE declarations could mis-drop. The
+    /// empty-fallback keeps the worst case at status quo; the
+    /// contract suite and the L0 bed gate the rest.
+    fn narrow_by_use(&self, entries: &[GraphEntry], atom: &str, cands: Vec<usize>) -> Vec<usize> {
+        if cands.len() < 2 {
+            return cands;
+        }
+        let Some(parsed) = portage_dep::parse_atom(atom) else {
+            return cands;
+        };
+        let use_deps = parsed.use_deps.unwrap_or_default();
+        if use_deps.is_empty() {
+            return cands;
+        }
+        let mut kept = Vec::new();
+        for &j in &cands {
+            let display = &entries[j].use_flags_display;
+            if display.is_empty() {
+                return cands;
+            }
+            let declared: HashSet<String> = display.iter().map(|(flag, _)| flag.clone()).collect();
+            let enabled: HashSet<String> = display
+                .iter()
+                .filter(|(_, on)| *on)
+                .map(|(flag, _)| flag.clone())
+                .collect();
+            if portage_dep::use_deps_satisfied(&use_deps, &declared, &enabled) {
+                kept.push(j);
+            }
+        }
+        if kept.is_empty() { cands } else { kept }
     }
 
     /// `select_dep_target`'s ranking over a fixed candidate set: prefer a
