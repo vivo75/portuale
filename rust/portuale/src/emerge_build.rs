@@ -157,19 +157,38 @@ pub fn run_buildpkgonly(
             ">>> Building binary for {}/{}-{version}...",
             entry.category, entry.package
         );
-        // Real `config.environ()` per entry: the run-wide base plus this
-        // entry's resolved `USE`/`IUSE_EFFECTIVE`/`USE_EXPAND` and
-        // `SLOT`/repo identity (#37 S2). The `install` chain and the
-        // `install_qa_check` misc-functions call after it see the same
-        // env the `-b` merge path does, and `package_after_install` gets
-        // the real `USE` for the `Packages` index / `metadata/USE`.
-        let mut build_env = run_wide.clone();
-        build_env.extend(entry_phase_env_tail(
-            Some(config),
-            repos,
-            entry,
-            Some(&candidate),
-        ));
+        // Real per-package `package.env` (backlog #129): `--buildpkgonly`
+        // carries no `MergeOptions`, but `config` already has the
+        // resolved `package_env_vars` table (`Config::package_env_vars`),
+        // so this matches the same `cat/pkg-ver:slot/sub` identity the
+        // merge scheduler's `entry_build_env` does, just reading `config`
+        // directly instead of threading it through a `MergeOptions`.
+        let cpv_slot = entry_cpv_slot(entry, version);
+        // Real per-package `PORTAGE_TMPDIR` (backlog #99, #129 residue):
+        // re-derive the tmpdir this entry's build directories live under
+        // from its matched `package.env` value, same as the merge
+        // scheduler's `entry_portage_tmpdir`. A missing matched directory
+        // is real's `_check_temp_dir` failure and aborts the entry.
+        let process_tmpdir = std::env::var_os("PORTAGE_TMPDIR").map(PathBuf::from);
+        let entry_tmpdir = match crate::ebuild_phases::resolve_entry_portage_tmpdir(
+            &config.package_env_vars,
+            &cpv_slot,
+            portage_tmpdir,
+            process_tmpdir.as_deref(),
+        ) {
+            Ok(dir) => dir,
+            Err(e) => {
+                let failure = format!("{}/{}-{version}: {e}", entry.category, entry.package);
+                if keep_going {
+                    failures.push(failure);
+                    continue;
+                }
+                return Err(failure);
+            }
+        };
+        let portage_tmpdir = entry_tmpdir.as_path();
+        let build_env =
+            buildpkgonly_entry_build_env(config, repos, entry, &candidate, &cpv_slot, &run_wide);
         let use_flags = build_env
             .iter()
             .find(|(k, _)| k == "USE")
@@ -204,13 +223,28 @@ pub fn run_buildpkgonly(
                 )),
             }
         };
+        // Real per-package `FEATURES` (backlog #130): `build_env` already
+        // carries this entry's fully resolved `FEATURES` (the per-entry
+        // `package.env` fold when one matched, the run-wide value
+        // otherwise -- `buildpkgonly_entry_build_env`'s own doc comment),
+        // so re-derive the binpkg-affecting `PackageOptions` fields from
+        // it here rather than the caller's single shared, run-wide value.
+        let mut per_entry_options = options.clone();
+        if let Some(features) = build_env
+            .iter()
+            .rev()
+            .find(|(k, _)| k == "FEATURES")
+            .map(|(_, v)| v.as_str())
+        {
+            per_entry_options.set_resolved_features(features);
+        }
         let failure = match clean_failure("pre") {
             Some(failure) => Some(failure),
             None => match ebuild_package::run_package(
                 &path,
                 root,
                 portage_tmpdir,
-                options,
+                &per_entry_options,
                 &build_env,
                 use_flags,
             ) {
@@ -242,6 +276,57 @@ pub fn run_buildpkgonly(
             failures.join("\n")
         ))
     }
+}
+
+/// [`run_buildpkgonly`]'s per-entry `config.environ()` (backlog #129):
+/// `run_wide` plus `entry`'s matched `package.env` build vars
+/// ([`matched_package_env_vars`], layered before the tail so an
+/// incremental's base is the run-wide value, matching `entry_build_env`'s
+/// order) with the per-package `FEATURES` fold ([`resolved_features_for`])
+/// on top, then [`entry_phase_env_tail`]'s resolved `USE`/`IUSE_EFFECTIVE`/
+/// `USE_EXPAND` and `SLOT`/repo identity rows. A free function (not a
+/// closure in the loop) so it is directly unit-testable without a real
+/// build, the same way `entry_build_env` already is.
+fn buildpkgonly_entry_build_env(
+    config: &portage_profile::Config,
+    repos: &[RepoConfig],
+    entry: &GraphEntry,
+    candidate: &Candidate,
+    cpv_slot: &str,
+    run_wide: &[(String, String)],
+) -> Vec<(String, String)> {
+    let profile_only_variables = config
+        .resolved_incremental("PROFILE_ONLY_VARIABLES")
+        .unwrap_or_default();
+    let mut build_env = run_wide.to_vec();
+    build_env.extend(matched_package_env_vars(
+        &config.package_env_vars,
+        cpv_slot,
+        &profile_only_variables,
+        run_wide,
+    ));
+    let run_wide_features = run_wide
+        .iter()
+        .find(|(k, _)| k == "FEATURES")
+        .map(|(_, v)| v.as_str())
+        .unwrap_or("");
+    let calling_features = std::env::var("FEATURES").unwrap_or_default();
+    if let Some(features) = resolved_features_for(
+        &config.package_env_vars,
+        cpv_slot,
+        run_wide_features,
+        &calling_features,
+    ) {
+        build_env.push(("FEATURES".to_string(), features.clone()));
+        build_env.push(("PORTAGE_FEATURES".to_string(), features));
+    }
+    build_env.extend(entry_phase_env_tail(
+        Some(config),
+        repos,
+        entry,
+        Some(candidate),
+    ));
+    build_env
 }
 
 /// Real `emerge <atom>` with no `--pretend` and no `--buildpkgonly`/
@@ -634,18 +719,43 @@ fn entry_portage_tmpdir(
     )
 }
 
-/// Real per-package `FEATURES` (backlog #98) for one scheduler entry:
-/// `FEATURES` is an incremental, so the matched env-file value folds
-/// onto the run-wide resolved list in `[run-wide, pkg, calling-env]`
-/// order (`regenerate()`, `config.py:2735`, `:2778-2825`) instead of
-/// replacing it. `calling_features` is the raw calling-environment
-/// value (a parameter, not an ambient read, so the fold stays
-/// unit-testable); the run-wide base is `options.features` (the
-/// resolved list on `emerge` paths, the raw process fallback
-/// elsewhere). `None` when nothing matched (or the entry is not
-/// buildable) — the caller then keeps the run-wide value untouched, so
-/// entries without a `package.env` `FEATURES` entry keep
-/// byte-identical output.
+/// Real per-package `FEATURES` (backlog #98) for one `cat/pkg-ver:slot/sub`
+/// identity, given the `package.env` table and the run-wide folded
+/// `FEATURES` list to fold onto: `FEATURES` is an incremental, so the
+/// matched env-file value folds in `[run-wide, pkg, calling-env]` order
+/// (`regenerate()`, `config.py:2735`, `:2778-2825`) instead of replacing
+/// it. `None` when nothing matched — the caller then keeps the run-wide
+/// value untouched, so entries without a `package.env` `FEATURES` entry
+/// keep byte-identical output. Raw pieces, not `&MergeOptions`, so
+/// `run_buildpkgonly` (backlog #129, no `MergeOptions` in scope) shares
+/// this with the merge scheduler's [`entry_resolved_features`].
+fn resolved_features_for(
+    package_env_vars: &[(String, Vec<(String, String)>)],
+    cpv_slot: &str,
+    run_wide_features: &str,
+    calling_features: &str,
+) -> Option<String> {
+    let pkg_raw = crate::ebuild_phases::match_package_env_incremental_raw(
+        package_env_vars,
+        cpv_slot,
+        "FEATURES",
+    );
+    if pkg_raw.is_empty() {
+        return None;
+    }
+    Some(crate::ebuild_phases::fold_package_env_incremental(
+        run_wide_features,
+        &pkg_raw,
+        calling_features,
+    ))
+}
+
+/// [`resolved_features_for`] for one scheduler entry: `calling_features`
+/// is the raw calling-environment value (a parameter, not an ambient
+/// read, so the fold stays unit-testable); the run-wide base is
+/// `options.features` (the resolved list on `emerge` paths, the raw
+/// process fallback elsewhere). `None` when the entry is not buildable
+/// either.
 pub(crate) fn entry_resolved_features(
     options: &ebuild_merge::MergeOptions,
     entry: &GraphEntry,
@@ -653,19 +763,12 @@ pub(crate) fn entry_resolved_features(
 ) -> Option<String> {
     let version = entry_version(&entry.outcome)?;
     let cpv_slot = entry_cpv_slot(entry, version);
-    let pkg_raw = crate::ebuild_phases::match_package_env_incremental_raw(
+    resolved_features_for(
         &options.package_env_vars,
         &cpv_slot,
-        "FEATURES",
-    );
-    if pkg_raw.is_empty() {
-        return None;
-    }
-    Some(crate::ebuild_phases::fold_package_env_incremental(
         &options.features,
-        &pkg_raw,
         calling_features,
-    ))
+    )
 }
 
 /// `[("USE", "<space-joined enabled IUSE flags>")]` for `entry` -- the
@@ -701,19 +804,39 @@ fn entry_cpv_slot(entry: &GraphEntry, version: &str) -> String {
     )
 }
 
-/// The per-package `package.env` build vars that match `entry`'s cpv --
-/// real `_grab_pkg_env` folding a matching `/etc/portage/package.env`
-/// entry's env file into `configdict["pkg"]`, with real's acceptance set
-/// (`match_package_env_vars`). Incrementals fold onto `options.build_env`
-/// (the run-wide resolved env) instead of replacing it, matching
-/// `regenerate()`'s layer stacking.
+/// The `package.env` build vars that match one `cat/pkg-ver:slot/sub`
+/// identity -- real `_grab_pkg_env` folding a matching
+/// `/etc/portage/package.env` entry's env file into `configdict["pkg"]`,
+/// with real's acceptance set (`match_package_env_vars`). Incrementals
+/// fold onto `base_env` (the run-wide resolved env) instead of replacing
+/// it, matching `regenerate()`'s layer stacking. Raw pieces, not
+/// `&MergeOptions`, so `run_buildpkgonly` (backlog #129, no
+/// `MergeOptions` in scope) shares this with the merge scheduler's
+/// [`entry_package_env_vars`].
+fn matched_package_env_vars(
+    package_env_vars: &[(String, Vec<(String, String)>)],
+    cpv_slot: &str,
+    profile_only_variables: &[String],
+    base_env: &[(String, String)],
+) -> Vec<(String, String)> {
+    if package_env_vars.is_empty() {
+        return Vec::new();
+    }
+    crate::ebuild_phases::match_package_env_vars(
+        package_env_vars,
+        cpv_slot,
+        profile_only_variables,
+        base_env,
+        &portage_profile::config_env_all(),
+    )
+}
+
+/// [`matched_package_env_vars`] for one scheduler entry: `entry`'s cpv
+/// against `options.package_env_vars`, layered over `options.build_env`.
 fn entry_package_env_vars(
     options: &ebuild_merge::MergeOptions,
     entry: &GraphEntry,
 ) -> Vec<(String, String)> {
-    if options.package_env_vars.is_empty() {
-        return Vec::new();
-    }
     let Some(version) = entry_version(&entry.outcome) else {
         return Vec::new();
     };
@@ -723,12 +846,11 @@ fn entry_package_env_vars(
         .as_deref()
         .and_then(|config| config.resolved_incremental("PROFILE_ONLY_VARIABLES"))
         .unwrap_or_default();
-    crate::ebuild_phases::match_package_env_vars(
+    matched_package_env_vars(
         &options.package_env_vars,
         &cpv_slot,
         &profile_only_variables,
         &options.build_env,
-        &portage_profile::config_env_all(),
     )
 }
 
@@ -1283,11 +1405,27 @@ fn build_one_source_entry(
             .find(|(k, _)| k == "USE")
             .map(|(_, v)| v.as_str())
             .unwrap_or("");
+        // Real per-package `FEATURES` (backlog #130): the shared,
+        // run-wide `PackageOptions` `buildpkg` carries doesn't see this
+        // entry's own `package.env` `FEATURES` fold otherwise -- clone it
+        // and re-derive the binpkg-affecting tokens
+        // (`binpkg-multi-instance`/`buildpkg-live`/`binpkg-signing`) from
+        // the same per-entry folded list `entry_resolved_features`
+        // already computes for the phase env. `None` (no match) keeps
+        // `package_options`'s own already-resolved value.
+        let mut per_entry_package_options = package_options.clone();
+        if let Some(features) = entry_resolved_features(
+            options,
+            entry,
+            &std::env::var("FEATURES").unwrap_or_default(),
+        ) {
+            per_entry_package_options.set_resolved_features(&features);
+        }
         let status = ebuild_package::package_after_install(
             &path,
             root,
             portage_tmpdir,
-            package_options,
+            &per_entry_package_options,
             use_flags,
         )?;
         if status != 0 {
@@ -2087,6 +2225,267 @@ mod tests {
 
         let packages = fs::read_to_string(pkgdir.join("Packages")).unwrap();
         assert!(packages.contains("CPV: dev-libs/packagepkg-1.0"));
+    }
+
+    /// Backlog #129: `--buildpkgonly`'s per-entry env now matches
+    /// `package.env` the same way the merge scheduler's `entry_build_env`
+    /// does -- Phase 2 S0 cell A/F's own oracle (a matched `CFLAGS`/`CC`
+    /// wins over the run-wide value), applied to the third build path.
+    /// Direct unit test of `buildpkgonly_entry_build_env` (no real build),
+    /// the same pattern `entry_build_env_resolves_full_use_expand_and_
+    /// entry_identity` already uses for the merge-scheduler sibling.
+    #[test]
+    fn buildpkgonly_entry_build_env_matches_package_env_and_folds_flags() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let candidate = locate_candidate(&repos, "dev-libs", "penvbuildpkg", "1.0")
+            .expect("penvbuildpkg-1.0 fixture candidate resolves");
+        let entry = source_entry(
+            "penvbuildpkg",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        let config = portage_profile::Config {
+            package_env_vars: vec![(
+                "dev-libs/penvbuildpkg".to_string(),
+                vec![
+                    (
+                        "CFLAGS".to_string(),
+                        "-Os -march=buildpkgonlypenv".to_string(),
+                    ),
+                    ("CC".to_string(), "buildpkgonly-cc".to_string()),
+                ],
+            )],
+            ..portage_profile::Config::default()
+        };
+        let run_wide = run_wide_phase_env(&config);
+        let cpv_slot = entry_cpv_slot(&entry, "1.0");
+        let build_env =
+            buildpkgonly_entry_build_env(&config, &repos, &entry, &candidate, &cpv_slot, &run_wide);
+        let get = |key: &str| {
+            build_env
+                .iter()
+                .filter(|(k, _)| k == key)
+                .map(|(_, v)| v.clone())
+                .next_back()
+        };
+        assert_eq!(
+            get("CFLAGS").as_deref(),
+            Some("-Os -march=buildpkgonlypenv")
+        );
+        assert_eq!(get("CC").as_deref(), Some("buildpkgonly-cc"));
+
+        // An unmatched entry (different cpv) keeps the run-wide value --
+        // #129 must not leak a matched entry's vars onto its neighbours.
+        let other = source_entry(
+            "newpkg",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        let other_candidate = locate_candidate(&repos, "dev-libs", "newpkg", "1.0")
+            .expect("newpkg-1.0 fixture candidate resolves");
+        let other_cpv_slot = entry_cpv_slot(&other, "1.0");
+        let other_env = buildpkgonly_entry_build_env(
+            &config,
+            &repos,
+            &other,
+            &other_candidate,
+            &other_cpv_slot,
+            &run_wide,
+        );
+        assert_ne!(
+            other_env
+                .iter()
+                .find(|(k, _)| k == "CFLAGS")
+                .map(|(_, v)| v.as_str()),
+            Some("-Os -march=buildpkgonlypenv"),
+            "an unmatched neighbour must not see the matched entry's package.env value"
+        );
+    }
+
+    /// Backlog #98/#129: a `package.env` `FEATURES` entry is an
+    /// incremental -- it folds onto the run-wide list
+    /// (`[run-wide, pkg, calling-env]`), it does not replace it.
+    #[test]
+    fn buildpkgonly_entry_build_env_folds_matched_features() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let candidate = locate_candidate(&repos, "dev-libs", "penvbuildpkg", "1.0")
+            .expect("penvbuildpkg-1.0 fixture candidate resolves");
+        let entry = source_entry(
+            "penvbuildpkg",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        let config = portage_profile::Config {
+            package_env_vars: vec![(
+                "dev-libs/penvbuildpkg".to_string(),
+                vec![("FEATURES".to_string(), "splitdebug".to_string())],
+            )],
+            ..portage_profile::Config::default()
+        };
+        let run_wide = run_wide_phase_env(&config);
+        let run_wide_features = run_wide
+            .iter()
+            .find(|(k, _)| k == "FEATURES")
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default();
+        let cpv_slot = entry_cpv_slot(&entry, "1.0");
+        let build_env =
+            buildpkgonly_entry_build_env(&config, &repos, &entry, &candidate, &cpv_slot, &run_wide);
+        let features = build_env
+            .iter()
+            .filter(|(k, _)| k == "FEATURES")
+            .map(|(_, v)| v.clone())
+            .next_back()
+            .expect("FEATURES is exported");
+        assert!(
+            features.split_whitespace().any(|t| t == "splitdebug"),
+            "matched FEATURES must fold in, got {features:?}"
+        );
+        for tok in run_wide_features.split_whitespace() {
+            assert!(
+                features.split_whitespace().any(|t| t == tok),
+                "the run-wide FEATURES token {tok:?} must survive the fold, got {features:?}"
+            );
+        }
+    }
+
+    /// Backlog #99/#129 (Phase 2 S0 cell E): a matched `PORTAGE_TMPDIR`
+    /// that does not exist on disk is real's exact `_check_temp_dir`
+    /// failure, and `run_buildpkgonly` now re-derives the tmpdir per
+    /// entry instead of only ever using the run-wide one.
+    #[test]
+    fn run_buildpkgonly_recomputes_per_entry_portage_tmpdir_and_fails_on_a_missing_match() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+        let pkgdir = tempdir();
+        let missing = portage_tmpdir.join("no-such-buildpkgonly-tmpdir");
+
+        let entries = vec![source_entry(
+            "penvbuildpkg",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        )];
+        let config = portage_profile::Config {
+            package_env_vars: vec![(
+                "dev-libs/penvbuildpkg".to_string(),
+                vec![(
+                    "PORTAGE_TMPDIR".to_string(),
+                    missing.to_str().unwrap().to_string(),
+                )],
+            )],
+            ..portage_profile::Config::default()
+        };
+
+        let result = run_buildpkgonly(
+            &entries,
+            &config,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &PackageOptions {
+                debug: false,
+                pkgdir,
+                distdir: tempdir(),
+                shell: PackageOptions::default().shell,
+                binpkg_compress: "bzip2".to_string(),
+                ..PackageOptions::default()
+            },
+            false,
+        );
+        let err = result.expect_err("a missing matched PORTAGE_TMPDIR must fail the entry");
+        assert!(
+            err.contains(&format!(
+                "The directory specified in your PORTAGE_TMPDIR variable, '{}',",
+                missing.display()
+            )),
+            "expected real's exact _check_temp_dir message, got: {err}"
+        );
+        assert!(
+            err.contains("does not exist.  Please create this directory or correct your PORTAGE_TMPDIR setting."),
+            "expected real's exact _check_temp_dir message, got: {err}"
+        );
+    }
+
+    /// Backlog #130: `--buildpkgonly` re-derives `PackageOptions`'
+    /// binpkg-affecting fields (`binpkg_multi_instance` here) from the
+    /// per-entry `package.env` `FEATURES` fold, not the single shared,
+    /// run-wide `PackageOptions` every entry in the run otherwise gets.
+    /// Real `bintree._allocate_filename_multi`'s own path shape
+    /// (`<pkgdir>/<cat>/<pn>/<pf>-<id>.xpak`, proven at the
+    /// `PackageOptions`/`run_package` level by
+    /// `real_package_with_binpkg_multi_instance_writes_the_cat_pn_subdir_layout`
+    /// in `ebuild_package.rs`) is the observable: only the matched entry
+    /// gets it, its unmatched neighbour in the same run keeps the shared
+    /// `binpkg_multi_instance: false` single-instance layout.
+    #[test]
+    fn run_buildpkgonly_resolves_per_entry_binpkg_multi_instance_from_package_env() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+        let pkgdir = tempdir();
+
+        let entries = vec![
+            source_entry(
+                "packagepkg",
+                PretendOutcome::New {
+                    version: "1.0".into(),
+                },
+            ),
+            source_entry(
+                "newpkg",
+                PretendOutcome::New {
+                    version: "1.0".into(),
+                },
+            ),
+        ];
+        let config = portage_profile::Config {
+            package_env_vars: vec![(
+                "dev-libs/packagepkg".to_string(),
+                vec![("FEATURES".to_string(), "binpkg-multi-instance".to_string())],
+            )],
+            ..portage_profile::Config::default()
+        };
+
+        let result = run_buildpkgonly(
+            &entries,
+            &config,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &PackageOptions {
+                debug: false,
+                pkgdir: pkgdir.clone(),
+                distdir: tempdir(),
+                shell: PackageOptions::default().shell,
+                binpkg_compress: "bzip2".to_string(),
+                binpkg_multi_instance: false,
+                ..PackageOptions::default()
+            },
+            false,
+        );
+        assert!(result.is_ok(), "{result:?}");
+
+        let matched = pkgdir.join("dev-libs/packagepkg/packagepkg-1.0-1.xpak");
+        assert!(
+            matched.is_file(),
+            "{matched:?} should exist -- the matched entry's package.env FEATURES=binpkg-multi-instance \
+             must reach PackageOptions, not just the run-wide default"
+        );
+        let unmatched = pkgdir.join("dev-libs/newpkg-1.0.tbz2");
+        assert!(
+            unmatched.is_file(),
+            "{unmatched:?} should exist -- the unmatched neighbour must keep the run-wide \
+             binpkg_multi_instance: false single-instance layout"
+        );
     }
 
     fn source_entry(package: &str, outcome: PretendOutcome) -> GraphEntry {

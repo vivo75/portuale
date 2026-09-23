@@ -107,6 +107,7 @@ pub fn is_real_package_command(command: &str) -> bool {
 /// `ebuild_merge::MergeOptions` already applied). `pkgdir` is env-var-
 /// sourced at the `ebuild.rs` CLI boundary; `Default` matches real
 /// `make.globals`'s own `PKGDIR="/var/cache/binpkgs"` exactly.
+#[derive(Clone)]
 pub struct PackageOptions {
     pub debug: bool,
     pub pkgdir: PathBuf,
@@ -217,6 +218,31 @@ impl Default for PackageOptions {
             binpkg_gpg_signing_gpg_home: String::new(),
             binpkg_gpg_signing_key: String::new(),
         }
+    }
+}
+
+impl PackageOptions {
+    /// Real per-package `FEATURES` (backlog #130): re-derive the
+    /// binpkg-affecting tokens from a **resolved**, already-folded
+    /// `FEATURES` list -- the same "presence is the answer" reading
+    /// `package_options_from_env`'s own `Some(resolved_features)` arm
+    /// already uses (a negated token has already been folded away by
+    /// `regenerate()`/`fold_package_env_incremental`, so a plain
+    /// presence check is correct here, unlike the raw-process-env
+    /// default-on-unless-negated fallback `PackageOptions::default`'s own
+    /// `buildpkg_live` doc comment describes). Mirrors
+    /// `ebuild_merge::MergeOptions::set_resolved_features`'s shape: the
+    /// `emerge` production paths call this right after resolving a
+    /// per-entry `FEATURES` fold, so a `package_after_install` call site
+    /// that shares one `PackageOptions` across every entry in a run can
+    /// clone it and re-derive the tokens for just this entry instead.
+    /// `binpkg_compress`/`binpkg_format`/the GPG signing identity fields
+    /// are config scalars, not `FEATURES` tokens, and are untouched here.
+    pub fn set_resolved_features(&mut self, features: &str) {
+        let has = |token: &str| features.split_whitespace().any(|t| t == token);
+        self.buildpkg_live = has("buildpkg-live");
+        self.binpkg_multi_instance = has("binpkg-multi-instance");
+        self.binpkg_signing = has("binpkg-signing");
     }
 }
 
@@ -1303,6 +1329,43 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// Backlog #130: `set_resolved_features` re-derives the
+    /// binpkg-affecting tokens from a resolved (already-folded)
+    /// `FEATURES` list by plain presence -- unlike the raw-process-env
+    /// `Default`/`package_options_from_env`'s `None` arm, a negated token
+    /// has already been folded away, so presence alone is correct here.
+    #[test]
+    fn set_resolved_features_rederives_the_binpkg_affecting_tokens() {
+        let mut options = PackageOptions {
+            buildpkg_live: false,
+            binpkg_multi_instance: false,
+            binpkg_signing: false,
+            ..PackageOptions::default()
+        };
+        options
+            .set_resolved_features("binpkg-multi-instance buildpkg-live binpkg-signing splitdebug");
+        assert!(options.buildpkg_live);
+        assert!(options.binpkg_multi_instance);
+        assert!(options.binpkg_signing);
+
+        // A folded list that no longer carries a token turns it back off
+        // -- this is a full re-derivation, not an additive merge.
+        options.set_resolved_features("splitdebug");
+        assert!(!options.buildpkg_live);
+        assert!(!options.binpkg_multi_instance);
+        assert!(!options.binpkg_signing);
+
+        // Config scalars are untouched.
+        assert_eq!(
+            options.binpkg_compress,
+            PackageOptions::default().binpkg_compress
+        );
+        assert_eq!(
+            options.binpkg_format,
+            PackageOptions::default().binpkg_format
+        );
     }
 
     #[test]
