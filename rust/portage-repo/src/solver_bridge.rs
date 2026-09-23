@@ -568,7 +568,10 @@ fn graph_result_from_order(
         // resolved USE: flatten each key with USE applied, and record
         // every blocker atom against this owner (deduped per owner+atom;
         // one owner can name the same block in several keys).
-        for raw in record.raw_deps.iter() {
+        // #143 S1: `raw_deps` is key-ordered
+        // (DEPEND/RDEPEND/BDEPEND/PDEPEND/IDEPEND), so the index
+        // recovers real's `blocker.priority.buildtime` provenance.
+        for (key_idx, raw) in record.raw_deps.iter().enumerate() {
             let toks: Vec<String> = raw.split_whitespace().map(str::to_string).collect();
             let Ok(flat) = portage_use_reduce::use_reduce_flat(
                 &toks,
@@ -594,6 +597,8 @@ fn graph_result_from_order(
                     pending_blockers.push(super::PendingBlocker {
                         atom_str: evaluated,
                         strong: dep_atom.blocker == portage_dep::Blocker::Strong,
+                        // #143 S1: key-ordered `raw_deps` (see above).
+                        buildtime: key_idx == 0 || key_idx == 2,
                         target_category: dep_atom.category,
                         target_package: dep_atom.package,
                         owner_key: (record.category.clone(), record.package.clone()),
@@ -646,6 +651,11 @@ fn graph_result_from_order(
         &entries,
         // The bridge engines have no required-set closure of their own.
         &std::collections::HashSet::new(),
+        // #143 S1: the bridge path never runs under `--buildpkgonly`
+        // (`ResolveRequest` carries no such flag — the parked
+        // pubgrub/resolvo engines are not the `--buildpkgonly` CLI
+        // path), so the gate is inert here.
+        false,
     );
     let mut orphan_blockers = Vec::new();
     super::file_blocker_conflicts(
