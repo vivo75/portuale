@@ -17869,3 +17869,14 @@ PORTAGE_TMPDIR=/tmp/portage-tmp portuale ebuild --shell brush /var/db/repos/gent
 ```
 
 The pin guard is the `exportexpandpkg` fixture (an `export ${var}`-using `src_install` that dies unless the variable arrived — cache-less, direct-path only, like `heredocpkg`) plus `ebuild_phases::tests::expanded_name_export_assigns_in_both_backends`, which installs it under both backends and asserts identical image file sets (watched RED on the old pin: brush `install` exits 1 with `export ${var} did not assign (got [])`). Staged upstream as the sixth thin-fork fix (`docs/brush-pr/06-declaration-assignment-expansion.md`, fork `main` `eb3b6c7b`, re-pinned `4edb1f43` → `eb3b6c7b`); this removes one of the two blockers to flipping `--shell`'s default (the other is #5's now-five unopened PRs). Two honest notes: `$?` after a failed `export` differs between `brush -c` (1, matching bash) and a stdin-fed script (0) — pre-existing, left alone; `export 'ea[0]=1'` matches bash under the harness but reports rc 1 from `-c` where bash reports 0. Detail: `docs/01.94-brush-declaration-assignment.md` (done), oracles `brush-shell/tests/cases/compat/builtins/declaration-assignment-expansion.yaml` (8 new cases, 13 unmarked known-failures; compat 2576 / 2120 / 0 unexpected).
+
+**The last direct `SLOT` scan and the last duplicate `PF` splitter are gone (Phase 6b S0–S2, 2026-09-23; #127/#126 DONE).** `portage_repo::split_pf` is the single longest-trailing-version splitter — `portuale::remote_bundle::split_pf` and portage-repo's private `split_installed_dir` are deleted, their five call sites (driver env, collision-owner scan, `depend_phase_metadata`, `same_package`, the installed listing) re-pointed — and `ebuild_merge::read_installed_slot` reads through `vdb_entry_slot`, keeping its main-slot projection verbatim while gaining the snapshot win and `_aux_get`'s multi-line collapse. A missing/empty `SLOT` reads as `Some("0")` per real `aux_get` (O5, owner-ruled 2026-09-23; #115 keeps the invalid-nonempty/`EAPI`/`_mtime_` thirds), which is inert on real data (host probe: 2090/2090 entries single-line `SLOT`, none missing). Runnable proof:
+
+```sh
+cargo test --release -p portage-repo split_pf
+# ok: 2 passed (foo-1bar-2.0 -> foo-1bar/2.0, foo-r1-2.0 -> foo-r1/2.0 — real _pkgsplit values, pinned for the first time)
+cargo test --release -p portuale read_installed_slot
+# ok: 3 passed (SLOT-less -> Some("0"), empty -> Some("0"), multi-line collapse)
+```
+
+Output-preserving over the full contract suite (1773 passed / 0 failed) and corpus; merge-path gate green (L1 glibc+bash reinstall `l1-20260923T020132Z`, merged_count 2, 0 hard / 0 unexplained). One honest note: the plan listed three `remote_bundle::split_pf` callers and grep found a fourth (the collision-owner scan) — consolidated under the same argument, recorded in the commit. Detail: `docs/08.126-127-vdb-slot-residues.md` (done), oracle `08.109-110-vdb-metadata-snapshot.md` §2.
