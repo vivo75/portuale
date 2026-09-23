@@ -2384,20 +2384,37 @@ pub(crate) fn write_vdb_entry_from_dir(
     Ok(())
 }
 
+/// The installed `SLOT` (main slot only) of
+/// `<root>/var/db/pkg/<category>/<package>-<version>`, read through the
+/// shared [`portage_repo::vdb_entry_slot`] seam every other
+/// installed-metadata consumer uses: a valid consolidated `metadata`
+/// snapshot serves the field with no per-entry `open()`, and a
+/// multi-line value collapses to one space-separated line the way real
+/// `_aux_get` normalises (`" ".join(myd.split())`,
+/// `vartree.py:975-1053`). A missing or empty `SLOT` reads as
+/// `Some("0")`, matching real `aux_get`'s invalid-`SLOT` → `"0"`
+/// translation (`:967-972`; O5 ruling 2026-09-23, which folds #115's
+/// empty-`SLOT` half into this slice — a present-but-invalid value
+/// stays #115's residue, as do `EAPI` and `_mtime_`). The return stays
+/// `Option<String>` so the five callers' `None` arms keep compiling
+/// untouched, but it is now always `Some`: every caller only queries
+/// listed installed versions, so "no such entry" cannot reach here in
+/// practice (and real `aux_get` raises `KeyError` there — portuale has
+/// no such signal, per `vdb_aux_get`'s own doc).
 pub(crate) fn read_installed_slot(
     root: &Path,
     category: &str,
     package: &str,
     version: &str,
 ) -> Option<String> {
-    let path = root
-        .join("var/db/pkg")
-        .join(category)
-        .join(format!("{package}-{version}"))
-        .join("SLOT");
-    std::fs::read_to_string(path)
-        .ok()
-        .map(|text| text.trim().split('/').next().unwrap_or("").to_string())
+    let pf = format!("{package}-{version}");
+    let raw = portage_repo::vdb_entry_slot(root, category, &pf);
+    let main = raw.split('/').next().unwrap_or("");
+    if main.is_empty() {
+        Some("0".to_string())
+    } else {
+        Some(main.to_string())
+    }
 }
 
 /// Real `self._installed_instance` selection (`vartree.py:4409-4418`):
@@ -2905,7 +2922,7 @@ fn find_owners(root: &Path, collisions: &[String]) -> BTreeMap<String, Vec<Strin
                 continue;
             }
             let pf = pkg_entry.file_name().to_string_lossy().to_string();
-            let Some((package, version)) = crate::remote_bundle::split_pf(&pf) else {
+            let Some((package, version)) = portage_repo::split_pf(&pf) else {
                 continue;
             };
             let mut claimed = Vec::new();
@@ -4194,6 +4211,54 @@ mod tests {
             installed_instance_pf(&root, "dev-libs", "instpkg", "2"),
             None,
             "no installed version at all in this slot"
+        );
+    }
+
+    #[test]
+    fn read_installed_slot_returns_0_for_a_slot_less_vdb_entry() {
+        // #126 (O5 ruling 2026-09-23): real `aux_get` translates a
+        // missing/empty SLOT to "0", so a SLOT-less entry groups with
+        // slot-"0" entries instead of being skipped.
+        let tmp = tempdir();
+        let root = tmp.join("ROOT");
+        let vdb_dir = root.join("var/db/pkg/dev-libs/slotlesspkg-1.0");
+        std::fs::create_dir_all(&vdb_dir).unwrap();
+        std::fs::write(vdb_dir.join("COUNTER"), "1").unwrap();
+
+        assert_eq!(
+            read_installed_slot(&root, "dev-libs", "slotlesspkg", "1.0"),
+            Some("0".to_string())
+        );
+    }
+
+    #[test]
+    fn read_installed_slot_returns_0_for_an_empty_slot_file() {
+        let tmp = tempdir();
+        let root = tmp.join("ROOT");
+        let vdb_dir = root.join("var/db/pkg/dev-libs/emptyslotpkg-1.0");
+        std::fs::create_dir_all(&vdb_dir).unwrap();
+        std::fs::write(vdb_dir.join("SLOT"), "").unwrap();
+
+        assert_eq!(
+            read_installed_slot(&root, "dev-libs", "emptyslotpkg", "1.0"),
+            Some("0".to_string())
+        );
+    }
+
+    #[test]
+    fn read_installed_slot_collapses_a_multiline_slot_before_the_main_slot_projection() {
+        // #126: through the seam a multi-line SLOT collapses
+        // (`" ".join(myd.split())`, real `_aux_get`) where the old bare
+        // `.trim()` kept the embedded newline.
+        let tmp = tempdir();
+        let root = tmp.join("ROOT");
+        let vdb_dir = root.join("var/db/pkg/dev-libs/multilinepkg-1.0");
+        std::fs::create_dir_all(&vdb_dir).unwrap();
+        std::fs::write(vdb_dir.join("SLOT"), "0\n1\n").unwrap();
+
+        assert_eq!(
+            read_installed_slot(&root, "dev-libs", "multilinepkg", "1.0"),
+            Some("0 1".to_string())
         );
     }
 

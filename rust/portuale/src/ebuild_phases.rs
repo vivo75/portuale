@@ -3666,7 +3666,7 @@ pub(crate) fn depend_phase_metadata(
     category: &str,
     pf: &str,
 ) -> Result<std::collections::HashMap<String, String>, String> {
-    let Some((package, _version)) = crate::remote_bundle::split_pf(pf) else {
+    let Some((package, _version)) = portage_repo::split_pf(pf) else {
         return Err(format!("{pf}: not a package-version name"));
     };
     let ebuild = repo_location
