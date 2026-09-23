@@ -17860,3 +17860,17 @@ portuale emerge -p -D dev-libs/deepusedepfconsumer
 ```
 
 The capture set (`l141-135-s0.txt`, bed `l0-fx-20260922T212815Z`) drops from 5 unexplained to 1; the default bed holds 39/30 with only the pre-existing p2b residue. Two honest stops: #136's item text is contradicted by its own capture (the notice already lists both instances — the gap is the merge list, `build_slot_conflict` is not the site), and #135(a)(b) are live-tree-only shapes with no fixture oracle. Detail: `docs/02.134-141-resolver-display-residues.md` (S5 suspended), oracles `../pmtest/differential-test-bed/findings/l0.md` "## #141/#135/#138/#134/#136 S0" + "## #135 S2 (d)+(e)/(c)".
+
+**`package.env` now reaches the third build path and the binpkg-affecting `FEATURES` tokens (Phase 2b #129/#130, 2026-09-23).** #98–#101 wired `package.env` matching into the merge scheduler and the standalone `ebuild <file>` phase-env paths but left two gaps: `emerge_build::run_buildpkgonly` built its per-entry env from the run-wide base alone (no match, no `FEATURES` fold, no `PORTAGE_TMPDIR` recompute), and every `package_after_install` call site — the `-jN` scheduler's build function, `ebuild_merge::run_merge`'s internal packaging, and `run_buildpkgonly`'s own `run_package` call — shared one run-wide `PackageOptions`, so a per-entry `package.env` `FEATURES=binpkg-multi-instance`/`buildpkg-live`/`binpkg-signing` never reached the binpkg it named. Both are fixed: `run_buildpkgonly` now matches `config.package_env_vars` directly (no `MergeOptions` needed — `Config` already carries the table), folds `FEATURES`, and recomputes the per-entry `PORTAGE_TMPDIR`, exactly like the other two paths; and `PackageOptions::set_resolved_features` (mirroring `MergeOptions::set_resolved_features`) re-derives the binpkg-affecting fields from a resolved `FEATURES` list at all three call sites. Live-verified, no oracle capture needed (Phase 2's S0 already established the four-layer model these two items just extend to new call sites):
+
+```sh
+FX=$PWD/fixtures
+PORTAGE_CONFIGROOT=$FX ROOT=/tmp/demo-root PORTAGE_TMPDIR=/tmp/demo-tmp PKGDIR=/tmp/demo-pkgdir \
+  portuale emerge --buildpkgonly dev-libs/penvbuildpkg
+# >>> Building binary for dev-libs/penvbuildpkg-1.0...
+tar xOf /tmp/demo-pkgdir/dev-libs/penvbuildpkg-1.0.tbz2 ./usr/share/penvbuildpkg/flags
+# CFLAGS=-Os -march=fixturepkgenv   (fixtures/etc/portage/env/penv-buildflags, not make.conf's default)
+# CC=fixture-cc
+```
+
+Before this slice the same command built with the run-wide flags, silently ignoring the fixture's own `/etc/portage/package.env` entry for `dev-libs/penvbuildpkg`. Pinned by three `emerge_build.rs` Rust unit tests (`buildpkgonly_entry_build_env_matches_package_env_and_folds_flags`, `_folds_matched_features`, `run_buildpkgonly_recomputes_per_entry_portage_tmpdir_and_fails_on_a_missing_match`) and a per-entry `binpkg-multi-instance` pin (`run_buildpkgonly_resolves_per_entry_binpkg_multi_instance_from_package_env`: one matched package gets real's `<pkgdir>/<cat>/<pn>/<pf>-<id>.xpak` multi-instance layout, its unmatched neighbour in the same run keeps the single-instance default) plus `PackageOptions`/`MergeOptions` `set_resolved_features` unit tests. O4 (whether a per-entry binpkg-artefact-shape change needs an owner ruling before a pmtest pin moves) stands: this slice lands the mechanism and Rust-level proof only, no `2pmtest`/`pmtest` CASES row or contract pin. Detail: `docs/01.129-130-per-entry-env-residues.md`.

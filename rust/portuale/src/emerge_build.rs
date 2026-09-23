@@ -223,13 +223,28 @@ pub fn run_buildpkgonly(
                 )),
             }
         };
+        // Real per-package `FEATURES` (backlog #130): `build_env` already
+        // carries this entry's fully resolved `FEATURES` (the per-entry
+        // `package.env` fold when one matched, the run-wide value
+        // otherwise -- `buildpkgonly_entry_build_env`'s own doc comment),
+        // so re-derive the binpkg-affecting `PackageOptions` fields from
+        // it here rather than the caller's single shared, run-wide value.
+        let mut per_entry_options = options.clone();
+        if let Some(features) = build_env
+            .iter()
+            .rev()
+            .find(|(k, _)| k == "FEATURES")
+            .map(|(_, v)| v.as_str())
+        {
+            per_entry_options.set_resolved_features(features);
+        }
         let failure = match clean_failure("pre") {
             Some(failure) => Some(failure),
             None => match ebuild_package::run_package(
                 &path,
                 root,
                 portage_tmpdir,
-                options,
+                &per_entry_options,
                 &build_env,
                 use_flags,
             ) {
@@ -1390,11 +1405,27 @@ fn build_one_source_entry(
             .find(|(k, _)| k == "USE")
             .map(|(_, v)| v.as_str())
             .unwrap_or("");
+        // Real per-package `FEATURES` (backlog #130): the shared,
+        // run-wide `PackageOptions` `buildpkg` carries doesn't see this
+        // entry's own `package.env` `FEATURES` fold otherwise -- clone it
+        // and re-derive the binpkg-affecting tokens
+        // (`binpkg-multi-instance`/`buildpkg-live`/`binpkg-signing`) from
+        // the same per-entry folded list `entry_resolved_features`
+        // already computes for the phase env. `None` (no match) keeps
+        // `package_options`'s own already-resolved value.
+        let mut per_entry_package_options = package_options.clone();
+        if let Some(features) = entry_resolved_features(
+            options,
+            entry,
+            &std::env::var("FEATURES").unwrap_or_default(),
+        ) {
+            per_entry_package_options.set_resolved_features(&features);
+        }
         let status = ebuild_package::package_after_install(
             &path,
             root,
             portage_tmpdir,
-            package_options,
+            &per_entry_package_options,
             use_flags,
         )?;
         if status != 0 {
@@ -2380,6 +2411,80 @@ mod tests {
         assert!(
             err.contains("does not exist.  Please create this directory or correct your PORTAGE_TMPDIR setting."),
             "expected real's exact _check_temp_dir message, got: {err}"
+        );
+    }
+
+    /// Backlog #130: `--buildpkgonly` re-derives `PackageOptions`'
+    /// binpkg-affecting fields (`binpkg_multi_instance` here) from the
+    /// per-entry `package.env` `FEATURES` fold, not the single shared,
+    /// run-wide `PackageOptions` every entry in the run otherwise gets.
+    /// Real `bintree._allocate_filename_multi`'s own path shape
+    /// (`<pkgdir>/<cat>/<pn>/<pf>-<id>.xpak`, proven at the
+    /// `PackageOptions`/`run_package` level by
+    /// `real_package_with_binpkg_multi_instance_writes_the_cat_pn_subdir_layout`
+    /// in `ebuild_package.rs`) is the observable: only the matched entry
+    /// gets it, its unmatched neighbour in the same run keeps the shared
+    /// `binpkg_multi_instance: false` single-instance layout.
+    #[test]
+    fn run_buildpkgonly_resolves_per_entry_binpkg_multi_instance_from_package_env() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+        let pkgdir = tempdir();
+
+        let entries = vec![
+            source_entry(
+                "packagepkg",
+                PretendOutcome::New {
+                    version: "1.0".into(),
+                },
+            ),
+            source_entry(
+                "newpkg",
+                PretendOutcome::New {
+                    version: "1.0".into(),
+                },
+            ),
+        ];
+        let config = portage_profile::Config {
+            package_env_vars: vec![(
+                "dev-libs/packagepkg".to_string(),
+                vec![("FEATURES".to_string(), "binpkg-multi-instance".to_string())],
+            )],
+            ..portage_profile::Config::default()
+        };
+
+        let result = run_buildpkgonly(
+            &entries,
+            &config,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &PackageOptions {
+                debug: false,
+                pkgdir: pkgdir.clone(),
+                distdir: tempdir(),
+                shell: PackageOptions::default().shell,
+                binpkg_compress: "bzip2".to_string(),
+                binpkg_multi_instance: false,
+                ..PackageOptions::default()
+            },
+            false,
+        );
+        assert!(result.is_ok(), "{result:?}");
+
+        let matched = pkgdir.join("dev-libs/packagepkg/packagepkg-1.0-1.xpak");
+        assert!(
+            matched.is_file(),
+            "{matched:?} should exist -- the matched entry's package.env FEATURES=binpkg-multi-instance \
+             must reach PackageOptions, not just the run-wide default"
+        );
+        let unmatched = pkgdir.join("dev-libs/newpkg-1.0.tbz2");
+        assert!(
+            unmatched.is_file(),
+            "{unmatched:?} should exist -- the unmatched neighbour must keep the run-wide \
+             binpkg_multi_instance: false single-instance layout"
         );
     }
 

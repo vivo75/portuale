@@ -288,7 +288,25 @@ pub fn run(args: &[String]) -> ExitCode {
         // PROTECT[_MASK]`, `DISTDIR`, the `collision-protect`/
         // `protect-owned`/`config-protect-if-modified` `FEATURES`
         // tokens, `NOCONFMEM`, `PORTAGE_CONFIGROOT`.
-        let merge_options = ebuild_merge::MergeOptions::from_env(shell, debug);
+        let mut merge_options = ebuild_merge::MergeOptions::from_env(shell, debug);
+        // Real per-package `FEATURES` (backlog #130): standalone `ebuild
+        // <file> merge`/`qmerge` never resolved a matched `package.env`
+        // `FEATURES` value before -- `from_env` only ever read the raw
+        // process `$FEATURES`. Fold a match onto that same raw value
+        // (real's `[run-wide, pkg, calling-env]` order collapses to
+        // `[raw-process, pkg, raw-process]` here, since standalone
+        // `ebuild` has no separately resolved run-wide config) and
+        // re-derive the merge-time gates from it, matching the resolved-
+        // graph paths' `set_resolved_features` call.
+        if let Some(features) = ebuild_phases::resolve_standalone_resolved_features(
+            std::path::Path::new(ebuild_file),
+            &portage_repo::config_root_from_env(),
+            &root,
+            &merge_options.features,
+            &std::env::var("FEATURES").unwrap_or_default(),
+        ) {
+            merge_options.set_resolved_features(&features);
+        }
         // Real `"unmerge-orphans" in self.settings.features` -- same
         // env-var-not-full-config-resolution shortcut `collision_protect`/
         // `protect_owned` above already use.

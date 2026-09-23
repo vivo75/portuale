@@ -3077,11 +3077,22 @@ pub fn run_merge(
             .find(|(k, _)| k == "USE")
             .map(|(_, v)| v.as_str())
             .unwrap_or("");
+        // Real per-package `FEATURES` (backlog #130): `options.features`
+        // is already this call's fully resolved value -- the caller's
+        // own per-entry fold when one matched (`entry_resolved_features`
+        // + `MergeOptions::set_resolved_features`), the run-wide value
+        // otherwise -- so re-deriving the binpkg-affecting `PackageOptions`
+        // fields from it here keeps `binpkg-multi-instance`/
+        // `buildpkg-live`/`binpkg-signing` in step with the same
+        // `FEATURES` the `install` phase above just saw, instead of the
+        // caller's single shared, run-wide `PackageOptions`.
+        let mut per_entry_package_options = package_options.clone();
+        per_entry_package_options.set_resolved_features(&options.features);
         let status = crate::ebuild_package::package_after_install(
             ebuild_path,
             root,
             portage_tmpdir,
-            package_options,
+            &per_entry_package_options,
             use_flags,
         )?;
         if status != 0 {

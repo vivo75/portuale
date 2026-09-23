@@ -1393,23 +1393,63 @@ pub(crate) fn resolve_standalone_portage_tmpdir(
     if process_tmpdir.is_some() {
         return Ok(run_tmpdir.to_path_buf());
     }
-    let Some((pkg_dir, category, pf)) = (|| -> Option<(PathBuf, String, String)> {
-        let ebuild_abs = ebuild_path.canonicalize().ok()?;
-        let pkg_dir = ebuild_abs.parent()?.to_path_buf();
-        let file_name = ebuild_abs.file_name()?.to_str()?;
-        let pf = file_name.strip_suffix(".ebuild")?.to_string();
-        let category = pkg_dir.parent()?.file_name()?.to_str()?.to_string();
-        Some((pkg_dir, category, pf))
-    })() else {
-        return Ok(run_tmpdir.to_path_buf());
-    };
-    let (Some(config), Some(cpv_slot)) = (
-        resolve_standalone_config(&pkg_dir, config_root, eroot),
-        standalone_cpv_slot(&pkg_dir, &category, &pf),
-    ) else {
+    let Some((config, cpv_slot)) = standalone_package_env_lookup(ebuild_path, config_root, eroot)
+    else {
         return Ok(run_tmpdir.to_path_buf());
     };
     resolve_entry_portage_tmpdir(&config.package_env_vars, &cpv_slot, run_tmpdir, None)
+}
+
+/// The resolved `Config` and `cat/pkg-ver:slot/sub` identity real
+/// `_grab_pkg_env` would match, for an ebuild with no resolved graph
+/// entry (standalone `ebuild <file>`/`qmerge`): the ebuild's own path
+/// gives the `category`/`pf`, [`resolve_standalone_config`] the
+/// `package_env_vars` table, [`standalone_cpv_slot`] the md5-cache
+/// `SLOT`. `None` outside a repo checkout or on an unparsable path --
+/// shared by [`resolve_standalone_portage_tmpdir`] (#99) and
+/// [`resolve_standalone_resolved_features`] (#130) so the path-parsing
+/// only happens once.
+fn standalone_package_env_lookup(
+    ebuild_path: &Path,
+    config_root: &Path,
+    eroot: &Path,
+) -> Option<(portage_profile::Config, String)> {
+    let ebuild_abs = ebuild_path.canonicalize().ok()?;
+    let pkg_dir = ebuild_abs.parent()?.to_path_buf();
+    let file_name = ebuild_abs.file_name()?.to_str()?;
+    let pf = file_name.strip_suffix(".ebuild")?;
+    let category = pkg_dir.parent()?.file_name()?.to_str()?;
+    let config = resolve_standalone_config(&pkg_dir, config_root, eroot)?;
+    let cpv_slot = standalone_cpv_slot(&pkg_dir, category, pf)?;
+    Some((config, cpv_slot))
+}
+
+/// Real per-package `FEATURES` (backlog #130) for a standalone `ebuild
+/// <file> merge`/`qmerge`: fold a matched `package.env` value onto
+/// `run_wide_features` in real's `[run-wide, pkg, calling-env]` order
+/// (`fold_package_env_incremental`), the same rule `entry_resolved_
+/// features`/`resolved_features_for` (`emerge_build.rs`) apply on the
+/// resolved-graph paths. `None` when nothing resolves (outside a repo
+/// checkout, unparsable path) or nothing matched -- the caller keeps its
+/// own already-resolved `FEATURES` value untouched.
+pub(crate) fn resolve_standalone_resolved_features(
+    ebuild_path: &Path,
+    config_root: &Path,
+    eroot: &Path,
+    run_wide_features: &str,
+    calling_features: &str,
+) -> Option<String> {
+    let (config, cpv_slot) = standalone_package_env_lookup(ebuild_path, config_root, eroot)?;
+    let pkg_raw =
+        match_package_env_incremental_raw(&config.package_env_vars, &cpv_slot, "FEATURES");
+    if pkg_raw.is_empty() {
+        return None;
+    }
+    Some(fold_package_env_incremental(
+        run_wide_features,
+        &pkg_raw,
+        calling_features,
+    ))
 }
 
 /// The config-`USE` set the `depend` phase reduces `RESTRICT`/
