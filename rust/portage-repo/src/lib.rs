@@ -6163,10 +6163,11 @@ pub fn installed_refs(root: &Path, category: &str, package: &str) -> Vec<Install
 /// (`foo-bar-1.2.3-r1`), read through the same [`vdb_aux_get`] seam
 /// every other installed-metadata consumer uses: the normalised
 /// `"slot/sub_slot"` string, multi-line values collapsed to one
-/// space-separated line, `""` for an entry with no `SLOT` file or a
-/// `pf` [`split_pf`] cannot split. No further splitting or defaulting --
-/// callers keep their own (real's invalid-`SLOT` -> `"0"` translation is
-/// backlog #115's residue, not this helper's).
+/// space-separated line, a present-but-invalid value translated to
+/// `"0"` (real `aux_get`'s `_get_slot_re` rule, #115 S1), `""` for an
+/// entry with no `SLOT` file or a `pf` [`split_pf`] cannot split. No
+/// further splitting -- callers keep their own main-slot projection
+/// and their own empty-case defaulting (#126 O5).
 pub fn vdb_entry_slot(root: &Path, category: &str, pf: &str) -> String {
     let Some((package, version)) = split_pf(pf) else {
         return String::new();
@@ -6733,10 +6734,11 @@ fn read_metadata_file(path: &Path, dir_mtime_ns: i128) -> Option<HashMap<String,
 ///   file with no normalisation at all (real never `" ".join()`s a
 ///   line-oriented key).
 ///
-/// Real's `aux_get` `EAPI == "" -> "0"` and invalid-`SLOT` -> `"0"`
-/// translations are also not here: portuale's callers default
-/// individually and that parity question is a filed residue, not this
-/// slice's.
+/// Real's `aux_get` `EAPI == "" -> "0"` translation is not here:
+/// portuale's callers default individually and that parity question is
+/// a filed residue, not this slice's. The invalid-`SLOT` -> `"0"` half
+/// *is* here (`translate_aux_slot`, #115 S1): every vdb `SLOT` read
+/// flows through this seam, so one site covers all of them.
 fn vdb_aux_get(root: &Path, category: &str, package: &str, version: &str, key: &str) -> String {
     if !in_metadata_file(key) {
         return read_vdb_raw_file(&vdb_pkg_dir(root, category, package, version).join(key));
@@ -6788,12 +6790,12 @@ fn vdb_aux_get(root: &Path, category: &str, package: &str, version: &str, key: &
     });
     if let Some(map) = cached {
         if let Some(v) = map.get(key) {
-            return v.clone();
+            return translate_aux_slot(key, v.clone());
         }
         // Fallback path: this key has not been resolved yet. Drop the
         // shared handle before mutating so `Rc::make_mut` can reuse it.
         drop(map);
-        let value = read_vdb_file(&dir.join(key));
+        let value = translate_aux_slot(key, read_vdb_file(&dir.join(key)));
         AUX_CACHE.with(|c| {
             if let Some((_, map)) = c.borrow_mut().get_mut(&cache_key) {
                 Rc::make_mut(map).insert(key.to_string(), value.clone());
@@ -6820,6 +6822,7 @@ fn vdb_aux_get(root: &Path, category: &str, package: &str, version: &str, key: &
         .get(key)
         .cloned()
         .unwrap_or_else(|| read_vdb_file(&dir.join(key)));
+    let value = translate_aux_slot(key, value);
     map.insert(key.to_string(), value.clone());
     AUX_CACHE.with(|c| {
         c.borrow_mut()
@@ -6844,6 +6847,47 @@ fn read_vdb_file(path: &Path) -> String {
                 .join(" ")
         })
         .unwrap_or_default()
+}
+
+/// Whether `value` is a `SLOT` real `aux_get` keeps instead of
+/// translating to `"0"`: `slot(/slot)?` with `slot = [\w][\w+.-]*`
+/// (ASCII — `versions.py:38`, `re.ASCII`), the `/sub` half iff the
+/// EAPI has `slot_operator` (`versions.py:76-90`). Portuale does no
+/// EAPI parametrization inside the EAPI 5+ floor (`agent-context.md`:
+/// every live EAPI has `slot_operator`, `eapi.py:319`), so this is
+/// always the operator shape; an entry whose own `EAPI` is empty (for
+/// which real would use the single-slot shape after its `EAPI ""→"0"`
+/// step) is out of scope — that translation is #115's documented cut,
+/// and no such entry has a portuale-visible consumer anyway (Phase 12
+/// S0.3). Empty is *not* invalid here: a missing/empty `SLOT` stays
+/// `""` at this layer and keeps #126's O5 caller contracts.
+fn is_valid_aux_slot(value: &str) -> bool {
+    fn is_slot(s: &str) -> bool {
+        let mut chars = s.bytes();
+        match chars.next() {
+            Some(b) if b.is_ascii_alphanumeric() || b == b'_' => {}
+            _ => return false,
+        }
+        chars.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'+' | b'.' | b'-'))
+    }
+    match value.split_once('/') {
+        Some((main, sub)) => is_slot(main) && is_slot(sub),
+        None => is_slot(value),
+    }
+}
+
+/// Real `aux_get`'s invalid-`SLOT` → `"0"` translation, applied at the
+/// one seam every vdb `SLOT` read flows through. Real translates in
+/// the outer `aux_get` (`vartree.py:967-972`); portuale has no outer
+/// layer — `vdb_aux_get` serves both roles — so it lives here, for the
+/// `SLOT` key only, over present (non-empty) values. The memoised value
+/// is the translated one (observably identical: the translation is
+/// idempotent, `"0"` is valid).
+fn translate_aux_slot(key: &str, value: String) -> String {
+    if key == "SLOT" && !value.is_empty() && !is_valid_aux_slot(&value) {
+        return "0".to_string();
+    }
+    value
 }
 
 /// The out-of-set read for [`vdb_aux_get`]: a key outside real's
@@ -27794,13 +27838,14 @@ mod tests {
     /// `_aux_get` on the individual-file path); the bare `.trim()` the
     /// scans used before kept the embedded newline. No live vdb entry has
     /// one (host probe: 0 of 2090), so this is pinned explicitly here.
+    /// #115 S1: the collapsed value (`"0/1.2 0/1.3"`) is itself invalid,
+    /// so the seam translates it on to `"0"` -- the collapse is still
+    /// what feeds the translation (without it the raw newline would fail
+    /// differently), and the pre-S1 expectation is kept in git history.
     #[test]
     fn vdb_entry_slot_collapses_a_multiline_slot_to_one_space_separated_line() {
         let root = tmp_vdb("dev-libs", "entryslot-2.0", &[("SLOT", b"0/1.2\n0/1.3\n")]);
-        assert_eq!(
-            vdb_entry_slot(&root, "dev-libs", "entryslot-2.0"),
-            "0/1.2 0/1.3"
-        );
+        assert_eq!(vdb_entry_slot(&root, "dev-libs", "entryslot-2.0"), "0");
     }
 
     /// #116: a directory name `split_pf` cannot split yields `""` -- the
@@ -27810,6 +27855,35 @@ mod tests {
     fn vdb_entry_slot_returns_empty_for_an_unsplittable_pf() {
         let root = tmp_vdb("dev-libs", "not-a-version-dir", &[]);
         assert_eq!(vdb_entry_slot(&root, "dev-libs", "not-a-version-dir"), "");
+    }
+
+    /// #115 S1: a present-but-invalid `SLOT` reads as `"0"`, matching
+    /// real `aux_get`'s `_get_slot_re` translation
+    /// (`vartree.py:967-972`) -- the S0.2 probe value, which the seam
+    /// passes through raw before this slice.
+    #[test]
+    fn vdb_entry_slot_translates_a_present_but_invalid_slot_to_0() {
+        let root = tmp_vdb("dev-libs", "badslot-1.0", &[("SLOT", b"!!bad slot!!\n")]);
+        assert_eq!(vdb_entry_slot(&root, "dev-libs", "badslot-1.0"), "0");
+    }
+
+    /// #115 S1: the operator shape survives the translation -- a valid
+    /// `main/sub` slot is not flattened to `"0"` (every live EAPI has
+    /// `slot_operator`, `eapi.py:319`, so this is the shape real
+    /// itself accepts for the entry).
+    #[test]
+    fn vdb_entry_slot_keeps_a_valid_sub_slot() {
+        let root = tmp_vdb("dev-libs", "subslot-2.0", &[("SLOT", b"0/2\n")]);
+        assert_eq!(vdb_entry_slot(&root, "dev-libs", "subslot-2.0"), "0/2");
+    }
+
+    /// #115 S1: a collapsed multi-line value is invalid (the space the
+    /// #109 normalisation introduces fails `_get_slot_re`), so it reads
+    /// as `"0"` too -- this pins the interaction of the two slices.
+    #[test]
+    fn vdb_entry_slot_translates_a_collapsed_multiline_slot_to_0() {
+        let root = tmp_vdb("dev-libs", "multislot-2.0", &[("SLOT", b"0\n1\n")]);
+        assert_eq!(vdb_entry_slot(&root, "dev-libs", "multislot-2.0"), "0");
     }
 
     /// #127: the public splitter's advertised disambiguation, pinned

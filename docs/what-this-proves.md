@@ -17930,3 +17930,12 @@ BINPKG_FORMAT=xpak emerge --buildpkgonly dev-libs/penvcmppkg dev-libs/packagepkg
 # pkgdir/dev-libs/packagepkg-1.0.tbz2 with bzip2 magic (run-wide fallback)
 ```
 Rust end-to-end + unit tests per slice, three `test_portuale.py` real-execution pins (twin `dev-libs/penvcmppkg`, overlay `-b` merge for the `BUILD_ID` split). No pretend output moves; the 2 slot-conflict corpus drifts in the worktree are pre-existing on `main` (byte-identical worktree-vs-pristine-`main`, not blessed). 7a's `l3-core` build rev predates S1–S3 — its triage must account for that. Detail: `docs/01.147-per-entry-binpkg-artefact.md` (done).
+
+**Vdb `aux_get` speaks real's invalid-`SLOT` dialect (Phase 12, 2026-09-24; #115 DONE).** Real translates any `SLOT` failing `_get_slot_re` to `"0"` (`vartree.py:967-972`) and empty `EAPI` to `"0"`, and serves `_mtime_` as a float — portuale passed an invalid `SLOT` through raw and had no `EAPI`/`_mtime_` reader at all (probed live: real `aux_get` on hand-edited vdb entries returns `SLOT='0'` for `!!bad slot!!` and `EAPI='0'` for an empty file). The owner ruled port-the-`SLOT`-arm, cut-the-rest (O11): the translation lives in `vdb_aux_get` for the `SLOT` key — the one seam every vdb `SLOT` read flows through — in the operator shape every live EAPI accepts, present values only (empty keeps #126's O5 contracts; repo-side parsing untouched). Live-verified at the seam:
+```sh
+cargo test -p portage-repo --lib vdb_entry_slot
+# vdb_entry_slot_translates_a_present_but_invalid_slot_to_0 ... ok
+# vdb_entry_slot_keeps_a_valid_sub_slot ... ok
+# vdb_entry_slot_translates_a_collapsed_multiline_slot_to_0 ... ok
+```
+Output-preserving on real data (no live invalid `SLOT`; contract suite 1775 passed with only the 3 pre-existing container-environment failures, drift flags byte-identical to baseline); merge-path gate green (L1 glibc+bash reinstall `l1-20260924T083118Z`, merged_count 2, merge_rc 0, 0 hard / 0 unexplained). `EAPI ""→"0"` and `_mtime_` stay documented cuts (no portuale consumer; real's `_mtime_` users are unported bintree/cache machinery), and the gate's missing-`bin/`-helpers gap is filed as #151. Detail: `docs/02.115-vdb-aux-get-translations.md` (done).
