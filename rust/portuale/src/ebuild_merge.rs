@@ -2394,8 +2394,10 @@ pub(crate) fn write_vdb_entry_from_dir(
 /// `vartree.py:975-1053`). A missing or empty `SLOT` reads as
 /// `Some("0")`, matching real `aux_get`'s invalid-`SLOT` → `"0"`
 /// translation (`:967-972`; O5 ruling 2026-09-23, which folds #115's
-/// empty-`SLOT` half into this slice — a present-but-invalid value
-/// stays #115's residue, as do `EAPI` and `_mtime_`). The return stays
+/// empty-`SLOT` half into this slice — #115 S1 extends the same
+/// translation to present-but-invalid values upstream in
+/// `portage_repo::vdb_aux_get`, so they arrive here already `"0"`; the
+/// `EAPI` and `_mtime_` thirds stay #115's documented cuts). The return stays
 /// `Option<String>` so the five callers' `None` arms keep compiling
 /// untouched, but it is now always `Some`: every caller only queries
 /// listed installed versions, so "no such entry" cannot reach here in
@@ -4250,6 +4252,10 @@ mod tests {
         // #126: through the seam a multi-line SLOT collapses
         // (`" ".join(myd.split())`, real `_aux_get`) where the old bare
         // `.trim()` kept the embedded newline.
+        // #115 S1: the collapsed value (`"0 1"`) is itself invalid, so
+        // the seam translates it on to `"0"` (real `aux_get`'s
+        // `_get_slot_re` rule) -- the pre-S1 expectation is kept in git
+        // history.
         let tmp = tempdir();
         let root = tmp.join("ROOT");
         let vdb_dir = root.join("var/db/pkg/dev-libs/multilinepkg-1.0");
@@ -4258,7 +4264,7 @@ mod tests {
 
         assert_eq!(
             read_installed_slot(&root, "dev-libs", "multilinepkg", "1.0"),
-            Some("0 1".to_string())
+            Some("0".to_string())
         );
     }
 
