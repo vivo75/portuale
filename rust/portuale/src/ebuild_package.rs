@@ -397,6 +397,57 @@ fn resolve_compression_command_jobs(
     Some(tokens.join(" "))
 }
 
+/// Real per-package `BINPKG_COMPRESS` (backlog #147 S2): re-derive
+/// `PORTAGE_COMPRESSION_COMMAND` from an entry's already-layered
+/// build env, replacing the run-wide pair in place.
+///
+/// Real `doebuild_environment()` computes the command from the
+/// package's own `mysettings` (`doebuild.py:697-750`), which carry
+/// the entry's matched `package.env` scalars -- so a per-package
+/// `BINPKG_COMPRESS=gzip` reaches the xpak tar pipe
+/// (`bin/misc-functions.sh:593-596`) even when the run-wide value
+/// is `zstd` (S0 B-xpak: gzip magic). The command is what real
+/// `__dyn_package` reads -- via the saved `${T}/environment`
+/// `bin/ebuild.sh:565-580` sources for the `package` phase -- not
+/// `PackageOptions::binpkg_compress`, which stays run-wide on
+/// purpose: the gpkg helper reads the global settings
+/// (`bin/gpkg-helper.py:49`, `gpkg.py:785`), so a per-entry value
+/// must never reach it (S0 B-gpkg: zst members).
+///
+/// The lookup is last-wins over the layered pairs (the matched
+/// scalars are already appended after the run-wide base by
+/// `matched_package_env_vars`, and the calling env is already
+/// folded into the run-wide pairs upstream -- no separate process
+/// lookup, which would also be unsound under `cargo test`'s shared
+/// process env). An unmatched entry re-derives the run-wide
+/// command byte-identically (regression guard by construction). A
+/// recompute of `None` (unknown per-entry codec) removes the pair,
+/// matching real leaving `mysettings["PORTAGE_COMPRESSION_COMMAND"]`
+/// unset (real `__dyn_package` then dies on its own guard).
+pub(crate) fn refresh_entry_compression_command(build_env: &mut Vec<(String, String)>) {
+    let lookup = |key: &str| {
+        build_env
+            .iter()
+            .rev()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+    };
+    let recomputed = phase_compression_command(lookup);
+    if let Some(pos) = build_env
+        .iter()
+        .rposition(|(k, _)| k == "PORTAGE_COMPRESSION_COMMAND")
+    {
+        match recomputed {
+            Some(cmd) => build_env[pos].1 = cmd,
+            None => {
+                build_env.remove(pos);
+            }
+        }
+    } else if let Some(cmd) = recomputed {
+        build_env.push(("PORTAGE_COMPRESSION_COMMAND".to_string(), cmd));
+    }
+}
+
 fn now_unix_time() -> Result<u64, String> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1489,6 +1540,50 @@ mod tests {
             resolve_compression_command("made-up-codec", "", "bzip2"),
             None
         );
+    }
+
+    #[test]
+    fn refresh_entry_compression_command_rederives_the_command_from_the_layered_env() {
+        let command_of = |env: &[(String, String)]| {
+            env.iter()
+                .rev()
+                .find(|(k, _)| k == "PORTAGE_COMPRESSION_COMMAND")
+                .map(|(_, v)| v.clone())
+        };
+        // Matched per-entry BINPKG_COMPRESS=gzip over a run-wide
+        // bzip2 pair: the pair is replaced (real's per-package
+        // mysettings value wins for the xpak pipe).
+        let mut matched = vec![
+            (
+                "PORTAGE_COMPRESSION_COMMAND".to_string(),
+                "bzip2".to_string(),
+            ),
+            ("BINPKG_COMPRESS".to_string(), "gzip".to_string()),
+            ("MAKEOPTS".to_string(), "-j1".to_string()),
+        ];
+        refresh_entry_compression_command(&mut matched);
+        assert_eq!(command_of(&matched), Some("gzip".to_string()));
+        // Unmatched entry: no BINPKG_COMPRESS pair anywhere, so the
+        // run-wide fallback recomputes byte-identically (bzip2
+        // default, matching real's own `.get` default and the
+        // `run_wide_phase_env` value already in the env).
+        let mut unmatched = vec![(
+            "PORTAGE_COMPRESSION_COMMAND".to_string(),
+            "bzip2".to_string(),
+        )];
+        refresh_entry_compression_command(&mut unmatched);
+        assert_eq!(command_of(&unmatched), Some("bzip2".to_string()));
+        // Unknown per-entry codec: the pair is removed, matching real
+        // leaving the key unset (its `__dyn_package` guard then fires).
+        let mut unknown = vec![
+            (
+                "PORTAGE_COMPRESSION_COMMAND".to_string(),
+                "bzip2".to_string(),
+            ),
+            ("BINPKG_COMPRESS".to_string(), "made-up-codec".to_string()),
+        ];
+        refresh_entry_compression_command(&mut unknown);
+        assert_eq!(command_of(&unknown), None);
     }
 
     #[test]

@@ -1157,10 +1157,29 @@ fn is_package_env_incremental(key: &str) -> bool {
 /// variable with `VAR=""`) and `__`-prefixed names (real does not strip
 /// them here).
 fn package_env_key_allowed(key: &str, profile_only_variables: &[String]) -> bool {
+    // Real `_grab_pkg_env` (backlog #95) rejects `protected_keys` ∪
+    // `non_user_variables` (PROFILE_ONLY ∪ env_blacklist ∪
+    // CONFIG_PROTECT); portuale additionally rejects its
+    // `ENVIRON_FILTER` export-filter list here -- a deliberate
+    // conservative narrowing, except for the compression family below.
+    // Real honors a per-package `BINPKG_COMPRESS` (and its FLAGS
+    // sisters: `doebuild.py:697-750` reads all three from the
+    // package's own `mysettings`, and none is in real's
+    // `non_user_variables` -- S0 B-xpak proves gzip magic), so
+    // backlog #147 S2 exempts exactly that family; every other
+    // `ENVIRON_FILTER` key stays rejected.
+    fn is_compression_key(key: &str) -> bool {
+        key == "BINPKG_COMPRESS"
+            || key == "BINPKG_COMPRESS_FLAGS"
+            || key == "PORTAGE_BZIP2_COMMAND"
+            || key
+                .strip_prefix("BINPKG_COMPRESS_FLAGS_")
+                .is_some_and(|rest| !rest.is_empty())
+    }
     !key.is_empty()
         && key != "USE"
         && !portage_profile::ENV_BLACKLIST.contains(&key)
-        && !portage_profile::ENVIRON_FILTER.contains(&key)
+        && !(portage_profile::ENVIRON_FILTER.contains(&key) && !is_compression_key(key))
         && !portage_profile::PORTUALE_COMPUTED.contains(&key)
         && !profile_only_variables.iter().any(|k| k == key)
 }
