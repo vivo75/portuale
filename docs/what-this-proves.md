@@ -17998,3 +17998,13 @@ python3 compare/diff.py --layer l3 --tolerate-payload \
   logs/l3-20260923T080445Z/control-a logs/l3-20260923T080445Z/control-b \
   compare/known-divergences.yaml   # rc 0, UNEXPLAINED 0
 ```
+
+**A `--tree` `[nomerge]` ancestor row carries the package's `USE` column, exactly like real's display (batch-2026-09-24 P18, 2026-09-24; #154 DONE).** Portuale's nomerge arm (`print_entry_line`'s `ordered == false` path) rendered the row bare, while real prints `USE="x"` — because real's `Display.__call__` runs `_display_use` for every package with no ordered/merge gate and appends `" " + verboseadd` in `print_messages` (`verbose_size` is merge-gated, so no size suffix follows on this arm; verified live against 3.0.82.2 on `--tree dev-libs/gpcyclec` at plain, `-v` and `-vv` verbosity). The arm now appends the same USE suffix as a merge row (empty for USE-less packages, so those rows are byte-unchanged):
+```sh
+portuale emerge --pretend --tree dev-libs/gpcyclec
+# [ebuild  N     ] dev-libs/gpcyclec-1.0
+# [nomerge       ]  dev-libs/gpcyclea-1.0 USE="x"
+# [ebuild  N     ]   dev-libs/gpcycleb-1.0
+# [ebuild  N     ]    dev-libs/gpcyclea-1.0  USE="x"
+```
+Pins: new `CASES` `--tree dev-libs/gpcyclec` (rc 1), `test_tree_nomerge_ancestor_row_carries_the_package_use_column`, Rust `nomerge_row_carries_the_use_suffix_when_the_package_has_one`; six expanded-corpus cycle cells (cyc4a/fucyclea/fucyclec/gpcyclea/gpcyclec/usecyclea) each move by exactly `+ USE="x"` (blessed). Beds: l131-s1 re-run drops the `[use] gpcyclea` finding (only the filed #153/#155/#156 items remain), default fixture-oracle 0 unexplained, L0 byte-identical 41-finding set. Operational lesson recorded in the batch plan: never run a real-`emerge` oracle against the live fixture tree — real applies its global updates (vdb moves) even under `--pretend`; oracles run against a `cp -a` copy.

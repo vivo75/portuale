@@ -575,6 +575,25 @@ fn use_suffix(
     format!(" {}", groups.join(" "))
 }
 
+/// Pure constructor for the `[nomerge …]` row, so the ancestor arm's
+/// exact rendering contract is unit-pinned below (#154). `tail` carries
+/// the oldbest / running-root / USE pieces (each empty when absent --
+/// a USE-less nomerge row is byte-identical to the pre-#154 rendering).
+/// The bracket pad is real's `"nomerge".ljust(13)` plus
+/// `empty_space_in_brackets()`; the `--quiet` narrowing is portuale's
+/// established quiet rendering, pinned by the quiet contract tests.
+fn nomerge_row(
+    category: &str,
+    package: &str,
+    disp_ver: &str,
+    indent: &str,
+    quiet: bool,
+    tail: &str,
+) -> String {
+    let pad = if quiet { "      " } else { "       " };
+    format!("[nomerge{pad}] {indent}{category}/{package}-{disp_ver}{tail}")
+}
+
 /// Which running root, if any, portuale resolves a package's `BDEPEND`/
 /// `IDEPEND` (and, for a native build, `DEPEND` -- `ESYSROOT` collapses
 /// to `BROOT` when nothing is cross-compiling) against instead of the
@@ -1304,7 +1323,8 @@ fn print_entry_line(
     // reached as a tree **ancestor** (`_ordered_tree_display`'s
     // `add_parents` passes `ordered=False`) is re-labelled `nomerge` and
     // rendered through `_set_no_columns`' non-merge arm, with no attr
-    // columns and no USE display. Flat callers (and every occurrence the
+    // columns -- but WITH the USE display (`_display_use` has no
+    // ordered/merge gate; #154). Flat callers (and every occurrence the
     // reversed display list reaches directly) pass `true`.
     ordered: bool,
     top_level_pkgs: &HashSet<(String, String)>,
@@ -1571,8 +1591,12 @@ fn print_entry_line(
     // #75 C1: real `_set_no_columns`' non-merge arm for a tree ancestor
     // occurrence of a merge node (`set_pkg_info` re-labels it `nomerge`,
     // `output.py:612-614`): `[<operation ljust 13><empty_space_in_brackets>]
-    // <indent><cpv> <oldbest>` -- no attr columns, no USE, no size
-    // suffix; the running-root suffix is appended like every other row.
+    // <indent><cpv> <oldbest>` -- no attr columns and no size suffix
+    // (`verbose_size` is merge-gated), but the `USE="…"` display IS
+    // appended: `Display.__call__` runs `_display_use` for every package
+    // with no ordered/merge gate, and `print_messages` appends
+    // `" " + verboseadd` to the row (#154). The running-root suffix is
+    // appended like every other row.
     let emit_nomerge = |version: &str| {
         let oldbest = oldbest_str();
         let mut tail = String::new();
@@ -1586,13 +1610,21 @@ fn print_entry_line(
             }
             tail.push_str(&root_col(&root_annotation));
         }
+        // #154: the nomerge arm carries the same USE suffix as a merge
+        // row (empty string when the package has no USE display, so
+        // USE-less nomerge rows are byte-unchanged).
+        tail.push_str(&use_suffix(entry, verbose, quiet, alphabetical, color));
         // `"nomerge".ljust(13)` + `empty_space_in_brackets()`.
-        let pad = if quiet { "      " } else { "       " };
         println!(
-            "[nomerge{pad}] {indent}{}/{}-{}{tail}",
-            entry.category,
-            entry.package,
-            disp_version(version),
+            "{}",
+            nomerge_row(
+                &entry.category,
+                &entry.package,
+                &disp_version(version),
+                indent,
+                quiet,
+                &tail,
+            )
         );
     };
     match &entry.outcome {
@@ -14497,6 +14529,54 @@ mod tests {
         assert_eq!(
             use_suffix(&unchanged, true, true, false, &nc),
             " USE=\"bar -baz\""
+        );
+    }
+
+    #[test]
+    fn nomerge_row_carries_the_use_suffix_when_the_package_has_one() {
+        // #154 (`--tree dev-libs/gpcyclec`): the ancestor occurrence of
+        // a merge node renders through the nomerge arm, which appends
+        // the same USE suffix as a merge row. Real
+        // `resolver/output.py`: `Display.__call__` runs `_display_use`
+        // for every package (no ordered/merge gate) and
+        // `print_messages` appends `" " + verboseadd`; `verbose_size`
+        // is merge-gated so no size suffix ever follows on this arm.
+        let nc = Colorizer::new(false);
+        // The gpcyclec cell shape: a `New` entry whose `-p` USE display
+        // is `x` (gpcyclea-1.0, IUSE=x, enabled).
+        let gpcyclea = entry_with_use(
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+            "x",
+            "x",
+        );
+        let use_str = use_suffix(&gpcyclea, false, false, false, &nc);
+        assert_eq!(use_str, " USE=\"x\"");
+        assert_eq!(
+            nomerge_row("dev-libs", "gpcyclea", "1.0", " ", false, &use_str),
+            "[nomerge       ]  dev-libs/gpcyclea-1.0 USE=\"x\""
+        );
+        // A USE-less package (empty display, e.g. `dev-libs/diamond`):
+        // the tail is empty and the row is byte-identical to the
+        // pre-#154 rendering, so no existing pin moves.
+        let bare = entry_with_use(
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+            "",
+            "",
+        );
+        let bare_use = use_suffix(&bare, false, false, false, &nc);
+        assert_eq!(bare_use, "");
+        assert_eq!(
+            nomerge_row("dev-libs", "diamond", "1.0", "", false, &bare_use),
+            "[nomerge       ] dev-libs/diamond-1.0"
+        );
+        // `--quiet` keeps the established narrow pad.
+        assert_eq!(
+            nomerge_row("dev-libs", "diamond", "1.0", " ", true, &bare_use),
+            "[nomerge      ]  dev-libs/diamond-1.0"
         );
     }
 }
