@@ -3105,12 +3105,22 @@ pub fn run_merge(
         // caller's single shared, run-wide `PackageOptions`.
         let mut per_entry_package_options = package_options.clone();
         per_entry_package_options.set_resolved_features(&options.features);
+        // Real `EbuildBinpkg._start`'s per-package `BUILD_ID` gate
+        // (backlog #147 S1 ruling (i)): `options.features` is
+        // already this call's fully resolved value (per-entry fold
+        // when one matched, run-wide otherwise), so the export
+        // follows it while the layout stays run-wide.
+        let per_entry_binpkg_multi_instance = options
+            .features
+            .split_whitespace()
+            .any(|t| t == "binpkg-multi-instance");
         let status = crate::ebuild_package::package_after_install(
             ebuild_path,
             root,
             portage_tmpdir,
             &per_entry_package_options,
             use_flags,
+            per_entry_binpkg_multi_instance,
         )?;
         if status != 0 {
             return Ok(status);

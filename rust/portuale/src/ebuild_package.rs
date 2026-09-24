@@ -222,9 +222,10 @@ impl Default for PackageOptions {
 }
 
 impl PackageOptions {
-    /// Real per-package `FEATURES` (backlog #130): re-derive the
-    /// binpkg-affecting tokens from a **resolved**, already-folded
-    /// `FEATURES` list -- the same "presence is the answer" reading
+    /// Real per-package `FEATURES` (backlog #130, narrowed by #147
+    /// S1 ruling (i)): re-derive the binpkg-affecting tokens from a
+    /// **resolved**, already-folded `FEATURES` list -- the same
+    /// "presence is the answer" reading
     /// `package_options_from_env`'s own `Some(resolved_features)` arm
     /// already uses (a negated token has already been folded away by
     /// `regenerate()`/`fold_package_env_incremental`, so a plain
@@ -236,12 +237,19 @@ impl PackageOptions {
     /// per-entry `FEATURES` fold, so a `package_after_install` call site
     /// that shares one `PackageOptions` across every entry in a run can
     /// clone it and re-derive the tokens for just this entry instead.
-    /// `binpkg_compress`/`binpkg_format`/the GPG signing identity fields
-    /// are config scalars, not `FEATURES` tokens, and are untouched here.
+    ///
+    /// `binpkg_multi_instance` is deliberately NOT re-derived here:
+    /// real's binpkg layout is run-wide-only (the bintree binds its
+    /// allocator once from the run-wide settings, `bintree.py:529-531`
+    /// -- S0 A1x/A2 prove both directions), so the layout bit keeps
+    /// its construction value and `package_after_install` takes the
+    /// per-entry token separately for the `BUILD_ID` export gate
+    /// (real `EbuildBinpkg.py:47-48`). `binpkg_compress`/
+    /// `binpkg_format`/the GPG signing identity fields are config
+    /// scalars, not `FEATURES` tokens, and are untouched here.
     pub fn set_resolved_features(&mut self, features: &str) {
         let has = |token: &str| features.split_whitespace().any(|t| t == token);
         self.buildpkg_live = has("buildpkg-live");
-        self.binpkg_multi_instance = has("binpkg-multi-instance");
         self.binpkg_signing = has("binpkg-signing");
     }
 }
@@ -629,7 +637,28 @@ pub fn run_package(
     // this deep, so there is no resolved USE to report -- the same "no
     // graph, no USE" gap `package_after_install`'s own doc comment
     // covers (`use_flags` is then `""`).
-    package_after_install(ebuild_path, root, portage_tmpdir, options, use_flags)
+    //
+    // The per-entry multi-instance token comes from this run's own
+    // `build_env` (the `--buildpkgonly` per-entry fold when one
+    // matched, the run-wide value otherwise); a standalone run
+    // passes `&[]`, so it falls back to the run-wide construction
+    // value, preserving today's standalone behavior exactly (real's
+    // `doebuild` package branch has no per-package `BUILD_ID`
+    // logic either).
+    let per_entry_binpkg_multi_instance = build_env
+        .iter()
+        .rev()
+        .find(|(k, _)| k == "FEATURES")
+        .map(|(_, v)| v.split_whitespace().any(|t| t == "binpkg-multi-instance"))
+        .unwrap_or(options.binpkg_multi_instance);
+    package_after_install(
+        ebuild_path,
+        root,
+        portage_tmpdir,
+        options,
+        use_flags,
+        per_entry_binpkg_multi_instance,
+    )
 }
 
 /// The packaging tail of `run_package`, split out so it can also run as a
@@ -643,12 +672,23 @@ pub fn run_package(
 /// field carries. `""` for a standalone `ebuild <file> package`/`merge`
 /// (no resolved graph reaches that deep -- the documented gap this
 /// module's own doc comment already covers).
+/// `per_entry_binpkg_multi_instance` is the entry's own resolved
+/// `binpkg-multi-instance` token (backlog #147 S1 ruling (i)): the
+/// layout stays run-wide (`options.binpkg_multi_instance`, real's
+/// once-bound bintree allocator), while the `BUILD_ID` export and
+/// the index entry follow this per-entry gate (real
+/// `EbuildBinpkg.py:47-48`). Standalone callers pass `false` --
+/// real's `doebuild` package branch has no per-package `BUILD_ID`
+/// logic. Run-wide single + per-entry token writes no `BUILD_ID`
+/// anywhere here, where real writes index `None` and vdb `-1` (S1
+/// D1): a documented `str(None)`-wart divergence, not mirrored.
 pub(crate) fn package_after_install(
     ebuild_path: &Path,
     root: &Path,
     portage_tmpdir: &Path,
     options: &PackageOptions,
     use_flags: &str,
+    per_entry_binpkg_multi_instance: bool,
 ) -> Result<i32, String> {
     // Same real gate as `run_package`'s (which already ran for the
     // `ebuild package` / `--buildpkgonly` paths) -- repeated here so
@@ -730,7 +770,16 @@ pub(crate) fn package_after_install(
         root,
         options,
         &tmp_path,
-        build_id,
+        // Real `EbuildBinpkg._start`'s per-package gate
+        // (`EbuildBinpkg.py:47-48`, backlog #147 S1 ruling (i)): the
+        // `BUILD_ID` export follows the entry's own token, while the
+        // allocation above stays run-wide. A negated entry in a
+        // run-wide-multi run therefore takes the multi path with no
+        // `BUILD_ID` (S0 A2 shape); a tokened entry in a
+        // run-wide-single run takes the single path with none either
+        // (real writes `None`/`-1` there -- documented divergence,
+        // see the function docs).
+        build_id.filter(|_| per_entry_binpkg_multi_instance),
     )?;
     if package_status != 0 {
         let _ = std::fs::remove_file(&tmp_path);
@@ -790,7 +839,13 @@ pub(crate) fn package_after_install(
                     .unwrap_or_default()
             )
         });
-    let build_id_str = build_id.map(|id| id.to_string()).unwrap_or_default();
+    // The index `BUILD_ID` is the archive's own metadata (real
+    // `_pkgindex_entry` reads `cpv._metadata`), so it follows the
+    // same per-entry gate as the export above, not the allocation.
+    let build_id_str = build_id
+        .filter(|_| per_entry_binpkg_multi_instance)
+        .map(|id| id.to_string())
+        .unwrap_or_default();
     let size_str = std::fs::metadata(&binpkg_path)
         .map(|st| st.len().to_string())
         .unwrap_or_default();
@@ -1398,14 +1453,17 @@ mod tests {
         options
             .set_resolved_features("binpkg-multi-instance buildpkg-live binpkg-signing splitdebug");
         assert!(options.buildpkg_live);
-        assert!(options.binpkg_multi_instance);
         assert!(options.binpkg_signing);
+        // The layout bit is run-wide-only (backlog #147 S1 ruling
+        // (i)): a per-entry token no longer flips it -- the
+        // `BUILD_ID` export gate lives in `package_after_install`'s
+        // own `per_entry_binpkg_multi_instance` parameter instead.
+        assert!(!options.binpkg_multi_instance);
 
         // A folded list that no longer carries a token turns it back off
         // -- this is a full re-derivation, not an additive merge.
         options.set_resolved_features("splitdebug");
         assert!(!options.buildpkg_live);
-        assert!(!options.binpkg_multi_instance);
         assert!(!options.binpkg_signing);
 
         // Config scalars are untouched.
@@ -1813,8 +1871,15 @@ mod tests {
         .expect("install succeeds");
         assert_eq!(status, 0);
 
-        let status = package_after_install(&ebuild, &root, &portage_tmpdir, &options, "foo bar")
-            .expect("package_after_install succeeds");
+        let status = package_after_install(
+            &ebuild,
+            &root,
+            &portage_tmpdir,
+            &options,
+            "foo bar",
+            options.binpkg_multi_instance,
+        )
+        .expect("package_after_install succeeds");
         assert_eq!(status, 0);
 
         let index = portage_repo::BinaryIndex::from_pkgdir(&options.pkgdir);
