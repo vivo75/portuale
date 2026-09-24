@@ -17939,3 +17939,21 @@ cargo test -p portage-repo --lib vdb_entry_slot
 # vdb_entry_slot_translates_a_collapsed_multiline_slot_to_0 ... ok
 ```
 Output-preserving on real data (no live invalid `SLOT`; contract suite 1775 passed with only the 3 pre-existing container-environment failures, drift flags byte-identical to baseline); merge-path gate green (L1 glibc+bash reinstall `l1-20260924T083118Z`, merged_count 2, merge_rc 0, 0 hard / 0 unexplained). `EAPI ""→"0"` and `_mtime_` stay documented cuts (no portuale consumer; real's `_mtime_` users are unported bintree/cache machinery), and the gate's missing-`bin/`-helpers gap is filed as #151. Detail: `docs/02.115-vdb-aux-get-translations.md` (done).
+
+**`--tree` walks the tree-mode serialization (Phase 13, 2026-09-24; #131 and #150 DONE).** `print_tree` consumed the flat merge order reversed; real's `_ordered_tree_display` consumes the reversed tree-mode retlist (greedy leaf pop disabled), so p2b interleaved `newpkg` second with a nested `[nomerge]` owner occurrence where portuale trailed it last, and slotusegroup re-descended an already-displayed parent as a `[nomerge]` ancestor. New `merge_order::tree_display_order` (schedule + one-at-a-time select with the stuck branch, shared leftover weave-back) feeds the walk; the synthetic uninstall is the replacement's parent (real's edge reversal), admitted removals wait on owners in tree mode only, and last-resort batches follow graph order. Bed `l0-fx-20260924T104133Z` is 3/3 clean (u6 was already clean via #142); the S1 drift-review bed re-verified every moved `--tree` cell, six byte-identical (rdrcyc, scuseparent, slotconfgroup, slotconflictunsolvable, socmeta, `@selected`).
+```sh
+emerge --pretend --tree --update dev-libs/p2btarget dev-libs/p2bowner dev-libs/newpkg
+# [ebuild     U  ] dev-libs/p2bowner-1.1 [1.0]
+# [ebuild  N     ] dev-libs/newpkg-1.0
+# [nomerge       ] dev-libs/p2bowner-1.1 [1.0]
+# [blocks b      ]  <dev-libs/p2btarget-2.0 ("<dev-libs/p2btarget-2.0" is soft blocking dev-libs/p2bowner-1.1)
+# [ebuild     U  ]   dev-libs/p2btarget-2.0 [1.0]
+emerge --pretend --tree -D dev-libs/slotusegroup
+# [ebuild  N     ] dev-libs/slotusegroup-1.0
+# [ebuild  N     ]  dev-libs/slotuseplain-1.0
+# [ebuild  N     ]   dev-libs/slotusetarget-2.0  USE="(-x)"
+# [ebuild  N     ]  dev-libs/slotusey-1.0
+# [ebuild  N     ]  dev-libs/slotusex-1.0
+# [ebuild  N     ]   dev-libs/slotusetarget-1.0  USE="x y"
+```
+Pins: rewritten `test_oracle_81_…` (full five rows), new `test_oracle_150_…`, two `tree_display_order` Rust unit tests (one Phase-8 test moved as an intended diff: the synthetic edge direction); flat output, rc and notices byte-identical (L0 120/101/0.842 with a byte-identical unexplained set). Residues filed with the S1-bed evidence: #153 (fucyclec invalid-`DEPEND` masking), #154 (gpcyclec nomerge-ancestor USE column), #155 (mg2top backtrack-skip), #156 (`@world` tree order at #3). Detail: `docs/02.131-tree-walk-sequence.md` (done).
