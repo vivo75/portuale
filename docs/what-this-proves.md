@@ -18008,3 +18008,12 @@ portuale emerge --pretend --tree dev-libs/gpcyclec
 # [ebuild  N     ]    dev-libs/gpcyclea-1.0  USE="x"
 ```
 Pins: new `CASES` `--tree dev-libs/gpcyclec` (rc 1), `test_tree_nomerge_ancestor_row_carries_the_package_use_column`, Rust `nomerge_row_carries_the_use_suffix_when_the_package_has_one`; six expanded-corpus cycle cells (cyc4a/fucyclea/fucyclec/gpcyclea/gpcyclec/usecyclea) each move by exactly `+ USE="x"` (blessed). Beds: l131-s1 re-run drops the `[use] gpcyclea` finding (only the filed #153/#155/#156 items remain), default fixture-oracle 0 unexplained, L0 byte-identical 41-finding set. Operational lesson recorded in the batch plan: never run a real-`emerge` oracle against the live fixture tree — real applies its global updates (vdb moves) even under `--pretend`; oracles run against a `cp -a` copy.
+
+**Packages whose dep conditionals reference flags outside their own IUSE are masked `invalid`, exactly like real (batch-2026-09-24 P19, 2026-09-24; #153 DONE).** Real `Package._validate_deps` runs every dep key through `use_reduce(matchall=True, is_valid_flag=own-effective-IUSE, token_class=Atom)` at construction: a `flag? ( … )` group *or* a `[flag?]`/`[!flag?]`/`[flag=]`/`[!flag=]` use-dep with an undeclared flag masks the whole candidate, no matter whether the conditional is active (verified live against 3.0.82.2 on three fixture ebuilds -- a tree-wide scan finds no others). Portuale ports that half of the check (`invalid_use_conditional_reasons`, same single-pass order, same key order, same two message shapes) and enforces it in visibility, masking reasons, and every autounmask relaxation level (never relaxed -- real offers no unmask for it):
+```sh
+portuale emerge --pretend dev-libs/fucyclec
+# !!! All ebuilds that could satisfy "dev-libs/fucyclec" have been masked.
+# !!! One of the following masked packages is required to complete your request:
+# - dev-libs/fucyclec-1.0::testrepo (masked by: invalid: DEPEND: USE flag 'x' referenced in conditional 'x?' in atom 'dev-libs/fucyclea[x?]' is not in IUSE)
+```
+The same holds for a defaulted conditional (`dev-libs/usedeppkg`: `[baz(+)?]` is still validated -- the default only matters for matching, not for the owner's IUSE) and for groups (`dev-vcs/somercurial`: `soflag? ( … )`, whose message has no `in atom` part). Two older pins asserted merges real never makes and were rewritten to these reports. Beds: the l131-s1 `fucyclec` cell is fully explained, the default fixture-oracle sits at 0 unexplained, and L0 is byte-identical to baseline.

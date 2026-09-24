@@ -4779,6 +4779,13 @@ pub fn is_visible(
         candidate.restrict.hash(&mut h);
         candidate.iuse.hash(&mut h);
         candidate.keywords.hash(&mut h);
+        // Backlog #153: the `invalid` IUSE-conditional verdict depends on
+        // the instance's own dep keys, so same-version binary instances
+        // (distinct `BUILD_ID`s, possibly distinct dep metadata) must not
+        // share a memo entry. Ebuild candidates need nothing extra: one
+        // version is one ebuild is one DEPEND.
+        candidate.build_id.hash(&mut h);
+        candidate.build_time.hash(&mut h);
         (config_fp, h.finish(), candidate_str.clone())
     };
     if let Some(hit) = IV_CACHE.with(|c| c.borrow().get(&key).copied()) {
@@ -4852,14 +4859,23 @@ fn is_visible_uncached(
         return false;
     }
 
-    keywords_accepted(
+    if !keywords_accepted(
         &candidate.keywords,
         &candidate_str,
         category,
         package,
         &config.accept_keywords,
         &config.package_accept_keywords,
-    )
+    ) {
+        return false;
+    }
+
+    // Backlog #153: real masks a candidate whose own dep conditionals
+    // reference flags outside its effective IUSE (`invalid`), after
+    // every `_getmaskingstatus` reason -- so this check sits last here
+    // too. Not relaxable (real has no autounmask for it): see
+    // `visible_with_relax`, which enforces it unconditionally as well.
+    invalid_use_conditional_reasons(candidate, category, package, config).is_empty()
 }
 
 /// Whether `candidate` would pass [`is_visible`] once the named masking
@@ -4930,6 +4946,13 @@ fn visible_with_relax(
         &config.accept_restrict,
         &config.package_accept_restrict,
     ) {
+        return false;
+    }
+
+    // Backlog #153: the `invalid` IUSE-conditional mask is never
+    // relaxed (real offers no autounmask for it) -- enforced at every
+    // autounmask level exactly like the unrelaxed `is_visible` does.
+    if !invalid_use_conditional_reasons(candidate, category, package, config).is_empty() {
         return false;
     }
 
@@ -5009,14 +5032,19 @@ fn keyword_masked_only(
         return false;
     }
 
-    !keywords_accepted(
+    if keywords_accepted(
         &candidate.keywords,
         &candidate_str,
         category,
         package,
         &config.accept_keywords,
         &config.package_accept_keywords,
-    )
+    ) {
+        return false;
+    }
+    // Backlog #153: "masked by X alone" also requires the candidate not
+    // be `invalid` -- an invalid package is never visible-except-X.
+    invalid_use_conditional_reasons(candidate, category, package, config).is_empty()
 }
 
 /// `--autounmask-keep-masks=n`'s own v1 slice, the `package.mask`
@@ -5069,7 +5097,7 @@ fn mask_masked_only(
     ) {
         return false;
     }
-    metadata_key_accepted(
+    if !metadata_key_accepted(
         &candidate.restrict,
         candidate,
         category,
@@ -5079,7 +5107,12 @@ fn mask_masked_only(
         MetadataKey::Restrict,
         &config.accept_restrict,
         &config.package_accept_restrict,
-    )
+    ) {
+        return false;
+    }
+    // Backlog #153: "masked by X alone" also requires the candidate not
+    // be `invalid` -- an invalid package is never visible-except-X.
+    invalid_use_conditional_reasons(candidate, category, package, config).is_empty()
 }
 
 /// The best `--autounmask-keep-masks=n` candidate for `category/package`,
@@ -5163,7 +5196,12 @@ fn license_masked_only(
         return false;
     }
 
-    !license_accepted(candidate, category, package, &candidate_str, config)
+    if license_accepted(candidate, category, package, &candidate_str, config) {
+        return false;
+    }
+    // Backlog #153: "masked by X alone" also requires the candidate not
+    // be `invalid` -- an invalid package is never visible-except-X.
+    invalid_use_conditional_reasons(candidate, category, package, config).is_empty()
 }
 
 /// The keyword portuale's own `--autounmask` v1 would suggest adding
@@ -9916,11 +9954,181 @@ fn highest_available_candidate_ignoring_use(
     ))
 }
 
+/// Real `Package._validate_deps`'s own IUSE-missing-conditional mask
+/// (`_emerge/Package.py`, backlog #153): every `flag? ( … )` group and
+/// every `[flag?]`/`[!flag?]`/`[flag=]`/`[!flag=]` use-dep conditional in
+/// the five dep keys must reference a flag valid for the *atom-owning*
+/// package's own effective IUSE (`is_valid_flag`, i.e. explicit IUSE ∪
+/// implicit: arch.list, use.mask/force, `build`/`bootstrap`,
+/// `iuse_effective` -- [`implicit_iuse_set`]), or the whole candidate is
+/// masked `invalid`. Skipped for installed packages in real
+/// (`dep_valid_flag = None` when `self.installed`); portuale only ever
+/// calls this for repo/binary candidates, never vdb ones, so the
+/// exemption holds structurally. The check runs with `matchall=True`
+/// semantics: every conditional is validated regardless of the
+/// candidate's own USE state (an inactive `off? ( … )` group with an
+/// undeclared flag is still invalid -- real validates at group close,
+/// not at evaluation).
+///
+/// The scan mirrors real `use_reduce(..., matchall=True,
+/// token_class=Atom, flat=True)`'s own single left-to-right pass: an
+/// atom token is validated the moment it is scanned (real constructs
+/// the `Atom`, whose `__init__` runs `_validate_conditional_flags`
+/// immediately), a group conditional when its own `)` closes
+/// (innermost group first, emerging naturally from the stack). First
+/// failure per key wins (real raises, aborting that key's reduction);
+/// keys run in real's own `_dep_keys` order and every key still runs
+/// after a failure, so a candidate can carry several `invalid: …`
+/// reasons at once.
+///
+/// Message shapes, both confirmed live against real 3.0.82.2 on the
+/// fixture tree (via a `cp -a` copy, never the live checkout):
+/// - group: `{KEY}: USE flag 'soflag' referenced in conditional
+///   'soflag?' is not in IUSE` (the raw conditional token, no atom part
+///   -- `dev-vcs/somercurial-5.5.1`'s own `RDEPEND`);
+/// - atom: `{KEY}: USE flag 'x' referenced in conditional 'x?' in atom
+///   'dev-libs/fucyclea[x?]' is not in IUSE` (conditional from real's
+///   own `_conditional_strings`: `f?`/`!f?`/`f=`/`!f=`; the atom exactly
+///   as written, defaults like `[baz(+)?]` kept --
+///   `dev-libs/usedeppkg-1.0`'s own `RDEPEND`).
+///
+/// Within one atom, real checks its `_conditionals_class` slot order
+/// (`disabled`, `enabled`, `equal`, `not_equal`); the scan does the same.
+///
+/// Deliberate narrowings, all without a fixture instance: EAPI gating
+/// (real passes `dep_eapi`, so an ancient EAPI reports `EAPI.incompatible`
+/// instead -- portuale's own atom grammar already accepts what it
+/// accepts, independently of this check); `LICENSE`/`PROPERTIES`/`RESTRICT`
+/// group conditionals and `SRC_URI` (real validates those too, but the
+/// `LICENSE` shortcut's own doc comment parks that pathway separately);
+/// and syntactically malformed dep strings (real reports those as
+/// `*.syntax` invalid instead -- an unparseable atom token is skipped
+/// here, an unbalanced bracket ends the scan silently).
+fn invalid_use_conditional_reasons(
+    candidate: &Candidate,
+    category: &str,
+    package: &str,
+    config: &portage_profile::Config,
+) -> Vec<String> {
+    let ebuild_map;
+    let deps: &HashMap<String, String> = match candidate.source {
+        CandidateSource::Ebuild => {
+            let stem = format!("{package}-{}", candidate.version);
+            let Ok(map) = repo_aux_metadata(&candidate.repo_location, category, &stem) else {
+                return Vec::new();
+            };
+            ebuild_map = map;
+            &ebuild_map
+        }
+        // A `Packages` index carries the binpkg's own dep keys (real
+        // validates a built, non-installed binary exactly like an
+        // ebuild here); there is no fixture binpkg oracle for the
+        // message text, so this arm is fidelity without a pin.
+        CandidateSource::Binary => &candidate.binary_deps,
+    };
+    let valid = implicit_iuse_set(&candidate.iuse, config);
+    let mut out = Vec::new();
+    for key in ["BDEPEND", "DEPEND", "IDEPEND", "PDEPEND", "RDEPEND"] {
+        let Some(dep) = deps.get(key) else { continue };
+        if dep.trim().is_empty() {
+            continue;
+        }
+        if let Some(msg) = first_invalid_conditional(dep, &valid) {
+            out.push(format!("invalid: {key}: {msg}"));
+        }
+    }
+    out
+}
+
+/// First IUSE-missing conditional in one dep string, in real's own
+/// encounter order -- see [`invalid_use_conditional_reasons`].
+fn first_invalid_conditional(dep: &str, valid: &HashSet<String>) -> Option<String> {
+    /// What the current level's last token was: only a `?`-suffixed
+    /// token can open a group, so only that needs remembering.
+    enum Last {
+        None,
+        Cond(String),
+        Other,
+    }
+    let mut stack: Vec<Last> = vec![Last::None];
+    for tok in dep.split_whitespace() {
+        match tok {
+            "(" => stack.push(Last::None),
+            ")" => {
+                let _closed = stack.pop();
+                let Some(top) = stack.last_mut() else {
+                    continue;
+                };
+                let raw = match top {
+                    Last::Cond(raw) => std::mem::take(raw),
+                    _ => continue,
+                };
+                *top = Last::Other;
+                let inner = raw.strip_suffix('?').unwrap_or(raw.as_str());
+                let flag = inner.strip_prefix('!').unwrap_or(inner);
+                if !valid.contains(flag) {
+                    return Some(format!(
+                        "USE flag '{flag}' referenced in conditional '{raw}' is not in IUSE"
+                    ));
+                }
+            }
+            "||" => {
+                if let Some(top) = stack.last_mut() {
+                    *top = Last::Other;
+                }
+            }
+            t if t.ends_with('?') => {
+                if let Some(top) = stack.last_mut() {
+                    *top = Last::Cond(t.to_string());
+                }
+            }
+            t => {
+                if let Some(top) = stack.last_mut() {
+                    *top = Last::Other;
+                }
+                let Some(atom) = portage_dep::parse_atom(t) else {
+                    continue;
+                };
+                let Some(use_deps) = atom.use_deps else {
+                    continue;
+                };
+                // Real `_conditionals_class` slot order.
+                for op in [
+                    portage_dep::UseDepOp::IfParentDisabled,
+                    portage_dep::UseDepOp::IfParentEnabled,
+                    portage_dep::UseDepOp::EqualParent,
+                    portage_dep::UseDepOp::OppositeParent,
+                ] {
+                    let (prefix, suffix) = match op {
+                        portage_dep::UseDepOp::IfParentDisabled => ("!", "?"),
+                        portage_dep::UseDepOp::IfParentEnabled => ("", "?"),
+                        portage_dep::UseDepOp::EqualParent => ("", "="),
+                        portage_dep::UseDepOp::OppositeParent => ("!", "="),
+                        portage_dep::UseDepOp::Enabled | portage_dep::UseDepOp::Disabled => {
+                            continue;
+                        }
+                    };
+                    for ud in &use_deps {
+                        if ud.op == op && !valid.contains(&ud.flag) {
+                            return Some(format!(
+                                "USE flag '{f}' referenced in conditional '{prefix}{f}{suffix}' in atom '{t}' is not in IUSE",
+                                f = ud.flag
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Real `getmaskingstatus._getmaskingstatus`'s human reason strings for a
 /// candidate that is *not* [`is_visible`] -- the `(masked by: …)` text
 /// [`all_masked_report`] puts after each `- <cpv>` line. Reason order
 /// mirrors real: `package.mask`, `LICENSE`, `PROPERTIES`, `RESTRICT`,
-/// `KEYWORDS`. `package.mask` and the `KEYWORDS` string (`"~<arch>
+/// `KEYWORDS`, then `invalid` (real appends the invalid reasons after
+/// `_getmaskingstatus` in `_get_masking_status`). `package.mask` and the `KEYWORDS` string (`"~<arch>
 /// keyword"` / `"-<arch> keyword"` / `"missing keyword"`) and the
 /// `LICENSE` string (`"<names> license(s)"`) match real verbatim;
 /// `PROPERTIES`/`RESTRICT` are the bare key name (real names the specific
@@ -10006,6 +10214,12 @@ fn candidate_masking_reasons(
             .unwrap_or_else(|| "missing".to_string());
         reasons.push(format!("{kmask} keyword"));
     }
+
+    // Backlog #153: real appends the `invalid` reasons after
+    // `_getmaskingstatus` in `_get_masking_status` -- same position here.
+    reasons.extend(invalid_use_conditional_reasons(
+        candidate, category, package, config,
+    ));
 
     if reasons.is_empty() {
         reasons.push("masked".to_string());
@@ -35783,14 +35997,16 @@ mod tests {
     }
 
     #[test]
-    fn circular_dep_solutions_conditional_grandparent_keeps_the_suggestion_with_followup() {
-        // Same USE-gated cycle shape (here fucyclea/fucycleb), but the
-        // top-level target dev-libs/fucyclec constrains the solution flag
-        // only conditionally (dev-libs/fucyclea[x?]) -- real
-        // `_find_suggestions` step 9's `followup_change` arm: the "disable
-        // x" fix survives, flagged as possibly cascading upward. This is
-        // the variant `docs/history/find-suggestions-plan.md` left
-        // without a fixture.
+    fn conditional_grandparent_with_undeclared_flag_is_masked_invalid_before_any_cycle_analysis() {
+        // Backlog #153: the fucyclea/fucycleb USE-gated cycle is still in
+        // the tree, but the top-level target dev-libs/fucyclec constrains
+        // the solution flag conditionally (`dev-libs/fucyclea[x?]`) with
+        // `x` in no IUSE of its own -- real masks the whole candidate
+        // `invalid` at construction (`Package._validate_deps`), so the
+        // resolve fails with the all-masked report before any cycle is
+        // ever walked: there is no circular-dep suggestion to keep. (This
+        // test previously pinned the followup suggestion; that output
+        // described a merge real never makes.)
         let root = fixtures_root();
         let config = portage_profile::resolve_config(
             &root,
@@ -35802,23 +36018,64 @@ mod tests {
             &root,
         )
         .expect("fixture config resolves");
-        let repos = find_repos(&root).expect("repos");
-        let result = graph_result_real("dev-libs/fucyclec");
-        assert_eq!(result.circular_deps.len(), 1);
-        let sols = circular_dep_solutions(
-            &result.circular_deps[0],
-            &repos,
+        #[allow(clippy::fn_params_excessive_bools)]
+        let err = resolve_pretend_graph(
+            &root,
+            &root,
+            &["dev-libs/fucyclec".to_string()],
             &config,
-            &result.autounmask_use_changes,
-            &result.entries,
-        );
-        assert_eq!(
-            sols,
-            vec![CircularSuggestion {
-                parent_cpv: "dev-libs/fucyclea-1.0".to_string(),
-                changes: vec![("x".to_string(), false)],
-                followup: true,
-            }]
+            false,
+            false,
+            false,
+            false,
+            Deep::NotRequested,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            false,
+            None,
+            false,
+            false,
+            None,
+            &fixtures_root().join("distfiles"),
+            false,
+            false,
+            false,
+            10,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            true,
+            false,
+        )
+        .expect_err("fucyclec must fail: its only candidate is masked invalid");
+        let Error::Detail(report) = err else {
+            panic!("expected the all-masked report, got: {err:?}");
+        };
+        assert!(
+            report.contains(
+                "- dev-libs/fucyclec-1.0::testrepo (masked by: invalid: DEPEND: \
+                 USE flag 'x' referenced in conditional 'x?' in atom \
+                 'dev-libs/fucyclea[x?]' is not in IUSE)"
+            ),
+            "{report}"
         );
     }
 
@@ -35947,6 +36204,139 @@ mod tests {
         assert_eq!(
             masked_candidates_for_atom(&repos, "dev-libs/doesnotexist-anywhere", &config),
             None
+        );
+    }
+
+    #[test]
+    fn invalid_use_conditional_mask_matches_real_on_all_three_fixture_cases() {
+        // Backlog #153: real 3.0.82.2 masks all three `invalid` (oracles
+        // captured against a `cp -a` copy of this same tree) --
+        // `fucyclec` (atom `[x?]` in DEPEND), `usedeppkg` (atom
+        // `[baz(+)?]` in RDEPEND -- a defaulted conditional is still
+        // validated), `somercurial` (`soflag? ( … )` group in RDEPEND).
+        let root = fixtures_root();
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+            &root,
+        )
+        .expect("fixture config resolves");
+        let repos = find_repos(&root).expect("repos");
+        for (cat, pkg, version, expected) in [
+            (
+                "dev-libs",
+                "fucyclec",
+                "1.0",
+                "invalid: DEPEND: USE flag 'x' referenced in conditional 'x?' in atom 'dev-libs/fucyclea[x?]' is not in IUSE",
+            ),
+            (
+                "dev-libs",
+                "usedeppkg",
+                "1.0",
+                "invalid: RDEPEND: USE flag 'baz' referenced in conditional 'baz?' in atom 'dev-libs/multislotpkg:1[baz(+)?]' is not in IUSE",
+            ),
+            (
+                "dev-vcs",
+                "somercurial",
+                "5.5.1",
+                "invalid: RDEPEND: USE flag 'soflag' referenced in conditional 'soflag?' is not in IUSE",
+            ),
+        ] {
+            let candidates = list_candidates(&repos, cat, pkg).expect("list_candidates");
+            let c = candidates
+                .iter()
+                .find(|c| c.version == version)
+                .expect("fixture version");
+            assert_eq!(
+                invalid_use_conditional_reasons(c, cat, pkg, &config),
+                vec![expected.to_string()],
+                "{cat}/{pkg}"
+            );
+            assert!(!is_visible(c, cat, pkg, &config), "{cat}/{pkg}");
+        }
+        // Negative control: `gpcyclea` conditions on `x` with `IUSE="+x"`.
+        let gpl = list_candidates(&repos, "dev-libs", "gpcyclea").expect("list_candidates");
+        let g = gpl.iter().find(|c| c.version == "1.0").expect("version");
+        assert!(invalid_use_conditional_reasons(g, "dev-libs", "gpcyclea", &config).is_empty());
+        assert!(is_visible(g, "dev-libs", "gpcyclea", &config));
+        // End to end: the masked-candidates disclosure carries the reason.
+        let masked = masked_candidates_for_atom(&repos, "dev-libs/fucyclec", &config)
+            .expect("invalid dep discloses");
+        assert_eq!(
+            masked,
+            vec![(
+                "dev-libs/fucyclec-1.0::testrepo".to_string(),
+                vec!["invalid: DEPEND: USE flag 'x' referenced in conditional 'x?' in atom 'dev-libs/fucyclea[x?]' is not in IUSE".to_string()]
+            )]
+        );
+    }
+
+    #[test]
+    fn first_invalid_conditional_covers_forms_nesting_and_order() {
+        let valid: HashSet<String> = ["x".to_string()].into_iter().collect();
+        // Clean strings pass, whatever the form.
+        for dep in [
+            "dev-libs/a[x?] dev-libs/b",
+            "x? ( dev-libs/a )",
+            "dev-libs/a[!x?] dev-libs/b[x=]",
+            "|| ( dev-libs/a dev-libs/b )",
+            "dev-libs/a[x(+)?]",
+        ] {
+            assert_eq!(first_invalid_conditional(dep, &valid), None, "{dep}");
+        }
+        // Every conditional form reports with real's conditional text.
+        for (dep, msg) in [
+            (
+                "dev-libs/a[y?]",
+                "USE flag 'y' referenced in conditional 'y?' in atom 'dev-libs/a[y?]' is not in IUSE",
+            ),
+            (
+                "dev-libs/a[!y?]",
+                "USE flag 'y' referenced in conditional '!y?' in atom 'dev-libs/a[!y?]' is not in IUSE",
+            ),
+            (
+                "dev-libs/a[y=]",
+                "USE flag 'y' referenced in conditional 'y=' in atom 'dev-libs/a[y=]' is not in IUSE",
+            ),
+            (
+                "dev-libs/a[!y=]",
+                "USE flag 'y' referenced in conditional '!y=' in atom 'dev-libs/a[!y=]' is not in IUSE",
+            ),
+            (
+                "y? ( dev-libs/a )",
+                "USE flag 'y' referenced in conditional 'y?' is not in IUSE",
+            ),
+            (
+                "!y? ( dev-libs/a )",
+                "USE flag 'y' referenced in conditional '!y?' is not in IUSE",
+            ),
+        ] {
+            assert_eq!(
+                first_invalid_conditional(dep, &valid).as_deref(),
+                Some(msg),
+                "{dep}"
+            );
+        }
+        // Encounter order: an atom before a group reports the atom (real
+        // validates each token as scanned, groups at their `)` close).
+        assert_eq!(
+            first_invalid_conditional("dev-libs/a[y?] z? ( dev-libs/b )", &valid).as_deref(),
+            Some(
+                "USE flag 'y' referenced in conditional 'y?' in atom 'dev-libs/a[y?]' is not in IUSE"
+            )
+        );
+        assert_eq!(
+            first_invalid_conditional("z? ( dev-libs/b ) dev-libs/a[y?]", &valid).as_deref(),
+            Some("USE flag 'z' referenced in conditional 'z?' is not in IUSE")
+        );
+        // Nested groups validate innermost first.
+        assert_eq!(
+            first_invalid_conditional("z? ( y? ( dev-libs/b ) )", &valid).as_deref(),
+            Some("USE flag 'y' referenced in conditional 'y?' is not in IUSE")
         );
     }
 
