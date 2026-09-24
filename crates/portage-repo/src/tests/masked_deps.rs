@@ -49,6 +49,134 @@ fn masked_candidates_for_atom_reports_masked_only_matches() {
 }
 
 #[test]
+fn invalid_use_conditional_mask_matches_portage_on_all_three_fixture_cases() {
+    // Portage 3.0.82.2 masks all three `invalid` fixture cases (oracle against
+    // a copy of this same tree).
+    let root = fixtures_root();
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    let repos = find_repos(&root).expect("repos");
+    for (cat, pkg, version, expected) in [
+        (
+            "dev-libs",
+            "fucyclec",
+            "1.0",
+            "invalid: DEPEND: USE flag 'x' referenced in conditional 'x?' in atom 'dev-libs/fucyclea[x?]' is not in IUSE",
+        ),
+        (
+            "dev-libs",
+            "usedeppkg",
+            "1.0",
+            "invalid: RDEPEND: USE flag 'baz' referenced in conditional 'baz?' in atom 'dev-libs/multislotpkg:1[baz(+)?]' is not in IUSE",
+        ),
+        (
+            "dev-vcs",
+            "somercurial",
+            "5.5.1",
+            "invalid: RDEPEND: USE flag 'soflag' referenced in conditional 'soflag?' is not in IUSE",
+        ),
+    ] {
+        let candidates = list_candidates(&repos, cat, pkg).expect("list_candidates");
+        let c = candidates
+            .iter()
+            .find(|c| c.version == version)
+            .expect("fixture version");
+        assert_eq!(
+            invalid_use_conditional_reasons(c, cat, pkg, &config),
+            vec![expected.to_string()],
+            "{cat}/{pkg}"
+        );
+        assert!(!is_visible(c, cat, pkg, &config), "{cat}/{pkg}");
+    }
+    // Negative control: `gpcyclea` conditions on `x` with `IUSE="+x"`.
+    let gpl = list_candidates(&repos, "dev-libs", "gpcyclea").expect("list_candidates");
+    let g = gpl.iter().find(|c| c.version == "1.0").expect("version");
+    assert!(invalid_use_conditional_reasons(g, "dev-libs", "gpcyclea", &config).is_empty());
+    assert!(is_visible(g, "dev-libs", "gpcyclea", &config));
+    // End to end: the masked-candidates disclosure carries the reason.
+    let masked = masked_candidates_for_atom(&repos, "dev-libs/fucyclec", &config)
+        .expect("invalid dep discloses");
+    assert_eq!(
+        masked,
+        vec![(
+            "dev-libs/fucyclec-1.0::testrepo".to_string(),
+            vec!["invalid: DEPEND: USE flag 'x' referenced in conditional 'x?' in atom 'dev-libs/fucyclea[x?]' is not in IUSE".to_string()]
+        )]
+    );
+}
+
+#[test]
+fn first_invalid_conditional_covers_forms_nesting_and_order() {
+    let valid: HashSet<String> = ["x".to_string()].into_iter().collect();
+    // Clean strings pass, whatever the form.
+    for dep in [
+        "dev-libs/a[x?] dev-libs/b",
+        "x? ( dev-libs/a )",
+        "dev-libs/a[!x?] dev-libs/b[x=]",
+        "|| ( dev-libs/a dev-libs/b )",
+        "dev-libs/a[x(+)?]",
+    ] {
+        assert_eq!(first_invalid_conditional(dep, &valid), None, "{dep}");
+    }
+    // Every conditional form reports with Portage's conditional text.
+    for (dep, msg) in [
+        (
+            "dev-libs/a[y?]",
+            "USE flag 'y' referenced in conditional 'y?' in atom 'dev-libs/a[y?]' is not in IUSE",
+        ),
+        (
+            "dev-libs/a[!y?]",
+            "USE flag 'y' referenced in conditional '!y?' in atom 'dev-libs/a[!y?]' is not in IUSE",
+        ),
+        (
+            "dev-libs/a[y=]",
+            "USE flag 'y' referenced in conditional 'y=' in atom 'dev-libs/a[y=]' is not in IUSE",
+        ),
+        (
+            "dev-libs/a[!y=]",
+            "USE flag 'y' referenced in conditional '!y=' in atom 'dev-libs/a[!y=]' is not in IUSE",
+        ),
+        (
+            "y? ( dev-libs/a )",
+            "USE flag 'y' referenced in conditional 'y?' is not in IUSE",
+        ),
+        (
+            "!y? ( dev-libs/a )",
+            "USE flag 'y' referenced in conditional '!y?' is not in IUSE",
+        ),
+    ] {
+        assert_eq!(
+            first_invalid_conditional(dep, &valid).as_deref(),
+            Some(msg),
+            "{dep}"
+        );
+    }
+    // Encounter order: an atom before a group reports the atom (Portage
+    // validates each token as scanned, groups at their `)` close).
+    assert_eq!(
+        first_invalid_conditional("dev-libs/a[y?] z? ( dev-libs/b )", &valid).as_deref(),
+        Some("USE flag 'y' referenced in conditional 'y?' in atom 'dev-libs/a[y?]' is not in IUSE")
+    );
+    assert_eq!(
+        first_invalid_conditional("z? ( dev-libs/b ) dev-libs/a[y?]", &valid).as_deref(),
+        Some("USE flag 'z' referenced in conditional 'z?' is not in IUSE")
+    );
+    // Nested groups validate innermost first.
+    assert_eq!(
+        first_invalid_conditional("z? ( y? ( dev-libs/b ) )", &valid).as_deref(),
+        Some("USE flag 'y' referenced in conditional 'y?' is not in IUSE")
+    );
+}
+
+#[test]
 fn atom_all_use_unmasked_is_true_for_the_unsatuseor_alternative() {
     // Portage's `all_use_unmasked` probe (bug 515584): an off-by-default flag
     // keeps the choice selectable, not demoted to `other`.
