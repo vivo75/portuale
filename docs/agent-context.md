@@ -389,6 +389,19 @@ L1_SKIP_BUILD=1 L1_CONSUME_REINSTALL=1 \
   differential-test-bed/run/l1-merge-from-binpkg.sh differential-test-bed/atomlists/l1-merge-gate.txt
 ```
 
+The gate needs the gitignored Portage checkout (**`3rdparty/portage`**
+in the portuale checkout under test) present in the execution tree, or
+it dies with an opaque `has_version: unexpected portageq exit code: 127`
+in `pkg_preinst` (#151): `ebuild_phases::bin_dir()` serves the
+portage-importing bin helpers (`portageq-wrapper`, `portageq`,
+`ebuild-pyhelper`) only from that checkout, never from the vendored
+`bin/`. The L1 runner now pre-flights this (`portuale_phase_helpers_preflight`)
+and exits 2 with `!!! [preflight] …` before any container starts; a
+fresh clone or a worktree without the checkout (it is gitignored) trips
+it — fix with `./3rdparty/setup.sh portage` in that tree, or
+`PORTUALE_PORTAGE_CHECKOUT=…` (the L1 container mounts `$PM_REPO` only,
+so it must point under it).
+
 This rule exists because of backlog #96 (2026-09-20): `merge_tree` wrote
 regular files with `std::fs::copy`, an in-place `O_TRUNC` rewrite of the
 existing inode. `ETXTBSY` protects a running *executable* (the merge
