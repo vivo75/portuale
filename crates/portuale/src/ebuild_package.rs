@@ -1656,6 +1656,74 @@ mod tests {
     }
 
     #[test]
+    fn refresh_entry_compression_command_rederives_the_command_from_the_layered_env() {
+        let command_of = |env: &[(String, String)]| {
+            env.iter()
+                .rev()
+                .find(|(k, _)| k == "PORTAGE_COMPRESSION_COMMAND")
+                .map(|(_, v)| v.clone())
+        };
+        // Matched per-entry BINPKG_COMPRESS=gzip over a run-wide bzip2 pair:
+        // the pair is replaced.
+        let mut matched = vec![
+            (
+                "PORTAGE_COMPRESSION_COMMAND".to_string(),
+                "bzip2".to_string(),
+            ),
+            ("BINPKG_COMPRESS".to_string(), "gzip".to_string()),
+            ("MAKEOPTS".to_string(), "-j1".to_string()),
+        ];
+        refresh_entry_compression_command(&mut matched, None);
+        assert_eq!(command_of(&matched), Some("gzip".to_string()));
+        // Unmatched entry: recomputes byte-identically to the run-wide value.
+        let mut unmatched = vec![(
+            "PORTAGE_COMPRESSION_COMMAND".to_string(),
+            "bzip2".to_string(),
+        )];
+        refresh_entry_compression_command(&mut unmatched, None);
+        assert_eq!(command_of(&unmatched), Some("bzip2".to_string()));
+        // Unknown per-entry codec: the pair is removed, matching Portage leaving
+        // the key unset.
+        let mut unknown = vec![
+            (
+                "PORTAGE_COMPRESSION_COMMAND".to_string(),
+                "bzip2".to_string(),
+            ),
+            ("BINPKG_COMPRESS".to_string(), "made-up-codec".to_string()),
+        ];
+        refresh_entry_compression_command(&mut unknown, None);
+        assert_eq!(command_of(&unknown), None);
+        // A `make.conf` BINPKG_COMPRESS with no calling-env value and no
+        // `package.env` match still reaches the pipe through the config tail.
+        // Skipped when the ambient process env sets the compression keys
+        // (the ambient value would rightly win).
+        if std::env::var_os("BINPKG_COMPRESS").is_none()
+            && std::env::var_os("BINPKG_COMPRESS_FLAGS").is_none()
+            && std::env::var_os("PORTAGE_BZIP2_COMMAND").is_none()
+        {
+            let config = portage_profile::Config {
+                other_vars: [("BINPKG_COMPRESS".to_string(), "gzip".to_string())]
+                    .into_iter()
+                    .collect(),
+                ..Default::default()
+            };
+            let mut filed = vec![
+                (
+                    "PORTAGE_COMPRESSION_COMMAND".to_string(),
+                    "bzip2".to_string(),
+                ),
+                ("MAKEOPTS".to_string(), "-j1".to_string()),
+            ];
+            refresh_entry_compression_command(&mut filed, Some(&config));
+            assert_eq!(
+                command_of(&filed),
+                Some("gzip".to_string()),
+                "the make.conf value must survive the re-derivation"
+            );
+        }
+    }
+
+    #[test]
     fn resolve_compression_command_is_none_when_the_bzip2_var_names_a_missing_binary() {
         // A genuine compressor name, but the bzip2 var names a missing binary:
         // the command is left unset, not fabricated.

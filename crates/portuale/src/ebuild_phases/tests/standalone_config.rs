@@ -184,3 +184,27 @@ fn per_package_portage_tmpdir_feeds_the_build_directory() {
     assert_eq!(out, run);
     std::fs::remove_dir_all(&probe).ok();
 }
+
+/// The standalone compressor resolver reads the matched `package.env`
+/// triple through the ebuild's own md5-cache identity.
+#[test]
+fn resolve_standalone_binpkg_compress_matches_the_twin_fixture() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+    let config_root = fixtures.clone();
+    let matched = resolve_standalone_binpkg_compress(
+        &fixtures.join("repo/dev-libs/penvcmppkg/penvcmppkg-1.0.ebuild"),
+        &config_root,
+        &fixtures,
+    );
+    assert_eq!(
+        matched,
+        Some(("gzip".to_string(), None, None,)),
+        "the penv-compress match must resolve, with no flags/bzip2 overrides"
+    );
+    let unmatched = resolve_standalone_binpkg_compress(
+        &fixtures.join("repo/dev-libs/newpkg/newpkg-1.0.ebuild"),
+        &config_root,
+        &fixtures,
+    );
+    assert_eq!(unmatched, None, "no match, no override");
+}
