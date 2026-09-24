@@ -244,6 +244,27 @@ fn vdb_entry_slot_returns_empty_for_an_unsplittable_pf() {
     assert_eq!(vdb_entry_slot(&root, "dev-libs", "not-a-version-dir"), "");
 }
 
+/// A present-but-invalid `SLOT` reads as `"0"` (Portage's `_get_slot_re`).
+#[test]
+fn vdb_entry_slot_translates_a_present_but_invalid_slot_to_0() {
+    let root = tmp_vdb("dev-libs", "badslot-1.0", &[("SLOT", b"!!bad slot!!\n")]);
+    assert_eq!(vdb_entry_slot(&root, "dev-libs", "badslot-1.0"), "0");
+}
+
+/// A valid `main/sub` slot is not flattened to `"0"`.
+#[test]
+fn vdb_entry_slot_keeps_a_valid_sub_slot() {
+    let root = tmp_vdb("dev-libs", "subslot-2.0", &[("SLOT", b"0/2\n")]);
+    assert_eq!(vdb_entry_slot(&root, "dev-libs", "subslot-2.0"), "0/2");
+}
+
+/// A collapsed multi-line value is invalid too, so it also reads as `"0"`.
+#[test]
+fn vdb_entry_slot_translates_a_collapsed_multiline_slot_to_0() {
+    let root = tmp_vdb("dev-libs", "multislot-2.0", &[("SLOT", b"0\n1\n")]);
+    assert_eq!(vdb_entry_slot(&root, "dev-libs", "multislot-2.0"), "0");
+}
+
 /// Snapshot parse (Portage's `_read_metadata_file`): `#` lines ignored,
 /// `=`-less lines skipped, last duplicate wins.
 #[test]
