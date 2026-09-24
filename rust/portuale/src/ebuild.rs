@@ -343,7 +343,7 @@ pub fn run(args: &[String]) -> ExitCode {
         let binpkg_compress_flags = std::env::var(&binpkg_compress_flags_name)
             .or_else(|_| std::env::var("BINPKG_COMPRESS_FLAGS"))
             .unwrap_or_else(|_| default_package_options.binpkg_compress_flags.clone());
-        let package_options = ebuild_package::PackageOptions {
+        let mut package_options = ebuild_package::PackageOptions {
             debug,
             pkgdir: std::env::var_os("PKGDIR")
                 .map(std::path::PathBuf::from)
@@ -378,6 +378,48 @@ pub fn run(args: &[String]) -> ExitCode {
                 .unwrap_or_default(),
             binpkg_gpg_signing_key: std::env::var("BINPKG_GPG_SIGNING_KEY").unwrap_or_default(),
         };
+        // Real per-package `BINPKG_COMPRESS*` (backlog #147 S3): a
+        // standalone `ebuild <file> package` runs `doebuild` on the
+        // setcpv'd config (`bin/ebuild:365`), so the package's own
+        // settings reach the xpak pipe (S0 C2: gzip magic with
+        // run-wide zstd). The match plays only when the calling env
+        // is silent on `BINPKG_COMPRESS` (real's calling-env-wins
+        // scalar precedence, #101 -- the run-wide resolution above
+        // already folded it in) and only for `xpak` runs: real's
+        // gpkg helper reads the global settings
+        // (`bin/gpkg-helper.py:49`), never the package's (S0
+        // B-gpkg). No per-entry `FEATURES` fold here on purpose: no
+        // per-package `FEATURES` token has a real-honored
+        // standalone-`package` artefact effect (the layout is
+        // run-wide -- the STOPPED S1 arm owns that question -- and
+        // signing needs its own oracle), so per O9 it is not
+        // implemented.
+        if package_options.binpkg_format == "xpak"
+            && std::env::var("BINPKG_COMPRESS").is_err()
+            && let Some((compress, flags, bzip2)) =
+                ebuild_phases::resolve_standalone_binpkg_compress(
+                    std::path::Path::new(ebuild_file),
+                    &portage_repo::config_root_from_env(),
+                    &root,
+                )
+        {
+            package_options.binpkg_compress = compress;
+            let flags_name = format!(
+                "BINPKG_COMPRESS_FLAGS_{}",
+                package_options.binpkg_compress.to_uppercase()
+            );
+            if std::env::var(&flags_name).is_err()
+                && std::env::var("BINPKG_COMPRESS_FLAGS").is_err()
+                && let Some(matched_flags) = flags
+            {
+                package_options.binpkg_compress_flags = matched_flags;
+            }
+            if std::env::var("PORTAGE_BZIP2_COMMAND").is_err()
+                && let Some(matched_bzip2) = bzip2
+            {
+                package_options.portage_bzip2_command = matched_bzip2;
+            }
+        }
         let ebuild_path = std::path::Path::new(ebuild_file);
 
         // `merge` / `qmerge` / `unmerge` write into a root-owned

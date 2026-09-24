@@ -326,6 +326,13 @@ fn buildpkgonly_entry_build_env(
         entry,
         Some(candidate),
     ));
+    // Real per-package `BINPKG_COMPRESS` (backlog #147 S2): the
+    // matched scalars are layered above, so re-derive the xpak pipe
+    // command from them here -- the install phases save this env and
+    // real `__dyn_package` reads it back through the saved
+    // `${T}/environment`. Unmatched entries recompute the run-wide
+    // command byte-identically.
+    crate::ebuild_package::refresh_entry_compression_command(&mut build_env);
     build_env
 }
 
@@ -1024,6 +1031,12 @@ fn entry_build_env(
         entry,
         candidate.as_ref(),
     ));
+    // Real per-package `BINPKG_COMPRESS` (backlog #147 S2): same
+    // re-derivation as `buildpkgonly_entry_build_env` -- this env
+    // feeds the merge-scheduler builds whose `package_after_install`
+    // side effect (`FEATURES=buildpkg` / `-b`) reads it back through
+    // the saved `${T}/environment`.
+    crate::ebuild_package::refresh_entry_compression_command(&mut env);
     env
 }
 
@@ -2485,6 +2498,94 @@ mod tests {
             unmatched.is_file(),
             "{unmatched:?} should exist -- the unmatched neighbour must keep the run-wide \
              binpkg_multi_instance: false single-instance layout"
+        );
+    }
+
+    /// Real per-package `BINPKG_COMPRESS` (backlog #147 S2): a
+    /// `package.env` scalar match must reach the xpak tar pipe for
+    /// that entry only (real `doebuild_environment()` reads the
+    /// package's own `mysettings`, `doebuild.py:697` -- S0 B-xpak
+    /// proves gzip magic with a zstd run-wide). The observable is
+    /// the archive magic: the matched entry compresses with its own
+    /// codec, its unmatched neighbour in the same run keeps the
+    /// run-wide one. Needs `PORTUALE_PORTAGE_CHECKOUT` pointing at a
+    /// real `3rdparty/portage` tree (the phase helpers import
+    /// `portage`), like the multi-instance test above.
+    #[test]
+    fn run_buildpkgonly_resolves_per_entry_binpkg_compress_from_package_env() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+        let pkgdir = tempdir();
+
+        let entries = vec![
+            source_entry(
+                "penvbuildpkg",
+                PretendOutcome::New {
+                    version: "1.0".into(),
+                },
+            ),
+            source_entry(
+                "newpkg",
+                PretendOutcome::New {
+                    version: "1.0".into(),
+                },
+            ),
+        ];
+        // In-memory package.env table (no committed fixture change --
+        // the scalars are env-driven, not ebuild-driven): gzip for the
+        // matched package only. Run-wide stays on the bzip2 fallback
+        // (no `BINPKG_COMPRESS` in this config or process env), so the
+        // neighbour pins the unchanged run-wide behavior too.
+        let config = portage_profile::Config {
+            package_env_vars: vec![(
+                "dev-libs/penvbuildpkg".to_string(),
+                vec![("BINPKG_COMPRESS".to_string(), "gzip".to_string())],
+            )],
+            ..portage_profile::Config::default()
+        };
+
+        let result = run_buildpkgonly(
+            &entries,
+            &config,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &PackageOptions {
+                debug: false,
+                pkgdir: pkgdir.clone(),
+                distdir: tempdir(),
+                shell: PackageOptions::default().shell,
+                binpkg_compress: "bzip2".to_string(),
+                binpkg_format: "xpak".to_string(),
+                ..PackageOptions::default()
+            },
+            false,
+        );
+        assert!(result.is_ok(), "{result:?}");
+
+        let magic_of = |path: std::path::PathBuf| {
+            let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
+            assert!(
+                bytes.len() > 4,
+                "{path:?} should hold a real archive, not an empty file"
+            );
+            bytes[..4].to_vec()
+        };
+        let matched = pkgdir.join("dev-libs/penvbuildpkg-1.0.tbz2");
+        assert_eq!(
+            magic_of(matched.clone()),
+            b"\x1f\x8b\x08\x00".to_vec(),
+            "{matched:?} should be gzip-compressed -- the matched entry's package.env \
+             BINPKG_COMPRESS=gzip must reach the xpak pipe, not just the run-wide bzip2"
+        );
+        let unmatched = pkgdir.join("dev-libs/newpkg-1.0.tbz2");
+        assert_eq!(
+            magic_of(unmatched.clone())[..3],
+            b"BZh".to_vec(),
+            "{unmatched:?} should keep the run-wide bzip2 bytes -- the neighbour must not \
+             inherit the match"
         );
     }
 

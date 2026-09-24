@@ -1157,10 +1157,29 @@ fn is_package_env_incremental(key: &str) -> bool {
 /// variable with `VAR=""`) and `__`-prefixed names (real does not strip
 /// them here).
 fn package_env_key_allowed(key: &str, profile_only_variables: &[String]) -> bool {
+    // Real `_grab_pkg_env` (backlog #95) rejects `protected_keys` ∪
+    // `non_user_variables` (PROFILE_ONLY ∪ env_blacklist ∪
+    // CONFIG_PROTECT); portuale additionally rejects its
+    // `ENVIRON_FILTER` export-filter list here -- a deliberate
+    // conservative narrowing, except for the compression family below.
+    // Real honors a per-package `BINPKG_COMPRESS` (and its FLAGS
+    // sisters: `doebuild.py:697-750` reads all three from the
+    // package's own `mysettings`, and none is in real's
+    // `non_user_variables` -- S0 B-xpak proves gzip magic), so
+    // backlog #147 S2 exempts exactly that family; every other
+    // `ENVIRON_FILTER` key stays rejected.
+    fn is_compression_key(key: &str) -> bool {
+        key == "BINPKG_COMPRESS"
+            || key == "BINPKG_COMPRESS_FLAGS"
+            || key == "PORTAGE_BZIP2_COMMAND"
+            || key
+                .strip_prefix("BINPKG_COMPRESS_FLAGS_")
+                .is_some_and(|rest| !rest.is_empty())
+    }
     !key.is_empty()
         && key != "USE"
         && !portage_profile::ENV_BLACKLIST.contains(&key)
-        && !portage_profile::ENVIRON_FILTER.contains(&key)
+        && !(portage_profile::ENVIRON_FILTER.contains(&key) && !is_compression_key(key))
         && !portage_profile::PORTUALE_COMPUTED.contains(&key)
         && !profile_only_variables.iter().any(|k| k == key)
 }
@@ -1450,6 +1469,49 @@ pub(crate) fn resolve_standalone_resolved_features(
         &pkg_raw,
         calling_features,
     ))
+}
+
+/// Real per-package `BINPKG_COMPRESS*` (backlog #147 S3) for a
+/// standalone `ebuild <file> package`: the matched scalar triple
+/// `(compress, flags, bzip2_command)` -- `flags`/`bzip2_command`
+/// each `None` when neither the match nor (for flags) its
+/// `FLAGS_<NAME>` override names one, in which case the caller
+/// keeps its run-wide value. Returns `None` when nothing resolves
+/// (outside a repo checkout, unparsable path) or nothing matched.
+///
+/// Real reads all three from the package's own `mysettings`
+/// (`doebuild.py:697-750`), and none is in real's
+/// `non_user_variables`, so the match uses the S2-accepted key set
+/// (`package_env_key_allowed`); the per-key calling-env-wins
+/// scalar precedence (#101) stays the caller's job -- it already
+/// resolved the run-wide triple from the calling env, so it masks
+/// the match exactly where real would. The caller also keeps the
+/// triple run-wide for `gpkg` runs: real's helper reads the global
+/// settings (`bin/gpkg-helper.py:49`), never the package's (S0
+/// B-gpkg).
+pub(crate) fn resolve_standalone_binpkg_compress(
+    ebuild_path: &Path,
+    config_root: &Path,
+    eroot: &Path,
+) -> Option<(String, Option<String>, Option<String>)> {
+    let (config, cpv_slot) = standalone_package_env_lookup(ebuild_path, config_root, eroot)?;
+    let profile_only = config
+        .resolved_incremental("PROFILE_ONLY_VARIABLES")
+        .unwrap_or_default();
+    let matched = |key: &str| {
+        if !package_env_key_allowed(key, &profile_only) {
+            return None;
+        }
+        match_package_env_scalar_raw(&config.package_env_vars, &cpv_slot, key)
+    };
+    let compress = matched("BINPKG_COMPRESS")?;
+    let flags = matched(&format!(
+        "BINPKG_COMPRESS_FLAGS_{}",
+        compress.to_uppercase()
+    ))
+    .or_else(|| matched("BINPKG_COMPRESS_FLAGS"));
+    let bzip2 = matched("PORTAGE_BZIP2_COMMAND");
+    Some((compress, flags, bzip2))
 }
 
 /// The config-`USE` set the `depend` phase reduces `RESTRICT`/
@@ -7283,5 +7345,32 @@ mod tests {
             "the resolved tmpdir is what the phase exports as PORTAGE_TMPDIR"
         );
         std::fs::remove_dir_all(&probe).ok();
+    }
+
+    /// Backlog #147 S3: the standalone compressor resolver reads the
+    /// twin fixture's committed `package.env` match
+    /// (`dev-libs/penvcmppkg penv-compress`, `BINPKG_COMPRESS=gzip`)
+    /// through the ebuild's own md5-cache identity -- `None` for an
+    /// unmatched neighbour (`dev-libs/newpkg`).
+    #[test]
+    fn resolve_standalone_binpkg_compress_matches_the_twin_fixture() {
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+        let config_root = fixtures.clone();
+        let matched = resolve_standalone_binpkg_compress(
+            &fixtures.join("repo/dev-libs/penvcmppkg/penvcmppkg-1.0.ebuild"),
+            &config_root,
+            &fixtures,
+        );
+        assert_eq!(
+            matched,
+            Some(("gzip".to_string(), None, None,)),
+            "the penv-compress match must resolve, with no flags/bzip2 overrides"
+        );
+        let unmatched = resolve_standalone_binpkg_compress(
+            &fixtures.join("repo/dev-libs/newpkg/newpkg-1.0.ebuild"),
+            &config_root,
+            &fixtures,
+        );
+        assert_eq!(unmatched, None, "no match, no override");
     }
 }
