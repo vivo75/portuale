@@ -200,11 +200,15 @@
 //     portage itself relies on (unmerge re-sorts, `qmerge`/`qlist` sort
 //     on read), and determinism is worth more here than bug-compatible
 //     arbitrariness.
-//   - `SLOT` is read directly from the ebuild's own text via a simple
-//     `SLOT=...` assignment regex (see `parse_slot`), the same
-//     "real-file, direct-text-parsing" shortcut `ebuild_phases::
-//     parse_eapi` already takes for `EAPI` -- a `SLOT` computed by real
-//     bash logic rather than declared as a literal is out of scope.
+//   - `SLOT` is read the way real `dblink.treewalk()` reads it
+//     (`vartree.py:4455-4498`): from `build-info/SLOT`, which the
+//     install phase's `__dyn_install` filled with the *evaluated*
+//     `${SLOT}` -- so a `SLOT` computed by real bash logic (e.g.
+//     `SLOT="$(ver_cut 1)"`) is already evaluated by the time the merge
+//     path reads it. The full real fallback chain (build-info value ->
+//     `settings["SLOT"]` write-back -> `!!! SLOT is undefined` abort,
+//     plus the `_eqawarn` QA Notice on a settings divergence) lives in
+//     `merge_after_install`.
 //   - `repository` is resolved by walking up from the ebuild's own
 //     package directory looking for a `profiles/repo_name` file (real
 //     portage's own mechanism for naming a repo), defaulting to the same
@@ -1590,29 +1594,6 @@ pub(crate) fn prune_unused_preserved_libs(
     write_plib_registry(root, &registry)?;
 
     Ok(removed)
-}
-
-/// Real PMS: unlike `EAPI` (restricted to the ebuild's own first real
-/// line), `SLOT` may appear anywhere among an ebuild's own top-level
-/// variable assignments -- this scans every line for the first literal
-/// `SLOT=...` match. No match at all defaults to `"0"` (the same default
-/// `portage_repo::installed_candidates`/`split_slot` already use for a
-/// missing `SLOT`).
-fn parse_slot(ebuild_text: &str) -> String {
-    let slot_re = regex::Regex::new(r#"^[ \t]*SLOT=(?:"([^"]*)"|'([^']*)'|(\S*))[ \t]*(#.*)?$"#)
-        .expect("static regex is valid");
-    for line in ebuild_text.lines() {
-        if let Some(caps) = slot_re.captures(line) {
-            let value = caps
-                .get(1)
-                .or_else(|| caps.get(2))
-                .or_else(|| caps.get(3))
-                .map(|m| m.as_str())
-                .unwrap_or("");
-            return value.to_string();
-        }
-    }
-    "0".to_string()
 }
 
 /// Real portage's own mechanism for naming a repo (`layout.conf`'s
@@ -3266,9 +3247,52 @@ fn merge_after_install(
         return Ok(1);
     }
 
-    let ebuild_text = std::fs::read_to_string(&env.ebuild_abs)
-        .map_err(|e| format!("{}: {e}", env.ebuild_abs.display()))?;
-    let full_slot = parse_slot(&ebuild_text);
+    // Real `dblink.treewalk()`'s own `self._installed_instance` slot
+    // read (`vartree.py:4455-4498`): the **evaluated** slot comes from
+    // `build-info/SLOT` (the install phase's `__dyn_install` wrote the
+    // live `${SLOT}`, so a computed `SLOT="$(ver_cut 1)"` is already
+    // evaluated there -- real `_eqawarn`s a divergence only), not from
+    // parsing the raw ebuild text (which would hand back the literal
+    // `$(ver_cut 1)` -- the #149 symptom). The full real chain:
+    //
+    // 1. read `build-info/SLOT`'s first line (empty/whitespace ~= read
+    //    error; real tolerates a missing file as empty);
+    // 2. empty -> fall back to the resolved `settings["SLOT"]` here
+    //    (`options.build_env`'s `SLOT`, the emerge path's resolved
+    //    metadata value) and `write_atomic` it back into the inforoot;
+    // 3. still empty -> `!!! SLOT is undefined`, abort the merge;
+    // 4. source builds only (`is_binpkg` is always false here -- the
+    //    binary path reads `meta_get("SLOT")` instead): a *known*
+    //    settings value that differs from the inforoot value gets a
+    //    `_eqawarn` QA Notice. Guarded on the settings value being
+    //    non-empty: real always carries a resolved `settings["SLOT"]`
+    //    on a merge (`depend` has run), while portuale's fixture path
+    //    can hand `merge_after_install` an empty `build_env` -- against
+    //    that state an `Expected SLOT='', got '1'` notice would be noise.
+    let info_root_slot = std::fs::read_to_string(env.build_info().join("SLOT"))
+        .ok()
+        .and_then(|text| text.lines().next().map(str::to_string))
+        .map(|line| line.trim().to_string())
+        .unwrap_or_default();
+    let settings_slot = options
+        .build_env
+        .iter()
+        .find(|(name, _)| name == "SLOT")
+        .map(|(_, value)| value.clone())
+        .unwrap_or_default();
+    let full_slot = if info_root_slot.is_empty() {
+        if settings_slot.is_empty() {
+            eprintln!("!!! SLOT is undefined");
+            return Ok(1);
+        }
+        let _ = std::fs::write(env.build_info().join("SLOT"), format!("{settings_slot}\n"));
+        settings_slot
+    } else {
+        if !settings_slot.is_empty() && info_root_slot != settings_slot {
+            eprintln!("QA Notice: Expected SLOT='{settings_slot}', got '{info_root_slot}'");
+        }
+        info_root_slot
+    };
     let repository = repository_name_for(&env.pkg_dir).unwrap_or_else(|| "__unknown__".to_string());
 
     // Real `self._installed_instance` (`vartree.py:4409-4418`), computed
@@ -4185,20 +4209,6 @@ mod tests {
         assert!(!is_real_qmerge_command("merge"));
         assert!(!is_real_qmerge_command("unmerge"));
         assert!(!is_real_qmerge_command("install"));
-    }
-
-    #[test]
-    fn parse_slot_reads_a_literal_assignment_anywhere_in_the_file() {
-        assert_eq!(parse_slot("EAPI=8\nSLOT=\"0\"\n"), "0");
-        assert_eq!(parse_slot("SLOT=\"2/5\"\n"), "2/5");
-        assert_eq!(parse_slot("SLOT='1'\n"), "1");
-        assert_eq!(parse_slot("SLOT=0\n"), "0");
-    }
-
-    #[test]
-    fn parse_slot_defaults_to_0_when_missing() {
-        assert_eq!(parse_slot("EAPI=8\nDESCRIPTION=x\n"), "0");
-        assert_eq!(parse_slot(""), "0");
     }
 
     #[test]
@@ -5552,6 +5562,79 @@ mod tests {
         assert!(
             t_dir.join("postinst-ran-after-merge").is_file(),
             "pkg_postinst must run, and see the file (and vdb entry) already merged"
+        );
+    }
+
+    /// A *computed* `SLOT="$(ver_cut 1)"` (task #149) is read back as its
+    /// **evaluated** value -- the value real Portage's own metadata
+    /// generation and `dblink.treewalk` both use. Expected value comes
+    /// from real Portage: the mpdecimal probe on the container test bed
+    /// (`4.0.1` -> `SLOT=4` in the real vdb, and `build-info/SLOT` = `4`
+    /// from the install phase writing the evaluated `${SLOT}`); for this
+    /// fixture `ver_cut` of `1.0` evaluates to `1`.
+    ///
+    /// Before the fix, `merge_after_install` derived `full_slot` by
+    /// regex-parsing the *raw* ebuild text (`parse_slot`), so the literal
+    /// `$(ver_cut 1)` itself landed in the vdb -- and every slot-keyed
+    /// consumer (`installed_instance_pf`/`find_collisions`/
+    /// `blocked_installed_packages`/`unmerge_replaced_same_slot`, all fed
+    /// `full_slot.split('/')`) keyed off the same corrupt value. On a
+    /// real image whose `dev-libs/mpdecimal-4.0.1` was installed by real
+    /// portage (evaluated `SLOT=4`), that mismatch made `find_collisions`
+    /// refuse to credit the installed instance, so a reinstall under
+    /// `FEATURES=protect-owned` aborted with `NOT merged due to file
+    /// collisions` -- the exact #149 symptom. Here the reinstall must not
+    /// abort under `MergeOptions::default()` (`protect_owned: true`), and
+    /// the vdb `SLOT` must record the evaluated `1`.
+    #[test]
+    fn computed_slot_is_evaluated_in_the_vdb_and_a_reinstall_does_not_abort_under_protect_owned() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        let repo_root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let ebuild = repo_root.join("dev-libs/compuslotpkg/compuslotpkg-1.0.ebuild");
+
+        // First install: lands the file and a vdb entry under the real
+        // default FEATURES (protect_owned: true).
+        let status = run_merge(
+            &ebuild,
+            &root,
+            &portage_tmpdir,
+            &MergeOptions::default(),
+            None,
+        )
+        .expect("first merge succeeds");
+        assert_eq!(status, 0);
+
+        let vdb_dir = root.join("var/db/pkg/dev-libs/compuslotpkg-1.0");
+        assert_eq!(
+            std::fs::read_to_string(vdb_dir.join("SLOT"))
+                .unwrap()
+                .trim(),
+            "1",
+            "vdb SLOT must be the evaluated ver_cut value, not the raw $(ver_cut 1) text"
+        );
+
+        // Reinstall under the same real-default protect_owned: the
+        // installed instance owns its own file, so this must not abort.
+        let status = run_merge(
+            &ebuild,
+            &root,
+            &portage_tmpdir,
+            &MergeOptions::default(),
+            None,
+        )
+        .expect("reinstall merge succeeds");
+        assert_eq!(status, 0, "reinstall must not abort under protect-owned");
+        assert_eq!(
+            std::fs::read_to_string(vdb_dir.join("SLOT"))
+                .unwrap()
+                .trim(),
+            "1"
         );
     }
 
