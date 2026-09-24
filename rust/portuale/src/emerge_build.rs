@@ -1427,19 +1427,33 @@ fn build_one_source_entry(
         // already computes for the phase env. `None` (no match) keeps
         // `package_options`'s own already-resolved value.
         let mut per_entry_package_options = package_options.clone();
-        if let Some(features) = entry_resolved_features(
+        let per_entry_features = entry_resolved_features(
             options,
             entry,
             &std::env::var("FEATURES").unwrap_or_default(),
-        ) {
-            per_entry_package_options.set_resolved_features(&features);
+        );
+        if let Some(features) = &per_entry_features {
+            per_entry_package_options.set_resolved_features(features);
         }
+        // Real `EbuildBinpkg._start`'s per-package `BUILD_ID` gate
+        // (backlog #147 S1 ruling (i)): the layout stays run-wide,
+        // the export follows this entry's own token -- the folded
+        // list when one matched, the run-wide value otherwise.
+        let per_entry_binpkg_multi_instance = per_entry_features
+            .as_deref()
+            .map(|features| {
+                features
+                    .split_whitespace()
+                    .any(|t| t == "binpkg-multi-instance")
+            })
+            .unwrap_or(per_entry_package_options.binpkg_multi_instance);
         let status = ebuild_package::package_after_install(
             &path,
             root,
             portage_tmpdir,
             &per_entry_package_options,
             use_flags,
+            per_entry_binpkg_multi_instance,
         )?;
         if status != 0 {
             return Err(format!("{cp}-{version}: binpkg build failed ({status})"));
@@ -2430,14 +2444,17 @@ mod tests {
     /// Backlog #130: `--buildpkgonly` re-derives `PackageOptions`'
     /// binpkg-affecting fields (`binpkg_multi_instance` here) from the
     /// per-entry `package.env` `FEATURES` fold, not the single shared,
-    /// run-wide `PackageOptions` every entry in the run otherwise gets.
-    /// Real `bintree._allocate_filename_multi`'s own path shape
-    /// (`<pkgdir>/<cat>/<pn>/<pf>-<id>.xpak`, proven at the
-    /// `PackageOptions`/`run_package` level by
-    /// `real_package_with_binpkg_multi_instance_writes_the_cat_pn_subdir_layout`
-    /// in `ebuild_package.rs`) is the observable: only the matched entry
-    /// gets it, its unmatched neighbour in the same run keeps the shared
-    /// `binpkg_multi_instance: false` single-instance layout.
+    /// Real per-package `FEATURES` (backlog #147 S1 ruling (i)):
+    /// the binpkg layout is run-wide-only (real's bintree binds its
+    /// allocator once, `bintree.py:529-531` -- S0 A1x/A2 prove both
+    /// directions), while the `BUILD_ID` export follows the entry's
+    /// own token (real `EbuildBinpkg.py:47-48`). With run-wide
+    /// multi-instance ON, a per-entry `-binpkg-multi-instance`
+    /// negation still takes the multi path (layout ignores it) but
+    /// exports no `BUILD_ID` (the gate honors it) -- S0 A2 shape.
+    /// Needs `PORTUALE_PORTAGE_CHECKOUT` pointing at a real
+    /// `3rdparty/portage` tree (the phase helpers import
+    /// `portage`), like the compression test below.
     #[test]
     fn run_buildpkgonly_resolves_per_entry_binpkg_multi_instance_from_package_env() {
         let config_root = fixtures_root();
@@ -2461,10 +2478,16 @@ mod tests {
             ),
         ];
         let config = portage_profile::Config {
-            package_env_vars: vec![(
-                "dev-libs/packagepkg".to_string(),
-                vec![("FEATURES".to_string(), "binpkg-multi-instance".to_string())],
-            )],
+            package_env_vars: vec![
+                (
+                    "dev-libs/packagepkg".to_string(),
+                    vec![("FEATURES".to_string(), "binpkg-multi-instance".to_string())],
+                ),
+                (
+                    "dev-libs/newpkg".to_string(),
+                    vec![("FEATURES".to_string(), "-binpkg-multi-instance".to_string())],
+                ),
+            ],
             ..portage_profile::Config::default()
         };
 
@@ -2480,24 +2503,45 @@ mod tests {
                 distdir: tempdir(),
                 shell: PackageOptions::default().shell,
                 binpkg_compress: "bzip2".to_string(),
-                binpkg_multi_instance: false,
+                binpkg_multi_instance: true,
                 ..PackageOptions::default()
             },
             false,
         );
         assert!(result.is_ok(), "{result:?}");
 
+        // Layout is run-wide: the negated neighbour takes the multi
+        // path too, not the single-instance default.
         let matched = pkgdir.join("dev-libs/packagepkg/packagepkg-1.0-1.xpak");
         assert!(
             matched.is_file(),
-            "{matched:?} should exist -- the matched entry's package.env FEATURES=binpkg-multi-instance \
-             must reach PackageOptions, not just the run-wide default"
+            "{matched:?} should exist -- run-wide multi-instance layout"
         );
-        let unmatched = pkgdir.join("dev-libs/newpkg-1.0.tbz2");
+        let negated = pkgdir.join("dev-libs/newpkg/newpkg-1.0-1.xpak");
         assert!(
-            unmatched.is_file(),
-            "{unmatched:?} should exist -- the unmatched neighbour must keep the run-wide \
-             binpkg_multi_instance: false single-instance layout"
+            negated.is_file(),
+            "{negated:?} should exist -- the per-entry negation must not move the layout"
+        );
+        // ...while the `BUILD_ID` export follows the entry's own
+        // token: present for the match, absent for the negation.
+        let index = std::fs::read_to_string(pkgdir.join("Packages")).expect("index written");
+        let stanza = |cpv: &str| {
+            index
+                .split("\n\n")
+                .find(|block| block.contains(&format!("CPV: {cpv}\n")))
+                .unwrap_or_else(|| panic!("{cpv} stanza should exist"))
+        };
+        assert!(
+            stanza("dev-libs/packagepkg-1.0")
+                .lines()
+                .any(|line| line.starts_with("BUILD_ID: 1")),
+            "the matched entry's index stanza should carry its BUILD_ID"
+        );
+        assert!(
+            stanza("dev-libs/newpkg-1.0")
+                .lines()
+                .all(|line| !line.starts_with("BUILD_ID")),
+            "the negated entry's index stanza should carry no BUILD_ID"
         );
     }
 
