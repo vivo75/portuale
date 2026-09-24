@@ -1924,6 +1924,7 @@ fn print_entry_line(
 #[allow(clippy::too_many_arguments)]
 fn print_tree(
     entries: &[GraphEntry],
+    display_order: &[usize],
     root: &Path,
     top_level_pkgs: &HashSet<(String, String)>,
     onlydeps: bool,
@@ -1975,8 +1976,18 @@ fn print_tree(
     // version compare. Suppressed `|| ( … )` alternatives are already
     // `None` there, so no separate `kept_alt_branches` pass is needed.
     let dep_targets = portage_repo::resolved_dep_targets(entries, root);
-    for (i, targets) in dep_targets.iter().enumerate() {
+    // #131 S1: the walk consumes the tree-mode serialization order
+    // (merge direction; the ordered walk below iterates it reversed),
+    // exactly like real's `_ordered_tree_display` consumes the reversed
+    // tree-mode retlist (`depgraph.py:10618-10619`) -- not the flat merge
+    // order. `display_order` is a permutation of the entry indices
+    // (`merge_order::tree_display_order`, same leftover weave-back as the
+    // flat path, so every entry keeps its node even when the scheduler
+    // never saw it).
+    for &i in display_order {
         node_order.push(TreeNode::Entry(i));
+    }
+    for (i, targets) in dep_targets.iter().enumerate() {
         for &j in targets.iter().flatten() {
             add_edge(TreeNode::Entry(j), TreeNode::Entry(i));
         }
@@ -11715,8 +11726,23 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut blocker_lines: Vec<String> = Vec::new();
     if show_merge_list {
         if tree {
+            // #131 S1: the tree-mode serialization order for the display
+            // walk (real's reversed tree-mode retlist). Computed on the
+            // displayed slice, so abort-partial lists stay
+            // self-consistent. One extra schedule+select pass per `--tree`
+            // run; the flat list (and everything else) never sees it.
+            let tree_order = portage_repo::tree_display_order(
+                display_entries,
+                &expanded_atoms,
+                &config,
+                &root,
+                implicit_system_deps,
+                &repos,
+                dynamic_deps,
+            );
             print_tree(
                 display_entries,
+                &tree_order,
                 &root,
                 &top_level_pkgs,
                 onlydeps,
