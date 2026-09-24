@@ -17922,3 +17922,12 @@ emerge --pretend -D dev-libs/slotusegroup
 # !!! Multiple package instances within a single package slot ... (both instances, rc 1)
 ```
 Twin pins moved with the same oracles (`slotconflictunsolvable`, `newpin`+`oldpin`, masking `--backtrack=0`, `mgfa --backtrack 1`, `orbtblocked --backtrack=0` corpus only). Beds: fixture-oracle S0 list 2/2 clean, default 39/34 (only the pre-existing p2b-tree residue), L0 120/101/0.842 with a byte-identical unexplained set. Residue filed as #150 (`--tree` shared-child `[nomerge]` artifact; tree surgery belongs to Phase 13). Work ran in sibling worktrees while Phase 7a's `l3-core` campaign held the live checkouts. Detail: `docs/02.148-slot-conflict-merge-list.md` (done).
+
+**Vdb `aux_get` speaks real's invalid-`SLOT` dialect (Phase 12, 2026-09-24; #115 DONE).** Real translates any `SLOT` failing `_get_slot_re` to `"0"` (`vartree.py:967-972`) and empty `EAPI` to `"0"`, and serves `_mtime_` as a float — portuale passed an invalid `SLOT` through raw and had no `EAPI`/`_mtime_` reader at all (probed live: real `aux_get` on hand-edited vdb entries returns `SLOT='0'` for `!!bad slot!!` and `EAPI='0'` for an empty file). The owner ruled port-the-`SLOT`-arm, cut-the-rest (O11): the translation lives in `vdb_aux_get` for the `SLOT` key — the one seam every vdb `SLOT` read flows through — in the operator shape every live EAPI accepts, present values only (empty keeps #126's O5 contracts; repo-side parsing untouched). Live-verified at the seam:
+```sh
+cargo test -p portage-repo --lib vdb_entry_slot
+# vdb_entry_slot_translates_a_present_but_invalid_slot_to_0 ... ok
+# vdb_entry_slot_keeps_a_valid_sub_slot ... ok
+# vdb_entry_slot_translates_a_collapsed_multiline_slot_to_0 ... ok
+```
+Output-preserving on real data (no live invalid `SLOT`; contract suite 1775 passed with only the 3 pre-existing container-environment failures, drift flags byte-identical to baseline); merge-path gate green (L1 glibc+bash reinstall `l1-20260924T083118Z`, merged_count 2, merge_rc 0, 0 hard / 0 unexplained). `EAPI ""→"0"` and `_mtime_` stay documented cuts (no portuale consumer; real's `_mtime_` users are unported bintree/cache machinery), and the gate's missing-`bin/`-helpers gap is filed as #151. Detail: `docs/02.115-vdb-aux-get-translations.md` (done).
