@@ -17957,3 +17957,26 @@ emerge --pretend --tree -D dev-libs/slotusegroup
 # [ebuild  N     ]   dev-libs/slotusetarget-1.0  USE="x y"
 ```
 Pins: rewritten `test_oracle_81_…` (full five rows), new `test_oracle_150_…`, two `tree_display_order` Rust unit tests (one Phase-8 test moved as an intended diff: the synthetic edge direction); flat output, rc and notices byte-identical (L0 120/101/0.842 with a byte-identical unexplained set). Residues filed with the S1-bed evidence: #153 (fucyclec invalid-`DEPEND` masking), #154 (gpcyclec nomerge-ancestor USE column), #155 (mg2top backtrack-skip), #156 (`@world` tree order at #3). Detail: `docs/02.131-tree-walk-sequence.md` (done).
+
+**Blockers act like real's blocker machinery under `--buildpkgonly` and in the pg0 pairing dance (batch-2026-09-24 H0 close-out of Phase 9, 2026-09-24; #143 and #142 DONE).** Phase 9's S0 grounded `--buildpkgonly` gate semantics against the upstream executed oracle: real evaluates only DEPEND/BDEPEND blockers — a hard `!!` there aborts with rc 1 and real's two `!!!` lines, a soft `!` there is silently satisfied with X untouched, and RDEPEND/PDEPEND blockers are not evaluated at all — while pg0's installed blocker `!=X-1` uninstall-orders installed Y-1 ahead of X-1's merge in every argv order. #143 (S1) ported the gate (runtime-key blanking + soft-blocker satisfaction + uninstall-anchored abort); #142 (S2) ported the pairing (joint slot solve + stale-owner gate + keeper walk + the uninstall-scheduling dance). This close-out's live re-probe against the shipped binary reproduces both pins exactly:
+```sh
+portuale emerge --pretend --backtrack=0 dev-libs/blk0a dev-libs/blk0b dev-libs/blk0c
+# [ebuild  N     ] dev-libs/blk0x-1
+# [uninstall     ] dev-libs/blk0y-1
+# [blocks b      ] =dev-libs/blk0y-1 ("=dev-libs/blk0y-1" is soft blocking dev-libs/blk0x-1)
+# [ebuild  N     ] dev-libs/blk0a-1
+# [ebuild  N     ] dev-libs/blk0b-1
+# [ebuild  N     ] dev-libs/blk0c-1
+# WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+# dev-libs/blk0x:0
+#   (dev-libs/blk0x-2:0/0::testrepo, ebuild scheduled for merge) USE="" conflicts with
+#     <dev-libs/blk0x-2 required by (dev-libs/blk0b-1:0/0::testrepo, ebuild scheduled for merge) USE=""
+portuale emerge --pretend --buildpkgonly dev-libs/blk1a
+# [ebuild  N     ] dev-libs/blk1a-1
+# [uninstall     ] dev-libs/blk1x-1
+# [blocks b      ] dev-libs/blk1x ("dev-libs/blk1x" is hard blocking dev-libs/blk1a-1)
+# !!! --buildpkgonly requires all dependencies to be merged.
+# !!! Cannot merge requested packages. Merge deps and try again.
+# (rc 1)
+```
+Pins: `test_pretend_case_exit_code[...pg0 order...]` all six argv orders (X-1 merges, exactly Y-1 uninstalls, blocker rows interleaved right after their owner, per-order WARNINGs) + pg1 A–F (A/B rc 1, C–F bare), `test_upstream_blocker_pg0_all_orders_pin_x1_and_uninstall_y1`, `test_upstream_blocker_pg1_buildpkgonly_gate`. Contract suite baseline green (1780 passed / 2 skipped / 5 xfailed); the phase's close-out bed (`l0-fx-20260923T201403Z`) ran the fixture-oracle with the S1/S2 allowlist rows deleted and every blk/u6/whpuller cell clean unsuppressed, L0 120/101/0.842 with zero drift. Detail: `docs/06.142-143-blocker-fidelity.md` (done).
