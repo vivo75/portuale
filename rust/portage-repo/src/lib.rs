@@ -12611,6 +12611,7 @@ fn resolve_root_deps_build_entries(
     // call above, so `outcome` can only ever have come from an ebuild
     // candidate (real `dbs` never grows a binary entry in that case).
     let mut entry = GraphEntry {
+        discovery: 0,
         category: atom.category.clone(),
         package: atom.package.clone(),
         outcome,
@@ -14128,6 +14129,19 @@ pub struct GraphEntry {
     /// rebuild/`--rebuild-if-*` synthetic entries, `--nodeps`) -- those
     /// fall back to array position plus their `required_by` edges.
     pub deps: Vec<DepEdge>,
+    /// This entry's own index in the resolver's pre-sort BFS discovery
+    /// order (backlog #155 S1): real's digraph parent lists follow edge-
+    /// insertion order, which is resolution order, and the `--tree`
+    /// display walk (`print_tree`'s `add_parents`) picks the first
+    /// untraversed parent -- so display edges must be enumerated in
+    /// discovery order, not in merge-sorted array position (a dependent
+    /// discovered later sorts earlier in merge order and would otherwise
+    /// precede the earlier puller in every parent list it shares).
+    /// Stamped by `topological_merge_order` (whose input vec IS discovery
+    /// order) just before sorting; `0` for entries fabricated outside a
+    /// resolve (unit tests), which all tie and keep array order via the
+    /// stable sort at the single enumeration site.
+    pub discovery: usize,
 }
 
 /// `(target cp, owner cp) -> (has_hard, has_soft)`: for each dependency
@@ -14171,6 +14185,15 @@ fn topological_merge_order(
     repos: &[RepoConfig],
     dynamic_deps: bool,
 ) -> Vec<GraphEntry> {
+    // Backlog #155 S1: stamp BFS discovery order before the merge
+    // sort consumes it -- the input vec IS discovery order (a package's
+    // entry is pushed before its dependencies are ever queued; see the
+    // caller), and the `--tree` display walk needs it to order display
+    // parents the way real's resolution-insertion edge order does.
+    let mut entries = entries;
+    for (seq, entry) in entries.iter_mut().enumerate() {
+        entry.discovery = seq;
+    }
     if entries.len() < 2 {
         // Real still emits the `digraph:` dump for a single-package merge
         // (its scheduler runs regardless); portuale short-circuits the
@@ -15471,6 +15494,7 @@ fn slot_operator_rebuild_entries(
                         Vec::new()
                     };
                 GraphEntry {
+                    discovery: 0,
                     category: pkg.category.clone(),
                     package: pkg.package.clone(),
                     outcome: PretendOutcome::Reinstall {
@@ -15730,6 +15754,7 @@ fn rebuild_if_entries(
         .trim()
         .to_string();
         out.push(GraphEntry {
+            discovery: 0,
             category: pkg.category.clone(),
             package: pkg.package.clone(),
             outcome: PretendOutcome::Reinstall {
@@ -16408,6 +16433,7 @@ fn uninstall_entry(
     let (slot, sub_slot) = read_vdb_slot(root, &category, &package, &version);
     let repo_name = installed_pkg_repo(root, &category, &package, &version);
     GraphEntry {
+        discovery: 0,
         category,
         package,
         outcome: PretendOutcome::Uninstall { version },
@@ -17736,6 +17762,7 @@ fn synthesize_surviving_conflict_entries(
                 })
                 .unwrap_or_default();
             let mut entry = GraphEntry {
+                discovery: 0,
                 category: sc.category.clone(),
                 package: sc.package.clone(),
                 outcome: PretendOutcome::New {
@@ -22433,6 +22460,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 }
             }
             state.entries.push(GraphEntry {
+                discovery: 0,
                 category: key.0,
                 package: key.1,
                 outcome,
@@ -23078,6 +23106,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         };
         oldbest.sort_by(|a, b| vercmp_ordering(&a.version, &b.version));
         state.entries.push(GraphEntry {
+            discovery: 0,
             category: key.0.clone(),
             package: key.1.clone(),
             outcome,
@@ -33649,6 +33678,7 @@ mod tests {
         use crate::resolver_trace::child_use_str;
         let root = fixtures_root();
         let parent = GraphEntry {
+            discovery: 0,
             category: "dev-libs".to_string(),
             package: "deepusedepparent".to_string(),
             outcome: PretendOutcome::AlreadyInstalled {
@@ -35842,6 +35872,46 @@ mod tests {
     }
 
     #[test]
+    fn topological_merge_order_stamps_discovery_before_sorting() {
+        // Backlog #155 S1: `GraphEntry::discovery` is the pre-sort BFS
+        // position, so the `--tree` walk can enumerate display parents in
+        // resolution-insertion order like real's digraph does. Input
+        // [a(dep b), b] sorts to [b, a]; the ranks must track the input
+        // slots, not the sorted ones.
+        let dep = |pkg: &str, priority: DepPriority| DepEdge {
+            atom: format!("dev-libs/{pkg}"),
+            evaluated: format!("dev-libs/{pkg}").clone(),
+            category: "dev-libs".to_string(),
+            package: pkg.to_string(),
+            priority,
+            disjunctive: false,
+            alt: None,
+            key: 0,
+        };
+        let runtime = DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        };
+        let mut a = graph_entry("dev-libs", "a", "1.0");
+        let b = graph_entry("dev-libs", "b", "1.0");
+        a.deps = vec![dep("b", runtime)];
+        let ordered = topological_merge_order(
+            vec![a, b],
+            &["dev-libs/a".to_string()],
+            &test_config(),
+            Path::new("/nonexistent-root"),
+            true,
+            &[],
+            true,
+        );
+        let ranks: Vec<(&str, usize)> = ordered
+            .iter()
+            .map(|e| (e.package.as_str(), e.discovery))
+            .collect();
+        assert_eq!(ranks, vec![("b", 1), ("a", 0)]);
+    }
+
+    #[test]
     fn implicit_system_deps_n_skips_the_merge_order_bias() {
         // Three independent leaves in discovery order a, b, c, with c in
         // @system: the bias promotes the deep system dep first, while
@@ -35916,6 +35986,7 @@ mod tests {
         let installed = vec![
             graph_entry("dev-libs", "hca", "1.0"),
             GraphEntry {
+                discovery: 0,
                 outcome: PretendOutcome::AlreadyInstalled {
                     version: "1.0".to_string(),
                 },
@@ -38954,6 +39025,7 @@ mod tests {
 
         // `bar` is being upgraded to slot 2 sub-slot 9 this run.
         let bar_upgrade = GraphEntry {
+            discovery: 0,
             category: "dev-libs".into(),
             package: "bar".into(),
             outcome: PretendOutcome::Upgrade {
@@ -39019,6 +39091,7 @@ mod tests {
         // that is how `abi_rebuilds` survives to the settling pass. A
         // *different* in-graph cp is still skipped.
         let stale_rebuild = GraphEntry {
+            discovery: 0,
             category: "dev-libs".into(),
             package: "stale".into(),
             outcome: PretendOutcome::Reinstall {
@@ -39104,6 +39177,7 @@ mod tests {
 
         // `bar` moves to slot 2 sub-slot 9 this run.
         let bar_upgrade = GraphEntry {
+            discovery: 0,
             category: "dev-libs".into(),
             package: "bar".into(),
             outcome: PretendOutcome::Upgrade {
@@ -39126,6 +39200,7 @@ mod tests {
         // `walked` entries: what the pass actually visited (an
         // `AlreadyInstalled` node per consumer, the @world shape).
         let walked_entry = |name: &str| GraphEntry {
+            discovery: 0,
             outcome: PretendOutcome::AlreadyInstalled {
                 version: "1.0".into(),
             },
@@ -39236,6 +39311,7 @@ mod tests {
         mk("libarchive-3.1.1", "0");
         let repos = find_repos(&fixtures_root()).expect("fixture repos");
         let parent = GraphEntry {
+            discovery: 0,
             outcome: PretendOutcome::Reinstall {
                 version: "4.10.0".into(),
                 changed_flags: Vec::new(),
@@ -39250,6 +39326,7 @@ mod tests {
             ..graph_entry("kde-base", "ark", "4.10.0")
         };
         let child = GraphEntry {
+            discovery: 0,
             outcome: PretendOutcome::AlreadyInstalled {
                 version: "3.1.1".into(),
             },
@@ -39312,6 +39389,7 @@ mod tests {
         // installed `souprov-1.0` (vdb 0/1) has tree `SLOT="0/1"`.
         slotundo_vdb(&dir, "souprov", "1.0", "0/1", "", "");
         let parent_souprov = GraphEntry {
+            discovery: 0,
             outcome: PretendOutcome::Reinstall {
                 version: "1.0".into(),
                 changed_flags: Vec::new(),
@@ -39326,6 +39404,7 @@ mod tests {
             ..graph_entry("dev-libs", "souneedslot", "1.0")
         };
         let child_souprov = GraphEntry {
+            discovery: 0,
             outcome: PretendOutcome::AlreadyInstalled {
                 version: "1.0".into(),
             },
@@ -39380,6 +39459,7 @@ mod tests {
         use_display: &[(&str, bool)],
     ) -> GraphEntry {
         GraphEntry {
+            discovery: 0,
             category: "dev-libs".into(),
             package: name.into(),
             outcome: PretendOutcome::Reinstall {
@@ -39406,6 +39486,7 @@ mod tests {
     /// `fixtures/repo/dev-libs/souprov` + its md5-cache provide.
     fn slotundo_provider_entry() -> GraphEntry {
         GraphEntry {
+            discovery: 0,
             outcome: PretendOutcome::Upgrade {
                 from: "1.0".into(),
                 to: "2.0".into(),
@@ -39786,6 +39867,7 @@ mod tests {
         mk("target-1.0", "");
 
         let target_upgrade = GraphEntry {
+            discovery: 0,
             category: "dev-libs".into(),
             package: "target".into(),
             outcome: PretendOutcome::Upgrade {
@@ -39851,6 +39933,7 @@ mod tests {
         let root = fixtures_root();
         let repos = find_repos(&root).expect("fixture repos.conf must resolve");
         let upgrade = |pkg: &str| GraphEntry {
+            discovery: 0,
             category: "dev-libs".into(),
             package: pkg.into(),
             outcome: PretendOutcome::Upgrade {
@@ -42617,6 +42700,7 @@ mod tests {
 
     fn graph_entry(category: &str, package: &str, version: &str) -> GraphEntry {
         GraphEntry {
+            discovery: 0,
             category: category.to_string(),
             package: package.to_string(),
             outcome: PretendOutcome::New {
@@ -43069,6 +43153,7 @@ mod tests {
             owner_installed: false,
         };
         let installed = |pkg: &str| GraphEntry {
+            discovery: 0,
             outcome: PretendOutcome::AlreadyInstalled {
                 version: "1.0".into(),
             },

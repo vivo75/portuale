@@ -1050,6 +1050,7 @@ fn synthetic_installed_entry(
     deps: Vec<DepEdge>,
 ) -> GraphEntry {
     GraphEntry {
+        discovery: 0,
         category,
         package,
         outcome: PretendOutcome::AlreadyInstalled { version },
@@ -4193,6 +4194,7 @@ mod tests {
     /// mirrors `synthetic_installed_entry`'s full field list.
     fn new_entry(category: &str, package: &str, version: &str, deps: Vec<DepEdge>) -> GraphEntry {
         GraphEntry {
+            discovery: 0,
             category: category.to_string(),
             package: package.to_string(),
             outcome: PretendOutcome::New {

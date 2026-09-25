@@ -610,6 +610,7 @@ fn graph_result_from_order(
             }
         }
         entries.push(GraphEntry {
+            discovery: 0,
             category: record.category.clone(),
             package: record.package.clone(),
             outcome,

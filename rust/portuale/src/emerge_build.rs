@@ -1092,6 +1092,7 @@ pub(crate) fn resume_entry(
     source: CandidateSource,
 ) -> GraphEntry {
     GraphEntry {
+        discovery: 0,
         category: category.to_string(),
         package: package.to_string(),
         outcome: PretendOutcome::New {
@@ -2004,6 +2005,7 @@ mod tests {
 
     fn live_test_entry() -> GraphEntry {
         GraphEntry {
+            discovery: 0,
             category: "dev-libs".into(),
             package: "propertiespkg".into(),
             outcome: PretendOutcome::New {
@@ -2082,6 +2084,7 @@ mod tests {
         // touched.
         let entries = vec![
             GraphEntry {
+                discovery: 0,
                 category: "dev-libs".into(),
                 package: "samepkg".into(),
                 outcome: PretendOutcome::AlreadyInstalled {
@@ -2113,6 +2116,7 @@ mod tests {
                 deps: Vec::new(),
             },
             GraphEntry {
+                discovery: 0,
                 category: "dev-libs".into(),
                 package: "nosuchpkg".into(),
                 outcome: PretendOutcome::NoVisibleCandidate,
@@ -2176,6 +2180,7 @@ mod tests {
         let pkgdir = tempdir();
 
         let entries = vec![GraphEntry {
+            discovery: 0,
             category: "dev-libs".into(),
             package: "packagepkg".into(),
             outcome: PretendOutcome::New {
@@ -2635,6 +2640,7 @@ mod tests {
 
     fn source_entry(package: &str, outcome: PretendOutcome) -> GraphEntry {
         GraphEntry {
+            discovery: 0,
             category: "dev-libs".into(),
             package: package.into(),
             outcome,
@@ -3742,6 +3748,7 @@ mod tests {
         let pkgdir = tempdir();
 
         let entries = vec![GraphEntry {
+            discovery: 0,
             category: "dev-libs".into(),
             package: "fetchpkg".into(),
             outcome: PretendOutcome::New {
@@ -3808,6 +3815,7 @@ mod tests {
 
     fn buildpkgonly_entry(category: &str, package: &str, version: &str) -> GraphEntry {
         GraphEntry {
+            discovery: 0,
             category: category.into(),
             package: package.into(),
             outcome: PretendOutcome::New {

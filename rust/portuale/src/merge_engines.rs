@@ -80,6 +80,7 @@ fn rebuild_entry(unit: &MergeUnit, source: CandidateSource) -> Option<GraphEntry
         None => candidate.version.clone(),
     };
     Some(GraphEntry {
+        discovery: 0,
         category: candidate.category,
         package: candidate.package,
         outcome: PretendOutcome::New { version },
@@ -225,6 +226,7 @@ mod tests {
 
     fn test_entry() -> GraphEntry {
         GraphEntry {
+            discovery: 0,
             category: "dev-libs".to_string(),
             package: "example".to_string(),
             outcome: PretendOutcome::Upgrade {

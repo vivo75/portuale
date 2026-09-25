@@ -18019,3 +18019,18 @@ portuale emerge --pretend dev-libs/fucyclec
 The same holds for a defaulted conditional (`dev-libs/usedeppkg`: `[baz(+)?]` is still validated -- the default only matters for matching, not for the owner's IUSE) and for groups (`dev-vcs/somercurial`: `soflag? ( … )`, whose message has no `in atom` part). Two older pins asserted merges real never makes and were rewritten to these reports. Beds: the l131-s1 `fucyclec` cell is fully explained, the default fixture-oracle sits at 0 unexplained, and L0 is byte-identical to baseline.
 
 **Flat `@world` merge order matches real exactly; the `--tree` row-#3 swap is display sequencing from a bias-tie discovery-order difference (batch-2026-09-24 P20, 2026-09-25; #156 CLOSED as a #17 instance, no code).** Bed cell `--tree @world` shows real `dev-libs/withdeps` where portuale shows `dev-libs/systempkg` at row #3, but the flat `@world` list is byte-identical and the merge-scheduler traces (`PORTUALE_MO_SEL=1` vs real's own `_serialize_tasks`, traced in-container) agree iteration for iteration -- including the final 5-node roots-last-resort batch. The batch follows post-bias graph order, and both bias functions tie the pair (0 parents, non-deep, stable sort), so whichever package was *discovered* first wins: real inserts `systempkg` first, portuale `withdeps`. The nested-`newpkg` twin symptom falls out of the same adjacency (no second bug). Recorded as evidence for #17 (bias-tie discovery order), where the fix belongs.
+
+**`--tree` nests backtrack-abandoned parents under the earliest-resolved puller, like real (batch-2026-09-24 P21, 2026-09-25; #155 DONE, notice half split to #129).** On `--tree dev-libs/mg2top` both sides merge the identical graph (flat outputs byte-identical), but portuale nested `mgfc-1` under `[nomerge] mgfb-1` where real nests it under `[nomerge] mgfa-1`: real's digraph parent lists follow resolution edge-insertion order and its tree walk takes the first untraversed parent, while portuale enumerated display edges over merge-sorted array position (merge order sorts the later-discovered `mgfb-1` first). Every display entry now carries its BFS discovery index (`GraphEntry::discovery`, stamped before the merge sort) and the tree walk enumerates edges in that order:
+```sh
+portuale emerge --pretend --tree dev-libs/mg2top
+# [ebuild  N     ] dev-libs/mg2top-1
+# [ebuild  N     ]  dev-libs/mgfa-1
+# [ebuild  N     ]   dev-libs/mgfb-1
+# [ebuild  N     ]  dev-libs/mgxa-1
+# [ebuild  N     ]   dev-libs/mgxb-1
+# [nomerge       ] dev-libs/mgfa-1
+# [ebuild  N     ]  dev-libs/mgfc-1
+# [nomerge       ] dev-libs/mgxa-1
+# [ebuild  N     ]  dev-libs/mgxc-1
+```
+Pins: new `--tree mg2top` CASES entry + pinned test, Rust stamper unit test; the l131-s1 bed cell's row findings are gone (only real's skipped-updates notice lines remain -- synthesizing those needs backtrack-trial state, filed as #129).

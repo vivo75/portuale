@@ -2019,8 +2019,18 @@ fn print_tree(
     for &i in display_order {
         node_order.push(TreeNode::Entry(i));
     }
-    for (i, targets) in dep_targets.iter().enumerate() {
-        for &j in targets.iter().flatten() {
+    // Backlog #155 S1: display edges in resolver-discovery order, not
+    // merge-sorted array position. Real's digraph parent lists follow
+    // edge-insertion order (resolution order), and the walk below picks
+    // the first untraversed parent -- enumerating over merge order lets
+    // a later-discovered dependent precede the earlier puller in every
+    // parent list they share (`mgfb` before `mgfa` for `mgfc-1`, hiding
+    // the real `[nomerge] mgfa` parent). Stable sort, so fabricated
+    // entries (all `discovery: 0`, e.g. unit tests) keep array order.
+    let mut by_discovery: Vec<usize> = (0..entries.len()).collect();
+    by_discovery.sort_by_key(|&i| entries[i].discovery);
+    for &i in &by_discovery {
+        for &j in dep_targets[i].iter().flatten() {
             add_edge(TreeNode::Entry(j), TreeNode::Entry(i));
         }
     }
@@ -14076,6 +14086,7 @@ mod tests {
             }
         };
         GraphEntry {
+            discovery: 0,
             category: "dev-libs".into(),
             package: "foo".into(),
             outcome,

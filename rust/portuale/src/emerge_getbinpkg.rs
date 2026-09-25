@@ -526,6 +526,7 @@ mod tests {
 
     fn graph_entry(package: &str, source: CandidateSource, version: &str) -> GraphEntry {
         GraphEntry {
+            discovery: 0,
             category: "dev-libs".into(),
             package: package.into(),
             outcome: PretendOutcome::New {
@@ -1402,6 +1403,7 @@ mod tests {
             ..Config::default()
         };
         let entry = GraphEntry {
+            discovery: 0,
             category: "dev-libs".into(),
             package: "packagepkg".into(),
             outcome: PretendOutcome::New {
@@ -1514,6 +1516,7 @@ mod tests {
             ..Config::default()
         };
         let entry = GraphEntry {
+            discovery: 0,
             category: "dev-libs".into(),
             package: "packagepkg".into(),
             outcome: PretendOutcome::Upgrade {
