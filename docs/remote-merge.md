@@ -415,6 +415,15 @@ disables -- only for labs with no NTP).
 - Rust unit tests for `sh_quote`, status-line parsing, option
   validation; contract-suite untouched (`--pretend` output identical
   with or without the flags present).
+- **Differential bed (L4, backlog #31)**: `pmtest`'s
+  `differential-test-bed/findings/l4.md` holds the real-Portage oracle —
+  a `porttest/setuid` gpkg merged by real Portage vs. `mrg` remote over
+  the loopback-sshd far end, recording bytes/modes/owners, the vdb entry
+  and the actual per-stage ssh command sequence. The #31 S0 capture
+  (`l31-s0-20260925T213346Z`) found `mrg` remote drops the
+  setuid/setgid/sticky bits (merged `711/755/750` vs. real
+  `4711/2755/1750`; the receive stage's `tar -xf` lacks `-p`). S1/S2
+  cells are the pmtest atomlist `l31-s0.txt`.
 
 ## 13. Slice plan (each: fixtures + tests + docs + full verify pass)
 
