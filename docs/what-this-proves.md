@@ -18034,3 +18034,29 @@ portuale emerge --pretend --tree dev-libs/mg2top
 # [ebuild  N     ]  dev-libs/mgxc-1
 ```
 Pins: new `--tree mg2top` CASES entry + pinned test, Rust stamper unit test; the l131-s1 bed cell's row findings are gone (only real's skipped-updates notice lines remain -- synthesizing those needs backtrack-trial state, filed as #129).
+
+## `l3-core` re-run: the candidate completes 345/345 and the control is clean (P17, 2026-09-25)
+
+Run `l3-20260925T074707Z` (`L3_CONTROL=1 L3_JOBS=20`, portuale rev
+`7d5ee297`) built the whole `l3-core` closure from source on both
+sides: portage 62 packages rc 0, portuale 345/345 Emerging+merged rc 0
+— the P15 evaluated-`SLOT` fix holds at scale (`dev-libs/mpdecimal`
+merges, no self-collision abort) — control-a/b 62/62 rc 0. The
+portage-vs-portage control diffs to **0 hard / 0 unexplained**, which
+proves the P16 R3 build-id comparator at `l3-core` scale (#152 DONE).
+The first candidate diff at this scale (520 hard / 346 explained /
+**174 unexplained**: 99 MISSING, 2 OWNER, 73 VDB) triages to one
+systemic class — portuale reinstalls keyword-masked
+`sys-apps/portage-3.0.82.2` where real downgrades to stable 3.0.81.3
+(#157, 169 rows) — plus three isolated residues (#158 OWNER of
+byte-identical files, #159 CONTENTS `dir` lines + SIZE, #160 ninja
+`CFLAGS`); O12 not tripped, #30 stays DONE-PARTIAL. Re-verify from the
+saved snapshots without containers:
+
+```sh
+# from ../pmtest; re-diffs the saved control pair, expect 0 unexplained rc 0
+python3 differential-test-bed/compare/diff.py --layer l3 --tolerate-payload \
+  differential-test-bed/logs/l3-20260925T074707Z/control-a \
+  differential-test-bed/logs/l3-20260925T074707Z/control-b \
+  differential-test-bed/compare/known-divergences.yaml | tail -8
+```
