@@ -2922,6 +2922,89 @@ mod tests {
         }
     }
 
+    /// #160: real `config.environ()`'s `filter_calling_env`
+    /// (`lib/portage/package/ebuild/config.py:3275-3305`, bug #189417) is
+    /// what keeps a variable the ebuild `unset` in an earlier phase unset:
+    /// every phase after `${T}/environment` exists spawns with only the
+    /// `special_env_vars.environ_whitelist` keys from the config/calling
+    /// env, and the saved environment supplies the rest. `unsetcflagspkg`'s
+    /// `src_compile` is `dev-build/ninja-1.13.2-r1`'s own `unset CFLAGS`
+    /// shape, so real's `__dyn_install` writes no `build-info/CFLAGS` and
+    /// the vdb gets no `CFLAGS` row (the l3-20260925T074707Z Class 4 row).
+    /// `CXXFLAGS` (never unset) is the control: its row must stay.
+    #[allow(clippy::field_reassign_with_default)]
+    #[test]
+    fn source_merge_omits_a_vdb_aux_file_the_ebuild_unset_in_an_earlier_phase() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+        let mut options = ebuild_merge::MergeOptions {
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            shell: ebuild_phases::ShellBackend::Bash,
+            ..ebuild_merge::MergeOptions::default()
+        };
+        // Real `bin/phase-functions.sh:1257` chgrps `${T}/environment` to
+        // `${PORTAGE_GRPNAME:-portage}`; unprivileged, the default
+        // `portage` group makes that fail and bash prints a `chgrp: …
+        // Operation not permitted` line per phase straight to the harness
+        // stderr. Point it at this process's own gid -- the group the file
+        // already has -- so the chgrp is a permitted no-op. Ownership is
+        // unchanged, so the aux-file assertion below is not weakened.
+        let gid = unsafe { libc::getegid() };
+        options.build_env = vec![
+            ("CFLAGS".to_string(), "-O2 -pipe".to_string()),
+            ("CXXFLAGS".to_string(), "-O2 -pipe".to_string()),
+            ("PORTAGE_GRPNAME".to_string(), gid.to_string()),
+        ];
+        // Keep the builddir: the observed `${T}` file is copied into the
+        // merged image, and the vdb read below happens on the final tree.
+        options.features = "noclean".to_string();
+
+        let entries = vec![source_entry(
+            "unsetcflagspkg",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        )];
+        run_source_merge(
+            &entries,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &options,
+            false,
+            None,
+            &[],
+            1,
+            None,
+            false,
+        )
+        .expect("source merge succeeds");
+
+        let observed = fs::read_to_string(root.join("usr/share/unsetcflagspkg/unset-observed.txt"))
+            .expect("the install phase ran and merged its observation");
+        assert_eq!(
+            observed, "CFLAGS=<unset>\nCXXFLAGS=-O2 -pipe\n",
+            "src_install must still see the `unset CFLAGS` from src_compile (bug #189417)"
+        );
+
+        let vdb = root.join("var/db/pkg/dev-libs/unsetcflagspkg-1.0");
+        assert!(
+            !vdb.join("CFLAGS").exists(),
+            "#160: real omits the vdb CFLAGS row its ebuild unset"
+        );
+        assert_eq!(
+            fs::read_to_string(vdb.join("CXXFLAGS")).unwrap().trim(),
+            "-O2 -pipe",
+            "an aux file the package still has a value for must stay"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&portage_tmpdir);
+    }
+
     /// #37 S2: `--buildpkgonly` threads the same resolved env as the
     /// `-b` merge path -- the archive's `metadata/USE`/`metadata/FEATURES`
     /// (real `__dyn_install` writes both into `build-info` from the phase
