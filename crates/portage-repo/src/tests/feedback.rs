@@ -1,5 +1,48 @@
 use super::*;
 
+/// The prune trigger also fires on the conflict half alone: direct-solve removal
+/// rows with a non-empty replace set restart like a mask-half pass.
+#[test]
+fn slot_operator_prune_rebuilds_fires_on_conflict_source_only() {
+    let dir = slotundo_temp_dir("253-prune-conflict");
+    let config = test_config();
+    let opts = CtxOpts161 {
+        backtrack_max: 20,
+        ..Default::default()
+    };
+    let ctx = ctx_161(&dir, &config, Vec::new(), &opts);
+    let mut grown = BacktrackParams::default();
+    grown
+        .slot_operator_replace_installed
+        .insert(("app-misc".to_string(), "pcons".to_string()));
+    let mut pass = pass_161();
+    pass.skipped_updates.push(SkippedUpdate {
+        category: "dev-libs".to_string(),
+        package: "slotconflicttarget".to_string(),
+        slot: "0".to_string(),
+        skipped_version: "2.0".to_string(),
+        skipped_sub_slot: "0".to_string(),
+        skipped_repo: "testrepo".to_string(),
+        skipped_use: Vec::new(),
+        atom: "<dev-libs/slotconflicttarget-2.0".to_string(),
+        consumer_cpv: "dev-libs/slotconflictoldconsumer-1.0".to_string(),
+        consumer_installed: false,
+        consumer_use: Vec::new(),
+        missed_targets_running_root: false,
+        consumer_targets_running_root: false,
+    });
+    let decision = collect_feedback(&ctx, &grown, &mut pass, &config);
+    let PassDecision::Feedback(BacktrackFeedback::Config { params: out }) = decision else {
+        panic!("a conflict-source-only pass restarts with prune_rebuilds");
+    };
+    assert!(out.prune_rebuilds, "the prune latch is set");
+    assert!(
+        out.slot_operator_replace_installed.is_empty(),
+        "the prune clears the replace set"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// With neither half present the trigger stays quiet.
 #[test]
 fn slot_operator_prune_rebuilds_stays_quiet_without_missed_updates() {

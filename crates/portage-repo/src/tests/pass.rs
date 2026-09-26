@@ -1,5 +1,61 @@
 use super::*;
 
+/// A chosen binary instance's depstrings come from the selected instance's own
+/// `Packages` entry (Portage's `_iter_match_pkgs` + selected `pkg._metadata`).
+#[test]
+fn multi_instance_walk_reads_the_selected_instances_own_deps() {
+    let dir = slotundo_temp_dir("1010-multiinst-deps");
+    let repo = dir.join("scratchrepo");
+    blocker_161_write_pkg(Blocker161WritePkgArgs {
+        repo: &repo,
+        cp: "dev-libs/spectre",
+        pv: "0.2.12",
+        slot: "0",
+        depend: "",
+        rdepend: "dev-libs/newdep",
+    });
+    for cp in ["dev-libs/olddep", "dev-libs/newdep"] {
+        blocker_161_write_pkg(Blocker161WritePkgArgs {
+            repo: &repo,
+            cp,
+            pv: "1.0",
+            slot: "0",
+            depend: "",
+            rdepend: "",
+        });
+    }
+    let repos = vec![blocker_161_repo_config(repo)];
+    let mut config = test_config();
+    config.scanned_binpkgs = Some(vec![
+        multi_instance_entry_1010("1", 1000, "dev-libs/olddep"),
+        multi_instance_entry_1010("2", 2000, "dev-libs/newdep"),
+    ]);
+    let opts = CtxOpts161 {
+        backtrack_max: 10,
+        atoms: vec!["dev-libs/spectre".to_string()],
+        usepkg: true,
+        ..Default::default()
+    };
+    let ctx = ctx_161(&dir, &config, repos, &opts);
+    let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+    let parent = pass
+        .entries
+        .iter()
+        .find(|e| e.package == "spectre")
+        .expect("the parent merges");
+    assert_eq!(parent.build_id.as_deref(), Some("2"), "newest build wins");
+    let names: Vec<&str> = pass.entries.iter().map(|e| e.package.as_str()).collect();
+    assert!(
+        names.contains(&"newdep"),
+        "build 2's own RDEPEND must be walked, got {names:?}"
+    );
+    assert!(
+        !names.contains(&"olddep"),
+        "build 1's RDEPEND must not leak into build 2's walk, got {names:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// A same-version/slot/sub-slot `Reinstall` whose installed repo differs carries
 /// that instance as `oldbest` (Portage's `_get_installed_best`).
 #[test]
@@ -308,6 +364,63 @@ fn run_pass_arms_the_missing_dep_trigger() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// A repeated NVC under active search masks is flagged suppressed.
+#[test]
+fn run_pass_flags_nvc_under_masks_suppressed() {
+    let dir = slotundo_temp_dir("161-run-suppr");
+    let repos = blocker_161_scratch_repo(Blocker161ScratchRepoArgs {
+        base: &dir,
+        cp: "dev-libs/depparent",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "dev-libs/victim2 dev-libs/victim2:0",
+    });
+    blocker_161_write_pkg(Blocker161WritePkgArgs {
+        repo: &repos.location,
+        cp: "dev-libs/victim2",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "",
+    });
+    let config = test_config();
+    let atoms = vec!["dev-libs/depparent".to_string()];
+    let walk = |masks: bool| {
+        let mut bp = BacktrackParams::default();
+        if masks {
+            bp.runtime_pkg_mask.insert(
+                ("dev-libs".to_string(), "victim2".to_string()),
+                vec![MaskEntry {
+                    neg: "!=dev-libs/victim2-1.0".to_string(),
+                    reason: MaskReason::MissingDependency {
+                        parent: ("dev-libs".to_string(), "depparent".to_string()),
+                        atom: "dev-libs/victim2".to_string(),
+                    },
+                }],
+            );
+        }
+        let opts = CtxOpts161 {
+            backtrack_max: 10,
+            atoms: atoms.clone(),
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, vec![repos.clone()], &opts);
+        run_pass(&ctx, &bp, true).expect("walk settles")
+    };
+    let plain = walk(false);
+    assert!(
+        plain
+            .entries
+            .iter()
+            .any(|e| e.package == "victim2" && matches!(e.outcome, PretendOutcome::New { .. })),
+        "unmasked victim2 merges"
+    );
+    assert!(!plain.suppressed_nvc);
+    assert!(walk(true).suppressed_nvc);
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// A dependency whose candidates are all masked reports once, however many
 /// dep edges name it.
 #[test]
@@ -599,6 +712,97 @@ fn run_pass_arms_the_trigger_for_an_upgrading_parent() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// An unresolvable top-level set member drops into `missing_args` instead of
+/// failing the walk; the same atom requested explicitly fails.
+#[test]
+fn run_pass_drops_an_unresolvable_set_member() {
+    let dir = slotundo_temp_dir("286-run-missing-arg");
+    let repos = blocker_161_scratch_repo(Blocker161ScratchRepoArgs {
+        base: &dir,
+        cp: "dev-libs/someother",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "",
+    });
+    let config = test_config();
+    let atoms = vec!["dev-libs/nosuchpkg".to_string()];
+    let walk = |from_set: bool| {
+        let opts = CtxOpts161 {
+            backtrack_max: 10,
+            atoms: atoms.clone(),
+            top_level: atoms.clone(),
+            set_args: if from_set {
+                HashSet::from(["dev-libs/nosuchpkg".to_string()])
+            } else {
+                HashSet::new()
+            },
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, vec![repos.clone()], &opts);
+        run_pass(&ctx, &BacktrackParams::default(), true)
+    };
+    let Err(err) = walk(false) else {
+        panic!("an explicit miss fails the walk");
+    };
+    assert!(
+        format!("{err}").contains("there are no ebuilds to satisfy"),
+        "explicit miss keeps the bare report, got: {err}"
+    );
+    let pass = walk(true).expect("a set member drops instead of failing");
+    assert_eq!(pass.missing_args, vec!["dev-libs/nosuchpkg".to_string()]);
+    assert!(
+        pass.entries.is_empty(),
+        "the dropped member leaves no entry, saw {:?}",
+        pass.entries
+            .iter()
+            .map(|e| format!("{}/{}", e.category, e.package))
+            .collect::<Vec<_>>()
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// One report per missing cp, even across categories sharing a package name.
+#[test]
+fn run_pass_reports_each_plain_miss_once() {
+    let dir = slotundo_temp_dir("161-run-miss4");
+    let repos = blocker_161_scratch_repo(Blocker161ScratchRepoArgs {
+        base: &dir,
+        cp: "dev-libs/depparent",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "dev-libs/nosucha dev-libs/nosuchb dev-libs/dupmiss sys-libs/dupmiss",
+    });
+    let config = test_config();
+    let atoms = vec!["dev-libs/depparent".to_string()];
+    let opts = CtxOpts161 {
+        backtrack_max: 0,
+        atoms: atoms.clone(),
+        ..Default::default()
+    };
+    let ctx = ctx_161(&dir, &config, vec![repos], &opts);
+    let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+    let mut rows: Vec<String> = pass
+        .plain_miss_deps
+        .iter()
+        .map(|r| format!("{}/{}", r.category, r.package))
+        .collect();
+    rows.sort();
+    assert_eq!(
+        rows,
+        vec![
+            "dev-libs/dupmiss",
+            "dev-libs/nosucha",
+            "dev-libs/nosuchb",
+            "sys-libs/dupmiss",
+        ]
+    );
+    // Backtrack disabled: no missing-dep retry arms either.
+    assert!(pass.missing_dep_trigger.is_none());
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// A repeated missing dep without active masks is not suppressed.
 #[test]
 fn run_pass_repeated_miss_without_masks_is_not_suppressed() {
@@ -621,6 +825,71 @@ fn run_pass_repeated_miss_without_masks_is_not_suppressed() {
     let ctx = ctx_161(&dir, &config, vec![repos], &opts);
     let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
     assert!(!pass.suppressed_nvc);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// One use-unsat report per unsatisfiable cp, even across categories.
+#[test]
+fn run_pass_reports_each_use_unsat_once() {
+    let dir = slotundo_temp_dir("161-run-use4");
+    let repo = blocker_161_scratch_repo(Blocker161ScratchRepoArgs {
+        base: &dir,
+        cp: "dev-libs/depparent",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "dev-libs/unsat1[soflag] dev-libs/unsat2[soflag] dev-libs/dupuse[soflag] sys-libs/dupuse[soflag]",
+    });
+    for (cp, pv) in [
+        ("dev-libs/unsat1", "1.0"),
+        ("dev-libs/unsat2", "1.0"),
+        ("dev-libs/dupuse", "1.0"),
+        ("sys-libs/dupuse", "1.0"),
+    ] {
+        let d = repo
+            .location
+            .join(cp.split_once('/').unwrap().0)
+            .join(cp.split_once('/').unwrap().1);
+        std::fs::create_dir_all(&d).unwrap();
+        let pkg = cp.split_once('/').unwrap().1;
+        let body = "EAPI=8\nDESCRIPTION=\"161 useunsat\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\nIUSE=\"soflag\"\n";
+        std::fs::write(d.join(format!("{pkg}-{pv}.ebuild")), body).unwrap();
+        use md5::Digest as _;
+        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+        let entry = format!(
+            "DEFINED_PHASES=-\nDESCRIPTION=161 useunsat\nEAPI=8\nIUSE=soflag\nKEYWORDS=amd64\nSLOT=0\n_md5_={md5}\n"
+        );
+        let cachedir = repo
+            .location
+            .join("metadata/md5-cache")
+            .join(cp.split_once('/').unwrap().0);
+        std::fs::create_dir_all(&cachedir).unwrap();
+        std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+    }
+    let config = test_config();
+    let atoms = vec!["dev-libs/depparent".to_string()];
+    let opts = CtxOpts161 {
+        backtrack_max: 0,
+        atoms: atoms.clone(),
+        ..Default::default()
+    };
+    let ctx = ctx_161(&dir, &config, vec![repo], &opts);
+    let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+    let mut rows: Vec<String> = pass
+        .use_unsat_deps
+        .iter()
+        .map(|r| format!("{}/{}", r.category, r.package))
+        .collect();
+    rows.sort();
+    assert_eq!(
+        rows,
+        vec![
+            "dev-libs/dupuse",
+            "dev-libs/unsat1",
+            "dev-libs/unsat2",
+            "sys-libs/dupuse",
+        ]
+    );
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -680,6 +949,153 @@ fn run_pass_files_one_row_per_blocker_owner() {
         .map(|e| e.package.as_str())
         .collect();
     assert_eq!(rows.len(), 2);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// With `--with-bdeps` a binary candidate's build-time keys walk too.
+#[test]
+fn run_pass_binary_walks_buildtime_deps_with_bdeps() {
+    let dir = slotundo_temp_dir("161-run-binbdep2");
+    // The tree parent carries the dep in `BDEPEND` on both sides, so the
+    // binary survives selection and the walk takes the all-keys arm.
+    let repo = dir.join("scratchrepo");
+    blocker_161_write_pkg_full(Blocker161WritePkgFullArgs {
+        repo: &repo,
+        cp: "dev-libs/binparent",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "dev-libs/runtimedep",
+        bdepend: "dev-libs/buildonlydep",
+    });
+    for (cp, pv) in [
+        ("dev-libs/buildonlydep", "1.0"),
+        ("dev-libs/runtimedep", "1.0"),
+    ] {
+        blocker_161_write_pkg(Blocker161WritePkgArgs {
+            repo: &repo,
+            cp,
+            pv,
+            slot: "0",
+            depend: "",
+            rdepend: "",
+        });
+    }
+    let repos = vec![blocker_161_repo_config(repo)];
+    let mut config = test_config();
+    config.scanned_binpkgs = Some(vec![HashMap::from([
+        ("CPV".to_string(), "dev-libs/binparent-1.0".to_string()),
+        ("SLOT".to_string(), "0".to_string()),
+        ("KEYWORDS".to_string(), "amd64".to_string()),
+        ("REPO".to_string(), "testrepo".to_string()),
+        ("BDEPEND".to_string(), "dev-libs/buildonlydep".to_string()),
+        ("RDEPEND".to_string(), "dev-libs/runtimedep".to_string()),
+    ])]);
+    let atoms = vec!["dev-libs/binparent".to_string()];
+    let opts = CtxOpts161 {
+        backtrack_max: 10,
+        atoms: atoms.clone(),
+        usepkg: true,
+        with_bdeps: true,
+        ..Default::default()
+    };
+    let ctx = ctx_161(&dir, &config, repos, &opts);
+    let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+    let names: Vec<&str> = pass.entries.iter().map(|e| e.package.as_str()).collect();
+    assert!(names.contains(&"binparent"));
+    assert!(names.contains(&"runtimedep"));
+    assert!(
+        names.contains(&"buildonlydep"),
+        "a selected binary walks its build-time keys under --with-bdeps"
+    );
+    // The all-keys arm also feeds the merge-order digraph.
+    let parent = pass
+        .entries
+        .iter()
+        .find(|e| e.package == "binparent")
+        .expect("parent merges");
+    assert!(
+        parent.deps.iter().any(|d| d.package == "buildonlydep"),
+        "the binary's build-time dep reaches the merge-order edges"
+    );
+    // ... and the queue tags that edge build-time-hard, which is what the
+    // `buildtime_atoms` gate computes.
+    assert_eq!(
+        pass.edge_kind_map.get(&(
+            (false, "dev-libs".to_string(), "buildonlydep".to_string()),
+            (false, "dev-libs".to_string(), "binparent".to_string())
+        )),
+        Some(&(true, false)),
+        "the build-time edge is hard, not soft"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Under `--buildpkgonly` (without `--deep`) a source candidate walks only its
+/// build-time keys.
+#[test]
+fn run_pass_buildpkgonly_walks_buildtime_keys_only() {
+    let dir = slotundo_temp_dir("161-run-bpkgonly");
+    let repos = blocker_161_scratch_repo(Blocker161ScratchRepoArgs {
+        base: &dir,
+        cp: "dev-libs/bpkgparent",
+        pv: "1.0",
+        slot: "0",
+        depend: "dev-libs/builddep",
+        rdepend: "dev-libs/rundep",
+    });
+    for (cp, pv) in [("dev-libs/builddep", "1.0"), ("dev-libs/rundep", "1.0")] {
+        blocker_161_write_pkg(Blocker161WritePkgArgs {
+            repo: &repos.location,
+            cp,
+            pv,
+            slot: "0",
+            depend: "",
+            rdepend: "",
+        });
+    }
+    let config = test_config();
+    let atoms = vec!["dev-libs/bpkgparent".to_string()];
+    let opts = CtxOpts161 {
+        backtrack_max: 10,
+        atoms: atoms.clone(),
+        buildpkgonly: true,
+        ..Default::default()
+    };
+    let ctx = ctx_161(&dir, &config, vec![repos], &opts);
+    let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+    let names: Vec<&str> = pass.entries.iter().map(|e| e.package.as_str()).collect();
+    assert!(names.contains(&"bpkgparent"));
+    assert!(
+        names.contains(&"builddep"),
+        "build-time keys still walk under --buildpkgonly"
+    );
+    assert!(
+        !names.contains(&"rundep"),
+        "run-time keys are blanked under --buildpkgonly"
+    );
+    let parent = pass
+        .entries
+        .iter()
+        .find(|e| e.package == "bpkgparent")
+        .expect("parent merges");
+    assert!(
+        parent.deps.iter().any(|d| d.package == "builddep"),
+        "the kept build-time dep reaches the merge-order edges"
+    );
+    assert!(
+        !parent.deps.iter().any(|d| d.package == "rundep"),
+        "the blanked run-time dep stays out of the edges too"
+    );
+    // ... and the queue tags the kept dep build-time-hard.
+    assert_eq!(
+        pass.edge_kind_map.get(&(
+            (false, "dev-libs".to_string(), "builddep".to_string()),
+            (false, "dev-libs".to_string(), "bpkgparent".to_string())
+        )),
+        Some(&(true, false)),
+        "the build-time edge is hard, not soft"
+    );
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -897,6 +1313,50 @@ fn run_pass_replace_seed_files_no_argument_puller() {
         pass.slot_pullers.is_empty(),
         "a lone seed files no Argument pullers"
     );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The trigger resolves its owner against the walked entries by exact cp.
+#[test]
+fn run_pass_trigger_matches_the_owner_entry_exactly() {
+    let dir = slotundo_temp_dir("161-run-misown");
+    let repos = blocker_161_scratch_repo(Blocker161ScratchRepoArgs {
+        base: &dir,
+        cp: "dev-libs/depparent",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "dev-libs/nosuchdep",
+    });
+    let config = test_config();
+    // A neighbour resolving elsewhere walks first, so a loosened
+    // owner lookup would build the wrong neg.
+    let atoms = vec![
+        "dev-libs/depparent".to_string(),
+        "dev-libs/sounneed".to_string(),
+    ];
+    let repos = {
+        let mut rs = find_repos(&fixtures_root()).expect("fixture repos");
+        rs.push(repos);
+        rs
+    };
+    let opts = CtxOpts161 {
+        backtrack_max: 10,
+        atoms: atoms.clone(),
+        ..Default::default()
+    };
+    let ctx = ctx_161(&dir, &config, repos, &opts);
+    let mut pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+    let trigger = pass.missing_dep_trigger.take().expect("trigger armed");
+    assert_eq!(
+        trigger,
+        (
+            ("dev-libs".to_string(), "depparent".to_string()),
+            "!=dev-libs/depparent-1.0".to_string(),
+            "dev-libs/nosuchdep".to_string(),
+        )
+    );
+    assert!(!pass.suppressed_nvc);
     let _ = fs::remove_dir_all(&dir);
 }
 
