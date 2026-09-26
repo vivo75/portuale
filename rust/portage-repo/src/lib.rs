@@ -48605,4 +48605,239 @@ mod tests_162 {
         assert!(out.is_empty(), "{out:?}");
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    /// Minimal merge-bound `GraphEntry` for the predicate legs (slot
+    /// and `new_slot` as the leg needs; everything display-side left
+    /// at its empty default).
+    fn entry_162(
+        cat: &str,
+        pkg: &str,
+        outcome: PretendOutcome,
+        slot: Option<&str>,
+        new_slot: bool,
+    ) -> GraphEntry {
+        GraphEntry {
+            discovery: 0,
+            category: cat.to_string(),
+            package: pkg.to_string(),
+            outcome,
+            blockers: Vec::new(),
+            slot: slot.map(str::to_string),
+            sub_slot: slot.map(str::to_string),
+            repo_name: Some("testrepo".to_string()),
+            oldbest: Vec::new(),
+            use_flags_display: Vec::new(),
+            use_expand_display: Vec::new(),
+            use_expand_display_p: Vec::new(),
+            keyword_mask: None,
+            new_slot,
+            interactive: false,
+            fetch_restrict: false,
+            fetch_restrict_satisfied: false,
+            download_files: Vec::new(),
+            required_by: Vec::new(),
+            source: CandidateSource::Ebuild,
+            provenance: VisibilityProvenance::default(),
+            keyword_suggestion: None,
+            use_suggestion: None,
+            parent_use_suggestion: None,
+            targets_running_root: false,
+            remote_binary: false,
+            build_id: None,
+            deps: Vec::new(),
+        }
+    }
+
+    // ---- S3: `complete_graph_auto_enable` (the `--complete` re-walk
+    // trigger: an `Upgrade`/`Downgrade`, a new-slot `New`, or a
+    // `Reinstall` with USE/slot churn enables it). ----
+
+    /// Any `Upgrade`/`Downgrade` enables when `if_new_ver` is set, and
+    /// neither does when it is not -- the deleted `Reinstall`-arm
+    /// neighbour legs live below; both whole-body rows (already
+    /// S0-caught) fail here too.
+    #[test]
+    fn complete_graph_auto_enable_upgrade_and_downgrade_follow_if_new_ver() {
+        let entries = vec![
+            entry_162(
+                "dev-libs",
+                "up",
+                PretendOutcome::Upgrade {
+                    from: "1.0".to_string(),
+                    to: "2.0".to_string(),
+                },
+                Some("0"),
+                false,
+            ),
+            entry_162(
+                "dev-libs",
+                "down",
+                PretendOutcome::Downgrade {
+                    from: "2.0".to_string(),
+                    to: "1.0".to_string(),
+                },
+                Some("0"),
+                false,
+            ),
+        ];
+        assert!(complete_graph_auto_enable(&entries, true, true, true));
+        assert!(complete_graph_auto_enable(&entries, false, true, false));
+        assert!(!complete_graph_auto_enable(&entries, true, false, true));
+        assert!(!complete_graph_auto_enable(&entries, false, false, false));
+    }
+
+    /// A new-slot `New` enables on `if_new_ver` or `if_new_slot`
+    /// alone; a same-slot `New` never does even with every flag set --
+    /// the `e.new_slot` guard flips and the `||` -> `&&` flip fail
+    /// here.
+    #[test]
+    fn complete_graph_auto_enable_new_only_for_a_new_slot() {
+        let new_slot = vec![entry_162(
+            "dev-libs",
+            "fresh",
+            PretendOutcome::New {
+                version: "1.0".to_string(),
+            },
+            Some("1"),
+            true,
+        )];
+        assert!(complete_graph_auto_enable(&new_slot, false, false, true));
+        assert!(complete_graph_auto_enable(&new_slot, false, true, false));
+        assert!(!complete_graph_auto_enable(&new_slot, false, false, false));
+        let same_slot = vec![entry_162(
+            "dev-libs",
+            "fresh",
+            PretendOutcome::New {
+                version: "1.0".to_string(),
+            },
+            Some("0"),
+            false,
+        )];
+        assert!(!complete_graph_auto_enable(&same_slot, true, true, true));
+    }
+
+    /// A `Reinstall` with USE churn enables on `if_new_use`, one with
+    /// a slot change on `if_new_ver`, and a churn-free one never does
+    /// -- the deleted `Reinstall` arm, the `||` -> `&&` flip and the
+    /// `!changed_flags` deletion fail here.
+    #[test]
+    fn complete_graph_auto_enable_reinstall_needs_churn() {
+        let use_churn = |changed: Vec<String>| {
+            entry_162(
+                "dev-libs",
+                "re",
+                PretendOutcome::Reinstall {
+                    version: "1.0".to_string(),
+                    changed_flags: changed,
+                    deps_changed: false,
+                    slot_changed: false,
+                    rebuilt_binary: false,
+                    new_repo: false,
+                    slot_operator_rebuild: false,
+                },
+                Some("0"),
+                false,
+            )
+        };
+        assert!(complete_graph_auto_enable(
+            &[use_churn(vec!["flip".to_string()])],
+            true,
+            false,
+            false
+        ));
+        assert!(!complete_graph_auto_enable(
+            &[use_churn(vec!["flip".to_string()])],
+            false,
+            false,
+            false
+        ));
+        assert!(!complete_graph_auto_enable(
+            &[use_churn(Vec::new())],
+            true,
+            false,
+            false
+        ));
+    }
+
+    /// A `Reinstall` with only a slot change enables on `if_new_ver`
+    /// alone, and the crossed shape (USE churn without `if_new_use`,
+    /// slot change without `if_new_ver`) stays off -- the two
+    /// remaining `&&`/`||` flips fail here.
+    #[test]
+    fn complete_graph_auto_enable_reinstall_slot_change_needs_if_new_ver() {
+        let slot_churn = entry_162(
+            "dev-libs",
+            "re",
+            PretendOutcome::Reinstall {
+                version: "1.0".to_string(),
+                changed_flags: Vec::new(),
+                deps_changed: false,
+                slot_changed: true,
+                rebuilt_binary: false,
+                new_repo: false,
+                slot_operator_rebuild: false,
+            },
+            Some("0"),
+            false,
+        );
+        assert!(!complete_graph_auto_enable(
+            std::slice::from_ref(&slot_churn),
+            true,
+            false,
+            false
+        ));
+        assert!(complete_graph_auto_enable(
+            std::slice::from_ref(&slot_churn),
+            false,
+            true,
+            false
+        ));
+        assert!(!complete_graph_auto_enable(
+            &[slot_churn],
+            false,
+            false,
+            false
+        ));
+        let crossed = entry_162(
+            "dev-libs",
+            "re",
+            PretendOutcome::Reinstall {
+                version: "1.0".to_string(),
+                changed_flags: vec!["flip".to_string()],
+                deps_changed: false,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: false,
+                slot_operator_rebuild: false,
+            },
+            Some("0"),
+            false,
+        );
+        assert!(!complete_graph_auto_enable(&[crossed], false, true, false));
+    }
+
+    /// Settled entries never enable, whatever the flags -- pins the
+    /// `_ => false` arm the mutants never touch.
+    #[test]
+    fn complete_graph_auto_enable_settled_entries_stay_off() {
+        let entries = vec![
+            entry_162(
+                "dev-libs",
+                "kept",
+                PretendOutcome::AlreadyInstalled {
+                    version: "1.0".to_string(),
+                },
+                None,
+                false,
+            ),
+            entry_162(
+                "dev-libs",
+                "gone",
+                PretendOutcome::NoVisibleCandidate,
+                None,
+                false,
+            ),
+        ];
+        assert!(!complete_graph_auto_enable(&entries, true, true, true));
+    }
 }
