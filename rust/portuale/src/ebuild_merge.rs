@@ -2448,9 +2448,7 @@ fn installed_instance_pf(root: &Path, category: &str, package: &str, slot: &str)
 /// first-ever install (no other same-slot instance), matching real's
 /// empty string.
 fn replacing_versions(pn: &str, installed_instance_pf: Option<&str>) -> Option<String> {
-    let version = installed_instance_pf?
-        .strip_prefix(pn)?
-        .strip_prefix('-')?;
+    let version = installed_instance_pf?.strip_prefix(pn)?.strip_prefix('-')?;
     (!version.is_empty()).then(|| version.to_string())
 }
 

@@ -3066,9 +3066,7 @@ mod tests {
             new_repo: false,
             slot_operator_rebuild: false,
         });
-        let after = fs::symlink_metadata(&dest)
-            .expect("still installed")
-            .ino();
+        let after = fs::symlink_metadata(&dest).expect("still installed").ino();
         assert_eq!(
             before, after,
             "#158: a byte-identical file must keep its inode (and owner) through a re-merge"
