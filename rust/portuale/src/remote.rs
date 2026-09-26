@@ -1111,6 +1111,11 @@ pub(crate) fn run_remote_plan(
     // `refresh_features` rule), so the vdb env carries the merge-time
     // features, not the binpkg's build-time ones.
     let regen_features = crate::pretend::config_features_string(config);
+    // Backlog #171 review: the same placed config's resolved
+    // `PORTAGE_BZIP2_COMMAND` rides the regen install too, so the
+    // scrubbed vdb env records the client's configured compressor
+    // (e.g. `lbzip2`), not always the `make.globals` default.
+    let regen_bzip2 = crate::pretend::config_bzip2_command(config);
     for entry in entries {
         let version = match &entry.outcome {
             // #72 B3: a removal is not remotely merged (execution is a
@@ -1149,6 +1154,7 @@ pub(crate) fn run_remote_plan(
             &install_mask,
             install_mask_prunes_usr_share,
             Some(&regen_features),
+            Some(&regen_bzip2),
         );
         match unit {
             Ok(()) => {
@@ -1221,6 +1227,7 @@ fn run_one_remote_unit(
     install_mask: &str,
     install_mask_prunes_usr_share: bool,
     regen_features: Option<&str>,
+    regen_bzip2: Option<&str>,
 ) -> Result<(), String> {
     let binpkg_path = if entry.remote_binary {
         let (binrepo, record) = portage_repo::find_remote_binpkg(
@@ -1286,6 +1293,7 @@ fn run_one_remote_unit(
         install_mask,
         install_mask_prunes_usr_share,
         regen_features,
+        regen_bzip2,
     )?;
     record_server_ledger(server_ledger_base, &ctx.hostname, &ledger_entry)?;
     Ok(())
@@ -1805,7 +1813,11 @@ pub(crate) fn check_binary_plan(entries: &[portage_repo::GraphEntry]) -> Result<
 /// ships no `INSTALL_MASK` -- backlog #170). `regen_features` is the
 /// resolve's own `config_features_string` for the placed config (the
 /// merge-time `FEATURES` the regen'd vdb env carries, backlog #171);
-/// the trial path passes `None` (no config, no refresh). Prints the
+/// the trial path passes `None` (no config, no refresh). `regen_bzip2`
+/// is the resolve's own `config_bzip2_command` for the placed config
+/// (the merge-time `PORTAGE_BZIP2_COMMAND` the scrubbed vdb env
+/// records); the trial path passes `None` (the `make.globals`
+/// default). Prints the
 /// stage report lines; `Ok(cpv)` is the merged `category/package-version`.
 #[allow(clippy::too_many_arguments)]
 fn run_binpkg_flow(
@@ -1818,6 +1830,7 @@ fn run_binpkg_flow(
     install_mask: &str,
     install_mask_prunes_usr_share: bool,
     regen_features: Option<&str>,
+    regen_bzip2: Option<&str>,
 ) -> Result<String, String> {
     let staging = std::env::temp_dir().join(format!(
         "portuale-remote-bundle-{}-{}",
@@ -2028,7 +2041,13 @@ fn run_binpkg_flow(
                     } else {
                         let vdb_env =
                             format!("{vdb}/{}/{}/environment.bz2", staged.category, staged.pf);
-                        match install_regenerated_env(ctx, control, &unit_dir, &vdb_env) {
+                        match install_regenerated_env(
+                            ctx,
+                            control,
+                            &unit_dir,
+                            &vdb_env,
+                            regen_bzip2,
+                        ) {
                             Ok(()) => println!(
                                 ">>> Remote env-regen {cpv}: vdb environment.bz2 regenerated"
                             ),
@@ -2065,8 +2084,20 @@ fn run_bundle_stage(
     // The trial path resolves no config (`run_remote` never runs the
     // resolver), so there is no placed config to read `INSTALL_MASK`
     // from: mask nothing, ship no `INSTALL_MASK` (backlog #170) -- and
-    // no resolved `FEATURES` either (no regen refresh, backlog #171).
-    match run_binpkg_flow(ctx, control, binpkg_path, None, None, None, "", false, None) {
+    // no resolved `FEATURES` either (no regen refresh, backlog #171) --
+    // and no resolved `PORTAGE_BZIP2_COMMAND` (the scrub default).
+    match run_binpkg_flow(
+        ctx,
+        control,
+        binpkg_path,
+        None,
+        None,
+        None,
+        "",
+        false,
+        None,
+        None,
+    ) {
         Ok(_) => ExitCode::from(0),
         Err(message) => {
             eprintln!("{message}");
@@ -2332,7 +2363,9 @@ run_old_hook() {
   # Backlog #171: prefer the server-decompressed env the server staged
   # at `$UNIT/old-env/<pf>` (no client bzip2 needed); then the legacy
   # plain `environment` older `mrg` versions left, used only when no
-  # `environment.bz2` exists; client `bzip2 -dc` only as a last resort.
+  # `environment.bz2` exists; client `bzip2 -dc` only as a last resort;
+  # then any plain `environment` at all (an older-`mrg` entry with both
+  # files whose staging failed, on a bzip2-less client).
   pf=${vdbdir##*/}
   if [ -f "$UNIT/old-env/$pf" ]; then
     cp "$UNIT/old-env/$pf" "$OTMP/temp/environment" || return 1
@@ -2340,6 +2373,8 @@ run_old_hook() {
     cp "$vdbdir/environment" "$OTMP/temp/environment" || return 1
   elif [ -f "$vdbdir/environment.bz2" ] && command -v bzip2 >/dev/null 2>&1; then
     bzip2 -dc -- "$vdbdir/environment.bz2" > "$OTMP/temp/environment" || return 1
+  elif [ -f "$vdbdir/environment" ]; then
+    cp "$vdbdir/environment" "$OTMP/temp/environment" || return 1
   else
     echo "OLDHOOK=no-env-bzip2-missing"; return 2
   fi
@@ -2953,21 +2988,24 @@ fn bzip2_decompress(bytes: &[u8]) -> Result<Vec<u8>, String> {
     bzip2_pipe(&["-d", "-c", "--"], bytes)
 }
 
-/// Restore the default `${PORTAGE_BZIP2_COMMAND}` spelling in a pulled
-/// regen'd environment before compressing it into the vdb. Real's
-/// merge-time save records its live value -- the client default
-/// `bzip2` (`cnf/make.globals:105`; verified on this host's own
+/// Rewrite the `${PORTAGE_BZIP2_COMMAND}` line in a pulled regen'd
+/// environment **only** when its value is the unit-local
+/// `bzip2-passthrough` stand-in the regen postinst run used, replacing
+/// it with the resolved client command (`bzip2_command` -- the
+/// server-resolved client `PORTAGE_BZIP2_COMMAND`, `make.globals`'
+/// `bzip2` when nothing is configured). Real's merge-time save records
+/// its live value (verified on this host's own
 /// `/var/db/pkg/*/environment.bz2`, which all carry
-/// `declare -x PORTAGE_BZIP2_COMMAND="bzip2"`) -- while ours ran with
-/// the unit-local `bzip2-passthrough` stand-in, a per-unit workdir
-/// path that must not leak into the vdb (and would keep the L1
-/// `environment` rows red: `normalize.py` compares the content
-/// verbatim). Any other value passes through untouched; a missing line
-/// stays missing.
-fn scrub_bzip2_command(bytes: &[u8]) -> Vec<u8> {
+/// `declare -x PORTAGE_BZIP2_COMMAND="bzip2"`), while ours ran with a
+/// per-unit workdir path that must not leak into the vdb (and would
+/// keep the L1 `environment` rows red: `normalize.py` compares the
+/// content verbatim). Any other value -- real's own spelling, a
+/// foreign path, anything -- is copied verbatim; a missing line stays
+/// missing (never invent it).
+fn scrub_bzip2_command(bytes: &[u8], bzip2_command: &str) -> Vec<u8> {
     let mut out = Vec::new();
     for line in bytes.split_inclusive(|b| *b == b'\n') {
-        let is_bzip2 = match line.iter().position(|b| *b == b'=') {
+        let is_passthrough = match line.iter().position(|b| *b == b'=') {
             Some(eq) => {
                 let mut name = &line[..eq];
                 for prefix in ["declare -x ".as_bytes(), "declare -- ".as_bytes()] {
@@ -2977,11 +3015,17 @@ fn scrub_bzip2_command(bytes: &[u8]) -> Vec<u8> {
                     }
                 }
                 name == b"PORTAGE_BZIP2_COMMAND"
+                    && line
+                        .windows(b"bzip2-passthrough".len())
+                        .any(|w| w == b"bzip2-passthrough")
             }
             None => false,
         };
-        if is_bzip2 {
-            out.extend_from_slice(b"declare -x PORTAGE_BZIP2_COMMAND=\"bzip2\"\n");
+        if is_passthrough {
+            let escaped = bzip2_command.replace('\\', "\\\\").replace('"', "\\\"");
+            out.extend_from_slice(
+                format!("declare -x PORTAGE_BZIP2_COMMAND=\"{escaped}\"\n").as_bytes(),
+            );
         } else {
             out.extend_from_slice(line);
         }
@@ -2990,7 +3034,9 @@ fn scrub_bzip2_command(bytes: &[u8]) -> Vec<u8> {
 }
 
 /// Install `bytes` at `dest` on the client atomically (temp name +
-/// `mv`, so a concurrent unmerge never reads a half-written env).
+/// `mv`, so a concurrent unmerge never reads a half-written env). A
+/// failed `mv` best-effort removes the remote temp name (review #4 --
+/// no client tmp litter).
 fn install_file_atomic(
     ctx: &RemoteContext,
     control: Option<&std::path::Path>,
@@ -3005,8 +3051,10 @@ fn install_file_atomic(
                     .map_err(|e| format!("{}: {e}", parent.display()))?;
             }
             std::fs::write(&tmp, bytes).map_err(|e| format!("mrg: writing {tmp} failed: {e}"))?;
-            std::fs::rename(&tmp, dest)
-                .map_err(|e| format!("mrg: installing {dest} failed: {e}"))?;
+            std::fs::rename(&tmp, dest).map_err(|e| {
+                let _ = std::fs::remove_file(&tmp);
+                format!("mrg: installing {dest} failed: {e}")
+            })?;
             Ok(())
         }
         RemoteTransport::Ssh => {
@@ -3029,6 +3077,12 @@ fn install_file_atomic(
                 if output.status.success() {
                     Ok(())
                 } else {
+                    // Best-effort: don't litter the client tmp name.
+                    let _ = run_raw_command(
+                        ctx,
+                        control,
+                        &["rm".to_string(), "-f".to_string(), tmp.clone()],
+                    );
                     Err(format!(
                         "mrg: moving {tmp} into place failed (exit {})",
                         output.status.code().unwrap_or(-1)
@@ -3044,16 +3098,19 @@ fn install_file_atomic(
 /// Pull the regen'd env, scrub it, compress it server-side and install
 /// it over the vdb's build-time `environment.bz2`. `Err` is
 /// `(failing step, detail)` -- `pull`, `compress` or `install` -- for
-/// the caller's one-`!!!` warn-and-continue line.
+/// the caller's one-`!!!` warn-and-continue line. `regen_bzip2` is the
+/// resolved client `PORTAGE_BZIP2_COMMAND` for the scrub (`None` on
+/// paths that resolve no config -- the `make.globals` default).
 fn install_regenerated_env(
     ctx: &RemoteContext,
     control: Option<&std::path::Path>,
     unit_dir: &str,
     vdb_env_bz2: &str,
+    regen_bzip2: Option<&str>,
 ) -> Result<(), (String, String)> {
     let regen = format!("{unit_dir}/environment.regen");
     let bytes = pull_file(ctx, control, &regen).map_err(|message| ("pull".to_string(), message))?;
-    let scrubbed = scrub_bzip2_command(&bytes);
+    let scrubbed = scrub_bzip2_command(&bytes, regen_bzip2.unwrap_or("bzip2"));
     let compressed =
         bzip2_compress(&scrubbed).map_err(|message| ("compress".to_string(), message))?;
     install_file_atomic(ctx, control, &compressed, vdb_env_bz2)
@@ -3114,8 +3171,9 @@ fn old_hook_warn_message(cpv: &str, detail: &str) -> String {
 /// same-package versions, pull each `environment.bz2`, decompress it
 /// **server-side**, and ship the plain text to `$UNIT/old-env/<pf>`.
 /// A version with no bz2 (older `mrg` entries carry only a plain
-/// `environment`) ships that file as-is; a version with neither gets
-/// nothing (the driver's own warn-and-skip). Best-effort throughout:
+/// `environment`) ships that file as-is; a version with neither
+/// warns with both pull errors (and still hits the driver's own
+/// warn-and-skip). Best-effort throughout:
 /// every failure lands in `warnings` and the merge continues.
 #[allow(clippy::too_many_arguments)]
 fn ship_old_hook_envs(
@@ -3195,19 +3253,26 @@ fn ship_old_hook_envs(
                     .warnings
                     .push(format!("{pf}: decompress: {message}")),
             },
-            Err(_) => {
+            Err(bz2_message) => {
                 // No bz2 (older `mrg` entries carry only a plain file,
-                // or nothing at all): ship the plain text as-is; a
-                // missing file is the driver's own warn-and-skip, not a
-                // warning.
+                // or nothing at all): ship the plain text as-is. When
+                // the plain pull fails too, the original bz2 error goes
+                // into `warnings` (review #3 -- silent staging failures
+                //); a version with neither file warns here and hits the
+                // driver's own warn-and-skip as well.
                 let old_plain = format!("{vdbroot}/{pf}/environment");
-                if let Ok(plain) = pull_file(ctx, control, &old_plain) {
-                    let dest = format!("{unit_dir}/old-env/{pf}");
-                    if let Err(message) = send_bytes(ctx, control, &plain, &dest) {
-                        shipment.warnings.push(format!("{pf}: send: {message}"));
-                    } else {
-                        shipment.shipped.push(pf);
+                match pull_file(ctx, control, &old_plain) {
+                    Ok(plain) => {
+                        let dest = format!("{unit_dir}/old-env/{pf}");
+                        if let Err(message) = send_bytes(ctx, control, &plain, &dest) {
+                            shipment.warnings.push(format!("{pf}: send: {message}"));
+                        } else {
+                            shipment.shipped.push(pf);
+                        }
                     }
+                    Err(plain_message) => shipment.warnings.push(format!(
+                        "{pf}: env pull: {bz2_message}; plain fallback: {plain_message}"
+                    )),
                 }
             }
         }
@@ -4490,6 +4555,7 @@ mod tests {
             None,
             &unit,
             vdb.join("environment.bz2").to_str().unwrap(),
+            Some("bzip2"),
         )
         .expect("install succeeds");
 
@@ -4555,6 +4621,7 @@ mod tests {
             None,
             &unit,
             vdb.join("environment.bz2").to_str().unwrap(),
+            Some("bzip2"),
         )
         .expect("install succeeds");
         let after = read_vdb_env(&vdb.join("environment.bz2"));
@@ -4590,6 +4657,7 @@ mod tests {
             None,
             unit.to_str().unwrap(),
             vdb.join("environment.bz2").to_str().unwrap(),
+            Some("bzip2"),
         )
         .expect_err("pull must fail without environment.regen");
         assert_eq!(err.0, "pull", "unexpected failing step: {err:?}");
@@ -4605,27 +4673,66 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// Pure unit: the `PORTAGE_BZIP2_COMMAND` scrub restores real's
-    /// default spelling without touching anything else.
+    /// Backlog #171 review: a failed atomic install leaves no client
+    /// tmp litter -- the remote temp name is removed best-effort.
+    /// (Local transport; the ssh branch's `rm -f` needs a live client
+    /// and is not covered here.)
     #[test]
-    fn scrub_bzip2_command_restores_default_spelling() {
+    fn install_file_atomic_removes_tmp_when_mv_fails() {
+        let tmp = regen_tmp("install-tmp");
+        let root = tmp.join("root");
+        let vdb = root.join("var/db/pkg/dev-libs/regen-1.0");
+        std::fs::create_dir_all(&vdb).unwrap();
+        // A directory at the dest path makes the `rename` fail.
+        let dest = vdb.join("environment.bz2");
+        std::fs::create_dir_all(&dest).unwrap();
+        let ctx = local_ctx(root.to_str().unwrap(), tmp.join("work").to_str().unwrap());
+        let err = install_file_atomic(&ctx, None, b"regen", dest.to_str().unwrap())
+            .expect_err("install into a directory must fail");
+        assert!(err.contains("installing"), "unexpected error text: {err}");
+        assert!(
+            !vdb.join("environment.bz2.portuale-regen-tmp").exists(),
+            "the remote temp name must not litter the client"
+        );
+        assert!(dest.is_dir(), "the blocking directory is untouched");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Pure unit: the `PORTAGE_BZIP2_COMMAND` scrub rewrites only the
+    /// unit-local passthrough stand-in -- to the resolved client value
+    /// when one is configured, to the `make.globals` default otherwise
+    /// -- and copies every other value verbatim.
+    #[test]
+    fn scrub_bzip2_command_rewrites_only_the_passthrough() {
         let regen = b"declare -x FEATURES=\"sandbox\"\ndeclare -x PORTAGE_BZIP2_COMMAND=\"'/tmp/w/bin/bzip2-passthrough'\"\ndeclare -x USE=\"amd64\"\n";
-        let scrubbed = scrub_bzip2_command(regen);
+        // Configured client value (e.g. `lbzip2` in `make.conf`) is written.
+        let scrubbed = scrub_bzip2_command(regen, "lbzip2");
+        assert_eq!(
+            String::from_utf8(scrubbed).unwrap(),
+            "declare -x FEATURES=\"sandbox\"\ndeclare -x PORTAGE_BZIP2_COMMAND=\"lbzip2\"\ndeclare -x USE=\"amd64\"\n",
+        );
+        // Unset (the `make.globals` default) restores `bzip2`.
+        let scrubbed = scrub_bzip2_command(regen, "bzip2");
         assert_eq!(
             String::from_utf8(scrubbed).unwrap(),
             "declare -x FEATURES=\"sandbox\"\ndeclare -x PORTAGE_BZIP2_COMMAND=\"bzip2\"\ndeclare -x USE=\"amd64\"\n",
         );
-        // Real's own spelling passes through byte-identical ...
+        // An unrelated value -- even a foreign compressor path -- is
+        // copied verbatim, never forced to the configured one ...
+        let foreign = b"declare -x PORTAGE_BZIP2_COMMAND=\"/opt/bin/pbzip2\"\n";
+        assert_eq!(scrub_bzip2_command(foreign, "lbzip2"), foreign);
+        // ... real's own spelling passes through byte-identical ...
         let real = b"declare -x PORTAGE_BZIP2_COMMAND=\"bzip2\"\n";
-        assert_eq!(scrub_bzip2_command(real), real);
+        assert_eq!(scrub_bzip2_command(real, "lbzip2"), real);
         // ... and a missing line stays missing (never invent it).
         let bare = b"declare -x FEATURES=\"sandbox\"\n";
-        assert_eq!(scrub_bzip2_command(bare), bare);
+        assert_eq!(scrub_bzip2_command(bare, "lbzip2"), bare);
         // Trailing line without a newline is preserved.
-        let noeol = b"declare -x PORTAGE_BZIP2_COMMAND=\"/x\"";
+        let noeol =
+            b"declare -x FEATURES=\"sandbox\"\ndeclare -x PORTAGE_BZIP2_COMMAND=\"'/tmp/w/bin/bzip2-passthrough'\"";
         assert_eq!(
-            String::from_utf8(scrub_bzip2_command(noeol)).unwrap(),
-            "declare -x PORTAGE_BZIP2_COMMAND=\"bzip2\"\n",
+            String::from_utf8(scrub_bzip2_command(noeol, "lbzip2")).unwrap(),
+            "declare -x FEATURES=\"sandbox\"\ndeclare -x PORTAGE_BZIP2_COMMAND=\"lbzip2\"\n",
         );
     }
 
@@ -4642,6 +4749,49 @@ mod tests {
         );
         assert!(parse_oldpf_probe("UNPACK=ok\n").is_empty());
         assert!(parse_oldpf_probe("OLDPF= SLOT=0\n").is_empty());
+    }
+
+    /// Backlog #171 review: when both the `environment.bz2` pull and
+    /// the plain fallback pull fail, the staging warning carries the
+    /// original bz2 error (no more silent staging failures).
+    #[test]
+    fn ship_old_hook_envs_warns_when_both_pulls_fail() {
+        let tmp = regen_tmp("old-noenv");
+        let root = tmp.join("root");
+        let work = tmp.join("work");
+        let oldvdb = root.join("var/db/pkg/dev-libs/oldhook-1.0");
+        std::fs::create_dir_all(&oldvdb).unwrap();
+        std::fs::write(oldvdb.join("SLOT"), "0\n").unwrap();
+        // Neither `environment.bz2` nor `environment` on the client.
+        assert!(!oldvdb.join("environment.bz2").exists());
+        assert!(!oldvdb.join("environment").exists());
+
+        let unit = work.join("oldhook-2.0");
+        std::fs::create_dir_all(&unit).unwrap();
+        let ctx = local_ctx(root.to_str().unwrap(), work.to_str().unwrap());
+        let shipment = ship_old_hook_envs(
+            &ctx,
+            None,
+            unit.to_str().unwrap(),
+            root.join("var/db/pkg").to_str().unwrap(),
+            "dev-libs",
+            "oldhook",
+            "oldhook-2.0",
+            "0",
+        );
+        assert!(shipment.shipped.is_empty(), "{:?}", shipment.shipped);
+        assert_eq!(shipment.warnings.len(), 1, "{:?}", shipment.warnings);
+        assert!(
+            shipment.warnings[0].contains("oldhook-1.0"),
+            "warning must name the pf: {:?}",
+            shipment.warnings
+        );
+        assert!(
+            shipment.warnings[0].contains("environment.bz2"),
+            "warning must carry the original bz2 error: {:?}",
+            shipment.warnings
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// Saved env for an old instance: `declare -x` lines (the
@@ -4837,6 +4987,57 @@ mod tests {
         .unwrap();
         std::fs::write(oldvdb.join("environment"), old_hook_environment()).unwrap();
         assert!(!oldvdb.join("environment.bz2").exists());
+
+        let unit = work.join("oldhook-2.0");
+        std::fs::create_dir_all(&unit).unwrap();
+        let status = std::process::Command::new("cp")
+            .args(["-a"])
+            .arg(crate::ebuild_phases::bin_dir())
+            .arg(unit.join("bin"))
+            .status()
+            .expect("cp -a bin");
+        assert!(status.success());
+
+        let farm = farm_path_without_bzip2(&tmp);
+        let stdout = run_old_hook_snippet(
+            unit.to_str().unwrap(),
+            root.to_str().unwrap(),
+            work.to_str().unwrap(),
+            &farm,
+            oldvdb.to_str().unwrap(),
+        );
+        assert!(stdout.contains("OLDHOOK_prerm=0"), "stdout:\n{stdout}");
+        assert!(stdout.contains("OLDHOOK_postrm=0"), "stdout:\n{stdout}");
+        assert_eq!(
+            std::fs::read_to_string(root.join("var/lib/oldhook.log")).unwrap(),
+            "prerm-ok\npostrm-ok\n"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #171 review: an older-`mrg` entry with **both** files
+    /// whose staging failed still runs its hooks on a bzip2-less
+    /// client, from the plain `environment` final fallback.
+    #[test]
+    fn old_hook_falls_back_to_plain_when_bz2_present_without_client_bzip2() {
+        let tmp = regen_tmp("old-both");
+        let root = tmp.join("root");
+        let work = tmp.join("work");
+        std::fs::create_dir_all(root.join("var/lib")).unwrap();
+        let oldvdb = root.join("var/db/pkg/dev-libs/oldhook-1.0");
+        std::fs::create_dir_all(&oldvdb).unwrap();
+        std::fs::write(oldvdb.join("SLOT"), "0\n").unwrap();
+        std::fs::write(
+            oldvdb.join("oldhook-1.0.ebuild"),
+            "EAPI=8\nDESCRIPTION=\"synthetic old-hook probe\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\n",
+        )
+        .unwrap();
+        // Both files (older `mrg`), nothing staged: the bz2 is
+        // unreadable without a client bzip2, so the plain file wins.
+        let compressed =
+            bzip2_compress(old_hook_environment().as_bytes()).expect("server bzip2 compresses");
+        std::fs::write(oldvdb.join("environment.bz2"), &compressed).unwrap();
+        std::fs::write(oldvdb.join("environment"), old_hook_environment()).unwrap();
 
         let unit = work.join("oldhook-2.0");
         std::fs::create_dir_all(&unit).unwrap();

@@ -6957,6 +6957,23 @@ pub(crate) fn config_features_string(config: &portage_profile::Config) -> String
     config_features_list(config).join(" ")
 }
 
+/// The resolved, merge-time `PORTAGE_BZIP2_COMMAND` -- real's
+/// merge-time env save records its live value (`cnf/make.globals:105`
+/// defaults it to `bzip2`; a client `make.conf` may set e.g.
+/// `lbzip2`/`pbzip2`). Shared with the remote-merge server
+/// (`run_remote_plan`, backlog #171), which resolves the client's
+/// placed config through this same function so the scrubbed regen'd
+/// env records exactly what a local merge would; falls back to the
+/// `make.globals` default when nothing is configured.
+pub(crate) fn config_bzip2_command(config: &portage_profile::Config) -> String {
+    config
+        .other_vars
+        .get("PORTAGE_BZIP2_COMMAND")
+        .cloned()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "bzip2".to_string())
+}
+
 /// The resolved, merge-time `INSTALL_MASK` plus the `no{man,info,doc}`
 /// `FEATURES` fold -- real `preinst_mask()` (`bin/misc-functions.sh`).
 /// Shared with the remote-merge server (`run_remote_plan`, backlog #170),
@@ -13747,6 +13764,31 @@ mod tests {
             args_with_emerge_defaults(&config, &with_ignore),
             with_ignore
         );
+    }
+
+    #[test]
+    fn config_bzip2_command_prefers_the_placed_config() {
+        // Backlog #171 review: a client `make.conf` compressor (e.g.
+        // `lbzip2`) wins over the `make.globals` default.
+        let configured = portage_profile::Config {
+            other_vars: [("PORTAGE_BZIP2_COMMAND".to_string(), "lbzip2".to_string())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        assert_eq!(config_bzip2_command(&configured), "lbzip2");
+        // Unset (or empty): the `cnf/make.globals:105` default.
+        assert_eq!(
+            config_bzip2_command(&portage_profile::Config::default()),
+            "bzip2"
+        );
+        let empty = portage_profile::Config {
+            other_vars: [("PORTAGE_BZIP2_COMMAND".to_string(), String::new())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        assert_eq!(config_bzip2_command(&empty), "bzip2");
     }
 
     fn world_entry(category: &str, package: &str, slot: &str) -> GraphEntry {
