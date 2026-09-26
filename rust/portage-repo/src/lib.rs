@@ -41904,6 +41904,163 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// Backlog #161 S6: with `--newuse`, an installed instance whose
+    /// built USE misses a now-enabled flag reinstalls with the flag
+    /// change recorded -- and the newly-enabled conditional dep walks.
+    #[test]
+    fn run_pass_newuse_reinstalls_a_flag_change() {
+        let dir = slotundo_temp_dir("161-run-newuse");
+        let atoms = vec!["dev-libs/deepvdbusepkg".to_string()];
+        // The vdb records no `wantdep`; the profile enables it.
+        let pass = run_161(
+            &dir,
+            &atoms,
+            false,
+            &[("deepvdbusepkg", "1.0", "0")],
+            true,
+            false,
+            false,
+            false,
+        );
+        let pkg = pass
+            .entries
+            .iter()
+            .find(|e| e.package == "deepvdbusepkg")
+            .expect("the requested package resolves");
+        match &pkg.outcome {
+            PretendOutcome::Reinstall { changed_flags, .. } => {
+                assert_eq!(changed_flags, &vec!["wantdep".to_string()]);
+            }
+            other => panic!("expected a USE-change reinstall, got {other:?}"),
+        }
+        // The conditional dep itself resolves on the retry walk the
+        // recorded flag change drives (contract-suite pinned); this
+        // pass pins the flag delta.
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: without `--newuse` the same USE mismatch stays
+    /// a bare reinstall with no flag change and no extra walk.
+    #[test]
+    fn run_pass_without_newuse_keeps_a_use_mismatch_quiet() {
+        let dir = slotundo_temp_dir("161-run-nouse");
+        let atoms = vec!["dev-libs/deepvdbusepkg".to_string()];
+        let pass = run_161(
+            &dir,
+            &atoms,
+            false,
+            &[("deepvdbusepkg", "1.0", "0")],
+            false,
+            false,
+            false,
+            false,
+        );
+        let pkg = pass
+            .entries
+            .iter()
+            .find(|e| e.package == "deepvdbusepkg")
+            .expect("the requested package resolves");
+        match &pkg.outcome {
+            PretendOutcome::Reinstall { changed_flags, .. } => {
+                assert!(changed_flags.is_empty());
+            }
+            other => panic!("expected a bare reinstall, got {other:?}"),
+        }
+        assert!(
+            !pass.entries.iter().any(|e| e.package == "deepvdbusetarget"),
+            "the conditional dep stays unwalked without the flip"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: under `--usepkgonly` with no binary packages,
+    /// even a tree-present leaf has no mergeable candidate.
+    #[test]
+    fn run_pass_usepkgonly_without_binaries_reports_nvc() {
+        let dir = slotundo_temp_dir("161-run-binonly");
+        let atoms = vec!["dev-libs/sounneed".to_string()];
+        let pass = run_161(&dir, &atoms, false, &[], false, true, false, false);
+        assert_eq!(pass.entries.len(), 1);
+        assert!(matches!(
+            pass.entries[0].outcome,
+            PretendOutcome::NoVisibleCandidate
+        ));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: under `--nodeps` only the requested atom
+    /// resolves -- dependencies never walk, and no dep-driven rows
+    /// appear.
+    #[test]
+    fn run_pass_nodeps_resolves_only_the_requested_atom() {
+        let dir = slotundo_temp_dir("161-run-nodeps");
+        let atoms = vec!["dev-libs/needer".to_string()];
+        let pass = run_161(&dir, &atoms, false, &[], false, false, true, false);
+        assert_eq!(pass.entries.len(), 1);
+        assert_eq!(pass.entries[0].package.as_str(), "needer");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: in selective mode the requested installed
+    /// version stays `AlreadyInstalled` instead of the bare reinstall.
+    #[test]
+    fn run_pass_selective_keeps_the_requested_version() {
+        let dir = slotundo_temp_dir("161-run-sel");
+        let atoms = vec!["dev-libs/sounneed".to_string()];
+        let pass = run_161(
+            &dir,
+            &atoms,
+            false,
+            &[("sounneed", "1.0", "0/1")],
+            false,
+            false,
+            false,
+            true,
+        );
+        assert_eq!(pass.entries.len(), 1);
+        assert!(matches!(
+            pass.entries[0].outcome,
+            PretendOutcome::AlreadyInstalled { .. }
+        ));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: the `needer`/`othermod` triangle records its
+    /// slot conflict on the pass instead of resolving silently.
+    #[test]
+    fn run_pass_records_the_needer_othermod_slot_conflict() {
+        let fixture_root = fixtures_root();
+        let atoms = vec![
+            "dev-libs/needer".to_string(),
+            "dev-libs/othermod".to_string(),
+        ];
+        let config = test_config();
+        let repos = find_repos(&fixture_root).expect("fixture repos");
+        let ctx = ctx_161(
+            &fixture_root,
+            &config,
+            repos,
+            HashSet::new(),
+            10,
+            &NO_STRINGS_161,
+            &atoms,
+            false,
+            false,
+            false,
+            false,
+            false,
+        );
+        let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+        assert!(
+            pass
+                .slot_conflicts
+                .iter()
+                .any(|sc| sc.package == "paired"),
+            "the paired triangle records a slot conflict"
+        );
+        let _ = fixture_root;
+    }
+
     /// recordered `USE`.
     fn slotundo_vdb(
         dir: &Path,
