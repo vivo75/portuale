@@ -28,6 +28,30 @@
 // (real `Scheduler.py:1599-1601`'s own `del mtimedb["resume"]` once the
 // mergelist empties), leaving `resume_backup` untouched.
 //
+// `mtimedb["info"]` IS real now too: real `MtimeDB` (`util/mtimedb.py`)
+// carries an `"info"` key mapping each absolute GNU-info directory to
+// that directory's `st_mtime` (whole seconds) the last time real
+// `chk_updated_info_files` (`util/_info_files.py`) regenerated its
+// `dir` index -- or skipped regenerating because the mtime already
+// matched. `read_info_mtimes`/`write_info_mtimes` round-trip that map
+// through the same file without disturbing `resume`/`resume_backup`
+// (real `commit()` persists the whole dict at once).
+//
+// Two deliberate narrowings, both documented where they bite:
+//   - real's file always carries every `_MTIMEDBKEYS` key (`info`,
+//     `ldpath`, `resume`, `resume_backup`, `starttime`, `updates`,
+//     `version`); portuale only ever writes the sections it manages
+//     (`resume`, `resume_backup`, now `info`) and still drops the rest
+//     -- `ldpath`/`updates` are `--sync`/`env-update` state portuale
+//     never manages, `starttime`/`version` real bookkeeping with no
+//     reader here. An empty `info` map is omitted outright (real would
+//     write `"info": {}`); the file is removed when nothing at all is
+//     stored, as before.
+//   - values are whole-second `i64`s (real `os.stat(...)[stat.ST_MTIME]`
+//     is already an int). A foreign-written float (`123.0`) is accepted
+//     on read and truncated; what portuale writes back is always an
+//     integer, matching real's steady state.
+//
 // Binary-entry replay IS real now too: each mergelist item carries real
 // portage's own `type` tag (`"ebuild"` or `"binary"`, `ResumeEntryKind`),
 // so `emerge --resume` can dispatch a resumed binary package through
@@ -48,6 +72,7 @@
 // from the failed run's own state.
 
 use regex::Regex;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// Real portage's own `mergelist` entry `type` tag
@@ -162,13 +187,15 @@ fn format_section_body(root: &Path, section: &Section) -> String {
 }
 
 /// Writes the whole mtimedb file from scratch, with `resume` and/or
-/// `resume_backup` as given -- `None` for a key omits it entirely.
-/// Removes the file outright when both are `None` (an empty object has
-/// nothing real portage or portuale itself would ever read back).
+/// `resume_backup` as given plus the `info` dir-mtime memo -- `None`
+/// for a section omits it entirely. Removes the file outright when
+/// there is nothing to store (an empty object has nothing real portage
+/// or portuale itself would ever read back).
 fn write_sections(
     root: &Path,
     resume: Option<&Section>,
     resume_backup: Option<&Section>,
+    info: Option<&BTreeMap<String, i64>>,
 ) -> Result<(), String> {
     let path = mtimedb_path(root);
     let mut parts = Vec::new();
@@ -184,6 +211,18 @@ fn write_sections(
             format_section_body(root, s)
         ));
     }
+    if let Some(mtimes) = info
+        && !mtimes.is_empty()
+    {
+        // Real `json.dumps(..., indent="\t", sort_keys=True)` shape for
+        // the flat `{path: mtime}` map (`BTreeMap` iterates sorted, like
+        // real's `sort_keys`).
+        let entries: Vec<String> = mtimes
+            .iter()
+            .map(|(k, v)| format!("\t\t{}: {v}", json_str(k)))
+            .collect();
+        parts.push(format!("\t\"info\": {{\n{}\n\t}}", entries.join(",\n")));
+    }
     if parts.is_empty() {
         let _ = std::fs::remove_file(&path);
         return Ok(());
@@ -191,6 +230,9 @@ fn write_sections(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
+    // Real `sort_keys=True` orders the top-level sections too
+    // (`info` < `resume` < `resume_backup`); the pushes above already
+    // append in that order.
     let content = format!("{{\n{}\n}}\n", parts.join(",\n"));
     std::fs::write(&path, content).map_err(|e| format!("{}: {e}", path.display()))
 }
@@ -303,6 +345,63 @@ fn read_section(root: &Path, key: &str) -> Option<Section> {
     parse_section(extract_object(&content, key)?)
 }
 
+/// Real `mtimedb["info"]`: absolute GNU-info directory -> that
+/// directory's `st_mtime` (whole seconds) as real
+/// `chk_updated_info_files` last left it. Empty when the file is
+/// absent or carries no `info` section.
+pub fn read_info_mtimes(root: &Path) -> BTreeMap<String, i64> {
+    let Ok(content) = std::fs::read_to_string(mtimedb_path(root)) else {
+        return BTreeMap::new();
+    };
+    let Some(object) = extract_object(&content, "info") else {
+        return BTreeMap::new();
+    };
+    // `"path": 123` pairs (real `json.dumps` of `{str: int}`); a
+    // foreign-written float (`123.0`) is accepted and truncated --
+    // what portuale writes back is always an integer (see this
+    // module's own doc comment).
+    let pair_re = Regex::new(r#""((?:[^"\\]|\\.)*)"\s*:\s*(-?\d+(?:\.\d+)?)"#).ok();
+    let Some(pair_re) = pair_re else {
+        return BTreeMap::new();
+    };
+    let mut mtimes = BTreeMap::new();
+    for cap in pair_re.captures_iter(object) {
+        let raw = &cap[1];
+        let mut key = String::with_capacity(raw.len());
+        let mut chars = raw.chars();
+        while let Some(c) = chars.next() {
+            if c == '\\'
+                && let Some(e) = chars.next()
+            {
+                match e {
+                    'n' => key.push('\n'),
+                    't' => key.push('\t'),
+                    'r' => key.push('\r'),
+                    other => key.push(other),
+                }
+            } else {
+                key.push(c);
+            }
+        }
+        if let Ok(v) = cap[2].parse::<f64>() {
+            mtimes.insert(key, v as i64);
+        }
+    }
+    mtimes
+}
+
+/// Stores `mtimedb["info"]` (real `MtimeDB.commit()` persisting the
+/// whole dict at once): rewrites the file with `info` replaced,
+/// preserving any existing `resume`/`resume_backup` untouched. An empty
+/// map stores nothing for `info` itself (the file keeps just the resume
+/// sections, or is removed when there is nothing at all -- see
+/// `write_sections`).
+pub fn write_info_mtimes(root: &Path, info: &BTreeMap<String, i64>) -> Result<(), String> {
+    let resume = read_section(root, "resume");
+    let backup = read_section(root, "resume_backup");
+    write_sections(root, resume.as_ref(), backup.as_ref(), Some(info))
+}
+
 /// Writes `mtimedb["resume"]` for a failed merge: `favorites` (the atom
 /// args) + `mergelist` (`["ebuild", <root>, "<cat/pkg-ver>", "merge"]`
 /// per still-unmerged package) + `myopts` (the `--oneshot`/`--onlydeps`
@@ -325,7 +424,8 @@ pub fn write_resume_list(
         opts: *opts,
     };
     let backup = read_section(root, "resume_backup");
-    write_sections(root, Some(&resume), backup.as_ref())
+    let info = read_info_mtimes(root);
+    write_sections(root, Some(&resume), backup.as_ref(), Some(&info))
 }
 
 /// Real `actions.py:664-672`: right before a fresh, non-`--resume`
@@ -344,7 +444,7 @@ pub fn rotate_resume_to_backup(root: &Path) {
     if resume.mergelist.len() <= 1 {
         return;
     }
-    let _ = write_sections(root, None, Some(&resume));
+    let _ = write_sections(root, None, Some(&resume), Some(&read_info_mtimes(root)));
 }
 
 /// Reads back `(favorites, mergelist-cpvs, myopts)` from
@@ -358,7 +458,7 @@ pub fn read_resume_list(root: &Path) -> Option<ResumeList> {
         return Some((s.favorites, s.mergelist, s.opts));
     }
     let backup = read_section(root, "resume_backup")?;
-    let _ = write_sections(root, Some(&backup), None);
+    let _ = write_sections(root, Some(&backup), None, Some(&read_info_mtimes(root)));
     Some((backup.favorites, backup.mergelist, backup.opts))
 }
 
@@ -381,7 +481,7 @@ fn split_cpv(cpv: &str) -> Option<(&str, &str)> {
 /// recovery point real portage doesn't clear here either.
 pub fn clear_resume_list(root: &Path) {
     let backup = read_section(root, "resume_backup");
-    let _ = write_sections(root, None, backup.as_ref());
+    let _ = write_sections(root, None, backup.as_ref(), Some(&read_info_mtimes(root)));
 }
 
 #[cfg(test)]
@@ -399,6 +499,73 @@ mod tests {
         ));
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn info_mtimes_round_trip_without_disturbing_the_resume_list() {
+        // Real `MtimeDB.commit()`: one file, every key at once -- an
+        // `info` write must not drop `resume`, and vice versa.
+        let root = tmproot();
+        write_resume_list(
+            &root,
+            &["dev-libs/a"],
+            &[(
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "a".to_string(),
+                "1".to_string(),
+            )],
+            &ResumeOpts::default(),
+        )
+        .unwrap();
+
+        let mut mtimes = BTreeMap::new();
+        mtimes.insert("/usr/share/info".to_string(), 1_700_000_000);
+        mtimes.insert("/opt/pkg/info".to_string(), 1_700_000_001);
+        write_info_mtimes(&root, &mtimes).unwrap();
+
+        assert_eq!(read_info_mtimes(&root), mtimes);
+        // The resume list survived the info write.
+        assert_eq!(read_resume_list(&root).unwrap().0, vec!["dev-libs/a"]);
+
+        // And a resume write preserves the info memo.
+        write_resume_list(
+            &root,
+            &["dev-libs/b"],
+            &[(
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "b".to_string(),
+                "2".to_string(),
+            )],
+            &ResumeOpts::default(),
+        )
+        .unwrap();
+        assert_eq!(read_info_mtimes(&root), mtimes);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn info_mtimes_accepts_a_foreign_float_and_reads_empty_as_empty() {
+        let root = tmproot();
+        // Absent file -> empty memo (real's own `setdefault("info", {})`
+        // shape: nothing recorded yet).
+        assert!(read_info_mtimes(&root).is_empty());
+
+        std::fs::create_dir_all(mtimedb_path(&root).parent().unwrap()).unwrap();
+        std::fs::write(
+            mtimedb_path(&root),
+            "{\n\t\"info\": {\n\t\t\"/usr/share/info\": 1700000000.0\n\t}\n}\n",
+        )
+        .unwrap();
+        let mtimes = read_info_mtimes(&root);
+        assert_eq!(mtimes.get("/usr/share/info"), Some(&1_700_000_000));
+
+        // Clearing the memo stores nothing for `info` (no resume
+        // sections either, so the file goes away entirely).
+        write_info_mtimes(&root, &BTreeMap::new()).unwrap();
+        assert!(!mtimedb_path(&root).exists());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

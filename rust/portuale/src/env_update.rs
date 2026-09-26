@@ -103,29 +103,20 @@ fn is_env_d_filename(name: &str) -> bool {
         && !name.ends_with(".bak")
 }
 
-/// Real `dblink._unmerge_pkgfiles()`'s own `infodirs`/`infodirs_inodes`
-/// (`lib/portage/dbapi/vartree.py:2830-2846`): real `INFOPATH`/
-/// `INFODIR`, colon-separated, collated from `/etc/env.d/*` the same
-/// way `run_env_update` collates every other real `COLON_SEPARATED`
-/// key -- a deliberately separate, narrower computation reusing this
-/// module's own `is_env_d_filename`/`parse_env_d_line` helpers directly,
-/// rather than a refactor of `run_env_update`'s own already-tested
-/// control flow for a second, narrower caller (`ebuild_unmerge::
-/// run_unmerge` is the one real caller, threading the result into
-/// `cleanup_info_dir`'s own real `inode_key in infodirs_inodes` check).
-/// Each real, `root`-joined candidate directory that actually exists on
-/// disk right now contributes its own `(dev, ino)` -- real `os.stat`
-/// (follows symlinks, unlike the `lstat`-based inode keys portuale's
-/// own `dirs`/`protected_symlinks` otherwise use, since a real
-/// `INFOPATH` entry naming a symlink should still match the directory
-/// it resolves to). A missing env.d directory, or a named candidate
-/// that doesn't actually exist, degrades gracefully to an empty/smaller
-/// set -- the same tolerance `run_env_update` itself already has for a
-/// missing `/etc/env.d`.
-pub fn info_dirs_inodes(root: &Path) -> std::collections::BTreeSet<(u64, u64)> {
-    use std::os::unix::fs::MetadataExt;
-
-    let mut candidates: Vec<String> = Vec::new();
+/// Real `INFOPATH`/`INFODIR`, colon-separated, collated from
+/// `/etc/env.d/*` the same way `run_env_update` collates every other
+/// real `COLON_SEPARATED` key -- `INFOPATH` entries first, then
+/// `INFODIR` entries (real `_emerge/post_emerge.py::post_emerge`'s own
+/// `infodirs = INFOPATH.split(":") + INFODIR.split(":")`, read from the
+/// settings reloaded after `env_update`). Empty entries are dropped
+/// (real `chk_updated_info_files` skips `""` itself); duplicates are
+/// kept (real passes them through -- the dir-mtime memo makes a second
+/// visit a no-op). Shared by `info_dirs_inodes` (the unmerge-time inode
+/// set) and `info_files` (the post-merge regeneration list) so there is
+/// exactly one env.d parser for both.
+pub fn info_dir_values(root: &Path) -> Vec<String> {
+    let mut infopath: Vec<String> = Vec::new();
+    let mut infodir: Vec<String> = Vec::new();
     let envd_dir = root.join("etc/env.d");
     if let Ok(entries) = portage_util::read_dir_entries(&envd_dir) {
         let filenames: Vec<String> = entries
@@ -141,14 +132,34 @@ pub fn info_dirs_inodes(root: &Path) -> std::collections::BTreeSet<(u64, u64)> {
                 let Some((key, value)) = parse_env_d_line(line) else {
                     continue;
                 };
-                if key == "INFOPATH" || key == "INFODIR" {
-                    candidates.extend(value.split(':').filter(|s| !s.is_empty()).map(String::from));
+                if key == "INFOPATH" {
+                    infopath.extend(value.split(':').filter(|s| !s.is_empty()).map(String::from));
+                } else if key == "INFODIR" {
+                    infodir.extend(value.split(':').filter(|s| !s.is_empty()).map(String::from));
                 }
             }
         }
     }
+    infopath.extend(infodir);
+    infopath
+}
+/// Real `dblink._unmerge_pkgfiles()`'s own `infodirs_inodes`
+/// (`lib/portage/dbapi/vartree.py:2830-2846`): each real, `root`-joined
+/// candidate directory from `info_dir_values` that actually exists on
+/// disk right now contributes its own `(dev, ino)` -- real `os.stat`
+/// (follows symlinks, unlike the `lstat`-based inode keys portuale's
+/// own `dirs`/`protected_symlinks` otherwise use, since a real
+/// `INFOPATH` entry naming a symlink should still match the directory
+/// it resolves to). A missing env.d directory, or a named candidate
+/// that doesn't actually exist, degrades gracefully to an empty/smaller
+/// set -- the same tolerance `run_env_update` itself already has for a
+/// missing `/etc/env.d`. (`ebuild_unmerge::run_unmerge` is the one real
+/// caller, threading the result into `cleanup_info_dir`'s own real
+/// `inode_key in infodirs_inodes` check.)
+pub fn info_dirs_inodes(root: &Path) -> std::collections::BTreeSet<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
 
-    candidates
+    info_dir_values(root)
         .iter()
         .filter_map(|dir| std::fs::metadata(root.join(dir.trim_start_matches('/'))).ok())
         .map(|meta| (meta.dev(), meta.ino()))
@@ -399,6 +410,25 @@ mod tests {
         assert!(!is_env_d_filename(".50-foo"));
         assert!(!is_env_d_filename("50-foo~"));
         assert!(!is_env_d_filename("50-foo.bak"));
+    }
+
+    #[test]
+    fn info_dir_values_lists_infopath_before_infodir() {
+        // Real `post_emerge.py`'s own `INFOPATH.split(":") +
+        // `INFODIR.split(":")` order: every INFOPATH entry first, then
+        // every INFODIR entry.
+        let tmp = tempdir();
+        std::fs::create_dir_all(tmp.join("etc/env.d")).unwrap();
+        std::fs::write(
+            tmp.join("etc/env.d/50-foo"),
+            "INFOPATH=\"/usr/share/info\"\nINFODIR=\"/opt/pkg/info\"\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            info_dir_values(&tmp),
+            vec!["/usr/share/info".to_string(), "/opt/pkg/info".to_string()]
+        );
     }
 
     #[test]

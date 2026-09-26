@@ -5105,9 +5105,16 @@ fn run_resume(
         return ExitCode::from(1);
     }
 
-    // Real `post_emerge()`: the preserved-libs advisory fires after a
-    // `--resume` too (the vdb changed).
+    // Real `post_emerge()`: the info-dir regen fires after a
+    // `--resume` too (the vdb changed -- the failure branch above
+    // already returned, and an empty mergelist returned even earlier),
+    // before the preserved-libs advisory.
     let color = Colorizer::new(color::resolve_havecolor(None));
+    let noinfo = config_features_list(config).iter().any(|t| t == "noinfo");
+    if let Err(e) = crate::info_files::post_merge_info_update(root, &color, false, noinfo) {
+        eprintln!("emerge: {e}");
+        return ExitCode::from(1);
+    }
     crate::preserved_libs::show_preserved_libs_notice(root, &color, false, false);
 
     ExitCode::SUCCESS
@@ -5198,6 +5205,18 @@ fn execute_unmerge(
         feature_enabled("split-elog"),
     );
 
+    // Real `post_emerge()`: after `emerge -C` / `--depclean` / `--prune`
+    // removed something, regenerate any stale GNU info directory index,
+    // then warn about any library the removal preserved. `noinfo` reads
+    // the raw process-env fallback here -- this boundary receives no
+    // resolved config (same documented degrade as the `unmerge-backup`
+    // check above it).
+    if let Err(e) =
+        crate::info_files::post_merge_info_update(root, color, false, feature_enabled("noinfo"))
+    {
+        eprintln!("emerge: {e}");
+        return ExitCode::from(1);
+    }
     // Real `post_emerge()`: after `emerge -C` / `--depclean` / `--prune`
     // removed something, warn about any library the removal preserved.
     crate::preserved_libs::show_preserved_libs_notice(root, color, false, false);
@@ -13194,6 +13213,22 @@ pub fn run(args: &[String]) -> ExitCode {
         // `save_summary` files the logdir, and `mail`/`mail_summary`
         // the MTA exactly as before (see `elog.rs`).
         if !buildpkgonly {
+            // Real `post_emerge()` (`post_emerge.py:126-130`): once the
+            // merge changed the vdb, regenerate any stale GNU info
+            // directory index *before* the preserved-libs notice below.
+            // The vdb-changed gate is structural here: every merge
+            // failure returned early above, `--pretend` never reaches
+            // this branch, `buildpkgonly` merges nothing, and an empty
+            // mergelist changed nothing either.
+            if !entries.is_empty() {
+                let noinfo = config_features_list(&config).iter().any(|t| t == "noinfo");
+                if let Err(e) =
+                    crate::info_files::post_merge_info_update(&root, &color, quiet, noinfo)
+                {
+                    eprintln!("emerge: {e}");
+                    return ExitCode::from(1);
+                }
+            }
             // Real `post_emerge()` (`post_emerge.py:141-152`): once the
             // merge changed the vdb, warn about any library the merge/
             // unmerge just preserved and point the user at
