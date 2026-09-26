@@ -50131,4 +50131,72 @@ mod tests_165 {
         assert_ne!(before, after);
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    // ---- S3: `find_repos_impl` survivors (real
+    // `repository/config.py::RepoConfigLoader`): S0 already catches
+    // everything except the default-priority `==` and the
+    // no-`volatile`-key heuristic, which no existing leg observes. ----
+
+    /// The main repo defaults to priority -1000, every other repo to 0
+    /// (real `config.py`'s own default): the `*name == main_repo` ->
+    /// `!=` flip swaps them and fails here.
+    #[test]
+    fn find_repos_impl_defaults_the_main_repo_to_priority_minus_1000() {
+        let root = dir_165("repos-priority");
+        std::fs::create_dir_all(root.join("etc/portage")).unwrap();
+        std::fs::write(
+            root.join("etc/portage/repos.conf"),
+            "[DEFAULT]\nmain-repo = main\n\n[main]\nlocation = main\n\n[overlay]\nlocation = overlay\n",
+        )
+        .unwrap();
+        let repos = find_repos(&root).expect("repos.conf resolves");
+        assert_eq!(
+            repos.iter().find(|r| r.name == "main").unwrap().priority,
+            -1000
+        );
+        assert_eq!(
+            repos.iter().find(|r| r.name == "overlay").unwrap().priority,
+            0
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The no-`volatile`-key heuristic (real `config.py:423`): volatile
+    /// unless the tree is under `/var/db/repos` *and* owned by
+    /// root/portage. An absolute location under `/var/db/repos` (which
+    /// need not exist -- only the lexical prefix and the failed
+    /// ownership stat matter) is still volatile for a non-root owner,
+    /// pinning both the `||` -> `&&` flip and the `!owned` deletion;
+    /// a second repo at a root-owned absolute location pins the
+    /// `!starts_with` deletion whenever the suite runs with root-owned
+    /// system dirs (and stays green otherwise: the heuristic is true
+    /// there either way).
+    #[test]
+    fn find_repos_impl_computes_volatile_from_location_and_owner() {
+        let root = dir_165("repos-volatile");
+        std::fs::create_dir_all(root.join("etc/portage")).unwrap();
+        let sys = ["/usr", "/etc", "/bin", "/"]
+            .iter()
+            .map(PathBuf::from)
+            .find(|p| path_owned_by_root_or_portage(p))
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "/usr".to_string());
+        std::fs::write(
+            root.join("etc/portage/repos.conf"),
+            format!(
+                "[DEFAULT]\nmain-repo = main\n\n[main]\nlocation = /var/db/repos/foo\n\n[second]\nlocation = {sys}\n"
+            ),
+        )
+        .unwrap();
+        let repos = find_repos(&root).expect("repos.conf resolves");
+        // `/var/db/repos/foo` is unowned (it does not exist): real
+        // `!starts_with || !owned` is true; `&&` and the `!owned`
+        // deletion both yield false.
+        assert!(repos.iter().find(|r| r.name == "main").unwrap().volatile);
+        // A non-`/var/db/repos` tree is volatile either way; when the
+        // location really is root-owned this also pins the
+        // `!starts_with` deletion (which would yield false).
+        assert!(repos.iter().find(|r| r.name == "second").unwrap().volatile);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
