@@ -37,6 +37,38 @@ fn record_slot_conflict_merges_same_triple_and_appends_new() {
     assert_eq!(v.len(), 2);
 }
 
+/// The record forms with the merge version resolved, the installed
+/// version preserved, the consumer at its recorded slot and repo.
+#[test]
+fn build_residual_forms_a_record_for_a_broken_pin() {
+    let dir = slotundo_temp_dir("161-resid");
+    let (repos, config, upgrade) = residual_161_setup(&dir);
+    let out = build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
+        repos: &repos,
+        config: &config,
+        root: &dir,
+        entries: &[upgrade],
+        slot_pullers: &HashMap::new(),
+        dropped: &[residual_161_pin()],
+    });
+    assert_eq!(out.len(), 1);
+    let r = &out[0];
+    assert_eq!(r.resolved_version, "2.0");
+    assert_eq!(r.conflicting_atom, "=dev-libs/souprov-1.0:0/1");
+    assert_eq!(r.instances.len(), 2);
+    assert!(!r.instances[0].installed);
+    assert_eq!(r.instances[0].version, "2.0");
+    assert!(r.instances[1].installed);
+    assert_eq!(r.instances[1].version, "1.0");
+    let parents: Vec<&str> = r.instances[1]
+        .parents
+        .iter()
+        .map(|p| p.parent_cpv.as_str())
+        .collect();
+    assert_eq!(parents, vec!["dev-libs/conpkg-1.0:3/0::testrepo"]);
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// A `New` entry feeds the merge version like an `Upgrade` one.
 #[test]
 fn build_residual_reads_the_merge_version_from_a_new_entry() {
@@ -147,6 +179,88 @@ fn build_residual_keeps_the_highest_matching_installed() {
     });
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].instances[1].version, "1.0");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Between two matching installed versions the greater wins (Portage
+/// `matches[-1]`).
+#[test]
+fn build_residual_prefers_the_greatest_matching_installed() {
+    let dir = slotundo_temp_dir("161-resid-max");
+    let (repos, config, upgrade) = residual_161_setup(&dir);
+    let dr = dir.join("var/db/pkg/dev-libs/souprov-1.0-r1");
+    fs::create_dir_all(&dr).unwrap();
+    fs::write(dr.join("CATEGORY"), "dev-libs\n").unwrap();
+    fs::write(dr.join("SLOT"), "0/1\n").unwrap();
+    fs::write(dr.join("repository"), "testrepo\n").unwrap();
+    let mut pin = residual_161_pin();
+    pin.atom = ">=dev-libs/souprov-1.0:0/1".to_string();
+    pin.raw_atom = pin.atom.clone();
+    let out = build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
+        repos: &repos,
+        config: &config,
+        root: &dir,
+        entries: &[upgrade],
+        slot_pullers: &HashMap::new(),
+        dropped: &[pin],
+    });
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].instances[1].version, "1.0-r1");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Puller atoms file by version match and USE satisfaction,
+/// deduplicated per side.
+#[test]
+fn build_residual_files_puller_parents_by_version_and_use() {
+    let dir = slotundo_temp_dir("161-resid-pull");
+    let (repos, config, upgrade) = residual_161_setup(&dir);
+    let row = |atom: &str| {
+        (
+            "dev-libs".to_string(),
+            "sounneed".to_string(),
+            "1.0".to_string(),
+            atom.to_string(),
+        )
+    };
+    let pullers: SlotPullers = HashMap::from([(
+        ("dev-libs".to_string(), "souprov".to_string()),
+        vec![
+            row("=dev-libs/souprov-2.0"),
+            row("=dev-libs/souprov-2.0"),
+            row("=dev-libs/souprov-1.0"),
+            row("=dev-libs/souprov-1.0"),
+            row("=dev-libs/souprov-2.0[no_such_flag_xyz]"),
+            row("=dev-libs/souprov-1.0[no_such_flag_xyz]"),
+            row("<dev-libs/souprov-0.1"),
+        ],
+    )]);
+    let out = build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
+        repos: &repos,
+        config: &config,
+        root: &dir,
+        entries: &[upgrade],
+        slot_pullers: &pullers,
+        dropped: &[residual_161_pin()],
+    });
+    assert_eq!(out.len(), 1);
+    let merge_atoms: Vec<&str> = out[0].instances[0]
+        .parents
+        .iter()
+        .map(|p| p.atom.as_str())
+        .collect();
+    let inst_atoms: Vec<&str> = out[0].instances[1]
+        .parents
+        .iter()
+        .map(|p| p.atom.as_str())
+        .collect();
+    assert_eq!(merge_atoms, vec!["=dev-libs/souprov-2.0"]);
+    // The puller plus the dropped pin itself, folded in after the
+    // pullers.
+    assert_eq!(
+        inst_atoms,
+        vec!["=dev-libs/souprov-1.0", "=dev-libs/souprov-1.0:0/1"]
+    );
     let _ = fs::remove_dir_all(&dir);
 }
 
