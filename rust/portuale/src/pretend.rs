@@ -6954,7 +6954,12 @@ fn config_features_string(config: &portage_profile::Config) -> String {
     config_features_list(config).join(" ")
 }
 
-fn config_install_mask(config: &portage_profile::Config) -> (String, bool) {
+/// The resolved, merge-time `INSTALL_MASK` plus the `no{man,info,doc}`
+/// `FEATURES` fold -- real `preinst_mask()` (`bin/misc-functions.sh`).
+/// Shared with the remote-merge server (`run_remote_plan`, backlog #170),
+/// which resolves the client's placed config through this same function
+/// so a remote merge masks exactly what a local one would.
+pub(crate) fn config_install_mask(config: &portage_profile::Config) -> (String, bool) {
     let features = config_features_list(config);
     let configured = std::env::var("INSTALL_MASK")
         .ok()

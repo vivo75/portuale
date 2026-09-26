@@ -287,6 +287,16 @@ pub fn select_phases(defined_phases: &str, has_ebuild: bool, has_environment: bo
 /// `repo_position`): used only when the binpkg's own embedded metadata
 /// carries no `repository`/`REPO` key (the `--remote-binpkg` trial path
 /// passes `None`, honestly reporting the bytes as-is).
+/// `install_mask` / `install_mask_prunes_usr_share` are the resolve's own
+/// `config_install_mask` values for the placed config (the client's under
+/// `ConfigPlacement::Client`, the server's under `ConfigPlacement::Server`;
+/// empty on the `--remote-binpkg` trial path, which resolves no config):
+/// the same `ebuild_merge::apply_install_mask` the local `merge_binpkg`
+/// runs prunes the staged image *before* `collect_filemeta`, so the
+/// client's copy loop, CONTENTS and collision checks see the masked set
+/// exactly like real `vartree.py:4581` `treewalk` (mask before
+/// collision-protect, before `pkg_preinst`), and `build-info/INSTALL_MASK`
+/// rides the bundle into the vdb verbatim.
 /// `gpg` is the same merge-time signature policy `merge_binpkg` runs
 /// (see `crate::binpkg::GpgVerify`) -- the bundle stages exactly what
 /// the merge would see, verified the same way.
@@ -295,6 +305,8 @@ pub fn build_bundle(
     staging_tmp: &Path,
     repo_override: Option<&str>,
     gpg: &crate::binpkg::GpgVerify,
+    install_mask: &str,
+    install_mask_prunes_usr_share: bool,
 ) -> Result<StagedBundle, String> {
     let name = binpkg_path
         .file_name()
@@ -337,6 +349,30 @@ pub fn build_bundle(
     let image = unit.join("image");
     let build_info = unit.join("build-info");
     crate::binpkg::extract_binpkg(binpkg_path, &image, &build_info, gpg)?;
+
+    // Real `_emerge/Binpkg._start_task`: "Store the md5sum in the vdb."
+    // The same digest the local `merge_binpkg` records (whole binpkg
+    // file, `"{md5}\n"`), written into the staged `build-info/` so the
+    // client's verbatim `build-info/*` vdb copy lands it (backlog #170).
+    let binpkg_md5 = crate::ebuild_merge::md5_hex(binpkg_path)?;
+    std::fs::write(build_info.join("BINPKGMD5"), format!("{binpkg_md5}\n"))
+        .map_err(|e| format!("{}: {e}", build_info.join("BINPKGMD5").display()))?;
+
+    // Real `dblink.treewalk()`'s `preinst_mask` (`vartree.py:4581`,
+    // `bin/misc-functions.sh:373-387`): the same
+    // `ebuild_merge::apply_install_mask` the local merge runs prunes the
+    // staged image here -- before `collect_filemeta` below -- so the
+    // client's copy loop, CONTENTS and shadow pre-check all see the
+    // masked set, and `build-info/INSTALL_MASK` rides the bundle into
+    // the vdb verbatim when the resolved mask is non-empty (#170). A
+    // no-op with an empty mask (the `--remote-binpkg` trial path, which
+    // resolves no config, masks nothing and writes no file).
+    let mask_options = crate::ebuild_merge::MergeOptions {
+        install_mask: install_mask.to_string(),
+        install_mask_prunes_usr_share,
+        ..crate::ebuild_merge::MergeOptions::default()
+    };
+    crate::ebuild_merge::apply_install_mask(&image, &build_info, &mask_options)?;
 
     // Server-side `bzip2 -dc`: the client never needs bzip2 (plan §6).
     let saved_env = build_info.join("environment.bz2");
@@ -517,6 +553,8 @@ mod tests {
             &tmp,
             None,
             &crate::binpkg::GpgVerify::default(),
+            "",
+            false,
         )
         .expect("fixture tbz2 stages");
         assert_eq!(staged.manifest.cpv, "dev-libs/packagepkg-1.0");
@@ -559,6 +597,8 @@ mod tests {
             &tmp,
             Some("testrepo"),
             &crate::binpkg::GpgVerify::default(),
+            "",
+            false,
         )
         .expect("fixture tbz2 stages");
         assert_eq!(staged.manifest.repo, "testrepo");
@@ -569,9 +609,137 @@ mod tests {
             &tmp,
             Some("__unknown__"),
             &crate::binpkg::GpgVerify::default(),
+            "",
+            false,
         )
         .expect("fixture tbz2 stages");
         assert_eq!(staged.manifest.repo, "__unknown__");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #170: the bundle carries `build-info/BINPKGMD5` = the md5
+    /// of the binpkg file being shipped + `\n` (33 B) -- real
+    /// `_emerge/Binpkg.py:374` `_start_task` ("Store the md5sum in the
+    /// vdb"), the same digest the local `merge_binpkg` records. It rides
+    /// the bundle's `build-info/` into the vdb verbatim, so the tar must
+    /// carry it too.
+    #[test]
+    fn bundle_writes_binpkgmd5_of_the_shipped_binpkg() {
+        use md5::Digest as _;
+        let tmp = tempdir("binpkgmd5");
+        let binpkg = fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2");
+        let staged = build_bundle(
+            &binpkg,
+            &tmp,
+            None,
+            &crate::binpkg::GpgVerify::default(),
+            "",
+            false,
+        )
+        .expect("fixture tbz2 stages");
+        let bytes = std::fs::read(&binpkg).unwrap();
+        let expected = format!("{:x}\n", md5::Md5::digest(&bytes));
+        assert_eq!(expected.len(), 33, "real BINPKGMD5 is 33 B");
+        assert_eq!(
+            std::fs::read_to_string(tmp.join("packagepkg-1.0/build-info/BINPKGMD5")).unwrap(),
+            expected,
+        );
+        let listing = std::process::Command::new("tar")
+            .args(["-tf"])
+            .arg(&staged.tarball)
+            .output()
+            .expect("tar -tf runs");
+        assert!(listing.status.success());
+        let listing = String::from_utf8_lossy(&listing.stdout).into_owned();
+        assert!(
+            listing.contains("packagepkg-1.0/build-info/BINPKGMD5"),
+            "BINPKGMD5 must ride the bundle:\n{listing}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #170: with a non-empty resolved mask the bundle prunes the
+    /// staged image *before* `collect_filemeta` (via the same
+    /// `ebuild_merge::apply_install_mask` the local merge runs) and ships
+    /// `build-info/INSTALL_MASK` = value + `\n` -- real
+    /// `vartree.py:4581` `treewalk` running `preinst_mask`
+    /// (`bin/misc-functions.sh:373-387`) before collision-protect. The
+    /// fixture image ships `usr/share/packagepkg/hello.txt`, so an
+    /// anchored `/usr/share/packagepkg` mask must drop it from the image,
+    /// from `filemeta`, and from the tarball's image listing.
+    #[test]
+    fn bundle_applies_install_mask_before_filemeta() {
+        let tmp = tempdir("mask");
+        let staged = build_bundle(
+            &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+            &tmp,
+            None,
+            &crate::binpkg::GpgVerify::default(),
+            "/usr/share/packagepkg",
+            false,
+        )
+        .expect("fixture tbz2 stages");
+        assert_eq!(
+            std::fs::read_to_string(tmp.join("packagepkg-1.0/build-info/INSTALL_MASK")).unwrap(),
+            "/usr/share/packagepkg\n",
+        );
+        assert!(
+            !tmp.join("packagepkg-1.0/image/usr/share/packagepkg/hello.txt")
+                .exists(),
+            "masked file must be pruned from the staged image"
+        );
+        let filemeta = std::fs::read_to_string(tmp.join("packagepkg-1.0/filemeta")).unwrap();
+        assert!(
+            !filemeta.contains("hello.txt"),
+            "masked file must not reach filemeta:\n{filemeta}"
+        );
+        let listing = std::process::Command::new("tar")
+            .args(["-tf"])
+            .arg(&staged.tarball)
+            .output()
+            .expect("tar -tf runs");
+        assert!(listing.status.success());
+        let listing = String::from_utf8_lossy(&listing.stdout).into_owned();
+        assert!(
+            listing.contains("packagepkg-1.0/build-info/INSTALL_MASK"),
+            "INSTALL_MASK must ride the bundle:\n{listing}"
+        );
+        assert!(
+            !listing.contains("hello.txt"),
+            "masked file must not ride the bundle:\n{listing}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #170: with an empty mask nothing is pruned and no
+    /// `INSTALL_MASK` file ships -- real's own `[[ -n ${x} ]] && echo …
+    /// `> INSTALL_MASK` gate in `preinst_mask`.
+    #[test]
+    fn bundle_empty_mask_prunes_nothing_and_writes_no_file() {
+        let tmp = tempdir("mask-empty");
+        let _staged = build_bundle(
+            &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+            &tmp,
+            None,
+            &crate::binpkg::GpgVerify::default(),
+            "",
+            false,
+        )
+        .expect("fixture tbz2 stages");
+        assert!(
+            tmp.join("packagepkg-1.0/image/usr/share/packagepkg/hello.txt")
+                .is_file(),
+            "empty mask must leave the image alone"
+        );
+        let filemeta = std::fs::read_to_string(tmp.join("packagepkg-1.0/filemeta")).unwrap();
+        assert!(
+            filemeta.contains("hello.txt"),
+            "unmasked file must reach filemeta:\n{filemeta}"
+        );
+        assert!(
+            !tmp.join("packagepkg-1.0/build-info/INSTALL_MASK").exists(),
+            "empty mask must write no INSTALL_MASK file"
+        );
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

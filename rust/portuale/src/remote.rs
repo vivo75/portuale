@@ -1087,6 +1087,15 @@ pub(crate) fn run_remote_plan(
     let mut failures: Vec<(String, String)> = Vec::new();
     let mut skipped: Vec<String> = Vec::new();
     let mut merged: u32 = 0;
+    // Real `preinst_mask()` (`bin/misc-functions.sh`): the placed
+    // config's resolved `INSTALL_MASK` + the `no{man,info,doc}` FEATURES
+    // fold, through the same `pretend::config_install_mask` resolver the
+    // local merge uses -- so a remote merge masks exactly what a local
+    // one would (backlog #170). `ConfigPlacement::Client` resolves the
+    // pulled client `/etc/portage`; `ConfigPlacement::Server` the
+    // server's own (both are `config` here: the resolve already ran
+    // under `ConfigRootOverride` for the placed root).
+    let (install_mask, install_mask_prunes_usr_share) = crate::pretend::config_install_mask(config);
     for entry in entries {
         let version = match &entry.outcome {
             // #72 B3: a removal is not remotely merged (execution is a
@@ -1122,6 +1131,8 @@ pub(crate) fn run_remote_plan(
             control,
             &shadow,
             &server_ledger_base,
+            &install_mask,
+            install_mask_prunes_usr_share,
         );
         match unit {
             Ok(()) => {
@@ -1191,6 +1202,8 @@ fn run_one_remote_unit(
     control: Option<&std::path::Path>,
     shadow: &VdbShadow,
     server_ledger_base: &std::path::Path,
+    install_mask: &str,
+    install_mask_prunes_usr_share: bool,
 ) -> Result<(), String> {
     let binpkg_path = if entry.remote_binary {
         let (binrepo, record) = portage_repo::find_remote_binpkg(
@@ -1253,6 +1266,8 @@ fn run_one_remote_unit(
         Some(&ledger),
         Some(&ledger_entry.repo),
         Some(shadow),
+        install_mask,
+        install_mask_prunes_usr_share,
     )?;
     record_server_ledger(server_ledger_base, &ctx.hostname, &ledger_entry)?;
     Ok(())
@@ -1765,8 +1780,13 @@ pub(crate) fn check_binary_plan(entries: &[portage_repo::GraphEntry]) -> Result<
 /// One binpkg end to end (bundle, stream, unpack, phases, merge,
 /// postinst): shared by the `--remote-binpkg` path (no ledger, no
 /// shadow) and the resolve path (ledger per merged entry, shadow
-/// pre-check before anything ships). Prints the stage report lines;
+/// pre-check before anything ships). `install_mask` /
+/// `install_mask_prunes_usr_share` are the resolve's own
+/// `config_install_mask` values for the placed config; the trial path
+/// passes empty values (it resolves no config, so it masks nothing and
+/// ships no `INSTALL_MASK` -- backlog #170). Prints the stage report lines;
 /// `Ok(cpv)` is the merged `category/package-version`.
+#[allow(clippy::too_many_arguments)]
 fn run_binpkg_flow(
     ctx: &RemoteContext,
     control: Option<&std::path::Path>,
@@ -1774,6 +1794,8 @@ fn run_binpkg_flow(
     ledger: Option<&LedgerSpec>,
     repo_override: Option<&str>,
     shadow: Option<&VdbShadow>,
+    install_mask: &str,
+    install_mask_prunes_usr_share: bool,
 ) -> Result<String, String> {
     let staging = std::env::temp_dir().join(format!(
         "portuale-remote-bundle-{}-{}",
@@ -1791,6 +1813,8 @@ fn run_binpkg_flow(
         &staging,
         repo_override,
         &crate::binpkg::GpgVerify::from_env(),
+        install_mask,
+        install_mask_prunes_usr_share,
     ) {
         Ok(staged) => staged,
         Err(message) => {
@@ -1984,7 +2008,10 @@ fn run_bundle_stage(
         eprintln!("mrg: --remote-binpkg {}: not found", binpkg_path.display());
         return ExitCode::from(1);
     }
-    match run_binpkg_flow(ctx, control, binpkg_path, None, None, None) {
+    // The trial path resolves no config (`run_remote` never runs the
+    // resolver), so there is no placed config to read `INSTALL_MASK`
+    // from: mask nothing, ship no `INSTALL_MASK` (backlog #170).
+    match run_binpkg_flow(ctx, control, binpkg_path, None, None, None, "", false) {
         Ok(_) => ExitCode::from(0),
         Err(message) => {
             eprintln!("{message}");
@@ -3136,6 +3163,8 @@ mod tests {
             &staging,
             None,
             &crate::binpkg::GpgVerify::default(),
+            "",
+            false,
         )
         .expect("fixture tbz2 stages");
         // Simulate the streamed file, truncated to half its bytes.
@@ -3169,6 +3198,95 @@ mod tests {
         );
         // Nothing unpacked: the gate runs before tar.
         assert!(!unit.join("image").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #170: end to end through the real `MERGE_FLOW` -- a bundle
+    /// built with a non-empty resolved mask merges without the masked
+    /// files (not on the root, not in the vdb `CONTENTS`), while the
+    /// merge-time aux files land in `var/db/pkg/<cat>/<pf>/`: real
+    /// `_emerge/Binpkg.py:374` (`BINPKGMD5`) and `vartree.py:4581`
+    /// `preinst_mask` (`INSTALL_MASK`). The fixture image ships
+    /// `usr/share/packagepkg/hello.txt`, so the anchored
+    /// `/usr/share/packagepkg` mask stands in for the bed's
+    /// `/usr/share/porttest/im/...` mask.
+    #[test]
+    fn remote_merge_masks_image_and_lands_aux_files_in_vdb() {
+        use md5::Digest as _;
+
+        let tmp = std::env::temp_dir().join(format!(
+            "portuale-remote-mask-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let binpkg = fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2");
+        let staging = tmp.join("staging");
+        std::fs::create_dir_all(&staging).unwrap();
+        let staged = crate::remote_bundle::build_bundle(
+            &binpkg,
+            &staging,
+            None,
+            &crate::binpkg::GpgVerify::default(),
+            "/usr/share/packagepkg",
+            false,
+        )
+        .expect("fixture tbz2 stages");
+        // Deliver the bundle the way the stream would, then run the real
+        // unpack driver.
+        let work = tmp.join("work");
+        let unit = work.join("packagepkg-1.0");
+        std::fs::create_dir_all(&unit).unwrap();
+        std::fs::copy(&staged.tarball, unit.join("bundle.tar")).unwrap();
+        let script = unpack_script(work.to_str().unwrap(), "packagepkg-1.0", staged.byte_count);
+        let output = std::process::Command::new("bash")
+            .args(["-s"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write as _;
+                child.stdin.take().unwrap().write_all(script.as_bytes())?;
+                child.wait_with_output()
+            })
+            .expect("local bash runs the driver");
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        assert!(
+            output.status.success() && stdout.contains("UNPACK=ok"),
+            "unpack driver failed:\n{stdout}"
+        );
+        // Run the real merge driver against a scratch root.
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+        let ctx = local_ctx(root.to_str().unwrap(), work.to_str().unwrap());
+        let markers = run_merge_stage(&ctx, None, unit.to_str().unwrap(), &staged, None)
+            .expect("merge succeeds");
+        assert!(markers.iter().any(|m| m == "MERGE_COPY=ok"), "{markers:?}");
+        assert!(markers.iter().any(|m| m == "MERGE_VDB=ok"), "{markers:?}");
+        // The masked file merged nowhere: not on the root, not in CONTENTS.
+        assert!(
+            !root.join("usr/share/packagepkg/hello.txt").exists(),
+            "masked file must not reach the merged root"
+        );
+        let vdb = root.join("var/db/pkg/dev-libs/packagepkg-1.0");
+        let contents = std::fs::read_to_string(vdb.join("CONTENTS")).unwrap();
+        assert!(
+            !contents.contains("hello.txt"),
+            "masked file must not reach CONTENTS:\n{contents}"
+        );
+        // The merge-time aux files land in the vdb entry verbatim.
+        let bytes = std::fs::read(&binpkg).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(vdb.join("BINPKGMD5")).unwrap(),
+            format!("{:x}\n", md5::Md5::digest(&bytes)),
+        );
+        assert_eq!(
+            std::fs::read_to_string(vdb.join("INSTALL_MASK")).unwrap(),
+            "/usr/share/packagepkg\n",
+        );
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

@@ -1622,7 +1622,11 @@ fn md5_hex_bytes(data: &[u8]) -> String {
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn md5_hex(path: &Path) -> Result<String, String> {
+/// Hex MD5 of a file's bytes. Shared with the remote-merge server
+/// (`remote_bundle::build_bundle` writes `build-info/BINPKGMD5`, backlog
+/// #170): the same digest the local `merge_binpkg` records, so a later
+/// index rebuild sees a still-current instance either way.
+pub(crate) fn md5_hex(path: &Path) -> Result<String, String> {
     let data = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(md5_hex_bytes(&data))
 }
@@ -2215,7 +2219,15 @@ fn write_vdb_entry(
 /// wholesale like every other build-info file). A no-op with an empty
 /// mask -- and then no `INSTALL_MASK` file, matching real's own
 /// `[[ -n ${x} ]] && echo … > INSTALL_MASK`.
-fn apply_install_mask(d: &Path, build_info: &Path, options: &MergeOptions) -> Result<(), String> {
+///
+/// Shared with the remote-merge server (`remote_bundle::build_bundle`,
+/// backlog #170): the bundle is staged from the same extraction, so the
+/// mask must prune the same image before `collect_filemeta` runs.
+pub(crate) fn apply_install_mask(
+    d: &Path,
+    build_info: &Path,
+    options: &MergeOptions,
+) -> Result<(), String> {
     let value = options.install_mask.trim();
     if value.is_empty() {
         return Ok(());
