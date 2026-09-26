@@ -42000,6 +42000,14 @@ mod tests {
             pkg.use_flags_display,
             vec![("wantdep".to_string(), false)]
         );
+        // The same-slot same-sub installed instance is not its own
+        // oldbest: the `Reinstall` filter keeps only *other*
+        // slot/sub instances (a reinstall in place supersedes, not
+        // coexists).
+        assert!(
+            pkg.oldbest.is_empty(),
+            "an in-place reinstall records no oldbest"
+        );
         assert_eq!(
             pkg.use_expand_display_p,
             vec![("USE".to_string(), "-wantdep%".to_string())]
@@ -42805,6 +42813,17 @@ mod tests {
             !names.contains(&"buildonlydep"),
             "build-time keys stay out without --with-bdeps"
         );
+        // The blanking twin: the recorded merge-order edges skip the
+        // build-time dep too.
+        let parent = pass
+            .entries
+            .iter()
+            .find(|e| e.package == "binparent")
+            .expect("parent merges");
+        assert!(
+            !parent.deps.iter().any(|d| d.package == "buildonlydep"),
+            "the blanked build-time dep stays out of the edges too"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -43292,6 +43311,16 @@ mod tests {
         assert!(
             !parent.deps.iter().any(|d| d.package == "rundep"),
             "the blanked run-time dep stays out of the edges too"
+        );
+        // ... and the queue tags the kept dep build-time-hard (no
+        // installed provider, no run-time alternative).
+        assert_eq!(
+            pass.edge_kind_map.get(&(
+                ("dev-libs".to_string(), "builddep".to_string()),
+                ("dev-libs".to_string(), "bpkgparent".to_string())
+            )),
+            Some(&(true, false)),
+            "the build-time edge is hard, not soft"
         );
         let _ = fs::remove_dir_all(&dir);
     }
