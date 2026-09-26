@@ -1180,6 +1180,27 @@ fn blocker_161_repo_config(repo: PathBuf) -> RepoConfig {
     }
 }
 
+fn blocker_161_repo(base: &Path) -> Vec<RepoConfig> {
+    let repo = base.join("repo");
+    blocker_161_write_pkg(Blocker161WritePkgArgs {
+        repo: &repo,
+        cp: "dev-libs/victim",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "",
+    });
+    blocker_161_write_pkg(Blocker161WritePkgArgs {
+        repo: &repo,
+        cp: "dev-libs/blockerparent",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "dev-libs/victim !dev-libs/victim",
+    });
+    vec![blocker_161_repo_config(repo)]
+}
+
 /// Arguments of [`blocker_161_scratch_repo`].
 struct Blocker161ScratchRepoArgs<'a> {
     base: &'a Path,

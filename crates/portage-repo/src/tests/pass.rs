@@ -68,6 +68,108 @@ fn run_pass_records_the_needer_othermod_slot_conflict() {
     let _ = fixture_root;
 }
 
+/// A runtime blocker on an installed package that stays put files a satisfied
+/// blocker row on it.
+#[test]
+fn run_pass_files_a_depend_blocker_row() {
+    let dir = slotundo_temp_dir("161-run-blk");
+    let repos = blocker_161_repo(&dir);
+    // victim-1.0 stays installed while the parent merges around it.
+    let d = dir.join("var/db/pkg/dev-libs/victim-1.0");
+    fs::create_dir_all(&d).unwrap();
+    fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+    fs::write(d.join("SLOT"), "0\n").unwrap();
+    fs::write(d.join("repository"), "testrepo\n").unwrap();
+    fs::write(d.join("USE"), "\n").unwrap();
+    let config = test_config();
+    let atoms = vec!["dev-libs/blockerparent".to_string()];
+    let opts = CtxOpts161 {
+        backtrack_max: 10,
+        atoms: atoms.clone(),
+        ..Default::default()
+    };
+    let ctx = ctx_161(&dir, &config, repos, &opts);
+    let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+    // The soft block files on the merging parent; the installed
+    // victim gains the uninstall-model row beside its installed one.
+    let parent = pass
+        .entries
+        .iter()
+        .find(|e| e.package == "blockerparent")
+        .expect("parent merges");
+    assert_eq!(parent.blockers.len(), 1);
+    assert_eq!(parent.blockers[0].atom_str, "!dev-libs/victim");
+    assert!(!parent.blockers[0].strong);
+    assert_eq!(parent.blockers[0].matched_version, "1.0");
+    assert!(
+        pass.entries
+            .iter()
+            .any(|e| e.package == "victim"
+                && matches!(e.outcome, PretendOutcome::Uninstall { .. })),
+        "the blocked installed instance gains an uninstall row"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Under `--nodeps` the all-installed blocker scan never runs.
+#[test]
+fn run_pass_nodeps_skips_the_unwalked_blocker_scan() {
+    let dir = slotundo_temp_dir("161-run-nodepsblk");
+    let mk = |name: &str, slot: &str, rdepend: &str| {
+        let d = dir.join("var/db/pkg/dev-libs").join(name);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+        fs::write(d.join("repository"), "testrepo\n").unwrap();
+        fs::write(d.join("USE"), "\n").unwrap();
+        if !rdepend.is_empty() {
+            fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+        }
+    };
+    // Unversioned: an op-less versioned blocker is ambiguous and rejected on
+    // both sides (Portage's `Atom` raises too).
+    mk("scanowner-1.0", "0", "!dev-libs/scanvictim");
+    mk("scanvictim-1.0", "0", "");
+    let scratch = blocker_161_scratch_repo(Blocker161ScratchRepoArgs {
+        base: &dir,
+        cp: "dev-libs/scanvictim",
+        pv: "2.0",
+        slot: "0",
+        depend: "",
+        rdepend: "",
+    });
+    let config = test_config();
+    let mut repos = find_repos(&fixtures_root()).expect("fixture repos");
+    repos.push(scratch);
+    let atoms = vec!["dev-libs/scanvictim".to_string()];
+    // The owner rides the required-set closure so a found blocker has a
+    // display home; without the `--nodeps` gate the scan would file rows.
+    let owner_closure: HashSet<(String, String)> =
+        HashSet::from([("dev-libs".to_string(), "scanowner".to_string())]);
+    let opts = CtxOpts161 {
+        backtrack_max: 10,
+        atoms: atoms.clone(),
+        update: true,
+        nodeps: true,
+        blocker_closure: owner_closure,
+        ..Default::default()
+    };
+    let ctx = ctx_161(&dir, &config, repos, &opts);
+    let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+    let victim = pass
+        .entries
+        .iter()
+        .find(|e| e.package == "scanvictim")
+        .expect("victim upgrades");
+    assert!(matches!(victim.outcome, PretendOutcome::Upgrade { .. }));
+    assert!(
+        victim.blockers.is_empty(),
+        "no scan runs under --nodeps, so no blocker rows file"
+    );
+    assert!(pass.orphan_blockers.is_empty());
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Top-level atoms matched by `package.provided` ride out sorted in argument
 /// order instead of resolving.
 #[test]
@@ -178,6 +280,31 @@ fn run_pass_with_test_deps_walks_test_conditionals() {
         testing.entries.iter().any(|e| e.package == "testonlydep"),
         "test? deps walk with the flag"
     );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A dependency nothing satisfies arms the missing-dep retry trigger.
+#[test]
+fn run_pass_arms_the_missing_dep_trigger() {
+    let dir = slotundo_temp_dir("161-run-missdep");
+    let repos = blocker_161_scratch_repo(Blocker161ScratchRepoArgs {
+        base: &dir,
+        cp: "dev-libs/depparent",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "dev-libs/nosuchdep",
+    });
+    let config = test_config();
+    let atoms = vec!["dev-libs/depparent".to_string()];
+    let opts = CtxOpts161 {
+        backtrack_max: 10,
+        atoms: atoms.clone(),
+        ..Default::default()
+    };
+    let ctx = ctx_161(&dir, &config, vec![repos], &opts);
+    let mut pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+    let _ = pass.missing_dep_trigger.take().expect("trigger armed");
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -319,6 +446,71 @@ fn run_pass_usepkg_selects_the_staged_binary() {
         "the staged binary wins over the ebuild"
     );
     assert_eq!(pass.entries[0].build_id.as_deref(), Some("abc123"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A binary candidate's build-time keys stay out of the walk without
+/// `--with-bdeps`.
+#[test]
+fn run_pass_binary_hides_buildtime_deps_without_bdeps() {
+    let dir = slotundo_temp_dir("161-run-binbdep");
+    let repos = blocker_161_scratch_repo(Blocker161ScratchRepoArgs {
+        base: &dir,
+        cp: "dev-libs/binparent",
+        pv: "1.0",
+        slot: "0",
+        depend: "dev-libs/buildonlydep",
+        rdepend: "dev-libs/runtimedep",
+    });
+    for (cp, pv) in [
+        ("dev-libs/buildonlydep", "1.0"),
+        ("dev-libs/runtimedep", "1.0"),
+    ] {
+        blocker_161_write_pkg(Blocker161WritePkgArgs {
+            repo: &repos.location,
+            cp,
+            pv,
+            slot: "0",
+            depend: "",
+            rdepend: "",
+        });
+    }
+    let mut config = test_config();
+    config.scanned_binpkgs = Some(vec![HashMap::from([
+        ("CPV".to_string(), "dev-libs/binparent-1.0".to_string()),
+        ("SLOT".to_string(), "0".to_string()),
+        ("KEYWORDS".to_string(), "amd64".to_string()),
+        ("REPO".to_string(), "testrepo".to_string()),
+        ("BDEPEND".to_string(), "dev-libs/buildonlydep".to_string()),
+        ("RDEPEND".to_string(), "dev-libs/runtimedep".to_string()),
+    ])]);
+    let atoms = vec!["dev-libs/binparent".to_string()];
+    let opts = CtxOpts161 {
+        backtrack_max: 10,
+        atoms: atoms.clone(),
+        usepkg: true,
+        ..Default::default()
+    };
+    let ctx = ctx_161(&dir, &config, vec![repos], &opts);
+    let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+    let names: Vec<&str> = pass.entries.iter().map(|e| e.package.as_str()).collect();
+    assert!(names.contains(&"binparent"));
+    assert!(names.contains(&"runtimedep"));
+    assert!(
+        !names.contains(&"buildonlydep"),
+        "build-time keys stay out without --with-bdeps"
+    );
+    // The blanking twin: the recorded merge-order edges skip the
+    // build-time dep too.
+    let parent = pass
+        .entries
+        .iter()
+        .find(|e| e.package == "binparent")
+        .expect("parent merges");
+    assert!(
+        !parent.deps.iter().any(|d| d.package == "buildonlydep"),
+        "the blanked build-time dep stays out of the edges too"
+    );
     let _ = fs::remove_dir_all(&dir);
 }
 
