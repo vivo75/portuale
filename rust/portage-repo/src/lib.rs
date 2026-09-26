@@ -50713,22 +50713,23 @@ mod tests_165 {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// The highest-version guard does not depend on install order:
-    /// with 2.0 created *before* 1.0 the guard's `-> false` flip
-    /// (which protects whatever version the directory scan happened
-    /// to yield last) still prunes 1.0 here. Like the basic leg this
-    /// assumes the scan yields creation order on this host's tmpfs --
-    /// the S0 run corroborates it (the `-> true` flip is already
-    /// caught by the existing prune leg).
+    /// The highest-version guard does not depend on scan order: with
+    /// versions whose lexicographic and version orders disagree (9.0
+    /// sorts after 10.0 but compares lower), the guard's `-> false`
+    /// flip -- which protects whatever version the directory scan
+    /// happened to yield last -- protects 9.0 and prunes 10.0 here,
+    /// under either scan discipline (sorted readdir, which this host's
+    /// tmpfs yields, or creation order). The real comparison is
+    /// order-independent, so this leg is green either way.
     #[test]
     fn prune_cleanlist_protects_the_highest_regardless_of_install_order() {
         let root = dir_165("prune-reverse-order");
-        install_165(&root, "dev-libs", "aa-2.0", "0", &[]);
-        install_165(&root, "dev-libs", "aa-1.0", "0", &[]);
+        install_165(&root, "dev-libs", "aa-10.0", "0", &[]);
+        install_165(&root, "dev-libs", "aa-9.0", "0", &[]);
         let result = prune_cleanlist(&root, &[], &[], &[]);
         assert_eq!(
             result.cleanlist.iter().map(|p| p.cpv()).collect::<Vec<_>>(),
-            vec!["dev-libs/aa-1.0"]
+            vec!["dev-libs/aa-9.0"]
         );
         let _ = std::fs::remove_dir_all(&root);
     }
