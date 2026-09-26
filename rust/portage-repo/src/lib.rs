@@ -50682,4 +50682,147 @@ mod tests_165 {
         assert_eq!(order_names_165(&out), vec!["cc", "aa", "bb"]);
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    // ---- S6: `prune_cleanlist` (real `emerge --prune`'s selection:
+    // every non-highest version its args-set matches, minus whatever
+    // the dependency closure reaches). ----
+
+    /// Two versions, no dependents: the older is pruned, the result is
+    /// unordered, and nothing is kept or unresolved. (The whole-body
+    /// `Default` row does not compile -- tool-reported unviable.) The
+    /// `is_highest`/`is_candidate`/seed/cleanlist mutants
+    /// (which empty, swap, or flood the cleanlist), and the
+    /// `counts`/`multi_version` narrowings all fail here, as does the
+    /// highest-version guard's `!= Greater` -> `==` flip (which would
+    /// protect the lowest and prune 2.0 instead).
+    #[test]
+    fn prune_cleanlist_prunes_the_older_of_two_versions() {
+        let root = dir_165("prune-basic");
+        install_165(&root, "dev-libs", "aa-1.0", "0", &[]);
+        install_165(&root, "dev-libs", "aa-2.0", "0", &[]);
+        install_165(&root, "dev-libs", "bb-1.0", "0", &[]);
+        let result = prune_cleanlist(&root, &[], &[], &[]);
+        assert_eq!(
+            result.cleanlist.iter().map(|p| p.cpv()).collect::<Vec<_>>(),
+            vec!["dev-libs/aa-1.0"]
+        );
+        assert!(!result.ordered);
+        assert_eq!(result.required_count, 2);
+        assert!(result.kept_parents.is_empty());
+        assert!(result.unresolved.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The highest-version guard does not depend on install order:
+    /// with 2.0 created *before* 1.0 the guard's `-> false` flip
+    /// (which protects whatever version the directory scan happened
+    /// to yield last) still prunes 1.0 here. Like the basic leg this
+    /// assumes the scan yields creation order on this host's tmpfs --
+    /// the S0 run corroborates it (the `-> true` flip is already
+    /// caught by the existing prune leg).
+    #[test]
+    fn prune_cleanlist_protects_the_highest_regardless_of_install_order() {
+        let root = dir_165("prune-reverse-order");
+        install_165(&root, "dev-libs", "aa-2.0", "0", &[]);
+        install_165(&root, "dev-libs", "aa-1.0", "0", &[]);
+        let result = prune_cleanlist(&root, &[], &[], &[]);
+        assert_eq!(
+            result.cleanlist.iter().map(|p| p.cpv()).collect::<Vec<_>>(),
+            vec!["dev-libs/aa-1.0"]
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Explicit versioned args: `=dev-libs/aa-2.0` matches only 2.0
+    /// (which is highest, so nothing is pruned). The args
+    /// `category`/`package` flips and the match `delete !` (which
+    /// unmatch everything) fail the companion assertion; the outer
+    /// `&&` -> `||` (which also matches 1.0 by its bare cp, pruning
+    /// it) fails here.
+    #[test]
+    fn prune_cleanlist_honours_versioned_atoms_in_args() {
+        let root = dir_165("prune-args");
+        install_165(&root, "dev-libs", "aa-1.0", "0", &[]);
+        install_165(&root, "dev-libs", "aa-2.0", "0", &[]);
+        let matched = prune_cleanlist(&root, &["dev-libs/aa".to_string()], &[], &[]);
+        assert_eq!(
+            matched
+                .cleanlist
+                .iter()
+                .map(|p| p.cpv())
+                .collect::<Vec<_>>(),
+            vec!["dev-libs/aa-1.0"]
+        );
+        let pinned = prune_cleanlist(&root, &["=dev-libs/aa-2.0".to_string()], &[], &[]);
+        assert!(pinned.cleanlist.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A keeper pins the old version through the dependency walk: with
+    /// `keeper` RDEPENDing the unversioned cp, both versions are
+    /// reached and nothing is pruned. The `matches_atom` narrowings
+    /// (which blind the walk) and the cleanlist `||`/`&&` flips fail
+    /// here.
+    #[test]
+    fn prune_cleanlist_keeps_a_version_reached_through_the_walk() {
+        let root = dir_165("prune-keeper");
+        install_165(&root, "dev-libs", "aa-1.0", "0", &[]);
+        install_165(
+            &root,
+            "dev-libs",
+            "aa-2.0",
+            "0",
+            &[("RDEPEND", "dev-libs/keeper")],
+        );
+        install_165(
+            &root,
+            "dev-libs",
+            "keeper-1.0",
+            "0",
+            &[("RDEPEND", "dev-libs/aa")],
+        );
+        let result = prune_cleanlist(&root, &[], &[], &[]);
+        assert!(result.cleanlist.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `kept_parents` names the keeper for every kept version it reaches:
+    /// `keeper` pins the whole `aa` cp, so both `aa-1.0` and `aa-2.0`
+    /// are kept with the same parent line, while single-version `bb`
+    /// (unmatched by the empty-args set) stays out even though the
+    /// walk records an edge into it. The `kept_parents` `delete !`
+    /// (which reports nothing) fails here, and the `multi_version`
+    /// `>=` widening (which would additionally keep `bb` with its own
+    /// parent line) fails on the exact row count.
+    #[test]
+    fn prune_cleanlist_reports_the_keeper_of_a_kept_version() {
+        let root = dir_165("prune-kept-parents");
+        install_165(&root, "dev-libs", "aa-1.0", "0", &[]);
+        install_165(
+            &root,
+            "dev-libs",
+            "aa-2.0",
+            "0",
+            &[("RDEPEND", "dev-libs/bb")],
+        );
+        install_165(&root, "dev-libs", "bb-1.0", "0", &[]);
+        install_165(
+            &root,
+            "dev-libs",
+            "keeper-1.0",
+            "0",
+            &[("RDEPEND", "dev-libs/aa")],
+        );
+        let result = prune_cleanlist(&root, &[], &[], &[]);
+        assert!(result.cleanlist.is_empty());
+        assert_eq!(result.kept_parents.len(), 2);
+        for (i, ver) in ["dev-libs/aa-1.0", "dev-libs/aa-2.0"].iter().enumerate() {
+            assert_eq!(result.kept_parents[i].0.cpv(), ver.to_string());
+            assert_eq!(
+                result.kept_parents[i].1,
+                vec!["dev-libs/keeper-1.0 requires dev-libs/aa".to_string()]
+            );
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
