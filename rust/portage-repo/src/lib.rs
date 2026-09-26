@@ -39425,6 +39425,408 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// Backlog #161 S1: `is_built_slot_op` is real's
+    /// `Atom.slot_operator_built` gate -- a *built* `=` atom naming both
+    /// slot and sub-slot. Each conjunct is load-bearing: `:=` (no slot),
+    /// `:2=` (no sub-slot) and `:2` (no operator) are all *not* built
+    /// ops, and the companion normaliser strips the slot binding only
+    /// for a built op.
+    #[test]
+    fn is_built_slot_op_requires_equals_operator_and_both_slots() {
+        let built = |s: &str| {
+            let atom = portage_dep::parse_atom(s).expect("test atom parses");
+            is_built_slot_op(&atom)
+        };
+        assert!(built("dev-libs/bar:2/2="));
+        assert!(!built("dev-libs/bar:="));
+        assert!(!built("dev-libs/bar:2="));
+        assert!(!built("dev-libs/bar:2"));
+        assert!(!built("dev-libs/bar"));
+
+        let norm = |s: &str| {
+            let atom = portage_dep::parse_atom(s).expect("test atom parses");
+            reverse_dep_constraint_atom(s, &atom)
+        };
+        assert_eq!(norm("dev-libs/bar:2/2="), "dev-libs/bar");
+        assert_eq!(norm("dev-libs/bar:2/2=[x]"), "dev-libs/bar");
+        assert_eq!(norm("dev-libs/bar:2"), "dev-libs/bar:2");
+        assert_eq!(norm("dev-libs/bar"), "dev-libs/bar");
+    }
+
+    /// Backlog #161 S1: a `Reinstall` parent counts toward the scan's
+    /// `new_slot` map (the `Upgrade | Downgrade | Reinstall` arm), and
+    /// the skip predicate's clauses each suppress independently: an
+    /// `undone` consumer, and a consumer outside `reachable` while the
+    /// reachable set is non-empty.
+    #[test]
+    fn slot_operator_rebuild_scan_reinstall_parent_and_skip_clauses() {
+        let dir = slotundo_temp_dir("161-scan");
+        let d = dir.join("var/db/pkg/dev-libs/stale-1.0");
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        fs::write(d.join("SLOT"), "0\n").unwrap();
+        fs::write(d.join("RDEPEND"), "dev-libs/bar:2/2=\n").unwrap();
+        let bar_reinstall = GraphEntry {
+            discovery: 0,
+            category: "dev-libs".into(),
+            package: "bar".into(),
+            outcome: PretendOutcome::Reinstall {
+                version: "2.0".into(),
+                changed_flags: Vec::new(),
+                deps_changed: false,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: false,
+                slot_operator_rebuild: false,
+            },
+            slot: Some("2".into()),
+            sub_slot: Some("9".into()),
+            ..graph_entry("dev-libs", "bar", "2.0")
+        };
+        let stale = ("dev-libs".to_string(), "stale".to_string());
+        let reach: HashSet<(String, String)> = HashSet::from([stale.clone()]);
+        let empty: BTreeSet<(String, String)> = BTreeSet::new();
+        // The Reinstall parent feeds `new_slot`, so the stale `:2/2=`
+        // binding schedules a rebuild.
+        let (scheduled, abi) = slot_operator_rebuild_scan(
+            &dir,
+            &[],
+            std::slice::from_ref(&bar_reinstall),
+            &reach,
+            &empty,
+            &empty,
+            true,
+        );
+        assert_eq!(scheduled, BTreeSet::from([stale.clone()]));
+        assert_eq!(
+            abi,
+            vec![(
+                "dev-libs/bar-2.0".to_string(),
+                "dev-libs/stale-1.0".to_string()
+            )]
+        );
+        // An `undone` consumer is skipped even though it is reachable.
+        let undone = BTreeSet::from([stale.clone()]);
+        let (done_sched, _) = slot_operator_rebuild_scan(
+            &dir,
+            &[],
+            std::slice::from_ref(&bar_reinstall),
+            &reach,
+            &empty,
+            &undone,
+            true,
+        );
+        assert!(done_sched.is_empty(), "`undone` suppresses the rebuild");
+        // A reachable set that omits the consumer suppresses the scan --
+        // the gate itself is non-empty, so the loop runs and skips.
+        let elsewhere: HashSet<(String, String)> =
+            HashSet::from([("dev-libs".to_string(), "other".to_string())]);
+        let (far_sched, _) = slot_operator_rebuild_scan(
+            &dir,
+            &[],
+            std::slice::from_ref(&bar_reinstall),
+            &elsewhere,
+            &empty,
+            &empty,
+            true,
+        );
+        assert!(
+            far_sched.is_empty(),
+            "unreachable consumers never schedule"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S1: the slot-change probe fires for an `Upgrade`
+    /// parent (bug 456208 is not `Reinstall`-only), while a slot-only
+    /// `:0` dep (no `=` operator) never probes -- it is not a
+    /// slot-operator atom at all.
+    #[test]
+    fn slot_operator_slot_change_probe_fires_for_upgrade_and_ignores_plain_slot_deps() {
+        use md5::Digest as _;
+        use std::fmt::Write as _;
+        let base = slotundo_temp_dir("161-probe");
+        let repo = base.join("repo");
+        let write_pkg = |cp: &str, pv: &str, slot: &str, rdepend: &str| {
+            let (cat, pkg) = cp.split_once('/').expect("category/package");
+            let dir = repo.join(cat).join(pkg);
+            std::fs::create_dir_all(&dir).unwrap();
+            let mut body = format!(
+                "EAPI=8\nDESCRIPTION=\"161 probe\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\n"
+            );
+            if !rdepend.is_empty() {
+                writeln!(body, "RDEPEND=\"{rdepend}\"").unwrap();
+            }
+            std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
+            let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+            let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=161 probe\nEAPI=8\n".to_string();
+            if !rdepend.is_empty() {
+                writeln!(entry, "RDEPEND={rdepend}").unwrap();
+            }
+            writeln!(entry, "KEYWORDS=amd64\nSLOT={slot}\n_md5_={md5}").unwrap();
+            let cachedir = repo.join("metadata/md5-cache").join(cat);
+            std::fs::create_dir_all(&cachedir).unwrap();
+            std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+        };
+        write_pkg("dev-libs/probeparentA", "1.0", "0", "dev-libs/probechild:=");
+        write_pkg("dev-libs/probeparentB", "1.0", "0", "dev-libs/probechild:0");
+        write_pkg("dev-libs/probechild", "2.0", "0/1", "");
+        let repos = vec![RepoConfig {
+            name: "testrepo".to_string(),
+            location: repo.clone(),
+            priority: 0,
+            is_main: true,
+            masters: vec![],
+            profile_formats: vec![],
+            cache_formats: vec![],
+            aliases: vec![],
+            sync_type: None,
+            sync_uri: None,
+            volatile: false,
+            module_specific_options: vec![],
+        }];
+        // Installed child moved: vdb SLOT 0/9 vs tree 0/1.
+        let vd = base.join("var/db/pkg/dev-libs/probechild-2.0");
+        std::fs::create_dir_all(&vd).unwrap();
+        std::fs::write(vd.join("CATEGORY"), "dev-libs\n").unwrap();
+        std::fs::write(vd.join("SLOT"), "0/9\n").unwrap();
+        std::fs::write(vd.join("repository"), "testrepo\n").unwrap();
+        let child = GraphEntry {
+            discovery: 0,
+            outcome: PretendOutcome::AlreadyInstalled {
+                version: "2.0".into(),
+            },
+            slot: Some("0".into()),
+            sub_slot: Some("9".into()),
+            ..graph_entry("dev-libs", "probechild", "2.0")
+        };
+        let child_cp = ("dev-libs".to_string(), "probechild".to_string());
+        let empty = BTreeSet::new();
+
+        // An `Upgrade` parent probes like a `Reinstall` one.
+        let upgrade_a = GraphEntry {
+            discovery: 0,
+            outcome: PretendOutcome::Upgrade {
+                from: "0.9".into(),
+                to: "1.0".into(),
+            },
+            slot: Some("0".into()),
+            sub_slot: Some("0".into()),
+            ..graph_entry("dev-libs", "probeparentA", "1.0")
+        };
+        let mut scheduled = BTreeSet::new();
+        slot_operator_slot_change_probe(
+            &base,
+            &repos,
+            &[upgrade_a, child.clone()],
+            &empty,
+            &mut scheduled,
+        );
+        assert_eq!(
+            scheduled,
+            BTreeSet::from([child_cp.clone()]),
+            "an Upgrade parent probes the moved child"
+        );
+
+        // A plain `:0` dep is not a slot-operator atom: no probe.
+        let new_b = graph_entry("dev-libs", "probeparentB", "1.0");
+        let mut scheduled_b = BTreeSet::new();
+        slot_operator_slot_change_probe(
+            &base,
+            &repos,
+            &[new_b, child],
+            &empty,
+            &mut scheduled_b,
+        );
+        assert!(
+            scheduled_b.is_empty(),
+            "a slot-only dep without `=` never probes"
+        );
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// Backlog #161 S1: one token of the S4 binder. A same-category
+    /// entry for another package never binds this token; `New` and
+    /// `Reinstall` entries bind before the installed fallback; and of
+    /// several same-cp entries the greatest version wins.
+    #[test]
+    fn bind_slot_operator_token_prefers_graph_entries_then_installed() {
+        let dir = slotundo_temp_dir("161-bind");
+        let d = dir.join("var/db/pkg/dev-libs/bar-1.0");
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        fs::write(d.join("SLOT"), "0/3\n").unwrap();
+        let new_entry = |package: &str, version: &str, slot: &str, sub: &str| GraphEntry {
+            discovery: 0,
+            category: "dev-libs".into(),
+            package: package.into(),
+            outcome: PretendOutcome::New {
+                version: version.into(),
+            },
+            slot: Some(slot.into()),
+            sub_slot: Some(sub.into()),
+            ..graph_entry("dev-libs", package, version)
+        };
+        // Same category, other package: skipped, so the installed
+        // `bar-1.0` (0/3) binds.
+        assert_eq!(
+            bind_slot_operator_token(
+                "dev-libs/bar:=",
+                &[new_entry("baz", "2.0", "9", "9")],
+                &dir
+            ),
+            "dev-libs/bar:0/3="
+        );
+        // Graph entries beat the installed instance ...
+        assert_eq!(
+            bind_slot_operator_token(
+                "dev-libs/bar:=",
+                &[new_entry("bar", "2.0", "5", "5")],
+                &dir
+            ),
+            "dev-libs/bar:5/5="
+        );
+        // ... and the greatest same-cp version wins.
+        assert_eq!(
+            bind_slot_operator_token(
+                "dev-libs/bar:=",
+                &[new_entry("bar", "2.0", "2", "2"), new_entry("bar", "1.0", "0", "1")],
+                &dir
+            ),
+            "dev-libs/bar:2/2="
+        );
+        // A `Reinstall` entry binds the same way a `New` one does.
+        let reinstall = GraphEntry {
+            discovery: 0,
+            category: "dev-libs".into(),
+            package: "bar".into(),
+            outcome: PretendOutcome::Reinstall {
+                version: "2.0".into(),
+                changed_flags: Vec::new(),
+                deps_changed: false,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: false,
+                slot_operator_rebuild: false,
+            },
+            slot: Some("5".into()),
+            sub_slot: Some("5".into()),
+            ..graph_entry("dev-libs", "bar", "2.0")
+        };
+        assert_eq!(
+            bind_slot_operator_token("dev-libs/bar:=", &[reinstall], &dir),
+            "dev-libs/bar:5/5="
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S1: the eliminate path's replace-cp lookup matches
+    /// the cp being decided -- a decoy installed package of the *same*
+    /// category that sorts first never satisfies it -- and a pin filed
+    /// for another cp never filters into this cp's parent match.
+    #[test]
+    fn slot_operator_eliminate_rebuilds_lookup_matches_the_replace_cp() {
+        let dir = slotundo_temp_dir("161-elim");
+        slotundo_vdb(
+            &dir,
+            "sounneed",
+            "1.0",
+            "0/1",
+            "soflag? ( dev-libs/souprov:0/1= )",
+            "",
+        );
+        slotundo_vdb(&dir, "souprov", "1.0", "0/1", "", "");
+        // Same category, sorts first, different package and version: a
+        // loosened lookup (`||`, `!=`) lands here and rule 1 (version)
+        // keeps the rebuild, while the exact lookup walks past it to
+        // `sounneed` and rule 8 demotes.
+        let decoy = dir.join("var/db/pkg/dev-libs/aadecoy-9.9");
+        fs::create_dir_all(&decoy).unwrap();
+        fs::write(decoy.join("CATEGORY"), "dev-libs\n").unwrap();
+        fs::write(decoy.join("SLOT"), "0\n").unwrap();
+        let repos = find_repos(&fixtures_root()).expect("fixture repos");
+        let provider = slotundo_provider_entry();
+        let entry = slotundo_rebuild_entry("sounneed", "1.0", "0", "1", &[("soflag", false)]);
+        let sounneed = ("dev-libs".to_string(), "sounneed".to_string());
+        let other_pin = RevDepPin {
+            cp: ("app-arch".to_string(), "aadecoy".to_string()),
+            atom: "=app-arch/aadecoy-1.0".to_string(),
+            raw_atom: "=app-arch/aadecoy-1.0".to_string(),
+            consumer: (
+                "app-arch".to_string(),
+                "aadecoy".to_string(),
+                "9.9".to_string(),
+            ),
+        };
+        let demoted = slot_operator_eliminate_rebuilds(
+            &dir,
+            &repos,
+            &[provider, entry],
+            &BTreeSet::from([sounneed.clone()]),
+            &HashMap::from([(
+                sounneed.clone(),
+                vec!["dev-libs/sounneed".to_string()],
+            )]),
+            &[other_pin],
+            false,
+            false,
+            &HashSet::new(),
+            false,
+        );
+        assert_eq!(
+            demoted,
+            BTreeSet::from([sounneed]),
+            "rule 8 demotes with a decoy installed and a foreign pin present"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S1: the S3 synthesiser entry lands at the *tree*
+    /// ebuild's slot for the installed version (`souprov-1.0` is 0/1;
+    /// 2.0's 0/2 must not leak in), carries no `[oldver]` bracket when
+    /// the slots agree, and records the vdb repository.
+    #[test]
+    fn slot_operator_rebuild_entries_use_the_consumer_tree_slot_and_repo() {
+        let dir = slotundo_temp_dir("161-entries");
+        let d = dir.join("var/db/pkg/dev-libs/souprov-1.0");
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        fs::write(d.join("SLOT"), "0/1\n").unwrap();
+        fs::write(d.join("RDEPEND"), "dev-libs/bar:2/2=\n").unwrap();
+        fs::write(d.join("repository"), "testrepo\n").unwrap();
+        let repos = find_repos(&fixtures_root()).expect("fixture repos");
+        let bar_upgrade = GraphEntry {
+            discovery: 0,
+            category: "dev-libs".into(),
+            package: "bar".into(),
+            outcome: PretendOutcome::Upgrade {
+                from: "1.0".into(),
+                to: "2.0".into(),
+            },
+            slot: Some("2".into()),
+            sub_slot: Some("9".into()),
+            ..graph_entry("dev-libs", "bar", "2.0")
+        };
+        let reach: HashSet<(String, String)> =
+            HashSet::from([("dev-libs".to_string(), "souprov".to_string())]);
+        let (out, _) = slot_operator_rebuild_entries(
+            &dir,
+            &repos,
+            std::slice::from_ref(&bar_upgrade),
+            &reach,
+            true,
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].slot.as_deref(), Some("0"));
+        assert_eq!(out[0].sub_slot.as_deref(), Some("1"));
+        assert!(
+            out[0].oldbest.is_empty(),
+            "same slot: no [oldver] bracket"
+        );
+        assert_eq!(out[0].repo_name.as_deref(), Some("testrepo"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     /// recordered `USE`.
     fn slotundo_vdb(
         dir: &Path,
