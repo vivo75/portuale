@@ -1998,17 +1998,23 @@ fn run_bundle_stage(
 /// Real `eapi_exports_merge_type` (`lib/portage/eapi.py:63`, attrs table
 /// `:300`: `exports_merge_type = eapi >= Eapi("4")`): `MERGE_TYPE` reaches
 /// the phase env only for EAPI 4+ (real `config.py:3335-3336` pops it
-/// otherwise). An unparseable EAPI takes real's `_get_eapi_attrs(None)`
-/// fallback row, which also exports (`eapi.py:258`).
+/// otherwise). An unsupported or unparseable EAPI takes real's
+/// `_get_eapi_attrs` fallback row (`eapi.py:247-258`), which exports.
 fn eapi_exports_merge_type(eapi: &str) -> bool {
-    match eapi.split('-').next().unwrap_or("").parse::<i64>() {
+    // Real tests the *whole* string against `_supported_eapis`; anything
+    // that is not a plain supported number (e.g. `3-foo`) takes the
+    // exporting fallback row.
+    match eapi.trim().parse::<u32>() {
         Ok(n) => n >= 4,
         Err(_) => true,
     }
 }
 
-/// Shared `export` block for any hook run (new phases in `phase_script`,
-/// old prerm/postrm inside the merge driver): path overrides with
+/// `export` block for the new instance's phase script (`phase_script`;
+/// the replaced instance's prerm/postrm go through the merge driver's own
+/// `run_old_hook`, which deliberately exports no `MERGE_TYPE`: real's
+/// unmerge re-creates the old instance's settings, `vartree.py:4535-4540`,
+/// and never passes through the scheduler that sets it): path overrides with
 /// caller-side values, everything else from the sourced saved env.
 /// `unit_bin` is the shipped runtime dir (`$UNIT/bin`,
 /// `$OLD_TMP/bin` symlink or copy -- callers decide).
@@ -3544,8 +3550,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// Positive pretend dispatch through the real stack: a synthetic unit
-    /// (hand-written ebuild + environment carrying `pkg_pretend`, the real
+    /// Backlog #172: `phase_exports` carries `MERGE_TYPE=binary` exactly
+    /// when real's `eapi_exports_merge_type` holds.
     #[test]
     fn phase_exports_gates_merge_type_on_eapi() {
         // Real `_emerge/Binpkg.py:92` sets `MERGE_TYPE=binary` for a binpkg
@@ -3596,6 +3602,11 @@ mod tests {
         assert!(eapi_exports_merge_type("8"));
         assert!(!eapi_exports_merge_type("0"));
         assert!(!eapi_exports_merge_type("3"));
+        assert!(!eapi_exports_merge_type("2"));
+        assert!(eapi_exports_merge_type("5"));
+        assert!(eapi_exports_merge_type("9"));
+        assert!(eapi_exports_merge_type("3-foo"));
+        assert!(eapi_exports_merge_type("bogus"));
         let exporting = exports_for("8");
         assert!(
             exporting.contains("export EBUILD_PHASE=setup EMERGE_FROM=binary MERGE_TYPE=binary\n"),
@@ -3612,6 +3623,8 @@ mod tests {
         );
     }
 
+    /// Positive pretend dispatch through the real stack: a synthetic unit
+    /// (hand-written ebuild + environment carrying `pkg_pretend`, the real
     /// shipped `bin/`) runs the generated phase script under local bash.
     /// Proves template + `ebuild.sh` + DEFINED_PHASES-agnostic dispatch;
     /// the ebuild/env being synthetic is the only unreal part.
