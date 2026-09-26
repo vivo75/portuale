@@ -49928,3 +49928,158 @@ mod tests_162 {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+/// Track U #165: `lib.rs` graph-input unit tests (mutation cluster 5) --
+/// walk/installed/vdb, merge-order, blockers, use.
+///
+/// Scratch-vdb / scratch-repo legs in the Phase 8 S2 style (own
+/// `dir_165` / `install_165` / `write_pkg_165` / `repo_165` / `entry_165`
+/// helpers copied from `tests_161`/`tests_162` -- not shared, so the
+/// other Track U branches' blocks rebase mechanically). Every test
+/// observes the function's own return value (returned vectors, the vdb
+/// fingerprint, filed conflicts, queued atoms) -- no end-to-end
+/// contract reproduction. Real-source grounding is real portage 3.0.82.2
+/// (`3rdparty/portage`): `vartree.dbapi` for the installed-set readers,
+/// `depgraph.py::_validate_blockers` for the blocker arms,
+/// `repository/config.py` for `find_repos_impl`, `output.py`'s unmerge
+/// ordering for `topological_removal_order`.
+#[cfg(test)]
+mod tests_165 {
+    use super::*;
+
+    /// Fresh unique scratch dir per test (vdb + repo live under it, so
+    /// the per-root memo caches -- `all_installed_packages`,
+    /// `installed_candidates` -- never see a reused path).
+    fn dir_165(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "portuale-165-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn install_165(root: &Path, cat: &str, pf: &str, slot: &str, files: &[(&str, &str)]) {
+        let d = root.join("var/db/pkg").join(cat).join(pf);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+        for (name, contents) in files {
+            std::fs::write(d.join(name), format!("{contents}\n")).unwrap();
+        }
+    }
+
+    // ---- S1: `installed_reverse_dependents` (real
+    // `vartree.dbapi`'s reverse-dependency scan: every installed
+    // package whose flattened runtime deps match the consumer's own
+    // `cat/pkg-ver:slot/sub-slot`, excluding the consumer itself). ----
+
+    /// A plain RDEPEND consumer is reported; a package depending on
+    /// something else is not; the whole-body `vec![]` /
+    /// `vec![String::new()]` / `vec!["xyzzy"]` rows all fail here.
+    #[test]
+    fn installed_reverse_dependents_reports_a_plain_rdepend_consumer() {
+        let root = dir_165("revdep-basic");
+        install_165(&root, "dev-libs", "consumer-1.0", "0", &[]);
+        install_165(
+            &root,
+            "dev-libs",
+            "user-1.0",
+            "0",
+            &[("RDEPEND", "dev-libs/consumer")],
+        );
+        install_165(
+            &root,
+            "dev-libs",
+            "bystander-1.0",
+            "0",
+            &[("RDEPEND", "dev-libs/other")],
+        );
+        assert_eq!(
+            installed_reverse_dependents(&root, "dev-libs", "consumer", "1.0"),
+            vec!["dev-libs/user-1.0".to_string()]
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The `&&`-chain self-skip is exact: a same-category sibling and a
+    /// same-cp other version are *not* the consumer and stay reported.
+    /// Both `&&` -> `||` flips (which wrongly skip on a bare category
+    /// or category+package match) fail here.
+    #[test]
+    fn installed_reverse_dependents_keeps_siblings_and_other_versions() {
+        let root = dir_165("revdep-siblings");
+        install_165(&root, "dev-libs", "consumer-1.0", "0", &[]);
+        install_165(
+            &root,
+            "dev-libs",
+            "other-1.0",
+            "0",
+            &[("RDEPEND", "dev-libs/consumer")],
+        );
+        install_165(
+            &root,
+            "dev-libs",
+            "consumer-2.0",
+            "0",
+            &[("RDEPEND", "dev-libs/consumer")],
+        );
+        assert_eq!(
+            installed_reverse_dependents(&root, "dev-libs", "consumer", "1.0"),
+            vec![
+                "dev-libs/consumer-2.0".to_string(),
+                "dev-libs/other-1.0".to_string(),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A consumer depending on itself is still excluded: each `==` ->
+    /// `!=` flip in the self-skip lets the consumer's own record
+    /// through and reports it.
+    #[test]
+    fn installed_reverse_dependents_excludes_a_self_dependent_consumer() {
+        let root = dir_165("revdep-self");
+        install_165(
+            &root,
+            "dev-libs",
+            "consumer-1.0",
+            "0",
+            &[("RDEPEND", "dev-libs/consumer")],
+        );
+        assert!(installed_reverse_dependents(&root, "dev-libs", "consumer", "1.0").is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Blocker atoms never count as reverse dependencies (the
+    /// blocker `!=` -> `==` flip would skip every plain dep instead),
+    /// while a genuinely matching consumer still files (the match
+    /// `delete !` flip would only file empty matches): both pins in
+    /// one leg.
+    #[test]
+    fn installed_reverse_dependents_ignores_blockers_but_keeps_matches() {
+        let root = dir_165("revdep-blocker");
+        install_165(&root, "dev-libs", "consumer-1.0", "0", &[]);
+        install_165(
+            &root,
+            "dev-libs",
+            "blocker-1.0",
+            "0",
+            &[("RDEPEND", "!dev-libs/consumer")],
+        );
+        install_165(
+            &root,
+            "dev-libs",
+            "user-1.0",
+            "0",
+            &[("RDEPEND", "dev-libs/consumer")],
+        );
+        assert_eq!(
+            installed_reverse_dependents(&root, "dev-libs", "consumer", "1.0"),
+            vec!["dev-libs/user-1.0".to_string()]
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
