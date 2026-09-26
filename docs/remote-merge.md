@@ -209,7 +209,11 @@ lines on a dedicated fd (stderr stays the human log):
    must therefore also be on the client -- forces vdb placement for
    replaced versions, see §7), `pkg_postinst` (non-fatal, local rule
    kept), `env_update` equivalent (`ldconfig -r` + `env-update`
-   if present; best-effort, logged).
+   if present; best-effort, logged). The vdb entry initially carries
+   the binpkg's build-time `environment.bz2` (never a plain
+   `environment` file -- real's vdb has `environment.bz2` only); the
+   regen run below then overwrites it with the merge-time env, so a
+   regen failure still leaves a usable (if build-time) hook env.
 4. **Report**: per-unit `STATUS=merged|failed|skipped:<reason>` trailer
    + exit code (0 merged-or-skipped, 1 unit-failed, 255 transport --
    never produced client-side, reserved for ssh itself).
@@ -221,8 +225,19 @@ Client tool floor (preflight-enforced): `bash` ≥ 5.3, GNU-or-BusyBox
 `bzip2 -dc` step `run_phase_from_saved_env` already runs locally) and
 ships a plain `environment` file in the bundle -- start uncompressed,
 revisit wire compression (e.g. zstd) only if bundle sizes ever justify
-a new client tool. Everything else (digests, merge math) is computed
-server-side and shipped in the manifest.
+a new client tool. That plain file is only the hook runtime's
+pre-image, never vdb content (backlog #171): after the merge the
+client re-saves the env from the live postinst phase to a unit-local
+`environment.regen` (still plain text -- real's `phase-functions.sh`
+`PORTAGE_UPDATE_ENV` block always compresses, so the run points
+`${PORTAGE_BZIP2_COMMAND}` at a pass-through shipped in the bundle's
+`bin/` that ignores `-c -f9` and copies stdin to stdout), and the
+server pulls it, compresses (`bzip2 -9`) and installs it over the
+vdb's `environment.bz2`. Replaced versions' old hooks get the same
+treatment in reverse: the server pulls their `environment.bz2`,
+decompresses server-side, and stages the plain text at
+`$UNIT/old-env/<pf>` for the driver. Everything else (digests, merge
+math) is computed server-side and shipped in the manifest.
 
 ## 7. Configuration placement (server vs. client)
 
@@ -481,7 +496,24 @@ disables -- only for labs with no NTP).
    bundle, fewer client tools)?~~ **Decided**: server pre-decompresses
    (the `bzip2 -dc` step it already runs), bundle ships a plain
    `environment` file; no `bzip2` on the client (§6). Wire compression
-   (zstd) only if bundle sizes ever justify it.
+   (zstd) only if bundle sizes ever justify it. Backlog #171 refined
+   the second half (owner Q8: *"we need the real client env; it is
+   also VERY important for the unmerge phase, which may happen in a
+   far future with a very different portage version and
+   environment"*): the bundle's plain `environment` is only the hook
+   runtime's pre-image, never vdb content. Every merge runs the
+   postinst phase -- defined or not, since real's
+   `phase-functions.sh` `PORTAGE_UPDATE_ENV` block runs regardless --
+   with `PORTAGE_UPDATE_ENV` pointed at a unit-local plain file and
+   `PORTAGE_BZIP2_COMMAND` at the bundle's pass-through; the server
+   pulls, `bzip2 -9`-compresses and installs it over the build-time
+   `environment.bz2` (any regen/pull/compress/install failure keeps
+   the build-time file with one `!!!` warning naming the package and
+   the step). Old-instance hooks get the same treatment in reverse
+   (server pulls + decompresses, stages plain text; legacy
+   plain-`environment` entries still source when no `environment.bz2`
+   exists; client `bzip2 -dc` is the last resort). The no-`bzip2`-
+   on-the-client decision stands.
 2. ~~gpkg-only v1, or `.tbz2` (xpak) from the start?~~ **Resolved: xpak
    is out of scope.** `mrg` targets gpkg only -- xpak is the old format
    and `mrg` does not need full binary-format compatibility (the shared
