@@ -52297,4 +52297,1081 @@ mod tests_163 {
             let _ = std::fs::remove_dir_all(&dir);
         }
     }
+    // ---- shared assemble_result harness (S5) ----
+
+    fn pass_163() -> PassResult {
+        PassResult {
+            entries: Vec::new(),
+            slot_conflicts: Vec::new(),
+            skipped_updates: Vec::new(),
+            orphan_blockers: Vec::new(),
+            slot_want: HashMap::new(),
+            slot_pullers: HashMap::new(),
+            masked_deps: Vec::new(),
+            use_unsat_deps: Vec::new(),
+            plain_miss_deps: Vec::new(),
+            nvc_dep_atoms: HashMap::new(),
+            missing_dep_trigger: None,
+            autounmask_grew: false,
+            edge_kind_map: HashMap::new(),
+            changed_deps_report_entries: Vec::new(),
+            pprovided_atoms: Vec::new(),
+            autounmask_keyword_changes: Vec::new(),
+            autounmask_use_changes: Vec::new(),
+            autounmask_license_changes: Vec::new(),
+            autounmask_mask_changes: Vec::new(),
+            use_overlay: HashMap::new(),
+            use_change_overlay: Vec::new(),
+            use_broke: false,
+            abi_rebuilds: None,
+            suppressed_nvc: false,
+            parent_atoms: Vec::new(),
+        }
+    }
+
+    /// Literal `ResolveCtx` in the #161 `ctx_161` shape (same field
+    /// list, so it tracks production), with the knobs each leg needs
+    /// as parameters.
+    #[allow(clippy::too_many_arguments)]
+    fn ctx_163<'a>(
+        root: &'a Path,
+        config: &'a portage_profile::Config,
+        repos: Vec<RepoConfig>,
+        atoms: &'a [String],
+        no_strings: &'a [String],
+        buildpkgonly: bool,
+        backtrack_enabled: bool,
+        ignore_slot_op: bool,
+        rebuild_new_slot: bool,
+        reachable: HashSet<(String, String)>,
+    ) -> ResolveCtx<'a> {
+        ResolveCtx {
+            root,
+            atoms,
+            update: false,
+            config,
+            newuse: false,
+            changed_use: false,
+            nodeps: false,
+            deep: Deep::NotRequested,
+            excluded: no_strings,
+            with_bdeps: false,
+            changed_deps: false,
+            changed_slot: false,
+            with_test_deps: false,
+            changed_deps_report: false,
+            selective: true,
+            autounmask_backtrack_enabled: backtrack_enabled,
+            usepkg: false,
+            usepkgonly: false,
+            binpkg_respect_use: false,
+            usepkg_exclude: no_strings,
+            usepkg_include: no_strings,
+            rebuilt_binaries: false,
+            rebuilt_binaries_timestamp: None,
+            newrepo: false,
+            buildpkgonly,
+            root_deps_running_root: None,
+            distdir: root,
+            empty: false,
+            getbinpkg: false,
+            ignore_built_slot_operator_deps: ignore_slot_op,
+            backtrack_max: 10,
+            reinstall_atoms: no_strings,
+            rebuild_if_new_slot: rebuild_new_slot,
+            rebuild_if_unbuilt: false,
+            rebuild_if_new_rev: false,
+            rebuild_if_new_ver: false,
+            rebuild_exclude: no_strings,
+            rebuild_ignore: no_strings,
+            dynamic_deps: true,
+            implicit_system_deps: false,
+            complete: false,
+            repos,
+            slot_op_reachable: reachable,
+            blocker_retry_closure: HashSet::new(),
+            complete_locked_merges: HashSet::new(),
+            top_level: HashSet::new(),
+            top_level_cps: HashSet::new(),
+            local_binpkg: build_local_binpkg_index(config),
+        }
+    }
+
+    fn change_163(atom: &str, token: &str, chain: &[&str]) -> AutounmaskChange {
+        AutounmaskChange {
+            atom: atom.to_string(),
+            token: token.to_string(),
+            dep_chain: chain.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    fn use_unsat_163(cat: &str, pkg: &str, atom: &str) -> UseUnsatDepReport {
+        UseUnsatDepReport {
+            category: cat.to_string(),
+            package: pkg.to_string(),
+            atom: atom.to_string(),
+            rows: vec![("x".to_string(), vec!["y".to_string()])],
+            chain: Vec::new(),
+        }
+    }
+
+    fn plain_163(cat: &str, pkg: &str, atom: &str) -> PlainMissDepReport {
+        PlainMissDepReport {
+            category: cat.to_string(),
+            package: pkg.to_string(),
+            atom: atom.to_string(),
+            chain: Vec::new(),
+        }
+    }
+
+    // ---- S5: `assemble_result` (the settled-graph assembly: merge
+    // order, buildpkgonly gate, cycle report, autounmask coalescing,
+    // disclosure chains, and the abort classification). ----
+
+    /// A non-buildpkgonly resolve never reports unsatisfied
+    /// buildpkgonly deps, even with merge edges present. Pins the
+    /// gate the S0 run already covers.
+    #[test]
+    fn assemble_result_no_buildpkgonly_flag_means_no_buildpkgonly_refusal() {
+        let dir = dir_163("asm-nobpo");
+        let repos = repo_pkgs_163(&dir, &[]);
+        let config = cfg_163();
+        let no_strings: Vec<String> = Vec::new();
+        let atoms: Vec<String> = Vec::new();
+        let ctx = ctx_163(
+            &dir,
+            &config,
+            repos,
+            &atoms,
+            &no_strings,
+            false,
+            false,
+            false,
+            true,
+            HashSet::new(),
+        );
+        let mut pass = pass_163();
+        pass.entries = vec![
+            entry_163("dev-libs", "a", new_163("1.0"), &[("dev-libs", "b")]),
+            entry_163("dev-libs", "b", new_163("1.0"), &[]),
+        ];
+        let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+        assert!(!result.buildpkgonly_deps_unsatisfied);
+        assert_eq!(result.backtrack_restarts, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A lone merge with no owners is no buildpkgonly edge, and a
+    /// lone uninstall with no owners is no blocker edge either.
+    /// The uninstall arm kills the `&&` -> `||` flip of the action
+    /// filter (which reports an edge here); the merge arm pins the
+    /// already-caught edge predicate.
+    #[test]
+    fn assemble_result_lone_entries_are_no_buildpkgonly_edge() {
+        for (tag, outcome) in [
+            ("merge", new_163("1.0")),
+            (
+                "uninstall",
+                PretendOutcome::Uninstall {
+                    version: "1.0".to_string(),
+                },
+            ),
+        ] {
+            let dir = dir_163(&format!("asm-lone-{tag}"));
+            let repos = repo_pkgs_163(&dir, &[]);
+            let config = cfg_163();
+            let no_strings: Vec<String> = Vec::new();
+            let atoms: Vec<String> = Vec::new();
+            let ctx = ctx_163(
+                &dir,
+                &config,
+                repos,
+                &atoms,
+                &no_strings,
+                true,
+                false,
+                false,
+                true,
+                HashSet::new(),
+            );
+            let mut pass = pass_163();
+            pass.entries = vec![entry_163("dev-libs", "solo", outcome, &[])];
+            let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+            assert!(!result.buildpkgonly_deps_unsatisfied, "{tag}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// A merge required by another merge is a buildpkgonly edge.
+    /// Pins the disjunction the S0 run already covers.
+    #[test]
+    fn assemble_result_merge_requiring_a_merge_is_a_buildpkgonly_edge() {
+        let dir = dir_163("asm-edge");
+        let repos = repo_pkgs_163(&dir, &[]);
+        let config = cfg_163();
+        let no_strings: Vec<String> = Vec::new();
+        let atoms: Vec<String> = Vec::new();
+        let ctx = ctx_163(
+            &dir,
+            &config,
+            repos,
+            &atoms,
+            &no_strings,
+            true,
+            false,
+            false,
+            true,
+            HashSet::new(),
+        );
+        let mut pass = pass_163();
+        pass.entries = vec![
+            entry_163("dev-libs", "a", new_163("1.0"), &[("dev-libs", "b")]),
+            entry_163("dev-libs", "b", new_163("1.0"), &[]),
+        ];
+        let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+        assert!(result.buildpkgonly_deps_unsatisfied);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Two chained uninstalls with no merge anywhere are still no
+    /// buildpkgonly edge: uninstalls are not merge actions. Pins the
+    /// filter the S0 run already covers.
+    #[test]
+    fn assemble_result_chained_uninstalls_are_no_buildpkgonly_edge() {
+        let dir = dir_163("asm-uninst");
+        let repos = repo_pkgs_163(&dir, &[]);
+        let config = cfg_163();
+        let no_strings: Vec<String> = Vec::new();
+        let atoms: Vec<String> = Vec::new();
+        let ctx = ctx_163(
+            &dir,
+            &config,
+            repos,
+            &atoms,
+            &no_strings,
+            true,
+            false,
+            false,
+            true,
+            HashSet::new(),
+        );
+        let mut pass = pass_163();
+        pass.entries = vec![
+            entry_163(
+                "dev-libs",
+                "u1",
+                PretendOutcome::Uninstall {
+                    version: "1.0".to_string(),
+                },
+                &[("dev-libs", "u2")],
+            ),
+            entry_163(
+                "dev-libs",
+                "u2",
+                PretendOutcome::Uninstall {
+                    version: "2.0".to_string(),
+                },
+                &[],
+            ),
+        ];
+        let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+        assert!(!result.buildpkgonly_deps_unsatisfied);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A recorded autounmask change is not duplicated by the
+    /// backtracking slice's records, while a record for another atom
+    /// is appended. Kills the first-`==` -> `!=` flip of the dedup
+    /// comparison (which duplicates the known atom and drops the new
+    /// one); pins the already-caught gate and the second flip (whose
+    /// duplicate the coalescing below repairs).
+    #[test]
+    fn assemble_result_recorded_autounmask_change_is_not_duplicated() {
+        let dir = dir_163("asm-dedup");
+        let repos = repo_pkgs_163(&dir, &[]);
+        let config = cfg_163();
+        let no_strings: Vec<String> = Vec::new();
+        let atoms: Vec<String> = Vec::new();
+        let ctx = ctx_163(
+            &dir,
+            &config,
+            repos,
+            &atoms,
+            &no_strings,
+            false,
+            false,
+            false,
+            true,
+            HashSet::new(),
+        );
+        let mut pass = pass_163();
+        pass.autounmask_use_changes = vec![change_163(">=dev-libs/a-1.0", "x", &[])];
+        let params = BacktrackParams {
+            autounmask_use_change_records: vec![
+                change_163(">=dev-libs/a-1.0", "x", &[]),
+                change_163(">=dev-libs/b-1.0", "x", &[]),
+            ],
+            ..Default::default()
+        };
+        let result = assemble_result(&ctx, &params, pass, &config, 0);
+        assert_eq!(
+            result
+                .autounmask_use_changes
+                .iter()
+                .map(|c| (c.atom.clone(), c.token.clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                (">=dev-libs/a-1.0".to_string(), "x".to_string()),
+                (">=dev-libs/b-1.0".to_string(), "x".to_string()),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A record with a new token for a known atom is appended, then
+    /// coalesced into the atom's line. Kills the `&&` -> `||` flip of
+    /// the dedup comparison (which drops the new token).
+    #[test]
+    fn assemble_result_new_token_for_a_known_atom_is_coalesced() {
+        let dir = dir_163("asm-coal");
+        let repos = repo_pkgs_163(&dir, &[]);
+        let config = cfg_163();
+        let no_strings: Vec<String> = Vec::new();
+        let atoms: Vec<String> = Vec::new();
+        let ctx = ctx_163(
+            &dir,
+            &config,
+            repos,
+            &atoms,
+            &no_strings,
+            false,
+            false,
+            false,
+            true,
+            HashSet::new(),
+        );
+        let mut pass = pass_163();
+        pass.autounmask_use_changes = vec![change_163(">=dev-libs/a-1.0", "x", &[])];
+        let params = BacktrackParams {
+            autounmask_use_change_records: vec![change_163(">=dev-libs/a-1.0", "y", &[])],
+            ..Default::default()
+        };
+        let result = assemble_result(&ctx, &params, pass, &config, 0);
+        assert_eq!(
+            result
+                .autounmask_use_changes
+                .iter()
+                .map(|c| (c.atom.clone(), c.token.clone()))
+                .collect::<Vec<_>>(),
+            vec![(">=dev-libs/a-1.0".to_string(), "x y".to_string())]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Changes for different atoms stay on separate lines, and a
+    /// repeated flag is not duplicated within a line. Kills the
+    /// `==` -> `!=` flip of the coalescing lookup (which merges
+    /// different atoms) and the `!any` deletion of the flag dedup
+    /// (which doubles the flag).
+    #[test]
+    fn assemble_result_coalescing_keeps_atoms_apart_and_flags_singular() {
+        let dir = dir_163("asm-coal2");
+        let repos = repo_pkgs_163(&dir, &[]);
+        let config = cfg_163();
+        let no_strings: Vec<String> = Vec::new();
+        let atoms: Vec<String> = Vec::new();
+        let ctx = ctx_163(
+            &dir,
+            &config,
+            repos,
+            &atoms,
+            &no_strings,
+            false,
+            false,
+            false,
+            true,
+            HashSet::new(),
+        );
+        let mut pass = pass_163();
+        pass.autounmask_use_changes = vec![
+            change_163(">=dev-libs/a-1.0", "x", &[]),
+            change_163(">=dev-libs/b-1.0", "y", &[]),
+            change_163(">=dev-libs/a-1.0", "x", &[]),
+        ];
+        let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+        assert_eq!(
+            result
+                .autounmask_use_changes
+                .iter()
+                .map(|c| (c.atom.clone(), c.token.clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                (">=dev-libs/a-1.0".to_string(), "x".to_string()),
+                (">=dev-libs/b-1.0".to_string(), "y".to_string()),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An uncovered dependency `NoVisibleCandidate` gains a
+    /// plain-miss disclosure naming the queued atom. Kills the
+    /// `!matches!(NoVisibleCandidate)` deletion (which files none).
+    #[test]
+    fn assemble_result_uncovered_nvc_gains_a_plain_miss_disclosure() {
+        let dir = dir_163("asm-plain");
+        let repos = repo_pkgs_163(&dir, &[]);
+        let config = cfg_163();
+        let no_strings: Vec<String> = Vec::new();
+        let atoms: Vec<String> = Vec::new();
+        let ctx = ctx_163(
+            &dir,
+            &config,
+            repos,
+            &atoms,
+            &no_strings,
+            false,
+            false,
+            false,
+            true,
+            HashSet::new(),
+        );
+        let mut pass = pass_163();
+        pass.entries = vec![entry_163(
+            "dev-libs",
+            "pm",
+            PretendOutcome::NoVisibleCandidate,
+            &[],
+        )];
+        pass.nvc_dep_atoms.insert(
+            ("dev-libs".to_string(), "pm".to_string()),
+            ">=dev-libs/pm-2.0".to_string(),
+        );
+        let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+        assert_eq!(result.plain_miss_deps.len(), 1);
+        assert_eq!(result.plain_miss_deps[0].atom, ">=dev-libs/pm-2.0");
+        assert_eq!(result.outcome, ResolveOutcome::Complete);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A `NoVisibleCandidate` claimed by each sibling disclosure gains
+    /// no plain-miss row: every `||` arm of the coverage check must
+    /// stay an `||`, and the `==`s inside each arm a `==`. Kills the
+    /// three `||` -> `&&` flips (each files a duplicate row) and the
+    /// first-`==` -> `!=` flip inside each arm predicate (each misses
+    /// its arm's exact claim and files a row).
+    #[test]
+    fn assemble_result_claimed_nvc_gains_no_plain_miss_row() {
+        for (tag, setup, expected) in [
+            ("masked", 0u8, 0usize),
+            ("use", 1u8, 0usize),
+            ("plain", 2u8, 1usize),
+        ] {
+            let dir = dir_163(&format!("asm-claimed-{tag}"));
+            let repos = repo_pkgs_163(&dir, &[]);
+            let config = cfg_163();
+            let no_strings: Vec<String> = Vec::new();
+            let atoms: Vec<String> = Vec::new();
+            let ctx = ctx_163(
+                &dir,
+                &config,
+                repos,
+                &atoms,
+                &no_strings,
+                false,
+                false,
+                false,
+                true,
+                HashSet::new(),
+            );
+            let mut pass = pass_163();
+            pass.entries = vec![entry_163(
+                "dev-libs",
+                "pm",
+                PretendOutcome::NoVisibleCandidate,
+                &[],
+            )];
+            match setup {
+                0 => {
+                    pass.masked_deps
+                        .push(masked_163("dev-libs", "pm", "dev-libs/pm"));
+                }
+                1 => {
+                    pass.use_unsat_deps
+                        .push(use_unsat_163("dev-libs", "pm", "dev-libs/pm[flag]"));
+                }
+                _ => {
+                    pass.plain_miss_deps
+                        .push(plain_163("dev-libs", "pm", "dev-libs/pm"));
+                }
+            }
+            let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+            assert_eq!(result.plain_miss_deps.len(), expected, "{tag}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// A neighbour's claim does not cover the entry: sibling reports
+    /// for another package leave the plain-miss row in place. Kills
+    /// the `&&` -> `||` flips and the second-`==` -> `!=` flips inside
+    /// each arm predicate (each treats the neighbour's claim as
+    /// covering).
+    #[test]
+    fn assemble_result_neighbour_claim_does_not_cover_the_entry() {
+        for (tag, setup, expected) in [
+            ("masked", 0u8, 1usize),
+            ("use", 1u8, 1usize),
+            ("plain", 2u8, 2usize),
+        ] {
+            let dir = dir_163(&format!("asm-neighbour-{tag}"));
+            let repos = repo_pkgs_163(&dir, &[]);
+            let config = cfg_163();
+            let no_strings: Vec<String> = Vec::new();
+            let atoms: Vec<String> = Vec::new();
+            let ctx = ctx_163(
+                &dir,
+                &config,
+                repos,
+                &atoms,
+                &no_strings,
+                false,
+                false,
+                false,
+                true,
+                HashSet::new(),
+            );
+            let mut pass = pass_163();
+            pass.entries = vec![entry_163(
+                "dev-libs",
+                "pm",
+                PretendOutcome::NoVisibleCandidate,
+                &[],
+            )];
+            match setup {
+                0 => {
+                    pass.masked_deps
+                        .push(masked_163("dev-libs", "other", "dev-libs/other"));
+                }
+                1 => {
+                    pass.use_unsat_deps.push(use_unsat_163(
+                        "dev-libs",
+                        "other",
+                        "dev-libs/other[flag]",
+                    ));
+                }
+                _ => {
+                    pass.plain_miss_deps
+                        .push(plain_163("dev-libs", "other", "dev-libs/other"));
+                }
+            }
+            let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+            assert_eq!(result.plain_miss_deps.len(), expected, "{tag}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// The in-progress extra list covers only its own cp: a second
+    /// uncovered entry in the same category is still filed. Kills the
+    /// `&&` -> `||` flip and the second-`==` -> `!=` flip of the
+    /// extra-list predicate (each treats the first row as covering
+    /// the second).
+    #[test]
+    fn assemble_result_extra_list_covers_only_its_own_cp() {
+        let dir = dir_163("asm-extra");
+        let repos = repo_pkgs_163(&dir, &[]);
+        let config = cfg_163();
+        let no_strings: Vec<String> = Vec::new();
+        let atoms: Vec<String> = Vec::new();
+        let ctx = ctx_163(
+            &dir,
+            &config,
+            repos,
+            &atoms,
+            &no_strings,
+            false,
+            false,
+            false,
+            true,
+            HashSet::new(),
+        );
+        let mut pass = pass_163();
+        pass.entries = vec![
+            entry_163("dev-libs", "other", PretendOutcome::NoVisibleCandidate, &[]),
+            entry_163("dev-libs", "pm", PretendOutcome::NoVisibleCandidate, &[]),
+        ];
+        let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+        assert_eq!(result.plain_miss_deps.len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The in-progress extra list does not cover across categories
+    /// either: same package, other category is still filed. Kills the
+    /// first-`==` -> `!=` flip of the extra-list predicate (which
+    /// treats the cross-category row as covering).
+    #[test]
+    fn assemble_result_extra_list_does_not_cover_across_categories() {
+        let dir = dir_163("asm-extra-cat");
+        let repos = repo_pkgs_163(&dir, &[]);
+        let config = cfg_163();
+        let no_strings: Vec<String> = Vec::new();
+        let atoms: Vec<String> = Vec::new();
+        let ctx = ctx_163(
+            &dir,
+            &config,
+            repos,
+            &atoms,
+            &no_strings,
+            false,
+            false,
+            false,
+            true,
+            HashSet::new(),
+        );
+        let mut pass = pass_163();
+        pass.entries = vec![
+            entry_163("sys-libs", "pm", PretendOutcome::NoVisibleCandidate, &[]),
+            entry_163("dev-libs", "pm", PretendOutcome::NoVisibleCandidate, &[]),
+        ];
+        let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+        assert_eq!(result.plain_miss_deps.len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    /// With `--autounmask-backtrack` off, a recorded use-config
+    /// change refreshes just that package's USE line. Kills the
+    /// `!autounmask_backtrack_enabled` deletion and the
+    /// `!config.is_empty()` deletion (each skips the refresh and
+    /// leaves the line empty).
+    #[test]
+    fn assemble_result_use_config_change_refreshes_the_package_line() {
+        let dir = dir_163("asm-refresh");
+        let repos = repo_pkgs_163(
+            &dir,
+            &[("dev-libs/rdisp", "1.0", "0", "alpha", "", "amd64")],
+        );
+        let config = cfg_163();
+        let no_strings: Vec<String> = Vec::new();
+        let atoms: Vec<String> = Vec::new();
+        let ctx = ctx_163(
+            &dir,
+            &config,
+            repos,
+            &atoms,
+            &no_strings,
+            false,
+            false,
+            false,
+            true,
+            HashSet::new(),
+        );
+        let mut pass = pass_163();
+        pass.entries = vec![entry_163("dev-libs", "rdisp", new_163("1.0"), &[])];
+        let mut params = BacktrackParams::default();
+        params.autounmask_use_config.insert(
+            ("dev-libs".to_string(), "rdisp".to_string()),
+            HashMap::from([("alpha".to_string(), true)]),
+        );
+        let result = assemble_result(&ctx, &params, pass, &config, 0);
+        let entry = result
+            .entries
+            .iter()
+            .find(|e| e.package == "rdisp")
+            .expect("entry kept");
+        assert_eq!(entry.use_flags_display, vec![("alpha".to_string(), true)]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// With `--autounmask-backtrack` on, the same recorded change
+    /// leaves the walked line alone. Kills the `&&` -> `||` flip of
+    /// the refresh gate (which refreshes anyway).
+    #[test]
+    fn assemble_result_backtrack_on_leaves_the_walked_line_alone() {
+        let dir = dir_163("asm-norefresh");
+        let repos = repo_pkgs_163(
+            &dir,
+            &[("dev-libs/rdisp", "1.0", "0", "alpha", "", "amd64")],
+        );
+        let config = cfg_163();
+        let no_strings: Vec<String> = Vec::new();
+        let atoms: Vec<String> = Vec::new();
+        let ctx = ctx_163(
+            &dir,
+            &config,
+            repos,
+            &atoms,
+            &no_strings,
+            false,
+            true,
+            false,
+            true,
+            HashSet::new(),
+        );
+        let mut pass = pass_163();
+        pass.entries = vec![entry_163("dev-libs", "rdisp", new_163("1.0"), &[])];
+        let mut params = BacktrackParams::default();
+        params.autounmask_use_config.insert(
+            ("dev-libs".to_string(), "rdisp".to_string()),
+            HashMap::from([("alpha".to_string(), true)]),
+        );
+        let result = assemble_result(&ctx, &params, pass, &config, 0);
+        let entry = result
+            .entries
+            .iter()
+            .find(|e| e.package == "rdisp")
+            .expect("entry kept");
+        assert!(entry.use_flags_display.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An autounmask change with an empty chain gains its `#required
+    /// by` chain from the change's own atom through the entries.
+    /// Pins the derivation the `&&` -> `||` flip would also run on a
+    /// preset chain.
+    #[test]
+    fn assemble_result_change_gains_its_required_by_chain() {
+        let dir = dir_163("asm-chain");
+        let repos = repo_pkgs_163(&dir, &[]);
+        let config = cfg_163();
+        let no_strings: Vec<String> = Vec::new();
+        let atoms = vec!["dev-libs/top".to_string()];
+        let mut top_level = HashSet::new();
+        top_level.insert("dev-libs/top");
+        let mut ctx = ctx_163(
+            &dir,
+            &config,
+            repos,
+            &atoms,
+            &no_strings,
+            false,
+            false,
+            false,
+            true,
+            HashSet::new(),
+        );
+        ctx.top_level = top_level;
+        let mut pass = pass_163();
+        pass.entries = vec![
+            entry_163("dev-libs", "dc", new_163("1.0"), &[("dev-libs", "top")]),
+            entry_163("dev-libs", "top", new_163("1.0"), &[]),
+        ];
+        pass.autounmask_keyword_changes = vec![change_163(">=dev-libs/dc-1.0", "~amd64", &[])];
+        let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+        assert_eq!(
+            result.autounmask_keyword_changes[0].dep_chain,
+            vec![
+                "required by dev-libs/top-1.0::testrepo".to_string(),
+                "required by dev-libs/top (argument)".to_string(),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A preset chain is kept as-is. Pins the keep (the `&&` ->
+    /// `||` flip is unviable, so no mutant reaches this shape).
+    #[test]
+    fn assemble_result_preset_chain_is_kept() {
+        let dir = dir_163("asm-chainkeep");
+        let repos = repo_pkgs_163(&dir, &[]);
+        let config = cfg_163();
+        let no_strings: Vec<String> = Vec::new();
+        let atoms = vec!["dev-libs/top".to_string()];
+        let mut top_level = HashSet::new();
+        top_level.insert("dev-libs/top");
+        let mut ctx = ctx_163(
+            &dir,
+            &config,
+            repos,
+            &atoms,
+            &no_strings,
+            false,
+            false,
+            false,
+            true,
+            HashSet::new(),
+        );
+        ctx.top_level = top_level;
+        let mut pass = pass_163();
+        pass.entries = vec![
+            entry_163("dev-libs", "dc", new_163("1.0"), &[("dev-libs", "top")]),
+            entry_163("dev-libs", "top", new_163("1.0"), &[]),
+        ];
+        pass.autounmask_keyword_changes =
+            vec![change_163(">=dev-libs/dc-1.0", "~amd64", &["keep"])];
+        let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+        assert_eq!(
+            result.autounmask_keyword_changes[0].dep_chain,
+            vec!["keep".to_string()]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The change owner is the entry matching the change's own
+    /// package: a same-category decoy listed first must not steal
+    /// it. Kills the `&&` -> `||` flip of the owner lookup (which
+    /// derives the chain from the decoy); pins the already-caught
+    /// `==` flips.
+    #[test]
+    fn assemble_result_change_owner_is_the_matching_entry() {
+        let dir = dir_163("asm-owner");
+        let repos = repo_pkgs_163(&dir, &[]);
+        let config = cfg_163();
+        let no_strings: Vec<String> = Vec::new();
+        let atoms = vec!["dev-libs/top".to_string()];
+        let mut top_level = HashSet::new();
+        top_level.insert("dev-libs/top");
+        let mut ctx = ctx_163(
+            &dir,
+            &config,
+            repos,
+            &atoms,
+            &no_strings,
+            false,
+            false,
+            false,
+            true,
+            HashSet::new(),
+        );
+        ctx.top_level = top_level;
+        let mut pass = pass_163();
+        pass.entries = vec![
+            entry_163("dev-libs", "zz", new_163("1.0"), &[]),
+            entry_163("dev-libs", "dc", new_163("1.0"), &[("dev-libs", "top")]),
+            entry_163("dev-libs", "top", new_163("1.0"), &[]),
+        ];
+        pass.autounmask_keyword_changes = vec![change_163(">=dev-libs/dc-1.0", "~amd64", &[])];
+        let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+        assert_eq!(
+            result.autounmask_keyword_changes[0].dep_chain,
+            vec![
+                "required by dev-libs/top-1.0::testrepo".to_string(),
+                "required by dev-libs/top (argument)".to_string(),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A hard two-ring with no wired deps reports the cycle with an
+    /// empty display and no large-count. Pins the count the S0 run
+    /// already covers.
+    #[test]
+    fn assemble_result_small_cycle_reports_no_large_count() {
+        let dir = dir_163("asm-cycle2");
+        let repos = repo_pkgs_163(&dir, &[]);
+        let config = cfg_163();
+        let no_strings: Vec<String> = Vec::new();
+        let atoms = vec!["dev-libs/ca".to_string()];
+        let ctx = ctx_163(
+            &dir,
+            &config,
+            repos,
+            &atoms,
+            &no_strings,
+            false,
+            false,
+            false,
+            true,
+            HashSet::new(),
+        );
+        let mut pass = pass_163();
+        pass.entries = vec![
+            entry_163("dev-libs", "ca", new_163("1.0"), &[]),
+            entry_163("dev-libs", "cb", new_163("1.0"), &[]),
+        ];
+        let cp = |p: &str| ("dev-libs".to_string(), p.to_string());
+        pass.edge_kind_map
+            .insert((cp("cb"), cp("ca")), (true, false));
+        pass.edge_kind_map
+            .insert((cp("ca"), cp("cb")), (true, false));
+        let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+        assert_eq!(result.circular_deps.len(), 1);
+        assert!(!result.large_cycle_count);
+        assert!(result.cycle_display.is_empty());
+        match &result.outcome {
+            ResolveOutcome::Aborted {
+                reason: AbortReason::UnserializableCycle { members },
+                partial,
+            } => {
+                assert!(members.is_empty());
+                assert!(partial.is_empty());
+            }
+            other => panic!("expected UnserializableCycle, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A hard triangle with wired deps reports three elementary
+    /// cycles: a large count only above three. Kills the `>` ->
+    /// `>=` flip (which reports a large cycle here); pins the
+    /// already-caught `==` flip.
+    #[test]
+    fn assemble_result_triangle_reports_three_cycles_without_large_count() {
+        let dir = dir_163("asm-cycle3");
+        let repos = repo_pkgs_163(&dir, &[]);
+        let config = cfg_163();
+        let no_strings: Vec<String> = Vec::new();
+        let atoms = vec![
+            "dev-libs/ta".to_string(),
+            "dev-libs/tb".to_string(),
+            "dev-libs/tc".to_string(),
+        ];
+        let ctx = ctx_163(
+            &dir,
+            &config,
+            repos,
+            &atoms,
+            &no_strings,
+            false,
+            false,
+            false,
+            true,
+            HashSet::new(),
+        );
+        let edge = |next: &str| DepEdge {
+            atom: format!("dev-libs/{next}"),
+            evaluated: format!("dev-libs/{next}"),
+            category: "dev-libs".to_string(),
+            package: next.to_string(),
+            priority: DepPriority {
+                runtime: true,
+                ..Default::default()
+            },
+            disjunctive: false,
+            alt: None,
+            key: 0,
+        };
+        let mut ea = entry_163("dev-libs", "ta", new_163("1.0"), &[]);
+        ea.deps = vec![edge("tb")];
+        let mut eb = entry_163("dev-libs", "tb", new_163("1.0"), &[]);
+        eb.deps = vec![edge("tc")];
+        let mut ec = entry_163("dev-libs", "tc", new_163("1.0"), &[]);
+        ec.deps = vec![edge("ta")];
+        let mut pass = pass_163();
+        pass.entries = vec![ea, eb, ec];
+        let cp = |p: &str| ("dev-libs".to_string(), p.to_string());
+        pass.edge_kind_map
+            .insert((cp("tb"), cp("ta")), (true, false));
+        pass.edge_kind_map
+            .insert((cp("tc"), cp("tb")), (true, false));
+        pass.edge_kind_map
+            .insert((cp("ta"), cp("tc")), (true, false));
+        let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+        assert_eq!(result.circular_deps.len(), 1);
+        assert!(!result.large_cycle_count);
+        assert_eq!(result.cycle_display.len(), 3);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    /// The slot-operator vdb scan reports a consumer bound to a
+    /// rebuilt sub-slot: real's `_forced_rebuilds` display pairs. The
+    /// scan runs exactly when neither the ignore flag nor a disabled
+    /// rebuild gate suppresses it. Kills the match-guard `true`
+    /// mutant (which reports no pairs here).
+    #[test]
+    fn assemble_result_slot_operator_scan_reports_the_rebuilt_consumer() {
+        let dir = dir_163("asm-slotop");
+        let repos = repo_pkgs_163(
+            &dir,
+            &[
+                ("dev-libs/prov", "1.0", "0", "", "", "amd64"),
+                ("dev-libs/prov", "2.0", "0", "", "", "amd64"),
+            ],
+        );
+        install_163(
+            &dir,
+            "dev-libs",
+            "cons-1.0",
+            "0",
+            &[("RDEPEND", "dev-libs/prov:0/0=")],
+        );
+        let config = cfg_163();
+        let no_strings: Vec<String> = Vec::new();
+        let atoms: Vec<String> = Vec::new();
+        let ctx = ctx_163(
+            &dir,
+            &config,
+            repos,
+            &atoms,
+            &no_strings,
+            false,
+            false,
+            false,
+            true,
+            HashSet::from([("dev-libs".to_string(), "cons".to_string())]),
+        );
+        let mut pass = pass_163();
+        let mut prov = entry_163(
+            "dev-libs",
+            "prov",
+            PretendOutcome::Upgrade {
+                from: "1.0".to_string(),
+                to: "2.0".to_string(),
+            },
+            &[],
+        );
+        prov.slot = Some("0".to_string());
+        prov.sub_slot = Some("1".to_string());
+        pass.entries = vec![prov];
+        let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+        assert_eq!(
+            result.abi_rebuilds,
+            vec![(
+                "dev-libs/prov-2.0".to_string(),
+                "dev-libs/cons-1.0".to_string()
+            )]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The ignore flag and a disabled rebuild gate each suppress the
+    /// scan. Kills the match-guard `false` mutant, the `||` -> `&&`
+    /// flip, and the `!rebuild_if_new_slot` deletion (each runs the
+    /// scan and reports the pair here).
+    #[test]
+    fn assemble_result_slot_operator_scan_gates_suppress_the_pairs() {
+        for (tag, ignore, rebuild) in [("ignore", true, true), ("disabled", false, false)] {
+            let dir = dir_163(&format!("asm-slotgate-{tag}"));
+            let repos = repo_pkgs_163(
+                &dir,
+                &[
+                    ("dev-libs/prov", "1.0", "0", "", "", "amd64"),
+                    ("dev-libs/prov", "2.0", "0", "", "", "amd64"),
+                ],
+            );
+            install_163(
+                &dir,
+                "dev-libs",
+                "cons-1.0",
+                "0",
+                &[("RDEPEND", "dev-libs/prov:0/0=")],
+            );
+            let config = cfg_163();
+            let no_strings: Vec<String> = Vec::new();
+            let atoms: Vec<String> = Vec::new();
+            let ctx = ctx_163(
+                &dir,
+                &config,
+                repos,
+                &atoms,
+                &no_strings,
+                false,
+                false,
+                ignore,
+                rebuild,
+                HashSet::from([("dev-libs".to_string(), "cons".to_string())]),
+            );
+            let mut pass = pass_163();
+            let mut prov = entry_163(
+                "dev-libs",
+                "prov",
+                PretendOutcome::Upgrade {
+                    from: "1.0".to_string(),
+                    to: "2.0".to_string(),
+                },
+                &[],
+            );
+            prov.slot = Some("0".to_string());
+            prov.sub_slot = Some("1".to_string());
+            pass.entries = vec![prov];
+            let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+            assert!(result.abi_rebuilds.is_empty(), "{tag}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
 }
