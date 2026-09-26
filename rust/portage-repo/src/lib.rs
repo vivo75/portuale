@@ -40442,6 +40442,7 @@ mod tests {
     /// each leg fills in.
     static NO_STRINGS_161: Vec<String> = Vec::new();
     static NO_STRS_161: [&str; 0] = [];
+    #[allow(clippy::too_many_arguments)]
     fn ctx_161<'a>(
         root: &'a Path,
         config: &'a portage_profile::Config,
@@ -40449,15 +40450,21 @@ mod tests {
         reachable: HashSet<(String, String)>,
         backtrack_max: u32,
         excluded: &'a [String],
+        atoms: &'a [String],
+        update: bool,
+        newuse: bool,
+        usepkgonly: bool,
+        nodeps: bool,
+        selective: bool,
     ) -> ResolveCtx<'a> {
         ResolveCtx {
             root,
-            atoms: &NO_STRINGS_161,
+            atoms,
+            update,
             config,
-            newuse: false,
+            newuse,
             changed_use: false,
-            nodeps: false,
-            update: false,
+            nodeps,
             deep: Deep::NotRequested,
             excluded,
             with_bdeps: false,
@@ -40465,10 +40472,10 @@ mod tests {
             changed_slot: false,
             with_test_deps: false,
             changed_deps_report: false,
-            selective: false,
+            selective: selective,
             autounmask_backtrack_enabled: false,
             usepkg: false,
-            usepkgonly: false,
+            usepkgonly: usepkgonly,
             binpkg_respect_use: false,
             usepkg_exclude: &NO_STRINGS_161,
             usepkg_include: &NO_STRINGS_161,
@@ -40562,7 +40569,7 @@ mod tests {
     fn collect_feedback_folds_the_use_overlay_without_duplicating() {
         let dir = slotundo_temp_dir("161-cf-over");
         let config = test_config();
-        let ctx = ctx_161(&dir, &config, Vec::new(), HashSet::new(), 0, &NO_STRINGS_161);
+        let ctx = ctx_161(&dir, &config, Vec::new(), HashSet::new(), 0, &NO_STRINGS_161, &NO_STRINGS_161, false, false, false, false, false);
         let cp = ("dev-libs".to_string(), "overpkg".to_string());
         let mut pass = pass_161();
         pass.use_overlay.insert(
@@ -40621,7 +40628,7 @@ mod tests {
         let dir = slotundo_temp_dir("161-cf-solv");
         let config = test_config();
         let repos = find_repos(&fixtures_root()).expect("fixture repos");
-        let ctx = ctx_161(&dir, &config, repos, HashSet::new(), 1, &NO_STRINGS_161);
+        let ctx = ctx_161(&dir, &config, repos, HashSet::new(), 1, &NO_STRINGS_161, &NO_STRINGS_161, false, false, false, false, false);
         let mut pass = pass_161();
         pass.slot_conflicts = vec![souprov_conflict_161()];
         let key = ("dev-libs".to_string(), "souprov".to_string());
@@ -40656,7 +40663,7 @@ mod tests {
         let dir = slotundo_temp_dir("161-cf-single");
         let config = test_config();
         let repos = find_repos(&fixtures_root()).expect("fixture repos");
-        let ctx = ctx_161(&dir, &config, repos, HashSet::new(), 1, &NO_STRINGS_161);
+        let ctx = ctx_161(&dir, &config, repos, HashSet::new(), 1, &NO_STRINGS_161, &NO_STRINGS_161, false, false, false, false, false);
         let key = ("dev-libs".to_string(), "souprov".to_string());
         let mut pass = pass_161();
         pass.slot_conflicts = vec![souprov_conflict_161()];
@@ -40681,7 +40688,7 @@ mod tests {
         let dir = slotundo_temp_dir("161-cf-dup");
         let config = test_config();
         let repos = find_repos(&fixtures_root()).expect("fixture repos");
-        let ctx = ctx_161(&dir, &config, repos, HashSet::new(), 1, &NO_STRINGS_161);
+        let ctx = ctx_161(&dir, &config, repos, HashSet::new(), 1, &NO_STRINGS_161, &NO_STRINGS_161, false, false, false, false, false);
         let mut pass = pass_161();
         pass.slot_conflicts = vec![souprov_conflict_161()];
         let key = ("dev-libs".to_string(), "souprov".to_string());
@@ -40721,7 +40728,7 @@ mod tests {
         let reachable: HashSet<(String, String)> =
             HashSet::from([("dev-libs".to_string(), "stale".to_string())]);
         let excluded = vec!["dev-libs/stale".to_string()];
-        let ctx = ctx_161(&dir, &config, Vec::new(), reachable, 1, &excluded);
+        let ctx = ctx_161(&dir, &config, Vec::new(), reachable, 1, &excluded, &NO_STRINGS_161, false, false, false, false, false);
         let bar_upgrade = GraphEntry {
             discovery: 0,
             category: "dev-libs".into(),
@@ -40771,7 +40778,7 @@ mod tests {
         let repos = find_repos(&fixtures_root()).expect("fixture repos");
         let reachable: HashSet<(String, String)> =
             HashSet::from([("dev-libs".to_string(), "pinner".to_string())]);
-        let ctx = ctx_161(&dir, &config, repos, reachable, 0, &NO_STRINGS_161);
+        let ctx = ctx_161(&dir, &config, repos, reachable, 0, &NO_STRINGS_161, &NO_STRINGS_161, false, false, false, false, false);
         let souprov_upgrade = GraphEntry {
             discovery: 0,
             category: "dev-libs".into(),
@@ -40847,7 +40854,7 @@ mod tests {
         let repos = find_repos(&fixtures_root()).expect("fixture repos");
         let reachable: HashSet<(String, String)> =
             HashSet::from([("dev-libs".to_string(), "pinner".to_string())]);
-        let ctx = ctx_161(&dir, &config, repos, reachable, 1, &NO_STRINGS_161);
+        let ctx = ctx_161(&dir, &config, repos, reachable, 1, &NO_STRINGS_161, &NO_STRINGS_161, false, false, false, false, false);
         let souprov_upgrade = GraphEntry {
             discovery: 0,
             category: "dev-libs".into(),
@@ -40958,6 +40965,7 @@ mod tests {
         entries: &'a [GraphEntry],
         top_level: &'a HashSet<(String, String)>,
         excluded: &'a [String],
+        selective: bool,
         replace_cps: &'a BTreeSet<(String, String)>,
         root: &'a Path,
         repos: &'a [RepoConfig],
@@ -40968,7 +40976,7 @@ mod tests {
             entries,
             top_level,
             excluded,
-            selective: false,
+            selective,
             replace_cps,
             root,
             repos,
@@ -41173,6 +41181,7 @@ mod tests {
             &entries,
             &top,
             &excluded,
+            false,
             &empty_replace,
             &root,
             &repos,
@@ -41218,6 +41227,7 @@ mod tests {
             &entries,
             &top,
             &excluded,
+            false,
             &empty_replace,
             &root,
             &repos,
@@ -41258,6 +41268,7 @@ mod tests {
             &entries,
             &top,
             &excluded,
+            false,
             &empty_replace,
             &root,
             &repos,
@@ -41729,6 +41740,168 @@ mod tests {
             ]
         );
         assert!(out.surviving.is_empty());
+    }
+
+    /// Backlog #161 S6: one full BFS walk per leg over the fixture
+    /// tree. `run_pass` takes the request atoms from the context; each
+    /// leg below resolves a different installed/tree shape and pins the
+    /// pass entries it settles.
+    fn run_161(
+        dir: &Path,
+        atoms: &[String],
+        update: bool,
+        installed: &[(&str, &str, &str)],
+        newuse: bool,
+        usepkgonly: bool,
+        nodeps: bool,
+        selective: bool,
+    ) -> PassResult {
+        for (name, version, slot) in installed {
+            let d = dir.join("var/db/pkg/dev-libs").join(format!("{name}-{version}"));
+            fs::create_dir_all(&d).unwrap();
+            fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+            fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+            fs::write(d.join("repository"), "testrepo\n").unwrap();
+            fs::write(d.join("USE"), "\n").unwrap();
+        }
+        let config = test_config();
+        let repos = find_repos(&fixtures_root()).expect("fixture repos");
+        let ctx = ctx_161(
+            dir,
+            &config,
+            repos,
+            HashSet::new(),
+            10,
+            &NO_STRINGS_161,
+            atoms,
+            update,
+            newuse,
+            usepkgonly,
+            nodeps,
+            selective,
+        );
+        run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles")
+    }
+
+    /// Backlog #161 S6: a bare leaf atom resolves to a single `New`
+    /// entry at the tree version and slot.
+    #[test]
+    fn run_pass_resolves_a_leaf_to_a_new_entry() {
+        let dir = slotundo_temp_dir("161-run-new");
+        let atoms = vec!["dev-libs/sounneed".to_string()];
+        let pass = run_161(&dir, &atoms, false, &[], false, false, false, false);
+        assert_eq!(pass.entries.len(), 1);
+        let e = &pass.entries[0];
+        assert_eq!((e.category.as_str(), e.package.as_str()), ("dev-libs", "sounneed"));
+        assert!(matches!(
+            e.outcome,
+            PretendOutcome::New { ref version } if version == "1.0"
+        ));
+        assert!(pass.slot_conflicts.is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: an atom with no visible candidate resolves to a
+    /// `NoVisibleCandidate` entry, not an error.
+    #[test]
+    fn run_pass_reports_a_missing_atom_as_nvc() {
+        let dir = slotundo_temp_dir("161-run-nvc");
+        let atoms = vec!["dev-libs/nosuchpkg".to_string()];
+        let pass = run_161(&dir, &atoms, false, &[], false, false, false, false);
+        assert_eq!(pass.entries.len(), 1);
+        assert!(matches!(
+            pass.entries[0].outcome,
+            PretendOutcome::NoVisibleCandidate
+        ));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: a top-level atom for the installed version
+    /// resolves to a bare reasonless `Reinstall` (real's `[ebuild R]`
+    /// for an explicitly requested package -- `is_top_level &&
+    /// !selective`).
+    #[test]
+    fn run_pass_reinstalls_the_requested_installed_version() {
+        let dir = slotundo_temp_dir("161-run-inst");
+        let atoms = vec!["dev-libs/sounneed".to_string()];
+        let pass = run_161(&dir, &atoms, false, &[("sounneed", "1.0", "0/1")], false, false, false, false);
+        assert_eq!(pass.entries.len(), 1);
+        assert!(matches!(
+            pass.entries[0].outcome,
+            PretendOutcome::Reinstall {
+                ref version,
+                ref changed_flags,
+                deps_changed: false,
+                slot_changed: false,
+                ..
+            } if version == "1.0" && changed_flags.is_empty()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: the same installed version reached only as a
+    /// dependency resolves `AlreadyInstalled` with no merge.
+    #[test]
+    fn run_pass_keeps_a_satisfied_dependency_installed() {
+        let dir = slotundo_temp_dir("161-run-depinst");
+        let atoms = vec!["dev-libs/needer".to_string()];
+        let pass = run_161(&dir, &atoms, false, &[("paired", "2.0", "0")], false, false, false, false);
+        let paired = pass
+            .entries
+            .iter()
+            .find(|e| e.package == "paired")
+            .expect("paired walks as needer's dependency");
+        assert!(matches!(
+            paired.outcome,
+            PretendOutcome::AlreadyInstalled { ref version } if version == "2.0"
+        ));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: with `--update`, an older installed instance
+    /// upgrades to the tree version.
+    #[test]
+    fn run_pass_upgrades_an_older_installed_version() {
+        let dir = slotundo_temp_dir("161-run-up");
+        let atoms = vec!["dev-libs/sounneed".to_string()];
+        let pass = run_161(&dir, &atoms, true, &[("sounneed", "0.9", "0/1")], false, false, false, false);
+        assert_eq!(pass.entries.len(), 1);
+        assert!(matches!(
+            pass.entries[0].outcome,
+            PretendOutcome::Upgrade { ref from, ref to } if from == "0.9" && to == "1.0"
+        ));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: with `--update`, a newer installed instance
+    /// downgrades to the tree version.
+    #[test]
+    fn run_pass_downgrades_a_newer_installed_version() {
+        let dir = slotundo_temp_dir("161-run-down");
+        let atoms = vec!["dev-libs/sounneed".to_string()];
+        let pass = run_161(&dir, &atoms, true, &[("sounneed", "2.0", "0/1")], false, false, false, false);
+        assert_eq!(pass.entries.len(), 1);
+        assert!(matches!(
+            pass.entries[0].outcome,
+            PretendOutcome::Downgrade { ref from, ref to } if from == "2.0" && to == "1.0"
+        ));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: dependencies walk transitively, and each
+    /// walked child records its parent atom.
+    #[test]
+    fn run_pass_walks_dependencies_and_records_parent_atoms() {
+        let dir = slotundo_temp_dir("161-run-deps");
+        let atoms = vec!["dev-libs/needer".to_string()];
+        let pass = run_161(&dir, &atoms, false, &[], false, false, false, false);
+        let mut names: Vec<&str> = pass.entries.iter().map(|e| e.package.as_str()).collect();
+        names.sort();
+        assert_eq!(names, vec!["needer", "paired"]);
+        // (`parent_atoms` rows are collected under `--debug` only, like
+        // every `resolver_trace` row -- pinned by the contract suite, so
+        // there is no unit-observable assertion for them here.)
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// recordered `USE`.
