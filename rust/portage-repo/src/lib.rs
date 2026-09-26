@@ -51227,4 +51227,397 @@ mod tests_165 {
         assert!(row_2_0.conflict.unsolvable);
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    // ---- S8: `file_blocker_conflicts` (hanging resolved rows on
+    // their owner entry, or -- with no owner entry -- on the
+    // `Uninstall` removal the row resolves by) and
+    // `collect_unwalked_installed_blockers` (real `_validate_blockers`'
+    // all-installed-packages scan for blockers the walk never
+    // reached). ----
+
+    fn filed_165(
+        owner: (&str, &str),
+        owner_version: &str,
+        atom: &str,
+        strong: bool,
+        target: (&str, &str, &str),
+        unsolvable: bool,
+        satisfied_by: Option<BlockerSatisfiedBy>,
+    ) -> FiledBlocker {
+        FiledBlocker {
+            owner: (owner.0.to_string(), owner.1.to_string()),
+            owner_version: owner_version.to_string(),
+            conflict: BlockerConflict {
+                atom_str: atom.to_string(),
+                strong,
+                matched_category: target.0.to_string(),
+                matched_package: target.1.to_string(),
+                matched_version: target.2.to_string(),
+                unsolvable,
+                satisfied_by,
+                tree_scheduled_uninstall: false,
+            },
+        }
+    }
+
+    fn uninstall_165(cpv: &str, anchor: (&str, &str)) -> BlockerSatisfiedBy {
+        BlockerSatisfiedBy::Uninstall {
+            cpv: cpv.to_string(),
+            anchor: (anchor.0.to_string(), anchor.1.to_string()),
+        }
+    }
+
+    /// An owned conflict lands on its entry *and* spawns the removal
+    /// its `Uninstall` tag names: the whole-body row (which files
+    /// nothing anywhere) and the owner `==` flip (which misses the
+    /// entry) both fail here. (The deleted `Uninstall` match arm does
+    /// not compile -- tool-reported unviable.)
+    #[test]
+    fn file_blocker_conflicts_files_an_owned_row_on_its_entry_and_removal() {
+        let root = dir_165("file-owned");
+        install_165(&root, "dev-libs", "victim-1.0", "0", &[]);
+        let mut entries = vec![new_165("dev-libs", "owner", "1.0")];
+        let mut orphans = Vec::new();
+        file_blocker_conflicts(
+            &mut entries,
+            &root,
+            vec![filed_165(
+                ("dev-libs", "owner"),
+                "1.0",
+                "!!dev-libs/victim",
+                true,
+                ("dev-libs", "victim", "1.0"),
+                false,
+                Some(uninstall_165("dev-libs/victim-1.0", ("dev-libs", "owner"))),
+            )],
+            &mut orphans,
+        );
+        assert!(orphans.is_empty());
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].blockers.len(), 1);
+        assert_eq!(entries[0].blockers[0].atom_str, "!!dev-libs/victim");
+        assert!(matches!(
+            entries[1].outcome,
+            PretendOutcome::Uninstall { .. }
+        ));
+        assert_eq!(entries[1].category, "dev-libs");
+        assert_eq!(entries[1].package, "victim");
+        assert!(entries[1].blockers.is_empty());
+        assert_eq!(
+            entries[1].required_by,
+            vec![("dev-libs".to_string(), "owner".to_string())]
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Two owned conflicts against one removal share it (blockers pile
+    /// up, the anchor is recorded once): each removal-lookup `==` ->
+    /// `!=` flip spawns a duplicate removal, and the anchor `delete !`
+    /// duplicates the anchor -- all fail the exact assertions here.
+    #[test]
+    fn file_blocker_conflicts_merges_two_owned_rows_into_one_removal() {
+        let root = dir_165("file-merge");
+        install_165(&root, "dev-libs", "victim-1.0", "0", &[]);
+        let mut entries = vec![new_165("dev-libs", "owner", "1.0")];
+        let mut orphans = Vec::new();
+        let anchor = ("dev-libs", "owner");
+        file_blocker_conflicts(
+            &mut entries,
+            &root,
+            vec![
+                filed_165(
+                    ("dev-libs", "owner"),
+                    "1.0",
+                    "!!dev-libs/victim",
+                    true,
+                    ("dev-libs", "victim", "1.0"),
+                    false,
+                    Some(uninstall_165("dev-libs/victim-1.0", anchor)),
+                ),
+                filed_165(
+                    ("dev-libs", "owner"),
+                    "1.0",
+                    "!dev-libs/victim",
+                    false,
+                    ("dev-libs", "victim", "1.0"),
+                    false,
+                    Some(uninstall_165("dev-libs/victim-1.0", anchor)),
+                ),
+            ],
+            &mut orphans,
+        );
+        assert!(orphans.is_empty());
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].blockers.len(), 2);
+        assert_eq!(entries[1].blockers.len(), 0);
+        assert_eq!(entries[1].required_by, vec![anchor_to_vec_165(anchor)]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn anchor_to_vec_165(anchor: (&str, &str)) -> (String, String) {
+        (anchor.0.to_string(), anchor.1.to_string())
+    }
+
+    /// Conflicts against different removals stay separate: both
+    /// removal-lookup `&&` -> `||` widenings (which merge on a bare
+    /// category or category+package match) fail here.
+    #[test]
+    fn file_blocker_conflicts_keeps_different_removals_separate() {
+        let root = dir_165("file-separate");
+        install_165(&root, "dev-libs", "victim-1.0", "0", &[]);
+        install_165(&root, "dev-libs", "other-1.0", "0", &[]);
+        let mut entries = vec![new_165("dev-libs", "owner", "1.0")];
+        let mut orphans = Vec::new();
+        let anchor = ("dev-libs", "owner");
+        file_blocker_conflicts(
+            &mut entries,
+            &root,
+            vec![
+                filed_165(
+                    ("dev-libs", "owner"),
+                    "1.0",
+                    "!!dev-libs/victim",
+                    true,
+                    ("dev-libs", "victim", "1.0"),
+                    false,
+                    Some(uninstall_165("dev-libs/victim-1.0", anchor)),
+                ),
+                filed_165(
+                    ("dev-libs", "owner"),
+                    "1.0",
+                    "!!dev-libs/other",
+                    true,
+                    ("dev-libs", "other", "1.0"),
+                    false,
+                    Some(uninstall_165("dev-libs/other-1.0", anchor)),
+                ),
+            ],
+            &mut orphans,
+        );
+        assert!(orphans.is_empty());
+        assert_eq!(entries.len(), 3);
+        let mut pkgs: Vec<String> = entries[1..].iter().map(|e| e.package.clone()).collect();
+        pkgs.sort();
+        assert_eq!(pkgs, vec!["other".to_string(), "victim".to_string()]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// With no owner entry anywhere, `Uninstall` rows still ride their
+    /// removal (the vdb-scan nomerge shape): two rows against one
+    /// removal share it, a same-version other-package row stays
+    /// separate. The no-owner lookup `==` -> `!=` flips (which split
+    /// the shared removal) and its `&&` -> `||` widenings (which fuse
+    /// the separate one) fail here.
+    #[test]
+    fn file_blocker_conflicts_rides_ownerless_rows_on_their_removals() {
+        let root = dir_165("file-ownerless");
+        install_165(&root, "dev-libs", "victim-1.0", "0", &[]);
+        install_165(&root, "dev-libs", "other-1.0", "0", &[]);
+        let mut entries: Vec<GraphEntry> = Vec::new();
+        let mut orphans = Vec::new();
+        file_blocker_conflicts(
+            &mut entries,
+            &root,
+            vec![
+                filed_165(
+                    ("dev-libs", "scanner"),
+                    "1.0",
+                    "!!dev-libs/victim",
+                    true,
+                    ("dev-libs", "victim", "1.0"),
+                    false,
+                    Some(uninstall_165(
+                        "dev-libs/victim-1.0",
+                        ("dev-libs", "scanner"),
+                    )),
+                ),
+                filed_165(
+                    ("dev-libs", "scanner"),
+                    "1.0",
+                    "!dev-libs/victim",
+                    false,
+                    ("dev-libs", "victim", "1.0"),
+                    false,
+                    Some(uninstall_165(
+                        "dev-libs/victim-1.0",
+                        ("dev-libs", "scanner2"),
+                    )),
+                ),
+                filed_165(
+                    ("dev-libs", "scanner"),
+                    "1.0",
+                    "!!dev-libs/other",
+                    true,
+                    ("dev-libs", "other", "1.0"),
+                    false,
+                    Some(uninstall_165("dev-libs/other-1.0", ("dev-libs", "scanner"))),
+                ),
+            ],
+            &mut orphans,
+        );
+        assert!(orphans.is_empty());
+        assert_eq!(entries.len(), 2);
+        let victim = entries
+            .iter()
+            .find(|e| e.package == "victim")
+            .expect("victim removal exists");
+        assert_eq!(victim.blockers.len(), 2);
+        assert_eq!(victim.required_by.len(), 2);
+        let other = entries
+            .iter()
+            .find(|e| e.package == "other")
+            .expect("other removal exists");
+        assert_eq!(other.blockers.len(), 1);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// An unsolvable row with no owner entry and no removal is not
+    /// dropped: it rides the orphan list real still reports.
+    #[test]
+    fn file_blocker_conflicts_orphans_an_unsolvable_ownerless_row() {
+        let root = dir_165("file-orphan");
+        let mut entries: Vec<GraphEntry> = Vec::new();
+        let mut orphans = Vec::new();
+        file_blocker_conflicts(
+            &mut entries,
+            &root,
+            vec![filed_165(
+                ("dev-libs", "scanner"),
+                "1.0",
+                "!!dev-libs/gone",
+                true,
+                ("dev-libs", "gone", "9.9"),
+                true,
+                None,
+            )],
+            &mut orphans,
+        );
+        assert!(entries.is_empty());
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(orphans[0].owner_package, "scanner");
+        assert_eq!(orphans[0].conflict.atom_str, "!!dev-libs/gone");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The scan files an unwalked installed package's strong blocker:
+    /// every whole-body / early-return / token-filter mutant empties
+    /// the pending list and fails here.
+    #[test]
+    fn collect_unwalked_installed_blockers_files_an_unwalked_strong_blocker() {
+        let root = dir_165("scan-basic");
+        install_165(
+            &root,
+            "dev-libs",
+            "blk-1.0",
+            "0",
+            &[("RDEPEND", "!!dev-libs/victim")],
+        );
+        let entries = vec![new_165("dev-libs", "victim", "2.0")];
+        let mut pending = Vec::new();
+        let mut memo = HashMap::new();
+        collect_unwalked_installed_blockers(
+            &[],
+            &root,
+            &cfg_165(),
+            false,
+            &HashMap::new(),
+            None,
+            &entries,
+            &mut pending,
+            &mut memo,
+        );
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].atom_str, "!!dev-libs/victim");
+        assert!(pending[0].strong);
+        assert!(!pending[0].buildtime);
+        assert_eq!(pending[0].target_category, "dev-libs");
+        assert_eq!(pending[0].target_package, "victim");
+        assert_eq!(
+            pending[0].owner_key,
+            ("dev-libs".to_string(), "blk".to_string())
+        );
+        assert_eq!(pending[0].owner_version, "1.0");
+        assert!(!pending[0].owner_merging);
+        assert!(pending[0].owner_installed);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// An already-walked cp is never scanned, and with nothing
+    /// merge-bound the scan is a no-op: both legs pin the early
+    /// returns.
+    #[test]
+    fn collect_unwalked_installed_blockers_skips_walked_cps_and_nomerge_runs() {
+        let root = dir_165("scan-skip");
+        install_165(
+            &root,
+            "dev-libs",
+            "blk-1.0",
+            "0",
+            &[("RDEPEND", "!!dev-libs/victim")],
+        );
+        // `blk` itself walked: its blocker is the walk's own business.
+        let entries = vec![
+            new_165("dev-libs", "victim", "2.0"),
+            new_165("dev-libs", "blk", "1.0"),
+        ];
+        let mut pending = Vec::new();
+        let mut memo = HashMap::new();
+        collect_unwalked_installed_blockers(
+            &[],
+            &root,
+            &cfg_165(),
+            false,
+            &HashMap::new(),
+            None,
+            &entries,
+            &mut pending,
+            &mut memo,
+        );
+        assert!(pending.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The duplicate guard is exact: a pre-seeded identical row is not
+    /// filed twice (each `==` -> `!=` flip re-files it), while a
+    /// same-owner different-atom row still files (each `&&` -> `||`
+    /// widening swallows it).
+    #[test]
+    fn collect_unwalked_installed_blockers_dedups_exact_rows_only() {
+        let root = dir_165("scan-dedup");
+        install_165(
+            &root,
+            "dev-libs",
+            "blk-1.0",
+            "0",
+            &[("RDEPEND", "!!dev-libs/victim !!dev-libs/other")],
+        );
+        let entries = vec![new_165("dev-libs", "victim", "2.0")];
+        let seed = PendingBlocker {
+            atom_str: "!!dev-libs/victim".to_string(),
+            strong: true,
+            buildtime: false,
+            target_category: "dev-libs".to_string(),
+            target_package: "victim".to_string(),
+            owner_key: ("dev-libs".to_string(), "blk".to_string()),
+            owner_version: "1.0".to_string(),
+            owner_merging: false,
+            owner_installed: true,
+        };
+        let mut pending = vec![seed];
+        let mut memo = HashMap::new();
+        collect_unwalked_installed_blockers(
+            &[],
+            &root,
+            &cfg_165(),
+            false,
+            &HashMap::new(),
+            None,
+            &entries,
+            &mut pending,
+            &mut memo,
+        );
+        assert_eq!(pending.len(), 2);
+        assert_eq!(pending[1].atom_str, "!!dev-libs/other");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
