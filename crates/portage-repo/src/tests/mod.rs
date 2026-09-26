@@ -609,6 +609,14 @@ fn assert_one_conflict(args: AssertOneConflictArgs<'_>) {
     );
 }
 
+fn aub0_conflict_versions(result: &GraphResult) -> Vec<Vec<String>> {
+    result
+        .slot_conflicts
+        .iter()
+        .map(|c| c.instances.iter().map(|i| i.version.clone()).collect())
+        .collect()
+}
+
 /// ABI probe harness: installed `abicons-1` recording `app-misc/abiprov:0/1=`,
 /// tree `abiprov-1`/`abiprov-2` + consumer (live `:=`) + forcer. `with_consumer`
 /// controls whether the consumer's same-version ebuild is visible in the tree.
