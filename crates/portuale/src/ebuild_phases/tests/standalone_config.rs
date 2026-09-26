@@ -208,3 +208,74 @@ fn resolve_standalone_binpkg_compress_matches_the_twin_fixture() {
     );
     assert_eq!(unmatched, None, "no match, no override");
 }
+
+/// The unmerge config chain resolves `BINPKG_FORMAT` for the
+/// `FEATURES=unmerge-backup` quickpkg; see notes for the full contract.
+#[test]
+fn resolve_unmerge_config_reads_binpkg_format_from_make_conf() {
+    let probe = TempDir::new("ebuild-phases-test-unmerge_binpkg_format").keep();
+    std::fs::remove_dir_all(&probe).ok();
+    let repo = probe.join("repo");
+    let prof = repo.join("profiles/default");
+    let portage_dir = probe.join("etc/portage");
+    std::fs::create_dir_all(&prof).unwrap();
+    std::fs::create_dir_all(&portage_dir).unwrap();
+    std::fs::write(
+        prof.join("make.defaults"),
+        "ARCH=\"amd64\"\nACCEPT_KEYWORDS=\"${ARCH}\"\n",
+    )
+    .unwrap();
+    std::fs::write(portage_dir.join("make.conf"), "BINPKG_FORMAT=\"xpak\"\n").unwrap();
+    std::fs::write(
+        portage_dir.join("repos.conf"),
+        "[DEFAULT]\nmain-repo = testrepo\n\n[testrepo]\nlocation = repo\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&prof, portage_dir.join("make.profile")).unwrap();
+
+    let config = resolve_unmerge_config(&probe, &probe).expect("scratch chain resolves");
+    assert_eq!(
+        config.other_vars.get("BINPKG_FORMAT").map(String::as_str),
+        Some("xpak"),
+        "the make.conf value must reach the chain the backup path reads"
+    );
+    // The file-side lookup shape (no calling env): the backup names
+    // a `.tbz2` for this value.
+    assert_eq!(
+        crate::ebuild_package::resolve_binpkg_format(|key| config.other_vars.get(key).cloned()),
+        "xpak"
+    );
+    // Only meaningful when the ambient env is silent on the key.
+    if std::env::var_os("BINPKG_FORMAT").is_none() {
+        assert_eq!(
+            crate::ebuild_package::resolve_binpkg_format(|key| {
+                portage_profile::env_over_config_scalar(&config, key)
+            }),
+            "xpak"
+        );
+    }
+
+    // No value anywhere in the chain: nothing resolves, so Portage's
+    // `make.globals` default (`gpkg`) applies.
+    std::fs::write(portage_dir.join("make.conf"), "# no BINPKG_FORMAT here\n").unwrap();
+    let config = resolve_unmerge_config(&probe, &probe).expect("scratch chain resolves");
+    assert!(
+        !config.other_vars.contains_key("BINPKG_FORMAT"),
+        "an unconfigured chain contributes no value"
+    );
+    assert_eq!(
+        crate::ebuild_package::resolve_binpkg_format(|key| config.other_vars.get(key).cloned()),
+        "gpkg"
+    );
+
+    // No `repos.conf` at all: no chain, `None` (the caller keeps the
+    // default) -- the same tolerance the standalone helpers have
+    // outside any repo checkout.
+    std::fs::remove_file(portage_dir.join("repos.conf")).unwrap();
+    assert!(
+        resolve_unmerge_config(&probe, &probe).is_none(),
+        "without repos.conf there is no chain to read"
+    );
+    std::fs::remove_dir_all(&probe).ok();
+}

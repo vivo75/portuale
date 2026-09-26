@@ -1488,6 +1488,42 @@ mod tests {
         TempDir::new("portuale-ebuild-package-test").keep()
     }
 
+    /// Expected value from Portage (container bed): `make.conf MAKEOPTS=-j5`
+    /// must reach the gpkg compressor even outside a repo.
+    #[test]
+    fn package_makeopts_falls_back_to_the_global_chain_outside_a_repo() {
+        let probe = tempdir();
+        let repo = probe.join("repo");
+        let prof = repo.join("profiles/default");
+        let portage_dir = probe.join("etc/portage");
+        std::fs::create_dir_all(&prof).unwrap();
+        std::fs::create_dir_all(&portage_dir).unwrap();
+        std::fs::write(prof.join("make.defaults"), "ARCH=\"amd64\"\n").unwrap();
+        std::fs::write(portage_dir.join("make.conf"), "MAKEOPTS=\"-j5\"\n").unwrap();
+        std::fs::write(
+            portage_dir.join("repos.conf"),
+            "[DEFAULT]\nmain-repo = testrepo\n\n[testrepo]\nlocation = repo\n",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(&prof, portage_dir.join("make.profile")).unwrap();
+        // The scratch layout `quickpkg_from_vdb` uses: no repo ancestor.
+        let scratch = probe.join("scratch/qp/q");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let ebuild = scratch.join("q-1.ebuild");
+        std::fs::write(&ebuild, "EAPI=8\nSLOT=0\n").unwrap();
+
+        assert_eq!(
+            ebuild_phases::resolve_standalone_chain_scalar(&ebuild, &probe, &probe, "MAKEOPTS"),
+            None,
+            "the ebuild-path chain resolves nothing outside a repo"
+        );
+        assert_eq!(
+            package_makeopts(&ebuild, &probe, &probe).as_deref(),
+            Some("-j5")
+        );
+        let _ = std::fs::remove_dir_all(&probe);
+    }
+
     /// Re-derivation from a resolved list is by plain presence, and the layout
     /// bit stays run-wide.
     #[test]
