@@ -50082,4 +50082,53 @@ mod tests_165 {
         );
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    // ---- S2: `vdb_fingerprint` (the `all_installed_packages` cache
+    // key: the vdb dir's own mtime plus every category dir's mtime,
+    // xor-folded with the category count; a missing vdb is exactly 0).
+    // Only deterministic oracles pin the hash: absence (0), presence
+    // (non-zero, non-one), and sensitivity to structural change. The
+    // pure-mixing mutants (`^=`/`%`/`+=`/`^` variants that keep the
+    // stability-and-sensitivity contract) have no deterministic oracle
+    // and are classified in the closeout, not pinned here. ----
+
+    /// A missing vdb fingerprints to exactly 0 -- the whole-body `-> 1`
+    /// row fails here.
+    #[test]
+    fn vdb_fingerprint_of_a_missing_vdb_is_zero() {
+        let root = dir_165("fp-missing");
+        assert_eq!(vdb_fingerprint(&root.join("var/db/pkg")), 0);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// An existing (even empty) vdb never fingerprints to 0 or 1: the
+    /// whole-body `-> 0` row, the nested `mtime_nanos -> 0` row (which
+    /// zeroes the only accumulator term), the `mtime_nanos -> 1` row
+    /// (whose constant survives the empty count term), and the final
+    /// `^` -> `&` row (which masks the accumulator with the zero count
+    /// term) all fail here.
+    #[test]
+    fn vdb_fingerprint_of_an_existing_vdb_is_neither_zero_nor_one() {
+        let root = dir_165("fp-empty");
+        std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+        let fp = vdb_fingerprint(&root.join("var/db/pkg"));
+        assert_ne!(fp, 0);
+        assert_ne!(fp, 1);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Adding a category changes the fingerprint: the `count += 1` ->
+    /// `-=` row underflows (debug panic) and the rotation `+ 1` -> `- 1`
+    /// row underflows on the first category's `u32` amount, so both
+    /// fail here rather than silently keeping a stale cache key.
+    #[test]
+    fn vdb_fingerprint_changes_when_a_category_appears() {
+        let root = dir_165("fp-sensitivity");
+        std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+        let before = vdb_fingerprint(&root.join("var/db/pkg"));
+        std::fs::create_dir_all(root.join("var/db/pkg/dev-libs")).unwrap();
+        let after = vdb_fingerprint(&root.join("var/db/pkg"));
+        assert_ne!(before, after);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
