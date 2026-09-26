@@ -50478,4 +50478,343 @@ mod tests_163 {
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
+    /// One scratch ebuild plus its real md5-cache entry (the md5-cache
+    /// validation guard fails otherwise), in the #161/#162 shape:
+    /// `SLOT`, `KEYWORDS`, `IUSE`, `RDEPEND` lines in both the ebuild
+    /// and the cache entry.
+    fn write_pkg_163(
+        repo: &Path,
+        cp: &str,
+        pv: &str,
+        slot: &str,
+        iuse: &str,
+        rdepend: &str,
+        keywords: &str,
+    ) {
+        use md5::Digest as _;
+        use std::fmt::Write as _;
+        let (cat, pkg) = cp.split_once('/').expect("category/package");
+        let dir = repo.join(cat).join(pkg);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut body = format!(
+            "EAPI=8\nDESCRIPTION=\"163 result assembly\"\nSLOT=\"{slot}\"\nKEYWORDS=\"{keywords}\"\n"
+        );
+        if !iuse.is_empty() {
+            writeln!(body, "IUSE=\"{iuse}\"").unwrap();
+        }
+        if !rdepend.is_empty() {
+            writeln!(body, "RDEPEND=\"{rdepend}\"").unwrap();
+        }
+        std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
+        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+        let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=163 result assembly\nEAPI=8\n".to_string();
+        if !iuse.is_empty() {
+            writeln!(entry, "IUSE={iuse}").unwrap();
+        }
+        if !rdepend.is_empty() {
+            writeln!(entry, "RDEPEND={rdepend}").unwrap();
+        }
+        writeln!(entry, "KEYWORDS={keywords}\nSLOT={slot}\n_md5_={md5}").unwrap();
+        let cachedir = repo.join("metadata/md5-cache").join(cat);
+        std::fs::create_dir_all(&cachedir).unwrap();
+        std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+    }
+
+    /// Single scratch repo (name `testrepo`, priority 0, main) holding
+    /// `(cp, version, slot, iuse, rdepend, keywords)` ebuilds.
+    fn repo_pkgs_163(dir: &Path, pkgs: &[(&str, &str, &str, &str, &str, &str)]) -> Vec<RepoConfig> {
+        let repo = dir.join("repo");
+        for (cp, pv, slot, iuse, rdepend, keywords) in pkgs {
+            write_pkg_163(&repo, cp, pv, slot, iuse, rdepend, keywords);
+        }
+        vec![RepoConfig {
+            name: "testrepo".to_string(),
+            location: repo,
+            priority: 0,
+            is_main: true,
+            masters: vec![],
+            profile_formats: vec![],
+            cache_formats: vec![],
+            aliases: vec![],
+            sync_type: None,
+            sync_uri: None,
+            volatile: false,
+            module_specific_options: vec![],
+        }]
+    }
+
+    /// One installed instance under `<root>/var/db/pkg` with the given
+    /// `SLOT` plus caller-supplied field files (`USE`, `IUSE`,
+    /// `RDEPEND`, `repository`, ...). Mirrors `tests_162::install_162`,
+    /// which must stay untouched.
+    fn install_163(root: &Path, cat: &str, pf: &str, slot: &str, files: &[(&str, &str)]) {
+        let d = root.join("var/db/pkg").join(cat).join(pf);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+        for (name, contents) in files {
+            std::fs::write(d.join(name), contents.as_bytes()).unwrap();
+        }
+    }
+
+    // ---- S3: `refresh_entry_use_display` (the post-walk USE-line
+    // re-render: real `_pkg_use_enabled` consults the flip tier for the
+    // display regardless of the walked graph). ----
+
+    /// A `New` entry's display comes from the resolved candidate's own
+    /// IUSE with the profile-effective USE. Kills the whole-body `()`
+    /// row and the `New`-arm deletion (both leave the display empty).
+    #[test]
+    fn refresh_entry_use_display_renders_a_new_entry_from_the_candidate() {
+        let dir = dir_163("refresh-new");
+        let repos = repo_pkgs_163(
+            &dir,
+            &[("dev-libs/rdisp", "2.0", "0", "alpha beta", "", "amd64")],
+        );
+        let config = cfg_163();
+        let mut entries = vec![entry_163("dev-libs", "rdisp", new_163("2.0"), &[])];
+        refresh_entry_use_display(
+            &mut entries,
+            &repos,
+            &dir,
+            &owner_163("dev-libs", "rdisp"),
+            &config,
+        );
+        assert_eq!(
+            entries[0].use_flags_display,
+            vec![("alpha".to_string(), false), ("beta".to_string(), false),]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An `Upgrade` entry renders the target candidate with the
+    /// installed instance as the diff base; a `Downgrade` the same in
+    /// the other direction. Kills the combined
+    /// `Upgrade|Downgrade`-arm deletion (both stay empty).
+    #[test]
+    fn refresh_entry_use_display_renders_upgrade_and_downgrade_against_the_installed_base() {
+        let dir = dir_163("refresh-updown");
+        let repos = repo_pkgs_163(
+            &dir,
+            &[
+                ("dev-libs/rdisp", "1.0", "0", "alpha", "", "amd64"),
+                ("dev-libs/rdisp", "2.0", "0", "alpha beta", "", "amd64"),
+            ],
+        );
+        let config = cfg_163();
+        install_163(
+            &dir,
+            "dev-libs",
+            "rdisp-1.0",
+            "0",
+            &[("IUSE", "alpha"), ("USE", "alpha")],
+        );
+        let mut entries = vec![entry_163(
+            "dev-libs",
+            "rdisp",
+            PretendOutcome::Upgrade {
+                from: "1.0".to_string(),
+                to: "2.0".to_string(),
+            },
+            &[],
+        )];
+        refresh_entry_use_display(
+            &mut entries,
+            &repos,
+            &dir,
+            &owner_163("dev-libs", "rdisp"),
+            &config,
+        );
+        assert_eq!(
+            entries[0].use_flags_display,
+            vec![("alpha".to_string(), false), ("beta".to_string(), false),]
+        );
+        // The installed base shows in the `-pv` line: `alpha` was on
+        // (`-alpha*`), `beta` is new to IUSE (`-beta%`).
+        assert_eq!(
+            entries[0].use_expand_display,
+            vec![("USE".to_string(), "-alpha* -beta%".to_string())]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let dir = dir_163("refresh-down");
+        let repos = repo_pkgs_163(
+            &dir,
+            &[
+                ("dev-libs/rdisp", "1.0", "0", "alpha", "", "amd64"),
+                ("dev-libs/rdisp", "2.0", "0", "alpha beta", "", "amd64"),
+            ],
+        );
+        install_163(
+            &dir,
+            "dev-libs",
+            "rdisp-2.0",
+            "0",
+            &[("IUSE", "alpha beta"), ("USE", "alpha beta")],
+        );
+        let mut entries = vec![entry_163(
+            "dev-libs",
+            "rdisp",
+            PretendOutcome::Downgrade {
+                from: "2.0".to_string(),
+                to: "1.0".to_string(),
+            },
+            &[],
+        )];
+        refresh_entry_use_display(
+            &mut entries,
+            &repos,
+            &dir,
+            &owner_163("dev-libs", "rdisp"),
+            &config,
+        );
+        assert_eq!(
+            entries[0].use_flags_display,
+            vec![("alpha".to_string(), false)]
+        );
+        // The installed base shows in the `-pv` line: `alpha` was on
+        // (`-alpha*`), and `beta` -- dropped from IUSE by the
+        // downgrade target -- renders as removed (`(-beta%*)`).
+        assert_eq!(
+            entries[0].use_expand_display,
+            vec![("USE".to_string(), "-alpha* (-beta%*)".to_string())]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A `Reinstall` entry whose trigger flag the new ebuild dropped
+    /// from IUSE still shows the `(-flag%*)` removed row at plain `-p`
+    /// through the trigger set. Kills the `Reinstall`-arm deletion of
+    /// the version lookup and the `Reinstall{changed_flags}`-arm
+    /// deletion of the trigger set (both render an empty line here).
+    #[test]
+    fn refresh_entry_use_display_force_shows_a_dropped_reinstall_trigger_flag() {
+        let dir = dir_163("refresh-reinst");
+        let repos = repo_pkgs_163(&dir, &[("dev-libs/rdisp", "1.0", "0", "keep", "", "amd64")]);
+        let config = cfg_163();
+        install_163(
+            &dir,
+            "dev-libs",
+            "rdisp-1.0",
+            "0",
+            &[("IUSE", "gone keep"), ("USE", "gone")],
+        );
+        let mut entries = vec![entry_163(
+            "dev-libs",
+            "rdisp",
+            PretendOutcome::Reinstall {
+                version: "1.0".to_string(),
+                changed_flags: vec!["gone".to_string()],
+                deps_changed: false,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: false,
+                slot_operator_rebuild: false,
+            },
+            &[],
+        )];
+        refresh_entry_use_display(
+            &mut entries,
+            &repos,
+            &dir,
+            &owner_163("dev-libs", "rdisp"),
+            &config,
+        );
+        assert_eq!(
+            entries[0].use_flags_display,
+            vec![("keep".to_string(), false)]
+        );
+        assert_eq!(
+            entries[0].use_expand_display_p,
+            vec![("USE".to_string(), "(-gone%*)".to_string())]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Entries for another cp are skipped, even when their version
+    /// matches a candidate of the refreshed cp: the `||` conjunction
+    /// must skip on either mismatch. Kills the `||` -> `&&` flip, and
+    /// both `!=` -> `==` flips (which skip the refreshed entry
+    /// itself).
+    #[test]
+    fn refresh_entry_use_display_skips_entries_for_another_cp() {
+        let dir = dir_163("refresh-skip");
+        let repos = repo_pkgs_163(
+            &dir,
+            &[("dev-libs/rdisp", "1.0", "0", "alpha", "", "amd64")],
+        );
+        let config = cfg_163();
+        let mut entries = vec![
+            entry_163("dev-libs", "rdisp", new_163("1.0"), &[]),
+            entry_163("dev-libs", "other", new_163("1.0"), &[]),
+            entry_163("sys-libs", "rdisp", new_163("1.0"), &[]),
+        ];
+        refresh_entry_use_display(
+            &mut entries,
+            &repos,
+            &dir,
+            &owner_163("dev-libs", "rdisp"),
+            &config,
+        );
+        assert_eq!(
+            entries[0].use_flags_display,
+            vec![("alpha".to_string(), false)]
+        );
+        assert!(entries[1].use_flags_display.is_empty());
+        assert!(entries[2].use_flags_display.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The candidate is picked by exact version: with two versions in
+    /// the tree the display comes from the entry's own, not the first
+    /// non-matching one. Kills the `==` -> `!=` flip of the version
+    /// lookup.
+    #[test]
+    fn refresh_entry_use_display_picks_the_candidate_at_the_entry_version() {
+        let dir = dir_163("refresh-ver");
+        let repos = repo_pkgs_163(
+            &dir,
+            &[
+                ("dev-libs/rdisp", "1.0", "0", "oldflag", "", "amd64"),
+                ("dev-libs/rdisp", "2.0", "0", "newflag", "", "amd64"),
+            ],
+        );
+        let config = cfg_163();
+        let mut entries = vec![entry_163("dev-libs", "rdisp", new_163("2.0"), &[])];
+        refresh_entry_use_display(
+            &mut entries,
+            &repos,
+            &dir,
+            &owner_163("dev-libs", "rdisp"),
+            &config,
+        );
+        assert_eq!(
+            entries[0].use_flags_display,
+            vec![("newflag".to_string(), false)]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Settled entries (`AlreadyInstalled`) keep their empty display:
+    /// the `_` arm skips them.
+    #[test]
+    fn refresh_entry_use_display_skips_settled_entries() {
+        let dir = dir_163("refresh-settled");
+        let repos = repo_pkgs_163(
+            &dir,
+            &[("dev-libs/rdisp", "1.0", "0", "alpha", "", "amd64")],
+        );
+        let config = cfg_163();
+        let mut entries = vec![entry_163("dev-libs", "rdisp", installed_163("1.0"), &[])];
+        refresh_entry_use_display(
+            &mut entries,
+            &repos,
+            &dir,
+            &owner_163("dev-libs", "rdisp"),
+            &config,
+        );
+        assert!(entries[0].use_flags_display.is_empty());
+        assert!(entries[0].use_expand_display.is_empty());
+        assert!(entries[0].use_expand_display_p.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
