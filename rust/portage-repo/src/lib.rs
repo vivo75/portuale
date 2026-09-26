@@ -49368,4 +49368,350 @@ mod tests_162 {
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    // ---- S6: `promote_tied_alternative` (real `dep_zapdeps`'s
+    // in-bin upgrade-preference pass, `dep_check.py` soft 738-802:
+    // `all_installed_slots` first, then a strict upgrade (no
+    // downgrade anywhere on a shared cp), then the in-graph
+    // alternative). ----
+
+    /// Shared tree for the promotion legs: `up` spans two versions,
+    /// `plain` spans two, `plainb` has one, `slota` spans two slots.
+    fn promote_repo_162(dir: &Path) -> Vec<RepoConfig> {
+        repo_pkgs_162(
+            dir,
+            &[
+                ("test/up", "1.0", "0", ""),
+                ("test/up", "2.0", "0", ""),
+                ("test/plain", "1.0", "0", ""),
+                ("test/plain", "2.0", "0", ""),
+                ("test/plainb", "1.0", "0", ""),
+                ("test/slota", "1.0", "0", ""),
+                ("test/slota", "2.0", "1", ""),
+            ],
+        )
+    }
+
+    fn promote_162(
+        repos: &[RepoConfig],
+        config: &portage_profile::Config,
+        root: &Path,
+        entries: &[GraphEntry],
+        alts: &[&[&str]],
+        queued: &[QueueItem],
+    ) -> usize {
+        let owned: Vec<Vec<String>> = alts
+            .iter()
+            .map(|a| a.iter().map(|s| s.to_string()).collect())
+            .collect();
+        promote_tied_alternative(
+            repos,
+            config,
+            root,
+            entries,
+            &HashMap::new(),
+            &owned,
+            queued,
+        )
+    }
+
+    /// A strict upgrade on the shared cp promotes the newer
+    /// alternative -- the whole-body `-> 0`, two `< 2` early-return
+    /// flips, the break-on-self flip, the position flip and the
+    /// upgrade-arm `||` narrowing fail here.
+    #[test]
+    fn promote_tied_alternative_prefers_the_strict_upgrade() {
+        let dir = dir_162("prom-up");
+        let repos = promote_repo_162(&dir);
+        let config = cfg_162();
+        assert_eq!(
+            promote_162(
+                &repos,
+                &config,
+                &dir,
+                &[],
+                &[&["=test/up-1.0"], &["test/up"]],
+                &[]
+            ),
+            1
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Disjoint cps never promote -- the whole-body `-> 1` (already
+    /// S0-caught) fails here too.
+    #[test]
+    fn promote_tied_alternative_keeps_disjoint_order() {
+        let dir = dir_162("prom-disj");
+        let repos = promote_repo_162(&dir);
+        let config = cfg_162();
+        assert_eq!(
+            promote_162(
+                &repos,
+                &config,
+                &dir,
+                &[],
+                &[&["test/up"], &["test/plain"]],
+                &[]
+            ),
+            0
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Three alternatives promote the newest past both older ones --
+    /// the `< 2` -> `>` flip (which returns 0 for any longer list)
+    /// fails here.
+    #[test]
+    fn promote_tied_alternative_promotes_through_a_longer_list() {
+        let dir = dir_162("prom-long");
+        let repos = promote_repo_162(&dir);
+        let config = cfg_162();
+        assert_eq!(
+            promote_162(
+                &repos,
+                &config,
+                &dir,
+                &[],
+                &[&["=test/up-1.0"], &["test/plain"], &["test/up"]],
+                &[]
+            ),
+            2
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An upgrade on one shared cp plus a downgrade on another is no
+    /// promotion -- both mixed-shape flips fail here.
+    #[test]
+    fn promote_tied_alternative_rejects_a_mixed_upgrade_and_downgrade() {
+        let dir = dir_162("prom-mixed");
+        let repos = promote_repo_162(&dir);
+        let config = cfg_162();
+        assert_eq!(
+            promote_162(
+                &repos,
+                &config,
+                &dir,
+                &[],
+                &[
+                    &["=test/plain-1.0", "test/up"],
+                    &["test/plain", "=test/up-1.0"]
+                ],
+                &[]
+            ),
+            0
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// With equal versions the in-graph alternative promotes -- the
+    /// two `!...` deletions and the inner-`&&` widening in the
+    /// in-graph arm fail here.
+    #[test]
+    fn promote_tied_alternative_prefers_the_in_graph_alternative() {
+        let dir = dir_162("prom-graph");
+        let repos = promote_repo_162(&dir);
+        let config = cfg_162();
+        let entries = vec![entry_162(
+            "test",
+            "plainb",
+            PretendOutcome::New {
+                version: "1.0".to_string(),
+            },
+            Some("0"),
+            false,
+        )];
+        assert_eq!(
+            promote_162(
+                &repos,
+                &config,
+                &dir,
+                &entries,
+                &[&["test/plain"], &["test/plainb"]],
+                &[]
+            ),
+            1
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// With both alternatives in-graph nothing promotes -- the two
+    /// outer-`&&` widenings in the in-graph arm (already S0-caught)
+    /// fail here too.
+    #[test]
+    fn promote_tied_alternative_keeps_order_when_both_are_in_graph() {
+        let dir = dir_162("prom-bothgraph");
+        let repos = promote_repo_162(&dir);
+        let config = cfg_162();
+        let entries = vec![
+            entry_162(
+                "test",
+                "plain",
+                PretendOutcome::New {
+                    version: "2.0".to_string(),
+                },
+                Some("0"),
+                false,
+            ),
+            entry_162(
+                "test",
+                "plainb",
+                PretendOutcome::New {
+                    version: "1.0".to_string(),
+                },
+                Some("0"),
+                false,
+            ),
+        ];
+        assert_eq!(
+            promote_162(
+                &repos,
+                &config,
+                &dir,
+                &entries,
+                &[&["test/plain"], &["test/plainb"]],
+                &[]
+            ),
+            0
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A downgrade-only alternative stays put even when it is the one
+    /// in-graph -- the `!has_upgrade` deletion in the downgrade guard
+    /// fails here.
+    #[test]
+    fn promote_tied_alternative_rejects_an_in_graph_downgrade() {
+        let dir = dir_162("prom-downgraph");
+        let repos = promote_repo_162(&dir);
+        let config = cfg_162();
+        let entries = vec![entry_162(
+            "test",
+            "up",
+            PretendOutcome::New {
+                version: "1.0".to_string(),
+            },
+            Some("0"),
+            false,
+        )];
+        assert_eq!(
+            promote_162(
+                &repos,
+                &config,
+                &dir,
+                &entries,
+                &[&["test/up", "test/plain"], &["=test/up-1.0"]],
+                &[]
+            ),
+            0
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An alternative installed in every needed slot promotes over
+    /// one that is not -- the `!all_installed_slots` deletion fails
+    /// here.
+    #[test]
+    fn promote_tied_alternative_prefers_the_installed_slots_alternative() {
+        let dir = dir_162("prom-slots");
+        let repos = promote_repo_162(&dir);
+        install_162(&dir, "test", "slota-1.0", "0", &[]);
+        let config = cfg_162();
+        assert_eq!(
+            promote_162(
+                &repos,
+                &config,
+                &dir,
+                &[],
+                &[&["test/plain"], &["=test/slota-1.0"]],
+                &[]
+            ),
+            1
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An uninstalled alternative does not take the installed-slots
+    /// promotion even against an installed one -- the
+    /// `all_installed_slots &&` widening (already S0-caught) fails
+    /// here too.
+    #[test]
+    fn promote_tied_alternative_rejects_an_uninstalled_alternative() {
+        let dir = dir_162("prom-noslots");
+        let repos = promote_repo_162(&dir);
+        install_162(&dir, "test", "slota-1.0", "0", &[]);
+        let config = cfg_162();
+        assert_eq!(
+            promote_162(
+                &repos,
+                &config,
+                &dir,
+                &[],
+                &[&["=test/slota-1.0"], &["test/plain"]],
+                &[]
+            ),
+            0
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Cp-installed but in the wrong slot is not
+    /// `all_installed_slots` (real soft 599-607) -- the slot-check
+    /// `&&` widening fails here.
+    #[test]
+    fn promote_tied_alternative_needs_the_candidate_slot_installed() {
+        let dir = dir_162("prom-wrongslot");
+        let repos = promote_repo_162(&dir);
+        install_162(&dir, "test", "slota-1.0", "0", &[]);
+        let config = cfg_162();
+        assert_eq!(
+            promote_162(
+                &repos,
+                &config,
+                &dir,
+                &[],
+                &[&["test/plain"], &["test/slota"]],
+                &[]
+            ),
+            0
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Blockers never enter a `cp_map`: the blocker alternative keeps
+    /// no shared cp and loses -- the blocker-skip flip fails here.
+    #[test]
+    fn promote_tied_alternative_ignores_blockers_in_cp_maps() {
+        let dir = dir_162("prom-blocker");
+        let repos = promote_repo_162(&dir);
+        install_162(&dir, "test", "up-1.0", "0", &[]);
+        let config = cfg_162();
+        assert_eq!(
+            promote_162(
+                &repos,
+                &config,
+                &dir,
+                &[],
+                &[&["=test/up-1.0"], &["!test/up"]],
+                &[]
+            ),
+            0
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A single alternative always wins index 0 -- pins the early
+    /// return the `< 2` mutants never touch.
+    #[test]
+    fn promote_tied_alternative_returns_zero_for_a_single_alternative() {
+        let dir = dir_162("prom-single");
+        let repos = promote_repo_162(&dir);
+        let config = cfg_162();
+        assert_eq!(
+            promote_162(&repos, &config, &dir, &[], &[&["test/up"]], &[]),
+            0
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
