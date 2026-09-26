@@ -1995,11 +1995,26 @@ fn run_bundle_stage(
 
 // --- Client merge (slice 4) ----------------------------------------------------
 
+/// Real `eapi_exports_merge_type` (`lib/portage/eapi.py:63`, attrs table
+/// `:300`: `exports_merge_type = eapi >= Eapi("4")`): `MERGE_TYPE` reaches
+/// the phase env only for EAPI 4+ (real `config.py:3335-3336` pops it
+/// otherwise). An unparseable EAPI takes real's `_get_eapi_attrs(None)`
+/// fallback row, which also exports (`eapi.py:258`).
+fn eapi_exports_merge_type(eapi: &str) -> bool {
+    match eapi.split('-').next().unwrap_or("").parse::<i64>() {
+        Ok(n) => n >= 4,
+        Err(_) => true,
+    }
+}
+
 /// Shared `export` block for any hook run (new phases in `phase_script`,
 /// old prerm/postrm inside the merge driver): path overrides with
 /// caller-side values, everything else from the sourced saved env.
 /// `unit_bin` is the shipped runtime dir (`$UNIT/bin`,
 /// `$OLD_TMP/bin` symlink or copy -- callers decide).
+/// `MERGE_TYPE=binary` rides the same line as `EMERGE_FROM` (real
+/// `_emerge/Binpkg.py:92` sets it for every binpkg merge; `mrg` only
+/// merges binpkgs), gated on [`eapi_exports_merge_type`].
 #[allow(clippy::too_many_arguments)]
 fn phase_exports(
     ebuild: &str,
@@ -2031,8 +2046,13 @@ fn phase_exports(
             "export PORTAGE_COLORMAP={colormap}\n",
             "export PORTAGE_TMPDIR={tmpdir}\n",
             "export SANDBOX_LOG={temp}/sandbox.log\n",
-            "export EBUILD_PHASE={phase} EMERGE_FROM=binary\n",
+            "export EBUILD_PHASE={phase} EMERGE_FROM=binary{merge_type}\n",
         ),
+        merge_type = if eapi_exports_merge_type(&staged.eapi) {
+            " MERGE_TYPE=binary"
+        } else {
+            ""
+        },
         eapi = sh_quote(&staged.eapi),
         category = sh_quote(&staged.category),
         pn = sh_quote(&staged.pn),
@@ -3526,6 +3546,72 @@ mod tests {
 
     /// Positive pretend dispatch through the real stack: a synthetic unit
     /// (hand-written ebuild + environment carrying `pkg_pretend`, the real
+    #[test]
+    fn phase_exports_gates_merge_type_on_eapi() {
+        // Real `_emerge/Binpkg.py:92` sets `MERGE_TYPE=binary` for a binpkg
+        // merge, and real `config.environ()` (`config.py:3335-3336`) exports
+        // it only when `eapi_exports_merge_type` holds (EAPI >= 4,
+        // `eapi.py:300`). Bed `l31-20260926T061556Z` shows real appending
+        // `merge_type=binary` x4 (322 B) where mrg wrote `?` x4 (302 B).
+        // `mrg` only merges binpkgs, so `binary` is the only value.
+        fn exports_for(eapi: &str) -> String {
+            let staged = crate::remote_bundle::StagedBundle {
+                tarball: std::path::PathBuf::from("/tmp/bundle.tar"),
+                byte_count: 0,
+                manifest: crate::remote_bundle::BundleManifest {
+                    format: 1,
+                    cpv: "dev-libs/probe-1.0".to_string(),
+                    slot: "0".to_string(),
+                    repo: "test".to_string(),
+                    has_environment: false,
+                },
+                eapi: eapi.to_string(),
+                category: "dev-libs".to_string(),
+                pn: "probe".to_string(),
+                pv: "1.0".to_string(),
+                pr: "r0".to_string(),
+                pvr: "1.0".to_string(),
+                p: "probe-1.0".to_string(),
+                pf: "probe-1.0".to_string(),
+                phases: Vec::new(),
+                postinst_defined: false,
+            };
+            phase_exports(
+                "/tmp/work/build-info/probe-1.0.ebuild",
+                "/tmp/work",
+                "/",
+                "/tmp/work/image",
+                "/tmp/work/temp",
+                "/tmp/work/work",
+                "/tmp/work/homedir",
+                "/tmp/work/files",
+                "/tmp/work/bin",
+                "/tmp",
+                "",
+                &staged,
+                "setup",
+            )
+        }
+        assert!(eapi_exports_merge_type("4"));
+        assert!(eapi_exports_merge_type("8"));
+        assert!(!eapi_exports_merge_type("0"));
+        assert!(!eapi_exports_merge_type("3"));
+        let exporting = exports_for("8");
+        assert!(
+            exporting.contains("export EBUILD_PHASE=setup EMERGE_FROM=binary MERGE_TYPE=binary\n"),
+            "EAPI 8 must export MERGE_TYPE=binary:\n{exporting}"
+        );
+        let gated = exports_for("3");
+        assert!(
+            !gated.contains("MERGE_TYPE"),
+            "EAPI 3 must not export MERGE_TYPE:\n{gated}"
+        );
+        assert!(
+            gated.contains("export EBUILD_PHASE=setup EMERGE_FROM=binary\n"),
+            "EAPI 3 keeps the bare EMERGE_FROM line:\n{gated}"
+        );
+    }
+
     /// shipped `bin/`) runs the generated phase script under local bash.
     /// Proves template + `ebuild.sh` + DEFINED_PHASES-agnostic dispatch;
     /// the ebuild/env being synthetic is the only unreal part.
