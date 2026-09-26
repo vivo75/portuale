@@ -40450,12 +40450,13 @@ mod tests {
         update: bool,
         newuse: bool,
         usepkg: bool,
+        binpkg_respect_use: bool,
         usepkgonly: bool,
         nodeps: bool,
         selective: bool,
         with_test_deps: bool,
-        with_bdeps: bool,
         deep: Deep,
+        with_bdeps: bool,
         complete: bool,
         locked: HashSet<(String, String)>,
         blocker_closure: HashSet<(String, String)>,
@@ -40485,7 +40486,7 @@ mod tests {
             autounmask_backtrack_enabled: false,
             usepkg: o.usepkg,
             usepkgonly: o.usepkgonly,
-            binpkg_respect_use: false,
+            binpkg_respect_use: o.binpkg_respect_use,
             usepkg_exclude: &NO_STRINGS_161,
             usepkg_include: &NO_STRINGS_161,
             rebuilt_binaries: false,
@@ -41899,7 +41900,7 @@ mod tests {
     fn run_pass_upgrades_an_older_installed_version() {
         let dir = slotundo_temp_dir("161-run-up");
         let atoms = vec!["dev-libs/sounneed".to_string()];
-        let pass = run_161(&dir, &atoms, true, &[("sounneed", "0.9", "0/1")], false, false, false, false, false, Deep::NotRequested, false);
+        let pass = run_161(&dir, &atoms, true, &[("sounneed", "0.9", "0/1"), ("sounneed", "0.8", "0/1")], false, false, false, false, false, Deep::NotRequested, false);
         assert_eq!(pass.entries.len(), 1);
         assert!(matches!(
             pass.entries[0].outcome,
@@ -41914,6 +41915,15 @@ mod tests {
         assert_eq!(
             pass.entries[0].use_expand_display_p,
             vec![("USE".to_string(), "-soflag%".to_string())]
+        );
+        // Both installed same-slot instances ride as oldbest, sorted.
+        assert_eq!(
+            pass.entries[0]
+                .oldbest
+                .iter()
+                .map(|r| r.version.as_str())
+                .collect::<Vec<_>>(),
+            vec!["0.8", "0.9"]
         );
         let _ = fs::remove_dir_all(&dir);
     }
@@ -41980,6 +41990,16 @@ mod tests {
             }
             other => panic!("expected a USE-change reinstall, got {other:?}"),
         }
+        // The reinstall renders the recorded USE with the changed
+        // flag marked.
+        assert_eq!(
+            pkg.use_flags_display,
+            vec![("wantdep".to_string(), false)]
+        );
+        assert_eq!(
+            pkg.use_expand_display_p,
+            vec![("USE".to_string(), "-wantdep%".to_string())]
+        );
         // The conditional dep itself resolves on the retry walk the
         // recorded flag change drives (contract-suite pinned); this
         // pass pins the flag delta.
@@ -43259,6 +43279,78 @@ mod tests {
             .collect();
         plain.sort();
         assert_eq!(plain, vec!["dev-libs/plainmiss", "sys-libs/dupmiss"]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: with `--binpkg-respect-use`, a binary
+    /// whose USE disagrees with the tree is filtered out and the
+    /// ebuild wins instead.
+    #[test]
+    fn run_pass_respect_use_filters_a_stale_binary() {
+        let dir = slotundo_temp_dir("161-run-respect");
+        let atoms = vec!["dev-libs/sounneed".to_string()];
+        let mut config = test_config();
+        // The staged binary was built with +soflag; the tree resolves
+        // it off.
+        config.scanned_binpkgs = Some(vec![HashMap::from([
+            ("CPV".to_string(), "dev-libs/sounneed-1.0".to_string()),
+            ("SLOT".to_string(), "0".to_string()),
+            ("KEYWORDS".to_string(), "amd64".to_string()),
+            ("REPO".to_string(), "testrepo".to_string()),
+            ("USE".to_string(), "soflag".to_string()),
+            ("IUSE".to_string(), "soflag".to_string()),
+        ])]);
+        let repos = find_repos(&fixtures_root()).expect("fixture repos");
+        let opts = CtxOpts161 {
+            backtrack_max: 10,
+            atoms: atoms.clone(),
+            usepkg: true,
+            binpkg_respect_use: true,
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, repos, &opts);
+        let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+        assert_eq!(pass.entries.len(), 1);
+        assert_eq!(
+            pass.entries[0].source,
+            CandidateSource::Ebuild,
+            "the USE-mismatched binary is filtered out"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: an older staged binary loses to the newer tree
+    /// ebuild under `--usepkg`.
+    #[test]
+    fn run_pass_newer_ebuild_beats_older_binary() {
+        let dir = slotundo_temp_dir("161-run-oldbin");
+        let atoms = vec!["dev-libs/sounneed".to_string()];
+        let mut config = test_config();
+        config.scanned_binpkgs = Some(vec![HashMap::from([
+            ("CPV".to_string(), "dev-libs/sounneed-0.9".to_string()),
+            ("SLOT".to_string(), "0".to_string()),
+            ("KEYWORDS".to_string(), "amd64".to_string()),
+            ("REPO".to_string(), "testrepo".to_string()),
+        ])]);
+        let repos = find_repos(&fixtures_root()).expect("fixture repos");
+        let opts = CtxOpts161 {
+            backtrack_max: 10,
+            atoms: atoms.clone(),
+            usepkg: true,
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, repos, &opts);
+        let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+        assert_eq!(pass.entries.len(), 1);
+        assert_eq!(
+            pass.entries[0].source,
+            CandidateSource::Ebuild,
+            "the newer tree ebuild wins"
+        );
+        assert!(matches!(
+            pass.entries[0].outcome,
+            PretendOutcome::New { ref version } if version == "1.0"
+        ));
         let _ = fs::remove_dir_all(&dir);
     }
 
