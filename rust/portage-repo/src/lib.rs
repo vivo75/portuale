@@ -50817,4 +50817,1484 @@ mod tests_163 {
         assert!(entries[0].use_expand_display_p.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
+    // ---- shared resolve_pretend harness (S4) ----
+
+    /// Option bundle for `resolve_163`, mirroring `resolve_pretend`'s
+    /// trailing flags positionally (see the `resolve` helper in the
+    /// main test module for the same shape). Defaults are the plain
+    /// top-level selective resolve.
+    #[derive(Default)]
+    struct RpOpts163 {
+        newuse: bool,
+        changed_use: bool,
+        update: bool,
+        excluded: Vec<String>,
+        changed_deps: bool,
+        with_bdeps: bool,
+        changed_slot: bool,
+        selective: bool,
+        is_top_level: bool,
+        usepkg: bool,
+        usepkgonly: bool,
+        binpkg_respect_use: bool,
+        usepkg_exclude: Vec<String>,
+        usepkg_include: Vec<String>,
+        rebuilt_binaries: bool,
+        rebuilt_binaries_timestamp: Option<u64>,
+        newrepo: bool,
+        empty: bool,
+        getbinpkg: bool,
+        autounmask_keywords: bool,
+        autounmask_use: bool,
+        autounmask_license: bool,
+        autounmask_masks: bool,
+        extra_constraints: Vec<String>,
+    }
+
+    impl RpOpts163 {
+        fn top() -> Self {
+            RpOpts163 {
+                selective: true,
+                is_top_level: true,
+                with_bdeps: true,
+                ..Default::default()
+            }
+        }
+        fn dep() -> Self {
+            RpOpts163 {
+                with_bdeps: true,
+                ..Default::default()
+            }
+        }
+    }
+
+    /// Direct `resolve_pretend` call over a scratch repo + scratch vdb.
+    /// `binpkgs` stages `config.scanned_binpkgs` records (the S6 binary
+    /// legs' shape); the binary pool derives from the same config, like
+    /// production's `ResolveCtx::new`.
+    fn resolve_163(
+        repos: &[RepoConfig],
+        root: &Path,
+        config: &portage_profile::Config,
+        atom: &str,
+        o: &RpOpts163,
+    ) -> PretendOutcome {
+        resolve_pretend(
+            repos,
+            root,
+            atom,
+            config,
+            o.newuse,
+            o.changed_use,
+            o.update,
+            &o.excluded,
+            o.changed_deps,
+            o.with_bdeps,
+            o.changed_slot,
+            o.selective,
+            o.is_top_level,
+            o.usepkg,
+            o.usepkgonly,
+            o.binpkg_respect_use,
+            &o.usepkg_exclude,
+            &o.usepkg_include,
+            o.rebuilt_binaries,
+            o.rebuilt_binaries_timestamp,
+            o.newrepo,
+            o.empty,
+            o.getbinpkg,
+            o.autounmask_keywords,
+            o.autounmask_use,
+            o.autounmask_license,
+            o.autounmask_masks,
+            &o.extra_constraints,
+            &build_local_binpkg_index(config),
+        )
+        .unwrap_or_else(|e| panic!("resolve_163({atom}) failed: {e}"))
+    }
+
+    fn binpkg_163(cpv: &str, slot: &str, extra: &[(&str, &str)]) -> HashMap<String, String> {
+        let mut m = HashMap::from([
+            ("CPV".to_string(), cpv.to_string()),
+            ("SLOT".to_string(), slot.to_string()),
+            ("KEYWORDS".to_string(), "amd64".to_string()),
+            ("REPO".to_string(), "testrepo".to_string()),
+        ]);
+        for (k, v) in extra {
+            m.insert(k.to_string(), v.to_string());
+        }
+        m
+    }
+
+    // ---- S4: `resolve_pretend` (the single-atom v1 pretend decision:
+    // best visible candidate vs installed, real
+    // `_wrapped_select_pkg_highest_available_imp` + the `avoid_update`
+    // / fallback / autounmask levels around it). ----
+
+    /// A fresh top-level atom resolves `New` at the best visible
+    /// version. Pins the baseline the S0 run already covers (its rows
+    /// are caught or unviable there).
+    #[test]
+    fn resolve_pretend_fresh_top_level_atom_resolves_new_at_the_best_version() {
+        let dir = dir_163("rp-new");
+        let repos = repo_pkgs_163(
+            &dir,
+            &[
+                ("dev-libs/rp", "1.0", "0", "", "", "amd64"),
+                ("dev-libs/rp", "2.0", "0", "", "", "amd64"),
+            ],
+        );
+        let config = cfg_163();
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp", &RpOpts163::top()),
+            new_163("2.0")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `--emptytree` rebuilds everything: an installed same-version
+    /// top-level atom with a newer tree version resolves `Upgrade`
+    /// while a non-empty selective resolve keeps the installed one.
+    /// Pins the `selective && !empty` conjunction the S0 run already
+    /// covers.
+    #[test]
+    fn resolve_pretend_emptytree_upgrades_past_the_installed_version() {
+        for (tag, empty, selective, expected) in [
+            (
+                "empty",
+                true,
+                true,
+                PretendOutcome::Upgrade {
+                    from: "1.0".to_string(),
+                    to: "2.0".to_string(),
+                },
+            ),
+            ("selective", false, true, installed_163("1.0")),
+        ] {
+            let dir = dir_163(&format!("rp-empty-{tag}"));
+            let repos = repo_pkgs_163(
+                &dir,
+                &[
+                    ("dev-libs/rp", "1.0", "0", "", "", "amd64"),
+                    ("dev-libs/rp", "2.0", "0", "", "", "amd64"),
+                ],
+            );
+            install_163(&dir, "dev-libs", "rp-1.0", "0", &[]);
+            let config = cfg_163();
+            let mut o = RpOpts163::top();
+            o.empty = empty;
+            o.selective = selective;
+            assert_eq!(
+                resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+                expected,
+                "{tag}"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// A non-empty selective top-level resolve over an installed
+    /// version with a newer tree version keeps the installed one.
+    /// Pins the shape the S0 run already covers.
+    #[test]
+    fn resolve_pretend_selective_top_level_keeps_the_installed_version() {
+        let dir = dir_163("rp-sel");
+        let repos = repo_pkgs_163(
+            &dir,
+            &[
+                ("dev-libs/rp", "1.0", "0", "", "", "amd64"),
+                ("dev-libs/rp", "2.0", "0", "", "", "amd64"),
+            ],
+        );
+        install_163(&dir, "dev-libs", "rp-1.0", "0", &[]);
+        let config = cfg_163();
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp", &RpOpts163::top()),
+            installed_163("1.0")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `--usepkgonly` pulls a binary-only package from the staged
+    /// index. Kills the `usepkg || usepkgonly` -> `&&` flip (which
+    /// leaves the binary pool empty and reports `NoVisibleCandidate`).
+    #[test]
+    fn resolve_pretend_usepkgonly_pulls_a_binary_only_package() {
+        let dir = dir_163("rp-binonly");
+        let repos = repo_pkgs_163(&dir, &[]);
+        let mut config = cfg_163();
+        config.scanned_binpkgs = Some(vec![binpkg_163("dev-libs/rpbin-1.0", "0", &[])]);
+        let mut o = RpOpts163::top();
+        o.usepkgonly = true;
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rpbin", &o),
+            new_163("1.0")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The installed fallback under `--usepkg`/`--usepkgonly` covers a
+    /// dependency whose only satisfier is installed (real restricts
+    /// the *merge* pool, not installed-satisfaction). Pins the shape
+    /// the S0 run already covers.
+    #[test]
+    fn resolve_pretend_usepkg_dependency_falls_back_to_the_installed_version() {
+        let dir = dir_163("rp-usefallback");
+        let repos = repo_pkgs_163(&dir, &[]);
+        install_163(&dir, "dev-libs", "rp-1.0", "0", &[]);
+        let config = cfg_163();
+        let mut o = RpOpts163::dep();
+        o.usepkg = true;
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+            installed_163("1.0")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A dependency whose installed version still satisfies the atom
+    /// is kept without searching for a newer one (real's
+    /// `avoid_update` early return). Pins the early return all four
+    /// `!`s guard.
+    #[test]
+    fn resolve_pretend_dependency_avoids_updating_a_satisfying_installed_version() {
+        let dir = dir_163("rp-avoid");
+        let repos = repo_pkgs_163(
+            &dir,
+            &[
+                ("dev-libs/rp", "1.0", "0", "", "", "amd64"),
+                ("dev-libs/rp", "2.0", "0", "", "", "amd64"),
+            ],
+        );
+        install_163(&dir, "dev-libs", "rp-1.0", "0", &[]);
+        let config = cfg_163();
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp", &RpOpts163::dep()),
+            installed_163("1.0")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Each widened early-return guard changes the outcome on its own:
+    /// `--update`, `--emptytree`, and a top-level atom each bypass the
+    /// early return and upgrade past the installed version (the dep
+    /// baseline keeps it). Pins the gate the S0 run already covers.
+    #[test]
+    fn resolve_pretend_early_return_bypass_flags_each_upgrade_past_installed() {
+        for (tag, o) in [
+            (
+                "update",
+                RpOpts163 {
+                    update: true,
+                    ..RpOpts163::dep()
+                },
+            ),
+            (
+                "empty",
+                RpOpts163 {
+                    empty: true,
+                    ..RpOpts163::dep()
+                },
+            ),
+            (
+                "top",
+                RpOpts163 {
+                    is_top_level: true,
+                    selective: false,
+                    ..RpOpts163::dep()
+                },
+            ),
+        ] {
+            let dir = dir_163(&format!("rp-bypass-{tag}"));
+            let repos = repo_pkgs_163(
+                &dir,
+                &[
+                    ("dev-libs/rp", "1.0", "0", "", "", "amd64"),
+                    ("dev-libs/rp", "2.0", "0", "", "", "amd64"),
+                ],
+            );
+            install_163(&dir, "dev-libs", "rp-1.0", "0", &[]);
+            let config = cfg_163();
+            assert_eq!(
+                resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+                PretendOutcome::Upgrade {
+                    from: "1.0".to_string(),
+                    to: "2.0".to_string(),
+                },
+                "{tag}"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+    /// A plain matching candidate is usable: no autounmask fallback
+    /// runs. Pins the probe the S0 run already covers.
+    #[test]
+    fn resolve_pretend_plain_matching_candidate_needs_no_fallback() {
+        let dir = dir_163("rp-usable");
+        let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "", "", "amd64")]);
+        let config = cfg_163();
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp", &RpOpts163::top()),
+            new_163("1.0")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A keyword-masked-only candidate resolves through the
+    /// `--autounmask` keyword level. Pins the level loop the S0 run
+    /// already covers.
+    #[test]
+    fn resolve_pretend_autounmask_keywords_relaxes_a_masked_candidate() {
+        let dir = dir_163("rp-aukw");
+        let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "", "", "~amd64")]);
+        let config = cfg_163();
+        let mut o = RpOpts163::top();
+        o.autounmask_keywords = true;
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+            new_163("1.0")
+        );
+        // Without the flag the same candidate is invisible.
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp", &RpOpts163::top()),
+            PretendOutcome::NoVisibleCandidate
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A positive extra constraint narrows the match; a negative one
+    /// hides its version. Pins the filters the S0 run already
+    /// covers.
+    #[test]
+    fn resolve_pretend_extra_constraints_narrow_and_hide_versions() {
+        for (tag, extra, expected) in [
+            (
+                "positive",
+                vec!["=dev-libs/rp-1.0".to_string()],
+                new_163("1.0"),
+            ),
+            (
+                "negative",
+                vec!["!=dev-libs/rp-2.0".to_string()],
+                new_163("1.0"),
+            ),
+        ] {
+            let dir = dir_163(&format!("rp-extra-{tag}"));
+            let repos = repo_pkgs_163(
+                &dir,
+                &[
+                    ("dev-libs/rp", "1.0", "0", "", "", "amd64"),
+                    ("dev-libs/rp", "2.0", "0", "", "", "amd64"),
+                ],
+            );
+            let config = cfg_163();
+            let mut o = RpOpts163::top();
+            o.extra_constraints = extra;
+            assert_eq!(
+                resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+                expected,
+                "{tag}"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// A vacuous negative extra constraint changes nothing. Pins
+    /// the probe the S0 run already covers.
+    #[test]
+    fn resolve_pretend_vacuous_negative_extra_constraint_resolves() {
+        let dir = dir_163("rp-extravac");
+        let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "", "", "amd64")]);
+        let config = cfg_163();
+        let mut o = RpOpts163::top();
+        o.extra_constraints = vec!["!=dev-libs/rp-9.9".to_string()];
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+            new_163("1.0")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A `[flag]` atom against a flippable candidate resolves through
+    /// `--autounmask-use`, and without the flag it is
+    /// `NoVisibleCandidate`. Pins the filter the S0 run already
+    /// covers (its reachable rows are caught there; the `true`
+    /// guard is unreachable -- see the report).
+    #[test]
+    fn resolve_pretend_use_dep_atom_resolves_only_through_autounmask_use() {
+        for (tag, autounmask_use, expected) in [
+            ("flip", true, new_163("1.0")),
+            ("noflip", false, PretendOutcome::NoVisibleCandidate),
+        ] {
+            let dir = dir_163(&format!("rp-usedep-{tag}"));
+            let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "feat", "", "amd64")]);
+            let config = cfg_163();
+            let mut o = RpOpts163::top();
+            o.autounmask_use = autounmask_use;
+            assert_eq!(
+                resolve_163(&repos, &dir, &config, "dev-libs/rp[feat]", &o),
+                expected,
+                "{tag}"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// A `[flag]` atom for a flag no candidate has is unfixable even
+    /// with `--autounmask-use`. Pins the shape the S0 run already
+    /// covers.
+    #[test]
+    fn resolve_pretend_unfixable_use_dep_atom_stays_unresolved() {
+        let dir = dir_163("rp-usebogus");
+        let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "feat", "", "amd64")]);
+        let config = cfg_163();
+        let mut o = RpOpts163::top();
+        o.autounmask_use = true;
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp[bogus]", &o),
+            PretendOutcome::NoVisibleCandidate
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `--useoldpkg-atoms` restricts the match to built candidates,
+    /// and an atoms-matching binary is exempt from the
+    /// ebuild-visibility check. One test, one global set/reset pair
+    /// on a dedicated `dev-libs/opkg` cp: the atoms are
+    /// process-global, so they must match no other test's cp, and two
+    /// setters would race each other's reset under parallel runs.
+    /// Kills the `source == Binary` -> `!=` flip and the `&&` ->
+    /// `||` flip of the oldpkg filter (both resolve the newer
+    /// ebuild), and the `!uev` deletion of the exemption (which drops
+    /// the exempt binary).
+    #[test]
+    fn resolve_pretend_useoldpkg_prefers_and_exempts_built_candidates() {
+        let dir = dir_163("rp-oldpkg");
+        let repos = repo_pkgs_163(&dir, &[("dev-libs/opkg", "2.0", "0", "", "", "amd64")]);
+        let mut config = cfg_163();
+        config.scanned_binpkgs = Some(vec![binpkg_163("dev-libs/opkg-1.0", "0", &[])]);
+        let mut o = RpOpts163::top();
+        o.usepkg = true;
+        // Without the atoms the newer ebuild wins.
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/opkg", &o),
+            new_163("2.0")
+        );
+        set_useoldpkg_atoms(vec!["dev-libs/opkg".to_string()]);
+        // With the atoms the older built candidate wins.
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/opkg", &o),
+            new_163("1.0")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        // Same atoms: a binary with no ebuild at its version survives
+        // the visibility check through the exemption.
+        let dir = dir_163("rp-oldexempt");
+        let repos = repo_pkgs_163(&dir, &[("dev-libs/opkg", "1.0", "0", "", "", "amd64")]);
+        let mut config = cfg_163();
+        config.scanned_binpkgs = Some(vec![binpkg_163("dev-libs/opkg-2.0", "0", &[])]);
+        let mut o = RpOpts163::top();
+        o.selective = false;
+        o.usepkg = true;
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/opkg", &o),
+            new_163("2.0")
+        );
+        set_useoldpkg_atoms(Vec::new());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An excluded installed version is left as-is before any
+    /// reinstall check runs. Pins the shape the S0 run already
+    /// covers.
+    #[test]
+    fn resolve_pretend_excluded_installed_version_stays_installed_under_newuse() {
+        let dir = dir_163("rp-excl");
+        let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "a b", "", "amd64")]);
+        install_163(
+            &dir,
+            "dev-libs",
+            "rp-1.0",
+            "0",
+            &[("IUSE", "a"), ("USE", "a")],
+        );
+        let config = cfg_163();
+        let mut o = RpOpts163::dep();
+        o.newuse = true;
+        o.excluded = vec!["dev-libs/rp".to_string()];
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+            installed_163("1.0")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A same-version install in another slot is a `New` into a fresh
+    /// slot, not an installed match: `candidate_is_installed` needs
+    /// both version and slot. Pins the shape the S0 run already
+    /// covers.
+    #[test]
+    fn resolve_pretend_same_version_in_another_slot_is_a_new_slot_install() {
+        let dir = dir_163("rp-newslot");
+        let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "", "", "amd64")]);
+        install_163(&dir, "dev-libs", "rp-1.0", "1", &[]);
+        let config = cfg_163();
+        let mut o = RpOpts163::top();
+        o.selective = false;
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+            new_163("1.0")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An installed same-version same-slot dependency atom is
+    /// `AlreadyInstalled`: both `==`s of `candidate_is_installed`
+    /// must hold. Pins the predicate the S0 run already covers.
+    #[test]
+    fn resolve_pretend_installed_same_version_is_already_installed() {
+        let dir = dir_163("rp-ai");
+        let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "", "", "amd64")]);
+        install_163(&dir, "dev-libs", "rp-1.0", "0", &[]);
+        let config = cfg_163();
+        let mut o = RpOpts163::dep();
+        o.update = true;
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+            installed_163("1.0")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The `avoid_update` early return honours a hiding negative
+    /// extra constraint: the installed version it rejects falls
+    /// through to the ordinary search. Kills both `!` deletions of
+    /// the negative arm (each keeps the installed version and
+    /// reports `AlreadyInstalled`).
+    #[test]
+    fn resolve_pretend_early_return_honours_a_hiding_negative_constraint() {
+        let dir = dir_163("rp-extrahide");
+        let repos = repo_pkgs_163(
+            &dir,
+            &[
+                ("dev-libs/rp", "1.0", "0", "", "", "amd64"),
+                ("dev-libs/rp", "2.0", "0", "", "", "amd64"),
+            ],
+        );
+        install_163(&dir, "dev-libs", "rp-1.0", "0", &[]);
+        let config = cfg_163();
+        let mut o = RpOpts163::dep();
+        o.extra_constraints = vec!["!=dev-libs/rp-1.0".to_string()];
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+            PretendOutcome::Upgrade {
+                from: "1.0".to_string(),
+                to: "2.0".to_string(),
+            }
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The `avoid_update` early return honours a pinning positive
+    /// extra constraint even when the tree candidate is masked: the
+    /// installed version it keeps is reported as-is (the masked tree
+    /// alone would be `NoVisibleCandidate`). Kills the positive-arm
+    /// `!` deletion (which drops the installed version and reports
+    /// the miss).
+    #[test]
+    fn resolve_pretend_early_return_honours_a_pinning_positive_constraint() {
+        let dir = dir_163("rp-extrapin");
+        let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "", "", "~amd64")]);
+        install_163(&dir, "dev-libs", "rp-1.0", "0", &[]);
+        let config = cfg_163();
+        let mut o = RpOpts163::dep();
+        o.extra_constraints = vec!["=dev-libs/rp-1.0".to_string()];
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+            installed_163("1.0")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A visible ebuild matching the atom disqualifies a binary with
+    /// no ebuild at its version (`_equiv_ebuild_visible`). Pins the
+    /// drop the S0 run already covers (its rows are caught
+    /// there).
+    #[test]
+    fn resolve_pretend_visible_ebuild_disqualifies_a_version_skewed_binary() {
+        let dir = dir_163("rp-equiv");
+        let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "", "", "amd64")]);
+        let mut config = cfg_163();
+        config.scanned_binpkgs = Some(vec![binpkg_163("dev-libs/rp-2.0", "0", &[])]);
+        let mut o = RpOpts163::top();
+        o.usepkg = true;
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+            new_163("1.0")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    /// A top-level `[flag]` atom the tree cannot currently satisfy
+    /// upgrades past a satisfying installed version (real keeps the
+    /// installed one only for dependencies). `--autounmask-use` keeps
+    /// the flippable candidate in the pool so the gate is reached.
+    /// Kills the `!is_top_level` deletion (which keeps the installed
+    /// version; the neighbouring `&&` -> `||` is unviable).
+    #[test]
+    fn resolve_pretend_top_level_use_dep_atom_upgrades_past_a_satisfying_installed_version() {
+        let dir = dir_163("rp-74top");
+        let repos = repo_pkgs_163(
+            &dir,
+            &[("dev-libs/rp", "2.0", "0", "wantflag", "", "amd64")],
+        );
+        install_163(
+            &dir,
+            "dev-libs",
+            "rp-1.0",
+            "0",
+            &[("IUSE", "wantflag"), ("USE", "wantflag")],
+        );
+        let config = cfg_163();
+        let mut o = RpOpts163::top();
+        o.update = true;
+        o.autounmask_use = true;
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp[wantflag]", &o),
+            PretendOutcome::Upgrade {
+                from: "1.0".to_string(),
+                to: "2.0".to_string(),
+            }
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A dependency `[flag]` atom the tree satisfies upgrades past a
+    /// satisfying installed version under `--update`. Kills the
+    /// `!atom_currently_satisfiable` deletion (which keeps the
+    /// installed version; the neighbouring `&&` -> `||` is
+    /// unviable).
+    #[test]
+    fn resolve_pretend_satisfiable_use_dep_atom_upgrades_under_update() {
+        let dir = dir_163("rp-74sat");
+        let repos = repo_pkgs_163(
+            &dir,
+            &[("dev-libs/rp", "2.0", "0", "+wantflag", "", "amd64")],
+        );
+        install_163(
+            &dir,
+            "dev-libs",
+            "rp-1.0",
+            "0",
+            &[("IUSE", "wantflag"), ("USE", "wantflag")],
+        );
+        let config = cfg_163();
+        let mut o = RpOpts163::dep();
+        o.update = true;
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp[wantflag]", &o),
+            PretendOutcome::Upgrade {
+                from: "1.0".to_string(),
+                to: "2.0".to_string(),
+            }
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A dependency `[flag]` atom the tree cannot currently satisfy
+    /// keeps the satisfying installed version under `--update`
+    /// (real's `_want_installed_pkg` keep). `--autounmask-use` keeps
+    /// the flippable candidate in the pool so the gate is reached.
+    /// Kills the `!d.is_empty()` deletion (which skips the keep and
+    /// upgrades).
+    #[test]
+    fn resolve_pretend_unsatisfiable_use_dep_atom_keeps_the_installed_version() {
+        let dir = dir_163("rp-74keep");
+        let repos = repo_pkgs_163(
+            &dir,
+            &[("dev-libs/rp", "2.0", "0", "wantflag", "", "amd64")],
+        );
+        install_163(
+            &dir,
+            "dev-libs",
+            "rp-1.0",
+            "0",
+            &[("IUSE", "wantflag"), ("USE", "wantflag")],
+        );
+        let config = cfg_163();
+        let mut o = RpOpts163::dep();
+        o.update = true;
+        o.autounmask_use = true;
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp[wantflag]", &o),
+            installed_163("1.0")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The `!update` shortcut's inner disjunction: a non-selective
+    /// top-level atom skips it, an `--emptytree` dependency skips it,
+    /// and `--update` skips it -- each upgrades past the installed
+    /// version where the plain dependency keeps it. Pins the shortcut
+    /// the S0 run already covers.
+    #[test]
+    fn resolve_pretend_update_shortcut_bypass_shapes_upgrade_past_installed() {
+        // Baseline: plain dependency keeps the installed version.
+        let dir = dir_163("rp-upd-base");
+        let repos = repo_pkgs_163(
+            &dir,
+            &[
+                ("dev-libs/rp", "1.0", "0", "", "", "amd64"),
+                ("dev-libs/rp", "2.0", "0", "", "", "amd64"),
+            ],
+        );
+        install_163(&dir, "dev-libs", "rp-1.0", "0", &[]);
+        let config = cfg_163();
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp", &RpOpts163::dep()),
+            installed_163("1.0")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        // Each bypass upgrades.
+        for (tag, o) in [
+            (
+                "top",
+                RpOpts163 {
+                    is_top_level: true,
+                    selective: false,
+                    ..RpOpts163::dep()
+                },
+            ),
+            (
+                "empty",
+                RpOpts163 {
+                    empty: true,
+                    ..RpOpts163::dep()
+                },
+            ),
+            (
+                "update",
+                RpOpts163 {
+                    update: true,
+                    ..RpOpts163::dep()
+                },
+            ),
+        ] {
+            let dir = dir_163(&format!("rp-upd-{tag}"));
+            let repos = repo_pkgs_163(
+                &dir,
+                &[
+                    ("dev-libs/rp", "1.0", "0", "", "", "amd64"),
+                    ("dev-libs/rp", "2.0", "0", "", "", "amd64"),
+                ],
+            );
+            install_163(&dir, "dev-libs", "rp-1.0", "0", &[]);
+            let config = cfg_163();
+            assert_eq!(
+                resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+                PretendOutcome::Upgrade {
+                    from: "1.0".to_string(),
+                    to: "2.0".to_string(),
+                },
+                "{tag}"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// `--newuse` with a gained flag reinstalls the installed version
+    /// with the trigger set: the gained flag (`b`) plus the dropped
+    /// effective flag (`a`, on in the vdb but default-off in the new
+    /// ebuild). Pins the trigger the S0 run already covers.
+    #[test]
+    fn resolve_pretend_newuse_with_a_gained_flag_reinstalls() {
+        let dir = dir_163("rp-newuse");
+        let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "a b", "", "amd64")]);
+        install_163(
+            &dir,
+            "dev-libs",
+            "rp-1.0",
+            "0",
+            &[("IUSE", "a"), ("USE", "a")],
+        );
+        let config = cfg_163();
+        let mut o = RpOpts163::dep();
+        o.newuse = true;
+        o.selective = false;
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+            PretendOutcome::Reinstall {
+                version: "1.0".to_string(),
+                changed_flags: vec!["a".to_string(), "b".to_string()],
+                deps_changed: false,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: false,
+                slot_operator_rebuild: false,
+            }
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A dependency atom whose installed version lacks the requested
+    /// `[flag]` reinstalls it (real never calls that "already
+    /// installed"). Pins the flip check the S0 run already covers.
+    #[test]
+    fn resolve_pretend_installed_version_missing_the_flag_reinstalls() {
+        let dir = dir_163("rp-flip");
+        let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "a b", "", "amd64")]);
+        install_163(
+            &dir,
+            "dev-libs",
+            "rp-1.0",
+            "0",
+            &[("IUSE", "a b"), ("USE", "a")],
+        );
+        let config = cfg_163();
+        let mut o = RpOpts163::dep();
+        o.selective = false;
+        o.autounmask_use = true;
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp[b]", &o),
+            PretendOutcome::Reinstall {
+                version: "1.0".to_string(),
+                changed_flags: Vec::new(),
+                deps_changed: false,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: false,
+                slot_operator_rebuild: false,
+            }
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Each reinstall trigger also fires through the best-version
+    /// path (past `--update`, which bypasses the `avoid_update`
+    /// shortcut): the gate and its disjunction arm must agree.
+    /// Kills the `&&` -> `||` flip of the `changed_slot` gate
+    /// (13711) and the `||` -> `&&` flips of the `changed_deps`,
+    /// `changed_slot`, and `new_repo` disjunction arms
+    /// (13741/13742/13744).
+    #[test]
+    fn resolve_pretend_triggers_fire_through_the_best_version_path() {
+        // Changed RDEPEND under --update.
+        let dir = dir_163("rp-bdeps");
+        let repos = repo_pkgs_163(
+            &dir,
+            &[("dev-libs/rp", "1.0", "0", "", "dev-libs/other", "amd64")],
+        );
+        install_163(
+            &dir,
+            "dev-libs",
+            "rp-1.0",
+            "0",
+            &[("RDEPEND", "dev-libs/different")],
+        );
+        let config = cfg_163();
+        let mut o = RpOpts163::dep();
+        o.update = true;
+        o.selective = false;
+        o.changed_deps = true;
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+            PretendOutcome::Reinstall {
+                version: "1.0".to_string(),
+                changed_flags: Vec::new(),
+                deps_changed: true,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: false,
+                slot_operator_rebuild: false,
+            }
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        // Changed sub-slot under --update, option on and off.
+        for (tag, changed_slot, expected) in [
+            (
+                "on",
+                true,
+                PretendOutcome::Reinstall {
+                    version: "1.0".to_string(),
+                    changed_flags: Vec::new(),
+                    deps_changed: false,
+                    slot_changed: true,
+                    rebuilt_binary: false,
+                    new_repo: false,
+                    slot_operator_rebuild: false,
+                },
+            ),
+            ("off", false, installed_163("1.0")),
+        ] {
+            let dir = dir_163(&format!("rp-bslot-{tag}"));
+            let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0/1", "", "", "amd64")]);
+            install_163(&dir, "dev-libs", "rp-1.0", "0/0", &[]);
+            let config = cfg_163();
+            let mut o = RpOpts163::dep();
+            o.update = true;
+            o.selective = false;
+            o.changed_slot = changed_slot;
+            assert_eq!(
+                resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+                expected,
+                "{tag}"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+        // Changed repo under --update.
+        let dir = dir_163("rp-brepo");
+        let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "", "", "amd64")]);
+        install_163(&dir, "dev-libs", "rp-1.0", "0", &[("repository", "other")]);
+        let config = cfg_163();
+        let mut o = RpOpts163::dep();
+        o.update = true;
+        o.selective = false;
+        o.newrepo = true;
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+            PretendOutcome::Reinstall {
+                version: "1.0".to_string(),
+                changed_flags: Vec::new(),
+                deps_changed: false,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: true,
+                slot_operator_rebuild: false,
+            }
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Each reinstall trigger fires on its own through the
+    /// `avoid_update` shortcut as well: the option-on shapes
+    /// reinstall with only their flag, the option-off shapes keep
+    /// the installed version. Pins the shortcut shapes the S0 run
+    /// already covers (the best-path arms live in the next test).
+    #[test]
+    fn resolve_pretend_each_reinstall_trigger_fires_on_its_own() {
+        // Changed RDEPEND, option on and off.
+        for (tag, changed_deps, deps_changed) in [("on", true, true), ("off", false, false)] {
+            let dir = dir_163(&format!("rp-tdeps-{tag}"));
+            let repos = repo_pkgs_163(
+                &dir,
+                &[("dev-libs/rp", "1.0", "0", "", "dev-libs/other", "amd64")],
+            );
+            install_163(
+                &dir,
+                "dev-libs",
+                "rp-1.0",
+                "0",
+                &[("RDEPEND", "dev-libs/different")],
+            );
+            let config = cfg_163();
+            let mut o = RpOpts163::dep();
+            o.changed_deps = changed_deps;
+            o.selective = false;
+            let expected = if deps_changed {
+                PretendOutcome::Reinstall {
+                    version: "1.0".to_string(),
+                    changed_flags: Vec::new(),
+                    deps_changed: true,
+                    slot_changed: false,
+                    rebuilt_binary: false,
+                    new_repo: false,
+                    slot_operator_rebuild: false,
+                }
+            } else {
+                installed_163("1.0")
+            };
+            assert_eq!(
+                resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+                expected,
+                "{tag}"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+        // Changed sub-slot (same main slot, so the installed instance
+        // still matches): the `slot_changed` probe compares the full
+        // slot, and a main-slot move is a new-slot install instead.
+        // Option on and off.
+        for (tag, changed_slot, slot_changed) in [("on", true, true), ("off", false, false)] {
+            let dir = dir_163(&format!("rp-tslot-{tag}"));
+            let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0/1", "", "", "amd64")]);
+            install_163(&dir, "dev-libs", "rp-1.0", "0/0", &[]);
+            let config = cfg_163();
+            let mut o = RpOpts163::dep();
+            o.changed_slot = changed_slot;
+            o.selective = false;
+            let expected = if slot_changed {
+                PretendOutcome::Reinstall {
+                    version: "1.0".to_string(),
+                    changed_flags: Vec::new(),
+                    deps_changed: false,
+                    slot_changed: true,
+                    rebuilt_binary: false,
+                    new_repo: false,
+                    slot_operator_rebuild: false,
+                }
+            } else {
+                installed_163("1.0")
+            };
+            assert_eq!(
+                resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+                expected,
+                "{tag}"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+        // Changed repo, option on and off.
+        for (tag, newrepo, new_repo) in [("on", true, true), ("off", false, false)] {
+            let dir = dir_163(&format!("rp-trepo-{tag}"));
+            let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "", "", "amd64")]);
+            install_163(&dir, "dev-libs", "rp-1.0", "0", &[("repository", "other")]);
+            let config = cfg_163();
+            let mut o = RpOpts163::dep();
+            o.newrepo = newrepo;
+            o.selective = false;
+            let expected = if new_repo {
+                PretendOutcome::Reinstall {
+                    version: "1.0".to_string(),
+                    changed_flags: Vec::new(),
+                    deps_changed: false,
+                    slot_changed: false,
+                    rebuilt_binary: false,
+                    new_repo: true,
+                    slot_operator_rebuild: false,
+                }
+            } else {
+                installed_163("1.0")
+            };
+            assert_eq!(
+                resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+                expected,
+                "{tag}"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// The `Reinstall` disjunction fires on each arm alone: `--emptytree`
+    /// and a non-selective top-level atom each reinstall a changeless
+    /// installed version where a plain dependency keeps it. Pins the
+    /// disjunction the S0 run already covers.
+    #[test]
+    fn resolve_pretend_reinstall_disjunction_fires_on_each_arm_alone() {
+        // Baseline: plain dependency keeps the installed version.
+        let dir = dir_163("rp-rcond-base");
+        let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "", "", "amd64")]);
+        install_163(&dir, "dev-libs", "rp-1.0", "0", &[]);
+        let config = cfg_163();
+        let mut o = RpOpts163::dep();
+        o.selective = false;
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+            installed_163("1.0")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        // Each arm reinstalls bare.
+        let bare = PretendOutcome::Reinstall {
+            version: "1.0".to_string(),
+            changed_flags: Vec::new(),
+            deps_changed: false,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: false,
+            slot_operator_rebuild: false,
+        };
+        for (tag, o) in [
+            (
+                "empty",
+                RpOpts163 {
+                    empty: true,
+                    ..RpOpts163::dep()
+                },
+            ),
+            (
+                "top",
+                RpOpts163 {
+                    is_top_level: true,
+                    selective: false,
+                    ..RpOpts163::dep()
+                },
+            ),
+        ] {
+            let dir = dir_163(&format!("rp-rcond-{tag}"));
+            let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "", "", "amd64")]);
+            install_163(&dir, "dev-libs", "rp-1.0", "0", &[]);
+            let config = cfg_163();
+            assert_eq!(
+                resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+                bare.clone(),
+                "{tag}"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// A selective top-level atom under `--update` keeps the
+    /// installed version: the top-level arm needs `!selective`. Kills
+    /// the `&&` -> `||` flip of the top-level arm (which reinstalls
+    /// bare; the `!selective` deletion is already caught).
+    #[test]
+    fn resolve_pretend_top_level_arm_needs_non_selective() {
+        let dir = dir_163("rp-rcond-upd");
+        let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "", "", "amd64")]);
+        install_163(&dir, "dev-libs", "rp-1.0", "0", &[]);
+        let config = cfg_163();
+        let mut o = RpOpts163::dep();
+        o.is_top_level = true;
+        o.selective = true;
+        o.update = true;
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+            installed_163("1.0")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The `!update` shortcut is reached past a non-empty exclude
+    /// list: an excluded-but-unmatched dependency still keeps its
+    /// installed version through the shortcut. Pins the shape the S0
+    /// run already covers.
+    #[test]
+    fn resolve_pretend_update_shortcut_holds_past_an_unmatched_exclude() {
+        let dir = dir_163("rp-upd-excl");
+        let repos = repo_pkgs_163(
+            &dir,
+            &[
+                ("dev-libs/rp", "1.0", "0", "", "", "amd64"),
+                ("dev-libs/rp", "2.0", "0", "", "", "amd64"),
+            ],
+        );
+        install_163(&dir, "dev-libs", "rp-1.0", "0", &[]);
+        let config = cfg_163();
+        let mut o = RpOpts163::dep();
+        o.selective = false;
+        o.excluded = vec!["dev-libs/other".to_string()];
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+            installed_163("1.0")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Upgrade and downgrade are decided against the installed
+    /// version in the candidate's own slot: a newer same-slot tree
+    /// version upgrades, an older one downgrades, and an other-slot
+    /// install is ignored. Pins the slot/version comparison the S0 run
+    /// already covers.
+    #[test]
+    fn resolve_pretend_upgrade_and_downgrade_follow_the_own_slot_version() {
+        for (tag, tree, vdb, expected) in [
+            (
+                "upgrade",
+                vec![
+                    ("dev-libs/rp", "1.0", "0", "", "", "amd64"),
+                    ("dev-libs/rp", "2.0", "0", "", "", "amd64"),
+                ],
+                ("rp-1.0", "0"),
+                PretendOutcome::Upgrade {
+                    from: "1.0".to_string(),
+                    to: "2.0".to_string(),
+                },
+            ),
+            (
+                "downgrade",
+                vec![("dev-libs/rp", "1.0", "0", "", "", "amd64")],
+                ("rp-2.0", "0"),
+                PretendOutcome::Downgrade {
+                    from: "2.0".to_string(),
+                    to: "1.0".to_string(),
+                },
+            ),
+            (
+                "other-slot",
+                vec![
+                    ("dev-libs/rp", "1.0", "0", "", "", "amd64"),
+                    ("dev-libs/rp", "1.5", "1", "", "", "amd64"),
+                ],
+                ("rp-1.0", "0"),
+                new_163("1.5"),
+            ),
+        ] {
+            let dir = dir_163(&format!("rp-slotver-{tag}"));
+            let repos = repo_pkgs_163(&dir, &tree);
+            install_163(&dir, "dev-libs", vdb.0, vdb.1, &[]);
+            let config = cfg_163();
+            let mut o = RpOpts163::dep();
+            o.update = true;
+            assert_eq!(
+                resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+                expected,
+                "{tag}"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+    /// `--binpkg-respect-use` (and `--newuse`, which opens the same
+    /// gate) drops a binary built against different USE. With no
+    /// ebuild matching the atom the visibility filter stays out, so
+    /// the gate alone decides: the divergent binary must not win.
+    /// Kills both `||` -> `&&` flips of the gate (each keeps the
+    /// binary and resolves it).
+    #[test]
+    fn resolve_pretend_respect_use_drops_a_use_divergent_binary() {
+        let dir = dir_163("rp-respect");
+        let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "", "", "~amd64")]);
+        let mut config = cfg_163();
+        config.scanned_binpkgs = Some(vec![binpkg_163(
+            "dev-libs/rp-2.0",
+            "0",
+            &[("IUSE", "feat"), ("USE", "feat")],
+        )]);
+        let mut o = RpOpts163::top();
+        o.selective = false;
+        o.usepkg = true;
+        o.newuse = true;
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+            PretendOutcome::NoVisibleCandidate
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The respect-use comparison is against the ebuild at the
+    /// binary's own version: a same-version ebuild whose IUSE covers
+    /// the baked USE keeps the binary in a skewed-slot shape. Kills
+    /// the `==` -> `!=` flip of the ebuild lookup (which compares
+    /// against no ebuild, drops the binary, and reports the
+    /// installed ebuild instead of the new slot), the `==` -> `!=`
+    /// flip of the version probe (which blinds the retain the same
+    /// way), and the `||` -> `&&` flip of the retain predicate
+    /// (which drops the binary the same way).
+    #[test]
+    fn resolve_pretend_respect_use_compares_against_the_same_version_ebuild() {
+        let dir = dir_163("rp-respectver");
+        let repos = repo_pkgs_163(
+            &dir,
+            &[
+                ("dev-libs/rp", "1.0", "0", "", "", "amd64"),
+                ("dev-libs/rp", "2.0", "0", "+a", "", "amd64"),
+            ],
+        );
+        install_163(
+            &dir,
+            "dev-libs",
+            "rp-2.0",
+            "0",
+            &[("IUSE", "a"), ("USE", "a")],
+        );
+        let mut config = cfg_163();
+        config.scanned_binpkgs = Some(vec![binpkg_163(
+            "dev-libs/rp-2.0",
+            "1",
+            &[("IUSE", "a"), ("USE", "a")],
+        )]);
+        let mut o = RpOpts163::top();
+        o.selective = false;
+        o.usepkg = true;
+        o.newuse = true;
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+            new_163("2.0")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A binary with no ebuild at its version is compared without one:
+    /// with no visible ebuild at all the visibility filter stays out,
+    /// so a real USE divergence still drops it. Kills the `&&` ->
+    /// `||` and `==` -> `!=` flips of the ebuild lookup (each
+    /// compares against the masked ebuild, accepts, and resolves the
+    /// binary).
+    #[test]
+    fn resolve_pretend_lonely_binary_with_divergent_use_is_dropped() {
+        let dir = dir_163("rp-lonely");
+        let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "+a", "", "~amd64")]);
+        let mut config = cfg_163();
+        config.scanned_binpkgs = Some(vec![binpkg_163(
+            "dev-libs/rp-2.0",
+            "0",
+            &[("IUSE", "a"), ("USE", "a")],
+        )]);
+        let mut o = RpOpts163::top();
+        o.selective = false;
+        o.usepkg = true;
+        o.newuse = true;
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+            PretendOutcome::NoVisibleCandidate
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `--binpkg-changed-deps` drops a binary built against different
+    /// dependencies: the stale binary in its own slot must not win
+    /// over the installed ebuild. Kills the `!binary_deps_changed`
+    /// deletion (which keeps the binary and resolves its slot).
+    #[test]
+    fn resolve_pretend_changed_deps_drops_a_stale_binary() {
+        let dir = dir_163("rp-bindeps");
+        let repos = repo_pkgs_163(
+            &dir,
+            &[
+                ("dev-libs/rp", "1.0", "0", "", "", "amd64"),
+                ("dev-libs/rp", "2.0", "0", "", "", "amd64"),
+            ],
+        );
+        install_163(&dir, "dev-libs", "rp-2.0", "0", &[]);
+        let mut config = cfg_163();
+        config.scanned_binpkgs = Some(vec![binpkg_163(
+            "dev-libs/rp-2.0",
+            "1",
+            &[("RDEPEND", "dev-libs/other")],
+        )]);
+        let mut o = RpOpts163::top();
+        o.selective = false;
+        o.usepkg = true;
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+            PretendOutcome::Reinstall {
+                version: "2.0".to_string(),
+                changed_flags: Vec::new(),
+                deps_changed: false,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: false,
+                slot_operator_rebuild: false,
+            }
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A keyword-masked ebuild does not make `some_ebuild_matches`:
+    /// the visible newer binary still resolves. Kills the first
+    /// `&&` -> `||` flip of the match probe (which counts the masked
+    /// ebuild, runs the visibility filter, and drops the binary).
+    #[test]
+    fn resolve_pretend_masked_ebuild_does_not_match_for_visibility() {
+        let dir = dir_163("rp-masketouch");
+        let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "", "", "~amd64")]);
+        let mut config = cfg_163();
+        config.scanned_binpkgs = Some(vec![binpkg_163("dev-libs/rp-2.0", "0", &[])]);
+        let mut o = RpOpts163::top();
+        o.selective = false;
+        o.usepkg = true;
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+            new_163("2.0")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A version-pinned atom does not match a newer ebuild for the
+    /// visibility probe: the matching older binary still resolves.
+    /// Kills the second `&&` -> `||` flip of the match probe (which
+    /// counts the newer ebuild, runs the filter, and drops the
+    /// binary).
+    #[test]
+    fn resolve_pretend_pinned_atom_does_not_match_a_newer_ebuild() {
+        let dir = dir_163("rp-pintouch");
+        let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "2.0", "0", "", "", "amd64")]);
+        let mut config = cfg_163();
+        config.scanned_binpkgs = Some(vec![binpkg_163("dev-libs/rp-1.0", "0", &[])]);
+        let mut o = RpOpts163::top();
+        o.selective = false;
+        o.usepkg = true;
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "=dev-libs/rp-1.0", &o),
+            new_163("1.0")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A slot-skewed binary kept by the visibility check resolves
+    /// into its own slot. Kills the `||` -> `&&` flip of the retain
+    /// predicate (which drops the binary and reports the installed
+    /// ebuild instead).
+    #[test]
+    fn resolve_pretend_kept_slot_skewed_binary_resolves_into_its_slot() {
+        let dir = dir_163("rp-binslot");
+        let repos = repo_pkgs_163(
+            &dir,
+            &[
+                ("dev-libs/rp", "1.0", "0", "", "", "amd64"),
+                ("dev-libs/rp", "2.0", "0", "", "", "amd64"),
+            ],
+        );
+        install_163(&dir, "dev-libs", "rp-2.0", "0", &[]);
+        let mut config = cfg_163();
+        config.scanned_binpkgs = Some(vec![binpkg_163("dev-libs/rp-2.0", "1", &[])]);
+        let mut o = RpOpts163::top();
+        o.selective = false;
+        o.usepkg = true;
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+            new_163("2.0")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `--rebuilt-binaries` with a newer binary build reinstalls
+    /// the installed version carrying the rebuild flag; without the
+    /// flag the same shape reinstalls bare (the `--emptytree` arm).
+    /// The `rebuilt` arm runs top-level selective under `--update`
+    /// ( past the update block with the top-level arm shut) so the
+    /// rebuild flag alone decides. Kills the `usepkg || usepkgonly`
+    /// -> `&&` flip of the rebuild gate and the `||` -> `&&` flip
+    /// of its disjunction arm (each reports the bare reinstall),
+    /// and the `&&` -> `||` flip of the gate (which reports the
+    /// rebuild reinstall without the flag).
+    #[test]
+    fn resolve_pretend_rebuilt_binaries_reinstalls_on_newer_build() {
+        let bare = PretendOutcome::Reinstall {
+            version: "1.0".to_string(),
+            changed_flags: Vec::new(),
+            deps_changed: false,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: false,
+            slot_operator_rebuild: false,
+        };
+        let rebuilt = PretendOutcome::Reinstall {
+            version: "1.0".to_string(),
+            changed_flags: Vec::new(),
+            deps_changed: false,
+            slot_changed: false,
+            rebuilt_binary: true,
+            new_repo: false,
+            slot_operator_rebuild: false,
+        };
+        for (tag, rebuilt_binaries, expected) in [("rebuilt", true, rebuilt), ("bare", false, bare)]
+        {
+            let dir = dir_163(&format!("rp-rebuilt-{tag}"));
+            let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "", "", "amd64")]);
+            install_163(&dir, "dev-libs", "rp-1.0", "0", &[("BUILD_TIME", "1000")]);
+            let mut config = cfg_163();
+            config.scanned_binpkgs = Some(vec![binpkg_163(
+                "dev-libs/rp-1.0",
+                "0",
+                &[("BUILD_TIME", "2000")],
+            )]);
+            // The `rebuilt` arm resolves top-level selective under
+            // `--update` (no shortcut, no bare arms) so the rebuild
+            // flag alone decides; the `bare` arm goes through
+            // `--emptytree` (the bare arm fires, the flag stays
+            // false).
+            let mut o = RpOpts163::top();
+            if tag == "bare" {
+                o.selective = false;
+                o.is_top_level = false;
+                o.empty = true;
+            }
+            o.update = true;
+            o.usepkg = true;
+            o.rebuilt_binaries = rebuilt_binaries;
+            assert_eq!(
+                resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+                expected,
+                "{tag}"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
 }
