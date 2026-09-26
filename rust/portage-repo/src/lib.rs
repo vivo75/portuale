@@ -50199,4 +50199,255 @@ mod tests_165 {
         assert!(repos.iter().find(|r| r.name == "second").unwrap().volatile);
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    /// One scratch ebuild plus its real md5-cache entry (the md5-cache
+    /// validation guard fails otherwise), with optional dependency keys.
+    #[allow(clippy::too_many_arguments)]
+    fn write_pkg_165(
+        repo: &Path,
+        cp: &str,
+        pv: &str,
+        slot: &str,
+        iuse: &str,
+        depend: &str,
+        rdepend: &str,
+        bdepend: &str,
+    ) {
+        use md5::Digest as _;
+        use std::fmt::Write as _;
+        let (cat, pkg) = cp.split_once('/').expect("category/package");
+        let dir = repo.join(cat).join(pkg);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut body = format!(
+            "EAPI=8\nDESCRIPTION=\"165 graph inputs\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\n"
+        );
+        if !iuse.is_empty() {
+            writeln!(body, "IUSE=\"{iuse}\"").unwrap();
+        }
+        if !depend.is_empty() {
+            writeln!(body, "DEPEND=\"{depend}\"").unwrap();
+        }
+        if !rdepend.is_empty() {
+            writeln!(body, "RDEPEND=\"{rdepend}\"").unwrap();
+        }
+        if !bdepend.is_empty() {
+            writeln!(body, "BDEPEND=\"{bdepend}\"").unwrap();
+        }
+        std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
+        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+        let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=165 graph inputs\nEAPI=8\n".to_string();
+        if !iuse.is_empty() {
+            writeln!(entry, "IUSE={iuse}").unwrap();
+        }
+        if !depend.is_empty() {
+            writeln!(entry, "DEPEND={depend}").unwrap();
+        }
+        if !rdepend.is_empty() {
+            writeln!(entry, "RDEPEND={rdepend}").unwrap();
+        }
+        if !bdepend.is_empty() {
+            writeln!(entry, "BDEPEND={bdepend}").unwrap();
+        }
+        writeln!(entry, "KEYWORDS=amd64\nSLOT={slot}\n_md5_={md5}").unwrap();
+        let cachedir = repo.join("metadata/md5-cache").join(cat);
+        std::fs::create_dir_all(&cachedir).unwrap();
+        std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+    }
+
+    fn repo_165(
+        dir: &Path,
+        pkgs: &[(&str, &str, &str, &str, &str, &str, &str)],
+    ) -> Vec<RepoConfig> {
+        let repo = dir.join("repo");
+        for (cp, pv, slot, iuse, depend, rdepend, bdepend) in pkgs {
+            write_pkg_165(&repo, cp, pv, slot, iuse, depend, rdepend, bdepend);
+        }
+        vec![RepoConfig {
+            name: "testrepo".to_string(),
+            location: repo,
+            priority: 0,
+            is_main: true,
+            masters: vec![],
+            profile_formats: vec![],
+            cache_formats: vec![],
+            aliases: vec![],
+            sync_type: None,
+            sync_uri: None,
+            volatile: false,
+            module_specific_options: vec![],
+        }]
+    }
+
+    fn cfg_165() -> portage_profile::Config {
+        portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            ..Default::default()
+        }
+    }
+
+    fn entry_165(cat: &str, pkg: &str, outcome: PretendOutcome, slot: Option<&str>) -> GraphEntry {
+        GraphEntry {
+            discovery: 0,
+            category: cat.to_string(),
+            package: pkg.to_string(),
+            outcome,
+            blockers: Vec::new(),
+            slot: slot.map(str::to_string),
+            sub_slot: slot.map(str::to_string),
+            repo_name: Some("testrepo".to_string()),
+            oldbest: Vec::new(),
+            use_flags_display: Vec::new(),
+            use_expand_display: Vec::new(),
+            use_expand_display_p: Vec::new(),
+            keyword_mask: None,
+            new_slot: false,
+            interactive: false,
+            fetch_restrict: false,
+            fetch_restrict_satisfied: false,
+            download_files: Vec::new(),
+            required_by: Vec::new(),
+            source: CandidateSource::Ebuild,
+            provenance: VisibilityProvenance::default(),
+            keyword_suggestion: None,
+            use_suggestion: None,
+            parent_use_suggestion: None,
+            targets_running_root: false,
+            remote_binary: false,
+            build_id: None,
+            deps: Vec::new(),
+        }
+    }
+
+    fn new_165(cat: &str, pkg: &str, ver: &str) -> GraphEntry {
+        entry_165(
+            cat,
+            pkg,
+            PretendOutcome::New {
+                version: ver.to_string(),
+            },
+            Some("0"),
+        )
+    }
+
+    // ---- S4: `parent_use_state` (the requesting parent's own resolved
+    // USE state behind a conditional use-dep: the owner's merge-bound
+    // entry version re-looked-up in the tree). ----
+
+    /// A `New` parent resolves to its own tree version with the
+    /// ebuild's IUSE visible: the whole-body `-> None` row and the
+    /// `New`-arm deletion both fail here.
+    #[test]
+    fn parent_use_state_resolves_a_new_parent_to_its_tree_version() {
+        let dir = dir_165("parent-new");
+        let repos = repo_165(&dir, &[("test/pkg", "1.0", "0", "foo", "", "", "")]);
+        let entries = vec![new_165("test", "pkg", "1.0")];
+        let (resolved, full_iuse, _use_flags, required_use) = parent_use_state(
+            &repos,
+            &entries,
+            &("test".to_string(), "pkg".to_string()),
+            &cfg_165(),
+        )
+        .expect("a merge-bound parent with a tree version resolves");
+        assert_eq!(resolved.version, "1.0");
+        assert!(full_iuse.contains("foo"));
+        assert_eq!(required_use, None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `Upgrade`, `Downgrade` and `Reinstall` parents resolve through
+    /// their own `to`/`version` fields: each deleted outcome arm
+    /// returns `None` instead and fails here.
+    #[test]
+    fn parent_use_state_resolves_upgrade_downgrade_and_reinstall_parents() {
+        let dir = dir_165("parent-outcomes");
+        let repos = repo_165(
+            &dir,
+            &[
+                ("test/pkg", "1.0", "0", "foo", "", "", ""),
+                ("test/pkg", "2.0", "0", "foo", "", "", ""),
+            ],
+        );
+        let config = cfg_165();
+        let owner = ("test".to_string(), "pkg".to_string());
+        for outcome in [
+            PretendOutcome::Upgrade {
+                from: "1.0".to_string(),
+                to: "2.0".to_string(),
+            },
+            PretendOutcome::Downgrade {
+                from: "2.0".to_string(),
+                to: "1.0".to_string(),
+            },
+            PretendOutcome::Reinstall {
+                version: "1.0".to_string(),
+                changed_flags: Vec::new(),
+                deps_changed: false,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: false,
+                slot_operator_rebuild: false,
+            },
+        ] {
+            let entries = vec![entry_165("test", "pkg", outcome.clone(), Some("0"))];
+            let (resolved, _, _, _) = parent_use_state(&repos, &entries, &owner, &config)
+                .expect("every merge-bound outcome resolves");
+            let want = match &outcome {
+                PretendOutcome::Upgrade { to, .. } => to,
+                PretendOutcome::Downgrade { to, .. } => to,
+                PretendOutcome::Reinstall { version, .. } => version,
+                _ => unreachable!(),
+            };
+            assert_eq!(&resolved.version, want);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The owner lookup is an exact `(category, package)` match:
+    /// same-category and same-package decoys do not resolve. The `&&`
+    /// -> `||` widening (which accepts either decoy) and each `==` ->
+    /// `!=` flip (which accepts its own decoy) fail here.
+    #[test]
+    fn parent_use_state_ignores_same_category_and_same_package_decoys() {
+        let dir = dir_165("parent-decoys");
+        let repos = repo_165(&dir, &[("test/pkg", "1.0", "0", "foo", "", "", "")]);
+        let entries = vec![
+            new_165("test", "other", "1.0"),
+            new_165("other", "pkg", "1.0"),
+        ];
+        assert!(
+            parent_use_state(
+                &repos,
+                &entries,
+                &("test".to_string(), "pkg".to_string()),
+                &cfg_165(),
+            )
+            .is_none()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The tree re-lookup filters on the parent's own version: with two
+    /// tree versions the `New 1.0` parent resolves 1.0, pinning the
+    /// `c.version == version` -> `!=` flip (which would resolve 2.0).
+    #[test]
+    fn parent_use_state_picks_the_parents_own_version_from_the_tree() {
+        let dir = dir_165("parent-version");
+        let repos = repo_165(
+            &dir,
+            &[
+                ("test/pkg", "1.0", "0", "foo", "", "", ""),
+                ("test/pkg", "2.0", "0", "foo", "", "", ""),
+            ],
+        );
+        let entries = vec![new_165("test", "pkg", "1.0")];
+        let (resolved, _, _, _) = parent_use_state(
+            &repos,
+            &entries,
+            &("test".to_string(), "pkg".to_string()),
+            &cfg_165(),
+        )
+        .expect("the parent version resolves");
+        assert_eq!(resolved.version, "1.0");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
