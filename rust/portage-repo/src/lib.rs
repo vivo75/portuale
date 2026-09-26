@@ -48840,4 +48840,127 @@ mod tests_162 {
         ];
         assert!(!complete_graph_auto_enable(&entries, true, true, true));
     }
+
+    /// Fixed "amd64"-only, no-overrides config, mirroring `tests`'
+    /// own `test_config` (visibility is pinned the same way so a
+    /// `KEYWORDS="amd64"` scratch ebuild is always visible).
+    fn cfg_162() -> portage_profile::Config {
+        portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            ..Default::default()
+        }
+    }
+
+    /// Direct `Candidate` literal for the visibility-free legs (mirrors
+    /// the existing `candidate()` helper's full field set).
+    fn cand_162(version: &str, keywords: &[&str], slot: &str) -> Candidate {
+        Candidate {
+            version: version.to_string(),
+            keywords: keywords.iter().map(|s| s.to_string()).collect(),
+            slot: slot.to_string(),
+            sub_slot: slot.to_string(),
+            repo_location: PathBuf::new(),
+            repo_priority: 0,
+            repo_name: "test".to_string(),
+            license: String::new(),
+            iuse: String::new(),
+            properties: String::new(),
+            restrict: String::new(),
+            source: CandidateSource::Ebuild,
+            binary_use: None,
+            remote: false,
+            build_id: None,
+            build_time: None,
+            binary_deps: HashMap::new(),
+        }
+    }
+
+    // ---- S4: `check_if_latest_atom_form` (the autounmask atom
+    // wording: `>=cpv` when nothing is higher, `>=cpv:slot` when only
+    // other slots are, `=cpv` when the same slot has more). ----
+
+    /// Nothing higher anywhere renders the bare `>=cpv` -- the
+    /// whole-body rows (already S0-caught) plus the outer `!higher`
+    /// deletion and the `&&` widening inside the probe fail here.
+    #[test]
+    fn check_if_latest_atom_form_renders_gte_when_nothing_is_higher() {
+        let config = cfg_162();
+        let resolved = cand_162("2.0", &["amd64"], "0");
+        let all = vec![
+            cand_162("1.0", &["amd64"], "0"),
+            cand_162("2.0", &["amd64"], "0"),
+        ];
+        assert_eq!(
+            check_if_latest_atom_form(&resolved, &all, "test", "pkg", &config, false),
+            ">=test/pkg-2.0"
+        );
+    }
+
+    /// A higher version in another slot only renders `>=cpv:slot` --
+    /// the `||` narrowing, the `Greater` flip and the inner `!higher`
+    /// deletion fail here.
+    #[test]
+    fn check_if_latest_atom_form_renders_slot_when_only_other_slots_are_higher() {
+        let config = cfg_162();
+        let resolved = cand_162("2.0", &["amd64"], "0");
+        let all = vec![
+            cand_162("2.0", &["amd64"], "0"),
+            cand_162("3.0", &["amd64"], "1"),
+        ];
+        assert_eq!(
+            check_if_latest_atom_form(&resolved, &all, "test", "pkg", &config, false),
+            ">=test/pkg-2.0:0"
+        );
+    }
+
+    /// A higher version in the same slot renders `=cpv` -- the
+    /// `!same_slot` deletion and the same-slot `Greater` flip fail
+    /// here.
+    #[test]
+    fn check_if_latest_atom_form_renders_equals_when_its_slot_is_higher() {
+        let config = cfg_162();
+        let resolved = cand_162("2.0", &["amd64"], "0");
+        let all = vec![
+            cand_162("2.0", &["amd64"], "0"),
+            cand_162("2.5", &["amd64"], "0"),
+        ];
+        assert_eq!(
+            check_if_latest_atom_form(&resolved, &all, "test", "pkg", &config, false),
+            "=test/pkg-2.0"
+        );
+    }
+
+    /// With visibility checking on, a keyword-masked higher candidate
+    /// does not count -- the visibility `&&` widening and the
+    /// `!check_visibility` deletion (masked side) fail here.
+    #[test]
+    fn check_if_latest_atom_form_ignores_a_masked_higher_candidate() {
+        let config = cfg_162();
+        let resolved = cand_162("2.0", &["amd64"], "0");
+        let all = vec![
+            cand_162("2.0", &["amd64"], "0"),
+            cand_162("3.0", &["~amd64"], "1"),
+        ];
+        assert_eq!(
+            check_if_latest_atom_form(&resolved, &all, "test", "pkg", &config, true),
+            ">=test/pkg-2.0"
+        );
+    }
+
+    /// With visibility checking off, that same masked candidate counts
+    /// again -- the `||` narrowing and the `!check_visibility`
+    /// deletion (unmasked side) fail here.
+    #[test]
+    fn check_if_latest_atom_form_counts_a_masked_candidate_without_visibility() {
+        let config = cfg_162();
+        let resolved = cand_162("2.0", &["amd64"], "0");
+        let all = vec![
+            cand_162("2.0", &["amd64"], "0"),
+            cand_162("3.0", &["~amd64"], "1"),
+        ];
+        assert_eq!(
+            check_if_latest_atom_form(&resolved, &all, "test", "pkg", &config, false),
+            ">=test/pkg-2.0:0"
+        );
+    }
 }
