@@ -48506,4 +48506,103 @@ mod tests_162 {
             assert_eq!(bare_cp(rejected), None, "{rejected}");
         }
     }
+
+    /// Fresh unique scratch dir per test (vdb + repo live under it, so
+    /// the per-root memo caches never see a reused path).
+    fn dir_162(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "portuale-162-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// One installed instance under `<root>/var/db/pkg` with the given
+    /// `SLOT` plus caller-supplied field files (`USE`, `IUSE`, ...).
+    fn install_162(root: &Path, cat: &str, pf: &str, slot: &str, files: &[(&str, &[u8])]) {
+        let d = root.join("var/db/pkg").join(cat).join(pf);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+        for (name, bytes) in files {
+            std::fs::write(d.join(name), bytes).unwrap();
+        }
+    }
+
+    fn atoms_162(atoms: &[&str]) -> Vec<String> {
+        atoms.iter().map(|a| a.to_string()).collect()
+    }
+
+    // ---- S2: `clean_selection` (real `emerge --prune --nodeps`
+    // selection, `3rdparty/portage` `unmerge.py` `_unmerge_display`:
+    // every cp with more than one matched version keeps the highest
+    // and selects the rest). ----
+
+    /// Scratch vdb for the `clean_selection` legs: `multi` spans two
+    /// versions in one slot, `single` has one (skipped), `spread`
+    /// spans two versions in each of two slots.
+    fn clean_root_162() -> PathBuf {
+        let root = dir_162("clean");
+        install_162(&root, "dev-libs", "multi-1.0", "0", &[]);
+        install_162(&root, "dev-libs", "multi-2.0", "0", &[]);
+        install_162(&root, "dev-libs", "single-1.0", "0", &[]);
+        install_162(&root, "dev-libs", "spread-1.0", "0", &[]);
+        install_162(&root, "dev-libs", "spread-2.0", "0", &[]);
+        install_162(&root, "dev-libs", "spread-3.0", "1", &[]);
+        install_162(&root, "dev-libs", "spread-4.0", "1", &[]);
+        root
+    }
+
+    /// Empty args walk every installed cp: `multi` keeps 2.0, `spread`
+    /// keeps 4.0 across both slots, the single-version cp is skipped.
+    /// Kills the whole-body `vec![]` row, the three
+    /// `versions.len() < 2` flips and the cross-slot best flip.
+    #[test]
+    fn clean_selection_reports_every_multi_version_cp() {
+        let root = clean_root_162();
+        let out = clean_selection(&root, &[]);
+        assert_eq!(out.len(), 2, "{out:?}");
+        assert_eq!(out[0].category, "dev-libs");
+        assert_eq!(out[0].package, "multi");
+        assert_eq!(out[0].best_version, "2.0");
+        assert_eq!(out[0].other_versions, vec!["1.0".to_string()]);
+        assert_eq!(out[1].package, "spread");
+        assert_eq!(out[1].best_version, "4.0");
+        assert_eq!(
+            out[1].other_versions,
+            vec!["1.0".to_string(), "3.0".to_string()]
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A version-range atom restricts the best/rest split to its own
+    /// match set, and a cp mismatch filters everything out -- the
+    /// `==` flips on the atom/cp guard fail here.
+    #[test]
+    fn clean_selection_version_pinned_atom_selects_only_its_set() {
+        let root = clean_root_162();
+        let out = clean_selection(&root, &atoms_162(&[">=dev-libs/multi-1.0"]));
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(out[0].best_version, "2.0");
+        assert_eq!(out[0].other_versions, vec!["1.0".to_string()]);
+        let out = clean_selection(&root, &atoms_162(&["dev-libs/nonexistent"]));
+        assert!(out.is_empty(), "{out:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// An atom matching nothing installed selects nothing: the
+    /// `parse && match` flip (`&&` -> `||` admits the cp-matched but
+    /// version-missed package) and the `!is_empty` deletion (which
+    /// admits it the other way round) both fail here.
+    #[test]
+    fn clean_selection_impossible_version_matches_nothing() {
+        let root = clean_root_162();
+        let out = clean_selection(&root, &atoms_162(&["=dev-libs/multi-3.0"]));
+        assert!(out.is_empty(), "{out:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
