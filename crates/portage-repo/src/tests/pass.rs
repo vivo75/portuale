@@ -151,6 +151,64 @@ fn run_pass_fails_a_required_use_violation() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// `--with-test-deps` walks a top-level atom's `test?` conditional deps.
+#[test]
+fn run_pass_with_test_deps_walks_test_conditionals() {
+    let dir = slotundo_temp_dir("161-run-testdeps");
+    let atoms = vec!["dev-libs/withtestdeppkg".to_string()];
+    let config = test_config();
+    let repos = find_repos(&fixtures_root()).expect("fixture repos");
+    let walk = |with_test_deps: bool| {
+        let opts = CtxOpts161 {
+            backtrack_max: 10,
+            atoms: atoms.clone(),
+            with_test_deps,
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, repos.clone(), &opts);
+        run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles")
+    };
+    let plain = walk(false);
+    assert!(
+        !plain.entries.iter().any(|e| e.package == "testonlydep"),
+        "test? deps stay out without the flag"
+    );
+    let testing = walk(true);
+    assert!(
+        testing.entries.iter().any(|e| e.package == "testonlydep"),
+        "test? deps walk with the flag"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// In complete mode a dependency outside the locked merge set resolves to
+/// nothing.
+#[test]
+fn run_pass_complete_mode_locks_unlisted_dependencies_out() {
+    let dir = slotundo_temp_dir("161-run-complete");
+    let atoms = vec!["dev-libs/needer".to_string()];
+    let config = test_config();
+    let repos = find_repos(&fixtures_root()).expect("fixture repos");
+    let opts = CtxOpts161 {
+        backtrack_max: 10,
+        atoms: atoms.clone(),
+        complete: true,
+        locked: HashSet::from([("dev-libs".to_string(), "otherpkg".to_string())]),
+        ..Default::default()
+    };
+    let ctx = ctx_161(&dir, &config, repos, &opts);
+    let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+    assert!(
+        pass.entries.iter().any(|e| e.package == "needer"),
+        "the requested atom still resolves"
+    );
+    assert!(
+        !pass.entries.iter().any(|e| e.package == "paired"),
+        "an unlocked dependency resolves to nothing in complete mode"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// An unlimited deep walk recurses into an installed dependency's own deps.
 #[test]
 fn run_pass_deep_walk_recurses_into_installed_deps() {
@@ -188,6 +246,39 @@ fn run_pass_deep_walk_recurses_into_installed_deps() {
         names,
         vec!["completegraphpkg", "deeppkg", "deeppkg2", "newpkg"]
     );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Under `--usepkg` with a staged binary index, the atom resolves from the
+/// binary pool instead of the tree.
+#[test]
+fn run_pass_usepkg_selects_the_staged_binary() {
+    let dir = slotundo_temp_dir("161-run-binpkg");
+    let atoms = vec!["dev-libs/sounneed".to_string()];
+    let mut config = test_config();
+    config.scanned_binpkgs = Some(vec![HashMap::from([
+        ("CPV".to_string(), "dev-libs/sounneed-1.0".to_string()),
+        ("SLOT".to_string(), "0".to_string()),
+        ("KEYWORDS".to_string(), "amd64".to_string()),
+        ("REPO".to_string(), "testrepo".to_string()),
+        ("BUILD_ID".to_string(), "abc123".to_string()),
+    ])]);
+    let repos = find_repos(&fixtures_root()).expect("fixture repos");
+    let opts = CtxOpts161 {
+        backtrack_max: 10,
+        atoms: atoms.clone(),
+        usepkg: true,
+        ..Default::default()
+    };
+    let ctx = ctx_161(&dir, &config, repos, &opts);
+    let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+    assert_eq!(pass.entries.len(), 1);
+    assert_eq!(
+        pass.entries[0].source,
+        CandidateSource::Binary,
+        "the staged binary wins over the ebuild"
+    );
+    assert_eq!(pass.entries[0].build_id.as_deref(), Some("abc123"));
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -274,6 +365,42 @@ fn run_pass_files_one_row_per_blocker_owner() {
         .map(|e| e.package.as_str())
         .collect();
     assert_eq!(rows.len(), 2);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// With `--binpkg-respect-use`, a USE-mismatched binary is filtered out and
+/// the ebuild wins instead.
+#[test]
+fn run_pass_respect_use_filters_a_stale_binary() {
+    let dir = slotundo_temp_dir("161-run-respect");
+    let atoms = vec!["dev-libs/sounneed".to_string()];
+    let mut config = test_config();
+    // The staged binary was built with +soflag; the tree resolves
+    // it off.
+    config.scanned_binpkgs = Some(vec![HashMap::from([
+        ("CPV".to_string(), "dev-libs/sounneed-1.0".to_string()),
+        ("SLOT".to_string(), "0".to_string()),
+        ("KEYWORDS".to_string(), "amd64".to_string()),
+        ("REPO".to_string(), "testrepo".to_string()),
+        ("USE".to_string(), "soflag".to_string()),
+        ("IUSE".to_string(), "soflag".to_string()),
+    ])]);
+    let repos = find_repos(&fixtures_root()).expect("fixture repos");
+    let opts = CtxOpts161 {
+        backtrack_max: 10,
+        atoms: atoms.clone(),
+        usepkg: true,
+        binpkg_respect_use: true,
+        ..Default::default()
+    };
+    let ctx = ctx_161(&dir, &config, repos, &opts);
+    let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+    assert_eq!(pass.entries.len(), 1);
+    assert_eq!(
+        pass.entries[0].source,
+        CandidateSource::Ebuild,
+        "the USE-mismatched binary is filtered out"
+    );
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -401,5 +528,51 @@ fn run_pass_newer_binary_loses_to_the_tree() {
         pass.entries[0].outcome,
         PretendOutcome::New { ref version } if version == "1.0"
     ));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A keyword-masked tree ebuild does not count as an ebuild twin.
+#[test]
+fn run_pass_masked_ebuild_is_no_twin() {
+    let dir = slotundo_temp_dir("161-run-maskbin");
+    let atoms = vec!["dev-libs/kwonlypkg".to_string()];
+    // Tree ebuild ~amd64 (masked under the amd64 accept); staged
+    // binary amd64 (visible).
+    let repo = blocker_161_scratch_repo(Blocker161ScratchRepoArgs {
+        base: &dir,
+        cp: "dev-libs/kwonlypkg",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "",
+    });
+    let d = repo.location.join("dev-libs/kwonlypkg");
+    let body = "EAPI=8\nDESCRIPTION=\"161 kw\"\nSLOT=\"0\"\nKEYWORDS=\"~amd64\"\n";
+    std::fs::write(d.join("kwonlypkg-1.0.ebuild"), body).unwrap();
+    use md5::Digest as _;
+    let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+    let entry = format!(
+        "DEFINED_PHASES=-\nDESCRIPTION=161 kw\nEAPI=8\nKEYWORDS=~amd64\nSLOT=0\n_md5_={md5}\n"
+    );
+    let cachedir = repo.location.join("metadata/md5-cache/dev-libs");
+    std::fs::create_dir_all(&cachedir).unwrap();
+    std::fs::write(cachedir.join("kwonlypkg-1.0"), entry).unwrap();
+    let mut config = test_config();
+    config.scanned_binpkgs = Some(vec![HashMap::from([
+        ("CPV".to_string(), "dev-libs/kwonlypkg-1.0".to_string()),
+        ("SLOT".to_string(), "0".to_string()),
+        ("KEYWORDS".to_string(), "amd64".to_string()),
+        ("REPO".to_string(), "testrepo".to_string()),
+    ])]);
+    let opts = CtxOpts161 {
+        backtrack_max: 10,
+        atoms: atoms.clone(),
+        usepkgonly: true,
+        ..Default::default()
+    };
+    let ctx = ctx_161(&dir, &config, vec![repo], &opts);
+    let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+    assert_eq!(pass.entries.len(), 1);
+    assert_eq!(pass.entries[0].source, CandidateSource::Binary);
     let _ = fs::remove_dir_all(&dir);
 }
