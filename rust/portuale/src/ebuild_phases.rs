@@ -1514,6 +1514,68 @@ pub(crate) fn resolve_standalone_binpkg_compress(
     Some((compress, flags, bzip2))
 }
 
+/// Real `BINPKG_FORMAT` (backlog #173) for a standalone `ebuild <file>
+/// package`: the resolved chain value below the calling env
+/// (`make.conf`/profile/`make.globals` via `other_vars` -- the same
+/// `resolve_config` chain every other standalone helper reads). The
+/// calling-env-wins scalar precedence (#101) stays the caller's job --
+/// it checks the process env first, exactly as it already does for the
+/// `BINPKG_COMPRESS` triple above. `None` when nothing resolves
+/// (outside a repo checkout, unparsable path) or nothing in the chain
+/// names a value, in which case the caller keeps real `make.globals`'s
+/// own default (`PackageOptions::default().binpkg_format`). Deliberately
+/// not `package.env`-matched: a global scalar, not a per-package one.
+pub(crate) fn resolve_standalone_binpkg_format(
+    ebuild_path: &Path,
+    config_root: &Path,
+    eroot: &Path,
+) -> Option<String> {
+    let (config, _) = standalone_package_env_lookup(ebuild_path, config_root, eroot)?;
+    config.other_vars.get("BINPKG_FORMAT").cloned()
+}
+
+/// The resolved global `Config` for the config-less `emerge -C` path
+/// (`execute_unmerge`'s `FEATURES=unmerge-backup` quickpkg, backlog
+/// #173): the same `resolve_config` chain (`make.globals` → profile
+/// `make.defaults` → `make.conf`) every other path reads, minus any
+/// package identity -- `BINPKG_FORMAT` is a global scalar, not a
+/// per-package one, so no ebuild path / `package.env` match is needed
+/// (unlike the standalone helpers above, which resolve through an
+/// ebuild's own path). `None` when no config resolves (missing
+/// `repos.conf`, no main repo, `resolve_config` error) -- the caller
+/// keeps real `make.globals`'s own default
+/// (`PackageOptions::default().binpkg_format`).
+pub(crate) fn resolve_unmerge_config(
+    config_root: &Path,
+    eroot: &Path,
+) -> Option<portage_profile::Config> {
+    let repos = portage_repo::find_repos(config_root).ok()?;
+    let main_repo = repos.iter().find(|r| r.is_main)?;
+    let overlay_repos: Vec<(String, PathBuf)> = repos
+        .iter()
+        .filter(|r| !r.is_main)
+        .map(|r| (r.name.clone(), r.location.clone()))
+        .collect();
+    let repo_aliases: Vec<(String, PathBuf)> = repos
+        .iter()
+        .flat_map(|r| r.aliases.iter().map(|a| (a.clone(), r.location.clone())))
+        .collect();
+    let repo_masters: std::collections::HashMap<String, Vec<PathBuf>> = repos
+        .iter()
+        .map(|r| (r.name.clone(), r.masters.clone()))
+        .collect();
+    portage_profile::resolve_config(
+        config_root,
+        &main_repo.location,
+        &overlay_repos,
+        &repo_aliases,
+        &main_repo.name,
+        &repo_masters,
+        eroot,
+    )
+    .ok()
+}
+
 /// The config-`USE` set the `depend` phase reduces `RESTRICT`/
 /// `PROPERTIES` on: real `doebuild(mydo="depend")` runs with the
 /// `setcpv` config `USE` (profile + `make.conf` + user `package.use`,
@@ -7435,5 +7497,91 @@ mod tests {
             &fixtures,
         );
         assert_eq!(unmatched, None, "no match, no override");
+    }
+
+    /// Backlog #173 review: `execute_unmerge`'s `FEATURES=unmerge-backup`
+    /// quickpkg resolves `BINPKG_FORMAT` through this chain (calling env
+    /// over `make.conf`/profile/`make.globals`, real `config`
+    /// precedence), so a `make.conf` value reaches the backup artefact
+    /// (a `.tbz2` for `xpak`). A full quickpkg run is too heavy for a
+    /// unit test; this pins the resolver the backup path uses instead --
+    /// the scratch chain value plus the production lookup shape over it.
+    /// The calling-env-beats-file half lives in portage-profile's own
+    /// `with_test_env` test (that hook is `cfg(test)`-local to that
+    /// crate); here only the file side is asserted, plus the
+    /// env-over-chain production expression when the ambient process
+    /// env is itself silent (otherwise the ambient value would rightly
+    /// win and the assertion would be testing the developer's shell).
+    #[test]
+    fn resolve_unmerge_config_reads_binpkg_format_from_make_conf() {
+        let probe = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-unmerge_binpkg_format",
+            std::process::id()
+        ));
+        std::fs::remove_dir_all(&probe).ok();
+        let repo = probe.join("repo");
+        let prof = repo.join("profiles/default");
+        let portage_dir = probe.join("etc/portage");
+        std::fs::create_dir_all(&prof).unwrap();
+        std::fs::create_dir_all(&portage_dir).unwrap();
+        std::fs::write(
+            prof.join("make.defaults"),
+            "ARCH=\"amd64\"\nACCEPT_KEYWORDS=\"${ARCH}\"\n",
+        )
+        .unwrap();
+        std::fs::write(portage_dir.join("make.conf"), "BINPKG_FORMAT=\"xpak\"\n").unwrap();
+        std::fs::write(
+            portage_dir.join("repos.conf"),
+            "[DEFAULT]\nmain-repo = testrepo\n\n[testrepo]\nlocation = repo\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&prof, portage_dir.join("make.profile")).unwrap();
+
+        let config = resolve_unmerge_config(&probe, &probe).expect("scratch chain resolves");
+        assert_eq!(
+            config.other_vars.get("BINPKG_FORMAT").map(String::as_str),
+            Some("xpak"),
+            "the make.conf value must reach the chain the backup path reads"
+        );
+        // The file-side lookup shape (no calling env): the backup names
+        // a `.tbz2` for this value.
+        assert_eq!(
+            crate::ebuild_package::resolve_binpkg_format(|key| config.other_vars.get(key).cloned()),
+            "xpak"
+        );
+        // The full production expression (calling env over the chain):
+        // only meaningful when the ambient env is silent on the key.
+        if std::env::var_os("BINPKG_FORMAT").is_none() {
+            assert_eq!(
+                crate::ebuild_package::resolve_binpkg_format(|key| {
+                    portage_profile::env_over_config_scalar(&config, key)
+                }),
+                "xpak"
+            );
+        }
+
+        // No value anywhere in the chain: nothing resolves, so the real
+        // `make.globals` default (`gpkg`) applies.
+        std::fs::write(portage_dir.join("make.conf"), "# no BINPKG_FORMAT here\n").unwrap();
+        let config = resolve_unmerge_config(&probe, &probe).expect("scratch chain resolves");
+        assert!(
+            !config.other_vars.contains_key("BINPKG_FORMAT"),
+            "an unconfigured chain contributes no value"
+        );
+        assert_eq!(
+            crate::ebuild_package::resolve_binpkg_format(|key| config.other_vars.get(key).cloned()),
+            "gpkg"
+        );
+
+        // No `repos.conf` at all: no chain, `None` (the caller keeps the
+        // default) -- the same tolerance the standalone helpers have
+        // outside any real repo checkout.
+        std::fs::remove_file(portage_dir.join("repos.conf")).unwrap();
+        assert!(
+            resolve_unmerge_config(&probe, &probe).is_none(),
+            "without repos.conf there is no chain to read"
+        );
+        std::fs::remove_dir_all(&probe).ok();
     }
 }

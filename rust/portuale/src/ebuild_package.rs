@@ -17,9 +17,9 @@
 //
 // KNOWN, DOCUMENTED GAPS (v1 scope, matching portuale's own
 // "narrow v1, document the cut" pattern):
-//   - `BINPKG_FORMAT` (`"xpak"` -- real portage's own first-listed
-//     `SUPPORTED_GENTOO_BINPKG_FORMATS` default -- or `"gpkg"`) is real
-//     now: for `"gpkg"`, real, unmodified `bin/misc-functions.sh
+//   - `BINPKG_FORMAT` (real default `"gpkg"` -- real `cnf/make.globals:43`
+//     -- with `"xpak"`, the predecessor format, still selectable) is
+//     honored at package time: for `"gpkg"`, real, unmodified `bin/misc-functions.sh
 //     __dyn_package` shells out to real, unmodified `bin/gpkg-helper.py
 //     compress` (real `portage.gpkg.gpkg().compress()`, no
 //     reimplementation) exactly the way the `"xpak"` branch already
@@ -128,9 +128,10 @@ pub struct PackageOptions {
     /// `"bzip2"`) -- only actually substituted when `binpkg_compress ==
     /// "bzip2"`.
     pub portage_bzip2_command: String,
-    /// Real `BINPKG_FORMAT` (real `make.globals`'s own default: `"xpak"`,
-    /// the first entry of `SUPPORTED_GENTOO_BINPKG_FORMATS`). `"gpkg"` is
-    /// the only other accepted value; `run_package` rejects anything else
+    /// Real `BINPKG_FORMAT` (real `cnf/make.globals:43`'s own default:
+    /// `"gpkg"` -- `"xpak"` is only the first entry of real
+    /// `SUPPORTED_GENTOO_BINPKG_FORMATS` (`const.py:296`), not the
+    /// shipped default). `"xpak"` is the only other accepted value; `run_package` rejects anything else
     /// with `Err("Unknown BINPKG_FORMAT ...")`, real `bin/misc-functions.
     /// sh __dyn_package`'s own `die`.
     pub binpkg_format: String,
@@ -208,7 +209,7 @@ impl Default for PackageOptions {
             binpkg_compress: "zstd".to_string(),
             binpkg_compress_flags: String::new(),
             portage_bzip2_command: "bzip2".to_string(),
-            binpkg_format: "xpak".to_string(),
+            binpkg_format: "gpkg".to_string(),
             config_root: PathBuf::from("/dev/null/no-config-root-configured"),
             buildpkg_live: true,
             binpkg_multi_instance: false,
@@ -384,6 +385,25 @@ pub fn phase_compression_command(lookup: impl Fn(&str) -> Option<String>) -> Opt
     let bzip2 = lookup("PORTAGE_BZIP2_COMMAND").unwrap_or_else(|| "bzip2".to_string());
     let makeopts = lookup("MAKEOPTS").unwrap_or_else(|| "1".to_string());
     resolve_compression_command_jobs(&name, &flags, &bzip2, &makeopts_to_job_count(&makeopts))
+}
+
+/// Real `BINPKG_FORMAT` from the resolved config (`lookup`: calling env
+/// over `make.conf`/profile/`make.globals` -- the same precedence real's
+/// `config` object gives any variable, and the same `lookup` shape
+/// `phase_compression_command` takes): the chain value when set
+/// anywhere, else real `cnf/make.globals:43`'s own default `"gpkg"`.
+/// Backlog #173: the two `PackageOptions` construction sites (`ebuild.
+/// rs`'s standalone `package`, `pretend.rs`'s `package_options_from_env`)
+/// used to read only the process env over a hardcoded `"xpak"`, so a
+/// `make.conf`/profile value was ignored and the default named the
+/// wrong format.
+pub fn resolve_binpkg_format(lookup: impl Fn(&str) -> Option<String>) -> String {
+    // An empty value stays an `Unknown BINPKG_FORMAT` error downstream,
+    // never a fallback: real's `make.conf` assignment overrides
+    // `make.globals` with `""` and real `bin/misc-functions.sh`
+    // `__dyn_package` then dies the same way (`die "Unknown
+    // BINPKG_FORMAT ..."`).
+    lookup("BINPKG_FORMAT").unwrap_or_else(|| PackageOptions::default().binpkg_format.clone())
 }
 
 fn resolve_compression_command_jobs(
@@ -1601,6 +1621,35 @@ mod tests {
     }
 
     #[test]
+    fn resolve_binpkg_format_defaults_to_gpkg_and_obeys_the_chain() {
+        // Backlog #173, grounded in real `cnf/make.globals:43`
+        // (`BINPKG_FORMAT="gpkg"`): no value anywhere in the chain
+        // yields the real default, and a chain value wins verbatim.
+        // The chain precedence itself (calling env over
+        // `make.conf`/profile/`make.globals`) lives in the `lookup`
+        // each call site builds (`portage_profile::env_over_config_scalar`
+        // over the resolved config); here the lookup is driven directly.
+        let cfg = |pairs: &'static [(&'static str, &'static str)]| {
+            move |k: &str| {
+                pairs
+                    .iter()
+                    .find(|(n, _)| *n == k)
+                    .map(|(_, v)| v.to_string())
+            }
+        };
+        assert_eq!(PackageOptions::default().binpkg_format, "gpkg");
+        assert_eq!(resolve_binpkg_format(cfg(&[])), "gpkg");
+        assert_eq!(
+            resolve_binpkg_format(cfg(&[("BINPKG_FORMAT", "xpak")])),
+            "xpak"
+        );
+        assert_eq!(
+            resolve_binpkg_format(cfg(&[("BINPKG_FORMAT", "gpkg")])),
+            "gpkg"
+        );
+    }
+
+    #[test]
     fn refresh_entry_compression_command_rederives_the_command_from_the_layered_env() {
         let command_of = |env: &[(String, String)]| {
             env.iter()
@@ -1758,6 +1807,9 @@ mod tests {
             // actually having `zstd` installed; `bzip2` is a
             // near-universal base package.
             binpkg_compress: "bzip2".to_string(),
+            // Pinned explicitly (backlog #173): the point of this test
+            // is the xpak path, not the (now gpkg) default.
+            binpkg_format: "xpak".to_string(),
             ..PackageOptions::default()
         };
         std::fs::create_dir_all(&root).unwrap();
@@ -2152,6 +2204,11 @@ mod tests {
             // opening the tar pipe -- a clean, deterministic failure
             // that never touches PORTAGE_BINPKG_TMPFILE at all.
             binpkg_compress: "made-up-codec".to_string(),
+            // Pinned explicitly (backlog #173): the deterministic
+            // `__dyn_package` die this test needs is the xpak tar
+            // pipe's own `[[ -z "${PORTAGE_COMPRESSION_COMMAND}" ]]`
+            // guard, not the gpkg path.
+            binpkg_format: "xpak".to_string(),
             ..PackageOptions::default()
         };
         std::fs::create_dir_all(&root).unwrap();

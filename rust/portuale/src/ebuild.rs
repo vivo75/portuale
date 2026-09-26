@@ -354,7 +354,22 @@ pub fn run(args: &[String]) -> ExitCode {
             binpkg_compress_flags,
             portage_bzip2_command: std::env::var("PORTAGE_BZIP2_COMMAND")
                 .unwrap_or(default_package_options.portage_bzip2_command),
-            binpkg_format: std::env::var("BINPKG_FORMAT")
+            // Real `BINPKG_FORMAT` from the resolved chain (backlog #173):
+            // calling env over `make.conf`/profile/`make.globals` (the
+            // standalone `resolve_config` chain below the env, real
+            // `config` precedence), else real `make.globals`'s own
+            // default (`PackageOptions::default().binpkg_format`). The
+            // env half reads through `config_env_var` (not raw
+            // `std::env::var`), the same test hook
+            // `env_over_config_scalar` uses.
+            binpkg_format: portage_profile::config_env_var("BINPKG_FORMAT")
+                .or_else(|| {
+                    ebuild_phases::resolve_standalone_binpkg_format(
+                        std::path::Path::new(ebuild_file),
+                        &portage_repo::config_root_from_env(),
+                        &root,
+                    )
+                })
                 .unwrap_or(default_package_options.binpkg_format),
             config_root: portage_repo::config_root_from_env(),
             // Real default-on FEATURES token -- see `PackageOptions::

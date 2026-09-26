@@ -2229,6 +2229,10 @@ mod tests {
                 // installed -- real xpak/tbz2 building is codec-
                 // agnostic either way.
                 binpkg_compress: "bzip2".to_string(),
+                // Pinned explicitly (backlog #173): this test asserts
+                // XPAK magic via the xpak reader, not the (now gpkg)
+                // default.
+                binpkg_format: "xpak".to_string(),
                 ..PackageOptions::default()
             },
             false,
@@ -2509,6 +2513,10 @@ mod tests {
                 shell: PackageOptions::default().shell,
                 binpkg_compress: "bzip2".to_string(),
                 binpkg_multi_instance: true,
+                // Pinned explicitly (backlog #173): this test pins the
+                // `.xpak` multi-instance paths, not the (now gpkg)
+                // default.
+                binpkg_format: "xpak".to_string(),
                 ..PackageOptions::default()
             },
             false,
@@ -3318,7 +3326,10 @@ mod tests {
         )
         .expect("--buildpkgonly succeeds");
 
-        assert!(pkgdir.join("dev-libs/packagepkg-1.0.tbz2").is_file());
+        // Backlog #173: the default format is gpkg now (real
+        // `cnf/make.globals:43`), so the incidental artefact assertion
+        // follows the default rather than pinning the old xpak shape.
+        assert!(pkgdir.join("dev-libs/packagepkg-1.0.gpkg.tar").is_file());
         let builddir = portage_tmpdir.join("portage/dev-libs/packagepkg-1.0");
         assert!(
             !builddir.join(".installed").exists(),
@@ -4081,8 +4092,10 @@ mod tests {
         assert!(err.contains("dev-libs/fetchpkg-1.0"), "{err}");
         assert!(err.contains("no Manifest entry"), "{err}");
 
+        // Backlog #173: the default format is gpkg now (real
+        // `cnf/make.globals:43`).
         assert!(
-            pkgdir.join("dev-libs/packagepkg-1.0.tbz2").is_file(),
+            pkgdir.join("dev-libs/packagepkg-1.0.gpkg.tar").is_file(),
             "packagepkg must still be built with --keep-going, despite fetchpkg's own failure"
         );
     }

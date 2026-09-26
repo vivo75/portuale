@@ -4388,20 +4388,29 @@ fn run_unmerge_pretend(
 /// tracks the file-removal core, which portuale still surfaces as a
 /// hard `Err`.
 /// Real `BINPKG_COMPRESS`/`BINPKG_COMPRESS_FLAGS[_<NAME>]`/
-/// `PORTAGE_BZIP2_COMMAND`/`PKGDIR`/`BINPKG_FORMAT`/... resolution, via
+/// `PORTAGE_BZIP2_COMMAND`/`PKGDIR`/... resolution, via
 /// the same env-var-sourced CLI boundary `ebuild.rs`'s own real
-/// `merge`/`qmerge`/`package` construction uses. Shared by the
+/// `merge`/`qmerge`/`package` construction uses, except `BINPKG_FORMAT`
+/// (backlog #173), which comes from the full resolved chain -- calling
+/// env over `make.conf`/profile/`make.globals` (real `config`
+/// precedence, via `portage_profile::env_over_config_scalar` over the
+/// caller's resolved `config`) -- falling back to real `make.globals`'s
+/// own default. Shared by the
 /// non-`--pretend` build/merge dispatch and `execute_unmerge`'s own
 /// `FEATURES=unmerge-backup` `quickpkg`.
 /// The resolved-`FEATURES` sibling of `feature_enabled` for this
 /// function: `Some` means the caller resolved a real config (#37 S2/S3),
 /// so the token is read from the folded list; `None` keeps the raw
-/// process-env fallback for the standalone `ebuild`/`execute_unmerge`
-/// paths.
+/// process-env fallback. The `config` parameter is independent of it:
+/// `None` keeps the env-only `BINPKG_FORMAT` fallback, reached only when
+/// a caller could resolve no chain (today only `execute_unmerge` when
+/// `resolve_unmerge_config` fails) -- every production caller otherwise
+/// passes its resolved config, including `execute_unmerge`.
 fn package_options_from_env(
     shell: ebuild_phases::ShellBackend,
     debug: bool,
     resolved_features: Option<&str>,
+    config: Option<&portage_profile::Config>,
 ) -> ebuild_package::PackageOptions {
     let feature_on = |token: &str| match resolved_features {
         Some(f) => f.split_whitespace().any(|t| t == token),
@@ -4427,7 +4436,18 @@ fn package_options_from_env(
         binpkg_compress_flags,
         portage_bzip2_command: std::env::var("PORTAGE_BZIP2_COMMAND")
             .unwrap_or(d.portage_bzip2_command),
-        binpkg_format: std::env::var("BINPKG_FORMAT").unwrap_or(d.binpkg_format),
+        binpkg_format: match config {
+            Some(c) => ebuild_package::resolve_binpkg_format(|key| {
+                portage_profile::env_over_config_scalar(c, key)
+            }),
+            // Config-less arm (only `execute_unmerge`'s
+            // `FEATURES=unmerge-backup` quickpkg reaches here -- and only
+            // when the chain resolution there failed; otherwise it passes
+            // its resolved config above): calling env only, through the
+            // same `config_env_var` test hook, else real `make.globals`'s
+            // own default.
+            None => ebuild_package::resolve_binpkg_format(portage_profile::config_env_var),
+        },
         config_root: portage_repo::config_root_from_env(),
         // Real default-on FEATURES token: enabled unless explicitly
         // negated (`-buildpkg-live`) -- unlike the sibling fields above,
@@ -5064,8 +5084,12 @@ fn run_resume(
             false,
         )
     } else {
-        let package_options =
-            package_options_from_env(shell, debug, Some(&config_features_string(config)));
+        let package_options = package_options_from_env(
+            shell,
+            debug,
+            Some(&config_features_string(config)),
+            Some(config),
+        );
         emerge_getbinpkg::run_merge_plan(
             &entries,
             config,
@@ -5138,9 +5162,19 @@ fn execute_unmerge(
     let portage_tmpdir = portage_repo::portage_tmpdir_from_env();
     let options = ebuild_merge::MergeOptions::from_env(shell, debug);
     // Real `dblink._pre_unmerge_backup`: `FEATURES=unmerge-backup` -> a
-    // `quickpkg` of each package before it's removed.
-    let backup =
-        feature_enabled("unmerge-backup").then(|| package_options_from_env(shell, debug, None));
+    // `quickpkg` of each package before it's removed. Its `BINPKG_FORMAT`
+    // follows the same resolved chain as every other `PackageOptions`
+    // construction site (backlog #173: calling env over
+    // `make.conf`/profile/`make.globals`, real `config` precedence) --
+    // resolved here, since this path carries no graph entry. A failed
+    // resolution keeps the old env-only fallback inside
+    // `package_options_from_env`'s `None` arm. `resolved_features` stays
+    // `None` on purpose: the `FEATURES` tokens keep their raw
+    // process-env fallback (only the format joins the chain).
+    let unmerge_config =
+        ebuild_phases::resolve_unmerge_config(&portage_repo::config_root_from_env(), root);
+    let backup = feature_enabled("unmerge-backup")
+        .then(|| package_options_from_env(shell, debug, None, unmerge_config.as_ref()));
     let scratch = portage_tmpdir.join("portage").join("_unmerge_src");
     let total = removal_list.len();
     for (idx, (category, package, version)) in removal_list.iter().enumerate() {
@@ -12960,8 +12994,12 @@ pub fn run(args: &[String]) -> ExitCode {
         // Real BINPKG_COMPRESS/BINPKG_COMPRESS_FLAGS[_<NAME>]/
         // PORTAGE_BZIP2_COMMAND/PKGDIR/... resolution -- see
         // `package_options_from_env`.
-        let package_options =
-            package_options_from_env(shell, debug, Some(&config_features_string(&config)));
+        let package_options = package_options_from_env(
+            shell,
+            debug,
+            Some(&config_features_string(&config)),
+            Some(&config),
+        );
         let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| portage_repo::portage_tmpdir_from_config(&config));
