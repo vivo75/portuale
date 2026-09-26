@@ -3005,6 +3005,79 @@ mod tests {
         let _ = fs::remove_dir_all(&portage_tmpdir);
     }
 
+    /// #158: a byte-identical installed file survives a re-merge when the
+    /// ebuild's own `pkg_preinst` helper is gated on `REPLACING_VERSIONS`
+    /// (real `dblink.treewalk`, `vartree.py:4768-4771`). Without the var
+    /// the fixture's preinst `rm`s the file; with it the preinst returns
+    /// early and `merge_tree`'s `needs_move` (real `_needs_move`,
+    /// `vartree.py:6363`) leaves the existing inode -- the property that
+    /// keeps real's OWNER (`/usr/share/man/man1/awk.1`'s `1:1`, #158)
+    /// instead of recreating the file from the image.
+    #[test]
+    fn reinstall_leaves_a_byte_identical_file_a_preinst_helper_would_remove() {
+        use std::os::unix::fs::MetadataExt;
+
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+        let options = ebuild_merge::MergeOptions {
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            ..ebuild_merge::MergeOptions::default()
+        };
+        let merge = |outcome: PretendOutcome| {
+            run_source_merge(
+                &[source_entry("identicalownerpkg", outcome)],
+                &repos,
+                &root,
+                &portage_tmpdir,
+                &options,
+                false,
+                None,
+                &[],
+                1,
+                None,
+                false,
+            )
+            .expect("merge succeeds");
+        };
+
+        // First merge: no same-slot instance yet, so the fixture's preinst
+        // `rm` is a no-op and the image's `identical.txt` lands.
+        merge(PretendOutcome::New {
+            version: "4".into(),
+        });
+        let dest = root.join("usr/share/identicalownerpkg/identical.txt");
+        let before = fs::symlink_metadata(&dest)
+            .expect("the fixture installed its file")
+            .ino();
+
+        // Re-merge the same version: `installed_instance_pf` sees the
+        // just-written vdb entry, `REPLACING_VERSIONS=4` is set for the
+        // preinst, the fixture returns early, and the byte-identical
+        // destination is left in place (same inode, same owner).
+        merge(PretendOutcome::Reinstall {
+            version: "4".into(),
+            changed_flags: vec![],
+            deps_changed: false,
+            slot_changed: false,
+            rebuilt_binary: true,
+            new_repo: false,
+            slot_operator_rebuild: false,
+        });
+        let after = fs::symlink_metadata(&dest)
+            .expect("still installed")
+            .ino();
+        assert_eq!(
+            before, after,
+            "#158: a byte-identical file must keep its inode (and owner) through a re-merge"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&portage_tmpdir);
+    }
+
     /// #37 S2: `--buildpkgonly` threads the same resolved env as the
     /// `-b` merge path -- the archive's `metadata/USE`/`metadata/FEATURES`
     /// (real `__dyn_install` writes both into `build-info` from the phase

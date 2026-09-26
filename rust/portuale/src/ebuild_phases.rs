@@ -4871,6 +4871,12 @@ pub(crate) fn run_phase_from_saved_env(
     // incremental list.
     update_env: Option<&Path>,
     refresh_features: Option<&str>,
+    // Real `dblink.treewalk`'s `REPLACING_VERSIONS` (`vartree.py:4768-
+    // 4771`), threaded into the hook env for the binary-merge
+    // `pkg_preinst`/`pkg_postinst` (`None` for every unmerge hook, which
+    // real does not give the var). See `ebuild_merge::replacing_versions`
+    // for the value's source.
+    replacing_versions: Option<&str>,
 ) -> Result<i32, String> {
     let runtime = shared_runtime()?;
     runtime.block_on(async {
@@ -4881,6 +4887,9 @@ pub(crate) fn run_phase_from_saved_env(
         }
 
         let mut extra_env = binary_merge_env();
+        if let Some(version) = replacing_versions {
+            extra_env.push(("REPLACING_VERSIONS".to_string(), version.to_string()));
+        }
         if let Some(p) = update_env {
             extra_env.push(("PORTAGE_UPDATE_ENV".to_string(), p.display().to_string()));
             if let Some(features) = refresh_features.filter(|f| !f.is_empty()) {
