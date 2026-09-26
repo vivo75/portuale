@@ -1570,7 +1570,17 @@ thread_local! {
 /// The process environment as the `env` `USE_ORDER` layer sees it -- real
 /// `std::env::var`, except under `cfg(test)` with a `TEST_ENV_OVERRIDE`
 /// installed, when that map is authoritative.
-fn config_env_var(name: &str) -> Option<String> {
+///
+/// `pub` so the `BINPKG_FORMAT` construction sites (`portuale::ebuild`'s
+/// standalone `package`, `portuale::pretend::package_options_from_env`'s
+/// config-less arm, backlog #173) read the calling env through the same
+/// choke point `env_over_config_scalar` uses -- identical production
+/// behavior, and the `cfg(test)` `TEST_ENV_OVERRIDE` hook stays
+/// available to this crate's own `with_test_env` tests. (External
+/// crates built without this crate's `cfg(test)` always take the plain
+/// `std::env::var` path; the override map itself stays `pub(crate)` on
+/// purpose.)
+pub fn config_env_var(name: &str) -> Option<String> {
     #[cfg(test)]
     {
         if TEST_ENV_OVERRIDE.with(|o| o.borrow().is_some()) {

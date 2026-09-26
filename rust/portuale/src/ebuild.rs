@@ -358,9 +358,11 @@ pub fn run(args: &[String]) -> ExitCode {
             // calling env over `make.conf`/profile/`make.globals` (the
             // standalone `resolve_config` chain below the env, real
             // `config` precedence), else real `make.globals`'s own
-            // default (`PackageOptions::default().binpkg_format`).
-            binpkg_format: std::env::var("BINPKG_FORMAT")
-                .ok()
+            // default (`PackageOptions::default().binpkg_format`). The
+            // env half reads through `config_env_var` (not raw
+            // `std::env::var`), the same test hook
+            // `env_over_config_scalar` uses.
+            binpkg_format: portage_profile::config_env_var("BINPKG_FORMAT")
                 .or_else(|| {
                     ebuild_phases::resolve_standalone_binpkg_format(
                         std::path::Path::new(ebuild_file),

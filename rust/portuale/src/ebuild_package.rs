@@ -18,8 +18,8 @@
 // KNOWN, DOCUMENTED GAPS (v1 scope, matching portuale's own
 // "narrow v1, document the cut" pattern):
 //   - `BINPKG_FORMAT` (real default `"gpkg"` -- real `cnf/make.globals:43`
-//     -- or `"gpkg"`'s predecessor `"xpak"`, still selectable) is real
-//     now: for `"gpkg"`, real, unmodified `bin/misc-functions.sh
+//     -- with `"xpak"`, the predecessor format, still selectable) is
+//     honored at package time: for `"gpkg"`, real, unmodified `bin/misc-functions.sh
 //     __dyn_package` shells out to real, unmodified `bin/gpkg-helper.py
 //     compress` (real `portage.gpkg.gpkg().compress()`, no
 //     reimplementation) exactly the way the `"xpak"` branch already
@@ -398,6 +398,11 @@ pub fn phase_compression_command(lookup: impl Fn(&str) -> Option<String>) -> Opt
 /// `make.conf`/profile value was ignored and the default named the
 /// wrong format.
 pub fn resolve_binpkg_format(lookup: impl Fn(&str) -> Option<String>) -> String {
+    // An empty value stays an `Unknown BINPKG_FORMAT` error downstream,
+    // never a fallback: real's `make.conf` assignment overrides
+    // `make.globals` with `""` and real `bin/misc-functions.sh`
+    // `__dyn_package` then dies the same way (`die "Unknown
+    // BINPKG_FORMAT ..."`).
     lookup("BINPKG_FORMAT").unwrap_or_else(|| PackageOptions::default().binpkg_format.clone())
 }
 
