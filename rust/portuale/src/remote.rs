@@ -1808,16 +1808,15 @@ pub(crate) fn check_binary_plan(entries: &[portage_repo::GraphEntry]) -> Result<
 /// shadow) and the resolve path (ledger per merged entry, shadow
 /// pre-check before anything ships). `install_mask` /
 /// `install_mask_prunes_usr_share` are the resolve's own
-/// `config_install_mask` values for the placed config; the trial path
-/// passes empty values (it resolves no config, so it masks nothing and
-/// ships no `INSTALL_MASK` -- backlog #170). `regen_features` is the
-/// resolve's own `config_features_string` for the placed config (the
-/// merge-time `FEATURES` the regen'd vdb env carries, backlog #171);
-/// the trial path passes `None` (no config, no refresh). `regen_bzip2`
-/// is the resolve's own `config_bzip2_command` for the placed config
-/// (the merge-time `PORTAGE_BZIP2_COMMAND` the scrubbed vdb env
-/// records); the trial path passes `None` (the `make.globals`
-/// default). Prints the
+/// `config_install_mask` values for the placed config -- both paths
+/// resolve the client config now (backlog #170/#171b: the trial path's
+/// `run_bundle_stage` places and loads it like `run_remote_resolve`
+/// does). `regen_features` is the resolve's own
+/// `config_features_string` for the placed config (the merge-time
+/// `FEATURES` the regen'd vdb env carries, backlog #171);
+/// `regen_bzip2` is the resolve's own `config_bzip2_command` for the
+/// placed config (the merge-time `PORTAGE_BZIP2_COMMAND` the scrubbed
+/// vdb env records). Prints the
 /// stage report lines; `Ok(cpv)` is the merged `category/package-version`.
 #[allow(clippy::too_many_arguments)]
 fn run_binpkg_flow(
@@ -2019,7 +2018,18 @@ fn run_binpkg_flow(
     // already in the vdb with one `!!!` warning and continues (real
     // `_postinst_failure`: "It's stupid to bail out here").
     let cpv = staged.manifest.cpv.clone();
-    match run_postinst_regen_stage(ctx, control, &unit_dir, &staged, regen_features) {
+    // Backlog #171b: the calling environment for the client phase is
+    // the server process -- forward its set locale variables (real's
+    // `environ_whitelist` rule; never invented defaults).
+    let server_locale = collect_server_locale(|name| std::env::var(name).ok());
+    match run_postinst_regen_stage(
+        ctx,
+        control,
+        &unit_dir,
+        &staged,
+        regen_features,
+        &server_locale,
+    ) {
         Ok(report) => {
             if report.skipped_no_hooks {
                 println!(">>> Remote postinst {cpv}: none to run from, skipped");
@@ -2081,11 +2091,52 @@ fn run_bundle_stage(
         eprintln!("mrg: --remote-binpkg {}: not found", binpkg_path.display());
         return ExitCode::from(1);
     }
-    // The trial path resolves no config (`run_remote` never runs the
-    // resolver), so there is no placed config to read `INSTALL_MASK`
-    // from: mask nothing, ship no `INSTALL_MASK` (backlog #170) -- and
-    // no resolved `FEATURES` either (no regen refresh, backlog #171) --
-    // and no resolved `PORTAGE_BZIP2_COMMAND` (the scrub default).
+    // Backlog #171b: the trial path resolves the client config exactly
+    // like the plan path does -- place `/etc/portage` per
+    // `ConfigPlacement` (pulled client tree re-rooted as a valid
+    // `PORTAGE_CONFIGROOT`, same shape as `run_remote_resolve`), then
+    // load the same repos + resolved config `pretend::run` merges with
+    // (`load_repos_and_config`: one shared resolver call, no duplicate
+    // logic). The placed config's `INSTALL_MASK` (+ the
+    // `no{man,info,doc}` fold), resolved `FEATURES`, and
+    // `PORTAGE_BZIP2_COMMAND` feed `build_bundle` / the env regen
+    // exactly as `run_remote_plan`'s own values do. Both placements
+    // always name a path, so there is no config-less mode left here to
+    // keep the old empty values for; a pull or resolve failure is a
+    // hard error like the resolve path's own.
+    let pull_tmp;
+    let config_dir: std::path::PathBuf = match &ctx.etc_portage {
+        ConfigPlacement::Server(path) => std::path::PathBuf::from(path),
+        ConfigPlacement::Client(path) => {
+            pull_tmp = std::env::temp_dir().join(format!(
+                "portuale-remote-etc-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            ));
+            let pulled_portage = pull_tmp.join("etc/portage");
+            if let Err(message) = pull_dir(ctx, control, path, &pulled_portage) {
+                eprintln!("{message}");
+                return ExitCode::from(1);
+            }
+            pull_tmp.clone()
+        }
+    };
+    let _config_guard = ConfigRootOverride::set(&config_dir);
+    let (_repos, config) =
+        match crate::pretend::load_repos_and_config(&config_dir, &portage_repo::root_from_env()) {
+            Ok(loaded) => loaded,
+            Err(message) => {
+                eprintln!("mrg: --remote-binpkg: cannot resolve the client config: {message}");
+                return ExitCode::from(1);
+            }
+        };
+    let (install_mask, install_mask_prunes_usr_share) =
+        crate::pretend::config_install_mask(&config);
+    let regen_features = crate::pretend::config_features_string(&config);
+    let regen_bzip2 = crate::pretend::config_bzip2_command(&config);
     match run_binpkg_flow(
         ctx,
         control,
@@ -2093,10 +2144,10 @@ fn run_bundle_stage(
         None,
         None,
         None,
-        "",
-        false,
-        None,
-        None,
+        &install_mask,
+        install_mask_prunes_usr_share,
+        Some(&regen_features),
+        Some(&regen_bzip2),
     ) {
         Ok(_) => ExitCode::from(0),
         Err(message) => {
@@ -2226,6 +2277,40 @@ fn phase_script(
     )
 }
 
+/// Locale variables the regen postinst run re-exports into the client
+/// phase env: real's saved locale comes from the calling environment
+/// through `environ_whitelist` (`special_env_vars.py`: `LANG` plus the
+/// `LC_*` list), and for `mrg` the calling environment is the server
+/// process. `LANGUAGE` is **not** in real's whitelist -- it rides along
+/// here only because the slice brief names it explicitly; see
+/// `collect_server_locale`. Only set variables are ever forwarded
+/// (never invented defaults).
+pub(crate) const REGEN_LOCALE_VARS: &[&str] = &[
+    "LANG",
+    "LANGUAGE",
+    "LC_ALL",
+    "LC_COLLATE",
+    "LC_CTYPE",
+    "LC_MESSAGES",
+    "LC_MONETARY",
+    "LC_NUMERIC",
+    "LC_TIME",
+    "LC_PAPER",
+];
+
+/// The server process's own locale values for the client regen phase
+/// env, as `(name, value)` pairs in `REGEN_LOCALE_VARS` order -- one
+/// entry per variable the getter reports as set (even empty: a set-but-
+/// empty `LANG` is still the calling environment's value, which is what
+/// real's whitelist passes through). Production passes
+/// `|name| std::env::var(name).ok()`; tests inject a fake map.
+fn collect_server_locale(get: impl Fn(&str) -> Option<String>) -> Vec<(String, String)> {
+    REGEN_LOCALE_VARS
+        .iter()
+        .filter_map(|name| get(name).map(|value| (name.to_string(), value)))
+        .collect()
+}
+
 /// The merge-time environment-regeneration postinst run (backlog #171):
 /// real `vartree.py:5334` sets `PORTAGE_UPDATE_ENV=<dbpkgdir>/
 /// environment.bz2` around *every* merge's postinst phase, and
@@ -2247,10 +2332,21 @@ fn phase_script(
 /// -- the client must have no `bzip2`, plan §6). `FEATURES` /
 /// `PORTAGE_FEATURES` carry the resolved client list (the local
 /// `refresh_features` rule), so the env records the merge-time
-/// features (e.g. no `buildpkg`). `PHASE_postinst=<rc>` plus
+/// features (e.g. no `buildpkg`). `locale` re-exports the server's own
+/// locale values (see `REGEN_LOCALE_VARS` / `collect_server_locale`) so
+/// the regen'd env carries them exactly as real's calling-environment
+/// whitelist does. `PHASE_postinst=<rc>` plus
 /// `REGEN_ENV=ok|missing|skip:no-hooks` come back on stdout; the
 /// script exits with the phase rc (a non-zero postinst is non-fatal --
 /// real `_postinst_failure` -- as long as the regen file exists).
+///
+/// `O` is unset and `SHELL` unexported before the phase runs: real's
+/// phase shell never has `O` (`config.environ()` drops it via
+/// `special_env_vars.py: environ_filter` even though `doebuild.py:475`
+/// sets `mysettings["O"]`) and its saved `SHELL` is `declare --`
+/// (bash initializes its own -- `SHELL` is in neither the whitelist
+/// nor the config), while `mrg` exported a unit-local `O` and usually
+/// inherits an exported `SHELL`.
 fn postinst_regen_script(
     unit_dir: &str,
     staged: &crate::remote_bundle::StagedBundle,
@@ -2258,6 +2354,7 @@ fn postinst_regen_script(
     workdir_parent: &str,
     colormap: &str,
     features: Option<&str>,
+    locale: &[(String, String)],
 ) -> String {
     let mut extra = String::new();
     if let Some(list) = features.filter(|f| !f.is_empty()) {
@@ -2271,6 +2368,16 @@ fn postinst_regen_script(
         regen = sh_quote(&format!("{unit_dir}/environment.regen")),
         passthrough = sh_quote(&format!("{unit_dir}/bin/bzip2-passthrough")),
     ));
+    // Backlog #171b: match real's phase shell (see the fn doc comment)
+    // so the `PORTAGE_UPDATE_ENV` save matches real's saved env.
+    extra.push_str("unset O\n");
+    extra.push_str("export -n SHELL\n");
+    for (name, value) in locale {
+        extra.push_str(&format!(
+            "export {name}={quoted}\n",
+            quoted = sh_quote(value)
+        ));
+    }
     format!(
         concat!(
             "UNIT={unit}\n",
@@ -2861,13 +2968,17 @@ struct RegenReport {
 /// Run the regen postinst script and print its log straight through.
 /// `Err` is a transport/command failure only -- a non-zero phase rc or
 /// a missing regen file is a warn-and-continue `RegenReport`, never a
-/// unit failure (real `_postinst_failure`).
+/// unit failure (real `_postinst_failure`). `locale` is the server's
+/// own locale pairs for the client phase env (see
+/// `collect_server_locale`); the unit flow collects them from the
+/// process environment, tests inject them explicitly.
 fn run_postinst_regen_stage(
     ctx: &RemoteContext,
     control: Option<&std::path::Path>,
     unit_dir: &str,
     staged: &crate::remote_bundle::StagedBundle,
     features: Option<&str>,
+    locale: &[(String, String)],
 ) -> Result<RegenReport, String> {
     let colormap = crate::color::phase_colormap_export();
     let workdir_parent = std::path::Path::new(&ctx.workdir)
@@ -2881,6 +2992,7 @@ fn run_postinst_regen_stage(
         &workdir_parent,
         &colormap,
         features,
+        locale,
     );
     let output = run_script_stdin(ctx, control, &script).map_err(|message| {
         if ctx.transport == RemoteTransport::Local {
@@ -4545,7 +4657,7 @@ mod tests {
         assert!(before.contains("buildpkg"), "pre-regen env:\n{before}");
 
         let report =
-            run_postinst_regen_stage(&ctx, None, &unit, &staged, Some("sandbox merge-time"))
+            run_postinst_regen_stage(&ctx, None, &unit, &staged, Some("sandbox merge-time"), &[])
                 .expect("regen phase runs");
         assert_eq!(report.phase_rc, 0);
         assert!(report.regen_present);
@@ -4611,7 +4723,7 @@ mod tests {
         assert!(!staged.postinst_defined);
         let ctx = local_ctx(root.to_str().unwrap(), tmp.join("work").to_str().unwrap());
         run_merge_stage(&ctx, None, &unit, &staged, None).expect("merge succeeds");
-        let report = run_postinst_regen_stage(&ctx, None, &unit, &staged, Some("sandbox"))
+        let report = run_postinst_regen_stage(&ctx, None, &unit, &staged, Some("sandbox"), &[])
             .expect("regen phase runs");
         assert_eq!(report.phase_rc, 0, "undefined pkg_postinst is a no-op");
         assert!(report.regen_present);
@@ -4633,6 +4745,210 @@ mod tests {
             after.contains("declare -x FEATURES=\"sandbox\""),
             "resolved FEATURES missing:\n{after}"
         );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #171b task 3: the server's set locale variables reach
+    /// the client phase env, and only those -- a fake getter pins the
+    /// selection (`LANG` set + empty-but-set `LANGUAGE` forwarded in
+    /// `REGEN_LOCALE_VARS` order; unset `LC_ALL` skipped; a
+    /// non-locale variable never consulted).
+    #[test]
+    fn collect_server_locale_forwards_only_set_vars() {
+        use std::collections::HashMap;
+        let env: HashMap<&str, &str> = [("LANG", "C.UTF-8"), ("LANGUAGE", ""), ("TERM", "xterm")]
+            .into_iter()
+            .collect();
+        let got = collect_server_locale(|name| env.get(name).map(|v| v.to_string()));
+        let names: Vec<&str> = got.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["LANG", "LANGUAGE"]);
+        assert_eq!(got[0].1, "C.UTF-8");
+        assert_eq!(got[1].1, "");
+    }
+
+    /// A minimal staged bundle for the render-level regen script test
+    /// (the script only needs the identity fields).
+    fn render_test_staged() -> crate::remote_bundle::StagedBundle {
+        crate::remote_bundle::StagedBundle {
+            tarball: std::path::PathBuf::from("/tmp/bundle.tar"),
+            byte_count: 0,
+            manifest: crate::remote_bundle::BundleManifest {
+                format: 1,
+                cpv: "dev-libs/regen-1.0".to_string(),
+                slot: "0".to_string(),
+                repo: "test".to_string(),
+                has_environment: true,
+            },
+            eapi: "8".to_string(),
+            category: "dev-libs".to_string(),
+            pn: "regen".to_string(),
+            pv: "1.0".to_string(),
+            pr: "r0".to_string(),
+            pvr: "1.0".to_string(),
+            p: "regen-1.0".to_string(),
+            pf: "regen-1.0".to_string(),
+            phases: Vec::new(),
+            postinst_defined: true,
+        }
+    }
+
+    /// Backlog #171b tasks 2-3, render level: the regen script unsets
+    /// `O`, unexports `SHELL`, and re-exports exactly the given locale
+    /// pairs (quoting values like any other export).
+    #[test]
+    fn postinst_regen_script_matches_real_shell_shape() {
+        let staged = render_test_staged();
+        let locale = vec![
+            ("LANG".to_string(), "C.UTF-8".to_string()),
+            ("LC_NUMERIC".to_string(), "a b".to_string()),
+        ];
+        let script = postinst_regen_script(
+            "/work/regen-1.0",
+            &staged,
+            "/",
+            "/work",
+            "never",
+            Some("sandbox merge-time"),
+            &locale,
+        );
+        assert!(
+            script.contains("unset O\n"),
+            "O must go (real environ_filter):\n{script}"
+        );
+        assert!(
+            script.contains("export -n SHELL\n"),
+            "SHELL must be unexported (real declare --):\n{script}"
+        );
+        assert!(
+            script.contains("export LANG='C.UTF-8'\n"),
+            "server LANG missing:\n{script}"
+        );
+        assert!(
+            script.contains("export LC_NUMERIC='a b'\n"),
+            "server LC_* missing or misquoted:\n{script}"
+        );
+        assert!(
+            !script.contains("LANGUAGE"),
+            "uninjected locale must not appear:\n{script}"
+        );
+    }
+
+    /// Backlog #171b tasks 2-3, stage level: a real regen run under
+    /// local bash leaves no `O` line in `environment.regen` (real
+    /// `doebuild.py:475` sets `mysettings["O"]` but
+    /// `config.environ()` drops it via `special_env_vars.py:
+    /// environ_filter`), records `SHELL` as `declare --` (bash's own,
+    /// unexported -- real has no exported `SHELL` to inherit), and
+    /// carries the injected locale values as `declare -x`.
+    #[test]
+    fn regen_matches_real_o_shell_and_locale() {
+        let tmp = regen_tmp("o-shell-locale");
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+        let (unit, staged) = regen_unit(
+            &tmp,
+            "EAPI=8\nDESCRIPTION=\"synthetic regen probe\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\npkg_postinst() {\n\texport PT_MERGE_MARKER=\"merge-time\"\n}\n",
+            "postinst",
+        );
+        let ctx = local_ctx(root.to_str().unwrap(), tmp.join("work").to_str().unwrap());
+        let locale = vec![
+            ("LANG".to_string(), "C.UTF-8".to_string()),
+            ("LC_MESSAGES".to_string(), "C.UTF-8".to_string()),
+        ];
+        let report = run_postinst_regen_stage(&ctx, None, &unit, &staged, Some("sandbox"), &locale)
+            .expect("regen phase runs");
+        assert_eq!(report.phase_rc, 0);
+        assert!(report.regen_present);
+        let regen =
+            std::fs::read_to_string(format!("{unit}/environment.regen")).expect("regen file");
+        for line in regen.lines() {
+            let Some(rest) = line.strip_prefix("declare ") else {
+                continue;
+            };
+            let rest = rest
+                .strip_prefix("-x ")
+                .or_else(|| rest.strip_prefix("-- "))
+                .unwrap_or(rest);
+            let name = rest.split(['=', ' ']).next().unwrap_or("");
+            assert_ne!(
+                name, "O",
+                "unit-local O leaked into the regen'd env:\n{regen}"
+            );
+        }
+        assert!(
+            regen.contains("declare -- SHELL="),
+            "SHELL must be unexported like real's:\n{regen}"
+        );
+        assert!(
+            !regen.contains("declare -x SHELL="),
+            "exported SHELL leaked into the regen'd env:\n{regen}"
+        );
+        assert!(
+            regen.contains("declare -x LANG=\"C.UTF-8\""),
+            "server LANG missing:\n{regen}"
+        );
+        assert!(
+            regen.contains("declare -x LC_MESSAGES=\"C.UTF-8\""),
+            "server LC_* missing:\n{regen}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #171b task 1: `--remote-binpkg` loads the placed client
+    /// config through the SAME shared helper `pretend::run` uses
+    /// (`load_repos_and_config`: one resolver call, no duplicate
+    /// logic), so `build_bundle` / the env regen see the same
+    /// `INSTALL_MASK` (+ the `no{man,info,doc}` fold), merge-time
+    /// `FEATURES` and `PORTAGE_BZIP2_COMMAND` as the plan path. A
+    /// synthetic client config root pins the wiring end to end.
+    #[test]
+    fn remote_binpkg_path_resolves_the_placed_client_config() {
+        let tmp = regen_tmp("binpkg-config");
+        let config_root = tmp.join("configroot");
+        let repo = tmp.join("repo");
+        std::fs::create_dir_all(config_root.join("etc/portage/repos.conf")).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::write(
+            config_root.join("etc/portage/repos.conf/testrepo.conf"),
+            format!(
+                "[DEFAULT]\nmain-repo = testrepo\n\n[testrepo]\nlocation = {}\n",
+                repo.display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            config_root.join("etc/portage/make.conf"),
+            "INSTALL_MASK=\"/usr/share/porttest/im/drop.txt *.la\"\nFEATURES=\"sandbox merge-time\"\nPORTAGE_BZIP2_COMMAND=\"lbzip2\"\n",
+        )
+        .unwrap();
+        // `config_install_mask` prefers the process `INSTALL_MASK` env
+        // var (the same rule the plan path runs under); clear it so
+        // the test pins the placed file, restoring before asserting.
+        let saved_mask = std::env::var_os("INSTALL_MASK");
+        // SAFETY: no other test in this binary sets `INSTALL_MASK`;
+        // readers elsewhere only consume it.
+        unsafe {
+            std::env::remove_var("INSTALL_MASK");
+        }
+        let eroot = tmp.join("eroot");
+        let resolved = crate::pretend::load_repos_and_config(&config_root, &eroot);
+        // SAFETY: same as above.
+        unsafe {
+            match saved_mask {
+                Some(value) => std::env::set_var("INSTALL_MASK", value),
+                None => std::env::remove_var("INSTALL_MASK"),
+            }
+        }
+        let (repos, config) = resolved.expect("synthetic client config resolves");
+        assert!(repos.iter().any(|r| r.is_main));
+        let (mask, prunes_usr_share) = crate::pretend::config_install_mask(&config);
+        assert_eq!(mask, "/usr/share/porttest/im/drop.txt *.la");
+        assert!(!prunes_usr_share);
+        assert_eq!(
+            crate::pretend::config_features_string(&config),
+            "merge-time sandbox"
+        );
+        assert_eq!(crate::pretend::config_bzip2_command(&config), "lbzip2");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

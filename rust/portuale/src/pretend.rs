@@ -8446,51 +8446,23 @@ fn skip_conflict_caret_line(atom: &str) -> String {
     line
 }
 
-pub fn run(args: &[String]) -> ExitCode {
-    if wants_help(args) {
-        print_help();
-        return ExitCode::SUCCESS;
-    }
-
-    // `--ask-enter-invalid` is process-wide state for the prompt
-    // helpers; reset per invocation so an in-process caller can't leak it
-    // (the CLI parse below sets it again from argv or the defaults).
-    ASK_ENTER_INVALID.store(false, std::sync::atomic::Ordering::Relaxed);
-
-    // Config resolution comes before argv parsing, matching real
-    // `emerge`'s own order: its first pass only finds `--config-root`,
-    // then it loads the config and re-parses with
-    // `EMERGE_DEFAULT_OPTS` prepended (`_emerge/main.py:1221-1232`,
-    // `:1352-1360`). Portuale has no `--config-root` CLI
-    // (`PORTAGE_CONFIGROOT` is the only config-root source), so the two
-    // passes collapse into this one: resolve, then prepend the
-    // variable's tokens to argv. `--help` above still short-circuits
-    // before any config load, exactly like real's early
-    // `myaction == "help"` return (`main.py:1254`).
-
-    // resolve_config needs the main repo's own location for
-    // package.mask/.unmask's repo-level source (see its doc comment) --
-    // found via the same find_repos repos.conf parsing
-    // resolve_pretend_graph uses internally a few lines down; called
-    // again here since portage-profile can't depend back on portage-repo
-    // (portage-repo already depends on portage-profile). Resolved before
-    // @world/@system expansion below: @system's own atom list lives in
-    // `config` (see portage-profile's `system_packages`), so the config
-    // must already exist by the time a "@system" token is seen.
-    let root = root_from_env();
-    let config_root = config_root_from_env();
-
-    let repos = match portage_repo::find_repos(&config_root) {
-        Ok(repos) => repos,
-        Err(e) => {
-            eprintln!("emerge: {e}");
-            return ExitCode::from(1);
-        }
-    };
-    let Some(main_repo) = repos.iter().find(|r| r.is_main) else {
-        eprintln!("emerge: no main repo found in repos.conf");
-        return ExitCode::from(1);
-    };
+/// Load the `repos.conf` repos + the fully-resolved config for one
+/// config root -- `run()`'s own preamble, factored out so
+/// `mrg --remote-binpkg` (which never runs a resolve) reads the *same*
+/// client config the resolve path merges with (backlog #170/#171: the
+/// `INSTALL_MASK` + `no{man,info,doc}` fold, the merge-time `FEATURES`,
+/// and `PORTAGE_BZIP2_COMMAND` all come from the placed config).
+/// `Err` is the bare display text; the caller prefixes it (`emerge:` /
+/// `mrg: …`) exactly as the inline preamble did.
+pub(crate) fn load_repos_and_config(
+    config_root: &std::path::Path,
+    root: &std::path::Path,
+) -> Result<(Vec<portage_repo::RepoConfig>, portage_profile::Config), String> {
+    let repos = portage_repo::find_repos(config_root).map_err(|e| e.to_string())?;
+    let main_repo = repos
+        .iter()
+        .find(|r| r.is_main)
+        .ok_or_else(|| "no main repo found in repos.conf".to_string())?;
 
     // Every non-main repo's own (name, location) -- portage-profile's
     // own package.mask/.unmask reading needs each overlay's own name to
@@ -8525,18 +8497,60 @@ pub fn run(args: &[String]) -> ExitCode {
         .flat_map(|r| r.aliases.iter().map(|a| (a.clone(), r.location.clone())))
         .collect();
 
-    let mut config = match portage_profile::resolve_config(
-        &config_root,
+    let config = portage_profile::resolve_config(
+        config_root,
         &main_repo.location,
         &overlay_repos,
         &repo_aliases,
         &main_repo.name,
         &repo_masters,
-        &root,
-    ) {
-        Ok(config) => config,
-        Err(e) => {
-            eprintln!("emerge: {e}");
+        root,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok((repos, config))
+}
+
+pub fn run(args: &[String]) -> ExitCode {
+    if wants_help(args) {
+        print_help();
+        return ExitCode::SUCCESS;
+    }
+
+    // `--ask-enter-invalid` is process-wide state for the prompt
+    // helpers; reset per invocation so an in-process caller can't leak it
+    // (the CLI parse below sets it again from argv or the defaults).
+    ASK_ENTER_INVALID.store(false, std::sync::atomic::Ordering::Relaxed);
+
+    // Config resolution comes before argv parsing, matching real
+    // `emerge`'s own order: its first pass only finds `--config-root`,
+    // then it loads the config and re-parses with
+    // `EMERGE_DEFAULT_OPTS` prepended (`_emerge/main.py:1221-1232`,
+    // `:1352-1360`). Portuale has no `--config-root` CLI
+    // (`PORTAGE_CONFIGROOT` is the only config-root source), so the two
+    // passes collapse into this one: resolve, then prepend the
+    // variable's tokens to argv. `--help` above still short-circuits
+    // before any config load, exactly like real's early
+    // `myaction == "help"` return (`main.py:1254`).
+
+    // resolve_config needs the main repo's own location for
+    // package.mask/.unmask's repo-level source (see its doc comment) --
+    // found via the same find_repos repos.conf parsing
+    // resolve_pretend_graph uses internally a few lines down; called
+    // again here since portage-profile can't depend back on portage-repo
+    // (portage-repo already depends on portage-profile). Resolved before
+    // @world/@system expansion below: @system's own atom list lives in
+    // `config` (see portage-profile's `system_packages`), so the config
+    // must already exist by the time a "@system" token is seen.
+    let root = root_from_env();
+    let config_root = config_root_from_env();
+
+    // The repos + resolved config (see `load_repos_and_config`): the
+    // resolve already runs under `ConfigRootOverride` for the placed
+    // root on the remote path.
+    let (repos, mut config) = match load_repos_and_config(&config_root, &root) {
+        Ok(loaded) => loaded,
+        Err(message) => {
+            eprintln!("emerge: {message}");
             return ExitCode::from(1);
         }
     };
