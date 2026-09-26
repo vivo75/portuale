@@ -546,3 +546,135 @@ fn use_dep_enforcement_plus_default_rescues_an_undeclared_flag() {
         }
     );
 }
+
+/// `adopt_current` replaces the live node's params in place without adding a
+/// node.
+#[test]
+fn backtracker_adopt_current_replaces_the_live_node() {
+    let mut bt = Backtracker::new(20, BacktrackParams::default());
+    bt.get().expect("root node");
+    bt.adopt_current(BacktrackParams {
+        depth: 7,
+        ..Default::default()
+    });
+    assert_eq!(bt.get_best_run().depth, 7);
+}
+
+/// `get_best_run` returns the deepest terminal node, earliest on ties.
+#[test]
+fn backtracker_get_best_run_prefers_the_deepest_terminal() {
+    let cp_a = ("dev-libs".to_string(), "aa".to_string());
+    let cp_b = ("dev-libs".to_string(), "bb".to_string());
+    let mut bt = Backtracker::new(20, BacktrackParams::default());
+    bt.get().expect("root node");
+    let mut a = BacktrackParams {
+        depth: 2,
+        mask_steps: 1,
+        ..Default::default()
+    };
+    a.autounmask_use_config
+        .insert(cp_a.clone(), HashMap::from([("flag".to_string(), true)]));
+    bt.feedback(BacktrackFeedback::Config {
+        params: Box::new(a),
+    });
+    bt.get().expect("first mask node");
+    let mut b = BacktrackParams {
+        depth: 2,
+        mask_steps: 2,
+        ..Default::default()
+    };
+    b.autounmask_use_config
+        .insert(cp_b.clone(), HashMap::from([("flag".to_string(), true)]));
+    bt.feedback(BacktrackFeedback::Config {
+        params: Box::new(b),
+    });
+    // Both children are terminal at depth 3; the tie keeps the first.
+    let best = bt.get_best_run();
+    assert_eq!(best.depth, 3);
+    assert!(
+        best.autounmask_use_config.contains_key(&cp_a)
+            && !best.autounmask_use_config.contains_key(&cp_b),
+        "depth ties keep the first deepest terminal"
+    );
+}
+
+/// The slot-conflict arm masks the target in a new node, replacing -- not
+/// duplicating -- a mask for the same negative.
+#[test]
+fn backtracker_feedback_slot_conflict_replaces_the_same_mask() {
+    let cp = ("dev-libs".to_string(), "maskpkg".to_string());
+    let neg = format!("!={}/{}-2.0", cp.0, cp.1);
+    let mut base = BacktrackParams::default();
+    base.runtime_pkg_mask.insert(
+        cp.clone(),
+        vec![MaskEntry {
+            neg: neg.clone(),
+            reason: MaskReason::MissingDependency {
+                parent: cp.clone(),
+                atom: "dev-libs/owner".to_string(),
+            },
+        }],
+    );
+    let choices = vec![MaskChoice {
+        target: (cp.0.clone(), cp.1.clone(), "2.0".to_string()),
+        parents: vec![(
+            (
+                "dev-libs".to_string(),
+                "owner".to_string(),
+                "1.0".to_string(),
+            ),
+            "<dev-libs/maskpkg-2.0".to_string(),
+        )],
+        similar: vec![],
+    }];
+    let mut bt = Backtracker::new(20, BacktrackParams::default());
+    bt.get().expect("root node");
+    bt.feedback(BacktrackFeedback::SlotConflict {
+        base: Box::new(base),
+        choices,
+    });
+    let node = bt.get().expect("mask node queued");
+    let bucket = node
+        .runtime_pkg_mask
+        .get(&cp)
+        .expect("mask bucket survives");
+    assert_eq!(bucket.len(), 1, "same negative is replaced, not pushed");
+    assert!(
+        matches!(bucket[0].reason, MaskReason::SlotConflict { .. }),
+        "the reason is refreshed to the slot conflict"
+    );
+    assert_eq!(node.mask_steps, 1);
+    assert_eq!(node.depth, 1);
+}
+
+/// The missing-dep arm latches the parent and masks it once.
+#[test]
+fn backtracker_feedback_missing_dep_latches_without_duplicating() {
+    let owner = ("dev-libs".to_string(), "ownpkg".to_string());
+    let entry = MaskEntry {
+        neg: "!=dev-libs/ownpkg-9.9".to_string(),
+        reason: MaskReason::MissingDependency {
+            parent: owner.clone(),
+            atom: "dev-libs/gone".to_string(),
+        },
+    };
+    let mut base = BacktrackParams::default();
+    base.runtime_pkg_mask
+        .insert(owner.clone(), vec![entry.clone()]);
+    let mut bt = Backtracker::new(20, BacktrackParams::default());
+    bt.get().expect("root node");
+    bt.feedback(BacktrackFeedback::MissingDep {
+        base: Box::new(base),
+        owner: owner.clone(),
+        entry: entry.clone(),
+    });
+    let node = bt.get().expect("mask node queued");
+    let bucket = node
+        .runtime_pkg_mask
+        .get(&owner)
+        .expect("mask bucket survives");
+    assert_eq!(bucket.len(), 1, "an already-masked parent is latched once");
+    assert!(node.missing_dep_masked.contains(&entry.neg));
+    assert_eq!(node.mask_steps, 1);
+    assert_eq!(node.depth, 1);
+}
