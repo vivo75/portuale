@@ -1,5 +1,177 @@
 use super::*;
 
+/// With neither half present the trigger stays quiet.
+#[test]
+fn slot_operator_prune_rebuilds_stays_quiet_without_missed_updates() {
+    let dir = slotundo_temp_dir("253-prune-quiet");
+    let config = test_config();
+    let opts = CtxOpts161 {
+        backtrack_max: 20,
+        ..Default::default()
+    };
+    let ctx = ctx_161(&dir, &config, Vec::new(), &opts);
+    let mut grown = BacktrackParams::default();
+    grown
+        .slot_operator_replace_installed
+        .insert(("app-misc".to_string(), "pcons".to_string()));
+    let mut pass = pass_161();
+    let decision = collect_feedback(&ctx, &grown, &mut pass, &config);
+    assert!(
+        matches!(decision, PassDecision::Settle { .. }),
+        "no missed updates, no prune restart"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The use-overlay fold appends new flips without duplicating pairs.
+#[test]
+fn collect_feedback_folds_the_use_overlay_without_duplicating() {
+    let dir = slotundo_temp_dir("161-cf-over");
+    let config = test_config();
+    let opts = CtxOpts161::default();
+    let ctx = ctx_161(&dir, &config, Vec::new(), &opts);
+    let cp = ("dev-libs".to_string(), "overpkg".to_string());
+    let mut pass = pass_161();
+    pass.use_overlay
+        .insert(cp.clone(), HashMap::from([("flag".to_string(), true)]));
+    pass.use_change_overlay = vec![
+        AutounmaskChange {
+            atom: "=dev-libs/overpkg-1.0".to_string(),
+            token: "+flag".to_string(),
+            dep_chain: Vec::new(),
+            trigger: None,
+        },
+        AutounmaskChange {
+            atom: "=dev-libs/overpkg-1.0".to_string(),
+            token: "-other".to_string(),
+            dep_chain: Vec::new(),
+            trigger: None,
+        },
+    ];
+    let params = BacktrackParams::default();
+    let mut grown = params.clone();
+    grown.autounmask_use_change_records.push(AutounmaskChange {
+        atom: "=dev-libs/overpkg-1.0".to_string(),
+        token: "-other".to_string(),
+        dep_chain: Vec::new(),
+        trigger: None,
+    });
+    let decision = collect_feedback(&ctx, &grown, &mut pass, &config);
+    let PassDecision::Settle { params: out } = decision else {
+        panic!("a quiet pass settles");
+    };
+    assert_eq!(
+        out.autounmask_use_config.get(&cp),
+        Some(&HashMap::from([("flag".to_string(), true)]))
+    );
+    let records: Vec<(&str, &str)> = out
+        .autounmask_use_change_records
+        .iter()
+        .map(|r| (r.atom.as_str(), r.token.as_str()))
+        .collect();
+    assert_eq!(
+        records,
+        vec![
+            ("=dev-libs/overpkg-1.0", "-other"),
+            ("=dev-libs/overpkg-1.0", "+flag")
+        ]
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Two want-atoms one version satisfies become retry constraints.
+#[test]
+fn collect_feedback_solves_a_two_want_conflict_into_constraints() {
+    let dir = slotundo_temp_dir("161-cf-solv");
+    let config = test_config();
+    let repos = find_repos(&fixtures_root()).expect("fixture repos");
+    let opts = CtxOpts161 {
+        backtrack_max: 1,
+        ..Default::default()
+    };
+    let ctx = ctx_161(&dir, &config, repos, &opts);
+    let mut pass = pass_161();
+    pass.slot_conflicts = vec![souprov_conflict_161()];
+    let key = ("dev-libs".to_string(), "souprov".to_string());
+    pass.slot_want.insert(
+        key.clone(),
+        vec![
+            "dev-libs/souprov".to_string(),
+            ">=dev-libs/souprov-2.0".to_string(),
+        ],
+    );
+    let decision = collect_feedback(&ctx, &BacktrackParams::default(), &mut pass, &config);
+    let PassDecision::Feedback(BacktrackFeedback::Config { params: out }) = decision else {
+        panic!("a solvable conflict retries with constraints");
+    };
+    assert_eq!(
+        out.slot_constraints.get(&key),
+        Some(&vec![
+            "dev-libs/souprov".to_string(),
+            ">=dev-libs/souprov-2.0".to_string()
+        ])
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A lone want-atom falls through to the mask trial.
+#[test]
+fn collect_feedback_keeps_a_single_want_out_of_constraints() {
+    let dir = slotundo_temp_dir("161-cf-single");
+    let config = test_config();
+    let repos = find_repos(&fixtures_root()).expect("fixture repos");
+    let opts = CtxOpts161 {
+        backtrack_max: 1,
+        ..Default::default()
+    };
+    let ctx = ctx_161(&dir, &config, repos, &opts);
+    let key = ("dev-libs".to_string(), "souprov".to_string());
+    let mut pass = pass_161();
+    pass.slot_conflicts = vec![souprov_conflict_161()];
+    pass.slot_want
+        .insert(key.clone(), vec!["dev-libs/souprov".to_string()]);
+    let decision = collect_feedback(&ctx, &BacktrackParams::default(), &mut pass, &config);
+    assert!(
+        matches!(
+            decision,
+            PassDecision::Feedback(BacktrackFeedback::SlotConflict { .. })
+        ),
+        "a single want falls through to the mask trial"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Retry constraints append only missing wants.
+#[test]
+fn collect_feedback_does_not_duplicate_logged_constraints() {
+    let dir = slotundo_temp_dir("161-cf-dup");
+    let config = test_config();
+    let repos = find_repos(&fixtures_root()).expect("fixture repos");
+    let opts = CtxOpts161 {
+        backtrack_max: 1,
+        ..Default::default()
+    };
+    let ctx = ctx_161(&dir, &config, repos, &opts);
+    let mut pass = pass_161();
+    pass.slot_conflicts = vec![souprov_conflict_161()];
+    let key = ("dev-libs".to_string(), "souprov".to_string());
+    let wants = vec![
+        "dev-libs/souprov".to_string(),
+        ">=dev-libs/souprov-2.0".to_string(),
+    ];
+    pass.slot_want.insert(key.clone(), wants.clone());
+    let mut grown = BacktrackParams::default();
+    grown
+        .slot_constraints
+        .insert(key.clone(), vec![wants[0].clone()]);
+    let decision = collect_feedback(&ctx, &grown, &mut pass, &config);
+    let PassDecision::Feedback(BacktrackFeedback::Config { params: out }) = decision else {
+        panic!("a solvable conflict retries with constraints");
+    };
+    assert_eq!(out.slot_constraints.get(&key), Some(&wants));
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// A stuck pass records an empty rebuild list instead of scanning.
 #[test]
 fn collect_feedback_reports_no_rebuilds_when_the_pass_is_stuck() {
