@@ -40449,10 +40449,12 @@ mod tests {
         atoms: Vec<String>,
         update: bool,
         newuse: bool,
+        usepkg: bool,
         usepkgonly: bool,
         nodeps: bool,
         selective: bool,
         with_test_deps: bool,
+        deep: Deep,
         complete: bool,
         locked: HashSet<(String, String)>,
         blocker_closure: HashSet<(String, String)>,
@@ -40471,7 +40473,7 @@ mod tests {
             newuse: o.newuse,
             changed_use: false,
             nodeps: o.nodeps,
-            deep: Deep::NotRequested,
+            deep: o.deep,
             excluded: &o.excluded,
             with_bdeps: false,
             changed_deps: false,
@@ -40480,7 +40482,7 @@ mod tests {
             changed_deps_report: false,
             selective: o.selective,
             autounmask_backtrack_enabled: false,
-            usepkg: false,
+            usepkg: o.usepkg,
             usepkgonly: o.usepkgonly,
             binpkg_respect_use: false,
             usepkg_exclude: &NO_STRINGS_161,
@@ -40511,10 +40513,10 @@ mod tests {
             complete_locked_merges: o.locked.clone(),
             top_level: NO_STRS_161.iter().copied().collect(),
             top_level_cps: HashSet::new(),
-            local_binpkg: std::sync::Arc::new(BinaryIndex {
-                entries: Vec::new(),
-                by_cp: HashMap::new(),
-            }),
+            // Like production's `ResolveCtx::new`: the binary pool
+            // derives from the config's scanned binpkgs (empty here
+            // unless a leg stages some).
+            local_binpkg: build_local_binpkg_index(config),
         }
     }
 
@@ -41769,6 +41771,8 @@ mod tests {
         usepkgonly: bool,
         nodeps: bool,
         selective: bool,
+        usepkg: bool,
+        deep: Deep,
     ) -> PassResult {
         for (name, version, slot) in installed {
             let d = dir.join("var/db/pkg/dev-libs").join(format!("{name}-{version}"));
@@ -41785,9 +41789,11 @@ mod tests {
             atoms: atoms.to_vec(),
             update,
             newuse,
+            usepkg,
             usepkgonly,
             nodeps,
             selective,
+            deep,
             ..Default::default()
         };
         let ctx = ctx_161(dir, &config, repos, &opts);
@@ -41800,7 +41806,7 @@ mod tests {
     fn run_pass_resolves_a_leaf_to_a_new_entry() {
         let dir = slotundo_temp_dir("161-run-new");
         let atoms = vec!["dev-libs/sounneed".to_string()];
-        let pass = run_161(&dir, &atoms, false, &[], false, false, false, false);
+        let pass = run_161(&dir, &atoms, false, &[], false, false, false, false, false, Deep::NotRequested);
         assert_eq!(pass.entries.len(), 1);
         let e = &pass.entries[0];
         assert_eq!((e.category.as_str(), e.package.as_str()), ("dev-libs", "sounneed"));
@@ -41818,7 +41824,7 @@ mod tests {
     fn run_pass_reports_a_missing_atom_as_nvc() {
         let dir = slotundo_temp_dir("161-run-nvc");
         let atoms = vec!["dev-libs/nosuchpkg".to_string()];
-        let pass = run_161(&dir, &atoms, false, &[], false, false, false, false);
+        let pass = run_161(&dir, &atoms, false, &[], false, false, false, false, false, Deep::NotRequested);
         assert_eq!(pass.entries.len(), 1);
         assert!(matches!(
             pass.entries[0].outcome,
@@ -41835,7 +41841,7 @@ mod tests {
     fn run_pass_reinstalls_the_requested_installed_version() {
         let dir = slotundo_temp_dir("161-run-inst");
         let atoms = vec!["dev-libs/sounneed".to_string()];
-        let pass = run_161(&dir, &atoms, false, &[("sounneed", "1.0", "0/1")], false, false, false, false);
+        let pass = run_161(&dir, &atoms, false, &[("sounneed", "1.0", "0/1")], false, false, false, false, false, Deep::NotRequested);
         assert_eq!(pass.entries.len(), 1);
         assert!(matches!(
             pass.entries[0].outcome,
@@ -41856,7 +41862,7 @@ mod tests {
     fn run_pass_keeps_a_satisfied_dependency_installed() {
         let dir = slotundo_temp_dir("161-run-depinst");
         let atoms = vec!["dev-libs/needer".to_string()];
-        let pass = run_161(&dir, &atoms, false, &[("paired", "2.0", "0")], false, false, false, false);
+        let pass = run_161(&dir, &atoms, false, &[("paired", "2.0", "0")], false, false, false, false, false, Deep::NotRequested);
         let paired = pass
             .entries
             .iter()
@@ -41875,7 +41881,7 @@ mod tests {
     fn run_pass_upgrades_an_older_installed_version() {
         let dir = slotundo_temp_dir("161-run-up");
         let atoms = vec!["dev-libs/sounneed".to_string()];
-        let pass = run_161(&dir, &atoms, true, &[("sounneed", "0.9", "0/1")], false, false, false, false);
+        let pass = run_161(&dir, &atoms, true, &[("sounneed", "0.9", "0/1")], false, false, false, false, false, Deep::NotRequested);
         assert_eq!(pass.entries.len(), 1);
         assert!(matches!(
             pass.entries[0].outcome,
@@ -41890,7 +41896,7 @@ mod tests {
     fn run_pass_downgrades_a_newer_installed_version() {
         let dir = slotundo_temp_dir("161-run-down");
         let atoms = vec!["dev-libs/sounneed".to_string()];
-        let pass = run_161(&dir, &atoms, true, &[("sounneed", "2.0", "0/1")], false, false, false, false);
+        let pass = run_161(&dir, &atoms, true, &[("sounneed", "2.0", "0/1")], false, false, false, false, false, Deep::NotRequested);
         assert_eq!(pass.entries.len(), 1);
         assert!(matches!(
             pass.entries[0].outcome,
@@ -41905,7 +41911,7 @@ mod tests {
     fn run_pass_walks_dependencies_and_records_parent_atoms() {
         let dir = slotundo_temp_dir("161-run-deps");
         let atoms = vec!["dev-libs/needer".to_string()];
-        let pass = run_161(&dir, &atoms, false, &[], false, false, false, false);
+        let pass = run_161(&dir, &atoms, false, &[], false, false, false, false, false, Deep::NotRequested);
         let mut names: Vec<&str> = pass.entries.iter().map(|e| e.package.as_str()).collect();
         names.sort();
         assert_eq!(names, vec!["needer", "paired"]);
@@ -41932,7 +41938,8 @@ mod tests {
             false,
             false,
             false,
-        );
+            false,
+            Deep::NotRequested        );
         let pkg = pass
             .entries
             .iter()
@@ -41965,7 +41972,8 @@ mod tests {
             false,
             false,
             false,
-        );
+            false,
+            Deep::NotRequested        );
         let pkg = pass
             .entries
             .iter()
@@ -41990,7 +41998,7 @@ mod tests {
     fn run_pass_usepkgonly_without_binaries_reports_nvc() {
         let dir = slotundo_temp_dir("161-run-binonly");
         let atoms = vec!["dev-libs/sounneed".to_string()];
-        let pass = run_161(&dir, &atoms, false, &[], false, true, false, false);
+        let pass = run_161(&dir, &atoms, false, &[], false, true, false, false, false, Deep::NotRequested);
         assert_eq!(pass.entries.len(), 1);
         assert!(matches!(
             pass.entries[0].outcome,
@@ -42006,7 +42014,7 @@ mod tests {
     fn run_pass_nodeps_resolves_only_the_requested_atom() {
         let dir = slotundo_temp_dir("161-run-nodeps");
         let atoms = vec!["dev-libs/needer".to_string()];
-        let pass = run_161(&dir, &atoms, false, &[], false, false, true, false);
+        let pass = run_161(&dir, &atoms, false, &[], false, false, true, false, false, Deep::NotRequested);
         assert_eq!(pass.entries.len(), 1);
         assert_eq!(pass.entries[0].package.as_str(), "needer");
         let _ = fs::remove_dir_all(&dir);
@@ -42027,6 +42035,8 @@ mod tests {
             false,
             false,
             true,
+            false,
+            Deep::NotRequested,
         );
         assert_eq!(pass.entries.len(), 1);
         assert!(matches!(
@@ -42274,7 +42284,7 @@ mod tests {
             "dev-libs/paired".to_string(),
             "dev-libs/sounneed".to_string(),
         ];
-        let pass = run_161(&dir, &atoms, false, &[], false, false, false, false);
+        let pass = run_161(&dir, &atoms, false, &[], false, false, false, false, false, Deep::NotRequested);
         let names: Vec<&str> = pass.entries.iter().map(|e| e.package.as_str()).collect();
         assert_eq!(names, vec!["sounneed", "paired"]);
         let _ = fs::remove_dir_all(&dir);
@@ -42314,7 +42324,7 @@ mod tests {
     fn run_pass_satisfies_a_disabled_use_dep() {
         let dir = slotundo_temp_dir("161-run-usedep");
         let atoms = vec!["dev-libs/deepvdbusepkg[-wantdep]".to_string()];
-        let pass = run_161(&dir, &atoms, false, &[], false, false, false, false);
+        let pass = run_161(&dir, &atoms, false, &[], false, false, false, false, false, Deep::NotRequested);
         assert_eq!(pass.entries.len(), 1);
         assert!(matches!(
             pass.entries[0].outcome,
@@ -42329,7 +42339,7 @@ mod tests {
     fn run_pass_reports_an_unenabled_use_dep_unsatisfied() {
         let dir = slotundo_temp_dir("161-run-nouse");
         let atoms = vec!["dev-libs/sounneed[soflag]".to_string()];
-        let pass = run_161(&dir, &atoms, false, &[], false, false, false, false);
+        let pass = run_161(&dir, &atoms, false, &[], false, false, false, false, false, Deep::NotRequested);
         assert!(
             pass.entries.iter().all(|e| !matches!(
                 e.outcome,
@@ -42583,6 +42593,86 @@ mod tests {
         assert!(
             !pass.entries.iter().any(|e| e.package == "paired"),
             "an unlocked dependency resolves to nothing in complete mode"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: an unlimited deep walk recurses into an
+    /// installed dependency's own deps; without it they stay out.
+    #[test]
+    fn run_pass_deep_walk_recurses_into_installed_deps() {
+        let dir = slotundo_temp_dir("161-run-deep");
+        let mk = |name: &str| {
+            let d = dir.join("var/db/pkg/dev-libs").join(name);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+            fs::write(d.join("SLOT"), "0\n").unwrap();
+            fs::write(d.join("repository"), "testrepo\n").unwrap();
+            fs::write(d.join("USE"), "\n").unwrap();
+        };
+        mk("deeppkg-1.0");
+        let atoms = vec!["dev-libs/completegraphpkg".to_string()];
+        let walk = |deep: Deep| {
+            let config = test_config();
+            let repos = find_repos(&fixtures_root()).expect("fixture repos");
+            let opts = CtxOpts161 {
+                backtrack_max: 10,
+                atoms: atoms.clone(),
+                deep,
+                ..Default::default()
+            };
+            let ctx = ctx_161(&dir, &config, repos, &opts);
+            run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles")
+        };
+        let shallow = walk(Deep::NotRequested);
+        let mut names: Vec<&str> = shallow
+            .entries
+            .iter()
+            .map(|e| e.package.as_str())
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["completegraphpkg", "deeppkg"]);
+        let deep = walk(Deep::Unlimited);
+        let mut names: Vec<&str> = deep
+            .entries
+            .iter()
+            .map(|e| e.package.as_str())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec!["completegraphpkg", "deeppkg", "deeppkg2", "newpkg"]
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: under `--usepkg` with a staged binary index,
+    /// the atom resolves from the binary pool instead of the tree.
+    #[test]
+    fn run_pass_usepkg_selects_the_staged_binary() {
+        let dir = slotundo_temp_dir("161-run-binpkg");
+        let atoms = vec!["dev-libs/sounneed".to_string()];
+        let mut config = test_config();
+        config.scanned_binpkgs = Some(vec![HashMap::from([
+            ("CPV".to_string(), "dev-libs/sounneed-1.0".to_string()),
+            ("SLOT".to_string(), "0".to_string()),
+            ("KEYWORDS".to_string(), "amd64".to_string()),
+            ("REPO".to_string(), "testrepo".to_string()),
+        ])]);
+        let repos = find_repos(&fixtures_root()).expect("fixture repos");
+        let opts = CtxOpts161 {
+            backtrack_max: 10,
+            atoms: atoms.clone(),
+            usepkg: true,
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, repos, &opts);
+        let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+        assert_eq!(pass.entries.len(), 1);
+        assert_eq!(
+            pass.entries[0].source,
+            CandidateSource::Binary,
+            "the staged binary wins over the ebuild"
         );
         let _ = fs::remove_dir_all(&dir);
     }
