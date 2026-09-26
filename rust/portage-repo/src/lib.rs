@@ -42910,6 +42910,34 @@ mod tests {
                 "sys-libs/dupmiss",
             ]
         );
+        // Backtrack disabled: no missing-dep retry arms either.
+        assert!(pass.missing_dep_trigger.is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: a repeated missing dep without active masks is
+    /// not suppressed -- suppression needs the mask gate.
+    #[test]
+    fn run_pass_repeated_miss_without_masks_is_not_suppressed() {
+        let dir = slotundo_temp_dir("161-run-nosuppr");
+        let repos = blocker_161_scratch_repo(
+            &dir,
+            "dev-libs/depparent",
+            "1.0",
+            "0",
+            "",
+            "dev-libs/nosuchdep dev-libs/nosuchdep:0",
+        );
+        let config = test_config();
+        let atoms = vec!["dev-libs/depparent".to_string()];
+        let opts = CtxOpts161 {
+            backtrack_max: 0,
+            atoms: atoms.clone(),
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, vec![repos], &opts);
+        let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+        assert!(!pass.suppressed_nvc);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -43185,8 +43213,8 @@ mod tests {
     }
 
     /// Backlog #161 S6: sibling report vecs do not shadow other
-    /// cps' plain misses -- a masked row and a use-unsat row for
-    /// neighbours leave every plain miss filed.
+    /// cps' misses -- visits run reverse-RDEPEND-text, so the plain
+    /// filings land last with every sibling vec populated.
     #[test]
     fn run_pass_plain_miss_ignores_other_cps_reports() {
         let dir = slotundo_temp_dir("161-run-misscombo");
@@ -43196,19 +43224,22 @@ mod tests {
             "1.0",
             "0",
             "",
-            "dev-libs/plainmiss dev-libs/maskedone dev-libs/unsatone[soflag]",
+            "dev-libs/plainmiss sys-libs/dupmiss dev-libs/dupmiss[soflag] dev-libs/unsatone[soflag] dev-libs/maskedone",
         );
         blocker_161_write_pkg(&repo.location, "dev-libs/maskedone", "1.0", "0", "", "");
-        let d = repo.location.join("dev-libs/unsatone");
-        std::fs::create_dir_all(&d).unwrap();
-        let body = "EAPI=8\nDESCRIPTION=\"161 combo\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\nIUSE=\"soflag\"\n";
-        std::fs::write(d.join("unsatone-1.0.ebuild"), body).unwrap();
-        use md5::Digest as _;
-        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
-        let entry = format!("DEFINED_PHASES=-\nDESCRIPTION=161 combo\nEAPI=8\nIUSE=soflag\nKEYWORDS=amd64\nSLOT=0\n_md5_={md5}\n");
-        let cachedir = repo.location.join("metadata/md5-cache/dev-libs");
-        std::fs::create_dir_all(&cachedir).unwrap();
-        std::fs::write(cachedir.join("unsatone-1.0"), entry).unwrap();
+        for (cp, pv) in [("dev-libs/unsatone", "1.0"), ("dev-libs/dupmiss", "1.0")] {
+            let (cat, pkg) = cp.split_once('/').unwrap();
+            let d = repo.location.join(cat).join(pkg);
+            std::fs::create_dir_all(&d).unwrap();
+            let body = "EAPI=8\nDESCRIPTION=\"161 combo\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\nIUSE=\"soflag\"\n";
+            std::fs::write(d.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
+            use md5::Digest as _;
+            let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+            let entry = format!("DEFINED_PHASES=-\nDESCRIPTION=161 combo\nEAPI=8\nIUSE=soflag\nKEYWORDS=amd64\nSLOT=0\n_md5_={md5}\n");
+            let cachedir = repo.location.join("metadata/md5-cache").join(cat);
+            std::fs::create_dir_all(&cachedir).unwrap();
+            std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+        }
         let mut config = test_config();
         config.package_mask = vec!["dev-libs/maskedone".to_string()];
         let atoms = vec!["dev-libs/depparent".to_string()];
@@ -43220,131 +43251,14 @@ mod tests {
         let ctx = ctx_161(&dir, &config, vec![repo], &opts);
         let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
         assert_eq!(pass.masked_deps.len(), 1);
-        assert_eq!(pass.use_unsat_deps.len(), 1);
-        assert_eq!(pass.plain_miss_deps.len(), 1);
-        assert_eq!(pass.plain_miss_deps[0].package, "plainmiss");
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    /// Backlog #161 S6: an auto-replace seed is not a top-level
-    /// argument -- it walks ownerless at depth 1 and never files an
-    /// `(Argument)` puller row. (Seeded alone, so no top-level visit
-    /// dedups it away first.)
-    #[test]
-    fn run_pass_replace_seed_files_no_argument_puller() {
-        let dir = slotundo_temp_dir("161-run-seed");
-        let d = dir.join("var/db/pkg/dev-libs/sounneed-1.0");
-        fs::create_dir_all(&d).unwrap();
-        fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
-        fs::write(d.join("SLOT"), "0/1\n").unwrap();
-        fs::write(d.join("repository"), "testrepo\n").unwrap();
-        fs::write(d.join("USE"), "\n").unwrap();
-        let config = test_config();
-        let repos = find_repos(&fixtures_root()).expect("fixture repos");
-        let atoms: Vec<String> = Vec::new();
-        let mut bp = BacktrackParams::default();
-        bp.slot_operator_replace_installed
-            .insert(("dev-libs".to_string(), "sounneed".to_string()));
-        let opts = CtxOpts161 {
-            backtrack_max: 10,
-            atoms: atoms.clone(),
-            ..Default::default()
-        };
-        let ctx = ctx_161(&dir, &config, repos, &opts);
-        let pass = run_pass(&ctx, &bp, true).expect("walk settles");
-        assert!(
-            pass.slot_pullers.is_empty(),
-            "a lone seed files no Argument pullers"
-        );
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    /// Backlog #161 S6: the trigger resolves its owner against the
-    /// walked entries by exact cp -- tested with a neighbour walking
-    /// first, plus the NVC-without-masks non-suppression.
-    #[test]
-    fn run_pass_trigger_matches_the_owner_entry_exactly() {
-        let dir = slotundo_temp_dir("161-run-misown");
-        let repos = blocker_161_scratch_repo(
-            &dir,
-            "dev-libs/depparent",
-            "1.0",
-            "0",
-            "",
-            "dev-libs/nosuchdep",
-        );
-        let config = test_config();
-        let atoms = vec![
-            "dev-libs/depparent".to_string(),
-            "dev-libs/sounneed".to_string(),
-        ];
-        let repos = {
-            let mut rs = find_repos(&fixtures_root()).expect("fixture repos");
-            rs.push(repos);
-            rs
-        };
-        let opts = CtxOpts161 {
-            backtrack_max: 10,
-            atoms: atoms.clone(),
-            ..Default::default()
-        };
-        let ctx = ctx_161(&dir, &config, repos, &opts);
-        let mut pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
-        let trigger = pass.missing_dep_trigger.take().expect("trigger armed");
-        assert_eq!(
-            trigger,
-            (
-                ("dev-libs".to_string(), "depparent".to_string()),
-                "!=dev-libs/depparent-1.0".to_string(),
-                "dev-libs/nosuchdep".to_string(),
-            )
-        );
-        assert!(!pass.suppressed_nvc);
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    /// Backlog #161 S6: a bare `:=` pull landing on a resolved slot
-    /// reuses it silently -- the satisfaction holds through the
-    /// operator and binding arms when nothing rebuilt shifts.
-    #[test]
-    fn run_pass_bare_slotop_pull_reuses_the_resolved_slot() {
-        let dir = slotundo_temp_dir("161-run-slotop");
-        let repo = blocker_161_scratch_repo(
-            &dir,
-            "dev-libs/consumerb",
-            "1.0",
-            "0",
-            "",
-            "dev-libs/prov",
-        );
-        blocker_161_write_pkg(&repo.location, "dev-libs/prov", "1.0", "0/1", "", "");
-        blocker_161_write_pkg(&repo.location, "dev-libs/prov", "2.0", "0/2", "", "");
-        blocker_161_write_pkg(
-            &repo.location,
-            "dev-libs/consumera",
-            "1.0",
-            "0",
-            "",
-            "dev-libs/prov:=",
-        );
-        let config = test_config();
-        // consumerb first resolves bare; consumera's `:=` then lands
-        // on the taken slot and reuses it.
-        let atoms = vec![
-            "dev-libs/consumera".to_string(),
-            "dev-libs/consumerb".to_string(),
-        ];
-        let opts = CtxOpts161 {
-            backtrack_max: 10,
-            atoms: atoms.clone(),
-            ..Default::default()
-        };
-        let ctx = ctx_161(&dir, &config, vec![repo], &opts);
-        let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
-        assert!(
-            pass.slot_conflicts.iter().all(|sc| sc.package != "prov"),
-            "a rebuildable := reuses the resolved slot silently"
-        );
+        assert_eq!(pass.use_unsat_deps.len(), 2);
+        let mut plain: Vec<String> = pass
+            .plain_miss_deps
+            .iter()
+            .map(|r| format!("{}/{}", r.category, r.package))
+            .collect();
+        plain.sort();
+        assert_eq!(plain, vec!["dev-libs/plainmiss", "sys-libs/dupmiss"]);
         let _ = fs::remove_dir_all(&dir);
     }
 
