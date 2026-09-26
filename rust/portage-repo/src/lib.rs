@@ -40437,46 +40437,51 @@ mod tests {
     }
 
     /// Backlog #161 S4: shared harness for the `collect_feedback`
-    /// legs. A minimal `ResolveCtx` (only root/config/repos/
-    /// reachability/backtrack budget vary) plus an empty `PassResult`
-    /// each leg fills in.
+    /// legs. A minimal `ResolveCtx` plus an empty `PassResult` each
+    /// leg fills in.
     static NO_STRINGS_161: Vec<String> = Vec::new();
     static NO_STRS_161: [&str; 0] = [];
-    #[allow(clippy::too_many_arguments)]
-    fn ctx_161<'a>(
-        root: &'a Path,
-        config: &'a portage_profile::Config,
-        repos: Vec<RepoConfig>,
+    #[derive(Default)]
+    struct CtxOpts161 {
         reachable: HashSet<(String, String)>,
         backtrack_max: u32,
-        excluded: &'a [String],
-        atoms: &'a [String],
+        excluded: Vec<String>,
+        atoms: Vec<String>,
         update: bool,
         newuse: bool,
         usepkgonly: bool,
         nodeps: bool,
         selective: bool,
+        with_test_deps: bool,
+        complete: bool,
+        locked: HashSet<(String, String)>,
         blocker_closure: HashSet<(String, String)>,
+    }
+    fn ctx_161<'a>(
+        root: &'a Path,
+        config: &'a portage_profile::Config,
+        repos: Vec<RepoConfig>,
+        o: &'a CtxOpts161,
     ) -> ResolveCtx<'a> {
         ResolveCtx {
             root,
-            atoms,
-            update,
+            atoms: &o.atoms,
+            update: o.update,
             config,
-            newuse,
+            newuse: o.newuse,
             changed_use: false,
-            nodeps,
+            nodeps: o.nodeps,
             deep: Deep::NotRequested,
-            excluded,
+            excluded: &o.excluded,
             with_bdeps: false,
             changed_deps: false,
             changed_slot: false,
-            with_test_deps: false,
+            with_test_deps: o.with_test_deps,
             changed_deps_report: false,
-            selective,
+            selective: o.selective,
             autounmask_backtrack_enabled: false,
             usepkg: false,
-            usepkgonly,
+            usepkgonly: o.usepkgonly,
             binpkg_respect_use: false,
             usepkg_exclude: &NO_STRINGS_161,
             usepkg_include: &NO_STRINGS_161,
@@ -40489,7 +40494,7 @@ mod tests {
             empty: false,
             getbinpkg: false,
             ignore_built_slot_operator_deps: false,
-            backtrack_max,
+            backtrack_max: o.backtrack_max,
             reinstall_atoms: &NO_STRINGS_161,
             rebuild_if_new_slot: true,
             rebuild_if_unbuilt: false,
@@ -40499,11 +40504,11 @@ mod tests {
             rebuild_ignore: &NO_STRINGS_161,
             dynamic_deps: true,
             implicit_system_deps: false,
-            complete: false,
+            complete: o.complete,
             repos,
-            slot_op_reachable: reachable,
-            blocker_retry_closure: blocker_closure,
-            complete_locked_merges: HashSet::new(),
+            slot_op_reachable: o.reachable.clone(),
+            blocker_retry_closure: o.blocker_closure.clone(),
+            complete_locked_merges: o.locked.clone(),
             top_level: NO_STRS_161.iter().copied().collect(),
             top_level_cps: HashSet::new(),
             local_binpkg: std::sync::Arc::new(BinaryIndex {
@@ -40570,7 +40575,8 @@ mod tests {
     fn collect_feedback_folds_the_use_overlay_without_duplicating() {
         let dir = slotundo_temp_dir("161-cf-over");
         let config = test_config();
-        let ctx = ctx_161(&dir, &config, Vec::new(), HashSet::new(), 0, &NO_STRINGS_161, &NO_STRINGS_161, false, false, false, false, false, HashSet::new());
+        let opts = CtxOpts161::default();
+        let ctx = ctx_161(&dir, &config, Vec::new(), &opts);
         let cp = ("dev-libs".to_string(), "overpkg".to_string());
         let mut pass = pass_161();
         pass.use_overlay.insert(
@@ -40629,7 +40635,8 @@ mod tests {
         let dir = slotundo_temp_dir("161-cf-solv");
         let config = test_config();
         let repos = find_repos(&fixtures_root()).expect("fixture repos");
-        let ctx = ctx_161(&dir, &config, repos, HashSet::new(), 1, &NO_STRINGS_161, &NO_STRINGS_161, false, false, false, false, false, HashSet::new());
+        let opts = CtxOpts161 { backtrack_max: 1, ..Default::default() };
+        let ctx = ctx_161(&dir, &config, repos, &opts);
         let mut pass = pass_161();
         pass.slot_conflicts = vec![souprov_conflict_161()];
         let key = ("dev-libs".to_string(), "souprov".to_string());
@@ -40664,7 +40671,8 @@ mod tests {
         let dir = slotundo_temp_dir("161-cf-single");
         let config = test_config();
         let repos = find_repos(&fixtures_root()).expect("fixture repos");
-        let ctx = ctx_161(&dir, &config, repos, HashSet::new(), 1, &NO_STRINGS_161, &NO_STRINGS_161, false, false, false, false, false, HashSet::new());
+        let opts = CtxOpts161 { backtrack_max: 1, ..Default::default() };
+        let ctx = ctx_161(&dir, &config, repos, &opts);
         let key = ("dev-libs".to_string(), "souprov".to_string());
         let mut pass = pass_161();
         pass.slot_conflicts = vec![souprov_conflict_161()];
@@ -40689,7 +40697,8 @@ mod tests {
         let dir = slotundo_temp_dir("161-cf-dup");
         let config = test_config();
         let repos = find_repos(&fixtures_root()).expect("fixture repos");
-        let ctx = ctx_161(&dir, &config, repos, HashSet::new(), 1, &NO_STRINGS_161, &NO_STRINGS_161, false, false, false, false, false, HashSet::new());
+        let opts = CtxOpts161 { backtrack_max: 1, ..Default::default() };
+        let ctx = ctx_161(&dir, &config, repos, &opts);
         let mut pass = pass_161();
         pass.slot_conflicts = vec![souprov_conflict_161()];
         let key = ("dev-libs".to_string(), "souprov".to_string());
@@ -40729,7 +40738,8 @@ mod tests {
         let reachable: HashSet<(String, String)> =
             HashSet::from([("dev-libs".to_string(), "stale".to_string())]);
         let excluded = vec!["dev-libs/stale".to_string()];
-        let ctx = ctx_161(&dir, &config, Vec::new(), reachable, 1, &excluded, &NO_STRINGS_161, false, false, false, false, false, HashSet::new());
+        let opts = CtxOpts161 { reachable: reachable.clone(), backtrack_max: 1, excluded: excluded.clone(), ..Default::default() };
+        let ctx = ctx_161(&dir, &config, Vec::new(), &opts);
         let bar_upgrade = GraphEntry {
             discovery: 0,
             category: "dev-libs".into(),
@@ -40779,7 +40789,8 @@ mod tests {
         let repos = find_repos(&fixtures_root()).expect("fixture repos");
         let reachable: HashSet<(String, String)> =
             HashSet::from([("dev-libs".to_string(), "pinner".to_string())]);
-        let ctx = ctx_161(&dir, &config, repos, reachable, 0, &NO_STRINGS_161, &NO_STRINGS_161, false, false, false, false, false, HashSet::new());
+        let opts = CtxOpts161 { reachable: reachable.clone(), ..Default::default() };
+        let ctx = ctx_161(&dir, &config, repos, &opts);
         let souprov_upgrade = GraphEntry {
             discovery: 0,
             category: "dev-libs".into(),
@@ -40855,7 +40866,8 @@ mod tests {
         let repos = find_repos(&fixtures_root()).expect("fixture repos");
         let reachable: HashSet<(String, String)> =
             HashSet::from([("dev-libs".to_string(), "pinner".to_string())]);
-        let ctx = ctx_161(&dir, &config, repos, reachable, 1, &NO_STRINGS_161, &NO_STRINGS_161, false, false, false, false, false, HashSet::new());
+        let opts = CtxOpts161 { reachable: reachable.clone(), backtrack_max: 1, ..Default::default() };
+        let ctx = ctx_161(&dir, &config, repos, &opts);
         let souprov_upgrade = GraphEntry {
             discovery: 0,
             category: "dev-libs".into(),
@@ -41768,21 +41780,17 @@ mod tests {
         }
         let config = test_config();
         let repos = find_repos(&fixtures_root()).expect("fixture repos");
-        let ctx = ctx_161(
-            dir,
-            &config,
-            repos,
-            HashSet::new(),
-            10,
-            &NO_STRINGS_161,
-            atoms,
+        let opts = CtxOpts161 {
+            backtrack_max: 10,
+            atoms: atoms.to_vec(),
             update,
             newuse,
             usepkgonly,
             nodeps,
             selective,
-            HashSet::new(),
-        );
+            ..Default::default()
+        };
+        let ctx = ctx_161(dir, &config, repos, &opts);
         run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles")
     }
 
@@ -42039,21 +42047,12 @@ mod tests {
         ];
         let config = test_config();
         let repos = find_repos(&fixture_root).expect("fixture repos");
-        let ctx = ctx_161(
-            &fixture_root,
-            &config,
-            repos,
-            HashSet::new(),
-            10,
-            &NO_STRINGS_161,
-            &atoms,
-            false,
-            false,
-            false,
-            false,
-            false,
-            HashSet::new(),
-        );
+        let opts = CtxOpts161 {
+            backtrack_max: 10,
+            atoms: atoms.clone(),
+            ..Default::default()
+        };
+        let ctx = ctx_161(&fixture_root, &config, repos, &opts);
         let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
         assert!(
             pass
@@ -42168,21 +42167,12 @@ mod tests {
         fs::write(d.join("USE"), "\n").unwrap();
         let config = test_config();
         let atoms = vec!["dev-libs/blockerparent".to_string()];
-        let ctx = ctx_161(
-            &dir,
-            &config,
-            repos,
-            HashSet::new(),
-            10,
-            &NO_STRINGS_161,
-            &atoms,
-            false,
-            false,
-            false,
-            false,
-            false,
-            HashSet::new(),
-        );
+        let opts = CtxOpts161 {
+            backtrack_max: 10,
+            atoms: atoms.clone(),
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, repos, &opts);
         let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
         // The soft block files on the merging parent; the installed
         // victim gains the uninstall-model row beside its installed one.
@@ -42247,21 +42237,15 @@ mod tests {
         // `--nodeps` gate the scan would file rows through it.
         let owner_closure: HashSet<(String, String)> =
             HashSet::from([("dev-libs".to_string(), "scanowner".to_string())]);
-        let ctx = ctx_161(
-            &dir,
-            &config,
-            repos,
-            HashSet::new(),
-            10,
-            &NO_STRINGS_161,
-            &atoms,
-            true,
-            false,
-            false,
-            true,
-            false,
-            owner_closure,
-        );
+        let opts = CtxOpts161 {
+            backtrack_max: 10,
+            atoms: atoms.clone(),
+            update: true,
+            nodeps: true,
+            blocker_closure: owner_closure,
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, repos, &opts);
         let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
         let victim = pass
             .entries
@@ -42311,21 +42295,12 @@ mod tests {
             "dev-libs/sounneed-1.0".to_string(),
         ];
         let repos = find_repos(&fixtures_root()).expect("fixture repos");
-        let ctx = ctx_161(
-            &dir,
-            &config,
-            repos,
-            HashSet::new(),
-            10,
-            &NO_STRINGS_161,
-            &atoms,
-            false,
-            false,
-            false,
-            false,
-            false,
-            HashSet::new(),
-        );
+        let opts = CtxOpts161 {
+            backtrack_max: 10,
+            atoms: atoms.clone(),
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, repos, &opts);
         let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
         assert!(pass.entries.is_empty());
         assert_eq!(pass.pprovided_atoms, atoms);
@@ -42365,6 +42340,250 @@ mod tests {
             "no merge without the flag"
         );
         assert!(!pass.use_unsat_deps.is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: a masked candidate reports through the
+    /// masked-dep channel instead of resolving.
+    #[test]
+    fn run_pass_reports_a_masked_candidate() {
+        let dir = slotundo_temp_dir("161-run-masked");
+        let atoms = vec!["dev-libs/hardmaskedpkg".to_string()];
+        let mut config = test_config();
+        config.package_mask = vec!["dev-libs/hardmaskedpkg".to_string()];
+        let repos = find_repos(&fixtures_root()).expect("fixture repos");
+        let opts = CtxOpts161 {
+            backtrack_max: 10,
+            atoms: atoms.clone(),
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, repos, &opts);
+        let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+        assert!(matches!(
+            pass.entries[0].outcome,
+            PretendOutcome::NoVisibleCandidate
+        ));
+        assert!(
+            pass
+                .masked_deps
+                .iter()
+                .any(|r| r.category == "dev-libs" && r.package == "hardmaskedpkg"),
+            "the masked candidate is reported"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: a REQUIRED_USE violation fails the walk with
+    /// no entries at all (its own ebuild documents the trigger: `foo`
+    /// forced on via `package.use`, `bar` left off).
+    #[test]
+    fn run_pass_fails_a_required_use_violation() {
+        let dir = slotundo_temp_dir("161-run-requse");
+        let atoms = vec!["dev-libs/requiredusebadpkg".to_string()];
+        let mut config = test_config();
+        config.package_use = vec![(
+            "dev-libs/requiredusebadpkg".to_string(),
+            vec!["foo".to_string()],
+        )];
+        let repos = find_repos(&fixtures_root()).expect("fixture repos");
+        let opts = CtxOpts161 {
+            backtrack_max: 10,
+            atoms: atoms.clone(),
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, repos, &opts);
+        assert!(run_pass(&ctx, &BacktrackParams::default(), true).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: `--with-test-deps` walks a top-level atom's
+    /// `test?` conditional deps; without it they stay out.
+    #[test]
+    fn run_pass_with_test_deps_walks_test_conditionals() {
+        let dir = slotundo_temp_dir("161-run-testdeps");
+        let atoms = vec!["dev-libs/withtestdeppkg".to_string()];
+        let config = test_config();
+        let repos = find_repos(&fixtures_root()).expect("fixture repos");
+        let walk = |with_test_deps: bool| {
+            let opts = CtxOpts161 {
+                backtrack_max: 10,
+                atoms: atoms.clone(),
+                with_test_deps,
+                ..Default::default()
+            };
+            let ctx = ctx_161(&dir, &config, repos.clone(), &opts);
+            run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles")
+        };
+        let plain = walk(false);
+        assert!(
+            !plain.entries.iter().any(|e| e.package == "testonlydep"),
+            "test? deps stay out without the flag"
+        );
+        let testing = walk(true);
+        assert!(
+            testing.entries.iter().any(|e| e.package == "testonlydep"),
+            "test? deps walk with the flag"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: a dependency nothing satisfies -- not even
+    /// its bare form -- arms the missing-dep retry trigger.
+    /// (A USE-only failure instead stays out of this path -- its bare
+    /// form still satisfies the probe -- so the shape uses a fully
+    /// missing package.)
+    #[test]
+    fn run_pass_arms_the_missing_dep_trigger() {
+        let dir = slotundo_temp_dir("161-run-missdep");
+        let repos = blocker_161_scratch_repo(
+            &dir,
+            "dev-libs/depparent",
+            "1.0",
+            "0",
+            "",
+            "dev-libs/nosuchdep",
+        );
+        let config = test_config();
+        let atoms = vec!["dev-libs/depparent".to_string()];
+        let opts = CtxOpts161 {
+            backtrack_max: 10,
+            atoms: atoms.clone(),
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, vec![repos], &opts);
+        let mut pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+        let _ = pass.missing_dep_trigger.take().expect("trigger armed");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: a repeated NVC under active search masks is
+    /// flagged suppressed (the #57 surely-masked shape: the second
+    /// visit dedups, and the mask gate marks the pass a dead end);
+    /// without masks the dep merges and nothing suppresses.
+    #[test]
+    fn run_pass_flags_nvc_under_masks_suppressed() {
+        let dir = slotundo_temp_dir("161-run-suppr");
+        let repos = blocker_161_scratch_repo(
+            &dir,
+            "dev-libs/depparent",
+            "1.0",
+            "0",
+            "",
+            "dev-libs/victim2 dev-libs/victim2:0",
+        );
+        blocker_161_write_pkg(
+            &repos.location,
+            "dev-libs/victim2",
+            "1.0",
+            "0",
+            "",
+            "",
+        );
+        let config = test_config();
+        let atoms = vec!["dev-libs/depparent".to_string()];
+        let walk = |masks: bool| {
+            let mut bp = BacktrackParams::default();
+            if masks {
+                bp.runtime_pkg_mask.insert(
+                    ("dev-libs".to_string(), "victim2".to_string()),
+                    vec![MaskEntry {
+                        neg: "!=dev-libs/victim2-1.0".to_string(),
+                        reason: MaskReason::MissingDependency {
+                            parent: ("dev-libs".to_string(), "depparent".to_string()),
+                            atom: "dev-libs/victim2".to_string(),
+                        },
+                    }],
+                );
+            }
+            let opts = CtxOpts161 {
+                backtrack_max: 10,
+                atoms: atoms.clone(),
+                ..Default::default()
+            };
+            let ctx = ctx_161(&dir, &config, vec![repos.clone()], &opts);
+            run_pass(&ctx, &bp, true).expect("walk settles")
+        };
+        let plain = walk(false);
+        assert!(
+            plain
+                .entries
+                .iter()
+                .any(|e| e.package == "victim2"
+                    && matches!(e.outcome, PretendOutcome::New { .. })),
+            "unmasked victim2 merges"
+        );
+        assert!(!plain.suppressed_nvc);
+        assert!(walk(true).suppressed_nvc);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: a dependency whose candidates are all
+    /// masked reports once through the masked-dep channel, however
+    /// many dep edges name it.
+    #[test]
+    fn run_pass_reports_a_masked_dependency_once() {
+        let dir = slotundo_temp_dir("161-run-depmask");
+        let repos = blocker_161_scratch_repo(
+            &dir,
+            "dev-libs/depparent",
+            "1.0",
+            "0",
+            "",
+            "dev-libs/victim2 dev-libs/victim2:0",
+        );
+        blocker_161_write_pkg(
+            &repos.location,
+            "dev-libs/victim2",
+            "1.0",
+            "0",
+            "",
+            "",
+        );
+        let mut config = test_config();
+        config.package_mask = vec!["dev-libs/victim2".to_string()];
+        let atoms = vec!["dev-libs/depparent".to_string()];
+        let opts = CtxOpts161 {
+            backtrack_max: 10,
+            atoms: atoms.clone(),
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, vec![repos], &opts);
+        let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+        let rows: Vec<&str> = pass
+            .masked_deps
+            .iter()
+            .map(|r| r.package.as_str())
+            .collect();
+        assert_eq!(rows, vec!["victim2"]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: in complete mode a dependency outside the
+    /// locked merge set resolves to nothing -- the cheap
+    /// graph-or-installed check instead of a fresh resolve.
+    #[test]
+    fn run_pass_complete_mode_locks_unlisted_dependencies_out() {
+        let dir = slotundo_temp_dir("161-run-complete");
+        let atoms = vec!["dev-libs/needer".to_string()];
+        let config = test_config();
+        let repos = find_repos(&fixtures_root()).expect("fixture repos");
+        let opts = CtxOpts161 {
+            backtrack_max: 10,
+            atoms: atoms.clone(),
+            complete: true,
+            locked: HashSet::from([("dev-libs".to_string(), "otherpkg".to_string())]),
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, repos, &opts);
+        let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+        assert!(
+            pass.entries.iter().any(|e| e.package == "needer"),
+            "the requested atom still resolves"
+        );
+        assert!(
+            !pass.entries.iter().any(|e| e.package == "paired"),
+            "an unlocked dependency resolves to nothing in complete mode"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
