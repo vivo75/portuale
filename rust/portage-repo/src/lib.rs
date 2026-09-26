@@ -42647,7 +42647,8 @@ mod tests {
     }
 
     /// Backlog #161 S6: under `--usepkg` with a staged binary index,
-    /// the atom resolves from the binary pool instead of the tree.
+    /// the atom resolves from the binary pool instead of the tree,
+    /// carrying the index's build identity.
     #[test]
     fn run_pass_usepkg_selects_the_staged_binary() {
         let dir = slotundo_temp_dir("161-run-binpkg");
@@ -42658,6 +42659,7 @@ mod tests {
             ("SLOT".to_string(), "0".to_string()),
             ("KEYWORDS".to_string(), "amd64".to_string()),
             ("REPO".to_string(), "testrepo".to_string()),
+            ("BUILD_ID".to_string(), "abc123".to_string()),
         ])]);
         let repos = find_repos(&fixtures_root()).expect("fixture repos");
         let opts = CtxOpts161 {
@@ -42674,7 +42676,133 @@ mod tests {
             CandidateSource::Binary,
             "the staged binary wins over the ebuild"
         );
+        assert_eq!(pass.entries[0].build_id.as_deref(), Some("abc123"));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: a binary candidate's build-time keys stay out
+    /// of the walk without `--with-bdeps`.
+    #[test]
+    fn run_pass_binary_hides_buildtime_deps_without_bdeps() {
+        let dir = slotundo_temp_dir("161-run-binbdep");
+        let repos = blocker_161_scratch_repo(
+            &dir,
+            "dev-libs/binparent",
+            "1.0",
+            "0",
+            "dev-libs/buildonlydep",
+            "dev-libs/runtimedep",
+        );
+        for (cp, pv) in [("dev-libs/buildonlydep", "1.0"), ("dev-libs/runtimedep", "1.0")] {
+            blocker_161_write_pkg(&repos.location, cp, pv, "0", "", "");
+        }
+        let mut config = test_config();
+        config.scanned_binpkgs = Some(vec![HashMap::from([
+            ("CPV".to_string(), "dev-libs/binparent-1.0".to_string()),
+            ("SLOT".to_string(), "0".to_string()),
+            ("KEYWORDS".to_string(), "amd64".to_string()),
+            ("REPO".to_string(), "testrepo".to_string()),
+            ("BDEPEND".to_string(), "dev-libs/buildonlydep".to_string()),
+            ("RDEPEND".to_string(), "dev-libs/runtimedep".to_string()),
+        ])]);
+        let atoms = vec!["dev-libs/binparent".to_string()];
+        let opts = CtxOpts161 {
+            backtrack_max: 10,
+            atoms: atoms.clone(),
+            usepkg: true,
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, vec![repos], &opts);
+        let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+        let names: Vec<&str> = pass.entries.iter().map(|e| e.package.as_str()).collect();
+        assert!(names.contains(&"binparent"));
+        assert!(names.contains(&"runtimedep"));
+        assert!(
+            !names.contains(&"buildonlydep"),
+            "build-time keys stay out without --with-bdeps"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: two unsatisfiable use-deps on one cp file a
+    /// single use-unsat report.
+    #[test]
+    fn run_pass_dedups_use_unsat_reports() {
+        let dir = slotundo_temp_dir("161-run-usedup");
+        let atoms = vec![
+            "dev-libs/sounneed[soflag]".to_string(),
+            "dev-libs/sounneed[soflag]:0".to_string(),
+        ];
+        let pass = run_161(
+            &dir,
+            &atoms,
+            false,
+            &[],
+            false,
+            false,
+            false,
+            false,
+            false,
+            Deep::NotRequested,
+        );
+        assert_eq!(pass.use_unsat_deps.len(), 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: two plain-missing deps on one cp file a single
+    /// plain-miss report.
+    #[test]
+    fn run_pass_dedups_plain_miss_reports() {
+        let dir = slotundo_temp_dir("161-run-missdup");
+        let repos = blocker_161_scratch_repo(
+            &dir,
+            "dev-libs/depparent",
+            "1.0",
+            "0",
+            "",
+            "dev-libs/nosuchdep dev-libs/nosuchdep:0",
+        );
+        let config = test_config();
+        let atoms = vec!["dev-libs/depparent".to_string()];
+        let opts = CtxOpts161 {
+            backtrack_max: 0,
+            atoms: atoms.clone(),
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, vec![repos], &opts);
+        let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+        assert_eq!(pass.plain_miss_deps.len(), 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: a solved in-walk slot conflict records its
+    /// skipped update for the withhold notice. Seed order matters:
+    /// `newconsumer` first pulls 2.0, then `oldconsumer` collides it
+    /// with 1.0.
+    #[test]
+    fn run_pass_records_skipped_updates_for_solved_conflicts() {
+        let fixture_root = fixtures_root();
+        let atoms = vec![
+            "dev-libs/slotconflictoldconsumer".to_string(),
+            "dev-libs/slotconflictnewconsumer".to_string(),
+        ];
+        let config = test_config();
+        let repos = find_repos(&fixture_root).expect("fixture repos");
+        let opts = CtxOpts161 {
+            backtrack_max: 10,
+            atoms: atoms.clone(),
+            ..Default::default()
+        };
+        let ctx = ctx_161(&fixture_root, &config, repos, &opts);
+        let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+        assert!(
+            pass
+                .skipped_updates
+                .iter()
+                .any(|s| s.skipped_version == "2.0"),
+            "the dropped 2.0 rides out as a skipped update"
+        );
+        let _ = fixture_root;
     }
 
     /// recordered `USE`.
