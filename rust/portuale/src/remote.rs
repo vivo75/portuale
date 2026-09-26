@@ -1384,7 +1384,7 @@ fn print_preflight_report(
 
 // --- Bundle streaming (slice 2) --------------------------------------------
 
-/// Unpack driver: byte-count gate, `tar -xf`, member + manifest sanity.
+/// Unpack driver: byte-count gate, `tar -xpf`, member + manifest sanity.
 /// Values baked in server-side, pre-quoted. The tarball itself arrived
 /// earlier via `send_file` (`$WORKDIR/<pf>/bundle.tar`). `UNPACK=...` on
 /// stdout, log on stderr; any gate prints its reason and exits 1.
@@ -1395,7 +1395,7 @@ BUNDLE="$UNIT_DIR/bundle.tar"
 if [ ! -f "$BUNDLE" ]; then echo "UNPACK=missing-bundle"; exit 1; fi
 ACTUAL=$(wc -c < "$BUNDLE")
 if [ "$ACTUAL" != "{expected}" ]; then echo "UNPACK=byte-count-mismatch expected={expected} actual=$ACTUAL"; exit 1; fi
-if ! tar -xf "$BUNDLE" -C {workdir}; then echo "UNPACK=tar-failed"; exit 1; fi
+if ! tar -xpf "$BUNDLE" -C {workdir}; then echo "UNPACK=tar-failed"; exit 1; fi
 rm -f "$BUNDLE"
 for member in "$UNIT_DIR/image" "$UNIT_DIR/build-info" "$UNIT_DIR/remote-manifest"; do
   if [ ! -e "$member" ]; then echo "UNPACK=missing-member member=$member"; exit 1; fi
@@ -2288,8 +2288,8 @@ while read -r line; do
     dir)
       if [ ! -d "$dest" ]; then
         mkdir -p "$dest" || mfail copy "mkdir $apath"
-        chmod --reference "$src" "$dest" || mfail copy "chmod $apath"
         [ "$ROOTUID" = 0 ] && chown --reference "$src" "$dest" || true
+        chmod --reference "$src" "$dest" || mfail copy "chmod $apath"
       fi
       echo "dir $apath" >> "$NEWCONTENTS"
       ;;
@@ -2312,8 +2312,8 @@ while read -r line; do
       tmp="${dest%/*}/.${dest##*/}._portage_merge_.$$"
       rm -f "$tmp"
       cp -p "$src" "$tmp" || { rm -f "$tmp"; mfail copy "$apath"; }
-      chmod --reference "$src" "$tmp" || { rm -f "$tmp"; mfail copy "chmod $apath"; }
       [ "$ROOTUID" = 0 ] && chown --reference "$src" "$tmp" || true
+      chmod --reference "$src" "$tmp" || { rm -f "$tmp"; mfail copy "chmod $apath"; }
       mv -f "$tmp" "$dest" || { rm -f "$tmp"; mfail copy "$apath"; }
       echo "obj $apath $md5 $mtime" >> "$NEWCONTENTS"
       ;;
@@ -3170,6 +3170,187 @@ mod tests {
         // Nothing unpacked: the gate runs before tar.
         assert!(!unit.join("image").exists());
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #169, site (b): the receive driver must preserve
+    /// setuid/setgid/sticky bits through the bundle tarball: an
+    /// unprivileged `tar -xf` applies the umask and strips all three
+    /// bits at extraction, `tar -xpf` (`--preserve-permissions`) keeps
+    /// them, so the merge stage never sees them otherwise (the bed's
+    /// non-root client capture, `4711/2755/1750 -> 711/755/750`). End to end through both shell
+    /// fragments: stage a unit with modes 4711/2755/1750 plus a 2750
+    /// directory, tar it the way `build_bundle` does, run the real
+    /// `unpack_script`, then the real merge driver, and assert the
+    /// modes on the merged root. Fails while unpack uses `tar -xf`;
+    /// as non-root the merge's chown step is skipped, so this
+    /// isolates the extraction site.
+    #[test]
+    fn unpack_then_merge_preserves_special_mode_bits() {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+        let tmp = std::env::temp_dir().join(format!(
+            "portuale-remote-setuid-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let pf = "probe-1.0";
+        // Stage the unit the way `build_bundle` lays it out (`<pf>/`
+        // with image/, build-info/, remote-manifest, filemeta).
+        let staging = tmp.join("staging").join(pf);
+        let image = staging.join("image");
+        for (rel, mode) in [
+            ("usr/bin/pt-setuid", 0o4711u32),
+            ("usr/bin/pt-setgid", 0o2755u32),
+            ("usr/bin/pt-sticky", 0o1750u32),
+        ] {
+            let path = image.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, b"probe payload\n").unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+        }
+        let sgiddir = image.join("usr/lib/pt-sgiddir");
+        std::fs::create_dir_all(&sgiddir).unwrap();
+        std::fs::set_permissions(&sgiddir, std::fs::Permissions::from_mode(0o2750)).unwrap();
+        let build_info = staging.join("build-info");
+        std::fs::create_dir_all(&build_info).unwrap();
+        for (name, content) in [
+            ("PF", "probe-1.0"),
+            ("CATEGORY", "dev-libs"),
+            ("SLOT", "0"),
+            ("DEFINED_PHASES", "-"),
+        ] {
+            std::fs::write(build_info.join(name), content).unwrap();
+        }
+        // The unpack driver only gates `FORMAT=` in the manifest.
+        std::fs::write(staging.join("remote-manifest"), "FORMAT=1\n").unwrap();
+        let entries = crate::remote_bundle::collect_filemeta(&image).unwrap();
+        let filemeta = crate::remote_bundle::render_filemeta(&entries).unwrap();
+        std::fs::write(staging.join("filemeta"), &filemeta).unwrap();
+        // Tar `<pf>/` exactly like `build_bundle` (`tar -cf`, `-C` the
+        // staging dir), then deliver it as the streamed bundle.
+        let tarball = tmp.join("bundle.tar");
+        let status = std::process::Command::new("tar")
+            .args(["-cf"])
+            .arg(&tarball)
+            .args(["-C"])
+            .arg(tmp.join("staging"))
+            .arg(pf)
+            .status()
+            .expect("tar -cf stages the bundle");
+        assert!(status.success());
+        let byte_count = std::fs::metadata(&tarball).unwrap().len();
+        let work = tmp.join("work");
+        let unit = work.join(pf);
+        std::fs::create_dir_all(&unit).unwrap();
+        std::fs::copy(&tarball, unit.join("bundle.tar")).unwrap();
+
+        let script = unpack_script(work.to_str().unwrap(), pf, byte_count);
+        let output = std::process::Command::new("bash")
+            .args(["-s"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write as _;
+                child.stdin.take().unwrap().write_all(script.as_bytes())?;
+                child.wait_with_output()
+            })
+            .expect("local bash runs the driver");
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        assert!(
+            output.status.success() && stdout.contains("UNPACK=ok"),
+            "unpack driver failed:\n{stdout}"
+        );
+
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+        let staged = crate::remote_bundle::StagedBundle {
+            tarball: tmp.join("bundle.tar"),
+            byte_count: 0,
+            manifest: crate::remote_bundle::BundleManifest {
+                format: 1,
+                cpv: "dev-libs/probe-1.0".to_string(),
+                slot: "0".to_string(),
+                repo: "test".to_string(),
+                has_environment: false,
+            },
+            eapi: "8".to_string(),
+            category: "dev-libs".to_string(),
+            pn: "probe".to_string(),
+            pv: "1.0".to_string(),
+            pr: "r0".to_string(),
+            pvr: "1.0".to_string(),
+            p: "probe-1.0".to_string(),
+            pf: "probe-1.0".to_string(),
+            phases: Vec::new(),
+            postinst_defined: false,
+        };
+        let ctx = local_ctx(root.to_str().unwrap(), work.to_str().unwrap());
+        let markers = run_merge_stage(&ctx, None, unit.to_str().unwrap(), &staged, None)
+            .expect("merge succeeds");
+        assert!(markers.iter().any(|m| m == "MERGE_COPY=ok"), "{markers:?}");
+
+        for (rel, mode) in [
+            ("usr/bin/pt-setuid", 0o4711u32),
+            ("usr/bin/pt-setgid", 0o2755u32),
+            ("usr/bin/pt-sticky", 0o1750u32),
+            ("usr/lib/pt-sgiddir", 0o2750u32),
+        ] {
+            let got = std::fs::metadata(root.join(rel)).unwrap().mode() & 0o7777;
+            assert_eq!(
+                got, mode,
+                "{rel}: special mode bits must survive unpack + merge"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #169, site (a): `chown(2)` on a regular file clears
+    /// `S_ISUID`/`S_ISGID` even when owner and group are unchanged, so
+    /// the merge copy driver must apply ownership *before* restoring
+    /// the mode -- real `lib/portage/util/movefile.py::_apply_stat`
+    /// does `os.chown` then `os.chmod` for exactly this reason. That
+    /// needs root to observe behaviourally (no sudo on this host), so
+    /// this pins the order structurally in `MERGE_FLOW` instead: the
+    /// `chown --reference` line must precede the `chmod --reference`
+    /// line in both the `obj` (`$tmp`) and `dir` (`$dest`) branches.
+    /// Fails while chmod runs first.
+    #[test]
+    fn merge_flow_applies_chown_before_chmod() {
+        for (what, chown, chmod) in [
+            (
+                "obj",
+                "chown --reference \"$src\" \"$tmp\"",
+                "chmod --reference \"$src\" \"$tmp\"",
+            ),
+            (
+                "dir",
+                "chown --reference \"$src\" \"$dest\"",
+                "chmod --reference \"$src\" \"$dest\"",
+            ),
+        ] {
+            for pat in [chown, chmod] {
+                assert_eq!(
+                    MERGE_FLOW.matches(pat).count(),
+                    1,
+                    "{what} branch: `{pat}` must occur exactly once for the order check"
+                );
+            }
+            let chown_pos = MERGE_FLOW
+                .find(chown)
+                .unwrap_or_else(|| panic!("{what} branch lost its chown --reference line"));
+            let chmod_pos = MERGE_FLOW
+                .find(chmod)
+                .unwrap_or_else(|| panic!("{what} branch lost its chmod --reference line"));
+            assert!(
+                chown_pos < chmod_pos,
+                "{what} branch must chown before chmod (chown(2) clears setuid/setgid)"
+            );
+        }
     }
 
     /// Synthetic merge through the real driver: protect rename and
