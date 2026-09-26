@@ -335,6 +335,64 @@ fn chain_suffix_stays_bare_on_an_ungated_edge() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// An installed chain node qualifies from its vdb `RDEPEND` against
+/// its recorded `USE`; the repo candidate only grounds keywords/repo.
+#[test]
+fn chain_suffix_qualifies_a_gated_installed_edge_from_the_vdb() {
+    let dir = dir_163("chain-installed");
+    let repos = repo_pkgs_163(
+        &dir,
+        &[(
+            "dev-libs/parent",
+            "1.0",
+            "0",
+            "+qml",
+            "qml? ( dev-libs/leaf )",
+            "amd64",
+        )],
+    );
+    let config = cfg_163();
+    install_163(
+        &dir,
+        "dev-libs",
+        "parent-1.0",
+        "0",
+        &[
+            ("USE", "qml\n"),
+            ("IUSE", "+qml\n"),
+            ("RDEPEND", "qml? ( dev-libs/leaf )\n"),
+            ("repository", "testrepo\n"),
+        ],
+    );
+    let entries = vec![
+        entry_163(
+            "dev-libs",
+            "leaf",
+            PretendOutcome::NoVisibleCandidate,
+            &[("dev-libs", "parent")],
+        ),
+        entry_163("dev-libs", "parent", installed_163("1.0"), &[]),
+    ];
+    let atoms: Vec<String> = Vec::new();
+    assert_eq!(
+        masked_dep_chain(MaskedDepChainArgs {
+            repos: &repos,
+            config: &config,
+            entries: &entries,
+            category: "dev-libs",
+            package: "leaf",
+            atoms: &atoms,
+            root: dir.as_path(),
+            atom: ""
+        }),
+        vec![(
+            "dev-libs/parent-1.0::testrepo[qml]".to_string(),
+            "installed".to_string(),
+        ),]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// No owner, and a display atom with no conditional use-deps, both
 /// return `None`.
 #[test]
@@ -1322,6 +1380,163 @@ fn plain_163(cat: &str, pkg: &str, atom: &str) -> PlainMissDepReport {
         atom: atom.to_string(),
         chain: Vec::new(),
     }
+}
+
+// ---- `assemble_result` (the settled-graph assembly: merge
+// order, buildpkgonly gate, cycle report, autounmask coalescing,
+// disclosure chains, and the abort classification). ----
+
+/// A non-buildpkgonly resolve never reports unsatisfied
+/// buildpkgonly deps, even with merge edges present.
+#[test]
+fn assemble_result_no_buildpkgonly_flag_means_no_buildpkgonly_refusal() {
+    let dir = dir_163("asm-nobpo");
+    let repos = repo_pkgs_163(&dir, &[]);
+    let config = cfg_163();
+    let no_strings: Vec<String> = Vec::new();
+    let atoms: Vec<String> = Vec::new();
+    let ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
+        repos,
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: false,
+        backtrack_enabled: false,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::new(),
+    });
+    let mut pass = pass_163();
+    pass.entries = vec![
+        entry_163("dev-libs", "a", new_163("1.0"), &[("dev-libs", "b")]),
+        entry_163("dev-libs", "b", new_163("1.0"), &[]),
+    ];
+    let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+    assert!(!result.buildpkgonly_deps_unsatisfied);
+    assert_eq!(result.backtrack_restarts, 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A merge required by another merge is a buildpkgonly edge.
+#[test]
+fn assemble_result_merge_requiring_a_merge_is_a_buildpkgonly_edge() {
+    let dir = dir_163("asm-edge");
+    let repos = repo_pkgs_163(&dir, &[]);
+    let config = cfg_163();
+    let no_strings: Vec<String> = Vec::new();
+    let atoms: Vec<String> = Vec::new();
+    let ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
+        repos,
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: true,
+        backtrack_enabled: false,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::new(),
+    });
+    let mut pass = pass_163();
+    pass.entries = vec![
+        entry_163("dev-libs", "a", new_163("1.0"), &[("dev-libs", "b")]),
+        entry_163("dev-libs", "b", new_163("1.0"), &[]),
+    ];
+    let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+    assert!(result.buildpkgonly_deps_unsatisfied);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Two chained uninstalls with no merge anywhere are still no
+/// buildpkgonly edge: uninstalls are not merge actions.
+#[test]
+fn assemble_result_chained_uninstalls_are_no_buildpkgonly_edge() {
+    let dir = dir_163("asm-uninst");
+    let repos = repo_pkgs_163(&dir, &[]);
+    let config = cfg_163();
+    let no_strings: Vec<String> = Vec::new();
+    let atoms: Vec<String> = Vec::new();
+    let ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
+        repos,
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: true,
+        backtrack_enabled: false,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::new(),
+    });
+    let mut pass = pass_163();
+    pass.entries = vec![
+        entry_163(
+            "dev-libs",
+            "u1",
+            PretendOutcome::Uninstall {
+                version: "1.0".to_string(),
+            },
+            &[("dev-libs", "u2")],
+        ),
+        entry_163(
+            "dev-libs",
+            "u2",
+            PretendOutcome::Uninstall {
+                version: "2.0".to_string(),
+            },
+            &[],
+        ),
+    ];
+    let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+    assert!(!result.buildpkgonly_deps_unsatisfied);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A recorded autounmask change is not duplicated by the
+/// backtracking slice's records, while a record for another atom
+/// is appended.
+#[test]
+fn assemble_result_recorded_autounmask_change_is_not_duplicated() {
+    let dir = dir_163("asm-dedup");
+    let repos = repo_pkgs_163(&dir, &[]);
+    let config = cfg_163();
+    let no_strings: Vec<String> = Vec::new();
+    let atoms: Vec<String> = Vec::new();
+    let ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
+        repos,
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: false,
+        backtrack_enabled: false,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::new(),
+    });
+    let mut pass = pass_163();
+    pass.autounmask_use_changes = vec![change_163(">=dev-libs/a-1.0", "x", &[])];
+    let params = BacktrackParams {
+        autounmask_use_change_records: vec![
+            change_163(">=dev-libs/a-1.0", "x", &[]),
+            change_163(">=dev-libs/b-1.0", "x", &[]),
+        ],
+        ..Default::default()
+    };
+    let result = assemble_result(&ctx, &params, pass, &config, 0);
+    assert_eq!(
+        result
+            .autounmask_use_changes
+            .iter()
+            .map(|c| (c.atom.clone(), c.token.clone()))
+            .collect::<Vec<_>>(),
+        vec![
+            (">=dev-libs/a-1.0".to_string(), "x".to_string()),
+            (">=dev-libs/b-1.0".to_string(), "x".to_string()),
+        ]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A record with a new token for a known atom is appended, then
