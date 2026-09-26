@@ -49928,3 +49928,311 @@ mod tests_162 {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// Backlog #163: `lib.rs` result/display-assembly unit tests.
+///
+/// Every test observes the assembled result structures (fields of the
+/// returned result, rows, outcomes) directly -- never a contract pin's
+/// full text output. Scratch-repo harness in the #161/#162 style
+/// (`repo_pkgs_163` / `write_pkg_163` mirror `repo_pkgs_162` /
+/// `write_pkg_162`); self-contained so the other Track U branches'
+/// blocks rebase mechanically.
+#[cfg(test)]
+mod tests_163 {
+    use super::*;
+
+    /// Minimal merge-bound `GraphEntry` for the assembly legs (slot and
+    /// `new_slot` as the leg needs; everything display-side left at its
+    /// empty default). Mirrors `tests_162::entry_162`, which must stay
+    /// untouched.
+    fn entry_163(
+        cat: &str,
+        pkg: &str,
+        outcome: PretendOutcome,
+        required_by: &[(&str, &str)],
+    ) -> GraphEntry {
+        GraphEntry {
+            discovery: 0,
+            category: cat.to_string(),
+            package: pkg.to_string(),
+            outcome,
+            blockers: Vec::new(),
+            slot: None,
+            sub_slot: None,
+            repo_name: Some("testrepo".to_string()),
+            oldbest: Vec::new(),
+            use_flags_display: Vec::new(),
+            use_expand_display: Vec::new(),
+            use_expand_display_p: Vec::new(),
+            keyword_mask: None,
+            new_slot: false,
+            interactive: false,
+            fetch_restrict: false,
+            fetch_restrict_satisfied: false,
+            download_files: Vec::new(),
+            required_by: required_by
+                .iter()
+                .map(|(c, p)| (c.to_string(), p.to_string()))
+                .collect(),
+            source: CandidateSource::Ebuild,
+            provenance: VisibilityProvenance::default(),
+            keyword_suggestion: None,
+            use_suggestion: None,
+            parent_use_suggestion: None,
+            targets_running_root: false,
+            remote_binary: false,
+            build_id: None,
+            deps: Vec::new(),
+        }
+    }
+
+    fn new_163(version: &str) -> PretendOutcome {
+        PretendOutcome::New {
+            version: version.to_string(),
+        }
+    }
+
+    fn installed_163(version: &str) -> PretendOutcome {
+        PretendOutcome::AlreadyInstalled {
+            version: version.to_string(),
+        }
+    }
+
+    fn masked_163(cat: &str, pkg: &str, atom: &str) -> MaskedDepReport {
+        MaskedDepReport {
+            category: cat.to_string(),
+            package: pkg.to_string(),
+            atom: atom.to_string(),
+            masked: Vec::new(),
+            chain: Vec::new(),
+        }
+    }
+
+    // ---- S1: `abort_outcome` (Slice 3: real's abandon sites as data --
+    // the renderer switches to `partial` in Slice 4). ----
+
+    /// A masked-only dep with a merge-bound requirer aborts as
+    /// `MaskedDep` with the report's atom, the first merge-bound
+    /// requirer's cpv, and an empty partial (real shows no list at
+    /// all). Pins the shape the S0 run already covers (its rows are
+    /// all caught there).
+    #[test]
+    fn abort_outcome_masked_dep_aborts_with_the_merge_bound_requirer() {
+        let entries = vec![
+            entry_163(
+                "dev-libs",
+                "need",
+                PretendOutcome::NoVisibleCandidate,
+                &[("dev-libs", "top")],
+            ),
+            entry_163("dev-libs", "top", new_163("1.0"), &[]),
+        ];
+        let masked = vec![masked_163("dev-libs", "need", "dev-libs/need")];
+        match abort_outcome(&entries, &masked, &[], &[], &HashMap::new()) {
+            ResolveOutcome::Aborted {
+                reason: AbortReason::MaskedDep { atom, parent_cpv },
+                partial,
+            } => {
+                assert_eq!(atom, "dev-libs/need");
+                assert_eq!(parent_cpv, "dev-libs/top-1.0");
+                assert!(partial.is_empty());
+            }
+            other => panic!("expected MaskedDep, got {other:?}"),
+        }
+    }
+
+    /// A merge-bound requirer whose cp is absent still completes, even
+    /// with a same-category merge-bound decoy present: the `&&`
+    /// conjunction (and its second `==`) must not match the decoy.
+    /// Pins the shape the S0 run already covers.
+    #[test]
+    fn abort_outcome_ghost_requirer_completes_despite_a_same_category_merge() {
+        let entries = vec![
+            entry_163(
+                "dev-libs",
+                "need",
+                PretendOutcome::NoVisibleCandidate,
+                &[("dev-libs", "ghost")],
+            ),
+            entry_163("dev-libs", "top", new_163("1.0"), &[]),
+        ];
+        assert_eq!(
+            abort_outcome(&entries, &[], &[], &[], &HashMap::new()),
+            ResolveOutcome::Complete
+        );
+    }
+
+    /// An installed-only requirer aborts as `UnsatisfiedAtom` with the
+    /// recorded atom and the installed cpv. Kills the
+    /// `AlreadyInstalled` arm deletion (which drops the fallback and
+    /// completes) and both `==` flips of the installed requirer
+    /// lookup (which miss the requirer and complete).
+    #[test]
+    fn abort_outcome_installed_only_requirer_aborts_with_the_installed_cpv() {
+        let entries = vec![
+            entry_163(
+                "dev-libs",
+                "need",
+                PretendOutcome::NoVisibleCandidate,
+                &[("dev-libs", "oldie")],
+            ),
+            entry_163("dev-libs", "oldie", installed_163("1.0"), &[]),
+        ];
+        let mut atoms = HashMap::new();
+        atoms.insert(
+            ("dev-libs".to_string(), "need".to_string()),
+            ">=dev-libs/need-2.0".to_string(),
+        );
+        match abort_outcome(&entries, &[], &[], &[], &atoms) {
+            ResolveOutcome::Aborted {
+                reason: AbortReason::UnsatisfiedAtom { atom, parent_cpv },
+                partial,
+            } => {
+                assert_eq!(atom, ">=dev-libs/need-2.0");
+                assert_eq!(parent_cpv, "dev-libs/oldie-1.0");
+                assert!(partial.is_empty());
+            }
+            other => panic!("expected UnsatisfiedAtom, got {other:?}"),
+        }
+    }
+
+    /// A ghost requirer still completes with a same-category installed
+    /// decoy present: the installed lookup's `&&` must not match the
+    /// decoy. Kills the `&&` -> `||` flip and the second `==` -> `!=`
+    /// flip of the installed requirer lookup (both match the decoy
+    /// and abort).
+    #[test]
+    fn abort_outcome_ghost_requirer_completes_despite_a_same_category_installed_entry() {
+        let entries = vec![
+            entry_163(
+                "dev-libs",
+                "need",
+                PretendOutcome::NoVisibleCandidate,
+                &[("dev-libs", "ghost")],
+            ),
+            entry_163("dev-libs", "top", installed_163("1.0"), &[]),
+        ];
+        assert_eq!(
+            abort_outcome(&entries, &[], &[], &[], &HashMap::new()),
+            ResolveOutcome::Complete
+        );
+    }
+
+    /// A masked report for another package in the same category does
+    /// not abort as masked: the report lookup's `&&` must not match a
+    /// same-category report. Kills the `&&` -> `||` flip and the second
+    /// `==` -> `!=` flip of the masked-report lookup (both match the
+    /// neighbour report and abort as `MaskedDep`).
+    #[test]
+    fn abort_outcome_masked_report_for_another_package_does_not_abort_as_masked() {
+        let entries = vec![
+            entry_163(
+                "dev-libs",
+                "need",
+                PretendOutcome::NoVisibleCandidate,
+                &[("dev-libs", "top")],
+            ),
+            entry_163("dev-libs", "top", new_163("1.0"), &[]),
+        ];
+        let masked = vec![masked_163("dev-libs", "other", "dev-libs/other")];
+        match abort_outcome(&entries, &masked, &[], &[], &HashMap::new()) {
+            ResolveOutcome::Aborted {
+                reason: AbortReason::UnsatisfiedAtom { atom, parent_cpv },
+                partial,
+            } => {
+                assert_eq!(atom, "dev-libs/need");
+                assert_eq!(parent_cpv, "dev-libs/top-1.0");
+                assert!(partial.is_empty());
+            }
+            other => panic!("expected UnsatisfiedAtom, got {other:?}"),
+        }
+    }
+
+    /// A masked report for the same package in another category does
+    /// not abort as masked either. Pins the shape the S0 run already
+    /// covers.
+    #[test]
+    fn abort_outcome_masked_report_for_the_same_package_in_another_category_does_not_abort_as_masked()
+     {
+        let entries = vec![
+            entry_163(
+                "dev-libs",
+                "need",
+                PretendOutcome::NoVisibleCandidate,
+                &[("dev-libs", "top")],
+            ),
+            entry_163("dev-libs", "top", new_163("1.0"), &[]),
+        ];
+        let masked = vec![masked_163("sys-libs", "need", "sys-libs/need")];
+        match abort_outcome(&entries, &masked, &[], &[], &HashMap::new()) {
+            ResolveOutcome::Aborted {
+                reason: AbortReason::UnsatisfiedAtom { atom, parent_cpv },
+                partial,
+            } => {
+                assert_eq!(atom, "dev-libs/need");
+                assert_eq!(parent_cpv, "dev-libs/top-1.0");
+                assert!(partial.is_empty());
+            }
+            other => panic!("expected UnsatisfiedAtom, got {other:?}"),
+        }
+    }
+
+    /// An NVC entry with no requirer at all keeps the old rescue: the
+    /// loop moves on and the run completes.
+    #[test]
+    fn abort_outcome_nvc_entry_with_no_requirer_is_rescued() {
+        let entries = vec![entry_163(
+            "dev-libs",
+            "lone",
+            PretendOutcome::NoVisibleCandidate,
+            &[],
+        )];
+        assert_eq!(
+            abort_outcome(&entries, &[], &[], &[], &HashMap::new()),
+            ResolveOutcome::Complete
+        );
+    }
+
+    /// No NVC entries and no cycles completes: the cycle gate's `!`
+    /// must stay. Pins the shape the S0 run already covers.
+    #[test]
+    fn abort_outcome_empty_graph_completes() {
+        let entries = vec![entry_163("dev-libs", "top", new_163("1.0"), &[])];
+        assert_eq!(
+            abort_outcome(&entries, &[], &[], &[], &HashMap::new()),
+            ResolveOutcome::Complete
+        );
+    }
+
+    /// A reported cycle aborts as `UnserializableCycle` with the
+    /// display members, and `partial` holds exactly the matching
+    /// entries in display order -- a merge-bound non-member stays
+    /// out. Pins the shape the S0 run already covers.
+    #[test]
+    fn abort_outcome_cycle_members_collect_the_matching_partial_in_order() {
+        let entries = vec![
+            entry_163("dev-libs", "a", new_163("1.0"), &[]),
+            entry_163("dev-libs", "b", new_163("2.0"), &[]),
+            entry_163("dev-libs", "c", new_163("3.0"), &[]),
+        ];
+        let display = vec!["dev-libs/b-2.0".to_string(), "dev-libs/a-1.0".to_string()];
+        match abort_outcome(
+            &entries,
+            &[],
+            &[vec!["x".to_string()]],
+            &display,
+            &HashMap::new(),
+        ) {
+            ResolveOutcome::Aborted {
+                reason: AbortReason::UnserializableCycle { members },
+                partial,
+            } => {
+                assert_eq!(members, display);
+                assert_eq!(partial.len(), 2);
+                assert_eq!(partial[0].package, "b");
+                assert_eq!(partial[1].package, "a");
+            }
+            other => panic!("expected UnserializableCycle, got {other:?}"),
+        }
+    }
+}
