@@ -45532,6 +45532,71 @@ mod tests {
         assert!(!is_visible(&c, "dev-libs", "foo-pkg", &config_foo_on));
     }
 
+    /// Backlog #164: direct unit legs for the masking/visibility stack
+    /// (`lib.rs` mutation cluster 4). Each leg observes its predicate's
+    /// own result -- no end-to-end contract reproduction. Self-contained
+    /// so rebases stay mechanical.
+    mod tests_164 {
+        use super::*;
+
+        /// Backlog #164 S1: `parse_license_tree` reports exact token
+        /// positions in every error. Real signals these malformed
+        /// shapes with a bare `InvalidDependString`
+        /// (`3rdparty/portage/lib/portage/exception.py:37`); the
+        /// per-token positions are portuale's own diagnostic precision,
+        /// and every `pos + N` site below is a mutation target (`+` ->
+        /// `-`/`*`), so each arm pins its exact number -- including at
+        /// position 0, where `-` underflows and `*` collapses to 0.
+        #[test]
+        fn parse_license_tree_164_reports_exact_error_positions() {
+            let toks = |s: &str| s.split_whitespace().map(String::from).collect::<Vec<_>>();
+            let no_use = HashSet::new();
+            // `()` is an empty group at token 0: the lookahead reads
+            // token 1, the error reports token 2.
+            match parse_license_tree(&toks("( )"), &no_use) {
+                Err(Error::LicenseExpectedDepString { token }) => assert_eq!(token, 2),
+                other => panic!("an empty group must fail closed, got {other:?}"),
+            }
+            // A stray `)` with no opener: token 1 at position 0 ...
+            match parse_license_tree(&toks(")"), &no_use) {
+                Err(Error::LicenseNoMatchingOpen { token }) => assert_eq!(token, 1),
+                other => panic!("a stray close must fail closed, got {other:?}"),
+            }
+            // ... and token 2 one step in.
+            match parse_license_tree(&toks("GPL-2 )"), &no_use) {
+                Err(Error::LicenseNoMatchingOpen { token }) => assert_eq!(token, 2),
+                other => panic!("a trailing close must fail closed, got {other:?}"),
+            }
+            // A `)` where a `(` was promised by `||`.
+            match parse_license_tree(&toks("|| )"), &no_use) {
+                Err(Error::LicenseExpectedOpen { token }) => assert_eq!(token, 2),
+                other => panic!("a close after `||` must fail closed, got {other:?}"),
+            }
+            // A second `||` where a `(` was promised.
+            match parse_license_tree(&toks("|| ||"), &no_use) {
+                Err(Error::LicenseExpectedOpenGotOr { token }) => assert_eq!(token, 2),
+                other => panic!("a doubled `||` must fail closed, got {other:?}"),
+            }
+            // A bare token where a `(` was promised.
+            match parse_license_tree(&toks("|| GPL-2"), &no_use) {
+                Err(Error::LicenseExpectedOpenGotToken { token, at }) => {
+                    assert_eq!(token, "GPL-2");
+                    assert_eq!(at, 2);
+                }
+                other => panic!("a token after `||` must fail closed, got {other:?}"),
+            }
+            // Pins (no mutants): unclosed and dangling shapes.
+            assert!(matches!(
+                parse_license_tree(&toks("( GPL-2"), &no_use),
+                Err(Error::LicenseMissingCloseParen)
+            ));
+            assert!(matches!(
+                parse_license_tree(&toks("||"), &no_use),
+                Err(Error::LicenseMissingOpenParen)
+            ));
+        }
+    }
+
     #[test]
     fn properties_default_star_accepts_any_declared_property() {
         let config = portage_profile::Config {
