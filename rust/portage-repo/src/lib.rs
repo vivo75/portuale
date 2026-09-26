@@ -50450,4 +50450,236 @@ mod tests_165 {
         assert_eq!(resolved.version, "1.0");
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    fn ipkg_165(cat: &str, pkg: &str, ver: &str, slot: &str) -> InstalledPackage {
+        InstalledPackage {
+            category: cat.to_string(),
+            package: pkg.to_string(),
+            version: ver.to_string(),
+            slot: slot.to_string(),
+        }
+    }
+
+    // ---- S5: `topological_removal_order` (real unmerge ordering:
+    // dependers before dependencies, cpv-descending ties, genuine
+    // cycles broken by real's `ignore_priority_range` scan). ----
+
+    /// Installs `<name>-1.0` (slot 0) with the given dep keys.
+    fn order_vdb_165(root: &Path, pkgs: &[(&str, &[(&str, &str)])]) {
+        for (name, keys) in pkgs {
+            let files: Vec<(&str, &str)> = keys.to_vec();
+            install_165(root, "dev-libs", &format!("{name}-1.0"), "0", &files);
+        }
+    }
+
+    fn order_list_165(names: &[&str]) -> Vec<InstalledPackage> {
+        names
+            .iter()
+            .map(|n| ipkg_165("dev-libs", n, "1.0", "0"))
+            .collect()
+    }
+
+    fn order_names_165(out: &[InstalledPackage]) -> Vec<String> {
+        out.iter().map(|p| p.package.clone()).collect()
+    }
+
+    /// A three-deep DEPEND chain unmerges depender-first: the
+    /// whole-body rows, the `n < 2` widenings, the no-edge
+    /// (`is_some_and`/`contains`) deletions, the `indeg` narrowings,
+    /// the ready-batch mutants, and -- crucially -- the `!ready`
+    /// deletion all fail here. That mutant only diverges (spins the
+    /// `ready.is_empty()` branch forever) on *cyclic* input; on this
+    /// DAG it terminates and merely pops in cycle-break order, so this
+    /// leg kills it quickly with no timeout involved.
+    #[test]
+    fn topological_removal_order_unmerges_a_depend_chain_dependers_first() {
+        let root = dir_165("order-chain");
+        order_vdb_165(
+            &root,
+            &[
+                ("aa", &[("DEPEND", "dev-libs/bb")]),
+                ("bb", &[("DEPEND", "dev-libs/cc")]),
+                ("cc", &[]),
+            ],
+        );
+        let (ordered, out) = topological_removal_order(&root, order_list_165(&["cc", "aa", "bb"]));
+        assert!(ordered);
+        assert_eq!(order_names_165(&out), vec!["aa", "bb", "cc"]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A self-dependency is not an edge (`i == j` always skips): with
+    /// no edges the input order is kept and `ordered` is false. Both
+    /// `||` -> `&&` narrowings (which admit the self-edge, pushing the
+    /// package through the cycle-break path instead) fail here.
+    #[test]
+    fn topological_removal_order_ignores_a_self_dependency() {
+        let root = dir_165("order-self");
+        order_vdb_165(&root, &[("aa", &[("RDEPEND", "dev-libs/aa")]), ("bb", &[])]);
+        let (ordered, out) = topological_removal_order(&root, order_list_165(&["aa", "bb"]));
+        assert!(!ordered);
+        assert_eq!(order_names_165(&out), vec!["aa", "bb"]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A cross-category edge orders too: the `i == j` -> `!=` flip
+    /// (which drops every edge) and both category/package `!=` ->
+    /// `==` flips (which drop every cross-cp edge) fail here.
+    #[test]
+    fn topological_removal_order_follows_a_cross_category_edge() {
+        let root = dir_165("order-cross");
+        let d = root.join("var/db/pkg/dev-libs").join("aa-1.0");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("SLOT"), "0\n").unwrap();
+        std::fs::write(d.join("RDEPEND"), "sys-libs/bb\n").unwrap();
+        let e = root.join("var/db/pkg/sys-libs").join("bb-1.0");
+        std::fs::create_dir_all(&e).unwrap();
+        std::fs::write(e.join("SLOT"), "0\n").unwrap();
+        let (ordered, out) = topological_removal_order(
+            &root,
+            vec![
+                ipkg_165("sys-libs", "bb", "1.0", "0"),
+                ipkg_165("dev-libs", "aa", "1.0", "0"),
+            ],
+        );
+        assert!(ordered);
+        assert_eq!(
+            out.iter().map(|p| p.cpv()).collect::<Vec<_>>(),
+            vec!["dev-libs/aa-1.0", "sys-libs/bb-1.0"]
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Priority arms: an IDEPEND edge (0) loses to an RDEPEND edge
+    /// (-2), an RDEPEND edge loses to a DEPEND edge (-4), and a PDEPEND
+    /// edge (-3) loses to a DEPEND edge. Each deleted `match` arm
+    /// demotes its key to -4 and pops the wrong node first here.
+    #[test]
+    fn topological_removal_order_breaks_cycles_by_dependency_key_priority() {
+        // `aa` IDEPENDs `zz` (0), `zz` RDEPENDs `aa` (-2): `aa` pops at
+        // the -2 level (IDEPEND-arm deletion pops `zz` at -4 instead).
+        let root = dir_165("order-prio-idepend");
+        order_vdb_165(
+            &root,
+            &[
+                ("aa", &[("IDEPEND", "dev-libs/zz")]),
+                ("zz", &[("RDEPEND", "dev-libs/aa")]),
+            ],
+        );
+        let (ordered, out) = topological_removal_order(&root, order_list_165(&["zz", "aa"]));
+        assert!(ordered);
+        assert_eq!(order_names_165(&out), vec!["aa", "zz"]);
+
+        // `aa` RDEPENDs `zz` (-2), `zz` DEPENDs `aa` (-4): `aa` pops at
+        // -4 (RDEPEND-arm deletion ties both at -4 and pops cpv-max
+        // `zz` instead).
+        let root2 = dir_165("order-prio-rdepend");
+        order_vdb_165(
+            &root2,
+            &[
+                ("aa", &[("RDEPEND", "dev-libs/zz")]),
+                ("zz", &[("DEPEND", "dev-libs/aa")]),
+            ],
+        );
+        let (_, out2) = topological_removal_order(&root2, order_list_165(&["zz", "aa"]));
+        assert_eq!(order_names_165(&out2), vec!["aa", "zz"]);
+
+        // `aa` PDEPENDs `zz` (-3), `zz` DEPENDs `aa` (-4): `aa` pops at
+        // -4 (PDEPEND-arm deletion ties both at -4 and pops `zz`).
+        let root3 = dir_165("order-prio-pdepend");
+        order_vdb_165(
+            &root3,
+            &[
+                ("aa", &[("PDEPEND", "dev-libs/zz")]),
+                ("zz", &[("DEPEND", "dev-libs/aa")]),
+            ],
+        );
+        let (_, out3) = topological_removal_order(&root3, order_list_165(&["zz", "aa"]));
+        assert_eq!(order_names_165(&out3), vec!["aa", "zz"]);
+
+        // Mutual PDEPEND (-3, -3): both pop at -3, cpv-max first; the
+        // PDEPEND `-3` -> `3` flip strands both (no level ever
+        // eligible) and returns nothing.
+        let root4 = dir_165("order-prio-pdepend-pair");
+        order_vdb_165(
+            &root4,
+            &[
+                ("aa", &[("PDEPEND", "dev-libs/zz")]),
+                ("zz", &[("PDEPEND", "dev-libs/aa")]),
+            ],
+        );
+        let (_, out4) = topological_removal_order(&root4, order_list_165(&["aa", "zz"]));
+        assert_eq!(order_names_165(&out4), vec!["zz", "aa"]);
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&root2);
+        let _ = std::fs::remove_dir_all(&root3);
+        let _ = std::fs::remove_dir_all(&root4);
+    }
+
+    /// A slot-operator RDEPEND without a sub-slot (`dev-libs/zz:0=`)
+    /// still matches (real `_match_slot` only checks the sub-slot when
+    /// the atom carries one) at the plain -2 priority: both
+    /// `slot_op_built` narrowings (`&&` -> `||`), which would promote
+    /// it to -1 and pop `aa` instead of `zz`, fail here.
+    #[test]
+    fn topological_removal_order_keeps_a_sub_slot_less_slot_operator_at_rdepend_priority() {
+        let root = dir_165("order-slotop");
+        order_vdb_165(
+            &root,
+            &[
+                ("aa", &[("RDEPEND", "dev-libs/zz:0=")]),
+                ("zz", &[("RDEPEND", "dev-libs/aa")]),
+            ],
+        );
+        let (_, out) = topological_removal_order(&root, order_list_165(&["aa", "zz"]));
+        assert_eq!(order_names_165(&out), vec!["zz", "aa"]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The `ignore_priority_range` scan: with edges at 0 (IDEPEND) and
+    /// -2 (RDEPEND) the -4 and -3 levels yield nothing and `aa` (whose
+    /// incoming edge is -2) pops at -2. Each `delete -` in the -4/-3/-2
+    /// scan levels turns its level positive, so both nodes are eligible
+    /// early and cpv-max `zz` pops instead. (The -1 level itself can
+    /// never pop a matchable edge -- every matchable priority is
+    /// -4..-2 or 0, and a node eligible at -1 was already eligible at
+    /// -2 -- so its own `delete -` is equivalent; classified in the
+    /// closeout, not pinned here.)
+    #[test]
+    fn topological_removal_order_scans_ignore_levels_before_popping() {
+        let root = dir_165("order-ignore");
+        order_vdb_165(
+            &root,
+            &[
+                ("aa", &[("IDEPEND", "dev-libs/zz")]),
+                ("zz", &[("RDEPEND", "dev-libs/aa")]),
+            ],
+        );
+        let (_, out) = topological_removal_order(&root, order_list_165(&["zz", "aa"]));
+        assert_eq!(order_names_165(&out), vec!["aa", "zz"]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A three-cycle pops cpv-max first, then re-scans: the
+    /// cycle-break candidate mutants (stale-`done` inclusion or
+    /// exclusion), the `<=` -> `>` flip, and the early-`break`
+    /// deletion all return a short or duplicated order and fail the
+    /// exact assertion here.
+    #[test]
+    fn topological_removal_order_pops_a_three_cycle_cpv_max_first() {
+        let root = dir_165("order-3cycle");
+        order_vdb_165(
+            &root,
+            &[
+                ("aa", &[("DEPEND", "dev-libs/bb")]),
+                ("bb", &[("DEPEND", "dev-libs/cc")]),
+                ("cc", &[("DEPEND", "dev-libs/aa")]),
+            ],
+        );
+        let (ordered, out) = topological_removal_order(&root, order_list_165(&["aa", "bb", "cc"]));
+        assert!(ordered);
+        assert_eq!(order_names_165(&out), vec!["cc", "aa", "bb"]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
