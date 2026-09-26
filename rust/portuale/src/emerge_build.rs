@@ -70,7 +70,7 @@ fn entry_version(outcome: &PretendOutcome) -> Option<&str> {
 
 /// This entry's own `mtimedb["resume"]` mergelist item (`ResumeCpv`), or
 /// `None` for an entry real's `_save_resume_list` would never record
-/// (`Scheduler.py:2419-2423` only keeps `Package`s with
+/// (`Scheduler.py:2414-2418` only keeps `Package`s with
 /// `operation == "merge"` -- an already-installed no-op, a blocker
 /// removal, or an entry with no visible candidate merges nothing). The
 /// `ResumeEntryKind` tag comes straight from the resolved source, the
