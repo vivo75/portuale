@@ -13187,7 +13187,14 @@ pub fn resolve_pretend(
                         .is_some_and(|r| !r.is_empty()),
                 })
         };
-    if !update && !is_top_level && excluded.is_empty() {
+    // #157: `--emptytree` skips installed packages as candidates entirely
+    // (real `depgraph.py:7888-7899`, `if empty and pkg.installed ...:
+    // continue`), so the dependency `avoid_update` early return below
+    // (`depgraph.py:8453-8458`, `return inst_pkg`) can never fire -- its
+    // `matched_packages` holds no installed instance. Gating on `!empty`
+    // keeps portuale from reinstalling a keyword-masked installed
+    // dependency that real downgrades to the best visible stable.
+    if !update && !empty && !is_top_level && excluded.is_empty() {
         let installed = installed_candidates(root, &atom.category, &atom.package);
         if let Some(installed_best) = dependency_avoid_update_candidate(
             root,
@@ -13553,7 +13560,12 @@ pub fn resolve_pretend(
     // still needs its own `!is_top_level` branch, reusing the same
     // broader (not `is_visible`-filtered) lookup, for that one
     // remaining combination.
-    if !update && (!is_top_level || selective) {
+    // #157: under `--emptytree` the dependency branch is skipped for the
+    // same reason as the early shortcut above -- real's installed
+    // candidates are dropped wholesale (`depgraph.py:7888-7899`), so the
+    // `inst_pkg` return it mirrors cannot apply. The top-level `selective`
+    // arm is already false under `empty` (`selective = selective && !empty`).
+    if !update && ((!is_top_level && !empty) || selective) {
         let installed_best = if !is_top_level {
             // #57: same `extra_constraints` gate as the early shortcut
             // above (`matched`, which the `is_top_level` arm below reads,
@@ -29090,6 +29102,43 @@ mod tests {
                 from: "2.0".to_string(),
                 to: "1.0".to_string(),
             }
+        );
+    }
+
+    #[test]
+    fn emptytree_downgrades_a_keyword_masked_installed_dependency_to_the_visible_stable() {
+        // #157: dev-libs/needskeywordmasked RDEPENDs on dev-libs/
+        // keywordmaskedpkg, installed at 2.0 (`KEYWORDS="~amd64"`, not
+        // accepted under the fixture profile's own default
+        // `ACCEPT_KEYWORDS="amd64"`) while 1.0 (`KEYWORDS="amd64"`) is the
+        // only visible version -- the installed `~arch`-masked version
+        // beside a visible stable the filing names. Under `--emptytree`
+        // real drops every installed candidate wholesale
+        // (`depgraph.py:7888-7899`: `if empty and pkg.installed ...:
+        // continue`), so its dependency `inst_pkg` return
+        // (`depgraph.py:8453-8458`) never fires and the best visible
+        // stable wins -> downgrade 2.0 -> 1.0. Before #157 the dependency
+        // avoid_update shortcut kept the masked 2.0 and reinstalled it,
+        // exactly the L3 `sys-apps/portage-3.0.82.2` reinstall / real
+        // `3.0.81.3` downgrade shape.
+        let entries = graph_empty("dev-libs/needskeywordmasked");
+        assert_eq!(
+            entries,
+            vec![
+                (
+                    "dev-libs/keywordmaskedpkg".to_string(),
+                    PretendOutcome::Downgrade {
+                        from: "2.0".to_string(),
+                        to: "1.0".to_string(),
+                    }
+                ),
+                (
+                    "dev-libs/needskeywordmasked".to_string(),
+                    PretendOutcome::New {
+                        version: "1.0".to_string()
+                    }
+                )
+            ]
         );
     }
 
