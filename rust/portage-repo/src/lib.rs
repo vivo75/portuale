@@ -46555,6 +46555,205 @@ mod tests {
                 Vec::new()
             );
         }
+
+        /// Backlog #164 S6: `autounmask_dep_chain` renders the whole
+        /// parent chain to the argument (real `_get_dep_chain_as_comment`,
+        /// `lib/_emerge/depgraph.py:6457`): one `required by
+        /// <cpv>::<repo>` row per merge-bound parent, then the argument
+        /// line.
+        #[test]
+        fn autounmask_dep_chain_164_top_level_change_names_the_argument() {
+            // No owner: a top-level change prints the argument atom as
+            // given, not the change's own `>=<cpv>` left-hand form ...
+            let entries: Vec<GraphEntry> = Vec::new();
+            let root = Path::new("/");
+            let top: HashSet<&str> = ["dev-libs/aunone[bar]"].into_iter().collect();
+            let got = autounmask_dep_chain(&None, ">=dev-libs/aunone-1.0", &top, &entries, root);
+            assert_eq!(
+                got,
+                vec!["required by dev-libs/aunone[bar] (argument)".to_string()]
+            );
+            // ... or the bare atom when nothing in `top_level` matches.
+            let other: HashSet<&str> = ["sys-apps/other"].into_iter().collect();
+            let got_fallback =
+                autounmask_dep_chain(&None, ">=dev-libs/aunone-1.0", &other, &entries, root);
+            assert_eq!(
+                got_fallback,
+                vec!["required by >=dev-libs/aunone-1.0 (argument)".to_string()]
+            );
+            // A same-category other-package atom still matches nothing:
+            // both halves of the `cp` comparison must hold.
+            let sibling: HashSet<&str> = ["dev-libs/otherpkg"].into_iter().collect();
+            let got_sibling =
+                autounmask_dep_chain(&None, ">=dev-libs/aunone-1.0", &sibling, &entries, root);
+            assert_eq!(
+                got_sibling,
+                vec!["required by >=dev-libs/aunone-1.0 (argument)".to_string()]
+            );
+        }
+
+        #[test]
+        fn autounmask_dep_chain_164_walks_the_whole_parent_chain() {
+            let dir = slotundo_temp_dir("164-auc");
+            let entries = vec![
+                // Decoy: same category, wrong package -- must not win
+                // the parent lookup at any hop.
+                entry_164(
+                    "dev-libs",
+                    "audecoy",
+                    PretendOutcome::New {
+                        version: "9.0".to_string(),
+                    },
+                    Vec::new(),
+                    Some("testrepo"),
+                    CandidateSource::Ebuild,
+                ),
+                entry_164(
+                    "dev-libs",
+                    "aumid",
+                    PretendOutcome::New {
+                        version: "1.0".to_string(),
+                    },
+                    vec![("dev-libs".to_string(), "autop".to_string())],
+                    Some("testrepo"),
+                    CandidateSource::Ebuild,
+                ),
+                entry_164(
+                    "dev-libs",
+                    "autop",
+                    PretendOutcome::New {
+                        version: "2.0".to_string(),
+                    },
+                    Vec::new(),
+                    Some("testrepo"),
+                    CandidateSource::Ebuild,
+                ),
+            ];
+            let owner = Some(("dev-libs".to_string(), "aumid".to_string()));
+            // A same-category sibling atom must not attach mid-chain.
+            let top: HashSet<&str> = ["dev-libs/autop", "dev-libs/ausibling"]
+                .into_iter()
+                .collect();
+            let got = autounmask_dep_chain(&owner, "dev-libs/aumid", &top, &entries, &dir);
+            assert_eq!(
+                got,
+                vec![
+                    "required by dev-libs/aumid-1.0::testrepo".to_string(),
+                    "required by dev-libs/autop-2.0::testrepo".to_string(),
+                    "required by dev-libs/autop (argument)".to_string(),
+                ]
+            );
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn autounmask_dep_chain_164_upgrade_parent_reports_the_to_version() {
+            let dir = slotundo_temp_dir("164-auc-up");
+            let entries = vec![
+                entry_164(
+                    "dev-libs",
+                    "auup",
+                    PretendOutcome::Upgrade {
+                        from: "1.0".to_string(),
+                        to: "2.0".to_string(),
+                    },
+                    vec![("dev-libs".to_string(), "auuptop".to_string())],
+                    Some("testrepo"),
+                    CandidateSource::Ebuild,
+                ),
+                entry_164(
+                    "dev-libs",
+                    "auuptop",
+                    PretendOutcome::New {
+                        version: "3.0".to_string(),
+                    },
+                    Vec::new(),
+                    Some("testrepo"),
+                    CandidateSource::Ebuild,
+                ),
+            ];
+            let owner = Some(("dev-libs".to_string(), "auup".to_string()));
+            let top: HashSet<&str> = ["dev-libs/auuptop"].into_iter().collect();
+            let got = autounmask_dep_chain(&owner, "dev-libs/auup", &top, &entries, &dir);
+            assert_eq!(
+                got,
+                vec![
+                    "required by dev-libs/auup-2.0::testrepo".to_string(),
+                    "required by dev-libs/auuptop-3.0::testrepo".to_string(),
+                    "required by dev-libs/auuptop (argument)".to_string(),
+                ]
+            );
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn autounmask_dep_chain_164_installed_parent_reports_the_vdb_repo() {
+            // An installed parent renders with the vdb repo; with no vdb
+            // entry that repo is `__unknown__` (see `installed_pkg_repo`).
+            let dir = slotundo_temp_dir("164-auc-inst");
+            let entries = vec![
+                entry_164(
+                    "dev-libs",
+                    "auinst",
+                    PretendOutcome::AlreadyInstalled {
+                        version: "1.0".to_string(),
+                    },
+                    vec![("dev-libs".to_string(), "auinsttop".to_string())],
+                    None,
+                    CandidateSource::Ebuild,
+                ),
+                entry_164(
+                    "dev-libs",
+                    "auinsttop",
+                    PretendOutcome::New {
+                        version: "2.0".to_string(),
+                    },
+                    Vec::new(),
+                    Some("testrepo"),
+                    CandidateSource::Ebuild,
+                ),
+            ];
+            let owner = Some(("dev-libs".to_string(), "auinst".to_string()));
+            let top: HashSet<&str> = ["dev-libs/auinsttop"].into_iter().collect();
+            let got = autounmask_dep_chain(&owner, "dev-libs/auinst", &top, &entries, &dir);
+            assert_eq!(
+                got,
+                vec![
+                    "required by dev-libs/auinst-1.0::__unknown__".to_string(),
+                    "required by dev-libs/auinsttop-2.0::testrepo".to_string(),
+                    "required by dev-libs/auinsttop (argument)".to_string(),
+                ]
+            );
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn autounmask_dep_chain_164_self_requiring_parent_stops_after_its_row() {
+            // A parent whose `required_by` names itself cannot ascend
+            // (the `*next != cur` guard): the chain is just its own row.
+            // This pins the shape that makes `guard -> true` equivalent
+            // (see the #164 closeout): advancing onto itself re-breaks on
+            // the visited set with the identical chain.
+            let dir = slotundo_temp_dir("164-auc-self");
+            let entries = vec![entry_164(
+                "dev-libs",
+                "auself",
+                PretendOutcome::New {
+                    version: "1.0".to_string(),
+                },
+                vec![("dev-libs".to_string(), "auself".to_string())],
+                Some("testrepo"),
+                CandidateSource::Ebuild,
+            )];
+            let owner = Some(("dev-libs".to_string(), "auself".to_string()));
+            let top: HashSet<&str> = ["sys-apps/other"].into_iter().collect();
+            let got = autounmask_dep_chain(&owner, "dev-libs/auselfdep", &top, &entries, &dir);
+            assert_eq!(
+                got,
+                vec!["required by dev-libs/auself-1.0::testrepo".to_string()]
+            );
+            let _ = fs::remove_dir_all(&dir);
+        }
     }
 
     #[test]
