@@ -43354,6 +43354,128 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// Backlog #161 S6: a bare `:=` pull landing on a resolved slot
+    /// reuses it silently -- the satisfaction holds through the
+    /// operator and binding arms when nothing rebuilt shifts.
+    #[test]
+    fn run_pass_bare_slotop_pull_reuses_the_resolved_slot() {
+        let dir = slotundo_temp_dir("161-run-slotop");
+        let repo = blocker_161_scratch_repo(
+            &dir,
+            "dev-libs/consumerb",
+            "1.0",
+            "0",
+            "",
+            "dev-libs/prov",
+        );
+        blocker_161_write_pkg(&repo.location, "dev-libs/prov", "1.0", "0/1", "", "");
+        blocker_161_write_pkg(&repo.location, "dev-libs/prov", "2.0", "0/2", "", "");
+        blocker_161_write_pkg(
+            &repo.location,
+            "dev-libs/consumera",
+            "1.0",
+            "0",
+            "",
+            "dev-libs/prov:=",
+        );
+        let config = test_config();
+        // consumerb first resolves bare; consumera's `:=` then lands
+        // on the taken slot and reuses it.
+        let atoms = vec![
+            "dev-libs/consumera".to_string(),
+            "dev-libs/consumerb".to_string(),
+        ];
+        let opts = CtxOpts161 {
+            backtrack_max: 10,
+            atoms: atoms.clone(),
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, vec![repo], &opts);
+        let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+        assert!(
+            pass.slot_conflicts.iter().all(|sc| sc.package != "prov"),
+            "a rebuildable := reuses the resolved slot silently"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+    /// Backlog #161 S6: an auto-replace seed is not a top-level
+    /// argument -- it walks ownerless at depth 1 and never files an
+    /// `(Argument)` puller row. (Seeded alone, so no top-level visit
+    /// dedups it away first.)
+    #[test]
+    fn run_pass_replace_seed_files_no_argument_puller() {
+        let dir = slotundo_temp_dir("161-run-seed");
+        let d = dir.join("var/db/pkg/dev-libs/sounneed-1.0");
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        fs::write(d.join("SLOT"), "0/1\n").unwrap();
+        fs::write(d.join("repository"), "testrepo\n").unwrap();
+        fs::write(d.join("USE"), "\n").unwrap();
+        let config = test_config();
+        let repos = find_repos(&fixtures_root()).expect("fixture repos");
+        let atoms: Vec<String> = Vec::new();
+        let mut bp = BacktrackParams::default();
+        bp.slot_operator_replace_installed
+            .insert(("dev-libs".to_string(), "sounneed".to_string()));
+        let opts = CtxOpts161 {
+            backtrack_max: 10,
+            atoms: atoms.clone(),
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, repos, &opts);
+        let pass = run_pass(&ctx, &bp, true).expect("walk settles");
+        assert!(
+            pass.slot_pullers.is_empty(),
+            "a lone seed files no Argument pullers"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+    /// Backlog #161 S6: the trigger resolves its owner against the
+    /// walked entries by exact cp -- a same-category neighbour walking
+    /// first never supplies it.
+    #[test]
+    fn run_pass_trigger_matches_the_owner_entry_exactly() {
+        let dir = slotundo_temp_dir("161-run-misown");
+        let repos = blocker_161_scratch_repo(
+            &dir,
+            "dev-libs/depparent",
+            "1.0",
+            "0",
+            "",
+            "dev-libs/nosuchdep",
+        );
+        let config = test_config();
+        // A neighbour resolving elsewhere walks first, so a loosened
+        // owner lookup would build the wrong neg.
+        let atoms = vec![
+            "dev-libs/depparent".to_string(),
+            "dev-libs/sounneed".to_string(),
+        ];
+        let repos = {
+            let mut rs = find_repos(&fixtures_root()).expect("fixture repos");
+            rs.push(repos);
+            rs
+        };
+        let opts = CtxOpts161 {
+            backtrack_max: 10,
+            atoms: atoms.clone(),
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, repos, &opts);
+        let mut pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+        let trigger = pass.missing_dep_trigger.take().expect("trigger armed");
+        assert_eq!(
+            trigger,
+            (
+                ("dev-libs".to_string(), "depparent".to_string()),
+                "!=dev-libs/depparent-1.0".to_string(),
+                "dev-libs/nosuchdep".to_string(),
+            )
+        );
+        assert!(!pass.suppressed_nvc);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     /// recordered `USE`.
     fn slotundo_vdb(
         dir: &Path,
