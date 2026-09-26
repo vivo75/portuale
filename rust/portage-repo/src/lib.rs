@@ -42281,6 +42281,93 @@ mod tests {
     }
 
 
+    /// Backlog #161 S6: multiple atoms resolve in walk order (the
+    /// seed stack runs argv reversed) -- both merge.
+    #[test]
+    fn run_pass_resolves_multiple_atoms_in_order() {
+        let dir = slotundo_temp_dir("161-run-multi");
+        let atoms = vec![
+            "dev-libs/paired".to_string(),
+            "dev-libs/sounneed".to_string(),
+        ];
+        let pass = run_161(&dir, &atoms, false, &[], false, false, false, false);
+        let names: Vec<&str> = pass.entries.iter().map(|e| e.package.as_str()).collect();
+        assert_eq!(names, vec!["sounneed", "paired"]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: top-level atoms matched by `package.provided`
+    /// skip resolution and ride out sorted in argument order.
+    #[test]
+    fn run_pass_sorts_provided_atoms_in_argument_order() {
+        let dir = slotundo_temp_dir("161-run-prov");
+        let atoms = vec![
+            "dev-libs/paired".to_string(),
+            "dev-libs/sounneed".to_string(),
+        ];
+        let mut config = test_config();
+        config.package_provided = vec![
+            "dev-libs/paired-1.0".to_string(),
+            "dev-libs/sounneed-1.0".to_string(),
+        ];
+        let repos = find_repos(&fixtures_root()).expect("fixture repos");
+        let ctx = ctx_161(
+            &dir,
+            &config,
+            repos,
+            HashSet::new(),
+            10,
+            &NO_STRINGS_161,
+            &atoms,
+            false,
+            false,
+            false,
+            false,
+            false,
+            HashSet::new(),
+        );
+        let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+        assert!(pass.entries.is_empty());
+        assert_eq!(pass.pprovided_atoms, atoms);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: a use-dep the resolved USE satisfies (here
+    /// `[-wantdep]`, off by default and untouched by the profile)
+    /// resolves the atom normally.
+    #[test]
+    fn run_pass_satisfies_a_disabled_use_dep() {
+        let dir = slotundo_temp_dir("161-run-usedep");
+        let atoms = vec!["dev-libs/deepvdbusepkg[-wantdep]".to_string()];
+        let pass = run_161(&dir, &atoms, false, &[], false, false, false, false);
+        assert_eq!(pass.entries.len(), 1);
+        assert!(matches!(
+            pass.entries[0].outcome,
+            PretendOutcome::New { .. } | PretendOutcome::Reinstall { .. }
+        ));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: a use-dep nothing enables reports the atom
+    /// unsatisfiable instead of resolving.
+    #[test]
+    fn run_pass_reports_an_unenabled_use_dep_unsatisfied() {
+        let dir = slotundo_temp_dir("161-run-nouse");
+        let atoms = vec!["dev-libs/sounneed[soflag]".to_string()];
+        let pass = run_161(&dir, &atoms, false, &[], false, false, false, false);
+        assert!(
+            pass.entries.iter().all(|e| !matches!(
+                e.outcome,
+                PretendOutcome::New { .. }
+                    | PretendOutcome::Upgrade { .. }
+                    | PretendOutcome::Reinstall { .. }
+            )),
+            "no merge without the flag"
+        );
+        assert!(!pass.use_unsat_deps.is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     /// recordered `USE`.
     fn slotundo_vdb(
         dir: &Path,
