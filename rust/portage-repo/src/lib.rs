@@ -50235,4 +50235,247 @@ mod tests_163 {
             other => panic!("expected UnserializableCycle, got {other:?}"),
         }
     }
+    /// Fresh unique scratch dir per test (vdb + repo live under it, so
+    /// the per-root memo caches never see a reused path). Mirrors
+    /// `tests_162::dir_162`, which must stay untouched.
+    fn dir_163(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "portuale-163-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// Fixed "amd64"-only, no-overrides config, mirroring `tests_162`'
+    /// `cfg_162` (a `KEYWORDS="amd64"` scratch ebuild is always
+    /// visible).
+    fn cfg_163() -> portage_profile::Config {
+        portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            ..Default::default()
+        }
+    }
+
+    /// Same shape with a `REQUIRED_USE` line instead of `RDEPEND`
+    /// (the S2 parent-flip legs' writer).
+    fn write_pkg_163_ru(
+        repo: &Path,
+        cp: &str,
+        pv: &str,
+        slot: &str,
+        iuse: &str,
+        required_use: &str,
+    ) {
+        use md5::Digest as _;
+        use std::fmt::Write as _;
+        let (cat, pkg) = cp.split_once('/').expect("category/package");
+        let dir = repo.join(cat).join(pkg);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut body = format!(
+            "EAPI=8\nDESCRIPTION=\"163 result assembly\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\n"
+        );
+        if !iuse.is_empty() {
+            writeln!(body, "IUSE=\"{iuse}\"").unwrap();
+        }
+        if !required_use.is_empty() {
+            writeln!(body, "REQUIRED_USE=\"{required_use}\"").unwrap();
+        }
+        std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
+        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+        let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=163 result assembly\nEAPI=8\n".to_string();
+        if !iuse.is_empty() {
+            writeln!(entry, "IUSE={iuse}").unwrap();
+        }
+        if !required_use.is_empty() {
+            writeln!(entry, "REQUIRED_USE={required_use}").unwrap();
+        }
+        writeln!(entry, "KEYWORDS=amd64\nSLOT={slot}\n_md5_={md5}").unwrap();
+        let cachedir = repo.join("metadata/md5-cache").join(cat);
+        std::fs::create_dir_all(&cachedir).unwrap();
+        std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+    }
+
+    /// Same shape with `(cp, version, slot, iuse, required_use)`
+    /// ebuilds (the S2 parent-flip legs' repo).
+    fn repo_pkgs_163_ru(dir: &Path, pkgs: &[(&str, &str, &str, &str, &str)]) -> Vec<RepoConfig> {
+        let repo = dir.join("repo");
+        for (cp, pv, slot, iuse, required_use) in pkgs {
+            write_pkg_163_ru(&repo, cp, pv, slot, iuse, required_use);
+        }
+        vec![RepoConfig {
+            name: "testrepo".to_string(),
+            location: repo,
+            priority: 0,
+            is_main: true,
+            masters: vec![],
+            profile_formats: vec![],
+            cache_formats: vec![],
+            aliases: vec![],
+            sync_type: None,
+            sync_uri: None,
+            volatile: false,
+            module_specific_options: vec![],
+        }]
+    }
+
+    fn owner_163(cat: &str, pkg: &str) -> (String, String) {
+        (cat.to_string(), pkg.to_string())
+    }
+
+    // ---- S2: `use_unsat_parent_row` (real `_show_unsatisfied_dep`'s
+    // parent-flag flip row, `depgraph.py:6756-6846`: the requesting
+    // parent flips its own USE to satisfy a conditional use-dep). ----
+
+    /// A conditional use-dep on a flag the parent has off suggests
+    /// `+flag` with the parent's cpv. Kills the whole-body `None` row
+    /// and every whole-body `Some` row with a wrong value, plus the
+    /// `!flag_is_settable` deletion (which returns `None` here).
+    #[test]
+    fn use_unsat_parent_row_suggests_enabling_an_off_flag() {
+        let dir = dir_163("parent-on");
+        let repos = repo_pkgs_163_ru(&dir, &[("dev-libs/parent", "1.0", "0", "flipme", "")]);
+        let config = cfg_163();
+        let entries = vec![entry_163("dev-libs", "parent", new_163("1.0"), &[])];
+        assert_eq!(
+            use_unsat_parent_row(
+                &repos,
+                &entries,
+                "dev-libs/child[flipme?]",
+                Some(&owner_163("dev-libs", "parent")),
+                &config,
+            ),
+            Some((
+                "dev-libs/parent-1.0::testrepo".to_string(),
+                vec!["Change USE: +flipme".to_string()],
+            ))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A conditional use-dep on a default-on flag the parent has on
+    /// suggests `-flag`. Kills the `!parent_use.contains` deletion in
+    /// the other direction (which suggests `+flag` here).
+    #[test]
+    fn use_unsat_parent_row_suggests_disabling_an_on_flag() {
+        let dir = dir_163("parent-off");
+        let repos = repo_pkgs_163_ru(&dir, &[("dev-libs/parent", "1.0", "0", "+keepoff", "")]);
+        let config = cfg_163();
+        let entries = vec![entry_163("dev-libs", "parent", new_163("1.0"), &[])];
+        assert_eq!(
+            use_unsat_parent_row(
+                &repos,
+                &entries,
+                "dev-libs/child[keepoff?]",
+                Some(&owner_163("dev-libs", "parent")),
+                &config,
+            ),
+            Some((
+                "dev-libs/parent-1.0::testrepo".to_string(),
+                vec!["Change USE: -keepoff".to_string()],
+            ))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// No owner, and a display atom with no conditional use-deps, both
+    /// return `None` (the `owner?` early return and the empty-flags
+    /// early return).
+    #[test]
+    fn use_unsat_parent_row_returns_none_without_an_owner_or_conditional_flags() {
+        let dir = dir_163("parent-none");
+        let repos = repo_pkgs_163_ru(&dir, &[("dev-libs/parent", "1.0", "0", "flipme", "")]);
+        let config = cfg_163();
+        let entries = vec![entry_163("dev-libs", "parent", new_163("1.0"), &[])];
+        assert_eq!(
+            use_unsat_parent_row(&repos, &entries, "dev-libs/child[flipme?]", None, &config,),
+            None
+        );
+        assert_eq!(
+            use_unsat_parent_row(
+                &repos,
+                &entries,
+                "dev-libs/child[flipme]",
+                Some(&owner_163("dev-libs", "parent")),
+                &config,
+            ),
+            None
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A flip that would newly violate the parent's `REQUIRED_USE`
+    /// appends the violation note. Kills the `!new_sat` deletion
+    /// (which drops the note here) and the `!is_empty` deletion of
+    /// the `REQUIRED_USE` gate (which skips the check for a
+    /// non-empty constraint and drops the note too).
+    #[test]
+    fn use_unsat_parent_row_notes_a_newly_violated_required_use() {
+        let dir = dir_163("parent-req");
+        let repos = repo_pkgs_163_ru(
+            &dir,
+            &[(
+                "dev-libs/parent",
+                "1.0",
+                "0",
+                "flipme other",
+                "flipme? ( other )",
+            )],
+        );
+        let config = cfg_163();
+        let entries = vec![entry_163("dev-libs", "parent", new_163("1.0"), &[])];
+        assert_eq!(
+            use_unsat_parent_row(
+                &repos,
+                &entries,
+                "dev-libs/child[flipme?]",
+                Some(&owner_163("dev-libs", "parent")),
+                &config,
+            ),
+            Some((
+                "dev-libs/parent-1.0::testrepo".to_string(),
+                vec!["Change USE: +flipme, this change violates use flag constraints defined by dev-libs/parent-1.0: 'flipme? ( other )'".to_string()],
+            ))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A flip that keeps `REQUIRED_USE` satisfied carries no note: the
+    /// `&&` conjunction must not fire on `old_sat` alone. Kills the
+    /// `&&` -> `||` flip of the violation gate (which appends the note
+    /// here).
+    #[test]
+    fn use_unsat_parent_row_omits_the_note_when_required_use_stays_satisfied() {
+        let dir = dir_163("parent-req-ok");
+        let repos = repo_pkgs_163_ru(
+            &dir,
+            &[(
+                "dev-libs/parent",
+                "1.0",
+                "0",
+                "flipme",
+                "flipme? ( flipme )",
+            )],
+        );
+        let config = cfg_163();
+        let entries = vec![entry_163("dev-libs", "parent", new_163("1.0"), &[])];
+        assert_eq!(
+            use_unsat_parent_row(
+                &repos,
+                &entries,
+                "dev-libs/child[flipme?]",
+                Some(&owner_163("dev-libs", "parent")),
+                &config,
+            ),
+            Some((
+                "dev-libs/parent-1.0::testrepo".to_string(),
+                vec!["Change USE: +flipme".to_string()],
+            ))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
