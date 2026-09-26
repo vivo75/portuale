@@ -1995,11 +1995,32 @@ fn run_bundle_stage(
 
 // --- Client merge (slice 4) ----------------------------------------------------
 
-/// Shared `export` block for any hook run (new phases in `phase_script`,
-/// old prerm/postrm inside the merge driver): path overrides with
+/// Real `eapi_exports_merge_type` (`lib/portage/eapi.py:63`, attrs table
+/// `:300`: `exports_merge_type = eapi >= Eapi("4")`): `MERGE_TYPE` reaches
+/// the phase env only for EAPI 4+ (real `config.py:3335-3336` pops it
+/// otherwise). An unsupported or unparseable EAPI takes real's
+/// `_get_eapi_attrs` fallback row (`eapi.py:247-258`), which exports.
+fn eapi_exports_merge_type(eapi: &str) -> bool {
+    // Real tests the *whole* string against `_supported_eapis`; anything
+    // that is not a plain supported number (e.g. `3-foo`) takes the
+    // exporting fallback row.
+    match eapi.trim().parse::<u32>() {
+        Ok(n) => n >= 4,
+        Err(_) => true,
+    }
+}
+
+/// `export` block for the new instance's phase script (`phase_script`;
+/// the replaced instance's prerm/postrm go through the merge driver's own
+/// `run_old_hook`, which deliberately exports no `MERGE_TYPE`: real's
+/// unmerge re-creates the old instance's settings, `vartree.py:4535-4540`,
+/// and never passes through the scheduler that sets it): path overrides with
 /// caller-side values, everything else from the sourced saved env.
 /// `unit_bin` is the shipped runtime dir (`$UNIT/bin`,
 /// `$OLD_TMP/bin` symlink or copy -- callers decide).
+/// `MERGE_TYPE=binary` rides the same line as `EMERGE_FROM` (real
+/// `_emerge/Binpkg.py:92` sets it for every binpkg merge; `mrg` only
+/// merges binpkgs), gated on [`eapi_exports_merge_type`].
 #[allow(clippy::too_many_arguments)]
 fn phase_exports(
     ebuild: &str,
@@ -2031,8 +2052,13 @@ fn phase_exports(
             "export PORTAGE_COLORMAP={colormap}\n",
             "export PORTAGE_TMPDIR={tmpdir}\n",
             "export SANDBOX_LOG={temp}/sandbox.log\n",
-            "export EBUILD_PHASE={phase} EMERGE_FROM=binary\n",
+            "export EBUILD_PHASE={phase} EMERGE_FROM=binary{merge_type}\n",
         ),
+        merge_type = if eapi_exports_merge_type(&staged.eapi) {
+            " MERGE_TYPE=binary"
+        } else {
+            ""
+        },
         eapi = sh_quote(&staged.eapi),
         category = sh_quote(&staged.category),
         pn = sh_quote(&staged.pn),
@@ -3703,6 +3729,79 @@ mod tests {
 "
         );
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #172: `phase_exports` carries `MERGE_TYPE=binary` exactly
+    /// when real's `eapi_exports_merge_type` holds.
+    #[test]
+    fn phase_exports_gates_merge_type_on_eapi() {
+        // Real `_emerge/Binpkg.py:92` sets `MERGE_TYPE=binary` for a binpkg
+        // merge, and real `config.environ()` (`config.py:3335-3336`) exports
+        // it only when `eapi_exports_merge_type` holds (EAPI >= 4,
+        // `eapi.py:300`). Bed `l31-20260926T061556Z` shows real appending
+        // `merge_type=binary` x4 (322 B) where mrg wrote `?` x4 (302 B).
+        // `mrg` only merges binpkgs, so `binary` is the only value.
+        fn exports_for(eapi: &str) -> String {
+            let staged = crate::remote_bundle::StagedBundle {
+                tarball: std::path::PathBuf::from("/tmp/bundle.tar"),
+                byte_count: 0,
+                manifest: crate::remote_bundle::BundleManifest {
+                    format: 1,
+                    cpv: "dev-libs/probe-1.0".to_string(),
+                    slot: "0".to_string(),
+                    repo: "test".to_string(),
+                    has_environment: false,
+                },
+                eapi: eapi.to_string(),
+                category: "dev-libs".to_string(),
+                pn: "probe".to_string(),
+                pv: "1.0".to_string(),
+                pr: "r0".to_string(),
+                pvr: "1.0".to_string(),
+                p: "probe-1.0".to_string(),
+                pf: "probe-1.0".to_string(),
+                phases: Vec::new(),
+                postinst_defined: false,
+            };
+            phase_exports(
+                "/tmp/work/build-info/probe-1.0.ebuild",
+                "/tmp/work",
+                "/",
+                "/tmp/work/image",
+                "/tmp/work/temp",
+                "/tmp/work/work",
+                "/tmp/work/homedir",
+                "/tmp/work/files",
+                "/tmp/work/bin",
+                "/tmp",
+                "",
+                &staged,
+                "setup",
+            )
+        }
+        assert!(eapi_exports_merge_type("4"));
+        assert!(eapi_exports_merge_type("8"));
+        assert!(!eapi_exports_merge_type("0"));
+        assert!(!eapi_exports_merge_type("3"));
+        assert!(!eapi_exports_merge_type("2"));
+        assert!(eapi_exports_merge_type("5"));
+        assert!(eapi_exports_merge_type("9"));
+        assert!(eapi_exports_merge_type("3-foo"));
+        assert!(eapi_exports_merge_type("bogus"));
+        let exporting = exports_for("8");
+        assert!(
+            exporting.contains("export EBUILD_PHASE=setup EMERGE_FROM=binary MERGE_TYPE=binary\n"),
+            "EAPI 8 must export MERGE_TYPE=binary:\n{exporting}"
+        );
+        let gated = exports_for("3");
+        assert!(
+            !gated.contains("MERGE_TYPE"),
+            "EAPI 3 must not export MERGE_TYPE:\n{gated}"
+        );
+        assert!(
+            gated.contains("export EBUILD_PHASE=setup EMERGE_FROM=binary\n"),
+            "EAPI 3 keeps the bare EMERGE_FROM line:\n{gated}"
+        );
     }
 
     /// Positive pretend dispatch through the real stack: a synthetic unit
