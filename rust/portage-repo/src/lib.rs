@@ -48454,3 +48454,1477 @@ mod tests {
         );
     }
 }
+
+/// Backlog #162 (`lib.rs` mutation cluster 2): direct unit tests for the
+/// eight pure selection predicates P7b's `cargo mutants` run left missed
+/// (`TEST/findings/mutants.md` "## `portage-repo/src/lib.rs`", ~102
+/// missed). Each test observes the predicate's own return value -- no
+/// end-to-end contract reproduction -- so every in-body operator flip
+/// changes an asserted outcome. Kept self-contained (own config, scratch
+/// repo/vdb/entry helpers) so the other Track U branches' blocks rebase
+/// mechanically.
+#[cfg(test)]
+mod tests_162 {
+    use super::*;
+
+    // ---- S1: `bare_cp` (real `3rdparty/portage/lib/portage/update.py`
+    // `parse_updates`: `atom.blocker or atom != atom.cp` rejects
+    // everything but a bare `cat/pkg`; the `slotmove` slot side is
+    // `valid_slot_name`'s job, not this predicate's). ----
+
+    /// `bare_cp` keeps the `(category, package)` of a plain `cat/pkg`
+    /// -- the whole-body `None`/`Some((...)` mutants all fail here.
+    #[test]
+    fn bare_cp_accepts_a_plain_cat_pkg() {
+        assert_eq!(
+            bare_cp("dev-libs/foo"),
+            Some(("dev-libs".to_string(), "foo".to_string()))
+        );
+        assert_eq!(
+            bare_cp("sys-apps/portage"),
+            Some(("sys-apps".to_string(), "portage".to_string()))
+        );
+    }
+
+    /// `bare_cp` rejects each non-bare form individually, so every
+    /// `||`-arm flip (`||` -> `&&` returns `Some` for a
+    /// single-violation input) and both `!=` flips fail here.
+    #[test]
+    fn bare_cp_rejects_every_non_bare_form() {
+        for rejected in [
+            "!dev-libs/foo",
+            "!!dev-libs/foo",
+            ">=dev-libs/foo-1.0",
+            "=dev-libs/foo-1.0",
+            "dev-libs/foo-1.0",
+            "dev-libs/foo:0",
+            "dev-libs/foo:=",
+            "dev-libs/foo[bar]",
+            "dev-libs/foo::gentoo",
+            "not an atom at all !!!",
+        ] {
+            assert_eq!(bare_cp(rejected), None, "{rejected}");
+        }
+    }
+
+    /// Fresh unique scratch dir per test (vdb + repo live under it, so
+    /// the per-root memo caches never see a reused path).
+    fn dir_162(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "portuale-162-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// One installed instance under `<root>/var/db/pkg` with the given
+    /// `SLOT` plus caller-supplied field files (`USE`, `IUSE`, ...).
+    fn install_162(root: &Path, cat: &str, pf: &str, slot: &str, files: &[(&str, &[u8])]) {
+        let d = root.join("var/db/pkg").join(cat).join(pf);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+        for (name, bytes) in files {
+            std::fs::write(d.join(name), bytes).unwrap();
+        }
+    }
+
+    fn atoms_162(atoms: &[&str]) -> Vec<String> {
+        atoms.iter().map(|a| a.to_string()).collect()
+    }
+
+    // ---- S2: `clean_selection` (real `emerge --prune --nodeps`
+    // selection, `3rdparty/portage` `unmerge.py` `_unmerge_display`:
+    // every cp with more than one matched version keeps the highest
+    // and selects the rest). ----
+
+    /// Scratch vdb for the `clean_selection` legs: `multi` spans two
+    /// versions in one slot, `single` has one (skipped), `spread`
+    /// spans two versions in each of two slots.
+    fn clean_root_162() -> PathBuf {
+        let root = dir_162("clean");
+        install_162(&root, "dev-libs", "multi-1.0", "0", &[]);
+        install_162(&root, "dev-libs", "multi-2.0", "0", &[]);
+        install_162(&root, "dev-libs", "single-1.0", "0", &[]);
+        install_162(&root, "dev-libs", "spread-1.0", "0", &[]);
+        install_162(&root, "dev-libs", "spread-2.0", "0", &[]);
+        install_162(&root, "dev-libs", "spread-3.0", "1", &[]);
+        install_162(&root, "dev-libs", "spread-4.0", "1", &[]);
+        root
+    }
+
+    /// Empty args walk every installed cp: `multi` keeps 2.0, `spread`
+    /// keeps 4.0 across both slots, the single-version cp is skipped.
+    /// Kills the whole-body `vec![]` row, the three
+    /// `versions.len() < 2` flips and the cross-slot best flip.
+    #[test]
+    fn clean_selection_reports_every_multi_version_cp() {
+        let root = clean_root_162();
+        let out = clean_selection(&root, &[]);
+        assert_eq!(out.len(), 2, "{out:?}");
+        assert_eq!(out[0].category, "dev-libs");
+        assert_eq!(out[0].package, "multi");
+        assert_eq!(out[0].best_version, "2.0");
+        assert_eq!(out[0].other_versions, vec!["1.0".to_string()]);
+        assert_eq!(out[1].package, "spread");
+        assert_eq!(out[1].best_version, "4.0");
+        assert_eq!(
+            out[1].other_versions,
+            vec!["1.0".to_string(), "3.0".to_string()]
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A version-range atom restricts the best/rest split to its own
+    /// match set, and a cp mismatch filters everything out -- the
+    /// `==` flips on the atom/cp guard fail here.
+    #[test]
+    fn clean_selection_version_pinned_atom_selects_only_its_set() {
+        let root = clean_root_162();
+        let out = clean_selection(&root, &atoms_162(&[">=dev-libs/multi-1.0"]));
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(out[0].best_version, "2.0");
+        assert_eq!(out[0].other_versions, vec!["1.0".to_string()]);
+        let out = clean_selection(&root, &atoms_162(&["dev-libs/nonexistent"]));
+        assert!(out.is_empty(), "{out:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// An atom matching nothing installed selects nothing: the
+    /// `parse && match` flip (`&&` -> `||` admits the cp-matched but
+    /// version-missed package) and the `!is_empty` deletion (which
+    /// admits it the other way round) both fail here.
+    #[test]
+    fn clean_selection_impossible_version_matches_nothing() {
+        let root = clean_root_162();
+        let out = clean_selection(&root, &atoms_162(&["=dev-libs/multi-3.0"]));
+        assert!(out.is_empty(), "{out:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Minimal merge-bound `GraphEntry` for the predicate legs (slot
+    /// and `new_slot` as the leg needs; everything display-side left
+    /// at its empty default).
+    fn entry_162(
+        cat: &str,
+        pkg: &str,
+        outcome: PretendOutcome,
+        slot: Option<&str>,
+        new_slot: bool,
+    ) -> GraphEntry {
+        GraphEntry {
+            discovery: 0,
+            category: cat.to_string(),
+            package: pkg.to_string(),
+            outcome,
+            blockers: Vec::new(),
+            slot: slot.map(str::to_string),
+            sub_slot: slot.map(str::to_string),
+            repo_name: Some("testrepo".to_string()),
+            oldbest: Vec::new(),
+            use_flags_display: Vec::new(),
+            use_expand_display: Vec::new(),
+            use_expand_display_p: Vec::new(),
+            keyword_mask: None,
+            new_slot,
+            interactive: false,
+            fetch_restrict: false,
+            fetch_restrict_satisfied: false,
+            download_files: Vec::new(),
+            required_by: Vec::new(),
+            source: CandidateSource::Ebuild,
+            provenance: VisibilityProvenance::default(),
+            keyword_suggestion: None,
+            use_suggestion: None,
+            parent_use_suggestion: None,
+            targets_running_root: false,
+            remote_binary: false,
+            build_id: None,
+            deps: Vec::new(),
+        }
+    }
+
+    // ---- S3: `complete_graph_auto_enable` (the `--complete` re-walk
+    // trigger: an `Upgrade`/`Downgrade`, a new-slot `New`, or a
+    // `Reinstall` with USE/slot churn enables it). ----
+
+    /// Any `Upgrade`/`Downgrade` enables when `if_new_ver` is set, and
+    /// neither does when it is not -- the deleted `Reinstall`-arm
+    /// neighbour legs live below; both whole-body rows (already
+    /// S0-caught) fail here too.
+    #[test]
+    fn complete_graph_auto_enable_upgrade_and_downgrade_follow_if_new_ver() {
+        let entries = vec![
+            entry_162(
+                "dev-libs",
+                "up",
+                PretendOutcome::Upgrade {
+                    from: "1.0".to_string(),
+                    to: "2.0".to_string(),
+                },
+                Some("0"),
+                false,
+            ),
+            entry_162(
+                "dev-libs",
+                "down",
+                PretendOutcome::Downgrade {
+                    from: "2.0".to_string(),
+                    to: "1.0".to_string(),
+                },
+                Some("0"),
+                false,
+            ),
+        ];
+        assert!(complete_graph_auto_enable(&entries, true, true, true));
+        assert!(complete_graph_auto_enable(&entries, false, true, false));
+        assert!(!complete_graph_auto_enable(&entries, true, false, true));
+        assert!(!complete_graph_auto_enable(&entries, false, false, false));
+    }
+
+    /// A new-slot `New` enables on `if_new_ver` or `if_new_slot`
+    /// alone; a same-slot `New` never does even with every flag set --
+    /// the `e.new_slot` guard flips and the `||` -> `&&` flip fail
+    /// here.
+    #[test]
+    fn complete_graph_auto_enable_new_only_for_a_new_slot() {
+        let new_slot = vec![entry_162(
+            "dev-libs",
+            "fresh",
+            PretendOutcome::New {
+                version: "1.0".to_string(),
+            },
+            Some("1"),
+            true,
+        )];
+        assert!(complete_graph_auto_enable(&new_slot, false, false, true));
+        assert!(complete_graph_auto_enable(&new_slot, false, true, false));
+        assert!(!complete_graph_auto_enable(&new_slot, false, false, false));
+        let same_slot = vec![entry_162(
+            "dev-libs",
+            "fresh",
+            PretendOutcome::New {
+                version: "1.0".to_string(),
+            },
+            Some("0"),
+            false,
+        )];
+        assert!(!complete_graph_auto_enable(&same_slot, true, true, true));
+    }
+
+    /// A `Reinstall` with USE churn enables on `if_new_use`, one with
+    /// a slot change on `if_new_ver`, and a churn-free one never does
+    /// -- the deleted `Reinstall` arm, the `||` -> `&&` flip and the
+    /// `!changed_flags` deletion fail here.
+    #[test]
+    fn complete_graph_auto_enable_reinstall_needs_churn() {
+        let use_churn = |changed: Vec<String>| {
+            entry_162(
+                "dev-libs",
+                "re",
+                PretendOutcome::Reinstall {
+                    version: "1.0".to_string(),
+                    changed_flags: changed,
+                    deps_changed: false,
+                    slot_changed: false,
+                    rebuilt_binary: false,
+                    new_repo: false,
+                    slot_operator_rebuild: false,
+                },
+                Some("0"),
+                false,
+            )
+        };
+        assert!(complete_graph_auto_enable(
+            &[use_churn(vec!["flip".to_string()])],
+            true,
+            false,
+            false
+        ));
+        assert!(!complete_graph_auto_enable(
+            &[use_churn(vec!["flip".to_string()])],
+            false,
+            false,
+            false
+        ));
+        assert!(!complete_graph_auto_enable(
+            &[use_churn(Vec::new())],
+            true,
+            false,
+            false
+        ));
+    }
+
+    /// A `Reinstall` with only a slot change enables on `if_new_ver`
+    /// alone, and the crossed shape (USE churn without `if_new_use`,
+    /// slot change without `if_new_ver`) stays off -- the two
+    /// remaining `&&`/`||` flips fail here.
+    #[test]
+    fn complete_graph_auto_enable_reinstall_slot_change_needs_if_new_ver() {
+        let slot_churn = entry_162(
+            "dev-libs",
+            "re",
+            PretendOutcome::Reinstall {
+                version: "1.0".to_string(),
+                changed_flags: Vec::new(),
+                deps_changed: false,
+                slot_changed: true,
+                rebuilt_binary: false,
+                new_repo: false,
+                slot_operator_rebuild: false,
+            },
+            Some("0"),
+            false,
+        );
+        assert!(!complete_graph_auto_enable(
+            std::slice::from_ref(&slot_churn),
+            true,
+            false,
+            false
+        ));
+        assert!(complete_graph_auto_enable(
+            std::slice::from_ref(&slot_churn),
+            false,
+            true,
+            false
+        ));
+        assert!(!complete_graph_auto_enable(
+            &[slot_churn],
+            false,
+            false,
+            false
+        ));
+        let crossed = entry_162(
+            "dev-libs",
+            "re",
+            PretendOutcome::Reinstall {
+                version: "1.0".to_string(),
+                changed_flags: vec!["flip".to_string()],
+                deps_changed: false,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: false,
+                slot_operator_rebuild: false,
+            },
+            Some("0"),
+            false,
+        );
+        assert!(!complete_graph_auto_enable(&[crossed], false, true, false));
+    }
+
+    /// Settled entries never enable, whatever the flags -- pins the
+    /// `_ => false` arm the mutants never touch.
+    #[test]
+    fn complete_graph_auto_enable_settled_entries_stay_off() {
+        let entries = vec![
+            entry_162(
+                "dev-libs",
+                "kept",
+                PretendOutcome::AlreadyInstalled {
+                    version: "1.0".to_string(),
+                },
+                None,
+                false,
+            ),
+            entry_162(
+                "dev-libs",
+                "gone",
+                PretendOutcome::NoVisibleCandidate,
+                None,
+                false,
+            ),
+        ];
+        assert!(!complete_graph_auto_enable(&entries, true, true, true));
+    }
+
+    /// Fixed "amd64"-only, no-overrides config, mirroring `tests`'
+    /// own `test_config` (visibility is pinned the same way so a
+    /// `KEYWORDS="amd64"` scratch ebuild is always visible).
+    fn cfg_162() -> portage_profile::Config {
+        portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            ..Default::default()
+        }
+    }
+
+    /// Direct `Candidate` literal for the visibility-free legs (mirrors
+    /// the existing `candidate()` helper's full field set).
+    fn cand_162(version: &str, keywords: &[&str], slot: &str) -> Candidate {
+        Candidate {
+            version: version.to_string(),
+            keywords: keywords.iter().map(|s| s.to_string()).collect(),
+            slot: slot.to_string(),
+            sub_slot: slot.to_string(),
+            repo_location: PathBuf::new(),
+            repo_priority: 0,
+            repo_name: "test".to_string(),
+            license: String::new(),
+            iuse: String::new(),
+            properties: String::new(),
+            restrict: String::new(),
+            source: CandidateSource::Ebuild,
+            binary_use: None,
+            remote: false,
+            build_id: None,
+            build_time: None,
+            binary_deps: HashMap::new(),
+        }
+    }
+
+    // ---- S4: `check_if_latest_atom_form` (the autounmask atom
+    // wording: `>=cpv` when nothing is higher, `>=cpv:slot` when only
+    // other slots are, `=cpv` when the same slot has more). ----
+
+    /// Nothing higher anywhere renders the bare `>=cpv` -- the
+    /// whole-body rows (already S0-caught) plus the outer `!higher`
+    /// deletion and the `&&` widening inside the probe fail here.
+    #[test]
+    fn check_if_latest_atom_form_renders_gte_when_nothing_is_higher() {
+        let config = cfg_162();
+        let resolved = cand_162("2.0", &["amd64"], "0");
+        let all = vec![
+            cand_162("1.0", &["amd64"], "0"),
+            cand_162("2.0", &["amd64"], "0"),
+        ];
+        assert_eq!(
+            check_if_latest_atom_form(&resolved, &all, "test", "pkg", &config, false),
+            ">=test/pkg-2.0"
+        );
+    }
+
+    /// A higher version in another slot only renders `>=cpv:slot` --
+    /// the `||` narrowing, the `Greater` flip and the inner `!higher`
+    /// deletion fail here.
+    #[test]
+    fn check_if_latest_atom_form_renders_slot_when_only_other_slots_are_higher() {
+        let config = cfg_162();
+        let resolved = cand_162("2.0", &["amd64"], "0");
+        let all = vec![
+            cand_162("2.0", &["amd64"], "0"),
+            cand_162("3.0", &["amd64"], "1"),
+        ];
+        assert_eq!(
+            check_if_latest_atom_form(&resolved, &all, "test", "pkg", &config, false),
+            ">=test/pkg-2.0:0"
+        );
+    }
+
+    /// A higher version in the same slot renders `=cpv` -- the
+    /// `!same_slot` deletion and the same-slot `Greater` flip fail
+    /// here.
+    #[test]
+    fn check_if_latest_atom_form_renders_equals_when_its_slot_is_higher() {
+        let config = cfg_162();
+        let resolved = cand_162("2.0", &["amd64"], "0");
+        let all = vec![
+            cand_162("2.0", &["amd64"], "0"),
+            cand_162("2.5", &["amd64"], "0"),
+        ];
+        assert_eq!(
+            check_if_latest_atom_form(&resolved, &all, "test", "pkg", &config, false),
+            "=test/pkg-2.0"
+        );
+    }
+
+    /// With visibility checking on, a keyword-masked higher candidate
+    /// does not count -- the visibility `&&` widening and the
+    /// `!check_visibility` deletion (masked side) fail here.
+    #[test]
+    fn check_if_latest_atom_form_ignores_a_masked_higher_candidate() {
+        let config = cfg_162();
+        let resolved = cand_162("2.0", &["amd64"], "0");
+        let all = vec![
+            cand_162("2.0", &["amd64"], "0"),
+            cand_162("3.0", &["~amd64"], "1"),
+        ];
+        assert_eq!(
+            check_if_latest_atom_form(&resolved, &all, "test", "pkg", &config, true),
+            ">=test/pkg-2.0"
+        );
+    }
+
+    /// With visibility checking off, that same masked candidate counts
+    /// again -- the `||` narrowing and the `!check_visibility`
+    /// deletion (unmasked side) fail here.
+    #[test]
+    fn check_if_latest_atom_form_counts_a_masked_candidate_without_visibility() {
+        let config = cfg_162();
+        let resolved = cand_162("2.0", &["amd64"], "0");
+        let all = vec![
+            cand_162("2.0", &["amd64"], "0"),
+            cand_162("3.0", &["~amd64"], "1"),
+        ];
+        assert_eq!(
+            check_if_latest_atom_form(&resolved, &all, "test", "pkg", &config, false),
+            ">=test/pkg-2.0:0"
+        );
+    }
+
+    /// Single scratch repo in the #161 `blocker_161` shape (name
+    /// `testrepo`, priority 0, main) holding `(cp, version, slot, iuse)`
+    /// ebuilds with `KEYWORDS="amd64"`.
+    fn repo_pkgs_162(dir: &Path, pkgs: &[(&str, &str, &str, &str)]) -> Vec<RepoConfig> {
+        let repo = dir.join("repo");
+        for (cp, pv, slot, iuse) in pkgs {
+            write_pkg_162(&repo, cp, pv, slot, iuse);
+        }
+        vec![RepoConfig {
+            name: "testrepo".to_string(),
+            location: repo,
+            priority: 0,
+            is_main: true,
+            masters: vec![],
+            profile_formats: vec![],
+            cache_formats: vec![],
+            aliases: vec![],
+            sync_type: None,
+            sync_uri: None,
+            volatile: false,
+            module_specific_options: vec![],
+        }]
+    }
+
+    /// One scratch ebuild plus its real md5-cache entry (the
+    /// md5-cache validation guard fails otherwise), in the #161
+    /// `blocker_161_write_pkg_full` shape with an `IUSE` line.
+    fn write_pkg_162(repo: &Path, cp: &str, pv: &str, slot: &str, iuse: &str) {
+        use md5::Digest as _;
+        use std::fmt::Write as _;
+        let (cat, pkg) = cp.split_once('/').expect("category/package");
+        let dir = repo.join(cat).join(pkg);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut body = format!(
+            "EAPI=8\nDESCRIPTION=\"162 selection predicates\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\n"
+        );
+        if !iuse.is_empty() {
+            writeln!(body, "IUSE=\"{iuse}\"").unwrap();
+        }
+        std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
+        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+        let mut entry =
+            "DEFINED_PHASES=-\nDESCRIPTION=162 selection predicates\nEAPI=8\n".to_string();
+        if !iuse.is_empty() {
+            writeln!(entry, "IUSE={iuse}").unwrap();
+        }
+        writeln!(entry, "KEYWORDS=amd64\nSLOT={slot}\n_md5_={md5}").unwrap();
+        let cachedir = repo.join("metadata/md5-cache").join(cat);
+        std::fs::create_dir_all(&cachedir).unwrap();
+        std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+    }
+
+    /// One queued-but-unresolved atom for the `#90 (S1)` drain-state
+    /// legs (`atoms_all_in_graph`'s `queued_cps` shortcut).
+    fn qatom_162(atom: &str) -> QueueItem {
+        QueueItem {
+            atom: atom.to_string(),
+            depth: 0,
+            owner: None,
+            unevaluated: None,
+            buildtime_hard: false,
+        }
+    }
+
+    fn self_162(cat: &str, pkg: &str) -> (String, String) {
+        (cat.to_string(), pkg.to_string())
+    }
+
+    // ---- S5: `disjunction_preference` (real `dep_check.py`
+    // `dep_zapdeps`' whole choice-bin classification, soft 449-523 and
+    // 599-724: `Unsatisfiable` < `Other` < `OtherInstalledAnySlot` <
+    // `OtherInstalledSome` < `OtherInstalled` < `UnsatUseNonInstalled` <
+    // `UnsatUseInstalled` < `UnsatUseInGraph` < `Available` <
+    // `Installed`). `self_cp` is a non-tree consumer everywhere except
+    // the circular legs. ----
+
+    fn disj_162(
+        repos: &[RepoConfig],
+        config: &portage_profile::Config,
+        root: &Path,
+        entries: &[GraphEntry],
+        self_cp: &(String, String),
+        atoms: &[&str],
+        queued: &[QueueItem],
+    ) -> portage_use_reduce::AltPreference {
+        disjunction_preference(
+            repos,
+            config,
+            root,
+            entries,
+            self_cp,
+            &HashMap::new(),
+            None,
+            &atoms_162(atoms),
+            queued,
+            false,
+        )
+    }
+
+    /// A resolvable but uninstalled alternative ranks `Available` --
+    /// the `avail || running_root` narrowing, the `!avail` deletion,
+    /// the `!all_available` deletion and the whole-body `Default`
+    /// (which is `Unsatisfiable`) fail here.
+    #[test]
+    fn disjunction_preference_ranks_a_fresh_alternative_available() {
+        let dir = dir_162("disj-avail");
+        let repos = repo_pkgs_162(&dir, &[("test/pkgA", "1.0", "0", "")]);
+        let config = cfg_162();
+        assert_eq!(
+            disj_162(
+                &repos,
+                &config,
+                &dir,
+                &[],
+                &self_162("test", "consumer"),
+                &["test/pkgA"],
+                &[]
+            ),
+            portage_use_reduce::AltPreference::Available
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An installed alternative ranks `Installed` -- the
+    /// `installed || in_graph` narrowing fails here.
+    #[test]
+    fn disjunction_preference_ranks_an_installed_alternative_installed() {
+        let dir = dir_162("disj-inst");
+        let repos = repo_pkgs_162(&dir, &[("test/pkgA", "1.0", "0", "")]);
+        install_162(&dir, "test", "pkgA-1.0", "0", &[]);
+        let config = cfg_162();
+        assert_eq!(
+            disj_162(
+                &repos,
+                &config,
+                &dir,
+                &[],
+                &self_162("test", "consumer"),
+                &["test/pkgA"],
+                &[]
+            ),
+            portage_use_reduce::AltPreference::Installed
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An alternative on the resolving package itself, not installed,
+    /// is circular and ranks `Unsatisfiable` -- the blocker-`==`
+    /// flip fails here.
+    #[test]
+    fn disjunction_preference_rejects_a_circular_self_alternative() {
+        let dir = dir_162("disj-circ");
+        let repos = repo_pkgs_162(&dir, &[("test/pkgA", "1.0", "0", "")]);
+        let config = cfg_162();
+        assert_eq!(
+            disj_162(
+                &repos,
+                &config,
+                &dir,
+                &[],
+                &self_162("test", "pkgA"),
+                &["test/pkgA"],
+                &[]
+            ),
+            portage_use_reduce::AltPreference::Unsatisfiable
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The same self alternative with the package installed is no
+    /// circle and ranks `Installed` -- the `!installed` deletion
+    /// fails here.
+    #[test]
+    fn disjunction_preference_keeps_an_installed_self_alternative() {
+        let dir = dir_162("disj-circ-inst");
+        let repos = repo_pkgs_162(&dir, &[("test/pkgA", "1.0", "0", "")]);
+        install_162(&dir, "test", "pkgA-1.0", "0", &[]);
+        let config = cfg_162();
+        assert_eq!(
+            disj_162(
+                &repos,
+                &config,
+                &dir,
+                &[],
+                &self_162("test", "pkgA"),
+                &["test/pkgA"],
+                &[]
+            ),
+            portage_use_reduce::AltPreference::Installed
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An uninstalled alternative on another package is not circular
+    /// -- the `cp == self` flip and both circular-`&&` widenings fail
+    /// here.
+    #[test]
+    fn disjunction_preference_keeps_an_uninstalled_other_alternative() {
+        let dir = dir_162("disj-other");
+        let repos = repo_pkgs_162(&dir, &[("test/pkgB", "1.0", "0", "")]);
+        let config = cfg_162();
+        assert_eq!(
+            disj_162(
+                &repos,
+                &config,
+                &dir,
+                &[],
+                &self_162("test", "pkgA"),
+                &["test/pkgB"],
+                &[]
+            ),
+            portage_use_reduce::AltPreference::Available
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A queued-but-unresolved atom counts as in-graph (the `#90 (S1)`
+    /// drain-state shortcut), promoting the alternative to
+    /// `Installed`.
+    #[test]
+    fn disjunction_preference_counts_a_queued_atom_as_in_graph() {
+        let dir = dir_162("disj-queued");
+        let repos = repo_pkgs_162(&dir, &[("test/pkgA", "1.0", "0", "")]);
+        let config = cfg_162();
+        assert_eq!(
+            disj_162(
+                &repos,
+                &config,
+                &dir,
+                &[],
+                &self_162("test", "consumer"),
+                &["test/pkgA"],
+                &[qatom_162("test/pkgA")]
+            ),
+            portage_use_reduce::AltPreference::Installed
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An alternative whose USE-dep the tree cannot satisfy (and no
+    /// installed instance helps) ranks `UnsatUseNonInstalled` -- the
+    /// use-block shortcut flip, the `if use_ok` inversion and the
+    /// masked-probe inversion (unmasked side) fail here.
+    #[test]
+    fn disjunction_preference_ranks_a_use_unsatisfiable_alternative() {
+        let dir = dir_162("disj-unsat");
+        let repos = repo_pkgs_162(&dir, &[("test/useflag", "1.0", "0", "flip")]);
+        let config = cfg_162();
+        assert_eq!(
+            disj_162(
+                &repos,
+                &config,
+                &dir,
+                &[],
+                &self_162("test", "consumer"),
+                &["test/useflag[flip]"],
+                &[]
+            ),
+            portage_use_reduce::AltPreference::UnsatUseNonInstalled
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The same alternative with the violated flag in `use.mask`
+    /// demotes to plain `Other` (real soft 705) -- the
+    /// `!all_use_unmasked` deletion and the masked-probe inversion
+    /// (masked side) fail here.
+    #[test]
+    fn disjunction_preference_demotes_a_masked_use_violation_to_other() {
+        let dir = dir_162("disj-masked");
+        let repos = repo_pkgs_162(&dir, &[("test/useflag", "1.0", "0", "flip")]);
+        let mut config = cfg_162();
+        config.use_mask_force_levels = vec![portage_profile::UseMaskForceLevel {
+            use_mask: vec!["flip".to_string()],
+            use_force: Vec::new(),
+            ..Default::default()
+        }];
+        assert_eq!(
+            disj_162(
+                &repos,
+                &config,
+                &dir,
+                &[],
+                &self_162("test", "consumer"),
+                &["test/useflag[flip]"],
+                &[]
+            ),
+            portage_use_reduce::AltPreference::Other
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An alternative satisfied by an installed instance's recorded
+    /// vdb USE (real `_dep_check_composite_db` over the vardb,
+    /// `dbapi._match_use`'s built-package branch) keeps bin 0 even
+    /// when the profile leaves the flag off -- both installed-USE
+    /// `||` narrowings fail here.
+    #[test]
+    fn disjunction_preference_matches_an_installed_alternatives_vdb_use_direct() {
+        let dir = dir_162("disj-vdbuse");
+        let repos = repo_pkgs_162(&dir, &[("test/vdbuse", "1.0", "0", "flip")]);
+        install_162(
+            &dir,
+            "test",
+            "vdbuse-1.0",
+            "0",
+            &[("USE", b"flip\n"), ("IUSE", b"flip\n")],
+        );
+        let config = cfg_162();
+        assert_eq!(
+            disj_162(
+                &repos,
+                &config,
+                &dir,
+                &[],
+                &self_162("test", "consumer"),
+                &["test/vdbuse[flip]"],
+                &[]
+            ),
+            portage_use_reduce::AltPreference::Installed
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An alternative satisfiable only in an uninstalled slot ranks
+    /// `UnsatUseNonInstalled`, not `UnsatUseInstalled` (real soft
+    /// 599-607: the *slot* of the best USE-ignoring candidate must be
+    /// installed) -- the slot-check `&&` widening fails here.
+    #[test]
+    fn disjunction_preference_needs_the_target_slot_installed() {
+        let dir = dir_162("disj-slot");
+        let repos = repo_pkgs_162(
+            &dir,
+            &[
+                ("test/slotpkg", "1.0", "0", "flip"),
+                ("test/slotpkg", "2.0", "1", "flip"),
+            ],
+        );
+        install_162(&dir, "test", "slotpkg-1.0", "0", &[]);
+        let config = cfg_162();
+        assert_eq!(
+            disj_162(
+                &repos,
+                &config,
+                &dir,
+                &[],
+                &self_162("test", "consumer"),
+                &["test/slotpkg:1[flip]"],
+                &[]
+            ),
+            portage_use_reduce::AltPreference::UnsatUseNonInstalled
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// No tree candidate but an installed cp behind a blocker-shaped
+    /// group ranks `Other`: blockers stay out of the installed fold
+    /// (real's own `if not atom.blocker` guard, soft 715-724) -- the
+    /// blocker-filter flip and the cp-level `!is_empty` deletion fail
+    /// here.
+    #[test]
+    fn disjunction_preference_ranks_an_unavailable_group_other() {
+        let dir = dir_162("disj-other2");
+        let repos = repo_pkgs_162(&dir, &[("test/bystander", "1.0", "0", "")]);
+        install_162(&dir, "test", "victim-1.0", "0", &[]);
+        let config = cfg_162();
+        assert_eq!(
+            disj_162(
+                &repos,
+                &config,
+                &dir,
+                &[],
+                &self_162("test", "consumer"),
+                &["!test/victim", "test/nonexistent"],
+                &[]
+            ),
+            portage_use_reduce::AltPreference::Other
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// No tree candidate but a fully matching installed instance
+    /// ranks `OtherInstalled` -- the cp-level `is_empty` flip
+    /// (installed side) fails here.
+    #[test]
+    fn disjunction_preference_ranks_a_fully_installed_group_other_installed() {
+        let dir = dir_162("disj-oinst");
+        let repos = repo_pkgs_162(&dir, &[("test/bystander", "1.0", "0", "")]);
+        install_162(&dir, "test", "victim-1.0", "0", &[]);
+        let config = cfg_162();
+        assert_eq!(
+            disj_162(
+                &repos,
+                &config,
+                &dir,
+                &[],
+                &self_162("test", "consumer"),
+                &["test/victim"],
+                &[]
+            ),
+            portage_use_reduce::AltPreference::OtherInstalled
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- S6: `promote_tied_alternative` (real `dep_zapdeps`'s
+    // in-bin upgrade-preference pass, `dep_check.py` soft 738-802:
+    // `all_installed_slots` first, then a strict upgrade (no
+    // downgrade anywhere on a shared cp), then the in-graph
+    // alternative). ----
+
+    /// Shared tree for the promotion legs: `up` spans two versions,
+    /// `plain` spans two, `plainb` has one, `slota` spans two slots.
+    fn promote_repo_162(dir: &Path) -> Vec<RepoConfig> {
+        repo_pkgs_162(
+            dir,
+            &[
+                ("test/up", "1.0", "0", ""),
+                ("test/up", "2.0", "0", ""),
+                ("test/plain", "1.0", "0", ""),
+                ("test/plain", "2.0", "0", ""),
+                ("test/plainb", "1.0", "0", ""),
+                ("test/slota", "1.0", "0", ""),
+                ("test/slota", "2.0", "1", ""),
+            ],
+        )
+    }
+
+    fn promote_162(
+        repos: &[RepoConfig],
+        config: &portage_profile::Config,
+        root: &Path,
+        entries: &[GraphEntry],
+        alts: &[&[&str]],
+        queued: &[QueueItem],
+    ) -> usize {
+        let owned: Vec<Vec<String>> = alts
+            .iter()
+            .map(|a| a.iter().map(|s| s.to_string()).collect())
+            .collect();
+        promote_tied_alternative(
+            repos,
+            config,
+            root,
+            entries,
+            &HashMap::new(),
+            &owned,
+            queued,
+        )
+    }
+
+    /// A strict upgrade on the shared cp promotes the newer
+    /// alternative -- the whole-body `-> 0`, two `< 2` early-return
+    /// flips, the break-on-self flip, the position flip and the
+    /// upgrade-arm `||` narrowing fail here.
+    #[test]
+    fn promote_tied_alternative_prefers_the_strict_upgrade() {
+        let dir = dir_162("prom-up");
+        let repos = promote_repo_162(&dir);
+        let config = cfg_162();
+        assert_eq!(
+            promote_162(
+                &repos,
+                &config,
+                &dir,
+                &[],
+                &[&["=test/up-1.0"], &["test/up"]],
+                &[]
+            ),
+            1
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Disjoint cps never promote -- the whole-body `-> 1` (already
+    /// S0-caught) fails here too.
+    #[test]
+    fn promote_tied_alternative_keeps_disjoint_order() {
+        let dir = dir_162("prom-disj");
+        let repos = promote_repo_162(&dir);
+        let config = cfg_162();
+        assert_eq!(
+            promote_162(
+                &repos,
+                &config,
+                &dir,
+                &[],
+                &[&["test/up"], &["test/plain"]],
+                &[]
+            ),
+            0
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Three alternatives promote the newest past both older ones --
+    /// the `< 2` -> `>` flip (which returns 0 for any longer list)
+    /// fails here.
+    #[test]
+    fn promote_tied_alternative_promotes_through_a_longer_list() {
+        let dir = dir_162("prom-long");
+        let repos = promote_repo_162(&dir);
+        let config = cfg_162();
+        assert_eq!(
+            promote_162(
+                &repos,
+                &config,
+                &dir,
+                &[],
+                &[&["=test/up-1.0"], &["test/plain"], &["test/up"]],
+                &[]
+            ),
+            2
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An upgrade on one shared cp plus a downgrade on another is no
+    /// promotion -- both mixed-shape flips fail here.
+    #[test]
+    fn promote_tied_alternative_rejects_a_mixed_upgrade_and_downgrade() {
+        let dir = dir_162("prom-mixed");
+        let repos = promote_repo_162(&dir);
+        let config = cfg_162();
+        assert_eq!(
+            promote_162(
+                &repos,
+                &config,
+                &dir,
+                &[],
+                &[
+                    &["=test/plain-1.0", "test/up"],
+                    &["test/plain", "=test/up-1.0"]
+                ],
+                &[]
+            ),
+            0
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// With equal versions the in-graph alternative promotes -- the
+    /// two `!...` deletions and the inner-`&&` widening in the
+    /// in-graph arm fail here.
+    #[test]
+    fn promote_tied_alternative_prefers_the_in_graph_alternative() {
+        let dir = dir_162("prom-graph");
+        let repos = promote_repo_162(&dir);
+        let config = cfg_162();
+        let entries = vec![entry_162(
+            "test",
+            "plainb",
+            PretendOutcome::New {
+                version: "1.0".to_string(),
+            },
+            Some("0"),
+            false,
+        )];
+        assert_eq!(
+            promote_162(
+                &repos,
+                &config,
+                &dir,
+                &entries,
+                &[&["test/plain"], &["test/plainb"]],
+                &[]
+            ),
+            1
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// With both alternatives in-graph nothing promotes -- the two
+    /// outer-`&&` widenings in the in-graph arm (already S0-caught)
+    /// fail here too.
+    #[test]
+    fn promote_tied_alternative_keeps_order_when_both_are_in_graph() {
+        let dir = dir_162("prom-bothgraph");
+        let repos = promote_repo_162(&dir);
+        let config = cfg_162();
+        let entries = vec![
+            entry_162(
+                "test",
+                "plain",
+                PretendOutcome::New {
+                    version: "2.0".to_string(),
+                },
+                Some("0"),
+                false,
+            ),
+            entry_162(
+                "test",
+                "plainb",
+                PretendOutcome::New {
+                    version: "1.0".to_string(),
+                },
+                Some("0"),
+                false,
+            ),
+        ];
+        assert_eq!(
+            promote_162(
+                &repos,
+                &config,
+                &dir,
+                &entries,
+                &[&["test/plain"], &["test/plainb"]],
+                &[]
+            ),
+            0
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A downgrade-only alternative stays put even when it is the one
+    /// in-graph -- the `!has_upgrade` deletion in the downgrade guard
+    /// fails here.
+    #[test]
+    fn promote_tied_alternative_rejects_an_in_graph_downgrade() {
+        let dir = dir_162("prom-downgraph");
+        let repos = promote_repo_162(&dir);
+        let config = cfg_162();
+        let entries = vec![entry_162(
+            "test",
+            "up",
+            PretendOutcome::New {
+                version: "1.0".to_string(),
+            },
+            Some("0"),
+            false,
+        )];
+        assert_eq!(
+            promote_162(
+                &repos,
+                &config,
+                &dir,
+                &entries,
+                &[&["test/up", "test/plain"], &["=test/up-1.0"]],
+                &[]
+            ),
+            0
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An alternative installed in every needed slot promotes over
+    /// one that is not -- the `!all_installed_slots` deletion fails
+    /// here.
+    #[test]
+    fn promote_tied_alternative_prefers_the_installed_slots_alternative() {
+        let dir = dir_162("prom-slots");
+        let repos = promote_repo_162(&dir);
+        install_162(&dir, "test", "slota-1.0", "0", &[]);
+        let config = cfg_162();
+        assert_eq!(
+            promote_162(
+                &repos,
+                &config,
+                &dir,
+                &[],
+                &[&["test/plain"], &["=test/slota-1.0"]],
+                &[]
+            ),
+            1
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An uninstalled alternative does not take the installed-slots
+    /// promotion even against an installed one -- the
+    /// `all_installed_slots &&` widening (already S0-caught) fails
+    /// here too.
+    #[test]
+    fn promote_tied_alternative_rejects_an_uninstalled_alternative() {
+        let dir = dir_162("prom-noslots");
+        let repos = promote_repo_162(&dir);
+        install_162(&dir, "test", "slota-1.0", "0", &[]);
+        let config = cfg_162();
+        assert_eq!(
+            promote_162(
+                &repos,
+                &config,
+                &dir,
+                &[],
+                &[&["=test/slota-1.0"], &["test/plain"]],
+                &[]
+            ),
+            0
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Cp-installed but in the wrong slot is not
+    /// `all_installed_slots` (real soft 599-607) -- the slot-check
+    /// `&&` widening fails here.
+    #[test]
+    fn promote_tied_alternative_needs_the_candidate_slot_installed() {
+        let dir = dir_162("prom-wrongslot");
+        let repos = promote_repo_162(&dir);
+        install_162(&dir, "test", "slota-1.0", "0", &[]);
+        let config = cfg_162();
+        assert_eq!(
+            promote_162(
+                &repos,
+                &config,
+                &dir,
+                &[],
+                &[&["test/plain"], &["test/slota"]],
+                &[]
+            ),
+            0
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Blockers never enter a `cp_map`: the blocker alternative keeps
+    /// no shared cp and loses -- the blocker-skip flip fails here.
+    #[test]
+    fn promote_tied_alternative_ignores_blockers_in_cp_maps() {
+        let dir = dir_162("prom-blocker");
+        let repos = promote_repo_162(&dir);
+        install_162(&dir, "test", "up-1.0", "0", &[]);
+        let config = cfg_162();
+        assert_eq!(
+            promote_162(
+                &repos,
+                &config,
+                &dir,
+                &[],
+                &[&["=test/up-1.0"], &["!test/up"]],
+                &[]
+            ),
+            0
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A single alternative always wins index 0 -- pins the early
+    /// return the `< 2` mutants never touch.
+    #[test]
+    fn promote_tied_alternative_returns_zero_for_a_single_alternative() {
+        let dir = dir_162("prom-single");
+        let repos = promote_repo_162(&dir);
+        let config = cfg_162();
+        assert_eq!(
+            promote_162(&repos, &config, &dir, &[], &[&["test/up"]], &[]),
+            0
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- S7: `alternative_downgrade_demoted` (real `depgraph`
+    // bug-531656 `conflict_downgrade`/`installed_downgrade`: an
+    // otherwise-available `||` alternative demotes to `other` when it
+    // would install below what the graph already holds and no visible
+    // candidate makes the downgrade desirable). ----
+
+    /// Shared tree for the demotion legs: `pkg` spans two versions in
+    /// slot 0.
+    fn demote_repo_162(dir: &Path) -> Vec<RepoConfig> {
+        repo_pkgs_162(
+            dir,
+            &[("test/pkg", "1.0", "0", ""), ("test/pkg", "2.0", "0", "")],
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn demote_162(
+        repos: &[RepoConfig],
+        config: &portage_profile::Config,
+        root: &Path,
+        entries: &[GraphEntry],
+        self_cp: &(String, String),
+        atoms: &[&str],
+        queued: &[QueueItem],
+        update: bool,
+    ) -> bool {
+        alternative_downgrade_demoted(
+            repos,
+            root,
+            config,
+            entries,
+            self_cp,
+            &HashMap::new(),
+            &atoms_162(atoms),
+            queued,
+            update,
+        )
+    }
+
+    fn demote_entries_162() -> Vec<GraphEntry> {
+        vec![entry_162(
+            "test",
+            "pkg",
+            PretendOutcome::New {
+                version: "2.0".to_string(),
+            },
+            Some("0"),
+            false,
+        )]
+    }
+
+    /// An alternative resolving below the graphed version demotes --
+    /// the whole-body `-> false`, the three graph-filter comparison
+    /// flips, the `!= Less` flip and the `!downgrade_probe` deletion
+    /// fail here.
+    #[test]
+    fn alternative_downgrade_demoted_flags_an_older_alternative() {
+        let dir = dir_162("demote-older");
+        let repos = demote_repo_162(&dir);
+        let config = cfg_162();
+        assert!(demote_162(
+            &repos,
+            &config,
+            &dir,
+            &demote_entries_162(),
+            &self_162("test", "consumer"),
+            &["=test/pkg-1.0"],
+            &[],
+            false
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An alternative at the graphed version does not demote -- the
+    /// whole-body `-> true` (already S0-caught) plus the graph-filter
+    /// `&&` widenings fail here (a widened filter would admit the
+    /// decoy other-slot entry and demote).
+    #[test]
+    fn alternative_downgrade_demoted_keeps_the_graphed_version() {
+        let dir = dir_162("demote-same");
+        let repos = demote_repo_162(&dir);
+        let config = cfg_162();
+        let mut entries = demote_entries_162();
+        entries.push(entry_162(
+            "test",
+            "pkg",
+            PretendOutcome::New {
+                version: "9.9".to_string(),
+            },
+            Some("9"),
+            false,
+        ));
+        assert!(!demote_162(
+            &repos,
+            &config,
+            &dir,
+            &entries,
+            &self_162("test", "consumer"),
+            &["test/pkg"],
+            &[],
+            false
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The resolving package's own alternative never demotes -- both
+    /// skip-guard flips (`||` -> `&&`, `==` -> `!=`) fail here.
+    #[test]
+    fn alternative_downgrade_demoted_skips_the_resolving_package() {
+        let dir = dir_162("demote-self");
+        let repos = demote_repo_162(&dir);
+        let config = cfg_162();
+        assert!(!demote_162(
+            &repos,
+            &config,
+            &dir,
+            &demote_entries_162(),
+            &self_162("test", "pkg"),
+            &["=test/pkg-1.0"],
+            &[],
+            false
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A blocker alternative never demotes -- the blocker-guard flip
+    /// (`!=` -> `==`, which would evaluate the blocker against the
+    /// graph and demote) fails here.
+    #[test]
+    fn alternative_downgrade_demoted_skips_blockers() {
+        let dir = dir_162("demote-blocker");
+        let repos = demote_repo_162(&dir);
+        let config = cfg_162();
+        assert!(!demote_162(
+            &repos,
+            &config,
+            &dir,
+            &demote_entries_162(),
+            &self_162("test", "consumer"),
+            &["!<=test/pkg-1.0"],
+            &[],
+            false
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// With an empty graph a queued same-cp atom stands in for the
+    /// not-yet-graphed selection (the `#90 (S1)` hypothetical): the
+    /// installed best is above the alternative, so it demotes -- the
+    /// queued-filter comparison flips and the hypothetical-match
+    /// `!is_empty` deletion fail here.
+    #[test]
+    fn alternative_downgrade_demoted_uses_the_queued_hypothetical() {
+        let dir = dir_162("demote-queued");
+        let repos = demote_repo_162(&dir);
+        install_162(&dir, "test", "pkg-2.0", "0", &[]);
+        let config = cfg_162();
+        assert!(demote_162(
+            &repos,
+            &config,
+            &dir,
+            &[],
+            &self_162("test", "consumer"),
+            &["=test/pkg-1.0"],
+            &[qatom_162("test/pkg")],
+            false
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A queued atom on another cp is not a hypothetical for this
+    /// one -- the queued-filter `||` -> `&&` flip (which would fold
+    /// the other cp's installed versions in and demote) fails here.
+    #[test]
+    fn alternative_downgrade_demoted_ignores_other_cp_queue() {
+        let dir = dir_162("demote-queue-other");
+        let repos = demote_repo_162(&dir);
+        install_162(&dir, "test", "other-3.0", "0", &[]);
+        let config = cfg_162();
+        assert!(!demote_162(
+            &repos,
+            &config,
+            &dir,
+            &[],
+            &self_162("test", "consumer"),
+            &["=test/pkg-1.0"],
+            &[qatom_162("test/other")],
+            false
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Under `--update` the hypothetical is the tree best, no vdb
+    /// needed -- pins the update arm the queued-filter mutants never
+    /// touch.
+    #[test]
+    fn alternative_downgrade_demoted_uses_the_tree_hypothetical_under_update() {
+        let dir = dir_162("demote-update");
+        let repos = demote_repo_162(&dir);
+        let config = cfg_162();
+        assert!(demote_162(
+            &repos,
+            &config,
+            &dir,
+            &[],
+            &self_162("test", "consumer"),
+            &["=test/pkg-1.0"],
+            &[qatom_162("test/pkg")],
+            true
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
