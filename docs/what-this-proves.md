@@ -18060,3 +18060,22 @@ python3 differential-test-bed/compare/diff.py --layer l3 --tolerate-payload \
   differential-test-bed/logs/l3-20260925T074707Z/control-b \
   differential-test-bed/compare/known-divergences.yaml | tail -8
 ```
+
+## `lib.rs` mutation run: 2729 mutants triaged into six test-gap clusters (P7b, 2026-09-25)
+
+`cargo mutants --in-place --file portage-repo/src/lib.rs` (branch
+`backlog/52-librs-mutants`, clean tree before and after, ~7 h serial):
+1588 caught / 940 missed / 197 unviable / 4 timeouts. The 132
+survivor-carrying functions have ~zero direct unit references — the
+same shape Phase 8 found in `merge_order.rs`: coverage lives in the
+black-box contract suite, which the run does not execute. Triaged in
+`../pmtest/differential-test-bed/findings/mutants.md` into six
+clusters filed as #161 (backtracker driver) through #166 (circular
+residue); no tests written in this phase, per the plan. #52 DONE;
+with it the `batch-2026-09-24.md` batch closes. Re-verify the launch
+count on the unchanged tree:
+
+```sh
+# from portuale/rust; expect 2729
+cargo mutants --list --file portage-repo/src/lib.rs 2>/dev/null | wc -l
+```
