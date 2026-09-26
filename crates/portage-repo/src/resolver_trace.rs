@@ -676,3 +676,12 @@ pub(crate) fn dump_resolution_walk(
         out(format_args!("\nExiting... ({cat}/{pkg}-{ver})\n"));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cp(cat: &str, pkg: &str) -> (String, String) {
+        (cat.to_string(), pkg.to_string())
+    }
+}
