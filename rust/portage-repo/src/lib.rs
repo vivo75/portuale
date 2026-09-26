@@ -43303,6 +43303,51 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// Backlog #161 S6: a bare `:=` pull landing on a resolved slot
+    /// reuses it silently -- the satisfaction holds through the
+    /// operator and binding arms when nothing rebuilt shifts.
+    #[test]
+    fn run_pass_bare_slotop_pull_reuses_the_resolved_slot() {
+        let dir = slotundo_temp_dir("161-run-slotop");
+        let repo = blocker_161_scratch_repo(
+            &dir,
+            "dev-libs/consumerb",
+            "1.0",
+            "0",
+            "",
+            "dev-libs/prov",
+        );
+        blocker_161_write_pkg(&repo.location, "dev-libs/prov", "1.0", "0/1", "", "");
+        blocker_161_write_pkg(&repo.location, "dev-libs/prov", "2.0", "0/2", "", "");
+        blocker_161_write_pkg(
+            &repo.location,
+            "dev-libs/consumera",
+            "1.0",
+            "0",
+            "",
+            "dev-libs/prov:=",
+        );
+        let config = test_config();
+        // consumerb first resolves bare; consumera's `:=` then lands
+        // on the taken slot and reuses it.
+        let atoms = vec![
+            "dev-libs/consumera".to_string(),
+            "dev-libs/consumerb".to_string(),
+        ];
+        let opts = CtxOpts161 {
+            backtrack_max: 10,
+            atoms: atoms.clone(),
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, vec![repo], &opts);
+        let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+        assert!(
+            pass.slot_conflicts.iter().all(|sc| sc.package != "prov"),
+            "a rebuildable := reuses the resolved slot silently"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     /// recordered `USE`.
     fn slotundo_vdb(
         dir: &Path,
