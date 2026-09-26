@@ -4868,29 +4868,26 @@ fn clean_delay_countdown() {
 /// The `(kind, category, package, version)` of every entry in `entries`
 /// (source *or* binary -- real portage's own resume mergelist records
 /// both) that was supposed to merge but has no `CONTENTS` under `root`
-/// yet -- the resume list for `mtimedb::write_resume_list`.
+/// yet -- the resume list for `mtimedb::write_resume_list` on the failure
+/// path. The per-entry mapping itself is `emerge_build::resume_cpv` (the
+/// same mapping the up-front save uses), narrowed here to entries whose
+/// merge never landed.
 fn entries_not_merged(
     root: &Path,
     entries: &[portage_repo::GraphEntry],
 ) -> Vec<crate::mtimedb::ResumeCpv> {
     let mut out = Vec::new();
     for e in entries {
-        let kind = match e.source {
-            portage_repo::CandidateSource::Ebuild => crate::mtimedb::ResumeEntryKind::Ebuild,
-            portage_repo::CandidateSource::Binary => crate::mtimedb::ResumeEntryKind::Binary,
-        };
-        let version = match &e.outcome {
-            PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => version,
-            PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to,
-            _ => continue,
+        let Some((kind, category, package, version)) = emerge_build::resume_cpv(e) else {
+            continue;
         };
         let contents = root
             .join("var/db/pkg")
-            .join(&e.category)
-            .join(format!("{}-{version}", e.package))
+            .join(&category)
+            .join(format!("{package}-{version}"))
             .join("CONTENTS");
         if !contents.is_file() {
-            out.push((kind, e.category.clone(), e.package.clone(), version.clone()));
+            out.push((kind, category, package, version));
         }
     }
     out
@@ -5013,6 +5010,15 @@ fn run_resume(
         }
         return ExitCode::SUCCESS;
     }
+
+    // Real `Scheduler.merge() -> _save_resume_list()` (#168): a resumed
+    // run re-saves before merging too -- this drops a `--skipfirst`-
+    // skipped head from the on-disk list and, together with the per-merge
+    // shrink inside the merge loops, leaves exactly the tail behind if
+    // this run is itself SIGKILLed. `--resume --pretend` returns above, so
+    // a preview never touches the list.
+    let fav_refs: Vec<&str> = favorites.iter().map(String::as_str).collect();
+    let _ = crate::mtimedb::write_resume_list(root, &fav_refs, &mergelist, &opts);
 
     println!(">>> Resuming merge of {} package(s)...", entries.len());
     let mut merge_options = ebuild_merge::MergeOptions::from_env(shell, debug);
@@ -13080,6 +13086,27 @@ pub fn run(args: &[String]) -> ExitCode {
                 }
                 return ExitCode::from(0);
             }
+            // Real `Scheduler.merge() -> _save_resume_list()` (#168):
+            // persist the full mergelist BEFORE the first merge runs, so a
+            // SIGKILL mid-merge still leaves `--resume` something to replay
+            // (nothing was saved here before -- only the failure path wrote
+            // anything). Each successful merge below shrinks it again
+            // (`run_merge_loop` / the `-j` scheduler); the failure path
+            // re-saves the tail. Silent on write failure, like the
+            // `rotate_resume_to_backup` above (a later failure write warns).
+            // `--buildpkgonly` and remote execution are deliberately
+            // untouched: no save here covers them.
+            let resume_mergelist: Vec<crate::mtimedb::ResumeCpv> = entries
+                .iter()
+                .filter_map(emerge_build::resume_cpv)
+                .collect();
+            let resume_opts = crate::mtimedb::ResumeOpts { oneshot, onlydeps };
+            let _ = crate::mtimedb::write_resume_list(
+                &root,
+                &atom_args,
+                &resume_mergelist,
+                &resume_opts,
+            );
             // `emerge --getbinpkg`/`-g` (and `-G`, binary-only): merge
             // every resolved entry, per-entry `Binary` vs `Source` --
             // see `emerge_getbinpkg::run_merge_plan`.
@@ -13120,7 +13147,20 @@ pub fn run(args: &[String]) -> ExitCode {
             }
         } else {
             // Plain `emerge <atom>`: real source build + merge (see
-            // `emerge_build::run_source_merge`).
+            // `emerge_build::run_source_merge`). The up-front resume save
+            // is real `Scheduler.merge() -> _save_resume_list()` (#168),
+            // same as the `--getbinpkg` arm above.
+            let resume_mergelist: Vec<crate::mtimedb::ResumeCpv> = entries
+                .iter()
+                .filter_map(emerge_build::resume_cpv)
+                .collect();
+            let resume_opts = crate::mtimedb::ResumeOpts { oneshot, onlydeps };
+            let _ = crate::mtimedb::write_resume_list(
+                &root,
+                &atom_args,
+                &resume_mergelist,
+                &resume_opts,
+            );
             if let Err(e) = emerge_build::run_source_merge(
                 entries,
                 &repos,
@@ -13480,6 +13520,43 @@ mod tests {
             )
         );
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn up_front_save_covers_exactly_the_failure_path_tail_when_nothing_merged() {
+        // #168: the up-front save (`emerge_build::resume_cpv` over the
+        // whole plan) and the failure-path tail (`entries_not_merged`)
+        // agree when no merge has landed yet -- so keeping the failure
+        // writes alongside the new up-front save + per-merge shrink is
+        // provably a harmless redundancy, and failure behaviour is
+        // unchanged.
+        let root = std::env::temp_dir().join(format!(
+            "pretend-test-{}-up_front_matches_failure_tail",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let entries = vec![
+            emerge_build::resume_entry(
+                "dev-libs",
+                "src-pkg",
+                "1.0",
+                portage_repo::CandidateSource::Ebuild,
+            ),
+            emerge_build::resume_entry(
+                "dev-libs",
+                "bin-pkg",
+                "2.0",
+                portage_repo::CandidateSource::Binary,
+            ),
+        ];
+        let up_front: Vec<crate::mtimedb::ResumeCpv> = entries
+            .iter()
+            .filter_map(emerge_build::resume_cpv)
+            .collect();
+        assert_eq!(up_front.len(), 2);
+        assert_eq!(entries_not_merged(&root, &entries), up_front);
         let _ = std::fs::remove_dir_all(&root);
     }
 
