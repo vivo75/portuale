@@ -40457,6 +40457,10 @@ mod tests {
         with_test_deps: bool,
         deep: Deep,
         with_bdeps: bool,
+        // Backlog #161 S6p: `--buildpkgonly` blanks the run-time
+        // keys for a non-binary candidate (the `dep_keys` second
+        // arm); default off like every other option flag.
+        buildpkgonly: bool,
         complete: bool,
         locked: HashSet<(String, String)>,
         blocker_closure: HashSet<(String, String)>,
@@ -40492,7 +40496,7 @@ mod tests {
             rebuilt_binaries: false,
             rebuilt_binaries_timestamp: None,
             newrepo: false,
-            buildpkgonly: false,
+            buildpkgonly: o.buildpkgonly,
             root_deps_running_root: None,
             distdir: root,
             empty: false,
@@ -42137,6 +42141,22 @@ mod tests {
         depend: &str,
         rdepend: &str,
     ) {
+        blocker_161_write_pkg_full(repo, cp, pv, slot, depend, rdepend, "");
+    }
+
+    /// Backlog #161 S6p: the `_full` variant also writes `BDEPEND`
+    /// (the plain helper can only express `DEPEND`/`RDEPEND`, which
+    /// is why the first `with_bdeps` binary leg below walked an
+    /// ebuild instead of a binary -- see its doc comment).
+    fn blocker_161_write_pkg_full(
+        repo: &Path,
+        cp: &str,
+        pv: &str,
+        slot: &str,
+        depend: &str,
+        rdepend: &str,
+        bdepend: &str,
+    ) {
         use md5::Digest as _;
         use std::fmt::Write as _;
         let (cat, pkg) = cp.split_once('/').expect("category/package");
@@ -42151,6 +42171,9 @@ mod tests {
         if !rdepend.is_empty() {
             writeln!(body, "RDEPEND=\"{rdepend}\"").unwrap();
         }
+        if !bdepend.is_empty() {
+            writeln!(body, "BDEPEND=\"{bdepend}\"").unwrap();
+        }
         std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
         let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
         let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=161 blocker\nEAPI=8\n".to_string();
@@ -42159,6 +42182,9 @@ mod tests {
         }
         if !rdepend.is_empty() {
             writeln!(entry, "RDEPEND={rdepend}").unwrap();
+        }
+        if !bdepend.is_empty() {
+            writeln!(entry, "BDEPEND={bdepend}").unwrap();
         }
         writeln!(entry, "KEYWORDS=amd64\nSLOT={slot}\n_md5_={md5}").unwrap();
         let cachedir = repo.join("metadata/md5-cache").join(cat);
@@ -43140,17 +43166,30 @@ mod tests {
     #[test]
     fn run_pass_binary_walks_buildtime_deps_with_bdeps() {
         let dir = slotundo_temp_dir("161-run-binbdep2");
-        let repos = blocker_161_scratch_repo(
-            &dir,
+        // NOTE (repaired S6p): the first version of this leg built the
+        // tree parent with `DEPEND="dev-libs/buildonlydep"` (the only
+        // key the helper could write) while staging the binary with
+        // `BDEPEND="dev-libs/buildonlydep"`. Under `--with-bdeps`
+        // `--binpkg-changed-deps` compares all five keys, saw the
+        // `DEPEND` mismatch, and rejected the binary -- so the leg
+        // walked the ebuild and proved nothing about the
+        // `Binary && !with_bdeps` gates. The parent now carries the
+        // dep in `BDEPEND` on both sides, so the binary survives
+        // selection and the walk genuinely takes the all-keys arm.
+        let repo = dir.join("scratchrepo");
+        blocker_161_write_pkg_full(
+            &repo,
             "dev-libs/binparent",
             "1.0",
             "0",
-            "dev-libs/buildonlydep",
+            "",
             "dev-libs/runtimedep",
+            "dev-libs/buildonlydep",
         );
         for (cp, pv) in [("dev-libs/buildonlydep", "1.0"), ("dev-libs/runtimedep", "1.0")] {
-            blocker_161_write_pkg(&repos.location, cp, pv, "0", "", "");
+            blocker_161_write_pkg(&repo, cp, pv, "0", "", "");
         }
+        let repos = vec![blocker_161_repo_config(repo)];
         let mut config = test_config();
         config.scanned_binpkgs = Some(vec![HashMap::from([
             ("CPV".to_string(), "dev-libs/binparent-1.0".to_string()),
@@ -43168,10 +43207,92 @@ mod tests {
             with_bdeps: true,
             ..Default::default()
         };
+        let ctx = ctx_161(&dir, &config, repos, &opts);
+        let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+        let names: Vec<&str> = pass.entries.iter().map(|e| e.package.as_str()).collect();
+        assert!(names.contains(&"binparent"));
+        assert!(names.contains(&"runtimedep"));
+        assert!(
+            names.contains(&"buildonlydep"),
+            "a selected binary walks its build-time keys under --with-bdeps"
+        );
+        // The all-keys arm also feeds the merge-order digraph: the
+        // parent's recorded edges name the build-time dep.
+        let parent = pass
+            .entries
+            .iter()
+            .find(|e| e.package == "binparent")
+            .expect("parent merges");
+        assert!(
+            parent.deps.iter().any(|d| d.package == "buildonlydep"),
+            "the binary's build-time dep reaches the merge-order edges"
+        );
+        // ... and the queue tags that edge build-time-hard (no
+        // installed provider, no run-time alternative), which is what
+        // the `buildtime_atoms` gate computes.
+        assert_eq!(
+            pass.edge_kind_map.get(&(
+                ("dev-libs".to_string(), "buildonlydep".to_string()),
+                ("dev-libs".to_string(), "binparent".to_string())
+            )),
+            Some(&(true, false)),
+            "the build-time edge is hard, not soft"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6p: under `--buildpkgonly` (without `--deep`)
+    /// a source candidate walks only its build-time keys -- the
+    /// `dep_keys` second arm (`candidate_source != Binary`). The
+    /// scratch parent carries the same dep in `DEPEND` (walked) and
+    /// a second one in `RDEPEND` (blanked).
+    #[test]
+    fn run_pass_buildpkgonly_walks_buildtime_keys_only() {
+        let dir = slotundo_temp_dir("161-run-bpkgonly");
+        let repos = blocker_161_scratch_repo(
+            &dir,
+            "dev-libs/bpkgparent",
+            "1.0",
+            "0",
+            "dev-libs/builddep",
+            "dev-libs/rundep",
+        );
+        for (cp, pv) in [("dev-libs/builddep", "1.0"), ("dev-libs/rundep", "1.0")] {
+            blocker_161_write_pkg(&repos.location, cp, pv, "0", "", "");
+        }
+        let config = test_config();
+        let atoms = vec!["dev-libs/bpkgparent".to_string()];
+        let opts = CtxOpts161 {
+            backtrack_max: 10,
+            atoms: atoms.clone(),
+            buildpkgonly: true,
+            ..Default::default()
+        };
         let ctx = ctx_161(&dir, &config, vec![repos], &opts);
         let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
         let names: Vec<&str> = pass.entries.iter().map(|e| e.package.as_str()).collect();
-        assert!(names.contains(&"buildonlydep"));
+        assert!(names.contains(&"bpkgparent"));
+        assert!(
+            names.contains(&"builddep"),
+            "build-time keys still walk under --buildpkgonly"
+        );
+        assert!(
+            !names.contains(&"rundep"),
+            "run-time keys are blanked under --buildpkgonly"
+        );
+        let parent = pass
+            .entries
+            .iter()
+            .find(|e| e.package == "bpkgparent")
+            .expect("parent merges");
+        assert!(
+            parent.deps.iter().any(|d| d.package == "builddep"),
+            "the kept build-time dep reaches the merge-order edges"
+        );
+        assert!(
+            !parent.deps.iter().any(|d| d.package == "rundep"),
+            "the blanked run-time dep stays out of the edges too"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
