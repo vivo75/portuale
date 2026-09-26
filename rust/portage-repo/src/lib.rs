@@ -49714,4 +49714,217 @@ mod tests_162 {
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    // ---- S7: `alternative_downgrade_demoted` (real `depgraph`
+    // bug-531656 `conflict_downgrade`/`installed_downgrade`: an
+    // otherwise-available `||` alternative demotes to `other` when it
+    // would install below what the graph already holds and no visible
+    // candidate makes the downgrade desirable). ----
+
+    /// Shared tree for the demotion legs: `pkg` spans two versions in
+    /// slot 0.
+    fn demote_repo_162(dir: &Path) -> Vec<RepoConfig> {
+        repo_pkgs_162(
+            dir,
+            &[("test/pkg", "1.0", "0", ""), ("test/pkg", "2.0", "0", "")],
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn demote_162(
+        repos: &[RepoConfig],
+        config: &portage_profile::Config,
+        root: &Path,
+        entries: &[GraphEntry],
+        self_cp: &(String, String),
+        atoms: &[&str],
+        queued: &[QueueItem],
+        update: bool,
+    ) -> bool {
+        alternative_downgrade_demoted(
+            repos,
+            root,
+            config,
+            entries,
+            self_cp,
+            &HashMap::new(),
+            &atoms_162(atoms),
+            queued,
+            update,
+        )
+    }
+
+    fn demote_entries_162() -> Vec<GraphEntry> {
+        vec![entry_162(
+            "test",
+            "pkg",
+            PretendOutcome::New {
+                version: "2.0".to_string(),
+            },
+            Some("0"),
+            false,
+        )]
+    }
+
+    /// An alternative resolving below the graphed version demotes --
+    /// the whole-body `-> false`, the three graph-filter comparison
+    /// flips, the `!= Less` flip and the `!downgrade_probe` deletion
+    /// fail here.
+    #[test]
+    fn alternative_downgrade_demoted_flags_an_older_alternative() {
+        let dir = dir_162("demote-older");
+        let repos = demote_repo_162(&dir);
+        let config = cfg_162();
+        assert!(demote_162(
+            &repos,
+            &config,
+            &dir,
+            &demote_entries_162(),
+            &self_162("test", "consumer"),
+            &["=test/pkg-1.0"],
+            &[],
+            false
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An alternative at the graphed version does not demote -- the
+    /// whole-body `-> true` (already S0-caught) plus the graph-filter
+    /// `&&` widenings fail here (a widened filter would admit the
+    /// decoy other-slot entry and demote).
+    #[test]
+    fn alternative_downgrade_demoted_keeps_the_graphed_version() {
+        let dir = dir_162("demote-same");
+        let repos = demote_repo_162(&dir);
+        let config = cfg_162();
+        let mut entries = demote_entries_162();
+        entries.push(entry_162(
+            "test",
+            "pkg",
+            PretendOutcome::New {
+                version: "9.9".to_string(),
+            },
+            Some("9"),
+            false,
+        ));
+        assert!(!demote_162(
+            &repos,
+            &config,
+            &dir,
+            &entries,
+            &self_162("test", "consumer"),
+            &["test/pkg"],
+            &[],
+            false
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The resolving package's own alternative never demotes -- both
+    /// skip-guard flips (`||` -> `&&`, `==` -> `!=`) fail here.
+    #[test]
+    fn alternative_downgrade_demoted_skips_the_resolving_package() {
+        let dir = dir_162("demote-self");
+        let repos = demote_repo_162(&dir);
+        let config = cfg_162();
+        assert!(!demote_162(
+            &repos,
+            &config,
+            &dir,
+            &demote_entries_162(),
+            &self_162("test", "pkg"),
+            &["=test/pkg-1.0"],
+            &[],
+            false
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A blocker alternative never demotes -- the blocker-guard flip
+    /// (`!=` -> `==`, which would evaluate the blocker against the
+    /// graph and demote) fails here.
+    #[test]
+    fn alternative_downgrade_demoted_skips_blockers() {
+        let dir = dir_162("demote-blocker");
+        let repos = demote_repo_162(&dir);
+        let config = cfg_162();
+        assert!(!demote_162(
+            &repos,
+            &config,
+            &dir,
+            &demote_entries_162(),
+            &self_162("test", "consumer"),
+            &["!<=test/pkg-1.0"],
+            &[],
+            false
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// With an empty graph a queued same-cp atom stands in for the
+    /// not-yet-graphed selection (the `#90 (S1)` hypothetical): the
+    /// installed best is above the alternative, so it demotes -- the
+    /// queued-filter comparison flips and the hypothetical-match
+    /// `!is_empty` deletion fail here.
+    #[test]
+    fn alternative_downgrade_demoted_uses_the_queued_hypothetical() {
+        let dir = dir_162("demote-queued");
+        let repos = demote_repo_162(&dir);
+        install_162(&dir, "test", "pkg-2.0", "0", &[]);
+        let config = cfg_162();
+        assert!(demote_162(
+            &repos,
+            &config,
+            &dir,
+            &[],
+            &self_162("test", "consumer"),
+            &["=test/pkg-1.0"],
+            &[qatom_162("test/pkg")],
+            false
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A queued atom on another cp is not a hypothetical for this
+    /// one -- the queued-filter `||` -> `&&` flip (which would fold
+    /// the other cp's installed versions in and demote) fails here.
+    #[test]
+    fn alternative_downgrade_demoted_ignores_other_cp_queue() {
+        let dir = dir_162("demote-queue-other");
+        let repos = demote_repo_162(&dir);
+        install_162(&dir, "test", "other-3.0", "0", &[]);
+        let config = cfg_162();
+        assert!(!demote_162(
+            &repos,
+            &config,
+            &dir,
+            &[],
+            &self_162("test", "consumer"),
+            &["=test/pkg-1.0"],
+            &[qatom_162("test/other")],
+            false
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Under `--update` the hypothetical is the tree best, no vdb
+    /// needed -- pins the update arm the queued-filter mutants never
+    /// touch.
+    #[test]
+    fn alternative_downgrade_demoted_uses_the_tree_hypothetical_under_update() {
+        let dir = dir_162("demote-update");
+        let repos = demote_repo_162(&dir);
+        let config = cfg_162();
+        assert!(demote_162(
+            &repos,
+            &config,
+            &dir,
+            &[],
+            &self_162("test", "consumer"),
+            &["=test/pkg-1.0"],
+            &[qatom_162("test/pkg")],
+            true
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
