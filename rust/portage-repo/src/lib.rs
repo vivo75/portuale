@@ -42453,7 +42453,14 @@ mod tests {
             ..Default::default()
         };
         let ctx = ctx_161(&dir, &config, repos, &opts);
-        assert!(run_pass(&ctx, &BacktrackParams::default(), true).is_err());
+        let Err(err) = run_pass(&ctx, &BacktrackParams::default(), true) else {
+            panic!("expected a REQUIRED_USE violation");
+        };
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("foo") && msg.contains("bar"),
+            "the violation names both flags, got: {msg}"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -43198,6 +43205,8 @@ mod tests {
             PretendOutcome::New { ref version } if version == "2.0"
         ));
         assert!(entry.new_slot);
+        assert_eq!(entry.oldbest.len(), 1);
+        assert_eq!(entry.oldbest[0].version, "1.0");
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -43581,6 +43590,33 @@ mod tests {
         let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
         assert_eq!(pass.entries.len(), 1);
         assert_eq!(pass.entries[0].source, CandidateSource::Binary);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: a `package.use_mask` entry masks `test`
+    /// exactly like the global mask list.
+    #[test]
+    fn run_pass_package_use_mask_hides_test_deps() {
+        let dir = slotundo_temp_dir("161-run-pumask");
+        let atoms = vec!["dev-libs/withtestdeppkg".to_string()];
+        let mut config = test_config();
+        config.package_use_mask = vec![(
+            "dev-libs/withtestdeppkg".to_string(),
+            vec!["test".to_string()],
+        )];
+        let repos = find_repos(&fixtures_root()).expect("fixture repos");
+        let opts = CtxOpts161 {
+            backtrack_max: 10,
+            atoms: atoms.clone(),
+            with_test_deps: true,
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, repos, &opts);
+        let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+        assert!(
+            !pass.entries.iter().any(|e| e.package == "testonlydep"),
+            "masked test stays out even with the flag"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
