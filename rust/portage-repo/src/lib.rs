@@ -46180,6 +46180,248 @@ mod tests {
             assert_eq!(got_missing, Vec::new());
             let _ = fs::remove_dir_all(&dir);
         }
+
+        /// Backlog #164 S4: minimal `GraphEntry` for the dep-chain legs
+        /// (merge-bound unless stated otherwise).
+        fn entry_164(
+            category: &str,
+            package: &str,
+            outcome: PretendOutcome,
+            required_by: Vec<(String, String)>,
+            repo: Option<&str>,
+            source: CandidateSource,
+        ) -> GraphEntry {
+            GraphEntry {
+                discovery: 0,
+                category: category.to_string(),
+                package: package.to_string(),
+                outcome,
+                blockers: Vec::new(),
+                slot: Some("0".to_string()),
+                sub_slot: Some("0".to_string()),
+                repo_name: repo.map(str::to_string),
+                oldbest: Vec::new(),
+                use_flags_display: Vec::new(),
+                use_expand_display: Vec::new(),
+                use_expand_display_p: Vec::new(),
+                keyword_mask: None,
+                new_slot: false,
+                interactive: false,
+                fetch_restrict: false,
+                fetch_restrict_satisfied: false,
+                download_files: Vec::new(),
+                required_by,
+                source,
+                provenance: VisibilityProvenance::default(),
+                keyword_suggestion: None,
+                use_suggestion: None,
+                parent_use_suggestion: None,
+                targets_running_root: false,
+                remote_binary: false,
+                build_id: None,
+                deps: Vec::new(),
+            }
+        }
+
+        fn new_164(package: &str, version: &str, parent: &str) -> GraphEntry {
+            entry_164(
+                "dev-libs",
+                package,
+                PretendOutcome::New {
+                    version: version.to_string(),
+                },
+                vec![("dev-libs".to_string(), parent.to_string())],
+                Some("testrepo"),
+                CandidateSource::Ebuild,
+            )
+        }
+
+        /// Backlog #164 S4: `masked_dep_chain` walks from a
+        /// `NoVisibleCandidate`'s requirers up to the command-line
+        /// argument (real `_show_unsatisfied_dep`'s own dep-chain tail,
+        /// `lib/_emerge/depgraph.py:6471`). Decoys pin every lookup: a
+        /// same-category other-package `New` entry must become neither
+        /// the start nor an ascent step, and a non-`NoVisibleCandidate`
+        /// first entry must not become the start either.
+        #[test]
+        fn masked_dep_chain_164_walks_to_the_argument() {
+            let dir = slotundo_temp_dir("164-mdc");
+            let entries = vec![
+                // Decoy: merge-bound but the wrong package.
+                entry_164(
+                    "dev-libs",
+                    "decoy",
+                    PretendOutcome::New {
+                        version: "9.0".to_string(),
+                    },
+                    Vec::new(),
+                    Some("testrepo"),
+                    CandidateSource::Ebuild,
+                ),
+                // Decoy: NVC but the wrong package.
+                entry_164(
+                    "dev-libs",
+                    "sibling",
+                    PretendOutcome::NoVisibleCandidate,
+                    Vec::new(),
+                    None,
+                    CandidateSource::Ebuild,
+                ),
+                entry_164(
+                    "dev-libs",
+                    "target",
+                    PretendOutcome::NoVisibleCandidate,
+                    vec![("dev-libs".to_string(), "parent".to_string())],
+                    None,
+                    CandidateSource::Ebuild,
+                ),
+                new_164("parent", "1.0", "grandma"),
+                entry_164(
+                    "dev-libs",
+                    "grandma",
+                    PretendOutcome::New {
+                        version: "1.0".to_string(),
+                    },
+                    Vec::new(),
+                    Some("testrepo"),
+                    CandidateSource::Ebuild,
+                ),
+            ];
+            let atoms = ["dev-libs/grandma".to_string()];
+            let got = masked_dep_chain(&entries, "dev-libs", "target", &atoms, &dir);
+            assert_eq!(
+                got,
+                vec![
+                    (
+                        "dev-libs/parent-1.0::testrepo".to_string(),
+                        "ebuild".to_string()
+                    ),
+                    (
+                        "dev-libs/grandma-1.0::testrepo".to_string(),
+                        "ebuild".to_string()
+                    ),
+                    ("dev-libs/grandma".to_string(), "argument".to_string()),
+                ]
+            );
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn masked_dep_chain_164_installed_parent_reports_the_vdb_repo() {
+            // An `AlreadyInstalled` parent renders with the vdb repo and
+            // the `installed` type; with no vdb entry that repo is
+            // `__unknown__` (see `installed_pkg_repo`). The
+            // same-category `AlreadyInstalled` decoy must not shadow the
+            // real parent.
+            let dir = slotundo_temp_dir("164-mdc-inst");
+            let entries = vec![
+                entry_164(
+                    "dev-libs",
+                    "aidecoy",
+                    PretendOutcome::AlreadyInstalled {
+                        version: "7.0".to_string(),
+                    },
+                    Vec::new(),
+                    None,
+                    CandidateSource::Ebuild,
+                ),
+                entry_164(
+                    "dev-libs",
+                    "target",
+                    PretendOutcome::NoVisibleCandidate,
+                    vec![("dev-libs".to_string(), "parent".to_string())],
+                    None,
+                    CandidateSource::Ebuild,
+                ),
+                entry_164(
+                    "dev-libs",
+                    "parent",
+                    PretendOutcome::AlreadyInstalled {
+                        version: "1.0".to_string(),
+                    },
+                    vec![("dev-libs".to_string(), "grandma".to_string())],
+                    None,
+                    CandidateSource::Ebuild,
+                ),
+                entry_164(
+                    "dev-libs",
+                    "grandma",
+                    PretendOutcome::New {
+                        version: "1.0".to_string(),
+                    },
+                    Vec::new(),
+                    Some("testrepo"),
+                    CandidateSource::Ebuild,
+                ),
+            ];
+            let atoms = ["dev-libs/grandma".to_string()];
+            let got = masked_dep_chain(&entries, "dev-libs", "target", &atoms, &dir);
+            assert_eq!(
+                got,
+                vec![
+                    (
+                        "dev-libs/parent-1.0::__unknown__".to_string(),
+                        "installed".to_string()
+                    ),
+                    (
+                        "dev-libs/grandma-1.0::testrepo".to_string(),
+                        "ebuild".to_string()
+                    ),
+                    ("dev-libs/grandma".to_string(), "argument".to_string()),
+                ]
+            );
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn masked_dep_chain_164_argument_lines_skip_blockers_and_other_packages() {
+            // `arg_lines` keeps only non-blocker atoms for this exact cp:
+            // a `!`-blocker on the same cp and a plain atom on another cp
+            // are not argument lines.
+            let dir = slotundo_temp_dir("164-mdc-args");
+            let entries = vec![
+                entry_164(
+                    "dev-libs",
+                    "target",
+                    PretendOutcome::NoVisibleCandidate,
+                    vec![("dev-libs".to_string(), "parent".to_string())],
+                    None,
+                    CandidateSource::Ebuild,
+                ),
+                new_164("parent", "1.0", "grandma"),
+                entry_164(
+                    "dev-libs",
+                    "grandma",
+                    PretendOutcome::New {
+                        version: "1.0".to_string(),
+                    },
+                    Vec::new(),
+                    Some("testrepo"),
+                    CandidateSource::Ebuild,
+                ),
+            ];
+            let atoms = [
+                "dev-libs/grandma".to_string(),
+                "!dev-libs/grandma".to_string(),
+                "dev-libs/unrelated".to_string(),
+            ];
+            let got = masked_dep_chain(&entries, "dev-libs", "target", &atoms, &dir);
+            assert_eq!(
+                got,
+                vec![
+                    (
+                        "dev-libs/parent-1.0::testrepo".to_string(),
+                        "ebuild".to_string()
+                    ),
+                    (
+                        "dev-libs/grandma-1.0::testrepo".to_string(),
+                        "ebuild".to_string()
+                    ),
+                    ("dev-libs/grandma".to_string(), "argument".to_string()),
+                ]
+            );
+            let _ = fs::remove_dir_all(&dir);
+        }
     }
 
     #[test]
