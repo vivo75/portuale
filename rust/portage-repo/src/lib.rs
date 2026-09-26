@@ -48454,3 +48454,56 @@ mod tests {
         );
     }
 }
+
+/// Backlog #162 (`lib.rs` mutation cluster 2): direct unit tests for the
+/// eight pure selection predicates P7b's `cargo mutants` run left missed
+/// (`TEST/findings/mutants.md` "## `portage-repo/src/lib.rs`", ~102
+/// missed). Each test observes the predicate's own return value -- no
+/// end-to-end contract reproduction -- so every in-body operator flip
+/// changes an asserted outcome. Kept self-contained (own config, scratch
+/// repo/vdb/entry helpers) so the other Track U branches' blocks rebase
+/// mechanically.
+#[cfg(test)]
+mod tests_162 {
+    use super::*;
+
+    // ---- S1: `bare_cp` (real `3rdparty/portage/lib/portage/update.py`
+    // `parse_updates`: `atom.blocker or atom != atom.cp` rejects
+    // everything but a bare `cat/pkg`; the `slotmove` slot side is
+    // `valid_slot_name`'s job, not this predicate's). ----
+
+    /// `bare_cp` keeps the `(category, package)` of a plain `cat/pkg`
+    /// -- the whole-body `None`/`Some((...)` mutants all fail here.
+    #[test]
+    fn bare_cp_accepts_a_plain_cat_pkg() {
+        assert_eq!(
+            bare_cp("dev-libs/foo"),
+            Some(("dev-libs".to_string(), "foo".to_string()))
+        );
+        assert_eq!(
+            bare_cp("sys-apps/portage"),
+            Some(("sys-apps".to_string(), "portage".to_string()))
+        );
+    }
+
+    /// `bare_cp` rejects each non-bare form individually, so every
+    /// `||`-arm flip (`||` -> `&&` returns `Some` for a
+    /// single-violation input) and both `!=` flips fail here.
+    #[test]
+    fn bare_cp_rejects_every_non_bare_form() {
+        for rejected in [
+            "!dev-libs/foo",
+            "!!dev-libs/foo",
+            ">=dev-libs/foo-1.0",
+            "=dev-libs/foo-1.0",
+            "dev-libs/foo-1.0",
+            "dev-libs/foo:0",
+            "dev-libs/foo:=",
+            "dev-libs/foo[bar]",
+            "dev-libs/foo::gentoo",
+            "not an atom at all !!!",
+        ] {
+            assert_eq!(bare_cp(rejected), None, "{rejected}");
+        }
+    }
+}
