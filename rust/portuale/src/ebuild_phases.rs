@@ -1514,6 +1514,26 @@ pub(crate) fn resolve_standalone_binpkg_compress(
     Some((compress, flags, bzip2))
 }
 
+/// Real `BINPKG_FORMAT` (backlog #173) for a standalone `ebuild <file>
+/// package`: the resolved chain value below the calling env
+/// (`make.conf`/profile/`make.globals` via `other_vars` -- the same
+/// `resolve_config` chain every other standalone helper reads). The
+/// calling-env-wins scalar precedence (#101) stays the caller's job --
+/// it checks the process env first, exactly as it already does for the
+/// `BINPKG_COMPRESS` triple above. `None` when nothing resolves
+/// (outside a repo checkout, unparsable path) or nothing in the chain
+/// names a value, in which case the caller keeps real `make.globals`'s
+/// own default (`PackageOptions::default().binpkg_format`). Deliberately
+/// not `package.env`-matched: a global scalar, not a per-package one.
+pub(crate) fn resolve_standalone_binpkg_format(
+    ebuild_path: &Path,
+    config_root: &Path,
+    eroot: &Path,
+) -> Option<String> {
+    let (config, _) = standalone_package_env_lookup(ebuild_path, config_root, eroot)?;
+    config.other_vars.get("BINPKG_FORMAT").cloned()
+}
+
 /// The config-`USE` set the `depend` phase reduces `RESTRICT`/
 /// `PROPERTIES` on: real `doebuild(mydo="depend")` runs with the
 /// `setcpv` config `USE` (profile + `make.conf` + user `package.use`,

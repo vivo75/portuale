@@ -1665,6 +1665,22 @@ fn apply_env_layer(scalars: &mut HashMap<String, String>, config: &mut Config) {
     }
 }
 
+/// The calling-env-over-config value of a plain last-wins scalar: the
+/// process environment first (real `config.regenerate()`'s `env`
+/// `USE_ORDER` layer, the highest-priority source), then the
+/// already-folded `make.globals` + profile-chain + `make.conf` value in
+/// `other_vars`. For variables outside the `ENV_SCALAR_VARS` allowlist
+/// (e.g. `BINPKG_FORMAT`, backlog #173) `resolve_config` never folds
+/// the env value into `other_vars` itself, so callers that need the
+/// full chain read it here instead of `std::env::var` alone (which
+/// would miss `make.conf`/profile) or `other_vars` alone (which would
+/// miss the calling env). Reads the env through `config_env_var`, so
+/// `cfg(test)` threads can drive it via `with_test_env` without
+/// touching the real process environment.
+pub fn env_over_config_scalar(config: &Config, key: &str) -> Option<String> {
+    config_env_var(key).or_else(|| config.other_vars.get(key).cloned())
+}
+
 /// Processes one file's lines against the shared scalar/USE/ACCEPT_KEYWORDS
 /// state, without any `source` support (used for make.defaults; make.conf
 /// wraps this with `source` handling -- see `process_make_conf_file`).
@@ -5883,6 +5899,68 @@ sync-uri = file:///srv/pkgs
                 assert_eq!(c.other_vars.get("CFLAGS").map(String::as_str), Some("-O3"));
             },
         );
+    }
+
+    #[test]
+    fn env_over_config_scalar_follows_the_calling_env_over_make_conf_chain() {
+        // Backlog #173: `BINPKG_FORMAT`'s full chain is calling env over
+        // `make.conf` over profile `make.defaults` over `make.globals`
+        // (real `config.regenerate()`'s `env` `USE_ORDER` layer on top of
+        // the file stack). The scratch root carries no `make.globals`
+        // (the fixture shape), so the file side is `make.conf` here.
+        let root = std::env::temp_dir().join("portage-profile-test-binpkg-format");
+        let repo = root.join("repo");
+        let prof = repo.join("profiles/default");
+        let portage_dir = root.join("etc/portage");
+        fs::create_dir_all(&prof).unwrap();
+        fs::create_dir_all(&portage_dir).unwrap();
+        fs::write(
+            prof.join("make.defaults"),
+            "ARCH=\"amd64\"\nACCEPT_KEYWORDS=\"${ARCH}\"\n",
+        )
+        .unwrap();
+        fs::write(portage_dir.join("make.conf"), "BINPKG_FORMAT=\"xpak\"\n").unwrap();
+        let make_profile = portage_dir.join("make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&prof, &make_profile).unwrap();
+        let resolve = || {
+            resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
+                .expect("resolves")
+        };
+
+        // No env: the `make.conf` value wins over the (absent) profile /
+        // `make.globals` values.
+        with_test_env(&[], || {
+            let c = resolve();
+            assert_eq!(
+                c.other_vars.get("BINPKG_FORMAT").map(String::as_str),
+                Some("xpak")
+            );
+            assert_eq!(
+                env_over_config_scalar(&c, "BINPKG_FORMAT").as_deref(),
+                Some("xpak")
+            );
+        });
+
+        // Calling env beats `make.conf`.
+        with_test_env(&[("BINPKG_FORMAT", "gpkg")], || {
+            let c = resolve();
+            assert_eq!(
+                env_over_config_scalar(&c, "BINPKG_FORMAT").as_deref(),
+                Some("gpkg")
+            );
+        });
+
+        // No value anywhere: `None` (the caller falls back to real
+        // `make.globals`'s own default, `BINPKG_FORMAT="gpkg"` --
+        // `ebuild_package::resolve_binpkg_format`).
+        fs::write(portage_dir.join("make.conf"), "CFLAGS=\"-O2\"\n").unwrap();
+        with_test_env(&[], || {
+            let c = resolve();
+            assert!(!c.other_vars.contains_key("BINPKG_FORMAT"));
+            assert_eq!(env_over_config_scalar(&c, "BINPKG_FORMAT"), None);
+        });
     }
 
     #[test]
