@@ -26,6 +26,25 @@ fn installed_instance_pf_picks_the_highest_counter_same_slot_version() {
 }
 
 #[test]
+fn replacing_versions_is_the_installed_same_slot_version() {
+    // Portage's `REPLACING_VERSIONS` is the version of the installed
+    // instance(s) this merge replaces (Portage: `vartree.py`).
+    assert_eq!(
+        replacing_versions("awk", Some("awk-4")),
+        Some("4".to_string())
+    );
+    assert_eq!(
+        replacing_versions("awk", Some("awk-3.1-r1")),
+        Some("3.1-r1".to_string())
+    );
+    assert_eq!(
+        replacing_versions("awk", None),
+        None,
+        "a first-ever install has no replaced version (real's empty string)"
+    );
+}
+
+#[test]
 fn read_installed_slot_returns_0_for_a_slot_less_vdb_entry() {
     // Portage's `aux_get` maps a missing/empty SLOT to "0".
     let tmp = tempdir();
