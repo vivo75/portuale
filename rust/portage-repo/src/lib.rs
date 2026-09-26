@@ -45532,6 +45532,1230 @@ mod tests {
         assert!(!is_visible(&c, "dev-libs", "foo-pkg", &config_foo_on));
     }
 
+    /// Backlog #164: direct unit legs for the masking/visibility stack
+    /// (`lib.rs` mutation cluster 4). Each leg observes its predicate's
+    /// own result -- no end-to-end contract reproduction. Self-contained
+    /// so rebases stay mechanical.
+    mod tests_164 {
+        use super::*;
+
+        /// Backlog #164 S1: `parse_license_tree` reports exact token
+        /// positions in every error. Real signals these malformed
+        /// shapes with a bare `InvalidDependString`
+        /// (`3rdparty/portage/lib/portage/exception.py:37`); the
+        /// per-token positions are portuale's own diagnostic precision,
+        /// and every `pos + N` site below is a mutation target (`+` ->
+        /// `-`/`*`), so each arm pins its exact number -- including at
+        /// position 0, where `-` underflows and `*` collapses to 0.
+        #[test]
+        fn parse_license_tree_164_reports_exact_error_positions() {
+            let toks = |s: &str| s.split_whitespace().map(String::from).collect::<Vec<_>>();
+            let no_use = HashSet::new();
+            // `()` is an empty group at token 0: the lookahead reads
+            // token 1, the error reports token 2.
+            match parse_license_tree(&toks("( )"), &no_use) {
+                Err(Error::LicenseExpectedDepString { token }) => assert_eq!(token, 2),
+                other => panic!("an empty group must fail closed, got {other:?}"),
+            }
+            // A stray `)` with no opener: token 1 at position 0 ...
+            match parse_license_tree(&toks(")"), &no_use) {
+                Err(Error::LicenseNoMatchingOpen { token }) => assert_eq!(token, 1),
+                other => panic!("a stray close must fail closed, got {other:?}"),
+            }
+            // ... and token 2 one step in.
+            match parse_license_tree(&toks("GPL-2 )"), &no_use) {
+                Err(Error::LicenseNoMatchingOpen { token }) => assert_eq!(token, 2),
+                other => panic!("a trailing close must fail closed, got {other:?}"),
+            }
+            // A `)` where a `(` was promised by `||`.
+            match parse_license_tree(&toks("|| )"), &no_use) {
+                Err(Error::LicenseExpectedOpen { token }) => assert_eq!(token, 2),
+                other => panic!("a close after `||` must fail closed, got {other:?}"),
+            }
+            // A second `||` where a `(` was promised.
+            match parse_license_tree(&toks("|| ||"), &no_use) {
+                Err(Error::LicenseExpectedOpenGotOr { token }) => assert_eq!(token, 2),
+                other => panic!("a doubled `||` must fail closed, got {other:?}"),
+            }
+            // A bare token where a `(` was promised.
+            match parse_license_tree(&toks("|| GPL-2"), &no_use) {
+                Err(Error::LicenseExpectedOpenGotToken { token, at }) => {
+                    assert_eq!(token, "GPL-2");
+                    assert_eq!(at, 2);
+                }
+                other => panic!("a token after `||` must fail closed, got {other:?}"),
+            }
+            // Pins (no mutants): unclosed and dangling shapes.
+            assert!(matches!(
+                parse_license_tree(&toks("( GPL-2"), &no_use),
+                Err(Error::LicenseMissingCloseParen)
+            ));
+            assert!(matches!(
+                parse_license_tree(&toks("||"), &no_use),
+                Err(Error::LicenseMissingOpenParen)
+            ));
+        }
+
+        /// Hand-built binary candidate: `binary_use` is the baked USE set
+        /// (real `pkg.use.enabled` for a built package), `iuse` its
+        /// domain -- no md5-cache read, no profile recompute (see
+        /// `candidate_iuse_and_use`'s own Binary arm).
+        fn binary_164(version: &str, iuse: &str, use_flags: &[&str]) -> Candidate {
+            let mut c = candidate(version, &["amd64"]);
+            c.source = CandidateSource::Binary;
+            c.iuse = iuse.to_string();
+            c.binary_use = Some(use_flags.iter().map(|s| s.to_string()).collect());
+            c
+        }
+
+        /// Backlog #164 S2: a candidate masked by KEYWORDS alone --
+        /// real `_getmaskingstatus`
+        /// (`3rdparty/portage/lib/portage/package/ebuild/getmaskingstatus.py:43`)
+        /// records one `_MaskReason` per failing category (package.mask,
+        /// KEYWORDS, LICENSE, PROPERTIES, RESTRICT), so "keyword-masked
+        /// only" means exactly the KEYWORDS reason fires and no other
+        /// gate trips first.
+        #[test]
+        fn keyword_masked_only_164_needs_keywords_and_only_keywords() {
+            // `~amd64` under an `amd64` profile: keyword-masked, and
+            // nothing else is wrong.
+            let config = test_config();
+            let kw_only = candidate("1.0", &["~amd64"]);
+            assert!(keyword_masked_only(&kw_only, "dev-libs", "kwonly", &config));
+            // Fully visible (`amd64`): not keyword-masked at all.
+            let visible = candidate("1.0", &["amd64"]);
+            assert!(!keyword_masked_only(
+                &visible,
+                "dev-libs",
+                "kwvisible",
+                &config
+            ));
+        }
+
+        #[test]
+        fn keyword_masked_only_164_false_when_another_reason_blocks() {
+            let config = portage_profile::Config {
+                accept_keywords: HashSet::from(["amd64".to_string()]),
+                accept_license: vec!["MIT".to_string()],
+                ..Default::default()
+            };
+            // Keywords rejected AND license unaccepted: the license gate
+            // fires first, so this is not "keyword-masked only".
+            let both = Candidate {
+                keywords: vec!["~amd64".to_string()],
+                license: "GPL-2".to_string(),
+                ..candidate("1.0", &["~amd64"])
+            };
+            assert!(!keyword_masked_only(&both, "dev-libs", "kwboth", &config));
+            // Keywords rejected AND PROPERTIES unaccepted.
+            let props = Candidate {
+                keywords: vec!["~amd64".to_string()],
+                properties: "interactive".to_string(),
+                ..candidate("1.0", &["~amd64"])
+            };
+            assert!(!keyword_masked_only(&props, "dev-libs", "kwprops", &config));
+            // Keywords rejected AND RESTRICT unaccepted.
+            let restrict = Candidate {
+                keywords: vec!["~amd64".to_string()],
+                restrict: "fetch".to_string(),
+                ..candidate("1.0", &["~amd64"])
+            };
+            assert!(!keyword_masked_only(
+                &restrict,
+                "dev-libs",
+                "kwrestrict",
+                &config
+            ));
+        }
+
+        #[test]
+        fn keyword_masked_only_164_mask_unmask_interplay() {
+            let rescued = candidate("1.0", &["~amd64"]);
+            // In `package.mask` but rescued by `package.unmask`: the mask
+            // gate stays shut, so a keyword-masked candidate still
+            // counts as keyword-masked only ...
+            let config = portage_profile::Config {
+                accept_keywords: HashSet::from(["amd64".to_string()]),
+                package_mask: vec!["dev-libs/kwunmask".to_string()],
+                package_unmask: vec!["dev-libs/kwunmask".to_string()],
+                ..Default::default()
+            };
+            assert!(keyword_masked_only(
+                &rescued, "dev-libs", "kwunmask", &config
+            ));
+            // ... while a mask with no unmask masks outright, whatever
+            // the keywords say.
+            let config_masked = portage_profile::Config {
+                accept_keywords: HashSet::from(["amd64".to_string()]),
+                package_mask: vec!["dev-libs/kwmasked".to_string()],
+                ..Default::default()
+            };
+            assert!(!keyword_masked_only(
+                &rescued,
+                "dev-libs",
+                "kwmasked",
+                &config_masked
+            ));
+        }
+
+        #[test]
+        fn keyword_masked_only_164_invalid_is_never_keyword_only() {
+            // Backlog #153: an `invalid` IUSE-conditional verdict
+            // disqualifies every "masked by X alone" claim. A binary
+            // candidate carries its own dep keys (`binary_deps`), so no
+            // repo staging is needed.
+            let mut invalid = binary_164("1.0", "", &[]);
+            invalid.keywords = vec!["~amd64".to_string()];
+            invalid.binary_deps = HashMap::from([(
+                "RDEPEND".to_string(),
+                "bogusflag? ( dev-libs/foo )".to_string(),
+            )]);
+            assert!(!keyword_masked_only(
+                &invalid,
+                "dev-libs",
+                "kwinvalid",
+                &test_config()
+            ));
+        }
+
+        /// Backlog #164 S2: a candidate masked by `package.mask` alone --
+        /// real `_getmaskingstatus`'s own first reason (`package.mask`
+        /// via `settings._getMaskAtom`, same file): every other
+        /// visibility check (KEYWORDS, LICENSE, PROPERTIES, RESTRICT)
+        /// must pass around it.
+        #[test]
+        fn mask_masked_only_164_needs_a_mask_and_nothing_else() {
+            let config = portage_profile::Config {
+                accept_keywords: HashSet::from(["amd64".to_string()]),
+                package_mask: vec!["dev-libs/maskonly".to_string()],
+                ..Default::default()
+            };
+            let masked = candidate("1.0", &["amd64"]);
+            assert!(mask_masked_only(&masked, "dev-libs", "maskonly", &config));
+            // No mask entry at all: not mask-masked, however visible.
+            assert!(!mask_masked_only(
+                &masked,
+                "dev-libs",
+                "maskabsent",
+                &config
+            ));
+        }
+
+        #[test]
+        fn mask_masked_only_164_false_when_another_reason_blocks() {
+            let config = portage_profile::Config {
+                accept_keywords: HashSet::from(["amd64".to_string()]),
+                accept_license: vec!["MIT".to_string()],
+                package_mask: vec![
+                    "dev-libs/maskkw".to_string(),
+                    "dev-libs/masklic".to_string(),
+                    "dev-libs/maskprops".to_string(),
+                    "dev-libs/maskrestrict".to_string(),
+                ],
+                ..Default::default()
+            };
+            // Masked AND keyword-rejected.
+            let kw = candidate("1.0", &["~amd64"]);
+            assert!(!mask_masked_only(&kw, "dev-libs", "maskkw", &config));
+            // Masked AND license-unaccepted.
+            let lic = Candidate {
+                license: "GPL-2".to_string(),
+                ..candidate("1.0", &["amd64"])
+            };
+            assert!(!mask_masked_only(&lic, "dev-libs", "masklic", &config));
+            // Masked AND PROPERTIES-unaccepted.
+            let props = Candidate {
+                properties: "interactive".to_string(),
+                ..candidate("1.0", &["amd64"])
+            };
+            assert!(!mask_masked_only(&props, "dev-libs", "maskprops", &config));
+            // Masked AND RESTRICT-unaccepted.
+            let restrict = Candidate {
+                restrict: "fetch".to_string(),
+                ..candidate("1.0", &["amd64"])
+            };
+            assert!(!mask_masked_only(
+                &restrict,
+                "dev-libs",
+                "maskrestrict",
+                &config
+            ));
+        }
+
+        #[test]
+        fn mask_masked_only_164_unmask_cancels_the_mask() {
+            // Masked AND unmasked: `package.unmask` cancels the mask
+            // (real `_getMaskAtom`'s own unmask half), so the candidate
+            // is not mask-masked at all.
+            let config = portage_profile::Config {
+                accept_keywords: HashSet::from(["amd64".to_string()]),
+                package_mask: vec!["dev-libs/maskrescue".to_string()],
+                package_unmask: vec!["dev-libs/maskrescue".to_string()],
+                ..Default::default()
+            };
+            assert!(!mask_masked_only(
+                &candidate("1.0", &["amd64"]),
+                "dev-libs",
+                "maskrescue",
+                &config
+            ));
+        }
+
+        #[test]
+        fn mask_masked_only_164_invalid_is_never_mask_only() {
+            // Backlog #153, same shape as the keyword leg: an `invalid`
+            // verdict disqualifies the "mask alone" claim even though the
+            // mask gate itself is open.
+            let config = portage_profile::Config {
+                accept_keywords: HashSet::from(["amd64".to_string()]),
+                package_mask: vec!["dev-libs/maskinvalid".to_string()],
+                ..Default::default()
+            };
+            let mut invalid = binary_164("1.0", "", &[]);
+            invalid.binary_deps = HashMap::from([(
+                "RDEPEND".to_string(),
+                "bogusflag? ( dev-libs/foo )".to_string(),
+            )]);
+            assert!(!mask_masked_only(
+                &invalid,
+                "dev-libs",
+                "maskinvalid",
+                &config
+            ));
+        }
+
+        /// Backlog #164 S2: a candidate masked by LICENSE alone -- real
+        /// `LicenseManager.getMissingLicenses` (via `_getMaskedLicenses`,
+        /// `3rdparty/portage/lib/portage/package/ebuild/_config/LicenseManager.py:169,211`)
+        /// reports a non-empty missing set while every other
+        /// `_getmaskingstatus` reason stays absent.
+        #[test]
+        fn license_masked_only_164_needs_a_license_and_only_a_license() {
+            let config = portage_profile::Config {
+                accept_keywords: HashSet::from(["amd64".to_string()]),
+                accept_license: vec!["MIT".to_string()],
+                ..Default::default()
+            };
+            // GPL-2 unaccepted, keywords fine: license-masked only.
+            let lic_only = Candidate {
+                license: "GPL-2".to_string(),
+                ..candidate("1.0", &["amd64"])
+            };
+            assert!(license_masked_only(
+                &lic_only, "dev-libs", "liconly", &config
+            ));
+            // License accepted: not license-masked at all.
+            let accepted = Candidate {
+                license: "MIT".to_string(),
+                ..candidate("1.0", &["amd64"])
+            };
+            assert!(!license_masked_only(
+                &accepted, "dev-libs", "licok", &config
+            ));
+        }
+
+        #[test]
+        fn license_masked_only_164_false_when_another_reason_blocks() {
+            let config = portage_profile::Config {
+                accept_keywords: HashSet::from(["amd64".to_string()]),
+                accept_license: vec!["MIT".to_string()],
+                package_mask: vec!["dev-libs/licmasked".to_string()],
+                ..Default::default()
+            };
+            let lic = || Candidate {
+                license: "GPL-2".to_string(),
+                ..candidate("1.0", &["amd64"])
+            };
+            // License-unaccepted AND keyword-rejected.
+            let kw = Candidate {
+                keywords: vec!["~amd64".to_string()],
+                ..lic()
+            };
+            assert!(!license_masked_only(&kw, "dev-libs", "lickw", &config));
+            // License-unaccepted AND PROPERTIES-unaccepted.
+            let props = Candidate {
+                properties: "interactive".to_string(),
+                ..lic()
+            };
+            assert!(!license_masked_only(
+                &props, "dev-libs", "licprops", &config
+            ));
+            // License-unaccepted AND RESTRICT-unaccepted.
+            let restrict = Candidate {
+                restrict: "fetch".to_string(),
+                ..lic()
+            };
+            assert!(!license_masked_only(
+                &restrict,
+                "dev-libs",
+                "licrestrict",
+                &config
+            ));
+            // License-unaccepted AND package-masked.
+            assert!(!license_masked_only(
+                &lic(),
+                "dev-libs",
+                "licmasked",
+                &config
+            ));
+        }
+
+        #[test]
+        fn license_masked_only_164_mask_unmask_leaves_the_license_verdict() {
+            // In `package.mask` but rescued by `package.unmask`: the
+            // mask gate stays shut, so the license verdict still shows.
+            let config = portage_profile::Config {
+                accept_keywords: HashSet::from(["amd64".to_string()]),
+                accept_license: vec!["MIT".to_string()],
+                package_mask: vec!["dev-libs/licunmask".to_string()],
+                package_unmask: vec!["dev-libs/licunmask".to_string()],
+                ..Default::default()
+            };
+            let lic = Candidate {
+                license: "GPL-2".to_string(),
+                ..candidate("1.0", &["amd64"])
+            };
+            assert!(license_masked_only(&lic, "dev-libs", "licunmask", &config));
+        }
+
+        #[test]
+        fn license_masked_only_164_use_conditional_follows_the_flag() {
+            // Real `use_reduce`'s own "if '?' in license_str" path: the
+            // `foo? ( ... )` group only constrains once `foo` is enabled.
+            // `+foo` in IUSE is enabled by default, no profile needed.
+            let config = portage_profile::Config {
+                accept_keywords: HashSet::from(["amd64".to_string()]),
+                accept_license: vec!["MIT".to_string()],
+                ..Default::default()
+            };
+            // MIT accepted but the active conditional pulls in an
+            // unaccepted GPL-2: license-masked only.
+            let cond = Candidate {
+                license: "MIT foo? ( GPL-2 )".to_string(),
+                iuse: "+foo".to_string(),
+                ..candidate("1.0", &["amd64"])
+            };
+            assert!(license_masked_only(&cond, "dev-libs", "liccond", &config));
+            // Same shape with the flag default-off: the group drops out,
+            // MIT alone is accepted -- not license-masked.
+            let cond_off = Candidate {
+                license: "MIT foo? ( GPL-2 )".to_string(),
+                iuse: "-foo".to_string(),
+                ..candidate("1.0", &["amd64"])
+            };
+            assert!(!license_masked_only(
+                &cond_off,
+                "dev-libs",
+                "liccondoff",
+                &config
+            ));
+        }
+
+        #[test]
+        fn license_masked_only_164_invalid_is_never_license_only() {
+            // Backlog #153: `invalid` disqualifies the claim even with a
+            // genuinely unaccepted LICENSE.
+            let config = portage_profile::Config {
+                accept_keywords: HashSet::from(["amd64".to_string()]),
+                accept_license: vec!["MIT".to_string()],
+                ..Default::default()
+            };
+            let mut invalid = binary_164("1.0", "", &[]);
+            invalid.license = "GPL-2".to_string();
+            invalid.binary_deps = HashMap::from([(
+                "RDEPEND".to_string(),
+                "bogusflag? ( dev-libs/foo )".to_string(),
+            )]);
+            assert!(!license_masked_only(
+                &invalid,
+                "dev-libs",
+                "licinvalid",
+                &config
+            ));
+        }
+
+        /// Backlog #164 S2: a visible candidate whose atom `[use]` deps
+        /// fail -- real `_iter_match_pkgs` checks a built package's own
+        /// `[use]` deps against `pkg.use.enabled` (the baked set). The
+        /// binary shape below needs no repo staging: `binary_use` is the
+        /// baked set, `iuse` its domain.
+        #[test]
+        fn use_masked_only_164_needs_an_unsatisfied_use_dep() {
+            let use_dep = |flag: &str| portage_dep::UseDep {
+                flag: flag.to_string(),
+                op: portage_dep::UseDepOp::Enabled,
+                default: None,
+            };
+            // `foo` declared but built disabled: `[foo]` unsatisfied.
+            let unmet = binary_164("1.0", "foo", &[]);
+            assert!(use_masked_only(
+                &unmet,
+                "dev-libs",
+                "useunmet",
+                &[use_dep("foo")],
+                &test_config()
+            ));
+            // Same candidate built with `foo`: satisfied, not use-masked.
+            let met = binary_164("1.0", "foo", &["foo"]);
+            assert!(!use_masked_only(
+                &met,
+                "dev-libs",
+                "usemet",
+                &[use_dep("foo")],
+                &test_config()
+            ));
+        }
+
+        #[test]
+        fn use_masked_only_164_invisible_is_never_use_only() {
+            // A keyword-masked candidate fails `is_visible` first, so no
+            // USE suggestion applies -- real's "only suggest a change
+            // that would actually fix it" spirit.
+            let use_dep = portage_dep::UseDep {
+                flag: "foo".to_string(),
+                op: portage_dep::UseDepOp::Enabled,
+                default: None,
+            };
+            let mut masked = binary_164("1.0", "foo", &[]);
+            masked.keywords = vec!["~amd64".to_string()];
+            assert!(!use_masked_only(
+                &masked,
+                "dev-libs",
+                "useinvisible",
+                &[use_dep],
+                &test_config()
+            ));
+        }
+
+        /// Backlog #164 S3: scratch repo writer with per-version
+        /// KEYWORDS/LICENSE/SLOT, mirroring `blocker_161_write_pkg_full`
+        /// (ebuild + consistent md5-cache entry, which the md5-cache
+        /// validation guard requires).
+        fn repo_164(base: &Path, pkgs: &[(&str, &str, &str, &str, &str)]) -> Vec<RepoConfig> {
+            // (cp, pv, slot, keywords, license).
+            use md5::Digest as _;
+            use std::fmt::Write as _;
+            let repo = base.join("repo164");
+            for (cp, pv, slot, keywords, license) in pkgs {
+                let (cat, pkg) = cp.split_once('/').expect("category/package");
+                let dir = repo.join(cat).join(pkg);
+                std::fs::create_dir_all(&dir).unwrap();
+                let body = format!(
+                    "EAPI=8\nDESCRIPTION=\"164 visibility\"\nSLOT=\"{slot}\"\nKEYWORDS=\"{keywords}\"\nLICENSE=\"{license}\"\n"
+                );
+                std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
+                let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+                let mut entry =
+                    "DEFINED_PHASES=-\nDESCRIPTION=164 visibility\nEAPI=8\n".to_string();
+                writeln!(entry, "KEYWORDS={keywords}").unwrap();
+                writeln!(entry, "LICENSE={license}").unwrap();
+                writeln!(entry, "SLOT={slot}\n_md5_={md5}").unwrap();
+                let cachedir = repo.join("metadata/md5-cache").join(cat);
+                std::fs::create_dir_all(&cachedir).unwrap();
+                std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+            }
+            vec![RepoConfig {
+                name: "testrepo".to_string(),
+                location: repo,
+                priority: 0,
+                is_main: true,
+                masters: vec![],
+                profile_formats: vec![],
+                cache_formats: vec![],
+                aliases: vec![],
+                sync_type: None,
+                sync_uri: None,
+                volatile: false,
+                module_specific_options: vec![],
+            }]
+        }
+
+        /// Backlog #164 S3: `visible_tree_matches` returns the visible
+        /// (real `_pkg_visibility_check`,
+        /// `lib/_emerge/depgraph.py:7562`) candidates an atom selects --
+        /// here 1.0 is stable-visible and 2.0 is `~amd64`-masked under an
+        /// `amd64` profile, so only 1.0 shows.
+        #[test]
+        fn visible_tree_matches_164_lists_only_visible_matches() {
+            let dir = slotundo_temp_dir("164-vtm");
+            let repos = repo_164(
+                &dir,
+                &[
+                    ("dev-libs/vtm", "1.0", "0", "amd64", "MIT"),
+                    ("dev-libs/vtm", "2.0", "0", "~amd64", "MIT"),
+                ],
+            );
+            // `test_config` accepts no license by default; the scratch
+            // packages declare MIT, so accept it (the KEYWORDS verdict
+            // under test is orthogonal).
+            let mut config = test_config();
+            config.accept_license = vec!["*".to_string()];
+            let got = visible_tree_matches(&repos, "dev-libs/vtm", &config, &[]);
+            assert_eq!(got, vec![("1.0".to_string(), "0".to_string())]);
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn visible_tree_matches_164_negated_constraint_excludes() {
+            // `!atom` drops the match it names: with 1.0 negated nothing
+            // is left (2.0 is keyword-masked).
+            let dir = slotundo_temp_dir("164-vtm-neg");
+            let repos = repo_164(
+                &dir,
+                &[
+                    ("dev-libs/vtmneg", "1.0", "0", "amd64", "MIT"),
+                    ("dev-libs/vtmneg", "2.0", "0", "~amd64", "MIT"),
+                ],
+            );
+            let mut config = test_config();
+            config.accept_license = vec!["*".to_string()];
+            // NOTE: the version half needs its `=` operator --
+            // portage-dep rejects an operator-less versioned atom as
+            // PMS-ambiguous (mirroring real `Atom.__init__`), which
+            // would make the constraint vacuously pass.
+            let neg_one = ["!=dev-libs/vtmneg-1.0".to_string()];
+            let got_none = visible_tree_matches(&repos, "dev-libs/vtmneg", &config, &neg_one);
+            assert_eq!(got_none, Vec::new());
+            // A negation naming nothing keeps the visible match ...
+            let neg_idle = ["!=dev-libs/vtmneg-9.0".to_string()];
+            let got_one = visible_tree_matches(&repos, "dev-libs/vtmneg", &config, &neg_idle);
+            assert_eq!(got_one, vec![("1.0".to_string(), "0".to_string())]);
+            // ... and so does a positive constraint it satisfies.
+            let pos_one = ["=dev-libs/vtmneg-1.0".to_string()];
+            let got_pos = visible_tree_matches(&repos, "dev-libs/vtmneg", &config, &pos_one);
+            assert_eq!(got_pos, vec![("1.0".to_string(), "0".to_string())]);
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn visible_tree_matches_164_atom_still_selects_within_visible() {
+            // Both versions visible here: `=...-1.0` must not leak 2.0
+            // past the atom match.
+            let dir = slotundo_temp_dir("164-vtm-sel");
+            let repos = repo_164(
+                &dir,
+                &[
+                    ("dev-libs/vtmsel", "1.0", "0", "amd64", "MIT"),
+                    ("dev-libs/vtmsel", "2.0", "0", "amd64", "MIT"),
+                ],
+            );
+            let mut config = test_config();
+            config.accept_license = vec!["*".to_string()];
+            let got = visible_tree_matches(&repos, "=dev-libs/vtmsel-1.0", &config, &[]);
+            assert_eq!(got, vec![("1.0".to_string(), "0".to_string())]);
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn visible_tree_matches_164_license_masked_versions_stay_out() {
+            // Real `LicenseManager.getMissingLicenses` verdict inside the
+            // visible set: 1.0 declares an unaccepted license, 2.0 an
+            // accepted one.
+            let dir = slotundo_temp_dir("164-vtm-lic");
+            let repos = repo_164(
+                &dir,
+                &[
+                    ("dev-libs/vtmlic", "1.0", "0", "amd64", "GPL-2"),
+                    ("dev-libs/vtmlic", "2.0", "0", "amd64", "MIT"),
+                ],
+            );
+            let config = portage_profile::Config {
+                accept_keywords: HashSet::from(["amd64".to_string()]),
+                accept_license: vec!["MIT".to_string()],
+                ..Default::default()
+            };
+            let got = visible_tree_matches(&repos, "dev-libs/vtmlic", &config, &[]);
+            assert_eq!(got, vec![("2.0".to_string(), "0".to_string())]);
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn visible_tree_matches_164_unparseable_atom_and_missing_package_match_nothing() {
+            let dir = slotundo_temp_dir("164-vtm-empty");
+            let repos = repo_164(&dir, &[("dev-libs/vtmempty", "1.0", "0", "amd64", "MIT")]);
+            let config = test_config();
+            let got_bad = visible_tree_matches(&repos, "][", &config, &[]);
+            assert_eq!(got_bad, Vec::new());
+            let got_missing = visible_tree_matches(&repos, "dev-libs/nosuchpkg", &config, &[]);
+            assert_eq!(got_missing, Vec::new());
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        /// Backlog #164 S4: minimal `GraphEntry` for the dep-chain legs
+        /// (merge-bound unless stated otherwise).
+        fn entry_164(
+            category: &str,
+            package: &str,
+            outcome: PretendOutcome,
+            required_by: Vec<(String, String)>,
+            repo: Option<&str>,
+            source: CandidateSource,
+        ) -> GraphEntry {
+            GraphEntry {
+                discovery: 0,
+                category: category.to_string(),
+                package: package.to_string(),
+                outcome,
+                blockers: Vec::new(),
+                slot: Some("0".to_string()),
+                sub_slot: Some("0".to_string()),
+                repo_name: repo.map(str::to_string),
+                oldbest: Vec::new(),
+                use_flags_display: Vec::new(),
+                use_expand_display: Vec::new(),
+                use_expand_display_p: Vec::new(),
+                keyword_mask: None,
+                new_slot: false,
+                interactive: false,
+                fetch_restrict: false,
+                fetch_restrict_satisfied: false,
+                download_files: Vec::new(),
+                required_by,
+                source,
+                provenance: VisibilityProvenance::default(),
+                keyword_suggestion: None,
+                use_suggestion: None,
+                parent_use_suggestion: None,
+                targets_running_root: false,
+                remote_binary: false,
+                build_id: None,
+                deps: Vec::new(),
+            }
+        }
+
+        fn new_164(package: &str, version: &str, parent: &str) -> GraphEntry {
+            entry_164(
+                "dev-libs",
+                package,
+                PretendOutcome::New {
+                    version: version.to_string(),
+                },
+                vec![("dev-libs".to_string(), parent.to_string())],
+                Some("testrepo"),
+                CandidateSource::Ebuild,
+            )
+        }
+
+        /// Backlog #164 S4: `masked_dep_chain` walks from a
+        /// `NoVisibleCandidate`'s requirers up to the command-line
+        /// argument (real `_show_unsatisfied_dep`'s own dep-chain tail,
+        /// `lib/_emerge/depgraph.py:6471`). Decoys pin every lookup: a
+        /// same-category other-package `New` entry must become neither
+        /// the start nor an ascent step, and a non-`NoVisibleCandidate`
+        /// first entry must not become the start either.
+        #[test]
+        fn masked_dep_chain_164_walks_to_the_argument() {
+            let dir = slotundo_temp_dir("164-mdc");
+            let entries = vec![
+                // Decoy: merge-bound but the wrong package.
+                entry_164(
+                    "dev-libs",
+                    "decoy",
+                    PretendOutcome::New {
+                        version: "9.0".to_string(),
+                    },
+                    Vec::new(),
+                    Some("testrepo"),
+                    CandidateSource::Ebuild,
+                ),
+                // Decoy: NVC but the wrong package.
+                entry_164(
+                    "dev-libs",
+                    "sibling",
+                    PretendOutcome::NoVisibleCandidate,
+                    Vec::new(),
+                    None,
+                    CandidateSource::Ebuild,
+                ),
+                entry_164(
+                    "dev-libs",
+                    "target",
+                    PretendOutcome::NoVisibleCandidate,
+                    vec![("dev-libs".to_string(), "parent".to_string())],
+                    None,
+                    CandidateSource::Ebuild,
+                ),
+                new_164("parent", "1.0", "grandma"),
+                entry_164(
+                    "dev-libs",
+                    "grandma",
+                    PretendOutcome::New {
+                        version: "1.0".to_string(),
+                    },
+                    Vec::new(),
+                    Some("testrepo"),
+                    CandidateSource::Ebuild,
+                ),
+            ];
+            let atoms = ["dev-libs/grandma".to_string()];
+            let got = masked_dep_chain(&entries, "dev-libs", "target", &atoms, &dir);
+            assert_eq!(
+                got,
+                vec![
+                    (
+                        "dev-libs/parent-1.0::testrepo".to_string(),
+                        "ebuild".to_string()
+                    ),
+                    (
+                        "dev-libs/grandma-1.0::testrepo".to_string(),
+                        "ebuild".to_string()
+                    ),
+                    ("dev-libs/grandma".to_string(), "argument".to_string()),
+                ]
+            );
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn masked_dep_chain_164_installed_parent_reports_the_vdb_repo() {
+            // An `AlreadyInstalled` parent renders with the vdb repo and
+            // the `installed` type; with no vdb entry that repo is
+            // `__unknown__` (see `installed_pkg_repo`). The
+            // same-category `AlreadyInstalled` decoy must not shadow the
+            // real parent.
+            let dir = slotundo_temp_dir("164-mdc-inst");
+            let entries = vec![
+                entry_164(
+                    "dev-libs",
+                    "aidecoy",
+                    PretendOutcome::AlreadyInstalled {
+                        version: "7.0".to_string(),
+                    },
+                    Vec::new(),
+                    None,
+                    CandidateSource::Ebuild,
+                ),
+                entry_164(
+                    "dev-libs",
+                    "target",
+                    PretendOutcome::NoVisibleCandidate,
+                    vec![("dev-libs".to_string(), "parent".to_string())],
+                    None,
+                    CandidateSource::Ebuild,
+                ),
+                entry_164(
+                    "dev-libs",
+                    "parent",
+                    PretendOutcome::AlreadyInstalled {
+                        version: "1.0".to_string(),
+                    },
+                    vec![("dev-libs".to_string(), "grandma".to_string())],
+                    None,
+                    CandidateSource::Ebuild,
+                ),
+                entry_164(
+                    "dev-libs",
+                    "grandma",
+                    PretendOutcome::New {
+                        version: "1.0".to_string(),
+                    },
+                    Vec::new(),
+                    Some("testrepo"),
+                    CandidateSource::Ebuild,
+                ),
+            ];
+            let atoms = ["dev-libs/grandma".to_string()];
+            let got = masked_dep_chain(&entries, "dev-libs", "target", &atoms, &dir);
+            assert_eq!(
+                got,
+                vec![
+                    (
+                        "dev-libs/parent-1.0::__unknown__".to_string(),
+                        "installed".to_string()
+                    ),
+                    (
+                        "dev-libs/grandma-1.0::testrepo".to_string(),
+                        "ebuild".to_string()
+                    ),
+                    ("dev-libs/grandma".to_string(), "argument".to_string()),
+                ]
+            );
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn masked_dep_chain_164_argument_lines_skip_blockers_and_other_packages() {
+            // `arg_lines` keeps only non-blocker atoms for this exact cp:
+            // a `!`-blocker on the same cp and a plain atom on another cp
+            // are not argument lines.
+            let dir = slotundo_temp_dir("164-mdc-args");
+            let entries = vec![
+                entry_164(
+                    "dev-libs",
+                    "target",
+                    PretendOutcome::NoVisibleCandidate,
+                    vec![("dev-libs".to_string(), "parent".to_string())],
+                    None,
+                    CandidateSource::Ebuild,
+                ),
+                new_164("parent", "1.0", "grandma"),
+                entry_164(
+                    "dev-libs",
+                    "grandma",
+                    PretendOutcome::New {
+                        version: "1.0".to_string(),
+                    },
+                    Vec::new(),
+                    Some("testrepo"),
+                    CandidateSource::Ebuild,
+                ),
+            ];
+            let atoms = [
+                "dev-libs/grandma".to_string(),
+                "!dev-libs/grandma".to_string(),
+                "dev-libs/unrelated".to_string(),
+            ];
+            let got = masked_dep_chain(&entries, "dev-libs", "target", &atoms, &dir);
+            assert_eq!(
+                got,
+                vec![
+                    (
+                        "dev-libs/parent-1.0::testrepo".to_string(),
+                        "ebuild".to_string()
+                    ),
+                    (
+                        "dev-libs/grandma-1.0::testrepo".to_string(),
+                        "ebuild".to_string()
+                    ),
+                    ("dev-libs/grandma".to_string(), "argument".to_string()),
+                ]
+            );
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        /// Backlog #164 S5: `required_use_dep_chain` reports the failing
+        /// package's direct parent plus its command-line argument (real
+        /// `_show_unsatisfied_dep`'s own dep-chain tail,
+        /// `lib/_emerge/depgraph.py:6471`: "first the failing package's
+        /// direct parent, then that parent's own command-line argument
+        /// when it is one").
+        #[test]
+        fn required_use_dep_chain_164_reports_parent_then_argument() {
+            let entries = vec![
+                // Decoy: same category, wrong package -- must not win
+                // the parent lookup.
+                entry_164(
+                    "dev-libs",
+                    "rudecoy",
+                    PretendOutcome::New {
+                        version: "9.0".to_string(),
+                    },
+                    Vec::new(),
+                    Some("testrepo"),
+                    CandidateSource::Ebuild,
+                ),
+                entry_164(
+                    "dev-libs",
+                    "ruparent",
+                    PretendOutcome::New {
+                        version: "1.0".to_string(),
+                    },
+                    Vec::new(),
+                    Some("testrepo"),
+                    CandidateSource::Ebuild,
+                ),
+            ];
+            let owner = Some(("dev-libs".to_string(), "ruparent".to_string()));
+            let top: HashSet<&str> = ["=dev-libs/ruparent-1.0"].into_iter().collect();
+            let got = required_use_dep_chain(&owner, &top, &entries);
+            assert_eq!(
+                got,
+                vec![
+                    (
+                        "dev-libs/ruparent-1.0::testrepo".to_string(),
+                        "ebuild".to_string()
+                    ),
+                    ("=dev-libs/ruparent-1.0".to_string(), "argument".to_string()),
+                ]
+            );
+        }
+
+        #[test]
+        fn required_use_dep_chain_164_upgrade_parent_reports_the_to_version() {
+            let entries = vec![entry_164(
+                "dev-libs",
+                "ruup",
+                PretendOutcome::Upgrade {
+                    from: "1.0".to_string(),
+                    to: "2.0".to_string(),
+                },
+                Vec::new(),
+                Some("testrepo"),
+                CandidateSource::Ebuild,
+            )];
+            let owner = Some(("dev-libs".to_string(), "ruup".to_string()));
+            let top: HashSet<&str> = ["sys-apps/other"].into_iter().collect();
+            let got = required_use_dep_chain(&owner, &top, &entries);
+            assert_eq!(
+                got,
+                vec![(
+                    "dev-libs/ruup-2.0::testrepo".to_string(),
+                    "ebuild".to_string()
+                )]
+            );
+        }
+
+        #[test]
+        fn required_use_dep_chain_164_argument_needs_the_same_package() {
+            // A same-category other-package atom is not this parent's
+            // argument line.
+            let entries = vec![entry_164(
+                "dev-libs",
+                "rusib",
+                PretendOutcome::New {
+                    version: "1.0".to_string(),
+                },
+                Vec::new(),
+                Some("testrepo"),
+                CandidateSource::Ebuild,
+            )];
+            let owner = Some(("dev-libs".to_string(), "rusib".to_string()));
+            let top: HashSet<&str> = ["dev-libs/rusibling"].into_iter().collect();
+            let got = required_use_dep_chain(&owner, &top, &entries);
+            assert_eq!(
+                got,
+                vec![(
+                    "dev-libs/rusib-1.0::testrepo".to_string(),
+                    "ebuild".to_string()
+                )]
+            );
+        }
+
+        #[test]
+        fn required_use_dep_chain_164_no_owner_and_installed_parent_yield_nothing() {
+            // No owner: the failing package IS the top-level atom, and
+            // real skips the block.
+            let entries = vec![entry_164(
+                "dev-libs",
+                "rux",
+                PretendOutcome::New {
+                    version: "1.0".to_string(),
+                },
+                Vec::new(),
+                Some("testrepo"),
+                CandidateSource::Ebuild,
+            )];
+            let top: HashSet<&str> = ["dev-libs/rux"].into_iter().collect();
+            assert_eq!(required_use_dep_chain(&None, &top, &entries), Vec::new());
+            // An `AlreadyInstalled` parent has no merge version to name.
+            let installed = vec![entry_164(
+                "dev-libs",
+                "ruinst",
+                PretendOutcome::AlreadyInstalled {
+                    version: "1.0".to_string(),
+                },
+                Vec::new(),
+                None,
+                CandidateSource::Ebuild,
+            )];
+            let owner = Some(("dev-libs".to_string(), "ruinst".to_string()));
+            let empty: HashSet<&str> = HashSet::new();
+            assert_eq!(
+                required_use_dep_chain(&owner, &empty, &installed),
+                Vec::new()
+            );
+        }
+
+        /// Backlog #164 S6: `autounmask_dep_chain` renders the whole
+        /// parent chain to the argument (real `_get_dep_chain_as_comment`,
+        /// `lib/_emerge/depgraph.py:6457`): one `required by
+        /// <cpv>::<repo>` row per merge-bound parent, then the argument
+        /// line.
+        #[test]
+        fn autounmask_dep_chain_164_top_level_change_names_the_argument() {
+            // No owner: a top-level change prints the argument atom as
+            // given, not the change's own `>=<cpv>` left-hand form ...
+            let entries: Vec<GraphEntry> = Vec::new();
+            let root = Path::new("/");
+            let top: HashSet<&str> = ["dev-libs/aunone[bar]"].into_iter().collect();
+            let got = autounmask_dep_chain(&None, ">=dev-libs/aunone-1.0", &top, &entries, root);
+            assert_eq!(
+                got,
+                vec!["required by dev-libs/aunone[bar] (argument)".to_string()]
+            );
+            // ... or the bare atom when nothing in `top_level` matches.
+            let other: HashSet<&str> = ["sys-apps/other"].into_iter().collect();
+            let got_fallback =
+                autounmask_dep_chain(&None, ">=dev-libs/aunone-1.0", &other, &entries, root);
+            assert_eq!(
+                got_fallback,
+                vec!["required by >=dev-libs/aunone-1.0 (argument)".to_string()]
+            );
+            // A same-category other-package atom still matches nothing:
+            // both halves of the `cp` comparison must hold.
+            let sibling: HashSet<&str> = ["dev-libs/otherpkg"].into_iter().collect();
+            let got_sibling =
+                autounmask_dep_chain(&None, ">=dev-libs/aunone-1.0", &sibling, &entries, root);
+            assert_eq!(
+                got_sibling,
+                vec!["required by >=dev-libs/aunone-1.0 (argument)".to_string()]
+            );
+        }
+
+        #[test]
+        fn autounmask_dep_chain_164_walks_the_whole_parent_chain() {
+            let dir = slotundo_temp_dir("164-auc");
+            let entries = vec![
+                // Decoy: same category, wrong package -- must not win
+                // the parent lookup at any hop.
+                entry_164(
+                    "dev-libs",
+                    "audecoy",
+                    PretendOutcome::New {
+                        version: "9.0".to_string(),
+                    },
+                    Vec::new(),
+                    Some("testrepo"),
+                    CandidateSource::Ebuild,
+                ),
+                entry_164(
+                    "dev-libs",
+                    "aumid",
+                    PretendOutcome::New {
+                        version: "1.0".to_string(),
+                    },
+                    vec![("dev-libs".to_string(), "autop".to_string())],
+                    Some("testrepo"),
+                    CandidateSource::Ebuild,
+                ),
+                entry_164(
+                    "dev-libs",
+                    "autop",
+                    PretendOutcome::New {
+                        version: "2.0".to_string(),
+                    },
+                    Vec::new(),
+                    Some("testrepo"),
+                    CandidateSource::Ebuild,
+                ),
+            ];
+            let owner = Some(("dev-libs".to_string(), "aumid".to_string()));
+            // A same-category sibling atom must not attach mid-chain.
+            let top: HashSet<&str> = ["dev-libs/autop", "dev-libs/ausibling"]
+                .into_iter()
+                .collect();
+            let got = autounmask_dep_chain(&owner, "dev-libs/aumid", &top, &entries, &dir);
+            assert_eq!(
+                got,
+                vec![
+                    "required by dev-libs/aumid-1.0::testrepo".to_string(),
+                    "required by dev-libs/autop-2.0::testrepo".to_string(),
+                    "required by dev-libs/autop (argument)".to_string(),
+                ]
+            );
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn autounmask_dep_chain_164_upgrade_parent_reports_the_to_version() {
+            let dir = slotundo_temp_dir("164-auc-up");
+            let entries = vec![
+                entry_164(
+                    "dev-libs",
+                    "auup",
+                    PretendOutcome::Upgrade {
+                        from: "1.0".to_string(),
+                        to: "2.0".to_string(),
+                    },
+                    vec![("dev-libs".to_string(), "auuptop".to_string())],
+                    Some("testrepo"),
+                    CandidateSource::Ebuild,
+                ),
+                entry_164(
+                    "dev-libs",
+                    "auuptop",
+                    PretendOutcome::New {
+                        version: "3.0".to_string(),
+                    },
+                    Vec::new(),
+                    Some("testrepo"),
+                    CandidateSource::Ebuild,
+                ),
+            ];
+            let owner = Some(("dev-libs".to_string(), "auup".to_string()));
+            let top: HashSet<&str> = ["dev-libs/auuptop"].into_iter().collect();
+            let got = autounmask_dep_chain(&owner, "dev-libs/auup", &top, &entries, &dir);
+            assert_eq!(
+                got,
+                vec![
+                    "required by dev-libs/auup-2.0::testrepo".to_string(),
+                    "required by dev-libs/auuptop-3.0::testrepo".to_string(),
+                    "required by dev-libs/auuptop (argument)".to_string(),
+                ]
+            );
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn autounmask_dep_chain_164_installed_parent_reports_the_vdb_repo() {
+            // An installed parent renders with the vdb repo; with no vdb
+            // entry that repo is `__unknown__` (see `installed_pkg_repo`).
+            let dir = slotundo_temp_dir("164-auc-inst");
+            let entries = vec![
+                entry_164(
+                    "dev-libs",
+                    "auinst",
+                    PretendOutcome::AlreadyInstalled {
+                        version: "1.0".to_string(),
+                    },
+                    vec![("dev-libs".to_string(), "auinsttop".to_string())],
+                    None,
+                    CandidateSource::Ebuild,
+                ),
+                entry_164(
+                    "dev-libs",
+                    "auinsttop",
+                    PretendOutcome::New {
+                        version: "2.0".to_string(),
+                    },
+                    Vec::new(),
+                    Some("testrepo"),
+                    CandidateSource::Ebuild,
+                ),
+            ];
+            let owner = Some(("dev-libs".to_string(), "auinst".to_string()));
+            let top: HashSet<&str> = ["dev-libs/auinsttop"].into_iter().collect();
+            let got = autounmask_dep_chain(&owner, "dev-libs/auinst", &top, &entries, &dir);
+            assert_eq!(
+                got,
+                vec![
+                    "required by dev-libs/auinst-1.0::__unknown__".to_string(),
+                    "required by dev-libs/auinsttop-2.0::testrepo".to_string(),
+                    "required by dev-libs/auinsttop (argument)".to_string(),
+                ]
+            );
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn autounmask_dep_chain_164_self_requiring_parent_stops_after_its_row() {
+            // A parent whose `required_by` names itself cannot ascend
+            // (the `*next != cur` guard): the chain is just its own row.
+            // This pins the shape that makes `guard -> true` equivalent
+            // (see the #164 closeout): advancing onto itself re-breaks on
+            // the visited set with the identical chain.
+            let dir = slotundo_temp_dir("164-auc-self");
+            let entries = vec![entry_164(
+                "dev-libs",
+                "auself",
+                PretendOutcome::New {
+                    version: "1.0".to_string(),
+                },
+                vec![("dev-libs".to_string(), "auself".to_string())],
+                Some("testrepo"),
+                CandidateSource::Ebuild,
+            )];
+            let owner = Some(("dev-libs".to_string(), "auself".to_string()));
+            let top: HashSet<&str> = ["sys-apps/other"].into_iter().collect();
+            let got = autounmask_dep_chain(&owner, "dev-libs/auselfdep", &top, &entries, &dir);
+            assert_eq!(
+                got,
+                vec!["required by dev-libs/auself-1.0::testrepo".to_string()]
+            );
+            let _ = fs::remove_dir_all(&dir);
+        }
+    }
+
     #[test]
     fn properties_default_star_accepts_any_declared_property() {
         let config = portage_profile::Config {
