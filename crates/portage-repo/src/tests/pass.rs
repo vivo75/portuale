@@ -828,6 +828,66 @@ fn run_pass_repeated_miss_without_masks_is_not_suppressed() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// One masked report per masked cp, even across categories.
+#[test]
+fn run_pass_reports_each_masked_dep_once() {
+    let dir = slotundo_temp_dir("161-run-mask4");
+    let repo = blocker_161_scratch_repo(Blocker161ScratchRepoArgs {
+        base: &dir,
+        cp: "dev-libs/depparent",
+        pv: "1.0",
+        slot: "0",
+        depend: "",
+        rdepend: "dev-libs/masked1 dev-libs/masked2 dev-libs/dupmask sys-libs/dupmask",
+    });
+    for (cp, pv) in [
+        ("dev-libs/masked1", "1.0"),
+        ("dev-libs/masked2", "1.0"),
+        ("dev-libs/dupmask", "1.0"),
+        ("sys-libs/dupmask", "1.0"),
+    ] {
+        blocker_161_write_pkg(Blocker161WritePkgArgs {
+            repo: &repo.location,
+            cp,
+            pv,
+            slot: "0",
+            depend: "",
+            rdepend: "",
+        });
+    }
+    let mut config = test_config();
+    config.package_mask = vec![
+        "dev-libs/masked1".to_string(),
+        "dev-libs/masked2".to_string(),
+        "dev-libs/dupmask".to_string(),
+        "sys-libs/dupmask".to_string(),
+    ];
+    let atoms = vec!["dev-libs/depparent".to_string()];
+    let opts = CtxOpts161 {
+        backtrack_max: 0,
+        atoms: atoms.clone(),
+        ..Default::default()
+    };
+    let ctx = ctx_161(&dir, &config, vec![repo], &opts);
+    let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+    let mut rows: Vec<String> = pass
+        .masked_deps
+        .iter()
+        .map(|r| format!("{}/{}", r.category, r.package))
+        .collect();
+    rows.sort();
+    assert_eq!(
+        rows,
+        vec![
+            "dev-libs/dupmask",
+            "dev-libs/masked1",
+            "dev-libs/masked2",
+            "sys-libs/dupmask",
+        ]
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// One use-unsat report per unsatisfiable cp, even across categories.
 #[test]
 fn run_pass_reports_each_use_unsat_once() {

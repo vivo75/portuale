@@ -1266,6 +1266,41 @@ fn enqueue_dependencies_drops_a_dep_satisfied_by_the_instance_itself() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A build-time blocker carries its provenance: with `with_bdeps`
+/// the DEPEND `!!` row is `buildtime`.
+#[test]
+fn enqueue_dependencies_marks_a_depend_blocker_as_buildtime() {
+    let root = dir_165("enqueue-buildtime");
+    install_165(
+        &root,
+        "dev-libs",
+        "consumer-1.0",
+        "0",
+        &[("DEPEND", "!!dev-libs/victim")],
+    );
+    let repos = repo_165(&root, &[("dev-libs/consumer", "1.0", "0", "", "", "", "")]);
+    let mut entries = Vec::new();
+    let mut queue = std::collections::VecDeque::new();
+    let mut pending = Vec::new();
+    enqueue_165(Enqueue165Args {
+        repos: &repos,
+        root: &root,
+        config: &cfg_165(),
+        cat: "dev-libs",
+        pkg: "consumer",
+        ver: "1.0",
+        with_bdeps: true,
+        entries: &mut entries,
+        queue: &mut queue,
+        pending: &mut pending,
+    });
+    assert!(queue.is_empty());
+    assert_eq!(pending.len(), 1);
+    assert!(pending[0].strong);
+    assert!(pending[0].buildtime);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// Plains queue before `||` choices (the main walk's
 /// plains-reversed + `||`-last split).
 #[test]
