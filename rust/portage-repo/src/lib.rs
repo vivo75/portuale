@@ -42018,6 +42018,47 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// Backlog #161 S6r: a second atom resolving to an already-graphed
+    /// `Reinstall` reuses it -- the `resolved_slots` revisit reads the
+    /// entry's own version back out instead of resolving (and
+    /// conflicting) twice. Same shape as the use-unsat dedup pair,
+    /// but installed, so the first outcome is a reinstall.
+    #[test]
+    fn run_pass_revisiting_a_reinstall_reuses_the_entry() {
+        let dir = slotundo_temp_dir("161-run-rereinst");
+        let atoms = vec![
+            "dev-libs/deepvdbusepkg".to_string(),
+            "dev-libs/deepvdbusepkg:0".to_string(),
+        ];
+        let pass = run_161(
+            &dir,
+            &atoms,
+            false,
+            &[("deepvdbusepkg", "1.0", "0")],
+            true,
+            false,
+            false,
+            false,
+            false,
+            Deep::NotRequested,
+            false        );
+        let rows: Vec<_> = pass
+            .entries
+            .iter()
+            .filter(|e| e.package == "deepvdbusepkg")
+            .collect();
+        assert_eq!(rows.len(), 1, "the revisit reuses the reinstall entry");
+        assert!(
+            matches!(rows[0].outcome, PretendOutcome::Reinstall { .. }),
+            "the kept entry is still the reinstall"
+        );
+        assert!(
+            pass.slot_conflicts.is_empty(),
+            "a satisfied revisit files no conflict"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     /// Backlog #161 S6: without `--newuse` the same USE mismatch stays
     /// a bare reinstall with no flag change and no extra walk.
     #[test]
