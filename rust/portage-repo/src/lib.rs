@@ -40456,6 +40456,7 @@ mod tests {
         usepkgonly: bool,
         nodeps: bool,
         selective: bool,
+        blocker_closure: HashSet<(String, String)>,
     ) -> ResolveCtx<'a> {
         ResolveCtx {
             root,
@@ -40472,10 +40473,10 @@ mod tests {
             changed_slot: false,
             with_test_deps: false,
             changed_deps_report: false,
-            selective: selective,
+            selective,
             autounmask_backtrack_enabled: false,
             usepkg: false,
-            usepkgonly: usepkgonly,
+            usepkgonly,
             binpkg_respect_use: false,
             usepkg_exclude: &NO_STRINGS_161,
             usepkg_include: &NO_STRINGS_161,
@@ -40501,7 +40502,7 @@ mod tests {
             complete: false,
             repos,
             slot_op_reachable: reachable,
-            blocker_retry_closure: HashSet::new(),
+            blocker_retry_closure: blocker_closure,
             complete_locked_merges: HashSet::new(),
             top_level: NO_STRS_161.iter().copied().collect(),
             top_level_cps: HashSet::new(),
@@ -40569,7 +40570,7 @@ mod tests {
     fn collect_feedback_folds_the_use_overlay_without_duplicating() {
         let dir = slotundo_temp_dir("161-cf-over");
         let config = test_config();
-        let ctx = ctx_161(&dir, &config, Vec::new(), HashSet::new(), 0, &NO_STRINGS_161, &NO_STRINGS_161, false, false, false, false, false);
+        let ctx = ctx_161(&dir, &config, Vec::new(), HashSet::new(), 0, &NO_STRINGS_161, &NO_STRINGS_161, false, false, false, false, false, HashSet::new());
         let cp = ("dev-libs".to_string(), "overpkg".to_string());
         let mut pass = pass_161();
         pass.use_overlay.insert(
@@ -40628,7 +40629,7 @@ mod tests {
         let dir = slotundo_temp_dir("161-cf-solv");
         let config = test_config();
         let repos = find_repos(&fixtures_root()).expect("fixture repos");
-        let ctx = ctx_161(&dir, &config, repos, HashSet::new(), 1, &NO_STRINGS_161, &NO_STRINGS_161, false, false, false, false, false);
+        let ctx = ctx_161(&dir, &config, repos, HashSet::new(), 1, &NO_STRINGS_161, &NO_STRINGS_161, false, false, false, false, false, HashSet::new());
         let mut pass = pass_161();
         pass.slot_conflicts = vec![souprov_conflict_161()];
         let key = ("dev-libs".to_string(), "souprov".to_string());
@@ -40663,7 +40664,7 @@ mod tests {
         let dir = slotundo_temp_dir("161-cf-single");
         let config = test_config();
         let repos = find_repos(&fixtures_root()).expect("fixture repos");
-        let ctx = ctx_161(&dir, &config, repos, HashSet::new(), 1, &NO_STRINGS_161, &NO_STRINGS_161, false, false, false, false, false);
+        let ctx = ctx_161(&dir, &config, repos, HashSet::new(), 1, &NO_STRINGS_161, &NO_STRINGS_161, false, false, false, false, false, HashSet::new());
         let key = ("dev-libs".to_string(), "souprov".to_string());
         let mut pass = pass_161();
         pass.slot_conflicts = vec![souprov_conflict_161()];
@@ -40688,7 +40689,7 @@ mod tests {
         let dir = slotundo_temp_dir("161-cf-dup");
         let config = test_config();
         let repos = find_repos(&fixtures_root()).expect("fixture repos");
-        let ctx = ctx_161(&dir, &config, repos, HashSet::new(), 1, &NO_STRINGS_161, &NO_STRINGS_161, false, false, false, false, false);
+        let ctx = ctx_161(&dir, &config, repos, HashSet::new(), 1, &NO_STRINGS_161, &NO_STRINGS_161, false, false, false, false, false, HashSet::new());
         let mut pass = pass_161();
         pass.slot_conflicts = vec![souprov_conflict_161()];
         let key = ("dev-libs".to_string(), "souprov".to_string());
@@ -40728,7 +40729,7 @@ mod tests {
         let reachable: HashSet<(String, String)> =
             HashSet::from([("dev-libs".to_string(), "stale".to_string())]);
         let excluded = vec!["dev-libs/stale".to_string()];
-        let ctx = ctx_161(&dir, &config, Vec::new(), reachable, 1, &excluded, &NO_STRINGS_161, false, false, false, false, false);
+        let ctx = ctx_161(&dir, &config, Vec::new(), reachable, 1, &excluded, &NO_STRINGS_161, false, false, false, false, false, HashSet::new());
         let bar_upgrade = GraphEntry {
             discovery: 0,
             category: "dev-libs".into(),
@@ -40778,7 +40779,7 @@ mod tests {
         let repos = find_repos(&fixtures_root()).expect("fixture repos");
         let reachable: HashSet<(String, String)> =
             HashSet::from([("dev-libs".to_string(), "pinner".to_string())]);
-        let ctx = ctx_161(&dir, &config, repos, reachable, 0, &NO_STRINGS_161, &NO_STRINGS_161, false, false, false, false, false);
+        let ctx = ctx_161(&dir, &config, repos, reachable, 0, &NO_STRINGS_161, &NO_STRINGS_161, false, false, false, false, false, HashSet::new());
         let souprov_upgrade = GraphEntry {
             discovery: 0,
             category: "dev-libs".into(),
@@ -40854,7 +40855,7 @@ mod tests {
         let repos = find_repos(&fixtures_root()).expect("fixture repos");
         let reachable: HashSet<(String, String)> =
             HashSet::from([("dev-libs".to_string(), "pinner".to_string())]);
-        let ctx = ctx_161(&dir, &config, repos, reachable, 1, &NO_STRINGS_161, &NO_STRINGS_161, false, false, false, false, false);
+        let ctx = ctx_161(&dir, &config, repos, reachable, 1, &NO_STRINGS_161, &NO_STRINGS_161, false, false, false, false, false, HashSet::new());
         let souprov_upgrade = GraphEntry {
             discovery: 0,
             category: "dev-libs".into(),
@@ -41746,6 +41747,7 @@ mod tests {
     /// tree. `run_pass` takes the request atoms from the context; each
     /// leg below resolves a different installed/tree shape and pins the
     /// pass entries it settles.
+    #[allow(clippy::too_many_arguments)]
     fn run_161(
         dir: &Path,
         atoms: &[String],
@@ -41779,6 +41781,7 @@ mod tests {
             usepkgonly,
             nodeps,
             selective,
+            HashSet::new(),
         );
         run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles")
     }
@@ -42049,6 +42052,7 @@ mod tests {
             false,
             false,
             false,
+            HashSet::new(),
         );
         let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
         assert!(
@@ -42060,6 +42064,222 @@ mod tests {
         );
         let _ = fixture_root;
     }
+
+    /// Backlog #161 S6: scratch-repo package writer shared by the
+    /// blocker legs. `blockerparent-1.0` merges `victim-1.0` through
+    /// `RDEPEND` while its own `RDEPEND` softly blocks it (a runtime
+    /// key, always walked; `DEPEND` would need `--with-bdeps`).
+    fn blocker_161_write_pkg(
+        repo: &Path,
+        cp: &str,
+        pv: &str,
+        slot: &str,
+        depend: &str,
+        rdepend: &str,
+    ) {
+        use md5::Digest as _;
+        use std::fmt::Write as _;
+        let (cat, pkg) = cp.split_once('/').expect("category/package");
+        let dir = repo.join(cat).join(pkg);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut body = format!(
+            "EAPI=8\nDESCRIPTION=\"161 blocker\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\n"
+        );
+        if !depend.is_empty() {
+            writeln!(body, "DEPEND=\"{depend}\"").unwrap();
+        }
+        if !rdepend.is_empty() {
+            writeln!(body, "RDEPEND=\"{rdepend}\"").unwrap();
+        }
+        std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
+        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+        let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=161 blocker\nEAPI=8\n".to_string();
+        if !depend.is_empty() {
+            writeln!(entry, "DEPEND={depend}").unwrap();
+        }
+        if !rdepend.is_empty() {
+            writeln!(entry, "RDEPEND={rdepend}").unwrap();
+        }
+        writeln!(entry, "KEYWORDS=amd64\nSLOT={slot}\n_md5_={md5}").unwrap();
+        let cachedir = repo.join("metadata/md5-cache").join(cat);
+        std::fs::create_dir_all(&cachedir).unwrap();
+        std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+    }
+
+    fn blocker_161_repo_config(repo: PathBuf) -> RepoConfig {
+        RepoConfig {
+            name: "testrepo".to_string(),
+            location: repo,
+            priority: 0,
+            is_main: true,
+            masters: vec![],
+            profile_formats: vec![],
+            cache_formats: vec![],
+            aliases: vec![],
+            sync_type: None,
+            sync_uri: None,
+            volatile: false,
+            module_specific_options: vec![],
+        }
+    }
+
+    fn blocker_161_repo(base: &Path) -> Vec<RepoConfig> {
+        let repo = base.join("repo");
+        blocker_161_write_pkg(&repo, "dev-libs/victim", "1.0", "0", "", "");
+        blocker_161_write_pkg(
+            &repo,
+            "dev-libs/blockerparent",
+            "1.0",
+            "0",
+            "",
+            "dev-libs/victim !dev-libs/victim",
+        );
+        vec![blocker_161_repo_config(repo)]
+    }
+
+    /// One scratch package in its own repo: for legs needing tree
+    /// versions the fixtures do not carry.
+    fn blocker_161_scratch_repo(
+        base: &Path,
+        cp: &str,
+        pv: &str,
+        slot: &str,
+        depend: &str,
+        rdepend: &str,
+    ) -> RepoConfig {
+        let repo = base.join("scratchrepo");
+        blocker_161_write_pkg(&repo, cp, pv, slot, depend, rdepend);
+        blocker_161_repo_config(repo)
+    }
+
+    /// Backlog #161 S6: a runtime blocker on an installed package
+    /// that stays put files a satisfied blocker row on it.
+    #[test]
+    fn run_pass_files_a_depend_blocker_row() {
+        let dir = slotundo_temp_dir("161-run-blk");
+        let repos = blocker_161_repo(&dir);
+        // victim-1.0 stays installed while the parent merges around
+        // it under a soft block.
+        let d = dir.join("var/db/pkg/dev-libs/victim-1.0");
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        fs::write(d.join("SLOT"), "0\n").unwrap();
+        fs::write(d.join("repository"), "testrepo\n").unwrap();
+        fs::write(d.join("USE"), "\n").unwrap();
+        let config = test_config();
+        let atoms = vec!["dev-libs/blockerparent".to_string()];
+        let ctx = ctx_161(
+            &dir,
+            &config,
+            repos,
+            HashSet::new(),
+            10,
+            &NO_STRINGS_161,
+            &atoms,
+            false,
+            false,
+            false,
+            false,
+            false,
+            HashSet::new(),
+        );
+        let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+        // The soft block files on the merging parent; the installed
+        // victim gains the uninstall-model row beside its installed one.
+        let parent = pass
+            .entries
+            .iter()
+            .find(|e| e.package == "blockerparent")
+            .expect("parent merges");
+        assert_eq!(parent.blockers.len(), 1);
+        assert_eq!(parent.blockers[0].atom_str, "!dev-libs/victim");
+        assert!(!parent.blockers[0].strong);
+        assert_eq!(parent.blockers[0].matched_version, "1.0");
+        assert!(
+            pass.entries.iter().any(|e| e.package == "victim"
+                && matches!(e.outcome, PretendOutcome::Uninstall { .. })),
+            "the blocked installed instance gains an uninstall row"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: under `--nodeps` the all-installed blocker
+    /// scan never runs -- an installed owner's blocker stays invisible
+    /// even when its target upgrades right beside it.
+    #[test]
+    fn run_pass_nodeps_skips_the_unwalked_blocker_scan() {
+        let dir = slotundo_temp_dir("161-run-nodepsblk");
+        // Unwalked installed owner blocking `scanvictim`, which this
+        // run upgrades 1.0 -> 2.0 (so a scan would find a merge-bound
+        // match and file rows).
+        let mk = |name: &str, slot: &str, rdepend: &str| {
+            let d = dir.join("var/db/pkg/dev-libs").join(name);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+            fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+            fs::write(d.join("repository"), "testrepo\n").unwrap();
+            fs::write(d.join("USE"), "\n").unwrap();
+            if !rdepend.is_empty() {
+                fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+            }
+        };
+        // Unwalked installed owner blocking `scanvictim`, which this
+        // run upgrades 1.0 -> 2.0 (so a scan would find a merge-bound
+        // match and file rows). Unversioned: an op-less versioned
+        // blocker is ambiguous and rejected on both sides (real
+        // `Atom('!dev-libs/scanvictim-1.0')` raises too).
+        mk("scanowner-1.0", "0", "!dev-libs/scanvictim");
+        mk("scanvictim-1.0", "0", "");
+        let scratch = blocker_161_scratch_repo(
+            &dir,
+            "dev-libs/scanvictim",
+            "2.0",
+            "0",
+            "",
+            "",
+        );
+        let config = test_config();
+        let mut repos = find_repos(&fixtures_root()).expect("fixture repos");
+        repos.push(scratch);
+        let atoms = vec!["dev-libs/scanvictim".to_string()];
+        // The owner rides the required-set closure so a found blocker
+        // has a display home (the #73 set-parent arm); without the
+        // `--nodeps` gate the scan would file rows through it.
+        let owner_closure: HashSet<(String, String)> =
+            HashSet::from([("dev-libs".to_string(), "scanowner".to_string())]);
+        let ctx = ctx_161(
+            &dir,
+            &config,
+            repos,
+            HashSet::new(),
+            10,
+            &NO_STRINGS_161,
+            &atoms,
+            true,
+            false,
+            false,
+            true,
+            false,
+            owner_closure,
+        );
+        let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+        let victim = pass
+            .entries
+            .iter()
+            .find(|e| e.package == "scanvictim")
+            .expect("victim upgrades");
+        assert!(matches!(
+            victim.outcome,
+            PretendOutcome::Upgrade { .. }
+        ));
+        assert!(
+            victim.blockers.is_empty(),
+            "no scan runs under --nodeps, so no blocker rows file"
+        );
+        assert!(pass.orphan_blockers.is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
 
     /// recordered `USE`.
     fn slotundo_vdb(
