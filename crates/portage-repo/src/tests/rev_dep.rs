@@ -1,5 +1,29 @@
 use super::*;
 
+/// A built slot op names both slot and sub-slot with `=`; `:=`,
+/// `:2=` and `:2` are not built ops (Portage `slot_operator_built`).
+#[test]
+fn is_built_slot_op_requires_equals_operator_and_both_slots() {
+    let built = |s: &str| {
+        let atom = portage_dep::parse_atom(s).expect("test atom parses");
+        is_built_slot_op(&atom)
+    };
+    assert!(built("dev-libs/bar:2/2="));
+    assert!(!built("dev-libs/bar:="));
+    assert!(!built("dev-libs/bar:2="));
+    assert!(!built("dev-libs/bar:2"));
+    assert!(!built("dev-libs/bar"));
+
+    let norm = |s: &str| {
+        let atom = portage_dep::parse_atom(s).expect("test atom parses");
+        reverse_dep_constraint_atom(s, &atom)
+    };
+    assert_eq!(norm("dev-libs/bar:2/2="), "dev-libs/bar");
+    assert_eq!(norm("dev-libs/bar:2/2=[x]"), "dev-libs/bar");
+    assert_eq!(norm("dev-libs/bar:2"), "dev-libs/bar:2");
+    assert_eq!(norm("dev-libs/bar"), "dev-libs/bar");
+}
+
 #[test]
 fn reverse_dependency_constraints_skips_an_unreachable_installed_consumer() {
     // A pin is found only when its cp is reachable or itself a graph
