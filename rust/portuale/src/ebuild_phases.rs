@@ -2405,6 +2405,41 @@ pub(crate) fn environ_whitelisted(key: &str) -> bool {
     ENVIRON_WHITELIST.contains(&key) || key.starts_with("CCACHE_") || key.starts_with("DISTCC_")
 }
 
+/// Real `config.environ()`'s `filter_calling_env`
+/// (`lib/portage/package/ebuild/config.py:3275-3305`, bug #189417): once a
+/// phase's own `${T}/environment` exists -- i.e. every phase after the
+/// first real one -- the process it spawns carries only the
+/// `special_env_vars.environ_whitelist` keys of the config/calling env;
+/// every other config variable is supplied by the saved environment
+/// instead, so a variable the ebuild itself `unset` in an earlier phase
+/// (bug #189417's own wording: "variables unset by the ebuild remain
+/// unset") stays unset. Real exempts the init/fetch phases and a `setup`
+/// phase run from a standalone `ebuild` (`EMERGE_FROM == "ebuild"`).
+///
+/// Without this, portuale re-injected the config `build_env` (`CFLAGS`
+/// and friends) into every later phase: `dev-build/ninja-1.13.2-r1`'s
+/// `src_compile` `unset CFLAGS` never reached `src_install`, so real
+/// `__dyn_install`'s write-if-present loop wrote a `build-info/CFLAGS`
+/// real never writes and the vdb carried a `CFLAGS` row real omits (#160,
+/// l3-20260925T074707Z Class 4; `findings/l3.md` § #160 S0).
+fn filter_calling_env(phase: &str, t_dir: &Path, extra_env: &[(String, String)]) -> bool {
+    if matches!(phase, "clean" | "cleanrm" | "depend" | "fetch") {
+        return false;
+    }
+    // `EMERGE_FROM` lives in `extra_env` for the binary/saved-env paths
+    // (the literal in `vars` below is the source path's own default).
+    let emerge_from = extra_env
+        .iter()
+        .rev()
+        .find(|(k, _)| k == "EMERGE_FROM")
+        .map(|(_, v)| v.as_str())
+        .unwrap_or("ebuild");
+    if phase == "setup" && emerge_from == "ebuild" {
+        return false;
+    }
+    t_dir.join("environment").is_file()
+}
+
 /// The `FEATURES` string a phase-execution decision should consult:
 /// the **last** `FEATURES` pair on `extra_env` when present (the
 /// resolved incremental list #37 S2 threads), else the process
@@ -2848,12 +2883,26 @@ fn phase_env_vars(
     // everything) and the `depend` phase -- see the helper.
     let standalone_base_env =
         phase_standalone_base_env(env, config_root, root, ebuild_phase_value, extra_env);
+    // #160: real `config.environ()`'s `filter_calling_env` drops every
+    // config/calling-env variable not on `environ_whitelist` once this
+    // phase's own `${T}/environment` exists, leaving the saved
+    // environment to supply it -- so an earlier phase's `unset` (ninja's
+    // `unset CFLAGS`) sticks. See `filter_calling_env`'s own doc comment.
+    let calling_env_filtered = filter_calling_env(ebuild_phase_value, &env.t(), extra_env);
     // Real `doebuild_environment()` assigns its computed values *after*
     // the config is built, so they win over a same-named config key:
     // the resolved-config base pairs seed `vars` first and the computed
     // literal below overrides them (downstream `cmd.envs` is last-wins),
     // while the merge path's `extra_env` still overrides both at the end.
-    let mut vars: Vec<(String, String)> = standalone_base_env.1;
+    let mut vars: Vec<(String, String)> = if calling_env_filtered {
+        standalone_base_env
+            .1
+            .into_iter()
+            .filter(|(k, _)| environ_whitelisted(k))
+            .collect()
+    } else {
+        standalone_base_env.1
+    };
     vars.extend(vec![
         ("EAPI".to_string(), env.eapi.clone()),
         ("PN".to_string(), env.split.pn.clone()),
@@ -3006,7 +3055,12 @@ fn phase_env_vars(
 
     // `PATH` is consumed above as the base behind the helper dirs; a
     // verbatim `extra_env` pair would drop them again.
-    vars.extend(extra_env.iter().filter(|(k, _)| k != "PATH").cloned());
+    vars.extend(
+        extra_env
+            .iter()
+            .filter(|(k, _)| k != "PATH" && (!calling_env_filtered || environ_whitelisted(k)))
+            .cloned(),
+    );
 
     // Real `EbuildPhase._start` (`EbuildPhase.py:52-56`) calls
     // `split_LC_ALL(settings)` (`portage/util/locale.py:160`) before
@@ -4817,6 +4871,12 @@ pub(crate) fn run_phase_from_saved_env(
     // incremental list.
     update_env: Option<&Path>,
     refresh_features: Option<&str>,
+    // Real `dblink.treewalk`'s `REPLACING_VERSIONS` (`vartree.py:4768-
+    // 4771`), threaded into the hook env for the binary-merge
+    // `pkg_preinst`/`pkg_postinst` (`None` for every unmerge hook, which
+    // real does not give the var). See `ebuild_merge::replacing_versions`
+    // for the value's source.
+    replacing_versions: Option<&str>,
 ) -> Result<i32, String> {
     let runtime = shared_runtime()?;
     runtime.block_on(async {
@@ -4827,6 +4887,9 @@ pub(crate) fn run_phase_from_saved_env(
         }
 
         let mut extra_env = binary_merge_env();
+        if let Some(version) = replacing_versions {
+            extra_env.push(("REPLACING_VERSIONS".to_string(), version.to_string()));
+        }
         if let Some(p) = update_env {
             extra_env.push(("PORTAGE_UPDATE_ENV".to_string(), p.display().to_string()));
             if let Some(features) = refresh_features.filter(|f| !f.is_empty()) {

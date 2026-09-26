@@ -2434,6 +2434,26 @@ fn installed_instance_pf(root: &Path, category: &str, package: &str, slot: &str)
         .map(|(pf, _)| pf)
 }
 
+/// Real `dblink.treewalk`'s own `REPLACING_VERSIONS` set
+/// (`vartree.py:4768-4771`) just before `pkg_preinst`: the versions of
+/// the installed same-slot instances this merge replaces. Portuale's
+/// per-merge analogue is the single `installed_instance_pf` it already
+/// selects (the highest-`COUNTER` same-slot instance -- real
+/// `others_in_slot`'s own selection); its version is what an ebuild's
+/// `ver_replacing` gate (real for EAPI >= 9, the `eapi9-ver` eclass for
+/// EAPI < 9) sees. Real's general `doebuild_environment` setter
+/// (`doebuild.py:1317-1322`) builds the same value for
+/// `preinst`/`postinst`/`pretend`/`setup` from
+/// `vardb.match(cpv_slot) + vardb.match("=" + cpv)`. `None` for a
+/// first-ever install (no other same-slot instance), matching real's
+/// empty string.
+fn replacing_versions(pn: &str, installed_instance_pf: Option<&str>) -> Option<String> {
+    let version = installed_instance_pf?
+        .strip_prefix(pn)?
+        .strip_prefix('-')?;
+    (!version.is_empty()).then(|| version.to_string())
+}
+
 /// Whether the installed package at `<root>/var/db/pkg/<category>/
 /// <package>-<version>` already claims `abs_path` in its own real
 /// `CONTENTS` (the path field of its recognized `obj`/`sym`/`dir`/
@@ -3310,6 +3330,15 @@ fn merge_after_install(
     let main_slot = full_slot.split('/').next().unwrap_or("0");
     let installed_instance_pf =
         installed_instance_pf(root, &env.category, &env.split.pn, main_slot);
+    // Real `dblink.treewalk()` sets `REPLACING_VERSIONS` right before
+    // `pkg_preinst` (`vartree.py:4768-4771`) -- and real's general
+    // `doebuild_environment` setter runs it for `postinst` too
+    // (`doebuild.py:1317-1322`). See `replacing_versions`'s own doc.
+    let replacing_versions = replacing_versions(&env.split.pn, installed_instance_pf.as_deref());
+    let mut preinst_env = options.build_env.clone();
+    if let Some(version) = &replacing_versions {
+        preinst_env.push(("REPLACING_VERSIONS".to_string(), version.clone()));
+    }
 
     // Real `dblink.treewalk()`'s `preinst_mask` + `install_mask_dir`
     // step, run before `_collision_protect` and before any file is
@@ -3388,7 +3417,7 @@ fn merge_after_install(
         options.debug,
         &options.config_root,
         options.shell,
-        &options.build_env,
+        &preinst_env,
         options.log_file.as_deref(),
     )?;
     if preinst_status != 0 {
@@ -3457,6 +3486,9 @@ fn merge_after_install(
         .join(&env.split.pf)
         .join("environment.bz2");
     let mut postinst_env = options.build_env.clone();
+    if let Some(version) = &replacing_versions {
+        postinst_env.push(("REPLACING_VERSIONS".to_string(), version.clone()));
+    }
     postinst_env.push((
         "PORTAGE_UPDATE_ENV".to_string(),
         vdb_env_bz2.display().to_string(),
@@ -3772,6 +3804,8 @@ pub(crate) fn run_vdb_saved_env_phase(
         // entry is on its way out).
         None,
         None,
+        // Real does not give an unmerge hook `REPLACING_VERSIONS`.
+        None,
     )
 }
 
@@ -3951,6 +3985,13 @@ pub fn merge_binpkg(
     // `pkg_preinst`/`pkg_postinst` (and the vdb env regeneration) see
     // them (#30 finding `l3-binpkg-hook-env-reseed`).
     let seeded = std::cell::Cell::new(false);
+    // Real `self._installed_instance` (`vartree.py:4409-4418`) is computed
+    // before `treewalk()`'s `pkg_preinst`, and `REPLACING_VERSIONS` is set
+    // from it right before that hook (`:4768-4771`). Computed here so the
+    // hook closure below can thread it into `pkg_preinst`/`pkg_postinst`;
+    // `merge_tree` reuses the same value.
+    let installed_instance = installed_instance_pf(root, &category, &package, &main_slot);
+    let replacing_versions = replacing_versions(&package, installed_instance.as_deref());
     let run_hook_ex =
         |phase: &str, always: bool, update_env: Option<&Path>| -> Result<i32, String> {
             match &extracted_ebuild {
@@ -3969,6 +4010,7 @@ pub fn merge_binpkg(
                         options.log_file.as_deref(),
                         update_env,
                         update_env.map(|_| options.features.as_str()),
+                        replacing_versions.as_deref(),
                     )
                 }
                 _ => Ok(0),
@@ -4233,6 +4275,27 @@ mod tests {
             installed_instance_pf(&root, "dev-libs", "instpkg", "2"),
             None,
             "no installed version at all in this slot"
+        );
+    }
+
+    #[test]
+    fn replacing_versions_is_the_installed_same_slot_version() {
+        // #158: real's `REPLACING_VERSIONS` is the version of the
+        // installed instance(s) this merge replaces (`vartree.py:4769`),
+        // which is exactly the `{pn}-{version}` PF `installed_instance_pf`
+        // selects.
+        assert_eq!(
+            replacing_versions("awk", Some("awk-4")),
+            Some("4".to_string())
+        );
+        assert_eq!(
+            replacing_versions("awk", Some("awk-3.1-r1")),
+            Some("3.1-r1".to_string())
+        );
+        assert_eq!(
+            replacing_versions("awk", None),
+            None,
+            "a first-ever install has no replaced version (real's empty string)"
         );
     }
 
