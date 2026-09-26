@@ -46026,6 +46026,160 @@ mod tests {
                 &test_config()
             ));
         }
+
+        /// Backlog #164 S3: scratch repo writer with per-version
+        /// KEYWORDS/LICENSE/SLOT, mirroring `blocker_161_write_pkg_full`
+        /// (ebuild + consistent md5-cache entry, which the md5-cache
+        /// validation guard requires).
+        fn repo_164(base: &Path, pkgs: &[(&str, &str, &str, &str, &str)]) -> Vec<RepoConfig> {
+            // (cp, pv, slot, keywords, license).
+            use md5::Digest as _;
+            use std::fmt::Write as _;
+            let repo = base.join("repo164");
+            for (cp, pv, slot, keywords, license) in pkgs {
+                let (cat, pkg) = cp.split_once('/').expect("category/package");
+                let dir = repo.join(cat).join(pkg);
+                std::fs::create_dir_all(&dir).unwrap();
+                let body = format!(
+                    "EAPI=8\nDESCRIPTION=\"164 visibility\"\nSLOT=\"{slot}\"\nKEYWORDS=\"{keywords}\"\nLICENSE=\"{license}\"\n"
+                );
+                std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
+                let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+                let mut entry =
+                    "DEFINED_PHASES=-\nDESCRIPTION=164 visibility\nEAPI=8\n".to_string();
+                writeln!(entry, "KEYWORDS={keywords}").unwrap();
+                writeln!(entry, "LICENSE={license}").unwrap();
+                writeln!(entry, "SLOT={slot}\n_md5_={md5}").unwrap();
+                let cachedir = repo.join("metadata/md5-cache").join(cat);
+                std::fs::create_dir_all(&cachedir).unwrap();
+                std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+            }
+            vec![RepoConfig {
+                name: "testrepo".to_string(),
+                location: repo,
+                priority: 0,
+                is_main: true,
+                masters: vec![],
+                profile_formats: vec![],
+                cache_formats: vec![],
+                aliases: vec![],
+                sync_type: None,
+                sync_uri: None,
+                volatile: false,
+                module_specific_options: vec![],
+            }]
+        }
+
+        /// Backlog #164 S3: `visible_tree_matches` returns the visible
+        /// (real `_pkg_visibility_check`,
+        /// `lib/_emerge/depgraph.py:7562`) candidates an atom selects --
+        /// here 1.0 is stable-visible and 2.0 is `~amd64`-masked under an
+        /// `amd64` profile, so only 1.0 shows.
+        #[test]
+        fn visible_tree_matches_164_lists_only_visible_matches() {
+            let dir = slotundo_temp_dir("164-vtm");
+            let repos = repo_164(
+                &dir,
+                &[
+                    ("dev-libs/vtm", "1.0", "0", "amd64", "MIT"),
+                    ("dev-libs/vtm", "2.0", "0", "~amd64", "MIT"),
+                ],
+            );
+            // `test_config` accepts no license by default; the scratch
+            // packages declare MIT, so accept it (the KEYWORDS verdict
+            // under test is orthogonal).
+            let mut config = test_config();
+            config.accept_license = vec!["*".to_string()];
+            let got = visible_tree_matches(&repos, "dev-libs/vtm", &config, &[]);
+            assert_eq!(got, vec![("1.0".to_string(), "0".to_string())]);
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn visible_tree_matches_164_negated_constraint_excludes() {
+            // `!atom` drops the match it names: with 1.0 negated nothing
+            // is left (2.0 is keyword-masked).
+            let dir = slotundo_temp_dir("164-vtm-neg");
+            let repos = repo_164(
+                &dir,
+                &[
+                    ("dev-libs/vtmneg", "1.0", "0", "amd64", "MIT"),
+                    ("dev-libs/vtmneg", "2.0", "0", "~amd64", "MIT"),
+                ],
+            );
+            let mut config = test_config();
+            config.accept_license = vec!["*".to_string()];
+            // NOTE: the version half needs its `=` operator --
+            // portage-dep rejects an operator-less versioned atom as
+            // PMS-ambiguous (mirroring real `Atom.__init__`), which
+            // would make the constraint vacuously pass.
+            let neg_one = ["!=dev-libs/vtmneg-1.0".to_string()];
+            let got_none = visible_tree_matches(&repos, "dev-libs/vtmneg", &config, &neg_one);
+            assert_eq!(got_none, Vec::new());
+            // A negation naming nothing keeps the visible match ...
+            let neg_idle = ["!=dev-libs/vtmneg-9.0".to_string()];
+            let got_one = visible_tree_matches(&repos, "dev-libs/vtmneg", &config, &neg_idle);
+            assert_eq!(got_one, vec![("1.0".to_string(), "0".to_string())]);
+            // ... and so does a positive constraint it satisfies.
+            let pos_one = ["=dev-libs/vtmneg-1.0".to_string()];
+            let got_pos = visible_tree_matches(&repos, "dev-libs/vtmneg", &config, &pos_one);
+            assert_eq!(got_pos, vec![("1.0".to_string(), "0".to_string())]);
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn visible_tree_matches_164_atom_still_selects_within_visible() {
+            // Both versions visible here: `=...-1.0` must not leak 2.0
+            // past the atom match.
+            let dir = slotundo_temp_dir("164-vtm-sel");
+            let repos = repo_164(
+                &dir,
+                &[
+                    ("dev-libs/vtmsel", "1.0", "0", "amd64", "MIT"),
+                    ("dev-libs/vtmsel", "2.0", "0", "amd64", "MIT"),
+                ],
+            );
+            let mut config = test_config();
+            config.accept_license = vec!["*".to_string()];
+            let got = visible_tree_matches(&repos, "=dev-libs/vtmsel-1.0", &config, &[]);
+            assert_eq!(got, vec![("1.0".to_string(), "0".to_string())]);
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn visible_tree_matches_164_license_masked_versions_stay_out() {
+            // Real `LicenseManager.getMissingLicenses` verdict inside the
+            // visible set: 1.0 declares an unaccepted license, 2.0 an
+            // accepted one.
+            let dir = slotundo_temp_dir("164-vtm-lic");
+            let repos = repo_164(
+                &dir,
+                &[
+                    ("dev-libs/vtmlic", "1.0", "0", "amd64", "GPL-2"),
+                    ("dev-libs/vtmlic", "2.0", "0", "amd64", "MIT"),
+                ],
+            );
+            let config = portage_profile::Config {
+                accept_keywords: HashSet::from(["amd64".to_string()]),
+                accept_license: vec!["MIT".to_string()],
+                ..Default::default()
+            };
+            let got = visible_tree_matches(&repos, "dev-libs/vtmlic", &config, &[]);
+            assert_eq!(got, vec![("2.0".to_string(), "0".to_string())]);
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn visible_tree_matches_164_unparseable_atom_and_missing_package_match_nothing() {
+            let dir = slotundo_temp_dir("164-vtm-empty");
+            let repos = repo_164(&dir, &[("dev-libs/vtmempty", "1.0", "0", "amd64", "MIT")]);
+            let config = test_config();
+            let got_bad = visible_tree_matches(&repos, "][", &config, &[]);
+            assert_eq!(got_bad, Vec::new());
+            let got_missing = visible_tree_matches(&repos, "dev-libs/nosuchpkg", &config, &[]);
+            assert_eq!(got_missing, Vec::new());
+            let _ = fs::remove_dir_all(&dir);
+        }
     }
 
     #[test]
