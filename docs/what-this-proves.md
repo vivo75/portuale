@@ -18079,3 +18079,36 @@ count on the unchanged tree:
 # from portuale/rust; expect 2729
 cargo mutants --list --file portage-repo/src/lib.rs 2>/dev/null | wc -l
 ```
+
+## Backlog #161 DONE (2026-09-26): `lib.rs` backtracker/slot-conflict driver unit tests
+
+P7b's cluster 1 (~233 missed across `run_pass`, `direct_solve_slot_conflicts`,
+`build_residual_slot_conflicts`, `collect_feedback`, `Backtracker::feedback`,
+`slot_operator_rebuild_*`) is now pinned by scratch-`ResolveCtx` legs in the
+Phase 8 S2 style, all test-only in `rust/portage-repo/src/lib.rs` (`mod tests`,
+branch `backlog/161-librs-backtracker-driver-tests`, S1–S6r, +4386 lines, zero
+product bytes): 53 `run_pass_*` legs plus S1–S5 legs for the other five
+functions. `run_pass` accounting: P7b inventory 140 missed → 48 killed by
+S6a–S6o → full-scope re-run 92 missed → S6p killed 5 (a first `with_bdeps`
+leg walked an ebuild, not a binary — caught only by instrumenting
+`candidate_source` at the gate — repaired plus a `--buildpkgonly` leg) →
+S6q killed 6 (edge/oldbest asserts) → S6r killed 1 (Reinstall-revisit reuse)
+→ 2 hand-verified lethal outside the scope runs (23823, 23831; stale-binary
+false misses) → 78 classified survivors (trace-only 3, autounmask-path 20,
+downgrade-shapes 2, binary-selection skew 20, slot-op unrebuildable 6,
+use-dep collision 4, #57 direction-2 1, proven-equivalent 1, download recipe
+1, REQUIRED_USE nuances 2, reinstall-display 1, AI+merge coexistence 2,
+direct-solve removal 13, replacement-wait 2). S1–S5: slot-op scans (19 caught
++ 1 equivalent), `Backtracker` (57 caught + 1 timeout), residual conflicts (23
+caught + 1 unviable), feedback (14 caught), direct solve (19 caught + 4
+equivalent). The `Backtracker::get` timeout (20574:9) stands as
+inspect-don't-pin. Triage detail (every bucket with line numbers and
+follow-up recipes, plus the S6p clobber / stale-binary / rustfmt-edition
+method notes for #162–#166): `../pmtest/differential-test-bed/findings/mutants.md`
+"#161 closeout". Test-only slices need no pmtest counterpart; the corpus
+shows zero drift. Re-verify the leg count on the branch:
+
+```sh
+# from portuale; expect 53
+grep -c "fn run_pass_" rust/portage-repo/src/lib.rs
+```
