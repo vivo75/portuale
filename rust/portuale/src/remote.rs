@@ -3173,11 +3173,11 @@ mod tests {
     }
 
     /// Backlog #169, site (b): the receive driver must preserve
-    /// setuid/setgid/sticky bits through the bundle tarball. Real
-    /// `lib/portage/util/movefile.py::_apply_stat` restores modes after
-    /// ownership; the remote path below it must not lose them earlier
-    /// at extraction (`tar -xf` strips all three for a non-root
-    /// client; `tar -xpf` keeps them). End to end through both shell
+    /// setuid/setgid/sticky bits through the bundle tarball: an
+    /// unprivileged `tar -xf` applies the umask and strips all three
+    /// bits at extraction, `tar -xpf` (`--preserve-permissions`) keeps
+    /// them, so the merge stage never sees them otherwise (the bed's
+    /// non-root client capture, `4711/2755/1750 -> 711/755/750`). End to end through both shell
     /// fragments: stage a unit with modes 4711/2755/1750 plus a 2750
     /// directory, tar it the way `build_bundle` does, run the real
     /// `unpack_script`, then the real merge driver, and assert the
@@ -3333,6 +3333,13 @@ mod tests {
                 "chmod --reference \"$src\" \"$dest\"",
             ),
         ] {
+            for pat in [chown, chmod] {
+                assert_eq!(
+                    MERGE_FLOW.matches(pat).count(),
+                    1,
+                    "{what} branch: `{pat}` must occur exactly once for the order check"
+                );
+            }
             let chown_pos = MERGE_FLOW
                 .find(chown)
                 .unwrap_or_else(|| panic!("{what} branch lost its chown --reference line"));
