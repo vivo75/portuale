@@ -43476,6 +43476,114 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// Backlog #161 S6: under `--usepkgonly`, a newer staged binary
+    /// merges even with no ebuild twin at its version.
+    #[test]
+    fn run_pass_usepkgonly_takes_a_newer_binary() {
+        let dir = slotundo_temp_dir("161-run-newbin");
+        let atoms = vec!["dev-libs/sounneed".to_string()];
+        let mut config = test_config();
+        config.scanned_binpkgs = Some(vec![HashMap::from([
+            ("CPV".to_string(), "dev-libs/sounneed-9.9".to_string()),
+            ("SLOT".to_string(), "0".to_string()),
+            ("KEYWORDS".to_string(), "amd64".to_string()),
+            ("REPO".to_string(), "testrepo".to_string()),
+        ])]);
+        let repos = find_repos(&fixtures_root()).expect("fixture repos");
+        let opts = CtxOpts161 {
+            backtrack_max: 10,
+            atoms: atoms.clone(),
+            usepkgonly: true,
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, repos, &opts);
+        let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+        assert_eq!(pass.entries.len(), 1);
+        assert_eq!(pass.entries[0].source, CandidateSource::Binary);
+        assert!(matches!(
+            pass.entries[0].outcome,
+            PretendOutcome::New { ref version } if version == "9.9"
+        ));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: under plain `--usepkg`, a binary with no
+    /// ebuild twin at its version loses to the visible tree.
+    #[test]
+    fn run_pass_newer_binary_loses_to_the_tree() {
+        let dir = slotundo_temp_dir("161-run-ebwin");
+        let atoms = vec!["dev-libs/sounneed".to_string()];
+        let mut config = test_config();
+        config.scanned_binpkgs = Some(vec![HashMap::from([
+            ("CPV".to_string(), "dev-libs/sounneed-9.9".to_string()),
+            ("SLOT".to_string(), "0".to_string()),
+            ("KEYWORDS".to_string(), "amd64".to_string()),
+            ("REPO".to_string(), "testrepo".to_string()),
+        ])]);
+        let repos = find_repos(&fixtures_root()).expect("fixture repos");
+        let opts = CtxOpts161 {
+            backtrack_max: 10,
+            atoms: atoms.clone(),
+            usepkg: true,
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, repos, &opts);
+        let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+        assert_eq!(pass.entries.len(), 1);
+        assert_eq!(pass.entries[0].source, CandidateSource::Ebuild);
+        assert!(matches!(
+            pass.entries[0].outcome,
+            PretendOutcome::New { ref version } if version == "1.0"
+        ));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: a keyword-masked tree ebuild does not count
+    /// as an ebuild twin -- the accepted staged binary still merges
+    /// under `--usepkgonly`.
+    #[test]
+    fn run_pass_masked_ebuild_is_no_twin() {
+        let dir = slotundo_temp_dir("161-run-maskbin");
+        let atoms = vec!["dev-libs/kwonlypkg".to_string()];
+        // Tree ebuild ~amd64 (masked under the amd64 accept); staged
+        // binary amd64 (visible).
+        let repo = blocker_161_scratch_repo(
+            &dir,
+            "dev-libs/kwonlypkg",
+            "1.0",
+            "0",
+            "",
+            "",
+        );
+        let d = repo.location.join("dev-libs/kwonlypkg");
+        let body = "EAPI=8\nDESCRIPTION=\"161 kw\"\nSLOT=\"0\"\nKEYWORDS=\"~amd64\"\n";
+        std::fs::write(d.join("kwonlypkg-1.0.ebuild"), &body).unwrap();
+        use md5::Digest as _;
+        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+        let entry = format!("DEFINED_PHASES=-\nDESCRIPTION=161 kw\nEAPI=8\nKEYWORDS=~amd64\nSLOT=0\n_md5_={md5}\n");
+        let cachedir = repo.location.join("metadata/md5-cache/dev-libs");
+        std::fs::create_dir_all(&cachedir).unwrap();
+        std::fs::write(cachedir.join("kwonlypkg-1.0"), entry).unwrap();
+        let mut config = test_config();
+        config.scanned_binpkgs = Some(vec![HashMap::from([
+            ("CPV".to_string(), "dev-libs/kwonlypkg-1.0".to_string()),
+            ("SLOT".to_string(), "0".to_string()),
+            ("KEYWORDS".to_string(), "amd64".to_string()),
+            ("REPO".to_string(), "testrepo".to_string()),
+        ])]);
+        let opts = CtxOpts161 {
+            backtrack_max: 10,
+            atoms: atoms.clone(),
+            usepkgonly: true,
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, vec![repo], &opts);
+        let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+        assert_eq!(pass.entries.len(), 1);
+        assert_eq!(pass.entries[0].source, CandidateSource::Binary);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     /// recordered `USE`.
     fn slotundo_vdb(
         dir: &Path,
