@@ -40454,6 +40454,7 @@ mod tests {
         nodeps: bool,
         selective: bool,
         with_test_deps: bool,
+        with_bdeps: bool,
         deep: Deep,
         complete: bool,
         locked: HashSet<(String, String)>,
@@ -40475,7 +40476,7 @@ mod tests {
             nodeps: o.nodeps,
             deep: o.deep,
             excluded: &o.excluded,
-            with_bdeps: false,
+            with_bdeps: o.with_bdeps,
             changed_deps: false,
             changed_slot: false,
             with_test_deps: o.with_test_deps,
@@ -41773,6 +41774,7 @@ mod tests {
         selective: bool,
         usepkg: bool,
         deep: Deep,
+        with_bdeps: bool,
     ) -> PassResult {
         for (name, version, slot) in installed {
             let d = dir.join("var/db/pkg/dev-libs").join(format!("{name}-{version}"));
@@ -41794,6 +41796,7 @@ mod tests {
             nodeps,
             selective,
             deep,
+            with_bdeps,
             ..Default::default()
         };
         let ctx = ctx_161(dir, &config, repos, &opts);
@@ -41801,12 +41804,13 @@ mod tests {
     }
 
     /// Backlog #161 S6: a bare leaf atom resolves to a single `New`
-    /// entry at the tree version and slot.
+    /// entry at the tree version and slot, carrying no old slot and
+    /// pulling no arguments.
     #[test]
     fn run_pass_resolves_a_leaf_to_a_new_entry() {
         let dir = slotundo_temp_dir("161-run-new");
         let atoms = vec!["dev-libs/sounneed".to_string()];
-        let pass = run_161(&dir, &atoms, false, &[], false, false, false, false, false, Deep::NotRequested);
+        let pass = run_161(&dir, &atoms, false, &[], false, false, false, false, false, Deep::NotRequested, false);
         assert_eq!(pass.entries.len(), 1);
         let e = &pass.entries[0];
         assert_eq!((e.category.as_str(), e.package.as_str()), ("dev-libs", "sounneed"));
@@ -41814,6 +41818,20 @@ mod tests {
             e.outcome,
             PretendOutcome::New { ref version } if version == "1.0"
         ));
+        assert!(!e.new_slot, "nothing installed anywhere for this cp");
+        assert!(e.oldbest.is_empty());
+        // The USE line renders every IUSE flag, off here.
+        assert_eq!(e.use_flags_display, vec![("soflag".to_string(), false)]);
+        assert_eq!(
+            pass.slot_pullers.get(&("dev-libs".to_string(), "sounneed".to_string())),
+            Some(&vec![(
+                String::new(),
+                String::new(),
+                String::new(),
+                "dev-libs/sounneed".to_string(),
+            )]),
+            "a top-level atom is an Argument puller"
+        );
         assert!(pass.slot_conflicts.is_empty());
         let _ = fs::remove_dir_all(&dir);
     }
@@ -41824,7 +41842,7 @@ mod tests {
     fn run_pass_reports_a_missing_atom_as_nvc() {
         let dir = slotundo_temp_dir("161-run-nvc");
         let atoms = vec!["dev-libs/nosuchpkg".to_string()];
-        let pass = run_161(&dir, &atoms, false, &[], false, false, false, false, false, Deep::NotRequested);
+        let pass = run_161(&dir, &atoms, false, &[], false, false, false, false, false, Deep::NotRequested, false);
         assert_eq!(pass.entries.len(), 1);
         assert!(matches!(
             pass.entries[0].outcome,
@@ -41841,7 +41859,7 @@ mod tests {
     fn run_pass_reinstalls_the_requested_installed_version() {
         let dir = slotundo_temp_dir("161-run-inst");
         let atoms = vec!["dev-libs/sounneed".to_string()];
-        let pass = run_161(&dir, &atoms, false, &[("sounneed", "1.0", "0/1")], false, false, false, false, false, Deep::NotRequested);
+        let pass = run_161(&dir, &atoms, false, &[("sounneed", "1.0", "0/1")], false, false, false, false, false, Deep::NotRequested, false);
         assert_eq!(pass.entries.len(), 1);
         assert!(matches!(
             pass.entries[0].outcome,
@@ -41862,7 +41880,7 @@ mod tests {
     fn run_pass_keeps_a_satisfied_dependency_installed() {
         let dir = slotundo_temp_dir("161-run-depinst");
         let atoms = vec!["dev-libs/needer".to_string()];
-        let pass = run_161(&dir, &atoms, false, &[("paired", "2.0", "0")], false, false, false, false, false, Deep::NotRequested);
+        let pass = run_161(&dir, &atoms, false, &[("paired", "2.0", "0")], false, false, false, false, false, Deep::NotRequested, false);
         let paired = pass
             .entries
             .iter()
@@ -41881,12 +41899,22 @@ mod tests {
     fn run_pass_upgrades_an_older_installed_version() {
         let dir = slotundo_temp_dir("161-run-up");
         let atoms = vec!["dev-libs/sounneed".to_string()];
-        let pass = run_161(&dir, &atoms, true, &[("sounneed", "0.9", "0/1")], false, false, false, false, false, Deep::NotRequested);
+        let pass = run_161(&dir, &atoms, true, &[("sounneed", "0.9", "0/1")], false, false, false, false, false, Deep::NotRequested, false);
         assert_eq!(pass.entries.len(), 1);
         assert!(matches!(
             pass.entries[0].outcome,
             PretendOutcome::Upgrade { ref from, ref to } if from == "0.9" && to == "1.0"
         ));
+        // The upgrade re-renders the USE line, trailing state marker
+        // included, exactly as resolved.
+        assert_eq!(
+            pass.entries[0].use_flags_display,
+            vec![("soflag".to_string(), false)]
+        );
+        assert_eq!(
+            pass.entries[0].use_expand_display_p,
+            vec![("USE".to_string(), "-soflag%".to_string())]
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -41896,7 +41924,7 @@ mod tests {
     fn run_pass_downgrades_a_newer_installed_version() {
         let dir = slotundo_temp_dir("161-run-down");
         let atoms = vec!["dev-libs/sounneed".to_string()];
-        let pass = run_161(&dir, &atoms, true, &[("sounneed", "2.0", "0/1")], false, false, false, false, false, Deep::NotRequested);
+        let pass = run_161(&dir, &atoms, true, &[("sounneed", "2.0", "0/1")], false, false, false, false, false, Deep::NotRequested, false);
         assert_eq!(pass.entries.len(), 1);
         assert!(matches!(
             pass.entries[0].outcome,
@@ -41911,7 +41939,7 @@ mod tests {
     fn run_pass_walks_dependencies_and_records_parent_atoms() {
         let dir = slotundo_temp_dir("161-run-deps");
         let atoms = vec!["dev-libs/needer".to_string()];
-        let pass = run_161(&dir, &atoms, false, &[], false, false, false, false, false, Deep::NotRequested);
+        let pass = run_161(&dir, &atoms, false, &[], false, false, false, false, false, Deep::NotRequested, false);
         let mut names: Vec<&str> = pass.entries.iter().map(|e| e.package.as_str()).collect();
         names.sort();
         assert_eq!(names, vec!["needer", "paired"]);
@@ -41939,7 +41967,8 @@ mod tests {
             false,
             false,
             false,
-            Deep::NotRequested        );
+            Deep::NotRequested,
+            false        );
         let pkg = pass
             .entries
             .iter()
@@ -41973,7 +42002,8 @@ mod tests {
             false,
             false,
             false,
-            Deep::NotRequested        );
+            Deep::NotRequested,
+            false        );
         let pkg = pass
             .entries
             .iter()
@@ -41998,7 +42028,7 @@ mod tests {
     fn run_pass_usepkgonly_without_binaries_reports_nvc() {
         let dir = slotundo_temp_dir("161-run-binonly");
         let atoms = vec!["dev-libs/sounneed".to_string()];
-        let pass = run_161(&dir, &atoms, false, &[], false, true, false, false, false, Deep::NotRequested);
+        let pass = run_161(&dir, &atoms, false, &[], false, true, false, false, false, Deep::NotRequested, false);
         assert_eq!(pass.entries.len(), 1);
         assert!(matches!(
             pass.entries[0].outcome,
@@ -42014,7 +42044,7 @@ mod tests {
     fn run_pass_nodeps_resolves_only_the_requested_atom() {
         let dir = slotundo_temp_dir("161-run-nodeps");
         let atoms = vec!["dev-libs/needer".to_string()];
-        let pass = run_161(&dir, &atoms, false, &[], false, false, true, false, false, Deep::NotRequested);
+        let pass = run_161(&dir, &atoms, false, &[], false, false, true, false, false, Deep::NotRequested, false);
         assert_eq!(pass.entries.len(), 1);
         assert_eq!(pass.entries[0].package.as_str(), "needer");
         let _ = fs::remove_dir_all(&dir);
@@ -42037,6 +42067,7 @@ mod tests {
             true,
             false,
             Deep::NotRequested,
+            false,
         );
         assert_eq!(pass.entries.len(), 1);
         assert!(matches!(
@@ -42284,7 +42315,7 @@ mod tests {
             "dev-libs/paired".to_string(),
             "dev-libs/sounneed".to_string(),
         ];
-        let pass = run_161(&dir, &atoms, false, &[], false, false, false, false, false, Deep::NotRequested);
+        let pass = run_161(&dir, &atoms, false, &[], false, false, false, false, false, Deep::NotRequested, false);
         let names: Vec<&str> = pass.entries.iter().map(|e| e.package.as_str()).collect();
         assert_eq!(names, vec!["sounneed", "paired"]);
         let _ = fs::remove_dir_all(&dir);
@@ -42324,7 +42355,7 @@ mod tests {
     fn run_pass_satisfies_a_disabled_use_dep() {
         let dir = slotundo_temp_dir("161-run-usedep");
         let atoms = vec!["dev-libs/deepvdbusepkg[-wantdep]".to_string()];
-        let pass = run_161(&dir, &atoms, false, &[], false, false, false, false, false, Deep::NotRequested);
+        let pass = run_161(&dir, &atoms, false, &[], false, false, false, false, false, Deep::NotRequested, false);
         assert_eq!(pass.entries.len(), 1);
         assert!(matches!(
             pass.entries[0].outcome,
@@ -42339,7 +42370,7 @@ mod tests {
     fn run_pass_reports_an_unenabled_use_dep_unsatisfied() {
         let dir = slotundo_temp_dir("161-run-nouse");
         let atoms = vec!["dev-libs/sounneed[soflag]".to_string()];
-        let pass = run_161(&dir, &atoms, false, &[], false, false, false, false, false, Deep::NotRequested);
+        let pass = run_161(&dir, &atoms, false, &[], false, false, false, false, false, Deep::NotRequested, false);
         assert!(
             pass.entries.iter().all(|e| !matches!(
                 e.outcome,
@@ -42744,6 +42775,7 @@ mod tests {
             false,
             false,
             Deep::NotRequested,
+            false,
         );
         assert_eq!(pass.use_unsat_deps.len(), 1);
         let _ = fs::remove_dir_all(&dir);
@@ -42803,6 +42835,400 @@ mod tests {
             "the dropped 2.0 rides out as a skipped update"
         );
         let _ = fixture_root;
+    }
+
+    /// Backlog #161 S6: the missing-dep trigger names the upgraded
+    /// parent version (the `Upgrade` arm, not just `New`).
+    #[test]
+    fn run_pass_arms_the_trigger_for_an_upgrading_parent() {
+        let dir = slotundo_temp_dir("161-run-misup");
+        let repos = blocker_161_scratch_repo(
+            &dir,
+            "dev-libs/depparentup",
+            "1.0",
+            "0",
+            "",
+            "dev-libs/nosuchdep",
+        );
+        let d = dir.join("var/db/pkg/dev-libs/depparentup-0.9");
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        fs::write(d.join("SLOT"), "0\n").unwrap();
+        fs::write(d.join("repository"), "testrepo\n").unwrap();
+        fs::write(d.join("USE"), "\n").unwrap();
+        let config = test_config();
+        let atoms = vec!["dev-libs/depparentup".to_string()];
+        let opts = CtxOpts161 {
+            backtrack_max: 10,
+            atoms: atoms.clone(),
+            update: true,
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, vec![repos], &opts);
+        let mut pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+        let trigger = pass.missing_dep_trigger.take().expect("trigger armed");
+        assert_eq!(trigger.1, "!=dev-libs/depparentup-1.0");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: the trigger resolves its owner against the
+    /// walked entries by exact cp -- a same-category neighbour never
+    /// supplies it.
+    #[test]
+    fn run_pass_trigger_matches_the_owner_entry_exactly() {
+        let dir = slotundo_temp_dir("161-run-misown");
+        let repos = blocker_161_scratch_repo(
+            &dir,
+            "dev-libs/depparent",
+            "1.0",
+            "0",
+            "",
+            "dev-libs/nosuchdep",
+        );
+        let config = test_config();
+        // A neighbour walks first so a loosened lookup would find it
+        // instead of the owner.
+        let atoms = vec![
+            "dev-libs/depparent".to_string(),
+            "dev-libs/sounneed".to_string(),
+        ];
+        let repos = {
+            let mut rs = find_repos(&fixtures_root()).expect("fixture repos");
+            rs.push(repos);
+            rs
+        };
+        let opts = CtxOpts161 {
+            backtrack_max: 10,
+            atoms: atoms.clone(),
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, repos, &opts);
+        let mut pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+        let trigger = pass.missing_dep_trigger.take().expect("trigger armed");
+        assert_eq!(
+            trigger,
+            (
+                ("dev-libs".to_string(), "depparent".to_string()),
+                "!=dev-libs/depparent-1.0".to_string(),
+                "dev-libs/nosuchdep".to_string(),
+            )
+        );
+        // The same NVC with no masks active is not suppressed.
+        assert!(!pass.suppressed_nvc);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: one report per missing cp, even across
+    /// categories sharing a package name.
+    #[test]
+    fn run_pass_reports_each_plain_miss_once() {
+        let dir = slotundo_temp_dir("161-run-miss4");
+        // Four missing deps: two sharing dev-libs, two sharing the
+        // package name across categories.
+        let repos = blocker_161_scratch_repo(
+            &dir,
+            "dev-libs/depparent",
+            "1.0",
+            "0",
+            "",
+            "dev-libs/nosucha dev-libs/nosuchb dev-libs/dupmiss sys-libs/dupmiss",
+        );
+        let config = test_config();
+        let atoms = vec!["dev-libs/depparent".to_string()];
+        let opts = CtxOpts161 {
+            backtrack_max: 0,
+            atoms: atoms.clone(),
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, vec![repos], &opts);
+        let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+        let mut rows: Vec<String> = pass
+            .plain_miss_deps
+            .iter()
+            .map(|r| format!("{}/{}", r.category, r.package))
+            .collect();
+        rows.sort();
+        assert_eq!(
+            rows,
+            vec![
+                "dev-libs/dupmiss",
+                "dev-libs/nosucha",
+                "dev-libs/nosuchb",
+                "sys-libs/dupmiss",
+            ]
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: one masked report per masked cp, even
+    /// across categories sharing a package name.
+    #[test]
+    fn run_pass_reports_each_masked_dep_once() {
+        let dir = slotundo_temp_dir("161-run-mask4");
+        let repo = blocker_161_scratch_repo(
+            &dir,
+            "dev-libs/depparent",
+            "1.0",
+            "0",
+            "",
+            "dev-libs/masked1 dev-libs/masked2 dev-libs/dupmask sys-libs/dupmask",
+        );
+        for (cp, pv) in [
+            ("dev-libs/masked1", "1.0"),
+            ("dev-libs/masked2", "1.0"),
+            ("dev-libs/dupmask", "1.0"),
+            ("sys-libs/dupmask", "1.0"),
+        ] {
+            blocker_161_write_pkg(&repo.location, cp, pv, "0", "", "");
+        }
+        let mut config = test_config();
+        config.package_mask = vec![
+            "dev-libs/masked1".to_string(),
+            "dev-libs/masked2".to_string(),
+            "dev-libs/dupmask".to_string(),
+            "sys-libs/dupmask".to_string(),
+        ];
+        let atoms = vec!["dev-libs/depparent".to_string()];
+        let opts = CtxOpts161 {
+            backtrack_max: 0,
+            atoms: atoms.clone(),
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, vec![repo], &opts);
+        let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+        let mut rows: Vec<String> = pass
+            .masked_deps
+            .iter()
+            .map(|r| format!("{}/{}", r.category, r.package))
+            .collect();
+        rows.sort();
+        assert_eq!(
+            rows,
+            vec![
+                "dev-libs/dupmask",
+                "dev-libs/masked1",
+                "dev-libs/masked2",
+                "sys-libs/dupmask",
+            ]
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: one use-unsat report per unsatisfiable cp,
+    /// even across categories sharing a package name.
+    #[test]
+    fn run_pass_reports_each_use_unsat_once() {
+        let dir = slotundo_temp_dir("161-run-use4");
+        let repo = blocker_161_scratch_repo(
+            &dir,
+            "dev-libs/depparent",
+            "1.0",
+            "0",
+            "",
+            "dev-libs/unsat1[soflag] dev-libs/unsat2[soflag] dev-libs/dupuse[soflag] sys-libs/dupuse[soflag]",
+        );
+        for (cp, pv) in [
+            ("dev-libs/unsat1", "1.0"),
+            ("dev-libs/unsat2", "1.0"),
+            ("dev-libs/dupuse", "1.0"),
+            ("sys-libs/dupuse", "1.0"),
+        ] {
+            let d = repo.location.join(cp.split_once('/').unwrap().0).join(
+                cp.split_once('/').unwrap().1,
+            );
+            std::fs::create_dir_all(&d).unwrap();
+            let pkg = cp.split_once('/').unwrap().1;
+            let body = "EAPI=8\nDESCRIPTION=\"161 useunsat\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\nIUSE=\"soflag\"\n";
+            std::fs::write(d.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
+            use md5::Digest as _;
+            let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+            let entry = format!("DEFINED_PHASES=-\nDESCRIPTION=161 useunsat\nEAPI=8\nIUSE=soflag\nKEYWORDS=amd64\nSLOT=0\n_md5_={md5}\n");
+            let cachedir = repo.location.join("metadata/md5-cache").join(cp.split_once('/').unwrap().0);
+            std::fs::create_dir_all(&cachedir).unwrap();
+            std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+        }
+        let config = test_config();
+        let atoms = vec!["dev-libs/depparent".to_string()];
+        let opts = CtxOpts161 {
+            backtrack_max: 0,
+            atoms: atoms.clone(),
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, vec![repo], &opts);
+        let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+        let mut rows: Vec<String> = pass
+            .use_unsat_deps
+            .iter()
+            .map(|r| format!("{}/{}", r.category, r.package))
+            .collect();
+        rows.sort();
+        assert_eq!(
+            rows,
+            vec![
+                "dev-libs/dupuse",
+                "dev-libs/unsat1",
+                "dev-libs/unsat2",
+                "sys-libs/dupuse",
+            ]
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: two owners blocking the same package file two
+    /// rows -- the pending dedup keys on the full triple, so a second
+    /// owner is never swallowed.
+    #[test]
+    fn run_pass_files_one_row_per_blocker_owner() {
+        let dir = slotundo_temp_dir("161-run-blk2");
+        let repo = blocker_161_scratch_repo(
+            &dir,
+            "dev-libs/blockerparent",
+            "1.0",
+            "0",
+            "",
+            "dev-libs/victim !dev-libs/victim",
+        );
+        blocker_161_write_pkg(&repo.location, "dev-libs/victim", "1.0", "0", "", "");
+        blocker_161_write_pkg(
+            &repo.location,
+            "dev-libs/blockerparent2",
+            "1.0",
+            "0",
+            "",
+            "dev-libs/victim !dev-libs/victim",
+        );
+        let d = dir.join("var/db/pkg/dev-libs/victim-1.0");
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        fs::write(d.join("SLOT"), "0\n").unwrap();
+        fs::write(d.join("repository"), "testrepo\n").unwrap();
+        fs::write(d.join("USE"), "\n").unwrap();
+        let config = test_config();
+        let atoms = vec![
+            "dev-libs/blockerparent".to_string(),
+            "dev-libs/blockerparent2".to_string(),
+        ];
+        let repos = vec![repo];
+        let opts = CtxOpts161 {
+            backtrack_max: 0,
+            atoms: atoms.clone(),
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, repos, &opts);
+        let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+        let rows: Vec<&str> = pass
+            .entries
+            .iter()
+            .filter(|e| e.package == "blockerparent" || e.package == "blockerparent2")
+            .filter(|e| !e.blockers.is_empty())
+            .map(|e| e.package.as_str())
+            .collect();
+        assert_eq!(rows.len(), 2);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: with `--with-bdeps` a binary candidate's
+    /// build-time keys walk too.
+    #[test]
+    fn run_pass_binary_walks_buildtime_deps_with_bdeps() {
+        let dir = slotundo_temp_dir("161-run-binbdep2");
+        let repos = blocker_161_scratch_repo(
+            &dir,
+            "dev-libs/binparent",
+            "1.0",
+            "0",
+            "dev-libs/buildonlydep",
+            "dev-libs/runtimedep",
+        );
+        for (cp, pv) in [("dev-libs/buildonlydep", "1.0"), ("dev-libs/runtimedep", "1.0")] {
+            blocker_161_write_pkg(&repos.location, cp, pv, "0", "", "");
+        }
+        let mut config = test_config();
+        config.scanned_binpkgs = Some(vec![HashMap::from([
+            ("CPV".to_string(), "dev-libs/binparent-1.0".to_string()),
+            ("SLOT".to_string(), "0".to_string()),
+            ("KEYWORDS".to_string(), "amd64".to_string()),
+            ("REPO".to_string(), "testrepo".to_string()),
+            ("BDEPEND".to_string(), "dev-libs/buildonlydep".to_string()),
+            ("RDEPEND".to_string(), "dev-libs/runtimedep".to_string()),
+        ])]);
+        let atoms = vec!["dev-libs/binparent".to_string()];
+        let opts = CtxOpts161 {
+            backtrack_max: 10,
+            atoms: atoms.clone(),
+            usepkg: true,
+            with_bdeps: true,
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, vec![repos], &opts);
+        let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+        let names: Vec<&str> = pass.entries.iter().map(|e| e.package.as_str()).collect();
+        assert!(names.contains(&"buildonlydep"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: a `New` into a slot with nothing installed is
+    /// still a plain new slot row only when another slot is installed.
+    #[test]
+    fn run_pass_marks_a_new_slot_row() {
+        let dir = slotundo_temp_dir("161-run-newslot");
+        let atoms = vec!["dev-libs/dualslotpkg".to_string()];
+        // Slot 1 stays installed; the walk news slot 2 alongside it.
+        let pass = run_161(
+            &dir,
+            &atoms,
+            true,
+            &[("dualslotpkg", "1.0", "1")],
+            false,
+            false,
+            false,
+            false,
+            false,
+            Deep::NotRequested,
+            false,
+        );
+        let entry = pass
+            .entries
+            .iter()
+            .find(|e| e.package == "dualslotpkg" && e.slot.as_deref() == Some("2"))
+            .expect("slot-2 news alongside slot 1");
+        assert!(matches!(
+            entry.outcome,
+            PretendOutcome::New { ref version } if version == "2.0"
+        ));
+        assert!(entry.new_slot);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #161 S6: reinstalling at a moved sub-slot records the
+    /// installed instance for the `[oldver]` bracket.
+    #[test]
+    fn run_pass_records_oldbest_for_a_moved_reinstall() {
+        let dir = slotundo_temp_dir("161-run-oldbest");
+        let atoms = vec!["dev-libs/sounneed".to_string()];
+        // Installed sub-slot 9 disagrees with the tree's 1.
+        let pass = run_161(
+            &dir,
+            &atoms,
+            false,
+            &[("sounneed", "1.0", "0/9")],
+            false,
+            false,
+            false,
+            false,
+            false,
+            Deep::NotRequested,
+            false,
+        );
+        let entry = pass
+            .entries
+            .iter()
+            .find(|e| e.package == "sounneed")
+            .expect("sounneed resolves");
+        assert_eq!(entry.oldbest.len(), 1);
+        assert_eq!(entry.oldbest[0].version, "1.0");
+        assert_eq!(entry.oldbest[0].sub_slot, "9");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// recordered `USE`.
