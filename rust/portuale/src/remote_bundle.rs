@@ -13,6 +13,10 @@
 //! <pf>/environment         decompressed hook env (absent when the binpkg
 //!                          carries no environment.bz2)
 //! <pf>/remote-manifest     FORMAT=1 + CPV/SLOT/REPO/HAS_ENVIRONMENT
+//! <pf>/bin/...             the ebuild runtime (`bash bin/ebuild.sh`),
+//!                          plus the `bzip2-passthrough`
+//!                          `${PORTAGE_BZIP2_COMMAND}` stand-in (backlog
+//!                          #171) for the env-regeneration postinst run
 //! ```
 //!
 //! Tarred uncompressed (`tar -cf`, system tar like `binpkg::run_tar` --
@@ -117,6 +121,19 @@ pub struct StagedBundle {
     /// failure, like the local merge.
     pub postinst_defined: bool,
 }
+
+/// The client's `${PORTAGE_BZIP2_COMMAND}` stand-in for the merge-time
+/// environment-regeneration postinst run (backlog #171): a tiny
+/// pass-through the bundle ships in the runtime `bin` dir. Real's
+/// `phase-functions.sh` `PORTAGE_UPDATE_ENV` block runs
+/// `${PORTAGE_BZIP2_COMMAND} -c -f9 > "${PORTAGE_UPDATE_ENV}"`
+/// (`bin/phase-functions.sh:1072-1082`), and the client must have no
+/// `bzip2` (`docs/remote-merge.md` §6, §14.1) -- so this ignores its
+/// arguments and copies stdin to stdout (`cat` itself would choke on
+/// `-c -f9`), leaving the regen'd environment plain text for the server
+/// to compress. Only ever invoked through that one block: nothing else
+/// in the phase run resolves through it.
+pub const BZIP2_PASSTHROUGH: &str = "#!/bin/sh\n# Backlog #171: PORTAGE_BZIP2_COMMAND stand-in -- ignore flags, pass stdin through.\nexec cat\n";
 
 /// Split `PVR` into `(PV, PR)`: trailing `-r<digits>` is the revision,
 /// else `PR` is real portage's own `"r0"` default.
@@ -426,6 +443,17 @@ pub fn build_bundle(
         .map_err(|e| format!("failed to spawn cp: {e}"))?;
     if !status.success() {
         return Err(format!("cp -a {} failed ({status})", bin_dir.display()));
+    }
+    // Backlog #171: the `PORTAGE_BZIP2_COMMAND` pass-through rides the
+    // shipped runtime `bin` dir (see `BZIP2_PASSTHROUGH`). `0o755` must
+    // survive the tar below (`tar -cf` preserves modes).
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let passthrough = unit.join("bin").join("bzip2-passthrough");
+        std::fs::write(&passthrough, BZIP2_PASSTHROUGH)
+            .map_err(|e| format!("bzip2-passthrough: {e}"))?;
+        std::fs::set_permissions(&passthrough, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| format!("bzip2-passthrough: {e}"))?;
     }
 
     let ebuild_file = build_info.join(format!("{pf}.ebuild"));
@@ -740,6 +768,66 @@ mod tests {
             !tmp.join("packagepkg-1.0/build-info/INSTALL_MASK").exists(),
             "empty mask must write no INSTALL_MASK file"
         );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #171: the bundle ships `bin/bzip2-passthrough` (the
+    /// client's `${PORTAGE_BZIP2_COMMAND}` stand-in for the env-regen
+    /// postinst run): executable, inside the tar, and ignoring
+    /// compression flags while passing stdin through.
+    #[test]
+    fn bundle_ships_bzip2_passthrough_for_regen() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let tmp = tempdir("passthrough");
+        let _staged = build_bundle(
+            &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+            &tmp,
+            None,
+            &crate::binpkg::GpgVerify::default(),
+            "",
+            false,
+        )
+        .expect("fixture tbz2 stages");
+        let passthrough = tmp.join("packagepkg-1.0/bin/bzip2-passthrough");
+        assert_eq!(
+            std::fs::read_to_string(&passthrough).unwrap(),
+            BZIP2_PASSTHROUGH,
+        );
+        assert_eq!(
+            std::fs::metadata(&passthrough)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o755,
+            "the client must execute it through ${{PORTAGE_BZIP2_COMMAND}}"
+        );
+        let listing = std::process::Command::new("tar")
+            .args(["-tf"])
+            .arg(tmp.join("bundle.tar"))
+            .output()
+            .expect("tar -tf runs");
+        assert!(listing.status.success());
+        let listing = String::from_utf8_lossy(&listing.stdout).into_owned();
+        assert!(
+            listing.contains("packagepkg-1.0/bin/bzip2-passthrough"),
+            "passthrough must ride the bundle:\n{listing}"
+        );
+        // Ignores real's `-c -f9`, copies stdin to stdout.
+        let output = std::process::Command::new("sh")
+            .arg(&passthrough)
+            .args(["-c", "-f9"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write as _;
+                child.stdin.take().unwrap().write_all(b"regen-bytes\n")?;
+                child.wait_with_output()
+            })
+            .expect("passthrough runs");
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"regen-bytes\n");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

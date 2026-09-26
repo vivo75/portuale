@@ -6949,8 +6949,11 @@ fn config_features_list(config: &portage_profile::Config) -> Vec<String> {
 
 /// The resolved, merge-time `FEATURES` incremental list, space-joined --
 /// for `MergeOptions::features` (`merge_binpkg`'s `PORTAGE_UPDATE_ENV`
-/// vdb-environment regeneration).
-fn config_features_string(config: &portage_profile::Config) -> String {
+/// vdb-environment regeneration). Shared with the remote-merge server
+/// (`run_remote_plan`, backlog #171), which resolves the client's
+/// placed config through this same function so a remote merge records
+/// exactly what a local one would.
+pub(crate) fn config_features_string(config: &portage_profile::Config) -> String {
     config_features_list(config).join(" ")
 }
 
