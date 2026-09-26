@@ -50826,4 +50826,405 @@ mod tests_165 {
         }
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    // ---- S7: `resolve_blockers` (real `_validate_blockers`: pending
+    // blocker atoms matched against installed + merge-bound targets,
+    // then filed as satisfied-uninstall, replacement, or unsolvable
+    // rows). The existing legs pin the `New` merge-bound arm, the
+    // use-dep filter, and the buildpkgonly gate; these legs pin the
+    // remaining outcome arms, the installed/graph dedup, the
+    // same-slot and installed-parent skips, and the nomerge
+    // unsolvable arms. ----
+
+    fn upgrade_165(cat: &str, pkg: &str, from: &str, to: &str) -> GraphEntry {
+        entry_165(
+            cat,
+            pkg,
+            PretendOutcome::Upgrade {
+                from: from.to_string(),
+                to: to.to_string(),
+            },
+            Some("0"),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn pending_165(
+        atom: &str,
+        strong: bool,
+        buildtime: bool,
+        target: (&str, &str),
+        owner: (&str, &str),
+        owner_version: &str,
+        owner_merging: bool,
+        owner_installed: bool,
+    ) -> PendingBlocker {
+        PendingBlocker {
+            atom_str: atom.to_string(),
+            strong,
+            buildtime,
+            target_category: target.0.to_string(),
+            target_package: target.1.to_string(),
+            owner_key: (owner.0.to_string(), owner.1.to_string()),
+            owner_version: owner_version.to_string(),
+            owner_merging,
+            owner_installed,
+        }
+    }
+
+    /// `Upgrade`, `Downgrade` and `Reinstall` merge-bound targets join
+    /// the candidate set exactly like `New` ones: each deleted outcome
+    /// arm drops its version from the match and files nothing here.
+    #[test]
+    fn resolve_blockers_matches_upgrade_downgrade_and_reinstall_targets() {
+        let mk = |outcome| {
+            resolve_blockers(
+                Path::new("/nonexistent-root-for-this-test"),
+                &[pending_165(
+                    "!!dev-libs/target",
+                    true,
+                    true,
+                    ("dev-libs", "target"),
+                    ("dev-libs", "owner"),
+                    "1.0",
+                    true,
+                    false,
+                )],
+                &[
+                    new_165("dev-libs", "owner", "1.0"),
+                    entry_165("dev-libs", "target", outcome, Some("0")),
+                ],
+                &HashSet::new(),
+                false,
+            )
+        };
+        for (outcome, version) in [
+            (
+                PretendOutcome::Upgrade {
+                    from: "1.0".to_string(),
+                    to: "2.0".to_string(),
+                },
+                "2.0",
+            ),
+            (
+                PretendOutcome::Downgrade {
+                    from: "2.0".to_string(),
+                    to: "1.0".to_string(),
+                },
+                "1.0",
+            ),
+            (
+                PretendOutcome::Reinstall {
+                    version: "1.0".to_string(),
+                    changed_flags: Vec::new(),
+                    deps_changed: false,
+                    slot_changed: false,
+                    rebuilt_binary: false,
+                    new_repo: false,
+                    slot_operator_rebuild: false,
+                },
+                "1.0",
+            ),
+        ] {
+            let conflicts = mk(outcome);
+            assert_eq!(conflicts.len(), 1);
+            assert_eq!(conflicts[0].conflict.matched_version, version);
+            assert!(conflicts[0].conflict.unsolvable);
+        }
+    }
+
+    /// A merge-bound target at a new slot joins the candidates beside
+    /// the installed one: the `!candidates.any` deletion (which drops
+    /// the graph version) and the slot `==` -> `!=` flip (which drops
+    /// it too) both miss the `:1` blocker here.
+    #[test]
+    fn resolve_blockers_sees_a_merge_bound_target_beside_its_installed_slot() {
+        let root = dir_165("blocker-slotmove");
+        install_165(&root, "dev-libs", "target-1.0", "0", &[]);
+        let entries = vec![
+            new_165("dev-libs", "owner", "1.0"),
+            entry_165(
+                "dev-libs",
+                "target",
+                PretendOutcome::New {
+                    version: "1.0".to_string(),
+                },
+                Some("1"),
+            ),
+        ];
+        let conflicts = resolve_blockers(
+            &root,
+            &[pending_165(
+                "!!dev-libs/target:1",
+                true,
+                true,
+                ("dev-libs", "target"),
+                ("dev-libs", "owner"),
+                "1.0",
+                true,
+                false,
+            )],
+            &entries,
+            &HashSet::new(),
+            false,
+        );
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].conflict.matched_version, "1.0");
+        assert!(conflicts[0].conflict.unsolvable);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A strong blocker against its owner's own slot is exempt from
+    /// the soft same-slot skip: the `!strong` deletion and the slot
+    /// `&&`/`==` narrowings (which would all skip it) fail here.
+    #[test]
+    fn resolve_blockers_keeps_a_strong_blocker_against_its_own_slot() {
+        let conflicts = resolve_blockers(
+            Path::new("/nonexistent-root-for-this-test"),
+            &[pending_165(
+                "!!dev-libs/owner",
+                true,
+                true,
+                ("dev-libs", "owner"),
+                ("dev-libs", "owner"),
+                "1.0",
+                true,
+                false,
+            )],
+            &[new_165("dev-libs", "owner", "1.0")],
+            &HashSet::new(),
+            false,
+        );
+        assert_eq!(conflicts.len(), 1);
+        assert!(conflicts[0].conflict.unsolvable);
+    }
+
+    /// Cell f: an installed-only match for a nomerge owner is ignored
+    /// outright. Every `&&` -> `||` widening and `!` deletion in the
+    /// cell files a row instead and fails here.
+    #[test]
+    fn resolve_blockers_ignores_an_installed_only_match_for_a_nomerge_owner() {
+        let root = dir_165("blocker-cell-f");
+        install_165(&root, "dev-libs", "target-1.0", "0", &[]);
+        let entries = vec![entry_165(
+            "dev-libs",
+            "owner",
+            PretendOutcome::AlreadyInstalled {
+                version: "1.0".to_string(),
+            },
+            Some("0"),
+        )];
+        let conflicts = resolve_blockers(
+            &root,
+            &[pending_165(
+                "!dev-libs/target",
+                false,
+                false,
+                ("dev-libs", "target"),
+                ("dev-libs", "owner"),
+                "1.0",
+                false,
+                false,
+            )],
+            &entries,
+            &HashSet::new(),
+            false,
+        );
+        assert!(conflicts.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A nomerge owner in the required-set closure still blocks on a
+    /// merge-bound match (real's "digraph node with parents"): without
+    /// the closure the same row is solvable. The `owner_set_parent`
+    /// `||` -> `&&` narrowing (which drops the set term) fails the
+    /// first leg; the `merge_bound_match &&` deletion... the second
+    /// leg pins the solvable side.
+    #[test]
+    fn resolve_blockers_unblocks_a_nomerge_row_outside_the_required_sets() {
+        let root = dir_165("blocker-sets");
+        install_165(&root, "dev-libs", "target-1.0", "0", &[]);
+        let owner = entry_165(
+            "dev-libs",
+            "owner",
+            PretendOutcome::AlreadyInstalled {
+                version: "1.0".to_string(),
+            },
+            Some("0"),
+        );
+        let entries = vec![
+            owner,
+            entry_165(
+                "dev-libs",
+                "target",
+                PretendOutcome::New {
+                    version: "2.0".to_string(),
+                },
+                Some("0"),
+            ),
+        ];
+        let pending = vec![pending_165(
+            "!dev-libs/target",
+            false,
+            false,
+            ("dev-libs", "target"),
+            ("dev-libs", "owner"),
+            "1.0",
+            false,
+            false,
+        )];
+        // Outside every required set the merge-bound match resolves by
+        // removing the owner.
+        let solvable = resolve_blockers(&root, &pending, &entries, &HashSet::new(), false);
+        let by_version: HashMap<String, &FiledBlocker> = solvable
+            .iter()
+            .map(|c| (c.conflict.matched_version.clone(), c))
+            .collect();
+        assert_eq!(by_version.len(), 2);
+        assert!(!by_version["2.0"].conflict.unsolvable);
+        // Inside the closure the same row is unresolved.
+        let closure = HashSet::from([("dev-libs".to_string(), "owner".to_string())]);
+        let stuck = resolve_blockers(&root, &pending, &entries, &closure, false);
+        let row_2_0 = stuck
+            .iter()
+            .find(|c| c.conflict.matched_version == "2.0")
+            .expect("merge-bound row filed");
+        assert!(row_2_0.conflict.unsolvable);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A use-dep blocker is evaluated against the *matched version's*
+    /// own entry: `targetA` (New 1.0, flag off) does not satisfy
+    /// `[wantblock]`, `targetB` (Upgrade to 2.0, flag on) does, so
+    /// only the 2.0 row files. Every `&&` -> `||` widening and `==` ->
+    /// `!=` flip in the graphed-USE entry lookup files the wrong set
+    /// (nothing, or the 1.0 row too) and fails here.
+    #[test]
+    fn resolve_blockers_evaluates_use_deps_against_the_matched_versions_entry() {
+        let mut target_a = new_165("dev-libs", "target", "1.0");
+        target_a.use_flags_display = vec![("wantblock".to_string(), false)];
+        let mut target_b = upgrade_165("dev-libs", "target", "1.0", "2.0");
+        target_b.use_flags_display = vec![("wantblock".to_string(), true)];
+        let entries = vec![target_a, target_b, new_165("dev-libs", "owner", "1.0")];
+        let conflicts = resolve_blockers(
+            Path::new("/nonexistent-root-for-this-test"),
+            &[pending_165(
+                "!!dev-libs/target[wantblock]",
+                true,
+                true,
+                ("dev-libs", "target"),
+                ("dev-libs", "owner"),
+                "1.0",
+                true,
+                false,
+            )],
+            &entries,
+            &HashSet::new(),
+            false,
+        );
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].conflict.matched_version, "2.0");
+        assert!(conflicts[0].conflict.unsolvable);
+    }
+
+    /// `merge_bound_match` needs the entry's slot *and* version: an
+    /// installed 1.0 beside a slot-moved merge-bound 9.9 leaves the
+    /// 1.0 row solvable (removed by uninstall). The
+    /// `installed_match`/`merge_bound_match` `&&` -> `||` widening
+    /// marks it merge-bound instead and fails here.
+    #[test]
+    fn resolve_blockers_needs_slot_and_version_for_a_merge_bound_match() {
+        let root = dir_165("blocker-merge-bound-match");
+        install_165(&root, "dev-libs", "target-1.0", "0", &[]);
+        let entries = vec![
+            new_165("dev-libs", "owner", "1.0"),
+            entry_165(
+                "dev-libs",
+                "target",
+                PretendOutcome::New {
+                    version: "9.9".to_string(),
+                },
+                Some("5"),
+            ),
+        ];
+        let conflicts = resolve_blockers(
+            &root,
+            &[pending_165(
+                "!!dev-libs/target",
+                true,
+                true,
+                ("dev-libs", "target"),
+                ("dev-libs", "owner"),
+                "1.0",
+                true,
+                false,
+            )],
+            &entries,
+            &HashSet::new(),
+            false,
+        );
+        assert_eq!(conflicts.len(), 2);
+        let row_1_0 = conflicts
+            .iter()
+            .find(|c| c.conflict.matched_version == "1.0")
+            .expect("installed row filed");
+        assert!(!row_1_0.conflict.unsolvable);
+        assert!(matches!(
+            row_1_0.conflict.satisfied_by,
+            Some(BlockerSatisfiedBy::Uninstall { .. })
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The non-merge fallback owner lookup is same-cp: with no owner
+    /// entry at all, another cp's `AlreadyInstalled` row must not
+    /// stand in (the `&&` -> `||` widening flips the owner to
+    /// nomerge and solves the merge-bound row instead of blocking
+    /// on it).
+    #[test]
+    fn resolve_blockers_falls_back_to_a_same_cp_nomerge_owner_only() {
+        let root = dir_165("blocker-owner-fallback");
+        install_165(&root, "dev-libs", "target-1.0", "0", &[]);
+        let other = entry_165(
+            "dev-libs",
+            "other",
+            PretendOutcome::AlreadyInstalled {
+                version: "1.0".to_string(),
+            },
+            Some("0"),
+        );
+        let entries = vec![
+            other,
+            entry_165(
+                "dev-libs",
+                "target",
+                PretendOutcome::New {
+                    version: "2.0".to_string(),
+                },
+                Some("0"),
+            ),
+        ];
+        let conflicts = resolve_blockers(
+            &root,
+            &[pending_165(
+                "!!dev-libs/target",
+                true,
+                true,
+                ("dev-libs", "target"),
+                ("dev-libs", "owner"),
+                "1.0",
+                true,
+                false,
+            )],
+            &entries,
+            &HashSet::new(),
+            false,
+        );
+        let row_2_0 = conflicts
+            .iter()
+            .find(|c| c.conflict.matched_version == "2.0")
+            .expect("merge-bound row filed");
+        assert!(row_2_0.conflict.unsolvable);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
