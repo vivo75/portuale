@@ -51620,4 +51620,312 @@ mod tests_165 {
         assert_eq!(pending[1].atom_str, "!!dev-libs/other");
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    // ---- S9: `enqueue_dependencies` (the `--deep`
+    // AlreadyInstalled recursion: the installed package's own
+    // flattened deps go to the queue, blockers to pending). Called
+    // directly with `dynamic_deps = false`, so dep strings come from
+    // the vdb snapshot and only the version lookup needs the tree. ----
+
+    #[allow(clippy::too_many_arguments)]
+    fn enqueue_165(
+        repos: &[RepoConfig],
+        root: &Path,
+        config: &portage_profile::Config,
+        cat: &str,
+        pkg: &str,
+        ver: &str,
+        with_bdeps: bool,
+        entries: &mut Vec<GraphEntry>,
+        queue: &mut std::collections::VecDeque<QueueItem>,
+        pending: &mut Vec<PendingBlocker>,
+    ) -> SlotPullers {
+        let mut seen = HashSet::new();
+        let mut memo = HashMap::new();
+        let mut pullers = HashMap::new();
+        enqueue_dependencies(
+            repos,
+            root,
+            false,
+            cat,
+            pkg,
+            ver,
+            config,
+            1,
+            queue,
+            pending,
+            (cat.to_string(), pkg.to_string()),
+            ver.to_string(),
+            with_bdeps,
+            None,
+            entries,
+            &mut seen,
+            &mut memo,
+            &mut pullers,
+            &HashMap::new(),
+            false,
+            &std::sync::Arc::new(BinaryIndex::default()),
+        );
+        pullers
+    }
+
+    /// A plain RDEPEND on an installed package is queued (not skipped):
+    /// the whole-body row, the `||`-token skip, and every
+    /// satisfied-self widening (which would drop it) fail here.
+    #[test]
+    fn enqueue_dependencies_queues_a_plain_dep_on_an_installed_package() {
+        let root = dir_165("enqueue-basic");
+        install_165(
+            &root,
+            "dev-libs",
+            "consumer-1.0",
+            "0",
+            &[("RDEPEND", "dev-libs/dep")],
+        );
+        install_165(&root, "dev-libs", "dep-1.0", "0", &[]);
+        let repos = repo_165(
+            &root,
+            &[
+                ("dev-libs/consumer", "1.0", "0", "", "", "", ""),
+                ("dev-libs/dep", "1.0", "0", "", "", "", ""),
+            ],
+        );
+        let mut entries = Vec::new();
+        let mut queue = std::collections::VecDeque::new();
+        let mut pending = Vec::new();
+        let pullers = enqueue_165(
+            &repos,
+            &root,
+            &cfg_165(),
+            "dev-libs",
+            "consumer",
+            "1.0",
+            false,
+            &mut entries,
+            &mut queue,
+            &mut pending,
+        );
+        assert!(pending.is_empty());
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue[0].atom, "dev-libs/dep");
+        assert_eq!(queue[0].depth, 1);
+        assert_eq!(
+            pullers.get(&("dev-libs".to_string(), "dep".to_string())),
+            Some(&vec![(
+                "dev-libs".to_string(),
+                "consumer".to_string(),
+                "1.0".to_string(),
+                "dev-libs/dep".to_string()
+            )])
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A dependency on the installed instance itself is the satisfied
+    /// self-edge real drops: the `version == owner_version` -> `!=`
+    /// flip re-queues it and fails here.
+    #[test]
+    fn enqueue_dependencies_drops_a_dep_satisfied_by_the_instance_itself() {
+        let root = dir_165("enqueue-self");
+        install_165(
+            &root,
+            "dev-libs",
+            "consumer-1.0",
+            "0",
+            &[("RDEPEND", "dev-libs/consumer")],
+        );
+        let repos = repo_165(&root, &[("dev-libs/consumer", "1.0", "0", "", "", "", "")]);
+        let mut entries = Vec::new();
+        let mut queue = std::collections::VecDeque::new();
+        let mut pending = Vec::new();
+        enqueue_165(
+            &repos,
+            &root,
+            &cfg_165(),
+            "dev-libs",
+            "consumer",
+            "1.0",
+            false,
+            &mut entries,
+            &mut queue,
+            &mut pending,
+        );
+        assert!(queue.is_empty());
+        assert!(pending.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A strong runtime blocker files into pending (never the queue)
+    /// with its provenance: the blocker `!=` -> `==` flip (which
+    /// queues it as a dep instead) and the `Strong` -> inverted flip
+    /// fail here.
+    #[test]
+    fn enqueue_dependencies_files_a_strong_blocker_into_pending() {
+        let root = dir_165("enqueue-blocker");
+        install_165(
+            &root,
+            "dev-libs",
+            "consumer-1.0",
+            "0",
+            &[("RDEPEND", "!!dev-libs/victim")],
+        );
+        let repos = repo_165(&root, &[("dev-libs/consumer", "1.0", "0", "", "", "", "")]);
+        let mut entries = Vec::new();
+        let mut queue = std::collections::VecDeque::new();
+        let mut pending = Vec::new();
+        enqueue_165(
+            &repos,
+            &root,
+            &cfg_165(),
+            "dev-libs",
+            "consumer",
+            "1.0",
+            false,
+            &mut entries,
+            &mut queue,
+            &mut pending,
+        );
+        assert!(queue.is_empty());
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].atom_str, "!!dev-libs/victim");
+        assert!(pending[0].strong);
+        assert!(!pending[0].buildtime);
+        assert!(!pending[0].owner_merging);
+        assert!(!pending[0].owner_installed);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A build-time blocker carries its provenance: with `with_bdeps`
+    /// the DEPEND `!!` row is `buildtime`, pinning the
+    /// buildtime-flatten `!=` -> `==` flip (which would record it as
+    /// runtime).
+    #[test]
+    fn enqueue_dependencies_marks_a_depend_blocker_as_buildtime() {
+        let root = dir_165("enqueue-buildtime");
+        install_165(
+            &root,
+            "dev-libs",
+            "consumer-1.0",
+            "0",
+            &[("DEPEND", "!!dev-libs/victim")],
+        );
+        let repos = repo_165(&root, &[("dev-libs/consumer", "1.0", "0", "", "", "", "")]);
+        let mut entries = Vec::new();
+        let mut queue = std::collections::VecDeque::new();
+        let mut pending = Vec::new();
+        enqueue_165(
+            &repos,
+            &root,
+            &cfg_165(),
+            "dev-libs",
+            "consumer",
+            "1.0",
+            true,
+            &mut entries,
+            &mut queue,
+            &mut pending,
+        );
+        assert!(queue.is_empty());
+        assert_eq!(pending.len(), 1);
+        assert!(pending[0].strong);
+        assert!(pending[0].buildtime);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A conditional use-dep is evaluated against the installed USE
+    /// before queueing, and the queue remembers the raw form: the
+    /// `evaluated != raw` -> `==` flip swaps which rows carry
+    /// `unevaluated` and fails here.
+    #[test]
+    fn enqueue_dependencies_records_the_unevaluated_form_of_a_conditional_dep() {
+        let root = dir_165("enqueue-unevaluated");
+        install_165(
+            &root,
+            "dev-libs",
+            "consumer-1.0",
+            "0",
+            &[
+                ("USE", "flag"),
+                ("RDEPEND", "dev-libs/need[flag=] dev-libs/plain"),
+            ],
+        );
+        let repos = repo_165(
+            &root,
+            &[
+                ("dev-libs/consumer", "1.0", "0", "", "", "", ""),
+                ("dev-libs/need", "1.0", "0", "flag", "", "", ""),
+                ("dev-libs/plain", "1.0", "0", "", "", "", ""),
+            ],
+        );
+        let mut entries = Vec::new();
+        let mut queue = std::collections::VecDeque::new();
+        let mut pending = Vec::new();
+        enqueue_165(
+            &repos,
+            &root,
+            &cfg_165(),
+            "dev-libs",
+            "consumer",
+            "1.0",
+            false,
+            &mut entries,
+            &mut queue,
+            &mut pending,
+        );
+        assert!(pending.is_empty());
+        assert_eq!(queue.len(), 2);
+        let cond = queue
+            .iter()
+            .find(|q| q.atom.starts_with("dev-libs/need"))
+            .expect("conditional dep queued");
+        assert_eq!(cond.unevaluated.as_deref(), Some("dev-libs/need[flag=]"));
+        let plain = queue
+            .iter()
+            .find(|q| q.atom == "dev-libs/plain")
+            .expect("plain dep queued");
+        assert_eq!(plain.unevaluated, None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Plains queue before `||` choices (the main walk's
+    /// plains-reversed + `||`-last split): both partition mutants flip
+    /// the order here.
+    #[test]
+    fn enqueue_dependencies_queues_plains_before_disjunction_choices() {
+        let root = dir_165("enqueue-order");
+        install_165(
+            &root,
+            "dev-libs",
+            "consumer-1.0",
+            "0",
+            &[("RDEPEND", "dev-libs/plain || ( dev-libs/only )")],
+        );
+        let repos = repo_165(
+            &root,
+            &[
+                ("dev-libs/consumer", "1.0", "0", "", "", "", ""),
+                ("dev-libs/plain", "1.0", "0", "", "", "", ""),
+                ("dev-libs/only", "1.0", "0", "", "", "", ""),
+            ],
+        );
+        let mut entries = Vec::new();
+        let mut queue = std::collections::VecDeque::new();
+        let mut pending = Vec::new();
+        enqueue_165(
+            &repos,
+            &root,
+            &cfg_165(),
+            "dev-libs",
+            "consumer",
+            "1.0",
+            false,
+            &mut entries,
+            &mut queue,
+            &mut pending,
+        );
+        assert!(pending.is_empty());
+        let atoms: Vec<String> = queue.iter().map(|q| q.atom.clone()).collect();
+        assert_eq!(atoms, vec!["dev-libs/plain", "dev-libs/only"]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
