@@ -7414,6 +7414,20 @@ fn resolved_global_use(config: &portage_profile::Config) -> std::collections::BT
     set
 }
 
+/// One `--info` variable-dump value for a plain scalar key: real
+/// `action_info`'s `settings.get(k)` (`_emerge/actions.py:2240`) walks
+/// `lookuplist` env-first (real `config.py:3178-3182`; `USE_ORDER`
+/// `"env:pkg:conf:defaults:…"` at `:1031-1035`), so this is #180's
+/// `env_over_config_scalar` chain (backlog #219), not `other_vars`
+/// with an env fallback. For keys `resolve_config` already env-folds
+/// (`ENV_SCALAR_VARS`, e.g. `PKGDIR`) the two reads agree; for the rest
+/// (`PORTAGE_BZIP2_COMMAND`, `PORTAGE_BUNZIP2_COMMAND`, any profile
+/// `info_vars` extra outside the allowlists) the env now wins, as real
+/// prints it.
+fn info_scalar_value(config: &portage_profile::Config, key: &str) -> Option<String> {
+    portage_profile::env_over_config_scalar(config, key)
+}
+
 /// First line of `<cmd> --version` output, trimmed -- `None` if the
 /// command isn't found or exits non-zero (real `subprocess.Popen` +
 /// `os.EX_OK` guard). `args` is usually `["--version"]`.
@@ -7886,15 +7900,18 @@ fn run_info(
                     .collect();
                 Some(flags.join(" "))
             }
-            // Real `settings.get(k)` bottoms out in `configdict["env"]`
-            // (`os.environ`), so a curated `info_vars` entry that is only
-            // ever an environment variable (`SHELL`, `LC_ALL`, …) still
-            // shows. Config sources win; the process env is the fallback.
-            _ => config
-                .other_vars
-                .get(k)
-                .cloned()
-                .or_else(|| std::env::var(k).ok()),
+            // Real `settings.get(k)` walks `lookuplist` env-first
+            // (`actions.py:2240`; `config.py:3178-3182`, `USE_ORDER`
+            // `"env:pkg:conf:…"` at `:1031-1035`), so the calling
+            // environment wins over `make.conf`/profile/`make.globals`
+            // -- including for keys `resolve_config` never env-folds
+            // itself (backlog #219: `PORTAGE_BZIP2_COMMAND`,
+            // `PORTAGE_BUNZIP2_COMMAND`). A curated `info_vars` entry
+            // that is only ever an environment variable (`SHELL`,
+            // `LC_ALL`, …) still shows via the same chain. (Backlog
+            // #180's `env_over_config_scalar`, not a second reader,
+            // and no raw `std::env` read.)
+            _ => info_scalar_value(config, k),
         };
         match value {
             Some(v) if k == "PORTAGE_BZIP2_COMMAND" && v == "bzip2" => {}
@@ -15822,6 +15839,65 @@ mod tests {
         assert_eq!(
             nomerge_row("dev-libs", "diamond", "1.0", " ", true, &bare_use),
             "[nomerge      ]  dev-libs/diamond-1.0"
+        );
+    }
+
+    // Serialize the one test that mutates the process environment, in
+    // the `PLACED_CONFIG_ENV_LOCK` (`remote.rs`) style.
+    static INFO_SCALAR_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn info_scalar_value_prefers_the_calling_env_over_the_config() {
+        // Backlog #219: `--info`'s scalar dump reads the calling env
+        // over the config files (real `settings.get(k)`, env-first
+        // `lookuplist`), not `other_vars` with an env fallback.
+        // Hermetic without `with_test_env` (that hook lives in
+        // portage-profile's own `cfg(test)`): a probe key no other code
+        // reads, mutated under a lock, ambient value saved/restored via
+        // a `Drop` guard so an assertion panic cannot leak it.
+        let _guard = INFO_SCALAR_ENV_LOCK.lock().unwrap();
+        let key = "PORTUALE_INFO_SCALAR_PROBE_219";
+        struct RestoreProbe {
+            key: &'static str,
+            saved: Option<std::ffi::OsString>,
+        }
+        impl Drop for RestoreProbe {
+            fn drop(&mut self) {
+                // SAFETY: held `INFO_SCALAR_ENV_LOCK`; no other test in
+                // this binary touches this probe key.
+                unsafe {
+                    match self.saved.take() {
+                        Some(value) => std::env::set_var(self.key, value),
+                        None => std::env::remove_var(self.key),
+                    }
+                }
+            }
+        }
+        let _restore = RestoreProbe {
+            key,
+            saved: std::env::var_os(key),
+        };
+        // SAFETY: held `INFO_SCALAR_ENV_LOCK`; no other test in this
+        // binary touches this probe key.
+        unsafe {
+            std::env::set_var(key, "env-value-219");
+        }
+        let config = portage_profile::Config {
+            other_vars: [(key.to_string(), "conf-value-219".to_string())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        assert_eq!(
+            info_scalar_value(&config, key).as_deref(),
+            Some("env-value-219"),
+            "the calling env must win over make.conf, as real prints it"
+        );
+        std::mem::drop(_restore);
+        assert_eq!(
+            info_scalar_value(&config, key).as_deref(),
+            Some("conf-value-219"),
+            "without the env layer the config value still shows"
         );
     }
 }

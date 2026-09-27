@@ -1673,6 +1673,20 @@ fn apply_env_layer(scalars: &mut HashMap<String, String>, config: &mut Config) {
             scalars.insert(name.to_string(), value);
         }
     }
+    // `CONFIG_PROTECT` / `CONFIG_PROTECT_MASK` / `ENV_UNSET`: also in
+    // real `const.INCREMENTALS` (`const.py:125-138`), so real
+    // `config.regenerate()` stacks the calling env as the final source
+    // of their fold like `FEATURES` (`mydbs = configlist[:-1] +
+    // [backupenv]`, `config.py:2735-2736`) -- `emerge --info`'s
+    // `settings.get(k)` then prints the stacked, sorted union (backlog
+    // #219 fix round 1). Same treatment as `FEATURES` above: the env
+    // value is both the final incremental source and the scalar.
+    for name in ["CONFIG_PROTECT", "CONFIG_PROTECT_MASK", "ENV_UNSET"] {
+        if let Some(value) = config_env_var(name) {
+            note_incremental(config, name, &value);
+            scalars.insert(name.to_string(), value);
+        }
+    }
 }
 
 /// The calling-env-over-config value of a plain last-wins scalar: the
@@ -5971,6 +5985,85 @@ sync-uri = file:///srv/pkgs
             assert!(!c.other_vars.contains_key("BINPKG_FORMAT"));
             assert_eq!(env_over_config_scalar(&c, "BINPKG_FORMAT"), None);
         });
+    }
+
+    #[test]
+    fn env_layer_stacks_onto_the_config_protect_and_env_unset_folds() {
+        // Backlog #219 fix round 1: `CONFIG_PROTECT`,
+        // `CONFIG_PROTECT_MASK` and `ENV_UNSET` are in real
+        // `const.INCREMENTALS` (`const.py:125-138`), so real
+        // `config.regenerate()` stacks the calling env as the final
+        // source (`mydbs = configlist[:-1] + [backupenv]`,
+        // `config.py:2735-2736`) -- like `FEATURES`, not last-wins.
+        // `emerge --info`'s `settings.get(k)` then prints the stacked,
+        // sorted union.
+        let root = std::env::temp_dir().join("portage-profile-test-info-incrementals");
+        let repo = root.join("repo");
+        let prof = repo.join("profiles/default");
+        let portage_dir = root.join("etc/portage");
+        fs::create_dir_all(&prof).unwrap();
+        fs::create_dir_all(&portage_dir).unwrap();
+        fs::write(
+            prof.join("make.defaults"),
+            "ARCH=\"amd64\"\nACCEPT_KEYWORDS=\"${ARCH}\"\n",
+        )
+        .unwrap();
+        fs::write(
+            portage_dir.join("make.conf"),
+            "CONFIG_PROTECT=\"/conf-protect\"\n\
+             CONFIG_PROTECT_MASK=\"/conf-mask\"\n\
+             ENV_UNSET=\"CONF_UNSET\"\n",
+        )
+        .unwrap();
+        let make_profile = portage_dir.join("make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&prof, &make_profile).unwrap();
+        let resolve = || {
+            resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
+                .expect("resolves")
+        };
+
+        // No env: the `make.conf` layer alone.
+        with_test_env(&[], || {
+            let c = resolve();
+            assert_eq!(
+                c.resolved_incremental("CONFIG_PROTECT"),
+                Some(vec!["/conf-protect".to_string()])
+            );
+            assert_eq!(
+                c.resolved_incremental("ENV_UNSET"),
+                Some(vec!["CONF_UNSET".to_string()])
+            );
+        });
+
+        // Calling env stacks onto the file fold (union, sorted --
+        // including `-tok` removal, as in real's fold).
+        with_test_env(
+            &[
+                ("CONFIG_PROTECT", "/env-protect"),
+                ("CONFIG_PROTECT_MASK", "-/conf-mask /env-mask"),
+                ("ENV_UNSET", "ENV_UNSET_X"),
+            ],
+            || {
+                let c = resolve();
+                assert_eq!(
+                    c.resolved_incremental("CONFIG_PROTECT"),
+                    Some(vec![
+                        "/conf-protect".to_string(),
+                        "/env-protect".to_string()
+                    ])
+                );
+                assert_eq!(
+                    c.resolved_incremental("CONFIG_PROTECT_MASK"),
+                    Some(vec!["/env-mask".to_string()])
+                );
+                assert_eq!(
+                    c.resolved_incremental("ENV_UNSET"),
+                    Some(vec!["CONF_UNSET".to_string(), "ENV_UNSET_X".to_string()])
+                );
+            },
+        );
     }
 
     #[test]
