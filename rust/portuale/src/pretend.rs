@@ -221,7 +221,7 @@ use portage_repo::{
     ResolveRequest, SlotConflict, active_resolver_for, all_installed_packages,
     config_root_from_env, ebuild_visible_at, root_from_env, slot_conflict_flag_sets, split_pf,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -1355,6 +1355,14 @@ fn print_entry_line(
     // ebuilds to satisfy "<atom>"` + chain block, rendered last in the
     // `NoVisibleCandidate` arm (after the two sibling blocks).
     plain_miss_deps: &[portage_repo::PlainMissDepReport],
+    // Backlog #206 S2: real `_show_circular_deps` forces `--verbose` for
+    // the stuck-remainder display, so every row carries its fetch size
+    // (`verbose_size`, `0 KiB` for an ebuild whose distfiles are already
+    // present) — while plain `-pv` rows keep portuale's established cut
+    // of omitting that bare `0 KiB` (see the `size_suffix` note below).
+    // True only for the circular re-display; every other caller passes
+    // false.
+    force_sizes: bool,
 ) {
     let entry = &entries[index];
     // Real `_DisplayConfig` verbosity: `--quiet and 1 or --verbose and 3
@@ -1533,8 +1541,11 @@ fn print_entry_line(
         // ever non-zero here -- an ebuild's distfiles / a local `$PKGDIR`
         // binary are already present, so real would show a bare ` 0 KiB`
         // that portuale's `-pv` lines have always omitted; closing that
-        // wider gap would re-pin every `-pv` assertion and is left out).
-        let size_suffix = if v3 && entry.remote_binary {
+        // wider gap would re-pin every `-pv` assertion and is left out)
+        // or under `force_sizes` (backlog #206 S2: the circular
+        // re-display runs forced-verbose, so its rows carry real's
+        // `0 KiB` like the live oracle).
+        let size_suffix = if v3 && (entry.remote_binary || force_sizes) {
             let bytes: u64 = entry.download_files.iter().map(|(_, s)| s).sum();
             format!(" {}", localized_size(bytes))
         } else {
@@ -1953,6 +1964,13 @@ fn print_entry_line(
 /// graph still holds it, so ordered mode prints it as a `nomerge`
 /// ancestor occurrence; portuale excludes it from the ordered node list
 /// for the same effect.
+///
+/// Renders the tree walk and reports it back: one `(entry index,
+/// `ordered`) pair per rendered entry row, in render order — real
+/// `_ordered_tree_display`'s own walk product, before printing. The only
+/// consumer of the return is backlog #206 S2's `Total:` recount (real
+/// counts displayed merge *rows*, repeats included, `nomerge` excluded);
+/// every other caller ignores it.
 #[allow(clippy::too_many_arguments)]
 fn print_tree(
     entries: &[GraphEntry],
@@ -1974,7 +1992,10 @@ fn print_tree(
     masked_deps: &[portage_repo::MaskedDepReport],
     use_unsat_deps: &[portage_repo::UseUnsatDepReport],
     plain_miss_deps: &[portage_repo::PlainMissDepReport],
-) {
+    // Backlog #206 S2: forwarded to `print_entry_line` (see its
+    // `force_sizes`).
+    force_sizes: bool,
+) -> Vec<(usize, bool)> {
     /// One node of the display graph: an entry, or a satisfied blocker
     /// row `entries[owner].blockers[index]`.
     #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -2316,6 +2337,7 @@ fn print_tree(
         }
     }
 
+    let mut rendered: Vec<(usize, bool)> = Vec::new();
     for (node, depth, ordered) in display {
         // Real `output_helpers.py`'s `self.indent` is exactly `depth`
         // spaces (`_ordered_tree_display`'s depth is passed straight to
@@ -2323,30 +2345,34 @@ fn print_tree(
         // one literal space after `]`, so portuale's formats do too.
         let indent = " ".repeat(depth);
         match node {
-            TreeNode::Entry(i) => print_entry_line(
-                entries,
-                root,
-                i,
-                &indent,
-                ordered,
-                top_level_pkgs,
-                onlydeps,
-                oneshot,
-                verbose,
-                quiet,
-                alphabetical,
-                false,
-                130,
-                running_root,
-                color,
-                system_atoms,
-                world_atoms,
-                force_reinstall_cps,
-                blocker_lines,
-                masked_deps,
-                use_unsat_deps,
-                plain_miss_deps,
-            ),
+            TreeNode::Entry(i) => {
+                rendered.push((i, ordered));
+                print_entry_line(
+                    entries,
+                    root,
+                    i,
+                    &indent,
+                    ordered,
+                    top_level_pkgs,
+                    onlydeps,
+                    oneshot,
+                    verbose,
+                    quiet,
+                    alphabetical,
+                    false,
+                    130,
+                    running_root,
+                    color,
+                    system_atoms,
+                    world_atoms,
+                    force_reinstall_cps,
+                    blocker_lines,
+                    masked_deps,
+                    use_unsat_deps,
+                    plain_miss_deps,
+                    force_sizes,
+                )
+            }
             TreeNode::Blocker { owner, index } => {
                 let owner_entry = &entries[owner];
                 println!(
@@ -2367,6 +2393,7 @@ fn print_tree(
             }
         }
     }
+    rendered
 }
 
 /// Escapes `s` for embedding in a JSON string literal (quote, backslash,
@@ -2747,6 +2774,43 @@ fn abort_outcome_to_json(outcome: &portage_repo::ResolveOutcome) -> String {
     }
 }
 
+/// Backlog #206 S1: real `_emerge/Package.py::Package.__str__` for a
+/// merge-bound package — the `(cpv:slot/sub_slot::repo, <type> scheduled
+/// for merge)` node text real
+/// `circular_dependency_handler._prepare_circular_dep_message`
+/// (`resolver/circular_dependency.py:76`) prints for each cycle member
+/// (the digraph f-string renders `str(Package)`). The `cpv:slot/sub::repo`
+/// head is wrapped in real's per-operation colour (`PKG_MERGE` for an
+/// ebuild merge, `PKG_BINARY_MERGE` for a binary one — a no-op unless the
+/// caller's `Colorizer` is enabled). Deliberate cuts, both grounded on
+/// live real: the ` to '<ROOT>'` arm never fires (eight unanimous
+/// `docs/evidence/2026-09-27-181-circular-text/real/` captures plus the
+/// six-case n206 container probe, all `ROOT=$FX`, show no suffix — and
+/// portuale's root is non-`/` in every test, so the literal gate would
+/// inject tmp paths; same rationale as `root_suffix`), and the
+/// `installed` / `uninstall` variants are unreachable here (cycle members
+/// are merge-bound by construction — `find_hard_cycles` only considers
+/// merge-bound entries; a member missing from `entries` falls back to
+/// the bare cpv at the call site). The slot-conflict renderers below
+/// keep their own local closures (their unknown-member fallbacks differ
+/// from each other and carry no colour, so sharing this helper would move
+/// their pins).
+fn circular_node_text(
+    cpv: &str,
+    slot: &str,
+    sub_slot: &str,
+    repo: &str,
+    type_name: &str,
+    color: &Colorizer,
+) -> String {
+    let head = format!("{cpv}:{slot}/{sub_slot}::{repo}");
+    let head = match type_name {
+        "binary" => color.c("PKG_BINARY_MERGE", &head),
+        _ => color.c("PKG_MERGE", &head),
+    };
+    format!("({head}, {type_name} scheduled for merge)")
+}
+
 /// Backlog #19 Slice 5: real `_show_circular_deps` (`depgraph.py:10425`)
 /// as a callable unit — the `* Error: circular dependencies:` block, the
 /// `Change USE:` suggestion-or-advisory branch, and the
@@ -2756,6 +2820,11 @@ fn abort_outcome_to_json(outcome: &portage_repo::ResolveOutcome) -> String {
 /// `ExitCode::from(1)` itself, except the gated cycle-abort path, which
 /// prints this *before* the autounmask section (real `display_problems`
 /// order, `:11113` before `:11140`) and then continues into it.
+///
+/// Backlog #206: the block opens with real's own three newlines (real
+/// `writemsg("\n\n")` before `display(handler.merge_list)` plus
+/// `writemsg("\n")` after it, all stderr), and each cycle member renders
+/// through `circular_node_text` (real `str(Package)`).
 #[allow(clippy::too_many_arguments)]
 fn print_circular_block(
     cycle: &[String],
@@ -2767,18 +2836,52 @@ fn print_circular_block(
     large_cycle_count: bool,
 ) {
     let prefix = color.c("BAD", " * ");
-    eprint!("\n{prefix}Error: circular dependencies:\n\n");
-    // `_prepare_circular_dep_message`: `<pkg> depends on`, then each
-    // subsequent `<pkg> (buildtime)` at a growing one-space indent,
-    // closing back on the first package.
-    let mut lines: Vec<String> = vec![format!("{} depends on", cycle[0])];
+    eprint!("\n\n\n{prefix}Error: circular dependencies:\n\n");
+    // `_prepare_circular_dep_message`: `<node> depends on`, then each
+    // subsequent `<node> (buildtime)` at a growing one-space indent,
+    // closing back on the first package. Each node is real
+    // `str(Package)` (`circular_node_text`); a member missing from
+    // `entries` (unreachable for resolver-built cycles) keeps the bare
+    // cpv so the block still prints.
+    let mut by_cpv: HashMap<String, (String, String, String, &str)> = HashMap::new();
+    for e in entries {
+        let version = match &e.outcome {
+            portage_repo::PretendOutcome::New { version }
+            | portage_repo::PretendOutcome::Reinstall { version, .. } => version.clone(),
+            portage_repo::PretendOutcome::Upgrade { to, .. }
+            | portage_repo::PretendOutcome::Downgrade { to, .. } => to.clone(),
+            _ => continue,
+        };
+        let (Some(slot), Some(sub_slot), Some(repo)) =
+            (e.slot.clone(), e.sub_slot.clone(), e.repo_name.clone())
+        else {
+            continue;
+        };
+        let type_name = match e.source {
+            portage_repo::CandidateSource::Binary => "binary",
+            portage_repo::CandidateSource::Ebuild => "ebuild",
+        };
+        by_cpv.insert(
+            format!("{}/{}-{version}", e.category, e.package),
+            (slot, sub_slot, repo, type_name),
+        );
+    }
+    let node = |cpv: &str| -> String {
+        match by_cpv.get(cpv) {
+            Some((slot, sub_slot, repo, type_name)) => {
+                circular_node_text(cpv, slot, sub_slot, repo, type_name, color)
+            }
+            None => cpv.to_string(),
+        }
+    };
+    let mut lines: Vec<String> = vec![format!("{} depends on", node(&cycle[0]))];
     for (pos, pkg) in cycle.iter().enumerate().skip(1) {
-        lines.push(format!("{}{pkg} (buildtime)", " ".repeat(pos)));
+        lines.push(format!("{}{} (buildtime)", " ".repeat(pos), node(pkg)));
     }
     lines.push(format!(
         "{}{} (buildtime)",
         " ".repeat(cycle.len()),
-        cycle[0]
+        node(&cycle[0])
     ));
     eprint!("{}", lines.join("\n"));
 
@@ -4995,6 +5098,14 @@ fn run_resume(
             return ExitCode::from(1);
         }
     };
+    // The local binary pool for resumed `Binary` entries (real's bintree
+    // re-resolution, backlog #186): the resolver's own pool constructor,
+    // so a resumed binary names the same `::repo` a fresh merge would.
+    // Built once even when the list turns out all-source (cheap: the
+    // constructor reads `<pkgdir>/Packages`, and only scans `$PKGDIR`
+    // files when a `--usepkg`-family run already scanned them into
+    // `config.scanned_binpkgs`).
+    let resume_bin_index = portage_repo::build_local_binpkg_index(config);
     let entries: Vec<portage_repo::GraphEntry> = mergelist
         .iter()
         .map(|(kind, c, p, v)| {
@@ -5002,7 +5113,16 @@ fn run_resume(
                 crate::mtimedb::ResumeEntryKind::Ebuild => portage_repo::CandidateSource::Ebuild,
                 crate::mtimedb::ResumeEntryKind::Binary => portage_repo::CandidateSource::Binary,
             };
-            let mut entry = emerge_build::resume_entry(c, p, v, source, &repos);
+            // A resumed binary entry re-resolves its `::repo` from the
+            // binary pool, never from the ebuild repos (real
+            // `depgraph.py::_loadResumeCommand`, backlog #186).
+            let binary_repo = if source == portage_repo::CandidateSource::Binary {
+                emerge_build::resume_binary_repo(&resume_bin_index, &config.binrepos, root, c, p, v)
+            } else {
+                None
+            };
+            let mut entry =
+                emerge_build::resume_entry(c, p, v, source, &repos, binary_repo.as_deref());
             // The `mtimedb` resume list records only `cat/pkg-ver`, so the
             // resolver's own `use_flags_display` population is skipped.
             // Recompute it for a source build -- `emerge_build::
@@ -5060,6 +5180,7 @@ fn run_resume(
                 &[],
                 &[],
                 &[],
+                false,
             );
         }
         return ExitCode::SUCCESS;
@@ -5146,7 +5267,13 @@ fn run_resume(
     if let Err(e) = merge_result {
         let still = entries_not_merged(root, &entries);
         let fav_refs: Vec<&str> = favorites.iter().map(String::as_str).collect();
-        let _ = crate::mtimedb::write_resume_list(root, &fav_refs, &still, &opts);
+        // The empty-`still` guard is the failure path's own
+        // (`write_resume_list` itself is unconditional now, #179): a
+        // failure with nothing unmerged leaves the per-merge shrink's
+        // own tail alone.
+        if !still.is_empty() {
+            let _ = crate::mtimedb::write_resume_list(root, &fav_refs, &still, &opts);
+        }
         // Backlog #174: a merge-time binpkg digest failure already
         // printed real's full tail -- no `emerge:` line either (real
         // exits a merge failure via `FAILURE`, not the action error
@@ -5260,6 +5387,8 @@ fn execute_unmerge(
             &portage_tmpdir,
             &options,
             backup.as_ref(),
+            false,
+            &BTreeMap::new(),
         ) {
             eprintln!("emerge: {e}");
             return ExitCode::from(1);
@@ -5398,6 +5527,12 @@ fn installed_cp_versions(root: &Path) -> Vec<(String, String, String, String)> {
         };
         for pkg in pkgs.into_iter().filter(|e| e.path().is_dir()) {
             let dirname = pkg.file_name().to_string_lossy().to_string();
+            // Real `vardbapi._excluded_dirs`: an in-progress
+            // `-MERGING-<pf>` entry is never a `--unmerge`/`-C`
+            // resolution candidate.
+            if portage_util::is_merging_vdb_entry(&dirname) {
+                continue;
+            }
             if let Some((name, version)) = split_pf(&dirname) {
                 // #116: through the vdb seam; the main slot only, as
                 // before (an absent `SLOT` is `""`, like the old
@@ -12059,8 +12194,35 @@ pub fn run(args: &[String]) -> ExitCode {
     // the entries and printed as one group after every package line (see
     // `format_blocker_lines`).
     let mut blocker_lines: Vec<String> = Vec::new();
+    // Backlog #206 S2: real `_show_circular_deps` (`depgraph.py:10425`)
+    // pops `--quiet` and forces `--verbose` + `--tree` before
+    // `display(handler.merge_list)` — the stuck remainder renders as a
+    // verbose tree no matter what display flags the user passed. When
+    // this resolve ends in the circular block, the merge list above IS
+    // that display, so it renders with the forced flags (and forced
+    // sizes — real `verbose_size` runs at verbosity 3). The legacy
+    // (gate-off) circular path keeps the user-flagged list plus its own
+    // re-display below, exactly as before.
+    let circular_forced_display = gated_abort_partial.is_some()
+        && matches!(
+            &result.outcome,
+            portage_repo::ResolveOutcome::Aborted {
+                reason: portage_repo::AbortReason::UnserializableCycle { .. },
+                ..
+            }
+        );
+    let (disp_tree, disp_verbose, disp_quiet) = if circular_forced_display {
+        (true, true, false)
+    } else {
+        (tree, verbose, quiet)
+    };
+    // Backlog #206 S2: the rendered entry rows of the tree walk, for the
+    // circular `Total:` recount only (real counts displayed merge rows —
+    // repeats included, `nomerge` excluded — not entries). Empty unless
+    // the tree branch below runs.
+    let mut rendered_rows: Vec<(usize, bool)> = Vec::new();
     if show_merge_list {
-        if tree {
+        if disp_tree {
             // #131 S1: the tree-mode serialization order for the display
             // walk (real's reversed tree-mode retlist). Computed on the
             // displayed slice, so abort-partial lists stay
@@ -12075,7 +12237,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 &repos,
                 dynamic_deps,
             );
-            print_tree(
+            rendered_rows = print_tree(
                 display_entries,
                 &tree_order,
                 &root,
@@ -12083,8 +12245,8 @@ pub fn run(args: &[String]) -> ExitCode {
                 onlydeps,
                 oneshot,
                 unordered_display,
-                verbose,
-                quiet,
+                disp_verbose,
+                disp_quiet,
                 alphabetical,
                 root_deps_running_root.as_deref(),
                 &color,
@@ -12095,6 +12257,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 &result.masked_deps,
                 &result.use_unsat_deps,
                 &result.plain_miss_deps,
+                circular_forced_display,
             );
         } else {
             // #68/#72 B2: rows whose replacement waits on its owner print
@@ -12113,8 +12276,8 @@ pub fn run(args: &[String]) -> ExitCode {
                     &top_level_pkgs,
                     onlydeps,
                     oneshot,
-                    verbose,
-                    quiet,
+                    disp_verbose,
+                    disp_quiet,
                     alphabetical,
                     columns,
                     columnwidth,
@@ -12127,6 +12290,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     &result.masked_deps,
                     &result.use_unsat_deps,
                     &result.plain_miss_deps,
+                    circular_forced_display,
                 );
                 for (_, line) in inline_blockers.iter().filter(|(after, _)| *after == i) {
                     println!("{line}");
@@ -12221,6 +12385,7 @@ pub fn run(args: &[String]) -> ExitCode {
                         &result.masked_deps,
                         &result.use_unsat_deps,
                         &result.plain_miss_deps,
+                        false,
                     );
                 }
             }
@@ -12257,18 +12422,51 @@ pub fn run(args: &[String]) -> ExitCode {
     // suppresses the line that `-pv` would show. Suppressed together with
     // an empty aborted list (real never calls `display()` there, so no
     // counters exist); the cycle partial counts over its own rows only.
-    if show_merge_list && verbose && !quiet && !display_list_suppressed {
+    //
+    // Backlog #206 S2: the circular display runs forced-verbose (see
+    // `circular_forced_display` above), so the gate reads the effective
+    // flags and the counters count the rendered rows, not the entries:
+    // real's `_PackageCounters` accumulate per displayed merge row, so a
+    // repeat-merge row (the cycle closure) counts again while a
+    // `[nomerge]` row never counts. The recount input is exactly the
+    // rendered merge/uninstall rows (`rendered_rows` from the tree walk
+    // above); `nomerge`, already-installed and disclosure rows contribute
+    // nothing, matching real's `set_pkg_info` gating.
+    let disp_count_entries: Option<Vec<GraphEntry>> = if circular_forced_display {
+        let mut counted: Vec<GraphEntry> = Vec::new();
+        for (i, ordered) in &rendered_rows {
+            if !ordered {
+                continue;
+            }
+            let e = &display_entries[*i];
+            match &e.outcome {
+                portage_repo::PretendOutcome::New { .. }
+                | portage_repo::PretendOutcome::Upgrade { .. }
+                | portage_repo::PretendOutcome::Downgrade { .. }
+                | portage_repo::PretendOutcome::Reinstall { .. }
+                | portage_repo::PretendOutcome::Uninstall { .. } => {
+                    counted.push(e.clone());
+                }
+                portage_repo::PretendOutcome::AlreadyInstalled { .. }
+                | portage_repo::PretendOutcome::NoVisibleCandidate => {}
+            }
+        }
+        Some(counted)
+    } else {
+        None
+    };
+    if show_merge_list && disp_verbose && !disp_quiet && !display_list_suppressed {
         println!();
         println!(
             "{}",
             package_counters_summary(
-                display_entries,
+                disp_count_entries.as_deref().unwrap_or(display_entries),
                 &root,
                 &top_level_pkgs,
                 onlydeps,
                 &color,
                 &result.orphan_blockers,
-                tree
+                disp_tree
             )
         );
     }
@@ -12352,6 +12550,11 @@ pub fn run(args: &[String]) -> ExitCode {
                 &result.masked_deps,
                 &result.use_unsat_deps,
                 &result.plain_miss_deps,
+                // The legacy (gate-off) re-display keeps the user-flagged
+                // rendering it always had; the forced-verbose display is
+                // the gated path's main list above (whose re-display is
+                // skipped as duplicative).
+                false,
             );
         }
     }
@@ -13464,7 +13667,9 @@ pub fn run(args: &[String]) -> ExitCode {
             // re-saves the tail. Silent on write failure, like the
             // `rotate_resume_to_backup` above (a later failure write warns).
             // `--buildpkgonly` and remote execution are deliberately
-            // untouched: no save here covers them.
+            // untouched: no save here covers them. The write is
+            // unconditional (real always assigns, #179): an all-noop
+            // plan records the empty list instead of leaving a stale one.
             let resume_mergelist: Vec<crate::mtimedb::ResumeCpv> = entries
                 .iter()
                 .filter_map(emerge_build::resume_cpv)
@@ -13513,18 +13718,29 @@ pub fn run(args: &[String]) -> ExitCode {
                 // up where this left off. Previously missing entirely
                 // for this `--getbinpkg` path -- a failed mixed-source-
                 // and-binary run left nothing for `--resume` to find.
+                // The empty-`unmerged` guard is the failure path's own:
+                // `write_resume_list` itself is unconditional now (real
+                // `_save_resume_list` always assigns, #179), but a
+                // failure with nothing unmerged must leave the
+                // per-merge shrink's own tail alone, not overwrite it
+                // with an empty list.
                 let unmerged = entries_not_merged(&root, entries);
                 let resume_opts = crate::mtimedb::ResumeOpts { oneshot, onlydeps };
-                if let Err(w) =
-                    crate::mtimedb::write_resume_list(&root, &atom_args, &unmerged, &resume_opts)
-                {
-                    eprintln!("emerge: warning: could not save the resume list: {w}");
-                } else if !unmerged.is_empty() {
-                    eprintln!(
-                        "\n * The resume list contains packages that could not be \
-                         merged.\n * Use `emerge --resume` to retry, or `emerge --resume \
-                         --skipfirst` to skip the first one."
-                    );
+                if !unmerged.is_empty() {
+                    if let Err(w) = crate::mtimedb::write_resume_list(
+                        &root,
+                        &atom_args,
+                        &unmerged,
+                        &resume_opts,
+                    ) {
+                        eprintln!("emerge: warning: could not save the resume list: {w}");
+                    } else {
+                        eprintln!(
+                            "\n * The resume list contains packages that could not be \
+                             merged.\n * Use `emerge --resume` to retry, or `emerge --resume \
+                             --skipfirst` to skip the first one."
+                        );
+                    }
                 }
                 eprintln!("emerge: {e}");
                 return ExitCode::from(1);
@@ -13533,7 +13749,8 @@ pub fn run(args: &[String]) -> ExitCode {
             // Plain `emerge <atom>`: real source build + merge (see
             // `emerge_build::run_source_merge`). The up-front resume save
             // is real `Scheduler.merge() -> _save_resume_list()` (#168),
-            // same as the `--getbinpkg` arm above.
+            // same as the `--getbinpkg` arm above -- unconditional (an
+            // all-noop plan records the empty list, #179).
             let resume_mergelist: Vec<crate::mtimedb::ResumeCpv> = entries
                 .iter()
                 .filter_map(emerge_build::resume_cpv)
@@ -13563,19 +13780,28 @@ pub fn run(args: &[String]) -> ExitCode {
             ) {
                 // Real `Scheduler._save_resume_list`: on a merge failure,
                 // record every still-unmerged package so `emerge --resume`
-                // can pick up where this left off.
+                // can pick up where this left off. The empty-`unmerged`
+                // guard is the failure path's own (`write_resume_list`
+                // itself is unconditional now, #179): a failure with
+                // nothing unmerged leaves the per-merge shrink's own
+                // tail alone.
                 let unmerged = entries_not_merged(&root, entries);
                 let resume_opts = crate::mtimedb::ResumeOpts { oneshot, onlydeps };
-                if let Err(w) =
-                    crate::mtimedb::write_resume_list(&root, &atom_args, &unmerged, &resume_opts)
-                {
-                    eprintln!("emerge: warning: could not save the resume list: {w}");
-                } else if !unmerged.is_empty() {
-                    eprintln!(
-                        "\n * The resume list contains packages that could not be \
-                         merged.\n * Use `emerge --resume` to retry, or `emerge --resume \
-                         --skipfirst` to skip the first one."
-                    );
+                if !unmerged.is_empty() {
+                    if let Err(w) = crate::mtimedb::write_resume_list(
+                        &root,
+                        &atom_args,
+                        &unmerged,
+                        &resume_opts,
+                    ) {
+                        eprintln!("emerge: warning: could not save the resume list: {w}");
+                    } else {
+                        eprintln!(
+                            "\n * The resume list contains packages that could not be \
+                             merged.\n * Use `emerge --resume` to retry, or `emerge --resume \
+                             --skipfirst` to skip the first one."
+                        );
+                    }
                 }
                 eprintln!("emerge: {e}");
                 return ExitCode::from(1);
@@ -13943,6 +14169,238 @@ mod tests {
         );
     }
 
+    /// The `portuale` binary next to the current test executable (same
+    /// layout `ask_without_a_tty_...` already relies on).
+    fn built_portuale_bin() -> std::path::PathBuf {
+        let mut portuale_bin = std::env::current_exe().expect("current test exe");
+        portuale_bin.pop();
+        if portuale_bin.ends_with("deps") {
+            portuale_bin.pop();
+        }
+        portuale_bin.push("portuale");
+        portuale_bin
+    }
+
+    /// A scratch `ROOT` with nothing but a stale multi-item resume list
+    /// (multi-item so the `resume_backup` rotation would *also* rewrite
+    /// the file if it ran -- the byte comparison below pins the rotation
+    /// stays out too). Returns the root plus the file's bytes before the
+    /// run under test.
+    fn stale_resume_root(tag: &str) -> (std::path::PathBuf, Vec<u8>) {
+        let root = std::env::temp_dir().join(format!(
+            "resume_no_write_{tag}_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let stale = vec![
+            (
+                crate::mtimedb::ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "stale-a".to_string(),
+                "1".to_string(),
+            ),
+            (
+                crate::mtimedb::ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "stale-b".to_string(),
+                "1".to_string(),
+            ),
+        ];
+        crate::mtimedb::write_resume_list(
+            &root,
+            &["dev-libs/stale-a"],
+            &stale,
+            &crate::mtimedb::ResumeOpts::default(),
+        )
+        .unwrap();
+        let before = std::fs::read(crate::mtimedb::mtimedb_path(&root)).unwrap();
+        (root, before)
+    }
+
+    /// Fixture-config env for a spawned `portuale emerge` that resolves
+    /// (never merges): the committed fixture tree as config, the scratch
+    /// dir as `ROOT`, everything else absolute so the test holds from
+    /// any working directory.
+    fn fixture_resolve_env(
+        root: &std::path::Path,
+        portage_tmpdir: &std::path::Path,
+    ) -> Vec<(String, String)> {
+        let fixtures = fixtures_root();
+        vec![
+            (
+                "PORTAGE_CONFIGROOT".to_string(),
+                fixtures.display().to_string(),
+            ),
+            ("ROOT".to_string(), root.display().to_string()),
+            (
+                "DISTDIR".to_string(),
+                fixtures.join("distfiles").display().to_string(),
+            ),
+            (
+                "PORTAGE_TMPDIR".to_string(),
+                portage_tmpdir.display().to_string(),
+            ),
+        ]
+    }
+
+    #[test]
+    fn pretend_writes_no_resume_list_even_with_a_stale_list_present() {
+        // #179: real `_emerge/actions.py` returns from the `--pretend`
+        // branch (`display(...)`, `return os.EX_OK`) before `Scheduler`
+        // exists -- and before the `resume_backup` rotation -- so a
+        // preview never touches `mtimedb`. A stale list must come back
+        // byte-identical, and no fresh list may appear on a bare root.
+        let portuale_bin = built_portuale_bin();
+        let tmp = std::env::temp_dir().join(format!(
+            "resume_no_write_pretend_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // Bare root first: `--pretend` resolves and prints, and leaves
+        // no `mtimedb` behind at all.
+        let bare = tmp.join("bare");
+        let output = std::process::Command::new(&portuale_bin)
+            .args(["emerge", "--pretend", "--oneshot", "dev-libs/schedok"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .envs(fixture_resolve_env(&bare, &tmp.join("pt-bare")))
+            .output()
+            .expect("portuale emerge spawns");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("dev-libs/schedok-1.0"),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert!(
+            !crate::mtimedb::mtimedb_path(&bare).exists(),
+            "--pretend must not create an mtimedb"
+        );
+
+        // Stale list present: byte-identical afterwards (neither a fresh
+        // save nor the rotation may run).
+        let (root, before) = stale_resume_root("pretend");
+        let output = std::process::Command::new(&portuale_bin)
+            .args(["emerge", "--pretend", "--oneshot", "dev-libs/schedok"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .envs(fixture_resolve_env(&root, &tmp.join("pt-stale")))
+            .output()
+            .expect("portuale emerge spawns");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            std::fs::read(crate::mtimedb::mtimedb_path(&root)).unwrap(),
+            before,
+            "--pretend must leave a stale resume list byte-identical"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A pty pair without any external helper: the child answers `--ask`
+    /// through the slave (its stdin), satisfying the up-front isatty
+    /// gate, while the test writes the answer into the master. `libc`
+    /// is already a dependency (`stdin_is_tty` uses it).
+    #[cfg(unix)]
+    fn pty_pair() -> (std::fs::File, std::process::Stdio) {
+        use std::os::fd::FromRawFd;
+        unsafe {
+            let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+            assert!(master >= 0, "posix_openpt failed");
+            assert_eq!(libc::grantpt(master), 0, "grantpt failed");
+            assert_eq!(libc::unlockpt(master), 0, "unlockpt failed");
+            let name_ptr = libc::ptsname(master);
+            assert!(!name_ptr.is_null(), "ptsname failed");
+            let name = std::ffi::CStr::from_ptr(name_ptr)
+                .to_str()
+                .expect("pty name is utf8")
+                .to_owned();
+            let master_file = std::fs::File::from_raw_fd(master);
+            let cname = std::ffi::CString::new(name).expect("pty name has no nul");
+            let slave = libc::open(cname.as_ptr(), libc::O_RDWR | libc::O_NOCTTY);
+            assert!(slave >= 0, "pty slave open failed");
+            let slave_stdio = std::process::Stdio::from(std::os::fd::OwnedFd::from_raw_fd(slave));
+            (master_file, slave_stdio)
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ask_declined_writes_no_resume_list() {
+        // #179: real `_emerge/actions.py:525-536` returns `128 + SIGINT`
+        // on a "No" answer before `Scheduler` runs -- a declined run
+        // writes nothing (and rotates nothing: the rotation sits after
+        // the prompt). `--ask` needs a real TTY (the up-front isatty
+        // gate), so the decline is answered through a pty; the stale
+        // multi-item list must come back byte-identical.
+        use std::io::Write;
+        let portuale_bin = built_portuale_bin();
+        let (root, before) = stale_resume_root("ask");
+        let tmp = std::env::temp_dir().join(format!(
+            "resume_no_write_ask_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let (mut master, slave_stdio) = pty_pair();
+        let child = std::process::Command::new(&portuale_bin)
+            .args(["emerge", "--ask", "--oneshot", "dev-libs/schedok"])
+            .stdin(slave_stdio)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .envs(fixture_resolve_env(&root, &tmp))
+            .spawn()
+            .expect("portuale emerge spawns");
+        // The pty buffers until the child prompts -- no synchronisation
+        // needed.
+        master.write_all(b"No\n").expect("answer the --ask prompt");
+        let output = child.wait_with_output().expect("wait for emerge");
+        drop(master);
+        assert_eq!(
+            output.status.code(),
+            Some(130),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("Quitting."),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert_eq!(
+            std::fs::read(crate::mtimedb::mtimedb_path(&root)).unwrap(),
+            before,
+            "a declined --ask run must leave a stale resume list byte-identical"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn nonpretend_merge_list_shown_only_when_real_shows_it() {
         // Backlog #185: real `_emerge/actions.py:464-469`
@@ -14015,6 +14473,7 @@ mod tests {
             "1.0",
             portage_repo::CandidateSource::Ebuild,
             &[],
+            None,
         );
         let binary_entry = emerge_build::resume_entry(
             "dev-libs",
@@ -14022,6 +14481,7 @@ mod tests {
             "2.0",
             portage_repo::CandidateSource::Binary,
             &[],
+            None,
         );
         let entries = vec![source_entry, binary_entry];
 
@@ -14072,6 +14532,7 @@ mod tests {
                 "1.0",
                 portage_repo::CandidateSource::Ebuild,
                 &[],
+                None,
             ),
             emerge_build::resume_entry(
                 "dev-libs",
@@ -14079,6 +14540,7 @@ mod tests {
                 "2.0",
                 portage_repo::CandidateSource::Binary,
                 &[],
+                None,
             ),
         ];
         let up_front: Vec<crate::mtimedb::ResumeCpv> = entries
@@ -15086,6 +15548,43 @@ mod tests {
         assert_eq!(
             replacement_wait_index(&entries, root, 0, &blocker, &[]),
             None
+        );
+    }
+
+    #[test]
+    fn circular_node_text_matches_real_package_str() {
+        // Backlog #206 S1: real `_emerge/Package.py::Package.__str__`
+        // for a merge-bound ebuild — `(cpv:slot/sub::repo, ebuild
+        // scheduled for merge)` — byte for byte, grounded on the live
+        // n206 probe (`=dev-libs/cyc0b-1`, `dev-libs/hardcyclea`,
+        // `dev-libs/usecyclea`, all `ROOT=$FX` with no `to` suffix).
+        let nc = Colorizer::new(false);
+        assert_eq!(
+            circular_node_text("dev-libs/cyc0b-1", "0", "0", "testrepo", "ebuild", &nc),
+            "(dev-libs/cyc0b-1:0/0::testrepo, ebuild scheduled for merge)"
+        );
+        // A non-0 slot renders `:slot/sub_slot`, like real
+        // `_append_slot`-less `__str__` (which always prints both).
+        assert_eq!(
+            circular_node_text("dev-libs/slotted-2.0", "1", "2", "testrepo", "ebuild", &nc),
+            "(dev-libs/slotted-2.0:1/2::testrepo, ebuild scheduled for merge)"
+        );
+        // A binary merge says `binary`, like real `type_name`.
+        assert_eq!(
+            circular_node_text("dev-libs/binpkg-1.0", "0", "0", "testrepo", "binary", &nc),
+            "(dev-libs/binpkg-1.0:0/0::testrepo, binary scheduled for merge)"
+        );
+        // Under `--color y` real wraps the `cpv:slot/sub::repo` head in
+        // `PKG_MERGE` (`PKG_BINARY_MERGE` for a binary merge); the
+        // `, <type> scheduled for merge)` tail stays plain.
+        let yc = Colorizer::new(true);
+        assert_eq!(
+            circular_node_text("dev-libs/cyc0b-1", "0", "0", "testrepo", "ebuild", &yc),
+            "(\x1b[32mdev-libs/cyc0b-1:0/0::testrepo\x1b[39;49;00m, ebuild scheduled for merge)"
+        );
+        assert_eq!(
+            circular_node_text("dev-libs/binpkg-1.0", "0", "0", "testrepo", "binary", &yc),
+            "(\x1b[35mdev-libs/binpkg-1.0:0/0::testrepo\x1b[39;49;00m, binary scheduled for merge)"
         );
     }
 

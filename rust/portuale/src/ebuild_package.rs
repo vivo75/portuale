@@ -650,14 +650,46 @@ fn omit_stanza_default<'a>(key: &'a str, value: &'a str) -> &'a str {
     }
 }
 
+/// Real `PackageIndex.write`'s own key order
+/// (`getbinpkg.py:153-177`): `keys.sort()` over the *internal* names,
+/// then the `_write_translation_map` applied on the way out
+/// (`_writepkgindex`, `getbinpkg.py:123-126`). Of the translated keys
+/// (`_pkgindex_translated_keys`, `bintree.py:638-642`) either writer
+/// emits only `_mtime_` -> `MTIME` and `repository` -> `REPO` (the third
+/// pair, `DESCRIPTION` -> `DESC`, never reaches a stanza); both internals
+/// sort after every all-uppercase key (`_` is 0x5F, `r` is 0x72), so
+/// the translated pair lands last with `MTIME` before `REPO` -- in
+/// either naming. Sorting by this internal-name mapping is therefore
+/// byte-identical to real's order for every key either stanza writer
+/// emits. Both writers route through here: the `--buildpkg` field
+/// assembly is already hand-sorted (this is a no-op guard against
+/// future drift) and the quickpkg assembly relies on it (backlog
+/// #203: its fixed order was real-divergent).
+fn sort_stanza_fields_for_write(fields: &mut Vec<(&'static str, &str)>) {
+    fn internal(key: &str) -> &str {
+        match key {
+            "MTIME" => "_mtime_",
+            "REPO" => "repository",
+            _ => key,
+        }
+    }
+    fields.sort_by(|a, b| internal(a.0).cmp(internal(b.0)));
+}
+
 /// One freshly built binary package's `<pkgdir>/Packages` stanza
 /// fields: the archive metadata's own values (real `_pkgindex_entry`,
 /// `bintree.py:2289-2313`), ordered as real's `keys.sort()` writes
-/// them (`getbinpkg.py:173-177`) — the *internal* names `_mtime_` and
+/// them (`getbinpkg.py:173-177`) -- the *internal* names `_mtime_` and
 /// `repository` sort after every uppercase key, so the translated
 /// `MTIME`/`REPO` land last. Default-valued (`SLOT: "0"`, `EAPI:
 /// "0"`) and empty values are omitted by [`omit_stanza_default`] and
 /// [`format_packages_entry`], like real's write path.
+/// `REPO_REVISIONS` has no `_pkgindex_default_pkg_data` entry
+/// (`bintree.py:609-629`), so only real's falsy guard
+/// (`getbinpkg.py:176`) applies: a non-empty archive value --
+/// `"{}"` for sync-less repos (see [`built_binpkg_stanza_fields`]'s
+/// field doc below) up to real sync-revision JSON -- is written
+/// verbatim, a missing/empty one is omitted.
 struct BuiltBinpkgStanza<'a> {
     bdepend: &'a str,
     build_id: &'a str,
@@ -676,6 +708,7 @@ struct BuiltBinpkgStanza<'a> {
     properties: &'a str,
     provides: &'a str,
     rdepend: &'a str,
+    repo_revisions: &'a str,
     requires: &'a str,
     restrict: &'a str,
     sha1: &'a str,
@@ -689,7 +722,12 @@ struct BuiltBinpkgStanza<'a> {
 fn built_binpkg_stanza_fields<'a>(
     stanza: &'a BuiltBinpkgStanza<'a>,
 ) -> Vec<(&'static str, &'a str)> {
-    vec![
+    // Hand-sorted into real's `keys.sort()` order (see
+    // [`sort_stanza_fields_for_write`]); the sort call below is a
+    // no-op guard so a future field lands ordered too.
+    // `REPO_REVISIONS` sorts between `RDEPEND` and `REQUIRES`
+    // (`RDEPEND` < `REPO_...` < `REQUIRES`: `D` < `E`, `P` < `Q`).
+    let mut fields = vec![
         ("BDEPEND", stanza.bdepend),
         ("BUILD_ID", stanza.build_id),
         ("BUILD_TIME", stanza.build_time),
@@ -707,6 +745,7 @@ fn built_binpkg_stanza_fields<'a>(
         ("PROPERTIES", stanza.properties),
         ("PROVIDES", stanza.provides),
         ("RDEPEND", stanza.rdepend),
+        ("REPO_REVISIONS", stanza.repo_revisions),
         ("REQUIRES", stanza.requires),
         ("RESTRICT", stanza.restrict),
         ("SHA1", stanza.sha1),
@@ -715,7 +754,9 @@ fn built_binpkg_stanza_fields<'a>(
         ("USE", stanza.use_flags),
         ("MTIME", stanza.mtime),
         ("REPO", stanza.repository),
-    ]
+    ];
+    sort_stanza_fields_for_write(&mut fields);
+    fields
 }
 
 /// Writes (creating the file, and its own header block, if necessary)
@@ -1110,6 +1151,7 @@ pub(crate) fn package_after_install(
     let idepend = get_bi("IDEPEND");
     let provides = get_bi("PROVIDES");
     let requires = get_bi("REQUIRES");
+    let repo_revisions = get_bi("REPO_REVISIONS");
     let repository = build_info_value("repository").unwrap_or_default();
     let stanza = BuiltBinpkgStanza {
         bdepend: &bdepend,
@@ -1129,6 +1171,7 @@ pub(crate) fn package_after_install(
         properties: &properties,
         provides: &provides,
         rdepend: &rdepend,
+        repo_revisions: &repo_revisions,
         requires: &requires,
         restrict: &restrict,
         sha1: &sha1_str,
@@ -1595,43 +1638,69 @@ pub(crate) fn quickpkg_from_vdb(
         .map(|st| binpkg::file_mtime(&st).to_string())
         .unwrap_or_default();
     let (md5_str, sha1_str) = binpkg_checksums(&binpkg_path).unwrap_or_default();
-    // Real `_pkgindex_entry` + `PackageIndex.write` apply here exactly
-    // as on the `--buildpkg` path (see [`omit_stanza_default`]): a
-    // default-`SLOT` package's on-disk stanza carries no `SLOT` line
-    // (backlog #188 — the vdb `SLOT` file always exists, so this omits
-    // precisely the `"0"` real omits), and the stanza key is the
-    // translated `MTIME`, not the internal `_mtime_` real only keeps
-    // in memory (`getbinpkg.py:123-125` write
-    // `self._write_translation_map.get(k, k)`).
+    // `$PKGDIR/Packages` entry from the vdb's own build-info files --
+    // the same archive-metadata source real `_pkgindex_entry`
+    // (`bintree.py:2289-2313`) reads: real quickpkg packs the whole vdb
+    // dir (`xpak.xpak(dblnk.dbdir)`, `bin/quickpkg:147`) and the stanza
+    // is whatever of it survives `PackageIndex.write`
+    // (`getbinpkg.py:153-177`). That is: `EAPI` verbatim unless `"0"`
+    // (the vdb `EAPI` file always exists; [`omit_stanza_default`]),
+    // `REPO_REVISIONS` verbatim when the vdb entry carries it (the
+    // installed package was merged from a build that recorded it --
+    // real writes `build-info/REPO_REVISIONS` whenever
+    // `PORTAGE_REPO_REVISIONS` is non-empty, `phase-functions.sh:769`,
+    // so even sync-less repos record `"{}"`), keys in real's
+    // `keys.sort()` order with translated `MTIME` last (no `REPO`:
+    // portuale's quickpkg path never recorded the vdb `repository`
+    // file, a separate gap), and no `PF`/`CATEGORY` lines at all --
+    // neither is in real's stanza aux-key set
+    // (`bindbapi._aux_cache_keys`, `bintree.py:96-120`), so the n203
+    // probe's real quickpkg stanza carries neither although the vdb
+    // has both files (backlog #188's "extras match real" claim was
+    // wrong). Empty values are skipped by [`format_packages_entry`],
+    // like real's `if metadata[k]` guard.
     let slot = omit_stanza_default("SLOT", bi("SLOT").as_str()).to_string();
-    write_packages_index_entry(
-        &options.pkgdir,
-        &cpv,
-        &[
-            ("CPV", &cpv),
-            ("PF", pf),
-            ("CATEGORY", category),
-            ("SLOT", &slot),
-            ("KEYWORDS", &bi("KEYWORDS")),
-            ("USE", &bi("USE")),
-            ("LICENSE", &bi("LICENSE")),
-            ("IUSE", &bi("IUSE")),
-            ("PROPERTIES", &bi("PROPERTIES")),
-            ("RESTRICT", &bi("RESTRICT")),
-            ("DEPEND", &bi("DEPEND")),
-            ("RDEPEND", &bi("RDEPEND")),
-            ("BDEPEND", &bi("BDEPEND")),
-            ("PDEPEND", &bi("PDEPEND")),
-            ("IDEPEND", &bi("IDEPEND")),
-            ("PATH", &path_field),
-            ("BUILD_TIME", build_time),
-            ("BUILD_ID", &build_id_str),
-            ("SIZE", &size_str),
-            ("MTIME", &mtime_str),
-            ("MD5", &md5_str),
-            ("SHA1", &sha1_str),
-        ],
-    )?;
+    let eapi = omit_stanza_default("EAPI", bi("EAPI").as_str()).to_string();
+    let keywords = bi("KEYWORDS");
+    let use_flags = bi("USE");
+    let license = bi("LICENSE");
+    let iuse = bi("IUSE");
+    let properties = bi("PROPERTIES");
+    let restrict = bi("RESTRICT");
+    let depend = bi("DEPEND");
+    let rdepend = bi("RDEPEND");
+    let bdepend = bi("BDEPEND");
+    let pdepend = bi("PDEPEND");
+    let idepend = bi("IDEPEND");
+    let defined_phases = bi("DEFINED_PHASES");
+    let repo_revisions = bi("REPO_REVISIONS");
+    let mut fields: Vec<(&'static str, &str)> = vec![
+        ("BDEPEND", &bdepend),
+        ("BUILD_ID", &build_id_str),
+        ("BUILD_TIME", build_time),
+        ("CPV", &cpv),
+        ("DEFINED_PHASES", &defined_phases),
+        ("DEPEND", &depend),
+        ("EAPI", &eapi),
+        ("IDEPEND", &idepend),
+        ("IUSE", &iuse),
+        ("KEYWORDS", &keywords),
+        ("LICENSE", &license),
+        ("MD5", &md5_str),
+        ("PATH", &path_field),
+        ("PDEPEND", &pdepend),
+        ("PROPERTIES", &properties),
+        ("RDEPEND", &rdepend),
+        ("REPO_REVISIONS", &repo_revisions),
+        ("RESTRICT", &restrict),
+        ("SHA1", &sha1_str),
+        ("SIZE", &size_str),
+        ("SLOT", &slot),
+        ("USE", &use_flags),
+        ("MTIME", &mtime_str),
+    ];
+    sort_stanza_fields_for_write(&mut fields);
+    write_packages_index_entry(&options.pkgdir, &cpv, &fields)?;
 
     Ok(Some(binpkg_path))
 }
@@ -2153,6 +2222,13 @@ mod tests {
         // `SLOT: 1` for `"1"`. Digests are real's fixed
         // `_pkgindex_hashes` pair (`bintree.py:548`), written even with
         // `PORTAGE_CHECKSUM_FILTER='-SHA1'` in the environment.
+        // `REPO_REVISIONS: {}` is real's sync-less value: the probe's
+        // overlay repo has no sync type, so `_setup_repo_revisions`
+        // records an empty dict, which `phase-functions.sh:769` still
+        // writes (the `"{}"` string is non-empty) into
+        // `build-info/REPO_REVISIONS`, and the stanza carries it
+        // verbatim (no `_pkgindex_default_pkg_data` entry, only the
+        // falsy guard).
         BuiltBinpkgStanza {
             bdepend: "",
             build_id: "1",
@@ -2171,6 +2247,7 @@ mod tests {
             properties: "",
             provides: "",
             rdepend: "",
+            repo_revisions: "{}",
             requires: "",
             restrict: "",
             sha1: "dcb4b4b5cd72b7f1c8d839c82eb94ffb12374776",
@@ -2197,6 +2274,7 @@ mod tests {
              LICENSE: GPL-2\n\
              MD5: 45ee79b46260208582e042d087ad6fff\n\
              PATH: l32/dep-a/dep-a-1.0-1.gpkg.tar\n\
+             REPO_REVISIONS: {}\n\
              SHA1: dcb4b4b5cd72b7f1c8d839c82eb94ffb12374776\n\
              SIZE: 10240\n\
              USE: abi_x86_64 amd64 elibc_glibc kernel_linux\n\
@@ -2212,6 +2290,163 @@ mod tests {
         assert!(text.contains("\nSIZE: 10240\nSLOT: 1\nUSE: "), "{text:?}");
         assert!(text.contains("MD5: 45ee79b46260208582e042d087ad6fff\n"));
         assert!(text.contains("SHA1: dcb4b4b5cd72b7f1c8d839c82eb94ffb12374776\n"));
+    }
+
+    #[test]
+    fn stanza_field_sort_matches_real_keys_sort_with_mtime_repo_last() {
+        // Real `PackageIndex.write` sorts the *internal* names
+        // (`getbinpkg.py:173-174`) and translates on write
+        // (`:175-177`): `_mtime_`/`repository` sort after every
+        // uppercase key, so `MTIME`/`REPO` land last in that relative
+        // order. A shuffled full key set must come out in exactly the
+        // probe's order.
+        let mut fields: Vec<(&'static str, &str)> = vec![
+            ("REPO", "l32"),
+            ("SLOT", "1"),
+            ("MTIME", "1"),
+            ("EAPI", "8"),
+            ("REPO_REVISIONS", "{}"),
+            ("CPV", "l32/dep-a-1.0"),
+            ("BDEPEND", "x"),
+            ("USE", "u"),
+            ("SIZE", "1"),
+        ];
+        sort_stanza_fields_for_write(&mut fields);
+        let keys: Vec<&str> = fields.iter().map(|(k, _)| *k).collect();
+        assert_eq!(
+            keys,
+            vec![
+                "BDEPEND",
+                "CPV",
+                "EAPI",
+                "REPO_REVISIONS",
+                "SIZE",
+                "SLOT",
+                "USE",
+                "MTIME",
+                "REPO",
+            ]
+        );
+    }
+
+    #[test]
+    fn quickpkg_from_vdb_writes_real_ordered_stanza_with_eapi_and_repo_revisions() {
+        // Backlog #203, grounded in the n203 container probe (real
+        // `quickpkg =l32/dep-a-1.0` in `localhost/test-portuale:latest`,
+        // `/tmp/opencode/n203/probe.log`): the stanza carries the vdb
+        // `EAPI` verbatim (`EAPI: 8`; omitted iff `"0"` like
+        // `--buildpkg`), `REPO_REVISIONS` verbatim from the vdb entry
+        // (`{}` here -- the package was merged from a sync-less build),
+        // keys in `PackageIndex.write` sorted order with `MTIME` last,
+        // and no `PF`/`CATEGORY`/`SLOT` lines (neither of the first two
+        // is in real's stanza aux-key set; `SLOT` is `"0"` here).
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        let scratch = tmp.join("scratch");
+        let options = PackageOptions {
+            debug: false,
+            pkgdir: tmp.join("pkgdir"),
+            distdir: tmp.join("distdir"),
+            shell: ebuild_phases::ShellBackend::default(),
+            binpkg_compress: "bzip2".to_string(),
+            binpkg_format: "xpak".to_string(),
+            ..PackageOptions::default()
+        };
+        std::fs::create_dir_all(root.join("etc")).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+        std::fs::write(root.join("etc/probe.conf"), "probe\n").unwrap();
+
+        let vdb_dir = root.join("var/db/pkg/dev-libs/probe-1.0");
+        std::fs::create_dir_all(&vdb_dir).unwrap();
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        std::fs::copy(
+            repo_root.join("dev-libs/packagepkg/packagepkg-1.0.ebuild"),
+            vdb_dir.join("probe-1.0.ebuild"),
+        )
+        .unwrap();
+        for (name, content) in [
+            ("EAPI", "8\n"),
+            ("SLOT", "0\n"),
+            ("CATEGORY", "dev-libs\n"),
+            ("PF", "probe-1.0\n"),
+            ("KEYWORDS", "amd64\n"),
+            ("LICENSE", "GPL-2\n"),
+            ("USE", "amd64\n"),
+            ("BUILD_TIME", "1790541998\n"),
+            ("REPO_REVISIONS", "{}\n"),
+            ("CONTENTS", "obj /etc/probe.conf\n"),
+        ] {
+            std::fs::write(vdb_dir.join(name), content).unwrap();
+        }
+
+        let built = quickpkg_from_vdb(
+            &root,
+            "dev-libs",
+            "probe",
+            "probe-1.0",
+            &scratch,
+            &portage_tmpdir,
+            &options,
+            "",
+            "",
+        )
+        .expect("quickpkg_from_vdb succeeds")
+        .expect("archive built");
+        assert_eq!(built, options.pkgdir.join("dev-libs/probe-1.0.tbz2"));
+
+        let packages = std::fs::read_to_string(options.pkgdir.join("Packages")).unwrap();
+        let stanza: Vec<&str> = packages
+            .split("\n\n")
+            .map(str::trim)
+            .find(|block| block.lines().any(|l| l == "CPV: dev-libs/probe-1.0"))
+            .expect("quickpkg stanza present")
+            .lines()
+            .collect();
+        let keys: Vec<&str> = stanza
+            .iter()
+            .map(|l| l.split_once(": ").map(|(k, _)| k).unwrap_or(""))
+            .collect();
+        assert_eq!(
+            keys,
+            vec![
+                "BUILD_TIME",
+                "CPV",
+                "EAPI",
+                "KEYWORDS",
+                "LICENSE",
+                "MD5",
+                "PATH",
+                "REPO_REVISIONS",
+                "SHA1",
+                "SIZE",
+                "USE",
+                "MTIME",
+            ],
+            "quickpkg stanza keys must be real's sorted order: {stanza:?}"
+        );
+        assert!(
+            stanza.contains(&"EAPI: 8"),
+            "vdb EAPI must be carried like real's: {stanza:?}"
+        );
+        assert!(
+            stanza.contains(&"REPO_REVISIONS: {}"),
+            "vdb REPO_REVISIONS must be carried verbatim: {stanza:?}"
+        );
+        assert!(
+            stanza.contains(&"PATH: dev-libs/probe-1.0.tbz2"),
+            "PATH must be relative to PKGDIR: {stanza:?}"
+        );
+        assert!(
+            !stanza.iter().any(|l| l.starts_with("SLOT:")),
+            "default SLOT must be omitted like real's: {stanza:?}"
+        );
+        assert!(
+            !stanza
+                .iter()
+                .any(|l| l.starts_with("PF:") || l.starts_with("CATEGORY:")),
+            "PF/CATEGORY are not stanza keys in real's: {stanza:?}"
+        );
     }
 
     #[test]

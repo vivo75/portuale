@@ -219,6 +219,7 @@ use crate::ebuild_phases;
 use crate::env_update;
 use md5::{Digest, Md5};
 use mrg_director::PackagesDb as _;
+use portage_util::MERGING_IDENTIFIER;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
@@ -945,21 +946,26 @@ pub(crate) fn write_cfgfiledict(root: &Path, map: &BTreeMap<String, String>) -> 
 /// `getPreservedLibs()` (cpv -> paths, last entry wins on a duplicate
 /// cpv across keys -- a corner case with no real relevance here).
 ///
-/// `orig_empty` is the observable projection of real `_data_orig` (the
-/// pre-`pruneNonExisting` copy real `load()` takes) for real `store()`'s
-/// own `self._data == self._data_orig` equality: JSON-loaded values are
-/// **lists** while every live value is a **tuple**, and a tuple never
-/// equals a list -- so after any `load()` a non-empty registry always
-/// compares changed and is rewritten by the next `store()`, while an
-/// empty one (`{}` or a 0-byte file, both degrading to `{}`) is
-/// rewritten only when `register()`/`unregister()` actually added or
-/// removed something. `write_plib_registry` therefore skips the write
-/// exactly when `orig_empty && entries.is_empty()`.
+/// `orig_entries` is the file content as parsed, snapshotted before
+/// `prune_non_existing` runs, for real `store()`'s own
+/// `self._data == self._data_orig` early return (`store()` in
+/// `PreservedLibsRegistry.py`): `write_plib_registry` skips the write
+/// -- not even creating the parent directory -- when `entries` still
+/// equals it, so a merge/unmerge with no preserved-lib activity leaves
+/// the file's bytes **and** mtime untouched (backlog #167).
+///
+/// One deliberate difference from real's literal comparison: real
+/// compares loaded JSON lists against live tuples, which are never `==`
+/// in Python, so real rewrites a non-empty registry (identical bytes --
+/// a tuple serializes exactly like the list it was loaded from -- but a
+/// touched mtime) on every `store()`. Portuale compares semantically
+/// and skips that mtime-only rewrite; the observable bytes stay
+/// identical to real's.
 type PlibEntries = BTreeMap<String, (String, String, Vec<String>)>;
 
 struct PlibRegistry {
     entries: PlibEntries,
-    orig_empty: bool,
+    orig_entries: PlibEntries,
 }
 
 impl PlibRegistry {
@@ -1098,8 +1104,8 @@ fn parse_plib_registry(text: &str) -> Option<PlibEntries> {
 
 /// Real `load()`: a missing or unparseable registry file degrades
 /// gracefully to an empty registry rather than an error. Like real
-/// `load()` (`PreservedLibsRegistry.py:96-97`), the parsed snapshot is
-/// kept as `orig_empty` and `prune_non_existing` runs immediately --
+/// `load()` (`PreservedLibsRegistry.py:load`), the parsed snapshot is
+/// kept as `orig_entries` and `prune_non_existing` runs immediately --
 /// every consumer below therefore sees the pruned registry, exactly as
 /// real consumers of `load()` do.
 fn read_plib_registry(root: &Path) -> PlibRegistry {
@@ -1107,7 +1113,7 @@ fn read_plib_registry(root: &Path) -> PlibRegistry {
         .ok()
         .and_then(|text| parse_plib_registry(&text));
     let mut registry = PlibRegistry {
-        orig_empty: parsed.as_ref().is_none_or(BTreeMap::is_empty),
+        orig_entries: parsed.clone().unwrap_or_default(),
         entries: parsed.unwrap_or_default(),
     };
     prune_non_existing(root, &mut registry);
@@ -1223,25 +1229,25 @@ fn json_quote(s: &str) -> String {
 }
 
 /// Real `store()`'s own `json.dumps(..., ensure_ascii=False,
-/// indent="\t", sort_keys=True)` layout (`PreservedLibsRegistry.py:21-25,
-/// 99-116`) -- `BTreeMap` already keeps keys sorted -- written via a
-/// plain `fs::write` (real `atomic_ofstream`'s own atomicity is a
+/// indent="\t", sort_keys=True)` layout (`PreservedLibsRegistry.store`)
+/// -- `BTreeMap` already keeps keys sorted -- written via a plain
+/// `fs::write` (real `atomic_ofstream`'s own atomicity is a
 /// portuale-wide cut, not this slice's). An empty dict serializes as
 /// exactly `{}` and carries no trailing newline, matching Python's own
-/// output byte-for-byte. And like real `store()` (`:107-108`), an
-/// unchanged registry is not rewritten at all: not even the parent
-/// directory is created, so a packaged 0-byte file stays 0 bytes and a
-/// missing file stays missing.
+/// output byte-for-byte. And like real `store()`, an unchanged registry
+/// (`entries == orig_entries`, see `PlibRegistry`) is not rewritten at
+/// all: not even the parent directory is created, so a packaged 0-byte
+/// file stays 0 bytes and a missing file stays missing.
 ///
 /// (`SANDBOX_ON` is not honored: real checks it because its own
 /// registry mutations run inside sandboxed phases, while portuale's run
 /// in portuale's own unsandboxed process -- the phases it spawns are
 /// separate bash children.)
 fn write_plib_registry(root: &Path, registry: &PlibRegistry) -> Result<(), String> {
+    if registry.entries == registry.orig_entries {
+        return Ok(());
+    }
     let out = if registry.entries.is_empty() {
-        if registry.orig_empty {
-            return Ok(());
-        }
         String::from("{}")
     } else {
         let mut out = String::from("{\n");
@@ -1450,55 +1456,243 @@ fn register_preserved_libs(
     }
 }
 
-/// Re-attribute every registry entry still owned by `old_cpv` to
-/// `new_cpv` (with the replacing package's own vdb `COUNTER`), keeping
-/// the `cp:slot` key and the pruned paths -- portuale's side of real
-/// `dblink.treewalk()` recording the preserved libs under the package
-/// being merged (`self.mycpv`, `vartree.py:5266-5272`). No-op when
-/// nothing names `old_cpv`; the write itself stays conditional (real
-/// `store()`), so a no-op over an empty/missing registry touches
-/// nothing. Called from `unmerge_replaced_same_slot` (see its own doc
-/// comment); a standalone unmerge keeps attributing to the removed
-/// package, matching real `_prune_plib_registry(unmerge=True)` with no
-/// replacement.
-fn reattribute_preserved_libs(
+/// `read_all_needed_entries` plus real `LinkageMap.rebuild()`'s own
+/// preserved-libs branch (`needed_elf::scan_preserved_lib_entries`):
+/// the shared linkage-map input of the preserve-libs computations
+/// (`find_preserve_paths_for_merge`, `preserve_libs_on_unmerge`, and
+/// the post-unmerge prune `find_unused_preserved_libs` below).
+/// Scanned entries join their owner's already-present group when one
+/// exists (real groups everything by owner for the bundled-library
+/// runpath inference), else form a new one; vdb entries come first, so
+/// on a same-inode conflict the vdb data wins (real indexes the
+/// `scanelf` line first instead -- the two describe the same live file,
+/// so they agree in practice). Skipped entirely when there is nothing
+/// to scan (backlog #178's second bump is the first merge that ever
+/// has anything to scan).
+///
+/// `exclude_cpv` is real `LinkageMap.rebuild()`'s own `exclude_pkgs` (a
+/// package being unmerged contributes neither `NEEDED.ELF.2` lines nor
+/// registry orphans -- its data "would only serve to corrupt the
+/// `LinkageMap`"): the unmerged instance in replacement mode, `None`
+/// everywhere else. `replacement_preserved` is real `preserve_paths`
+/// (the merge-side just-preserved set, owner -> paths, not yet
+/// registered at prune time, so it must be passed explicitly): scanned
+/// under the replacing cpv -- real indexes it with owner `None` (and
+/// skips the bundled-library runpath inference for `None`); grouping
+/// it under the replacing cpv is the closest this `String`-keyed input
+/// gets, and the owner only feeds that inference, never the keep/drop
+/// verdict.
+fn linkage_owner_entries(
     root: &Path,
-    old_cpv: &str,
-    new_cpv: &str,
-    new_counter: &str,
-) -> Result<(), String> {
-    let mut registry = read_plib_registry(root);
-    let new_counter = new_counter.trim().to_string();
-    for (entry_cpv, entry_counter, _entry_paths) in registry.entries.values_mut() {
-        if entry_cpv == old_cpv {
-            *entry_cpv = new_cpv.to_string();
-            *entry_counter = new_counter.clone();
+    preserved: &BTreeMap<String, Vec<String>>,
+    exclude_cpv: Option<&str>,
+    replacement_preserved: &BTreeMap<String, Vec<String>>,
+) -> Vec<(String, Vec<crate::needed_elf::NeededEntry>)> {
+    let mut owner_entries: Vec<(String, Vec<crate::needed_elf::NeededEntry>)> =
+        crate::needed_elf::read_all_needed_entries(root)
+            .into_iter()
+            .filter(|(cpv, _)| Some(cpv.as_str()) != exclude_cpv)
+            .collect();
+    let mut scan_input = preserved.clone();
+    for (owner, paths) in replacement_preserved {
+        scan_input
+            .entry(owner.clone())
+            .or_default()
+            .extend(paths.iter().cloned());
+    }
+    if let Some(excluded) = exclude_cpv {
+        scan_input.remove(excluded);
+    }
+    if scan_input.is_empty() {
+        return owner_entries;
+    }
+    for (owner, entries) in crate::needed_elf::scan_preserved_lib_entries(root, &scan_input) {
+        if let Some(slot) = owner_entries.iter_mut().find(|(o, _)| o == &owner) {
+            slot.1.extend(entries);
+        } else {
+            owner_entries.push((owner, entries));
         }
     }
+    owner_entries
+}
+
+fn owner_entries_with_preserved_orphans(
+    root: &Path,
+    preserved: &BTreeMap<String, Vec<String>>,
+) -> Vec<(String, Vec<crate::needed_elf::NeededEntry>)> {
+    linkage_owner_entries(root, preserved, None, &BTreeMap::new())
+}
+
+/// Real `dblink.treewalk`'s own pre-replace-loop preserve-libs
+/// computation (the `_linkmap_rebuild` + `_find_libs_to_preserve()`
+/// block): rebuild the system-wide `LinkageMap` and select the installed same-slot instance's libraries
+/// that are still needed (`_find_libs_to_preserve()`, `unmerge=False`).
+/// `new_image_paths` is the just-merged image's own path set (parsed
+/// from `merge_tree`'s `CONTENTS` text) -- real `self.isowner(f)` on the
+/// merging instance, whose `CONTENTS` is already written at this point,
+/// so a library the new version itself ships is never preserved.
+/// Returns `None` when no same-slot instance is installed (a first-ever
+/// install preserves nothing) or it owns no files (real
+/// `installed_instance.getcontents()` falsy skips the rebuild); otherwise
+/// the preserve set plus the old instance's own raw `CONTENTS` text (for
+/// entry injection below).
+///
+/// Must run after `merge_tree` (the files are on disk for `lstat`, and
+/// the new vdb entry is *not* written yet, so -- exactly like real, whose
+/// `LinkageMap` rebuild only sees installed packages -- the new package
+/// is not part of the linkage map) and before `write_vdb_entry`.
+fn find_preserve_paths_for_merge(
+    root: &Path,
+    category: &str,
+    package: &str,
+    main_slot: &str,
+    new_image_paths: &BTreeSet<String>,
+) -> Option<(BTreeSet<String>, String)> {
+    let old_pf = installed_instance_pf(root, category, package, main_slot)?;
+    let old_contents_text = std::fs::read_to_string(
+        root.join("var/db/pkg")
+            .join(category)
+            .join(&old_pf)
+            .join("CONTENTS"),
+    )
+    .unwrap_or_default();
+    let old_contents: Vec<String> = old_contents_text
+        .lines()
+        .filter_map(|line| line.split_whitespace().nth(1).map(String::from))
+        .collect();
+    if old_contents.is_empty() {
+        return None;
+    }
+
+    // Real `LinkageMap.rebuild()` sees the registry's own preserved
+    // libs too (`_linkmap_rebuild` loads them via the orphan `scanelf`
+    // branch): without them a previously-preserved library the replaced
+    // instance no longer ships in its own `NEEDED.ELF.2` is invisible
+    // here, and a second consecutive soname bump would preserve nothing
+    // (backlog #178).
+    let preserved = read_plib_registry(root).preserved_libs();
+    let owner_entries = owner_entries_with_preserved_orphans(root, &preserved);
+    let map = crate::needed_elf::rebuild(root, &owner_entries);
+    let defpath =
+        crate::needed_elf::getlibpaths(root, std::env::var("LD_LIBRARY_PATH").ok().as_deref());
+
+    let old_owner_is_owner = |p: &str| owns_path_pf(root, category, &old_pf, p);
+    let new_owner_is_owner = |p: &str| new_image_paths.contains(p);
+
+    Some((
+        crate::needed_elf::find_libs_to_preserve(
+            root,
+            &map,
+            &defpath,
+            &old_contents,
+            &old_owner_is_owner,
+            &new_owner_is_owner,
+        ),
+        old_contents_text,
+    ))
+}
+
+/// Real `dblink._add_preserve_libs_to_contents` (`vartree.py:3775-3826`):
+/// copy the preserved paths' own entries from the replaced instance's
+/// `CONTENTS` into the merging package's (digest/mtime carried over
+/// verbatim -- the files are *not* reinstalled), printing real
+/// `>>> needed    {obj|sym} <path>` per path in `sorted()` order.
+/// `new_image_paths` is the just-merged image's own path set: a
+/// preserved path already there keeps its own fresh entry (real assigns
+/// into a dict, so re-adding is a no-op, never a duplicate line).
+/// Returns the `CONTENTS` lines to append plus the surviving preserve set:
+/// a path with no entry in the old `CONTENTS` cannot be preserved (real
+/// `!!! File ... will not be preserved due to missing contents entry`)
+/// and is dropped, exactly like real dropping it from `preserve_paths`.
+fn inject_preserved_libs_into_contents(
+    old_contents_text: &str,
+    preserve_paths: &BTreeSet<String>,
+    new_image_paths: &BTreeSet<String>,
+) -> (String, BTreeSet<String>) {
+    let mut lines = String::new();
+    let mut surviving = BTreeSet::new();
+    for f in preserve_paths {
+        let Some(entry) = old_contents_text.lines().find(|line| {
+            let mut parts = line.split_whitespace();
+            parts.next();
+            parts.next() == Some(f.as_str())
+        }) else {
+            eprintln!("!!! File '{f}' will not be preserved due to missing contents entry");
+            continue;
+        };
+        surviving.insert(f.clone());
+        let obj_type = entry.split_whitespace().next().unwrap_or("obj");
+        println!(">>> needed    {obj_type} {f}");
+        if !new_image_paths.contains(f) {
+            lines.push_str(entry);
+            lines.push('\n');
+        }
+    }
+    (lines, surviving)
+}
+
+/// Real `dblink.treewalk()`'s own post-replace-loop registration
+/// (`vartree.py:5266-5272`): `register(self.mycpv, slot, counter,
+/// sorted(preserve_paths))` -- the one `cp:slot` record is **replaced**
+/// by the merging package's `(cpv, counter, paths)`, never merged with
+/// or re-attributed from the old entry (real `register()`'s own
+/// unconditional overwrite, `PreservedLibsRegistry.py:165-169`). Reads
+/// the counter back from the just-written new vdb entry (real
+/// `counter_tick()`'s own value, the same one `COUNTER` carries).
+/// No-op when nothing was preserved (real `if preserve_paths:`), leaving
+/// the replace loop's unregistration of the old record as the final
+/// state. Keep #167's serialisation and write-only-on-change rules
+/// intact: `register_preserved_libs` + `write_plib_registry` do that.
+fn register_merge_preserved_libs(
+    root: &Path,
+    category: &str,
+    pn: &str,
+    new_pf: &str,
+    main_slot: &str,
+    preserve_paths: &BTreeSet<String>,
+) -> Result<(), String> {
+    if preserve_paths.is_empty() {
+        return Ok(());
+    }
+    let new_counter = std::fs::read_to_string(
+        root.join("var/db/pkg")
+            .join(category)
+            .join(new_pf)
+            .join("COUNTER"),
+    )
+    .unwrap_or_else(|_| "0".to_string());
+    let new_cpv = format!("{category}/{new_pf}");
+    let mut registry = read_plib_registry(root);
+    let paths_vec: Vec<String> = preserve_paths.iter().cloned().collect();
+    register_preserved_libs(
+        &mut registry,
+        &new_cpv,
+        category,
+        pn,
+        main_slot,
+        &new_counter,
+        &paths_vec,
+    );
     write_plib_registry(root, &registry)
 }
 
-/// Real `dblink._prune_plib_registry()` (`vartree.py:2228-2314`), called
-/// from real `unmerge()` with `unmerge=True` right before real
-/// `_unmerge_pkgfiles()` runs (`vartree.py:2493`/`2529` -- confirmed by
-/// reading the real call site, not just the method itself), narrowed to
-/// the one real shape portuale's own standalone `ebuild <file>
-/// unmerge` always reaches: `unmerge_with_replacement=False`. Real
-/// `preserve_paths` (a `_prune_plib_registry` parameter, not to be
+/// Real `dblink._prune_plib_registry`, called from real `unmerge()`
+/// with `unmerge=True` right before real `_unmerge_pkgfiles()` runs.
+/// Real `preserve_paths` (a `_prune_plib_registry` parameter, not to be
 /// confused with this function's own *return* value) is only ever
 /// non-`None` when a real depgraph-driven upgrade transaction already
-/// computed it via a companion `merge()` call in the *same* transaction
-/// -- portuale's own `merge`/`unmerge` are always separate,
-/// independent CLI invocations, so this is always the real shape that
-/// applies (real `instance_owns_files and not unmerge_with_replacement`
-/// collapses to just `instance_owns_files`).
+/// computed it via a companion `merge()` call in the *same* transaction:
+/// `None` on the standalone path (portuale's own `merge`/`unmerge` are
+/// always separate, independent CLI invocations), the merge-side set on
+/// the replace loop. An instance that owns no files still unregisters
+/// (real `instance_owns_files` gates only the rebuild and the scans).
 ///
 /// Real order: rebuild the system-wide `LinkageMap` from every real
 /// installed package's own vdb-stored `NEEDED.ELF.2`
-/// (`needed_elf::read_all_needed_entries` + `rebuild` -- real `exclude_
-/// pkgs=None` in this exact shape, since the package being unmerged
-/// hasn't left the vdb yet, so its own data is still really part of the
-/// map, matching real behavior exactly). Compute `needed_elf::find_
+/// (`linkage_owner_entries` + `rebuild` -- real `exclude_pkgs=None` on
+/// the standalone path, since the package being unmerged hasn't left
+/// the vdb yet, so its own data is still really part of the map,
+/// matching real behavior exactly). Compute `needed_elf::find_
 /// libs_to_preserve` with `new_owner_is_owner` always `false` (matching
 /// what real `not unmerge and self.isowner(f)` collapses to when
 /// `unmerge` is `true`) and `old_owner_is_owner` real `self.isowner`
@@ -1507,6 +1701,19 @@ fn reattribute_preserved_libs(
 /// first (real `plib_registry.unregister`); if anything is actually
 /// preserved, register this package -- the one being removed -- as the
 /// new keeper of those paths (real `plib_registry.register`).
+///
+/// `is_replacement` is real `unmerge_with_replacement`
+/// (`preserve_paths is not None`, set exactly when `treewalk()`'s own
+/// replace loop drives this unmerge): real then skips the
+/// `_find_libs_to_preserve(unmerge=True)` re-registration entirely and
+/// only unregisters the old entry -- the preserved set was already
+/// computed merge-side (`find_preserve_paths_for_merge`) and injected
+/// into the replacing package's own `CONTENTS`, so the files survive
+/// removal through same-slot ownership (`remove_contents`' own
+/// `is_owned` skip) and the record lands under the merging package via
+/// `register_merge_preserved_libs`. Returns an empty set in that mode;
+/// the standalone (`emerge -C`) mode returns the preserved paths for
+/// the caller to exclude from its own real file-removal loop.
 ///
 /// Returns the set of preserved paths (already `ROOT`-relative absolute
 /// paths, portuale's own `CONTENTS` convention) -- the caller is
@@ -1522,32 +1729,13 @@ pub(crate) fn preserve_libs_on_unmerge(
     pf: &str,
     slot: &str,
     contents_text: &str,
+    is_replacement: bool,
 ) -> Result<BTreeSet<String>, String> {
-    if contents_text.trim().is_empty() {
-        return Ok(BTreeSet::new());
-    }
-
-    let owner_entries = crate::needed_elf::read_all_needed_entries(root);
-    let map = crate::needed_elf::rebuild(root, &owner_entries);
-    let defpath =
-        crate::needed_elf::getlibpaths(root, std::env::var("LD_LIBRARY_PATH").ok().as_deref());
-
-    let old_contents: Vec<String> = contents_text
-        .lines()
-        .filter_map(|line| line.split_whitespace().nth(1).map(String::from))
-        .collect();
-
-    let old_owner_is_owner = |p: &str| owns_path_pf(root, category, pf, p);
-    let new_owner_is_owner = |_: &str| false;
-
-    let preserved = crate::needed_elf::find_libs_to_preserve(
-        root,
-        &map,
-        &defpath,
-        &old_contents,
-        &old_owner_is_owner,
-        &new_owner_is_owner,
-    );
+    // Real `_prune_plib_registry` still runs `unregister()` for an
+    // instance that owns no files (`instance_owns_files` gates only the
+    // linkmap rebuild and the preserve/prune scans below); only the
+    // preserve-set computation is skipped.
+    let instance_owns_files = !contents_text.trim().is_empty();
 
     let counter_path = root
         .join("var/db/pkg")
@@ -1558,8 +1746,40 @@ pub(crate) fn preserve_libs_on_unmerge(
     let cpv = format!("{category}/{pf}");
 
     let mut registry = read_plib_registry(root);
+    // The orphan scan below must see the registry *before* this
+    // package's own entry is unregistered: real `_prune_plib_registry`
+    // rebuilds the `LinkageMap` (whose orphan `scanelf` branch reads the
+    // registry) before `unregister()` runs, so a previously-preserved
+    // library this instance no longer ships in its own `NEEDED.ELF.2`
+    // is still indexed for the computation.
+    let preserved = if is_replacement || !instance_owns_files {
+        BTreeSet::new()
+    } else {
+        let old_contents: Vec<String> = contents_text
+            .lines()
+            .filter_map(|line| line.split_whitespace().nth(1).map(String::from))
+            .collect();
+
+        let owner_entries = owner_entries_with_preserved_orphans(root, &registry.preserved_libs());
+        let map = crate::needed_elf::rebuild(root, &owner_entries);
+        let defpath =
+            crate::needed_elf::getlibpaths(root, std::env::var("LD_LIBRARY_PATH").ok().as_deref());
+
+        let old_owner_is_owner = |p: &str| owns_path_pf(root, category, pf, p);
+        let new_owner_is_owner = |_: &str| false;
+
+        crate::needed_elf::find_libs_to_preserve(
+            root,
+            &map,
+            &defpath,
+            &old_contents,
+            &old_owner_is_owner,
+            &new_owner_is_owner,
+        )
+    };
+
     register_preserved_libs(&mut registry, &cpv, category, pn, slot, &counter, &[]);
-    if !preserved.is_empty() {
+    if !is_replacement && !preserved.is_empty() {
         let paths_vec: Vec<String> = preserved.iter().cloned().collect();
         register_preserved_libs(
             &mut registry,
@@ -1573,7 +1793,11 @@ pub(crate) fn preserve_libs_on_unmerge(
     }
     write_plib_registry(root, &registry)?;
 
-    Ok(preserved)
+    Ok(if is_replacement {
+        BTreeSet::new()
+    } else {
+        preserved
+    })
 }
 
 /// Every currently-registered preserved-library path, keyed by the cpv
@@ -1585,24 +1809,37 @@ pub(crate) fn preserved_lib_paths(root: &Path) -> BTreeMap<String, Vec<String>> 
     read_plib_registry(root).preserved_libs()
 }
 
-/// Real `dblink._find_unused_preserved_libs()` (`vartree.py:3880-3948`):
-/// the registered preserved libraries that no installed package links
-/// against any more, keyed by the cpv that owns them (so the caller can
-/// prune each owner's `CONTENTS`). Rebuilds the system-wide `LinkageMap`
-/// from every installed `NEEDED.ELF.2` and, for each registered path
-/// that still exists on disk, collects its consumers -- from the linkage
-/// map when the path is still an indexed object, otherwise via a
-/// basename==soname reverse lookup (`needed_elf::soname_consumers`) for a
-/// library whose owning package has already left the vdb. The
-/// consumer/preserved graph is then reduced by
-/// `needed_elf::find_unneeded_preserved` (real
+/// Real `dblink._find_unused_preserved_libs`: the registered
+/// preserved libraries that no installed package links against any
+/// more, keyed by the cpv that owns them (so the caller can prune each
+/// owner's `CONTENTS`). Rebuilds the system-wide `LinkageMap` from
+/// every installed `NEEDED.ELF.2` **plus** the registry orphans no
+/// `NEEDED.ELF.2` indexes (`linkage_owner_entries`, real
+/// `LinkageMap.rebuild`'s own preserved-libs branch) -- without the
+/// orphans a just-preserved library is invisible here -- and, for each
+/// registered path that still exists on disk, collects its consumers
+/// -- from the linkage map when the path is still an indexed object,
+/// otherwise via a basename==soname reverse lookup
+/// (`needed_elf::soname_consumers`) for a library whose owning package
+/// has already left the vdb. The consumer/preserved graph is then
+/// reduced by `needed_elf::find_unneeded_preserved` (real
 /// `_find_unneeded_preserved_nodes`, cycle-aware).
 ///
 /// `unmerge_no_replacement` + `being_unmerged`: real "also eliminate
 /// consumers that are going to be unmerged if unmerge_no_replacement is
-/// True" -- on a plain unmerge with no replacement, a consumer that is
-/// itself entirely owned by the package now being removed does not keep
-/// a library alive. `being_unmerged` returns true for such a path.
+/// True" (real `unmerge_no_replacement = unmerge and not
+/// unmerge_with_replacement`): on a plain unmerge with no replacement,
+/// a consumer that is itself entirely owned by the package now being
+/// removed does not keep a library alive; in replacement mode those
+/// consumers survive through the replacing package, so they still
+/// count. `being_unmerged` returns true for such a path.
+///
+/// `exclude_cpv` + `replacement_preserved`: real `exclude_pkgs` +
+/// `preserve_paths` (see `linkage_owner_entries`): in replacement mode
+/// the unmerged instance's own linkmap data is excluded while the
+/// merge-side just-preserved set is scanned in, so a preserved library
+/// whose only linkmap consumer is a just-preserved file is kept. Both
+/// are empty/`None` on every other path.
 ///
 /// Deliberate narrowing vs. real: the per-consumer "an alternative,
 /// non-preserved provider of the same soname is installed" edge removal
@@ -1614,6 +1851,8 @@ pub(crate) fn find_unused_preserved_libs(
     root: &Path,
     unmerge_no_replacement: bool,
     being_unmerged: &dyn Fn(&str) -> bool,
+    exclude_cpv: Option<&str>,
+    replacement_preserved: &BTreeMap<String, Vec<String>>,
 ) -> BTreeMap<String, BTreeSet<String>> {
     let registry = read_plib_registry(root);
     let plib_dict = registry.preserved_libs();
@@ -1621,7 +1860,7 @@ pub(crate) fn find_unused_preserved_libs(
         return BTreeMap::new();
     }
 
-    let owner_entries = crate::needed_elf::read_all_needed_entries(root);
+    let owner_entries = linkage_owner_entries(root, &plib_dict, exclude_cpv, replacement_preserved);
     let map = crate::needed_elf::rebuild(root, &owner_entries);
     let defpath =
         crate::needed_elf::getlibpaths(root, std::env::var("LD_LIBRARY_PATH").ok().as_deref());
@@ -1669,11 +1908,10 @@ pub(crate) fn find_unused_preserved_libs(
     cpv_lib_map
 }
 
-/// Real `dblink._prune_plib_registry()`'s own tail
+/// Real `dblink._prune_plib_registry`'s own tail
 /// (`_remove_preserved_libs` + the `removeFromContents` loop +
-/// `pruneNonExisting`, `vartree.py:2295-2314`/`3950-3990`), which real
-/// portage runs at the end of **both** a merge (`treewalk`,
-/// `vartree.py:5378` -- "For gcc upgrades, preserved libs have to be
+/// `pruneNonExisting`), which real portage runs at the end of **both** a
+/// merge (`treewalk` -- "For gcc upgrades, preserved libs have to be
 /// removed after the library path has been updated") and an unmerge.
 ///
 /// Deletes every preserved-library file `find_unused_preserved_libs`
@@ -1684,12 +1922,26 @@ pub(crate) fn find_unused_preserved_libs(
 /// no longer exist on disk -- real `pruneNonExisting`). Prints real
 /// `<<< !needed  {obj|sym} <path>` per removed file. Returns the removed
 /// `ROOT`-relative paths.
+///
+/// `unmerge_no_replacement` / `being_unmerged` / `exclude_cpv` /
+/// `replacement_preserved` are passed straight through to
+/// `find_unused_preserved_libs` (see its own doc comment for the real
+/// grounding); every caller except the replace-loop unmerge passes
+/// `exclude_cpv=None` and an empty set.
 pub(crate) fn prune_unused_preserved_libs(
     root: &Path,
     unmerge_no_replacement: bool,
     being_unmerged: &dyn Fn(&str) -> bool,
+    exclude_cpv: Option<&str>,
+    replacement_preserved: &BTreeMap<String, Vec<String>>,
 ) -> Result<Vec<String>, String> {
-    let cpv_lib_map = find_unused_preserved_libs(root, unmerge_no_replacement, being_unmerged);
+    let cpv_lib_map = find_unused_preserved_libs(
+        root,
+        unmerge_no_replacement,
+        being_unmerged,
+        exclude_cpv,
+        replacement_preserved,
+    );
 
     let mut removed: Vec<String> = Vec::new();
     let mut parent_dirs: BTreeSet<PathBuf> = BTreeSet::new();
@@ -2315,55 +2567,139 @@ fn next_counter(root: &Path) -> Result<i64, String> {
     Ok(next)
 }
 
-/// Real `lib/portage/const.py`'s own `MERGING_IDENTIFIER` (`"-MERGING-"`):
-/// the prefix real `dblink.dbtmpdir` uses for its own temporary,
-/// not-yet-finalized vdb entry directory, a sibling of the real vdb entry
-/// under the same `<category>` directory.
-const MERGING_IDENTIFIER: &str = "-MERGING-";
+/// Real `dblink.treewalk()`'s own `self.dbdir = self.dbtmpdir;
+/// self.delete(); ensure_dirs(self.dbtmpdir)` step (`vartree.py`, right
+/// after the collision-protect abort gate and before `pkg_preinst` runs,
+/// long before a single file is copied to `${ROOT}`): wipe a stale
+/// `MERGING_IDENTIFIER`-prefixed temporary sibling left by a killed
+/// previous merge of this exact `category/pf`, then (re)create it empty.
+/// Both merge paths call this before `pkg_preinst`, so a SIGKILL any time
+/// from here on leaves `-MERGING-<pf>` behind exactly like real (the
+/// `l32` C4 killed-mid-merge invariant) -- and every portuale vdb reader
+/// skips such names (see [`portage_util::is_merging_vdb_entry`]).
+fn create_vdb_tmp(root: &Path, category: &str, pf: &str) -> Result<(), String> {
+    let tmp_dir = root
+        .join("var/db/pkg")
+        .join(category)
+        .join(format!("{MERGING_IDENTIFIER}{pf}"));
+    if tmp_dir.exists() {
+        std::fs::remove_dir_all(&tmp_dir).map_err(|e| format!("{}: {e}", tmp_dir.display()))?;
+    }
+    std::fs::create_dir_all(&tmp_dir).map_err(|e| format!("{}: {e}", tmp_dir.display()))?;
+    Ok(())
+}
 
-/// Writes a real vdb entry under `root` for the package described by
-/// `env`. Real `dblink.merge()`/`treewalk()` copies *every* file directly
-/// under `inforoot` (`${PORTAGE_BUILDDIR}/build-info`) into the vdb
-/// wholesale (`vartree.py:4911-4913`, `for x in os.listdir(inforoot):
-/// self.copyfile(...)`) -- so this does too: every regular file in
-/// `build-info` (the `CATEGORY`/`SLOT`/`KEYWORDS`/`IUSE`/`USE`/`EAPI`/
-/// `DEFINED_PHASES`/… `bin/phase-functions.sh __dyn_install` writes, the
+/// Real `dblink.treewalk()`'s own info-file + `COUNTER` step (`vartree.py`,
+/// after `pkg_preinst`, before `_merge_contents` copies a single file to
+/// `${ROOT}`): copy *every* regular file directly under `build_info_dir`
+/// (`${PORTAGE_BUILDDIR}/build-info`) into the temporary vdb entry real's
+/// `for x in os.listdir(inforoot): self.copyfile(...)` copies -- the
+/// `CATEGORY`/`SLOT`/`KEYWORDS`/`IUSE`/`USE`/`EAPI`/`DEFINED_PHASES`/…
+/// `bin/phase-functions.sh __dyn_install` writes, the
 /// `DEPEND`/`RDEPEND`/`LICENSE`/… `ebuild_phases::write_post_install_
 /// metadata` adds, `NEEDED.ELF.2` from the real `scanelf` QA step,
-/// `environment.bz2`, the `<PF>.ebuild` copy) lands in the vdb. Then the
-/// merge-generated files that were never in `build-info` are written on
-/// top: `CONTENTS` (the real file list, built during the copy loop) and
-/// `COUNTER` (real `cpv_counter`, portuale's own `next_counter`).
-/// `CATEGORY`/`SLOT`/`repository` are re-asserted explicitly too -- a
-/// standalone `ebuild <file> install` outside a repo checkout has no
-/// `build-info/repository`, and `SLOT` here is the sub-slot-stripped
-/// main slot the caller resolved.
-///
-/// Builds the entry in a `MERGING_IDENTIFIER`-prefixed temporary sibling
-/// directory first, then
-/// atomically renames it into place -- mirroring real `dblink.merge()`'s
-/// own `dbtmpdir`-then-`_movefile()` approach (both are guaranteed to sit
-/// on the same filesystem, under the same `<category>` directory, so
-/// `std::fs::rename` alone is already atomic here, the same guarantee
-/// real `_movefile()` relies on for a same-device move). A crash
-/// mid-write leaves at most a stale, harmless `MERGING_IDENTIFIER`
-/// leftover -- never a half-written *final* vdb entry.
-fn write_vdb_entry(
+/// `environment.bz2`, the `<PF>.ebuild` copy -- then the merge-generated
+/// files that were never in `build-info`: `CATEGORY`/`SLOT`/`repository`
+/// re-asserted explicitly (a standalone `ebuild <file> install` outside a
+/// repo checkout has no `build-info/repository`, and `SLOT` here is the
+/// caller-resolved full slot) and `COUNTER` (real `cpv_counter`,
+/// portuale's own `next_counter`, ticked here so the replace loop below
+/// records the new value from the temporary entry). The directory itself
+/// must already exist (see [`create_vdb_tmp`]).
+fn populate_vdb_tmp(
     root: &Path,
-    env: &ebuild_phases::Environment,
+    category: &str,
+    pf: &str,
+    build_info_dir: &Path,
     slot: &str,
     repository: &str,
+) -> Result<(), String> {
+    let tmp_dir = root
+        .join("var/db/pkg")
+        .join(category)
+        .join(format!("{MERGING_IDENTIFIER}{pf}"));
+    if let Ok(entries) = portage_util::read_dir_entries(build_info_dir) {
+        for entry in entries {
+            let src = entry.path();
+            if src.is_file()
+                && let Some(name) = src.file_name()
+            {
+                std::fs::copy(&src, tmp_dir.join(name))
+                    .map_err(|e| format!("{}: {e}", src.display()))?;
+            }
+        }
+    }
+    let counter = next_counter(root)?;
+    for (name, value) in [
+        ("CATEGORY", category),
+        ("SLOT", slot),
+        ("repository", repository),
+    ] {
+        std::fs::write(tmp_dir.join(name), format!("{value}\n"))
+            .map_err(|e| format!("{}: {e}", tmp_dir.join(name).display()))?;
+    }
+    std::fs::write(tmp_dir.join("COUNTER"), counter.to_string())
+        .map_err(|e| format!("{}: {e}", tmp_dir.join("COUNTER").display()))?;
+    Ok(())
+}
+
+/// Real `dblink.treewalk()`'s own `CONTENTS` + metadata-consolidation tail
+/// (`vartree.py`: `CONTENTS` is written into `dbtmpdir` by
+/// `_merge_contents` while the image is copied to `${ROOT}`, and
+/// `_consolidate_to_metadata_file(self.dbtmpdir)` is the last write into
+/// `dbtmpdir` before the rename below): record the merge-generated file
+/// list, then fold every per-field file into the consolidated `metadata`
+/// file. Runs after the file copy, before the old instances are unmerged
+/// (neither touches the temporary directory, so real's
+/// consolidate-after-unmerge and this consolidate-before-unmerge are the
+/// same bytes); the rename into place still waits for the replace loop
+/// (see [`publish_vdb_tmp`]).
+fn write_vdb_tmp_contents(
+    root: &Path,
+    category: &str,
+    pf: &str,
     contents: &str,
 ) -> Result<(), String> {
-    write_vdb_entry_from_dir(
-        root,
-        &env.category,
-        &env.split.pf,
-        &env.build_info(),
-        slot,
-        repository,
-        contents,
-    )
+    let tmp_dir = root
+        .join("var/db/pkg")
+        .join(category)
+        .join(format!("{MERGING_IDENTIFIER}{pf}"));
+    // Real `_consolidate_to_metadata_file(self.dbtmpdir)` (`vartree.py`):
+    // the last write into the temp vdb dir before the rename -- fold
+    // every per-field file real's `_in_metadata_file()` accepts into one
+    // `metadata` file. Its `#dir_mtime=` trailer records the dir's
+    // `st_mtime_ns` and real's reader rejects the file if the dir changed
+    // afterwards, so it must come after CONTENTS above and the
+    // `#dir_mtime=` line must be *appended* (a plain write, no new dir
+    // entry) after the body is on disk. The rename below does not touch
+    // the dir's own mtime, so the value survives the move.
+    std::fs::write(tmp_dir.join("CONTENTS"), contents)
+        .map_err(|e| format!("{}: {e}", tmp_dir.join("CONTENTS").display()))?;
+    write_consolidated_metadata_file(&tmp_dir)?;
+    Ok(())
+}
+
+/// Real `dblink.treewalk()`'s own move into place (`vartree.py`: after
+/// the replace loop unmerged every same-slot version,
+/// `self.dbdir = self.dbpkgdir; self.delete(); _movefile(self.dbtmpdir,
+/// self.dbpkgdir)`): drop the old live entry, then atomically rename the
+/// temporary sibling into place. Both sit under the same `<category>`
+/// directory, hence guaranteed the same filesystem, so `std::fs::rename`
+/// alone is already atomic here -- the same guarantee real `_movefile()`
+/// relies on for a same-device move. A crash before this leaves the stale
+/// `MERGING_IDENTIFIER` leftover (readers skip it; the next merge's
+/// [`create_vdb_tmp`] wipes it) -- never a half-written *final* entry,
+/// except real's own delete-then-move exposure on a same-pf reinstall,
+/// which this shares exactly.
+fn publish_vdb_tmp(root: &Path, category: &str, pf: &str) -> Result<(), String> {
+    let cat_dir = root.join("var/db/pkg").join(category);
+    let tmp_dir = cat_dir.join(format!("{MERGING_IDENTIFIER}{pf}"));
+    let final_dir = cat_dir.join(pf);
+    if final_dir.exists() {
+        std::fs::remove_dir_all(&final_dir).map_err(|e| format!("{}: {e}", final_dir.display()))?;
+    }
+    std::fs::rename(&tmp_dir, &final_dir).map_err(|e| format!("{}: {e}", final_dir.display()))?;
+    Ok(())
 }
 
 /// Real `dblink.treewalk()`'s `preinst_mask` + `install_mask_dir` step
@@ -2373,7 +2709,7 @@ fn write_vdb_entry(
 /// `no{man,info,doc}` `FEATURE` folded a `/usr/share/*` entry in --
 /// `rmdir` a now-empty `<d>/usr/share`. The resolved mask is also
 /// written to `<build_info>/INSTALL_MASK` (real `preinst_mask` writes it
-/// there; `write_vdb_entry_from_dir` then copies it into the vdb
+/// there; `populate_vdb_tmp` then copies it into the vdb
 /// wholesale like every other build-info file). A no-op with an empty
 /// mask -- and then no `INSTALL_MASK` file, matching real's own
 /// `[[ -n ${x} ]] && echo … > INSTALL_MASK`.
@@ -2462,76 +2798,6 @@ fn write_consolidated_metadata_file(dbdir: &Path) -> Result<(), String> {
     use std::io::Write as _;
     writeln!(f, "#dir_mtime={dir_mtime_ns}")
         .map_err(|e| format!("{}: {e}", metadata_path.display()))?;
-    Ok(())
-}
-
-/// The `env`-free core of `write_vdb_entry`: `category`/`pf` name the
-/// entry, `build_info_dir` holds the files to copy wholesale. Shared with
-/// `emerge_binmerge` (a binpkg merge has no `Environment`).
-pub(crate) fn write_vdb_entry_from_dir(
-    root: &Path,
-    category: &str,
-    pf: &str,
-    build_info_dir: &Path,
-    slot: &str,
-    repository: &str,
-    contents: &str,
-) -> Result<(), String> {
-    let cat_dir = root.join("var/db/pkg").join(category);
-    let tmp_dir = cat_dir.join(format!("{MERGING_IDENTIFIER}{pf}"));
-    let final_dir = cat_dir.join(pf);
-
-    if tmp_dir.exists() {
-        std::fs::remove_dir_all(&tmp_dir).map_err(|e| format!("{}: {e}", tmp_dir.display()))?;
-    }
-    std::fs::create_dir_all(&tmp_dir).map_err(|e| format!("{}: {e}", tmp_dir.display()))?;
-
-    // Real `treewalk()`: copy every regular file from `build-info` into
-    // the vdb entry (`vartree.py:4911-4913`).
-    if let Ok(entries) = portage_util::read_dir_entries(build_info_dir) {
-        for entry in entries {
-            let src = entry.path();
-            if src.is_file()
-                && let Some(name) = src.file_name()
-            {
-                std::fs::copy(&src, tmp_dir.join(name))
-                    .map_err(|e| format!("{}: {e}", src.display()))?;
-            }
-        }
-    }
-
-    // Merge-generated files never present in `build-info`, plus the
-    // caller-resolved values re-asserted (see this function's own doc
-    // comment).
-    let counter = next_counter(root)?;
-    for (name, value) in [
-        ("CATEGORY", category),
-        ("SLOT", slot),
-        ("repository", repository),
-    ] {
-        std::fs::write(tmp_dir.join(name), format!("{value}\n"))
-            .map_err(|e| format!("{}: {e}", tmp_dir.join(name).display()))?;
-    }
-    std::fs::write(tmp_dir.join("CONTENTS"), contents)
-        .map_err(|e| format!("{}: {e}", tmp_dir.join("CONTENTS").display()))?;
-    std::fs::write(tmp_dir.join("COUNTER"), counter.to_string())
-        .map_err(|e| format!("{}: {e}", tmp_dir.join("COUNTER").display()))?;
-
-    // Real `_consolidate_to_metadata_file(self.dbtmpdir)` (`vartree.py:
-    // 5231`): the last write into the temp vdb dir before the rename --
-    // fold every per-field file real's `_in_metadata_file()` accepts
-    // into one `metadata` file. Its `#dir_mtime=` trailer records the
-    // dir's `st_mtime_ns` and real's reader rejects the file if the dir
-    // changed afterwards, so it must come after CONTENTS/COUNTER above
-    // and the `#dir_mtime=` line must be *appended* (a plain write, no
-    // new dir entry) after the body is on disk. The rename below does
-    // not touch the dir's own mtime, so the value survives the move.
-    write_consolidated_metadata_file(&tmp_dir)?;
-
-    if final_dir.exists() {
-        std::fs::remove_dir_all(&final_dir).map_err(|e| format!("{}: {e}", final_dir.display()))?;
-    }
-    std::fs::rename(&tmp_dir, &final_dir).map_err(|e| format!("{}: {e}", final_dir.display()))?;
     Ok(())
 }
 
@@ -2642,6 +2908,35 @@ fn owns_path(root: &Path, category: &str, package: &str, version: &str, abs_path
         .any(|path| path == relative)
 }
 
+/// The `CONTENTS` text of the vdb entry `category/pf`: the live entry
+/// first, falling back to its `-MERGING-<pf>` temporary when the live
+/// one is absent. The fallback is real `dblink.getcontents()` resolving
+/// through `dbdir`, which *is* `dbtmpdir` for the package being merged
+/// while the replace loop unmerges the instances it replaces (real
+/// `treewalk()`: the new entry is renamed into place only after) -- so
+/// an `others_in_slot`/`also_keep` ownership check against the replacing
+/// version sees the just-written file list. Enumeration skips are
+/// unaffected (those never name a `pf` explicitly; see
+/// [`portage_util::is_merging_vdb_entry`]): outside a merge the live
+/// entry always exists when these are queried, so the fallback only ever
+/// fires mid-merge.
+fn read_contents_pf(root: &Path, category: &str, pf: &str) -> Option<String> {
+    let live = root
+        .join("var/db/pkg")
+        .join(category)
+        .join(pf)
+        .join("CONTENTS");
+    if let Ok(text) = std::fs::read_to_string(&live) {
+        return Some(text);
+    }
+    let tmp = root
+        .join("var/db/pkg")
+        .join(category)
+        .join(format!("{MERGING_IDENTIFIER}{pf}"))
+        .join("CONTENTS");
+    std::fs::read_to_string(&tmp).ok()
+}
+
 /// Same real `CONTENTS`-ownership check as `owns_path`, but keyed by a
 /// bare `category`/`pf` pair (`"package-version"`, real portage's own
 /// vdb directory-name convention) rather than a split `package`/
@@ -2657,12 +2952,7 @@ fn owns_path(root: &Path, category: &str, package: &str, version: &str, abs_path
 /// hold only the bare vdb directory name -- going through the seam would
 /// split the `pf` apart only for `VdbReader` to join it back together.
 pub(crate) fn owns_path_pf(root: &Path, category: &str, pf: &str, abs_path: &str) -> bool {
-    let path = root
-        .join("var/db/pkg")
-        .join(category)
-        .join(pf)
-        .join("CONTENTS");
-    let Ok(text) = std::fs::read_to_string(path) else {
+    let Some(text) = read_contents_pf(root, category, pf) else {
         return false;
     };
     text.lines().any(|line| {
@@ -2687,12 +2977,7 @@ pub(crate) fn owned_node_type_pf(
     pf: &str,
     abs_path: &str,
 ) -> Option<String> {
-    let path = root
-        .join("var/db/pkg")
-        .join(category)
-        .join(pf)
-        .join("CONTENTS");
-    let text = std::fs::read_to_string(path).ok()?;
+    let text = read_contents_pf(root, category, pf)?;
     text.lines().find_map(|line| {
         let mut parts = line.split_whitespace();
         let node_type = parts.next()?;
@@ -2718,12 +3003,7 @@ fn owned_node_value_pf(
     pf: &str,
     abs_path: &str,
 ) -> Option<(String, String)> {
-    let path = root
-        .join("var/db/pkg")
-        .join(category)
-        .join(pf)
-        .join("CONTENTS");
-    let text = std::fs::read_to_string(path).ok()?;
+    let text = read_contents_pf(root, category, pf)?;
     text.lines().find_map(|line| {
         let mut parts = line.split_whitespace();
         let node_type = parts.next()?;
@@ -2879,8 +3159,15 @@ fn blockers_from_flat_deps(root: &Path, flat_deps: &[String]) -> HashSet<(String
                     .into_iter()
                     .flatten()
                     .filter(|e| e.path().is_dir())
-                    .map(move |pkg_entry| {
+                    .filter_map(move |pkg_entry| {
                         let pf = pkg_entry.file_name().to_string_lossy().to_string();
+                        // Real `vardbapi._excluded_dirs`: an in-progress
+                        // `-MERGING-<pf>` entry is never an installed
+                        // package, so it never participates in blocker
+                        // matching either.
+                        if portage_util::is_merging_vdb_entry(&pf) {
+                            return None;
+                        }
                         // #116: through the vdb seam, so this scan sees the
                         // same normalised `SLOT` every other consumer does
                         // (a missing field is `""` -> `("", "")` here).
@@ -2889,7 +3176,7 @@ fn blockers_from_flat_deps(root: &Path, flat_deps: &[String]) -> HashSet<(String
                             .split_once('/')
                             .map(|(s, ss)| (s.to_string(), ss.to_string()))
                             .unwrap_or_else(|| (slot.clone(), slot.clone()));
-                        (category_name.clone(), pf, slot, sub_slot)
+                        Some((category_name.clone(), pf, slot, sub_slot))
                     })
                     .map(|(category, pf, slot, sub_slot)| {
                         let candidate_str = format!("{category}/{pf}:{slot}/{sub_slot}");
@@ -3093,6 +3380,12 @@ fn find_owners(root: &Path, collisions: &[String]) -> BTreeMap<String, Vec<Strin
                 continue;
             }
             let pf = pkg_entry.file_name().to_string_lossy().to_string();
+            // Real `vardbapi._excluded_dirs`: an in-progress
+            // `-MERGING-<pf>` entry owns nothing -- a stale one's
+            // half-written `CONTENTS` must never claim a colliding path.
+            if portage_util::is_merging_vdb_entry(&pf) {
+                continue;
+            }
             let Some((package, version)) = portage_repo::split_pf(&pf) else {
                 continue;
             };
@@ -3599,11 +3892,16 @@ fn merge_after_install(
         ));
     }
 
-    // Real `dblink.treewalk()`'s own order: `pkg_preinst` runs before
-    // anything is copied, `pkg_postinst` only after the vdb entry is
-    // fully written -- `run_single_phase` (not `run_commands`) since
-    // neither is part of `install`'s own `actionmap_deps` chain (real
-    // `treewalk()` invokes them directly, not through `doebuild()`).
+    // Real `dblink.treewalk()`'s own order: the `-MERGING-<pf>` temporary
+    // vdb entry is created before `pkg_preinst` runs (wiping a stale one
+    // a killed previous merge left), populated after it, and only renamed
+    // into place after every replaced same-slot version is unmerged --
+    // `pkg_postinst` runs last and sees the live entry. See
+    // `create_vdb_tmp`/`populate_vdb_tmp`/`publish_vdb_tmp`.
+    // `run_single_phase` (not `run_commands`) since neither hook is part
+    // of `install`'s own `actionmap_deps` chain (real `treewalk()` invokes
+    // them directly, not through `doebuild()`).
+    create_vdb_tmp(root, &env.category, &env.split.pf)?;
     let preinst_status = ebuild_phases::run_single_phase(
         ebuild_path,
         "preinst",
@@ -3618,9 +3916,17 @@ fn merge_after_install(
     if preinst_status != 0 {
         return Ok(preinst_status);
     }
+    populate_vdb_tmp(
+        root,
+        &env.category,
+        &env.split.pf,
+        &env.build_info(),
+        &full_slot,
+        &repository,
+    )?;
 
     let mut cfgfiledict = read_cfgfiledict(root);
-    let contents = merge_tree(
+    let mut contents = merge_tree(
         &env.d(),
         root,
         &env.category,
@@ -3631,20 +3937,61 @@ fn merge_after_install(
         options.noconfmem,
         &mut cfgfiledict,
     )?;
+    // Real `dblink.treewalk`'s own pre-replace-loop preserve-libs
+    // block: the replaced same-slot instance's
+    // still-needed libraries are selected now -- the new vdb entry is
+    // not written yet, so (exactly like real, whose `LinkageMap`
+    // rebuild only ever sees installed packages) the new package is
+    // not part of the linkage map -- and their entries are carried
+    // into the new package's own `CONTENTS`
+    // (`_add_preserve_libs_to_contents`). The
+    // record itself lands after the replace loop below
+    // (`register_merge_preserved_libs`).
+    let new_image_paths: BTreeSet<String> = contents
+        .lines()
+        .filter_map(|line| line.split_whitespace().nth(1).map(String::from))
+        .collect();
+    let mut preserve_paths = BTreeSet::new();
+    if let Some((paths, old_contents_text)) = find_preserve_paths_for_merge(
+        root,
+        &env.category,
+        &env.split.pn,
+        main_slot,
+        &new_image_paths,
+    ) {
+        let (injected, surviving) =
+            inject_preserved_libs_into_contents(&old_contents_text, &paths, &new_image_paths);
+        contents.push_str(&injected);
+        preserve_paths = surviving;
+    }
     write_cfgfiledict(root, &cfgfiledict)?;
-    write_vdb_entry(root, env, &full_slot, &repository, &contents)?;
+    write_vdb_tmp_contents(root, &env.category, &env.split.pf, &contents)?;
 
     if !plib_collisions.is_empty() {
         let cpv = format!("{}/{}", env.category, env.split.pf);
         unregister_preserved_libs(root, &cpv, plib_registry, &plib_collisions)?;
     }
 
-    // Real `dblink.treewalk()`'s replace loop: now that this version's
-    // vdb entry is live, unmerge every same-slot version it replaced --
-    // see `unmerge_replaced_same_slot`. Real `treewalk()` order: *after*
-    // the vdb write, *before* `pkg_postinst` / `env_update`. A same-cpv
-    // `Reinstall` finds nothing to unmerge (`write_vdb_entry` already
-    // replaced its own entry), matching the pre-replace-loop behaviour.
+    // Real `dblink.treewalk()`'s replace loop: unmerge every same-slot
+    // version this merge replaced while the new version's vdb entry still
+    // sits in its `-MERGING-<pf>` temporary -- see
+    // `unmerge_replaced_same_slot`. Real `treewalk()` order: *after* the
+    // file copy, *before* the rename into place and `pkg_postinst` /
+    // `env_update`. A same-cpv `Reinstall` finds nothing to unmerge (its
+    // own live entry is untouched until `publish_vdb_tmp` below),
+    // matching the pre-replace-loop behaviour.
+    // The merge-side just-preserved set travels with the replace loop
+    // (real `preserve_paths` into `dblink.unmerge`) so the post-unmerge
+    // prune can see files no `NEEDED.ELF.2` indexes yet -- see
+    // `linkage_owner_entries`.
+    let replacement_preserved: BTreeMap<String, Vec<String>> = if preserve_paths.is_empty() {
+        BTreeMap::new()
+    } else {
+        BTreeMap::from([(
+            format!("{}/{}", env.category, env.split.pf),
+            preserve_paths.iter().cloned().collect(),
+        )])
+    };
     let replaced = unmerge_replaced_same_slot(
         root,
         &env.category,
@@ -3654,6 +4001,24 @@ fn merge_after_install(
         &env.portage_builddir().join("unmerge-src"),
         portage_tmpdir,
         options,
+        &replacement_preserved,
+    )?;
+
+    // Real `dblink.treewalk()`'s own post-replace-loop registration
+    // (`vartree.py:5266-5272`) -- backlog #178: the one `cp:slot`
+    // record is replaced by the merging package's own `(cpv, counter,
+    // paths)`, so a second consecutive soname bump cannot keep a stale
+    // path list.
+    // After the rename into place, like real (backlog #183: the counter
+    // is read back from the published entry).
+    publish_vdb_tmp(root, &env.category, &env.split.pf)?;
+    register_merge_preserved_libs(
+        root,
+        &env.category,
+        &env.split.pn,
+        &env.split.pf,
+        main_slot,
+        &preserve_paths,
     )?;
 
     // Real `merge()`'s own ordering: `postinst` runs, but its own exit
@@ -3709,7 +4074,7 @@ fn merge_after_install(
         // removed after the library path has been updated" -- a preserved
         // lib whose last consumer this merge just rebuilt is now orphaned
         // and gets deleted + unregistered (real `_prune_plib_registry()`).
-        prune_unused_preserved_libs(root, false, &|_| false)?;
+        prune_unused_preserved_libs(root, false, &|_| false, None, &BTreeMap::new())?;
     }
 
     // Real `dblink.merge()`: `self._elog_process()` runs here, after the
@@ -3723,8 +4088,9 @@ fn merge_after_install(
 }
 
 /// Real `dblink.treewalk()`'s replace loop (`vartree.py:5187-5219`):
-/// once the *new* version's vdb entry is live, every already-installed
-/// **same-slot** version of the same cp is removed --
+/// while the *new* version's vdb entry still sits in its `-MERGING-<pf>`
+/// temporary (it is renamed into place only after this returns), every
+/// already-installed **same-slot** version of the same cp is removed --
 /// `dblink.unmerge()` (`pkg_prerm` -> delete its files -> `pkg_postrm`)
 /// then `dblink.delete()` (drop its vdb entry). Each `pkg_prerm`/
 /// `pkg_postrm` runs from *that* version's own vdb-stored
@@ -3756,15 +4122,22 @@ pub(crate) fn unmerge_replaced_same_slot(
     scratch_dir: &Path,
     portage_tmpdir: &Path,
     options: &MergeOptions,
+    replacement_preserved: &BTreeMap<String, Vec<String>>,
 ) -> Result<Vec<String>, String> {
     // Real merge-then-unmerge: `<package>-<digit...>` vdb-dir names, the
     // same shape `blocked_installed_packages` and `installed_instance_pf`
-    // match; exclude the just-written new entry.
+    // match; exclude the just-merged new entry. A `-MERGING-<pf>`
+    // temporary can never match the `<package>-<digit...>` shape (real
+    // package names never start with `-`), but skip it explicitly anyway:
+    // readers never see in-progress entries, not even here.
     let vdb_cat = root.join("var/db/pkg").join(category);
     let mut replaced: Vec<String> = Vec::new();
     if let Ok(entries) = portage_util::read_dir_entries(&vdb_cat) {
         for e in entries {
             let name = e.file_name().to_string_lossy().to_string();
+            if portage_util::is_merging_vdb_entry(&name) {
+                continue;
+            }
             let is_this_cp = name.starts_with(&format!("{package}-"))
                 && name[package.len() + 1..].starts_with(|c: char| c.is_ascii_digit());
             if !is_this_cp || name == new_pf {
@@ -3792,32 +4165,8 @@ pub(crate) fn unmerge_replaced_same_slot(
             portage_tmpdir,
             options,
             None,
-        )?;
-    }
-
-    // Real `dblink.treewalk()` registers the preserved libs under the
-    // package *being merged* (`plib_registry.register(self.mycpv, slot,
-    // counter, sorted(preserve_paths))`, `vartree.py:5266-5272`) -- the
-    // post-bump cpv -- while portuale's own replace loop preserves them
-    // during the *replaced* version's own `unmerge_pkgfiles` (which
-    // attributes them to the removed cpv, the way a standalone `emerge
-    // -C` correctly does). Re-attribute every entry still owned by a
-    // just-replaced cpv to the replacing package, matching real's own
-    // recorded owner (l32 C2: `l32/sonamelib-2.0`, not `-1.0`).
-    let new_cpv = format!("{category}/{new_pf}");
-    let new_counter = std::fs::read_to_string(
-        root.join("var/db/pkg")
-            .join(category)
-            .join(new_pf)
-            .join("COUNTER"),
-    )
-    .unwrap_or_else(|_| "0".to_string());
-    for old_pf in &replaced {
-        reattribute_preserved_libs(
-            root,
-            &format!("{category}/{old_pf}"),
-            &new_cpv,
-            &new_counter,
+            true,
+            replacement_preserved,
         )?;
     }
 
@@ -3876,6 +4225,9 @@ pub(crate) fn unmerge_replaced_same_slot(
 /// `also_keep` is folded into real `others_in_slot` so a path a
 /// replacing version now owns is left in place -- empty for a standalone
 /// `emerge -C`, `[new_pf]` for `treewalk()`'s replace loop.
+/// `is_replacement` is real `unmerge_with_replacement` (see
+/// `preserve_libs_on_unmerge`): set by `unmerge_replaced_same_slot`,
+/// cleared by `pretend.rs`'s real `emerge -C`.
 /// `scratch_dir` holds the ebuild extracted from the vdb for its phase
 /// run (`<scratch_dir>/<cat>/<pn>/<pf>.ebuild`, so
 /// `compute_environment`'s path parse works). Shared by
@@ -3890,6 +4242,11 @@ pub(crate) fn unmerge_replaced_same_slot(
 /// `if retval != os.EX_OK: ... return retval`. `treewalk()`'s replace
 /// loop passes `None` -- its own `_pre_merge_backup`/`downgrade-backup`
 /// path is a documented cut.
+///
+/// `replacement_preserved` is real `preserve_paths` (owner -> paths
+/// just preserved merge-side): threaded from the merge caller through
+/// `unmerge_replaced_same_slot` into the post-unmerge prune (see
+/// `ebuild_unmerge::unmerge_pkgfiles`); empty on the standalone path.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn unmerge_one_installed(
     root: &Path,
@@ -3901,6 +4258,8 @@ pub(crate) fn unmerge_one_installed(
     portage_tmpdir: &Path,
     options: &MergeOptions,
     backup: Option<&crate::ebuild_package::PackageOptions>,
+    is_replacement: bool,
+    replacement_preserved: &BTreeMap<String, Vec<String>>,
 ) -> Result<(), String> {
     let vdb_dir = root.join("var/db/pkg").join(category).join(pf);
     let unmerge_options = crate::ebuild_unmerge::UnmergeOptions {
@@ -3964,6 +4323,8 @@ pub(crate) fn unmerge_one_installed(
         pf,
         also_keep,
         &unmerge_options,
+        is_replacement,
+        replacement_preserved,
     )?;
     let postrm_status = run_hook("postrm")?;
     if postrm_status != 0 {
@@ -4167,7 +4528,7 @@ pub fn merge_binpkg(
     // inside itself -- it's the digest of the *whole* binpkg file, which
     // real records so a later `emerge -k` / index rebuild can tell a
     // still-current instance from a rebuilt one. Written into build-info
-    // so `write_vdb_entry_from_dir` copies it into the vdb like every
+    // so `populate_vdb_tmp` copies it into the vdb like every
     // other build-info file.
     let binpkg_md5 = md5_hex(binpkg_path)?;
     std::fs::write(build_info.join("BINPKGMD5"), format!("{binpkg_md5}\n"))
@@ -4297,7 +4658,7 @@ pub fn merge_binpkg(
     // masked path (e.g. `/usr/share/info` under `FEATURES=noinfo`) never
     // reaches `${ROOT}` and never shows up in the vdb `CONTENTS`. The
     // resolved `INSTALL_MASK` also lands in `build-info`, so
-    // `write_vdb_entry_from_dir` copies it into the vdb entry.
+    // `populate_vdb_tmp` copies it into the vdb entry.
     apply_install_mask(&image, &build_info, options)?;
 
     // Real `dblink.merge()`'s own `_collision_protect` check, run before
@@ -4346,16 +4707,20 @@ pub fn merge_binpkg(
         ));
     }
 
-    // Real `dblink.treewalk()` order: `pkg_preinst` runs before a single
-    // file is copied.
+    // Real `dblink.treewalk()` order: the `-MERGING-<pf>` temporary vdb
+    // entry is created before `pkg_preinst` runs, populated after it, and
+    // only renamed into place after every replaced same-slot version is
+    // unmerged -- identical to `merge_after_install`.
+    create_vdb_tmp(root, &category, &pf)?;
     let preinst_status = run_hook("preinst")?;
     if preinst_status != 0 {
         return Ok(preinst_status);
     }
+    populate_vdb_tmp(root, &category, &pf, &build_info, &full_slot, &repository)?;
 
     let installed_instance = installed_instance_pf(root, &category, &package, &main_slot);
     let mut cfgfiledict = read_cfgfiledict(root);
-    let contents = merge_tree(
+    let mut contents = merge_tree(
         &image,
         root,
         &category,
@@ -4366,16 +4731,25 @@ pub fn merge_binpkg(
         options.noconfmem,
         &mut cfgfiledict,
     )?;
+    // Real `dblink.treewalk`'s own pre-replace-loop preserve-libs
+    // block (identical to `merge_after_install`): the replaced same-slot instance's
+    // still-needed libraries are carried into this package's own
+    // `CONTENTS`; the record itself lands after the replace loop below.
+    let new_image_paths: BTreeSet<String> = contents
+        .lines()
+        .filter_map(|line| line.split_whitespace().nth(1).map(String::from))
+        .collect();
+    let mut preserve_paths = BTreeSet::new();
+    if let Some((paths, old_contents_text)) =
+        find_preserve_paths_for_merge(root, &category, &package, &main_slot, &new_image_paths)
+    {
+        let (injected, surviving) =
+            inject_preserved_libs_into_contents(&old_contents_text, &paths, &new_image_paths);
+        contents.push_str(&injected);
+        preserve_paths = surviving;
+    }
     write_cfgfiledict(root, &cfgfiledict)?;
-    write_vdb_entry_from_dir(
-        root,
-        &category,
-        &pf,
-        &build_info,
-        &full_slot,
-        &repository,
-        &contents,
-    )?;
+    write_vdb_tmp_contents(root, &category, &pf, &contents)?;
 
     // Real `treewalk()`: a preserved lib this new version now provides
     // itself is taken over from the `preserved_libs_registry` and
@@ -4386,9 +4760,20 @@ pub fn merge_binpkg(
         unregister_preserved_libs(root, &cpv, plib_registry, &plib_collisions)?;
     }
 
-    // Real merge-then-unmerge: the new version's vdb entry now exists,
-    // so drop every same-slot version it replaced (see
-    // `unmerge_replaced_same_slot`).
+    // Real merge-then-unmerge: drop every same-slot version the new one
+    // replaced while its own vdb entry still sits in the `-MERGING-<pf>`
+    // temporary (see `unmerge_replaced_same_slot`).
+    // The merge-side just-preserved set travels with the replace loop
+    // (real `preserve_paths` into `dblink.unmerge`) -- identical to
+    // `merge_after_install`.
+    let replacement_preserved: BTreeMap<String, Vec<String>> = if preserve_paths.is_empty() {
+        BTreeMap::new()
+    } else {
+        BTreeMap::from([(
+            format!("{category}/{pf}"),
+            preserve_paths.iter().cloned().collect(),
+        )])
+    };
     let replaced_same_slot = unmerge_replaced_same_slot(
         root,
         &category,
@@ -4398,7 +4783,13 @@ pub fn merge_binpkg(
         &builddir.join("unmerge-src"),
         portage_tmpdir,
         options,
+        &replacement_preserved,
     )?;
+    publish_vdb_tmp(root, &category, &pf)?;
+
+    // Real `dblink.treewalk()`'s own post-replace-loop registration
+    // (`vartree.py:5266-5272`) -- identical to `merge_after_install`.
+    register_merge_preserved_libs(root, &category, &package, &pf, &main_slot, &preserve_paths)?;
 
     // Real `treewalk()` order: `pkg_postinst` runs after the vdb entry
     // is live *and* every replaced same-slot version is gone, but before
@@ -4432,7 +4823,7 @@ pub fn merge_binpkg(
         env_update::run_env_update(root)?;
         // Real `treewalk()`: prune preserved libs orphaned by this merge
         // (identical to `merge_after_install`).
-        prune_unused_preserved_libs(root, false, &|_| false)?;
+        prune_unused_preserved_libs(root, false, &|_| false, None, &BTreeMap::new())?;
     }
 
     // Real `dblink.merge()`'s `_elog_process()`, before the builddir
@@ -6097,6 +6488,192 @@ mod tests {
         );
     }
 
+    /// Backlog #183: a stale `-MERGING-<pf>` entry left by a killed merge
+    /// is invisible to every portuale vdb reader, and the next merge of
+    /// the same package wipes it and publishes the real entry -- real
+    /// `dblink.treewalk()`'s own `self.dbdir = self.dbtmpdir;
+    /// self.delete(); ensure_dirs(self.dbtmpdir)` prologue plus the
+    /// `vardbapi._excluded_dirs` reader skip (`vartree.py`). Ground truth:
+    /// the `l32` C4 control cell (`findings/l5.md` Group 4) leaves exactly
+    /// `-MERGING-slow-a-1.0` after the SIGKILL, no `slow-a-1.0`, and the
+    /// resumed merge reinstalls from scratch.
+    #[test]
+    fn stale_merging_entry_is_invisible_and_replaced_by_the_next_merge() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        // A killed merge's leftovers: a half-written `-MERGING-` entry
+        // for the package about to be merged, and nothing live.
+        let stale = root.join("var/db/pkg/dev-libs/-MERGING-mergepkg-1.0");
+        std::fs::create_dir_all(&stale).unwrap();
+        std::fs::write(stale.join("SLOT"), "0\n").unwrap();
+        std::fs::write(stale.join("COUNTER"), "41\n").unwrap();
+        std::fs::write(
+            stale.join("CONTENTS"),
+            "obj /usr/share/mergepkg/hello.txt deadbeef 123\n",
+        )
+        .unwrap();
+        std::fs::write(stale.join("NEEDED.ELF.2"), "junk\n").unwrap();
+        assert!(!root.join("var/db/pkg/dev-libs/mergepkg-1.0").exists());
+
+        // Every reader skips the stale entry: it is not an installed
+        // package, owns no path, and indexes no sonames.
+        assert!(portage_repo::all_installed_packages(&root).is_empty());
+        assert!(portage_repo::installed_versions(&root, "dev-libs", "mergepkg").is_empty());
+        assert!(
+            find_owners(&root, &["/usr/share/mergepkg/hello.txt".to_string()]).is_empty(),
+            "a stale half-written CONTENTS claims nothing"
+        );
+        assert!(
+            crate::needed_elf::read_all_needed_entries(&root).is_empty(),
+            "a stale NEEDED.ELF.2 indexes nothing"
+        );
+
+        // The next merge behaves as real: it wipes the stale entry and
+        // publishes the real one, leaving no temporary behind.
+        let repo_root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let ebuild = repo_root.join("dev-libs/mergepkg/mergepkg-1.0.ebuild");
+        assert_eq!(
+            run_merge(
+                &ebuild,
+                &root,
+                &portage_tmpdir,
+                &MergeOptions::default(),
+                None
+            )
+            .unwrap(),
+            0
+        );
+        let vdb_dir = root.join("var/db/pkg/dev-libs/mergepkg-1.0");
+        let contents = std::fs::read_to_string(vdb_dir.join("CONTENTS")).unwrap();
+        assert!(
+            contents
+                .lines()
+                .any(|l| l.starts_with("obj /usr/share/mergepkg/hello.txt "))
+        );
+        assert!(
+            !contents.contains("deadbeef"),
+            "the stale CONTENTS is fully replaced, not merged"
+        );
+        assert!(!stale.exists(), "the stale temporary is wiped");
+        assert_eq!(portage_repo::all_installed_packages(&root).len(), 1);
+    }
+
+    /// Backlog #183: interrupting a merge while its vdb entry is still
+    /// being written leaves `-MERGING-<pf>` and nothing at `<pf>` -- real
+    /// `dbtmpdir` visibility from its creation (before `pkg_preinst` and
+    /// the `${ROOT}` copy) to the `_movefile` into place after the old
+    /// instances are unmerged. Drives the staged writer directly:
+    /// `create` + `populate` + `write contents` is the interrupt point
+    /// (no `publish` ever runs), pinning that every pre-`publish` stage
+    /// leaves the live entry untouched and the temporary invisible.
+    #[test]
+    fn interrupted_vdb_write_leaves_merging_and_no_final_entry() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let build_info = tmp.join("build-info");
+        std::fs::create_dir_all(&build_info).unwrap();
+        std::fs::write(build_info.join("SLOT"), "0\n").unwrap();
+
+        create_vdb_tmp(&root, "dev-libs", "victimpkg-1.0").unwrap();
+        // A kill here (during `pkg_preinst` / the `${ROOT}` copy) leaves
+        // an empty temporary -- real's own C4 shape, where the kill lands
+        // in the `pkg_preinst` sleep before any info file is copied.
+        let tmp_dir = root.join("var/db/pkg/dev-libs/-MERGING-victimpkg-1.0");
+        assert!(tmp_dir.is_dir());
+        assert!(!root.join("var/db/pkg/dev-libs/victimpkg-1.0").exists());
+
+        populate_vdb_tmp(
+            &root,
+            "dev-libs",
+            "victimpkg-1.0",
+            &build_info,
+            "0",
+            "testrepo",
+        )
+        .unwrap();
+        write_vdb_tmp_contents(
+            &root,
+            "dev-libs",
+            "victimpkg-1.0",
+            "obj /usr/bin/victim abc 123\n",
+        )
+        .unwrap();
+        // ... and a kill here leaves the fully-populated temporary, still
+        // with nothing live and nothing enumerated.
+        assert!(!root.join("var/db/pkg/dev-libs/victimpkg-1.0").exists());
+        assert!(portage_repo::all_installed_packages(&root).is_empty());
+
+        publish_vdb_tmp(&root, "dev-libs", "victimpkg-1.0").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join("var/db/pkg/dev-libs/victimpkg-1.0/CONTENTS"))
+                .unwrap(),
+            "obj /usr/bin/victim abc 123\n"
+        );
+        assert!(!tmp_dir.exists(), "no temporary survives a publish");
+    }
+
+    /// Backlog #183: an upgrade publishes the new version's vdb entry only
+    /// after the replaced same-slot version is unmerged -- real
+    /// `treewalk()`'s own `_movefile(self.dbtmpdir, self.dbpkgdir)`
+    /// position, after the replace loop. Observable contract: the old
+    /// entry is gone, the new one is live with the new content, and no
+    /// temporary survives. (The in-between invisibility itself is what the
+    /// `l32` C4 candidate run checks live: the kill lands while the new
+    /// entry is still `-MERGING-*`.)
+    #[test]
+    fn upgrade_publishes_the_new_entry_after_unmerging_the_old() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        let repo_root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let v1 = repo_root.join("dev-libs/othersinslotpkg/othersinslotpkg-1.0.ebuild");
+        let v2 = repo_root.join("dev-libs/othersinslotpkg/othersinslotpkg-2.0.ebuild");
+
+        assert_eq!(
+            run_merge(&v1, &root, &portage_tmpdir, &MergeOptions::default(), None).unwrap(),
+            0
+        );
+        assert!(
+            root.join("var/db/pkg/dev-libs/othersinslotpkg-1.0")
+                .is_dir()
+        );
+
+        assert_eq!(
+            run_merge(&v2, &root, &portage_tmpdir, &MergeOptions::default(), None).unwrap(),
+            0
+        );
+        let vdb_cat = root.join("var/db/pkg/dev-libs");
+        let entries: Vec<String> = portage_util::read_dir_entries(&vdb_cat)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(entries, vec!["othersinslotpkg-2.0".to_string()]);
+        assert_eq!(
+            std::fs::read_to_string(root.join("usr/share/othersinslotpkg/shared.txt")).unwrap(),
+            "shared, from 2.0\n"
+        );
+        assert!(
+            root.join("usr/share/othersinslotpkg/only-in-v2.txt")
+                .is_file()
+        );
+        assert!(
+            !root
+                .join("usr/share/othersinslotpkg/only-in-v1.txt")
+                .exists()
+        );
+    }
+
     /// L3 smoke finding: a package whose ebuild `SLOT` carries a sub-slot
     /// (`SLOT="0/1"`) must not collide with its own installed copy on a
     /// reinstall / `-e` merge. `find_collisions` and
@@ -6794,7 +7371,7 @@ mod tests {
             &tmp,
             &PlibRegistry {
                 entries: entries.clone(),
-                orig_empty: false,
+                orig_entries: BTreeMap::new(),
             },
         )
         .expect("write succeeds");
@@ -6873,6 +7450,7 @@ mod tests {
             "plain-1.0",
             "0",
             "obj /usr/lib/plain.so abc 1\n",
+            false,
         )
         .unwrap();
         assert!(preserved.is_empty());
@@ -6880,7 +7458,8 @@ mod tests {
         let registry = read_plib_registry(&root);
         unregister_preserved_libs(&root, "dev-libs/plain-1.0", registry, &BTreeMap::new()).unwrap();
 
-        let removed = prune_unused_preserved_libs(&root, false, &|_| false).unwrap();
+        let removed =
+            prune_unused_preserved_libs(&root, false, &|_| false, None, &BTreeMap::new()).unwrap();
         assert!(removed.is_empty());
 
         let after = std::fs::metadata(&reg_path).unwrap();
@@ -6892,18 +7471,115 @@ mod tests {
         );
     }
 
+    /// Fix round 1 for review item 2 (backlog #178): real `store()`
+    /// returns early when the registry equals what was read
+    /// (`PreservedLibsRegistry.store`) -- a merge/unmerge with no
+    /// preserved-lib activity must leave an unrelated non-empty entry's
+    /// bytes **and** mtime untouched, not just the empty-file case
+    /// above. Pre-fix, every `preserve_libs_on_unmerge` /
+    /// `prune_unused_preserved_libs` call rewrote the file even when
+    /// `register()` was a no-op.
+    #[test]
+    fn plib_registry_with_an_unrelated_entry_is_not_rewritten_without_preserve_activity() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        // A live unrelated entry: the file exists (so `pruneNonExisting`
+        // keeps it) and stays needed (an installed consumer links its
+        // soname), so every step below is a genuine registry no-op.
+        std::fs::create_dir_all(root.join("usr/lib")).unwrap();
+        std::fs::create_dir_all(root.join("usr/bin")).unwrap();
+        std::fs::write(root.join("usr/lib/other.so"), b"fake elf").unwrap();
+        std::fs::write(root.join("usr/bin/cprog"), b"fake elf").unwrap();
+        let vdb_consumer = root.join("var/db/pkg/dev-libs/consumer-1.0");
+        std::fs::create_dir_all(&vdb_consumer).unwrap();
+        std::fs::write(vdb_consumer.join("COUNTER"), "1\n").unwrap();
+        std::fs::write(
+            vdb_consumer.join("CONTENTS"),
+            "obj /usr/bin/cprog abc 1\nobj /usr/lib/other.so def 1\n",
+        )
+        .unwrap();
+        std::fs::write(
+            vdb_consumer.join("NEEDED.ELF.2"),
+            "X86_64;/usr/lib/other.so;libother.so.1;;\nX86_64;/usr/bin/cprog;;;libother.so.1\n",
+        )
+        .unwrap();
+        let seed = "{\n\t\"dev-libs/other:0\": [\n\t\t\"dev-libs/other-1.0\",\n\t\t\"9\",\n\t\t[\n\t\t\t\"/usr/lib/other.so\"\n\t\t]\n\t]\n}";
+        std::fs::create_dir_all(plib_registry_path(&root).parent().unwrap()).unwrap();
+        std::fs::write(plib_registry_path(&root), seed).unwrap();
+        // A distinctly old mtime, so any rewrite is observable even at
+        // coarse filesystem timestamp granularity.
+        let touch = std::process::Command::new("touch")
+            .args([
+                "-d",
+                "2001-02-03 04:05:06",
+                &plib_registry_path(&root).display().to_string(),
+            ])
+            .status()
+            .expect("touch sets the seed mtime");
+        assert!(touch.success());
+        let before_bytes = std::fs::read(plib_registry_path(&root)).unwrap();
+        let before_mtime = std::fs::metadata(plib_registry_path(&root))
+            .unwrap()
+            .modified()
+            .unwrap();
+
+        // A package with no preserved-lib activity at all.
+        let vdb = root.join("var/db/pkg/dev-libs/plain-1.0");
+        std::fs::create_dir_all(&vdb).unwrap();
+        std::fs::write(vdb.join("COUNTER"), "3\n").unwrap();
+        let preserved = preserve_libs_on_unmerge(
+            &root,
+            "dev-libs",
+            "plain",
+            "plain-1.0",
+            "0",
+            "obj /usr/lib/plain.so abc 1\n",
+            false,
+        )
+        .unwrap();
+        assert!(preserved.is_empty());
+        let being: BTreeSet<String> = ["/usr/lib/plain.so".to_string()].into_iter().collect();
+        let removed = prune_unused_preserved_libs(
+            &root,
+            true,
+            &|p| being.contains(p),
+            None,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(
+            removed.is_empty(),
+            "the still-needed unrelated entry must survive the prune"
+        );
+
+        assert_eq!(
+            std::fs::read(plib_registry_path(&root)).unwrap(),
+            before_bytes,
+            "the registry bytes must not change without preserve activity"
+        );
+        assert_eq!(
+            std::fs::metadata(plib_registry_path(&root))
+                .unwrap()
+                .modified()
+                .unwrap(),
+            before_mtime,
+            "the registry mtime must not change without preserve activity"
+        );
+    }
+
     /// S0 for backlog #167(b): an empty registry real *does* write is
     /// exactly `{}` (2 bytes, no trailing newline -- real
     /// `json.dumps({}, indent="\t", sort_keys=True)`).
     #[test]
     fn plib_registry_empty_serializes_to_exactly_empty_braces() {
         let tmp = tempdir();
-        // `orig_empty: false`: this stands in for a loaded non-empty
-        // registry whose entries were all unregistered -- real
-        // `_data (now {}) != _data_orig`, so real `store()` rewrites.
+        // A loaded non-empty registry whose entries were all
+        // unregistered: snapshot `orig_entries` the way real `load()`
+        // snapshots `_data_orig`, so the now-empty `entries` compare
+        // changed and real `store()` rewrites.
         let mut registry = PlibRegistry {
             entries: BTreeMap::new(),
-            orig_empty: false,
+            orig_entries: BTreeMap::new(),
         };
         register_preserved_libs(
             &mut registry,
@@ -6914,6 +7590,7 @@ mod tests {
             "5",
             &["/usr/lib/libfoo.so.1".to_string()],
         );
+        registry.orig_entries = registry.entries.clone();
         register_preserved_libs(
             &mut registry,
             "dev-libs/foo-1.0",
@@ -6959,7 +7636,7 @@ mod tests {
             &tmp,
             &PlibRegistry {
                 entries,
-                orig_empty: false,
+                orig_entries: BTreeMap::new(),
             },
         )
         .expect("write succeeds");
@@ -7009,50 +7686,149 @@ mod tests {
         );
     }
 
-    /// S0 for backlog #167(d): real `dblink.treewalk()` records the
-    /// preserved libs under the package being merged (`self.mycpv` -- the
-    /// post-bump cpv, `3rdparty/portage/lib/portage/dbapi/vartree.py:
-    /// 5266-5272`), with its own slot and counter. The registry as the
-    /// replaced version's own unmerge left it names the pre-bump cpv in
-    /// `register()`-sorted path order; after re-attribution the key is
-    /// unchanged, the owner is the post-bump cpv with the new counter,
-    /// and the paths are the load-pruned file-then-symlink order.
+    fn versioned_fixture(name: &str, version: &str) -> PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/repo/dev-libs")
+            .join(name)
+            .join(format!("{name}-{version}.ebuild"))
+    }
+
+    /// Backlog #178 (S0 oracle + S2): two consecutive soname bumps
+    /// (`sonamebumplib` 1.0 -> 2.0 -> 3.0, each dropping the previous
+    /// soname while `consumesonamebump` still links `.so.1`).
+    /// Real `PreservedLibsRegistry.register(cpv, slot, counter, paths)`
+    /// (`3rdparty/portage/lib/portage/util/_dyn_libs/
+    /// PreservedLibsRegistry.py:142-169`) keyed `cp:slot` **replaces**
+    /// the record with the merging package's `(cpv, counter, paths)` --
+    /// real `dblink.treewalk()` calls it as `register(self.mycpv, slot,
+    /// counter, sorted(preserve_paths))` (`lib/portage/dbapi/vartree.py:
+    /// 5266-5272`), after copying the preserved entries into the new
+    /// package's own `CONTENTS` (`_add_preserve_libs_to_contents`,
+    /// `:3775-3826`). The S0 oracle (one `podman run ...
+    /// localhost/test-portuale:latest` probe over the l32 C2 cell shape
+    /// plus a `sonamelib-3.0` ebuild, real portage 3.0.82.2) holds after
+    /// each step: `{"l32/sonamelib:0": ["l32/sonamelib-<N>.0",
+    /// "<counter>", ["/usr/lib64/libl32soname.so.1.0.0",
+    /// "/usr/lib64/libl32soname.so.1"]]}`, the `.so.2` files gone from
+    /// disk, and the new package's `CONTENTS` listing the preserved
+    /// `.so.1` entries with their original digest/mtime (see
+    /// `differential-test-bed/findings/l5.md` "## Group 2").
     #[test]
-    fn plib_registry_soname_bump_records_the_post_bump_cpv() {
+    fn plib_registry_two_consecutive_soname_bumps_replace_the_record_under_the_merging_cpv() {
         let tmp = tempdir();
         let root = tmp.join("root");
-        std::fs::create_dir_all(root.join("usr/lib")).unwrap();
-        std::fs::write(root.join("usr/lib/libl32soname.so.1.0.0"), b"fake elf").unwrap();
-        std::os::unix::fs::symlink(
-            "libl32soname.so.1.0.0",
-            root.join("usr/lib/libl32soname.so.1"),
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        // A real Gentoo ROOT's own `/etc/ld.so.conf` lists `/usr/lib64`
+        // (container-verified on the S0 probe image), so real
+        // `getlibpaths()`'s own `defpath` covers the libdir and real
+        // `findConsumers` matches the consumer. Portuale regenerates
+        // `etc/ld.so.conf` from env.d `LDPATH` on every merge
+        // (`env_update::run_env_update`), so seed that input the way a
+        // real toolchain env.d entry does -- otherwise this synthetic
+        // root's `defpath` is just `/usr/lib` + `/lib` and no
+        // `/usr/lib64` consumer is ever found, on either implementation.
+        std::fs::create_dir_all(root.join("etc/env.d")).unwrap();
+        std::fs::write(
+            root.join("etc/env.d/99sonamebump"),
+            "LDPATH=\"/usr/lib64\"\n",
         )
         .unwrap();
-        let seed = "{\n\t\"l32/sonamelib:0\": [\n\t\t\"l32/sonamelib-1.0\",\n\t\t\"1\",\n\t\t[\n\t\t\t\"/usr/lib/libl32soname.so.1\",\n\t\t\t\"/usr/lib/libl32soname.so.1.0.0\"\n\t\t]\n\t]}";
-        std::fs::create_dir_all(plib_registry_path(&root).parent().unwrap()).unwrap();
-        std::fs::write(plib_registry_path(&root), seed).unwrap();
 
-        reattribute_preserved_libs(&root, "l32/sonamelib-1.0", "l32/sonamelib-2.0", "7\n").unwrap();
+        for (name, version) in [
+            ("sonamebumplib", "1.0"),
+            ("consumesonamebump", "1.0"),
+            ("sonamebumplib", "2.0"),
+        ] {
+            let status = run_merge(
+                &versioned_fixture(name, version),
+                &root,
+                &portage_tmpdir,
+                &MergeOptions::default(),
+                None,
+            )
+            .expect("run_merge succeeds");
+            assert_eq!(status, 0, "{name}-{version} merges cleanly");
+        }
 
-        let registry = read_plib_registry(&root);
-        let (cpv, counter, paths) = registry
-            .entries
-            .get("l32/sonamelib:0")
-            .expect("the entry keeps its key");
-        assert_eq!(cpv, "l32/sonamelib-2.0");
-        assert_eq!(counter, "7");
+        // Bump 1: the record is owned by the merging cpv with its own
+        // vdb COUNTER, paths file-then-symlink (real `pruneNonExisting`
+        // order), byte-exact.
+        let counter_2 =
+            std::fs::read_to_string(root.join("var/db/pkg/dev-libs/sonamebumplib-2.0/COUNTER"))
+                .unwrap();
+        let expected_bump1 = format!(
+            "{{\n\t\"dev-libs/sonamebumplib:0\": [\n\t\t\"dev-libs/sonamebumplib-2.0\",\n\t\t\"{}\",\n\t\t[\n\t\t\t\"/usr/lib64/libsonamebump.so.1.0.0\",\n\t\t\t\"/usr/lib64/libsonamebump.so.1\"\n\t\t]\n\t]\n}}",
+            counter_2.trim(),
+        );
         assert_eq!(
-            paths,
-            &vec![
-                "/usr/lib/libl32soname.so.1.0.0".to_string(),
-                "/usr/lib/libl32soname.so.1".to_string(),
-            ]
+            std::fs::read_to_string(plib_registry_path(&root)).unwrap(),
+            expected_bump1,
+            "after bump 1 the registry must match the S0 oracle shape"
+        );
+        let contents_2 =
+            std::fs::read_to_string(root.join("var/db/pkg/dev-libs/sonamebumplib-2.0/CONTENTS"))
+                .unwrap();
+        assert!(
+            contents_2.contains("obj /usr/lib64/libsonamebump.so.1.0.0"),
+            "the new package owns the preserved hardlink: {contents_2}"
+        );
+        assert!(
+            contents_2.contains("sym /usr/lib64/libsonamebump.so.1 "),
+            "the new package owns the preserved soname symlink: {contents_2}"
         );
 
-        // No-op when the old cpv owns nothing: the file is byte-identical.
-        let before = std::fs::read(plib_registry_path(&root)).unwrap();
-        reattribute_preserved_libs(&root, "l32/sonamelib-1.0", "l32/sonamelib-9.0", "9").unwrap();
-        assert_eq!(std::fs::read(plib_registry_path(&root)).unwrap(), before);
+        let status = run_merge(
+            &versioned_fixture("sonamebumplib", "3.0"),
+            &root,
+            &portage_tmpdir,
+            &MergeOptions::default(),
+            None,
+        )
+        .expect("run_merge succeeds");
+        assert_eq!(status, 0, "sonamebumplib-3.0 merges cleanly");
+
+        // Bump 2: the SAME key is replaced -- owner flips to the new
+        // merging cpv/counter while the still-needed `.so.1` path list
+        // survives verbatim (real drops only the unneeded `.so.2` pair,
+        // which nobody links).
+        let counter_3 =
+            std::fs::read_to_string(root.join("var/db/pkg/dev-libs/sonamebumplib-3.0/COUNTER"))
+                .unwrap();
+        let expected_bump2 = format!(
+            "{{\n\t\"dev-libs/sonamebumplib:0\": [\n\t\t\"dev-libs/sonamebumplib-3.0\",\n\t\t\"{}\",\n\t\t[\n\t\t\t\"/usr/lib64/libsonamebump.so.1.0.0\",\n\t\t\t\"/usr/lib64/libsonamebump.so.1\"\n\t\t]\n\t]\n}}",
+            counter_3.trim(),
+        );
+        assert_eq!(
+            std::fs::read_to_string(plib_registry_path(&root)).unwrap(),
+            expected_bump2,
+            "after bump 2 the registry must match the S0 oracle shape"
+        );
+        assert!(
+            root.join("usr/lib64/libsonamebump.so.1.0.0").is_file(),
+            "the still-needed hardlink survives the second bump"
+        );
+        assert!(
+            !root.join("usr/lib64/libsonamebump.so.2.0.0").exists(),
+            "the unneeded .so.2 hardlink is unmerged at the second bump"
+        );
+        assert!(
+            !root.join("usr/lib64/libsonamebump.so.2").exists(),
+            "the unneeded .so.2 symlink is unmerged at the second bump"
+        );
+        let contents_3 =
+            std::fs::read_to_string(root.join("var/db/pkg/dev-libs/sonamebumplib-3.0/CONTENTS"))
+                .unwrap();
+        assert!(
+            contents_3.contains("obj /usr/lib64/libsonamebump.so.1.0.0"),
+            "the newest package owns the preserved hardlink: {contents_3}"
+        );
+        assert!(
+            !contents_3.contains("libsonamebump.so.2"),
+            "the newest package must not claim the dropped soname: {contents_3}"
+        );
     }
 
     /// Real `unregister` (`register(cpv, slot, counter, [])`): removes
@@ -7063,7 +7839,7 @@ mod tests {
     fn register_preserved_libs_unregister_only_matches_the_same_cpv_and_counter() {
         let mut registry = PlibRegistry {
             entries: BTreeMap::new(),
-            orig_empty: true,
+            orig_entries: BTreeMap::new(),
         };
         register_preserved_libs(
             &mut registry,
@@ -7128,7 +7904,7 @@ mod tests {
     fn register_preserved_libs_with_paths_unconditionally_overwrites() {
         let mut registry = PlibRegistry {
             entries: BTreeMap::new(),
-            orig_empty: true,
+            orig_entries: BTreeMap::new(),
         };
         register_preserved_libs(
             &mut registry,
@@ -7155,17 +7931,398 @@ mod tests {
         assert_eq!(paths, &["/usr/lib/libfoo.so.2".to_string()]);
     }
 
-    /// Real `_prune_plib_registry`'s own early-exit shape for a package
-    /// that owns no files at all (empty `CONTENTS`): portuale's own
-    /// `preserve_libs_on_unmerge` short-circuits to an empty preserved
-    /// set without touching the registry or rebuilding the linkage map.
+    /// Real `_prune_plib_registry`'s own unregister shape for a package
+    /// that owns no files at all (empty `CONTENTS`): real
+    /// `instance_owns_files` gates only the linkmap rebuild and the
+    /// preserve/prune scans -- `unregister()` still runs. So portuale's
+    /// own `preserve_libs_on_unmerge` returns an empty preserved set but
+    /// still drops a matching stale entry; with no entry at all nothing
+    /// is written (write-only-on-change).
     #[test]
-    fn preserve_libs_on_unmerge_short_circuits_on_empty_contents() {
+    fn preserve_libs_on_unmerge_with_empty_contents_still_unregisters() {
         let tmp = tempdir();
+        let root = tmp.join("root");
+        let vdb = root.join("var/db/pkg/dev-libs/foo-1.0");
+        std::fs::create_dir_all(&vdb).unwrap();
+        std::fs::write(vdb.join("COUNTER"), "5\n").unwrap();
+        // The stale path exists, so the load-time `pruneNonExisting`
+        // keeps the entry and only the `unregister()` below removes it.
+        std::fs::create_dir_all(root.join("usr/lib")).unwrap();
+        std::fs::write(root.join("usr/lib/stale.so"), b"fake elf").unwrap();
+        let mut entries = BTreeMap::new();
+        entries.insert(
+            "dev-libs/foo:0".to_string(),
+            (
+                "dev-libs/foo-1.0".to_string(),
+                "5".to_string(),
+                vec!["/usr/lib/stale.so".to_string()],
+            ),
+        );
+        write_plib_registry(
+            &root,
+            &PlibRegistry {
+                entries,
+                orig_entries: BTreeMap::new(),
+            },
+        )
+        .expect("seeding the registry succeeds");
+
         let preserved =
-            preserve_libs_on_unmerge(&tmp, "dev-libs", "foo", "foo-1.0", "0", "").unwrap();
+            preserve_libs_on_unmerge(&root, "dev-libs", "foo", "foo-1.0", "0", "", false).unwrap();
         assert!(preserved.is_empty());
-        assert!(!plib_registry_path(&tmp).exists());
+        assert_eq!(
+            std::fs::read_to_string(plib_registry_path(&root)).unwrap(),
+            "{}",
+            "the matching stale entry must be unregistered even with empty CONTENTS"
+        );
+
+        // No entry at all: nothing to unregister, nothing written.
+        let tmp2 = tempdir();
+        let preserved =
+            preserve_libs_on_unmerge(&tmp2, "dev-libs", "foo", "foo-1.0", "0", "", false).unwrap();
+        assert!(preserved.is_empty());
+        assert!(!plib_registry_path(&tmp2).exists());
+    }
+
+    /// Seeds a synthetic root where preserved lib `/usr/lib/keepA.so`
+    /// (soname `libkeep.so.1`, indexed by `provider-1.0`'s hand-written
+    /// `NEEDED.ELF.2`, registered under `dev-libs/provider:0`) has
+    /// exactly one consumer, `/usr/bin/cprog`, owned by `oldapp-1.0`'s
+    /// `CONTENTS`. Returns the root and the `being_unmerged` set an
+    /// unmerge of the old instance would pass.
+    fn seed_old_owned_consumer_root(tmp: &std::path::Path) -> (PathBuf, BTreeSet<String>) {
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("usr/lib")).unwrap();
+        std::fs::create_dir_all(root.join("usr/bin")).unwrap();
+        std::fs::write(root.join("usr/lib/keepA.so"), b"fake elf").unwrap();
+        std::fs::write(root.join("usr/bin/cprog"), b"fake elf").unwrap();
+        for (pf, contents, needed) in [
+            (
+                "provider-1.0",
+                "obj /usr/lib/keepA.so def 1\n",
+                "X86_64;/usr/lib/keepA.so;libkeep.so.1;;\n",
+            ),
+            (
+                "oldapp-1.0",
+                "obj /usr/bin/cprog abc 1\n",
+                "X86_64;/usr/bin/cprog;;;libkeep.so.1\n",
+            ),
+        ] {
+            let vdb = root.join("var/db/pkg/dev-libs").join(pf);
+            std::fs::create_dir_all(&vdb).unwrap();
+            std::fs::write(vdb.join("CONTENTS"), contents).unwrap();
+            std::fs::write(vdb.join("NEEDED.ELF.2"), needed).unwrap();
+        }
+        std::fs::write(root.join("var/db/pkg/dev-libs/oldapp-1.0/COUNTER"), "7\n").unwrap();
+        let mut entries = BTreeMap::new();
+        entries.insert(
+            "dev-libs/provider:0".to_string(),
+            (
+                "dev-libs/provider-1.0".to_string(),
+                "4".to_string(),
+                vec!["/usr/lib/keepA.so".to_string()],
+            ),
+        );
+        write_plib_registry(
+            &root,
+            &PlibRegistry {
+                entries,
+                orig_entries: BTreeMap::new(),
+            },
+        )
+        .expect("seeding the registry succeeds");
+        let being: BTreeSet<String> = ["/usr/bin/cprog".to_string()].into_iter().collect();
+        (root, being)
+    }
+
+    /// Fix round 1 for review item 3 (backlog #178): real
+    /// `unmerge_no_replacement = unmerge and not
+    /// unmerge_with_replacement` (`dblink._prune_plib_registry`) -- in
+    /// replacement mode a consumer owned by the old instance still
+    /// keeps a preserved lib alive (it survives through the replacing
+    /// package). Pre-fix, portuale always passed `true`, eliminating
+    /// those consumers and wrongly pruning the lib.
+    #[test]
+    fn prune_keeps_a_preserved_lib_whose_only_consumer_is_old_owned_in_replacement_mode() {
+        let tmp = tempdir();
+        let (root, being) = seed_old_owned_consumer_root(&tmp);
+
+        let unneeded =
+            find_unused_preserved_libs(&root, true, &|p| being.contains(p), None, &BTreeMap::new());
+        assert_eq!(
+            unneeded,
+            BTreeMap::from([(
+                "dev-libs/provider-1.0".to_string(),
+                BTreeSet::from(["/usr/lib/keepA.so".to_string()]),
+            )]),
+            "standalone mode eliminates the about-to-be-unmerged consumer"
+        );
+
+        let unneeded = find_unused_preserved_libs(
+            &root,
+            false,
+            &|p| being.contains(p),
+            None,
+            &BTreeMap::new(),
+        );
+        assert!(
+            unneeded.is_empty(),
+            "replacement mode keeps the old-owned consumer, so the lib is needed: {unneeded:?}"
+        );
+    }
+
+    /// Fix round 1 for review item 3, threading half: the replace loop
+    /// (`unmerge_pkgfiles` with `is_replacement`) must reach the prune
+    /// with `unmerge_no_replacement=false` and the old instance
+    /// excluded, so the still-needed lib survives a real replacement
+    /// unmerge on disk and in the registry. The replacing instance owns
+    /// the consumer too (its `CONTENTS` + `NEEDED.ELF.2` are live --
+    /// real `include_file`), which is what keeps the consumer visible
+    /// past the old-instance exclusion.
+    #[test]
+    fn replacement_unmerge_keeps_a_preserved_lib_needed_by_the_replacing_consumer() {
+        let tmp = tempdir();
+        let (root, _) = seed_old_owned_consumer_root(&tmp);
+        let vdb_new = root.join("var/db/pkg/dev-libs/newapp-1.0");
+        std::fs::create_dir_all(&vdb_new).unwrap();
+        std::fs::write(vdb_new.join("CONTENTS"), "obj /usr/bin/cprog abc 1\n").unwrap();
+        std::fs::write(
+            vdb_new.join("NEEDED.ELF.2"),
+            "X86_64;/usr/bin/cprog;;;libkeep.so.1\n",
+        )
+        .unwrap();
+
+        crate::ebuild_unmerge::unmerge_pkgfiles(
+            &root,
+            "dev-libs",
+            "oldapp",
+            "oldapp-1.0",
+            &["newapp-1.0".to_string()],
+            &crate::ebuild_unmerge::UnmergeOptions::default(),
+            true,
+            &BTreeMap::new(),
+        )
+        .expect("replacement unmerge succeeds");
+
+        assert!(
+            root.join("usr/lib/keepA.so").is_file(),
+            "the still-needed preserved lib must survive the replacement unmerge"
+        );
+        assert!(
+            root.join("usr/bin/cprog").is_file(),
+            "the consumer owned by the replacing package must survive"
+        );
+        let registry = read_plib_registry(&root);
+        assert_eq!(
+            registry.entries.get("dev-libs/provider:0"),
+            Some(&(
+                "dev-libs/provider-1.0".to_string(),
+                "4".to_string(),
+                vec!["/usr/lib/keepA.so".to_string()],
+            )),
+            "the registry entry must survive the replacement unmerge"
+        );
+    }
+
+    /// Fix round 1 for review item 4, `exclude_pkgs` half (backlog
+    /// #178): real `LinkageMap.rebuild(exclude_pkgs=...)` drops the
+    /// unmerged instance's `NEEDED.ELF.2` lines, so a consumer only the
+    /// old instance knows about cannot keep a preserved lib alive past
+    /// the replacement. Without the exclusion the stale consumer data
+    /// "would only serve to corrupt the `LinkageMap`".
+    #[test]
+    fn prune_excludes_the_replaced_instance_linkage_data() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("usr/lib")).unwrap();
+        std::fs::create_dir_all(root.join("usr/bin")).unwrap();
+        std::fs::write(root.join("usr/lib/staleD.so"), b"fake elf").unwrap();
+        std::fs::write(root.join("usr/bin/oldtool"), b"fake elf").unwrap();
+        // The library is indexed (its provider is still installed); its
+        // only consumer is known solely to the instance being replaced.
+        let vdb_prov = root.join("var/db/pkg/dev-libs/provider-1.0");
+        std::fs::create_dir_all(&vdb_prov).unwrap();
+        std::fs::write(vdb_prov.join("CONTENTS"), "obj /usr/lib/staleD.so def 1\n").unwrap();
+        std::fs::write(
+            vdb_prov.join("NEEDED.ELF.2"),
+            "X86_64;/usr/lib/staleD.so;libstale.so.1;;\n",
+        )
+        .unwrap();
+        let vdb_old = root.join("var/db/pkg/dev-libs/oldapp-1.0");
+        std::fs::create_dir_all(&vdb_old).unwrap();
+        std::fs::write(vdb_old.join("CONTENTS"), "obj /usr/bin/oldtool abc 1\n").unwrap();
+        std::fs::write(
+            vdb_old.join("NEEDED.ELF.2"),
+            "X86_64;/usr/bin/oldtool;;;libstale.so.1\n",
+        )
+        .unwrap();
+        let mut entries = BTreeMap::new();
+        entries.insert(
+            "dev-libs/provider:0".to_string(),
+            (
+                "dev-libs/provider-1.0".to_string(),
+                "4".to_string(),
+                vec!["/usr/lib/staleD.so".to_string()],
+            ),
+        );
+        write_plib_registry(
+            &root,
+            &PlibRegistry {
+                entries,
+                orig_entries: BTreeMap::new(),
+            },
+        )
+        .expect("seeding the registry succeeds");
+
+        let unneeded = find_unused_preserved_libs(
+            &root,
+            false,
+            &|_| false,
+            Some("dev-libs/oldapp-1.0"),
+            &BTreeMap::new(),
+        );
+        assert_eq!(
+            unneeded,
+            BTreeMap::from([(
+                "dev-libs/provider-1.0".to_string(),
+                BTreeSet::from(["/usr/lib/staleD.so".to_string()]),
+            )]),
+            "with the replaced instance excluded nothing consumes the lib"
+        );
+
+        let unneeded = find_unused_preserved_libs(&root, false, &|_| false, None, &BTreeMap::new());
+        assert!(
+            unneeded.is_empty(),
+            "without the exclusion the stale consumer keeps it (the corruption real excludes): {unneeded:?}"
+        );
+    }
+
+    /// Compiles a real `libA` (soname `libA.so.1`) and a real `libB`
+    /// (`DT_NEEDED libA.so.1`, soname `libB.so.1`) with the host `cc`
+    /// and installs both under the synthetic root's `/usr/lib` --
+    /// the same `gcc -shared -fPIC -Wl,-soname` shape the
+    /// `sonamebumplib` fixtures use, so `scanelf` (hence the orphan
+    /// branch under test) sees genuine ELF headers.
+    fn compile_linked_pair(tmp: &std::path::Path, root: &std::path::Path) {
+        let build = tmp.join("build");
+        std::fs::create_dir_all(&build).unwrap();
+        std::fs::write(build.join("a.c"), "int aval(void) { return 1; }\n").unwrap();
+        std::fs::write(
+            build.join("b.c"),
+            "extern int aval(void);\nint bval(void) { return aval(); }\n",
+        )
+        .unwrap();
+        let run = |args: &[&str]| {
+            let status = std::process::Command::new("cc")
+                .args(args)
+                .current_dir(&build)
+                .status()
+                .expect("host cc must exist for the orphan-scan test");
+            assert!(status.success(), "cc {args:?} must succeed");
+        };
+        run(&[
+            "-shared",
+            "-fPIC",
+            "-Wl,-soname,libA.so.1",
+            "-o",
+            "libA.so.1.0.0",
+            "a.c",
+        ]);
+        std::os::unix::fs::symlink("libA.so.1.0.0", build.join("libA.so")).unwrap();
+        run(&[
+            "-shared",
+            "-fPIC",
+            "-Wl,-soname,libB.so.1",
+            "-o",
+            "libB.so.1.0.0",
+            "b.c",
+            "-L.",
+            "-lA",
+        ]);
+        std::fs::create_dir_all(root.join("usr/lib")).unwrap();
+        std::fs::copy(
+            build.join("libA.so.1.0.0"),
+            root.join("usr/lib/libA.so.1.0.0"),
+        )
+        .unwrap();
+        std::fs::copy(
+            build.join("libB.so.1.0.0"),
+            root.join("usr/lib/libB.so.1.0.0"),
+        )
+        .unwrap();
+    }
+
+    /// Fix round 1 for review item 4, `preserve_paths` half (backlog
+    /// #178): real `LinkageMap.rebuild(preserve_paths=...)` scans the
+    /// merge-side just-preserved set, so a preserved library whose only
+    /// linkmap consumer is a just-preserved file -- indexed in no
+    /// `NEEDED.ELF.2` anywhere -- is kept, not deleted as unneeded.
+    /// Grounded in real `LinkageMap.rebuild` (the `preserve_paths`
+    /// parameter): without the feed the consumer is invisible to the
+    /// prune.
+    #[test]
+    fn prune_sees_just_preserved_files_missing_from_every_needed_elf2() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        compile_linked_pair(&tmp, &root);
+        // `libA` is indexed (hand-written provider entry, the way any
+        // still-installed owner's `NEEDED.ELF.2` would); `libB` appears
+        // in no `NEEDED.ELF.2` -- only the `preserve_paths` feed (real
+        // `LinkageMap.rebuild(preserve_paths=...)`) can show it to the
+        // prune.
+        let vdb_prov = root.join("var/db/pkg/dev-libs/provider-1.0");
+        std::fs::create_dir_all(&vdb_prov).unwrap();
+        std::fs::write(
+            vdb_prov.join("CONTENTS"),
+            "obj /usr/lib/libA.so.1.0.0 def 1\n",
+        )
+        .unwrap();
+        std::fs::write(
+            vdb_prov.join("NEEDED.ELF.2"),
+            "X86_64;/usr/lib/libA.so.1.0.0;libA.so.1;;\n",
+        )
+        .unwrap();
+        let mut entries = BTreeMap::new();
+        entries.insert(
+            "dev-libs/provider:0".to_string(),
+            (
+                "dev-libs/provider-1.0".to_string(),
+                "4".to_string(),
+                vec!["/usr/lib/libA.so.1.0.0".to_string()],
+            ),
+        );
+        write_plib_registry(
+            &root,
+            &PlibRegistry {
+                entries,
+                orig_entries: BTreeMap::new(),
+            },
+        )
+        .expect("seeding the registry succeeds");
+
+        let unneeded = find_unused_preserved_libs(&root, false, &|_| false, None, &BTreeMap::new());
+        assert_eq!(
+            unneeded,
+            BTreeMap::from([(
+                "dev-libs/provider-1.0".to_string(),
+                BTreeSet::from(["/usr/lib/libA.so.1.0.0".to_string()]),
+            )]),
+            "without the just-preserved feed the consumer is invisible"
+        );
+
+        let feed: BTreeMap<String, Vec<String>> = BTreeMap::from([(
+            "dev-libs/newapp-2.0".to_string(),
+            vec!["/usr/lib/libB.so.1.0.0".to_string()],
+        )]);
+        let unneeded = find_unused_preserved_libs(&root, false, &|_| false, None, &feed);
+        assert!(
+            unneeded.is_empty(),
+            "the just-preserved consumer keeps the lib alive: {unneeded:?}"
+        );
+        assert!(
+            root.join("usr/lib/libA.so.1.0.0").is_file(),
+            "nothing was deleted by the read-only probe above"
+        );
     }
 
     /// Sanity baseline (portuale's own "fixtures must actually
@@ -7248,7 +8405,7 @@ mod tests {
             &root,
             &PlibRegistry {
                 entries,
-                orig_empty: false,
+                orig_entries: BTreeMap::new(),
             },
         )
         .expect("seeding the registry succeeds");
@@ -7614,7 +8771,7 @@ mod tests {
     /// step (`ebuild_phases::run_commands_async`) -- actually lands in
     /// the real vdb entry, matching real `dblink.merge()`'s own
     /// `treewalk()` (`vartree.py:4912-4913`) copying it out of
-    /// `build-info` (see `write_vdb_entry`'s own doc comment for why
+    /// `build-info` (see `populate_vdb_tmp`'s own doc comment for why
     /// portuale copies only this one build-info file, not the whole
     /// directory). Installs a real, dynamically-linked ELF binary
     /// (`/bin/true`, whatever the real host machine actually has) so
