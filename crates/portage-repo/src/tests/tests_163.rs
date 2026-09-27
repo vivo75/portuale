@@ -135,6 +135,45 @@ fn abort_outcome_ghost_requirer_completes_despite_a_same_category_merge() {
     );
 }
 
+/// An installed-only requirer aborts as `UnsatisfiedAtom` with the
+/// recorded atom and the installed cpv.
+#[test]
+fn abort_outcome_installed_only_requirer_aborts_with_the_installed_cpv() {
+    let entries = vec![
+        entry_163(
+            "dev-libs",
+            "need",
+            PretendOutcome::NoVisibleCandidate,
+            &[("dev-libs", "oldie")],
+        ),
+        entry_163("dev-libs", "oldie", installed_163("1.0"), &[]),
+    ];
+    let mut atoms = HashMap::new();
+    atoms.insert(
+        ("dev-libs".to_string(), "need".to_string()),
+        ">=dev-libs/need-2.0".to_string(),
+    );
+    match abort_outcome(AbortOutcomeArgs {
+        entries: &entries,
+        masked_deps: &[],
+        circular_deps: &[],
+        cycle_display: &[],
+        cycle_display_idx: &[],
+        nvc_dep_atoms: &atoms,
+        virtual_cycle: &[],
+    }) {
+        ResolveOutcome::Aborted {
+            reason: AbortReason::UnsatisfiedAtom { atom, parent_cpv },
+            partial,
+        } => {
+            assert_eq!(atom, ">=dev-libs/need-2.0");
+            assert_eq!(parent_cpv, "dev-libs/oldie-1.0");
+            assert!(partial.is_empty());
+        }
+        other => panic!("expected UnsatisfiedAtom, got {other:?}"),
+    }
+}
+
 /// A ghost requirer still completes with a same-category installed
 /// decoy present.
 #[test]
@@ -274,6 +313,40 @@ fn abort_outcome_empty_graph_completes() {
     );
 }
 
+/// A reported cycle aborts as `UnserializableCycle` with the
+/// display members, and `partial` holds exactly the matching
+/// entries in display order -- a merge-bound non-member stays
+/// out.
+#[test]
+fn abort_outcome_cycle_members_collect_the_matching_partial_in_order() {
+    let entries = vec![
+        entry_163("dev-libs", "a", new_163("1.0"), &[]),
+        entry_163("dev-libs", "b", new_163("2.0"), &[]),
+        entry_163("dev-libs", "c", new_163("3.0"), &[]),
+    ];
+    let display = vec!["dev-libs/b-2.0".to_string(), "dev-libs/a-1.0".to_string()];
+    match abort_outcome(AbortOutcomeArgs {
+        entries: &entries,
+        masked_deps: &[],
+        circular_deps: &[vec!["x".to_string()]],
+        cycle_display: &display,
+        cycle_display_idx: &[],
+        nvc_dep_atoms: &HashMap::new(),
+        virtual_cycle: &[],
+    }) {
+        ResolveOutcome::Aborted {
+            reason: AbortReason::UnserializableCycle { members },
+            partial,
+        } => {
+            assert_eq!(members, display);
+            assert_eq!(partial.len(), 2);
+            assert_eq!(partial[0].package, "b");
+            assert_eq!(partial[1].package, "a");
+        }
+        other => panic!("expected UnserializableCycle, got {other:?}"),
+    }
+}
+
 /// Fresh unique scratch dir per test (vdb + repo live under it, so
 /// the per-root memo caches never see a reused path). Mirrors
 /// `tests_162::dir_162`, which must stay untouched.
@@ -373,6 +446,106 @@ fn repo_pkgs_163_ru(dir: &Path, pkgs: &[(&str, &str, &str, &str, &str)]) -> Vec<
 
 fn owner_163(cat: &str, pkg: &str) -> (String, String) {
     (cat.to_string(), pkg.to_string())
+}
+
+// ---- `use_unsat_parent_row` (Portage's parent-flag flip row). ----
+
+/// An `=`-conditional use-dep on a flag the parent has off (the
+/// child has it on) suggests `+flag` with the parent's cpv.
+/// Portage: dep/__init__.py violated_conditionals
+#[test]
+fn use_unsat_parent_row_suggests_enabling_an_off_flag() {
+    let dir = dir_163("parent-on");
+    let repos = repo_pkgs_163_ru(
+        &dir,
+        &[
+            ("dev-libs/parent", "1.0", "0", "flipme", ""),
+            ("dev-libs/child", "1.0", "0", "+flipme", ""),
+        ],
+    );
+    let config = cfg_163();
+    let entries = vec![entry_163("dev-libs", "parent", new_163("1.0"), &[])];
+    assert_eq!(
+        use_unsat_parent_row(UseUnsatParentRowArgs {
+            repos: &repos,
+            root: dir.as_path(),
+            entries: &entries,
+            display_atom: "dev-libs/child[flipme=]",
+            owner: Some(&owner_163("dev-libs", "parent")),
+            config: &config
+        }),
+        Some((
+            "dev-libs/parent-1.0::testrepo".to_string(),
+            vec!["Change USE: +flipme".to_string()],
+        ))
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A conditional use-dep on a default-on flag the parent has on
+/// suggests `-flag`.
+#[test]
+fn use_unsat_parent_row_suggests_disabling_an_on_flag() {
+    let dir = dir_163("parent-off");
+    let repos = repo_pkgs_163_ru(
+        &dir,
+        &[
+            ("dev-libs/parent", "1.0", "0", "+keepoff", ""),
+            ("dev-libs/child", "1.0", "0", "keepoff", ""),
+        ],
+    );
+    let config = cfg_163();
+    let entries = vec![entry_163("dev-libs", "parent", new_163("1.0"), &[])];
+    assert_eq!(
+        use_unsat_parent_row(UseUnsatParentRowArgs {
+            repos: &repos,
+            root: dir.as_path(),
+            entries: &entries,
+            display_atom: "dev-libs/child[keepoff?]",
+            owner: Some(&owner_163("dev-libs", "parent")),
+            config: &config
+        }),
+        Some((
+            "dev-libs/parent-1.0::testrepo".to_string(),
+            vec!["Change USE: -keepoff".to_string()],
+        ))
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An installed requesting parent flips on its own vdb-recorded USE
+/// (Portage `_pkg_use_enabled` for a built package).
+#[test]
+fn use_unsat_parent_row_suggests_enabling_an_installed_parents_off_flag() {
+    let dir = dir_163("parent-installed");
+    let repos = repo_pkgs_163_ru(
+        &dir,
+        &[
+            ("dev-libs/parent", "1.0", "0", "flip", ""),
+            ("dev-libs/child", "1.0", "0", "+flip", ""),
+        ],
+    );
+    let config = cfg_163();
+    let vdb = dir.join("var/db/pkg/dev-libs/parent-1.0");
+    std::fs::create_dir_all(&vdb).unwrap();
+    std::fs::write(vdb.join("USE"), "\n").unwrap();
+    std::fs::write(vdb.join("IUSE"), "flip\n").unwrap();
+    let entries = vec![entry_163("dev-libs", "parent", installed_163("1.0"), &[])];
+    assert_eq!(
+        use_unsat_parent_row(UseUnsatParentRowArgs {
+            repos: &repos,
+            root: dir.as_path(),
+            entries: &entries,
+            display_atom: "dev-libs/child[flip=]",
+            owner: Some(&owner_163("dev-libs", "parent")),
+            config: &config
+        }),
+        Some((
+            "dev-libs/parent-1.0::testrepo".to_string(),
+            vec!["Change USE: +flip".to_string()],
+        ))
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A merge-bound chain node whose dep sits behind `qml? ( ... )`
@@ -554,6 +727,73 @@ fn use_unsat_parent_row_returns_none_without_an_owner_or_conditional_flags() {
             config: &config
         }),
         None
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A flip that would newly violate the parent's `REQUIRED_USE`
+/// appends the violation note.
+#[test]
+fn use_unsat_parent_row_notes_a_newly_violated_required_use() {
+    let dir = dir_163("parent-req");
+    let repos = repo_pkgs_163_ru(
+        &dir,
+        &[
+            (
+                "dev-libs/parent",
+                "1.0",
+                "0",
+                "flipme other",
+                "flipme? ( other )",
+            ),
+            ("dev-libs/child", "1.0", "0", "+flipme", ""),
+        ],
+    );
+    let config = cfg_163();
+    let entries = vec![entry_163("dev-libs", "parent", new_163("1.0"), &[])];
+    assert_eq!(
+        use_unsat_parent_row(UseUnsatParentRowArgs { repos: &repos, root: dir.as_path(), entries: &entries, display_atom: "dev-libs/child[flipme=]", owner: Some(&owner_163("dev-libs", "parent")), config: &config }),
+        Some((
+            "dev-libs/parent-1.0::testrepo".to_string(),
+            vec!["Change USE: +flipme, this change violates use flag constraints defined by dev-libs/parent-1.0: 'flipme? ( other )'".to_string()],
+        ))
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A flip that keeps `REQUIRED_USE` satisfied carries no note: the
+/// `&&` conjunction must not fire on `old_sat` alone.
+#[test]
+fn use_unsat_parent_row_omits_the_note_when_required_use_stays_satisfied() {
+    let dir = dir_163("parent-req-ok");
+    let repos = repo_pkgs_163_ru(
+        &dir,
+        &[
+            (
+                "dev-libs/parent",
+                "1.0",
+                "0",
+                "flipme",
+                "flipme? ( flipme )",
+            ),
+            ("dev-libs/child", "1.0", "0", "+flipme", ""),
+        ],
+    );
+    let config = cfg_163();
+    let entries = vec![entry_163("dev-libs", "parent", new_163("1.0"), &[])];
+    assert_eq!(
+        use_unsat_parent_row(UseUnsatParentRowArgs {
+            repos: &repos,
+            root: dir.as_path(),
+            entries: &entries,
+            display_atom: "dev-libs/child[flipme=]",
+            owner: Some(&owner_163("dev-libs", "parent")),
+            config: &config
+        }),
+        Some((
+            "dev-libs/parent-1.0::testrepo".to_string(),
+            vec!["Change USE: +flipme".to_string()],
+        ))
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -820,6 +1060,38 @@ fn refresh_entry_use_display_force_shows_a_dropped_reinstall_trigger_flag() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Entries for another cp are skipped, even when their version
+/// matches a candidate of the refreshed cp: the `||` conjunction
+/// must skip on either mismatch.
+#[test]
+fn refresh_entry_use_display_skips_entries_for_another_cp() {
+    let dir = dir_163("refresh-skip");
+    let repos = repo_pkgs_163(
+        &dir,
+        &[("dev-libs/rdisp", "1.0", "0", "alpha", "", "amd64")],
+    );
+    let config = cfg_163();
+    let mut entries = vec![
+        entry_163("dev-libs", "rdisp", new_163("1.0"), &[]),
+        entry_163("dev-libs", "other", new_163("1.0"), &[]),
+        entry_163("sys-libs", "rdisp", new_163("1.0"), &[]),
+    ];
+    refresh_entry_use_display(
+        &mut entries,
+        &repos,
+        &dir,
+        &owner_163("dev-libs", "rdisp"),
+        &config,
+    );
+    assert_eq!(
+        entries[0].use_flags_display,
+        vec![("alpha".to_string(), false)]
+    );
+    assert!(entries[1].use_flags_display.is_empty());
+    assert!(entries[2].use_flags_display.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The candidate is picked by exact version: with two versions in
 /// the tree the display comes from the entry's own, not the first
 /// non-matching one.
@@ -846,6 +1118,30 @@ fn refresh_entry_use_display_picks_the_candidate_at_the_entry_version() {
         entries[0].use_flags_display,
         vec![("newflag".to_string(), false)]
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Settled entries (`AlreadyInstalled`) keep their empty display:
+/// the `_` arm skips them.
+#[test]
+fn refresh_entry_use_display_skips_settled_entries() {
+    let dir = dir_163("refresh-settled");
+    let repos = repo_pkgs_163(
+        &dir,
+        &[("dev-libs/rdisp", "1.0", "0", "alpha", "", "amd64")],
+    );
+    let config = cfg_163();
+    let mut entries = vec![entry_163("dev-libs", "rdisp", installed_163("1.0"), &[])];
+    refresh_entry_use_display(
+        &mut entries,
+        &repos,
+        &dir,
+        &owner_163("dev-libs", "rdisp"),
+        &config,
+    );
+    assert!(entries[0].use_flags_display.is_empty());
+    assert!(entries[0].use_expand_display.is_empty());
+    assert!(entries[0].use_expand_display_p.is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
 // ---- shared resolve_pretend harness ----
@@ -955,6 +1251,634 @@ fn binpkg_163(cpv: &str, slot: &str, extra: &[(&str, &str)]) -> HashMap<String, 
         m.insert(k.to_string(), v.to_string());
     }
     m
+}
+
+// ---- `resolve_pretend` (single-atom pretend decision). ----
+
+/// A fresh top-level atom resolves `New` at the best visible
+/// version.
+#[test]
+fn resolve_pretend_fresh_top_level_atom_resolves_new_at_the_best_version() {
+    let dir = dir_163("rp-new");
+    let repos = repo_pkgs_163(
+        &dir,
+        &[
+            ("dev-libs/rp", "1.0", "0", "", "", "amd64"),
+            ("dev-libs/rp", "2.0", "0", "", "", "amd64"),
+        ],
+    );
+    let config = cfg_163();
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/rp", &RpOpts163::top()),
+        new_163("2.0")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `--emptytree` rebuilds everything: an installed same-version
+/// top-level atom with a newer tree version resolves `Upgrade`
+/// while a non-empty selective resolve keeps the installed one.
+#[test]
+fn resolve_pretend_emptytree_upgrades_past_the_installed_version() {
+    for (tag, empty, selective, expected) in [
+        (
+            "empty",
+            true,
+            true,
+            PretendOutcome::Upgrade {
+                from: "1.0".to_string(),
+                to: "2.0".to_string(),
+            },
+        ),
+        ("selective", false, true, installed_163("1.0")),
+    ] {
+        let dir = dir_163(&format!("rp-empty-{tag}"));
+        let repos = repo_pkgs_163(
+            &dir,
+            &[
+                ("dev-libs/rp", "1.0", "0", "", "", "amd64"),
+                ("dev-libs/rp", "2.0", "0", "", "", "amd64"),
+            ],
+        );
+        install_163(&dir, "dev-libs", "rp-1.0", "0", &[]);
+        let config = cfg_163();
+        let mut o = RpOpts163::top();
+        o.empty = empty;
+        o.selective = selective;
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+            expected,
+            "{tag}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// A non-empty selective top-level resolve over an installed
+/// version with a newer tree version keeps the installed one.
+#[test]
+fn resolve_pretend_selective_top_level_keeps_the_installed_version() {
+    let dir = dir_163("rp-sel");
+    let repos = repo_pkgs_163(
+        &dir,
+        &[
+            ("dev-libs/rp", "1.0", "0", "", "", "amd64"),
+            ("dev-libs/rp", "2.0", "0", "", "", "amd64"),
+        ],
+    );
+    install_163(&dir, "dev-libs", "rp-1.0", "0", &[]);
+    let config = cfg_163();
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/rp", &RpOpts163::top()),
+        installed_163("1.0")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `--usepkgonly` pulls a binary-only package from the staged
+/// index.
+#[test]
+fn resolve_pretend_usepkgonly_pulls_a_binary_only_package() {
+    let dir = dir_163("rp-binonly");
+    let repos = repo_pkgs_163(&dir, &[]);
+    let mut config = cfg_163();
+    config.scanned_binpkgs = Some(vec![binpkg_163("dev-libs/rpbin-1.0", "0", &[])]);
+    let mut o = RpOpts163::top();
+    o.usepkgonly = true;
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/rpbin", &o),
+        new_163("1.0")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The installed fallback under `--usepkg`/`--usepkgonly` covers a
+/// dependency whose only satisfier is installed (Portage restricts
+/// the merge pool, not installed-satisfaction).
+#[test]
+fn resolve_pretend_usepkg_dependency_falls_back_to_the_installed_version() {
+    let dir = dir_163("rp-usefallback");
+    let repos = repo_pkgs_163(&dir, &[]);
+    install_163(&dir, "dev-libs", "rp-1.0", "0", &[]);
+    let config = cfg_163();
+    let mut o = RpOpts163::dep();
+    o.usepkg = true;
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+        installed_163("1.0")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A dependency whose installed version still satisfies the atom
+/// is kept without searching for a newer one (Portage's
+/// `avoid_update` early return).
+#[test]
+fn resolve_pretend_dependency_avoids_updating_a_satisfying_installed_version() {
+    let dir = dir_163("rp-avoid");
+    let repos = repo_pkgs_163(
+        &dir,
+        &[
+            ("dev-libs/rp", "1.0", "0", "", "", "amd64"),
+            ("dev-libs/rp", "2.0", "0", "", "", "amd64"),
+        ],
+    );
+    install_163(&dir, "dev-libs", "rp-1.0", "0", &[]);
+    let config = cfg_163();
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/rp", &RpOpts163::dep()),
+        installed_163("1.0")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Each widened early-return guard changes the outcome on its own:
+/// `--update`, `--emptytree`, and a top-level atom each bypass it.
+#[test]
+fn resolve_pretend_early_return_bypass_flags_each_upgrade_past_installed() {
+    for (tag, o) in [
+        (
+            "update",
+            RpOpts163 {
+                update: true,
+                ..RpOpts163::dep()
+            },
+        ),
+        (
+            "empty",
+            RpOpts163 {
+                empty: true,
+                ..RpOpts163::dep()
+            },
+        ),
+        (
+            "top",
+            RpOpts163 {
+                is_top_level: true,
+                selective: false,
+                ..RpOpts163::dep()
+            },
+        ),
+    ] {
+        let dir = dir_163(&format!("rp-bypass-{tag}"));
+        let repos = repo_pkgs_163(
+            &dir,
+            &[
+                ("dev-libs/rp", "1.0", "0", "", "", "amd64"),
+                ("dev-libs/rp", "2.0", "0", "", "", "amd64"),
+            ],
+        );
+        install_163(&dir, "dev-libs", "rp-1.0", "0", &[]);
+        let config = cfg_163();
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+            PretendOutcome::Upgrade {
+                from: "1.0".to_string(),
+                to: "2.0".to_string(),
+            },
+            "{tag}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+/// A plain matching candidate is usable: no autounmask fallback
+/// runs.
+#[test]
+fn resolve_pretend_plain_matching_candidate_needs_no_fallback() {
+    let dir = dir_163("rp-usable");
+    let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "", "", "amd64")]);
+    let config = cfg_163();
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/rp", &RpOpts163::top()),
+        new_163("1.0")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A keyword-masked-only candidate resolves through the
+/// `--autounmask` keyword level.
+#[test]
+fn resolve_pretend_autounmask_keywords_relaxes_a_masked_candidate() {
+    let dir = dir_163("rp-aukw");
+    let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "", "", "~amd64")]);
+    let config = cfg_163();
+    let mut o = RpOpts163::top();
+    o.autounmask_keywords = true;
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+        new_163("1.0")
+    );
+    // Without the flag the same candidate is invisible.
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/rp", &RpOpts163::top()),
+        PretendOutcome::NoVisibleCandidate
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A positive extra constraint narrows the match; a negative one
+/// hides its version.
+#[test]
+fn resolve_pretend_extra_constraints_narrow_and_hide_versions() {
+    for (tag, extra, expected) in [
+        (
+            "positive",
+            vec!["=dev-libs/rp-1.0".to_string()],
+            new_163("1.0"),
+        ),
+        (
+            "negative",
+            vec!["!=dev-libs/rp-2.0".to_string()],
+            new_163("1.0"),
+        ),
+    ] {
+        let dir = dir_163(&format!("rp-extra-{tag}"));
+        let repos = repo_pkgs_163(
+            &dir,
+            &[
+                ("dev-libs/rp", "1.0", "0", "", "", "amd64"),
+                ("dev-libs/rp", "2.0", "0", "", "", "amd64"),
+            ],
+        );
+        let config = cfg_163();
+        let mut o = RpOpts163::top();
+        o.extra_constraints = extra;
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+            expected,
+            "{tag}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// A vacuous negative extra constraint changes nothing.
+#[test]
+fn resolve_pretend_vacuous_negative_extra_constraint_resolves() {
+    let dir = dir_163("rp-extravac");
+    let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "", "", "amd64")]);
+    let config = cfg_163();
+    let mut o = RpOpts163::top();
+    o.extra_constraints = vec!["!=dev-libs/rp-9.9".to_string()];
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+        new_163("1.0")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A `[flag]` atom against a flippable candidate resolves through
+/// `--autounmask-use`, and without the flag it is
+/// `NoVisibleCandidate`.
+#[test]
+fn resolve_pretend_use_dep_atom_resolves_only_through_autounmask_use() {
+    for (tag, autounmask_use, expected) in [
+        ("flip", true, new_163("1.0")),
+        ("noflip", false, PretendOutcome::NoVisibleCandidate),
+    ] {
+        let dir = dir_163(&format!("rp-usedep-{tag}"));
+        let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "feat", "", "amd64")]);
+        let config = cfg_163();
+        let mut o = RpOpts163::top();
+        o.autounmask_use = autounmask_use;
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp[feat]", &o),
+            expected,
+            "{tag}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// A `[flag]` atom for a flag no candidate has is unfixable even
+/// with `--autounmask-use`.
+#[test]
+fn resolve_pretend_unfixable_use_dep_atom_stays_unresolved() {
+    let dir = dir_163("rp-usebogus");
+    let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "feat", "", "amd64")]);
+    let config = cfg_163();
+    let mut o = RpOpts163::top();
+    o.autounmask_use = true;
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/rp[bogus]", &o),
+        PretendOutcome::NoVisibleCandidate
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `--useoldpkg-atoms` restricts the match to built candidates,
+/// and a matching binary is exempt from the ebuild-visibility check.
+#[test]
+fn resolve_pretend_useoldpkg_prefers_and_exempts_built_candidates() {
+    let dir = dir_163("rp-oldpkg");
+    let repos = repo_pkgs_163(&dir, &[("dev-libs/opkg", "2.0", "0", "", "", "amd64")]);
+    let mut config = cfg_163();
+    config.scanned_binpkgs = Some(vec![binpkg_163("dev-libs/opkg-1.0", "0", &[])]);
+    let mut o = RpOpts163::top();
+    o.usepkg = true;
+    // Without the atoms the newer ebuild wins.
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/opkg", &o),
+        new_163("2.0")
+    );
+    set_useoldpkg_atoms(vec!["dev-libs/opkg".to_string()]);
+    // With the atoms the older built candidate wins.
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/opkg", &o),
+        new_163("1.0")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    // Same atoms: a binary with no ebuild at its version survives
+    // the visibility check through the exemption.
+    let dir = dir_163("rp-oldexempt");
+    let repos = repo_pkgs_163(&dir, &[("dev-libs/opkg", "1.0", "0", "", "", "amd64")]);
+    let mut config = cfg_163();
+    config.scanned_binpkgs = Some(vec![binpkg_163("dev-libs/opkg-2.0", "0", &[])]);
+    let mut o = RpOpts163::top();
+    o.selective = false;
+    o.usepkg = true;
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/opkg", &o),
+        new_163("2.0")
+    );
+    set_useoldpkg_atoms(Vec::new());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An excluded installed version is left as-is before any
+/// reinstall check runs.
+#[test]
+fn resolve_pretend_excluded_installed_version_stays_installed_under_newuse() {
+    let dir = dir_163("rp-excl");
+    let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "a b", "", "amd64")]);
+    install_163(
+        &dir,
+        "dev-libs",
+        "rp-1.0",
+        "0",
+        &[("IUSE", "a"), ("USE", "a")],
+    );
+    let config = cfg_163();
+    let mut o = RpOpts163::dep();
+    o.newuse = true;
+    o.excluded = vec!["dev-libs/rp".to_string()];
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+        installed_163("1.0")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A same-version install in another slot is a `New` into a fresh
+/// slot, not an installed match: `candidate_is_installed` needs
+/// both version and slot.
+#[test]
+fn resolve_pretend_same_version_in_another_slot_is_a_new_slot_install() {
+    let dir = dir_163("rp-newslot");
+    let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "", "", "amd64")]);
+    install_163(&dir, "dev-libs", "rp-1.0", "1", &[]);
+    let config = cfg_163();
+    let mut o = RpOpts163::top();
+    o.selective = false;
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+        new_163("1.0")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An installed same-version same-slot dependency atom is
+/// `AlreadyInstalled`: `candidate_is_installed` needs both `==`s.
+#[test]
+fn resolve_pretend_installed_same_version_is_already_installed() {
+    let dir = dir_163("rp-ai");
+    let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "", "", "amd64")]);
+    install_163(&dir, "dev-libs", "rp-1.0", "0", &[]);
+    let config = cfg_163();
+    let mut o = RpOpts163::dep();
+    o.update = true;
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+        installed_163("1.0")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The `avoid_update` early return honours a hiding negative
+/// extra constraint: the installed version it rejects falls
+/// through to the ordinary search.
+#[test]
+fn resolve_pretend_early_return_honours_a_hiding_negative_constraint() {
+    let dir = dir_163("rp-extrahide");
+    let repos = repo_pkgs_163(
+        &dir,
+        &[
+            ("dev-libs/rp", "1.0", "0", "", "", "amd64"),
+            ("dev-libs/rp", "2.0", "0", "", "", "amd64"),
+        ],
+    );
+    install_163(&dir, "dev-libs", "rp-1.0", "0", &[]);
+    let config = cfg_163();
+    let mut o = RpOpts163::dep();
+    o.extra_constraints = vec!["!=dev-libs/rp-1.0".to_string()];
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+        PretendOutcome::Upgrade {
+            from: "1.0".to_string(),
+            to: "2.0".to_string(),
+        }
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The `avoid_update` early return honours a pinning positive
+/// extra constraint even when the tree candidate is masked: the
+/// installed version it keeps is reported as-is.
+#[test]
+fn resolve_pretend_early_return_honours_a_pinning_positive_constraint() {
+    let dir = dir_163("rp-extrapin");
+    let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "", "", "~amd64")]);
+    install_163(&dir, "dev-libs", "rp-1.0", "0", &[]);
+    let config = cfg_163();
+    let mut o = RpOpts163::dep();
+    o.extra_constraints = vec!["=dev-libs/rp-1.0".to_string()];
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+        installed_163("1.0")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A visible ebuild matching the atom disqualifies a binary with
+/// no ebuild at its version (`_equiv_ebuild_visible`).
+#[test]
+fn resolve_pretend_visible_ebuild_disqualifies_a_version_skewed_binary() {
+    let dir = dir_163("rp-equiv");
+    let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "", "", "amd64")]);
+    let mut config = cfg_163();
+    config.scanned_binpkgs = Some(vec![binpkg_163("dev-libs/rp-2.0", "0", &[])]);
+    let mut o = RpOpts163::top();
+    o.usepkg = true;
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+        new_163("1.0")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+/// A top-level `[flag]` atom the tree cannot currently satisfy
+/// upgrades past a satisfying installed version (Portage keeps the
+/// installed one only for dependencies).
+#[test]
+fn resolve_pretend_top_level_use_dep_atom_upgrades_past_a_satisfying_installed_version() {
+    let dir = dir_163("rp-74top");
+    let repos = repo_pkgs_163(
+        &dir,
+        &[("dev-libs/rp", "2.0", "0", "wantflag", "", "amd64")],
+    );
+    install_163(
+        &dir,
+        "dev-libs",
+        "rp-1.0",
+        "0",
+        &[("IUSE", "wantflag"), ("USE", "wantflag")],
+    );
+    let config = cfg_163();
+    let mut o = RpOpts163::top();
+    o.update = true;
+    o.autounmask_use = true;
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/rp[wantflag]", &o),
+        PretendOutcome::Upgrade {
+            from: "1.0".to_string(),
+            to: "2.0".to_string(),
+        }
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A dependency `[flag]` atom the tree satisfies upgrades past a
+/// satisfying installed version under `--update`.
+#[test]
+fn resolve_pretend_satisfiable_use_dep_atom_upgrades_under_update() {
+    let dir = dir_163("rp-74sat");
+    let repos = repo_pkgs_163(
+        &dir,
+        &[("dev-libs/rp", "2.0", "0", "+wantflag", "", "amd64")],
+    );
+    install_163(
+        &dir,
+        "dev-libs",
+        "rp-1.0",
+        "0",
+        &[("IUSE", "wantflag"), ("USE", "wantflag")],
+    );
+    let config = cfg_163();
+    let mut o = RpOpts163::dep();
+    o.update = true;
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/rp[wantflag]", &o),
+        PretendOutcome::Upgrade {
+            from: "1.0".to_string(),
+            to: "2.0".to_string(),
+        }
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A dependency `[flag]` atom the tree cannot currently satisfy
+/// keeps the satisfying installed version under `--update`
+/// (Portage's `_want_installed_pkg` keep).
+#[test]
+fn resolve_pretend_unsatisfiable_use_dep_atom_keeps_the_installed_version() {
+    let dir = dir_163("rp-74keep");
+    let repos = repo_pkgs_163(
+        &dir,
+        &[("dev-libs/rp", "2.0", "0", "wantflag", "", "amd64")],
+    );
+    install_163(
+        &dir,
+        "dev-libs",
+        "rp-1.0",
+        "0",
+        &[("IUSE", "wantflag"), ("USE", "wantflag")],
+    );
+    let config = cfg_163();
+    let mut o = RpOpts163::dep();
+    o.update = true;
+    o.autounmask_use = true;
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/rp[wantflag]", &o),
+        installed_163("1.0")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The `!update` shortcut's inner disjunction: a non-selective
+/// top-level atom, an `--emptytree` dependency, and `--update` each
+/// skip it and upgrade past the installed version.
+#[test]
+fn resolve_pretend_update_shortcut_bypass_shapes_upgrade_past_installed() {
+    // Baseline: plain dependency keeps the installed version.
+    let dir = dir_163("rp-upd-base");
+    let repos = repo_pkgs_163(
+        &dir,
+        &[
+            ("dev-libs/rp", "1.0", "0", "", "", "amd64"),
+            ("dev-libs/rp", "2.0", "0", "", "", "amd64"),
+        ],
+    );
+    install_163(&dir, "dev-libs", "rp-1.0", "0", &[]);
+    let config = cfg_163();
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/rp", &RpOpts163::dep()),
+        installed_163("1.0")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    // Each bypass upgrades.
+    for (tag, o) in [
+        (
+            "top",
+            RpOpts163 {
+                is_top_level: true,
+                selective: false,
+                ..RpOpts163::dep()
+            },
+        ),
+        (
+            "empty",
+            RpOpts163 {
+                empty: true,
+                ..RpOpts163::dep()
+            },
+        ),
+        (
+            "update",
+            RpOpts163 {
+                update: true,
+                ..RpOpts163::dep()
+            },
+        ),
+    ] {
+        let dir = dir_163(&format!("rp-upd-{tag}"));
+        let repos = repo_pkgs_163(
+            &dir,
+            &[
+                ("dev-libs/rp", "1.0", "0", "", "", "amd64"),
+                ("dev-libs/rp", "2.0", "0", "", "", "amd64"),
+            ],
+        );
+        install_163(&dir, "dev-libs", "rp-1.0", "0", &[]);
+        let config = cfg_163();
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+            PretendOutcome::Upgrade {
+                from: "1.0".to_string(),
+                to: "2.0".to_string(),
+            },
+            "{tag}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 /// `--newuse` with a gained flag reinstalls with the trigger set:
@@ -1275,6 +2199,186 @@ fn resolve_pretend_reinstall_disjunction_fires_on_each_arm_alone() {
     }
 }
 
+/// A selective top-level atom under `--update` keeps the
+/// installed version: the top-level arm needs `!selective`.
+#[test]
+fn resolve_pretend_top_level_arm_needs_non_selective() {
+    let dir = dir_163("rp-rcond-upd");
+    let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "", "", "amd64")]);
+    install_163(&dir, "dev-libs", "rp-1.0", "0", &[]);
+    let config = cfg_163();
+    let mut o = RpOpts163::dep();
+    o.is_top_level = true;
+    o.selective = true;
+    o.update = true;
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+        installed_163("1.0")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The `!update` shortcut is reached past a non-empty exclude
+/// list: an excluded-but-unmatched dependency still keeps its
+/// installed version through the shortcut.
+#[test]
+fn resolve_pretend_update_shortcut_holds_past_an_unmatched_exclude() {
+    let dir = dir_163("rp-upd-excl");
+    let repos = repo_pkgs_163(
+        &dir,
+        &[
+            ("dev-libs/rp", "1.0", "0", "", "", "amd64"),
+            ("dev-libs/rp", "2.0", "0", "", "", "amd64"),
+        ],
+    );
+    install_163(&dir, "dev-libs", "rp-1.0", "0", &[]);
+    let config = cfg_163();
+    let mut o = RpOpts163::dep();
+    o.selective = false;
+    o.excluded = vec!["dev-libs/other".to_string()];
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+        installed_163("1.0")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Upgrade and downgrade are decided against the installed version
+/// in the candidate's own slot: newer upgrades, older downgrades,
+/// other-slot installs are ignored.
+#[test]
+fn resolve_pretend_upgrade_and_downgrade_follow_the_own_slot_version() {
+    for (tag, tree, vdb, expected) in [
+        (
+            "upgrade",
+            vec![
+                ("dev-libs/rp", "1.0", "0", "", "", "amd64"),
+                ("dev-libs/rp", "2.0", "0", "", "", "amd64"),
+            ],
+            ("rp-1.0", "0"),
+            PretendOutcome::Upgrade {
+                from: "1.0".to_string(),
+                to: "2.0".to_string(),
+            },
+        ),
+        (
+            "downgrade",
+            vec![("dev-libs/rp", "1.0", "0", "", "", "amd64")],
+            ("rp-2.0", "0"),
+            PretendOutcome::Downgrade {
+                from: "2.0".to_string(),
+                to: "1.0".to_string(),
+            },
+        ),
+        (
+            "other-slot",
+            vec![
+                ("dev-libs/rp", "1.0", "0", "", "", "amd64"),
+                ("dev-libs/rp", "1.5", "1", "", "", "amd64"),
+            ],
+            ("rp-1.0", "0"),
+            new_163("1.5"),
+        ),
+    ] {
+        let dir = dir_163(&format!("rp-slotver-{tag}"));
+        let repos = repo_pkgs_163(&dir, &tree);
+        install_163(&dir, "dev-libs", vdb.0, vdb.1, &[]);
+        let config = cfg_163();
+        let mut o = RpOpts163::dep();
+        o.update = true;
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+            expected,
+            "{tag}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+/// `--binpkg-respect-use` (and `--newuse`, which opens the same
+/// gate) drops a binary built against different USE; with no ebuild
+/// matching, the gate alone decides.
+#[test]
+fn resolve_pretend_respect_use_drops_a_use_divergent_binary() {
+    let dir = dir_163("rp-respect");
+    let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "", "", "~amd64")]);
+    let mut config = cfg_163();
+    config.scanned_binpkgs = Some(vec![binpkg_163(
+        "dev-libs/rp-2.0",
+        "0",
+        &[("IUSE", "feat"), ("USE", "feat")],
+    )]);
+    let mut o = RpOpts163::top();
+    o.selective = false;
+    o.usepkg = true;
+    o.newuse = true;
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+        PretendOutcome::NoVisibleCandidate
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The respect-use comparison is against the ebuild at the
+/// binary's own version: a same-version ebuild whose IUSE covers
+/// the baked USE keeps the binary in a skewed-slot shape.
+#[test]
+fn resolve_pretend_respect_use_compares_against_the_same_version_ebuild() {
+    let dir = dir_163("rp-respectver");
+    let repos = repo_pkgs_163(
+        &dir,
+        &[
+            ("dev-libs/rp", "1.0", "0", "", "", "amd64"),
+            ("dev-libs/rp", "2.0", "0", "+a", "", "amd64"),
+        ],
+    );
+    install_163(
+        &dir,
+        "dev-libs",
+        "rp-2.0",
+        "0",
+        &[("IUSE", "a"), ("USE", "a")],
+    );
+    let mut config = cfg_163();
+    config.scanned_binpkgs = Some(vec![binpkg_163(
+        "dev-libs/rp-2.0",
+        "1",
+        &[("IUSE", "a"), ("USE", "a")],
+    )]);
+    let mut o = RpOpts163::top();
+    o.selective = false;
+    o.usepkg = true;
+    o.newuse = true;
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+        new_163("2.0")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A binary with no ebuild at its version is compared without one:
+/// with no visible ebuild the filter stays out, so a genuine USE
+/// divergence still drops it.
+#[test]
+fn resolve_pretend_lonely_binary_with_divergent_use_is_dropped() {
+    let dir = dir_163("rp-lonely");
+    let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "+a", "", "~amd64")]);
+    let mut config = cfg_163();
+    config.scanned_binpkgs = Some(vec![binpkg_163(
+        "dev-libs/rp-2.0",
+        "0",
+        &[("IUSE", "a"), ("USE", "a")],
+    )]);
+    let mut o = RpOpts163::top();
+    o.selective = false;
+    o.usepkg = true;
+    o.newuse = true;
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+        PretendOutcome::NoVisibleCandidate
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `--binpkg-changed-deps` drops a binary built against different
 /// dependencies: the stale binary must not win over the installed
 /// ebuild.
@@ -1309,6 +2413,67 @@ fn resolve_pretend_changed_deps_drops_a_stale_binary() {
             new_repo: false,
             slot_operator_rebuild: false,
         }
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A keyword-masked ebuild does not make `some_ebuild_matches`:
+/// the visible newer binary still resolves.
+#[test]
+fn resolve_pretend_masked_ebuild_does_not_match_for_visibility() {
+    let dir = dir_163("rp-masketouch");
+    let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "", "", "~amd64")]);
+    let mut config = cfg_163();
+    config.scanned_binpkgs = Some(vec![binpkg_163("dev-libs/rp-2.0", "0", &[])]);
+    let mut o = RpOpts163::top();
+    o.selective = false;
+    o.usepkg = true;
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+        new_163("2.0")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A version-pinned atom does not match a newer ebuild: the
+/// matching older binary still resolves.
+#[test]
+fn resolve_pretend_pinned_atom_does_not_match_a_newer_ebuild() {
+    let dir = dir_163("rp-pintouch");
+    let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "2.0", "0", "", "", "amd64")]);
+    let mut config = cfg_163();
+    config.scanned_binpkgs = Some(vec![binpkg_163("dev-libs/rp-1.0", "0", &[])]);
+    let mut o = RpOpts163::top();
+    o.selective = false;
+    o.usepkg = true;
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "=dev-libs/rp-1.0", &o),
+        new_163("1.0")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A slot-skewed binary kept by the visibility check resolves
+/// into its own slot.
+#[test]
+fn resolve_pretend_kept_slot_skewed_binary_resolves_into_its_slot() {
+    let dir = dir_163("rp-binslot");
+    let repos = repo_pkgs_163(
+        &dir,
+        &[
+            ("dev-libs/rp", "1.0", "0", "", "", "amd64"),
+            ("dev-libs/rp", "2.0", "0", "", "", "amd64"),
+        ],
+    );
+    install_163(&dir, "dev-libs", "rp-2.0", "0", &[]);
+    let mut config = cfg_163();
+    config.scanned_binpkgs = Some(vec![binpkg_163("dev-libs/rp-2.0", "1", &[])]);
+    let mut o = RpOpts163::top();
+    o.selective = false;
+    o.usepkg = true;
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+        new_163("2.0")
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -1550,6 +2715,44 @@ fn assemble_result_no_buildpkgonly_flag_means_no_buildpkgonly_refusal() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A lone merge with no owners is no buildpkgonly edge, and a
+/// lone uninstall with no owners is no blocker edge either.
+#[test]
+fn assemble_result_lone_entries_are_no_buildpkgonly_edge() {
+    for (tag, outcome) in [
+        ("merge", new_163("1.0")),
+        (
+            "uninstall",
+            PretendOutcome::Uninstall {
+                version: "1.0".to_string(),
+            },
+        ),
+    ] {
+        let dir = dir_163(&format!("asm-lone-{tag}"));
+        let repos = repo_pkgs_163(&dir, &[]);
+        let config = cfg_163();
+        let no_strings: Vec<String> = Vec::new();
+        let atoms: Vec<String> = Vec::new();
+        let ctx = ctx_163(Ctx163Args {
+            root: &dir,
+            config: &config,
+            repos,
+            atoms: &atoms,
+            no_strings: &no_strings,
+            buildpkgonly: true,
+            backtrack_enabled: false,
+            ignore_slot_op: false,
+            rebuild_new_slot: true,
+            reachable: HashSet::new(),
+        });
+        let mut pass = pass_163();
+        pass.entries = vec![entry_163("dev-libs", "solo", outcome, &[])];
+        let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+        assert!(!result.buildpkgonly_deps_unsatisfied, "{tag}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 /// A merge required by another merge is a buildpkgonly edge.
 #[test]
 fn assemble_result_merge_requiring_a_merge_is_a_buildpkgonly_edge() {
@@ -1708,4 +2911,678 @@ fn assemble_result_new_token_for_a_known_atom_is_coalesced() {
         vec![(">=dev-libs/a-1.0".to_string(), "x y".to_string())]
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Changes for different atoms stay on separate lines, and a
+/// repeated flag is not duplicated within a line.
+#[test]
+fn assemble_result_coalescing_keeps_atoms_apart_and_flags_singular() {
+    let dir = dir_163("asm-coal2");
+    let repos = repo_pkgs_163(&dir, &[]);
+    let config = cfg_163();
+    let no_strings: Vec<String> = Vec::new();
+    let atoms: Vec<String> = Vec::new();
+    let ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
+        repos,
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: false,
+        backtrack_enabled: false,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::new(),
+    });
+    let mut pass = pass_163();
+    pass.autounmask_use_changes = vec![
+        change_163(">=dev-libs/a-1.0", "x", &[]),
+        change_163(">=dev-libs/b-1.0", "y", &[]),
+        change_163(">=dev-libs/a-1.0", "x", &[]),
+    ];
+    let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+    assert_eq!(
+        result
+            .autounmask_use_changes
+            .iter()
+            .map(|c| (c.atom.clone(), c.token.clone()))
+            .collect::<Vec<_>>(),
+        vec![
+            (">=dev-libs/a-1.0".to_string(), "x".to_string()),
+            (">=dev-libs/b-1.0".to_string(), "y".to_string()),
+        ]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An uncovered dependency `NoVisibleCandidate` gains a
+/// plain-miss disclosure naming the queued atom.
+#[test]
+fn assemble_result_uncovered_nvc_gains_a_plain_miss_disclosure() {
+    let dir = dir_163("asm-plain");
+    let repos = repo_pkgs_163(&dir, &[]);
+    let config = cfg_163();
+    let no_strings: Vec<String> = Vec::new();
+    let atoms: Vec<String> = Vec::new();
+    let ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
+        repos,
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: false,
+        backtrack_enabled: false,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::new(),
+    });
+    let mut pass = pass_163();
+    pass.entries = vec![entry_163(
+        "dev-libs",
+        "pm",
+        PretendOutcome::NoVisibleCandidate,
+        &[],
+    )];
+    pass.nvc_dep_atoms.insert(
+        ("dev-libs".to_string(), "pm".to_string()),
+        ">=dev-libs/pm-2.0".to_string(),
+    );
+    let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+    assert_eq!(result.plain_miss_deps.len(), 1);
+    assert_eq!(result.plain_miss_deps[0].atom, ">=dev-libs/pm-2.0");
+    assert_eq!(result.outcome, ResolveOutcome::Complete);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A `NoVisibleCandidate` claimed by each sibling disclosure gains
+/// no plain-miss row: every `||` arm of the coverage check must
+/// stay an `||`, and the `==`s inside each arm a `==`.
+#[test]
+fn assemble_result_claimed_nvc_gains_no_plain_miss_row() {
+    for (tag, setup, expected) in [
+        ("masked", 0u8, 0usize),
+        ("use", 1u8, 0usize),
+        ("plain", 2u8, 1usize),
+    ] {
+        let dir = dir_163(&format!("asm-claimed-{tag}"));
+        let repos = repo_pkgs_163(&dir, &[]);
+        let config = cfg_163();
+        let no_strings: Vec<String> = Vec::new();
+        let atoms: Vec<String> = Vec::new();
+        let ctx = ctx_163(Ctx163Args {
+            root: &dir,
+            config: &config,
+            repos,
+            atoms: &atoms,
+            no_strings: &no_strings,
+            buildpkgonly: false,
+            backtrack_enabled: false,
+            ignore_slot_op: false,
+            rebuild_new_slot: true,
+            reachable: HashSet::new(),
+        });
+        let mut pass = pass_163();
+        pass.entries = vec![entry_163(
+            "dev-libs",
+            "pm",
+            PretendOutcome::NoVisibleCandidate,
+            &[],
+        )];
+        match setup {
+            0 => {
+                pass.masked_deps
+                    .push(masked_163("dev-libs", "pm", "dev-libs/pm"));
+            }
+            1 => {
+                pass.use_unsat_deps
+                    .push(use_unsat_163("dev-libs", "pm", "dev-libs/pm[flag]"));
+            }
+            _ => {
+                pass.plain_miss_deps
+                    .push(plain_163("dev-libs", "pm", "dev-libs/pm"));
+            }
+        }
+        let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+        assert_eq!(result.plain_miss_deps.len(), expected, "{tag}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// A neighbour's claim does not cover the entry: sibling reports
+/// for another package leave the plain-miss row in place.
+#[test]
+fn assemble_result_neighbour_claim_does_not_cover_the_entry() {
+    for (tag, setup, expected) in [
+        ("masked", 0u8, 1usize),
+        ("use", 1u8, 1usize),
+        ("plain", 2u8, 2usize),
+    ] {
+        let dir = dir_163(&format!("asm-neighbour-{tag}"));
+        let repos = repo_pkgs_163(&dir, &[]);
+        let config = cfg_163();
+        let no_strings: Vec<String> = Vec::new();
+        let atoms: Vec<String> = Vec::new();
+        let ctx = ctx_163(Ctx163Args {
+            root: &dir,
+            config: &config,
+            repos,
+            atoms: &atoms,
+            no_strings: &no_strings,
+            buildpkgonly: false,
+            backtrack_enabled: false,
+            ignore_slot_op: false,
+            rebuild_new_slot: true,
+            reachable: HashSet::new(),
+        });
+        let mut pass = pass_163();
+        pass.entries = vec![entry_163(
+            "dev-libs",
+            "pm",
+            PretendOutcome::NoVisibleCandidate,
+            &[],
+        )];
+        match setup {
+            0 => {
+                pass.masked_deps
+                    .push(masked_163("dev-libs", "other", "dev-libs/other"));
+            }
+            1 => {
+                pass.use_unsat_deps.push(use_unsat_163(
+                    "dev-libs",
+                    "other",
+                    "dev-libs/other[flag]",
+                ));
+            }
+            _ => {
+                pass.plain_miss_deps
+                    .push(plain_163("dev-libs", "other", "dev-libs/other"));
+            }
+        }
+        let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+        assert_eq!(result.plain_miss_deps.len(), expected, "{tag}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// The in-progress extra list covers only its own cp: a second
+/// uncovered entry in the same category is still filed.
+#[test]
+fn assemble_result_extra_list_covers_only_its_own_cp() {
+    let dir = dir_163("asm-extra");
+    let repos = repo_pkgs_163(&dir, &[]);
+    let config = cfg_163();
+    let no_strings: Vec<String> = Vec::new();
+    let atoms: Vec<String> = Vec::new();
+    let ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
+        repos,
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: false,
+        backtrack_enabled: false,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::new(),
+    });
+    let mut pass = pass_163();
+    pass.entries = vec![
+        entry_163("dev-libs", "other", PretendOutcome::NoVisibleCandidate, &[]),
+        entry_163("dev-libs", "pm", PretendOutcome::NoVisibleCandidate, &[]),
+    ];
+    let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+    assert_eq!(result.plain_miss_deps.len(), 2);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The in-progress extra list does not cover across categories
+/// either: same package, other category is still filed.
+#[test]
+fn assemble_result_extra_list_does_not_cover_across_categories() {
+    let dir = dir_163("asm-extra-cat");
+    let repos = repo_pkgs_163(&dir, &[]);
+    let config = cfg_163();
+    let no_strings: Vec<String> = Vec::new();
+    let atoms: Vec<String> = Vec::new();
+    let ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
+        repos,
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: false,
+        backtrack_enabled: false,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::new(),
+    });
+    let mut pass = pass_163();
+    pass.entries = vec![
+        entry_163("sys-libs", "pm", PretendOutcome::NoVisibleCandidate, &[]),
+        entry_163("dev-libs", "pm", PretendOutcome::NoVisibleCandidate, &[]),
+    ];
+    let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+    assert_eq!(result.plain_miss_deps.len(), 2);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+/// With `--autounmask-backtrack` off, a recorded use-config change
+/// refreshes just that package's USE line.
+#[test]
+fn assemble_result_use_config_change_refreshes_the_package_line() {
+    let dir = dir_163("asm-refresh");
+    let repos = repo_pkgs_163(
+        &dir,
+        &[("dev-libs/rdisp", "1.0", "0", "alpha", "", "amd64")],
+    );
+    let config = cfg_163();
+    let no_strings: Vec<String> = Vec::new();
+    let atoms: Vec<String> = Vec::new();
+    let ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
+        repos,
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: false,
+        backtrack_enabled: false,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::new(),
+    });
+    let mut pass = pass_163();
+    pass.entries = vec![entry_163("dev-libs", "rdisp", new_163("1.0"), &[])];
+    let mut params = BacktrackParams::default();
+    params.autounmask_use_config.insert(
+        ("dev-libs".to_string(), "rdisp".to_string()),
+        HashMap::from([("alpha".to_string(), true)]),
+    );
+    let result = assemble_result(&ctx, &params, pass, &config, 0);
+    let entry = result
+        .entries
+        .iter()
+        .find(|e| e.package == "rdisp")
+        .expect("entry kept");
+    assert_eq!(entry.use_flags_display, vec![("alpha".to_string(), true)]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// With `--autounmask-backtrack` on, the same recorded change
+/// leaves the walked line alone.
+#[test]
+fn assemble_result_backtrack_on_leaves_the_walked_line_alone() {
+    let dir = dir_163("asm-norefresh");
+    let repos = repo_pkgs_163(
+        &dir,
+        &[("dev-libs/rdisp", "1.0", "0", "alpha", "", "amd64")],
+    );
+    let config = cfg_163();
+    let no_strings: Vec<String> = Vec::new();
+    let atoms: Vec<String> = Vec::new();
+    let ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
+        repos,
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: false,
+        backtrack_enabled: true,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::new(),
+    });
+    let mut pass = pass_163();
+    pass.entries = vec![entry_163("dev-libs", "rdisp", new_163("1.0"), &[])];
+    let mut params = BacktrackParams::default();
+    params.autounmask_use_config.insert(
+        ("dev-libs".to_string(), "rdisp".to_string()),
+        HashMap::from([("alpha".to_string(), true)]),
+    );
+    let result = assemble_result(&ctx, &params, pass, &config, 0);
+    let entry = result
+        .entries
+        .iter()
+        .find(|e| e.package == "rdisp")
+        .expect("entry kept");
+    assert!(entry.use_flags_display.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An autounmask change with an empty chain gains its `#required
+/// by` chain from the change's own atom through the entries.
+#[test]
+fn assemble_result_change_gains_its_required_by_chain() {
+    let dir = dir_163("asm-chain");
+    let repos = repo_pkgs_163(&dir, &[]);
+    let config = cfg_163();
+    let no_strings: Vec<String> = Vec::new();
+    let atoms = vec!["dev-libs/top".to_string()];
+    let mut top_level = HashSet::new();
+    top_level.insert("dev-libs/top");
+    let mut ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
+        repos,
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: false,
+        backtrack_enabled: false,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::new(),
+    });
+    ctx.top_level = top_level;
+    let mut pass = pass_163();
+    pass.entries = vec![
+        entry_163("dev-libs", "dc", new_163("1.0"), &[("dev-libs", "top")]),
+        entry_163("dev-libs", "top", new_163("1.0"), &[]),
+    ];
+    pass.autounmask_keyword_changes = vec![change_163(">=dev-libs/dc-1.0", "~amd64", &[])];
+    let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+    assert_eq!(
+        result.autounmask_keyword_changes[0].dep_chain,
+        vec![
+            "required by dev-libs/top-1.0::testrepo".to_string(),
+            "required by dev-libs/top (argument)".to_string(),
+        ]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A preset chain is kept as-is.
+#[test]
+fn assemble_result_preset_chain_is_kept() {
+    let dir = dir_163("asm-chainkeep");
+    let repos = repo_pkgs_163(&dir, &[]);
+    let config = cfg_163();
+    let no_strings: Vec<String> = Vec::new();
+    let atoms = vec!["dev-libs/top".to_string()];
+    let mut top_level = HashSet::new();
+    top_level.insert("dev-libs/top");
+    let mut ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
+        repos,
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: false,
+        backtrack_enabled: false,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::new(),
+    });
+    ctx.top_level = top_level;
+    let mut pass = pass_163();
+    pass.entries = vec![
+        entry_163("dev-libs", "dc", new_163("1.0"), &[("dev-libs", "top")]),
+        entry_163("dev-libs", "top", new_163("1.0"), &[]),
+    ];
+    pass.autounmask_keyword_changes = vec![change_163(">=dev-libs/dc-1.0", "~amd64", &["keep"])];
+    let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+    assert_eq!(
+        result.autounmask_keyword_changes[0].dep_chain,
+        vec!["keep".to_string()]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The change owner is the entry matching the change's own
+/// package: a same-category decoy listed first must not steal
+/// it.
+#[test]
+fn assemble_result_change_owner_is_the_matching_entry() {
+    let dir = dir_163("asm-owner");
+    let repos = repo_pkgs_163(&dir, &[]);
+    let config = cfg_163();
+    let no_strings: Vec<String> = Vec::new();
+    let atoms = vec!["dev-libs/top".to_string()];
+    let mut top_level = HashSet::new();
+    top_level.insert("dev-libs/top");
+    let mut ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
+        repos,
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: false,
+        backtrack_enabled: false,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::new(),
+    });
+    ctx.top_level = top_level;
+    let mut pass = pass_163();
+    pass.entries = vec![
+        entry_163("dev-libs", "zz", new_163("1.0"), &[]),
+        entry_163("dev-libs", "dc", new_163("1.0"), &[("dev-libs", "top")]),
+        entry_163("dev-libs", "top", new_163("1.0"), &[]),
+    ];
+    pass.autounmask_keyword_changes = vec![change_163(">=dev-libs/dc-1.0", "~amd64", &[])];
+    let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+    assert_eq!(
+        result.autounmask_keyword_changes[0].dep_chain,
+        vec![
+            "required by dev-libs/top-1.0::testrepo".to_string(),
+            "required by dev-libs/top (argument)".to_string(),
+        ]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A hard two-ring with no wired deps reports the cycle with an
+/// empty display and no large-count.
+#[test]
+fn assemble_result_small_cycle_reports_no_large_count() {
+    let dir = dir_163("asm-cycle2");
+    let repos = repo_pkgs_163(&dir, &[]);
+    let config = cfg_163();
+    let no_strings: Vec<String> = Vec::new();
+    let atoms = vec!["dev-libs/ca".to_string()];
+    let ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
+        repos,
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: false,
+        backtrack_enabled: false,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::new(),
+    });
+    let mut pass = pass_163();
+    pass.entries = vec![
+        entry_163("dev-libs", "ca", new_163("1.0"), &[]),
+        entry_163("dev-libs", "cb", new_163("1.0"), &[]),
+    ];
+    let cp = |p: &str| (false, "dev-libs".to_string(), p.to_string());
+    pass.edge_kind_map
+        .insert((cp("cb"), cp("ca")), (true, false));
+    pass.edge_kind_map
+        .insert((cp("ca"), cp("cb")), (true, false));
+    let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+    assert_eq!(result.circular_deps.len(), 1);
+    assert!(!result.large_cycle_count);
+    assert!(result.cycle_display.is_empty());
+    match &result.outcome {
+        ResolveOutcome::Aborted {
+            reason: AbortReason::UnserializableCycle { members },
+            partial,
+        } => {
+            assert!(members.is_empty());
+            assert!(partial.is_empty());
+        }
+        other => panic!("expected UnserializableCycle, got {other:?}"),
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A hard triangle with wired deps reports three elementary cycles:
+/// a large count only above three.
+#[test]
+fn assemble_result_triangle_reports_three_cycles_without_large_count() {
+    let dir = dir_163("asm-cycle3");
+    let repos = repo_pkgs_163(&dir, &[]);
+    let config = cfg_163();
+    let no_strings: Vec<String> = Vec::new();
+    let atoms = vec![
+        "dev-libs/ta".to_string(),
+        "dev-libs/tb".to_string(),
+        "dev-libs/tc".to_string(),
+    ];
+    let ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
+        repos,
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: false,
+        backtrack_enabled: false,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::new(),
+    });
+    let edge = |next: &str| DepEdge {
+        atom: format!("dev-libs/{next}"),
+        evaluated: format!("dev-libs/{next}"),
+        category: "dev-libs".to_string(),
+        package: next.to_string(),
+        priority: DepPriority {
+            runtime: true,
+            ..Default::default()
+        },
+        disjunctive: false,
+        alt: None,
+        key: 0,
+    };
+    let mut ea = entry_163("dev-libs", "ta", new_163("1.0"), &[]);
+    ea.deps = vec![edge("tb")];
+    let mut eb = entry_163("dev-libs", "tb", new_163("1.0"), &[]);
+    eb.deps = vec![edge("tc")];
+    let mut ec = entry_163("dev-libs", "tc", new_163("1.0"), &[]);
+    ec.deps = vec![edge("ta")];
+    let mut pass = pass_163();
+    pass.entries = vec![ea, eb, ec];
+    let cp = |p: &str| (false, "dev-libs".to_string(), p.to_string());
+    pass.edge_kind_map
+        .insert((cp("tb"), cp("ta")), (true, false));
+    pass.edge_kind_map
+        .insert((cp("tc"), cp("tb")), (true, false));
+    pass.edge_kind_map
+        .insert((cp("ta"), cp("tc")), (true, false));
+    let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+    assert_eq!(result.circular_deps.len(), 1);
+    assert!(!result.large_cycle_count);
+    assert_eq!(result.cycle_display.len(), 3);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+/// The slot-operator vdb scan reports a consumer bound to a rebuilt
+/// sub-slot (Portage's `_forced_rebuilds` display pairs).
+#[test]
+fn assemble_result_slot_operator_scan_reports_the_rebuilt_consumer() {
+    let dir = dir_163("asm-slotop");
+    let repos = repo_pkgs_163(
+        &dir,
+        &[
+            ("dev-libs/prov", "1.0", "0", "", "", "amd64"),
+            ("dev-libs/prov", "2.0", "0", "", "", "amd64"),
+        ],
+    );
+    install_163(
+        &dir,
+        "dev-libs",
+        "cons-1.0",
+        "0",
+        &[("RDEPEND", "dev-libs/prov:0/0=")],
+    );
+    let config = cfg_163();
+    let no_strings: Vec<String> = Vec::new();
+    let atoms: Vec<String> = Vec::new();
+    let ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
+        repos,
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: false,
+        backtrack_enabled: false,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::from([("dev-libs".to_string(), "cons".to_string())]),
+    });
+    let mut pass = pass_163();
+    let mut prov = entry_163(
+        "dev-libs",
+        "prov",
+        PretendOutcome::Upgrade {
+            from: "1.0".to_string(),
+            to: "2.0".to_string(),
+        },
+        &[],
+    );
+    prov.slot = Some("0".to_string());
+    prov.sub_slot = Some("1".to_string());
+    pass.entries = vec![prov];
+    let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+    assert_eq!(
+        result.abi_rebuilds,
+        vec![(
+            "dev-libs/prov-2.0".to_string(),
+            "dev-libs/cons-1.0".to_string()
+        )]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The ignore flag and a disabled rebuild gate each suppress the
+/// scan.
+#[test]
+fn assemble_result_slot_operator_scan_gates_suppress_the_pairs() {
+    for (tag, ignore, rebuild) in [("ignore", true, true), ("disabled", false, false)] {
+        let dir = dir_163(&format!("asm-slotgate-{tag}"));
+        let repos = repo_pkgs_163(
+            &dir,
+            &[
+                ("dev-libs/prov", "1.0", "0", "", "", "amd64"),
+                ("dev-libs/prov", "2.0", "0", "", "", "amd64"),
+            ],
+        );
+        install_163(
+            &dir,
+            "dev-libs",
+            "cons-1.0",
+            "0",
+            &[("RDEPEND", "dev-libs/prov:0/0=")],
+        );
+        let config = cfg_163();
+        let no_strings: Vec<String> = Vec::new();
+        let atoms: Vec<String> = Vec::new();
+        let ctx = ctx_163(Ctx163Args {
+            root: &dir,
+            config: &config,
+            repos,
+            atoms: &atoms,
+            no_strings: &no_strings,
+            buildpkgonly: false,
+            backtrack_enabled: false,
+            ignore_slot_op: ignore,
+            rebuild_new_slot: rebuild,
+            reachable: HashSet::from([("dev-libs".to_string(), "cons".to_string())]),
+        });
+        let mut pass = pass_163();
+        let mut prov = entry_163(
+            "dev-libs",
+            "prov",
+            PretendOutcome::Upgrade {
+                from: "1.0".to_string(),
+                to: "2.0".to_string(),
+            },
+            &[],
+        );
+        prov.slot = Some("0".to_string());
+        prov.sub_slot = Some("1".to_string());
+        pass.entries = vec![prov];
+        let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+        assert!(result.abi_rebuilds.is_empty(), "{tag}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
