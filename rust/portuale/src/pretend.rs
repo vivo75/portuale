@@ -13150,13 +13150,26 @@ pub fn run(args: &[String]) -> ExitCode {
         || !result.autounmask_license_changes.is_empty();
     let autounmask_continue_active = !pretend && autounmask_continue == Some(true);
 
-    // Real `_display_autounmask`'s tail (`depgraph.py`, gated on
+    // Real `_display_autounmask`'s tail (`depgraph.py:11093`, gated on
     // `_dynamic_config._autounmask_backtrack_disabled`): with
     // `--autounmask-backtrack` off (the default), the resolver stops
     // after the first autounmask batch instead of re-driving, and says
     // so -- `--pretend` included. `--autounmask-continue` implies
-    // backtrack=y, so the notice is suppressed there.
-    if has_autounmask_changes && !config.autounmask_backtrack {
+    // backtrack=y, so the notice is suppressed there. Backlog #217:
+    // the flag is set at exactly one site (`need_config_change:11752`),
+    // reached only when the early return (`:11713-11717`) did NOT fire
+    // -- i.e. NOT when `_success_without_autounmask` holds (the
+    // `_resolve` tail `:5793`, "reserved for cases where there are
+    // *zero* other problems": the resolve succeeds once the autounmask
+    // changes are applied, no other failure). A lone autounmask change
+    // (oracle: `abort-au-plain`, `fixtures/abort-captures/`) therefore
+    // prints the change block with NO notice; the notice stays exactly
+    // when another failure coincides (a cycle: `abort-au-cycle`; a
+    // restart-worthy flip on an already-graphed package: `aucasctop`;
+    // a post-failure parent rescue). `GraphResult::
+    // autounmask_backtrack_disabled` ports the flag, including real's
+    // `_allow_backtracking` conjunct (`--backtrack=0` never prints it).
+    if result.autounmask_backtrack_disabled(config.autounmask_backtrack) {
         eprintln!();
         for line in [
             "In order to avoid wasting time, backtracking has terminated early",
