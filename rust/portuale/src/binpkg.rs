@@ -1582,10 +1582,10 @@ fn extract_gpkg_member(gpkg_path: &Path, want: &str, dest: &Path) -> Result<(), 
     ])
 }
 
-/// Real `bintree._populate_local`'s own default (non-`FEATURES=
-/// pkgdir-index-trusted`) behavior: walk `pkgdir` for binpkg *files* and
-/// synthesize one `Packages`-style entry per file from its own embedded
-/// metadata (`read_xpak_metadata` / `read_gpkg_metadata`), fast-pathed
+/// Real `bintree._populate_local`'s own behavior, both halves: walk
+/// `pkgdir` for binpkg *files* and synthesize one `Packages`-style
+/// entry per file from its own embedded metadata
+/// (`read_xpak_metadata` / `read_gpkg_metadata`), fast-pathed
 /// against any already-parsed `<pkgdir>/Packages` entries first -- real
 /// `bintree.py:1108-1136`'s own "Validate data from the package index
 /// and try to avoid reading the xpak if possible" comment names this
@@ -1594,8 +1594,15 @@ fn extract_gpkg_member(gpkg_path: &Path, want: &str, dest: &Path) -> Result<(), 
 /// which carries at least `CPV`/`SLOT`, real's own `minimum_keys`) is
 /// reused verbatim -- its `PATH` is refreshed in case the file moved,
 /// matching real's own `if oldpath != mypath: d["PATH"] = mypath`.
-/// Anything else (a changed file, a brand-new one, an absent index
-/// entirely, or a stale match) is freshly parsed via
+/// A basename-matched entry whose `_mtime_`/`SIZE` no longer agree is
+/// *still* reused verbatim (backlog #174): that is real's own default,
+/// `FEATURES=pkgdir-index-trusted` (in real `make.globals`' own default
+/// `FEATURES`, `cnf/make.globals:81`), under which `_populate_local`
+/// runs with `reindex=False`, never stats or reads the file at scan,
+/// and leaves size/digest verification to merge-time `BinpkgVerifier`
+/// -- so only `CPV` is required of the vouched stanza, not the
+/// reindex fast path's `minimum_keys`.
+/// Only a file no stanza vouches for is freshly parsed via
 /// `read_xpak_metadata`/`read_gpkg_metadata`, and gets a fresh
 /// `_mtime_`/`SIZE` recorded on the returned entry so a *later* call can
 /// hit the fast path. This real revalidation replaces portuale's own
@@ -1771,6 +1778,33 @@ fn scan_binpkg_file(
         return Ok(Some(entry));
     }
 
+    // Real's own default (`FEATURES=pkgdir-index-trusted` is in real
+    // `make.globals`' own default `FEATURES`, `cnf/make.globals:81`):
+    // `_populate_local(reindex=False)` never walks `$PKGDIR` at all --
+    // every `<pkgdir>/Packages` stanza is injected verbatim and the
+    // file's own bytes are first touched at merge, by `BinpkgVerifier`
+    // (backlog #174). So an index stanza for this basename vouches for
+    // the file even when its `_mtime_`/`SIZE` no longer agree with the
+    // live file (a truncated or otherwise corrupted binpkg): reuse it
+    // verbatim -- stale `SIZE`/digests included, since the merge-time
+    // verification (`verify_binpkg_against_index`) checks the file
+    // against exactly those index values -- instead of re-parsing the
+    // container and pre-rejecting it here with `!!! Invalid binary
+    // package`. Only `CPV` is required of the stanza (real injects
+    // stanzas unconditionally on this path -- notably, a
+    // portuale-written `--buildpkg` stanza may carry no `SLOT`). A file
+    // no stanza vouches for keeps the reindex behavior: parse the
+    // container now, rejecting it at scan when its metadata can't be
+    // read (real's own `PortagePackageException` /
+    // `SignatureException` arm, `bintree.py:1185-1199`).
+    if let Some(candidates) = by_basename.get(basename)
+        && let Some(&hit) = candidates.iter().find(|d| d.contains_key("CPV"))
+    {
+        let mut entry = hit.clone();
+        entry.insert("PATH".to_string(), path_field);
+        return Ok(Some(entry));
+    }
+
     // Stale, moved, or unindexed -- re-derive from the file itself. A
     // `.xpak` file is byte-format-identical to a `.tbz2`, so
     // `read_xpak_metadata` reads both.
@@ -1829,6 +1863,179 @@ fn scan_binpkg_file(
 pub(crate) fn file_mtime(st: &fs::Metadata) -> i64 {
     use std::os::unix::fs::MetadataExt;
     st.mtime()
+}
+
+/// A merge-time binpkg size/digest mismatch: real `_emerge/
+/// BinpkgVerifier._digest_exception`'s own `(name, value, expected)`
+/// triple (`BinpkgVerifier.py`), where `name` is `"size"` or a hash
+/// name (`"MD5"`, `"SHA1"`, ...), `got` the live file's value and
+/// `expected` the `<pkgdir>/Packages` index's claim.
+pub struct BinpkgDigestMismatch {
+    /// `"size"` or the hash name, exactly as real reports it.
+    pub name: String,
+    /// The live file's value (`st_size` / lowercase hex digest).
+    pub got: String,
+    /// The index record's claim.
+    pub expected: String,
+}
+
+/// Real `_emerge/BinpkgVerifier` + `bintree._get_digests` (backlog
+/// #174): verify a local `$PKGDIR` binpkg at merge time against the
+/// `<pkgdir>/Packages` index record that vouches for it. The size
+/// (`SIZE`) is checked first via `stat(2)`; then every digest the
+/// record carries (`MD5`/`SHA1`, the two real `_pkgindex_entry`
+/// writes, plus `SHA256`/`SHA512` when present) is hashed over the
+/// file and compared. A record with no `SIZE` verifies nothing --
+/// real's own `if "size" not in digests: return OK` (`BinpkgVerifier.
+/// _start`). Returns the first mismatch; the caller renames the file
+/// (`checksum_failure_rename`) and prints real's exact failure block
+/// (`digest_failure_block`). Files the index does not vouch for are
+/// already fully parsed at scan and never reach here with a record.
+pub fn verify_binpkg_against_index(
+    path: &Path,
+    record: &HashMap<String, String>,
+) -> Result<(), BinpkgDigestMismatch> {
+    let indexed_size = record.get("SIZE").and_then(|s| s.parse::<u64>().ok());
+    let Some(expected_size) = indexed_size else {
+        return Ok(());
+    };
+    let actual_size = fs::metadata(path).map(|st| st.len()).unwrap_or(u64::MAX);
+    if actual_size != expected_size {
+        return Err(BinpkgDigestMismatch {
+            name: "size".to_string(),
+            got: actual_size.to_string(),
+            expected: expected_size.to_string(),
+        });
+    }
+    for algo in ["MD5", "SHA1", "SHA256", "SHA512"] {
+        let Some(expected) = record.get(algo).filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        let Some(actual) = file_hex_digest(path, algo) else {
+            continue;
+        };
+        if !actual.eq_ignore_ascii_case(expected) {
+            return Err(BinpkgDigestMismatch {
+                name: algo.to_string(),
+                got: actual,
+                expected: expected.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Hex digest of the whole file with `algo` (`MD5`/`SHA1`/`SHA256`/
+/// `SHA512`), the same whole-file readers real `perform_multiple_
+/// checksums` runs for a `Packages` entry. `None` for an unknown name
+/// or an unreadable file.
+fn file_hex_digest(path: &Path, algo: &str) -> Option<String> {
+    let bytes = fs::read(path).ok()?;
+    let hex = |digest: &[u8]| digest.iter().map(|b| format!("{b:02x}")).collect();
+    match algo {
+        "MD5" => {
+            use md5::Digest as _;
+            Some(hex(&md5::Md5::digest(&bytes)))
+        }
+        "SHA1" => {
+            use sha1::Digest as _;
+            Some(hex(&sha1::Sha1::digest(&bytes)))
+        }
+        "SHA256" => {
+            use sha2::Digest as _;
+            Some(hex(&sha2::Sha256::digest(&bytes)))
+        }
+        "SHA512" => {
+            use sha2::Digest as _;
+            Some(hex(&sha2::Sha512::digest(&bytes)))
+        }
+        _ => None,
+    }
+}
+
+/// Real `portage.package.ebuild.fetch._checksum_failure_temp_file`
+/// (`fetch.py:293`): rename a digest-failed file to
+/// `<basename>._checksum_failure_.<rand>` in its own directory and
+/// return the new path. A same-size same-md5
+/// `<basename>._checksum_failure_.*` duplicate is reused instead (the
+/// corrupt file is unlinked, real's own `os.unlink(filename)`), so
+/// repeated failures don't pile up evidence files. `None` when the
+/// rename itself fails (the caller still fails the package).
+pub fn checksum_failure_rename(path: &Path) -> Option<PathBuf> {
+    let dir = path.parent()?;
+    let basename = path.file_name()?.to_str()?;
+    let prefix = format!("{basename}._checksum_failure_.");
+    let size = fs::metadata(path).map(|st| st.len()).ok()?;
+    if let Ok(entries) = portage_util::read_dir_paths(dir) {
+        let checksum = file_hex_digest(path, "MD5");
+        for entry in entries {
+            let name = entry
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default();
+            if !name.starts_with(&prefix) {
+                continue;
+            }
+            let same_size = fs::metadata(&entry)
+                .map(|st| st.len() == size)
+                .unwrap_or(false);
+            if !same_size {
+                continue;
+            }
+            let same_md5 = match (&checksum, file_hex_digest(&entry, "MD5")) {
+                (Some(a), Some(b)) => a == &b,
+                _ => false,
+            };
+            if same_md5 && fs::remove_file(path).is_ok() {
+                return Some(entry);
+            }
+        }
+    }
+    // Real `tempfile.mkstemp("", <basename> + "._checksum_failure_.",
+    // dir)`: a unique sibling. `SystemTime` nanos plus a counter make
+    // the name unique without a placeholder file; the loop retries on
+    // the (absurd) collision instead of clobbering.
+    for attempt in 0..100u32 {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let candidate = dir.join(format!("{prefix}{nanos:x}-{attempt}"));
+        if candidate.exists() {
+            continue;
+        }
+        if fs::rename(path, &candidate).is_ok() {
+            return Some(candidate);
+        }
+        if !path.exists() {
+            break;
+        }
+    }
+    None
+}
+
+/// Real `_emerge/BinpkgVerifier._digest_exception`'s own failure block
+/// (`BinpkgVerifier.py`), byte-shaped: a leading blank line, three
+/// `!!!` lines (the path, the `Failed on <name> verification` reason,
+/// `Got`/`Expected`), then the bare `File renamed to '<path>'` line
+/// (no `!!!` prefix, real's own `f"File renamed to ..."`). Real emits
+/// it through the scheduler (stdout + package log); portuale prints it
+/// to stdout. `renamed` is the `checksum_failure_rename` result -- when
+/// the rename itself failed the caller passes the original path (the
+/// file is still there), so the line always names a real location.
+pub fn digest_failure_block(
+    path: &Path,
+    mismatch: &BinpkgDigestMismatch,
+    renamed: &Path,
+) -> String {
+    format!(
+        "\n!!! Digest verification failed:\n!!! {}\n!!! Reason: Failed on {} verification\n!!! Got: {}\n!!! Expected: {}\nFile renamed to '{}'\n",
+        path.display(),
+        mismatch.name,
+        mismatch.got,
+        mismatch.expected,
+        renamed.display(),
+    )
 }
 
 fn run_tar(args: &[&str]) -> Result<(), String> {
@@ -3331,12 +3538,21 @@ mod tests {
     }
 
     #[test]
-    fn populate_local_pkgdir_trusts_an_unchanged_index_entry_and_revalidates_a_stale_one() {
-        // A stale `Packages` entry (wrong SIZE/_mtime_, real `bintree.
-        // py:1108-1136`'s own "avoid reading the xpak if possible" fast
-        // path failing its own check) is dropped in favor of the file's
-        // own real embedded metadata -- proven here by a bogus SLOT the
-        // index claims that the real `.tbz2` itself does not carry.
+    fn populate_local_pkgdir_trusts_an_index_entry_even_when_stale() {
+        // Backlog #174: real's own default (`FEATURES=
+        // pkgdir-index-trusted` is in real `make.globals`' own default
+        // `FEATURES`) runs `_populate_local` with `reindex=False` -- the
+        // `<pkgdir>/Packages` stanza vouches for the file even when its
+        // `_mtime_`/`SIZE` no longer agree with the live file, and the
+        // file's own bytes are first touched at merge by
+        // `BinpkgVerifier`. So a stale stanza is reused verbatim here
+        // (proven by a bogus SLOT the index claims that the real
+        // `.tbz2` itself does not carry) instead of being re-derived
+        // from the file -- the corruption surfaces at merge via
+        // `verify_binpkg_against_index`, with real's `!!! Digest
+        // verification failed:` block. (This test previously asserted
+        // the reindex behavior -- stale means re-parse -- which is only
+        // real with an explicit `-pkgdir-index-trusted`.)
         let scratch = ScratchDir::new("mtime-staleness").unwrap();
         let pkgdir = scratch.path();
         let cat_dir = pkgdir.join("dev-libs");
@@ -3367,8 +3583,10 @@ mod tests {
             "an unchanged index entry must be trusted, not re-derived"
         );
 
-        // The same claim, but with a wrong _mtime_ -- now stale, so the
-        // real SLOT ("0") is re-derived from the file itself instead.
+        // The same claim, but with a wrong _mtime_ -- still stale, so
+        // the index is *still* trusted verbatim (backlog #174): the
+        // bogus SLOT survives, and the size/digest mismatch is merge
+        // time's job, not the scan's.
         let stale = format!(
             "CPV: dev-libs/packagepkg-1.0\nSLOT: 99-not-the-real-slot\nSIZE: {real_size}\n_mtime_: {}\nPATH: dev-libs/packagepkg-1.0.tbz2\n",
             real_mtime + 1000
@@ -3378,9 +3596,143 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(
             entries[0].get("SLOT").map(String::as_str),
-            Some("0"),
-            "a stale index entry must be re-derived from the real file"
+            Some("99-not-the-real-slot"),
+            "a stale index entry must still be trusted, not re-derived"
         );
+    }
+
+    #[test]
+    fn populate_local_pkgdir_accepts_a_truncated_binpkg_the_index_vouches_for() {
+        // Backlog #174 (the F2 shape): real `emerge --oneshot
+        // --usepkgonly l32/faultpkg` with the gpkg truncated to half
+        // *selects* the binary -- the `<pkgdir>/Packages` stanza (written
+        // by `--regen` before the truncation, so its `SIZE` is the
+        // whole-file size) vouches for it at scan under real's default
+        // `FEATURES=pkgdir-index-trusted`, and the failure surfaces at
+        // merge via `BinpkgVerifier`. Portuale used to fully parse the
+        // container at scan, hit `unexpected EOF during skip`, and drop
+        // the candidate with `!!! Invalid binary package`, ending in
+        // `there are no ebuilds to satisfy`. The scan must return the
+        // index stanza verbatim -- stale `SIZE` included -- so the merge
+        // path can verify against it.
+        let scratch = ScratchDir::new("index-vouched-truncated").unwrap();
+        let pkgdir = scratch.path();
+        fs::create_dir_all(pkgdir.join("dev-libs")).unwrap();
+        let whole = fs::read(fixture("pkgdir/dev-libs/gpkgreadpkg-1.0.gpkg.tar")).unwrap();
+        let dest = pkgdir.join("dev-libs/gpkgreadpkg-1.0.gpkg.tar");
+        fs::write(&dest, &whole[..whole.len() / 2]).unwrap();
+        let half = fs::metadata(&dest).unwrap().len();
+        assert!(half < whole.len() as u64);
+        use md5::Digest as _;
+        let md5: String = md5::Md5::digest(&whole)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        fs::write(
+            pkgdir.join("Packages"),
+            format!(
+                "TIMESTAMP: 0\n\nCPV: dev-libs/gpkgreadpkg-1.0\nSLOT: 0\nSIZE: {}\nMD5: {md5}\n_mtime_: 1\nPATH: dev-libs/gpkgreadpkg-1.0.gpkg.tar\n",
+                whole.len()
+            ),
+        )
+        .unwrap();
+        let entries = populate_local_pkgdir(pkgdir).expect("scan succeeds");
+        assert_eq!(entries.len(), 1, "{entries:?}");
+        assert_eq!(
+            entries[0].get("CPV").map(String::as_str),
+            Some("dev-libs/gpkgreadpkg-1.0")
+        );
+        assert_eq!(
+            entries[0].get("SIZE").map(String::as_str),
+            Some(whole.len().to_string()).as_deref(),
+            "the vouched entry keeps the index SIZE, not the truncated file's"
+        );
+        assert_eq!(
+            entries[0].get("MD5").map(String::as_str),
+            Some(md5).as_deref()
+        );
+    }
+
+    #[test]
+    fn verify_binpkg_against_index_reports_size_then_digest_like_real() {
+        // Real `_emerge/BinpkgVerifier` checks the stat size against the
+        // index `SIZE` first, then each digest the record carries; the
+        // failure triple is `(name, got, expected)` with `name ==
+        // "size"` for the size check.
+        let scratch = ScratchDir::new("verify-against-index").unwrap();
+        let file = scratch.path().join("pkg-1.0.gpkg.tar");
+        fs::write(&file, b"0123456789abcdef").unwrap();
+        use md5::Digest as _;
+        let md5: String = md5::Md5::digest(b"0123456789abcdef")
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+
+        // No SIZE: nothing to verify against (real's own early OK).
+        let mut record = HashMap::new();
+        assert!(verify_binpkg_against_index(&file, &record).is_ok());
+
+        // Size mismatch beats everything, even a correct digest.
+        record.insert("SIZE".to_string(), "16".to_string());
+        record.insert("MD5".to_string(), md5.clone());
+        assert!(verify_binpkg_against_index(&file, &record).is_ok());
+        record.insert("SIZE".to_string(), "10240".to_string());
+        let mismatch = verify_binpkg_against_index(&file, &record)
+            .expect_err("short file must fail the index SIZE");
+        assert_eq!(mismatch.name, "size");
+        assert_eq!(mismatch.got, "16");
+        assert_eq!(mismatch.expected, "10240");
+
+        // Matching size, wrong digest: the hash name is reported.
+        record.insert("SIZE".to_string(), "16".to_string());
+        record.insert("MD5".to_string(), "0".repeat(32));
+        let mismatch =
+            verify_binpkg_against_index(&file, &record).expect_err("wrong MD5 must fail");
+        assert_eq!(mismatch.name, "MD5");
+        assert_eq!(mismatch.got, md5);
+        assert_eq!(mismatch.expected, "0".repeat(32));
+
+        // The failure block is real `BinpkgVerifier._digest_exception`'s
+        // own shape: leading blank line, three `!!!` lines, then the
+        // bare `File renamed to` line (no `!!!` prefix).
+        let renamed = scratch.path().join("pkg-1.0.gpkg.tar._checksum_failure_.x");
+        let block = digest_failure_block(&file, &mismatch, &renamed);
+        assert_eq!(
+            block,
+            format!("\n!!! Digest verification failed:\n!!! {}", file.display())
+                + &format!(
+                    "\n!!! Reason: Failed on MD5 verification\n!!! Got: {md5}\n!!! Expected: {}\nFile renamed to '{}'\n",
+                    "0".repeat(32),
+                    renamed.display(),
+                )
+        );
+    }
+
+    #[test]
+    fn checksum_failure_rename_moves_to_a_checksum_failure_sibling() {
+        // Real `_checksum_failure_temp_file`: the corrupt file is
+        // renamed to `<basename>._checksum_failure_.<rand>` in its own
+        // directory. A second, identical failure reuses the existing
+        // sibling (same size + md5) instead of piling up evidence.
+        let scratch = ScratchDir::new("checksum-failure-rename").unwrap();
+        let dir = scratch.path();
+        let first = dir.join("pkg-1.0.gpkg.tar");
+        fs::write(&first, b"corrupt-bytes").unwrap();
+        let renamed = checksum_failure_rename(&first).expect("rename works");
+        assert!(!first.exists(), "the corrupt path is gone");
+        assert!(renamed.is_file());
+        let name = renamed.file_name().unwrap().to_str().unwrap();
+        assert!(
+            name.starts_with("pkg-1.0.gpkg.tar._checksum_failure_."),
+            "{name}"
+        );
+
+        let second = dir.join("pkg-1.0.gpkg.tar");
+        fs::write(&second, b"corrupt-bytes").unwrap();
+        let reused = checksum_failure_rename(&second).expect("rename works");
+        assert_eq!(reused, renamed, "identical bytes reuse the sibling");
+        assert!(!second.exists());
+        assert_eq!(fs::read(&reused).unwrap(), b"corrupt-bytes");
     }
 
     // ---- #58 S1: the in-process inner metadata.tar reader ----

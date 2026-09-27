@@ -11416,14 +11416,16 @@ pub fn run(args: &[String]) -> ExitCode {
     // Real `bintree._populate_local`: when `--usepkg`/`--usepkgonly`
     // makes local binary candidates eligible, walk `$PKGDIR` for binpkg
     // files and build the pool from each file's own embedded metadata,
-    // fast-pathed against any already-parsed `<pkgdir>/Packages` entry
-    // whose `_mtime_`/`SIZE` still agree with the live file (real's own
-    // mtime-staleness revalidation -- `binpkg::populate_local_pkgdir`'s
-    // own doc comment has the full real grounding). Runs unconditionally
-    // now, `Packages` present or not -- real portage always walks
-    // `$PKGDIR`, never just trusts a present index outright (that's
-    // `FEATURES=pkgdir-index-trusted`, a real *non-default* opt-in this
-    // used to approximate as portuale's own default). Unlike real
+    // trusting any already-parsed `<pkgdir>/Packages` entry that
+    // vouches for the file (real's own default: `FEATURES=
+    // pkgdir-index-trusted` is in real `make.globals`' own default
+    // `FEATURES`, so `_populate_local` runs with `reindex=False` and
+    // leaves size/digest verification to merge-time `BinpkgVerifier` --
+    // `binpkg::populate_local_pkgdir`'s own doc comment has the full
+    // real grounding, backlog #174). Runs unconditionally now,
+    // `Packages` present or not -- real portage always walks
+    // `$PKGDIR` (a file no stanza vouches for is parsed from its own
+    // bytes, rejected at scan when unreadable). Unlike real
     // portage this is NOT written back to `Packages` (see
     // `Config::scanned_binpkgs`) -- portuale recomputes each run, so
     // `--pretend` still writes nothing.

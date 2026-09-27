@@ -2202,10 +2202,13 @@ fn list_candidates_uncached(
 /// binpkgs/Packages`) rather than a package entry at all, so it's
 /// always skipped here. Trusts the index outright -- no mtime/size
 /// revalidation against the real on-disk binpkg file at this layer
-/// (real portage's own `FEATURES="pkgdir-index-trusted"` behavior, not
-/// the real default). The real default's own mtime-staleness
-/// revalidation (`bintree.py:1108-1136`'s own "avoid reading the xpak
-/// if possible" fast path) lives one layer up, at the *local* `$PKGDIR`
+/// (real portage's own default `FEATURES="pkgdir-index-trusted"`
+/// behavior -- real `make.globals` ships it in the default `FEATURES`,
+/// so `_populate_local` runs with `reindex=False` and verifies
+/// size/digest at merge via `BinpkgVerifier`, backlog #174). The
+/// reindex path's own mtime-staleness revalidation
+/// (`bintree.py:1108-1136`'s own "avoid reading the xpak if possible"
+/// fast path) lives one layer up, at the *local* `$PKGDIR`
 /// CLI boundary (`portuale::binpkg::populate_local_pkgdir`, which calls
 /// this function as its own fast-path cache and re-derives fresh
 /// metadata via `read_xpak_metadata`/`read_gpkg_metadata` for anything

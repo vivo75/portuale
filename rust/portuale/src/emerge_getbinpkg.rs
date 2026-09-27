@@ -309,6 +309,48 @@ pub(crate) fn merge_one_binary_entry(
         }
     };
 
+    // Real `_emerge/Binpkg.py` + `BinpkgVerifier` (backlog #174): a
+    // local binpkg the `<pkgdir>/Packages` index vouches for is
+    // verified at merge -- size first, then every digest the record
+    // carries -- against the index's own values, exactly like real's
+    // merge-time check (real `bintree._get_digests` reads the index,
+    // never the re-scanned file). A mismatch prints real's `!!!
+    // Digest verification failed:` block, renames the file to
+    // `._checksum_failure_.<rand>` (real
+    // `_checksum_failure_temp_file`), and fails the package with
+    // real's `>>> Failed to emerge <cpv>` shape (real
+    // `Scheduler._failed_pkg_msg(..., "emerge", "for")` with no
+    // located log file, so no `, Log file:` suffix). A binpkg no
+    // record vouches for was fully parsed at scan and skips this --
+    // there is nothing to verify against (real's own `if "size" not
+    // in digests: return OK` halves this: a record without `SIZE`
+    // verifies nothing either). Remote (`file://` or binhost)
+    // downloads were already checked by `download_and_verify` against
+    // the *remote* record (real `_get_digests` prefers the remote
+    // metadata too), so only a purely local binpkg is re-checked here
+    // against the local index.
+    if !entry.remote_binary
+        && let Some(record) = local_index_record(
+            pkgdir,
+            &entry.category,
+            &entry.package,
+            &version,
+            entry.build_id.as_deref(),
+            &binpkg_path,
+        )
+        && let Err(mismatch) = crate::binpkg::verify_binpkg_against_index(&binpkg_path, &record)
+    {
+        let cpv = format!("{}/{}-{version}", entry.category, entry.package);
+        let renamed = crate::binpkg::checksum_failure_rename(&binpkg_path)
+            .unwrap_or_else(|| binpkg_path.clone());
+        print!(
+            "{}",
+            crate::binpkg::digest_failure_block(&binpkg_path, &mismatch, &renamed)
+        );
+        println!(">>> Failed to emerge {cpv}");
+        return Err(format!("{cpv}: binpkg digest verification failed"));
+    }
+
     // Real `PackageMerge._start`'s per-package line (backlog #177):
     // the binpkg is located/fetched above (real's `Binpkg` chain),
     // the vdb merge runs below (real's `EbuildMerge` chain) -- this
@@ -337,6 +379,48 @@ pub(crate) fn merge_one_binary_entry(
         crate::emerge_build::completed_line(entry, &version, progress, root, &color)
     );
     Ok(())
+}
+
+/// The `<pkgdir>/Packages` index record vouching for a local binpkg
+/// merge (real `bintree._get_digests`' own index read, backlog #174):
+/// the stanza whose `CPV` is `<category>/<package>-<version>`. With
+/// several (multi-instance `BUILD_ID`s), the `BUILD_ID` picks -- else
+/// the stanza whose `PATH` basename is the located file's own name, so
+/// a moved file still verifies against its own record. `None` when no
+/// stanza vouches (the file was synthesized at scan from its own
+/// bytes) or the record carries no `SIZE` (real verifies nothing
+/// without one).
+fn local_index_record(
+    pkgdir: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+    build_id: Option<&str>,
+    binpkg_path: &Path,
+) -> Option<std::collections::HashMap<String, String>> {
+    let cpv = format!("{category}/{package}-{version}");
+    let basename = binpkg_path.file_name()?.to_str()?;
+    let mut candidates: Vec<std::collections::HashMap<String, String>> =
+        portage_repo::read_packages_index(pkgdir)
+            .into_iter()
+            .filter(|e| e.get("CPV").is_some_and(|c| c == &cpv))
+            .collect();
+    if candidates.is_empty() {
+        return None;
+    }
+    if candidates.len() > 1
+        && let Some(want) = build_id.filter(|s| !s.is_empty())
+    {
+        candidates.retain(|e| e.get("BUILD_ID").is_some_and(|b| b == want));
+    }
+    if candidates.len() > 1 {
+        candidates.retain(|e| {
+            e.get("PATH")
+                .and_then(|p| Path::new(p).file_name()?.to_str())
+                .is_some_and(|b| b == basename)
+        });
+    }
+    candidates.into_iter().next()
 }
 
 /// The on-disk binpkg for `<cat>/<package>-<version>` in `$PKGDIR`.
@@ -668,6 +752,77 @@ mod tests {
             root.join("var/db/pkg/dev-libs/gpkgreadpkg-1.0/CONTENTS")
                 .is_file()
         );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn merge_one_binary_entry_fails_a_truncated_index_vouched_binpkg_at_merge() {
+        // Backlog #174, end to end at the merge boundary: real `emerge
+        // --oneshot --usepkgonly l32/faultpkg` with the gpkg truncated
+        // to half *selects* the binary (the `Packages` stanza vouches
+        // for it at scan) and fails at merge with `!!! Digest
+        // verification failed:` (`Failed on size verification`,
+        // `Got`/`Expected`), renames the file to
+        // `._checksum_failure_.<rand>`, and reports `>>> Failed to
+        // emerge <cpv>` -- rc 1 with a clean root. The merge must fail
+        // *before* unpacking anything: no vdb entry, no installed file.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let pkgdir = tmp.join("pkgdir");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(pkgdir.join("dev-libs")).unwrap();
+        let whole = std::fs::read(fixtures_root().join("pkgdir/dev-libs/gpkgreadpkg-1.0.gpkg.tar"))
+            .unwrap();
+        let dest = pkgdir.join("dev-libs/gpkgreadpkg-1.0.gpkg.tar");
+        std::fs::write(&dest, &whole[..whole.len() / 2]).unwrap();
+        use md5::Digest as _;
+        let md5: String = md5::Md5::digest(&whole)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        std::fs::write(
+            pkgdir.join("Packages"),
+            format!(
+                "TIMESTAMP: 0\n\nCPV: dev-libs/gpkgreadpkg-1.0\nSLOT: 0\nSIZE: {}\nMD5: {md5}\n_mtime_: 1\nPATH: dev-libs/gpkgreadpkg-1.0.gpkg.tar\n",
+                whole.len()
+            ),
+        )
+        .unwrap();
+
+        // The scan half of the same shape: the truncated file is
+        // accepted on the index's word (no `!!! Invalid binary
+        // package`), so resolution can select it.
+        let scanned = crate::binpkg::populate_local_pkgdir(&pkgdir).expect("scan succeeds");
+        assert_eq!(scanned.len(), 1, "{scanned:?}");
+
+        let entry = graph_entry("gpkgreadpkg", CandidateSource::Binary, "1.0");
+        let err = merge_one_binary_entry(
+            &entry,
+            &Config::default(),
+            &root,
+            &pkgdir,
+            &tmp.join("pt"),
+            &MergeOptions::default(),
+            mrg_director::MergeProgress::single(),
+        )
+        .expect_err("a truncated vouched binpkg must fail at merge");
+        assert!(
+            err.contains("dev-libs/gpkgreadpkg-1.0: binpkg digest verification failed"),
+            "{err}"
+        );
+        assert!(!dest.exists(), "the corrupt file is renamed away");
+        let renamed: Vec<_> = portage_util::read_dir_paths(&pkgdir.join("dev-libs"))
+            .unwrap()
+            .into_iter()
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("gpkgreadpkg-1.0.gpkg.tar._checksum_failure_."))
+            })
+            .collect();
+        assert_eq!(renamed.len(), 1, "one checksum-failure sibling");
+        // Clean root: nothing unpacked, no vdb entry, no merge marker.
+        assert!(!root.join("var/db/pkg/dev-libs/gpkgreadpkg-1.0").exists());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
