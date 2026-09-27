@@ -944,10 +944,22 @@ pub(crate) fn write_cfgfiledict(root: &Path, map: &BTreeMap<String, String>) -> 
 /// -> `(cpv, counter, paths)`. `preserved_libs()` mirrors real
 /// `getPreservedLibs()` (cpv -> paths, last entry wins on a duplicate
 /// cpv across keys -- a corner case with no real relevance here).
+///
+/// `orig_empty` is the observable projection of real `_data_orig` (the
+/// pre-`pruneNonExisting` copy real `load()` takes) for real `store()`'s
+/// own `self._data == self._data_orig` equality: JSON-loaded values are
+/// **lists** while every live value is a **tuple**, and a tuple never
+/// equals a list -- so after any `load()` a non-empty registry always
+/// compares changed and is rewritten by the next `store()`, while an
+/// empty one (`{}` or a 0-byte file, both degrading to `{}`) is
+/// rewritten only when `register()`/`unregister()` actually added or
+/// removed something. `write_plib_registry` therefore skips the write
+/// exactly when `orig_empty && entries.is_empty()`.
 type PlibEntries = BTreeMap<String, (String, String, Vec<String>)>;
 
 struct PlibRegistry {
     entries: PlibEntries,
+    orig_empty: bool,
 }
 
 impl PlibRegistry {
@@ -1085,16 +1097,112 @@ fn parse_plib_registry(text: &str) -> Option<PlibEntries> {
 }
 
 /// Real `load()`: a missing or unparseable registry file degrades
-/// gracefully to an empty registry rather than an error.
+/// gracefully to an empty registry rather than an error. Like real
+/// `load()` (`PreservedLibsRegistry.py:96-97`), the parsed snapshot is
+/// kept as `orig_empty` and `prune_non_existing` runs immediately --
+/// every consumer below therefore sees the pruned registry, exactly as
+/// real consumers of `load()` do.
 fn read_plib_registry(root: &Path) -> PlibRegistry {
-    let entries = std::fs::read_to_string(plib_registry_path(root))
+    let parsed: Option<PlibEntries> = std::fs::read_to_string(plib_registry_path(root))
         .ok()
-        .and_then(|text| parse_plib_registry(&text))
-        .unwrap_or_default();
-    PlibRegistry { entries }
+        .and_then(|text| parse_plib_registry(&text));
+    let mut registry = PlibRegistry {
+        orig_empty: parsed.as_ref().is_none_or(BTreeMap::is_empty),
+        entries: parsed.unwrap_or_default(),
+    };
+    prune_non_existing(root, &mut registry);
+    registry
+}
+
+/// Lexical POSIX `normpath` (real `os.path.normpath`), for
+/// `plib_abssymlink` below: collapses `.`/`..`/duplicate separators
+/// without touching the filesystem.
+fn norm_posix_path(path: &str) -> String {
+    let absolute = path.starts_with('/');
+    let mut parts: Vec<&str> = Vec::new();
+    for comp in path.split('/') {
+        match comp {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            c => parts.push(c),
+        }
+    }
+    let mut out = parts.join("/");
+    if absolute {
+        out.insert(0, '/');
+    }
+    if out.is_empty() {
+        out.push('.');
+    }
+    out
+}
+
+/// Real `portage.abssymlink(symlink, target)` (`lib/portage/__init__.py`):
+/// the absolute path of a symlink's target -- the target itself when
+/// absolute, otherwise resolved against the symlink's own directory and
+/// normalized. `path` is the stored registry path (always absolute).
+fn plib_abssymlink(path: &str, target: &str) -> String {
+    if target.starts_with('/') {
+        norm_posix_path(target)
+    } else {
+        let dir = path.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+        norm_posix_path(&format!("{dir}/{target}"))
+    }
+}
+
+/// Real `PreservedLibsRegistry.pruneNonExisting`
+/// (`PreservedLibsRegistry.py:180-219`): drop every recorded path that
+/// no longer exists on disk (`lstat` failure), rebuild each surviving
+/// entry as regular files first (in stored order), then the symlinks
+/// whose `abssymlink` target is one of those regular files (a tool like
+/// `eselect-opengl` may have repointed a soname symlink elsewhere -- bug
+/// #406837 -- and the orphaned hardlink is found separately), and drop
+/// the entry entirely when nothing survives. Only symlinks and regular
+/// files count (real `S_ISLNK`/`S_ISREG`); anything else is neither.
+fn prune_non_existing(root: &Path, registry: &mut PlibRegistry) {
+    let mut dead_keys = Vec::new();
+    for (cps, (_cpv, _counter, paths)) in registry.entries.iter_mut() {
+        let mut ordered: Vec<String> = Vec::new();
+        let mut hardlinks: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut symlinks: Vec<(String, String)> = Vec::new();
+        for f in paths.iter() {
+            let full = root.join(f.trim_start_matches('/'));
+            let meta = match std::fs::symlink_metadata(&full) {
+                Ok(meta) => meta,
+                Err(_) => continue,
+            };
+            if meta.file_type().is_symlink() {
+                match std::fs::read_link(&full) {
+                    Ok(target) => symlinks.push((f.clone(), target.to_string_lossy().into_owned())),
+                    Err(_) => continue,
+                }
+            } else if meta.file_type().is_file() {
+                hardlinks.insert(f.clone());
+                ordered.push(f.clone());
+            }
+        }
+        for (f, target) in &symlinks {
+            if hardlinks.contains(&plib_abssymlink(f, target)) {
+                ordered.push(f.clone());
+            }
+        }
+        if ordered.is_empty() {
+            dead_keys.push(cps.clone());
+        } else {
+            *paths = ordered;
+        }
+    }
+    for key in dead_keys {
+        registry.entries.remove(&key);
+    }
 }
 
 fn json_quote(s: &str) -> String {
+    // Real `json.dumps(..., ensure_ascii=False)`: `"` and `\` escaped,
+    // C0 controls as the short forms (`\b \t \n \f \r`) or `\u00xx`,
+    // everything else (including non-ASCII and DEL) raw UTF-8.
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
     for c in s.chars() {
@@ -1104,6 +1212,9 @@ fn json_quote(s: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\t' => out.push_str("\\t"),
             '\r' => out.push_str("\\r"),
+            '\u{8}' => out.push_str("\\b"),
+            '\u{c}' => out.push_str("\\f"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
             c => out.push(c),
         }
     }
@@ -1111,33 +1222,54 @@ fn json_quote(s: &str) -> String {
     out
 }
 
-/// Real `store()`'s own `json.dumps(..., indent="\t", sort_keys=True)`
-/// layout -- `BTreeMap` already keeps keys sorted.
+/// Real `store()`'s own `json.dumps(..., ensure_ascii=False,
+/// indent="\t", sort_keys=True)` layout (`PreservedLibsRegistry.py:21-25,
+/// 99-116`) -- `BTreeMap` already keeps keys sorted -- written via a
+/// plain `fs::write` (real `atomic_ofstream`'s own atomicity is a
+/// portuale-wide cut, not this slice's). An empty dict serializes as
+/// exactly `{}` and carries no trailing newline, matching Python's own
+/// output byte-for-byte. And like real `store()` (`:107-108`), an
+/// unchanged registry is not rewritten at all: not even the parent
+/// directory is created, so a packaged 0-byte file stays 0 bytes and a
+/// missing file stays missing.
+///
+/// (`SANDBOX_ON` is not honored: real checks it because its own
+/// registry mutations run inside sandboxed phases, while portuale's run
+/// in portuale's own unsandboxed process -- the phases it spawns are
+/// separate bash children.)
 fn write_plib_registry(root: &Path, registry: &PlibRegistry) -> Result<(), String> {
+    let out = if registry.entries.is_empty() {
+        if registry.orig_empty {
+            return Ok(());
+        }
+        String::from("{}")
+    } else {
+        let mut out = String::from("{\n");
+        let n = registry.entries.len();
+        for (i, (key, (cpv, counter, paths))) in registry.entries.iter().enumerate() {
+            out.push_str(&format!("\t{}: [\n", json_quote(key)));
+            out.push_str(&format!("\t\t{},\n", json_quote(cpv)));
+            out.push_str(&format!("\t\t{},\n", json_quote(counter)));
+            if paths.is_empty() {
+                out.push_str("\t\t[]\n");
+            } else {
+                out.push_str("\t\t[\n");
+                for (j, p) in paths.iter().enumerate() {
+                    out.push_str(&format!("\t\t\t{}", json_quote(p)));
+                    out.push_str(if j + 1 < paths.len() { ",\n" } else { "\n" });
+                }
+                out.push_str("\t\t]\n");
+            }
+            out.push_str("\t]");
+            out.push_str(if i + 1 < n { ",\n" } else { "\n" });
+        }
+        out.push('}');
+        out
+    };
     let path = plib_registry_path(root);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
-    let mut out = String::from("{\n");
-    let n = registry.entries.len();
-    for (i, (key, (cpv, counter, paths))) in registry.entries.iter().enumerate() {
-        out.push_str(&format!("\t{}: [\n", json_quote(key)));
-        out.push_str(&format!("\t\t{},\n", json_quote(cpv)));
-        out.push_str(&format!("\t\t{},\n", json_quote(counter)));
-        if paths.is_empty() {
-            out.push_str("\t\t[]\n");
-        } else {
-            out.push_str("\t\t[\n");
-            for (j, p) in paths.iter().enumerate() {
-                out.push_str(&format!("\t\t\t{}", json_quote(p)));
-                out.push_str(if j + 1 < paths.len() { ",\n" } else { "\n" });
-            }
-            out.push_str("\t\t]\n");
-        }
-        out.push_str("\t]");
-        out.push_str(if i + 1 < n { ",\n" } else { "\n" });
-    }
-    out.push_str("}\n");
     std::fs::write(&path, out).map_err(|e| format!("{}: {e}", path.display()))
 }
 
@@ -1316,6 +1448,34 @@ fn register_preserved_libs(
             .entries
             .insert(cps, (cpv.to_string(), counter.to_string(), paths.to_vec()));
     }
+}
+
+/// Re-attribute every registry entry still owned by `old_cpv` to
+/// `new_cpv` (with the replacing package's own vdb `COUNTER`), keeping
+/// the `cp:slot` key and the pruned paths -- portuale's side of real
+/// `dblink.treewalk()` recording the preserved libs under the package
+/// being merged (`self.mycpv`, `vartree.py:5266-5272`). No-op when
+/// nothing names `old_cpv`; the write itself stays conditional (real
+/// `store()`), so a no-op over an empty/missing registry touches
+/// nothing. Called from `unmerge_replaced_same_slot` (see its own doc
+/// comment); a standalone unmerge keeps attributing to the removed
+/// package, matching real `_prune_plib_registry(unmerge=True)` with no
+/// replacement.
+fn reattribute_preserved_libs(
+    root: &Path,
+    old_cpv: &str,
+    new_cpv: &str,
+    new_counter: &str,
+) -> Result<(), String> {
+    let mut registry = read_plib_registry(root);
+    let new_counter = new_counter.trim().to_string();
+    for (entry_cpv, entry_counter, _entry_paths) in registry.entries.values_mut() {
+        if entry_cpv == old_cpv {
+            *entry_cpv = new_cpv.to_string();
+            *entry_counter = new_counter.clone();
+        }
+    }
+    write_plib_registry(root, &registry)
 }
 
 /// Real `dblink._prune_plib_registry()` (`vartree.py:2228-2314`), called
@@ -1584,13 +1744,11 @@ pub(crate) fn prune_unused_preserved_libs(
         }
     }
 
-    // Real `pruneNonExisting`: drop a registry entry once none of its
-    // recorded paths exist on disk any more.
-    registry.entries.retain(|_key, (_cpv, _counter, paths)| {
-        paths
-            .iter()
-            .any(|p| std::fs::symlink_metadata(root.join(p.trim_start_matches('/'))).is_ok())
-    });
+    // Real `_remove_preserved_libs`'s own tail (`vartree.py:3995`):
+    // `self.vartree.dbapi._plib_registry.pruneNonExisting()` -- drop a
+    // registry entry once none of its recorded paths exist on disk any
+    // more (rebuilding survivors file-then-symlink, not just retaining).
+    prune_non_existing(root, &mut registry);
     write_plib_registry(root, &registry)?;
 
     Ok(removed)
@@ -3595,6 +3753,32 @@ pub(crate) fn unmerge_replaced_same_slot(
             portage_tmpdir,
             options,
             None,
+        )?;
+    }
+
+    // Real `dblink.treewalk()` registers the preserved libs under the
+    // package *being merged* (`plib_registry.register(self.mycpv, slot,
+    // counter, sorted(preserve_paths))`, `vartree.py:5266-5272`) -- the
+    // post-bump cpv -- while portuale's own replace loop preserves them
+    // during the *replaced* version's own `unmerge_pkgfiles` (which
+    // attributes them to the removed cpv, the way a standalone `emerge
+    // -C` correctly does). Re-attribute every entry still owned by a
+    // just-replaced cpv to the replacing package, matching real's own
+    // recorded owner (l32 C2: `l32/sonamelib-2.0`, not `-1.0`).
+    let new_cpv = format!("{category}/{new_pf}");
+    let new_counter = std::fs::read_to_string(
+        root.join("var/db/pkg")
+            .join(category)
+            .join(new_pf)
+            .join("COUNTER"),
+    )
+    .unwrap_or_else(|_| "0".to_string());
+    for old_pf in &replaced {
+        reattribute_preserved_libs(
+            root,
+            &format!("{category}/{old_pf}"),
+            &new_cpv,
+            &new_counter,
         )?;
     }
 
@@ -6571,6 +6755,7 @@ mod tests {
             &tmp,
             &PlibRegistry {
                 entries: entries.clone(),
+                orig_empty: false,
             },
         )
         .expect("write succeeds");
@@ -6621,6 +6806,216 @@ mod tests {
         );
     }
 
+    /// S0 for backlog #167(a): real `PreservedLibsRegistry.store()`
+    /// (`3rdparty/portage/lib/portage/util/_dyn_libs/
+    /// PreservedLibsRegistry.py:107-108`) returns without writing when the
+    /// registry is unchanged (`self._data == self._data_orig`) -- a
+    /// merge/unmerge that preserves nothing must leave a packaged 0-byte
+    /// registry at 0 bytes (l32 C1/C3/C4 cells), not rewrite it.
+    #[test]
+    fn plib_registry_is_not_rewritten_when_nothing_is_preserved() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let reg_path = plib_registry_path(&root);
+        std::fs::create_dir_all(reg_path.parent().unwrap()).unwrap();
+        std::fs::write(&reg_path, b"").unwrap();
+        let before = std::fs::metadata(&reg_path).unwrap();
+        let before_mtime = before.modified().unwrap();
+
+        std::fs::create_dir_all(root.join("usr/lib")).unwrap();
+        std::fs::write(root.join("usr/lib/plain.so"), b"x").unwrap();
+        let vdb = root.join("var/db/pkg/dev-libs/plain-1.0");
+        std::fs::create_dir_all(&vdb).unwrap();
+        std::fs::write(vdb.join("COUNTER"), "3\n").unwrap();
+        let preserved = preserve_libs_on_unmerge(
+            &root,
+            "dev-libs",
+            "plain",
+            "plain-1.0",
+            "0",
+            "obj /usr/lib/plain.so abc 1\n",
+        )
+        .unwrap();
+        assert!(preserved.is_empty());
+
+        let registry = read_plib_registry(&root);
+        unregister_preserved_libs(&root, "dev-libs/plain-1.0", registry, &BTreeMap::new()).unwrap();
+
+        let removed = prune_unused_preserved_libs(&root, false, &|_| false).unwrap();
+        assert!(removed.is_empty());
+
+        let after = std::fs::metadata(&reg_path).unwrap();
+        assert_eq!(after.len(), 0, "a 0-byte registry must stay 0 bytes");
+        assert_eq!(
+            after.modified().unwrap(),
+            before_mtime,
+            "the registry file must not be rewritten when nothing changed"
+        );
+    }
+
+    /// S0 for backlog #167(b): an empty registry real *does* write is
+    /// exactly `{}` (2 bytes, no trailing newline -- real
+    /// `json.dumps({}, indent="\t", sort_keys=True)`).
+    #[test]
+    fn plib_registry_empty_serializes_to_exactly_empty_braces() {
+        let tmp = tempdir();
+        // `orig_empty: false`: this stands in for a loaded non-empty
+        // registry whose entries were all unregistered -- real
+        // `_data (now {}) != _data_orig`, so real `store()` rewrites.
+        let mut registry = PlibRegistry {
+            entries: BTreeMap::new(),
+            orig_empty: false,
+        };
+        register_preserved_libs(
+            &mut registry,
+            "dev-libs/foo-1.0",
+            "dev-libs",
+            "foo",
+            "0",
+            "5",
+            &["/usr/lib/libfoo.so.1".to_string()],
+        );
+        register_preserved_libs(
+            &mut registry,
+            "dev-libs/foo-1.0",
+            "dev-libs",
+            "foo",
+            "0",
+            "5",
+            &[],
+        );
+        assert!(registry.entries.is_empty());
+        write_plib_registry(&tmp, &registry).expect("write succeeds");
+        let bytes = std::fs::read(plib_registry_path(&tmp)).unwrap();
+        assert_eq!(
+            bytes, b"{}",
+            "an empty registry is exactly `{{}}`, no trailing newline"
+        );
+    }
+
+    /// S0 for backlog #167(c): a non-empty registry is serialized
+    /// byte-identical to real `json.dumps(data, ensure_ascii=False,
+    /// indent="\t", sort_keys=True)` (expected bytes below generated with
+    /// `python3 -c 'import json; print(repr(json.dumps({"b:0":
+    /// ("x-1.0", "1", []), "a:0": ("y-2.0", "3",
+    /// ["/usr/lib/lib\u00e9.so.1", "a\"b\\\\c"])}, ensure_ascii=False,
+    /// indent="\t", sort_keys=True)))'`).
+    #[test]
+    fn plib_registry_serialization_is_byte_identical_to_python_json_dumps() {
+        let tmp = tempdir();
+        let mut entries = BTreeMap::new();
+        entries.insert(
+            "b:0".to_string(),
+            ("x-1.0".to_string(), "1".to_string(), Vec::new()),
+        );
+        entries.insert(
+            "a:0".to_string(),
+            (
+                "y-2.0".to_string(),
+                "3".to_string(),
+                vec!["/usr/lib/lib\u{e9}.so.1".to_string(), "a\"b\\c".to_string()],
+            ),
+        );
+        write_plib_registry(
+            &tmp,
+            &PlibRegistry {
+                entries,
+                orig_empty: false,
+            },
+        )
+        .expect("write succeeds");
+        let bytes = std::fs::read(plib_registry_path(&tmp)).unwrap();
+        let expected = "{\n\t\"a:0\": [\n\t\t\"y-2.0\",\n\t\t\"3\",\n\t\t[\n\t\t\t\"/usr/lib/lib\u{e9}.so.1\",\n\t\t\t\"a\\\"b\\\\c\"\n\t\t]\n\t],\n\t\"b:0\": [\n\t\t\"x-1.0\",\n\t\t\"1\",\n\t\t[]\n\t]\n}";
+        assert_eq!(
+            String::from_utf8(bytes).unwrap(),
+            expected,
+            "registry bytes must match Python json.dumps exactly (no trailing newline)"
+        );
+    }
+
+    /// S0 for backlog #167(e): real `load()` calls `pruneNonExisting()`
+    /// (`PreservedLibsRegistry.py:96-97,180-219`), which rebuilds each
+    /// entry's paths as regular files first (in stored order), then
+    /// symlinks whose target is one of those files -- so after a reload
+    /// the hardlink `.so.1.0.0` comes before the soname symlink `.so.1`
+    /// even though `register()` stored `sorted()` order, and gone paths
+    /// are dropped.
+    #[test]
+    fn plib_registry_reload_orders_regular_files_before_symlinks() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("usr/lib")).unwrap();
+        std::fs::write(root.join("usr/lib/libl32soname.so.1.0.0"), b"fake elf").unwrap();
+        std::os::unix::fs::symlink(
+            "libl32soname.so.1.0.0",
+            root.join("usr/lib/libl32soname.so.1"),
+        )
+        .unwrap();
+        let seed = "{\n\t\"l32/sonamelib:0\": [\n\t\t\"l32/sonamelib-1.0\",\n\t\t\"1\",\n\t\t[\n\t\t\t\"/usr/lib/libl32soname.so.1\",\n\t\t\t\"/usr/lib/libl32soname.so.1.0.0\",\n\t\t\t\"/usr/lib/libl32soname.so.gone\"\n\t\t]\n\t]\n}";
+        std::fs::create_dir_all(plib_registry_path(&root).parent().unwrap()).unwrap();
+        std::fs::write(plib_registry_path(&root), seed).unwrap();
+
+        let registry = read_plib_registry(&root);
+        let (_, _, paths) = registry
+            .entries
+            .get("l32/sonamelib:0")
+            .expect("the entry survives reload");
+        assert_eq!(
+            paths,
+            &vec![
+                "/usr/lib/libl32soname.so.1.0.0".to_string(),
+                "/usr/lib/libl32soname.so.1".to_string(),
+            ],
+            "regular files first, then symlinks; gone paths dropped"
+        );
+    }
+
+    /// S0 for backlog #167(d): real `dblink.treewalk()` records the
+    /// preserved libs under the package being merged (`self.mycpv` -- the
+    /// post-bump cpv, `3rdparty/portage/lib/portage/dbapi/vartree.py:
+    /// 5266-5272`), with its own slot and counter. The registry as the
+    /// replaced version's own unmerge left it names the pre-bump cpv in
+    /// `register()`-sorted path order; after re-attribution the key is
+    /// unchanged, the owner is the post-bump cpv with the new counter,
+    /// and the paths are the load-pruned file-then-symlink order.
+    #[test]
+    fn plib_registry_soname_bump_records_the_post_bump_cpv() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("usr/lib")).unwrap();
+        std::fs::write(root.join("usr/lib/libl32soname.so.1.0.0"), b"fake elf").unwrap();
+        std::os::unix::fs::symlink(
+            "libl32soname.so.1.0.0",
+            root.join("usr/lib/libl32soname.so.1"),
+        )
+        .unwrap();
+        let seed = "{\n\t\"l32/sonamelib:0\": [\n\t\t\"l32/sonamelib-1.0\",\n\t\t\"1\",\n\t\t[\n\t\t\t\"/usr/lib/libl32soname.so.1\",\n\t\t\t\"/usr/lib/libl32soname.so.1.0.0\"\n\t\t]\n\t]}";
+        std::fs::create_dir_all(plib_registry_path(&root).parent().unwrap()).unwrap();
+        std::fs::write(plib_registry_path(&root), seed).unwrap();
+
+        reattribute_preserved_libs(&root, "l32/sonamelib-1.0", "l32/sonamelib-2.0", "7\n").unwrap();
+
+        let registry = read_plib_registry(&root);
+        let (cpv, counter, paths) = registry
+            .entries
+            .get("l32/sonamelib:0")
+            .expect("the entry keeps its key");
+        assert_eq!(cpv, "l32/sonamelib-2.0");
+        assert_eq!(counter, "7");
+        assert_eq!(
+            paths,
+            &vec![
+                "/usr/lib/libl32soname.so.1.0.0".to_string(),
+                "/usr/lib/libl32soname.so.1".to_string(),
+            ]
+        );
+
+        // No-op when the old cpv owns nothing: the file is byte-identical.
+        let before = std::fs::read(plib_registry_path(&root)).unwrap();
+        reattribute_preserved_libs(&root, "l32/sonamelib-1.0", "l32/sonamelib-9.0", "9").unwrap();
+        assert_eq!(std::fs::read(plib_registry_path(&root)).unwrap(), before);
+    }
+
     /// Real `unregister` (`register(cpv, slot, counter, [])`): removes
     /// the `cps` entry only when it still records the *same* `cpv` and
     /// `counter` -- a different package (or a stale counter) sharing the
@@ -6629,6 +7024,7 @@ mod tests {
     fn register_preserved_libs_unregister_only_matches_the_same_cpv_and_counter() {
         let mut registry = PlibRegistry {
             entries: BTreeMap::new(),
+            orig_empty: true,
         };
         register_preserved_libs(
             &mut registry,
@@ -6693,6 +7089,7 @@ mod tests {
     fn register_preserved_libs_with_paths_unconditionally_overwrites() {
         let mut registry = PlibRegistry {
             entries: BTreeMap::new(),
+            orig_empty: true,
         };
         register_preserved_libs(
             &mut registry,
@@ -6808,8 +7205,14 @@ mod tests {
                 vec!["/usr/lib/preservedtest/libfoo.so.1".to_string()],
             ),
         );
-        write_plib_registry(&root, &PlibRegistry { entries })
-            .expect("seeding the registry succeeds");
+        write_plib_registry(
+            &root,
+            &PlibRegistry {
+                entries,
+                orig_empty: false,
+            },
+        )
+        .expect("seeding the registry succeeds");
 
         let options = MergeOptions {
             collision_protect: true,
