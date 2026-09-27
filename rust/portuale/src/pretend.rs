@@ -5235,6 +5235,7 @@ fn execute_unmerge(
             &portage_tmpdir,
             &options,
             backup.as_ref(),
+            false,
         ) {
             eprintln!("emerge: {e}");
             return ExitCode::from(1);

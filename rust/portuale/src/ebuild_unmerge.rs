@@ -574,6 +574,12 @@ impl Default for UnmergeOptions {
 /// non-empty, is folded into the real `others_in_slot` set so a path
 /// the replacing version now owns is left in place exactly as a path
 /// owned by a genuine other same-slot instance would be.
+/// `is_replacement` is real `unmerge_with_replacement`: `treewalk()`'s
+/// own replace loop sets it (the preserved set was computed merge-side
+/// and injected into the replacing package's `CONTENTS`, so the files
+/// survive through ownership and no old-cpv registration happens --
+/// see `ebuild_merge::preserve_libs_on_unmerge`); a standalone
+/// `emerge -C` clears it.
 pub(crate) fn unmerge_pkgfiles(
     root: &Path,
     category: &str,
@@ -581,6 +587,7 @@ pub(crate) fn unmerge_pkgfiles(
     pf: &str,
     also_keep: &[String],
     options: &UnmergeOptions,
+    is_replacement: bool,
 ) -> Result<(), String> {
     let vdb_dir = root.join("var/db/pkg").join(category).join(pf);
     let contents_path = vdb_dir.join("CONTENTS");
@@ -642,6 +649,7 @@ pub(crate) fn unmerge_pkgfiles(
         pf,
         own_slot.as_deref().unwrap_or("0"),
         &contents_text,
+        is_replacement,
     )?;
 
     remove_contents(
@@ -736,6 +744,7 @@ pub fn run_unmerge(
         &env.split.pf,
         &[],
         options,
+        false,
     )?;
 
     let postrm_status = ebuild_phases::run_single_phase(
