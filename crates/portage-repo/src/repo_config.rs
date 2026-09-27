@@ -180,6 +180,13 @@ pub fn find_repos(config_root: &Path) -> Result<Vec<RepoConfig>, Error> {
     find_repos_impl(config_root, true)
 }
 
+/// [`find_repos`] for a process-internal config probe that runs before
+/// the CLI's own load: stays quiet, so the run prints the section-name
+/// line exactly as often as before the probe existed.
+pub fn find_repos_quiet(config_root: &Path) -> Result<Vec<RepoConfig>, Error> {
+    find_repos_impl(config_root, false)
+}
+
 /// [`find_repos`] without the user-facing section-name-mismatch line, for
 /// internal location-keyed lookups: the CLI layers already report a
 /// mismatch once, and repeating it on every internal probe is noise.

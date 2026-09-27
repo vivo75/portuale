@@ -106,6 +106,28 @@ fn still_listed_parents_is_empty_when_no_set_lists_the_cp() {
     assert!(still_listed_parents(&root, &sets, "dev-libs", "dualslotpkg", "1.0").is_empty());
 }
 
+// `FEATURES` is process-global and the remote tests mutate it too: share
+// their lock, so no two `FEATURES` writers overlap.
+use crate::remote::tests::PLACED_CONFIG_ENV_LOCK as FEATURES_ENV_LOCK;
+
+/// Saves `FEATURES` on entry and restores it on drop, so an assertion panic
+/// cannot leak a probe value into another test.
+struct RestoreFeatures {
+    saved: Option<std::ffi::OsString>,
+}
+
+impl Drop for RestoreFeatures {
+    fn drop(&mut self) {
+        // SAFETY: same locked env mutation as `set` (restoring the value).
+        unsafe {
+            match self.saved.take() {
+                Some(value) => std::env::set_var("FEATURES", value),
+                None => std::env::remove_var("FEATURES"),
+            }
+        }
+    }
+}
+
 /// A scratch config root resolving `FEATURES` from a `make.globals` carrying
 /// `binpkg-multi-instance` plus `make_conf` as `make.conf`.
 fn unmerge_features_probe_root(tag: &str, make_conf: &str) -> std::path::PathBuf {

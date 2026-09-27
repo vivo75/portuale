@@ -136,6 +136,13 @@ fn synthetic_unit_bytes(
     (unit.to_str().unwrap().to_string(), staged)
 }
 
+/// Serialises the tests that pin `PORTAGE_CONFIGROOT`: it is
+/// process-global, and `place_config_root` reads it (the server
+/// `make.globals` lookup) while `PlacedConfig` overwrites it, so
+/// two such tests racing would seed from each other's server root. The
+/// `FEATURES`-mutating tests elsewhere (`pretend::tests::unmerge`) share it.
+pub(crate) static PLACED_CONFIG_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn local_ctx(root: &str, workdir: &str) -> RemoteContext {
     // Direct stage runs (no preflight) still need a resolved absolute
     // path in the fixture context: the built `portuale` binary.
@@ -320,6 +327,143 @@ fn render_test_staged() -> crate::remote_bundle::StagedBundle {
     }
 }
 
+/// Synthetic server root: `etc/portage/repos.conf` + the server's own
+/// `make.globals`.
+fn l171e_server_root(tmp: &std::path::Path, repos_conf: &str) -> std::path::PathBuf {
+    let server_root = tmp.join("serverroot");
+    std::fs::create_dir_all(server_root.join("etc/portage/repos.conf")).unwrap();
+    std::fs::create_dir_all(server_root.join("usr/share/portage/config")).unwrap();
+    std::fs::write(
+        server_root.join("etc/portage/repos.conf/l171e.conf"),
+        repos_conf,
+    )
+    .unwrap();
+    std::fs::write(
+        server_root.join("usr/share/portage/config/make.globals"),
+        "FEATURES=\"sandbox news sign\"\n",
+    )
+    .unwrap();
+    server_root
+}
+
+/// Add a server repo with one profile `<location>/profiles/<rel>`
+/// carrying `make.defaults` `FEATURES="<features>"` (plus a
+/// `repo_name` file so `find_repos` keeps the section name).
+fn l171e_server_repo(
+    server_root: &std::path::Path,
+    name: &str,
+    rel: &str,
+    features: &str,
+) -> std::path::PathBuf {
+    let location = server_root.join("repos").join(name);
+    let profile = location.join("profiles").join(rel);
+    std::fs::create_dir_all(&profile).unwrap();
+    std::fs::write(
+        profile.join("make.defaults"),
+        format!("FEATURES=\"{features}\"\n"),
+    )
+    .unwrap();
+    std::fs::write(location.join("profiles/repo_name"), format!("{name}\n")).unwrap();
+    location
+}
+
+/// Pin `PORTAGE_CONFIGROOT` at a synthetic server root with ambient
+/// `FEATURES`/`INSTALL_MASK` cleared (all process-global; shares
+/// `PLACED_CONFIG_ENV_LOCK`), restoring everything on drop while the
+/// lock is still held.
+struct ServerEnvPin {
+    saved_config_root: Option<std::ffi::OsString>,
+    saved_features: Option<std::ffi::OsString>,
+    saved_mask: Option<std::ffi::OsString>,
+    _guard: std::sync::MutexGuard<'static, ()>,
+}
+
+impl ServerEnvPin {
+    fn pin(server_root: &std::path::Path) -> Self {
+        let guard = PLACED_CONFIG_ENV_LOCK.lock().unwrap();
+        let saved_config_root = std::env::var_os("PORTAGE_CONFIGROOT");
+        let saved_features = std::env::var_os("FEATURES");
+        let saved_mask = std::env::var_os("INSTALL_MASK");
+        // SAFETY: held `PLACED_CONFIG_ENV_LOCK`; no other test in
+        // this binary pins these without it.
+        unsafe {
+            std::env::set_var("PORTAGE_CONFIGROOT", server_root);
+            std::env::remove_var("FEATURES");
+            std::env::remove_var("INSTALL_MASK");
+        }
+        Self {
+            saved_config_root,
+            saved_features,
+            saved_mask,
+            _guard: guard,
+        }
+    }
+}
+
+impl Drop for ServerEnvPin {
+    fn drop(&mut self) {
+        // SAFETY: same as above.
+        unsafe {
+            match self.saved_config_root.take() {
+                Some(value) => std::env::set_var("PORTAGE_CONFIGROOT", value),
+                None => std::env::remove_var("PORTAGE_CONFIGROOT"),
+            }
+            match self.saved_features.take() {
+                Some(value) => std::env::set_var("FEATURES", value),
+                None => std::env::remove_var("FEATURES"),
+            }
+            match self.saved_mask.take() {
+                Some(value) => std::env::set_var("INSTALL_MASK", value),
+                None => std::env::remove_var("INSTALL_MASK"),
+            }
+        }
+    }
+}
+
+/// Resolve a placed client tree's config against explicit server repos
+/// (kept for the remap tests; the production path uses the shared
+/// `load_repos_and_config`).
+fn l171e_resolve_with_server_repos(
+    placed_dir: &std::path::Path,
+    server_root: &std::path::Path,
+    eroot: &std::path::Path,
+) -> portage_profile::Config {
+    let server_repos = portage_repo::find_repos(server_root).expect("server repos resolve");
+    let main = server_repos
+        .iter()
+        .find(|repo| repo.is_main)
+        .expect("a main repo");
+    let overlays: Vec<(String, std::path::PathBuf)> = server_repos
+        .iter()
+        .filter(|repo| !repo.is_main)
+        .map(|repo| (repo.name.clone(), repo.location.clone()))
+        .collect();
+    let aliases: Vec<(String, std::path::PathBuf)> = server_repos
+        .iter()
+        .flat_map(|repo| {
+            repo.aliases
+                .iter()
+                .map(|alias| (alias.clone(), repo.location.clone()))
+        })
+        .collect();
+    let masters: std::collections::HashMap<String, Vec<std::path::PathBuf>> = server_repos
+        .iter()
+        .map(|repo| (repo.name.clone(), repo.masters.clone()))
+        .collect();
+    portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: placed_dir,
+        main_repo_location: &main.location,
+        overlay_repos: &overlays,
+        repo_aliases: &aliases,
+        main_repo_name: &main.name,
+        repo_masters: &masters,
+        eroot,
+    })
+    .expect("placed client config resolves")
+}
+
+const L171E_REL: &str = "default/linux/amd64/23.0";
+
 /// Saved env for an old instance: `declare -x` lines (the
 /// `env_val` form `run_old_hook` greps) plus hook functions writing
 /// to a client log.
@@ -452,12 +596,29 @@ fn s8_sha256(path: &std::path::Path) -> String {
     )
 }
 
+/// One end-to-end tree: a client root + workdir, a `--remote-portuale-dir`
+/// bin dir, and a minimal `server:` config.
+struct S8Tree {
+    tmp: std::path::PathBuf,
+    root: std::path::PathBuf,
+    work: std::path::PathBuf,
+    bindir: std::path::PathBuf,
+    clientetc: std::path::PathBuf,
+}
+
+impl Drop for S8Tree {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.tmp);
+    }
+}
+
 fn s8_stdout(output: &std::process::Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
 mod binpkg_flow;
 mod client_binary;
+mod config_place;
 mod context;
 mod host_keys;
 mod ledger;

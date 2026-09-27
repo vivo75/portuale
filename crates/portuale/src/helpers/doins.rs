@@ -161,6 +161,28 @@ struct Guard {
     root: PathBuf,
 }
 
+/// Lexically normalise an absolute path (`.`/`..` only; symlinks are
+/// left alone — this is the fallback when nothing exists to
+/// canonicalize).
+fn lexical_normalise(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for comp in p.components() {
+        use std::path::Component;
+        match comp {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            _ => out.push(comp.as_os_str()),
+        }
+    }
+    if out.as_os_str().is_empty() {
+        PathBuf::from("/")
+    } else {
+        out
+    }
+}
+
 /// Map an errno to Portage's Python exception type name.
 fn exc_name(errno: i32) -> &'static str {
     match errno {

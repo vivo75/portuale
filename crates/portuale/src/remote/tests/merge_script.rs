@@ -155,6 +155,66 @@ fn phase_script_runs_pkg_pretend_from_saved_env() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// The server's set locale variables reach the client phase env, and
+/// only those (a fake getter pins the selection).
+#[test]
+fn collect_server_locale_forwards_only_set_vars() {
+    use std::collections::HashMap;
+    let env: HashMap<&str, &str> = [("LANG", "C.UTF-8"), ("LANGUAGE", ""), ("TERM", "xterm")]
+        .into_iter()
+        .collect();
+    let got = collect_server_locale(|name| env.get(name).map(|v| v.to_string()));
+    let names: Vec<&str> = got.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, vec!["LANG", "LANGUAGE"]);
+    assert_eq!(got[0].1, "C.UTF-8");
+    assert_eq!(got[1].1, "");
+}
+
+/// Render level: the regen script unsets `O`/`SHELL`/`LC_ALL` (posixish)
+/// and re-exports exactly the given locale pairs.
+#[test]
+fn postinst_regen_script_matches_portage_shell_shape() {
+    let staged = render_test_staged();
+    let locale = vec![
+        ("LANG".to_string(), "C.UTF-8".to_string()),
+        ("LC_NUMERIC".to_string(), "a b".to_string()),
+    ];
+    let script = postinst_regen_script(PostinstRegenScriptArgs {
+        unit_dir: "/work/regen-1.0",
+        staged: &staged,
+        root: "/",
+        workdir_parent: "/work",
+        colormap: "never",
+        features: Some("sandbox merge-time"),
+        locale: &locale,
+        portuale_bin: "/opt/bin/portuale-0123456789abcdef",
+    });
+    assert!(
+        script.contains("unset O\n"),
+        "O must go (real environ_filter):\n{script}"
+    );
+    assert!(
+        script.contains("unset SHELL\n"),
+        "SHELL must be unset so bash self-inits it (real declare --):\n{script}"
+    );
+    assert!(
+        script.contains("unset LC_ALL\n"),
+        "LC_ALL must go on posixish EAPIs (real split_LC_ALL):\n{script}"
+    );
+    assert!(
+        script.contains("export LANG='C.UTF-8'\n"),
+        "server LANG missing:\n{script}"
+    );
+    assert!(
+        script.contains("export LC_NUMERIC='a b'\n"),
+        "server LC_* missing or misquoted:\n{script}"
+    );
+    assert!(
+        !script.contains("LANGUAGE"),
+        "uninjected locale must not appear:\n{script}"
+    );
+}
+
 /// The merge copy driver applies ownership before restoring the mode
 /// (`chown` then `chmod`), since `chown(2)` clears setuid/setgid even
 /// when owner and group are unchanged.
