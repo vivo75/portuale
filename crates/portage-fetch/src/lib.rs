@@ -679,6 +679,60 @@ pub struct DownloadWithCommandsQuietArgs<'a> {
     pub commands: &'a FetchCommands,
 }
 
+/// The capturing sibling of [`download_with_commands`]: the same command
+/// selection, `${FILE}` check, and substitution, but the child's stdout
+/// is dropped and its stderr captured -- never inherited. For callers
+/// whose failure message is shaped from the transcript (Portage
+/// `bintree._populate_remote`'s `!!! [repo] Error fetching ...` shape).
+pub fn download_with_commands_quiet(
+    args: DownloadWithCommandsQuietArgs<'_>,
+) -> Result<(), QuietFetchError> {
+    let DownloadWithCommandsQuietArgs {
+        uri,
+        dest,
+        resume,
+        distdir,
+        vars,
+        commands,
+    } = args;
+    let planned = plan_fetch_command(PlanFetchCommandArgs {
+        uri,
+        dest,
+        resume,
+        distdir,
+        vars,
+        commands,
+    })
+    .map_err(|summary| QuietFetchError {
+        summary,
+        stderr: String::new(),
+    })?;
+    let output = std::process::Command::new(&planned.prog)
+        .args(&planned.args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .map_err(|e| QuietFetchError {
+            summary: format!("failed to spawn {}: {e}", planned.prog),
+            stderr: planned.file_param_warning.clone().unwrap_or_default(),
+        })?;
+    if !output.status.success() {
+        if !resume {
+            let _ = std::fs::remove_file(dest);
+        }
+        let mut stderr = planned.file_param_warning.clone().unwrap_or_default();
+        stderr.push_str(&String::from_utf8_lossy(&output.stderr));
+        return Err(QuietFetchError {
+            summary: format!(
+                "{} failed to fetch {uri:?} ({})",
+                planned.prog, output.status
+            ),
+            stderr,
+        });
+    }
+    Ok(())
+}
+
 /// The `make.globals` default transport, for callers with no resolved
 /// config: `download_with_commands` over the defaults, no extra
 /// variables. Shared by the `portuale` fetch path and the `mrg-director`
@@ -689,6 +743,23 @@ pub fn download_via_wget(uri: &str, dest: &Path, resume: bool) -> Result<(), Str
         uri,
         dest,
         resume,
+        distdir,
+        vars: FetchCommandVars::default(),
+        commands: &FetchCommands::default(),
+    })
+}
+
+/// The quiet `make.globals` default transport: [`download_via_wget`]'s
+/// own command line, but output-captured ([`download_with_commands_quiet`])
+/// -- for callers that shape the failure themselves (a binhost index
+/// refresh prints Portage's `!!! [repo] ...` lines, never wget's raw
+/// transcript).
+pub fn download_via_wget_quiet(uri: &str, dest: &Path) -> Result<(), QuietFetchError> {
+    let distdir = dest.parent().unwrap_or_else(|| Path::new("."));
+    download_with_commands_quiet(DownloadWithCommandsQuietArgs {
+        uri,
+        dest,
+        resume: false,
         distdir,
         vars: FetchCommandVars::default(),
         commands: &FetchCommands::default(),

@@ -17,6 +17,49 @@ use portage_profile::{BinRepo, Config};
 use portage_repo::{GraphEntry, PretendOutcome, RepoConfig};
 use std::path::Path;
 
+/// Portage's `fetch._hide_url_passwd`, verbatim: mask `//user:secret@` as
+/// `//user:*password*@` with a single global substitution, so edge behaviour
+/// matches (a password with whitespace is left alone; a user with `/` is
+/// still masked).
+pub(crate) fn hide_binhost_passwd(url: &str) -> String {
+    regex::Regex::new(r"//([^:\s]+):[^@\s]+@")
+        .expect("static regex is valid")
+        .replace_all(url, "//$1:*password*@")
+        .into_owned()
+}
+
+/// Recover Portage's `HTTPError` string (`"HTTP Error {code}: {reason}"`,
+/// verified against the stdlib) from a captured wget transcript's
+/// `awaiting response... {code} {reason}` line -- byte-identical whenever the
+/// server sent a reason phrase. `None` when the transcript holds no response
+/// line: the caller falls back to the fetch summary (documented, not parity).
+pub(crate) fn wget_http_error(stderr: &str) -> Option<String> {
+    for line in stderr.lines() {
+        let Some((_, rest)) = line.split_once("awaiting response... ") else {
+            continue;
+        };
+        let rest = rest.trim();
+        let (code, reason) = rest.split_once(' ')?;
+        if code.len() == 3 && code.bytes().all(|b| b.is_ascii_digit()) && !reason.trim().is_empty()
+        {
+            return Some(format!("HTTP Error {code}: {}", reason.trim()));
+        }
+    }
+    None
+}
+
+/// The leading-blank-line `!!! [<name>] Error fetching binhost package info`
+/// line plus the `!!! [<name>] <detail>` line and trailing blank line, as one
+/// stderr block. `detail` is the `HTTP Error` shape (see [`wget_http_error`]),
+/// else the fetch summary.
+// Portage: lib/portage/dbapi/bintree.py, _populate_remote
+pub(crate) fn binhost_fetch_warning(binrepo_name: &str, sync_uri: &str, detail: &str) -> String {
+    format!(
+        "\n\n!!! [{binrepo_name}] Error fetching binhost package info from '{}'\n!!! [{binrepo_name}] {detail}\n\n",
+        hide_binhost_passwd(sync_uri)
+    )
+}
+
 /// The cache file `<EROOT>/var/cache/edb/binhost/<host>/<url-path>/Packages`.
 /// For `http(s)`/`ssh` that is [`BinRepo::packages_dir`]; for `file://` the
 /// EROOT-side copy (Portage caches even local indexes).
@@ -48,6 +91,21 @@ fn unix_now() -> f64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs_f64())
         .unwrap_or(0.0)
+}
+
+/// Prefer a server status line (`HTTP Error 500: ...`, from the first attempt
+/// that has one) over the wget summary. Attempts hit the same server, so the
+/// first parseable one is representative.
+fn http_or_summary(failures: &[portage_fetch::QuietFetchError]) -> String {
+    failures
+        .iter()
+        .find_map(|f| wget_http_error(&f.stderr))
+        .unwrap_or_else(|| {
+            failures
+                .last()
+                .map(|f| f.summary.clone())
+                .unwrap_or_else(|| "index refresh failed".to_string())
+        })
 }
 
 /// Arguments of [`run_merge_plan`].
@@ -1772,6 +1830,74 @@ mod tests {
         assert!(err.contains("SHA1 mismatch"), "{err}");
         assert!(!pkgdir.join("dev-libs/packagepkg-1.0.tbz2").is_file());
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn wget_http_error_recovers_urllibs_http_error_shape() {
+        // The shaped detail is byte-identical whenever the server sent a reason
+        // phrase (verified against the stdlib); this transcript is a live `wget`
+        // capture, not hand-written.
+        let transcript = "--2026-09-27 06:19:14--  http://127.0.0.1:18765/Packages\n\
+             Connecting to 127.0.0.1:18765... connected.\n\
+             HTTP request sent, awaiting response... 500 Internal Server Error\n\
+             2026-09-27 06:19:14 ERROR 500: Internal Server Error.\n";
+        assert_eq!(
+            wget_http_error(transcript).as_deref(),
+            Some("HTTP Error 500: Internal Server Error")
+        );
+        // No response line (DNS failure, refused connection, ...): Portage
+        // would print its own `URLError` string, which wget cannot reproduce --
+        // the caller falls back to the fetch summary.
+        assert_eq!(
+            wget_http_error("wget: unable to resolve host address 'example.invalid'\n"),
+            None
+        );
+        assert_eq!(wget_http_error(""), None);
+    }
+
+    #[test]
+    fn hide_binhost_passwd_masks_only_a_userinfo_password() {
+        // Portage's `_hide_url_passwd` (`//user:secret@` -> `//user:*password*@`),
+        // as the same single regex substitution.
+        assert_eq!(
+            hide_binhost_passwd("http://user:secret@host:1234/path"),
+            "http://user:*password*@host:1234/path"
+        );
+        assert_eq!(
+            hide_binhost_passwd("http://127.0.0.1:18765"),
+            "http://127.0.0.1:18765"
+        );
+        assert_eq!(
+            hide_binhost_passwd("http://user@host/"),
+            "http://user@host/"
+        );
+        // A space inside the password is left alone: `[^@\s]+` cannot span it,
+        // so the regex never matches.
+        assert_eq!(
+            hide_binhost_passwd("http://user:pass word@host/"),
+            "http://user:pass word@host/"
+        );
+        // A `/` inside the user is still masked: `[^:\s]+` allows it.
+        assert_eq!(
+            hide_binhost_passwd("http://a/b:c@host/"),
+            "http://a/b:*password*@host/"
+        );
+    }
+
+    #[test]
+    fn binhost_fetch_warning_matches_portages_two_line_shape() {
+        // The leading blank line, two `!!!` lines, trailing blank line -- all on
+        // stderr -- for the bed's all-500ing stub.
+        assert_eq!(
+            binhost_fetch_warning(
+                "l32-500",
+                "http://127.0.0.1:18765",
+                "HTTP Error 500: Internal Server Error"
+            ),
+            "\n\n!!! [l32-500] Error fetching binhost package info from \
+             'http://127.0.0.1:18765'\n\
+             !!! [l32-500] HTTP Error 500: Internal Server Error\n\n"
+        );
     }
 
     /// Remote versions of `package` the resolver would see for
