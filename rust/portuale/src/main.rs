@@ -30,6 +30,7 @@ mod emerge_options;
 mod env_update;
 mod error;
 mod fetch;
+mod info_files;
 mod install_mask;
 mod merge_engines;
 mod mrg;

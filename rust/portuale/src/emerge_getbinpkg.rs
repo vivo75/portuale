@@ -136,7 +136,7 @@ pub fn run_merge_plan(
     // Real `Scheduler._pkg_count` for this run (backlog #177): every
     // entry below prints its own snapshot of these counters.
     let progress = crate::emerge_build::merge_progress_map(entries);
-    crate::emerge_build::run_merge_loop(entries, keep_going, |idx, entry| {
+    crate::emerge_build::run_merge_loop(entries, keep_going, root, |idx, entry| {
         // The director seam executes every unit: derive the entry's
         // `MergeUnit` and dispatch on its kind through the real source /
         // binary engines (real `MergeListItem._start`'s own `type_name`
