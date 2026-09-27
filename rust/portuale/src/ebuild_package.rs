@@ -1278,10 +1278,12 @@ fn invoke_dyn_package(
 /// Real `include_config=False`: a CONFIG_PROTECT'd (not -MASK'd) file is
 /// left out of the image. fifo/device `CONTENTS` nodes are skipped -- a
 /// documented cut, the same `CAP_MKNOD` limitation the merge side's own
-/// `create_special_node` has. Returns `Ok(None)` when `$PKGDIR` already
-/// holds a binpkg for this cpv at the same `BUILD_TIME` (real
-/// `_quickpkg_dblink`'s own `for binpkg in ... bintree.dbapi.match(...)
-/// if binpkg.build_time == build_time: return os.EX_OK`).
+/// `create_special_node` has. Returns `Ok(None)` -- silently building no
+/// backup -- only when the target archive path already exists. Real has
+/// no such guard (`bin/quickpkg` overwrites), so that is portuale's own
+/// conservative cut against clobbering a user-placed binpkg; real's
+/// `_quickpkg_dblink` `BUILD_TIME` idempotency check is deliberately not
+/// mirrored (see the body comment, backlog #202).
 ///
 /// Under `FEATURES=binpkg-multi-instance` the archive is written to real
 /// `_allocate_filename_multi`'s `<pkgdir>/<cat>/<pn>/<pf>-<build_id>.
@@ -1306,21 +1308,21 @@ pub(crate) fn quickpkg_from_vdb(
         .trim()
         .to_string();
 
-    // Real `_quickpkg_dblink`'s `BUILD_TIME` idempotency check: skip if
-    // `$PKGDIR` already holds a binpkg for this exact cpv+`BUILD_TIME`
-    // (any instance, any format). Covers both the bare single-instance
-    // name and a prior multi-instance build.
+    // Deliberately no real `_quickpkg_dblink` `BUILD_TIME` idempotency
+    // check (backlog #202): real's own check iterates
+    // `bintree.dbapi.match("=cpv")` (`vartree.py:6297-6313`), but in
+    // every removal flow that reaches it that bintree was never
+    // populated -- `binarytree.__init__` only records `populated = 0`,
+    // and `run_action` populates it solely for `action in ("search",
+    // None)` with `--usepkg` (`actions.py:3725-3765`; the remaining
+    // populate sites serve the depgraph merge flow with remote
+    // binpkgs). An empty dbapi matches nothing, so real always shells
+    // out to `bin/quickpkg` and rebuilds -- while consulting the raw
+    // `<pkgdir>/Packages` file here skipped the backup whenever a stale
+    // stanza (e.g. an unlinked first backup) shared the re-merged
+    // package's second-granularity `BUILD_TIME`, silently producing no
+    // second backup with rc 0.
     let cpv = format!("{category}/{pf}");
-    if !vdb_build_time.is_empty()
-        && portage_repo::read_packages_index(&options.pkgdir)
-            .iter()
-            .any(|e| {
-                e.get("CPV").map(String::as_str) == Some(cpv.as_str())
-                    && e.get("BUILD_TIME").map(String::as_str) == Some(vdb_build_time.as_str())
-            })
-    {
-        return Ok(None);
-    }
 
     let multi_instance_suffix = multi_instance_binpkg_suffix(&options.binpkg_format)?;
     let build_id = options.binpkg_multi_instance.then(|| {
