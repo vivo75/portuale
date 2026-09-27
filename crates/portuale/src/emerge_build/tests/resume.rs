@@ -94,3 +94,63 @@ fn resume_entry_uses_the_binary_repo_for_binary_entries_only() {
     });
     assert_eq!(fallback.repo_name, None);
 }
+
+#[test]
+fn run_merge_loop_shrinks_the_saved_resume_list_per_successful_merge() {
+    // With the full mergelist saved up front, each successful merge removes
+    // exactly that entry, so a SIGKILL mid-run leaves the tail and the last
+    // merge deletes the key.
+    let root = tempdir();
+    let entries = vec![
+        resume_entry(ResumeEntryArgs {
+            category: "dev-libs",
+            package: "loop-a",
+            version: "1.0",
+            source: CandidateSource::Ebuild,
+            repos: &[],
+            binary_repo: None,
+        }),
+        resume_entry(ResumeEntryArgs {
+            category: "dev-libs",
+            package: "loop-b",
+            version: "1.0",
+            source: CandidateSource::Ebuild,
+            repos: &[],
+            binary_repo: None,
+        }),
+        resume_entry(ResumeEntryArgs {
+            category: "dev-libs",
+            package: "loop-c",
+            version: "1.0",
+            source: CandidateSource::Ebuild,
+            repos: &[],
+            binary_repo: None,
+        }),
+    ];
+    let full: Vec<crate::mtimedb::ResumeCpv> =
+        entries.iter().map(|e| resume_cpv(e).unwrap()).collect();
+    crate::mtimedb::write_resume_list(
+        &root,
+        &["dev-libs/loop-a"],
+        &full,
+        &crate::mtimedb::ResumeOpts::default(),
+    )
+    .unwrap();
+
+    run_merge_loop(&entries, false, &root, |_, entry| {
+        // By the time this entry's own merge runs, every earlier entry
+        // has already left the on-disk list.
+        let pos = full
+            .iter()
+            .position(|(_, _, p, _)| p == &entry.package)
+            .expect("loop entry is in the saved list");
+        let (_, remaining, _) =
+            crate::mtimedb::read_resume_list(&root).expect("resume list mid-run");
+        assert_eq!(remaining, full[pos..]);
+        Ok(())
+    })
+    .unwrap();
+
+    assert!(crate::mtimedb::read_resume_list(&root).is_none());
+    let _ = fs::remove_dir_all(&root);
+}
