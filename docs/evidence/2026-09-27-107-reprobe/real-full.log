@@ -1,0 +1,8 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 9.31 s (backtrack: 0/20).
+
+[ebuild     U  ] dev-libs/md4c-0.6.0 [0.5.3]
+[binary  N g   ] net-libs/rest-0.10.2-1  USE="introspection -gtk-doc -test -vala" 

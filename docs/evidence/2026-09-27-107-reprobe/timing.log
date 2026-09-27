@@ -1,0 +1,53 @@
+Real Portage - Run 1
+	User time (seconds): 12.99
+	System time (seconds): 0.41
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:13.58
+	Maximum resident set size (kbytes): 317292
+
+Real Portage - Run 2
+	User time (seconds): 14.85
+	System time (seconds): 0.51
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:15.55
+	Maximum resident set size (kbytes): 319952
+
+Real Portage - Run 3
+	User time (seconds): 11.74
+	System time (seconds): 0.43
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:12.36
+	Maximum resident set size (kbytes): 318656
+
+Portuale Default - Run 1
+	User time (seconds): 0.82
+	System time (seconds): 0.32
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:01.14
+	Maximum resident set size (kbytes): 94804
+
+Portuale Default - Run 2
+	User time (seconds): 0.82
+	System time (seconds): 0.30
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:01.13
+	Maximum resident set size (kbytes): 94652
+
+Portuale Default - Run 3
+	User time (seconds): 0.83
+	System time (seconds): 0.31
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:01.15
+	Maximum resident set size (kbytes): 93412
+
+Portuale --backtrack=0 - Run 1
+	User time (seconds): 0.76
+	System time (seconds): 0.25
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:01.01
+	Maximum resident set size (kbytes): 93736
+
+Portuale --backtrack=0 - Run 2
+	User time (seconds): 0.73
+	System time (seconds): 0.28
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:01.02
+	Maximum resident set size (kbytes): 94568
+
+Portuale --backtrack=0 - Run 3
+	User time (seconds): 0.69
+	System time (seconds): 0.31
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:01.01
+	Maximum resident set size (kbytes): 94912
