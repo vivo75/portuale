@@ -350,6 +350,8 @@ they shipped, not a rule for new work.
 
 228. **OPEN (filed 2026-09-27, #206 review) — the circular-dependency cycle lines always print `(buildtime)`.** Real prints each edge's `priorities[-1]` (`resolver/circular_dependency.py` debug print; `DepPriority.__str__`, `_emerge/DepPriority.py:52-70`), which can be `runtime`, `runtime_slot_op`, `buildtime_slot_op`, `optional`, `soft`; portuale's `print_circular_block` hard-codes `buildtime`. Every pinned cycle today is buildtime-only; a mixed-priority unserializable cycle would misrender. [A]
 
+229. **OPEN (filed 2026-09-27, #224 report) — the merge-side preserve computation does not see the replacing package's `NEEDED.ELF.2`.** Real `dblink.treewalk` calls `self._linkmap_rebuild(include_file=needed)` before `_find_libs_to_preserve()` (`vartree.py` pre-replace-loop preserve block), so a library owned by the replaced instance whose only consumer is the replacing package is preserved. Portuale's `find_preserve_paths_for_merge` reads `read_all_needed_entries`, which skips the `-MERGING-` entry, and has no include feed; the gap predates #183 (the new entry was never live at that point). Fix like #224: feed the tmp entry's `NEEDED.ELF.2` first, owner none. [I]
+
 ## Tier 4 — `--solver=` real-tree correctness (pubgrub / resolvo)
 
 33. **`--solver=resolvo` cycle linearization** — `install_order` can't order any closure with a toolchain cycle (glibc↔gcc↔perl); `solver_bridge.rs` prints raw ids. Non-functional on real targets. `docs/history/solver-backends-analysis.md`. [J]
