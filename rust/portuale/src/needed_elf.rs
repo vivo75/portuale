@@ -598,13 +598,13 @@ fn expand_origin(rpath: &str, origin: &str) -> String {
         .replace("$ORIGIN", origin)
 }
 
-/// Real `LinkageMap.rebuild()`'s own preserved-libs branch
-/// (`LinkageMapELF.py:233-324`): preserved libraries are registered in
-/// no `NEEDED.ELF.2` file, so real runs the real, unmodified `scanelf`
-/// binary over them (`scanelf -BF '%a;%F;%S;%r;%n'`, deliberately
-/// without `-q` so soname-less libraries like musl's `libc.so` are not
-/// omitted) and indexes every reported line exactly like `NEEDED.ELF.2`
-/// data, owned by the preserving cpv.
+/// Real `LinkageMap.rebuild`'s own preserved-libs branch: preserved
+/// libraries are registered in no `NEEDED.ELF.2` file, so real runs
+/// the real, unmodified `scanelf` binary over them (`scanelf -BF
+/// '%a;%F;%S;%r;%n'`, deliberately without `-q` so soname-less
+/// libraries like musl's `libc.so` are not omitted) and indexes every
+/// reported line exactly like `NEEDED.ELF.2` data, owned by the
+/// preserving cpv.
 ///
 /// `preserved` is real `getPreservedLibs()` (preserving cpv -> paths).
 /// Only still-existing regular files and symlinks are scanned --
@@ -629,10 +629,12 @@ fn expand_origin(rpath: &str, origin: &str) -> String {
 ///   empty-soname shared object (bug 715162, via the `file` binary).
 ///   Skipped: a `NEEDED.ELF.2`-indexed library with an empty soname
 ///   provides nothing either, so both paths agree.
-/// - A missing/failing `scanelf` binary degrades to no entries (real
-///   raises `CommandNotFound`). Portuale's own linkage-map readers
-///   never fail; without the entries the computation simply finds no
-///   consumers for those paths.
+/// - A missing `scanelf` binary degrades to no entries (real raises
+///   `CommandNotFound`), but loudly: a stderr warning names the
+///   missing tool, since silent degradation would turn bump-2-style
+///   preserves into `{}` with zero log output. A `scanelf` that runs
+///   but fails still degrades silently (real tolerates unscannable
+///   lines the same way).
 ///
 /// Returns `(owner, entries)` groups ready to append to
 /// `read_all_needed_entries`'s own output before `rebuild` (an owner
@@ -647,6 +649,7 @@ pub fn scan_preserved_lib_entries(
     let mut seen: BTreeSet<String> = BTreeSet::new();
     for (cpv, paths) in preserved {
         for p in paths {
+            // First-wins on a duplicate path across cpvs; real `plibs.update(...)` is last-wins (only observable if two cpvs register the same path).
             if !seen.insert(p.clone()) {
                 continue;
             }
@@ -663,16 +666,25 @@ pub fn scan_preserved_lib_entries(
         return Vec::new();
     }
 
-    let mut args = vec![
-        "scanelf".to_string(),
-        "-BF".to_string(),
-        "%a;%F;%S;%r;%n".to_string(),
-    ];
+    let mut args = vec!["-BF".to_string(), "%a;%F;%S;%r;%n".to_string()];
     args.extend(targets.iter().map(|(_, full)| full.clone()));
-    let output = std::process::Command::new("scanelf")
-        .args(&args[1..])
+    // Real `os.path.join(EPREFIX or "/", "usr/bin/scanelf")`
+    // (`LinkageMap.rebuild`): the EPREFIXed absolute path first, then
+    // `PATH`. Portuale assumes an empty `EPREFIX` like every other
+    // real-execution path, so that is `/usr/bin/scanelf`, falling back
+    // to a `PATH` lookup.
+    let scanelf_bin = if std::path::Path::new("/usr/bin/scanelf").is_file() {
+        "/usr/bin/scanelf".to_string()
+    } else {
+        "scanelf".to_string()
+    };
+    let output = std::process::Command::new(&scanelf_bin)
+        .args(&args)
         .output();
     let Ok(output) = output else {
+        eprintln!(
+            "!!! Command Not Found: {scanelf_bin} -- preserved-library orphan scan skipped, preserve-libs decisions may miss consumers"
+        );
         return Vec::new();
     };
     if !output.status.success() {

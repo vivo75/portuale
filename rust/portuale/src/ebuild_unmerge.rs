@@ -579,7 +579,12 @@ impl Default for UnmergeOptions {
 /// and injected into the replacing package's `CONTENTS`, so the files
 /// survive through ownership and no old-cpv registration happens --
 /// see `ebuild_merge::preserve_libs_on_unmerge`); a standalone
-/// `emerge -C` clears it.
+/// `emerge -C` clears it. `replacement_preserved` is real
+/// `preserve_paths` (owner -> paths just preserved merge-side, not yet
+/// registered): non-empty only on the replace-loop path, where the
+/// merge caller threads its own set through `unmerge_replaced_same_slot`
+/// and `unmerge_one_installed`; empty everywhere else.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn unmerge_pkgfiles(
     root: &Path,
     category: &str,
@@ -588,6 +593,7 @@ pub(crate) fn unmerge_pkgfiles(
     also_keep: &[String],
     options: &UnmergeOptions,
     is_replacement: bool,
+    replacement_preserved: &BTreeMap<String, Vec<String>>,
 ) -> Result<(), String> {
     let vdb_dir = root.join("var/db/pkg").join(category).join(pf);
     let contents_path = vdb_dir.join("CONTENTS");
@@ -635,10 +641,10 @@ pub(crate) fn unmerge_pkgfiles(
     let cfgfiledict = ebuild_merge::read_cfgfiledict(root);
     let mut stale_confmem: Vec<String> = Vec::new();
 
-    // Real `_prune_plib_registry(unmerge=True, ...)` (`vartree.py:2493`),
-    // called right before real `_unmerge_pkgfiles()` runs -- see
-    // `ebuild_merge::preserve_libs_on_unmerge`'s own doc comment for the
-    // full real grounding. `own_slot` defaults to `"0"` the same way
+    // Real `_prune_plib_registry(unmerge=True, ...)`
+    // (confirmed by reading the real call site, not just the method
+    // itself -- see `ebuild_merge::preserve_libs_on_unmerge`'s own doc
+    // comment for the full real grounding). `own_slot` defaults to `"0"` the same way
     // `parse_slot`'s own real fallback already does, matching real
     // `_pkg_str`'s own `settings["SLOT"]` fallback for a package with no
     // recorded slot at all.
@@ -673,18 +679,27 @@ pub(crate) fn unmerge_pkgfiles(
         ebuild_merge::write_cfgfiledict(root, &updated)?;
     }
 
-    // Real `_prune_plib_registry()`'s own tail (`vartree.py:2295-2314`),
-    // which runs on unmerge too, not only on merge: a preserved library
-    // whose last surviving consumer is the package now being removed is
-    // orphaned -- delete it and drop it from the registry. `unmerge_no_
-    // replacement=true` (portuale's `merge`/`unmerge` are always separate
-    // invocations, real `unmerge_with_replacement=False`), so a consumer
-    // entirely owned by this same package doesn't keep a library alive.
+    // Real `_prune_plib_registry`'s own tail, which runs on unmerge
+    // too, not only on merge: a preserved library whose last surviving
+    // consumer is the package now being removed is orphaned -- delete it
+    // and drop it from the registry. Real `unmerge_no_replacement =
+    // unmerge and not unmerge_with_replacement`: in replacement mode a
+    // consumer owned by the old instance still counts (it survives
+    // through the replacing package), the old instance's own linkmap
+    // data is excluded, and the merge-side just-preserved set is
+    // scanned in (see `ebuild_merge::find_unused_preserved_libs`).
     let being_unmerged: std::collections::BTreeSet<String> = contents_text
         .lines()
         .filter_map(|line| line.split_whitespace().nth(1).map(String::from))
         .collect();
-    ebuild_merge::prune_unused_preserved_libs(root, true, &|p| being_unmerged.contains(p))?;
+    let exclude_cpv = is_replacement.then(|| format!("{category}/{pf}"));
+    ebuild_merge::prune_unused_preserved_libs(
+        root,
+        !is_replacement,
+        &|p| being_unmerged.contains(p),
+        exclude_cpv.as_deref(),
+        replacement_preserved,
+    )?;
 
     Ok(())
 }
@@ -745,6 +760,7 @@ pub fn run_unmerge(
         &[],
         options,
         false,
+        &BTreeMap::new(),
     )?;
 
     let postrm_status = ebuild_phases::run_single_phase(
