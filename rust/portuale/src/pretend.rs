@@ -5125,9 +5125,13 @@ fn run_resume(
         // Backlog #174: a merge-time binpkg digest failure already
         // printed real's full tail -- no `emerge:` line either (real
         // exits a merge failure via `FAILURE`, not the action error
-        // path). The silent resume re-save above stays: real keeps the
+        // path). Backlog #187 extends the same silence to the
+        // missing-file sentinel (real `BinpkgVerifier`'s ENOENT arm).
+        // The silent resume re-save above stays: real keeps the
         // list resumable too.
-        if !crate::emerge_getbinpkg::is_binpkg_digest_failure(&e) {
+        if !crate::emerge_getbinpkg::is_binpkg_digest_failure(&e)
+            && !crate::emerge_getbinpkg::is_binpkg_missing_failure(&e)
+        {
             eprintln!("emerge: {e}");
         }
         return ExitCode::from(1);
@@ -13316,10 +13320,14 @@ pub fn run(args: &[String]) -> ExitCode {
                 // `>>> Failed to emerge ...`, real
                 // `Scheduler._failed_pkg_msg`) and needs no resume-list
                 // notice or `emerge:` line -- real prints neither for a
-                // merge-time package failure. The up-front save above
+                // merge-time package failure. Backlog #187 extends the
+                // same silence to the missing-file sentinel (real
+                // `BinpkgVerifier`'s ENOENT arm). The up-front save above
                 // (minus per-success removals) already leaves the tail
                 // for `--resume`, like real's own start-of-merge save.
-                if crate::emerge_getbinpkg::is_binpkg_digest_failure(&e) {
+                if crate::emerge_getbinpkg::is_binpkg_digest_failure(&e)
+                    || crate::emerge_getbinpkg::is_binpkg_missing_failure(&e)
+                {
                     return ExitCode::from(1);
                 }
                 // Real `Scheduler._save_resume_list`: on a merge
