@@ -55095,6 +55095,120 @@ mod tests_166 {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // ---- S6: `synthesize_surviving_conflict_entries` (files each
+    // surviving conflict instance beside its merge-bound siblings, so
+    // the final merge list prints conflicting instances adjacently --
+    // see the function's own doc comment). ----
+
+    /// One conflict with a single merge-bound (non-installed) instance.
+    fn synth_conflict_166() -> SlotConflict {
+        SlotConflict {
+            category: "dev-libs".to_string(),
+            package: "foo".to_string(),
+            slot: "0".to_string(),
+            resolved_version: "2.0".to_string(),
+            conflicting_atom: "dev-libs/foo".to_string(),
+            instances: vec![inst_166("2.0", false)],
+        }
+    }
+
+    fn synth_owners_166() -> HashMap<(String, String), HashSet<(String, String)>> {
+        HashMap::from([(
+            ("dev-libs".to_string(), "foo".to_string()),
+            HashSet::from([("dev-libs".to_string(), "parent".to_string())]),
+        )])
+    }
+
+    /// The surviving instance files directly after its last merge-bound
+    /// sibling (not at the end, not before): kills both `+` -> `-`/`*`
+    /// index shifts, both `&&` -> `||` widenings (which file behind the
+    /// trailing decoy instead) and both `==` -> `!=` flips (which file
+    /// behind the other-category same-package row, or at the end).
+    #[test]
+    fn synthesize_166_files_the_instance_beside_its_siblings() {
+        let root = dir_166("synth-pos");
+        let dir = dir_166("synth-pos-repo");
+        let repos = repo_pkgs_166(
+            &dir,
+            &[
+                ("dev-libs/foo", "1.0", "0", "fa", "", ""),
+                ("dev-libs/foo", "2.0", "0", "fa", "", ""),
+            ],
+        );
+        let config = cfg_166();
+        let mut entries = vec![
+            entry_166("other-libs", "foo", "1.0", Vec::new()),
+            entry_166("dev-libs", "foo", "1.0", Vec::new()),
+            entry_166("dev-libs", "decoy", "9.0", Vec::new()),
+        ];
+        synthesize_surviving_conflict_entries(
+            &mut entries,
+            &[synth_conflict_166()],
+            &synth_owners_166(),
+            &repos,
+            &root,
+            &config,
+        );
+        let order: Vec<(&str, &str, &str)> = entries
+            .iter()
+            .map(|e| {
+                (
+                    e.category.as_str(),
+                    e.package.as_str(),
+                    merge_bound_version(&e.outcome).map(String::as_str).unwrap_or("?"),
+                )
+            })
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                ("other-libs", "foo", "1.0"),
+                ("dev-libs", "foo", "1.0"),
+                ("dev-libs", "foo", "2.0"),
+                ("dev-libs", "decoy", "9.0"),
+            ]
+        );
+        // The filed entry carries the conflict's owners as parents.
+        assert_eq!(
+            entries[2].required_by,
+            vec![("dev-libs".to_string(), "parent".to_string())]
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `new_slot` reports whether the cp is already installed: kills
+    /// the `!is_empty()` deletion in both directions (installed reads
+    /// `true`, fresh root reads `false`).
+    #[test]
+    fn synthesize_166_new_slot_tracks_the_installed_set() {
+        let dir = dir_166("synth-slot-repo");
+        let repos = repo_pkgs_166(&dir, &[("dev-libs/foo", "2.0", "0", "fa", "", "")]);
+        let config = cfg_166();
+        let owners = synth_owners_166();
+        let filed_new_slot = |root: &Path| {
+            let mut entries = Vec::new();
+            synthesize_surviving_conflict_entries(
+                &mut entries,
+                &[synth_conflict_166()],
+                &owners,
+                &repos,
+                root,
+                &config,
+            );
+            assert_eq!(entries.len(), 1);
+            entries.pop().expect("filed").new_slot
+        };
+        let bare = dir_166("synth-slot-bare");
+        assert!(!filed_new_slot(&bare));
+        let installed = dir_166("synth-slot-inst");
+        install_166(&installed, "dev-libs", "foo-1.0", "100\n");
+        assert!(filed_new_slot(&installed));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&bare);
+        let _ = std::fs::remove_dir_all(&installed);
+    }
+
     /// A merge instance with an entry reads its resolved display
     /// flags, and decoys (wrong category, wrong package) never match:
     /// kills the whole-body rows, the category/package `==` -> `!=`
