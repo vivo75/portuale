@@ -1649,16 +1649,28 @@ pub(crate) fn quickpkg_from_vdb(
     // installed package was merged from a build that recorded it --
     // real writes `build-info/REPO_REVISIONS` whenever
     // `PORTAGE_REPO_REVISIONS` is non-empty, `phase-functions.sh:769`,
-    // so even sync-less repos record `"{}"`), keys in real's
-    // `keys.sort()` order with translated `MTIME` last (no `REPO`:
-    // portuale's quickpkg path never recorded the vdb `repository`
-    // file, a separate gap), and no `PF`/`CATEGORY` lines at all --
-    // neither is in real's stanza aux-key set
-    // (`bindbapi._aux_cache_keys`, `bintree.py:96-120`), so the n203
-    // probe's real quickpkg stanza carries neither although the vdb
-    // has both files (backlog #188's "extras match real" claim was
-    // wrong). Empty values are skipped by [`format_packages_entry`],
-    // like real's `if metadata[k]` guard.
+    // so even sync-less repos record `"{}"`), `repository` verbatim as
+    // `REPO` (`repository` is in real's stanza aux-key set,
+    // `bindbapi._aux_cache_keys`, `bintree.py:96-124`, so the archive
+    // metadata carries it and `PackageIndex.write` emits it translated
+    // last, after `MTIME`), keys in real's `keys.sort()` order, and no
+    // `PF`/`CATEGORY` lines at all -- neither is in real's stanza
+    // aux-key set, so the n203 probe's real quickpkg stanza carries
+    // neither although the vdb has both files (backlog #188's "extras
+    // match real" claim was wrong). `REPO` is never inherited from the
+    // index header in the shapes portuale writes: real drops a stanza
+    // value equal to a non-empty header value
+    // (`_pkgindex_inherited_keys`, `bintree.py:630`,
+    // `getbinpkg.py:164-168`), but the header default for
+    // `repository` is `""` (`bintree.py:633-636`), real's
+    // `_update_pkgindex_header` never sets it (it only sets
+    // `_pkgindex_header_keys`, which excludes it), and portuale's own
+    // header carries only `TIMESTAMP`+`VERSION`
+    // ([`packages_index_header`]) -- so the guard's `if v` is always
+    // falsy and `REPO` is always written, exactly like real's
+    // fresh-index shape (the n203 probe ends `..., MTIME, REPO: l32`).
+    // Empty values are skipped by [`format_packages_entry`], like
+    // real's `if metadata[k]` guard.
     let slot = omit_stanza_default("SLOT", bi("SLOT").as_str()).to_string();
     let eapi = omit_stanza_default("EAPI", bi("EAPI").as_str()).to_string();
     let keywords = bi("KEYWORDS");
@@ -1674,6 +1686,7 @@ pub(crate) fn quickpkg_from_vdb(
     let idepend = bi("IDEPEND");
     let defined_phases = bi("DEFINED_PHASES");
     let repo_revisions = bi("REPO_REVISIONS");
+    let repository = bi("repository");
     let mut fields: Vec<(&'static str, &str)> = vec![
         ("BDEPEND", &bdepend),
         ("BUILD_ID", &build_id_str),
@@ -1698,6 +1711,7 @@ pub(crate) fn quickpkg_from_vdb(
         ("SLOT", &slot),
         ("USE", &use_flags),
         ("MTIME", &mtime_str),
+        ("REPO", &repository),
     ];
     sort_stanza_fields_for_write(&mut fields);
     write_packages_index_entry(&options.pkgdir, &cpv, &fields)?;
@@ -2337,7 +2351,11 @@ mod tests {
         // `EAPI` verbatim (`EAPI: 8`; omitted iff `"0"` like
         // `--buildpkg`), `REPO_REVISIONS` verbatim from the vdb entry
         // (`{}` here -- the package was merged from a sync-less build),
-        // keys in `PackageIndex.write` sorted order with `MTIME` last,
+        // `repository` verbatim as `REPO` (backlog #226: `repository`
+        // is in real's stanza aux-key set, and the header never carries
+        // it in the shapes portuale writes, so the inherited-key drop
+        // never fires -- the probe stanza ends `..., MTIME, REPO: l32`),
+        // keys in `PackageIndex.write` sorted order with `REPO` last,
         // and no `PF`/`CATEGORY`/`SLOT` lines (neither of the first two
         // is in real's stanza aux-key set; `SLOT` is `"0"` here).
         let tmp = tempdir();
@@ -2375,6 +2393,7 @@ mod tests {
             ("USE", "amd64\n"),
             ("BUILD_TIME", "1790541998\n"),
             ("REPO_REVISIONS", "{}\n"),
+            ("repository", "testrepo\n"),
             ("CONTENTS", "obj /etc/probe.conf\n"),
         ] {
             std::fs::write(vdb_dir.join(name), content).unwrap();
@@ -2422,12 +2441,17 @@ mod tests {
                 "SIZE",
                 "USE",
                 "MTIME",
+                "REPO",
             ],
             "quickpkg stanza keys must be real's sorted order: {stanza:?}"
         );
         assert!(
             stanza.contains(&"EAPI: 8"),
             "vdb EAPI must be carried like real's: {stanza:?}"
+        );
+        assert!(
+            stanza.contains(&"REPO: testrepo"),
+            "vdb repository must be carried as REPO last like real's: {stanza:?}"
         );
         assert!(
             stanza.contains(&"REPO_REVISIONS: {}"),
