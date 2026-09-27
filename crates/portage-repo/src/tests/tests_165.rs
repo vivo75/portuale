@@ -20,6 +20,107 @@ fn install_165(root: &Path, cat: &str, pf: &str, slot: &str, files: &[(&str, &st
     }
 }
 
+// ---- `installed_reverse_dependents` (Portage vartree.dbapi scan). ----
+
+/// A plain RDEPEND consumer is reported; a package depending on
+/// something else is not.
+#[test]
+fn installed_reverse_dependents_reports_a_plain_rdepend_consumer() {
+    let root = dir_165("revdep-basic");
+    install_165(&root, "dev-libs", "consumer-1.0", "0", &[]);
+    install_165(
+        &root,
+        "dev-libs",
+        "user-1.0",
+        "0",
+        &[("RDEPEND", "dev-libs/consumer")],
+    );
+    install_165(
+        &root,
+        "dev-libs",
+        "bystander-1.0",
+        "0",
+        &[("RDEPEND", "dev-libs/other")],
+    );
+    assert_eq!(
+        installed_reverse_dependents(&root, "dev-libs", "consumer", "1.0"),
+        vec!["dev-libs/user-1.0".to_string()]
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The `&&`-chain self-skip is exact: a same-category sibling and a
+/// same-cp other version are *not* the consumer and stay reported.
+#[test]
+fn installed_reverse_dependents_keeps_siblings_and_other_versions() {
+    let root = dir_165("revdep-siblings");
+    install_165(&root, "dev-libs", "consumer-1.0", "0", &[]);
+    install_165(
+        &root,
+        "dev-libs",
+        "other-1.0",
+        "0",
+        &[("RDEPEND", "dev-libs/consumer")],
+    );
+    install_165(
+        &root,
+        "dev-libs",
+        "consumer-2.0",
+        "0",
+        &[("RDEPEND", "dev-libs/consumer")],
+    );
+    assert_eq!(
+        installed_reverse_dependents(&root, "dev-libs", "consumer", "1.0"),
+        vec![
+            "dev-libs/consumer-2.0".to_string(),
+            "dev-libs/other-1.0".to_string(),
+        ]
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A consumer depending on itself is still excluded.
+#[test]
+fn installed_reverse_dependents_excludes_a_self_dependent_consumer() {
+    let root = dir_165("revdep-self");
+    install_165(
+        &root,
+        "dev-libs",
+        "consumer-1.0",
+        "0",
+        &[("RDEPEND", "dev-libs/consumer")],
+    );
+    assert!(installed_reverse_dependents(&root, "dev-libs", "consumer", "1.0").is_empty());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Blocker atoms never count as reverse dependencies, while a
+/// genuinely matching consumer still files.
+#[test]
+fn installed_reverse_dependents_ignores_blockers_but_keeps_matches() {
+    let root = dir_165("revdep-blocker");
+    install_165(&root, "dev-libs", "consumer-1.0", "0", &[]);
+    install_165(
+        &root,
+        "dev-libs",
+        "blocker-1.0",
+        "0",
+        &[("RDEPEND", "!dev-libs/consumer")],
+    );
+    install_165(
+        &root,
+        "dev-libs",
+        "user-1.0",
+        "0",
+        &[("RDEPEND", "dev-libs/consumer")],
+    );
+    assert_eq!(
+        installed_reverse_dependents(&root, "dev-libs", "consumer", "1.0"),
+        vec!["dev-libs/user-1.0".to_string()]
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 // ---- `find_repos_impl` survivors (Portage RepoConfigLoader). ----
 
 /// The main repo defaults to priority -1000, every other repo to 0
@@ -42,6 +143,42 @@ fn find_repos_impl_defaults_the_main_repo_to_priority_minus_1000() {
         repos.iter().find(|r| r.name == "overlay").unwrap().priority,
         0
     );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The no-`volatile`-key heuristic (Portage `repository/config.py`):
+/// volatile unless under `/var/db/repos` and owned by root/portage.
+#[test]
+fn find_repos_impl_computes_volatile_from_location_and_owner() {
+    let root = dir_165("repos-volatile");
+    std::fs::create_dir_all(root.join("etc/portage")).unwrap();
+    let sys = ["/usr", "/etc", "/bin", "/"]
+        .iter()
+        .map(PathBuf::from)
+        .find(|p| path_owned_by_root_or_portage(p))
+        .map(|p| p.to_string_lossy().into_owned());
+    let conf = match &sys {
+        Some(s) => format!(
+            "[DEFAULT]\nmain-repo = main\n\n[main]\nlocation = /var/db/repos/foo\n\n[second]\nlocation = {s}\n"
+        ),
+        None => "[DEFAULT]\nmain-repo = main\n\n[main]\nlocation = /var/db/repos/foo\n".to_string(),
+    };
+    std::fs::write(root.join("etc/portage/repos.conf"), conf).unwrap();
+    let repos = find_repos(&root).expect("repos.conf resolves");
+    // `/var/db/repos/foo` is unowned (it does not exist):
+    // `!starts_with || !owned` is true.
+    assert!(repos.iter().find(|r| r.name == "main").unwrap().volatile);
+    match sys {
+        Some(_) => {
+            // A non-`/var/db/repos` tree is volatile either way.
+            assert!(repos.iter().find(|r| r.name == "second").unwrap().volatile);
+        }
+        None => {
+            eprintln!(
+                "SKIP tests_165 second-repo volatile leg: no root-owned /usr, /etc, /bin or / on this host"
+            );
+        }
+    }
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -191,6 +328,30 @@ fn new_165(cat: &str, pkg: &str, ver: &str) -> GraphEntry {
     )
 }
 
+// ---- `parent_use_state` (the requesting parent's own resolved
+// USE state behind a conditional use-dep: the owner's merge-bound
+// entry version re-looked-up in the tree). ----
+
+/// A `New` parent resolves to its own tree version with the
+/// ebuild's IUSE visible.
+#[test]
+fn parent_use_state_resolves_a_new_parent_to_its_tree_version() {
+    let dir = dir_165("parent-new");
+    let repos = repo_165(&dir, &[("test/pkg", "1.0", "0", "foo", "", "", "")]);
+    let entries = vec![new_165("test", "pkg", "1.0")];
+    let (resolved, full_iuse, _use_flags, required_use) = parent_use_state(
+        &repos,
+        &entries,
+        &("test".to_string(), "pkg".to_string()),
+        &cfg_165(),
+    )
+    .expect("a merge-bound parent with a tree version resolves");
+    assert_eq!(resolved.version, "1.0");
+    assert!(full_iuse.contains("foo"));
+    assert_eq!(required_use, None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `Upgrade`, `Downgrade` and `Reinstall` parents resolve through
 /// their own `to`/`version` fields.
 #[test]
@@ -238,6 +399,52 @@ fn parent_use_state_resolves_upgrade_downgrade_and_reinstall_parents() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The owner lookup is an exact `(category, package)` match:
+/// same-category and same-package decoys do not resolve.
+#[test]
+fn parent_use_state_ignores_same_category_and_same_package_decoys() {
+    let dir = dir_165("parent-decoys");
+    let repos = repo_165(&dir, &[("test/pkg", "1.0", "0", "foo", "", "", "")]);
+    let entries = vec![
+        new_165("test", "other", "1.0"),
+        new_165("other", "pkg", "1.0"),
+    ];
+    assert!(
+        parent_use_state(
+            &repos,
+            &entries,
+            &("test".to_string(), "pkg".to_string()),
+            &cfg_165(),
+        )
+        .is_none()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The tree re-lookup filters on the parent's own version: with two
+/// tree versions the `New 1.0` parent resolves 1.0.
+#[test]
+fn parent_use_state_picks_the_parents_own_version_from_the_tree() {
+    let dir = dir_165("parent-version");
+    let repos = repo_165(
+        &dir,
+        &[
+            ("test/pkg", "1.0", "0", "foo", "", "", ""),
+            ("test/pkg", "2.0", "0", "foo", "", "", ""),
+        ],
+    );
+    let entries = vec![new_165("test", "pkg", "1.0")];
+    let (resolved, _, _, _) = parent_use_state(
+        &repos,
+        &entries,
+        &("test".to_string(), "pkg".to_string()),
+        &cfg_165(),
+    )
+    .expect("the parent version resolves");
+    assert_eq!(resolved.version, "1.0");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 fn ipkg_165(cat: &str, pkg: &str, ver: &str, slot: &str) -> InstalledPackage {
     InstalledPackage {
         category: cat.to_string(),
@@ -245,6 +452,57 @@ fn ipkg_165(cat: &str, pkg: &str, ver: &str, slot: &str) -> InstalledPackage {
         version: ver.to_string(),
         slot: slot.to_string(),
     }
+}
+
+// ---- `topological_removal_order` (Portage unmerge ordering). ----
+
+/// Installs `<name>-1.0` (slot 0) with the given dep keys.
+fn order_vdb_165(root: &Path, pkgs: &[(&str, &[(&str, &str)])]) {
+    for (name, keys) in pkgs {
+        let files: Vec<(&str, &str)> = keys.to_vec();
+        install_165(root, "dev-libs", &format!("{name}-1.0"), "0", &files);
+    }
+}
+
+fn order_list_165(names: &[&str]) -> Vec<InstalledPackage> {
+    names
+        .iter()
+        .map(|n| ipkg_165("dev-libs", n, "1.0", "0"))
+        .collect()
+}
+
+fn order_names_165(out: &[InstalledPackage]) -> Vec<String> {
+    out.iter().map(|p| p.package.clone()).collect()
+}
+
+/// A three-deep DEPEND chain unmerges depender-first.
+#[test]
+fn topological_removal_order_unmerges_a_depend_chain_dependers_first() {
+    let root = dir_165("order-chain");
+    order_vdb_165(
+        &root,
+        &[
+            ("aa", &[("DEPEND", "dev-libs/bb")]),
+            ("bb", &[("DEPEND", "dev-libs/cc")]),
+            ("cc", &[]),
+        ],
+    );
+    let (ordered, out) = topological_removal_order(&root, order_list_165(&["cc", "aa", "bb"]));
+    assert!(ordered);
+    assert_eq!(order_names_165(&out), vec!["aa", "bb", "cc"]);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A self-dependency is not an edge (`i == j` always skips): with
+/// no edges the input order is kept and `ordered` is false.
+#[test]
+fn topological_removal_order_ignores_a_self_dependency() {
+    let root = dir_165("order-self");
+    order_vdb_165(&root, &[("aa", &[("RDEPEND", "dev-libs/aa")]), ("bb", &[])]);
+    let (ordered, out) = topological_removal_order(&root, order_list_165(&["aa", "bb"]));
+    assert!(!ordered);
+    assert_eq!(order_names_165(&out), vec!["aa", "bb"]);
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 /// A cross-category edge orders too.
@@ -273,6 +531,144 @@ fn topological_removal_order_follows_a_cross_category_edge() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// Priority arms: an IDEPEND edge (0) loses to an RDEPEND edge
+/// (-2), an RDEPEND edge loses to a DEPEND edge (-4), and a PDEPEND
+/// edge (-3) loses to a DEPEND edge.
+#[test]
+fn topological_removal_order_breaks_cycles_by_dependency_key_priority() {
+    // `aa` IDEPENDs `zz` (0), `zz` RDEPENDs `aa` (-2): `aa` pops at
+    // the -2 level.
+    let root = dir_165("order-prio-idepend");
+    order_vdb_165(
+        &root,
+        &[
+            ("aa", &[("IDEPEND", "dev-libs/zz")]),
+            ("zz", &[("RDEPEND", "dev-libs/aa")]),
+        ],
+    );
+    let (ordered, out) = topological_removal_order(&root, order_list_165(&["zz", "aa"]));
+    assert!(ordered);
+    assert_eq!(order_names_165(&out), vec!["aa", "zz"]);
+
+    // `aa` RDEPENDs `zz` (-2), `zz` DEPENDs `aa` (-4): `aa` pops at
+    // -4.
+    let root2 = dir_165("order-prio-rdepend");
+    order_vdb_165(
+        &root2,
+        &[
+            ("aa", &[("RDEPEND", "dev-libs/zz")]),
+            ("zz", &[("DEPEND", "dev-libs/aa")]),
+        ],
+    );
+    let (_, out2) = topological_removal_order(&root2, order_list_165(&["zz", "aa"]));
+    assert_eq!(order_names_165(&out2), vec!["aa", "zz"]);
+
+    // `aa` PDEPENDs `zz` (-3), `zz` DEPENDs `aa` (-4): `aa` pops at
+    // -4.
+    let root3 = dir_165("order-prio-pdepend");
+    order_vdb_165(
+        &root3,
+        &[
+            ("aa", &[("PDEPEND", "dev-libs/zz")]),
+            ("zz", &[("DEPEND", "dev-libs/aa")]),
+        ],
+    );
+    let (_, out3) = topological_removal_order(&root3, order_list_165(&["zz", "aa"]));
+    assert_eq!(order_names_165(&out3), vec!["aa", "zz"]);
+
+    // Mutual PDEPEND (-3, -3): both pop at -3, cpv-max first.
+    let root4 = dir_165("order-prio-pdepend-pair");
+    order_vdb_165(
+        &root4,
+        &[
+            ("aa", &[("PDEPEND", "dev-libs/zz")]),
+            ("zz", &[("PDEPEND", "dev-libs/aa")]),
+        ],
+    );
+    let (_, out4) = topological_removal_order(&root4, order_list_165(&["aa", "zz"]));
+    assert_eq!(order_names_165(&out4), vec!["zz", "aa"]);
+
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&root2);
+    let _ = std::fs::remove_dir_all(&root3);
+    let _ = std::fs::remove_dir_all(&root4);
+}
+
+/// A slot-operator RDEPEND without a sub-slot (`dev-libs/zz:0=`)
+/// still matches at the plain -2 priority (Portage `_match_slot`
+/// only checks the sub-slot when the atom carries one).
+#[test]
+fn topological_removal_order_keeps_a_sub_slot_less_slot_operator_at_rdepend_priority() {
+    let root = dir_165("order-slotop");
+    order_vdb_165(
+        &root,
+        &[
+            ("aa", &[("RDEPEND", "dev-libs/zz:0=")]),
+            ("zz", &[("RDEPEND", "dev-libs/aa")]),
+        ],
+    );
+    let (_, out) = topological_removal_order(&root, order_list_165(&["aa", "zz"]));
+    assert_eq!(order_names_165(&out), vec!["zz", "aa"]);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The `ignore_priority_range` scan: with edges at 0 and -2, the -4
+/// and -3 levels yield nothing and `aa` pops at -2.
+#[test]
+fn topological_removal_order_scans_ignore_levels_before_popping() {
+    let root = dir_165("order-ignore");
+    order_vdb_165(
+        &root,
+        &[
+            ("aa", &[("IDEPEND", "dev-libs/zz")]),
+            ("zz", &[("RDEPEND", "dev-libs/aa")]),
+        ],
+    );
+    let (_, out) = topological_removal_order(&root, order_list_165(&["zz", "aa"]));
+    assert_eq!(order_names_165(&out), vec!["aa", "zz"]);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A three-cycle pops cpv-max first, then re-scans.
+#[test]
+fn topological_removal_order_pops_a_three_cycle_cpv_max_first() {
+    let root = dir_165("order-3cycle");
+    order_vdb_165(
+        &root,
+        &[
+            ("aa", &[("DEPEND", "dev-libs/bb")]),
+            ("bb", &[("DEPEND", "dev-libs/cc")]),
+            ("cc", &[("DEPEND", "dev-libs/aa")]),
+        ],
+    );
+    let (ordered, out) = topological_removal_order(&root, order_list_165(&["aa", "bb", "cc"]));
+    assert!(ordered);
+    assert_eq!(order_names_165(&out), vec!["cc", "aa", "bb"]);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// ---- `prune_cleanlist` (Portage `emerge --prune` selection). ----
+
+/// Two versions, no dependents: the older is pruned, the result is
+/// unordered, and nothing is kept or unresolved.
+#[test]
+fn prune_cleanlist_prunes_the_older_of_two_versions() {
+    let root = dir_165("prune-basic");
+    install_165(&root, "dev-libs", "aa-1.0", "0", &[]);
+    install_165(&root, "dev-libs", "aa-2.0", "0", &[]);
+    install_165(&root, "dev-libs", "bb-1.0", "0", &[]);
+    let result = prune_cleanlist(&root, &[], &[], &[]);
+    assert_eq!(
+        result.cleanlist.iter().map(|p| p.cpv()).collect::<Vec<_>>(),
+        vec!["dev-libs/aa-1.0"]
+    );
+    assert!(!result.ordered);
+    assert_eq!(result.required_count, 2);
+    assert!(result.kept_parents.is_empty());
+    assert!(result.unresolved.is_empty());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// The highest-version guard does not depend on scan order (sorted
 /// readdir or creation order): 10.0 is kept over 9.0 either way.
 /// Portage comparison is order-independent.
@@ -286,6 +682,88 @@ fn prune_cleanlist_protects_the_highest_regardless_of_install_order() {
         result.cleanlist.iter().map(|p| p.cpv()).collect::<Vec<_>>(),
         vec!["dev-libs/aa-9.0"]
     );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Explicit versioned args: `=dev-libs/aa-2.0` matches only 2.0
+/// (which is highest, so nothing is pruned).
+#[test]
+fn prune_cleanlist_honours_versioned_atoms_in_args() {
+    let root = dir_165("prune-args");
+    install_165(&root, "dev-libs", "aa-1.0", "0", &[]);
+    install_165(&root, "dev-libs", "aa-2.0", "0", &[]);
+    let matched = prune_cleanlist(&root, &["dev-libs/aa".to_string()], &[], &[]);
+    assert_eq!(
+        matched
+            .cleanlist
+            .iter()
+            .map(|p| p.cpv())
+            .collect::<Vec<_>>(),
+        vec!["dev-libs/aa-1.0"]
+    );
+    let pinned = prune_cleanlist(&root, &["=dev-libs/aa-2.0".to_string()], &[], &[]);
+    assert!(pinned.cleanlist.is_empty());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A keeper pins the old version through the dependency walk: with
+/// `keeper` RDEPENDing the unversioned cp, both versions are
+/// reached and nothing is pruned.
+#[test]
+fn prune_cleanlist_keeps_a_version_reached_through_the_walk() {
+    let root = dir_165("prune-keeper");
+    install_165(&root, "dev-libs", "aa-1.0", "0", &[]);
+    install_165(
+        &root,
+        "dev-libs",
+        "aa-2.0",
+        "0",
+        &[("RDEPEND", "dev-libs/keeper")],
+    );
+    install_165(
+        &root,
+        "dev-libs",
+        "keeper-1.0",
+        "0",
+        &[("RDEPEND", "dev-libs/aa")],
+    );
+    let result = prune_cleanlist(&root, &[], &[], &[]);
+    assert!(result.cleanlist.is_empty());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// `kept_parents` names the keeper for every kept version: `keeper`
+/// pins the whole `aa` cp, so both versions keep the same parent
+/// line; single-version `bb` stays out.
+#[test]
+fn prune_cleanlist_reports_the_keeper_of_a_kept_version() {
+    let root = dir_165("prune-kept-parents");
+    install_165(&root, "dev-libs", "aa-1.0", "0", &[]);
+    install_165(
+        &root,
+        "dev-libs",
+        "aa-2.0",
+        "0",
+        &[("RDEPEND", "dev-libs/bb")],
+    );
+    install_165(&root, "dev-libs", "bb-1.0", "0", &[]);
+    install_165(
+        &root,
+        "dev-libs",
+        "keeper-1.0",
+        "0",
+        &[("RDEPEND", "dev-libs/aa")],
+    );
+    let result = prune_cleanlist(&root, &[], &[], &[]);
+    assert!(result.cleanlist.is_empty());
+    assert_eq!(result.kept_parents.len(), 2);
+    for (i, ver) in ["dev-libs/aa-1.0", "dev-libs/aa-2.0"].iter().enumerate() {
+        assert_eq!(result.kept_parents[i].0.cpv(), ver.to_string());
+        assert_eq!(
+            result.kept_parents[i].1,
+            vec!["dev-libs/keeper-1.0 requires dev-libs/aa".to_string()]
+        );
+    }
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -1266,6 +1744,44 @@ fn enqueue_dependencies_drops_a_dep_satisfied_by_the_instance_itself() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A strong runtime blocker files into pending (never the queue)
+/// with its provenance.
+#[test]
+fn enqueue_dependencies_files_a_strong_blocker_into_pending() {
+    let root = dir_165("enqueue-blocker");
+    install_165(
+        &root,
+        "dev-libs",
+        "consumer-1.0",
+        "0",
+        &[("RDEPEND", "!!dev-libs/victim")],
+    );
+    let repos = repo_165(&root, &[("dev-libs/consumer", "1.0", "0", "", "", "", "")]);
+    let mut entries = Vec::new();
+    let mut queue = std::collections::VecDeque::new();
+    let mut pending = Vec::new();
+    enqueue_165(Enqueue165Args {
+        repos: &repos,
+        root: &root,
+        config: &cfg_165(),
+        cat: "dev-libs",
+        pkg: "consumer",
+        ver: "1.0",
+        with_bdeps: false,
+        entries: &mut entries,
+        queue: &mut queue,
+        pending: &mut pending,
+    });
+    assert!(queue.is_empty());
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].atom_str, "!!dev-libs/victim");
+    assert!(pending[0].strong);
+    assert!(!pending[0].buildtime);
+    assert!(!pending[0].owner_merging);
+    assert!(!pending[0].owner_installed);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A build-time blocker carries its provenance: with `with_bdeps`
 /// the DEPEND `!!` row is `buildtime`.
 #[test]
@@ -1298,6 +1814,59 @@ fn enqueue_dependencies_marks_a_depend_blocker_as_buildtime() {
     assert_eq!(pending.len(), 1);
     assert!(pending[0].strong);
     assert!(pending[0].buildtime);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A conditional use-dep is evaluated against the installed USE
+/// before queueing, and the queue remembers the raw form.
+#[test]
+fn enqueue_dependencies_records_the_unevaluated_form_of_a_conditional_dep() {
+    let root = dir_165("enqueue-unevaluated");
+    install_165(
+        &root,
+        "dev-libs",
+        "consumer-1.0",
+        "0",
+        &[
+            ("USE", "flag"),
+            ("RDEPEND", "dev-libs/need[flag=] dev-libs/plain"),
+        ],
+    );
+    let repos = repo_165(
+        &root,
+        &[
+            ("dev-libs/consumer", "1.0", "0", "", "", "", ""),
+            ("dev-libs/need", "1.0", "0", "flag", "", "", ""),
+            ("dev-libs/plain", "1.0", "0", "", "", "", ""),
+        ],
+    );
+    let mut entries = Vec::new();
+    let mut queue = std::collections::VecDeque::new();
+    let mut pending = Vec::new();
+    enqueue_165(Enqueue165Args {
+        repos: &repos,
+        root: &root,
+        config: &cfg_165(),
+        cat: "dev-libs",
+        pkg: "consumer",
+        ver: "1.0",
+        with_bdeps: false,
+        entries: &mut entries,
+        queue: &mut queue,
+        pending: &mut pending,
+    });
+    assert!(pending.is_empty());
+    assert_eq!(queue.len(), 2);
+    let cond = queue
+        .iter()
+        .find(|q| q.atom.starts_with("dev-libs/need"))
+        .expect("conditional dep queued");
+    assert_eq!(cond.unevaluated.as_deref(), Some("dev-libs/need[flag=]"));
+    let plain = queue
+        .iter()
+        .find(|q| q.atom == "dev-libs/plain")
+        .expect("plain dep queued");
+    assert_eq!(plain.unevaluated, None);
     let _ = std::fs::remove_dir_all(&root);
 }
 

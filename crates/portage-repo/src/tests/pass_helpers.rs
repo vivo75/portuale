@@ -1,5 +1,73 @@
 use super::*;
 
+/// An atom in both a build-time key and the walked `IDEPEND` is a
+/// runtime edge, not `buildtime_hard`.
+#[test]
+fn onlydeps_ideps_atom_shared_with_buildtime_key_is_not_buildtime_hard() {
+    // EAPI 8 with ideps kept classifies; blanked ideps (or EAPI 7) classifies nothing.
+    assert_eq!(
+        onlydeps_runtime_keys(OnlydepsRuntimeKeysArgs {
+            onlydeps_blanks_runtime: true,
+            onlydeps_blanks_idepend: false,
+            eapi_has_idepend: true
+        }),
+        &["IDEPEND"][..]
+    );
+    assert!(
+        onlydeps_runtime_keys(OnlydepsRuntimeKeysArgs {
+            onlydeps_blanks_runtime: true,
+            onlydeps_blanks_idepend: true,
+            eapi_has_idepend: true
+        })
+        .is_empty()
+    );
+    assert!(
+        onlydeps_runtime_keys(OnlydepsRuntimeKeysArgs {
+            onlydeps_blanks_runtime: true,
+            onlydeps_blanks_idepend: false,
+            eapi_has_idepend: false
+        })
+        .is_empty()
+    );
+    let flatten = |text: &str| -> HashSet<String> {
+        let toks: Vec<String> = text.split_whitespace().map(String::from).collect();
+        let use_flags: HashSet<String> = HashSet::new();
+        portage_use_reduce::use_reduce_flat(
+            &toks,
+            &use_flags,
+            portage_use_reduce::MatchMode::Normal,
+        )
+        .map(|v| v.into_iter().filter(|t| t != "||").collect())
+        .unwrap_or_default()
+    };
+    let buildtime_atoms = flatten("dev-libs/odw0e");
+    let runtime_atoms = flatten("dev-libs/odw0e");
+    assert!(buildtime_atoms.contains("dev-libs/odw0e"));
+    assert!(runtime_atoms.contains("dev-libs/odw0e"));
+    let mut queue = VecDeque::new();
+    let mut blockers = Vec::new();
+    enqueue_flat_deps(EnqueueFlatDepsArgs {
+        flat_deps: vec!["dev-libs/odw0e".to_string()],
+        key: &("dev-libs".to_string(), "odw0a".to_string()),
+        version: "1",
+        depth: 1,
+        parent_use: &HashSet::new(),
+        queue: &mut queue,
+        pending_blockers: &mut blockers,
+        buildtime_atoms: &buildtime_atoms,
+        runtime_atoms: &runtime_atoms,
+        bdepend_atoms: &HashSet::new(),
+        or_universe: &HashSet::new(),
+        running_atoms: &HashSet::new(),
+        owner_targets_running_root: false,
+    });
+    assert_eq!(queue.len(), 1);
+    assert!(
+        !queue[0].buildtime_hard,
+        "an IDEPEND-walked atom is a runtime edge even when rdeps are blanked"
+    );
+}
+
 /// Collapses co-selected atoms onto one pick like Portage's
 /// `_minimize_children`: installed-first for dynamic deps,
 /// ascending for version ranges.
