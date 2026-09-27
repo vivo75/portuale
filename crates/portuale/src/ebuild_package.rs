@@ -1692,6 +1692,80 @@ mod tests {
     }
 
     #[test]
+    fn resolve_pkgdir_compress_flags_and_bzip2_obey_the_chain() {
+        // Expected values from Portage's `make.globals` defaults; the lookup
+        // is driven directly here, chain precedence lives at the call sites.
+        let cfg = |pairs: &'static [(&'static str, &'static str)]| {
+            move |k: &str| {
+                pairs
+                    .iter()
+                    .find(|(n, _)| *n == k)
+                    .map(|(_, v)| v.to_string())
+            }
+        };
+        assert_eq!(
+            PackageOptions::default().pkgdir,
+            std::path::PathBuf::from("/var/cache/binpkgs")
+        );
+        assert_eq!(
+            resolve_pkgdir(cfg(&[])),
+            std::path::PathBuf::from("/var/cache/binpkgs")
+        );
+        assert_eq!(
+            resolve_pkgdir(cfg(&[("PKGDIR", "/tmp/bins")])),
+            std::path::PathBuf::from("/tmp/bins")
+        );
+        // Empty is unset (Portage has no `PKGDIR`-empty die).
+        assert_eq!(
+            resolve_pkgdir(cfg(&[("PKGDIR", "")])),
+            std::path::PathBuf::from("/var/cache/binpkgs")
+        );
+
+        assert_eq!(PackageOptions::default().binpkg_compress, "zstd");
+        assert_eq!(resolve_binpkg_compress(cfg(&[])), "zstd");
+        assert_eq!(
+            resolve_binpkg_compress(cfg(&[("BINPKG_COMPRESS", "gzip")])),
+            "gzip"
+        );
+        assert_eq!(
+            resolve_binpkg_compress(cfg(&[("BINPKG_COMPRESS", "bzip2")])),
+            "bzip2"
+        );
+        // Empty disables compression downstream, so it round-trips verbatim.
+        assert_eq!(resolve_binpkg_compress(cfg(&[("BINPKG_COMPRESS", "")])), "");
+
+        assert_eq!(PackageOptions::default().binpkg_compress_flags, "");
+        assert_eq!(resolve_binpkg_compress_flags(cfg(&[]), "gzip"), "");
+        // The per-compressor override wins over the generic value.
+        assert_eq!(
+            resolve_binpkg_compress_flags(
+                cfg(&[
+                    ("BINPKG_COMPRESS_FLAGS", "-1"),
+                    ("BINPKG_COMPRESS_FLAGS_GZIP", "-9"),
+                ]),
+                "gzip"
+            ),
+            "-9"
+        );
+        assert_eq!(
+            resolve_binpkg_compress_flags(cfg(&[("BINPKG_COMPRESS_FLAGS", "-1")]), "gzip"),
+            "-1"
+        );
+        // ...keyed to the resolved compressor, not a neighbor's.
+        assert_eq!(
+            resolve_binpkg_compress_flags(cfg(&[("BINPKG_COMPRESS_FLAGS_GZIP", "-9")]), "bzip2"),
+            ""
+        );
+
+        assert_eq!(PackageOptions::default().portage_bzip2_command, "bzip2");
+        assert_eq!(resolve_portage_bzip2_command(cfg(&[])), "bzip2");
+        assert_eq!(
+            resolve_portage_bzip2_command(cfg(&[("PORTAGE_BZIP2_COMMAND", "lbzip2")])),
+            "lbzip2"
+        );
+    }
+
+    #[test]
     fn refresh_entry_compression_command_rederives_the_command_from_the_layered_env() {
         let command_of = |env: &[(String, String)]| {
             env.iter()

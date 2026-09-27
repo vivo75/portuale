@@ -209,6 +209,36 @@ fn resolve_standalone_binpkg_compress_matches_the_twin_fixture() {
     assert_eq!(unmatched, None, "no match, no override");
 }
 
+/// The standalone chain-scalar reader serves global binpkg scalars
+/// below the calling env; see notes for the fixture contract.
+#[test]
+fn resolve_standalone_chain_scalar_reads_the_fixture_make_conf() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+    let config_root = fixtures.clone();
+    let ebuild = fixtures.join("repo/dev-libs/newpkg/newpkg-1.0.ebuild");
+    let pkgdir = resolve_standalone_chain_scalar(&ebuild, &config_root, &fixtures, "PKGDIR")
+        .expect("fixture make.conf sets PKGDIR");
+    assert!(
+        pkgdir.ends_with("pkgdir"),
+        "the file-side PKGDIR must reach the caller, got {pkgdir:?}"
+    );
+    assert_eq!(
+        resolve_standalone_chain_scalar(
+            &ebuild,
+            &config_root,
+            &fixtures,
+            "BINPKG_COMPRESS_DEFINITELY_UNSET"
+        ),
+        None,
+        "an unconfigured chain contributes no value"
+    );
+    assert_eq!(
+        resolve_standalone_chain_scalar(&ebuild, &config_root, &fixtures, "BINPKG_FORMAT"),
+        resolve_standalone_binpkg_format(&ebuild, &config_root, &fixtures),
+        "the wrapper stays a thin alias for its key"
+    );
+}
+
 /// The unmerge config chain resolves `BINPKG_FORMAT` for the
 /// `FEATURES=unmerge-backup` quickpkg; see notes for the full contract.
 #[test]
