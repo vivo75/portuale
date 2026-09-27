@@ -2098,6 +2098,12 @@ mod tests {
 
         // The directory scan walks the `<cat>/<pn>/` subdir, keeps each
         // build's own BUILD_ID, and CPV stays the bare `cat/pf`.
+        // (Backlog #174: vouched files are trusted on the index's word,
+        // like real's default `FEATURES=pkgdir-index-trusted`, so the
+        // entries are the written stanzas verbatim -- real's own
+        // `_pkgindex_aux_keys` carries no `PF`, and neither does the
+        // stanza portuale wrote, so `PF` is no longer asserted here.
+        // Downstream splits it from `CPV`, exactly like real.)
         let scanned = crate::binpkg::populate_local_pkgdir(&options.pkgdir).expect("scan succeeds");
         assert_eq!(scanned.len(), 2);
         let build_ids: std::collections::HashSet<&str> = scanned
@@ -2110,7 +2116,6 @@ mod tests {
                 entry.get("CPV").map(String::as_str),
                 Some("dev-libs/packagepkg-1.0")
             );
-            assert_eq!(entry.get("PF").map(String::as_str), Some("packagepkg-1.0"));
         }
     }
 

@@ -88,6 +88,12 @@ md-5 = "0.10"
 # use only (SHA-1 is cryptographically broken); real portage writes and
 # verifies it, so portuale does too.
 sha1 = "0.10"
+# Merge-time binpkg digest verification (backlog #174) checks every
+# digest a `Packages` record may carry, not just real's own two
+# (`MD5`/`SHA1` above): `SHA256`/`SHA512` when present. Same waiver as
+# md-5 above (pure Rust, no C linkage); already locked (was a
+# dev-dependency for the `Manifest` digest tests) -- no new fetch.
+sha2 = "0.10"
 # Real merge: real movefile() explicitly preserves the source's own
 # mtime onto the merged destination (`newmtime=thismtime`) -- std::fs::
 # copy doesn't (the destination gets a fresh "now" mtime), which would
@@ -131,9 +137,8 @@ tar = { version = "0.4", default-features = false }
 clap = "4"
 
 [dev-dependencies]
-# Test-only: assemble gpkg `Manifest` `DATA` lines with real BLAKE2B/
-# SHA512 digests so `binpkg::verify_gpkg_manifest`'s tests exercise the
-# real hashers rather than pre-baked constants. Both are already vendored
-# (portage-fetch depends on them at these versions) -- no new fetch.
+# Test-only: assemble gpkg `Manifest` `DATA` lines with real BLAKE2B
+# digests so `binpkg::verify_gpkg_manifest`'s tests exercise the real
+# hasher rather than pre-baked constants. Already vendored
+# (portage-fetch depends on it at this version) -- no new fetch.
 blake2 = "0.10"
-sha2 = "0.10"
