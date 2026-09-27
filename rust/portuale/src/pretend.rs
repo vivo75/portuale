@@ -8614,6 +8614,19 @@ pub(crate) fn load_repos_and_config(
     Ok((repos, config))
 }
 
+/// Backlog #185: real's merge-list gating (real
+/// `_emerge/actions.py:464-469`, the `mergelist_shown` branch): a
+/// non-`--pretend` run displays the list before merging only when
+/// `--ask`, `--tree` or `--verbose` is given, and never when `--quiet`
+/// is given without `--ask` (`--quiet --ask` still shows it). A
+/// `--pretend` run always displays it. Pure predicate so the shapes
+/// stay unit-pinned without spawning a merge; the abort-path and
+/// `--autounmask-only` carve-outs live at the `show_merge_list` call
+/// site, not here.
+fn merge_list_shown(pretend: bool, ask: bool, tree: bool, verbose: bool, quiet: bool) -> bool {
+    pretend || ((ask || tree || verbose) && !(quiet && !ask))
+}
+
 pub fn run(args: &[String]) -> ExitCode {
     if wants_help(args) {
         print_help();
@@ -11788,7 +11801,74 @@ pub fn run(args: &[String]) -> ExitCode {
     // list -- only the `display_problems()` equivalent (slot-conflict
     // notice + autounmask blocks) is shown, then exit 0. Also forces the
     // dry-run path: nothing is ever built.
-    let show_merge_list = !autounmask_only;
+    //
+    // Backlog #185: real `_emerge/actions.py:464-469` (`mergelist_shown`
+    // branch) shows the merge list before a non-`--pretend` merge only
+    // when `--ask`, `--tree` or `--verbose` is given, and never when
+    // `--quiet` is given without `--ask`. A `--pretend` run always
+    // shows it (the long-standing, corpus-pinned behavior above). An
+    // aborted resolve shows no list on a real non-`--pretend` run
+    // either (real `actions.py:460-462` fails before any `display()`).
+    let show_merge_list = !autounmask_only
+        && merge_list_shown(pretend, ask, tree, verbose, quiet)
+        && (pretend || gated_abort_partial.is_none());
+    // Backlog #185: real's resolution-phase display for a non-`--pretend`
+    // run, printed whether or not the list itself is shown -- and whether
+    // or not resolution succeeds. Real `depgraph.py::
+    // _start_resolution_display` prints the header (when `--ask`,
+    // `--tree` or `--verbose` is given) and starts the spinner notice
+    // before resolving, and `backtrack_depgraph`'s `finally:` completes
+    // the notice plus the timing line after (success or failure alike).
+    // `--quiet` -- and `--nodeps`, real `depgraph.py:12130` -- puts the
+    // spinner in QUIET mode: no header, no notice, and `end_notice()`
+    // reports nothing to complete, so no timing line either.
+    // Provenance: container probe m185 (real 3.0.81.3,
+    // `localhost/test-portuale:latest`, `emerge --oneshot --usepkgonly
+    // probe/probe-a` in six shapes; the gating is identical in 3.0.82.2
+    // by source read) plus the 3.0.82.2 source for exact text.
+    if !pretend && !quiet && !nodeps {
+        if ask || tree || verbose {
+            // Real `_start_resolution_display`
+            // (`depgraph.py:12087-12127`): a leading blank line, then
+            // `These are the packages that would be ...` -- `in reverse
+            // order` for `--tree` (a plain `:` under
+            // `--unordered-display`), `fetched` under `--fetchonly` and
+            // `built` under `--buildpkgonly` (`--fetchonly` is
+            // unimplemented here, rc 2, so only the `built` arm below is
+            // reachable), else `merged, in order:` -- then a blank line.
+            println!();
+            let action = if buildpkgonly { "built" } else { "merged" };
+            if tree {
+                if unordered_display {
+                    println!("These are the packages that would be {action}:");
+                } else {
+                    println!("These are the packages that would be {action}, in reverse order:");
+                }
+            } else {
+                println!("These are the packages that would be {action}, in order:");
+            }
+            println!();
+        }
+        // Real `stdout_spinner` STATIC mode (piped stdout, real
+        // `stdout_spinner.py:105-145`): `begin_notice("Calculating
+        // dependencies")` writes the notice plus ` ...`, and
+        // `end_notice()` completes it with ` done!`. NOTE: the m185
+        // probe (3.0.81.3) shows two spaces before `...`; the 3.0.82.2
+        // source (`f"{notice} ..."` + `" done!\n"`) shows one -- ported
+        // from the pinned source, pending the coordinator's 3.0.82.2
+        // bed confirmation (see the m185 report).
+        println!("Calculating dependencies ... done!");
+        // Real `_show_resolution_report` (`depgraph.py:12134-12146`):
+        // `Dependency resolution took N.NN s (backtrack: B/M).` plus a
+        // trailing blank line. The wall-clock seconds are cut exactly
+        // like the #135 abort-path timing line just below (repeated-run
+        // determinism is a jointly-owned gate; nondeterministic values
+        // ride `--json` only) -- the `backtrack: B/M` signal is kept.
+        println!(
+            "Dependency resolution took (backtrack: {}/{}).\n",
+            result.backtrack_restarts, result.backtrack_max,
+        );
+    }
 
     // Real `depgraph.py:11192-11235`'s `display_problems()` block for a
     // directly-requested atom that matched `package.provided` -- printed
@@ -12010,7 +12090,15 @@ pub fn run(args: &[String]) -> ExitCode {
         // Non-abort resolves (including `Complete` graphs that still
         // carry NVC entries, e.g. build-root-only misses) render those
         // lines in the loop above exactly as before.
-        if gated_abort_partial.is_some()
+        // Backlog #185: pretend-only since the unconditional
+        // resolution-phase block above took over the non-`--pretend`
+        // preamble. Real's resolution-phase prints (header, notice,
+        // timing) run before success/failure is known, so a failed
+        // non-`--pretend` resolve already printed them above; re-printing
+        // here would double them, and real never shows the partial list
+        // itself on a non-`--pretend` abort (`actions.py:460-462`).
+        if pretend
+            && gated_abort_partial.is_some()
             && matches!(
                 &result.outcome,
                 portage_repo::ResolveOutcome::Aborted {
@@ -12127,6 +12215,18 @@ pub fn run(args: &[String]) -> ExitCode {
                 tree
             )
         );
+    }
+
+    // Backlog #185: real `_emerge/actions.py:526` prints one blank line
+    // after the merge list, before the `--ask` prompt (or the scheduler,
+    // when nothing prompts). `show_merge_list` (not the bare gate) is
+    // the condition: real's `print()` only runs when the list branch ran
+    // (an aborted resolve returns before it). `--ask` needs none here:
+    // `ask_confirm` already opens with that same single blank line
+    // (real's `print()` before `UserQuery.query`), so printing another
+    // would double it.
+    if !pretend && show_merge_list && !ask {
+        println!();
     }
 
     // Real `_show_circular_deps`' cycle-only re-display
@@ -13148,6 +13248,17 @@ pub fn run(args: &[String]) -> ExitCode {
         if ask && !ask_confirm(&color, "Would you like to merge these packages?") {
             return ExitCode::from(130);
         }
+        // Backlog #185: real `Scheduler._status_msg`
+        // (`Scheduler.py:2387-2397`) precedes every status line -- the
+        // first `>>> Emerging ...` among them -- with a blank line,
+        // unless the scheduler is in background mode (real
+        // `_background_mode`: parallel `--jobs`, `--quiet`, or
+        // `--quiet-build=y`). Only the first one is ported here: the
+        // text before the first merge line is this slice's contract;
+        // the per-message generalization is deferred.
+        if jobs <= 1 && !quiet && quiet_build != Some(true) {
+            println!();
+        }
         // Real BINPKG_COMPRESS/BINPKG_COMPRESS_FLAGS[_<NAME>]/
         // PORTAGE_BZIP2_COMMAND/PKGDIR/... resolution -- see
         // `package_options_from_env`.
@@ -13757,6 +13868,27 @@ mod tests {
             stderr.contains("\"--ask\" should only be used in a terminal"),
             "{stderr}"
         );
+    }
+
+    #[test]
+    fn nonpretend_merge_list_shown_only_when_real_shows_it() {
+        // Backlog #185: real `_emerge/actions.py:464-469`
+        // (`mergelist_shown` branch) plus the m185 container probe (real
+        // 3.0.81.3, `emerge --oneshot --usepkgonly probe/probe-a` in six
+        // shapes; gating identical in 3.0.82.2 by source read): a
+        // non-`--pretend` run shows the merge list only with `--ask`,
+        // `--tree` or `--verbose`, and never with `--quiet` unless
+        // `--ask` is also given. `--pretend` always shows it.
+        // (pretend, ask, tree, verbose, quiet) -> shown
+        assert!(merge_list_shown(true, false, false, false, false));
+        assert!(merge_list_shown(true, false, false, false, true));
+        assert!(!merge_list_shown(false, false, false, false, false));
+        assert!(merge_list_shown(false, true, false, false, false));
+        assert!(merge_list_shown(false, false, true, false, false));
+        assert!(merge_list_shown(false, false, false, true, false));
+        assert!(!merge_list_shown(false, false, false, false, true));
+        assert!(!merge_list_shown(false, false, false, true, true));
+        assert!(merge_list_shown(false, true, false, false, true));
     }
 
     #[test]
