@@ -1364,6 +1364,48 @@ pub(crate) fn entry_repo(entry: &GraphEntry) -> &str {
     entry.repo_name.as_deref().unwrap_or("")
 }
 
+/// A resumed *binary* entry's `::repo` for the merge progress lines.
+/// Real re-resolves a `["binary", root, cpv, "merge"]` resume item from
+/// its bintree (`depgraph.py::_loadResumeCommand` matches
+/// `pkg_type == "binary"` against the binary tree only), so the resumed
+/// Package -- and the `(N of M) cpv::repo` line (`PackageMerge._make_msg`,
+/// `PackageMerge.py:25`, `pkg.cpv + _repo_separator + pkg.repo`) --
+/// carries the *binary's* repository (the `Packages` index `REPO` field
+/// real `bintree` surfaces as the package's `repository`), never the
+/// ebuild repo. Mirrors the resolver's own pool order: the local
+/// `$PKGDIR` index first (real `bintree.isremote` prefers a local file),
+/// then the configured remote binhosts in order (`find_remote_binpkg`).
+/// A record without `REPO` yields `"__unknown__"` -- real
+/// `portage.versions._unknown_repo`, and exactly what
+/// `binary_candidates_from_index` (hence a fresh binary merge) reports
+/// for the same record. `None` when no binary pool lists the version at
+/// all: the caller keeps the ebuild-repo fallback (today's display; the
+/// merge itself then reports it cannot locate the entry, same as a
+/// non-resume run).
+pub(crate) fn resume_binary_repo(
+    local: &portage_repo::BinaryIndex,
+    binrepos: &[portage_profile::BinRepo],
+    root: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> Option<String> {
+    if let Some(cand) = portage_repo::list_binary_candidates(local, category, package)
+        .into_iter()
+        .find(|c| c.version == version)
+    {
+        return Some(cand.repo_name);
+    }
+    let (_, record) = portage_repo::find_remote_binpkg(binrepos, root, category, package, version)?;
+    Some(
+        record
+            .get("REPO")
+            .filter(|s| !s.is_empty())
+            .cloned()
+            .unwrap_or_else(|| "__unknown__".to_string()),
+    )
+}
+
 /// A minimal source `GraphEntry` for `emerge --resume` (`pretend.rs`):
 /// the saved `mtimedb` resume list only records `cat/pkg-ver`, so the
 /// display/USE/blocker fields are all empty. `required_by` is empty too --
@@ -1382,24 +1424,39 @@ pub(crate) fn entry_repo(entry: &GraphEntry) -> &str {
 /// real's `cpv::repo` shape (backlog #177) and the saved resume list
 /// records only `cat/pkg-ver`. `None` when no repo carries the version
 /// anymore (the merge then reports it cannot locate the ebuild, same as
-/// a non-resume run). For a resumed *binary* entry this names the
-/// ebuild repo, not the binhost it came from -- display-only (binpkg
-/// location never reads `repo_name`); real records the true origin.
+/// a non-resume run). For a resumed *binary* entry the caller passes the
+/// binary's own repository (`resume_binary_repo`, real's bintree
+/// re-resolution, backlog #186) in `binary_repo`, which wins over the
+/// ebuild lookup; `None` keeps the ebuild lookup as the fallback.
 pub(crate) fn resume_entry(
     category: &str,
     package: &str,
     version: &str,
     source: CandidateSource,
     repos: &[RepoConfig],
+    binary_repo: Option<&str>,
 ) -> GraphEntry {
-    let repo_name = portage_repo::list_candidates(repos, category, package)
-        .ok()
-        .and_then(|cs| {
-            cs.iter()
-                .filter(|c| c.version == version)
-                .max_by_key(|c| c.repo_priority)
-                .map(|c| c.repo_name.clone())
-        });
+    let repo_name = if source == CandidateSource::Binary {
+        binary_repo.map(str::to_string).or_else(|| {
+            portage_repo::list_candidates(repos, category, package)
+                .ok()
+                .and_then(|cs| {
+                    cs.iter()
+                        .filter(|c| c.version == version)
+                        .max_by_key(|c| c.repo_priority)
+                        .map(|c| c.repo_name.clone())
+                })
+        })
+    } else {
+        portage_repo::list_candidates(repos, category, package)
+            .ok()
+            .and_then(|cs| {
+                cs.iter()
+                    .filter(|c| c.version == version)
+                    .max_by_key(|c| c.repo_priority)
+                    .map(|c| c.repo_name.clone())
+            })
+    };
     GraphEntry {
         discovery: 0,
         category: category.to_string(),
@@ -2533,7 +2590,14 @@ mod tests {
         // The up-front resume save (real `Scheduler._save_resume_list`'s
         // `operation == "merge"` filter) records every entry that will
         // actually merge -- source and binary alike -- and nothing else.
-        let src = resume_entry("dev-libs", "src-pkg", "1.0", CandidateSource::Ebuild, &[]);
+        let src = resume_entry(
+            "dev-libs",
+            "src-pkg",
+            "1.0",
+            CandidateSource::Ebuild,
+            &[],
+            None,
+        );
         assert_eq!(
             resume_cpv(&src),
             Some((
@@ -2543,7 +2607,14 @@ mod tests {
                 "1.0".to_string(),
             ))
         );
-        let bin = resume_entry("dev-libs", "bin-pkg", "2.0", CandidateSource::Binary, &[]);
+        let bin = resume_entry(
+            "dev-libs",
+            "bin-pkg",
+            "2.0",
+            CandidateSource::Binary,
+            &[],
+            None,
+        );
         assert_eq!(
             resume_cpv(&bin),
             Some((
@@ -2553,16 +2624,127 @@ mod tests {
                 "2.0".to_string(),
             ))
         );
-        let mut installed =
-            resume_entry("dev-libs", "old-pkg", "3.0", CandidateSource::Ebuild, &[]);
+        let mut installed = resume_entry(
+            "dev-libs",
+            "old-pkg",
+            "3.0",
+            CandidateSource::Ebuild,
+            &[],
+            None,
+        );
         installed.outcome = PretendOutcome::AlreadyInstalled {
             version: "3.0".into(),
         };
         assert_eq!(resume_cpv(&installed), None);
-        let mut uninstalled =
-            resume_entry("dev-libs", "gone-pkg", "4.0", CandidateSource::Ebuild, &[]);
+        let mut uninstalled = resume_entry(
+            "dev-libs",
+            "gone-pkg",
+            "4.0",
+            CandidateSource::Ebuild,
+            &[],
+            None,
+        );
         uninstalled.outcome = PretendOutcome::NoVisibleCandidate;
         assert_eq!(resume_cpv(&uninstalled), None);
+    }
+
+    #[test]
+    fn resume_binary_repo_comes_from_the_binary_pool_not_the_ebuild_repos() {
+        // #186: real `depgraph.py::_loadResumeCommand` re-resolves a
+        // `["binary", root, cpv, "merge"]` resume item from the bintree,
+        // so the resumed `(N of M) cpv::repo` line names the binary's own
+        // repository. Local `$PKGDIR` index first, then the configured
+        // remote binhosts; a record without `REPO` is `"__unknown__"`
+        // (what a fresh binary merge shows for it); nothing anywhere is
+        // `None` (the caller then keeps the ebuild fallback).
+        use std::collections::HashMap;
+        let record = |cpv: &str, repo: Option<&str>| {
+            let mut m = HashMap::new();
+            m.insert("CPV".to_string(), cpv.to_string());
+            if let Some(r) = repo {
+                m.insert("REPO".to_string(), r.to_string());
+            }
+            m
+        };
+        let local = portage_repo::BinaryIndex::from_entries(vec![
+            record("dev-libs/bin-a-1.0", Some("binhostrepo")),
+            record("dev-libs/bin-norepo-1.0", None),
+            record("dev-libs/bin-s-1.0", Some("localrepo")),
+        ]);
+        let here = Path::new("/");
+        assert_eq!(
+            resume_binary_repo(&local, &[], here, "dev-libs", "bin-a", "1.0"),
+            Some("binhostrepo".to_string())
+        );
+        assert_eq!(
+            resume_binary_repo(&local, &[], here, "dev-libs", "bin-norepo", "1.0"),
+            Some("__unknown__".to_string())
+        );
+        assert_eq!(
+            resume_binary_repo(&local, &[], here, "dev-libs", "missing", "1.0"),
+            None
+        );
+
+        // Remote hit through a `file://` binhost the local index lacks.
+        let remote_dir = tempdir();
+        fs::write(
+            remote_dir.join("Packages"),
+            "TIMESTAMP: 0\nPACKAGES: 2\n\nCPV: dev-libs/bin-r-2.0\nREPO: remoterepo\n\nCPV: dev-libs/bin-s-1.0\nREPO: remoterepo\n",
+        )
+        .unwrap();
+        let binrepos = vec![portage_profile::BinRepo {
+            name: "tmpremote".to_string(),
+            sync_uri: format!("file://{}", remote_dir.display()),
+            priority: 1,
+            location: None,
+            verify_signature: false,
+        }];
+        assert_eq!(
+            resume_binary_repo(&local, &binrepos, here, "dev-libs", "bin-r", "2.0"),
+            Some("remoterepo".to_string())
+        );
+        // The local index shadows the binhost for the same version.
+        assert_eq!(
+            resume_binary_repo(&local, &binrepos, here, "dev-libs", "bin-s", "1.0"),
+            Some("localrepo".to_string())
+        );
+        let _ = fs::remove_dir_all(&remote_dir);
+    }
+
+    #[test]
+    fn resume_entry_uses_the_binary_repo_for_binary_entries_only() {
+        // #186: `binary_repo` wins for a `Binary` entry (even when an
+        // ebuild repo would resolve -- here there are no repos at all,
+        // so the fallback would be `None` either way and the win is
+        // exact), is ignored for an `Ebuild` entry, and `None` keeps the
+        // ebuild fallback.
+        let bin = resume_entry(
+            "dev-libs",
+            "bin-pkg",
+            "2.0",
+            CandidateSource::Binary,
+            &[],
+            Some("binhostrepo"),
+        );
+        assert_eq!(bin.repo_name.as_deref(), Some("binhostrepo"));
+        let src = resume_entry(
+            "dev-libs",
+            "src-pkg",
+            "1.0",
+            CandidateSource::Ebuild,
+            &[],
+            Some("binhostrepo"),
+        );
+        assert_eq!(src.repo_name, None);
+        let fallback = resume_entry(
+            "dev-libs",
+            "bin-pkg",
+            "2.0",
+            CandidateSource::Binary,
+            &[],
+            None,
+        );
+        assert_eq!(fallback.repo_name, None);
     }
 
     #[test]
@@ -2573,9 +2755,30 @@ mod tests {
         // tail and the last merge deletes the key.
         let root = tempdir();
         let entries = vec![
-            resume_entry("dev-libs", "loop-a", "1.0", CandidateSource::Ebuild, &[]),
-            resume_entry("dev-libs", "loop-b", "1.0", CandidateSource::Ebuild, &[]),
-            resume_entry("dev-libs", "loop-c", "1.0", CandidateSource::Ebuild, &[]),
+            resume_entry(
+                "dev-libs",
+                "loop-a",
+                "1.0",
+                CandidateSource::Ebuild,
+                &[],
+                None,
+            ),
+            resume_entry(
+                "dev-libs",
+                "loop-b",
+                "1.0",
+                CandidateSource::Ebuild,
+                &[],
+                None,
+            ),
+            resume_entry(
+                "dev-libs",
+                "loop-c",
+                "1.0",
+                CandidateSource::Ebuild,
+                &[],
+                None,
+            ),
         ];
         let full: Vec<crate::mtimedb::ResumeCpv> =
             entries.iter().map(|e| resume_cpv(e).unwrap()).collect();

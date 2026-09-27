@@ -4970,6 +4970,14 @@ fn run_resume(
             return ExitCode::from(1);
         }
     };
+    // The local binary pool for resumed `Binary` entries (real's bintree
+    // re-resolution, backlog #186): the resolver's own pool constructor,
+    // so a resumed binary names the same `::repo` a fresh merge would.
+    // Built once even when the list turns out all-source (cheap: the
+    // constructor reads `<pkgdir>/Packages`, and only scans `$PKGDIR`
+    // files when a `--usepkg`-family run already scanned them into
+    // `config.scanned_binpkgs`).
+    let resume_bin_index = portage_repo::build_local_binpkg_index(config);
     let entries: Vec<portage_repo::GraphEntry> = mergelist
         .iter()
         .map(|(kind, c, p, v)| {
@@ -4977,7 +4985,16 @@ fn run_resume(
                 crate::mtimedb::ResumeEntryKind::Ebuild => portage_repo::CandidateSource::Ebuild,
                 crate::mtimedb::ResumeEntryKind::Binary => portage_repo::CandidateSource::Binary,
             };
-            let mut entry = emerge_build::resume_entry(c, p, v, source, &repos);
+            // A resumed binary entry re-resolves its `::repo` from the
+            // binary pool, never from the ebuild repos (real
+            // `depgraph.py::_loadResumeCommand`, backlog #186).
+            let binary_repo = if source == portage_repo::CandidateSource::Binary {
+                emerge_build::resume_binary_repo(&resume_bin_index, &config.binrepos, root, c, p, v)
+            } else {
+                None
+            };
+            let mut entry =
+                emerge_build::resume_entry(c, p, v, source, &repos, binary_repo.as_deref());
             // The `mtimedb` resume list records only `cat/pkg-ver`, so the
             // resolver's own `use_flags_display` population is skipped.
             // Recompute it for a source build -- `emerge_build::
@@ -14238,6 +14255,7 @@ mod tests {
             "1.0",
             portage_repo::CandidateSource::Ebuild,
             &[],
+            None,
         );
         let binary_entry = emerge_build::resume_entry(
             "dev-libs",
@@ -14245,6 +14263,7 @@ mod tests {
             "2.0",
             portage_repo::CandidateSource::Binary,
             &[],
+            None,
         );
         let entries = vec![source_entry, binary_entry];
 
@@ -14295,6 +14314,7 @@ mod tests {
                 "1.0",
                 portage_repo::CandidateSource::Ebuild,
                 &[],
+                None,
             ),
             emerge_build::resume_entry(
                 "dev-libs",
@@ -14302,6 +14322,7 @@ mod tests {
                 "2.0",
                 portage_repo::CandidateSource::Binary,
                 &[],
+                None,
             ),
         ];
         let up_front: Vec<crate::mtimedb::ResumeCpv> = entries
