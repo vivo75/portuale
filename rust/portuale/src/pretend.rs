@@ -5122,7 +5122,14 @@ fn run_resume(
         let still = entries_not_merged(root, &entries);
         let fav_refs: Vec<&str> = favorites.iter().map(String::as_str).collect();
         let _ = crate::mtimedb::write_resume_list(root, &fav_refs, &still, &opts);
-        eprintln!("emerge: {e}");
+        // Backlog #174: a merge-time binpkg digest failure already
+        // printed real's full tail -- no `emerge:` line either (real
+        // exits a merge failure via `FAILURE`, not the action error
+        // path). The silent resume re-save above stays: real keeps the
+        // list resumable too.
+        if !crate::emerge_getbinpkg::is_binpkg_digest_failure(&e) {
+            eprintln!("emerge: {e}");
+        }
         return ExitCode::from(1);
     }
 
@@ -13232,6 +13239,17 @@ pub fn run(args: &[String]) -> ExitCode {
                 buildpkg,
                 &buildpkg_exclude,
             ) {
+                // Backlog #174: a merge-time binpkg digest failure
+                // already printed real's full tail (digest block +
+                // `>>> Failed to emerge ...`, real
+                // `Scheduler._failed_pkg_msg`) and needs no resume-list
+                // notice or `emerge:` line -- real prints neither for a
+                // merge-time package failure. The up-front save above
+                // (minus per-success removals) already leaves the tail
+                // for `--resume`, like real's own start-of-merge save.
+                if crate::emerge_getbinpkg::is_binpkg_digest_failure(&e) {
+                    return ExitCode::from(1);
+                }
                 // Real `Scheduler._save_resume_list`: on a merge
                 // failure, record every still-unmerged package (source
                 // *or* binary -- `entries_not_merged`'s own

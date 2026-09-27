@@ -314,21 +314,35 @@ pub(crate) fn merge_one_binary_entry(
     // verified at merge -- size first, then every digest the record
     // carries -- against the index's own values, exactly like real's
     // merge-time check (real `bintree._get_digests` reads the index,
-    // never the re-scanned file). A mismatch prints real's `!!!
-    // Digest verification failed:` block, renames the file to
-    // `._checksum_failure_.<rand>` (real
-    // `_checksum_failure_temp_file`), and fails the package with
-    // real's `>>> Failed to emerge <cpv>` shape (real
-    // `Scheduler._failed_pkg_msg(..., "emerge", "for")` with no
-    // located log file, so no `, Log file:` suffix). A binpkg no
-    // record vouches for was fully parsed at scan and skips this --
-    // there is nothing to verify against (real's own `if "size" not
-    // in digests: return OK` halves this: a record without `SIZE`
-    // verifies nothing either). Remote (`file://` or binhost)
-    // downloads were already checked by `download_and_verify` against
-    // the *remote* record (real `_get_digests` prefers the remote
-    // metadata too), so only a purely local binpkg is re-checked here
-    // against the local index.
+    // never the re-scanned file; the honored digest list is fixed --
+    // see `binpkg::verify_binpkg_against_index`'s own disclosure). A
+    // mismatch prints real's `!!! Digest verification failed:` block to
+    // stdout AND to the package `build.log` (real
+    // `SchedulerInterface.output(msg, log_path)` appends to both),
+    // renames the file to `._checksum_failure_.<rand>` (real
+    // `_checksum_failure_temp_file`), and fails the package with real's
+    // `>>> Failed to emerge <cpv>[ for <root>][, Log file:]` shape
+    // (real `Scheduler._failed_pkg_msg(..., "emerge", "for")`; the `,
+    // Log file:` suffix and `>>>  '<log>'` line appear because the
+    // just-written `build.log` is non-empty, real
+    // `_locate_failure_log`). A binpkg no record vouches for was fully
+    // parsed at scan and skips this -- there is nothing to verify
+    // against (real's own `if "size" not in digests: return OK` halves
+    // this: a record without `SIZE` verifies nothing either). Remote
+    // (`file://` or binhost) downloads were already checked by
+    // `download_and_verify` against the *remote* record (real
+    // `_get_digests` prefers the remote metadata too), so only a purely
+    // local binpkg is re-checked here against the local index.
+    //
+    // Real prints nothing else for this failure: no resume-list notice
+    // (real's notices -- `actions.py:348,363`, `Scheduler.py:2493` --
+    // fire only for resolution-time `UnsatisfiedResumeDep` /
+    // `PackageNotFound`, never for a merge-time package failure, and
+    // the end-of-run failed-packages summary only for `> 1` failure or
+    // `--keep-going`) and no `emerge: ...` line (a merge failure exits
+    // via `FAILURE`, not the action error path). So the returned error
+    // is a `binpkg_digest_failure` sentinel the CLI boundary drops
+    // silently (exit 1).
     if !entry.remote_binary
         && let Some(record) = local_index_record(
             pkgdir,
@@ -343,12 +357,34 @@ pub(crate) fn merge_one_binary_entry(
         let cpv = format!("{}/{}-{version}", entry.category, entry.package);
         let renamed = crate::binpkg::checksum_failure_rename(&binpkg_path)
             .unwrap_or_else(|| binpkg_path.clone());
+        let block = crate::binpkg::digest_failure_block(&binpkg_path, &mismatch, &renamed);
+        // Real `Binpkg._start` runs `prepare_build_dirs` + `clean_log`
+        // before `BinpkgVerifier`, and `_digest_exception` appends the
+        // block to the fresh `PORTAGE_LOG_FILE`: the log holds exactly
+        // this block. `build_log_path` is that same
+        // `${PORTAGE_BUILDDIR}/temp/build.log` (plus real's
+        // `PORTAGE_LOGDIR`/compress naming).
+        let log_path = crate::emerge_build::build_log_path(
+            portage_tmpdir,
+            &entry.category,
+            &entry.package,
+            &version,
+            &crate::emerge_build::resolved_features(merge_options),
+        );
+        // Real `_locate_failure_log` only reports a log that exists and
+        // is non-empty: without a writable log there is no `, Log file:`
+        // suffix, exactly like real with no located log.
+        let log_ready = log_path
+            .parent()
+            .is_some_and(|dir| std::fs::create_dir_all(dir).is_ok())
+            && std::fs::write(&log_path, block.as_bytes()).is_ok()
+            && std::fs::metadata(&log_path).is_ok_and(|st| st.len() > 0);
+        print!("{block}");
         print!(
             "{}",
-            crate::binpkg::digest_failure_block(&binpkg_path, &mismatch, &renamed)
+            failed_pkg_msg(&cpv, root, log_ready.then_some(log_path.as_path()))
         );
-        println!(">>> Failed to emerge {cpv}");
-        return Err(format!("{cpv}: binpkg digest verification failed"));
+        return Err(binpkg_digest_failure(&cpv));
     }
 
     // Real `PackageMerge._start`'s per-package line (backlog #177):
@@ -381,6 +417,45 @@ pub(crate) fn merge_one_binary_entry(
     Ok(())
 }
 
+/// Real `Scheduler._failed_pkg_msg(pkg, "emerge", "for")`'s own tail
+/// (`Scheduler.py:2366-2381`, backlog #174): `>>> Failed to emerge
+/// <cpv>[ for <root>][, Log file:]` plus, when `_locate_failure_log`
+/// finds the non-empty build log, `>>>  '<log>'`. Each `_status_msg`
+/// writes its own leading blank line first (`writemsg_level("\n")`
+/// before `displayMessage`), and the `>>> ` prefix is
+/// `JobStatusDisplay._format_msg`; the log line's extra space is
+/// real's own `f" '{log}'"`. The ` for <root>` suffix appears when
+/// `ROOT != "/"` (real `pkg.root_config.settings["ROOT"]`).
+pub(crate) fn failed_pkg_msg(cpv: &str, root: &Path, log_path: Option<&Path>) -> String {
+    let for_root = if root == Path::new("/") {
+        String::new()
+    } else {
+        format!(" for {}", root.display())
+    };
+    match log_path {
+        Some(log) => format!(
+            "\n>>> Failed to emerge {cpv}{for_root}, Log file:\n\n>>>  '{}'\n",
+            log.display()
+        ),
+        None => format!("\n>>> Failed to emerge {cpv}{for_root}\n"),
+    }
+}
+
+/// The error for a merge-time binpkg digest failure whose real output
+/// (the digest block + `failed_pkg_msg`) is already printed: the CLI
+/// boundary must exit 1 WITHOUT a resume-list notice or an `emerge:`
+/// line (real prints neither -- see the call site).
+pub(crate) fn binpkg_digest_failure(cpv: &str) -> String {
+    format!("{cpv}: binpkg digest verification failed")
+}
+
+/// Whether `e` is exactly one `binpkg_digest_failure`. A `--keep-going`
+/// combined message embeds the same text among newlines and must keep
+/// the normal tail, so only a lone single-line failure matches.
+pub(crate) fn is_binpkg_digest_failure(e: &str) -> bool {
+    !e.contains('\n') && e.ends_with(": binpkg digest verification failed")
+}
+
 /// The `<pkgdir>/Packages` index record vouching for a local binpkg
 /// merge (real `bintree._get_digests`' own index read, backlog #174):
 /// the stanza whose `CPV` is `<category>/<package>-<version>`. With
@@ -388,8 +463,9 @@ pub(crate) fn merge_one_binary_entry(
 /// the stanza whose `PATH` basename is the located file's own name, so
 /// a moved file still verifies against its own record. `None` when no
 /// stanza vouches (the file was synthesized at scan from its own
-/// bytes) or the record carries no `SIZE` (real verifies nothing
-/// without one).
+/// bytes). A record without `SIZE` still returns here -- real's
+/// "verifies nothing without one" (`BinpkgVerifier._start`'s early OK)
+/// lives in `verify_binpkg_against_index`, not in the lookup.
 fn local_index_record(
     pkgdir: &Path,
     category: &str,
@@ -763,9 +839,15 @@ mod tests {
         // for it at scan) and fails at merge with `!!! Digest
         // verification failed:` (`Failed on size verification`,
         // `Got`/`Expected`), renames the file to
-        // `._checksum_failure_.<rand>`, and reports `>>> Failed to
-        // emerge <cpv>` -- rc 1 with a clean root. The merge must fail
-        // *before* unpacking anything: no vdb entry, no installed file.
+        // `._checksum_failure_.<rand>`, logs the block to the package
+        // `build.log`, and reports `>>> Failed to emerge <cpv> for
+        // <root>, Log file:` + `>>>  '<log>'` (real
+        // `Scheduler._failed_pkg_msg`) -- rc 1 with a clean root. The
+        // merge must fail *before* unpacking anything: no vdb entry, no
+        // installed file. The `>>>` lines go to stdout (pinned by the
+        // pmtest contract test); the `Err` is the silent
+        // `binpkg_digest_failure` sentinel, so the CLI boundary adds no
+        // resume notice or `emerge:` line.
         let tmp = tempdir();
         let root = tmp.join("root");
         let pkgdir = tmp.join("pkgdir");
@@ -795,20 +877,25 @@ mod tests {
         let scanned = crate::binpkg::populate_local_pkgdir(&pkgdir).expect("scan succeeds");
         assert_eq!(scanned.len(), 1, "{scanned:?}");
 
+        let pt = tmp.join("pt");
         let entry = graph_entry("gpkgreadpkg", CandidateSource::Binary, "1.0");
         let err = merge_one_binary_entry(
             &entry,
             &Config::default(),
             &root,
             &pkgdir,
-            &tmp.join("pt"),
+            &pt,
             &MergeOptions::default(),
             mrg_director::MergeProgress::single(),
         )
         .expect_err("a truncated vouched binpkg must fail at merge");
-        assert!(
-            err.contains("dev-libs/gpkgreadpkg-1.0: binpkg digest verification failed"),
+        assert_eq!(
+            err, "dev-libs/gpkgreadpkg-1.0: binpkg digest verification failed",
             "{err}"
+        );
+        assert!(
+            is_binpkg_digest_failure(&err),
+            "the CLI boundary must recognize the silent sentinel"
         );
         assert!(!dest.exists(), "the corrupt file is renamed away");
         let renamed: Vec<_> = portage_util::read_dir_paths(&pkgdir.join("dev-libs"))
@@ -821,9 +908,71 @@ mod tests {
             })
             .collect();
         assert_eq!(renamed.len(), 1, "one checksum-failure sibling");
+        let rand = renamed[0]
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.strip_prefix("gpkgreadpkg-1.0.gpkg.tar._checksum_failure_."))
+            .unwrap_or("");
+        assert_eq!(rand.len(), 8, "{renamed:?}");
+        assert!(
+            rand.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'),
+            "{renamed:?}"
+        );
+        // Real `SchedulerInterface.output(msg, log_path)`: the digest
+        // block lands in the package `build.log` too, non-empty so real
+        // `_locate_failure_log` reports it.
+        let log = pt.join("portage/dev-libs/gpkgreadpkg-1.0/temp/build.log");
+        let logged = std::fs::read_to_string(&log).unwrap_or_default();
+        assert!(
+            logged.contains("!!! Digest verification failed:")
+                && logged.contains("!!! Reason: Failed on size verification"),
+            "build.log holds the digest block: {log:?}"
+        );
         // Clean root: nothing unpacked, no vdb entry, no merge marker.
         assert!(!root.join("var/db/pkg/dev-libs/gpkgreadpkg-1.0").exists());
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn failed_pkg_msg_matches_real_failed_pkg_msg_bytes() {
+        // Real `Scheduler._failed_pkg_msg(..., "emerge", "for")`
+        // (`Scheduler.py:2366`): each `_status_msg` emits its own
+        // leading blank line, then `>>> <msg>`; the log line carries
+        // real's own leading space (`f" '{log}'"`); ` for <root>` only
+        // when `ROOT != "/"`. The bed oracle's tail is the `ROOT == "/"`
+        // row below, byte for byte.
+        assert_eq!(
+            failed_pkg_msg(
+                "l32/faultpkg-1.0",
+                Path::new("/"),
+                Some(Path::new(
+                    "/var/tmp/portage/l32/faultpkg-1.0/temp/build.log"
+                ))
+            ),
+            "\n>>> Failed to emerge l32/faultpkg-1.0, Log file:\n\
+             \n>>>  '/var/tmp/portage/l32/faultpkg-1.0/temp/build.log'\n"
+        );
+        assert_eq!(
+            failed_pkg_msg(
+                "dev-libs/packagepkg-1.0",
+                Path::new("/tmp/r/root"),
+                Some(Path::new(
+                    "/tmp/r/pt/portage/dev-libs/packagepkg-1.0/temp/build.log"
+                ))
+            ),
+            "\n>>> Failed to emerge dev-libs/packagepkg-1.0 for /tmp/r/root, Log file:\n\
+             \n>>>  '/tmp/r/pt/portage/dev-libs/packagepkg-1.0/temp/build.log'\n"
+        );
+        assert_eq!(
+            failed_pkg_msg("dev-libs/packagepkg-1.0", Path::new("/tmp/r/root"), None),
+            "\n>>> Failed to emerge dev-libs/packagepkg-1.0 for /tmp/r/root\n"
+        );
+        // Only a lone failure is silent: a `--keep-going` combined
+        // message keeps the normal tail.
+        assert!(!is_binpkg_digest_failure(
+            "2 package(s) failed to merge (--keep-going):\n  dev-libs/a-1.0: binpkg digest verification failed"
+        ));
     }
 
     /// A writable copy of portage's own committed GnuPG test keyring

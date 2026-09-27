@@ -1443,7 +1443,11 @@ pub(crate) fn resume_entry(
 /// process env (standalone `ebuild <file>` / tests, where `features` is
 /// empty). The same precedence `ebuild_phases::features_string` uses for
 /// the phase-execution gates.
-fn resolved_features(options: &ebuild_merge::MergeOptions) -> String {
+///
+/// `pub(crate)` for the binary-merge digest-failure path
+/// (`emerge_getbinpkg`): real `Binpkg` prepares the same builddir before
+/// `BinpkgVerifier` runs, so the failure log lives at this same path.
+pub(crate) fn resolved_features(options: &ebuild_merge::MergeOptions) -> String {
     if options.features.is_empty() {
         std::env::var("FEATURES").unwrap_or_default()
     } else {
@@ -1451,7 +1455,10 @@ fn resolved_features(options: &ebuild_merge::MergeOptions) -> String {
     }
 }
 
-fn build_log_path(
+/// `pub(crate)` for the binary-merge digest-failure path
+/// (`emerge_getbinpkg`): real logs `BinpkgVerifier`'s digest block to
+/// this same `PORTAGE_LOG_FILE`.
+pub(crate) fn build_log_path(
     portage_tmpdir: &Path,
     category: &str,
     package: &str,

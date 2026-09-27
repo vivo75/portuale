@@ -1792,13 +1792,20 @@ fn scan_binpkg_file(
     // container and pre-rejecting it here with `!!! Invalid binary
     // package`. Only `CPV` is required of the stanza (real injects
     // stanzas unconditionally on this path -- notably, a
-    // portuale-written `--buildpkg` stanza may carry no `SLOT`). A file
-    // no stanza vouches for keeps the reindex behavior: parse the
-    // container now, rejecting it at scan when its metadata can't be
-    // read (real's own `PortagePackageException` /
+    // portuale-written `--buildpkg` stanza may carry no `SLOT`), and the
+    // stanza must belong to this file's own category (`CPV` starts with
+    // `{category}/`): the same `PF` can exist in two categories with the
+    // same basename, and the first same-basename stanza would vouch for
+    // the wrong file. A file no stanza vouches for keeps the reindex
+    // behavior: parse the container now, rejecting it at scan when its
+    // metadata can't be read (real's own `PortagePackageException` /
     // `SignatureException` arm, `bintree.py:1185-1199`).
     if let Some(candidates) = by_basename.get(basename)
-        && let Some(&hit) = candidates.iter().find(|d| d.contains_key("CPV"))
+        && let Some(&hit) = candidates.iter().find(|d| {
+            d.contains_key("CPV")
+                && d.get("CPV")
+                    .is_some_and(|cpv| cpv.starts_with(&format!("{category}/")))
+        })
     {
         let mut entry = hit.clone();
         entry.insert("PATH".to_string(), path_field);
@@ -1891,6 +1898,17 @@ pub struct BinpkgDigestMismatch {
 /// (`checksum_failure_rename`) and prints real's exact failure block
 /// (`digest_failure_block`). Files the index does not vouch for are
 /// already fully parsed at scan and never reach here with a record.
+///
+/// Fixed digest list, disclosed: real `_get_digests` collects every
+/// key in `get_valid_checksum_keys()` (host-dependent; on this host:
+/// `BLAKE2B/BLAKE2S/MD5/RMD160/SHA1/SHA256/SHA3_256/SHA3_512/SHA512/
+/// WHIRLPOOL/size`) and checks them in frozenset order; portuale
+/// checks `MD5`/`SHA1`/`SHA256`/`SHA512` in that fixed order and skips
+/// the rest (`RMD160`/`WHIRLPOOL`/`BLAKE2B`/`BLAKE2S`/`SHA3_256`/
+/// `SHA3_512` need hashers portuale doesn't vendor -- not small).
+/// Real's own local `--regen` writes only `MD5`/`SHA1` (real
+/// `_pkgindex_hashes`), so the gap only bites on foreign index stanzas
+/// carrying the wider keys.
 pub fn verify_binpkg_against_index(
     path: &Path,
     record: &HashMap<String, String>,
@@ -1992,15 +2010,13 @@ pub fn checksum_failure_rename(path: &Path) -> Option<PathBuf> {
         }
     }
     // Real `tempfile.mkstemp("", <basename> + "._checksum_failure_.",
-    // dir)`: a unique sibling. `SystemTime` nanos plus a counter make
-    // the name unique without a placeholder file; the loop retries on
-    // the (absurd) collision instead of clobbering.
+    // dir)` (`fetch.py:692-696`): the trailing random part is 8
+    // characters from `tempfile._RandomNameSequence.characters`
+    // (`"abcdefghijklmnopqrstuvwxyz0123456789_"`), `os.urandom`-seeded.
+    // Match that shape exactly (`<rand>` is `[a-z0-9_]{8}`); the loop
+    // retries on the (absurd) collision instead of clobbering.
     for attempt in 0..100u32 {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let candidate = dir.join(format!("{prefix}{nanos:x}-{attempt}"));
+        let candidate = dir.join(format!("{prefix}{}", checksum_failure_rand(attempt)));
         if candidate.exists() {
             continue;
         }
@@ -2012,6 +2028,42 @@ pub fn checksum_failure_rename(path: &Path) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Real `tempfile._RandomNameSequence`'s own 8-character name
+/// (`tempfile.py`: 8 `choices` over `"abcdefghijklmnopqrstuvwxyz0123456789_"`):
+/// 8 bytes from the OS mixed onto the same 37-character alphabet. The
+/// `attempt` salts the deterministic fallback (no OS entropy available)
+/// so retries still vary; the caller re-checks `exists()` either way.
+fn checksum_failure_rand(attempt: u32) -> String {
+    const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789_";
+    let mut bytes = [0u8; 8];
+    let have_entropy = std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| {
+            use std::io::Read;
+            f.read_exact(&mut bytes)
+        })
+        .is_ok();
+    if !have_entropy {
+        use std::hash::Hasher;
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        h.write_u128(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        );
+        h.write_u32(std::process::id());
+        h.write_u32(attempt);
+        let digest = h.finish();
+        for (i, b) in bytes.iter_mut().enumerate() {
+            *b = (digest >> ((i % 8) * 8)) as u8;
+        }
+    }
+    bytes
+        .iter()
+        .map(|b| ALPHABET[(usize::from(*b) * ALPHABET.len()) / 256] as char)
+        .collect()
 }
 
 /// Real `_emerge/BinpkgVerifier._digest_exception`'s own failure block
@@ -3654,6 +3706,44 @@ mod tests {
     }
 
     #[test]
+    fn populate_local_pkgdir_vouches_by_category_plus_basename() {
+        // Backlog #174 review: the index-vouched branch must match the
+        // stanza by category + basename (`CPV` starting with
+        // `{category}/`), not the first same-basename stanza. The same
+        // `PF` can exist in two categories with the same basename
+        // (`cat-a/same-1.0.tbz2` vs `cat-b/same-1.0.tbz2`); each file
+        // must reuse its own category's stanza. The vouched path never
+        // parses the container, so the files' bytes are irrelevant.
+        let scratch = ScratchDir::new("index-vouched-category").unwrap();
+        let pkgdir = scratch.path();
+        for cat in ["cat-a", "cat-b"] {
+            fs::create_dir_all(pkgdir.join(cat)).unwrap();
+            fs::write(pkgdir.join(cat).join("same-1.0.tbz2"), b"not-a-real-binpkg").unwrap();
+        }
+        fs::write(
+            pkgdir.join("Packages"),
+            "TIMESTAMP: 0\n\
+             \n\
+             CPV: cat-a/same-1.0\nSLOT: 0\nSIZE: 17\n_mtime_: 1\nPATH: cat-a/same-1.0.tbz2\n\
+             \n\
+             CPV: cat-b/same-1.0\nSLOT: 0\nSIZE: 17\n_mtime_: 1\nPATH: cat-b/same-1.0.tbz2\n",
+        )
+        .unwrap();
+        let entries = populate_local_pkgdir(pkgdir).expect("scan succeeds");
+        assert_eq!(entries.len(), 2, "{entries:?}");
+        for entry in &entries {
+            let cpv = entry.get("CPV").map(String::as_str).unwrap_or("");
+            // Each file reuses its own category's stanza: `CPV` and
+            // `PATH` agree on the category (`<cat>/same-1.0`).
+            assert_eq!(
+                entry.get("PATH").map(String::as_str),
+                Some(format!("{cpv}.tbz2")).as_deref(),
+                "stanza {cpv} must vouch for its own category's file"
+            );
+        }
+    }
+
+    #[test]
     fn verify_binpkg_against_index_reports_size_then_digest_like_real() {
         // Real `_emerge/BinpkgVerifier` checks the stat size against the
         // index `SIZE` first, then each digest the record carries; the
@@ -3710,10 +3800,15 @@ mod tests {
 
     #[test]
     fn checksum_failure_rename_moves_to_a_checksum_failure_sibling() {
-        // Real `_checksum_failure_temp_file`: the corrupt file is
-        // renamed to `<basename>._checksum_failure_.<rand>` in its own
-        // directory. A second, identical failure reuses the existing
-        // sibling (same size + md5) instead of piling up evidence.
+        // Real `_checksum_failure_temp_file` (`fetch.py:692-696` is
+        // `tempfile.mkstemp("", <basename> + "._checksum_failure_.",
+        // dir)`): the corrupt file is renamed to
+        // `<basename>._checksum_failure_.<rand>` in its own directory,
+        // where `<rand>` is real `tempfile._RandomNameSequence`'s own
+        // shape -- 8 characters over `[a-z0-9_]` (the bed oracle shows
+        // `._checksum_failure_.4b2g93ai`). A second, identical failure
+        // reuses the existing sibling (same size + md5) instead of
+        // piling up evidence.
         let scratch = ScratchDir::new("checksum-failure-rename").unwrap();
         let dir = scratch.path();
         let first = dir.join("pkg-1.0.gpkg.tar");
@@ -3722,8 +3817,13 @@ mod tests {
         assert!(!first.exists(), "the corrupt path is gone");
         assert!(renamed.is_file());
         let name = renamed.file_name().unwrap().to_str().unwrap();
+        let rand = name
+            .strip_prefix("pkg-1.0.gpkg.tar._checksum_failure_.")
+            .unwrap_or_else(|| panic!("{name}"));
+        assert_eq!(rand.len(), 8, "{name}");
         assert!(
-            name.starts_with("pkg-1.0.gpkg.tar._checksum_failure_."),
+            rand.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'),
             "{name}"
         );
 
