@@ -12570,6 +12570,25 @@ pub fn run(args: &[String]) -> ExitCode {
         println!();
     }
 
+    // Backlog #129 (S1): real `_show_missed_update_unsatisfied_dep`'s
+    // abbreviated tail (`depgraph.py:1638-1649`) -- the slots whose
+    // higher masked version lost to an unsatisfied dependency under
+    // backtracking (`GraphResult::skipped_missing_deps`, in first-mask
+    // order like the `WARNING` rows above). Real prefixes the section
+    // with one blank line (its slot section already ends with one);
+    // the `for <root>` suffix is omitted like every other portuale
+    // notice row, and `-q`/`--json`/`--columns` behave exactly like the
+    // `WARNING` block above (display-only, same standing).
+    if !result.skipped_missing_deps.is_empty() {
+        println!();
+        println!("!!! The following update(s) have been skipped due to unsatisfied dependencies");
+        println!("!!! triggered by backtracking:");
+        println!();
+        for s in &result.skipped_missing_deps {
+            println!("{}/{}:{}", s.category, s.package, s.slot);
+        }
+    }
+
     // Backlog #19 Slice 5: with the gate on, an aborted cycle prints its
     // circular block HERE -- before the autounmask section -- matching
     // real `display_problems()` order (`_show_circular_deps` at

@@ -18123,6 +18123,22 @@ pub struct SkippedUpdate {
     pub consumer_use: Vec<(String, String)>,
 }
 
+/// Backlog #129 (S1): one slot real reports through the abbreviated
+/// `!!! The following update(s) have been skipped due to unsatisfied
+/// dependencies / !!! triggered by backtracking:` tail
+/// (`depgraph.py:1638-1649`) -- a masked version higher than the chosen
+/// one whose missing-dependency mask still bites at settle time (real's
+/// `check_backtrack` probe raises `_backtrack_mask`). Only the slot
+/// renders (no versions, no parents); the full per-update form real
+/// prints when the probe does *not* raise is out of scope (see
+/// `backtrack_missed_updates`: those records are skipped, not rendered).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkippedMissingDep {
+    pub category: String,
+    pub package: String,
+    pub slot: String,
+}
+
 /// Backlog #90 (S2): real `_solve_non_slot_operator_slot_conflicts`
 /// (`depgraph.py:1774-2106`), run unconditionally by
 /// `_process_slot_conflicts` (`:2108-2116`) -- no backtracking gate
@@ -18812,6 +18828,240 @@ pub(crate) fn constraint_withheld_updates(
     out
 }
 
+/// Backlog #129 (S1): highest missed version per `(cat, pkg, slot)`
+/// while deriving [`backtrack_missed_updates`] -- the version, its
+/// first-seen mask order, the mask reason, and the tree sub-slot/repo.
+type KeptMissedValue = (String, usize, MaskReason, String, String);
+type KeptMissed = HashMap<(String, String, String), KeptMissedValue>;
+
+/// Backlog #129 (S1): real `_get_missed_updates`
+/// (`lib/_emerge/depgraph.py:1529-1565`) over the settled backtrack
+/// trial state -- `self._dynamic_config._runtime_pkg_mask` (masks
+/// accumulated across backtracking runs, `:706`) chained with
+/// `_conflict_missed_update` (the slot-conflict handler's removals,
+/// `:2090-2106`). The second source already rides
+/// `PassResult::skipped_updates` (the direct solve's removal rows, #90
+/// S2); this reads the first: for every masked version that is higher
+/// than the chosen one in its `(root, slot_atom)` -- keeping the
+/// highest per slot -- record `(pkg, mask_type, parent_atoms)`.
+///
+/// Mask-type mapping: real's `"slot conflict"` becomes `SkippedUpdate`
+/// rows (same shape as the direct-solve rows -- one row per rejecting
+/// parent, like the established provisional shape, where real renders
+/// one block with every parent inside); real's `"missing dependency"`
+/// becomes [`SkippedMissingDep`] slots *only when the missing atom
+/// still matches a backtrack-masked version at settle time* -- real's
+/// `check_backtrack` probe (`:6471-6484`: raise `_backtrack_mask`,
+/// abbreviated tail) as opposed to the full per-update form it prints
+/// otherwise, which has no portuale renderer.
+///
+/// Deliberate narrowings (all documented at the call site too):
+/// - one root only (portuale resolves a single root; real keys by
+///   `(root, slot_atom)` and renders `for <root>` -- omitted like every
+///   other portuale notice row).
+/// - an installed masked version is never reported (real excludes
+///   `pkg.installed`; portuale's rows are merge-shaped).
+/// - a masked version with no tree metadata (no slot to key on) is
+///   skipped: there is no honest slot_atom for it.
+/// - a `"missing dependency"` record whose atom matches nothing
+///   backtrack-masked at settle time is skipped, not rendered: real
+///   shows its full form there, which is its own slice (no renderer
+///   exists here). Silence preserves current behaviour on those
+///   un-oracled shapes.
+/// - no cross-source collapse against the direct-solve rows: those keep
+///   their established per-(version, parent) shape (pinned multi-row
+///   for one slot); overlap needs its own oracle before merging.
+/// - parents render merge-scheduled (`consumer_installed: false`), the
+///   `build_slot_conflict` convention -- mask parents are graph pullers.
+pub(crate) fn backtrack_missed_updates(
+    repos: &[RepoConfig],
+    root: &Path,
+    config: &portage_profile::Config,
+    entries: &[GraphEntry],
+    params: &BacktrackParams,
+) -> (Vec<SkippedUpdate>, Vec<SkippedMissingDep>) {
+    // First-seen position per negative (real's dict insertion order;
+    // defensive `usize::MAX` for entries the order vector never saw).
+    let order_of = |cp: &(String, String), neg: &str| -> usize {
+        params
+            .mask_order
+            .iter()
+            .position(|(k, n)| k == cp && n == neg)
+            .unwrap_or(usize::MAX)
+    };
+    // Highest missed version per `(cat, pkg, slot)`, with its order,
+    // reason, sub-slot and repo: ties go to the first-seen mask (real
+    // keeps the first record per key on ties across its chained
+    // sources; within one source the key is written once).
+    let mut kept: KeptMissed = HashMap::new();
+    for ((cat, pkg), bucket) in &params.runtime_pkg_mask {
+        let cp = (cat.clone(), pkg.clone());
+        for entry in bucket {
+            // `!=cat/pkg-ver` back to the version (defensive: skip what
+            // does not parse against its own bucket).
+            let (ver, order) = match entry.neg.strip_prefix("!=").and_then(split_cpv) {
+                Some((c, p, v)) if c == *cat && p == *pkg => (v, order_of(&cp, &entry.neg)),
+                _ => continue,
+            };
+            // Real's installed exclusion (`:1539-1542`).
+            if installed_candidates(root, cat, pkg)
+                .iter()
+                .any(|(v, _, _)| v == &ver)
+            {
+                continue;
+            }
+            let (sub, repo, slot) = slot_conflict_meta(repos, cat, pkg, &ver);
+            if slot.is_empty() {
+                continue;
+            }
+            // Real's chosen comparison (`:1543-1554`): the tracker's
+            // `(root, slot_atom)` matches here -- merge-bound entries
+            // plus installed ones still listed.
+            let mut any_selected = false;
+            let mut missed = true;
+            for e in entries {
+                if e.category != *cat || e.package != *pkg {
+                    continue;
+                }
+                let (chosen_ver, chosen_installed) =
+                    match &e.outcome {
+                        PretendOutcome::New { version }
+                        | PretendOutcome::Reinstall { version, .. } => (version, false),
+                        PretendOutcome::Upgrade { to, .. }
+                        | PretendOutcome::Downgrade { to, .. } => (to, false),
+                        PretendOutcome::AlreadyInstalled { version } => (version, true),
+                        PretendOutcome::NoVisibleCandidate | PretendOutcome::Uninstall { .. } => {
+                            continue;
+                        }
+                    };
+                let chosen_slot = e.slot.clone().or_else(|| {
+                    let s = if chosen_installed {
+                        read_vdb_slot(root, cat, pkg, chosen_ver).0
+                    } else {
+                        slot_conflict_meta(repos, cat, pkg, chosen_ver).2
+                    };
+                    if s.is_empty() { None } else { Some(s) }
+                });
+                if chosen_slot.as_deref() != Some(slot.as_str()) {
+                    continue;
+                }
+                any_selected = true;
+                match vercmp_ordering(chosen_ver, &ver) {
+                    std::cmp::Ordering::Greater => {
+                        missed = false;
+                        break;
+                    }
+                    std::cmp::Ordering::Equal if !chosen_installed => {
+                        missed = false;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            if !any_selected || !missed {
+                continue;
+            }
+            // Real skips mask types with no parents (`:1559-1562`).
+            if let MaskReason::SlotConflict { parents } = &entry.reason
+                && parents.is_empty()
+            {
+                continue;
+            }
+            let key = (cat.clone(), pkg.clone(), slot.clone());
+            let replace = match kept.get(&key) {
+                None => true,
+                Some((kept_ver, kept_order, _, _, _)) => match vercmp_ordering(&ver, kept_ver) {
+                    std::cmp::Ordering::Greater => true,
+                    std::cmp::Ordering::Equal => order < *kept_order,
+                    _ => false,
+                },
+            };
+            if replace {
+                kept.insert(key, (ver, order, entry.reason.clone(), sub, repo));
+            }
+        }
+    }
+    // Emit in first-seen order (real's dict order).
+    let mut kept: Vec<((String, String, String), KeptMissedValue)> = kept.into_iter().collect();
+    kept.sort_by(|a, b| {
+        a.1.1
+            .cmp(&b.1.1)
+            .then_with(|| (a.0.clone(), a.1.0.clone()).cmp(&(b.0.clone(), b.1.0.clone())))
+    });
+    let mut skipped: Vec<SkippedUpdate> = Vec::new();
+    let mut missing: Vec<SkippedMissingDep> = Vec::new();
+    for ((cat, pkg, slot), (ver, _, reason, sub, repo)) in kept {
+        match reason {
+            MaskReason::SlotConflict { parents } => {
+                for ((pc, pp, pv), atom) in parents {
+                    if pc.is_empty() {
+                        continue;
+                    }
+                    skipped.push(SkippedUpdate {
+                        category: cat.clone(),
+                        package: pkg.clone(),
+                        slot: slot.clone(),
+                        skipped_version: ver.clone(),
+                        skipped_sub_slot: sub.clone(),
+                        skipped_repo: repo.clone(),
+                        skipped_use: pkg_use_display_for(repos, config, &cat, &pkg, &ver),
+                        atom,
+                        consumer_cpv: slot_conflict_puller_cpv(repos, &pc, &pp, &pv),
+                        consumer_installed: false,
+                        consumer_use: pkg_use_display_for(repos, config, &pc, &pp, &pv),
+                    });
+                }
+            }
+            MaskReason::MissingDependency { atom, .. } => {
+                if backtrack_masked_match(repos, params, &atom) {
+                    missing.push(SkippedMissingDep {
+                        category: cat.clone(),
+                        package: pkg.clone(),
+                        slot: slot.clone(),
+                    });
+                }
+            }
+        }
+    }
+    (skipped, missing)
+}
+
+/// Backlog #129 (S1): real `_show_unsatisfied_dep(..., check_backtrack=
+/// True)` (`depgraph.py:6471-6484`) -- no output, just the verdict:
+/// `true` when the atom matches a version the settled backtrack state
+/// still masks (real raises `_backtrack_mask`, and the missed update
+/// renders in the abbreviated tail). USE-deps are stripped for the
+/// match, exactly like the missed-update recording's plain-match form
+/// (`direct_solve_atom_matches`' `for_skipped` arm, `:2083-2094`).
+fn backtrack_masked_match(repos: &[RepoConfig], params: &BacktrackParams, atom: &str) -> bool {
+    let probe_atom = portage_dep::without_use(atom).to_string();
+    for ((cat, pkg), bucket) in &params.runtime_pkg_mask {
+        for entry in bucket {
+            let Some(stripped) = entry.neg.strip_prefix("!=") else {
+                continue;
+            };
+            let Some((c, p, ver)) = split_cpv(stripped) else {
+                continue;
+            };
+            if c != *cat || p != *pkg {
+                continue;
+            }
+            let (_, _, slot) = slot_conflict_meta(repos, &c, &p, &ver);
+            let probe = if slot.is_empty() {
+                format!("{c}/{p}-{ver}")
+            } else {
+                format!("{c}/{p}-{ver}:{slot}")
+            };
+            if portage_dep::match_from_list(&probe_atom, &[probe.as_str()])
+                .is_some_and(|m| !m.is_empty())
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// `--changed-deps-report`: an installed package, still in the graph at
 /// `version`, whose vdb-recorded dependency strings differ from the
 /// repo's current ebuild for that exact version (`deps_changed`) -- but
@@ -19048,6 +19298,11 @@ pub struct GraphResult {
     /// skipped version does not merge, rc 0). Rendered after the merge
     /// list by `pretend.rs`; silent under `-q`/`--json`/`--columns`.
     pub skipped_updates: Vec<SkippedUpdate>,
+    /// Backlog #129 (S1): slots real reports through the abbreviated
+    /// unsatisfied-dependencies tail (see [`SkippedMissingDep`]).
+    /// Rendered right after [`GraphResult::skipped_updates`] by
+    /// `pretend.rs`, in first-mask order like the `WARNING` rows.
+    pub skipped_missing_deps: Vec<SkippedMissingDep>,
     /// Backlog #80: unresolved blocker rows whose owner has no display
     /// entry (scan-collected, absent from the graph). The renderer
     /// prints them in the trailing blocker group, counts them in
@@ -20654,12 +20909,17 @@ impl Backtracker {
                                     parents: parents.clone(),
                                 };
                             }
-                            None => bucket.push(MaskEntry {
-                                neg,
-                                reason: MaskReason::SlotConflict {
-                                    parents: parents.clone(),
-                                },
-                            }),
+                            None => {
+                                bucket.push(MaskEntry {
+                                    neg: neg.clone(),
+                                    reason: MaskReason::SlotConflict {
+                                        parents: parents.clone(),
+                                    },
+                                });
+                                // #129 (S1): first-seen order for the
+                                // missed-update notice (see `mask_order`).
+                                params.mask_order.push(((cat.clone(), pkg.clone()), neg));
+                            }
                         }
                     }
                     params.mask_steps += 1;
@@ -20675,9 +20935,13 @@ impl Backtracker {
                 // itself; portuale's string latch additionally pins the
                 // exact cpv so the same parent is never re-masked).
                 params.missing_dep_masked.insert(entry.neg.clone());
+                let order_key = (owner.clone(), entry.neg.clone());
                 let bucket = params.runtime_pkg_mask.entry(owner).or_default();
                 if !bucket.iter().any(|m| m.neg == entry.neg) {
                     bucket.push(entry);
+                    // #129 (S1): first-seen order for the missed-update
+                    // notice (see `mask_order`).
+                    params.mask_order.push(order_key);
                 }
                 (params, false, 1)
             }
@@ -20978,6 +21242,17 @@ struct BacktrackParams {
     /// `MaskReason`, keyed by the masked version's `cat/pkg` (real keys by
     /// package; the per-`cat/pkg` bucket keeps every reader's lookup shape).
     runtime_pkg_mask: HashMap<(String, String), Vec<MaskEntry>>,
+    /// Backlog #129 (S1): first-insertion order of the `runtime_pkg_mask`
+    /// negatives above, as `((cat, pkg), neg)` pairs across buckets. Real's
+    /// `_get_missed_updates` iterates the mask dict in insertion order and
+    /// the notice renders in that order, while portuale's buckets hash
+    /// theirs away; this recovers it. Same-state dedup ignores it (same
+    /// masks are the same search state whatever order they arrived in --
+    /// see `params_equal`, which deliberately does not compare it, like
+    /// real's order-insensitive parameter `__eq__`). Appended exactly
+    /// where a negative is first pushed (a reason *replace* keeps its
+    /// first-seen position, like real's dict assignment).
+    mask_order: Vec<((String, String), String)>,
     /// Mask-producing retries (slot-conflict choices, missing-dep
     /// parents). Real's `--backtrack=N` bounds this per node
     /// (`Backtracker._add`), not the pass count; advanced by
@@ -25112,6 +25387,35 @@ fn assemble_result(
         &pass.nvc_dep_atoms,
     );
 
+    // Backlog #129 (S1): real `display_problems` shows missed updates
+    // only with no unresolved conflicts (`depgraph.py:11127-11132` --
+    // slot collisions or unsatisfied blockers hide them as possibly
+    // irrelevant): the settled backtrack masks become skip records only
+    // on a clean `Complete` graph with no surviving slot conflicts, no
+    // unsolvable blocker rows and no orphan rows. A mask-free search
+    // (including every `--backtrack=0` run) derives nothing here.
+    let mut skipped_missing_deps: Vec<SkippedMissingDep> = Vec::new();
+    if matches!(outcome, ResolveOutcome::Complete)
+        && pass.slot_conflicts.is_empty()
+        && pass.orphan_blockers.is_empty()
+        && !pass
+            .entries
+            .iter()
+            .any(|e| e.blockers.iter().any(|b| b.unsolvable))
+    {
+        let (mut mask_skipped, mask_missing) =
+            backtrack_missed_updates(&ctx.repos, ctx.root, config, &pass.entries, params);
+        // Real chains the mask dict before the handler removals
+        // (`:1533-1536`), so mask rows lead in first-seen order and the
+        // direct-solve/withhold rows keep their established sorted
+        // order behind them. No re-sort: alphabetical would scramble
+        // the mask insertion order real renders in.
+        mask_skipped.append(&mut pass.skipped_updates);
+        pass.skipped_updates = mask_skipped;
+        pass.skipped_updates.dedup();
+        skipped_missing_deps = mask_missing;
+    }
+
     GraphResult {
         entries: pass.entries,
         backtrack_restarts,
@@ -25119,6 +25423,7 @@ fn assemble_result(
         outcome,
         slot_conflicts: pass.slot_conflicts,
         skipped_updates: pass.skipped_updates,
+        skipped_missing_deps,
         orphan_blockers: pass.orphan_blockers,
         changed_deps_report: pass.changed_deps_report_entries,
         buildpkgonly_deps_unsatisfied,
@@ -39956,6 +40261,12 @@ mod tests {
         let mut p = base.clone();
         p.mask_steps = 3;
         assert!(params_equal(&base, &p), "mask_steps excluded");
+        // Backlog #129 (S1): first-seen mask order is render order,
+        // not search state -- same masks in any arrival order dedup.
+        let mut p = base.clone();
+        p.mask_order
+            .push((("a".to_string(), "b".to_string()), "!=a/b-1.0".to_string()));
+        assert!(params_equal(&base, &p), "mask_order excluded");
     }
 
     /// Backlog #161 S2: `adopt_current` replaces the live node's params
@@ -43091,6 +43402,92 @@ mod tests {
             "the dropped 2.0 rides out as a skipped update"
         );
         let _ = fixture_root;
+    }
+
+    /// Backlog #129 (S1): real's two notices on the mg2top backtrack
+    /// shape (`l0-fx-20260927T080515Z` oracle) come from the settled
+    /// backtrack trial state, not from a second pass. The search
+    /// settles every `-1`, and the accumulated masks derive the
+    /// slot-conflict `WARNING` rows (`mgxc-2` vs `=mgxc-1`/`mgxa-1`,
+    /// `mgfc-3.0` vs `=mgfc-1`/`mgfa-1`, in first-mask order) plus the
+    /// abbreviated missing-dependency slots (`mgxb:0`, `mgfb:0`).
+    #[test]
+    fn backtrack_missed_updates_reports_the_mg2top_shape() {
+        let result = graph_result_real_backtrack("dev-libs/mg2top", 20);
+        assert!(
+            result.slot_conflicts.is_empty(),
+            "the search settles with no surviving conflict"
+        );
+        let versions: Vec<(&str, &str)> = result
+            .entries
+            .iter()
+            .filter_map(|e| {
+                merge_bound_version(&e.outcome).map(|v| (e.package.as_str(), v.as_str()))
+            })
+            .collect();
+        for pkg in ["mg2top", "mgfa", "mgfb", "mgfc", "mgxa", "mgxb", "mgxc"] {
+            assert!(
+                versions.iter().any(|(p, v)| p == &pkg && v == &"1"),
+                "settles {pkg}-1, saw {versions:?}"
+            );
+        }
+        assert_eq!(
+            result
+                .skipped_updates
+                .iter()
+                .map(|s| (
+                    s.package.as_str(),
+                    s.skipped_version.as_str(),
+                    s.atom.as_str(),
+                    s.consumer_cpv.as_str()
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "mgxc",
+                    "2",
+                    "=dev-libs/mgxc-1",
+                    "dev-libs/mgxa-1:0/0::testrepo"
+                ),
+                (
+                    "mgfc",
+                    "3.0",
+                    "=dev-libs/mgfc-1",
+                    "dev-libs/mgfa-1:0/0::testrepo"
+                ),
+            ]
+        );
+        assert_eq!(
+            result
+                .skipped_missing_deps
+                .iter()
+                .map(|s| (s.category.as_str(), s.package.as_str(), s.slot.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("dev-libs", "mgxb", "0"), ("dev-libs", "mgfb", "0"),]
+        );
+    }
+
+    /// Backlog #129 (S1): the missed-update derivation only runs on a
+    /// clean settle. At `--backtrack=0` the mg2top root pass keeps its
+    /// slot conflicts (highest-first picks the `-2`s), so no mask
+    /// trial state exists and neither notice may fire.
+    #[test]
+    fn backtrack_missed_updates_stays_silent_without_a_clean_settle() {
+        let result = graph_result_real_backtrack("dev-libs/mg2top", 0);
+        assert!(
+            !result.slot_conflicts.is_empty(),
+            "bt0 keeps the conflicts instead of settling"
+        );
+        assert!(
+            result.skipped_updates.is_empty(),
+            "no WARNING rows without trial state: {:?}",
+            result.skipped_updates
+        );
+        assert!(
+            result.skipped_missing_deps.is_empty(),
+            "no abbreviated slots without trial state: {:?}",
+            result.skipped_missing_deps
+        );
     }
 
     /// Backlog #161 S6: the missing-dep trigger names the upgraded
