@@ -258,6 +258,19 @@ pub(crate) fn wget_fetch(uri: &str, dest: &Path) -> Result<(), String> {
     portage_fetch::download_via_wget(uri, dest, false)
 }
 
+/// Quiet sibling of [`wget_fetch`]: the same default-`FETCHCOMMAND`
+/// wget, but output-captured (`download_via_wget_quiet`) -- for the
+/// binhost index refresh (`emerge_getbinpkg::refresh_binhost_indexes`),
+/// whose failure message is shaped from the transcript (real
+/// `bintree._populate_remote`'s `!!! [repo] ...` pair), never inherited
+/// onto stdout/stderr.
+pub(crate) fn wget_fetch_quiet(
+    uri: &str,
+    dest: &Path,
+) -> Result<(), portage_fetch::QuietFetchError> {
+    portage_fetch::download_via_wget_quiet(uri, dest)
+}
+
 /// Real `mysettings.get("PORTAGE_SSH_OPTS")` (`fetch.py:1806-1810`):
 /// the resolved scalar when the config carries it, else `None` (absent
 /// expands to empty in the fetch command, exactly like real's missing

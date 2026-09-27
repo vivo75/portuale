@@ -11501,13 +11501,12 @@ pub fn run(args: &[String]) -> ExitCode {
     // run refreshes each `http(s)` binhost's `Packages` index into the
     // local edb cache *before* resolution, so the resolver picks up the
     // live pool. (`--pretend` deliberately never touches the network --
-    // it resolves against whatever is already cached.)
-    if !pretend
-        && getbinpkg
-        && let Err(e) = emerge_getbinpkg::refresh_binhost_indexes(&config.binrepos, &root)
-    {
-        eprintln!("emerge: {e}");
-        return ExitCode::from(1);
+    // it resolves against whatever is already cached.) A failed refresh
+    // is non-fatal (backlog #175): real warns (`!!! [<repo>] Error
+    // fetching ...`) and resolves against the local pool, so this
+    // returns nothing -- it never aborts the run.
+    if !pretend && getbinpkg {
+        emerge_getbinpkg::refresh_binhost_indexes(&config.binrepos, &root);
     }
 
     // Real `main.py:958-975` precedence for the `--rebuild-if-*` trio:

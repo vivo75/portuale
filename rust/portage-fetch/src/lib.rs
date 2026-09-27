@@ -764,14 +764,31 @@ fn shell_split(s: &str) -> Vec<String> {
 /// renames after verification, while portuale writes `dest` directly.
 /// This slice deliberately does not change portuale's download path --
 /// recorded in `docs/history/02.68-74.md` §6.
-pub fn download_with_commands(
+/// The fetch command real's selection + `${FILE}` check + variable
+/// substitution reduce to: the make.conf variable name to blame, the
+/// program, and its argv -- everything short of the spawn itself, so the
+/// inheriting transport ([`download_with_commands`]) and the capturing
+/// one ([`download_with_commands_quiet`]) run byte-identical command
+/// lines and differ only in where the child's output goes.
+struct PlannedFetch {
+    prog: String,
+    args: Vec<String>,
+    /// Real's `${FILE}`-less-command warning (the `!!! <VAR> does not
+    /// contain ...` lines plus the make.conf(5) hint), when the distfile
+    /// name matched the URL basename so real runs the command anyway.
+    /// The caller decides where it goes: real stderr for the inheriting
+    /// transport, the captured stream for the quiet one.
+    file_param_warning: Option<String>,
+}
+
+fn plan_fetch_command(
     uri: &str,
     dest: &Path,
     resume: bool,
     distdir: &Path,
     vars: FetchCommandVars<'_>,
     commands: &FetchCommands,
-) -> Result<(), String> {
+) -> Result<PlannedFetch, String> {
     let proto = uri
         .split_once("://")
         .map(|(p, _)| p.to_ascii_uppercase())
@@ -787,6 +804,7 @@ pub fn download_with_commands(
         .filter(|(_, command)| !command.contains("${FILE}"))
         .map(|(var, _)| format!("!!! {var} does not contain the required ${{FILE}} parameter.\n"))
         .collect();
+    let mut file_param_warning = None;
     if !missing_file_param.is_empty() {
         let hint = "!!! Refer to the make.conf(5) man page for information about how to\n\
                     !!! correctly specify FETCHCOMMAND and RESUMECOMMAND.\n";
@@ -797,9 +815,9 @@ pub fn download_with_commands(
             return Err(message);
         }
         // Names match: real still prints the warning before running the
-        // command; there is no `Err` to carry it here, so it goes to
-        // stderr.
-        eprint!("{message}");
+        // command; there is no `Err` to carry it here, so the caller
+        // emits it on the transport's own channel.
+        file_param_warning = Some(message);
     }
     let (var, command) = if resume {
         (resume_var, resume_command)
@@ -820,15 +838,98 @@ pub fn download_with_commands(
     let Some((prog, rest)) = argv.split_first() else {
         return Err(format!("!!! {var} is empty.\n"));
     };
-    let status = std::process::Command::new(prog)
-        .args(rest)
+    Ok(PlannedFetch {
+        prog: prog.clone(),
+        args: rest.to_vec(),
+        file_param_warning,
+    })
+}
+
+pub fn download_with_commands(
+    uri: &str,
+    dest: &Path,
+    resume: bool,
+    distdir: &Path,
+    vars: FetchCommandVars<'_>,
+    commands: &FetchCommands,
+) -> Result<(), String> {
+    let planned = plan_fetch_command(uri, dest, resume, distdir, vars, commands)?;
+    if let Some(warning) = planned.file_param_warning {
+        // Names match: real still prints the warning before running the
+        // command; there is no `Err` to carry it here, so it goes to
+        // stderr.
+        eprint!("{warning}");
+    }
+    let status = std::process::Command::new(&planned.prog)
+        .args(&planned.args)
         .status()
-        .map_err(|e| format!("failed to spawn {prog}: {e}"))?;
+        .map_err(|e| format!("failed to spawn {}: {e}", planned.prog))?;
     if !status.success() {
         if !resume {
             let _ = std::fs::remove_file(dest);
         }
-        return Err(format!("{prog} failed to fetch {uri:?} ({status})"));
+        return Err(format!(
+            "{} failed to fetch {uri:?} ({status})",
+            planned.prog
+        ));
+    }
+    Ok(())
+}
+
+/// A quiet fetch failure: the same one-line summary
+/// [`download_with_commands`] would return, plus everything the fetch
+/// command wrote to stderr (its stdout is discarded). Carries the
+/// transcript as data so the caller can shape a real-style message from
+/// it instead of leaking it onto the terminal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuietFetchError {
+    pub summary: String,
+    pub stderr: String,
+}
+
+/// The capturing sibling of [`download_with_commands`]: the same
+/// command selection, `${FILE}` check, and substitution, but the child's
+/// stdout is dropped and its stderr captured -- never inherited. For
+/// callers whose failure message is shaped from the transcript (real
+/// `bintree._populate_remote`'s `!!! [repo] Error fetching ...` shape),
+/// not printed raw.
+pub fn download_with_commands_quiet(
+    uri: &str,
+    dest: &Path,
+    resume: bool,
+    distdir: &Path,
+    vars: FetchCommandVars<'_>,
+    commands: &FetchCommands,
+) -> Result<(), QuietFetchError> {
+    let planned =
+        plan_fetch_command(uri, dest, resume, distdir, vars, commands).map_err(|summary| {
+            QuietFetchError {
+                summary,
+                stderr: String::new(),
+            }
+        })?;
+    let output = std::process::Command::new(&planned.prog)
+        .args(&planned.args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .map_err(|e| QuietFetchError {
+            summary: format!("failed to spawn {}: {e}", planned.prog),
+            stderr: planned.file_param_warning.clone().unwrap_or_default(),
+        })?;
+    if !output.status.success() {
+        if !resume {
+            let _ = std::fs::remove_file(dest);
+        }
+        let mut stderr = planned.file_param_warning.clone().unwrap_or_default();
+        stderr.push_str(&String::from_utf8_lossy(&output.stderr));
+        return Err(QuietFetchError {
+            summary: format!(
+                "{} failed to fetch {uri:?} ({})",
+                planned.prog, output.status
+            ),
+            stderr,
+        });
     }
     Ok(())
 }
@@ -846,6 +947,23 @@ pub fn download_via_wget(uri: &str, dest: &Path, resume: bool) -> Result<(), Str
         uri,
         dest,
         resume,
+        distdir,
+        FetchCommandVars::default(),
+        &FetchCommands::default(),
+    )
+}
+
+/// The quiet `make.globals` default transport: [`download_via_wget`]'s
+/// own command line, but output-captured ([`download_with_commands_quiet`])
+/// -- for callers that shape the failure themselves (a binhost index
+/// refresh prints real's `!!! [repo] ...` lines, never wget's raw
+/// transcript).
+pub fn download_via_wget_quiet(uri: &str, dest: &Path) -> Result<(), QuietFetchError> {
+    let distdir = dest.parent().unwrap_or_else(|| Path::new("."));
+    download_with_commands_quiet(
+        uri,
+        dest,
+        false,
         distdir,
         FetchCommandVars::default(),
         &FetchCommands::default(),
