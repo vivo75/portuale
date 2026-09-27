@@ -126,7 +126,9 @@ can't grow into these incrementally:
     `portage-dep` cannot parse soname atoms and dep flattening drops
     unparseable tokens, so no soname parent atom can ever reach the
     collision renderer (a deliberate non-gap, not a cut);
-  - the `need_rebuild` fixture (blocked on the vdb walk below);
+  - the `need_rebuild` fixture (dormant by construction since #27 S2
+    removed the built-`:=` append -- the vdb walk it was blocked on had
+    shipped as 025 A4; renderer/recording stay, see backlog #27);
   - **resolver substrate, shipped or scoped** (all verified live against
     real portage): slot-reuse USE re-verification **shipped** (a
     `>=T-1.0[x]` parent no longer silently reuses a resolved x-off
@@ -140,10 +142,12 @@ can't grow into these incrementally:
     source disagrees" claim was false). The real gap is the *default*:
     real's `FakeVartree._apply_dynamic_deps` overlays the live ebuild
     deps **plus** the vdb's built `:=` atoms, portuale drops the
-    append, and `GraphEntry::deps` for an installed entry still reads
-    the ebuild under `=n`; installed-parent atoms are also never
-    recorded in `slot_pullers`, which is the actual `need_rebuild`
-    blocker (see `docs/history/025-tier2-closeout.deepseek.md`);
+     append, and `GraphEntry::deps` for an installed entry still reads
+     the ebuild under `=n`; installed-parent atoms are recorded in
+     `slot_pullers` only from live-token pullers since #27 S2 (025 A4
+     shipped the recording; the built-`:=` append that would feed it is
+     gone), which is the actual `need_rebuild`
+     blocker (see `docs/history/025-tier2-closeout.deepseek.md`);
     literal bound `:=` atoms in ebuilds -- **investigated (Tier 1),
     premise contradicted, not a gap**: no "improper context for
     slot-operator built atom syntax" masking exists in the vendored
@@ -211,11 +215,11 @@ can't grow into these incrementally:
   surviving-child counts + per-filter ready heaps, wired into the hot
   leaf queries, `PORTAGE_SERIALIZE_FRONTIER_DISABLE` falling back to
   plain scans; pure perf, no behaviour change -- see
-  `what-this-proves.md` for the numbers). Still open: blocker/uninstall
-  interleaving (a `--pretend` merge graph has no uninstall nodes to
-  interleave). #68 (2026-09-16) closed the blocker *classification*,
-  exit code and the host `@world` abort; the `[uninstall]` merge-list
-  row real prints for a satisfied block is filed as backlog #72.
+  `what-this-proves.md` for the numbers). Blocker/uninstall
+   interleaving shipped 2026-09-17 (backlog #72 B0b–B5: `[uninstall]`
+   merge-list rows are modelled, rendered inline, counted in `Total:`,
+   and carried in `--json`). #68 (2026-09-16) closed the blocker
+   *classification*, exit code and the host `@world` abort.
 - **`_complete_graph` as graph *nodes*.** Its reverse-dependency
   **atoms** shipped 2026-09-07 (`reverse_dependency_constraints` — a vdb
   reverse scan fed into the `'backtrack` loop's `slot_constraints`,
@@ -289,15 +293,22 @@ can't grow into these incrementally:
   real; conflict-mass is the update probe, not this one). S6 L0
   validation: 120 probes, 96 clean, parity 0.800, `portuale/` outputs
   byte-identical to the S0/S1 archives (the slot-op path does not fire
-  on the corpus) -- no regression, no new known-divergence. **Still
-  cut:** bug 614390's `complete` case is a *selection* gap, not the
-  undo (named bare `socc` resolves before meta's `=socc-1` through the
-  already-installed fast path, which skips `resolved_slots`; real's
-  `_add_pkg` slot-parent check catches it — #36 overlap); the v2 probe
+  on the corpus) -- no regression, no new known-divergence. Bug
+  614390's `complete` case **shipped 2026-09-16** (#57 S1, K3: the
+  installed-instance slot check records the collision and the
+  solvable-conflict feedback enforces it —
+  `test_oracle_slotop_complete` is a permanent pin, not an xfail).
+  **Still cut:** the v2 probe
   family `#24b`–`#24f` (update probe + `check_reverse_dependencies`,
   `slot_operator_mask_built`, `prune_rebuilds`,
-  `_slot_conflict_backtrack_abi`, the in-walk unsatisfied probe) and
-  `IUSE_EFFECTIVE` in the built-dep domain. `--changed-slot` itself
+  `_slot_conflict_backtrack_abi`, the in-walk unsatisfied probe).
+  `IUSE_EFFECTIVE` in the built-dep domain **shipped 2026-08-29**
+  (`0ecc581b`: the installed-dep USE-dep check follows real
+  `dbapi._iuse_implicit_cnstr` / `_iuse_implicit_built`, bug 640318 —
+  recorded `IUSE` ∪ profile `IUSE_EFFECTIVE` ∪ the package's own
+  recorded `USE`; unit test
+  `recursion_keeps_an_installed_dependency_whose_use_dep_flag_is_only_in_its_built_use`).
+  `--changed-slot` itself
   ships standalone (`slot_changed`), and the unbuilt probe keeps the
   pre-existing `--ignore-built-slot-operator-deps` /
   `--rebuild-if-new-slot=n` scan gates (a documented narrowing vs real,
@@ -405,6 +416,46 @@ can't grow into these incrementally:
   not an abandonment; 6 CASES entries pin exit 0, and flipping them is
   out of #19's scope (real exits 1 there via a different
   `select_files` failure — a documented divergence, as before).
+
+## §A triage (2026-09-27)
+
+One row per §A item still listed as open (P-R4 step 2, owner B5:
+diagnosis only, no product code). Real-source line numbers are from the
+vendored 3.0.82.2 tree (`pmtest/3rdparty/portage/lib/`); portuale paths
+are this repo's `rust/`. No container probe was run (rule 13); every
+probe below is an existing fixture/pin or a described shape.
+
+| row | real-source pointer | smallest probe | verdict | cost |
+| --- | --- | --- | --- | --- |
+| `--backtrack=0` feed-loop skip | `_emerge/depgraph.py:_resolve_conflicts` (:9444: calls `_complete_graph()` with no `_allow_backtracking` gate) + `_complete_graph` (:8562) | #107's reference workload: installed `dev-libs/weston-16.0.0`'s recorded `<media-libs/libdisplay-info-0.4.0:=` pin. Real withholds 0.4.0 in-pass (the consumer is a nomerge node, its atom is a parent atom at selection); portuale settles pass 1 (`lib.rs:25872`: `backtrack_max == 0` discards `collect_feedback`'s `Feedback`) so the pin needs within-pass enforcement | **fixable, in scope** (filed #209) | medium |
+| reinstall-with-slot-change | `_emerge/depgraph.py:_complete_graph` (:8619-8648: a slot/sub-slot change without revbump counts as `version_change`, auto-enables complete mode, and re-seeds the required sets so the consumer's atom constrains selection) | described shape, no fixture yet: package reinstalled at a new slot (same version) while an installed consumer holds a built `:=`/`<` pin against the old slot. Portuale's `reverse_dependency_constraints` (`portage-repo/src/lib.rs:14729`) only fills its `upgrading` map from `Upgrade`/`Downgrade` outcomes, so a `Reinstall` never constrains | **fixable, in scope** (filed #210) | small |
+| 1854-node re-walk | `_emerge/depgraph.py:_complete_graph` (:8677-8731: required-set re-seed, `@world`/`@selected`/`@system` as nomerge nodes) | the `_serialize_tasks` validation (`what-this-proves.md`: 1854 real nodes vs portuale's 462-node closure, identical merge list) + #107's 2026-09-27 re-probe (same merge set both sides; the only delta is the skip-warning block, owned by #25's parent-atom model) | **deliberate cut** (ordering needs no nodes; membership is covered by the reverse-dep pins + residuals) | — |
+| #24b update probe + `check_reverse_dependencies` | `_emerge/depgraph.py:_slot_operator_update_probe` (:2576) + `_slot_operator_check_reverse_dependencies` (:2472; gates at :2622, :2738, :3131, :8786) | described shape, no fixture yet: an installed parent's `:=` dep where an available higher-version child should schedule a rebuild/reinstall (the `conflict-mass` shape #24 S5 names is this probe). Portuale's `slot_operator_rebuild_scan` doc comment still lists it as a cut (`lib.rs:15066`) | **fixable, in scope** (filed #211) | medium |
+| #24c `slot_operator_mask_built` (+ every binary half) | `_emerge/depgraph.py` mask sites (:2383, :2427-2431, :2901-2903) enforced via the backtrack-config restart (:5703-5712) | described shape, no fixture yet: a built (binary/installed) package whose slot-op dep real masks (`slot_operator_mask_built`) so the solver avoids it. Same `lib.rs:15068` cut note | **fixable, in scope** (filed #212) | small |
+| #24d `prune_rebuilds` | `_emerge/depgraph.py` (:5763-5780: `_slot_operator_replace_installed` + `_get_missed_updates()` set `config["prune_rebuilds"]` and restart; `_ENABLE_PRUNE_REBUILDS` :628, `prune_rebuilds` param :710) | described shape, no fixture yet: a slot-op replace set with missed updates, where real restarts in prune mode and drops the unnecessary rebuilds | **fixable, in scope** (filed #213) | medium |
+| #24e `_slot_conflict_backtrack_abi` | `_emerge/depgraph.py:_slot_conflict_backtrack_abi` (:2282: a built parent's soname/`:=` conflict atom schedules the parent rebuild via the update probe) | described shape, no fixture yet: a slot conflict whose parent is built and rebuildable, where real rebuilds the parent instead of reporting. Builds on #211's probe | **fixable, in scope** (filed #214) | medium |
+| #24f in-walk unsatisfied probe | `_emerge/depgraph.py:_slot_operator_unsatisfied_probe` (:2817) + `_slot_operator_unsatisfied_backtrack` (:2881), fired at :3447-3458 for a built-`:=` dep of a masked parent | described shape, no fixture yet: an installed parent with an unsatisfied built `:=` dep where a replacement parent exists in the tree | **fixable, in scope** (filed #215) | medium |
+| built-dep `IUSE_EFFECTIVE` | `portage/dbapi/__init__.py:_iuse_implicit_cnstr` (:240) / `_iuse_implicit_built` (:237, bug 640318) | unit test `recursion_keeps_an_installed_dependency_whose_use_dep_flag_is_only_in_its_built_use` (`lib.rs:35802`: installed `USE="divergedflag"` satisfies `[divergedflag]` although the current ebuild dropped the flag) | **already shipped** (`0ecc581b`, 2026-08-29) | — |
+| `need_rebuild` fixture | `slot_collision.py` `need_rebuild` scan; portuale `pretend.rs:8446` + `slot_pullers` recording (`lib.rs:17653`) | no fixture can trigger it: #27 S2 removed the built-`:=` append, so no installed-parent puller conflict can form; the renderer stays dormant fed by live-token pullers | **deliberate cut** (owned by #27) | — |
+| instance display order | — (resolved-first vs real's arbitrary set-iteration order) | none: no semantic content, pre-existing | **deliberate cut** | — |
+| tree nesting / `[nomerge]` / row-counted `Total:` + backtrack-masking cycle members out | Gate G0.2 (dedup-by-design) | covered by the #19 slices' pins (flat remainder list, unique-package counters) | **deliberate cut** | — |
+| blocker/uninstall interleaving | — | had been filed as #72; #72 B0b-B5 shipped the `[uninstall]` rows | **already shipped** (#72, 2026-09-17) | — |
+| bug 614390 `complete` case | real `_add_pkg` slot-parent check | `test_oracle_slotop_complete` (permanent pin since #57 S1 K3) | **already shipped** (#57, 2026-09-16) | — |
+| `\|\|` choice on plasma-meta/podman (go-bootstrap `circular_self` pick hides the cycle) | `_emerge/depgraph.py:_create_graph` (:3254: `_dep_stack` push/pop order decides which `\|\|` branch is live when the cycle forms) | real-tree shape only, no hermetic fixture yet: host `@world` plasma-meta/podman where real takes in-graph `>=dev-lang/go`, cycles, and aborts with the remainder under autounmask (else `circular_dependency`-map re-resolve); portuale picks `go-bootstrap` via the `circular_self` bolt-on (`lib.rs:11575`) and never sees the cycle. Under the L0 `truncated` suppression | **fixable, in scope** (filed #216) | medium |
+| autounmask (a): "terminated early" notice on a lone change | `_emerge/depgraph.py:need_config_change` (:11713-11717 returns on `_success_without_autounmask` before `_autounmask_backtrack_disabled` is set at :11752) vs portuale `pretend.rs:12891` (prints for every change with backtrack off) | fixture `dev-libs/abort-au-plain` + strict xfail `test_autounmask_only_resolve_prints_no_terminated_early_notice` (captures `fixtures/abort-captures/dev-libs_abort-au-plain.*`) | **fixable, in scope** (filed #217) | small |
+| autounmask (b): in-graph `[use]` flip before the flipped node's dep walk | `_emerge/depgraph.py:_create_graph` (:3254-3271: `_add_dep` only pushes onto `_dep_stack`; `aucasclate` pops first and flips still-unwalked `aucascmid`) | fixture `dev-libs/aucasctop` + strict xfail `test_autounmask_cascade_flip_before_dep_walk_pulls_the_gated_leaf` (captures `fixtures/abort-captures/dev-libs_aucasctop.*`) | **fixable, in scope** (filed #218) | medium |
+| first-failure choice in BFS admission order | — (two coexisting walk-time failures) | none pinned; real's choice is walk-order dependent | **deliberate cut** | — |
+| installed parents' unsatisfied deps never abort | `_emerge/depgraph.py:_complete_graph` (:8760-8767: `_initially_unsatisfied_deps` rescue) | none: recorded as a deliberate cut in the #19 S5 close-out | **deliberate cut** | — |
+| unbuilt-probe `--ignore-built-slot-operator-deps` / `--rebuild-if-new-slot=n` scan gates | #24 G0.6 (`--rebuild-if-*` stays out of the rebuild path) | none: a documented narrowing vs real, no v1 oracle | **deliberate cut** | — |
+| "Backtracking exhausted" timing line | `Dependency resolution took X s (backtrack: N/M)` | none: timing is non-deterministic, portuale is a deterministic tool | **deliberate cut** | — |
+| `soname` reason key | — (`portage-dep` cannot parse soname atoms; flattening drops them before the renderer) | unreachable by construction | **deliberate non-gap** | — |
+
+Stale claims fixed by this triage: bug 614390 `complete` case (shipped
+#57), built-dep `IUSE_EFFECTIVE` (shipped `0ecc581b`), blocker/uninstall
+interleaving (shipped #72), the `need_rebuild` "blocked on the vdb walk"
+parenthetical (the walk shipped as 025 A4; dormant by #27 S2 instead),
+and the "installed-parent atoms are never recorded in `slot_pullers`"
+clause (recorded from live-token pullers since 025 A4 / #27 S2).
 
 ### B / C / D / E — complete; residual documented cuts only
 
