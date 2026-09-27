@@ -513,6 +513,95 @@ fn format_packages_entry(fields: &[(&str, &str)]) -> String {
     block
 }
 
+/// Real `PackageIndex.write` drops a stanza value that equals real's
+/// `_pkgindex_default_pkg_data` default for that key
+/// (`getbinpkg.py:169-172`, defaults at `bintree.py:609-629`), and
+/// `readBody` restores it on the next read (`getbinpkg.py:143-145`,
+/// `d.setdefault(k, v)`). Of the whole default map only `SLOT: "0"`
+/// and `EAPI: "0"` can reach a stanza non-empty (every other defaulted
+/// key defaults to `""`, which `format_packages_entry` — like real's
+/// `if metadata[k]` guard at `getbinpkg.py:176` — skips anyway), so
+/// those two are the whole rule: a default-`SLOT` package's on-disk
+/// stanza carries no `SLOT` line at all, and a non-default one carries
+/// it verbatim, sub-slot included (only the exact `"0"` is default).
+/// S0 probe (backlog #188, real Portage in
+/// `localhost/test-portuale:latest`): `l32/dep-a` (`SLOT="0"`) has no
+/// `SLOT` line, `l32/slotpkg` (`SLOT="1"`) has `SLOT: 1`.
+fn omit_stanza_default<'a>(key: &'a str, value: &'a str) -> &'a str {
+    match (key, value) {
+        ("SLOT", "0") | ("EAPI", "0") => "",
+        _ => value,
+    }
+}
+
+/// One freshly built binary package's `<pkgdir>/Packages` stanza
+/// fields: the archive metadata's own values (real `_pkgindex_entry`,
+/// `bintree.py:2289-2313`), ordered as real's `keys.sort()` writes
+/// them (`getbinpkg.py:173-177`) — the *internal* names `_mtime_` and
+/// `repository` sort after every uppercase key, so the translated
+/// `MTIME`/`REPO` land last. Default-valued (`SLOT: "0"`, `EAPI:
+/// "0"`) and empty values are omitted by [`omit_stanza_default`] and
+/// [`format_packages_entry`], like real's write path.
+struct BuiltBinpkgStanza<'a> {
+    bdepend: &'a str,
+    build_id: &'a str,
+    build_time: &'a str,
+    cpv: &'a str,
+    defined_phases: &'a str,
+    depend: &'a str,
+    eapi: &'a str,
+    idepend: &'a str,
+    iuse: &'a str,
+    keywords: &'a str,
+    license: &'a str,
+    md5: &'a str,
+    path: &'a str,
+    pdepend: &'a str,
+    properties: &'a str,
+    provides: &'a str,
+    rdepend: &'a str,
+    requires: &'a str,
+    restrict: &'a str,
+    sha1: &'a str,
+    size: &'a str,
+    slot: &'a str,
+    use_flags: &'a str,
+    mtime: &'a str,
+    repository: &'a str,
+}
+
+fn built_binpkg_stanza_fields<'a>(
+    stanza: &'a BuiltBinpkgStanza<'a>,
+) -> Vec<(&'static str, &'a str)> {
+    vec![
+        ("BDEPEND", stanza.bdepend),
+        ("BUILD_ID", stanza.build_id),
+        ("BUILD_TIME", stanza.build_time),
+        ("CPV", stanza.cpv),
+        ("DEFINED_PHASES", stanza.defined_phases),
+        ("DEPEND", stanza.depend),
+        ("EAPI", omit_stanza_default("EAPI", stanza.eapi)),
+        ("IDEPEND", stanza.idepend),
+        ("IUSE", stanza.iuse),
+        ("KEYWORDS", stanza.keywords),
+        ("LICENSE", stanza.license),
+        ("MD5", stanza.md5),
+        ("PATH", stanza.path),
+        ("PDEPEND", stanza.pdepend),
+        ("PROPERTIES", stanza.properties),
+        ("PROVIDES", stanza.provides),
+        ("RDEPEND", stanza.rdepend),
+        ("REQUIRES", stanza.requires),
+        ("RESTRICT", stanza.restrict),
+        ("SHA1", stanza.sha1),
+        ("SIZE", stanza.size),
+        ("SLOT", omit_stanza_default("SLOT", stanza.slot)),
+        ("USE", stanza.use_flags),
+        ("MTIME", stanza.mtime),
+        ("REPO", stanza.repository),
+    ]
+}
+
 /// Writes (creating the file, and its own header block, if necessary)
 /// or replaces `cpv`'s own entry in `<pkgdir>/Packages` -- real
 /// portage's own index format (`portage_repo::read_packages_index`'s
@@ -877,19 +966,22 @@ pub(crate) fn package_after_install(
 
     // Real `_pkgindex_entry` + `PackageIndex.write` (`bintree.py:2289-
     // 2312`, `getbinpkg.py:155-175`): the stanza fields are the archive
-    // metadata's own values, written in real's `keys.sort()` order --
-    // which puts the *internal* names `_mtime_`/`repository` after every
-    // uppercase key, so the translated `MTIME`/`REPO` land last -- with
-    // values equal to real's `_pkgindex_default_pkg_data` omitted
-    // (`SLOT: 0`, `EAPI: 0`) and empty values skipped. `PROVIDES`/
-    // `REQUIRES`/`DEFINED_PHASES`/`SIZE`/`IUSE`/`IUSE_EFFECTIVE` and the
-    // rewritten `*DEPEND` values all now live in `build-info` (#39), so
-    // read them from there, falling back to `md5-cache` for the rest.
+    // metadata's own values in real's `keys.sort()` order (see
+    // [`built_binpkg_stanza_fields`]). `PROVIDES`/`REQUIRES`/
+    // `DEFINED_PHASES`/`SIZE`/`IUSE`/`IUSE_EFFECTIVE` and the rewritten
+    // `*DEPEND` values all now live in `build-info` (#39), so read them
+    // from there, falling back to `md5-cache` for the rest.
+    //
+    // Real `_pkgindex_hashes = ["MD5", "SHA1"]` (`bintree.py:548`) is a
+    // fixed list: `perform_multiple_checksums(pkg_path,
+    // hashes=self._pkgindex_hashes)` (`bintree.py:2302`) takes no
+    // configuration, and the S0 probe (backlog #188) confirmed a
+    // `PORTAGE_CHECKSUM_FILTER='-SHA1'` rebuild still writes both
+    // digests. [`binpkg_checksums`] therefore always computes both,
+    // unconditionally.
     let defined_phases = get_bi("DEFINED_PHASES");
     let eapi = get_bi("EAPI");
-    let eapi = if eapi == "0" { String::new() } else { eapi };
     let slot = get_bi("SLOT");
-    let slot = if slot == "0" { String::new() } else { slot };
     let iuse = get_bi("IUSE");
     let keywords = get_bi("KEYWORDS");
     let license = get_bi("LICENSE");
@@ -903,37 +995,34 @@ pub(crate) fn package_after_install(
     let provides = get_bi("PROVIDES");
     let requires = get_bi("REQUIRES");
     let repository = build_info_value("repository").unwrap_or_default();
-    write_packages_index_entry(
-        &options.pkgdir,
-        &cpv,
-        &[
-            ("BDEPEND", &bdepend),
-            ("BUILD_ID", &build_id_str),
-            ("BUILD_TIME", &build_time_str),
-            ("CPV", &cpv),
-            ("DEFINED_PHASES", &defined_phases),
-            ("DEPEND", &depend),
-            ("EAPI", &eapi),
-            ("IDEPEND", &idepend),
-            ("IUSE", &iuse),
-            ("KEYWORDS", &keywords),
-            ("LICENSE", &license),
-            ("MD5", &md5_str),
-            ("PATH", &path_field),
-            ("PDEPEND", &pdepend),
-            ("PROPERTIES", &properties),
-            ("PROVIDES", &provides),
-            ("RDEPEND", &rdepend),
-            ("REQUIRES", &requires),
-            ("RESTRICT", &restrict),
-            ("SHA1", &sha1_str),
-            ("SIZE", &size_str),
-            ("SLOT", &slot),
-            ("USE", use_flags),
-            ("MTIME", &mtime_str),
-            ("REPO", &repository),
-        ],
-    )?;
+    let stanza = BuiltBinpkgStanza {
+        bdepend: &bdepend,
+        build_id: &build_id_str,
+        build_time: &build_time_str,
+        cpv: &cpv,
+        defined_phases: &defined_phases,
+        depend: &depend,
+        eapi: &eapi,
+        idepend: &idepend,
+        iuse: &iuse,
+        keywords: &keywords,
+        license: &license,
+        md5: &md5_str,
+        path: &path_field,
+        pdepend: &pdepend,
+        properties: &properties,
+        provides: &provides,
+        rdepend: &rdepend,
+        requires: &requires,
+        restrict: &restrict,
+        sha1: &sha1_str,
+        size: &size_str,
+        slot: &slot,
+        use_flags,
+        mtime: &mtime_str,
+        repository: &repository,
+    };
+    write_packages_index_entry(&options.pkgdir, &cpv, &built_binpkg_stanza_fields(&stanza))?;
 
     Ok(0)
 }
@@ -1383,6 +1472,15 @@ pub(crate) fn quickpkg_from_vdb(
         .map(|st| binpkg::file_mtime(&st).to_string())
         .unwrap_or_default();
     let (md5_str, sha1_str) = binpkg_checksums(&binpkg_path).unwrap_or_default();
+    // Real `_pkgindex_entry` + `PackageIndex.write` apply here exactly
+    // as on the `--buildpkg` path (see [`omit_stanza_default`]): a
+    // default-`SLOT` package's on-disk stanza carries no `SLOT` line
+    // (backlog #188 — the vdb `SLOT` file always exists, so this omits
+    // precisely the `"0"` real omits), and the stanza key is the
+    // translated `MTIME`, not the internal `_mtime_` real only keeps
+    // in memory (`getbinpkg.py:123-125` write
+    // `self._write_translation_map.get(k, k)`).
+    let slot = omit_stanza_default("SLOT", bi("SLOT").as_str()).to_string();
     write_packages_index_entry(
         &options.pkgdir,
         &cpv,
@@ -1390,7 +1488,7 @@ pub(crate) fn quickpkg_from_vdb(
             ("CPV", &cpv),
             ("PF", pf),
             ("CATEGORY", category),
-            ("SLOT", &bi("SLOT")),
+            ("SLOT", &slot),
             ("KEYWORDS", &bi("KEYWORDS")),
             ("USE", &bi("USE")),
             ("LICENSE", &bi("LICENSE")),
@@ -1406,7 +1504,7 @@ pub(crate) fn quickpkg_from_vdb(
             ("BUILD_TIME", build_time),
             ("BUILD_ID", &build_id_str),
             ("SIZE", &size_str),
-            ("_mtime_", &mtime_str),
+            ("MTIME", &mtime_str),
             ("MD5", &md5_str),
             ("SHA1", &sha1_str),
         ],
@@ -1790,6 +1888,91 @@ mod tests {
     }
 
     #[test]
+    fn omit_stanza_default_omits_only_exact_slot_and_eapi_zero() {
+        // Real `_pkgindex_default_pkg_data` (`bintree.py:609-629`): only
+        // the exact `"0"` is default. A sub-slotted `SLOT` (`0/1`) or a
+        // non-zero `EAPI` is written verbatim; any other key is never a
+        // default and passes through untouched (empty values are
+        // skipped separately by `format_packages_entry`).
+        assert_eq!(omit_stanza_default("SLOT", "0"), "");
+        assert_eq!(omit_stanza_default("SLOT", ""), "");
+        assert_eq!(omit_stanza_default("SLOT", "1"), "1");
+        assert_eq!(omit_stanza_default("SLOT", "0/1"), "0/1");
+        assert_eq!(omit_stanza_default("EAPI", "0"), "");
+        assert_eq!(omit_stanza_default("EAPI", "8"), "8");
+        assert_eq!(omit_stanza_default("USE", "0"), "0");
+        assert_eq!(omit_stanza_default("SIZE", "0"), "0");
+    }
+
+    fn probe_shaped_stanza(slot: &str) -> BuiltBinpkgStanza<'_> {
+        // The S0 probe's `l32/dep-a` stanza shape (real Portage in
+        // `localhost/test-portuale:latest`, default config), with only
+        // the `SLOT` varying: real omits it for `"0"` and writes
+        // `SLOT: 1` for `"1"`. Digests are real's fixed
+        // `_pkgindex_hashes` pair (`bintree.py:548`), written even with
+        // `PORTAGE_CHECKSUM_FILTER='-SHA1'` in the environment.
+        BuiltBinpkgStanza {
+            bdepend: "",
+            build_id: "1",
+            build_time: "1790533433",
+            cpv: "l32/dep-a-1.0",
+            defined_phases: "install",
+            depend: "",
+            eapi: "8",
+            idepend: "",
+            iuse: "",
+            keywords: "amd64",
+            license: "GPL-2",
+            md5: "45ee79b46260208582e042d087ad6fff",
+            path: "l32/dep-a/dep-a-1.0-1.gpkg.tar",
+            pdepend: "",
+            properties: "",
+            provides: "",
+            rdepend: "",
+            requires: "",
+            restrict: "",
+            sha1: "dcb4b4b5cd72b7f1c8d839c82eb94ffb12374776",
+            size: "10240",
+            slot,
+            use_flags: "abi_x86_64 amd64 elibc_glibc kernel_linux",
+            mtime: "1790533434",
+            repository: "l32",
+        }
+    }
+
+    #[test]
+    fn stanza_bytes_for_default_slot_omit_slot_and_keep_both_digests() {
+        let stanza = probe_shaped_stanza("0");
+        let text = format_packages_entry(&built_binpkg_stanza_fields(&stanza));
+        assert_eq!(
+            text,
+            "BUILD_ID: 1\n\
+             BUILD_TIME: 1790533433\n\
+             CPV: l32/dep-a-1.0\n\
+             DEFINED_PHASES: install\n\
+             EAPI: 8\n\
+             KEYWORDS: amd64\n\
+             LICENSE: GPL-2\n\
+             MD5: 45ee79b46260208582e042d087ad6fff\n\
+             PATH: l32/dep-a/dep-a-1.0-1.gpkg.tar\n\
+             SHA1: dcb4b4b5cd72b7f1c8d839c82eb94ffb12374776\n\
+             SIZE: 10240\n\
+             USE: abi_x86_64 amd64 elibc_glibc kernel_linux\n\
+             MTIME: 1790533434\n\
+             REPO: l32\n"
+        );
+    }
+
+    #[test]
+    fn stanza_bytes_for_nondefault_slot_write_it_between_size_and_use() {
+        let stanza = probe_shaped_stanza("1");
+        let text = format_packages_entry(&built_binpkg_stanza_fields(&stanza));
+        assert!(text.contains("\nSIZE: 10240\nSLOT: 1\nUSE: "), "{text:?}");
+        assert!(text.contains("MD5: 45ee79b46260208582e042d087ad6fff\n"));
+        assert!(text.contains("SHA1: dcb4b4b5cd72b7f1c8d839c82eb94ffb12374776\n"));
+    }
+
+    #[test]
     fn real_package_builds_a_real_xpak_tbz2_and_a_real_packages_entry() {
         let tmp = tempdir();
         let root = tmp.join("root");
@@ -1938,6 +2121,81 @@ mod tests {
         let metadata = portage_repo::read_binary_metadata(&index, "dev-libs", "packagepkg", "1.0")
             .expect("binary metadata entry exists");
         assert_eq!(metadata.get("USE").map(String::as_str), Some("foo bar"));
+    }
+
+    #[test]
+    fn package_after_install_stanza_omits_default_slot_and_writes_both_digests() {
+        // Backlog #188, grounded in the S0 real-Portage probe (default
+        // config, `SLOT="0"` fixture `dev-libs/packagepkg` — the same
+        // shape as the probe's `l32/dep-a`): real's on-disk stanza
+        // carries no `SLOT` line (`_pkgindex_default_pkg_data`,
+        // `bintree.py:609-629`, dropped by `PackageIndex.write`,
+        // `getbinpkg.py:169-172`), both fixed digests (`MD5` + `SHA1`,
+        // `_pkgindex_hashes`, `bintree.py:548`), and the translated
+        // `MTIME` key (never the internal `_mtime_`).
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        let options = PackageOptions {
+            debug: false,
+            pkgdir: tmp.join("pkgdir"),
+            distdir: tmp.join("distdir"),
+            shell: ebuild_phases::ShellBackend::default(),
+            binpkg_compress: "bzip2".to_string(),
+            ..PackageOptions::default()
+        };
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let ebuild = repo_root.join("dev-libs/packagepkg/packagepkg-1.0.ebuild");
+
+        let status = ebuild_phases::run_commands(
+            &ebuild,
+            &["install"],
+            &root,
+            &portage_tmpdir,
+            &options.distdir,
+            options.debug,
+            &options.config_root,
+            options.shell,
+            &[],
+        )
+        .expect("install succeeds");
+        assert_eq!(status, 0);
+
+        let status = package_after_install(
+            &ebuild,
+            &root,
+            &portage_tmpdir,
+            &options,
+            "",
+            options.binpkg_multi_instance,
+        )
+        .expect("package_after_install succeeds");
+        assert_eq!(status, 0);
+
+        let packages = std::fs::read_to_string(options.pkgdir.join("Packages")).unwrap();
+        assert!(
+            !packages.lines().any(|l| l.starts_with("SLOT:")),
+            "default SLOT must be omitted like real's: {packages:?}"
+        );
+        assert!(
+            packages.lines().any(|l| l.starts_with("MD5: ")),
+            "fixed MD5 digest missing: {packages:?}"
+        );
+        assert!(
+            packages.lines().any(|l| l.starts_with("SHA1: ")),
+            "fixed SHA1 digest missing: {packages:?}"
+        );
+        assert!(
+            packages.lines().any(|l| l.starts_with("MTIME: ")),
+            "translated MTIME key missing: {packages:?}"
+        );
+        assert!(
+            !packages.lines().any(|l| l.starts_with("_mtime_:")),
+            "internal _mtime_ key must never be written: {packages:?}"
+        );
     }
 
     #[test]
