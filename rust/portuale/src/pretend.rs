@@ -12521,55 +12521,65 @@ pub fn run(args: &[String]) -> ExitCode {
         println!();
     }
 
-    // Backlog #90 (S2) + #92: real `_conflict_missed_update[
-    // "slot conflict"]` (`depgraph.py:2063-2106`) -- `WARNING: One or
-    // more updates/rebuilds have been skipped due to a dependency
-    // conflict:` plus one `conflicts with` group per withheld upgrade,
-    // printed after the merge list, rc 0. Two producers, one shape:
-    // the direct solve's removed instances and the reverse-pin
-    // withholds (`GraphResult::skipped_updates`; the renderer cannot
-    // tell them apart and real does not distinguish them either).
-    // Root suffixes (`for <root>`, `to/in '<root>'`) are omitted like
-    // every other portuale notice row. The `^` marker line mirrors
-    // real's operator + version spans (approximation: leading operator
-    // chars plus the version token; real derives them from its
-    // collision-reason keys). Suppressed under `--quiet` unless
-    // `--debug` -- real `_show_missed_update` drops both notice types
-    // then (`depgraph.py:1576-1581`). `--json` never reaches this
-    // block (it returns above); `--columns` has no gate (real shows
-    // the notices regardless of columns: they are not merge-list
-    // rows).
+    // Backlog #90 (S2) + #92, #129 review round 2: real
+    // `_conflict_missed_update["slot conflict"]`
+    // (`depgraph.py:2063-2106`) -- `WARNING: One or more
+    // updates/rebuilds have been skipped due to a dependency
+    // conflict:` plus one `conflicts with` block per missed upgrade,
+    // printed after the merge list, rc 0. Real keeps one entry per
+    // `(root, slot_atom)` with the whole `(parent, atom)` set inside
+    // (`_get_missed_updates`, `:1553-1562`); portuale's rows are one
+    // per rejecting parent, so rows naming the same missed pkg group
+    // into one block (`portage_repo::group_skipped_updates`). Two
+    // producers, one shape: the direct solve's removed instances and
+    // the reverse-pin withholds (`GraphResult::skipped_updates`; the
+    // renderer cannot tell them apart and real does not distinguish
+    // them either). Root suffixes (`for <root>`, `to/in '<root>'`)
+    // are omitted like every other portuale notice row. The `^`
+    // marker line mirrors real's operator + version spans
+    // (approximation: leading operator chars plus the version token;
+    // real derives them from its collision-reason keys). Suppressed
+    // under `--quiet` unless `--debug` -- real `_show_missed_update`
+    // drops both notice types then (`depgraph.py:1576-1581`).
+    // `--json` never reaches this block (it returns above);
+    // `--columns` has no gate (real shows the notices regardless of
+    // columns: they are not merge-list rows).
     if !(quiet && !debug) && !result.skipped_updates.is_empty() {
         println!(
             "WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:"
         );
-        for s in &result.skipped_updates {
+        for group in portage_repo::group_skipped_updates(&result.skipped_updates) {
+            let Some(header) = group.first() else {
+                continue;
+            };
             println!();
-            println!("{}/{}:{}", s.category, s.package, s.slot);
+            println!("{}/{}:{}", header.category, header.package, header.slot);
             println!();
             println!(
                 "  ({}/{}-{}:{}/{}::{}, ebuild scheduled for merge) {} conflicts with",
-                s.category,
-                s.package,
-                s.skipped_version,
-                s.slot,
-                s.skipped_sub_slot,
-                s.skipped_repo,
-                render_pkg_use_display(&s.skipped_use),
+                header.category,
+                header.package,
+                header.skipped_version,
+                header.slot,
+                header.skipped_sub_slot,
+                header.skipped_repo,
+                render_pkg_use_display(&header.skipped_use),
             );
-            let consumer_state = if s.consumer_installed {
-                "installed"
-            } else {
-                "ebuild scheduled for merge"
-            };
-            println!(
-                "    {} required by ({}, {}) {}",
-                s.atom,
-                s.consumer_cpv,
-                consumer_state,
-                render_pkg_use_display(&s.consumer_use),
-            );
-            println!("    {}", skip_conflict_caret_line(&s.atom));
+            for s in group {
+                let consumer_state = if s.consumer_installed {
+                    "installed"
+                } else {
+                    "ebuild scheduled for merge"
+                };
+                println!(
+                    "    {} required by ({}, {}) {}",
+                    s.atom,
+                    s.consumer_cpv,
+                    consumer_state,
+                    render_pkg_use_display(&s.consumer_use),
+                );
+                println!("    {}", skip_conflict_caret_line(&s.atom));
+            }
         }
         println!();
     }

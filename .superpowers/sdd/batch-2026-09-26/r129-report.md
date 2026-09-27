@@ -186,3 +186,82 @@ the pin is left untouched for the #142 close-out bed.
    block); the stale provisional pin stays for the #142 close-out bed.]**
 4. No docs touched (`what-this-proves.md`, `backlog-tasks.md` #129 entry):
    left for the coordinator's batch bookkeeping.
+
+## Review fixes (round 2)
+
+Fix brief `r129-fix2-brief.md` (coordinator oracle run
+`l0-fx-20260927T125711Z`: real prints one `dev-libs/blk0x:0` block for
+`-3` with both parents). Commits: pmtest `a042c6b` (pin, first) then
+portuale `a0bcccc9`
+`resolve: one skipped-update block per slot with all parents, like real (#129 review)`.
+
+- `portage_repo::group_skipped_updates` (`rust/portage-repo/src/lib.rs`):
+  groups rows naming the same missed pkg into one render block
+  (first-seen group order, row order within), mirroring real's single
+  per-`(root, slot_atom)` entry (`lib/_emerge/depgraph.py:1553-1562`,
+  set per pkg at `:2090-2106`, one block per entry at `:1650+`).
+  Real iterates an unordered set (`Package` keeps identity hash,
+  `_emerge/Package.py:27`), so its within-block order is hash order;
+  the oracle's b-then-c order is what the sorted direct rows give.
+  `GraphResult` rows stay one-per-parent (`collapse_skipped_updates`
+  unchanged). New unit test
+  `group_skipped_updates_merges_parents_of_the_same_missed_pkg` (two
+  parents → one block, both lines; different version stays separate).
+- Renderer (`rust/portuale/src/pretend.rs`): one block per group with
+  every parent line-pair inside; trailing blank-line structure
+  unchanged. Output for `blk0b blk0c blk0a --backtrack=0` is now
+  byte-identical to the oracle modulo the established `USE=""` /
+  missing-ROOT-suffix normalisation.
+- Pin (sole rule-7 exception): order `b c a` expects the merged block
+  (docstring cites `l0-fx-20260927T125711Z`, notes #142's divergence
+  for this order is resolved by #129). Other orders untouched.
+
+Gates: `cargo fmt --check` clean, `cargo clippy --release
+--all-targets` 0 warnings, `cargo test --release` workspace **1690
+passed / 0 failed** (log `/tmp/opencode/r129-fix2/cargo-test.log`).
+pmtest suite (`PMTEST_PROFILE=release`,
+`--basetemp=/var/tmp/pmtest-r129fix2`, log
+`/tmp/opencode/r129-fix2/pmtest.log`): **1959 passed / 6 failed /
+37 skipped / 5 xfailed**. 4 known (3 gpkg `test_emerge_buildpkgonly_*`
+per Z0 + `pid-sandbox` host). 1 orbt corpus-bless assert (output
+assertions pass; harvest predates the notice -- same as round 1). 1
+blocker pin, now failing at order `c b a` (was `b c a`): its
+three-block expectation (with an `-2` block) was already stale before
+this slice -- pre-fix actual was two `-3` blocks, the loop just never
+reached it -- and the brief forbids touching other orders, so it stays
+for the #142 close-out bed (no oracle for that order; real's
+resolution is order-dependent). Fixture tree left clean. No bless.
+
+**Drift, by key (reported, NOT blessed).** Contract (5 lines, 4 unique
+keys -- the S1 notices, harvest predates them): orbt
+`test_or_group_alternative_yields_to_the_next_when_backtracking_masks_it#0`
+x2, `test_oracle_slot_conflict_masks_highest_version_first#0`,
+`test_oracle_two_simultaneous_conflicts_defer_second_to_later_pass#0`,
+`test_oracle_missed_update_siblings_masked_together#0`. Expanded (44
+-- identical set to round 1): the six backtracked shapes
+(`btgp`, `btparent`, `mg2top`, `mgfa`, `mgxa`, `orbtblocked`) x
+{emptytree, tree, update-deep-newuse, update-deep, update, verbose,
+flat} (42) + `--pretend --quiet dev-libs/libgit2-glib` and
+`--pretend --quiet dev-vcs/gitg` (2). The round-1 profiles-updates /
+package-moves environmental drifts are gone (fixture clean).
+
+## Review fixes (round 2) — bed notes (coordinator only)
+
+- `blk0b blk0c blk0a --backtrack=0` cell (`l0-fx-20260927T125711Z`):
+  expect the single-`-3`-block form quoted in the brief; add a
+  `blk0c blk0b blk0a --backtrack=0` cell -- portuale prints the same
+  merged block there, real's shape for that order is un-oracled.
+- Small-case oracle + L0 by name (unchanged from round 1): expect the
+  six `--quiet` notice lines gone; orbt/btparent notice lines are new
+  real-correct output.
+- No merge-path change (resolver display only): L1 gate not
+  triggered.
+
+### BED-PENDING
+
+- `differential-test-bed/run/l0-resolver.sh` (coordinator only):
+  expect the blk0 `b c a` cell to match real's single-block form;
+  the `c b a` cell is the open #142 question above.
+- Small-case oracle bed (coordinator only): expect notice-line
+  findings per the round-1 notes; no new cells from this slice.
+- L1 merge-path gate: not triggered (display-only change).

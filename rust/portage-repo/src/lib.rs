@@ -19052,7 +19052,8 @@ pub(crate) fn backtrack_missed_updates(
 /// `skipped_version` (`vercmp_ordering`, the same comparison the
 /// derivation uses). Equal versions all stay (the established
 /// one-row-per-parent shape -- real keeps one record per slot with
-/// every parent inside, portuale one row per parent); exact
+/// every parent inside, portuale one row per parent, grouped into
+/// one block at render by [`group_skipped_updates`]); exact
 /// duplicates collapse to one. Relative order is preserved: mask
 /// rows lead, direct rows follow.
 fn collapse_skipped_updates(rows: Vec<SkippedUpdate>) -> Vec<SkippedUpdate> {
@@ -19091,6 +19092,53 @@ fn collapse_skipped_updates(rows: Vec<SkippedUpdate>) -> Vec<SkippedUpdate> {
             ))
         })
         .collect()
+}
+
+/// Backlog #129 (review round 2): real `_get_missed_updates` keeps one
+/// entry per `(root, slot_atom)`
+/// (`lib/_emerge/depgraph.py:1553-1562`) -- the highest missed pkg with
+/// its whole `(parent, atom)` set (`:2090-2106` accumulates into a set
+/// per pkg) -- and `_show_missed_update_slot_conflicts` (`:1650+`)
+/// renders one block per entry with every parent line inside.
+/// Portuale's rows stay one per rejecting parent (the established #90
+/// S2 shape, which `collapse_skipped_updates` also assumes), so the
+/// renderer groups rows naming the same missed pkg into one block
+/// (`GraphResult::skipped_updates` order is preserved: groups keep
+/// first-seen order, parents keep row order -- mask rows arrive in
+/// first-seen mask order, direct rows sorted). Real itself iterates an
+/// unordered set -- `Package` keeps identity hash
+/// (`_emerge/Package.py:27`) -- so its within-block order is hash
+/// order; the `blk0b blk0c blk0a` oracle's b-then-c order is what the
+/// sorted direct rows give here.
+pub fn group_skipped_updates(rows: &[SkippedUpdate]) -> Vec<Vec<&SkippedUpdate>> {
+    type MissedPkgKey = (
+        (String, String, String, String, String, String),
+        Vec<(String, String)>,
+    );
+    let key_of = |s: &SkippedUpdate| -> MissedPkgKey {
+        (
+            (
+                s.category.clone(),
+                s.package.clone(),
+                s.slot.clone(),
+                s.skipped_version.clone(),
+                s.skipped_sub_slot.clone(),
+                s.skipped_repo.clone(),
+            ),
+            s.skipped_use.clone(),
+        )
+    };
+    let mut index: HashMap<MissedPkgKey, usize> = HashMap::new();
+    let mut groups: Vec<Vec<&SkippedUpdate>> = Vec::new();
+    for s in rows {
+        let key = key_of(s);
+        if !index.contains_key(&key) {
+            index.insert(key.clone(), groups.len());
+            groups.push(Vec::new());
+        }
+        groups[index[&key]].push(s);
+    }
+    groups
 }
 
 /// Backlog #129 (S1): real `_show_unsatisfied_dep(..., check_backtrack=
@@ -43611,6 +43659,51 @@ mod tests {
                 ("mgxd", "2", "<dev-libs/mgxd-3"),
             ]
         );
+    }
+
+    /// Backlog #129 (review round 2): rows naming the same missed pkg
+    /// render as one block with every parent line inside (real
+    /// `_show_missed_update_slot_conflicts`,
+    /// `lib/_emerge/depgraph.py:1650+`, over the single per-`(root,
+    /// slot_atom)` entry, `:1553-1562`) -- the `blk0b blk0c blk0a
+    /// --backtrack=0` oracle shape (bed `l0-fx-20260927T125711Z`: one
+    /// `dev-libs/blk0x:0` block for `-3` with both parents). Groups
+    /// keep first-seen order, parents keep row order; a different
+    /// missed version stays its own block.
+    #[test]
+    fn group_skipped_updates_merges_parents_of_the_same_missed_pkg() {
+        fn row(ver: &str, atom: &str, consumer: &str) -> SkippedUpdate {
+            SkippedUpdate {
+                category: "dev-libs".to_string(),
+                package: "blk0x".to_string(),
+                slot: "0".to_string(),
+                skipped_version: ver.to_string(),
+                skipped_sub_slot: "0".to_string(),
+                skipped_repo: "testrepo".to_string(),
+                skipped_use: Vec::new(),
+                atom: atom.to_string(),
+                consumer_cpv: consumer.to_string(),
+                consumer_installed: false,
+                consumer_use: Vec::new(),
+            }
+        }
+        let rows = vec![
+            row("3", "<dev-libs/blk0x-2", "dev-libs/blk0b-1:0/0::testrepo"),
+            row("3", "<dev-libs/blk0x-3", "dev-libs/blk0c-1:0/0::testrepo"),
+            row("2", "<dev-libs/blk0x-2", "dev-libs/blk0b-1:0/0::testrepo"),
+        ];
+        let groups = group_skipped_updates(&rows);
+        assert_eq!(groups.len(), 2, "same missed pkg renders one block");
+        assert_eq!(
+            groups[0]
+                .iter()
+                .map(|s| s.atom.as_str())
+                .collect::<Vec<_>>(),
+            vec!["<dev-libs/blk0x-2", "<dev-libs/blk0x-3"],
+            "both parents stay inside, in row order",
+        );
+        assert_eq!(groups[1].len(), 1);
+        assert_eq!(groups[1][0].skipped_version, "2");
     }
 
     /// Backlog #161 S6: the missing-dep trigger names the upgraded
