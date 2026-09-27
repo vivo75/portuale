@@ -530,6 +530,305 @@ impl Drop for ConfigRootOverride {
     }
 }
 
+/// A placed `/etc/portage` config root for a resolve run: `Server`
+/// paths are used directly, `Client` trees are pulled once into a temp
+/// dir re-rooted as `<tmp>/etc/portage` (a valid `PORTAGE_CONFIGROOT`,
+/// real-root layout) with `ConfigRootOverride` held for the whole
+/// resolve. The pulled temp dir is removed best-effort on drop, once
+/// the resolve is done (backlog #171c review: both the resolve site
+/// and `--remote-binpkg` leaked one
+/// `/tmp/portuale-remote-etc-<pid>-<nanos>` per run). The pulled tree
+/// additionally carries the server's own `make.globals` seeded under
+/// `<tmp>/usr/share/portage/config/` (backlog #171 follow-up 3) -- the
+/// pull only carries the client's `/etc/portage` contents, so without
+/// the seed the resolve would stack no base layer at all. Shared by
+/// `run_remote_resolve` and `run_bundle_stage` -- one placement match,
+/// no duplicated pull logic. A dangling pulled `make.profile` symlink is
+/// additionally remapped onto the server's repos
+/// (`remap_client_make_profile`, backlog #171 follow-up 4) -- same
+/// helper, so both paths resolve the client profile the same way.
+pub(crate) struct PlacedConfig {
+    /// The dir to resolve from (the server path, or the pulled temp root).
+    pub(crate) dir: std::path::PathBuf,
+    _config_guard: ConfigRootOverride,
+    /// Temp dir holding a pulled client tree (`None` for `Server`).
+    tmp: Option<std::path::PathBuf>,
+}
+
+impl Drop for PlacedConfig {
+    fn drop(&mut self) {
+        if let Some(tmp) = &self.tmp {
+            let _ = std::fs::remove_dir_all(tmp);
+        }
+    }
+}
+
+/// Lexically normalize an absolute path (fold `.`/`..` without touching
+/// the filesystem -- the client tree isn't here, only pulled symlink
+/// text, so `canonicalize` would resolve the wrong machine's paths).
+fn lexical_normalize(path: &std::path::Path) -> std::path::PathBuf {
+    use std::path::Component;
+    let mut out = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => out.push(prefix.as_os_str()),
+            Component::RootDir => out.push("/"),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::Normal(part) => out.push(part),
+        }
+    }
+    if out.as_os_str().is_empty() {
+        out.push("/");
+    }
+    out
+}
+
+/// Resolve a pulled client `make.profile` symlink against the server's
+/// repos (backlog #171 follow-up 4, owner Q10 = b: the client may hold no
+/// repo at all, so a symlink into the client's repo path dangles here and
+/// the profile chain would silently resolve to `[]`).
+///
+/// Only dangling symlinks whose target text names a repo profile (a
+/// `/profiles/` component in the client-absolute target) are rewritten:
+/// to the same-named server repo's `<location>/profiles/<rel>` when the
+/// pulled client `repos.conf` (if any) has a repo whose `location` is the
+/// link prefix, else to the first server repo -- in `find_repos` priority
+/// order, main repo first -- providing `<location>/profiles/<rel>`. A
+/// link that already resolves inside the pulled tree (e.g. a relative
+/// link to a custom profile shipped under `/etc/portage`, or a loopback
+/// absolute link), a directory `make.profile` (its `parent` entries ride
+/// the normal profile machinery), a missing one, and a target naming no
+/// repo profile are all left alone. Nothing found is a hard `mrg: !!! …`
+/// error naming the target, never a silent empty chain.
+///
+/// Real grounding (`3rdparty/portage` = portage-3.0.82.2): the profile
+/// root is `<config_root>/etc/make.profile` followed as a link
+/// (`package/ebuild/_config/LocationsManager.py:119-149`, `realpath`ed
+/// at `:154-157` for repo matching), and real warns it "should point
+/// into a profile within $PORTDIR/profiles/"
+/// (`package/ebuild/config.py:1444-1450`) -- the rewrite keeps exactly
+/// that shape, server-side, then reuses the existing resolver.
+fn remap_client_make_profile(
+    tmp: &std::path::Path,
+    client_etc_portage: &str,
+    server_config_root: &std::path::Path,
+) -> Result<(), String> {
+    let link = tmp.join("etc/portage/make.profile");
+    let meta = match link.symlink_metadata() {
+        Ok(meta) => meta,
+        Err(_) => return Ok(()),
+    };
+    if !meta.file_type().is_symlink() {
+        return Ok(());
+    }
+    // Already resolving server-side (a shipped in-tree profile, or a
+    // loopback absolute link): leave it -- only dangling links need the
+    // server-repo mapping.
+    if link.is_dir() {
+        return Ok(());
+    }
+    // The link target *text* -- never followed on the client (the pull is
+    // tar-only); relative targets resolve against the client's own
+    // `/etc/portage` dir, lexically.
+    let target = std::fs::read_link(&link)
+        .map_err(|e| format!("mrg: reading the pulled client make.profile link: {e}"))?;
+    let target_text = target.display().to_string();
+    let client_abs = if target.is_absolute() {
+        target.clone()
+    } else {
+        lexical_normalize(&std::path::Path::new(client_etc_portage).join(&target))
+    };
+    let client_abs_text = client_abs.to_string_lossy().into_owned();
+    let Some(split) = client_abs_text.find("/profiles/") else {
+        return Ok(());
+    };
+    let prefix = lexical_normalize(std::path::Path::new(&client_abs_text[..split]));
+    let rel = client_abs_text[split + "/profiles/".len()..].to_string();
+    if rel.is_empty() {
+        return Err(format!(
+            "mrg: !!! the pulled client make.profile points at {target_text}, which names no profile under profiles/"
+        ));
+    }
+    // Step 2: the pulled client `repos.conf` (if any) names the repo
+    // whose `location` is the link prefix; the same-named server repo
+    // provides the profile.
+    let client_repo_name: Option<String> = if tmp
+        .join("etc/portage/repos.conf")
+        .symlink_metadata()
+        .is_ok()
+    {
+        portage_repo::find_repos(tmp).ok().and_then(|repos| {
+            repos.into_iter().find_map(|repo| {
+                (lexical_normalize(&repo.location) == prefix).then(|| repo.name.clone())
+            })
+        })
+    } else {
+        None
+    };
+    let server_repos = portage_repo::find_repos(server_config_root).map_err(|e| {
+        format!(
+            "mrg: !!! the pulled client make.profile points at {target_text}, and the server repos cannot be listed: {e}"
+        )
+    })?;
+    // The same-named server repo first (a step-2 hit), then every server
+    // repo in priority order with main first (`find_repos` already sorts
+    // that way): the first `<location>/profiles/<rel>` that exists wins.
+    let mut ordered: Vec<&portage_repo::RepoConfig> = Vec::new();
+    if let Some(name) = client_repo_name.as_deref() {
+        ordered.extend(server_repos.iter().filter(|repo| repo.name == name));
+    }
+    ordered.extend(server_repos.iter().filter(|repo| {
+        client_repo_name
+            .as_deref()
+            .is_none_or(|name| repo.name != name)
+    }));
+    for repo in ordered {
+        let candidate = repo.location.join("profiles").join(&rel);
+        if candidate.is_dir() {
+            std::fs::remove_file(&link)
+                .map_err(|e| format!("mrg: replacing the pulled client make.profile link: {e}"))?;
+            std::os::unix::fs::symlink(&candidate, &link).map_err(|e| {
+                format!(
+                    "mrg: pointing the pulled client make.profile at {}: {e}",
+                    candidate.display()
+                )
+            })?;
+            return Ok(());
+        }
+    }
+    // Step 5: nothing found -- fail loudly, naming the target.
+    let name_note = client_repo_name
+        .as_deref()
+        .map_or(String::new(), |name| format!(" for client repo {name:?}"));
+    Err(format!(
+        "mrg: !!! the pulled client make.profile points at {target_text}: no server repo provides profiles/{rel}{name_note} ({} server repo(s) checked)",
+        server_repos.len()
+    ))
+}
+
+/// Place `/etc/portage` per `ConfigPlacement` (see `PlacedConfig`).
+/// `Err` is a pull failure (already a full `mrg: …` line); callers
+/// print it and exit 1, like the resolve path's own errors.
+pub(crate) fn place_config_root(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+) -> Result<PlacedConfig, String> {
+    // Backlog #171 follow-up 3 (owner Q9 = b): the server's own
+    // `make.globals` -- located exactly the way the local path locates
+    // it (`resolve_config` reads
+    // `<config_root>/usr/share/portage/config/make.globals`, which is
+    // the live `/usr/share/portage/config/make.globals` for a `/` run;
+    // real sources it from `global_config_path` regardless of
+    // `config_root`, `config.py:446-499,569` +
+    // `_config/LocationsManager.py:413-415`). Read before the
+    // `ConfigRootOverride` below repoints `PORTAGE_CONFIGROOT` at the
+    // placed dir, so this still names the server file. `Server`
+    // placements need no seed (the placed root is server-side already);
+    // the pulled `Client` tree gets it as the resolve's bottom layer,
+    // under the client profile chain and the pulled `make.conf` --
+    // real's `config` stacking order. Absent on the server (tests):
+    // contributes nothing, deterministically.
+    let server_config_root = portage_repo::config_root_from_env();
+    let server_globals = server_config_root.join("usr/share/portage/config/make.globals");
+    let (dir, tmp): (std::path::PathBuf, Option<std::path::PathBuf>) = match &ctx.etc_portage {
+        ConfigPlacement::Server(path) => (std::path::PathBuf::from(path), None),
+        ConfigPlacement::Client(path) => {
+            let tmp = std::env::temp_dir().join(format!(
+                "portuale-remote-etc-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            ));
+            // The pulled tree is the *contents* of the client's
+            // `/etc/portage`; re-root it as `<tmp>/etc/portage` so the
+            // dir is a valid `PORTAGE_CONFIGROOT` (real-root layout).
+            let pulled_portage = tmp.join("etc/portage");
+            if let Err(message) = pull_dir(ctx, control, path, &pulled_portage) {
+                // Best-effort: don't leave a partial pull behind.
+                let _ = std::fs::remove_dir_all(&tmp);
+                return Err(message);
+            }
+            if server_globals.is_file() {
+                let dest = tmp.join("usr/share/portage/config/make.globals");
+                if let Some(parent) = dest.parent()
+                    && let Err(e) = std::fs::create_dir_all(parent)
+                {
+                    let _ = std::fs::remove_dir_all(&tmp);
+                    return Err(format!(
+                        "mrg: staging the server make.globals under {}: {e}",
+                        tmp.display()
+                    ));
+                }
+                if let Err(e) = std::fs::copy(&server_globals, &dest) {
+                    let _ = std::fs::remove_dir_all(&tmp);
+                    return Err(format!(
+                        "mrg: staging the server make.globals under {}: {e}",
+                        tmp.display()
+                    ));
+                }
+            }
+            // Backlog #171 follow-up 4 (owner Q10 = b): the pulled
+            // `make.profile` symlink dangles when the client holds its
+            // repos elsewhere (or none at all) -- resolve its target
+            // text against the server's repos before the
+            // `ConfigRootOverride` below repoints `PORTAGE_CONFIGROOT`
+            // at the pulled root (server repos must be listed from the
+            // server root, like the seed above). `Server` placements
+            // are untouched.
+            if let Err(message) = remap_client_make_profile(&tmp, path, &server_config_root) {
+                let _ = std::fs::remove_dir_all(&tmp);
+                return Err(message);
+            }
+            // Backlog #171 follow-up 5 (l171f; review of l171d/l171e):
+            // the pulled client tree may hold no `repos.conf` at all
+            // (owner Q10: the client operates without the gentoo
+            // repository) while the server holds the repos -- but
+            // `find_repos` on the placed root fails `NoReposConf`
+            // without the user `etc/portage/repos.conf` path, so both
+            // resolving paths hard-errored after a successful remap.
+            // Seed the server's own global `repos.conf` (read from the
+            // server root like the `make.globals` seed above, before
+            // the `ConfigRootOverride`), but only when the pulled
+            // client tree has none: a client `repos.conf`, if present,
+            // still wins -- real layers the global file before the
+            // user's in one parser, so the user wins per key
+            // (`repository/config.py:1488-1508`), and the user slot is
+            // never clobbered here. Absent on the server (or a
+            // directory rather than a file): contributes nothing, and
+            // the loud `NoReposConf` error is kept -- never a silent
+            // empty repo set. Same file-copy mechanism (with tmp
+            // cleanup) as the `make.globals` seed.
+            let server_repos_conf = server_config_root.join("usr/share/portage/config/repos.conf");
+            if tmp
+                .join("etc/portage/repos.conf")
+                .symlink_metadata()
+                .is_err()
+                && server_repos_conf.is_file()
+                && let Err(e) =
+                    std::fs::copy(&server_repos_conf, tmp.join("etc/portage/repos.conf"))
+            {
+                let _ = std::fs::remove_dir_all(&tmp);
+                return Err(format!(
+                    "mrg: staging the server repos.conf under {}: {e}",
+                    tmp.display()
+                ));
+            }
+            (tmp.clone(), Some(tmp))
+        }
+    };
+    let guard = ConfigRootOverride::set(&dir);
+    Ok(PlacedConfig {
+        dir,
+        _config_guard: guard,
+        tmp,
+    })
+}
+
 /// Run an arbitrary remote command (`tar`, …), not just `bash -s`.
 /// stdout bytes come back to the caller (used by the config pull).
 fn run_raw_command(
@@ -624,20 +923,30 @@ fn send_file(
     local_path: &std::path::Path,
     dest: &str,
 ) -> Result<(), String> {
+    let bytes = std::fs::read(local_path).map_err(|e| format!("{}: {e}", local_path.display()))?;
+    send_bytes(ctx, control, &bytes, dest)
+}
+
+/// Ship in-memory bytes to a client path: the `send_file` transport
+/// with bytes the server never wrote to disk (old-hook envs staged for
+/// the merge driver, backlog #171).
+fn send_bytes(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    bytes: &[u8],
+    dest: &str,
+) -> Result<(), String> {
     match ctx.transport {
         RemoteTransport::Local => {
             if let Some(parent) = std::path::Path::new(dest).parent() {
                 std::fs::create_dir_all(parent)
                     .map_err(|e| format!("{}: {e}", parent.display()))?;
             }
-            std::fs::copy(local_path, dest)
-                .map_err(|e| format!("{}: {e}", local_path.display()))?;
+            std::fs::write(dest, bytes).map_err(|e| format!("mrg: writing {dest} failed: {e}"))?;
             Ok(())
         }
         RemoteTransport::Ssh => {
             use std::io::Write as _;
-            let bytes =
-                std::fs::read(local_path).map_err(|e| format!("{}: {e}", local_path.display()))?;
             let mut argv = ssh_argv(ctx, control);
             argv.push("sh".to_string());
             argv.push("-c".to_string());
@@ -653,7 +962,7 @@ fn send_file(
                 .stdin
                 .take()
                 .ok_or_else(|| "mrg: ssh stdin unavailable".to_string())?
-                .write_all(&bytes)
+                .write_all(bytes)
                 .map_err(|e| format!("mrg: writing to ssh stdin: {e}"))?;
             let output = child
                 .wait_with_output()
@@ -972,31 +1281,17 @@ pub fn run_remote_resolve(matches: &ArgMatches, ctx: RemoteContext, argv: Vec<St
         return print_preflight_report(&ctx, &failures, &warnings, first_contact);
     }
     print_preflight_report(&ctx, &failures, &warnings, first_contact);
-    // etc-portage placement → config root for the resolve.
-    let pull_tmp;
-    let config_dir: std::path::PathBuf = match &ctx.etc_portage {
-        ConfigPlacement::Server(path) => std::path::PathBuf::from(path),
-        ConfigPlacement::Client(path) => {
-            pull_tmp = std::env::temp_dir().join(format!(
-                "portuale-remote-etc-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos())
-                    .unwrap_or(0)
-            ));
-            // The pulled tree is the *contents* of the client's
-            // `/etc/portage`; re-root it as `<tmp>/etc/portage` so the
-            // dir is a valid `PORTAGE_CONFIGROOT` (real-root layout).
-            let pulled_portage = pull_tmp.join("etc/portage");
-            if let Err(message) = pull_dir(&ctx, control, path, &pulled_portage) {
-                eprintln!("{message}");
-                return ExitCode::from(1);
-            }
-            pull_tmp.clone()
+    // etc-portage placement → config root for the resolve (shared
+    // helper: `Server` direct, `Client` pulled). `_placed` stays alive
+    // across the resolve (config root + env override); its temp pull
+    // is removed best-effort on drop at scope end.
+    let _placed = match place_config_root(&ctx, control) {
+        Ok(placed) => placed,
+        Err(message) => {
+            eprintln!("{message}");
+            return ExitCode::from(1);
         }
     };
-    let _config_guard = ConfigRootOverride::set(&config_dir);
     set_remote_exec(ctx);
     let code = crate::pretend::run(&argv);
     // Defensive: the dispatch site takes the handoff, but an early return
@@ -1087,6 +1382,25 @@ pub(crate) fn run_remote_plan(
     let mut failures: Vec<(String, String)> = Vec::new();
     let mut skipped: Vec<String> = Vec::new();
     let mut merged: u32 = 0;
+    // Real `preinst_mask()` (`bin/misc-functions.sh`): the placed
+    // config's resolved `INSTALL_MASK` + the `no{man,info,doc}` FEATURES
+    // fold, through the same `pretend::config_install_mask` resolver the
+    // local merge uses -- so a remote merge masks exactly what a local
+    // one would (backlog #170). `ConfigPlacement::Client` resolves the
+    // pulled client `/etc/portage`; `ConfigPlacement::Server` the
+    // server's own (both are `config` here: the resolve already ran
+    // under `ConfigRootOverride` for the placed root).
+    let (install_mask, install_mask_prunes_usr_share) = crate::pretend::config_install_mask(config);
+    // Backlog #171: the same placed config's resolved `FEATURES` list
+    // rides every unit's regen postinst run (the local
+    // `refresh_features` rule), so the vdb env carries the merge-time
+    // features, not the binpkg's build-time ones.
+    let regen_features = crate::pretend::config_features_string(config);
+    // Backlog #171 review: the same placed config's resolved
+    // `PORTAGE_BZIP2_COMMAND` rides the regen install too, so the
+    // scrubbed vdb env records the client's configured compressor
+    // (e.g. `lbzip2`), not always the `make.globals` default.
+    let regen_bzip2 = crate::pretend::config_bzip2_command(config);
     for entry in entries {
         let version = match &entry.outcome {
             // #72 B3: a removal is not remotely merged (execution is a
@@ -1122,6 +1436,10 @@ pub(crate) fn run_remote_plan(
             control,
             &shadow,
             &server_ledger_base,
+            &install_mask,
+            install_mask_prunes_usr_share,
+            Some(&regen_features),
+            Some(&regen_bzip2),
         );
         match unit {
             Ok(()) => {
@@ -1191,6 +1509,10 @@ fn run_one_remote_unit(
     control: Option<&std::path::Path>,
     shadow: &VdbShadow,
     server_ledger_base: &std::path::Path,
+    install_mask: &str,
+    install_mask_prunes_usr_share: bool,
+    regen_features: Option<&str>,
+    regen_bzip2: Option<&str>,
 ) -> Result<(), String> {
     let binpkg_path = if entry.remote_binary {
         let (binrepo, record) = portage_repo::find_remote_binpkg(
@@ -1253,6 +1575,10 @@ fn run_one_remote_unit(
         Some(&ledger),
         Some(&ledger_entry.repo),
         Some(shadow),
+        install_mask,
+        install_mask_prunes_usr_share,
+        regen_features,
+        regen_bzip2,
     )?;
     record_server_ledger(server_ledger_base, &ctx.hostname, &ledger_entry)?;
     Ok(())
@@ -1765,8 +2091,19 @@ pub(crate) fn check_binary_plan(entries: &[portage_repo::GraphEntry]) -> Result<
 /// One binpkg end to end (bundle, stream, unpack, phases, merge,
 /// postinst): shared by the `--remote-binpkg` path (no ledger, no
 /// shadow) and the resolve path (ledger per merged entry, shadow
-/// pre-check before anything ships). Prints the stage report lines;
-/// `Ok(cpv)` is the merged `category/package-version`.
+/// pre-check before anything ships). `install_mask` /
+/// `install_mask_prunes_usr_share` are the resolve's own
+/// `config_install_mask` values for the placed config -- both paths
+/// resolve the client config now (backlog #170/#171b: the trial path's
+/// `run_bundle_stage` places and loads it like `run_remote_resolve`
+/// does). `regen_features` is the resolve's own
+/// `config_features_string` for the placed config (the merge-time
+/// `FEATURES` the regen'd vdb env carries, backlog #171);
+/// `regen_bzip2` is the resolve's own `config_bzip2_command` for the
+/// placed config (the merge-time `PORTAGE_BZIP2_COMMAND` the scrubbed
+/// vdb env records). Prints the
+/// stage report lines; `Ok(cpv)` is the merged `category/package-version`.
+#[allow(clippy::too_many_arguments)]
 fn run_binpkg_flow(
     ctx: &RemoteContext,
     control: Option<&std::path::Path>,
@@ -1774,6 +2111,10 @@ fn run_binpkg_flow(
     ledger: Option<&LedgerSpec>,
     repo_override: Option<&str>,
     shadow: Option<&VdbShadow>,
+    install_mask: &str,
+    install_mask_prunes_usr_share: bool,
+    regen_features: Option<&str>,
+    regen_bzip2: Option<&str>,
 ) -> Result<String, String> {
     let staging = std::env::temp_dir().join(format!(
         "portuale-remote-bundle-{}-{}",
@@ -1791,6 +2132,8 @@ fn run_binpkg_flow(
         &staging,
         repo_override,
         &crate::binpkg::GpgVerify::from_env(),
+        install_mask,
+        install_mask_prunes_usr_share,
     ) {
         Ok(staged) => staged,
         Err(message) => {
@@ -1885,6 +2228,34 @@ fn run_binpkg_flow(
         ">>> Remote bundle {}: unpacked ({} bytes, slot {}, repo {})",
         staged.manifest.cpv, staged.byte_count, staged.manifest.slot, staged.manifest.repo,
     );
+    let (vdb, stateless) = client_vdb_placement(ctx);
+    // Backlog #171: stage the replaced instance's saved env for the
+    // merge driver's old hooks (server-decompressed, so the client
+    // needs no bzip2). Best-effort: failures warn and the driver falls
+    // back to the client vdb. Stateless merges run no old hooks.
+    if !stateless {
+        let unit_dir = format!("{}/{pf}", ctx.workdir);
+        let mainslot = staged.manifest.slot.split('/').next().unwrap_or("0");
+        let shipment = ship_old_hook_envs(
+            ctx,
+            control,
+            &unit_dir,
+            &vdb,
+            &staged.category,
+            &staged.pn,
+            &staged.pf,
+            mainslot,
+        );
+        for pf in &shipment.shipped {
+            println!(
+                ">>> Remote old-env {}: staged for {pf}",
+                staged.manifest.cpv
+            );
+        }
+        for warning in &shipment.warnings {
+            println!("{}", old_hook_warn_message(&staged.manifest.cpv, warning));
+        }
+    }
     // Slice-3 phases (pretend/setup/preinst, DEFINED_PHASES-gated at
     // bundle time). Postinst waits for the slice-4 merge. An empty phase
     // list (no hooks, or no ebuild/env shipped) is a note, not a failure
@@ -1912,8 +2283,8 @@ fn run_binpkg_flow(
         }
     }
     let unit_dir = format!("{}/{pf}", ctx.workdir);
-    // Slice-4 merge (copy+vdb+replace) then new-postinst, non-fatal like
-    // the local merge's own `_postinst_failure` rule.
+    // Slice-4 merge (copy+vdb+replace); the regen postinst below stays
+    // non-fatal like the local merge's own `_postinst_failure` rule.
     match run_merge_stage(ctx, control, &unit_dir, &staged, ledger) {
         Ok(markers) => {
             for marker in &markers {
@@ -1924,56 +2295,77 @@ fn run_binpkg_flow(
             return Err(message);
         }
     }
-    if staged.postinst_defined {
-        let colormap = crate::color::phase_colormap_export();
-        let workdir_parent = std::path::Path::new(&ctx.workdir)
-            .parent()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "/var/tmp".to_string());
-        let script = phase_script(
-            &unit_dir,
-            &staged,
-            "postinst",
-            &ctx.root,
-            &workdir_parent,
-            &colormap,
-        );
-        match run_script_stdin(ctx, control, &script) {
-            Ok(output) => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                for line in stderr.lines().chain(stdout.lines()) {
-                    println!("{line}");
+    // Backlog #171: the postinst phase runs for every merged unit --
+    // defined or not -- as the merge-time environment regeneration
+    // (real `vartree.py:5334` + `phase-functions.sh:1072-1082`; an
+    // undefined `pkg_postinst` is a no-op that still re-saves the env).
+    // Any regen/pull/compress/install failure keeps the build-time env
+    // already in the vdb with one `!!!` warning and continues (real
+    // `_postinst_failure`: "It's stupid to bail out here").
+    let cpv = staged.manifest.cpv.clone();
+    // Backlog #171b: the calling environment for the client phase is
+    // the server process -- forward its set locale variables (real's
+    // `environ_whitelist` rule; never invented defaults).
+    let server_locale = collect_server_locale(|name| std::env::var(name).ok());
+    match run_postinst_regen_stage(
+        ctx,
+        control,
+        &unit_dir,
+        &staged,
+        regen_features,
+        &server_locale,
+    ) {
+        Ok(report) => {
+            if report.skipped_no_hooks {
+                println!(">>> Remote postinst {cpv}: none to run from, skipped");
+            } else {
+                if !staged.postinst_defined {
+                    println!(">>> Remote postinst {cpv}: no pkg_postinst defined, regen only");
                 }
-                let rc: i32 = parse_kv(&stdout)
-                    .get("PHASE_postinst")
-                    .and_then(|rc| rc.parse().ok())
-                    .unwrap_or(-1);
-                if output.status.success() && rc == 0 {
-                    println!(">>> Remote postinst {}: ok", staged.manifest.cpv);
+                if report.phase_rc == 0 {
+                    println!(">>> Remote postinst {cpv}: ok");
                 } else {
                     println!(
-                        ">>> Remote postinst {}: FAILED (exit {}) -- merge kept (real _postinst_failure)",
-                        staged.manifest.cpv,
-                        output.status.code().unwrap_or(-1)
+                        ">>> Remote postinst {cpv}: FAILED (exit {}) -- merge kept (real _postinst_failure)",
+                        report.phase_rc
                     );
                 }
-            }
-            Err(message) => {
-                println!(
-                    ">>> Remote postinst {}: transport failed, merge kept: {message}",
-                    staged.manifest.cpv
-                );
+                if report.regen_present {
+                    if stateless {
+                        println!(">>> Remote env-regen {cpv}: skipped (stateless, no client vdb)");
+                    } else {
+                        let vdb_env =
+                            format!("{vdb}/{}/{}/environment.bz2", staged.category, staged.pf);
+                        match install_regenerated_env(
+                            ctx,
+                            control,
+                            &unit_dir,
+                            &vdb_env,
+                            regen_bzip2,
+                        ) {
+                            Ok(()) => println!(
+                                ">>> Remote env-regen {cpv}: vdb environment.bz2 regenerated"
+                            ),
+                            Err((step, detail)) => {
+                                println!("{}", regen_warn_message(&cpv, &step));
+                                for line in detail.lines().take(3) {
+                                    println!("mrg:   {line}");
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    println!("{}", regen_warn_message(&cpv, "postinst"));
+                }
             }
         }
-    } else {
-        println!(
-            ">>> Remote postinst {}: none defined, skipped",
-            staged.manifest.cpv
-        );
+        Err(message) => {
+            println!(">>> Remote postinst {cpv}: transport failed, merge kept: {message}");
+            println!("{}", regen_warn_message(&cpv, "postinst"));
+        }
     }
-    println!(">>> Remote merged {}", staged.manifest.cpv);
-    Ok(staged.manifest.cpv.clone())
+    println!(">>> Remote merged {cpv}");
+    Ok(cpv)
 }
 fn run_bundle_stage(
     ctx: &RemoteContext,
@@ -1984,7 +2376,52 @@ fn run_bundle_stage(
         eprintln!("mrg: --remote-binpkg {}: not found", binpkg_path.display());
         return ExitCode::from(1);
     }
-    match run_binpkg_flow(ctx, control, binpkg_path, None, None, None) {
+    // Backlog #171b: the trial path resolves the client config exactly
+    // like the plan path does -- place `/etc/portage` per
+    // `ConfigPlacement` through the shared `place_config_root` helper
+    // (same shape as `run_remote_resolve`), then load the same repos +
+    // resolved config `pretend::run` merges with
+    // (`load_repos_and_config`: one shared resolver call, no duplicate
+    // logic). The placed config's `INSTALL_MASK` (+ the
+    // `no{man,info,doc}` fold), resolved `FEATURES`, and
+    // `PORTAGE_BZIP2_COMMAND` feed `build_bundle` / the env regen
+    // exactly as `run_remote_plan`'s own values do. Both placements
+    // always name a path, so there is no config-less mode left here to
+    // keep the old empty values for; a pull or resolve failure is a
+    // hard error like the resolve path's own. `_placed` stays alive
+    // across the flow; its temp pull is removed best-effort on drop.
+    let _placed = match place_config_root(ctx, control) {
+        Ok(placed) => placed,
+        Err(message) => {
+            eprintln!("{message}");
+            return ExitCode::from(1);
+        }
+    };
+    let config_dir = _placed.dir.clone();
+    let (_repos, config) =
+        match crate::pretend::load_repos_and_config(&config_dir, &portage_repo::root_from_env()) {
+            Ok(loaded) => loaded,
+            Err(message) => {
+                eprintln!("mrg: --remote-binpkg: cannot resolve the client config: {message}");
+                return ExitCode::from(1);
+            }
+        };
+    let (install_mask, install_mask_prunes_usr_share) =
+        crate::pretend::config_install_mask(&config);
+    let regen_features = crate::pretend::config_features_string(&config);
+    let regen_bzip2 = crate::pretend::config_bzip2_command(&config);
+    match run_binpkg_flow(
+        ctx,
+        control,
+        binpkg_path,
+        None,
+        None,
+        None,
+        &install_mask,
+        install_mask_prunes_usr_share,
+        Some(&regen_features),
+        Some(&regen_bzip2),
+    ) {
         Ok(_) => ExitCode::from(0),
         Err(message) => {
             eprintln!("{message}");
@@ -2139,6 +2576,254 @@ fn phase_script(
     )
 }
 
+/// Locale variables the regen postinst run re-exports into the client
+/// phase env: real's saved locale comes from the calling environment
+/// through `environ_whitelist` (`special_env_vars.py`: `LANG` plus the
+/// `LC_*` list), and for `mrg` the calling environment is the server
+/// process. `LANGUAGE` is **not** in real's whitelist -- it rides along
+/// here only because the slice brief names it explicitly; see
+/// `collect_server_locale`. Only set variables are ever forwarded
+/// (never invented defaults).
+pub(crate) const REGEN_LOCALE_VARS: &[&str] = &[
+    "LANG",
+    "LANGUAGE",
+    "LC_ALL",
+    "LC_COLLATE",
+    "LC_CTYPE",
+    "LC_MESSAGES",
+    "LC_MONETARY",
+    "LC_NUMERIC",
+    "LC_TIME",
+    "LC_PAPER",
+];
+
+/// The server process's own locale values for the client regen phase
+/// env, as `(name, value)` pairs in `REGEN_LOCALE_VARS` order -- one
+/// entry per variable the getter reports as set (even empty: a set-but-
+/// empty `LANG` is still the calling environment's value, which is what
+/// real's whitelist passes through). Production passes
+/// `|name| std::env::var(name).ok()`; tests inject a fake map.
+fn collect_server_locale(get: impl Fn(&str) -> Option<String>) -> Vec<(String, String)> {
+    REGEN_LOCALE_VARS
+        .iter()
+        .filter_map(|name| get(name).map(|value| (name.to_string(), value)))
+        .collect()
+}
+
+/// Real's `posixish_locale` EAPI attribute (`eapi.py:182,309`): true
+/// from EAPI 6 on. Only posixish phases run the `LC_ALL` split below
+/// (`EbuildPhase.py:51-56`); older EAPIs keep `LC_ALL` as-is.
+fn eapi_is_posixish(eapi: &str) -> bool {
+    let digits: String = eapi
+        .trim()
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    // Real rejects an unknown EAPI outright; anything reaching us parsed
+    // off an ebuild, so default an unparseable value to the modern rule
+    // (the same direction the local phase path's unconditional split
+    // already takes).
+    digits.parse::<u64>().map(|n| n >= 6).unwrap_or(true)
+}
+
+/// Real's `locale_categories` (`portage/util/locale.py:22-36`): the full
+/// set `split_LC_ALL` copies a set `LC_ALL` over -- the six POSIX
+/// categories, `LC_PAPER`, and the five GNU extensions
+/// (`LC_ADDRESS`, `LC_IDENTIFICATION`, `LC_MEASUREMENT`, `LC_NAME`,
+/// `LC_TELEPHONE`). The fan-out below iterates this list, not the
+/// forwarding set: real's split operates on settings, and for a
+/// binpkg-merge postinst `$T/environment` does not exist yet, so
+/// `config.environ()` applies no whitelist filter
+/// (`config.py:3286-3299`) and all twelve reach the phase env and the
+/// `PORTAGE_UPDATE_ENV` save (`EbuildPhase.py:158,259` runs the env
+/// extractor for `pretend`/`prerm` only). Probed against real's own
+/// `split_LC_ALL` + `environ()`: with `LC_ALL` set, all twelve export
+/// when `$T/environment` is absent, seven when present.
+pub(crate) const REAL_LOCALE_CATEGORIES: &[&str] = &[
+    "LC_COLLATE",
+    "LC_CTYPE",
+    "LC_MONETARY",
+    "LC_MESSAGES",
+    "LC_NUMERIC",
+    "LC_TIME",
+    "LC_ADDRESS",
+    "LC_IDENTIFICATION",
+    "LC_MEASUREMENT",
+    "LC_NAME",
+    "LC_PAPER",
+    "LC_TELEPHONE",
+];
+
+/// Port of real's `split_LC_ALL` (`portage/util/locale.py:160`) to the
+/// forwarded regen locale set, for a posixish phase: a set `LC_ALL` fans
+/// out over all twelve real `locale_categories` (see
+/// `REAL_LOCALE_CATEGORIES`; real copies it over the same list,
+/// unconditionally overwriting) and itself
+/// disappears (real blanks it, then `config.environ()` deletes the
+/// placeholder, `config.py:3374-3385`). `LANG` is filled from `LC_ALL`
+/// only when the server left it unset -- real's split never touches
+/// `LANG`, but with `LC_ALL` set and `LANG` unset the effective locale
+/// is `LC_ALL`'s value everywhere, and the bed shows real's saved env
+/// carrying `LANG` alongside the split categories. An explicitly set
+/// `LANG` is never clobbered; `LANGUAGE` (not a locale category, rides
+/// along per the l171b brief) is never touched. A set-but-empty
+/// `LC_ALL` is dropped without fanning out (real's `if lc_all:` is
+/// falsy, then `environ()` deletes the placeholder). Non-posixish
+/// EAPIs return the pairs unchanged (real never calls the split there).
+fn split_server_locale(locale: &[(String, String)], eapi: &str) -> Vec<(String, String)> {
+    if !eapi_is_posixish(eapi) {
+        return locale.to_vec();
+    }
+    let lc_all = locale
+        .iter()
+        .rev()
+        .find(|(name, _)| name == "LC_ALL")
+        .map(|(_, value)| value.clone())
+        .unwrap_or_default();
+    let mut out: Vec<(String, String)> = locale
+        .iter()
+        .filter(|(name, _)| name != "LC_ALL")
+        .cloned()
+        .collect();
+    if lc_all.is_empty() {
+        return out;
+    }
+    for name in REAL_LOCALE_CATEGORIES {
+        match out.iter_mut().find(|(n, _)| n == name) {
+            Some(pair) => pair.1 = lc_all.clone(),
+            None => out.push((name.to_string(), lc_all.clone())),
+        }
+    }
+    if !out.iter().any(|(n, _)| n == "LANG") {
+        out.push(("LANG".to_string(), lc_all));
+    }
+    out
+}
+
+/// The merge-time environment-regeneration postinst run (backlog #171):
+/// real `vartree.py:5334` sets `PORTAGE_UPDATE_ENV=<dbpkgdir>/
+/// environment.bz2` around *every* merge's postinst phase, and
+/// `bin/phase-functions.sh:1072-1082` re-saves the vdb env from the
+/// live phase env through it -- so the vdb env carries the merge-time
+/// config, not the binpkg's build-time one. `mrg` runs this phase on
+/// the client for every merged unit, **whether or not `pkg_postinst`
+/// is defined**: real's `prerm|postrm|preinst|postinst|config|info`
+/// case (`phase-functions.sh:1061-1083`) runs
+/// `__ebuild_phase_with_hooks pkg_${1}` unconditionally
+/// (`__ebuild_phase` is a no-op for an undefined function) and *then*
+/// the `PORTAGE_UPDATE_ENV` block -- so an undefined `pkg_postinst`
+/// still regenerates the env. `pkg_postinst` itself still runs only if
+/// defined (the same no-op rule; nothing faked).
+///
+/// `PORTAGE_UPDATE_ENV` points at a unit-local file
+/// (`$UNIT/environment.regen`) and `PORTAGE_BZIP2_COMMAND` at the
+/// bundle's `bzip2-passthrough` (plain text out; the server compresses
+/// -- the client must have no `bzip2`, plan §6). `FEATURES` /
+/// `PORTAGE_FEATURES` carry the resolved client list (the local
+/// `refresh_features` rule), so the env records the merge-time
+/// features (e.g. no `buildpkg`). `locale` re-exports the server's own
+/// locale values (see `REGEN_LOCALE_VARS` / `collect_server_locale`,
+/// split per `split_server_locale` on posixish EAPIs) so
+/// the regen'd env carries them exactly as real's calling-environment
+/// whitelist does. `PHASE_postinst=<rc>` plus
+/// `REGEN_ENV=ok|missing|skip:no-hooks` come back on stdout; the
+/// script exits with the phase rc (a non-zero postinst is non-fatal --
+/// real `_postinst_failure` -- as long as the regen file exists).
+///
+/// `O` is unset and `SHELL` unset before the phase runs: real's
+/// phase shell never has `O` (`config.environ()` drops it via
+/// `special_env_vars.py: environ_filter` even though `doebuild.py:475`
+/// sets `mysettings["O"]`) and its saved `SHELL` is `declare --`
+/// (bash initializes its own -- `SHELL` is in neither the whitelist
+/// nor the config), while `mrg` exported a unit-local `O` and usually
+/// inherits an exported `SHELL`. `LC_ALL` is unset on posixish EAPIs
+/// and the forwarded locale arrives pre-split (see
+/// `split_server_locale`); the unset also kills any `LC_ALL` leaking
+/// in from the sourced build-time environment.
+fn postinst_regen_script(
+    unit_dir: &str,
+    staged: &crate::remote_bundle::StagedBundle,
+    root: &str,
+    workdir_parent: &str,
+    colormap: &str,
+    features: Option<&str>,
+    locale: &[(String, String)],
+) -> String {
+    let mut extra = String::new();
+    if let Some(list) = features.filter(|f| !f.is_empty()) {
+        extra.push_str(&format!(
+            "export FEATURES={features} PORTAGE_FEATURES={features}\n",
+            features = sh_quote(list),
+        ));
+    }
+    extra.push_str(&format!(
+        "export PORTAGE_UPDATE_ENV={regen} PORTAGE_BZIP2_COMMAND={passthrough}\n",
+        regen = sh_quote(&format!("{unit_dir}/environment.regen")),
+        passthrough = sh_quote(&format!("{unit_dir}/bin/bzip2-passthrough")),
+    ));
+    // Backlog #171b: match real's phase shell (see the fn doc comment)
+    // so the `PORTAGE_UPDATE_ENV` save matches real's saved env.
+    extra.push_str("unset O\n");
+    // Backlog #171c: `unset` (not `export -n`) reproduces real exactly:
+    // bash self-initializes an unexported `SHELL`, while `export -n`
+    // would keep a non-default server value.
+    extra.push_str("unset SHELL\n");
+    // Backlog #171c: real's posixish phases never see `LC_ALL`
+    // (`split_LC_ALL` + `config.environ()`); the unset also covers an
+    // `LC_ALL` leaking in from the sourced build-time environment, and
+    // the exports below carry the pre-split values.
+    let posixish = eapi_is_posixish(&staged.eapi);
+    if posixish {
+        extra.push_str("unset LC_ALL\n");
+    }
+    for (name, value) in split_server_locale(locale, &staged.eapi).iter() {
+        extra.push_str(&format!(
+            "export {name}={quoted}\n",
+            quoted = sh_quote(value)
+        ));
+    }
+    format!(
+        concat!(
+            "UNIT={unit}\n",
+            "T=\"$UNIT/temp\"\n",
+            "mkdir -p \"$T\" \"$UNIT/work\" \"$UNIT/homedir\" \"$UNIT/files\" \"$UNIT/empty\"\n",
+            "if [ ! -f \"$UNIT/build-info/{pf}.ebuild\" ] || [ ! -f \"$UNIT/environment\" ]; then\n",
+            "  echo \"REGEN_ENV=skip:no-hooks\"\n",
+            "  echo \"PHASE_postinst=0\"\n",
+            "  exit 0\n",
+            "fi\n",
+            "cp \"$UNIT/environment\" \"$T/environment\"\n",
+            ": > \"$T/environment.raw\"\n",
+            "{exports}",
+            "{extra}",
+            "export PATH=\"$UNIT/bin/ebuild-helpers:$PATH\"\n",
+            "bash \"$UNIT/bin/ebuild.sh\" postinst\n",
+            "rc=$?\n",
+            "echo \"PHASE_postinst=$rc\"\n",
+            "if [ -s \"$UNIT/environment.regen\" ]; then echo \"REGEN_ENV=ok\"; else echo \"REGEN_ENV=missing\"; fi\n",
+            "exit $rc\n",
+        ),
+        unit = sh_quote(unit_dir),
+        pf = staged.pf,
+        exports = phase_exports(
+            &format!("{unit_dir}/build-info/{}.ebuild", staged.pf),
+            unit_dir,
+            root,
+            &format!("{unit_dir}/image"),
+            &format!("{unit_dir}/temp"),
+            &format!("{unit_dir}/work"),
+            &format!("{unit_dir}/homedir"),
+            &format!("{unit_dir}/files"),
+            &format!("{unit_dir}/bin"),
+            workdir_parent,
+            colormap,
+            staged,
+            "postinst",
+        ),
+        extra = extra,
+    )
+}
+
 // --- Client merge driver (slice 4): helpers ----------------------------------
 
 /// Longest-prefix `is_protected` + `alloc_cfg` + `env_val` + `run_old_hook`
@@ -2186,10 +2871,21 @@ run_old_hook() {
   OTMP="$WORKDIR/oldtmp"
   rm -rf "$OTMP"
   mkdir -p "$OTMP/temp" "$OTMP/work" "$OTMP/homedir" "$OTMP/files" "$OTMP/empty" "$OTMP/image" || return 1
-  if [ -f "$vdbdir/environment" ]; then
+  # Backlog #171: prefer the server-decompressed env the server staged
+  # at `$UNIT/old-env/<pf>` (no client bzip2 needed); then the legacy
+  # plain `environment` older `mrg` versions left, used only when no
+  # `environment.bz2` exists; client `bzip2 -dc` only as a last resort;
+  # then any plain `environment` at all (an older-`mrg` entry with both
+  # files whose staging failed, on a bzip2-less client).
+  pf=${vdbdir##*/}
+  if [ -f "$UNIT/old-env/$pf" ]; then
+    cp "$UNIT/old-env/$pf" "$OTMP/temp/environment" || return 1
+  elif [ ! -f "$vdbdir/environment.bz2" ] && [ -f "$vdbdir/environment" ]; then
     cp "$vdbdir/environment" "$OTMP/temp/environment" || return 1
   elif [ -f "$vdbdir/environment.bz2" ] && command -v bzip2 >/dev/null 2>&1; then
     bzip2 -dc -- "$vdbdir/environment.bz2" > "$OTMP/temp/environment" || return 1
+  elif [ -f "$vdbdir/environment" ]; then
+    cp "$vdbdir/environment" "$OTMP/temp/environment" || return 1
   else
     echo "OLDHOOK=no-env-bzip2-missing"; return 2
   fi
@@ -2378,12 +3074,11 @@ for f in "$UNIT/build-info"/*; do
   # an explicit if for fallible steps.
   if [ -f "$f" ]; then cp "$f" "$TMPVDB"/ || mfail vdb "copy build-info"; fi
 done
-# The plain hook environment ships only when the binpkg carried an
-# `environment.bz2` (else there is nothing future hooks could source;
-# the verbatim `build-info/*` copies above already kept the original).
-if [ -f "$UNIT/environment" ]; then
-  cp "$UNIT/environment" "$TMPVDB/environment" || mfail vdb "copy environment"
-fi
+# Backlog #171: no plain `environment` in the vdb (real writes
+# `environment.bz2` only). The build-time `environment.bz2` rides the
+# verbatim `build-info/*` copies above as the fallback until the
+# postinst regen phase overwrites it; future unmerge hooks source that
+# file (server-decompressed at ship time, never a plain copy).
 printf '%s\n' "$CAT" > "$TMPVDB/CATEGORY"
 printf '%s\n' "$FULLSLOT" > "$TMPVDB/SLOT"
 printf '%s\n' "$REPO" > "$TMPVDB/repository"
@@ -2560,6 +3255,22 @@ fn merge_script(
     ))
 }
 
+/// Client vdb destination for this run: the placed path, plus whether
+/// the driver runs stateless (server-side vdb placement, plan §7 -- the
+/// driver merges files only: no vdb entry, no old hooks, fail-closed
+/// collisions). Shared by the merge driver and the #171 env-regen
+/// install (a stateless merge has no vdb entry to attach the regen'd
+/// env to, so the install is skipped while postinst still runs).
+fn client_vdb_placement(ctx: &RemoteContext) -> (String, bool) {
+    match &ctx.vdb {
+        ConfigPlacement::Client(path) => (path.clone(), false),
+        ConfigPlacement::Server(_) => (
+            format!("{}/var/db/pkg", ctx.root.trim_end_matches('/')),
+            true,
+        ),
+    }
+}
+
 /// Human tail of a merge failure: the `MERGE_FAIL` line plus a few log
 /// lines, prefixed for the report.
 fn merge_failure_tail(stdout: &str, stderr: &str, code: Option<i32>) -> String {
@@ -2591,16 +3302,7 @@ fn run_merge_stage(
     staged: &crate::remote_bundle::StagedBundle,
     ledger: Option<&LedgerSpec>,
 ) -> Result<Vec<String>, String> {
-    // Server-side vdb placement is the stateless degrade (plan §7): the
-    // driver merges files only -- no vdb entry, no old hooks, and
-    // fail-closed collisions.
-    let (vdb, stateless) = match &ctx.vdb {
-        ConfigPlacement::Client(path) => (path.clone(), false),
-        ConfigPlacement::Server(_) => (
-            format!("{}/var/db/pkg", ctx.root.trim_end_matches('/')),
-            true,
-        ),
-    };
+    let (vdb, stateless) = client_vdb_placement(ctx);
     let script = merge_script(
         unit_dir,
         staged,
@@ -2646,6 +3348,452 @@ fn run_merge_stage(
     } else {
         Err(merge_failure_tail(&stdout, &stderr, code))
     }
+}
+
+// --- Merge-time vdb environment regeneration (backlog #171) -------------------
+//
+// Real regenerates the vdb env from the live postinst environment of
+// the merge (`vartree.py:5334` `PORTAGE_UPDATE_ENV=<dbpkgdir>/
+// environment.bz2`; `bin/phase-functions.sh:1072-1082`), while `mrg`
+// kept the binpkg's build-time env. The client regenerates
+// uncompressed (no `bzip2` on the client, plan §6/§14.1) and the
+// server compresses + installs; old-instance hooks get their env
+// server-decompressed the same way.
+
+/// Outcome of the regen postinst run: the phase rc (non-zero is
+/// non-fatal, real `_postinst_failure`) plus whether the client left a
+/// fresh `$UNIT/environment.regen` behind.
+struct RegenReport {
+    phase_rc: i32,
+    regen_present: bool,
+    skipped_no_hooks: bool,
+}
+
+/// Run the regen postinst script and print its log straight through.
+/// `Err` is a transport/command failure only -- a non-zero phase rc or
+/// a missing regen file is a warn-and-continue `RegenReport`, never a
+/// unit failure (real `_postinst_failure`). `locale` is the server's
+/// own locale pairs for the client phase env (see
+/// `collect_server_locale`); the unit flow collects them from the
+/// process environment, tests inject them explicitly.
+fn run_postinst_regen_stage(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    unit_dir: &str,
+    staged: &crate::remote_bundle::StagedBundle,
+    features: Option<&str>,
+    locale: &[(String, String)],
+) -> Result<RegenReport, String> {
+    let colormap = crate::color::phase_colormap_export();
+    let workdir_parent = std::path::Path::new(&ctx.workdir)
+        .parent()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "/var/tmp".to_string());
+    let script = postinst_regen_script(
+        unit_dir,
+        staged,
+        &ctx.root,
+        &workdir_parent,
+        &colormap,
+        features,
+        locale,
+    );
+    let output = run_script_stdin(ctx, control, &script).map_err(|message| {
+        if ctx.transport == RemoteTransport::Local {
+            format!("mrg: local postinst regen command failed: {message}")
+        } else {
+            message
+        }
+    })?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stderr.lines().chain(stdout.lines()) {
+        println!("{line}");
+    }
+    let values = parse_kv(&stdout);
+    let phase_rc: i32 = values
+        .get("PHASE_postinst")
+        .and_then(|rc| rc.parse().ok())
+        .unwrap_or(-1);
+    let regen = values
+        .get("REGEN_ENV")
+        .map(String::as_str)
+        .unwrap_or("missing");
+    Ok(RegenReport {
+        phase_rc,
+        regen_present: regen == "ok",
+        skipped_no_hooks: regen == "skip:no-hooks",
+    })
+}
+
+/// Pull one remote file's bytes to the server (`cat` remotely; a plain
+/// read for the `local` transport, where client paths are server
+/// paths). `Err` is the pull failure (the #171 regen warn path).
+fn pull_file(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    remote_path: &str,
+) -> Result<Vec<u8>, String> {
+    match ctx.transport {
+        RemoteTransport::Local => std::fs::read(remote_path)
+            .map_err(|e| format!("mrg: pulling {remote_path} from the client failed: {e}")),
+        RemoteTransport::Ssh => {
+            let output =
+                run_raw_command(ctx, control, &["cat".to_string(), remote_path.to_string()])?;
+            let code = output.status.code();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !output.status.success() && is_transport_error(code, &stderr) {
+                return Err(format!(
+                    "mrg: client {} unreachable:\n{stderr}",
+                    ctx.hostname
+                ));
+            }
+            if !output.status.success() {
+                return Err(format!(
+                    "mrg: pulling {remote_path} from the client failed (exit {}):\n{stderr}",
+                    code.unwrap_or(-1)
+                ));
+            }
+            Ok(output.stdout)
+        }
+    }
+}
+
+/// Server-side `bzip2` over piped bytes (the server has bzip2; the
+/// client must not need it). The local merge shells the same binary
+/// (`seed_saved_environment`, `remote_bundle::build_bundle`) -- there
+/// is no Rust bzip2 crate in the tree, so this pipes through the
+/// system one instead of adding a dependency.
+fn bzip2_pipe(args: &[&str], bytes: &[u8]) -> Result<Vec<u8>, String> {
+    use std::io::Write as _;
+    let mut child = std::process::Command::new("bzip2")
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("mrg: cannot spawn server bzip2: {e}"))?;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| "mrg: bzip2 stdin unavailable".to_string())?
+        .write_all(bytes)
+        .map_err(|e| format!("mrg: feeding server bzip2: {e}"))?;
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("mrg: waiting for server bzip2: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "mrg: server bzip2 {} failed (exit {}): {}",
+            args.join(" "),
+            output.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(output.stdout)
+}
+
+/// Server-side compression for the pulled regen'd env: `bzip2 -9`, the
+/// same level real's `PORTAGE_UPDATE_ENV` block uses (`-f9`).
+fn bzip2_compress(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    bzip2_pipe(&["-c", "-f9"], bytes)
+}
+
+/// Server-side decompression for an old instance's `environment.bz2`.
+fn bzip2_decompress(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    bzip2_pipe(&["-d", "-c", "--"], bytes)
+}
+
+/// Rewrite the `${PORTAGE_BZIP2_COMMAND}` line in a pulled regen'd
+/// environment **only** when its value is the unit-local
+/// `bzip2-passthrough` stand-in the regen postinst run used, replacing
+/// it with the resolved client command (`bzip2_command` -- the
+/// server-resolved client `PORTAGE_BZIP2_COMMAND`, `make.globals`'
+/// `bzip2` when nothing is configured). Real's merge-time save records
+/// its live value (verified on this host's own
+/// `/var/db/pkg/*/environment.bz2`, which all carry
+/// `declare -x PORTAGE_BZIP2_COMMAND="bzip2"`), while ours ran with a
+/// per-unit workdir path that must not leak into the vdb (and would
+/// keep the L1 `environment` rows red: `normalize.py` compares the
+/// content verbatim). Any other value -- real's own spelling, a
+/// foreign path, anything -- is copied verbatim; a missing line stays
+/// missing (never invent it).
+fn scrub_bzip2_command(bytes: &[u8], bzip2_command: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    for line in bytes.split_inclusive(|b| *b == b'\n') {
+        let is_passthrough = match line.iter().position(|b| *b == b'=') {
+            Some(eq) => {
+                let mut name = &line[..eq];
+                for prefix in ["declare -x ".as_bytes(), "declare -- ".as_bytes()] {
+                    if let Some(rest) = name.strip_prefix(prefix) {
+                        name = rest;
+                        break;
+                    }
+                }
+                name == b"PORTAGE_BZIP2_COMMAND"
+                    && line
+                        .windows(b"bzip2-passthrough".len())
+                        .any(|w| w == b"bzip2-passthrough")
+            }
+            None => false,
+        };
+        if is_passthrough {
+            let escaped = bzip2_command.replace('\\', "\\\\").replace('"', "\\\"");
+            out.extend_from_slice(
+                format!("declare -x PORTAGE_BZIP2_COMMAND=\"{escaped}\"\n").as_bytes(),
+            );
+        } else {
+            out.extend_from_slice(line);
+        }
+    }
+    out
+}
+
+/// Install `bytes` at `dest` on the client atomically (temp name +
+/// `mv`, so a concurrent unmerge never reads a half-written env). A
+/// failed `mv` best-effort removes the remote temp name (review #4 --
+/// no client tmp litter).
+fn install_file_atomic(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    bytes: &[u8],
+    dest: &str,
+) -> Result<(), String> {
+    let tmp = format!("{dest}.portuale-regen-tmp");
+    match ctx.transport {
+        RemoteTransport::Local => {
+            if let Some(parent) = std::path::Path::new(&tmp).parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("{}: {e}", parent.display()))?;
+            }
+            std::fs::write(&tmp, bytes).map_err(|e| format!("mrg: writing {tmp} failed: {e}"))?;
+            std::fs::rename(&tmp, dest).map_err(|e| {
+                let _ = std::fs::remove_file(&tmp);
+                format!("mrg: installing {dest} failed: {e}")
+            })?;
+            Ok(())
+        }
+        RemoteTransport::Ssh => {
+            let server_tmp = std::env::temp_dir().join(format!(
+                "portuale-regen-install-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            ));
+            std::fs::write(&server_tmp, bytes)
+                .map_err(|e| format!("mrg: staging the regen install failed: {e}"))?;
+            let result = send_file(ctx, control, &server_tmp, &tmp).and_then(|()| {
+                let output = run_raw_command(
+                    ctx,
+                    control,
+                    &["mv".to_string(), tmp.clone(), dest.to_string()],
+                )?;
+                if output.status.success() {
+                    Ok(())
+                } else {
+                    // Best-effort: don't litter the client tmp name.
+                    let _ = run_raw_command(
+                        ctx,
+                        control,
+                        &["rm".to_string(), "-f".to_string(), tmp.clone()],
+                    );
+                    Err(format!(
+                        "mrg: moving {tmp} into place failed (exit {})",
+                        output.status.code().unwrap_or(-1)
+                    ))
+                }
+            });
+            let _ = std::fs::remove_file(&server_tmp);
+            result
+        }
+    }
+}
+
+/// Pull the regen'd env, scrub it, compress it server-side and install
+/// it over the vdb's build-time `environment.bz2`. `Err` is
+/// `(failing step, detail)` -- `pull`, `compress` or `install` -- for
+/// the caller's one-`!!!` warn-and-continue line. `regen_bzip2` is the
+/// resolved client `PORTAGE_BZIP2_COMMAND` for the scrub (`None` on
+/// paths that resolve no config -- the `make.globals` default).
+fn install_regenerated_env(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    unit_dir: &str,
+    vdb_env_bz2: &str,
+    regen_bzip2: Option<&str>,
+) -> Result<(), (String, String)> {
+    let regen = format!("{unit_dir}/environment.regen");
+    let bytes = pull_file(ctx, control, &regen).map_err(|message| ("pull".to_string(), message))?;
+    let scrubbed = scrub_bzip2_command(&bytes, regen_bzip2.unwrap_or("bzip2"));
+    let compressed =
+        bzip2_compress(&scrubbed).map_err(|message| ("compress".to_string(), message))?;
+    install_file_atomic(ctx, control, &compressed, vdb_env_bz2)
+        .map_err(|message| ("install".to_string(), message))?;
+    Ok(())
+}
+
+/// The #171 failure line (coordinator decision): names the package and
+/// the failing step (`postinst`, `pull`, `compress`, `install`); the
+/// vdb keeps the build-time `environment.bz2` and the merge continues.
+fn regen_warn_message(cpv: &str, step: &str) -> String {
+    format!(
+        "!!! Remote {cpv}: merge-time environment regen failed at {step}, keeping build-time environment.bz2"
+    )
+}
+
+/// A staged old-hook environment: which replaced-version pfs got a
+/// server-decompressed env under `$UNIT/old-env/`, plus per-pf failure
+/// details for the report (the driver falls back to the client vdb for
+/// those -- the legacy plain file, then client `bzip2`).
+struct OldHookShipment {
+    shipped: Vec<String>,
+    warnings: Vec<String>,
+}
+
+/// `OLDPF=<pf> SLOT=<slot>` lines out of the old-version probe
+/// (anything else ignored -- the driver owns discovery, this only
+/// stages envs).
+fn parse_oldpf_probe(stdout: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for line in stdout.lines() {
+        let rest = match line.trim().strip_prefix("OLDPF=") {
+            Some(rest) => rest,
+            None => continue,
+        };
+        let (pf, slot) = match rest.split_once(" SLOT=") {
+            Some((pf, slot)) => (pf, slot),
+            None => continue,
+        };
+        if pf.is_empty() {
+            continue;
+        }
+        out.push((pf.to_string(), slot.to_string()));
+    }
+    out
+}
+
+/// The old-hook staging warning: names the package and the failing
+/// detail; old hooks for that pf fall back to the client vdb.
+fn old_hook_warn_message(cpv: &str, detail: &str) -> String {
+    format!(
+        "!!! Remote {cpv}: could not stage the saved env for an old instance ({detail}); old hooks fall back to the client vdb"
+    )
+}
+
+/// Stage every same-slot installed version's saved env for the merge
+/// driver's `run_old_hook` (backlog #171): probe the client vdb for
+/// same-package versions, pull each `environment.bz2`, decompress it
+/// **server-side**, and ship the plain text to `$UNIT/old-env/<pf>`.
+/// A version with no bz2 (older `mrg` entries carry only a plain
+/// `environment`) ships that file as-is; a version with neither
+/// warns with both pull errors (and still hits the driver's own
+/// warn-and-skip). Best-effort throughout:
+/// every failure lands in `warnings` and the merge continues.
+#[allow(clippy::too_many_arguments)]
+fn ship_old_hook_envs(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+    unit_dir: &str,
+    vdb: &str,
+    category: &str,
+    pn: &str,
+    new_pf: &str,
+    new_mainslot: &str,
+) -> OldHookShipment {
+    let mut shipment = OldHookShipment {
+        shipped: Vec::new(),
+        warnings: Vec::new(),
+    };
+    let vdbroot = format!("{vdb}/{category}");
+    // Same discovery shape as the driver's own replace loop
+    // (`$PKG-<digit...>` names, SLOT first field); the driver still
+    // decides, this only stages envs.
+    let script = format!(
+        concat!(
+            "UNIT={unit}\n",
+            "VDBROOT={vdbroot}\n",
+            "PKG={pkg}\n",
+            "mkdir -p \"$UNIT/old-env\" 2>/dev/null || true\n",
+            "for d in \"$VDBROOT/\"$PKG-*/; do\n",
+            "  [ -d \"$d\" ] || continue\n",
+            "  cpf=${{d%/}}; cpf=${{cpf##*/}}\n",
+            "  rest=${{cpf#\"$PKG-\"}}\n",
+            "  case \"$rest\" in [0-9]*) ;; *) continue;; esac\n",
+            "  [ \"$cpf\" = {newpf} ] && continue\n",
+            "  slot=$(cat \"$d/SLOT\" 2>/dev/null | cut -d/ -f1)\n",
+            "  echo \"OLDPF=$cpf SLOT=${{slot:-unknown}}\"\n",
+            "done\n",
+        ),
+        unit = sh_quote(unit_dir),
+        vdbroot = sh_quote(&vdbroot),
+        pkg = sh_quote(pn),
+        newpf = sh_quote(new_pf),
+    );
+    let output = match run_script_stdin(ctx, control, &script) {
+        Ok(output) => output,
+        Err(message) => {
+            shipment.warnings.push(format!("probe: {message}"));
+            return shipment;
+        }
+    };
+    if !output.status.success() {
+        shipment.warnings.push(format!(
+            "probe exited {}",
+            output.status.code().unwrap_or(-1)
+        ));
+        return shipment;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    for (pf, slot) in parse_oldpf_probe(&stdout) {
+        if pf == new_pf {
+            continue;
+        }
+        // Unknown slots ship anyway (fail-open toward staging; the
+        // driver decides what to replace).
+        if slot != "unknown" && slot != new_mainslot {
+            continue;
+        }
+        let old_bz2 = format!("{vdbroot}/{pf}/environment.bz2");
+        match pull_file(ctx, control, &old_bz2) {
+            Ok(compressed) => match bzip2_decompress(&compressed) {
+                Ok(plain) => {
+                    let dest = format!("{unit_dir}/old-env/{pf}");
+                    match send_bytes(ctx, control, &plain, &dest) {
+                        Ok(()) => shipment.shipped.push(pf),
+                        Err(message) => shipment.warnings.push(format!("{pf}: send: {message}")),
+                    }
+                }
+                Err(message) => shipment
+                    .warnings
+                    .push(format!("{pf}: decompress: {message}")),
+            },
+            Err(bz2_message) => {
+                // No bz2 (older `mrg` entries carry only a plain file,
+                // or nothing at all): ship the plain text as-is. When
+                // the plain pull fails too, the original bz2 error goes
+                // into `warnings` (review #3 -- silent staging failures
+                //); a version with neither file warns here and hits the
+                // driver's own warn-and-skip as well.
+                let old_plain = format!("{vdbroot}/{pf}/environment");
+                match pull_file(ctx, control, &old_plain) {
+                    Ok(plain) => {
+                        let dest = format!("{unit_dir}/old-env/{pf}");
+                        if let Err(message) = send_bytes(ctx, control, &plain, &dest) {
+                            shipment.warnings.push(format!("{pf}: send: {message}"));
+                        } else {
+                            shipment.shipped.push(pf);
+                        }
+                    }
+                    Err(plain_message) => shipment.warnings.push(format!(
+                        "{pf}: env pull: {bz2_message}; plain fallback: {plain_message}"
+                    )),
+                }
+            }
+        }
+    }
+    shipment
 }
 
 /// Run the staged phases in order, stopping at the first non-zero
@@ -3162,6 +4310,8 @@ mod tests {
             &staging,
             None,
             &crate::binpkg::GpgVerify::default(),
+            "",
+            false,
         )
         .expect("fixture tbz2 stages");
         // Simulate the streamed file, truncated to half its bytes.
@@ -3195,6 +4345,95 @@ mod tests {
         );
         // Nothing unpacked: the gate runs before tar.
         assert!(!unit.join("image").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #170: end to end through the real `MERGE_FLOW` -- a bundle
+    /// built with a non-empty resolved mask merges without the masked
+    /// files (not on the root, not in the vdb `CONTENTS`), while the
+    /// merge-time aux files land in `var/db/pkg/<cat>/<pf>/`: real
+    /// `_emerge/Binpkg.py:374` (`BINPKGMD5`) and `vartree.py:4581`
+    /// `preinst_mask` (`INSTALL_MASK`). The fixture image ships
+    /// `usr/share/packagepkg/hello.txt`, so the anchored
+    /// `/usr/share/packagepkg` mask stands in for the bed's
+    /// `/usr/share/porttest/im/...` mask.
+    #[test]
+    fn remote_merge_masks_image_and_lands_aux_files_in_vdb() {
+        use md5::Digest as _;
+
+        let tmp = std::env::temp_dir().join(format!(
+            "portuale-remote-mask-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let binpkg = fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2");
+        let staging = tmp.join("staging");
+        std::fs::create_dir_all(&staging).unwrap();
+        let staged = crate::remote_bundle::build_bundle(
+            &binpkg,
+            &staging,
+            None,
+            &crate::binpkg::GpgVerify::default(),
+            "/usr/share/packagepkg",
+            false,
+        )
+        .expect("fixture tbz2 stages");
+        // Deliver the bundle the way the stream would, then run the real
+        // unpack driver.
+        let work = tmp.join("work");
+        let unit = work.join("packagepkg-1.0");
+        std::fs::create_dir_all(&unit).unwrap();
+        std::fs::copy(&staged.tarball, unit.join("bundle.tar")).unwrap();
+        let script = unpack_script(work.to_str().unwrap(), "packagepkg-1.0", staged.byte_count);
+        let output = std::process::Command::new("bash")
+            .args(["-s"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write as _;
+                child.stdin.take().unwrap().write_all(script.as_bytes())?;
+                child.wait_with_output()
+            })
+            .expect("local bash runs the driver");
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        assert!(
+            output.status.success() && stdout.contains("UNPACK=ok"),
+            "unpack driver failed:\n{stdout}"
+        );
+        // Run the real merge driver against a scratch root.
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+        let ctx = local_ctx(root.to_str().unwrap(), work.to_str().unwrap());
+        let markers = run_merge_stage(&ctx, None, unit.to_str().unwrap(), &staged, None)
+            .expect("merge succeeds");
+        assert!(markers.iter().any(|m| m == "MERGE_COPY=ok"), "{markers:?}");
+        assert!(markers.iter().any(|m| m == "MERGE_VDB=ok"), "{markers:?}");
+        // The masked file merged nowhere: not on the root, not in CONTENTS.
+        assert!(
+            !root.join("usr/share/packagepkg/hello.txt").exists(),
+            "masked file must not reach the merged root"
+        );
+        let vdb = root.join("var/db/pkg/dev-libs/packagepkg-1.0");
+        let contents = std::fs::read_to_string(vdb.join("CONTENTS")).unwrap();
+        assert!(
+            !contents.contains("hello.txt"),
+            "masked file must not reach CONTENTS:\n{contents}"
+        );
+        // The merge-time aux files land in the vdb entry verbatim.
+        let bytes = std::fs::read(&binpkg).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(vdb.join("BINPKGMD5")).unwrap(),
+            format!("{:x}\n", md5::Md5::digest(&bytes)),
+        );
+        assert_eq!(
+            std::fs::read_to_string(vdb.join("INSTALL_MASK")).unwrap(),
+            "/usr/share/packagepkg\n",
+        );
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -3439,6 +4678,12 @@ mod tests {
         };
         (unit.to_str().unwrap().to_string(), staged)
     }
+
+    /// Serialises the tests that pin `PORTAGE_CONFIGROOT`: it is
+    /// process-global, and `place_config_root` reads it (the server
+    /// `make.globals` lookup) while `PlacedConfig` overwrites it, so
+    /// two such tests racing would seed from each other's server root.
+    static PLACED_CONFIG_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn local_ctx(root: &str, workdir: &str) -> RemoteContext {
         RemoteContext {
@@ -3892,6 +5137,1806 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(root.join("var/lib/probe.log")).unwrap(),
             "pretend-ok\n"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Build-time hook env, mimicking `__save_ebuild_env` output with a
+    /// stray build-host local (`declare -- x=""`, as the bed's
+    /// `setuid-1.0-1.gpkg.tar` build-time env carries) and build-time
+    /// `FEATURES` (with `buildpkg`). Real binpkg envs also carry the
+    /// hook functions themselves (the phase runs from the saved env,
+    /// never re-sourcing the ebuild) -- `with_postinst` adds the test's
+    /// `pkg_postinst`, without which the regen run is a no-op like
+    /// real's undefined-function case.
+    fn build_time_environment(with_postinst: bool) -> String {
+        let mut lines = vec![
+            "declare -x EAPI=\"8\"",
+            "declare -x CATEGORY=\"dev-libs\"",
+            "declare -x PN=\"regen\"",
+            "declare -x PV=\"1.0\"",
+            "declare -x PR=\"r0\"",
+            "declare -x PVR=\"1.0\"",
+            "declare -x P=\"regen-1.0\"",
+            "declare -x PF=\"regen-1.0\"",
+            "declare -- x=\"\"",
+            "declare -x FEATURES=\"buildpkg sandbox\"",
+            "declare -x PORTAGE_FEATURES=\"buildpkg sandbox\"",
+            "declare -x USE=\"amd64\"",
+        ];
+        if with_postinst {
+            lines.push("pkg_postinst() {\n\texport PT_MERGE_MARKER=\"merge-time\"\n}");
+        }
+        lines.join("\n") + "\n"
+    }
+
+    /// A full client unit for the regen tests: image + build-info (with
+    /// the given ebuild text and `DEFINED_PHASES`) + build-time
+    /// `$UNIT/environment` + the real runtime `bin/` + `filemeta`, so
+    /// both `run_merge_stage` and the regen phase run for real under
+    /// local bash.
+    fn regen_unit(
+        tmp: &std::path::Path,
+        ebuild: &str,
+        defined_phases: &str,
+    ) -> (String, crate::remote_bundle::StagedBundle) {
+        let unit = tmp.join("work/regen-1.0");
+        let image = unit.join("image");
+        let build_info = unit.join("build-info");
+        std::fs::create_dir_all(&build_info).unwrap();
+        let path = image.join("usr/share/regen/payload.txt");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "payload\n").unwrap();
+        for (name, content) in [
+            ("PF", "regen-1.0"),
+            ("CATEGORY", "dev-libs"),
+            ("SLOT", "0"),
+            ("DEFINED_PHASES", defined_phases),
+        ] {
+            std::fs::write(build_info.join(name), content).unwrap();
+        }
+        std::fs::write(build_info.join("regen-1.0.ebuild"), ebuild).unwrap();
+        // The saved env carries the hooks the phase runs (real
+        // `__save_ebuild_env` keeps `pkg_postinst`; an ebuild without
+        // one yields an env without one).
+        let with_postinst = ebuild.contains("pkg_postinst()");
+        std::fs::write(
+            unit.join("environment"),
+            build_time_environment(with_postinst),
+        )
+        .unwrap();
+        // Like a real binpkg, `build-info/` carries the build-time
+        // `environment.bz2` (the MERGE_FLOW vdb fallback the regen
+        // later overwrites).
+        {
+            let compressed = bzip2_compress(build_time_environment(with_postinst).as_bytes())
+                .expect("server bzip2 compresses");
+            std::fs::write(build_info.join("environment.bz2"), &compressed).unwrap();
+        }
+        let status = std::process::Command::new("cp")
+            .args(["-a"])
+            .arg(crate::ebuild_phases::bin_dir())
+            .arg(unit.join("bin"))
+            .status()
+            .expect("cp -a bin");
+        assert!(status.success());
+        // Mirror `build_bundle`: the regen run's
+        // `${PORTAGE_BZIP2_COMMAND}` stand-in rides `bin/`.
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let passthrough = unit.join("bin").join("bzip2-passthrough");
+            std::fs::write(&passthrough, crate::remote_bundle::BZIP2_PASSTHROUGH).unwrap();
+            std::fs::set_permissions(&passthrough, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let entries = crate::remote_bundle::collect_filemeta(&image).unwrap();
+        let filemeta = crate::remote_bundle::render_filemeta(&entries).unwrap();
+        std::fs::write(unit.join("filemeta"), &filemeta).unwrap();
+        let staged = crate::remote_bundle::StagedBundle {
+            tarball: tmp.join("bundle.tar"),
+            byte_count: 0,
+            manifest: crate::remote_bundle::BundleManifest {
+                format: 1,
+                cpv: "dev-libs/regen-1.0".to_string(),
+                slot: "0".to_string(),
+                repo: "test".to_string(),
+                has_environment: true,
+            },
+            eapi: "8".to_string(),
+            category: "dev-libs".to_string(),
+            pn: "regen".to_string(),
+            pv: "1.0".to_string(),
+            pr: "r0".to_string(),
+            pvr: "1.0".to_string(),
+            p: "regen-1.0".to_string(),
+            pf: "regen-1.0".to_string(),
+            phases: Vec::new(),
+            postinst_defined: defined_phases.split_whitespace().any(|w| w == "postinst"),
+        };
+        (unit.to_str().unwrap().to_string(), staged)
+    }
+
+    fn regen_tmp(tag: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "portuale-remote-regen-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    /// Decompress a vdb `environment.bz2` for content assertions.
+    fn read_vdb_env(vdb_env_bz2: &std::path::Path) -> String {
+        let bytes = std::fs::read(vdb_env_bz2).unwrap();
+        let output = std::process::Command::new("bzip2")
+            .args(["-d", "-c", "--"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write as _;
+                child.stdin.take().unwrap().write_all(&bytes)?;
+                child.wait_with_output()
+            })
+            .expect("server bzip2 decompresses");
+        assert!(output.status.success());
+        String::from_utf8(output.stdout).unwrap()
+    }
+
+    /// Backlog #171: a merge through the real driver + the regen
+    /// postinst run leaves `var/db/pkg/<cat>/<pf>/environment.bz2`
+    /// whose decompressed content is the **postinst-time** env -- a
+    /// variable the test sets only in `pkg_postinst` is present, the
+    /// stray build-time `x=""` is gone (real `ebuild.sh`'s own
+    /// `unset path seen i x` after sourcing), `FEATURES` /
+    /// `PORTAGE_FEATURES` are the resolved merge-time value (not the
+    /// build-time `buildpkg` one) -- and **no** plain `environment`
+    /// file (real's vdb has `environment.bz2` only).
+    #[test]
+    fn regen_postinst_rewrites_vdb_env_from_merge_time_env() {
+        let tmp = regen_tmp("merge-time");
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+        let (unit, staged) = regen_unit(
+            &tmp,
+            "EAPI=8\nDESCRIPTION=\"synthetic regen probe\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\npkg_postinst() {\n\texport PT_MERGE_MARKER=\"merge-time\"\n}\n",
+            "postinst",
+        );
+        let ctx = local_ctx(root.to_str().unwrap(), tmp.join("work").to_str().unwrap());
+        let markers = run_merge_stage(&ctx, None, &unit, &staged, None).expect("merge succeeds");
+        assert!(markers.iter().any(|m| m == "MERGE_VDB=ok"), "{markers:?}");
+        let vdb = root.join("var/db/pkg/dev-libs/regen-1.0");
+        // No plain `environment` in the vdb (real's shape).
+        assert!(
+            !vdb.join("environment").exists(),
+            "MERGE_FLOW must not write a plain environment file"
+        );
+        // The vdb still holds the build-time env before the regen.
+        let before = read_vdb_env(&vdb.join("environment.bz2"));
+        assert!(
+            before.contains("declare -- x=\"\""),
+            "pre-regen env:\n{before}"
+        );
+        assert!(before.contains("buildpkg"), "pre-regen env:\n{before}");
+
+        let report =
+            run_postinst_regen_stage(&ctx, None, &unit, &staged, Some("sandbox merge-time"), &[])
+                .expect("regen phase runs");
+        assert_eq!(report.phase_rc, 0);
+        assert!(report.regen_present);
+        assert!(!report.skipped_no_hooks);
+        install_regenerated_env(
+            &ctx,
+            None,
+            &unit,
+            vdb.join("environment.bz2").to_str().unwrap(),
+            Some("bzip2"),
+        )
+        .expect("install succeeds");
+
+        let after = read_vdb_env(&vdb.join("environment.bz2"));
+        assert!(
+            after.contains("declare -x PT_MERGE_MARKER=\"merge-time\""),
+            "postinst-time var missing:\n{after}"
+        );
+        assert!(
+            !after.contains("x=\"\""),
+            "stray build-time x survived:\n{after}"
+        );
+        assert!(
+            !after.contains("buildpkg"),
+            "build-time FEATURES survived:\n{after}"
+        );
+        assert!(
+            after.contains("declare -x FEATURES=\"sandbox merge-time\""),
+            "resolved FEATURES missing:\n{after}"
+        );
+        assert!(
+            after.contains("declare -x PORTAGE_FEATURES=\"sandbox merge-time\""),
+            "resolved PORTAGE_FEATURES missing:\n{after}"
+        );
+        assert!(
+            after.contains("declare -x PORTAGE_BZIP2_COMMAND=\"bzip2\""),
+            "passthrough path leaked into the vdb env:\n{after}"
+        );
+        assert!(
+            !vdb.join("environment").exists(),
+            "install must not write a plain environment file"
+        );
+        // Atomic install leaves no temp behind.
+        assert!(!vdb.join("environment.bz2.portuale-regen-tmp").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #171: a package **without** `pkg_postinst` still gets a
+    /// regenerated env -- real's postinst `EbuildPhase` always starts
+    /// (`phase-functions.sh:1061-1083` runs the hooks, no-op when
+    /// undefined, then the `PORTAGE_UPDATE_ENV` block), so the phase rc
+    /// is 0 and the env carries the merge-time `FEATURES`.
+    #[test]
+    fn regen_runs_without_pkg_postinst() {
+        let tmp = regen_tmp("no-postinst");
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+        let (unit, staged) = regen_unit(
+            &tmp,
+            "EAPI=8\nDESCRIPTION=\"synthetic regen probe, no postinst\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\n",
+            "-",
+        );
+        assert!(!staged.postinst_defined);
+        let ctx = local_ctx(root.to_str().unwrap(), tmp.join("work").to_str().unwrap());
+        run_merge_stage(&ctx, None, &unit, &staged, None).expect("merge succeeds");
+        let report = run_postinst_regen_stage(&ctx, None, &unit, &staged, Some("sandbox"), &[])
+            .expect("regen phase runs");
+        assert_eq!(report.phase_rc, 0, "undefined pkg_postinst is a no-op");
+        assert!(report.regen_present);
+        let vdb = root.join("var/db/pkg/dev-libs/regen-1.0");
+        install_regenerated_env(
+            &ctx,
+            None,
+            &unit,
+            vdb.join("environment.bz2").to_str().unwrap(),
+            Some("bzip2"),
+        )
+        .expect("install succeeds");
+        let after = read_vdb_env(&vdb.join("environment.bz2"));
+        assert!(
+            !after.contains("x=\"\""),
+            "stray build-time x survived:\n{after}"
+        );
+        assert!(
+            after.contains("declare -x FEATURES=\"sandbox\""),
+            "resolved FEATURES missing:\n{after}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #171b task 3: the server's set locale variables reach
+    /// the client phase env, and only those -- a fake getter pins the
+    /// selection (`LANG` set + empty-but-set `LANGUAGE` forwarded in
+    /// `REGEN_LOCALE_VARS` order; unset `LC_ALL` skipped; a
+    /// non-locale variable never consulted).
+    #[test]
+    fn collect_server_locale_forwards_only_set_vars() {
+        use std::collections::HashMap;
+        let env: HashMap<&str, &str> = [("LANG", "C.UTF-8"), ("LANGUAGE", ""), ("TERM", "xterm")]
+            .into_iter()
+            .collect();
+        let got = collect_server_locale(|name| env.get(name).map(|v| v.to_string()));
+        let names: Vec<&str> = got.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["LANG", "LANGUAGE"]);
+        assert_eq!(got[0].1, "C.UTF-8");
+        assert_eq!(got[1].1, "");
+    }
+
+    /// A minimal staged bundle for the render-level regen script test
+    /// (the script only needs the identity fields).
+    fn render_test_staged() -> crate::remote_bundle::StagedBundle {
+        crate::remote_bundle::StagedBundle {
+            tarball: std::path::PathBuf::from("/tmp/bundle.tar"),
+            byte_count: 0,
+            manifest: crate::remote_bundle::BundleManifest {
+                format: 1,
+                cpv: "dev-libs/regen-1.0".to_string(),
+                slot: "0".to_string(),
+                repo: "test".to_string(),
+                has_environment: true,
+            },
+            eapi: "8".to_string(),
+            category: "dev-libs".to_string(),
+            pn: "regen".to_string(),
+            pv: "1.0".to_string(),
+            pr: "r0".to_string(),
+            pvr: "1.0".to_string(),
+            p: "regen-1.0".to_string(),
+            pf: "regen-1.0".to_string(),
+            phases: Vec::new(),
+            postinst_defined: true,
+        }
+    }
+
+    /// Backlog #171b tasks 2-3, render level: the regen script unsets
+    /// `O`, unsets `SHELL`, unsets `LC_ALL` (EAPI 8 is posixish), and
+    /// re-exports exactly the given locale pairs (quoting values like
+    /// any other export).
+    #[test]
+    fn postinst_regen_script_matches_real_shell_shape() {
+        let staged = render_test_staged();
+        let locale = vec![
+            ("LANG".to_string(), "C.UTF-8".to_string()),
+            ("LC_NUMERIC".to_string(), "a b".to_string()),
+        ];
+        let script = postinst_regen_script(
+            "/work/regen-1.0",
+            &staged,
+            "/",
+            "/work",
+            "never",
+            Some("sandbox merge-time"),
+            &locale,
+        );
+        assert!(
+            script.contains("unset O\n"),
+            "O must go (real environ_filter):\n{script}"
+        );
+        assert!(
+            script.contains("unset SHELL\n"),
+            "SHELL must be unset so bash self-inits it (real declare --):\n{script}"
+        );
+        assert!(
+            script.contains("unset LC_ALL\n"),
+            "LC_ALL must go on posixish EAPIs (real split_LC_ALL):\n{script}"
+        );
+        assert!(
+            script.contains("export LANG='C.UTF-8'\n"),
+            "server LANG missing:\n{script}"
+        );
+        assert!(
+            script.contains("export LC_NUMERIC='a b'\n"),
+            "server LC_* missing or misquoted:\n{script}"
+        );
+        assert!(
+            !script.contains("LANGUAGE"),
+            "uninjected locale must not appear:\n{script}"
+        );
+    }
+
+    /// Backlog #171b tasks 2-3, stage level: a real regen run under
+    /// local bash leaves no `O` line in `environment.regen` (real
+    /// `doebuild.py:475` sets `mysettings["O"]` but
+    /// `config.environ()` drops it via `special_env_vars.py:
+    /// environ_filter`), records `SHELL` as `declare --` (bash's own,
+    /// unexported -- real has no exported `SHELL` to inherit), and
+    /// carries the injected locale values as `declare -x`.
+    #[test]
+    fn regen_matches_real_o_shell_and_locale() {
+        let tmp = regen_tmp("o-shell-locale");
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+        let (unit, staged) = regen_unit(
+            &tmp,
+            "EAPI=8\nDESCRIPTION=\"synthetic regen probe\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\npkg_postinst() {\n\texport PT_MERGE_MARKER=\"merge-time\"\n}\n",
+            "postinst",
+        );
+        let ctx = local_ctx(root.to_str().unwrap(), tmp.join("work").to_str().unwrap());
+        let locale = vec![
+            ("LANG".to_string(), "C.UTF-8".to_string()),
+            ("LC_MESSAGES".to_string(), "C.UTF-8".to_string()),
+        ];
+        let report = run_postinst_regen_stage(&ctx, None, &unit, &staged, Some("sandbox"), &locale)
+            .expect("regen phase runs");
+        assert_eq!(report.phase_rc, 0);
+        assert!(report.regen_present);
+        let regen =
+            std::fs::read_to_string(format!("{unit}/environment.regen")).expect("regen file");
+        for line in regen.lines() {
+            let Some(rest) = line.strip_prefix("declare ") else {
+                continue;
+            };
+            let rest = rest
+                .strip_prefix("-x ")
+                .or_else(|| rest.strip_prefix("-- "))
+                .unwrap_or(rest);
+            let name = rest.split(['=', ' ']).next().unwrap_or("");
+            assert_ne!(
+                name, "O",
+                "unit-local O leaked into the regen'd env:\n{regen}"
+            );
+        }
+        assert!(
+            regen.contains("declare -- SHELL="),
+            "SHELL must be unexported like real's:\n{regen}"
+        );
+        assert!(
+            !regen.contains("declare -x SHELL="),
+            "exported SHELL leaked into the regen'd env:\n{regen}"
+        );
+        assert!(
+            regen.contains("declare -x LANG=\"C.UTF-8\""),
+            "server LANG missing:\n{regen}"
+        );
+        assert!(
+            regen.contains("declare -x LC_MESSAGES=\"C.UTF-8\""),
+            "server LC_* missing:\n{regen}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #171c task 1, unit level: the `split_LC_ALL` port fans a
+    /// set `LC_ALL` out over all twelve real `locale_categories` and
+    /// drops it (real `portage/util/locale.py:22-36,160` +
+    /// `config.py:3374-3385`), fills an unset `LANG`, never clobbers
+    /// an explicit one, drops an empty `LC_ALL` without fanning out,
+    /// leaves `LANGUAGE` alone, and passes everything through
+    /// untouched on non-posixish EAPIs.
+    #[test]
+    fn split_server_locale_fans_lc_all_out_like_real() {
+        // The twelve `locale_categories` real fans out over
+        // (`portage/util/locale.py:22-36`) -- hardcoded here (not via
+        // `REAL_LOCALE_CATEGORIES`) so the test pins the list's
+        // content, not just its own reference to it.
+        const TWELVE: &[&str] = &[
+            "LC_COLLATE",
+            "LC_CTYPE",
+            "LC_MONETARY",
+            "LC_MESSAGES",
+            "LC_NUMERIC",
+            "LC_TIME",
+            "LC_ADDRESS",
+            "LC_IDENTIFICATION",
+            "LC_MEASUREMENT",
+            "LC_NAME",
+            "LC_PAPER",
+            "LC_TELEPHONE",
+        ];
+        assert_eq!(REAL_LOCALE_CATEGORIES, TWELVE);
+        assert!(eapi_is_posixish("6"));
+        assert!(eapi_is_posixish("8"));
+        assert!(!eapi_is_posixish("5"));
+        let get = |pairs: &[(String, String)], name: &str| {
+            pairs
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, v)| v.clone())
+        };
+        // The brief's case: server `LC_ALL=C.UTF-8` alone → `LANG` +
+        // all twelve categories carry it, no `LC_ALL`.
+        let out = split_server_locale(&[("LC_ALL".to_string(), "C.UTF-8".to_string())], "8");
+        assert!(get(&out, "LC_ALL").is_none(), "LC_ALL survived:\n{out:?}");
+        assert_eq!(get(&out, "LANG").as_deref(), Some("C.UTF-8"));
+        for name in TWELVE {
+            assert_eq!(
+                get(&out, name).as_deref(),
+                Some("C.UTF-8"),
+                "{name} not split"
+            );
+        }
+        // Real overwrites unconditionally; an explicit `LANG` still wins.
+        let out = split_server_locale(
+            &[
+                ("LC_ALL".to_string(), "C.UTF-8".to_string()),
+                ("LC_MESSAGES".to_string(), "en_US.UTF-8".to_string()),
+                ("LANG".to_string(), "POSIX".to_string()),
+                ("LANGUAGE".to_string(), "de".to_string()),
+            ],
+            "8",
+        );
+        assert_eq!(get(&out, "LC_MESSAGES").as_deref(), Some("C.UTF-8"));
+        assert_eq!(get(&out, "LANG").as_deref(), Some("POSIX"));
+        assert_eq!(get(&out, "LANGUAGE").as_deref(), Some("de"));
+        assert!(get(&out, "LC_ALL").is_none());
+        // Set-but-empty `LC_ALL` is dropped, never fanned out.
+        let out = split_server_locale(
+            &[
+                ("LC_ALL".to_string(), String::new()),
+                ("LANG".to_string(), "C".to_string()),
+            ],
+            "8",
+        );
+        assert!(get(&out, "LC_ALL").is_none());
+        assert_eq!(get(&out, "LANG").as_deref(), Some("C"));
+        assert!(get(&out, "LC_CTYPE").is_none());
+        // Non-posixish EAPIs keep `LC_ALL` as-is (real never splits).
+        let input = vec![("LC_ALL".to_string(), "C.UTF-8".to_string())];
+        assert_eq!(split_server_locale(&input, "5"), input);
+    }
+
+    /// Backlog #171c task 1, stage level: a real regen run with only
+    /// `LC_ALL=C.UTF-8` forwarded records `LANG` + all twelve real
+    /// locale categories as `C.UTF-8` and no `LC_ALL` line (bed run
+    /// `l31-20260927T052232Z`: real has `LANG` + split categories where
+    /// `mrg` echoed `LC_ALL` back).
+    #[test]
+    fn regen_splits_lc_all_like_real() {
+        let tmp = regen_tmp("lc-all-split");
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+        let (unit, staged) = regen_unit(
+            &tmp,
+            "EAPI=8\nDESCRIPTION=\"synthetic regen probe\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\npkg_postinst() {\n\texport PT_MERGE_MARKER=\"merge-time\"\n}\n",
+            "postinst",
+        );
+        let ctx = local_ctx(root.to_str().unwrap(), tmp.join("work").to_str().unwrap());
+        let locale = vec![("LC_ALL".to_string(), "C.UTF-8".to_string())];
+        let report = run_postinst_regen_stage(&ctx, None, &unit, &staged, Some("sandbox"), &locale)
+            .expect("regen phase runs");
+        assert_eq!(report.phase_rc, 0);
+        assert!(report.regen_present);
+        let regen =
+            std::fs::read_to_string(format!("{unit}/environment.regen")).expect("regen file");
+        assert!(
+            regen.contains("declare -x LANG=\"C.UTF-8\""),
+            "split LANG missing:\n{regen}"
+        );
+        for name in [
+            "LC_COLLATE",
+            "LC_CTYPE",
+            "LC_MESSAGES",
+            "LC_MONETARY",
+            "LC_NUMERIC",
+            "LC_TIME",
+            "LC_ADDRESS",
+            "LC_IDENTIFICATION",
+            "LC_MEASUREMENT",
+            "LC_NAME",
+            "LC_PAPER",
+            "LC_TELEPHONE",
+        ] {
+            assert!(
+                regen.contains(&format!("declare -x {name}=\"C.UTF-8\"")),
+                "split {name} missing:\n{regen}"
+            );
+        }
+        assert!(
+            !regen.lines().any(|line| line.contains("LC_ALL")),
+            "LC_ALL leaked into the regen'd env:\n{regen}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #171c task 4: the `--remote-binpkg` trial path places
+    /// `/etc/portage` through the shared `place_config_root` helper --
+    /// `Server` used directly, `Client` pulled over local transport and
+    /// re-rooted -- with the `PORTAGE_CONFIGROOT` override held for the
+    /// resolve, so the same `load_repos_and_config` +
+    /// `config_install_mask` / `config_features_string` /
+    /// `config_bzip2_command` getters the plan path uses see the placed
+    /// tree. A synthetic client tree pins both placements (`server:`
+    /// takes a config root in real-root layout, `client:` the
+    /// `/etc/portage` dir itself -- the contract suite's
+    /// `test_mrg_remote_resolve_merges_a_binhost_binary` uses
+    /// `server:{root}` the same way); the pulled temp dir is gone after
+    /// the `Client` resolve (task 3).
+    #[test]
+    fn placed_config_root_covers_both_placements() {
+        // `PORTAGE_CONFIGROOT` is process-global (see
+        // `PLACED_CONFIG_ENV_LOCK`); pin it to an empty dir so the
+        // host's own `/usr/share/portage/config/make.globals` -- when
+        // one is installed -- cannot leak into this hermetic resolve.
+        let _env_guard = PLACED_CONFIG_ENV_LOCK.lock().unwrap();
+        let tmp = regen_tmp("placed-config");
+        let pinned_server = tmp.join("pinned-server");
+        std::fs::create_dir_all(&pinned_server).unwrap();
+        let saved_config_root = std::env::var_os("PORTAGE_CONFIGROOT");
+        // SAFETY: held `PLACED_CONFIG_ENV_LOCK`; no other test in this
+        // binary pins `PORTAGE_CONFIGROOT` without it.
+        unsafe {
+            std::env::set_var("PORTAGE_CONFIGROOT", &pinned_server);
+        }
+        let config_root = tmp.join("clientroot");
+        let client_etc = config_root.join("etc/portage");
+        let repo = tmp.join("repo");
+        std::fs::create_dir_all(client_etc.join("repos.conf")).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::write(
+            client_etc.join("repos.conf/testrepo.conf"),
+            format!(
+                "[DEFAULT]\nmain-repo = testrepo\n\n[testrepo]\nlocation = {}\n",
+                repo.display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            client_etc.join("make.conf"),
+            "INSTALL_MASK=\"/usr/share/porttest/im/drop.txt *.la\"\nFEATURES=\"sandbox merge-time\"\nPORTAGE_BZIP2_COMMAND=\"lbzip2\"\n",
+        )
+        .unwrap();
+        // `config_install_mask` prefers the process `INSTALL_MASK` env
+        // var; clear it so the test pins the placed file.
+        let saved_mask = std::env::var_os("INSTALL_MASK");
+        // SAFETY: no other test in this binary sets `INSTALL_MASK`.
+        unsafe {
+            std::env::remove_var("INSTALL_MASK");
+        }
+        let eroot = tmp.join("eroot");
+        let mut client_tmp: Option<std::path::PathBuf> = None;
+        for placement in [
+            ConfigPlacement::Client(client_etc.to_string_lossy().into_owned()),
+            ConfigPlacement::Server(config_root.to_string_lossy().into_owned()),
+        ] {
+            let mut ctx = local_ctx(
+                tmp.join("root").to_str().unwrap(),
+                tmp.join("work").to_str().unwrap(),
+            );
+            ctx.etc_portage = placement.clone();
+            let placed = place_config_root(&ctx, None).expect("placement resolves");
+            // Both shapes resolve to a real-root layout: the `Client`
+            // pull is re-rooted as `<tmp>/etc/portage`, the `Server`
+            // root is used directly.
+            assert!(
+                placed.dir.join("etc/portage/make.conf").is_file(),
+                "placed root lacks the client make.conf: {}",
+                placed.dir.display()
+            );
+            assert_eq!(
+                std::env::var_os("PORTAGE_CONFIGROOT"),
+                Some(placed.dir.as_os_str().to_os_string()),
+                "config-root override not held for the resolve"
+            );
+            // The same shared resolver + getters `run_bundle_stage`
+            // feeds into `run_binpkg_flow`.
+            let (repos, config) = crate::pretend::load_repos_and_config(&placed.dir, &eroot)
+                .expect("placed client config resolves");
+            assert!(repos.iter().any(|r| r.is_main));
+            let (mask, _) = crate::pretend::config_install_mask(&config);
+            assert_eq!(mask, "/usr/share/porttest/im/drop.txt *.la");
+            assert_eq!(
+                crate::pretend::config_features_string(&config),
+                "merge-time sandbox"
+            );
+            assert_eq!(crate::pretend::config_bzip2_command(&config), "lbzip2");
+            if matches!(placement, ConfigPlacement::Client(_)) {
+                client_tmp = Some(placed.dir.clone());
+            }
+            drop(placed);
+        }
+        // SAFETY: same as above.
+        unsafe {
+            match saved_mask {
+                Some(value) => std::env::set_var("INSTALL_MASK", value),
+                None => std::env::remove_var("INSTALL_MASK"),
+            }
+            match saved_config_root {
+                Some(value) => std::env::set_var("PORTAGE_CONFIGROOT", value),
+                None => std::env::remove_var("PORTAGE_CONFIGROOT"),
+            }
+        }
+        // Task 3: the pulled temp copy is removed best-effort with the
+        // resolve; the server source tree is untouched.
+        assert!(
+            client_tmp.as_ref().is_some_and(|dir| !dir.exists()),
+            "pulled client config temp dir leaked: {client_tmp:?}"
+        );
+        assert!(
+            client_etc.join("make.conf").is_file(),
+            "server placement must not remove the source tree"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #171 follow-up 3 (owner Q9 = b): the pulled client
+    /// config stacks the **server's** `make.globals` as its bottom
+    /// layer. A synthetic server root carries
+    /// `usr/share/portage/config/make.globals` with
+    /// `FEATURES="news sandbox"`; the pulled client `make.conf` says
+    /// `FEATURES="-news sign"` -- real's incremental fold
+    /// (`const.INCREMENTALS`, `config.py:446-499`) resolves that to
+    /// `sandbox sign`, and the regen'd vdb env carries exactly that
+    /// list (not the build-time `buildpkg` one). `PORTAGE_CONFIGROOT`
+    /// is pinned to the synthetic server root (process-global; see
+    /// `PLACED_CONFIG_ENV_LOCK`) and ambient `FEATURES`/`INSTALL_MASK`
+    /// cleared so the host cannot leak into the hermetic resolve.
+    #[test]
+    fn remote_client_config_stacks_server_make_globals() {
+        let _env_guard = PLACED_CONFIG_ENV_LOCK.lock().unwrap();
+        let tmp = regen_tmp("server-globals");
+        let server_root = tmp.join("serverroot");
+        std::fs::create_dir_all(server_root.join("usr/share/portage/config")).unwrap();
+        std::fs::write(
+            server_root.join("usr/share/portage/config/make.globals"),
+            "FEATURES=\"news sandbox\"\n",
+        )
+        .unwrap();
+        let client_etc = tmp.join("clientroot/etc/portage");
+        let repo = tmp.join("repo");
+        std::fs::create_dir_all(client_etc.join("repos.conf")).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::write(
+            client_etc.join("repos.conf/testrepo.conf"),
+            format!(
+                "[DEFAULT]\nmain-repo = testrepo\n\n[testrepo]\nlocation = {}\n",
+                repo.display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(client_etc.join("make.conf"), "FEATURES=\"-news sign\"\n").unwrap();
+        let saved_config_root = std::env::var_os("PORTAGE_CONFIGROOT");
+        let saved_features = std::env::var_os("FEATURES");
+        let saved_mask = std::env::var_os("INSTALL_MASK");
+        // SAFETY: held `PLACED_CONFIG_ENV_LOCK`; no other test in this
+        // binary pins these without it.
+        unsafe {
+            std::env::set_var("PORTAGE_CONFIGROOT", &server_root);
+            std::env::remove_var("FEATURES");
+            std::env::remove_var("INSTALL_MASK");
+        }
+        let mut ctx = local_ctx(
+            tmp.join("root").to_str().unwrap(),
+            tmp.join("work").to_str().unwrap(),
+        );
+        ctx.etc_portage = ConfigPlacement::Client(client_etc.to_string_lossy().into_owned());
+        let placed = place_config_root(&ctx, None).expect("client placement resolves");
+        assert!(
+            placed
+                .dir
+                .join("usr/share/portage/config/make.globals")
+                .is_file(),
+            "the server make.globals must be seeded under the pulled root"
+        );
+        let eroot = tmp.join("eroot");
+        let (repos, config) = crate::pretend::load_repos_and_config(&placed.dir, &eroot)
+            .expect("placed client config resolves");
+        assert!(repos.iter().any(|r| r.is_main));
+        let resolved = crate::pretend::config_features_string(&config);
+        assert_eq!(
+            resolved, "sandbox sign",
+            "incremental fold over the seeded defaults"
+        );
+        drop(placed);
+        // SAFETY: same as above.
+        unsafe {
+            match saved_config_root {
+                Some(value) => std::env::set_var("PORTAGE_CONFIGROOT", value),
+                None => std::env::remove_var("PORTAGE_CONFIGROOT"),
+            }
+            match saved_features {
+                Some(value) => std::env::set_var("FEATURES", value),
+                None => std::env::remove_var("FEATURES"),
+            }
+            match saved_mask {
+                Some(value) => std::env::set_var("INSTALL_MASK", value),
+                None => std::env::remove_var("INSTALL_MASK"),
+            }
+        }
+        // The regenerated vdb env carries the resolved list: merge the
+        // synthetic unit, run the regen postinst with the resolved
+        // `FEATURES`, and read the installed `environment.bz2`.
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+        let (unit, staged) = regen_unit(
+            &tmp,
+            "EAPI=8\nDESCRIPTION=\"synthetic globals probe\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\n",
+            "-",
+        );
+        let ctx = local_ctx(root.to_str().unwrap(), tmp.join("work").to_str().unwrap());
+        run_merge_stage(&ctx, None, &unit, &staged, None).expect("merge succeeds");
+        let report = run_postinst_regen_stage(&ctx, None, &unit, &staged, Some(&resolved), &[])
+            .expect("regen phase runs");
+        assert_eq!(report.phase_rc, 0);
+        assert!(report.regen_present);
+        let vdb = root.join("var/db/pkg/dev-libs/regen-1.0");
+        install_regenerated_env(
+            &ctx,
+            None,
+            &unit,
+            vdb.join("environment.bz2").to_str().unwrap(),
+            Some("bzip2"),
+        )
+        .expect("install succeeds");
+        let after = read_vdb_env(&vdb.join("environment.bz2"));
+        assert!(
+            after.contains("declare -x FEATURES=\"sandbox sign\""),
+            "resolved FEATURES missing:\n{after}"
+        );
+        assert!(
+            after.contains("declare -x PORTAGE_FEATURES=\"sandbox sign\""),
+            "resolved PORTAGE_FEATURES missing:\n{after}"
+        );
+        assert!(
+            !after.contains("buildpkg"),
+            "build-time FEATURES survived:\n{after}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #171 follow-up 4 (owner Q10 = b) scaffolding: a
+    /// synthetic server root (`etc/portage/repos.conf` + the server's
+    /// own `make.globals`, the two server-side inputs `place_config_root`
+    /// reads before repointing `PORTAGE_CONFIGROOT`). Returns the root;
+    /// repos are added per-test with `l171e_server_repo`.
+    fn l171e_server_root(tmp: &std::path::Path, repos_conf: &str) -> std::path::PathBuf {
+        let server_root = tmp.join("serverroot");
+        std::fs::create_dir_all(server_root.join("etc/portage/repos.conf")).unwrap();
+        std::fs::create_dir_all(server_root.join("usr/share/portage/config")).unwrap();
+        std::fs::write(
+            server_root.join("etc/portage/repos.conf/l171e.conf"),
+            repos_conf,
+        )
+        .unwrap();
+        std::fs::write(
+            server_root.join("usr/share/portage/config/make.globals"),
+            "FEATURES=\"sandbox news sign\"\n",
+        )
+        .unwrap();
+        server_root
+    }
+
+    /// Add a server repo with one profile `<location>/profiles/<rel>`
+    /// carrying `make.defaults` `FEATURES="<features>"` (plus a
+    /// `repo_name` file so `find_repos` keeps the section name).
+    fn l171e_server_repo(
+        server_root: &std::path::Path,
+        name: &str,
+        rel: &str,
+        features: &str,
+    ) -> std::path::PathBuf {
+        let location = server_root.join("repos").join(name);
+        let profile = location.join("profiles").join(rel);
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::write(
+            profile.join("make.defaults"),
+            format!("FEATURES=\"{features}\"\n"),
+        )
+        .unwrap();
+        std::fs::write(location.join("profiles/repo_name"), format!("{name}\n")).unwrap();
+        location
+    }
+
+    /// Pin `PORTAGE_CONFIGROOT` at a synthetic server root with ambient
+    /// `FEATURES`/`INSTALL_MASK` cleared (all process-global; shares
+    /// `PLACED_CONFIG_ENV_LOCK`), restoring everything on drop while the
+    /// lock is still held.
+    struct ServerEnvPin {
+        saved_config_root: Option<std::ffi::OsString>,
+        saved_features: Option<std::ffi::OsString>,
+        saved_mask: Option<std::ffi::OsString>,
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl ServerEnvPin {
+        fn pin(server_root: &std::path::Path) -> Self {
+            let guard = PLACED_CONFIG_ENV_LOCK.lock().unwrap();
+            let saved_config_root = std::env::var_os("PORTAGE_CONFIGROOT");
+            let saved_features = std::env::var_os("FEATURES");
+            let saved_mask = std::env::var_os("INSTALL_MASK");
+            // SAFETY: held `PLACED_CONFIG_ENV_LOCK`; no other test in
+            // this binary pins these without it.
+            unsafe {
+                std::env::set_var("PORTAGE_CONFIGROOT", server_root);
+                std::env::remove_var("FEATURES");
+                std::env::remove_var("INSTALL_MASK");
+            }
+            Self {
+                saved_config_root,
+                saved_features,
+                saved_mask,
+                _guard: guard,
+            }
+        }
+    }
+
+    impl Drop for ServerEnvPin {
+        fn drop(&mut self) {
+            // SAFETY: same as above.
+            unsafe {
+                match self.saved_config_root.take() {
+                    Some(value) => std::env::set_var("PORTAGE_CONFIGROOT", value),
+                    None => std::env::remove_var("PORTAGE_CONFIGROOT"),
+                }
+                match self.saved_features.take() {
+                    Some(value) => std::env::set_var("FEATURES", value),
+                    None => std::env::remove_var("FEATURES"),
+                }
+                match self.saved_mask.take() {
+                    Some(value) => std::env::set_var("INSTALL_MASK", value),
+                    None => std::env::remove_var("INSTALL_MASK"),
+                }
+            }
+        }
+    }
+
+    /// Resolve a placed client tree's config against explicit server
+    /// repos (kept for the l171e remap tests, which pin the rewritten
+    /// link against hand-picked server repos; the production path now
+    /// resolves through the shared `load_repos_and_config` -- see
+    /// `remote_client_without_repos_conf_resolves_on_the_production_path`).
+    fn l171e_resolve_with_server_repos(
+        placed_dir: &std::path::Path,
+        server_root: &std::path::Path,
+        eroot: &std::path::Path,
+    ) -> portage_profile::Config {
+        let server_repos = portage_repo::find_repos(server_root).expect("server repos resolve");
+        let main = server_repos
+            .iter()
+            .find(|repo| repo.is_main)
+            .expect("a main repo");
+        let overlays: Vec<(String, std::path::PathBuf)> = server_repos
+            .iter()
+            .filter(|repo| !repo.is_main)
+            .map(|repo| (repo.name.clone(), repo.location.clone()))
+            .collect();
+        let aliases: Vec<(String, std::path::PathBuf)> = server_repos
+            .iter()
+            .flat_map(|repo| {
+                repo.aliases
+                    .iter()
+                    .map(|alias| (alias.clone(), repo.location.clone()))
+            })
+            .collect();
+        let masters: std::collections::HashMap<String, Vec<std::path::PathBuf>> = server_repos
+            .iter()
+            .map(|repo| (repo.name.clone(), repo.masters.clone()))
+            .collect();
+        portage_profile::resolve_config(
+            placed_dir,
+            &main.location,
+            &overlays,
+            &aliases,
+            &main.name,
+            &masters,
+            eroot,
+        )
+        .expect("placed client config resolves")
+    }
+
+    const L171E_REL: &str = "default/linux/amd64/23.0";
+
+    /// Backlog #171 follow-up 4, step 2: a dangling absolute
+    /// `make.profile` into the client's repo path plus a client
+    /// `repos.conf` naming that repo resolves to the **same-named**
+    /// server repo's profile -- even when the main repo provides the
+    /// same relative profile with different content (a pure
+    /// main-first scan would pick the wrong one). Real's stacking
+    /// order holds: server `make.globals` + profile + client
+    /// `make.conf` (`config.py:446-499`, `const.INCREMENTALS`).
+    #[test]
+    fn remote_client_make_profile_resolves_against_same_named_server_repo() {
+        let tmp = regen_tmp("make-profile-name");
+        let server_root = l171e_server_root(
+            &tmp,
+            &format!(
+                "[DEFAULT]\nmain-repo = gentoo\n\n[gentoo]\nlocation = {}\n\n[custom]\nlocation = {}\n",
+                tmp.join("serverroot/repos/gentoo").display(),
+                tmp.join("serverroot/repos/custom").display(),
+            ),
+        );
+        l171e_server_repo(&server_root, "gentoo", L171E_REL, "otherfeat -sign");
+        let custom_profile = l171e_server_repo(&server_root, "custom", L171E_REL, "filecaps -sign");
+        // The client's repo path: text only, never created (dangling,
+        // like a client holding its tree elsewhere).
+        let prefix = "/var/db/repos-client-l171e/custom";
+        let client_etc = tmp.join("clientroot/etc/portage");
+        std::fs::create_dir_all(client_etc.join("repos.conf")).unwrap();
+        std::fs::write(
+            client_etc.join("repos.conf/l171e.conf"),
+            format!("[DEFAULT]\nmain-repo = custom\n\n[custom]\nlocation = {prefix}\n"),
+        )
+        .unwrap();
+        std::fs::write(client_etc.join("make.conf"), "FEATURES=\"-news custom\"\n").unwrap();
+        std::os::unix::fs::symlink(
+            format!("{prefix}/profiles/{L171E_REL}"),
+            client_etc.join("make.profile"),
+        )
+        .unwrap();
+        let _env = ServerEnvPin::pin(&server_root);
+        let mut ctx = local_ctx(
+            tmp.join("root").to_str().unwrap(),
+            tmp.join("work").to_str().unwrap(),
+        );
+        ctx.etc_portage = ConfigPlacement::Client(client_etc.to_string_lossy().into_owned());
+        let placed = place_config_root(&ctx, None).expect("client placement resolves");
+        // Remapped onto the same-named server repo, not the main one.
+        assert_eq!(
+            std::fs::read_link(placed.dir.join("etc/portage/make.profile")).unwrap(),
+            custom_profile.join("profiles").join(L171E_REL),
+            "the pulled link must point at the same-named server repo's profile"
+        );
+        let eroot = tmp.join("eroot");
+        let (repos, config) = crate::pretend::load_repos_and_config(&placed.dir, &eroot)
+            .expect("placed client config resolves");
+        assert!(repos.iter().any(|repo| repo.is_main));
+        assert_eq!(
+            crate::pretend::config_features_string(&config),
+            "custom filecaps sandbox",
+            "server make.globals + same-named profile + client make.conf"
+        );
+        drop(placed);
+        drop(_env);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #171 follow-up 4, step 3: with **no** client `repos.conf`
+    /// (the owner Q10 client holds no repo at all) the dangling link
+    /// resolves by `profiles/<rel>` against the server repos.
+    #[test]
+    fn remote_client_make_profile_resolves_without_client_repos_conf() {
+        let tmp = regen_tmp("make-profile-norepos");
+        let server_root = l171e_server_root(
+            &tmp,
+            &format!(
+                "[DEFAULT]\nmain-repo = gentoo\n\n[gentoo]\nlocation = {}\n",
+                tmp.join("serverroot/repos/gentoo").display(),
+            ),
+        );
+        let server_profile = l171e_server_repo(&server_root, "gentoo", L171E_REL, "filecaps -sign");
+        let target = format!("/var/db/repos-client-l171e/gentoo/profiles/{L171E_REL}");
+        let client_etc = tmp.join("clientroot/etc/portage");
+        std::fs::create_dir_all(&client_etc).unwrap();
+        std::fs::write(client_etc.join("make.conf"), "FEATURES=\"-news custom\"\n").unwrap();
+        std::os::unix::fs::symlink(&target, client_etc.join("make.profile")).unwrap();
+        let _env = ServerEnvPin::pin(&server_root);
+        let mut ctx = local_ctx(
+            tmp.join("root").to_str().unwrap(),
+            tmp.join("work").to_str().unwrap(),
+        );
+        ctx.etc_portage = ConfigPlacement::Client(client_etc.to_string_lossy().into_owned());
+        let placed = place_config_root(&ctx, None).expect("client placement resolves");
+        assert_eq!(
+            std::fs::read_link(placed.dir.join("etc/portage/make.profile")).unwrap(),
+            server_profile.join("profiles").join(L171E_REL),
+        );
+        let eroot = tmp.join("eroot");
+        let config = l171e_resolve_with_server_repos(&placed.dir, &server_root, &eroot);
+        assert_eq!(
+            crate::pretend::config_features_string(&config),
+            "custom filecaps sandbox",
+            "server make.globals + profile + client make.conf"
+        );
+        drop(placed);
+        drop(_env);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #171 follow-up 5 (l171f; review of l171e): the owner
+    /// Q10 client holds no `repos.conf` at all -- the pulled config
+    /// must resolve on the PRODUCTION path (`place_config_root` +
+    /// `load_repos_and_config`, the shared chain `run_remote_resolve`
+    /// / `pretend::run` and `run_bundle_stage` both resolve through),
+    /// not just through the test-only
+    /// `l171e_resolve_with_server_repos` helper. The server root
+    /// carries its repos *only* in the global
+    /// `usr/share/portage/config/repos.conf` slot (real's
+    /// `repository/config.py:1488-1508` reads the global file before
+    /// the user's); the seed copies it into the placed root because
+    /// the pulled tree has none, the dangling `make.profile` remaps
+    /// onto the server repo, and the resolved `FEATURES` stack server
+    /// globals + profile + client `make.conf` in real's order
+    /// (`config.py:446-499`, `const.INCREMENTALS`).
+    #[test]
+    fn remote_client_without_repos_conf_resolves_on_the_production_path() {
+        let tmp = regen_tmp("norepos-production");
+        // A server root with repos in the global slot (the exact file
+        // `place_config_root` seeds from) *and* a user slot -- like a
+        // real server, which always has `/etc/portage/repos.conf`, so
+        // `find_repos` on the server root itself keeps working. The
+        // user slot carries an extra overlay the global slot lacks, so
+        // the placed tree pins the seed's source: only the global
+        // content may arrive.
+        let server_root = tmp.join("serverroot");
+        std::fs::create_dir_all(server_root.join("usr/share/portage/config")).unwrap();
+        std::fs::create_dir_all(server_root.join("etc/portage/repos.conf")).unwrap();
+        let global_conf = format!(
+            "[DEFAULT]\nmain-repo = gentoo\n\n[gentoo]\nlocation = {}\n",
+            tmp.join("serverroot/repos/gentoo").display(),
+        );
+        std::fs::write(
+            server_root.join("usr/share/portage/config/repos.conf"),
+            &global_conf,
+        )
+        .unwrap();
+        let ovl = tmp.join("serverroot/repos/ovl");
+        std::fs::create_dir_all(&ovl).unwrap();
+        std::fs::write(
+            server_root.join("etc/portage/repos.conf/l171f.conf"),
+            format!(
+                "[DEFAULT]\nmain-repo = gentoo\n\n[ovl]\nlocation = {}\n",
+                ovl.display(),
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            server_root.join("usr/share/portage/config/make.globals"),
+            "FEATURES=\"sandbox news sign\"\n",
+        )
+        .unwrap();
+        let server_profile = l171e_server_repo(&server_root, "gentoo", L171E_REL, "filecaps -sign");
+        let target = format!("/var/db/repos-client-l171f/gentoo/profiles/{L171E_REL}");
+        let client_etc = tmp.join("clientroot/etc/portage");
+        std::fs::create_dir_all(&client_etc).unwrap();
+        std::fs::write(client_etc.join("make.conf"), "FEATURES=\"-news custom\"\n").unwrap();
+        std::os::unix::fs::symlink(&target, client_etc.join("make.profile")).unwrap();
+        let _env = ServerEnvPin::pin(&server_root);
+        let mut ctx = local_ctx(
+            tmp.join("root").to_str().unwrap(),
+            tmp.join("work").to_str().unwrap(),
+        );
+        ctx.etc_portage = ConfigPlacement::Client(client_etc.to_string_lossy().into_owned());
+        let placed = place_config_root(&ctx, None).expect("client placement resolves");
+        assert_eq!(
+            std::fs::read_link(placed.dir.join("etc/portage/make.profile")).unwrap(),
+            server_profile.join("profiles").join(L171E_REL),
+            "the dangling client link must remap onto the server repo's profile"
+        );
+        let eroot = tmp.join("eroot");
+        // The production resolver both mrg paths share -- previously
+        // `Err(NoReposConf)` here (review of l171e).
+        let (repos, config) = crate::pretend::load_repos_and_config(&placed.dir, &eroot)
+            .expect("placed client config resolves without a client repos.conf");
+        // Only the seeded global content arrived: the server user
+        // slot's overlay must not leak into the placed resolve.
+        assert!(
+            repos.iter().all(|repo| repo.name == "gentoo"),
+            "placed repos must come from the seeded global file: {:?}",
+            repos.iter().map(|repo| &repo.name).collect::<Vec<_>>()
+        );
+        assert!(repos.iter().any(|repo| repo.is_main));
+        assert_eq!(
+            crate::pretend::config_features_string(&config),
+            "custom filecaps sandbox",
+            "server make.globals + server profile + client make.conf"
+        );
+        drop(placed);
+        drop(_env);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #171 follow-up 4, step 5: an unresolvable target fails
+    /// loudly -- a `!!!` message naming the target -- never a silent
+    /// empty chain.
+    #[test]
+    fn remote_client_make_profile_unresolvable_fails_loudly() {
+        let tmp = regen_tmp("make-profile-loud");
+        let server_root = l171e_server_root(
+            &tmp,
+            &format!(
+                "[DEFAULT]\nmain-repo = gentoo\n\n[gentoo]\nlocation = {}\n",
+                tmp.join("serverroot/repos/gentoo").display(),
+            ),
+        );
+        l171e_server_repo(
+            &server_root,
+            "gentoo",
+            "default/linux/amd64/22.0",
+            "filecaps -sign",
+        );
+        let target = "/var/db/repos-client-l171e/gentoo/profiles/default/linux/amd64/99.9";
+        let client_etc = tmp.join("clientroot/etc/portage");
+        std::fs::create_dir_all(client_etc.join("repos.conf")).unwrap();
+        std::fs::write(
+            client_etc.join("repos.conf/l171e.conf"),
+            "[DEFAULT]\nmain-repo = gentoo\n\n[gentoo]\nlocation = /var/db/repos-client-l171e/gentoo\n",
+        )
+        .unwrap();
+        std::fs::write(client_etc.join("make.conf"), "FEATURES=\"custom\"\n").unwrap();
+        std::os::unix::fs::symlink(target, client_etc.join("make.profile")).unwrap();
+        let _env = ServerEnvPin::pin(&server_root);
+        let mut ctx = local_ctx(
+            tmp.join("root").to_str().unwrap(),
+            tmp.join("work").to_str().unwrap(),
+        );
+        ctx.etc_portage = ConfigPlacement::Client(client_etc.to_string_lossy().into_owned());
+        let error = match place_config_root(&ctx, None) {
+            Ok(_) => panic!("unresolvable target must fail"),
+            Err(message) => message,
+        };
+        assert!(error.contains("!!!"), "failure must be loud, got: {error}");
+        assert!(
+            error.contains(target),
+            "failure must name the target, got: {error}"
+        );
+        drop(_env);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #171 follow-up 4, step 4: a directory `make.profile`
+    /// keeps working through the normal machinery -- its `parent`
+    /// `gentoo:base` entry resolves against the configured repos.
+    #[test]
+    fn remote_client_make_profile_dir_with_cross_repo_parent_resolves() {
+        let tmp = regen_tmp("make-profile-dir");
+        let server_root = l171e_server_root(
+            &tmp,
+            &format!(
+                "[DEFAULT]\nmain-repo = testrepo\n\n[testrepo]\nlocation = {}\n",
+                tmp.join("serverroot/repos/testrepo").display(),
+            ),
+        );
+        // The client repo lives client-side (a directory profile's
+        // parents resolve through the normal machinery, no remap).
+        let client_repo = tmp.join("crepo");
+        let base = client_repo.join("profiles/base");
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("make.defaults"), "FEATURES=\"filecaps -sign\"\n").unwrap();
+        let client_etc = tmp.join("clientroot/etc/portage");
+        std::fs::create_dir_all(client_etc.join("repos.conf")).unwrap();
+        std::fs::create_dir_all(client_etc.join("make.profile")).unwrap();
+        std::fs::write(
+            client_etc.join("repos.conf/l171e.conf"),
+            format!(
+                "[DEFAULT]\nmain-repo = testrepo\n\n[testrepo]\nlocation = {}\n",
+                client_repo.display(),
+            ),
+        )
+        .unwrap();
+        std::fs::write(client_etc.join("make.profile/parent"), "testrepo:base\n").unwrap();
+        std::fs::write(client_etc.join("make.conf"), "FEATURES=\"-news custom\"\n").unwrap();
+        let _env = ServerEnvPin::pin(&server_root);
+        let mut ctx = local_ctx(
+            tmp.join("root").to_str().unwrap(),
+            tmp.join("work").to_str().unwrap(),
+        );
+        ctx.etc_portage = ConfigPlacement::Client(client_etc.to_string_lossy().into_owned());
+        let placed = place_config_root(&ctx, None).expect("client placement resolves");
+        assert!(
+            placed.dir.join("etc/portage/make.profile").is_dir()
+                && placed
+                    .dir
+                    .join("etc/portage/make.profile")
+                    .symlink_metadata()
+                    .unwrap()
+                    .file_type()
+                    .is_dir(),
+            "a directory make.profile must pass through untouched"
+        );
+        let eroot = tmp.join("eroot");
+        let (repos, config) = crate::pretend::load_repos_and_config(&placed.dir, &eroot)
+            .expect("placed client config resolves");
+        assert!(repos.iter().any(|repo| repo.is_main));
+        assert_eq!(
+            crate::pretend::config_features_string(&config),
+            "custom filecaps sandbox",
+            "server make.globals + parent profile + client make.conf"
+        );
+        drop(placed);
+        drop(_env);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #171 follow-up 4, step 3 order: with no client
+    /// `repos.conf` and two server repos providing `profiles/<rel>`,
+    /// the main repo wins; the link itself is client-relative (its
+    /// text climbs out of the client's `/etc/portage`, never followed
+    /// there).
+    #[test]
+    fn remote_client_make_profile_prefers_main_repo_and_relative_targets() {
+        let tmp = regen_tmp("make-profile-order");
+        let server_root = l171e_server_root(
+            &tmp,
+            &format!(
+                "[DEFAULT]\nmain-repo = gentoo\n\n[gentoo]\nlocation = {}\n\n[ovl]\nlocation = {}\n",
+                tmp.join("serverroot/repos/gentoo").display(),
+                tmp.join("serverroot/repos/ovl").display(),
+            ),
+        );
+        let main_profile = l171e_server_repo(&server_root, "gentoo", L171E_REL, "mainfeat -sign");
+        l171e_server_repo(&server_root, "ovl", L171E_REL, "otherfeat -sign");
+        let client_etc = tmp.join("clientroot/etc/portage");
+        std::fs::create_dir_all(&client_etc).unwrap();
+        std::fs::write(client_etc.join("make.conf"), "FEATURES=\"-news custom\"\n").unwrap();
+        // A client-relative target: climb from the client's
+        // `/etc/portage` to `/`, then the dangling repo path.
+        let depth = client_etc
+            .components()
+            .filter(|component| matches!(component, std::path::Component::Normal(_)))
+            .count();
+        let target = format!(
+            "{}var/db/repos-client-l171e/gentoo/profiles/{L171E_REL}",
+            "../".repeat(depth)
+        );
+        std::os::unix::fs::symlink(&target, client_etc.join("make.profile")).unwrap();
+        let _env = ServerEnvPin::pin(&server_root);
+        let mut ctx = local_ctx(
+            tmp.join("root").to_str().unwrap(),
+            tmp.join("work").to_str().unwrap(),
+        );
+        ctx.etc_portage = ConfigPlacement::Client(client_etc.to_string_lossy().into_owned());
+        let placed = place_config_root(&ctx, None).expect("client placement resolves");
+        assert_eq!(
+            std::fs::read_link(placed.dir.join("etc/portage/make.profile")).unwrap(),
+            main_profile.join("profiles").join(L171E_REL),
+            "the main repo must win the server scan"
+        );
+        let eroot = tmp.join("eroot");
+        let config = l171e_resolve_with_server_repos(&placed.dir, &server_root, &eroot);
+        assert_eq!(
+            crate::pretend::config_features_string(&config),
+            "custom mainfeat sandbox",
+            "server make.globals + main profile + client make.conf"
+        );
+        drop(placed);
+        drop(_env);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #171b task 1: `--remote-binpkg` loads the placed client
+    /// config through the SAME shared helper `pretend::run` uses
+    /// (`load_repos_and_config`: one resolver call, no duplicate
+    /// logic), so `build_bundle` / the env regen see the same
+    /// `INSTALL_MASK` (+ the `no{man,info,doc}` fold), merge-time
+    /// `FEATURES` and `PORTAGE_BZIP2_COMMAND` as the plan path. A
+    /// synthetic client config root pins the wiring end to end.
+    #[test]
+    fn remote_binpkg_path_resolves_the_placed_client_config() {
+        // `INSTALL_MASK` is process-global (see `PLACED_CONFIG_ENV_LOCK`);
+        // hold the lock across the remove/restore below so a parallel
+        // test pinning a different value cannot interleave.
+        let _env_guard = PLACED_CONFIG_ENV_LOCK.lock().unwrap();
+        let tmp = regen_tmp("binpkg-config");
+        let config_root = tmp.join("configroot");
+        let repo = tmp.join("repo");
+        std::fs::create_dir_all(config_root.join("etc/portage/repos.conf")).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::write(
+            config_root.join("etc/portage/repos.conf/testrepo.conf"),
+            format!(
+                "[DEFAULT]\nmain-repo = testrepo\n\n[testrepo]\nlocation = {}\n",
+                repo.display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            config_root.join("etc/portage/make.conf"),
+            "INSTALL_MASK=\"/usr/share/porttest/im/drop.txt *.la\"\nFEATURES=\"sandbox merge-time\"\nPORTAGE_BZIP2_COMMAND=\"lbzip2\"\n",
+        )
+        .unwrap();
+        // `config_install_mask` prefers the process `INSTALL_MASK` env
+        // var (the same rule the plan path runs under); clear it so
+        // the test pins the placed file, restoring before asserting.
+        let saved_mask = std::env::var_os("INSTALL_MASK");
+        // SAFETY: no other test in this binary sets `INSTALL_MASK`;
+        // readers elsewhere only consume it.
+        unsafe {
+            std::env::remove_var("INSTALL_MASK");
+        }
+        let eroot = tmp.join("eroot");
+        let resolved = crate::pretend::load_repos_and_config(&config_root, &eroot);
+        // SAFETY: same as above.
+        unsafe {
+            match saved_mask {
+                Some(value) => std::env::set_var("INSTALL_MASK", value),
+                None => std::env::remove_var("INSTALL_MASK"),
+            }
+        }
+        let (repos, config) = resolved.expect("synthetic client config resolves");
+        assert!(repos.iter().any(|r| r.is_main));
+        let (mask, prunes_usr_share) = crate::pretend::config_install_mask(&config);
+        assert_eq!(mask, "/usr/share/porttest/im/drop.txt *.la");
+        assert!(!prunes_usr_share);
+        assert_eq!(
+            crate::pretend::config_features_string(&config),
+            "merge-time sandbox"
+        );
+        assert_eq!(crate::pretend::config_bzip2_command(&config), "lbzip2");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #171, failure path: a forced pull failure (no
+    /// `environment.regen` in the unit) keeps the build-time
+    /// `environment.bz2` byte-identical and reports the step.
+    #[test]
+    fn install_keeps_build_time_env_when_pull_fails() {
+        let tmp = regen_tmp("failure");
+        let root = tmp.join("root");
+        let vdb = root.join("var/db/pkg/dev-libs/regen-1.0");
+        std::fs::create_dir_all(&vdb).unwrap();
+        // A build-time env already in the vdb (the MERGE_FLOW fallback).
+        let build_time = bzip2_compress(build_time_environment(false).as_bytes())
+            .expect("server bzip2 compresses");
+        std::fs::write(vdb.join("environment.bz2"), &build_time).unwrap();
+        let unit = tmp.join("work/regen-1.0");
+        std::fs::create_dir_all(&unit).unwrap();
+        let ctx = local_ctx(root.to_str().unwrap(), tmp.join("work").to_str().unwrap());
+        let err = install_regenerated_env(
+            &ctx,
+            None,
+            unit.to_str().unwrap(),
+            vdb.join("environment.bz2").to_str().unwrap(),
+            Some("bzip2"),
+        )
+        .expect_err("pull must fail without environment.regen");
+        assert_eq!(err.0, "pull", "unexpected failing step: {err:?}");
+        assert_eq!(
+            std::fs::read(vdb.join("environment.bz2")).unwrap(),
+            build_time,
+            "the build-time env must survive byte-identical"
+        );
+        assert_eq!(
+            regen_warn_message("dev-libs/regen-1.0", "pull"),
+            "!!! Remote dev-libs/regen-1.0: merge-time environment regen failed at pull, keeping build-time environment.bz2",
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #171 review: a failed atomic install leaves no client
+    /// tmp litter -- the remote temp name is removed best-effort.
+    /// (Local transport; the ssh branch's `rm -f` needs a live client
+    /// and is not covered here.)
+    #[test]
+    fn install_file_atomic_removes_tmp_when_mv_fails() {
+        let tmp = regen_tmp("install-tmp");
+        let root = tmp.join("root");
+        let vdb = root.join("var/db/pkg/dev-libs/regen-1.0");
+        std::fs::create_dir_all(&vdb).unwrap();
+        // A directory at the dest path makes the `rename` fail.
+        let dest = vdb.join("environment.bz2");
+        std::fs::create_dir_all(&dest).unwrap();
+        let ctx = local_ctx(root.to_str().unwrap(), tmp.join("work").to_str().unwrap());
+        let err = install_file_atomic(&ctx, None, b"regen", dest.to_str().unwrap())
+            .expect_err("install into a directory must fail");
+        assert!(err.contains("installing"), "unexpected error text: {err}");
+        assert!(
+            !vdb.join("environment.bz2.portuale-regen-tmp").exists(),
+            "the remote temp name must not litter the client"
+        );
+        assert!(dest.is_dir(), "the blocking directory is untouched");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Pure unit: the `PORTAGE_BZIP2_COMMAND` scrub rewrites only the
+    /// unit-local passthrough stand-in -- to the resolved client value
+    /// when one is configured, to the `make.globals` default otherwise
+    /// -- and copies every other value verbatim.
+    #[test]
+    fn scrub_bzip2_command_rewrites_only_the_passthrough() {
+        let regen = b"declare -x FEATURES=\"sandbox\"\ndeclare -x PORTAGE_BZIP2_COMMAND=\"'/tmp/w/bin/bzip2-passthrough'\"\ndeclare -x USE=\"amd64\"\n";
+        // Configured client value (e.g. `lbzip2` in `make.conf`) is written.
+        let scrubbed = scrub_bzip2_command(regen, "lbzip2");
+        assert_eq!(
+            String::from_utf8(scrubbed).unwrap(),
+            "declare -x FEATURES=\"sandbox\"\ndeclare -x PORTAGE_BZIP2_COMMAND=\"lbzip2\"\ndeclare -x USE=\"amd64\"\n",
+        );
+        // Unset (the `make.globals` default) restores `bzip2`.
+        let scrubbed = scrub_bzip2_command(regen, "bzip2");
+        assert_eq!(
+            String::from_utf8(scrubbed).unwrap(),
+            "declare -x FEATURES=\"sandbox\"\ndeclare -x PORTAGE_BZIP2_COMMAND=\"bzip2\"\ndeclare -x USE=\"amd64\"\n",
+        );
+        // An unrelated value -- even a foreign compressor path -- is
+        // copied verbatim, never forced to the configured one ...
+        let foreign = b"declare -x PORTAGE_BZIP2_COMMAND=\"/opt/bin/pbzip2\"\n";
+        assert_eq!(scrub_bzip2_command(foreign, "lbzip2"), foreign);
+        // ... real's own spelling passes through byte-identical ...
+        let real = b"declare -x PORTAGE_BZIP2_COMMAND=\"bzip2\"\n";
+        assert_eq!(scrub_bzip2_command(real, "lbzip2"), real);
+        // ... and a missing line stays missing (never invent it).
+        let bare = b"declare -x FEATURES=\"sandbox\"\n";
+        assert_eq!(scrub_bzip2_command(bare, "lbzip2"), bare);
+        // Trailing line without a newline is preserved.
+        let noeol =
+            b"declare -x FEATURES=\"sandbox\"\ndeclare -x PORTAGE_BZIP2_COMMAND=\"'/tmp/w/bin/bzip2-passthrough'\"";
+        assert_eq!(
+            String::from_utf8(scrub_bzip2_command(noeol, "lbzip2")).unwrap(),
+            "declare -x FEATURES=\"sandbox\"\ndeclare -x PORTAGE_BZIP2_COMMAND=\"lbzip2\"\n",
+        );
+    }
+
+    /// Pure unit: the old-version probe parser takes only `OLDPF=`
+    /// lines apart into `(pf, slot)`.
+    #[test]
+    fn parse_oldpf_probe_parses_only_probe_lines() {
+        assert_eq!(
+            parse_oldpf_probe("OLDPF=old-1.0 SLOT=0\nnoise\nOLDPF=old-0.9 SLOT=unknown\n"),
+            vec![
+                ("old-1.0".to_string(), "0".to_string()),
+                ("old-0.9".to_string(), "unknown".to_string()),
+            ]
+        );
+        assert!(parse_oldpf_probe("UNPACK=ok\n").is_empty());
+        assert!(parse_oldpf_probe("OLDPF= SLOT=0\n").is_empty());
+    }
+
+    /// Backlog #171 review: when both the `environment.bz2` pull and
+    /// the plain fallback pull fail, the staging warning carries the
+    /// original bz2 error (no more silent staging failures).
+    #[test]
+    fn ship_old_hook_envs_warns_when_both_pulls_fail() {
+        let tmp = regen_tmp("old-noenv");
+        let root = tmp.join("root");
+        let work = tmp.join("work");
+        let oldvdb = root.join("var/db/pkg/dev-libs/oldhook-1.0");
+        std::fs::create_dir_all(&oldvdb).unwrap();
+        std::fs::write(oldvdb.join("SLOT"), "0\n").unwrap();
+        // Neither `environment.bz2` nor `environment` on the client.
+        assert!(!oldvdb.join("environment.bz2").exists());
+        assert!(!oldvdb.join("environment").exists());
+
+        let unit = work.join("oldhook-2.0");
+        std::fs::create_dir_all(&unit).unwrap();
+        let ctx = local_ctx(root.to_str().unwrap(), work.to_str().unwrap());
+        let shipment = ship_old_hook_envs(
+            &ctx,
+            None,
+            unit.to_str().unwrap(),
+            root.join("var/db/pkg").to_str().unwrap(),
+            "dev-libs",
+            "oldhook",
+            "oldhook-2.0",
+            "0",
+        );
+        assert!(shipment.shipped.is_empty(), "{:?}", shipment.shipped);
+        assert_eq!(shipment.warnings.len(), 1, "{:?}", shipment.warnings);
+        assert!(
+            shipment.warnings[0].contains("oldhook-1.0"),
+            "warning must name the pf: {:?}",
+            shipment.warnings
+        );
+        assert!(
+            shipment.warnings[0].contains("environment.bz2"),
+            "warning must carry the original bz2 error: {:?}",
+            shipment.warnings
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Saved env for an old instance: `declare -x` lines (the
+    /// `env_val` form `run_old_hook` greps) plus hook functions writing
+    /// to a client log.
+    fn old_hook_environment() -> String {
+        [
+            "declare -x EAPI=\"8\"",
+            "declare -x CATEGORY=\"dev-libs\"",
+            "declare -x PN=\"oldhook\"",
+            "declare -x PV=\"1.0\"",
+            "declare -x PR=\"r0\"",
+            "declare -x PVR=\"1.0\"",
+            "declare -x P=\"oldhook-1.0\"",
+            "declare -x PF=\"oldhook-1.0\"",
+            "pkg_prerm() {",
+            "\techo prerm-ok >> \"${EROOT}/var/lib/oldhook.log\"",
+            "}",
+            "pkg_postrm() {",
+            "\techo postrm-ok >> \"${EROOT}/var/lib/oldhook.log\"",
+            "}",
+        ]
+        .join("\n")
+            + "\n"
+    }
+
+    /// PATH farm: symlinks to every `/usr/bin` + `/bin` entry EXCEPT
+    /// `bzip2`, so `command -v bzip2` fails exactly like a bzip2-less
+    /// client (plan §6 tool floor).
+    fn farm_path_without_bzip2(dir: &std::path::Path) -> String {
+        let farm = dir.join("farm");
+        std::fs::create_dir_all(&farm).unwrap();
+        for bindir in ["/usr/bin", "/bin"] {
+            let Ok(entries) = std::fs::read_dir(bindir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name == "bzip2" {
+                    continue;
+                }
+                let link = farm.join(&name);
+                if !link.exists() {
+                    let _ = std::os::unix::fs::symlink(entry.path(), &link);
+                }
+            }
+        }
+        assert!(!farm.join("bzip2").exists());
+        assert!(farm.join("bash").exists(), "the farm must resolve bash");
+        farm.to_str().unwrap().to_string()
+    }
+
+    /// Drive `run_old_hook` straight through local bash (header exports
+    /// plus the real `MERGE_HELPERS` plus both old phases) under a PATH
+    /// with no `bzip2`. Returns stdout.
+    fn run_old_hook_snippet(
+        unit: &str,
+        root: &str,
+        work: &str,
+        farm_path: &str,
+        oldvdb: &str,
+    ) -> String {
+        let script = format!(
+            concat!(
+                "export PATH={farm}\n",
+                "command -v bzip2 >/dev/null 2>&1 && echo BZIP2-PRESENT || echo BZIP2-ABSENT\n",
+                "UNIT={unit}\n",
+                "ROOT={root}\n",
+                "WORKDIR={work}\n",
+                "UNITBIN=\"$UNIT/bin\"\n",
+                "COLORMAP=''\n",
+                "{helpers}\n",
+                "run_old_hook {oldvdb} prerm\n",
+                "echo \"RC=$?\"\n",
+                "run_old_hook {oldvdb} postrm\n",
+                "echo \"RC=$?\"\n",
+            ),
+            farm = sh_quote(farm_path),
+            unit = sh_quote(unit),
+            root = sh_quote(root),
+            work = sh_quote(work),
+            helpers = MERGE_HELPERS,
+            oldvdb = sh_quote(oldvdb),
+        );
+        let output = std::process::Command::new("bash")
+            .args(["-s"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write as _;
+                child.stdin.take().unwrap().write_all(script.as_bytes())?;
+                child.wait_with_output()
+            })
+            .expect("local bash runs run_old_hook");
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert!(
+            stdout.contains("BZIP2-ABSENT"),
+            "bzip2 must be shadowed away:\n{stdout}\n{stderr}"
+        );
+        stdout
+    }
+
+    /// Backlog #171: with only `environment.bz2` in the old vdb entry
+    /// and no client `bzip2` on `PATH`, `run_old_hook` still gets a
+    /// sourceable env via the server-side decompress staged at
+    /// `$UNIT/old-env/<pf>`.
+    #[test]
+    fn old_hook_uses_server_decompressed_env_without_client_bzip2() {
+        let tmp = regen_tmp("old-shipped");
+        let root = tmp.join("root");
+        let work = tmp.join("work");
+        std::fs::create_dir_all(root.join("var/lib")).unwrap();
+        let oldvdb = root.join("var/db/pkg/dev-libs/oldhook-1.0");
+        std::fs::create_dir_all(&oldvdb).unwrap();
+        std::fs::write(oldvdb.join("SLOT"), "0\n").unwrap();
+        std::fs::write(
+            oldvdb.join("oldhook-1.0.ebuild"),
+            "EAPI=8\nDESCRIPTION=\"synthetic old-hook probe\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\n",
+        )
+        .unwrap();
+        // Only `environment.bz2` -- no plain file (real's shape).
+        let compressed =
+            bzip2_compress(old_hook_environment().as_bytes()).expect("server bzip2 compresses");
+        std::fs::write(oldvdb.join("environment.bz2"), &compressed).unwrap();
+
+        // The new unit (hook runtime for the old phases).
+        let unit = work.join("oldhook-2.0");
+        std::fs::create_dir_all(&unit).unwrap();
+        let status = std::process::Command::new("cp")
+            .args(["-a"])
+            .arg(crate::ebuild_phases::bin_dir())
+            .arg(unit.join("bin"))
+            .status()
+            .expect("cp -a bin");
+        assert!(status.success());
+
+        // Server stages the decompressed env (local transport = same
+        // paths the client sees).
+        let ctx = local_ctx(root.to_str().unwrap(), work.to_str().unwrap());
+        let shipment = ship_old_hook_envs(
+            &ctx,
+            None,
+            unit.to_str().unwrap(),
+            root.join("var/db/pkg").to_str().unwrap(),
+            "dev-libs",
+            "oldhook",
+            "oldhook-2.0",
+            "0",
+        );
+        assert!(shipment.warnings.is_empty(), "{:?}", shipment.warnings);
+        assert_eq!(shipment.shipped, vec!["oldhook-1.0".to_string()]);
+        assert_eq!(
+            std::fs::read_to_string(unit.join("old-env/oldhook-1.0")).unwrap(),
+            old_hook_environment(),
+        );
+
+        let farm = farm_path_without_bzip2(&tmp);
+        let stdout = run_old_hook_snippet(
+            unit.to_str().unwrap(),
+            root.to_str().unwrap(),
+            work.to_str().unwrap(),
+            &farm,
+            oldvdb.to_str().unwrap(),
+        );
+        assert!(stdout.contains("OLDHOOK_prerm=0"), "stdout:\n{stdout}");
+        assert!(stdout.contains("OLDHOOK_postrm=0"), "stdout:\n{stdout}");
+        assert_eq!(
+            std::fs::read_to_string(root.join("var/lib/oldhook.log")).unwrap(),
+            "prerm-ok\npostrm-ok\n"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #171, legacy fallback: a vdb entry written by an older
+    /// `mrg` (plain `environment`, no `environment.bz2`) still sources
+    /// with no client `bzip2` and nothing staged.
+    #[test]
+    fn old_hook_falls_back_to_legacy_plain_environment() {
+        let tmp = regen_tmp("old-legacy");
+        let root = tmp.join("root");
+        let work = tmp.join("work");
+        std::fs::create_dir_all(root.join("var/lib")).unwrap();
+        let oldvdb = root.join("var/db/pkg/dev-libs/oldhook-1.0");
+        std::fs::create_dir_all(&oldvdb).unwrap();
+        std::fs::write(oldvdb.join("SLOT"), "0\n").unwrap();
+        std::fs::write(
+            oldvdb.join("oldhook-1.0.ebuild"),
+            "EAPI=8\nDESCRIPTION=\"synthetic old-hook probe\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\n",
+        )
+        .unwrap();
+        std::fs::write(oldvdb.join("environment"), old_hook_environment()).unwrap();
+        assert!(!oldvdb.join("environment.bz2").exists());
+
+        let unit = work.join("oldhook-2.0");
+        std::fs::create_dir_all(&unit).unwrap();
+        let status = std::process::Command::new("cp")
+            .args(["-a"])
+            .arg(crate::ebuild_phases::bin_dir())
+            .arg(unit.join("bin"))
+            .status()
+            .expect("cp -a bin");
+        assert!(status.success());
+
+        let farm = farm_path_without_bzip2(&tmp);
+        let stdout = run_old_hook_snippet(
+            unit.to_str().unwrap(),
+            root.to_str().unwrap(),
+            work.to_str().unwrap(),
+            &farm,
+            oldvdb.to_str().unwrap(),
+        );
+        assert!(stdout.contains("OLDHOOK_prerm=0"), "stdout:\n{stdout}");
+        assert!(stdout.contains("OLDHOOK_postrm=0"), "stdout:\n{stdout}");
+        assert_eq!(
+            std::fs::read_to_string(root.join("var/lib/oldhook.log")).unwrap(),
+            "prerm-ok\npostrm-ok\n"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #171 review: an older-`mrg` entry with **both** files
+    /// whose staging failed still runs its hooks on a bzip2-less
+    /// client, from the plain `environment` final fallback.
+    #[test]
+    fn old_hook_falls_back_to_plain_when_bz2_present_without_client_bzip2() {
+        let tmp = regen_tmp("old-both");
+        let root = tmp.join("root");
+        let work = tmp.join("work");
+        std::fs::create_dir_all(root.join("var/lib")).unwrap();
+        let oldvdb = root.join("var/db/pkg/dev-libs/oldhook-1.0");
+        std::fs::create_dir_all(&oldvdb).unwrap();
+        std::fs::write(oldvdb.join("SLOT"), "0\n").unwrap();
+        std::fs::write(
+            oldvdb.join("oldhook-1.0.ebuild"),
+            "EAPI=8\nDESCRIPTION=\"synthetic old-hook probe\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\n",
+        )
+        .unwrap();
+        // Both files (older `mrg`), nothing staged: the bz2 is
+        // unreadable without a client bzip2, so the plain file wins.
+        let compressed =
+            bzip2_compress(old_hook_environment().as_bytes()).expect("server bzip2 compresses");
+        std::fs::write(oldvdb.join("environment.bz2"), &compressed).unwrap();
+        std::fs::write(oldvdb.join("environment"), old_hook_environment()).unwrap();
+
+        let unit = work.join("oldhook-2.0");
+        std::fs::create_dir_all(&unit).unwrap();
+        let status = std::process::Command::new("cp")
+            .args(["-a"])
+            .arg(crate::ebuild_phases::bin_dir())
+            .arg(unit.join("bin"))
+            .status()
+            .expect("cp -a bin");
+        assert!(status.success());
+
+        let farm = farm_path_without_bzip2(&tmp);
+        let stdout = run_old_hook_snippet(
+            unit.to_str().unwrap(),
+            root.to_str().unwrap(),
+            work.to_str().unwrap(),
+            &farm,
+            oldvdb.to_str().unwrap(),
+        );
+        assert!(stdout.contains("OLDHOOK_prerm=0"), "stdout:\n{stdout}");
+        assert!(stdout.contains("OLDHOOK_postrm=0"), "stdout:\n{stdout}");
+        assert_eq!(
+            std::fs::read_to_string(root.join("var/lib/oldhook.log")).unwrap(),
+            "prerm-ok\npostrm-ok\n"
         );
         let _ = std::fs::remove_dir_all(&tmp);
     }

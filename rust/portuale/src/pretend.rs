@@ -7053,12 +7053,37 @@ fn config_features_list(config: &portage_profile::Config) -> Vec<String> {
 
 /// The resolved, merge-time `FEATURES` incremental list, space-joined --
 /// for `MergeOptions::features` (`merge_binpkg`'s `PORTAGE_UPDATE_ENV`
-/// vdb-environment regeneration).
-fn config_features_string(config: &portage_profile::Config) -> String {
+/// vdb-environment regeneration). Shared with the remote-merge server
+/// (`run_remote_plan`, backlog #171), which resolves the client's
+/// placed config through this same function so a remote merge records
+/// exactly what a local one would.
+pub(crate) fn config_features_string(config: &portage_profile::Config) -> String {
     config_features_list(config).join(" ")
 }
 
-fn config_install_mask(config: &portage_profile::Config) -> (String, bool) {
+/// The resolved, merge-time `PORTAGE_BZIP2_COMMAND` -- real's
+/// merge-time env save records its live value (`cnf/make.globals:105`
+/// defaults it to `bzip2`; a client `make.conf` may set e.g.
+/// `lbzip2`/`pbzip2`). Shared with the remote-merge server
+/// (`run_remote_plan`, backlog #171), which resolves the client's
+/// placed config through this same function so the scrubbed regen'd
+/// env records exactly what a local merge would; falls back to the
+/// `make.globals` default when nothing is configured.
+pub(crate) fn config_bzip2_command(config: &portage_profile::Config) -> String {
+    config
+        .other_vars
+        .get("PORTAGE_BZIP2_COMMAND")
+        .cloned()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "bzip2".to_string())
+}
+
+/// The resolved, merge-time `INSTALL_MASK` plus the `no{man,info,doc}`
+/// `FEATURES` fold -- real `preinst_mask()` (`bin/misc-functions.sh`).
+/// Shared with the remote-merge server (`run_remote_plan`, backlog #170),
+/// which resolves the client's placed config through this same function
+/// so a remote merge masks exactly what a local one would.
+pub(crate) fn config_install_mask(config: &portage_profile::Config) -> (String, bool) {
     let features = config_features_list(config);
     let configured = std::env::var("INSTALL_MASK")
         .ok()
@@ -8525,51 +8550,23 @@ fn skip_conflict_caret_line(atom: &str) -> String {
     line
 }
 
-pub fn run(args: &[String]) -> ExitCode {
-    if wants_help(args) {
-        print_help();
-        return ExitCode::SUCCESS;
-    }
-
-    // `--ask-enter-invalid` is process-wide state for the prompt
-    // helpers; reset per invocation so an in-process caller can't leak it
-    // (the CLI parse below sets it again from argv or the defaults).
-    ASK_ENTER_INVALID.store(false, std::sync::atomic::Ordering::Relaxed);
-
-    // Config resolution comes before argv parsing, matching real
-    // `emerge`'s own order: its first pass only finds `--config-root`,
-    // then it loads the config and re-parses with
-    // `EMERGE_DEFAULT_OPTS` prepended (`_emerge/main.py:1221-1232`,
-    // `:1352-1360`). Portuale has no `--config-root` CLI
-    // (`PORTAGE_CONFIGROOT` is the only config-root source), so the two
-    // passes collapse into this one: resolve, then prepend the
-    // variable's tokens to argv. `--help` above still short-circuits
-    // before any config load, exactly like real's early
-    // `myaction == "help"` return (`main.py:1254`).
-
-    // resolve_config needs the main repo's own location for
-    // package.mask/.unmask's repo-level source (see its doc comment) --
-    // found via the same find_repos repos.conf parsing
-    // resolve_pretend_graph uses internally a few lines down; called
-    // again here since portage-profile can't depend back on portage-repo
-    // (portage-repo already depends on portage-profile). Resolved before
-    // @world/@system expansion below: @system's own atom list lives in
-    // `config` (see portage-profile's `system_packages`), so the config
-    // must already exist by the time a "@system" token is seen.
-    let root = root_from_env();
-    let config_root = config_root_from_env();
-
-    let repos = match portage_repo::find_repos(&config_root) {
-        Ok(repos) => repos,
-        Err(e) => {
-            eprintln!("emerge: {e}");
-            return ExitCode::from(1);
-        }
-    };
-    let Some(main_repo) = repos.iter().find(|r| r.is_main) else {
-        eprintln!("emerge: no main repo found in repos.conf");
-        return ExitCode::from(1);
-    };
+/// Load the `repos.conf` repos + the fully-resolved config for one
+/// config root -- `run()`'s own preamble, factored out so
+/// `mrg --remote-binpkg` (which never runs a resolve) reads the *same*
+/// client config the resolve path merges with (backlog #170/#171: the
+/// `INSTALL_MASK` + `no{man,info,doc}` fold, the merge-time `FEATURES`,
+/// and `PORTAGE_BZIP2_COMMAND` all come from the placed config).
+/// `Err` is the bare display text; the caller prefixes it (`emerge:` /
+/// `mrg: …`) exactly as the inline preamble did.
+pub(crate) fn load_repos_and_config(
+    config_root: &std::path::Path,
+    root: &std::path::Path,
+) -> Result<(Vec<portage_repo::RepoConfig>, portage_profile::Config), String> {
+    let repos = portage_repo::find_repos(config_root).map_err(|e| e.to_string())?;
+    let main_repo = repos
+        .iter()
+        .find(|r| r.is_main)
+        .ok_or_else(|| "no main repo found in repos.conf".to_string())?;
 
     // Every non-main repo's own (name, location) -- portage-profile's
     // own package.mask/.unmask reading needs each overlay's own name to
@@ -8604,18 +8601,60 @@ pub fn run(args: &[String]) -> ExitCode {
         .flat_map(|r| r.aliases.iter().map(|a| (a.clone(), r.location.clone())))
         .collect();
 
-    let mut config = match portage_profile::resolve_config(
-        &config_root,
+    let config = portage_profile::resolve_config(
+        config_root,
         &main_repo.location,
         &overlay_repos,
         &repo_aliases,
         &main_repo.name,
         &repo_masters,
-        &root,
-    ) {
-        Ok(config) => config,
-        Err(e) => {
-            eprintln!("emerge: {e}");
+        root,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok((repos, config))
+}
+
+pub fn run(args: &[String]) -> ExitCode {
+    if wants_help(args) {
+        print_help();
+        return ExitCode::SUCCESS;
+    }
+
+    // `--ask-enter-invalid` is process-wide state for the prompt
+    // helpers; reset per invocation so an in-process caller can't leak it
+    // (the CLI parse below sets it again from argv or the defaults).
+    ASK_ENTER_INVALID.store(false, std::sync::atomic::Ordering::Relaxed);
+
+    // Config resolution comes before argv parsing, matching real
+    // `emerge`'s own order: its first pass only finds `--config-root`,
+    // then it loads the config and re-parses with
+    // `EMERGE_DEFAULT_OPTS` prepended (`_emerge/main.py:1221-1232`,
+    // `:1352-1360`). Portuale has no `--config-root` CLI
+    // (`PORTAGE_CONFIGROOT` is the only config-root source), so the two
+    // passes collapse into this one: resolve, then prepend the
+    // variable's tokens to argv. `--help` above still short-circuits
+    // before any config load, exactly like real's early
+    // `myaction == "help"` return (`main.py:1254`).
+
+    // resolve_config needs the main repo's own location for
+    // package.mask/.unmask's repo-level source (see its doc comment) --
+    // found via the same find_repos repos.conf parsing
+    // resolve_pretend_graph uses internally a few lines down; called
+    // again here since portage-profile can't depend back on portage-repo
+    // (portage-repo already depends on portage-profile). Resolved before
+    // @world/@system expansion below: @system's own atom list lives in
+    // `config` (see portage-profile's `system_packages`), so the config
+    // must already exist by the time a "@system" token is seen.
+    let root = root_from_env();
+    let config_root = config_root_from_env();
+
+    // The repos + resolved config (see `load_repos_and_config`): the
+    // resolve already runs under `ConfigRootOverride` for the placed
+    // root on the remote path.
+    let (repos, mut config) = match load_repos_and_config(&config_root, &root) {
+        Ok(loaded) => loaded,
+        Err(message) => {
+            eprintln!("emerge: {message}");
             return ExitCode::from(1);
         }
     };
@@ -14036,6 +14075,31 @@ mod tests {
             args_with_emerge_defaults(&config, &with_ignore),
             with_ignore
         );
+    }
+
+    #[test]
+    fn config_bzip2_command_prefers_the_placed_config() {
+        // Backlog #171 review: a client `make.conf` compressor (e.g.
+        // `lbzip2`) wins over the `make.globals` default.
+        let configured = portage_profile::Config {
+            other_vars: [("PORTAGE_BZIP2_COMMAND".to_string(), "lbzip2".to_string())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        assert_eq!(config_bzip2_command(&configured), "lbzip2");
+        // Unset (or empty): the `cnf/make.globals:105` default.
+        assert_eq!(
+            config_bzip2_command(&portage_profile::Config::default()),
+            "bzip2"
+        );
+        let empty = portage_profile::Config {
+            other_vars: [("PORTAGE_BZIP2_COMMAND".to_string(), String::new())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        assert_eq!(config_bzip2_command(&empty), "bzip2");
     }
 
     fn world_entry(category: &str, package: &str, slot: &str) -> GraphEntry {
