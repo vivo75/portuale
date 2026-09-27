@@ -1355,6 +1355,14 @@ fn print_entry_line(
     // ebuilds to satisfy "<atom>"` + chain block, rendered last in the
     // `NoVisibleCandidate` arm (after the two sibling blocks).
     plain_miss_deps: &[portage_repo::PlainMissDepReport],
+    // Backlog #206 S2: real `_show_circular_deps` forces `--verbose` for
+    // the stuck-remainder display, so every row carries its fetch size
+    // (`verbose_size`, `0 KiB` for an ebuild whose distfiles are already
+    // present) — while plain `-pv` rows keep portuale's established cut
+    // of omitting that bare `0 KiB` (see the `size_suffix` note below).
+    // True only for the circular re-display; every other caller passes
+    // false.
+    force_sizes: bool,
 ) {
     let entry = &entries[index];
     // Real `_DisplayConfig` verbosity: `--quiet and 1 or --verbose and 3
@@ -1533,8 +1541,11 @@ fn print_entry_line(
         // ever non-zero here -- an ebuild's distfiles / a local `$PKGDIR`
         // binary are already present, so real would show a bare ` 0 KiB`
         // that portuale's `-pv` lines have always omitted; closing that
-        // wider gap would re-pin every `-pv` assertion and is left out).
-        let size_suffix = if v3 && entry.remote_binary {
+        // wider gap would re-pin every `-pv` assertion and is left out)
+        // or under `force_sizes` (backlog #206 S2: the circular
+        // re-display runs forced-verbose, so its rows carry real's
+        // `0 KiB` like the live oracle).
+        let size_suffix = if v3 && (entry.remote_binary || force_sizes) {
             let bytes: u64 = entry.download_files.iter().map(|(_, s)| s).sum();
             format!(" {}", localized_size(bytes))
         } else {
@@ -1953,6 +1964,13 @@ fn print_entry_line(
 /// graph still holds it, so ordered mode prints it as a `nomerge`
 /// ancestor occurrence; portuale excludes it from the ordered node list
 /// for the same effect.
+///
+/// Renders the tree walk and reports it back: one `(entry index,
+/// `ordered`) pair per rendered entry row, in render order — real
+/// `_ordered_tree_display`'s own walk product, before printing. The only
+/// consumer of the return is backlog #206 S2's `Total:` recount (real
+/// counts displayed merge *rows*, repeats included, `nomerge` excluded);
+/// every other caller ignores it.
 #[allow(clippy::too_many_arguments)]
 fn print_tree(
     entries: &[GraphEntry],
@@ -1974,7 +1992,10 @@ fn print_tree(
     masked_deps: &[portage_repo::MaskedDepReport],
     use_unsat_deps: &[portage_repo::UseUnsatDepReport],
     plain_miss_deps: &[portage_repo::PlainMissDepReport],
-) {
+    // Backlog #206 S2: forwarded to `print_entry_line` (see its
+    // `force_sizes`).
+    force_sizes: bool,
+) -> Vec<(usize, bool)> {
     /// One node of the display graph: an entry, or a satisfied blocker
     /// row `entries[owner].blockers[index]`.
     #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -2316,6 +2337,7 @@ fn print_tree(
         }
     }
 
+    let mut rendered: Vec<(usize, bool)> = Vec::new();
     for (node, depth, ordered) in display {
         // Real `output_helpers.py`'s `self.indent` is exactly `depth`
         // spaces (`_ordered_tree_display`'s depth is passed straight to
@@ -2323,30 +2345,34 @@ fn print_tree(
         // one literal space after `]`, so portuale's formats do too.
         let indent = " ".repeat(depth);
         match node {
-            TreeNode::Entry(i) => print_entry_line(
-                entries,
-                root,
-                i,
-                &indent,
-                ordered,
-                top_level_pkgs,
-                onlydeps,
-                oneshot,
-                verbose,
-                quiet,
-                alphabetical,
-                false,
-                130,
-                running_root,
-                color,
-                system_atoms,
-                world_atoms,
-                force_reinstall_cps,
-                blocker_lines,
-                masked_deps,
-                use_unsat_deps,
-                plain_miss_deps,
-            ),
+            TreeNode::Entry(i) => {
+                rendered.push((i, ordered));
+                print_entry_line(
+                    entries,
+                    root,
+                    i,
+                    &indent,
+                    ordered,
+                    top_level_pkgs,
+                    onlydeps,
+                    oneshot,
+                    verbose,
+                    quiet,
+                    alphabetical,
+                    false,
+                    130,
+                    running_root,
+                    color,
+                    system_atoms,
+                    world_atoms,
+                    force_reinstall_cps,
+                    blocker_lines,
+                    masked_deps,
+                    use_unsat_deps,
+                    plain_miss_deps,
+                    force_sizes,
+                )
+            }
             TreeNode::Blocker { owner, index } => {
                 let owner_entry = &entries[owner];
                 println!(
@@ -2367,6 +2393,7 @@ fn print_tree(
             }
         }
     }
+    rendered
 }
 
 /// Escapes `s` for embedding in a JSON string literal (quote, backslash,
@@ -2747,6 +2774,43 @@ fn abort_outcome_to_json(outcome: &portage_repo::ResolveOutcome) -> String {
     }
 }
 
+/// Backlog #206 S1: real `_emerge/Package.py::Package.__str__` for a
+/// merge-bound package — the `(cpv:slot/sub_slot::repo, <type> scheduled
+/// for merge)` node text real
+/// `circular_dependency_handler._prepare_circular_dep_message`
+/// (`resolver/circular_dependency.py:76`) prints for each cycle member
+/// (the digraph f-string renders `str(Package)`). The `cpv:slot/sub::repo`
+/// head is wrapped in real's per-operation colour (`PKG_MERGE` for an
+/// ebuild merge, `PKG_BINARY_MERGE` for a binary one — a no-op unless the
+/// caller's `Colorizer` is enabled). Deliberate cuts, both grounded on
+/// live real: the ` to '<ROOT>'` arm never fires (eight unanimous
+/// `docs/evidence/2026-09-27-181-circular-text/real/` captures plus the
+/// six-case n206 container probe, all `ROOT=$FX`, show no suffix — and
+/// portuale's root is non-`/` in every test, so the literal gate would
+/// inject tmp paths; same rationale as `root_suffix`), and the
+/// `installed` / `uninstall` variants are unreachable here (cycle members
+/// are merge-bound by construction — `find_hard_cycles` only considers
+/// merge-bound entries; a member missing from `entries` falls back to
+/// the bare cpv at the call site). The slot-conflict renderers below
+/// keep their own local closures (their unknown-member fallbacks differ
+/// from each other and carry no colour, so sharing this helper would move
+/// their pins).
+fn circular_node_text(
+    cpv: &str,
+    slot: &str,
+    sub_slot: &str,
+    repo: &str,
+    type_name: &str,
+    color: &Colorizer,
+) -> String {
+    let head = format!("{cpv}:{slot}/{sub_slot}::{repo}");
+    let head = match type_name {
+        "binary" => color.c("PKG_BINARY_MERGE", &head),
+        _ => color.c("PKG_MERGE", &head),
+    };
+    format!("({head}, {type_name} scheduled for merge)")
+}
+
 /// Backlog #19 Slice 5: real `_show_circular_deps` (`depgraph.py:10425`)
 /// as a callable unit — the `* Error: circular dependencies:` block, the
 /// `Change USE:` suggestion-or-advisory branch, and the
@@ -2756,6 +2820,11 @@ fn abort_outcome_to_json(outcome: &portage_repo::ResolveOutcome) -> String {
 /// `ExitCode::from(1)` itself, except the gated cycle-abort path, which
 /// prints this *before* the autounmask section (real `display_problems`
 /// order, `:11113` before `:11140`) and then continues into it.
+///
+/// Backlog #206: the block opens with real's own three newlines (real
+/// `writemsg("\n\n")` before `display(handler.merge_list)` plus
+/// `writemsg("\n")` after it, all stderr), and each cycle member renders
+/// through `circular_node_text` (real `str(Package)`).
 #[allow(clippy::too_many_arguments)]
 fn print_circular_block(
     cycle: &[String],
@@ -2767,18 +2836,52 @@ fn print_circular_block(
     large_cycle_count: bool,
 ) {
     let prefix = color.c("BAD", " * ");
-    eprint!("\n{prefix}Error: circular dependencies:\n\n");
-    // `_prepare_circular_dep_message`: `<pkg> depends on`, then each
-    // subsequent `<pkg> (buildtime)` at a growing one-space indent,
-    // closing back on the first package.
-    let mut lines: Vec<String> = vec![format!("{} depends on", cycle[0])];
+    eprint!("\n\n\n{prefix}Error: circular dependencies:\n\n");
+    // `_prepare_circular_dep_message`: `<node> depends on`, then each
+    // subsequent `<node> (buildtime)` at a growing one-space indent,
+    // closing back on the first package. Each node is real
+    // `str(Package)` (`circular_node_text`); a member missing from
+    // `entries` (unreachable for resolver-built cycles) keeps the bare
+    // cpv so the block still prints.
+    let mut by_cpv: HashMap<String, (String, String, String, &str)> = HashMap::new();
+    for e in entries {
+        let version = match &e.outcome {
+            portage_repo::PretendOutcome::New { version }
+            | portage_repo::PretendOutcome::Reinstall { version, .. } => version.clone(),
+            portage_repo::PretendOutcome::Upgrade { to, .. }
+            | portage_repo::PretendOutcome::Downgrade { to, .. } => to.clone(),
+            _ => continue,
+        };
+        let (Some(slot), Some(sub_slot), Some(repo)) =
+            (e.slot.clone(), e.sub_slot.clone(), e.repo_name.clone())
+        else {
+            continue;
+        };
+        let type_name = match e.source {
+            portage_repo::CandidateSource::Binary => "binary",
+            portage_repo::CandidateSource::Ebuild => "ebuild",
+        };
+        by_cpv.insert(
+            format!("{}/{}-{version}", e.category, e.package),
+            (slot, sub_slot, repo, type_name),
+        );
+    }
+    let node = |cpv: &str| -> String {
+        match by_cpv.get(cpv) {
+            Some((slot, sub_slot, repo, type_name)) => {
+                circular_node_text(cpv, slot, sub_slot, repo, type_name, color)
+            }
+            None => cpv.to_string(),
+        }
+    };
+    let mut lines: Vec<String> = vec![format!("{} depends on", node(&cycle[0]))];
     for (pos, pkg) in cycle.iter().enumerate().skip(1) {
-        lines.push(format!("{}{pkg} (buildtime)", " ".repeat(pos)));
+        lines.push(format!("{}{} (buildtime)", " ".repeat(pos), node(pkg)));
     }
     lines.push(format!(
         "{}{} (buildtime)",
         " ".repeat(cycle.len()),
-        cycle[0]
+        node(&cycle[0])
     ));
     eprint!("{}", lines.join("\n"));
 
@@ -5077,6 +5180,7 @@ fn run_resume(
                 &[],
                 &[],
                 &[],
+                false,
             );
         }
         return ExitCode::SUCCESS;
@@ -12090,8 +12194,35 @@ pub fn run(args: &[String]) -> ExitCode {
     // the entries and printed as one group after every package line (see
     // `format_blocker_lines`).
     let mut blocker_lines: Vec<String> = Vec::new();
+    // Backlog #206 S2: real `_show_circular_deps` (`depgraph.py:10425`)
+    // pops `--quiet` and forces `--verbose` + `--tree` before
+    // `display(handler.merge_list)` — the stuck remainder renders as a
+    // verbose tree no matter what display flags the user passed. When
+    // this resolve ends in the circular block, the merge list above IS
+    // that display, so it renders with the forced flags (and forced
+    // sizes — real `verbose_size` runs at verbosity 3). The legacy
+    // (gate-off) circular path keeps the user-flagged list plus its own
+    // re-display below, exactly as before.
+    let circular_forced_display = gated_abort_partial.is_some()
+        && matches!(
+            &result.outcome,
+            portage_repo::ResolveOutcome::Aborted {
+                reason: portage_repo::AbortReason::UnserializableCycle { .. },
+                ..
+            }
+        );
+    let (disp_tree, disp_verbose, disp_quiet) = if circular_forced_display {
+        (true, true, false)
+    } else {
+        (tree, verbose, quiet)
+    };
+    // Backlog #206 S2: the rendered entry rows of the tree walk, for the
+    // circular `Total:` recount only (real counts displayed merge rows —
+    // repeats included, `nomerge` excluded — not entries). Empty unless
+    // the tree branch below runs.
+    let mut rendered_rows: Vec<(usize, bool)> = Vec::new();
     if show_merge_list {
-        if tree {
+        if disp_tree {
             // #131 S1: the tree-mode serialization order for the display
             // walk (real's reversed tree-mode retlist). Computed on the
             // displayed slice, so abort-partial lists stay
@@ -12106,7 +12237,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 &repos,
                 dynamic_deps,
             );
-            print_tree(
+            rendered_rows = print_tree(
                 display_entries,
                 &tree_order,
                 &root,
@@ -12114,8 +12245,8 @@ pub fn run(args: &[String]) -> ExitCode {
                 onlydeps,
                 oneshot,
                 unordered_display,
-                verbose,
-                quiet,
+                disp_verbose,
+                disp_quiet,
                 alphabetical,
                 root_deps_running_root.as_deref(),
                 &color,
@@ -12126,6 +12257,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 &result.masked_deps,
                 &result.use_unsat_deps,
                 &result.plain_miss_deps,
+                circular_forced_display,
             );
         } else {
             // #68/#72 B2: rows whose replacement waits on its owner print
@@ -12144,8 +12276,8 @@ pub fn run(args: &[String]) -> ExitCode {
                     &top_level_pkgs,
                     onlydeps,
                     oneshot,
-                    verbose,
-                    quiet,
+                    disp_verbose,
+                    disp_quiet,
                     alphabetical,
                     columns,
                     columnwidth,
@@ -12158,6 +12290,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     &result.masked_deps,
                     &result.use_unsat_deps,
                     &result.plain_miss_deps,
+                    circular_forced_display,
                 );
                 for (_, line) in inline_blockers.iter().filter(|(after, _)| *after == i) {
                     println!("{line}");
@@ -12252,6 +12385,7 @@ pub fn run(args: &[String]) -> ExitCode {
                         &result.masked_deps,
                         &result.use_unsat_deps,
                         &result.plain_miss_deps,
+                        false,
                     );
                 }
             }
@@ -12288,18 +12422,51 @@ pub fn run(args: &[String]) -> ExitCode {
     // suppresses the line that `-pv` would show. Suppressed together with
     // an empty aborted list (real never calls `display()` there, so no
     // counters exist); the cycle partial counts over its own rows only.
-    if show_merge_list && verbose && !quiet && !display_list_suppressed {
+    //
+    // Backlog #206 S2: the circular display runs forced-verbose (see
+    // `circular_forced_display` above), so the gate reads the effective
+    // flags and the counters count the rendered rows, not the entries:
+    // real's `_PackageCounters` accumulate per displayed merge row, so a
+    // repeat-merge row (the cycle closure) counts again while a
+    // `[nomerge]` row never counts. The recount input is exactly the
+    // rendered merge/uninstall rows (`rendered_rows` from the tree walk
+    // above); `nomerge`, already-installed and disclosure rows contribute
+    // nothing, matching real's `set_pkg_info` gating.
+    let disp_count_entries: Option<Vec<GraphEntry>> = if circular_forced_display {
+        let mut counted: Vec<GraphEntry> = Vec::new();
+        for (i, ordered) in &rendered_rows {
+            if !ordered {
+                continue;
+            }
+            let e = &display_entries[*i];
+            match &e.outcome {
+                portage_repo::PretendOutcome::New { .. }
+                | portage_repo::PretendOutcome::Upgrade { .. }
+                | portage_repo::PretendOutcome::Downgrade { .. }
+                | portage_repo::PretendOutcome::Reinstall { .. }
+                | portage_repo::PretendOutcome::Uninstall { .. } => {
+                    counted.push(e.clone());
+                }
+                portage_repo::PretendOutcome::AlreadyInstalled { .. }
+                | portage_repo::PretendOutcome::NoVisibleCandidate => {}
+            }
+        }
+        Some(counted)
+    } else {
+        None
+    };
+    if show_merge_list && disp_verbose && !disp_quiet && !display_list_suppressed {
         println!();
         println!(
             "{}",
             package_counters_summary(
-                display_entries,
+                disp_count_entries.as_deref().unwrap_or(display_entries),
                 &root,
                 &top_level_pkgs,
                 onlydeps,
                 &color,
                 &result.orphan_blockers,
-                tree
+                disp_tree
             )
         );
     }
@@ -12383,6 +12550,11 @@ pub fn run(args: &[String]) -> ExitCode {
                 &result.masked_deps,
                 &result.use_unsat_deps,
                 &result.plain_miss_deps,
+                // The legacy (gate-off) re-display keeps the user-flagged
+                // rendering it always had; the forced-verbose display is
+                // the gated path's main list above (whose re-display is
+                // skipped as duplicative).
+                false,
             );
         }
     }
@@ -15363,6 +15535,43 @@ mod tests {
         assert_eq!(
             replacement_wait_index(&entries, root, 0, &blocker, &[]),
             None
+        );
+    }
+
+    #[test]
+    fn circular_node_text_matches_real_package_str() {
+        // Backlog #206 S1: real `_emerge/Package.py::Package.__str__`
+        // for a merge-bound ebuild — `(cpv:slot/sub::repo, ebuild
+        // scheduled for merge)` — byte for byte, grounded on the live
+        // n206 probe (`=dev-libs/cyc0b-1`, `dev-libs/hardcyclea`,
+        // `dev-libs/usecyclea`, all `ROOT=$FX` with no `to` suffix).
+        let nc = Colorizer::new(false);
+        assert_eq!(
+            circular_node_text("dev-libs/cyc0b-1", "0", "0", "testrepo", "ebuild", &nc),
+            "(dev-libs/cyc0b-1:0/0::testrepo, ebuild scheduled for merge)"
+        );
+        // A non-0 slot renders `:slot/sub_slot`, like real
+        // `_append_slot`-less `__str__` (which always prints both).
+        assert_eq!(
+            circular_node_text("dev-libs/slotted-2.0", "1", "2", "testrepo", "ebuild", &nc),
+            "(dev-libs/slotted-2.0:1/2::testrepo, ebuild scheduled for merge)"
+        );
+        // A binary merge says `binary`, like real `type_name`.
+        assert_eq!(
+            circular_node_text("dev-libs/binpkg-1.0", "0", "0", "testrepo", "binary", &nc),
+            "(dev-libs/binpkg-1.0:0/0::testrepo, binary scheduled for merge)"
+        );
+        // Under `--color y` real wraps the `cpv:slot/sub::repo` head in
+        // `PKG_MERGE` (`PKG_BINARY_MERGE` for a binary merge); the
+        // `, <type> scheduled for merge)` tail stays plain.
+        let yc = Colorizer::new(true);
+        assert_eq!(
+            circular_node_text("dev-libs/cyc0b-1", "0", "0", "testrepo", "ebuild", &yc),
+            "(\x1b[32mdev-libs/cyc0b-1:0/0::testrepo\x1b[39;49;00m, ebuild scheduled for merge)"
+        );
+        assert_eq!(
+            circular_node_text("dev-libs/binpkg-1.0", "0", "0", "testrepo", "binary", &yc),
+            "(\x1b[35mdev-libs/binpkg-1.0:0/0::testrepo\x1b[39;49;00m, binary scheduled for merge)"
         );
     }
 
