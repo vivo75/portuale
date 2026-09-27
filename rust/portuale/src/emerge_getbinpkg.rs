@@ -55,19 +55,95 @@ use portage_profile::{BinRepo, Config};
 use portage_repo::{GraphEntry, PretendOutcome, RepoConfig};
 use std::path::Path;
 
+/// Real `fetch.py::_hide_url_passwd`: mask a userinfo password
+/// (`//user:secret@` -> `//user:*password*@`), leaving the rest of the
+/// URL untouched. Real applies it to the binhost URL in its own
+/// `Error fetching binhost package info` line (`bintree.py:1794-1796`).
+pub(crate) fn hide_binhost_passwd(url: &str) -> String {
+    let Some(auth_start) = url.find("//") else {
+        return url.to_string();
+    };
+    let after = &url[auth_start + 2..];
+    let Some(at) = after.find('@') else {
+        return url.to_string();
+    };
+    let (auth, rest) = after.split_at(at);
+    let Some((user, _)) = auth.split_once(':') else {
+        return url.to_string();
+    };
+    if user.is_empty() || user.contains([' ', '/']) {
+        return url.to_string();
+    }
+    format!("{}//{}:*password*{}", &url[..auth_start], user, rest)
+}
+
+/// Real `urllib.error.HTTPError`'s own `str` (`"HTTP Error {code}:
+/// {reason}"`, verified against the stdlib: `HTTPError(url, 500,
+/// "Internal Server Error", ...)` stringifies to exactly
+/// `"HTTP Error 500: Internal Server Error"`): recover that shape from
+/// a captured wget transcript. wget's own
+/// `HTTP request sent, awaiting response... {code} {reason}` line
+/// carries the server's status line verbatim, so the reconstruction is
+/// byte-identical whenever the server sent a reason phrase. `None` when
+/// the transcript holds no response line (DNS failure, connection
+/// refused, ...): real would print its own urllib `URLError` string
+/// there, which wget cannot reproduce -- the caller falls back to the
+/// fetch summary instead (documented, not invented parity).
+pub(crate) fn wget_http_error(stderr: &str) -> Option<String> {
+    for line in stderr.lines() {
+        let Some((_, rest)) = line.split_once("awaiting response... ") else {
+            continue;
+        };
+        let rest = rest.trim();
+        let (code, reason) = rest.split_once(' ')?;
+        if code.len() == 3 && code.bytes().all(|b| b.is_ascii_digit()) && !reason.trim().is_empty()
+        {
+            return Some(format!("HTTP Error {code}: {}", reason.trim()));
+        }
+    }
+    None
+}
+
+/// Real `bintree._populate_remote`'s `except OSError` pair
+/// (`bintree.py:1793-1798`): the leading-blank-line
+/// `!!! [<name>] Error fetching binhost package info from '<url>'`
+/// line plus the `!!! [<name>] <detail>` line and its trailing blank
+/// line, as one stderr block. `detail` is real's `str(err)` -- the
+/// `HTTP Error 500: Internal Server Error` shape for a 500 (see
+/// [`wget_http_error`]), the fetch summary otherwise.
+pub(crate) fn binhost_fetch_warning(binrepo_name: &str, sync_uri: &str, detail: &str) -> String {
+    format!(
+        "\n\n!!! [{binrepo_name}] Error fetching binhost package info from '{}'\n!!! [{binrepo_name}] {detail}\n\n",
+        hide_binhost_passwd(sync_uri)
+    )
+}
+
 /// Real `bintree._populate_remote`: for each `http(s)` binrepo, download
 /// its live `Packages` index into the local edb cache
-/// (`BinRepo::packages_dir`). A `file://` binrepo is left as-is. Failures
-/// are surfaced (a `--getbinpkgonly` run with an unreachable binhost
-/// should say so, not silently resolve against a stale/empty pool).
-pub fn refresh_binhost_indexes(binrepos: &[BinRepo], root: &Path) -> Result<(), String> {
+/// (`BinRepo::packages_dir`). A `file://` binrepo is left as-is.
+///
+/// A failed refresh is NON-FATAL (backlog #175): real prints its
+/// `!!! [<repo>] Error fetching binhost package info` /
+/// `!!! [<repo>] <error>` pair to stderr and resolves against whatever
+/// local pool exists (`pkgindex = None`, `bintree.py:1809`) -- a 500ing
+/// binhost with an empty `PKGDIR` falls back to the ebuild, it never
+/// aborts the run. So this returns nothing: each failure is warned
+/// about (via [`binhost_fetch_warning`], never wget's raw transcript)
+/// and resolution proceeds.
+pub fn refresh_binhost_indexes(binrepos: &[BinRepo], root: &Path) {
     for binrepo in binrepos {
         let uri = binrepo.sync_uri.trim_end_matches('/');
         if uri.starts_with("file://") {
             continue;
         }
         let cache_dir = binrepo.packages_dir(root);
-        std::fs::create_dir_all(&cache_dir).map_err(|e| format!("{}: {e}", cache_dir.display()))?;
+        if let Err(e) = std::fs::create_dir_all(&cache_dir) {
+            eprint!(
+                "{}",
+                binhost_fetch_warning(&binrepo.name, uri, &format!("{}: {e}", cache_dir.display()))
+            );
+            continue;
+        }
         let dest = cache_dir.join("Packages");
 
         // Real `bintree._populate_remote` prefers a compressed index when
@@ -75,32 +151,73 @@ pub fn refresh_binhost_indexes(binrepos: &[BinRepo], root: &Path) -> Result<(), 
         // decompressing it into the same plain `Packages` cache file
         // `list_remote_binary_candidates` reads. Fall back to the plain
         // `Packages` if neither compressed form is there.
-        let mut got = false;
+        //
+        // Every attempt runs quiet (`download_via_wget_quiet`): the
+        // transcript is captured for message shaping, never inherited
+        // onto stdout/stderr.
+        let mut failures: Vec<portage_fetch::QuietFetchError> = Vec::new();
+        let mut refreshed = false;
         for (ext, tool) in [("gz", "gzip"), ("zst", "zstd")] {
             let compressed = cache_dir.join(format!("Packages.{ext}"));
-            if crate::fetch::wget_fetch(&format!("{uri}/Packages.{ext}"), &compressed).is_ok() {
-                let out =
-                    std::fs::File::create(&dest).map_err(|e| format!("{}: {e}", dest.display()))?;
-                let status = std::process::Command::new(tool)
-                    .arg("-dc")
-                    .arg(&compressed)
-                    .stdout(std::process::Stdio::from(out))
-                    .status()
-                    .map_err(|e| format!("binhost {uri}: spawning {tool}: {e}"))?;
-                let _ = std::fs::remove_file(&compressed);
-                if !status.success() {
-                    return Err(format!("binhost {uri}: {tool} -dc Packages.{ext} failed"));
+            match crate::fetch::wget_fetch_quiet(&format!("{uri}/Packages.{ext}"), &compressed) {
+                Err(e) => failures.push(e),
+                Ok(()) => {
+                    match std::fs::File::create(&dest) {
+                        Err(e) => failures.push(portage_fetch::QuietFetchError {
+                            summary: format!("{}: {e}", dest.display()),
+                            stderr: String::new(),
+                        }),
+                        Ok(out) => {
+                            let ok = std::process::Command::new(tool)
+                                .arg("-dc")
+                                .arg(&compressed)
+                                .stdout(std::process::Stdio::from(out))
+                                .status()
+                                .is_ok_and(|s| s.success());
+                            let _ = std::fs::remove_file(&compressed);
+                            if ok {
+                                refreshed = true;
+                            } else {
+                                // Like real's corrupt-`Packages.gz`
+                                // (`gzip.BadGzipFile`, itself an
+                                // `OSError`, hits the same
+                                // `except OSError`): warn, no further
+                                // fallback for this repo.
+                                failures.push(portage_fetch::QuietFetchError {
+                                    summary: format!("{tool} -dc Packages.{ext} failed"),
+                                    stderr: String::new(),
+                                });
+                            }
+                        }
+                    }
+                    break;
                 }
-                got = true;
-                break;
             }
         }
-        if !got {
-            crate::fetch::wget_fetch(&format!("{uri}/Packages"), &dest)
-                .map_err(|e| format!("binhost {uri}: {e}"))?;
+        if !refreshed {
+            match crate::fetch::wget_fetch_quiet(&format!("{uri}/Packages"), &dest) {
+                Ok(()) => refreshed = true,
+                Err(e) => failures.push(e),
+            }
+        }
+        if !refreshed {
+            // Real warns with the fetch's own error string; prefer a
+            // server status line (`HTTP Error 500: ...`, from the first
+            // attempt that has one) over the wget summary, exactly like
+            // real prefers `str(HTTPError)` -- the attempts hit the same
+            // server, so the first parseable one is representative.
+            let detail = failures
+                .iter()
+                .find_map(|f| wget_http_error(&f.stderr))
+                .unwrap_or_else(|| {
+                    failures
+                        .last()
+                        .map(|f| f.summary.clone())
+                        .unwrap_or_else(|| "index refresh failed".to_string())
+                });
+            eprint!("{}", binhost_fetch_warning(&binrepo.name, uri, &detail));
         }
     }
-    Ok(())
 }
 
 /// Real `emerge --getbinpkg <atom>` / `--getbinpkgonly <atom>` (no
@@ -516,6 +633,22 @@ mod tests {
         routes: HashMap<String, Vec<u8>>,
         requests: usize,
     ) -> (String, std::thread::JoinHandle<()>) {
+        serve_with_status(
+            routes
+                .into_iter()
+                .map(|(p, b)| (p, ("200 OK".to_string(), b)))
+                .collect(),
+            requests,
+        )
+    }
+
+    /// [`serve`] with an explicit status line per route
+    /// (`"/path" -> ("500 Internal Server Error", body)`), for the
+    /// fault-injection refresh tests below -- unlisted paths still 404.
+    fn serve_with_status(
+        routes: HashMap<String, (String, Vec<u8>)>,
+        requests: usize,
+    ) -> (String, std::thread::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let handle = std::thread::spawn(move || {
@@ -528,8 +661,8 @@ mod tests {
                 let req = String::from_utf8_lossy(&buf[..n]);
                 let path = req.split_whitespace().nth(1).unwrap_or("/").to_string();
                 let (status, body) = match routes.get(&path) {
-                    Some(b) => ("200 OK", b.clone()),
-                    None => ("404 Not Found", Vec::new()),
+                    Some((s, b)) => (s.clone(), b.clone()),
+                    None => ("404 Not Found".to_string(), Vec::new()),
                 };
                 let header = format!(
                     "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -1384,10 +1517,111 @@ mod tests {
             location: None,
             verify_signature: true,
         };
-        refresh_binhost_indexes(std::slice::from_ref(&binrepo), &root).unwrap();
+        refresh_binhost_indexes(std::slice::from_ref(&binrepo), &root);
         let cached = binrepo.packages_dir(&root).join("Packages");
         assert_eq!(std::fs::read(&cached).unwrap(), plain);
         assert!(!binrepo.packages_dir(&root).join("Packages.gz").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn wget_http_error_recovers_urllibs_http_error_shape() {
+        // Real `str(urllib.error.HTTPError(url, 500, "Internal Server
+        // Error", ...))` is `"HTTP Error 500: Internal Server Error"`
+        // (verified against the stdlib, not invented). wget's own
+        // `awaiting response... 500 Internal Server Error` line carries
+        // the server's status line verbatim, so the shaped detail is
+        // byte-identical -- this transcript is a live `wget` capture
+        // against the bed's own 500 stub shape, not hand-written.
+        let transcript = "--2026-09-27 06:19:14--  http://127.0.0.1:18765/Packages\n\
+             Connecting to 127.0.0.1:18765... connected.\n\
+             HTTP request sent, awaiting response... 500 Internal Server Error\n\
+             2026-09-27 06:19:14 ERROR 500: Internal Server Error.\n";
+        assert_eq!(
+            wget_http_error(transcript).as_deref(),
+            Some("HTTP Error 500: Internal Server Error")
+        );
+        // No response line (DNS failure, refused connection, ...): real
+        // would print its own urllib `URLError` string there, which wget
+        // cannot reproduce -- the caller falls back to the fetch summary.
+        assert_eq!(
+            wget_http_error("wget: unable to resolve host address 'example.invalid'\n"),
+            None
+        );
+        assert_eq!(wget_http_error(""), None);
+    }
+
+    #[test]
+    fn hide_binhost_passwd_masks_only_a_userinfo_password() {
+        // Real `fetch.py::_hide_url_passwd` (`//user:secret@` ->
+        // `//user:*password*@`).
+        assert_eq!(
+            hide_binhost_passwd("http://user:secret@host:1234/path"),
+            "http://user:*password*@host:1234/path"
+        );
+        assert_eq!(
+            hide_binhost_passwd("http://127.0.0.1:18765"),
+            "http://127.0.0.1:18765"
+        );
+        assert_eq!(
+            hide_binhost_passwd("http://user@host/"),
+            "http://user@host/"
+        );
+    }
+
+    #[test]
+    fn binhost_fetch_warning_matches_reals_two_line_shape() {
+        // Real `bintree.py:1793-1798` for the bed's F3 stub (repo
+        // `l32-500`, every GET/HEAD 500): the leading blank line, the
+        // two `!!!` lines, the trailing blank line -- all on stderr.
+        assert_eq!(
+            binhost_fetch_warning(
+                "l32-500",
+                "http://127.0.0.1:18765",
+                "HTTP Error 500: Internal Server Error"
+            ),
+            "\n\n!!! [l32-500] Error fetching binhost package info from \
+             'http://127.0.0.1:18765'\n\
+             !!! [l32-500] HTTP Error 500: Internal Server Error\n\n"
+        );
+    }
+
+    #[test]
+    fn refresh_binhost_indexes_warns_and_continues_on_a_500ing_binhost() {
+        // Backlog #175: every index URL 500s. The refresh must not fail
+        // (it returns nothing now) and must leave no cache file behind,
+        // so resolution proceeds against the local pool; the real
+        // `!!! [repo] ...` pair goes to stderr (shaped by
+        // `binhost_fetch_warning`, pinned above -- stderr itself is not
+        // capturable from a unit test, but the run log shows the pair
+        // and no wget transcript).
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let mut routes = HashMap::new();
+        for path in ["/Packages.gz", "/Packages.zst", "/Packages"] {
+            routes.insert(
+                path.to_string(),
+                (
+                    "500 Internal Server Error".to_string(),
+                    b"stub 500\n".to_vec(),
+                ),
+            );
+        }
+        // One connection per attempt: Packages.gz + Packages.zst +
+        // Packages (wget does not retry a 500).
+        let (base, _h) = serve_with_status(routes, 3);
+        let binrepo = BinRepo {
+            name: "l32-500".to_string(),
+            sync_uri: base.clone(),
+            priority: 50,
+            location: None,
+            verify_signature: false,
+        };
+        refresh_binhost_indexes(std::slice::from_ref(&binrepo), &root);
+        assert!(
+            !binrepo.packages_dir(&root).join("Packages").exists(),
+            "a failed refresh leaves no cache file for the resolver to trust"
+        );
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -1419,7 +1653,10 @@ mod tests {
             location: None,
             verify_signature: true,
         }];
-        refresh_binhost_indexes(&binrepos, &root).expect("index refresh");
+        // Non-fatal by design (backlog #175): a failed refresh warns on
+        // stderr and resolves against the local pool -- here the plain
+        // Packages succeeds, so the live index lands in the edb cache.
+        refresh_binhost_indexes(&binrepos, &root);
         assert!(
             root.join("var/cache/edb/binhost/127.0.0.1/Packages")
                 .is_file(),
@@ -1537,7 +1774,7 @@ mod tests {
             location: None,
             verify_signature: true,
         }];
-        refresh_binhost_indexes(&binrepos, &root).expect("index refresh");
+        refresh_binhost_indexes(&binrepos, &root);
 
         let config = Config {
             binrepos: binrepos.clone(),
