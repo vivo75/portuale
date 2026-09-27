@@ -8627,6 +8627,29 @@ fn merge_list_shown(pretend: bool, ask: bool, tree: bool, verbose: bool, quiet: 
     pretend || ((ask || tree || verbose) && !(quiet && !ask))
 }
 
+/// Backlog #185 fix round 1: real's resolution-phase header gating
+/// (real `_emerge/depgraph.py:12089-12094`, `_start_resolution_display`):
+/// the `These are the packages that would be ...` header prints when
+/// `--quiet` is absent and (`--ask`/`--tree`/`--verbose`) is given --
+/// `--nodeps` is NOT consulted (the `spinner.mode = QUIET` assignment
+/// at `depgraph.py:12129-12130` comes after the header block). Pure
+/// predicate so the `--nodeps` + display-flag shapes stay unit-pinned.
+fn resolution_header_shown(ask: bool, tree: bool, verbose: bool, quiet: bool) -> bool {
+    !quiet && (ask || tree || verbose)
+}
+
+/// Backlog #185 fix round 1: real's spinner-notice gating (real
+/// `_emerge/depgraph.py:12129-12132` + `stdout_spinner.py:117-139`):
+/// `--quiet` or `--nodeps` forces `spinner.mode = QUIET`, so
+/// `begin_notice("Calculating dependencies")` queues nothing,
+/// `end_notice()` reports nothing to complete (no `... done!` line),
+/// and `backtrack_depgraph`'s `finally:` prints no timing report.
+/// Pure predicate so the `--nodeps` + display-flag shapes stay
+/// unit-pinned.
+fn resolution_notice_shown(quiet: bool, nodeps: bool) -> bool {
+    !quiet && !nodeps
+}
+
 pub fn run(args: &[String]) -> ExitCode {
     if wants_help(args) {
         print_help();
@@ -11812,22 +11835,24 @@ pub fn run(args: &[String]) -> ExitCode {
     let show_merge_list = !autounmask_only
         && merge_list_shown(pretend, ask, tree, verbose, quiet)
         && (pretend || gated_abort_partial.is_none());
-    // Backlog #185: real's resolution-phase display for a non-`--pretend`
-    // run, printed whether or not the list itself is shown -- and whether
-    // or not resolution succeeds. Real `depgraph.py::
+    // Backlog #185 (fix round 1): real's resolution-phase display for
+    // a non-`--pretend` run, printed whether or not the list itself is
+    // shown -- and whether or not resolution succeeds. Real `depgraph.py::
     // _start_resolution_display` prints the header (when `--ask`,
-    // `--tree` or `--verbose` is given) and starts the spinner notice
-    // before resolving, and `backtrack_depgraph`'s `finally:` completes
-    // the notice plus the timing line after (success or failure alike).
-    // `--quiet` -- and `--nodeps`, real `depgraph.py:12130` -- puts the
-    // spinner in QUIET mode: no header, no notice, and `end_notice()`
-    // reports nothing to complete, so no timing line either.
+    // `--tree` or `--verbose` is given and `--quiet` is absent --
+    // `--nodeps` is NOT consulted, the `spinner.mode = QUIET`
+    // assignment at `depgraph.py:12129-12130` comes after the header
+    // block) and starts the spinner notice before resolving, and
+    // `backtrack_depgraph`'s `finally:` completes the notice plus the
+    // timing line after (success or failure alike). `--quiet` suppresses
+    // everything; `--nodeps` suppresses only the notice and the timing
+    // line (QUIET mode: `end_notice()` reports nothing to complete).
     // Provenance: container probe m185 (real 3.0.81.3,
     // `localhost/test-portuale:latest`, `emerge --oneshot --usepkgonly
     // probe/probe-a` in six shapes; the gating is identical in 3.0.82.2
     // by source read) plus the 3.0.82.2 source for exact text.
-    if !pretend && !quiet && !nodeps {
-        if ask || tree || verbose {
+    if !pretend && !quiet {
+        if resolution_header_shown(ask, tree, verbose, quiet) {
             // Real `_start_resolution_display`
             // (`depgraph.py:12087-12127`): a leading blank line, then
             // `These are the packages that would be ...` -- `in reverse
@@ -11849,25 +11874,27 @@ pub fn run(args: &[String]) -> ExitCode {
             }
             println!();
         }
-        // Real `stdout_spinner` STATIC mode (piped stdout, real
-        // `stdout_spinner.py:105-145`): `begin_notice("Calculating
-        // dependencies")` writes the notice plus ` ...`, and
-        // `end_notice()` completes it with ` done!`. NOTE: the m185
-        // probe (3.0.81.3) shows two spaces before `...`; the 3.0.82.2
-        // source (`f"{notice} ..."` + `" done!\n"`) shows one -- ported
-        // from the pinned source, pending the coordinator's 3.0.82.2
-        // bed confirmation (see the m185 report).
-        println!("Calculating dependencies ... done!");
-        // Real `_show_resolution_report` (`depgraph.py:12134-12146`):
-        // `Dependency resolution took N.NN s (backtrack: B/M).` plus a
-        // trailing blank line. The wall-clock seconds are cut exactly
-        // like the #135 abort-path timing line just below (repeated-run
-        // determinism is a jointly-owned gate; nondeterministic values
-        // ride `--json` only) -- the `backtrack: B/M` signal is kept.
-        println!(
-            "Dependency resolution took (backtrack: {}/{}).\n",
-            result.backtrack_restarts, result.backtrack_max,
-        );
+        if resolution_notice_shown(quiet, nodeps) {
+            // Real `stdout_spinner` STATIC mode (piped stdout, real
+            // `stdout_spinner.py:105-145`): `begin_notice("Calculating
+            // dependencies")` writes the notice plus ` ...`, and
+            // `end_notice()` completes it with ` done!`. NOTE: the m185
+            // probe (3.0.81.3) shows two spaces before `...`; the 3.0.82.2
+            // source (`f"{notice} ..."` + `" done!\n"`) shows one -- ported
+            // from the pinned source, pending the coordinator's 3.0.82.2
+            // bed confirmation (see the m185 report).
+            println!("Calculating dependencies ... done!");
+            // Real `_show_resolution_report` (`depgraph.py:12134-12146`):
+            // `Dependency resolution took N.NN s (backtrack: B/M).` plus a
+            // trailing blank line. The wall-clock seconds are cut exactly
+            // like the #135 abort-path timing line just below (repeated-run
+            // determinism is a jointly-owned gate; nondeterministic values
+            // ride `--json` only) -- the `backtrack: B/M` signal is kept.
+            println!(
+                "Dependency resolution took (backtrack: {}/{}).\n",
+                result.backtrack_restarts, result.backtrack_max,
+            );
+        }
     }
 
     // Real `depgraph.py:11192-11235`'s `display_problems()` block for a
@@ -13889,6 +13916,38 @@ mod tests {
         assert!(!merge_list_shown(false, false, false, false, true));
         assert!(!merge_list_shown(false, false, false, true, true));
         assert!(merge_list_shown(false, true, false, false, true));
+    }
+
+    #[test]
+    fn nonpretend_resolution_display_splits_header_from_notice_under_nodeps() {
+        // Backlog #185 fix round 1: real
+        // `_emerge/depgraph.py::_start_resolution_display`
+        // (`depgraph.py:12086-12132`) prints the header without consulting
+        // `--nodeps` (the `spinner.mode = QUIET` assignment at
+        // `:12129-12130` comes after the header block), while the
+        // `Calculating dependencies ... done!` notice and the timing
+        // report are suppressed under `--nodeps` (QUIET spinner:
+        // `end_notice()` reports nothing to complete) or `--quiet`.
+        // (ask, tree, verbose, quiet) -> header shown.
+        assert!(resolution_header_shown(false, false, true, false));
+        assert!(!resolution_header_shown(false, false, true, true));
+        assert!(!resolution_header_shown(true, false, false, true));
+        assert!(resolution_header_shown(false, true, false, false));
+        assert!(!resolution_header_shown(false, false, false, false));
+        // (quiet, nodeps) -> notice + timing shown.
+        assert!(resolution_notice_shown(false, false));
+        assert!(!resolution_notice_shown(false, true));
+        assert!(!resolution_notice_shown(true, false));
+        assert!(!resolution_notice_shown(true, true));
+        // The three review shapes (`--verbose` in each): `--nodeps`
+        // non-pretend -> header shown, calc/timing hidden; plain ->
+        // both shown; `--quiet` -> neither.
+        assert!(resolution_header_shown(false, false, true, false));
+        assert!(!resolution_notice_shown(false, true));
+        assert!(resolution_header_shown(false, false, true, false));
+        assert!(resolution_notice_shown(false, false));
+        assert!(!resolution_header_shown(false, false, true, true));
+        assert!(!resolution_notice_shown(true, false));
     }
 
     #[test]
