@@ -298,6 +298,60 @@ fn sigint_prompt_child(
     (child, master, stdout_pipe, err_handle)
 }
 
+/// Spawns `args` on a pty with the env `make_env` builds, waits for
+/// `prompt` on stdout, then sends `^C`. Asserts exit 130 with one
+/// `Interrupted.` and no `Quitting.`. Returns stdout.
+/// Portage: UserQuery.py, query.
+#[cfg(unix)]
+fn ctrl_c_at_prompt(
+    label: &str,
+    args: &[&str],
+    make_env: fn(&std::path::Path, &std::path::Path) -> Vec<(String, String)>,
+    prompt: &[u8],
+) -> String {
+    use std::io::Write;
+    use std::os::unix::process::ExitStatusExt;
+    let portuale_bin = built_portuale_bin();
+    let base = TempDir::new(label).keep();
+    let root = base.join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    let env = make_env(&root, &base.join("pt"));
+    let (master, slave_stdio) = pty_pair();
+    let (child, mut master, mut stdout_pipe, err_handle) =
+        sigint_prompt_child(&portuale_bin, args, env, master, slave_stdio);
+    let mut stdout = read_stdout_until_marker(&mut stdout_pipe, prompt, label);
+    master.write_all(b"\x03").expect("Ctrl-C the prompt");
+    let out_handle = std::thread::spawn(move || {
+        let mut v = Vec::new();
+        std::io::Read::read_to_end(&mut stdout_pipe, &mut v).expect("drain child stdout");
+        v
+    });
+    let status = wait_pty_status(child);
+    drop(master);
+    stdout.extend(out_handle.join().expect("stdout drain"));
+    let stderr = err_handle.join().expect("stderr drain");
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&stdout),
+        String::from_utf8_lossy(&stderr)
+    );
+    assert_eq!(
+        status.signal(),
+        None,
+        "SIGINT at the prompt must exit 130, not die by signal"
+    );
+    let text = String::from_utf8_lossy(&stdout).into_owned();
+    assert_eq!(text.matches("Interrupted.").count(), 1, "{text}");
+    assert!(
+        !text.contains("Quitting."),
+        "an interrupted prompt must not print `Quitting.`: {text}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+    text
+}
+
 /// An unowned ROOT for the privilege tests; `None` for a root caller, whose test
 /// returns early.
 #[cfg(unix)]
@@ -309,6 +363,50 @@ fn ask_pretend_unowned_root() -> Option<std::path::PathBuf> {
     Some(std::path::PathBuf::from(
         "/usr/portuale-ask-pretend-test-does-not-exist",
     ))
+}
+
+/// Run the built binary twice under `--pretend` -- once with
+/// `--X=True`, once with the bare `--X` -- and assert the two runs
+/// are byte-identical (exit code, stdout, stderr).
+/// Portage `true_y_or_n` admits `=True` for these options.
+fn true_spelling_matches_bare(flag_eq_true: &str, flag_bare: &str, atom: &str, expected_rc: i32) {
+    let portuale_bin = built_portuale_bin();
+    let base = TempDir::new("true_y_or_n").keep();
+    let root = base.join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    let env = fixture_resolve_env(&root, &base.join("pt"));
+    let run = |flag: &str| {
+        std::process::Command::new(&portuale_bin)
+            .args(["emerge", "--pretend", flag, atom])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .envs(env.clone())
+            .output()
+            .expect("portuale emerge spawns")
+    };
+    let spelled = run(flag_eq_true);
+    let bare = run(flag_bare);
+    for (label, output) in [("spelled", &spelled), ("bare", &bare)] {
+        assert_eq!(
+            output.status.code(),
+            Some(expected_rc),
+            "--pretend {flag_bare} {atom} ({label}) must exit {expected_rc}\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+    assert_eq!(
+        String::from_utf8_lossy(&spelled.stdout),
+        String::from_utf8_lossy(&bare.stdout),
+        "--pretend {flag_eq_true} {atom} must print like the bare flag",
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&spelled.stderr),
+        String::from_utf8_lossy(&bare.stderr),
+        "--pretend {flag_eq_true} {atom} must warn like the bare flag",
+    );
+    let _ = std::fs::remove_dir_all(&base);
 }
 
 /// The `portuale` binary next to the current test executable.
@@ -538,6 +636,7 @@ mod attrs;
 mod blockers;
 mod conflicts;
 mod env_config;
+mod flag_spellings;
 mod gates;
 mod json;
 mod news;

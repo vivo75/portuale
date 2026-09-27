@@ -63,6 +63,101 @@ fn resume_cpv_maps_source_and_binary_and_skips_non_merges() {
 }
 
 #[test]
+fn resume_binary_repo_comes_from_the_binary_pool_not_the_ebuild_repos() {
+    // The resumed `cpv::repo` line names the binary's own repository: local
+    // `$PKGDIR` index first, then remote binhosts; a record without `REPO`
+    // is `"__unknown__"`, and nothing anywhere is `None`.
+    use std::collections::HashMap;
+    let record = |cpv: &str, repo: Option<&str>| {
+        let mut m = HashMap::new();
+        m.insert("CPV".to_string(), cpv.to_string());
+        if let Some(r) = repo {
+            m.insert("REPO".to_string(), r.to_string());
+        }
+        m
+    };
+    let local = portage_repo::BinaryIndex::from_entries(vec![
+        record("dev-libs/bin-a-1.0", Some("binhostrepo")),
+        record("dev-libs/bin-norepo-1.0", None),
+        record("dev-libs/bin-s-1.0", Some("localrepo")),
+    ]);
+    let here = Path::new("/");
+    assert_eq!(
+        resume_binary_repo(ResumeBinaryRepoArgs {
+            local: &local,
+            binrepos: &[],
+            root: here,
+            category: "dev-libs",
+            package: "bin-a",
+            version: "1.0"
+        }),
+        Some("binhostrepo".to_string())
+    );
+    assert_eq!(
+        resume_binary_repo(ResumeBinaryRepoArgs {
+            local: &local,
+            binrepos: &[],
+            root: here,
+            category: "dev-libs",
+            package: "bin-norepo",
+            version: "1.0"
+        }),
+        Some("__unknown__".to_string())
+    );
+    assert_eq!(
+        resume_binary_repo(ResumeBinaryRepoArgs {
+            local: &local,
+            binrepos: &[],
+            root: here,
+            category: "dev-libs",
+            package: "missing",
+            version: "1.0"
+        }),
+        None
+    );
+
+    // Remote hit through a `file://` binhost the local index lacks.
+    let remote_dir = tempdir();
+    fs::write(
+        remote_dir.join("Packages"),
+        "TIMESTAMP: 0\nPACKAGES: 2\n\nCPV: dev-libs/bin-r-2.0\nREPO: remoterepo\n\nCPV: dev-libs/bin-s-1.0\nREPO: remoterepo\n",
+    )
+    .unwrap();
+    let binrepos = vec![portage_profile::BinRepo {
+        name: "tmpremote".to_string(),
+        sync_uri: format!("file://{}", remote_dir.display()),
+        priority: 1,
+        location: None,
+        verify_signature: false,
+        frozen: false,
+    }];
+    assert_eq!(
+        resume_binary_repo(ResumeBinaryRepoArgs {
+            local: &local,
+            binrepos: &binrepos,
+            root: here,
+            category: "dev-libs",
+            package: "bin-r",
+            version: "2.0"
+        }),
+        Some("remoterepo".to_string())
+    );
+    // The local index shadows the binhost for the same version.
+    assert_eq!(
+        resume_binary_repo(ResumeBinaryRepoArgs {
+            local: &local,
+            binrepos: &binrepos,
+            root: here,
+            category: "dev-libs",
+            package: "bin-s",
+            version: "1.0"
+        }),
+        Some("localrepo".to_string())
+    );
+    let _ = fs::remove_dir_all(&remote_dir);
+}
+
+#[test]
 fn resume_entry_uses_the_binary_repo_for_binary_entries_only() {
     // `binary_repo` wins for a `Binary` entry, is ignored for an `Ebuild`
     // entry, and `None` keeps the ebuild fallback.
