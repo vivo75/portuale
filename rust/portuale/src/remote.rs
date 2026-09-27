@@ -530,6 +530,70 @@ impl Drop for ConfigRootOverride {
     }
 }
 
+/// A placed `/etc/portage` config root for a resolve run: `Server`
+/// paths are used directly, `Client` trees are pulled once into a temp
+/// dir re-rooted as `<tmp>/etc/portage` (a valid `PORTAGE_CONFIGROOT`,
+/// real-root layout) with `ConfigRootOverride` held for the whole
+/// resolve. The pulled temp dir is removed best-effort on drop, once
+/// the resolve is done (backlog #171c review: both the resolve site
+/// and `--remote-binpkg` leaked one
+/// `/tmp/portuale-remote-etc-<pid>-<nanos>` per run). Shared by
+/// `run_remote_resolve` and `run_bundle_stage` -- one placement match,
+/// no duplicated pull logic.
+pub(crate) struct PlacedConfig {
+    /// The dir to resolve from (the server path, or the pulled temp root).
+    pub(crate) dir: std::path::PathBuf,
+    _config_guard: ConfigRootOverride,
+    /// Temp dir holding a pulled client tree (`None` for `Server`).
+    tmp: Option<std::path::PathBuf>,
+}
+
+impl Drop for PlacedConfig {
+    fn drop(&mut self) {
+        if let Some(tmp) = &self.tmp {
+            let _ = std::fs::remove_dir_all(tmp);
+        }
+    }
+}
+
+/// Place `/etc/portage` per `ConfigPlacement` (see `PlacedConfig`).
+/// `Err` is a pull failure (already a full `mrg: …` line); callers
+/// print it and exit 1, like the resolve path's own errors.
+pub(crate) fn place_config_root(
+    ctx: &RemoteContext,
+    control: Option<&std::path::Path>,
+) -> Result<PlacedConfig, String> {
+    let (dir, tmp): (std::path::PathBuf, Option<std::path::PathBuf>) = match &ctx.etc_portage {
+        ConfigPlacement::Server(path) => (std::path::PathBuf::from(path), None),
+        ConfigPlacement::Client(path) => {
+            let tmp = std::env::temp_dir().join(format!(
+                "portuale-remote-etc-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            ));
+            // The pulled tree is the *contents* of the client's
+            // `/etc/portage`; re-root it as `<tmp>/etc/portage` so the
+            // dir is a valid `PORTAGE_CONFIGROOT` (real-root layout).
+            let pulled_portage = tmp.join("etc/portage");
+            if let Err(message) = pull_dir(ctx, control, path, &pulled_portage) {
+                // Best-effort: don't leave a partial pull behind.
+                let _ = std::fs::remove_dir_all(&tmp);
+                return Err(message);
+            }
+            (tmp.clone(), Some(tmp))
+        }
+    };
+    let guard = ConfigRootOverride::set(&dir);
+    Ok(PlacedConfig {
+        dir,
+        _config_guard: guard,
+        tmp,
+    })
+}
+
 /// Run an arbitrary remote command (`tar`, …), not just `bash -s`.
 /// stdout bytes come back to the caller (used by the config pull).
 fn run_raw_command(
@@ -982,31 +1046,17 @@ pub fn run_remote_resolve(matches: &ArgMatches, ctx: RemoteContext, argv: Vec<St
         return print_preflight_report(&ctx, &failures, &warnings, first_contact);
     }
     print_preflight_report(&ctx, &failures, &warnings, first_contact);
-    // etc-portage placement → config root for the resolve.
-    let pull_tmp;
-    let config_dir: std::path::PathBuf = match &ctx.etc_portage {
-        ConfigPlacement::Server(path) => std::path::PathBuf::from(path),
-        ConfigPlacement::Client(path) => {
-            pull_tmp = std::env::temp_dir().join(format!(
-                "portuale-remote-etc-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos())
-                    .unwrap_or(0)
-            ));
-            // The pulled tree is the *contents* of the client's
-            // `/etc/portage`; re-root it as `<tmp>/etc/portage` so the
-            // dir is a valid `PORTAGE_CONFIGROOT` (real-root layout).
-            let pulled_portage = pull_tmp.join("etc/portage");
-            if let Err(message) = pull_dir(&ctx, control, path, &pulled_portage) {
-                eprintln!("{message}");
-                return ExitCode::from(1);
-            }
-            pull_tmp.clone()
+    // etc-portage placement → config root for the resolve (shared
+    // helper: `Server` direct, `Client` pulled). `_placed` stays alive
+    // across the resolve (config root + env override); its temp pull
+    // is removed best-effort on drop at scope end.
+    let _placed = match place_config_root(&ctx, control) {
+        Ok(placed) => placed,
+        Err(message) => {
+            eprintln!("{message}");
+            return ExitCode::from(1);
         }
     };
-    let _config_guard = ConfigRootOverride::set(&config_dir);
     set_remote_exec(ctx);
     let code = crate::pretend::run(&argv);
     // Defensive: the dispatch site takes the handoff, but an early return
@@ -2093,9 +2143,9 @@ fn run_bundle_stage(
     }
     // Backlog #171b: the trial path resolves the client config exactly
     // like the plan path does -- place `/etc/portage` per
-    // `ConfigPlacement` (pulled client tree re-rooted as a valid
-    // `PORTAGE_CONFIGROOT`, same shape as `run_remote_resolve`), then
-    // load the same repos + resolved config `pretend::run` merges with
+    // `ConfigPlacement` through the shared `place_config_root` helper
+    // (same shape as `run_remote_resolve`), then load the same repos +
+    // resolved config `pretend::run` merges with
     // (`load_repos_and_config`: one shared resolver call, no duplicate
     // logic). The placed config's `INSTALL_MASK` (+ the
     // `no{man,info,doc}` fold), resolved `FEATURES`, and
@@ -2103,28 +2153,16 @@ fn run_bundle_stage(
     // exactly as `run_remote_plan`'s own values do. Both placements
     // always name a path, so there is no config-less mode left here to
     // keep the old empty values for; a pull or resolve failure is a
-    // hard error like the resolve path's own.
-    let pull_tmp;
-    let config_dir: std::path::PathBuf = match &ctx.etc_portage {
-        ConfigPlacement::Server(path) => std::path::PathBuf::from(path),
-        ConfigPlacement::Client(path) => {
-            pull_tmp = std::env::temp_dir().join(format!(
-                "portuale-remote-etc-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos())
-                    .unwrap_or(0)
-            ));
-            let pulled_portage = pull_tmp.join("etc/portage");
-            if let Err(message) = pull_dir(ctx, control, path, &pulled_portage) {
-                eprintln!("{message}");
-                return ExitCode::from(1);
-            }
-            pull_tmp.clone()
+    // hard error like the resolve path's own. `_placed` stays alive
+    // across the flow; its temp pull is removed best-effort on drop.
+    let _placed = match place_config_root(ctx, control) {
+        Ok(placed) => placed,
+        Err(message) => {
+            eprintln!("{message}");
+            return ExitCode::from(1);
         }
     };
-    let _config_guard = ConfigRootOverride::set(&config_dir);
+    let config_dir = _placed.dir.clone();
     let (_repos, config) =
         match crate::pretend::load_repos_and_config(&config_dir, &portage_repo::root_from_env()) {
             Ok(loaded) => loaded,
@@ -2311,6 +2349,70 @@ fn collect_server_locale(get: impl Fn(&str) -> Option<String>) -> Vec<(String, S
         .collect()
 }
 
+/// Real's `posixish_locale` EAPI attribute (`eapi.py:182,309`): true
+/// from EAPI 6 on. Only posixish phases run the `LC_ALL` split below
+/// (`EbuildPhase.py:51-56`); older EAPIs keep `LC_ALL` as-is.
+fn eapi_is_posixish(eapi: &str) -> bool {
+    let digits: String = eapi
+        .trim()
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    // Real rejects an unknown EAPI outright; anything reaching us parsed
+    // off an ebuild, so default an unparseable value to the modern rule
+    // (the same direction the local phase path's unconditional split
+    // already takes).
+    digits.parse::<u64>().map(|n| n >= 6).unwrap_or(true)
+}
+
+/// Port of real's `split_LC_ALL` (`portage/util/locale.py:160`) to the
+/// forwarded regen locale set, for a posixish phase: a set `LC_ALL` fans
+/// out over every forwarded `LC_*` (real copies it over all twelve
+/// `locale_categories`, unconditionally overwriting) and itself
+/// disappears (real blanks it, then `config.environ()` deletes the
+/// placeholder, `config.py:3374-3385`). `LANG` is filled from `LC_ALL`
+/// only when the server left it unset -- real's split never touches
+/// `LANG`, but with `LC_ALL` set and `LANG` unset the effective locale
+/// is `LC_ALL`'s value everywhere, and the bed shows real's saved env
+/// carrying `LANG` alongside the split categories. An explicitly set
+/// `LANG` is never clobbered; `LANGUAGE` (not a locale category, rides
+/// along per the l171b brief) is never touched. A set-but-empty
+/// `LC_ALL` is dropped without fanning out (real's `if lc_all:` is
+/// falsy, then `environ()` deletes the placeholder). Non-posixish
+/// EAPIs return the pairs unchanged (real never calls the split there).
+fn split_server_locale(locale: &[(String, String)], eapi: &str) -> Vec<(String, String)> {
+    if !eapi_is_posixish(eapi) {
+        return locale.to_vec();
+    }
+    let lc_all = locale
+        .iter()
+        .rev()
+        .find(|(name, _)| name == "LC_ALL")
+        .map(|(_, value)| value.clone())
+        .unwrap_or_default();
+    let mut out: Vec<(String, String)> = locale
+        .iter()
+        .filter(|(name, _)| name != "LC_ALL")
+        .cloned()
+        .collect();
+    if lc_all.is_empty() {
+        return out;
+    }
+    for name in REGEN_LOCALE_VARS
+        .iter()
+        .filter(|name| **name != "LC_ALL" && **name != "LANGUAGE" && **name != "LANG")
+    {
+        match out.iter_mut().find(|(n, _)| n == name) {
+            Some(pair) => pair.1 = lc_all.clone(),
+            None => out.push((name.to_string(), lc_all.clone())),
+        }
+    }
+    if !out.iter().any(|(n, _)| n == "LANG") {
+        out.push(("LANG".to_string(), lc_all));
+    }
+    out
+}
+
 /// The merge-time environment-regeneration postinst run (backlog #171):
 /// real `vartree.py:5334` sets `PORTAGE_UPDATE_ENV=<dbpkgdir>/
 /// environment.bz2` around *every* merge's postinst phase, and
@@ -2333,20 +2435,24 @@ fn collect_server_locale(get: impl Fn(&str) -> Option<String>) -> Vec<(String, S
 /// `PORTAGE_FEATURES` carry the resolved client list (the local
 /// `refresh_features` rule), so the env records the merge-time
 /// features (e.g. no `buildpkg`). `locale` re-exports the server's own
-/// locale values (see `REGEN_LOCALE_VARS` / `collect_server_locale`) so
+/// locale values (see `REGEN_LOCALE_VARS` / `collect_server_locale`,
+/// split per `split_server_locale` on posixish EAPIs) so
 /// the regen'd env carries them exactly as real's calling-environment
 /// whitelist does. `PHASE_postinst=<rc>` plus
 /// `REGEN_ENV=ok|missing|skip:no-hooks` come back on stdout; the
 /// script exits with the phase rc (a non-zero postinst is non-fatal --
 /// real `_postinst_failure` -- as long as the regen file exists).
 ///
-/// `O` is unset and `SHELL` unexported before the phase runs: real's
+/// `O` is unset and `SHELL` unset before the phase runs: real's
 /// phase shell never has `O` (`config.environ()` drops it via
 /// `special_env_vars.py: environ_filter` even though `doebuild.py:475`
 /// sets `mysettings["O"]`) and its saved `SHELL` is `declare --`
 /// (bash initializes its own -- `SHELL` is in neither the whitelist
 /// nor the config), while `mrg` exported a unit-local `O` and usually
-/// inherits an exported `SHELL`.
+/// inherits an exported `SHELL`. `LC_ALL` is unset on posixish EAPIs
+/// and the forwarded locale arrives pre-split (see
+/// `split_server_locale`); the unset also kills any `LC_ALL` leaking
+/// in from the sourced build-time environment.
 fn postinst_regen_script(
     unit_dir: &str,
     staged: &crate::remote_bundle::StagedBundle,
@@ -2371,8 +2477,19 @@ fn postinst_regen_script(
     // Backlog #171b: match real's phase shell (see the fn doc comment)
     // so the `PORTAGE_UPDATE_ENV` save matches real's saved env.
     extra.push_str("unset O\n");
-    extra.push_str("export -n SHELL\n");
-    for (name, value) in locale {
+    // Backlog #171c: `unset` (not `export -n`) reproduces real exactly:
+    // bash self-initializes an unexported `SHELL`, while `export -n`
+    // would keep a non-default server value.
+    extra.push_str("unset SHELL\n");
+    // Backlog #171c: real's posixish phases never see `LC_ALL`
+    // (`split_LC_ALL` + `config.environ()`); the unset also covers an
+    // `LC_ALL` leaking in from the sourced build-time environment, and
+    // the exports below carry the pre-split values.
+    let posixish = eapi_is_posixish(&staged.eapi);
+    if posixish {
+        extra.push_str("unset LC_ALL\n");
+    }
+    for (name, value) in split_server_locale(locale, &staged.eapi).iter() {
         extra.push_str(&format!(
             "export {name}={quoted}\n",
             quoted = sh_quote(value)
@@ -4793,8 +4910,9 @@ mod tests {
     }
 
     /// Backlog #171b tasks 2-3, render level: the regen script unsets
-    /// `O`, unexports `SHELL`, and re-exports exactly the given locale
-    /// pairs (quoting values like any other export).
+    /// `O`, unsets `SHELL`, unsets `LC_ALL` (EAPI 8 is posixish), and
+    /// re-exports exactly the given locale pairs (quoting values like
+    /// any other export).
     #[test]
     fn postinst_regen_script_matches_real_shell_shape() {
         let staged = render_test_staged();
@@ -4816,8 +4934,12 @@ mod tests {
             "O must go (real environ_filter):\n{script}"
         );
         assert!(
-            script.contains("export -n SHELL\n"),
-            "SHELL must be unexported (real declare --):\n{script}"
+            script.contains("unset SHELL\n"),
+            "SHELL must be unset so bash self-inits it (real declare --):\n{script}"
+        );
+        assert!(
+            script.contains("unset LC_ALL\n"),
+            "LC_ALL must go on posixish EAPIs (real split_LC_ALL):\n{script}"
         );
         assert!(
             script.contains("export LANG='C.UTF-8'\n"),
@@ -4890,6 +5012,224 @@ mod tests {
         assert!(
             regen.contains("declare -x LC_MESSAGES=\"C.UTF-8\""),
             "server LC_* missing:\n{regen}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #171c task 1, unit level: the `split_LC_ALL` port fans a
+    /// set `LC_ALL` out over the forwarded set and drops it (real
+    /// `portage/util/locale.py:160` + `config.py:3374-3385`), fills an
+    /// unset `LANG`, never clobbers an explicit one, drops an empty
+    /// `LC_ALL` without fanning out, leaves `LANGUAGE` alone, and
+    /// passes everything through untouched on non-posixish EAPIs.
+    #[test]
+    fn split_server_locale_fans_lc_all_out_like_real() {
+        assert!(eapi_is_posixish("6"));
+        assert!(eapi_is_posixish("8"));
+        assert!(!eapi_is_posixish("5"));
+        let get = |pairs: &[(String, String)], name: &str| {
+            pairs
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, v)| v.clone())
+        };
+        // The brief's case: server `LC_ALL=C.UTF-8` alone → `LANG` +
+        // every forwarded `LC_*` carry it, no `LC_ALL`.
+        let out = split_server_locale(&[("LC_ALL".to_string(), "C.UTF-8".to_string())], "8");
+        assert!(get(&out, "LC_ALL").is_none(), "LC_ALL survived:\n{out:?}");
+        assert_eq!(get(&out, "LANG").as_deref(), Some("C.UTF-8"));
+        for name in [
+            "LC_COLLATE",
+            "LC_CTYPE",
+            "LC_MESSAGES",
+            "LC_MONETARY",
+            "LC_NUMERIC",
+            "LC_TIME",
+            "LC_PAPER",
+        ] {
+            assert_eq!(
+                get(&out, name).as_deref(),
+                Some("C.UTF-8"),
+                "{name} not split"
+            );
+        }
+        // Real overwrites unconditionally; an explicit `LANG` still wins.
+        let out = split_server_locale(
+            &[
+                ("LC_ALL".to_string(), "C.UTF-8".to_string()),
+                ("LC_MESSAGES".to_string(), "en_US.UTF-8".to_string()),
+                ("LANG".to_string(), "POSIX".to_string()),
+                ("LANGUAGE".to_string(), "de".to_string()),
+            ],
+            "8",
+        );
+        assert_eq!(get(&out, "LC_MESSAGES").as_deref(), Some("C.UTF-8"));
+        assert_eq!(get(&out, "LANG").as_deref(), Some("POSIX"));
+        assert_eq!(get(&out, "LANGUAGE").as_deref(), Some("de"));
+        assert!(get(&out, "LC_ALL").is_none());
+        // Set-but-empty `LC_ALL` is dropped, never fanned out.
+        let out = split_server_locale(
+            &[
+                ("LC_ALL".to_string(), String::new()),
+                ("LANG".to_string(), "C".to_string()),
+            ],
+            "8",
+        );
+        assert!(get(&out, "LC_ALL").is_none());
+        assert_eq!(get(&out, "LANG").as_deref(), Some("C"));
+        assert!(get(&out, "LC_CTYPE").is_none());
+        // Non-posixish EAPIs keep `LC_ALL` as-is (real never splits).
+        let input = vec![("LC_ALL".to_string(), "C.UTF-8".to_string())];
+        assert_eq!(split_server_locale(&input, "5"), input);
+    }
+
+    /// Backlog #171c task 1, stage level: a real regen run with only
+    /// `LC_ALL=C.UTF-8` forwarded records `LANG` + the individual
+    /// `LC_*` as `C.UTF-8` and no `LC_ALL` line (bed run
+    /// `l31-20260927T052232Z`: real has `LANG` + split categories where
+    /// `mrg` echoed `LC_ALL` back).
+    #[test]
+    fn regen_splits_lc_all_like_real() {
+        let tmp = regen_tmp("lc-all-split");
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+        let (unit, staged) = regen_unit(
+            &tmp,
+            "EAPI=8\nDESCRIPTION=\"synthetic regen probe\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\npkg_postinst() {\n\texport PT_MERGE_MARKER=\"merge-time\"\n}\n",
+            "postinst",
+        );
+        let ctx = local_ctx(root.to_str().unwrap(), tmp.join("work").to_str().unwrap());
+        let locale = vec![("LC_ALL".to_string(), "C.UTF-8".to_string())];
+        let report = run_postinst_regen_stage(&ctx, None, &unit, &staged, Some("sandbox"), &locale)
+            .expect("regen phase runs");
+        assert_eq!(report.phase_rc, 0);
+        assert!(report.regen_present);
+        let regen =
+            std::fs::read_to_string(format!("{unit}/environment.regen")).expect("regen file");
+        assert!(
+            regen.contains("declare -x LANG=\"C.UTF-8\""),
+            "split LANG missing:\n{regen}"
+        );
+        for name in [
+            "LC_COLLATE",
+            "LC_CTYPE",
+            "LC_MESSAGES",
+            "LC_MONETARY",
+            "LC_NUMERIC",
+            "LC_TIME",
+            "LC_PAPER",
+        ] {
+            assert!(
+                regen.contains(&format!("declare -x {name}=\"C.UTF-8\"")),
+                "split {name} missing:\n{regen}"
+            );
+        }
+        assert!(
+            !regen.lines().any(|line| line.contains("LC_ALL")),
+            "LC_ALL leaked into the regen'd env:\n{regen}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #171c task 4: the `--remote-binpkg` trial path places
+    /// `/etc/portage` through the shared `place_config_root` helper --
+    /// `Server` used directly, `Client` pulled over local transport and
+    /// re-rooted -- with the `PORTAGE_CONFIGROOT` override held for the
+    /// resolve, so the same `load_repos_and_config` +
+    /// `config_install_mask` / `config_features_string` /
+    /// `config_bzip2_command` getters the plan path uses see the placed
+    /// tree. A synthetic client tree pins both placements (`server:`
+    /// takes a config root in real-root layout, `client:` the
+    /// `/etc/portage` dir itself -- the contract suite's
+    /// `test_mrg_remote_resolve_merges_a_binhost_binary` uses
+    /// `server:{root}` the same way); the pulled temp dir is gone after
+    /// the `Client` resolve (task 3).
+    #[test]
+    fn placed_config_root_covers_both_placements() {
+        let tmp = regen_tmp("placed-config");
+        let config_root = tmp.join("clientroot");
+        let client_etc = config_root.join("etc/portage");
+        let repo = tmp.join("repo");
+        std::fs::create_dir_all(client_etc.join("repos.conf")).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::write(
+            client_etc.join("repos.conf/testrepo.conf"),
+            format!(
+                "[DEFAULT]\nmain-repo = testrepo\n\n[testrepo]\nlocation = {}\n",
+                repo.display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            client_etc.join("make.conf"),
+            "INSTALL_MASK=\"/usr/share/porttest/im/drop.txt *.la\"\nFEATURES=\"sandbox merge-time\"\nPORTAGE_BZIP2_COMMAND=\"lbzip2\"\n",
+        )
+        .unwrap();
+        // `config_install_mask` prefers the process `INSTALL_MASK` env
+        // var; clear it so the test pins the placed file.
+        let saved_mask = std::env::var_os("INSTALL_MASK");
+        // SAFETY: no other test in this binary sets `INSTALL_MASK`.
+        unsafe {
+            std::env::remove_var("INSTALL_MASK");
+        }
+        let eroot = tmp.join("eroot");
+        let mut client_tmp: Option<std::path::PathBuf> = None;
+        for placement in [
+            ConfigPlacement::Client(client_etc.to_string_lossy().into_owned()),
+            ConfigPlacement::Server(config_root.to_string_lossy().into_owned()),
+        ] {
+            let mut ctx = local_ctx(
+                tmp.join("root").to_str().unwrap(),
+                tmp.join("work").to_str().unwrap(),
+            );
+            ctx.etc_portage = placement.clone();
+            let placed = place_config_root(&ctx, None).expect("placement resolves");
+            // Both shapes resolve to a real-root layout: the `Client`
+            // pull is re-rooted as `<tmp>/etc/portage`, the `Server`
+            // root is used directly.
+            assert!(
+                placed.dir.join("etc/portage/make.conf").is_file(),
+                "placed root lacks the client make.conf: {}",
+                placed.dir.display()
+            );
+            assert_eq!(
+                std::env::var_os("PORTAGE_CONFIGROOT"),
+                Some(placed.dir.as_os_str().to_os_string()),
+                "config-root override not held for the resolve"
+            );
+            // The same shared resolver + getters `run_bundle_stage`
+            // feeds into `run_binpkg_flow`.
+            let (repos, config) = crate::pretend::load_repos_and_config(&placed.dir, &eroot)
+                .expect("placed client config resolves");
+            assert!(repos.iter().any(|r| r.is_main));
+            let (mask, _) = crate::pretend::config_install_mask(&config);
+            assert_eq!(mask, "/usr/share/porttest/im/drop.txt *.la");
+            assert_eq!(
+                crate::pretend::config_features_string(&config),
+                "merge-time sandbox"
+            );
+            assert_eq!(crate::pretend::config_bzip2_command(&config), "lbzip2");
+            if matches!(placement, ConfigPlacement::Client(_)) {
+                client_tmp = Some(placed.dir.clone());
+            }
+            drop(placed);
+        }
+        // SAFETY: same as above.
+        unsafe {
+            match saved_mask {
+                Some(value) => std::env::set_var("INSTALL_MASK", value),
+                None => std::env::remove_var("INSTALL_MASK"),
+            }
+        }
+        // Task 3: the pulled temp copy is removed best-effort with the
+        // resolve; the server source tree is untouched.
+        assert!(
+            client_tmp.as_ref().is_some_and(|dir| !dir.exists()),
+            "pulled client config temp dir leaked: {client_tmp:?}"
+        );
+        assert!(
+            client_etc.join("make.conf").is_file(),
+            "server placement must not remove the source tree"
         );
         let _ = std::fs::remove_dir_all(&tmp);
     }
