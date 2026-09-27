@@ -1917,6 +1917,85 @@ mod tests {
     }
 
     #[test]
+    fn omit_stanza_default_omits_only_exact_slot_and_eapi_zero() {
+        // Only the exact `"0"` is default; anything else passes through.
+        assert_eq!(omit_stanza_default("SLOT", "0"), "");
+        assert_eq!(omit_stanza_default("SLOT", ""), "");
+        assert_eq!(omit_stanza_default("SLOT", "1"), "1");
+        assert_eq!(omit_stanza_default("SLOT", "0/1"), "0/1");
+        assert_eq!(omit_stanza_default("EAPI", "0"), "");
+        assert_eq!(omit_stanza_default("EAPI", "8"), "8");
+        assert_eq!(omit_stanza_default("USE", "0"), "0");
+        assert_eq!(omit_stanza_default("SIZE", "0"), "0");
+    }
+
+    fn probe_shaped_stanza(slot: &str) -> BuiltBinpkgStanza<'_> {
+        // Expected values from Portage (container bed): the probe's stanza
+        // shape, with only `SLOT` varying.
+        BuiltBinpkgStanza {
+            bdepend: "",
+            build_id: "1",
+            build_time: "1790533433",
+            cpv: "l32/dep-a-1.0",
+            defined_phases: "install",
+            depend: "",
+            eapi: "8",
+            idepend: "",
+            iuse: "",
+            keywords: "amd64",
+            license: "GPL-2",
+            md5: "45ee79b46260208582e042d087ad6fff",
+            path: "l32/dep-a/dep-a-1.0-1.gpkg.tar",
+            pdepend: "",
+            properties: "",
+            provides: "",
+            rdepend: "",
+            repo_revisions: "{}",
+            requires: "",
+            restrict: "",
+            sha1: "dcb4b4b5cd72b7f1c8d839c82eb94ffb12374776",
+            size: "10240",
+            slot,
+            use_flags: "abi_x86_64 amd64 elibc_glibc kernel_linux",
+            mtime: "1790533434",
+            repository: "l32",
+        }
+    }
+
+    #[test]
+    fn stanza_bytes_for_default_slot_omit_slot_and_keep_both_digests() {
+        let stanza = probe_shaped_stanza("0");
+        let text = format_packages_entry(&built_binpkg_stanza_fields(&stanza));
+        assert_eq!(
+            text,
+            "BUILD_ID: 1\n\
+             BUILD_TIME: 1790533433\n\
+             CPV: l32/dep-a-1.0\n\
+             DEFINED_PHASES: install\n\
+             EAPI: 8\n\
+             KEYWORDS: amd64\n\
+             LICENSE: GPL-2\n\
+             MD5: 45ee79b46260208582e042d087ad6fff\n\
+             PATH: l32/dep-a/dep-a-1.0-1.gpkg.tar\n\
+             REPO_REVISIONS: {}\n\
+             SHA1: dcb4b4b5cd72b7f1c8d839c82eb94ffb12374776\n\
+             SIZE: 10240\n\
+             USE: abi_x86_64 amd64 elibc_glibc kernel_linux\n\
+             MTIME: 1790533434\n\
+             REPO: l32\n"
+        );
+    }
+
+    #[test]
+    fn stanza_bytes_for_nondefault_slot_write_it_between_size_and_use() {
+        let stanza = probe_shaped_stanza("1");
+        let text = format_packages_entry(&built_binpkg_stanza_fields(&stanza));
+        assert!(text.contains("\nSIZE: 10240\nSLOT: 1\nUSE: "), "{text:?}");
+        assert!(text.contains("MD5: 45ee79b46260208582e042d087ad6fff\n"));
+        assert!(text.contains("SHA1: dcb4b4b5cd72b7f1c8d839c82eb94ffb12374776\n"));
+    }
+
+    #[test]
     fn quickpkg_from_vdb_writes_portage_ordered_stanza_with_eapi_and_repo_revisions() {
         // Expected values from Portage (container probe): vdb `EAPI`/`REPO_REVISIONS`
         // carried verbatim, `repository` as last key `REPO`, sorted key order,

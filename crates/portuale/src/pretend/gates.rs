@@ -1,5 +1,28 @@
 //! Small predicates deciding what a run shows.
 
+/// Arguments of [`merge_list_shown`].
+pub(crate) struct MergeListShownArgs {
+    pub(crate) pretend: bool,
+    pub(crate) ask: bool,
+    pub(crate) tree: bool,
+    pub(crate) verbose: bool,
+    pub(crate) quiet: bool,
+}
+
+/// Whether the merge list prints: always under `--pretend`; otherwise only
+/// with `--ask`/`--tree`/`--verbose`, and never under `--quiet` without `--ask`.
+// Portage: _emerge/actions.py, action_build
+pub(crate) fn merge_list_shown(args: MergeListShownArgs) -> bool {
+    let MergeListShownArgs {
+        pretend,
+        ask,
+        tree,
+        verbose,
+        quiet,
+    } = args;
+    pretend || ((ask || tree || verbose) && !(quiet && !ask))
+}
+
 /// Whether a non-`--pretend` run with display flags and an empty plan prints
 /// `Nothing to merge; quitting.` and exits 0 before the resume rotation
 /// and the scheduler. A `--pretend` run never takes this arm.

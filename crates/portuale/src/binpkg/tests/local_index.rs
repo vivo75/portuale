@@ -390,6 +390,52 @@ fn populate_local_pkgdir_reindex_reparses_a_key_incomplete_stanza() {
 }
 
 #[test]
+fn populate_local_pkgdir_reindex_drops_a_removed_files_index_stanza() {
+    // A removed file's stanza is re-injected in trusted mode but
+    // absent in reindex mode; the survivor's entry is identical
+    // either way.
+    let scratch = ScratchDir::new("reindex-removed").unwrap();
+    let pkgdir = scratch.path();
+    let cat_dir = pkgdir.join("dev-libs");
+    fs::create_dir_all(&cat_dir).unwrap();
+    let dest = cat_dir.join("packagepkg-1.0.tbz2");
+    fs::copy(fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"), &dest).unwrap();
+    let st = fs::metadata(&dest).unwrap();
+    fs::write(
+        pkgdir.join("Packages"),
+        format!(
+            "TIMESTAMP: 0\n\
+             \n\
+             CPV: dev-libs/gonepkg-1.0\nSLOT: 0\nSIZE: 12345\n_mtime_: 1\nPATH: dev-libs/gonepkg-1.0.tbz2\n\
+             \n\
+             BDEPEND: \nBUILD_ID: \nBUILD_TIME: 0\nCHOST: x86_64-pc-linux-gnu\nDEFINED_PHASES: install\nDEPEND: \nEAPI: 8\nIDEPEND: \nIUSE: \nKEYWORDS: amd64\nLICENSE: MIT\nPDEPEND: \nPROPERTIES: \nPROVIDES: \nRDEPEND: dev-libs/samepkg\nrepository: gentoo\nREQUIRES: \nRESTRICT: \nUSE: \nCPV: dev-libs/packagepkg-1.0\nSLOT: 0\nSIZE: {}\n_mtime_: {}\nPATH: dev-libs/packagepkg-1.0.tbz2\n",
+            st.len(),
+            file_mtime(&st),
+        ),
+    )
+    .unwrap();
+
+    let trusted = populate_local_pkgdir(pkgdir, true).expect("scan succeeds");
+    assert_eq!(trusted.len(), 2, "{trusted:?}");
+
+    let reindexed = populate_local_pkgdir(pkgdir, false).expect("scan succeeds");
+    assert_eq!(reindexed.len(), 1, "{reindexed:?}");
+    assert_eq!(
+        reindexed[0].get("CPV").map(String::as_str),
+        Some("dev-libs/packagepkg-1.0"),
+        "only the surviving file stays: {reindexed:?}"
+    );
+    let survivor = trusted
+        .iter()
+        .find(|e| e.get("CPV").map(String::as_str) == Some("dev-libs/packagepkg-1.0"))
+        .expect("trusted pool still holds the surviving file");
+    assert_eq!(
+        survivor, &reindexed[0],
+        "the surviving file's own entry is identical either way"
+    );
+}
+
+#[test]
 fn populate_local_pkgdir_parses_unindexed_files_in_both_modes() {
     // A file no stanza covers joins the pool in both modes (the walk
     // runs in trusted mode too, so a `Packages`-less `$PKGDIR` still
