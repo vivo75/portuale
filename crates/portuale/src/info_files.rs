@@ -373,3 +373,345 @@ pub fn post_merge_info_update(
     }
     Ok(report)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use portage_util::TempDir;
+
+    fn test_color() -> Colorizer {
+        // No colour in tests, so assertions read the plain strings.
+        Colorizer::new(false)
+    }
+
+    fn tmproot() -> std::path::PathBuf {
+        TempDir::new("info_files_test").keep()
+    }
+
+    fn install_info_present() -> bool {
+        Path::new(INSTALL_INFO).exists()
+    }
+
+    /// A small valid `.info` file plus a stale but well-formed `dir` index
+    /// (the shape the pmtest contract test installs through the
+    /// `dev-libs/dirregenpkg` fixture ebuild).
+    fn write_info_pair(info_dir: &Path) {
+        let mut info = std::fs::File::create(info_dir.join("infopkg.info")).unwrap();
+        write!(
+            info,
+            "This is infopkg.info, an Info document.\n\
+             \n\
+             INFO-DIR-SECTION Test\n\
+             START-INFO-DIR-ENTRY\n\
+             * infopkg: (infopkg). Fixture package for info dir regeneration.\n\
+             END-INFO-DIR-ENTRY\n\
+             \n\
+             \x1f\n\
+             File: infopkg.info,  Node: Top,  Up: (dir)\n\
+             \n\
+             Top\n\
+             ***\n\
+             \n\
+             content here\n"
+        )
+        .unwrap();
+        std::fs::write(
+            info_dir.join("dir"),
+            "This is the file .../info/dir, which contains the\n\
+             topmost node of the Info hierarchy, called (dir)Top.\n\
+             The first time you invoke Info you start off looking at this node.\n\
+             \x1f\n\
+             File: dir,\tNode: Top\tThis is the top of the INFO hierarchy\n\
+             \n\
+             * Menu:\n\
+             \n\
+             * Foo: (foo). Foo docs.\n",
+        )
+        .unwrap();
+    }
+
+    fn scratch_root_with_infopath() -> (std::path::PathBuf, String) {
+        let root = tmproot();
+        std::fs::create_dir_all(root.join("etc/env.d")).unwrap();
+        std::fs::write(
+            root.join("etc/env.d/50-test"),
+            "INFOPATH=\"/usr/share/info\"\n",
+        )
+        .unwrap();
+        let info_dir = root.join("usr/share/info");
+        std::fs::create_dir_all(&info_dir).unwrap();
+        write_info_pair(&info_dir);
+        let inforoot = normalize_path(&format!("{}/usr/share/info", root.display()));
+        (root, inforoot)
+    }
+
+    #[test]
+    fn regen_records_the_dir_mtime_and_cleans_the_old_files() {
+        // After the post-merge step `dir` holds the entry, `dir.old` is
+        // gone, and the memo records the dir's mtime.
+        if !install_info_present() {
+            eprintln!("skip: no {INSTALL_INFO} on this host");
+            return;
+        }
+        let (root, inforoot) = scratch_root_with_infopath();
+        let color = test_color();
+        let mut prev = BTreeMap::new();
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+
+        let report = chk_updated_info_files(ChkUpdatedInfoFilesArgs {
+            root: &root,
+            infodirs: &["/usr/share/info".to_string()],
+            prev_mtimes: &mut prev,
+            quiet: false,
+            color: &color,
+            install_info: INSTALL_INFO,
+            out: &mut out,
+            err: &mut err,
+        })
+        .unwrap();
+
+        assert!(report.ran);
+        assert_eq!(report.regenerated, vec![inforoot.clone()]);
+        assert_eq!((report.icount, report.badcount), (1, 0));
+        // The user-visible lines printed for a regen.
+        let printed = String::from_utf8(out).unwrap();
+        assert!(
+            printed.contains("Regenerating GNU info directory index..."),
+            "{printed}"
+        );
+        assert!(printed.contains("Processed 1 info files."), "{printed}");
+        assert!(err.is_empty());
+        let dir = std::fs::read_to_string(root.join("usr/share/info/dir")).unwrap();
+        assert!(dir.contains("* infopkg: (infopkg)."), "{dir}");
+        assert!(
+            !root.join("usr/share/info/dir.old").exists(),
+            "the .old rename must be cleaned up"
+        );
+        let mtime = std::fs::metadata(root.join("usr/share/info"))
+            .unwrap()
+            .mtime();
+        assert_eq!(prev.get(&inforoot), Some(&mtime));
+        // And the memo round-trips through the mtimedb file.
+        crate::mtimedb::write_info_mtimes(&root, &prev).unwrap();
+        assert_eq!(crate::mtimedb::read_info_mtimes(&root), prev);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn second_run_with_no_change_is_up_to_date() {
+        if !install_info_present() {
+            eprintln!("skip: no {INSTALL_INFO} on this host");
+            return;
+        }
+        let (root, _) = scratch_root_with_infopath();
+        let color = test_color();
+        let mut prev = BTreeMap::new();
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let first = chk_updated_info_files(ChkUpdatedInfoFilesArgs {
+            root: &root,
+            infodirs: &["/usr/share/info".to_string()],
+            prev_mtimes: &mut prev,
+            quiet: false,
+            color: &color,
+            install_info: INSTALL_INFO,
+            out: &mut out,
+            err: &mut err,
+        })
+        .unwrap();
+        assert_eq!(first.regenerated.len(), 1);
+
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let second = chk_updated_info_files(ChkUpdatedInfoFilesArgs {
+            root: &root,
+            infodirs: &["/usr/share/info".to_string()],
+            prev_mtimes: &mut prev,
+            quiet: false,
+            color: &color,
+            install_info: INSTALL_INFO,
+            out: &mut out,
+            err: &mut err,
+        })
+        .unwrap();
+        // Up-to-date branch: nothing regenerated, nothing counted, and the
+        // line itself reaches stdout.
+        assert!(second.regenerated.is_empty());
+        assert_eq!((second.icount, second.badcount), (0, 0));
+        let printed = String::from_utf8(out).unwrap();
+        assert!(
+            printed.contains("GNU info directory index is up-to-date."),
+            "{printed}"
+        );
+        assert!(err.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn quiet_regen_prints_nothing_but_records_the_memo() {
+        // `--quiet`: the einfo lines and the bare `\n` are suppressed, while
+        // the regen itself -- and its memo record -- still happens.
+        if !install_info_present() {
+            eprintln!("skip: no {INSTALL_INFO} on this host");
+            return;
+        }
+        let (root, inforoot) = scratch_root_with_infopath();
+        let color = test_color();
+        let mut prev = BTreeMap::new();
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let report = chk_updated_info_files(ChkUpdatedInfoFilesArgs {
+            root: &root,
+            infodirs: &["/usr/share/info".to_string()],
+            prev_mtimes: &mut prev,
+            quiet: true,
+            color: &color,
+            install_info: INSTALL_INFO,
+            out: &mut out,
+            err: &mut err,
+        })
+        .unwrap();
+        assert!(report.ran);
+        assert_eq!((report.icount, report.badcount), (1, 0));
+        assert!(out.is_empty(), "{:?}", String::from_utf8_lossy(&out));
+        assert!(err.is_empty(), "{:?}", String::from_utf8_lossy(&err));
+        assert!(prev.contains_key(&inforoot));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn noinfo_leaves_the_dir_and_the_memo_alone() {
+        // `"noinfo"` in `FEATURES` gates the whole block.
+        let (root, _) = scratch_root_with_infopath();
+        let color = test_color();
+        let before = std::fs::read(root.join("usr/share/info/dir")).unwrap();
+
+        let report = post_merge_info_update(&root, &color, false, true).unwrap();
+
+        assert_eq!(report, InfoReport::default());
+        assert_eq!(
+            std::fs::read(root.join("usr/share/info/dir")).unwrap(),
+            before
+        );
+        assert!(crate::mtimedb::read_info_mtimes(&root).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn keepinfodir_skips_the_directory() {
+        // A dir containing a `.keepinfodir*` entry is never regenerated.
+        if !install_info_present() {
+            eprintln!("skip: no {INSTALL_INFO} on this host");
+            return;
+        }
+        let (root, inforoot) = scratch_root_with_infopath();
+        std::fs::write(root.join("usr/share/info/.keepinfodir-foo"), "").unwrap();
+        let color = test_color();
+        let mut prev = BTreeMap::new();
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+
+        let report = chk_updated_info_files(ChkUpdatedInfoFilesArgs {
+            root: &root,
+            infodirs: &["/usr/share/info".to_string()],
+            prev_mtimes: &mut prev,
+            quiet: false,
+            color: &color,
+            install_info: INSTALL_INFO,
+            out: &mut out,
+            err: &mut err,
+        })
+        .unwrap();
+
+        assert!(report.regenerated.is_empty());
+        assert!(!prev.contains_key(&inforoot));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn missing_install_info_is_a_silent_no_op() {
+        // Without the host binary nothing at all happens -- exercised here
+        // against a bogus path so the test holds with or without install-info.
+        let (root, _) = scratch_root_with_infopath();
+        let color = test_color();
+        let mut prev = BTreeMap::new();
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+
+        let report = chk_updated_info_files(ChkUpdatedInfoFilesArgs {
+            root: &root,
+            infodirs: &["/usr/share/info".to_string()],
+            prev_mtimes: &mut prev,
+            quiet: false,
+            color: &color,
+            install_info: "/nonexistent/install-info-for-test",
+            out: &mut out,
+            err: &mut err,
+        })
+        .unwrap();
+
+        assert_eq!(report, InfoReport::default());
+        assert!(prev.is_empty());
+        // Silent means silent: neither sink sees a byte.
+        assert!(out.is_empty());
+        assert!(err.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn classify_output_matches_portage_three_way_split() {
+        assert_eq!(classify_output(""), None);
+        assert_eq!(
+            classify_output("install-info: warning: no info dir entry in `/x'"),
+            None
+        );
+        assert_eq!(
+            classify_output(
+                "something\ninstall-info: menu item `foo' already exists, for file `bar'"
+            ),
+            None
+        );
+        assert_eq!(
+            classify_output("install-info: No such file or directory for /x"),
+            Some("install-info: No such file or directory for /x")
+        );
+    }
+
+    #[test]
+    fn skippable_names_mirror_the_dir_extensions_tuple() {
+        let inforoot = Path::new("/nonexistent-inforoot");
+        for name in [
+            "dir",
+            "dir.gz",
+            "dir.bz2",
+            "dir.xz",
+            "dir.lz",
+            "dir.lz4",
+            "dir.zst",
+            "dir.lzma",
+            "dir.old",
+            "dir.gz.old",
+            ".hidden",
+        ] {
+            assert!(
+                skippable_name(std::ffi::OsStr::new(name), inforoot),
+                "{name} must be skipped"
+            );
+        }
+        for name in ["infopkg.info", "dirfoo", "mydir", "dir2"] {
+            assert!(
+                !skippable_name(std::ffi::OsStr::new(name), inforoot),
+                "{name} must be processed"
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_path_collapses_the_root_join_double_slash() {
+        // `normalize_path(root + z)`: `"/" + "/usr/share/info"`.
+        assert_eq!(normalize_path("//usr/share/info"), "/usr/share/info");
+        assert_eq!(normalize_path("/usr/share/info/"), "/usr/share/info");
+        assert_eq!(normalize_path("/"), "/");
+    }
+}
