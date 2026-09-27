@@ -18224,3 +18224,27 @@ python3 differential-test-bed/compare/diff.py --layer l3 --tolerate-payload \
   differential-test-bed/compare/known-divergences.yaml | tail -8
 ```
 
+
+## Skipped-updates notices from backtrack trial state (#129 DONE, 2026-09-27)
+
+On `--tree dev-libs/mg2top` real backtracks (`backtrack: 10/20`) and then prints `WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict` plus the `!!! The following update(s) have been skipped due to unsatisfied dependencies / !!! triggered by backtracking:` tail; portuale settled on the same `-1`s silently. S0 (`edff1111`) established that real's `_show_missed_update` reads only backtrack trial state: `_get_missed_updates` (`depgraph.py:1529-1565`) over `_runtime_pkg_mask` ∪ `_conflict_missed_update`. Portuale `3e0365f2` ports it over the settled `BacktrackParams::runtime_pkg_mask`, keeps first-seen mask order to match real's dict order, and gates on `--quiet` like real. There is no second resolver pass, so #107 stays parked. After review it renders one block per slot carrying every parent, which all six `blk0` orders confirmed against real. The oracle is `l0-fx-20260927T080515Z`. The pins are in pmtest `4dcfa42`, and the reviewed corpus drift is blessed as `cb1115a`. Re-run the pins:
+
+```sh
+# from ../pmtest; expect 6 passed
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider \
+  -k 'mg2top_nests or yields_to_the_next_when_backtracking or siblings_masked_together or two_simultaneous_conflicts or unsolvable_slot_conflict_resolved or pg0_all_orders'
+```
+
+## `mrg` writes real's merge-time vdb files: `BINPKGMD5`, `INSTALL_MASK`, regenerated `environment.bz2` (#170 + #171 DONE, 2026-09-27)
+
+Real Portage synthesizes three vdb files at merge time that no gpkg carries: `BINPKGMD5`, `INSTALL_MASK`, and the saved environment. The environment is regenerated from the live postinst env (`PORTAGE_UPDATE_ENV`, `vartree.py:5334`). `mrg` used to copy the binpkg's build-time env instead and never wrote the other two. Portuale `80c6111d` fixes all three:
+- `556dcde4` applies `INSTALL_MASK` on the server and ships both aux files.
+- `2feb7769` regenerates the env from the *client's* merge-time env (owner Q8: the unmerge phase may run years later under a very different Portage) and drops the plain `environment` file that real never writes.
+- `cbc8b407`…`25f25dc1` make `--remote-binpkg` resolve the client config. The server's `make.globals` sits underneath it (Q9), and the client's `make.profile` is resolved against the server's repos (Q10), so the client needs no gentoo repo.
+
+The last `FEATURES` row was bed asymmetry, not product: #189, pmtest `df84a67`. Gate 5's `l31-20260927T140625Z` shows 0 hard and 0 unexplained rows. Re-run:
+
+```sh
+# from ../pmtest; expect UNEXPLAINED 0
+PORTTEST_PODMAN=$HOME/.local/bin/podman-lxc L31_MODE=candidate differential-test-bed/run/l31-remote-merge.sh
+```
