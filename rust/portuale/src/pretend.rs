@@ -13522,8 +13522,11 @@ pub fn run(args: &[String]) -> ExitCode {
         // `--quiet` -- see `emerge_build::scheduler_status_mode`).
         // #185 ported only the first blank with a `jobs`/`quiet`
         // approximation; #197 generalizes the rule to every status
-        // line (the merge functions take it from here) and the exact
-        // background predicate.
+        // line, and the merge functions own every blank through their
+        // `StatusDisplay::status()` -- including the first, so no
+        // blank prints here (fix round 1 removed the duplicate that
+        // printed a second blank before the first `>>>` line). The
+        // exact background predicate still computes here.
         let status_mode = crate::emerge_build::scheduler_status_mode(
             jobs,
             quiet,
@@ -13531,9 +13534,6 @@ pub fn run(args: &[String]) -> ExitCode {
             entries.len(),
             verbose,
         );
-        if !status_mode.background {
-            println!();
-        }
         // Real BINPKG_COMPRESS/BINPKG_COMPRESS_FLAGS[_<NAME>]/
         // PORTAGE_BZIP2_COMMAND/PKGDIR/... resolution -- see
         // `package_options_from_env`.

@@ -273,7 +273,13 @@ pub fn run_merge_plan(
     // visibility), computed once by the caller. The mixed plan runs
     // serially, so no `>>> Jobs:` events fire -- the mode only carries
     // the blank/`>>>` rule (a `--quiet` binary merge prints no leading
-    // blanks, exactly like real's background scheduler).
+    // blanks, exactly like real's background scheduler). Stated cut:
+    // real drives binary tasks through the same display (real
+    // `Scheduler._merge_exit` / `_do_merge_exit`,
+    // `Scheduler.py:1532-1560`), so a real `--quiet --verbose` (or
+    // `-jN`) binary merge shows `>>> Jobs:` lines while portuale shows
+    // none here -- unprobed against real, Jobs events for the mixed
+    // plan are a later slice.
     mode: crate::emerge_build::StatusMode,
 ) -> Result<(), String> {
     // Real `Scheduler._pkg_count` for this run (backlog #177): every

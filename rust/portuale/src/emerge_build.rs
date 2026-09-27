@@ -500,9 +500,12 @@ pub fn run_source_merge(
             // construction (see `scheduler_status_mode`), so these are
             // real's serial-background `>>> Jobs:` events: start,
             // build-end, merge-land around the same halves the `-jN`
-            // scheduler runs.
+            // scheduler runs -- and, on failure, real `_build_exit` /
+            // `_merge_exit`'s failure arms (`Scheduler.py:1641-1658` /
+            // `:1543-1561`), each fired exactly once like the `-jN`
+            // scheduler above.
             display.job_started();
-            let path = build_one_source_entry(
+            let path = match build_one_source_entry(
                 entry,
                 repos,
                 root,
@@ -512,9 +515,18 @@ pub fn run_source_merge(
                 true,
                 entry_progress,
                 &display,
-            )?;
-            display.build_finished();
-            merge_one_built_entry(
+            ) {
+                Ok(path) => {
+                    display.build_finished();
+                    path
+                }
+                Err(e) => {
+                    display.job_failed();
+                    display.build_finished();
+                    return Err(e);
+                }
+            };
+            if let Err(e) = merge_one_built_entry(
                 entry,
                 repos,
                 &path,
@@ -523,7 +535,10 @@ pub fn run_source_merge(
                 options,
                 entry_progress,
                 &display,
-            )?;
+            ) {
+                display.job_failed();
+                return Err(e);
+            }
             display.merge_finished();
             Ok(())
         } else {
@@ -1464,10 +1479,13 @@ impl StatusDisplay {
     /// arms only when nonzero, padded with spaces to the 68-column jobs
     /// field (real's `max_display_width - 32` at the non-tty width of
     /// 100; the tty term-width half is cut -- portuale always uses the
-    /// non-tty rule, stated here), then `Load avg: {triple}` in real's
-    /// magnitude formatting. The counters wear `INFORM`, like real's
-    /// `number_style`; the padding is measured on the plain text, like
-    /// real's `plain_output` gauge.
+    /// non-tty rule, stated here). Real appends `Load avg: {triple}`
+    /// after the padding; portuale cuts it exactly like #185 cut the
+    /// resolution seconds (repeated-run determinism is a jointly-owned
+    /// gate; nondeterministic values ride `--json` only -- coordinator
+    /// ruling B14, batch-2026-09-27). The counters wear `INFORM`, like
+    /// real's `number_style`; the padding is measured on the plain text,
+    /// like real's `plain_output` gauge.
     pub(crate) fn jobs_line(&self) -> String {
         let state = self.state.lock().unwrap();
         jobs_line(
@@ -1477,7 +1495,6 @@ impl StatusDisplay {
             state.running,
             state.failed,
             0,
-            &loadavg_string(),
         )
     }
 }
@@ -1485,8 +1502,9 @@ impl StatusDisplay {
 /// Backlog #197: the pure `>>> Jobs:` shape (real
 /// `JobStatusDisplay._display_status`), split out for unit tests.
 /// `merge_wait` is always 0 from portuale (see [`StatusDisplay`]); the
-/// arm stays because it is part of the shape. `loadavg` is the already
-/// formatted trailing field (see [`format_loadavg`]).
+/// arm stays because it is part of the shape. Real's `Load avg:`
+/// trailer is cut (see [`StatusDisplay::jobs_line`]); the padding that
+/// precedes it is kept, so the line keeps real's shape and column.
 fn jobs_line(
     color: &crate::color::Colorizer,
     curval: usize,
@@ -1494,7 +1512,6 @@ fn jobs_line(
     running: usize,
     failed: usize,
     merge_wait: usize,
-    loadavg: &str,
 ) -> String {
     let mut plain = format!("Jobs: {curval} of {maxval} complete");
     let mut styled = format!(
@@ -1516,54 +1533,12 @@ fn jobs_line(
         }
     }
     // Real `self._jobs_column_width = width - 32` at the non-tty
-    // `width = max_display_width = 100`.
+    // `width = max_display_width = 100`. The padding stays even though
+    // real's `Load avg:` trailer is cut (see `jobs_line`'s doc
+    // comment), so the line keeps real's shape and column.
     let padding = 68usize.saturating_sub(plain.len());
     styled.push_str(&" ".repeat(padding));
-    styled.push_str(&format!("Load avg: {loadavg}"));
     format!(">>> {styled}")
-}
-
-/// Backlog #197: real `JobStatusDisplay._load_avg_str`: the 1/5/15-minute
-/// triple, `unknown` when unreadable, else `%.2f` / `%.1f` / `%.0f` by
-/// the magnitude of the largest sample (the n197 probe caught real
-/// printing `6.9, 7.3, 10.4`, i.e. the `%.1f` arm). The value itself is
-/// inherently nondeterministic -- tests pin the shape with a fixed
-/// triple via [`format_loadavg`] and normalize the live field in
-/// `test_output_invariants`-style stdout matching, the #185
-/// seconds-cut precedent for nondeterministic text.
-fn loadavg_string() -> String {
-    match read_loadavg() {
-        Some(avg) => format_loadavg(avg),
-        None => "unknown".to_string(),
-    }
-}
-
-/// Backlog #197: read the 1/5/15-minute load averages (real
-/// `os.getloadavg()`; portuale reads Linux `/proc/loadavg` directly).
-/// `None` when the file is missing or unparseable -- real's `OSError`
-/// arm.
-fn read_loadavg() -> Option<(f64, f64, f64)> {
-    let content = std::fs::read_to_string("/proc/loadavg").ok()?;
-    let mut fields = content.split_whitespace();
-    let parse = |field: Option<&str>| field?.parse::<f64>().ok();
-    Some((
-        parse(fields.next())?,
-        parse(fields.next())?,
-        parse(fields.next())?,
-    ))
-}
-
-/// Backlog #197: real `JobStatusDisplay._load_avg_str` formatting over
-/// an explicit triple (pure; see [`loadavg_string`]).
-fn format_loadavg(avg: (f64, f64, f64)) -> String {
-    let max_avg = avg.0.max(avg.1).max(avg.2);
-    if max_avg < 10.0 {
-        format!("{:.2}, {:.2}, {:.2}", avg.0, avg.1, avg.2)
-    } else if max_avg < 100.0 {
-        format!("{:.1}, {:.1}, {:.1}", avg.0, avg.1, avg.2)
-    } else {
-        format!("{:.0}, {:.0}, {:.0}", avg.0, avg.1, avg.2)
-    }
 }
 
 /// Real `_emerge/MergeListItem.py::_start` (`MergeListItem.py:60-85`):
@@ -2466,7 +2441,7 @@ fn run_build_scheduler(
                     display.build_finished();
                     let entry = &entries[idx];
                     let entry_progress = progress[idx];
-                    merge_one_built_entry(
+                    let err = merge_one_built_entry(
                         entry,
                         repos,
                         &path,
@@ -2476,15 +2451,28 @@ fn run_build_scheduler(
                         entry_progress,
                         display,
                     )
-                    .err()
+                    .err();
+                    if err.is_some() {
+                        // Backlog #197: real `_merge_exit` /
+                        // `_do_merge_exit`'s failure arm
+                        // (`Scheduler.py:1543-1561`): `failed` rises
+                        // (its `>>> Jobs:` line prints). The build slot
+                        // is already free from the tail above, so no
+                        // `running` event fires here -- and the `Some`
+                        // arm below fires none either, so each failure
+                        // prints exactly real's lines.
+                        display.job_failed();
+                    }
+                    err
                 }
                 Err(e) => {
-                    // Backlog #197: real `_build_exit`'s failure arm --
-                    // `failed` rises before the freed build slot
-                    // (`running` drops) prints. (Real also prints its
-                    // `>>> Failed to emerge ...` tail between the two;
-                    // portuale's source-build failure rendering is
-                    // unchanged by this slice.)
+                    // Backlog #197: real `_build_exit`'s failure arm
+                    // (`Scheduler.py:1641-1658`) -- `failed` rises
+                    // before the freed build slot (`running` drops)
+                    // prints. (Real also prints its `>>> Failed to
+                    // emerge ...` tail between the two; portuale's
+                    // source-build failure rendering is unchanged by
+                    // this slice.)
                     display.job_failed();
                     display.build_finished();
                     Some(e)
@@ -2505,14 +2493,12 @@ fn run_build_scheduler(
                     display.merge_finished();
                 }
                 Some(e) => {
-                    // Backlog #197: real `_build_exit`'s failure arm --
-                    // `failed` rises (its `>>> Jobs:` line prints) and
-                    // the build slot is still freed (`running` drops).
-                    // (Real also prints its `>>> Failed to emerge ...`
-                    // tail here; portuale's source-build failure
-                    // rendering is unchanged by this slice.)
-                    display.job_failed();
-                    display.build_finished();
+                    // Backlog #197: no display events here -- the
+                    // build-failure arm above already fired `job_failed`
+                    // + `build_finished`, and the merge-failure arm
+                    // already fired `job_failed`. Each failure prints
+                    // exactly real's lines (failed-set, then the
+                    // running-drop where real drops it).
                     if !keep_going {
                         // Real `_keep_scheduling`/`_terminate_tasks`
                         // (`PollScheduler.py:106-126`): once any package
@@ -4679,56 +4665,47 @@ mod tests {
         );
     }
 
-    /// Backlog #197: real `JobStatusDisplay._load_avg_str` formatting
-    /// over fixed triples (`%.2f` under 10, `%.1f` under 100, `%.0f`
-    /// above; the middle arm is the n197 probe's own `6.9, 7.3, 10.4`).
-    #[test]
-    fn format_loadavg_matches_reals_magnitude_arms() {
-        assert_eq!(format_loadavg((0.12, 0.05, 0.01)), "0.12, 0.05, 0.01");
-        assert_eq!(format_loadavg((6.9, 7.3, 10.4)), "6.9, 7.3, 10.4");
-        assert_eq!(format_loadavg((10.0, 9.99, 0.0)), "10.0, 10.0, 0.0");
-        assert_eq!(format_loadavg((120.4, 99.9, 50.0)), "120, 100, 50");
-    }
-
     /// Backlog #197: the `>>> Jobs:` shape (real
     /// `JobStatusDisplay._display_status` on a non-tty) -- conditional
     /// `running`/`failed`/`merge wait` arms, space padding to the
-    /// 68-column jobs field, `Load avg:` trailer. The first case is the
-    /// n197 probe's s2 line byte for byte (including all 36 pad
+    /// 68-column jobs field. Real's `Load avg:` trailer is cut
+    /// (coordinator ruling B14 -- see [`StatusDisplay::jobs_line`]); the
+    /// padding that precedes it is kept, so the first case below is the
+    /// n197 probe's s2 line up to the cut (including all 36 pad
     /// spaces).
     #[test]
     fn jobs_line_matches_reals_display_status_shape() {
         let color = crate::color::Colorizer::new(false);
         assert_eq!(
-            jobs_line(&color, 0, 3, 1, 0, 0, "6.9, 7.3, 10.4"),
-            ">>> Jobs: 0 of 3 complete, 1 running                                    Load avg: 6.9, 7.3, 10.4",
+            jobs_line(&color, 0, 3, 1, 0, 0),
+            ">>> Jobs: 0 of 3 complete, 1 running                                    ",
         );
         assert_eq!(
-            jobs_line(&color, 2, 3, 0, 0, 0, "0.10, 0.20, 0.30"),
-            ">>> Jobs: 2 of 3 complete                                               Load avg: 0.10, 0.20, 0.30",
+            jobs_line(&color, 2, 3, 0, 0, 0),
+            ">>> Jobs: 2 of 3 complete                                               ",
         );
         assert_eq!(
-            jobs_line(&color, 1, 3, 1, 2, 1, "1.00, 1.00, 1.00"),
-            ">>> Jobs: 1 of 3 complete, 1 running, 2 failed, 1 merge wait            Load avg: 1.00, 1.00, 1.00",
+            jobs_line(&color, 1, 3, 1, 2, 1),
+            ">>> Jobs: 1 of 3 complete, 1 running, 2 failed, 1 merge wait            ",
         );
         // Coloured: the counters wear `INFORM`, the padding is still
-        // measured on the plain text (real's `plain_output` gauge).
+        // measured on the plain text (real's `plain_output` gauge) and
+        // the line still ends at real's column.
         let tty_color = crate::color::Colorizer::new(true);
-        let line = jobs_line(&tty_color, 0, 3, 1, 0, 0, "6.9, 7.3, 10.4");
+        let line = jobs_line(&tty_color, 0, 3, 1, 0, 0);
         assert!(line.starts_with(">>> Jobs: "), "{line}");
         assert!(line.contains(&tty_color.c("INFORM", "0")), "{line}");
         // The escape codes around the counts move the byte indices, so
-        // count the spaces just before `Load avg:` instead: 68 - 32.
-        let load_idx = line.find("Load avg:").unwrap();
-        assert_eq!(&line[load_idx - 36..load_idx], &" ".repeat(36), "{line}");
+        // count the trailing spaces instead: 68 - 32.
+        assert_eq!(&line[line.len() - 36..], &" ".repeat(36), "{line}");
     }
 
     /// Backlog #197: the display counters feed the `>>> Jobs:` line --
     /// dispatch raises `running`, a freed build slot drops it, a landed
     /// merge raises `curval`, a failure raises `failed` (real
-    /// `_schedule_tasks_imp` / `_build_exit` / `_merge_exit`). The
-    /// `Load avg:` tail is live, so only the head is pinned here; the
-    /// full shape is pinned above and in the contract suite.
+    /// `_schedule_tasks_imp` / `_build_exit` / `_merge_exit`). The line
+    /// is deterministic (no live trailer -- B14), so the full shape is
+    /// pinned here, not just the head.
     #[test]
     fn status_display_counters_feed_the_jobs_line() {
         let display = StatusDisplay::new(
@@ -4739,37 +4716,94 @@ mod tests {
             3,
             crate::color::Colorizer::new(false),
         );
-        let head = |display: &StatusDisplay| {
-            display
-                .jobs_line()
-                .split("Load avg:")
-                .next()
-                .unwrap()
-                .to_string()
-        };
         assert_eq!(
-            head(&display),
+            display.jobs_line(),
             ">>> Jobs: 0 of 3 complete                                               "
         );
         display.job_started();
         display.job_started();
         assert_eq!(
-            head(&display),
+            display.jobs_line(),
             ">>> Jobs: 0 of 3 complete, 2 running                                    "
         );
         display.build_finished();
         assert_eq!(
-            head(&display),
+            display.jobs_line(),
             ">>> Jobs: 0 of 3 complete, 1 running                                    "
         );
         display.merge_finished();
         assert_eq!(
-            head(&display),
+            display.jobs_line(),
             ">>> Jobs: 1 of 3 complete, 1 running                                    "
         );
         display.job_failed();
         display.build_finished();
-        assert!(head(&display).contains(", 1 failed"), "{}", head(&display));
+        assert_eq!(
+            display.jobs_line(),
+            ">>> Jobs: 1 of 3 complete, 1 failed                                     "
+        );
+    }
+
+    /// Backlog #197 fix round 1: one failed `-jN` build fires each
+    /// failure event exactly once. Real `_build_exit`'s failure arm
+    /// assigns absolutely (`Scheduler.py:1662`, `failed =
+    /// len(self._failed_pkgs)` -- 1 for a single failure), then drops
+    /// the freed build slot (`running`, `:1663-1665`): exactly two
+    /// `>>> Jobs:` lines, ending at `failed == 1`. The pre-fix code
+    /// fired `job_failed` + `build_finished` twice (once in the `Err`
+    /// arm, once in the `Some` arm), reaching `failed == 2`. Drives
+    /// the real scheduler (`run_build_scheduler`) over the `schedbad`
+    /// fixture (its `src_install` dies) with a caller-owned display,
+    /// so the counters pin the wiring, not just the display.
+    #[test]
+    fn run_build_scheduler_single_failure_counts_failed_exactly_once() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+
+        let bad = source_entry(
+            "schedbad",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        let entries = vec![bad];
+
+        let options = ebuild_merge::MergeOptions {
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            ..ebuild_merge::MergeOptions::default()
+        };
+        let display = StatusDisplay::new(
+            StatusMode {
+                background: true,
+                show_jobs: false,
+            },
+            1,
+            crate::color::Colorizer::new(false),
+        );
+        let policy = mrg_director::LoadAwarePolicy::new(2, None);
+        let err = run_build_scheduler(
+            &entries,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &options,
+            false,
+            None,
+            &[],
+            &policy,
+            &display,
+        )
+        .expect_err("schedbad's own failure must fail the run");
+        assert!(err.contains("schedbad-1.0"), "{err}");
+        assert_eq!(
+            display.jobs_line(),
+            ">>> Jobs: 0 of 1 complete, 1 failed                                     "
+        );
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&portage_tmpdir);
     }
 
     #[test]
