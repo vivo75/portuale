@@ -68,6 +68,29 @@ fn entry_version(outcome: &PretendOutcome) -> Option<&str> {
     }
 }
 
+/// This entry's own `mtimedb["resume"]` mergelist item (`ResumeCpv`), or
+/// `None` for an entry real's `_save_resume_list` would never record
+/// (`Scheduler.py:2414-2418` only keeps `Package`s with
+/// `operation == "merge"` -- an already-installed no-op, a blocker
+/// removal, or an entry with no visible candidate merges nothing). The
+/// `ResumeEntryKind` tag comes straight from the resolved source, the
+/// same tag `entries_not_merged` (`pretend.rs`) already writes on the
+/// failure path -- so the up-front save and the per-merge shrink below
+/// name every entry identically.
+pub(crate) fn resume_cpv(entry: &GraphEntry) -> Option<crate::mtimedb::ResumeCpv> {
+    let version = entry_version(&entry.outcome)?;
+    let kind = match entry.source {
+        CandidateSource::Ebuild => crate::mtimedb::ResumeEntryKind::Ebuild,
+        CandidateSource::Binary => crate::mtimedb::ResumeEntryKind::Binary,
+    };
+    Some((
+        kind,
+        entry.category.clone(),
+        entry.package.clone(),
+        version.to_string(),
+    ))
+}
+
 /// Re-finds the winning candidate for `category/package` at exactly
 /// `version` -- the same repo/version lookup `resolve_pretend_graph`
 /// already did internally to pick this entry's winning version in the
@@ -425,7 +448,7 @@ pub fn run_source_merge(
         buildpkg,
         buildpkg_exclude,
     };
-    run_merge_loop(entries, keep_going, |entry| {
+    run_merge_loop(entries, keep_going, root, |entry| {
         let bp = buildpkg.filter(|opts| {
             entry_buildpkg_wanted(entry, repos, buildpkg_exclude, opts.buildpkg_live)
         });
@@ -532,6 +555,7 @@ pub(crate) fn entry_buildpkg_wanted(
 pub(crate) fn run_merge_loop<F>(
     entries: &[GraphEntry],
     keep_going: bool,
+    root: &Path,
     mut merge_one: F,
 ) -> Result<(), String>
 where
@@ -577,6 +601,13 @@ where
                     }
                 }
             }
+        } else if let Some(cpv) = resume_cpv(entry) {
+            // Real `Scheduler.py:1595-1602`: each successful merge removes
+            // its own package from the up-front-saved resume list (and
+            // commits), so a SIGKILL leaves exactly the tail for
+            // `--resume`. A no-op "merge" (already installed) was never
+            // saved, so its own removal is a silent no-op.
+            crate::mtimedb::remove_merged_entry(root, &cpv);
         }
     }
 
@@ -1735,6 +1766,13 @@ fn run_build_scheduler(
             match failure {
                 None => {
                     merged.insert(idx);
+                    // Real `Scheduler.py:1595-1602`, same as the serial
+                    // loop: each successful merge leaves the saved resume
+                    // list (order-free removal by value, so parallel
+                    // completion order is fine).
+                    if let Some(cpv) = resume_cpv(&entries[idx]) {
+                        crate::mtimedb::remove_merged_entry(root, &cpv);
+                    }
                     // Real `_emerge/Scheduler.py`'s `JobStatusDisplay`.
                     let done = (0..n)
                         .filter(|&i| scheduler_needs_build(&entries[i]) && merged.contains(&i))
@@ -2169,6 +2207,81 @@ mod tests {
             false,
         );
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn resume_cpv_maps_source_and_binary_and_skips_non_merges() {
+        // The up-front resume save (real `Scheduler._save_resume_list`'s
+        // `operation == "merge"` filter) records every entry that will
+        // actually merge -- source and binary alike -- and nothing else.
+        let src = resume_entry("dev-libs", "src-pkg", "1.0", CandidateSource::Ebuild);
+        assert_eq!(
+            resume_cpv(&src),
+            Some((
+                crate::mtimedb::ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "src-pkg".to_string(),
+                "1.0".to_string(),
+            ))
+        );
+        let bin = resume_entry("dev-libs", "bin-pkg", "2.0", CandidateSource::Binary);
+        assert_eq!(
+            resume_cpv(&bin),
+            Some((
+                crate::mtimedb::ResumeEntryKind::Binary,
+                "dev-libs".to_string(),
+                "bin-pkg".to_string(),
+                "2.0".to_string(),
+            ))
+        );
+        let mut installed = resume_entry("dev-libs", "old-pkg", "3.0", CandidateSource::Ebuild);
+        installed.outcome = PretendOutcome::AlreadyInstalled {
+            version: "3.0".into(),
+        };
+        assert_eq!(resume_cpv(&installed), None);
+        let mut uninstalled = resume_entry("dev-libs", "gone-pkg", "4.0", CandidateSource::Ebuild);
+        uninstalled.outcome = PretendOutcome::NoVisibleCandidate;
+        assert_eq!(resume_cpv(&uninstalled), None);
+    }
+
+    #[test]
+    fn run_merge_loop_shrinks_the_saved_resume_list_per_successful_merge() {
+        // #168 through the production serial loop: with the full mergelist
+        // saved up front, each successful merge removes exactly that entry
+        // (real `Scheduler.py:1595-1602`), so a SIGKILL mid-run leaves the
+        // tail and the last merge deletes the key.
+        let root = tempdir();
+        let entries = vec![
+            resume_entry("dev-libs", "loop-a", "1.0", CandidateSource::Ebuild),
+            resume_entry("dev-libs", "loop-b", "1.0", CandidateSource::Ebuild),
+            resume_entry("dev-libs", "loop-c", "1.0", CandidateSource::Ebuild),
+        ];
+        let full: Vec<crate::mtimedb::ResumeCpv> =
+            entries.iter().map(|e| resume_cpv(e).unwrap()).collect();
+        crate::mtimedb::write_resume_list(
+            &root,
+            &["dev-libs/loop-a"],
+            &full,
+            &crate::mtimedb::ResumeOpts::default(),
+        )
+        .unwrap();
+
+        run_merge_loop(&entries, false, &root, |entry| {
+            // By the time this entry's own merge runs, every earlier entry
+            // has already left the on-disk list.
+            let pos = full
+                .iter()
+                .position(|(_, _, p, _)| p == &entry.package)
+                .expect("loop entry is in the saved list");
+            let (_, remaining, _) =
+                crate::mtimedb::read_resume_list(&root).expect("resume list mid-run");
+            assert_eq!(remaining, full[pos..]);
+            Ok(())
+        })
+        .unwrap();
+
+        assert!(crate::mtimedb::read_resume_list(&root).is_none());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -3770,7 +3883,9 @@ mod tests {
             },
         );
         let mut seen: Vec<String> = Vec::new();
-        let err = run_merge_loop(&[a, b], false, |e| {
+        // No resume list under this fresh root, so the per-merge shrink
+        // is a silent no-op.
+        let err = run_merge_loop(&[a, b], false, &tempdir(), |e| {
             seen.push(e.package.clone());
             Err(format!("{} boom", e.package))
         })
@@ -3812,7 +3927,9 @@ mod tests {
         );
 
         let mut merged: Vec<String> = Vec::new();
-        let err = run_merge_loop(&[dep, mid, top, other], true, |e| {
+        // No resume list under this fresh root, so the per-merge shrink
+        // is a silent no-op.
+        let err = run_merge_loop(&[dep, mid, top, other], true, &tempdir(), |e| {
             if e.package == "dep" {
                 return Err("dep boom".into());
             }

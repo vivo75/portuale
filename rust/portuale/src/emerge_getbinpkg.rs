@@ -133,7 +133,7 @@ pub fn run_merge_plan(
     buildpkg: Option<&crate::ebuild_package::PackageOptions>,
     buildpkg_exclude: &[String],
 ) -> Result<(), String> {
-    crate::emerge_build::run_merge_loop(entries, keep_going, |entry| {
+    crate::emerge_build::run_merge_loop(entries, keep_going, root, |entry| {
         // The director seam executes every unit: derive the entry's
         // `MergeUnit` and dispatch on its kind through the real source /
         // binary engines (real `MergeListItem._start`'s own `type_name`

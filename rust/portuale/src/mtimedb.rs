@@ -1,8 +1,13 @@
 // Real `/var/cache/edb/mtimedb` `resume` support (`_emerge/Scheduler.py::
-// _save_resume_list` + `_emerge/actions.py`'s `--resume` handling): when a
-// merge fails, the packages that still need merging are written to
-// `mtimedb["resume"]["mergelist"]` (each entry `[type, root, cpv,
-// operation]`) along with the original atom args
+// _save_resume_list` + `_emerge/actions.py`'s `--resume` handling): the
+// resolved plan's own mergelist is saved to `mtimedb["resume"]`
+// **before the first merge runs** (real `Scheduler.merge()`'s own
+// `_save_resume_list` call, #168), so a SIGKILL mid-merge still leaves a
+// list for `emerge --resume`. Each successful merge then removes its own
+// entry (`remove_merged_entry`, real `Scheduler.py:1595-1602`), deleting
+// the key once the list empties; a clean failure re-saves the
+// still-unmerged tail. Each entry is `[type, root, cpv,
+// operation]` along with the original atom args
 // (`mtimedb["resume"]["favorites"]`). `emerge --resume` reads them back
 // and merges them in order; `emerge --resume --skipfirst` drops the first
 // (the one that failed) before continuing.
@@ -402,13 +407,15 @@ pub fn write_info_mtimes(root: &Path, info: &BTreeMap<String, i64>) -> Result<()
     write_sections(root, resume.as_ref(), backup.as_ref(), Some(info))
 }
 
-/// Writes `mtimedb["resume"]` for a failed merge: `favorites` (the atom
-/// args) + `mergelist` (`["ebuild", <root>, "<cat/pkg-ver>", "merge"]`
-/// per still-unmerged package) + `myopts` (the `--oneshot`/`--onlydeps`
-/// flags, so `--resume` replays with the same world-recording
-/// behaviour). No-op if `mergelist` is empty. Preserves an existing
-/// `resume_backup` untouched -- real's own `mtimedb["resume"] = ...`
-/// only ever assigns the `"resume"` key.
+/// Writes `mtimedb["resume"]` from `favorites` (the atom args), `mergelist`
+/// (one merge item per package, tagged `"ebuild"` or `"binary"` with its
+/// `<root>` and `"<cat/pkg-ver>"`) and `myopts` (the `--oneshot` /
+/// `--onlydeps` flags, so `--resume` replays with the same
+/// world-recording behaviour). Used both for the up-front save of the full
+/// resolved plan (real `Scheduler.merge()`'s own `_save_resume_list`, #168)
+/// and for re-saving the still-unmerged tail on a clean failure. No-op if
+/// `mergelist` is empty. An existing `resume_backup` is preserved untouched
+/// -- real's own resume assignment only ever touches the `"resume"` key.
 pub fn write_resume_list(
     root: &Path,
     favorites: &[&str],
@@ -426,6 +433,39 @@ pub fn write_resume_list(
     let backup = read_section(root, "resume_backup");
     let info = read_info_mtimes(root);
     write_sections(root, Some(&resume), backup.as_ref(), Some(&info))
+}
+
+/// Real `Scheduler.py:1595-1602`: after each successful merge (committed
+/// at once, "so that --resume still works after being interrupted by
+/// reboot, sigkill or similar"), the merged package leaves
+/// `mtimedb["resume"]["mergelist"]`; once the list empties,
+/// `del mtimedb["resume"]`. Removes the first entry equal to `entry`
+/// (real's own `list.remove` semantics); a no-op when there is no
+/// `resume` section at all or the entry isn't listed (an
+/// already-installed no-op "merge" reports success without ever being
+/// saved). An emptied list deletes the `resume` key outright (removing
+/// the file when no `resume_backup` survives); a non-empty remainder is
+/// re-committed with an existing `resume_backup` preserved untouched.
+pub fn remove_merged_entry(root: &Path, entry: &ResumeCpv) {
+    let Some(mut resume) = read_section(root, "resume") else {
+        return;
+    };
+    let Some(pos) = resume.mergelist.iter().position(|e| e == entry) else {
+        return;
+    };
+    resume.mergelist.remove(pos);
+    let backup = read_section(root, "resume_backup");
+    let resume_opt = if resume.mergelist.is_empty() {
+        None
+    } else {
+        Some(&resume)
+    };
+    let _ = write_sections(
+        root,
+        resume_opt,
+        backup.as_ref(),
+        Some(&read_info_mtimes(root)),
+    );
 }
 
 /// Real `actions.py:664-672`: right before a fresh, non-`--resume`
@@ -806,6 +846,167 @@ mod tests {
         assert_eq!(resume.mergelist, new_list);
         let backup = read_section(&root, "resume_backup").expect("old backup preserved");
         assert_eq!(backup.mergelist, backup_list);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn remove_merged_entry_shrinks_the_list_and_deletes_it_when_empty() {
+        // Real `Scheduler.py:1595-1602`: after each successful merge the
+        // merged package leaves `mtimedb["resume"]["mergelist"]` (committed,
+        // so a SIGKILL still leaves the tail for `--resume`); once the
+        // list empties, `del mtimedb["resume"]`.
+        let root = tmproot();
+        let full = vec![
+            (
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "resume-a".to_string(),
+                "1".to_string(),
+            ),
+            (
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "resume-b".to_string(),
+                "1".to_string(),
+            ),
+            (
+                ResumeEntryKind::Binary,
+                "dev-libs".to_string(),
+                "resume-c".to_string(),
+                "2".to_string(),
+            ),
+        ];
+        write_resume_list(&root, &["dev-libs/resume-a"], &full, &ResumeOpts::default()).unwrap();
+
+        // After package 1 of 3 merges: the remaining 2.
+        remove_merged_entry(&root, &full[0]);
+        assert_eq!(read_resume_list(&root).unwrap().1, full[1..]);
+
+        // After package 2 of 3: the remaining 1.
+        remove_merged_entry(&root, &full[1]);
+        assert_eq!(read_resume_list(&root).unwrap().1, full[2..]);
+
+        // After the last merge: the `resume` key is gone (and with no
+        // backup to preserve, the file itself is gone too).
+        remove_merged_entry(&root, &full[2]);
+        assert!(read_resume_list(&root).is_none());
+        assert!(!mtimedb_path(&root).exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn remove_merged_entry_keeps_the_backup_and_ignores_unknown_entries() {
+        let root = tmproot();
+        let old = vec![
+            (
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "old-a".to_string(),
+                "1".to_string(),
+            ),
+            (
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "old-b".to_string(),
+                "1".to_string(),
+            ),
+        ];
+        write_resume_list(&root, &[], &old, &ResumeOpts::default()).unwrap();
+        rotate_resume_to_backup(&root);
+        let fresh = vec![(
+            ResumeEntryKind::Ebuild,
+            "dev-libs".to_string(),
+            "new".to_string(),
+            "2".to_string(),
+        )];
+        write_resume_list(&root, &["dev-libs/new"], &fresh, &ResumeOpts::default()).unwrap();
+
+        // Removing an entry that is only in the backup (not in `resume`)
+        // leaves the file byte-identical.
+        let before = std::fs::read(mtimedb_path(&root)).unwrap();
+        remove_merged_entry(&root, &old[0]);
+        assert_eq!(std::fs::read(mtimedb_path(&root)).unwrap(), before);
+
+        // Removing the last fresh entry deletes `resume` but keeps the
+        // rotated backup recoverable.
+        remove_merged_entry(&root, &fresh[0]);
+        assert!(read_section(&root, "resume").is_none());
+        let (_, back, _) = read_resume_list(&root).expect("backup promoted");
+        assert_eq!(back, old);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn remove_merged_entry_without_any_resume_file_is_a_noop() {
+        let root = tmproot();
+        let ghost = (
+            ResumeEntryKind::Ebuild,
+            "dev-libs".to_string(),
+            "ghost".to_string(),
+            "1".to_string(),
+        );
+        remove_merged_entry(&root, &ghost);
+        assert!(!mtimedb_path(&root).exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn driver_sequence_rotates_first_then_saves_up_front_and_shrinks_per_merge() {
+        // The whole #168 driver lifecycle in one hermetic sequence: (d) a
+        // stale multi-item list rotates to backup first; (a) the fresh run
+        // saves its full mergelist before the first merge; (b) each
+        // successful merge shrinks it to the remainder; (c) the last merge
+        // deletes the key -- while the rotated backup survives the run.
+        let root = tmproot();
+        let stale = vec![
+            (
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "stale-a".to_string(),
+                "1".to_string(),
+            ),
+            (
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "stale-b".to_string(),
+                "1".to_string(),
+            ),
+        ];
+        write_resume_list(&root, &["stale"], &stale, &ResumeOpts::default()).unwrap();
+
+        rotate_resume_to_backup(&root);
+        assert!(read_section(&root, "resume").is_none());
+
+        let full = vec![
+            (
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "run-a".to_string(),
+                "1".to_string(),
+            ),
+            (
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "run-b".to_string(),
+                "1".to_string(),
+            ),
+            (
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "run-c".to_string(),
+                "1".to_string(),
+            ),
+        ];
+        write_resume_list(&root, &["fav"], &full, &ResumeOpts::default()).unwrap();
+        assert_eq!(read_resume_list(&root).unwrap().1, full);
+
+        remove_merged_entry(&root, &full[0]);
+        assert_eq!(read_resume_list(&root).unwrap().1, full[1..]);
+
+        remove_merged_entry(&root, &full[1]);
+        remove_merged_entry(&root, &full[2]);
+        assert!(read_section(&root, "resume").is_none());
+        assert!(read_section(&root, "resume_backup").is_some());
         let _ = std::fs::remove_dir_all(&root);
     }
 }
