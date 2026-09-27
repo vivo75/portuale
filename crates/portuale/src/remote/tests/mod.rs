@@ -606,6 +606,42 @@ struct S8Tree {
     clientetc: std::path::PathBuf,
 }
 
+impl S8Tree {
+    fn fresh(tag: &str) -> Self {
+        let tmp = TempDir::new(&format!("portuale-remote-s8-{tag}")).keep();
+        let root = tmp.join("root");
+        let work = tmp.join("work");
+        let bindir = tmp.join("bin");
+        std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(&bindir).unwrap();
+        let clientetc = tmp.join("clientetc");
+        let repo = tmp.join("repo");
+        std::fs::create_dir_all(clientetc.join("etc/portage/repos.conf")).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::write(
+            clientetc.join("etc/portage/repos.conf/testrepo.conf"),
+            format!(
+                "[DEFAULT]\nmain-repo = testrepo\n\n[testrepo]\nlocation = {}\n",
+                repo.display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            clientetc.join("etc/portage/make.conf"),
+            "FEATURES=\"sandbox\"\n",
+        )
+        .unwrap();
+        Self {
+            tmp,
+            root,
+            work,
+            bindir,
+            clientetc,
+        }
+    }
+}
+
 impl Drop for S8Tree {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.tmp);

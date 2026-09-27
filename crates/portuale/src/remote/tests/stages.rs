@@ -228,6 +228,199 @@ fn merge_driver_aborts_on_unowned_collision() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// A merge plus the regen postinst run leaves `environment.bz2` holding
+/// the postinst-time env, and no plain `environment` file.
+#[test]
+fn regen_postinst_rewrites_vdb_env_from_merge_time_env() {
+    let tmp = regen_tmp("merge-time");
+    let root = tmp.join("root");
+    std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+    let (unit, staged) = regen_unit(
+        &tmp,
+        "EAPI=8\nDESCRIPTION=\"synthetic regen probe\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\npkg_postinst() {\n\texport PT_MERGE_MARKER=\"merge-time\"\n}\n",
+        "postinst",
+    );
+    let ctx = local_ctx(root.to_str().unwrap(), tmp.join("work").to_str().unwrap());
+    let markers = run_merge_stage(&ctx, None, &unit, &staged, None).expect("merge succeeds");
+    assert!(markers.iter().any(|m| m == "MERGE_VDB=ok"), "{markers:?}");
+    let vdb = root.join("var/db/pkg/dev-libs/regen-1.0");
+    // No plain `environment` in the vdb (Portage's shape).
+    assert!(
+        !vdb.join("environment").exists(),
+        "MERGE_FLOW must not write a plain environment file"
+    );
+    // The vdb still holds the build-time env before the regen.
+    let before = read_vdb_env(&vdb.join("environment.bz2"));
+    assert!(
+        before.contains("declare -- x=\"\""),
+        "pre-regen env:\n{before}"
+    );
+    assert!(before.contains("buildpkg"), "pre-regen env:\n{before}");
+
+    let report = run_postinst_regen_stage(RunPostinstRegenStageArgs {
+        ctx: &ctx,
+        control: None,
+        unit_dir: &unit,
+        staged: &staged,
+        features: Some("sandbox merge-time"),
+        locale: &[],
+    })
+    .expect("regen phase runs");
+    assert_eq!(report.phase_rc, 0);
+    assert!(report.regen_present);
+    assert!(!report.skipped_no_hooks);
+    install_regenerated_env(
+        &ctx,
+        None,
+        &unit,
+        vdb.join("environment.bz2").to_str().unwrap(),
+        Some("bzip2"),
+    )
+    .expect("install succeeds");
+
+    let after = read_vdb_env(&vdb.join("environment.bz2"));
+    assert!(
+        after.contains("declare -x PT_MERGE_MARKER=\"merge-time\""),
+        "postinst-time var missing:\n{after}"
+    );
+    assert!(
+        !after.contains("x=\"\""),
+        "stray build-time x survived:\n{after}"
+    );
+    assert!(
+        !after.contains("buildpkg"),
+        "build-time FEATURES survived:\n{after}"
+    );
+    assert!(
+        after.contains("declare -x FEATURES=\"sandbox merge-time\""),
+        "resolved FEATURES missing:\n{after}"
+    );
+    assert!(
+        after.contains("declare -x PORTAGE_FEATURES=\"sandbox merge-time\""),
+        "resolved PORTAGE_FEATURES missing:\n{after}"
+    );
+    assert!(
+        after.contains("declare -x PORTAGE_BZIP2_COMMAND=\"bzip2\""),
+        "passthrough path leaked into the vdb env:\n{after}"
+    );
+    assert!(
+        !vdb.join("environment").exists(),
+        "install must not write a plain environment file"
+    );
+    // Atomic install leaves no temp behind.
+    assert!(!vdb.join("environment.bz2.portuale-regen-tmp").exists());
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// A package without `pkg_postinst` still gets a regenerated env: an
+/// undefined function is a no-op that still re-saves.
+#[test]
+fn regen_runs_without_pkg_postinst() {
+    let tmp = regen_tmp("no-postinst");
+    let root = tmp.join("root");
+    std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+    let (unit, staged) = regen_unit(
+        &tmp,
+        "EAPI=8\nDESCRIPTION=\"synthetic regen probe, no postinst\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\n",
+        "-",
+    );
+    assert!(!staged.postinst_defined);
+    let ctx = local_ctx(root.to_str().unwrap(), tmp.join("work").to_str().unwrap());
+    run_merge_stage(&ctx, None, &unit, &staged, None).expect("merge succeeds");
+    let report = run_postinst_regen_stage(RunPostinstRegenStageArgs {
+        ctx: &ctx,
+        control: None,
+        unit_dir: &unit,
+        staged: &staged,
+        features: Some("sandbox"),
+        locale: &[],
+    })
+    .expect("regen phase runs");
+    assert_eq!(report.phase_rc, 0, "undefined pkg_postinst is a no-op");
+    assert!(report.regen_present);
+    let vdb = root.join("var/db/pkg/dev-libs/regen-1.0");
+    install_regenerated_env(
+        &ctx,
+        None,
+        &unit,
+        vdb.join("environment.bz2").to_str().unwrap(),
+        Some("bzip2"),
+    )
+    .expect("install succeeds");
+    let after = read_vdb_env(&vdb.join("environment.bz2"));
+    assert!(
+        !after.contains("x=\"\""),
+        "stray build-time x survived:\n{after}"
+    );
+    assert!(
+        after.contains("declare -x FEATURES=\"sandbox\""),
+        "resolved FEATURES missing:\n{after}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// A regen run leaves no `O` line, records `SHELL` unexported, and
+/// carries the injected locale values.
+#[test]
+fn regen_matches_portage_o_shell_and_locale() {
+    let tmp = regen_tmp("o-shell-locale");
+    let root = tmp.join("root");
+    std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+    let (unit, staged) = regen_unit(
+        &tmp,
+        "EAPI=8\nDESCRIPTION=\"synthetic regen probe\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\npkg_postinst() {\n\texport PT_MERGE_MARKER=\"merge-time\"\n}\n",
+        "postinst",
+    );
+    let ctx = local_ctx(root.to_str().unwrap(), tmp.join("work").to_str().unwrap());
+    let locale = vec![
+        ("LANG".to_string(), "C.UTF-8".to_string()),
+        ("LC_MESSAGES".to_string(), "C.UTF-8".to_string()),
+    ];
+    let report = run_postinst_regen_stage(RunPostinstRegenStageArgs {
+        ctx: &ctx,
+        control: None,
+        unit_dir: &unit,
+        staged: &staged,
+        features: Some("sandbox"),
+        locale: &locale,
+    })
+    .expect("regen phase runs");
+    assert_eq!(report.phase_rc, 0);
+    assert!(report.regen_present);
+    let regen = std::fs::read_to_string(format!("{unit}/environment.regen")).expect("regen file");
+    for line in regen.lines() {
+        let Some(rest) = line.strip_prefix("declare ") else {
+            continue;
+        };
+        let rest = rest
+            .strip_prefix("-x ")
+            .or_else(|| rest.strip_prefix("-- "))
+            .unwrap_or(rest);
+        let name = rest.split(['=', ' ']).next().unwrap_or("");
+        assert_ne!(
+            name, "O",
+            "unit-local O leaked into the regen'd env:\n{regen}"
+        );
+    }
+    assert!(
+        regen.contains("declare -- SHELL="),
+        "SHELL must be unexported like real's:\n{regen}"
+    );
+    assert!(
+        !regen.contains("declare -x SHELL="),
+        "exported SHELL leaked into the regen'd env:\n{regen}"
+    );
+    assert!(
+        regen.contains("declare -x LANG=\"C.UTF-8\""),
+        "server LANG missing:\n{regen}"
+    );
+    assert!(
+        regen.contains("declare -x LC_MESSAGES=\"C.UTF-8\""),
+        "server LC_* missing:\n{regen}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// A regen run with only `LC_ALL=C.UTF-8` forwarded records `LANG` plus
 /// all twelve categories as `C.UTF-8`, and no `LC_ALL`.
 #[test]
@@ -280,6 +473,280 @@ fn regen_splits_lc_all_like_portage() {
     assert!(
         !regen.lines().any(|line| line.contains("LC_ALL")),
         "LC_ALL leaked into the regen'd env:\n{regen}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// The pulled client config stacks the server's `make.globals` as its
+/// bottom layer (expected value from the incremental fold).
+#[test]
+fn remote_client_config_stacks_server_make_globals() {
+    let _env_guard = PLACED_CONFIG_ENV_LOCK.lock().unwrap();
+    let tmp = regen_tmp("server-globals");
+    let server_root = tmp.join("serverroot");
+    std::fs::create_dir_all(server_root.join("usr/share/portage/config")).unwrap();
+    std::fs::write(
+        server_root.join("usr/share/portage/config/make.globals"),
+        "FEATURES=\"news sandbox\"\n",
+    )
+    .unwrap();
+    let client_etc = tmp.join("clientroot/etc/portage");
+    let repo = tmp.join("repo");
+    std::fs::create_dir_all(client_etc.join("repos.conf")).unwrap();
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(
+        client_etc.join("repos.conf/testrepo.conf"),
+        format!(
+            "[DEFAULT]\nmain-repo = testrepo\n\n[testrepo]\nlocation = {}\n",
+            repo.display()
+        ),
+    )
+    .unwrap();
+    std::fs::write(client_etc.join("make.conf"), "FEATURES=\"-news sign\"\n").unwrap();
+    let saved_config_root = std::env::var_os("PORTAGE_CONFIGROOT");
+    let saved_features = std::env::var_os("FEATURES");
+    let saved_mask = std::env::var_os("INSTALL_MASK");
+    // SAFETY: held `PLACED_CONFIG_ENV_LOCK`; no other test in this
+    // binary pins these without it.
+    unsafe {
+        std::env::set_var("PORTAGE_CONFIGROOT", &server_root);
+        std::env::remove_var("FEATURES");
+        std::env::remove_var("INSTALL_MASK");
+    }
+    let mut ctx = local_ctx(
+        tmp.join("root").to_str().unwrap(),
+        tmp.join("work").to_str().unwrap(),
+    );
+    ctx.etc_portage = ConfigPlacement::Client(client_etc.to_string_lossy().into_owned());
+    let placed = place_config_root(&ctx, None).expect("client placement resolves");
+    assert!(
+        placed
+            .dir
+            .join("usr/share/portage/config/make.globals")
+            .is_file(),
+        "the server make.globals must be seeded under the pulled root"
+    );
+    let eroot = tmp.join("eroot");
+    let (repos, config) = crate::pretend::load_repos_and_config(&placed.dir, &eroot)
+        .expect("placed client config resolves");
+    assert!(repos.iter().any(|r| r.is_main));
+    let resolved = crate::pretend::config_features_string(&config);
+    assert_eq!(
+        resolved, "sandbox sign",
+        "incremental fold over the seeded defaults"
+    );
+    drop(placed);
+    // SAFETY: same as above.
+    unsafe {
+        match saved_config_root {
+            Some(value) => std::env::set_var("PORTAGE_CONFIGROOT", value),
+            None => std::env::remove_var("PORTAGE_CONFIGROOT"),
+        }
+        match saved_features {
+            Some(value) => std::env::set_var("FEATURES", value),
+            None => std::env::remove_var("FEATURES"),
+        }
+        match saved_mask {
+            Some(value) => std::env::set_var("INSTALL_MASK", value),
+            None => std::env::remove_var("INSTALL_MASK"),
+        }
+    }
+    // The regenerated vdb env carries the resolved list: merge the
+    // synthetic unit, run the regen postinst with the resolved
+    // `FEATURES`, and read the installed `environment.bz2`.
+    let root = tmp.join("root");
+    std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+    let (unit, staged) = regen_unit(
+        &tmp,
+        "EAPI=8\nDESCRIPTION=\"synthetic globals probe\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\n",
+        "-",
+    );
+    let ctx = local_ctx(root.to_str().unwrap(), tmp.join("work").to_str().unwrap());
+    run_merge_stage(&ctx, None, &unit, &staged, None).expect("merge succeeds");
+    let report = run_postinst_regen_stage(RunPostinstRegenStageArgs {
+        ctx: &ctx,
+        control: None,
+        unit_dir: &unit,
+        staged: &staged,
+        features: Some(&resolved),
+        locale: &[],
+    })
+    .expect("regen phase runs");
+    assert_eq!(report.phase_rc, 0);
+    assert!(report.regen_present);
+    let vdb = root.join("var/db/pkg/dev-libs/regen-1.0");
+    install_regenerated_env(
+        &ctx,
+        None,
+        &unit,
+        vdb.join("environment.bz2").to_str().unwrap(),
+        Some("bzip2"),
+    )
+    .expect("install succeeds");
+    let after = read_vdb_env(&vdb.join("environment.bz2"));
+    assert!(
+        after.contains("declare -x FEATURES=\"sandbox sign\""),
+        "resolved FEATURES missing:\n{after}"
+    );
+    assert!(
+        after.contains("declare -x PORTAGE_FEATURES=\"sandbox sign\""),
+        "resolved PORTAGE_FEATURES missing:\n{after}"
+    );
+    assert!(
+        !after.contains("buildpkg"),
+        "build-time FEATURES survived:\n{after}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// A failed pull keeps the build-time `environment.bz2` byte-identical
+/// and reports the step.
+#[test]
+fn install_keeps_build_time_env_when_pull_fails() {
+    let tmp = regen_tmp("failure");
+    let root = tmp.join("root");
+    let vdb = root.join("var/db/pkg/dev-libs/regen-1.0");
+    std::fs::create_dir_all(&vdb).unwrap();
+    // A build-time env already in the vdb (the MERGE_FLOW fallback).
+    let build_time =
+        bzip2_compress(build_time_environment(false).as_bytes()).expect("server bzip2 compresses");
+    std::fs::write(vdb.join("environment.bz2"), &build_time).unwrap();
+    let unit = tmp.join("work/regen-1.0");
+    std::fs::create_dir_all(&unit).unwrap();
+    let ctx = local_ctx(root.to_str().unwrap(), tmp.join("work").to_str().unwrap());
+    let err = install_regenerated_env(
+        &ctx,
+        None,
+        unit.to_str().unwrap(),
+        vdb.join("environment.bz2").to_str().unwrap(),
+        Some("bzip2"),
+    )
+    .expect_err("pull must fail without environment.regen");
+    assert_eq!(err.0, "pull", "unexpected failing step: {err:?}");
+    assert_eq!(
+        std::fs::read(vdb.join("environment.bz2")).unwrap(),
+        build_time,
+        "the build-time env must survive byte-identical"
+    );
+    assert_eq!(
+        regen_warn_message("dev-libs/regen-1.0", "pull"),
+        "!!! Remote dev-libs/regen-1.0: merge-time environment regen failed at pull, keeping build-time environment.bz2",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// A failed atomic install leaves no client tmp litter: the remote temp
+/// name is removed best-effort.
+#[test]
+fn install_file_atomic_removes_tmp_when_mv_fails() {
+    let tmp = regen_tmp("install-tmp");
+    let root = tmp.join("root");
+    let vdb = root.join("var/db/pkg/dev-libs/regen-1.0");
+    std::fs::create_dir_all(&vdb).unwrap();
+    // A directory at the dest path makes the `rename` fail.
+    let dest = vdb.join("environment.bz2");
+    std::fs::create_dir_all(&dest).unwrap();
+    let ctx = local_ctx(root.to_str().unwrap(), tmp.join("work").to_str().unwrap());
+    let err = install_file_atomic(&ctx, None, b"regen", dest.to_str().unwrap())
+        .expect_err("install into a directory must fail");
+    assert!(err.contains("installing"), "unexpected error text: {err}");
+    assert!(
+        !vdb.join("environment.bz2.portuale-regen-tmp").exists(),
+        "the remote temp name must not litter the client"
+    );
+    assert!(dest.is_dir(), "the blocking directory is untouched");
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// The scrub rewrites only the unit-local passthrough stand-in; every
+/// other value passes verbatim and a missing line stays missing.
+#[test]
+fn scrub_bzip2_command_rewrites_only_the_passthrough() {
+    let regen = b"declare -x FEATURES=\"sandbox\"\ndeclare -x PORTAGE_BZIP2_COMMAND=\"'/tmp/w/bin/bzip2-passthrough'\"\ndeclare -x USE=\"amd64\"\n";
+    // Configured client value (e.g. `lbzip2` in `make.conf`) is written.
+    let scrubbed = scrub_bzip2_command(regen, "lbzip2");
+    assert_eq!(
+        String::from_utf8(scrubbed).unwrap(),
+        "declare -x FEATURES=\"sandbox\"\ndeclare -x PORTAGE_BZIP2_COMMAND=\"lbzip2\"\ndeclare -x USE=\"amd64\"\n",
+    );
+    // Unset (the `make.globals` default) restores `bzip2`.
+    let scrubbed = scrub_bzip2_command(regen, "bzip2");
+    assert_eq!(
+        String::from_utf8(scrubbed).unwrap(),
+        "declare -x FEATURES=\"sandbox\"\ndeclare -x PORTAGE_BZIP2_COMMAND=\"bzip2\"\ndeclare -x USE=\"amd64\"\n",
+    );
+    // An unrelated value -- even a foreign compressor path -- is
+    // copied verbatim, never forced to the configured one ...
+    let foreign = b"declare -x PORTAGE_BZIP2_COMMAND=\"/opt/bin/pbzip2\"\n";
+    assert_eq!(scrub_bzip2_command(foreign, "lbzip2"), foreign);
+    // ... Portage's own spelling passes through byte-identical ...
+    let real = b"declare -x PORTAGE_BZIP2_COMMAND=\"bzip2\"\n";
+    assert_eq!(scrub_bzip2_command(real, "lbzip2"), real);
+    // ... and a missing line stays missing (never invent it).
+    let bare = b"declare -x FEATURES=\"sandbox\"\n";
+    assert_eq!(scrub_bzip2_command(bare, "lbzip2"), bare);
+    // Trailing line without a newline is preserved.
+    let noeol =
+        b"declare -x FEATURES=\"sandbox\"\ndeclare -x PORTAGE_BZIP2_COMMAND=\"'/tmp/w/bin/bzip2-passthrough'\"";
+    assert_eq!(
+        String::from_utf8(scrub_bzip2_command(noeol, "lbzip2")).unwrap(),
+        "declare -x FEATURES=\"sandbox\"\ndeclare -x PORTAGE_BZIP2_COMMAND=\"lbzip2\"\n",
+    );
+}
+
+/// The old-version probe parser takes only `OLDPF=` lines apart into
+/// `(pf, slot)`.
+#[test]
+fn parse_oldpf_probe_parses_only_probe_lines() {
+    assert_eq!(
+        parse_oldpf_probe("OLDPF=old-1.0 SLOT=0\nnoise\nOLDPF=old-0.9 SLOT=unknown\n"),
+        vec![
+            ("old-1.0".to_string(), "0".to_string()),
+            ("old-0.9".to_string(), "unknown".to_string()),
+        ]
+    );
+    assert!(parse_oldpf_probe("UNPACK=ok\n").is_empty());
+    assert!(parse_oldpf_probe("OLDPF= SLOT=0\n").is_empty());
+}
+
+/// When both the `environment.bz2` pull and the plain fallback pull fail,
+/// the staging warning carries the original bz2 error.
+#[test]
+fn ship_old_hook_envs_warns_when_both_pulls_fail() {
+    let tmp = regen_tmp("old-noenv");
+    let root = tmp.join("root");
+    let work = tmp.join("work");
+    let oldvdb = root.join("var/db/pkg/dev-libs/oldhook-1.0");
+    std::fs::create_dir_all(&oldvdb).unwrap();
+    std::fs::write(oldvdb.join("SLOT"), "0\n").unwrap();
+    // Neither `environment.bz2` nor `environment` on the client.
+    assert!(!oldvdb.join("environment.bz2").exists());
+    assert!(!oldvdb.join("environment").exists());
+
+    let unit = work.join("oldhook-2.0");
+    std::fs::create_dir_all(&unit).unwrap();
+    let ctx = local_ctx(root.to_str().unwrap(), work.to_str().unwrap());
+    let shipment = ship_old_hook_envs(ShipOldHookEnvsArgs {
+        ctx: &ctx,
+        control: None,
+        unit_dir: unit.to_str().unwrap(),
+        vdb: root.join("var/db/pkg").to_str().unwrap(),
+        category: "dev-libs",
+        pn: "oldhook",
+        new_pf: "oldhook-2.0",
+        new_mainslot: "0",
+    });
+    assert!(shipment.shipped.is_empty(), "{:?}", shipment.shipped);
+    assert_eq!(shipment.warnings.len(), 1, "{:?}", shipment.warnings);
+    assert!(
+        shipment.warnings[0].contains("oldhook-1.0"),
+        "warning must name the pf: {:?}",
+        shipment.warnings
+    );
+    assert!(
+        shipment.warnings[0].contains("environment.bz2"),
+        "warning must carry the original bz2 error: {:?}",
+        shipment.warnings
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }

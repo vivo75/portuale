@@ -688,6 +688,36 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    /// With an empty mask nothing is pruned and no `INSTALL_MASK` file ships.
+    #[test]
+    fn bundle_empty_mask_prunes_nothing_and_writes_no_file() {
+        let tmp = tempdir("mask-empty");
+        let _staged = build_bundle(BuildBundleArgs {
+            binpkg_path: &fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+            staging_tmp: &tmp,
+            repo_override: None,
+            gpg: &crate::binpkg::GpgVerify::default(),
+            install_mask: "",
+            install_mask_prunes_usr_share: false,
+        })
+        .expect("fixture tbz2 stages");
+        assert!(
+            tmp.join("packagepkg-1.0/image/usr/share/packagepkg/hello.txt")
+                .is_file(),
+            "empty mask must leave the image alone"
+        );
+        let filemeta = std::fs::read_to_string(tmp.join("packagepkg-1.0/filemeta")).unwrap();
+        assert!(
+            filemeta.contains("hello.txt"),
+            "unmasked file must reach filemeta:\n{filemeta}"
+        );
+        assert!(
+            !tmp.join("packagepkg-1.0/build-info/INSTALL_MASK").exists(),
+            "empty mask must write no INSTALL_MASK file"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     /// The bundle ships an executable `bin/bzip2-passthrough` that ignores
     /// compression flags while passing stdin through.
     #[test]
