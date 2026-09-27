@@ -1605,8 +1605,9 @@ struct IndexVouch<'a> {
 /// `bintree.py:1108-1136`'s own "Validate data from the package index
 /// and try to avoid reading the xpak if possible" comment names this
 /// exact optimization. A candidate entry (matched by basename) whose
-/// own `_mtime_`/`SIZE` still agree with the live file's `stat(2)` (and
-/// which carries at least `CPV`/`SLOT`, real's own `minimum_keys`) is
+/// own `_mtime_`/`SIZE` still agree with the live file's `stat(2)` and
+/// which carries real's own `minimum_keys`
+/// ([`PKGINDEX_MINIMUM_KEYS`]) is
 /// reused verbatim -- its `PATH` is refreshed in case the file moved,
 /// matching real's own `if oldpath != mypath: d["PATH"] = mypath`.
 /// A basename-matched entry whose `_mtime_`/`SIZE` no longer agree is
@@ -1849,13 +1850,68 @@ pub fn populate_local_pkgdir(
     Ok(out)
 }
 
+/// Real `_populate_local`'s own `minimum_keys`
+/// (`bintree.py:1018`: `self._pkgindex_keys.difference(self._pkgindex_hashes)`):
+/// the `_aux_cache_keys` set (`bintree.py:96-120`) plus `CPV`/`SIZE`
+/// (`bintree.py:550-551`), minus the `_pkgindex_hashes` digests
+/// (`MD5`, `SHA1` -- `bintree.py:548`; real never computes digests at
+/// scan, `bintree.py:1014-1017`, so a stanza missing only digests must
+/// still hit the fast path). `MD5` is the one hash that is also an aux
+/// key, hence the only name dropped from the aux list; `SHA1` was
+/// never in it. `CPV`/`SIZE`/`SLOT`/`_mtime_` ride along (real checks
+/// presence of the whole set, values only for `_mtime_`/`SIZE`).
+const PKGINDEX_MINIMUM_KEYS: &[&str] = &[
+    "BDEPEND",
+    "BUILD_ID",
+    "BUILD_TIME",
+    "CHOST",
+    "DEFINED_PHASES",
+    "DEPEND",
+    "EAPI",
+    "IDEPEND",
+    "IUSE",
+    "KEYWORDS",
+    "LICENSE",
+    "PDEPEND",
+    "PROPERTIES",
+    "PROVIDES",
+    "RDEPEND",
+    "repository",
+    "REQUIRES",
+    "RESTRICT",
+    "SIZE",
+    "SLOT",
+    "USE",
+    "_mtime_",
+    "CPV",
+];
+
+/// Real `bintree.py:1124`'s own `if not minimum_keys.difference(d)`:
+/// every minimum key must be present on the stanza (presence only --
+/// real compares values solely for `_mtime_`/`SIZE`).
+fn stanza_has_minimum_keys(stanza: &HashMap<String, String>) -> bool {
+    PKGINDEX_MINIMUM_KEYS
+        .iter()
+        .all(|key| stanza.contains_key(*key))
+}
+
 /// One `$PKGDIR` binpkg file -> its synthesized `Packages`-style entry,
 /// or `None` if it isn't a binpkg or is a misnamed multi-instance file
 /// (real's own `invalid_name`/`name_split` `continue`). Reuses an
 /// unchanged `<pkgdir>/Packages` entry (matched by basename, with
 /// `_mtime_` and `SIZE` still agreeing -- real's "avoid reading the
 /// xpak if possible") when one exists, else parses the archive's own
-/// embedded metadata. `vouch` carries the index pool and records each
+/// embedded metadata. The fast path additionally requires real's own
+/// `minimum_keys` (`bintree.py:1014-1018`: `_pkgindex_keys`, i.e. the
+/// `_aux_cache_keys` of `bintree.py:96-120` plus `CPV`/`SIZE`
+/// (`bintree.py:548-551`), minus the `_pkgindex_hashes` digests, all
+/// present on the stanza -- `bintree.py:1124`'s own `if not
+/// minimum_keys.difference(d)`), so a stat-matching but key-incomplete
+/// stanza falls through to the fresh parse under
+/// `FEATURES=-pkgdir-index-trusted`, exactly like real. In trusted
+/// mode the same miss falls through to the stale-vouch arm below,
+/// which reuses the stanza verbatim -- so the added check cannot
+/// change trusted-mode output. `vouch` carries the index pool and records each
 /// consumed stanza (see [`IndexVouch`]). `multi_instance` selects the
 /// naming contract: when set, the
 /// file is `<pf>-<build_id>.{xpak,gpkg.tar}` with `PF` taken from the
@@ -1886,13 +1942,17 @@ fn scan_binpkg_file(
     let mtime = file_mtime(&st);
     let size = st.len();
 
+    // Real's own fast-path gate (`bintree.py:1115-1126`): the live
+    // `lstat(2)` mtime seconds and byte size must agree with the
+    // stanza's `_mtime_`/`SIZE`, and the stanza must carry every one
+    // of real's `minimum_keys` -- so a stat-matching but
+    // key-incomplete stanza is re-parsed, not vouched.
     if let Some(candidates) = vouch.by_basename.get(basename)
         && let Some(hit) = candidates.iter().copied().find(|&i| {
             let d = &vouch.stanzas[i];
             d.get("_mtime_").and_then(|m| m.parse::<i64>().ok()) == Some(mtime)
                 && d.get("SIZE").and_then(|s| s.parse::<u64>().ok()) == Some(size)
-                && d.contains_key("CPV")
-                && d.contains_key("SLOT")
+                && stanza_has_minimum_keys(d)
         })
     {
         let mut entry = vouch.stanzas[hit].clone();
@@ -4010,6 +4070,60 @@ mod tests {
     }
 
     #[test]
+    fn populate_local_pkgdir_reindex_reparses_a_key_incomplete_stanza() {
+        // Backlog #199 fix round 1: real's fast path reuses a stanza
+        // only when the stat fields agree *and* every `minimum_keys`
+        // entry is present (`bintree.py:1115-1126` -- `_mtime_`, `SIZE`,
+        // then `if not minimum_keys.difference(d)`). A stanza whose
+        // `_mtime_`/`SIZE` still match the live file but which lacks a
+        // minimum key (no `EAPI` here) is therefore re-parsed under
+        // `FEATURES=-pkgdir-index-trusted` (`trust_index == false`,
+        // real `_populate_local(reindex=True)`): the bogus `SLOT` the
+        // stanza claims gives way to the archive's real one. In trusted
+        // mode the same stanza is still vouched verbatim -- the fast
+        // path now misses, but the stale-vouch arm (backlog #174)
+        // reuses it byte-identically, so the trusted default is
+        // unchanged by the added check.
+        let scratch = ScratchDir::new("reindex-key-incomplete").unwrap();
+        let pkgdir = scratch.path();
+        let cat_dir = pkgdir.join("dev-libs");
+        fs::create_dir_all(&cat_dir).unwrap();
+        let dest = cat_dir.join("packagepkg-1.0.tbz2");
+        fs::copy(fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"), &dest).unwrap();
+        let st = fs::metadata(&dest).unwrap();
+        let real_size = st.len();
+        let real_mtime = file_mtime(&st);
+        let stanza = format!(
+            "TIMESTAMP: 0\n\nCPV: dev-libs/packagepkg-1.0\nSLOT: 99-not-the-real-slot\nSIZE: {real_size}\n_mtime_: {real_mtime}\nPATH: dev-libs/packagepkg-1.0.tbz2\nDEFINED_PHASES: install\nRDEPEND: dev-libs/samepkg\nUSE: \n",
+        );
+        fs::write(pkgdir.join("Packages"), &stanza).unwrap();
+
+        let entries = populate_local_pkgdir(pkgdir, true).expect("scan succeeds");
+        assert_eq!(entries.len(), 1, "{entries:?}");
+        assert_eq!(
+            entries[0].get("SLOT").map(String::as_str),
+            Some("99-not-the-real-slot"),
+            "trusted mode keeps the key-incomplete stanza verbatim"
+        );
+
+        let entries = populate_local_pkgdir(pkgdir, false).expect("scan succeeds");
+        assert_eq!(entries.len(), 1, "{entries:?}");
+        assert_eq!(
+            entries[0].get("SLOT").map(String::as_str),
+            Some("0"),
+            "reindex mode re-parses the key-incomplete stanza: {entries:?}"
+        );
+        assert_eq!(
+            entries[0].get("SIZE").map(String::as_str),
+            Some(real_size.to_string()).as_deref(),
+        );
+        assert_eq!(
+            entries[0].get("_mtime_").map(String::as_str),
+            Some(real_mtime.to_string()).as_deref(),
+        );
+    }
+
+    #[test]
     fn populate_local_pkgdir_reindex_drops_a_removed_files_index_stanza() {
         // Backlog #199: real `_populate_local(reindex=True)` deletes
         // every index stanza with no live file from the pool
@@ -4017,7 +4131,11 @@ mod tests {
         // `instance_key not in pkg_paths`). A stanza whose file was
         // removed is re-injected verbatim with `trust_index == true`
         // (backlog #187) but absent with `false`, while the surviving
-        // file's own entry is identical either way.
+        // file's own entry is identical either way. The survivor's
+        // stanza carries every `minimum_keys` entry (with live
+        // `_mtime_`/`SIZE`), so the fast path vouches it verbatim in
+        // both modes -- the equality below pins that, not a re-parse
+        // that merely happens to agree.
         let scratch = ScratchDir::new("reindex-removed").unwrap();
         let pkgdir = scratch.path();
         let cat_dir = pkgdir.join("dev-libs");
@@ -4032,22 +4150,30 @@ mod tests {
                  \n\
                  CPV: dev-libs/gonepkg-1.0\nSLOT: 0\nSIZE: 12345\n_mtime_: 1\nPATH: dev-libs/gonepkg-1.0.tbz2\n\
                  \n\
-                 CPV: dev-libs/packagepkg-1.0\nSLOT: 0\nSIZE: {}\n_mtime_: {}\nPATH: dev-libs/packagepkg-1.0.tbz2\n",
+                 BDEPEND: \nBUILD_ID: \nBUILD_TIME: 0\nCHOST: x86_64-pc-linux-gnu\nDEFINED_PHASES: install\nDEPEND: \nEAPI: 8\nIDEPEND: \nIUSE: \nKEYWORDS: amd64\nLICENSE: MIT\nPDEPEND: \nPROPERTIES: \nPROVIDES: \nRDEPEND: dev-libs/samepkg\nrepository: gentoo\nREQUIRES: \nRESTRICT: \nUSE: \nCPV: dev-libs/packagepkg-1.0\nSLOT: 0\nSIZE: {}\n_mtime_: {}\nPATH: dev-libs/packagepkg-1.0.tbz2\n",
                 st.len(),
                 file_mtime(&st),
             ),
         )
         .unwrap();
 
-        let entries = populate_local_pkgdir(pkgdir, true).expect("scan succeeds");
-        assert_eq!(entries.len(), 2, "{entries:?}");
+        let trusted = populate_local_pkgdir(pkgdir, true).expect("scan succeeds");
+        assert_eq!(trusted.len(), 2, "{trusted:?}");
 
-        let entries = populate_local_pkgdir(pkgdir, false).expect("scan succeeds");
-        assert_eq!(entries.len(), 1, "{entries:?}");
+        let reindexed = populate_local_pkgdir(pkgdir, false).expect("scan succeeds");
+        assert_eq!(reindexed.len(), 1, "{reindexed:?}");
         assert_eq!(
-            entries[0].get("CPV").map(String::as_str),
+            reindexed[0].get("CPV").map(String::as_str),
             Some("dev-libs/packagepkg-1.0"),
-            "only the surviving file stays: {entries:?}"
+            "only the surviving file stays: {reindexed:?}"
+        );
+        let survivor = trusted
+            .iter()
+            .find(|e| e.get("CPV").map(String::as_str) == Some("dev-libs/packagepkg-1.0"))
+            .expect("trusted pool still holds the surviving file");
+        assert_eq!(
+            survivor, &reindexed[0],
+            "the surviving file's own entry is identical either way"
         );
     }
 

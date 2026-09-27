@@ -7043,16 +7043,25 @@ fn buildpkg_from_config(buildpkg_opt: Option<bool>, config: &portage_profile::Co
     buildpkg_opt.unwrap_or_else(|| config_features_list(config).iter().any(|t| t == "buildpkg"))
 }
 
+/// The resolved `FEATURES` incremental list, if it was assigned
+/// anywhere: the folded `make.globals` + profile + `make.conf` +
+/// calling-env stack ([`Config::resolved_incremental`], with real's
+/// own `-*` / `-tok` / `+tok` semantics), falling back to a raw
+/// whitespace split of `other_vars["FEATURES"]` for configs that carry
+/// `FEATURES` only there. `None` means nothing configured anywhere --
+/// callers that need real's host-`make.globals` default seed it
+/// themselves (see `pkgdir_index_trusted`).
+fn config_features_opt(config: &portage_profile::Config) -> Option<Vec<String>> {
+    config.resolved_incremental("FEATURES").or_else(|| {
+        config
+            .other_vars
+            .get("FEATURES")
+            .map(|f| f.split_whitespace().map(String::from).collect())
+    })
+}
+
 fn config_features_list(config: &portage_profile::Config) -> Vec<String> {
-    config
-        .resolved_incremental("FEATURES")
-        .or_else(|| {
-            config
-                .other_vars
-                .get("FEATURES")
-                .map(|f| f.split_whitespace().map(String::from).collect())
-        })
-        .unwrap_or_default()
+    config_features_opt(config).unwrap_or_default()
 }
 
 /// Real `bintree.populate`'s own `reindex = "pkgdir-index-trusted" not
@@ -7062,34 +7071,24 @@ fn config_features_list(config: &portage_profile::Config) -> Vec<String> {
 /// `false` means it re-stats and re-reads (`reindex=True`).
 ///
 /// Read from the same resolved chain every other resolver-side
-/// `FEATURES` read uses (`config_features_list`, the folded
+/// `FEATURES` read uses (`config_features_opt`, the folded
 /// `make.globals` + profile + `make.conf` + calling-env stack -- so a
 /// `FEATURES=-pkgdir-index-trusted` in `make.conf` or on the calling
-/// env reaches the scan; no new env read here). The fold starts from
+/// env reaches the scan; no new env read here), with the same
+/// `other_vars` fallback `config_features_list` uses. The fold starts from
 /// real's own default: the token is in real `make.globals`' own default
 /// `FEATURES` (`cnf/make.globals:81`), which real always sources from
 /// the host installation -- while portuale reads `make.globals`
 /// `config_root`-relative, so under a test/fixture root it contributes
-/// nothing. Seeding the default keeps "nothing configured" trusted
-/// (byte-identical to the pre-#199 scan, and what real computes on a
-/// live host); only an explicit `-pkgdir-index-trusted` (or `-*`, real
-/// `resolved_incremental`'s own clear) in the chain, not undone by a
-/// later re-add, distrusts -- exactly when real's folded `features`
-/// would lack the token.
+/// nothing. `None` (nothing configured anywhere) therefore stays
+/// trusted (byte-identical to the pre-#199 scan, and what real computes
+/// on a live host); only a folded list that lacks the token --
+/// an explicit `-pkgdir-index-trusted` (or `-*`, real
+/// `resolved_incremental`'s own clear) not undone by a later re-add --
+/// distrusts, exactly when real's folded `features` would lack it.
 fn pkgdir_index_trusted(config: &portage_profile::Config) -> bool {
-    let mut trusted = true;
-    if let Some(sources) = config.incremental_sources.get("FEATURES") {
-        for layer in sources {
-            for tok in layer {
-                if tok == "pkgdir-index-trusted" || tok == "+pkgdir-index-trusted" {
-                    trusted = true;
-                } else if tok == "-pkgdir-index-trusted" || tok == "-*" {
-                    trusted = false;
-                }
-            }
-        }
-    }
-    trusted
+    config_features_opt(config)
+        .is_none_or(|features| features.iter().any(|t| t == "pkgdir-index-trusted"))
 }
 
 /// The resolved, merge-time `FEATURES` incremental list, space-joined --
@@ -13751,6 +13750,63 @@ mod tests {
         off.other_vars
             .insert("FEATURES".to_string(), "-buildpkg sandbox".to_string());
         assert!(!buildpkg_from_config(None, &off));
+    }
+
+    #[test]
+    fn pkgdir_index_trusted_folds_the_resolved_features_chain() {
+        // Backlog #199 fix round 1: `pkgdir_index_trusted` is real
+        // `bintree.populate`'s own `reindex =
+        // "pkgdir-index-trusted" not in features` (`bintree.py:936-938`)
+        // over the folded `FEATURES` chain, defaulting to trusted when
+        // nothing configures `FEATURES` at all (real's host
+        // `make.globals` default, `cnf/make.globals:81`).
+        let layered = |layers: Vec<Vec<&str>>| {
+            let mut config = portage_profile::Config::default();
+            config.incremental_sources.insert(
+                "FEATURES".to_string(),
+                layers
+                    .into_iter()
+                    .map(|l| l.into_iter().map(String::from).collect())
+                    .collect(),
+            );
+            config
+        };
+        // Nothing configured anywhere: trusted (the seeded default).
+        assert!(pkgdir_index_trusted(&portage_profile::Config::default()));
+        // Token present, never negated: trusted.
+        assert!(pkgdir_index_trusted(&layered(vec![vec![
+            "sandbox",
+            "pkgdir-index-trusted"
+        ]])));
+        // A later layer negates it (the `make.conf`-layer case): distrusted.
+        assert!(!pkgdir_index_trusted(&layered(vec![
+            vec!["pkgdir-index-trusted"],
+            vec!["-pkgdir-index-trusted"],
+        ])));
+        // `-*` clears the chain, a later re-add restores it: trusted.
+        assert!(pkgdir_index_trusted(&layered(vec![
+            vec!["pkgdir-index-trusted", "-*"],
+            vec!["pkgdir-index-trusted"],
+        ])));
+        // `-*` last, with no re-add: distrusted.
+        assert!(!pkgdir_index_trusted(&layered(vec![
+            vec!["pkgdir-index-trusted"],
+            vec!["-*"],
+        ])));
+        // The `other_vars` fallback (the case `config_features_list`
+        // falls back for): `FEATURES` carried only there still decides.
+        let mut fallback_on = portage_profile::Config::default();
+        fallback_on.other_vars.insert(
+            "FEATURES".to_string(),
+            "sandbox pkgdir-index-trusted".to_string(),
+        );
+        assert!(pkgdir_index_trusted(&fallback_on));
+        let mut fallback_off = portage_profile::Config::default();
+        fallback_off.other_vars.insert(
+            "FEATURES".to_string(),
+            "sandbox -pkgdir-index-trusted".to_string(),
+        );
+        assert!(!pkgdir_index_trusted(&fallback_off));
     }
 
     #[test]
