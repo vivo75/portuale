@@ -785,6 +785,11 @@ fn graph_result_from_order(
         autounmask_use_changes: Vec::new(),
         autounmask_license_changes: Vec::new(),
         autounmask_mask_changes: Vec::new(),
+        // Same standing empty: no relaxation loop ran whose flips a
+        // "terminated early" gate could hinge on (backlog #217: no
+        // changes, so `autounmask_backtrack_disabled()` is False
+        // regardless).
+        autounmask_no_clean_tail: false,
         abi_rebuilds,
         circular_deps,
         large_cycle_count,

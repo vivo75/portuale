@@ -19748,6 +19748,40 @@ pub struct GraphResult {
     /// v1 cut: real's `# <filename>:` + masking-comment lines (no
     /// source-file provenance on portuale's `package_mask` list).
     pub autounmask_mask_changes: Vec<AutounmaskChange>,
+    /// Backlog #217: the settled pass took an autounmask path on which
+    /// real's final `_resolve` would NOT have set `_success_without_
+    /// autounmask` -- so `need_config_change` (`depgraph.py:11708`)
+    /// reaches its third branch (`:11752`) and sets `_autounmask_
+    /// backtrack_disabled`, and the "terminated early" notice prints.
+    /// Two shapes, both observed on the final pass:
+    ///
+    /// * a `package.use` flip was folded for an already-graphed
+    ///   package (the already-resolved-slot re-check or the parent
+    ///   flip with `--autounmask-backtrack=y` grew the settled
+    ///   `autounmask_use_config` accumulator -- real `_needed_use_
+    ///   config_changes` grown for a digraph node). Real's
+    ///   `want_restart_for_use_change` (`:7719`) answers True there,
+    ///   so `_resolve` returns before the autounmask tail (oracle:
+    ///   `aucasctop` prints the notice, `fixtures/abort-captures/`);
+    /// * a failed dependency was rescued by a parent USE flip after
+    ///   the walk failed (default `--autounmask-backtrack` off: real
+    ///   `_apply_parent_use_changes` (`:5820`) collects the flip into
+    ///   `_needed_use_config_changes` post-failure, so `_have_
+    ///   autounmask_changes()` holds while the tail was never
+    ///   reached).
+    ///
+    /// A fresh-candidate flip (the package is picked with the flip
+    /// before it is ever graphed) leaves this False: real reaches the
+    /// tail (`:5793`, "reserved for cases where there are *zero* other
+    /// problems"), the early return (`:11713-11717`) fires, and the
+    /// notice stays off (oracle: `abort-au-plain`).
+    ///
+    /// Approximation: portuale folds a graphed-package flip
+    /// unconditionally while real additionally requires the reduced
+    /// deps to change (or a parent USE-dep to break), so such a flip
+    /// still counts here -- that only ever keeps the notice (the
+    /// status quo), never removes it where real prints it.
+    pub autounmask_no_clean_tail: bool,
     /// `(provider-cpv, consumer-cpv)` pairs behind each slot-operator
     /// auto-rebuild (real `_compute_abi_rebuild_info`'s `_forced_rebuilds`):
     /// the consumer got a `Reinstall { slot_operator_rebuild: true }`
@@ -19817,6 +19851,59 @@ pub struct GraphResult {
     /// bare `!!! no visible ebuild for dependency` line, after the two
     /// sibling blocks' precedence.
     pub plain_miss_deps: Vec<PlainMissDepReport>,
+}
+
+impl GraphResult {
+    /// Backlog #217: real `_dynamic_config._autounmask_backtrack_
+    /// disabled` as a pure predicate over the settled result -- the
+    /// gate for `_display_autounmask`'s "backtracking has terminated
+    /// early" tail (`depgraph.py:11093`, set at exactly one site,
+    /// `need_config_change:11752`).
+    ///
+    /// Real sets the flag iff autounmask changes exist (`_have_
+    /// autounmask_changes`), backtracking is allowed (`_allow_
+    /// backtracking`, i.e. `--backtrack` budget > 0) and not opted back
+    /// in (`--autounmask-backtrack=y`, or `--autounmask-continue`
+    /// implying it), AND `need_config_change` reaches its third branch:
+    /// the early return (`:11713-11717`) did not fire -- neither
+    /// `_success_without_autounmask` (the `_resolve` tail `:5793`,
+    /// "reserved for cases where there are *zero* other problems") nor
+    /// `_required_use_unsatisfied` (`:3652`) -- and the slot-conflict
+    /// handler branch (`:11719-11736`) found no changes to suggest.
+    ///
+    /// Portuale's terms for "zero other problems" (i.e. real would have
+    /// reached the tail): the outcome is `Complete`, no restart-worthy
+    /// flip was folded and no post-failure parent rescue ran
+    /// ([`GraphResult::autounmask_no_clean_tail`]), no slot conflict
+    /// was recorded, no unsolvable blocker exists, and
+    /// `--buildpkgonly`'s own check is satisfied. Anything else means
+    /// another failure coincides and the notice stays. Known
+    /// approximations, all on the keep-the-notice side (never a new
+    /// divergence where real prints it): portuale has no slot-conflict
+    /// handler (branch 2 would suppress there) and no REQUIRED_USE
+    /// early-return signal, and `autounmask_no_clean_tail`
+    /// over-approximates `want_restart_for_use_change` (see its docs).
+    /// Warnings that do not fail real's `_resolve` (`skipped_updates`,
+    /// `skipped_missing_deps`, the masked/use-unsat/plain-miss
+    /// disclosures on a `Complete` outcome) correctly do not count.
+    pub fn autounmask_backtrack_disabled(&self, autounmask_backtrack: bool) -> bool {
+        let has_changes = !self.autounmask_keyword_changes.is_empty()
+            || !self.autounmask_mask_changes.is_empty()
+            || !self.autounmask_use_changes.is_empty()
+            || !self.autounmask_license_changes.is_empty();
+        has_changes
+            && !autounmask_backtrack
+            && self.backtrack_max > 0
+            && (matches!(self.outcome, ResolveOutcome::Aborted { .. })
+                || self.autounmask_no_clean_tail
+                || !self.slot_conflicts.is_empty()
+                || self.buildpkgonly_deps_unsatisfied
+                || self
+                    .entries
+                    .iter()
+                    .any(|e| e.blockers.iter().any(|b| b.unsolvable))
+                || !self.orphan_blockers.is_empty())
+    }
 }
 
 /// One real `--autounmask` change (`depgraph.py::_display_autounmask`):
@@ -21775,6 +21862,15 @@ struct PassResult {
     nvc_dep_atoms: HashMap<(String, String), String>,
     missing_dep_trigger: Option<((String, String), String, String)>,
     autounmask_grew: bool,
+    /// Backlog #217: set when the pass rescued a failed dependency via
+    /// a parent USE flip with `--autounmask-backtrack` off (the
+    /// `'parent_flip` off-arm applies the flip to this dep's resolution
+    /// directly instead of the overlay). Real's counterpart collects
+    /// the flip post-failure (`_apply_parent_use_changes`,
+    /// `depgraph.py:5820`), so the `_success_without_autounmask` tail
+    /// is pre-empted and the "terminated early" notice prints. Rides
+    /// into [`GraphResult::autounmask_no_clean_tail`].
+    parent_flip_rescued: bool,
     edge_kind_map: EdgeKindMap,
     changed_deps_report_entries: Vec<ChangedDepsReportEntry>,
     pprovided_atoms: Vec<String>,
@@ -21893,6 +21989,10 @@ struct PassState {
     /// The driver at the bottom re-runs the whole walk with the grown
     /// config, so the flipped package's `flag?`-gated deps appear.
     autounmask_grew: bool,
+    /// Backlog #217: set when the pass rescued a failed dependency via
+    /// a parent USE flip with `--autounmask-backtrack` off (the
+    /// `'parent_flip` off-arm). Rides into `PassResult` (same name).
+    parent_flip_rescued: bool,
     /// Set (once) when this pass hit a dependency `NoVisibleCandidate`
     /// whose non-top-level parent isn't already latched -- the driver
     /// at the bottom masks `!=parent-cpv` and re-runs (real
@@ -22451,6 +22551,11 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     // ascent like every other change (#135 (e)).
                     dep_chain: Vec::new(),
                 });
+                // Backlog #217: a failed dep rescued by a parent flip
+                // (real `_apply_parent_use_changes` collecting
+                // post-failure) pre-empts the `_success_without_
+                // autounmask` tail -- the notice stays.
+                state.parent_flip_rescued = true;
                 let mut disp_seen: HashSet<String> = HashSet::new();
                 let mut disp: Vec<(String, bool)> = parent_cand
                     .iuse
@@ -24866,6 +24971,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         nvc_dep_atoms: state.nvc_dep_atoms,
         missing_dep_trigger: state.missing_dep_trigger,
         autounmask_grew: state.autounmask_grew,
+        parent_flip_rescued: state.parent_flip_rescued,
         edge_kind_map: state.edge_kind_map,
         changed_deps_report_entries: state.changed_deps_report_entries,
         // Backlog #90 (S1): the walk resolves last-declared-first
@@ -25818,6 +25924,17 @@ fn assemble_result(
         autounmask_use_changes: pass.autounmask_use_changes,
         autounmask_license_changes: pass.autounmask_license_changes,
         autounmask_mask_changes: pass.autounmask_mask_changes,
+        // Backlog #217: the settled accumulator still holds a flip
+        // folded for an already-graphed package (the Settle/Feedback
+        // params carry the pass's overlay union -- see
+        // `collect_feedback`'s `grown`), i.e. real's final pass grew
+        // `_needed_use_config_changes` for a digraph node and wanted a
+        // restart instead of reaching the `_success_without_autounmask`
+        // tail -- or the pass rescued a failed dep via a parent USE
+        // flip (real `_apply_parent_use_changes` collecting
+        // post-failure). Either way the tail was pre-empted.
+        autounmask_no_clean_tail: !params.autounmask_use_config.is_empty()
+            || pass.parent_flip_rescued,
         abi_rebuilds,
         circular_deps,
         masked_deps: pass.masked_deps,
@@ -39093,6 +39210,89 @@ mod tests {
         }
     }
 
+    #[test]
+    fn autounmask_backtrack_disabled_gate() {
+        // Backlog #217, both branches of the "terminated early" gate
+        // (`GraphResult::autounmask_backtrack_disabled`, real
+        // `_autounmask_backtrack_disabled`, `depgraph.py:11752`).
+        // Fixture ground truth is live real, captured in
+        // `fixtures/abort-captures/`: `abort-au-plain`'s USE block has
+        // NO notice (lone change -- `_success_without_autounmask`),
+        // `abort-au-cycle`'s and `aucasctop`'s blocks DO (a cycle /
+        // a restart-worthy flip on the already-graphed `aucascmid`
+        // coincide).
+        let plain = graph_result_autounmask("dev-libs/abort-au-plain");
+        assert!(
+            !plain.autounmask_use_changes.is_empty(),
+            "plain: the change block is still reported"
+        );
+        assert!(
+            !plain.autounmask_no_clean_tail,
+            "plain: fresh-candidate flip, the tail stays clean"
+        );
+        assert!(
+            !plain.autounmask_backtrack_disabled(false),
+            "plain: lone change prints no notice"
+        );
+        // The cycle shape keeps the notice via the outcome arm, and the
+        // restart-wanted shape via the accumulator arm.
+        let cycle = graph_result_autounmask("dev-libs/abort-au-cycle");
+        assert!(
+            !cycle.autounmask_use_changes.is_empty(),
+            "cycle: the change block is still reported alongside"
+        );
+        assert!(
+            cycle.autounmask_backtrack_disabled(false),
+            "cycle: another failure coincides, notice stays"
+        );
+        let casc = graph_result_autounmask("dev-libs/aucasctop");
+        assert!(
+            casc.autounmask_no_clean_tail,
+            "aucasctop: the flip folds for the already-graphed slot"
+        );
+        assert!(
+            casc.autounmask_backtrack_disabled(false),
+            "aucasctop: restart-wanted, notice stays"
+        );
+        // Post-failure parent rescues keep the notice too (real
+        // `_apply_parent_use_changes`, `depgraph.py:5820`).
+        for top in ["dev-libs/parentflipeqpkg", "dev-libs/pfgraphparent"] {
+            let result = graph_result_autounmask(top);
+            assert!(
+                !result.autounmask_use_changes.is_empty(),
+                "{top}: the parent flip is still reported"
+            );
+            assert!(
+                result.autounmask_no_clean_tail,
+                "{top}: the failed dep was rescued by a parent flip"
+            );
+            assert!(
+                result.autounmask_backtrack_disabled(false),
+                "{top}: notice stays"
+            );
+        }
+        // The config conjuncts suppress unconditionally, even where the
+        // notice would otherwise print: `--autounmask-backtrack=y`
+        // opts back in, and `--backtrack=0` leaves real's
+        // `_allow_backtracking` False so the flag is never set.
+        assert!(
+            !graph_result_autounmask_backtrack("dev-libs/abort-au-cycle")
+                .autounmask_backtrack_disabled(true),
+            "backtrack=y suppresses the notice"
+        );
+        let mut no_budget = graph_result_autounmask("dev-libs/aucasctop");
+        no_budget.backtrack_max = 0;
+        assert!(
+            !no_budget.autounmask_backtrack_disabled(false),
+            "--backtrack=0 never prints the notice"
+        );
+        // No changes, no notice -- the predicate's first conjunct.
+        assert!(
+            !graph_result_real("dev-libs/diamond").autounmask_backtrack_disabled(false),
+            "a clean resolve prints no notice"
+        );
+    }
+
     #[track_caller]
     fn assert_one_conflict(
         result: &GraphResult,
@@ -41271,6 +41471,7 @@ mod tests {
             nvc_dep_atoms: HashMap::new(),
             missing_dep_trigger: None,
             autounmask_grew: false,
+            parent_flip_rescued: false,
             edge_kind_map: HashMap::new(),
             changed_deps_report_entries: Vec::new(),
             pprovided_atoms: Vec::new(),
@@ -54645,6 +54846,7 @@ mod tests_163 {
             nvc_dep_atoms: HashMap::new(),
             missing_dep_trigger: None,
             autounmask_grew: false,
+            parent_flip_rescued: false,
             edge_kind_map: HashMap::new(),
             changed_deps_report_entries: Vec::new(),
             pprovided_atoms: Vec::new(),
