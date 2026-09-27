@@ -1166,7 +1166,9 @@ fn package_env_key_allowed(key: &str, profile_only_variables: &[String]) -> bool
     // package's own `mysettings`, and none is in real's
     // `non_user_variables` -- S0 B-xpak proves gzip magic), so
     // backlog #147 S2 exempts exactly that family; every other
-    // `ENVIRON_FILTER` key stays rejected.
+    // `ENVIRON_FILTER` key stays rejected. `PORTAGE_BZIP2_COMMAND` is
+    // listed for symmetry only: it is not on real's `environ_filter`,
+    // so accepting it here exempts nothing.
     fn is_compression_key(key: &str) -> bool {
         key == "BINPKG_COMPRESS"
             || key == "BINPKG_COMPRESS_FLAGS"

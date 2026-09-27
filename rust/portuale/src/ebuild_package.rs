@@ -426,7 +426,7 @@ pub fn resolve_binpkg_format(lookup: impl Fn(&str) -> Option<String>) -> String 
 /// broken relative paths).
 ///
 /// Real grounding: `PKGDIR` is in real's `environ_whitelist`
-/// (`special_env_vars.py:125`) and not in `environ_filter`, so the
+/// (`_config/special_env_vars.py:125`) and not in `environ_filter`, so the
 /// calling-env value reaches every consumer -- real `bintree.pkgdir`
 /// (the full config, env layer highest) for the tmpfile path, and the
 /// phase env for `${PKGDIR}` itself -- for both formats alike.
@@ -448,7 +448,7 @@ pub fn resolve_pkgdir(lookup: impl Fn(&str) -> Option<String>) -> std::path::Pat
 /// 697` reads the package's own `mysettings` (env layer highest) for
 /// the tar pipe -- but for `gpkg` the files-only chain (no calling
 /// env): real's `environ_filter`
-/// (`special_env_vars.py:280`) keeps a calling-environment
+/// (`_config/special_env_vars.py:280`) keeps a calling-environment
 /// `BINPKG_COMPRESS` out of the phase env, and `bin/gpkg-helper.py`
 /// rebuilds `portage.settings` from that filtered env plus the config
 /// files, so an env value never reaches the gpkg compressor (the Q6
@@ -467,8 +467,11 @@ pub fn resolve_binpkg_compress(lookup: impl Fn(&str) -> Option<String>) -> Strin
 /// -- the same override-then-generic order both readers use), resolved
 /// over the caller's `lookup` (full chain for `xpak`, files-only for
 /// `gpkg`, exactly as `resolve_binpkg_compress`'s own doc comment
-/// explains -- both `FLAGS` keys are `environ_filter`ed alongside
-/// `BINPKG_COMPRESS` itself). Real `make.globals` sets neither, so the
+/// explains -- generic `BINPKG_COMPRESS_FLAGS` is `environ_filter`ed
+/// alongside `BINPKG_COMPRESS`, and `BINPKG_COMPRESS_FLAGS_<NAME>` never
+/// reaches the phase environment because it is not in
+/// `environ_whitelist` (`config.environ()`'s `filter_calling_env`,
+/// `config.py:3275-3305`)). Real `make.globals` sets neither, so the
 /// default is empty (`PackageOptions::default().
 /// binpkg_compress_flags`).
 pub fn resolve_binpkg_compress_flags(
@@ -489,7 +492,7 @@ pub fn resolve_binpkg_compress_flags(
 /// default (`PackageOptions::default().portage_bzip2_command`).
 /// Backlog #180, same two construction sites. Unlike the compression
 /// pair, the calling env wins for **both** formats: the key is in
-/// real's `environ_whitelist` (`special_env_vars.py:143`) and not in
+/// real's `environ_whitelist` (`_config/special_env_vars.py:143`) and not in
 /// `environ_filter`, so it propagates into the phase env and reaches
 /// even the gpkg helper's rebuilt settings. Only substituted when
 /// `binpkg_compress == "bzip2"` (the `${PORTAGE_BZIP2_COMMAND}`
@@ -570,7 +573,7 @@ pub(crate) fn refresh_entry_compression_command(
             .rev()
             .find(|(k, _)| k == key)
             .map(|(_, v)| v.clone())
-            .or_else(|| std::env::var(key).ok())
+            .or_else(|| portage_profile::config_env_var(key))
             .or_else(|| config.and_then(|c| c.other_vars.get(key).cloned()))
     };
     let recomputed = phase_compression_command(lookup);

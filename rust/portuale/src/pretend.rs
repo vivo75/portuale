@@ -4405,7 +4405,7 @@ fn run_unmerge_pretend(
 /// The one exception is the gpkg compression pair
 /// (`BINPKG_COMPRESS`/`BINPKG_COMPRESS_FLAGS[_<NAME>]`, backlog #180's
 /// Q6 rule, pmtest `bf0692f`): real's `environ_filter`
-/// (`special_env_vars.py:280-281`) keeps a calling-environment value
+/// (`_config/special_env_vars.py:280-281`) keeps a calling-environment value
 /// out of the phase env, and `bin/gpkg-helper.py` rebuilds
 /// `portage.settings` from that filtered env plus the config files, so
 /// for `gpkg` runs only a config-file value reaches the compressor --
