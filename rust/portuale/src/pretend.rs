@@ -8830,6 +8830,25 @@ fn merge_list_shown(pretend: bool, ask: bool, tree: bool, verbose: bool, quiet: 
     pretend || ((ask || tree || verbose) && !(quiet && !ask))
 }
 
+/// Backlog #225: real `_emerge/actions.py:496-521` (`action_build`):
+/// inside the display-flag branch (the same gate `show_merge_list`
+/// carries for a non-`--pretend` run -- aborts and `--autounmask-only`
+/// never reach the merge driver), a plan with no merge-bound entries
+/// (`mergecount == 0`; real counts `operation == "merge"` packages, and
+/// `emerge_build::resume_cpv` is `Some` for exactly that set) prints
+/// `Nothing to merge; quitting.` on stdout and returns `EX_OK` before
+/// the `resume_backup` rotation and before `Scheduler` -- the resume
+/// list and its backup stay untouched. Pure predicate so the
+/// `--pretend` exclusion (real's `--pretend` branch returns after the
+/// display with no message) and the plain-run exclusion (`mergecount`
+/// stays `None` without display flags, so `Scheduler` still writes --
+/// possibly empty -- per #179) stay unit-pinned; the
+/// resume-list-untouched half is pinned end to end in pmtest
+/// (`test_portuale.py`, backlog #225).
+fn nothing_to_merge(pretend: bool, show_merge_list: bool, mergecount: usize) -> bool {
+    !pretend && show_merge_list && mergecount == 0
+}
+
 /// Backlog #185 fix round 1: real's resolution-phase header gating
 /// (real `_emerge/depgraph.py:12089-12094`, `_start_resolution_display`):
 /// the `These are the packages that would be ...` header prints when
@@ -13561,6 +13580,44 @@ pub fn run(args: &[String]) -> ExitCode {
     // is also `true` -- see `emerge_build.rs`'s own module doc comment
     // for what this actually does (and doesn't) build.
     if !pretend {
+        // Backlog #225 (real `_emerge/actions.py:496-521`): the merge
+        // list has just been displayed (see `show_merge_list` above),
+        // and when nothing in it is merge-bound real prints `Nothing to
+        // merge; quitting.` on stdout and returns `EX_OK` before the
+        // `resume_backup` rotation below and before `Scheduler` -- so a
+        // stale resume list (and its backup) come back untouched. This
+        // sits after every failure gate above (real's own `if not
+        // success: display_problems(); return 1` precedes its display
+        // branch), and `--resume` never reaches here (it dispatches to
+        // `run_resume` far above, with its own `nothing to resume`
+        // message).
+        //
+        // Residue (deliberate, follow-up): real defers instead when the
+        // run is `selective` (`-u`/`-N`/`--noreplace`/..., real
+        // `create_depgraph_params.py`) without `--oneshot` and a
+        // world-candidate favorite exists (`actions.py:514-516` -- the
+        // prompt moves into `depgraph.saveNomergeFavorites`, the
+        // rotation still runs, still no `Scheduler` write). Portuale has
+        // no world-favorites prompt, so the whole branch returns here; a
+        // selective all-noop run without `--oneshot` therefore skips the
+        // world-file record real would still make.
+        let mergecount = display_entries
+            .iter()
+            .filter_map(emerge_build::resume_cpv)
+            .count();
+        if nothing_to_merge(pretend, show_merge_list, mergecount) {
+            // Real's own `print()` before the message
+            // (`actions.py:518`): `--ask` reaches here with no blank
+            // line printed yet (the #185 `actions.py:526` blank only
+            // covers the no-prompt shape, and `ask_confirm`'s own
+            // opener never runs).
+            if ask {
+                println!();
+            }
+            println!("Nothing to merge; quitting.");
+            println!();
+            return ExitCode::SUCCESS;
+        }
         // Real `_emerge/actions.py:525-536`: `--ask` prompts once, after
         // the whole merge list is displayed, before anything is built.
         if ask && !ask_confirm(&color, "Would you like to merge these packages?") {
@@ -14523,6 +14580,25 @@ mod tests {
         assert!(!merge_list_shown(false, false, false, false, true));
         assert!(!merge_list_shown(false, false, false, true, true));
         assert!(merge_list_shown(false, true, false, false, true));
+    }
+
+    #[test]
+    fn nothing_to_merge_fires_only_for_a_shown_nonpretend_empty_plan() {
+        // Backlog #225: real `_emerge/actions.py:464-521` -- the early
+        // return fires only inside the display-flag branch of a real
+        // (non-`--pretend`) run, and only when `mergecount == 0`.
+        // (pretend, show_merge_list, mergecount) -> early return.
+        assert!(nothing_to_merge(false, true, 0));
+        // `--pretend` displays and returns with no message.
+        assert!(!nothing_to_merge(true, true, 0));
+        // A plain run (no display flags) never takes this branch:
+        // `mergecount` stays `None` and `Scheduler` still writes (per
+        // #179, possibly empty).
+        assert!(!nothing_to_merge(false, false, 0));
+        // Anything merge-bound proceeds to the prompt / scheduler.
+        assert!(!nothing_to_merge(false, true, 1));
+        assert!(!nothing_to_merge(false, true, 7));
+        assert!(!nothing_to_merge(true, false, 3));
     }
 
     #[test]
