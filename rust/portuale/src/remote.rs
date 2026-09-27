@@ -784,6 +784,40 @@ pub(crate) fn place_config_root(
                 let _ = std::fs::remove_dir_all(&tmp);
                 return Err(message);
             }
+            // Backlog #171 follow-up 5 (l171f; review of l171d/l171e):
+            // the pulled client tree may hold no `repos.conf` at all
+            // (owner Q10: the client operates without the gentoo
+            // repository) while the server holds the repos -- but
+            // `find_repos` on the placed root fails `NoReposConf`
+            // without the user `etc/portage/repos.conf` path, so both
+            // resolving paths hard-errored after a successful remap.
+            // Seed the server's own global `repos.conf` (read from the
+            // server root like the `make.globals` seed above, before
+            // the `ConfigRootOverride`), but only when the pulled
+            // client tree has none: a client `repos.conf`, if present,
+            // still wins -- real layers the global file before the
+            // user's in one parser, so the user wins per key
+            // (`repository/config.py:1488-1508`), and the user slot is
+            // never clobbered here. Absent on the server (or a
+            // directory rather than a file): contributes nothing, and
+            // the loud `NoReposConf` error is kept -- never a silent
+            // empty repo set. Same file-copy mechanism (with tmp
+            // cleanup) as the `make.globals` seed.
+            let server_repos_conf = server_config_root.join("usr/share/portage/config/repos.conf");
+            if tmp
+                .join("etc/portage/repos.conf")
+                .symlink_metadata()
+                .is_err()
+                && server_repos_conf.is_file()
+                && let Err(e) =
+                    std::fs::copy(&server_repos_conf, tmp.join("etc/portage/repos.conf"))
+            {
+                let _ = std::fs::remove_dir_all(&tmp);
+                return Err(format!(
+                    "mrg: staging the server repos.conf under {}: {e}",
+                    tmp.display()
+                ));
+            }
             (tmp.clone(), Some(tmp))
         }
     };
@@ -2566,10 +2600,39 @@ fn eapi_is_posixish(eapi: &str) -> bool {
     digits.parse::<u64>().map(|n| n >= 6).unwrap_or(true)
 }
 
+/// Real's `locale_categories` (`portage/util/locale.py:22-36`): the full
+/// set `split_LC_ALL` copies a set `LC_ALL` over -- the six POSIX
+/// categories, `LC_PAPER`, and the five GNU extensions
+/// (`LC_ADDRESS`, `LC_IDENTIFICATION`, `LC_MEASUREMENT`, `LC_NAME`,
+/// `LC_TELEPHONE`). The fan-out below iterates this list, not the
+/// forwarding set: real's split operates on settings, and for a
+/// binpkg-merge postinst `$T/environment` does not exist yet, so
+/// `config.environ()` applies no whitelist filter
+/// (`config.py:3286-3299`) and all twelve reach the phase env and the
+/// `PORTAGE_UPDATE_ENV` save (`EbuildPhase.py:158,259` runs the env
+/// extractor for `pretend`/`prerm` only). Probed against real's own
+/// `split_LC_ALL` + `environ()`: with `LC_ALL` set, all twelve export
+/// when `$T/environment` is absent, seven when present.
+pub(crate) const REAL_LOCALE_CATEGORIES: &[&str] = &[
+    "LC_COLLATE",
+    "LC_CTYPE",
+    "LC_MONETARY",
+    "LC_MESSAGES",
+    "LC_NUMERIC",
+    "LC_TIME",
+    "LC_ADDRESS",
+    "LC_IDENTIFICATION",
+    "LC_MEASUREMENT",
+    "LC_NAME",
+    "LC_PAPER",
+    "LC_TELEPHONE",
+];
+
 /// Port of real's `split_LC_ALL` (`portage/util/locale.py:160`) to the
 /// forwarded regen locale set, for a posixish phase: a set `LC_ALL` fans
-/// out over every forwarded `LC_*` (real copies it over all twelve
-/// `locale_categories`, unconditionally overwriting) and itself
+/// out over all twelve real `locale_categories` (see
+/// `REAL_LOCALE_CATEGORIES`; real copies it over the same list,
+/// unconditionally overwriting) and itself
 /// disappears (real blanks it, then `config.environ()` deletes the
 /// placeholder, `config.py:3374-3385`). `LANG` is filled from `LC_ALL`
 /// only when the server left it unset -- real's split never touches
@@ -2599,10 +2662,7 @@ fn split_server_locale(locale: &[(String, String)], eapi: &str) -> Vec<(String, 
     if lc_all.is_empty() {
         return out;
     }
-    for name in REGEN_LOCALE_VARS
-        .iter()
-        .filter(|name| **name != "LC_ALL" && **name != "LANGUAGE" && **name != "LANG")
-    {
+    for name in REAL_LOCALE_CATEGORIES {
         match out.iter_mut().find(|(n, _)| n == name) {
             Some(pair) => pair.1 = lc_all.clone(),
             None => out.push((name.to_string(), lc_all.clone())),
@@ -5224,13 +5284,33 @@ mod tests {
     }
 
     /// Backlog #171c task 1, unit level: the `split_LC_ALL` port fans a
-    /// set `LC_ALL` out over the forwarded set and drops it (real
-    /// `portage/util/locale.py:160` + `config.py:3374-3385`), fills an
-    /// unset `LANG`, never clobbers an explicit one, drops an empty
-    /// `LC_ALL` without fanning out, leaves `LANGUAGE` alone, and
-    /// passes everything through untouched on non-posixish EAPIs.
+    /// set `LC_ALL` out over all twelve real `locale_categories` and
+    /// drops it (real `portage/util/locale.py:22-36,160` +
+    /// `config.py:3374-3385`), fills an unset `LANG`, never clobbers
+    /// an explicit one, drops an empty `LC_ALL` without fanning out,
+    /// leaves `LANGUAGE` alone, and passes everything through
+    /// untouched on non-posixish EAPIs.
     #[test]
     fn split_server_locale_fans_lc_all_out_like_real() {
+        // The twelve `locale_categories` real fans out over
+        // (`portage/util/locale.py:22-36`) -- hardcoded here (not via
+        // `REAL_LOCALE_CATEGORIES`) so the test pins the list's
+        // content, not just its own reference to it.
+        const TWELVE: &[&str] = &[
+            "LC_COLLATE",
+            "LC_CTYPE",
+            "LC_MONETARY",
+            "LC_MESSAGES",
+            "LC_NUMERIC",
+            "LC_TIME",
+            "LC_ADDRESS",
+            "LC_IDENTIFICATION",
+            "LC_MEASUREMENT",
+            "LC_NAME",
+            "LC_PAPER",
+            "LC_TELEPHONE",
+        ];
+        assert_eq!(REAL_LOCALE_CATEGORIES, TWELVE);
         assert!(eapi_is_posixish("6"));
         assert!(eapi_is_posixish("8"));
         assert!(!eapi_is_posixish("5"));
@@ -5241,19 +5321,11 @@ mod tests {
                 .map(|(_, v)| v.clone())
         };
         // The brief's case: server `LC_ALL=C.UTF-8` alone → `LANG` +
-        // every forwarded `LC_*` carry it, no `LC_ALL`.
+        // all twelve categories carry it, no `LC_ALL`.
         let out = split_server_locale(&[("LC_ALL".to_string(), "C.UTF-8".to_string())], "8");
         assert!(get(&out, "LC_ALL").is_none(), "LC_ALL survived:\n{out:?}");
         assert_eq!(get(&out, "LANG").as_deref(), Some("C.UTF-8"));
-        for name in [
-            "LC_COLLATE",
-            "LC_CTYPE",
-            "LC_MESSAGES",
-            "LC_MONETARY",
-            "LC_NUMERIC",
-            "LC_TIME",
-            "LC_PAPER",
-        ] {
+        for name in TWELVE {
             assert_eq!(
                 get(&out, name).as_deref(),
                 Some("C.UTF-8"),
@@ -5291,8 +5363,8 @@ mod tests {
     }
 
     /// Backlog #171c task 1, stage level: a real regen run with only
-    /// `LC_ALL=C.UTF-8` forwarded records `LANG` + the individual
-    /// `LC_*` as `C.UTF-8` and no `LC_ALL` line (bed run
+    /// `LC_ALL=C.UTF-8` forwarded records `LANG` + all twelve real
+    /// locale categories as `C.UTF-8` and no `LC_ALL` line (bed run
     /// `l31-20260927T052232Z`: real has `LANG` + split categories where
     /// `mrg` echoed `LC_ALL` back).
     #[test]
@@ -5324,7 +5396,12 @@ mod tests {
             "LC_MONETARY",
             "LC_NUMERIC",
             "LC_TIME",
+            "LC_ADDRESS",
+            "LC_IDENTIFICATION",
+            "LC_MEASUREMENT",
+            "LC_NAME",
             "LC_PAPER",
+            "LC_TELEPHONE",
         ] {
             assert!(
                 regen.contains(&format!("declare -x {name}=\"C.UTF-8\"")),
@@ -5680,9 +5757,10 @@ mod tests {
     }
 
     /// Resolve a placed client tree's config against explicit server
-    /// repos (for trees with no client `repos.conf`, where the shared
-    /// `load_repos_and_config` has nothing to read -- the profile chain
-    /// itself still resolves through the reused `resolve_config`).
+    /// repos (kept for the l171e remap tests, which pin the rewritten
+    /// link against hand-picked server repos; the production path now
+    /// resolves through the shared `load_repos_and_config` -- see
+    /// `remote_client_without_repos_conf_resolves_on_the_production_path`).
     fn l171e_resolve_with_server_repos(
         placed_dir: &std::path::Path,
         server_root: &std::path::Path,
@@ -5824,6 +5902,99 @@ mod tests {
             crate::pretend::config_features_string(&config),
             "custom filecaps sandbox",
             "server make.globals + profile + client make.conf"
+        );
+        drop(placed);
+        drop(_env);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #171 follow-up 5 (l171f; review of l171e): the owner
+    /// Q10 client holds no `repos.conf` at all -- the pulled config
+    /// must resolve on the PRODUCTION path (`place_config_root` +
+    /// `load_repos_and_config`, the shared chain `run_remote_resolve`
+    /// / `pretend::run` and `run_bundle_stage` both resolve through),
+    /// not just through the test-only
+    /// `l171e_resolve_with_server_repos` helper. The server root
+    /// carries its repos *only* in the global
+    /// `usr/share/portage/config/repos.conf` slot (real's
+    /// `repository/config.py:1488-1508` reads the global file before
+    /// the user's); the seed copies it into the placed root because
+    /// the pulled tree has none, the dangling `make.profile` remaps
+    /// onto the server repo, and the resolved `FEATURES` stack server
+    /// globals + profile + client `make.conf` in real's order
+    /// (`config.py:446-499`, `const.INCREMENTALS`).
+    #[test]
+    fn remote_client_without_repos_conf_resolves_on_the_production_path() {
+        let tmp = regen_tmp("norepos-production");
+        // A server root with repos in the global slot (the exact file
+        // `place_config_root` seeds from) *and* a user slot -- like a
+        // real server, which always has `/etc/portage/repos.conf`, so
+        // `find_repos` on the server root itself keeps working. The
+        // user slot carries an extra overlay the global slot lacks, so
+        // the placed tree pins the seed's source: only the global
+        // content may arrive.
+        let server_root = tmp.join("serverroot");
+        std::fs::create_dir_all(server_root.join("usr/share/portage/config")).unwrap();
+        std::fs::create_dir_all(server_root.join("etc/portage/repos.conf")).unwrap();
+        let global_conf = format!(
+            "[DEFAULT]\nmain-repo = gentoo\n\n[gentoo]\nlocation = {}\n",
+            tmp.join("serverroot/repos/gentoo").display(),
+        );
+        std::fs::write(
+            server_root.join("usr/share/portage/config/repos.conf"),
+            &global_conf,
+        )
+        .unwrap();
+        let ovl = tmp.join("serverroot/repos/ovl");
+        std::fs::create_dir_all(&ovl).unwrap();
+        std::fs::write(
+            server_root.join("etc/portage/repos.conf/l171f.conf"),
+            format!(
+                "[DEFAULT]\nmain-repo = gentoo\n\n[ovl]\nlocation = {}\n",
+                ovl.display(),
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            server_root.join("usr/share/portage/config/make.globals"),
+            "FEATURES=\"sandbox news sign\"\n",
+        )
+        .unwrap();
+        let server_profile = l171e_server_repo(&server_root, "gentoo", L171E_REL, "filecaps -sign");
+        let target = format!("/var/db/repos-client-l171f/gentoo/profiles/{L171E_REL}");
+        let client_etc = tmp.join("clientroot/etc/portage");
+        std::fs::create_dir_all(&client_etc).unwrap();
+        std::fs::write(client_etc.join("make.conf"), "FEATURES=\"-news custom\"\n").unwrap();
+        std::os::unix::fs::symlink(&target, client_etc.join("make.profile")).unwrap();
+        let _env = ServerEnvPin::pin(&server_root);
+        let mut ctx = local_ctx(
+            tmp.join("root").to_str().unwrap(),
+            tmp.join("work").to_str().unwrap(),
+        );
+        ctx.etc_portage = ConfigPlacement::Client(client_etc.to_string_lossy().into_owned());
+        let placed = place_config_root(&ctx, None).expect("client placement resolves");
+        assert_eq!(
+            std::fs::read_link(placed.dir.join("etc/portage/make.profile")).unwrap(),
+            server_profile.join("profiles").join(L171E_REL),
+            "the dangling client link must remap onto the server repo's profile"
+        );
+        let eroot = tmp.join("eroot");
+        // The production resolver both mrg paths share -- previously
+        // `Err(NoReposConf)` here (review of l171e).
+        let (repos, config) = crate::pretend::load_repos_and_config(&placed.dir, &eroot)
+            .expect("placed client config resolves without a client repos.conf");
+        // Only the seeded global content arrived: the server user
+        // slot's overlay must not leak into the placed resolve.
+        assert!(
+            repos.iter().all(|repo| repo.name == "gentoo"),
+            "placed repos must come from the seeded global file: {:?}",
+            repos.iter().map(|repo| &repo.name).collect::<Vec<_>>()
+        );
+        assert!(repos.iter().any(|repo| repo.is_main));
+        assert_eq!(
+            crate::pretend::config_features_string(&config),
+            "custom filecaps sandbox",
+            "server make.globals + server profile + client make.conf"
         );
         drop(placed);
         drop(_env);
@@ -6007,6 +6178,10 @@ mod tests {
     /// synthetic client config root pins the wiring end to end.
     #[test]
     fn remote_binpkg_path_resolves_the_placed_client_config() {
+        // `INSTALL_MASK` is process-global (see `PLACED_CONFIG_ENV_LOCK`);
+        // hold the lock across the remove/restore below so a parallel
+        // test pinning a different value cannot interleave.
+        let _env_guard = PLACED_CONFIG_ENV_LOCK.lock().unwrap();
         let tmp = regen_tmp("binpkg-config");
         let config_root = tmp.join("configroot");
         let repo = tmp.join("repo");
