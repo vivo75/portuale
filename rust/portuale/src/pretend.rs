@@ -4058,6 +4058,12 @@ fn run_unmerge_pretend(
     // phases (and the `unmerge-backup` `quickpkg`). Inert when `pretend`.
     debug: bool,
     color: &Colorizer,
+    // Real `--quiet` (`noiselimit < 0`, `actions.py:3907-3908`): the
+    // post-removal info-regen einfo lines are suppressed. `noinfo` is the
+    // resolved-config `FEATURES` read (`config_features_list`), computed
+    // by each caller from the `config` already in its scope.
+    quiet: bool,
+    noinfo: bool,
 ) -> ExitCode {
     if targets.is_empty() {
         eprintln!("emerge: no package atoms given to --{action}");
@@ -4361,7 +4367,7 @@ fn run_unmerge_pretend(
             return ExitCode::from(130);
         }
         clean_delay_countdown();
-        return execute_unmerge(&removal_list, root, shell, debug, color);
+        return execute_unmerge(&removal_list, root, shell, debug, color, quiet, noinfo);
     }
     ExitCode::SUCCESS
 }
@@ -4943,6 +4949,9 @@ fn run_resume(
     load_average: Option<f64>,
     shell: ebuild_phases::ShellBackend,
     debug: bool,
+    // Real `--quiet` (`noiselimit < 0`, `actions.py:3907-3908`): suppresses
+    // the post-merge info-regen einfo lines like every other action's.
+    quiet: bool,
 ) -> ExitCode {
     let Some((favorites, mut mergelist, opts)) = crate::mtimedb::read_resume_list(root) else {
         eprintln!("emerge: could not find a valid resume list");
@@ -5129,9 +5138,16 @@ fn run_resume(
         return ExitCode::from(1);
     }
 
-    // Real `post_emerge()`: the preserved-libs advisory fires after a
-    // `--resume` too (the vdb changed).
+    // Real `post_emerge()`: the info-dir regen fires after a
+    // `--resume` too (the vdb changed -- the failure branch above
+    // already returned, and an empty mergelist returned even earlier),
+    // before the preserved-libs advisory.
     let color = Colorizer::new(color::resolve_havecolor(None));
+    let noinfo = config_features_list(config).iter().any(|t| t == "noinfo");
+    if let Err(e) = crate::info_files::post_merge_info_update(root, &color, quiet, noinfo) {
+        eprintln!("emerge: {e}");
+        return ExitCode::from(1);
+    }
     crate::preserved_libs::show_preserved_libs_notice(root, &color, false, false);
 
     ExitCode::SUCCESS
@@ -5158,6 +5174,12 @@ fn execute_unmerge(
     shell: ebuild_phases::ShellBackend,
     debug: bool,
     color: &Colorizer,
+    // Real `--quiet` (`noiselimit < 0`): suppresses the info-regen einfo
+    // lines. `noinfo` is the resolved-config `FEATURES` read, threaded
+    // from the caller (real `"noinfo" not in settings.features`,
+    // `post_emerge.py:127`).
+    quiet: bool,
+    noinfo: bool,
 ) -> ExitCode {
     let portage_tmpdir = portage_repo::portage_tmpdir_from_env();
     let options = ebuild_merge::MergeOptions::from_env(shell, debug);
@@ -5232,6 +5254,13 @@ fn execute_unmerge(
         feature_enabled("split-elog"),
     );
 
+    // Real `post_emerge()`: after `emerge -C` / `--depclean` / `--prune`
+    // removed something, regenerate any stale GNU info directory index,
+    // then warn about any library the removal preserved.
+    if let Err(e) = crate::info_files::post_merge_info_update(root, color, quiet, noinfo) {
+        eprintln!("emerge: {e}");
+        return ExitCode::from(1);
+    }
     // Real `post_emerge()`: after `emerge -C` / `--depclean` / `--prune`
     // removed something, warn about any library the removal preserved.
     crate::preserved_libs::show_preserved_libs_notice(root, color, false, false);
@@ -5437,6 +5466,10 @@ fn run_prune_pretend(
     shell: ebuild_phases::ShellBackend,
     debug: bool,
     color: &Colorizer,
+    // Threaded into the post-removal info-regen block (real `--quiet`
+    // suppression + resolved-config `noinfo`); computed by the caller.
+    quiet: bool,
+    noinfo: bool,
 ) -> ExitCode {
     let args = match resolve_cleanup_args(targets, root, "prune") {
         Ok(a) => a,
@@ -5501,6 +5534,8 @@ fn run_prune_pretend(
         shell,
         debug,
         color,
+        quiet,
+        noinfo,
     )
 }
 
@@ -5533,6 +5568,10 @@ fn run_prune_nodeps_pretend(
     shell: ebuild_phases::ShellBackend,
     debug: bool,
     color: &Colorizer,
+    // Threaded into the post-removal info-regen block (real `--quiet`
+    // suppression + resolved-config `noinfo`); computed by the caller.
+    quiet: bool,
+    noinfo: bool,
 ) -> ExitCode {
     run_prune_nodeps_or_clean(
         targets,
@@ -5544,6 +5583,8 @@ fn run_prune_nodeps_pretend(
         debug,
         color,
         false,
+        quiet,
+        noinfo,
     )
 }
 
@@ -5565,6 +5606,10 @@ fn run_clean_pretend(
     shell: ebuild_phases::ShellBackend,
     debug: bool,
     color: &Colorizer,
+    // Threaded into the post-removal info-regen block (real `--quiet`
+    // suppression + resolved-config `noinfo`); computed by the caller.
+    quiet: bool,
+    noinfo: bool,
 ) -> ExitCode {
     run_prune_nodeps_or_clean(
         targets,
@@ -5576,6 +5621,8 @@ fn run_clean_pretend(
         debug,
         color,
         true,
+        quiet,
+        noinfo,
     )
 }
 
@@ -5590,6 +5637,10 @@ fn run_prune_nodeps_or_clean(
     debug: bool,
     color: &Colorizer,
     is_clean: bool,
+    // Threaded into the post-removal info-regen block (real `--quiet`
+    // suppression + resolved-config `noinfo`); computed by the caller.
+    quiet: bool,
+    noinfo: bool,
 ) -> ExitCode {
     let action = if is_clean { "clean" } else { "prune" };
     let args = match resolve_cleanup_args(targets, root, action) {
@@ -5717,7 +5768,7 @@ fn run_prune_nodeps_or_clean(
             return ExitCode::from(130);
         }
         clean_delay_countdown();
-        return execute_unmerge(&removal_list, root, shell, debug, color);
+        return execute_unmerge(&removal_list, root, shell, debug, color, quiet, noinfo);
     }
     ExitCode::SUCCESS
 }
@@ -5966,6 +6017,10 @@ fn run_depclean_pretend(
     shell: ebuild_phases::ShellBackend,
     debug: bool,
     color: &Colorizer,
+    // Threaded into the post-removal info-regen block (real `--quiet`
+    // suppression + resolved-config `noinfo`); computed by the caller.
+    quiet: bool,
+    noinfo: bool,
 ) -> ExitCode {
     // Bare-name targets get their category from the vdb, then each atom
     // is checked against the vdb (real `action_depclean`, `:848-863`) --
@@ -6169,6 +6224,8 @@ fn run_depclean_pretend(
         shell,
         debug,
         color,
+        quiet,
+        noinfo,
     );
     // Real `action_depclean` prints the stats block after `unmerge()`
     // returns (`Number removed:` without `--pretend`). A mid-removal
@@ -10878,6 +10935,7 @@ pub fn run(args: &[String]) -> ExitCode {
             load_average,
             shell,
             debug,
+            quiet,
         );
     }
 
@@ -10961,6 +11019,8 @@ pub fn run(args: &[String]) -> ExitCode {
             shell,
             debug,
             &color,
+            quiet,
+            config_features_list(&config).iter().any(|t| t == "noinfo"),
         );
     }
     // `--rage-clean`: a fast `--unmerge` (identical `--pretend` display).
@@ -10977,6 +11037,8 @@ pub fn run(args: &[String]) -> ExitCode {
             shell,
             debug,
             &color,
+            quiet,
+            config_features_list(&config).iter().any(|t| t == "noinfo"),
         );
     }
 
@@ -10998,6 +11060,8 @@ pub fn run(args: &[String]) -> ExitCode {
             shell,
             debug,
             &color,
+            quiet,
+            config_features_list(&config).iter().any(|t| t == "noinfo"),
         );
     }
     if depclean {
@@ -11014,6 +11078,8 @@ pub fn run(args: &[String]) -> ExitCode {
             shell,
             debug,
             &color,
+            quiet,
+            config_features_list(&config).iter().any(|t| t == "noinfo"),
         );
     }
     if prune {
@@ -11027,6 +11093,8 @@ pub fn run(args: &[String]) -> ExitCode {
                 shell,
                 debug,
                 &color,
+                quiet,
+                config_features_list(&config).iter().any(|t| t == "noinfo"),
             );
         }
         return run_prune_pretend(
@@ -11041,6 +11109,8 @@ pub fn run(args: &[String]) -> ExitCode {
             shell,
             debug,
             &color,
+            quiet,
+            config_features_list(&config).iter().any(|t| t == "noinfo"),
         );
     }
 
@@ -13232,6 +13302,22 @@ pub fn run(args: &[String]) -> ExitCode {
         // `save_summary` files the logdir, and `mail`/`mail_summary`
         // the MTA exactly as before (see `elog.rs`).
         if !buildpkgonly {
+            // Real `post_emerge()` (`post_emerge.py:126-130`): once the
+            // merge changed the vdb, regenerate any stale GNU info
+            // directory index *before* the preserved-libs notice below.
+            // The vdb-changed gate is structural here: every merge
+            // failure returned early above, `--pretend` never reaches
+            // this branch, `buildpkgonly` merges nothing, and an empty
+            // mergelist changed nothing either.
+            if !entries.is_empty() {
+                let noinfo = config_features_list(&config).iter().any(|t| t == "noinfo");
+                if let Err(e) =
+                    crate::info_files::post_merge_info_update(&root, &color, quiet, noinfo)
+                {
+                    eprintln!("emerge: {e}");
+                    return ExitCode::from(1);
+                }
+            }
             // Real `post_emerge()` (`post_emerge.py:141-152`): once the
             // merge changed the vdb, warn about any library the merge/
             // unmerge just preserved and point the user at
@@ -13249,6 +13335,79 @@ mod tests {
 
     fn fixtures_root() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
+    }
+
+    #[test]
+    fn execute_unmerge_forwards_quiet_and_noinfo_to_the_info_regen() {
+        // #176 review: `run_unmerge_pretend` -> `execute_unmerge` carry
+        // real `--quiet` (`noiselimit < 0`) and the resolved-config
+        // `noinfo` (real `"noinfo" not in settings.features`,
+        // `post_emerge.py:127`) into `post_merge_info_update`. Hermetic:
+        // an empty removal list touches no vdb package, and a stale
+        // `dir`-only info dir needs no `install-info` run (every name is
+        // skippable) yet still records the memo -- so neither case needs
+        // the host binary.
+        fn scratch_info_root(tag: &str) -> (std::path::PathBuf, String) {
+            let root = std::env::temp_dir().join(format!(
+                "unmerge_info_wiring_{tag}_{}_{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(root.join("etc/env.d")).unwrap();
+            std::fs::write(
+                root.join("etc/env.d/50-test"),
+                "INFOPATH=\"/usr/share/info\"\n",
+            )
+            .unwrap();
+            let info_dir = root.join("usr/share/info");
+            std::fs::create_dir_all(&info_dir).unwrap();
+            std::fs::write(info_dir.join("dir"), "stale index\n").unwrap();
+            let inforoot = format!("{}/usr/share/info", root.display());
+            (root, inforoot)
+        }
+        let color = crate::color::Colorizer::new(false);
+
+        // `quiet=true` prints nothing here (a `dir`-only regen counts
+        // zero files), while `noinfo=false` lets the regen record the
+        // memo -- proving the params arrive, not just exist.
+        // (`ExitCode` exposes neither `PartialEq` nor its code, so
+        // success is asserted via its `Debug` rendering.)
+        let success = format!("{:?}", ExitCode::SUCCESS);
+        let (root, inforoot) = scratch_info_root("record");
+        let rc = execute_unmerge(
+            &[],
+            &root,
+            crate::ebuild_phases::ShellBackend::default(),
+            false,
+            &color,
+            true,
+            false,
+        );
+        assert_eq!(format!("{rc:?}"), success);
+        assert!(
+            crate::mtimedb::read_info_mtimes(&root).contains_key(&inforoot),
+            "noinfo=false must let the post-unmerge regen record the memo"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+
+        // `noinfo=true` (resolved-config `FEATURES=noinfo`) suppresses
+        // the whole block: the memo stays empty.
+        let (root, _) = scratch_info_root("suppressed");
+        let rc = execute_unmerge(
+            &[],
+            &root,
+            crate::ebuild_phases::ShellBackend::default(),
+            false,
+            &color,
+            true,
+            true,
+        );
+        assert_eq!(format!("{rc:?}"), success);
+        assert!(crate::mtimedb::read_info_mtimes(&root).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
