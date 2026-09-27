@@ -328,49 +328,74 @@ pub fn run(args: &[String]) -> ExitCode {
             unmerge_orphans,
             config_root: portage_repo::config_root_from_env(),
         };
-        // Real make.globals's own PKGDIR default -- see
-        // ebuild_package::PackageOptions's own Default impl.
-        let default_package_options = ebuild_package::PackageOptions::default();
-        let binpkg_compress = std::env::var("BINPKG_COMPRESS")
-            .unwrap_or_else(|_| default_package_options.binpkg_compress.clone());
-        // Real `BINPKG_COMPRESS_FLAGS_<NAME>` (per-compressor override)
-        // if set, else real `BINPKG_COMPRESS_FLAGS` -- resolved here,
-        // once, so `ebuild_package.rs` itself never needs to know about
-        // the per-compressor override naming convention (see
-        // `PackageOptions::binpkg_compress_flags`'s own doc comment).
-        let binpkg_compress_flags_name =
-            format!("BINPKG_COMPRESS_FLAGS_{}", binpkg_compress.to_uppercase());
-        let binpkg_compress_flags = std::env::var(&binpkg_compress_flags_name)
-            .or_else(|_| std::env::var("BINPKG_COMPRESS_FLAGS"))
-            .unwrap_or_else(|_| default_package_options.binpkg_compress_flags.clone());
+        // Real binpkg scalars from the resolved chain (backlogs #173,
+        // #180): calling env over `make.conf`/profile/`make.globals`
+        // (the standalone `resolve_config` chain below the env, real
+        // `config` precedence), else real `make.globals`'s own defaults
+        // (`PackageOptions::default()`). The env half reads through
+        // `config_env_var` (not raw `std::env::var`), the same test
+        // hook `env_over_config_scalar` uses. The gpkg compression
+        // pair (`BINPKG_COMPRESS`/`BINPKG_COMPRESS_FLAGS[_<NAME>]`)
+        // reads files-only below the env (the Q6 rule: real's
+        // `environ_filter` keeps a calling-environment value out of
+        // the helper's rebuilt settings); `PORTAGE_BZIP2_COMMAND`
+        // keeps the full chain for both formats (whitelisted, never
+        // filtered), as does `PKGDIR`.
+        let ebuild_path_for_chain = std::path::Path::new(ebuild_file);
+        let config_root_for_chain = portage_repo::config_root_from_env();
+        let chain = |key: &str| {
+            portage_profile::config_env_var(key).or_else(|| {
+                ebuild_phases::resolve_standalone_chain_scalar(
+                    ebuild_path_for_chain,
+                    &config_root_for_chain,
+                    &root,
+                    key,
+                )
+            })
+        };
+        let files = |key: &str| {
+            ebuild_phases::resolve_standalone_chain_scalar(
+                ebuild_path_for_chain,
+                &config_root_for_chain,
+                &root,
+                key,
+            )
+        };
+        // Real `BINPKG_FORMAT` from the resolved chain (backlog #173),
+        // resolved first: the compression lookup below depends on it.
+        // Keeps the dedicated wrapper (not the key-parameterized
+        // closure below it) so the #173 block stays verbatim.
+        let binpkg_format = portage_profile::config_env_var("BINPKG_FORMAT")
+            .or_else(|| {
+                ebuild_phases::resolve_standalone_binpkg_format(
+                    ebuild_path_for_chain,
+                    &config_root_for_chain,
+                    &root,
+                )
+            })
+            .unwrap_or_else(|| {
+                ebuild_package::PackageOptions::default()
+                    .binpkg_format
+                    .clone()
+            });
+        let (binpkg_compress, binpkg_compress_flags) = if binpkg_format == "gpkg" {
+            let compress = ebuild_package::resolve_binpkg_compress(files);
+            let flags = ebuild_package::resolve_binpkg_compress_flags(files, &compress);
+            (compress, flags)
+        } else {
+            let compress = ebuild_package::resolve_binpkg_compress(chain);
+            let flags = ebuild_package::resolve_binpkg_compress_flags(chain, &compress);
+            (compress, flags)
+        };
         let mut package_options = ebuild_package::PackageOptions {
             debug,
-            pkgdir: std::env::var_os("PKGDIR")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| default_package_options.pkgdir.clone()),
+            pkgdir: ebuild_package::resolve_pkgdir(chain),
             distdir: distdir.clone(),
             shell,
             binpkg_compress,
             binpkg_compress_flags,
-            portage_bzip2_command: std::env::var("PORTAGE_BZIP2_COMMAND")
-                .unwrap_or(default_package_options.portage_bzip2_command),
-            // Real `BINPKG_FORMAT` from the resolved chain (backlog #173):
-            // calling env over `make.conf`/profile/`make.globals` (the
-            // standalone `resolve_config` chain below the env, real
-            // `config` precedence), else real `make.globals`'s own
-            // default (`PackageOptions::default().binpkg_format`). The
-            // env half reads through `config_env_var` (not raw
-            // `std::env::var`), the same test hook
-            // `env_over_config_scalar` uses.
-            binpkg_format: portage_profile::config_env_var("BINPKG_FORMAT")
-                .or_else(|| {
-                    ebuild_phases::resolve_standalone_binpkg_format(
-                        std::path::Path::new(ebuild_file),
-                        &portage_repo::config_root_from_env(),
-                        &root,
-                    )
-                })
-                .unwrap_or(default_package_options.binpkg_format),
+            portage_bzip2_command: ebuild_package::resolve_portage_bzip2_command(chain),
+            binpkg_format,
             config_root: portage_repo::config_root_from_env(),
             // Real default-on FEATURES token -- see `PackageOptions::
             // buildpkg_live`'s own doc comment.

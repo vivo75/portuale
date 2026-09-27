@@ -1513,24 +1513,37 @@ pub(crate) fn resolve_standalone_binpkg_compress(
     Some((compress, flags, bzip2))
 }
 
-/// Real `BINPKG_FORMAT` (backlog #173) for a standalone `ebuild <file>
+/// Real global scalar (backlog #180) for a standalone `ebuild <file>
 /// package`: the resolved chain value below the calling env
 /// (`make.conf`/profile/`make.globals` via `other_vars` -- the same
 /// `resolve_config` chain every other standalone helper reads). The
 /// calling-env-wins scalar precedence (#101) stays the caller's job --
 /// it checks the process env first, exactly as it already does for the
-/// `BINPKG_COMPRESS` triple above. `None` when nothing resolves
+/// `BINPKG_COMPRESS` triple. `None` when nothing resolves
 /// (outside a repo checkout, unparsable path) or nothing in the chain
 /// names a value, in which case the caller keeps real `make.globals`'s
-/// own default (`PackageOptions::default().binpkg_format`). Deliberately
-/// not `package.env`-matched: a global scalar, not a per-package one.
+/// own default. Deliberately not `package.env`-matched: a global
+/// scalar, not a per-package one.
+pub(crate) fn resolve_standalone_chain_scalar(
+    ebuild_path: &Path,
+    config_root: &Path,
+    eroot: &Path,
+    key: &str,
+) -> Option<String> {
+    let (config, _) = standalone_package_env_lookup(ebuild_path, config_root, eroot)?;
+    config.other_vars.get(key).cloned()
+}
+
+/// Real `BINPKG_FORMAT` (backlog #173) for a standalone `ebuild <file>
+/// package`: `resolve_standalone_chain_scalar` for that key (see its
+/// own doc comment for the chain, the caller-kept env precedence, and
+/// the `None` contract).
 pub(crate) fn resolve_standalone_binpkg_format(
     ebuild_path: &Path,
     config_root: &Path,
     eroot: &Path,
 ) -> Option<String> {
-    let (config, _) = standalone_package_env_lookup(ebuild_path, config_root, eroot)?;
-    config.other_vars.get("BINPKG_FORMAT").cloned()
+    resolve_standalone_chain_scalar(ebuild_path, config_root, eroot, "BINPKG_FORMAT")
 }
 
 /// The resolved global `Config` for the config-less `emerge -C` path
@@ -7552,6 +7565,43 @@ mod tests {
             &fixtures,
         );
         assert_eq!(unmatched, None, "no match, no override");
+    }
+
+    /// Backlog #180: the standalone chain-scalar reader serves every
+    /// global binpkg scalar (`PKGDIR`, `BINPKG_COMPRESS*`,
+    /// `PORTAGE_BZIP2_COMMAND`, `BINPKG_FORMAT`) below the calling env.
+    /// The fixture `make.conf` sets
+    /// `PKGDIR="${PORTAGE_CONFIGROOT}/pkgdir"`, so the file side must
+    /// resolve to the fixture's own pkgdir; an unconfigured key
+    /// resolves to `None` (the caller keeps real `make.globals`'s own
+    /// default); and `BINPKG_FORMAT` agrees with the dedicated
+    /// `resolve_standalone_binpkg_format` wrapper by construction.
+    #[test]
+    fn resolve_standalone_chain_scalar_reads_the_fixture_make_conf() {
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+        let config_root = fixtures.clone();
+        let ebuild = fixtures.join("repo/dev-libs/newpkg/newpkg-1.0.ebuild");
+        let pkgdir = resolve_standalone_chain_scalar(&ebuild, &config_root, &fixtures, "PKGDIR")
+            .expect("fixture make.conf sets PKGDIR");
+        assert!(
+            pkgdir.ends_with("pkgdir"),
+            "the file-side PKGDIR must reach the caller, got {pkgdir:?}"
+        );
+        assert_eq!(
+            resolve_standalone_chain_scalar(
+                &ebuild,
+                &config_root,
+                &fixtures,
+                "BINPKG_COMPRESS_DEFINITELY_UNSET"
+            ),
+            None,
+            "an unconfigured chain contributes no value"
+        );
+        assert_eq!(
+            resolve_standalone_chain_scalar(&ebuild, &config_root, &fixtures, "BINPKG_FORMAT"),
+            resolve_standalone_binpkg_format(&ebuild, &config_root, &fixtures),
+            "the wrapper stays a thin alias for its key"
+        );
     }
 
     /// Backlog #173 review: `execute_unmerge`'s `FEATURES=unmerge-backup`

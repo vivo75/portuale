@@ -42,14 +42,19 @@
 //     `_compressors`/`BINPKG_COMPRESS_FLAGS_*`, `doebuild.py:697-750`) is
 //     real now -- see `resolve_compression_command`'s own doc comment
 //     for the exact real mechanics and v1 narrowing (no full shell
-//     `varexpand`, real host CPU count for `{JOBS}`). `BINPKG_COMPRESS`/
-//     `BINPKG_COMPRESS_FLAGS[_<NAME>]`/`PORTAGE_BZIP2_COMMAND` are env-
-//     var-sourced at the `ebuild.rs` CLI boundary, the same "env var,
-//     not full config resolution" shortcut `CONFIG_PROTECT` already
-//     established; `Default` matches real `make.globals`'s own
-//     `BINPKG_COMPRESS="zstd"` (**not** `"bzip2"` -- real portage's own
-//     default changed at some point; portuale's own previous hardcoded
-//     `"bzip2 -c"` predated noticing that).
+//     `varexpand`, real host CPU count for `{JOBS}`). `PKGDIR`/
+//     `BINPKG_COMPRESS`/`BINPKG_COMPRESS_FLAGS[_<NAME>]`/
+//     `PORTAGE_BZIP2_COMMAND` follow real's layering at both
+//     `PackageOptions` construction sites (backlog #180): calling env
+//     over `make.conf`/profile/`make.globals` (real `config`
+//     precedence, via `portage_profile::env_over_config_scalar`),
+//     falling back to real `make.globals`'s own defaults
+//     (`PKGDIR="/var/cache/binpkgs"`, `BINPKG_COMPRESS="zstd"`,
+//     `PORTAGE_BZIP2_COMMAND="bzip2"`, empty flags) -- except the
+//     gpkg compression pair, which real's `environ_filter` keeps out
+//     of the helper's rebuilt settings, so only a config-file value
+//     reaches it (the Q6 rule: calling-env `BINPKG_COMPRESS`/`FLAGS`
+//     win for `xpak`, never for `gpkg`).
 //   - `USE` in the Packages index entry is real now
 //     (`package_after_install`'s own `use_flags` parameter): an
 //     `emerge <atom> -b` build's resolved flags (the same `USE`
@@ -104,8 +109,9 @@ pub fn is_real_package_command(command: &str) -> bool {
 
 /// Options for `run_package`, bundled into a struct rather than more
 /// positional parameters (the same "positional-parameter pain" lesson
-/// `ebuild_merge::MergeOptions` already applied). `pkgdir` is env-var-
-/// sourced at the `ebuild.rs` CLI boundary; `Default` matches real
+/// `ebuild_merge::MergeOptions` already applied). `pkgdir` is
+/// chain-resolved at the construction sites (backlog #180: calling env
+/// over `make.conf`/profile/`make.globals`); `Default` matches real
 /// `make.globals`'s own `PKGDIR="/var/cache/binpkgs"` exactly.
 #[derive(Clone)]
 pub struct PackageOptions {
@@ -406,6 +412,93 @@ pub fn resolve_binpkg_format(lookup: impl Fn(&str) -> Option<String>) -> String 
     lookup("BINPKG_FORMAT").unwrap_or_else(|| PackageOptions::default().binpkg_format.clone())
 }
 
+/// Real `PKGDIR` from the resolved config (`lookup`: calling env over
+/// `make.conf`/profile/`make.globals` -- the same precedence real's
+/// `config` object gives any variable, and the same `lookup` shape
+/// `resolve_binpkg_format` takes): the chain value when set anywhere,
+/// else real `cnf/make.globals:31`'s own default
+/// (`PackageOptions::default().pkgdir`). Backlog #180: the two
+/// `PackageOptions` construction sites (`ebuild.rs`'s standalone
+/// `package`, `pretend.rs`'s `package_options_from_env`) used to read
+/// only the process env over that default, so a `make.conf`/profile
+/// value was ignored. An empty value falls back (real has no
+/// `PKGDIR`-empty die; an empty `bintree.pkgdir` only ever yields
+/// broken relative paths).
+///
+/// Real grounding: `PKGDIR` is in real's `environ_whitelist`
+/// (`special_env_vars.py:125`) and not in `environ_filter`, so the
+/// calling-env value reaches every consumer -- real `bintree.pkgdir`
+/// (the full config, env layer highest) for the tmpfile path, and the
+/// phase env for `${PKGDIR}` itself -- for both formats alike.
+pub fn resolve_pkgdir(lookup: impl Fn(&str) -> Option<String>) -> std::path::PathBuf {
+    lookup("PKGDIR")
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| PackageOptions::default().pkgdir.clone())
+}
+
+/// Real `BINPKG_COMPRESS` from the resolved config (`lookup`: calling
+/// env over `make.conf`/profile/`make.globals`): the chain value when
+/// set anywhere, else real `cnf/make.globals:39`'s own default
+/// (`PackageOptions::default().binpkg_compress`). Backlog #180, same
+/// two construction sites as `resolve_pkgdir`.
+///
+/// The caller picks the lookup per format (backlog #180's Q6 rule,
+/// pmtest `bf0692f`): for `xpak` the full chain -- real `doebuild.py:
+/// 697` reads the package's own `mysettings` (env layer highest) for
+/// the tar pipe -- but for `gpkg` the files-only chain (no calling
+/// env): real's `environ_filter`
+/// (`special_env_vars.py:280`) keeps a calling-environment
+/// `BINPKG_COMPRESS` out of the phase env, and `bin/gpkg-helper.py`
+/// rebuilds `portage.settings` from that filtered env plus the config
+/// files, so an env value never reaches the gpkg compressor (the Q6
+/// probe: env-only `gzip` still compresses `zst`, `make.conf` `gzip`
+/// compresses `.gz`). An empty value is honored verbatim (real's
+/// empty-`BINPKG_COMPRESS`-disables-compression arm,
+/// `doebuild.py:706-710` / `bin/quickpkg:161-167`); only an *unset*
+/// chain falls back.
+pub fn resolve_binpkg_compress(lookup: impl Fn(&str) -> Option<String>) -> String {
+    lookup("BINPKG_COMPRESS").unwrap_or_else(|| PackageOptions::default().binpkg_compress.clone())
+}
+
+/// Real `BINPKG_COMPRESS_FLAGS_<NAME>` (per-compressor override,
+/// `<NAME>` = `binpkg_compress` uppercased) if set, else real
+/// `BINPKG_COMPRESS_FLAGS` (`doebuild.py:710-717`, `gpkg.py:1876-1882`
+/// -- the same override-then-generic order both readers use), resolved
+/// over the caller's `lookup` (full chain for `xpak`, files-only for
+/// `gpkg`, exactly as `resolve_binpkg_compress`'s own doc comment
+/// explains -- both `FLAGS` keys are `environ_filter`ed alongside
+/// `BINPKG_COMPRESS` itself). Real `make.globals` sets neither, so the
+/// default is empty (`PackageOptions::default().
+/// binpkg_compress_flags`).
+pub fn resolve_binpkg_compress_flags(
+    lookup: impl Fn(&str) -> Option<String>,
+    binpkg_compress: &str,
+) -> String {
+    lookup(&format!(
+        "BINPKG_COMPRESS_FLAGS_{}",
+        binpkg_compress.to_uppercase()
+    ))
+    .or_else(|| lookup("BINPKG_COMPRESS_FLAGS"))
+    .unwrap_or_default()
+}
+
+/// Real `PORTAGE_BZIP2_COMMAND` from the resolved config (`lookup`:
+/// calling env over `make.conf`/profile/`make.globals`): the chain
+/// value when set anywhere, else real `cnf/make.globals:105`'s own
+/// default (`PackageOptions::default().portage_bzip2_command`).
+/// Backlog #180, same two construction sites. Unlike the compression
+/// pair, the calling env wins for **both** formats: the key is in
+/// real's `environ_whitelist` (`special_env_vars.py:143`) and not in
+/// `environ_filter`, so it propagates into the phase env and reaches
+/// even the gpkg helper's rebuilt settings. Only substituted when
+/// `binpkg_compress == "bzip2"` (the `${PORTAGE_BZIP2_COMMAND}`
+/// template arm).
+pub fn resolve_portage_bzip2_command(lookup: impl Fn(&str) -> Option<String>) -> String {
+    lookup("PORTAGE_BZIP2_COMMAND")
+        .unwrap_or_else(|| PackageOptions::default().portage_bzip2_command.clone())
+}
+
 fn resolve_compression_command_jobs(
     binpkg_compress: &str,
     binpkg_compress_flags: &str,
@@ -447,18 +540,38 @@ fn resolve_compression_command_jobs(
 /// `matched_package_env_vars`, and the calling env is already
 /// folded into the run-wide pairs upstream -- no separate process
 /// lookup, which would also be unsound under `cargo test`'s shared
-/// process env). An unmatched entry re-derives the run-wide
+/// process env), then the calling env, then the resolved config's
+/// own file chain (`config.other_vars`: `make.conf`/profile/
+/// `make.globals` -- backlog #180). That tail is what keeps a
+/// `make.conf` `BINPKG_COMPRESS` (with no calling-env value and no
+/// `package.env` match) on the pipe: the run-wide base the callers
+/// pass in carries no `BINPKG_COMPRESS` pair for it (the key is
+/// `environ_filter`ed out of `phase_environ`), so without the file
+/// tail the recompute would fall back to real's own `.get` default
+/// (`bzip2`) and clobber the run-wide `make.conf` command the pipe
+/// would otherwise read back. The order mirrors real's
+/// `env:pkg:conf` `USE_ORDER` exactly: a calling-env value already
+/// masked any same-key `package.env` match upstream (#101), so the
+/// layered pairs still outrank the raw env here, and both outrank
+/// the files. An unmatched entry re-derives the run-wide
 /// command byte-identically (regression guard by construction). A
 /// recompute of `None` (unknown per-entry codec) removes the pair,
 /// matching real leaving `mysettings["PORTAGE_COMPRESSION_COMMAND"]`
 /// unset (real `__dyn_package` then dies on its own guard).
-pub(crate) fn refresh_entry_compression_command(build_env: &mut Vec<(String, String)>) {
+/// `config` is `None` on the config-less paths (no chain to fall
+/// back to -- the lookup stays pairs-then-env, today's shape).
+pub(crate) fn refresh_entry_compression_command(
+    build_env: &mut Vec<(String, String)>,
+    config: Option<&portage_profile::Config>,
+) {
     let lookup = |key: &str| {
         build_env
             .iter()
             .rev()
             .find(|(k, _)| k == key)
             .map(|(_, v)| v.clone())
+            .or_else(|| std::env::var(key).ok())
+            .or_else(|| config.and_then(|c| c.other_vars.get(key).cloned()))
     };
     let recomputed = phase_compression_command(lookup);
     if let Some(pos) = build_env
@@ -1180,9 +1293,14 @@ fn invoke_dyn_package(
         // `${PORTAGE_BZIP2_COMMAND}` via `varexpand` -- real
         // `gpkg._get_binary_cmd`), NOT from `PORTAGE_COMPRESSION_COMMAND`
         // (that is xpak's `bin/misc-functions.sh` tar-pipe only). Export
-        // the same values portuale already resolves at the `ebuild.rs`
-        // CLI boundary so the gpkg build is deterministic rather than
-        // inheriting the host's own `make.conf`.
+        // the same values the construction sites already resolved
+        // through the chain (backlog #180) so the gpkg build is
+        // deterministic rather than inheriting the host's own
+        // `make.conf` -- and, by construction, identical to what the
+        // helper's own files-only rebuild would read: the
+        // `BINPKG_COMPRESS`/`FLAGS` values here are files-only for
+        // `gpkg` runs (the Q6 rule), while `PORTAGE_BZIP2_COMMAND`
+        // keeps the calling env (whitelisted, never filtered).
         extra_env.push((
             "BINPKG_COMPRESS".to_string(),
             options.binpkg_compress.clone(),
@@ -1750,6 +1868,93 @@ mod tests {
     }
 
     #[test]
+    fn resolve_pkgdir_compress_flags_and_bzip2_obey_the_chain() {
+        // Backlog #180, grounded in real `cnf/make.globals:31`
+        // (`PKGDIR="/var/cache/binpkgs"`), `:39`
+        // (`BINPKG_COMPRESS="zstd"`), `:105`
+        // (`PORTAGE_BZIP2_COMMAND="bzip2"`), with no `FLAGS` default
+        // anywhere: no value anywhere in the chain yields the real
+        // default, and a chain value wins verbatim. The chain
+        // precedence itself (calling env over `make.conf`/profile/
+        // `make.globals`) lives in the `lookup` each call site builds
+        // (`portage_profile::env_over_config_scalar` over the resolved
+        // config, files-only `other_vars` for the gpkg compression
+        // pair per the Q6 rule); here the lookup is driven directly.
+        let cfg = |pairs: &'static [(&'static str, &'static str)]| {
+            move |k: &str| {
+                pairs
+                    .iter()
+                    .find(|(n, _)| *n == k)
+                    .map(|(_, v)| v.to_string())
+            }
+        };
+        assert_eq!(
+            PackageOptions::default().pkgdir,
+            std::path::PathBuf::from("/var/cache/binpkgs")
+        );
+        assert_eq!(
+            resolve_pkgdir(cfg(&[])),
+            std::path::PathBuf::from("/var/cache/binpkgs")
+        );
+        assert_eq!(
+            resolve_pkgdir(cfg(&[("PKGDIR", "/tmp/bins")])),
+            std::path::PathBuf::from("/tmp/bins")
+        );
+        // Empty is unset (real has no `PKGDIR`-empty die), never a
+        // relative-path footgun.
+        assert_eq!(
+            resolve_pkgdir(cfg(&[("PKGDIR", "")])),
+            std::path::PathBuf::from("/var/cache/binpkgs")
+        );
+
+        assert_eq!(PackageOptions::default().binpkg_compress, "zstd");
+        assert_eq!(resolve_binpkg_compress(cfg(&[])), "zstd");
+        assert_eq!(
+            resolve_binpkg_compress(cfg(&[("BINPKG_COMPRESS", "gzip")])),
+            "gzip"
+        );
+        assert_eq!(
+            resolve_binpkg_compress(cfg(&[("BINPKG_COMPRESS", "bzip2")])),
+            "bzip2"
+        );
+        // Empty disables compression downstream (real
+        // `doebuild.py:706-710`), so it round-trips verbatim, never a
+        // fallback.
+        assert_eq!(resolve_binpkg_compress(cfg(&[("BINPKG_COMPRESS", "")])), "");
+
+        assert_eq!(PackageOptions::default().binpkg_compress_flags, "");
+        assert_eq!(resolve_binpkg_compress_flags(cfg(&[]), "gzip"), "");
+        // The per-compressor override wins over the generic value
+        // (real `doebuild.py:710-717` / `gpkg.py:1876-1882` order).
+        assert_eq!(
+            resolve_binpkg_compress_flags(
+                cfg(&[
+                    ("BINPKG_COMPRESS_FLAGS", "-1"),
+                    ("BINPKG_COMPRESS_FLAGS_GZIP", "-9"),
+                ]),
+                "gzip"
+            ),
+            "-9"
+        );
+        assert_eq!(
+            resolve_binpkg_compress_flags(cfg(&[("BINPKG_COMPRESS_FLAGS", "-1")]), "gzip"),
+            "-1"
+        );
+        // ...keyed to the resolved compressor, not a neighbor's.
+        assert_eq!(
+            resolve_binpkg_compress_flags(cfg(&[("BINPKG_COMPRESS_FLAGS_GZIP", "-9")]), "bzip2"),
+            ""
+        );
+
+        assert_eq!(PackageOptions::default().portage_bzip2_command, "bzip2");
+        assert_eq!(resolve_portage_bzip2_command(cfg(&[])), "bzip2");
+        assert_eq!(
+            resolve_portage_bzip2_command(cfg(&[("PORTAGE_BZIP2_COMMAND", "lbzip2")])),
+            "lbzip2"
+        );
+    }
+
+    #[test]
     fn refresh_entry_compression_command_rederives_the_command_from_the_layered_env() {
         let command_of = |env: &[(String, String)]| {
             env.iter()
@@ -1768,7 +1973,7 @@ mod tests {
             ("BINPKG_COMPRESS".to_string(), "gzip".to_string()),
             ("MAKEOPTS".to_string(), "-j1".to_string()),
         ];
-        refresh_entry_compression_command(&mut matched);
+        refresh_entry_compression_command(&mut matched, None);
         assert_eq!(command_of(&matched), Some("gzip".to_string()));
         // Unmatched entry: no BINPKG_COMPRESS pair anywhere, so the
         // run-wide fallback recomputes byte-identically (bzip2
@@ -1778,7 +1983,7 @@ mod tests {
             "PORTAGE_COMPRESSION_COMMAND".to_string(),
             "bzip2".to_string(),
         )];
-        refresh_entry_compression_command(&mut unmatched);
+        refresh_entry_compression_command(&mut unmatched, None);
         assert_eq!(command_of(&unmatched), Some("bzip2".to_string()));
         // Unknown per-entry codec: the pair is removed, matching real
         // leaving the key unset (its `__dyn_package` guard then fires).
@@ -1789,8 +1994,40 @@ mod tests {
             ),
             ("BINPKG_COMPRESS".to_string(), "made-up-codec".to_string()),
         ];
-        refresh_entry_compression_command(&mut unknown);
+        refresh_entry_compression_command(&mut unknown, None);
         assert_eq!(command_of(&unknown), None);
+        // Backlog #180: a `make.conf` BINPKG_COMPRESS (no calling-env
+        // value, no `package.env` match -- so no compression scalar at
+        // all in the layered pairs) still reaches the pipe through the
+        // config tail instead of falling back to the `bzip2` default.
+        // Only meaningful when the ambient process env is itself
+        // silent on the compression keys (otherwise the ambient value
+        // rightly wins and the assertion would be testing the
+        // developer's shell).
+        if std::env::var_os("BINPKG_COMPRESS").is_none()
+            && std::env::var_os("BINPKG_COMPRESS_FLAGS").is_none()
+            && std::env::var_os("PORTAGE_BZIP2_COMMAND").is_none()
+        {
+            let config = portage_profile::Config {
+                other_vars: [("BINPKG_COMPRESS".to_string(), "gzip".to_string())]
+                    .into_iter()
+                    .collect(),
+                ..Default::default()
+            };
+            let mut filed = vec![
+                (
+                    "PORTAGE_COMPRESSION_COMMAND".to_string(),
+                    "bzip2".to_string(),
+                ),
+                ("MAKEOPTS".to_string(), "-j1".to_string()),
+            ];
+            refresh_entry_compression_command(&mut filed, Some(&config));
+            assert_eq!(
+                command_of(&filed),
+                Some("gzip".to_string()),
+                "the make.conf value must survive the re-derivation"
+            );
+        }
     }
 
     #[test]
