@@ -187,6 +187,117 @@ fn ask_read_news_declined(label: &str, ask_flags: [&str; 2]) -> String {
     stdout.into_owned()
 }
 
+/// `pre_exec` putting the child in the pty's foreground group, so a `^C` byte
+/// written to the master arrives as SIGINT. Only async-signal-safe syscalls run here.
+#[cfg(unix)]
+fn pty_foreground_pre_exec() -> std::io::Result<()> {
+    // SAFETY: `setsid`/`ioctl`/`tcsetpgrp`/`getpid` are plain
+    // syscalls on fd 0, which std has already duped onto the pty
+    // slave before `pre_exec` runs.
+    unsafe {
+        if libc::setsid() < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if libc::ioctl(libc::STDIN_FILENO, libc::TIOCSCTTY, 0 as libc::c_ulong) < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if libc::tcsetpgrp(libc::STDIN_FILENO, libc::getpid()) < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+}
+
+/// Drain the child's piped stdout until `marker` appears, with a hard deadline
+/// so a prompt regression fails instead of hanging. Returns every byte read so far.
+#[cfg(unix)]
+fn read_stdout_until_marker(
+    pipe: &mut std::process::ChildStdout,
+    marker: &[u8],
+    what: &str,
+) -> Vec<u8> {
+    use std::os::fd::AsRawFd;
+    let mut seen = Vec::new();
+    let mut buf = [0u8; 512];
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    loop {
+        if !marker.is_empty() && seen.windows(marker.len()).any(|w| w == marker) {
+            return seen;
+        }
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            panic!(
+                "timed out waiting for {what}; got so far: {}",
+                String::from_utf8_lossy(&seen)
+            );
+        }
+        let mut pfd = libc::pollfd {
+            fd: pipe.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: a single valid `pollfd`; the timeout fits in a
+        // `c_int` by construction (120 s ceiling).
+        let pr = unsafe { libc::poll(&mut pfd, 1, remaining.as_millis() as libc::c_int) };
+        assert!(pr >= 0, "poll on child stdout failed");
+        if pr == 0 {
+            continue;
+        }
+        let n = std::io::Read::read(pipe, &mut buf).expect("read child stdout");
+        if n == 0 {
+            panic!(
+                "child exited before printing {what}; got: {}",
+                String::from_utf8_lossy(&seen)
+            );
+        }
+        seen.extend_from_slice(&buf[..n]);
+    }
+}
+
+/// Spawn `emerge --ask ...` for a SIGINT test: pty stdin in the child's
+/// foreground group, both outputs piped, stderr drained on a thread from the
+/// start. Returns the child, the master, the stdout pipe, and the drain handle.
+#[cfg(unix)]
+fn sigint_prompt_child(
+    portuale_bin: &std::path::Path,
+    args: &[&str],
+    env: Vec<(String, String)>,
+    master: std::fs::File,
+    slave_stdio: std::process::Stdio,
+) -> (
+    std::process::Child,
+    std::fs::File,
+    std::process::ChildStdout,
+    std::thread::JoinHandle<Vec<u8>>,
+) {
+    let mut cmd = std::process::Command::new(portuale_bin);
+    cmd.args(args);
+    cmd.stdin(slave_stdio);
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+    cmd.envs(env);
+    // SAFETY: `pty_foreground_pre_exec` runs only async-signal-safe
+    // syscalls (`setsid`, `ioctl`, `tcsetpgrp`, `getpid`) on the
+    // already-duped stdio fds; it allocates nothing and touches no
+    // locks. (Fully qualified: another `CommandExt` is in scope
+    // via `super::*`, and this toolchain's `pre_exec` is `unsafe`.)
+    unsafe {
+        <std::process::Command as std::os::unix::process::CommandExt>::pre_exec(
+            &mut cmd,
+            pty_foreground_pre_exec,
+        );
+    }
+    let mut child = cmd.spawn().expect("portuale emerge spawns");
+    let mut stderr_pipe = child.stderr.take().expect("piped stderr");
+    let err_handle = std::thread::spawn(move || {
+        let mut v = Vec::new();
+        std::io::Read::read_to_end(&mut stderr_pipe, &mut v).expect("drain child stderr");
+        v
+    });
+    let stdout_pipe = child.stdout.take().expect("piped stdout");
+    (child, master, stdout_pipe, err_handle)
+}
+
 /// An unowned ROOT for the privilege tests; `None` for a root caller, whose test
 /// returns early.
 #[cfg(unix)]
@@ -337,6 +448,29 @@ fn wait_pty_output_bound(
                      stderr: {}",
                     String::from_utf8_lossy(&output.stdout),
                     String::from_utf8_lossy(&output.stderr),
+                );
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(25)),
+            Err(e) => panic!("watchdog: try_wait failed: {e}"),
+        }
+    }
+}
+
+/// Bounded wait returning the exit status alone, for children whose outputs are
+/// already owned by the caller's drain threads.
+#[cfg(unix)]
+fn wait_pty_status(mut child: std::process::Child) -> std::process::ExitStatus {
+    let bound = pty_watchdog_bound();
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status,
+            Ok(None) if start.elapsed() >= bound => {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!(
+                    "watchdog: pty child exceeded {bound:?} and was killed \
+                     (status-only shape; see the test's pre-wait marker text)"
                 );
             }
             Ok(None) => std::thread::sleep(std::time::Duration::from_millis(25)),
