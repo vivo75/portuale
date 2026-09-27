@@ -631,13 +631,19 @@ fn entry_with_use(outcome: PretendOutcome, pv_use: &str, p_use: &str) -> GraphEn
     }
 }
 
+// Serialize the one test that mutates the process environment, in
+// the `PLACED_CONFIG_ENV_LOCK` (`remote.rs`) style.
+static INFO_SCALAR_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 mod atoms;
 mod attrs;
 mod blockers;
+mod circular;
 mod conflicts;
 mod env_config;
 mod flag_spellings;
 mod gates;
+mod info;
 mod json;
 mod news;
 mod prompt;

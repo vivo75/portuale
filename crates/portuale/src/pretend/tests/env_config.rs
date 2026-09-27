@@ -18,6 +18,51 @@ fn buildpkg_comes_from_the_cli_then_the_resolved_features() {
 }
 
 #[test]
+fn pkgdir_index_trusted_folds_the_resolved_features_chain() {
+    // Portage: bintree.py, populate. Trusted unless the folded chain negates the token.
+    let layered = |layers: Vec<Vec<&str>>| {
+        let mut config = portage_profile::Config::default();
+        config.incremental_sources.insert(
+            "FEATURES".to_string(),
+            layers
+                .into_iter()
+                .map(|l| l.into_iter().map(String::from).collect())
+                .collect(),
+        );
+        config
+    };
+    assert!(pkgdir_index_trusted(&portage_profile::Config::default()));
+    assert!(pkgdir_index_trusted(&layered(vec![vec![
+        "sandbox",
+        "pkgdir-index-trusted"
+    ]])));
+    assert!(!pkgdir_index_trusted(&layered(vec![
+        vec!["pkgdir-index-trusted"],
+        vec!["-pkgdir-index-trusted"],
+    ])));
+    assert!(pkgdir_index_trusted(&layered(vec![
+        vec!["pkgdir-index-trusted", "-*"],
+        vec!["pkgdir-index-trusted"],
+    ])));
+    assert!(!pkgdir_index_trusted(&layered(vec![
+        vec!["pkgdir-index-trusted"],
+        vec!["-*"],
+    ])));
+    let mut fallback_on = portage_profile::Config::default();
+    fallback_on.other_vars.insert(
+        "FEATURES".to_string(),
+        "sandbox pkgdir-index-trusted".to_string(),
+    );
+    assert!(pkgdir_index_trusted(&fallback_on));
+    let mut fallback_off = portage_profile::Config::default();
+    fallback_off.other_vars.insert(
+        "FEATURES".to_string(),
+        "sandbox -pkgdir-index-trusted".to_string(),
+    );
+    assert!(!pkgdir_index_trusted(&fallback_off));
+}
+
+#[test]
 fn shell_split_handles_quotes_and_escapes() {
     assert_eq!(
         shell_split("ionice -c 3 -p ${PID}"),
