@@ -6853,14 +6853,14 @@ impl mrg_director::NewsSelector for FilesystemNews<'_> {
     }
 }
 
-fn run_check_news(
-    repos: &[portage_repo::RepoConfig],
-    root: &Path,
-    quiet: bool,
-    color: &Colorizer,
-) -> ExitCode {
-    let mut any = false;
-    let mut first = true;
+/// One repo's unread-news evaluation plus the `updateItems` state
+/// write-back, shared by `--check-news` and the GLEP 42 count notice
+/// (backlog #196): every repo maps to its `len(.unread)` count (real
+/// `NewsManager.getUnreadItems`, `news.py:234`) -- 0 when the repo has
+/// no `metadata/news` directory at all. The `.unread`/`.skip` files are
+/// rewritten (sorted, one id per line) only when their sets actually
+/// changed, exactly like `run_check_news` always did.
+fn unread_news_counts(repos: &[portage_repo::RepoConfig], root: &Path) -> Vec<(String, usize)> {
     let mut per_repo: Vec<(String, usize)> = Vec::new();
     for repo in repos {
         // The unread computation runs through the director's news slot:
@@ -6890,32 +6890,90 @@ fn run_check_news(
             &eval.skip_orig,
             &eval.skip,
         );
-        let count = eval.unread.len();
-        per_repo.push((repo.name.clone(), count));
-        if count > 0 {
-            any = true;
+        per_repo.push((repo.name.clone(), eval.unread.len()));
+    }
+    per_repo
+}
+
+/// Real `portage.news.display_news_notifications` (`news.py:509-528`):
+/// a leading blank line, then one ` * IMPORTANT: N news items need
+/// reading for repository '<repo>'.` line per repo with a nonzero
+/// count, then ` * Use eselect news read to view new items.` plus a
+/// trailing blank line. Shared by `--check-news` and the backlog #196
+/// count notice so the two can never drift apart.
+fn print_news_notifications(per_repo: &[(String, usize)], color: &Colorizer) {
+    let mut first = true;
+    for (repo, count) in per_repo {
+        if *count > 0 {
+            if first {
+                println!();
+                first = false;
+            }
+            println!(
+                "{} {count} news items need reading for repository '{repo}'.",
+                color.c("WARN", " * IMPORTANT:")
+            );
         }
     }
+    println!(
+        "{} Use {} to view new items.\n",
+        color.c("WARN", " *"),
+        color.c("GOOD", "eselect news read")
+    );
+}
+
+/// Real `display_news_notification`'s own gate (`post_emerge.py:38`):
+/// `news` is in the resolved `FEATURES`. Pure predicate so the gate
+/// stays unit-pinned independently of the counting.
+fn news_notice_enabled(config: &portage_profile::Config) -> bool {
+    config_features_list(config).iter().any(|t| t == "news")
+}
+
+/// Backlog #196: real `_emerge/post_emerge.py::display_news_notification`
+/// (`post_emerge.py:37-46`): print the GLEP 42 count notice when `news`
+/// is in the resolved `FEATURES` and at least one repo has a nonzero
+/// unread count (real `count_unread_news`, `news.py:447-506`, reusing the
+/// existing `FilesystemNews` evaluation -- no second news parser). No
+/// `--quiet` gate: real's own function consults neither `--quiet` nor
+/// `--ask` (the m185 probe's `--quiet` shape shows the notice surfacing
+/// mid-merge through stdio buffering, which is not ported). The
+/// `--ask` + `--read-news` "read the news while calculating?" prompt and
+/// the `eselect news read` spawn (`actions.py:4271-4288`) are NOT ported:
+/// portuale has no eselect integration and must never block on an
+/// interactive prompt in a test harness (residue, see the #196 report).
+/// Likewise the `post_emerge.py:112-117` `--pretend` arm (a pretend run
+/// prints the notice at the end): porting it would write
+/// `.unread`/`.skip` into the shared, git-tracked fixture ROOT on every
+/// pretend contract test (the pattern `_check_news_isolated_root` exists
+/// to forbid exactly that) and drift the whole pretend corpus for no bed
+/// benefit -- owner ruling pending (residue, see the #196 report).
+fn display_news_notice_if_any(
+    repos: &[portage_repo::RepoConfig],
+    root: &Path,
+    config: &portage_profile::Config,
+    color: &Colorizer,
+) {
+    if !news_notice_enabled(config) {
+        return;
+    }
+    let per_repo = unread_news_counts(repos, root);
+    if per_repo.iter().any(|(_, count)| *count > 0) {
+        print_news_notifications(&per_repo, color);
+    }
+}
+
+fn run_check_news(
+    repos: &[portage_repo::RepoConfig],
+    root: &Path,
+    quiet: bool,
+    color: &Colorizer,
+) -> ExitCode {
+    let per_repo = unread_news_counts(repos, root);
+    let any = per_repo.iter().any(|(_, count)| *count > 0);
 
     if any {
         // Real `display_news_notifications`.
-        for (repo, count) in &per_repo {
-            if *count > 0 {
-                if first {
-                    println!();
-                    first = false;
-                }
-                println!(
-                    "{} {count} news items need reading for repository '{repo}'.",
-                    color.c("WARN", " * IMPORTANT:")
-                );
-            }
-        }
-        println!(
-            "{} Use {} to view new items.\n",
-            color.c("WARN", " *"),
-            color.c("GOOD", "eselect news read")
-        );
+        print_news_notifications(&per_repo, color);
     } else if !quiet {
         // Real `print("", colorize("GOOD", "*"), "No news items were found.")`.
         println!(" {} No news items were found.", color.c("GOOD", "*"));
@@ -11694,6 +11752,19 @@ pub fn run(args: &[String]) -> ExitCode {
         v.dedup();
         v
     };
+    // Backlog #196: real `_emerge/actions.py:4264-4270` (`run_action`):
+    // the GLEP 42 news-count notice prints BEFORE resolution on a
+    // non-`--pretend` run (after argument validation, before
+    // `action_build`), so it fires even when resolution itself later
+    // fails -- and, like real, it is NOT gated on `--quiet`, `--ask`,
+    // or `--nodeps` (only `news` in FEATURES plus a nonzero unread
+    // count, inside `display_news_notice_if_any`). The m185 probe shows
+    // it standing first in real's pre-`>>>` output (news, blank,
+    // header, `Calculating...`), which this placement reproduces: the
+    // resolution-phase display block below runs after.
+    if !pretend {
+        display_news_notice_if_any(&repos, &root, &config, &color);
+    }
     let run_resolve = |complete: bool, locked: &[String], with_seeds: bool| {
         let cfg: std::borrow::Cow<portage_profile::Config> =
             if !complete_seed_atoms.is_empty() || !locked.is_empty() {
@@ -13680,6 +13751,21 @@ pub fn run(args: &[String]) -> ExitCode {
             // unmerge just preserved and point the user at
             // `emerge @preserved-rebuild`.
             crate::preserved_libs::show_preserved_libs_notice(&root, &color, quiet, verbose);
+            // Backlog #196: real `post_emerge()` (`post_emerge.py:155`)
+            // prints the GLEP 42 count notice a second time once the
+            // merge changed the vdb (after the preserved-libs notice and
+            // the config-file check, both mirrored above) -- same
+            // FEATURES-plus-nonzero-count gates, no `--quiet` gate. The
+            // vdb-changed gate is structural here: `--buildpkgonly`
+            // builds but never merges (real's `_pkgs_changed` stays
+            // false, so its `post_emerge` early-returns with no notice),
+            // an empty mergelist changed nothing either, and every merge
+            // failure returned early above (real would still print the
+            // notice for a nonzero retval -- residue, see the #196
+            // report).
+            if !entries.is_empty() {
+                display_news_notice_if_any(&repos, &root, &config, &color);
+            }
         }
     }
 
@@ -13931,6 +14017,88 @@ mod tests {
         };
         assert!(empty.evaluate().is_none());
         assert!(empty.unread_ids().is_empty());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn news_notice_gate_needs_news_in_resolved_features() {
+        // Real `display_news_notification` (`post_emerge.py:38`): the
+        // notice is skipped wholesale unless `news` is in the resolved
+        // `FEATURES` (no evaluation, no output). Same `Config::default`
+        // + `other_vars` shape `buildpkg_comes_from_the_cli_then_...`
+        // uses for its own feature gate.
+        let mut with = portage_profile::Config::default();
+        with.other_vars
+            .insert("FEATURES".to_string(), "sandbox news userpriv".to_string());
+        assert!(news_notice_enabled(&with));
+        let mut without = portage_profile::Config::default();
+        without
+            .other_vars
+            .insert("FEATURES".to_string(), "sandbox userpriv".to_string());
+        assert!(!news_notice_enabled(&without));
+        assert!(!news_notice_enabled(&portage_profile::Config::default()));
+    }
+
+    #[test]
+    fn unread_news_counts_reuses_the_check_news_evaluation() {
+        // Backlog #196 S1's "no second news parser": the count notice
+        // reads through the same `FilesystemNews` evaluation (and the
+        // same `.unread`/`.skip` write-back) `--check-news` uses, so
+        // the hermetic fixture tree counts exactly what
+        // `test_check_news_counts_unread_relevant_items` pins over in
+        // the contract suite (5 relevant testrepo items). The ROOT is a
+        // temp dir sharing the fixtures' own vdb read-only
+        // (`Display-If-Installed` needs it) with a fresh `var/lib`, the
+        // same isolation `_check_news_isolated_root` gives the contract
+        // tests -- nothing is ever written into the git-tracked
+        // fixtures tree itself.
+        let fixtures = fixtures_root();
+        let base =
+            std::env::temp_dir().join(format!("pretend-test-{}-news_counts", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("root");
+        std::fs::create_dir_all(root.join("var/lib")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(fixtures.join("var/db"), root.join("var/db")).unwrap();
+        let repo_config = |name: &str, dir: &str| portage_repo::RepoConfig {
+            name: name.to_string(),
+            location: fixtures.join(dir),
+            priority: 0,
+            is_main: name == "testrepo",
+            masters: Vec::new(),
+            profile_formats: Vec::new(),
+            cache_formats: Vec::new(),
+            aliases: Vec::new(),
+            sync_type: None,
+            sync_uri: None,
+            volatile: false,
+            module_specific_options: Vec::new(),
+        };
+        let repos = vec![
+            repo_config("testrepo", "repo"),
+            repo_config("overlay", "overlay"),
+        ];
+        let counts = unread_news_counts(&repos, &root);
+        assert_eq!(
+            counts,
+            vec![("testrepo".to_string(), 5), ("overlay".to_string(), 0),]
+        );
+        // The write-back landed in the temp ROOT (sorted, one id per
+        // line), and a second evaluation stays sticky at the same
+        // count (real `getUnreadItems`'s `len(.unread)`).
+        let news_dir = root.join("var/lib/gentoo/news");
+        let unread: Vec<String> = std::fs::read_to_string(news_dir.join("news-testrepo.unread"))
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect();
+        assert_eq!(unread.len(), 5);
+        assert_eq!(unread, {
+            let mut sorted = unread.clone();
+            sorted.sort();
+            sorted
+        });
+        assert_eq!(unread_news_counts(&repos, &root), counts);
         let _ = std::fs::remove_dir_all(&base);
     }
 
