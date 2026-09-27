@@ -1133,7 +1133,7 @@ mod tests {
         // The scan half of the same shape: the truncated file is
         // accepted on the index's word (no `!!! Invalid binary
         // package`), so resolution can select it.
-        let scanned = crate::binpkg::populate_local_pkgdir(&pkgdir).expect("scan succeeds");
+        let scanned = crate::binpkg::populate_local_pkgdir(&pkgdir, true).expect("scan succeeds");
         assert_eq!(scanned.len(), 1, "{scanned:?}");
 
         let pt = tmp.join("pt");
@@ -1227,7 +1227,7 @@ mod tests {
 
         // The scan half of the same shape: the removed file's stanza
         // rejoins the pool, so resolution can select the binary.
-        let scanned = crate::binpkg::populate_local_pkgdir(&pkgdir).expect("scan succeeds");
+        let scanned = crate::binpkg::populate_local_pkgdir(&pkgdir, true).expect("scan succeeds");
         assert_eq!(scanned.len(), 1, "{scanned:?}");
         assert_eq!(
             scanned[0].get("CPV").map(String::as_str),

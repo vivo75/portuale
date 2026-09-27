@@ -7203,16 +7203,52 @@ fn buildpkg_from_config(buildpkg_opt: Option<bool>, config: &portage_profile::Co
     buildpkg_opt.unwrap_or_else(|| config_features_list(config).iter().any(|t| t == "buildpkg"))
 }
 
+/// The resolved `FEATURES` incremental list, if it was assigned
+/// anywhere: the folded `make.globals` + profile + `make.conf` +
+/// calling-env stack ([`Config::resolved_incremental`], with real's
+/// own `-*` / `-tok` / `+tok` semantics), falling back to a raw
+/// whitespace split of `other_vars["FEATURES"]` for configs that carry
+/// `FEATURES` only there. `None` means nothing configured anywhere --
+/// callers that need real's host-`make.globals` default seed it
+/// themselves (see `pkgdir_index_trusted`).
+fn config_features_opt(config: &portage_profile::Config) -> Option<Vec<String>> {
+    config.resolved_incremental("FEATURES").or_else(|| {
+        config
+            .other_vars
+            .get("FEATURES")
+            .map(|f| f.split_whitespace().map(String::from).collect())
+    })
+}
+
 fn config_features_list(config: &portage_profile::Config) -> Vec<String> {
-    config
-        .resolved_incremental("FEATURES")
-        .or_else(|| {
-            config
-                .other_vars
-                .get("FEATURES")
-                .map(|f| f.split_whitespace().map(String::from).collect())
-        })
-        .unwrap_or_default()
+    config_features_opt(config).unwrap_or_default()
+}
+
+/// Real `bintree.populate`'s own `reindex = "pkgdir-index-trusted" not
+/// in self.settings.features or force_reindex` (`bintree.py:936-938`,
+/// backlog #199) for the local `$PKGDIR` scan: `true` means the scan
+/// trusts the `Packages` index (real `_populate_local(reindex=False)`),
+/// `false` means it re-stats and re-reads (`reindex=True`).
+///
+/// Read from the same resolved chain every other resolver-side
+/// `FEATURES` read uses (`config_features_opt`, the folded
+/// `make.globals` + profile + `make.conf` + calling-env stack -- so a
+/// `FEATURES=-pkgdir-index-trusted` in `make.conf` or on the calling
+/// env reaches the scan; no new env read here), with the same
+/// `other_vars` fallback `config_features_list` uses. The fold starts from
+/// real's own default: the token is in real `make.globals`' own default
+/// `FEATURES` (`cnf/make.globals:81`), which real always sources from
+/// the host installation -- while portuale reads `make.globals`
+/// `config_root`-relative, so under a test/fixture root it contributes
+/// nothing. `None` (nothing configured anywhere) therefore stays
+/// trusted (byte-identical to the pre-#199 scan, and what real computes
+/// on a live host); only a folded list that lacks the token --
+/// an explicit `-pkgdir-index-trusted` (or `-*`, real
+/// `resolved_incremental`'s own clear) not undone by a later re-add --
+/// distrusts, exactly when real's folded `features` would lack it.
+fn pkgdir_index_trusted(config: &portage_profile::Config) -> bool {
+    config_features_opt(config)
+        .is_none_or(|features| features.iter().any(|t| t == "pkgdir-index-trusted"))
 }
 
 /// The resolved, merge-time `FEATURES` incremental list, space-joined --
@@ -11236,7 +11272,10 @@ pub fn run(args: &[String]) -> ExitCode {
         // `--usepkg` resolve path does further down (that scan runs after
         // this standalone-action dispatch, so `--info` needs its own).
         if info_usepkg {
-            match crate::binpkg::populate_local_pkgdir(Path::new(&config.pkgdir)) {
+            match crate::binpkg::populate_local_pkgdir(
+                Path::new(&config.pkgdir),
+                pkgdir_index_trusted(&config),
+            ) {
                 Ok(entries) if !entries.is_empty() => config.scanned_binpkgs = Some(entries),
                 Ok(_) => {}
                 Err(e) => {
@@ -11663,10 +11702,14 @@ pub fn run(args: &[String]) -> ExitCode {
     // makes local binary candidates eligible, walk `$PKGDIR` for binpkg
     // files and build the pool from each file's own embedded metadata,
     // trusting any already-parsed `<pkgdir>/Packages` entry that
-    // vouches for the file (real's own default: `FEATURES=
+    // vouches for the file under real's own default (`FEATURES=
     // pkgdir-index-trusted` is in real `make.globals`' own default
     // `FEATURES`, so `_populate_local` runs with `reindex=False` and
-    // leaves size/digest verification to merge-time `BinpkgVerifier` --
+    // leaves size/digest verification to merge-time `BinpkgVerifier`;
+    // with `FEATURES=-pkgdir-index-trusted` only the `_mtime_`/`SIZE`
+    // fast path is trusted and stale stanzas are dropped -- backlog
+    // #199, `pkgdir_index_trusted` below threads the resolved
+    // `FEATURES` in).
     // `binpkg::populate_local_pkgdir`'s own doc comment has the full
     // real grounding, backlog #174). Runs unconditionally now,
     // `Packages` present or not -- real portage always walks
@@ -11677,7 +11720,7 @@ pub fn run(args: &[String]) -> ExitCode {
     // `--pretend` still writes nothing.
     if usepkg || usepkgonly {
         let pkgdir_path = Path::new(&config.pkgdir);
-        match crate::binpkg::populate_local_pkgdir(pkgdir_path) {
+        match crate::binpkg::populate_local_pkgdir(pkgdir_path, pkgdir_index_trusted(&config)) {
             Ok(entries) if !entries.is_empty() => config.scanned_binpkgs = Some(entries),
             Ok(_) => {}
             Err(e) => {
@@ -13958,6 +14001,63 @@ mod tests {
         off.other_vars
             .insert("FEATURES".to_string(), "-buildpkg sandbox".to_string());
         assert!(!buildpkg_from_config(None, &off));
+    }
+
+    #[test]
+    fn pkgdir_index_trusted_folds_the_resolved_features_chain() {
+        // Backlog #199 fix round 1: `pkgdir_index_trusted` is real
+        // `bintree.populate`'s own `reindex =
+        // "pkgdir-index-trusted" not in features` (`bintree.py:936-938`)
+        // over the folded `FEATURES` chain, defaulting to trusted when
+        // nothing configures `FEATURES` at all (real's host
+        // `make.globals` default, `cnf/make.globals:81`).
+        let layered = |layers: Vec<Vec<&str>>| {
+            let mut config = portage_profile::Config::default();
+            config.incremental_sources.insert(
+                "FEATURES".to_string(),
+                layers
+                    .into_iter()
+                    .map(|l| l.into_iter().map(String::from).collect())
+                    .collect(),
+            );
+            config
+        };
+        // Nothing configured anywhere: trusted (the seeded default).
+        assert!(pkgdir_index_trusted(&portage_profile::Config::default()));
+        // Token present, never negated: trusted.
+        assert!(pkgdir_index_trusted(&layered(vec![vec![
+            "sandbox",
+            "pkgdir-index-trusted"
+        ]])));
+        // A later layer negates it (the `make.conf`-layer case): distrusted.
+        assert!(!pkgdir_index_trusted(&layered(vec![
+            vec!["pkgdir-index-trusted"],
+            vec!["-pkgdir-index-trusted"],
+        ])));
+        // `-*` clears the chain, a later re-add restores it: trusted.
+        assert!(pkgdir_index_trusted(&layered(vec![
+            vec!["pkgdir-index-trusted", "-*"],
+            vec!["pkgdir-index-trusted"],
+        ])));
+        // `-*` last, with no re-add: distrusted.
+        assert!(!pkgdir_index_trusted(&layered(vec![
+            vec!["pkgdir-index-trusted"],
+            vec!["-*"],
+        ])));
+        // The `other_vars` fallback (the case `config_features_list`
+        // falls back for): `FEATURES` carried only there still decides.
+        let mut fallback_on = portage_profile::Config::default();
+        fallback_on.other_vars.insert(
+            "FEATURES".to_string(),
+            "sandbox pkgdir-index-trusted".to_string(),
+        );
+        assert!(pkgdir_index_trusted(&fallback_on));
+        let mut fallback_off = portage_profile::Config::default();
+        fallback_off.other_vars.insert(
+            "FEATURES".to_string(),
+            "sandbox -pkgdir-index-trusted".to_string(),
+        );
+        assert!(!pkgdir_index_trusted(&fallback_off));
     }
 
     #[test]

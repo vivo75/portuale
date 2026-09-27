@@ -2748,7 +2748,8 @@ mod tests {
         // `_mtime_`/`SIZE` still agree with the real file (nothing else
         // touched it since), so this hits the mtime-staleness fast path
         // rather than re-parsing the gpkg archive.
-        let scanned = crate::binpkg::populate_local_pkgdir(&options.pkgdir).expect("scan succeeds");
+        let scanned =
+            crate::binpkg::populate_local_pkgdir(&options.pkgdir, true).expect("scan succeeds");
         assert_eq!(scanned.len(), 1);
         assert_eq!(
             scanned[0].get("CPV").map(String::as_str),
@@ -2839,7 +2840,8 @@ mod tests {
         // `_pkgindex_aux_keys` carries no `PF`, and neither does the
         // stanza portuale wrote, so `PF` is no longer asserted here.
         // Downstream splits it from `CPV`, exactly like real.)
-        let scanned = crate::binpkg::populate_local_pkgdir(&options.pkgdir).expect("scan succeeds");
+        let scanned =
+            crate::binpkg::populate_local_pkgdir(&options.pkgdir, true).expect("scan succeeds");
         assert_eq!(scanned.len(), 2);
         let build_ids: std::collections::HashSet<&str> = scanned
             .iter()
@@ -2907,7 +2909,8 @@ mod tests {
 
         // Drop the just-written index so the scan must parse the archive.
         let _ = std::fs::remove_file(options.pkgdir.join("Packages"));
-        let scanned = crate::binpkg::populate_local_pkgdir(&options.pkgdir).expect("scan succeeds");
+        let scanned =
+            crate::binpkg::populate_local_pkgdir(&options.pkgdir, true).expect("scan succeeds");
         assert_eq!(scanned.len(), 1);
         assert_eq!(
             scanned[0].get("CPV").map(String::as_str),
