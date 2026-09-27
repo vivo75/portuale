@@ -54706,4 +54706,85 @@ mod tests_166 {
         );
         assert_eq!(out.len(), 1);
     }
+
+    // ---- S3: `rebuilt_binary_changed` (real `depgraph.py`'s two
+    // independent `rebuilt_binary` triggers folded into one: the
+    // `--rebuilt-binaries` BUILD_TIME comparison and the
+    // no-ebuild-visible rejection of an installed built instance --
+    // see the function's own doc comment). ----
+
+    /// Fresh unique scratch dir per test (vdb lives under it, so the
+    /// per-root aux caches never see a reused path).
+    fn dir_166(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "portuale-166-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// One installed instance with the given `BUILD_TIME` (plus `SLOT`,
+    /// which the vdb scan expects beside every instance).
+    fn install_166(root: &Path, cat: &str, pf: &str, build_time: &str) {
+        let d = root.join("var/db/pkg").join(cat).join(pf);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("SLOT"), "0\n").unwrap();
+        std::fs::write(d.join("BUILD_TIME"), build_time).unwrap();
+    }
+
+    /// Timestamped (`--rebuilt-binaries-timestamp`) comparison: strictly
+    /// newer past the floor reports, anything else does not. Kills the
+    /// `&&` -> `||` widening (older binary reports through the floor
+    /// arm), the three `>` rewrites and the `>=` -> `<` flip.
+    #[test]
+    fn rebuilt_binary_166_timestamped_comparison() {
+        let root = dir_166("rebuilt-ts");
+        install_166(&root, "dev-libs", "rebuilt-1.0", "100\n");
+        let changed = |built: Option<i64>, ts: Option<u64>| {
+            rebuilt_binary_changed(&root, built, "dev-libs", "rebuilt", "1.0", ts)
+        };
+        // No binary candidate (or no BUILD_TIME): no verdict either way
+        // (pins both `let-else return false` arms; no mutant targets).
+        assert!(!changed(None, Some(50)));
+        // Strictly newer past the floor: the only `true` shape here.
+        assert!(changed(Some(200), Some(50)));
+        // Older binary: `false && true` is false, `false || true` is
+        // true.
+        assert!(!changed(Some(50), Some(10)));
+        // Equal stamps: `>` is false, `>=` is true.
+        assert!(!changed(Some(100), Some(50)));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Untimestamped comparison: any difference reports. Kills the `!=`
+    /// -> `==` flip in both directions (newer reports, equal does not).
+    #[test]
+    fn rebuilt_binary_166_untimestamped_comparison() {
+        let root = dir_166("rebuilt-plain");
+        install_166(&root, "dev-libs", "rebuilt-1.0", "100\n");
+        let changed = |built: Option<i64>| {
+            rebuilt_binary_changed(&root, built, "dev-libs", "rebuilt", "1.0", None)
+        };
+        assert!(changed(Some(200)));
+        assert!(!changed(Some(100)));
+        // No installed BUILD_TIME at all: the second `let-else` fires
+        // (no mutant target; documents the missing-record tolerance).
+        let bare = dir_166("rebuilt-bare");
+        std::fs::create_dir_all(bare.join("var/db/pkg/dev-libs/rebuilt-1.0")).unwrap();
+        assert!(!rebuilt_binary_changed(
+            &bare,
+            Some(200),
+            "dev-libs",
+            "rebuilt",
+            "1.0",
+            None
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&bare);
+    }
 }
