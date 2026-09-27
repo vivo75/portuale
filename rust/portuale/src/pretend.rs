@@ -5121,7 +5121,13 @@ fn run_resume(
     if let Err(e) = merge_result {
         let still = entries_not_merged(root, &entries);
         let fav_refs: Vec<&str> = favorites.iter().map(String::as_str).collect();
-        let _ = crate::mtimedb::write_resume_list(root, &fav_refs, &still, &opts);
+        // The empty-`still` guard is the failure path's own
+        // (`write_resume_list` itself is unconditional now, #179): a
+        // failure with nothing unmerged leaves the per-merge shrink's
+        // own tail alone.
+        if !still.is_empty() {
+            let _ = crate::mtimedb::write_resume_list(root, &fav_refs, &still, &opts);
+        }
         // Backlog #174: a merge-time binpkg digest failure already
         // printed real's full tail -- no `emerge:` line either (real
         // exits a merge failure via `FAILURE`, not the action error
@@ -13426,7 +13432,9 @@ pub fn run(args: &[String]) -> ExitCode {
             // re-saves the tail. Silent on write failure, like the
             // `rotate_resume_to_backup` above (a later failure write warns).
             // `--buildpkgonly` and remote execution are deliberately
-            // untouched: no save here covers them.
+            // untouched: no save here covers them. The write is
+            // unconditional (real always assigns, #179): an all-noop
+            // plan records the empty list instead of leaving a stale one.
             let resume_mergelist: Vec<crate::mtimedb::ResumeCpv> = entries
                 .iter()
                 .filter_map(emerge_build::resume_cpv)
@@ -13475,18 +13483,29 @@ pub fn run(args: &[String]) -> ExitCode {
                 // up where this left off. Previously missing entirely
                 // for this `--getbinpkg` path -- a failed mixed-source-
                 // and-binary run left nothing for `--resume` to find.
+                // The empty-`unmerged` guard is the failure path's own:
+                // `write_resume_list` itself is unconditional now (real
+                // `_save_resume_list` always assigns, #179), but a
+                // failure with nothing unmerged must leave the
+                // per-merge shrink's own tail alone, not overwrite it
+                // with an empty list.
                 let unmerged = entries_not_merged(&root, entries);
                 let resume_opts = crate::mtimedb::ResumeOpts { oneshot, onlydeps };
-                if let Err(w) =
-                    crate::mtimedb::write_resume_list(&root, &atom_args, &unmerged, &resume_opts)
-                {
-                    eprintln!("emerge: warning: could not save the resume list: {w}");
-                } else if !unmerged.is_empty() {
-                    eprintln!(
-                        "\n * The resume list contains packages that could not be \
-                         merged.\n * Use `emerge --resume` to retry, or `emerge --resume \
-                         --skipfirst` to skip the first one."
-                    );
+                if !unmerged.is_empty() {
+                    if let Err(w) = crate::mtimedb::write_resume_list(
+                        &root,
+                        &atom_args,
+                        &unmerged,
+                        &resume_opts,
+                    ) {
+                        eprintln!("emerge: warning: could not save the resume list: {w}");
+                    } else {
+                        eprintln!(
+                            "\n * The resume list contains packages that could not be \
+                             merged.\n * Use `emerge --resume` to retry, or `emerge --resume \
+                             --skipfirst` to skip the first one."
+                        );
+                    }
                 }
                 eprintln!("emerge: {e}");
                 return ExitCode::from(1);
@@ -13495,7 +13514,8 @@ pub fn run(args: &[String]) -> ExitCode {
             // Plain `emerge <atom>`: real source build + merge (see
             // `emerge_build::run_source_merge`). The up-front resume save
             // is real `Scheduler.merge() -> _save_resume_list()` (#168),
-            // same as the `--getbinpkg` arm above.
+            // same as the `--getbinpkg` arm above -- unconditional (an
+            // all-noop plan records the empty list, #179).
             let resume_mergelist: Vec<crate::mtimedb::ResumeCpv> = entries
                 .iter()
                 .filter_map(emerge_build::resume_cpv)
@@ -13525,19 +13545,28 @@ pub fn run(args: &[String]) -> ExitCode {
             ) {
                 // Real `Scheduler._save_resume_list`: on a merge failure,
                 // record every still-unmerged package so `emerge --resume`
-                // can pick up where this left off.
+                // can pick up where this left off. The empty-`unmerged`
+                // guard is the failure path's own (`write_resume_list`
+                // itself is unconditional now, #179): a failure with
+                // nothing unmerged leaves the per-merge shrink's own
+                // tail alone.
                 let unmerged = entries_not_merged(&root, entries);
                 let resume_opts = crate::mtimedb::ResumeOpts { oneshot, onlydeps };
-                if let Err(w) =
-                    crate::mtimedb::write_resume_list(&root, &atom_args, &unmerged, &resume_opts)
-                {
-                    eprintln!("emerge: warning: could not save the resume list: {w}");
-                } else if !unmerged.is_empty() {
-                    eprintln!(
-                        "\n * The resume list contains packages that could not be \
-                         merged.\n * Use `emerge --resume` to retry, or `emerge --resume \
-                         --skipfirst` to skip the first one."
-                    );
+                if !unmerged.is_empty() {
+                    if let Err(w) = crate::mtimedb::write_resume_list(
+                        &root,
+                        &atom_args,
+                        &unmerged,
+                        &resume_opts,
+                    ) {
+                        eprintln!("emerge: warning: could not save the resume list: {w}");
+                    } else {
+                        eprintln!(
+                            "\n * The resume list contains packages that could not be \
+                             merged.\n * Use `emerge --resume` to retry, or `emerge --resume \
+                             --skipfirst` to skip the first one."
+                        );
+                    }
                 }
                 eprintln!("emerge: {e}");
                 return ExitCode::from(1);
@@ -13903,6 +13932,238 @@ mod tests {
             stderr.contains("\"--ask\" should only be used in a terminal"),
             "{stderr}"
         );
+    }
+
+    /// The `portuale` binary next to the current test executable (same
+    /// layout `ask_without_a_tty_...` already relies on).
+    fn built_portuale_bin() -> std::path::PathBuf {
+        let mut portuale_bin = std::env::current_exe().expect("current test exe");
+        portuale_bin.pop();
+        if portuale_bin.ends_with("deps") {
+            portuale_bin.pop();
+        }
+        portuale_bin.push("portuale");
+        portuale_bin
+    }
+
+    /// A scratch `ROOT` with nothing but a stale multi-item resume list
+    /// (multi-item so the `resume_backup` rotation would *also* rewrite
+    /// the file if it ran -- the byte comparison below pins the rotation
+    /// stays out too). Returns the root plus the file's bytes before the
+    /// run under test.
+    fn stale_resume_root(tag: &str) -> (std::path::PathBuf, Vec<u8>) {
+        let root = std::env::temp_dir().join(format!(
+            "resume_no_write_{tag}_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let stale = vec![
+            (
+                crate::mtimedb::ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "stale-a".to_string(),
+                "1".to_string(),
+            ),
+            (
+                crate::mtimedb::ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "stale-b".to_string(),
+                "1".to_string(),
+            ),
+        ];
+        crate::mtimedb::write_resume_list(
+            &root,
+            &["dev-libs/stale-a"],
+            &stale,
+            &crate::mtimedb::ResumeOpts::default(),
+        )
+        .unwrap();
+        let before = std::fs::read(crate::mtimedb::mtimedb_path(&root)).unwrap();
+        (root, before)
+    }
+
+    /// Fixture-config env for a spawned `portuale emerge` that resolves
+    /// (never merges): the committed fixture tree as config, the scratch
+    /// dir as `ROOT`, everything else absolute so the test holds from
+    /// any working directory.
+    fn fixture_resolve_env(
+        root: &std::path::Path,
+        portage_tmpdir: &std::path::Path,
+    ) -> Vec<(String, String)> {
+        let fixtures = fixtures_root();
+        vec![
+            (
+                "PORTAGE_CONFIGROOT".to_string(),
+                fixtures.display().to_string(),
+            ),
+            ("ROOT".to_string(), root.display().to_string()),
+            (
+                "DISTDIR".to_string(),
+                fixtures.join("distfiles").display().to_string(),
+            ),
+            (
+                "PORTAGE_TMPDIR".to_string(),
+                portage_tmpdir.display().to_string(),
+            ),
+        ]
+    }
+
+    #[test]
+    fn pretend_writes_no_resume_list_even_with_a_stale_list_present() {
+        // #179: real `_emerge/actions.py` returns from the `--pretend`
+        // branch (`display(...)`, `return os.EX_OK`) before `Scheduler`
+        // exists -- and before the `resume_backup` rotation -- so a
+        // preview never touches `mtimedb`. A stale list must come back
+        // byte-identical, and no fresh list may appear on a bare root.
+        let portuale_bin = built_portuale_bin();
+        let tmp = std::env::temp_dir().join(format!(
+            "resume_no_write_pretend_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // Bare root first: `--pretend` resolves and prints, and leaves
+        // no `mtimedb` behind at all.
+        let bare = tmp.join("bare");
+        let output = std::process::Command::new(&portuale_bin)
+            .args(["emerge", "--pretend", "--oneshot", "dev-libs/schedok"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .envs(fixture_resolve_env(&bare, &tmp.join("pt-bare")))
+            .output()
+            .expect("portuale emerge spawns");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("dev-libs/schedok-1.0"),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert!(
+            !crate::mtimedb::mtimedb_path(&bare).exists(),
+            "--pretend must not create an mtimedb"
+        );
+
+        // Stale list present: byte-identical afterwards (neither a fresh
+        // save nor the rotation may run).
+        let (root, before) = stale_resume_root("pretend");
+        let output = std::process::Command::new(&portuale_bin)
+            .args(["emerge", "--pretend", "--oneshot", "dev-libs/schedok"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .envs(fixture_resolve_env(&root, &tmp.join("pt-stale")))
+            .output()
+            .expect("portuale emerge spawns");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            std::fs::read(crate::mtimedb::mtimedb_path(&root)).unwrap(),
+            before,
+            "--pretend must leave a stale resume list byte-identical"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A pty pair without any external helper: the child answers `--ask`
+    /// through the slave (its stdin), satisfying the up-front isatty
+    /// gate, while the test writes the answer into the master. `libc`
+    /// is already a dependency (`stdin_is_tty` uses it).
+    #[cfg(unix)]
+    fn pty_pair() -> (std::fs::File, std::process::Stdio) {
+        use std::os::fd::FromRawFd;
+        unsafe {
+            let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+            assert!(master >= 0, "posix_openpt failed");
+            assert_eq!(libc::grantpt(master), 0, "grantpt failed");
+            assert_eq!(libc::unlockpt(master), 0, "unlockpt failed");
+            let name_ptr = libc::ptsname(master);
+            assert!(!name_ptr.is_null(), "ptsname failed");
+            let name = std::ffi::CStr::from_ptr(name_ptr)
+                .to_str()
+                .expect("pty name is utf8")
+                .to_owned();
+            let master_file = std::fs::File::from_raw_fd(master);
+            let cname = std::ffi::CString::new(name).expect("pty name has no nul");
+            let slave = libc::open(cname.as_ptr(), libc::O_RDWR | libc::O_NOCTTY);
+            assert!(slave >= 0, "pty slave open failed");
+            let slave_stdio = std::process::Stdio::from(std::os::fd::OwnedFd::from_raw_fd(slave));
+            (master_file, slave_stdio)
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ask_declined_writes_no_resume_list() {
+        // #179: real `_emerge/actions.py:525-536` returns `128 + SIGINT`
+        // on a "No" answer before `Scheduler` runs -- a declined run
+        // writes nothing (and rotates nothing: the rotation sits after
+        // the prompt). `--ask` needs a real TTY (the up-front isatty
+        // gate), so the decline is answered through a pty; the stale
+        // multi-item list must come back byte-identical.
+        use std::io::Write;
+        let portuale_bin = built_portuale_bin();
+        let (root, before) = stale_resume_root("ask");
+        let tmp = std::env::temp_dir().join(format!(
+            "resume_no_write_ask_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let (mut master, slave_stdio) = pty_pair();
+        let child = std::process::Command::new(&portuale_bin)
+            .args(["emerge", "--ask", "--oneshot", "dev-libs/schedok"])
+            .stdin(slave_stdio)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .envs(fixture_resolve_env(&root, &tmp))
+            .spawn()
+            .expect("portuale emerge spawns");
+        // The pty buffers until the child prompts -- no synchronisation
+        // needed.
+        master.write_all(b"No\n").expect("answer the --ask prompt");
+        let output = child.wait_with_output().expect("wait for emerge");
+        drop(master);
+        assert_eq!(
+            output.status.code(),
+            Some(130),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("Quitting."),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert_eq!(
+            std::fs::read(crate::mtimedb::mtimedb_path(&root)).unwrap(),
+            before,
+            "a declined --ask run must leave a stale resume list byte-identical"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

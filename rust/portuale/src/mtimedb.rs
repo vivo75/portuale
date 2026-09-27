@@ -413,18 +413,23 @@ pub fn write_info_mtimes(root: &Path, info: &BTreeMap<String, i64>) -> Result<()
 /// `--onlydeps` flags, so `--resume` replays with the same
 /// world-recording behaviour). Used both for the up-front save of the full
 /// resolved plan (real `Scheduler.merge()`'s own `_save_resume_list`, #168)
-/// and for re-saving the still-unmerged tail on a clean failure. No-op if
-/// `mergelist` is empty. An existing `resume_backup` is preserved untouched
-/// -- real's own resume assignment only ever touches the `"resume"` key.
+/// and for re-saving the still-unmerged tail on a clean failure. Like
+/// real's own `_save_resume_list` (`Scheduler.py:2398-2431`) the assignment
+/// is unconditional: an empty `mergelist` (an all-noop plan whose entries
+/// all resolved `nomerge` / already-installed) still overwrites any stale
+/// list with the fresh empty one -- real reaches `Scheduler.merge()` for
+/// such a plan (no `--ask` early return, no `--pretend` early return) and
+/// commits the empty list. Callers on the *failure* path guard the empty
+/// case themselves (a failure with nothing unmerged leaves the per-merge
+/// shrink's own tail alone). An existing `resume_backup` is preserved
+/// untouched -- real's own resume assignment only ever touches the
+/// `"resume"` key.
 pub fn write_resume_list(
     root: &Path,
     favorites: &[&str],
     mergelist: &[ResumeCpv],
     opts: &ResumeOpts,
 ) -> Result<(), String> {
-    if mergelist.is_empty() {
-        return Ok(());
-    }
     let resume = Section {
         favorites: favorites.iter().map(|s| s.to_string()).collect(),
         mergelist: mergelist.to_vec(),
@@ -1007,6 +1012,49 @@ mod tests {
         remove_merged_entry(&root, &full[2]);
         assert!(read_section(&root, "resume").is_none());
         assert!(read_section(&root, "resume_backup").is_some());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn up_front_save_of_an_all_noop_plan_overwrites_a_stale_list_with_empty() {
+        // #179: real `Scheduler._save_resume_list`
+        // (`Scheduler.py:2398-2431`) assigns `mtimedb["resume"]`
+        // unconditionally at merge start, so a run whose plan has
+        // nothing to merge still commits the fresh (empty) list -- no
+        // stale entry survives. The driver calls `write_resume_list`
+        // with exactly the up-front-filtered mergelist (empty for an
+        // all-noop plan), so the write itself must not no-op on empty.
+        let root = tmproot();
+        let stale = vec![(
+            ResumeEntryKind::Ebuild,
+            "dev-libs".to_string(),
+            "stale".to_string(),
+            "9.9".to_string(),
+        )];
+        write_resume_list(&root, &["dev-libs/stale"], &stale, &ResumeOpts::default()).unwrap();
+
+        // A single-item stale list does not rotate (real's own
+        // `len(...) > 1` guard, `actions.py:664-672`) -- the up-front
+        // save overwrites it directly.
+        rotate_resume_to_backup(&root);
+        assert!(read_section(&root, "resume").is_some());
+
+        write_resume_list(&root, &["dev-libs/noop"], &[], &ResumeOpts::default()).unwrap();
+        // Real-equal on disk: the file still records the fresh run
+        // (favorites present) with an empty mergelist -- and the stale
+        // entry is gone. Readers treat an empty list as nothing to
+        // resume (`parse_section` maps it to `None`), so behaviour
+        // matches real's "nothing left to merge" too.
+        let content = std::fs::read_to_string(mtimedb_path(&root)).expect("mtimedb written");
+        assert!(
+            !content.contains("stale-9.9"),
+            "no stale 1-item resume may survive: {content}"
+        );
+        assert!(
+            content.contains("dev-libs/noop"),
+            "the fresh run's favorites are recorded: {content}"
+        );
+        assert!(read_resume_list(&root).is_none());
         let _ = std::fs::remove_dir_all(&root);
     }
 }
