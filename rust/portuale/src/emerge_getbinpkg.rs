@@ -439,10 +439,46 @@ pub(crate) fn merge_one_binary_entry(
             path
         }
         None => {
-            return Err(format!(
-                "{cp}-{version}: no binpkg file under {}",
-                pkgdir.display()
-            ));
+            // Real `_emerge/BinpkgVerifier._start`'s `os.stat` failure
+            // arm (backlog #187): the `>>> Emerging binary` line above
+            // already printed (real's scheduler prints it before the
+            // verifier runs), so what remains is the verifier's own
+            // output -- to stdout AND the package `build.log` (real
+            // `SchedulerInterface.output(msg, log_path)` appends to
+            // both), plus real's `>>> Failed to emerge ...` tail (the
+            // same `failed_pkg_msg` + `build_log_path` machinery the
+            // digest arm reuses; the log holds exactly this block).
+            // `local_index_lists_cpv` is real's own branch condition
+            // (`bintree.dbapi.cpv_exists`, `BinpkgVerifier.py:48`).
+            let cpv = format!("{cp}-{version}");
+            let block = missing_binpkg_block(
+                &cpv,
+                local_index_lists_cpv(
+                    pkgdir,
+                    &entry.category,
+                    &entry.package,
+                    &version,
+                    entry.build_id.as_deref(),
+                ),
+            );
+            let log_path = crate::emerge_build::build_log_path(
+                portage_tmpdir,
+                &entry.category,
+                &entry.package,
+                &version,
+                &crate::emerge_build::resolved_features(merge_options),
+            );
+            let log_ready = log_path
+                .parent()
+                .is_some_and(|dir| std::fs::create_dir_all(dir).is_ok())
+                && std::fs::write(&log_path, block.as_bytes()).is_ok()
+                && std::fs::metadata(&log_path).is_ok_and(|st| st.len() > 0);
+            print!("{block}");
+            print!(
+                "{}",
+                failed_pkg_msg(&cpv, root, log_ready.then_some(log_path.as_path()))
+            );
+            return Err(binpkg_missing_failure(&cpv));
         }
     };
 
@@ -591,6 +627,76 @@ pub(crate) fn binpkg_digest_failure(cpv: &str) -> String {
 /// the normal tail, so only a lone single-line failure matches.
 pub(crate) fn is_binpkg_digest_failure(e: &str) -> bool {
     !e.contains('\n') && e.ends_with(": binpkg digest verification failed")
+}
+
+/// Real `_emerge/BinpkgVerifier._start`'s `os.stat` ENOENT text
+/// (`BinpkgVerifier.py:40-60`, backlog #187), as one block (each line
+/// `\n`-terminated, no surrounding blanks -- the bed oracle's bytes):
+/// the stale-index arm when the cpv is still in the `<pkgdir>/Packages`
+/// index (the file was removed without refreshing it), else real's
+/// `!!! Fetching Binary failed` arm. Pure shaper, for tests and the
+/// `build.log` write alike.
+pub(crate) fn missing_binpkg_block(cpv: &str, index_lists_cpv: bool) -> String {
+    if index_lists_cpv {
+        format!(
+            "!!! Tried to use non-existent binary for '{cpv}'\n\
+             !!! Likely caused by an outdated index. Run 'emaint binhost -f'.\n"
+        )
+    } else {
+        format!("!!! Fetching Binary failed for '{cpv}'\n")
+    }
+}
+
+/// Real `bintree.dbapi.cpv_exists` as `BinpkgVerifier._start` consults
+/// it (`BinpkgVerifier.py:48`): does the local `<pkgdir>/Packages`
+/// index still list this cpv. The narrowing mirrors
+/// [`local_index_record`] minus the basename tie-break (there is no
+/// file to name it after) -- with several same-`CPV` stanzas (multi-
+/// instance `BUILD_ID`s) the entry's `BUILD_ID` picks.
+fn local_index_lists_cpv(
+    pkgdir: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+    build_id: Option<&str>,
+) -> bool {
+    let cpv = format!("{category}/{package}-{version}");
+    let mut candidates = portage_repo::read_packages_index(pkgdir)
+        .into_iter()
+        .filter(|e| e.get("CPV").is_some_and(|c| c == &cpv))
+        .peekable();
+    if candidates.peek().is_none() {
+        return false;
+    }
+    if let Some(want) = build_id.filter(|s| !s.is_empty()) {
+        let narrowed: Vec<_> = candidates
+            .filter(|e| e.get("BUILD_ID").is_some_and(|b| b == want))
+            .collect();
+        // A `BUILD_ID` that matches nothing still leaves the plain
+        // `CPV` hit: real's `cpv_exists` passes a plain string, which
+        // `_instance_key_multi_instance` resolves to the latest
+        // instance (`virtual.py:53-68`) -- any surviving instance
+        // keeps it true.
+        if !narrowed.is_empty() {
+            return true;
+        }
+    }
+    true
+}
+
+/// The error for a merge-time missing binpkg file whose real output
+/// (the `missing_binpkg_block` text + `failed_pkg_msg`) is already
+/// printed: the CLI boundary must exit 1 WITHOUT a resume-list notice
+/// or an `emerge:` line (real exits a merge failure via `FAILURE`,
+/// exactly like the digest arm).
+pub(crate) fn binpkg_missing_failure(cpv: &str) -> String {
+    format!("{cpv}: non-existent binary package")
+}
+
+/// Whether `e` is exactly one `binpkg_missing_failure` (same lone-
+/// failure shape as [`is_binpkg_digest_failure`]).
+pub(crate) fn is_binpkg_missing_failure(e: &str) -> bool {
+    !e.contains('\n') && e.ends_with(": non-existent binary package")
 }
 
 /// The `<pkgdir>/Packages` index record vouching for a local binpkg
@@ -1084,6 +1190,126 @@ mod tests {
         );
         // Clean root: nothing unpacked, no vdb entry, no merge marker.
         assert!(!root.join("var/db/pkg/dev-libs/gpkgreadpkg-1.0").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn merge_one_binary_entry_aborts_a_stale_index_binary_like_real() {
+        // Backlog #187, end to end at the merge boundary: the bed's
+        // F3a shape (`l32/faultpkg` removed from `$PKGDIR`, its
+        // `Packages` stanza kept). Real selects the indexed binary
+        // (trusted index, `bintree._populate_local(reindex=False)`)
+        // and fails at merge: `BinpkgVerifier._start` stats the
+        // missing file, finds the cpv still in the dbapi
+        // (`cpv_exists`), and prints `!!! Tried to use non-existent
+        // binary for '<cpv>'` + `!!! Likely caused by an outdated
+        // index. Run 'emaint binhost -f'.` to stdout AND the package
+        // `build.log`, followed by real's `>>> Failed to emerge
+        // <cpv>[ for <root>][, Log file:]` tail (`Scheduler.py`,
+        // byte-pinned by `failed_pkg_msg_matches_real_failed_pkg_msg_bytes`).
+        // The `>>>` lines go to stdout (pinned by the pmtest contract
+        // test); the `Err` is the silent `binpkg_missing_failure`
+        // sentinel, so the CLI boundary adds no resume notice or
+        // `emerge:` line -- rc 1 with a clean root. Portuale used to
+        // fail here with its own `no binpkg file under ...` error.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let pkgdir = tmp.join("pkgdir");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(pkgdir.join("dev-libs")).unwrap();
+        // No binpkg file on disk at all -- only the stale stanza,
+        // exactly like the bed's `$nopkg` after `find -delete`.
+        std::fs::write(
+            pkgdir.join("Packages"),
+            "TIMESTAMP: 0\n\nCPV: dev-libs/packagepkg-1.0\nSLOT: 0\nSIZE: 12345\n_mtime_: 1\nPATH: dev-libs/packagepkg-1.0.tbz2\n",
+        )
+        .unwrap();
+
+        // The scan half of the same shape: the removed file's stanza
+        // rejoins the pool, so resolution can select the binary.
+        let scanned = crate::binpkg::populate_local_pkgdir(&pkgdir).expect("scan succeeds");
+        assert_eq!(scanned.len(), 1, "{scanned:?}");
+        assert_eq!(
+            scanned[0].get("CPV").map(String::as_str),
+            Some("dev-libs/packagepkg-1.0")
+        );
+
+        let pt = tmp.join("pt");
+        let entry = graph_entry("packagepkg", CandidateSource::Binary, "1.0");
+        let err = merge_one_binary_entry(
+            &entry,
+            &Config::default(),
+            &root,
+            &pkgdir,
+            &pt,
+            &MergeOptions::default(),
+            mrg_director::MergeProgress::single(),
+        )
+        .expect_err("a stale-index binary must fail at merge, not fall back");
+        assert_eq!(
+            err, "dev-libs/packagepkg-1.0: non-existent binary package",
+            "{err}"
+        );
+        assert!(
+            is_binpkg_missing_failure(&err),
+            "the CLI boundary must recognize the silent sentinel"
+        );
+        // Real `SchedulerInterface.output(msg, log_path)`: the two
+        // `!!!` lines land in the package `build.log` too, non-empty
+        // so real `_locate_failure_log` reports it -- byte for byte
+        // real's `BinpkgVerifier.py:50-51` text.
+        let log = pt.join("portage/dev-libs/packagepkg-1.0/temp/build.log");
+        let logged = std::fs::read_to_string(&log).unwrap_or_default();
+        assert_eq!(
+            logged,
+            "!!! Tried to use non-existent binary for 'dev-libs/packagepkg-1.0'\n\
+             !!! Likely caused by an outdated index. Run 'emaint binhost -f'.\n",
+            "build.log holds real's stale-index pair: {log:?}"
+        );
+        // Clean root: nothing unpacked, no vdb entry, no merge marker.
+        assert!(!root.join("var/db/pkg/dev-libs/packagepkg-1.0").exists());
+        assert!(!root.join("usr/share/packagepkg/hello.txt").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn merge_one_binary_entry_reports_fetching_failed_without_an_index_stanza() {
+        // Backlog #187: real's other `BinpkgVerifier._start` ENOENT arm
+        // (`BinpkgVerifier.py:57`) -- the cpv is NOT in the index
+        // (`cpv_exists` false), so the text is `!!! Fetching Binary
+        // failed for '<cpv>' instead of the stale-index pair. Same
+        // stdout + `build.log` + `>>> Failed to emerge ...` tail and
+        // the same silent sentinel as the stale arm.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let pkgdir = tmp.join("pkgdir");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(pkgdir.join("dev-libs")).unwrap();
+
+        let pt = tmp.join("pt");
+        let entry = graph_entry("packagepkg", CandidateSource::Binary, "1.0");
+        let err = merge_one_binary_entry(
+            &entry,
+            &Config::default(),
+            &root,
+            &pkgdir,
+            &pt,
+            &MergeOptions::default(),
+            mrg_director::MergeProgress::single(),
+        )
+        .expect_err("a stanza-less missing binary must fail at merge");
+        assert_eq!(
+            err, "dev-libs/packagepkg-1.0: non-existent binary package",
+            "{err}"
+        );
+        assert!(is_binpkg_missing_failure(&err));
+        let log = pt.join("portage/dev-libs/packagepkg-1.0/temp/build.log");
+        let logged = std::fs::read_to_string(&log).unwrap_or_default();
+        assert_eq!(
+            logged, "!!! Fetching Binary failed for 'dev-libs/packagepkg-1.0'\n",
+            "build.log holds real's fetching-failed line: {log:?}"
+        );
+        assert!(!root.join("var/db/pkg/dev-libs/packagepkg-1.0").exists());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -2379,6 +2605,10 @@ mod tests {
         // false`, `build_id: None`, exactly like `resume_entry`.
         let entry = graph_entry("binpkgrmpkg", CandidateSource::Binary, "1.0");
         assert!(!entry.remote_binary);
+        // No local stanza vouches for it (empty `$PKGDIR`), so the
+        // failure is real's `!!! Fetching Binary failed` arm
+        // (`BinpkgVerifier.py:57`, backlog #187) -- never a refetch,
+        // and never portuale's old `no binpkg file under ...` text.
         let err = merge_one_binary_entry(
             &entry,
             &config,
@@ -2390,8 +2620,12 @@ mod tests {
         )
         .expect_err("a resumed binary with no local file must fail, not refetch");
         assert!(
-            err.contains("no binpkg file under"),
-            "local-only error, got: {err}"
+            is_binpkg_missing_failure(&err),
+            "silent missing-file sentinel, got: {err}"
+        );
+        assert!(
+            !err.contains("no binpkg file under"),
+            "portuale's own wording is gone, got: {err}"
         );
         assert!(
             !err.contains("binhost"),

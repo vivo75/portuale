@@ -1582,6 +1582,21 @@ fn extract_gpkg_member(gpkg_path: &Path, want: &str, dest: &Path) -> Result<(), 
     ])
 }
 
+/// The parsed `<pkgdir>/Packages` pool one `$PKGDIR` file scan
+/// vouches files against: the basename lookup, the stanzas behind it,
+/// and which stanzas the walk consumed (the leftovers are the
+/// removed-file candidates for the stale-index re-injection, backlog
+/// #187). One struct so the per-file scan stays under the
+/// argument-count lint.
+struct IndexVouch<'a> {
+    /// `PATH` basename -> stanza indices into `stanzas`.
+    by_basename: HashMap<&'a str, Vec<usize>>,
+    /// The parsed `<pkgdir>/Packages` stanzas.
+    stanzas: &'a [HashMap<String, String>],
+    /// Stanza indices the walk consumed, parallel to `stanzas`.
+    vouched: &'a mut [bool],
+}
+
 /// Real `bintree._populate_local`'s own behavior, both halves: walk
 /// `pkgdir` for binpkg *files* and synthesize one `Packages`-style
 /// entry per file from its own embedded metadata
@@ -1639,6 +1654,21 @@ fn extract_gpkg_member(gpkg_path: &Path, want: &str, dest: &Path) -> Result<(), 
 /// callers rely on that), so the reported reason strips the leading
 /// `'<path>: '` to keep real's one-path shape.
 ///
+/// A `<pkgdir>/Packages` stanza no file on disk answers to (the file
+/// was removed without refreshing the index) is re-injected verbatim
+/// (backlog #187): that is real's own default too --
+/// `FEATURES=pkgdir-index-trusted` runs `_populate_local` with
+/// `reindex=False`, which `cpv_inject`s every stanza without stating
+/// any file (`bintree.py:1057-1064`) and leaves the failure to
+/// merge-time `BinpkgVerifier` -- so the resolver still selects the
+/// binary and the merge aborts with real's `!!! Tried to use
+/// non-existent binary` pair instead of silently falling back to the
+/// ebuild. Only stanzas whose `PATH` names no live file inject (a
+/// present file was already consumed by the walk above, so every
+/// existing-file behavior is unchanged), and only stanzas carrying a
+/// `CPV` (without one there is no candidate to select; real's own
+/// `_pkg_str` needs it too).
+///
 /// v1 cut: the old flat `<pkgdir>/All/<pf>.tbz2` layout (real's own
 /// `mydir != "All"` fallback) is not walked. A *misnamed* multi-instance
 /// file (one whose `<pf>-<id>` stem disagrees with its embedded `PF`, or
@@ -1646,14 +1676,23 @@ fn extract_gpkg_member(gpkg_path: &Path, want: &str, dest: &Path) -> Result<(), 
 /// `invalid_name`/`name_split` `continue`.
 pub fn populate_local_pkgdir(pkgdir: &Path) -> Result<Vec<HashMap<String, String>>, String> {
     let existing = portage_repo::read_packages_index(pkgdir);
-    let mut by_basename: HashMap<&str, Vec<&HashMap<String, String>>> = HashMap::new();
-    for e in &existing {
+    let mut by_basename: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (i, e) in existing.iter().enumerate() {
         if let Some(path) = e.get("PATH")
             && let Some(basename) = Path::new(path).file_name().and_then(|n| n.to_str())
         {
-            by_basename.entry(basename).or_default().push(e);
+            by_basename.entry(basename).or_default().push(i);
         }
     }
+    // Which `existing` stanzas the file walk consumes (fast-path or
+    // index-vouched reuse below); the rest are orphan candidates for
+    // the stale-index re-injection.
+    let mut vouched = vec![false; existing.len()];
+    let mut vouch = IndexVouch {
+        by_basename,
+        stanzas: &existing,
+        vouched: &mut vouched,
+    };
 
     // Real's own caller (`bintree.py:1185-1199`): `Invalid` files are
     // reported with real's exact message shape and skipped; `Fatal` ones
@@ -1700,7 +1739,7 @@ pub fn populate_local_pkgdir(pkgdir: &Path) -> Result<Vec<HashMap<String, String
                     let path_field = format!("{category}/{name}/{mname}");
                     let Some(e) = record(
                         &mfile,
-                        scan_binpkg_file(&mfile, mname, category, path_field, &by_basename, true),
+                        scan_binpkg_file(&mfile, mname, category, path_field, &mut vouch, true),
                     )?
                     else {
                         continue;
@@ -1721,11 +1760,41 @@ pub fn populate_local_pkgdir(pkgdir: &Path) -> Result<Vec<HashMap<String, String
             let path_field = format!("{category}/{name}");
             if let Some(e) = record(
                 &entry,
-                scan_binpkg_file(&entry, name, category, path_field, &by_basename, false),
+                scan_binpkg_file(&entry, name, category, path_field, &mut vouch, false),
             )? {
                 out.push(e);
             }
         }
+    }
+    // Backlog #187 -- the stale-index half of real's `reindex=False`
+    // (see this function's own doc comment): every never-vouched
+    // stanza whose `PATH` names no live file is a removed binpkg real
+    // still selects, so it rejoins the pool verbatim here instead of
+    // vanishing into an ebuild fallback.
+    for (i, stanza) in existing.iter().enumerate() {
+        if vouch.vouched[i] {
+            continue;
+        }
+        let Some(cpv) = stanza.get("CPV").filter(|c| !c.is_empty()) else {
+            continue;
+        };
+        // Real defaults a PATH-less stanza to `<cpv>.tbz2`
+        // (`bintree.py:1047-1055`); either way, a live file there was
+        // already consumed by the walk above, so only the missing half
+        // injects -- every existing-file behavior is unchanged.
+        let rel = stanza
+            .get("PATH")
+            .filter(|p| !p.is_empty())
+            .cloned()
+            .unwrap_or_else(|| format!("{cpv}.tbz2"));
+        if pkgdir.join(&rel).is_file() {
+            continue;
+        }
+        let mut entry = stanza.clone();
+        entry
+            .entry("PATH".to_string())
+            .or_insert_with(|| rel.clone());
+        out.push(entry);
     }
     out.sort_by(|a, b| a.get("CPV").cmp(&b.get("CPV")));
     Ok(out)
@@ -1737,7 +1806,9 @@ pub fn populate_local_pkgdir(pkgdir: &Path) -> Result<Vec<HashMap<String, String
 /// unchanged `<pkgdir>/Packages` entry (matched by basename, with
 /// `_mtime_` and `SIZE` still agreeing -- real's "avoid reading the
 /// xpak if possible") when one exists, else parses the archive's own
-/// embedded metadata. `multi_instance` selects the naming contract: when set, the
+/// embedded metadata. `vouch` carries the index pool and records each
+/// consumed stanza (see [`IndexVouch`]). `multi_instance` selects the
+/// naming contract: when set, the
 /// file is `<pf>-<build_id>.{xpak,gpkg.tar}` with `PF` taken from the
 /// archive and `BUILD_ID` from the filename; when clear, it is
 /// `<pf>.{tbz2,gpkg.tar}`.
@@ -1746,7 +1817,7 @@ fn scan_binpkg_file(
     basename: &str,
     category: &str,
     path_field: String,
-    by_basename: &HashMap<&str, Vec<&HashMap<String, String>>>,
+    vouch: &mut IndexVouch<'_>,
     multi_instance: bool,
 ) -> Result<Option<HashMap<String, String>>, BinpkgError> {
     let is_gpkg = basename.ends_with(".gpkg.tar");
@@ -1765,16 +1836,18 @@ fn scan_binpkg_file(
     let mtime = file_mtime(&st);
     let size = st.len();
 
-    if let Some(candidates) = by_basename.get(basename)
-        && let Some(&hit) = candidates.iter().find(|d| {
+    if let Some(candidates) = vouch.by_basename.get(basename)
+        && let Some(hit) = candidates.iter().copied().find(|&i| {
+            let d = &vouch.stanzas[i];
             d.get("_mtime_").and_then(|m| m.parse::<i64>().ok()) == Some(mtime)
                 && d.get("SIZE").and_then(|s| s.parse::<u64>().ok()) == Some(size)
                 && d.contains_key("CPV")
                 && d.contains_key("SLOT")
         })
     {
-        let mut entry = hit.clone();
+        let mut entry = vouch.stanzas[hit].clone();
         entry.insert("PATH".to_string(), path_field);
+        vouch.vouched[hit] = true;
         return Ok(Some(entry));
     }
 
@@ -1800,15 +1873,17 @@ fn scan_binpkg_file(
     // behavior: parse the container now, rejecting it at scan when its
     // metadata can't be read (real's own `PortagePackageException` /
     // `SignatureException` arm, `bintree.py:1185-1199`).
-    if let Some(candidates) = by_basename.get(basename)
-        && let Some(&hit) = candidates.iter().find(|d| {
+    if let Some(candidates) = vouch.by_basename.get(basename)
+        && let Some(hit) = candidates.iter().copied().find(|&i| {
+            let d = &vouch.stanzas[i];
             d.contains_key("CPV")
                 && d.get("CPV")
                     .is_some_and(|cpv| cpv.starts_with(&format!("{category}/")))
         })
     {
-        let mut entry = hit.clone();
+        let mut entry = vouch.stanzas[hit].clone();
         entry.insert("PATH".to_string(), path_field);
+        vouch.vouched[hit] = true;
         return Ok(Some(entry));
     }
 
@@ -3741,6 +3816,79 @@ mod tests {
                 "stanza {cpv} must vouch for its own category's file"
             );
         }
+    }
+
+    #[test]
+    fn populate_local_pkgdir_reinjects_a_removed_files_index_stanza() {
+        // Backlog #187 (the bed's F3a shape): the local `Packages`
+        // still lists a binary whose file was removed, while a
+        // sibling binpkg is still on disk. Real trusts the index
+        // under its default `FEATURES=pkgdir-index-trusted`
+        // (`_populate_local(reindex=False)` `cpv_inject`s every
+        // stanza without stating any file, `bintree.py:1057-1064`),
+        // so the removed package stays a selectable binary and only
+        // fails at merge (`BinpkgVerifier`). Portuale's file-driven
+        // scan used to drop the orphan outright -- and with any other
+        // file present the non-empty scan shadowed the raw-index
+        // fallback too, so the resolver silently fell back to the
+        // ebuild (rc 0) where real aborts (rc 1). The orphan must
+        // rejoin the pool verbatim (`PATH` as the index claims it),
+        // while the surviving file keeps its fast-path entry.
+        let scratch = ScratchDir::new("index-orphan-stale").unwrap();
+        let pkgdir = scratch.path();
+        let cat_dir = pkgdir.join("dev-libs");
+        fs::create_dir_all(&cat_dir).unwrap();
+        let real_tbz2 = fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2");
+        let dest = cat_dir.join("packagepkg-1.0.tbz2");
+        fs::copy(&real_tbz2, &dest).unwrap();
+        let st = fs::metadata(&dest).unwrap();
+        let real_size = st.len();
+        let real_mtime = file_mtime(&st);
+        fs::write(
+            pkgdir.join("Packages"),
+            format!(
+                "TIMESTAMP: 0\n\
+                 \n\
+                 CPV: dev-libs/gonepkg-1.0\nSLOT: 0\nSIZE: 12345\n_mtime_: 1\nPATH: dev-libs/gonepkg-1.0.tbz2\n\
+                 \n\
+                 CPV: dev-libs/packagepkg-1.0\nSLOT: 0\nSIZE: {real_size}\n_mtime_: {real_mtime}\nPATH: dev-libs/packagepkg-1.0.tbz2\n"
+            ),
+        )
+        .unwrap();
+        let entries = populate_local_pkgdir(pkgdir).expect("scan succeeds");
+        assert_eq!(entries.len(), 2, "{entries:?}");
+        // `CPV`-sorted: the orphan sorts first.
+        assert_eq!(
+            entries[0].get("CPV").map(String::as_str),
+            Some("dev-libs/gonepkg-1.0")
+        );
+        assert_eq!(
+            entries[0].get("PATH").map(String::as_str),
+            Some("dev-libs/gonepkg-1.0.tbz2"),
+            "the orphan keeps the index PATH verbatim"
+        );
+        assert_eq!(
+            entries[1].get("CPV").map(String::as_str),
+            Some("dev-libs/packagepkg-1.0")
+        );
+
+        // The lone-orphan shape (no file on disk at all): the scan
+        // still yields the stanza -- the pool never degrades to "no
+        // binary".
+        fs::remove_file(&dest).unwrap();
+        fs::write(
+            pkgdir.join("Packages"),
+            "TIMESTAMP: 0\n\
+             \n\
+             CPV: dev-libs/gonepkg-1.0\nSLOT: 0\nSIZE: 12345\n_mtime_: 1\nPATH: dev-libs/gonepkg-1.0.tbz2\n",
+        )
+        .unwrap();
+        let entries = populate_local_pkgdir(pkgdir).expect("scan succeeds");
+        assert_eq!(entries.len(), 1, "{entries:?}");
+        assert_eq!(
+            entries[0].get("CPV").map(String::as_str),
+            Some("dev-libs/gonepkg-1.0")
+        );
     }
 
     #[test]
