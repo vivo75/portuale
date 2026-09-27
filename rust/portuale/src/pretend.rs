@@ -12533,9 +12533,13 @@ pub fn run(args: &[String]) -> ExitCode {
     // every other portuale notice row. The `^` marker line mirrors
     // real's operator + version spans (approximation: leading operator
     // chars plus the version token; real derives them from its
-    // collision-reason keys). Silent under `-q`/`--json`/`--columns`
-    // (display-only, like the slot block's own cut).
-    if !result.skipped_updates.is_empty() {
+    // collision-reason keys). Suppressed under `--quiet` unless
+    // `--debug` -- real `_show_missed_update` drops both notice types
+    // then (`depgraph.py:1576-1581`). `--json` never reaches this
+    // block (it returns above); `--columns` has no gate (real shows
+    // the notices regardless of columns: they are not merge-list
+    // rows).
+    if !(quiet && !debug) && !result.skipped_updates.is_empty() {
         println!(
             "WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:"
         );
@@ -12577,9 +12581,10 @@ pub fn run(args: &[String]) -> ExitCode {
     // order like the `WARNING` rows above). Real prefixes the section
     // with one blank line (its slot section already ends with one);
     // the `for <root>` suffix is omitted like every other portuale
-    // notice row, and `-q`/`--json`/`--columns` behave exactly like the
-    // `WARNING` block above (display-only, same standing).
-    if !result.skipped_missing_deps.is_empty() {
+    // notice row. Same `--quiet`-unless-`--debug` gate as the
+    // `WARNING` block above (real drops both types together,
+    // `depgraph.py:1576-1581`); likewise no `--columns` gate.
+    if !(quiet && !debug) && !result.skipped_missing_deps.is_empty() {
         println!();
         println!("!!! The following update(s) have been skipped due to unsatisfied dependencies");
         println!("!!! triggered by backtracking:");

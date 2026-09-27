@@ -18105,9 +18105,10 @@ fn build_residual_slot_conflicts(
 /// whose non-forced instance is removed) and the reverse-pin withhold
 /// (an enforced holdable pin that settles the installed version while a
 /// higher visible candidate exists). Both render through the same
-/// `pretend.rs` block; both are silent under `-q`/`--json`/`--columns`
-/// (display-only data, like the slot notice's own cut -- the rc stays 0
-/// either way since no `SlotConflict` survives).
+/// `pretend.rs` block, suppressed under `--quiet` unless `--debug`
+/// (real `_show_missed_update`, `depgraph.py:1576-1581`); `--json`
+/// returns before the block and `--columns` has no gate. The rc stays
+/// 0 either way since no `SlotConflict` survives).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkippedUpdate {
     pub category: String,
@@ -18834,6 +18835,18 @@ pub(crate) fn constraint_withheld_updates(
 type KeptMissedValue = (String, usize, MaskReason, String, String);
 type KeptMissed = HashMap<(String, String, String), KeptMissedValue>;
 
+/// Backlog #129 (review): row-identity key for
+/// [`collapse_skipped_updates`]'s exact-duplicate pass -- every
+/// [`SkippedUpdate`] field.
+type SkippedUpdateKey = (
+    (String, String, String, String, String, String),
+    Vec<(String, String)>,
+    String,
+    String,
+    bool,
+    Vec<(String, String)>,
+);
+
 /// Backlog #129 (S1): real `_get_missed_updates`
 /// (`lib/_emerge/depgraph.py:1529-1565`) over the settled backtrack
 /// trial state -- `self._dynamic_config._runtime_pkg_mask` (masks
@@ -18868,9 +18881,11 @@ type KeptMissed = HashMap<(String, String, String), KeptMissedValue>;
 ///   shows its full form there, which is its own slice (no renderer
 ///   exists here). Silence preserves current behaviour on those
 ///   un-oracled shapes.
-/// - no cross-source collapse against the direct-solve rows: those keep
-///   their established per-(version, parent) shape (pinned multi-row
-///   for one slot); overlap needs its own oracle before merging.
+/// - cross-source collapse against the direct-solve rows happens at
+///   the call site (`collapse_skipped_updates`, real `:1553-1562`):
+///   per slot only the highest-version rows survive, whichever source
+///   holds them; equal versions all stay (the established
+///   per-(version, parent) shape).
 /// - parents render merge-scheduled (`consumer_installed: false`), the
 ///   `build_slot_conflict` convention -- mask parents are graph pullers.
 pub(crate) fn backtrack_missed_updates(
@@ -19024,6 +19039,58 @@ pub(crate) fn backtrack_missed_updates(
         }
     }
     (skipped, missing)
+}
+
+/// Backlog #129 (review): real `_get_missed_updates` chains
+/// `_runtime_pkg_mask` before `_conflict_missed_update`
+/// (`lib/_emerge/depgraph.py:1533-1536`) and keeps per
+/// `(root, slot_atom)` the highest missed pkg (`:1553-1562`).
+/// Portuale's two `SkippedUpdate` sources -- the backtrack-mask rows
+/// (first-seen order) and the direct-solve/withhold rows (sorted) --
+/// collapse the same way: per `(category, package, slot)` (a single
+/// root, so root is constant) keep only the rows naming the highest
+/// `skipped_version` (`vercmp_ordering`, the same comparison the
+/// derivation uses). Equal versions all stay (the established
+/// one-row-per-parent shape -- real keeps one record per slot with
+/// every parent inside, portuale one row per parent); exact
+/// duplicates collapse to one. Relative order is preserved: mask
+/// rows lead, direct rows follow.
+fn collapse_skipped_updates(rows: Vec<SkippedUpdate>) -> Vec<SkippedUpdate> {
+    let mut best: HashMap<(String, String, String), String> = HashMap::new();
+    for s in &rows {
+        let key = (s.category.clone(), s.package.clone(), s.slot.clone());
+        let replace = match best.get(&key) {
+            Some(kept) => vercmp_ordering(&s.skipped_version, kept) == std::cmp::Ordering::Greater,
+            None => true,
+        };
+        if replace {
+            best.insert(key, s.skipped_version.clone());
+        }
+    }
+    let mut seen: HashSet<SkippedUpdateKey> = HashSet::new();
+    rows.into_iter()
+        .filter(|s| {
+            best.get(&(s.category.clone(), s.package.clone(), s.slot.clone()))
+                .is_some_and(|v| v == &s.skipped_version)
+        })
+        .filter(|s| {
+            seen.insert((
+                (
+                    s.category.clone(),
+                    s.package.clone(),
+                    s.slot.clone(),
+                    s.skipped_version.clone(),
+                    s.skipped_sub_slot.clone(),
+                    s.skipped_repo.clone(),
+                ),
+                s.skipped_use.clone(),
+                s.atom.clone(),
+                s.consumer_cpv.clone(),
+                s.consumer_installed,
+                s.consumer_use.clone(),
+            ))
+        })
+        .collect()
 }
 
 /// Backlog #129 (S1): real `_show_unsatisfied_dep(..., check_backtrack=
@@ -19296,7 +19363,9 @@ pub struct GraphResult {
     /// `WARNING: One or more updates/rebuilds have been skipped due to
     /// a dependency conflict:` (merge list keeps the keeper, the
     /// skipped version does not merge, rc 0). Rendered after the merge
-    /// list by `pretend.rs`; silent under `-q`/`--json`/`--columns`.
+    /// list by `pretend.rs`, suppressed under `--quiet` unless
+    /// `--debug` (real `_show_missed_update`); `--json` returns before
+    /// the block and `--columns` has no gate.
     pub skipped_updates: Vec<SkippedUpdate>,
     /// Backlog #129 (S1): slots real reports through the abbreviated
     /// unsatisfied-dependencies tail (see [`SkippedMissingDep`]).
@@ -25403,16 +25472,18 @@ fn assemble_result(
             .iter()
             .any(|e| e.blockers.iter().any(|b| b.unsolvable))
     {
-        let (mut mask_skipped, mask_missing) =
+        let (mask_skipped, mask_missing) =
             backtrack_missed_updates(&ctx.repos, ctx.root, config, &pass.entries, params);
         // Real chains the mask dict before the handler removals
         // (`:1533-1536`), so mask rows lead in first-seen order and the
         // direct-solve/withhold rows keep their established sorted
         // order behind them. No re-sort: alphabetical would scramble
-        // the mask insertion order real renders in.
-        mask_skipped.append(&mut pass.skipped_updates);
-        pass.skipped_updates = mask_skipped;
-        pass.skipped_updates.dedup();
+        // the mask insertion order real renders in. Both sources
+        // collapse per `(root, slot_atom)` keeping the highest missed
+        // pkg (`:1553-1562`) -- see `collapse_skipped_updates`.
+        let mut combined = mask_skipped;
+        combined.append(&mut pass.skipped_updates);
+        pass.skipped_updates = collapse_skipped_updates(combined);
         skipped_missing_deps = mask_missing;
     }
 
@@ -43487,6 +43558,58 @@ mod tests {
             result.skipped_missing_deps.is_empty(),
             "no abbreviated slots without trial state: {:?}",
             result.skipped_missing_deps
+        );
+    }
+
+    /// Backlog #129 (review minor 3): the two `SkippedUpdate` sources
+    /// (backtrack-mask rows, direct-solve rows) collapse per slot
+    /// keeping the highest missed pkg, like real `_get_missed_updates`
+    /// (`lib/_emerge/depgraph.py:1553-1562`) -- a consecutive `dedup()`
+    /// could not do this. A slot present in both sources renders once,
+    /// at the higher version, whichever source holds it; equal
+    /// versions all stay (one row per parent) and exact duplicates
+    /// collapse to one, with mask rows leading.
+    #[test]
+    fn collapse_skipped_updates_keeps_the_highest_version_per_slot() {
+        fn row(pkg: &str, ver: &str, atom: &str) -> SkippedUpdate {
+            SkippedUpdate {
+                category: "dev-libs".to_string(),
+                package: pkg.to_string(),
+                slot: "0".to_string(),
+                skipped_version: ver.to_string(),
+                skipped_sub_slot: "0".to_string(),
+                skipped_repo: "testrepo".to_string(),
+                skipped_use: Vec::new(),
+                atom: atom.to_string(),
+                consumer_cpv: "dev-libs/consumer-1:0/0::testrepo".to_string(),
+                consumer_installed: false,
+                consumer_use: Vec::new(),
+            }
+        }
+        // Mask source leads (first-seen order), direct source follows.
+        let out = collapse_skipped_updates(vec![
+            row("mgxc", "2", "=dev-libs/mgxc-1"),
+            row("mgfc", "2", "=dev-libs/mgfc-2"),
+            row("mgxc", "1.5", "=dev-libs/mgxc-1.5"),
+            row("mgfc", "3.0", "=dev-libs/mgfc-1"),
+            row("mgfc", "3.0", "=dev-libs/mgfc-1"),
+            row("mgxd", "2", "=dev-libs/mgxd-2"),
+            row("mgxd", "2", "<dev-libs/mgxd-3"),
+        ]);
+        assert_eq!(
+            out.iter()
+                .map(|s| (
+                    s.package.as_str(),
+                    s.skipped_version.as_str(),
+                    s.atom.as_str()
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("mgxc", "2", "=dev-libs/mgxc-1"),
+                ("mgfc", "3.0", "=dev-libs/mgfc-1"),
+                ("mgxd", "2", "=dev-libs/mgxd-2"),
+                ("mgxd", "2", "<dev-libs/mgxd-3"),
+            ]
         );
     }
 
