@@ -1642,6 +1642,10 @@ struct IndexVouch<'a> {
 /// file's own byte size (real `bintree`'s own `st_size`), `REPO` from
 /// the embedded `repository`, `PATH` from the relative path. Entries are
 /// `CPV`-sorted for a deterministic pool order.
+/// `trust_index` is `populate_local_pkgdir`'s own flag: when false
+/// (`FEATURES=-pkgdir-index-trusted`) the stale-vouch arm below is
+/// skipped and a changed file falls through to the fresh parse, real
+/// `_populate_local(reindex=True)` (`bintree.py:1179-1351`).
 ///
 /// A file the reader rejects is split exactly like real's own caller
 /// (`bintree.py:1185-1199`): an `Invalid` file (real's
@@ -1669,12 +1673,36 @@ struct IndexVouch<'a> {
 /// `CPV` (without one there is no candidate to select; real's own
 /// `_pkg_str` needs it too).
 ///
+/// `trust_index` selects real's two `_populate_local` modes (backlog
+/// #199, `bintree.py:936-938`'s own `reindex =
+/// "pkgdir-index-trusted" not in features or force_reindex`): `true`
+/// is the default (`FEATURES=pkgdir-index-trusted`, in real
+/// `make.globals`' own default `FEATURES`) -- the stale-vouch arm
+/// above and the orphan re-injection below stay on, exactly the
+/// long-standing behavior. `false` is
+/// `FEATURES=-pkgdir-index-trusted` (`reindex=True`): only the
+/// `_mtime_`/`SIZE` fast path is trusted, a file whose stat fields no
+/// longer agree is re-parsed from disk (`bintree.py:1179-1351`), and a
+/// stanza with no live file is dropped (`bintree.py:1353-1356`).
+/// Files no stanza covers are parsed from disk in both modes (real's
+/// reindex behavior for them; in trusted mode real never walks at all,
+/// but this scan always walks so a `Packages`-less `$PKGDIR` still
+/// resolves -- the pre-#199 behavior this flag must not change).
+/// Real rewrites a changed `Packages` back under lock
+/// (`populate`'s own second `_populate_local()` +
+/// `_pkgindex_write`, only when a file was added/changed/moved);
+/// portuale never writes it back (recomputed each run -- see
+/// `Config::scanned_binpkgs`), so the flag only shapes the pool.
+///
 /// v1 cut: the old flat `<pkgdir>/All/<pf>.tbz2` layout (real's own
 /// `mydir != "All"` fallback) is not walked. A *misnamed* multi-instance
 /// file (one whose `<pf>-<id>` stem disagrees with its embedded `PF`, or
 /// whose subdir isn't `<pn>`) is skipped, matching real's own
 /// `invalid_name`/`name_split` `continue`.
-pub fn populate_local_pkgdir(pkgdir: &Path) -> Result<Vec<HashMap<String, String>>, String> {
+pub fn populate_local_pkgdir(
+    pkgdir: &Path,
+    trust_index: bool,
+) -> Result<Vec<HashMap<String, String>>, String> {
     let existing = portage_repo::read_packages_index(pkgdir);
     let mut by_basename: HashMap<&str, Vec<usize>> = HashMap::new();
     for (i, e) in existing.iter().enumerate() {
@@ -1739,7 +1767,15 @@ pub fn populate_local_pkgdir(pkgdir: &Path) -> Result<Vec<HashMap<String, String
                     let path_field = format!("{category}/{name}/{mname}");
                     let Some(e) = record(
                         &mfile,
-                        scan_binpkg_file(&mfile, mname, category, path_field, &mut vouch, true),
+                        scan_binpkg_file(
+                            &mfile,
+                            mname,
+                            category,
+                            path_field,
+                            &mut vouch,
+                            true,
+                            trust_index,
+                        ),
                     )?
                     else {
                         continue;
@@ -1760,7 +1796,15 @@ pub fn populate_local_pkgdir(pkgdir: &Path) -> Result<Vec<HashMap<String, String
             let path_field = format!("{category}/{name}");
             if let Some(e) = record(
                 &entry,
-                scan_binpkg_file(&entry, name, category, path_field, &mut vouch, false),
+                scan_binpkg_file(
+                    &entry,
+                    name,
+                    category,
+                    path_field,
+                    &mut vouch,
+                    false,
+                    trust_index,
+                ),
             )? {
                 out.push(e);
             }
@@ -1770,31 +1814,36 @@ pub fn populate_local_pkgdir(pkgdir: &Path) -> Result<Vec<HashMap<String, String
     // (see this function's own doc comment): every never-vouched
     // stanza whose `PATH` names no live file is a removed binpkg real
     // still selects, so it rejoins the pool verbatim here instead of
-    // vanishing into an ebuild fallback.
-    for (i, stanza) in existing.iter().enumerate() {
-        if vouch.vouched[i] {
-            continue;
+    // vanishing into an ebuild fallback. Under
+    // `FEATURES=-pkgdir-index-trusted` (backlog #199, real
+    // `_populate_local(reindex=True)`, `bintree.py:1353-1356`) such a
+    // stanza is dropped instead -- the whole arm is skipped.
+    if trust_index {
+        for (i, stanza) in existing.iter().enumerate() {
+            if vouch.vouched[i] {
+                continue;
+            }
+            let Some(cpv) = stanza.get("CPV").filter(|c| !c.is_empty()) else {
+                continue;
+            };
+            // Real defaults a PATH-less stanza to `<cpv>.tbz2`
+            // (`bintree.py:1047-1055`); either way, a live file there was
+            // already consumed by the walk above, so only the missing half
+            // injects -- every existing-file behavior is unchanged.
+            let rel = stanza
+                .get("PATH")
+                .filter(|p| !p.is_empty())
+                .cloned()
+                .unwrap_or_else(|| format!("{cpv}.tbz2"));
+            if pkgdir.join(&rel).is_file() {
+                continue;
+            }
+            let mut entry = stanza.clone();
+            entry
+                .entry("PATH".to_string())
+                .or_insert_with(|| rel.clone());
+            out.push(entry);
         }
-        let Some(cpv) = stanza.get("CPV").filter(|c| !c.is_empty()) else {
-            continue;
-        };
-        // Real defaults a PATH-less stanza to `<cpv>.tbz2`
-        // (`bintree.py:1047-1055`); either way, a live file there was
-        // already consumed by the walk above, so only the missing half
-        // injects -- every existing-file behavior is unchanged.
-        let rel = stanza
-            .get("PATH")
-            .filter(|p| !p.is_empty())
-            .cloned()
-            .unwrap_or_else(|| format!("{cpv}.tbz2"));
-        if pkgdir.join(&rel).is_file() {
-            continue;
-        }
-        let mut entry = stanza.clone();
-        entry
-            .entry("PATH".to_string())
-            .or_insert_with(|| rel.clone());
-        out.push(entry);
     }
     out.sort_by(|a, b| a.get("CPV").cmp(&b.get("CPV")));
     Ok(out)
@@ -1819,6 +1868,7 @@ fn scan_binpkg_file(
     path_field: String,
     vouch: &mut IndexVouch<'_>,
     multi_instance: bool,
+    trust_index: bool,
 ) -> Result<Option<HashMap<String, String>>, BinpkgError> {
     let is_gpkg = basename.ends_with(".gpkg.tar");
     let ext = if is_gpkg {
@@ -1872,8 +1922,13 @@ fn scan_binpkg_file(
     // the wrong file. A file no stanza vouches for keeps the reindex
     // behavior: parse the container now, rejecting it at scan when its
     // metadata can't be read (real's own `PortagePackageException` /
-    // `SignatureException` arm, `bintree.py:1185-1199`).
-    if let Some(candidates) = vouch.by_basename.get(basename)
+    // `SignatureException` arm, `bintree.py:1185-1199`). With
+    // `trust_index == false` (`FEATURES=-pkgdir-index-trusted`, backlog
+    // #199) this whole arm is off: real `_populate_local(reindex=True)`
+    // re-reads any file the fast path above did not match
+    // (`bintree.py:1179-1351`).
+    if trust_index
+        && let Some(candidates) = vouch.by_basename.get(basename)
         && let Some(hit) = candidates.iter().copied().find(|&i| {
             let d = &vouch.stanzas[i];
             d.contains_key("CPV")
@@ -3163,7 +3218,7 @@ mod tests {
         // (real `_populate_local`'s default `reindex=True`), so entries
         // for these two files are always freshly parsed from disk
         // regardless of what the index claims.
-        let entries = populate_local_pkgdir(&fixture("pkgdir")).expect("scan succeeds");
+        let entries = populate_local_pkgdir(&fixture("pkgdir"), true).expect("scan succeeds");
         let by_cpv: HashMap<&str, &HashMap<String, String>> = entries
             .iter()
             .map(|e| (e.get("CPV").unwrap().as_str(), e))
@@ -3207,12 +3262,16 @@ mod tests {
     #[test]
     fn populate_local_pkgdir_of_a_missing_or_empty_dir_is_empty() {
         assert!(
-            populate_local_pkgdir(Path::new("/nonexistent/pkgdir"))
+            populate_local_pkgdir(Path::new("/nonexistent/pkgdir"), true)
                 .unwrap()
                 .is_empty()
         );
         let scratch = ScratchDir::new("scan-empty").unwrap();
-        assert!(populate_local_pkgdir(scratch.path()).unwrap().is_empty());
+        assert!(
+            populate_local_pkgdir(scratch.path(), true)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     /// Real `_populate_local`'s two classes at the scan boundary
@@ -3236,7 +3295,7 @@ mod tests {
         fs::copy(&invalid, pkgdir.join("dev-libs/invalidpkg-1.0.gpkg.tar")).unwrap();
 
         let entries =
-            populate_local_pkgdir(pkgdir).expect("an invalid file must not abort the scan");
+            populate_local_pkgdir(pkgdir, true).expect("an invalid file must not abort the scan");
         assert_eq!(entries.len(), 1, "{entries:?}");
         assert_eq!(
             entries[0].get("CPV").map(String::as_str),
@@ -3257,7 +3316,8 @@ mod tests {
         );
         fs::copy(&fatal, pkgdir.join("dev-libs/fatalpkg-1.0.gpkg.tar")).unwrap();
 
-        let err = populate_local_pkgdir(pkgdir).expect_err("a fatal file must abort the scan");
+        let err =
+            populate_local_pkgdir(pkgdir, true).expect_err("a fatal file must abort the scan");
         assert!(err.contains("not in the archive"), "{err}");
     }
 
@@ -3702,7 +3762,7 @@ mod tests {
             format!("TIMESTAMP: 0\n\n{trusted}"),
         )
         .unwrap();
-        let entries = populate_local_pkgdir(pkgdir).expect("scan succeeds");
+        let entries = populate_local_pkgdir(pkgdir, true).expect("scan succeeds");
         assert_eq!(entries.len(), 1);
         assert_eq!(
             entries[0].get("SLOT").map(String::as_str),
@@ -3719,7 +3779,7 @@ mod tests {
             real_mtime + 1000
         );
         fs::write(pkgdir.join("Packages"), format!("TIMESTAMP: 0\n\n{stale}")).unwrap();
-        let entries = populate_local_pkgdir(pkgdir).expect("scan succeeds");
+        let entries = populate_local_pkgdir(pkgdir, true).expect("scan succeeds");
         assert_eq!(entries.len(), 1);
         assert_eq!(
             entries[0].get("SLOT").map(String::as_str),
@@ -3763,7 +3823,7 @@ mod tests {
             ),
         )
         .unwrap();
-        let entries = populate_local_pkgdir(pkgdir).expect("scan succeeds");
+        let entries = populate_local_pkgdir(pkgdir, true).expect("scan succeeds");
         assert_eq!(entries.len(), 1, "{entries:?}");
         assert_eq!(
             entries[0].get("CPV").map(String::as_str),
@@ -3804,7 +3864,7 @@ mod tests {
              CPV: cat-b/same-1.0\nSLOT: 0\nSIZE: 17\n_mtime_: 1\nPATH: cat-b/same-1.0.tbz2\n",
         )
         .unwrap();
-        let entries = populate_local_pkgdir(pkgdir).expect("scan succeeds");
+        let entries = populate_local_pkgdir(pkgdir, true).expect("scan succeeds");
         assert_eq!(entries.len(), 2, "{entries:?}");
         for entry in &entries {
             let cpv = entry.get("CPV").map(String::as_str).unwrap_or("");
@@ -3855,7 +3915,7 @@ mod tests {
             ),
         )
         .unwrap();
-        let entries = populate_local_pkgdir(pkgdir).expect("scan succeeds");
+        let entries = populate_local_pkgdir(pkgdir, true).expect("scan succeeds");
         assert_eq!(entries.len(), 2, "{entries:?}");
         // `CPV`-sorted: the orphan sorts first.
         assert_eq!(
@@ -3883,12 +3943,147 @@ mod tests {
              CPV: dev-libs/gonepkg-1.0\nSLOT: 0\nSIZE: 12345\n_mtime_: 1\nPATH: dev-libs/gonepkg-1.0.tbz2\n",
         )
         .unwrap();
-        let entries = populate_local_pkgdir(pkgdir).expect("scan succeeds");
+        let entries = populate_local_pkgdir(pkgdir, true).expect("scan succeeds");
         assert_eq!(entries.len(), 1, "{entries:?}");
         assert_eq!(
             entries[0].get("CPV").map(String::as_str),
             Some("dev-libs/gonepkg-1.0")
         );
+    }
+
+    #[test]
+    fn populate_local_pkgdir_reindex_reparses_a_changed_file() {
+        // Backlog #199: real `_populate_local(reindex=True)` (explicit
+        // `FEATURES=-pkgdir-index-trusted`, `bintree.py:1110-1136`) only
+        // reuses an index stanza whose `_mtime_` *and* `SIZE` still agree
+        // with the live file's `lstat(2)` (and which carries real's
+        // `minimum_keys`); a file whose stat fields changed is re-parsed
+        // from disk (`bintree.py:1179-1351`). So a stale stanza (bogus
+        // `_mtime_`, proven stale by a fabricated SLOT the real archive
+        // does not carry) is trusted verbatim with `trust_index == true`
+        // (backlog #174) but re-derived with `false`: the real SLOT,
+        // SIZE and `_mtime_` come back.
+        let scratch = ScratchDir::new("reindex-changed").unwrap();
+        let pkgdir = scratch.path();
+        let cat_dir = pkgdir.join("dev-libs");
+        fs::create_dir_all(&cat_dir).unwrap();
+        let dest = cat_dir.join("packagepkg-1.0.tbz2");
+        fs::copy(fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"), &dest).unwrap();
+        let st = fs::metadata(&dest).unwrap();
+        let real_size = st.len();
+        let real_mtime = file_mtime(&st);
+        fs::write(
+            pkgdir.join("Packages"),
+            format!(
+                "TIMESTAMP: 0\n\nCPV: dev-libs/packagepkg-1.0\nSLOT: 99-not-the-real-slot\nSIZE: {}\n_mtime_: {}\nPATH: dev-libs/packagepkg-1.0.tbz2\n",
+                real_size + 1,
+                real_mtime + 1000,
+            ),
+        )
+        .unwrap();
+
+        let entries = populate_local_pkgdir(pkgdir, true).expect("scan succeeds");
+        assert_eq!(entries.len(), 1, "{entries:?}");
+        assert_eq!(
+            entries[0].get("SLOT").map(String::as_str),
+            Some("99-not-the-real-slot"),
+            "trusted mode keeps the stale stanza verbatim"
+        );
+
+        let entries = populate_local_pkgdir(pkgdir, false).expect("scan succeeds");
+        assert_eq!(entries.len(), 1, "{entries:?}");
+        assert_eq!(
+            entries[0].get("SLOT").map(String::as_str),
+            Some("0"),
+            "reindex mode re-parses the changed file: {entries:?}"
+        );
+        assert_eq!(
+            entries[0].get("SIZE").map(String::as_str),
+            Some(real_size.to_string()).as_deref(),
+            "reindex mode records the live size, not the stale claim"
+        );
+        assert_eq!(
+            entries[0].get("_mtime_").map(String::as_str),
+            Some(real_mtime.to_string()).as_deref(),
+            "reindex mode records the live mtime, not the stale claim"
+        );
+    }
+
+    #[test]
+    fn populate_local_pkgdir_reindex_drops_a_removed_files_index_stanza() {
+        // Backlog #199: real `_populate_local(reindex=True)` deletes
+        // every index stanza with no live file from the pool
+        // (`bintree.py:1353-1356` -- `del metadata[instance_key]` for an
+        // `instance_key not in pkg_paths`). A stanza whose file was
+        // removed is re-injected verbatim with `trust_index == true`
+        // (backlog #187) but absent with `false`, while the surviving
+        // file's own entry is identical either way.
+        let scratch = ScratchDir::new("reindex-removed").unwrap();
+        let pkgdir = scratch.path();
+        let cat_dir = pkgdir.join("dev-libs");
+        fs::create_dir_all(&cat_dir).unwrap();
+        let dest = cat_dir.join("packagepkg-1.0.tbz2");
+        fs::copy(fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"), &dest).unwrap();
+        let st = fs::metadata(&dest).unwrap();
+        fs::write(
+            pkgdir.join("Packages"),
+            format!(
+                "TIMESTAMP: 0\n\
+                 \n\
+                 CPV: dev-libs/gonepkg-1.0\nSLOT: 0\nSIZE: 12345\n_mtime_: 1\nPATH: dev-libs/gonepkg-1.0.tbz2\n\
+                 \n\
+                 CPV: dev-libs/packagepkg-1.0\nSLOT: 0\nSIZE: {}\n_mtime_: {}\nPATH: dev-libs/packagepkg-1.0.tbz2\n",
+                st.len(),
+                file_mtime(&st),
+            ),
+        )
+        .unwrap();
+
+        let entries = populate_local_pkgdir(pkgdir, true).expect("scan succeeds");
+        assert_eq!(entries.len(), 2, "{entries:?}");
+
+        let entries = populate_local_pkgdir(pkgdir, false).expect("scan succeeds");
+        assert_eq!(entries.len(), 1, "{entries:?}");
+        assert_eq!(
+            entries[0].get("CPV").map(String::as_str),
+            Some("dev-libs/packagepkg-1.0"),
+            "only the surviving file stays: {entries:?}"
+        );
+    }
+
+    #[test]
+    fn populate_local_pkgdir_parses_unindexed_files_in_both_modes() {
+        // Backlog #199: real `_populate_local(reindex=True)` parses every
+        // file the fast path did not match (`bintree.py:1179-1351`), so a
+        // file no stanza covers joins the pool -- and portuale's walk
+        // runs in trusted mode too (unlike real's `reindex=False`, which
+        // never walks; kept so a `Packages`-less `$PKGDIR` still
+        // resolves), so an unindexed file parses identically either way.
+        let scratch = ScratchDir::new("reindex-unindexed").unwrap();
+        let pkgdir = scratch.path();
+        let cat_dir = pkgdir.join("dev-libs");
+        fs::create_dir_all(&cat_dir).unwrap();
+        fs::copy(
+            fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+            cat_dir.join("packagepkg-1.0.tbz2"),
+        )
+        .unwrap();
+        assert!(!pkgdir.join("Packages").exists());
+
+        for trust in [true, false] {
+            let entries = populate_local_pkgdir(pkgdir, trust).expect("scan succeeds");
+            assert_eq!(entries.len(), 1, "trust={trust}: {entries:?}");
+            assert_eq!(
+                entries[0].get("CPV").map(String::as_str),
+                Some("dev-libs/packagepkg-1.0"),
+                "trust={trust}: {entries:?}"
+            );
+            assert_eq!(
+                entries[0].get("SLOT").map(String::as_str),
+                Some("0"),
+                "trust={trust}: parsed from the archive: {entries:?}"
+            );
+        }
     }
 
     #[test]

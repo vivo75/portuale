@@ -7055,6 +7055,43 @@ fn config_features_list(config: &portage_profile::Config) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Real `bintree.populate`'s own `reindex = "pkgdir-index-trusted" not
+/// in self.settings.features or force_reindex` (`bintree.py:936-938`,
+/// backlog #199) for the local `$PKGDIR` scan: `true` means the scan
+/// trusts the `Packages` index (real `_populate_local(reindex=False)`),
+/// `false` means it re-stats and re-reads (`reindex=True`).
+///
+/// Read from the same resolved chain every other resolver-side
+/// `FEATURES` read uses (`config_features_list`, the folded
+/// `make.globals` + profile + `make.conf` + calling-env stack -- so a
+/// `FEATURES=-pkgdir-index-trusted` in `make.conf` or on the calling
+/// env reaches the scan; no new env read here). The fold starts from
+/// real's own default: the token is in real `make.globals`' own default
+/// `FEATURES` (`cnf/make.globals:81`), which real always sources from
+/// the host installation -- while portuale reads `make.globals`
+/// `config_root`-relative, so under a test/fixture root it contributes
+/// nothing. Seeding the default keeps "nothing configured" trusted
+/// (byte-identical to the pre-#199 scan, and what real computes on a
+/// live host); only an explicit `-pkgdir-index-trusted` (or `-*`, real
+/// `resolved_incremental`'s own clear) in the chain, not undone by a
+/// later re-add, distrusts -- exactly when real's folded `features`
+/// would lack the token.
+fn pkgdir_index_trusted(config: &portage_profile::Config) -> bool {
+    let mut trusted = true;
+    if let Some(sources) = config.incremental_sources.get("FEATURES") {
+        for layer in sources {
+            for tok in layer {
+                if tok == "pkgdir-index-trusted" || tok == "+pkgdir-index-trusted" {
+                    trusted = true;
+                } else if tok == "-pkgdir-index-trusted" || tok == "-*" {
+                    trusted = false;
+                }
+            }
+        }
+    }
+    trusted
+}
+
 /// The resolved, merge-time `FEATURES` incremental list, space-joined --
 /// for `MergeOptions::features` (`merge_binpkg`'s `PORTAGE_UPDATE_ENV`
 /// vdb-environment regeneration). Shared with the remote-merge server
@@ -11076,7 +11113,10 @@ pub fn run(args: &[String]) -> ExitCode {
         // `--usepkg` resolve path does further down (that scan runs after
         // this standalone-action dispatch, so `--info` needs its own).
         if info_usepkg {
-            match crate::binpkg::populate_local_pkgdir(Path::new(&config.pkgdir)) {
+            match crate::binpkg::populate_local_pkgdir(
+                Path::new(&config.pkgdir),
+                pkgdir_index_trusted(&config),
+            ) {
                 Ok(entries) if !entries.is_empty() => config.scanned_binpkgs = Some(entries),
                 Ok(_) => {}
                 Err(e) => {
@@ -11503,10 +11543,14 @@ pub fn run(args: &[String]) -> ExitCode {
     // makes local binary candidates eligible, walk `$PKGDIR` for binpkg
     // files and build the pool from each file's own embedded metadata,
     // trusting any already-parsed `<pkgdir>/Packages` entry that
-    // vouches for the file (real's own default: `FEATURES=
+    // vouches for the file under real's own default (`FEATURES=
     // pkgdir-index-trusted` is in real `make.globals`' own default
     // `FEATURES`, so `_populate_local` runs with `reindex=False` and
-    // leaves size/digest verification to merge-time `BinpkgVerifier` --
+    // leaves size/digest verification to merge-time `BinpkgVerifier`;
+    // with `FEATURES=-pkgdir-index-trusted` only the `_mtime_`/`SIZE`
+    // fast path is trusted and stale stanzas are dropped -- backlog
+    // #199, `pkgdir_index_trusted` below threads the resolved
+    // `FEATURES` in).
     // `binpkg::populate_local_pkgdir`'s own doc comment has the full
     // real grounding, backlog #174). Runs unconditionally now,
     // `Packages` present or not -- real portage always walks
@@ -11517,7 +11561,7 @@ pub fn run(args: &[String]) -> ExitCode {
     // `--pretend` still writes nothing.
     if usepkg || usepkgonly {
         let pkgdir_path = Path::new(&config.pkgdir);
-        match crate::binpkg::populate_local_pkgdir(pkgdir_path) {
+        match crate::binpkg::populate_local_pkgdir(pkgdir_path, pkgdir_index_trusted(&config)) {
             Ok(entries) if !entries.is_empty() => config.scanned_binpkgs = Some(entries),
             Ok(_) => {}
             Err(e) => {
