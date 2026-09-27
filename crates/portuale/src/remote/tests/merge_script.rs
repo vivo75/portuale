@@ -154,3 +154,41 @@ fn phase_script_runs_pkg_pretend_from_saved_env() {
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// The merge copy driver applies ownership before restoring the mode
+/// (`chown` then `chmod`), since `chown(2)` clears setuid/setgid even
+/// when owner and group are unchanged.
+// Portage: lib/portage/util/movefile.py, _apply_stat
+#[test]
+fn merge_flow_applies_chown_before_chmod() {
+    for (what, chown, chmod) in [
+        (
+            "obj",
+            "chown --reference \"$src\" \"$tmp\"",
+            "chmod --reference \"$src\" \"$tmp\"",
+        ),
+        (
+            "dir",
+            "chown --reference \"$src\" \"$dest\"",
+            "chmod --reference \"$src\" \"$dest\"",
+        ),
+    ] {
+        for pat in [chown, chmod] {
+            assert_eq!(
+                MERGE_FLOW.matches(pat).count(),
+                1,
+                "{what} branch: `{pat}` must occur exactly once for the order check"
+            );
+        }
+        let chown_pos = MERGE_FLOW
+            .find(chown)
+            .unwrap_or_else(|| panic!("{what} branch lost its chown --reference line"));
+        let chmod_pos = MERGE_FLOW
+            .find(chmod)
+            .unwrap_or_else(|| panic!("{what} branch lost its chmod --reference line"));
+        assert!(
+            chown_pos < chmod_pos,
+            "{what} branch must chown before chmod (chown(2) clears setuid/setgid)"
+        );
+    }
+}

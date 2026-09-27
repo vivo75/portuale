@@ -123,6 +123,133 @@ fn plib_registry_is_not_rewritten_when_nothing_is_preserved() {
     );
 }
 
+/// With no preserved-lib activity, an unrelated non-empty entry's bytes and
+/// mtime stay untouched too, not just the empty-file case above.
+/// Portage: `PreservedLibsRegistry.py`, `store`.
+#[test]
+fn plib_registry_with_an_unrelated_entry_is_not_rewritten_without_preserve_activity() {
+    let tmp = tempdir();
+    let root = tmp.join("root");
+    // A live, still-needed unrelated entry, so every step below is a no-op.
+    std::fs::create_dir_all(root.join("usr/lib")).unwrap();
+    std::fs::create_dir_all(root.join("usr/bin")).unwrap();
+    std::fs::write(root.join("usr/lib/other.so"), b"fake elf").unwrap();
+    std::fs::write(root.join("usr/bin/cprog"), b"fake elf").unwrap();
+    let vdb_consumer = root.join("var/db/pkg/dev-libs/consumer-1.0");
+    std::fs::create_dir_all(&vdb_consumer).unwrap();
+    std::fs::write(vdb_consumer.join("COUNTER"), "1\n").unwrap();
+    std::fs::write(
+        vdb_consumer.join("CONTENTS"),
+        "obj /usr/bin/cprog abc 1\nobj /usr/lib/other.so def 1\n",
+    )
+    .unwrap();
+    std::fs::write(
+        vdb_consumer.join("NEEDED.ELF.2"),
+        "X86_64;/usr/lib/other.so;libother.so.1;;\nX86_64;/usr/bin/cprog;;;libother.so.1\n",
+    )
+    .unwrap();
+    let seed = "{\n\t\"dev-libs/other:0\": [\n\t\t\"dev-libs/other-1.0\",\n\t\t\"9\",\n\t\t[\n\t\t\t\"/usr/lib/other.so\"\n\t\t]\n\t]\n}";
+    std::fs::create_dir_all(plib_registry_path(&root).parent().unwrap()).unwrap();
+    std::fs::write(plib_registry_path(&root), seed).unwrap();
+    // A distinctly old mtime, so any rewrite is observable.
+    let touch = std::process::Command::new("touch")
+        .args([
+            "-d",
+            "2001-02-03 04:05:06",
+            &plib_registry_path(&root).display().to_string(),
+        ])
+        .status()
+        .expect("touch sets the seed mtime");
+    assert!(touch.success());
+    let before_bytes = std::fs::read(plib_registry_path(&root)).unwrap();
+    let before_mtime = std::fs::metadata(plib_registry_path(&root))
+        .unwrap()
+        .modified()
+        .unwrap();
+
+    let vdb = root.join("var/db/pkg/dev-libs/plain-1.0");
+    std::fs::create_dir_all(&vdb).unwrap();
+    std::fs::write(vdb.join("COUNTER"), "3\n").unwrap();
+    let preserved = preserve_libs_on_unmerge(PreserveLibsOnUnmergeArgs {
+        root: &root,
+        category: "dev-libs",
+        pn: "plain",
+        pf: "plain-1.0",
+        slot: "0",
+        contents_text: "obj /usr/lib/plain.so abc 1\n",
+        is_replacement: false,
+    })
+    .unwrap();
+    assert!(preserved.is_empty());
+    let being: BTreeSet<String> = ["/usr/lib/plain.so".to_string()].into_iter().collect();
+    let removed = prune_unused_preserved_libs(PruneUnusedPreservedLibsArgs {
+        root: &root,
+        unmerge_no_replacement: true,
+        being_unmerged: &|p| being.contains(p),
+        exclude_cpvs: &[],
+        replacement_preserved: &BTreeMap::new(),
+        replacement_needed: &[],
+    })
+    .unwrap();
+    assert!(
+        removed.is_empty(),
+        "the still-needed unrelated entry must survive the prune"
+    );
+
+    assert_eq!(
+        std::fs::read(plib_registry_path(&root)).unwrap(),
+        before_bytes,
+        "the registry bytes must not change without preserve activity"
+    );
+    assert_eq!(
+        std::fs::metadata(plib_registry_path(&root))
+            .unwrap()
+            .modified()
+            .unwrap(),
+        before_mtime,
+        "the registry mtime must not change without preserve activity"
+    );
+}
+
+/// An empty registry writes exactly `{}`, no trailing newline.
+/// Portage: `PreservedLibsRegistry.py`, `store`.
+#[test]
+fn plib_registry_empty_serializes_to_exactly_empty_braces() {
+    let tmp = tempdir();
+    // Snapshot `orig_entries` as `load` does, so the now-empty entries
+    // compare changed and `store` rewrites.
+    let mut registry = PlibRegistry {
+        entries: BTreeMap::new(),
+        orig_entries: BTreeMap::new(),
+    };
+    register_preserved_libs(RegisterPreservedLibsArgs {
+        registry: &mut registry,
+        cpv: "dev-libs/foo-1.0",
+        category: "dev-libs",
+        pn: "foo",
+        slot: "0",
+        counter: "5",
+        paths: &["/usr/lib/libfoo.so.1".to_string()],
+    });
+    registry.orig_entries = registry.entries.clone();
+    register_preserved_libs(RegisterPreservedLibsArgs {
+        registry: &mut registry,
+        cpv: "dev-libs/foo-1.0",
+        category: "dev-libs",
+        pn: "foo",
+        slot: "0",
+        counter: "5",
+        paths: &[],
+    });
+    assert!(registry.entries.is_empty());
+    write_plib_registry(&tmp, &registry).expect("write succeeds");
+    let bytes = std::fs::read(plib_registry_path(&tmp)).unwrap();
+    assert_eq!(
+        bytes, b"{}",
+        "an empty registry is exactly `{{}}`, no trailing newline"
+    );
+}
+
 /// A non-empty registry serializes byte-identical to Portage's `json.dumps`
 /// with `ensure_ascii=False`, tab indent and sorted keys.
 /// Portage: `PreservedLibsRegistry.py`, `store`.
@@ -156,6 +283,39 @@ fn plib_registry_serialization_is_byte_identical_to_python_json_dumps() {
         String::from_utf8(bytes).unwrap(),
         expected,
         "registry bytes must match Python json.dumps exactly (no trailing newline)"
+    );
+}
+
+/// Reload rebuilds each entry's paths as regular files first (in stored
+/// order), then symlinks, dropping gone paths.
+/// Portage: `PreservedLibsRegistry.py`, `load`.
+#[test]
+fn plib_registry_reload_orders_regular_files_before_symlinks() {
+    let tmp = tempdir();
+    let root = tmp.join("root");
+    std::fs::create_dir_all(root.join("usr/lib")).unwrap();
+    std::fs::write(root.join("usr/lib/libl32soname.so.1.0.0"), b"fake elf").unwrap();
+    std::os::unix::fs::symlink(
+        "libl32soname.so.1.0.0",
+        root.join("usr/lib/libl32soname.so.1"),
+    )
+    .unwrap();
+    let seed = "{\n\t\"l32/sonamelib:0\": [\n\t\t\"l32/sonamelib-1.0\",\n\t\t\"1\",\n\t\t[\n\t\t\t\"/usr/lib/libl32soname.so.1\",\n\t\t\t\"/usr/lib/libl32soname.so.1.0.0\",\n\t\t\t\"/usr/lib/libl32soname.so.gone\"\n\t\t]\n\t]\n}";
+    std::fs::create_dir_all(plib_registry_path(&root).parent().unwrap()).unwrap();
+    std::fs::write(plib_registry_path(&root), seed).unwrap();
+
+    let registry = read_plib_registry(&root);
+    let (_, _, paths) = registry
+        .entries
+        .get("l32/sonamelib:0")
+        .expect("the entry survives reload");
+    assert_eq!(
+        paths,
+        &vec![
+            "/usr/lib/libl32soname.so.1.0.0".to_string(),
+            "/usr/lib/libl32soname.so.1".to_string(),
+        ],
+        "regular files first, then symlinks; gone paths dropped"
     );
 }
 
