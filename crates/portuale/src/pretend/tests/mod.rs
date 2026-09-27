@@ -404,6 +404,7 @@ mod attrs;
 mod blockers;
 mod conflicts;
 mod env_config;
+mod gates;
 mod json;
 mod news;
 mod prompt;

@@ -8,6 +8,27 @@ pub(crate) fn nothing_to_merge(pretend: bool, show_merge_list: bool, mergecount:
     !pretend && show_merge_list && mergecount == 0
 }
 
+/// Arguments of [`selective_noop_deferred`].
+pub(crate) struct SelectiveNoopDeferredArgs {
+    pub(crate) selective: bool,
+    pub(crate) oneshot_or_onlydeps: bool,
+    pub(crate) has_world_candidates: bool,
+}
+
+/// Whether an empty plan skips the quit message and still rotates the resume
+/// list and records world favorites: a selective run without
+/// `--oneshot`/`--onlydeps` that has a world-candidate favorite. Only
+/// `Scheduler` is skipped.
+// Portage: _emerge/actions.py, action_build
+pub(crate) fn selective_noop_deferred(args: SelectiveNoopDeferredArgs) -> bool {
+    let SelectiveNoopDeferredArgs {
+        selective,
+        oneshot_or_onlydeps,
+        has_world_candidates,
+    } = args;
+    selective && !oneshot_or_onlydeps && has_world_candidates
+}
+
 /// Arguments of [`resolution_header_shown`].
 pub(crate) struct ResolutionHeaderShownArgs {
     pub(crate) ask: bool,
