@@ -676,7 +676,9 @@ directions (`l2-20260914T032915Z`: cross-install 0 unexplained, control
 0/0; #37/#38/#39/#40/#43 all closed). L3–L5 planned in
 `history/real-world-testing.md` §5/§14 and distilled for execution
 into `real-world-testing.md` (§2–§8: controls, triage, L2–L5 designs,
-risks, metrics), are not built:
+risks, metrics). L4 and L5 have since shipped (2026-09-26, #31/#32
+DONE); `l3-core` has run twice more (P17, then P-C3 2026-09-27, #30
+DONE):
 
 - **DONE 2026-09-14 — L2** — portuale as builder: `emerge -b` the L1
   set from source, structural `.gpkg.tar` checks (`gpkg-structure.sh`),
@@ -692,11 +694,12 @@ risks, metrics), are not built:
   portage-vs-portage control pair is 0 unexplained on `l3-smoke`; the
   candidate surfaced four producer classes (two fixed with tests, two
   filed) and `l3-core`/`@system` are not started per the S4 stop rule.
+  `l3-core` has since run twice (P17 `l3-20260925T074707Z`, then P-C3
+  `l3-20260927T080452Z`: candidate 347/345/2, control 0 unexplained)
+  and #30 is DONE 2026-09-27; `@system` still not started.
   `TEST/findings/l3.md`; plan `docs/history/030_L3-source-build-parity.deepseek.md`.
-- **L4** — `mrg` remote merge over SSH (`remote-merge.md` §6).
-- **L5** — lifecycle & failure injection: `-C` / `--depclean` diffs,
-  soname bump → preserved-libs, `CONFIG_PROTECT`, `--resume` after
-  SIGKILL, disk-full / corrupt-archive / binhost-500 fault injection.
+- **DONE 2026-09-26 — L4** — `mrg` remote merge over SSH (`remote-merge.md` §6). Bed shipped: `differential-test-bed/run/l31-remote-merge.sh` (loopback sshd + container ROOT); candidate `l31-20260926T061556Z`, control green; classes filed as #169–#172.
+- **DONE 2026-09-26 — L5** — lifecycle & failure injection: `-C` / `--depclean` diffs, soname bump → preserved-libs, `CONFIG_PROTECT`, `--resume` after SIGKILL, disk-full / corrupt-archive / binhost-500 fault injection. Bed shipped: `differential-test-bed/run/l32-lifecycle.sh` (life-cycle C1–C4 + fault F1–F3); classes filed as #167/#168 and #173–#175.
 
 ### J. Alternate `--solver=` backends (pubgrub / resolvo)
 

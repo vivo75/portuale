@@ -18112,3 +18112,115 @@ shows zero drift. Re-verify the leg count on the branch:
 # from portuale; expect 53
 grep -c "fn run_pass_" rust/portage-repo/src/lib.rs
 ```
+
+## `preserved_libs_registry`: written only on change, empty as `{}`, owned by the post-bump cpv (#167 DONE, 2026-09-27)
+
+Portuale's merge rewrites `/var/lib/portage/preserved_libs_registry` only when the registry actually changes, serializes an empty registry as `{}` with no trailing newline (real `json.dumps(indent="\t", sort_keys=True)`), attributes the entry to the post-bump cpv, and orders preserved paths `.so.1.0.0` before `.so.1`. Verified by gate `l1-20260926T224350Z` and `l32-20260926T230337Z` (SIZE row gone C1–C4+F2, C2 content equal). Re-run the cell:
+
+```sh
+# from ../pmtest; expect the preserved_libs_registry SIZE row gone
+differential-test-bed/run/l32-lifecycle.sh
+```
+
+## `--resume` survives a SIGKILL: the resume list is saved before the first merge (#168 DONE, 2026-09-27)
+
+The resolved plan's resume list (`favorites`/`mergelist`/`myopts`) is persisted into `mtimedb` before the first merge runs (real `Scheduler._save_resume_list`), so a `kill -9` mid-merge still leaves a list `emerge --resume` replays with rc 0. Verified by gate `l1-20260926T224828Z` and the C4 proofs `l32-20260927T052653Z` / `l32-20260927T061016Z` (resume key present, `--resume` rc 0, 0 unexplained). Re-run the cell:
+
+```sh
+# from ../pmtest; expect the C4 resume key present and --resume rc 0
+differential-test-bed/run/l32-lifecycle.sh
+```
+
+## Remote merge keeps setuid/setgid/sticky (#169 DONE, 2026-09-27)
+
+`mrg` unpacks with `tar -xpf` and the merge copy driver re-chmods after chown (chown-after-chmod cleared `S_ISUID`/`S_ISGID`; the non-root receive path stripped all three at extraction). Verified by gate `l1-20260926T223731Z` and `l31-20260926T225952Z` (`[MODE]` rows gone). Re-run the bed:
+
+```sh
+# from ../pmtest; expect the pt-setuid/pt-setgid [MODE] rows gone
+differential-test-bed/run/l31-remote-merge.sh
+```
+
+## Remote `pkg_*` phases export `MERGE_TYPE` (#172 DONE, 2026-09-27)
+
+The remote phase env sets `MERGE_TYPE=binary` next to `EMERGE_FROM` (real `_emerge/Binpkg.py`), so the `porttest/phases` log is the 322-byte `merge_type=binary` shape again. Verified by gate `l1-20260926T224047Z` and `l31-20260926T230107Z` (phase.log SIZE row gone). Re-run the bed:
+
+```sh
+# from ../pmtest; expect phase.log back at 322 bytes
+differential-test-bed/run/l31-remote-merge.sh
+```
+
+## Default `BINPKG_FORMAT` is `gpkg`, obeying the config chain (#173 DONE, 2026-09-27)
+
+The built-in default is now `gpkg` (real `make.globals:43`); a configured `BINPKG_FORMAT` still wins (owner N1). Verified on `main` by `l32-20260926T231851Z` (the F2 row gone). Re-run the cell:
+
+```sh
+# from ../pmtest; expect format-probe.txt to name a .gpkg.tar by default
+differential-test-bed/run/l32-lifecycle.sh
+```
+
+## Truncated binpkgs fail at merge with real's digest block, not at scan (#174 DONE, 2026-09-27)
+
+A truncated local binpkg now stays a candidate through the pool scan and fails at merge with real's `!!! Digest verification failed:` / `Failed on size verification` / `Got` / `Expected` block plus the `._checksum_failure_.<rand>` rename. Verified by gate `l1-20260927T074345Z` and l32 F2 `l32-20260927T074644Z` (0 unexplained, corrupt-merge log byte-equal from the digest block on). Re-run the cell:
+
+```sh
+# from ../pmtest; expect the F2 digest-failure shape and rename
+differential-test-bed/run/l32-lifecycle.sh
+```
+
+## A failed binhost index fetch is non-fatal with fallback to the ebuild (#175 DONE, 2026-09-27)
+
+A 500 from every binhost GET/HEAD now renders real's `!!! [<repo>] Error fetching binhost package info` / `!!! HTTP Error 500` shape instead of the raw wget transcript, and resolution carries on — stale index aborts via `Tried to use non-existent binary`, empty `PKGDIR` builds from source (rc 0). Verified by gate `l1-20260927T065535Z` and l32 F3 `l32-20260927T070047Z` (0 unexplained). Re-run the cell:
+
+```sh
+# from ../pmtest; expect the F3b ebuild fallback to install
+differential-test-bed/run/l32-lifecycle.sh
+```
+
+## Post-emerge GNU info regeneration, full port (#176 DONE, 2026-09-27)
+
+Portuale ports real `chk_updated_info_files` (dir-mtime memo, `install-info` spawn, the `Regenerating GNU info directory index...` output, gated on `noinfo` not in `FEATURES`), so `/usr/share/info/dir` is rebuilt as the running uid/gid instead of surviving with the base image's `1:1`. Verified by gate `l1-20260926T225636Z` and the l3-core `info/dir` OWNER row closing via P-C3. Exercise it directly:
+
+```sh
+# merge any package shipping an info file; expect the regeneration line
+portuale emerge -1 dev-lang/python 2>&1 | grep "Regenerating GNU info directory index"
+```
+
+## Real `(N of M) cpv::repo` progress lines with `Installing` after the build (#177 DONE, 2026-09-27)
+
+A non-pretend merge prints real's `(N of M) <cpv>::<repo>` progress lines and the `Installing` line once the build phase completes, matching real 3.0.82.2's merge display. Verified by gate `l1-20260927T060519Z` and l32 C4 `l32-20260927T061016Z`. Re-run the cell:
+
+```sh
+# from ../pmtest; expect the (N of M) lines and Installing in the C4 log
+differential-test-bed/run/l32-lifecycle.sh
+```
+
+## Direct-solve shadowed instance (enabled, declared) swap (#184 DONE, 2026-09-27)
+
+Surfaced by #166's cluster-6 triage: the direct solver swaps a shadowed installed instance for the enabled, declared one. Verified by the small-case oracle `l0-fx-20260927T073759Z` plus L0 `l0-20260927T073846Z`, both probe-identical to `main`. Re-run the resolver bed:
+
+```sh
+# from ../pmtest; expect a probe-identical finding set
+differential-test-bed/run/l0-resolver.sh
+```
+
+## Track U DONE (2026-09-27): `lib.rs` clusters 2–6 unit-pinned (#162–#166)
+
+The five remaining P7b mutation clusters are pinned by scratch-`ResolveCtx` tests in the #161 style, zero product bytes: cluster 2 pure predicates (portuale `3042fdaf`, 68 killed + 2 equivalent), cluster 3 display assembly (`08ed2ab2`, 74 killed + 1 equivalent + 1 unreachable), cluster 4 masking stack (`9d6483a7`, 73 → 1 equivalent), cluster 5 graph inputs (`92c55577`, 70 killed, 7627:12 timeout inspected not pinned), cluster 6 circular residue (`c5af5193`, 56 → 0 missed, surfaced #184). Re-run the crate suite:
+
+```sh
+# from portuale; the Track U legs live in the crate suite
+cargo test --release -p portage-repo
+```
+
+## P-C3: `l3-core` re-run lands 347/345/2 and #30 is DONE (2026-09-27)
+
+Run `l3-20260927T080452Z` (same knobs, R3) after Track M: candidate 347/345/2 (was 520/346/174) — #157's 169 rows, #158's `awk.1` row and #160's row gone, #176's `info/dir` row gone — control 0 unexplained. The 2 remaining rows are #159-residue-class SIZE rows over tolerated payload (python, icu), folded into the P-Z notes per owner Q1 (no number). Re-verify from the saved snapshots without containers:
+
+```sh
+# from ../pmtest; re-diffs the saved P-C3 control pair, expect 0 unexplained rc 0
+python3 differential-test-bed/compare/diff.py --layer l3 --tolerate-payload \
+  differential-test-bed/logs/l3-20260927T080452Z/control-a \
+  differential-test-bed/logs/l3-20260927T080452Z/control-b \
+  differential-test-bed/compare/known-divergences.yaml | tail -8
+```
+
