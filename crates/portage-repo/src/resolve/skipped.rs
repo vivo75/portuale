@@ -246,6 +246,39 @@ pub(crate) fn collapse_skipped_updates(rows: Vec<SkippedUpdate>) -> Vec<SkippedU
         .collect()
 }
 
+/// Groups rows naming the same missed package into one block, preserving
+/// first-seen group order and row order within.
+pub fn group_skipped_updates(rows: &[SkippedUpdate]) -> Vec<Vec<&SkippedUpdate>> {
+    type MissedPkgKey = (
+        (String, String, String, String, String, String),
+        Vec<(String, String)>,
+    );
+    let key_of = |s: &SkippedUpdate| -> MissedPkgKey {
+        (
+            (
+                s.category.clone(),
+                s.package.clone(),
+                s.slot.clone(),
+                s.skipped_version.clone(),
+                s.skipped_sub_slot.clone(),
+                s.skipped_repo.clone(),
+            ),
+            s.skipped_use.clone(),
+        )
+    };
+    let mut index: HashMap<MissedPkgKey, usize> = HashMap::new();
+    let mut groups: Vec<Vec<&SkippedUpdate>> = Vec::new();
+    for s in rows {
+        let key = key_of(s);
+        if !index.contains_key(&key) {
+            index.insert(key.clone(), groups.len());
+            groups.push(Vec::new());
+        }
+        groups[index[&key]].push(s);
+    }
+    groups
+}
+
 /// Whether `atom` (USE-deps stripped) matches a version the settled backtrack
 /// state still masks: then the missed update renders in the abbreviated tail.
 // Portage: depgraph.py, _show_unsatisfied_dep (check_backtrack probe)

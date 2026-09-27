@@ -2817,6 +2817,7 @@ mod repo_config;
 mod resolver_trace;
 mod result;
 mod rev_dep;
+mod skipped;
 mod slot_conflict;
 mod slot_undo;
 mod unsat_probe;

@@ -78,6 +78,215 @@ pub(crate) fn show_missing_args_and_aborts(
     }
 }
 
+/// Updates skipped for missing dependencies.
+pub(crate) fn show_skipped_missing_deps(quiet: bool, debug: bool, result: &GraphResult) {
+    // The abbreviated tail: slots whose higher masked version lost to an
+    // unsatisfied dependency under backtracking. Same `--quiet`-unless-`--debug`
+    // gate as the `WARNING` block; no `--columns` gate.
+    // Portage: depgraph.py, _show_missed_update_unsatisfied_dep
+    if !(quiet && !debug) && !result.skipped_missing_deps.is_empty() {
+        println!();
+        println!("!!! The following update(s) have been skipped due to unsatisfied dependencies");
+        println!("!!! triggered by backtracking:");
+        println!();
+        for s in &result.skipped_missing_deps {
+            println!("{}/{}:{}", s.category, s.package, s.slot);
+        }
+    }
+
+    // The full per-update form: one block per masked higher version whose
+    // missing atom bites nothing backtrack-masked. Same gate as above;
+    // `--json` returns above, no `--columns` gate.
+    // Portage: depgraph.py, _show_missed_update_unsatisfied_dep
+    if !(quiet && !debug) && !result.skipped_missing_dep_full.is_empty() {
+        for f in &result.skipped_missing_dep_full {
+            println!();
+            println!("!!! The following update has been skipped due to unsatisfied dependencies:");
+            println!();
+            println!("{}/{}:{}", f.category, f.package, f.slot);
+            println!();
+            println!("  selected: {}", f.selected_display);
+            println!(
+                "  skipped: {} (see unsatisfied dependency below)",
+                f.skipped_display
+            );
+            println!();
+            match &f.dep {
+                portage_repo::SkippedDepDisclosure::Masked(report) => {
+                    println!(
+                        "!!! All ebuilds that could satisfy {:?} have been masked.",
+                        report.atom
+                    );
+                    println!(
+                        "!!! One of the following masked packages is required to complete your request:"
+                    );
+                    for (cpv, reasons) in &report.masked {
+                        println!("- {cpv} (masked by: {})", reasons.join(", "));
+                    }
+                    println!();
+                    for (node, ty) in &report.chain {
+                        println!("(dependency required by \"{node}\" [{ty}])");
+                    }
+                    println!("For more information, see the MASKED PACKAGES section in the emerge");
+                    println!("man page or refer to the Gentoo Handbook.");
+                    println!();
+                }
+                portage_repo::SkippedDepDisclosure::Plain(report) => {
+                    println!("emerge: there are no ebuilds to satisfy {:?}.", report.atom);
+                    for (node, ty) in &report.chain {
+                        println!("(dependency required by \"{node}\" [{ty}])");
+                    }
+                    println!();
+                }
+            }
+        }
+    }
+}
+
+/// Updates skipped by slot conflicts or masks.
+pub(crate) fn show_skipped_updates(
+    plan: &ResolvePlan,
+    opts: &EmergeOpts<'_>,
+    result: &GraphResult,
+    root: &Path,
+    repos: &[RepoConfig],
+) {
+    let ResolvePlan {
+        root_deps_running_root,
+        running_config,
+        ..
+    } = plan;
+    let &EmergeOpts { quiet, debug, .. } = opts;
+    // The slot-conflict missed-update block, printed after the merge list
+    // with rc 0. Rows naming the same missed package group into one block.
+    // Each package renders with its effective USE display; destinations
+    // follow the per-node rule (quoted `to '<root>'` iff the node's own
+    // root is not `/`). A top-level `(Argument)` parent renders as the bare
+    // indented arg line with no atom and no marker. Suppressed under
+    // `--quiet` unless `--debug`; `--json` and `--columns` never reach here.
+    // Portage: depgraph.py, _conflict_missed_update
+    if !(quiet && !debug) && !result.skipped_updates.is_empty() {
+        println!(
+            "WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:"
+        );
+        for group in portage_repo::group_skipped_updates(&result.skipped_updates) {
+            let Some(header) = group.first() else {
+                continue;
+            };
+            println!();
+            println!("{}/{}:{}", header.category, header.package, header.slot);
+            println!();
+            // Per-node destination and own-root USE paint, like the missed
+            // line above.
+            let missed_suffix = skipped_node_suffix(
+                header.missed_targets_running_root,
+                root,
+                root_deps_running_root.as_deref(),
+            );
+            let missed_use = if header.missed_targets_running_root
+                && let Some(cfg) = running_config.as_ref()
+            {
+                portage_repo::skipped_update_use_display_for(
+                    repos,
+                    cfg,
+                    &header.category,
+                    &header.package,
+                    &header.skipped_version,
+                )
+            } else {
+                header.skipped_use.clone()
+            };
+            println!(
+                "  ({}/{}-{}:{}/{}::{}, ebuild scheduled for merge{}) {} conflicts with",
+                header.category,
+                header.package,
+                header.skipped_version,
+                header.slot,
+                header.skipped_sub_slot,
+                header.skipped_repo,
+                missed_suffix,
+                render_pkg_use_display(&missed_use),
+            );
+            for s in group.iter() {
+                if s.consumer_cpv.is_empty() {
+                    // The bare command-line argument: no atom and no `^` marker.
+                    // The recorded atom already is that argument text.
+                    // Portage: depgraph.py
+                    println!("    {}", s.atom);
+                    continue;
+                }
+                if s.consumer_installed {
+                    // The installed root is the consumer's own.
+                    // Portage: depgraph.py
+                    let installed_root: &Path = if s.consumer_targets_running_root {
+                        root_deps_running_root.as_deref().unwrap_or(root)
+                    } else {
+                        root
+                    };
+                    println!(
+                        "    {} required by ({}, installed in '{}') {}",
+                        s.atom,
+                        s.consumer_cpv,
+                        installed_root.display(),
+                        render_pkg_use_display(&s.consumer_use),
+                    );
+                } else {
+                    // Per-node destination + own-root USE paint, like above;
+                    // an unparsable cpv keeps the resolve-time paint.
+                    let consumer_suffix = skipped_node_suffix(
+                        s.consumer_targets_running_root,
+                        root,
+                        root_deps_running_root.as_deref(),
+                    );
+                    let consumer_use = if s.consumer_targets_running_root
+                        && let Some(cfg) = running_config.as_ref()
+                        && let Some((cc, cp2, cv)) = s
+                            .consumer_cpv
+                            .split(':')
+                            .next()
+                            .and_then(portage_repo::split_cpv)
+                    {
+                        portage_repo::skipped_update_use_display_for(repos, cfg, &cc, &cp2, &cv)
+                    } else {
+                        s.consumer_use.clone()
+                    };
+                    println!(
+                        "    {} required by ({}, ebuild scheduled for merge{}) {}",
+                        s.atom,
+                        s.consumer_cpv,
+                        consumer_suffix,
+                        render_pkg_use_display(&consumer_use),
+                    );
+                }
+                // The `^` marker spans the operator + version only when the
+                // missed package does not satisfy the version part.
+                // Portage: output.py, highlight_version
+                let version_ok = {
+                    let cpv = format!(
+                        "{}/{}-{}",
+                        header.category, header.package, header.skipped_version
+                    );
+                    let base = portage_dep::without_use(&s.atom);
+                    let base = base.split("::").next().unwrap_or(base);
+                    let base = base.split(':').next().unwrap_or(base);
+                    portage_dep::match_from_list(base, &[cpv.as_str()])
+                        .is_some_and(|m| !m.is_empty())
+                };
+                println!(
+                    "    {}",
+                    skip_conflict_caret_line(
+                        &s.atom,
+                        &header.slot,
+                        &header.skipped_sub_slot,
+                        !version_ok
+                    )
+                );
+            }
+        }
+        println!();
+    }
+}
+
 /// The values [`show_deferred_unsat`] reads from its caller.
 pub(crate) struct ShowDeferredUnsatArgs<'a> {
     pub(crate) plan: &'a ResolvePlan,
