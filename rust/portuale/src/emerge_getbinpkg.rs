@@ -133,14 +133,19 @@ pub fn run_merge_plan(
     buildpkg: Option<&crate::ebuild_package::PackageOptions>,
     buildpkg_exclude: &[String],
 ) -> Result<(), String> {
-    crate::emerge_build::run_merge_loop(entries, keep_going, root, |entry| {
+    // Real `Scheduler._pkg_count` for this run (backlog #177): every
+    // entry below prints its own snapshot of these counters.
+    let progress = crate::emerge_build::merge_progress_map(entries);
+    crate::emerge_build::run_merge_loop(entries, keep_going, root, |idx, entry| {
         // The director seam executes every unit: derive the entry's
         // `MergeUnit` and dispatch on its kind through the real source /
         // binary engines (real `MergeListItem._start`'s own `type_name`
         // routing). An entry with nothing to merge (`AlreadyInstalled` /
         // `NoVisibleCandidate`) stays a silent no-op, exactly the merge
         // functions' own early return.
-        let Some(unit) = crate::merge_engines::merge_unit_for_entry(entry, root) else {
+        let entry_progress = progress[idx];
+        let Some(unit) = crate::merge_engines::merge_unit_for_entry(entry, root, entry_progress)
+        else {
             return Ok(());
         };
         let ctx = mrg_director::MergeContext {
@@ -196,6 +201,7 @@ pub(crate) fn merge_one_binary_entry(
     pkgdir: &Path,
     portage_tmpdir: &Path,
     merge_options: &MergeOptions,
+    progress: mrg_director::MergeProgress,
 ) -> Result<(), String> {
     let cp = format!("{}/{}", entry.category, entry.package);
     let version = match &entry.outcome {
@@ -209,6 +215,15 @@ pub(crate) fn merge_one_binary_entry(
             return Err(format!("no binary package available for {cp}"));
         }
     };
+
+    // Real `MergeListItem._start`'s per-package line for a binary entry
+    // (backlog #177): `Emerging binary (N of M) cpv::repo`. This is the
+    // `>>> Merging binary package ...` line's real shape.
+    let color = crate::emerge_build::progress_color();
+    println!(
+        "{}",
+        crate::emerge_build::emerging_line(entry, &version, progress, root, &color)
+    );
 
     let local = resolve_local_binpkg(
         pkgdir,
@@ -294,7 +309,14 @@ pub(crate) fn merge_one_binary_entry(
         }
     };
 
-    println!(">>> Merging binary package {cp}-{version}...");
+    // Real `PackageMerge._start`'s per-package line (backlog #177):
+    // the binpkg is located/fetched above (real's `Binpkg` chain),
+    // the vdb merge runs below (real's `EbuildMerge` chain) -- this
+    // line lands exactly between them, like real's.
+    println!(
+        "{}",
+        crate::emerge_build::installing_line(entry, &version, progress, root, &color)
+    );
     let mut entry_options;
     let merge_options = match fetched_verify {
         Some(gpg) => {
@@ -308,6 +330,12 @@ pub(crate) fn merge_one_binary_entry(
     if status != 0 {
         return Err(format!("{cp}-{version}: binpkg merge failed ({status})"));
     }
+    // Real `PackageMerge._install_exit`'s per-package line (backlog
+    // #177): `Completed (N of M) cpv::repo`.
+    println!(
+        "{}",
+        crate::emerge_build::completed_line(entry, &version, progress, root, &color)
+    );
     Ok(())
 }
 
@@ -632,6 +660,7 @@ mod tests {
             &pkgdir,
             &tmp.join("pt"),
             &MergeOptions::default(),
+            mrg_director::MergeProgress::single(),
         )
         .expect("multi-instance local gpkg merges");
 
@@ -1703,6 +1732,7 @@ mod tests {
             &pkgdir,
             &tmp.join("pt"),
             &MergeOptions::default(),
+            mrg_director::MergeProgress::single(),
         )
         .expect_err("a resumed binary with no local file must fail, not refetch");
         assert!(

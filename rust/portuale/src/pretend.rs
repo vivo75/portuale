@@ -4977,7 +4977,7 @@ fn run_resume(
                 crate::mtimedb::ResumeEntryKind::Ebuild => portage_repo::CandidateSource::Ebuild,
                 crate::mtimedb::ResumeEntryKind::Binary => portage_repo::CandidateSource::Binary,
             };
-            let mut entry = emerge_build::resume_entry(c, p, v, source);
+            let mut entry = emerge_build::resume_entry(c, p, v, source, &repos);
             // The `mtimedb` resume list records only `cat/pkg-ver`, so the
             // resolver's own `use_flags_display` population is skipped.
             // Recompute it for a source build -- `emerge_build::
@@ -13685,12 +13685,14 @@ mod tests {
             "src-pkg",
             "1.0",
             portage_repo::CandidateSource::Ebuild,
+            &[],
         );
         let binary_entry = emerge_build::resume_entry(
             "dev-libs",
             "bin-pkg",
             "2.0",
             portage_repo::CandidateSource::Binary,
+            &[],
         );
         let entries = vec![source_entry, binary_entry];
 
@@ -13740,12 +13742,14 @@ mod tests {
                 "src-pkg",
                 "1.0",
                 portage_repo::CandidateSource::Ebuild,
+                &[],
             ),
             emerge_build::resume_entry(
                 "dev-libs",
                 "bin-pkg",
                 "2.0",
                 portage_repo::CandidateSource::Binary,
+                &[],
             ),
         ];
         let up_front: Vec<crate::mtimedb::ResumeCpv> = entries
