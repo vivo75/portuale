@@ -221,7 +221,7 @@ use portage_repo::{
     ResolveRequest, SlotConflict, active_resolver_for, all_installed_packages,
     config_root_from_env, ebuild_visible_at, root_from_env, slot_conflict_flag_sets, split_pf,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -5260,6 +5260,8 @@ fn execute_unmerge(
             &portage_tmpdir,
             &options,
             backup.as_ref(),
+            false,
+            &BTreeMap::new(),
         ) {
             eprintln!("emerge: {e}");
             return ExitCode::from(1);
