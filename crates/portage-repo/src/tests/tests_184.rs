@@ -141,3 +141,25 @@ fn direct_solve_instance_use_184_shadowed_reads_tree_effectively() {
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A `[fb(+)]` use-dep is not satisfied by the shadowed instance
+/// (`fb` declared but not enabled).
+#[test]
+fn direct_solve_atom_matches_184_shadowed_rejects_disabled_flag() {
+    let root = dir_184("am-shadowed");
+    let dir = dir_184("am-shadowed-repo");
+    let repos = repo_pkgs_184(&dir, &[("dev-libs/iupkg", "1.0", "0", "+fa fb")]);
+    let config = cfg_184();
+    let replace = BTreeSet::new();
+    let input = iu_input_184(&[], &replace, &root, &repos, &config);
+    let conflict = conflict_184();
+    assert!(!direct_solve_atom_matches(
+        &input,
+        &conflict,
+        0,
+        "dev-libs/iupkg[fb(+)]",
+        false
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&dir);
+}
