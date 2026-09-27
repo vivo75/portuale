@@ -3,6 +3,16 @@
 use crate::*;
 use portage_util::TempDir;
 
+// Shadowed arm: evaluate the atom's USE deps against the package's
+// enabled USE with its IUSE as the valid set.
+// Portage: lib/_emerge/Package.py, with_use; lib/_emerge/depgraph.py
+
+/// Fresh unique scratch dir per test (vdb lives under it, so the
+/// per-root aux caches never see a reused path).
+fn dir_184(tag: &str) -> std::path::PathBuf {
+    TempDir::new(&format!("portuale-184-{tag}")).keep()
+}
+
 /// One scratch ebuild plus a valid md5-cache entry (the md5-cache
 /// validation guard fails otherwise).
 fn write_pkg_184(repo: &Path, cp: &str, pv: &str, slot: &str, iuse: &str) {
@@ -107,4 +117,27 @@ fn conflict_184() -> SlotConflict {
         conflicting_atom: "dev-libs/iupkg".to_string(),
         instances: vec![inst_184("1.0", false)],
     }
+}
+
+/// A shadowed merge instance (no entry, not installed) reads the
+/// tree candidate in `(enabled, declared)` order.
+#[test]
+fn direct_solve_instance_use_184_shadowed_reads_tree_effectively() {
+    let root = dir_184("iu-shadowed");
+    let dir = dir_184("iu-shadowed-repo");
+    let repos = repo_pkgs_184(&dir, &[("dev-libs/iupkg", "1.0", "0", "+fa fb")]);
+    let config = cfg_184();
+    let replace = BTreeSet::new();
+    // No entries: the instance is shadowed (a second instance with
+    // no merge-bound entry of its own).
+    let input = iu_input_184(&[], &replace, &root, &repos, &config);
+    let (enabled, declared) =
+        direct_solve_instance_use(&input, "dev-libs", "iupkg", &inst_184("1.0", false));
+    assert_eq!(enabled, HashSet::from(["fa".to_string()]));
+    assert_eq!(
+        declared,
+        HashSet::from(["fa".to_string(), "fb".to_string()])
+    );
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&dir);
 }
