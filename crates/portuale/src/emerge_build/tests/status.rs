@@ -57,3 +57,77 @@ fn merge_progress_map_counts_only_merging_entries_in_order() {
         ">>> Emerging (2 of 2) dev-libs/same-pkg-1.0::testrepo"
     );
 }
+
+/// The exact progress-line strings, colour escapes included: `ROOT != "/"`
+/// appends ` for {root}` (Emerging) vs ` to {root}` (Installing/Completed).
+/// Expected value from Portage source.
+#[test]
+fn merge_progress_lines_match_portage_exact_text() {
+    use std::path::Path;
+    let plain = crate::color::Colorizer::new(false);
+    let root = Path::new("/");
+    let two_of_three = mrg_director::MergeProgress { cur: 2, max: 3 };
+    let a = source_entry(
+        "a-pkg",
+        PretendOutcome::New {
+            version: "1.0".into(),
+        },
+    );
+    let mut b = source_entry(
+        "b-pkg",
+        PretendOutcome::New {
+            version: "2.0".into(),
+        },
+    );
+    b.source = CandidateSource::Binary;
+
+    // Source, colour off, `ROOT == "/"`: the bare shape.
+    assert_eq!(
+        emerging_line(&a, "1.0", two_of_three, root, &plain),
+        ">>> Emerging (2 of 3) dev-libs/a-pkg-1.0::testrepo"
+    );
+    // Binary: `Emerging binary`, same counters.
+    assert_eq!(
+        emerging_line(&b, "2.0", two_of_three, root, &plain),
+        ">>> Emerging binary (2 of 3) dev-libs/b-pkg-2.0::testrepo"
+    );
+    assert_eq!(
+        installing_line(&a, "1.0", two_of_three, root, &plain),
+        ">>> Installing (2 of 3) dev-libs/a-pkg-1.0::testrepo"
+    );
+    assert_eq!(
+        completed_line(&a, "1.0", two_of_three, root, &plain),
+        ">>> Completed (2 of 3) dev-libs/a-pkg-1.0::testrepo"
+    );
+
+    // `ROOT != "/"`: `for` on Emerging, `to` on Installing/Completed.
+    let alt = Path::new("/altroot");
+    assert_eq!(
+        emerging_line(&a, "1.0", two_of_three, alt, &plain),
+        ">>> Emerging (2 of 3) dev-libs/a-pkg-1.0::testrepo for /altroot"
+    );
+    assert_eq!(
+        installing_line(&a, "1.0", two_of_three, alt, &plain),
+        ">>> Installing (2 of 3) dev-libs/a-pkg-1.0::testrepo to /altroot"
+    );
+    assert_eq!(
+        completed_line(&a, "1.0", two_of_three, alt, &plain),
+        ">>> Completed (2 of 3) dev-libs/a-pkg-1.0::testrepo to /altroot"
+    );
+
+    // Colour on: only the two counters and the `cpv::repo` wear escapes; the
+    // action word, parens, `of`, and `for ROOT` stay plain.
+    let live = crate::color::Colorizer::new(true);
+    assert_eq!(
+        emerging_line(&a, "1.0", two_of_three, root, &live),
+        ">>> Emerging (\x1b[33;01m2\x1b[39;49;00m of \x1b[33;01m3\x1b[39;49;00m) \x1b[32mdev-libs/a-pkg-1.0::testrepo\x1b[39;49;00m"
+    );
+    assert_eq!(
+        emerging_line(&b, "2.0", two_of_three, root, &live),
+        ">>> Emerging binary (\x1b[33;01m2\x1b[39;49;00m of \x1b[33;01m3\x1b[39;49;00m) \x1b[35mdev-libs/b-pkg-2.0::testrepo\x1b[39;49;00m"
+    );
+    assert_eq!(
+        installing_line(&a, "1.0", two_of_three, root, &live),
+        ">>> Installing (\x1b[33;01m2\x1b[39;49;00m of \x1b[33;01m3\x1b[39;49;00m) \x1b[32mdev-libs/a-pkg-1.0::testrepo\x1b[39;49;00m"
+    );
+}
