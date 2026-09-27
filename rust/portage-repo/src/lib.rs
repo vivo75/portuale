@@ -54599,3 +54599,39 @@ mod tests_163 {
         }
     }
 }
+
+/// Backlog #166 (circular/instance-use solution residue): direct
+/// predicate-result legs in the #161/#162 scratch style. Each test
+/// observes the predicate's own return value -- no end-to-end contract
+/// reproduction -- so every in-body operator flip changes an asserted
+/// outcome. Kept self-contained (own scratch repo/vdb/entry helpers)
+/// so the other Track U branches' blocks rebase mechanically. Do not
+/// edit other items' `mod tests_16x` blocks.
+#[cfg(test)]
+mod tests_166 {
+    use super::*;
+
+    // ---- S1: `strip_revision` (`--rebuild-if-new-ver` compares the
+    // merged version against installed ones with `-r<n>` stripped on
+    // both sides -- see `rebuild_if_entries`). ----
+
+    /// Only a numeric `-r<n>` suffix strips, and the split is at the
+    /// last `-r`: kills the whole-body `""`/`"xyzzy"` rows, both guard
+    /// replacements, the `&&` -> `||` widening (empty rev strips) and
+    /// the `!` deletion (numeric rev kept).
+    #[test]
+    fn strip_revision_166_strips_numeric_revisions_only() {
+        assert_eq!(strip_revision("1.0-r1"), "1.0");
+        assert_eq!(strip_revision("1.0"), "1.0");
+        // Non-numeric tail: the guard stays shut (guard-`true` would
+        // strip to "1.0").
+        assert_eq!(strip_revision("1.0-rx"), "1.0-rx");
+        assert_eq!(strip_revision("1.0-r1x"), "1.0-r1x");
+        // Empty rev: `!rev.is_empty()` is false while `all(digits)` is
+        // vacuously true, so `&&` -> `||` would strip to "1.0".
+        assert_eq!(strip_revision("1.0-r"), "1.0-r");
+        assert_eq!(strip_revision("1.0-r0"), "1.0");
+        // Last `-r` wins: only the trailing numeric revision strips.
+        assert_eq!(strip_revision("1.0-r1-r2"), "1.0-r1");
+    }
+}
