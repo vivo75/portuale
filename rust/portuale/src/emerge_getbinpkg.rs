@@ -136,17 +136,14 @@ pub fn run_merge_plan(
     // Real `Scheduler._pkg_count` for this run (backlog #177): every
     // entry below prints its own snapshot of these counters.
     let progress = crate::emerge_build::merge_progress_map(entries);
-    crate::emerge_build::run_merge_loop(entries, keep_going, |entry| {
+    crate::emerge_build::run_merge_loop(entries, keep_going, |idx, entry| {
         // The director seam executes every unit: derive the entry's
         // `MergeUnit` and dispatch on its kind through the real source /
         // binary engines (real `MergeListItem._start`'s own `type_name`
         // routing). An entry with nothing to merge (`AlreadyInstalled` /
         // `NoVisibleCandidate`) stays a silent no-op, exactly the merge
         // functions' own early return.
-        let entry_progress = progress
-            .get(&(entry.category.clone(), entry.package.clone()))
-            .copied()
-            .unwrap_or(mrg_director::MergeProgress::single());
+        let entry_progress = progress[idx];
         let Some(unit) = crate::merge_engines::merge_unit_for_entry(entry, root, entry_progress)
         else {
             return Ok(());

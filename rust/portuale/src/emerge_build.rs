@@ -134,7 +134,7 @@ pub fn run_buildpkgonly(
     // Real `Scheduler._pkg_count` for this run (backlog #177).
     let progress = merge_progress_map(entries);
     let mut failures = Vec::new();
-    for entry in entries {
+    for (idx, entry) in entries.iter().enumerate() {
         if entry.source == CandidateSource::Binary {
             continue;
         }
@@ -165,10 +165,7 @@ pub fn run_buildpkgonly(
         // silently on stdout; only `emerge.log` records it, which
         // portuale does not write -- see the S0 table).
         let color = progress_color();
-        let entry_progress = progress
-            .get(&(entry.category.clone(), entry.package.clone()))
-            .copied()
-            .unwrap_or(mrg_director::MergeProgress::single());
+        let entry_progress = progress[idx];
         println!(
             "{}",
             emerging_line(entry, version, entry_progress, root, &color)
@@ -442,16 +439,10 @@ pub fn run_source_merge(
         buildpkg_exclude,
     };
     // Real `Scheduler._pkg_count` for this run (backlog #177): every
-    // entry below prints its own snapshot of these counters.
+    // entry below prints its own positional snapshot of these counters.
     let progress = merge_progress_map(entries);
-    let progress_of = |entry: &GraphEntry| {
-        progress
-            .get(&(entry.category.clone(), entry.package.clone()))
-            .copied()
-            .unwrap_or(mrg_director::MergeProgress::single())
-    };
-    run_merge_loop(entries, keep_going, |entry| {
-        let entry_progress = progress_of(entry);
+    run_merge_loop(entries, keep_going, |idx, entry| {
+        let entry_progress = progress[idx];
         let bp = buildpkg.filter(|opts| {
             entry_buildpkg_wanted(entry, repos, buildpkg_exclude, opts.buildpkg_live)
         });
@@ -577,7 +568,7 @@ pub(crate) fn run_merge_loop<F>(
     mut merge_one: F,
 ) -> Result<(), String>
 where
-    F: FnMut(&GraphEntry) -> Result<(), String>,
+    F: FnMut(usize, &GraphEntry) -> Result<(), String>,
 {
     use std::collections::{HashMap, HashSet};
 
@@ -596,13 +587,13 @@ where
     let mut failures: Vec<String> = Vec::new();
     let mut skipped: Vec<String> = Vec::new();
 
-    for entry in entries {
+    for (idx, entry) in entries.iter().enumerate() {
         let cp = (entry.category.clone(), entry.package.clone());
         if skip.contains(&cp) {
             skipped.push(format!("{}/{}", entry.category, entry.package));
             continue;
         }
-        if let Err(e) = merge_one(entry) {
+        if let Err(e) = merge_one(idx, entry) {
             if !keep_going {
                 return Err(e);
             }
@@ -741,20 +732,25 @@ pub(crate) fn merge_one_source_entry(
     if clean_status != 0 {
         return Err(format!("{cp}-{version}: clean failed ({clean_status})"));
     }
-    // Real `PackageMerge._start`'s per-package line (backlog #177).
-    // Placement narrowing: real prints it between the `EbuildBuild`
-    // (phase chain) and `EbuildMerge` (vdb merge) halves, but portuale's
-    // serial `run_merge` fuses both halves in one call -- so the line
-    // lands at the fuse point, before the phase output, rather than
-    // between build and merge output. Shape, counters, `::repo`, ` to
-    // ROOT` and colours are real's exactly; only the position within the
-    // entry's own output differs (the `-jN` scheduler's build/merge
-    // split below places it exactly like real does).
-    println!(
-        "{}",
-        installing_line(entry, &version, progress, root, &color)
-    );
-    let status = ebuild_merge::run_merge(&path, root, portage_tmpdir, &per_entry, buildpkg)?;
+    // Real `PackageMerge._start`'s per-package line (backlog #177),
+    // printed from `run_merge`'s pre-merge hook: real wraps the finished
+    // `EbuildBuild` in a `PackageMerge` (`Scheduler._build_exit`,
+    // `Scheduler.py:1615-1621`), so `Installing` lands after the build
+    // phase output (and the `--buildpkg` packaging) and before the
+    // `EbuildMerge` vdb merge -- the same point the `-jN` scheduler's
+    // build/merge split prints it (before the serialized `run_qmerge`).
+    // A failed build never reaches the hook, so no `Installing` prints
+    // for it, exactly like real queuing no merge for a failed build.
+    let installing = installing_line(entry, &version, progress, root, &color);
+    let print_installing = || println!("{installing}");
+    let status = ebuild_merge::run_merge_with_hook(
+        &path,
+        root,
+        portage_tmpdir,
+        &per_entry,
+        buildpkg,
+        Some(&print_installing as &dyn Fn()),
+    )?;
     if status != 0 {
         return Err(format!("{cp}-{version}: merge failed ({status})"));
     }
@@ -1159,9 +1155,14 @@ pub(crate) fn entry_counts_toward_progress(entry: &GraphEntry) -> bool {
 /// Every merging entry's own real `(curval, maxval)` snapshot (real
 /// `Scheduler._pkg_count`, copied per `MergeListItem` at task creation
 /// after `curval += 1`, `Scheduler.py:2273`/`2355`): `max` is the count
-/// of merging entries, `cur` the 1-based ordinal in merge order. Keyed by
-/// `(category, package)`; callers look their entry up and pass the value
-/// into the merge functions, so the run-level loops own the only scan.
+/// of merging entries, `cur` the 1-based ordinal in merge order. One
+/// snapshot **per entry position** (`out[i]` belongs to `entries[i]`; a
+/// non-merging entry carries `MergeProgress::single()`, which it never
+/// prints) -- keyed positionally, not by `(category, package)`, so two
+/// merging entries for the same cat/pkg in one run (e.g. two slots of
+/// one package) keep their own `cur` instead of collapsing onto one map
+/// slot (review of backlog #177). Callers pass `progress[i]` into the
+/// merge functions, so the run-level loops own the only scan.
 ///
 /// Narrowing: real assigns `curval` in task-start order, which under
 /// `--jobs` can differ from merge-list order when independent packages
@@ -1171,25 +1172,23 @@ pub(crate) fn entry_counts_toward_progress(entry: &GraphEntry) -> bool {
 /// case they are identical by construction. Real also recomputes
 /// `maxval` per `--keep-going` pass (`Scheduler.py:1307-1312`); portuale
 /// keeps the run's original total (a failure-path-only difference).
-pub(crate) fn merge_progress_map(
-    entries: &[GraphEntry],
-) -> std::collections::HashMap<(String, String), mrg_director::MergeProgress> {
+pub(crate) fn merge_progress_map(entries: &[GraphEntry]) -> Vec<mrg_director::MergeProgress> {
     let max = entries
         .iter()
         .filter(|e| entry_counts_toward_progress(e))
         .count();
     let mut cur = 0usize;
-    let mut out = std::collections::HashMap::new();
-    for entry in entries {
-        if entry_counts_toward_progress(entry) {
-            cur += 1;
-            out.insert(
-                (entry.category.clone(), entry.package.clone()),
-                mrg_director::MergeProgress { cur, max },
-            );
-        }
-    }
-    out
+    entries
+        .iter()
+        .map(|entry| {
+            if entry_counts_toward_progress(entry) {
+                cur += 1;
+                mrg_director::MergeProgress { cur, max }
+            } else {
+                mrg_director::MergeProgress::single()
+            }
+        })
+        .collect()
 }
 
 /// The colouriser for the merge progress lines: real `actions.py:2816-
@@ -1980,12 +1979,9 @@ fn run_build_scheduler(
                 started.insert(idx);
                 in_flight += 1;
                 // Real `Scheduler._pkg_count` (backlog #177): the
-                // entry's own snapshot, resolved here -- the worker
+                // entry's own positional snapshot -- the worker
                 // closure below is `move` and cannot borrow the map.
-                let entry_progress = progress
-                    .get(&(entries[idx].category.clone(), entries[idx].package.clone()))
-                    .copied()
-                    .unwrap_or(mrg_director::MergeProgress::single());
+                let entry_progress = progress[idx];
                 let tx = tx.clone();
                 let bp = buildpkg.filter(|opts| {
                     entry_buildpkg_wanted(
@@ -2033,10 +2029,7 @@ fn run_build_scheduler(
             let failure = match build_result {
                 Ok(path) => {
                     let entry = &entries[idx];
-                    let entry_progress = progress
-                        .get(&(entry.category.clone(), entry.package.clone()))
-                        .copied()
-                        .unwrap_or(mrg_director::MergeProgress::single());
+                    let entry_progress = progress[idx];
                     merge_one_built_entry(
                         entry,
                         repos,
@@ -3001,31 +2994,38 @@ mod tests {
     /// Backlog #177: the merge progress counters -- real
     /// `Scheduler._pkg_count` (`Scheduler.py:296-304`): only merging
     /// outcomes count, and each merging entry's `cur` is its 1-based
-    /// ordinal in merge order. Grounded in the cited real source (there
+    /// ordinal in merge order. The map is positional (`out[i]` belongs to
+    /// `entries[i]`), so two merging entries for the same cat/pkg -- two
+    /// slots of one package in a single run -- keep their own `cur`
+    /// (review of #177). Grounded in the cited real source (there
     /// is no Python mirror); the `testrepo` repo name is this module's
     /// own `source_entry` fixture value.
     #[test]
     fn merge_progress_map_counts_only_merging_entries_in_order() {
+        let mut slot1 = source_entry(
+            "same-pkg",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        slot1.slot = Some("1".into());
+        let mut slot2 = source_entry(
+            "same-pkg",
+            PretendOutcome::Upgrade {
+                from: "0.9".into(),
+                to: "1.0".into(),
+            },
+        );
+        slot2.slot = Some("2".into());
         let entries = vec![
-            source_entry(
-                "a-pkg",
-                PretendOutcome::New {
-                    version: "1.0".into(),
-                },
-            ),
+            slot1,
             source_entry(
                 "b-pkg",
                 PretendOutcome::AlreadyInstalled {
                     version: "1.0".into(),
                 },
             ),
-            source_entry(
-                "c-pkg",
-                PretendOutcome::Upgrade {
-                    from: "1.0".into(),
-                    to: "2.0".into(),
-                },
-            ),
+            slot2,
             source_entry(
                 "d-pkg",
                 PretendOutcome::Uninstall {
@@ -3034,16 +3034,24 @@ mod tests {
             ),
         ];
         let map = merge_progress_map(&entries);
-        assert_eq!(map.len(), 2);
+        assert_eq!(map.len(), 4);
+        // The two same-cat/pkg entries print their own `cur`.
+        assert_eq!(map[0], mrg_director::MergeProgress { cur: 1, max: 2 });
+        assert_eq!(map[2], mrg_director::MergeProgress { cur: 2, max: 2 });
+        // Non-merging entries carry the never-printed placeholder.
+        assert_eq!(map[1], mrg_director::MergeProgress::single());
+        assert_eq!(map[3], mrg_director::MergeProgress::single());
+        // And the lines really read `(1 of 2)` / `(2 of 2)`.
+        let plain = crate::color::Colorizer::new(false);
+        let root = std::path::Path::new("/");
         assert_eq!(
-            map[&("dev-libs".to_string(), "a-pkg".to_string())],
-            mrg_director::MergeProgress { cur: 1, max: 2 }
+            emerging_line(&entries[0], "1.0", map[0], root, &plain),
+            ">>> Emerging (1 of 2) dev-libs/same-pkg-1.0::testrepo"
         );
         assert_eq!(
-            map[&("dev-libs".to_string(), "c-pkg".to_string())],
-            mrg_director::MergeProgress { cur: 2, max: 2 }
+            emerging_line(&entries[2], "1.0", map[2], root, &plain),
+            ">>> Emerging (2 of 2) dev-libs/same-pkg-1.0::testrepo"
         );
-        assert!(!map.contains_key(&("dev-libs".to_string(), "b-pkg".to_string())));
     }
 
     /// Backlog #177: the exact progress-line strings -- real
@@ -4234,7 +4242,7 @@ mod tests {
             },
         );
         let mut seen: Vec<String> = Vec::new();
-        let err = run_merge_loop(&[a, b], false, |e| {
+        let err = run_merge_loop(&[a, b], false, |_, e| {
             seen.push(e.package.clone());
             Err(format!("{} boom", e.package))
         })
@@ -4276,7 +4284,7 @@ mod tests {
         );
 
         let mut merged: Vec<String> = Vec::new();
-        let err = run_merge_loop(&[dep, mid, top, other], true, |e| {
+        let err = run_merge_loop(&[dep, mid, top, other], true, |_, e| {
             if e.package == "dep" {
                 return Err("dep boom".into());
             }

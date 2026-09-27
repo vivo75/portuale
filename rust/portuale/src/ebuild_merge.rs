@@ -3070,6 +3070,27 @@ pub fn run_merge(
     // real `bin/ebuild` equivalent.
     buildpkg: Option<&crate::ebuild_package::PackageOptions>,
 ) -> Result<i32, String> {
+    run_merge_with_hook(ebuild_path, root, portage_tmpdir, options, buildpkg, None)
+}
+
+/// [`run_merge`], with a hook real's `Scheduler._build_exit` fires
+/// between the two halves: real wraps the finished `EbuildBuild` in a
+/// `PackageMerge` (`Scheduler.py:1615-1621`), whose `_start` prints
+/// `Installing (cur of max)` (`PackageMerge.py:32-54`) before
+/// `create_install_task()` starts the `EbuildMerge` vdb merge -- i.e.
+/// after the build phases (and the `EbuildBinpkg` packaging) succeed,
+/// before the vdb merge begins. A failed build never reaches the hook
+/// (real queues no merge for it), so callers that print the
+/// `Installing` line from the hook also regain that gating for free.
+/// `None` runs the fused build+merge exactly like [`run_merge`].
+pub fn run_merge_with_hook(
+    ebuild_path: &Path,
+    root: &Path,
+    portage_tmpdir: &Path,
+    options: &MergeOptions,
+    buildpkg: Option<&crate::ebuild_package::PackageOptions>,
+    before_merge: Option<&dyn Fn()>,
+) -> Result<i32, String> {
     let status = ebuild_phases::run_commands(
         ebuild_path,
         &["install"],
@@ -3128,6 +3149,12 @@ pub fn run_merge(
         }
     }
     let env = ebuild_phases::compute_environment(ebuild_path, portage_tmpdir)?;
+    // Real's `PackageMerge._start` point (see `run_merge_with_hook`):
+    // the build halves above all succeeded, the vdb merge below has not
+    // started -- exactly where real prints `Installing (cur of max)`.
+    if let Some(hook) = before_merge {
+        hook();
+    }
     let merge_status = merge_after_install(ebuild_path, root, portage_tmpdir, &env, options)?;
     // Real `dblink.merge()`'s tail (`dbapi/vartree.py:6183-6198`): after
     // the success hooks and `env_update`, the `clean` phase removes the
