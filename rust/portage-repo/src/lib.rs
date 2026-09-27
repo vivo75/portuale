@@ -54825,6 +54825,8 @@ mod tests_166 {
         }
     }
 
+    /// Eight-arg input builder (same shape as #161's `ds_input_161`).
+    #[allow(clippy::too_many_arguments)]
     fn arg_input_166<'a>(
         conflicts: &'a [SlotConflict],
         top_level: &'a HashSet<(String, String)>,
@@ -54864,7 +54866,16 @@ mod tests_166 {
         let top = arg_top_166();
         let replace = BTreeSet::new();
         assert!(direct_solve_arg_mode(
-            &arg_input_166(&conflicts, &top, &[], false, &replace, &root, &repos, &config),
+            &arg_input_166(
+                &conflicts,
+                &top,
+                &[],
+                false,
+                &replace,
+                &root,
+                &repos,
+                &config
+            ),
             &conflicts[0]
         ));
         let _ = std::fs::remove_dir_all(&root);
@@ -54883,13 +54894,15 @@ mod tests_166 {
         let top = arg_top_166();
         let empty_top: HashSet<(String, String)> = HashSet::new();
         let replace = BTreeSet::new();
-        let mk =
-            |conflicts: &[SlotConflict], top: &HashSet<(String, String)>, excl: &[String], sel: bool| {
-                direct_solve_arg_mode(
-                    &arg_input_166(conflicts, top, excl, sel, &replace, &root, &repos, &config),
-                    &conflicts[0],
-                )
-            };
+        let mk = |conflicts: &[SlotConflict],
+                  top: &HashSet<(String, String)>,
+                  excl: &[String],
+                  sel: bool| {
+            direct_solve_arg_mode(
+                &arg_input_166(conflicts, top, excl, sel, &replace, &root, &repos, &config),
+                &conflicts[0],
+            )
+        };
         // No installed instance: not arguable even when requested.
         let merge_only = [conflict_166(vec![("2.0", false), ("1.0", false)])];
         assert!(!mk(&merge_only, &top, &[], false));
@@ -54947,7 +54960,8 @@ mod tests_166 {
         }
         std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
         let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
-        let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=166 circular/instance-use\nEAPI=8\n".to_string();
+        let mut entry =
+            "DEFINED_PHASES=-\nDESCRIPTION=166 circular/instance-use\nEAPI=8\n".to_string();
         if !iuse.is_empty() {
             writeln!(entry, "IUSE={iuse}").unwrap();
         }
@@ -54997,12 +55011,7 @@ mod tests_166 {
 
     /// Merge-bound `GraphEntry` carrying resolved display flags (the
     /// shape `direct_solve_instance_use` reads for a merge instance).
-    fn entry_166(
-        cat: &str,
-        pkg: &str,
-        version: &str,
-        display: Vec<(String, bool)>,
-    ) -> GraphEntry {
+    fn entry_166(cat: &str, pkg: &str, version: &str, display: Vec<(String, bool)>) -> GraphEntry {
         GraphEntry {
             discovery: 0,
             category: cat.to_string(),
@@ -55036,7 +55045,6 @@ mod tests_166 {
             deps: Vec::new(),
         }
     }
-
 
     fn inst_166(version: &str, installed: bool) -> SlotConflictInstance {
         SlotConflictInstance {
@@ -55090,7 +55098,10 @@ mod tests_166 {
         let (enabled, declared) =
             direct_solve_instance_use(&input, "dev-libs", "iupkg", &inst_166("1.0", true));
         assert_eq!(enabled, HashSet::from(["fa".to_string()]));
-        assert_eq!(declared, HashSet::from(["fa".to_string(), "fb".to_string()]));
+        assert_eq!(
+            declared,
+            HashSet::from(["fa".to_string(), "fb".to_string()])
+        );
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -55155,7 +55166,9 @@ mod tests_166 {
                 (
                     e.category.as_str(),
                     e.package.as_str(),
-                    merge_bound_version(&e.outcome).map(String::as_str).unwrap_or("?"),
+                    merge_bound_version(&e.outcome)
+                        .map(String::as_str)
+                        .unwrap_or("?"),
                 )
             })
             .collect();
@@ -55227,7 +55240,12 @@ mod tests_166 {
                     .iter()
                     .map(|(f, on)| format!("{f}={on}"))
                     .collect();
-                format!("{} [{}] followup={}", s.parent_cpv, changes.join(","), s.followup)
+                format!(
+                    "{} [{}] followup={}",
+                    s.parent_cpv,
+                    changes.join(","),
+                    s.followup
+                )
             })
             .collect()
     }
@@ -55264,7 +55282,9 @@ mod tests_166 {
         );
         assert_eq!(
             sols_166(&sols),
-            std::collections::BTreeSet::from(["dev-libs/apkg-1.0 [y=true] followup=false".to_string()])
+            std::collections::BTreeSet::from([
+                "dev-libs/apkg-1.0 [y=true] followup=false".to_string()
+            ])
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -55280,7 +55300,17 @@ mod tests_166 {
         let dir = dir_166("circ-b");
         let iuse = "+f1 f2 f3 f4 f5 f6 f7 f8 f9 f10";
         let ru = "|| ( f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 )";
-        let repos = repo_pkgs_166(&dir, &[("dev-libs/bpkg", "1.0", "0", iuse, "f1? ( dev-libs/bpkg )", ru)]);
+        let repos = repo_pkgs_166(
+            &dir,
+            &[(
+                "dev-libs/bpkg",
+                "1.0",
+                "0",
+                iuse,
+                "f1? ( dev-libs/bpkg )",
+                ru,
+            )],
+        );
         let config = cfg_166();
         let sols = circular_dep_solutions(
             &["dev-libs/bpkg-1.0".to_string()],
@@ -55291,7 +55321,9 @@ mod tests_166 {
         );
         let mut expected = std::collections::BTreeSet::new();
         for f in ["f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10"] {
-            expected.insert(format!("dev-libs/bpkg-1.0 [f1=false,{f}=true] followup=false"));
+            expected.insert(format!(
+                "dev-libs/bpkg-1.0 [f1=false,{f}=true] followup=false"
+            ));
         }
         assert_eq!(sols_166(&sols), expected);
         let _ = std::fs::remove_dir_all(&dir);
@@ -55305,7 +55337,14 @@ mod tests_166 {
         let dir = dir_166("circ-c");
         let repos = repo_pkgs_166(
             &dir,
-            &[("dev-libs/cpkg", "1.0", "0", "+x", "x? ( dev-libs/cpkg )", "")],
+            &[(
+                "dev-libs/cpkg",
+                "1.0",
+                "0",
+                "+x",
+                "x? ( dev-libs/cpkg )",
+                "",
+            )],
         );
         let config = cfg_166();
         let sols = circular_dep_solutions(
@@ -55317,7 +55356,9 @@ mod tests_166 {
         );
         assert_eq!(
             sols_166(&sols),
-            std::collections::BTreeSet::from(["dev-libs/cpkg-1.0 [x=false] followup=false".to_string()])
+            std::collections::BTreeSet::from([
+                "dev-libs/cpkg-1.0 [x=false] followup=false".to_string()
+            ])
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -55447,7 +55488,12 @@ mod tests_166 {
         let replace = BTreeSet::new();
         let entries = vec![
             entry_166("other-libs", "iupkg", "1.0", vec![("dx".to_string(), true)]),
-            entry_166("dev-libs", "otherpkg", "1.0", vec![("dy".to_string(), true)]),
+            entry_166(
+                "dev-libs",
+                "otherpkg",
+                "1.0",
+                vec![("dy".to_string(), true)],
+            ),
             entry_166(
                 "dev-libs",
                 "iupkg",
@@ -55459,7 +55505,10 @@ mod tests_166 {
         let (enabled, declared) =
             direct_solve_instance_use(&input, "dev-libs", "iupkg", &inst_166("1.0", false));
         assert_eq!(enabled, HashSet::from(["fa".to_string()]));
-        assert_eq!(declared, HashSet::from(["fa".to_string(), "fb".to_string()]));
+        assert_eq!(
+            declared,
+            HashSet::from(["fa".to_string(), "fb".to_string()])
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 }
