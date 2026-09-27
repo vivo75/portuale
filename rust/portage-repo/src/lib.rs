@@ -5562,6 +5562,67 @@ fn parent_use_state(
     ))
 }
 
+/// Real `_show_unsatisfied_dep`'s parent-conditional row for an
+/// *installed* requesting parent (`depgraph.py:6768-6858` reads
+/// `self._pkg_use_enabled(myparent)` and `myparent.use.mask/.force`
+/// with no installed/merge-bound distinction -- the live `qtdeclarative`
+/// row is `[installed]`). `parent_use_state` covers merge-bound parents
+/// only (its version lookup has no `AlreadyInstalled` arm); this is the
+/// installed twin, used as a fallback by [`use_unsat_parent_row`] alone.
+/// The abort block is the only consumer: the `--autounmask-use` repair
+/// path (`suggested_parent_use_candidate` and its walk-time caller) keeps
+/// `parent_use_state`'s merge-bound-only shape, so installed parents gain
+/// the display row without gaining a repair attempt.
+///
+/// State sources mirror real's installed instance: the flip base is the
+/// vdb-recorded `USE` (real `_pkg_use_enabled` for a built package), the
+/// IUSE fold is the vdb `IUSE`, and the repo candidate at the same
+/// version supplies the `Candidate` `flag_is_settable` needs plus the row
+/// cpv/repo and `REQUIRED_USE` (the fixture vdb carries no
+/// `REQUIRED_USE` file; same-version ebuild metadata is what a real vdb
+/// entry built from that ebuild records). `None` when the entry isn't
+/// installed, the vdb record is absent, or no same-version repo
+/// candidate exists (without it neither mask/force nor the row cpv can
+/// be grounded -- real would still print the row from the instance, a
+/// documented narrowing).
+fn installed_parent_use_state(
+    repos: &[RepoConfig],
+    root: &Path,
+    entries: &[GraphEntry],
+    owner: &(String, String),
+    config: &portage_profile::Config,
+) -> Option<ParentUseState> {
+    let parent_entry = entries
+        .iter()
+        .find(|e| e.category == owner.0 && e.package == owner.1)?;
+    let PretendOutcome::AlreadyInstalled { version } = &parent_entry.outcome else {
+        return None;
+    };
+    if !vdb_pkg_dir(root, &owner.0, &owner.1, version).is_dir() {
+        return None;
+    }
+    let candidates = list_candidates(repos, &owner.0, &owner.1).ok()?;
+    let resolved = candidates
+        .iter()
+        .filter(|c| c.version == *version)
+        .max_by_key(|c| c.repo_priority)?
+        .clone();
+    let vdb_iuse = read_vdb_flag_set(root, &owner.0, &owner.1, version, "IUSE");
+    let mut iuse_line: Vec<String> = vdb_iuse.into_iter().collect();
+    iuse_line.sort();
+    let full_iuse = implicit_iuse_set(&iuse_line.join(" "), config);
+    let use_flags: Rc<HashSet<String>> =
+        Rc::new(read_vdb_flag_set(root, &owner.0, &owner.1, version, "USE"));
+    let pf = format!("{}-{version}", owner.1);
+    let metadata = repo_aux_metadata(&resolved.repo_location, &owner.0, &pf).ok()?;
+    Some((
+        resolved,
+        full_iuse,
+        use_flags,
+        metadata.get("REQUIRED_USE").cloned(),
+    ))
+}
+
 /// Which of `unevaluated_atom`'s own use-deps are conditional on the
 /// *requesting parent's* own USE (`opt?`/`!opt?`/`opt=`/`!opt=` --
 /// `UseDepOp::IfParentEnabled`/`IfParentDisabled`/`EqualParent`/
@@ -10387,6 +10448,7 @@ fn masked_candidates_for_atom(
 /// can't be read, or a flip is pinned by `use.mask`/`use.force`.
 fn use_unsat_parent_row(
     repos: &[RepoConfig],
+    root: &Path,
     entries: &[GraphEntry],
     display_atom: &str,
     owner: Option<&(String, String)>,
@@ -10397,8 +10459,13 @@ fn use_unsat_parent_row(
     if involved_flags.is_empty() {
         return None;
     }
+    // Merge-bound parents resolve through `parent_use_state`; installed
+    // ones (the live `qtdeclarative` row, the r135 fixture) through the
+    // vdb-backed twin -- the abort block is display-only, so the
+    // autounmask repair path keeps the merge-bound shape.
     let (parent_candidate, parent_iuse, parent_use, parent_required_use) =
-        parent_use_state(repos, entries, owner, config)?;
+        parent_use_state(repos, entries, owner, config)
+            .or_else(|| installed_parent_use_state(repos, root, entries, owner, config))?;
     let mut hypothetical = parent_use.as_ref().clone();
     let mut changes: Vec<String> = Vec::new();
     for flag in &involved_flags {
@@ -10468,6 +10535,7 @@ fn use_unsat_parent_row(
 /// (`:6897-6907`), which this visibility-filtered scan cannot express.
 fn use_unsat_candidates_for_atom(
     repos: &[RepoConfig],
+    root: &Path,
     entries: &[GraphEntry],
     display_atom: &str,
     evaluated_atom: &str,
@@ -10647,7 +10715,8 @@ fn use_unsat_candidates_for_atom(
         // (highest-version) unmasked `Change USE:` candidate, then the
         // requirer's own row when the dep is conditional.
         let mut rows = vec![change_rows.remove(0)];
-        if let Some(parent_row) = use_unsat_parent_row(repos, entries, display_atom, owner, config)
+        if let Some(parent_row) =
+            use_unsat_parent_row(repos, root, entries, display_atom, owner, config)
         {
             rows.push(parent_row);
         }
@@ -22824,6 +22893,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 // only the final pass's reports are rendered.
                 if let Some(rows) = use_unsat_candidates_for_atom(
                     &ctx.repos,
+                    ctx.root,
                     &state.entries,
                     display_atom,
                     &current_atom,
@@ -36937,8 +37007,9 @@ mod tests {
         )
         .expect("fixture config resolves");
         let repos = find_repos(&root).expect("repos");
-        let one =
-            |atom: &str| use_unsat_candidates_for_atom(&repos, &[], atom, atom, None, &config);
+        let one = |atom: &str| {
+            use_unsat_candidates_for_atom(&repos, &root, &[], atom, atom, None, &config)
+        };
         assert_eq!(
             one("dev-libs/unsatusealt[unsatuseorflag]"),
             Some(vec![(
@@ -52186,6 +52257,7 @@ mod tests_163 {
         assert_eq!(
             use_unsat_parent_row(
                 &repos,
+                dir.as_path(),
                 &entries,
                 "dev-libs/child[flipme?]",
                 Some(&owner_163("dev-libs", "parent")),
@@ -52211,6 +52283,7 @@ mod tests_163 {
         assert_eq!(
             use_unsat_parent_row(
                 &repos,
+                dir.as_path(),
                 &entries,
                 "dev-libs/child[keepoff?]",
                 Some(&owner_163("dev-libs", "parent")),
@@ -52219,6 +52292,39 @@ mod tests_163 {
             Some((
                 "dev-libs/parent-1.0::testrepo".to_string(),
                 vec!["Change USE: -keepoff".to_string()],
+            ))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An *installed* requesting parent flips on its own vdb-recorded USE
+    /// (real `_pkg_use_enabled(myparent)` for a built package): the r135
+    /// S0 shape -- parent installed -flip, display atom `[flip=]`
+    /// (`EqualParent`), vdb `USE` empty and vdb `IUSE` declaring flip, so
+    /// the row proposes `+flip` on the parent's own cpv. Kills the
+    /// `AlreadyInstalled`-blindness (no row for installed parents).
+    #[test]
+    fn use_unsat_parent_row_suggests_enabling_an_installed_parents_off_flag() {
+        let dir = dir_163("parent-installed");
+        let repos = repo_pkgs_163_ru(&dir, &[("dev-libs/parent", "1.0", "0", "flip", "")]);
+        let config = cfg_163();
+        let vdb = dir.join("var/db/pkg/dev-libs/parent-1.0");
+        std::fs::create_dir_all(&vdb).unwrap();
+        std::fs::write(vdb.join("USE"), "\n").unwrap();
+        std::fs::write(vdb.join("IUSE"), "flip\n").unwrap();
+        let entries = vec![entry_163("dev-libs", "parent", installed_163("1.0"), &[])];
+        assert_eq!(
+            use_unsat_parent_row(
+                &repos,
+                dir.as_path(),
+                &entries,
+                "dev-libs/child[flip=]",
+                Some(&owner_163("dev-libs", "parent")),
+                &config,
+            ),
+            Some((
+                "dev-libs/parent-1.0::testrepo".to_string(),
+                vec!["Change USE: +flip".to_string()],
             ))
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -52234,12 +52340,20 @@ mod tests_163 {
         let config = cfg_163();
         let entries = vec![entry_163("dev-libs", "parent", new_163("1.0"), &[])];
         assert_eq!(
-            use_unsat_parent_row(&repos, &entries, "dev-libs/child[flipme?]", None, &config,),
+            use_unsat_parent_row(
+                &repos,
+                dir.as_path(),
+                &entries,
+                "dev-libs/child[flipme?]",
+                None,
+                &config,
+            ),
             None
         );
         assert_eq!(
             use_unsat_parent_row(
                 &repos,
+                dir.as_path(),
                 &entries,
                 "dev-libs/child[flipme]",
                 Some(&owner_163("dev-libs", "parent")),
@@ -52273,6 +52387,7 @@ mod tests_163 {
         assert_eq!(
             use_unsat_parent_row(
                 &repos,
+                dir.as_path(),
                 &entries,
                 "dev-libs/child[flipme?]",
                 Some(&owner_163("dev-libs", "parent")),
@@ -52308,6 +52423,7 @@ mod tests_163 {
         assert_eq!(
             use_unsat_parent_row(
                 &repos,
+                dir.as_path(),
                 &entries,
                 "dev-libs/child[flipme?]",
                 Some(&owner_163("dev-libs", "parent")),
