@@ -367,8 +367,10 @@ fn buildpkgonly_entry_build_env(
     // command from them here -- the install phases save this env and
     // real `__dyn_package` reads it back through the saved
     // `${T}/environment`. Unmatched entries recompute the run-wide
-    // command byte-identically.
-    crate::ebuild_package::refresh_entry_compression_command(&mut build_env);
+    // command byte-identically (backlog #180: the re-derivation falls
+    // back through the calling env to the config's own file chain, so
+    // a `make.conf` value survives it).
+    crate::ebuild_package::refresh_entry_compression_command(&mut build_env, Some(config));
     build_env
 }
 
@@ -1126,8 +1128,12 @@ fn entry_build_env(
     // re-derivation as `buildpkgonly_entry_build_env` -- this env
     // feeds the merge-scheduler builds whose `package_after_install`
     // side effect (`FEATURES=buildpkg` / `-b`) reads it back through
-    // the saved `${T}/environment`.
-    crate::ebuild_package::refresh_entry_compression_command(&mut env);
+    // the saved `${T}/environment`. The resolved config may be absent
+    // on the config-less paths (`None`: pairs-then-env only).
+    crate::ebuild_package::refresh_entry_compression_command(
+        &mut env,
+        options.resolved_config.as_deref(),
+    );
     env
 }
 

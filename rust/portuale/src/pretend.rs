@@ -4394,24 +4394,34 @@ fn run_unmerge_pretend(
 /// tracks the file-removal core, which portuale still surfaces as a
 /// hard `Err`.
 /// Real `BINPKG_COMPRESS`/`BINPKG_COMPRESS_FLAGS[_<NAME>]`/
-/// `PORTAGE_BZIP2_COMMAND`/`PKGDIR`/... resolution, via
-/// the same env-var-sourced CLI boundary `ebuild.rs`'s own real
-/// `merge`/`qmerge`/`package` construction uses, except `BINPKG_FORMAT`
-/// (backlog #173), which comes from the full resolved chain -- calling
-/// env over `make.conf`/profile/`make.globals` (real `config`
-/// precedence, via `portage_profile::env_over_config_scalar` over the
-/// caller's resolved `config`) -- falling back to real `make.globals`'s
-/// own default. Shared by the
+/// `PORTAGE_BZIP2_COMMAND`/`PKGDIR`/`BINPKG_FORMAT` resolution, via the
+/// full resolved chain -- calling env over `make.conf`/profile/
+/// `make.globals` (real `config` precedence, via
+/// `portage_profile::env_over_config_scalar` over the caller's resolved
+/// `config`) -- falling back to real `make.globals`'s own defaults.
+/// Shared by the
 /// non-`--pretend` build/merge dispatch and `execute_unmerge`'s own
 /// `FEATURES=unmerge-backup` `quickpkg`.
+/// The one exception is the gpkg compression pair
+/// (`BINPKG_COMPRESS`/`BINPKG_COMPRESS_FLAGS[_<NAME>]`, backlog #180's
+/// Q6 rule, pmtest `bf0692f`): real's `environ_filter`
+/// (`_config/special_env_vars.py:280-281`) keeps a calling-environment value
+/// out of the phase env, and `bin/gpkg-helper.py` rebuilds
+/// `portage.settings` from that filtered env plus the config files, so
+/// for `gpkg` runs only a config-file value reaches the compressor --
+/// the lookup there is files-only (`config.other_vars`), never the
+/// calling env. `PORTAGE_BZIP2_COMMAND` keeps the full chain for both
+/// formats (whitelisted, never filtered), as does `PKGDIR`.
 /// The resolved-`FEATURES` sibling of `feature_enabled` for this
 /// function: `Some` means the caller resolved a real config (#37 S2/S3),
 /// so the token is read from the folded list; `None` keeps the raw
 /// process-env fallback. The `config` parameter is independent of it:
-/// `None` keeps the env-only `BINPKG_FORMAT` fallback, reached only when
-/// a caller could resolve no chain (today only `execute_unmerge` when
-/// `resolve_unmerge_config` fails) -- every production caller otherwise
-/// passes its resolved config, including `execute_unmerge`.
+/// `None` keeps the env-only fallback for every variable, reached only
+/// when a caller could resolve no chain (today only `execute_unmerge`
+/// when `resolve_unmerge_config` fails) -- with no file chain there is
+/// no `make.conf` for the env to lose to, so the calling env stands,
+/// even for the gpkg pair; every production caller otherwise passes its
+/// resolved config, including `execute_unmerge`.
 fn package_options_from_env(
     shell: ebuild_phases::ShellBackend,
     debug: bool,
@@ -4423,37 +4433,52 @@ fn package_options_from_env(
         None => feature_enabled(token),
     };
     let d = ebuild_package::PackageOptions::default();
-    let binpkg_compress =
-        std::env::var("BINPKG_COMPRESS").unwrap_or_else(|_| d.binpkg_compress.clone());
-    let flags_name = format!("BINPKG_COMPRESS_FLAGS_{}", binpkg_compress.to_uppercase());
-    let binpkg_compress_flags = std::env::var(&flags_name)
-        .or_else(|_| std::env::var("BINPKG_COMPRESS_FLAGS"))
-        .unwrap_or_else(|_| d.binpkg_compress_flags.clone());
+    // The two chain lookups (backlog #173's mechanism, reused for
+    // #180): the full calling-env-over-files chain, and the files-only
+    // chain for the gpkg compression pair (the Q6 rule above).
+    let chain = |key: &str| match config {
+        Some(c) => portage_profile::env_over_config_scalar(c, key),
+        // Config-less arm (only `execute_unmerge`'s
+        // `FEATURES=unmerge-backup` quickpkg reaches here -- and only
+        // when the chain resolution there failed; otherwise it passes
+        // its resolved config above): calling env only, through the
+        // same `config_env_var` test hook, else real `make.globals`'s
+        // own default.
+        None => portage_profile::config_env_var(key),
+    };
+    let files = |key: &str| match config {
+        Some(c) => c.other_vars.get(key).cloned(),
+        // No chain, no files: nothing resolves (the caller falls back
+        // to the real default inside each resolver).
+        None => None,
+    };
+    let binpkg_format = ebuild_package::resolve_binpkg_format(chain);
+    // The Q6 split: `xpak` compresses through the full chain (real
+    // `doebuild.py:697` reads the package's own `mysettings`, env
+    // layer highest); `gpkg` compresses through the files only (real
+    // `bin/gpkg-helper.py:49` rebuilds its settings from the filtered
+    // env plus the config files). In the config-less `None` arm both
+    // sides are env-only (see the `chain` comment above).
+    let (binpkg_compress, binpkg_compress_flags) = if binpkg_format == "gpkg" && config.is_some() {
+        let compress = ebuild_package::resolve_binpkg_compress(files);
+        let flags = ebuild_package::resolve_binpkg_compress_flags(files, &compress);
+        (compress, flags)
+    } else {
+        let compress = ebuild_package::resolve_binpkg_compress(chain);
+        let flags = ebuild_package::resolve_binpkg_compress_flags(chain, &compress);
+        (compress, flags)
+    };
     ebuild_package::PackageOptions {
         debug,
-        pkgdir: std::env::var_os("PKGDIR")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| d.pkgdir.clone()),
+        pkgdir: ebuild_package::resolve_pkgdir(chain),
         distdir: std::env::var_os("DISTDIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| d.distdir.clone()),
         shell,
         binpkg_compress,
         binpkg_compress_flags,
-        portage_bzip2_command: std::env::var("PORTAGE_BZIP2_COMMAND")
-            .unwrap_or(d.portage_bzip2_command),
-        binpkg_format: match config {
-            Some(c) => ebuild_package::resolve_binpkg_format(|key| {
-                portage_profile::env_over_config_scalar(c, key)
-            }),
-            // Config-less arm (only `execute_unmerge`'s
-            // `FEATURES=unmerge-backup` quickpkg reaches here -- and only
-            // when the chain resolution there failed; otherwise it passes
-            // its resolved config above): calling env only, through the
-            // same `config_env_var` test hook, else real `make.globals`'s
-            // own default.
-            None => ebuild_package::resolve_binpkg_format(portage_profile::config_env_var),
-        },
+        portage_bzip2_command: ebuild_package::resolve_portage_bzip2_command(chain),
+        binpkg_format,
         config_root: portage_repo::config_root_from_env(),
         // Real default-on FEATURES token: enabled unless explicitly
         // negated (`-buildpkg-live`) -- unlike the sibling fields above,
