@@ -54634,4 +54634,76 @@ mod tests_166 {
         // Last `-r` wins: only the trailing numeric revision strips.
         assert_eq!(strip_revision("1.0-r1-r2"), "1.0-r1");
     }
+
+    // ---- S2: `filter_usepkg_exclude_include` (real
+    // `create_depgraph_params.py` `--usepkg-exclude`/`--usepkg-include`
+    // handling, applied to the binary pool in `depgraph.py`'s own
+    // break-out-of-the-loop rejection -- see the call site's doc
+    // comment). ----
+
+    /// Hand-built binary candidate in the #162 `cand_162` shape (same
+    /// fields; `candidate_str` renders `cat/pkg-ver:slot/sub::repo`).
+    fn cand_166(version: &str) -> Candidate {
+        Candidate {
+            version: version.to_string(),
+            keywords: vec!["amd64".to_string()],
+            slot: "0".to_string(),
+            sub_slot: "0".to_string(),
+            repo_location: PathBuf::new(),
+            repo_priority: 0,
+            repo_name: "testrepo".to_string(),
+            license: String::new(),
+            iuse: String::new(),
+            properties: String::new(),
+            restrict: String::new(),
+            source: CandidateSource::Binary,
+            binary_use: None,
+            remote: false,
+            build_id: None,
+            build_time: None,
+            binary_deps: HashMap::new(),
+        }
+    }
+
+    /// Exclude-only: the pinned version drops, the rest stays. Kills
+    /// the either-empty gate widening (`&&` -> `||` keeps everything),
+    /// the `||` -> `&&` narrowing in `is_included` (drops everything)
+    /// and the `!` deletion (keeps the excluded row).
+    #[test]
+    fn filter_usepkg_166_exclude_drops_only_the_match() {
+        let out = filter_usepkg_exclude_include(
+            vec![cand_166("1.0"), cand_166("2.0")],
+            "dev-libs",
+            "foo",
+            &["=dev-libs/foo-1.0".to_string()],
+            &[],
+        );
+        let versions: Vec<&str> = out.iter().map(|c| c.version.as_str()).collect();
+        assert_eq!(versions, vec!["2.0"]);
+    }
+
+    /// Include-only: a non-matching candidate drops even though nothing
+    /// excludes it. Kills the `!excluded && included` -> `||`
+    /// widening (keeps the row through `!excluded` alone).
+    #[test]
+    fn filter_usepkg_166_include_drops_a_non_match() {
+        let out = filter_usepkg_exclude_include(
+            vec![cand_166("1.0")],
+            "dev-libs",
+            "foo",
+            &[],
+            &["dev-libs/bar".to_string()],
+        );
+        assert!(out.is_empty(), "{out:?}");
+        // Pin: a matching include keeps the row (no mutant target;
+        // documents the `is_empty() ||` arm).
+        let out = filter_usepkg_exclude_include(
+            vec![cand_166("1.0")],
+            "dev-libs",
+            "foo",
+            &[],
+            &["dev-libs/foo".to_string()],
+        );
+        assert_eq!(out.len(), 1);
+    }
 }
