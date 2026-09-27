@@ -543,7 +543,10 @@ impl Drop for ConfigRootOverride {
 /// pull only carries the client's `/etc/portage` contents, so without
 /// the seed the resolve would stack no base layer at all. Shared by
 /// `run_remote_resolve` and `run_bundle_stage` -- one placement match,
-/// no duplicated pull logic.
+/// no duplicated pull logic. A dangling pulled `make.profile` symlink is
+/// additionally remapped onto the server's repos
+/// (`remap_client_make_profile`, backlog #171 follow-up 4) -- same
+/// helper, so both paths resolve the client profile the same way.
 pub(crate) struct PlacedConfig {
     /// The dir to resolve from (the server path, or the pulled temp root).
     pub(crate) dir: std::path::PathBuf,
@@ -558,6 +561,152 @@ impl Drop for PlacedConfig {
             let _ = std::fs::remove_dir_all(tmp);
         }
     }
+}
+
+/// Lexically normalize an absolute path (fold `.`/`..` without touching
+/// the filesystem -- the client tree isn't here, only pulled symlink
+/// text, so `canonicalize` would resolve the wrong machine's paths).
+fn lexical_normalize(path: &std::path::Path) -> std::path::PathBuf {
+    use std::path::Component;
+    let mut out = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => out.push(prefix.as_os_str()),
+            Component::RootDir => out.push("/"),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::Normal(part) => out.push(part),
+        }
+    }
+    if out.as_os_str().is_empty() {
+        out.push("/");
+    }
+    out
+}
+
+/// Resolve a pulled client `make.profile` symlink against the server's
+/// repos (backlog #171 follow-up 4, owner Q10 = b: the client may hold no
+/// repo at all, so a symlink into the client's repo path dangles here and
+/// the profile chain would silently resolve to `[]`).
+///
+/// Only dangling symlinks whose target text names a repo profile (a
+/// `/profiles/` component in the client-absolute target) are rewritten:
+/// to the same-named server repo's `<location>/profiles/<rel>` when the
+/// pulled client `repos.conf` (if any) has a repo whose `location` is the
+/// link prefix, else to the first server repo -- in `find_repos` priority
+/// order, main repo first -- providing `<location>/profiles/<rel>`. A
+/// link that already resolves inside the pulled tree (e.g. a relative
+/// link to a custom profile shipped under `/etc/portage`, or a loopback
+/// absolute link), a directory `make.profile` (its `parent` entries ride
+/// the normal profile machinery), a missing one, and a target naming no
+/// repo profile are all left alone. Nothing found is a hard `mrg: !!! …`
+/// error naming the target, never a silent empty chain.
+///
+/// Real grounding (`3rdparty/portage` = portage-3.0.82.2): the profile
+/// root is `<config_root>/etc/make.profile` followed as a link
+/// (`package/ebuild/_config/LocationsManager.py:119-149`, `realpath`ed
+/// at `:154-157` for repo matching), and real warns it "should point
+/// into a profile within $PORTDIR/profiles/"
+/// (`package/ebuild/config.py:1444-1450`) -- the rewrite keeps exactly
+/// that shape, server-side, then reuses the existing resolver.
+fn remap_client_make_profile(
+    tmp: &std::path::Path,
+    client_etc_portage: &str,
+    server_config_root: &std::path::Path,
+) -> Result<(), String> {
+    let link = tmp.join("etc/portage/make.profile");
+    let meta = match link.symlink_metadata() {
+        Ok(meta) => meta,
+        Err(_) => return Ok(()),
+    };
+    if !meta.file_type().is_symlink() {
+        return Ok(());
+    }
+    // Already resolving server-side (a shipped in-tree profile, or a
+    // loopback absolute link): leave it -- only dangling links need the
+    // server-repo mapping.
+    if link.is_dir() {
+        return Ok(());
+    }
+    // The link target *text* -- never followed on the client (the pull is
+    // tar-only); relative targets resolve against the client's own
+    // `/etc/portage` dir, lexically.
+    let target = std::fs::read_link(&link)
+        .map_err(|e| format!("mrg: reading the pulled client make.profile link: {e}"))?;
+    let target_text = target.display().to_string();
+    let client_abs = if target.is_absolute() {
+        target.clone()
+    } else {
+        lexical_normalize(&std::path::Path::new(client_etc_portage).join(&target))
+    };
+    let client_abs_text = client_abs.to_string_lossy().into_owned();
+    let Some(split) = client_abs_text.find("/profiles/") else {
+        return Ok(());
+    };
+    let prefix = lexical_normalize(std::path::Path::new(&client_abs_text[..split]));
+    let rel = client_abs_text[split + "/profiles/".len()..].to_string();
+    if rel.is_empty() {
+        return Err(format!(
+            "mrg: !!! the pulled client make.profile points at {target_text}, which names no profile under profiles/"
+        ));
+    }
+    // Step 2: the pulled client `repos.conf` (if any) names the repo
+    // whose `location` is the link prefix; the same-named server repo
+    // provides the profile.
+    let client_repo_name: Option<String> = if tmp
+        .join("etc/portage/repos.conf")
+        .symlink_metadata()
+        .is_ok()
+    {
+        portage_repo::find_repos(tmp).ok().and_then(|repos| {
+            repos.into_iter().find_map(|repo| {
+                (lexical_normalize(&repo.location) == prefix).then(|| repo.name.clone())
+            })
+        })
+    } else {
+        None
+    };
+    let server_repos = portage_repo::find_repos(server_config_root).map_err(|e| {
+        format!(
+            "mrg: !!! the pulled client make.profile points at {target_text}, and the server repos cannot be listed: {e}"
+        )
+    })?;
+    // The same-named server repo first (a step-2 hit), then every server
+    // repo in priority order with main first (`find_repos` already sorts
+    // that way): the first `<location>/profiles/<rel>` that exists wins.
+    let mut ordered: Vec<&portage_repo::RepoConfig> = Vec::new();
+    if let Some(name) = client_repo_name.as_deref() {
+        ordered.extend(server_repos.iter().filter(|repo| repo.name == name));
+    }
+    ordered.extend(server_repos.iter().filter(|repo| {
+        client_repo_name
+            .as_deref()
+            .is_none_or(|name| repo.name != name)
+    }));
+    for repo in ordered {
+        let candidate = repo.location.join("profiles").join(&rel);
+        if candidate.is_dir() {
+            std::fs::remove_file(&link)
+                .map_err(|e| format!("mrg: replacing the pulled client make.profile link: {e}"))?;
+            std::os::unix::fs::symlink(&candidate, &link).map_err(|e| {
+                format!(
+                    "mrg: pointing the pulled client make.profile at {}: {e}",
+                    candidate.display()
+                )
+            })?;
+            return Ok(());
+        }
+    }
+    // Step 5: nothing found -- fail loudly, naming the target.
+    let name_note = client_repo_name
+        .as_deref()
+        .map_or(String::new(), |name| format!(" for client repo {name:?}"));
+    Err(format!(
+        "mrg: !!! the pulled client make.profile points at {target_text}: no server repo provides profiles/{rel}{name_note} ({} server repo(s) checked)",
+        server_repos.len()
+    ))
 }
 
 /// Place `/etc/portage` per `ConfigPlacement` (see `PlacedConfig`).
@@ -582,8 +731,8 @@ pub(crate) fn place_config_root(
     // under the client profile chain and the pulled `make.conf` --
     // real's `config` stacking order. Absent on the server (tests):
     // contributes nothing, deterministically.
-    let server_globals =
-        portage_repo::config_root_from_env().join("usr/share/portage/config/make.globals");
+    let server_config_root = portage_repo::config_root_from_env();
+    let server_globals = server_config_root.join("usr/share/portage/config/make.globals");
     let (dir, tmp): (std::path::PathBuf, Option<std::path::PathBuf>) = match &ctx.etc_portage {
         ConfigPlacement::Server(path) => (std::path::PathBuf::from(path), None),
         ConfigPlacement::Client(path) => {
@@ -622,6 +771,18 @@ pub(crate) fn place_config_root(
                         tmp.display()
                     ));
                 }
+            }
+            // Backlog #171 follow-up 4 (owner Q10 = b): the pulled
+            // `make.profile` symlink dangles when the client holds its
+            // repos elsewhere (or none at all) -- resolve its target
+            // text against the server's repos before the
+            // `ConfigRootOverride` below repoints `PORTAGE_CONFIGROOT`
+            // at the pulled root (server repos must be listed from the
+            // server root, like the seed above). `Server` placements
+            // are untouched.
+            if let Err(message) = remap_client_make_profile(&tmp, path, &server_config_root) {
+                let _ = std::fs::remove_dir_all(&tmp);
+                return Err(message);
             }
             (tmp.clone(), Some(tmp))
         }
@@ -5419,6 +5580,421 @@ mod tests {
             !after.contains("buildpkg"),
             "build-time FEATURES survived:\n{after}"
         );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #171 follow-up 4 (owner Q10 = b) scaffolding: a
+    /// synthetic server root (`etc/portage/repos.conf` + the server's
+    /// own `make.globals`, the two server-side inputs `place_config_root`
+    /// reads before repointing `PORTAGE_CONFIGROOT`). Returns the root;
+    /// repos are added per-test with `l171e_server_repo`.
+    fn l171e_server_root(tmp: &std::path::Path, repos_conf: &str) -> std::path::PathBuf {
+        let server_root = tmp.join("serverroot");
+        std::fs::create_dir_all(server_root.join("etc/portage/repos.conf")).unwrap();
+        std::fs::create_dir_all(server_root.join("usr/share/portage/config")).unwrap();
+        std::fs::write(
+            server_root.join("etc/portage/repos.conf/l171e.conf"),
+            repos_conf,
+        )
+        .unwrap();
+        std::fs::write(
+            server_root.join("usr/share/portage/config/make.globals"),
+            "FEATURES=\"sandbox news sign\"\n",
+        )
+        .unwrap();
+        server_root
+    }
+
+    /// Add a server repo with one profile `<location>/profiles/<rel>`
+    /// carrying `make.defaults` `FEATURES="<features>"` (plus a
+    /// `repo_name` file so `find_repos` keeps the section name).
+    fn l171e_server_repo(
+        server_root: &std::path::Path,
+        name: &str,
+        rel: &str,
+        features: &str,
+    ) -> std::path::PathBuf {
+        let location = server_root.join("repos").join(name);
+        let profile = location.join("profiles").join(rel);
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::write(
+            profile.join("make.defaults"),
+            format!("FEATURES=\"{features}\"\n"),
+        )
+        .unwrap();
+        std::fs::write(location.join("profiles/repo_name"), format!("{name}\n")).unwrap();
+        location
+    }
+
+    /// Pin `PORTAGE_CONFIGROOT` at a synthetic server root with ambient
+    /// `FEATURES`/`INSTALL_MASK` cleared (all process-global; shares
+    /// `PLACED_CONFIG_ENV_LOCK`), restoring everything on drop while the
+    /// lock is still held.
+    struct ServerEnvPin {
+        saved_config_root: Option<std::ffi::OsString>,
+        saved_features: Option<std::ffi::OsString>,
+        saved_mask: Option<std::ffi::OsString>,
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl ServerEnvPin {
+        fn pin(server_root: &std::path::Path) -> Self {
+            let guard = PLACED_CONFIG_ENV_LOCK.lock().unwrap();
+            let saved_config_root = std::env::var_os("PORTAGE_CONFIGROOT");
+            let saved_features = std::env::var_os("FEATURES");
+            let saved_mask = std::env::var_os("INSTALL_MASK");
+            // SAFETY: held `PLACED_CONFIG_ENV_LOCK`; no other test in
+            // this binary pins these without it.
+            unsafe {
+                std::env::set_var("PORTAGE_CONFIGROOT", server_root);
+                std::env::remove_var("FEATURES");
+                std::env::remove_var("INSTALL_MASK");
+            }
+            Self {
+                saved_config_root,
+                saved_features,
+                saved_mask,
+                _guard: guard,
+            }
+        }
+    }
+
+    impl Drop for ServerEnvPin {
+        fn drop(&mut self) {
+            // SAFETY: same as above.
+            unsafe {
+                match self.saved_config_root.take() {
+                    Some(value) => std::env::set_var("PORTAGE_CONFIGROOT", value),
+                    None => std::env::remove_var("PORTAGE_CONFIGROOT"),
+                }
+                match self.saved_features.take() {
+                    Some(value) => std::env::set_var("FEATURES", value),
+                    None => std::env::remove_var("FEATURES"),
+                }
+                match self.saved_mask.take() {
+                    Some(value) => std::env::set_var("INSTALL_MASK", value),
+                    None => std::env::remove_var("INSTALL_MASK"),
+                }
+            }
+        }
+    }
+
+    /// Resolve a placed client tree's config against explicit server
+    /// repos (for trees with no client `repos.conf`, where the shared
+    /// `load_repos_and_config` has nothing to read -- the profile chain
+    /// itself still resolves through the reused `resolve_config`).
+    fn l171e_resolve_with_server_repos(
+        placed_dir: &std::path::Path,
+        server_root: &std::path::Path,
+        eroot: &std::path::Path,
+    ) -> portage_profile::Config {
+        let server_repos = portage_repo::find_repos(server_root).expect("server repos resolve");
+        let main = server_repos
+            .iter()
+            .find(|repo| repo.is_main)
+            .expect("a main repo");
+        let overlays: Vec<(String, std::path::PathBuf)> = server_repos
+            .iter()
+            .filter(|repo| !repo.is_main)
+            .map(|repo| (repo.name.clone(), repo.location.clone()))
+            .collect();
+        let aliases: Vec<(String, std::path::PathBuf)> = server_repos
+            .iter()
+            .flat_map(|repo| {
+                repo.aliases
+                    .iter()
+                    .map(|alias| (alias.clone(), repo.location.clone()))
+            })
+            .collect();
+        let masters: std::collections::HashMap<String, Vec<std::path::PathBuf>> = server_repos
+            .iter()
+            .map(|repo| (repo.name.clone(), repo.masters.clone()))
+            .collect();
+        portage_profile::resolve_config(
+            placed_dir,
+            &main.location,
+            &overlays,
+            &aliases,
+            &main.name,
+            &masters,
+            eroot,
+        )
+        .expect("placed client config resolves")
+    }
+
+    const L171E_REL: &str = "default/linux/amd64/23.0";
+
+    /// Backlog #171 follow-up 4, step 2: a dangling absolute
+    /// `make.profile` into the client's repo path plus a client
+    /// `repos.conf` naming that repo resolves to the **same-named**
+    /// server repo's profile -- even when the main repo provides the
+    /// same relative profile with different content (a pure
+    /// main-first scan would pick the wrong one). Real's stacking
+    /// order holds: server `make.globals` + profile + client
+    /// `make.conf` (`config.py:446-499`, `const.INCREMENTALS`).
+    #[test]
+    fn remote_client_make_profile_resolves_against_same_named_server_repo() {
+        let tmp = regen_tmp("make-profile-name");
+        let server_root = l171e_server_root(
+            &tmp,
+            &format!(
+                "[DEFAULT]\nmain-repo = gentoo\n\n[gentoo]\nlocation = {}\n\n[custom]\nlocation = {}\n",
+                tmp.join("serverroot/repos/gentoo").display(),
+                tmp.join("serverroot/repos/custom").display(),
+            ),
+        );
+        l171e_server_repo(&server_root, "gentoo", L171E_REL, "otherfeat -sign");
+        let custom_profile = l171e_server_repo(&server_root, "custom", L171E_REL, "filecaps -sign");
+        // The client's repo path: text only, never created (dangling,
+        // like a client holding its tree elsewhere).
+        let prefix = "/var/db/repos-client-l171e/custom";
+        let client_etc = tmp.join("clientroot/etc/portage");
+        std::fs::create_dir_all(client_etc.join("repos.conf")).unwrap();
+        std::fs::write(
+            client_etc.join("repos.conf/l171e.conf"),
+            format!("[DEFAULT]\nmain-repo = custom\n\n[custom]\nlocation = {prefix}\n"),
+        )
+        .unwrap();
+        std::fs::write(client_etc.join("make.conf"), "FEATURES=\"-news custom\"\n").unwrap();
+        std::os::unix::fs::symlink(
+            format!("{prefix}/profiles/{L171E_REL}"),
+            client_etc.join("make.profile"),
+        )
+        .unwrap();
+        let _env = ServerEnvPin::pin(&server_root);
+        let mut ctx = local_ctx(
+            tmp.join("root").to_str().unwrap(),
+            tmp.join("work").to_str().unwrap(),
+        );
+        ctx.etc_portage = ConfigPlacement::Client(client_etc.to_string_lossy().into_owned());
+        let placed = place_config_root(&ctx, None).expect("client placement resolves");
+        // Remapped onto the same-named server repo, not the main one.
+        assert_eq!(
+            std::fs::read_link(placed.dir.join("etc/portage/make.profile")).unwrap(),
+            custom_profile.join("profiles").join(L171E_REL),
+            "the pulled link must point at the same-named server repo's profile"
+        );
+        let eroot = tmp.join("eroot");
+        let (repos, config) = crate::pretend::load_repos_and_config(&placed.dir, &eroot)
+            .expect("placed client config resolves");
+        assert!(repos.iter().any(|repo| repo.is_main));
+        assert_eq!(
+            crate::pretend::config_features_string(&config),
+            "custom filecaps sandbox",
+            "server make.globals + same-named profile + client make.conf"
+        );
+        drop(placed);
+        drop(_env);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #171 follow-up 4, step 3: with **no** client `repos.conf`
+    /// (the owner Q10 client holds no repo at all) the dangling link
+    /// resolves by `profiles/<rel>` against the server repos.
+    #[test]
+    fn remote_client_make_profile_resolves_without_client_repos_conf() {
+        let tmp = regen_tmp("make-profile-norepos");
+        let server_root = l171e_server_root(
+            &tmp,
+            &format!(
+                "[DEFAULT]\nmain-repo = gentoo\n\n[gentoo]\nlocation = {}\n",
+                tmp.join("serverroot/repos/gentoo").display(),
+            ),
+        );
+        let server_profile = l171e_server_repo(&server_root, "gentoo", L171E_REL, "filecaps -sign");
+        let target = format!("/var/db/repos-client-l171e/gentoo/profiles/{L171E_REL}");
+        let client_etc = tmp.join("clientroot/etc/portage");
+        std::fs::create_dir_all(&client_etc).unwrap();
+        std::fs::write(client_etc.join("make.conf"), "FEATURES=\"-news custom\"\n").unwrap();
+        std::os::unix::fs::symlink(&target, client_etc.join("make.profile")).unwrap();
+        let _env = ServerEnvPin::pin(&server_root);
+        let mut ctx = local_ctx(
+            tmp.join("root").to_str().unwrap(),
+            tmp.join("work").to_str().unwrap(),
+        );
+        ctx.etc_portage = ConfigPlacement::Client(client_etc.to_string_lossy().into_owned());
+        let placed = place_config_root(&ctx, None).expect("client placement resolves");
+        assert_eq!(
+            std::fs::read_link(placed.dir.join("etc/portage/make.profile")).unwrap(),
+            server_profile.join("profiles").join(L171E_REL),
+        );
+        let eroot = tmp.join("eroot");
+        let config = l171e_resolve_with_server_repos(&placed.dir, &server_root, &eroot);
+        assert_eq!(
+            crate::pretend::config_features_string(&config),
+            "custom filecaps sandbox",
+            "server make.globals + profile + client make.conf"
+        );
+        drop(placed);
+        drop(_env);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #171 follow-up 4, step 5: an unresolvable target fails
+    /// loudly -- a `!!!` message naming the target -- never a silent
+    /// empty chain.
+    #[test]
+    fn remote_client_make_profile_unresolvable_fails_loudly() {
+        let tmp = regen_tmp("make-profile-loud");
+        let server_root = l171e_server_root(
+            &tmp,
+            &format!(
+                "[DEFAULT]\nmain-repo = gentoo\n\n[gentoo]\nlocation = {}\n",
+                tmp.join("serverroot/repos/gentoo").display(),
+            ),
+        );
+        l171e_server_repo(
+            &server_root,
+            "gentoo",
+            "default/linux/amd64/22.0",
+            "filecaps -sign",
+        );
+        let target = "/var/db/repos-client-l171e/gentoo/profiles/default/linux/amd64/99.9";
+        let client_etc = tmp.join("clientroot/etc/portage");
+        std::fs::create_dir_all(client_etc.join("repos.conf")).unwrap();
+        std::fs::write(
+            client_etc.join("repos.conf/l171e.conf"),
+            "[DEFAULT]\nmain-repo = gentoo\n\n[gentoo]\nlocation = /var/db/repos-client-l171e/gentoo\n",
+        )
+        .unwrap();
+        std::fs::write(client_etc.join("make.conf"), "FEATURES=\"custom\"\n").unwrap();
+        std::os::unix::fs::symlink(target, client_etc.join("make.profile")).unwrap();
+        let _env = ServerEnvPin::pin(&server_root);
+        let mut ctx = local_ctx(
+            tmp.join("root").to_str().unwrap(),
+            tmp.join("work").to_str().unwrap(),
+        );
+        ctx.etc_portage = ConfigPlacement::Client(client_etc.to_string_lossy().into_owned());
+        let error = match place_config_root(&ctx, None) {
+            Ok(_) => panic!("unresolvable target must fail"),
+            Err(message) => message,
+        };
+        assert!(error.contains("!!!"), "failure must be loud, got: {error}");
+        assert!(
+            error.contains(target),
+            "failure must name the target, got: {error}"
+        );
+        drop(_env);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #171 follow-up 4, step 4: a directory `make.profile`
+    /// keeps working through the normal machinery -- its `parent`
+    /// `gentoo:base` entry resolves against the configured repos.
+    #[test]
+    fn remote_client_make_profile_dir_with_cross_repo_parent_resolves() {
+        let tmp = regen_tmp("make-profile-dir");
+        let server_root = l171e_server_root(
+            &tmp,
+            &format!(
+                "[DEFAULT]\nmain-repo = testrepo\n\n[testrepo]\nlocation = {}\n",
+                tmp.join("serverroot/repos/testrepo").display(),
+            ),
+        );
+        // The client repo lives client-side (a directory profile's
+        // parents resolve through the normal machinery, no remap).
+        let client_repo = tmp.join("crepo");
+        let base = client_repo.join("profiles/base");
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("make.defaults"), "FEATURES=\"filecaps -sign\"\n").unwrap();
+        let client_etc = tmp.join("clientroot/etc/portage");
+        std::fs::create_dir_all(client_etc.join("repos.conf")).unwrap();
+        std::fs::create_dir_all(client_etc.join("make.profile")).unwrap();
+        std::fs::write(
+            client_etc.join("repos.conf/l171e.conf"),
+            format!(
+                "[DEFAULT]\nmain-repo = testrepo\n\n[testrepo]\nlocation = {}\n",
+                client_repo.display(),
+            ),
+        )
+        .unwrap();
+        std::fs::write(client_etc.join("make.profile/parent"), "testrepo:base\n").unwrap();
+        std::fs::write(client_etc.join("make.conf"), "FEATURES=\"-news custom\"\n").unwrap();
+        let _env = ServerEnvPin::pin(&server_root);
+        let mut ctx = local_ctx(
+            tmp.join("root").to_str().unwrap(),
+            tmp.join("work").to_str().unwrap(),
+        );
+        ctx.etc_portage = ConfigPlacement::Client(client_etc.to_string_lossy().into_owned());
+        let placed = place_config_root(&ctx, None).expect("client placement resolves");
+        assert!(
+            placed.dir.join("etc/portage/make.profile").is_dir()
+                && placed
+                    .dir
+                    .join("etc/portage/make.profile")
+                    .symlink_metadata()
+                    .unwrap()
+                    .file_type()
+                    .is_dir(),
+            "a directory make.profile must pass through untouched"
+        );
+        let eroot = tmp.join("eroot");
+        let (repos, config) = crate::pretend::load_repos_and_config(&placed.dir, &eroot)
+            .expect("placed client config resolves");
+        assert!(repos.iter().any(|repo| repo.is_main));
+        assert_eq!(
+            crate::pretend::config_features_string(&config),
+            "custom filecaps sandbox",
+            "server make.globals + parent profile + client make.conf"
+        );
+        drop(placed);
+        drop(_env);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #171 follow-up 4, step 3 order: with no client
+    /// `repos.conf` and two server repos providing `profiles/<rel>`,
+    /// the main repo wins; the link itself is client-relative (its
+    /// text climbs out of the client's `/etc/portage`, never followed
+    /// there).
+    #[test]
+    fn remote_client_make_profile_prefers_main_repo_and_relative_targets() {
+        let tmp = regen_tmp("make-profile-order");
+        let server_root = l171e_server_root(
+            &tmp,
+            &format!(
+                "[DEFAULT]\nmain-repo = gentoo\n\n[gentoo]\nlocation = {}\n\n[ovl]\nlocation = {}\n",
+                tmp.join("serverroot/repos/gentoo").display(),
+                tmp.join("serverroot/repos/ovl").display(),
+            ),
+        );
+        let main_profile = l171e_server_repo(&server_root, "gentoo", L171E_REL, "mainfeat -sign");
+        l171e_server_repo(&server_root, "ovl", L171E_REL, "otherfeat -sign");
+        let client_etc = tmp.join("clientroot/etc/portage");
+        std::fs::create_dir_all(&client_etc).unwrap();
+        std::fs::write(client_etc.join("make.conf"), "FEATURES=\"-news custom\"\n").unwrap();
+        // A client-relative target: climb from the client's
+        // `/etc/portage` to `/`, then the dangling repo path.
+        let depth = client_etc
+            .components()
+            .filter(|component| matches!(component, std::path::Component::Normal(_)))
+            .count();
+        let target = format!(
+            "{}var/db/repos-client-l171e/gentoo/profiles/{L171E_REL}",
+            "../".repeat(depth)
+        );
+        std::os::unix::fs::symlink(&target, client_etc.join("make.profile")).unwrap();
+        let _env = ServerEnvPin::pin(&server_root);
+        let mut ctx = local_ctx(
+            tmp.join("root").to_str().unwrap(),
+            tmp.join("work").to_str().unwrap(),
+        );
+        ctx.etc_portage = ConfigPlacement::Client(client_etc.to_string_lossy().into_owned());
+        let placed = place_config_root(&ctx, None).expect("client placement resolves");
+        assert_eq!(
+            std::fs::read_link(placed.dir.join("etc/portage/make.profile")).unwrap(),
+            main_profile.join("profiles").join(L171E_REL),
+            "the main repo must win the server scan"
+        );
+        let eroot = tmp.join("eroot");
+        let config = l171e_resolve_with_server_repos(&placed.dir, &server_root, &eroot);
+        assert_eq!(
+            crate::pretend::config_features_string(&config),
+            "custom mainfeat sandbox",
+            "server make.globals + main profile + client make.conf"
+        );
+        drop(placed);
+        drop(_env);
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
