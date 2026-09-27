@@ -54907,4 +54907,220 @@ mod tests_166 {
         ));
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    // ---- S5: `direct_solve_instance_use` (real
+    // `pkg.with_use(self._pkg_use_enabled(pkg))`: a merge instance with
+    // an entry reads its resolved display flags, a merge instance
+    // without one reads the tree candidate effectively, an installed
+    // instance reads its vdb record -- see the function's own doc
+    // comment). ----
+
+    /// One scratch ebuild plus its real md5-cache entry (the md5-cache
+    /// validation guard fails otherwise), in the #162
+    /// `write_pkg_162` shape extended with `DEPEND`/`REQUIRED_USE`
+    /// lines for the circular legs below.
+    fn write_pkg_166(
+        repo: &Path,
+        cp: &str,
+        pv: &str,
+        slot: &str,
+        iuse: &str,
+        depend: &str,
+        required_use: &str,
+    ) {
+        use md5::Digest as _;
+        use std::fmt::Write as _;
+        let (cat, pkg) = cp.split_once('/').expect("category/package");
+        let dir = repo.join(cat).join(pkg);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut body = format!(
+            "EAPI=8\nDESCRIPTION=\"166 circular/instance-use\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\n"
+        );
+        if !iuse.is_empty() {
+            writeln!(body, "IUSE=\"{iuse}\"").unwrap();
+        }
+        if !depend.is_empty() {
+            writeln!(body, "DEPEND=\"{depend}\"").unwrap();
+        }
+        if !required_use.is_empty() {
+            writeln!(body, "REQUIRED_USE=\"{required_use}\"").unwrap();
+        }
+        std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
+        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+        let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=166 circular/instance-use\nEAPI=8\n".to_string();
+        if !iuse.is_empty() {
+            writeln!(entry, "IUSE={iuse}").unwrap();
+        }
+        if !depend.is_empty() {
+            writeln!(entry, "DEPEND={depend}").unwrap();
+        }
+        if !required_use.is_empty() {
+            writeln!(entry, "REQUIRED_USE={required_use}").unwrap();
+        }
+        writeln!(entry, "KEYWORDS=amd64\nSLOT={slot}\n_md5_={md5}").unwrap();
+        let cachedir = repo.join("metadata/md5-cache").join(cat);
+        std::fs::create_dir_all(&cachedir).unwrap();
+        std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+    }
+
+    /// Single scratch repo (`testrepo`, priority 0, main) holding
+    /// `(cp, version, slot, IUSE, DEPEND, REQUIRED_USE)` ebuilds with
+    /// `KEYWORDS="amd64"`.
+    fn repo_pkgs_166(dir: &Path, pkgs: &[(&str, &str, &str, &str, &str, &str)]) -> Vec<RepoConfig> {
+        let repo = dir.join("repo");
+        for (cp, pv, slot, iuse, depend, required_use) in pkgs {
+            write_pkg_166(&repo, cp, pv, slot, iuse, depend, required_use);
+        }
+        vec![RepoConfig {
+            name: "testrepo".to_string(),
+            location: repo,
+            priority: 0,
+            is_main: true,
+            masters: vec![],
+            profile_formats: vec![],
+            cache_formats: vec![],
+            aliases: vec![],
+            sync_type: None,
+            sync_uri: None,
+            volatile: false,
+            module_specific_options: vec![],
+        }]
+    }
+
+    /// One installed instance with the given `USE` record.
+    fn use_install_166(root: &Path, cat: &str, pf: &str, use_flags: &str) {
+        let d = root.join("var/db/pkg").join(cat).join(pf);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("SLOT"), "0\n").unwrap();
+        std::fs::write(d.join("USE"), use_flags).unwrap();
+    }
+
+    /// Merge-bound `GraphEntry` carrying resolved display flags (the
+    /// shape `direct_solve_instance_use` reads for a merge instance).
+    fn entry_166(
+        cat: &str,
+        pkg: &str,
+        version: &str,
+        display: Vec<(String, bool)>,
+    ) -> GraphEntry {
+        GraphEntry {
+            discovery: 0,
+            category: cat.to_string(),
+            package: pkg.to_string(),
+            outcome: PretendOutcome::New {
+                version: version.to_string(),
+            },
+            blockers: Vec::new(),
+            slot: Some("0".to_string()),
+            sub_slot: Some("0".to_string()),
+            repo_name: Some("testrepo".to_string()),
+            oldbest: Vec::new(),
+            use_flags_display: display,
+            use_expand_display: Vec::new(),
+            use_expand_display_p: Vec::new(),
+            keyword_mask: None,
+            new_slot: false,
+            interactive: false,
+            fetch_restrict: false,
+            fetch_restrict_satisfied: false,
+            download_files: Vec::new(),
+            required_by: Vec::new(),
+            source: CandidateSource::Ebuild,
+            provenance: VisibilityProvenance::default(),
+            keyword_suggestion: None,
+            use_suggestion: None,
+            parent_use_suggestion: None,
+            targets_running_root: false,
+            remote_binary: false,
+            build_id: None,
+            deps: Vec::new(),
+        }
+    }
+
+
+    fn inst_166(version: &str, installed: bool) -> SlotConflictInstance {
+        SlotConflictInstance {
+            version: version.to_string(),
+            sub_slot: "0".to_string(),
+            repo_name: "testrepo".to_string(),
+            use_display: Vec::new(),
+            parents: Vec::new(),
+            installed,
+        }
+    }
+
+    fn iu_input_166<'a>(
+        entries: &'a [GraphEntry],
+        replace_cps: &'a BTreeSet<(String, String)>,
+        root: &'a Path,
+        repos: &'a [RepoConfig],
+        config: &'a portage_profile::Config,
+    ) -> DirectSolveInput<'a> {
+        let conflicts: &'a [SlotConflict] = &[];
+        let top: &'a HashSet<(String, String)> = &EMPTY_TOP_166;
+        DirectSolveInput {
+            conflicts,
+            entries,
+            top_level: top,
+            excluded: &[],
+            selective: false,
+            replace_cps,
+            root,
+            repos,
+            config,
+        }
+    }
+
+    /// Empty top-level set for inputs whose verdict never consults it.
+    static EMPTY_TOP_166: std::sync::LazyLock<HashSet<(String, String)>> =
+        std::sync::LazyLock::new(HashSet::new);
+
+    /// An installed instance reads vdb `USE` (enabled) over the tree
+    /// `IUSE` (declared): kills the whole-body rows and the `==` ->
+    /// `!=` version-find flip (which falls back to `enabled.clone()`).
+    #[test]
+    fn direct_solve_instance_use_166_installed_reads_vdb_over_tree_iuse() {
+        let root = dir_166("iu-inst");
+        use_install_166(&root, "dev-libs", "iupkg-1.0", "fa\n");
+        let dir = dir_166("iu-inst-repo");
+        let repos = repo_pkgs_166(&dir, &[("dev-libs/iupkg", "1.0", "0", "fa fb", "", "")]);
+        let config = cfg_166();
+        let replace = BTreeSet::new();
+        let input = iu_input_166(&[], &replace, &root, &repos, &config);
+        let (enabled, declared) =
+            direct_solve_instance_use(&input, "dev-libs", "iupkg", &inst_166("1.0", true));
+        assert_eq!(enabled, HashSet::from(["fa".to_string()]));
+        assert_eq!(declared, HashSet::from(["fa".to_string(), "fb".to_string()]));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A merge instance with an entry reads its resolved display
+    /// flags, and decoys (wrong category, wrong package) never match:
+    /// kills the whole-body rows, the category/package `==` -> `!=`
+    /// flips (which match the first decoy instead) and the first `&&`
+    /// -> `||` widening (which matches the same-category decoy).
+    #[test]
+    fn direct_solve_instance_use_166_merge_reads_its_own_entry() {
+        let root = dir_166("iu-entry");
+        let repos = Vec::new();
+        let config = cfg_166();
+        let replace = BTreeSet::new();
+        let entries = vec![
+            entry_166("other-libs", "iupkg", "1.0", vec![("dx".to_string(), true)]),
+            entry_166("dev-libs", "otherpkg", "1.0", vec![("dy".to_string(), true)]),
+            entry_166(
+                "dev-libs",
+                "iupkg",
+                "1.0",
+                vec![("fa".to_string(), true), ("fb".to_string(), false)],
+            ),
+        ];
+        let input = iu_input_166(&entries, &replace, &root, &repos, &config);
+        let (enabled, declared) =
+            direct_solve_instance_use(&input, "dev-libs", "iupkg", &inst_166("1.0", false));
+        assert_eq!(enabled, HashSet::from(["fa".to_string()]));
+        assert_eq!(declared, HashSet::from(["fa".to_string(), "fb".to_string()]));
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
