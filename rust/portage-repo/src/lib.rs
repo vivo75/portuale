@@ -54787,4 +54787,124 @@ mod tests_166 {
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&bare);
     }
+
+    // ---- S4: `direct_solve_arg_mode` (real `_want_installed_pkg`,
+    // `depgraph.py:7280-7302`, folded to what the direct solve needs:
+    // the installed instance is "argued" exactly when the user asked
+    // for that cp without `--exclude` and outside selective mode). ----
+
+    /// Minimal visibility config in the #161 `test_config` shape
+    /// (amd64-only, no overrides).
+    fn cfg_166() -> portage_profile::Config {
+        portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            ..Default::default()
+        }
+    }
+
+    /// One conflict over `(version, installed)` instances (parents are
+    /// irrelevant to the arg-mode verdict).
+    fn conflict_166(versions: Vec<(&str, bool)>) -> SlotConflict {
+        SlotConflict {
+            category: "dev-libs".to_string(),
+            package: "argpkg".to_string(),
+            slot: "0".to_string(),
+            resolved_version: versions[0].0.to_string(),
+            conflicting_atom: "dev-libs/argpkg".to_string(),
+            instances: versions
+                .into_iter()
+                .map(|(v, installed)| SlotConflictInstance {
+                    version: v.to_string(),
+                    sub_slot: "0".to_string(),
+                    repo_name: "testrepo".to_string(),
+                    use_display: Vec::new(),
+                    parents: Vec::new(),
+                    installed,
+                })
+                .collect(),
+        }
+    }
+
+    fn arg_input_166<'a>(
+        conflicts: &'a [SlotConflict],
+        top_level: &'a HashSet<(String, String)>,
+        excluded: &'a [String],
+        selective: bool,
+        replace_cps: &'a BTreeSet<(String, String)>,
+        root: &'a Path,
+        repos: &'a [RepoConfig],
+        config: &'a portage_profile::Config,
+    ) -> DirectSolveInput<'a> {
+        DirectSolveInput {
+            conflicts,
+            entries: &[],
+            top_level,
+            excluded,
+            selective,
+            replace_cps,
+            root,
+            repos,
+            config,
+        }
+    }
+
+    fn arg_top_166() -> HashSet<(String, String)> {
+        HashSet::from([("dev-libs".to_string(), "argpkg".to_string())])
+    }
+
+    /// The argued shape (installed instance, top-level names the cp, no
+    /// exclude, not selective) is the only `true`: kills the
+    /// whole-body `-> false` row.
+    #[test]
+    fn direct_solve_arg_mode_166_argues_the_requested_installed() {
+        let root = dir_166("arg-true");
+        let repos = Vec::new();
+        let config = cfg_166();
+        let conflicts = [conflict_166(vec![("2.0", false), ("1.0", true)])];
+        let top = arg_top_166();
+        let replace = BTreeSet::new();
+        assert!(direct_solve_arg_mode(
+            &arg_input_166(&conflicts, &top, &[], false, &replace, &root, &repos, &config),
+            &conflicts[0]
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Every missing precondition reports `false`: no installed
+    /// instance (kills the `!any(installed)` deletion and the `||` ->
+    /// `&&` narrowing, both of which proceed to `true`), selective
+    /// mode, an unrequested cp, and a matching `--exclude` (kills the
+    /// `!excluded.any` deletion, which reports `true`).
+    #[test]
+    fn direct_solve_arg_mode_166_rejects_every_non_arg_shape() {
+        let root = dir_166("arg-false");
+        let repos = Vec::new();
+        let config = cfg_166();
+        let top = arg_top_166();
+        let empty_top: HashSet<(String, String)> = HashSet::new();
+        let replace = BTreeSet::new();
+        let mk =
+            |conflicts: &[SlotConflict], top: &HashSet<(String, String)>, excl: &[String], sel: bool| {
+                direct_solve_arg_mode(
+                    &arg_input_166(conflicts, top, excl, sel, &replace, &root, &repos, &config),
+                    &conflicts[0],
+                )
+            };
+        // No installed instance: not arguable even when requested.
+        let merge_only = [conflict_166(vec![("2.0", false), ("1.0", false)])];
+        assert!(!mk(&merge_only, &top, &[], false));
+        // Selective mode wants the installed package.
+        let with_inst = [conflict_166(vec![("2.0", false), ("1.0", true)])];
+        assert!(!mk(&with_inst, &top, &[], true));
+        // Nobody asked for this cp.
+        assert!(!mk(&with_inst, &empty_top, &[], false));
+        // `--exclude` names the installed cpv.
+        assert!(!mk(
+            &with_inst,
+            &top,
+            &["dev-libs/argpkg".to_string()],
+            false
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
