@@ -1212,16 +1212,22 @@ fn add_installed_dependency_closure(
         let live = crate::live_metadata_for_installed(repos, root, cat, pkg, ver);
         let mut md: HashMap<String, String> = HashMap::new();
         let mut memo: HashMap<(String, String, String, String), String> = HashMap::new();
-        // A2 follow-up, settled by Phase 5 S1: with the built-`:=`
-        // append removed, the closure stays on Raw under every option
-        // set -- the pre-A2 scheduler graph (raw minus the injected
-        // libc), which is closer to real's effective view than the
-        // ebuild alone.
+        // A2 follow-up (unchanged by backlog #25 S1b, which scopes the
+        // overlay to the walk/scan sites): the closure stays on Raw
+        // under every option set -- the pre-A2 scheduler graph (raw
+        // minus the injected libc), which is closer to real's effective
+        // view than the ebuild alone.
         let layer = crate::InstalledMetaLayer::Raw;
         for k in ["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"] {
+            // The `false` below is dead under `Raw` (the flag only gates
+            // the Effective append); backlog #25 S1b scopes the overlay
+            // to the walk/scan sites, so the closure keeps Raw. Thread
+            // the real flag through `add_installed_dependency_closure`
+            // and its callers if this layer ever changes.
             let s = crate::installed_dep_string(
                 root,
                 dynamic_deps,
+                false,
                 cat,
                 pkg,
                 ver,
