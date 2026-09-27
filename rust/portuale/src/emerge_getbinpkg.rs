@@ -55,26 +55,19 @@ use portage_profile::{BinRepo, Config};
 use portage_repo::{GraphEntry, PretendOutcome, RepoConfig};
 use std::path::Path;
 
-/// Real `fetch.py::_hide_url_passwd`: mask a userinfo password
-/// (`//user:secret@` -> `//user:*password*@`), leaving the rest of the
-/// URL untouched. Real applies it to the binhost URL in its own
+/// Real `fetch.py::_hide_url_passwd`, verbatim (`fetch.py:73-74`):
+/// `re.sub(r"//([^:\s]+):[^@\s]+@", r"//\1:*password*@", url)`.
+/// Real applies it to the binhost URL in its own
 /// `Error fetching binhost package info` line (`bintree.py:1794-1796`).
+/// The single global substitution is implemented exactly (same pattern
+/// and replacement text), so edge behaviour matches: a password
+/// containing whitespace is left alone (`[^@\s]+` cannot span it),
+/// while a user containing `/` is still masked (`[^:\s]+` allows it).
 pub(crate) fn hide_binhost_passwd(url: &str) -> String {
-    let Some(auth_start) = url.find("//") else {
-        return url.to_string();
-    };
-    let after = &url[auth_start + 2..];
-    let Some(at) = after.find('@') else {
-        return url.to_string();
-    };
-    let (auth, rest) = after.split_at(at);
-    let Some((user, _)) = auth.split_once(':') else {
-        return url.to_string();
-    };
-    if user.is_empty() || user.contains([' ', '/']) {
-        return url.to_string();
-    }
-    format!("{}//{}:*password*{}", &url[..auth_start], user, rest)
+    regex::Regex::new(r"//([^:\s]+):[^@\s]+@")
+        .expect("static regex is valid")
+        .replace_all(url, "//$1:*password*@")
+        .into_owned()
 }
 
 /// Real `urllib.error.HTTPError`'s own `str` (`"HTTP Error {code}:
@@ -132,92 +125,119 @@ pub(crate) fn binhost_fetch_warning(binrepo_name: &str, sync_uri: &str, detail: 
 /// and resolution proceeds.
 pub fn refresh_binhost_indexes(binrepos: &[BinRepo], root: &Path) {
     for binrepo in binrepos {
-        let uri = binrepo.sync_uri.trim_end_matches('/');
-        if uri.starts_with("file://") {
-            continue;
-        }
-        let cache_dir = binrepo.packages_dir(root);
-        if let Err(e) = std::fs::create_dir_all(&cache_dir) {
-            eprint!(
-                "{}",
-                binhost_fetch_warning(&binrepo.name, uri, &format!("{}: {e}", cache_dir.display()))
-            );
-            continue;
-        }
-        let dest = cache_dir.join("Packages");
-
-        // Real `bintree._populate_remote` prefers a compressed index when
-        // the binhost serves one (`Packages.gz` / `Packages.zst`),
-        // decompressing it into the same plain `Packages` cache file
-        // `list_remote_binary_candidates` reads. Fall back to the plain
-        // `Packages` if neither compressed form is there.
-        //
-        // Every attempt runs quiet (`download_via_wget_quiet`): the
-        // transcript is captured for message shaping, never inherited
-        // onto stdout/stderr.
-        let mut failures: Vec<portage_fetch::QuietFetchError> = Vec::new();
-        let mut refreshed = false;
-        for (ext, tool) in [("gz", "gzip"), ("zst", "zstd")] {
-            let compressed = cache_dir.join(format!("Packages.{ext}"));
-            match crate::fetch::wget_fetch_quiet(&format!("{uri}/Packages.{ext}"), &compressed) {
-                Err(e) => failures.push(e),
-                Ok(()) => {
-                    match std::fs::File::create(&dest) {
-                        Err(e) => failures.push(portage_fetch::QuietFetchError {
-                            summary: format!("{}: {e}", dest.display()),
-                            stderr: String::new(),
-                        }),
-                        Ok(out) => {
-                            let ok = std::process::Command::new(tool)
-                                .arg("-dc")
-                                .arg(&compressed)
-                                .stdout(std::process::Stdio::from(out))
-                                .status()
-                                .is_ok_and(|s| s.success());
-                            let _ = std::fs::remove_file(&compressed);
-                            if ok {
-                                refreshed = true;
-                            } else {
-                                // Like real's corrupt-`Packages.gz`
-                                // (`gzip.BadGzipFile`, itself an
-                                // `OSError`, hits the same
-                                // `except OSError`): warn, no further
-                                // fallback for this repo.
-                                failures.push(portage_fetch::QuietFetchError {
-                                    summary: format!("{tool} -dc Packages.{ext} failed"),
-                                    stderr: String::new(),
-                                });
-                            }
-                        }
-                    }
-                    break;
-                }
-            }
-        }
-        if !refreshed {
-            match crate::fetch::wget_fetch_quiet(&format!("{uri}/Packages"), &dest) {
-                Ok(()) => refreshed = true,
-                Err(e) => failures.push(e),
-            }
-        }
-        if !refreshed {
-            // Real warns with the fetch's own error string; prefer a
-            // server status line (`HTTP Error 500: ...`, from the first
-            // attempt that has one) over the wget summary, exactly like
-            // real prefers `str(HTTPError)` -- the attempts hit the same
-            // server, so the first parseable one is representative.
-            let detail = failures
-                .iter()
-                .find_map(|f| wget_http_error(&f.stderr))
-                .unwrap_or_else(|| {
-                    failures
-                        .last()
-                        .map(|f| f.summary.clone())
-                        .unwrap_or_else(|| "index refresh failed".to_string())
-                });
-            eprint!("{}", binhost_fetch_warning(&binrepo.name, uri, &detail));
+        if let Some(warning) = refresh_one_binrepo(binrepo, root) {
+            eprint!("{warning}");
         }
     }
+}
+
+/// One binrepo of [`refresh_binhost_indexes`]: `None` once its live
+/// index is cached (or for a `file://` binrepo, which needs no
+/// refresh), else real's `!!! [<repo>] ...` warning block for the
+/// caller to print to stderr. Returning the block (instead of
+/// printing it) keeps the shaping testable.
+fn refresh_one_binrepo(binrepo: &BinRepo, root: &Path) -> Option<String> {
+    // Real warns with `base_url` as configured (`bintree.py:1488,1795`):
+    // only `uri` (the trailing-`/`-stripped form) builds fetch URLs,
+    // every warning below prints `raw`.
+    let raw = binrepo.sync_uri.as_str();
+    let uri = raw.trim_end_matches('/');
+    if uri.starts_with("file://") {
+        return None;
+    }
+    let cache_dir = binrepo.packages_dir(root);
+    if let Err(e) = std::fs::create_dir_all(&cache_dir) {
+        return Some(binhost_fetch_warning(
+            &binrepo.name,
+            raw,
+            &format!("{}: {e}", cache_dir.display()),
+        ));
+    }
+    let dest = cache_dir.join("Packages");
+
+    // Real `bintree._populate_remote` prefers a compressed index when
+    // the binhost serves one (`Packages.gz` / `Packages.zst`),
+    // decompressing it into the same plain `Packages` cache file
+    // `list_remote_binary_candidates` reads. Fall back to the plain
+    // `Packages` if neither compressed form is there.
+    //
+    // Every attempt runs quiet (`download_via_wget_quiet`): the
+    // transcript is captured for message shaping, never inherited
+    // onto stdout/stderr.
+    let mut failures: Vec<portage_fetch::QuietFetchError> = Vec::new();
+    for (ext, tool) in [("gz", "gzip"), ("zst", "zstd")] {
+        let compressed = cache_dir.join(format!("Packages.{ext}"));
+        match crate::fetch::wget_fetch_quiet(&format!("{uri}/Packages.{ext}"), &compressed) {
+            Err(e) => failures.push(e),
+            Ok(()) => match std::fs::File::create(&dest) {
+                Err(e) => {
+                    failures.push(portage_fetch::QuietFetchError {
+                        summary: format!("{}: {e}", dest.display()),
+                        stderr: String::new(),
+                    });
+                    break;
+                }
+                Ok(out) => {
+                    let ok = std::process::Command::new(tool)
+                        .arg("-dc")
+                        .arg(&compressed)
+                        .stdout(std::process::Stdio::from(out))
+                        .status()
+                        .is_ok_and(|s| s.success());
+                    let _ = std::fs::remove_file(&compressed);
+                    if ok {
+                        return None;
+                    }
+                    // A downloaded-but-corrupt compressed index warns
+                    // immediately, with NO plain-`Packages` attempt:
+                    // real's `gzip.BadGzipFile` subclasses `OSError`
+                    // (verified against the stdlib), so it escapes the
+                    // `("Packages.gz", "Packages")` loop straight to the
+                    // outer `except OSError` (`bintree.py:1790-1809`).
+                    // The truncated cache file goes too: a failed
+                    // refresh leaves nothing for the resolver to trust.
+                    let _ = std::fs::remove_file(&dest);
+                    failures.push(portage_fetch::QuietFetchError {
+                        summary: format!("{tool} -dc Packages.{ext} failed"),
+                        stderr: String::new(),
+                    });
+                    return Some(binhost_fetch_warning(
+                        &binrepo.name,
+                        raw,
+                        &http_or_summary(&failures),
+                    ));
+                }
+            },
+        }
+    }
+    match crate::fetch::wget_fetch_quiet(&format!("{uri}/Packages"), &dest) {
+        Ok(()) => None,
+        Err(e) => {
+            failures.push(e);
+            Some(binhost_fetch_warning(
+                &binrepo.name,
+                raw,
+                &http_or_summary(&failures),
+            ))
+        }
+    }
+}
+
+/// Real warns with the fetch's own error string; prefer a
+/// server status line (`HTTP Error 500: ...`, from the first
+/// attempt that has one) over the wget summary, exactly like
+/// real prefers `str(HTTPError)` -- the attempts hit the same
+/// server, so the first parseable one is representative.
+fn http_or_summary(failures: &[portage_fetch::QuietFetchError]) -> String {
+    failures
+        .iter()
+        .find_map(|f| wget_http_error(&f.stderr))
+        .unwrap_or_else(|| {
+            failures
+                .last()
+                .map(|f| f.summary.clone())
+                .unwrap_or_else(|| "index refresh failed".to_string())
+        })
 }
 
 /// Real `emerge --getbinpkg <atom>` / `--getbinpkgonly <atom>` (no
@@ -1525,6 +1545,86 @@ mod tests {
     }
 
     #[test]
+    fn refresh_binhost_indexes_warns_immediately_on_a_corrupt_packages_gz() {
+        // Review fix (#175): a downloaded-but-corrupt `Packages.gz`
+        // must NOT fall back to plain `Packages`. Real's
+        // `gzip.BadGzipFile` subclasses `OSError` (verified against
+        // the stdlib), so it escapes the `("Packages.gz", "Packages")`
+        // loop straight to the outer `except OSError`
+        // (`bintree.py:1790-1809`). The stub serves garbage for
+        // `Packages.gz` and a valid index for `Packages`: pre-fix the
+        // cache would hold the plain body (the fallback was tried);
+        // post-fix no cache file is left at all.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let plain = b"TIMESTAMP: 0\nPACKAGES: 0\n\n".to_vec();
+        let mut routes = HashMap::new();
+        routes.insert("/Packages.gz".to_string(), b"this is not gzip\n".to_vec());
+        routes.insert("/Packages".to_string(), plain);
+        // The `.gz` attempt plus the never-made plain attempt's slot
+        // (the helper thread just blocks on accept until teardown).
+        let (base, _h) = serve(routes, 2);
+        let binrepo = BinRepo {
+            name: "test".to_string(),
+            sync_uri: base.clone(),
+            priority: 1,
+            location: None,
+            verify_signature: true,
+        };
+        refresh_binhost_indexes(std::slice::from_ref(&binrepo), &root);
+        assert!(
+            !binrepo.packages_dir(&root).join("Packages").exists(),
+            "a corrupt Packages.gz warns with no plain-Packages fallback"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn refresh_warns_with_the_untrimmed_sync_uri_but_fetches_stripped_urls() {
+        // Review fix (#175): real warns with `base_url` as configured
+        // (`bintree.py:1488,1795`), so a `sync-uri` with a trailing
+        // slash keeps it in the warning -- while fetch URLs are still
+        // built from the stripped form. The stub 500s only the
+        // stripped `/sub/...` paths: the `HTTP Error 500` detail in
+        // the returned warning proves the fetches hit the stripped
+        // URLs (unstripped doubleslash paths would 404 with a wget
+        // summary instead), and the `from '.../sub/'` line proves the
+        // warning kept the configured slash.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let mut routes = HashMap::new();
+        for path in ["/sub/Packages.gz", "/sub/Packages.zst", "/sub/Packages"] {
+            routes.insert(
+                path.to_string(),
+                (
+                    "500 Internal Server Error".to_string(),
+                    b"stub 500\n".to_vec(),
+                ),
+            );
+        }
+        // One connection per attempt: Packages.gz + Packages.zst +
+        // Packages (wget does not retry a 500).
+        let (base, _h) = serve_with_status(routes, 3);
+        let binrepo = BinRepo {
+            name: "trail".to_string(),
+            sync_uri: format!("{base}/sub/"),
+            priority: 50,
+            location: None,
+            verify_signature: false,
+        };
+        let warning = refresh_one_binrepo(&binrepo, &root).expect("a 500ing binhost warns");
+        assert!(
+            warning.contains(&format!("from '{base}/sub/'")),
+            "warning keeps the configured trailing slash: {warning}"
+        );
+        assert!(
+            warning.contains("HTTP Error 500: Internal Server Error"),
+            "fetches hit the stripped URLs and recovered the status: {warning}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
     fn wget_http_error_recovers_urllibs_http_error_shape() {
         // Real `str(urllib.error.HTTPError(url, 500, "Internal Server
         // Error", ...))` is `"HTTP Error 500: Internal Server Error"`
@@ -1554,7 +1654,8 @@ mod tests {
     #[test]
     fn hide_binhost_passwd_masks_only_a_userinfo_password() {
         // Real `fetch.py::_hide_url_passwd` (`//user:secret@` ->
-        // `//user:*password*@`).
+        // `//user:*password*@`), implemented as the same single regex
+        // substitution (`fetch.py:73-74`).
         assert_eq!(
             hide_binhost_passwd("http://user:secret@host:1234/path"),
             "http://user:*password*@host:1234/path"
@@ -1566,6 +1667,18 @@ mod tests {
         assert_eq!(
             hide_binhost_passwd("http://user@host/"),
             "http://user@host/"
+        );
+        // A space inside the password is left alone: real's
+        // `[^@\s]+` cannot span it, so the regex never matches.
+        assert_eq!(
+            hide_binhost_passwd("http://user:pass word@host/"),
+            "http://user:pass word@host/"
+        );
+        // A `/` inside the user is still masked: real's `[^:\s]+`
+        // allows it.
+        assert_eq!(
+            hide_binhost_passwd("http://a/b:c@host/"),
+            "http://a/b:*password*@host/"
         );
     }
 
