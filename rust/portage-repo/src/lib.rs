@@ -6131,7 +6131,7 @@ fn vercmp_ordering(a: &str, b: &str) -> Ordering {
 /// `st_mtime` of `p` in nanos, 0 when the path is missing or unreadable.
 /// The invalidation signal for the [`installed_candidates`] cache below:
 /// every portuale vdb mutation replaces or removes a package dir
-/// (`ebuild_merge::write_vdb_entry_from_dir` `remove_dir_all` + `rename`;
+/// (`ebuild_merge::publish_vdb_tmp` `remove_dir_all` + `rename`;
 /// unmerge removes the dir), so the *category* dir mtime catches all of
 /// them. An external in-place rewrite of a file inside a running process
 /// is not caught -- the same in-process-cache property real's `vardb`
@@ -6217,6 +6217,14 @@ fn installed_candidates_uncached(
             e.file_type().is_ok_and(|t| t.is_dir()) || e.path().is_dir()
         }) {
             let name = e.file_name().to_string_lossy().to_string();
+            // Real `vardbapi._excluded_dirs`: an in-progress
+            // `-MERGING-<pf>` entry is never an installed version (the
+            // `strip_version_prefix` below already rejects it, since no
+            // package name starts with `-MERGING-`; this states the rule
+            // where real states it).
+            if portage_util::is_merging_vdb_entry(&name) {
+                continue;
+            }
             let Some(version) = strip_version_prefix(&name, &src_pkg) else {
                 continue;
             };
@@ -7384,6 +7392,13 @@ fn all_installed_packages_uncached(root: &Path) -> Vec<InstalledPackage> {
         };
         for pkg in pkgs.into_iter().filter(|e| e.path().is_dir()) {
             let dirname = pkg.file_name().to_string_lossy().to_string();
+            // Real `vardbapi._excluded_dirs`: an in-progress
+            // `-MERGING-<pf>` entry is never an installed package
+            // (`split_pf` would otherwise mis-split it into a bogus
+            // `-MERGING-<pn>`/`version` row).
+            if portage_util::is_merging_vdb_entry(&dirname) {
+                continue;
+            }
             let Some((name, version)) = split_pf(&dirname) else {
                 continue;
             };
@@ -28439,6 +28454,35 @@ mod tests {
             std::fs::write(dir.join(name), bytes).unwrap();
         }
         root
+    }
+
+    /// Backlog #183: a stale `-MERGING-<pf>` entry left by a killed merge
+    /// is invisible to installed-package enumeration -- real
+    /// `vardbapi._excluded_dirs` (`vartree.py`), which `cp_list` consults
+    /// before `_pkg_str` ever sees the name (without the skip,
+    /// `split_pf` mis-splits `-MERGING-realpkg-2.0` into a bogus
+    /// `-MERGING-realpkg`/`2.0` row). Ground truth: the `l32` C4 control
+    /// cell (`findings/l5.md` Group 4) leaves exactly
+    /// `-MERGING-slow-a-1.0` after the SIGKILL, and the resumed merge
+    /// treats `slow-a` as not installed.
+    #[test]
+    fn all_installed_packages_skips_a_stale_merging_entry() {
+        let root = tmp_vdb("dev-libs", "realpkg-1.0", &[]);
+        let stale = root.join("var/db/pkg/dev-libs/-MERGING-realpkg-2.0");
+        std::fs::create_dir_all(&stale).unwrap();
+        std::fs::write(stale.join("SLOT"), "0\n").unwrap();
+        std::fs::write(stale.join("COUNTER"), "41\n").unwrap();
+        std::fs::write(stale.join("CONTENTS"), "obj /usr/bin/stale abc 123\n").unwrap();
+
+        let cpvs: Vec<String> = all_installed_packages(&root)
+            .iter()
+            .map(InstalledPackage::cpv)
+            .collect();
+        assert_eq!(cpvs, vec!["dev-libs/realpkg-1.0".to_string()]);
+        assert_eq!(
+            installed_versions(&root, "dev-libs", "realpkg"),
+            vec!["1.0".to_string()]
+        );
     }
 
     /// #109 S1: real `_aux_get` normalises every field that is not

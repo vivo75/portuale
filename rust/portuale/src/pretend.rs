@@ -5373,6 +5373,12 @@ fn installed_cp_versions(root: &Path) -> Vec<(String, String, String, String)> {
         };
         for pkg in pkgs.into_iter().filter(|e| e.path().is_dir()) {
             let dirname = pkg.file_name().to_string_lossy().to_string();
+            // Real `vardbapi._excluded_dirs`: an in-progress
+            // `-MERGING-<pf>` entry is never a `--unmerge`/`-C`
+            // resolution candidate.
+            if portage_util::is_merging_vdb_entry(&dirname) {
+                continue;
+            }
             if let Some((name, version)) = split_pf(&dirname) {
                 // #116: through the vdb seam; the main slot only, as
                 // before (an absent `SLOT` is `""`, like the old

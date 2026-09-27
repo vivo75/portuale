@@ -57,6 +57,21 @@ pub fn read_dir_paths(dir: &Path) -> io::Result<Vec<PathBuf>> {
         .collect())
 }
 
+/// Real `MERGING_IDENTIFIER` (`lib/portage/const.py`): the
+/// `"-MERGING-"` prefix real `dblink.dbtmpdir` uses for its own
+/// temporary, not-yet-finalized vdb entry directory, a sibling of the
+/// real vdb entry under the same `<category>` directory. Real readers
+/// skip such names (`vartree.py` `vardbapi._excluded_dirs`).
+pub const MERGING_IDENTIFIER: &str = "-MERGING-";
+
+/// Whether a vdb directory name is an in-progress merge entry real
+/// readers skip (the `MERGING_IDENTIFIER` arm of real
+/// `vardbapi._excluded_dirs`; the dotfile/`CVS`/`lost+found` arms are a
+/// separate concern and stay unported).
+pub fn is_merging_vdb_entry(name: &str) -> bool {
+    name.starts_with(MERGING_IDENTIFIER)
+}
+
 /// Portage's `VCS_DIRS` (`lib/portage/const.py:278`): directory names
 /// `_recursive_file_list` never descends into.
 pub const VCS_DIRS: &[&str] = &["CVS", "RCS", "SCCS", ".bzr", ".git", ".hg", ".svn"];

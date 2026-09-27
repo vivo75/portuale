@@ -1936,7 +1936,7 @@ fn write_post_install_metadata(
     // Real `_post_src_install_write_metadata` (`doebuild.py:2727-2732`)
     // writes `int(time.time())` into `build-info/BUILD_TIME` before any
     // metadata key, unconditionally (backlog #47). The vdb entry copies
-    // it (`write_vdb_entry_from_dir`) and `_consolidate_to_metadata_file`
+    // it (`populate_vdb_tmp`) and `_consolidate_to_metadata_file`
     // folds it into the consolidated `metadata` body -- real's own
     // reader (`versions.py:413`) and binpkg multi-instance logic compare
     // against it, and omitting it made every portuale vdb entry differ
