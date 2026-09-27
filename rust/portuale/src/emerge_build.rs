@@ -131,6 +131,8 @@ pub fn run_buildpkgonly(
     // run (`--buildpkgonly` has no `MergeOptions`; `entry_phase_env_tail`
     // adds the per-entry half). #37 S2.
     let run_wide = run_wide_phase_env(config);
+    // Real `Scheduler._pkg_count` for this run (backlog #177).
+    let progress = merge_progress_map(entries);
     let mut failures = Vec::new();
     for entry in entries {
         if entry.source == CandidateSource::Binary {
@@ -153,9 +155,23 @@ pub fn run_buildpkgonly(
             return Err(failure);
         };
         let path = ebuild_path(&candidate, &entry.category, &entry.package, version);
+        // Real `MergeListItem._start`'s per-package line (backlog #177):
+        // real `--buildpkgonly` prints the same `Emerging (N of M)`
+        // line (it is not fetch-only), and -- like real, whose
+        // `PackageMerge._should_show_status` is false for buildpkgonly
+        // -- no `Installing`/`Completed` line follows. This replaces the
+        // `>>> Building binary for ...` line portuale used to print,
+        // which has no real counterpart (real builds the binpkg
+        // silently on stdout; only `emerge.log` records it, which
+        // portuale does not write -- see the S0 table).
+        let color = progress_color();
+        let entry_progress = progress
+            .get(&(entry.category.clone(), entry.package.clone()))
+            .copied()
+            .unwrap_or(mrg_director::MergeProgress::single());
         println!(
-            ">>> Building binary for {}/{}-{version}...",
-            entry.category, entry.package
+            "{}",
+            emerging_line(entry, version, entry_progress, root, &color)
         );
         // Real per-package `package.env` (backlog #129): `--buildpkgonly`
         // carries no `MergeOptions`, but `config` already has the
@@ -425,16 +441,42 @@ pub fn run_source_merge(
         buildpkg,
         buildpkg_exclude,
     };
+    // Real `Scheduler._pkg_count` for this run (backlog #177): every
+    // entry below prints its own snapshot of these counters.
+    let progress = merge_progress_map(entries);
+    let progress_of = |entry: &GraphEntry| {
+        progress
+            .get(&(entry.category.clone(), entry.package.clone()))
+            .copied()
+            .unwrap_or(mrg_director::MergeProgress::single())
+    };
     run_merge_loop(entries, keep_going, |entry| {
+        let entry_progress = progress_of(entry);
         let bp = buildpkg.filter(|opts| {
             entry_buildpkg_wanted(entry, repos, buildpkg_exclude, opts.buildpkg_live)
         });
         if capture_log && scheduler_needs_build(entry) {
-            let path =
-                build_one_source_entry(entry, repos, root, portage_tmpdir, options, bp, true)?;
-            merge_one_built_entry(entry, repos, &path, root, portage_tmpdir, options)
+            let path = build_one_source_entry(
+                entry,
+                repos,
+                root,
+                portage_tmpdir,
+                options,
+                bp,
+                true,
+                entry_progress,
+            )?;
+            merge_one_built_entry(
+                entry,
+                repos,
+                &path,
+                root,
+                portage_tmpdir,
+                options,
+                entry_progress,
+            )
         } else {
-            engine.merge_entry(entry)
+            engine.merge_entry(entry, entry_progress)
         }
     })
 }
@@ -618,6 +660,7 @@ pub(crate) fn merge_one_source_entry(
     portage_tmpdir: &Path,
     options: &ebuild_merge::MergeOptions,
     buildpkg: Option<&ebuild_package::PackageOptions>,
+    progress: mrg_director::MergeProgress,
 ) -> Result<(), String> {
     let cp = format!("{}/{}", entry.category, entry.package);
     let version = match &entry.outcome {
@@ -650,7 +693,9 @@ pub(crate) fn merge_one_source_entry(
     };
     let path = ebuild_path(&candidate, &entry.category, &entry.package, &version);
 
-    println!(">>> Emerging ({cp}-{version})...");
+    // Real `MergeListItem._start`'s per-package line (backlog #177).
+    let color = progress_color();
+    println!("{}", emerging_line(entry, &version, progress, root, &color));
     if buildpkg.is_some() {
         println!(">>> Building package for {cp}-{version}...");
     }
@@ -696,11 +741,30 @@ pub(crate) fn merge_one_source_entry(
     if clean_status != 0 {
         return Err(format!("{cp}-{version}: clean failed ({clean_status})"));
     }
+    // Real `PackageMerge._start`'s per-package line (backlog #177).
+    // Placement narrowing: real prints it between the `EbuildBuild`
+    // (phase chain) and `EbuildMerge` (vdb merge) halves, but portuale's
+    // serial `run_merge` fuses both halves in one call -- so the line
+    // lands at the fuse point, before the phase output, rather than
+    // between build and merge output. Shape, counters, `::repo`, ` to
+    // ROOT` and colours are real's exactly; only the position within the
+    // entry's own output differs (the `-jN` scheduler's build/merge
+    // split below places it exactly like real does).
+    println!(
+        "{}",
+        installing_line(entry, &version, progress, root, &color)
+    );
     let status = ebuild_merge::run_merge(&path, root, portage_tmpdir, &per_entry, buildpkg)?;
     if status != 0 {
         return Err(format!("{cp}-{version}: merge failed ({status})"));
     }
-    println!(">>> {cp}-{version} merged.");
+    // Real `PackageMerge._install_exit`'s per-package line (backlog
+    // #177): this is the `Completed (N of M) cpv::repo` real prints
+    // where portuale used to print its own `merged.` line.
+    println!(
+        "{}",
+        completed_line(entry, &version, progress, root, &color)
+    );
     Ok(())
 }
 
@@ -1074,6 +1138,202 @@ fn scheduler_needs_build(entry: &GraphEntry) -> bool {
         )
 }
 
+/// Whether this entry counts toward real's merge progress counters --
+/// real `Scheduler.py:296-304` counts only `operation == "merge"`
+/// mergelist entries (uninstalls and nomerge nodes are not counted and
+/// print no progress line). Portuale's equivalents are the outcomes that
+/// actually merge: `New`/`Reinstall`/`Upgrade`/`Downgrade`.
+/// `AlreadyInstalled`/`Uninstall`/`NoVisibleCandidate` neither count nor
+/// print, exactly like the mergelist entries real skips in
+/// `MergeListItem._start` (`pkg.installed` returns early).
+pub(crate) fn entry_counts_toward_progress(entry: &GraphEntry) -> bool {
+    matches!(
+        entry.outcome,
+        PretendOutcome::New { .. }
+            | PretendOutcome::Reinstall { .. }
+            | PretendOutcome::Upgrade { .. }
+            | PretendOutcome::Downgrade { .. }
+    )
+}
+
+/// Every merging entry's own real `(curval, maxval)` snapshot (real
+/// `Scheduler._pkg_count`, copied per `MergeListItem` at task creation
+/// after `curval += 1`, `Scheduler.py:2273`/`2355`): `max` is the count
+/// of merging entries, `cur` the 1-based ordinal in merge order. Keyed by
+/// `(category, package)`; callers look their entry up and pass the value
+/// into the merge functions, so the run-level loops own the only scan.
+///
+/// Narrowing: real assigns `curval` in task-start order, which under
+/// `--jobs` can differ from merge-list order when independent packages
+/// start out of order. Portuale's scheduler dispatches in index order
+/// (the `find` scans `0..n`), so list ordinal and start ordinal agree
+/// whenever dependencies force the order -- and in the common serial
+/// case they are identical by construction. Real also recomputes
+/// `maxval` per `--keep-going` pass (`Scheduler.py:1307-1312`); portuale
+/// keeps the run's original total (a failure-path-only difference).
+pub(crate) fn merge_progress_map(
+    entries: &[GraphEntry],
+) -> std::collections::HashMap<(String, String), mrg_director::MergeProgress> {
+    let max = entries
+        .iter()
+        .filter(|e| entry_counts_toward_progress(e))
+        .count();
+    let mut cur = 0usize;
+    let mut out = std::collections::HashMap::new();
+    for entry in entries {
+        if entry_counts_toward_progress(entry) {
+            cur += 1;
+            out.insert(
+                (entry.category.clone(), entry.package.clone()),
+                mrg_director::MergeProgress { cur, max },
+            );
+        }
+    }
+    out
+}
+
+/// The colouriser for the merge progress lines: real `actions.py:2816-
+/// 2828` resolves module-global `havecolor` from `--color y|n` over
+/// `NO_COLOR`/`NOCOLOR`/`TERM`/isatty (`color::resolve_havecolor` ports
+/// exactly that gate). The merge path threads no `--color` value down
+/// (unlike the pretend renderer, which takes `color_opt`), so this
+/// resolves the ambient default -- colour on a tty, off when piped.
+/// Either way the line *shape* is real's; only the escapes differ.
+pub(crate) fn progress_color() -> crate::color::Colorizer {
+    crate::color::Colorizer::new(crate::color::resolve_havecolor(None))
+}
+
+/// Real `_emerge/MergeListItem.py::_start` (`MergeListItem.py:60-85`):
+/// `{Emerging|Emerging binary|Fetching} ({cur} of {max}) {cpv}::{repo}`,
+/// plus ` for {root}` when `ROOT != "/"`. The counters wear
+/// `MERGE_LIST_PROGRESS`, the `cpv::repo` wears `PKG_MERGE` (source) or
+/// `PKG_BINARY_MERGE` (binary); everything else is uncoloured. Real
+/// prints it via the scheduler's `statusMessage` path, which prefixes
+/// `>>> ` (`JobStatusDisplay._format_msg`) on stdout -- hence the
+/// literal prefix here. `version` is the entry's merge version.
+pub(crate) fn emerging_line(
+    entry: &GraphEntry,
+    version: &str,
+    progress: mrg_director::MergeProgress,
+    root: &Path,
+    color: &crate::color::Colorizer,
+) -> String {
+    let binary = entry.source == CandidateSource::Binary;
+    let action = if binary {
+        "Emerging binary"
+    } else {
+        "Emerging"
+    };
+    let pkg_color = if binary {
+        "PKG_BINARY_MERGE"
+    } else {
+        "PKG_MERGE"
+    };
+    let mut line = format!(
+        ">>> {action} ({} of {}) {}",
+        color.c("MERGE_LIST_PROGRESS", &progress.cur.to_string()),
+        color.c("MERGE_LIST_PROGRESS", &progress.max.to_string()),
+        color.c(
+            pkg_color,
+            &format!(
+                "{}/{}-{version}::{}",
+                entry.category,
+                entry.package,
+                entry_repo(entry)
+            )
+        ),
+    );
+    if root.as_os_str() != "/" {
+        line.push_str(&format!(" for {}", root.display()));
+    }
+    line
+}
+
+/// Real `_emerge/PackageMerge.py::_start` (`PackageMerge.py:32-54`):
+/// `Installing ({cur} of {max}) {cpv}::{repo}`, plus ` to {root}` when
+/// `ROOT != "/"` (note: `to`, not the `for` the Emerging line uses).
+/// Same colours as [`emerging_line`]. Real suppresses it under
+/// `--fetchonly`/`--pretend`/`--buildpkgonly` (`_should_show_status`);
+/// portuale's merge functions never run in those modes, so no gate is
+/// needed at the call sites.
+pub(crate) fn installing_line(
+    entry: &GraphEntry,
+    version: &str,
+    progress: mrg_director::MergeProgress,
+    root: &Path,
+    color: &crate::color::Colorizer,
+) -> String {
+    let binary = entry.source == CandidateSource::Binary;
+    let pkg_color = if binary {
+        "PKG_BINARY_MERGE"
+    } else {
+        "PKG_MERGE"
+    };
+    let mut line = format!(
+        ">>> Installing ({} of {}) {}",
+        color.c("MERGE_LIST_PROGRESS", &progress.cur.to_string()),
+        color.c("MERGE_LIST_PROGRESS", &progress.max.to_string()),
+        color.c(
+            pkg_color,
+            &format!(
+                "{}/{}-{version}::{}",
+                entry.category,
+                entry.package,
+                entry_repo(entry)
+            )
+        ),
+    );
+    if root.as_os_str() != "/" {
+        line.push_str(&format!(" to {}", root.display()));
+    }
+    line
+}
+
+/// Real `_emerge/PackageMerge.py::_install_exit` (`PackageMerge.py:56-
+/// 79`): `Completed ({cur} of {max}) {cpv}::{repo}`, plus ` to {root}`
+/// when `ROOT != "/"`. Same colours and suppression as
+/// [`installing_line`].
+pub(crate) fn completed_line(
+    entry: &GraphEntry,
+    version: &str,
+    progress: mrg_director::MergeProgress,
+    root: &Path,
+    color: &crate::color::Colorizer,
+) -> String {
+    let binary = entry.source == CandidateSource::Binary;
+    let pkg_color = if binary {
+        "PKG_BINARY_MERGE"
+    } else {
+        "PKG_MERGE"
+    };
+    let mut line = format!(
+        ">>> Completed ({} of {}) {}",
+        color.c("MERGE_LIST_PROGRESS", &progress.cur.to_string()),
+        color.c("MERGE_LIST_PROGRESS", &progress.max.to_string()),
+        color.c(
+            pkg_color,
+            &format!(
+                "{}/{}-{version}::{}",
+                entry.category,
+                entry.package,
+                entry_repo(entry)
+            )
+        ),
+    );
+    if root.as_os_str() != "/" {
+        line.push_str(&format!(" to {}", root.display()));
+    }
+    line
+}
+
+/// The entry's `::repo` for the progress lines: `repo_name` is always
+/// `Some` for a merging entry (`GraphEntry::repo_name`'s own doc
+/// comment); an empty fallback keeps a would-be `None` loud (a visibly
+/// wrong `cpv::`) rather than silently reshaping the line.
+pub(crate) fn entry_repo(entry: &GraphEntry) -> &str {
+    entry.repo_name.as_deref().unwrap_or("")
+}
+
 /// A minimal source `GraphEntry` for `emerge --resume` (`pretend.rs`):
 /// the saved `mtimedb` resume list only records `cat/pkg-ver`, so the
 /// display/USE/blocker fields are all empty. `required_by` is empty too --
@@ -1085,12 +1345,31 @@ fn scheduler_needs_build(entry: &GraphEntry) -> bool {
 /// `$PKGDIR` (`remote_binary: false`) -- see `mtimedb.rs`'s own module
 /// doc comment for why re-deriving "was this fetched remotely" isn't
 /// attempted.
+///
+/// `repo_name` is re-derived from `repos` (the highest-priority repo
+/// carrying this exact version -- the same tie-break
+/// `locate_candidate` uses), because the merge progress lines print
+/// real's `cpv::repo` shape (backlog #177) and the saved resume list
+/// records only `cat/pkg-ver`. `None` when no repo carries the version
+/// anymore (the merge then reports it cannot locate the ebuild, same as
+/// a non-resume run). For a resumed *binary* entry this names the
+/// ebuild repo, not the binhost it came from -- display-only (binpkg
+/// location never reads `repo_name`); real records the true origin.
 pub(crate) fn resume_entry(
     category: &str,
     package: &str,
     version: &str,
     source: CandidateSource,
+    repos: &[RepoConfig],
 ) -> GraphEntry {
+    let repo_name = portage_repo::list_candidates(repos, category, package)
+        .ok()
+        .and_then(|cs| {
+            cs.iter()
+                .filter(|c| c.version == version)
+                .max_by_key(|c| c.repo_priority)
+                .map(|c| c.repo_name.clone())
+        });
     GraphEntry {
         discovery: 0,
         category: category.to_string(),
@@ -1101,7 +1380,7 @@ pub(crate) fn resume_entry(
         blockers: Vec::new(),
         slot: None,
         sub_slot: None,
-        repo_name: None,
+        repo_name,
         oldbest: Vec::new(),
         use_flags_display: Vec::new(),
         use_expand_display: Vec::new(),
@@ -1313,6 +1592,7 @@ fn tail_of(path: &Path, n: usize) -> String {
 /// stdout+stderr go to `${T}/build.log` instead of the terminal (real
 /// `PORTAGE_LOG_FILE`); on a build failure the tail of that log is folded
 /// into the returned error so the scheduler can show it.
+#[allow(clippy::too_many_arguments)]
 fn build_one_source_entry(
     entry: &GraphEntry,
     repos: &[RepoConfig],
@@ -1321,6 +1601,7 @@ fn build_one_source_entry(
     options: &ebuild_merge::MergeOptions,
     buildpkg: Option<&ebuild_package::PackageOptions>,
     capture_log: bool,
+    progress: mrg_director::MergeProgress,
 ) -> Result<PathBuf, String> {
     let (cp, version) = scheduler_cp_version(entry)?;
     let Some(candidate) = locate_candidate(repos, &entry.category, &entry.package, &version) else {
@@ -1330,7 +1611,11 @@ fn build_one_source_entry(
         ));
     };
     let path = ebuild_path(&candidate, &entry.category, &entry.package, &version);
-    println!(">>> Emerging ({cp}-{version})...");
+    // Real `MergeListItem._start`'s per-package line (backlog #177) --
+    // the build half of the scheduler split prints it when the build
+    // starts, exactly where real starts the `EbuildBuild` chain.
+    let color = progress_color();
+    println!("{}", emerging_line(entry, &version, progress, root, &color));
     // Real per-package `PORTAGE_TMPDIR` (#99): this entry's build log,
     // pre-clean and phase chain all live under the matched value.
     let entry_tmpdir = entry_portage_tmpdir(options, entry, &version, portage_tmpdir)?;
@@ -1476,6 +1761,7 @@ fn merge_one_built_entry(
     root: &Path,
     portage_tmpdir: &Path,
     options: &ebuild_merge::MergeOptions,
+    progress: mrg_director::MergeProgress,
 ) -> Result<(), String> {
     let (cp, version) = scheduler_cp_version(entry)?;
     // `merge_after_install`'s `pkg_preinst`/`pkg_postinst` see this
@@ -1514,6 +1800,14 @@ fn merge_one_built_entry(
         &version,
         &resolved_features(options),
     ));
+    // Real `PackageMerge._start`'s per-package line (backlog #177) --
+    // the merge half of the scheduler split prints it right before the
+    // serialized vdb merge, exactly where real starts `EbuildMerge`.
+    let color = progress_color();
+    println!(
+        "{}",
+        installing_line(entry, &version, progress, root, &color)
+    );
     let status = ebuild_merge::run_qmerge(ebuild_path, root, portage_tmpdir, &per_entry)?;
     if status != 0 {
         return Err(format!("{cp}-{version}: merge failed ({status})"));
@@ -1537,7 +1831,13 @@ fn merge_one_built_entry(
             per_entry.log_file.as_deref(),
         )?;
     }
-    println!(">>> {cp}-{version} merged.");
+    // Real `PackageMerge._install_exit`'s per-package line (backlog
+    // #177): this is the `Completed (N of M) cpv::repo` real prints
+    // where portuale used to print its own `merged.` line.
+    println!(
+        "{}",
+        completed_line(entry, &version, progress, root, &color)
+    );
     Ok(())
 }
 
@@ -1650,6 +1950,9 @@ fn run_build_scheduler(
     // single process-wide singleton (an unrelated `cargo test` thread's
     // subprocess must never be reachable from here).
     let registry = ebuild_phases::new_scheduler_registry();
+    // Real `Scheduler._pkg_count` for this run (backlog #177): every
+    // build/merge half below prints its entry's own snapshot.
+    let progress = merge_progress_map(entries);
 
     std::thread::scope(|scope| -> Result<(), String> {
         let (tx, rx) = mpsc::channel::<(usize, Result<PathBuf, String>)>();
@@ -1676,6 +1979,13 @@ fn run_build_scheduler(
                 let Some(idx) = next else { break };
                 started.insert(idx);
                 in_flight += 1;
+                // Real `Scheduler._pkg_count` (backlog #177): the
+                // entry's own snapshot, resolved here -- the worker
+                // closure below is `move` and cannot borrow the map.
+                let entry_progress = progress
+                    .get(&(entries[idx].category.clone(), entries[idx].package.clone()))
+                    .copied()
+                    .unwrap_or(mrg_director::MergeProgress::single());
                 let tx = tx.clone();
                 let bp = buildpkg.filter(|opts| {
                     entry_buildpkg_wanted(
@@ -1705,6 +2015,7 @@ fn run_build_scheduler(
                         // interleave on the terminal (real portage's
                         // `--quiet-build`, on by default under `--jobs`).
                         true,
+                        entry_progress,
                     );
                     let _ = tx.send((idx, r));
                 });
@@ -1720,15 +2031,23 @@ fn run_build_scheduler(
             in_flight -= 1;
 
             let failure = match build_result {
-                Ok(path) => merge_one_built_entry(
-                    &entries[idx],
-                    repos,
-                    &path,
-                    root,
-                    portage_tmpdir,
-                    options,
-                )
-                .err(),
+                Ok(path) => {
+                    let entry = &entries[idx];
+                    let entry_progress = progress
+                        .get(&(entry.category.clone(), entry.package.clone()))
+                        .copied()
+                        .unwrap_or(mrg_director::MergeProgress::single());
+                    merge_one_built_entry(
+                        entry,
+                        repos,
+                        &path,
+                        root,
+                        portage_tmpdir,
+                        options,
+                        entry_progress,
+                    )
+                    .err()
+                }
                 Err(e) => Some(e),
             };
 
@@ -2679,6 +2998,135 @@ mod tests {
         }
     }
 
+    /// Backlog #177: the merge progress counters -- real
+    /// `Scheduler._pkg_count` (`Scheduler.py:296-304`): only merging
+    /// outcomes count, and each merging entry's `cur` is its 1-based
+    /// ordinal in merge order. Grounded in the cited real source (there
+    /// is no Python mirror); the `testrepo` repo name is this module's
+    /// own `source_entry` fixture value.
+    #[test]
+    fn merge_progress_map_counts_only_merging_entries_in_order() {
+        let entries = vec![
+            source_entry(
+                "a-pkg",
+                PretendOutcome::New {
+                    version: "1.0".into(),
+                },
+            ),
+            source_entry(
+                "b-pkg",
+                PretendOutcome::AlreadyInstalled {
+                    version: "1.0".into(),
+                },
+            ),
+            source_entry(
+                "c-pkg",
+                PretendOutcome::Upgrade {
+                    from: "1.0".into(),
+                    to: "2.0".into(),
+                },
+            ),
+            source_entry(
+                "d-pkg",
+                PretendOutcome::Uninstall {
+                    version: "1.0".into(),
+                },
+            ),
+        ];
+        let map = merge_progress_map(&entries);
+        assert_eq!(map.len(), 2);
+        assert_eq!(
+            map[&("dev-libs".to_string(), "a-pkg".to_string())],
+            mrg_director::MergeProgress { cur: 1, max: 2 }
+        );
+        assert_eq!(
+            map[&("dev-libs".to_string(), "c-pkg".to_string())],
+            mrg_director::MergeProgress { cur: 2, max: 2 }
+        );
+        assert!(!map.contains_key(&("dev-libs".to_string(), "b-pkg".to_string())));
+    }
+
+    /// Backlog #177: the exact progress-line strings -- real
+    /// `_emerge/MergeListItem.py::_start` (`MergeListItem.py:60-85`) for
+    /// `Emerging`/`Emerging binary`, real `_emerge/PackageMerge.py`
+    /// (`PackageMerge.py:32-79`) for `Installing`/`Completed`. Colour
+    /// escapes are `color.rs`'s port of `output.py:68-92`
+    /// (`MERGE_LIST_PROGRESS` = yellow `\x1b[33;01m`, `PKG_MERGE` =
+    /// darkgreen `\x1b[32m`, `PKG_BINARY_MERGE` = purple `\x1b[35m`,
+    /// reset `\x1b[39;49;00m`); `ROOT != "/"` appends ` for {root}`
+    /// (Emerging) vs ` to {root}` (Installing/Completed).
+    #[test]
+    fn merge_progress_lines_match_real_exact_text() {
+        use std::path::Path;
+        let plain = crate::color::Colorizer::new(false);
+        let root = Path::new("/");
+        let two_of_three = mrg_director::MergeProgress { cur: 2, max: 3 };
+        let a = source_entry(
+            "a-pkg",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        let mut b = source_entry(
+            "b-pkg",
+            PretendOutcome::New {
+                version: "2.0".into(),
+            },
+        );
+        b.source = CandidateSource::Binary;
+
+        // Source, colour off, `ROOT == "/"`: the bare shape.
+        assert_eq!(
+            emerging_line(&a, "1.0", two_of_three, root, &plain),
+            ">>> Emerging (2 of 3) dev-libs/a-pkg-1.0::testrepo"
+        );
+        // Binary: `Emerging binary`, same counters.
+        assert_eq!(
+            emerging_line(&b, "2.0", two_of_three, root, &plain),
+            ">>> Emerging binary (2 of 3) dev-libs/b-pkg-2.0::testrepo"
+        );
+        assert_eq!(
+            installing_line(&a, "1.0", two_of_three, root, &plain),
+            ">>> Installing (2 of 3) dev-libs/a-pkg-1.0::testrepo"
+        );
+        assert_eq!(
+            completed_line(&a, "1.0", two_of_three, root, &plain),
+            ">>> Completed (2 of 3) dev-libs/a-pkg-1.0::testrepo"
+        );
+
+        // `ROOT != "/"`: `for` on Emerging, `to` on Installing/Completed.
+        let alt = Path::new("/altroot");
+        assert_eq!(
+            emerging_line(&a, "1.0", two_of_three, alt, &plain),
+            ">>> Emerging (2 of 3) dev-libs/a-pkg-1.0::testrepo for /altroot"
+        );
+        assert_eq!(
+            installing_line(&a, "1.0", two_of_three, alt, &plain),
+            ">>> Installing (2 of 3) dev-libs/a-pkg-1.0::testrepo to /altroot"
+        );
+        assert_eq!(
+            completed_line(&a, "1.0", two_of_three, alt, &plain),
+            ">>> Completed (2 of 3) dev-libs/a-pkg-1.0::testrepo to /altroot"
+        );
+
+        // Colour on: only the two counters and the `cpv::repo` wear
+        // escapes; the action word, parens, `of`, and `for ROOT` stay
+        // plain -- exactly real `colorize()`'s call sites.
+        let live = crate::color::Colorizer::new(true);
+        assert_eq!(
+            emerging_line(&a, "1.0", two_of_three, root, &live),
+            ">>> Emerging (\x1b[33;01m2\x1b[39;49;00m of \x1b[33;01m3\x1b[39;49;00m) \x1b[32mdev-libs/a-pkg-1.0::testrepo\x1b[39;49;00m"
+        );
+        assert_eq!(
+            emerging_line(&b, "2.0", two_of_three, root, &live),
+            ">>> Emerging binary (\x1b[33;01m2\x1b[39;49;00m of \x1b[33;01m3\x1b[39;49;00m) \x1b[35mdev-libs/b-pkg-2.0::testrepo\x1b[39;49;00m"
+        );
+        assert_eq!(
+            installing_line(&a, "1.0", two_of_three, root, &live),
+            ">>> Installing (\x1b[33;01m2\x1b[39;49;00m of \x1b[33;01m3\x1b[39;49;00m) \x1b[32mdev-libs/a-pkg-1.0::testrepo\x1b[39;49;00m"
+        );
+    }
+
     /// #37 S2: with a resolved config in scope, `entry_build_env` threads
     /// the full effective `USE` (implicit profile flags included), the
     /// per-package `USE_EXPAND` values, and the entry's `SLOT`/repo
@@ -3259,8 +3707,16 @@ mod tests {
             features: "noclean".to_string(),
             ..ebuild_merge::MergeOptions::default()
         };
-        merge_one_source_entry(&entry, &repos, &root, &portage_tmpdir, &options, None)
-            .expect("first merge succeeds");
+        merge_one_source_entry(
+            &entry,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &options,
+            None,
+            mrg_director::MergeProgress::single(),
+        )
+        .expect("first merge succeeds");
         let builddir = portage_tmpdir.join("portage/dev-libs/packagepkg-1.0");
         assert!(
             builddir.join(".installed").exists(),
@@ -3280,8 +3736,16 @@ mod tests {
             features: "sandbox".to_string(),
             ..ebuild_merge::MergeOptions::default()
         };
-        merge_one_source_entry(&entry, &repos, &root, &portage_tmpdir, &options, None)
-            .expect("second merge succeeds");
+        merge_one_source_entry(
+            &entry,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &options,
+            None,
+            mrg_director::MergeProgress::single(),
+        )
+        .expect("second merge succeeds");
         assert!(root.join("usr/share/packagepkg/hello.txt").is_file());
         assert!(
             !root.join("usr/share/packagepkg/stale.txt").exists(),

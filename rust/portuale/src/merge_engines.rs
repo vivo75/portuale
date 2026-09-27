@@ -34,7 +34,11 @@ use std::path::Path;
 /// `None` for `AlreadyInstalled` (a silent no-op, like the merge
 /// functions' own early return) and `NoVisibleCandidate` (nothing to
 /// merge -- the caller reports it, same as before).
-pub fn merge_unit_for_entry(entry: &GraphEntry, root: &Path) -> Option<MergeUnit> {
+pub fn merge_unit_for_entry(
+    entry: &GraphEntry,
+    root: &Path,
+    progress: mrg_director::MergeProgress,
+) -> Option<MergeUnit> {
     let version = match &entry.outcome {
         // #72 B3: a blocker-removal task is not a merge unit.
         PretendOutcome::AlreadyInstalled { .. }
@@ -62,6 +66,7 @@ pub fn merge_unit_for_entry(entry: &GraphEntry, root: &Path) -> Option<MergeUnit
         slot: entry.slot.clone(),
         sub_slot: entry.sub_slot.clone(),
         use_flags: entry.use_flags_display.clone(),
+        progress,
     })
 }
 
@@ -132,7 +137,13 @@ pub struct SourceEngine<'a> {
 impl SourceEngine<'_> {
     /// Merge one resolved entry from source (the `Source`-entry arm of
     /// the mixed dispatcher, and `run_source_merge`'s serial loop).
-    pub fn merge_entry(&self, entry: &GraphEntry) -> Result<(), String> {
+    /// `progress` is the entry's own real `(curval, maxval)` snapshot
+    /// (backlog #177) for the `Emerging`/`Installing`/`Completed` lines.
+    pub fn merge_entry(
+        &self,
+        entry: &GraphEntry,
+        progress: mrg_director::MergeProgress,
+    ) -> Result<(), String> {
         let bp = self.buildpkg.filter(|opts| {
             crate::emerge_build::entry_buildpkg_wanted(
                 entry,
@@ -148,6 +159,7 @@ impl SourceEngine<'_> {
             self.portage_tmpdir,
             self.options,
             bp,
+            progress,
         )
     }
 }
@@ -161,7 +173,7 @@ impl MergeEngine for SourceEngine<'_> {
             ));
         }
         match rebuild_entry(unit, CandidateSource::Ebuild) {
-            Some(entry) => match self.merge_entry(&entry) {
+            Some(entry) => match self.merge_entry(&entry, unit.progress) {
                 Ok(()) => MergeOutcome::Merged,
                 Err(e) => MergeOutcome::Failed(e),
             },
@@ -188,8 +200,13 @@ pub struct BinaryEngine<'a> {
 
 impl BinaryEngine<'_> {
     /// Merge one resolved binary entry (the `Binary`-entry arm of the
-    /// mixed dispatcher).
-    pub fn merge_entry(&self, entry: &GraphEntry) -> Result<(), String> {
+    /// mixed dispatcher). `progress` is the entry's own real
+    /// `(curval, maxval)` snapshot (backlog #177).
+    pub fn merge_entry(
+        &self,
+        entry: &GraphEntry,
+        progress: mrg_director::MergeProgress,
+    ) -> Result<(), String> {
         crate::emerge_getbinpkg::merge_one_binary_entry(
             entry,
             self.config,
@@ -197,6 +214,7 @@ impl BinaryEngine<'_> {
             self.pkgdir,
             self.portage_tmpdir,
             self.options,
+            progress,
         )
     }
 }
@@ -210,7 +228,7 @@ impl MergeEngine for BinaryEngine<'_> {
             ));
         }
         match rebuild_entry(unit, CandidateSource::Binary) {
-            Some(entry) => match self.merge_entry(&entry) {
+            Some(entry) => match self.merge_entry(&entry, unit.progress) {
                 Ok(()) => MergeOutcome::Merged,
                 Err(e) => MergeOutcome::Failed(e),
             },
@@ -267,7 +285,8 @@ mod tests {
     #[test]
     fn merge_unit_for_entry_carries_everything_the_merge_reads() {
         let root = Path::new("/root");
-        let unit = merge_unit_for_entry(&test_entry(), root).unwrap();
+        let unit = merge_unit_for_entry(&test_entry(), root, mrg_director::MergeProgress::single())
+            .unwrap();
         assert_eq!(unit.cpv, "dev-libs/example-2.0");
         assert_eq!(unit.kind, MergeKind::Source);
         assert_eq!(unit.repo.as_deref(), Some("main"));
@@ -279,10 +298,15 @@ mod tests {
         installed.outcome = PretendOutcome::AlreadyInstalled {
             version: "2.0".to_string(),
         };
-        assert!(merge_unit_for_entry(&installed, root).is_none());
+        assert!(
+            merge_unit_for_entry(&installed, root, mrg_director::MergeProgress::single()).is_none()
+        );
         let mut unresolvable = test_entry();
         unresolvable.outcome = PretendOutcome::NoVisibleCandidate;
-        assert!(merge_unit_for_entry(&unresolvable, root).is_none());
+        assert!(
+            merge_unit_for_entry(&unresolvable, root, mrg_director::MergeProgress::single())
+                .is_none()
+        );
 
         // A binary entry keeps its location bits (remote fetch, build
         // id) on the unit, so the binary engine can locate it.
@@ -290,7 +314,8 @@ mod tests {
         binary.source = CandidateSource::Binary;
         binary.remote_binary = true;
         binary.build_id = Some("3".to_string());
-        let unit = merge_unit_for_entry(&binary, root).unwrap();
+        let unit =
+            merge_unit_for_entry(&binary, root, mrg_director::MergeProgress::single()).unwrap();
         assert_eq!(unit.kind, MergeKind::Binary);
         assert!(unit.remote_binary);
         assert_eq!(unit.build_id.as_deref(), Some("3"));
@@ -301,7 +326,8 @@ mod tests {
         revised.outcome = PretendOutcome::New {
             version: "1.2-r1".to_string(),
         };
-        let unit = merge_unit_for_entry(&revised, root).unwrap();
+        let unit =
+            merge_unit_for_entry(&revised, root, mrg_director::MergeProgress::single()).unwrap();
         assert_eq!(unit.cpv, "dev-libs/example-1.2-r1");
         let rebuilt = rebuild_entry(&unit, CandidateSource::Ebuild).unwrap();
         assert_eq!(

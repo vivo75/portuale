@@ -300,6 +300,29 @@ pub enum MergeKind {
     Binary,
 }
 
+/// Real `Scheduler._pkg_count` (`3rdparty/portage/lib/_emerge/
+/// Scheduler.py:110-114`, `:296-304`): the per-package `(curval, maxval)`
+/// snapshot each `MergeListItem` carries. `maxval` counts only the
+/// `operation == "merge"` entries (uninstalls and nomerge nodes are not
+/// counted); `curval` is the 1-based ordinal in start order. Every merge
+/// progress line (`Emerging`, `Installing`, `Completed`) prints it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MergeProgress {
+    /// 1-based ordinal of this unit among the run's merging entries.
+    pub cur: usize,
+    /// Total merging entries in the run.
+    pub max: usize,
+}
+
+impl MergeProgress {
+    /// A lone unit executed outside a merge run (hand-built units in
+    /// tests, single-package drivers): it is the only package, so it is
+    /// 1 of 1.
+    pub fn single() -> Self {
+        Self { cur: 1, max: 1 }
+    }
+}
+
 /// A single unit of merge work at the boundary between the director's
 /// plan and whatever executes the copy/install: one resolved entry.
 ///
@@ -341,6 +364,10 @@ pub struct MergeUnit {
     /// `(flag, enabled)` pairs): the source engine exports the enabled
     /// ones as the build-phase `USE`. Empty means `USE=""` stands.
     pub use_flags: Vec<(String, bool)>,
+    /// This unit's own `(curval, maxval)` snapshot (see [`MergeProgress`]):
+    /// the merge progress lines print it. Set by whoever derives the unit
+    /// from a merge run; hand-built units keep `single()`.
+    pub progress: MergeProgress,
 }
 
 impl MergeUnit {
@@ -359,6 +386,7 @@ impl MergeUnit {
             slot: None,
             sub_slot: None,
             use_flags: Vec::new(),
+            progress: MergeProgress::single(),
         }
     }
 
@@ -1836,6 +1864,7 @@ mod tests {
             slot: Some("0".to_string()),
             sub_slot: None,
             use_flags: vec![("flag".to_string(), true)],
+            progress: MergeProgress::single(),
         };
         assert_eq!(unit.kind, MergeKind::Source);
         assert_eq!(engine.execute(&unit, &ctx), MergeOutcome::Merged);
@@ -1850,6 +1879,7 @@ mod tests {
             slot: None,
             sub_slot: None,
             use_flags: Vec::new(),
+            progress: MergeProgress::single(),
         };
         assert!(matches!(
             engine.execute(&broken, &ctx),
@@ -1883,6 +1913,7 @@ mod tests {
             slot: None,
             sub_slot: None,
             use_flags: Vec::new(),
+            progress: MergeProgress::single(),
         };
         let binary_unit = MergeUnit {
             cpv: "dev-libs/example-1.0".to_string(),
@@ -1895,6 +1926,7 @@ mod tests {
             slot: None,
             sub_slot: None,
             use_flags: Vec::new(),
+            progress: MergeProgress::single(),
         };
         assert!(matches!(
             SourceMergeEngine.execute(&source_unit, &ctx),
