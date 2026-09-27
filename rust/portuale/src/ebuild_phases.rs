@@ -562,21 +562,21 @@ impl Environment {
 /// (real `doebuild()` creates them via `prepare_build_dirs()` before
 /// spawning the phase at all).
 ///
-/// `S` is created here too, empty, as a deliberate v1 simplification:
-/// real `S` only ever exists because `src_unpack`'s own `unpack ${A}`
-/// call creates it as a side effect of extracting a real, fetched
-/// `SRC_URI` archive -- portuale has no fetch/unpack machinery at all
-/// (no network access attempted, no archive-format support), so an
-/// ebuild whose own `A` is empty (real `default_src_unpack`'s own
-/// `[[ -n ${A} ]] && unpack ${A}` never runs `unpack` at all in that
-/// case) would otherwise reach `src_prepare`/`src_configure`/
-/// `src_compile`/`src_install` with a `${S}` that flat-out doesn't
-/// exist, since nothing else creates it either. Real ebuilds with a
-/// nonempty `SRC_URI` are simply out of scope for this slice (would need
-/// real fetch+unpack support, its own separately-scoped follow-up); this
-/// pre-creation only matters for exactly the empty-`SRC_URI` case this
-/// slice's own fixture (and any similarly source-less ebuild) exercises.
-/// Real `_prepare_fake_filesdir` (`prepare_build_dirs.py:504-515`) as a
+/// `S` is deliberately NOT created here (backlog #190): real `S` only
+/// ever exists because `src_unpack`'s own `unpack ${A}` call creates it
+/// as a side effect of extracting a real, fetched `SRC_URI` archive, or
+/// because the ebuild sets `S` itself (e.g. `S="${WORKDIR}"`). Real
+/// `bin/phase-functions.sh`'s `__dyn_prepare`/`__dyn_configure`/
+/// `__dyn_compile`/`__dyn_test`/`__dyn_install` die with `The source
+/// directory '${S}' doesn't exist` when `S` is not a directory
+/// (`phase-functions.sh:444,480,512,546,638`; default
+/// `S=${WORKDIR}/${P}` from `bin/ebuild.sh:500`; the `${WORKDIR}`
+/// fallback is EAPI 0-3 only, `bin/eapi.sh:8`; the empty-`A` fallback
+/// fires only when no phase up to the current one is defined).
+/// Pre-creating `${S}` would make that `[[ -d ${S} ]]` check always
+/// pass, so a source-less ebuild with no `S` would build under
+/// portuale while real dies -- exactly the #190 divergence. Real
+/// `_prepare_fake_filesdir` (`prepare_build_dirs.py:504-515`) as a
 /// standalone step: `link_path` (`${PORTAGE_BUILDDIR}/files`) becomes a
 /// symlink to `target` (the repo package dir's `files/`), unconditionally
 /// -- dangling included, exactly like real.
@@ -619,7 +619,6 @@ fn create_directories(env: &Environment) -> Result<(), String> {
         env.d(),
         env.home(),
         env.filesdir(),
-        env.s(),
         // Real `bin/ebuild.sh`'s own top-level code (run unconditionally
         // as soon as it's sourced, EAPI 8's own comment: "requires us to
         // use an empty directory here"): `cd`s into `${PORTAGE_BUILDDIR}/
@@ -5113,7 +5112,7 @@ mod tests {
         let ebuild = pkg_dir.join("srctestpkg-1.0.ebuild");
         std::fs::write(
             &ebuild,
-            "EAPI=8\nSLOT=\"0\"\nsrc_test() { touch \"${T}/test-ran\" || die; }\n",
+            "EAPI=8\nSLOT=\"0\"\nS=\"${WORKDIR}\"\nsrc_test() { touch \"${T}/test-ran\" || die; }\n",
         )
         .unwrap();
         let root = tmp.join("root");
@@ -5466,6 +5465,60 @@ mod tests {
         let _ = std::fs::remove_dir_all(&portage_tmpdir);
     }
 
+    /// Backlog #190 (S0 repro): real `bin/phase-functions.sh`'s
+    /// `__dyn_install` -- like its `prepare`/`configure`/`compile`/
+    /// `test` twins (`phase-functions.sh:444,480,512,546,638`) -- dies
+    /// with `The source directory '${S}' doesn't exist` when `S` is not
+    /// a directory. The default is `S=${WORKDIR}/${P}`
+    /// (`bin/ebuild.sh:500`); EAPI 8 has no `${WORKDIR}` fallback
+    /// (`bin/eapi.sh:8`: `___eapi_has_S_WORKDIR_fallback` is EAPI 0-3
+    /// only), and with `A` empty but `src_install` defined,
+    /// `__has_phase_defined_up_to install` is true, so neither
+    /// fallback fires and the phase dies. A source-less ebuild with no
+    /// `S` must therefore fail the `install` run with real's message.
+    #[test]
+    fn install_dies_like_real_when_s_is_missing() {
+        let tmp = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-{}",
+            std::process::id(),
+            "install_dies_like_real_when_s_is_missing"
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let pkg_dir = tmp.join("pkg/dev-libs/nosrcpkg");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        let ebuild_path = pkg_dir.join("nosrcpkg-1.0.ebuild");
+        std::fs::write(
+            &ebuild_path,
+            "EAPI=8\nDESCRIPTION=\"fixture: no sources, no S\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\n\nsrc_install() {\n\tinsinto /usr/share/${PN}\n}\n",
+        )
+        .unwrap();
+        let portage_tmpdir = tmp.join("tmp");
+        let log_file = tmp.join("build.log");
+
+        let status = run_commands_logged(
+            &ebuild_path,
+            &["install"],
+            Path::new("/"),
+            &portage_tmpdir,
+            &portage_tmpdir.join("distfiles"),
+            false,
+            Path::new("/dev/null/no-config-root"),
+            ShellBackend::default(),
+            Some(&log_file),
+            &[],
+        )
+        .expect("run_commands_logged should not itself error");
+        assert_ne!(status, 0, "install must fail when ${{S}} does not exist");
+        let log = std::fs::read_to_string(&log_file)
+            .unwrap_or_else(|e| panic!("{} should have been written: {e}", log_file.display()));
+        assert!(
+            log.contains("The source directory") && log.contains("doesn't exist"),
+            "install log should carry real's missing-S message, got:\n{log}"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     /// Backlog #47: real `_post_src_install_write_metadata`
     /// (`doebuild.py:2727-2732`) writes `build-info/BUILD_TIME` (epoch
     /// seconds) before any metadata key, and the vdb copy +
@@ -5789,6 +5842,7 @@ mod tests {
              DESCRIPTION=\"fixture: real post-install QA check strips a genuinely empty dir\"\n\
              SLOT=\"0\"\n\
              KEYWORDS=\"amd64\"\n\
+             S=\"${WORKDIR}\"\n\
              src_install() {\n\
              \tdodir /usr/lib/reallyempty\n\
              \tkeepdir /usr/lib/keptempty\n\
@@ -6808,6 +6862,7 @@ mod tests {
              DESCRIPTION=\"fixture: real cross-repo masters-chain eclass inherit\"\n\
              SLOT=\"0\"\n\
              KEYWORDS=\"amd64\"\n\
+             S=\"${WORKDIR}\"\n\
              inherit mastershared\n\
              src_install() {\n\
              \tmastershared_hello > \"${T}/eclass-marker.txt\" || die\n\
