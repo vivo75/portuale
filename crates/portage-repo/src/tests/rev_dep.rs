@@ -24,6 +24,92 @@ fn is_built_slot_op_requires_equals_operator_and_both_slots() {
     assert_eq!(norm("dev-libs/bar"), "dev-libs/bar");
 }
 
+/// A recorded `:S/SS=` binding relaxes to bare `:=`, keeping version,
+/// use-deps and repo; anything not built passes through verbatim.
+/// Portage: depgraph.py, _slot_operator_check_reverse_dependencies
+#[test]
+fn relax_built_slot_operator_atom_keeps_everything_but_the_binding() {
+    assert_eq!(
+        relax_built_slot_operator_atom(">=dev-libs/provpkg-1.0:0/1="),
+        ">=dev-libs/provpkg-1.0:="
+    );
+    assert_eq!(
+        relax_built_slot_operator_atom("<dev-libs/r25lib-2.0:0/1="),
+        "<dev-libs/r25lib-2.0:="
+    );
+    assert_eq!(
+        relax_built_slot_operator_atom(">=dev-libs/provpkg-1.0:0/1=[x]"),
+        ">=dev-libs/provpkg-1.0:=[x]"
+    );
+    assert_eq!(
+        relax_built_slot_operator_atom(">=dev-libs/provpkg-1.0:0/1=::testrepo"),
+        ">=dev-libs/provpkg-1.0:=::testrepo"
+    );
+    // Not built: verbatim.
+    assert_eq!(
+        relax_built_slot_operator_atom("dev-libs/provpkg:="),
+        "dev-libs/provpkg:="
+    );
+    assert_eq!(
+        relax_built_slot_operator_atom("dev-libs/slotoptarget:2="),
+        "dev-libs/slotoptarget:2="
+    );
+    assert_eq!(
+        relax_built_slot_operator_atom(">=dev-libs/provpkg-1.0"),
+        ">=dev-libs/provpkg-1.0"
+    );
+    assert_eq!(
+        relax_built_slot_operator_atom("dev-libs/provpkg"),
+        "dev-libs/provpkg"
+    );
+    assert_eq!(
+        relax_built_slot_operator_atom("not an atom ((("),
+        "not an atom ((("
+    );
+    // The relaxed form matches both slots; the raw form rejects the
+    // new one -- the property the rebuild-trigger predicate needs.
+    let cands = [
+        "dev-libs/provpkg-1.0:0/1::testrepo",
+        "dev-libs/provpkg-2.0:0/2::testrepo",
+    ];
+    let raw = ">=dev-libs/provpkg-1.0:0/1=";
+    let relaxed = relax_built_slot_operator_atom(raw);
+    assert_eq!(
+        portage_dep::match_from_list(raw, &cands).map(|m| m.len()),
+        Some(1)
+    );
+    assert_eq!(
+        portage_dep::match_from_list(&relaxed, &cands).map(|m| m.len()),
+        Some(2)
+    );
+}
+
+/// Fires for a recorded binding the probe's relaxation accepts;
+/// silent for a version veto, a non-built atom, unparseable text.
+#[test]
+fn built_slot_operator_rebuild_trigger_only_forgives_rebuilds() {
+    assert!(built_slot_operator_rebuild_trigger(
+        ">=dev-libs/provpkg-1.0:0/1=",
+        "dev-libs/provpkg-2.0:0/2"
+    ));
+    assert!(!built_slot_operator_rebuild_trigger(
+        "<dev-libs/r25lib-2.0:0/1=",
+        "dev-libs/r25lib-2.0:0/2"
+    ));
+    assert!(!built_slot_operator_rebuild_trigger(
+        "dev-libs/provpkg:=",
+        "dev-libs/provpkg-2.0:0/2"
+    ));
+    assert!(!built_slot_operator_rebuild_trigger(
+        ">=dev-libs/provpkg-1.0",
+        "dev-libs/provpkg-2.0:0/2"
+    ));
+    assert!(!built_slot_operator_rebuild_trigger(
+        "not an atom (((",
+        "dev-libs/provpkg-2.0:0/2"
+    ));
+}
+
 #[test]
 fn reverse_dependency_constraints_skips_an_unreachable_installed_consumer() {
     // A pin is found only when its cp is reachable or itself a graph

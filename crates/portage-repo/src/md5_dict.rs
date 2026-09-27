@@ -488,4 +488,14 @@ mod tests {
             assert!(!eapi_is_supported(eapi), "{eapi:?}");
         }
     }
+
+    #[test]
+    fn eapi_slot_operator_matches_portage() {
+        for eapi in ["5", "6", "7", "8", "9", "9-pre1", " 8 "] {
+            assert!(eapi_has_slot_operator(eapi), "{eapi}");
+        }
+        for eapi in ["0", "1", "2", "3", "4", ""] {
+            assert!(!eapi_has_slot_operator(eapi), "{eapi:?}");
+        }
+    }
 }
