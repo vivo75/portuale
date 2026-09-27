@@ -537,7 +537,11 @@ impl Drop for ConfigRootOverride {
 /// resolve. The pulled temp dir is removed best-effort on drop, once
 /// the resolve is done (backlog #171c review: both the resolve site
 /// and `--remote-binpkg` leaked one
-/// `/tmp/portuale-remote-etc-<pid>-<nanos>` per run). Shared by
+/// `/tmp/portuale-remote-etc-<pid>-<nanos>` per run). The pulled tree
+/// additionally carries the server's own `make.globals` seeded under
+/// `<tmp>/usr/share/portage/config/` (backlog #171 follow-up 3) -- the
+/// pull only carries the client's `/etc/portage` contents, so without
+/// the seed the resolve would stack no base layer at all. Shared by
 /// `run_remote_resolve` and `run_bundle_stage` -- one placement match,
 /// no duplicated pull logic.
 pub(crate) struct PlacedConfig {
@@ -563,6 +567,23 @@ pub(crate) fn place_config_root(
     ctx: &RemoteContext,
     control: Option<&std::path::Path>,
 ) -> Result<PlacedConfig, String> {
+    // Backlog #171 follow-up 3 (owner Q9 = b): the server's own
+    // `make.globals` -- located exactly the way the local path locates
+    // it (`resolve_config` reads
+    // `<config_root>/usr/share/portage/config/make.globals`, which is
+    // the live `/usr/share/portage/config/make.globals` for a `/` run;
+    // real sources it from `global_config_path` regardless of
+    // `config_root`, `config.py:446-499,569` +
+    // `_config/LocationsManager.py:413-415`). Read before the
+    // `ConfigRootOverride` below repoints `PORTAGE_CONFIGROOT` at the
+    // placed dir, so this still names the server file. `Server`
+    // placements need no seed (the placed root is server-side already);
+    // the pulled `Client` tree gets it as the resolve's bottom layer,
+    // under the client profile chain and the pulled `make.conf` --
+    // real's `config` stacking order. Absent on the server (tests):
+    // contributes nothing, deterministically.
+    let server_globals =
+        portage_repo::config_root_from_env().join("usr/share/portage/config/make.globals");
     let (dir, tmp): (std::path::PathBuf, Option<std::path::PathBuf>) = match &ctx.etc_portage {
         ConfigPlacement::Server(path) => (std::path::PathBuf::from(path), None),
         ConfigPlacement::Client(path) => {
@@ -582,6 +603,25 @@ pub(crate) fn place_config_root(
                 // Best-effort: don't leave a partial pull behind.
                 let _ = std::fs::remove_dir_all(&tmp);
                 return Err(message);
+            }
+            if server_globals.is_file() {
+                let dest = tmp.join("usr/share/portage/config/make.globals");
+                if let Some(parent) = dest.parent()
+                    && let Err(e) = std::fs::create_dir_all(parent)
+                {
+                    let _ = std::fs::remove_dir_all(&tmp);
+                    return Err(format!(
+                        "mrg: staging the server make.globals under {}: {e}",
+                        tmp.display()
+                    ));
+                }
+                if let Err(e) = std::fs::copy(&server_globals, &dest) {
+                    let _ = std::fs::remove_dir_all(&tmp);
+                    return Err(format!(
+                        "mrg: staging the server make.globals under {}: {e}",
+                        tmp.display()
+                    ));
+                }
             }
             (tmp.clone(), Some(tmp))
         }
@@ -4211,6 +4251,12 @@ mod tests {
         (unit.to_str().unwrap().to_string(), staged)
     }
 
+    /// Serialises the tests that pin `PORTAGE_CONFIGROOT`: it is
+    /// process-global, and `place_config_root` reads it (the server
+    /// `make.globals` lookup) while `PlacedConfig` overwrites it, so
+    /// two such tests racing would seed from each other's server root.
+    static PLACED_CONFIG_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn local_ctx(root: &str, workdir: &str) -> RemoteContext {
         RemoteContext {
             hostname: "localtest".to_string(),
@@ -5146,7 +5192,20 @@ mod tests {
     /// the `Client` resolve (task 3).
     #[test]
     fn placed_config_root_covers_both_placements() {
+        // `PORTAGE_CONFIGROOT` is process-global (see
+        // `PLACED_CONFIG_ENV_LOCK`); pin it to an empty dir so the
+        // host's own `/usr/share/portage/config/make.globals` -- when
+        // one is installed -- cannot leak into this hermetic resolve.
+        let _env_guard = PLACED_CONFIG_ENV_LOCK.lock().unwrap();
         let tmp = regen_tmp("placed-config");
+        let pinned_server = tmp.join("pinned-server");
+        std::fs::create_dir_all(&pinned_server).unwrap();
+        let saved_config_root = std::env::var_os("PORTAGE_CONFIGROOT");
+        // SAFETY: held `PLACED_CONFIG_ENV_LOCK`; no other test in this
+        // binary pins `PORTAGE_CONFIGROOT` without it.
+        unsafe {
+            std::env::set_var("PORTAGE_CONFIGROOT", &pinned_server);
+        }
         let config_root = tmp.join("clientroot");
         let client_etc = config_root.join("etc/portage");
         let repo = tmp.join("repo");
@@ -5220,6 +5279,10 @@ mod tests {
                 Some(value) => std::env::set_var("INSTALL_MASK", value),
                 None => std::env::remove_var("INSTALL_MASK"),
             }
+            match saved_config_root {
+                Some(value) => std::env::set_var("PORTAGE_CONFIGROOT", value),
+                None => std::env::remove_var("PORTAGE_CONFIGROOT"),
+            }
         }
         // Task 3: the pulled temp copy is removed best-effort with the
         // resolve; the server source tree is untouched.
@@ -5230,6 +5293,131 @@ mod tests {
         assert!(
             client_etc.join("make.conf").is_file(),
             "server placement must not remove the source tree"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #171 follow-up 3 (owner Q9 = b): the pulled client
+    /// config stacks the **server's** `make.globals` as its bottom
+    /// layer. A synthetic server root carries
+    /// `usr/share/portage/config/make.globals` with
+    /// `FEATURES="news sandbox"`; the pulled client `make.conf` says
+    /// `FEATURES="-news sign"` -- real's incremental fold
+    /// (`const.INCREMENTALS`, `config.py:446-499`) resolves that to
+    /// `sandbox sign`, and the regen'd vdb env carries exactly that
+    /// list (not the build-time `buildpkg` one). `PORTAGE_CONFIGROOT`
+    /// is pinned to the synthetic server root (process-global; see
+    /// `PLACED_CONFIG_ENV_LOCK`) and ambient `FEATURES`/`INSTALL_MASK`
+    /// cleared so the host cannot leak into the hermetic resolve.
+    #[test]
+    fn remote_client_config_stacks_server_make_globals() {
+        let _env_guard = PLACED_CONFIG_ENV_LOCK.lock().unwrap();
+        let tmp = regen_tmp("server-globals");
+        let server_root = tmp.join("serverroot");
+        std::fs::create_dir_all(server_root.join("usr/share/portage/config")).unwrap();
+        std::fs::write(
+            server_root.join("usr/share/portage/config/make.globals"),
+            "FEATURES=\"news sandbox\"\n",
+        )
+        .unwrap();
+        let client_etc = tmp.join("clientroot/etc/portage");
+        let repo = tmp.join("repo");
+        std::fs::create_dir_all(client_etc.join("repos.conf")).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::write(
+            client_etc.join("repos.conf/testrepo.conf"),
+            format!(
+                "[DEFAULT]\nmain-repo = testrepo\n\n[testrepo]\nlocation = {}\n",
+                repo.display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(client_etc.join("make.conf"), "FEATURES=\"-news sign\"\n").unwrap();
+        let saved_config_root = std::env::var_os("PORTAGE_CONFIGROOT");
+        let saved_features = std::env::var_os("FEATURES");
+        let saved_mask = std::env::var_os("INSTALL_MASK");
+        // SAFETY: held `PLACED_CONFIG_ENV_LOCK`; no other test in this
+        // binary pins these without it.
+        unsafe {
+            std::env::set_var("PORTAGE_CONFIGROOT", &server_root);
+            std::env::remove_var("FEATURES");
+            std::env::remove_var("INSTALL_MASK");
+        }
+        let mut ctx = local_ctx(
+            tmp.join("root").to_str().unwrap(),
+            tmp.join("work").to_str().unwrap(),
+        );
+        ctx.etc_portage = ConfigPlacement::Client(client_etc.to_string_lossy().into_owned());
+        let placed = place_config_root(&ctx, None).expect("client placement resolves");
+        assert!(
+            placed
+                .dir
+                .join("usr/share/portage/config/make.globals")
+                .is_file(),
+            "the server make.globals must be seeded under the pulled root"
+        );
+        let eroot = tmp.join("eroot");
+        let (repos, config) = crate::pretend::load_repos_and_config(&placed.dir, &eroot)
+            .expect("placed client config resolves");
+        assert!(repos.iter().any(|r| r.is_main));
+        let resolved = crate::pretend::config_features_string(&config);
+        assert_eq!(
+            resolved, "sandbox sign",
+            "incremental fold over the seeded defaults"
+        );
+        drop(placed);
+        // SAFETY: same as above.
+        unsafe {
+            match saved_config_root {
+                Some(value) => std::env::set_var("PORTAGE_CONFIGROOT", value),
+                None => std::env::remove_var("PORTAGE_CONFIGROOT"),
+            }
+            match saved_features {
+                Some(value) => std::env::set_var("FEATURES", value),
+                None => std::env::remove_var("FEATURES"),
+            }
+            match saved_mask {
+                Some(value) => std::env::set_var("INSTALL_MASK", value),
+                None => std::env::remove_var("INSTALL_MASK"),
+            }
+        }
+        // The regenerated vdb env carries the resolved list: merge the
+        // synthetic unit, run the regen postinst with the resolved
+        // `FEATURES`, and read the installed `environment.bz2`.
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+        let (unit, staged) = regen_unit(
+            &tmp,
+            "EAPI=8\nDESCRIPTION=\"synthetic globals probe\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\n",
+            "-",
+        );
+        let ctx = local_ctx(root.to_str().unwrap(), tmp.join("work").to_str().unwrap());
+        run_merge_stage(&ctx, None, &unit, &staged, None).expect("merge succeeds");
+        let report = run_postinst_regen_stage(&ctx, None, &unit, &staged, Some(&resolved), &[])
+            .expect("regen phase runs");
+        assert_eq!(report.phase_rc, 0);
+        assert!(report.regen_present);
+        let vdb = root.join("var/db/pkg/dev-libs/regen-1.0");
+        install_regenerated_env(
+            &ctx,
+            None,
+            &unit,
+            vdb.join("environment.bz2").to_str().unwrap(),
+            Some("bzip2"),
+        )
+        .expect("install succeeds");
+        let after = read_vdb_env(&vdb.join("environment.bz2"));
+        assert!(
+            after.contains("declare -x FEATURES=\"sandbox sign\""),
+            "resolved FEATURES missing:\n{after}"
+        );
+        assert!(
+            after.contains("declare -x PORTAGE_FEATURES=\"sandbox sign\""),
+            "resolved PORTAGE_FEATURES missing:\n{after}"
+        );
+        assert!(
+            !after.contains("buildpkg"),
+            "build-time FEATURES survived:\n{after}"
         );
         let _ = std::fs::remove_dir_all(&tmp);
     }
