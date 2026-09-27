@@ -1147,6 +1147,44 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    #[test]
+    fn failed_pkg_msg_matches_portage_failed_pkg_msg_bytes() {
+        // Each message emits its own leading blank line; the log line carries
+        // Portage's own leading space; ` for <root>` only when `ROOT != "/"`.
+        // The oracle's tail is the `ROOT == "/"` row below, byte for byte.
+        assert_eq!(
+            failed_pkg_msg(
+                "l32/faultpkg-1.0",
+                Path::new("/"),
+                Some(Path::new(
+                    "/var/tmp/portage/l32/faultpkg-1.0/temp/build.log"
+                ))
+            ),
+            "\n>>> Failed to emerge l32/faultpkg-1.0, Log file:\n\
+             \n>>>  '/var/tmp/portage/l32/faultpkg-1.0/temp/build.log'\n"
+        );
+        assert_eq!(
+            failed_pkg_msg(
+                "dev-libs/packagepkg-1.0",
+                Path::new("/tmp/r/root"),
+                Some(Path::new(
+                    "/tmp/r/pt/portage/dev-libs/packagepkg-1.0/temp/build.log"
+                ))
+            ),
+            "\n>>> Failed to emerge dev-libs/packagepkg-1.0 for /tmp/r/root, Log file:\n\
+             \n>>>  '/tmp/r/pt/portage/dev-libs/packagepkg-1.0/temp/build.log'\n"
+        );
+        assert_eq!(
+            failed_pkg_msg("dev-libs/packagepkg-1.0", Path::new("/tmp/r/root"), None),
+            "\n>>> Failed to emerge dev-libs/packagepkg-1.0 for /tmp/r/root\n"
+        );
+        // Only a lone failure is silent: a `--keep-going` combined
+        // message keeps the normal tail.
+        assert!(!is_binpkg_digest_failure(
+            "2 package(s) failed to merge (--keep-going):\n  dev-libs/a-1.0: binpkg digest verification failed"
+        ));
+    }
+
     /// A writable copy of the committed GnuPG test keyring (see `binpkg.rs`).
     /// `gpg` refuses a homedir it doesn't own, so the tree itself is never used.
     fn test_gpg_home() -> std::path::PathBuf {

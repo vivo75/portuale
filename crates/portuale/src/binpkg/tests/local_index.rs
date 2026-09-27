@@ -201,6 +201,40 @@ fn populate_local_pkgdir_accepts_a_truncated_binpkg_the_index_vouches_for() {
 }
 
 #[test]
+fn populate_local_pkgdir_vouches_by_category_plus_basename() {
+    // The vouch matches by category + basename, not the first
+    // same-basename stanza: the same `PF` can exist in two categories.
+    // The vouched path never parses the container.
+    let scratch = ScratchDir::new("index-vouched-category").unwrap();
+    let pkgdir = scratch.path();
+    for cat in ["cat-a", "cat-b"] {
+        fs::create_dir_all(pkgdir.join(cat)).unwrap();
+        fs::write(pkgdir.join(cat).join("same-1.0.tbz2"), b"not-a-real-binpkg").unwrap();
+    }
+    fs::write(
+        pkgdir.join("Packages"),
+        "TIMESTAMP: 0\n\
+         \n\
+         CPV: cat-a/same-1.0\nSLOT: 0\nSIZE: 17\n_mtime_: 1\nPATH: cat-a/same-1.0.tbz2\n\
+         \n\
+         CPV: cat-b/same-1.0\nSLOT: 0\nSIZE: 17\n_mtime_: 1\nPATH: cat-b/same-1.0.tbz2\n",
+    )
+    .unwrap();
+    let entries = populate_local_pkgdir(pkgdir, true).expect("scan succeeds");
+    assert_eq!(entries.len(), 2, "{entries:?}");
+    for entry in &entries {
+        let cpv = entry.get("CPV").map(String::as_str).unwrap_or("");
+        // Each file reuses its own category's stanza: `CPV` and
+        // `PATH` agree on the category (`<cat>/same-1.0`).
+        assert_eq!(
+            entry.get("PATH").map(String::as_str),
+            Some(format!("{cpv}.tbz2")).as_deref(),
+            "stanza {cpv} must vouch for its own category's file"
+        );
+    }
+}
+
+#[test]
 fn populate_local_pkgdir_reinjects_a_removed_files_index_stanza() {
     // A removed file's stanza rejoins the pool verbatim while the
     // surviving file keeps its fast-path entry.
