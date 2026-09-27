@@ -1,0 +1,28 @@
+--- EAPI '0' does not support 'package.use.stable.mask': '/tmp/l0-fixture-oracle/fixtures/repo/profiles/package.use.stable.mask'
+--- EAPI '0' does not support 'use.stable.force': '/tmp/l0-fixture-oracle/fixtures/repo/profiles/base/use.stable.force'
+--- EAPI '0' does not support 'package.use.stable.mask': '/tmp/l0-fixture-oracle/fixtures/repo/profiles/base/package.use.stable.mask'
+--- EAPI '0' does not support 'package.use.stable.mask': '/tmp/l0-fixture-oracle/fixtures/repo/profiles/package.use.stable.mask'
+Undefined license group 'FREE'
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.13 s (backtrack: 1/20).
+
+
+
+[ebuild  N     ] dev-libs/cyc0b-2::testrepo to /tmp/l0-fixture-oracle/fixtures/ 0 KiB
+[nomerge       ]  dev-libs/cyc0a-2::testrepo  USE="foo -bar" 
+[ebuild  N     ]   dev-libs/cyc0b-2::testrepo  0 KiB
+[ebuild  N     ]    dev-libs/cyc0a-2::testrepo  USE="foo -bar" 0 KiB
+
+Total: 3 packages (3 new), Size of downloads: 0 KiB
+
+ * Error: circular dependencies:
+
+(dev-libs/cyc0b-2:0/0::testrepo, ebuild scheduled for merge) depends on
+ (dev-libs/cyc0a-2:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+  (dev-libs/cyc0b-2:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+
+ * Note that circular dependencies can often be avoided by temporarily
+ * disabling USE flags that trigger optional dependencies.

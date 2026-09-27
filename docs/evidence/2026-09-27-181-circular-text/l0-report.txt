@@ -1,0 +1,52 @@
+# L0 resolver-parity report
+
+## environment
+  date_utc	2026-09-27T20:23:11Z
+  portuale_bin	emerge: command-line interface to the Portuale package manager
+  real_portage	Portage 3.0.82.2 (python 3.14.6-final-0, default, gcc-15, unavailable, 6.18.39-serv x86_64)
+  portage_pin	3.0.82.2
+  staged_at	/tmp/l0-fixture-oracle/fixtures
+
+## summary
+  probes           : 8
+  clean            : 0
+  parity_rate      : 0.000
+  explained        : 0
+  UNEXPLAINED      : 8
+    missing      : 5
+    order        : 3
+
+## unexplained findings
+
+### _dev-libs_cyc0z-1
+  [missing] nomerge dev-libs/cyc0y-1 present for real, absent for portuale
+
+### _dev-libs_cyc0z-2
+  [missing] nomerge dev-libs/cyc0y-1 present for real, absent for portuale
+
+### _dev-libs_cyc0z-3
+  [missing] nomerge dev-libs/cyc0y-1 present for real, absent for portuale
+
+### _dev-libs_cyc0w-1
+  [order] merge order diverges at #1: real dev-libs/cyc0y vs portuale dev-libs/cyc0z
+
+### _dev-libs_cyc0w-2
+  [order] merge order diverges at #1: real dev-libs/cyc0y vs portuale dev-libs/cyc0z
+
+### _dev-libs_cyc0w-3
+  [order] merge order diverges at #1: real dev-libs/cyc0y vs portuale dev-libs/cyc0z
+
+### _dev-libs_cyc0b-1
+  [missing] nomerge dev-libs/cyc0a-1 present for real, absent for portuale
+
+### _dev-libs_cyc0b-2
+  [missing] nomerge dev-libs/cyc0a-2 present for real, absent for portuale
+
+## allowlist entries that matched nothing (candidates for removal)
+  fixture-masked-path-suffix
+  fixture-masked-atom-synthesis
+  fixture-unmet-requirements-wording
+  fixture-problem-resolving-header
+  fixture-miss-message-unsuffixed
+  fixture-masked-message-unsuffixed
+  slotop-world-complete-graph-order
