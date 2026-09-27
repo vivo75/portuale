@@ -584,6 +584,10 @@ impl Default for UnmergeOptions {
 /// registered): non-empty only on the replace-loop path, where the
 /// merge caller threads its own set through `unmerge_replaced_same_slot`
 /// and `unmerge_one_installed`; empty everywhere else.
+/// `replacement_needed` is real `include_file` (the replacing
+/// package's own `NEEDED.ELF.2` lines -- see
+/// `ebuild_merge::unmerge_replaced_same_slot`): same threading, same
+/// empty-on-standalone rule.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn unmerge_pkgfiles(
     root: &Path,
@@ -594,6 +598,7 @@ pub(crate) fn unmerge_pkgfiles(
     options: &UnmergeOptions,
     is_replacement: bool,
     replacement_preserved: &BTreeMap<String, Vec<String>>,
+    replacement_needed: &[(String, Vec<crate::needed_elf::NeededEntry>)],
 ) -> Result<(), String> {
     let vdb_dir = root.join("var/db/pkg").join(category).join(pf);
     let contents_path = vdb_dir.join("CONTENTS");
@@ -686,8 +691,10 @@ pub(crate) fn unmerge_pkgfiles(
     // unmerge and not unmerge_with_replacement`: in replacement mode a
     // consumer owned by the old instance still counts (it survives
     // through the replacing package), the old instance's own linkmap
-    // data is excluded, and the merge-side just-preserved set is
-    // scanned in (see `ebuild_merge::find_unused_preserved_libs`).
+    // data is excluded, the merge-side just-preserved set is scanned
+    // in, and the replacing package's own `NEEDED` lines are fed
+    // explicitly (real `include_file` -- the new entry is still
+    // `-MERGING-`; see `ebuild_merge::find_unused_preserved_libs`).
     let being_unmerged: std::collections::BTreeSet<String> = contents_text
         .lines()
         .filter_map(|line| line.split_whitespace().nth(1).map(String::from))
@@ -699,6 +706,7 @@ pub(crate) fn unmerge_pkgfiles(
         &|p| being_unmerged.contains(p),
         exclude_cpv.as_deref(),
         replacement_preserved,
+        replacement_needed,
     )?;
 
     Ok(())
@@ -761,6 +769,9 @@ pub fn run_unmerge(
         options,
         false,
         &BTreeMap::new(),
+        // Standalone `emerge -C`: no replacing package, so no include
+        // feed (backlog #224).
+        &[],
     )?;
 
     let postrm_status = ebuild_phases::run_single_phase(
