@@ -49939,9 +49939,10 @@ mod tests_162 {
 /// fingerprint, filed conflicts, queued atoms) -- no end-to-end
 /// contract reproduction. Real-source grounding is real portage 3.0.82.2
 /// (`3rdparty/portage`): `vartree.dbapi` for the installed-set readers,
-/// `depgraph.py::_validate_blockers` for the blocker arms,
-/// `repository/config.py` for `find_repos_impl`, `output.py`'s unmerge
-/// ordering for `topological_removal_order`.
+/// `lib/_emerge/depgraph.py:8891 _validate_blockers` for the blocker arms,
+/// `repository/config.py` for `find_repos_impl`,
+/// `lib/_emerge/actions.py`'s unmerge ordering (`UnmergeDepPriority`,
+/// `ignore_priority_range` ~:1709) for `topological_removal_order`.
 #[cfg(test)]
 mod tests_165 {
     use super::*;
@@ -50166,11 +50167,10 @@ mod tests_165 {
     /// root/portage. An absolute location under `/var/db/repos` (which
     /// need not exist -- only the lexical prefix and the failed
     /// ownership stat matter) is still volatile for a non-root owner,
-    /// pinning both the `||` -> `&&` flip and the `!owned` deletion;
-    /// a second repo at a root-owned absolute location pins the
-    /// `!starts_with` deletion whenever the suite runs with root-owned
-    /// system dirs (and stays green otherwise: the heuristic is true
-    /// there either way).
+    /// pinning both the `||` -> `&&` flip and the `!owned` deletion.
+    /// A second repo at a root-owned absolute location pins the
+    /// `!starts_with` deletion; where the suite has no root-owned
+    /// system dir that leg skips loudly instead of passing silently.
     #[test]
     fn find_repos_impl_computes_volatile_from_location_and_owner() {
         let root = dir_165("repos-volatile");
@@ -50179,24 +50179,34 @@ mod tests_165 {
             .iter()
             .map(PathBuf::from)
             .find(|p| path_owned_by_root_or_portage(p))
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "/usr".to_string());
-        std::fs::write(
-            root.join("etc/portage/repos.conf"),
-            format!(
-                "[DEFAULT]\nmain-repo = main\n\n[main]\nlocation = /var/db/repos/foo\n\n[second]\nlocation = {sys}\n"
+            .map(|p| p.to_string_lossy().into_owned());
+        let conf = match &sys {
+            Some(s) => format!(
+                "[DEFAULT]\nmain-repo = main\n\n[main]\nlocation = /var/db/repos/foo\n\n[second]\nlocation = {s}\n"
             ),
-        )
-        .unwrap();
+            None => {
+                "[DEFAULT]\nmain-repo = main\n\n[main]\nlocation = /var/db/repos/foo\n".to_string()
+            }
+        };
+        std::fs::write(root.join("etc/portage/repos.conf"), conf).unwrap();
         let repos = find_repos(&root).expect("repos.conf resolves");
         // `/var/db/repos/foo` is unowned (it does not exist): real
         // `!starts_with || !owned` is true; `&&` and the `!owned`
         // deletion both yield false.
         assert!(repos.iter().find(|r| r.name == "main").unwrap().volatile);
-        // A non-`/var/db/repos` tree is volatile either way; when the
-        // location really is root-owned this also pins the
-        // `!starts_with` deletion (which would yield false).
-        assert!(repos.iter().find(|r| r.name == "second").unwrap().volatile);
+        match sys {
+            Some(_) => {
+                // A non-`/var/db/repos` tree is volatile either way;
+                // with a genuinely root-owned location this also pins
+                // the `!starts_with` deletion (which would yield false).
+                assert!(repos.iter().find(|r| r.name == "second").unwrap().volatile);
+            }
+            None => {
+                eprintln!(
+                    "SKIP tests_165 second-repo volatile leg: no root-owned /usr, /etc, /bin or / on this host"
+                );
+            }
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -50971,6 +50981,62 @@ mod tests_165 {
         assert_eq!(conflicts.len(), 1);
         assert_eq!(conflicts[0].conflict.matched_version, "1.0");
         assert!(conflicts[0].conflict.unsolvable);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `installed_match` needs slot *and* version: installed
+    /// `target-1.0:0` beside the merge-bound twin `target-1.0:1` leaves
+    /// the `:1` row an unsolvable uninstall (the matched instance is
+    /// not the installed one). The `&&` -> `||` flip (16930:49)
+    /// self-matches on the version alone and misfiles it as a slot
+    /// `Replacement` once a second same-slot entry (`target-2.0:1`)
+    /// satisfies the replaced-in-slot arm -- so this leg kills it.
+    #[test]
+    fn resolve_blockers_requires_slot_and_version_for_an_installed_match() {
+        let root = dir_165("blocker-installed-match");
+        install_165(&root, "dev-libs", "target-1.0", "0", &[]);
+        let entries = vec![
+            new_165("dev-libs", "owner", "1.0"),
+            entry_165(
+                "dev-libs",
+                "target",
+                PretendOutcome::New {
+                    version: "1.0".to_string(),
+                },
+                Some("1"),
+            ),
+            entry_165(
+                "dev-libs",
+                "target",
+                PretendOutcome::New {
+                    version: "2.0".to_string(),
+                },
+                Some("1"),
+            ),
+        ];
+        let conflicts = resolve_blockers(
+            &root,
+            &[pending_165(
+                "!!dev-libs/target:1",
+                true,
+                true,
+                ("dev-libs", "target"),
+                ("dev-libs", "owner"),
+                "1.0",
+                true,
+                false,
+            )],
+            &entries,
+            &HashSet::new(),
+            false,
+        );
+        assert_eq!(conflicts.len(), 2);
+        let twin = conflicts
+            .iter()
+            .find(|c| c.conflict.matched_version == "1.0")
+            .expect("the :1 twin files");
+        assert!(twin.conflict.unsolvable);
+        assert!(twin.conflict.satisfied_by.is_none());
         let _ = std::fs::remove_dir_all(&root);
     }
 
