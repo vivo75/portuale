@@ -1,0 +1,61 @@
+HOST FACTS
+==========
+
+nproc: 32
+
+Installed packages: 2128 (via ls -d /var/db/pkg/*/* | wc -l)
+
+Git HEAD: 8b7890cd
+
+Portuale binary (emerge symlink):
+  ls -l /home/vivo/repo/PORTUALE/portuale/rust/target/release/
+  lrwxrwxrwx 1 vivo users 8  8 set 13.10 /home/vivo/repo/PORTUALE/portuale/rust/target/release/emerge -> portuale
+  -rwxr-xr-x 2 vivo users 15M 27 set 13.52 /home/vivo/repo/PORTUALE/portuale/rust/target/release/portuale
+
+Required packages installed:
+  /var/db/pkg/dev-libs/weston-16.0.0
+  /var/db/pkg/media-libs/libdisplay-info-0.3.0 (note: task mentioned 0.4.0, but 0.3.0 is installed)
+
+RESOLVE BEHAVIOR
+================
+
+Signal used: JSON --json flag to extract backtrack count from JSON output
+
+Portuale default resolution:
+  - JSON backtrack: {"restarts": 1, "max": 10}
+  - Restarts: 1 (2 passes total)
+  - Avoids upgrading libdisplay-info due to weston slot conflict
+  - Shows "WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:"
+
+Portuale --backtrack=0 resolution:
+  - JSON backtrack: {"restarts": 0, "max": 0}
+  - Restarts: 0 (1 pass total)
+  - Upgrades libdisplay-info
+  - Shows "The following packages are causing rebuilds:" for weston, kwin, mesa
+
+Real Portage resolution:
+  - Text output: "Dependency resolution took 11.26 s (backtrack: 0/20)."
+  - Restarts: 0 (1 pass total)
+  - Same resolution as portuale --backtrack=0 but with binary package for rest
+
+TRIGGER
+=======
+
+Portuale restart trigger: media-libs/libdisplay-info upgrade blocked by dev-libs/weston-16.0.0's
+  <media-libs/libdisplay-info-0.4.0:= (slot operator) dependency constraint
+
+Real Portage resolves this in one pass by upgrading libdisplay-info and causing rebuilds for
+dependent packages. Portuale on default backtracking attempts once, hits the conflict, backtracks,
+and gives up (with 1 restart recorded).
+
+MISSING PREAMBLE BUG
+====================
+
+Portuale is NOT printing the standard preamble that real Portage prints:
+  "These are the packages that would be merged, in order:"
+  "Calculating dependencies ... done!"
+  "Dependency resolution took (backtrack: N/M)."
+
+This is missing from portuale's text output (it only appears in JSON via --json flag).
+Real Portage prints this even with successful resolutions.
+
