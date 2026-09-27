@@ -141,6 +141,7 @@ fn ebuild_path(candidate: &Candidate, category: &str, package: &str, version: &s
 /// invalidate for a later entry. Failures are collected and returned
 /// together at the end as a single combined error listing every one --
 /// `Ok(())` only once every entry has a real binary package on disk.
+#[allow(clippy::too_many_arguments)]
 pub fn run_buildpkgonly(
     entries: &[GraphEntry],
     config: &portage_profile::Config,
@@ -149,6 +150,13 @@ pub fn run_buildpkgonly(
     portage_tmpdir: &Path,
     options: &PackageOptions,
     keep_going: bool,
+    // Backlog #197: the scheduler-display mode (background + Jobs
+    // visibility). `--buildpkgonly` prints real's `Emerging (N of M)`
+    // line through the same `_status_msg` path, so the blank rule
+    // applies; its serial loop emits no `>>> Jobs:` events (a cut,
+    // stated on `StatusDisplay`), so the mode only carries the blank
+    // half here.
+    mode: StatusMode,
 ) -> Result<(), String> {
     // The run-wide half of real `config.environ()`, once for the whole
     // run (`--buildpkgonly` has no `MergeOptions`; `entry_phase_env_tail`
@@ -156,6 +164,10 @@ pub fn run_buildpkgonly(
     let run_wide = run_wide_phase_env(config);
     // Real `Scheduler._pkg_count` for this run (backlog #177).
     let progress = merge_progress_map(entries);
+    // Backlog #197: real `Scheduler` owns one `JobStatusDisplay` per
+    // merge run (no Jobs events fire on this path -- see `mode`).
+    let total_builds = entries.iter().filter(|e| scheduler_needs_build(e)).count();
+    let display = StatusDisplay::new(mode, total_builds, progress_color());
     let mut failures = Vec::new();
     for (idx, entry) in entries.iter().enumerate() {
         if entry.source == CandidateSource::Binary {
@@ -189,10 +201,7 @@ pub fn run_buildpkgonly(
         // portuale does not write -- see the S0 table).
         let color = progress_color();
         let entry_progress = progress[idx];
-        println!(
-            "{}",
-            emerging_line(entry, version, entry_progress, root, &color)
-        );
+        display.status(&emerging_line(entry, version, entry_progress, root, &color));
         // Real per-package `package.env` (backlog #129): `--buildpkgonly`
         // carries no `MergeOptions`, but `config` already has the
         // resolved `package_env_vars` table (`Config::package_env_vars`),
@@ -414,7 +423,19 @@ pub fn run_source_merge(
     // `--quiet-build=y` / `-q`. When set, the single-job path runs the
     // same captured-build-then-serialized-merge split the scheduler uses.
     capture_log: bool,
+    // Backlog #197: the scheduler-display mode (background + Jobs
+    // visibility), computed once by the caller from the CLI flags and
+    // the mergelist length. A serial captured run (`capture_log`) is
+    // always background (see `scheduler_status_mode`); the mode only
+    // carries the display half, never the capture decision itself.
+    mode: StatusMode,
 ) -> Result<(), String> {
+    // Backlog #197: real `Scheduler` owns one `JobStatusDisplay` per
+    // merge run (`maxval` is the build-bound count here -- see
+    // `StatusDisplay`'s own doc comment for the installed-noop
+    // narrowing).
+    let total_builds = entries.iter().filter(|e| scheduler_needs_build(e)).count();
+    let display = StatusDisplay::new(mode, total_builds, progress_color());
     if jobs > 1 {
         // The `-jN` dispatch policy, one of the director's two
         // `SchedulerPolicy` implementations: a bare `-j` (mapped to
@@ -433,6 +454,7 @@ pub fn run_source_merge(
                 buildpkg,
                 buildpkg_exclude,
                 &policy,
+                &display,
             );
         }
         let policy = mrg_director::LoadAwarePolicy::new(jobs, load_average);
@@ -446,6 +468,7 @@ pub fn run_source_merge(
             buildpkg,
             buildpkg_exclude,
             &policy,
+            &display,
         );
     }
     // The serial loop merges through the director's source engine (the
@@ -462,6 +485,7 @@ pub fn run_source_merge(
         options,
         buildpkg,
         buildpkg_exclude,
+        display: &display,
     };
     // Real `Scheduler._pkg_count` for this run (backlog #177): every
     // entry below prints its own positional snapshot of these counters.
@@ -472,6 +496,12 @@ pub fn run_source_merge(
             entry_buildpkg_wanted(entry, repos, buildpkg_exclude, opts.buildpkg_live)
         });
         if capture_log && scheduler_needs_build(entry) {
+            // Backlog #197: the captured serial split is background by
+            // construction (see `scheduler_status_mode`), so these are
+            // real's serial-background `>>> Jobs:` events: start,
+            // build-end, merge-land around the same halves the `-jN`
+            // scheduler runs.
+            display.job_started();
             let path = build_one_source_entry(
                 entry,
                 repos,
@@ -481,7 +511,9 @@ pub fn run_source_merge(
                 bp,
                 true,
                 entry_progress,
+                &display,
             )?;
+            display.build_finished();
             merge_one_built_entry(
                 entry,
                 repos,
@@ -490,7 +522,10 @@ pub fn run_source_merge(
                 portage_tmpdir,
                 options,
                 entry_progress,
-            )
+                &display,
+            )?;
+            display.merge_finished();
+            Ok(())
         } else {
             engine.merge_entry(entry, entry_progress)
         }
@@ -677,6 +712,7 @@ where
 /// mixed source+binary merge). `AlreadyInstalled` is a silent no-op; a
 /// `Binary` entry is a hard error here (the mixed dispatcher routes
 /// those to `merge_binpkg` before ever calling this).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn merge_one_source_entry(
     entry: &GraphEntry,
     repos: &[RepoConfig],
@@ -685,6 +721,7 @@ pub(crate) fn merge_one_source_entry(
     options: &ebuild_merge::MergeOptions,
     buildpkg: Option<&ebuild_package::PackageOptions>,
     progress: mrg_director::MergeProgress,
+    display: &StatusDisplay,
 ) -> Result<(), String> {
     let cp = format!("{}/{}", entry.category, entry.package);
     let version = match &entry.outcome {
@@ -719,7 +756,7 @@ pub(crate) fn merge_one_source_entry(
 
     // Real `MergeListItem._start`'s per-package line (backlog #177).
     let color = progress_color();
-    println!("{}", emerging_line(entry, &version, progress, root, &color));
+    display.status(&emerging_line(entry, &version, progress, root, &color));
     if buildpkg.is_some() {
         println!(">>> Building package for {cp}-{version}...");
     }
@@ -775,7 +812,7 @@ pub(crate) fn merge_one_source_entry(
     // A failed build never reaches the hook, so no `Installing` prints
     // for it, exactly like real queuing no merge for a failed build.
     let installing = installing_line(entry, &version, progress, root, &color);
-    let print_installing = || println!("{installing}");
+    let print_installing = || display.status(&installing);
     let status = ebuild_merge::run_merge_with_hook(
         &path,
         root,
@@ -790,10 +827,7 @@ pub(crate) fn merge_one_source_entry(
     // Real `PackageMerge._install_exit`'s per-package line (backlog
     // #177): this is the `Completed (N of M) cpv::repo` real prints
     // where portuale used to print its own `merged.` line.
-    println!(
-        "{}",
-        completed_line(entry, &version, progress, root, &color)
-    );
+    display.status(&completed_line(entry, &version, progress, root, &color));
     Ok(())
 }
 
@@ -1237,6 +1271,299 @@ pub(crate) fn merge_progress_map(entries: &[GraphEntry]) -> Vec<mrg_director::Me
 /// Either way the line *shape* is real's; only the escapes differ.
 pub(crate) fn progress_color() -> crate::color::Colorizer {
     crate::color::Colorizer::new(crate::color::resolve_havecolor(None))
+}
+
+/// Backlog #197: real `Scheduler._background_mode`
+/// (`3rdparty/portage/lib/_emerge/Scheduler.py:470-531`) as a value.
+/// `background` is real `Scheduler._background`: a parallel `--jobs`
+/// run, `--quiet`, or `--quiet-build=y` -- except that a one-package
+/// mergelist without `--quiet`/`--quiet-build=y` resets to serial and
+/// non-background (real also resets `max_jobs` there; portuale keeps
+/// its dispatch and only takes the display half -- a scheduled build
+/// under `-jN` still captures its phase output). `show_jobs` is real
+/// `JobStatusDisplay.quiet == false`, i.e. `background && (!quiet ||
+/// verbose)` (`Scheduler.py:524-527`): `--quiet` without `--verbose`
+/// suppresses the `>>> Jobs:` lines but not the status lines
+/// themselves. Two deliberate cuts, both stated: interactive packages
+/// (real forces non-background with a `>>> Sending package output to
+/// stdio` notice; portuale models no `interactive` PROPERTIES) and the
+/// `--pretend`/`--fetchonly`/`--fetch-all-uri` exemption (those modes
+/// never reach the merge code that reads this value).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct StatusMode {
+    /// Real `Scheduler._background`: status lines print with no leading
+    /// blank, and build output is captured, not streamed.
+    pub background: bool,
+    /// Real `JobStatusDisplay` is live: `>>> Jobs:` lines print.
+    pub show_jobs: bool,
+}
+
+impl StatusMode {
+    /// A mode for unit tests: serial, non-background, no Jobs lines.
+    #[cfg(test)]
+    pub(crate) fn for_tests() -> Self {
+        StatusMode {
+            background: false,
+            show_jobs: false,
+        }
+    }
+}
+
+/// Backlog #197: real's scheduler-display predicate. `jobs` is the CLI
+/// `--jobs` value (`usize::MAX` is a bare `-j`, i.e. real's `max_jobs
+/// is True`); `quiet` is `--quiet`; `quiet_build` is the `--quiet-build`
+/// tri-state (`Some(true)` is bare/`=y` -- real `main.py` normalizes
+/// both to `"y"` before `_background_mode` reads it, so bare counts);
+/// `mergelist_len` is the resolved entry count; `verbose` is
+/// `--verbose`.
+pub(crate) fn scheduler_status_mode(
+    jobs: usize,
+    quiet: bool,
+    quiet_build: Option<bool>,
+    mergelist_len: usize,
+    verbose: bool,
+) -> StatusMode {
+    let background_quiet = quiet || quiet_build == Some(true);
+    let mut background = jobs > 1 || background_quiet;
+    if mergelist_len <= 1 && !background_quiet {
+        background = false;
+    }
+    StatusMode {
+        background,
+        show_jobs: background && (!quiet || verbose),
+    }
+}
+
+/// Backlog #197: real `_emerge/JobStatusDisplay.py` (the `>>> Jobs:`
+/// line) plus the `Scheduler._status_msg` half (`Scheduler.py:2383-
+/// 2397`) that prefixes every status line with a blank line unless the
+/// scheduler is in background mode. One value per merge run, shared by
+/// reference (the `-jN` scheduler prints from worker threads, so the
+/// counters live behind a mutex; every `println!` still happens under
+/// its own call, exactly like the existing merge-path prints).
+///
+/// Real's `maxval` counts every `operation == "merge"` mergelist entry
+/// (`Scheduler.py:296-304`); portuale's is the build-bound count (see
+/// `scheduler_needs_build`) -- the two agree whenever every entry
+/// builds, and the installed-noop counting quirk is out of scope.
+/// Real's `merge_wait` arm is implemented but always reads 0 here:
+/// portuale serializes every vdb merge immediately behind its build and
+/// models neither the merge-wait queue nor `FEATURES=merge-wait`.
+pub(crate) struct StatusDisplay {
+    mode: StatusMode,
+    color: crate::color::Colorizer,
+    state: std::sync::Mutex<StatusState>,
+}
+
+struct StatusState {
+    maxval: usize,
+    curval: usize,
+    running: usize,
+    failed: usize,
+    /// A `>>> Jobs:` line has been printed: real's `displayMessage`
+    /// re-displays the current status after every status line once one
+    /// is on screen (`JobStatusDisplay.displayMessage`, verified in the
+    /// n197 probe: each `Emerging`/`Installing`/`Completed` is followed
+    /// by a `>>> Jobs:` repeat).
+    displayed: bool,
+}
+
+impl StatusDisplay {
+    pub(crate) fn new(mode: StatusMode, maxval: usize, color: crate::color::Colorizer) -> Self {
+        StatusDisplay {
+            mode,
+            color,
+            state: std::sync::Mutex::new(StatusState {
+                maxval,
+                curval: 0,
+                running: 0,
+                failed: 0,
+                displayed: false,
+            }),
+        }
+    }
+
+    /// A display for unit tests: non-background, no Jobs lines, so
+    /// `status` prints exactly `"\n{line}\n"` under test capture.
+    #[cfg(test)]
+    pub(crate) fn for_tests() -> Self {
+        StatusDisplay::new(
+            StatusMode {
+                background: false,
+                show_jobs: false,
+            },
+            1,
+            crate::color::Colorizer::new(false),
+        )
+    }
+
+    /// Real `Scheduler._status_msg` + `JobStatusDisplay.displayMessage`
+    /// (non-tty half): the leading blank unless in background mode, the
+    /// `>>> ` line itself on stdout, then the current `>>> Jobs:` status
+    /// again when the display is live and showing (the n197 probe shows
+    /// the repeat after every status line; real's tty `\r`-redraw half
+    /// is not ported -- portuale prints plain lines on a tty too).
+    pub(crate) fn status(&self, line: &str) {
+        if !self.mode.background {
+            println!();
+        }
+        println!("{line}");
+        let redisplay = self.mode.show_jobs && self.state.lock().unwrap().displayed;
+        if redisplay {
+            self.print_jobs();
+        }
+    }
+
+    /// Real `_schedule_tasks_imp`'s `running = self._jobs` on task
+    /// start: print the `>>> Jobs: 0 of N complete, 1 running` line
+    /// *before* the worker thread prints its `>>> Emerging` line, so
+    /// the order matches real's event order.
+    pub(crate) fn job_started(&self) {
+        self.state.lock().unwrap().running += 1;
+        if self.mode.show_jobs {
+            self.print_jobs();
+        }
+    }
+
+    /// Real `_build_exit`'s tail (`running = self._jobs` after the
+    /// token release): the build slot is free, the merge is pending.
+    pub(crate) fn build_finished(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.running = state.running.saturating_sub(1);
+        drop(state);
+        if self.mode.show_jobs {
+            self.print_jobs();
+        }
+    }
+
+    /// Real `_merge_exit`'s `curval += 1`: the merge landed.
+    pub(crate) fn merge_finished(&self) {
+        self.state.lock().unwrap().curval += 1;
+        if self.mode.show_jobs {
+            self.print_jobs();
+        }
+    }
+
+    /// Real `_build_exit`/`_do_merge_exit`'s `failed =
+    /// len(self._failed_pkgs)`: record a failure on the display.
+    pub(crate) fn job_failed(&self) {
+        self.state.lock().unwrap().failed += 1;
+        if self.mode.show_jobs {
+            self.print_jobs();
+        }
+    }
+
+    fn print_jobs(&self) {
+        println!("{}", self.jobs_line());
+        self.state.lock().unwrap().displayed = true;
+    }
+
+    /// Real `JobStatusDisplay._display_status` on a non-tty
+    /// (`JobStatusDisplay.py`): `>>> Jobs: {cur} of {max} complete`
+    /// plus the `, {r} running` / `, {f} failed` / `, {w} merge wait`
+    /// arms only when nonzero, padded with spaces to the 68-column jobs
+    /// field (real's `max_display_width - 32` at the non-tty width of
+    /// 100; the tty term-width half is cut -- portuale always uses the
+    /// non-tty rule, stated here), then `Load avg: {triple}` in real's
+    /// magnitude formatting. The counters wear `INFORM`, like real's
+    /// `number_style`; the padding is measured on the plain text, like
+    /// real's `plain_output` gauge.
+    pub(crate) fn jobs_line(&self) -> String {
+        let state = self.state.lock().unwrap();
+        jobs_line(
+            &self.color,
+            state.curval,
+            state.maxval,
+            state.running,
+            state.failed,
+            0,
+            &loadavg_string(),
+        )
+    }
+}
+
+/// Backlog #197: the pure `>>> Jobs:` shape (real
+/// `JobStatusDisplay._display_status`), split out for unit tests.
+/// `merge_wait` is always 0 from portuale (see [`StatusDisplay`]); the
+/// arm stays because it is part of the shape. `loadavg` is the already
+/// formatted trailing field (see [`format_loadavg`]).
+fn jobs_line(
+    color: &crate::color::Colorizer,
+    curval: usize,
+    maxval: usize,
+    running: usize,
+    failed: usize,
+    merge_wait: usize,
+    loadavg: &str,
+) -> String {
+    let mut plain = format!("Jobs: {curval} of {maxval} complete");
+    let mut styled = format!(
+        "Jobs: {} of {} complete",
+        color.c("INFORM", &curval.to_string()),
+        color.c("INFORM", &maxval.to_string()),
+    );
+    for (value, label) in [
+        (running, "running"),
+        (failed, "failed"),
+        (merge_wait, "merge wait"),
+    ] {
+        if value > 0 {
+            plain.push_str(&format!(", {value} {label}"));
+            styled.push_str(&format!(
+                ", {} {label}",
+                color.c("INFORM", &value.to_string()),
+            ));
+        }
+    }
+    // Real `self._jobs_column_width = width - 32` at the non-tty
+    // `width = max_display_width = 100`.
+    let padding = 68usize.saturating_sub(plain.len());
+    styled.push_str(&" ".repeat(padding));
+    styled.push_str(&format!("Load avg: {loadavg}"));
+    format!(">>> {styled}")
+}
+
+/// Backlog #197: real `JobStatusDisplay._load_avg_str`: the 1/5/15-minute
+/// triple, `unknown` when unreadable, else `%.2f` / `%.1f` / `%.0f` by
+/// the magnitude of the largest sample (the n197 probe caught real
+/// printing `6.9, 7.3, 10.4`, i.e. the `%.1f` arm). The value itself is
+/// inherently nondeterministic -- tests pin the shape with a fixed
+/// triple via [`format_loadavg`] and normalize the live field in
+/// `test_output_invariants`-style stdout matching, the #185
+/// seconds-cut precedent for nondeterministic text.
+fn loadavg_string() -> String {
+    match read_loadavg() {
+        Some(avg) => format_loadavg(avg),
+        None => "unknown".to_string(),
+    }
+}
+
+/// Backlog #197: read the 1/5/15-minute load averages (real
+/// `os.getloadavg()`; portuale reads Linux `/proc/loadavg` directly).
+/// `None` when the file is missing or unparseable -- real's `OSError`
+/// arm.
+fn read_loadavg() -> Option<(f64, f64, f64)> {
+    let content = std::fs::read_to_string("/proc/loadavg").ok()?;
+    let mut fields = content.split_whitespace();
+    let parse = |field: Option<&str>| field?.parse::<f64>().ok();
+    Some((
+        parse(fields.next())?,
+        parse(fields.next())?,
+        parse(fields.next())?,
+    ))
+}
+
+/// Backlog #197: real `JobStatusDisplay._load_avg_str` formatting over
+/// an explicit triple (pure; see [`loadavg_string`]).
+fn format_loadavg(avg: (f64, f64, f64)) -> String {
+    let max_avg = avg.0.max(avg.1).max(avg.2);
+    if max_avg < 10.0 {
+        format!("{:.2}, {:.2}, {:.2}", avg.0, avg.1, avg.2)
+    } else if max_avg < 100.0 {
+        format!("{:.1}, {:.1}, {:.1}", avg.0, avg.1, avg.2)
+    } else {
+        format!("{:.0}, {:.0}, {:.0}", avg.0, avg.1, avg.2)
+    }
 }
 
 /// Real `_emerge/MergeListItem.py::_start` (`MergeListItem.py:60-85`):
@@ -1702,6 +2029,7 @@ fn build_one_source_entry(
     buildpkg: Option<&ebuild_package::PackageOptions>,
     capture_log: bool,
     progress: mrg_director::MergeProgress,
+    display: &StatusDisplay,
 ) -> Result<PathBuf, String> {
     let (cp, version) = scheduler_cp_version(entry)?;
     let Some(candidate) = locate_candidate(repos, &entry.category, &entry.package, &version) else {
@@ -1715,7 +2043,7 @@ fn build_one_source_entry(
     // the build half of the scheduler split prints it when the build
     // starts, exactly where real starts the `EbuildBuild` chain.
     let color = progress_color();
-    println!("{}", emerging_line(entry, &version, progress, root, &color));
+    display.status(&emerging_line(entry, &version, progress, root, &color));
     // Real per-package `PORTAGE_TMPDIR` (#99): this entry's build log,
     // pre-clean and phase chain all live under the matched value.
     let entry_tmpdir = entry_portage_tmpdir(options, entry, &version, portage_tmpdir)?;
@@ -1854,6 +2182,7 @@ fn build_one_source_entry(
 /// `${PORTAGE_BUILDDIR}/.installed` marker `install` leaves behind and
 /// runs `merge_after_install`, including the same-slot replace of an
 /// upgraded/reinstalled version).
+#[allow(clippy::too_many_arguments)]
 fn merge_one_built_entry(
     entry: &GraphEntry,
     repos: &[RepoConfig],
@@ -1862,6 +2191,7 @@ fn merge_one_built_entry(
     portage_tmpdir: &Path,
     options: &ebuild_merge::MergeOptions,
     progress: mrg_director::MergeProgress,
+    display: &StatusDisplay,
 ) -> Result<(), String> {
     let (cp, version) = scheduler_cp_version(entry)?;
     // `merge_after_install`'s `pkg_preinst`/`pkg_postinst` see this
@@ -1904,10 +2234,7 @@ fn merge_one_built_entry(
     // the merge half of the scheduler split prints it right before the
     // serialized vdb merge, exactly where real starts `EbuildMerge`.
     let color = progress_color();
-    println!(
-        "{}",
-        installing_line(entry, &version, progress, root, &color)
-    );
+    display.status(&installing_line(entry, &version, progress, root, &color));
     let status = ebuild_merge::run_qmerge(ebuild_path, root, portage_tmpdir, &per_entry)?;
     if status != 0 {
         return Err(format!("{cp}-{version}: merge failed ({status})"));
@@ -1934,10 +2261,7 @@ fn merge_one_built_entry(
     // Real `PackageMerge._install_exit`'s per-package line (backlog
     // #177): this is the `Completed (N of M) cpv::repo` real prints
     // where portuale used to print its own `merged.` line.
-    println!(
-        "{}",
-        completed_line(entry, &version, progress, root, &color)
-    );
+    display.status(&completed_line(entry, &version, progress, root, &color));
     Ok(())
 }
 
@@ -2008,6 +2332,9 @@ fn run_build_scheduler(
     // so a capped (`LoadAwarePolicy`) or uncapped (`UnlimitedPolicy`)
     // scheduler is one caller-side value, never a loop change here.
     policy: &dyn mrg_director::SchedulerPolicy,
+    // Backlog #197: the run's status display (the `>>> Jobs:` events
+    // below plus the blank/`>>>` rule inside the build/merge halves).
+    display: &StatusDisplay,
 ) -> Result<(), String> {
     use std::collections::{HashMap, HashSet};
     use std::sync::mpsc;
@@ -2031,12 +2358,10 @@ fn run_build_scheduler(
         }
     }
 
-    let total_builds = (0..n)
-        .filter(|&i| scheduler_needs_build(&entries[i]))
-        .count();
-
     // Entries that need no build (AlreadyInstalled / Binary) count as
     // already merged, so their dependents become dispatchable immediately.
+    // (Backlog #197: the `>>> Jobs:` `maxval` lives on the run's
+    // `StatusDisplay`, computed by the caller -- see `run_source_merge`.)
     let mut merged: HashSet<usize> = (0..n)
         .filter(|&i| !scheduler_needs_build(&entries[i]))
         .collect();
@@ -2079,6 +2404,11 @@ fn run_build_scheduler(
                 let Some(idx) = next else { break };
                 started.insert(idx);
                 in_flight += 1;
+                // Backlog #197: real `_schedule_tasks_imp`'s `running =
+                // self._jobs` -- the `>>> Jobs: 0 of N complete, R
+                // running` line prints at dispatch, *before* the worker
+                // prints its `>>> Emerging` line (real's event order).
+                display.job_started();
                 // Real `Scheduler._pkg_count` (backlog #177): the
                 // entry's own positional snapshot -- the worker
                 // closure below is `move` and cannot borrow the map.
@@ -2113,6 +2443,7 @@ fn run_build_scheduler(
                         // `--quiet-build`, on by default under `--jobs`).
                         true,
                         entry_progress,
+                        display,
                     );
                     let _ = tx.send((idx, r));
                 });
@@ -2129,6 +2460,10 @@ fn run_build_scheduler(
 
             let failure = match build_result {
                 Ok(path) => {
+                    // Backlog #197: real `_build_exit`'s tail -- the
+                    // build slot is free (`running` drops) before the
+                    // serialized merge starts.
+                    display.build_finished();
                     let entry = &entries[idx];
                     let entry_progress = progress[idx];
                     merge_one_built_entry(
@@ -2139,10 +2474,21 @@ fn run_build_scheduler(
                         portage_tmpdir,
                         options,
                         entry_progress,
+                        display,
                     )
                     .err()
                 }
-                Err(e) => Some(e),
+                Err(e) => {
+                    // Backlog #197: real `_build_exit`'s failure arm --
+                    // `failed` rises before the freed build slot
+                    // (`running` drops) prints. (Real also prints its
+                    // `>>> Failed to emerge ...` tail between the two;
+                    // portuale's source-build failure rendering is
+                    // unchanged by this slice.)
+                    display.job_failed();
+                    display.build_finished();
+                    Some(e)
+                }
             };
 
             match failure {
@@ -2155,13 +2501,18 @@ fn run_build_scheduler(
                     if let Some(cpv) = resume_cpv(&entries[idx]) {
                         crate::mtimedb::remove_merged_entry(root, &cpv);
                     }
-                    // Real `_emerge/Scheduler.py`'s `JobStatusDisplay`.
-                    let done = (0..n)
-                        .filter(|&i| scheduler_needs_build(&entries[i]) && merged.contains(&i))
-                        .count();
-                    println!(">>> Jobs: {done} of {total_builds} complete");
+                    // Backlog #197: real `_merge_exit`'s `curval += 1`.
+                    display.merge_finished();
                 }
                 Some(e) => {
+                    // Backlog #197: real `_build_exit`'s failure arm --
+                    // `failed` rises (its `>>> Jobs:` line prints) and
+                    // the build slot is still freed (`running` drops).
+                    // (Real also prints its `>>> Failed to emerge ...`
+                    // tail here; portuale's source-build failure
+                    // rendering is unchanged by this slice.)
+                    display.job_failed();
+                    display.build_finished();
                     if !keep_going {
                         // Real `_keep_scheduling`/`_terminate_tasks`
                         // (`PollScheduler.py:106-126`): once any package
@@ -2587,6 +2938,7 @@ mod tests {
                 ..PackageOptions::default()
             },
             false,
+            StatusMode::for_tests(),
         );
         assert!(result.is_ok());
     }
@@ -2879,6 +3231,7 @@ mod tests {
                 ..PackageOptions::default()
             },
             false,
+            StatusMode::for_tests(),
         );
         assert!(result.is_ok(), "{result:?}");
 
@@ -3078,6 +3431,7 @@ mod tests {
                 ..PackageOptions::default()
             },
             false,
+            StatusMode::for_tests(),
         );
         let err = result.expect_err("a missing matched PORTAGE_TMPDIR must fail the entry");
         assert!(
@@ -3163,6 +3517,7 @@ mod tests {
                 ..PackageOptions::default()
             },
             false,
+            StatusMode::for_tests(),
         );
         assert!(result.is_ok(), "{result:?}");
 
@@ -3262,6 +3617,7 @@ mod tests {
                 ..PackageOptions::default()
             },
             false,
+            StatusMode::for_tests(),
         );
         assert!(result.is_ok(), "{result:?}");
 
@@ -3677,6 +4033,7 @@ mod tests {
                 1,
                 None,
                 false,
+                StatusMode::for_tests(),
             )
             .unwrap_or_else(|e| panic!("{label}: source merge succeeds: {e}"));
 
@@ -3775,6 +4132,7 @@ mod tests {
             1,
             None,
             false,
+            StatusMode::for_tests(),
         )
         .expect("source merge succeeds");
 
@@ -3834,6 +4192,7 @@ mod tests {
                 1,
                 None,
                 false,
+                StatusMode::for_tests(),
             )
             .expect("merge succeeds");
         };
@@ -3915,6 +4274,7 @@ mod tests {
                 ..PackageOptions::default()
             },
             false,
+            StatusMode::for_tests(),
         )
         .expect("--buildpkgonly succeeds");
 
@@ -4000,6 +4360,7 @@ mod tests {
             1,
             None,
             false,
+            StatusMode::for_tests(),
         )
         .expect("source merge succeeds");
 
@@ -4054,6 +4415,7 @@ mod tests {
             &options,
             None,
             mrg_director::MergeProgress::single(),
+            &StatusDisplay::for_tests(),
         )
         .expect("first merge succeeds");
         let builddir = portage_tmpdir.join("portage/dev-libs/packagepkg-1.0");
@@ -4083,6 +4445,7 @@ mod tests {
             &options,
             None,
             mrg_director::MergeProgress::single(),
+            &StatusDisplay::for_tests(),
         )
         .expect("second merge succeeds");
         assert!(root.join("usr/share/packagepkg/hello.txt").is_file());
@@ -4126,6 +4489,7 @@ mod tests {
                 ..PackageOptions::default()
             },
             false,
+            StatusMode::for_tests(),
         )
         .expect("--buildpkgonly succeeds");
 
@@ -4193,6 +4557,7 @@ mod tests {
             1,
             None,
             true, // capture_log
+            StatusMode::for_tests(),
         )
         .expect("source merge succeeds");
 
@@ -4210,6 +4575,201 @@ mod tests {
 
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    /// Backlog #197: real `Scheduler._background_mode`
+    /// (`Scheduler.py:470-531`) -- the serial shapes stay foreground
+    /// with no Jobs display, anything parallel/quiet/captured goes
+    /// background, and `--quiet` without `--verbose` kills the Jobs
+    /// display but keeps the (unblanked) status lines.
+    #[test]
+    fn scheduler_status_mode_matches_reals_background_gates() {
+        // Serial, nothing quiet: foreground, no Jobs.
+        assert_eq!(
+            scheduler_status_mode(1, false, None, 3, false),
+            StatusMode {
+                background: false,
+                show_jobs: false,
+            }
+        );
+        // `-j2`: background with Jobs.
+        assert_eq!(
+            scheduler_status_mode(2, false, None, 3, false),
+            StatusMode {
+                background: true,
+                show_jobs: true,
+            }
+        );
+        // `-j2 --quiet`: background, Jobs suppressed.
+        assert_eq!(
+            scheduler_status_mode(2, true, None, 3, false),
+            StatusMode {
+                background: true,
+                show_jobs: false,
+            }
+        );
+        // `-j2 --quiet --verbose`: background, Jobs back on.
+        assert_eq!(
+            scheduler_status_mode(2, true, None, 3, true),
+            StatusMode {
+                background: true,
+                show_jobs: true,
+            }
+        );
+        // `--quiet` serial: background (even single-package), no Jobs.
+        assert_eq!(
+            scheduler_status_mode(1, true, None, 1, false),
+            StatusMode {
+                background: true,
+                show_jobs: false,
+            }
+        );
+        // `--quiet --verbose` serial (the n197 probe's s3 shape):
+        // background, Jobs on.
+        assert_eq!(
+            scheduler_status_mode(1, true, None, 1, true),
+            StatusMode {
+                background: true,
+                show_jobs: true,
+            }
+        );
+        // `--quiet-build=y` serial (no `--quiet`/`--verbose`): real's
+        // `myopts.get("--quiet-build") == "y"` arm -- background, and
+        // the Jobs display is live (no `--quiet` to suppress it).
+        assert_eq!(
+            scheduler_status_mode(1, false, Some(true), 2, false),
+            StatusMode {
+                background: true,
+                show_jobs: true,
+            }
+        );
+        // `--quiet-build=n` serial: foreground, like an uncaptured run.
+        assert_eq!(
+            scheduler_status_mode(1, false, Some(false), 2, false),
+            StatusMode {
+                background: false,
+                show_jobs: false,
+            }
+        );
+        // `-j2` with a one-package mergelist and no quiet: real resets
+        // `max_jobs` to 1 and leaves background mode.
+        assert_eq!(
+            scheduler_status_mode(2, false, None, 1, false),
+            StatusMode {
+                background: false,
+                show_jobs: false,
+            }
+        );
+        // Same single-package `-j2` under `--quiet`: background stays.
+        assert_eq!(
+            scheduler_status_mode(2, true, None, 1, false),
+            StatusMode {
+                background: true,
+                show_jobs: false,
+            }
+        );
+        // Bare `-j` (`usize::MAX`, real's `max_jobs is True`) counts as
+        // parallel.
+        assert_eq!(
+            scheduler_status_mode(usize::MAX, false, None, 3, false),
+            StatusMode {
+                background: true,
+                show_jobs: true,
+            }
+        );
+    }
+
+    /// Backlog #197: real `JobStatusDisplay._load_avg_str` formatting
+    /// over fixed triples (`%.2f` under 10, `%.1f` under 100, `%.0f`
+    /// above; the middle arm is the n197 probe's own `6.9, 7.3, 10.4`).
+    #[test]
+    fn format_loadavg_matches_reals_magnitude_arms() {
+        assert_eq!(format_loadavg((0.12, 0.05, 0.01)), "0.12, 0.05, 0.01");
+        assert_eq!(format_loadavg((6.9, 7.3, 10.4)), "6.9, 7.3, 10.4");
+        assert_eq!(format_loadavg((10.0, 9.99, 0.0)), "10.0, 10.0, 0.0");
+        assert_eq!(format_loadavg((120.4, 99.9, 50.0)), "120, 100, 50");
+    }
+
+    /// Backlog #197: the `>>> Jobs:` shape (real
+    /// `JobStatusDisplay._display_status` on a non-tty) -- conditional
+    /// `running`/`failed`/`merge wait` arms, space padding to the
+    /// 68-column jobs field, `Load avg:` trailer. The first case is the
+    /// n197 probe's s2 line byte for byte (including all 36 pad
+    /// spaces).
+    #[test]
+    fn jobs_line_matches_reals_display_status_shape() {
+        let color = crate::color::Colorizer::new(false);
+        assert_eq!(
+            jobs_line(&color, 0, 3, 1, 0, 0, "6.9, 7.3, 10.4"),
+            ">>> Jobs: 0 of 3 complete, 1 running                                    Load avg: 6.9, 7.3, 10.4",
+        );
+        assert_eq!(
+            jobs_line(&color, 2, 3, 0, 0, 0, "0.10, 0.20, 0.30"),
+            ">>> Jobs: 2 of 3 complete                                               Load avg: 0.10, 0.20, 0.30",
+        );
+        assert_eq!(
+            jobs_line(&color, 1, 3, 1, 2, 1, "1.00, 1.00, 1.00"),
+            ">>> Jobs: 1 of 3 complete, 1 running, 2 failed, 1 merge wait            Load avg: 1.00, 1.00, 1.00",
+        );
+        // Coloured: the counters wear `INFORM`, the padding is still
+        // measured on the plain text (real's `plain_output` gauge).
+        let tty_color = crate::color::Colorizer::new(true);
+        let line = jobs_line(&tty_color, 0, 3, 1, 0, 0, "6.9, 7.3, 10.4");
+        assert!(line.starts_with(">>> Jobs: "), "{line}");
+        assert!(line.contains(&tty_color.c("INFORM", "0")), "{line}");
+        // The escape codes around the counts move the byte indices, so
+        // count the spaces just before `Load avg:` instead: 68 - 32.
+        let load_idx = line.find("Load avg:").unwrap();
+        assert_eq!(&line[load_idx - 36..load_idx], &" ".repeat(36), "{line}");
+    }
+
+    /// Backlog #197: the display counters feed the `>>> Jobs:` line --
+    /// dispatch raises `running`, a freed build slot drops it, a landed
+    /// merge raises `curval`, a failure raises `failed` (real
+    /// `_schedule_tasks_imp` / `_build_exit` / `_merge_exit`). The
+    /// `Load avg:` tail is live, so only the head is pinned here; the
+    /// full shape is pinned above and in the contract suite.
+    #[test]
+    fn status_display_counters_feed_the_jobs_line() {
+        let display = StatusDisplay::new(
+            StatusMode {
+                background: true,
+                show_jobs: false,
+            },
+            3,
+            crate::color::Colorizer::new(false),
+        );
+        let head = |display: &StatusDisplay| {
+            display
+                .jobs_line()
+                .split("Load avg:")
+                .next()
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(
+            head(&display),
+            ">>> Jobs: 0 of 3 complete                                               "
+        );
+        display.job_started();
+        display.job_started();
+        assert_eq!(
+            head(&display),
+            ">>> Jobs: 0 of 3 complete, 2 running                                    "
+        );
+        display.build_finished();
+        assert_eq!(
+            head(&display),
+            ">>> Jobs: 0 of 3 complete, 1 running                                    "
+        );
+        display.merge_finished();
+        assert_eq!(
+            head(&display),
+            ">>> Jobs: 1 of 3 complete, 1 running                                    "
+        );
+        display.job_failed();
+        display.build_finished();
+        assert!(head(&display).contains(", 1 failed"), "{}", head(&display));
     }
 
     #[test]
@@ -4263,6 +4823,7 @@ mod tests {
             2,
             None,
             false,
+            StatusMode::for_tests(),
         )
         .expect("parallel source merge succeeds");
 
@@ -4334,6 +4895,7 @@ mod tests {
             2,
             Some(1e9),
             false,
+            StatusMode::for_tests(),
         )
         .expect("high --load-average must not stall the scheduler");
         for pkg in ["schedleaf-a-1.0", "schedleaf-b-1.0", "schedparent-1.0"] {
@@ -4393,6 +4955,7 @@ mod tests {
             2,
             None,
             false,
+            StatusMode::for_tests(),
         )
         .expect_err("a failed build must make the whole run fail under --keep-going");
         assert!(err.contains("schedbad-1.0"), "{err}");
@@ -4460,6 +5023,7 @@ mod tests {
             2,
             None,
             false,
+            StatusMode::for_tests(),
         )
         .expect_err("schedbad's own failure must fail the whole run");
         assert!(err.contains("schedbad-1.0"), "{err}");
@@ -4553,6 +5117,7 @@ mod tests {
             1,
             None,
             false,
+            StatusMode::for_tests(),
         )
         .unwrap_err();
         assert!(err.contains("binary package"), "{err}");
@@ -4672,6 +5237,7 @@ mod tests {
             1,
             None,
             false,
+            StatusMode::for_tests(),
         )
         .expect("1.0 merges");
         run_source_merge(
@@ -4692,6 +5258,7 @@ mod tests {
             1,
             None,
             false,
+            StatusMode::for_tests(),
         )
         .expect("2.0 upgrade merges");
 
@@ -4772,6 +5339,7 @@ mod tests {
                 ..PackageOptions::default()
             },
             false,
+            StatusMode::for_tests(),
         );
         // `fetchpkg`'s own fixture has a real, nonempty SRC_URI but no
         // Manifest entry at all -- refused before any network access is
@@ -4854,6 +5422,7 @@ mod tests {
                 ..PackageOptions::default()
             },
             false,
+            StatusMode::for_tests(),
         );
         let err = result.expect_err("fetchpkg must still fail");
         assert!(err.contains("no Manifest entry"), "{err}");
@@ -4894,6 +5463,7 @@ mod tests {
                 ..PackageOptions::default()
             },
             true,
+            StatusMode::for_tests(),
         );
         let err = result.expect_err("fetchpkg still fails overall");
         assert!(err.contains("dev-libs/fetchpkg-1.0"), "{err}");
