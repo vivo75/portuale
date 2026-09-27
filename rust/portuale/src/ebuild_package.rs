@@ -537,9 +537,10 @@ fn omit_stanza_default<'a>(key: &'a str, value: &'a str) -> &'a str {
 /// Real `PackageIndex.write`'s own key order
 /// (`getbinpkg.py:153-177`): `keys.sort()` over the *internal* names,
 /// then the `_write_translation_map` applied on the way out
-/// (`_writepkgindex`, `getbinpkg.py:123-126`). The only translated
-/// stanza keys are `_mtime_` -> `MTIME` and `repository` -> `REPO`
-/// (`_pkgindex_translated_keys`, `bintree.py:638-642`); both internals
+/// (`_writepkgindex`, `getbinpkg.py:123-126`). Of the translated keys
+/// (`_pkgindex_translated_keys`, `bintree.py:638-642`) either writer
+/// emits only `_mtime_` -> `MTIME` and `repository` -> `REPO` (the third
+/// pair, `DESCRIPTION` -> `DESC`, never reaches a stanza); both internals
 /// sort after every all-uppercase key (`_` is 0x5F, `r` is 0x72), so
 /// the translated pair lands last with `MTIME` before `REPO` -- in
 /// either naming. Sorting by this internal-name mapping is therefore
