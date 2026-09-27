@@ -14535,6 +14535,73 @@ fn reverse_dep_constraint_atom(atom_str: &str, atom: &portage_dep::Atom) -> Stri
     }
 }
 
+/// Real `Atom.with_slot("=")` as `_slot_operator_check_reverse_-
+/// dependencies` applies it (`lib/_emerge/depgraph.py:2494-2502`): a
+/// parent whose atom is a **built** slot-operator atom "may need to be
+/// rebuilt, therefore discard its soname and built slot operator
+/// dependency components" -- the recorded `:S/SS=` binding is relaxed
+/// to bare `:=`, keeping the version operator, any `[use]` deps and
+/// any `::repo`. The relaxed atom schedules a consumer rebuild, never
+/// a withhold: `>=dev-libs/provpkg-1.0:0/1=` still accepts the
+/// `0/2`-slot `provpkg-2.0` candidate, while `<dev-libs/r25lib-2.0:0/1=`
+/// still rejects `r25lib-2.0`.
+///
+/// Unlike [`reverse_dep_constraint_atom`] (which drops the `=` as well
+/// as the slot, equivalently, for *matching*), this keeps the operator
+/// so the result stays a faithful `with_slot("=")` rendering.
+/// A non-built or unparseable atom returns verbatim.
+fn relax_built_slot_operator_atom(atom_str: &str) -> String {
+    let Some(atom) = portage_dep::parse_atom(atom_str) else {
+        return atom_str.to_string();
+    };
+    if !is_built_slot_op(&atom) {
+        return atom_str.to_string();
+    }
+    // `is_built_slot_op` guarantees both are present; the `:S/SS=`
+    // needle is parser-derived, so it occurs verbatim (slot names are
+    // ASCII, and no `[use]`/`::repo` tail can contain that shape).
+    let needle = format!(
+        ":{}/{}=",
+        atom.slot.as_deref().unwrap_or_default(),
+        atom.sub_slot.as_deref().unwrap_or_default()
+    );
+    match atom_str.find(&needle) {
+        Some(idx) => format!("{}:={}", &atom_str[..idx], &atom_str[idx + needle.len()..]),
+        None => atom_str.to_string(),
+    }
+}
+
+/// Whether an installed-settling edge's atom is a slot-operator rebuild
+/// trigger rather than a genuine slot conflict: a **built**
+/// slot-operator atom (`cat/pkg:S/SS=`, real `Atom.slot_operator_built`)
+/// that accepts the already-resolved merge instance once relaxed the
+/// way real's update probe relaxes it (`relax_built_slot_operator_atom`
+/// -- real `Atom.with_slot("=")`,
+/// `lib/_emerge/depgraph.py:2494-2502`).
+///
+/// Real's `_minimize_children` (`lib/_emerge/depgraph.py:4751-4840`)
+/// never lets such an atom contend the selection against the probe's
+/// upgrade -- both atoms collapse onto the installed instance first,
+/// and the update probe then replaces it (scheduling consumer
+/// rebuilds) exactly when this predicate holds. Recording it as a slot
+/// conflict instead feeds the direct solve a removal verdict real never
+/// renders (the slotop `@world` cells: no `provpkg-2.0`, no consumer
+/// `rR` rows). A version veto (`<dev-libs/r25lib-2.0:0/1=`, the r25
+/// consumer pin) still mismatches the merge under the relaxed form, so
+/// that conflict records normally and the withhold survives.
+/// An unparseable atom is never a trigger (fall back to recording,
+/// today's behaviour).
+fn built_slot_operator_rebuild_trigger(atom_str: &str, existing_str: &str) -> bool {
+    let Some(atom) = portage_dep::parse_atom(atom_str) else {
+        return false;
+    };
+    if !is_built_slot_op(&atom) {
+        return false;
+    }
+    let relaxed = relax_built_slot_operator_atom(atom_str);
+    portage_dep::match_from_list(&relaxed, &[existing_str]).is_some_and(|m| !m.is_empty())
+}
+
 /// One installed consumer's recorded atom broken by this pass's
 /// upgrade, with the consumer's identity attached -- real's complete
 /// graph carries that consumer as a nomerge node (`_add_pkg` of the
@@ -22842,6 +22909,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     };
                     if portage_dep::match_from_list(&current_atom, &[existing_str.as_str()])
                         .is_none_or(|m| m.is_empty())
+                        && !built_slot_operator_rebuild_trigger(&current_atom, &existing_str)
                     {
                         record_slot_conflict(
                             &mut state.slot_conflicts,
@@ -40431,6 +40499,100 @@ mod tests {
         assert_eq!(norm("dev-libs/bar:2/2=[x]"), "dev-libs/bar");
         assert_eq!(norm("dev-libs/bar:2"), "dev-libs/bar:2");
         assert_eq!(norm("dev-libs/bar"), "dev-libs/bar");
+    }
+
+    /// Backlog #25 S1b-fix: `relax_built_slot_operator_atom` is real's
+    /// `Atom.with_slot("=")` as `_slot_operator_check_reverse_-
+    /// dependencies` applies it (`depgraph.py:2494-2502`) -- the
+    /// recorded `:S/SS=` binding relaxes to bare `:=`, keeping the
+    /// version operator, `[use]` deps and `::repo`. Non-built atoms
+    /// (bare `:=`, `:S=` without sub-slot, plain slots, unversioned)
+    /// and unparseable text pass through verbatim.
+    #[test]
+    fn relax_built_slot_operator_atom_keeps_everything_but_the_binding() {
+        assert_eq!(
+            relax_built_slot_operator_atom(">=dev-libs/provpkg-1.0:0/1="),
+            ">=dev-libs/provpkg-1.0:="
+        );
+        assert_eq!(
+            relax_built_slot_operator_atom("<dev-libs/r25lib-2.0:0/1="),
+            "<dev-libs/r25lib-2.0:="
+        );
+        assert_eq!(
+            relax_built_slot_operator_atom(">=dev-libs/provpkg-1.0:0/1=[x]"),
+            ">=dev-libs/provpkg-1.0:=[x]"
+        );
+        assert_eq!(
+            relax_built_slot_operator_atom(">=dev-libs/provpkg-1.0:0/1=::testrepo"),
+            ">=dev-libs/provpkg-1.0:=::testrepo"
+        );
+        // Not built: verbatim.
+        assert_eq!(
+            relax_built_slot_operator_atom("dev-libs/provpkg:="),
+            "dev-libs/provpkg:="
+        );
+        assert_eq!(
+            relax_built_slot_operator_atom("dev-libs/slotoptarget:2="),
+            "dev-libs/slotoptarget:2="
+        );
+        assert_eq!(
+            relax_built_slot_operator_atom(">=dev-libs/provpkg-1.0"),
+            ">=dev-libs/provpkg-1.0"
+        );
+        assert_eq!(
+            relax_built_slot_operator_atom("dev-libs/provpkg"),
+            "dev-libs/provpkg"
+        );
+        assert_eq!(
+            relax_built_slot_operator_atom("not an atom ((("),
+            "not an atom ((("
+        );
+        // The relaxed form still matches the new-slot candidate and the
+        // old one, while the raw recorded form rejects the new slot --
+        // the exact property the rebuild-trigger predicate needs.
+        let cands = [
+            "dev-libs/provpkg-1.0:0/1::testrepo",
+            "dev-libs/provpkg-2.0:0/2::testrepo",
+        ];
+        let raw = ">=dev-libs/provpkg-1.0:0/1=";
+        let relaxed = relax_built_slot_operator_atom(raw);
+        assert_eq!(
+            portage_dep::match_from_list(raw, &cands).map(|m| m.len()),
+            Some(1)
+        );
+        assert_eq!(
+            portage_dep::match_from_list(&relaxed, &cands).map(|m| m.len()),
+            Some(2)
+        );
+    }
+
+    /// Backlog #25 S1b-fix: `built_slot_operator_rebuild_trigger` fires
+    /// for a recorded binding the probe's relaxation accepts (the
+    /// slotop upgrade shape) and stays silent for a version veto (the
+    /// r25 withhold shape), for a non-built atom, and for unparseable
+    /// text.
+    #[test]
+    fn built_slot_operator_rebuild_trigger_only_forgives_rebuilds() {
+        assert!(built_slot_operator_rebuild_trigger(
+            ">=dev-libs/provpkg-1.0:0/1=",
+            "dev-libs/provpkg-2.0:0/2"
+        ));
+        assert!(!built_slot_operator_rebuild_trigger(
+            "<dev-libs/r25lib-2.0:0/1=",
+            "dev-libs/r25lib-2.0:0/2"
+        ));
+        assert!(!built_slot_operator_rebuild_trigger(
+            "dev-libs/provpkg:=",
+            "dev-libs/provpkg-2.0:0/2"
+        ));
+        assert!(!built_slot_operator_rebuild_trigger(
+            ">=dev-libs/provpkg-1.0",
+            "dev-libs/provpkg-2.0:0/2"
+        ));
+        assert!(!built_slot_operator_rebuild_trigger(
+            "not an atom (((",
+            "dev-libs/provpkg-2.0:0/2"
+        ));
     }
 
     /// Backlog #161 S1: a `Reinstall` parent counts toward the scan's
