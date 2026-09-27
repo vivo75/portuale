@@ -5262,6 +5262,9 @@ fn execute_unmerge(
             backup.as_ref(),
             false,
             &BTreeMap::new(),
+            // Standalone `emerge -C`: no replacing package, so neither
+            // feed (backlog #224).
+            &[],
         ) {
             eprintln!("emerge: {e}");
             return ExitCode::from(1);
