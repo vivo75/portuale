@@ -254,7 +254,7 @@ they shipped, not a rule for new work.
 
 181. **OPEN (filed 2026-09-27, #50 residue) — the circular-dep "solution attribution" text needs a real-text oracle.** Batch 2's `test_circular_dependencies` CASES (pmtest `4c5f424`) pin portuale's wording without checking it against real's. Evidence: #50 batch-2 close-out. Ledger: `docs/evidence/2026-09-27-batch0926-closeout-ledger.md`. [A]
 
-182. **OPEN (filed 2026-09-27, pmtest) — the `loopback_sshd` fixture leaks its `sshd` when a run is killed.** A killed l31 run leaves the daemon behind. Evidence: l31 runs (`run/l31-remote-merge.sh`). Ledger: `docs/evidence/2026-09-27-batch0926-closeout-ledger.md`. [I]
+182. **OPEN (filed 2026-09-27, pmtest) — the `loopback_sshd` fixture leaks its `sshd` when a run is killed.** A killed l31 run leaves the daemon behind. Evidence: l31 runs (`run/l31-remote-merge.sh`). Ledger: `docs/evidence/2026-09-27-batch0926-closeout-ledger.md`. Fix shipped on branch backlog/182-sshd-leak (pmtest e6093eb): the fixture launched sshd without -D, so it detached and the teardown killed only the exited launcher; now -D plus a parent-death signal. [I]
 
 183. **OPEN (filed 2026-09-27) — portuale writes no real-style `-MERGING-<pf>` in-progress vdb entry during a merge.** Evidence: batch-2026-09-26 close-out ledger. Ledger: `docs/evidence/2026-09-27-batch0926-closeout-ledger.md`. [I]
 
