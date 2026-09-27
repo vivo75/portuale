@@ -96,6 +96,53 @@ fn register_preserved_libs_with_paths_unconditionally_overwrites() {
     assert_eq!(paths, &["/usr/lib/libfoo.so.2".to_string()]);
 }
 
+/// Merge-side preserve sees the replacing package's `-MERGING-` NEEDED feed,
+/// so a lib owned by the replaced instance and consumed only by the
+/// replacement is preserved. Portage: `dblink.py`, `treewalk`.
+#[test]
+fn merge_side_preserve_sees_the_replacing_packages_merging_needed() {
+    let tmp = tempdir();
+    let root = tmp.join("root");
+    std::fs::create_dir_all(root.join("usr/lib")).unwrap();
+    std::fs::create_dir_all(root.join("usr/bin")).unwrap();
+    std::fs::write(root.join("usr/lib/libold.so.1"), b"fake elf").unwrap();
+    std::fs::write(root.join("usr/bin/newtool"), b"fake elf").unwrap();
+    let vdb_old = root.join("var/db/pkg/dev-libs/oldapp-1.0");
+    std::fs::create_dir_all(&vdb_old).unwrap();
+    std::fs::write(vdb_old.join("CONTENTS"), "obj /usr/lib/libold.so.1 def 1\n").unwrap();
+    std::fs::write(
+        vdb_old.join("NEEDED.ELF.2"),
+        "X86_64;/usr/lib/libold.so.1;libold.so.1;;\n",
+    )
+    .unwrap();
+    std::fs::write(vdb_old.join("SLOT"), "0\n").unwrap();
+    std::fs::write(vdb_old.join("COUNTER"), "7\n").unwrap();
+    // The replacing package is still `-MERGING-`, so only the explicit
+    // include feed can show its consumer to the preserve computation.
+    let vdb_new = root.join("var/db/pkg/dev-libs/-MERGING-oldapp-2.0");
+    std::fs::create_dir_all(&vdb_new).unwrap();
+    std::fs::write(
+        vdb_new.join("NEEDED.ELF.2"),
+        "X86_64;/usr/bin/newtool;;;libold.so.1\n",
+    )
+    .unwrap();
+    let new_image_paths: BTreeSet<String> = ["/usr/bin/newtool".to_string()].into_iter().collect();
+
+    let (paths, _) = find_preserve_paths_for_merge(FindPreservePathsForMergeArgs {
+        root: &root,
+        category: "dev-libs",
+        package: "oldapp",
+        new_pf: "oldapp-2.0",
+        main_slot: "0",
+        new_image_paths: &new_image_paths,
+    })
+    .expect("a same-slot instance owning files preserves");
+    assert!(
+        paths.contains("/usr/lib/libold.so.1"),
+        "the old-owned lib consumed only by the replacing package must be preserved: {paths:?}"
+    );
+}
+
 /// Removing a path from `CONTENTS` also drops its `NEEDED.ELF.2` entry;
 /// entries for still-owned paths survive untouched.
 /// Portage: `vartree.py`, `removeFromContents`.

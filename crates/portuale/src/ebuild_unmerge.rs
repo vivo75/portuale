@@ -334,6 +334,41 @@ pub(crate) struct UnmergePkgfilesArgs<'a> {
     pub(crate) replacement_needed: &'a [(String, Vec<crate::needed_elf::NeededEntry>)],
 }
 
+/// File-removal core of the unmerge: deletes every `CONTENTS` entry
+/// deepest-first with the same skips as `remove_contents`, but no
+/// `prerm`/`postrm` hooks and no vdb-directory removal. Split out so the
+/// binpkg replace path can reuse it phase-free (a binpkg carries no
+/// ebuild to source a phase from). `also_keep` folds into `others_in_slot`;
+/// the `is_replacement`/`replacement_*` triple threads the replace-loop
+/// preserved-libs state (empty on a standalone `emerge -C`).
+/// Portage: dbapi/vartree.py, _unmerge_pkgfiles.
+#[cfg(test)]
+pub(crate) fn unmerge_pkgfiles(args: UnmergePkgfilesArgs<'_>) -> Result<(), String> {
+    let UnmergePkgfilesArgs {
+        root,
+        category,
+        pn,
+        pf,
+        also_keep,
+        options,
+        is_replacement,
+        replacement_preserved,
+        replacement_needed,
+    } = args;
+    unmerge_pkgfiles_into(UnmergePkgfilesIntoArgs {
+        root,
+        category,
+        pn,
+        pf,
+        also_keep,
+        options,
+        is_replacement,
+        replacement_preserved,
+        replacement_needed,
+        retire: None,
+    })
+}
+
 /// Arguments of [`unmerge_pkgfiles_into`].
 pub(crate) struct UnmergePkgfilesIntoArgs<'a> {
     pub(crate) root: &'a Path,

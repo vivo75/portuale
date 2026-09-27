@@ -167,10 +167,12 @@ pub(super) fn publish_hook(root: &Path) {
     });
 }
 
-mod collisions;
 /// The merge on a database backend.
 #[cfg(any(feature = "vdb-sqlite", feature = "vdb-redb"))]
 mod db_merge;
+
+mod after_install;
+mod collisions;
 mod installed_instance;
 mod options;
 mod plib_merge;

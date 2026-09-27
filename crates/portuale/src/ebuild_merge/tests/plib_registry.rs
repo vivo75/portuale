@@ -319,6 +319,113 @@ fn plib_registry_reload_orders_regular_files_before_symlinks() {
     );
 }
 
+/// Two consecutive soname bumps replace the record under the merging cpv
+/// while the still-needed paths survive verbatim.
+/// Portage: `PreservedLibsRegistry.py`, `register`.
+#[test]
+fn plib_registry_two_consecutive_soname_bumps_replace_the_record_under_the_merging_cpv() {
+    let tmp = tempdir();
+    let root = tmp.join("root");
+    let portage_tmpdir = tmp.join("tmp");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+    // Seed the env.d `LDPATH` input the way a toolchain entry does, or no
+    // `/usr/lib64` consumer is ever found on either implementation.
+    std::fs::create_dir_all(root.join("etc/env.d")).unwrap();
+    std::fs::write(
+        root.join("etc/env.d/99sonamebump"),
+        "LDPATH=\"/usr/lib64\"\n",
+    )
+    .unwrap();
+
+    for (name, version) in [
+        ("sonamebumplib", "1.0"),
+        ("consumesonamebump", "1.0"),
+        ("sonamebumplib", "2.0"),
+    ] {
+        let status = run_merge(
+            &versioned_fixture(name, version),
+            &root,
+            &portage_tmpdir,
+            &MergeOptions::default(),
+            None,
+        )
+        .expect("run_merge succeeds");
+        assert_eq!(status, 0, "{name}-{version} merges cleanly");
+    }
+
+    let counter_2 =
+        std::fs::read_to_string(root.join("var/db/pkg/dev-libs/sonamebumplib-2.0/COUNTER"))
+            .unwrap();
+    let expected_bump1 = format!(
+        "{{\n\t\"dev-libs/sonamebumplib:0\": [\n\t\t\"dev-libs/sonamebumplib-2.0\",\n\t\t\"{}\",\n\t\t[\n\t\t\t\"/usr/lib64/libsonamebump.so.1.0.0\",\n\t\t\t\"/usr/lib64/libsonamebump.so.1\"\n\t\t]\n\t]\n}}",
+        counter_2.trim(),
+    );
+    assert_eq!(
+        std::fs::read_to_string(plib_registry_path(&root)).unwrap(),
+        expected_bump1,
+        "after bump 1 the registry must match the S0 oracle shape"
+    );
+    let contents_2 =
+        std::fs::read_to_string(root.join("var/db/pkg/dev-libs/sonamebumplib-2.0/CONTENTS"))
+            .unwrap();
+    assert!(
+        contents_2.contains("obj /usr/lib64/libsonamebump.so.1.0.0"),
+        "the new package owns the preserved hardlink: {contents_2}"
+    );
+    assert!(
+        contents_2.contains("sym /usr/lib64/libsonamebump.so.1 "),
+        "the new package owns the preserved soname symlink: {contents_2}"
+    );
+
+    let status = run_merge(
+        &versioned_fixture("sonamebumplib", "3.0"),
+        &root,
+        &portage_tmpdir,
+        &MergeOptions::default(),
+        None,
+    )
+    .expect("run_merge succeeds");
+    assert_eq!(status, 0, "sonamebumplib-3.0 merges cleanly");
+
+    let counter_3 =
+        std::fs::read_to_string(root.join("var/db/pkg/dev-libs/sonamebumplib-3.0/COUNTER"))
+            .unwrap();
+    let expected_bump2 = format!(
+        "{{\n\t\"dev-libs/sonamebumplib:0\": [\n\t\t\"dev-libs/sonamebumplib-3.0\",\n\t\t\"{}\",\n\t\t[\n\t\t\t\"/usr/lib64/libsonamebump.so.1.0.0\",\n\t\t\t\"/usr/lib64/libsonamebump.so.1\"\n\t\t]\n\t]\n}}",
+        counter_3.trim(),
+    );
+    assert_eq!(
+        std::fs::read_to_string(plib_registry_path(&root)).unwrap(),
+        expected_bump2,
+        "after bump 2 the registry must match the S0 oracle shape"
+    );
+    assert!(
+        root.join("usr/lib64/libsonamebump.so.1.0.0").is_file(),
+        "the still-needed hardlink survives the second bump"
+    );
+    assert!(
+        !root.join("usr/lib64/libsonamebump.so.2.0.0").exists(),
+        "the unneeded .so.2 hardlink is unmerged at the second bump"
+    );
+    assert!(
+        !root.join("usr/lib64/libsonamebump.so.2").exists(),
+        "the unneeded .so.2 symlink is unmerged at the second bump"
+    );
+    let contents_3 =
+        std::fs::read_to_string(root.join("var/db/pkg/dev-libs/sonamebumplib-3.0/CONTENTS"))
+            .unwrap();
+    assert!(
+        contents_3.contains("obj /usr/lib64/libsonamebump.so.1.0.0"),
+        "the newest package owns the preserved hardlink: {contents_3}"
+    );
+    assert!(
+        !contents_3.contains("libsonamebump.so.2"),
+        "the newest package must not claim the dropped soname: {contents_3}"
+    );
+}
+
 /// A package owning no files still unregisters its matching stale entry;
 /// with no entry at all, nothing is written.
 /// Portage: `PreservedLibsRegistry.py`, `store`.
@@ -380,6 +487,55 @@ fn preserve_libs_on_unmerge_with_empty_contents_still_unregisters() {
     .unwrap();
     assert!(preserved.is_empty());
     assert!(!plib_registry_path(&tmp2).exists());
+}
+
+/// A replacement unmerge excludes the old instance at the prune, so a lib
+/// still needed by the replacing consumer survives on disk and in the registry.
+/// Portage: `dblink.py`, `_prune_plib_registry`.
+#[test]
+fn replacement_unmerge_keeps_a_preserved_lib_needed_by_the_replacing_consumer() {
+    let tmp = tempdir();
+    let (root, _) = seed_old_owned_consumer_root(&tmp);
+    let vdb_new = root.join("var/db/pkg/dev-libs/newapp-1.0");
+    std::fs::create_dir_all(&vdb_new).unwrap();
+    std::fs::write(vdb_new.join("CONTENTS"), "obj /usr/bin/cprog abc 1\n").unwrap();
+    std::fs::write(
+        vdb_new.join("NEEDED.ELF.2"),
+        "X86_64;/usr/bin/cprog;;;libkeep.so.1\n",
+    )
+    .unwrap();
+
+    crate::ebuild_unmerge::unmerge_pkgfiles(crate::ebuild_unmerge::UnmergePkgfilesArgs {
+        root: &root,
+        category: "dev-libs",
+        pn: "oldapp",
+        pf: "oldapp-1.0",
+        also_keep: &["newapp-1.0".to_string()],
+        options: &crate::ebuild_unmerge::UnmergeOptions::default(),
+        is_replacement: true,
+        replacement_preserved: &BTreeMap::new(),
+        replacement_needed: &[],
+    })
+    .expect("replacement unmerge succeeds");
+
+    assert!(
+        root.join("usr/lib/keepA.so").is_file(),
+        "the still-needed preserved lib must survive the replacement unmerge"
+    );
+    assert!(
+        root.join("usr/bin/cprog").is_file(),
+        "the consumer owned by the replacing package must survive"
+    );
+    let registry = read_plib_registry(&root);
+    assert_eq!(
+        registry.entries.get("dev-libs/provider:0"),
+        Some(&(
+            "dev-libs/provider-1.0".to_string(),
+            "4".to_string(),
+            vec!["/usr/lib/keepA.so".to_string()],
+        )),
+        "the registry entry must survive the replacement unmerge"
+    );
 }
 
 /// A path in the preserved-libs registry is excluded from collision-protect
