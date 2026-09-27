@@ -55209,6 +55209,231 @@ mod tests_166 {
         let _ = std::fs::remove_dir_all(&installed);
     }
 
+    // ---- S7: `circular_dep_solutions` (real `_find_suggestions`,
+    // `3rdparty/portage/lib/_emerge/resolver/circular_dependency.py:114`:
+    // per-cycle-position USE assignments whose reduced dep drops the
+    // pull atom while REQUIRED_USE still holds, minimised and checked
+    // against grandparent use-deps). Cycles are handed in directly as
+    // cpv strings over scratch repos -- no graph walk needed. ----
+
+    /// The suggestion set rendered order-free (the trailing
+    /// sort/dedup carries no mutants; the positions, flags and
+    /// directions below are what the operator flips move).
+    fn sols_166(sols: &[CircularSuggestion]) -> std::collections::BTreeSet<String> {
+        sols.iter()
+            .map(|s| {
+                let changes: Vec<String> = s
+                    .changes
+                    .iter()
+                    .map(|(f, on)| format!("{f}={on}"))
+                    .collect();
+                format!("{} [{}] followup={}", s.parent_cpv, changes.join(","), s.followup)
+            })
+            .collect()
+    }
+
+    /// Two entangled flags under `|| ( x y )` with both off: only
+    /// "enable y" removes the atom while REQUIRED_USE holds. Kills the
+    /// cur-construction `<<` -> `>>` (bit 1 never sets, no solution),
+    /// the sol-diff `<<` -> `>>` plus both `&&` flips and both `!`
+    /// deletions around the diff (all emit `[{}}` or a bloated pair),
+    /// the REQUIRED_USE `!empty` deletion and the `!ok` deletion (both
+    /// admit the violating empty assignment), and the `>` -> `<`
+    /// pair on the MAX_AFFECTING_USE gates (retain/drop to nothing).
+    #[test]
+    fn circular_166_two_flag_or_requirement_suggests_enabling_y() {
+        let dir = dir_166("circ-a");
+        let repos = repo_pkgs_166(
+            &dir,
+            &[(
+                "dev-libs/apkg",
+                "1.0",
+                "0",
+                "x y",
+                "x? ( dev-libs/apkg )",
+                "|| ( x y )",
+            )],
+        );
+        let config = cfg_166();
+        let sols = circular_dep_solutions(
+            &["dev-libs/apkg-1.0".to_string()],
+            &repos,
+            &config,
+            &[],
+            &[],
+        );
+        assert_eq!(
+            sols_166(&sols),
+            std::collections::BTreeSet::from(["dev-libs/apkg-1.0 [y=true] followup=false".to_string()])
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Ten entangled flags with only `f1` on: each "disable f1, enable
+    /// fi" pair is a minimal solution (nine suggestions). Kills the
+    /// REQUIRED_USE `!untouchable` deletion (collapses to nothing), the
+    /// `<=` -> `>` expansion flip (stays unexpanded, nothing holds),
+    /// and the `>` -> `==`/`>=` pair on both MAX_AFFECTING_USE gates
+    /// (retain-to-one / give-up, both empty).
+    #[test]
+    fn circular_166_ten_flags_yield_nine_minimal_pairs() {
+        let dir = dir_166("circ-b");
+        let iuse = "+f1 f2 f3 f4 f5 f6 f7 f8 f9 f10";
+        let ru = "|| ( f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 )";
+        let repos = repo_pkgs_166(&dir, &[("dev-libs/bpkg", "1.0", "0", iuse, "f1? ( dev-libs/bpkg )", ru)]);
+        let config = cfg_166();
+        let sols = circular_dep_solutions(
+            &["dev-libs/bpkg-1.0".to_string()],
+            &repos,
+            &config,
+            &[],
+            &[],
+        );
+        let mut expected = std::collections::BTreeSet::new();
+        for f in ["f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10"] {
+            expected.insert(format!("dev-libs/bpkg-1.0 [f1=false,{f}=true] followup=false"));
+        }
+        assert_eq!(sols_166(&sols), expected);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// No REQUIRED_USE at all with `x` on: "disable x" is the only
+    /// solution. Kills the `&&` -> `||` widening on the REQUIRED_USE
+    /// gate (skips the only solution).
+    #[test]
+    fn circular_166_plain_gated_edge_suggests_disabling_x() {
+        let dir = dir_166("circ-c");
+        let repos = repo_pkgs_166(
+            &dir,
+            &[("dev-libs/cpkg", "1.0", "0", "+x", "x? ( dev-libs/cpkg )", "")],
+        );
+        let config = cfg_166();
+        let sols = circular_dep_solutions(
+            &["dev-libs/cpkg-1.0".to_string()],
+            &repos,
+            &config,
+            &[],
+            &[],
+        );
+        assert_eq!(
+            sols_166(&sols),
+            std::collections::BTreeSet::from(["dev-libs/cpkg-1.0 [x=false] followup=false".to_string()])
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Eleven gated flags with one disabled: the first MAX gate keeps
+    /// the ten enabled ones and the second lets exactly ten through.
+    /// Every retained flag gates its own occurrence of the pull atom,
+    /// so the only solution disables all ten. Kills the second gate's
+    /// `==` -> continue and `>=` -> continue (both give up at exactly
+    /// ten where real proceeds).
+    #[test]
+    fn circular_166_eleven_flags_retain_to_ten_and_proceed() {
+        let dir = dir_166("circ-e");
+        let flags: Vec<String> = (1..=11).map(|i| format!("g{i}")).collect();
+        let depend = flags
+            .iter()
+            .map(|f| format!("{f}? ( dev-libs/hpkg )"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut iuse = flags
+            .iter()
+            .map(|f| format!("+{f}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        // g11 off: the retain drops exactly one.
+        iuse = iuse.replacen("+g11", "g11", 1);
+        let repos = repo_pkgs_166(&dir, &[("dev-libs/hpkg", "1.0", "0", &iuse, &depend, "")]);
+        let config = cfg_166();
+        let sols = circular_dep_solutions(
+            &["dev-libs/hpkg-1.0".to_string()],
+            &repos,
+            &config,
+            &[],
+            &[],
+        );
+        assert_eq!(
+            sols_166(&sols),
+            std::collections::BTreeSet::from(["dev-libs/hpkg-1.0 [g1=false,g10=false,g2=false,g3=false,g4=false,g5=false,g6=false,g7=false,g8=false,g9=false] followup=false".to_string()])
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Eleven gated flags with two disabled: the retain drops to nine
+    /// and the second gate lets fewer-than-ten through, so the only
+    /// solution disables all nine. Kills the second gate's `<` ->
+    /// continue (which gives up below ten where real proceeds).
+    #[test]
+    fn circular_166_eleven_flags_retain_to_nine_and_proceed() {
+        let dir = dir_166("circ-f");
+        let flags: Vec<String> = (1..=11).map(|i| format!("g{i}")).collect();
+        let depend = flags
+            .iter()
+            .map(|f| format!("{f}? ( dev-libs/hpkg )"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut iuse = flags
+            .iter()
+            .map(|f| format!("+{f}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        // g10 and g11 off: the retain drops exactly two.
+        iuse = iuse.replacen("+g10", "g10", 1);
+        iuse = iuse.replacen("+g11", "g11", 1);
+        let repos = repo_pkgs_166(&dir, &[("dev-libs/hpkg", "1.0", "0", &iuse, &depend, "")]);
+        let config = cfg_166();
+        let sols = circular_dep_solutions(
+            &["dev-libs/hpkg-1.0".to_string()],
+            &repos,
+            &config,
+            &[],
+            &[],
+        );
+        assert_eq!(
+            sols_166(&sols),
+            std::collections::BTreeSet::from(["dev-libs/hpkg-1.0 [g1=false,g2=false,g3=false,g4=false,g5=false,g6=false,g7=false,g8=false,g9=false] followup=false".to_string()])
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A three-ring with one gated edge per position: every position
+    /// reports its own parent. Kills the parent-index `-` -> `+`
+    /// rotation (identical on two-rings, wrong parent on three).
+    #[test]
+    fn circular_166_three_ring_reports_each_parent() {
+        let dir = dir_166("circ-d");
+        let repos = repo_pkgs_166(
+            &dir,
+            &[
+                ("dev-libs/ca", "1.0", "0", "+y", "y? ( dev-libs/cb )", ""),
+                ("dev-libs/cb", "1.0", "0", "+z", "z? ( dev-libs/cc )", ""),
+                ("dev-libs/cc", "1.0", "0", "+x", "x? ( dev-libs/ca )", ""),
+            ],
+        );
+        let config = cfg_166();
+        let sols = circular_dep_solutions(
+            &[
+                "dev-libs/ca-1.0".to_string(),
+                "dev-libs/cb-1.0".to_string(),
+                "dev-libs/cc-1.0".to_string(),
+            ],
+            &repos,
+            &config,
+            &[],
+            &[],
+        );
+        assert_eq!(
+            sols_166(&sols),
+            std::collections::BTreeSet::from([
+                "dev-libs/ca-1.0 [y=false] followup=false".to_string(),
+                "dev-libs/cb-1.0 [z=false] followup=false".to_string(),
+                "dev-libs/cc-1.0 [x=false] followup=false".to_string(),
+            ])
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A merge instance with an entry reads its resolved display
     /// flags, and decoys (wrong category, wrong package) never match:
     /// kills the whole-body rows, the category/package `==` -> `!=`
