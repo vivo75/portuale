@@ -191,6 +191,21 @@ fn news_counts_follow_portage_count_unread_news_gates() {
 }
 
 #[test]
+fn news_notice_gate_needs_news_in_resolved_features() {
+    // Portage: post_emerge.py. The notice needs `news` in the resolved `FEATURES`.
+    let mut with = portage_profile::Config::default();
+    with.other_vars
+        .insert("FEATURES".to_string(), "sandbox news userpriv".to_string());
+    assert!(news_notice_enabled(&with));
+    let mut without = portage_profile::Config::default();
+    without
+        .other_vars
+        .insert("FEATURES".to_string(), "sandbox userpriv".to_string());
+    assert!(!news_notice_enabled(&without));
+    assert!(!news_notice_enabled(&portage_profile::Config::default()));
+}
+
+#[test]
 fn unread_news_counts_reuses_the_check_news_evaluation() {
     // Counts reuse the `--check-news` evaluation, over an isolated ROOT sharing
     // the fixture vdb read-only. Nothing is written into the fixtures tree itself.
@@ -238,6 +253,75 @@ fn unread_news_counts_reuses_the_check_news_evaluation() {
         sorted
     });
     assert_eq!(unread_news_counts(&repos, &root, &context), counts);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn pretend_end_notice_prints_only_under_pretend() {
+    // Portage: post_emerge.py. The end notice prints only under `--pretend`.
+    let color = crate::color::Colorizer::new(false);
+    let (base, root, repos, config) = news_notice_test_tree("pretend_end");
+    pretend_end_news_notice(false, &repos, &root, &config, &color);
+    assert!(
+        !root.join("var/lib/gentoo/news").exists(),
+        "pretend=false must not evaluate news at all"
+    );
+    pretend_end_news_notice(true, &repos, &root, &config, &color);
+    let unread: Vec<String> =
+        std::fs::read_to_string(root.join("var/lib/gentoo/news/news-testrepo.unread"))
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect();
+    assert_eq!(unread.len(), 5);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn merge_failure_notice_prints_only_when_the_vdb_changed() {
+    // Portage: post_emerge.py. The failure notice prints only when the vdb changed.
+    let color = crate::color::Colorizer::new(false);
+    let (base, root, repos, config) = news_notice_test_tree("merge_failure");
+    merge_failure_news_notice(false, &repos, &root, &config, &color);
+    assert!(
+        !root.join("var/lib/gentoo/news").exists(),
+        "a failure with nothing merged must not evaluate news at all"
+    );
+    merge_failure_news_notice(true, &repos, &root, &config, &color);
+    let unread: Vec<String> =
+        std::fs::read_to_string(root.join("var/lib/gentoo/news/news-testrepo.unread"))
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect();
+    assert_eq!(unread.len(), 5);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn display_news_notice_reports_whether_it_printed() {
+    // Portage: actions.py. The prompt fires only when the notice actually printed.
+    let color = crate::color::Colorizer::new(false);
+    let (base, root, repos, mut config) = news_notice_test_tree("notice_bool");
+    config
+        .other_vars
+        .insert("FEATURES".to_string(), String::new());
+    assert!(!display_news_notice_if_any(&repos, &root, &config, &color));
+    assert!(
+        !root.join("var/lib/gentoo/news").exists(),
+        "a gated-off notice must not evaluate news at all"
+    );
+    config
+        .other_vars
+        .insert("FEATURES".to_string(), "sandbox news userpriv".to_string());
+    assert!(display_news_notice_if_any(&repos, &root, &config, &color));
+    let unread: Vec<String> =
+        std::fs::read_to_string(root.join("var/lib/gentoo/news/news-testrepo.unread"))
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect();
+    assert_eq!(unread.len(), 5);
     let _ = std::fs::remove_dir_all(&base);
 }
 

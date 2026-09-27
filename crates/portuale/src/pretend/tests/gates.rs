@@ -1,6 +1,19 @@
 use super::*;
 
 #[test]
+fn nothing_to_merge_fires_only_for_a_shown_nonpretend_empty_plan() {
+    // Portage: actions.py. The early return fires only inside the display-flag
+    // branch of a non-pretend run, and only when `mergecount == 0`.
+    // (pretend, show_merge_list, mergecount) -> early return.
+    assert!(nothing_to_merge(false, true, 0));
+    assert!(!nothing_to_merge(true, true, 0));
+    assert!(!nothing_to_merge(false, false, 0));
+    assert!(!nothing_to_merge(false, true, 1));
+    assert!(!nothing_to_merge(false, true, 7));
+    assert!(!nothing_to_merge(true, false, 3));
+}
+
+#[test]
 fn selective_noop_deferred_only_for_selective_non_oneshot_world_runs() {
     // Portage: actions.py. Deferred only for a selective run with world
     // candidates and neither `--oneshot` nor `--onlydeps`.
