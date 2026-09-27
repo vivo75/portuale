@@ -1325,7 +1325,7 @@ pub fn extract_binpkg(
 /// resolves the S1 reader and writes each member as a **regular file**
 /// with its header mode (masked to `0o7777`, setuid/setgid stripped).
 /// Real would extract an in-archive symlink as a symlink there, which
-/// every later reader of build-info (`write_vdb_entry_from_dir`,
+/// every later reader of build-info (`populate_vdb_tmp`,
 /// `BINPKGMD5`, the saved-`environment.bz2` extractor, the `pkg_*`
 /// phases) would then follow -- a documented difference, and real's
 /// writer never emits one. Duplicates (`tar_safe_extract`'s "Duplicate

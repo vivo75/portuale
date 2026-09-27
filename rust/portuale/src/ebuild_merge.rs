@@ -219,6 +219,7 @@ use crate::ebuild_phases;
 use crate::env_update;
 use md5::{Digest, Md5};
 use mrg_director::PackagesDb as _;
+use portage_util::MERGING_IDENTIFIER;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
@@ -2566,55 +2567,139 @@ fn next_counter(root: &Path) -> Result<i64, String> {
     Ok(next)
 }
 
-/// Real `lib/portage/const.py`'s own `MERGING_IDENTIFIER` (`"-MERGING-"`):
-/// the prefix real `dblink.dbtmpdir` uses for its own temporary,
-/// not-yet-finalized vdb entry directory, a sibling of the real vdb entry
-/// under the same `<category>` directory.
-const MERGING_IDENTIFIER: &str = "-MERGING-";
+/// Real `dblink.treewalk()`'s own `self.dbdir = self.dbtmpdir;
+/// self.delete(); ensure_dirs(self.dbtmpdir)` step (`vartree.py`, right
+/// after the collision-protect abort gate and before `pkg_preinst` runs,
+/// long before a single file is copied to `${ROOT}`): wipe a stale
+/// `MERGING_IDENTIFIER`-prefixed temporary sibling left by a killed
+/// previous merge of this exact `category/pf`, then (re)create it empty.
+/// Both merge paths call this before `pkg_preinst`, so a SIGKILL any time
+/// from here on leaves `-MERGING-<pf>` behind exactly like real (the
+/// `l32` C4 killed-mid-merge invariant) -- and every portuale vdb reader
+/// skips such names (see [`portage_util::is_merging_vdb_entry`]).
+fn create_vdb_tmp(root: &Path, category: &str, pf: &str) -> Result<(), String> {
+    let tmp_dir = root
+        .join("var/db/pkg")
+        .join(category)
+        .join(format!("{MERGING_IDENTIFIER}{pf}"));
+    if tmp_dir.exists() {
+        std::fs::remove_dir_all(&tmp_dir).map_err(|e| format!("{}: {e}", tmp_dir.display()))?;
+    }
+    std::fs::create_dir_all(&tmp_dir).map_err(|e| format!("{}: {e}", tmp_dir.display()))?;
+    Ok(())
+}
 
-/// Writes a real vdb entry under `root` for the package described by
-/// `env`. Real `dblink.merge()`/`treewalk()` copies *every* file directly
-/// under `inforoot` (`${PORTAGE_BUILDDIR}/build-info`) into the vdb
-/// wholesale (`vartree.py:4911-4913`, `for x in os.listdir(inforoot):
-/// self.copyfile(...)`) -- so this does too: every regular file in
-/// `build-info` (the `CATEGORY`/`SLOT`/`KEYWORDS`/`IUSE`/`USE`/`EAPI`/
-/// `DEFINED_PHASES`/… `bin/phase-functions.sh __dyn_install` writes, the
+/// Real `dblink.treewalk()`'s own info-file + `COUNTER` step (`vartree.py`,
+/// after `pkg_preinst`, before `_merge_contents` copies a single file to
+/// `${ROOT}`): copy *every* regular file directly under `build_info_dir`
+/// (`${PORTAGE_BUILDDIR}/build-info`) into the temporary vdb entry real's
+/// `for x in os.listdir(inforoot): self.copyfile(...)` copies -- the
+/// `CATEGORY`/`SLOT`/`KEYWORDS`/`IUSE`/`USE`/`EAPI`/`DEFINED_PHASES`/…
+/// `bin/phase-functions.sh __dyn_install` writes, the
 /// `DEPEND`/`RDEPEND`/`LICENSE`/… `ebuild_phases::write_post_install_
 /// metadata` adds, `NEEDED.ELF.2` from the real `scanelf` QA step,
-/// `environment.bz2`, the `<PF>.ebuild` copy) lands in the vdb. Then the
-/// merge-generated files that were never in `build-info` are written on
-/// top: `CONTENTS` (the real file list, built during the copy loop) and
-/// `COUNTER` (real `cpv_counter`, portuale's own `next_counter`).
-/// `CATEGORY`/`SLOT`/`repository` are re-asserted explicitly too -- a
-/// standalone `ebuild <file> install` outside a repo checkout has no
-/// `build-info/repository`, and `SLOT` here is the sub-slot-stripped
-/// main slot the caller resolved.
-///
-/// Builds the entry in a `MERGING_IDENTIFIER`-prefixed temporary sibling
-/// directory first, then
-/// atomically renames it into place -- mirroring real `dblink.merge()`'s
-/// own `dbtmpdir`-then-`_movefile()` approach (both are guaranteed to sit
-/// on the same filesystem, under the same `<category>` directory, so
-/// `std::fs::rename` alone is already atomic here, the same guarantee
-/// real `_movefile()` relies on for a same-device move). A crash
-/// mid-write leaves at most a stale, harmless `MERGING_IDENTIFIER`
-/// leftover -- never a half-written *final* vdb entry.
-fn write_vdb_entry(
+/// `environment.bz2`, the `<PF>.ebuild` copy -- then the merge-generated
+/// files that were never in `build-info`: `CATEGORY`/`SLOT`/`repository`
+/// re-asserted explicitly (a standalone `ebuild <file> install` outside a
+/// repo checkout has no `build-info/repository`, and `SLOT` here is the
+/// caller-resolved full slot) and `COUNTER` (real `cpv_counter`,
+/// portuale's own `next_counter`, ticked here so the replace loop below
+/// records the new value from the temporary entry). The directory itself
+/// must already exist (see [`create_vdb_tmp`]).
+fn populate_vdb_tmp(
     root: &Path,
-    env: &ebuild_phases::Environment,
+    category: &str,
+    pf: &str,
+    build_info_dir: &Path,
     slot: &str,
     repository: &str,
+) -> Result<(), String> {
+    let tmp_dir = root
+        .join("var/db/pkg")
+        .join(category)
+        .join(format!("{MERGING_IDENTIFIER}{pf}"));
+    if let Ok(entries) = portage_util::read_dir_entries(build_info_dir) {
+        for entry in entries {
+            let src = entry.path();
+            if src.is_file()
+                && let Some(name) = src.file_name()
+            {
+                std::fs::copy(&src, tmp_dir.join(name))
+                    .map_err(|e| format!("{}: {e}", src.display()))?;
+            }
+        }
+    }
+    let counter = next_counter(root)?;
+    for (name, value) in [
+        ("CATEGORY", category),
+        ("SLOT", slot),
+        ("repository", repository),
+    ] {
+        std::fs::write(tmp_dir.join(name), format!("{value}\n"))
+            .map_err(|e| format!("{}: {e}", tmp_dir.join(name).display()))?;
+    }
+    std::fs::write(tmp_dir.join("COUNTER"), counter.to_string())
+        .map_err(|e| format!("{}: {e}", tmp_dir.join("COUNTER").display()))?;
+    Ok(())
+}
+
+/// Real `dblink.treewalk()`'s own `CONTENTS` + metadata-consolidation tail
+/// (`vartree.py`: `CONTENTS` is written into `dbtmpdir` by
+/// `_merge_contents` while the image is copied to `${ROOT}`, and
+/// `_consolidate_to_metadata_file(self.dbtmpdir)` is the last write into
+/// `dbtmpdir` before the rename below): record the merge-generated file
+/// list, then fold every per-field file into the consolidated `metadata`
+/// file. Runs after the file copy, before the old instances are unmerged
+/// (neither touches the temporary directory, so real's
+/// consolidate-after-unmerge and this consolidate-before-unmerge are the
+/// same bytes); the rename into place still waits for the replace loop
+/// (see [`publish_vdb_tmp`]).
+fn write_vdb_tmp_contents(
+    root: &Path,
+    category: &str,
+    pf: &str,
     contents: &str,
 ) -> Result<(), String> {
-    write_vdb_entry_from_dir(
-        root,
-        &env.category,
-        &env.split.pf,
-        &env.build_info(),
-        slot,
-        repository,
-        contents,
-    )
+    let tmp_dir = root
+        .join("var/db/pkg")
+        .join(category)
+        .join(format!("{MERGING_IDENTIFIER}{pf}"));
+    // Real `_consolidate_to_metadata_file(self.dbtmpdir)` (`vartree.py`):
+    // the last write into the temp vdb dir before the rename -- fold
+    // every per-field file real's `_in_metadata_file()` accepts into one
+    // `metadata` file. Its `#dir_mtime=` trailer records the dir's
+    // `st_mtime_ns` and real's reader rejects the file if the dir changed
+    // afterwards, so it must come after CONTENTS above and the
+    // `#dir_mtime=` line must be *appended* (a plain write, no new dir
+    // entry) after the body is on disk. The rename below does not touch
+    // the dir's own mtime, so the value survives the move.
+    std::fs::write(tmp_dir.join("CONTENTS"), contents)
+        .map_err(|e| format!("{}: {e}", tmp_dir.join("CONTENTS").display()))?;
+    write_consolidated_metadata_file(&tmp_dir)?;
+    Ok(())
+}
+
+/// Real `dblink.treewalk()`'s own move into place (`vartree.py`: after
+/// the replace loop unmerged every same-slot version,
+/// `self.dbdir = self.dbpkgdir; self.delete(); _movefile(self.dbtmpdir,
+/// self.dbpkgdir)`): drop the old live entry, then atomically rename the
+/// temporary sibling into place. Both sit under the same `<category>`
+/// directory, hence guaranteed the same filesystem, so `std::fs::rename`
+/// alone is already atomic here -- the same guarantee real `_movefile()`
+/// relies on for a same-device move. A crash before this leaves the stale
+/// `MERGING_IDENTIFIER` leftover (readers skip it; the next merge's
+/// [`create_vdb_tmp`] wipes it) -- never a half-written *final* entry,
+/// except real's own delete-then-move exposure on a same-pf reinstall,
+/// which this shares exactly.
+fn publish_vdb_tmp(root: &Path, category: &str, pf: &str) -> Result<(), String> {
+    let cat_dir = root.join("var/db/pkg").join(category);
+    let tmp_dir = cat_dir.join(format!("{MERGING_IDENTIFIER}{pf}"));
+    let final_dir = cat_dir.join(pf);
+    if final_dir.exists() {
+        std::fs::remove_dir_all(&final_dir).map_err(|e| format!("{}: {e}", final_dir.display()))?;
+    }
+    std::fs::rename(&tmp_dir, &final_dir).map_err(|e| format!("{}: {e}", final_dir.display()))?;
+    Ok(())
 }
 
 /// Real `dblink.treewalk()`'s `preinst_mask` + `install_mask_dir` step
@@ -2624,7 +2709,7 @@ fn write_vdb_entry(
 /// `no{man,info,doc}` `FEATURE` folded a `/usr/share/*` entry in --
 /// `rmdir` a now-empty `<d>/usr/share`. The resolved mask is also
 /// written to `<build_info>/INSTALL_MASK` (real `preinst_mask` writes it
-/// there; `write_vdb_entry_from_dir` then copies it into the vdb
+/// there; `populate_vdb_tmp` then copies it into the vdb
 /// wholesale like every other build-info file). A no-op with an empty
 /// mask -- and then no `INSTALL_MASK` file, matching real's own
 /// `[[ -n ${x} ]] && echo … > INSTALL_MASK`.
@@ -2713,76 +2798,6 @@ fn write_consolidated_metadata_file(dbdir: &Path) -> Result<(), String> {
     use std::io::Write as _;
     writeln!(f, "#dir_mtime={dir_mtime_ns}")
         .map_err(|e| format!("{}: {e}", metadata_path.display()))?;
-    Ok(())
-}
-
-/// The `env`-free core of `write_vdb_entry`: `category`/`pf` name the
-/// entry, `build_info_dir` holds the files to copy wholesale. Shared with
-/// `emerge_binmerge` (a binpkg merge has no `Environment`).
-pub(crate) fn write_vdb_entry_from_dir(
-    root: &Path,
-    category: &str,
-    pf: &str,
-    build_info_dir: &Path,
-    slot: &str,
-    repository: &str,
-    contents: &str,
-) -> Result<(), String> {
-    let cat_dir = root.join("var/db/pkg").join(category);
-    let tmp_dir = cat_dir.join(format!("{MERGING_IDENTIFIER}{pf}"));
-    let final_dir = cat_dir.join(pf);
-
-    if tmp_dir.exists() {
-        std::fs::remove_dir_all(&tmp_dir).map_err(|e| format!("{}: {e}", tmp_dir.display()))?;
-    }
-    std::fs::create_dir_all(&tmp_dir).map_err(|e| format!("{}: {e}", tmp_dir.display()))?;
-
-    // Real `treewalk()`: copy every regular file from `build-info` into
-    // the vdb entry (`vartree.py:4911-4913`).
-    if let Ok(entries) = portage_util::read_dir_entries(build_info_dir) {
-        for entry in entries {
-            let src = entry.path();
-            if src.is_file()
-                && let Some(name) = src.file_name()
-            {
-                std::fs::copy(&src, tmp_dir.join(name))
-                    .map_err(|e| format!("{}: {e}", src.display()))?;
-            }
-        }
-    }
-
-    // Merge-generated files never present in `build-info`, plus the
-    // caller-resolved values re-asserted (see this function's own doc
-    // comment).
-    let counter = next_counter(root)?;
-    for (name, value) in [
-        ("CATEGORY", category),
-        ("SLOT", slot),
-        ("repository", repository),
-    ] {
-        std::fs::write(tmp_dir.join(name), format!("{value}\n"))
-            .map_err(|e| format!("{}: {e}", tmp_dir.join(name).display()))?;
-    }
-    std::fs::write(tmp_dir.join("CONTENTS"), contents)
-        .map_err(|e| format!("{}: {e}", tmp_dir.join("CONTENTS").display()))?;
-    std::fs::write(tmp_dir.join("COUNTER"), counter.to_string())
-        .map_err(|e| format!("{}: {e}", tmp_dir.join("COUNTER").display()))?;
-
-    // Real `_consolidate_to_metadata_file(self.dbtmpdir)` (`vartree.py:
-    // 5231`): the last write into the temp vdb dir before the rename --
-    // fold every per-field file real's `_in_metadata_file()` accepts
-    // into one `metadata` file. Its `#dir_mtime=` trailer records the
-    // dir's `st_mtime_ns` and real's reader rejects the file if the dir
-    // changed afterwards, so it must come after CONTENTS/COUNTER above
-    // and the `#dir_mtime=` line must be *appended* (a plain write, no
-    // new dir entry) after the body is on disk. The rename below does
-    // not touch the dir's own mtime, so the value survives the move.
-    write_consolidated_metadata_file(&tmp_dir)?;
-
-    if final_dir.exists() {
-        std::fs::remove_dir_all(&final_dir).map_err(|e| format!("{}: {e}", final_dir.display()))?;
-    }
-    std::fs::rename(&tmp_dir, &final_dir).map_err(|e| format!("{}: {e}", final_dir.display()))?;
     Ok(())
 }
 
@@ -2893,6 +2908,35 @@ fn owns_path(root: &Path, category: &str, package: &str, version: &str, abs_path
         .any(|path| path == relative)
 }
 
+/// The `CONTENTS` text of the vdb entry `category/pf`: the live entry
+/// first, falling back to its `-MERGING-<pf>` temporary when the live
+/// one is absent. The fallback is real `dblink.getcontents()` resolving
+/// through `dbdir`, which *is* `dbtmpdir` for the package being merged
+/// while the replace loop unmerges the instances it replaces (real
+/// `treewalk()`: the new entry is renamed into place only after) -- so
+/// an `others_in_slot`/`also_keep` ownership check against the replacing
+/// version sees the just-written file list. Enumeration skips are
+/// unaffected (those never name a `pf` explicitly; see
+/// [`portage_util::is_merging_vdb_entry`]): outside a merge the live
+/// entry always exists when these are queried, so the fallback only ever
+/// fires mid-merge.
+fn read_contents_pf(root: &Path, category: &str, pf: &str) -> Option<String> {
+    let live = root
+        .join("var/db/pkg")
+        .join(category)
+        .join(pf)
+        .join("CONTENTS");
+    if let Ok(text) = std::fs::read_to_string(&live) {
+        return Some(text);
+    }
+    let tmp = root
+        .join("var/db/pkg")
+        .join(category)
+        .join(format!("{MERGING_IDENTIFIER}{pf}"))
+        .join("CONTENTS");
+    std::fs::read_to_string(&tmp).ok()
+}
+
 /// Same real `CONTENTS`-ownership check as `owns_path`, but keyed by a
 /// bare `category`/`pf` pair (`"package-version"`, real portage's own
 /// vdb directory-name convention) rather than a split `package`/
@@ -2908,12 +2952,7 @@ fn owns_path(root: &Path, category: &str, package: &str, version: &str, abs_path
 /// hold only the bare vdb directory name -- going through the seam would
 /// split the `pf` apart only for `VdbReader` to join it back together.
 pub(crate) fn owns_path_pf(root: &Path, category: &str, pf: &str, abs_path: &str) -> bool {
-    let path = root
-        .join("var/db/pkg")
-        .join(category)
-        .join(pf)
-        .join("CONTENTS");
-    let Ok(text) = std::fs::read_to_string(path) else {
+    let Some(text) = read_contents_pf(root, category, pf) else {
         return false;
     };
     text.lines().any(|line| {
@@ -2938,12 +2977,7 @@ pub(crate) fn owned_node_type_pf(
     pf: &str,
     abs_path: &str,
 ) -> Option<String> {
-    let path = root
-        .join("var/db/pkg")
-        .join(category)
-        .join(pf)
-        .join("CONTENTS");
-    let text = std::fs::read_to_string(path).ok()?;
+    let text = read_contents_pf(root, category, pf)?;
     text.lines().find_map(|line| {
         let mut parts = line.split_whitespace();
         let node_type = parts.next()?;
@@ -2969,12 +3003,7 @@ fn owned_node_value_pf(
     pf: &str,
     abs_path: &str,
 ) -> Option<(String, String)> {
-    let path = root
-        .join("var/db/pkg")
-        .join(category)
-        .join(pf)
-        .join("CONTENTS");
-    let text = std::fs::read_to_string(path).ok()?;
+    let text = read_contents_pf(root, category, pf)?;
     text.lines().find_map(|line| {
         let mut parts = line.split_whitespace();
         let node_type = parts.next()?;
@@ -3130,8 +3159,15 @@ fn blockers_from_flat_deps(root: &Path, flat_deps: &[String]) -> HashSet<(String
                     .into_iter()
                     .flatten()
                     .filter(|e| e.path().is_dir())
-                    .map(move |pkg_entry| {
+                    .filter_map(move |pkg_entry| {
                         let pf = pkg_entry.file_name().to_string_lossy().to_string();
+                        // Real `vardbapi._excluded_dirs`: an in-progress
+                        // `-MERGING-<pf>` entry is never an installed
+                        // package, so it never participates in blocker
+                        // matching either.
+                        if portage_util::is_merging_vdb_entry(&pf) {
+                            return None;
+                        }
                         // #116: through the vdb seam, so this scan sees the
                         // same normalised `SLOT` every other consumer does
                         // (a missing field is `""` -> `("", "")` here).
@@ -3140,7 +3176,7 @@ fn blockers_from_flat_deps(root: &Path, flat_deps: &[String]) -> HashSet<(String
                             .split_once('/')
                             .map(|(s, ss)| (s.to_string(), ss.to_string()))
                             .unwrap_or_else(|| (slot.clone(), slot.clone()));
-                        (category_name.clone(), pf, slot, sub_slot)
+                        Some((category_name.clone(), pf, slot, sub_slot))
                     })
                     .map(|(category, pf, slot, sub_slot)| {
                         let candidate_str = format!("{category}/{pf}:{slot}/{sub_slot}");
@@ -3344,6 +3380,12 @@ fn find_owners(root: &Path, collisions: &[String]) -> BTreeMap<String, Vec<Strin
                 continue;
             }
             let pf = pkg_entry.file_name().to_string_lossy().to_string();
+            // Real `vardbapi._excluded_dirs`: an in-progress
+            // `-MERGING-<pf>` entry owns nothing -- a stale one's
+            // half-written `CONTENTS` must never claim a colliding path.
+            if portage_util::is_merging_vdb_entry(&pf) {
+                continue;
+            }
             let Some((package, version)) = portage_repo::split_pf(&pf) else {
                 continue;
             };
@@ -3850,11 +3892,16 @@ fn merge_after_install(
         ));
     }
 
-    // Real `dblink.treewalk()`'s own order: `pkg_preinst` runs before
-    // anything is copied, `pkg_postinst` only after the vdb entry is
-    // fully written -- `run_single_phase` (not `run_commands`) since
-    // neither is part of `install`'s own `actionmap_deps` chain (real
-    // `treewalk()` invokes them directly, not through `doebuild()`).
+    // Real `dblink.treewalk()`'s own order: the `-MERGING-<pf>` temporary
+    // vdb entry is created before `pkg_preinst` runs (wiping a stale one
+    // a killed previous merge left), populated after it, and only renamed
+    // into place after every replaced same-slot version is unmerged --
+    // `pkg_postinst` runs last and sees the live entry. See
+    // `create_vdb_tmp`/`populate_vdb_tmp`/`publish_vdb_tmp`.
+    // `run_single_phase` (not `run_commands`) since neither hook is part
+    // of `install`'s own `actionmap_deps` chain (real `treewalk()` invokes
+    // them directly, not through `doebuild()`).
+    create_vdb_tmp(root, &env.category, &env.split.pf)?;
     let preinst_status = ebuild_phases::run_single_phase(
         ebuild_path,
         "preinst",
@@ -3869,6 +3916,14 @@ fn merge_after_install(
     if preinst_status != 0 {
         return Ok(preinst_status);
     }
+    populate_vdb_tmp(
+        root,
+        &env.category,
+        &env.split.pf,
+        &env.build_info(),
+        &full_slot,
+        &repository,
+    )?;
 
     let mut cfgfiledict = read_cfgfiledict(root);
     let mut contents = merge_tree(
@@ -3910,19 +3965,21 @@ fn merge_after_install(
         preserve_paths = surviving;
     }
     write_cfgfiledict(root, &cfgfiledict)?;
-    write_vdb_entry(root, env, &full_slot, &repository, &contents)?;
+    write_vdb_tmp_contents(root, &env.category, &env.split.pf, &contents)?;
 
     if !plib_collisions.is_empty() {
         let cpv = format!("{}/{}", env.category, env.split.pf);
         unregister_preserved_libs(root, &cpv, plib_registry, &plib_collisions)?;
     }
 
-    // Real `dblink.treewalk()`'s replace loop: now that this version's
-    // vdb entry is live, unmerge every same-slot version it replaced --
-    // see `unmerge_replaced_same_slot`. Real `treewalk()` order: *after*
-    // the vdb write, *before* `pkg_postinst` / `env_update`. A same-cpv
-    // `Reinstall` finds nothing to unmerge (`write_vdb_entry` already
-    // replaced its own entry), matching the pre-replace-loop behaviour.
+    // Real `dblink.treewalk()`'s replace loop: unmerge every same-slot
+    // version this merge replaced while the new version's vdb entry still
+    // sits in its `-MERGING-<pf>` temporary -- see
+    // `unmerge_replaced_same_slot`. Real `treewalk()` order: *after* the
+    // file copy, *before* the rename into place and `pkg_postinst` /
+    // `env_update`. A same-cpv `Reinstall` finds nothing to unmerge (its
+    // own live entry is untouched until `publish_vdb_tmp` below),
+    // matching the pre-replace-loop behaviour.
     // The merge-side just-preserved set travels with the replace loop
     // (real `preserve_paths` into `dblink.unmerge`) so the post-unmerge
     // prune can see files no `NEEDED.ELF.2` indexes yet -- see
@@ -3952,6 +4009,9 @@ fn merge_after_install(
     // record is replaced by the merging package's own `(cpv, counter,
     // paths)`, so a second consecutive soname bump cannot keep a stale
     // path list.
+    // After the rename into place, like real (backlog #183: the counter
+    // is read back from the published entry).
+    publish_vdb_tmp(root, &env.category, &env.split.pf)?;
     register_merge_preserved_libs(
         root,
         &env.category,
@@ -4028,8 +4088,9 @@ fn merge_after_install(
 }
 
 /// Real `dblink.treewalk()`'s replace loop (`vartree.py:5187-5219`):
-/// once the *new* version's vdb entry is live, every already-installed
-/// **same-slot** version of the same cp is removed --
+/// while the *new* version's vdb entry still sits in its `-MERGING-<pf>`
+/// temporary (it is renamed into place only after this returns), every
+/// already-installed **same-slot** version of the same cp is removed --
 /// `dblink.unmerge()` (`pkg_prerm` -> delete its files -> `pkg_postrm`)
 /// then `dblink.delete()` (drop its vdb entry). Each `pkg_prerm`/
 /// `pkg_postrm` runs from *that* version's own vdb-stored
@@ -4065,12 +4126,18 @@ pub(crate) fn unmerge_replaced_same_slot(
 ) -> Result<Vec<String>, String> {
     // Real merge-then-unmerge: `<package>-<digit...>` vdb-dir names, the
     // same shape `blocked_installed_packages` and `installed_instance_pf`
-    // match; exclude the just-written new entry.
+    // match; exclude the just-merged new entry. A `-MERGING-<pf>`
+    // temporary can never match the `<package>-<digit...>` shape (real
+    // package names never start with `-`), but skip it explicitly anyway:
+    // readers never see in-progress entries, not even here.
     let vdb_cat = root.join("var/db/pkg").join(category);
     let mut replaced: Vec<String> = Vec::new();
     if let Ok(entries) = portage_util::read_dir_entries(&vdb_cat) {
         for e in entries {
             let name = e.file_name().to_string_lossy().to_string();
+            if portage_util::is_merging_vdb_entry(&name) {
+                continue;
+            }
             let is_this_cp = name.starts_with(&format!("{package}-"))
                 && name[package.len() + 1..].starts_with(|c: char| c.is_ascii_digit());
             if !is_this_cp || name == new_pf {
@@ -4461,7 +4528,7 @@ pub fn merge_binpkg(
     // inside itself -- it's the digest of the *whole* binpkg file, which
     // real records so a later `emerge -k` / index rebuild can tell a
     // still-current instance from a rebuilt one. Written into build-info
-    // so `write_vdb_entry_from_dir` copies it into the vdb like every
+    // so `populate_vdb_tmp` copies it into the vdb like every
     // other build-info file.
     let binpkg_md5 = md5_hex(binpkg_path)?;
     std::fs::write(build_info.join("BINPKGMD5"), format!("{binpkg_md5}\n"))
@@ -4591,7 +4658,7 @@ pub fn merge_binpkg(
     // masked path (e.g. `/usr/share/info` under `FEATURES=noinfo`) never
     // reaches `${ROOT}` and never shows up in the vdb `CONTENTS`. The
     // resolved `INSTALL_MASK` also lands in `build-info`, so
-    // `write_vdb_entry_from_dir` copies it into the vdb entry.
+    // `populate_vdb_tmp` copies it into the vdb entry.
     apply_install_mask(&image, &build_info, options)?;
 
     // Real `dblink.merge()`'s own `_collision_protect` check, run before
@@ -4640,12 +4707,16 @@ pub fn merge_binpkg(
         ));
     }
 
-    // Real `dblink.treewalk()` order: `pkg_preinst` runs before a single
-    // file is copied.
+    // Real `dblink.treewalk()` order: the `-MERGING-<pf>` temporary vdb
+    // entry is created before `pkg_preinst` runs, populated after it, and
+    // only renamed into place after every replaced same-slot version is
+    // unmerged -- identical to `merge_after_install`.
+    create_vdb_tmp(root, &category, &pf)?;
     let preinst_status = run_hook("preinst")?;
     if preinst_status != 0 {
         return Ok(preinst_status);
     }
+    populate_vdb_tmp(root, &category, &pf, &build_info, &full_slot, &repository)?;
 
     let installed_instance = installed_instance_pf(root, &category, &package, &main_slot);
     let mut cfgfiledict = read_cfgfiledict(root);
@@ -4678,15 +4749,7 @@ pub fn merge_binpkg(
         preserve_paths = surviving;
     }
     write_cfgfiledict(root, &cfgfiledict)?;
-    write_vdb_entry_from_dir(
-        root,
-        &category,
-        &pf,
-        &build_info,
-        &full_slot,
-        &repository,
-        &contents,
-    )?;
+    write_vdb_tmp_contents(root, &category, &pf, &contents)?;
 
     // Real `treewalk()`: a preserved lib this new version now provides
     // itself is taken over from the `preserved_libs_registry` and
@@ -4697,11 +4760,12 @@ pub fn merge_binpkg(
         unregister_preserved_libs(root, &cpv, plib_registry, &plib_collisions)?;
     }
 
-    // Real merge-then-unmerge: the new version's vdb entry now exists,
-    // so drop every same-slot version it replaced (see
-    // `unmerge_replaced_same_slot`). The merge-side just-preserved set
-    // travels with the replace loop (real `preserve_paths` into
-    // `dblink.unmerge`) -- identical to `merge_after_install`.
+    // Real merge-then-unmerge: drop every same-slot version the new one
+    // replaced while its own vdb entry still sits in the `-MERGING-<pf>`
+    // temporary (see `unmerge_replaced_same_slot`).
+    // The merge-side just-preserved set travels with the replace loop
+    // (real `preserve_paths` into `dblink.unmerge`) -- identical to
+    // `merge_after_install`.
     let replacement_preserved: BTreeMap<String, Vec<String>> = if preserve_paths.is_empty() {
         BTreeMap::new()
     } else {
@@ -4721,6 +4785,7 @@ pub fn merge_binpkg(
         options,
         &replacement_preserved,
     )?;
+    publish_vdb_tmp(root, &category, &pf)?;
 
     // Real `dblink.treewalk()`'s own post-replace-loop registration
     // (`vartree.py:5266-5272`) -- identical to `merge_after_install`.
@@ -6419,6 +6484,192 @@ mod tests {
         assert!(
             !root
                 .join("var/db/pkg/dev-libs/-MERGING-mergepkg-1.0")
+                .exists()
+        );
+    }
+
+    /// Backlog #183: a stale `-MERGING-<pf>` entry left by a killed merge
+    /// is invisible to every portuale vdb reader, and the next merge of
+    /// the same package wipes it and publishes the real entry -- real
+    /// `dblink.treewalk()`'s own `self.dbdir = self.dbtmpdir;
+    /// self.delete(); ensure_dirs(self.dbtmpdir)` prologue plus the
+    /// `vardbapi._excluded_dirs` reader skip (`vartree.py`). Ground truth:
+    /// the `l32` C4 control cell (`findings/l5.md` Group 4) leaves exactly
+    /// `-MERGING-slow-a-1.0` after the SIGKILL, no `slow-a-1.0`, and the
+    /// resumed merge reinstalls from scratch.
+    #[test]
+    fn stale_merging_entry_is_invisible_and_replaced_by_the_next_merge() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        // A killed merge's leftovers: a half-written `-MERGING-` entry
+        // for the package about to be merged, and nothing live.
+        let stale = root.join("var/db/pkg/dev-libs/-MERGING-mergepkg-1.0");
+        std::fs::create_dir_all(&stale).unwrap();
+        std::fs::write(stale.join("SLOT"), "0\n").unwrap();
+        std::fs::write(stale.join("COUNTER"), "41\n").unwrap();
+        std::fs::write(
+            stale.join("CONTENTS"),
+            "obj /usr/share/mergepkg/hello.txt deadbeef 123\n",
+        )
+        .unwrap();
+        std::fs::write(stale.join("NEEDED.ELF.2"), "junk\n").unwrap();
+        assert!(!root.join("var/db/pkg/dev-libs/mergepkg-1.0").exists());
+
+        // Every reader skips the stale entry: it is not an installed
+        // package, owns no path, and indexes no sonames.
+        assert!(portage_repo::all_installed_packages(&root).is_empty());
+        assert!(portage_repo::installed_versions(&root, "dev-libs", "mergepkg").is_empty());
+        assert!(
+            find_owners(&root, &["/usr/share/mergepkg/hello.txt".to_string()]).is_empty(),
+            "a stale half-written CONTENTS claims nothing"
+        );
+        assert!(
+            crate::needed_elf::read_all_needed_entries(&root).is_empty(),
+            "a stale NEEDED.ELF.2 indexes nothing"
+        );
+
+        // The next merge behaves as real: it wipes the stale entry and
+        // publishes the real one, leaving no temporary behind.
+        let repo_root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let ebuild = repo_root.join("dev-libs/mergepkg/mergepkg-1.0.ebuild");
+        assert_eq!(
+            run_merge(
+                &ebuild,
+                &root,
+                &portage_tmpdir,
+                &MergeOptions::default(),
+                None
+            )
+            .unwrap(),
+            0
+        );
+        let vdb_dir = root.join("var/db/pkg/dev-libs/mergepkg-1.0");
+        let contents = std::fs::read_to_string(vdb_dir.join("CONTENTS")).unwrap();
+        assert!(
+            contents
+                .lines()
+                .any(|l| l.starts_with("obj /usr/share/mergepkg/hello.txt "))
+        );
+        assert!(
+            !contents.contains("deadbeef"),
+            "the stale CONTENTS is fully replaced, not merged"
+        );
+        assert!(!stale.exists(), "the stale temporary is wiped");
+        assert_eq!(portage_repo::all_installed_packages(&root).len(), 1);
+    }
+
+    /// Backlog #183: interrupting a merge while its vdb entry is still
+    /// being written leaves `-MERGING-<pf>` and nothing at `<pf>` -- real
+    /// `dbtmpdir` visibility from its creation (before `pkg_preinst` and
+    /// the `${ROOT}` copy) to the `_movefile` into place after the old
+    /// instances are unmerged. Drives the staged writer directly:
+    /// `create` + `populate` + `write contents` is the interrupt point
+    /// (no `publish` ever runs), pinning that every pre-`publish` stage
+    /// leaves the live entry untouched and the temporary invisible.
+    #[test]
+    fn interrupted_vdb_write_leaves_merging_and_no_final_entry() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let build_info = tmp.join("build-info");
+        std::fs::create_dir_all(&build_info).unwrap();
+        std::fs::write(build_info.join("SLOT"), "0\n").unwrap();
+
+        create_vdb_tmp(&root, "dev-libs", "victimpkg-1.0").unwrap();
+        // A kill here (during `pkg_preinst` / the `${ROOT}` copy) leaves
+        // an empty temporary -- real's own C4 shape, where the kill lands
+        // in the `pkg_preinst` sleep before any info file is copied.
+        let tmp_dir = root.join("var/db/pkg/dev-libs/-MERGING-victimpkg-1.0");
+        assert!(tmp_dir.is_dir());
+        assert!(!root.join("var/db/pkg/dev-libs/victimpkg-1.0").exists());
+
+        populate_vdb_tmp(
+            &root,
+            "dev-libs",
+            "victimpkg-1.0",
+            &build_info,
+            "0",
+            "testrepo",
+        )
+        .unwrap();
+        write_vdb_tmp_contents(
+            &root,
+            "dev-libs",
+            "victimpkg-1.0",
+            "obj /usr/bin/victim abc 123\n",
+        )
+        .unwrap();
+        // ... and a kill here leaves the fully-populated temporary, still
+        // with nothing live and nothing enumerated.
+        assert!(!root.join("var/db/pkg/dev-libs/victimpkg-1.0").exists());
+        assert!(portage_repo::all_installed_packages(&root).is_empty());
+
+        publish_vdb_tmp(&root, "dev-libs", "victimpkg-1.0").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join("var/db/pkg/dev-libs/victimpkg-1.0/CONTENTS"))
+                .unwrap(),
+            "obj /usr/bin/victim abc 123\n"
+        );
+        assert!(!tmp_dir.exists(), "no temporary survives a publish");
+    }
+
+    /// Backlog #183: an upgrade publishes the new version's vdb entry only
+    /// after the replaced same-slot version is unmerged -- real
+    /// `treewalk()`'s own `_movefile(self.dbtmpdir, self.dbpkgdir)`
+    /// position, after the replace loop. Observable contract: the old
+    /// entry is gone, the new one is live with the new content, and no
+    /// temporary survives. (The in-between invisibility itself is what the
+    /// `l32` C4 candidate run checks live: the kill lands while the new
+    /// entry is still `-MERGING-*`.)
+    #[test]
+    fn upgrade_publishes_the_new_entry_after_unmerging_the_old() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        let repo_root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let v1 = repo_root.join("dev-libs/othersinslotpkg/othersinslotpkg-1.0.ebuild");
+        let v2 = repo_root.join("dev-libs/othersinslotpkg/othersinslotpkg-2.0.ebuild");
+
+        assert_eq!(
+            run_merge(&v1, &root, &portage_tmpdir, &MergeOptions::default(), None).unwrap(),
+            0
+        );
+        assert!(
+            root.join("var/db/pkg/dev-libs/othersinslotpkg-1.0")
+                .is_dir()
+        );
+
+        assert_eq!(
+            run_merge(&v2, &root, &portage_tmpdir, &MergeOptions::default(), None).unwrap(),
+            0
+        );
+        let vdb_cat = root.join("var/db/pkg/dev-libs");
+        let entries: Vec<String> = portage_util::read_dir_entries(&vdb_cat)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(entries, vec!["othersinslotpkg-2.0".to_string()]);
+        assert_eq!(
+            std::fs::read_to_string(root.join("usr/share/othersinslotpkg/shared.txt")).unwrap(),
+            "shared, from 2.0\n"
+        );
+        assert!(
+            root.join("usr/share/othersinslotpkg/only-in-v2.txt")
+                .is_file()
+        );
+        assert!(
+            !root
+                .join("usr/share/othersinslotpkg/only-in-v1.txt")
                 .exists()
         );
     }
@@ -8520,7 +8771,7 @@ mod tests {
     /// step (`ebuild_phases::run_commands_async`) -- actually lands in
     /// the real vdb entry, matching real `dblink.merge()`'s own
     /// `treewalk()` (`vartree.py:4912-4913`) copying it out of
-    /// `build-info` (see `write_vdb_entry`'s own doc comment for why
+    /// `build-info` (see `populate_vdb_tmp`'s own doc comment for why
     /// portuale copies only this one build-info file, not the whole
     /// directory). Installs a real, dynamically-linked ELF binary
     /// (`/bin/true`, whatever the real host machine actually has) so

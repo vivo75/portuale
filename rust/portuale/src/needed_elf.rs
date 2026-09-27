@@ -2,7 +2,7 @@
 // data model for one parsed line of a real `NEEDED.ELF.2` file -- the
 // aux vdb metadata real, unmodified `bin/misc-functions.sh
 // install_qa_check`'s own real `scanelf`-driven step generates, and
-// which `ebuild_merge::write_vdb_entry` now copies into every real vdb
+// which `ebuild_merge::populate_vdb_tmp` now copies into every real vdb
 // entry that has one (see that function's own doc comment).
 //
 // Each step confirmed with the user before implementing: real parsing
@@ -512,6 +512,12 @@ pub fn read_all_needed_entries(root: &Path) -> Vec<(String, Vec<NeededEntry>)> {
             .collect();
 
         for pf in pf_names {
+            // Real `vardbapi._excluded_dirs`: an in-progress
+            // `-MERGING-<pf>` entry contributes no soname index rows --
+            // its `NEEDED.ELF.2` is half-written by definition.
+            if portage_util::is_merging_vdb_entry(&pf) {
+                continue;
+            }
             let cpv = format!("{category}/{pf}");
             let needed_path = category_path.join(&pf).join("NEEDED.ELF.2");
             let entries = std::fs::read_to_string(&needed_path)

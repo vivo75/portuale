@@ -1957,6 +1957,12 @@ impl VdbShadow {
             };
             for pf in pfs {
                 let pfname = pf.file_name().to_string_lossy().into_owned();
+                // Real `vardbapi._excluded_dirs`: an in-progress
+                // `-MERGING-<pf>` entry owns nothing -- a stale one's
+                // half-written `CONTENTS` must never claim a path.
+                if portage_util::is_merging_vdb_entry(&pfname) {
+                    continue;
+                }
                 let contents = pf.path().join("CONTENTS");
                 let Ok(text) = std::fs::read_to_string(&contents) else {
                     continue;
@@ -4175,6 +4181,31 @@ mod tests {
             )
             .is_ok()
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #183: the vdb shadow skips in-progress `-MERGING-<pf>`
+    /// entries, so a stale half-written `CONTENTS` never blocks a bundle
+    /// -- real `vardbapi._excluded_dirs` (`vartree.py`).
+    #[test]
+    fn shadow_ignores_a_stale_merging_entry() {
+        let dir = std::env::temp_dir().join(format!(
+            "portuale-remote-shadow-merging-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let vdb = dir.join("vdb");
+        std::fs::create_dir_all(vdb.join("dev-libs/-MERGING-stalepkg-1.0")).unwrap();
+        std::fs::write(
+            vdb.join("dev-libs/-MERGING-stalepkg-1.0/CONTENTS"),
+            "obj /usr/bin/stale abc 1\n",
+        )
+        .unwrap();
+        let shadow = VdbShadow::load(&vdb);
+        assert!(shadow.owner("/usr/bin/stale").is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
