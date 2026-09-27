@@ -1,5 +1,27 @@
 use super::*;
 
+/// A stale `-MERGING-<pf>` entry left by a killed merge is invisible to
+/// installed-package enumeration (Portage's `vartree._excluded_dirs`).
+#[test]
+fn all_installed_packages_skips_a_stale_merging_entry() {
+    let root = tmp_vdb("dev-libs", "realpkg-1.0", &[]);
+    let stale = root.join("var/db/pkg/dev-libs/-MERGING-realpkg-2.0");
+    std::fs::create_dir_all(&stale).unwrap();
+    std::fs::write(stale.join("SLOT"), "0\n").unwrap();
+    std::fs::write(stale.join("COUNTER"), "41\n").unwrap();
+    std::fs::write(stale.join("CONTENTS"), "obj /usr/bin/stale abc 123\n").unwrap();
+
+    let cpvs: Vec<String> = all_installed_packages(&root)
+        .iter()
+        .map(InstalledPackage::cpv)
+        .collect();
+    assert_eq!(cpvs, vec!["dev-libs/realpkg-1.0".to_string()]);
+    assert_eq!(
+        installed_versions(&root, "dev-libs", "realpkg"),
+        vec!["1.0".to_string()]
+    );
+}
+
 /// `read_vdb_string` collapses multi-line values to one space-separated line
 /// (Portage's `_aux_get` normalisation).
 #[test]

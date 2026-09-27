@@ -181,3 +181,4 @@ mod plib_unmerge;
 mod protect;
 mod run_merge;
 mod tree;
+mod vdb_entry;

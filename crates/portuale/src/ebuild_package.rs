@@ -2070,6 +2070,38 @@ mod tests {
     }
 
     #[test]
+    fn stanza_field_sort_matches_portage_keys_sort_with_mtime_repo_last() {
+        // A shuffled key set must come out in exactly the probe's order.
+        let mut fields: Vec<(&'static str, &str)> = vec![
+            ("REPO", "l32"),
+            ("SLOT", "1"),
+            ("MTIME", "1"),
+            ("EAPI", "8"),
+            ("REPO_REVISIONS", "{}"),
+            ("CPV", "l32/dep-a-1.0"),
+            ("BDEPEND", "x"),
+            ("USE", "u"),
+            ("SIZE", "1"),
+        ];
+        sort_stanza_fields_for_write(&mut fields);
+        let keys: Vec<&str> = fields.iter().map(|(k, _)| *k).collect();
+        assert_eq!(
+            keys,
+            vec![
+                "BDEPEND",
+                "CPV",
+                "EAPI",
+                "REPO_REVISIONS",
+                "SIZE",
+                "SLOT",
+                "USE",
+                "MTIME",
+                "REPO",
+            ]
+        );
+    }
+
+    #[test]
     fn quickpkg_from_vdb_writes_portage_ordered_stanza_with_eapi_and_repo_revisions() {
         // Expected values from Portage (container probe): vdb `EAPI`/`REPO_REVISIONS`
         // carried verbatim, `repository` as last key `REPO`, sorted key order,
