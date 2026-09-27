@@ -10755,6 +10755,175 @@ fn all_masked_report(
     Some(out)
 }
 
+/// Real `_get_dep_chain`'s affecting-USE `pkg[flag]` suffix for one chain
+/// node (`depgraph.py:6257+` via `portage.dep.extract_affecting_use`):
+/// the flags in the node's own dep strings whose `flag?` conditionals
+/// gate the edge down to `child`, rendered `[flag]` for flags enabled in
+/// the node's own USE and `[-flag]` for disabled ones (real
+/// `_pkg_use_enabled`), minus `use.mask`/`use.force`. `""` when no dep
+/// string names `child`, when no conditional gates the edge, or when the
+/// node's metadata/USE can't be read (the chain keeps its bare row --
+/// today's behaviour everywhere the suffix doesn't apply).
+///
+/// Sources mirror the node's kind: a merge-bound node reads the
+/// same-version repo candidate's metadata (`BDEPEND`, `DEPEND`,
+/// `IDEPEND`, `PDEPEND`, `RDEPEND` -- real `Package._dep_keys`) and its
+/// effective USE; an installed node reads the vdb (`RDEPEND`, `PDEPEND`,
+/// `DEPEND` files; the recorded `USE`). Real filters the dep strings by
+/// the edge's own buildtime/runtime priority and portuale doesn't track
+/// it, so every available key is scanned (union -- wider only when one
+/// cp is gated differently under two keys). Real matches the linking
+/// atom by exact token text (evaluated for the first row, unevaluated
+/// parent atoms after); portuale re-derives it as the first token whose
+/// cp is `child`'s, which agrees everywhere except a doubly-conditional
+/// edge (`flag? ( pkg[other=] )`), where real's two forms can disagree
+/// with each other too. Multi-flag rows sort (real iterates a `set`,
+/// hash order under the bed's `PYTHONHASHSEED=0`; every fixture and live
+/// row so far carries one flag). A malformed dep string is skipped (real
+/// raises for ebuilds -- a display path must not fail the resolve).
+/// Mask/force for an installed node reuses the same-version repo
+/// candidate's keywords for the stability decision, falling back to no
+/// exclusion when no such candidate exists.
+fn chain_node_usedep_suffix(
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    root: &Path,
+    node: &GraphEntry,
+    version: &str,
+    installed: bool,
+    child: &(String, String),
+) -> String {
+    // Same-version repo candidate when one exists: metadata location for
+    // merge-bound nodes, keyword source for the stability decision.
+    let candidate = list_candidates(repos, &node.category, &node.package)
+        .ok()
+        .and_then(|cs| {
+            cs.iter()
+                .filter(|c| c.version == version)
+                .max_by_key(|c| c.repo_priority)
+                .cloned()
+        });
+    let strings: Vec<String> = if installed {
+        ["RDEPEND", "PDEPEND", "DEPEND"]
+            .iter()
+            .map(|k| read_vdb_string(root, &node.category, &node.package, version, k))
+            .collect()
+    } else {
+        let Some(ref cand) = candidate else {
+            return String::new();
+        };
+        let pf = format!("{}-{version}", node.package);
+        let Ok(metadata) = repo_aux_metadata(&cand.repo_location, &node.category, &pf) else {
+            return String::new();
+        };
+        ["BDEPEND", "DEPEND", "IDEPEND", "PDEPEND", "RDEPEND"]
+            .iter()
+            .map(|k| metadata.get(*k).cloned().unwrap_or_default())
+            .collect()
+    };
+    // The linking atom, re-derived: the first token whose cp is the
+    // child's (real records the per-edge parent atom; portuale's
+    // `required_by` keeps cp pairs only).
+    let mut linking: Option<&str> = None;
+    'scan: for s in &strings {
+        for tok in s.split_whitespace() {
+            if portage_dep::parse_atom(tok)
+                .is_some_and(|a| a.category == child.0 && a.package == child.1)
+            {
+                linking = Some(tok);
+                break 'scan;
+            }
+        }
+    }
+    let Some(linking) = linking else {
+        return String::new();
+    };
+    let mut affecting: HashSet<String> = HashSet::new();
+    for s in &strings {
+        if s.trim().is_empty() {
+            continue;
+        }
+        if let Some(flags) = portage_dep::extract_affecting_use(s, linking) {
+            affecting.extend(flags);
+        }
+    }
+    if affecting.is_empty() {
+        return String::new();
+    }
+    // Real `affecting_use.difference_update(node.use.mask,
+    // node.use.force)`.
+    if let Some(ref cand) = candidate {
+        let candidate_str = format!(
+            "{}/{}-{}:{}/{}::{}",
+            node.category, node.package, cand.version, cand.slot, cand.sub_slot, cand.repo_name
+        );
+        let stable = is_stable(
+            &cand.keywords,
+            &candidate_str,
+            &node.category,
+            &node.package,
+            &config.accept_keywords,
+            &config.package_accept_keywords,
+        );
+        let mut untouchable = resolved_use_mask_or_force(
+            MaskOrForce::Mask,
+            config,
+            &candidate_str,
+            &node.category,
+            &node.package,
+            stable,
+        )
+        .as_ref()
+        .clone();
+        untouchable.extend(
+            resolved_use_mask_or_force(
+                MaskOrForce::Force,
+                config,
+                &candidate_str,
+                &node.category,
+                &node.package,
+                stable,
+            )
+            .iter()
+            .cloned(),
+        );
+        affecting.retain(|f| !untouchable.contains(f));
+    }
+    if affecting.is_empty() {
+        return String::new();
+    }
+    // The node's own enabled set: effective USE merge-bound, recorded
+    // vdb USE installed.
+    let enabled: HashSet<String> = if installed {
+        if !vdb_pkg_dir(root, &node.category, &node.package, version).is_dir() {
+            return String::new();
+        }
+        read_vdb_flag_set(root, &node.category, &node.package, version, "USE")
+    } else {
+        let Some(ref cand) = candidate else {
+            return String::new();
+        };
+        let Some((_, use_flags)) =
+            candidate_iuse_and_use(cand, &node.category, &node.package, config)
+        else {
+            return String::new();
+        };
+        use_flags.as_ref().clone()
+    };
+    let mut flags: Vec<String> = affecting
+        .into_iter()
+        .map(|f| {
+            if enabled.contains(&f) {
+                f
+            } else {
+                format!("-{f}")
+            }
+        })
+        .collect();
+    flags.sort();
+    format!("[{}]", flags.join(","))
+}
+
 /// Real `_get_dep_chain` for one masked-dependency disclosure
 /// (`depgraph.py:6257+`): `(node, type)` pairs from the failed
 /// dependency's direct parents up to the top-level argument(s),
@@ -10767,12 +10936,14 @@ fn all_masked_report(
 /// -- portuale never abandons, so all failing branches disclose, with
 /// #19 parked); cycles guarded by a visited set; ascent stops at the
 /// first arg-targeted node (real prefers arguments since they are root
-/// nodes). Narrowings, documented: no affecting-USE `pkg[flag]` suffix
-/// on chain nodes (fixtures use plain atoms; real appends it when the
-/// linking atom carries USE conditionals), and every matching top-level
-/// atom is shown (real shows the pulling one -- portuale doesn't track
-/// which).
+/// nodes). Narrowings, documented: every matching top-level atom is
+/// shown (real shows the pulling one -- portuale doesn't track which).
+/// The affecting-USE suffix is real's own ([`chain_node_usedep_suffix`]
+/// documents its approximations); a node whose metadata can't be read
+/// keeps today's bare row.
 fn masked_dep_chain(
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
     entries: &[GraphEntry],
     category: &str,
     package: &str,
@@ -10806,8 +10977,17 @@ fn masked_dep_chain(
                 })
             })
     }
-    /// `(node, type)` for one chain entry, or `None` to stop.
-    fn node_line(entry: &GraphEntry, root: &Path) -> Option<(String, String)> {
+    /// `(node, type)` for one chain entry, or `None` to stop. `child`
+    /// is the cp below this node on the chain (the failed dependency
+    /// for the first row) -- its linking atom decides the affecting-USE
+    /// suffix.
+    fn node_line(
+        entry: &GraphEntry,
+        root: &Path,
+        repos: &[RepoConfig],
+        config: &portage_profile::Config,
+        child: &(String, String),
+    ) -> Option<(String, String)> {
         let version = match &entry.outcome {
             PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
                 version.clone()
@@ -10817,12 +10997,14 @@ fn masked_dep_chain(
             // #72 B3: a removal is not a dependency-chain node.
             PretendOutcome::NoVisibleCandidate | PretendOutcome::Uninstall { .. } => return None,
         };
-        let (repo, ty) = match &entry.outcome {
+        let (installed, repo, ty) = match &entry.outcome {
             PretendOutcome::AlreadyInstalled { .. } => (
+                true,
                 installed_pkg_repo(root, &entry.category, &entry.package, &version),
                 "installed".to_string(),
             ),
             _ => (
+                false,
                 entry.repo_name.clone().unwrap_or_default(),
                 if entry.source == CandidateSource::Binary {
                     "binary".to_string()
@@ -10831,8 +11013,13 @@ fn masked_dep_chain(
                 },
             ),
         };
+        let suffix =
+            chain_node_usedep_suffix(repos, config, root, entry, &version, installed, child);
         Some((
-            format!("{}/{}-{version}::{repo}", entry.category, entry.package),
+            format!(
+                "{}/{}-{version}::{repo}{suffix}",
+                entry.category, entry.package
+            ),
             ty,
         ))
     }
@@ -10863,9 +11050,12 @@ fn masked_dep_chain(
         if !visited.insert(parent.clone()) {
             continue;
         }
+        // The cp below the current node: the failed dependency for the
+        // first row, the previous chain node after each ascent step.
+        let mut child = (category.to_string(), package.to_string());
         let mut cur = parent;
         while let Some(entry) = select_entry(entries, &cur) {
-            let Some((node, ty)) = node_line(entry, root) else {
+            let Some((node, ty)) = node_line(entry, root, repos, config, &child) else {
                 break;
             };
             chain.push((node, ty));
@@ -10885,6 +11075,7 @@ fn masked_dep_chain(
                 break;
             };
             visited.insert(next.clone());
+            child = cur;
             cur = next;
         }
     }
@@ -25454,6 +25645,8 @@ fn assemble_result(
     // data was recorded at each `NoVisibleCandidate` push above.
     for rep in &mut pass.masked_deps {
         rep.chain = masked_dep_chain(
+            &ctx.repos,
+            ctx.config,
             &pass.entries,
             &rep.category,
             &rep.package,
@@ -25465,6 +25658,8 @@ fn assemble_result(
     // shape is real `_get_dep_chain`'s, shared with the masked block.
     for rep in &mut pass.use_unsat_deps {
         rep.chain = masked_dep_chain(
+            &ctx.repos,
+            ctx.config,
             &pass.entries,
             &rep.category,
             &rep.package,
@@ -25556,6 +25751,8 @@ fn assemble_result(
     // Same walk for the plain-miss disclosures (#135 (d)).
     for rep in &mut pass.plain_miss_deps {
         rep.chain = masked_dep_chain(
+            &ctx.repos,
+            ctx.config,
             &pass.entries,
             &rep.category,
             &rep.package,
@@ -46977,7 +47174,15 @@ mod tests {
                 ),
             ];
             let atoms = ["dev-libs/grandma".to_string()];
-            let got = masked_dep_chain(&entries, "dev-libs", "target", &atoms, &dir);
+            let got = masked_dep_chain(
+                &[],
+                &portage_profile::Config::default(),
+                &entries,
+                "dev-libs",
+                "target",
+                &atoms,
+                &dir,
+            );
             assert_eq!(
                 got,
                 vec![
@@ -47044,7 +47249,15 @@ mod tests {
                 ),
             ];
             let atoms = ["dev-libs/grandma".to_string()];
-            let got = masked_dep_chain(&entries, "dev-libs", "target", &atoms, &dir);
+            let got = masked_dep_chain(
+                &[],
+                &portage_profile::Config::default(),
+                &entries,
+                "dev-libs",
+                "target",
+                &atoms,
+                &dir,
+            );
             assert_eq!(
                 got,
                 vec![
@@ -47094,7 +47307,15 @@ mod tests {
                 "!dev-libs/grandma".to_string(),
                 "dev-libs/unrelated".to_string(),
             ];
-            let got = masked_dep_chain(&entries, "dev-libs", "target", &atoms, &dir);
+            let got = masked_dep_chain(
+                &[],
+                &portage_profile::Config::default(),
+                &entries,
+                "dev-libs",
+                "target",
+                &atoms,
+                &dir,
+            );
             assert_eq!(
                 got,
                 vec![
@@ -52326,6 +52547,159 @@ mod tests_163 {
                 "dev-libs/parent-1.0::testrepo".to_string(),
                 vec!["Change USE: +flip".to_string()],
             ))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A merge-bound chain node whose dep on the child sits behind
+    /// `qml? ( ... )` renders real's `[qml]` qualifier (the r135 S0
+    /// `(b)` shape: `extract_affecting_use` finds qml gating the edge,
+    /// qml enabled in the node's effective USE). Kills the
+    /// always-bare-row behaviour.
+    #[test]
+    fn chain_suffix_qualifies_a_flag_gated_merge_bound_edge() {
+        let dir = dir_163("chain-qml");
+        let repos = repo_pkgs_163(
+            &dir,
+            &[(
+                "dev-libs/consumer",
+                "1.0",
+                "0",
+                "+qml",
+                "qml? ( dev-libs/leaf )",
+                "amd64",
+            )],
+        );
+        let config = cfg_163();
+        let entries = vec![
+            entry_163(
+                "dev-libs",
+                "leaf",
+                PretendOutcome::NoVisibleCandidate,
+                &[("dev-libs", "consumer")],
+            ),
+            entry_163("dev-libs", "consumer", new_163("1.0"), &[]),
+        ];
+        let atoms: Vec<String> = Vec::new();
+        assert_eq!(
+            masked_dep_chain(
+                &repos,
+                &config,
+                &entries,
+                "dev-libs",
+                "leaf",
+                &atoms,
+                dir.as_path(),
+            ),
+            vec![(
+                "dev-libs/consumer-1.0::testrepo[qml]".to_string(),
+                "ebuild".to_string(),
+            ),]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The same edge ungated renders the bare row (no token names the
+    /// child behind a conditional, so there is nothing to qualify).
+    #[test]
+    fn chain_suffix_stays_bare_on_an_ungated_edge() {
+        let dir = dir_163("chain-bare");
+        let repos = repo_pkgs_163(
+            &dir,
+            &[(
+                "dev-libs/consumer",
+                "1.0",
+                "0",
+                "+qml",
+                "dev-libs/leaf",
+                "amd64",
+            )],
+        );
+        let config = cfg_163();
+        let entries = vec![
+            entry_163(
+                "dev-libs",
+                "leaf",
+                PretendOutcome::NoVisibleCandidate,
+                &[("dev-libs", "consumer")],
+            ),
+            entry_163("dev-libs", "consumer", new_163("1.0"), &[]),
+        ];
+        let atoms: Vec<String> = Vec::new();
+        assert_eq!(
+            masked_dep_chain(
+                &repos,
+                &config,
+                &entries,
+                "dev-libs",
+                "leaf",
+                &atoms,
+                dir.as_path(),
+            ),
+            vec![(
+                "dev-libs/consumer-1.0::testrepo".to_string(),
+                "ebuild".to_string(),
+            ),]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An installed chain node qualifies from its vdb `RDEPEND` against
+    /// its recorded `USE` (the live `[installed]` `[qml]`/`[kde]` rows):
+    /// the gate is read from the vdb, the repo candidate at the same
+    /// version only grounds keywords/repo. Kills the installed-blindness
+    /// (bare rows for installed nodes).
+    #[test]
+    fn chain_suffix_qualifies_a_gated_installed_edge_from_the_vdb() {
+        let dir = dir_163("chain-installed");
+        let repos = repo_pkgs_163(
+            &dir,
+            &[(
+                "dev-libs/parent",
+                "1.0",
+                "0",
+                "+qml",
+                "qml? ( dev-libs/leaf )",
+                "amd64",
+            )],
+        );
+        let config = cfg_163();
+        install_163(
+            &dir,
+            "dev-libs",
+            "parent-1.0",
+            "0",
+            &[
+                ("USE", "qml\n"),
+                ("IUSE", "+qml\n"),
+                ("RDEPEND", "qml? ( dev-libs/leaf )\n"),
+                ("repository", "testrepo\n"),
+            ],
+        );
+        let entries = vec![
+            entry_163(
+                "dev-libs",
+                "leaf",
+                PretendOutcome::NoVisibleCandidate,
+                &[("dev-libs", "parent")],
+            ),
+            entry_163("dev-libs", "parent", installed_163("1.0"), &[]),
+        ];
+        let atoms: Vec<String> = Vec::new();
+        assert_eq!(
+            masked_dep_chain(
+                &repos,
+                &config,
+                &entries,
+                "dev-libs",
+                "leaf",
+                &atoms,
+                dir.as_path(),
+            ),
+            vec![(
+                "dev-libs/parent-1.0::testrepo[qml]".to_string(),
+                "installed".to_string(),
+            ),]
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
