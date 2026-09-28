@@ -8696,6 +8696,10 @@ enum SlotConflictReason {
     Version(&'static str), // "ge" | "eq" | "le"
     Slot(String),          // the ":slot[/sub]" text, for the caret span
     Use(String),           // the violated flag, for the caret span
+    /// Real `slot_collision.py`'s `("AtomArg", None)` key: a bare
+    /// command-line parent whose atom is satisfied by every other
+    /// instance, shown when some other instance is installed.
+    Argument,
 }
 
 /// One slot-conflict parent that contributed at least one specific
@@ -8757,6 +8761,7 @@ struct ConflictOther {
     cpv: String,
     iuse: HashSet<String>,
     use_flags: HashSet<String>,
+    installed: bool,
 }
 
 /// Real `_prepare_conflict_msg_and_check_for_specificity`'s per-parent
@@ -8803,8 +8808,14 @@ fn slot_conflict_reasons(atom: &Atom, others: &[ConflictOther]) -> (Vec<SlotConf
                 if !reasons.contains(&r) {
                     reasons.push(r);
                 }
+                // Real's `elif` chain (`slot_collision.py`): the USE
+                // check below runs only when the slot half matched --
+                // otherwise the slot reason already explains this
+                // parent against this other instance.
+                continue;
             }
-        } else if let Some(use_deps) = &atom.use_deps {
+        }
+        if let Some(use_deps) = &atom.use_deps {
             // `match_from_list` skips USE evaluation against plain-string
             // candidates (real's own `hasattr(x, "use")` guard), so a
             // version+slot match always "matches" here -- the USE verdict
@@ -12442,6 +12453,9 @@ pub fn run(args: &[String]) -> ExitCode {
             complete_if_new_use,
             complete_if_new_ver,
             rebuild_if_new_slot,
+            &root,
+            &repos,
+            &config,
         );
     let want_complete = complete_graph || (deep == portage_repo::Deep::NotRequested && auto_enable);
     let result = if want_complete {
@@ -13152,11 +13166,16 @@ pub fn run(args: &[String]) -> ExitCode {
                 let show_argument_parents = c
                     .instances
                     .iter()
-                    .any(|o| o.version != inst.version && o.installed);
+                    .any(|o| !std::ptr::eq(o, inst) && o.installed);
+                // Real compares against every *other* instance in the
+                // slot (`slot_collision.py`: `if other_pkg == pkg:
+                // continue`) -- identity, not version: a same-version
+                // merge/installed twin (a USE-only break, backlog #222)
+                // still sees its twin, so the USE parent classifies.
                 let others: Vec<ConflictOther> = c
                     .instances
                     .iter()
-                    .filter(|o| o.version != inst.version)
+                    .filter(|o| !std::ptr::eq(*o, inst))
                     .map(|o| {
                         // Flag sets for the `("use", flag)` branch: an
                         // installed other's own vdb-recorded sets, like
@@ -13184,6 +13203,7 @@ pub fn run(args: &[String]) -> ExitCode {
                             ),
                             iuse,
                             use_flags,
+                            installed: o.installed,
                         }
                     })
                     .collect();
@@ -13199,7 +13219,22 @@ pub fn run(args: &[String]) -> ExitCode {
                     let Some(atom) = parse_atom(&p.atom) else {
                         continue;
                     };
-                    let (reasons, use_unconditional) = slot_conflict_reasons(&atom, &others);
+                    let (mut reasons, use_unconditional) = slot_conflict_reasons(&atom, &others);
+                    // Real `slot_collision.py`'s `("AtomArg", None)` key
+                    // (`elif isinstance(ppkg, AtomArg) and
+                    // other_pkg.installed`): a bare command-line parent
+                    // satisfied by every other instance is still shown
+                    // once some other instance is installed. Like real's
+                    // `elif`, it only fires when no version/slot/USE
+                    // reason did (so an argument parent that already
+                    // classifies, like pg1's `>=cgp1x-2`, renders exactly
+                    // once, as today).
+                    if p.parent_cpv.is_empty()
+                        && reasons.is_empty()
+                        && others.iter().any(|o| o.installed)
+                    {
+                        reasons.push(SlotConflictReason::Argument);
+                    }
                     if !reasons.is_empty() {
                         classified.push(ClassifiedParent {
                             parent_cpv: &p.parent_cpv,
@@ -13266,6 +13301,9 @@ pub fn run(args: &[String]) -> ExitCode {
                             }
                         }
                         SlotConflictReason::Use(_) => {
+                            selected.extend(members.iter().copied());
+                        }
+                        SlotConflictReason::Argument => {
                             selected.extend(members.iter().copied());
                         }
                     }
@@ -16071,6 +16109,7 @@ mod tests {
             cpv: "dev-libs/t-1.0:0/0::r".to_string(),
             iuse: ["x".to_string()].into_iter().collect(),
             use_flags: ["x".to_string()].into_iter().collect(),
+            installed: false,
         }];
         // ">=dev-libs/t-2.0" does not accept 1.0 -> ("version", "ge")
         let ge = parse_atom(">=dev-libs/t-2.0").unwrap();
@@ -16093,6 +16132,7 @@ mod tests {
             cpv: "dev-libs/t-1.0:0/0::r".to_string(),
             iuse: ["x".to_string()].into_iter().collect(),
             use_flags: HashSet::new(),
+            installed: false,
         }];
         assert_eq!(
             slot_conflict_reasons(&ok, &others_off),
@@ -16103,6 +16143,7 @@ mod tests {
             cpv: "dev-libs/t-1.0:0/0::r".to_string(),
             iuse: HashSet::new(),
             use_flags: HashSet::new(),
+            installed: false,
         }];
         assert_eq!(
             slot_conflict_reasons(&ok, &others_gone),

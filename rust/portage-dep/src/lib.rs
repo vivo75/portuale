@@ -898,6 +898,34 @@ pub fn use_mismatch_flags(
     (HashSet::new(), violated)
 }
 
+/// Real `Atom.violated_conditionals` (`lib/portage/dep/__init__.py`):
+/// whether any of `atom`'s `[use]` deps is violated by `child_use` (the
+/// candidate's own enabled USE set) given `parent_use` (the enabled USE
+/// set of the package that recorded the atom). This is the walk-time
+/// check real's complete-graph end-of-walk loop leans on: a deep
+/// dependency whose use-deps the scheduled (re)build contradicts counts
+/// as unsatisfied even though `match_from_list` (which never reads the
+/// four conditional forms, and only the unconditional two against the
+/// candidate) still matches it.
+///
+/// Composed from the two primitives real itself fuses here --
+/// `evaluate_conditionals` (parent-relative `?`/`!`/`=`/`!` resolved to
+/// unconditional demands or dropped) then the match-time satisfied check
+/// (`use_deps_satisfied`, including its IUSE-validity and `(+)`/`(-)`
+/// default handling) -- rather than a third evaluator, so the truth
+/// table stays in exactly one place (`evaluate_use_dep_conditionals`).
+/// `child_iuse` is the candidate's own declared IUSE (default markers
+/// stripped -- same shape `use_deps_satisfied` takes).
+pub fn use_deps_violated(
+    use_deps: &[UseDep],
+    parent_use: &HashSet<String>,
+    child_use: &HashSet<String>,
+    child_iuse: &HashSet<String>,
+) -> bool {
+    let evaluated = evaluate_use_dep_conditionals(use_deps, parent_use);
+    !use_deps_satisfied(&evaluated, child_iuse, child_use)
+}
+
 /// Renders one `UseDep` back to its own atom-string token, the exact
 /// inverse of `parse_use_deps`'s own per-token parse (`flag`/`-flag`/
 /// `flag?`/`!flag?`/`flag=`/`!flag=`, each optionally suffixed with its
@@ -1880,6 +1908,59 @@ mod use_mismatch_tests {
             mismatch("dev-libs/foo[-x(+)]", &[], &[]),
             (vec![], vec!["x".to_string()])
         );
+    }
+}
+
+#[cfg(test)]
+mod use_deps_violated_tests {
+    use super::*;
+
+    fn violated(atom_str: &str, parent: &[&str], child: &[&str], iuse: &[&str]) -> bool {
+        let ud = parse_atom(atom_str)
+            .expect("atom must parse")
+            .use_deps
+            .expect("atom must carry use deps");
+        let parent_use: HashSet<String> = parent.iter().map(|s| s.to_string()).collect();
+        let child_use: HashSet<String> = child.iter().map(|s| s.to_string()).collect();
+        let child_iuse: HashSet<String> = iuse.iter().map(|s| s.to_string()).collect();
+        use_deps_violated(&ud, &parent_use, &child_use, &child_iuse)
+    }
+
+    #[test]
+    fn unconditional_forms_follow_the_child() {
+        assert!(violated("dev-libs/foo[x]", &[], &[], &["x"]));
+        assert!(!violated("dev-libs/foo[x]", &[], &["x"], &["x"]));
+        assert!(violated("dev-libs/foo[-x]", &[], &["x"], &["x"]));
+        assert!(!violated("dev-libs/foo[-x]", &[], &[], &["x"]));
+    }
+
+    #[test]
+    fn parent_disabled_child_enabled_breaks_not_parent_disabled() {
+        // Backlog #222's own shape: installed consumer built with -icu
+        // (`[-icu]` raw, `[!icu?]` live) vs the icu-flipped rebuild.
+        assert!(violated("dev-libs/foo[!x?]", &[], &["x"], &["x"]));
+        assert!(!violated("dev-libs/foo[!x?]", &[], &[], &["x"]));
+        assert!(!violated("dev-libs/foo[!x?]", &["x"], &["x"], &["x"]));
+        assert!(violated("dev-libs/foo[-x]", &[], &["x"], &["x"]));
+    }
+
+    #[test]
+    fn parent_enabled_forms_compare_against_the_parent() {
+        assert!(violated("dev-libs/foo[x?]", &["x"], &[], &["x"]));
+        assert!(!violated("dev-libs/foo[x?]", &[], &[], &["x"]));
+        assert!(!violated("dev-libs/foo[x?]", &["x"], &["x"], &["x"]));
+        assert!(violated("dev-libs/foo[x=]", &["x"], &[], &["x"]));
+        assert!(violated("dev-libs/foo[x=]", &[], &["x"], &["x"]));
+        assert!(!violated("dev-libs/foo[x=]", &["x"], &["x"], &["x"]));
+        assert!(violated("dev-libs/foo[!x=]", &["x"], &["x"], &["x"]));
+        assert!(violated("dev-libs/foo[!x=]", &[], &[], &["x"]));
+        assert!(!violated("dev-libs/foo[!x=]", &["x"], &[], &["x"]));
+    }
+
+    #[test]
+    fn undeclared_flag_without_default_is_always_violated() {
+        assert!(violated("dev-libs/foo[x]", &[], &[], &[]));
+        assert!(violated("dev-libs/foo[!x?]", &[], &[], &[]));
     }
 }
 
