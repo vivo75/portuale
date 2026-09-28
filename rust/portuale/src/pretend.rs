@@ -9222,7 +9222,9 @@ fn merge_list_shown(pretend: bool, ask: bool, tree: bool, verbose: bool, quiet: 
 /// `emerge_build::resume_cpv` is `Some` for exactly that set) prints
 /// `Nothing to merge; quitting.` on stdout and returns `EX_OK` before
 /// the `resume_backup` rotation and before `Scheduler` -- the resume
-/// list and its backup stay untouched. Pure predicate so the
+/// list and its backup stay untouched (except the
+/// selective-without-`--oneshot` deferral, which still rotates -- see
+/// `selective_noop_deferred`). Pure predicate so the
 /// `--pretend` exclusion (real's `--pretend` branch returns after the
 /// display with no message) and the plain-run exclusion (`mergecount`
 /// stays `None` without display flags, so `Scheduler` still writes --
@@ -9231,6 +9233,28 @@ fn merge_list_shown(pretend: bool, ask: bool, tree: bool, verbose: bool, quiet: 
 /// (`test_portuale.py`, backlog #225).
 fn nothing_to_merge(pretend: bool, show_merge_list: bool, mergecount: usize) -> bool {
     !pretend && show_merge_list && mergecount == 0
+}
+
+/// Backlog #232: real `_emerge/actions.py:496-521` (`action_build`),
+/// the `mergecount == 0` arm's own deferral (`:514-516`): when the run
+/// is `selective` (real `create_depgraph_params.py` -- `-u`/`-N`/
+/// `--noreplace`/...) without `--oneshot` and a world-candidate
+/// favorite exists, real does NOT print `Nothing to merge; quitting.`
+/// -- the prompt just moves into `depgraph.saveNomergeFavorites` while
+/// the run falls through to the `resume_backup` rotation (`:664-672`)
+/// and the world-file record, skipping only `Scheduler` (`:674-675`).
+/// `selective` is portuale's own real-faithful computation (see its
+/// site); a world candidate is any non-`@` favorite (real keeps every
+/// non-`SETPREFIX` string, `actions.py:498-513`) or user `@set` (real
+/// defaults `usersets` to `world-candidate = true`,
+/// `_sets/__init__.py:133` -- portuale's `selected_set_args` holds
+/// exactly the user sets, so it is that set; the built-in
+/// `@world`/`@system`/`@profile` filter out on both sides since real
+/// never marks them world candidates). Pure predicate so the gate
+/// matrix stays unit-pinned; the rotation half is pinned end to end in
+/// pmtest (`test_portuale.py`, backlog #232).
+fn selective_noop_deferred(selective: bool, oneshot: bool, has_world_candidates: bool) -> bool {
+    selective && !oneshot && has_world_candidates
 }
 
 /// Backlog #185 fix round 1: real's resolution-phase header gating
@@ -14286,20 +14310,45 @@ pub fn run(args: &[String]) -> ExitCode {
         // `run_resume` far above, with its own `nothing to resume`
         // message).
         //
-        // Residue (deliberate, follow-up): real defers instead when the
-        // run is `selective` (`-u`/`-N`/`--noreplace`/..., real
-        // `create_depgraph_params.py`) without `--oneshot` and a
+        // Residue (deliberate, follow-up -- next rule): real defers
+        // instead when the run is `selective` (`-u`/`-N`/`--noreplace`/...,
+        // real `create_depgraph_params.py`) without `--oneshot` and a
         // world-candidate favorite exists (`actions.py:514-516` -- the
         // prompt moves into `depgraph.saveNomergeFavorites`, the
-        // rotation still runs, still no `Scheduler` write). Portuale has
-        // no world-favorites prompt, so the whole branch returns here; a
-        // selective all-noop run without `--oneshot` therefore skips the
-        // world-file record real would still make.
+        // rotation still runs, still no `Scheduler` write). The rotation
+        // half is restored below (`selective_noop_deferred`); the
+        // world-file record real still makes has no portuale counterpart
+        // on this arm yet, so a selective all-noop run without
+        // `--oneshot` still skips the record real would make.
         let mergecount = display_entries
             .iter()
             .filter_map(emerge_build::resume_cpv)
             .count();
+        // Backlog #232: real's selective-without-`--oneshot` world
+        // candidates -- a plain (non-`@`) favorite, which real's own
+        // `world_candidates` filter always keeps (`actions.py:498-513`),
+        // or a user `@set` (`selected_set_args`; real defaults
+        // `usersets` to `world-candidate = true`). Built-in
+        // `@world`/`@system`/`@profile` never count on either side.
+        let deferred = selective_noop_deferred(
+            selective,
+            oneshot,
+            atom_args.iter().any(|a| !a.starts_with('@')) || !selected_set_args.is_empty(),
+        );
         if nothing_to_merge(pretend, show_merge_list, mergecount) {
+            if deferred {
+                // Real `actions.py:524`: the blank line prints on the
+                // prompt shape too (`prompt` stays `None` on this arm,
+                // so `UserQuery` is skipped), then the run falls through
+                // to the `resume_backup` rotation and
+                // `saveNomergeFavorites` -- only `Scheduler` is skipped
+                // (`:664-675`). This rule restores the rotation (and the
+                // silent `EX_OK`); the world-file record follows in the
+                // next rule.
+                println!();
+                crate::mtimedb::rotate_resume_to_backup(&root);
+                return ExitCode::SUCCESS;
+            }
             // Real's own `print()` before the message
             // (`actions.py:518`): `--ask` reaches here with no blank
             // line printed yet (the #185 `actions.py:526` blank only
@@ -16543,6 +16592,25 @@ mod tests {
         assert!(!nothing_to_merge(false, true, 1));
         assert!(!nothing_to_merge(false, true, 7));
         assert!(!nothing_to_merge(true, false, 3));
+    }
+
+    #[test]
+    fn selective_noop_deferred_only_for_selective_non_oneshot_world_runs() {
+        // Backlog #232: real `_emerge/actions.py:514-516` -- the
+        // deferral (no message, rotation + world record, no `Scheduler`)
+        // fires only when the run is `selective` without `--oneshot`
+        // and a world-candidate favorite exists.
+        // (selective, oneshot, has_world_candidates) -> deferred.
+        assert!(selective_noop_deferred(true, false, true));
+        // `--oneshot` keeps the deferral at bay (the #225 shape).
+        assert!(!selective_noop_deferred(true, true, true));
+        // A non-selective all-noop run is the plain `Nothing to merge`
+        // shape even with world candidates around.
+        assert!(!selective_noop_deferred(false, false, true));
+        // No world candidate (bare args, or only `@world`/`@system`) is
+        // the plain `Nothing to merge` shape even when selective.
+        assert!(!selective_noop_deferred(true, false, false));
+        assert!(!selective_noop_deferred(false, true, false));
     }
 
     #[test]
