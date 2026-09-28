@@ -3142,6 +3142,8 @@ Dependency and target selection:
       --selective[=y|n]      same as --noreplace; =n cancels it
   -1, --oneshot              merge without recording the target in world / world_sets
   -o, --onlydeps             merge the targets' dependencies but not the targets themselves
+      --onlydeps-with-rdeps[=y|n]  include runtime deps under --onlydeps (default y)
+      --onlydeps-with-ideps[=y|n]  include install-time deps under --onlydeps --onlydeps-with-rdeps=n (default n)
   -O, --nodeps               ignore dependencies entirely
   -X, --exclude ATOMS        never act on a matching package (repeatable, space separated)
       --newrepo              reinstall if the package would now come from a different repo
@@ -9186,6 +9188,16 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut changed_use = false;
     let mut nodeps = false;
     let mut onlydeps = false;
+    // `--onlydeps-with-rdeps` / `--onlydeps-with-ideps` (real `main.py`
+    // `argument_options`, `choices: true_y_or_n` = `("True", "y", "n")`,
+    // no default): `true` = keep the key class, `false` = blank it for
+    // an `--onlydeps` root. Defaults are real's own (`man emerge.1`:
+    // with-rdeps enabled, with-ideps disabled); without `--onlydeps`
+    // both are inert (real only ever consults them behind
+    // `pkg.onlydeps`). See the parse arms below and
+    // `portage_repo::ResolveRequest`'s own doc comments.
+    let mut onlydeps_with_rdeps = true;
+    let mut onlydeps_with_ideps = false;
     // --oneshot/-1: don't record the target in the world file on a real
     // merge, and (at --pretend) don't colour it as a would-be world
     // member -- real `Scheduler._world_atom` / `_DisplayConfig.oneshot`.
@@ -9633,6 +9645,83 @@ pub fn run(args: &[String]) -> ExitCode {
         } else if arg == "--onlydeps" || arg == "-o" {
             onlydeps = true;
             i += 1;
+        } else if arg == "--onlydeps-with-rdeps" {
+            // Real `main.py`: `default_arg_opts` `y_or_n` (a bare flag
+            // inserts `"True"`) + `argument_options`
+            // `choices: true_y_or_n` (`"True"`, `"y"`, `"n"`). A
+            // space-separated value is only consumed when it is `y` or
+            // `n` (real `insert_optional_args`); anything else leaves
+            // the bare form (`"True"`) in place and the token to the
+            // positional parser -- the same shape every other
+            // optional-value flag in this loop already has. `=True` is
+            // accepted explicitly (real argparse's own `=` form); any
+            // other value is a real, immediate usage error (real
+            // argparse's own choices validation), rc 2 either way.
+            match args.get(i + 1).map(String::as_str) {
+                Some("y") => {
+                    onlydeps_with_rdeps = true;
+                    i += 2;
+                }
+                Some("n") => {
+                    onlydeps_with_rdeps = false;
+                    i += 2;
+                }
+                _ => {
+                    onlydeps_with_rdeps = true;
+                    i += 1;
+                }
+            }
+        } else if let Some(value) = arg.strip_prefix("--onlydeps-with-rdeps=") {
+            match value {
+                "y" | "True" => {
+                    onlydeps_with_rdeps = true;
+                    i += 1;
+                }
+                "n" => {
+                    onlydeps_with_rdeps = false;
+                    i += 1;
+                }
+                _ => {
+                    eprintln!(
+                        "emerge: option \"--onlydeps-with-rdeps\": invalid choice: {value:?} (choose from \"True\", \"y\", \"n\")"
+                    );
+                    return ExitCode::from(2);
+                }
+            }
+        } else if arg == "--onlydeps-with-ideps" {
+            // Same real shape as `--onlydeps-with-rdeps` above
+            // (`default_arg_opts` `y_or_n` + `choices: true_y_or_n`).
+            match args.get(i + 1).map(String::as_str) {
+                Some("y") => {
+                    onlydeps_with_ideps = true;
+                    i += 2;
+                }
+                Some("n") => {
+                    onlydeps_with_ideps = false;
+                    i += 2;
+                }
+                _ => {
+                    onlydeps_with_ideps = true;
+                    i += 1;
+                }
+            }
+        } else if let Some(value) = arg.strip_prefix("--onlydeps-with-ideps=") {
+            match value {
+                "y" | "True" => {
+                    onlydeps_with_ideps = true;
+                    i += 1;
+                }
+                "n" => {
+                    onlydeps_with_ideps = false;
+                    i += 1;
+                }
+                _ => {
+                    eprintln!(
+                        "emerge: option \"--onlydeps-with-ideps\": invalid choice: {value:?} (choose from \"True\", \"y\", \"n\")"
+                    );
+                    return ExitCode::from(2);
+                }
+            }
         } else if arg == "--oneshot" || arg == "-1" {
             oneshot = true;
             i += 1;
@@ -12197,6 +12286,9 @@ pub fn run(args: &[String]) -> ExitCode {
             newuse,
             changed_use,
             nodeps,
+            onlydeps,
+            onlydeps_with_rdeps,
+            onlydeps_with_ideps,
             update,
             deep,
             excluded: excluded.clone(),
