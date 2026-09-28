@@ -16794,8 +16794,12 @@ fn slot_operator_slot_change_probe(
 /// (`:2881`) writes `slot_operator_replace_installed` (for an installed
 /// parent, via `_replace_installed_atom`, `:2908-2911`) plus
 /// `_need_restart`. The non-installed-parent `slot_operator_mask_built`
-/// arm (`:2901-2903`) is the #212 cut (steers a parent the graph
-/// already fails on); the installed arm is this probe.
+/// arm (`:2901-2903`) is a cut of its own -- deliberately not ported
+/// here, and not covered by #212 (whose slot-change probe fires on a
+/// different trigger: a merge-bound binary's shifted built dep, real
+/// `:2381-2398`): a non-installed ebuild parent with an unsatisfied
+/// built dep has no unsatisfied-probe path at all. The installed arm
+/// below is this probe.
 ///
 /// Portuale has no in-walk backtrack for this shape, so the probe runs
 /// here, on a dead-end pass, next to the #211/#212 post-pass trigger:
@@ -16812,14 +16816,21 @@ fn slot_operator_slot_change_probe(
 ///   real's `_allow_backtracking` gate (`:3447`) and the scan's own bt0
 ///   gate: under `--backtrack=0` real fails the run (`emerge: there are
 ///   no ebuilds to satisfy ...`), and so does this port.
+/// - `dep.atom.package` (real `:3449`) is vacuous: parsed atoms always
+///   carry a package.
 /// - the parent must be installed (real `dep.parent.installed`) and
-///   must not sit in `runtime_pkg_mask` already (real `:3447-3448`,
-///   else the restart would loop); an installed parent matching
-///   `--exclude` refuses (real `:2818-2824`).
+///   the probed installed instance must not sit in `runtime_pkg_mask`
+///   already (real `:3447-3448`, per package instance, else the restart
+///   would loop); an installed parent matching `--exclude` refuses
+///   (real `:2818-2824`).
 /// - the replacement search is same-slot (real passes
 ///   `dep.parent.slot_atom`), visible (`is_visible`, standing in for
-///   `_pkg_visibility_check`), non-excluded (real `:3036-3040` skips),
-///   ebuild-only (installed instances never seed a reinstall).
+///   `_pkg_visibility_check`), non-excluded and unmasked per instance
+///   (real `:3036-3040` skips `pkg in _runtime_pkg_mask` then the
+///   excluded check), ebuild-only (installed instances never seed a
+///   reinstall).
+/// - `onlydeps` (real `:2844-2845`, threading `dep.onlydeps` into
+///   `_select_package`) is ignored: the re-resolve passes `&[]`.
 /// - the replacement's live dep keys are runtime keys always,
 ///   `DEPEND`/`BDEPEND` only `with_bdeps` (the scan's own key
 ///   discipline; real's `validated_atoms` spans every key).
@@ -16840,6 +16851,7 @@ fn slot_operator_unsatisfied_probe(
     repos: &[RepoConfig],
     entries: &[GraphEntry],
     slot_want: &HashMap<(String, String), Vec<String>>,
+    pullers: &SlotPullers,
     masked: &HashMap<(String, String), Vec<MaskEntry>>,
     with_bdeps: bool,
     excluded: &[String],
@@ -16847,6 +16859,26 @@ fn slot_operator_unsatisfied_probe(
 ) -> BTreeSet<(String, String)> {
     const RUNTIME_KEYS: [&str; 3] = ["RDEPEND", "IDEPEND", "PDEPEND"];
     const BUILD_KEYS: [&str; 2] = ["DEPEND", "BDEPEND"];
+    // Real `_iter_similar_available` (`:3036-3040`) and the firing gate
+    // (`:3447-3448`) both skip `pkg in _runtime_pkg_mask` per package
+    // instance (real keys by package object): a `!=cp-ver` negative
+    // screens only that version, and a `[binary]`-marked negative only
+    // ever screens the binary instance, never the same-version ebuild
+    // (real still yields the ebuild there; see `is_binary_only_mask`).
+    let masked_version = |cp: &(String, String), version: &str| -> bool {
+        masked.get(cp).is_some_and(|bucket| {
+            bucket.iter().any(|entry| {
+                if is_binary_only_mask(&entry.neg) {
+                    return false;
+                }
+                entry
+                    .neg
+                    .strip_prefix("!=")
+                    .and_then(split_cpv)
+                    .is_some_and(|(c, p, v)| c == cp.0 && p == cp.1 && v == version)
+            })
+        })
+    };
     let mut seeds: BTreeSet<(String, String)> = BTreeSet::new();
     for e in entries {
         if !matches!(e.outcome, PretendOutcome::NoVisibleCandidate) {
@@ -16856,119 +16888,125 @@ fn slot_operator_unsatisfied_probe(
         let Some(wants) = slot_want.get(&dep_cp) else {
             continue;
         };
-        for atom_str in wants {
-            let Some(atom) = portage_dep::parse_atom(atom_str) else {
-                continue;
-            };
-            if atom.blocker != portage_dep::Blocker::None {
+        // Fast pre-filter: real only ever probes a built-atom edge, so
+        // with no built-form want on this cp there is no edge to probe.
+        if !wants.iter().any(|atom_str| {
+            portage_dep::parse_atom(atom_str).is_some_and(|atom| {
+                atom.blocker == portage_dep::Blocker::None && is_built_slot_op(&atom)
+            })
+        }) {
+            continue;
+        }
+        for owner in &e.required_by {
+            // Real probes one dep edge (parent -> the built atom,
+            // `:3447-3458` into the `:2817` probe): seed only an owner
+            // whose own recorded want is the built atom -- this pass's
+            // puller triples pair owner and atom text -- never the
+            // cp-level `required_by` x `slot_want` cross product. (A
+            // USE-conditional built want never parses here; that corner
+            // rides the filed conditional-`:=` cut.)
+            let paired = pullers.get(&dep_cp).is_some_and(|triples| {
+                triples.iter().any(|(pc, pp, _, atom_text)| {
+                    pc == &owner.0
+                        && pp == &owner.1
+                        && portage_dep::parse_atom(atom_text).is_some_and(|atom| {
+                            atom.blocker == portage_dep::Blocker::None
+                                && is_built_slot_op(&atom)
+                                && atom.category == dep_cp.0
+                                && atom.package == dep_cp.1
+                        })
+                })
+            });
+            if !paired {
                 continue;
             }
-            // Real `:3451`: only a *built* slot-operator dep qualifies.
-            if !is_built_slot_op(&atom) {
+            // Real `dep.parent.installed`.
+            let installed = installed_candidates(root, &owner.0, &owner.1);
+            if installed.is_empty() {
                 continue;
             }
-            let child_cp = (atom.category.clone(), atom.package.clone());
-            for owner in &e.required_by {
-                // Real `dep.parent.installed`.
-                let installed = installed_candidates(root, &owner.0, &owner.1);
-                if installed.is_empty() {
-                    continue;
-                }
-                // Real `:3447-3448`: a parent already in
+            // Real `:2818-2824`: an installed parent matching
+            // `--exclude` refuses the probe.
+            let excluded_parent = installed.iter().any(|(v, _, _)| {
+                let q_str = format!("{}/{}-{v}", owner.0, owner.1);
+                excluded
+                    .iter()
+                    .any(|ex| matches_config_entry(ex, &q_str, &owner.0, &owner.1))
+            });
+            if excluded_parent {
+                continue;
+            }
+            for (installed_version, parent_slot, _) in &installed {
+                // Real `:3447-3448`: an installed instance already in
                 // `runtime_pkg_mask` would restart-loop.
-                if masked.contains_key(owner) {
+                if masked_version(owner, installed_version) {
                     continue;
                 }
-                // Real `:2818-2824`: an installed parent matching
-                // `--exclude` refuses the probe.
-                let excluded_parent = installed.iter().any(|(v, _, _)| {
-                    let q_str = format!("{}/{}-{v}", owner.0, owner.1);
-                    excluded
+                let Ok(tree) = list_candidates(repos, &owner.0, &owner.1) else {
+                    continue;
+                };
+                let mut hit = false;
+                for cand in tree.iter().filter(|c| {
+                    c.source == CandidateSource::Ebuild
+                        && c.slot == *parent_slot
+                        && is_visible(c, &owner.0, &owner.1, config)
+                        && !masked_version(owner, &c.version)
+                }) {
+                    let cand_str = format!(
+                        "{}/{}-{}:{}/{}::{}",
+                        owner.0, owner.1, cand.version, cand.slot, cand.sub_slot, cand.repo_name
+                    );
+                    if excluded
                         .iter()
-                        .any(|ex| matches_config_entry(ex, &q_str, &owner.0, &owner.1))
-                });
-                if excluded_parent {
-                    continue;
-                }
-                for (_, parent_slot, _) in &installed {
-                    let Ok(tree) = list_candidates(repos, &owner.0, &owner.1) else {
+                        .any(|ex| matches_config_entry(ex, &cand_str, &owner.0, &owner.1))
+                    {
+                        continue;
+                    }
+                    let pf = format!("{}-{}", owner.1, cand.version);
+                    let Ok(meta) = repo_aux_metadata(&cand.repo_location, &owner.0, &pf) else {
                         continue;
                     };
-                    let mut hit = false;
-                    for cand in tree.iter().filter(|c| {
-                        c.source == CandidateSource::Ebuild
-                            && c.slot == *parent_slot
-                            && is_visible(c, &owner.0, &owner.1, config)
-                    }) {
-                        let cand_str = format!(
-                            "{}/{}-{}:{}/{}::{}",
-                            owner.0,
-                            owner.1,
-                            cand.version,
-                            cand.slot,
-                            cand.sub_slot,
-                            cand.repo_name
-                        );
-                        if excluded
-                            .iter()
-                            .any(|ex| matches_config_entry(ex, &cand_str, &owner.0, &owner.1))
-                        {
-                            continue;
-                        }
-                        let pf = format!("{}-{}", owner.1, cand.version);
-                        let Ok(meta) = repo_aux_metadata(&cand.repo_location, &owner.0, &pf) else {
+                    let use_flags = effective_use_flags_uncached(
+                        config,
+                        meta.get("IUSE").map(String::as_str).unwrap_or_default(),
+                        &cand.keywords,
+                        &cand_str,
+                        &owner.0,
+                        &owner.1,
+                    );
+                    let mut keys: Vec<&str> = RUNTIME_KEYS.to_vec();
+                    if with_bdeps {
+                        keys.extend(BUILD_KEYS);
+                    }
+                    for key in keys {
+                        let Some(tokens) = flat_dep_atoms(
+                            meta.get(key).map(String::as_str).unwrap_or_default(),
+                            &use_flags,
+                        ) else {
                             continue;
                         };
-                        let use_flags = effective_use_flags_uncached(
-                            config,
-                            meta.get("IUSE").map(String::as_str).unwrap_or_default(),
-                            &cand.keywords,
-                            &cand_str,
-                            &owner.0,
-                            &owner.1,
-                        );
-                        let mut keys: Vec<&str> = RUNTIME_KEYS.to_vec();
-                        if with_bdeps {
-                            keys.extend(BUILD_KEYS);
-                        }
-                        for key in keys {
-                            let Some(tokens) = flat_dep_atoms(
-                                meta.get(key).map(String::as_str).unwrap_or_default(),
-                                &use_flags,
-                            ) else {
+                        for token in tokens {
+                            let Some(live) = portage_dep::parse_atom(&token) else {
                                 continue;
                             };
-                            for token in tokens {
-                                let Some(live) = portage_dep::parse_atom(&token) else {
-                                    continue;
-                                };
-                                // Real `:2835-2839`: a `=`-operator,
-                                // non-blocker atom on the dep's own cp.
-                                if live.slot_operator != Some(portage_dep::SlotOperator::Equals)
-                                    || live.blocker != portage_dep::Blocker::None
-                                    || live.category != child_cp.0
-                                    || live.package != child_cp.1
-                                {
-                                    continue;
-                                }
-                                // Real `:2843-2845`: USE discarded,
-                                // then `_select_package` -- visible
-                                // tree or installed.
-                                let stripped = portage_dep::without_use(&token).to_string();
-                                if !visible_tree_matches(repos, &stripped, config, &[]).is_empty()
-                                    || best_installed_for_atom(
-                                        root,
-                                        &stripped,
-                                        &child_cp.0,
-                                        &child_cp.1,
-                                    )
-                                    .is_some()
-                                {
-                                    hit = true;
-                                    break;
-                                }
+                            // Real `:2835-2839`: a `=`-operator,
+                            // non-blocker atom on the dep's own cp.
+                            if live.slot_operator != Some(portage_dep::SlotOperator::Equals)
+                                || live.blocker != portage_dep::Blocker::None
+                                || live.category != dep_cp.0
+                                || live.package != dep_cp.1
+                            {
+                                continue;
                             }
-                            if hit {
+                            // Real `:2843-2845`: USE discarded,
+                            // then `_select_package` -- visible
+                            // tree or installed.
+                            let stripped = portage_dep::without_use(&token).to_string();
+                            if !visible_tree_matches(repos, &stripped, config, &[]).is_empty()
+                                || best_installed_for_atom(root, &stripped, &dep_cp.0, &dep_cp.1)
+                                    .is_some()
+                            {
+                                hit = true;
                                 break;
                             }
                         }
@@ -16977,9 +17015,12 @@ fn slot_operator_unsatisfied_probe(
                         }
                     }
                     if hit {
-                        seeds.insert(owner.clone());
                         break;
                     }
+                }
+                if hit {
+                    seeds.insert(owner.clone());
+                    break;
                 }
             }
         }
@@ -30024,6 +30065,7 @@ fn collect_feedback(
             &ctx.repos,
             &pass.entries,
             &pass.slot_want,
+            &pass.slot_pullers,
             &grown.runtime_pkg_mask,
             ctx.with_bdeps,
             ctx.excluded,
@@ -47188,88 +47230,135 @@ mod tests {
     /// (`_emerge/depgraph.py:2817`, fired at `:3447-3458`) -- a dead-end
     /// pass whose `NoVisibleCandidate` entry is an installed owner's
     /// unsatisfiable built `:=` dep seeds that owner when a replacement
-    /// parent (same slot, visible) carries a satisfiable live `:=` on
-    /// the same child cp. Guards: the atom must be built-form (a plain
-    /// `:=` never qualifies), the owner must be installed, an already
-    /// masked owner stays dead (else the restart would loop), an
-    /// `--exclude`d owner refuses, and with no replacement the pass
+    /// parent (same slot, visible, unmasked per instance like real's
+    /// `_iter_similar_available` `:3036-3040`) carries a satisfiable
+    /// live `:=` on the same child cp. Guards: only an owner whose own
+    /// recorded want is the built atom seeds (real probes one dep edge,
+    //  so a plain-atom co-owner never does), the atom must be
+    /// built-form (a plain `:=` never qualifies), the owner must be
+    /// installed, an already masked installed instance stays dead (else
+    /// the restart would loop), an `--exclude`d owner refuses, and with
+    /// no (or a different-slot, or a fully masked) replacement the pass
     /// stays a dead end.
     #[test]
     fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
         use md5::Digest as _;
-        let base = std::env::temp_dir().join(format!(
-            "portage-repo-slotop-unsat-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        // vdb: installed `unsatpar-1` bound to the abandoned provider
-        // slot (EAPI-bearing, like the bed fragment).
-        let d = base.join("var/db/pkg/app-misc/unsatpar-1");
-        fs::create_dir_all(&d).unwrap();
-        fs::write(d.join("CATEGORY"), "app-misc\n").unwrap();
-        fs::write(d.join("SLOT"), "0\n").unwrap();
-        fs::write(d.join("repository"), "testrepo\n").unwrap();
-        fs::write(d.join("EAPI"), "8\n").unwrap();
-        fs::write(d.join("RDEPEND"), ">=app-misc/unsatprov-1:0/1=\n").unwrap();
-        // Tree: `unsatprov-2` at slot 2/2, plus the parent's own live
-        // ebuild carrying the satisfiable `:=`.
-        let repo = base.join("repo");
-        let write_pkg = |pkg: &str, pv: &str, slot: &str, rdepend: &str| {
-            let dir = repo.join("app-misc").join(pkg);
-            std::fs::create_dir_all(&dir).unwrap();
-            let body = format!(
-                "EAPI=8\nDESCRIPTION=\"215 probe\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\nRDEPEND=\"{rdepend}\"\n"
-            );
-            std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
-            let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
-            let entry = format!(
-                "DEFINED_PHASES=-\nDESCRIPTION=215 probe\nEAPI=8\nKEYWORDS=amd64\nRDEPEND={rdepend}\nSLOT={slot}\n_md5_={md5}\n"
-            );
-            let cachedir = repo.join("metadata/md5-cache/app-misc");
-            std::fs::create_dir_all(&cachedir).unwrap();
-            std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
-        };
-        write_pkg("unsatprov", "2", "2/2", "");
-        write_pkg("unsatpar", "1", "0", "app-misc/unsatprov:=");
-        let repos = vec![RepoConfig {
-            name: "testrepo".to_string(),
-            location: repo.clone(),
-            priority: 0,
-            is_main: true,
-            masters: vec![],
-            profile_formats: vec![],
-            cache_formats: vec![],
-            aliases: vec![],
-            sync_type: None,
-            sync_uri: None,
-            volatile: false,
-            module_specific_options: vec![],
-        }];
-        let config = test_config();
+        // One scratch root per shape: vdb owner(s) plus a repo holding
+        // `unsatprov-2` (slot 2/2) and the requested parent ebuilds
+        // (each carrying the satisfiable live `:=`).
+        fn unsat_base(
+            tag: &str,
+            vdb: &[(&str, &str)],
+            pars: &[(&str, &str, &str)],
+        ) -> (PathBuf, Vec<RepoConfig>) {
+            let base = std::env::temp_dir().join(format!(
+                "portage-repo-slotop-unsat-{tag}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            for (pkg, rdepend) in vdb {
+                // EAPI-bearing vdb, like the bed fragment.
+                let d = base.join(format!("var/db/pkg/app-misc/{pkg}-1"));
+                fs::create_dir_all(&d).unwrap();
+                fs::write(d.join("CATEGORY"), "app-misc\n").unwrap();
+                fs::write(d.join("SLOT"), "0\n").unwrap();
+                fs::write(d.join("repository"), "testrepo\n").unwrap();
+                fs::write(d.join("EAPI"), "8\n").unwrap();
+                fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+            }
+            let repo = base.join("repo");
+            let write_pkg = |pkg: &str, pv: &str, slot: &str, rdepend: &str| {
+                let dir = repo.join("app-misc").join(pkg);
+                std::fs::create_dir_all(&dir).unwrap();
+                let body = format!(
+                    "EAPI=8\nDESCRIPTION=\"215 probe\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\nRDEPEND=\"{rdepend}\"\n"
+                );
+                std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
+                let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+                let entry = format!(
+                    "DEFINED_PHASES=-\nDESCRIPTION=215 probe\nEAPI=8\nKEYWORDS=amd64\nRDEPEND={rdepend}\nSLOT={slot}\n_md5_={md5}\n"
+                );
+                let cachedir = repo.join("metadata/md5-cache/app-misc");
+                std::fs::create_dir_all(&cachedir).unwrap();
+                std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+            };
+            write_pkg("unsatprov", "2", "2/2", "");
+            for (pkg, pv, slot) in pars {
+                write_pkg(pkg, pv, slot, "app-misc/unsatprov:=");
+            }
+            let repos = vec![RepoConfig {
+                name: "testrepo".to_string(),
+                location: repo.clone(),
+                priority: 0,
+                is_main: true,
+                masters: vec![],
+                profile_formats: vec![],
+                cache_formats: vec![],
+                aliases: vec![],
+                sync_type: None,
+                sync_uri: None,
+                volatile: false,
+                module_specific_options: vec![],
+            }];
+            (base, repos)
+        }
         // The dead-end pass: the provider cp resolves to
-        // `NoVisibleCandidate`, pulled by the installed parent.
-        let mut nvc = graph_entry("app-misc", "unsatprov", "2");
-        nvc.outcome = PretendOutcome::NoVisibleCandidate;
-        nvc.required_by = vec![("app-misc".to_string(), "unsatpar".to_string())];
-        let entries = vec![nvc];
-        let mut slot_want: HashMap<(String, String), Vec<String>> = HashMap::new();
-        slot_want.insert(
-            ("app-misc".to_string(), "unsatprov".to_string()),
-            vec![">=app-misc/unsatprov-1:0/1=".to_string()],
+        // `NoVisibleCandidate`, pulled by the installed parent's own
+        // built want (`>=app-misc/unsatprov-1:0/1=`).
+        type UnsatInputs = (
+            Vec<GraphEntry>,
+            HashMap<(String, String), Vec<String>>,
+            SlotPullers,
         );
+        fn unsat_inputs(owners: &[(&str, &str)]) -> UnsatInputs {
+            let mut nvc = graph_entry("app-misc", "unsatprov", "2");
+            nvc.outcome = PretendOutcome::NoVisibleCandidate;
+            nvc.required_by = owners
+                .iter()
+                .map(|(pkg, _)| ("app-misc".to_string(), (*pkg).to_string()))
+                .collect();
+            let prov = ("app-misc".to_string(), "unsatprov".to_string());
+            let mut slot_want: HashMap<(String, String), Vec<String>> = HashMap::new();
+            slot_want.insert(
+                prov.clone(),
+                owners.iter().map(|(_, atom)| (*atom).to_string()).collect(),
+            );
+            let mut pullers: SlotPullers = HashMap::new();
+            pullers.insert(
+                prov,
+                owners
+                    .iter()
+                    .map(|(pkg, atom)| {
+                        (
+                            "app-misc".to_string(),
+                            (*pkg).to_string(),
+                            "1".to_string(),
+                            (*atom).to_string(),
+                        )
+                    })
+                    .collect(),
+            );
+            (vec![nvc], slot_want, pullers)
+        }
+        let config = test_config();
         let masked: HashMap<(String, String), Vec<MaskEntry>> = HashMap::new();
         let par = ("app-misc".to_string(), "unsatpar".to_string());
+        let built = ">=app-misc/unsatprov-1:0/1=";
+        let plain = "app-misc/unsatprov:=";
         // Positive: the replacement parent's live `:=` resolves, so the
         // installed owner seeds.
+        let (base, repos) = unsat_base("base", &[("unsatpar", built)], &[("unsatpar", "1", "0")]);
+        let (entries, slot_want, pullers) = unsat_inputs(&[("unsatpar", built)]);
         assert_eq!(
             slot_operator_unsatisfied_probe(
                 &base,
                 &repos,
                 &entries,
                 &slot_want,
+                &pullers,
                 &masked,
                 false,
                 &[],
@@ -47278,11 +47367,37 @@ mod tests {
             BTreeSet::from([par.clone()]),
             "installed owner with an unsatisfiable built dep and a live replacement seeds"
         );
+        // Real probes one dep edge: a co-owner pulling the same cp via a
+        // plain atom never seeds, even installed with its own live
+        // replacement.
+        let (base_x, repos_x) = unsat_base(
+            "cross",
+            &[("unsatpar", built), ("unsatcona", plain)],
+            &[("unsatpar", "1", "0"), ("unsatcona", "1", "0")],
+        );
+        let (entries_x, slot_want_x, pullers_x) =
+            unsat_inputs(&[("unsatcona", plain), ("unsatpar", built)]);
+        assert_eq!(
+            slot_operator_unsatisfied_probe(
+                &base_x,
+                &repos_x,
+                &entries_x,
+                &slot_want_x,
+                &pullers_x,
+                &masked,
+                false,
+                &[],
+                &config,
+            ),
+            BTreeSet::from([par.clone()]),
+            "only the owner whose own want is the built atom seeds"
+        );
         // A plain (unbuilt) `:=` never qualifies, even on the same edge.
+        let (_, _, pullers_plain) = unsat_inputs(&[("unsatpar", plain)]);
         let mut plain_want = slot_want.clone();
         plain_want.insert(
             ("app-misc".to_string(), "unsatprov".to_string()),
-            vec!["app-misc/unsatprov:=".to_string()],
+            vec![plain.to_string()],
         );
         assert!(
             slot_operator_unsatisfied_probe(
@@ -47290,6 +47405,7 @@ mod tests {
                 &repos,
                 &entries,
                 &plain_want,
+                &pullers_plain,
                 &masked,
                 false,
                 &[],
@@ -47298,7 +47414,8 @@ mod tests {
             .is_empty(),
             "unbuilt atoms are not probe fuel"
         );
-        // An already-masked owner stays dead (else the restart loops).
+        // An already-masked installed instance stays dead (else the
+        // restart loops, real `:3447-3448`).
         let mut masked_owner = masked.clone();
         masked_owner.insert(
             par.clone(),
@@ -47313,6 +47430,7 @@ mod tests {
                 &repos,
                 &entries,
                 &slot_want,
+                &pullers,
                 &masked_owner,
                 false,
                 &[],
@@ -47321,6 +47439,60 @@ mod tests {
             .is_empty(),
             "masked owners never re-seed"
         );
+        // A masked replacement candidate yields no seed either (real
+        // `_iter_similar_available` `:3036-3040`), while the installed
+        // instance itself stays probed: masking only the v2 candidate
+        // still seeds through v1.
+        let (base_m, repos_m) = unsat_base(
+            "maskedcand",
+            &[("unsatpar", built)],
+            &[("unsatpar", "1", "0"), ("unsatpar", "2", "0")],
+        );
+        let mut masked_cand = masked.clone();
+        masked_cand.insert(
+            par.clone(),
+            vec![MaskEntry {
+                neg: "!=app-misc/unsatpar-2".to_string(),
+                reason: MaskReason::SlotConflict { parents: vec![] },
+            }],
+        );
+        assert_eq!(
+            slot_operator_unsatisfied_probe(
+                &base_m,
+                &repos_m,
+                &entries,
+                &slot_want,
+                &pullers,
+                &masked_cand,
+                false,
+                &[],
+                &config,
+            ),
+            BTreeSet::from([par.clone()]),
+            "masking one candidate version still seeds through the other"
+        );
+        // ... but with the only same-slot candidate masked, the pass
+        // stays a dead end even though the owner instance is unmasked.
+        let (base_m2, repos_m2) = unsat_base(
+            "maskedonly",
+            &[("unsatpar", built)],
+            &[("unsatpar", "2", "0")],
+        );
+        assert!(
+            slot_operator_unsatisfied_probe(
+                &base_m2,
+                &repos_m2,
+                &entries,
+                &slot_want,
+                &pullers,
+                &masked_cand,
+                false,
+                &[],
+                &config,
+            )
+            .is_empty(),
+            "a masked replacement yields no seed"
+        );
         // An `--exclude`d owner refuses, like real `:2818-2824`.
         assert!(
             slot_operator_unsatisfied_probe(
@@ -47328,6 +47500,7 @@ mod tests {
                 &repos,
                 &entries,
                 &slot_want,
+                &pullers,
                 &masked,
                 false,
                 &["app-misc/unsatpar".to_string()],
@@ -47336,7 +47509,64 @@ mod tests {
             .is_empty(),
             "excluded owners refuse the probe"
         );
-        let _ = fs::remove_dir_all(&base);
+        // With no replacement ebuild the pass stays a dead end.
+        let (base_n, repos_n) = unsat_base("norepl", &[("unsatpar", built)], &[]);
+        assert!(
+            slot_operator_unsatisfied_probe(
+                &base_n,
+                &repos_n,
+                &entries,
+                &slot_want,
+                &pullers,
+                &masked,
+                false,
+                &[],
+                &config,
+            )
+            .is_empty(),
+            "no replacement stays a dead end"
+        );
+        // A replacement in a different slot is not a replacement.
+        let (base_s, repos_s) = unsat_base(
+            "diffslot",
+            &[("unsatpar", built)],
+            &[("unsatpar", "2", "1")],
+        );
+        assert!(
+            slot_operator_unsatisfied_probe(
+                &base_s,
+                &repos_s,
+                &entries,
+                &slot_want,
+                &pullers,
+                &masked,
+                false,
+                &[],
+                &config,
+            )
+            .is_empty(),
+            "a different-slot replacement stays a dead end"
+        );
+        // An owner with no installed instance is not a parent at all.
+        let (base_u, repos_u) = unsat_base("uninstalled", &[], &[("unsatpar", "1", "0")]);
+        assert!(
+            slot_operator_unsatisfied_probe(
+                &base_u,
+                &repos_u,
+                &entries,
+                &slot_want,
+                &pullers,
+                &masked,
+                false,
+                &[],
+                &config,
+            )
+            .is_empty(),
+            "uninstalled owners never seed"
+        );
+        for dir in [&base, &base_x, &base_m, &base_m2, &base_n, &base_s, &base_u] {
+            let _ = fs::remove_dir_all(dir);
+        }
     }
 
     /// Backlog #211 (v2 `#24b`): real `_slot_operator_update_probe`'s
