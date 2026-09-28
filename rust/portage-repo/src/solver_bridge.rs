@@ -722,7 +722,10 @@ fn graph_result_from_order(
     // same kind map here: a build-time edge no installed package
     // satisfies is hard (`best_installed_for_atom`, the walk's own
     // gate), anything else soft -- blockers never reach the map on
-    // either side (both skip them before recording). `slot_conflicts`
+    // either side (both skip them before recording). `find_hard_cycles`
+    // additionally reads the entries' own `deps` for the #228
+    // slot-operator arm, so the bridge inherits it with no extra map
+    // state here. `slot_conflicts`
     // and the `autounmask_*` lists stay empty on purpose: an engine
     // solution picks a single version per CPN, so a successful plan
     // admits no same-slot divergence to report, and no relaxation loop
@@ -745,7 +748,7 @@ fn graph_result_from_order(
             }
         }
     }
-    let circular_deps = super::find_hard_cycles(&entries, &edge_kinds);
+    let circular_deps = super::find_hard_cycles(&entries, &edge_kinds, &req.root);
     // Elementary-cycle enumeration for the `large_cycle_count` trailer
     // and cycle-only re-display, same as the walk path: only a reported
     // hard cycle pays for the report build.
@@ -785,6 +788,11 @@ fn graph_result_from_order(
         autounmask_use_changes: Vec::new(),
         autounmask_license_changes: Vec::new(),
         autounmask_mask_changes: Vec::new(),
+        // Same standing empty: no relaxation loop ran whose flips a
+        // "terminated early" gate could hinge on (backlog #217: no
+        // changes, so `autounmask_backtrack_disabled()` is False
+        // regardless).
+        autounmask_no_clean_tail: false,
         abi_rebuilds,
         circular_deps,
         large_cycle_count,

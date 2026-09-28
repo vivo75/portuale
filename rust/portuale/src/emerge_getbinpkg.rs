@@ -1,21 +1,24 @@
-// Real `emerge --getbinpkg <atom>` / `--getbinpkgonly <atom>` execution,
-// WITHOUT `--pretend`: refresh each remote binhost's live index, resolve
-// the graph, then merge every resolved entry -- dispatching per entry on
-// its `source` (a `Binary` candidate is downloaded+merged, anything else
-// is built+merged from source).
+// Real `emerge --getbinpkg <atom>` / `--getbinpkgonly <atom>` execution:
+// refresh each remote binhost's live index (in `--pretend` exactly like
+// in a real merge, backlog #192), resolve the graph, then merge every
+// resolved entry -- dispatching per entry on its `source` (a `Binary`
+// candidate is downloaded+merged, anything else is built+merged from
+// source).
 //
 // The `--pretend` half of `--getbinpkg`/`--getbinpkgonly` already shipped
 // (real `bintree`'s `binrepos.conf`/`PORTAGE_BINHOST` parsing, remote
-// binhost candidates from each binhost's *cached* `Packages` index, the
-// `g` bracket column). This module is the other half: the live index
+// binhost candidates from each binhost's `Packages` index, the `g`
+// bracket column). This module is the other half: the live index
 // refresh + the file download + the merge.
 //
-//   - `refresh_binhost_indexes`: real `bintree._populate_remote`, for
-//     `http(s)` binhosts -- `wget <sync_uri>/Packages` into the same
-//     `<EROOT>/var/cache/edb/binhost/<host>/<path>/Packages` cache
-//     location `list_remote_binary_candidates` reads. A `file://` binhost
-//     needs no refresh (its `packages_dir` IS the source). Run BEFORE
-//     resolution, so the resolver sees the fresh pool.
+//   - `refresh_binhost_indexes`: real `bintree._populate_remote` --
+//     fetch `<sync_uri>/Packages` (a `file://` binhost is read from its
+//     own directory) and best-effort-cache it at the same
+//     `<EROOT>/var/cache/edb/binhost/<host>/<path>/Packages` location
+//     `list_remote_binary_candidates` reads, with the fetched index
+//     handed to the resolver in memory. Runs BEFORE resolution, in
+//     `--pretend` exactly like in a real merge, so the resolver sees
+//     the fresh pool.
 //   - `run_merge_plan`: iterate the resolved entries (already in real
 //     topological merge order), and per entry -- `Binary` ->
 //     `merge_one_binary_entry` (find its `Packages` record via
@@ -111,114 +114,495 @@ pub(crate) fn binhost_fetch_warning(binrepo_name: &str, sync_uri: &str, detail: 
     )
 }
 
-/// Real `bintree._populate_remote`: for each `http(s)` binrepo, download
-/// its live `Packages` index into the local edb cache
-/// (`BinRepo::packages_dir`). A `file://` binrepo is left as-is.
+/// Real `bintree._populate_remote_repo`'s no-`TIMESTAMP` drop
+/// (`bintree.py:1722-1732`): `\n\n!!! [<name>] Binhost package index
+///  has no TIMESTAMP field.\n` on stderr. The double space is real's
+/// own implicit concatenation (`"index " " has no ..."`), kept
+/// byte-identical.
+pub(crate) fn binhost_no_timestamp_warning(binrepo_name: &str) -> String {
+    format!("\n\n!!! [{binrepo_name}] Binhost package index  has no TIMESTAMP field.\n")
+}
+
+/// Real `bintree._populate_remote_repo`'s version-gate drop
+/// (`bintree.py:1735-1744`): `\n\n!!! [<name>] Binhost package index
+/// version is not supported: '<ver>'\n` on stderr, where `<ver>` is
+/// the raw `VERSION` header (`'None'` when absent -- real formats
+/// `header.get("VERSION")`, i.e. `None`).
+pub(crate) fn binhost_unsupported_version_warning(
+    binrepo_name: &str,
+    version: Option<&str>,
+) -> String {
+    format!(
+        "\n\n!!! [{binrepo_name}] Binhost package index version is not supported: '{}'\n",
+        version.unwrap_or("None")
+    )
+}
+
+/// Real `bintree._populate_remote`: refresh every binrepo's live
+/// `Packages` index and hand it to the resolver in memory -- in
+/// `--pretend` exactly like in a real merge (real
+/// `actions.py:3752` passes `getbinpkg_refresh=True` unconditionally;
+/// `pretend` only selects the stale-fallback message, never skips the
+/// fetch, `bintree.py:917-920`, backlog #192).
 ///
-/// A failed refresh is NON-FATAL (backlog #175): real prints its
-/// `!!! [<repo>] Error fetching binhost package info` /
-/// `!!! [<repo>] <error>` pair to stderr and resolves against whatever
-/// local pool exists (`pkgindex = None`, `bintree.py:1809`) -- a 500ing
-/// binhost with an empty `PKGDIR` falls back to the ebuild, it never
-/// aborts the run. So this returns nothing: each failure is warned
-/// about (via [`binhost_fetch_warning`], never wget's raw transcript)
-/// and resolution proceeds.
-pub fn refresh_binhost_indexes(binrepos: &[BinRepo], root: &Path) {
+/// Per binrepo (real `_populate_remote_repo`):
+///   - a `frozen` repo, or one whose cached index is still within its
+///     `TTL`, is used from cache with real's own
+///     `[name] Local copy of remote index is ... and will be used.`
+///     note (stdout);
+///   - otherwise the remote index is fetched (a `file://` repo is read
+///     from its own directory, `Packages.gz` first like real;
+///     `http(s)` tries `Packages.gz` / `Packages.zst` / `Packages`);
+///   - a fetched index with a `TIMESTAMP` no newer than the cache keeps
+///     the cache silently; a newer one (or any fetch with no cache to
+///     compare against) is cached with a fresh `DOWNLOAD_TIMESTAMP` and
+///     used -- the cache write is best-effort (an unwritable cache dir
+///     is ignored, `bintree.py:1819-1823`; only a write error on a
+///     *writable* dir warns, where real would re-raise);
+///   - a failed fetch warns real's `!!! [repo] Error fetching ...` pair
+///     (stderr) and then -- `--pretend`: real's
+///     `[name] Local copy of unavailable remote index will be used due
+///     to --pretend` note (stdout), resolving from the stale cache; --
+///     real merge: nothing more, and even a stale cache is dropped (real
+///     `pkgindex = None`, `bintree.py:1809`).
+///
+/// A failed refresh is NON-FATAL either way (backlog #175): resolution
+/// proceeds against whatever pool the rules above leave.
+///
+/// Deliberate narrowings (all documented, none invented parity):
+///   - conditional-GET (`If-Modified-Since` / `304 Not Modified`) is not
+///     sent -- wget always downloads the body, so a repeat run against
+///     an unchanged index re-downloads where real would print
+///     `... is up-to-date and will be used.` Resolution is identical
+///     (the `TIMESTAMP` compare keeps the cache silently either way);
+///     only that one stdout line differs, and only across runs.
+///   - a fetched index with no `TIMESTAMP` header, or an
+///     unparseable one, is dropped with real's own
+///     `!!! [name] Binhost package index  has no TIMESTAMP field.`
+///     (stderr, `bintree.py:1722-1732` -- the double space is real's
+///     own `"index " " has"` concatenation; real only tests falsiness
+///     there, so an unparseable stamp takes the same arm rather than
+///     real's `int()` `ValueError` unwind); a fetched index whose
+///     `VERSION` is missing, unparseable, or newer than real's
+///     `_pkgindex_version` (`0`, `bintree.py:2429-2437`) is dropped
+///     with `!!! [name] Binhost package index version is not
+///     supported: '<ver>' (`bintree.py:1735-1744`, `'None'` when the
+///     header is absent). Either drop discards even a stale cache for
+///     the run (real `pkgindex = None`), in `--pretend` exactly like
+///     in a real merge -- real draws no pretend distinction here.
+///   - `--verbose`'s `Last-Modified` mismatch warning, `ssh://`
+///     transports, `getbinpkg-exclude`/`-include` pool filtering and the
+///     trust-helper/`gpkg_only` gating are not modelled.
+pub fn refresh_binhost_indexes(binrepos: &[BinRepo], root: &Path, pretend: bool) {
     for binrepo in binrepos {
-        if let Some(warning) = refresh_one_binrepo(binrepo, root) {
+        let outcome = refresh_one_binrepo(binrepo, root, pretend);
+        if let Some(warning) = outcome.stderr_warning {
             eprint!("{warning}");
+        }
+        if let Some(note) = outcome.stdout_note {
+            print!("{note}");
         }
     }
 }
 
-/// One binrepo of [`refresh_binhost_indexes`]: `None` once its live
-/// index is cached (or for a `file://` binrepo, which needs no
-/// refresh), else real's `!!! [<repo>] ...` warning block for the
-/// caller to print to stderr. Returning the block (instead of
-/// printing it) keeps the shaping testable.
-fn refresh_one_binrepo(binrepo: &BinRepo, root: &Path) -> Option<String> {
+/// One binrepo of [`refresh_binhost_indexes`]: installs that repo's
+/// run index via [`portage_repo::set_remote_binary_index_override`]
+/// (keyed by the same `packages_dir` the resolver reads) and returns
+/// real's messages for the caller to print -- the `!!! [repo] ...`
+/// warning block for stderr, the `Local copy ...` note for stdout.
+struct RefreshOutcome {
+    stderr_warning: Option<String>,
+    stdout_note: Option<String>,
+}
+
+/// Real `bintree._populate_remote_repo`'s own cache file:
+/// `<EROOT>/var/cache/edb/binhost/<host>/<url-path>/Packages`
+/// (`bintree.py:1497-1504`). For `http(s)`/`ssh` that is exactly
+/// [`BinRepo::packages_dir`]; for `file://` it is the EROOT-side copy
+/// (real caches even local indexes: `host` is empty, so
+/// `file:///srv/pkgs` caches under
+/// `<EROOT>/var/cache/edb/binhost/srv/pkgs/Packages`).
+fn edb_cache_packages_file(root: &Path, sync_uri: &str) -> std::path::PathBuf {
+    let uri = sync_uri.trim_end_matches('/');
+    if let Some(rest) = uri.strip_prefix("file://") {
+        return root
+            .join("var/cache/edb/binhost")
+            .join(rest.trim_start_matches('/'))
+            .join("Packages");
+    }
+    // Real `BinRepo::packages_dir` (kept as the single mapping so the
+    // cache is always written where the resolver reads).
+    BinRepo {
+        name: String::new(),
+        sync_uri: uri.to_string(),
+        priority: 0,
+        location: None,
+        verify_signature: true,
+        frozen: false,
+    }
+    .packages_dir(root)
+    .join("Packages")
+}
+fn refresh_one_binrepo(binrepo: &BinRepo, root: &Path, pretend: bool) -> RefreshOutcome {
     // Real warns with `base_url` as configured (`bintree.py:1488,1795`):
     // only `uri` (the trailing-`/`-stripped form) builds fetch URLs,
-    // every warning below prints `raw`.
+    // every message below prints `raw`.
     let raw = binrepo.sync_uri.as_str();
     let uri = raw.trim_end_matches('/');
-    if uri.starts_with("file://") {
-        return None;
-    }
-    let cache_dir = binrepo.packages_dir(root);
-    if let Err(e) = std::fs::create_dir_all(&cache_dir) {
-        return Some(binhost_fetch_warning(
-            &binrepo.name,
-            raw,
-            &format!("{}: {e}", cache_dir.display()),
-        ));
-    }
-    let dest = cache_dir.join("Packages");
+    let ok = |overlay: portage_repo::BinaryIndex| {
+        portage_repo::set_remote_binary_index_override(
+            &binrepo.packages_dir(root),
+            Some(std::sync::Arc::new(overlay)),
+        );
+    };
+    let cached_file = edb_cache_packages_file(root, raw);
+    let cached_text = std::fs::read_to_string(&cached_file).ok();
+    let (cached_header, cached_entries) = cached_text
+        .as_deref()
+        .map(portage_repo::parse_packages_index)
+        .unwrap_or_default();
+    let cached_index = || portage_repo::BinaryIndex::from_entries(cached_entries.clone());
 
+    // Real `if local_timestamp and (repo.frozen or not getbinpkg_refresh)`
+    // (`bintree.py:1528-1533`) -- refresh is always requested here, so a
+    // cached index on a frozen repo is used as-is.
+    if cached_text.is_some()
+        && cached_header
+            .get("TIMESTAMP")
+            .is_some_and(|s| !s.is_empty())
+        && binrepo.frozen
+    {
+        ok(cached_index());
+        return RefreshOutcome {
+            stderr_warning: None,
+            stdout_note: Some(use_cached_note(&binrepo.name, "frozen")),
+        };
+    }
+    // Real `DOWNLOAD_TIMESTAMP + TTL` freshness (`bintree.py:1535-1545`):
+    // a still-valid cache is used without any fetch.
+    let ttl_secs: f64 = cached_header
+        .get("TTL")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0.0);
+    let downloaded_at: f64 = cached_header
+        .get("DOWNLOAD_TIMESTAMP")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0.0);
+    if downloaded_at > 0.0 && ttl_secs > 0.0 && downloaded_at + ttl_secs > unix_now() {
+        ok(cached_index());
+        return RefreshOutcome {
+            stderr_warning: None,
+            stdout_note: Some(use_cached_note(&binrepo.name, "within TTL")),
+        };
+    }
+
+    // The fetch itself runs BEFORE any cache-dir write (real fetches
+    // first and only then tries `ensure_dirs` + the atomic write,
+    // `bintree.py:1463-1823` -- never `create_dir_all`-then-abort like
+    // portuale used to, backlog #192). It lands in temp files, never
+    // straight into the cache: a stale cache must survive a failed or
+    // older remote index.
+    match fetch_remote_index_text(uri) {
+        Err(failures) => {
+            let warning = Some(binhost_fetch_warning(
+                &binrepo.name,
+                raw,
+                &http_or_summary(&failures),
+            ));
+            if pretend {
+                // Real keeps the stale copy and says so
+                // (`bintree.py:1801-1808`).
+                ok(cached_index());
+                RefreshOutcome {
+                    stderr_warning: warning,
+                    stdout_note: Some(format!(
+                        "[{}] Local copy of unavailable remote index will be used due to --pretend\n",
+                        binrepo.name
+                    )),
+                }
+            } else {
+                // Real drops even the stale copy (`pkgindex = None`,
+                // `bintree.py:1809`): the override suppresses the disk
+                // cache for the rest of the run.
+                portage_repo::set_remote_binary_index_override(&binrepo.packages_dir(root), None);
+                RefreshOutcome {
+                    stderr_warning: warning,
+                    stdout_note: None,
+                }
+            }
+        }
+        Ok(remote_text) => {
+            let (remote_header, remote_entries) = portage_repo::parse_packages_index(&remote_text);
+            // Real drops a fetched index with no `TIMESTAMP` header
+            // (`pkgindex = None` + the `!!! ... has no TIMESTAMP
+            // field.` warning, `bintree.py:1722-1732`).
+            if remote_header
+                .get("TIMESTAMP")
+                .and_then(|s| s.parse::<i64>().ok())
+                .is_none()
+            {
+                portage_repo::set_remote_binary_index_override(&binrepo.packages_dir(root), None);
+                return RefreshOutcome {
+                    stderr_warning: Some(binhost_no_timestamp_warning(&binrepo.name)),
+                    stdout_note: None,
+                };
+            }
+            // Real `_pkgindex_version_supported`
+            // (`bintree.py:2429-2437`, `_pkgindex_version = 0`,
+            // `bintree.py:547`): the `VERSION` header must parse to an
+            // int `<= 0`, else the index is dropped with the
+            // `!!! ... version is not supported: ...` warning
+            // (`bintree.py:1735-1744`).
+            if !remote_header
+                .get("VERSION")
+                .and_then(|s| s.parse::<i64>().ok())
+                .is_some_and(|v| v <= 0)
+            {
+                portage_repo::set_remote_binary_index_override(&binrepo.packages_dir(root), None);
+                return RefreshOutcome {
+                    stderr_warning: Some(binhost_unsupported_version_warning(
+                        &binrepo.name,
+                        remote_header.get("VERSION").map(String::as_str),
+                    )),
+                    stdout_note: None,
+                };
+            }
+            // Real serves the remote index only when strictly newer
+            // (`not local_timestamp or int(local) < int(remote)`,
+            // `bintree.py:1739-1744`); an equally-old or older remote
+            // keeps the cache silently, with no rewrite.
+            let stale_remote = match (
+                cached_header
+                    .get("TIMESTAMP")
+                    .and_then(|s| s.parse::<i64>().ok()),
+                remote_header
+                    .get("TIMESTAMP")
+                    .and_then(|s| s.parse::<i64>().ok()),
+            ) {
+                (Some(local), Some(remote)) => local >= remote,
+                _ => false,
+            };
+            if stale_remote {
+                ok(cached_index());
+                return RefreshOutcome {
+                    stderr_warning: None,
+                    stdout_note: None,
+                };
+            }
+            let now = unix_now() as u64;
+            let staged = stamp_download_timestamp(&remote_text, now);
+            ok(portage_repo::BinaryIndex::from_entries(remote_entries));
+            // Best-effort cache write (real `ensure_dirs` +
+            // `atomic_ofstream`, `bintree.py:1811-1818`): an unwritable
+            // cache dir is ignored ("that's alright"); only a write
+            // error on a writable dir warns (where real would re-raise
+            // -- portuale refreshes stay non-fatal per backlog #175).
+            // Either way the in-memory index above is what the run
+            // resolves from.
+            let write_error = (|| {
+                if let Some(parent) = cached_file.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                }
+                std::fs::write(&cached_file, staged).map_err(|e| e.to_string())
+            })();
+            let stderr_warning = match write_error {
+                Ok(()) => None,
+                Err(_) if !cache_dir_writable(&cached_file) => None,
+                Err(e) => Some(binhost_fetch_warning(
+                    &binrepo.name,
+                    raw,
+                    &format!("{}: {e}", cached_file.display()),
+                )),
+            };
+            RefreshOutcome {
+                stderr_warning,
+                stdout_note: None,
+            }
+        }
+    }
+}
+
+/// Real `bintree._populate_remote_repo`'s skip note
+/// (`bintree.py:1785-1789`):
+/// `[name] Local copy of remote index is <why> and will be used.`
+/// (stdout; real appends `Last-Modified` detail only under `--verbose`,
+/// which portuale does not model).
+fn use_cached_note(binrepo_name: &str, why: &str) -> String {
+    format!("[{binrepo_name}] Local copy of remote index is {why} and will be used.\n")
+}
+
+/// Seconds since the epoch as `f64` (real `time.time()`).
+fn unix_now() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
+}
+
+/// Real `os.access(dirname, W_OK)` (`bintree.py:1821`) without libc:
+/// the parent dir's mode bits decide (review M3 -- no probe file is
+/// ever created, so nothing can linger in the EROOT cache dir). A
+/// missing directory counts as unwritable (its own creation is the
+/// caller's `create_dir_all`, whose failure lands here the same way).
+/// Like `access(2)` this is a permission-bit check rather than a write
+/// attempt, so on a read-only filesystem with writable bits a failed
+/// write still warns (where real would re-raise -- portuale refreshes
+/// stay non-fatal per backlog #175).
+fn cache_dir_writable(cache_file: &Path) -> bool {
+    let dir = cache_file.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::metadata(dir).is_ok_and(|m| !m.permissions().readonly())
+}
+
+/// Insert (or replace) the `DOWNLOAD_TIMESTAMP` header real stamps
+/// before caching a fetched index (`pkgindex.header[
+/// "DOWNLOAD_TIMESTAMP"] = "%d" % time.time()`, `bintree.py:1806`),
+/// so a later run's `TTL` check sees it.
+fn stamp_download_timestamp(text: &str, now_secs: u64) -> String {
+    let marker = format!("DOWNLOAD_TIMESTAMP: {now_secs}");
+    let (header, rest) = match text.find("\n\n") {
+        Some(i) => text.split_at(i),
+        None => (text, ""),
+    };
+    let mut out = String::new();
+    let mut stamped = false;
+    for line in header.lines() {
+        if line.starts_with("DOWNLOAD_TIMESTAMP:") && !stamped {
+            out.push_str(&marker);
+            stamped = true;
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    if !stamped {
+        out.push_str(&marker);
+        out.push('\n');
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Fetch one binrepo's remote `Packages` index body as text. A `file://`
+/// repo is read from its own directory (`Packages.gz` first, like
+/// real's `("Packages.gz", "Packages")` loop -- a missing `.gz` falls
+/// through to the plain file, a corrupt `.gz` fails outright, real
+/// `bintree.py:1595-1604`); anything else goes over wget into temp
+/// files (never the cache itself), preferring a compressed index real
+/// serves (`Packages.gz`, then portuale's `Packages.zst` superset cut,
+/// then plain `Packages`). Every attempt runs quiet
+/// (`download_via_wget_quiet`): the transcript is captured for message
+/// shaping, never inherited onto stdout/stderr.
+fn fetch_remote_index_text(uri: &str) -> Result<String, Vec<portage_fetch::QuietFetchError>> {
+    if let Some(rest) = uri.strip_prefix("file://") {
+        let dir = Path::new(rest);
+        let gz = dir.join("Packages.gz");
+        if gz.is_file() {
+            let out = std::process::Command::new("gzip")
+                .arg("-dc")
+                .arg(&gz)
+                .output();
+            return match out {
+                Ok(out) if out.status.success() => {
+                    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+                }
+                Ok(out) => Err(vec![portage_fetch::QuietFetchError {
+                    summary: "gzip -dc Packages.gz failed".to_string(),
+                    stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+                }]),
+                Err(e) => Err(vec![portage_fetch::QuietFetchError {
+                    summary: format!("gzip -dc {}: {e}", gz.display()),
+                    stderr: String::new(),
+                }]),
+            };
+        }
+        let plain = dir.join("Packages");
+        return std::fs::read_to_string(&plain).map_err(|e| {
+            vec![portage_fetch::QuietFetchError {
+                summary: format!("{}: {e}", plain.display()),
+                stderr: String::new(),
+            }]
+        });
+    }
+
+    static FETCH_TMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let mut tmps: Vec<std::path::PathBuf> = Vec::new();
+    let tmp = |tmps: &mut Vec<std::path::PathBuf>, suffix: &str| {
+        let path = std::env::temp_dir().join(format!(
+            "portuale-binhost-{}-{}-{suffix}",
+            std::process::id(),
+            FETCH_TMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        tmps.push(path.clone());
+        path
+    };
+    let cleanup = |tmps: &[std::path::PathBuf]| {
+        for t in tmps {
+            let _ = std::fs::remove_file(t);
+        }
+    };
     // Real `bintree._populate_remote` prefers a compressed index when
-    // the binhost serves one (`Packages.gz` / `Packages.zst`),
-    // decompressing it into the same plain `Packages` cache file
-    // `list_remote_binary_candidates` reads. Fall back to the plain
-    // `Packages` if neither compressed form is there.
-    //
-    // Every attempt runs quiet (`download_via_wget_quiet`): the
-    // transcript is captured for message shaping, never inherited
-    // onto stdout/stderr.
+    // the binhost serves one, decompressing it into the plain cache
+    // file. A downloaded-but-corrupt compressed index fails
+    // immediately, with NO plain-`Packages` attempt: real's
+    // `gzip.BadGzipFile` subclasses `OSError` (verified against the
+    // stdlib), so it escapes the `("Packages.gz", "Packages")` loop
+    // straight to the outer `except OSError` (`bintree.py:1790-1809`).
     let mut failures: Vec<portage_fetch::QuietFetchError> = Vec::new();
     for (ext, tool) in [("gz", "gzip"), ("zst", "zstd")] {
-        let compressed = cache_dir.join(format!("Packages.{ext}"));
+        let compressed = tmp(&mut tmps, ext);
         match crate::fetch::wget_fetch_quiet(&format!("{uri}/Packages.{ext}"), &compressed) {
             Err(e) => failures.push(e),
-            Ok(()) => match std::fs::File::create(&dest) {
-                Err(e) => {
-                    failures.push(portage_fetch::QuietFetchError {
-                        summary: format!("{}: {e}", dest.display()),
-                        stderr: String::new(),
-                    });
-                    break;
-                }
-                Ok(out) => {
-                    let ok = std::process::Command::new(tool)
+            Ok(()) => {
+                let plain_tmp = tmp(&mut tmps, "plain");
+                let decompressed = match std::fs::File::create(&plain_tmp) {
+                    Err(e) => {
+                        failures.push(portage_fetch::QuietFetchError {
+                            summary: format!("{}: {e}", plain_tmp.display()),
+                            stderr: String::new(),
+                        });
+                        cleanup(&tmps);
+                        return Err(failures);
+                    }
+                    Ok(out) => std::process::Command::new(tool)
                         .arg("-dc")
                         .arg(&compressed)
                         .stdout(std::process::Stdio::from(out))
                         .status()
-                        .is_ok_and(|s| s.success());
-                    let _ = std::fs::remove_file(&compressed);
-                    if ok {
-                        return None;
+                        .is_ok_and(|s| s.success()),
+                };
+                match std::fs::read_to_string(&plain_tmp) {
+                    Ok(text) if decompressed => {
+                        cleanup(&tmps);
+                        return Ok(text);
                     }
-                    // A downloaded-but-corrupt compressed index warns
-                    // immediately, with NO plain-`Packages` attempt:
-                    // real's `gzip.BadGzipFile` subclasses `OSError`
-                    // (verified against the stdlib), so it escapes the
-                    // `("Packages.gz", "Packages")` loop straight to the
-                    // outer `except OSError` (`bintree.py:1790-1809`).
-                    // The truncated cache file goes too: a failed
-                    // refresh leaves nothing for the resolver to trust.
-                    let _ = std::fs::remove_file(&dest);
-                    failures.push(portage_fetch::QuietFetchError {
-                        summary: format!("{tool} -dc Packages.{ext} failed"),
-                        stderr: String::new(),
-                    });
-                    return Some(binhost_fetch_warning(
-                        &binrepo.name,
-                        raw,
-                        &http_or_summary(&failures),
-                    ));
+                    _ => {
+                        cleanup(&tmps);
+                        failures.push(portage_fetch::QuietFetchError {
+                            summary: format!("{tool} -dc Packages.{ext} failed"),
+                            stderr: String::new(),
+                        });
+                        return Err(failures);
+                    }
                 }
-            },
+            }
         }
     }
-    match crate::fetch::wget_fetch_quiet(&format!("{uri}/Packages"), &dest) {
-        Ok(()) => None,
+    let plain_tmp = tmp(&mut tmps, "plain");
+    match crate::fetch::wget_fetch_quiet(&format!("{uri}/Packages"), &plain_tmp) {
+        Ok(()) => {
+            let result = std::fs::read_to_string(&plain_tmp).map_err(|e| {
+                vec![portage_fetch::QuietFetchError {
+                    summary: format!("{}: {e}", plain_tmp.display()),
+                    stderr: String::new(),
+                }]
+            });
+            cleanup(&tmps);
+            result
+        }
         Err(e) => {
             failures.push(e);
-            Some(binhost_fetch_warning(
-                &binrepo.name,
-                raw,
-                &http_or_summary(&failures),
-            ))
+            cleanup(&tmps);
+            Err(failures)
         }
     }
 }
@@ -269,10 +653,36 @@ pub fn run_merge_plan(
     keep_going: bool,
     buildpkg: Option<&crate::ebuild_package::PackageOptions>,
     buildpkg_exclude: &[String],
+    // Backlog #197: the scheduler-display mode (background + Jobs
+    // visibility), computed once by the caller. The mixed plan runs
+    // serially, so no `>>> Jobs:` events fire -- the mode only carries
+    // the blank/`>>>` rule (a `--quiet` binary merge prints no leading
+    // blanks, exactly like real's background scheduler). Stated cut:
+    // real drives binary tasks through the same display (real
+    // `Scheduler._merge_exit` / `_do_merge_exit`,
+    // `Scheduler.py:1532-1560`), so a real `--quiet --verbose` (or
+    // `-jN`) binary merge shows `>>> Jobs:` lines while portuale shows
+    // none here -- unprobed against real, Jobs events for the mixed
+    // plan are a later slice.
+    mode: crate::emerge_build::StatusMode,
 ) -> Result<(), String> {
     // Real `Scheduler._pkg_count` for this run (backlog #177): every
     // entry below prints its own snapshot of these counters.
     let progress = crate::emerge_build::merge_progress_map(entries);
+    // Backlog #197: real `Scheduler` owns one `JobStatusDisplay` per
+    // merge run.
+    let total_builds = entries
+        .iter()
+        .filter(|e| {
+            e.source == portage_repo::CandidateSource::Binary
+                || crate::emerge_build::entry_counts_toward_progress(e)
+        })
+        .count();
+    let display = crate::emerge_build::StatusDisplay::new(
+        mode,
+        total_builds,
+        crate::emerge_build::progress_color(),
+    );
     crate::emerge_build::run_merge_loop(entries, keep_going, root, |idx, entry| {
         // The director seam executes every unit: derive the entry's
         // `MergeUnit` and dispatch on its kind through the real source /
@@ -308,6 +718,7 @@ pub fn run_merge_plan(
                     options: merge_options,
                     buildpkg: bp,
                     buildpkg_exclude,
+                    display: &display,
                 }
                 .execute(&unit, &ctx)
             }
@@ -317,6 +728,7 @@ pub fn run_merge_plan(
                 pkgdir,
                 portage_tmpdir,
                 options: merge_options,
+                display: &display,
             }
             .execute(&unit, &ctx),
         };
@@ -331,6 +743,7 @@ pub fn run_merge_plan(
 /// is a silent no-op; `New`/`Upgrade`/`Downgrade`/`Reinstall` are
 /// fetched (remote) or located (`$PKGDIR`) and merged (`merge_binpkg`
 /// unmerges a replaced same-slot version itself).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn merge_one_binary_entry(
     entry: &GraphEntry,
     config: &Config,
@@ -339,6 +752,7 @@ pub(crate) fn merge_one_binary_entry(
     portage_tmpdir: &Path,
     merge_options: &MergeOptions,
     progress: mrg_director::MergeProgress,
+    display: &crate::emerge_build::StatusDisplay,
 ) -> Result<(), String> {
     let cp = format!("{}/{}", entry.category, entry.package);
     let version = match &entry.outcome {
@@ -357,10 +771,9 @@ pub(crate) fn merge_one_binary_entry(
     // (backlog #177): `Emerging binary (N of M) cpv::repo`. This is the
     // `>>> Merging binary package ...` line's real shape.
     let color = crate::emerge_build::progress_color();
-    println!(
-        "{}",
-        crate::emerge_build::emerging_line(entry, &version, progress, root, &color)
-    );
+    display.status(&crate::emerge_build::emerging_line(
+        entry, &version, progress, root, &color,
+    ));
 
     let local = resolve_local_binpkg(
         pkgdir,
@@ -564,10 +977,9 @@ pub(crate) fn merge_one_binary_entry(
     // the binpkg is located/fetched above (real's `Binpkg` chain),
     // the vdb merge runs below (real's `EbuildMerge` chain) -- this
     // line lands exactly between them, like real's.
-    println!(
-        "{}",
-        crate::emerge_build::installing_line(entry, &version, progress, root, &color)
-    );
+    display.status(&crate::emerge_build::installing_line(
+        entry, &version, progress, root, &color,
+    ));
     let mut entry_options;
     let merge_options = match fetched_verify {
         Some(gpg) => {
@@ -583,10 +995,9 @@ pub(crate) fn merge_one_binary_entry(
     }
     // Real `PackageMerge._install_exit`'s per-package line (backlog
     // #177): `Completed (N of M) cpv::repo`.
-    println!(
-        "{}",
-        crate::emerge_build::completed_line(entry, &version, progress, root, &color)
-    );
+    display.status(&crate::emerge_build::completed_line(
+        entry, &version, progress, root, &color,
+    ));
     Ok(())
 }
 
@@ -963,7 +1374,10 @@ mod tests {
     }
 
     fn packages_index(entries: &[&str]) -> Vec<u8> {
-        let mut s = format!("TIMESTAMP: 0\nPACKAGES: {}\n\n", entries.len());
+        // A genuine binhost index always carries both headers real
+        // gates on (`TIMESTAMP`, `bintree.py:1722-1732`; `VERSION`,
+        // `bintree.py:1735-1744`), so the helper stamps both.
+        let mut s = format!("TIMESTAMP: 0\nVERSION: 0\nPACKAGES: {}\n\n", entries.len());
         for e in entries {
             s.push_str(e);
             s.push_str("\n\n");
@@ -1080,6 +1494,7 @@ mod tests {
             &tmp.join("pt"),
             &MergeOptions::default(),
             mrg_director::MergeProgress::single(),
+            &crate::emerge_build::StatusDisplay::for_tests(),
         )
         .expect("multi-instance local gpkg merges");
 
@@ -1133,7 +1548,7 @@ mod tests {
         // The scan half of the same shape: the truncated file is
         // accepted on the index's word (no `!!! Invalid binary
         // package`), so resolution can select it.
-        let scanned = crate::binpkg::populate_local_pkgdir(&pkgdir).expect("scan succeeds");
+        let scanned = crate::binpkg::populate_local_pkgdir(&pkgdir, true).expect("scan succeeds");
         assert_eq!(scanned.len(), 1, "{scanned:?}");
 
         let pt = tmp.join("pt");
@@ -1146,6 +1561,7 @@ mod tests {
             &pt,
             &MergeOptions::default(),
             mrg_director::MergeProgress::single(),
+            &crate::emerge_build::StatusDisplay::for_tests(),
         )
         .expect_err("a truncated vouched binpkg must fail at merge");
         assert_eq!(
@@ -1227,7 +1643,7 @@ mod tests {
 
         // The scan half of the same shape: the removed file's stanza
         // rejoins the pool, so resolution can select the binary.
-        let scanned = crate::binpkg::populate_local_pkgdir(&pkgdir).expect("scan succeeds");
+        let scanned = crate::binpkg::populate_local_pkgdir(&pkgdir, true).expect("scan succeeds");
         assert_eq!(scanned.len(), 1, "{scanned:?}");
         assert_eq!(
             scanned[0].get("CPV").map(String::as_str),
@@ -1244,6 +1660,7 @@ mod tests {
             &pt,
             &MergeOptions::default(),
             mrg_director::MergeProgress::single(),
+            &crate::emerge_build::StatusDisplay::for_tests(),
         )
         .expect_err("a stale-index binary must fail at merge, not fall back");
         assert_eq!(
@@ -1296,6 +1713,7 @@ mod tests {
             &pt,
             &MergeOptions::default(),
             mrg_director::MergeProgress::single(),
+            &crate::emerge_build::StatusDisplay::for_tests(),
         )
         .expect_err("a stanza-less missing binary must fail at merge");
         assert_eq!(
@@ -2042,7 +2460,7 @@ mod tests {
     fn refresh_binhost_indexes_decompresses_a_packages_gz() {
         let tmp = tempdir();
         let root = tmp.join("root");
-        let plain = b"TIMESTAMP: 0\nPACKAGES: 1\n\nCPV: dev-libs/foo-1.0\n\n".to_vec();
+        let plain = b"TIMESTAMP: 0\nVERSION: 0\nPACKAGES: 1\n\nCPV: dev-libs/foo-1.0\n\n".to_vec();
         // Real `gzip` output of `plain`.
         let mut gz_child = std::process::Command::new("gzip")
             .arg("-c")
@@ -2066,10 +2484,24 @@ mod tests {
             priority: 1,
             location: None,
             verify_signature: true,
+            frozen: false,
         };
-        refresh_binhost_indexes(std::slice::from_ref(&binrepo), &root);
+        refresh_binhost_indexes(std::slice::from_ref(&binrepo), &root, false);
         let cached = binrepo.packages_dir(&root).join("Packages");
-        assert_eq!(std::fs::read(&cached).unwrap(), plain);
+        // The promoted index is cached with a fresh DOWNLOAD_TIMESTAMP
+        // header (real `bintree.py:1806`), so it differs from the served
+        // bytes by exactly that line.
+        let (header, entries) =
+            portage_repo::parse_packages_index(&std::fs::read_to_string(&cached).unwrap());
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].get("CPV").map(String::as_str),
+            Some("dev-libs/foo-1.0")
+        );
+        assert!(
+            header.contains_key("DOWNLOAD_TIMESTAMP"),
+            "promotion stamps DOWNLOAD_TIMESTAMP"
+        );
         assert!(!binrepo.packages_dir(&root).join("Packages.gz").exists());
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -2087,7 +2519,7 @@ mod tests {
         // post-fix no cache file is left at all.
         let tmp = tempdir();
         let root = tmp.join("root");
-        let plain = b"TIMESTAMP: 0\nPACKAGES: 0\n\n".to_vec();
+        let plain = b"TIMESTAMP: 0\nVERSION: 0\nPACKAGES: 0\n\n".to_vec();
         let mut routes = HashMap::new();
         routes.insert("/Packages.gz".to_string(), b"this is not gzip\n".to_vec());
         routes.insert("/Packages".to_string(), plain);
@@ -2100,8 +2532,9 @@ mod tests {
             priority: 1,
             location: None,
             verify_signature: true,
+            frozen: false,
         };
-        refresh_binhost_indexes(std::slice::from_ref(&binrepo), &root);
+        refresh_binhost_indexes(std::slice::from_ref(&binrepo), &root, false);
         assert!(
             !binrepo.packages_dir(&root).join("Packages").exists(),
             "a corrupt Packages.gz warns with no plain-Packages fallback"
@@ -2141,8 +2574,11 @@ mod tests {
             priority: 50,
             location: None,
             verify_signature: false,
+            frozen: false,
         };
-        let warning = refresh_one_binrepo(&binrepo, &root).expect("a 500ing binhost warns");
+        let warning = refresh_one_binrepo(&binrepo, &root, false)
+            .stderr_warning
+            .expect("a 500ing binhost warns");
         assert!(
             warning.contains(&format!("from '{base}/sub/'")),
             "warning keeps the configured trailing slash: {warning}"
@@ -2259,11 +2695,486 @@ mod tests {
             priority: 50,
             location: None,
             verify_signature: false,
+            frozen: false,
         };
-        refresh_binhost_indexes(std::slice::from_ref(&binrepo), &root);
+        refresh_binhost_indexes(std::slice::from_ref(&binrepo), &root, false);
         assert!(
             !binrepo.packages_dir(&root).join("Packages").exists(),
             "a failed refresh leaves no cache file for the resolver to trust"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Remote versions of `package` the resolver would see for
+    /// `binrepos` under `root` -- i.e. the live-refresh override when a
+    /// refresh ran, else the on-disk index.
+    fn remote_versions(binrepos: &[BinRepo], root: &Path, package: &str) -> Vec<String> {
+        let local = portage_repo::BinaryIndex::from_entries(Vec::new());
+        portage_repo::list_remote_binary_candidates(binrepos, root, &local, "dev-libs", package)
+            .into_iter()
+            .map(|c| c.version)
+            .collect()
+    }
+
+    #[test]
+    fn refresh_pretend_reads_a_file_binhost_with_an_unwritable_edb_cache() {
+        file_binhost_unwritable_cache_case(true);
+    }
+
+    #[test]
+    fn refresh_real_merge_reads_a_file_binhost_with_an_unwritable_edb_cache() {
+        file_binhost_unwritable_cache_case(false);
+    }
+
+    /// Backlog #192: real fetches the remote index first and ignores a
+    /// cache-write failure (`bintree.py:1819-1823`) -- no
+    /// `create_dir_all` before fetching, in `--pretend` exactly like in
+    /// a real merge. A `file://` binhost goes through the same cache
+    /// machinery (real caches even local indexes), so with
+    /// `<EROOT>/var/cache/edb` unwritable the refresh must still
+    /// resolve from the in-memory index, warn about nothing, and write
+    /// no cache file.
+    fn file_binhost_unwritable_cache_case(pretend: bool) {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let binhost = tmp.join("binhost");
+        std::fs::create_dir_all(&binhost).unwrap();
+        std::fs::write(
+            binhost.join("Packages"),
+            packages_index(&[
+                "CPV: dev-libs/remotebinpkg-1.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo",
+            ]),
+        )
+        .unwrap();
+        // Unwritable *ancestor*: the fetch must run before any mkdir,
+        // and the write failure must be ignored like real.
+        let edb = root.join("var/cache/edb");
+        std::fs::create_dir_all(&edb).unwrap();
+        std::fs::set_permissions(&edb, std::fs::Permissions::from_mode(0o555)).unwrap();
+        if std::fs::write(edb.join(".portuale-probe"), b"").is_ok() {
+            let _ = std::fs::remove_file(edb.join(".portuale-probe"));
+            std::fs::set_permissions(&edb, std::fs::Permissions::from_mode(0o755)).unwrap();
+            eprintln!("skipping unwritable-cache case: test user writes through 0o555 (root?)");
+            let _ = std::fs::remove_dir_all(&tmp);
+            return;
+        }
+        let binrepo = BinRepo {
+            name: "filecache".to_string(),
+            sync_uri: format!("file://{}", binhost.display()),
+            priority: 1,
+            location: None,
+            verify_signature: true,
+            frozen: false,
+        };
+        let outcome = refresh_one_binrepo(&binrepo, &root, pretend);
+        assert!(
+            outcome.stderr_warning.is_none(),
+            "pretend={pretend}: an unwritable cache dir is ignored silently like real: {:?}",
+            outcome.stderr_warning
+        );
+        assert!(
+            outcome.stdout_note.is_none(),
+            "pretend={pretend}: a fresh fetch carries no skip note: {:?}",
+            outcome.stdout_note
+        );
+        assert_eq!(
+            remote_versions(std::slice::from_ref(&binrepo), &root, "remotebinpkg"),
+            vec!["1.0"],
+            "pretend={pretend}: the run resolves from the in-memory index",
+        );
+        assert!(
+            !edb_cache_packages_file(&root, &binrepo.sync_uri).is_file(),
+            "pretend={pretend}: no cache file is fabricated on failure",
+        );
+        std::fs::set_permissions(&edb, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn refresh_pretend_failure_falls_back_to_the_stale_cache() {
+        // Backlog #192: real `--pretend` on a fetch failure keeps the
+        // stale copy with `[name] Local copy of unavailable remote
+        // index will be used due to --pretend` (`bintree.py:1801-1808`).
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let stale = "TIMESTAMP: 5\nPACKAGES: 1\n\nCPV: dev-libs/stalepkg-1.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo\n\n";
+        let mut routes = HashMap::new();
+        for path in ["/Packages.gz", "/Packages.zst", "/Packages"] {
+            routes.insert(
+                path.to_string(),
+                (
+                    "500 Internal Server Error".to_string(),
+                    b"stub 500\n".to_vec(),
+                ),
+            );
+        }
+        let (base, _h) = serve_with_status(routes, 3);
+        let binrepo = BinRepo {
+            name: "stale500".to_string(),
+            sync_uri: base.clone(),
+            priority: 50,
+            location: None,
+            verify_signature: false,
+            frozen: false,
+        };
+        // A stale cache with no TTL headers (the TTL check must not fire).
+        let cached = binrepo.packages_dir(&root).join("Packages");
+        std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
+        std::fs::write(&cached, stale).unwrap();
+        let outcome = refresh_one_binrepo(&binrepo, &root, true);
+        assert!(
+            outcome
+                .stderr_warning
+                .is_some_and(|w| w.contains("Error fetching binhost package info")),
+            "the fetch failure still warns",
+        );
+        assert_eq!(
+            outcome.stdout_note.as_deref(),
+            Some(
+                "[stale500] Local copy of unavailable remote index will be used due to --pretend\n"
+            ),
+        );
+        assert_eq!(
+            remote_versions(std::slice::from_ref(&binrepo), &root, "stalepkg"),
+            vec!["1.0"],
+            "pretend resolves from the stale cache",
+        );
+        assert_eq!(
+            std::fs::read_to_string(&cached).unwrap(),
+            stale,
+            "a failed refresh never rewrites the cache",
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn refresh_real_merge_failure_drops_the_stale_cache() {
+        // Backlog #192: outside `--pretend` real drops even the stale
+        // copy (`pkgindex = None`, `bintree.py:1809`) -- the same
+        // warning pair, no fallback note, no candidates.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let stale = "TIMESTAMP: 5\nPACKAGES: 1\n\nCPV: dev-libs/stalepkg-1.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo\n\n";
+        let mut routes = HashMap::new();
+        for path in ["/Packages.gz", "/Packages.zst", "/Packages"] {
+            routes.insert(
+                path.to_string(),
+                (
+                    "500 Internal Server Error".to_string(),
+                    b"stub 500\n".to_vec(),
+                ),
+            );
+        }
+        let (base, _h) = serve_with_status(routes, 3);
+        let binrepo = BinRepo {
+            name: "stale500".to_string(),
+            sync_uri: base.clone(),
+            priority: 50,
+            location: None,
+            verify_signature: false,
+            frozen: false,
+        };
+        let cached = binrepo.packages_dir(&root).join("Packages");
+        std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
+        std::fs::write(&cached, stale).unwrap();
+        let outcome = refresh_one_binrepo(&binrepo, &root, false);
+        assert!(
+            outcome
+                .stderr_warning
+                .is_some_and(|w| w.contains("Error fetching binhost package info")),
+            "the fetch failure still warns",
+        );
+        assert!(
+            outcome.stdout_note.is_none(),
+            "a real merge carries no pretend-fallback note: {:?}",
+            outcome.stdout_note
+        );
+        assert!(
+            remote_versions(std::slice::from_ref(&binrepo), &root, "stalepkg").is_empty(),
+            "a real merge drops even the stale cache",
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn refresh_within_ttl_uses_the_cache_without_fetching() {
+        // Real `DOWNLOAD_TIMESTAMP + TTL` freshness
+        // (`bintree.py:1535-1545`): no fetch at all, real's own note.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let cached_body = format!(
+            "TIMESTAMP: 100\nTTL: 3600\nDOWNLOAD_TIMESTAMP: {now}\nPACKAGES: 1\n\nCPV: dev-libs/ttlpkg-1.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo\n\n"
+        );
+        // Zero expected connections: any fetch would hang this stub.
+        let (base, _h) = serve_with_status(HashMap::new(), 0);
+        let binrepo = BinRepo {
+            name: "ttl".to_string(),
+            sync_uri: base.clone(),
+            priority: 50,
+            location: None,
+            verify_signature: false,
+            frozen: false,
+        };
+        let cached = binrepo.packages_dir(&root).join("Packages");
+        std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
+        std::fs::write(&cached, &cached_body).unwrap();
+        let outcome = refresh_one_binrepo(&binrepo, &root, true);
+        assert!(outcome.stderr_warning.is_none());
+        assert_eq!(
+            outcome.stdout_note.as_deref(),
+            Some("[ttl] Local copy of remote index is within TTL and will be used.\n"),
+        );
+        assert_eq!(
+            remote_versions(std::slice::from_ref(&binrepo), &root, "ttlpkg"),
+            vec!["1.0"],
+        );
+        assert_eq!(
+            std::fs::read_to_string(&cached).unwrap(),
+            cached_body,
+            "a TTL hit rewrites nothing",
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn refresh_promotes_a_newer_remote_index_over_a_stale_cache() {
+        // Real serves the remote index when strictly newer
+        // (`int(local) < int(remote)`, `bintree.py:1739-1744`).
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let stale = "TIMESTAMP: 5\nPACKAGES: 1\n\nCPV: dev-libs/tstpkg-1.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo\n\n";
+        let fresh = "TIMESTAMP: 9\nVERSION: 0\nPACKAGES: 1\n\nCPV: dev-libs/tstpkg-2.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo\n\n";
+        let mut routes = HashMap::new();
+        routes.insert("/Packages".to_string(), fresh.as_bytes().to_vec());
+        // gz + zst 404, then the plain index: 3 connections.
+        let (base, _h) = serve(routes, 3);
+        let binrepo = BinRepo {
+            name: "newer".to_string(),
+            sync_uri: base.clone(),
+            priority: 1,
+            location: None,
+            verify_signature: false,
+            frozen: false,
+        };
+        let cached = binrepo.packages_dir(&root).join("Packages");
+        std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
+        std::fs::write(&cached, stale).unwrap();
+        let outcome = refresh_one_binrepo(&binrepo, &root, false);
+        assert!(outcome.stderr_warning.is_none());
+        assert!(outcome.stdout_note.is_none());
+        let (header, entries) =
+            portage_repo::parse_packages_index(&std::fs::read_to_string(&cached).unwrap());
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].get("CPV").map(String::as_str),
+            Some("dev-libs/tstpkg-2.0")
+        );
+        assert!(
+            header.contains_key("DOWNLOAD_TIMESTAMP"),
+            "promotion stamps DOWNLOAD_TIMESTAMP like real"
+        );
+        assert_eq!(
+            remote_versions(std::slice::from_ref(&binrepo), &root, "tstpkg"),
+            vec!["2.0"],
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn refresh_keeps_a_newer_cache_over_a_stale_remote_index() {
+        // The mirror arm: an equally-old or older remote keeps the cache
+        // silently, with no rewrite (`bintree.py:1739-1744`).
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let cached_body = "TIMESTAMP: 9\nPACKAGES: 1\n\nCPV: dev-libs/tstpkg-2.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo\n\n";
+        let stale_remote = "TIMESTAMP: 5\nVERSION: 0\nPACKAGES: 1\n\nCPV: dev-libs/tstpkg-1.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo\n\n";
+        let mut routes = HashMap::new();
+        routes.insert("/Packages".to_string(), stale_remote.as_bytes().to_vec());
+        let (base, _h) = serve(routes, 3);
+        let binrepo = BinRepo {
+            name: "older".to_string(),
+            sync_uri: base.clone(),
+            priority: 1,
+            location: None,
+            verify_signature: false,
+            frozen: false,
+        };
+        let cached = binrepo.packages_dir(&root).join("Packages");
+        std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
+        std::fs::write(&cached, cached_body).unwrap();
+        let outcome = refresh_one_binrepo(&binrepo, &root, false);
+        assert!(outcome.stderr_warning.is_none());
+        assert!(outcome.stdout_note.is_none());
+        assert_eq!(
+            std::fs::read_to_string(&cached).unwrap(),
+            cached_body,
+            "a stale remote rewrites nothing",
+        );
+        assert_eq!(
+            remote_versions(std::slice::from_ref(&binrepo), &root, "tstpkg"),
+            vec!["2.0"],
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn refresh_frozen_repo_uses_the_cache_without_fetching() {
+        // Real `UseCachedCopyOfRemoteIndex("frozen")`
+        // (`bintree.py:1528-1533`): never refreshed, used as-is.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let cached_body = "TIMESTAMP: 5\nPACKAGES: 1\n\nCPV: dev-libs/frzpkg-1.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo\n\n";
+        let (base, _h) = serve_with_status(HashMap::new(), 0);
+        let binrepo = BinRepo {
+            name: "frz".to_string(),
+            sync_uri: base.clone(),
+            priority: 1,
+            location: None,
+            verify_signature: false,
+            frozen: true,
+        };
+        let cached = binrepo.packages_dir(&root).join("Packages");
+        std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
+        std::fs::write(&cached, cached_body).unwrap();
+        let outcome = refresh_one_binrepo(&binrepo, &root, true);
+        assert!(outcome.stderr_warning.is_none());
+        assert_eq!(
+            outcome.stdout_note.as_deref(),
+            Some("[frz] Local copy of remote index is frozen and will be used.\n"),
+        );
+        assert_eq!(
+            remote_versions(std::slice::from_ref(&binrepo), &root, "frzpkg"),
+            vec!["1.0"],
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn refresh_pretend_drops_a_remote_index_without_a_timestamp() {
+        timestamp_or_version_drop_case(
+            true,
+            "VERSION: 0\nPACKAGES: 1\n\nCPV: dev-libs/newpkg-1.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo\n\n",
+            "\n\n!!! [drop] Binhost package index  has no TIMESTAMP field.\n",
+        );
+    }
+
+    #[test]
+    fn refresh_real_merge_drops_a_remote_index_without_a_timestamp() {
+        timestamp_or_version_drop_case(
+            false,
+            "VERSION: 0\nPACKAGES: 1\n\nCPV: dev-libs/newpkg-1.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo\n\n",
+            "\n\n!!! [drop] Binhost package index  has no TIMESTAMP field.\n",
+        );
+    }
+
+    #[test]
+    fn refresh_pretend_drops_a_remote_index_with_an_unparseable_timestamp() {
+        timestamp_or_version_drop_case(
+            true,
+            "TIMESTAMP: yesterday\nVERSION: 0\nPACKAGES: 1\n\nCPV: dev-libs/newpkg-1.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo\n\n",
+            "\n\n!!! [drop] Binhost package index  has no TIMESTAMP field.\n",
+        );
+    }
+
+    #[test]
+    fn refresh_real_merge_drops_a_remote_index_with_an_unparseable_timestamp() {
+        timestamp_or_version_drop_case(
+            false,
+            "TIMESTAMP: yesterday\nVERSION: 0\nPACKAGES: 1\n\nCPV: dev-libs/newpkg-1.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo\n\n",
+            "\n\n!!! [drop] Binhost package index  has no TIMESTAMP field.\n",
+        );
+    }
+
+    #[test]
+    fn refresh_pretend_drops_a_remote_index_with_an_unsupported_version() {
+        timestamp_or_version_drop_case(
+            true,
+            "TIMESTAMP: 9\nVERSION: 1\nPACKAGES: 1\n\nCPV: dev-libs/newpkg-1.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo\n\n",
+            "\n\n!!! [drop] Binhost package index version is not supported: '1'\n",
+        );
+    }
+
+    #[test]
+    fn refresh_real_merge_drops_a_remote_index_with_an_unsupported_version() {
+        timestamp_or_version_drop_case(
+            false,
+            "TIMESTAMP: 9\nVERSION: 1\nPACKAGES: 1\n\nCPV: dev-libs/newpkg-1.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo\n\n",
+            "\n\n!!! [drop] Binhost package index version is not supported: '1'\n",
+        );
+    }
+
+    #[test]
+    fn refresh_pretend_drops_a_remote_index_without_a_version() {
+        timestamp_or_version_drop_case(
+            true,
+            "TIMESTAMP: 9\nPACKAGES: 1\n\nCPV: dev-libs/newpkg-1.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo\n\n",
+            "\n\n!!! [drop] Binhost package index version is not supported: 'None'\n",
+        );
+    }
+
+    #[test]
+    fn refresh_real_merge_drops_a_remote_index_without_a_version() {
+        timestamp_or_version_drop_case(
+            false,
+            "TIMESTAMP: 9\nPACKAGES: 1\n\nCPV: dev-libs/newpkg-1.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo\n\n",
+            "\n\n!!! [drop] Binhost package index version is not supported: 'None'\n",
+        );
+    }
+
+    /// Backlog #192 fix round: real drops a fetched index with no (or
+    /// unparseable) `TIMESTAMP` (`bintree.py:1722-1732`) or with a
+    /// `VERSION` its `_pkgindex_version_supported` rejects
+    /// (`bintree.py:1735-1744`, `_pkgindex_version = 0`) -- `pkgindex =
+    /// None`, so even a stale cache contributes nothing for the run, in
+    /// `--pretend` exactly like in a real merge. A `file://` binhost
+    /// serves `remote_body`; a valid stale cache is seeded to prove it
+    /// is suppressed, not resurrected.
+    fn timestamp_or_version_drop_case(pretend: bool, remote_body: &str, expected_warning: &str) {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let binhost = tmp.join("binhost");
+        std::fs::create_dir_all(&binhost).unwrap();
+        std::fs::write(binhost.join("Packages"), remote_body).unwrap();
+        let binrepo = BinRepo {
+            name: "drop".to_string(),
+            sync_uri: format!("file://{}", binhost.display()),
+            priority: 1,
+            location: None,
+            verify_signature: true,
+            frozen: false,
+        };
+        let stale = "TIMESTAMP: 5\nVERSION: 0\nPACKAGES: 1\n\nCPV: dev-libs/stalepkg-1.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo\n\n";
+        let cached = edb_cache_packages_file(&root, &binrepo.sync_uri);
+        std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
+        std::fs::write(&cached, stale).unwrap();
+        let outcome = refresh_one_binrepo(&binrepo, &root, pretend);
+        assert_eq!(
+            outcome.stderr_warning.as_deref(),
+            Some(expected_warning),
+            "pretend={pretend}: the drop warns exactly like real",
+        );
+        assert!(
+            outcome.stdout_note.is_none(),
+            "pretend={pretend}: a drop carries no skip note: {:?}",
+            outcome.stdout_note
+        );
+        assert!(
+            remote_versions(std::slice::from_ref(&binrepo), &root, "newpkg").is_empty(),
+            "pretend={pretend}: the dropped index contributes nothing",
+        );
+        assert!(
+            remote_versions(std::slice::from_ref(&binrepo), &root, "stalepkg").is_empty(),
+            "pretend={pretend}: the drop discards even the stale cache like real's pkgindex = None",
+        );
+        assert_eq!(
+            std::fs::read_to_string(&cached).unwrap(),
+            stale,
+            "pretend={pretend}: a dropped index never rewrites the cache",
         );
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -2295,11 +3206,12 @@ mod tests {
             priority: 1,
             location: None,
             verify_signature: true,
+            frozen: false,
         }];
         // Non-fatal by design (backlog #175): a failed refresh warns on
         // stderr and resolves against the local pool -- here the plain
         // Packages succeeds, so the live index lands in the edb cache.
-        refresh_binhost_indexes(&binrepos, &root);
+        refresh_binhost_indexes(&binrepos, &root, false);
         assert!(
             root.join("var/cache/edb/binhost/127.0.0.1/Packages")
                 .is_file(),
@@ -2355,6 +3267,7 @@ mod tests {
             false,
             None,
             &[],
+            crate::emerge_build::StatusMode::for_tests(),
         )
         .expect("getbinpkg merge succeeds");
 
@@ -2416,8 +3329,9 @@ mod tests {
             priority: 1,
             location: None,
             verify_signature: true,
+            frozen: false,
         }];
-        refresh_binhost_indexes(&binrepos, &root);
+        refresh_binhost_indexes(&binrepos, &root, false);
 
         let config = Config {
             binrepos: binrepos.clone(),
@@ -2469,6 +3383,7 @@ mod tests {
             false,
             None,
             &[],
+            crate::emerge_build::StatusMode::for_tests(),
         )
         .expect("getbinpkg merge succeeds");
 
@@ -2529,6 +3444,7 @@ mod tests {
             false,
             None,
             &[],
+            crate::emerge_build::StatusMode::for_tests(),
         )
         .expect("mixed merge plan succeeds");
 
@@ -2592,6 +3508,7 @@ mod tests {
                 priority: 1,
                 location: None,
                 verify_signature: false,
+                frozen: false,
             }],
             ..Default::default()
         };
@@ -2617,6 +3534,7 @@ mod tests {
             &tmp.join("pt"),
             &MergeOptions::default(),
             mrg_director::MergeProgress::single(),
+            &crate::emerge_build::StatusDisplay::for_tests(),
         )
         .expect_err("a resumed binary with no local file must fail, not refetch");
         assert!(

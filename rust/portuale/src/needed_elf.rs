@@ -2,7 +2,7 @@
 // data model for one parsed line of a real `NEEDED.ELF.2` file -- the
 // aux vdb metadata real, unmodified `bin/misc-functions.sh
 // install_qa_check`'s own real `scanelf`-driven step generates, and
-// which `ebuild_merge::write_vdb_entry` now copies into every real vdb
+// which `ebuild_merge::populate_vdb_tmp` now copies into every real vdb
 // entry that has one (see that function's own doc comment).
 //
 // Each step confirmed with the user before implementing: real parsing
@@ -512,6 +512,12 @@ pub fn read_all_needed_entries(root: &Path) -> Vec<(String, Vec<NeededEntry>)> {
             .collect();
 
         for pf in pf_names {
+            // Real `vardbapi._excluded_dirs`: an in-progress
+            // `-MERGING-<pf>` entry contributes no soname index rows --
+            // its `NEEDED.ELF.2` is half-written by definition.
+            if portage_util::is_merging_vdb_entry(&pf) {
+                continue;
+            }
             let cpv = format!("{category}/{pf}");
             let needed_path = category_path.join(&pf).join("NEEDED.ELF.2");
             let entries = std::fs::read_to_string(&needed_path)
@@ -596,6 +602,134 @@ fn expand_origin(rpath: &str, origin: &str) -> String {
     rpath
         .replace("${ORIGIN}", origin)
         .replace("$ORIGIN", origin)
+}
+
+/// Real `LinkageMap.rebuild`'s own preserved-libs branch: preserved
+/// libraries are registered in no `NEEDED.ELF.2` file, so real runs
+/// the real, unmodified `scanelf` binary over them (`scanelf -BF
+/// '%a;%F;%S;%r;%n'`, deliberately without `-q` so soname-less
+/// libraries like musl's `libc.so` are not omitted) and indexes every
+/// reported line exactly like `NEEDED.ELF.2` data, owned by the
+/// preserving cpv.
+///
+/// `preserved` is real `getPreservedLibs()` (preserving cpv -> paths).
+/// Only still-existing regular files and symlinks are scanned --
+/// directories are never passed (real `scanelf` would recurse into
+/// them and index files nothing preserves), anything else `scanelf`
+/// reports nothing for is skipped with real `InvalidData` tolerance.
+/// Each line's real `EM_`-prefixed arch (`EM_X86_64`) is stripped to the
+/// bare `e_machine` name (`l[3:]`) before parsing, and the multilib
+/// category comes from a live ELF header read
+/// (`compute_multilib_category`, real `ELFHeader.read` +
+/// `compute_multilib_category`) -- `None` falls back to the approximate
+/// table in `rebuild`, exactly like real `_approx_multilib_categories`.
+///
+/// Deliberate cuts vs. real (documented, no fixture instance):
+/// - Real generates a dummy `("", x, "", "", "")` line for a preserved
+///   path `scanelf` reports nothing for (a non-ELF file), so
+///   `findConsumers` never raises `KeyError`. Portuale's own
+///   `find_consumers` instead returns `Err` there and every caller
+///   already treats that as "no consumers" -- the dummy line's own
+///   empty provider/consumer sets -- so no dummy is emitted.
+/// - Real infers an implicit soname from the basename for an
+///   empty-soname shared object (bug 715162, via the `file` binary).
+///   Skipped: a `NEEDED.ELF.2`-indexed library with an empty soname
+///   provides nothing either, so both paths agree.
+/// - A missing `scanelf` binary degrades to no entries (real raises
+///   `CommandNotFound`), but loudly: a stderr warning names the
+///   missing tool, since silent degradation would turn bump-2-style
+///   preserves into `{}` with zero log output. A `scanelf` that runs
+///   but fails still degrades silently (real tolerates unscannable
+///   lines the same way).
+///
+/// Returns `(owner, entries)` groups ready to append to
+/// `read_all_needed_entries`'s own output before `rebuild` (an owner
+/// already present there gains the scanned entries, matching real
+/// grouping everything by owner for the bundled-library runpath
+/// inference -- see `owner_entries_with_preserved_orphans`).
+pub fn scan_preserved_lib_entries(
+    root: &Path,
+    preserved: &BTreeMap<String, Vec<String>>,
+) -> Vec<(String, Vec<NeededEntry>)> {
+    let mut targets: Vec<(String, String)> = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    for (cpv, paths) in preserved {
+        for p in paths {
+            // First-wins on a duplicate path across cpvs; real `plibs.update(...)` is last-wins (only observable if two cpvs register the same path).
+            if !seen.insert(p.clone()) {
+                continue;
+            }
+            let full = root.join(p.trim_start_matches('/'));
+            let is_scannable = std::fs::symlink_metadata(&full)
+                .map(|m| m.file_type().is_file() || m.file_type().is_symlink())
+                .unwrap_or(false);
+            if is_scannable {
+                targets.push((cpv.clone(), full.to_string_lossy().into_owned()));
+            }
+        }
+    }
+    if targets.is_empty() {
+        return Vec::new();
+    }
+
+    let mut args = vec!["-BF".to_string(), "%a;%F;%S;%r;%n".to_string()];
+    args.extend(targets.iter().map(|(_, full)| full.clone()));
+    // Real `os.path.join(EPREFIX or "/", "usr/bin/scanelf")`
+    // (`LinkageMap.rebuild`): the EPREFIXed absolute path first, then
+    // `PATH`. Portuale assumes an empty `EPREFIX` like every other
+    // real-execution path, so that is `/usr/bin/scanelf`, falling back
+    // to a `PATH` lookup.
+    let scanelf_bin = if std::path::Path::new("/usr/bin/scanelf").is_file() {
+        "/usr/bin/scanelf".to_string()
+    } else {
+        "scanelf".to_string()
+    };
+    let output = std::process::Command::new(&scanelf_bin)
+        .args(&args)
+        .output();
+    let Ok(output) = output else {
+        eprintln!(
+            "!!! Command Not Found: {scanelf_bin} -- preserved-library orphan scan skipped, preserve-libs decisions may miss consumers"
+        );
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+
+    let root_str = root.to_string_lossy();
+    let root_prefix = format!("{}/", root_str.trim_end_matches('/'));
+    // Which preserving cpv each scanned absolute path belongs to, so a
+    // reported line is grouped under its real owner (real
+    // `plibs.pop(entry.filename)`).
+    let mut path_owner: BTreeMap<String, String> = BTreeMap::new();
+    for (cpv, full) in &targets {
+        path_owner
+            .entry(full.clone())
+            .or_insert_with(|| cpv.clone());
+    }
+    let mut by_owner: BTreeMap<String, Vec<NeededEntry>> = BTreeMap::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        // Real `l[3:]`: strip scanelf's own `EM_`-prefixed arch
+        // (`EM_X86_64` -> `X86_64`, the `e_machine` name real
+        // `_approx_multilib_categories` maps).
+        let Some(line) = line.get(3..) else {
+            continue;
+        };
+        let Some(mut entry) = NeededEntry::parse(line) else {
+            continue;
+        };
+        let full = entry.filename.clone();
+        let Some(rel) = full.strip_prefix(&root_prefix) else {
+            continue;
+        };
+        entry.filename = format!("/{rel}");
+        entry.multilib_category = compute_multilib_category(Path::new(&full));
+        if let Some(owner) = path_owner.get(&full) {
+            by_owner.entry(owner.clone()).or_default().push(entry);
+        }
+    }
+    by_owner.into_iter().collect()
 }
 
 /// Real `LinkageMap._ObjectKey`'s own generated key (`LinkageMapELF.py:

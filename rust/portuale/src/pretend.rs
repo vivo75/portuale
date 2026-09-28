@@ -221,7 +221,7 @@ use portage_repo::{
     ResolveRequest, SlotConflict, active_resolver_for, all_installed_packages,
     config_root_from_env, ebuild_visible_at, root_from_env, slot_conflict_flag_sets, split_pf,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -1355,6 +1355,14 @@ fn print_entry_line(
     // ebuilds to satisfy "<atom>"` + chain block, rendered last in the
     // `NoVisibleCandidate` arm (after the two sibling blocks).
     plain_miss_deps: &[portage_repo::PlainMissDepReport],
+    // Backlog #206 S2: real `_show_circular_deps` forces `--verbose` for
+    // the stuck-remainder display, so every row carries its fetch size
+    // (`verbose_size`, `0 KiB` for an ebuild whose distfiles are already
+    // present) — while plain `-pv` rows keep portuale's established cut
+    // of omitting that bare `0 KiB` (see the `size_suffix` note below).
+    // True only for the circular re-display; every other caller passes
+    // false.
+    force_sizes: bool,
 ) {
     let entry = &entries[index];
     // Real `_DisplayConfig` verbosity: `--quiet and 1 or --verbose and 3
@@ -1533,8 +1541,11 @@ fn print_entry_line(
         // ever non-zero here -- an ebuild's distfiles / a local `$PKGDIR`
         // binary are already present, so real would show a bare ` 0 KiB`
         // that portuale's `-pv` lines have always omitted; closing that
-        // wider gap would re-pin every `-pv` assertion and is left out).
-        let size_suffix = if v3 && entry.remote_binary {
+        // wider gap would re-pin every `-pv` assertion and is left out)
+        // or under `force_sizes` (backlog #206 S2: the circular
+        // re-display runs forced-verbose, so its rows carry real's
+        // `0 KiB` like the live oracle).
+        let size_suffix = if v3 && (entry.remote_binary || force_sizes) {
             let bytes: u64 = entry.download_files.iter().map(|(_, s)| s).sum();
             format!(" {}", localized_size(bytes))
         } else {
@@ -1953,6 +1964,13 @@ fn print_entry_line(
 /// graph still holds it, so ordered mode prints it as a `nomerge`
 /// ancestor occurrence; portuale excludes it from the ordered node list
 /// for the same effect.
+///
+/// Renders the tree walk and reports it back: one `(entry index,
+/// `ordered`) pair per rendered entry row, in render order — real
+/// `_ordered_tree_display`'s own walk product, before printing. The only
+/// consumer of the return is backlog #206 S2's `Total:` recount (real
+/// counts displayed merge *rows*, repeats included, `nomerge` excluded);
+/// every other caller ignores it.
 #[allow(clippy::too_many_arguments)]
 fn print_tree(
     entries: &[GraphEntry],
@@ -1974,7 +1992,10 @@ fn print_tree(
     masked_deps: &[portage_repo::MaskedDepReport],
     use_unsat_deps: &[portage_repo::UseUnsatDepReport],
     plain_miss_deps: &[portage_repo::PlainMissDepReport],
-) {
+    // Backlog #206 S2: forwarded to `print_entry_line` (see its
+    // `force_sizes`).
+    force_sizes: bool,
+) -> Vec<(usize, bool)> {
     /// One node of the display graph: an entry, or a satisfied blocker
     /// row `entries[owner].blockers[index]`.
     #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -2316,6 +2337,7 @@ fn print_tree(
         }
     }
 
+    let mut rendered: Vec<(usize, bool)> = Vec::new();
     for (node, depth, ordered) in display {
         // Real `output_helpers.py`'s `self.indent` is exactly `depth`
         // spaces (`_ordered_tree_display`'s depth is passed straight to
@@ -2323,30 +2345,34 @@ fn print_tree(
         // one literal space after `]`, so portuale's formats do too.
         let indent = " ".repeat(depth);
         match node {
-            TreeNode::Entry(i) => print_entry_line(
-                entries,
-                root,
-                i,
-                &indent,
-                ordered,
-                top_level_pkgs,
-                onlydeps,
-                oneshot,
-                verbose,
-                quiet,
-                alphabetical,
-                false,
-                130,
-                running_root,
-                color,
-                system_atoms,
-                world_atoms,
-                force_reinstall_cps,
-                blocker_lines,
-                masked_deps,
-                use_unsat_deps,
-                plain_miss_deps,
-            ),
+            TreeNode::Entry(i) => {
+                rendered.push((i, ordered));
+                print_entry_line(
+                    entries,
+                    root,
+                    i,
+                    &indent,
+                    ordered,
+                    top_level_pkgs,
+                    onlydeps,
+                    oneshot,
+                    verbose,
+                    quiet,
+                    alphabetical,
+                    false,
+                    130,
+                    running_root,
+                    color,
+                    system_atoms,
+                    world_atoms,
+                    force_reinstall_cps,
+                    blocker_lines,
+                    masked_deps,
+                    use_unsat_deps,
+                    plain_miss_deps,
+                    force_sizes,
+                )
+            }
             TreeNode::Blocker { owner, index } => {
                 let owner_entry = &entries[owner];
                 println!(
@@ -2367,6 +2393,7 @@ fn print_tree(
             }
         }
     }
+    rendered
 }
 
 /// Escapes `s` for embedding in a JSON string literal (quote, backslash,
@@ -2747,18 +2774,70 @@ fn abort_outcome_to_json(outcome: &portage_repo::ResolveOutcome) -> String {
     }
 }
 
+/// Backlog #206 S1: real `_emerge/Package.py::Package.__str__` for a
+/// merge-bound package — the `(cpv:slot/sub_slot::repo, <type> scheduled
+/// for merge)` node text real
+/// `circular_dependency_handler._prepare_circular_dep_message`
+/// (`resolver/circular_dependency.py:76`) prints for each cycle member
+/// (the digraph f-string renders `str(Package)`). The `cpv:slot/sub::repo`
+/// head is wrapped in real's per-operation colour (`PKG_MERGE` for an
+/// ebuild merge, `PKG_BINARY_MERGE` for a binary one — a no-op unless the
+/// caller's `Colorizer` is enabled). Deliberate cuts, both grounded on
+/// live real: the ` to '<ROOT>'` arm never fires (eight unanimous
+/// `docs/evidence/2026-09-27-181-circular-text/real/` captures plus the
+/// six-case n206 container probe, all `ROOT=$FX`, show no suffix — and
+/// portuale's root is non-`/` in every test, so the literal gate would
+/// inject tmp paths; same rationale as `root_suffix`), and the
+/// `installed` / `uninstall` variants are unreachable here (cycle members
+/// are merge-bound by construction — `find_hard_cycles` only considers
+/// merge-bound entries; a member missing from `entries` falls back to
+/// the bare cpv at the call site). The slot-conflict renderers below
+/// keep their own local closures (their unknown-member fallbacks differ
+/// from each other and carry no colour, so sharing this helper would move
+/// their pins).
+fn circular_node_text(
+    cpv: &str,
+    slot: &str,
+    sub_slot: &str,
+    repo: &str,
+    type_name: &str,
+    color: &Colorizer,
+) -> String {
+    let head = format!("{cpv}:{slot}/{sub_slot}::{repo}");
+    let head = match type_name {
+        "binary" => color.c("PKG_BINARY_MERGE", &head),
+        _ => color.c("PKG_MERGE", &head),
+    };
+    format!("({head}, {type_name} scheduled for merge)")
+}
+
 /// Backlog #19 Slice 5: real `_show_circular_deps` (`depgraph.py:10425`)
 /// as a callable unit — the `* Error: circular dependencies:` block, the
 /// `Change USE:` suggestion-or-advisory branch, and the
 /// `large_cycle_count` trailer. Faithful transcription of the `writemsg`
-/// sequence (see the call sites for the re-display note); every edge is
-/// buildtime by construction. Prints only — every call site returns
-/// `ExitCode::from(1)` itself, except the gated cycle-abort path, which
-/// prints this *before* the autounmask section (real `display_problems`
-/// order, `:11113` before `:11140`) and then continues into it.
+/// sequence (see the call sites for the re-display note). Prints only —
+/// every call site returns `ExitCode::from(1)` itself, except the gated
+/// cycle-abort path, which prints this *before* the autounmask section
+/// (real `display_problems` order, `:11113` before `:11140`) and then
+/// continues into it.
+///
+/// Backlog #206: the block opens with real's own three newlines (real
+/// `writemsg("\n\n")` before `display(handler.merge_list)` plus
+/// `writemsg("\n")` after it, all stderr), and each cycle member renders
+/// through `circular_node_text` (real `str(Package)`).
+///
+/// Backlog #228: every cycle line after `depends on` carries its own
+/// edge's `priorities[-1]` label (real
+/// `_prepare_circular_dep_message`, `resolver/circular_dependency.py`;
+/// `DepPriority.__str__`, `_emerge/DepPriority.py`), threaded in as
+/// `edge_labels` (`portage_repo::cycle_edge_labels` over the same
+/// `entries` the message renders -- `labels[i]` is the edge
+/// `cycle[i] -> cycle[(i + 1) % len]`). All-buildtime cycles (every
+/// pin before #228) still render `(buildtime)` on every line.
 #[allow(clippy::too_many_arguments)]
 fn print_circular_block(
     cycle: &[String],
+    edge_labels: &[String],
     color: &Colorizer,
     repos: &[portage_repo::RepoConfig],
     config: &portage_profile::Config,
@@ -2767,18 +2846,69 @@ fn print_circular_block(
     large_cycle_count: bool,
 ) {
     let prefix = color.c("BAD", " * ");
-    eprint!("\n{prefix}Error: circular dependencies:\n\n");
-    // `_prepare_circular_dep_message`: `<pkg> depends on`, then each
-    // subsequent `<pkg> (buildtime)` at a growing one-space indent,
-    // closing back on the first package.
-    let mut lines: Vec<String> = vec![format!("{} depends on", cycle[0])];
-    for (pos, pkg) in cycle.iter().enumerate().skip(1) {
-        lines.push(format!("{}{pkg} (buildtime)", " ".repeat(pos)));
+    eprint!("\n\n\n{prefix}Error: circular dependencies:\n\n");
+    // `_prepare_circular_dep_message`: `<node> depends on`, then each
+    // subsequent `<node> (<priorities[-1]>)` at a growing one-space
+    // indent, closing back on the first package. Each node is real
+    // `str(Package)` (`circular_node_text`); each label is real
+    // `DepPriority.__str__` of the edge into that line's package
+    // (`edge_labels`, backlog #228 -- `(buildtime)` on every line for
+    // the all-buildtime cycles that were the only reachable shape
+    // before it). A member missing from `entries` (unreachable for
+    // resolver-built cycles) keeps the bare cpv so the block still
+    // prints.
+    let mut by_cpv: HashMap<String, (String, String, String, &str)> = HashMap::new();
+    for e in entries {
+        let version = match &e.outcome {
+            portage_repo::PretendOutcome::New { version }
+            | portage_repo::PretendOutcome::Reinstall { version, .. } => version.clone(),
+            portage_repo::PretendOutcome::Upgrade { to, .. }
+            | portage_repo::PretendOutcome::Downgrade { to, .. } => to.clone(),
+            _ => continue,
+        };
+        let (Some(slot), Some(sub_slot), Some(repo)) =
+            (e.slot.clone(), e.sub_slot.clone(), e.repo_name.clone())
+        else {
+            continue;
+        };
+        let type_name = match e.source {
+            portage_repo::CandidateSource::Binary => "binary",
+            portage_repo::CandidateSource::Ebuild => "ebuild",
+        };
+        by_cpv.insert(
+            format!("{}/{}-{version}", e.category, e.package),
+            (slot, sub_slot, repo, type_name),
+        );
     }
+    let node = |cpv: &str| -> String {
+        match by_cpv.get(cpv) {
+            Some((slot, sub_slot, repo, type_name)) => {
+                circular_node_text(cpv, slot, sub_slot, repo, type_name, color)
+            }
+            None => cpv.to_string(),
+        }
+    };
+    let mut lines: Vec<String> = vec![format!("{} depends on", node(&cycle[0]))];
+    // Backlog #228: `edge_labels[i]` is the edge into line `i + 1`'s
+    // package (`cycle[i] -> cycle[i + 1]`), and the closing line's label
+    // is the wrap-around edge (`cycle[last] -> cycle[0]`). A short
+    // slice (unreachable -- `cycle_edge_labels` emits one label per
+    // member) falls back to `(buildtime)`, the pre-#228 rendering.
+    for (pos, pkg) in cycle.iter().enumerate().skip(1) {
+        let label = edge_labels
+            .get(pos - 1)
+            .map(String::as_str)
+            .unwrap_or("buildtime");
+        lines.push(format!("{}{} ({label})", " ".repeat(pos), node(pkg)));
+    }
+    let closing = edge_labels
+        .last()
+        .map(String::as_str)
+        .unwrap_or("buildtime");
     lines.push(format!(
-        "{}{} (buildtime)",
+        "{}{} ({closing})",
         " ".repeat(cycle.len()),
-        cycle[0]
+        node(&cycle[0])
     ));
     eprint!("{}", lines.join("\n"));
 
@@ -3024,6 +3154,7 @@ Dependency and target selection:
       --rebuild-if-unbuilt, -new-rev, -new-ver, -new-slot  rebuild an installed package when a build dep is merged
       --rebuild-exclude ATOMS, --rebuild-ignore ATOMS  keep packages out of the rebuild triggers
       --complete-graph[=y|n], --complete-graph-if-new-use, --complete-graph-if-new-ver  force a full deep graph walk
+      --ignore-world[=y|n]  ignore the @world set and its dependencies (complete-graph walks args only)
       --dynamic-deps[=y|n]  walk the ebuild (y, default) or the vdb snapshot (n) during --deep
       --backtrack N         maximum resolver backtracking passes (default 10; 0 disables)
       --package-moves[=y|n]  apply profiles/updates/ package moves (default y)
@@ -3056,6 +3187,7 @@ Build scheduling:
   -l, --load-average N       hold new builds while the load average exceeds N
   -a, --ask[=y|n]            prompt for confirmation before a real merge or removal
       --ask-enter-invalid    with --ask: a bare Enter is not accepted as Yes
+      --read-news[=y|n]      with --ask: offer to read unread news via eselect
       --ignore-default-opts  ignore the EMERGE_DEFAULT_OPTS variable for this run
       --keep-going           on a build failure, drop that package's dependents and carry on
       --quiet-build[=y|n]    redirect a build's phase output to ${T}/build.log (implied by -j >1 and -q)
@@ -4035,6 +4167,10 @@ fn run_unmerge_pretend(
     root: &Path,
     config_root: &Path,
     config: &portage_profile::Config,
+    // The `repos.conf` repos -- threaded into the post-removal GLEP 42
+    // count notice (backlog #196 fix round 1: real `post_emerge` after
+    // uninstall actions, `actions.py:4164-4175`).
+    repos: &[portage_repo::RepoConfig],
     // Real `_unmerge_display`'s `ordered` flag (`unmerge.py:459`): when
     // `true` the per-package blocks are rendered in `targets` order and
     // *not* regrouped/re-sorted by `cat/pn`. Only `--depclean`'s own
@@ -4367,7 +4503,17 @@ fn run_unmerge_pretend(
             return ExitCode::from(130);
         }
         clean_delay_countdown();
-        return execute_unmerge(&removal_list, root, shell, debug, color, quiet, noinfo);
+        return execute_unmerge(
+            &removal_list,
+            root,
+            shell,
+            debug,
+            color,
+            quiet,
+            noinfo,
+            repos,
+            config,
+        );
     }
     ExitCode::SUCCESS
 }
@@ -4779,6 +4925,23 @@ fn stdin_is_tty() -> bool {
 /// makes a bare Enter loop back for a real answer instead of matching
 /// "Yes"; see `classify_yes_no`.
 fn ask_confirm(color: &Colorizer, question: &str) -> bool {
+    if ask_yes_no(color, question) {
+        return true;
+    }
+    println!("\nQuitting.\n");
+    false
+}
+
+/// The prompt half of `ask_confirm`, without the decline side effect:
+/// the same bold `<question>` + `[Yes/No]` loop, but a "No" (or EOF)
+/// answer just returns `false` with nothing printed -- real
+/// `UserQuery.query` itself prints nothing on "No" either (each real
+/// caller decides what a decline means). Backlog #231 needs this for
+/// the "read the news items while calculating dependencies?" prompt
+/// (real `_emerge/actions.py:4271-4281`): answering "No" there skips
+/// the `eselect` spawn and continues into `action_build`, it does not
+/// quit the run.
+fn ask_yes_no(color: &Colorizer, question: &str) -> bool {
     use std::io::Write;
     print!("\n{} ", color.c("bold", question));
     loop {
@@ -4801,7 +4964,6 @@ fn ask_confirm(color: &Colorizer, question: &str) -> bool {
             Ok(_) => match classify_yes_no(line.trim(), ask_enter_invalid()) {
                 Some(true) => return true,
                 Some(false) => {
-                    println!("\nQuitting.\n");
                     return false;
                 }
                 None => print!("Sorry, response '{}' not understood. ", line.trim()),
@@ -4974,8 +5136,41 @@ fn run_resume(
     // Real `--quiet` (`noiselimit < 0`, `actions.py:3907-3908`): suppresses
     // the post-merge info-regen einfo lines like every other action's.
     quiet: bool,
+    // Backlog #231 (a/c): real `run_action` prints the pre-resolution
+    // news notice (and offers the `--read-news` prompt) before
+    // `action_build` -- which is where the resume handling lives -- so
+    // resumed builds print both notices too.
+    ask: bool,
+    read_news: bool,
 ) -> ExitCode {
+    let color = Colorizer::new(color::resolve_havecolor(color_opt));
+    let repos = match portage_repo::find_repos(config_root) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("emerge: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    // Backlog #231 (a): real `_emerge/actions.py::run_action`
+    // (`actions.py:4266-4270`) prints the GLEP 42 pre-resolution notice
+    // before `action_build` -- and the resume handling (`resume =
+    // True`, `resume_depgraph`, `actions.py:220-...`) lives *inside*
+    // `action_build` -- so a resumed build prints it too (even when the
+    // resume list turns out missing or empty below: real's notice
+    // precedes all of that). Gated on non-`--pretend` like real; the
+    // `--ask` + `--read-news` prompt (c) rides the same pre point.
+    let resume_pre_printed = if !pretend {
+        display_news_notice_if_any(&repos, root, config, &color)
+    } else {
+        false
+    };
+    offer_news_reading(ask, read_news, resume_pre_printed, &color);
     let Some((favorites, mut mergelist, opts)) = crate::mtimedb::read_resume_list(root) else {
+        // Real reaches `post_emerge` even on this path (unconditional
+        // in `run_action`, `actions.py:4289-4297`): with nothing merged
+        // that prints the notice only under `--pretend`
+        // (`post_emerge.py:112-117`) -- a no-op otherwise.
+        pretend_end_news_notice(pretend, &repos, root, config, &color);
         eprintln!("emerge: could not find a valid resume list");
         return ExitCode::from(1);
     };
@@ -4984,17 +5179,20 @@ fn run_resume(
     }
     if mergelist.is_empty() {
         crate::mtimedb::clear_resume_list(root);
+        // Same `post_emerge` arm as above: only a `--pretend` run
+        // prints here.
+        pretend_end_news_notice(pretend, &repos, root, config, &color);
         println!("emerge: the resume list is empty; nothing to do.");
         return ExitCode::SUCCESS;
     }
-
-    let repos = match portage_repo::find_repos(config_root) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("emerge: {e}");
-            return ExitCode::from(1);
-        }
-    };
+    // The local binary pool for resumed `Binary` entries (real's bintree
+    // re-resolution, backlog #186): the resolver's own pool constructor,
+    // so a resumed binary names the same `::repo` a fresh merge would.
+    // Built once even when the list turns out all-source (cheap: the
+    // constructor reads `<pkgdir>/Packages`, and only scans `$PKGDIR`
+    // files when a `--usepkg`-family run already scanned them into
+    // `config.scanned_binpkgs`).
+    let resume_bin_index = portage_repo::build_local_binpkg_index(config);
     let entries: Vec<portage_repo::GraphEntry> = mergelist
         .iter()
         .map(|(kind, c, p, v)| {
@@ -5002,7 +5200,16 @@ fn run_resume(
                 crate::mtimedb::ResumeEntryKind::Ebuild => portage_repo::CandidateSource::Ebuild,
                 crate::mtimedb::ResumeEntryKind::Binary => portage_repo::CandidateSource::Binary,
             };
-            let mut entry = emerge_build::resume_entry(c, p, v, source, &repos);
+            // A resumed binary entry re-resolves its `::repo` from the
+            // binary pool, never from the ebuild repos (real
+            // `depgraph.py::_loadResumeCommand`, backlog #186).
+            let binary_repo = if source == portage_repo::CandidateSource::Binary {
+                emerge_build::resume_binary_repo(&resume_bin_index, &config.binrepos, root, c, p, v)
+            } else {
+                None
+            };
+            let mut entry =
+                emerge_build::resume_entry(c, p, v, source, &repos, binary_repo.as_deref());
             // The `mtimedb` resume list records only `cat/pkg-ver`, so the
             // resolver's own `use_flags_display` population is skipped.
             // Recompute it for a source build -- `emerge_build::
@@ -5028,7 +5235,6 @@ fn run_resume(
     // re-derived `N`/`U`/`R` markers, same limitation the resume merge
     // itself already carries.
     if pretend {
-        let color = Colorizer::new(color::resolve_havecolor(color_opt));
         let mut blocker_lines: Vec<String> = Vec::new();
         for (i, _entry) in entries.iter().enumerate() {
             print_entry_line(
@@ -5060,8 +5266,14 @@ fn run_resume(
                 &[],
                 &[],
                 &[],
+                false,
             );
         }
+        // Backlog #231 (a): real reaches `post_emerge` after the
+        // `--resume --pretend` display too (`actions.py:4289-4297`),
+        // printing the notice when the vdb did not change
+        // (`post_emerge.py:112-117`).
+        pretend_end_news_notice(pretend, &repos, root, config, &color);
         return ExitCode::SUCCESS;
     }
 
@@ -5104,6 +5316,10 @@ fn run_resume(
     // introduced here) -- unlike a pure-source resume, a binary-
     // involving one never had `--jobs` parallelism to begin with, so
     // this isn't a regression for it.
+    // Backlog #197: `--resume` carries no `--quiet`/`--verbose` in
+    // `mtimedb["resume"]` (a documented `myopts` cut), so the display
+    // mode is serial-streaming unless `-j` >1.
+    let resume_mode = emerge_build::scheduler_status_mode(jobs, false, None, entries.len(), false);
     let merge_result = if entries
         .iter()
         .all(|e| e.source == portage_repo::CandidateSource::Ebuild)
@@ -5122,6 +5338,7 @@ fn run_resume(
             // `--resume` carries no `--quiet-build` in `mtimedb["resume"]`
             // (a documented `myopts` cut) -- stream, unless `-j` >1.
             false,
+            resume_mode,
         )
     } else {
         let package_options = package_options_from_env(
@@ -5141,12 +5358,19 @@ fn run_resume(
             false,
             None,
             &[],
+            resume_mode,
         )
     };
     if let Err(e) = merge_result {
         let still = entries_not_merged(root, &entries);
         let fav_refs: Vec<&str> = favorites.iter().map(String::as_str).collect();
-        let _ = crate::mtimedb::write_resume_list(root, &fav_refs, &still, &opts);
+        // The empty-`still` guard is the failure path's own
+        // (`write_resume_list` itself is unconditional now, #179): a
+        // failure with nothing unmerged leaves the per-merge shrink's
+        // own tail alone.
+        if !still.is_empty() {
+            let _ = crate::mtimedb::write_resume_list(root, &fav_refs, &still, &opts);
+        }
         // Backlog #174: a merge-time binpkg digest failure already
         // printed real's full tail -- no `emerge:` line either (real
         // exits a merge failure via `FAILURE`, not the action error
@@ -5159,6 +5383,13 @@ fn run_resume(
         {
             eprintln!("emerge: {e}");
         }
+        // Backlog #231 (a): real `post_emerge.py:155` prints the notice
+        // regardless of retval -- gated on the vdb having changed
+        // (`:112-117`), which here is `still.len() < entries.len()` (at
+        // least one resumed entry landed; the same structural
+        // approximation as the non-resume failure arms'
+        // `merge_failure_news_notice`).
+        merge_failure_news_notice(still.len() < entries.len(), &repos, root, config, &color);
         return ExitCode::from(1);
     }
 
@@ -5184,13 +5415,17 @@ fn run_resume(
     // `--resume` too (the vdb changed -- the failure branch above
     // already returned, and an empty mergelist returned even earlier),
     // before the preserved-libs advisory.
-    let color = Colorizer::new(color::resolve_havecolor(None));
     let noinfo = config_features_list(config).iter().any(|t| t == "noinfo");
     if let Err(e) = crate::info_files::post_merge_info_update(root, &color, quiet, noinfo) {
         eprintln!("emerge: {e}");
         return ExitCode::from(1);
     }
     crate::preserved_libs::show_preserved_libs_notice(root, &color, false, false);
+    // Backlog #231 (a): real `post_emerge()` (`post_emerge.py:155`)
+    // prints the GLEP 42 notice a second time once the resumed merge
+    // changed the vdb -- same FEATURES-plus-nonzero-count gates as the
+    // non-resume success path above.
+    display_news_notice_if_any(&repos, root, config, &color);
 
     ExitCode::SUCCESS
 }
@@ -5198,9 +5433,11 @@ fn run_resume(
 /// Real `"unmerge-backup" in self.settings.features` -- not a
 /// `make.globals` default token, so absent unless `FEATURES` names it.
 ///
-/// This is the **raw process-env fallback**, for the CLI boundaries with
-/// no resolved config (`ebuild <file>` and `execute_unmerge`, which
-/// receives none -- #37 S3 residual). Every build/merge path reads the
+/// This is the **raw process-env fallback**, for the CLI boundaries
+/// with no resolved config (`ebuild <file>`) and for the two
+/// `execute_unmerge` reads (`unmerge-backup`, `split-elog`) that
+/// predate its resolved `config` param (backlog #196 fix round 1) and
+/// keep the old fallback. Every build/merge path reads the
 /// resolved list instead: `config_features_list`/`config_features_string`
 /// here, `MergeOptions::set_resolved_features`, and
 /// `ebuild_phases::features_string`/`emerge_build::resolved_features`.
@@ -5210,6 +5447,7 @@ fn feature_enabled(token: &str) -> bool {
         .unwrap_or(false)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn execute_unmerge(
     removal_list: &[(String, String, String)],
     root: &Path,
@@ -5222,6 +5460,15 @@ fn execute_unmerge(
     // `post_emerge.py:127`).
     quiet: bool,
     noinfo: bool,
+    // Backlog #196 fix round 1: real calls `post_emerge` after the
+    // uninstall actions (clean/depclean/prune/unmerge/rage-clean --
+    // `actions.py:4164-4175`, except deselect/buildpkgonly/fetchonly/
+    // pretend), whose tail is the GLEP 42 count notice. `repos` +
+    // `config` feed that notice; the vdb-changed gate is structural
+    // (every caller only reaches here with a non-empty `removal_list`
+    // and `pretend == false`).
+    repos: &[portage_repo::RepoConfig],
+    config: &portage_profile::Config,
 ) -> ExitCode {
     let portage_tmpdir = portage_repo::portage_tmpdir_from_env();
     let options = ebuild_merge::MergeOptions::from_env(shell, debug);
@@ -5260,11 +5507,28 @@ fn execute_unmerge(
             &portage_tmpdir,
             &options,
             backup.as_ref(),
+            false,
+            &BTreeMap::new(),
+            // Standalone `emerge -C`: no replacing package, so neither
+            // feed (backlog #224).
+            &[],
         ) {
+            // Backlog #196 fix round 1: real `post_emerge` prints the
+            // notice regardless of retval -- gated on the vdb having
+            // changed. `idx > 0` is that gate here (at least one
+            // package was already removed this run); a failure on the
+            // very first removal changed nothing and stays silent,
+            // exactly like real's `:112-117` early return.
+            if idx > 0 {
+                display_news_notice_if_any(repos, root, config, color);
+            }
             eprintln!("emerge: {e}");
             return ExitCode::from(1);
         }
         if let Err(e) = deselect_from_world(root, category, package) {
+            // The package itself is already removed above, so the vdb
+            // changed -- the notice prints (same real arm).
+            display_news_notice_if_any(repos, root, config, color);
             eprintln!("emerge: {e}");
             return ExitCode::from(1);
         }
@@ -5300,12 +5564,27 @@ fn execute_unmerge(
     // removed something, regenerate any stale GNU info directory index,
     // then warn about any library the removal preserved.
     if let Err(e) = crate::info_files::post_merge_info_update(root, color, quiet, noinfo) {
+        // Every removal already landed above, so the vdb changed -- the
+        // notice prints (same real arm as below).
+        display_news_notice_if_any(repos, root, config, color);
         eprintln!("emerge: {e}");
         return ExitCode::from(1);
     }
     // Real `post_emerge()`: after `emerge -C` / `--depclean` / `--prune`
     // removed something, warn about any library the removal preserved.
     crate::preserved_libs::show_preserved_libs_notice(root, color, false, false);
+    // Backlog #196 fix round 1: real `post_emerge()`'s tail
+    // (`post_emerge.py:155`) after the uninstall actions
+    // (`actions.py:4164-4175` -- clean/depclean/prune/unmerge/
+    // rage-clean; NOT deselect -- `run_deselect` never reaches here --
+    // and never under `--pretend`, which returns before any removal).
+    // The vdb-changed gate is structural: every caller only reaches
+    // here with a non-empty `removal_list`, so an empty selection
+    // (which returns before removal) prints no notice, like real's
+    // `:112-117` early return.
+    if !removal_list.is_empty() {
+        display_news_notice_if_any(repos, root, config, color);
+    }
 
     ExitCode::SUCCESS
 }
@@ -5398,6 +5677,12 @@ fn installed_cp_versions(root: &Path) -> Vec<(String, String, String, String)> {
         };
         for pkg in pkgs.into_iter().filter(|e| e.path().is_dir()) {
             let dirname = pkg.file_name().to_string_lossy().to_string();
+            // Real `vardbapi._excluded_dirs`: an in-progress
+            // `-MERGING-<pf>` entry is never a `--unmerge`/`-C`
+            // resolution candidate.
+            if portage_util::is_merging_vdb_entry(&dirname) {
+                continue;
+            }
             if let Some((name, version)) = split_pf(&dirname) {
                 // #116: through the vdb seam; the main slot only, as
                 // before (an absent `SLOT` is `""`, like the old
@@ -5501,6 +5786,9 @@ fn run_prune_pretend(
     root: &Path,
     config_root: &Path,
     config: &portage_profile::Config,
+    // The `repos.conf` repos -- threaded into the post-removal GLEP 42
+    // count notice (backlog #196 fix round 1).
+    repos: &[portage_repo::RepoConfig],
     verbose: bool,
     lib_check: bool,
     pretend: bool,
@@ -5570,6 +5858,7 @@ fn run_prune_pretend(
         root,
         config_root,
         config,
+        repos,
         result.ordered,
         pretend,
         ask,
@@ -5614,6 +5903,10 @@ fn run_prune_nodeps_pretend(
     // suppression + resolved-config `noinfo`); computed by the caller.
     quiet: bool,
     noinfo: bool,
+    // The `repos.conf` repos + resolved config -- threaded into the
+    // post-removal GLEP 42 count notice (backlog #196 fix round 1).
+    repos: &[portage_repo::RepoConfig],
+    config: &portage_profile::Config,
 ) -> ExitCode {
     run_prune_nodeps_or_clean(
         targets,
@@ -5627,6 +5920,8 @@ fn run_prune_nodeps_pretend(
         false,
         quiet,
         noinfo,
+        repos,
+        config,
     )
 }
 
@@ -5652,6 +5947,10 @@ fn run_clean_pretend(
     // suppression + resolved-config `noinfo`); computed by the caller.
     quiet: bool,
     noinfo: bool,
+    // The `repos.conf` repos + resolved config -- threaded into the
+    // post-removal GLEP 42 count notice (backlog #196 fix round 1).
+    repos: &[portage_repo::RepoConfig],
+    config: &portage_profile::Config,
 ) -> ExitCode {
     run_prune_nodeps_or_clean(
         targets,
@@ -5665,6 +5964,8 @@ fn run_clean_pretend(
         true,
         quiet,
         noinfo,
+        repos,
+        config,
     )
 }
 
@@ -5683,6 +5984,10 @@ fn run_prune_nodeps_or_clean(
     // suppression + resolved-config `noinfo`); computed by the caller.
     quiet: bool,
     noinfo: bool,
+    // The `repos.conf` repos + resolved config -- threaded into the
+    // post-removal GLEP 42 count notice (backlog #196 fix round 1).
+    repos: &[portage_repo::RepoConfig],
+    config: &portage_profile::Config,
 ) -> ExitCode {
     let action = if is_clean { "clean" } else { "prune" };
     let args = match resolve_cleanup_args(targets, root, action) {
@@ -5810,7 +6115,17 @@ fn run_prune_nodeps_or_clean(
             return ExitCode::from(130);
         }
         clean_delay_countdown();
-        return execute_unmerge(&removal_list, root, shell, debug, color, quiet, noinfo);
+        return execute_unmerge(
+            &removal_list,
+            root,
+            shell,
+            debug,
+            color,
+            quiet,
+            noinfo,
+            repos,
+            config,
+        );
     }
     ExitCode::SUCCESS
 }
@@ -6043,6 +6358,9 @@ fn run_depclean_pretend(
     root: &Path,
     config_root: &Path,
     config: &portage_profile::Config,
+    // The `repos.conf` repos -- threaded into the post-removal GLEP 42
+    // count notice (backlog #196 fix round 1).
+    repos: &[portage_repo::RepoConfig],
     verbose: bool,
     lib_check: bool,
     // Real `action_depclean`'s `deselect = myopts.get("--deselect") !=
@@ -6260,6 +6578,7 @@ fn run_depclean_pretend(
         root,
         config_root,
         config,
+        repos,
         result.ordered,
         pretend,
         ask,
@@ -6822,14 +7141,14 @@ impl mrg_director::NewsSelector for FilesystemNews<'_> {
     }
 }
 
-fn run_check_news(
-    repos: &[portage_repo::RepoConfig],
-    root: &Path,
-    quiet: bool,
-    color: &Colorizer,
-) -> ExitCode {
-    let mut any = false;
-    let mut first = true;
+/// One repo's unread-news evaluation plus the `updateItems` state
+/// write-back, shared by `--check-news` and the GLEP 42 count notice
+/// (backlog #196): every repo maps to its `len(.unread)` count (real
+/// `NewsManager.getUnreadItems`, `news.py:234`) -- 0 when the repo has
+/// no `metadata/news` directory at all. The `.unread`/`.skip` files are
+/// rewritten (sorted, one id per line) only when their sets actually
+/// changed, exactly like `run_check_news` always did.
+fn unread_news_counts(repos: &[portage_repo::RepoConfig], root: &Path) -> Vec<(String, usize)> {
     let mut per_repo: Vec<(String, usize)> = Vec::new();
     for repo in repos {
         // The unread computation runs through the director's news slot:
@@ -6859,32 +7178,167 @@ fn run_check_news(
             &eval.skip_orig,
             &eval.skip,
         );
-        let count = eval.unread.len();
-        per_repo.push((repo.name.clone(), count));
-        if count > 0 {
-            any = true;
+        per_repo.push((repo.name.clone(), eval.unread.len()));
+    }
+    per_repo
+}
+
+/// Real `portage.news.display_news_notifications` (`news.py:509-528`):
+/// a leading blank line, then one ` * IMPORTANT: N news items need
+/// reading for repository '<repo>'.` line per repo with a nonzero
+/// count, then ` * Use eselect news read to view new items.` plus a
+/// trailing blank line. The all-zero gate lives INSIDE, like real
+/// (`news.py:526`, `if news_reader_display`): an all-zero map prints
+/// nothing at all, so a future third caller cannot emit a dangling
+/// "Use eselect…" block (review Minor #4). Shared by `--check-news`
+/// and the backlog #196 count notice so the two can never drift apart.
+fn print_news_notifications(per_repo: &[(String, usize)], color: &Colorizer) -> bool {
+    let mut first = true;
+    for (repo, count) in per_repo {
+        if *count > 0 {
+            if first {
+                println!();
+                first = false;
+            }
+            println!(
+                "{} {count} news items need reading for repository '{repo}'.",
+                color.c("WARN", " * IMPORTANT:")
+            );
         }
     }
-
-    if any {
-        // Real `display_news_notifications`.
-        for (repo, count) in &per_repo {
-            if *count > 0 {
-                if first {
-                    println!();
-                    first = false;
-                }
-                println!(
-                    "{} {count} news items need reading for repository '{repo}'.",
-                    color.c("WARN", " * IMPORTANT:")
-                );
-            }
-        }
+    if !first {
         println!(
             "{} Use {} to view new items.\n",
             color.c("WARN", " *"),
             color.c("GOOD", "eselect news read")
         );
+    }
+    !first
+}
+
+/// Real `display_news_notification`'s own gate (`post_emerge.py:38`):
+/// `news` is in the resolved `FEATURES`. Pure predicate so the gate
+/// stays unit-pinned independently of the counting.
+fn news_notice_enabled(config: &portage_profile::Config) -> bool {
+    config_features_list(config).iter().any(|t| t == "news")
+}
+
+/// Backlog #196: real `_emerge/post_emerge.py::display_news_notification`
+/// (`post_emerge.py:37-46`): print the GLEP 42 count notice when `news`
+/// is in the resolved `FEATURES` and at least one repo has a nonzero
+/// unread count (real `count_unread_news`, `news.py:447-506`, reusing the
+/// existing `FilesystemNews` evaluation -- no second news parser). No
+/// `--quiet` gate: real's own function consults neither `--quiet` nor
+/// `--ask` (the m185 probe's `--quiet` shape shows the notice surfacing
+/// mid-merge through stdio buffering, which is not ported).
+/// Returns real `display_news_notification`'s own boolean (whether the
+/// notice printed): the `--ask` + `--read-news` prompt below only fires
+/// when the notice actually printed (real `actions.py:4268-4281`
+/// short-circuits on its falsy return).
+/// The all-zero gate lives in `print_news_notifications` (like real
+/// `news.py:526`), so this calls it unconditionally past the FEATURES
+/// gate.
+fn display_news_notice_if_any(
+    repos: &[portage_repo::RepoConfig],
+    root: &Path,
+    config: &portage_profile::Config,
+    color: &Colorizer,
+) -> bool {
+    if !news_notice_enabled(config) {
+        return false;
+    }
+    let per_repo = unread_news_counts(repos, root);
+    print_news_notifications(&per_repo, color)
+}
+
+/// Backlog #231 (c): real `_emerge/actions.py::run_action`
+/// (`actions.py:4266-4281`) -- when the pre-resolution notice printed
+/// *and* `--ask` *and* `--read-news` are given, real asks "Would you
+/// like to read the news items while calculating dependencies?" (real
+/// `UserQuery.query` with the `--ask-enter-invalid` flag) and spawns
+/// `eselect news read` on "Yes" (stdio inherited, return code ignored).
+/// A "No" (or EOF) answer skips the spawn and continues into the
+/// resolve -- only the merge-list prompt quits the run. When `eselect`
+/// is missing the spawn raises `OSError`, and real prints `Please
+/// install eselect to use this feature.` to stderr. `--ask` without a
+/// TTY never reaches here (the up-front `stdin_is_tty` gate exits
+/// first), matching real `actions.py:3917-3926`; under `--pretend`
+/// `ask` is already false, matching real's `--pretend` gate around the
+/// whole block.
+fn offer_news_reading(ask: bool, read_news: bool, notice_printed: bool, color: &Colorizer) {
+    if !(ask && read_news && notice_printed) {
+        return;
+    }
+    if ask_yes_no(
+        color,
+        "Would you like to read the news items while calculating dependencies?",
+    ) {
+        match std::process::Command::new("eselect")
+            .args(["news", "read"])
+            .status()
+        {
+            Ok(_) => {}
+            Err(_) => eprintln!("Please install eselect to use this feature."),
+        }
+    }
+}
+
+/// Backlog #196 fix round 1: real `_emerge/post_emerge.py:112-117` --
+/// when the vdb did not change and the run was `--pretend`,
+/// `post_emerge` still runs `display_news_notification` before
+/// returning. Real reaches this arm for EVERY `action_build` retval:
+/// `run_action` calls `post_emerge` unconditionally (the final
+/// `retval = action_build(...); post_emerge(...)` in the build branch,
+/// `actions.py:4289-4297`), so a failed `--pretend` resolve prints the
+/// notice too -- every `--pretend` exit of the build path below ends
+/// with this call. (Usage-error returns above the resolve never reach
+/// `post_emerge` in real either, so they stay silent here as well.)
+/// `--json` is a portuale-only format with no real counterpart and
+/// stays machine-readable: no notice on that path.
+fn pretend_end_news_notice(
+    pretend: bool,
+    repos: &[portage_repo::RepoConfig],
+    root: &Path,
+    config: &portage_profile::Config,
+    color: &Colorizer,
+) {
+    if pretend {
+        display_news_notice_if_any(repos, root, config, color);
+    }
+}
+
+/// Backlog #196 fix round 1: real `post_emerge.py:155` prints the
+/// notice regardless of retval (`retval` only feeds `exit_msg`,
+/// `:104-108`) -- but only when the vdb actually changed (`:112-117`
+/// early-returns otherwise). `changed` is that gate: the caller passes
+/// `unmerged.len() < entries.len()` (at least one entry landed, read
+/// off the vdb the way `entries_not_merged` already does for the
+/// resume list). A total failure with nothing merged -- e.g. a digest
+/// failure on the first package -- stays silent, exactly like real.
+fn merge_failure_news_notice(
+    changed: bool,
+    repos: &[portage_repo::RepoConfig],
+    root: &Path,
+    config: &portage_profile::Config,
+    color: &Colorizer,
+) {
+    if changed {
+        display_news_notice_if_any(repos, root, config, color);
+    }
+}
+
+fn run_check_news(
+    repos: &[portage_repo::RepoConfig],
+    root: &Path,
+    quiet: bool,
+    color: &Colorizer,
+) -> ExitCode {
+    let per_repo = unread_news_counts(repos, root);
+    let any = per_repo.iter().any(|(_, count)| *count > 0);
+
+    if any {
+        // Real `display_news_notifications`.
+        print_news_notifications(&per_repo, color);
     } else if !quiet {
         // Real `print("", colorize("GOOD", "*"), "No news items were found.")`.
         println!(" {} No news items were found.", color.c("GOOD", "*"));
@@ -7068,16 +7522,52 @@ fn buildpkg_from_config(buildpkg_opt: Option<bool>, config: &portage_profile::Co
     buildpkg_opt.unwrap_or_else(|| config_features_list(config).iter().any(|t| t == "buildpkg"))
 }
 
+/// The resolved `FEATURES` incremental list, if it was assigned
+/// anywhere: the folded `make.globals` + profile + `make.conf` +
+/// calling-env stack ([`Config::resolved_incremental`], with real's
+/// own `-*` / `-tok` / `+tok` semantics), falling back to a raw
+/// whitespace split of `other_vars["FEATURES"]` for configs that carry
+/// `FEATURES` only there. `None` means nothing configured anywhere --
+/// callers that need real's host-`make.globals` default seed it
+/// themselves (see `pkgdir_index_trusted`).
+fn config_features_opt(config: &portage_profile::Config) -> Option<Vec<String>> {
+    config.resolved_incremental("FEATURES").or_else(|| {
+        config
+            .other_vars
+            .get("FEATURES")
+            .map(|f| f.split_whitespace().map(String::from).collect())
+    })
+}
+
 fn config_features_list(config: &portage_profile::Config) -> Vec<String> {
-    config
-        .resolved_incremental("FEATURES")
-        .or_else(|| {
-            config
-                .other_vars
-                .get("FEATURES")
-                .map(|f| f.split_whitespace().map(String::from).collect())
-        })
-        .unwrap_or_default()
+    config_features_opt(config).unwrap_or_default()
+}
+
+/// Real `bintree.populate`'s own `reindex = "pkgdir-index-trusted" not
+/// in self.settings.features or force_reindex` (`bintree.py:936-938`,
+/// backlog #199) for the local `$PKGDIR` scan: `true` means the scan
+/// trusts the `Packages` index (real `_populate_local(reindex=False)`),
+/// `false` means it re-stats and re-reads (`reindex=True`).
+///
+/// Read from the same resolved chain every other resolver-side
+/// `FEATURES` read uses (`config_features_opt`, the folded
+/// `make.globals` + profile + `make.conf` + calling-env stack -- so a
+/// `FEATURES=-pkgdir-index-trusted` in `make.conf` or on the calling
+/// env reaches the scan; no new env read here), with the same
+/// `other_vars` fallback `config_features_list` uses. The fold starts from
+/// real's own default: the token is in real `make.globals`' own default
+/// `FEATURES` (`cnf/make.globals:81`), which real always sources from
+/// the host installation -- while portuale reads `make.globals`
+/// `config_root`-relative, so under a test/fixture root it contributes
+/// nothing. `None` (nothing configured anywhere) therefore stays
+/// trusted (byte-identical to the pre-#199 scan, and what real computes
+/// on a live host); only a folded list that lacks the token --
+/// an explicit `-pkgdir-index-trusted` (or `-*`, real
+/// `resolved_incremental`'s own clear) not undone by a later re-add --
+/// distrusts, exactly when real's folded `features` would lack it.
+fn pkgdir_index_trusted(config: &portage_profile::Config) -> bool {
+    config_features_opt(config)
+        .is_none_or(|features| features.iter().any(|t| t == "pkgdir-index-trusted"))
 }
 
 /// The resolved, merge-time `FEATURES` incremental list, space-joined --
@@ -7238,6 +7728,20 @@ fn resolved_global_use(config: &portage_profile::Config) -> std::collections::BT
         set.remove(m);
     }
     set
+}
+
+/// One `--info` variable-dump value for a plain scalar key: real
+/// `action_info`'s `settings.get(k)` (`_emerge/actions.py:2240`) walks
+/// `lookuplist` env-first (real `config.py:3178-3182`; `USE_ORDER`
+/// `"env:pkg:conf:defaults:…"` at `:1031-1035`), so this is #180's
+/// `env_over_config_scalar` chain (backlog #219), not `other_vars`
+/// with an env fallback. For keys `resolve_config` already env-folds
+/// (`ENV_SCALAR_VARS`, e.g. `PKGDIR`) the two reads agree; for the rest
+/// (`PORTAGE_BZIP2_COMMAND`, `PORTAGE_BUNZIP2_COMMAND`, any profile
+/// `info_vars` extra outside the allowlists) the env now wins, as real
+/// prints it.
+fn info_scalar_value(config: &portage_profile::Config, key: &str) -> Option<String> {
+    portage_profile::env_over_config_scalar(config, key)
 }
 
 /// First line of `<cmd> --version` output, trimmed -- `None` if the
@@ -7712,15 +8216,18 @@ fn run_info(
                     .collect();
                 Some(flags.join(" "))
             }
-            // Real `settings.get(k)` bottoms out in `configdict["env"]`
-            // (`os.environ`), so a curated `info_vars` entry that is only
-            // ever an environment variable (`SHELL`, `LC_ALL`, …) still
-            // shows. Config sources win; the process env is the fallback.
-            _ => config
-                .other_vars
-                .get(k)
-                .cloned()
-                .or_else(|| std::env::var(k).ok()),
+            // Real `settings.get(k)` walks `lookuplist` env-first
+            // (`actions.py:2240`; `config.py:3178-3182`, `USE_ORDER`
+            // `"env:pkg:conf:…"` at `:1031-1035`), so the calling
+            // environment wins over `make.conf`/profile/`make.globals`
+            // -- including for keys `resolve_config` never env-folds
+            // itself (backlog #219: `PORTAGE_BZIP2_COMMAND`,
+            // `PORTAGE_BUNZIP2_COMMAND`). A curated `info_vars` entry
+            // that is only ever an environment variable (`SHELL`,
+            // `LC_ALL`, …) still shows via the same chain. (Backlog
+            // #180's `env_over_config_scalar`, not a second reader,
+            // and no raw `std::env` read.)
+            _ => info_scalar_value(config, k),
         };
         match value {
             Some(v) if k == "PORTAGE_BZIP2_COMMAND" && v == "bzip2" => {}
@@ -8656,6 +9163,25 @@ fn merge_list_shown(pretend: bool, ask: bool, tree: bool, verbose: bool, quiet: 
     pretend || ((ask || tree || verbose) && !(quiet && !ask))
 }
 
+/// Backlog #225: real `_emerge/actions.py:496-521` (`action_build`):
+/// inside the display-flag branch (the same gate `show_merge_list`
+/// carries for a non-`--pretend` run -- aborts and `--autounmask-only`
+/// never reach the merge driver), a plan with no merge-bound entries
+/// (`mergecount == 0`; real counts `operation == "merge"` packages, and
+/// `emerge_build::resume_cpv` is `Some` for exactly that set) prints
+/// `Nothing to merge; quitting.` on stdout and returns `EX_OK` before
+/// the `resume_backup` rotation and before `Scheduler` -- the resume
+/// list and its backup stay untouched. Pure predicate so the
+/// `--pretend` exclusion (real's `--pretend` branch returns after the
+/// display with no message) and the plain-run exclusion (`mergecount`
+/// stays `None` without display flags, so `Scheduler` still writes --
+/// possibly empty -- per #179) stay unit-pinned; the
+/// resume-list-untouched half is pinned end to end in pmtest
+/// (`test_portuale.py`, backlog #225).
+fn nothing_to_merge(pretend: bool, show_merge_list: bool, mergecount: usize) -> bool {
+    !pretend && show_merge_list && mergecount == 0
+}
+
 /// Backlog #185 fix round 1: real's resolution-phase header gating
 /// (real `_emerge/depgraph.py:12089-12094`, `_start_resolution_display`):
 /// the `These are the packages that would be ...` header prints when
@@ -8689,6 +9215,11 @@ pub fn run(args: &[String]) -> ExitCode {
     // helpers; reset per invocation so an in-process caller can't leak it
     // (the CLI parse below sets it again from argv or the defaults).
     ASK_ENTER_INVALID.store(false, std::sync::atomic::Ordering::Relaxed);
+
+    // The live binhost-index overrides are process-wide state too
+    // (review M4): a second in-process run must resolve from its own
+    // refresh, not inherit the first run's in-memory indexes.
+    portage_repo::clear_remote_binary_index_overrides();
 
     // Config resolution comes before argv parsing, matching real
     // `emerge`'s own order: its first pass only finds `--config-root`,
@@ -8739,6 +9270,12 @@ pub fn run(args: &[String]) -> ExitCode {
     // (`128 + SIGINT`). Ignored under `--pretend` (nothing executes
     // anyway).
     let mut ask = false;
+    // --read-news (real `y_or_n`, `main.py:175`: `choices: true_y_or_n`,
+    // normalized to `True`/`None` at `main.py:950-953`): with `--ask`,
+    // offer `eselect news read` while calculating dependencies (real
+    // `actions.py:4266-4281`, backlog #231). Alone it changes nothing --
+    // real's prompt requires both flags.
+    let mut read_news = false;
     // --resume/-r + --skipfirst (real `_emerge/Scheduler.py` resume
     // handling): `--resume` replays `mtimedb["resume"]["mergelist"]` --
     // the packages a previous failed `emerge <atom>` left unmerged;
@@ -8828,6 +9365,21 @@ pub fn run(args: &[String]) -> ExitCode {
     // `complete` param). `--rebuild-if-{unbuilt,new-rev,new-ver}` imply it
     // too (same `create_depgraph_params.py` block); `--nodeps` pops it.
     let mut complete_graph = false;
+    // --ignore-world (real `y_or_n` in `default_arg_opts` so a bare flag
+    // inserts `"True"`, `true_y_or_n` choices in `argument_options`,
+    // `main.py:164`/`486`/`928-929`: only a `true_y` value flips it to
+    // `True`; `create_depgraph_params.py:128-129` sets
+    // `myparams["ignore_world"]` only on `is True`). "Ignore the @world
+    // package set and its dependencies" (`man/emerge.1`): real
+    // `depgraph.py:357-360` empties `_required_set_names` (dropping
+    // `@world` -- which nests `@selected`/`@system`/`@profile`, real
+    // `_sets/__init__.py:97-98` -- from the complete-graph seeds, so the
+    // complete walk covers only the deep dependencies of the args) and
+    // `:10107` skips the `@selected` uninstall guard. No `actions.py`
+    // handling, no `--complete-graph`/`--deep`/`--update` interplay, and
+    // no removal-action effect (real `create_depgraph_params.py`
+    // returns early for `remove` before reaching the flag).
+    let mut ignore_world = false;
     // --complete-graph-if-new-use / --complete-graph-if-new-ver (real
     // `y_or_n`, `main.py:157-158`). Both default ON -- real
     // `_complete_graph` reads `myparams.get("complete_if_new_*", "y")`, so
@@ -9172,6 +9724,28 @@ pub fn run(args: &[String]) -> ExitCode {
             i += 1;
         } else if arg == "--ask=n" {
             ask = false;
+            i += 1;
+        } else if arg == "--read-news" {
+            // Real `true_y_or_n`: a bare flag, or `--read-news=y`/`--read-news=n`.
+            match args.get(i + 1).map(String::as_str) {
+                Some("y") => {
+                    read_news = true;
+                    i += 2;
+                }
+                Some("n") => {
+                    read_news = false;
+                    i += 2;
+                }
+                _ => {
+                    read_news = true;
+                    i += 1;
+                }
+            }
+        } else if arg == "--read-news=y" {
+            read_news = true;
+            i += 1;
+        } else if arg == "--read-news=n" {
+            read_news = false;
             i += 1;
         } else if arg == "--newuse" || arg == "-N" {
             newuse = true;
@@ -9535,6 +10109,24 @@ pub fn run(args: &[String]) -> ExitCode {
                 "y".to_string()
             };
             complete_graph = matches!(val.as_str(), "y" | "True");
+        } else if arg == "--ignore-world" || arg.starts_with("--ignore-world=") {
+            // Same `true_y_or_n` bare/`=y`/`=True` -> on, `=n` -> off shape
+            // as `--complete-graph` above (real `main.py:164`/`486`/
+            // `928-929` + `create_depgraph_params.py:128-129`).
+            let val = if let Some(v) = arg.strip_prefix("--ignore-world=") {
+                i += 1;
+                v.to_string()
+            } else if matches!(
+                args.get(i + 1).map(String::as_str),
+                Some("y" | "n" | "True")
+            ) {
+                i += 2;
+                args[i - 1].clone()
+            } else {
+                i += 1;
+                "y".to_string()
+            };
+            ignore_world = matches!(val.as_str(), "y" | "True");
         } else if arg == "--complete-graph-if-new-use"
             || arg.starts_with("--complete-graph-if-new-use=")
             || arg == "--complete-graph-if-new-ver"
@@ -11053,6 +11645,8 @@ pub fn run(args: &[String]) -> ExitCode {
             shell,
             debug,
             quiet,
+            ask,
+            read_news,
         );
     }
 
@@ -11101,7 +11695,10 @@ pub fn run(args: &[String]) -> ExitCode {
         // `--usepkg` resolve path does further down (that scan runs after
         // this standalone-action dispatch, so `--info` needs its own).
         if info_usepkg {
-            match crate::binpkg::populate_local_pkgdir(Path::new(&config.pkgdir)) {
+            match crate::binpkg::populate_local_pkgdir(
+                Path::new(&config.pkgdir),
+                pkgdir_index_trusted(&config),
+            ) {
                 Ok(entries) if !entries.is_empty() => config.scanned_binpkgs = Some(entries),
                 Ok(_) => {}
                 Err(e) => {
@@ -11138,6 +11735,8 @@ pub fn run(args: &[String]) -> ExitCode {
             &color,
             quiet,
             config_features_list(&config).iter().any(|t| t == "noinfo"),
+            &repos,
+            &config,
         );
     }
     // `--rage-clean`: a fast `--unmerge` (identical `--pretend` display).
@@ -11148,6 +11747,7 @@ pub fn run(args: &[String]) -> ExitCode {
             &root,
             &config_root,
             &config,
+            &repos,
             false,
             pretend,
             ask,
@@ -11171,6 +11771,7 @@ pub fn run(args: &[String]) -> ExitCode {
             &root,
             &config_root,
             &config,
+            &repos,
             false,
             pretend,
             ask,
@@ -11187,6 +11788,7 @@ pub fn run(args: &[String]) -> ExitCode {
             &root,
             &config_root,
             &config,
+            &repos,
             verbose,
             lib_check,
             !deselect_n,
@@ -11212,6 +11814,8 @@ pub fn run(args: &[String]) -> ExitCode {
                 &color,
                 quiet,
                 config_features_list(&config).iter().any(|t| t == "noinfo"),
+                &repos,
+                &config,
             );
         }
         return run_prune_pretend(
@@ -11219,6 +11823,7 @@ pub fn run(args: &[String]) -> ExitCode {
             &root,
             &config_root,
             &config,
+            &repos,
             verbose,
             lib_check,
             pretend,
@@ -11528,10 +12133,14 @@ pub fn run(args: &[String]) -> ExitCode {
     // makes local binary candidates eligible, walk `$PKGDIR` for binpkg
     // files and build the pool from each file's own embedded metadata,
     // trusting any already-parsed `<pkgdir>/Packages` entry that
-    // vouches for the file (real's own default: `FEATURES=
+    // vouches for the file under real's own default (`FEATURES=
     // pkgdir-index-trusted` is in real `make.globals`' own default
     // `FEATURES`, so `_populate_local` runs with `reindex=False` and
-    // leaves size/digest verification to merge-time `BinpkgVerifier` --
+    // leaves size/digest verification to merge-time `BinpkgVerifier`;
+    // with `FEATURES=-pkgdir-index-trusted` only the `_mtime_`/`SIZE`
+    // fast path is trusted and stale stanzas are dropped -- backlog
+    // #199, `pkgdir_index_trusted` below threads the resolved
+    // `FEATURES` in).
     // `binpkg::populate_local_pkgdir`'s own doc comment has the full
     // real grounding, backlog #174). Runs unconditionally now,
     // `Packages` present or not -- real portage always walks
@@ -11542,7 +12151,7 @@ pub fn run(args: &[String]) -> ExitCode {
     // `--pretend` still writes nothing.
     if usepkg || usepkgonly {
         let pkgdir_path = Path::new(&config.pkgdir);
-        match crate::binpkg::populate_local_pkgdir(pkgdir_path) {
+        match crate::binpkg::populate_local_pkgdir(pkgdir_path, pkgdir_index_trusted(&config)) {
             Ok(entries) if !entries.is_empty() => config.scanned_binpkgs = Some(entries),
             Ok(_) => {}
             Err(e) => {
@@ -11610,16 +12219,18 @@ pub fn run(args: &[String]) -> ExitCode {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("/var/cache/distfiles"));
 
-    // Real `bintree._populate_remote`: a non-`--pretend` `--getbinpkg`
-    // run refreshes each `http(s)` binhost's `Packages` index into the
-    // local edb cache *before* resolution, so the resolver picks up the
-    // live pool. (`--pretend` deliberately never touches the network --
-    // it resolves against whatever is already cached.) A failed refresh
-    // is non-fatal (backlog #175): real warns (`!!! [<repo>] Error
-    // fetching ...`) and resolves against the local pool, so this
-    // returns nothing -- it never aborts the run.
-    if !pretend && getbinpkg {
-        emerge_getbinpkg::refresh_binhost_indexes(&config.binrepos, &root);
+    // Real `bintree._populate_remote`: a `--getbinpkg` run refreshes
+    // each binhost's `Packages` index into the local edb cache *before*
+    // resolution, so the resolver picks up the live pool -- in
+    // `--pretend` exactly like in a real merge (real `actions.py:3752`
+    // passes `getbinpkg_refresh=True` unconditionally; `pretend` only
+    // selects the stale-fallback message, never skips the fetch,
+    // `bintree.py:917-920`, backlog #192). A failed refresh is non-fatal
+    // (backlog #175): real warns (`!!! [<repo>] Error fetching ...`)
+    // and resolves against the local pool, so this returns nothing --
+    // it never aborts the run.
+    if getbinpkg {
+        emerge_getbinpkg::refresh_binhost_indexes(&config.binrepos, &root, pretend);
     }
 
     // Real `main.py:958-975` precedence for the `--rebuild-if-*` trio:
@@ -11655,14 +12266,40 @@ pub fn run(args: &[String]) -> ExitCode {
     // slot-operator-rebuild scan (real only slot-op-rebuilds a consumer
     // reachable from these). Computed once; `run_resolve` injects it into
     // a cloned `Config` only for the `complete = true` pass.
+    // `--ignore-world` (real `depgraph.py:357-360`) empties
+    // `_required_set_names`, so the seeds are empty here too -- the
+    // complete walk then covers only the args' own deep dependencies
+    // (real `man/emerge.1`). Explicit `@world`/`@selected` args still
+    // expand above (real always processes `_initial_arg_list`); only the
+    // seed sets drop out.
     let complete_seed_atoms: Vec<String> = {
-        let mut v = expand_selected(&root, &config_root).unwrap_or_default();
-        v.extend(config.profile_packages.iter().cloned());
-        v.extend(config.system_packages.iter().cloned());
-        v.sort();
-        v.dedup();
-        v
+        if ignore_world {
+            Vec::new()
+        } else {
+            let mut v = expand_selected(&root, &config_root).unwrap_or_default();
+            v.extend(config.profile_packages.iter().cloned());
+            v.extend(config.system_packages.iter().cloned());
+            v.sort();
+            v.dedup();
+            v
+        }
     };
+    // Backlog #196: real `_emerge/actions.py:4264-4270` (`run_action`):
+    // the GLEP 42 news-count notice prints BEFORE resolution on a
+    // non-`--pretend` run (after argument validation, before
+    // `action_build`), so it fires even when resolution itself later
+    // fails -- and, like real, it is NOT gated on `--quiet`, `--ask`,
+    // or `--nodeps` (only `news` in FEATURES plus a nonzero unread
+    // count, inside `display_news_notice_if_any`). The m185 probe shows
+    // it standing first in real's pre-`>>>` output (news, blank,
+    // header, `Calculating...`), which this placement reproduces: the
+    // resolution-phase display block below runs after.
+    if !pretend {
+        let notice_printed = display_news_notice_if_any(&repos, &root, &config, &color);
+        // Backlog #231 (c): real `actions.py:4266-4281` offers the
+        // `eselect news read` spawn here, once the notice printed.
+        offer_news_reading(ask, read_news, notice_printed, &color);
+    }
     let run_resolve = |complete: bool, locked: &[String], with_seeds: bool| {
         let cfg: std::borrow::Cow<portage_profile::Config> =
             if !complete_seed_atoms.is_empty() || !locked.is_empty() {
@@ -11762,7 +12399,10 @@ pub fn run(args: &[String]) -> ExitCode {
     // new merge).
     let result = match handle(run_resolve(false, &[], false).map_err(crate::error::Error::from)) {
         Ok(result) => result,
-        Err(code) => return code,
+        Err(code) => {
+            pretend_end_news_notice(pretend, &repos, &root, &config, &color);
+            return code;
+        }
     };
     // The `cp`s phase 1 would actually merge -- real's "already in the
     // graph" for `_select_pkg_from_graph`. The complete pass may not
@@ -11807,7 +12447,10 @@ pub fn run(args: &[String]) -> ExitCode {
     let result = if want_complete {
         match handle(run_resolve(true, &locked_merges, true).map_err(crate::error::Error::from)) {
             Ok(result) => result,
-            Err(code) => return code,
+            Err(code) => {
+                pretend_end_news_notice(pretend, &repos, &root, &config, &color);
+                return code;
+            }
         }
     } else if auto_enable {
         // `--deep` in force (the only way to reach here with
@@ -11817,7 +12460,10 @@ pub fn run(args: &[String]) -> ExitCode {
         // slot-operator-rebuild scan now seeing `slot_op_reachable`.
         match handle(run_resolve(false, &[], true).map_err(crate::error::Error::from)) {
             Ok(result) => result,
-            Err(code) => return code,
+            Err(code) => {
+                pretend_end_news_notice(pretend, &repos, &root, &config, &color);
+                return code;
+            }
         }
     } else {
         result
@@ -12059,8 +12705,35 @@ pub fn run(args: &[String]) -> ExitCode {
     // the entries and printed as one group after every package line (see
     // `format_blocker_lines`).
     let mut blocker_lines: Vec<String> = Vec::new();
+    // Backlog #206 S2: real `_show_circular_deps` (`depgraph.py:10425`)
+    // pops `--quiet` and forces `--verbose` + `--tree` before
+    // `display(handler.merge_list)` — the stuck remainder renders as a
+    // verbose tree no matter what display flags the user passed. When
+    // this resolve ends in the circular block, the merge list above IS
+    // that display, so it renders with the forced flags (and forced
+    // sizes — real `verbose_size` runs at verbosity 3). The legacy
+    // (gate-off) circular path keeps the user-flagged list plus its own
+    // re-display below, exactly as before.
+    let circular_forced_display = gated_abort_partial.is_some()
+        && matches!(
+            &result.outcome,
+            portage_repo::ResolveOutcome::Aborted {
+                reason: portage_repo::AbortReason::UnserializableCycle { .. },
+                ..
+            }
+        );
+    let (disp_tree, disp_verbose, disp_quiet) = if circular_forced_display {
+        (true, true, false)
+    } else {
+        (tree, verbose, quiet)
+    };
+    // Backlog #206 S2: the rendered entry rows of the tree walk, for the
+    // circular `Total:` recount only (real counts displayed merge rows —
+    // repeats included, `nomerge` excluded — not entries). Empty unless
+    // the tree branch below runs.
+    let mut rendered_rows: Vec<(usize, bool)> = Vec::new();
     if show_merge_list {
-        if tree {
+        if disp_tree {
             // #131 S1: the tree-mode serialization order for the display
             // walk (real's reversed tree-mode retlist). Computed on the
             // displayed slice, so abort-partial lists stay
@@ -12075,7 +12748,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 &repos,
                 dynamic_deps,
             );
-            print_tree(
+            rendered_rows = print_tree(
                 display_entries,
                 &tree_order,
                 &root,
@@ -12083,8 +12756,8 @@ pub fn run(args: &[String]) -> ExitCode {
                 onlydeps,
                 oneshot,
                 unordered_display,
-                verbose,
-                quiet,
+                disp_verbose,
+                disp_quiet,
                 alphabetical,
                 root_deps_running_root.as_deref(),
                 &color,
@@ -12095,6 +12768,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 &result.masked_deps,
                 &result.use_unsat_deps,
                 &result.plain_miss_deps,
+                circular_forced_display,
             );
         } else {
             // #68/#72 B2: rows whose replacement waits on its owner print
@@ -12113,8 +12787,8 @@ pub fn run(args: &[String]) -> ExitCode {
                     &top_level_pkgs,
                     onlydeps,
                     oneshot,
-                    verbose,
-                    quiet,
+                    disp_verbose,
+                    disp_quiet,
                     alphabetical,
                     columns,
                     columnwidth,
@@ -12127,6 +12801,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     &result.masked_deps,
                     &result.use_unsat_deps,
                     &result.plain_miss_deps,
+                    circular_forced_display,
                 );
                 for (_, line) in inline_blockers.iter().filter(|(after, _)| *after == i) {
                     println!("{line}");
@@ -12221,6 +12896,7 @@ pub fn run(args: &[String]) -> ExitCode {
                         &result.masked_deps,
                         &result.use_unsat_deps,
                         &result.plain_miss_deps,
+                        false,
                     );
                 }
             }
@@ -12257,18 +12933,51 @@ pub fn run(args: &[String]) -> ExitCode {
     // suppresses the line that `-pv` would show. Suppressed together with
     // an empty aborted list (real never calls `display()` there, so no
     // counters exist); the cycle partial counts over its own rows only.
-    if show_merge_list && verbose && !quiet && !display_list_suppressed {
+    //
+    // Backlog #206 S2: the circular display runs forced-verbose (see
+    // `circular_forced_display` above), so the gate reads the effective
+    // flags and the counters count the rendered rows, not the entries:
+    // real's `_PackageCounters` accumulate per displayed merge row, so a
+    // repeat-merge row (the cycle closure) counts again while a
+    // `[nomerge]` row never counts. The recount input is exactly the
+    // rendered merge/uninstall rows (`rendered_rows` from the tree walk
+    // above); `nomerge`, already-installed and disclosure rows contribute
+    // nothing, matching real's `set_pkg_info` gating.
+    let disp_count_entries: Option<Vec<GraphEntry>> = if circular_forced_display {
+        let mut counted: Vec<GraphEntry> = Vec::new();
+        for (i, ordered) in &rendered_rows {
+            if !ordered {
+                continue;
+            }
+            let e = &display_entries[*i];
+            match &e.outcome {
+                portage_repo::PretendOutcome::New { .. }
+                | portage_repo::PretendOutcome::Upgrade { .. }
+                | portage_repo::PretendOutcome::Downgrade { .. }
+                | portage_repo::PretendOutcome::Reinstall { .. }
+                | portage_repo::PretendOutcome::Uninstall { .. } => {
+                    counted.push(e.clone());
+                }
+                portage_repo::PretendOutcome::AlreadyInstalled { .. }
+                | portage_repo::PretendOutcome::NoVisibleCandidate => {}
+            }
+        }
+        Some(counted)
+    } else {
+        None
+    };
+    if show_merge_list && disp_verbose && !disp_quiet && !display_list_suppressed {
         println!();
         println!(
             "{}",
             package_counters_summary(
-                display_entries,
+                disp_count_entries.as_deref().unwrap_or(display_entries),
                 &root,
                 &top_level_pkgs,
                 onlydeps,
                 &color,
                 &result.orphan_blockers,
-                tree
+                disp_tree
             )
         );
     }
@@ -12352,6 +13061,11 @@ pub fn run(args: &[String]) -> ExitCode {
                 &result.masked_deps,
                 &result.use_unsat_deps,
                 &result.plain_miss_deps,
+                // The legacy (gate-off) re-display keeps the user-flagged
+                // rendering it always had; the forced-verbose display is
+                // the gated path's main list above (whose re-display is
+                // skipped as duplicative).
+                false,
             );
         }
     }
@@ -12817,6 +13531,7 @@ pub fn run(args: &[String]) -> ExitCode {
     {
         print_circular_block(
             cycle,
+            &portage_repo::cycle_edge_labels(&result.entries, cycle),
             &color,
             &repos,
             &config,
@@ -12882,8 +13597,11 @@ pub fn run(args: &[String]) -> ExitCode {
 
     // `--autounmask-only`: real `actions.py:456` returns 0 right after
     // `display_problems()` -- nothing below (the abi-rebuild info, the
-    // changed-deps report, and any real merge) runs.
+    // changed-deps report, and any real merge) runs. Real still calls
+    // `post_emerge` after (`run_action`'s unconditional tail), so a
+    // `--pretend` run prints the end notice here too.
     if autounmask_only {
+        pretend_end_news_notice(pretend, &repos, &root, &config, &color);
         return ExitCode::SUCCESS;
     }
 
@@ -12904,13 +13622,26 @@ pub fn run(args: &[String]) -> ExitCode {
         || !result.autounmask_license_changes.is_empty();
     let autounmask_continue_active = !pretend && autounmask_continue == Some(true);
 
-    // Real `_display_autounmask`'s tail (`depgraph.py`, gated on
+    // Real `_display_autounmask`'s tail (`depgraph.py:11093`, gated on
     // `_dynamic_config._autounmask_backtrack_disabled`): with
     // `--autounmask-backtrack` off (the default), the resolver stops
     // after the first autounmask batch instead of re-driving, and says
     // so -- `--pretend` included. `--autounmask-continue` implies
-    // backtrack=y, so the notice is suppressed there.
-    if has_autounmask_changes && !config.autounmask_backtrack {
+    // backtrack=y, so the notice is suppressed there. Backlog #217:
+    // the flag is set at exactly one site (`need_config_change:11752`),
+    // reached only when the early return (`:11713-11717`) did NOT fire
+    // -- i.e. NOT when `_success_without_autounmask` holds (the
+    // `_resolve` tail `:5793`, "reserved for cases where there are
+    // *zero* other problems": the resolve succeeds once the autounmask
+    // changes are applied, no other failure). A lone autounmask change
+    // (oracle: `abort-au-plain`, `fixtures/abort-captures/`) therefore
+    // prints the change block with NO notice; the notice stays exactly
+    // when another failure coincides (a cycle: `abort-au-cycle`; a
+    // restart-worthy flip on an already-graphed package: `aucasctop`;
+    // a post-failure parent rescue). `GraphResult::
+    // autounmask_backtrack_disabled` ports the flag, including real's
+    // `_allow_backtracking` conjunct (`--backtrack=0` never prints it).
+    if result.autounmask_backtrack_disabled(config.autounmask_backtrack) {
         eprintln!();
         for line in [
             "In order to avoid wasting time, backtracking has terminated early",
@@ -12923,6 +13654,7 @@ pub fn run(args: &[String]) -> ExitCode {
     }
 
     if has_autounmask_changes && !autounmask_continue_active {
+        pretend_end_news_notice(pretend, &repos, &root, &config, &color);
         return ExitCode::from(1);
     }
 
@@ -12958,6 +13690,7 @@ pub fn run(args: &[String]) -> ExitCode {
         );
         eprintln!("section of the Gentoo Linux x86 Handbook (architecture is irrelevant):\n");
         eprintln!("https://wiki.gentoo.org/wiki/Handbook:X86/Working/Portage#Blocked_packages\n");
+        pretend_end_news_notice(pretend, &repos, &root, &config, &color);
         return ExitCode::from(1);
     }
 
@@ -13007,6 +13740,7 @@ pub fn run(args: &[String]) -> ExitCode {
     let backtracking_disabled = backtrack_max == 0;
     let slot_conflict_tolerated = backtracking_disabled && (buildpkgonly || nodeps);
     if !result.slot_conflicts.is_empty() && !slot_conflict_tolerated {
+        pretend_end_news_notice(pretend, &repos, &root, &config, &color);
         return ExitCode::from(1);
     }
 
@@ -13220,16 +13954,18 @@ pub fn run(args: &[String]) -> ExitCode {
     if result.buildpkgonly_deps_unsatisfied {
         eprintln!("\n!!! --buildpkgonly requires all dependencies to be merged.");
         eprintln!("!!! Cannot merge requested packages. Merge deps and try again.\n");
+        pretend_end_news_notice(pretend, &repos, &root, &config, &color);
         return ExitCode::from(1);
     }
 
     // Real `_serialize_tasks` -> `_show_circular_deps` (`depgraph.py:
-    // 10425`): an unbreakable build-time dependency cycle among the
-    // merge-bound packages -- every edge in it an unsatisfied
-    // `DEPEND`/`BDEPEND` with no run-time alternative, the only cycle
-    // real portage's `_ignore_runtime` scan can't linearize. Printed to
-    // stderr after the merge list, then the whole action fails (exit 1),
-    // pretend or not -- real portage never proceeds to build a cycle.
+    // 10425`): an unbreakable dependency cycle among the merge-bound
+    // packages -- every edge in it one real portage's `_ignore_runtime`
+    // scan can't linearize (an unsatisfied `DEPEND`/`BDEPEND` with no
+    // run-time alternative, or since backlog #228 an unsatisfied
+    // slot-operator edge). Printed to stderr after the merge list, then
+    // the whole action fails (exit 1), pretend or not -- real portage
+    // never proceeds to build a cycle.
     //
     // Faithful transcription of `_show_circular_deps`'s `writemsg`
     // sequence: the reduced cycle-only re-display
@@ -13245,8 +13981,9 @@ pub fn run(args: &[String]) -> ExitCode {
     // disqualifies it), and `fucyclec` (conditional grandparent clash
     // keeps it with `followup_change`) pin all three outcomes.
     // The shortest cycle drives `_prepare_circular_dep_message`; every
-    // edge is build-time by construction, so every priority label is
-    // `(buildtime)`.
+    // line after `depends on` carries its own edge's `priorities[-1]`
+    // label (backlog #228 -- `(buildtime)` on every line for the
+    // all-buildtime cycles, `slopcyca` pins the mixed shape).
     // Slice 5 routing for the legacy site: gate-on aborts never reach
     // here with work left (a cycle abort printed above, before the
     // autounmask section; a masked/unsat abort prints no circular block
@@ -13261,6 +13998,7 @@ pub fn run(args: &[String]) -> ExitCode {
         if !gated_abort {
             print_circular_block(
                 cycle,
+                &portage_repo::cycle_edge_labels(&result.entries, cycle),
                 &color,
                 &repos,
                 &config,
@@ -13269,6 +14007,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 result.large_cycle_count,
             );
         }
+        pretend_end_news_notice(pretend, &repos, &root, &config, &color);
         return ExitCode::from(1);
     }
 
@@ -13291,6 +14030,7 @@ pub fn run(args: &[String]) -> ExitCode {
     if portage_repo::abort_path_enabled()
         && let portage_repo::ResolveOutcome::Aborted { .. } = &result.outcome
     {
+        pretend_end_news_notice(pretend, &repos, &root, &config, &color);
         return ExitCode::from(1);
     }
 
@@ -13299,22 +14039,70 @@ pub fn run(args: &[String]) -> ExitCode {
     // is also `true` -- see `emerge_build.rs`'s own module doc comment
     // for what this actually does (and doesn't) build.
     if !pretend {
+        // Backlog #225 (real `_emerge/actions.py:496-521`): the merge
+        // list has just been displayed (see `show_merge_list` above),
+        // and when nothing in it is merge-bound real prints `Nothing to
+        // merge; quitting.` on stdout and returns `EX_OK` before the
+        // `resume_backup` rotation below and before `Scheduler` -- so a
+        // stale resume list (and its backup) come back untouched. This
+        // sits after every failure gate above (real's own `if not
+        // success: display_problems(); return 1` precedes its display
+        // branch), and `--resume` never reaches here (it dispatches to
+        // `run_resume` far above, with its own `nothing to resume`
+        // message).
+        //
+        // Residue (deliberate, follow-up): real defers instead when the
+        // run is `selective` (`-u`/`-N`/`--noreplace`/..., real
+        // `create_depgraph_params.py`) without `--oneshot` and a
+        // world-candidate favorite exists (`actions.py:514-516` -- the
+        // prompt moves into `depgraph.saveNomergeFavorites`, the
+        // rotation still runs, still no `Scheduler` write). Portuale has
+        // no world-favorites prompt, so the whole branch returns here; a
+        // selective all-noop run without `--oneshot` therefore skips the
+        // world-file record real would still make.
+        let mergecount = display_entries
+            .iter()
+            .filter_map(emerge_build::resume_cpv)
+            .count();
+        if nothing_to_merge(pretend, show_merge_list, mergecount) {
+            // Real's own `print()` before the message
+            // (`actions.py:518`): `--ask` reaches here with no blank
+            // line printed yet (the #185 `actions.py:526` blank only
+            // covers the no-prompt shape, and `ask_confirm`'s own
+            // opener never runs).
+            if ask {
+                println!();
+            }
+            println!("Nothing to merge; quitting.");
+            println!();
+            return ExitCode::SUCCESS;
+        }
         // Real `_emerge/actions.py:525-536`: `--ask` prompts once, after
         // the whole merge list is displayed, before anything is built.
         if ask && !ask_confirm(&color, "Would you like to merge these packages?") {
             return ExitCode::from(130);
         }
-        // Backlog #185: real `Scheduler._status_msg`
+        // Backlog #185/#197: real `Scheduler._status_msg`
         // (`Scheduler.py:2387-2397`) precedes every status line -- the
         // first `>>> Emerging ...` among them -- with a blank line,
         // unless the scheduler is in background mode (real
         // `_background_mode`: parallel `--jobs`, `--quiet`, or
-        // `--quiet-build=y`). Only the first one is ported here: the
-        // text before the first merge line is this slice's contract;
-        // the per-message generalization is deferred.
-        if jobs <= 1 && !quiet && quiet_build != Some(true) {
-            println!();
-        }
+        // `--quiet-build=y`, except a one-package mergelist without
+        // `--quiet` -- see `emerge_build::scheduler_status_mode`).
+        // #185 ported only the first blank with a `jobs`/`quiet`
+        // approximation; #197 generalizes the rule to every status
+        // line, and the merge functions own every blank through their
+        // `StatusDisplay::status()` -- including the first, so no
+        // blank prints here (fix round 1 removed the duplicate that
+        // printed a second blank before the first `>>>` line). The
+        // exact background predicate still computes here.
+        let status_mode = crate::emerge_build::scheduler_status_mode(
+            jobs,
+            quiet,
+            quiet_build,
+            entries.len(),
+            verbose,
+        );
         // Real BINPKG_COMPRESS/BINPKG_COMPRESS_FLAGS[_<NAME>]/
         // PORTAGE_BZIP2_COMMAND/PKGDIR/... resolution -- see
         // `package_options_from_env`.
@@ -13390,6 +14178,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 &portage_tmpdir,
                 &package_options,
                 keep_going,
+                status_mode,
             ) {
                 eprintln!("emerge: {e}");
                 return ExitCode::from(1);
@@ -13440,6 +14229,23 @@ pub fn run(args: &[String]) -> ExitCode {
                     eprintln!("emerge: {e}");
                     return ExitCode::from(1);
                 }
+                // Backlog #231 (b): real `post_emerge`'s tail (info regen,
+                // preserved-libs notice, config-file check, the GLEP 42
+                // notice at `post_emerge.py:155`) runs only once the vdb
+                // changed (`post_emerge.py:112-117` early-returns
+                // otherwise -- printing just the notice, and only under
+                // `--pretend`). The remote plan merges onto the *remote*
+                // host (`run_remote_plan` ships every unit through the
+                // transport; the local `${ROOT}/var/db/pkg` is never
+                // touched), so from this process's vdb nothing changed:
+                // real's gate evaluates false on both the success and
+                // the failure returns above, and -- being non-`--pretend`
+                // here (every `--pretend` exit returned long before this
+                // dispatch) -- the tail would print nothing. The early
+                // return is therefore the faithful shape; no post-merge
+                // notice here by construction, pinned by the
+                // local-transport contract test. (The pre-resolution
+                // notice already printed before the resolve, like real.)
                 return ExitCode::from(0);
             }
             // Real `Scheduler.merge() -> _save_resume_list()` (#168):
@@ -13451,7 +14257,9 @@ pub fn run(args: &[String]) -> ExitCode {
             // re-saves the tail. Silent on write failure, like the
             // `rotate_resume_to_backup` above (a later failure write warns).
             // `--buildpkgonly` and remote execution are deliberately
-            // untouched: no save here covers them.
+            // untouched: no save here covers them. The write is
+            // unconditional (real always assigns, #179): an all-noop
+            // plan records the empty list instead of leaving a stale one.
             let resume_mergelist: Vec<crate::mtimedb::ResumeCpv> = entries
                 .iter()
                 .filter_map(emerge_build::resume_cpv)
@@ -13477,6 +14285,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 keep_going,
                 buildpkg,
                 &buildpkg_exclude,
+                status_mode,
             ) {
                 // Backlog #174: a merge-time binpkg digest failure
                 // already printed real's full tail (digest block +
@@ -13500,19 +14309,43 @@ pub fn run(args: &[String]) -> ExitCode {
                 // up where this left off. Previously missing entirely
                 // for this `--getbinpkg` path -- a failed mixed-source-
                 // and-binary run left nothing for `--resume` to find.
+                // The empty-`unmerged` guard is the failure path's own:
+                // `write_resume_list` itself is unconditional now (real
+                // `_save_resume_list` always assigns, #179), but a
+                // failure with nothing unmerged must leave the
+                // per-merge shrink's own tail alone, not overwrite it
+                // with an empty list.
                 let unmerged = entries_not_merged(&root, entries);
                 let resume_opts = crate::mtimedb::ResumeOpts { oneshot, onlydeps };
-                if let Err(w) =
-                    crate::mtimedb::write_resume_list(&root, &atom_args, &unmerged, &resume_opts)
-                {
-                    eprintln!("emerge: warning: could not save the resume list: {w}");
-                } else if !unmerged.is_empty() {
-                    eprintln!(
-                        "\n * The resume list contains packages that could not be \
-                         merged.\n * Use `emerge --resume` to retry, or `emerge --resume \
-                         --skipfirst` to skip the first one."
-                    );
+                if !unmerged.is_empty() {
+                    if let Err(w) = crate::mtimedb::write_resume_list(
+                        &root,
+                        &atom_args,
+                        &unmerged,
+                        &resume_opts,
+                    ) {
+                        eprintln!("emerge: warning: could not save the resume list: {w}");
+                    } else {
+                        eprintln!(
+                            "\n * The resume list contains packages that could not be \
+                             merged.\n * Use `emerge --resume` to retry, or `emerge --resume \
+                             --skipfirst` to skip the first one."
+                        );
+                    }
                 }
+                // Backlog #196 fix round 1: real `post_emerge.py:155`
+                // prints the GLEP 42 notice regardless of retval -- gated
+                // on the vdb having changed (`:112-117`), which here is
+                // `unmerged.len() < entries.len()` (at least one entry
+                // landed; the same structural approximation as the
+                // success path's `!entries.is_empty()` below).
+                merge_failure_news_notice(
+                    unmerged.len() < entries.len(),
+                    &repos,
+                    &root,
+                    &config,
+                    &color,
+                );
                 eprintln!("emerge: {e}");
                 return ExitCode::from(1);
             }
@@ -13520,7 +14353,8 @@ pub fn run(args: &[String]) -> ExitCode {
             // Plain `emerge <atom>`: real source build + merge (see
             // `emerge_build::run_source_merge`). The up-front resume save
             // is real `Scheduler.merge() -> _save_resume_list()` (#168),
-            // same as the `--getbinpkg` arm above.
+            // same as the `--getbinpkg` arm above -- unconditional (an
+            // all-noop plan records the empty list, #179).
             let resume_mergelist: Vec<crate::mtimedb::ResumeCpv> = entries
                 .iter()
                 .filter_map(emerge_build::resume_cpv)
@@ -13547,23 +14381,43 @@ pub fn run(args: &[String]) -> ExitCode {
                 // build output when `--quiet-build=y` or `-q` is set (a
                 // `-j` >1 run always captures regardless).
                 quiet_build.unwrap_or(false) || quiet,
+                status_mode,
             ) {
                 // Real `Scheduler._save_resume_list`: on a merge failure,
                 // record every still-unmerged package so `emerge --resume`
-                // can pick up where this left off.
+                // can pick up where this left off. The empty-`unmerged`
+                // guard is the failure path's own (`write_resume_list`
+                // itself is unconditional now, #179): a failure with
+                // nothing unmerged leaves the per-merge shrink's own
+                // tail alone.
                 let unmerged = entries_not_merged(&root, entries);
                 let resume_opts = crate::mtimedb::ResumeOpts { oneshot, onlydeps };
-                if let Err(w) =
-                    crate::mtimedb::write_resume_list(&root, &atom_args, &unmerged, &resume_opts)
-                {
-                    eprintln!("emerge: warning: could not save the resume list: {w}");
-                } else if !unmerged.is_empty() {
-                    eprintln!(
-                        "\n * The resume list contains packages that could not be \
-                         merged.\n * Use `emerge --resume` to retry, or `emerge --resume \
-                         --skipfirst` to skip the first one."
-                    );
+                if !unmerged.is_empty() {
+                    if let Err(w) = crate::mtimedb::write_resume_list(
+                        &root,
+                        &atom_args,
+                        &unmerged,
+                        &resume_opts,
+                    ) {
+                        eprintln!("emerge: warning: could not save the resume list: {w}");
+                    } else {
+                        eprintln!(
+                            "\n * The resume list contains packages that could not be \
+                             merged.\n * Use `emerge --resume` to retry, or `emerge --resume \
+                             --skipfirst` to skip the first one."
+                        );
+                    }
                 }
+                // Backlog #196 fix round 1: same failure-path notice as
+                // the `--getbinpkg` arm above (real `post_emerge.py:155`
+                // regardless of retval, gated on the vdb having changed).
+                merge_failure_news_notice(
+                    unmerged.len() < entries.len(),
+                    &repos,
+                    &root,
+                    &config,
+                    &color,
+                );
                 eprintln!("emerge: {e}");
                 return ExitCode::from(1);
             }
@@ -13626,8 +14480,30 @@ pub fn run(args: &[String]) -> ExitCode {
             // unmerge just preserved and point the user at
             // `emerge @preserved-rebuild`.
             crate::preserved_libs::show_preserved_libs_notice(&root, &color, quiet, verbose);
+            // Backlog #196: real `post_emerge()` (`post_emerge.py:155`)
+            // prints the GLEP 42 count notice a second time once the
+            // merge changed the vdb (after the preserved-libs notice and
+            // the config-file check, both mirrored above) -- same
+            // FEATURES-plus-nonzero-count gates, no `--quiet` gate. The
+            // vdb-changed gate is structural here: `--buildpkgonly`
+            // builds but never merges (real's `_pkgs_changed` stays
+            // false, so its `post_emerge` early-returns with no notice),
+            // and an empty mergelist changed nothing either. A merge
+            // failure prints the notice too when the vdb changed (real
+            // prints regardless of retval, `post_emerge.py:104-108,155`)
+            // -- see `merge_failure_news_notice` on the two failure
+            // arms above.
+            if !entries.is_empty() {
+                display_news_notice_if_any(&repos, &root, &config, &color);
+            }
         }
     }
+
+    // Backlog #196 fix round 1: real `post_emerge.py:112-117` -- a
+    // `--pretend` run prints the GLEP 42 notice at the end (the vdb
+    // never changes under `--pretend`, so this arm is pretend-only;
+    // the non-pretend path printed its post-merge notice above).
+    pretend_end_news_notice(pretend, &repos, &root, &config, &color);
 
     ExitCode::SUCCESS
 }
@@ -13680,6 +14556,9 @@ mod tests {
         // success is asserted via its `Debug` rendering.)
         let success = format!("{:?}", ExitCode::SUCCESS);
         let (root, inforoot) = scratch_info_root("record");
+        // No repos and a default (news-less) config: the post-removal
+        // GLEP 42 notice (backlog #196 fix round 1) is gated off, so
+        // these info-regen assertions observe no notice output.
         let rc = execute_unmerge(
             &[],
             &root,
@@ -13688,6 +14567,8 @@ mod tests {
             &color,
             true,
             false,
+            &[],
+            &portage_profile::Config::default(),
         );
         assert_eq!(format!("{rc:?}"), success);
         assert!(
@@ -13707,6 +14588,8 @@ mod tests {
             &color,
             true,
             true,
+            &[],
+            &portage_profile::Config::default(),
         );
         assert_eq!(format!("{rc:?}"), success);
         assert!(crate::mtimedb::read_info_mtimes(&root).is_empty());
@@ -13732,6 +14615,63 @@ mod tests {
         off.other_vars
             .insert("FEATURES".to_string(), "-buildpkg sandbox".to_string());
         assert!(!buildpkg_from_config(None, &off));
+    }
+
+    #[test]
+    fn pkgdir_index_trusted_folds_the_resolved_features_chain() {
+        // Backlog #199 fix round 1: `pkgdir_index_trusted` is real
+        // `bintree.populate`'s own `reindex =
+        // "pkgdir-index-trusted" not in features` (`bintree.py:936-938`)
+        // over the folded `FEATURES` chain, defaulting to trusted when
+        // nothing configures `FEATURES` at all (real's host
+        // `make.globals` default, `cnf/make.globals:81`).
+        let layered = |layers: Vec<Vec<&str>>| {
+            let mut config = portage_profile::Config::default();
+            config.incremental_sources.insert(
+                "FEATURES".to_string(),
+                layers
+                    .into_iter()
+                    .map(|l| l.into_iter().map(String::from).collect())
+                    .collect(),
+            );
+            config
+        };
+        // Nothing configured anywhere: trusted (the seeded default).
+        assert!(pkgdir_index_trusted(&portage_profile::Config::default()));
+        // Token present, never negated: trusted.
+        assert!(pkgdir_index_trusted(&layered(vec![vec![
+            "sandbox",
+            "pkgdir-index-trusted"
+        ]])));
+        // A later layer negates it (the `make.conf`-layer case): distrusted.
+        assert!(!pkgdir_index_trusted(&layered(vec![
+            vec!["pkgdir-index-trusted"],
+            vec!["-pkgdir-index-trusted"],
+        ])));
+        // `-*` clears the chain, a later re-add restores it: trusted.
+        assert!(pkgdir_index_trusted(&layered(vec![
+            vec!["pkgdir-index-trusted", "-*"],
+            vec!["pkgdir-index-trusted"],
+        ])));
+        // `-*` last, with no re-add: distrusted.
+        assert!(!pkgdir_index_trusted(&layered(vec![
+            vec!["pkgdir-index-trusted"],
+            vec!["-*"],
+        ])));
+        // The `other_vars` fallback (the case `config_features_list`
+        // falls back for): `FEATURES` carried only there still decides.
+        let mut fallback_on = portage_profile::Config::default();
+        fallback_on.other_vars.insert(
+            "FEATURES".to_string(),
+            "sandbox pkgdir-index-trusted".to_string(),
+        );
+        assert!(pkgdir_index_trusted(&fallback_on));
+        let mut fallback_off = portage_profile::Config::default();
+        fallback_off.other_vars.insert(
+            "FEATURES".to_string(),
+            "sandbox -pkgdir-index-trusted".to_string(),
+        );
+        assert!(!pkgdir_index_trusted(&fallback_off));
     }
 
     #[test]
@@ -13881,6 +14821,799 @@ mod tests {
     }
 
     #[test]
+    fn news_notice_gate_needs_news_in_resolved_features() {
+        // Real `display_news_notification` (`post_emerge.py:38`): the
+        // notice is skipped wholesale unless `news` is in the resolved
+        // `FEATURES` (no evaluation, no output). Same `Config::default`
+        // + `other_vars` shape `buildpkg_comes_from_the_cli_then_...`
+        // uses for its own feature gate.
+        let mut with = portage_profile::Config::default();
+        with.other_vars
+            .insert("FEATURES".to_string(), "sandbox news userpriv".to_string());
+        assert!(news_notice_enabled(&with));
+        let mut without = portage_profile::Config::default();
+        without
+            .other_vars
+            .insert("FEATURES".to_string(), "sandbox userpriv".to_string());
+        assert!(!news_notice_enabled(&without));
+        assert!(!news_notice_enabled(&portage_profile::Config::default()));
+    }
+
+    #[test]
+    fn unread_news_counts_reuses_the_check_news_evaluation() {
+        // Backlog #196 S1's "no second news parser": the count notice
+        // reads through the same `FilesystemNews` evaluation (and the
+        // same `.unread`/`.skip` write-back) `--check-news` uses, so
+        // the hermetic fixture tree counts exactly what
+        // `test_check_news_counts_unread_relevant_items` pins over in
+        // the contract suite (5 relevant testrepo items). The ROOT is a
+        // temp dir sharing the fixtures' own vdb read-only
+        // (`Display-If-Installed` needs it) with a fresh `var/lib`, the
+        // same isolation `_check_news_isolated_root` gives the contract
+        // tests -- nothing is ever written into the git-tracked
+        // fixtures tree itself.
+        let fixtures = fixtures_root();
+        let base =
+            std::env::temp_dir().join(format!("pretend-test-{}-news_counts", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("root");
+        std::fs::create_dir_all(root.join("var/lib")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(fixtures.join("var/db"), root.join("var/db")).unwrap();
+        let repo_config = |name: &str, dir: &str| portage_repo::RepoConfig {
+            name: name.to_string(),
+            location: fixtures.join(dir),
+            priority: 0,
+            is_main: name == "testrepo",
+            masters: Vec::new(),
+            profile_formats: Vec::new(),
+            cache_formats: Vec::new(),
+            aliases: Vec::new(),
+            sync_type: None,
+            sync_uri: None,
+            volatile: false,
+            module_specific_options: Vec::new(),
+        };
+        let repos = vec![
+            repo_config("testrepo", "repo"),
+            repo_config("overlay", "overlay"),
+        ];
+        let counts = unread_news_counts(&repos, &root);
+        assert_eq!(
+            counts,
+            vec![("testrepo".to_string(), 5), ("overlay".to_string(), 0),]
+        );
+        // The write-back landed in the temp ROOT (sorted, one id per
+        // line), and a second evaluation stays sticky at the same
+        // count (real `getUnreadItems`'s `len(.unread)`).
+        let news_dir = root.join("var/lib/gentoo/news");
+        let unread: Vec<String> = std::fs::read_to_string(news_dir.join("news-testrepo.unread"))
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect();
+        assert_eq!(unread.len(), 5);
+        assert_eq!(unread, {
+            let mut sorted = unread.clone();
+            sorted.sort();
+            sorted
+        });
+        assert_eq!(unread_news_counts(&repos, &root), counts);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// An isolated ROOT for the fix-round-1 notice tests: a temp dir
+    /// sharing the fixtures' own vdb read-only (the same isolation
+    /// `unread_news_counts_reuses_the_check_news_evaluation` and the
+    /// contract suite's `_check_news_isolated_root` use) plus a config
+    /// with `news` in the resolved `FEATURES`. Returns the scratch
+    /// base (for cleanup), the ROOT, the two fixture repos, and the
+    /// config. Prints from the notice helpers land in the test
+    /// capture; assertions observe the state dir (evaluation ran) or
+    /// its absence (gated off before any evaluation).
+    fn news_notice_test_tree(
+        tag: &str,
+    ) -> (
+        std::path::PathBuf,
+        std::path::PathBuf,
+        Vec<portage_repo::RepoConfig>,
+        portage_profile::Config,
+    ) {
+        let fixtures = fixtures_root();
+        let base = std::env::temp_dir().join(format!(
+            "pretend-test-{}-news_notice_{tag}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("root");
+        std::fs::create_dir_all(root.join("var/lib")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(fixtures.join("var/db"), root.join("var/db")).unwrap();
+        let repo_config = |name: &str, dir: &str| portage_repo::RepoConfig {
+            name: name.to_string(),
+            location: fixtures.join(dir),
+            priority: 0,
+            is_main: name == "testrepo",
+            masters: Vec::new(),
+            profile_formats: Vec::new(),
+            cache_formats: Vec::new(),
+            aliases: Vec::new(),
+            sync_type: None,
+            sync_uri: None,
+            volatile: false,
+            module_specific_options: Vec::new(),
+        };
+        let repos = vec![
+            repo_config("testrepo", "repo"),
+            repo_config("overlay", "overlay"),
+        ];
+        let mut config = portage_profile::Config::default();
+        config
+            .other_vars
+            .insert("FEATURES".to_string(), "sandbox news userpriv".to_string());
+        (base, root, repos, config)
+    }
+
+    #[test]
+    fn pretend_end_notice_prints_only_under_pretend() {
+        // Backlog #196 fix round 1: real `post_emerge.py:112-117`
+        // prints the notice at the end of a `--pretend` run (for every
+        // `action_build` retval) and never otherwise. `pretend=false`
+        // evaluates nothing (no state dir appears); `pretend=true`
+        // evaluates and writes back the hermetic 5-count, exactly like
+        // `--check-news` does.
+        let color = crate::color::Colorizer::new(false);
+        let (base, root, repos, config) = news_notice_test_tree("pretend_end");
+        pretend_end_news_notice(false, &repos, &root, &config, &color);
+        assert!(
+            !root.join("var/lib/gentoo/news").exists(),
+            "pretend=false must not evaluate news at all"
+        );
+        pretend_end_news_notice(true, &repos, &root, &config, &color);
+        let unread: Vec<String> =
+            std::fs::read_to_string(root.join("var/lib/gentoo/news/news-testrepo.unread"))
+                .unwrap()
+                .lines()
+                .map(str::to_string)
+                .collect();
+        assert_eq!(unread.len(), 5);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn merge_failure_notice_prints_only_when_the_vdb_changed() {
+        // Backlog #196 fix round 1: real `post_emerge.py:155` prints
+        // the notice regardless of retval, but only when the vdb
+        // changed (`:112-117`). A total failure (`changed=false`)
+        // evaluates nothing; a partial one (`changed=true`) evaluates
+        // and writes back the hermetic 5-count.
+        let color = crate::color::Colorizer::new(false);
+        let (base, root, repos, config) = news_notice_test_tree("merge_failure");
+        merge_failure_news_notice(false, &repos, &root, &config, &color);
+        assert!(
+            !root.join("var/lib/gentoo/news").exists(),
+            "a failure with nothing merged must not evaluate news at all"
+        );
+        merge_failure_news_notice(true, &repos, &root, &config, &color);
+        let unread: Vec<String> =
+            std::fs::read_to_string(root.join("var/lib/gentoo/news/news-testrepo.unread"))
+                .unwrap()
+                .lines()
+                .map(str::to_string)
+                .collect();
+        assert_eq!(unread.len(), 5);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn display_news_notice_reports_whether_it_printed() {
+        // Backlog #231 (c): the `--ask` + `--read-news` prompt fires
+        // only when the notice actually printed (real
+        // `actions.py:4268-4281` short-circuits on `display_news_
+        // notification`'s falsy return), so the helper returns real's
+        // own boolean. Gated off: `false`, no evaluation. Gated on:
+        // `true`, the hermetic 5-count evaluated and written back.
+        let color = crate::color::Colorizer::new(false);
+        let (base, root, repos, mut config) = news_notice_test_tree("notice_bool");
+        config
+            .other_vars
+            .insert("FEATURES".to_string(), String::new());
+        assert!(!display_news_notice_if_any(&repos, &root, &config, &color));
+        assert!(
+            !root.join("var/lib/gentoo/news").exists(),
+            "a gated-off notice must not evaluate news at all"
+        );
+        config
+            .other_vars
+            .insert("FEATURES".to_string(), "sandbox news userpriv".to_string());
+        assert!(display_news_notice_if_any(&repos, &root, &config, &color));
+        let unread: Vec<String> =
+            std::fs::read_to_string(root.join("var/lib/gentoo/news/news-testrepo.unread"))
+                .unwrap()
+                .lines()
+                .map(str::to_string)
+                .collect();
+        assert_eq!(unread.len(), 5);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A scratch `ROOT` with a single-item stale resume list, so
+    /// `--resume --skipfirst` empties it and takes the "nothing to do"
+    /// exit without merging anything (fast, hermetic).
+    fn single_resume_root(tag: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "resume_single_{tag}_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        crate::mtimedb::write_resume_list(
+            &root,
+            &["dev-libs/stale-a"],
+            &[(
+                crate::mtimedb::ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "stale-a".to_string(),
+                "1".to_string(),
+            )],
+            &crate::mtimedb::ResumeOpts::default(),
+        )
+        .unwrap();
+        root
+    }
+
+    /// Plain recursive copy (files + dirs + symlinks) for fixture
+    /// trees (`fixtures/var` has no symlinks; `fixtures/etc/portage`
+    /// carries `make.profile`, repointed absolutely after the copy).
+    #[cfg(unix)]
+    fn copy_tree(src: &std::path::Path, dst: &std::path::Path) {
+        std::fs::create_dir_all(dst).unwrap();
+        for entry in std::fs::read_dir(src).unwrap() {
+            let entry = entry.unwrap();
+            let dst_path = dst.join(entry.file_name());
+            let ft = entry.file_type().unwrap();
+            if ft.is_symlink() {
+                let target = std::fs::read_link(entry.path()).unwrap();
+                std::os::unix::fs::symlink(target, dst_path).unwrap();
+            } else if ft.is_dir() {
+                copy_tree(&entry.path(), &dst_path);
+            } else if ft.is_file() {
+                std::fs::copy(entry.path(), dst_path).unwrap();
+            }
+        }
+    }
+
+    /// `fixture_resolve_env` plus `FEATURES="news"` opted in -- the
+    /// same layering the contract suite's `_news_env` uses.
+    fn news_resolve_env(
+        root: &std::path::Path,
+        portage_tmpdir: &std::path::Path,
+    ) -> Vec<(String, String)> {
+        let mut env = fixture_resolve_env(root, portage_tmpdir);
+        env.push(("FEATURES".to_string(), "news".to_string()));
+        env
+    }
+
+    #[test]
+    fn resume_pretend_end_notice_prints_once_like_real() {
+        // Backlog #231 (a): real reaches `post_emerge` after the
+        // `--resume --pretend` display too (`actions.py:4289-4297`),
+        // whose `not _pkgs_changed` arm prints the notice under
+        // `--pretend` (`post_emerge.py:112-117`) -- exactly once (the
+        // pre-resolution notice is itself `--pretend`-gated,
+        // `actions.py:4266`). A stale list + `FEATURES="news"` on an
+        // isolated ROOT; no merge runs.
+        let portuale_bin = built_portuale_bin();
+        let (root, _) = stale_resume_root("news_pretend");
+        let tmp = std::env::temp_dir().join(format!(
+            "resume_news_pretend_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let output = std::process::Command::new(&portuale_bin)
+            .args(["emerge", "--resume", "--pretend"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .envs(news_resolve_env(&root, &tmp.join("pt-resume-news")))
+            .output()
+            .expect("portuale emerge spawns");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("dev-libs/stale-a-1"), "{stdout}");
+        assert_eq!(
+            stdout.matches("news items need reading").count(),
+            1,
+            "{stdout}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn resume_skipfirst_empty_list_prints_only_the_pre_notice_like_real() {
+        // Backlog #231 (a): real's pre-resolution notice precedes all
+        // of `action_build`'s resume handling (`actions.py:4266` before
+        // `:4289`), so even a `--resume --skipfirst` that empties the
+        // list prints it -- while the post notice stays silent (the
+        // vdb never changed; real `post_emerge.py:112-117`
+        // early-returns on a non-`--pretend` run). Fast: a single-item
+        // stale list, no merge runs.
+        let portuale_bin = built_portuale_bin();
+        let root = single_resume_root("news_empty");
+        let tmp = std::env::temp_dir().join(format!(
+            "resume_news_empty_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let output = std::process::Command::new(&portuale_bin)
+            .args(["emerge", "--resume", "--skipfirst"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .envs(news_resolve_env(&root, &tmp.join("pt-resume-empty")))
+            .output()
+            .expect("portuale emerge spawns");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("nothing to do"), "{stdout}");
+        assert_eq!(
+            stdout.matches("news items need reading").count(),
+            1,
+            "{stdout}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A stub `eselect` on `PATH`: an executable shell script logging
+    /// its argv to a marker file. Returns the stub dir (to prepend to
+    /// `PATH`) and the marker path.
+    #[cfg(unix)]
+    fn eselect_stub(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!(
+            "eselect_stub_{tag}_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let marker = dir.join("eselect.log");
+        std::fs::write(
+            dir.join("eselect"),
+            format!("#!/bin/sh\necho \"$@\" >> {}\n", marker.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(dir.join("eselect"), std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+        (dir, marker)
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ask_read_news_yes_spawns_eselect_and_continues() {
+        // Backlog #231 (c): real `_emerge/actions.py:4266-4281` --
+        // once the pre-resolution notice printed, `--ask --read-news`
+        // prompts "Would you like to read the news items while
+        // calculating dependencies?" and spawns `eselect news read`
+        // on "Yes", then continues into the resolve. Answering "Yes"
+        // here runs the stub (argv pinned) and the declined merge
+        // prompt still exits 130 with `Quitting.`.
+        let (stubdir, marker) = eselect_stub("yes");
+        let path = format!(
+            "{}:{}",
+            stubdir.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        // The stub dir is separate from the run's base dir so the
+        // marker survives the cleanup below for the assertion.
+        use std::io::Write;
+        let portuale_bin = built_portuale_bin();
+        let base = std::env::temp_dir().join(format!(
+            "ask_read_news_yes_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = base.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let mut env = news_resolve_env(&root, &base.join("pt"));
+        env.push(("PATH".to_string(), path));
+        let (mut master, slave_stdio) = pty_pair();
+        let child = std::process::Command::new(&portuale_bin)
+            .args([
+                "emerge",
+                "--ask",
+                "--read-news",
+                "--oneshot",
+                "dev-libs/schedok",
+            ])
+            .stdin(slave_stdio)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .envs(env)
+            .spawn()
+            .expect("portuale emerge spawns");
+        master.write_all(b"Yes\n").expect("answer the news prompt");
+        master.write_all(b"No\n").expect("decline the merge prompt");
+        let output = child.wait_with_output().expect("wait for emerge");
+        drop(master);
+        assert_eq!(
+            output.status.code(),
+            Some(130),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout
+                .contains("Would you like to read the news items while calculating dependencies?"),
+            "{stdout}"
+        );
+        assert_eq!(
+            stdout.matches("news items need reading").count(),
+            1,
+            "{stdout}"
+        );
+        assert!(stdout.contains("Quitting."), "{stdout}");
+        assert_eq!(
+            std::fs::read_to_string(&marker).unwrap_or_default(),
+            "news read\n",
+        );
+        let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(stubdir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ask_read_news_no_skips_eselect_and_continues() {
+        // Backlog #231 (c), the "No" arm: real's `== "Yes"` check
+        // fails, so no spawn happens and the run continues into the
+        // resolve -- the stub marker never appears, while the notice
+        // still printed once and the declined merge prompt still
+        // exits 130.
+        use std::io::Write;
+        let portuale_bin = built_portuale_bin();
+        let (stubdir, marker) = eselect_stub("no");
+        let path = format!(
+            "{}:{}",
+            stubdir.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let base = std::env::temp_dir().join(format!(
+            "ask_read_news_no_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = base.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let mut env = news_resolve_env(&root, &base.join("pt"));
+        env.push(("PATH".to_string(), path));
+        let (mut master, slave_stdio) = pty_pair();
+        let child = std::process::Command::new(&portuale_bin)
+            .args([
+                "emerge",
+                "--ask",
+                "--read-news",
+                "--oneshot",
+                "dev-libs/schedok",
+            ])
+            .stdin(slave_stdio)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .envs(env)
+            .spawn()
+            .expect("portuale emerge spawns");
+        master.write_all(b"No\n").expect("decline the news prompt");
+        master.write_all(b"No\n").expect("decline the merge prompt");
+        let output = child.wait_with_output().expect("wait for emerge");
+        drop(master);
+        assert_eq!(
+            output.status.code(),
+            Some(130),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout
+                .contains("Would you like to read the news items while calculating dependencies?"),
+            "{stdout}"
+        );
+        assert_eq!(
+            stdout.matches("news items need reading").count(),
+            1,
+            "{stdout}"
+        );
+        assert!(
+            !marker.exists(),
+            "a declined news prompt must not spawn eselect"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(stubdir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ask_read_news_without_eselect_prints_real_hint() {
+        // Backlog #231 (c): real catches the spawn's `OSError`
+        // (eselect missing) and prints `Please install eselect to use
+        // this feature.` (`actions.py:4284-4287`). `PATH` holds only an
+        // empty dir, so the spawn must fail; the "Yes" is still
+        // consumed and the declined merge prompt still exits 130.
+        use std::io::Write;
+        let portuale_bin = built_portuale_bin();
+        let emptydir = std::env::temp_dir().join(format!(
+            "ask_read_news_empty_path_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&emptydir).unwrap();
+        let base = std::env::temp_dir().join(format!(
+            "ask_read_news_missing_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = base.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let mut env = news_resolve_env(&root, &base.join("pt"));
+        env.push(("PATH".to_string(), emptydir.display().to_string()));
+        let (mut master, slave_stdio) = pty_pair();
+        let child = std::process::Command::new(&portuale_bin)
+            .args([
+                "emerge",
+                "--ask",
+                "--read-news",
+                "--oneshot",
+                "dev-libs/schedok",
+            ])
+            .stdin(slave_stdio)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .envs(env)
+            .spawn()
+            .expect("portuale emerge spawns");
+        master.write_all(b"Yes\n").expect("answer the news prompt");
+        master.write_all(b"No\n").expect("decline the merge prompt");
+        let output = child.wait_with_output().expect("wait for emerge");
+        drop(master);
+        assert_eq!(
+            output.status.code(),
+            Some(130),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("Please install eselect to use this feature."),
+            "{stderr}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(&emptydir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn remote_success_prints_no_post_merge_notice_like_real() {
+        // Backlog #231 (b): the remote-execution early return
+        // (`take_remote_exec` dispatch) skips `post_emerge`'s tail --
+        // correctly so. The remote plan merges onto the *remote* host;
+        // the local `${ROOT}/var/db/pkg` is never touched, so real's
+        // `_pkgs_changed` gate (`post_emerge.py:112-117`) evaluates
+        // false and -- the run being non-`--pretend` -- the tail would
+        // print nothing. Local-transport end to end (`mrg
+        // --remote-transport local`, the same shape the contract
+        // suite's `test_mrg_remote_resolve_merges_a_binhost_binary`
+        // uses): the pre-resolution notice still prints once, before
+        // `Calculating...`, and no second notice follows the merge.
+        let portuale_bin = built_portuale_bin();
+        let fixtures = fixtures_root();
+        let base = std::env::temp_dir().join(format!(
+            "remote_news_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        // Client ROOT: a copy of the fixtures' `var` (the hermetic
+        // 5-count vdb), so the pre notice has something to print.
+        let root = base.join("root");
+        copy_tree(&fixtures.join("var"), &root.join("var"));
+        // Tmp `file://` binhost serving the hook-ordering fixture
+        // binary with a minimal `Packages` index.
+        let binhost = base.join("binhost");
+        std::fs::create_dir_all(binhost.join("dev-libs")).unwrap();
+        std::fs::copy(
+            fixtures.join("pkgdir/dev-libs/binpkgrmpkg-1.0.tbz2"),
+            binhost.join("dev-libs/binpkgrmpkg-1.0.tbz2"),
+        )
+        .unwrap();
+        let size = std::fs::metadata(binhost.join("dev-libs/binpkgrmpkg-1.0.tbz2"))
+            .unwrap()
+            .len();
+        std::fs::write(
+            binhost.join("Packages"),
+            format!(
+                "TIMESTAMP: 0\nVERSION: 0\nPACKAGES: 1\n\nBUILD_ID: 1\nCPV: dev-libs/binpkgrmpkg-1.0\nDEFINED_PHASES: -\nEAPI: 8\nKEYWORDS: amd64\nPATH: dev-libs/binpkgrmpkg-1.0.tbz2\nREPO: testrepo\nSIZE: {size}\nSLOT: 0\nUSE:\n"
+            ),
+        )
+        .unwrap();
+        // Client `/etc/portage`: the fixture config repointed at the
+        // tmp binhost (absolute repo locations, like the contract
+        // suite's `_write_tmp_clientetc`).
+        let clientetc = base.join("clientetc");
+        copy_tree(
+            &fixtures.join("etc/portage"),
+            &clientetc.join("etc/portage"),
+        );
+        let profile_link = clientetc.join("etc/portage/make.profile");
+        let _ = std::fs::remove_file(&profile_link);
+        std::os::unix::fs::symlink(fixtures.join("repo/profiles/default"), &profile_link).unwrap();
+        std::fs::write(
+            clientetc.join("etc/portage/binrepos.conf"),
+            format!(
+                "[tmpbinhost]\nsync-uri = file://{}\npriority = 1\n",
+                binhost.display()
+            ),
+        )
+        .unwrap();
+        for entry in std::fs::read_dir(clientetc.join("etc/portage/repos.conf")).unwrap() {
+            let entry = entry.unwrap();
+            if !entry.file_type().unwrap().is_file() {
+                continue;
+            }
+            let text = std::fs::read_to_string(entry.path()).unwrap();
+            let mut lines = Vec::new();
+            for line in text.lines() {
+                let mut line = line.to_string();
+                if line.trim_start().starts_with("location") && line.contains('=') {
+                    let value = line
+                        .split('=')
+                        .nth(1)
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string();
+                    if !value.is_empty() && !value.starts_with('/') {
+                        line = line.replace(
+                            value.as_str(),
+                            fixtures.join(&value).display().to_string().as_str(),
+                        );
+                    }
+                }
+                lines.push(line);
+            }
+            lines.push(String::new());
+            std::fs::write(entry.path(), lines.join("\n")).unwrap();
+        }
+        let work = base.join("work");
+        let output = std::process::Command::new(&portuale_bin)
+            .args([
+                "mrg",
+                "--getbinpkgonly",
+                "--remote-hostname",
+                "localtest",
+                "--remote-transport",
+                "local",
+                "--remote-root",
+                root.to_str().unwrap(),
+                "--remote-workdir",
+                work.to_str().unwrap(),
+                "--remote-etc-portage",
+                &format!("server:{}", clientetc.display()),
+                "dev-libs/binpkgrmpkg",
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .env("PORTAGE_CONFIGROOT", &clientetc)
+            .env("ROOT", &root)
+            .env("PORTAGE_RUNNING_ROOT", &fixtures)
+            .env("DISTDIR", fixtures.join("distfiles"))
+            .env("PORTAGE_TMPDIR", base.join("pt"))
+            .env("FEATURES", "news")
+            .output()
+            .expect("portuale mrg spawns");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains(">>> Remote merged dev-libs/binpkgrmpkg-1.0"),
+            "{stdout}"
+        );
+        assert!(
+            root.join("var/db/pkg/dev-libs/binpkgrmpkg-1.0/CONTENTS")
+                .is_file(),
+            "the remote unit really merged into the client root"
+        );
+        // Exactly one notice: the pre-resolution one, standing before
+        // `Calculating...` -- no post-merge notice follows the merge.
+        assert_eq!(
+            stdout.matches("news items need reading").count(),
+            1,
+            "{stdout}"
+        );
+        assert!(
+            stdout.find("need reading").unwrap() < stdout.find("Calculating").unwrap(),
+            "{stdout}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn unmerge_end_notice_skips_an_empty_removal_list() {
+        // Backlog #196 fix round 1: real `post_emerge` after the
+        // uninstall actions prints the notice only when the vdb
+        // changed -- an empty selection removes nothing, so no notice
+        // (and no evaluation: no state dir appears). `noinfo=true`
+        // skips the info regen (nothing to regenerate under a scratch
+        // ROOT); the removal list is empty, so nothing else runs
+        // either -- the positive path (a real removal prints) is
+        // pinned by the contract suite instead.
+        let color = crate::color::Colorizer::new(false);
+        let (base, root, repos, config) = news_notice_test_tree("unmerge_empty");
+        let rc = execute_unmerge(
+            &[],
+            &root,
+            crate::ebuild_phases::ShellBackend::default(),
+            false,
+            &color,
+            true,
+            true,
+            &repos,
+            &config,
+        );
+        assert_eq!(format!("{rc:?}"), format!("{:?}", ExitCode::SUCCESS));
+        assert!(
+            !root.join("var/lib/gentoo/news").exists(),
+            "an empty removal list must not evaluate news at all"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn classify_yes_no_prefix_matches_case_insensitively_and_rejects_garbage() {
         assert_eq!(classify_yes_no("", false), Some(true));
         assert_eq!(classify_yes_no("y", false), Some(true));
@@ -13930,6 +15663,238 @@ mod tests {
         );
     }
 
+    /// The `portuale` binary next to the current test executable (same
+    /// layout `ask_without_a_tty_...` already relies on).
+    fn built_portuale_bin() -> std::path::PathBuf {
+        let mut portuale_bin = std::env::current_exe().expect("current test exe");
+        portuale_bin.pop();
+        if portuale_bin.ends_with("deps") {
+            portuale_bin.pop();
+        }
+        portuale_bin.push("portuale");
+        portuale_bin
+    }
+
+    /// A scratch `ROOT` with nothing but a stale multi-item resume list
+    /// (multi-item so the `resume_backup` rotation would *also* rewrite
+    /// the file if it ran -- the byte comparison below pins the rotation
+    /// stays out too). Returns the root plus the file's bytes before the
+    /// run under test.
+    fn stale_resume_root(tag: &str) -> (std::path::PathBuf, Vec<u8>) {
+        let root = std::env::temp_dir().join(format!(
+            "resume_no_write_{tag}_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let stale = vec![
+            (
+                crate::mtimedb::ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "stale-a".to_string(),
+                "1".to_string(),
+            ),
+            (
+                crate::mtimedb::ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "stale-b".to_string(),
+                "1".to_string(),
+            ),
+        ];
+        crate::mtimedb::write_resume_list(
+            &root,
+            &["dev-libs/stale-a"],
+            &stale,
+            &crate::mtimedb::ResumeOpts::default(),
+        )
+        .unwrap();
+        let before = std::fs::read(crate::mtimedb::mtimedb_path(&root)).unwrap();
+        (root, before)
+    }
+
+    /// Fixture-config env for a spawned `portuale emerge` that resolves
+    /// (never merges): the committed fixture tree as config, the scratch
+    /// dir as `ROOT`, everything else absolute so the test holds from
+    /// any working directory.
+    fn fixture_resolve_env(
+        root: &std::path::Path,
+        portage_tmpdir: &std::path::Path,
+    ) -> Vec<(String, String)> {
+        let fixtures = fixtures_root();
+        vec![
+            (
+                "PORTAGE_CONFIGROOT".to_string(),
+                fixtures.display().to_string(),
+            ),
+            ("ROOT".to_string(), root.display().to_string()),
+            (
+                "DISTDIR".to_string(),
+                fixtures.join("distfiles").display().to_string(),
+            ),
+            (
+                "PORTAGE_TMPDIR".to_string(),
+                portage_tmpdir.display().to_string(),
+            ),
+        ]
+    }
+
+    #[test]
+    fn pretend_writes_no_resume_list_even_with_a_stale_list_present() {
+        // #179: real `_emerge/actions.py` returns from the `--pretend`
+        // branch (`display(...)`, `return os.EX_OK`) before `Scheduler`
+        // exists -- and before the `resume_backup` rotation -- so a
+        // preview never touches `mtimedb`. A stale list must come back
+        // byte-identical, and no fresh list may appear on a bare root.
+        let portuale_bin = built_portuale_bin();
+        let tmp = std::env::temp_dir().join(format!(
+            "resume_no_write_pretend_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // Bare root first: `--pretend` resolves and prints, and leaves
+        // no `mtimedb` behind at all.
+        let bare = tmp.join("bare");
+        let output = std::process::Command::new(&portuale_bin)
+            .args(["emerge", "--pretend", "--oneshot", "dev-libs/schedok"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .envs(fixture_resolve_env(&bare, &tmp.join("pt-bare")))
+            .output()
+            .expect("portuale emerge spawns");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("dev-libs/schedok-1.0"),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert!(
+            !crate::mtimedb::mtimedb_path(&bare).exists(),
+            "--pretend must not create an mtimedb"
+        );
+
+        // Stale list present: byte-identical afterwards (neither a fresh
+        // save nor the rotation may run).
+        let (root, before) = stale_resume_root("pretend");
+        let output = std::process::Command::new(&portuale_bin)
+            .args(["emerge", "--pretend", "--oneshot", "dev-libs/schedok"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .envs(fixture_resolve_env(&root, &tmp.join("pt-stale")))
+            .output()
+            .expect("portuale emerge spawns");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            std::fs::read(crate::mtimedb::mtimedb_path(&root)).unwrap(),
+            before,
+            "--pretend must leave a stale resume list byte-identical"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A pty pair without any external helper: the child answers `--ask`
+    /// through the slave (its stdin), satisfying the up-front isatty
+    /// gate, while the test writes the answer into the master. `libc`
+    /// is already a dependency (`stdin_is_tty` uses it).
+    #[cfg(unix)]
+    fn pty_pair() -> (std::fs::File, std::process::Stdio) {
+        use std::os::fd::FromRawFd;
+        unsafe {
+            let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+            assert!(master >= 0, "posix_openpt failed");
+            assert_eq!(libc::grantpt(master), 0, "grantpt failed");
+            assert_eq!(libc::unlockpt(master), 0, "unlockpt failed");
+            let name_ptr = libc::ptsname(master);
+            assert!(!name_ptr.is_null(), "ptsname failed");
+            let name = std::ffi::CStr::from_ptr(name_ptr)
+                .to_str()
+                .expect("pty name is utf8")
+                .to_owned();
+            let master_file = std::fs::File::from_raw_fd(master);
+            let cname = std::ffi::CString::new(name).expect("pty name has no nul");
+            let slave = libc::open(cname.as_ptr(), libc::O_RDWR | libc::O_NOCTTY);
+            assert!(slave >= 0, "pty slave open failed");
+            let slave_stdio = std::process::Stdio::from(std::os::fd::OwnedFd::from_raw_fd(slave));
+            (master_file, slave_stdio)
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ask_declined_writes_no_resume_list() {
+        // #179: real `_emerge/actions.py:525-536` returns `128 + SIGINT`
+        // on a "No" answer before `Scheduler` runs -- a declined run
+        // writes nothing (and rotates nothing: the rotation sits after
+        // the prompt). `--ask` needs a real TTY (the up-front isatty
+        // gate), so the decline is answered through a pty; the stale
+        // multi-item list must come back byte-identical.
+        use std::io::Write;
+        let portuale_bin = built_portuale_bin();
+        let (root, before) = stale_resume_root("ask");
+        let tmp = std::env::temp_dir().join(format!(
+            "resume_no_write_ask_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let (mut master, slave_stdio) = pty_pair();
+        let child = std::process::Command::new(&portuale_bin)
+            .args(["emerge", "--ask", "--oneshot", "dev-libs/schedok"])
+            .stdin(slave_stdio)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .envs(fixture_resolve_env(&root, &tmp))
+            .spawn()
+            .expect("portuale emerge spawns");
+        // The pty buffers until the child prompts -- no synchronisation
+        // needed.
+        master.write_all(b"No\n").expect("answer the --ask prompt");
+        let output = child.wait_with_output().expect("wait for emerge");
+        drop(master);
+        assert_eq!(
+            output.status.code(),
+            Some(130),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("Quitting."),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert_eq!(
+            std::fs::read(crate::mtimedb::mtimedb_path(&root)).unwrap(),
+            before,
+            "a declined --ask run must leave a stale resume list byte-identical"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn nonpretend_merge_list_shown_only_when_real_shows_it() {
         // Backlog #185: real `_emerge/actions.py:464-469`
@@ -13949,6 +15914,25 @@ mod tests {
         assert!(!merge_list_shown(false, false, false, false, true));
         assert!(!merge_list_shown(false, false, false, true, true));
         assert!(merge_list_shown(false, true, false, false, true));
+    }
+
+    #[test]
+    fn nothing_to_merge_fires_only_for_a_shown_nonpretend_empty_plan() {
+        // Backlog #225: real `_emerge/actions.py:464-521` -- the early
+        // return fires only inside the display-flag branch of a real
+        // (non-`--pretend`) run, and only when `mergecount == 0`.
+        // (pretend, show_merge_list, mergecount) -> early return.
+        assert!(nothing_to_merge(false, true, 0));
+        // `--pretend` displays and returns with no message.
+        assert!(!nothing_to_merge(true, true, 0));
+        // A plain run (no display flags) never takes this branch:
+        // `mergecount` stays `None` and `Scheduler` still writes (per
+        // #179, possibly empty).
+        assert!(!nothing_to_merge(false, false, 0));
+        // Anything merge-bound proceeds to the prompt / scheduler.
+        assert!(!nothing_to_merge(false, true, 1));
+        assert!(!nothing_to_merge(false, true, 7));
+        assert!(!nothing_to_merge(true, false, 3));
     }
 
     #[test]
@@ -14002,6 +15986,7 @@ mod tests {
             "1.0",
             portage_repo::CandidateSource::Ebuild,
             &[],
+            None,
         );
         let binary_entry = emerge_build::resume_entry(
             "dev-libs",
@@ -14009,6 +15994,7 @@ mod tests {
             "2.0",
             portage_repo::CandidateSource::Binary,
             &[],
+            None,
         );
         let entries = vec![source_entry, binary_entry];
 
@@ -14059,6 +16045,7 @@ mod tests {
                 "1.0",
                 portage_repo::CandidateSource::Ebuild,
                 &[],
+                None,
             ),
             emerge_build::resume_entry(
                 "dev-libs",
@@ -14066,6 +16053,7 @@ mod tests {
                 "2.0",
                 portage_repo::CandidateSource::Binary,
                 &[],
+                None,
             ),
         ];
         let up_front: Vec<crate::mtimedb::ResumeCpv> = entries
@@ -15077,6 +17065,43 @@ mod tests {
     }
 
     #[test]
+    fn circular_node_text_matches_real_package_str() {
+        // Backlog #206 S1: real `_emerge/Package.py::Package.__str__`
+        // for a merge-bound ebuild — `(cpv:slot/sub::repo, ebuild
+        // scheduled for merge)` — byte for byte, grounded on the live
+        // n206 probe (`=dev-libs/cyc0b-1`, `dev-libs/hardcyclea`,
+        // `dev-libs/usecyclea`, all `ROOT=$FX` with no `to` suffix).
+        let nc = Colorizer::new(false);
+        assert_eq!(
+            circular_node_text("dev-libs/cyc0b-1", "0", "0", "testrepo", "ebuild", &nc),
+            "(dev-libs/cyc0b-1:0/0::testrepo, ebuild scheduled for merge)"
+        );
+        // A non-0 slot renders `:slot/sub_slot`, like real
+        // `_append_slot`-less `__str__` (which always prints both).
+        assert_eq!(
+            circular_node_text("dev-libs/slotted-2.0", "1", "2", "testrepo", "ebuild", &nc),
+            "(dev-libs/slotted-2.0:1/2::testrepo, ebuild scheduled for merge)"
+        );
+        // A binary merge says `binary`, like real `type_name`.
+        assert_eq!(
+            circular_node_text("dev-libs/binpkg-1.0", "0", "0", "testrepo", "binary", &nc),
+            "(dev-libs/binpkg-1.0:0/0::testrepo, binary scheduled for merge)"
+        );
+        // Under `--color y` real wraps the `cpv:slot/sub::repo` head in
+        // `PKG_MERGE` (`PKG_BINARY_MERGE` for a binary merge); the
+        // `, <type> scheduled for merge)` tail stays plain.
+        let yc = Colorizer::new(true);
+        assert_eq!(
+            circular_node_text("dev-libs/cyc0b-1", "0", "0", "testrepo", "ebuild", &yc),
+            "(\x1b[32mdev-libs/cyc0b-1:0/0::testrepo\x1b[39;49;00m, ebuild scheduled for merge)"
+        );
+        assert_eq!(
+            circular_node_text("dev-libs/binpkg-1.0", "0", "0", "testrepo", "binary", &yc),
+            "(\x1b[35mdev-libs/binpkg-1.0:0/0::testrepo\x1b[39;49;00m, binary scheduled for merge)"
+        );
+    }
+
+    #[test]
     fn use_suffix_picks_the_p_or_pv_use_rendering_by_verbosity() {
         let nc = Colorizer::new(false);
         // A `New` entry: the resolver renders the same full list into
@@ -15207,6 +17232,65 @@ mod tests {
         assert_eq!(
             nomerge_row("dev-libs", "diamond", "1.0", " ", true, &bare_use),
             "[nomerge      ]  dev-libs/diamond-1.0"
+        );
+    }
+
+    // Serialize the one test that mutates the process environment, in
+    // the `PLACED_CONFIG_ENV_LOCK` (`remote.rs`) style.
+    static INFO_SCALAR_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn info_scalar_value_prefers_the_calling_env_over_the_config() {
+        // Backlog #219: `--info`'s scalar dump reads the calling env
+        // over the config files (real `settings.get(k)`, env-first
+        // `lookuplist`), not `other_vars` with an env fallback.
+        // Hermetic without `with_test_env` (that hook lives in
+        // portage-profile's own `cfg(test)`): a probe key no other code
+        // reads, mutated under a lock, ambient value saved/restored via
+        // a `Drop` guard so an assertion panic cannot leak it.
+        let _guard = INFO_SCALAR_ENV_LOCK.lock().unwrap();
+        let key = "PORTUALE_INFO_SCALAR_PROBE_219";
+        struct RestoreProbe {
+            key: &'static str,
+            saved: Option<std::ffi::OsString>,
+        }
+        impl Drop for RestoreProbe {
+            fn drop(&mut self) {
+                // SAFETY: held `INFO_SCALAR_ENV_LOCK`; no other test in
+                // this binary touches this probe key.
+                unsafe {
+                    match self.saved.take() {
+                        Some(value) => std::env::set_var(self.key, value),
+                        None => std::env::remove_var(self.key),
+                    }
+                }
+            }
+        }
+        let _restore = RestoreProbe {
+            key,
+            saved: std::env::var_os(key),
+        };
+        // SAFETY: held `INFO_SCALAR_ENV_LOCK`; no other test in this
+        // binary touches this probe key.
+        unsafe {
+            std::env::set_var(key, "env-value-219");
+        }
+        let config = portage_profile::Config {
+            other_vars: [(key.to_string(), "conf-value-219".to_string())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        assert_eq!(
+            info_scalar_value(&config, key).as_deref(),
+            Some("env-value-219"),
+            "the calling env must win over make.conf, as real prints it"
+        );
+        std::mem::drop(_restore);
+        assert_eq!(
+            info_scalar_value(&config, key).as_deref(),
+            Some("conf-value-219"),
+            "without the env layer the config value still shows"
         );
     }
 }

@@ -51,6 +51,26 @@ pub fn eapi_is_supported(eapi: &str) -> bool {
     )
 }
 
+/// Real `_get_eapi_attrs(eapi).slot_operator` (`portage/eapi.py`): whether
+/// `:=` slot-operator dependencies exist in this EAPI. Call only with an
+/// `eapi_is_supported` EAPI -- real evaluates the attribute strictly after
+/// the support gate in `FakeVartree._apply_dynamic_deps`
+/// (`lib/_emerge/FakeVartree.py:158-169`). The rule is
+/// `Eapi(eapi) >= Eapi("5")` (`eapi.py` else-branch), where `Eapi`
+/// compares only the integer before any `-` suffix (`"9-pre1"` reads as
+/// 9). The deprecated underscore EAPIs (`3_pre1`, …) make real's `Eapi()`
+/// raise `ValueError` (no `-` to partition on); no vdb or tree can carry
+/// one in practice, so they read by numeric prefix here -- the only
+/// reachable inputs are `"0"`–`"9"`.
+pub fn eapi_has_slot_operator(eapi: &str) -> bool {
+    let digits: String = eapi
+        .trim()
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.parse::<u32>().is_ok_and(|n| n >= 5)
+}
+
 /// Real `portdbapi._pull_valid_cache` (`porttree.py:603-658`) against a
 /// single on-disk `md5-cache` entry: `true` when
 /// `metadata/md5-cache/<category>/<pf>` validates, so the `depend` phase
@@ -466,6 +486,18 @@ mod tests {
         }
         for eapi in ["", "99", "10", "8-pre1"] {
             assert!(!eapi_is_supported(eapi), "{eapi:?}");
+        }
+    }
+
+    #[test]
+    fn eapi_slot_operator_matches_real() {
+        // Real `_get_eapi_attrs(eapi).slot_operator` (`portage/eapi.py`):
+        // `Eapi(eapi) >= Eapi("5")`, dash-suffix-insensitive.
+        for eapi in ["5", "6", "7", "8", "9", "9-pre1", " 8 "] {
+            assert!(eapi_has_slot_operator(eapi), "{eapi}");
+        }
+        for eapi in ["0", "1", "2", "3", "4", ""] {
+            assert!(!eapi_has_slot_operator(eapi), "{eapi:?}");
         }
     }
 }
