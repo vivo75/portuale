@@ -2770,6 +2770,13 @@ fn abort_outcome_to_json(outcome: &portage_repo::ResolveOutcome) -> String {
                     members.join(",")
                 )
             }
+            portage_repo::AbortReason::VirtualCycle { members } => {
+                let members: Vec<String> = members.iter().map(|m| json_string(m)).collect();
+                format!(
+                    "{{\"reason\":\"virtual-cycle\",\"members\":[{}]}}",
+                    members.join(",")
+                )
+            }
         },
     }
 }
@@ -12965,7 +12972,8 @@ pub fn run(args: &[String]) -> ExitCode {
                 &result.outcome,
                 portage_repo::ResolveOutcome::Aborted {
                     reason: portage_repo::AbortReason::MaskedDep { .. }
-                        | portage_repo::AbortReason::UnsatisfiedAtom { .. },
+                        | portage_repo::AbortReason::UnsatisfiedAtom { .. }
+                        | portage_repo::AbortReason::VirtualCycle { .. },
                     ..
                 }
             )
@@ -13670,6 +13678,30 @@ pub fn run(args: &[String]) -> ExitCode {
             &result.entries,
             result.large_cycle_count,
         );
+    }
+
+    // Backlog #193: real `select_files`' `_virtual_cycle_error` handler
+    // (`lib/_emerge/depgraph.py:5002-5013` in 3rdparty/portage 3.0.82.2)
+    // prints `\n\n!!! virtual cycle detected:\n\n`, one
+    // `  {cpv}::{repo}` line per probe-stack member (sorted), then `\n`
+    // -- to stderr (`writemsg`, noiselevel -1), mid-resolution (between
+    // real's `Calculating dependencies ...` notice halves; portuale
+    // prints that notice whole in the preamble above, like the
+    // masked/unsat arm). No merge list, no counters, no trailing error
+    // block: real's run ends after the timing line (g193 probe), and the
+    // shared abort gate below exits 1. Uncoloured like real's own
+    // `writemsg` (no colour markup on that path).
+    if portage_repo::abort_path_enabled()
+        && let portage_repo::ResolveOutcome::Aborted {
+            reason: portage_repo::AbortReason::VirtualCycle { members },
+            ..
+        } = &result.outcome
+    {
+        eprint!("\n\n!!! virtual cycle detected:\n\n");
+        for member in members {
+            eprintln!("  {member}");
+        }
+        eprintln!();
     }
 
     // Real `depgraph.py::_display_autounmask` (`:10625`), the

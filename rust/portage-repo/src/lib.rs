@@ -17112,6 +17112,161 @@ fn find_hard_cycles(
     }
 }
 
+/// Backlog #193: real `depgraph._virt_deps_visible`'s virtual-cycle rule
+/// (`lib/_emerge/depgraph.py:6208-6222` in 3rdparty/portage 3.0.82.2).
+/// While resolving a `virtual/` atom, real recursively probes the
+/// selected provider's own `RDEPEND` closure
+/// (`_virt_deps_visible_imp`, `:6224-6256`, reached through `dep_check`
+/// → `_dep_check_composite_db.match_pkgs`, `:11833` → `_visible`,
+/// `:11921` → `_virt_deps_visible`, `:11945`), and re-entering a
+/// virtual already on the probe stack (`_virt_deps_visible_recursion`,
+/// `:873`) raises `_virtual_cycle_error` (class `:11685`, `:6215-6216`).
+/// `select_files` (`:5002-5013`) catches it into `_virtual_cycle`,
+/// prints `\n\n!!! virtual cycle detected:\n\n` plus one
+/// `  {cpv}::{repo}` line per stack member (sorted) plus `\n`
+/// (`writemsg`, stderr), and fails the resolve (`_skip_restart`, no
+/// merge list, exit 1). Upstream `test_virtual_cycle.py` (bug 965570):
+/// `virtual/gzip-1` whose `RDEPEND` is itself, and the
+/// `virtual/A-1 → B-1 → C-1 → A-1` ring, both fail (the playground
+/// surfaces the members as `virtual_cycle`,
+/// `ResolverPlayground.py:1241-1242`). Grounded live by the g193 probe
+/// (`podman run localhost/test-portuale:latest`, portage 3.0.81.3 --
+/// same message shape in 3.0.82.2 by source read --
+/// `emerge -p --color=n app-misc/{bar,foo}` on the staged #50
+/// fixtures, rc 1 both, members `virtual/gzip-1` /
+/// `virtual/A-1,B-1,C-1` each with `::testrepo`).
+///
+/// Ported as a settled-graph check over the provider selection the walk
+/// already made: DFS from every merge-bound `virtual/` entry along
+/// kept-branch `RDEPEND` (`DepEdge.key == 0`, the only key real's imp
+/// expands) edges to merge-bound `virtual/` targets; revisiting an
+/// on-stack entry reports the whole stack -- real reports the full
+/// recursion set, so a lollipop (a virtual pulling a self-looping
+/// virtual) reports every virtual on the path, not just the loop.
+/// Members return as `cpv::repo` lines in real's sorted order (cp, then
+/// `vercmp` version, then repo). Empty when no merge-bound virtual
+/// (transitively) requires itself; a `virtual/ → non-virtual →
+/// virtual/` ring is NOT one (real's stack holds virtuals only, so
+/// that shape probes clean) and stays an ordinary merge.
+///
+/// Documented cuts: a dep target that is not merge-bound
+/// (`AlreadyInstalled`, unresolvable) is not expanded -- real probes
+/// the installed/available package's own recorded `RDEPEND` there too,
+/// but no fixture shapes an installed virtual with a cyclic recorded
+/// `RDEPEND` that nothing merges; and a suppressed `||` alternative is
+/// never probed -- real's `dep_check` may probe a non-selected branch
+/// first and fail where this succeeds (no fixture shapes that
+/// either). A virtual the walk considered but did not select is likewise
+/// never a start node (real may probe such a candidate mid-search;
+/// single-provider fixtures cannot tell).
+fn find_virtual_cycles(entries: &[GraphEntry], root: &Path) -> Vec<String> {
+    // Cheap gate: no merge-bound virtual, no probe (every ordinary resolve).
+    if !entries
+        .iter()
+        .any(|e| e.category == "virtual" && merge_bound_cpv(e).is_some())
+    {
+        return Vec::new();
+    }
+    let cp_index = merge_bound_index(entries);
+    // Branch selection reuses `kept_alt_branches`, the same set
+    // `build_digraph` collapses to (real's digraph holds the resolved
+    // edge only) -- computed lazily so resolves without a `||` edge on
+    // any merge-bound virtual never touch the digraph prelude.
+    let kept: Vec<HashSet<usize>> = if entries.iter().any(|e| {
+        e.category == "virtual"
+            && merge_bound_cpv(e).is_some()
+            && e.deps.iter().any(|d| d.alt.is_some())
+    }) {
+        kept_alt_branches(entries, root)
+    } else {
+        vec![HashSet::new(); entries.len()]
+    };
+    // Successors: kept-branch RDEPEND edges to merge-bound virtual targets.
+    let succ = |idx: usize| -> Vec<usize> {
+        let mut out: Vec<usize> = entries[idx]
+            .deps
+            .iter()
+            .enumerate()
+            .filter(|(ei, d)| {
+                d.key == 0 && d.category == "virtual" && (d.alt.is_none() || kept[idx].contains(ei))
+            })
+            .filter_map(|(_, d)| cp_index.get(&(d.category.as_str(), d.package.as_str())))
+            .copied()
+            .filter(|&t| entries[t].category == "virtual")
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    };
+    fn visit(
+        idx: usize,
+        succ: &dyn Fn(usize) -> Vec<usize>,
+        stack: &mut Vec<usize>,
+        on_stack: &mut HashSet<usize>,
+        done: &mut HashSet<usize>,
+    ) -> Option<Vec<usize>> {
+        for t in succ(idx) {
+            // The revisit check is the `_virt_deps_visible_recursion`
+            // membership test (`:6215`): the reported members are the
+            // whole stack, like real's `list(recursion_set)`.
+            if on_stack.contains(&t) {
+                return Some(stack.clone());
+            }
+            if !done.contains(&t) {
+                stack.push(t);
+                on_stack.insert(t);
+                if let Some(members) = visit(t, succ, stack, on_stack, done) {
+                    return Some(members);
+                }
+                stack.pop();
+                on_stack.remove(&t);
+            }
+        }
+        done.insert(idx);
+        None
+    }
+    for start in 0..entries.len() {
+        if entries[start].category != "virtual" {
+            continue;
+        }
+        if merge_bound_cpv(&entries[start]).is_none() {
+            continue;
+        }
+        let mut stack = vec![start];
+        let mut on_stack: HashSet<usize> = HashSet::from([start]);
+        let mut done: HashSet<usize> = HashSet::new();
+        if let Some(path) = visit(start, &succ, &mut stack, &mut on_stack, &mut done) {
+            let mut members: Vec<(&str, &str, &str, &str)> = path
+                .iter()
+                .map(|&i| {
+                    let e = &entries[i];
+                    (
+                        e.category.as_str(),
+                        e.package.as_str(),
+                        merge_bound_version(&e.outcome)
+                            .expect("merge-bound")
+                            .as_str(),
+                        e.repo_name.as_deref().unwrap_or("unknown"),
+                    )
+                })
+                .collect();
+            // Real `sorted()` on `Package` (`Package.py:830`: cp, then
+            // `vercmp` version); the `::repo` suffix plays no part there.
+            members.sort_by(|a, b| {
+                a.0.cmp(b.0)
+                    .then(a.1.cmp(b.1))
+                    .then(vercmp_ordering(a.2, b.2))
+                    .then(a.3.cmp(b.3))
+            });
+            return members
+                .into_iter()
+                .map(|(c, p, v, r)| format!("{c}/{p}-{v}::{r}"))
+                .collect();
+        }
+    }
+    Vec::new()
+}
+
 /// Backlog #228: one label per edge of a `find_hard_cycles` cycle --
 /// real `_prepare_circular_dep_message`
 /// (`resolver/circular_dependency.py`, the `({pkg}
@@ -20495,6 +20650,17 @@ pub enum AbortReason {
     /// tree nesting/`[nomerge]` rows stay a deliberate cut
     /// (dedup-by-design, Gate G0.2).
     UnserializableCycle { members: Vec<String> },
+    /// Real `depgraph._virt_deps_visible`'s virtual-cycle failure
+    /// (backlog #193): a merge-bound `virtual/` package (transitively)
+    /// requires itself through selected virtual providers, so the
+    /// virtual can never resolve to a real package. Real raises out of
+    /// the walk (`_virtual_cycle_error`, `depgraph.py:6215-6216`),
+    /// prints `!!! virtual cycle detected:` with one `  {cpv}::{repo}`
+    /// line per probe-stack member (`select_files`, `:5002-5013`), and
+    /// fails with no merge list. `members` are those `cpv::repo` lines
+    /// in real's sorted order (see [`find_virtual_cycles`]); the
+    /// renderer prefixes the two spaces.
+    VirtualCycle { members: Vec<String> },
 }
 
 /// Whether the resolve ran to completion or was abandoned: real's
@@ -20571,7 +20737,24 @@ pub fn abort_outcome(
     circular_deps: &[Vec<String>],
     cycle_display: &[String],
     nvc_dep_atoms: &HashMap<(String, String), String>,
+    virtual_cycle: &[String],
 ) -> ResolveOutcome {
+    // Backlog #193: real's virtual-cycle failure is an exception raised
+    // out of the walk (`_virtual_cycle_error` propagating through
+    // `_resolve` to `select_files`, `depgraph.py:5002`), so it preempts
+    // every serialize-time failure the way a walk-time masked/unsat miss
+    // does -- checked before both. Against a masked/unsat miss in the
+    // same graph real reports whichever its DFS reaches first (a walk-
+    // order artefact); virtual-first is the documented choice, and no
+    // fixture shapes both at once.
+    if !virtual_cycle.is_empty() {
+        return ResolveOutcome::Aborted {
+            reason: AbortReason::VirtualCycle {
+                members: virtual_cycle.to_vec(),
+            },
+            partial: Vec::new(),
+        };
+    }
     for entry in entries {
         if !matches!(entry.outcome, PretendOutcome::NoVisibleCandidate) {
             continue;
@@ -20824,6 +21007,13 @@ pub struct GraphResult {
     /// a package under two parents the way real's ordered tree does;
     /// isolating *which* packages is what's ported).
     pub cycle_display: Vec<String>,
+    /// Backlog #193: real `depgraph._virt_deps_visible`'s probe-stack
+    /// members for a virtual cycle among the merge-bound entries (see
+    /// [`find_virtual_cycles`]): `cpv::repo` lines in real's sorted
+    /// order. Non-empty exactly when the outcome is
+    /// `Aborted { VirtualCycle }`; the renderer prints real's
+    /// `!!! virtual cycle detected:` block from it and exits 1.
+    pub virtual_cycle: Vec<String>,
     /// Masked-only dependency disclosures (real `_show_unsatisfied_dep`'s
     /// "All ebuilds that could satisfy … have been masked" block for a
     /// *dependency* atom): one per dependency `NoVisibleCandidate` entry
@@ -27949,13 +28139,20 @@ fn assemble_result(
     }
 
     // Backlog #19 Slice 3: classify the settled graph the way real's
-    // abandon sites would have (see `abort_outcome`).
+    // abandon sites would have (see `abort_outcome`). Backlog #193:
+    // the virtual-cycle probe runs on the same settled graph (real's
+    // `_virt_deps_visible` recursion over the selected providers);
+    // like `find_hard_cycles` it is unconditional -- its own cheap
+    // gate (no merge-bound virtual, no probe) keeps ordinary resolves
+    // free.
+    let virtual_cycle = find_virtual_cycles(&pass.entries, ctx.root);
     let outcome = abort_outcome(
         &pass.entries,
         &pass.masked_deps,
         &circular_deps,
         &cycle_display,
         &pass.nvc_dep_atoms,
+        &virtual_cycle,
     );
 
     // Backlog #129 (S1): real `display_problems` shows missed updates
@@ -28023,6 +28220,7 @@ fn assemble_result(
         plain_miss_deps: pass.plain_miss_deps,
         large_cycle_count,
         cycle_display,
+        virtual_cycle,
     }
 }
 
@@ -39823,6 +40021,204 @@ mod tests {
         // Installed slot `1/0`, child slot `1/0`: satisfied (soft).
         let root = make_vdb("n228-slot-gate-same-slot", "1/0");
         assert!(find_hard_cycles(&make_entries(), &make_map(), &root).is_empty());
+    }
+
+    #[test]
+    fn find_virtual_cycles_reports_self_loop_ring_and_lollipop() {
+        // Backlog #193: real `_virt_deps_visible` (`depgraph.py:6208`)
+        // fails a virtual that (transitively) requires itself through
+        // selected virtual providers -- upstream `test_virtual_cycle.py`
+        // (bug 965570): `virtual/gzip-1` (self-`RDEPEND`) and the
+        // `virtual/A-1 → B-1 → C-1 → A-1` ring.
+        let redge = |pkg: &str| DepEdge {
+            atom: format!("virtual/{pkg}"),
+            evaluated: format!("virtual/{pkg}"),
+            category: "virtual".to_string(),
+            package: pkg.to_string(),
+            priority: DepPriority {
+                runtime: true,
+                ..DepPriority::default()
+            },
+            disjunctive: false,
+            alt: None,
+            key: 0,
+        };
+        let virt = |pkg: &str, deps: Vec<DepEdge>| {
+            let mut e = graph_entry("virtual", pkg, "1");
+            e.deps = deps;
+            e
+        };
+        let fake = Path::new("/nonexistent-root");
+        // Self-loop: the single member reports with `::testrepo`.
+        let gzip = virt("gzip", vec![redge("gzip")]);
+        assert_eq!(
+            find_virtual_cycles(&[gzip], fake),
+            vec!["virtual/gzip-1::testrepo".to_string()]
+        );
+        // Three-ring: every member reports, sorted (real sorts the
+        // probe-stack packages, `Package.py:830`).
+        let ring = vec![
+            virt("A", vec![redge("B")]),
+            virt("B", vec![redge("C")]),
+            virt("C", vec![redge("A")]),
+        ];
+        assert_eq!(
+            find_virtual_cycles(&ring, fake),
+            vec![
+                "virtual/A-1::testrepo".to_string(),
+                "virtual/B-1::testrepo".to_string(),
+                "virtual/C-1::testrepo".to_string(),
+            ]
+        );
+        // Lollipop: `X` pulls self-looping `Y` -- real reports the
+        // whole recursion set (`list(_virt_deps_visible_recursion)`),
+        // not just the loop.
+        let lollipop = vec![virt("X", vec![redge("Y")]), virt("Y", vec![redge("Y")])];
+        assert_eq!(
+            find_virtual_cycles(&lollipop, fake),
+            vec![
+                "virtual/X-1::testrepo".to_string(),
+                "virtual/Y-1::testrepo".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn find_virtual_cycles_ignores_non_rdepend_and_non_virtual_shapes() {
+        // Real's stack holds virtuals only and the imp expands `RDEPEND`
+        // alone (`depgraph.py:6224-6256`): a `virtual/ → non-virtual →
+        // virtual/` ring probes clean (an ordinary merge), a `DEPEND`
+        // (`key: 3`) loop is never expanded, and an `AlreadyInstalled`
+        // virtual is never a start node (not merge-bound).
+        let redge = |cat: &str, pkg: &str, key: u8| DepEdge {
+            atom: format!("{cat}/{pkg}"),
+            evaluated: format!("{cat}/{pkg}"),
+            category: cat.to_string(),
+            package: pkg.to_string(),
+            priority: DepPriority {
+                runtime: true,
+                ..DepPriority::default()
+            },
+            disjunctive: false,
+            alt: None,
+            key,
+        };
+        let fake = Path::new("/nonexistent-root");
+        // virtual/V → dev-libs/P → virtual/V: no report.
+        let mut v = graph_entry("virtual", "V", "1");
+        v.deps = vec![redge("dev-libs", "P", 0)];
+        let mut p = graph_entry("dev-libs", "P", "1");
+        p.deps = vec![redge("virtual", "V", 0)];
+        assert!(find_virtual_cycles(&[v, p], fake).is_empty());
+        // DEPEND-only loop between two virtuals: no report.
+        let mut d1 = graph_entry("virtual", "D1", "1");
+        d1.deps = vec![redge("virtual", "D2", 3)];
+        let mut d2 = graph_entry("virtual", "D2", "1");
+        d2.deps = vec![redge("virtual", "D1", 3)];
+        assert!(find_virtual_cycles(&[d1, d2], fake).is_empty());
+        // AlreadyInstalled virtual with a self-edge: not merge-bound,
+        // never expanded.
+        let mut ai = GraphEntry {
+            outcome: PretendOutcome::AlreadyInstalled {
+                version: "1".to_string(),
+            },
+            ..graph_entry("virtual", "AI", "1")
+        };
+        ai.deps = vec![redge("virtual", "AI", 0)];
+        assert!(find_virtual_cycles(&[ai], fake).is_empty());
+        // A ring with no virtual at all: the category gate skips it
+        // (ordinary circular handling owns that shape).
+        let mut n1 = graph_entry("dev-libs", "N1", "1");
+        n1.deps = vec![redge("dev-libs", "N2", 0)];
+        let mut n2 = graph_entry("dev-libs", "N2", "1");
+        n2.deps = vec![redge("dev-libs", "N1", 0)];
+        assert!(find_virtual_cycles(&[n1, n2], fake).is_empty());
+    }
+
+    #[test]
+    fn find_virtual_cycles_ignores_a_suppressed_disjunctive_branch() {
+        // `O` (virtual, merge-bound): `RDEPEND`
+        // `|| ( virtual/plain virtual/D )`, both merge-bound; the walk
+        // keeps the first written branch (real `dep_zapdeps`
+        // choice_bins, the same `kept_alt_branches` set
+        // `build_digraph` collapses to), so `O → D` is suppressed. `D`
+        // is still merged (pulled by `P`), and `D → O` is selected --
+        // but the `D → O → D` loop never closes through the suppressed
+        // edge, so nothing reports. Without the kept check this walk
+        // would follow `O → D → O` and report both. (Real's `dep_check`
+        // may probe the suppressed branch during choice evaluation and
+        // fail here instead -- a documented cut in
+        // `find_virtual_cycles`.)
+        let alt_edge = |pkg: &str, branch: u32| DepEdge {
+            atom: format!("virtual/{pkg}"),
+            evaluated: format!("virtual/{pkg}"),
+            category: "virtual".to_string(),
+            package: pkg.to_string(),
+            priority: DepPriority {
+                runtime: true,
+                ..DepPriority::default()
+            },
+            disjunctive: true,
+            alt: Some((0, branch)),
+            key: 0,
+        };
+        let plain_edge = |pkg: &str| DepEdge {
+            atom: format!("virtual/{pkg}"),
+            evaluated: format!("virtual/{pkg}"),
+            category: "virtual".to_string(),
+            package: pkg.to_string(),
+            priority: DepPriority {
+                runtime: true,
+                ..DepPriority::default()
+            },
+            disjunctive: false,
+            alt: None,
+            key: 0,
+        };
+        let mut o = graph_entry("virtual", "O", "1");
+        o.deps = vec![alt_edge("plain", 0), alt_edge("D", 1)];
+        let plain = graph_entry("virtual", "plain", "1");
+        let mut d = graph_entry("virtual", "D", "1");
+        d.deps = vec![plain_edge("O")];
+        let mut p = graph_entry("dev-libs", "P", "1");
+        p.deps = vec![plain_edge("D")];
+        let entries = vec![o, plain, d, p];
+        assert!(find_virtual_cycles(&entries, Path::new("/nonexistent-root")).is_empty());
+    }
+
+    #[test]
+    fn virtual_cycle_aborts_like_real_on_the_upstream_fixtures() {
+        // Backlog #193, upstream `test_virtual_cycle.py` (bug 965570) as
+        // emitted by pmtest `89d17e0`: both cells fail in real
+        // (`ResolverPlayground` success=False,
+        // virtual_cycle={gzip-1} / {A-1,B-1,C-1}; g193 container probe
+        // `emerge -p --color=n app-misc/{bar,foo}` on the staged tree:
+        // rc 1 with the `!!! virtual cycle detected:` block). Portuale
+        // merged both as ordinary rings (rc 0).
+        for (top, expected) in [
+            ("app-misc/bar", vec!["virtual/gzip-1::testrepo".to_string()]),
+            (
+                "app-misc/foo",
+                vec![
+                    "virtual/A-1::testrepo".to_string(),
+                    "virtual/B-1::testrepo".to_string(),
+                    "virtual/C-1::testrepo".to_string(),
+                ],
+            ),
+        ] {
+            let result = graph_result_real(top);
+            assert_eq!(result.virtual_cycle, expected, "{top}");
+            match &result.outcome {
+                ResolveOutcome::Aborted {
+                    reason: AbortReason::VirtualCycle { members },
+                    partial,
+                } => {
+                    assert_eq!(members, &expected, "{top}");
+                    assert!(partial.is_empty(), "{top}: real shows no list at all");
+                }
+                other => panic!("{top}: expected VirtualCycle, got {other:?}"),
+            }
+        }
     }
 
     #[test]
@@ -56721,7 +57117,7 @@ mod tests_163 {
             entry_163("dev-libs", "top", new_163("1.0"), &[]),
         ];
         let masked = vec![masked_163("dev-libs", "need", "dev-libs/need")];
-        match abort_outcome(&entries, &masked, &[], &[], &HashMap::new()) {
+        match abort_outcome(&entries, &masked, &[], &[], &HashMap::new(), &[]) {
             ResolveOutcome::Aborted {
                 reason: AbortReason::MaskedDep { atom, parent_cpv },
                 partial,
@@ -56750,7 +57146,7 @@ mod tests_163 {
             entry_163("dev-libs", "top", new_163("1.0"), &[]),
         ];
         assert_eq!(
-            abort_outcome(&entries, &[], &[], &[], &HashMap::new()),
+            abort_outcome(&entries, &[], &[], &[], &HashMap::new(), &[]),
             ResolveOutcome::Complete
         );
     }
@@ -56776,7 +57172,7 @@ mod tests_163 {
             ("dev-libs".to_string(), "need".to_string()),
             ">=dev-libs/need-2.0".to_string(),
         );
-        match abort_outcome(&entries, &[], &[], &[], &atoms) {
+        match abort_outcome(&entries, &[], &[], &[], &atoms, &[]) {
             ResolveOutcome::Aborted {
                 reason: AbortReason::UnsatisfiedAtom { atom, parent_cpv },
                 partial,
@@ -56806,7 +57202,7 @@ mod tests_163 {
             entry_163("dev-libs", "top", installed_163("1.0"), &[]),
         ];
         assert_eq!(
-            abort_outcome(&entries, &[], &[], &[], &HashMap::new()),
+            abort_outcome(&entries, &[], &[], &[], &HashMap::new(), &[]),
             ResolveOutcome::Complete
         );
     }
@@ -56828,7 +57224,7 @@ mod tests_163 {
             entry_163("dev-libs", "top", new_163("1.0"), &[]),
         ];
         let masked = vec![masked_163("dev-libs", "other", "dev-libs/other")];
-        match abort_outcome(&entries, &masked, &[], &[], &HashMap::new()) {
+        match abort_outcome(&entries, &masked, &[], &[], &HashMap::new(), &[]) {
             ResolveOutcome::Aborted {
                 reason: AbortReason::UnsatisfiedAtom { atom, parent_cpv },
                 partial,
@@ -56857,7 +57253,7 @@ mod tests_163 {
             entry_163("dev-libs", "top", new_163("1.0"), &[]),
         ];
         let masked = vec![masked_163("sys-libs", "need", "sys-libs/need")];
-        match abort_outcome(&entries, &masked, &[], &[], &HashMap::new()) {
+        match abort_outcome(&entries, &masked, &[], &[], &HashMap::new(), &[]) {
             ResolveOutcome::Aborted {
                 reason: AbortReason::UnsatisfiedAtom { atom, parent_cpv },
                 partial,
@@ -56881,7 +57277,7 @@ mod tests_163 {
             &[],
         )];
         assert_eq!(
-            abort_outcome(&entries, &[], &[], &[], &HashMap::new()),
+            abort_outcome(&entries, &[], &[], &[], &HashMap::new(), &[]),
             ResolveOutcome::Complete
         );
     }
@@ -56892,7 +57288,7 @@ mod tests_163 {
     fn abort_outcome_empty_graph_completes() {
         let entries = vec![entry_163("dev-libs", "top", new_163("1.0"), &[])];
         assert_eq!(
-            abort_outcome(&entries, &[], &[], &[], &HashMap::new()),
+            abort_outcome(&entries, &[], &[], &[], &HashMap::new(), &[]),
             ResolveOutcome::Complete
         );
     }
@@ -56915,6 +57311,7 @@ mod tests_163 {
             &[vec!["x".to_string()]],
             &display,
             &HashMap::new(),
+            &[],
         ) {
             ResolveOutcome::Aborted {
                 reason: AbortReason::UnserializableCycle { members },
