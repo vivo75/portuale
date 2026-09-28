@@ -3360,42 +3360,27 @@ fn preserved_rebuild_atoms(root: &Path) -> Vec<String> {
     atoms
 }
 
-/// Real `Scheduler._world_atom` + `depgraph.saveNomergeFavorites`: after
-/// a successful non-`--pretend` `emerge <atom>`, each directly-requested
-/// **plain** target atom (not a dependency, not a `@set`) is recorded in
-/// `<root>/var/lib/portage/world` -- whether it merged or was already
-/// installed. `--oneshot`/`--onlydeps` suppress this entirely (real
-/// `_world_atom`'s own early-return set). The recorded atom is the
-/// argument's own `cat/pkg` (plus `::repo` when the arg carried one),
-/// EXCEPT that a `cat/pkg:slot` argument is recorded slot-qualified when
-/// `cat/pkg` is genuinely slotted -- real `create_world_atom`: "If the
-/// argument atom is precise enough to identify a specific slot then a
-/// slot atom will be returned." "Slotted" here is real's own test: more
-/// than one `SLOT` available in the repo, or a single `SLOT` that isn't
-/// `"0"`. v1 cuts still: a *version*-pinned arg that identifies one slot
-/// (real records the slot atom there too); the vdb-only multislot
-/// fallback; system-virtual exclusion; and the `@set` target -> `world_sets`
-/// half (needs `emerge @set` build support, not implemented yet).
-/// An unslotted `@system` member is not recorded (real "unslotted system
-/// packages will not be stored in world"). Already-present atoms are
-/// left alone; when anything is added the file is rewritten sorted +
-/// deduplicated (real `WorldSelectedPackagesSet.write`). Prints the real
-/// `>>> Recording <atom> in "world" favorites file...` line per addition.
-fn update_world_file(
-    root: &Path,
+/// Backlog #232: the pure "what would be added" half of
+/// `update_world_file` (real `Scheduler._world_atom` +
+/// `depgraph.saveNomergeFavorites` -- see the writer's own doc comment
+/// for the full grounding), split out so the
+/// selective-without-`--oneshot` deferral arm
+/// (`_emerge/actions.py:514-516` -- the prompt moves into
+/// `depgraph.saveNomergeFavorites`) can show real's
+/// `Would you like to add these packages to your world favorites?`
+/// prompt (`depgraph.py:11376-11386`) *before* anything is recorded.
+/// Returns the new world atoms in argument order (a duplicate argument
+/// repeats, exactly as the writer prints it); the caller sorts only its
+/// own display copy.
+fn world_file_additions(
+    current: &[String],
     target_atoms: &[&str],
     entries: &[GraphEntry],
     system_atoms: &[String],
     repos: &[portage_repo::RepoConfig],
-    oneshot: bool,
-    onlydeps: bool,
-) -> Result<(), String> {
-    if oneshot || onlydeps {
-        return Ok(());
-    }
-    let mut current = read_world_atoms(root)?;
+) -> Vec<String> {
     let before: std::collections::HashSet<String> = current.iter().cloned().collect();
-    let mut added = false;
+    let mut added = Vec::new();
 
     for raw in target_atoms {
         if raw.starts_with('@') {
@@ -3452,12 +3437,52 @@ fn update_world_file(
         if before.contains(&world_atom) {
             continue;
         }
+        added.push(world_atom);
+    }
+    added
+}
+
+/// Real `Scheduler._world_atom` + `depgraph.saveNomergeFavorites`: after
+/// a successful non-`--pretend` `emerge <atom>`, each directly-requested
+/// **plain** target atom (not a dependency, not a `@set`) is recorded in
+/// `<root>/var/lib/portage/world` -- whether it merged or was already
+/// installed. `--oneshot`/`--onlydeps` suppress this entirely (real
+/// `_world_atom`'s own early-return set). The recorded atom is the
+/// argument's own `cat/pkg` (plus `::repo` when the arg carried one),
+/// EXCEPT that a `cat/pkg:slot` argument is recorded slot-qualified when
+/// `cat/pkg` is genuinely slotted -- real `create_world_atom`: "If the
+/// argument atom is precise enough to identify a specific slot then a
+/// slot atom will be returned." "Slotted" here is real's own test: more
+/// than one `SLOT` available in the repo, or a single `SLOT` that isn't
+/// `"0"`. v1 cuts still: a *version*-pinned arg that identifies one slot
+/// (real records the slot atom there too); the vdb-only multislot
+/// fallback; system-virtual exclusion; and the `@set` target -> `world_sets`
+/// half (needs `emerge @set` build support, not implemented yet).
+/// An unslotted `@system` member is not recorded (real "unslotted system
+/// packages will not be stored in world"). Already-present atoms are
+/// left alone; when anything is added the file is rewritten sorted +
+/// deduplicated (real `WorldSelectedPackagesSet.write`). Prints the real
+/// `>>> Recording <atom> in "world" favorites file...` line per addition.
+fn update_world_file(
+    root: &Path,
+    target_atoms: &[&str],
+    entries: &[GraphEntry],
+    system_atoms: &[String],
+    repos: &[portage_repo::RepoConfig],
+    oneshot: bool,
+    onlydeps: bool,
+) -> Result<(), String> {
+    if oneshot || onlydeps {
+        return Ok(());
+    }
+    let mut current = read_world_atoms(root)?;
+    let added = world_file_additions(&current, target_atoms, entries, system_atoms, repos);
+    for world_atom in &added {
         println!(">>> Recording {world_atom} in \"world\" favorites file...");
-        current.push(world_atom);
-        added = true;
+        current.push(world_atom.clone());
     }
 
-    if added {
+    if !added.is_empty() {
         current.sort();
         current.dedup();
         let path = root.join("var/lib/portage/world");
@@ -3469,6 +3494,24 @@ fn update_world_file(
         std::fs::write(&path, body).map_err(|e| format!("{}: {e}", path.display()))?;
     }
     Ok(())
+}
+
+/// Backlog #232: the pure "what would be added" half of
+/// `update_world_sets_file` (see its doc comment for the grounding),
+/// split out for the same pre-record `--ask` prompt as
+/// `world_file_additions`. Takes the `@`-prefixed current lines and
+/// returns the new ones, in argument order.
+fn world_sets_additions(current: &[String], set_names: &[String]) -> Vec<String> {
+    let before: std::collections::HashSet<String> = current.iter().cloned().collect();
+    let mut added = Vec::new();
+    for name in set_names {
+        let line = format!("@{name}");
+        if before.contains(&line) {
+            continue;
+        }
+        added.push(line);
+    }
+    added
 }
 
 /// Real `depgraph.saveNomergeFavorites`'s own `@set` half: after a
@@ -3499,18 +3542,12 @@ fn update_world_sets_file(
         .into_iter()
         .map(|n| format!("@{n}"))
         .collect();
-    let before: std::collections::HashSet<String> = current.iter().cloned().collect();
-    let mut added = false;
-    for name in set_names {
-        let line = format!("@{name}");
-        if before.contains(&line) {
-            continue;
-        }
+    let added = world_sets_additions(&current, set_names);
+    for line in &added {
         println!(">>> Recording {line} in \"world_sets\" favorites file...");
-        current.push(line);
-        added = true;
+        current.push(line.clone());
     }
-    if added {
+    if !added.is_empty() {
         current.sort();
         current.dedup();
         let path = root.join("var/lib/portage/world_sets");
@@ -14310,16 +14347,15 @@ pub fn run(args: &[String]) -> ExitCode {
         // `run_resume` far above, with its own `nothing to resume`
         // message).
         //
-        // Residue (deliberate, follow-up -- next rule): real defers
-        // instead when the run is `selective` (`-u`/`-N`/`--noreplace`/...,
-        // real `create_depgraph_params.py`) without `--oneshot` and a
-        // world-candidate favorite exists (`actions.py:514-516` -- the
-        // prompt moves into `depgraph.saveNomergeFavorites`, the
-        // rotation still runs, still no `Scheduler` write). The rotation
-        // half is restored below (`selective_noop_deferred`); the
-        // world-file record real still makes has no portuale counterpart
-        // on this arm yet, so a selective all-noop run without
-        // `--oneshot` still skips the record real would make.
+        // Residue (deliberate scope boundary): the deferral arm above
+        // restores real's rotation plus `saveNomergeFavorites`'s record
+        // (`actions.py:514-516` + `:664-675` + `depgraph.py:11305-11402`)
+        // within portuale's existing world-file cuts -- the
+        // `world_file_additions`/`update_world_file` v1 cuts
+        // (version-pinned slot args, the vdb-only multislot fallback,
+        // system-virtual exclusion) and the `world_candidate = false`
+        // user-set cut (a set opting out still counts as a candidate
+        // here, matching `update_world_sets_file`'s own standing cut).
         let mergecount = display_entries
             .iter()
             .filter_map(emerge_build::resume_cpv)
@@ -14342,11 +14378,85 @@ pub fn run(args: &[String]) -> ExitCode {
                 // so `UserQuery` is skipped), then the run falls through
                 // to the `resume_backup` rotation and
                 // `saveNomergeFavorites` -- only `Scheduler` is skipped
-                // (`:664-675`). This rule restores the rotation (and the
-                // silent `EX_OK`); the world-file record follows in the
-                // next rule.
+                // (`:664-675`).
                 println!();
                 crate::mtimedb::rotate_resume_to_backup(&root);
+                // Backlog #232, second half: real
+                // `depgraph.saveNomergeFavorites`
+                // (`depgraph.py:11305-11402`) records the world-candidate
+                // favorites that stayed unmerged. Its own suppression set
+                // (`:11308-11317`) is `--buildpkgonly` / `--fetchonly` /
+                // `--fetch-all-uri` / `--oneshot` / `--onlydeps` /
+                // `--pretend`: `--pretend` never reaches this branch,
+                // `--oneshot` contradicts the deferral gate above, and
+                // `--fetchonly` / `--fetch-all-uri` are
+                // portuale-unimplemented options (a usage error long
+                // before this point), so only `--buildpkgonly` /
+                // `--onlydeps` still suppress here. Under `--ask` the
+                // prompt moves here (`:11376-11386`): the additions list
+                // prints first, then `Would you like to add these
+                // packages to your world favorites?`, and a "No" (or EOF,
+                // which `ask_yes_no` folds into the same decline) records
+                // nothing -- the run still succeeds, the rotation above
+                // already happened.
+                if !buildpkgonly && !onlydeps {
+                    let fav_refs: Vec<&str> = atom_args.to_vec();
+                    let mut additions = match read_world_atoms(&root) {
+                        Ok(current) => {
+                            world_file_additions(&current, &fav_refs, entries, system_atoms, &repos)
+                        }
+                        Err(e) => {
+                            eprintln!("emerge: {e}");
+                            return ExitCode::from(1);
+                        }
+                    };
+                    match read_world_sets(&root) {
+                        Ok(names) => {
+                            let current: Vec<String> =
+                                names.into_iter().map(|n| format!("@{n}")).collect();
+                            additions.extend(world_sets_additions(&current, &selected_set_args));
+                        }
+                        Err(e) => {
+                            eprintln!("emerge: {e}");
+                            return ExitCode::from(1);
+                        }
+                    }
+                    if ask && !additions.is_empty() {
+                        println!();
+                        let mut shown = additions.clone();
+                        shown.sort();
+                        shown.dedup();
+                        for a in &shown {
+                            println!(" {} {}", color.c("GOOD", "*"), a);
+                        }
+                        println!();
+                        if ask_yes_no(
+                            &color,
+                            "Would you like to add these packages to your world favorites?",
+                        ) != Some(true)
+                        {
+                            return ExitCode::SUCCESS;
+                        }
+                    }
+                    if let Err(e) = update_world_file(
+                        &root,
+                        &fav_refs,
+                        entries,
+                        system_atoms,
+                        &repos,
+                        oneshot,
+                        onlydeps,
+                    ) {
+                        eprintln!("emerge: {e}");
+                        return ExitCode::from(1);
+                    }
+                    if let Err(e) =
+                        update_world_sets_file(&root, &selected_set_args, oneshot, onlydeps)
+                    {
+                        eprintln!("emerge: {e}");
+                        return ExitCode::from(1);
+                    }
+                }
                 return ExitCode::SUCCESS;
             }
             // Real's own `print()` before the message
@@ -17050,6 +17160,62 @@ mod tests {
         e.package = package.into();
         e.slot = Some(slot.into());
         e
+    }
+
+    #[test]
+    fn world_file_additions_reports_only_new_plain_targets() {
+        // Backlog #232: the deferral arm's pre-record computation --
+        // new atoms in argument order; already-present atoms, `@set`
+        // targets (the `world_sets` half), and args with no resolved
+        // entry contribute nothing.
+        let entries = vec![
+            world_entry("dev-libs", "wanted", "0"),
+            world_entry("dev-libs", "existing", "0"),
+        ];
+        assert_eq!(
+            world_file_additions(
+                &["dev-libs/existing".to_string()],
+                &[
+                    "dev-libs/wanted",
+                    "dev-libs/existing",
+                    "@someset",
+                    "dev-libs/ghost"
+                ],
+                &entries,
+                &[],
+                &[],
+            ),
+            vec!["dev-libs/wanted".to_string()],
+        );
+        // Nothing new -> empty (the `--ask` prompt stays silent too).
+        assert!(
+            world_file_additions(
+                &[
+                    "dev-libs/existing".to_string(),
+                    "dev-libs/wanted".to_string()
+                ],
+                &["dev-libs/wanted"],
+                &entries,
+                &[],
+                &[],
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn world_sets_additions_reports_only_new_sets() {
+        // Backlog #232: the `@set` half of the deferral arm's
+        // pre-record computation -- `@`-prefixed lines for names not
+        // already recorded, in argument order.
+        assert_eq!(
+            world_sets_additions(
+                &["@kept".to_string()],
+                &["kept".to_string(), "fresh".to_string()],
+            ),
+            vec!["@fresh".to_string()],
+        );
+        assert!(world_sets_additions(&["@kept".to_string()], &["kept".to_string()]).is_empty());
     }
 
     #[test]
