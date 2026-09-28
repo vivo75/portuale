@@ -269,10 +269,36 @@ pub fn run_merge_plan(
     keep_going: bool,
     buildpkg: Option<&crate::ebuild_package::PackageOptions>,
     buildpkg_exclude: &[String],
+    // Backlog #197: the scheduler-display mode (background + Jobs
+    // visibility), computed once by the caller. The mixed plan runs
+    // serially, so no `>>> Jobs:` events fire -- the mode only carries
+    // the blank/`>>>` rule (a `--quiet` binary merge prints no leading
+    // blanks, exactly like real's background scheduler). Stated cut:
+    // real drives binary tasks through the same display (real
+    // `Scheduler._merge_exit` / `_do_merge_exit`,
+    // `Scheduler.py:1532-1560`), so a real `--quiet --verbose` (or
+    // `-jN`) binary merge shows `>>> Jobs:` lines while portuale shows
+    // none here -- unprobed against real, Jobs events for the mixed
+    // plan are a later slice.
+    mode: crate::emerge_build::StatusMode,
 ) -> Result<(), String> {
     // Real `Scheduler._pkg_count` for this run (backlog #177): every
     // entry below prints its own snapshot of these counters.
     let progress = crate::emerge_build::merge_progress_map(entries);
+    // Backlog #197: real `Scheduler` owns one `JobStatusDisplay` per
+    // merge run.
+    let total_builds = entries
+        .iter()
+        .filter(|e| {
+            e.source == portage_repo::CandidateSource::Binary
+                || crate::emerge_build::entry_counts_toward_progress(e)
+        })
+        .count();
+    let display = crate::emerge_build::StatusDisplay::new(
+        mode,
+        total_builds,
+        crate::emerge_build::progress_color(),
+    );
     crate::emerge_build::run_merge_loop(entries, keep_going, root, |idx, entry| {
         // The director seam executes every unit: derive the entry's
         // `MergeUnit` and dispatch on its kind through the real source /
@@ -308,6 +334,7 @@ pub fn run_merge_plan(
                     options: merge_options,
                     buildpkg: bp,
                     buildpkg_exclude,
+                    display: &display,
                 }
                 .execute(&unit, &ctx)
             }
@@ -317,6 +344,7 @@ pub fn run_merge_plan(
                 pkgdir,
                 portage_tmpdir,
                 options: merge_options,
+                display: &display,
             }
             .execute(&unit, &ctx),
         };
@@ -331,6 +359,7 @@ pub fn run_merge_plan(
 /// is a silent no-op; `New`/`Upgrade`/`Downgrade`/`Reinstall` are
 /// fetched (remote) or located (`$PKGDIR`) and merged (`merge_binpkg`
 /// unmerges a replaced same-slot version itself).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn merge_one_binary_entry(
     entry: &GraphEntry,
     config: &Config,
@@ -339,6 +368,7 @@ pub(crate) fn merge_one_binary_entry(
     portage_tmpdir: &Path,
     merge_options: &MergeOptions,
     progress: mrg_director::MergeProgress,
+    display: &crate::emerge_build::StatusDisplay,
 ) -> Result<(), String> {
     let cp = format!("{}/{}", entry.category, entry.package);
     let version = match &entry.outcome {
@@ -357,10 +387,9 @@ pub(crate) fn merge_one_binary_entry(
     // (backlog #177): `Emerging binary (N of M) cpv::repo`. This is the
     // `>>> Merging binary package ...` line's real shape.
     let color = crate::emerge_build::progress_color();
-    println!(
-        "{}",
-        crate::emerge_build::emerging_line(entry, &version, progress, root, &color)
-    );
+    display.status(&crate::emerge_build::emerging_line(
+        entry, &version, progress, root, &color,
+    ));
 
     let local = resolve_local_binpkg(
         pkgdir,
@@ -564,10 +593,9 @@ pub(crate) fn merge_one_binary_entry(
     // the binpkg is located/fetched above (real's `Binpkg` chain),
     // the vdb merge runs below (real's `EbuildMerge` chain) -- this
     // line lands exactly between them, like real's.
-    println!(
-        "{}",
-        crate::emerge_build::installing_line(entry, &version, progress, root, &color)
-    );
+    display.status(&crate::emerge_build::installing_line(
+        entry, &version, progress, root, &color,
+    ));
     let mut entry_options;
     let merge_options = match fetched_verify {
         Some(gpg) => {
@@ -583,10 +611,9 @@ pub(crate) fn merge_one_binary_entry(
     }
     // Real `PackageMerge._install_exit`'s per-package line (backlog
     // #177): `Completed (N of M) cpv::repo`.
-    println!(
-        "{}",
-        crate::emerge_build::completed_line(entry, &version, progress, root, &color)
-    );
+    display.status(&crate::emerge_build::completed_line(
+        entry, &version, progress, root, &color,
+    ));
     Ok(())
 }
 
@@ -1080,6 +1107,7 @@ mod tests {
             &tmp.join("pt"),
             &MergeOptions::default(),
             mrg_director::MergeProgress::single(),
+            &crate::emerge_build::StatusDisplay::for_tests(),
         )
         .expect("multi-instance local gpkg merges");
 
@@ -1146,6 +1174,7 @@ mod tests {
             &pt,
             &MergeOptions::default(),
             mrg_director::MergeProgress::single(),
+            &crate::emerge_build::StatusDisplay::for_tests(),
         )
         .expect_err("a truncated vouched binpkg must fail at merge");
         assert_eq!(
@@ -1244,6 +1273,7 @@ mod tests {
             &pt,
             &MergeOptions::default(),
             mrg_director::MergeProgress::single(),
+            &crate::emerge_build::StatusDisplay::for_tests(),
         )
         .expect_err("a stale-index binary must fail at merge, not fall back");
         assert_eq!(
@@ -1296,6 +1326,7 @@ mod tests {
             &pt,
             &MergeOptions::default(),
             mrg_director::MergeProgress::single(),
+            &crate::emerge_build::StatusDisplay::for_tests(),
         )
         .expect_err("a stanza-less missing binary must fail at merge");
         assert_eq!(
@@ -2355,6 +2386,7 @@ mod tests {
             false,
             None,
             &[],
+            crate::emerge_build::StatusMode::for_tests(),
         )
         .expect("getbinpkg merge succeeds");
 
@@ -2469,6 +2501,7 @@ mod tests {
             false,
             None,
             &[],
+            crate::emerge_build::StatusMode::for_tests(),
         )
         .expect("getbinpkg merge succeeds");
 
@@ -2529,6 +2562,7 @@ mod tests {
             false,
             None,
             &[],
+            crate::emerge_build::StatusMode::for_tests(),
         )
         .expect("mixed merge plan succeeds");
 
@@ -2617,6 +2651,7 @@ mod tests {
             &tmp.join("pt"),
             &MergeOptions::default(),
             mrg_director::MergeProgress::single(),
+            &crate::emerge_build::StatusDisplay::for_tests(),
         )
         .expect_err("a resumed binary with no local file must fail, not refetch");
         assert!(

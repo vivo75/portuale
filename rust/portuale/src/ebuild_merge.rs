@@ -1497,7 +1497,9 @@ fn register_preserved_libs(
 /// bundled-library runpath inference, never the keep/drop verdict --
 /// and these lines genuinely share one owner, so the inference is, if
 /// anything, more faithful). Empty on every path but the replace-loop
-/// prune: standalone `emerge -C` has no replacing package, and the
+/// prune and the merge-side preserve computation
+/// (`find_preserve_paths_for_merge`, backlog #229): standalone
+/// `emerge -C` has no replacing package, and the
 /// merge-end prune runs after the rename into place, when the new
 /// entry's own lines are already enumerated.
 fn linkage_owner_entries(
@@ -1550,7 +1552,7 @@ fn owner_entries_with_preserved_orphans(
 }
 
 /// Real `dblink.treewalk()`'s own `needed = os.path.join(inforoot,
-/// LinkageMap._needed_aux_key)` (backlog #224): the replacing
+/// LinkageMap._needed_aux_key)` (backlogs #224/#229): the replacing
 /// package's `NEEDED.ELF.2` lines, read from its `-MERGING-<new_pf>`
 /// temporary vdb entry, which holds the build-info copy from
 /// `populate_vdb_tmp` (every build-info file is copied there, the
@@ -1586,8 +1588,9 @@ fn replacement_needed_entries(
 }
 
 /// Real `dblink.treewalk`'s own pre-replace-loop preserve-libs
-/// computation (the `_linkmap_rebuild` + `_find_libs_to_preserve()`
-/// block): rebuild the system-wide `LinkageMap` and select the installed same-slot instance's libraries
+/// computation (the `_linkmap_rebuild(include_file=needed)` +
+/// `_find_libs_to_preserve()` block): rebuild the system-wide
+/// `LinkageMap` and select the installed same-slot instance's libraries
 /// that are still needed (`_find_libs_to_preserve()`, `unmerge=False`).
 /// `new_image_paths` is the just-merged image's own path set (parsed
 /// from `merge_tree`'s `CONTENTS` text) -- real `self.isowner(f)` on the
@@ -1599,14 +1602,20 @@ fn replacement_needed_entries(
 /// the preserve set plus the old instance's own raw `CONTENTS` text (for
 /// entry injection below).
 ///
-/// Must run after `merge_tree` (the files are on disk for `lstat`, and
-/// the new vdb entry is *not* written yet, so -- exactly like real, whose
-/// `LinkageMap` rebuild only sees installed packages -- the new package
-/// is not part of the linkage map) and before `write_vdb_entry`.
+/// Must run after `merge_tree` (the files are on disk for `lstat`) and
+/// after `populate_vdb_tmp` (backlog #183: the new vdb entry *is*
+/// written by then, into its `-MERGING-<pf>` temporary -- the doc used
+/// to say it was not). Enumeration (`read_all_needed_entries`, real
+/// `cpv_all()`) still skips `-MERGING-` names, so the new package
+/// reaches the linkage map only through the explicit include feed below
+/// (real `include_file=needed`, backlog #229): without it a library
+/// owned by the replaced instance whose only consumer is the replacing
+/// package would not be preserved. Runs before `write_vdb_tmp_contents`.
 fn find_preserve_paths_for_merge(
     root: &Path,
     category: &str,
     package: &str,
+    new_pf: &str,
     main_slot: &str,
     new_image_paths: &BTreeSet<String>,
 ) -> Option<(BTreeSet<String>, String)> {
@@ -1633,7 +1642,21 @@ fn find_preserve_paths_for_merge(
     // here, and a second consecutive soname bump would preserve nothing
     // (backlog #178).
     let preserved = read_plib_registry(root).preserved_libs();
-    let owner_entries = owner_entries_with_preserved_orphans(root, &preserved);
+    // Real `LinkageMap.rebuild(include_file=needed)` (backlog #229):
+    // the replacing package's `-MERGING-<new_pf>/NEEDED.ELF.2` lines
+    // (live since `populate_vdb_tmp`, skipped by enumeration) join the
+    // linkage input first, owner verdict-neutral -- see
+    // `linkage_owner_entries`. A library owned by the replaced
+    // instance whose only consumer is the replacing package is
+    // preserved only because of this feed.
+    let replacement_needed = replacement_needed_entries(root, category, new_pf);
+    let owner_entries = linkage_owner_entries(
+        root,
+        &preserved,
+        None,
+        &BTreeMap::new(),
+        &replacement_needed,
+    );
     let map = crate::needed_elf::rebuild(root, &owner_entries);
     let defpath =
         crate::needed_elf::getlibpaths(root, std::env::var("LD_LIBRARY_PATH").ok().as_deref());
@@ -4018,10 +4041,12 @@ fn merge_after_install(
     )?;
     // Real `dblink.treewalk`'s own pre-replace-loop preserve-libs
     // block: the replaced same-slot instance's
-    // still-needed libraries are selected now -- the new vdb entry is
-    // not written yet, so (exactly like real, whose `LinkageMap`
-    // rebuild only ever sees installed packages) the new package is
-    // not part of the linkage map -- and their entries are carried
+    // still-needed libraries are selected now -- the new vdb entry sits
+    // in its `-MERGING-<pf>` temporary (written by `populate_vdb_tmp`
+    // above), so enumeration skips it and it reaches the linkage map
+    // only through the explicit include feed inside
+    // `find_preserve_paths_for_merge` (real `include_file=needed`) --
+    // and their entries are carried
     // into the new package's own `CONTENTS`
     // (`_add_preserve_libs_to_contents`). The
     // record itself lands after the replace loop below
@@ -4035,6 +4060,7 @@ fn merge_after_install(
         root,
         &env.category,
         &env.split.pn,
+        &env.split.pf,
         main_slot,
         &new_image_paths,
     ) {
@@ -4837,7 +4863,7 @@ pub fn merge_binpkg(
         .collect();
     let mut preserve_paths = BTreeSet::new();
     if let Some((paths, old_contents_text)) =
-        find_preserve_paths_for_merge(root, &category, &package, &main_slot, &new_image_paths)
+        find_preserve_paths_for_merge(root, &category, &package, &pf, &main_slot, &new_image_paths)
     {
         let (injected, surviving) =
             inject_preserved_libs_into_contents(&old_contents_text, &paths, &new_image_paths);
@@ -8314,6 +8340,76 @@ mod tests {
         assert!(
             vdb_new.join("NEEDED.ELF.2").is_file(),
             "the replace loop must leave the `-MERGING-` entry alone"
+        );
+    }
+
+    /// Backlog #229 (merge-side half of #224): real `dblink.treewalk`
+    /// feeds the replacing package's build-info `NEEDED.ELF.2` into the
+    /// merge-side preserve computation explicitly
+    /// (`self._linkmap_rebuild(include_file=needed)` before
+    /// `_find_libs_to_preserve()`), because the new entry still sits in
+    /// its `-MERGING-<pf>` temporary and enumeration (`cpv_all()`)
+    /// skips it. A library owned by the replaced instance whose only
+    /// consumer is the replacing package itself must therefore be
+    /// preserved merge-side; without the feed the consumer is invisible
+    /// and the lib is never preserved (missed-preserve, so the file is
+    /// unmerged with the old instance).
+    ///
+    /// Same hand-written-`NEEDED.ELF.2` seed shape as the #224 test,
+    /// except the provider is the replaced same-slot instance itself
+    /// (`oldapp-1.0`, live) and the only consumer (`/usr/bin/newtool`,
+    /// shipped by the new image) is known solely to the
+    /// `-MERGING-oldapp-2.0` temporary -- the real merge-side state
+    /// since #183 (`populate_vdb_tmp` runs before the preserve block).
+    /// The call goes through `find_preserve_paths_for_merge` itself
+    /// (new `new_pf` parameter), so this test compiles and fails
+    /// without the fix and passes with it.
+    #[test]
+    fn merge_side_preserve_sees_the_replacing_packages_merging_needed() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("usr/lib")).unwrap();
+        std::fs::create_dir_all(root.join("usr/bin")).unwrap();
+        std::fs::write(root.join("usr/lib/libold.so.1"), b"fake elf").unwrap();
+        std::fs::write(root.join("usr/bin/newtool"), b"fake elf").unwrap();
+        // The replaced same-slot instance, live: owns the library.
+        let vdb_old = root.join("var/db/pkg/dev-libs/oldapp-1.0");
+        std::fs::create_dir_all(&vdb_old).unwrap();
+        std::fs::write(vdb_old.join("CONTENTS"), "obj /usr/lib/libold.so.1 def 1\n").unwrap();
+        std::fs::write(
+            vdb_old.join("NEEDED.ELF.2"),
+            "X86_64;/usr/lib/libold.so.1;libold.so.1;;\n",
+        )
+        .unwrap();
+        std::fs::write(vdb_old.join("SLOT"), "0\n").unwrap();
+        std::fs::write(vdb_old.join("COUNTER"), "7\n").unwrap();
+        // The replacing package, exactly as the merge-side preserve
+        // block sees it: still `-MERGING-`, so only the explicit
+        // include feed (never enumeration) can show its consumer to
+        // the preserve computation.
+        let vdb_new = root.join("var/db/pkg/dev-libs/-MERGING-oldapp-2.0");
+        std::fs::create_dir_all(&vdb_new).unwrap();
+        std::fs::write(
+            vdb_new.join("NEEDED.ELF.2"),
+            "X86_64;/usr/bin/newtool;;;libold.so.1\n",
+        )
+        .unwrap();
+        // The new image ships the consumer but not the library.
+        let new_image_paths: BTreeSet<String> =
+            ["/usr/bin/newtool".to_string()].into_iter().collect();
+
+        let (paths, _) = find_preserve_paths_for_merge(
+            &root,
+            "dev-libs",
+            "oldapp",
+            "oldapp-2.0",
+            "0",
+            &new_image_paths,
+        )
+        .expect("a same-slot instance owning files preserves");
+        assert!(
+            paths.contains("/usr/lib/libold.so.1"),
+            "the old-owned lib consumed only by the replacing package must be preserved: {paths:?}"
         );
     }
 
