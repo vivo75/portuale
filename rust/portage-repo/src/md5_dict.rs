@@ -87,6 +87,25 @@ pub fn eapi_has_iuse_effective(eapi: &str) -> bool {
     digits.parse::<u32>().is_ok_and(|n| n >= 5)
 }
 
+/// Real `eapi_has_idepend` (`portage/eapi.py:135`): whether `IDEPEND`
+/// exists in this EAPI (`_get_eapi_attrs(eapi).idepend`, `eapi.py:304`:
+/// `idepend = eapi >= Eapi("8")`, same dash-suffix-insensitive integer
+/// comparison `eapi_has_slot_operator` documents). Real `bin/ebuild.sh`'s
+/// own `depend` phase unsets `IDEPEND` when the EAPI lacks it (`if !
+/// ___eapi_has_IDEPEND; then unset IDEPEND; fi`), so an EAPI-7 ebuild's
+/// `IDEPEND` assignment never reaches saved metadata -- `portdb.aux_get`
+/// serves `""`, and `depgraph.py` never walks it. Backlog #194: the
+/// `--onlydeps-with-rdeps=y` oracle cell on an EAPI-7 root merges
+/// `[B, C, D]` with no `E` for exactly this reason.
+pub fn eapi_has_idepend(eapi: &str) -> bool {
+    let digits: String = eapi
+        .trim()
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.parse::<u32>().is_ok_and(|n| n >= 8)
+}
+
 /// Real `portdbapi._pull_valid_cache` (`porttree.py:603-658`) against a
 /// single on-disk `md5-cache` entry: `true` when
 /// `metadata/md5-cache/<category>/<pf>` validates, so the `depend` phase
@@ -514,6 +533,19 @@ mod tests {
         }
         for eapi in ["0", "1", "2", "3", "4", ""] {
             assert!(!eapi_has_slot_operator(eapi), "{eapi:?}");
+        }
+    }
+
+    #[test]
+    fn eapi_idepend_matches_real() {
+        // Real `eapi_has_idepend` (`portage/eapi.py:135`): `idepend =
+        // eapi >= Eapi("8")`, dash-suffix-insensitive like the slot
+        // operator above.
+        for eapi in ["8", "9", "9-pre1", " 8 "] {
+            assert!(eapi_has_idepend(eapi), "{eapi}");
+        }
+        for eapi in ["0", "1", "5", "6", "7", "7-pre1", ""] {
+            assert!(!eapi_has_idepend(eapi), "{eapi:?}");
         }
     }
 }
