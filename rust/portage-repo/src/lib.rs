@@ -21159,7 +21159,11 @@ pub fn active_resolver() -> Box<dyn Resolver> {
 
 /// Pick the [`Resolver`] for one [`SolverKind`] (`--solver=`): the
 /// backtracking walk for `Portage`, lu-zero's PubGrub / resolvo bridges
-/// (see `solver_bridge.rs`) for the other two.
+/// (see `solver_bridge.rs`) for the other two. The parked engines only
+/// implement version solving over repo facts: they ignore `--onlydeps`
+/// and its `--onlydeps-with-rdeps` / `--onlydeps-with-ideps` root
+/// filtering (like `--nodeps` / `--buildpkgonly`) -- only the
+/// backtracking walk above applies them.
 pub fn active_resolver_for(kind: SolverKind) -> Box<dyn Resolver> {
     match kind {
         SolverKind::Portage => Box::new(BacktrackingResolver),
@@ -22648,6 +22652,56 @@ fn overlay_use_want(
         .and_then(|b| b.get(flag))
         .copied()
         .or_else(|| committed.get(key).and_then(|b| b.get(flag)).copied())
+}
+
+/// Backlog #194: whether one dep key is walked for this package.
+/// Real `bin/ebuild.sh`'s own `depend` phase unsets `IDEPEND` below
+/// EAPI 8 (`portage/eapi.py:135`), so a stale or hand-written cache
+/// entry can still *carry* `IDEPEND` under EAPI 7 (real `egencache`
+/// never emits one) -- the read-time gate here drops it anyway. Real
+/// `depgraph.py:4186-4193` additionally blanks an `--onlydeps` root's
+/// `RDEPEND`/`PDEPEND` under `--onlydeps-with-rdeps=n`, and its
+/// `IDEPEND` too unless `--onlydeps-with-ideps` is `y`/`True`.
+/// Extracted (rather than left as `run_pass`'s inline closure) so the
+/// adversarial-cache path stays pinned after the fixtures stopped
+/// carrying one.
+fn onlydeps_walk_dep_key(
+    key: &str,
+    eapi_has_idepend: bool,
+    onlydeps_blanks_runtime: bool,
+    onlydeps_blanks_idepend: bool,
+) -> bool {
+    if key == "IDEPEND" && (!eapi_has_idepend || onlydeps_blanks_idepend) {
+        return false;
+    }
+    if onlydeps_blanks_runtime && (key == "RDEPEND" || key == "PDEPEND") {
+        return false;
+    }
+    true
+}
+
+/// Backlog #194: which run-time keys classify atoms as runtime edges
+/// for this package (real `DepPriority`: an atom in a build-time key
+/// but no walked run-time key is `buildtime_hard`, an unbreakable
+/// merge-order edge). Mirrors `onlydeps_walk_dep_key` above: under
+/// `--onlydeps --onlydeps-with-rdeps=n --onlydeps-with-ideps=y` on
+/// EAPI 8, `IDEPEND` is still walked, so it still classifies.
+fn onlydeps_runtime_keys(
+    onlydeps_blanks_runtime: bool,
+    onlydeps_blanks_idepend: bool,
+    eapi_has_idepend: bool,
+) -> &'static [&'static str] {
+    if onlydeps_blanks_runtime {
+        if onlydeps_blanks_idepend || !eapi_has_idepend {
+            &[]
+        } else {
+            &["IDEPEND"]
+        }
+    } else if onlydeps_blanks_idepend || !eapi_has_idepend {
+        &["RDEPEND", "PDEPEND"]
+    } else {
+        &["RDEPEND", "PDEPEND", "IDEPEND"]
+    }
 }
 
 /// Phase A3 (023): one full BFS walk over the current `bp`.
@@ -24910,13 +24964,12 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         let eapi_has_idepend =
             md5_dict::eapi_has_idepend(metadata.get("EAPI").map(String::as_str).unwrap_or("0"));
         let keep_key = |key: &&str| {
-            if *key == "IDEPEND" && (!eapi_has_idepend || onlydeps_blanks_idepend) {
-                return false;
-            }
-            if onlydeps_blanks_runtime && (*key == "RDEPEND" || *key == "PDEPEND") {
-                return false;
-            }
-            true
+            onlydeps_walk_dep_key(
+                key,
+                eapi_has_idepend,
+                onlydeps_blanks_runtime,
+                onlydeps_blanks_idepend,
+            )
         };
         let base_keys: &[&str] = if candidate_source == CandidateSource::Binary && !ctx.with_bdeps {
             &["RDEPEND", "PDEPEND", "IDEPEND"]
@@ -25022,15 +25075,16 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         };
         // #194: a blanked runtime key classifies nothing -- real never
         // walks it, so an atom that only survives via a build-time key
-        // is `buildtime_hard`, not runtime. Without blanking this is
-        // the long-standing unconditional three-key set.
-        let runtime_keys: &[&str] = if onlydeps_blanks_runtime {
-            &[]
-        } else if onlydeps_blanks_idepend || !eapi_has_idepend {
-            &["RDEPEND", "PDEPEND"]
-        } else {
-            &["RDEPEND", "PDEPEND", "IDEPEND"]
-        };
+        // is `buildtime_hard`, not runtime. A *walked* `IDEPEND` still
+        // classifies (rdeps=n + ideps=y on EAPI 8), so the selection
+        // mirrors `onlydeps_walk_dep_key`, not just the rdeps blank.
+        // Without blanking this is the long-standing unconditional
+        // three-key set.
+        let runtime_keys: &[&str] = onlydeps_runtime_keys(
+            onlydeps_blanks_runtime,
+            onlydeps_blanks_idepend,
+            eapi_has_idepend,
+        );
         let runtime_atoms = flatten_keys(runtime_keys);
         // Real `--root-deps` branch-selection feed-in (see
         // `root_deps_satisfied_atoms`'s own doc comment): a `||` group
@@ -34004,6 +34058,81 @@ mod tests {
                 "dev-libs/odw0g",
             ]
         );
+    }
+    /// Backlog #194 (review round 1): under `--onlydeps
+    /// --onlydeps-with-rdeps=n --onlydeps-with-ideps=y` on an EAPI-8
+    /// root, real keeps walking `IDEPEND` (`depgraph.py:4186-4193`;
+    /// oracle cell `[B, E, F]`), so an atom present in both a
+    /// build-time key and `IDEPEND` is a runtime edge -- not
+    /// `buildtime_hard` (real `DepPriority`: an unbreakable
+    /// merge-order edge). Pinned at the classification level: the key
+    /// selection still carries `IDEPEND`, and one shared atom enqueued
+    /// with those sets lands soft.
+    #[test]
+    fn onlydeps_ideps_atom_shared_with_buildtime_key_is_not_buildtime_hard() {
+        // rdeps blanked, ideps kept, EAPI 8: IDEPEND still classifies;
+        // with ideps blanked (or below EAPI 8) nothing does.
+        assert_eq!(onlydeps_runtime_keys(true, false, true), &["IDEPEND"][..]);
+        assert!(onlydeps_runtime_keys(true, true, true).is_empty());
+        assert!(onlydeps_runtime_keys(true, false, false).is_empty());
+        let flatten = |text: &str| -> HashSet<String> {
+            let toks: Vec<String> = text.split_whitespace().map(String::from).collect();
+            let use_flags: HashSet<String> = HashSet::new();
+            portage_use_reduce::use_reduce_flat(
+                &toks,
+                &use_flags,
+                portage_use_reduce::MatchMode::Normal,
+            )
+            .map(|v| v.into_iter().filter(|t| t != "||").collect())
+            .unwrap_or_default()
+        };
+        // One atom in both a build-time key and the walked IDEPEND.
+        let buildtime_atoms = flatten("dev-libs/odw0e");
+        let runtime_atoms = flatten("dev-libs/odw0e");
+        assert!(buildtime_atoms.contains("dev-libs/odw0e"));
+        assert!(runtime_atoms.contains("dev-libs/odw0e"));
+        let mut queue = VecDeque::new();
+        let mut blockers = Vec::new();
+        enqueue_flat_deps(
+            vec!["dev-libs/odw0e".to_string()],
+            &("dev-libs".to_string(), "odw0a".to_string()),
+            "1",
+            1,
+            &HashSet::new(),
+            &mut queue,
+            &mut blockers,
+            &buildtime_atoms,
+            &runtime_atoms,
+            &HashSet::new(),
+        );
+        assert_eq!(queue.len(), 1);
+        assert!(
+            !queue[0].buildtime_hard,
+            "an IDEPEND-walked atom is a runtime edge even when rdeps are blanked"
+        );
+    }
+
+    /// Backlog #194 (review round 1): the read-time EAPI gate drops
+    /// `IDEPEND` from an EAPI-7 cache entry that still carries it.
+    /// Real `egencache` could never emit such an entry (real
+    /// `bin/ebuild.sh`'s `depend` phase unsets `IDEPEND` below EAPI 8),
+    /// so no fixture pins this path -- the adversarial entry is fed to
+    /// the gate directly.
+    #[test]
+    fn eapi7_cache_entry_carrying_idepend_is_gated_at_read_time() {
+        // EAPI 7 + IDEPEND present: dropped even with no onlydeps
+        // blanking.
+        assert!(!onlydeps_walk_dep_key("IDEPEND", false, false, false));
+        // EAPI 8 keeps it under the default flags ...
+        assert!(onlydeps_walk_dep_key("IDEPEND", true, false, false));
+        // ... but rdeps=n + ideps=n drops it there too.
+        assert!(!onlydeps_walk_dep_key("IDEPEND", true, true, true));
+        // Build-time keys are never gated; RDEPEND/PDEPEND fall to the
+        // rdeps blank only.
+        assert!(onlydeps_walk_dep_key("DEPEND", false, true, true));
+        assert!(onlydeps_walk_dep_key("BDEPEND", false, true, true));
+        assert!(!onlydeps_walk_dep_key("RDEPEND", false, true, true));
+        assert!(onlydeps_walk_dep_key("RDEPEND", true, false, false));
     }
     /// instance's own slot (real's `pkg.slot_atom` node identity), not
     /// the cp. `fixtures/var/db/pkg` has `dev-libs/slotdedup-1.0` (slot
