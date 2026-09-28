@@ -17217,12 +17217,14 @@ pub struct CircularSuggestion {
 /// everywhere else portuale diverges from a real non-determinism).
 ///
 /// Simplifications vs real, all documented in `docs/history/find-suggestions-plan.md`:
-/// `_pkg_use_enabled` is `effective_use_flags` without the (rare)
-/// autounmask-USE overlay (autounmask-*changed* flags are still honoured
-/// as untouchable); the grandparent-atom set is re-derived by scanning
-/// each puller entry's raw `DEPEND`/`BDEPEND`/`RDEPEND`/`PDEPEND` for
-/// atoms on `parent`'s `cat/pkg` rather than real's exact recorded
-/// `_parent_atoms`.
+/// `_pkg_use_enabled` is `effective_use_flags` with the autounmask-USE
+/// overlay applied (real `_emerge/depgraph.py:7669` returns the
+/// `_needed_use_config_changes` set, autounmask included);
+/// autounmask-*changed* flags are still honoured as untouchable (real
+/// `resolver/circular_dependency.py:104-114`); the grandparent-atom set
+/// is re-derived by scanning each puller entry's raw
+/// `DEPEND`/`BDEPEND`/`RDEPEND`/`PDEPEND` for atoms on `parent`'s
+/// `cat/pkg` rather than real's exact recorded `_parent_atoms`.
 pub fn circular_dep_solutions(
     cycle: &[String],
     repos: &[RepoConfig],
@@ -17267,8 +17269,26 @@ pub fn circular_dep_solutions(
             "{pcat}/{ppkg}-{pver}:{}/{}::{}",
             pc.slot, pc.sub_slot, pc.repo_name
         );
-        let parent_use =
-            effective_use_flags(config, &pc.iuse, &pc.keywords, &parent_str, &pcat, &ppkg);
+        // Real `_pkg_use_enabled` (`_emerge/depgraph.py:7669`) returns the
+        // `_needed_use_config_changes` set when the parent carries one --
+        // the autounmask-USE overlay applied on top of the configured
+        // USE. The changed flags themselves stay untouchable below (real
+        // `_get_autounmask_changes`, `circular_dependency.py:104`).
+        let mut parent_use: HashSet<String> =
+            effective_use_flags(config, &pc.iuse, &pc.keywords, &parent_str, &pcat, &ppkg)
+                .as_ref()
+                .clone();
+        for ch in autounmask_use_changes {
+            if matches_config_entry(&ch.atom, &parent_str, &pcat, &ppkg) {
+                for tok in ch.token.split_whitespace() {
+                    if let Some(flag) = tok.strip_prefix('-') {
+                        parent_use.remove(flag);
+                    } else {
+                        parent_use.insert(tok.trim_start_matches('+').to_string());
+                    }
+                }
+            }
+        }
 
         // `parent_atom`: the (unevaluated) token in `dep` that pulls the
         // child -- real `all_parent_atoms[pkg]` filtered to this parent,
@@ -17328,7 +17348,7 @@ pub fn circular_dep_solutions(
         let n_aff = affecting.len();
         let mut solutions: HashSet<Vec<(String, bool)>> = HashSet::new();
         for mask in 0u32..(1u32 << n_aff) {
-            let mut cur = parent_use.as_ref().clone();
+            let mut cur = parent_use.clone();
             for (i, f) in affecting.iter().enumerate() {
                 if mask & (1 << i) != 0 {
                     cur.insert(f.clone());
@@ -39837,6 +39857,58 @@ mod tests {
             vec![CircularSuggestion {
                 parent_cpv: "dev-libs/usecyclea-1.0".to_string(),
                 changes: vec![("x".to_string(), false)],
+                followup: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn circular_dep_solutions_applies_the_autounmask_use_overlay() {
+        // Backlog #208(b): `=dev-libs/cyc0w-3` needs `dev-libs/cyc0z[bar]`,
+        // so the resolve autounmasks `bar` on `cyc0z-3` (IUSE `+foo bar`,
+        // `DEPEND="foo? ( !bar? ( dev-libs/cyc0y ) ) foo? (
+        // dev-libs/cyc0y ) !bar? ( dev-libs/cyc0y )"`). Real
+        // `_pkg_use_enabled` (`_emerge/depgraph.py:7669`) evaluates the
+        // suggestion on the autounmasked `USE="bar foo"` while `bar`
+        // stays untouchable (`resolver/circular_dependency.py:104-114`),
+        // so the only assignment dropping `dev-libs/cyc0y` is `foo` off:
+        // `cyc0z-3 (Change USE: -foo)`. Without the overlay `bar` reads
+        // off and no assignment drops the atom (the generic
+        // "temporarily disabling USE flags" advisory).
+        let root = fixtures_root();
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+            &root,
+        )
+        .expect("fixture config resolves");
+        let repos = find_repos(&root).expect("repos");
+        let result = graph_result_autounmask("=dev-libs/cyc0w-3");
+        assert_eq!(result.circular_deps.len(), 1);
+        assert!(
+            result
+                .autounmask_use_changes
+                .iter()
+                .any(|ch| ch.token.split_whitespace().any(|t| t == "bar")),
+            "expected an autounmask `bar` change, got {:?}",
+            result.autounmask_use_changes
+        );
+        let sols = circular_dep_solutions(
+            &result.circular_deps[0],
+            &repos,
+            &config,
+            &result.autounmask_use_changes,
+            &result.entries,
+        );
+        assert_eq!(
+            sols,
+            vec![CircularSuggestion {
+                parent_cpv: "dev-libs/cyc0z-3".to_string(),
+                changes: vec![("foo".to_string(), false)],
                 followup: false,
             }]
         );
