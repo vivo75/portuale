@@ -13273,11 +13273,21 @@ pub fn run(args: &[String]) -> ExitCode {
     // rebuild in the cascade. Real yields the
     // `@__auto_slot_operator_replace_installed__` set with
     // `force_reinstall=True` and tags the provider via `_forced_rebuilds`.
+    // Backlog #214: real only tags a merge that is not new
+    // (`resolver/output.py:812-816`, `not pkg_info.attr_display.new`) --
+    // a provider with nothing installed anywhere (a pure `New` install
+    // that still caused a rebuild, like `abiprov-2`) stays `N`.
     let force_reinstall_cps: HashSet<(String, String)> = result
         .abi_rebuilds
         .iter()
-        .flat_map(|(provider, consumer)| [provider, consumer])
-        .filter_map(|cpv| portage_repo::split_cpv(cpv).map(|(c, p, _)| (c, p)))
+        .flat_map(|(provider, consumer)| [(provider, true), (consumer, false)])
+        .filter_map(|(cpv, is_provider)| {
+            let (c, p, _) = portage_repo::split_cpv(cpv)?;
+            if is_provider && portage_repo::installed_candidates(&root, &c, &p).is_empty() {
+                return None;
+            }
+            Some((c, p))
+        })
         .collect();
     // Real `Display.blockers`: blocker lines are collected while walking
     // the entries and printed as one group after every package line (see
