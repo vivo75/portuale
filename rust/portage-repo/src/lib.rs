@@ -2224,6 +2224,16 @@ pub fn read_packages_index(pkgdir: &Path) -> Vec<HashMap<String, String>> {
     let Ok(text) = fs::read_to_string(&path) else {
         return Vec::new();
     };
+    parse_packages_index(&text).1
+}
+
+/// Split a `Packages` index text into its global header block (the
+/// first `KEY: value` block -- real `getbinpkg.PackageIndex.header`,
+/// carrying `TIMESTAMP`/`TTL`/`DOWNLOAD_TIMESTAMP` for the remote-index
+/// freshness checks in `bintree._populate_remote_repo`) and one
+/// `HashMap` per package entry. [`read_packages_index`] is this same
+/// split with the header dropped.
+pub fn parse_packages_index(text: &str) -> (HashMap<String, String>, Vec<HashMap<String, String>>) {
     let mut blocks: Vec<HashMap<String, String>> = Vec::new();
     let mut current: HashMap<String, String> = HashMap::new();
     for line in text.lines() {
@@ -2243,10 +2253,10 @@ pub fn read_packages_index(pkgdir: &Path) -> Vec<HashMap<String, String>> {
     // The first block is the index's own global header, never a real
     // package entry -- see this function's own doc comment.
     if blocks.is_empty() {
-        blocks
+        (HashMap::new(), Vec::new())
     } else {
-        blocks.remove(0);
-        blocks
+        let header = blocks.remove(0);
+        (header, blocks)
     }
 }
 
@@ -2326,7 +2336,20 @@ impl BinaryIndex {
 /// made a large `emerge -p --getbinpkg` graph take minutes. `emerge` is
 /// a one-shot process and a synced index doesn't change mid-run, so a
 /// path-keyed global cache is safe.
+///
+/// A live binhost-index refresh (`portuale::emerge_getbinpkg`, real
+/// `bintree._populate_remote`) installs a per-directory override here
+/// *before* resolution, so the resolver uses the fetched index
+/// in memory even when the edb cache write failed (real ignores an
+/// unwritable cache dir, `bintree.py:1819-1823`, backlog #192) -- and,
+/// on a non-`--pretend` fetch failure, suppresses even a stale cached
+/// copy (real sets `pkgindex = None`, `bintree.py:1809`). `Some` is the
+/// index to use; `None` means "this binrepo contributes nothing this
+/// run". An override wins over both the memo below and the disk.
 fn cached_binary_index(pkgdir: &Path) -> std::sync::Arc<BinaryIndex> {
+    if let Some(overridden) = remote_binary_index_override(pkgdir) {
+        return overridden.unwrap_or_default();
+    }
     static CACHE: OnceLock<RwLock<HashMap<PathBuf, std::sync::Arc<BinaryIndex>>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| RwLock::new(HashMap::new()));
     if let Some(hit) = cache.read().unwrap().get(pkgdir) {
@@ -2338,6 +2361,47 @@ fn cached_binary_index(pkgdir: &Path) -> std::sync::Arc<BinaryIndex> {
         .unwrap()
         .insert(pkgdir.to_path_buf(), idx.clone());
     idx
+}
+
+/// The live-refresh override table for [`cached_binary_index`], keyed by
+/// the same `packages_dir` the resolver reads. Set once per binrepo by
+/// the refresh, before any resolution. `emerge` is a one-shot process,
+/// but an in-process multi-run caller (or tests sharing an EROOT)
+/// must not inherit a previous run's indexes, so `pretend::run`
+/// calls [`clear_remote_binary_index_overrides`] where a run starts;
+/// unit tests use pid+nanos-unique temp dirs, so their keys never
+/// collide either way.
+static REMOTE_INDEX_OVERRIDE: OnceLock<
+    RwLock<HashMap<PathBuf, Option<std::sync::Arc<BinaryIndex>>>>,
+> = OnceLock::new();
+
+/// Install (or replace) the in-memory index for `pkgdir` (real
+/// `bintree`'s fetched-then-maybe-cached `pkgindex` for the run):
+/// `Some(index)` resolves from it, `None` resolves nothing (a failed
+/// non-`--pretend` refresh drops even a stale cache, like real).
+pub fn set_remote_binary_index_override(pkgdir: &Path, index: Option<std::sync::Arc<BinaryIndex>>) {
+    REMOTE_INDEX_OVERRIDE
+        .get_or_init(|| RwLock::new(HashMap::new()))
+        .write()
+        .unwrap()
+        .insert(pkgdir.to_path_buf(), index);
+}
+
+/// Drop every live-refresh override installed by
+/// [`set_remote_binary_index_override`]. Called where a run starts
+/// (review M4), so a second in-process run resolves from its own
+/// refresh (or the disk) instead of inheriting the first run's
+/// in-memory indexes.
+pub fn clear_remote_binary_index_overrides() {
+    if let Some(table) = REMOTE_INDEX_OVERRIDE.get() {
+        table.write().unwrap().clear();
+    }
+}
+
+fn remote_binary_index_override(pkgdir: &Path) -> Option<Option<std::sync::Arc<BinaryIndex>>> {
+    REMOTE_INDEX_OVERRIDE
+        .get()
+        .and_then(|table| table.read().unwrap().get(pkgdir).cloned())
 }
 
 /// The local `$PKGDIR` binary index for this run: the CLI layer's own
@@ -2625,9 +2689,11 @@ fn dedup_binary_instances(
 }
 
 /// `--getbinpkg`/`-g`: binary candidates for `category/package` from
-/// every `config.binrepos` binrepo's own on-disk `Packages` index (real
-/// `bintree._populate_remote`, narrowed -- `--pretend` never fetches, so
-/// a binrepo whose cached index is absent simply contributes nothing).
+/// every `config.binrepos` binrepo's own `Packages` index -- the live
+/// refresh's in-memory copy when it ran (real `bintree._populate_remote`,
+/// backlog #192; `--pretend` refreshes exactly like a real merge), else
+/// the on-disk index (`BinRepo::packages_dir`: the edb cache for
+/// `http(s)`/`ssh`, the URI's own directory for `file://`).
 /// `root` is the `EROOT` under which the `http(s)://`/`ssh://` cache
 /// lives (`BinRepo::packages_dir`). A remote build of a cpv+version the
 /// local `$PKGDIR` (`local_pkgdir`) also carries is dropped -- real
@@ -14473,8 +14539,12 @@ pub struct GraphEntry {
 /// `(target cp, owner cp) -> (has_hard, has_soft)`: for each dependency
 /// edge the BFS walked, whether it was ever pulled as an unsatisfied
 /// build-time-only dep (`QueueItem::buildtime_hard`) and/or via any
-/// softer route. An edge is unbreakable in a cycle only when
-/// `(true, false)`. Built in `resolve_pretend_graph`, consumed by
+/// softer route. An edge is unbreakable in a cycle when `(true, false)`
+/// -- or, since backlog #228, when the owner's entry carries an
+/// unsatisfied non-optional slot-operator priority toward the dep
+/// (`find_hard_cycles`' own deps rule, which the map's token-text view
+/// cannot see: a run-time-key `:=` atom is never `buildtime_hard`).
+/// Built in `resolve_pretend_graph`, consumed by
 /// `topological_merge_order` (and Commit 2's cycle detection).
 type EdgeKindMap = HashMap<((String, String), (String, String)), (bool, bool)>;
 
@@ -15226,6 +15296,145 @@ fn reverse_dependency_constraints(
 /// what `_show_abi_rebuild_info` renders).
 type SlotOpRebuildScan = (BTreeSet<(String, String)>, Vec<(String, String)>);
 
+/// One installed parent's atom on a provider, for the update-probe
+/// refusal below: the parent's identity plus the atom text to match the
+/// fresh candidate against (built `:S/SS=` atoms already relaxed the way
+/// real checks them).
+#[derive(Debug, Clone)]
+struct ProbeParent {
+    /// The installed parent `(category, package)`.
+    parent: (String, String),
+    /// Effective atom: [`relax_built_slot_operator_atom`] for built
+    /// slot-operator atoms, verbatim otherwise.
+    atom: String,
+}
+
+/// Real `_slot_operator_check_reverse_dependencies`
+/// (`lib/_emerge/depgraph.py:2472-2573`) as the update probe's refusal
+/// gate on both scan arms (the `:2622` replacement-parent gate and the
+/// `:2738` candidate-child gate inside `_slot_operator_update_probe`;
+/// the `:8786` slot-conflict-fired probe is v2 `#24e` and never reaches
+/// this scan).
+///
+/// The caller precollects, per provider cp, every installed package Q
+/// whose recorded deps name that cp -- real's `_parent_atoms[child]`.
+/// Only parents real could see are collected: Q must be complete-mode
+/// reachable or walked this pass (an unwalked parent registers no dep);
+/// a Q this run replaces (merge-bound entry, or already in the replace
+/// set), uninstalls (blocker-conflict removal), or excludes carries a
+/// stale pin real skips (`:2513-2528` elimination,
+/// `_upgrade_available`, bug 612772, `excluded_pkgs`).
+///
+/// `probe_refused` then answers per scheduling edge: the fresh provider
+/// candidate (`fresh_cand`, `"cat/pkg-ver:slot/sub"` -- repo-less, so a
+/// `::repo` atom passes vacuously, a documented over-match corner) must
+/// match every surviving parent atom, with the consumer itself skipped
+/// (real's `replacement_parent` skip: the rebuild replaces it, so its
+/// own pin is not a veto). A single mismatch refuses the whole
+/// replacement -- the caller schedules nothing for that edge.
+///
+/// The `:2622` gate is not separately ported: the scheduled rebuild
+/// reinstalls the same version, which satisfies every atom the installed
+/// instance satisfied, so the replacement-parent check is vacuous here
+/// (real needs it only because its replacement can be an upgrade).
+///
+/// Cuts: `_too_deep` (no depths at this layer), the direct-circular
+/// escape (no digraph here), and soname atoms (the parser rejects them,
+/// same direction as real's `continue`). `[use]` deps are not evaluated
+/// (the candidate carries no USE state -- allows, never blocks).
+#[allow(clippy::too_many_arguments)]
+fn collect_probe_parents(
+    root: &Path,
+    entries: &[GraphEntry],
+    reachable: &HashSet<(String, String)>,
+    walked: &HashSet<(String, String)>,
+    in_graph: &HashSet<(String, String)>,
+    already: &BTreeSet<(String, String)>,
+    with_bdeps: bool,
+    excluded: &[String],
+) -> HashMap<(String, String), Vec<ProbeParent>> {
+    let mut being_removed: HashSet<(String, String)> = HashSet::new();
+    for e in entries {
+        if matches!(e.outcome, PretendOutcome::Uninstall { .. }) {
+            being_removed.insert((e.category.clone(), e.package.clone()));
+        }
+    }
+    let mut parents: HashMap<(String, String), Vec<ProbeParent>> = HashMap::new();
+    for pkg in all_installed_packages(root) {
+        let qcp = (pkg.category.clone(), pkg.package.clone());
+        if !reachable.contains(&qcp) && !walked.contains(&qcp) {
+            continue;
+        }
+        // Merge-bound this pass, or already in the replace set: real's
+        // elimination / `_upgrade_available` skips (the pin is stale).
+        // Consumers scheduled later in this same scan loop are skipped at
+        // check time instead (see `probe_refused`).
+        if in_graph.contains(&qcp) || already.contains(&qcp) {
+            continue;
+        }
+        if being_removed.contains(&qcp) {
+            continue;
+        }
+        let q_str = format!("{}/{}-{}", pkg.category, pkg.package, pkg.version);
+        if excluded
+            .iter()
+            .any(|ex| matches_config_entry(ex, &q_str, &pkg.category, &pkg.package))
+        {
+            continue;
+        }
+        // Same build-time-key rule as the scheduling loop: real drops a
+        // built package's `DEPEND`/`BDEPEND` before any dep is registered
+        // when `bdeps` is off, and only non-optional (walked) parents
+        // register them when it is on.
+        let dep_keys: &[&str] = match with_bdeps && walked.contains(&qcp) {
+            true => &["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"],
+            false => &["RDEPEND", "PDEPEND", "IDEPEND"],
+        };
+        for key in dep_keys {
+            let tokens = read_vdb_string(root, &pkg.category, &pkg.package, &pkg.version, key);
+            for token in tokens.split_whitespace() {
+                let Some(atom) = portage_dep::parse_atom(token) else {
+                    continue;
+                };
+                if atom.blocker != portage_dep::Blocker::None {
+                    continue;
+                }
+                let provider_cp = (atom.category.clone(), atom.package.clone());
+                let effective = relax_built_slot_operator_atom(token);
+                parents.entry(provider_cp).or_default().push(ProbeParent {
+                    parent: qcp.clone(),
+                    atom: effective,
+                });
+            }
+        }
+    }
+    parents
+}
+
+/// Refusal half of the probe: does any surviving parent of `provider_cp`
+/// (other than the consumer itself) reject `fresh_cand`? See
+/// [`collect_probe_parents`]. `scheduled` is the replace set as it grows
+/// during the scan loop -- a parent scheduled earlier in this same scan
+/// is already being rebuilt, so its pin is stale too.
+fn probe_refused(
+    parents: &HashMap<(String, String), Vec<ProbeParent>>,
+    scheduled: &BTreeSet<(String, String)>,
+    provider_cp: &(String, String),
+    fresh_cand: &str,
+    consumer_cp: &(String, String),
+) -> bool {
+    let Some(list) = parents.get(provider_cp) else {
+        return false;
+    };
+    let refs = [fresh_cand];
+    list.iter().any(|p| {
+        if &p.parent == consumer_cp || scheduled.contains(&p.parent) {
+            return false;
+        }
+        portage_dep::match_from_list(&p.atom, &refs).is_none_or(|m| m.is_empty())
+    })
+}
+
 /// Real depgraph's `_slot_operator_trigger_reinstalls` (3089-3132) +
 /// `_slot_operator_replace_installed` (the
 /// `@__auto_slot_operator_replace_installed__` set), run once every
@@ -15296,10 +15505,9 @@ type SlotOpRebuildScan = (BTreeSet<(String, String)>, Vec<(String, String)>);
 /// `reachable` gate: the slot-conflict path rebuilds graph-node runtime
 /// consumers in both shapes.
 ///
-/// Cuts (v2 `#24b` remainder): no `_slot_operator_check_reverse_dependencies`
-/// refusal (the scan schedules whenever the probe's shape holds; a parent
-/// whose atom the new child violates does not veto), no
-/// `slot_operator_mask_built` for non-installed binaries (v2 `#24c`).
+/// Cuts (v2 remainder): no `slot_operator_mask_built` for non-installed
+/// binaries (v2 `#24c`); the `:8786` slot-conflict-fired probe never
+/// reaches this scan (v2 `#24e`).
 #[allow(clippy::too_many_arguments)]
 fn slot_operator_rebuild_scan(
     root: &Path,
@@ -15311,6 +15519,7 @@ fn slot_operator_rebuild_scan(
     with_bdeps: bool,
     update: bool,
     top_level_cps: &HashSet<(String, String)>,
+    excluded: &[String],
 ) -> SlotOpRebuildScan {
     // cp -> (new version, new slot, new sub-slot) for every entry that
     // replaces an installed version in that slot.
@@ -15319,7 +15528,9 @@ fn slot_operator_rebuild_scan(
     // into a fresh slot (no installed instance in that slot -- real's
     // `_get_installed_best` empty-`myinslotlist` case, rendered `[ebuild N]`).
     // A provider that moves slot only ever arrives this way; the update
-    // probe's new-child-slot arm (`:3121-3126`) is the sole consumer.
+    // probe's new-child-slot arm (`:3121-3126`) prefers these, falling
+    // back to `Upgrade`/`Downgrade`/`Reinstall` entries in a slot the
+    // consumer is not bound to (same real candidate loop).
     let mut new_slot_fresh: HashMap<(String, String), (String, String, String)> = HashMap::new();
     let mut in_graph: HashSet<(String, String)> = HashSet::new();
     for e in entries {
@@ -15393,6 +15604,13 @@ fn slot_operator_rebuild_scan(
     // The `_slot_change_probe` half below is *not* complete-mode gated in
     // real (its first trigger arm runs for any merge-bound parent,
     // 3103-3107), so it is called unconditionally.
+    // #211 R2: the update-probe refusal parents (real
+    // `_slot_operator_check_reverse_dependencies`, `depgraph.py:2472`).
+    // Collected once per scan; the per-edge verdict reads the replace
+    // set as it grows (see `probe_refused`).
+    let probe_parents = collect_probe_parents(
+        root, entries, reachable, &walked, &in_graph, already, with_bdeps, excluded,
+    );
     if !new_slot.is_empty() || !new_slot_fresh.is_empty() {
         for pkg in &installed {
             let cp = (pkg.category.clone(), pkg.package.clone());
@@ -15407,8 +15625,8 @@ fn slot_operator_rebuild_scan(
             // their vdb is rewritten at merge, so no reinstall is needed
             // (real's not-installed-parent disjunct would probe them; the
             // refusal half of that probe is v2 `#24b` remainder either way).
-            let new_slot_scope =
-                !new_slot_fresh.is_empty() && (reachable.contains(&cp) || walked.contains(&cp));
+            let new_slot_scope = (!new_slot_fresh.is_empty() || !new_slot.is_empty())
+                && (reachable.contains(&cp) || walked.contains(&cp));
             if !same_slot_scope && !new_slot_scope {
                 continue;
             }
@@ -15420,7 +15638,9 @@ fn slot_operator_rebuild_scan(
                 true => &["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"],
                 false => &["RDEPEND", "PDEPEND", "IDEPEND"],
             };
-            let mut providers: Vec<String> = dep_keys
+            // (display `provider_cpv`, provider cp, fresh candidate
+            // `"cat/pkg-ver:slot/sub"` for the refusal check).
+            let mut edges: Vec<(String, (String, String), String)> = dep_keys
                 .iter()
                 .flat_map(|key| {
                     read_vdb_string(root, &pkg.category, &pkg.package, &pkg.version, key)
@@ -15438,7 +15658,12 @@ fn slot_operator_rebuild_scan(
                     if same_slot_scope {
                         let (n_ver, n_slot, n_sub) = new_slot.get(&provider_cp)?;
                         if a_slot == n_slot && a_sub != n_sub {
-                            return Some(format!("{}/{}-{n_ver}", atom.category, atom.package));
+                            let display = format!("{}/{}-{n_ver}", atom.category, atom.package);
+                            let cand = format!(
+                                "{}/{}-{n_ver}:{n_slot}/{n_sub}",
+                                atom.category, atom.package
+                            );
+                            return Some((display, provider_cp, cand));
                         }
                     }
                     // #211 (v2 `#24b`): real `_slot_operator_update_probe`
@@ -15446,48 +15671,88 @@ fn slot_operator_rebuild_scan(
                     // bug 486580): an installed consumer whose built
                     // `:S/SS=` dep is bound to a slot the provider no
                     // longer occupies rebuilds against the fresh slot.
+                    // Candidates are the fresh (`New`) entries first, then
+                    // `Upgrade`/`Downgrade`/`Reinstall` entries in a slot
+                    // the consumer is not bound to: real's candidate loop
+                    // (`_iter_similar_available`, `:2660-2695`) ranges
+                    // over every available package, not only fresh-slot
+                    // merges, so a bound-slot mismatch on a same-slot
+                    // entry probes the same way (entries at the bound
+                    // slot stay with the same-slot arm above). First
+                    // acceptable candidate wins, gates and R2 refusal
+                    // per candidate.
                     if new_slot_scope {
-                        let (f_ver, f_slot, _) = new_slot_fresh.get(&provider_cp)?;
-                        if *f_slot == a_slot {
-                            return None;
+                        let mut cands: Vec<(&String, &String, &String)> = Vec::new();
+                        if let Some(fresh) = new_slot_fresh.get(&provider_cp) {
+                            cands.push((&fresh.0, &fresh.1, &fresh.2));
                         }
-                        // The superseded child: an installed provider
-                        // instance must sit in the bound slot (else there
-                        // is no `dep.child` to update away from).
-                        let old_ver = installed_by_cp.get(&provider_cp)?.iter().find_map(
-                            |(version, slot)| (*slot == a_slot).then(|| version.clone()),
-                        )?;
-                        // Higher version only (real `pkg < dep.child`
-                        // skips downgrades; equal versions -- a slot move
-                        // without a revbump -- probe).
-                        if vercmp_ordering(f_ver, &old_ver) == Ordering::Less {
-                            return None;
+                        if let Some(other) = new_slot.get(&provider_cp) {
+                            cands.push((&other.0, &other.1, &other.2));
                         }
-                        // `want_update` stand-in (real `:3805-3809`):
-                        // `--update`, or the provider itself is directly
-                        // requested (real's arg-chain disjunct). The
-                        // registration-time complete-mode/depth nuance is
-                        // not modelled.
-                        if !update && !top_level_cps.contains(&provider_cp) {
-                            return None;
+                        for (c_ver, c_slot, c_sub) in cands {
+                            if *c_slot == a_slot {
+                                continue;
+                            }
+                            // The superseded child: an installed provider
+                            // instance must sit in the bound slot (else
+                            // there is no `dep.child` to update away from).
+                            let Some(old_ver) = installed_by_cp.get(&provider_cp)?.iter().find_map(
+                                |(version, slot)| (*slot == a_slot).then(|| version.clone()),
+                            ) else {
+                                continue;
+                            };
+                            // Higher version only (real `pkg < dep.child`
+                            // skips downgrades; equal versions -- a slot
+                            // move without a revbump -- probe).
+                            if vercmp_ordering(c_ver, &old_ver) == Ordering::Less {
+                                continue;
+                            }
+                            // `want_update` stand-in (real `:3805-3809`):
+                            // `--update`, or the provider itself is
+                            // directly requested (real's arg-chain
+                            // disjunct). The registration-time
+                            // complete-mode/depth nuance is not modelled.
+                            if !update && !top_level_cps.contains(&provider_cp) {
+                                continue;
+                            }
+                            // A `replacement_parent` must exist: with no
+                            // visible tree candidate the forced reinstall
+                            // would dead-end (real finds no replacement
+                            // and does nothing).
+                            if list_candidates(repos, &pkg.category, &pkg.package)
+                                .ok()
+                                .is_none_or(|cands| cands.is_empty())
+                            {
+                                continue;
+                            }
+                            let display = format!("{}/{}-{c_ver}", atom.category, atom.package);
+                            let cand = format!(
+                                "{}/{}-{c_ver}:{c_slot}/{c_sub}",
+                                atom.category, atom.package
+                            );
+                            if probe_refused(&probe_parents, &scheduled, &provider_cp, &cand, &cp) {
+                                continue;
+                            }
+                            return Some((display, provider_cp, cand));
                         }
-                        // A `replacement_parent` must exist: with no
-                        // visible tree candidate the forced reinstall
-                        // would dead-end (real finds no replacement and
-                        // does nothing).
-                        if list_candidates(repos, &pkg.category, &pkg.package)
-                            .ok()
-                            .is_none_or(|cands| cands.is_empty())
-                        {
-                            return None;
-                        }
-                        return Some(format!("{}/{}-{f_ver}", atom.category, atom.package));
+                        return None;
                     }
                     None
                 })
                 .collect();
-            providers.sort();
-            providers.dedup();
+            edges.sort();
+            edges.dedup();
+            // #211 R2: real `_slot_operator_check_reverse_dependencies`
+            // (`depgraph.py:2472-2573`, gates `:2622`/`:2738`) refuses
+            // the whole replacement when the fresh candidate violates
+            // another parent's atom -- on both arms alike.
+            let mut providers: Vec<String> = Vec::new();
+            for (display, provider_cp, cand) in edges {
+                if probe_refused(&probe_parents, &scheduled, &provider_cp, &cand, &cp) {
+                    continue;
+                }
+                providers.push(display);
+            }
             if providers.is_empty() {
                 continue;
             }
@@ -16019,12 +16284,16 @@ fn slot_operator_eliminate_rebuilds(
 /// `topological_merge_order`, and its own `RDEPEND` is never re-walked.
 /// The default `--solver=portage` path has none of that -- see
 /// `BacktrackParams::slot_operator_replace_installed`.
+#[allow(clippy::too_many_arguments)]
 fn slot_operator_rebuild_entries(
     root: &Path,
     repos: &[RepoConfig],
     entries: &[GraphEntry],
     reachable: &HashSet<(String, String)>,
     with_bdeps: bool,
+    excluded: &[String],
+    update: bool,
+    top_level_cps: &HashSet<(String, String)>,
 ) -> (Vec<GraphEntry>, Vec<(String, String)>) {
     let installed = all_installed_packages(root);
     let mut scheduled: BTreeSet<(String, String)> = BTreeSet::new();
@@ -16041,12 +16310,14 @@ fn slot_operator_rebuild_entries(
             &scheduled,
             &BTreeSet::new(),
             with_bdeps,
-            // The `--solver=` bridge keeps the pre-#211 behaviour: the
-            // new-slot update arm stays off here (no `update`/`top_level`
-            // context at this layer), so this fixpoint can only schedule
-            // same-slot rebuilds exactly as before.
-            false,
-            &HashSet::new(),
+            // #211 I1: the `--solver=` bridge threads the same
+            // `update`/`top_level` context the default path passes, so
+            // both solvers agree on the new-slot arm (the request
+            // carries both -- the "no context at this layer" cut that
+            // kept this fixpoint same-slot-only is gone).
+            update,
+            top_level_cps,
+            excluded,
         );
         abi_rebuilds = pairs;
         if next == scheduled {
@@ -16423,31 +16694,12 @@ fn merge_bound_cpv(entry: &GraphEntry) -> Option<String> {
     Some(format!("{}/{}-{version}", entry.category, entry.package))
 }
 
-/// Finds the shortest **unbreakable** dependency cycle among the
-/// merge-bound `entries` -- real `circular_dependency_handler`'s
-/// `_find_cycles` + `shortest_cycle`, restricted to *hard* edges (an
-/// unsatisfied build-time dep with no run-time alternative,
-/// `edge_kind_map[(dep cp, owner cp)] == (true, false)`). Those are the
-/// only edges real `_serialize_tasks`' `_ignore_runtime` scan can't
-/// drop, so a cycle made entirely of them is exactly the case real
-/// portage reports with `* Error: circular dependencies:`.
-///
-/// The hard-edge digraph has an edge `owner -> dep` for every such
-/// `edge_kind_map` entry whose both endpoints are merge-bound `entries`.
-/// Returns the shortest directed cycle as an ordered CPV list where each
-/// element depends on the next (the last wrapping to the first), rotated
-/// to start at its lowest `entries` index for a deterministic render;
-/// empty when the hard-edge graph is acyclic (every ordinary resolve).
-///
-/// Full elementary-cycle enumeration lives separately
-/// (`merge_order::elementary_cycles`, real `digraph.get_cycles` over the
-/// `medium_soft` rung) and feeds only `large_cycle_count` and the
-/// cycle-only re-display -- this stays the short hard ring the message
-/// and the suggestions render.
-fn find_hard_cycles(entries: &[GraphEntry], edge_kind_map: &EdgeKindMap) -> Vec<Vec<String>> {
-    // Merge-bound entries only, lowest index per cp (the merge list is
-    // already in dependency order, so the first is the one to start a
-    // rendered cycle at).
+/// Lowest-index merge-bound entry per `(category, package)` -- the merge
+/// list is already in dependency order, so the first is the one to
+/// start a rendered cycle at. Shared by `find_hard_cycles` (cycle
+/// nodes) and `cycle_edge_labels` (owner lookup), so the two cannot
+/// disagree on which instance an edge belongs to.
+fn merge_bound_index(entries: &[GraphEntry]) -> HashMap<(&str, &str), usize> {
     let mut cp_index: HashMap<(&str, &str), usize> = HashMap::new();
     for (i, e) in entries.iter().enumerate() {
         if merge_bound_cpv(e).is_some() {
@@ -16456,20 +16708,134 @@ fn find_hard_cycles(entries: &[GraphEntry], edge_kind_map: &EdgeKindMap) -> Vec<
                 .or_insert(i);
         }
     }
+    cp_index
+}
+
+/// Finds the shortest **unbreakable** dependency cycle among the
+/// merge-bound `entries` -- real `circular_dependency_handler`'s
+/// `_find_cycles` + `shortest_cycle`, restricted to *hard* edges. Those
+/// are the only edges real `_serialize_tasks`' `_ignore_runtime` scan
+/// can't drop, so a cycle made entirely of them is exactly the case
+/// real portage reports with `* Error: circular dependencies:`.
+///
+/// A hard edge is an unsatisfied build-time dep with no run-time
+/// alternative, `edge_kind_map[(dep cp, owner cp)] == (true, false)`
+/// -- or, since backlog #228, an unsatisfied non-optional
+/// slot-operator edge (`DEPEND`/`RDEPEND` `:=`, real `DepPriority`
+/// `buildtime_slot_op`/`runtime_slot_op`, which no
+/// `ignore_priority` rung of either `DepPriority*Range` relaxes --
+/// real `_emerge/DepPriorityNormalRange.py` / `_emerge/
+/// DepPrioritySatisfiedRange.py`, grounded by the n228 probe: real
+/// 3.0.81.3 aborts `dev-libs/slopcyca -RDEPEND:=-> dev-libs/slopcycb
+/// -DEPEND-> dev-libs/slopcyca` with `(runtime_slot_op)` /
+/// `(buildtime)`). A plain unsatisfied run-time edge stays soft on
+/// purpose: both serializers merge a run-time cycle as a group
+/// (`find_smallest_cycle`/`gather_deps`), so it never forces an
+/// abort. The slot-op arm reads the owner's own `deps` edges (the
+/// merge-order graph input, which carries real's per-key `DepPriority`
+/// including the `:=` promotion) with real's own installed gate
+/// (`dep_edge_satisfied_by_installed`, so a satisfied slot-op edge
+/// stays breakable exactly like real's `satisfied` rung -- and, for a
+/// slot-operator edge, only an installed instance in the child's own
+/// slot/sub-slot satisfies, real `_add_pkg_dep_string`'s `inst_pkgs`
+/// same-slot filter in `depgraph.py`); `DepEdge`
+/// `priority.satisfied` itself is never consulted -- it is always
+/// false on an entry (`build_digraph` only sets it on a local copy).
+///
+/// The hard-edge digraph has an edge `owner -> dep` for every such
+/// `edge_kind_map` entry whose both endpoints are merge-bound `entries`
+/// (plus every slot-op deps edge between two merge-bound entries, even
+/// one the walk never recorded -- provided it sits on the `||` branch
+/// the walk selected: real's digraph holds the resolved edge only, so
+/// a suppressed alternative's `:=` edge never hardens, real
+/// `dep_check.py::dep_zapdeps`). Branch selection reuses
+/// `merge_order::kept_alt_branches`, the same set `build_digraph`
+/// collapses to, so the two cannot disagree. Returns the shortest
+/// directed cycle as an ordered CPV
+/// list where each element depends on the next (the last wrapping to
+/// the first), rotated to start at its lowest `entries` index for a
+/// deterministic render; empty when the hard-edge graph is acyclic
+/// (every ordinary resolve).
+///
+/// Full elementary-cycle enumeration lives separately
+/// (`merge_order::elementary_cycles`, real `digraph.get_cycles` over the
+/// `medium_soft` rung) and feeds only `large_cycle_count` and the
+/// cycle-only re-display -- this stays the short hard ring the message
+/// and the suggestions render.
+fn find_hard_cycles(
+    entries: &[GraphEntry],
+    edge_kind_map: &EdgeKindMap,
+    root: &Path,
+) -> Vec<Vec<String>> {
+    // Merge-bound entries only, lowest index per cp (the merge list is
+    // already in dependency order, so the first is the one to start a
+    // rendered cycle at).
+    let cp_index = merge_bound_index(entries);
+    // Backlog #228 slot-op arm: owner index -> dep indices with an
+    // unsatisfied non-optional slot-operator `deps` edge between two
+    // merge-bound entries. Only the `||` branch the walk selected
+    // counts (`kept_alt_branches`, real `dep_zapdeps`' choice -- the
+    // same set `build_digraph` collapses to): real's digraph holds the
+    // resolved edge only, never a suppressed alternative's. The
+    // installed gate is `dep_edge_satisfied_by_installed`, so a `:=`
+    // edge is satisfied only by an installed instance in the dep
+    // entry's own slot/sub-slot (real `_add_pkg_dep_string`'s
+    // `inst_pkgs` same-slot filter in `depgraph.py`).
+    let kept = kept_alt_branches(entries, root);
+    let slot_op_hard = |owner_idx: usize, dep_idx: usize| -> bool {
+        entries[owner_idx].deps.iter().enumerate().any(|(ei, d)| {
+            (d.alt.is_none() || kept[owner_idx].contains(&ei))
+                && d.category == entries[dep_idx].category
+                && d.package == entries[dep_idx].package
+                && (d.priority.buildtime_slot_op || d.priority.runtime_slot_op)
+                && !d.priority.optional
+                && !dep_edge_satisfied_by_installed(root, d, Some(&entries[dep_idx]))
+        })
+    };
     // adjacency: owner index -> sorted, deduped dep indices (hard edges).
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); entries.len()];
     for ((dep_cp, owner_cp), (has_hard, has_soft)) in edge_kind_map {
-        if !has_hard || *has_soft {
-            continue;
-        }
         let (Some(&oi), Some(&di)) = (
             cp_index.get(&(owner_cp.0.as_str(), owner_cp.1.as_str())),
             cp_index.get(&(dep_cp.0.as_str(), dep_cp.1.as_str())),
         ) else {
             continue;
         };
-        if oi != di {
+        if oi == di {
+            continue;
+        }
+        // Backlog #228: the walk's `(true, false)` arm, or the
+        // slot-op deps arm (an `RDEPEND` `:=` edge is never
+        // `buildtime_hard`, so the map alone can never see it).
+        if (*has_hard && !*has_soft) || slot_op_hard(oi, di) {
             adj[oi].push(di);
+        }
+    }
+    // A slot-op deps edge the walk never recorded has no map entry at
+    // all -- it still counts when it sits on the branch the walk
+    // selected (real's digraph holds that resolved edge); a suppressed
+    // `||` alternative's edge is skipped above.
+    for &oi in cp_index.values() {
+        for (ei, dep) in entries[oi].deps.iter().enumerate() {
+            if dep.alt.is_some() && !kept[oi].contains(&ei) {
+                continue;
+            }
+            if !(dep.priority.buildtime_slot_op || dep.priority.runtime_slot_op)
+                || dep.priority.optional
+            {
+                continue;
+            }
+            let Some(&di) = cp_index
+                .get(&(dep.category.as_str(), dep.package.as_str()))
+                .filter(|&&di| di != oi)
+            else {
+                continue;
+            };
+            if !dep_edge_satisfied_by_installed(root, dep, Some(&entries[di]))
+                && !adj[oi].contains(&di)
+            {
+                adj[oi].push(di);
+            }
         }
     }
     for v in &mut adj {
@@ -16530,6 +16896,53 @@ fn find_hard_cycles(entries: &[GraphEntry], edge_kind_map: &EdgeKindMap) -> Vec<
             vec![rotated]
         }
     }
+}
+
+/// Backlog #228: one label per edge of a `find_hard_cycles` cycle --
+/// real `_prepare_circular_dep_message`
+/// (`resolver/circular_dependency.py`, the `({pkg}
+/// ({priorities[-1]}))` on every line after `depends on`).
+/// `labels[i]` is the edge `cycle[i] -> cycle[(i + 1) % len]`: the
+/// `DepPriority.__str__` (`_emerge/DepPriority.py`) of the hardest
+/// `deps` priority the owner's entry carries toward the dep's cp.
+/// Real keeps the per-edge priorities sorted by hardness
+/// (`digraph.add`'s `bisect.insort`), so `[-1]` is the max -- taken
+/// here with `max_by_key(dep_priority_rank)`, the ordering
+/// `resolver_trace::max_priority` implements, rendered with the same
+/// `dep_priority_str` the `--debug` digraph dump already prints per
+/// edge. `satisfied` never affects a label (real ranks by
+/// hardness only); a `||` group contributes every branch's priority
+/// (real's digraph holds only the resolved branch -- an approximation,
+/// immaterial whenever the branches share a key, which they do by
+/// construction). `"buildtime"` when the owner carries no `deps` edge
+/// there at all (a map-only edge from a `deps`-less synthetic entry;
+/// every resolver-built cycle edge has its atom queued, so the
+/// fallback never fires on a real resolve).
+pub fn cycle_edge_labels(entries: &[GraphEntry], cycle: &[String]) -> Vec<String> {
+    if cycle.is_empty() {
+        return Vec::new();
+    }
+    cycle
+        .iter()
+        .enumerate()
+        .map(|(i, owner_cpv)| {
+            let dep_cpv = &cycle[(i + 1) % cycle.len()];
+            let hardest = entries
+                .iter()
+                .find(|e| merge_bound_cpv(e).as_deref() == Some(owner_cpv.as_str()))
+                .into_iter()
+                .flat_map(|e| e.deps.iter())
+                .filter_map(|d| {
+                    split_cpv(dep_cpv).and_then(|(cat, pkg, _)| {
+                        (d.category == cat && d.package == pkg).then_some(d.priority)
+                    })
+                })
+                .max_by_key(crate::resolver_trace::dep_priority_rank);
+            hardest
+                .map(|p| crate::resolver_trace::dep_priority_str(&p).to_string())
+                .unwrap_or_else(|| "buildtime".to_string())
+        })
+        .collect()
 }
 
 /// Split a `category/package-version` string into its three parts (the
@@ -21453,6 +21866,31 @@ pub struct ResolveRequest {
     pub newuse: bool,
     pub changed_use: bool,
     pub nodeps: bool,
+    /// `--onlydeps`/`-o` (real `main.py` boolean): merge the targets'
+    /// dependencies but not the targets themselves. The resolver itself
+    /// walks every dep class for the root (real selects the root node
+    /// with `onlydeps=True` and still traverses its deps); the root's
+    /// own merge-list suppression is display-layer (`pretend.rs`
+    /// `onlydeps`/`top_level_pkgs`). Carried here so the
+    /// `--onlydeps-with-*` pair below can gate on it, exactly like
+    /// real's `pkg.onlydeps` gate in `_add_pkg_deps`.
+    pub onlydeps: bool,
+    /// `--onlydeps-with-rdeps <y|n>` (real `main.py` `true_y_or_n`,
+    /// default enabled -- `man emerge.1` "This option is enabled by
+    /// default"): include run-time deps under `--onlydeps`. Real
+    /// `depgraph.py::_add_pkg_deps` blanks an onlydeps root's
+    /// `RDEPEND` **and** `PDEPEND` when the value is `"n"`; any other
+    /// value (`"y"`, `"True"`, absent) keeps them. `false` here is
+    /// exactly that `"n"`.
+    pub onlydeps_with_rdeps: bool,
+    /// `--onlydeps-with-ideps <y|n>` (real `main.py` `true_y_or_n`,
+    /// default disabled -- `man emerge.1` "This option is disabled by
+    /// default", and only consulted "when `--onlydeps` and
+    /// `--onlydeps-with-rdeps=n` are both specified"): include
+    /// install-time deps for an onlydeps root whose run-time deps are
+    /// disabled. Real blanks its `IDEPEND` when the value is `"n"` or
+    /// absent (`in ("n", None)`); `true` here is `"y"`/`"True"`.
+    pub onlydeps_with_ideps: bool,
     pub update: bool,
     pub deep: Deep,
     pub excluded: Vec<String>,
@@ -21577,7 +22015,11 @@ pub fn active_resolver() -> Box<dyn Resolver> {
 
 /// Pick the [`Resolver`] for one [`SolverKind`] (`--solver=`): the
 /// backtracking walk for `Portage`, lu-zero's PubGrub / resolvo bridges
-/// (see `solver_bridge.rs`) for the other two.
+/// (see `solver_bridge.rs`) for the other two. The parked engines only
+/// implement version solving over repo facts: they ignore `--onlydeps`
+/// and its `--onlydeps-with-rdeps` / `--onlydeps-with-ideps` root
+/// filtering (like `--nodeps` / `--buildpkgonly`) -- only the
+/// backtracking walk above applies them.
 pub fn active_resolver_for(kind: SolverKind) -> Box<dyn Resolver> {
     match kind {
         SolverKind::Portage => Box::new(BacktrackingResolver),
@@ -21888,6 +22330,9 @@ struct ResolveCtx<'a> {
     newuse: bool,
     changed_use: bool,
     nodeps: bool,
+    onlydeps: bool,
+    onlydeps_with_rdeps: bool,
+    onlydeps_with_ideps: bool,
     update: bool,
     deep: Deep,
     excluded: &'a [String],
@@ -22062,6 +22507,9 @@ impl<'a> ResolveCtx<'a> {
             newuse: req.newuse,
             changed_use: req.changed_use,
             nodeps: req.nodeps,
+            onlydeps: req.onlydeps,
+            onlydeps_with_rdeps: req.onlydeps_with_rdeps,
+            onlydeps_with_ideps: req.onlydeps_with_ideps,
             update: req.update,
             deep,
             excluded: &req.excluded,
@@ -22286,7 +22734,9 @@ impl Backtracker {
             .expect("feedback() only after get() returned params");
         let current_terminal = self.nodes[current_idx].terminal;
         let (mut params, terminal, mask_cost) = match kind {
-            BacktrackFeedback::Config { params } => (*params, current_terminal, 0),
+            BacktrackFeedback::Config { params } | BacktrackFeedback::RevDep { params } => {
+                (*params, current_terminal, 0)
+            }
             BacktrackFeedback::SlotConflict { base, choices } => {
                 // #57 S1: keep the pass's merged accumulators on the node
                 // itself, exactly as `PassDecision::DeadEnd` does -- the
@@ -22558,6 +23008,17 @@ fn slot_conflict_mask_choices(
 /// a deliberate C2 cut).
 enum BacktrackFeedback {
     Config {
+        params: Box<BacktrackParams>,
+    },
+    /// Backlog #209: the reverse-dependency feed (`_complete_graph`'s
+    /// installed-consumer pins, `collect_feedback`'s scan). Real
+    /// `_resolve_conflicts` (`_emerge/depgraph.py:9444`) calls
+    /// `_complete_graph()` (`:8562`) with no `_allow_backtracking` gate,
+    /// so these pins enforce in-pass even under `--backtrack=0`; the
+    /// driver re-runs the pass with them instead of settling. Carries
+    /// the same working copy as `Config` and behaves identically inside
+    /// the search.
+    RevDep {
         params: Box<BacktrackParams>,
     },
     SlotConflict {
@@ -23067,6 +23528,56 @@ fn overlay_use_want(
         .and_then(|b| b.get(flag))
         .copied()
         .or_else(|| committed.get(key).and_then(|b| b.get(flag)).copied())
+}
+
+/// Backlog #194: whether one dep key is walked for this package.
+/// Real `bin/ebuild.sh`'s own `depend` phase unsets `IDEPEND` below
+/// EAPI 8 (`portage/eapi.py:135`), so a stale or hand-written cache
+/// entry can still *carry* `IDEPEND` under EAPI 7 (real `egencache`
+/// never emits one) -- the read-time gate here drops it anyway. Real
+/// `depgraph.py:4186-4193` additionally blanks an `--onlydeps` root's
+/// `RDEPEND`/`PDEPEND` under `--onlydeps-with-rdeps=n`, and its
+/// `IDEPEND` too unless `--onlydeps-with-ideps` is `y`/`True`.
+/// Extracted (rather than left as `run_pass`'s inline closure) so the
+/// adversarial-cache path stays pinned after the fixtures stopped
+/// carrying one.
+fn onlydeps_walk_dep_key(
+    key: &str,
+    eapi_has_idepend: bool,
+    onlydeps_blanks_runtime: bool,
+    onlydeps_blanks_idepend: bool,
+) -> bool {
+    if key == "IDEPEND" && (!eapi_has_idepend || onlydeps_blanks_idepend) {
+        return false;
+    }
+    if onlydeps_blanks_runtime && (key == "RDEPEND" || key == "PDEPEND") {
+        return false;
+    }
+    true
+}
+
+/// Backlog #194: which run-time keys classify atoms as runtime edges
+/// for this package (real `DepPriority`: an atom in a build-time key
+/// but no walked run-time key is `buildtime_hard`, an unbreakable
+/// merge-order edge). Mirrors `onlydeps_walk_dep_key` above: under
+/// `--onlydeps --onlydeps-with-rdeps=n --onlydeps-with-ideps=y` on
+/// EAPI 8, `IDEPEND` is still walked, so it still classifies.
+fn onlydeps_runtime_keys(
+    onlydeps_blanks_runtime: bool,
+    onlydeps_blanks_idepend: bool,
+    eapi_has_idepend: bool,
+) -> &'static [&'static str] {
+    if onlydeps_blanks_runtime {
+        if onlydeps_blanks_idepend || !eapi_has_idepend {
+            &[]
+        } else {
+            &["IDEPEND"]
+        }
+    } else if onlydeps_blanks_idepend || !eapi_has_idepend {
+        &["RDEPEND", "PDEPEND"]
+    } else {
+        &["RDEPEND", "PDEPEND", "IDEPEND"]
+    }
 }
 
 /// Phase A3 (023): one full BFS walk over the current `bp`.
@@ -25337,7 +25848,41 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         // package under `--buildpkgonly` without `--deep` — runtime
         // blockers never enter the graph (upstream pg1 E/F). A binary
         // or installed candidate is `pkg.built` and keeps its keys.
-        let dep_keys: &[&str] = if candidate_source == CandidateSource::Binary && !ctx.with_bdeps {
+        //
+        // Backlog #194: real `depgraph.py:4186-4193` (`_add_pkg_deps`)
+        // blanks an `--onlydeps` root's (`pkg.onlydeps` -- the
+        // arg-selected package, i.e. this walk's `depth == 0`)
+        // `RDEPEND` and `PDEPEND` when `--onlydeps-with-rdeps=n`, and
+        // its `IDEPEND` too unless `--onlydeps-with-ideps` is `y` or
+        // `True` (`man emerge.1`: rdeps enabled by default so only an
+        // explicit `=n` blanks; ideps disabled by default so only an
+        // explicit `=y`/bare flag keeps). Build-time keys
+        // (`DEPEND`/`BDEPEND`) always stay (`man emerge.1`: "When this
+        // is disabled only build time dependencies are included").
+        // Without `--onlydeps` both flags are inert (no `pkg.onlydeps`
+        // node exists to blank).
+        let onlydeps_blanks_runtime = ctx.onlydeps && depth == 0 && !ctx.onlydeps_with_rdeps;
+        let onlydeps_blanks_idepend = onlydeps_blanks_runtime && !ctx.onlydeps_with_ideps;
+        // Real `bin/ebuild.sh`'s own `depend` phase (`if !
+        // ___eapi_has_IDEPEND; then unset IDEPEND; fi`) + real
+        // `portage/eapi.py:135` (`eapi_has_idepend`): below EAPI 8
+        // `IDEPEND` never reaches saved metadata, so `portdb.aux_get`
+        // serves `""` for it -- for ebuild and binary candidates alike
+        // (real's `bintree` defaults a missing `EAPI` to `"0"`, same as
+        // `porttree.py:644-648` does for ebuilds). #194's EAPI-7 oracle
+        // cell needs this: `--onlydeps-with-rdeps=y` on an EAPI-7 root
+        // merges `[B, C, D]`, never `E`.
+        let eapi_has_idepend =
+            md5_dict::eapi_has_idepend(metadata.get("EAPI").map(String::as_str).unwrap_or("0"));
+        let keep_key = |key: &&str| {
+            onlydeps_walk_dep_key(
+                key,
+                eapi_has_idepend,
+                onlydeps_blanks_runtime,
+                onlydeps_blanks_idepend,
+            )
+        };
+        let base_keys: &[&str] = if candidate_source == CandidateSource::Binary && !ctx.with_bdeps {
             &["RDEPEND", "PDEPEND", "IDEPEND"]
         } else if ctx.buildpkgonly
             && candidate_source != CandidateSource::Binary
@@ -25346,6 +25891,16 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             &["DEPEND", "BDEPEND"]
         } else {
             &["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"]
+        };
+        // The filter only ever removes keys, so when nothing is blanked
+        // the static slices above are used as-is (no per-package alloc
+        // on the hot path).
+        let filtered_keys: Vec<&str>;
+        let dep_keys: &[&str] = if onlydeps_blanks_runtime || !eapi_has_idepend {
+            filtered_keys = base_keys.iter().copied().filter(keep_key).collect();
+            &filtered_keys
+        } else {
+            base_keys
         };
         let mut depstr = String::new();
         for dep_key in dep_keys {
@@ -25367,7 +25922,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         // listing every branch's atoms in written order (the *other*
         // branches are simply never a real entry, so they contribute
         // no edge once the merge-order digraph looks them up).
-        let real_order_keys: &[&str] =
+        let base_order_keys: &[&str] =
             if candidate_source == CandidateSource::Binary && !ctx.with_bdeps {
                 &["RDEPEND", "PDEPEND", "IDEPEND"]
             } else if ctx.buildpkgonly
@@ -25381,6 +25936,15 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             } else {
                 &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"]
             };
+        // #194: the same blanked keys stay out of the merge-order
+        // digraph (real never walks them, so they contribute no edge).
+        let filtered_order_keys: Vec<&str>;
+        let real_order_keys: &[&str] = if onlydeps_blanks_runtime || !eapi_has_idepend {
+            filtered_order_keys = base_order_keys.iter().copied().filter(keep_key).collect();
+            &filtered_order_keys
+        } else {
+            base_order_keys
+        };
         state.entries[entry_idx].deps = merge_order::dep_edges_from_metadata(
             &metadata,
             &use_flags,
@@ -25420,7 +25984,19 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         } else {
             flatten_keys(&["DEPEND", "BDEPEND"])
         };
-        let runtime_atoms = flatten_keys(&["RDEPEND", "PDEPEND", "IDEPEND"]);
+        // #194: a blanked runtime key classifies nothing -- real never
+        // walks it, so an atom that only survives via a build-time key
+        // is `buildtime_hard`, not runtime. A *walked* `IDEPEND` still
+        // classifies (rdeps=n + ideps=y on EAPI 8), so the selection
+        // mirrors `onlydeps_walk_dep_key`, not just the rdeps blank.
+        // Without blanking this is the long-standing unconditional
+        // three-key set.
+        let runtime_keys: &[&str] = onlydeps_runtime_keys(
+            onlydeps_blanks_runtime,
+            onlydeps_blanks_idepend,
+            eapi_has_idepend,
+        );
+        let runtime_atoms = flatten_keys(runtime_keys);
         // Real `--root-deps` branch-selection feed-in (see
         // `root_deps_satisfied_atoms`'s own doc comment): a `||` group
         // with no branch tree-visible still needs a branch selected
@@ -26396,7 +26972,10 @@ fn collect_feedback(
         }
     }
     if added {
-        return PassDecision::Feedback(BacktrackFeedback::Config {
+        // Backlog #209: a distinct variant (see its doc comment) so the
+        // driver can feed these pins back in-pass under `--backtrack=0`,
+        // where every other feedback kind still settles.
+        return PassDecision::Feedback(BacktrackFeedback::RevDep {
             params: Box::new(grown),
         });
     }
@@ -26458,6 +27037,7 @@ fn collect_feedback(
             ctx.with_bdeps,
             ctx.update,
             &ctx.top_level_cps,
+            ctx.excluded,
         );
         pass.abi_rebuilds = Some(abi_rebuilds);
         if scheduled != grown.slot_operator_replace_installed {
@@ -26559,6 +27139,7 @@ fn assemble_result(
                 ctx.with_bdeps,
                 ctx.update,
                 &ctx.top_level_cps,
+                ctx.excluded,
             )
             .1
         }
@@ -26650,7 +27231,7 @@ fn assemble_result(
     // cycle in discovery order (it can't linearize one); this
     // records it for `pretend.rs` to render the fatal
     // `* Error: circular dependencies:` block.
-    let circular_deps = find_hard_cycles(&pass.entries, &pass.edge_kind_map);
+    let circular_deps = find_hard_cycles(&pass.entries, &pass.edge_kind_map, ctx.root);
 
     // Elementary-cycle enumeration + reduced display order for the
     // `large_cycle_count` trailer and the cycle-only re-display
@@ -26765,12 +27346,45 @@ fn assemble_result(
     // block (same shape, same rc 0; the renderer cannot tell the
     // producers apart). Exact-dedupe against the removal rows covers
     // the pathological both-paths shape.
+    //
+    // Backlog #209: under `--backtrack=0` a slot-operator withhold
+    // stays silent. Real never reports that path: the minimizer/probe
+    // selection writes no `_runtime_pkg_mask` and no
+    // `_conflict_missed_update`, so `_show_missed_update`
+    // (`_emerge/depgraph.py:1566`) has nothing to render (the r25 shape
+    // merges silently at `backtrack: 0/20`, both bound forms of the
+    // consumer's pin). A plain-pin withhold still synthesizes its rows:
+    // real reaches it through the slot-conflict solver, whose "Record
+    // missed updates" tail (`:2089-2110`) runs with no
+    // `_allow_backtracking` gate, so the notice prints even with
+    // backtracking off (the #90 S2 two-target cell pins it).
+    // `raw_atom` is the verbatim recorded text: the live `:=` form and
+    // the recorded `:S/SS=` form both carry a slot operator there,
+    // while `atom` is normalised (the built form strips to a bare
+    // version pin), so the raw text is what classifies the path.
+    let bt0_plain_pins: Vec<RevDepPin> = if ctx.backtrack_max == 0 {
+        params
+            .reverse_dep_pins
+            .iter()
+            .filter(|pin| {
+                !portage_dep::parse_atom(&pin.raw_atom).is_some_and(|a| a.slot_operator.is_some())
+            })
+            .cloned()
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let enforced_pins: &[RevDepPin] = if ctx.backtrack_max == 0 {
+        &bt0_plain_pins
+    } else {
+        &params.reverse_dep_pins
+    };
     pass.skipped_updates.extend(constraint_withheld_updates(
         &ctx.repos,
         ctx.root,
         config,
         &pass.entries,
-        &params.reverse_dep_pins,
+        enforced_pins,
     ));
     pass.skipped_updates.sort_by(|a, b| {
         (
@@ -27004,10 +27618,31 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
     // real's counter is frozen before its own best-run re-pass.
     let mut passes: u64 = 0;
     let mut restarts: u64 = 0;
-    while let Some(params) = bt.get() {
+    // Backlog #209: the `--backtrack=0` reverse-dependency feed loop.
+    // Real `_resolve_conflicts` (`_emerge/depgraph.py:9444`) runs
+    // `_complete_graph()` (`:8562`) with no `_allow_backtracking` gate
+    // (that flag only gates auto-enabling `complete` mode on slot
+    // conflicts at `:9444-9450`, and the slot-op trigger at `:2131`),
+    // so a satisfiable installed-consumer pin enforces in-pass even
+    // with backtracking off. Portuale's scan runs post-pass, so its
+    // `RevDep` working copy feeds one more pass here instead of
+    // settling -- a feed loop, not a backtrack retry (`restarts` stays
+    // 0, real `backtrack: 0/0`). Bounded: `reverse_dep_masked` latches
+    // every enforced `(cp, atom)`, so a pass that adds nothing new
+    // falls through to `Settle`. `--nodeps` is excluded: real pops
+    // `recurse` there (`create_depgraph_params.py:181-183`), so its
+    // complete graph never runs.
+    let mut feed_params: Option<BacktrackParams> = None;
+    loop {
+        let from_feed = feed_params.is_some();
+        let Some(params) = feed_params.take().or_else(|| bt.get()) else {
+            break;
+        };
         let mut pass = run_pass(&ctx, &params, first_pass)?;
-        passes += 1;
-        restarts = passes - 1;
+        if !from_feed {
+            passes += 1;
+            restarts = passes - 1;
+        }
         first_pass = false;
         // The per-pass config view: the accumulator's autounmask-use
         // changes layered on as the top USE tier (see `Config::
@@ -27032,13 +27667,25 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
             PassDecision::Feedback(kind) => {
                 if ctx.backtrack_max == 0 {
                     // No search: report the root pass with its merged
-                    // working copy, exactly like the old single pass.
-                    let grown: BacktrackParams = match kind {
-                        BacktrackFeedback::Config { params } => *params,
-                        BacktrackFeedback::SlotConflict { base, .. } => *base,
-                        BacktrackFeedback::MissingDep { base, .. } => *base,
-                    };
-                    return Ok(assemble_result(&ctx, &grown, pass, config, restarts));
+                    // working copy, exactly like the old single pass --
+                    // except the #209 feed above, which enforces
+                    // satisfiable reverse-dep pins in-pass like real's
+                    // ungated `_complete_graph`.
+                    match kind {
+                        BacktrackFeedback::RevDep { params: grown } if !ctx.nodeps => {
+                            feed_params = Some(*grown);
+                            continue;
+                        }
+                        kind => {
+                            let grown: BacktrackParams = match kind {
+                                BacktrackFeedback::Config { params }
+                                | BacktrackFeedback::RevDep { params } => *params,
+                                BacktrackFeedback::SlotConflict { base, .. } => *base,
+                                BacktrackFeedback::MissingDep { base, .. } => *base,
+                            };
+                            return Ok(assemble_result(&ctx, &grown, pass, config, restarts));
+                        }
+                    }
                 }
                 bt.feedback(kind);
             }
@@ -27135,7 +27782,11 @@ pub fn resolve_pretend_graph(
     // deferred, not silently assumed). `--backtrack=0` disables
     // backtracking entirely -- no feedback node is explored, so a slot
     // conflict is reported without any retry, exactly the
-    // pre-backtracking behavior.
+    // pre-backtracking behavior. The one exception is backlog #209's
+    // reverse-dependency feed: real `_resolve_conflicts` runs
+    // `_complete_graph` with no backtracking gate, so satisfiable
+    // installed-consumer pins re-run the pass in-process (a feed loop,
+    // never a counted restart) instead of settling.
     // Config-growth retries never counted against this budget (real's
     // `_feedback_config` doesn't count toward `--backtrack=N` either).
     backtrack_max: u32,
@@ -27207,6 +27858,15 @@ pub fn resolve_pretend_graph(
         newuse,
         changed_use,
         nodeps,
+        // The legacy marshaller only ever answers with onlydeps off:
+        // real's `pkg.onlydeps` is set exactly when `--onlydeps` is in
+        // myopts, and every legacy caller resolves without it (the one
+        // production `--onlydeps` path builds a `ResolveRequest`
+        // directly). The with-* defaults are real's own
+        // (`man emerge.1`: rdeps enabled, ideps disabled).
+        onlydeps: false,
+        onlydeps_with_rdeps: true,
+        onlydeps_with_ideps: false,
         update,
         deep,
         excluded: excluded.to_vec(),
@@ -27385,6 +28045,8 @@ fn built_slot_operator_atoms(raw_depstr: &str, use_flags: &HashSet<String>) -> V
 ///   `:166-168`), or an installed EAPI without `:=` support
 ///   (`_get_eapi_attrs(pkg.eapi).slot_operator`, `:168-169`): the live
 ///   ebuild string stands alone.
+/// - `IDEPEND` from a live EAPI without `idepend` support (backlog #194;
+///   real `bin/ebuild.sh` unsets it, `portage/eapi.py:135`): `""`.
 /// - otherwise the vdb's own built `:=` atoms for this key are appended
 ///   to the live string (`:175-180`); when the live EAPI itself lacks
 ///   `:=` support the whole overlay is void (`:176-178`, raw fallback).
@@ -27440,6 +28102,16 @@ pub(crate) fn installed_dep_string(
             if !(md5_dict::eapi_is_supported(&live_eapi) && md5_dict::eapi_is_supported(inst_eapi))
             {
                 apply_updates_to_dep_string(&raw).unwrap_or_else(|| raw.clone())
+            } else if key == "IDEPEND" && !md5_dict::eapi_has_idepend(&live_eapi) {
+                // Backlog #194: real `bin/ebuild.sh`'s own `depend`
+                // phase unsets `IDEPEND` when the EAPI lacks it
+                // (`portage/eapi.py:135`: `idepend = eapi >=
+                // Eapi("8")`), so installed-metadata readers
+                // (`FakeVartree`, serving `portdb.aux_get`) see `""`.
+                // The vdb's own record needs no gate (an EAPI-7 build
+                // never wrote an `IDEPEND` file); only the live-ebuild
+                // overlay does.
+                String::new()
             } else if ignore_built_slot_operator_deps
                 || !md5_dict::eapi_has_slot_operator(inst_eapi)
             {
@@ -28056,6 +28728,7 @@ mod tests {
             priority: 1,
             location: None,
             verify_signature: true,
+            frozen: false,
         }
     }
 
@@ -32442,6 +33115,129 @@ mod tests {
         assert_eq!(one.slot_conflicts, vec![]);
     }
 
+    #[test]
+    fn backtrack_zero_feeds_satisfiable_reverse_dep_pins_in_pass() {
+        // Backlog #209: `--backtrack=0` must not skip the
+        // reverse-dependency feed loop. Real `_resolve_conflicts`
+        // (`_emerge/depgraph.py:9444`) calls `_complete_graph()`
+        // (`:8562`) with no `_allow_backtracking` gate, so a satisfiable
+        // installed-consumer pin enforces in-pass even with backtracking
+        // off. Hermetic r25 shape (#25 S0): installed world consumer
+        // `r25consumer` pins `<r25lib-2.0:=` (both bound forms), and
+        // `-uD r25target` must withhold `r25lib-2.0` silently --
+        // `backtrack_restarts` 0 (real `backtrack: 0/20`) and no
+        // skipped-update rows (real merges `r25up-2.0 + r25target-1.0`
+        // with no warning).
+        //
+        // The fixture world file does not carry the consumer (it would
+        // perturb every other fixture-ROOT test), so the seed is set
+        // directly -- the `FX_WORLD_EXTRA=dev-libs/r25consumer`
+        // equivalent the bed cell stages.
+        let root = fixtures_root();
+        let mut config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+            &root,
+        )
+        .expect("fixture config resolves");
+        config.complete_seed_atoms = vec!["dev-libs/r25consumer".to_string()];
+        #[allow(clippy::fn_params_excessive_bools)]
+        let result = resolve_pretend_graph(
+            &root,
+            &root,
+            &["dev-libs/r25target".to_string()],
+            &config,
+            true,
+            false,
+            false,
+            true,
+            Deep::Unlimited,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            false,
+            None,
+            false,
+            false,
+            None,
+            &fixtures_root().join("distfiles"),
+            false,
+            false,
+            false,
+            0,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            true,
+            false,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend_graph(r25target) failed: {e}"));
+        // The lib upgrade is withheld: no merge of any r25lib version.
+        assert!(
+            result.entries.iter().all(|e| {
+                e.package != "r25lib"
+                    || matches!(e.outcome, PretendOutcome::AlreadyInstalled { .. })
+            }),
+            "r25lib must settle installed, not merge: {:?}",
+            result
+                .entries
+                .iter()
+                .filter(|e| e.package == "r25lib")
+                .collect::<Vec<_>>()
+        );
+        // Real's silence: no slot-operator withhold rows at bt0 (the
+        // minimizer/probe path writes no missed-update state).
+        assert_eq!(result.skipped_updates, vec![]);
+        assert_eq!(result.backtrack_restarts, 0);
+        assert_eq!(result.slot_conflicts, vec![]);
+        // The rest of real's merge set is intact.
+        let versions: HashMap<(&str, &str), String> = result
+            .entries
+            .iter()
+            .filter_map(|e| match &e.outcome {
+                PretendOutcome::Upgrade { to, .. } => {
+                    Some(((e.category.as_str(), e.package.as_str()), format!("U {to}")))
+                }
+                PretendOutcome::New { version } => Some((
+                    (e.category.as_str(), e.package.as_str()),
+                    format!("N {version}"),
+                )),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            versions.get(&("dev-libs", "r25up")).map(String::as_str),
+            Some("U 2.0"),
+            "r25up still upgrades"
+        );
+        assert_eq!(
+            versions.get(&("dev-libs", "r25target")).map(String::as_str),
+            Some("N 1.0"),
+            "r25target still merges"
+        );
+    }
+
     /// Backlog #90 (S2) shared builders: a synthetic `SlotConflict`
     /// over `dev-libs/slotconflicttarget:0` from `(version, installed,
     /// [(parent_cpv, atom, parent_installed)])` rows, plus merge `New`
@@ -34237,7 +35033,217 @@ mod tests {
         .collect()
     }
 
-    /// #74 S2a: the `AlreadyInstalled` dedup is keyed by the installed
+    /// Backlog #194: resolve one atom as an `--onlydeps` root with the
+    /// given `--onlydeps-with-*` values, over the shared fixture tree --
+    /// the unit-level counterpart of the `odw0*` contract cells. A full
+    /// `ResolveRequest` (like production's own `run_resolve` builds it),
+    /// since the legacy marshaller answers with onlydeps off.
+    fn graph_onlydeps(
+        atom_str: &str,
+        with_rdeps: bool,
+        with_ideps: bool,
+    ) -> Vec<(String, PretendOutcome)> {
+        let root = fixtures_root();
+        let req = ResolveRequest {
+            config_root: root.clone(),
+            root: root.clone(),
+            atoms: vec![atom_str.to_string()],
+            config: test_config(),
+            newuse: false,
+            changed_use: false,
+            nodeps: false,
+            onlydeps: true,
+            onlydeps_with_rdeps: with_rdeps,
+            onlydeps_with_ideps: with_ideps,
+            update: false,
+            deep: Deep::NotRequested,
+            excluded: Vec::new(),
+            with_bdeps: true,
+            changed_deps: false,
+            changed_slot: false,
+            with_test_deps: false,
+            changed_deps_report: false,
+            selective: false,
+            autounmask_suggest_keywords: false,
+            autounmask_suggest_use: false,
+            autounmask_suggest_license: false,
+            autounmask_suggest_masks: false,
+            usepkg: false,
+            usepkgonly: false,
+            binpkg_respect_use: false,
+            usepkg_exclude: Vec::new(),
+            usepkg_include: Vec::new(),
+            rebuilt_binaries: false,
+            rebuilt_binaries_timestamp: None,
+            newrepo: false,
+            buildpkgonly: false,
+            root_deps_running_root: None,
+            distdir: root.join("distfiles"),
+            empty: false,
+            getbinpkg: false,
+            ignore_built_slot_operator_deps: false,
+            backtrack_max: 10,
+            reinstall_atoms: Vec::new(),
+            rebuild_if_new_slot: true,
+            rebuild_if_unbuilt: false,
+            rebuild_if_new_rev: false,
+            rebuild_if_new_ver: false,
+            rebuild_exclude: Vec::new(),
+            rebuild_ignore: Vec::new(),
+            dynamic_deps: true,
+            implicit_system_deps: true,
+            complete: false,
+            solver: SolverKind::Portage,
+        };
+        active_resolver()
+            .resolve(&req)
+            .unwrap_or_else(|e| panic!("resolve({atom_str}) failed: {e}"))
+            .entries
+            .into_iter()
+            .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
+            .collect()
+    }
+
+    /// Backlog #194: `--onlydeps-with-rdeps` / `--onlydeps-with-ideps`
+    /// blank an onlydeps root's dep classes exactly like real
+    /// `depgraph.py:4186-4193` (sets asserted against the
+    /// `/tmp/opencode/n194/oracle_odw.log` playground oracle; the root
+    /// itself is always resolved -- only the display layer suppresses
+    /// it -- so it stays in the entries here).
+    #[test]
+    fn onlydeps_with_rdeps_and_ideps_blank_the_root_dep_classes() {
+        let names = |entries: Vec<(String, PretendOutcome)>| {
+            let mut names: Vec<String> = entries.into_iter().map(|(n, _)| n).collect();
+            names.sort();
+            names
+        };
+        // Default (rdeps on): every class walked.
+        assert_eq!(
+            names(graph_onlydeps("dev-libs/odw0a", true, false)),
+            vec![
+                "dev-libs/odw0a",
+                "dev-libs/odw0b",
+                "dev-libs/odw0c",
+                "dev-libs/odw0d",
+                "dev-libs/odw0e",
+                "dev-libs/odw0f",
+            ],
+            "default"
+        );
+        // with-rdeps=n: build-time keys (DEPEND B, BDEPEND F) only.
+        assert_eq!(
+            names(graph_onlydeps("dev-libs/odw0a", false, false)),
+            vec!["dev-libs/odw0a", "dev-libs/odw0b", "dev-libs/odw0f"],
+            "with-rdeps=n"
+        );
+        // with-rdeps=n + with-ideps=y: IDEPEND E restored.
+        assert_eq!(
+            names(graph_onlydeps("dev-libs/odw0a", false, true)),
+            vec![
+                "dev-libs/odw0a",
+                "dev-libs/odw0b",
+                "dev-libs/odw0e",
+                "dev-libs/odw0f",
+            ],
+            "with-rdeps=n with-ideps=y"
+        );
+    }
+
+    /// Backlog #194: an EAPI-7 root's `IDEPEND` never reaches the walk
+    /// (real `bin/ebuild.sh` unsets it in the depend phase), so even the
+    /// default rdeps-on shape merges no `E`.
+    #[test]
+    fn onlydeps_eapi7_root_ignores_idepend() {
+        let mut names: Vec<String> = graph_onlydeps("dev-libs/odw0g", true, false)
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec![
+                "dev-libs/odw0b",
+                "dev-libs/odw0c",
+                "dev-libs/odw0d",
+                "dev-libs/odw0g",
+            ]
+        );
+    }
+    /// Backlog #194 (review round 1): under `--onlydeps
+    /// --onlydeps-with-rdeps=n --onlydeps-with-ideps=y` on an EAPI-8
+    /// root, real keeps walking `IDEPEND` (`depgraph.py:4186-4193`;
+    /// oracle cell `[B, E, F]`), so an atom present in both a
+    /// build-time key and `IDEPEND` is a runtime edge -- not
+    /// `buildtime_hard` (real `DepPriority`: an unbreakable
+    /// merge-order edge). Pinned at the classification level: the key
+    /// selection still carries `IDEPEND`, and one shared atom enqueued
+    /// with those sets lands soft.
+    #[test]
+    fn onlydeps_ideps_atom_shared_with_buildtime_key_is_not_buildtime_hard() {
+        // rdeps blanked, ideps kept, EAPI 8: IDEPEND still classifies;
+        // with ideps blanked (or below EAPI 8) nothing does.
+        assert_eq!(onlydeps_runtime_keys(true, false, true), &["IDEPEND"][..]);
+        assert!(onlydeps_runtime_keys(true, true, true).is_empty());
+        assert!(onlydeps_runtime_keys(true, false, false).is_empty());
+        let flatten = |text: &str| -> HashSet<String> {
+            let toks: Vec<String> = text.split_whitespace().map(String::from).collect();
+            let use_flags: HashSet<String> = HashSet::new();
+            portage_use_reduce::use_reduce_flat(
+                &toks,
+                &use_flags,
+                portage_use_reduce::MatchMode::Normal,
+            )
+            .map(|v| v.into_iter().filter(|t| t != "||").collect())
+            .unwrap_or_default()
+        };
+        // One atom in both a build-time key and the walked IDEPEND.
+        let buildtime_atoms = flatten("dev-libs/odw0e");
+        let runtime_atoms = flatten("dev-libs/odw0e");
+        assert!(buildtime_atoms.contains("dev-libs/odw0e"));
+        assert!(runtime_atoms.contains("dev-libs/odw0e"));
+        let mut queue = VecDeque::new();
+        let mut blockers = Vec::new();
+        enqueue_flat_deps(
+            vec!["dev-libs/odw0e".to_string()],
+            &("dev-libs".to_string(), "odw0a".to_string()),
+            "1",
+            1,
+            &HashSet::new(),
+            &mut queue,
+            &mut blockers,
+            &buildtime_atoms,
+            &runtime_atoms,
+            &HashSet::new(),
+        );
+        assert_eq!(queue.len(), 1);
+        assert!(
+            !queue[0].buildtime_hard,
+            "an IDEPEND-walked atom is a runtime edge even when rdeps are blanked"
+        );
+    }
+
+    /// Backlog #194 (review round 1): the read-time EAPI gate drops
+    /// `IDEPEND` from an EAPI-7 cache entry that still carries it.
+    /// Real `egencache` could never emit such an entry (real
+    /// `bin/ebuild.sh`'s `depend` phase unsets `IDEPEND` below EAPI 8),
+    /// so no fixture pins this path -- the adversarial entry is fed to
+    /// the gate directly.
+    #[test]
+    fn eapi7_cache_entry_carrying_idepend_is_gated_at_read_time() {
+        // EAPI 7 + IDEPEND present: dropped even with no onlydeps
+        // blanking.
+        assert!(!onlydeps_walk_dep_key("IDEPEND", false, false, false));
+        // EAPI 8 keeps it under the default flags ...
+        assert!(onlydeps_walk_dep_key("IDEPEND", true, false, false));
+        // ... but rdeps=n + ideps=n drops it there too.
+        assert!(!onlydeps_walk_dep_key("IDEPEND", true, true, true));
+        // Build-time keys are never gated; RDEPEND/PDEPEND fall to the
+        // rdeps blank only.
+        assert!(onlydeps_walk_dep_key("DEPEND", false, true, true));
+        assert!(onlydeps_walk_dep_key("BDEPEND", false, true, true));
+        assert!(!onlydeps_walk_dep_key("RDEPEND", false, true, true));
+        assert!(onlydeps_walk_dep_key("RDEPEND", true, false, false));
+    }
     /// instance's own slot (real's `pkg.slot_atom` node identity), not
     /// the cp. `fixtures/var/db/pkg` has `dev-libs/slotdedup-1.0` (slot
     /// 1, no deps) and `slotdedup-2.0` (slot 2, RDEPEND
@@ -38125,12 +39131,13 @@ mod tests {
         ];
 
         // Pure hard cycle hca <-> hcb: reported, rotated to start at the
-        // lowest index (hca).
+        // lowest index (hca). The entries carry no `deps`, so the #228
+        // slot-op arm never fires and no vdb is consulted (fake root).
         let mut hard: EdgeKindMap = HashMap::new();
         hard.insert((cp("hcb"), cp("hca")), (true, false));
         hard.insert((cp("hca"), cp("hcb")), (true, false));
         assert_eq!(
-            find_hard_cycles(&entries, &hard),
+            find_hard_cycles(&entries, &hard, Path::new("/nonexistent-root")),
             vec![vec![hardcpv("hca"), hardcpv("hcb")]]
         );
 
@@ -38139,7 +39146,7 @@ mod tests {
         let mut mixed: EdgeKindMap = HashMap::new();
         mixed.insert((cp("hcb"), cp("hca")), (true, false));
         mixed.insert((cp("hca"), cp("hcb")), (true, true));
-        assert!(find_hard_cycles(&entries, &mixed).is_empty());
+        assert!(find_hard_cycles(&entries, &mixed, Path::new("/nonexistent-root")).is_empty());
 
         // An AlreadyInstalled node can't be in a build-time cycle.
         let installed = vec![
@@ -38152,7 +39159,139 @@ mod tests {
                 ..graph_entry("dev-libs", "hcb", "1.0")
             },
         ];
-        assert!(find_hard_cycles(&installed, &hard).is_empty());
+        assert!(find_hard_cycles(&installed, &hard, Path::new("/nonexistent-root")).is_empty());
+    }
+
+    #[test]
+    fn find_hard_cycles_ignores_a_suppressed_disjunctive_slot_op_branch() {
+        // Backlog #228 fix round 1 (review Important-1): real's digraph
+        // holds the `||` branch the walk selected (real
+        // `dep_check.py::dep_zapdeps`' `choice_bins`: the first branch,
+        // in written order, all of whose atoms resolve in the graph
+        // wins), not a suppressed one. Owner `dev-libs/own` carries
+        // RDEPEND `|| ( dev-libs/keb dev-libs/kea:= )`; the walk kept the
+        // first (plain run-time) branch, while `dev-libs/kea` is
+        // merge-bound through its own hard DEPEND back-edge to the
+        // owner. The discarded `:=` branch's unsatisfied
+        // `runtime_slot_op` edge must not harden `own -> kea`: there is
+        // no cycle to report. (Pre-fix the unrecorded-edge arm added
+        // that suppressed edge and reported a phantom `own -> kea ->
+        // own` cycle.)
+        let cp = |p: &str| ("dev-libs".to_string(), p.to_string());
+        let runtime = DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        };
+        let runtime_slot_op = DepPriority {
+            runtime: true,
+            runtime_slot_op: true,
+            ..DepPriority::default()
+        };
+        let buildtime = DepPriority {
+            buildtime: true,
+            ..DepPriority::default()
+        };
+        let alt_edge = |pkg: &str, atom: &str, priority: DepPriority, branch: u32| DepEdge {
+            atom: atom.to_string(),
+            evaluated: atom.to_string(),
+            category: "dev-libs".to_string(),
+            package: pkg.to_string(),
+            priority,
+            disjunctive: true,
+            alt: Some((0, branch)),
+            key: 0,
+        };
+        let mut own = graph_entry("dev-libs", "own", "1.0");
+        own.deps = vec![
+            alt_edge("keb", "dev-libs/keb", runtime, 0),
+            alt_edge("kea", "dev-libs/kea:=", runtime_slot_op, 1),
+        ];
+        let mut kea = graph_entry("dev-libs", "kea", "1.0");
+        kea.deps = vec![DepEdge {
+            atom: "dev-libs/own".to_string(),
+            evaluated: "dev-libs/own".to_string(),
+            category: "dev-libs".to_string(),
+            package: "own".to_string(),
+            priority: buildtime,
+            disjunctive: false,
+            alt: None,
+            key: 3,
+        }];
+        let keb = graph_entry("dev-libs", "keb", "1.0");
+        let entries = vec![own, kea, keb];
+        // The walk recorded the kept branch (soft run-time) and kea's
+        // hard back-edge; the suppressed `:=` branch has no map entry.
+        let mut map: EdgeKindMap = HashMap::new();
+        map.insert((cp("keb"), cp("own")), (false, true));
+        map.insert((cp("own"), cp("kea")), (true, false));
+        assert!(find_hard_cycles(&entries, &map, Path::new("/nonexistent-root")).is_empty());
+    }
+
+    #[test]
+    fn find_hard_cycles_slot_op_gate_requires_the_child_slot_like_real() {
+        // Backlog #228 fix round 1 (review Important-2): real filters
+        // `inst_pkgs` to the child's slot and sub-slot for
+        // `slot_operator == "="` (real
+        // `depgraph.py::_add_pkg_dep_string`), so an installed same-cp
+        // different-slot instance does NOT satisfy a `:=` edge. Owner
+        // `dev-libs/sown -RDEPEND:=-> dev-libs/sdep` (child slot `1`)
+        // with `dev-libs/sdep-1.0:0` installed: the edge stays hard and
+        // the two-cycle reports. With `dev-libs/sdep-1.0:1/0`
+        // installed the edge is satisfied and breakable: no cycle.
+        let cp = |p: &str| ("dev-libs".to_string(), p.to_string());
+        let runtime_slot_op = DepPriority {
+            runtime: true,
+            runtime_slot_op: true,
+            ..DepPriority::default()
+        };
+        let buildtime = DepPriority {
+            buildtime: true,
+            ..DepPriority::default()
+        };
+        let plain_edge = |pkg: &str, atom: &str, priority: DepPriority, key: u8| DepEdge {
+            atom: atom.to_string(),
+            evaluated: atom.to_string(),
+            category: "dev-libs".to_string(),
+            package: pkg.to_string(),
+            priority,
+            disjunctive: false,
+            alt: None,
+            key,
+        };
+        let make_entries = || {
+            let mut sown = graph_entry("dev-libs", "sown", "1.0");
+            sown.deps = vec![plain_edge("sdep", "dev-libs/sdep:=", runtime_slot_op, 0)];
+            let mut sdep = graph_entry("dev-libs", "sdep", "1.0");
+            sdep.slot = Some("1".to_string());
+            sdep.sub_slot = Some("0".to_string());
+            sdep.deps = vec![plain_edge("sown", "dev-libs/sown", buildtime, 3)];
+            vec![sown, sdep]
+        };
+        let make_map = || {
+            let mut map: EdgeKindMap = HashMap::new();
+            map.insert((cp("sdep"), cp("sown")), (false, true));
+            map.insert((cp("sown"), cp("sdep")), (true, false));
+            map
+        };
+        let make_vdb = |name: &str, slot: &str| {
+            let root = masters_test_root(name);
+            let vdb = root.join("var/db/pkg/dev-libs/sdep-1.0");
+            std::fs::create_dir_all(&vdb).unwrap();
+            std::fs::write(vdb.join("SLOT"), format!("{slot}\n")).unwrap();
+            root
+        };
+        // Installed slot `0`, child slot `1`: unsatisfied (hard).
+        let root = make_vdb("n228-slot-gate-other-slot", "0");
+        assert_eq!(
+            find_hard_cycles(&make_entries(), &make_map(), &root),
+            vec![vec![
+                "dev-libs/sown-1.0".to_string(),
+                "dev-libs/sdep-1.0".to_string()
+            ]]
+        );
+        // Installed slot `1/0`, child slot `1/0`: satisfied (soft).
+        let root = make_vdb("n228-slot-gate-same-slot", "1/0");
+        assert!(find_hard_cycles(&make_entries(), &make_map(), &root).is_empty());
     }
 
     #[test]
@@ -38224,6 +39363,39 @@ mod tests {
             &result.entries,
         );
         assert!(sols.is_empty(), "{:?}", sols);
+    }
+
+    #[test]
+    fn mixed_priority_cycle_reports_per_edge_labels() {
+        // Backlog #228: `dev-libs/slopcyca -RDEPEND:=-> dev-libs/slopcycb
+        // -DEPEND-> dev-libs/slopcyca`. The `RDEPEND` `:=` edge is an
+        // unsatisfied `runtime_slot_op` priority -- unbreakable at every
+        // `ignore_priority` rung, so real aborts (n228 probe: real
+        // 3.0.81.3 rc 1 with `(buildtime)` on the back edge and
+        // `(runtime_slot_op)` on the slot-op edge) where the pre-#228
+        // detector saw only a soft run-time edge and merged silently.
+        // Rotation starts at the requested atom (lowest entries index --
+        // the #208 family, not this slice), so the labels read
+        // `runtime_slot_op` into the second line, `buildtime` closing.
+        let result = graph_result_real("dev-libs/slopcyca");
+        assert_eq!(
+            result.circular_deps,
+            vec![vec![
+                "dev-libs/slopcyca-1.0".to_string(),
+                "dev-libs/slopcycb-1.0".to_string()
+            ]]
+        );
+        assert_eq!(
+            cycle_edge_labels(&result.entries, &result.circular_deps[0]),
+            vec!["runtime_slot_op".to_string(), "buildtime".to_string()]
+        );
+        // The all-buildtime fixtures keep the old rendering: every
+        // edge labels `(buildtime)`.
+        let hard = graph_result_real("dev-libs/hardcyclea");
+        assert_eq!(
+            cycle_edge_labels(&hard.entries, &hard.circular_deps[0]),
+            vec!["buildtime".to_string(), "buildtime".to_string()]
+        );
     }
 
     #[test]
@@ -41399,6 +42571,7 @@ mod tests {
             true,
             false,
             &HashSet::new(),
+            &[],
         );
         assert_eq!(
             scheduled,
@@ -41424,6 +42597,7 @@ mod tests {
             true,
             false,
             &HashSet::new(),
+            &[],
         );
         assert!(empty_sched.is_empty() && empty_abi.is_empty());
 
@@ -41441,6 +42615,7 @@ mod tests {
             true,
             false,
             &HashSet::new(),
+            &[],
         );
         assert!(none_sched.is_empty() && none_abi.is_empty());
 
@@ -41476,6 +42651,7 @@ mod tests {
             true,
             false,
             &HashSet::new(),
+            &[],
         );
         assert_eq!(again, already, "the set is stable -- no second restart");
         assert_eq!(
@@ -41495,6 +42671,9 @@ mod tests {
             std::slice::from_ref(&bar_upgrade),
             &reach,
             true,
+            &[],
+            false,
+            &HashSet::new(),
         );
         let names: Vec<&str> = out.iter().map(|e| e.package.as_str()).collect();
         assert_eq!(names, vec!["stale"]);
@@ -41505,6 +42684,115 @@ mod tests {
                 ..
             }
         ));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #211 I1: the `--solver=` bridge fixpoint runs the
+    /// new-slot update arm once `update`/`top_level_cps` are threaded
+    /// through, so both solvers agree -- a slot-moving provider merged
+    /// fresh schedules the walked consumer bound to the old slot, and
+    /// stays off without `--update` (real's `want_update` gate).
+    #[test]
+    fn slot_operator_bridge_entries_run_the_new_slot_arm() {
+        use md5::Digest as _;
+        use std::fmt::Write as _;
+        let dir = std::env::temp_dir().join(format!(
+            "portage-repo-slotop-bridge-newslot-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        for (name, slot, rdepend) in [
+            ("massb-1", "1", ""),
+            ("massc-1", "0", "dev-libs/massb:1/1="),
+        ] {
+            let d = dir.join("var/db/pkg/dev-libs").join(name);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+            fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+            fs::write(d.join("repository"), "testrepo\n").unwrap();
+            if !rdepend.is_empty() {
+                fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+            }
+        }
+        let repo = dir.join("repo");
+        for (pkg, pv, slot) in [("massb", "2.0", "2/2"), ("massc", "1.0", "0")] {
+            let d = repo.join("dev-libs").join(pkg);
+            std::fs::create_dir_all(&d).unwrap();
+            let body = format!(
+                "EAPI=8\nDESCRIPTION=\"211 bridge\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\n"
+            );
+            std::fs::write(d.join(format!("{pkg}-{pv}.ebuild")), body.as_bytes()).unwrap();
+            let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+            let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=211 bridge\nEAPI=8\n".to_string();
+            writeln!(entry, "KEYWORDS=amd64\nSLOT={slot}\n_md5_={md5}").unwrap();
+            let cachedir = repo.join("metadata/md5-cache/dev-libs");
+            std::fs::create_dir_all(&cachedir).unwrap();
+            std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+        }
+        let repos = vec![RepoConfig {
+            name: "testrepo".to_string(),
+            location: repo.clone(),
+            priority: 0,
+            is_main: true,
+            masters: vec![],
+            profile_formats: vec![],
+            cache_formats: vec![],
+            aliases: vec![],
+            sync_type: None,
+            sync_uri: None,
+            volatile: false,
+            module_specific_options: vec![],
+        }];
+        let fresh = GraphEntry {
+            slot: Some("2".into()),
+            sub_slot: Some("2".into()),
+            ..graph_entry("dev-libs", "massb", "2.0")
+        };
+        let consumer = GraphEntry {
+            outcome: PretendOutcome::AlreadyInstalled {
+                version: "1.0".into(),
+            },
+            slot: Some("0".into()),
+            sub_slot: Some("0".into()),
+            ..graph_entry("dev-libs", "massc", "1.0")
+        };
+        let entries = [fresh, consumer];
+        // With `--update` the bridge synthesises the consumer rebuild,
+        // exactly like the default path's scan-then-seed.
+        let (out, _) = slot_operator_rebuild_entries(
+            &dir,
+            &repos,
+            &entries,
+            &HashSet::new(),
+            true,
+            &[],
+            true,
+            &HashSet::new(),
+        );
+        let names: Vec<&str> = out.iter().map(|e| e.package.as_str()).collect();
+        assert_eq!(names, vec!["massc"]);
+        assert!(matches!(
+            out[0].outcome,
+            PretendOutcome::Reinstall {
+                slot_operator_rebuild: true,
+                ..
+            }
+        ));
+        // Without `--update` (and no arg-chain) the arm stays off.
+        let (off, _) = slot_operator_rebuild_entries(
+            &dir,
+            &repos,
+            &entries,
+            &HashSet::new(),
+            true,
+            &[],
+            false,
+            &HashSet::new(),
+        );
+        assert!(off.is_empty(), "no want_update, no schedule");
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -41604,6 +42892,7 @@ mod tests {
             true,
             true,
             &HashSet::new(),
+            &[],
         );
         assert_eq!(
             scheduled,
@@ -41629,6 +42918,7 @@ mod tests {
             true,
             false,
             &HashSet::new(),
+            &[],
         );
         assert!(withheld.is_empty(), "without --update the probe withholds");
         // ...unless the provider itself is directly requested (real's
@@ -41644,6 +42934,7 @@ mod tests {
             true,
             false,
             &top,
+            &[],
         );
         assert_eq!(via_arg, BTreeSet::from([massc.clone()]));
         // A lower-version fresh slot is a downgrade real never probes.
@@ -41665,6 +42956,7 @@ mod tests {
             true,
             true,
             &HashSet::new(),
+            &[],
         );
         assert!(downgraded.is_empty(), "downgrades never probe");
         // No tree candidate for the consumer: no replacement parent, no
@@ -41679,6 +42971,7 @@ mod tests {
             true,
             true,
             &HashSet::new(),
+            &[],
         );
         assert!(nocand.is_empty(), "no candidate means no schedule");
         // Neither walked nor reachable: outside the probe's population.
@@ -41692,8 +42985,274 @@ mod tests {
             true,
             true,
             &HashSet::new(),
+            &[],
         );
         assert!(unwalked.is_empty(), "unwalked consumers never schedule");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// Backlog #211 R2: real `_slot_operator_check_reverse_dependencies`
+    /// (`depgraph.py:2472-2573`, gates `:2622`/`:2738`) refuses the whole
+    /// replacement when the fresh candidate violates another parent's
+    /// atom -- on the new-slot arm and the same-slot arm alike. A parent
+    /// whose pin the candidate still satisfies (built `:S/SS=`, relaxed
+    /// to `:=`) never vetoes; neither does the consumer itself (real's
+    /// `replacement_parent` skip), an out-of-scope parent real never
+    /// walked, a parent this run replaces, or an excluded one.
+    #[test]
+    fn slot_operator_update_probe_refusal_vetoes_both_arms() {
+        use md5::Digest as _;
+        use std::fmt::Write as _;
+        let base = std::env::temp_dir().join(format!(
+            "portage-repo-slotop-refusal-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        // vdb: provider `massb-1` in slot 1, consumer `massc-1` bound
+        // `massb:1/1=`, veto parent `massv-1` pinning `<massb-2`.
+        for (name, slot, rdepend) in [
+            ("massb-1", "1", ""),
+            ("massc-1", "0", "dev-libs/massb:1/1="),
+            ("massv-1", "0", "<dev-libs/massb-2"),
+        ] {
+            let d = base.join("var/db/pkg/dev-libs").join(name);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+            fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+            fs::write(d.join("repository"), "testrepo\n").unwrap();
+            if !rdepend.is_empty() {
+                fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+            }
+        }
+        let repo = base.join("repo");
+        let write_pkg = |pkg: &str, pv: &str, slot: &str| {
+            let dir = repo.join("dev-libs").join(pkg);
+            std::fs::create_dir_all(&dir).unwrap();
+            let body =
+                format!("EAPI=8\nDESCRIPTION=\"211 R2\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\n");
+            std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
+            let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+            let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=211 R2\nEAPI=8\n".to_string();
+            writeln!(entry, "KEYWORDS=amd64\nSLOT={slot}\n_md5_={md5}").unwrap();
+            let cachedir = repo.join("metadata/md5-cache/dev-libs");
+            std::fs::create_dir_all(&cachedir).unwrap();
+            std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+        };
+        write_pkg("massb", "2.0", "2/2");
+        write_pkg("massc", "1.0", "0");
+        let repos = vec![RepoConfig {
+            name: "testrepo".to_string(),
+            location: repo.clone(),
+            priority: 0,
+            is_main: true,
+            masters: vec![],
+            profile_formats: vec![],
+            cache_formats: vec![],
+            aliases: vec![],
+            sync_type: None,
+            sync_uri: None,
+            volatile: false,
+            module_specific_options: vec![],
+        }];
+        let fresh = GraphEntry {
+            slot: Some("2".into()),
+            sub_slot: Some("2".into()),
+            ..graph_entry("dev-libs", "massb", "2.0")
+        };
+        let walked_entry = |package: &str| GraphEntry {
+            outcome: PretendOutcome::AlreadyInstalled {
+                version: "1.0".into(),
+            },
+            slot: Some("0".into()),
+            sub_slot: Some("0".into()),
+            ..graph_entry("dev-libs", package, "1.0")
+        };
+        let consumer = walked_entry("massc");
+        let veto_parent = walked_entry("massv");
+        let empty: BTreeSet<(String, String)> = BTreeSet::new();
+        let massc = ("dev-libs".to_string(), "massc".to_string());
+        let scan = |entries: &[GraphEntry], excluded: &[String]| {
+            slot_operator_rebuild_scan(
+                &base,
+                &repos,
+                entries,
+                &HashSet::new(),
+                &empty,
+                &empty,
+                true,
+                true,
+                &HashSet::new(),
+                excluded,
+            )
+        };
+        // The veto parent walked: the fresh candidate violates its pin,
+        // so the whole replacement is refused -- nothing schedules.
+        let (refused, _) = scan(&[fresh.clone(), consumer.clone(), veto_parent.clone()], &[]);
+        assert!(refused.is_empty(), "a vetoed replacement schedules nothing");
+        // Out of scope (neither walked nor reachable): real never walks
+        // the parent, so there is no veto.
+        let (unscoped, _) = scan(&[fresh.clone(), consumer.clone()], &[]);
+        assert_eq!(unscoped, BTreeSet::from([massc.clone()]));
+        // Excluded: real's `excluded_pkgs` skip.
+        let (excluded_out, _) = scan(
+            &[fresh.clone(), consumer.clone(), veto_parent.clone()],
+            &["dev-libs/massv".to_string()],
+        );
+        assert_eq!(excluded_out, BTreeSet::from([massc.clone()]));
+        // Same-slot arm: an in-slot upgrade the veto parent rejects is
+        // refused the same way.
+        let upgrade = GraphEntry {
+            outcome: PretendOutcome::Upgrade {
+                from: "1.0".into(),
+                to: "2.0".into(),
+            },
+            slot: Some("1".into()),
+            sub_slot: Some("2".into()),
+            ..graph_entry("dev-libs", "massb", "2.0")
+        };
+        let reach_massc: HashSet<(String, String)> =
+            HashSet::from([massc.clone(), ("dev-libs".to_string(), "massv".to_string())]);
+        let (same_refused, _) = slot_operator_rebuild_scan(
+            &base,
+            &repos,
+            &[upgrade.clone(), consumer.clone(), veto_parent.clone()],
+            &reach_massc,
+            &empty,
+            &empty,
+            true,
+            true,
+            &HashSet::new(),
+            &[],
+        );
+        assert!(same_refused.is_empty(), "the same-slot arm refuses too");
+        let (same_kept, _) = slot_operator_rebuild_scan(
+            &base,
+            &repos,
+            &[upgrade, consumer, veto_parent],
+            &reach_massc,
+            &empty,
+            &empty,
+            true,
+            true,
+            &HashSet::new(),
+            &["dev-libs/massv".to_string()],
+        );
+        assert_eq!(same_kept, BTreeSet::from([massc]));
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// Backlog #211 item 2: the new-child-slot arm also probes
+    /// `Upgrade`/`Downgrade`/`Reinstall` entries in a slot the consumer
+    /// is not bound to. Real's candidate loop (`_iter_similar_available`,
+    /// `depgraph.py:2660-2695`) ranges over every available package, not
+    /// only fresh-slot merges; entries at the bound slot stay with the
+    /// same-slot arm and never leak into the new arm.
+    #[test]
+    fn slot_operator_new_slot_arm_probes_bound_slot_mismatched_entries() {
+        use md5::Digest as _;
+        use std::fmt::Write as _;
+        let base = std::env::temp_dir().join(format!(
+            "portage-repo-slotop-mismatch-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        // vdb: provider `massm` installed in slots 0 (`1`) and 1 (`2`),
+        // consumer `massn-1` bound `massm:0/1=`, consumer `masso-1`
+        // bound `massm:1/1=`.
+        for (name, slot, rdepend) in [
+            ("massm-1", "0", ""),
+            ("massm-2", "1", ""),
+            ("massn-1", "0", "dev-libs/massm:0/1="),
+            ("masso-1", "0", "dev-libs/massm:1/1="),
+        ] {
+            let d = base.join("var/db/pkg/dev-libs").join(name);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+            fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+            fs::write(d.join("repository"), "testrepo\n").unwrap();
+            if !rdepend.is_empty() {
+                fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+            }
+        }
+        let repo = base.join("repo");
+        for pkg in ["massn", "masso"] {
+            let dir = repo.join("dev-libs").join(pkg);
+            std::fs::create_dir_all(&dir).unwrap();
+            let body = "EAPI=8\nDESCRIPTION=\"211 mismatch\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\n";
+            std::fs::write(dir.join(format!("{pkg}-1.0.ebuild")), body).unwrap();
+            let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+            let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=211 mismatch\nEAPI=8\n".to_string();
+            writeln!(entry, "KEYWORDS=amd64\nSLOT=0\n_md5_={md5}").unwrap();
+            let cachedir = repo.join("metadata/md5-cache/dev-libs");
+            std::fs::create_dir_all(&cachedir).unwrap();
+            std::fs::write(cachedir.join(format!("{pkg}-1.0")), entry).unwrap();
+        }
+        let repos = vec![RepoConfig {
+            name: "testrepo".to_string(),
+            location: repo.clone(),
+            priority: 0,
+            is_main: true,
+            masters: vec![],
+            profile_formats: vec![],
+            cache_formats: vec![],
+            aliases: vec![],
+            sync_type: None,
+            sync_uri: None,
+            volatile: false,
+            module_specific_options: vec![],
+        }];
+        // `massm-3.0` upgrades the slot-1 instance; the consumer is bound
+        // to slot 0 -- a bound-slot mismatch on an `Upgrade` entry, with
+        // no `New` entry anywhere.
+        let upgrade = GraphEntry {
+            outcome: PretendOutcome::Upgrade {
+                from: "2".into(),
+                to: "3.0".into(),
+            },
+            slot: Some("1".into()),
+            sub_slot: Some("2".into()),
+            ..graph_entry("dev-libs", "massm", "3.0")
+        };
+        let walked_consumer = |package: &str| GraphEntry {
+            outcome: PretendOutcome::AlreadyInstalled {
+                version: "1.0".into(),
+            },
+            slot: Some("0".into()),
+            sub_slot: Some("0".into()),
+            ..graph_entry("dev-libs", package, "1.0")
+        };
+        let empty: BTreeSet<(String, String)> = BTreeSet::new();
+        let massn = ("dev-libs".to_string(), "massn".to_string());
+        // Both consumers walked, neither reachable: the same-slot arm is
+        // out of scope. `massn` (bound to slot 0) probes the slot-1
+        // upgrade; `masso` (bound to the entry's own slot 1) must not
+        // leak that entry into the new arm.
+        let (scheduled, abi) = slot_operator_rebuild_scan(
+            &base,
+            &repos,
+            &[upgrade, walked_consumer("massn"), walked_consumer("masso")],
+            &HashSet::new(),
+            &empty,
+            &empty,
+            true,
+            true,
+            &HashSet::new(),
+            &[],
+        );
+        assert_eq!(scheduled, BTreeSet::from([massn]));
+        assert_eq!(
+            abi,
+            vec![(
+                "dev-libs/massm-3.0".to_string(),
+                "dev-libs/massn-1".to_string()
+            )]
+        );
         let _ = fs::remove_dir_all(&base);
     }
 
@@ -41767,6 +43326,7 @@ mod tests {
             false,
             false,
             &HashSet::new(),
+            &[],
         );
         assert_eq!(
             scheduled, runtime_only,
@@ -41792,6 +43352,7 @@ mod tests {
             true,
             false,
             &HashSet::new(),
+            &[],
         );
         assert_eq!(
             scheduled, runtime_only,
@@ -41814,6 +43375,7 @@ mod tests {
             true,
             false,
             &HashSet::new(),
+            &[],
         );
         assert_eq!(scheduled, all_five);
         assert_eq!(
@@ -41854,6 +43416,7 @@ mod tests {
             false,
             false,
             &HashSet::new(),
+            &[],
         );
         assert_eq!(scheduled, runtime_only);
 
@@ -42163,6 +43726,7 @@ mod tests {
             true,
             false,
             &HashSet::new(),
+            &[],
         );
         assert_eq!(scheduled, BTreeSet::from([stale.clone()]));
         assert_eq!(
@@ -42184,6 +43748,7 @@ mod tests {
             true,
             false,
             &HashSet::new(),
+            &[],
         );
         assert!(done_sched.is_empty(), "`undone` suppresses the rebuild");
         // A reachable set that omits the consumer suppresses the scan --
@@ -42200,6 +43765,7 @@ mod tests {
             true,
             false,
             &HashSet::new(),
+            &[],
         );
         assert!(far_sched.is_empty(), "unreachable consumers never schedule");
         let _ = fs::remove_dir_all(&dir);
@@ -42468,6 +44034,9 @@ mod tests {
             std::slice::from_ref(&bar_upgrade),
             &reach,
             true,
+            &[],
+            false,
+            &HashSet::new(),
         );
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].slot.as_deref(), Some("0"));
@@ -43135,6 +44704,9 @@ mod tests {
             newuse: o.newuse,
             changed_use: false,
             nodeps: o.nodeps,
+            onlydeps: false,
+            onlydeps_with_rdeps: true,
+            onlydeps_with_ideps: false,
             deep: o.deep,
             excluded: &o.excluded,
             with_bdeps: o.with_bdeps,
@@ -43494,8 +45066,11 @@ mod tests {
         let mut pass = pass_161();
         pass.entries = vec![souprov_upgrade.clone()];
         // Append leg: fresh params collect the pin via config feedback.
+        // Backlog #209: the enforced-pin feedback travels as `RevDep`
+        // (same working copy as `Config`; the driver feeds it back
+        // in-pass under `--backtrack=0`).
         let decision = collect_feedback(&ctx, &BacktrackParams::default(), &mut pass, &config);
-        let PassDecision::Feedback(BacktrackFeedback::Config { params: out }) = decision else {
+        let PassDecision::Feedback(BacktrackFeedback::RevDep { params: out }) = decision else {
             panic!("a newly enforced pin retries with config");
         };
         assert_eq!(out.reverse_dep_pins, vec![pin.clone()]);
@@ -47123,6 +48698,7 @@ mod tests {
             true,
             false,
             &HashSet::new(),
+            &[],
         );
         assert!(
             rescheduled.is_empty(),
@@ -56841,6 +58417,9 @@ mod tests_163 {
             newuse: false,
             changed_use: false,
             nodeps: false,
+            onlydeps: false,
+            onlydeps_with_rdeps: true,
+            onlydeps_with_ideps: false,
             deep: Deep::NotRequested,
             excluded: no_strings,
             with_bdeps: false,

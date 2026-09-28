@@ -341,8 +341,12 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--getbinpkg-include", None),
     ("--usepkg-exclude", None),
     ("--usepkg-include", None),
-    ("--onlydeps-with-ideps", None),
-    ("--onlydeps-with-rdeps", None),
+    // `--onlydeps-with-rdeps` / `--onlydeps-with-ideps` ARE implemented
+    // -- real `main.py` `true_y_or_n` (`"True"`/`"y"`/`"n"`, bare inserts
+    // `"True"`), `depgraph.py:4186-4193` (blank an `--onlydeps` root's
+    // `RDEPEND`+`PDEPEND` on `=n`, its `IDEPEND` too unless ideps is
+    // `y`/`True`). See pretend.rs's own parse loop + `ResolveRequest`'s
+    // `onlydeps*` fields. Excluded here for the same reason.
     // `--rebuild-exclude` / `--rebuild-ignore` IS implemented -- filters
     // for the `--rebuild-if-*` scan (see pretend.rs + portage-repo's
     // `rebuild_if_entries`).
@@ -360,7 +364,10 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     // reason `--verbose`/`-v` is: the caller parses them directly. See
     // pretend.rs.
     ("--quiet-fail", None),
-    ("--read-news", None),
+    // `--read-news` IS implemented -- with `--ask`, offer `eselect news
+    // read` while calculating dependencies (see pretend.rs, backlog
+    // #231) -- deliberately excluded here for the same reason `--ask`
+    // is: the caller parses it directly.
     // `--rebuild-if-new-slot` / `-new-rev` / `-new-ver` / `-unbuilt` ARE
     // implemented -- rebuild an installed package whose build-time dep is
     // being merged this run (see pretend.rs + portage-repo's
@@ -521,11 +528,18 @@ mod tests {
     }
 
     #[test]
-    fn does_not_recognize_nodeps_itself() {
-        // --nodeps/-O is handled directly by the caller (it's
+    fn does_not_recognize_with_test_deps_itself() {
+        // --with-test-deps is handled directly by the caller (it's
         // implemented), not through this "not implemented" table.
-        assert!(lookup("--nodeps").is_none());
-        assert!(lookup("-O").is_none());
+        assert!(lookup("--with-test-deps").is_none());
+    }
+
+    #[test]
+    fn does_not_recognize_read_news_itself() {
+        // --read-news is handled directly by the caller (it's
+        // implemented, backlog #231), not through this "not
+        // implemented" table.
+        assert!(lookup("--read-news").is_none());
     }
 
     #[test]
@@ -591,13 +605,6 @@ mod tests {
         // --changed-slot is handled directly by the caller (it's
         // implemented), not through this "not implemented" table.
         assert!(lookup("--changed-slot").is_none());
-    }
-
-    #[test]
-    fn does_not_recognize_with_test_deps_itself() {
-        // --with-test-deps is handled directly by the caller (it's
-        // implemented), not through this "not implemented" table.
-        assert!(lookup("--with-test-deps").is_none());
     }
 
     #[test]

@@ -2815,19 +2815,29 @@ fn circular_node_text(
 /// as a callable unit — the `* Error: circular dependencies:` block, the
 /// `Change USE:` suggestion-or-advisory branch, and the
 /// `large_cycle_count` trailer. Faithful transcription of the `writemsg`
-/// sequence (see the call sites for the re-display note); every edge is
-/// buildtime by construction. Prints only — every call site returns
-/// `ExitCode::from(1)` itself, except the gated cycle-abort path, which
-/// prints this *before* the autounmask section (real `display_problems`
-/// order, `:11113` before `:11140`) and then continues into it.
+/// sequence (see the call sites for the re-display note). Prints only —
+/// every call site returns `ExitCode::from(1)` itself, except the gated
+/// cycle-abort path, which prints this *before* the autounmask section
+/// (real `display_problems` order, `:11113` before `:11140`) and then
+/// continues into it.
 ///
 /// Backlog #206: the block opens with real's own three newlines (real
 /// `writemsg("\n\n")` before `display(handler.merge_list)` plus
 /// `writemsg("\n")` after it, all stderr), and each cycle member renders
 /// through `circular_node_text` (real `str(Package)`).
+///
+/// Backlog #228: every cycle line after `depends on` carries its own
+/// edge's `priorities[-1]` label (real
+/// `_prepare_circular_dep_message`, `resolver/circular_dependency.py`;
+/// `DepPriority.__str__`, `_emerge/DepPriority.py`), threaded in as
+/// `edge_labels` (`portage_repo::cycle_edge_labels` over the same
+/// `entries` the message renders -- `labels[i]` is the edge
+/// `cycle[i] -> cycle[(i + 1) % len]`). All-buildtime cycles (every
+/// pin before #228) still render `(buildtime)` on every line.
 #[allow(clippy::too_many_arguments)]
 fn print_circular_block(
     cycle: &[String],
+    edge_labels: &[String],
     color: &Colorizer,
     repos: &[portage_repo::RepoConfig],
     config: &portage_profile::Config,
@@ -2838,11 +2848,15 @@ fn print_circular_block(
     let prefix = color.c("BAD", " * ");
     eprint!("\n\n\n{prefix}Error: circular dependencies:\n\n");
     // `_prepare_circular_dep_message`: `<node> depends on`, then each
-    // subsequent `<node> (buildtime)` at a growing one-space indent,
-    // closing back on the first package. Each node is real
-    // `str(Package)` (`circular_node_text`); a member missing from
-    // `entries` (unreachable for resolver-built cycles) keeps the bare
-    // cpv so the block still prints.
+    // subsequent `<node> (<priorities[-1]>)` at a growing one-space
+    // indent, closing back on the first package. Each node is real
+    // `str(Package)` (`circular_node_text`); each label is real
+    // `DepPriority.__str__` of the edge into that line's package
+    // (`edge_labels`, backlog #228 -- `(buildtime)` on every line for
+    // the all-buildtime cycles that were the only reachable shape
+    // before it). A member missing from `entries` (unreachable for
+    // resolver-built cycles) keeps the bare cpv so the block still
+    // prints.
     let mut by_cpv: HashMap<String, (String, String, String, &str)> = HashMap::new();
     for e in entries {
         let version = match &e.outcome {
@@ -2875,11 +2889,24 @@ fn print_circular_block(
         }
     };
     let mut lines: Vec<String> = vec![format!("{} depends on", node(&cycle[0]))];
+    // Backlog #228: `edge_labels[i]` is the edge into line `i + 1`'s
+    // package (`cycle[i] -> cycle[i + 1]`), and the closing line's label
+    // is the wrap-around edge (`cycle[last] -> cycle[0]`). A short
+    // slice (unreachable -- `cycle_edge_labels` emits one label per
+    // member) falls back to `(buildtime)`, the pre-#228 rendering.
     for (pos, pkg) in cycle.iter().enumerate().skip(1) {
-        lines.push(format!("{}{} (buildtime)", " ".repeat(pos), node(pkg)));
+        let label = edge_labels
+            .get(pos - 1)
+            .map(String::as_str)
+            .unwrap_or("buildtime");
+        lines.push(format!("{}{} ({label})", " ".repeat(pos), node(pkg)));
     }
+    let closing = edge_labels
+        .last()
+        .map(String::as_str)
+        .unwrap_or("buildtime");
     lines.push(format!(
-        "{}{} (buildtime)",
+        "{}{} ({closing})",
         " ".repeat(cycle.len()),
         node(&cycle[0])
     ));
@@ -3115,6 +3142,8 @@ Dependency and target selection:
       --selective[=y|n]      same as --noreplace; =n cancels it
   -1, --oneshot              merge without recording the target in world / world_sets
   -o, --onlydeps             merge the targets' dependencies but not the targets themselves
+      --onlydeps-with-rdeps[=y|n]  include runtime deps under --onlydeps (default y)
+      --onlydeps-with-ideps[=y|n]  include install-time deps under --onlydeps --onlydeps-with-rdeps=n (default n)
   -O, --nodeps               ignore dependencies entirely
   -X, --exclude ATOMS        never act on a matching package (repeatable, space separated)
       --newrepo              reinstall if the package would now come from a different repo
@@ -3160,6 +3189,7 @@ Build scheduling:
   -l, --load-average N       hold new builds while the load average exceeds N
   -a, --ask[=y|n]            prompt for confirmation before a real merge or removal
       --ask-enter-invalid    with --ask: a bare Enter is not accepted as Yes
+      --read-news[=y|n]      with --ask: offer to read unread news via eselect
       --ignore-default-opts  ignore the EMERGE_DEFAULT_OPTS variable for this run
       --keep-going           on a build failure, drop that package's dependents and carry on
       --quiet-build[=y|n]    redirect a build's phase output to ${T}/build.log (implied by -j >1 and -q)
@@ -4886,9 +4916,12 @@ fn stdin_is_tty() -> bool {
 /// matches "Yes") -- an unrecognized response reprints "Sorry,
 /// response '...' not understood." and loops again, real's own
 /// behavior, rather than giving up on the first bad answer. Returns
-/// `true` for "Yes"/EOF, `false` (after printing `Quitting.`, a caller-
+/// `true` for "Yes", `false` (after printing `Quitting.`, a caller-
 /// side convenience real portage's own callers each print for
-/// themselves) for "No". TTY gating happens once, globally, before
+/// themselves) for "No" -- and `false` (after printing
+/// `Interrupted.`, then `Quitting.`) on EOF or a read error, the same
+/// `128 + SIGINT` exit the merge-list prompt already takes below.
+/// TTY gating happens once, globally, before
 /// `ask` is ever `true` at all (`run()`'s own `stdin_is_tty` check
 /// right after CLI parsing) -- by the time this runs, stdin is already
 /// known to be a real terminal.
@@ -4897,6 +4930,29 @@ fn stdin_is_tty() -> bool {
 /// makes a bare Enter loop back for a real answer instead of matching
 /// "Yes"; see `classify_yes_no`.
 fn ask_confirm(color: &Colorizer, question: &str) -> bool {
+    if ask_yes_no(color, question) == Some(true) {
+        return true;
+    }
+    println!("\nQuitting.\n");
+    false
+}
+
+/// The prompt half of `ask_confirm`, without the decline side effect:
+/// the same bold `<question>` + `[Yes/No]` loop, but a "No" (or EOF)
+/// answer just returns `false` with nothing printed -- real
+/// `UserQuery.query` itself prints nothing on "No" either (each real
+/// caller decides what a decline means). Backlog #231 needs this for
+/// the "read the news items while calculating dependencies?" prompt
+/// (real `_emerge/actions.py:4271-4281`): answering "No" there skips
+/// the `eselect` spawn and continues into `action_build`, it does not
+/// quit the run.
+///
+/// Returns `None` on EOF or a read error (after printing real
+/// `UserQuery.query`'s own `Interrupted.`, `_emerge/UserQuery.py:74-76`):
+/// the news prompt (backlog #234) turns that into real's
+/// `sys.exit(128 + SIGINT)` before `action_build`, while `ask_confirm`
+/// folds it into its ordinary decline arm.
+fn ask_yes_no(color: &Colorizer, question: &str) -> Option<bool> {
     use std::io::Write;
     print!("\n{} ", color.c("bold", question));
     loop {
@@ -4910,17 +4966,16 @@ fn ask_confirm(color: &Colorizer, question: &str) -> bool {
         match std::io::stdin().read_line(&mut line) {
             Ok(0) => {
                 println!("Interrupted.");
-                return false;
+                return None;
             }
             Err(_) => {
                 println!("Interrupted.");
-                return false;
+                return None;
             }
             Ok(_) => match classify_yes_no(line.trim(), ask_enter_invalid()) {
-                Some(true) => return true,
+                Some(true) => return Some(true),
                 Some(false) => {
-                    println!("\nQuitting.\n");
-                    return false;
+                    return Some(false);
                 }
                 None => print!("Sorry, response '{}' not understood. ", line.trim()),
             },
@@ -5092,8 +5147,46 @@ fn run_resume(
     // Real `--quiet` (`noiselimit < 0`, `actions.py:3907-3908`): suppresses
     // the post-merge info-regen einfo lines like every other action's.
     quiet: bool,
+    // Backlog #231 (a/c): real `run_action` prints the pre-resolution
+    // news notice (and offers the `--read-news` prompt) before
+    // `action_build` -- which is where the resume handling lives -- so
+    // resumed builds print both notices too.
+    ask: bool,
+    read_news: bool,
 ) -> ExitCode {
+    let color = Colorizer::new(color::resolve_havecolor(color_opt));
+    let repos = match portage_repo::find_repos(config_root) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("emerge: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    // Backlog #231 (a): real `_emerge/actions.py::run_action`
+    // (`actions.py:4266-4270`) prints the GLEP 42 pre-resolution notice
+    // before `action_build` -- and the resume handling (`resume =
+    // True`, `resume_depgraph`, `actions.py:220-...`) lives *inside*
+    // `action_build` -- so a resumed build prints it too (even when the
+    // resume list turns out missing or empty below: real's notice
+    // precedes all of that). Gated on non-`--pretend` like real; the
+    // `--ask` + `--read-news` prompt (c) rides the same pre point.
+    let resume_pre_printed = if !pretend {
+        display_news_notice_if_any(&repos, root, config, &color)
+    } else {
+        false
+    };
+    // An interrupted news prompt (backlog #234) exits `128 + SIGINT`
+    // before `action_build`, like real `UserQuery.query`'s own
+    // `sys.exit` (`_emerge/UserQuery.py:74-76`).
+    if offer_news_reading(ask, read_news, resume_pre_printed, &color) {
+        return ExitCode::from(130);
+    }
     let Some((favorites, mut mergelist, opts)) = crate::mtimedb::read_resume_list(root) else {
+        // Real reaches `post_emerge` even on this path (unconditional
+        // in `run_action`, `actions.py:4289-4297`): with nothing merged
+        // that prints the notice only under `--pretend`
+        // (`post_emerge.py:112-117`) -- a no-op otherwise.
+        pretend_end_news_notice(pretend, &repos, root, config, &color);
         eprintln!("emerge: could not find a valid resume list");
         return ExitCode::from(1);
     };
@@ -5102,17 +5195,12 @@ fn run_resume(
     }
     if mergelist.is_empty() {
         crate::mtimedb::clear_resume_list(root);
+        // Same `post_emerge` arm as above: only a `--pretend` run
+        // prints here.
+        pretend_end_news_notice(pretend, &repos, root, config, &color);
         println!("emerge: the resume list is empty; nothing to do.");
         return ExitCode::SUCCESS;
     }
-
-    let repos = match portage_repo::find_repos(config_root) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("emerge: {e}");
-            return ExitCode::from(1);
-        }
-    };
     // The local binary pool for resumed `Binary` entries (real's bintree
     // re-resolution, backlog #186): the resolver's own pool constructor,
     // so a resumed binary names the same `::repo` a fresh merge would.
@@ -5163,7 +5251,6 @@ fn run_resume(
     // re-derived `N`/`U`/`R` markers, same limitation the resume merge
     // itself already carries.
     if pretend {
-        let color = Colorizer::new(color::resolve_havecolor(color_opt));
         let mut blocker_lines: Vec<String> = Vec::new();
         for (i, _entry) in entries.iter().enumerate() {
             print_entry_line(
@@ -5198,6 +5285,11 @@ fn run_resume(
                 false,
             );
         }
+        // Backlog #231 (a): real reaches `post_emerge` after the
+        // `--resume --pretend` display too (`actions.py:4289-4297`),
+        // printing the notice when the vdb did not change
+        // (`post_emerge.py:112-117`).
+        pretend_end_news_notice(pretend, &repos, root, config, &color);
         return ExitCode::SUCCESS;
     }
 
@@ -5307,6 +5399,13 @@ fn run_resume(
         {
             eprintln!("emerge: {e}");
         }
+        // Backlog #231 (a): real `post_emerge.py:155` prints the notice
+        // regardless of retval -- gated on the vdb having changed
+        // (`:112-117`), which here is `still.len() < entries.len()` (at
+        // least one resumed entry landed; the same structural
+        // approximation as the non-resume failure arms'
+        // `merge_failure_news_notice`).
+        merge_failure_news_notice(still.len() < entries.len(), &repos, root, config, &color);
         return ExitCode::from(1);
     }
 
@@ -5332,13 +5431,17 @@ fn run_resume(
     // `--resume` too (the vdb changed -- the failure branch above
     // already returned, and an empty mergelist returned even earlier),
     // before the preserved-libs advisory.
-    let color = Colorizer::new(color::resolve_havecolor(None));
     let noinfo = config_features_list(config).iter().any(|t| t == "noinfo");
     if let Err(e) = crate::info_files::post_merge_info_update(root, &color, quiet, noinfo) {
         eprintln!("emerge: {e}");
         return ExitCode::from(1);
     }
     crate::preserved_libs::show_preserved_libs_notice(root, &color, false, false);
+    // Backlog #231 (a): real `post_emerge()` (`post_emerge.py:155`)
+    // prints the GLEP 42 notice a second time once the resumed merge
+    // changed the vdb -- same FEATURES-plus-nonzero-count gates as the
+    // non-resume success path above.
+    display_news_notice_if_any(&repos, root, config, &color);
 
     ExitCode::SUCCESS
 }
@@ -7105,7 +7208,7 @@ fn unread_news_counts(repos: &[portage_repo::RepoConfig], root: &Path) -> Vec<(S
 /// nothing at all, so a future third caller cannot emit a dangling
 /// "Use eselect…" block (review Minor #4). Shared by `--check-news`
 /// and the backlog #196 count notice so the two can never drift apart.
-fn print_news_notifications(per_repo: &[(String, usize)], color: &Colorizer) {
+fn print_news_notifications(per_repo: &[(String, usize)], color: &Colorizer) -> bool {
     let mut first = true;
     for (repo, count) in per_repo {
         if *count > 0 {
@@ -7126,6 +7229,7 @@ fn print_news_notifications(per_repo: &[(String, usize)], color: &Colorizer) {
             color.c("GOOD", "eselect news read")
         );
     }
+    !first
 }
 
 /// Real `display_news_notification`'s own gate (`post_emerge.py:38`):
@@ -7142,11 +7246,11 @@ fn news_notice_enabled(config: &portage_profile::Config) -> bool {
 /// existing `FilesystemNews` evaluation -- no second news parser). No
 /// `--quiet` gate: real's own function consults neither `--quiet` nor
 /// `--ask` (the m185 probe's `--quiet` shape shows the notice surfacing
-/// mid-merge through stdio buffering, which is not ported). The
-/// `--ask` + `--read-news` "read the news while calculating?" prompt and
-/// the `eselect news read` spawn (`actions.py:4266-4281`) are NOT ported:
-/// portuale has no eselect integration and must never block on an
-/// interactive prompt in a test harness (residue, see the #196 report).
+/// mid-merge through stdio buffering, which is not ported).
+/// Returns real `display_news_notification`'s own boolean (whether the
+/// notice printed): the `--ask` + `--read-news` prompt below only fires
+/// when the notice actually printed (real `actions.py:4268-4281`
+/// short-circuits on its falsy return).
 /// The all-zero gate lives in `print_news_notifications` (like real
 /// `news.py:526`), so this calls it unconditionally past the FEATURES
 /// gate.
@@ -7155,12 +7259,55 @@ fn display_news_notice_if_any(
     root: &Path,
     config: &portage_profile::Config,
     color: &Colorizer,
-) {
+) -> bool {
     if !news_notice_enabled(config) {
-        return;
+        return false;
     }
     let per_repo = unread_news_counts(repos, root);
-    print_news_notifications(&per_repo, color);
+    print_news_notifications(&per_repo, color)
+}
+
+/// Backlog #231 (c): real `_emerge/actions.py::run_action`
+/// (`actions.py:4266-4281`) -- when the pre-resolution notice printed
+/// *and* `--ask` *and* `--read-news` are given, real asks "Would you
+/// like to read the news items while calculating dependencies?" (real
+/// `UserQuery.query` with the `--ask-enter-invalid` flag) and spawns
+/// `eselect news read` on "Yes" (stdio inherited, return code ignored).
+/// A "No" answer skips the spawn and continues into the
+/// resolve -- only the merge-list prompt quits the run. EOF or a read
+/// error (backlog #234) prints real `UserQuery.query`'s own
+/// `Interrupted.` (inside `ask_yes_no`, `_emerge/UserQuery.py:74-76`)
+/// and reports `true` so the caller exits `128 + SIGINT` before
+/// `action_build`, exactly like real `actions.py:4270-4281` (whose
+/// `sys.exit` never reaches `action_build` either).
+/// When `eselect`
+/// is missing the spawn raises `OSError`, and real prints `Please
+/// install eselect to use this feature.` to stderr. `--ask` without a
+/// TTY never reaches here (the up-front `stdin_is_tty` gate exits
+/// first), matching real `actions.py:3917-3926`; under `--pretend`
+/// `ask` is already false, matching real's `--pretend` gate around the
+/// whole block.
+fn offer_news_reading(ask: bool, read_news: bool, notice_printed: bool, color: &Colorizer) -> bool {
+    if !(ask && read_news && notice_printed) {
+        return false;
+    }
+    match ask_yes_no(
+        color,
+        "Would you like to read the news items while calculating dependencies?",
+    ) {
+        Some(true) => {
+            match std::process::Command::new("eselect")
+                .args(["news", "read"])
+                .status()
+            {
+                Ok(_) => {}
+                Err(_) => eprintln!("Please install eselect to use this feature."),
+            }
+            false
+        }
+        Some(false) => false,
+        None => true,
+    }
 }
 
 /// Backlog #196 fix round 1: real `_emerge/post_emerge.py:112-117` --
@@ -9096,6 +9243,11 @@ pub fn run(args: &[String]) -> ExitCode {
     // (the CLI parse below sets it again from argv or the defaults).
     ASK_ENTER_INVALID.store(false, std::sync::atomic::Ordering::Relaxed);
 
+    // The live binhost-index overrides are process-wide state too
+    // (review M4): a second in-process run must resolve from its own
+    // refresh, not inherit the first run's in-memory indexes.
+    portage_repo::clear_remote_binary_index_overrides();
+
     // Config resolution comes before argv parsing, matching real
     // `emerge`'s own order: its first pass only finds `--config-root`,
     // then it loads the config and re-parses with
@@ -9145,6 +9297,13 @@ pub fn run(args: &[String]) -> ExitCode {
     // (`128 + SIGINT`). Ignored under `--pretend` (nothing executes
     // anyway).
     let mut ask = false;
+    // --read-news (real `y_or_n` insert default, `main.py:175`, with
+    // `choices: true_y_or_n`, `main.py:625`, normalized to `True`/`None`
+    // at `main.py:950-953`): with `--ask`,
+    // offer `eselect news read` while calculating dependencies (real
+    // `actions.py:4266-4281`, backlog #231). Alone it changes nothing --
+    // real's prompt requires both flags.
+    let mut read_news = false;
     // --resume/-r + --skipfirst (real `_emerge/Scheduler.py` resume
     // handling): `--resume` replays `mtimedb["resume"]["mergelist"]` --
     // the packages a previous failed `emerge <atom>` left unmerged;
@@ -9159,6 +9318,16 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut changed_use = false;
     let mut nodeps = false;
     let mut onlydeps = false;
+    // `--onlydeps-with-rdeps` / `--onlydeps-with-ideps` (real `main.py`
+    // `argument_options`, `choices: true_y_or_n` = `("True", "y", "n")`,
+    // no default): `true` = keep the key class, `false` = blank it for
+    // an `--onlydeps` root. Defaults are real's own (`man emerge.1`:
+    // with-rdeps enabled, with-ideps disabled); without `--onlydeps`
+    // both are inert (real only ever consults them behind
+    // `pkg.onlydeps`). See the parse arms below and
+    // `portage_repo::ResolveRequest`'s own doc comments.
+    let mut onlydeps_with_rdeps = true;
+    let mut onlydeps_with_ideps = false;
     // --oneshot/-1: don't record the target in the world file on a real
     // merge, and (at --pretend) don't colour it as a would-be world
     // member -- real `Scheduler._world_atom` / `_DisplayConfig.oneshot`.
@@ -9573,7 +9742,12 @@ pub fn run(args: &[String]) -> ExitCode {
             // `args_with_emerge_defaults`; accepted here as a no-op.
             i += 1;
         } else if arg == "--ask" || arg == "-a" {
-            // Real `true_y_or_n`: a bare flag, or `--ask=y`/`--ask=n`.
+            // Real `true_y_or_n`: a bare flag (real
+            // `insert_optional_args` inserts `"True"`), `--ask=y` /
+            // `--ask=True` / `--ask=n`, or a separate `y` / `n` word
+            // (only `y`/`n` are consumed -- real's insert `y_or_n`
+            // set; a separate `True` stays a positional atom, same as
+            // here where it falls through to the atom args below).
             match args.get(i + 1).map(String::as_str) {
                 Some("y") => {
                     ask = true;
@@ -9588,11 +9762,36 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
             }
-        } else if arg == "--ask=y" {
+        } else if arg == "--ask=y" || arg == "--ask=True" {
             ask = true;
             i += 1;
         } else if arg == "--ask=n" {
             ask = false;
+            i += 1;
+        } else if arg == "--read-news" {
+            // Real `true_y_or_n`: a bare flag (real
+            // `insert_optional_args` inserts `"True"`), `--read-news=y`
+            // / `--read-news=True` / `--read-news=n`, or a separate `y`
+            // / `n` word -- same separate-word shape as `--ask` above.
+            match args.get(i + 1).map(String::as_str) {
+                Some("y") => {
+                    read_news = true;
+                    i += 2;
+                }
+                Some("n") => {
+                    read_news = false;
+                    i += 2;
+                }
+                _ => {
+                    read_news = true;
+                    i += 1;
+                }
+            }
+        } else if arg == "--read-news=y" || arg == "--read-news=True" {
+            read_news = true;
+            i += 1;
+        } else if arg == "--read-news=n" {
+            read_news = false;
             i += 1;
         } else if arg == "--newuse" || arg == "-N" {
             newuse = true;
@@ -9606,6 +9805,83 @@ pub fn run(args: &[String]) -> ExitCode {
         } else if arg == "--onlydeps" || arg == "-o" {
             onlydeps = true;
             i += 1;
+        } else if arg == "--onlydeps-with-rdeps" {
+            // Real `main.py`: `default_arg_opts` `y_or_n` (a bare flag
+            // inserts `"True"`) + `argument_options`
+            // `choices: true_y_or_n` (`"True"`, `"y"`, `"n"`). A
+            // space-separated value is only consumed when it is `y` or
+            // `n` (real `insert_optional_args`); anything else leaves
+            // the bare form (`"True"`) in place and the token to the
+            // positional parser -- the same shape every other
+            // optional-value flag in this loop already has. `=True` is
+            // accepted explicitly (real argparse's own `=` form); any
+            // other value is a real, immediate usage error (real
+            // argparse's own choices validation), rc 2 either way.
+            match args.get(i + 1).map(String::as_str) {
+                Some("y") => {
+                    onlydeps_with_rdeps = true;
+                    i += 2;
+                }
+                Some("n") => {
+                    onlydeps_with_rdeps = false;
+                    i += 2;
+                }
+                _ => {
+                    onlydeps_with_rdeps = true;
+                    i += 1;
+                }
+            }
+        } else if let Some(value) = arg.strip_prefix("--onlydeps-with-rdeps=") {
+            match value {
+                "y" | "True" => {
+                    onlydeps_with_rdeps = true;
+                    i += 1;
+                }
+                "n" => {
+                    onlydeps_with_rdeps = false;
+                    i += 1;
+                }
+                _ => {
+                    eprintln!(
+                        "emerge: option \"--onlydeps-with-rdeps\": invalid choice: {value:?} (choose from \"True\", \"y\", \"n\")"
+                    );
+                    return ExitCode::from(2);
+                }
+            }
+        } else if arg == "--onlydeps-with-ideps" {
+            // Same real shape as `--onlydeps-with-rdeps` above
+            // (`default_arg_opts` `y_or_n` + `choices: true_y_or_n`).
+            match args.get(i + 1).map(String::as_str) {
+                Some("y") => {
+                    onlydeps_with_ideps = true;
+                    i += 2;
+                }
+                Some("n") => {
+                    onlydeps_with_ideps = false;
+                    i += 2;
+                }
+                _ => {
+                    onlydeps_with_ideps = true;
+                    i += 1;
+                }
+            }
+        } else if let Some(value) = arg.strip_prefix("--onlydeps-with-ideps=") {
+            match value {
+                "y" | "True" => {
+                    onlydeps_with_ideps = true;
+                    i += 1;
+                }
+                "n" => {
+                    onlydeps_with_ideps = false;
+                    i += 1;
+                }
+                _ => {
+                    eprintln!(
+                        "emerge: option \"--onlydeps-with-ideps\": invalid choice: {value:?} (choose from \"True\", \"y\", \"n\")"
+                    );
+                    return ExitCode::from(2);
+                }
+            }
         } else if arg == "--oneshot" || arg == "-1" {
             oneshot = true;
             i += 1;
@@ -11492,6 +11768,8 @@ pub fn run(args: &[String]) -> ExitCode {
             shell,
             debug,
             quiet,
+            ask,
+            read_news,
         );
     }
 
@@ -12064,16 +12342,18 @@ pub fn run(args: &[String]) -> ExitCode {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("/var/cache/distfiles"));
 
-    // Real `bintree._populate_remote`: a non-`--pretend` `--getbinpkg`
-    // run refreshes each `http(s)` binhost's `Packages` index into the
-    // local edb cache *before* resolution, so the resolver picks up the
-    // live pool. (`--pretend` deliberately never touches the network --
-    // it resolves against whatever is already cached.) A failed refresh
-    // is non-fatal (backlog #175): real warns (`!!! [<repo>] Error
-    // fetching ...`) and resolves against the local pool, so this
-    // returns nothing -- it never aborts the run.
-    if !pretend && getbinpkg {
-        emerge_getbinpkg::refresh_binhost_indexes(&config.binrepos, &root);
+    // Real `bintree._populate_remote`: a `--getbinpkg` run refreshes
+    // each binhost's `Packages` index into the local edb cache *before*
+    // resolution, so the resolver picks up the live pool -- in
+    // `--pretend` exactly like in a real merge (real `actions.py:3752`
+    // passes `getbinpkg_refresh=True` unconditionally; `pretend` only
+    // selects the stale-fallback message, never skips the fetch,
+    // `bintree.py:917-920`, backlog #192). A failed refresh is non-fatal
+    // (backlog #175): real warns (`!!! [<repo>] Error fetching ...`)
+    // and resolves against the local pool, so this returns nothing --
+    // it never aborts the run.
+    if getbinpkg {
+        emerge_getbinpkg::refresh_binhost_indexes(&config.binrepos, &root, pretend);
     }
 
     // Real `main.py:958-975` precedence for the `--rebuild-if-*` trio:
@@ -12138,7 +12418,15 @@ pub fn run(args: &[String]) -> ExitCode {
     // header, `Calculating...`), which this placement reproduces: the
     // resolution-phase display block below runs after.
     if !pretend {
-        display_news_notice_if_any(&repos, &root, &config, &color);
+        let notice_printed = display_news_notice_if_any(&repos, &root, &config, &color);
+        // Backlog #231 (c): real `actions.py:4266-4281` offers the
+        // `eselect news read` spawn here, once the notice printed. An
+        // interrupted news prompt (backlog #234) exits `128 + SIGINT`
+        // before `action_build`, like real `UserQuery.query`'s own
+        // `sys.exit` (`_emerge/UserQuery.py:74-76`).
+        if offer_news_reading(ask, read_news, notice_printed, &color) {
+            return ExitCode::from(130);
+        }
     }
     let run_resolve = |complete: bool, locked: &[String], with_seeds: bool| {
         let cfg: std::borrow::Cow<portage_profile::Config> =
@@ -12170,6 +12458,9 @@ pub fn run(args: &[String]) -> ExitCode {
             newuse,
             changed_use,
             nodeps,
+            onlydeps,
+            onlydeps_with_rdeps,
+            onlydeps_with_ideps,
             update,
             deep,
             excluded: excluded.clone(),
@@ -13371,6 +13662,7 @@ pub fn run(args: &[String]) -> ExitCode {
     {
         print_circular_block(
             cycle,
+            &portage_repo::cycle_edge_labels(&result.entries, cycle),
             &color,
             &repos,
             &config,
@@ -13798,12 +14090,13 @@ pub fn run(args: &[String]) -> ExitCode {
     }
 
     // Real `_serialize_tasks` -> `_show_circular_deps` (`depgraph.py:
-    // 10425`): an unbreakable build-time dependency cycle among the
-    // merge-bound packages -- every edge in it an unsatisfied
-    // `DEPEND`/`BDEPEND` with no run-time alternative, the only cycle
-    // real portage's `_ignore_runtime` scan can't linearize. Printed to
-    // stderr after the merge list, then the whole action fails (exit 1),
-    // pretend or not -- real portage never proceeds to build a cycle.
+    // 10425`): an unbreakable dependency cycle among the merge-bound
+    // packages -- every edge in it one real portage's `_ignore_runtime`
+    // scan can't linearize (an unsatisfied `DEPEND`/`BDEPEND` with no
+    // run-time alternative, or since backlog #228 an unsatisfied
+    // slot-operator edge). Printed to stderr after the merge list, then
+    // the whole action fails (exit 1), pretend or not -- real portage
+    // never proceeds to build a cycle.
     //
     // Faithful transcription of `_show_circular_deps`'s `writemsg`
     // sequence: the reduced cycle-only re-display
@@ -13819,8 +14112,9 @@ pub fn run(args: &[String]) -> ExitCode {
     // disqualifies it), and `fucyclec` (conditional grandparent clash
     // keeps it with `followup_change`) pin all three outcomes.
     // The shortest cycle drives `_prepare_circular_dep_message`; every
-    // edge is build-time by construction, so every priority label is
-    // `(buildtime)`.
+    // line after `depends on` carries its own edge's `priorities[-1]`
+    // label (backlog #228 -- `(buildtime)` on every line for the
+    // all-buildtime cycles, `slopcyca` pins the mixed shape).
     // Slice 5 routing for the legacy site: gate-on aborts never reach
     // here with work left (a cycle abort printed above, before the
     // autounmask section; a masked/unsat abort prints no circular block
@@ -13835,6 +14129,7 @@ pub fn run(args: &[String]) -> ExitCode {
         if !gated_abort {
             print_circular_block(
                 cycle,
+                &portage_repo::cycle_edge_labels(&result.entries, cycle),
                 &color,
                 &repos,
                 &config,
@@ -14065,6 +14360,23 @@ pub fn run(args: &[String]) -> ExitCode {
                     eprintln!("emerge: {e}");
                     return ExitCode::from(1);
                 }
+                // Backlog #231 (b): real `post_emerge`'s tail (info regen,
+                // preserved-libs notice, config-file check, the GLEP 42
+                // notice at `post_emerge.py:155`) runs only once the vdb
+                // changed (`post_emerge.py:112-117` early-returns
+                // otherwise -- printing just the notice, and only under
+                // `--pretend`). The remote plan merges onto the *remote*
+                // host (`run_remote_plan` ships every unit through the
+                // transport; the local `${ROOT}/var/db/pkg` is never
+                // touched), so from this process's vdb nothing changed:
+                // real's gate evaluates false on both the success and
+                // the failure returns above, and -- being non-`--pretend`
+                // here (every `--pretend` exit returned long before this
+                // dispatch) -- the tail would print nothing. The early
+                // return is therefore the faithful shape; no post-merge
+                // notice here by construction, pinned by the
+                // local-transport contract test. (The pre-resolution
+                // notice already printed before the resolve, like real.)
                 return ExitCode::from(0);
             }
             // Real `Scheduler.merge() -> _save_resume_list()` (#168):
@@ -14825,6 +15137,761 @@ mod tests {
     }
 
     #[test]
+    fn display_news_notice_reports_whether_it_printed() {
+        // Backlog #231 (c): the `--ask` + `--read-news` prompt fires
+        // only when the notice actually printed (real
+        // `actions.py:4268-4281` short-circuits on `display_news_
+        // notification`'s falsy return), so the helper returns real's
+        // own boolean. Gated off: `false`, no evaluation. Gated on:
+        // `true`, the hermetic 5-count evaluated and written back.
+        let color = crate::color::Colorizer::new(false);
+        let (base, root, repos, mut config) = news_notice_test_tree("notice_bool");
+        config
+            .other_vars
+            .insert("FEATURES".to_string(), String::new());
+        assert!(!display_news_notice_if_any(&repos, &root, &config, &color));
+        assert!(
+            !root.join("var/lib/gentoo/news").exists(),
+            "a gated-off notice must not evaluate news at all"
+        );
+        config
+            .other_vars
+            .insert("FEATURES".to_string(), "sandbox news userpriv".to_string());
+        assert!(display_news_notice_if_any(&repos, &root, &config, &color));
+        let unread: Vec<String> =
+            std::fs::read_to_string(root.join("var/lib/gentoo/news/news-testrepo.unread"))
+                .unwrap()
+                .lines()
+                .map(str::to_string)
+                .collect();
+        assert_eq!(unread.len(), 5);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A scratch `ROOT` with a single-item stale resume list, so
+    /// `--resume --skipfirst` empties it and takes the "nothing to do"
+    /// exit without merging anything (fast, hermetic).
+    fn single_resume_root(tag: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "resume_single_{tag}_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        crate::mtimedb::write_resume_list(
+            &root,
+            &["dev-libs/stale-a"],
+            &[(
+                crate::mtimedb::ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "stale-a".to_string(),
+                "1".to_string(),
+            )],
+            &crate::mtimedb::ResumeOpts::default(),
+        )
+        .unwrap();
+        root
+    }
+
+    /// Plain recursive copy (files + dirs + symlinks) for fixture
+    /// trees (`fixtures/var` has no symlinks; `fixtures/etc/portage`
+    /// carries `make.profile`, repointed absolutely after the copy).
+    #[cfg(unix)]
+    fn copy_tree(src: &std::path::Path, dst: &std::path::Path) {
+        std::fs::create_dir_all(dst).unwrap();
+        for entry in std::fs::read_dir(src).unwrap() {
+            let entry = entry.unwrap();
+            let dst_path = dst.join(entry.file_name());
+            let ft = entry.file_type().unwrap();
+            if ft.is_symlink() {
+                let target = std::fs::read_link(entry.path()).unwrap();
+                std::os::unix::fs::symlink(target, dst_path).unwrap();
+            } else if ft.is_dir() {
+                copy_tree(&entry.path(), &dst_path);
+            } else if ft.is_file() {
+                std::fs::copy(entry.path(), dst_path).unwrap();
+            }
+        }
+    }
+
+    /// `fixture_resolve_env` plus `FEATURES="news"` opted in -- the
+    /// same layering the contract suite's `_news_env` uses.
+    fn news_resolve_env(
+        root: &std::path::Path,
+        portage_tmpdir: &std::path::Path,
+    ) -> Vec<(String, String)> {
+        let mut env = fixture_resolve_env(root, portage_tmpdir);
+        env.push(("FEATURES".to_string(), "news".to_string()));
+        env
+    }
+
+    #[test]
+    fn resume_pretend_end_notice_prints_once_like_real() {
+        // Backlog #231 (a): real reaches `post_emerge` after the
+        // `--resume --pretend` display too (`actions.py:4289-4297`),
+        // whose `not _pkgs_changed` arm prints the notice under
+        // `--pretend` (`post_emerge.py:112-117`) -- exactly once (the
+        // pre-resolution notice is itself `--pretend`-gated,
+        // `actions.py:4266`). A stale list + `FEATURES="news"` on an
+        // isolated ROOT; no merge runs.
+        let portuale_bin = built_portuale_bin();
+        let (root, _) = stale_resume_root("news_pretend");
+        let tmp = std::env::temp_dir().join(format!(
+            "resume_news_pretend_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let output = std::process::Command::new(&portuale_bin)
+            .args(["emerge", "--resume", "--pretend"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .envs(news_resolve_env(&root, &tmp.join("pt-resume-news")))
+            .output()
+            .expect("portuale emerge spawns");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("dev-libs/stale-a-1"), "{stdout}");
+        assert_eq!(
+            stdout.matches("news items need reading").count(),
+            1,
+            "{stdout}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn resume_skipfirst_empty_list_prints_only_the_pre_notice_like_real() {
+        // Backlog #231 (a): real's pre-resolution notice precedes all
+        // of `action_build`'s resume handling (`actions.py:4266` before
+        // `:4289`), so even a `--resume --skipfirst` that empties the
+        // list prints it -- while the post notice stays silent (the
+        // vdb never changed; real `post_emerge.py:112-117`
+        // early-returns on a non-`--pretend` run). Fast: a single-item
+        // stale list, no merge runs.
+        let portuale_bin = built_portuale_bin();
+        let root = single_resume_root("news_empty");
+        let tmp = std::env::temp_dir().join(format!(
+            "resume_news_empty_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let output = std::process::Command::new(&portuale_bin)
+            .args(["emerge", "--resume", "--skipfirst"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .envs(news_resolve_env(&root, &tmp.join("pt-resume-empty")))
+            .output()
+            .expect("portuale emerge spawns");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("nothing to do"), "{stdout}");
+        assert_eq!(
+            stdout.matches("news items need reading").count(),
+            1,
+            "{stdout}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A stub `eselect` on `PATH`: an executable shell script logging
+    /// its argv to a marker file. Returns the stub dir (to prepend to
+    /// `PATH`) and the marker path.
+    #[cfg(unix)]
+    fn eselect_stub(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!(
+            "eselect_stub_{tag}_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let marker = dir.join("eselect.log");
+        std::fs::write(
+            dir.join("eselect"),
+            format!("#!/bin/sh\necho \"$@\" >> {}\n", marker.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(dir.join("eselect"), std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+        (dir, marker)
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ask_read_news_yes_spawns_eselect_and_continues() {
+        // Backlog #231 (c): real `_emerge/actions.py:4266-4281` --
+        // once the pre-resolution notice printed, `--ask --read-news`
+        // prompts "Would you like to read the news items while
+        // calculating dependencies?" and spawns `eselect news read`
+        // on "Yes", then continues into the resolve. Answering "Yes"
+        // here runs the stub (argv pinned) and the declined merge
+        // prompt still exits 130 with `Quitting.`.
+        let (stubdir, marker) = eselect_stub("yes");
+        let path = format!(
+            "{}:{}",
+            stubdir.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        // The stub dir is separate from the run's base dir so the
+        // marker survives the cleanup below for the assertion.
+        use std::io::Write;
+        let portuale_bin = built_portuale_bin();
+        let base = std::env::temp_dir().join(format!(
+            "ask_read_news_yes_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = base.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let mut env = news_resolve_env(&root, &base.join("pt"));
+        env.push(("PATH".to_string(), path));
+        let (mut master, slave_stdio) = pty_pair();
+        let child = std::process::Command::new(&portuale_bin)
+            .args([
+                "emerge",
+                "--ask",
+                "--read-news",
+                "--oneshot",
+                "dev-libs/schedok",
+            ])
+            .stdin(slave_stdio)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .envs(env)
+            .spawn()
+            .expect("portuale emerge spawns");
+        master.write_all(b"Yes\n").expect("answer the news prompt");
+        master.write_all(b"No\n").expect("decline the merge prompt");
+        let output = child.wait_with_output().expect("wait for emerge");
+        drop(master);
+        assert_eq!(
+            output.status.code(),
+            Some(130),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout
+                .contains("Would you like to read the news items while calculating dependencies?"),
+            "{stdout}"
+        );
+        assert_eq!(
+            stdout.matches("news items need reading").count(),
+            1,
+            "{stdout}"
+        );
+        assert!(stdout.contains("Quitting."), "{stdout}");
+        assert_eq!(
+            std::fs::read_to_string(&marker).unwrap_or_default(),
+            "news read\n",
+        );
+        let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(stubdir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ask_read_news_no_skips_eselect_and_continues() {
+        // Backlog #231 (c), the "No" arm: real's `== "Yes"` check
+        // fails, so no spawn happens and the run continues into the
+        // resolve -- the stub marker never appears, while the notice
+        // still printed once and the declined merge prompt still
+        // exits 130.
+        use std::io::Write;
+        let portuale_bin = built_portuale_bin();
+        let (stubdir, marker) = eselect_stub("no");
+        let path = format!(
+            "{}:{}",
+            stubdir.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let base = std::env::temp_dir().join(format!(
+            "ask_read_news_no_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = base.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let mut env = news_resolve_env(&root, &base.join("pt"));
+        env.push(("PATH".to_string(), path));
+        let (mut master, slave_stdio) = pty_pair();
+        let child = std::process::Command::new(&portuale_bin)
+            .args([
+                "emerge",
+                "--ask",
+                "--read-news",
+                "--oneshot",
+                "dev-libs/schedok",
+            ])
+            .stdin(slave_stdio)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .envs(env)
+            .spawn()
+            .expect("portuale emerge spawns");
+        master.write_all(b"No\n").expect("decline the news prompt");
+        master.write_all(b"No\n").expect("decline the merge prompt");
+        let output = child.wait_with_output().expect("wait for emerge");
+        drop(master);
+        assert_eq!(
+            output.status.code(),
+            Some(130),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout
+                .contains("Would you like to read the news items while calculating dependencies?"),
+            "{stdout}"
+        );
+        assert_eq!(
+            stdout.matches("news items need reading").count(),
+            1,
+            "{stdout}"
+        );
+        assert!(
+            !marker.exists(),
+            "a declined news prompt must not spawn eselect"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(stubdir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ask_read_news_eof_exits_before_resolve_like_real() {
+        // Backlog #234 (a): real `_emerge/UserQuery.query`
+        // (`_emerge/UserQuery.py:74-76`) prints `Interrupted.` and exits
+        // `128 + SIGINT` on EOF -- the news prompt's `sys.exit` fires
+        // before `action_build`. EOF here is a VEOF byte (`Ctrl-D`)
+        // written to the pty master: the slave line discipline turns it
+        // into a zero-byte read, exactly how a terminal user types EOF
+        // into real's `input()` (which then raises `EOFError`). The
+        // master must stay open until the child exits -- closing it
+        // first makes the slave stop being a tty at all (Linux drops
+        // the termios once the last master closes), so the run would
+        // die in the up-front `--ask` isatty gate instead of reaching
+        // the prompt. Must print `Interrupted.`, exit 130, and never
+        // reach the resolve (`Calculating dependencies` stays absent);
+        // before the fix the run skipped the spawn, resolved, and only
+        // exited 130 at the later merge prompt.
+        use std::io::Write;
+        let portuale_bin = built_portuale_bin();
+        let base = std::env::temp_dir().join(format!(
+            "ask_read_news_eof_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = base.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let env = news_resolve_env(&root, &base.join("pt"));
+        let (mut master, slave_stdio) = pty_pair();
+        let child = std::process::Command::new(&portuale_bin)
+            .args([
+                "emerge",
+                "--ask",
+                "--read-news",
+                "--oneshot",
+                "dev-libs/schedok",
+            ])
+            .stdin(slave_stdio)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .envs(env)
+            .spawn()
+            .expect("portuale emerge spawns");
+        // The pty buffers until the child prompts -- no synchronisation
+        // needed.
+        master
+            .write_all(b"\x04")
+            .expect("EOF the news prompt with VEOF");
+        let output = child.wait_with_output().expect("wait for emerge");
+        drop(master);
+        assert_eq!(
+            output.status.code(),
+            Some(130),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout
+                .contains("Would you like to read the news items while calculating dependencies?"),
+            "{stdout}"
+        );
+        assert!(stdout.contains("Interrupted."), "{stdout}");
+        assert_eq!(
+            stdout.matches("news items need reading").count(),
+            1,
+            "{stdout}"
+        );
+        assert!(
+            !stdout.contains("Calculating dependencies"),
+            "an interrupted news prompt must exit before the resolve: {stdout}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ask_read_news_true_spellings_prompt_like_real() {
+        // Backlog #234 (b): real `true_y_or_n` (`main.py:321-322,625`)
+        // accepts `--ask=True` / `--read-news=True` (a bare flag inserts
+        // `"True"` via `insert_optional_args`, the choices admit it, and
+        // `in true_y` normalizes it at `main.py:802-805,950-953`). The
+        // `=True` pair prompts exactly like the bare flags: "No" to the
+        // news prompt skips eselect, "No" to the merge prompt exits 130
+        // with `Quitting.`.
+        use std::io::Write;
+        let portuale_bin = built_portuale_bin();
+        let (stubdir, marker) = eselect_stub("true_spellings");
+        let path = format!(
+            "{}:{}",
+            stubdir.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let base = std::env::temp_dir().join(format!(
+            "ask_read_news_true_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = base.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let mut env = news_resolve_env(&root, &base.join("pt"));
+        env.push(("PATH".to_string(), path));
+        let (mut master, slave_stdio) = pty_pair();
+        let child = std::process::Command::new(&portuale_bin)
+            .args([
+                "emerge",
+                "--ask=True",
+                "--read-news=True",
+                "--oneshot",
+                "dev-libs/schedok",
+            ])
+            .stdin(slave_stdio)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .envs(env)
+            .spawn()
+            .expect("portuale emerge spawns");
+        master.write_all(b"No\n").expect("decline the news prompt");
+        master.write_all(b"No\n").expect("decline the merge prompt");
+        let output = child.wait_with_output().expect("wait for emerge");
+        drop(master);
+        assert_eq!(
+            output.status.code(),
+            Some(130),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout
+                .contains("Would you like to read the news items while calculating dependencies?"),
+            "{stdout}"
+        );
+        assert_eq!(
+            stdout.matches("news items need reading").count(),
+            1,
+            "{stdout}"
+        );
+        assert!(stdout.contains("Quitting."), "{stdout}");
+        assert!(
+            !marker.exists(),
+            "a declined news prompt must not spawn eselect"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(stubdir);
+    }
+
+    #[test]
+    fn ask_true_spelling_hits_the_tty_gate_like_real() {
+        // Backlog #234 (b): `--ask=True` parses as ask-on (real
+        // `true_y_or_n` choices + `in true_y` normalization,
+        // `main.py:321-322,802-805`), so a non-terminal stdin hits real
+        // `actions.py:3920-3926`'s gate exactly like a bare `--ask`
+        // (before the fix `--ask=True` died as an unrecognized option).
+        let portuale_bin = built_portuale_bin();
+        let output = std::process::Command::new(&portuale_bin)
+            .args(["emerge", "--ask=True", "dev-libs/does-not-matter"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("portuale emerge spawns");
+        assert_eq!(output.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("\"--ask\" should only be used in a terminal"),
+            "{stderr}"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ask_read_news_without_eselect_prints_real_hint() {
+        // Backlog #231 (c): real catches the spawn's `OSError`
+        // (eselect missing) and prints `Please install eselect to use
+        // this feature.` (`actions.py:4284-4287`). `PATH` holds only an
+        // empty dir, so the spawn must fail; the "Yes" is still
+        // consumed and the declined merge prompt still exits 130.
+        use std::io::Write;
+        let portuale_bin = built_portuale_bin();
+        let emptydir = std::env::temp_dir().join(format!(
+            "ask_read_news_empty_path_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&emptydir).unwrap();
+        let base = std::env::temp_dir().join(format!(
+            "ask_read_news_missing_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = base.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let mut env = news_resolve_env(&root, &base.join("pt"));
+        env.push(("PATH".to_string(), emptydir.display().to_string()));
+        let (mut master, slave_stdio) = pty_pair();
+        let child = std::process::Command::new(&portuale_bin)
+            .args([
+                "emerge",
+                "--ask",
+                "--read-news",
+                "--oneshot",
+                "dev-libs/schedok",
+            ])
+            .stdin(slave_stdio)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .envs(env)
+            .spawn()
+            .expect("portuale emerge spawns");
+        master.write_all(b"Yes\n").expect("answer the news prompt");
+        master.write_all(b"No\n").expect("decline the merge prompt");
+        let output = child.wait_with_output().expect("wait for emerge");
+        drop(master);
+        assert_eq!(
+            output.status.code(),
+            Some(130),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("Please install eselect to use this feature."),
+            "{stderr}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(&emptydir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn remote_success_prints_no_post_merge_notice_like_real() {
+        // Backlog #231 (b): the remote-execution early return
+        // (`take_remote_exec` dispatch) skips `post_emerge`'s tail --
+        // correctly so. The remote plan merges onto the *remote* host;
+        // the local `${ROOT}/var/db/pkg` is never touched, so real's
+        // `_pkgs_changed` gate (`post_emerge.py:112-117`) evaluates
+        // false and -- the run being non-`--pretend` -- the tail would
+        // print nothing. Local-transport end to end (`mrg
+        // --remote-transport local`, the same shape the contract
+        // suite's `test_mrg_remote_resolve_merges_a_binhost_binary`
+        // uses): the pre-resolution notice still prints once, before
+        // `Calculating...`, and no second notice follows the merge.
+        let portuale_bin = built_portuale_bin();
+        let fixtures = fixtures_root();
+        let base = std::env::temp_dir().join(format!(
+            "remote_news_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        // Client ROOT: a copy of the fixtures' `var` (the hermetic
+        // 5-count vdb), so the pre notice has something to print.
+        let root = base.join("root");
+        copy_tree(&fixtures.join("var"), &root.join("var"));
+        // Tmp `file://` binhost serving the hook-ordering fixture
+        // binary with a minimal `Packages` index.
+        let binhost = base.join("binhost");
+        std::fs::create_dir_all(binhost.join("dev-libs")).unwrap();
+        std::fs::copy(
+            fixtures.join("pkgdir/dev-libs/binpkgrmpkg-1.0.tbz2"),
+            binhost.join("dev-libs/binpkgrmpkg-1.0.tbz2"),
+        )
+        .unwrap();
+        let size = std::fs::metadata(binhost.join("dev-libs/binpkgrmpkg-1.0.tbz2"))
+            .unwrap()
+            .len();
+        std::fs::write(
+            binhost.join("Packages"),
+            format!(
+                "TIMESTAMP: 0\nVERSION: 0\nPACKAGES: 1\n\nBUILD_ID: 1\nCPV: dev-libs/binpkgrmpkg-1.0\nDEFINED_PHASES: -\nEAPI: 8\nKEYWORDS: amd64\nPATH: dev-libs/binpkgrmpkg-1.0.tbz2\nREPO: testrepo\nSIZE: {size}\nSLOT: 0\nUSE:\n"
+            ),
+        )
+        .unwrap();
+        // Client `/etc/portage`: the fixture config repointed at the
+        // tmp binhost (absolute repo locations, like the contract
+        // suite's `_write_tmp_clientetc`).
+        let clientetc = base.join("clientetc");
+        copy_tree(
+            &fixtures.join("etc/portage"),
+            &clientetc.join("etc/portage"),
+        );
+        let profile_link = clientetc.join("etc/portage/make.profile");
+        let _ = std::fs::remove_file(&profile_link);
+        std::os::unix::fs::symlink(fixtures.join("repo/profiles/default"), &profile_link).unwrap();
+        std::fs::write(
+            clientetc.join("etc/portage/binrepos.conf"),
+            format!(
+                "[tmpbinhost]\nsync-uri = file://{}\npriority = 1\n",
+                binhost.display()
+            ),
+        )
+        .unwrap();
+        for entry in std::fs::read_dir(clientetc.join("etc/portage/repos.conf")).unwrap() {
+            let entry = entry.unwrap();
+            if !entry.file_type().unwrap().is_file() {
+                continue;
+            }
+            let text = std::fs::read_to_string(entry.path()).unwrap();
+            let mut lines = Vec::new();
+            for line in text.lines() {
+                let mut line = line.to_string();
+                if line.trim_start().starts_with("location") && line.contains('=') {
+                    let value = line
+                        .split('=')
+                        .nth(1)
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string();
+                    if !value.is_empty() && !value.starts_with('/') {
+                        line = line.replace(
+                            value.as_str(),
+                            fixtures.join(&value).display().to_string().as_str(),
+                        );
+                    }
+                }
+                lines.push(line);
+            }
+            lines.push(String::new());
+            std::fs::write(entry.path(), lines.join("\n")).unwrap();
+        }
+        let work = base.join("work");
+        let output = std::process::Command::new(&portuale_bin)
+            .args([
+                "mrg",
+                "--getbinpkgonly",
+                "--remote-hostname",
+                "localtest",
+                "--remote-transport",
+                "local",
+                "--remote-root",
+                root.to_str().unwrap(),
+                "--remote-workdir",
+                work.to_str().unwrap(),
+                "--remote-etc-portage",
+                &format!("server:{}", clientetc.display()),
+                "dev-libs/binpkgrmpkg",
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .env("PORTAGE_CONFIGROOT", &clientetc)
+            .env("ROOT", &root)
+            .env("PORTAGE_RUNNING_ROOT", &fixtures)
+            .env("DISTDIR", fixtures.join("distfiles"))
+            .env("PORTAGE_TMPDIR", base.join("pt"))
+            .env("FEATURES", "news")
+            .output()
+            .expect("portuale mrg spawns");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains(">>> Remote merged dev-libs/binpkgrmpkg-1.0"),
+            "{stdout}"
+        );
+        assert!(
+            root.join("var/db/pkg/dev-libs/binpkgrmpkg-1.0/CONTENTS")
+                .is_file(),
+            "the remote unit really merged into the client root"
+        );
+        // Exactly one notice: the pre-resolution one, standing before
+        // `Calculating...` -- no post-merge notice follows the merge.
+        assert_eq!(
+            stdout.matches("news items need reading").count(),
+            1,
+            "{stdout}"
+        );
+        assert!(
+            stdout.find("need reading").unwrap() < stdout.find("Calculating").unwrap(),
+            "{stdout}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn unmerge_end_notice_skips_an_empty_removal_list() {
         // Backlog #196 fix round 1: real `post_emerge` after the
         // uninstall actions prints the notice only when the vdb
@@ -15071,10 +16138,24 @@ mod tests {
                 .to_str()
                 .expect("pty name is utf8")
                 .to_owned();
-            let master_file = std::fs::File::from_raw_fd(master);
             let cname = std::ffi::CString::new(name).expect("pty name has no nul");
             let slave = libc::open(cname.as_ptr(), libc::O_RDWR | libc::O_NOCTTY);
             assert!(slave >= 0, "pty slave open failed");
+            // Backlog #234: close-on-exec on both ends. Without it the
+            // spawned child inherits the master, so dropping the test's
+            // `master` never delivers EOF to the child's slave read (the
+            // EOF test hung on exactly this). The stdio dup onto fd 0
+            // clears the flag on the dup, so the child's stdin survives.
+            for fd in [master, slave] {
+                let flags = libc::fcntl(fd, libc::F_GETFD);
+                assert!(flags >= 0, "fcntl F_GETFD failed");
+                assert_eq!(
+                    libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC),
+                    0,
+                    "fcntl F_SETFD failed"
+                );
+            }
+            let master_file = std::fs::File::from_raw_fd(master);
             let slave_stdio = std::process::Stdio::from(std::os::fd::OwnedFd::from_raw_fd(slave));
             (master_file, slave_stdio)
         }
