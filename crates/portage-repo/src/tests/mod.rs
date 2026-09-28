@@ -1116,6 +1116,85 @@ fn graph_entries_real(atom_str: &str) -> Vec<GraphEntry> {
     graph_result_real(atom_str).entries
 }
 
+/// Like `graph_result_real`, but with `blocker_retry_seed_atoms` set (the
+/// `@world ∪ @selected ∪ @system` list of Portage's complete-mode retry).
+fn graph_entries_with_retry_seeds(atom_str: &str, seeds: &[&str]) -> Vec<GraphEntry> {
+    let root = fixtures_root();
+    let mut config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    config.blocker_retry_seed_atoms = seeds.iter().map(|s| s.to_string()).collect();
+    ResolveRequest::new(
+        &root,
+        &root,
+        &[atom_str.to_string()],
+        &config,
+        &fixtures_root().join("distfiles"),
+    )
+    .resolve()
+    .unwrap_or_else(|e| panic!("resolving {atom_str} failed: {e}"))
+    .entries
+}
+
+/// `graph_result_autounmask_cfg` for several top-level atoms, in argv order.
+fn graph_result_autounmask_cfg_atoms(
+    config: &portage_profile::Config,
+    atoms: &[String],
+) -> GraphResult {
+    let atom_str = atoms.join(" ");
+    let root = fixtures_root();
+    ResolveRequest {
+        autounmask_suggest_keywords: true,
+        autounmask_suggest_use: true,
+        autounmask_suggest_license: true,
+        autounmask_suggest_masks: true,
+        ..ResolveRequest::new(
+            &root,
+            &root,
+            atoms,
+            config,
+            &fixtures_root().join("distfiles"),
+        )
+    }
+    .resolve()
+    .unwrap_or_else(|e| panic!("resolving {atom_str} failed: {e}"))
+}
+
+/// `graph_result_autounmask` with `autounmask_suggest_use` forced off
+/// (an explicit `--autounmask-use=n`).
+fn graph_result_autounmask_use_n(atom_str: &str) -> GraphResult {
+    graph_result_with(atom_str, |r| r.autounmask_suggest_keywords = true)
+}
+
+/// The six `aub0` argument orders (upstream `test_autounmask_use_breakage`).
+/// Expected values from Portage 3.0.82.2.
+fn aub0_result(order: &str, backtrack_y: bool) -> GraphResult {
+    let root = fixtures_root();
+    let mut config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    config.autounmask_backtrack = backtrack_y;
+    let atoms: Vec<String> = order
+        .split_whitespace()
+        .map(|p| format!("dev-libs/aub0{p}"))
+        .collect();
+    graph_result_autounmask_cfg_atoms(&config, &atoms)
+}
+
 fn aub0_conflict_versions(result: &GraphResult) -> Vec<Vec<String>> {
     result
         .slot_conflicts
@@ -1741,6 +1820,48 @@ fn blocker_161_scratch_repo(args: Blocker161ScratchRepoArgs<'_>) -> RepoConfig {
     blocker_161_repo_config(repo)
 }
 
+/// World=B shape shared by the unit tests that seed a world consumer: `dev-libs/abk0d` with
+/// `--autounmask-backtrack=y` while installed `abk0b-1` is reachable through
+/// the required sets. The fixture world file stays pristine, so the seed is
+/// set directly (the `FX_WORLD_EXTRA=dev-libs/abk0b` equivalent the bed cell
+/// stages).
+fn graph_result_abk0_worldb_on(root: &Path, backtrack_max: u32) -> GraphResult {
+    let fixture_root = fixtures_root();
+    let mut config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &fixture_root,
+        main_repo_location: &fixture_root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), fixture_root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &fixture_root,
+    })
+    .expect("fixture config resolves");
+    config.autounmask_backtrack = true;
+    config.complete_seed_atoms = vec!["dev-libs/abk0b".to_string()];
+    ResolveRequest {
+        autounmask_suggest_keywords: true,
+        autounmask_suggest_use: true,
+        autounmask_suggest_license: true,
+        autounmask_suggest_masks: true,
+        backtrack_max,
+        ..ResolveRequest::new(
+            &fixture_root,
+            root,
+            &["dev-libs/abk0d".to_string()],
+            &config,
+            &fixtures_root().join("distfiles"),
+        )
+    }
+    .resolve()
+    .unwrap_or_else(|e| panic!("resolving dev-libs/abk0d failed: {e}"))
+}
+
+fn graph_result_abk0_worldb(backtrack_max: u32) -> GraphResult {
+    let root = fixtures_root();
+    graph_result_abk0_worldb_on(&root, backtrack_max)
+}
+
 /// Arguments of [`slotundo_vdb`].
 struct SlotundoVdbArgs<'a> {
     dir: &'a Path,
@@ -1875,6 +1996,10 @@ fn assert_triangle_conflict(result: &GraphResult, installed_first: bool) {
             ">=dev-libs/paired-2.0".to_string()
         )]
     );
+}
+
+fn graph_result_buildpkgonly(atom_str: &str) -> GraphResult {
+    graph_result_with(atom_str, |r| r.buildpkgonly = true)
 }
 
 /// Arguments of [`euf_flat`].
@@ -3349,6 +3474,7 @@ mod repo_config;
 mod resolver_trace;
 mod result;
 mod rev_dep;
+mod root_deps;
 mod skipped;
 mod slot_conflict;
 mod slot_undo;

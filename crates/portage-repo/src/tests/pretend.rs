@@ -83,6 +83,27 @@ fn installed_dep_missing_a_use_flag_reinstalls_not_already_installed() {
 }
 
 #[test]
+fn emptytree_reinstalls_an_installed_dependency_that_would_otherwise_be_hidden() {
+    // Under --emptytree an installed dep becomes a bare Reinstall
+    // instead of AlreadyInstalled.
+    assert_eq!(
+        graph_empty("dev-libs/deeppkg")
+            .into_iter()
+            .find(|(name, _)| name == "dev-libs/deeppkg2")
+            .map(|(_, o)| o),
+        Some(PretendOutcome::Reinstall {
+            version: "1.0".to_string(),
+            changed_flags: vec![],
+            deps_changed: false,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: false,
+            slot_operator_rebuild: false,
+        })
+    );
+}
+
+#[test]
 fn resolve_pretend_matches_a_sub_slot_restricted_atom_against_the_real_sub_slot() {
     // Exact sub-slot match on the plain PMS 8.3.3 `:slot/sub-slot`
     // form (unlike `:slot=` atoms, this needs candidate sub-slot data).

@@ -23,6 +23,13 @@ pub(crate) fn merge_list_shown(args: MergeListShownArgs) -> bool {
     pretend || ((ask || tree || verbose) && !(quiet && !ask))
 }
 
+/// Arguments of [`autounmask_only_reshows_merge_list`].
+pub(crate) struct AutounmaskOnlyReshowsMergeListArgs {
+    pub(crate) pretend: bool,
+    pub(crate) autounmask_only: bool,
+    pub(crate) has_changes: bool,
+}
+
 /// Whether a non-`--pretend` run with display flags and an empty plan prints
 /// `Nothing to merge; quitting.` and exits 0 before the resume rotation
 /// and the scheduler. A `--pretend` run never takes this arm.

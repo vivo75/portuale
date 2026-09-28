@@ -91,3 +91,34 @@ fn tree_display_order_schedules_an_admitted_removal_after_its_owner() {
         entries[order[1]].outcome
     );
 }
+
+#[test]
+fn uninstall_entries_follow_their_owner_in_merge_order() {
+    // `blockerpkg` blocks installed `samepkg-1.0`, resolved by removing it.
+    let entries = graph_entries_real("dev-libs/blockerpkg");
+    let names: Vec<(&str, Option<&str>)> = entries
+        .iter()
+        .map(|e| (e.package.as_str(), crate::merge_order::entry_version(e)))
+        .collect();
+    assert_eq!(
+        names,
+        vec![("blockerpkg", Some("1.0")), ("samepkg", Some("1.0"))]
+    );
+    assert!(matches!(
+        entries[1].outcome,
+        PretendOutcome::Uninstall { .. }
+    ));
+    assert_eq!(
+        entries[1].required_by,
+        vec![("dev-libs".to_string(), "blockerpkg".to_string())]
+    );
+
+    // B0 u3: the owner's own dependency still merges first.
+    let entries = graph_entries_real("dev-libs/blockerorderpkg");
+    let names: Vec<&str> = entries.iter().map(|e| e.package.as_str()).collect();
+    assert_eq!(names, vec!["newpkg", "blockerorderpkg", "samepkg"]);
+    assert!(matches!(
+        entries[2].outcome,
+        PretendOutcome::Uninstall { .. }
+    ));
+}

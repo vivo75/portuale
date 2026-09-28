@@ -3184,6 +3184,20 @@ fn required_use_referencing_an_implicit_arch_list_flag_is_valid() {
     );
 }
 
+#[test]
+fn autounmask_use_n_leaves_a_masked_child_flag_dep_unresolved() {
+    // With `--autounmask-use=n` neither the child nor the parent flip is
+    // attempted: the dependency stays NoVisibleCandidate with no change.
+    let result = graph_result_autounmask_use_n("dev-libs/parentflipeqpkg");
+    let child = result
+        .entries
+        .iter()
+        .find(|e| e.package == "parentflipchildpkg")
+        .expect("child entry");
+    assert!(matches!(child.outcome, PretendOutcome::NoVisibleCandidate));
+    assert!(result.autounmask_use_changes.is_empty());
+}
+
 /// `adopt_current` replaces the live node's params in place without adding a
 /// node.
 #[test]
@@ -3604,6 +3618,21 @@ fn package_provided_records_a_matching_top_level_target_for_the_warning() {
 }
 
 #[test]
+fn buildpkgonly_flags_a_new_package_depending_on_another_new_package() {
+    // Both DEPEND and RDEPEND on another New package: --buildpkgonly can't
+    // resolve this, since the dep itself would also need building.
+    let result = graph_result_buildpkgonly("dev-libs/dualdep");
+    assert!(result.buildpkgonly_deps_unsatisfied);
+}
+
+#[test]
+fn buildpkgonly_does_not_fire_when_the_dependency_is_already_installed() {
+    // RDEPENDs on an already-installed package: nothing else needs building.
+    let result = graph_result_buildpkgonly("dev-libs/buildpkgonlysatisfied");
+    assert!(!result.buildpkgonly_deps_unsatisfied);
+}
+
+#[test]
 fn buildpkgonly_is_always_false_when_not_requested() {
     // `graph_result_real` always passes buildpkgonly=false -- even for the same
     // dualdep fixture that trips the check above, the field must stay false
@@ -3637,6 +3666,26 @@ fn fixture_strong_blocker_matches_an_installed_package() {
             }),
             tree_scheduled_uninstall: false,
         }]
+    );
+}
+
+#[test]
+fn blocker_retry_seeds_make_an_uninstall_resolved_block_unsolvable() {
+    // Complete mode re-runs the serialize in the retry walk covering
+    // `@selected ∪ @profile ∪ @system`, so an installed blocked instance
+    // reachable from a world member is a digraph node with parents and the
+    // block is `B` (rc 1).
+    //
+    // With no seeds the block is uninstall-resolved (`b`, the pin above);
+    // with installed `changeddepspkg` as the world seed, the retry closure
+    // reaches `samepkg` -> unresolved.
+    let entries = graph_entries_with_retry_seeds("dev-libs/blockerpkg", &[]);
+    assert!(!entries[0].blockers[0].unsolvable);
+    let entries =
+        graph_entries_with_retry_seeds("dev-libs/blockerpkg", &["dev-libs/changeddepspkg"]);
+    assert!(
+        entries[0].blockers[0].unsolvable,
+        "the world member's installed closure is a parent"
     );
 }
 

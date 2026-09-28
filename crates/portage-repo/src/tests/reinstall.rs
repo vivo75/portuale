@@ -321,6 +321,58 @@ fn changed_deps_detects_a_plain_atom_reorder_but_not_a_redundant_bracket() {
 }
 
 #[test]
+fn changed_deps_report_reports_without_reinstalling() {
+    let result = graph_changed_deps_report("dev-libs/changeddepspkg", false, true);
+    assert_eq!(
+        result.changed_deps_report,
+        vec![ChangedDepsReportEntry {
+            category: "dev-libs".to_string(),
+            package: "changeddepspkg".to_string(),
+            version: "1.0".to_string(),
+            repo_name: "testrepo".to_string(),
+        }]
+    );
+    // Report-only: still AlreadyInstalled, never reinstalled.
+    assert_eq!(
+        result.entries[0].outcome,
+        PretendOutcome::AlreadyInstalled {
+            version: "1.0".to_string()
+        }
+    );
+}
+
+#[test]
+fn changed_deps_report_is_silent_when_changed_deps_is_also_given() {
+    // Silent when --changed-deps is also given; the second assert
+    // proves the underlying change still reinstalls.
+    let result = graph_changed_deps_report("dev-libs/changeddepspkg", true, true);
+    assert!(result.changed_deps_report.is_empty());
+    let changeddepspkg = result
+        .entries
+        .iter()
+        .find(|e| e.package == "changeddepspkg")
+        .expect("changeddepspkg entry");
+    assert_eq!(
+        changeddepspkg.outcome,
+        PretendOutcome::Reinstall {
+            version: "1.0".to_string(),
+            changed_flags: Vec::new(),
+            deps_changed: true,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: false,
+            slot_operator_rebuild: false,
+        }
+    );
+}
+
+#[test]
+fn changed_deps_report_is_empty_without_the_flag() {
+    let result = graph_changed_deps_report("dev-libs/changeddepspkg", false, false);
+    assert!(result.changed_deps_report.is_empty());
+}
+
+#[test]
 fn changed_deps_ignores_a_libc_only_dependency_change() {
     // glibc-vs-musl is libc noise both sides strip (Portage
     // `strip_libc_deps`), leaving identical deps: no reinstall.
