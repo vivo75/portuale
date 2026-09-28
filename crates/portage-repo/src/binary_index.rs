@@ -139,6 +139,14 @@ pub fn set_remote_binary_index_override(pkgdir: &Path, index: Option<std::sync::
         .insert(pkgdir.to_path_buf(), index);
 }
 
+/// Drops every live-refresh override. Called where a run starts (review M4),
+/// so a second in-process run resolves from its own refresh or the disk.
+pub fn clear_remote_binary_index_overrides() {
+    if let Some(table) = REMOTE_INDEX_OVERRIDE.get() {
+        table.write().unwrap().clear();
+    }
+}
+
 pub(crate) fn remote_binary_index_override(
     pkgdir: &Path,
 ) -> Option<Option<std::sync::Arc<BinaryIndex>>> {
