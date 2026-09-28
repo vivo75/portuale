@@ -825,11 +825,19 @@ impl AltPreference {
 /// crate stays atom-agnostic, matching its own "tokens stay opaque
 /// strings" architecture -- see the module doc comment), instead of
 /// flattening every alternative into the result the way plain
-/// `use_reduce_flat` always has. An alternative that resolves to zero
-/// atoms at all (every token inside it gated by an inactive conditional)
-/// counts as trivially satisfiable -- `alternative_satisfiable` is
-/// expected to return a non-`Unsatisfiable` rank for an empty slice, the
-/// same vacuous-truth real portage gives a no-cost alternative.
+/// `use_reduce_flat` always has. An alternative an inactive
+/// conditional emptied (it flattens to zero atoms) is dropped before
+/// ranking at all -- real `use_reduce` never lets it reach
+/// `dep_zapdeps` (the flat branch removes the conditional and never
+/// merges its list), so the probe is never called with an empty slice.
+/// When every alternative empties that way, the whole `"||"` group is
+/// dropped if `empty_groups_always_true` (real
+/// `_get_eapi_attrs(eapi).empty_groups_always_true`, true at EAPI <= 6)
+/// and otherwise becomes real's own unsatisfiable
+/// `__const__/empty-any-of` placeholder atom (`dep/__init__.py:864-869`,
+/// EAPI 7+, including the `eapi=None` default real `dep_check` uses for
+/// installed packages) -- emitted as a `||`-chosen atom so it fails
+/// downstream candidate lookup exactly like real's placeholder does.
 ///
 /// Falls back to keeping the *whole* `"||"` group exactly as
 /// `use_reduce_flat` would have flattened it (literal `"||"` marker,
@@ -862,11 +870,19 @@ pub fn use_reduce_flat_disjunctive(
     tokens: &[String],
     uselist: &HashSet<String>,
     mode: MatchMode,
+    empty_groups_always_true: bool,
     alternative_satisfiable: &mut impl FnMut(&[String]) -> AltPreference,
     tie_break: &mut TieBreak<'_>,
 ) -> Result<Vec<String>, Error> {
     let tree = build_dep_tree(tokens)?;
-    let resolved = resolve_disjunctions(&tree, uselist, mode, alternative_satisfiable, tie_break)?;
+    let resolved = resolve_disjunctions(
+        &tree,
+        uselist,
+        mode,
+        empty_groups_always_true,
+        alternative_satisfiable,
+        tie_break,
+    )?;
     let mut reserialized = Vec::new();
     serialize_dep_tree(&resolved, &mut reserialized);
     use_reduce_flat(&reserialized, uselist, mode)
@@ -876,6 +892,7 @@ fn resolve_disjunctions(
     nodes: &[DepNode],
     uselist: &HashSet<String>,
     mode: MatchMode,
+    empty_groups_always_true: bool,
     alternative_satisfiable: &mut impl FnMut(&[String]) -> AltPreference,
     tie_break: &mut TieBreak<'_>,
 ) -> Result<Vec<DepNode>, Error> {
@@ -900,6 +917,7 @@ fn resolve_disjunctions(
                     children,
                     uselist,
                     mode,
+                    empty_groups_always_true,
                     alternative_satisfiable,
                     tie_break,
                 )?;
@@ -913,6 +931,7 @@ fn resolve_disjunctions(
                     children,
                     uselist,
                     mode,
+                    empty_groups_always_true,
                     alternative_satisfiable,
                     tie_break,
                 )?;
@@ -942,8 +961,37 @@ fn resolve_disjunctions(
                     let Ok(flat_atoms) = use_reduce_flat(&flat, uselist, mode) else {
                         continue;
                     };
+                    // Backlog #238: real `use_reduce` drops an
+                    // alternative an inactive conditional emptied before
+                    // `dep_zapdeps` ever ranks the group (the flat branch
+                    // removes the conditional and never merges its list),
+                    // so it never reaches the probe -- it is not a
+                    // rankable choice. (Before this, the emptied
+                    // alternative was probed with an empty slice and came
+                    // back vacuously satisfiable, silently dropping the
+                    // whole group.)
+                    if flat_atoms.is_empty() {
+                        continue;
+                    }
                     let rank = alternative_satisfiable(&flat_atoms);
                     ranked.push((rank, alt_nodes, flat_atoms));
+                }
+                if ranked.is_empty() {
+                    // Every alternative was emptied by inactive
+                    // conditionals -- real `use_reduce`
+                    // (`dep/__init__.py:864-869`): `|| ( )` is dropped
+                    // when `empty_groups_always_true` (EAPI <= 6) and
+                    // becomes the unsatisfiable
+                    // `__const__/empty-any-of` atom otherwise (EAPI 7+,
+                    // including the `eapi=None` default real `dep_check`
+                    // uses for installed packages). The placeholder is a
+                    // `||`-chosen atom (deferred, like a selected
+                    // alternative) so it fails downstream candidate
+                    // lookup exactly like real's placeholder does.
+                    if !empty_groups_always_true {
+                        deferred.push(DepNode::Str(EMPTY_ANY_OF.to_string()));
+                    }
+                    continue;
                 }
                 let mut selectable: Vec<&(AltPreference, Vec<DepNode>, Vec<String>)> = ranked
                     .iter()
@@ -983,6 +1031,7 @@ fn resolve_disjunctions(
                         &alt_nodes,
                         uselist,
                         mode,
+                        empty_groups_always_true,
                         alternative_satisfiable,
                         tie_break,
                     )?),
@@ -1130,6 +1179,7 @@ mod tests {
             &toks("|| ( dev-libs/a dev-libs/b dev-libs/c )"),
             &HashSet::new(),
             MatchMode::Normal,
+            true,
             &mut |atoms| pref(atoms == ["dev-libs/b"]),
             &mut |_| 0,
         )
@@ -1146,6 +1196,7 @@ mod tests {
             &toks("|| ( dev-libs/a dev-libs/b )"),
             &HashSet::new(),
             MatchMode::Normal,
+            true,
             &mut |_| AltPreference::Unsatisfiable,
             &mut |_| 0,
         )
@@ -1162,6 +1213,7 @@ mod tests {
             &toks("|| ( ( dev-libs/a dev-libs/b ) dev-libs/c )"),
             &HashSet::new(),
             MatchMode::Normal,
+            true,
             &mut |atoms| pref(atoms == ["dev-libs/a", "dev-libs/b"]),
             &mut |_| 0,
         )
@@ -1178,6 +1230,7 @@ mod tests {
             &toks("|| ( ( dev-libs/a dev-libs/b ) dev-libs/c )"),
             &HashSet::new(),
             MatchMode::Normal,
+            true,
             &mut |atoms| pref(atoms == ["dev-libs/c"]),
             &mut |_| 0,
         )
@@ -1186,16 +1239,68 @@ mod tests {
     }
 
     #[test]
-    fn disjunctive_treats_an_inactive_conditional_alternative_as_vacuously_satisfiable() {
-        // || ( foo? ( dev-libs/a ) dev-libs/b ) with "foo" off -- the
-        // first alternative flattens to nothing at all (a real,
-        // legitimate "requires nothing" alternative), which must win
-        // immediately rather than falling through to "dev-libs/b".
+    fn disjunctive_skips_an_emptied_alternative_and_selects_the_survivor() {
+        // Backlog #238: `|| ( foo? ( dev-libs/a ) dev-libs/b )` with
+        // "foo" off -- real `use_reduce` drops the emptied alternative
+        // before `dep_zapdeps` ranks the group, so the surviving
+        // "dev-libs/b" is selected (real reduces the same string to the
+        // bare `dev-libs/b` atom). The probe must never see the emptied
+        // alternative: it panics on an empty slice. Before the fix the
+        // emptied alternative won vacuously and the whole group
+        // contributed nothing.
         let result = use_reduce_flat_disjunctive(
             &toks("|| ( foo? ( dev-libs/a ) dev-libs/b )"),
             &HashSet::new(),
             MatchMode::Normal,
-            &mut |atoms: &[String]| pref(atoms.is_empty()),
+            true,
+            &mut |atoms: &[String]| {
+                assert!(
+                    !atoms.is_empty(),
+                    "an emptied alternative must never reach the probe"
+                );
+                pref(atoms == ["dev-libs/b"])
+            },
+            &mut |_| 0,
+        )
+        .unwrap();
+        assert_eq!(result, vec!["dev-libs/b"]);
+    }
+
+    #[test]
+    fn disjunctive_emptied_group_becomes_empty_any_of_placeholder() {
+        // Backlog #238, EAPI 7+ (`empty_groups_always_true` false): the
+        // upstream `test_eapi` pg1 `=dev-libs/C-2` shape -- `|| ( foo? (
+        // dev-libs/a ) )` with "foo" off empties the whole group, and
+        // real `use_reduce` (`dep/__init__.py:864-869`) substitutes the
+        // unsatisfiable `__const__/empty-any-of` atom. No alternative
+        // survives, so the probe runs zero times.
+        let result = use_reduce_flat_disjunctive(
+            &toks("|| ( foo? ( dev-libs/a ) )"),
+            &HashSet::new(),
+            MatchMode::Normal,
+            false,
+            &mut |_: &[String]| -> AltPreference {
+                panic!("no surviving alternative may reach the probe")
+            },
+            &mut |_| 0,
+        )
+        .unwrap();
+        assert_eq!(result, vec!["__const__/empty-any-of"]);
+    }
+
+    #[test]
+    fn disjunctive_emptied_group_is_dropped_when_empty_groups_always_true() {
+        // Backlog #238, EAPI <= 6 (`empty_groups_always_true` true): the
+        // upstream `test_eapi` pg1 `=dev-libs/C-1` shape -- the same
+        // fully-emptied group is dropped, and the package merges bare.
+        let result = use_reduce_flat_disjunctive(
+            &toks("|| ( foo? ( dev-libs/a ) )"),
+            &HashSet::new(),
+            MatchMode::Normal,
+            true,
+            &mut |_: &[String]| -> AltPreference {
+                panic!("no surviving alternative may reach the probe")
+            },
             &mut |_| 0,
         )
         .unwrap();
@@ -1213,6 +1318,7 @@ mod tests {
             &toks("|| ( dev-libs/a dev-libs/b )"),
             &HashSet::new(),
             MatchMode::Normal,
+            true,
             &mut |atoms: &[String]| {
                 if atoms == ["dev-libs/b"] {
                     AltPreference::Installed
@@ -1236,6 +1342,7 @@ mod tests {
             &toks("|| ( dev-libs/a dev-libs/b )"),
             &HashSet::new(),
             MatchMode::Normal,
+            true,
             &mut |_| AltPreference::Available,
             &mut |_| 0,
         )
@@ -1256,6 +1363,7 @@ mod tests {
             &toks("|| ( dev-libs/a dev-libs/b )"),
             &HashSet::new(),
             MatchMode::Normal,
+            true,
             &mut |_| AltPreference::Available,
             &mut |alts: &[Vec<String>]| {
                 seen = alts.to_vec();
@@ -1282,6 +1390,7 @@ mod tests {
             &toks("|| ( dev-libs/a dev-libs/b )"),
             &HashSet::new(),
             MatchMode::Normal,
+            true,
             &mut |atoms: &[String]| {
                 if atoms == ["dev-libs/b"] {
                     AltPreference::Installed
@@ -1308,6 +1417,7 @@ mod tests {
             &toks("dev-libs/a foo? ( dev-libs/b )"),
             &set(&["foo"]),
             MatchMode::Normal,
+            true,
             &mut |_| AltPreference::Unsatisfiable,
             &mut |_| 0,
         )
