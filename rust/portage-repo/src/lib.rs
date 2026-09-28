@@ -13703,7 +13703,10 @@ pub fn resolve_pretend(
         // pool, not installed-satisfaction. The non-`--usepkg` path keeps
         // its existing behaviour here (a dependency whose ebuild left the
         // tree entirely is still reported) -- narrowing this fix to the
-        // case the L1 test bed actually turned up (L1-a).
+        // case the L1 test bed actually turned up (L1-a). Runtime-keyed
+        // deps get their installed hearing one layer up instead (the
+        // queue loop's #233 rewrite, which sees the edge kind this
+        // function never receives).
         if !empty
             && !is_top_level
             && (usepkg || usepkgonly)
@@ -20856,6 +20859,20 @@ struct QueueItem {
     /// reaches already-satisfied deps), and anything with a run-time
     /// alternative.
     buildtime_hard: bool,
+    /// The atom was chosen out of an `|| ( ... )` group (the `disj`
+    /// partition of `enqueue_flat_deps` / `enqueue_dependencies`,
+    /// computed via `or_group_universe`). Real resolves the disjunction
+    /// layer's group-level classification (`dep_check.py` soft 715-724:
+    /// `all_available` vs `all_installed`/`some_installed` vs `other`)
+    /// before any per-atom selection, and the chosen alternative's atoms
+    /// each still need a visible tree candidate of their own -- an
+    /// installed-only atom in the chosen alternative stays a reported
+    /// miss (pinned by
+    /// `test_or_group_other_installed_some_bin_beats_plain_other`: both
+    /// `opartlya` and `opartlyb` are reported even though `opartlya`
+    /// alone is installed). `false` for plain deps, top-level atoms,
+    /// and the auto-replace seeds.
+    from_disjunction: bool,
 }
 
 /// Backtracking: `(cat, pkg)` targeted by an atom -> every puller this
@@ -20963,7 +20980,11 @@ fn enqueue_flat_deps(
         .partition(|t| t != "||" && or_universe.contains(t));
     plains.reverse();
     disj.reverse();
-    for tok in plains.into_iter().chain(disj) {
+    for (tok, from_disjunction) in plains
+        .into_iter()
+        .map(|t| (t, false))
+        .chain(disj.into_iter().map(|t| (t, true)))
+    {
         if tok == "||" {
             continue;
         }
@@ -21009,6 +21030,7 @@ fn enqueue_flat_deps(
             owner: Some(key.clone()),
             unevaluated,
             buildtime_hard,
+            from_disjunction,
         });
     }
 }
@@ -22726,6 +22748,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             owner: None,
             unevaluated: None,
             buildtime_hard: false,
+            from_disjunction: false,
         });
     }
     // #24 S3: real `_gen_reinstall_sets` (5457-5480) turns
@@ -22751,6 +22774,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             owner: None,
             unevaluated: None,
             buildtime_hard: false,
+            from_disjunction: false,
         });
     }
 
@@ -22762,6 +22786,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         owner,
         unevaluated: unevaluated_atom,
         buildtime_hard,
+        from_disjunction,
     }) = state.queue.pop_front()
     {
         let Some(atom) = portage_dep::parse_atom(&current_atom) else {
@@ -22929,6 +22954,77 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 &ctx.local_binpkg,
             )?
         };
+
+        // Backlog #233: a runtime-keyed dependency no ebuild satisfies
+        // but an installed instance does settles `AlreadyInstalled`,
+        // never `NoVisibleCandidate`. Real
+        // `_wrapped_select_pkg_highest_available_imp`
+        // (`depgraph.py:7799-7840`) iterates the installed db
+        // (`_iter_match_pkgs(root_config, "installed", atom)`) for every
+        // resolve, so a stale recorded built slot-operator atom on an
+        // installed world member (`dev-libs/reinstslottarget:0/1=`, the
+        // target having moved `0/1 -> 0/2` without a revbump) still
+        // matches the installed instance in vartree: the edge is a
+        // satisfied nomerge edge, never a second instance and never a
+        // miss (real merges the unrelated `@world` updates and withholds
+        // the reinstall silently, rc 0; S0 probe `probe.log`). Without
+        // this the walk aborted (rc 1) before the #210
+        // reverse-dependency scan could engage. Scoped to genuine
+        // dependency edges (`owner.is_some()`, non-top-level depth) that
+        // are not build-time-hard: a pure `DEPEND`/`BDEPEND` edge targets
+        // the *running* root in real (EAPI-7+ `dep_root`), which this
+        // walk cannot consult outside the `--root-deps` feed-in, so its
+        // long-pinned "reported, not satisfied from the target vdb"
+        // behaviour stands (`rootdepsprovider` unit + contract pins).
+        // `--emptytree` is excluded the same way `resolve_pretend`'s own
+        // fallback excludes it (real selects no installed candidates).
+        // Version match alone is not enough: `best_installed_matching`
+        // (not the USE-blind `best_installed_for_atom`) also requires
+        // the installed instance's recorded vdb `USE` to satisfy the
+        // atom's use-deps -- real `vardb.match` semantics, the same
+        // filter `dependency_avoid_update_candidate` and the `||`
+        // installed classification use. Without it an evaluated
+        // `[-flip]` "matched" the installed `+flip` child and the dep
+        // was wrongly dropped as satisfied instead of surfacing
+        // unsatisfied for the abort path (`deep_walk_*_installed_parents`
+        // arm A).
+        // Two further exclusions. `||`-chosen edges (`from_disjunction`)
+        // keep their miss: the disjunction layer classifies
+        // installed-ness itself at the group level (`dep_check.py` soft
+        // 715-724) and the chosen alternative's atoms each still need a
+        // visible tree candidate of their own -- an installed-only atom
+        // there stays reported (the `opartlya` pin). And only
+        // slot-operator atoms qualify (`atom.slot` / `slot_operator`:
+        // `:slot`, `:slot/sub=`, `:=`, `:*`): a stale built
+        // slot-operator dep names the slot the instance was *built*
+        // against, so once no ebuild still carries that slot the
+        // installed instance is the only possible satisfaction -- real's
+        // installed-db iteration is the whole rule, with no competing
+        // ebuild candidate the pass masks could be protecting. Bare and
+        // version-range atoms stay on the old path: their NVC can mean a
+        // genuinely missing package, a masked candidate, or a
+        // backtrack-masked instance (the needer/othermod triangle keeps
+        // its restart count; `oldmovepkg` keeps reporting), all of which
+        // need machinery this site deliberately does not replicate.
+        // Backtrack `extra_constraints` are likewise not consulted: the
+        // `!=cpv` negatives a pass can hold against a slot-bound
+        // nomerge instance are portuale's own transient
+        // conflict-before-scan artifacts (masking the instance the #210
+        // assembly scan is about to withhold *to*), which real's
+        // integrated scan never creates -- respecting them diverts the
+        // walk into missing-dep feedback instead of terminating with
+        // the both-instances shape the withhold needs.
+        if matches!(outcome, PretendOutcome::NoVisibleCandidate)
+            && owner.is_some()
+            && depth != 0
+            && !buildtime_hard
+            && !from_disjunction
+            && !ctx.empty
+            && (atom.slot.is_some() || atom.slot_operator.is_some())
+            && let Some(version) = best_installed_matching(ctx.root, &current_atom, config)
+        {
+            outcome = PretendOutcome::AlreadyInstalled { version };
+        }
 
         // `--reinstall-atoms`: a matching already-installed package
         // is forced to re-merge (real `depgraph.py` drops it from
@@ -27343,7 +27439,11 @@ fn enqueue_dependencies(
         .partition(|t| t != "||" && universe.contains(t));
     plains.reverse();
     disj.reverse();
-    for tok in plains.into_iter().chain(disj) {
+    for (tok, from_disjunction) in plains
+        .into_iter()
+        .map(|t| (t, false))
+        .chain(disj.into_iter().map(|t| (t, true)))
+    {
         if tok == "||" {
             continue;
         }
@@ -27465,6 +27565,7 @@ fn enqueue_dependencies(
             owner: Some(owner_key.clone()),
             unevaluated,
             buildtime_hard: false,
+            from_disjunction,
         });
     }
 }
@@ -29057,6 +29158,73 @@ mod tests {
                 version: "1.0".to_string()
             }
         );
+    }
+
+    /// Backlog #233: a dependency atom no ebuild satisfies but an
+    /// installed instance does settles `AlreadyInstalled` -- real
+    /// `_wrapped_select_pkg_highest_available_imp`
+    /// (`depgraph.py:7799-7840`) iterates the installed db for every
+    /// resolve (no `--usepkg` gate; the old gate here was the L1-a
+    /// narrowing). The live shape is an installed world member's stale
+    /// recorded built slot-operator atom:
+    /// `dev-libs/reinstslottarget:0/1=` (installed 1.0 at `SLOT="0/1"`,
+    /// only the `0/2` ebuild left in the tree) -- the `@world` walk
+    /// aborted `NoVisibleCandidate` on it (rc 1) before the #210
+    /// reverse-dependency scan could withhold the reinstall, while real
+    /// 3.0.82.2 merges the unrelated world updates and withholds
+    /// silently (rc 0; S0 probe `probe.log`, offline comparator
+    /// simulation clean). Flags mirror that cell (`--changed-slot
+    /// --update --deep --newuse`, no `--usepkg`). A top-level atom with
+    /// the same shape still reports (real needs something mergeable for
+    /// a package named on the command line).
+    #[test]
+    fn stale_built_slot_operator_dep_with_no_ebuild_reports_at_this_level() {
+        // At `resolve_pretend` level the L1-a gate stands (see the
+        // fallback's own comment): without `--usepkg`/`--usepkgonly` a
+        // dependency with no usable ebuild candidate reports
+        // `NoVisibleCandidate` even when the vdb could satisfy it --
+        // the runtime-keyed installed hearing lives one layer up (the
+        // queue loop's #233 rewrite), and the build-time-keyed pins
+        // below depend on this level reporting.
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+        let call = |is_top_level: bool| {
+            resolve_pretend(
+                &repos,
+                &root,
+                "dev-libs/reinstslottarget:0/1=",
+                &test_config(),
+                true,  // newuse
+                false, // changed_use
+                true,  // update
+                &[],
+                false, // changed_deps
+                false, // with_bdeps
+                true,  // changed_slot
+                true,  // selective (real sets it with --update)
+                is_top_level,
+                false, // usepkg
+                false, // usepkgonly
+                false, // binpkg_respect_use
+                &[],
+                &[],
+                false, // rebuilt_binaries
+                None,
+                false, // newrepo
+                false, // empty
+                false, // getbinpkg
+                false, // autounmask_keywords
+                false, // autounmask_use
+                false, // autounmask_license
+                false, // autounmask_masks
+                &[],
+                &build_local_binpkg_index(&test_config()),
+            )
+            .expect("resolve_pretend(dev-libs/reinstslottarget:0/1=) failed")
+        };
+        // Both levels report here; the walk rewrites the dependency one.
+        assert_eq!(call(false), PretendOutcome::NoVisibleCandidate);
+        assert_eq!(call(true), PretendOutcome::NoVisibleCandidate);
     }
 
     /// L0 finding L: a dependency atom `foo[bar]` whose already-installed
@@ -36091,6 +36259,42 @@ mod tests {
                 }
             ),],
             "the running-root-satisfied branch is selected and then dropped as already-satisfied"
+        );
+    }
+
+    #[test]
+    fn stale_built_slot_operator_dep_of_an_installed_package_settles_installed() {
+        // Backlog #233: walking an installed package's recorded deps
+        // (`Deep::Unlimited`, no `--update`), its stale built
+        // slot-operator atom `dev-libs/reinstslottarget:0/1=` (installed
+        // 1.0 at `SLOT="0/1"`, only the `0/2` ebuild in the tree) settles
+        // `AlreadyInstalled` -- the queue loop's runtime-keyed rewrite of
+        // the `NoVisibleCandidate` `resolve_pretend` still reports (real
+        // `_wrapped_select_pkg_highest_available_imp`,
+        // `depgraph.py:7799-7840`, iterates the installed db for every
+        // resolve). The live `:=` edge settles the same instance via the
+        // ordinary avoid-update path and dedups (`other_outcomes`), so
+        // the walk holds exactly two entries and never reports. Before
+        // the fix the `:0/1=` edge produced a `NoVisibleCandidate`
+        // entry, which the `@world` walk then rendered fatal (rc 1)
+        // before the #210 scan engaged. (Entry order is walk order: the
+        // dep settles before its parent entry is pushed.)
+        assert_eq!(
+            graph_root_deps("dev-libs/reinstslotbound", None),
+            vec![
+                (
+                    "dev-libs/reinstslottarget".to_string(),
+                    PretendOutcome::AlreadyInstalled {
+                        version: "1.0".to_string()
+                    }
+                ),
+                (
+                    "dev-libs/reinstslotbound".to_string(),
+                    PretendOutcome::AlreadyInstalled {
+                        version: "1.0".to_string()
+                    }
+                ),
+            ]
         );
     }
 
@@ -52960,6 +53164,7 @@ mod tests_162 {
             owner: None,
             unevaluated: None,
             buildtime_hard: false,
+            from_disjunction: false,
         }
     }
 
