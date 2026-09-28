@@ -20867,6 +20867,17 @@ pub struct AutounmaskChange {
     /// package parent, `required by <atom> (argument)` for a command-line
     /// argument.
     pub dep_chain: Vec<String>,
+    /// Backlog #205: the `(category, package)` whose atom mismatch
+    /// forced this USE flip (real `_get_dep_chain`'s
+    /// `unsatisfied_dependency` first parent). `None` for
+    /// keyword/license/mask changes (real renders those without the
+    /// unsatisfied filter) and for flips whose trigger is the change
+    /// owner itself (parent-flip rescues). The post-loop fill starts
+    /// the chain there instead of at the first requirer; a stale
+    /// trigger (no longer a requirer) falls back to the legacy start.
+    /// Travels with the record across backtrack passes (it names the
+    /// flip site, which the re-resolve reproduces).
+    pub trigger: Option<(String, String)>,
 }
 
 /// Real `_get_dep_chain_as_comment` (`depgraph.py:6457`), narrowed to
@@ -23607,6 +23618,10 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 state.autounmask_use_changes.push(AutounmaskChange {
                     atom: autounmask_use_atom_form(&parent_cand, &parent_all, &pc, &pp, config),
                     token,
+                    // A parent-flip rescue names the flipped parent, not
+                    // the failed dep: no single forcing parent, legacy
+                    // fill (backlog #205).
+                    trigger: None,
                     // Walk-time chain would be one row (required_by
                     // unfilled); the post-loop fill walks the full
                     // ascent like every other change (#135 (e)).
@@ -23721,6 +23736,12 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                         atom: atom_form,
                         token,
                         dep_chain: Vec::new(),
+                        // Backward-cascade overlay: the flip serves an
+                        // already-resolved slot, and the current dep's
+                        // owner is often not the forcing parent (e.g.
+                        // the bare-depending top package) -- no single
+                        // forcing parent, legacy fill (backlog #205).
+                        trigger: None,
                     });
                 }
                 state.autounmask_grew = true;
@@ -24781,6 +24802,8 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                                     atom: atom_form,
                                     token,
                                     dep_chain: Vec::new(),
+                                    // Backward-cascade overlay: see above.
+                                    trigger: None,
                                 });
                             }
                             // Real `_backtrack_depgraph` finishes
@@ -24889,6 +24912,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 atom: format!("={}/{}-{version}", key.0, key.1),
                 token: kw.to_string(),
                 dep_chain: Vec::new(),
+                trigger: None,
             });
         }
         // Real `--autounmask-license`: `resolve_pretend` accepted this
@@ -24906,6 +24930,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     atom: check_if_latest_atom_form(resolved, &all, &key.0, &key.1, config, false),
                     token: missing.join(" "),
                     dep_chain: Vec::new(),
+                    trigger: None,
                 });
             }
         }
@@ -24923,6 +24948,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 atom: format!("={}/{}-{version}", key.0, key.1),
                 token: String::new(),
                 dep_chain: Vec::new(),
+                trigger: None,
             });
         }
         // Real `_get_installed_best`'s `new_slot`: a `New` entry whose
@@ -25118,6 +25144,8 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     ),
                     token,
                     dep_chain: Vec::new(),
+                    // This dep's owner forced the flip.
+                    trigger: owner.clone(),
                 });
             }
         }
@@ -27099,7 +27127,6 @@ fn assemble_result(
     for change in pass
         .autounmask_keyword_changes
         .iter_mut()
-        .chain(pass.autounmask_use_changes.iter_mut())
         .chain(pass.autounmask_license_changes.iter_mut())
         .chain(pass.autounmask_mask_changes.iter_mut())
     {
@@ -27118,6 +27145,47 @@ fn assemble_result(
                 .iter()
                 .find(|e| e.category == atom.category && e.package == atom.package)
                 .and_then(|e| e.required_by.first().cloned())
+                .or(Some(own));
+            change.dep_chain = autounmask_dep_chain(
+                &owner,
+                &change.atom,
+                &ctx.top_level,
+                &pass.entries,
+                ctx.root,
+            );
+        }
+    }
+    // Backlog #205: USE changes start their chain at the forcing
+    // parent, not the first requirer. Real `_get_dep_chain(pkg,
+    // unsatisfied_dependency=True)` (`depgraph.py:6257`) picks the
+    // parent whose atom the package still does not satisfy
+    // (`best_match_to_list`); when every parent is satisfied
+    // post-change -- the ordinary flip shape, the change fixed them
+    // all -- it walks the digraph parents preferring the last merge
+    // parent (bug #354747), i.e. the deepest forcing edge, then the
+    // argument. The flip site records its forcing owner in
+    // `AutounmaskChange::trigger`; the fill starts there when it is
+    // still a requirer, else the legacy first-requirer start stands
+    // (stale triggers after a masking retry, parent-flip rescues).
+    // (Keyword/license/mask changes keep the legacy start: real
+    // renders those without the unsatisfied filter.) The ascent above
+    // that start is unchanged (single-branch, first-requirer hops).
+    for change in pass.autounmask_use_changes.iter_mut() {
+        if change.dep_chain.is_empty()
+            && let Some(atom) = portage_dep::parse_atom(&change.atom)
+        {
+            let own = (atom.category.clone(), atom.package.clone());
+            let owner = pass
+                .entries
+                .iter()
+                .find(|e| e.category == atom.category && e.package == atom.package)
+                .and_then(|e| {
+                    change
+                        .trigger
+                        .clone()
+                        .filter(|t| e.required_by.contains(t))
+                        .or_else(|| e.required_by.first().cloned())
+                })
                 .or(Some(own));
             change.dep_chain = autounmask_dep_chain(
                 &owner,
@@ -43646,6 +43714,7 @@ mod tests {
             atom: ">=a/b-1.0".to_string(),
             token: "flag".to_string(),
             dep_chain: Vec::new(),
+            trigger: None,
         });
         assert!(differs(p), "autounmask_use_change_records");
         let mut p = base.clone();
@@ -44355,11 +44424,13 @@ mod tests {
                 atom: "=dev-libs/overpkg-1.0".to_string(),
                 token: "+flag".to_string(),
                 dep_chain: Vec::new(),
+                trigger: None,
             },
             AutounmaskChange {
                 atom: "=dev-libs/overpkg-1.0".to_string(),
                 token: "-other".to_string(),
                 dep_chain: Vec::new(),
+                trigger: None,
             },
         ];
         let params = BacktrackParams::default();
@@ -44370,6 +44441,7 @@ mod tests {
             atom: "=dev-libs/overpkg-1.0".to_string(),
             token: "-other".to_string(),
             dep_chain: Vec::new(),
+            trigger: None,
         });
         let decision = collect_feedback(&ctx, &grown, &mut pass, &config);
         let PassDecision::Settle { params: out } = decision else {
@@ -58075,6 +58147,7 @@ mod tests_163 {
             atom: atom.to_string(),
             token: token.to_string(),
             dep_chain: chain.iter().map(|s| s.to_string()).collect(),
+            trigger: None,
         }
     }
 
