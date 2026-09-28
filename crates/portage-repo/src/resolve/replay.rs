@@ -74,6 +74,14 @@ pub(crate) fn replay_walk(
     })
 }
 
+/// Whether a pass carries any autounmask USE change: the only passes the
+/// autounmask-breakage replay has anything to decide on.
+pub(crate) fn pass_has_use_changes(params: &BacktrackParams, pass: &PassResult) -> bool {
+    !pass.autounmask_use_changes.is_empty()
+        || !pass.use_overlay.is_empty()
+        || !params.autounmask_use_config.is_empty()
+}
+
 /// The params of the one final clean pass: every autounmask change dropped
 /// and suggestion fully off.
 // Portage: depgraph.py, _autounmask_breakage
@@ -88,6 +96,130 @@ pub(crate) fn breakage_clean_params(params: &BacktrackParams) -> BacktrackParams
     grown.autounmask_use_change_records.clear();
     grown.backtrack_config = None;
     grown
+}
+
+/// The clean pass after an autounmask breakage runs with backtracking off: one
+/// pass, reported as it stands, then cut to what the fail-fast walk reached.
+// Portage: depgraph.py, _autounmask_breakage
+pub(crate) fn run_breakage_clean_pass(
+    ctx: &ResolveCtx<'_>,
+    initial: &BacktrackParams,
+    restarts: u64,
+) -> Result<GraphResult, Error> {
+    // The clean depgraph carries none of the search's masks or config.
+    let clean = breakage_clean_params(initial);
+    let pass = run_pass(ctx, &clean, false)?;
+    let mut result = assemble_result(ctx, &clean, pass, ctx.config, restarts);
+    fail_fast_truncate(ctx, &mut result);
+    Ok(result)
+}
+
+/// Portage's `_create_graph` returns at the first failing dependency, while
+/// portuale's pass walks everything and classifies afterwards. Replay Portage's
+/// walk over the result and keep only what that walk reached: the first failing
+/// atom's report with its own dep chain, and the slot conflicts admitted before
+/// it (in admission order). Leaves `result` untouched when the replay finds no
+/// failure or the pass has no report for it.
+// Portage: depgraph.py, _create_graph; _get_dep_chain
+pub(crate) fn fail_fast_truncate(ctx: &ResolveCtx<'_>, result: &mut GraphResult) {
+    if !matches!(result.outcome, ResolveOutcome::Aborted { .. }) {
+        return;
+    }
+    let r = replay_walk(ctx, &result.entries, false, &HashMap::new());
+    let Some(f) = r.failure.clone() else {
+        return;
+    };
+    let entries = &result.entries;
+    let edge = &entries[f.parent].deps[f.edge];
+    let (fc, fp) = (edge.category.clone(), edge.package.clone());
+    let same = |c: &str, p: &str, a: &str| c == fc && p == fp && a == edge.atom;
+    let has_report = result
+        .use_unsat_deps
+        .iter()
+        .any(|d| same(&d.category, &d.package, &d.atom))
+        || result
+            .plain_miss_deps
+            .iter()
+            .any(|d| same(&d.category, &d.package, &d.atom));
+    if !has_report {
+        return;
+    }
+    // The failing parent's own chain, innermost first.
+    let mut chain: Vec<(String, String)> = Vec::new();
+    let mut child = (fc.clone(), fp.clone());
+    let mut cur = f.parent;
+    let mut guard = 0usize;
+    loop {
+        let e = &entries[cur];
+        let Some(line) = chain_node_line(e, ctx.root, &ctx.repos, ctx.config, &child) else {
+            break;
+        };
+        chain.push(line);
+        if let Some(ai) = r.admitted_arg[cur] {
+            chain.push((ctx.atoms[ai].clone(), "argument".to_string()));
+            break;
+        }
+        let Some((p, _)) = r.admitted_by[cur] else {
+            break;
+        };
+        child = (e.category.clone(), e.package.clone());
+        cur = p;
+        guard += 1;
+        if guard > entries.len() {
+            break;
+        }
+    }
+    result
+        .use_unsat_deps
+        .retain(|d| same(&d.category, &d.package, &d.atom));
+    for d in &mut result.use_unsat_deps {
+        d.chain = chain.clone();
+    }
+    result
+        .plain_miss_deps
+        .retain(|d| same(&d.category, &d.package, &d.atom));
+    for d in &mut result.plain_miss_deps {
+        d.chain = chain.clone();
+    }
+    result.masked_deps.clear();
+    // Slot conflicts: only admitted instances, in admission order.
+    let rank: HashMap<(String, String, String), usize> = r
+        .admitted
+        .iter()
+        .enumerate()
+        .filter_map(|(pos, &i)| {
+            let e = &entries[i];
+            merge_bound_version(&e.outcome)
+                .map(|v| ((e.category.clone(), e.package.clone(), v.clone()), pos))
+        })
+        .collect();
+    let parent_rank = |cpv: &str| -> Option<usize> {
+        let (c, p, v) = split_cpv(cpv.split(':').next().unwrap_or(cpv))?;
+        rank.get(&(c, p, v)).copied()
+    };
+    for c in &mut result.slot_conflicts {
+        c.instances.retain(|inst| {
+            rank.contains_key(&(c.category.clone(), c.package.clone(), inst.version.clone()))
+        });
+        c.instances.sort_by_key(|inst| {
+            rank[&(c.category.clone(), c.package.clone(), inst.version.clone())]
+        });
+        for inst in &mut c.instances {
+            inst.parents
+                .retain(|p| p.parent_cpv.is_empty() || parent_rank(&p.parent_cpv).is_some());
+        }
+    }
+    result.slot_conflicts.retain(|c| c.instances.len() >= 2);
+    if let ResolveOutcome::Aborted { reason, .. } = &mut result.outcome
+        && let AbortReason::UnsatisfiedAtom { atom, parent_cpv }
+        | AbortReason::MaskedDep { atom, parent_cpv } = reason
+    {
+        let pe = &entries[f.parent];
+        if let Some(v) = merge_bound_version(&pe.outcome) {
+            *parent_cpv = format!("{}/{}-{v}", pe.category, pe.package);
+        }
+        *atom = edge.atom.clone();
+    }
 }
 
 /// Portage's `pkg_use_display` for a walked entry the replay placed in a
@@ -129,4 +261,189 @@ pub(crate) fn replay_conflict_use_display(
             version,
         },
     ))
+}
+
+/// A slot-conflict block as Portage's package tracker holds it after the
+/// replayed walk: instances in admission order, each instance's parents every
+/// edge that landed on it in walk order, each `USE="…"` the flip-applied
+/// display. Conflicts the replay cannot place are left as they are.
+// Portage: depgraph.py package tracker; UseFlagDisplay.pkg_use_display
+pub(crate) fn replay_slot_conflicts(
+    ctx: &ResolveCtx<'_>,
+    entries: &[GraphEntry],
+    r: &merge_order::WalkReplay,
+    conflicts: &mut [SlotConflict],
+) {
+    let find = |c: &str, p: &str, v: &str| {
+        entries.iter().position(|e| {
+            e.category == c
+                && e.package == p
+                && merge_bound_version(&e.outcome).is_some_and(|x| x == v)
+        })
+    };
+    let pos: HashMap<usize, usize> = r
+        .admitted
+        .iter()
+        .enumerate()
+        .map(|(k, &i)| (i, k))
+        .collect();
+    for c in conflicts.iter_mut() {
+        let idx: Vec<Option<usize>> = c
+            .instances
+            .iter()
+            .map(|inst| {
+                find(&c.category, &c.package, &inst.version).filter(|i| pos.contains_key(i))
+            })
+            .collect();
+        if idx.iter().any(Option::is_none) {
+            continue;
+        }
+        for (inst, i) in c.instances.iter_mut().zip(idx.iter().flatten()) {
+            let parents: Vec<SlotConflictParent> = r
+                .edges
+                .iter()
+                .filter(|(_, _, t)| t == i)
+                .filter_map(|&(p, ei, _)| {
+                    let pe = &entries[p];
+                    let v = merge_bound_version(&pe.outcome)?;
+                    let (sub, repo, slot) =
+                        slot_conflict_meta(&ctx.repos, &pe.category, &pe.package, v);
+                    Some(SlotConflictParent {
+                        parent_cpv: format!(
+                            "{}/{}-{v}:{slot}/{sub}::{repo}",
+                            pe.category, pe.package
+                        ),
+                        atom: pe.deps[ei].atom.clone(),
+                        use_display: replay_conflict_use_display(ctx, pe, v)
+                            .unwrap_or_else(|| pe.use_expand_display.clone()),
+                        installed: false,
+                    })
+                })
+                .collect();
+            if !parents.is_empty() {
+                inst.parents = parents;
+            }
+            let version = inst.version.clone();
+            if let Some(disp) = replay_conflict_use_display(ctx, &entries[*i], &version) {
+                inst.use_display = disp;
+            }
+        }
+        let mut order: Vec<(usize, SlotConflictInstance)> = idx
+            .iter()
+            .flatten()
+            .map(|i| pos[i])
+            .zip(c.instances.drain(..))
+            .collect();
+        order.sort_by_key(|(k, _)| *k);
+        c.instances = order.into_iter().map(|(_, inst)| inst).collect();
+    }
+}
+
+/// The USE changes the replayed walk needed on this pass (beyond what `base`
+/// already carried) applied to the entries they land on, and recorded in
+/// `changes` when the pass itself did not record them, with the first
+/// requester needing the change as the chain trigger.
+// Portage: depgraph.py, _pkg_use_enabled
+pub(crate) fn apply_replay_flips(
+    ctx: &ResolveCtx<'_>,
+    entries: &mut [GraphEntry],
+    r: &merge_order::WalkReplay,
+    base: &HashMap<(String, String), HashMap<String, bool>>,
+    changes: &mut Vec<AutounmaskChange>,
+) {
+    let origin_cp: HashMap<(String, String), (String, String)> = r
+        .flip_origin
+        .iter()
+        .map(|(cp, &(p, _))| {
+            (
+                cp.clone(),
+                (entries[p].category.clone(), entries[p].package.clone()),
+            )
+        })
+        .collect();
+    let mut needed: Vec<&(String, String)> = r.needed.keys().collect();
+    needed.sort();
+    for cp in needed {
+        let flags = &r.needed[cp];
+        let mut new: Vec<(String, bool)> = flags
+            .iter()
+            .filter(|(f, v)| base.get(cp).and_then(|m| m.get(*f)) != Some(v))
+            .map(|(f, v)| (f.clone(), *v))
+            .collect();
+        if new.is_empty() {
+            continue;
+        }
+        new.sort();
+        let Ok(cands) = list_candidates(&ctx.repos, &cp.0, &cp.1) else {
+            continue;
+        };
+        for e in entries.iter_mut().filter(|e| {
+            e.category == cp.0 && e.package == cp.1 && e.source == CandidateSource::Ebuild
+        }) {
+            let Some(version) = merge_bound_version(&e.outcome).cloned() else {
+                continue;
+            };
+            if !new
+                .iter()
+                .all(|(f, _)| e.use_flags_display.iter().any(|(g, _)| g == f))
+            {
+                continue;
+            }
+            let Some(cand) = cands.iter().find(|c| {
+                c.version == version && e.repo_name.as_deref().is_none_or(|r| r == c.repo_name)
+            }) else {
+                continue;
+            };
+            for (f, on) in &new {
+                for (g, v) in e.use_flags_display.iter_mut() {
+                    if g == f {
+                        *v = *on;
+                    }
+                }
+            }
+            let cpv = format!(
+                "{}/{}-{version}:{}/{}::{}",
+                cp.0, cp.1, cand.slot, cand.sub_slot, cand.repo_name
+            );
+            let forced = forced_or_masked_flags(ForcedOrMaskedFlagsArgs {
+                iuse: &cand.iuse,
+                keywords: &cand.keywords,
+                candidate_str: &cpv,
+                category: &cp.0,
+                package: &cp.1,
+                config: ctx.config,
+            });
+            let no_reinst = HashSet::new();
+            e.use_expand_display = build_use_expand_display(BuildUseExpandDisplayArgs {
+                use_flags_display: &e.use_flags_display,
+                config: ctx.config,
+                installed: None,
+                forced: &forced,
+                all_flags: true,
+                reinst_flags: &no_reinst,
+            });
+            e.use_expand_display_p = build_use_expand_display(BuildUseExpandDisplayArgs {
+                use_flags_display: &e.use_flags_display,
+                config: ctx.config,
+                installed: None,
+                forced: &forced,
+                all_flags: false,
+                reinst_flags: &no_reinst,
+            });
+            let atom = autounmask_use_atom_form(cand, &cands, &cp.0, &cp.1, ctx.config);
+            let token = new
+                .iter()
+                .map(|(f, on)| if *on { f.clone() } else { format!("-{f}") })
+                .collect::<Vec<_>>()
+                .join(" ");
+            if !changes.iter().any(|c| c.atom == atom && c.token == token) {
+                changes.push(AutounmaskChange {
+                    atom,
+                    token,
+                    dep_chain: Vec::new(),
+                    trigger: origin_cp.get(cp).cloned(),
+                });
+            }
+        }
+    }
 }

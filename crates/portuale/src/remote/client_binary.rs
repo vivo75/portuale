@@ -92,6 +92,47 @@ pub(crate) fn server_bin_info(ctx: &RemoteContext) -> Result<ServerBinInfo, Stri
     })
 }
 
+/// `e_machine` values the gate knows, with the `uname -m` names each
+/// maps to.
+pub(crate) fn machine_unames(machine: u16) -> Option<&'static [&'static str]> {
+    match machine {
+        // EM_386: the 32-bit x86 spellings `uname -m` prints.
+        3 => Some(&["i386", "i486", "i586", "i686"]),
+        // EM_PPC64: both endians run the same instruction set name here.
+        21 => Some(&["ppc64", "ppc64le"]),
+        // EM_S390.
+        22 => Some(&["s390x"]),
+        // EM_ARM.
+        40 => Some(&["armv5tel", "armv6l", "armv7l", "armv8l", "arm"]),
+        // EM_X86_64 (`amd64` is the FreeBSD `uname -m` spelling).
+        62 => Some(&["x86_64", "amd64"]),
+        // EM_AARCH64 (`arm64` is the macOS spelling).
+        183 => Some(&["aarch64", "arm64"]),
+        // EM_RISCV.
+        243 => Some(&["riscv64"]),
+        _ => None,
+    }
+}
+
+/// Human name for an `e_machine` in gate messages.
+pub(crate) fn machine_name(machine: u16) -> String {
+    match machine_unames(machine) {
+        Some(names) => names[0].to_string(),
+        None => format!("e_machine {machine}"),
+    }
+}
+
+/// Whether the shipped binary runs on the client: `Some(true)` when
+/// the client's `uname -m` is one of the machine's names, `Some(false)`
+/// on a definite mismatch, `None` when either side is unknown.
+pub(crate) fn arch_matches(machine: u16, uname_m: &str) -> Option<bool> {
+    let names = machine_unames(machine)?;
+    if uname_m.is_empty() {
+        return None;
+    }
+    Some(names.contains(&uname_m))
+}
+
 /// Server-side preflight facts for the binary gates: what to look for
 /// and what to compare against. `None` for local transport without
 /// `--remote-portuale-dir`, which keeps `current_exe()` and installs
@@ -154,6 +195,80 @@ pub(crate) fn dir_writable_for_install(
         ));
     }
     Ok(())
+}
+
+/// Evaluate the client-binary gates over parsed preflight values:
+/// `(plan, failures, notes)`. The first digest match wins; no match
+/// plans an install as `<dir>/portuale-<hash>` in the first usable
+/// directory; a mismatched plain `portuale` is a note (reported, left
+/// alone); an arch mismatch or no usable directory fails.
+pub(crate) fn evaluate_bin_gates(
+    values: &HashMap<String, String>,
+    pre: &BinPreflight,
+    override_given: bool,
+) -> (ClientBinPlan, Vec<String>, Vec<String>) {
+    let mut failures = Vec::new();
+    let mut notes = Vec::new();
+    let uname_m = values.get("UNAME_M").map(String::as_str).unwrap_or("");
+    if arch_matches(pre.machine, uname_m) == Some(false) {
+        failures.push(format!(
+            "client architecture is {uname_m:?} but the shipped binary (--remote-portuale-binary {}) is built for {}: build the client architecture and pass it with --remote-portuale-binary",
+            pre.bin_path,
+            machine_name(pre.machine),
+        ));
+        return (ClientBinPlan::Unresolved, failures, notes);
+    }
+    let short: String = pre.digest.chars().take(16).collect();
+    let mut corrupted_hashed: Vec<String> = Vec::new();
+    for (i, path) in pre.candidates.iter().enumerate() {
+        let sha = values
+            .get(&format!("CAND_{i}_SHA"))
+            .map(String::as_str)
+            .unwrap_or("missing");
+        if sha == pre.digest {
+            return (ClientBinPlan::Use(path.clone()), failures, notes);
+        }
+        let plain = path.rsplit('/').next().unwrap_or(path) == "portuale";
+        if !plain && sha != "missing" && !sha.is_empty() {
+            corrupted_hashed.push(path.clone());
+        }
+        if plain && sha != "missing" && !sha.is_empty() {
+            notes.push(format!(
+                "client {path} has a different SHA-256 (an operator install?); left alone"
+            ));
+        }
+    }
+    // No match: the first usable directory takes `<dir>/portuale-<hash>`.
+    let mut reasons = Vec::new();
+    for (j, dir) in pre.dirs.iter().enumerate() {
+        match dir_writable_for_install(values, j, dir) {
+            Ok(()) => {
+                let target = format!("{dir}/portuale-{short}");
+                if corrupted_hashed.contains(&target) {
+                    notes.push(format!(
+                        "client {target} does not match its name (corrupted); planned for replacement"
+                    ));
+                }
+                return (ClientBinPlan::Install(target), failures, notes);
+            }
+            Err(reason) => reasons.push(reason),
+        }
+    }
+    if override_given {
+        failures.push(format!(
+            "mrg: --remote-portuale-dir {}: {}",
+            pre.dirs.first().map(String::as_str).unwrap_or("?"),
+            reasons
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "no usable directory".to_string()),
+        ));
+    } else {
+        failures.push(
+            "mrg: no writable client directory for the portuale binary (/opt/bin and /usr/local/bin are missing, unwritable, or world-writable without the sticky bit): pass --remote-portuale-dir=<abs dir> pointing at a directory the client login can write, or run as a root login".to_string(),
+        );
+    }
+    (ClientBinPlan::Unresolved, failures, notes)
 }
 
 /// Run the install stage when the plan says so: `Use`/`Local` are
