@@ -402,6 +402,27 @@ fn resolve_real_changed_deps(category: &str, package: &str, with_bdeps: bool) ->
     .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
 }
 
+fn graph_changed_deps_report(
+    atom_str: &str,
+    changed_deps: bool,
+    changed_deps_report: bool,
+) -> GraphResult {
+    let root = fixtures_root();
+    ResolveRequest {
+        changed_deps,
+        changed_deps_report,
+        ..ResolveRequest::new(
+            &root,
+            &root,
+            &[atom_str.to_string()],
+            &test_config(),
+            &fixtures_root().join("distfiles"),
+        )
+    }
+    .resolve()
+    .unwrap_or_else(|e| panic!("resolving {atom_str} failed: {e}"))
+}
+
 fn resolve_real_changed_slot(category: &str, package: &str) -> PretendOutcome {
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
@@ -559,6 +580,132 @@ fn mk_at(root: &std::path::Path, name: &str, key: &str, dep: &str) {
     std::fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
     std::fs::write(d.join("SLOT"), "0\n").unwrap();
     std::fs::write(d.join(key), format!("{dep}\n")).unwrap();
+}
+
+fn graph_with(
+    atom_str: &str,
+    tweak: impl FnOnce(&mut ResolveRequest),
+) -> Vec<(String, PretendOutcome)> {
+    let root = fixtures_root();
+    let mut request = ResolveRequest::new(
+        &root,
+        &root,
+        &[atom_str.to_string()],
+        &test_config(),
+        &fixtures_root().join("distfiles"),
+    );
+    tweak(&mut request);
+    request
+        .resolve()
+        .unwrap_or_else(|e| panic!("resolving {atom_str} failed: {e}"))
+        .entries
+        .into_iter()
+        .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
+        .collect()
+}
+
+fn graph(atom_str: &str) -> Vec<(String, PretendOutcome)> {
+    graph_with(atom_str, |_| {})
+}
+
+/// Resolve one atom as an `--onlydeps` root with the given `--onlydeps-with-*`
+/// values, over the shared fixture tree (the unit-level counterpart of the
+/// `odw0*` contract cells).
+fn graph_onlydeps(
+    atom_str: &str,
+    with_rdeps: bool,
+    with_ideps: bool,
+) -> Vec<(String, PretendOutcome)> {
+    let root = fixtures_root();
+    let req = ResolveRequest {
+        config_root: root.clone(),
+        root: root.clone(),
+        atoms: vec![atom_str.to_string()],
+        config: test_config(),
+        newuse: false,
+        changed_use: false,
+        nodeps: false,
+        onlydeps: true,
+        onlydeps_with_rdeps: with_rdeps,
+        onlydeps_with_ideps: with_ideps,
+        update: false,
+        deep: Deep::NotRequested,
+        excluded: Vec::new(),
+        with_bdeps: true,
+        changed_deps: false,
+        changed_slot: false,
+        with_test_deps: false,
+        changed_deps_report: false,
+        selective: false,
+        autounmask_suggest_keywords: false,
+        autounmask_suggest_use: false,
+        autounmask_suggest_license: false,
+        autounmask_suggest_masks: false,
+        usepkg: false,
+        usepkgonly: false,
+        binpkg_respect_use: false,
+        usepkg_exclude: Vec::new(),
+        usepkg_include: Vec::new(),
+        rebuilt_binaries: false,
+        rebuilt_binaries_timestamp: None,
+        newrepo: false,
+        buildpkgonly: false,
+        root_deps_running_root: None,
+        distdir: root.join("distfiles"),
+        empty: false,
+        getbinpkg: false,
+        ignore_built_slot_operator_deps: false,
+        backtrack_max: 10,
+        reinstall_atoms: Vec::new(),
+        rebuild_if_new_slot: true,
+        rebuild_if_unbuilt: false,
+        rebuild_if_new_rev: false,
+        rebuild_if_new_ver: false,
+        rebuild_exclude: Vec::new(),
+        rebuild_ignore: Vec::new(),
+        dynamic_deps: true,
+        implicit_system_deps: true,
+        complete: false,
+        set_args: std::collections::HashSet::new(),
+        solver: SolverKind::Portage,
+    };
+    active_resolver()
+        .resolve(&req)
+        .unwrap_or_else(|e| panic!("resolve({atom_str}) failed: {e}"))
+        .entries
+        .into_iter()
+        .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
+        .collect()
+}
+
+/// Resolve a multi-atom fixture graph with `--update`, returning full entries
+/// (the `graph*` helpers above map to name/outcome pairs only).
+fn graph_update_entries(atoms: &[&str], config: &portage_profile::Config) -> Vec<GraphEntry> {
+    let root = fixtures_root();
+    let owned: Vec<String> = atoms.iter().map(|a| a.to_string()).collect();
+    ResolveRequest {
+        update: true,
+        ..ResolveRequest::new(
+            &root,
+            &root,
+            &owned,
+            config,
+            &fixtures_root().join("distfiles"),
+        )
+    }
+    .resolve()
+    .unwrap_or_else(|e| panic!("resolving {owned:?} failed: {e}"))
+    .entries
+}
+
+/// Like `graph`, but with `--nodeps` enabled.
+fn graph_nodeps(atom_str: &str) -> Vec<(String, PretendOutcome)> {
+    graph_with(atom_str, |r| r.nodeps = true)
+}
+
+/// Like `graph`, but with `--update` enabled.
+fn graph_update(atom_str: &str) -> Vec<(String, PretendOutcome)> {
+    graph_with(atom_str, |r| r.update = true)
 }
 
 /// Arguments of [`graph_rebuild_if`].
@@ -2829,6 +2976,8 @@ mod installed;
 mod installed_meta;
 mod license;
 mod masked_deps;
+mod merge_bound;
+mod merge_order;
 mod metadata_cache;
 mod pass;
 mod pass_helpers;

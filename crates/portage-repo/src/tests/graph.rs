@@ -571,6 +571,99 @@ fn sibling_package_prefix_does_not_contaminate_vdb_scan() {
     );
 }
 
+/// `--onlydeps-with-rdeps` / `--onlydeps-with-ideps` blank an onlydeps root's
+/// dep classes like Portage (the root itself is always resolved; only the
+/// display layer suppresses it).
+#[test]
+fn onlydeps_with_rdeps_and_ideps_blank_the_root_dep_classes() {
+    let names = |entries: Vec<(String, PretendOutcome)>| {
+        let mut names: Vec<String> = entries.into_iter().map(|(n, _)| n).collect();
+        names.sort();
+        names
+    };
+    // Default (rdeps on): every class walked.
+    assert_eq!(
+        names(graph_onlydeps("dev-libs/odw0a", true, false)),
+        vec![
+            "dev-libs/odw0a",
+            "dev-libs/odw0b",
+            "dev-libs/odw0c",
+            "dev-libs/odw0d",
+            "dev-libs/odw0e",
+            "dev-libs/odw0f",
+        ],
+        "default"
+    );
+    // with-rdeps=n: build-time keys (DEPEND B, BDEPEND F) only.
+    assert_eq!(
+        names(graph_onlydeps("dev-libs/odw0a", false, false)),
+        vec!["dev-libs/odw0a", "dev-libs/odw0b", "dev-libs/odw0f"],
+        "with-rdeps=n"
+    );
+    // with-rdeps=n + with-ideps=y: IDEPEND E restored.
+    assert_eq!(
+        names(graph_onlydeps("dev-libs/odw0a", false, true)),
+        vec![
+            "dev-libs/odw0a",
+            "dev-libs/odw0b",
+            "dev-libs/odw0e",
+            "dev-libs/odw0f",
+        ],
+        "with-rdeps=n with-ideps=y"
+    );
+}
+
+/// An EAPI-7 root's `IDEPEND` never reaches the walk (Portage's `bin/ebuild.sh`
+/// unsets it in the depend phase).
+#[test]
+fn onlydeps_eapi7_root_ignores_idepend() {
+    let mut names: Vec<String> = graph_onlydeps("dev-libs/odw0g", true, false)
+        .into_iter()
+        .map(|(n, _)| n)
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        vec![
+            "dev-libs/odw0b",
+            "dev-libs/odw0c",
+            "dev-libs/odw0d",
+            "dev-libs/odw0g",
+        ]
+    );
+}
+
+/// An installed `||` alternative's `[use]` deps are matched against its
+/// recorded vdb USE, not the tree candidate's profile-derived USE (Portage's
+/// composite-db vardb cover plus the built-package branch reading `USE`).
+#[test]
+fn disjunction_preference_matches_an_installed_alternatives_vdb_use() {
+    let entries = graph("dev-libs/altconsumer");
+    assert!(
+        entries
+            .iter()
+            .any(|(name, _)| name == "dev-libs/altconsumer"),
+        "{entries:?}"
+    );
+    let altprov_merges: Vec<&(String, PretendOutcome)> = entries
+        .iter()
+        .filter(|(name, outcome)| {
+            name == "dev-libs/altprov"
+                && matches!(
+                    outcome,
+                    PretendOutcome::New { .. }
+                        | PretendOutcome::Upgrade { .. }
+                        | PretendOutcome::Downgrade { .. }
+                        | PretendOutcome::Reinstall { .. }
+                )
+        })
+        .collect();
+    assert!(
+        altprov_merges.is_empty(),
+        "the installed altprov:1.1[flip] must win the || group: {entries:?}"
+    );
+}
+
 #[test]
 fn exclude_threads_through_dependency_recursion_not_just_top_level() {
     // --exclude must still leave it alone despite --update, proving the flag
@@ -1173,6 +1266,157 @@ fn deep_is_ignored_when_nodeps_disables_the_dependency_walk_entirely() {
 }
 
 #[test]
+fn recursion_basic_chain() {
+    // Without --update it stays AlreadyInstalled, reached here as a dependency
+    // instead of a top-level atom.
+    let entries = graph("dev-libs/withdeps");
+    assert_eq!(
+        entries,
+        vec![
+            (
+                "dev-libs/newpkg".to_string(),
+                PretendOutcome::New {
+                    version: "1.0".to_string()
+                }
+            ),
+            (
+                "dev-libs/upgradepkg".to_string(),
+                PretendOutcome::AlreadyInstalled {
+                    version: "1.0".to_string()
+                }
+            ),
+            (
+                "dev-libs/withdeps".to_string(),
+                PretendOutcome::New {
+                    version: "1.0".to_string()
+                }
+            )
+        ]
+    );
+}
+
+#[test]
+fn recursion_keeps_a_keyword_masked_but_installed_dependency_instead_of_downgrading() {
+    // Reached only as a dependency (the live `sys-fs/fuse` -> `sys-libs/liburing`
+    // shape): stays installed instead of downgrading.
+    let entries = graph("dev-libs/needskeywordmasked");
+    assert_eq!(
+        entries,
+        vec![
+            (
+                "dev-libs/keywordmaskedpkg".to_string(),
+                PretendOutcome::AlreadyInstalled {
+                    version: "2.0".to_string()
+                }
+            ),
+            (
+                "dev-libs/needskeywordmasked".to_string(),
+                PretendOutcome::New {
+                    version: "1.0".to_string()
+                }
+            )
+        ]
+    );
+}
+
+#[test]
+fn recursion_keeps_a_keyword_masked_but_installed_dependency_with_a_satisfied_use_dep() {
+    // A genuine USE-dep on the same keyword-masked-but-installed shape, checked
+    // against the vdb-recorded USE via `use_deps_satisfied` (the live
+    // `sys-fs/fuse` -> `sys-libs/liburing:=[...]` shape).
+    let entries = graph("dev-libs/needskeywordmaskeduse");
+    assert_eq!(
+        entries,
+        vec![
+            (
+                "dev-libs/keywordmaskedusepkg".to_string(),
+                PretendOutcome::AlreadyInstalled {
+                    version: "2.0".to_string()
+                }
+            ),
+            (
+                "dev-libs/needskeywordmaskeduse".to_string(),
+                PretendOutcome::New {
+                    version: "1.0".to_string()
+                }
+            )
+        ]
+    );
+}
+
+#[test]
+fn recursion_keeps_an_installed_dependency_whose_use_dep_flag_is_only_in_its_built_use() {
+    // The installed 1.0 has vdb USE="divergedflag" but empty vdb IUSE, and the
+    // current ebuild dropped the flag entirely -- yet the installed version
+    // satisfies the atom (Portage's `_iuse_implicit_built`).
+    let entries = graph("dev-libs/needsbuiltusediverge");
+    assert_eq!(
+        entries,
+        vec![
+            (
+                "dev-libs/builtusedivergedep".to_string(),
+                PretendOutcome::AlreadyInstalled {
+                    version: "1.0".to_string()
+                }
+            ),
+            (
+                "dev-libs/needsbuiltusediverge".to_string(),
+                PretendOutcome::New {
+                    version: "1.0".to_string()
+                }
+            )
+        ]
+    );
+}
+
+#[test]
+fn recursion_basic_chain_with_update_upgrades_the_dependency() {
+    // Same fixture with --update, reached only as a dependency: still upgrades,
+    // proving `update` threads through the whole BFS.
+    let entries = graph_update("dev-libs/withdeps");
+    assert_eq!(
+        entries,
+        vec![
+            (
+                "dev-libs/newpkg".to_string(),
+                PretendOutcome::New {
+                    version: "1.0".to_string()
+                }
+            ),
+            (
+                "dev-libs/upgradepkg".to_string(),
+                PretendOutcome::Upgrade {
+                    from: "1.0".to_string(),
+                    to: "2.0".to_string(),
+                }
+            ),
+            (
+                "dev-libs/withdeps".to_string(),
+                PretendOutcome::New {
+                    version: "1.0".to_string()
+                }
+            )
+        ]
+    );
+}
+
+#[test]
+fn nodeps_resolves_the_top_level_atom_but_never_recurses() {
+    // With --nodeps only the top-level atom itself is ever resolved; its own
+    // DEPEND/RDEPEND is never even read.
+    let entries = graph_nodeps("dev-libs/withdeps");
+    assert_eq!(
+        entries,
+        vec![(
+            "dev-libs/withdeps".to_string(),
+            PretendOutcome::New {
+                version: "1.0".to_string()
+            }
+        )]
+    );
+}
+
+#[test]
 fn nodeps_still_computes_use_flags_display_for_the_top_level_atom() {
     // Portage's own -v USE display is about a package's own metadata, so
     // --nodeps must not blank it out.
@@ -1246,6 +1490,118 @@ fn use_expand_hidden_group_is_absent_from_the_pv_display() {
 }
 
 #[test]
+fn recursion_walks_bdepend_pdepend_idepend_same_as_depend_rdepend() {
+    for pkg in ["bdependpkg", "pdependpkg", "idependpkg"] {
+        let entries = graph(&format!("dev-libs/{pkg}"));
+        assert_eq!(
+            entries,
+            vec![
+                (
+                    "dev-libs/newpkg".to_string(),
+                    PretendOutcome::New {
+                        version: "1.0".to_string()
+                    }
+                ),
+                (
+                    format!("dev-libs/{pkg}"),
+                    PretendOutcome::New {
+                        version: "1.0".to_string()
+                    }
+                ),
+            ],
+            "{pkg}"
+        );
+    }
+}
+
+#[test]
+fn recursion_dedupes_diamond_dependency() {
+    let entries = graph("dev-libs/diamond");
+    let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(
+        names,
+        vec![
+            "dev-libs/common",
+            "dev-libs/shared-a",
+            "dev-libs/shared-b",
+            "dev-libs/diamond"
+        ]
+    );
+    // "common" must appear exactly once despite being reachable via
+    // both shared-a and shared-b.
+    assert_eq!(names.iter().filter(|n| **n == "dev-libs/common").count(), 1);
+}
+
+#[test]
+fn entries_are_returned_in_dependency_first_merge_order() {
+    // `topological_merge_order`: the BFS builds entries parent-first, so the
+    // graph re-sorts them into dependency-first order before returning.
+    let names: Vec<String> = graph("dev-libs/withdeps")
+        .into_iter()
+        .map(|(n, _)| n)
+        .collect();
+    let withdeps = names.iter().position(|n| n == "dev-libs/withdeps").unwrap();
+    let newpkg = names.iter().position(|n| n == "dev-libs/newpkg").unwrap();
+    let upgradepkg = names
+        .iter()
+        .position(|n| n == "dev-libs/upgradepkg")
+        .unwrap();
+    assert!(newpkg < withdeps, "{names:?}");
+    assert!(upgradepkg < withdeps, "{names:?}");
+
+    // Diamond: the shared leaf precedes both consumers, which both precede
+    // the root.
+    let d: Vec<String> = graph("dev-libs/diamond")
+        .into_iter()
+        .map(|(n, _)| n)
+        .collect();
+    let pos = |p: &str| d.iter().position(|n| n == p).unwrap();
+    assert!(pos("dev-libs/common") < pos("dev-libs/shared-a"));
+    assert!(pos("dev-libs/common") < pos("dev-libs/shared-b"));
+    assert!(pos("dev-libs/shared-a") < pos("dev-libs/diamond"));
+    assert!(pos("dev-libs/shared-b") < pos("dev-libs/diamond"));
+}
+
+#[test]
+fn a_slot_qualified_dep_does_not_edge_to_a_sibling_slot() {
+    // `build_digraph` resolves each dep atom to the entries it actually
+    // matches before adding an edge (a slot-blind lookup gave phantom edges).
+    let names: Vec<String> = graph("dev-libs/slotorderroot")
+        .into_iter()
+        .map(|(n, _)| n)
+        .collect();
+    let pos = |p: &str| names.iter().position(|n| n == p).unwrap();
+    assert!(
+        pos("dev-libs/slotordera") < pos("dev-libs/slotorderdual"),
+        "{names:?}"
+    );
+    assert!(
+        pos("dev-libs/slotorderdual") < pos("dev-libs/slotorderb"),
+        "{names:?}"
+    );
+    assert!(
+        pos("dev-libs/slotorderb") < pos("dev-libs/slotorderroot"),
+        "{names:?}"
+    );
+    // both slots still merge -- the fix removes phantom edges, not nodes
+    assert_eq!(
+        names
+            .iter()
+            .filter(|n| *n == "dev-libs/slotorderdual")
+            .count(),
+        2,
+        "{names:?}"
+    );
+}
+
+#[test]
+fn recursion_terminates_on_a_dependency_cycle() {
+    let entries = graph("dev-libs/cycle-a");
+    let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, vec!["dev-libs/cycle-a", "dev-libs/cycle-b"]);
+}
+
+#[test]
 fn conditional_grandparent_with_undeclared_flag_is_masked_invalid_before_any_cycle_analysis() {
     // The USE-gated cycle is still in the tree, but the target constrains the
     // flag conditionally with `x` in no IUSE: Portage masks the candidate
@@ -1281,6 +1637,66 @@ fn conditional_grandparent_with_undeclared_flag_is_masked_invalid_before_any_cyc
         ),
         "{report}"
     );
+}
+
+#[test]
+fn or_dep_prefers_a_branch_already_merge_bound_in_the_graph() {
+    // ingraphwallet is already a graph node when ingraphsvc's `||` resolves:
+    // Portage's `all_in_graph` bin picks it over the first-listed branch.
+    let names: Vec<String> = graph("dev-libs/ingraphany")
+        .into_iter()
+        .map(|(n, _)| n)
+        .collect();
+    assert!(names.contains(&"dev-libs/ingraphwallet".to_string()));
+    assert!(!names.contains(&"dev-libs/ingraphkeyring".to_string()));
+    assert!(!names.contains(&"dev-libs/ingraphkeyringdep".to_string()));
+
+    // Control: with nothing pulling ingraphwallet in independently,
+    // the same `||` falls back to the first-listed branch.
+    let ctl: Vec<String> = graph("dev-libs/ingraphnoany")
+        .into_iter()
+        .map(|(n, _)| n)
+        .collect();
+    assert!(ctl.contains(&"dev-libs/ingraphkeyring".to_string()));
+    assert!(!ctl.contains(&"dev-libs/ingraphwallet".to_string()));
+}
+
+#[test]
+fn recursion_prefers_the_installed_any_of_alternative_over_an_earlier_uninstalled_one() {
+    // The installed alternative wins even though it's listed second (Portage's
+    // `preferred_installed` bin).
+    let entries = graph("dev-libs/anyof");
+    let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, vec!["dev-libs/samepkg", "dev-libs/anyof"]);
+}
+
+#[test]
+fn recursion_survives_an_unresolvable_dependency() {
+    // The unresolvable dependency still shows up (as NoVisibleCandidate, not
+    // silently dropped); it just isn't recursed into further.
+    let entries = graph("dev-libs/missingdep");
+    assert_eq!(
+        entries,
+        vec![
+            (
+                "dev-libs/doesnotexist-anywhere".to_string(),
+                PretendOutcome::NoVisibleCandidate
+            ),
+            (
+                "dev-libs/missingdep".to_string(),
+                PretendOutcome::New {
+                    version: "1.0".to_string()
+                }
+            )
+        ]
+    );
+}
+
+#[test]
+fn recursion_dedupes_across_depend_and_rdepend() {
+    let entries = graph("dev-libs/dualdep");
+    let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, vec!["dev-libs/newpkg", "dev-libs/dualdep"]);
 }
 
 /// End-to-end wiring check: the fully resolved config proves genuine USE flags
