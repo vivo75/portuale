@@ -1520,6 +1520,42 @@ mod use_deps_violated_tests {
         let child_iuse: HashSet<String> = iuse.iter().map(|s| s.to_string()).collect();
         use_deps_violated(&ud, &parent_use, &child_use, &child_iuse)
     }
+
+    #[test]
+    fn unconditional_forms_follow_the_child() {
+        assert!(violated("dev-libs/foo[x]", &[], &[], &["x"]));
+        assert!(!violated("dev-libs/foo[x]", &[], &["x"], &["x"]));
+        assert!(violated("dev-libs/foo[-x]", &[], &["x"], &["x"]));
+        assert!(!violated("dev-libs/foo[-x]", &[], &[], &["x"]));
+    }
+
+    #[test]
+    fn parent_disabled_child_enabled_breaks_not_parent_disabled() {
+        // Installed consumer built with -icu (`[-icu]` raw, `[!icu?]` live) vs the icu-flipped rebuild.
+        assert!(violated("dev-libs/foo[!x?]", &[], &["x"], &["x"]));
+        assert!(!violated("dev-libs/foo[!x?]", &[], &[], &["x"]));
+        assert!(!violated("dev-libs/foo[!x?]", &["x"], &["x"], &["x"]));
+        assert!(violated("dev-libs/foo[-x]", &[], &["x"], &["x"]));
+    }
+
+    #[test]
+    fn parent_enabled_forms_compare_against_the_parent() {
+        assert!(violated("dev-libs/foo[x?]", &["x"], &[], &["x"]));
+        assert!(!violated("dev-libs/foo[x?]", &[], &[], &["x"]));
+        assert!(!violated("dev-libs/foo[x?]", &["x"], &["x"], &["x"]));
+        assert!(violated("dev-libs/foo[x=]", &["x"], &[], &["x"]));
+        assert!(violated("dev-libs/foo[x=]", &[], &["x"], &["x"]));
+        assert!(!violated("dev-libs/foo[x=]", &["x"], &["x"], &["x"]));
+        assert!(violated("dev-libs/foo[!x=]", &["x"], &["x"], &["x"]));
+        assert!(violated("dev-libs/foo[!x=]", &[], &[], &["x"]));
+        assert!(!violated("dev-libs/foo[!x=]", &["x"], &[], &["x"]));
+    }
+
+    #[test]
+    fn undeclared_flag_without_default_is_always_violated() {
+        assert!(violated("dev-libs/foo[x]", &[], &[], &[]));
+        assert!(violated("dev-libs/foo[!x?]", &[], &[], &[]));
+    }
 }
 
 #[cfg(test)]
