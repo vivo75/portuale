@@ -16087,8 +16087,8 @@ struct ProbeParent {
 /// (`lib/_emerge/depgraph.py:2472-2573`) as the update probe's refusal
 /// gate on both scan arms (the `:2622` replacement-parent gate and the
 /// `:2738` candidate-child gate inside `_slot_operator_update_probe`;
-/// the `:8786` slot-conflict-fired probe is v2 `#24e` and never reaches
-/// this scan).
+/// the `:2310` slot-conflict-fired probe is v2 `#214`'s own
+/// [`slot_conflict_abi_probe`], which reuses this map).
 ///
 /// The caller precollects, per provider cp, every installed package Q
 /// whose recorded deps name that cp -- real's `_parent_atoms[child]`.
@@ -16209,6 +16209,283 @@ fn probe_refused(
     })
 }
 
+/// `cat/pkg-ver` for a slot-conflict parent edge: [`slot_conflict_puller_cpv`]
+/// renders `` `cat/pkg-ver:slot/sub::repo` `` (empty for a top-level
+/// `(Argument)` parent). Strips the display suffixes back to the triple.
+fn parse_conflict_parent_cpv(parent_cpv: &str) -> Option<(String, String, String)> {
+    let head = parent_cpv.split_once("::").map_or(parent_cpv, |(h, _)| h);
+    let (cpv_part, _) = head.split_once(':')?;
+    split_cpv(cpv_part)
+}
+
+/// Backlog #214 (v2 `#24e`): real `_slot_conflict_backtrack_abi`
+/// (`lib/_emerge/depgraph.py:2282-2315`), the slot-conflict-fired half
+/// of the update probe (real `:2310`, via
+/// `_slot_operator_update_probe_slot_conflict` `:2453`).
+///
+/// Real's `_process_slot_conflict` tries this BEFORE the masking
+/// backtrack: for every recorded conflict, for every parent edge whose
+/// atom is a built package's soname/`:=` atom, it re-probes with
+/// `_slot_operator_update_probe_slot_conflict` (the `slot_conflict=True`
+/// form -- no `want_update` gate, no complete-mode gate) and, on
+/// success, schedules the parent reinstall through
+/// `_slot_operator_update_backtrack` (the same
+/// `slot_operator_replace_installed` set + restart the #211 scan feeds)
+/// instead of reporting the conflict.
+///
+/// Portuale runs this over the direct solve's surviving records, in the
+/// feedback chain before the mask arms (the same order as real), and
+/// returns the newly-scheduled parent cps; the caller grows the replace
+/// set, which restarts the search -- no masks are filed for a resolved
+/// conflict, like real's `remaining` skip. The rebuild's display pair is
+/// recomputed at settle time (see [`slot_conflict_abi_display_pairs`]),
+/// mirroring real's settle-time `_compute_abi_rebuild_info`.
+///
+/// Per parent edge (parent P with atom A filed under instance M, other
+/// instance C), P is scheduled when every check below holds:
+/// - P parses (an `(Argument)` edge is not a package -- real's
+///   `not isinstance(parent, Package)` skip) and is installed at that
+///   version (real's `parent.built`), but is not merge-bound this pass
+///   (a merging parent rebinds its live `:=` through its own walk), is
+///   not already scheduled, and is not eliminated;
+/// - P is not `--exclude`d (real checks the dep's parent end);
+/// - A is a built slot-operator atom (`cat/pkg:S/SS=`, real
+///   `Atom.slot_operator_built`) that does NOT match C (else this edge
+///   is not conflicted at all);
+/// - C differs from M in sub-slot (real skips identical slot/sub-slot)
+///   and is not older than M (downgrades need `_downgrade_probe`,
+///   unimplemented -- the same direction as the scan);
+/// - a same-version tree ebuild for P exists (the reinstall real forces;
+///   with no visible candidate it would dead-end) whose live atoms
+///   accept C;
+/// - the R2 refusal passes for C (the same [`probe_refused`] gate as the
+///   scan, over the same [`collect_probe_parents`] map).
+///
+/// Cuts, all disclosed: soname atoms (the parser rejects them -- the
+/// scan carries the same cut); the probe's per-autounmask-level retry
+/// (`_slot_operator_update_probe_slot_conflict` re-probes at each level
+/// when `_autounmask` is on); merge-bound veto parents (the refusal only
+/// sees installed parents, like the scan's); the child-side
+/// `--exclude` check (only the parent end is gated); USE-conditional
+/// and `||` evaluation of the replacement's atoms (flat token match).
+/// Not gated on `rebuild_if_new_slot`: real's conflict path never is
+/// (the scan's call-site gate is the pre-existing narrowing for its own
+/// arms, not this one).
+#[allow(clippy::too_many_arguments)]
+fn slot_conflict_abi_probe(
+    root: &Path,
+    repos: &[RepoConfig],
+    entries: &[GraphEntry],
+    conflicts: &[SlotConflict],
+    already: &BTreeSet<(String, String)>,
+    undone: &BTreeSet<(String, String)>,
+    with_bdeps: bool,
+    walked: &HashSet<(String, String)>,
+    excluded: &[String],
+    probe_parents: &HashMap<(String, String), Vec<ProbeParent>>,
+) -> BTreeSet<(String, String)> {
+    // cp -> () for every merge-bound entry: a merging parent rebinds
+    // through its own walk, so only installed parents probe.
+    let merge_bound: HashSet<(String, String)> = entries
+        .iter()
+        .filter(|e| merge_bound_version(&e.outcome).is_some())
+        .map(|e| (e.category.clone(), e.package.clone()))
+        .collect();
+    // Real restarts the whole search per resolution, so two edges never
+    // share one probe call; the growing set below is the local
+    // equivalent (a parent scheduled by an earlier edge skips, and its
+    // veto is forgiven, exactly like the scan's `scheduled`).
+    let mut scheduled: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut refusals: BTreeSet<(String, String)> = already.clone();
+    for sc in conflicts {
+        let provider_cp = (sc.category.clone(), sc.package.clone());
+        if sc.instances.len() < 2 {
+            continue;
+        }
+        for (mi, m) in sc.instances.iter().enumerate() {
+            for parent in &m.parents {
+                let Some((pcat, ppkg, pver)) = parse_conflict_parent_cpv(&parent.parent_cpv) else {
+                    continue;
+                };
+                let pcp = (pcat.clone(), ppkg.clone());
+                if !installed_candidates(root, &pcat, &ppkg)
+                    .iter()
+                    .any(|(v, _, _)| v == &pver)
+                {
+                    continue;
+                }
+                if merge_bound.contains(&pcp)
+                    || already.contains(&pcp)
+                    || scheduled.contains(&pcp)
+                    || undone.contains(&pcp)
+                {
+                    continue;
+                }
+                let pq_str = format!("{pcat}/{ppkg}-{pver}");
+                if excluded
+                    .iter()
+                    .any(|ex| matches_config_entry(ex, &pq_str, &pcat, &ppkg))
+                {
+                    continue;
+                }
+                let Some(atom) = portage_dep::parse_atom(&parent.atom) else {
+                    continue;
+                };
+                if !is_built_slot_op(&atom) {
+                    continue;
+                }
+                // Every other instance is a candidate child; real probes
+                // each non-conflicting slot node in turn.
+                for (ci, c) in sc.instances.iter().enumerate() {
+                    if ci == mi {
+                        continue;
+                    }
+                    if m.sub_slot.is_empty() || c.sub_slot.is_empty() || m.sub_slot == c.sub_slot {
+                        continue;
+                    }
+                    if vercmp_ordering(&c.version, &m.version) == std::cmp::Ordering::Less {
+                        continue;
+                    }
+                    let c_str = format!(
+                        "{cat}/{pkg}-{cver}:{slot}/{csub}",
+                        cat = sc.category,
+                        pkg = sc.package,
+                        cver = c.version,
+                        slot = sc.slot,
+                        csub = c.sub_slot,
+                    );
+                    // The edge is only conflicted when A rejects C.
+                    if portage_dep::match_from_list(&parent.atom, &[c_str.as_str()])
+                        .is_some_and(|mt| !mt.is_empty())
+                    {
+                        continue;
+                    }
+                    // The same-version reinstall real forces: its live
+                    // atoms must accept C (the replacement search), and
+                    // its mere presence proves the reinstall can land.
+                    let Some(live) = live_metadata_for_installed(repos, root, &pcat, &ppkg, &pver)
+                    else {
+                        continue;
+                    };
+                    // Same build-time-key rule as the scan: real empties
+                    // the replacement's build-time keys when bdeps is off.
+                    let dep_keys: &[&str] = match with_bdeps && walked.contains(&pcp) {
+                        true => &["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"],
+                        false => &["RDEPEND", "PDEPEND", "IDEPEND"],
+                    };
+                    let accepts = dep_keys
+                        .iter()
+                        .flat_map(|k| {
+                            live.get(*k)
+                                .map(|s| s.as_str())
+                                .unwrap_or("")
+                                .split_whitespace()
+                        })
+                        .any(|tok| {
+                            let Some(la) = portage_dep::parse_atom(tok) else {
+                                return false;
+                            };
+                            if la.blocker != portage_dep::Blocker::None {
+                                return false;
+                            }
+                            if la.category != sc.category || la.package != sc.package {
+                                return false;
+                            }
+                            portage_dep::match_from_list(tok, &[c_str.as_str()])
+                                .is_some_and(|mt| !mt.is_empty())
+                        });
+                    if !accepts {
+                        continue;
+                    }
+                    if probe_refused(probe_parents, &refusals, &provider_cp, &c_str, &pcp) {
+                        continue;
+                    }
+                    scheduled.insert(pcp.clone());
+                    refusals.insert(pcp.clone());
+                }
+            }
+        }
+    }
+    scheduled
+}
+
+/// Backlog #214 (v2 `#24e`): the display continuity for conflict-fired
+/// rebuilds. The firing pass restarts the search, so only the settled
+/// graph is left to render real's `causing rebuilds` block -- and the
+/// scan cannot re-derive the pair there (no `Upgrade` entry keys its
+/// same-slot arm when nothing was installed, and same-slot `New`
+/// entries never feed its new-slot arm). Recomputed here from the
+/// settled state instead, mirroring real's settle-time
+/// `_compute_abi_rebuild_info` (`depgraph.py:996-1090`, which derives
+/// the block from the force-reinstalled parents rather than carrying
+/// it): for every `slot_operator_rebuild` reinstall entry, each
+/// recorded built `:=` atom on a provider cp merged in the same slot at
+/// a different sub-slot contributes its `(provider-cpv, consumer-cpv)`
+/// pair. Unioned with the scan's pairs and deduped by the caller, so
+/// shapes the scan already covers render exactly once.
+fn slot_conflict_abi_display_pairs(
+    root: &Path,
+    entries: &[GraphEntry],
+    replace_set: &BTreeSet<(String, String)>,
+    with_bdeps: bool,
+) -> Vec<(String, String)> {
+    let walked: HashSet<(String, String)> = entries
+        .iter()
+        .map(|e| (e.category.clone(), e.package.clone()))
+        .collect();
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    for e in entries {
+        let PretendOutcome::Reinstall {
+            version,
+            slot_operator_rebuild: true,
+            ..
+        } = &e.outcome
+        else {
+            continue;
+        };
+        let ccp = (e.category.clone(), e.package.clone());
+        if !replace_set.contains(&ccp) {
+            continue;
+        }
+        let consumer_cpv = format!("{}/{}-{version}", e.category, e.package);
+        let dep_keys: &[&str] = match with_bdeps && walked.contains(&ccp) {
+            true => &["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"],
+            false => &["RDEPEND", "PDEPEND", "IDEPEND"],
+        };
+        for key in dep_keys {
+            let recorded = read_vdb_string(root, &e.category, &e.package, version, key);
+            for tok in recorded.split_whitespace() {
+                let Some(atom) = portage_dep::parse_atom(tok) else {
+                    continue;
+                };
+                if !is_built_slot_op(&atom) {
+                    continue;
+                }
+                let Some(bound_slot) = atom.slot.clone() else {
+                    continue;
+                };
+                let bound_sub = atom.sub_slot.clone().unwrap_or_default();
+                for cand in entries.iter().filter(|o| {
+                    o.category == atom.category
+                        && o.package == atom.package
+                        && merge_bound_version(&o.outcome).is_some()
+                        && o.slot.as_deref() == Some(bound_slot.as_str())
+                        && o.sub_slot.as_deref().is_some_and(|s| *s != bound_sub)
+                }) {
+                    let Some(pver) = merge_bound_version(&cand.outcome) else {
+                        continue;
+                    };
+                    pairs.push((
+                        format!("{}/{}-{pver}", atom.category, atom.package),
+                        consumer_cpv.clone(),
+                    ));
+                }
+            }
+        }
+    }
+    pairs
+}
+
 /// Real depgraph's `_slot_operator_trigger_reinstalls` (3089-3132) +
 /// `_slot_operator_replace_installed` (the
 /// `@__auto_slot_operator_replace_installed__` set), run once every
@@ -16286,8 +16563,10 @@ fn probe_refused(
 /// `slot_operator_mask_built` arms, which have no portuale-visible
 /// diverging shape -- both steer a *parent* the graph is already
 /// replacing (update) or failing on (unsatisfied), so same-version
-/// binary-vs-ebuild steering is vacuous there; the `:8786`
-/// slot-conflict-fired probe never reaches this scan (v2 `#24e`).
+/// binary-vs-ebuild steering is vacuous there. The `:2310`
+/// slot-conflict-fired probe is NOT this scan (v2 `#214` ports it as
+/// the sibling [`slot_conflict_abi_probe`], fed by the surviving
+/// conflict records rather than the merge entries).
 #[allow(clippy::too_many_arguments)]
 fn slot_operator_rebuild_scan(
     root: &Path,
@@ -29211,6 +29490,79 @@ fn collect_feedback(
         };
     }
 
+    // Backlog #214 (v2 `#24e`): real `_slot_conflict_backtrack_abi`
+    // (`lib/_emerge/depgraph.py:2282-2315`) runs inside
+    // `_process_slot_conflict`, BEFORE the masking backtrack below --
+    // a built parent whose soname/`:=` conflict atom the update probe
+    // can resolve is rebuilt instead of reported. Same order here: the
+    // probe below fires before the solvability/mask arms, and its
+    // restart carries no masks (real's `remaining` skip). Gated on a
+    // live search like the scan's own call site (`backtrack_max > 0`
+    // is real's `_allow_backtracking`; `ignore_built_slot_operator_deps`
+    // drops the built atoms the probe reads; no unsatisfiable
+    // dependency outstanding, like the `has_nvc` dead-end arm below --
+    // real never reaches conflict processing with a failed
+    // `_create_graph`).
+    // Deliberately NOT gated on `rebuild_if_new_slot` (real's conflict
+    // path never is -- the scan's call-site gate is the pre-existing
+    // narrowing for its own arms, not this one).
+    if !pass.slot_conflicts.is_empty()
+        && ctx.backtrack_max > 0
+        && !ctx.ignore_built_slot_operator_deps
+        && !pass.suppressed_nvc
+        && !pass
+            .entries
+            .iter()
+            .any(|e| matches!(e.outcome, PretendOutcome::NoVisibleCandidate))
+    {
+        // Same inputs the scan builds for its own refusal map: every
+        // cp this pass walked, the merge-bound set, and the R2 parents.
+        let walked: HashSet<(String, String)> = pass
+            .entries
+            .iter()
+            .map(|e| (e.category.clone(), e.package.clone()))
+            .collect();
+        let mut in_graph: HashSet<(String, String)> = HashSet::new();
+        for e in &pass.entries {
+            if !matches!(
+                e.outcome,
+                PretendOutcome::AlreadyInstalled { .. }
+                    | PretendOutcome::NoVisibleCandidate
+                    | PretendOutcome::Uninstall { .. }
+            ) {
+                in_graph.insert((e.category.clone(), e.package.clone()));
+            }
+        }
+        let probe_parents = collect_probe_parents(
+            ctx.root,
+            &pass.entries,
+            &ctx.slot_op_reachable,
+            &walked,
+            &in_graph,
+            &grown.slot_operator_replace_installed,
+            ctx.with_bdeps,
+            ctx.excluded,
+        );
+        let fresh = slot_conflict_abi_probe(
+            ctx.root,
+            &ctx.repos,
+            &pass.entries,
+            &pass.slot_conflicts,
+            &grown.slot_operator_replace_installed,
+            &grown.slot_operator_undone,
+            ctx.with_bdeps,
+            &walked,
+            ctx.excluded,
+            &probe_parents,
+        );
+        if !fresh.is_empty() {
+            grown.slot_operator_replace_installed.extend(fresh);
+            return PassDecision::Feedback(BacktrackFeedback::Config {
+                params: Box::new(grown),
+            });
+        }
+    }
+
     // Backtracking (real `backtracking.py` retry loop driven by
     // `_process_slot_conflicts`): if this attempt left any slot conflicts,
     // check each one for solvability -- is there a single version of the
@@ -29875,7 +30227,7 @@ fn assemble_result(
     // recomputed for `_show_abi_rebuild_info`. `collect_feedback` already
     // ran the scan for every pass it decided; the `get_best_run` re-pass
     // does not go through it, hence the fallback.
-    let abi_rebuilds = match pass.abi_rebuilds.take() {
+    let mut abi_rebuilds = match pass.abi_rebuilds.take() {
         Some(pairs) => pairs,
         None if ctx.ignore_built_slot_operator_deps || !ctx.rebuild_if_new_slot => Vec::new(),
         None => {
@@ -29894,6 +30246,19 @@ fn assemble_result(
             .1
         }
     };
+    // Backlog #214 (v2 `#24e`): continuity pairs for conflict-fired
+    // rebuilds (see [`slot_conflict_abi_display_pairs`]) -- the firing
+    // pass restarts, so the scan never sees the edge on the settling
+    // pass. Unioned with the scan's pairs and deduped, so shapes the
+    // scan already covers render exactly once.
+    abi_rebuilds.extend(slot_conflict_abi_display_pairs(
+        ctx.root,
+        &pass.entries,
+        &params.slot_operator_replace_installed,
+        ctx.with_bdeps,
+    ));
+    abi_rebuilds.sort();
+    abi_rebuilds.dedup();
 
     // Real `_rebuild_config.trigger_rebuilds()` (`--rebuild-if-unbuilt`
     // / `--rebuild-if-new-rev` / `--rebuild-if-new-ver`): an installed
@@ -47288,6 +47653,433 @@ mod tests {
             &["dev-libs/massv".to_string()],
         );
         assert_eq!(same_kept, BTreeSet::from([massc]));
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// Backlog #214 (v2 `#24e`) S0 harness: installed `abicons-1`
+    /// recording `app-misc/abiprov:0/1=`, tree `abiprov-1` (`0/1`) +
+    /// `abiprov-2` (`0/2`) + consumer `abicons-1` (live `:=`) + forcer
+    /// `abiforce-1` (`>=abiprov-2`). `with_consumer` controls whether
+    /// the consumer's same-version ebuild (the reinstall real forces)
+    /// is visible in the tree.
+    #[allow(clippy::too_many_arguments)]
+    fn abi_probe_harness(with_consumer: bool) -> (std::path::PathBuf, Vec<RepoConfig>) {
+        use md5::Digest as _;
+        use std::fmt::Write as _;
+        let base = std::env::temp_dir().join(format!(
+            "portage-repo-abi-probe-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        for (name, slot, rdepend) in [
+            ("abiprov-1", "0/1", ""),
+            ("abicons-1", "0", "app-misc/abiprov:0/1="),
+        ] {
+            let d = base.join("var/db/pkg/app-misc").join(name);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(d.join("CATEGORY"), "app-misc\n").unwrap();
+            fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+            fs::write(d.join("repository"), "testrepo\n").unwrap();
+            if !rdepend.is_empty() {
+                fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+            }
+        }
+        let repo = base.join("repo");
+        let write_pkg = |pkg: &str, pv: &str, slot: &str, rdepend: &str| {
+            let dir = repo.join("app-misc").join(pkg);
+            std::fs::create_dir_all(&dir).unwrap();
+            let mut body =
+                format!("EAPI=8\nDESCRIPTION=\"214 abi\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\n");
+            if !rdepend.is_empty() {
+                writeln!(body, "RDEPEND=\"{rdepend}\"").unwrap();
+            }
+            std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
+            let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+            let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=214 abi\nEAPI=8\n".to_string();
+            if !rdepend.is_empty() {
+                writeln!(entry, "RDEPEND={rdepend}").unwrap();
+            }
+            writeln!(entry, "KEYWORDS=amd64\nSLOT={slot}\n_md5_={md5}").unwrap();
+            let cachedir = repo.join("metadata/md5-cache/app-misc");
+            std::fs::create_dir_all(&cachedir).unwrap();
+            std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+        };
+        write_pkg("abiprov", "1", "0/1", "");
+        write_pkg("abiprov", "2", "0/2", "");
+        if with_consumer {
+            write_pkg("abicons", "1", "0", "app-misc/abiprov:=");
+        }
+        write_pkg("abiforce", "1", "0", ">=app-misc/abiprov-2");
+        let repos = vec![RepoConfig {
+            name: "testrepo".to_string(),
+            location: repo.clone(),
+            priority: 0,
+            is_main: true,
+            masters: vec![],
+            profile_formats: vec![],
+            cache_formats: vec![],
+            aliases: vec![],
+            sync_type: None,
+            sync_uri: None,
+            volatile: false,
+            module_specific_options: vec![],
+        }];
+        (base, repos)
+    }
+
+    fn abi_conflict_record(
+        inst0_parents: Vec<(&str, &str)>,
+        inst1_parents: Vec<(&str, &str)>,
+    ) -> SlotConflict {
+        let edge = |cpv: &str, atom: &str| SlotConflictParent {
+            parent_cpv: cpv.to_string(),
+            atom: atom.to_string(),
+            use_display: Vec::new(),
+            installed: false,
+        };
+        let inst = |version: &str, sub: &str, parents: Vec<(&str, &str)>| SlotConflictInstance {
+            version: version.to_string(),
+            sub_slot: sub.to_string(),
+            repo_name: "testrepo".to_string(),
+            use_display: Vec::new(),
+            parents: parents.into_iter().map(|(c, a)| edge(c, a)).collect(),
+            installed: false,
+        };
+        SlotConflict {
+            category: "app-misc".to_string(),
+            package: "abiprov".to_string(),
+            slot: "0".to_string(),
+            resolved_version: "2".to_string(),
+            conflicting_atom: "app-misc/abiprov:0/1=".to_string(),
+            instances: vec![inst("2", "2", inst0_parents), inst("1", "1", inst1_parents)],
+        }
+    }
+
+    fn abi_probe_entries(consumer_outcome: PretendOutcome) -> Vec<GraphEntry> {
+        let provider = |version: &str, sub: &str| GraphEntry {
+            outcome: PretendOutcome::New {
+                version: version.to_string(),
+            },
+            slot: Some("0".into()),
+            sub_slot: Some(sub.into()),
+            ..graph_entry("app-misc", "abiprov", version)
+        };
+        vec![
+            provider("2", "2"),
+            provider("1", "1"),
+            GraphEntry {
+                outcome: consumer_outcome,
+                slot: Some("0".into()),
+                sub_slot: Some("0".into()),
+                ..graph_entry("app-misc", "abicons", "1")
+            },
+            GraphEntry {
+                outcome: PretendOutcome::New {
+                    version: "1".to_string(),
+                },
+                slot: Some("0".into()),
+                sub_slot: Some("0".into()),
+                ..graph_entry("app-misc", "abiforce", "1")
+            },
+        ]
+    }
+
+    /// Backlog #214 (v2 `#24e`): the conflict-fired probe schedules the
+    /// installed `:=` parent for rebuild instead of reporting, with one
+    /// guard arm per coded gate.
+    #[test]
+    fn slot_conflict_abi_probe_rebuilds_the_built_parent() {
+        let (base, repos) = abi_probe_harness(true);
+        let cons_cpv = "app-misc/abicons-1:0/0::testrepo";
+        let force_cpv = "app-misc/abiforce-1:0/0::testrepo";
+        let record = abi_conflict_record(
+            vec![
+                (force_cpv, ">=app-misc/abiprov-2"),
+                (cons_cpv, "app-misc/abiprov:="),
+            ],
+            vec![(cons_cpv, "app-misc/abiprov:0/1=")],
+        );
+        let installed_consumer = PretendOutcome::AlreadyInstalled {
+            version: "1".to_string(),
+        };
+        let probe = |entries: &[GraphEntry],
+                     conflicts: &[SlotConflict],
+                     already: &BTreeSet<(String, String)>,
+                     excluded: &[String]|
+         -> BTreeSet<(String, String)> {
+            let walked: HashSet<(String, String)> = entries
+                .iter()
+                .map(|e| (e.category.clone(), e.package.clone()))
+                .collect();
+            let mut in_graph: HashSet<(String, String)> = HashSet::new();
+            for e in entries {
+                if !matches!(
+                    e.outcome,
+                    PretendOutcome::AlreadyInstalled { .. }
+                        | PretendOutcome::NoVisibleCandidate
+                        | PretendOutcome::Uninstall { .. }
+                ) {
+                    in_graph.insert((e.category.clone(), e.package.clone()));
+                }
+            }
+            let empty_reach: HashSet<(String, String)> = HashSet::new();
+            let parents = collect_probe_parents(
+                &base,
+                entries,
+                &empty_reach,
+                &walked,
+                &in_graph,
+                already,
+                true,
+                excluded,
+            );
+            slot_conflict_abi_probe(
+                &base,
+                &repos,
+                entries,
+                conflicts,
+                already,
+                &BTreeSet::new(),
+                true,
+                &walked,
+                excluded,
+                &parents,
+            )
+        };
+        let abicons = ("app-misc".to_string(), "abicons".to_string());
+        let entries = abi_probe_entries(installed_consumer.clone());
+        // Positive: the installed `:=` parent rebuilds.
+        assert_eq!(
+            probe(
+                &entries,
+                std::slice::from_ref(&record),
+                &BTreeSet::new(),
+                &[]
+            ),
+            BTreeSet::from([abicons.clone()])
+        );
+        // Merge-bound parent rebinds through its own walk: no probe.
+        let merging = abi_probe_entries(PretendOutcome::New {
+            version: "1".to_string(),
+        });
+        assert!(
+            probe(
+                &merging,
+                std::slice::from_ref(&record),
+                &BTreeSet::new(),
+                &[]
+            )
+            .is_empty(),
+            "a merging parent needs no reinstall"
+        );
+        // Already scheduled: no growth.
+        assert!(
+            probe(
+                &entries,
+                std::slice::from_ref(&record),
+                &BTreeSet::from([abicons.clone()]),
+                &[],
+            )
+            .is_empty(),
+            "an in-flight rebuild is not scheduled twice"
+        );
+        // Excluded parent: real's `excluded_pkgs` skip.
+        assert!(
+            probe(
+                &entries,
+                std::slice::from_ref(&record),
+                &BTreeSet::new(),
+                &["app-misc/abicons".to_string()]
+            )
+            .is_empty(),
+            "an excluded parent is never force-rebuilt"
+        );
+        // Non-built atom: a plain version pin is a real conflict, not an
+        // ABI rebuild (real's `slot_operator_built` gate).
+        let plain = abi_conflict_record(
+            vec![(force_cpv, ">=app-misc/abiprov-2")],
+            vec![(cons_cpv, "=app-misc/abiprov-1")],
+        );
+        assert!(
+            probe(&entries, &[plain], &BTreeSet::new(), &[]).is_empty(),
+            "a non-slot-operator pin reports instead of rebuilding"
+        );
+        // `(Argument)` parent: not a package, real skips it.
+        let arg_only = abi_conflict_record(vec![], vec![("", "app-misc/abiprov:0/1=")]);
+        assert!(
+            probe(&entries, &[arg_only], &BTreeSet::new(), &[]).is_empty(),
+            "a top-level atom schedules no rebuild"
+        );
+        // Same sub-slot on both instances: no ABI shift to chase.
+        let mut same_sub = record.clone();
+        same_sub.instances[1].sub_slot = "2".to_string();
+        same_sub.instances[1].parents = vec![SlotConflictParent {
+            parent_cpv: cons_cpv.to_string(),
+            atom: "app-misc/abiprov:0/9=".to_string(),
+            use_display: Vec::new(),
+            installed: false,
+        }];
+        assert!(
+            probe(&entries, &[same_sub], &BTreeSet::new(), &[]).is_empty(),
+            "identical sub-slots are not an ABI update"
+        );
+        // Downgrade direction: the other instance is older.
+        let mut older_other = record.clone();
+        older_other.instances[0].version = "0".to_string();
+        assert!(
+            probe(&entries, &[older_other], &BTreeSet::new(), &[]).is_empty(),
+            "an older other-instance is never the update target"
+        );
+        // No same-version ebuild for the parent: the forced reinstall
+        // would dead-end.
+        let (bare_base, bare_repos) = abi_probe_harness(false);
+        let walked: HashSet<(String, String)> = entries
+            .iter()
+            .map(|e| (e.category.clone(), e.package.clone()))
+            .collect();
+        let mut in_graph: HashSet<(String, String)> = HashSet::new();
+        for e in &entries {
+            if !matches!(e.outcome, PretendOutcome::AlreadyInstalled { .. }) {
+                in_graph.insert((e.category.clone(), e.package.clone()));
+            }
+        }
+        let bare_parents = collect_probe_parents(
+            &bare_base,
+            &entries,
+            &HashSet::new(),
+            &walked,
+            &in_graph,
+            &BTreeSet::new(),
+            true,
+            &[],
+        );
+        assert!(
+            slot_conflict_abi_probe(
+                &bare_base,
+                &bare_repos,
+                &entries,
+                std::slice::from_ref(&record),
+                &BTreeSet::new(),
+                &BTreeSet::new(),
+                true,
+                &walked,
+                &[],
+                &bare_parents,
+            )
+            .is_empty(),
+            "without a visible replacement the probe does nothing"
+        );
+        // Veto: another installed parent rejects the fresh candidate
+        // (the R2 refusal, same gate as the scan).
+        let veto_dir = base.join("var/db/pkg/app-misc").join("abiveto-1");
+        fs::create_dir_all(&veto_dir).unwrap();
+        fs::write(veto_dir.join("CATEGORY"), "app-misc\n").unwrap();
+        fs::write(veto_dir.join("SLOT"), "0\n").unwrap();
+        fs::write(veto_dir.join("repository"), "testrepo\n").unwrap();
+        fs::write(veto_dir.join("RDEPEND"), "<app-misc/abiprov-2\n").unwrap();
+        let mut vetoed = entries.clone();
+        vetoed.push(GraphEntry {
+            outcome: PretendOutcome::AlreadyInstalled {
+                version: "1".to_string(),
+            },
+            slot: Some("0".into()),
+            sub_slot: Some("0".into()),
+            ..graph_entry("app-misc", "abiveto", "1")
+        });
+        assert!(
+            probe(
+                &vetoed,
+                std::slice::from_ref(&record),
+                &BTreeSet::new(),
+                &[]
+            )
+            .is_empty(),
+            "a vetoed candidate refuses the whole replacement"
+        );
+        let _ = fs::remove_dir_all(&base);
+        let _ = fs::remove_dir_all(&bare_base);
+    }
+
+    /// Backlog #214 (v2 `#24e`): the settle-time display continuity --
+    /// a `slot_operator_rebuild` reinstall re-derives its
+    /// `(provider-cpv, consumer-cpv)` pair from the recorded built atom
+    /// and the merged provider, so the `causing rebuilds` block renders
+    /// even though the firing pass restarted.
+    #[test]
+    fn slot_conflict_abi_display_pairs_follow_the_rebuild() {
+        let (base, _repos) = abi_probe_harness(true);
+        let reinstall = |slot_operator_rebuild: bool| GraphEntry {
+            outcome: PretendOutcome::Reinstall {
+                version: "1".to_string(),
+                changed_flags: Vec::new(),
+                deps_changed: false,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: false,
+                slot_operator_rebuild,
+            },
+            slot: Some("0".into()),
+            sub_slot: Some("0".into()),
+            ..graph_entry("app-misc", "abicons", "1")
+        };
+        let provider = GraphEntry {
+            outcome: PretendOutcome::New {
+                version: "2".to_string(),
+            },
+            slot: Some("0".into()),
+            sub_slot: Some("2".into()),
+            ..graph_entry("app-misc", "abiprov", "2")
+        };
+        let set: BTreeSet<(String, String)> =
+            BTreeSet::from([("app-misc".to_string(), "abicons".to_string())]);
+        // Positive: the rebuilt consumer re-derives its provider pair.
+        assert_eq!(
+            slot_conflict_abi_display_pairs(
+                &base,
+                &[reinstall(true), provider.clone()],
+                &set,
+                true
+            ),
+            vec![(
+                "app-misc/abiprov-2".to_string(),
+                "app-misc/abicons-1".to_string()
+            )]
+        );
+        // Not a slot-operator rebuild: no pair.
+        assert!(
+            slot_conflict_abi_display_pairs(
+                &base,
+                &[reinstall(false), provider.clone()],
+                &set,
+                true
+            )
+            .is_empty(),
+            "an ordinary reinstall renders no ABI pair"
+        );
+        // Consumer not in the replace set: no pair.
+        assert!(
+            slot_conflict_abi_display_pairs(
+                &base,
+                &[reinstall(true), provider.clone()],
+                &BTreeSet::new(),
+                true
+            )
+            .is_empty(),
+            "only replace-set rebuilds explain themselves"
+        );
+        // Provider at the bound sub-slot: no shift, no pair.
+        let same_sub = GraphEntry {
+            sub_slot: Some("1".into()),
+            ..provider.clone()
+        };
+        assert!(
+            slot_conflict_abi_display_pairs(&base, &[reinstall(true), same_sub], &set, true)
+                .is_empty(),
+            "an unshifted provider is not an ABI cause"
+        );
         let _ = fs::remove_dir_all(&base);
     }
 
