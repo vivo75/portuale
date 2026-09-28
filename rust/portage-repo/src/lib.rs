@@ -11364,11 +11364,87 @@ fn atom_installed_in_slot_of(
 /// see `atoms_all_in_graph` for the whole-alternative predicate): the atom
 /// is satisfied by a package already added to the graph this run
 /// (merge-bound), with `[use]` deps checked against that entry's resolved
-/// USE. Split out of `atoms_all_in_graph` so the circular-self-dep check
+/// USE. Real matches against full package objects -- slot included
+/// (`graph_db.match_pkgs(atom)` over the digraph) -- so the candidate
+/// carries the entry's `:slot[/sub-slot]` (the same assembled shape as
+/// [`circular_child_candidate`]; a slotless entry falls back to the bare
+/// cpv). Matching slotless used to over-match `:slot` atoms (`matches_slot`
+/// is vacuous without a candidate slot): `dev-lang/rust:1.95.0`
+/// "matched" graphed `rust-1.96.1`, ranked `Installed`, and beat
+/// `rust-bin:1.96.1` on the backtrack retry -- the g221c L0 regression
+/// (real's slot check rejects it, `rust-bin` wins). Split out of
+/// `atoms_all_in_graph` so the circular-self-dep check
 /// in `disjunction_preference` can ask the same question for one atom: a
 /// self-naming atom that matches an in-graph node is real's pass-1
 /// `preferred_in_graph` pick (backlog #216), not a circle to refuse.
+/// (The gate itself asks the coarser cp-presence question --
+/// [`atom_cp_present_in_graph`] -- since a cross-slot same-cp atom must
+/// still proceed to the bins; only the choice bins use this
+/// slot-precise rule.)
 fn atom_matches_graph(
+    atom_str: &str,
+    entries: &[GraphEntry],
+    config: &portage_profile::Config,
+    queued_cps: &HashSet<(String, String)>,
+) -> bool {
+    let Some(parsed) = portage_dep::parse_atom(atom_str) else {
+        return false;
+    };
+    if parsed.blocker != portage_dep::Blocker::None {
+        return false;
+    }
+    if queued_cps.contains(&(parsed.category.clone(), parsed.package.clone())) {
+        return true;
+    };
+    let use_deps = parsed.use_deps.unwrap_or_default();
+    entries.iter().any(|e| {
+        let Some(cpv) = merge_bound_cpv(e) else {
+            return false;
+        };
+        if e.category != parsed.category || e.package != parsed.package {
+            return false;
+        }
+        let mut candidate = cpv;
+        if let Some(slot) = &e.slot {
+            candidate.push(':');
+            candidate.push_str(slot);
+            if let Some(sub_slot) = &e.sub_slot {
+                candidate.push('/');
+                candidate.push_str(sub_slot);
+            }
+        }
+        if portage_dep::match_from_list(atom_str, &[candidate.as_str()])
+            .is_none_or(|m| m.is_empty())
+        {
+            return false;
+        }
+        if use_deps.is_empty() {
+            return true;
+        }
+        let enabled: HashSet<String> = e
+            .use_flags_display
+            .iter()
+            .filter(|(_, on)| *on)
+            .map(|(f, _)| f.clone())
+            .collect();
+        let iuse: HashSet<String> = e.use_flags_display.iter().map(|(f, _)| f.clone()).collect();
+        portage_dep::use_deps_satisfied(&use_deps, &valid_iuse(&iuse, config), &enabled)
+    })
+}
+
+/// The circular-self-dep gate's cp-level presence check: does a merge-bound
+/// entry (or a queued-but-unresolved atom, backlog #90 (S1)'s drain-state
+/// approximation) share the atom's `cat/pkg`? Deliberately slot-blind,
+/// unlike [`atom_matches_graph`]: the gate (portuale-only, real has no
+/// self-exclusion) asks "is our cp in play at all", not "does this atom
+/// resolve to a graphed instance". A same-cp cross-slot atom with a
+/// different-slot instance graphed (e.g. `dev-lang/rust:1.95.0` while
+/// `rust-1.96.1` is merge-bound) must still proceed to the choice bins --
+/// real merges the second instance as an ordinary dependency -- so slot
+/// precision here would wrongly refuse it as circular. Body is the
+/// pre-g221c `atom_matches_graph` verbatim; only the choice bins moved to
+/// the slot-precise rule.
+fn atom_cp_present_in_graph(
     atom_str: &str,
     entries: &[GraphEntry],
     config: &portage_profile::Config,
@@ -11393,9 +11469,6 @@ fn atom_matches_graph(
         }
         if portage_dep::match_from_list(atom_str, &[cpv.as_str()]).is_none_or(|m| m.is_empty()) {
             return false;
-        }
-        if use_deps.is_empty() {
-            return true;
         }
         let enabled: HashSet<String> = e
             .use_flags_display
@@ -11699,10 +11772,13 @@ fn alternative_downgrade_demoted(
 /// re-walk takes the branch that breaks the cycle (bugs 703440, 705986).
 /// The installed-walk call sites (`collect_unwalked_installed_blockers`,
 /// `enqueue_dependencies`) pass an empty map: real keys exact package
-/// nodes, so an installed parent -- never a merge-bound cycle node -- can
-/// never hit, and portuale's one-entry-per-`cat/pkg` shape means those
-/// parents never share a cp with one either (the blocker scan skips
-/// walked cps outright).
+/// nodes (`Package.__hash__ = Task.__hash__`, no `__eq__` override), so
+/// an installed parent -- never a merge-bound cycle node -- can never
+/// hit. The argument is node-identity keying, not cp-disjointness:
+/// portuale's cp-keying would over-demote on an installed-v1/merging-v2
+/// cp collision real never exhibits (the blocker scan skips walked cps,
+/// but `enqueue_dependencies` parents are `AlreadyInstalled` entries
+/// whose cp may coincide with a merging cp).
 ///
 /// Real's per-atom loop probes each atom's availability once and
 /// short-circuits (`if not avail_pkg: ... break`, soft 469): review
@@ -11763,7 +11839,7 @@ fn disjunction_preference(
         });
         if self_naming
             && !atom_cp_installed(root, a)
-            && !atom_matches_graph(
+            && !atom_cp_present_in_graph(
                 a,
                 entries,
                 config,
@@ -18596,8 +18672,8 @@ fn collect_unwalked_installed_blockers(
     // one real's per-parent `_select_atoms` would consult for a parent
     // real never walks. (Real has no equivalent scan: it discovers
     // installed blockers by walking installed packages in complete
-    // mode, which is `enqueue_dependencies`' job -- and that site DOES
-    // take the live map.)
+    // mode, which is `enqueue_dependencies`' job -- and that site also
+    // passes the empty map, per its own site decision below.)
     root_deps_running_root: Option<&Path>,
     entries: &[GraphEntry],
     pending_blockers: &mut Vec<PendingBlocker>,
@@ -44066,6 +44142,56 @@ mod tests {
         );
     }
 
+    /// g221c (L0 `dev-lang/rust` regression): a slot-pinned `||` build
+    /// dep over an older slot of the package itself vs the `-bin`
+    /// package, the older slot carrying its own self buildtime edge.
+    /// The first pass self-picks and strands; the retry demotes the
+    /// recorded self branch and must take `-bin` -- real's exact set in
+    /// real's exact order after exactly one retry (grounded in
+    /// 3rdparty/portage 3.0.82.2 `ResolverPlayground`,
+    /// `/tmp/opencode/g221c/probe_slcirc.py`: backtracking on merges
+    /// `[slcirc-bin-2.0, slcirc-2.0]` after `backtracking try 1`,
+    /// `--backtrack=0` fails circular). The g221b reconciliation broke
+    /// this: the slot-blind in-graph check ranked the older-slot branch
+    /// `Installed`, beating `-bin` and re-closing the cycle through the
+    /// older slot's self edge (rc 1, `slcirc-1.0 depends on slcirc-1.0`).
+    #[test]
+    fn circular_slot_pinned_branch_prefers_bin_over_older_slot() {
+        let result = graph_result_real("dev-libs/slcirc");
+        assert!(matches!(result.outcome, ResolveOutcome::Complete));
+        assert!(
+            result.circular_deps.is_empty(),
+            "{:?}",
+            result.circular_deps
+        );
+        assert_eq!(
+            result
+                .entries
+                .iter()
+                .map(|e| format!(
+                    "{}-{}",
+                    e.package,
+                    match &e.outcome {
+                        PretendOutcome::New { version }
+                        | PretendOutcome::AlreadyInstalled { version } => version.clone(),
+                        PretendOutcome::Reinstall { version, .. } => version.clone(),
+                        PretendOutcome::Upgrade { to, .. }
+                        | PretendOutcome::Downgrade { to, .. } => to.clone(),
+                        PretendOutcome::NoVisibleCandidate
+                        | PretendOutcome::Uninstall { .. } => "?".to_string(),
+                    }
+                ))
+                .collect::<Vec<_>>(),
+            vec!["slcirc-bin-2.0", "slcirc-2.0"],
+        );
+        assert_eq!(result.backtrack_restarts, 1);
+        assert!(
+            !graph_result_real_backtrack("dev-libs/slcirc", 0)
+                .circular_deps
+                .is_empty()
+        );
+    }
+
     /// Backlog #221 (I3): the unsolved-cycle-with-backtracking-ON
     /// leg of `assemble_result`'s persisting-ring report. `dev-libs/sbrA`
     /// BDEPENDs+RDEPENDs on `dev-libs/sbrB` (the dual edge softens the
@@ -58178,6 +58304,118 @@ mod tests_162 {
                 &[]
             ),
             portage_use_reduce::AltPreference::Installed
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// g221c (L0 `dev-lang/rust`): a `:slot` atom naming a different slot
+    /// than the graphed instance is NOT in-graph -- real's
+    /// `graph_db.match_pkgs(atom)` checks the slot, so the older-slot
+    /// branch ranks `Available` and the retry takes `-bin`. The
+    /// slot-blind candidate used to rank it `Installed`, beating
+    /// `-bin` and re-closing the cycle through the older slot's own
+    /// self edge. The `Available` (not `Unsatisfiable`) also pins that
+    /// the circular-self gate let it through (see the next test).
+    #[test]
+    fn disjunction_preference_cross_slot_atom_is_not_in_graph() {
+        let dir = dir_162("disj-crossslot");
+        let repos = repo_pkgs_162(
+            &dir,
+            &[("test/pkgB", "1.0", "0", ""), ("test/pkgB", "2.0", "1", "")],
+        );
+        let config = cfg_162();
+        let entries = vec![entry_162(
+            "test",
+            "pkgB",
+            PretendOutcome::New {
+                version: "2.0".to_string(),
+            },
+            Some("1"),
+            false,
+        )];
+        assert_eq!(
+            disj_162(
+                &repos,
+                &config,
+                &dir,
+                &entries,
+                &self_162("test", "consumer"),
+                &["test/pkgB:0"],
+                &[]
+            ),
+            portage_use_reduce::AltPreference::Available
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The same-slot `:slot` atom still matches the graphed instance --
+    /// the g221c precision must not over-narrow to `Available`.
+    #[test]
+    fn disjunction_preference_same_slot_atom_stays_in_graph() {
+        let dir = dir_162("disj-sameslot");
+        let repos = repo_pkgs_162(
+            &dir,
+            &[("test/pkgB", "1.0", "0", ""), ("test/pkgB", "2.0", "1", "")],
+        );
+        let config = cfg_162();
+        let entries = vec![entry_162(
+            "test",
+            "pkgB",
+            PretendOutcome::New {
+                version: "2.0".to_string(),
+            },
+            Some("1"),
+            false,
+        )];
+        assert_eq!(
+            disj_162(
+                &repos,
+                &config,
+                &dir,
+                &entries,
+                &self_162("test", "consumer"),
+                &["test/pkgB:1"],
+                &[]
+            ),
+            portage_use_reduce::AltPreference::Installed
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The circular-self gate still lets a cross-slot self atom through:
+    /// the gate asks cp-presence ([`atom_cp_present_in_graph`]), not
+    /// instance identity -- real merges the second instance as an
+    /// ordinary dependency, so slot precision here would wrongly refuse
+    /// it as circular. Ranks `Available` (the bins use the slot-precise
+    /// rule), never `Unsatisfiable`.
+    #[test]
+    fn disjunction_preference_cross_slot_self_atom_still_proceeds() {
+        let dir = dir_162("disj-crossself");
+        let repos = repo_pkgs_162(
+            &dir,
+            &[("test/pkgB", "1.0", "0", ""), ("test/pkgB", "2.0", "1", "")],
+        );
+        let config = cfg_162();
+        let entries = vec![entry_162(
+            "test",
+            "pkgB",
+            PretendOutcome::New {
+                version: "2.0".to_string(),
+            },
+            Some("1"),
+            false,
+        )];
+        assert_eq!(
+            disj_162(
+                &repos,
+                &config,
+                &dir,
+                &entries,
+                &self_162("test", "pkgB"),
+                &["test/pkgB:0"],
+                &[]
+            ),
+            portage_use_reduce::AltPreference::Available
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
