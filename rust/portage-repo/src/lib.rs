@@ -64153,7 +64153,7 @@ mod tests_195d {
         cell_195d("!foo(-)?", false, false, false, false);
     }
 
-    /// The concrete gate on two-token atoms (oracle gate cells G0-G10):
+    /// The concrete gate on two-token atoms (oracle gate cells G1-G10):
     /// a valid parent-active conditional plus one unconditional token.
     /// `bar_valid` / `bar_use` mirror the oracle's columns; `hit` is
     /// the oracle `arm` column.
