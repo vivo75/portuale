@@ -20801,6 +20801,228 @@ fn enqueue_flat_deps(
     }
 }
 
+/// Backlog #218 (L0 20260928T063310Z): eager clean-reuse classification
+/// for delta atoms.
+///
+/// Real's rule (`3rdparty/portage`, `lib/_emerge/depgraph.py`): the
+/// flipped package was already *walked* pre-flip, so a newly-gated atom
+/// that names an already-graphed slot never re-enters real's `_dep_stack`
+/// (`if not previously_added: dep_stack.append(pkg)`, `_add_pkg`, :3820)
+/// and records no `_add_parent_atom` owner row (`:3583-3604`).
+/// Live-verified on `gui-libs/gtk:4`: real walks freetype with `harfbuzz`
+/// off (its `Children` are bzip2 + libpng only) and the `harfbuzz` flip
+/// lands later via pango's `freetype-2.5.0.1:2[harfbuzz,...]` atom -- so
+/// real's graph carries no freetype -> harfbuzz edge at all.
+///
+/// Portuale's delta queues through the normal machinery, so without this
+/// filter a delta atom that merely re-names a settled slot still pops:
+/// the pop folds the flipped package into `required_by_map` (plus the
+/// edge-kind map, slot want-lists and pullers), and `build_digraph`'s
+/// `required_by` fallback then synthesizes exactly the phantom edge real
+/// never has -- reordering Kahn's walk for unrelated packages (gtk:4 went
+/// set-identical but #30 -> #22 with findings byte-identical, and even
+/// dropping the narrowed new-target `deps` edges did not move it).
+///
+/// So each text-new delta atom is pre-resolved here with the pop site's
+/// own arguments and dropped -- never queued, so no puller row and no
+/// pop-time bookkeeping at all -- when the pop is provably
+/// bookkeeping-only: a merge-bound outcome for the already-resolved
+/// version of an already-resolved slot, with the atom's slot and use-dep
+/// constraints satisfied (or absent). Anything else -- a genuinely new
+/// slot, a version or slot conflict, unsatisfied use-deps that may fold a
+/// further (nested-cascade) flip, an installed or unsatisfiable outcome, a
+/// blocker -- queues exactly as before. `resolve_pretend` writes no
+/// global state (the unparsed-token counter fires at the pop site, not
+/// inside it), so the speculative resolution is side-effect free; and its
+/// inputs are all pass-fixed (`ctx`, `config`, `union_constraints`), so
+/// the verdict cannot drift between here and the pop.
+fn delta_atom_cleanly_reuses_resolved_slot(
+    ctx: &ResolveCtx,
+    config: &portage_profile::Config,
+    union_constraints: &HashMap<(String, String), Vec<String>>,
+    state: &PassState,
+    bp: &BacktrackParams,
+    evaluated: &str,
+) -> bool {
+    let Some(atom) = portage_dep::parse_atom(evaluated) else {
+        return false;
+    };
+    if atom.blocker != portage_dep::Blocker::None {
+        return false;
+    }
+    let key2 = (atom.category.clone(), atom.package.clone());
+    // Complete mode diverts dependency atoms around `resolve_pretend`
+    // (graph-or-installed only); never second-guess that branch.
+    if ctx.complete
+        && !ctx.complete_locked_merges.is_empty()
+        && !ctx.complete_locked_merges.contains(&key2)
+    {
+        return false;
+    }
+    let empty_constraints: Vec<String> = Vec::new();
+    let extra_constraints = union_constraints.get(&key2).unwrap_or(&empty_constraints);
+    let Ok(outcome) = resolve_pretend(
+        &ctx.repos,
+        ctx.root,
+        evaluated,
+        config,
+        ctx.newuse,
+        ctx.changed_use,
+        ctx.update,
+        ctx.excluded,
+        ctx.changed_deps,
+        ctx.with_bdeps,
+        ctx.changed_slot,
+        ctx.selective,
+        false,
+        ctx.usepkg,
+        ctx.usepkgonly,
+        ctx.binpkg_respect_use,
+        ctx.usepkg_exclude,
+        ctx.usepkg_include,
+        ctx.rebuilt_binaries,
+        ctx.rebuilt_binaries_timestamp,
+        ctx.newrepo,
+        ctx.empty,
+        ctx.getbinpkg,
+        bp.autounmask_suggest_keywords,
+        bp.autounmask_suggest_use,
+        bp.autounmask_suggest_license,
+        bp.autounmask_suggest_masks,
+        extra_constraints,
+        &ctx.local_binpkg,
+    ) else {
+        return false;
+    };
+    // Only a merge-bound outcome can hit the already-resolved branch
+    // below; an installed or unsatisfiable outcome takes the pop site's
+    // own installed/NVC paths, which this filter must not swallow.
+    let version = match &outcome {
+        PretendOutcome::New { version } => version.clone(),
+        PretendOutcome::Upgrade { to, .. } => to.clone(),
+        PretendOutcome::Downgrade { to, .. } => to.clone(),
+        PretendOutcome::Reinstall { version, .. } => version.clone(),
+        _ => return false,
+    };
+    // The same winning-candidate pick the pop site resolves the slot
+    // from ("ebuild type is the last resort", then repo priority).
+    let repo_candidates = list_candidates(&ctx.repos, &key2.0, &key2.1).unwrap_or_default();
+    let Some(resolved) = repo_candidates
+        .iter()
+        .filter(|c| c.version == version)
+        .max_by(|a, b| {
+            let src_rank = |c: &Candidate| match c.source {
+                CandidateSource::Binary => 1u8,
+                CandidateSource::Ebuild => 0,
+            };
+            src_rank(a)
+                .cmp(&src_rank(b))
+                .then(a.repo_priority.cmp(&b.repo_priority))
+        })
+    else {
+        return false;
+    };
+    let slot_key2 = (key2.0.clone(), key2.1.clone(), resolved.slot.clone());
+    let Some(&existing_idx2) = state.resolved_slots.get(&slot_key2) else {
+        // A genuinely new slot: the aucascleaf case. Queue it.
+        return false;
+    };
+    let existing_version2 = match &state.entries[existing_idx2].outcome {
+        PretendOutcome::New { version } => version.clone(),
+        PretendOutcome::Upgrade { to, .. } => to.clone(),
+        PretendOutcome::Downgrade { to, .. } => to.clone(),
+        PretendOutcome::Reinstall { version, .. } => version.clone(),
+        // `resolved_slots` only ever indexes these four (the pop site's
+        // own `unreachable!`); conservative here, never a drop.
+        _ => return false,
+    };
+    if version != existing_version2 {
+        // A version conflict: the pop site records it. Queue it.
+        return false;
+    }
+    // Include the already-resolved version's own sub-slot, exactly like
+    // the pop site (a built `cat/pkg:0/2=` puller matches no `:slot`-only
+    // string).
+    let existing_sub = slot_conflict_meta(&ctx.repos, &key2.0, &key2.1, &existing_version2).0;
+    let existing_match_str = if existing_sub.is_empty() {
+        format!(
+            "{}/{}-{existing_version2}:{}",
+            key2.0, key2.1, resolved.slot
+        )
+    } else {
+        format!(
+            "{}/{}-{existing_version2}:{}/{}",
+            key2.0, key2.1, resolved.slot, existing_sub
+        )
+    };
+    let bare_equals = atom.slot_operator == Some(portage_dep::SlotOperator::Equals)
+        && atom.slot.is_none()
+        && atom.sub_slot.is_none();
+    if portage_dep::match_from_list(evaluated, &[existing_match_str.as_str()])
+        .is_none_or(|m| m.is_empty())
+        || (bare_equals
+            && built_equals_shift_unrebuildable(
+                ctx.root,
+                &ctx.repos,
+                &key2.0,
+                &key2.1,
+                &existing_sub,
+                &state.slot_pullers,
+                ctx.excluded,
+            ))
+    {
+        return false;
+    }
+    if bare_equals
+        && let Some((inst_ver, _)) = built_equals_binding(ctx.root, &ctx.repos, &key2.0, &key2.1)
+        && inst_ver != existing_version2
+        && built_equals_shift_unrebuildable(
+            ctx.root,
+            &ctx.repos,
+            &key2.0,
+            &key2.1,
+            &existing_sub,
+            &state.slot_pullers,
+            ctx.excluded,
+        )
+    {
+        // The pop site's bound-instance side record would fire. Queue it.
+        return false;
+    }
+    // `match_from_list` matched version + slot only: a `[flag]` use-dep
+    // still has to be satisfied by the settled package, else the pop
+    // site folds a flip (possibly a nested cascade). Only a satisfied
+    // atom is a clean reuse.
+    if let Some(use_deps) = atom.use_deps.as_deref().filter(|d| !d.is_empty()) {
+        let all_cands = list_candidates(&ctx.repos, &key2.0, &key2.1).unwrap_or_default();
+        let Some(existing_cand) = all_cands.iter().find(|c| c.version == existing_version2) else {
+            return false;
+        };
+        let declared: HashSet<String> = existing_cand
+            .iuse
+            .split_whitespace()
+            .map(|t| t.trim_start_matches(['+', '-']).to_string())
+            .collect();
+        let iuse_set = valid_iuse(&declared, config);
+        let existing_cand_str = format!(
+            "{}/{}-{existing_version2}:{}/{}::{}",
+            key2.0, key2.1, existing_cand.slot, existing_cand.sub_slot, existing_cand.repo_name
+        );
+        let existing_use = effective_use_flags(
+            config,
+            &existing_cand.iuse,
+            &existing_cand.keywords,
+            &existing_cand_str,
+            &key2.0,
+            &key2.1,
+        );
+        if !portage_dep::use_deps_satisfied(use_deps, &iuse_set, &existing_use) {
+            return false;
+        }
+    }
+    true
+}
+
 /// Backlog #218: in-pass delta re-expansion for an already-resolved
 /// slot's `--autounmask-use` flip.
 ///
@@ -20845,6 +21067,7 @@ fn expand_resolved_slot_with_flipped_use(
     config: &portage_profile::Config,
     union_constraints: &HashMap<(String, String), Vec<String>>,
     state: &mut PassState,
+    bp: &BacktrackParams,
     key: &(String, String),
     existing_idx: usize,
     existing_cand: &Candidate,
@@ -21019,6 +21242,31 @@ fn expand_resolved_slot_with_flipped_use(
     if new_toks.is_empty() {
         return;
     }
+    // L0 20260928T063310Z: a text-new atom that cleanly re-resolves to
+    // its already-settled slot (`delta_atom_cleanly_reuses_resolved_slot`)
+    // is dropped before any bookkeeping -- queueing it would record the
+    // flipped package as an owner at pop and synthesize the phantom edge
+    // real never has. The genuinely-new survivors below are untouched.
+    let mut kept_toks: Vec<String> = Vec::new();
+    for tok in &new_toks {
+        let evaluated =
+            portage_dep::evaluate_atom_conditionals(tok, new_use).unwrap_or_else(|| tok.clone());
+        if delta_atom_cleanly_reuses_resolved_slot(
+            ctx,
+            config,
+            union_constraints,
+            state,
+            bp,
+            &evaluated,
+        ) {
+            continue;
+        }
+        kept_toks.push(tok.clone());
+    }
+    if kept_toks.is_empty() {
+        return;
+    }
+    let new_toks = kept_toks;
     for tok in &new_toks {
         if let Some(dep_atom) = portage_dep::parse_atom(tok)
             && dep_atom.blocker == portage_dep::Blocker::None
@@ -24464,6 +24712,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                                 config,
                                 &union_constraints,
                                 &mut state,
+                                bp,
                                 &key,
                                 existing_idx,
                                 existing_cand,
@@ -40381,6 +40630,41 @@ mod tests {
             !result.autounmask_use_changes.is_empty(),
             "the [cascade] flip is still reported"
         );
+        // L0 20260928T063310Z: the delta never records a phantom owner.
+        // `aucascleaf` queues only through the flipped package's
+        // re-expansion (a genuinely new slot), and no text-new delta atom
+        // re-names a settled slot here -- so every `required_by` set is
+        // exactly the forward-walk owners, with no flipped-package
+        // residue for `build_digraph`'s fallback to stitch a phantom
+        // edge from (real carries no such edge: the flip lands via the
+        // later atom, never via a re-walk of the flipped package).
+        for (pkg, want) in [
+            ("aucasctop", vec![]),
+            (
+                "aucascmid",
+                vec![
+                    ("dev-libs".to_string(), "aucasclate".to_string()),
+                    ("dev-libs".to_string(), "aucasctop".to_string()),
+                ],
+            ),
+            (
+                "aucasclate",
+                vec![("dev-libs".to_string(), "aucasctop".to_string())],
+            ),
+            (
+                "aucascleaf",
+                vec![("dev-libs".to_string(), "aucascmid".to_string())],
+            ),
+        ] {
+            let entry = result
+                .entries
+                .iter()
+                .find(|e| e.package == pkg)
+                .unwrap_or_else(|| panic!("{pkg} is in the graph"));
+            let mut got = entry.required_by.clone();
+            got.sort_unstable();
+            assert_eq!(got, want, "{pkg} has exactly its forward-walk owners");
+        }
         // The fresh-flip shape is untouched: `aucasclate` alone resolves
         // `aucascmid[cascade]` on first encounter, leaf included, with no
         // delta pass involved.
