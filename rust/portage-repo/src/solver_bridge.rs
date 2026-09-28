@@ -823,6 +823,11 @@ fn graph_result_from_order(
         use_unsat_deps: Vec::new(),
         // Same standing empty: no BFS walk, no plain-miss disclosure.
         plain_miss_deps: Vec::new(),
+        // Same standing empty (backlog #193): the engine backends have
+        // no `_virt_deps_visible` probe walk, and the bridge outcome is
+        // always `Complete` by design -- a virtual cycle is one more
+        // abort shape the bridges do not do, like slot conflicts above.
+        virtual_cycle: Vec::new(),
     }
 }
 
@@ -1267,6 +1272,12 @@ mod tests {
             newuse: false,
             changed_use: false,
             nodeps: false,
+            // Bridge test helper resolves without `--onlydeps`; the
+            // parked pubgrub/resolvo engines do not implement the
+            // `--onlydeps-with-*` root filtering (nor `--nodeps`).
+            onlydeps: false,
+            onlydeps_with_rdeps: true,
+            onlydeps_with_ideps: false,
             update: false,
             deep: Deep::NotRequested,
             excluded: Vec::new(),
