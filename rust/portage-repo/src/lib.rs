@@ -16087,7 +16087,7 @@ struct ProbeParent {
 /// (`lib/_emerge/depgraph.py:2472-2573`) as the update probe's refusal
 /// gate on both scan arms (the `:2622` replacement-parent gate and the
 /// `:2738` candidate-child gate inside `_slot_operator_update_probe`;
-/// the `:8786` slot-conflict-fired probe is v2 `#214`'s own
+/// the `:2310` slot-conflict-fired probe is v2 `#214`'s own
 /// [`slot_conflict_abi_probe`], which reuses this map).
 ///
 /// The caller precollects, per provider cp, every installed package Q
@@ -16220,7 +16220,8 @@ fn parse_conflict_parent_cpv(parent_cpv: &str) -> Option<(String, String, String
 
 /// Backlog #214 (v2 `#24e`): real `_slot_conflict_backtrack_abi`
 /// (`lib/_emerge/depgraph.py:2282-2315`), the slot-conflict-fired half
-/// of the update probe (real `:8786`).
+/// of the update probe (real `:2310`, via
+/// `_slot_operator_update_probe_slot_conflict` `:2453`).
 ///
 /// Real's `_process_slot_conflict` tries this BEFORE the masking
 /// backtrack: for every recorded conflict, for every parent edge whose
@@ -16562,7 +16563,7 @@ fn slot_conflict_abi_display_pairs(
 /// `slot_operator_mask_built` arms, which have no portuale-visible
 /// diverging shape -- both steer a *parent* the graph is already
 /// replacing (update) or failing on (unsatisfied), so same-version
-/// binary-vs-ebuild steering is vacuous there. The `:8786`
+/// binary-vs-ebuild steering is vacuous there. The `:2310`
 /// slot-conflict-fired probe is NOT this scan (v2 `#214` ports it as
 /// the sibling [`slot_conflict_abi_probe`], fed by the surviving
 /// conflict records rather than the merge entries).
