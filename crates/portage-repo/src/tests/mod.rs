@@ -1203,6 +1203,33 @@ fn aub0_conflict_versions(result: &GraphResult) -> Vec<Vec<String>> {
         .collect()
 }
 
+fn assert_aub0_fails_on_a(result: &GraphResult, order: &str) {
+    assert!(
+        matches!(
+            &result.outcome,
+            ResolveOutcome::Aborted {
+                reason: AbortReason::UnsatisfiedAtom { atom, parent_cpv },
+                ..
+            } if atom == "dev-libs/aub0d[-foo]" && parent_cpv == "dev-libs/aub0a-0"
+        ),
+        "{order}: {:?}",
+        result.outcome
+    );
+    assert!(result.autounmask_use_changes.is_empty(), "{order}");
+    assert_eq!(result.use_unsat_deps.len(), 1, "{order}");
+    assert_eq!(
+        result.use_unsat_deps[0].chain,
+        vec![
+            (
+                "dev-libs/aub0a-0::testrepo".to_string(),
+                "ebuild".to_string()
+            ),
+            ("dev-libs/aub0a".to_string(), "argument".to_string()),
+        ],
+        "{order}: the failing dependency's own chain only"
+    );
+}
+
 /// ABI probe harness: installed `abicons-1` recording `app-misc/abiprov:0/1=`,
 /// tree `abiprov-1`/`abiprov-2` + consumer (live `:=`) + forcer. `with_consumer`
 /// controls whether the consumer's same-version ebuild is visible in the tree.
@@ -3435,6 +3462,8 @@ mod tests_165;
 mod tests_166;
 
 mod tests_184;
+
+mod tests_195d;
 
 mod abi_probe;
 mod backtrack_params;
