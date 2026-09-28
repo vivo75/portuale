@@ -14131,6 +14131,61 @@ pub fn run(args: &[String]) -> ExitCode {
         }
     }
 
+    // Backlog #198: real `_show_missed_update_unsatisfied_dep`'s full
+    // per-update form (`depgraph.py:1592-1636`) -- one block per masked
+    // higher version whose missing atom bites nothing backtrack-masked
+    // (`GraphResult::skipped_missing_dep_full`, in the same first-mask
+    // order). The `cat/pkg:slot` header, the `selected:` / `skipped:
+    // ... (see unsatisfied dependency below)` rows and the missing
+    // atom's own disclosure follow real line for line; the `for <root>`
+    // suffix is omitted like every other portuale notice row. Same
+    // `--quiet`-unless-`--debug` gate as the two blocks above (real
+    // drops all missed-update types together, `depgraph.py:1576-1581`);
+    // likewise no `--columns` gate, and `--json` returns above.
+    if !(quiet && !debug) && !result.skipped_missing_dep_full.is_empty() {
+        for f in &result.skipped_missing_dep_full {
+            println!();
+            println!("!!! The following update has been skipped due to unsatisfied dependencies:");
+            println!();
+            println!("{}/{}:{}", f.category, f.package, f.slot);
+            println!();
+            println!("  selected: {}", f.selected_display);
+            println!(
+                "  skipped: {} (see unsatisfied dependency below)",
+                f.skipped_display
+            );
+            println!();
+            match &f.dep {
+                portage_repo::SkippedDepDisclosure::Masked(report) => {
+                    println!(
+                        "!!! All ebuilds that could satisfy {:?} have been masked.",
+                        report.atom
+                    );
+                    println!(
+                        "!!! One of the following masked packages is required to complete your request:"
+                    );
+                    for (cpv, reasons) in &report.masked {
+                        println!("- {cpv} (masked by: {})", reasons.join(", "));
+                    }
+                    println!();
+                    for (node, ty) in &report.chain {
+                        println!("(dependency required by \"{node}\" [{ty}])");
+                    }
+                    println!("For more information, see the MASKED PACKAGES section in the emerge");
+                    println!("man page or refer to the Gentoo Handbook.");
+                    println!();
+                }
+                portage_repo::SkippedDepDisclosure::Plain(report) => {
+                    println!("emerge: there are no ebuilds to satisfy {:?}.", report.atom);
+                    for (node, ty) in &report.chain {
+                        println!("(dependency required by \"{node}\" [{ty}])");
+                    }
+                    println!();
+                }
+            }
+        }
+    }
+
     // Backlog #19 Slice 5: with the gate on, an aborted cycle prints its
     // circular block HERE -- before the autounmask section -- matching
     // real `display_problems()` order (`_show_circular_deps` at
@@ -16954,13 +17009,14 @@ mod tests {
         // `:821-822`) -- the old wrong `(choose from "y", "n")`
         // rejection of `=True` is gone, and the bare form (once a
         // "requires an argument" rc 2) now keeps keywords like real's
-        // inserted `"True"`. `=True` keeps the unstable-keyworded B-1,
-        // so newest A-2 fails like real (rc 1, same as the `=y` pin).
+        // inserted `"True"`. `=True` keeps keywords, so the run falls
+        // back to the older stable `akk0a-1` like real (rc 0, same as
+        // the `=y` pin since backlog #198's missing-dep backtrack).
         true_spelling_matches_bare(
             "--autounmask-keep-keywords=True",
             "--autounmask-keep-keywords",
             "dev-libs/akk0a",
-            1,
+            0,
         );
     }
 

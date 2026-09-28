@@ -796,6 +796,7 @@ fn graph_result_from_order(
         // Bridge engines run no backtrack loop, so no trial masks ever
         // accumulate: nothing for either missed-update notice.
         skipped_missing_deps: Vec::new(),
+        skipped_missing_dep_full: Vec::new(),
         orphan_blockers,
         changed_deps_report: Vec::new(),
         buildpkgonly_deps_unsatisfied: false,
