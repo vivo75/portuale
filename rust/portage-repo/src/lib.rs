@@ -17265,6 +17265,34 @@ fn tree_metadata_for(
     .ok()
 }
 
+/// Backlog #213 (v2 `#24d`): apply real's `prune_rebuilds` restart to
+/// the working params (real `resolver/backtracking.py::_feedback_config`
+/// `:247-257`): latch the flag, clear the whole replace set, and drop
+/// the `slot_operator_mask_built` steers. Real pops that reason off the
+/// runtime masks of the recorded packages and clears its own
+/// `slot_operator_mask_built` set; portuale keeps no parallel set -- the
+/// `MaskReason::SlotOperatorBuilt` negatives in `runtime_pkg_mask` ARE
+/// the record, so removing them plus their `mask_order` slots is the
+/// whole equivalent. The caller fires this once (the latch guards the
+/// re-entry); the re-walk re-masks any still-stale binary through the
+/// probe above, exactly like real's re-probe.
+fn apply_prune_rebuilds(params: &mut BacktrackParams) {
+    params.prune_rebuilds = true;
+    params.slot_operator_replace_installed.clear();
+    let mut removed: Vec<((String, String), String)> = Vec::new();
+    params.runtime_pkg_mask.retain(|cp, bucket| {
+        bucket.retain(|entry| {
+            let drop_it = matches!(entry.reason, MaskReason::SlotOperatorBuilt);
+            if drop_it {
+                removed.push((cp.clone(), entry.neg.clone()));
+            }
+            !drop_it
+        });
+        !bucket.is_empty()
+    });
+    params.mask_order.retain(|slot| !removed.contains(slot));
+}
+
 /// Backlog #24 S4: real `_eliminate_rebuilds` (`depgraph.py:3859-4000`),
 /// the undo path. For every cp in the S3 replace set whose walked entry
 /// is a `Reinstall { slot_operator_rebuild: true }` at the installed
@@ -24969,6 +24997,7 @@ fn params_equal(a: &BacktrackParams, b: &BacktrackParams) -> bool {
         && a.autounmask_disabled == b.autounmask_disabled
         && a.slot_operator_replace_installed == b.slot_operator_replace_installed
         && a.slot_operator_undone == b.slot_operator_undone
+        && a.prune_rebuilds == b.prune_rebuilds
         && a.circular_dependency == b.circular_dependency
 }
 
@@ -25568,6 +25597,15 @@ struct BacktrackParams {
     /// caller-side `already` set (real has no analogue of this latch to
     /// compare -- its undo mutates the graph in place).
     slot_operator_undone: BTreeSet<(String, String)>,
+    /// Backlog #213 (v2 `#24d`): the prune latch. Real restarts with
+    /// `config["prune_rebuilds"]` when `_slot_operator_replace_installed`
+    /// meets missed updates (`_resolve`, `depgraph.py:5763-5780`;
+    /// `_ENABLE_PRUNE_REBUILDS` `:628`, always true upstream; the
+    /// `prune_rebuilds` backtrack parameter `:710`, consumed by
+    /// `resolver/backtracking.py::_feedback_config:247-257`). Included
+    /// in `params_equal` like real's parameter `__eq__`
+    /// (`backtracking.py:76`), which compares `prune_rebuilds`.
+    prune_rebuilds: bool,
     /// Backlog #221: real `backtrack_infos["config"]["circular_dependency"]`
     /// (`_emerge/depgraph.py:10270-10287`, written by `_serialize_tasks`
     /// when no leaf node selects and consumed by `resolver/backtracking.py::
@@ -29938,6 +29976,51 @@ fn collect_feedback(
             return PassDecision::Feedback(BacktrackFeedback::Config {
                 params: Box::new(grown),
             });
+        }
+
+        // Backlog #213 (v2 `#24d`): real `_resolve`'s `prune_rebuilds`
+        // check (`depgraph.py:5763-5780`) -- between the replace-set
+        // restart above (real `:5703-5712` returns first when the set
+        // grew this pass) and `_eliminate_rebuilds` below (real
+        // `:5777-5780`, skipped on the prune pass by the early return).
+        // On a pass where the replace set is non-empty and missed
+        // updates exist (real `_get_missed_updates`,
+        // `depgraph.py:1529-1565`; here the mask half of
+        // [`backtrack_missed_updates`] -- built-binary steers never
+        // render rows there, the same outcome as real's falsy-`None`
+        // skip at `:1556`), real records `config["prune_rebuilds"]`
+        // and restarts, and the re-resolve drops the unnecessary
+        // rebuilds. `_ENABLE_PRUNE_REBUILDS` (`:628`) is
+        // unconditionally true upstream. Two deliberate cuts: the
+        // `_ignored_binaries_autounmask_backtrack` disjunct (`:5764`)
+        // needs the ignored-binaries/autounmask-USE state portuale's
+        // A3 overlay does not track at this layer (no pin diverges on
+        // it); real's second missed-update source,
+        // `_conflict_missed_update` (the slot-conflict handler's
+        // removals), rides `pass.skipped_updates` here mixed with
+        // #90-withhold rows, with no clean read at this layer -- the
+        // mask half fires on every probed shape. Fires once (the
+        // latch); Config feedback is budget-free, and the re-walk
+        // re-schedules genuine rebuilds through the probe above, so
+        // the search terminates with the same rows and two extra
+        // passes.
+        //
+        // Gated on no live slot conflict like `_eliminate_rebuilds`
+        // below: real never reaches the check with one (its
+        // `:5685-5690` conflict return precedes it); a conflict-owning
+        // pass belongs to the conflict machinery above.
+        if !grown.prune_rebuilds
+            && !grown.slot_operator_replace_installed.is_empty()
+            && pass.slot_conflicts.is_empty()
+        {
+            let (skipped, missing, full) =
+                backtrack_missed_updates(&ctx.repos, ctx.root, config, &pass.entries, &grown);
+            if !skipped.is_empty() || !missing.is_empty() || !full.is_empty() {
+                apply_prune_rebuilds(&mut grown);
+                return PassDecision::Feedback(BacktrackFeedback::Config {
+                    params: Box::new(grown),
+                });
+            }
         }
 
         // #24 S4: real `_resolve`'s `_eliminate_rebuilds` call
@@ -48795,6 +48878,70 @@ mod tests {
         assert!(is_binary_only_mask("!=dev-libs/maskchild-1.0[binary]"));
         assert!(!is_binary_only_mask("!=dev-libs/maskchild-1.0"));
         assert!(!is_binary_only_mask("=dev-libs/maskchild-1.0[binary]"));
+    }
+
+    /// Backlog #213 (v2 `#24d`): [`apply_prune_rebuilds`] latches the
+    /// flag, clears the whole replace set, and drops only the
+    /// `slot_operator_mask_built` steers (plus their `mask_order`
+    /// slots); other masks, the undone latch and the rest of the
+    /// search state survive. Real
+    /// `resolver/backtracking.py::_feedback_config:247-257`.
+    #[test]
+    fn slot_operator_prune_rebuilds_clears_replace_and_built_masks() {
+        let mut params = BacktrackParams::default();
+        params
+            .slot_operator_replace_installed
+            .insert(("app-misc".to_string(), "pcons".to_string()));
+        params
+            .slot_operator_undone
+            .insert(("app-misc".to_string(), "oldcons".to_string()));
+        params.runtime_pkg_mask.insert(
+            ("dev-libs".to_string(), "bttarget".to_string()),
+            vec![MaskEntry {
+                neg: "!=dev-libs/bttarget-2.0".to_string(),
+                reason: MaskReason::SlotConflict { parents: vec![] },
+            }],
+        );
+        params.runtime_pkg_mask.insert(
+            ("dev-libs".to_string(), "somaskchild".to_string()),
+            vec![MaskEntry {
+                neg: "!=dev-libs/somaskchild-1.0[binary]".to_string(),
+                reason: MaskReason::SlotOperatorBuilt,
+            }],
+        );
+        params.mask_order = vec![
+            (
+                ("dev-libs".to_string(), "bttarget".to_string()),
+                "!=dev-libs/bttarget-2.0".to_string(),
+            ),
+            (
+                ("dev-libs".to_string(), "somaskchild".to_string()),
+                "!=dev-libs/somaskchild-1.0[binary]".to_string(),
+            ),
+        ];
+        apply_prune_rebuilds(&mut params);
+        assert!(params.prune_rebuilds);
+        assert!(params.slot_operator_replace_installed.is_empty());
+        // The undone latch is not real state -- the prune does not touch it.
+        assert!(
+            params
+                .slot_operator_undone
+                .contains(&("app-misc".to_string(), "oldcons".to_string()))
+        );
+        // The conflict mask survives; the built steer is gone with its order slot.
+        assert_eq!(params.runtime_pkg_mask.len(), 1);
+        assert!(
+            params
+                .runtime_pkg_mask
+                .contains_key(&("dev-libs".to_string(), "bttarget".to_string()))
+        );
+        assert_eq!(
+            params.mask_order,
+            vec![(
+                ("dev-libs".to_string(), "bttarget".to_string()),
+                "!=dev-libs/bttarget-2.0".to_string()
+            )]
+        );
     }
 
     /// Backlog #212 (v2 `#24c`): real `_slot_change_backtrack`
