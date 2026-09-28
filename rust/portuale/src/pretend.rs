@@ -5049,12 +5049,13 @@ impl PromptSigintGuard {
             new.sa_sigaction = prompt_sigint_handler as *const () as usize;
             libc::sigemptyset(&mut new.sa_mask);
             new.sa_flags = 0;
+            // Clear before installing, so a SIGINT landing in between is not lost.
+            PROMPT_SIGINT.store(false, std::sync::atomic::Ordering::SeqCst);
             assert_eq!(
                 libc::sigaction(libc::SIGINT, &new, &mut old),
                 0,
                 "sigaction(SIGINT) failed"
             );
-            PROMPT_SIGINT.store(false, std::sync::atomic::Ordering::SeqCst);
             Self { old }
         }
     }
@@ -16090,6 +16091,149 @@ mod tests {
         assert!(
             !text.contains("Calculating dependencies"),
             "an interrupted news prompt must exit before the resolve: {text}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ask_config_select_sigint_prints_interrupted_and_exits_130_like_real() {
+        // Backlog #240 follow-up: the config `Selection?` menu goes
+        // through the same `UserQuery.query` in real
+        // (`_emerge/actions.py:746` through
+        // `_emerge/UserQuery.py:74-76`), so a `^C` there prints
+        // `Interrupted.` and exits `128 + SIGINT` by exit -- `X`'s own
+        // `Quitting.` (`actions.py:747-748`) never runs. Two fake vdb
+        // entries make `dev-libs/seltest` match twice, reaching the
+        // menu with no ebuild work at all; same `^C`-through-the-pty
+        // delivery and prompt-synchronized timing as the merge-prompt
+        // test above.
+        use std::io::Write;
+        use std::os::unix::process::ExitStatusExt;
+        let portuale_bin = built_portuale_bin();
+        let base = std::env::temp_dir().join(format!(
+            "ask_config_select_sigint_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = base.join("root");
+        for v in ["1.0", "2.0"] {
+            std::fs::create_dir_all(root.join(format!("var/db/pkg/dev-libs/seltest-{v}"))).unwrap();
+        }
+        let env = fixture_resolve_env(&root, &base.join("pt"));
+        let (master, slave_stdio) = pty_pair();
+        let (mut child, mut master, mut stdout_pipe, err_handle) = sigint_prompt_child(
+            &portuale_bin,
+            &["emerge", "--ask", "--config", "dev-libs/seltest"],
+            env,
+            master,
+            slave_stdio,
+        );
+        let mut stdout =
+            read_stdout_until_marker(&mut stdout_pipe, b"Selection?", "the Selection? prompt");
+        master
+            .write_all(b"\x03")
+            .expect("Ctrl-C the Selection? prompt");
+        let out_handle = std::thread::spawn(move || {
+            let mut v = Vec::new();
+            std::io::Read::read_to_end(&mut stdout_pipe, &mut v).expect("drain child stdout");
+            v
+        });
+        let status = child.wait().expect("wait for emerge");
+        drop(master);
+        stdout.extend(out_handle.join().expect("stdout drain"));
+        let stderr = err_handle.join().expect("stderr drain");
+        assert_eq!(
+            status.code(),
+            Some(130),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&stdout),
+            String::from_utf8_lossy(&stderr)
+        );
+        assert_eq!(
+            status.signal(),
+            None,
+            "SIGINT at the prompt must exit 130, not die by signal"
+        );
+        let text = String::from_utf8_lossy(&stdout);
+        assert!(
+            text.contains("Please select a package to configure:"),
+            "{text}"
+        );
+        assert_eq!(text.matches("Interrupted.").count(), 1, "{text}");
+        assert!(
+            !text.contains("Quitting."),
+            "an interrupted Selection? prompt must not print `Quitting.` like real: {text}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn sigint_during_merge_still_dies_by_signal_like_before() {
+        // Backlog #240 scoping pin: the guard lives strictly inside
+        // the prompt functions, so a `^C` outside any prompt keeps
+        // the default disposition -- death by signal, exactly as
+        // before this slice. A promptless `emerge --oneshot` merge of
+        // `dev-libs/schedok` runs ebuild phases for well over a
+        // second after printing `>>> Emerging`, so a `^C`
+        // synchronized on that marker deterministically lands outside
+        // any prompt: no `Interrupted.` line, no exit code,
+        // `signal() == Some(SIGINT)`.
+        use std::io::Write;
+        use std::os::unix::process::ExitStatusExt;
+        let portuale_bin = built_portuale_bin();
+        let base = std::env::temp_dir().join(format!(
+            "merge_sigint_dies_by_signal_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = base.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let env = fixture_resolve_env(&root, &base.join("pt"));
+        let (master, slave_stdio) = pty_pair();
+        let (mut child, mut master, mut stdout_pipe, err_handle) = sigint_prompt_child(
+            &portuale_bin,
+            &["emerge", "--oneshot", "dev-libs/schedok"],
+            env,
+            master,
+            slave_stdio,
+        );
+        let mut stdout =
+            read_stdout_until_marker(&mut stdout_pipe, b">>> Emerging", "the merge start");
+        master.write_all(b"\x03").expect("Ctrl-C the running merge");
+        let out_handle = std::thread::spawn(move || {
+            let mut v = Vec::new();
+            std::io::Read::read_to_end(&mut stdout_pipe, &mut v).expect("drain child stdout");
+            v
+        });
+        let status = child.wait().expect("wait for emerge");
+        drop(master);
+        stdout.extend(out_handle.join().expect("stdout drain"));
+        let stderr = err_handle.join().expect("stderr drain");
+        assert_eq!(
+            status.signal(),
+            Some(libc::SIGINT),
+            "SIGINT outside a prompt must kill the process: stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&stdout),
+            String::from_utf8_lossy(&stderr)
+        );
+        assert_eq!(
+            status.code(),
+            None,
+            "a signal death has no exit code: stdout: {}",
+            String::from_utf8_lossy(&stdout),
+        );
+        let text = String::from_utf8_lossy(&stdout);
+        assert!(
+            !text.contains("Interrupted."),
+            "only the prompt arm prints `Interrupted.`: {text}"
         );
         let _ = std::fs::remove_dir_all(&base);
     }
