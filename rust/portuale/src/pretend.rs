@@ -5071,9 +5071,14 @@ fn stdin_is_tty() -> bool {
 /// behavior, rather than giving up on the first bad answer. Returns
 /// `true` for "Yes", `false` (after printing `Quitting.`, a caller-
 /// side convenience real portage's own callers each print for
-/// themselves) for "No" -- and `false` (after printing
-/// `Interrupted.`, then `Quitting.`) on EOF or a read error, the same
-/// `128 + SIGINT` exit the merge-list prompt already takes below.
+/// themselves) for "No" -- and `false` (after `ask_yes_no`'s own
+/// `Interrupted.`, with no `Quitting.`) on EOF, a read error, or
+/// SIGINT (backlog #240). Real `_emerge/UserQuery.query`
+/// (`_emerge/UserQuery.py:74-76`) exits from *inside* `query` on
+/// `EOFError`/`KeyboardInterrupt`, so the merge prompt's own
+/// `== "No"` comparison and its `Quitting.` never run there either;
+/// the caller still exits `128 + SIGINT` through the same arm a "No"
+/// takes below.
 /// TTY gating happens once, globally, before
 /// `ask` is ever `true` at all (`run()`'s own `stdin_is_tty` check
 /// right after CLI parsing) -- by the time this runs, stdin is already
@@ -5083,11 +5088,14 @@ fn stdin_is_tty() -> bool {
 /// makes a bare Enter loop back for a real answer instead of matching
 /// "Yes"; see `classify_yes_no`.
 fn ask_confirm(color: &Colorizer, question: &str) -> bool {
-    if ask_yes_no(color, question) == Some(true) {
-        return true;
+    match ask_yes_no(color, question) {
+        Some(true) => true,
+        Some(false) => {
+            println!("\nQuitting.\n");
+            false
+        }
+        None => false,
     }
-    println!("\nQuitting.\n");
-    false
 }
 
 /// The prompt half of `ask_confirm`, without the decline side effect:
@@ -5100,13 +5108,25 @@ fn ask_confirm(color: &Colorizer, question: &str) -> bool {
 /// the `eselect` spawn and continues into `action_build`, it does not
 /// quit the run.
 ///
-/// Returns `None` on EOF or a read error (after printing real
-/// `UserQuery.query`'s own `Interrupted.`, `_emerge/UserQuery.py:74-76`):
-/// the news prompt (backlog #234) turns that into real's
-/// `sys.exit(128 + SIGINT)` before `action_build`, while `ask_confirm`
-/// folds it into its ordinary decline arm.
+/// Returns `None` on EOF, a read error, or SIGINT (after printing
+/// real `UserQuery.query`'s own `Interrupted.`,
+/// `_emerge/UserQuery.py:74-76`): the news prompt (backlog #234)
+/// turns that into real's `sys.exit(128 + SIGINT)` before
+/// `action_build`, while `ask_confirm` folds it into a quiet decline
+/// (no `Quitting.`, backlog #240 -- real exits from inside `query`).
+///
+/// SIGINT handling is scoped to the prompt read itself (backlog
+/// #240): `PromptSigintGuard` installs a handler that only records
+/// the signal, and `read_prompt_line` turns it into `None`; the
+/// previous disposition is restored before this returns, so SIGINT
+/// during a merge, a build phase, or a resolve keeps doing exactly
+/// what it does today.
 fn ask_yes_no(color: &Colorizer, question: &str) -> Option<bool> {
     use std::io::Write;
+    // Installed before the first print, so a ^C typed the moment the
+    // prompt exists is already handled (the prompt text reaching the
+    // terminal strictly implies the handler is active).
+    let _sigint = PromptSigintGuard::install();
     print!("\n{} ", color.c("bold", question));
     loop {
         print!(
@@ -5115,17 +5135,12 @@ fn ask_yes_no(color: &Colorizer, question: &str) -> Option<bool> {
             color.c("PROMPT_CHOICE_OTHER", "No")
         );
         let _ = std::io::stdout().flush();
-        let mut line = String::new();
-        match std::io::stdin().read_line(&mut line) {
-            Ok(0) => {
+        match read_prompt_line() {
+            None => {
                 println!("Interrupted.");
                 return None;
             }
-            Err(_) => {
-                println!("Interrupted.");
-                return None;
-            }
-            Ok(_) => match classify_yes_no(line.trim(), ask_enter_invalid()) {
+            Some(line) => match classify_yes_no(line.trim(), ask_enter_invalid()) {
                 Some(true) => return Some(true),
                 Some(false) => {
                     return Some(false);
@@ -5134,6 +5149,128 @@ fn ask_yes_no(color: &Colorizer, question: &str) -> Option<bool> {
             },
         }
     }
+}
+
+/// Backlog #240: real `_emerge/UserQuery.query` catches
+/// `KeyboardInterrupt` out of `input()` (`_emerge/UserQuery.py:74-76`),
+/// printing `Interrupted.` and exiting `128 + SIGINT`. Python installs
+/// a SIGINT handler process-wide (its default one raises
+/// `KeyboardInterrupt`); portuale instead installs this handler only
+/// around the prompt read, so a merge, a build phase, or a resolve
+/// keeps the default disposition (death by signal) exactly as today.
+/// Set by the handler, consumed by `read_prompt_line`; cleared on
+/// every install so a stale flag can never interrupt a later prompt.
+static PROMPT_SIGINT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The handler behind `PromptSigintGuard`: records the signal and
+/// returns. An atomic store is async-signal-safe; nothing else runs
+/// here, so interrupting allocator locks or stdio buffers is safe.
+extern "C" fn prompt_sigint_handler(_sig: libc::c_int) {
+    PROMPT_SIGINT.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// RAII SIGINT scope for the prompt reads: installs
+/// `prompt_sigint_handler` (without `SA_RESTART`, so the raw
+/// `libc::read` in `read_prompt_line` observes `EINTR`) and restores
+/// the previous disposition on drop. Covers the prints too, not just
+/// the blocking read -- `read_prompt_line` re-checks the flag on
+/// entry, since a ^C that lands while printing consumes its character
+/// as the signal and no input byte will ever arrive for it. (One line
+/// per raw `read` is a line-discipline guarantee in canonical mode,
+/// so an answer written ahead can never be swallowed with the next
+/// one -- the existing `Yes\n`+`No\n` tests rely on it.)
+struct PromptSigintGuard {
+    old: libc::sigaction,
+}
+
+impl PromptSigintGuard {
+    fn install() -> Self {
+        // SAFETY: `sigaction`/`sigemptyset` touch only the two local
+        // structs; the handler is a plain function pointer valid for
+        // the process lifetime.
+        unsafe {
+            let mut old: libc::sigaction = std::mem::zeroed();
+            let mut new: libc::sigaction = std::mem::zeroed();
+            new.sa_sigaction = prompt_sigint_handler as *const () as usize;
+            libc::sigemptyset(&mut new.sa_mask);
+            new.sa_flags = 0;
+            // Clear before installing, so a SIGINT landing in between is not lost.
+            PROMPT_SIGINT.store(false, std::sync::atomic::Ordering::SeqCst);
+            assert_eq!(
+                libc::sigaction(libc::SIGINT, &new, &mut old),
+                0,
+                "sigaction(SIGINT) failed"
+            );
+            Self { old }
+        }
+    }
+}
+
+impl Drop for PromptSigintGuard {
+    fn drop(&mut self) {
+        // SAFETY: restores the disposition saved at install; the
+        // pointer is the guard's own field, valid until drop returns.
+        unsafe {
+            libc::sigaction(libc::SIGINT, &self.old, std::ptr::null_mut());
+        }
+    }
+}
+
+/// One line from fd 0 for the prompt loops: blocks in a raw
+/// `libc::read` (a std `read_line` would retry `EINTR` internally and
+/// never observe the scoped SIGINT) on the canonical-mode tty until
+/// `\n`, EOF, a read error, or the guard's SIGINT flag. Returns
+/// `Some(line)` (newline included when one arrived, like `read_line`;
+/// callers trim) or `None` for a bare EOF (`Ok(0)` on an empty
+/// buffer, real's `EOFError`), SIGINT (`EINTR` with the flag set,
+/// real's `KeyboardInterrupt`), or any other read error (real's
+/// `input()` failure arm, same `Interrupted.` treatment the old
+/// `Err(_)` arm gave). A partial line pending at EOF is evaluated
+/// like `read_line`'s `Ok(_)` arm. Invalid UTF-8 also yields `None`,
+/// matching that old arm byte for byte; real decodes with replacement
+/// and reprompts, a pre-existing divergence this slice keeps.
+fn read_prompt_line() -> Option<String> {
+    if PROMPT_SIGINT.load(std::sync::atomic::Ordering::SeqCst) {
+        return None;
+    }
+    let mut buf: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 256];
+    loop {
+        // SAFETY: `chunk` is a live, writable stack buffer of `len`
+        // bytes; `read` writes at most that many or returns < 0.
+        let n = unsafe {
+            libc::read(
+                libc::STDIN_FILENO,
+                chunk.as_mut_ptr() as *mut libc::c_void,
+                chunk.len(),
+            )
+        };
+        if n < 0 {
+            if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                if PROMPT_SIGINT.load(std::sync::atomic::Ordering::SeqCst) {
+                    return None;
+                }
+                continue;
+            }
+            return None;
+        }
+        if n == 0 {
+            // EOF: a bare one yields `None` below, while a partial
+            // line pending (`^D` after typed-but-unentered text)
+            // falls through and is evaluated -- exactly like the old
+            // `read_line` `Ok(_)` arm, and like real's `input()`,
+            // which returns the partial line before the `EOFError`.
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n as usize]);
+        if buf.contains(&b'\n') {
+            break;
+        }
+    }
+    if buf.is_empty() {
+        return None;
+    }
+    String::from_utf8(buf).ok()
 }
 
 /// `--ask-enter-invalid` (real `main.py`'s boolean flag, consumed by
@@ -5186,19 +5323,17 @@ fn classify_yes_no(answer: &str, enter_invalid: bool) -> Option<bool> {
 /// calling this).
 fn ask_select(n: usize) -> Option<usize> {
     use std::io::Write;
+    // Backlog #240: same scoped SIGINT as `ask_yes_no` -- real's
+    // `UserQuery.query` exits `128 + SIGINT` on `KeyboardInterrupt`
+    // for this menu too (the config `Selection?` prompt).
+    let _sigint = PromptSigintGuard::install();
     loop {
         print!("\nSelection? ");
         let _ = std::io::stdout().flush();
-        let mut line = String::new();
-        if std::io::stdin()
-            .read_line(&mut line)
-            .ok()
-            .filter(|&b| b > 0)
-            .is_none()
-        {
+        let Some(line) = read_prompt_line() else {
             println!("Interrupted.");
             return None;
-        }
+        };
         let a = line.trim();
         if a.is_empty() {
             // Real `UserQuery.query`'s prefix match makes an empty
@@ -9250,33 +9385,71 @@ fn render_pkg_use_display(disp: &[(String, String)]) -> String {
     out
 }
 
-/// Backlog #90 (S2): the `^` marker line under a skip-conflict pin --
-/// real marks the leading operator chars plus the version token
-/// (`~` + `1.0` in `~dev-libs/whblocker-1.0`, staged oracle). The
+/// Backlog #90 (S2), extended by #230: the `^` marker line under a
+/// skip-conflict pin -- real `format_unmatched_atom`
+/// (`_emerge/resolver/output.py:892`) marks the leading operator chars
+/// plus the version token (`~` + `1.0` in `~dev-libs/whblocker-1.0`,
+/// staged oracle), plus a `:slot[/sub-slot][op]` span when the atom
+/// carries one that mismatches the missed package (`:967-975`). The
 /// spans are computed on the raw atom text (no color realignment --
 /// same deliberate divergence as the slot block's own markers).
-fn skip_conflict_caret_line(atom: &str) -> String {
+/// USE-token spans stay a documented cut (no grounded case carries
+/// USE-deps on a skipped row).
+fn skip_conflict_caret_line(atom: &str, pkg_slot: &str, pkg_sub_slot: &str) -> String {
+    // Collect real's highlight spans first, then render once: spans may
+    // abut (a version end meets its `:slot` start), so incremental
+    // push-`^`-or-pad rendering would misplace the later one.
+    let mut spans: Vec<(usize, usize)> = Vec::new();
     let op_len: usize = atom
         .chars()
         .take_while(|c| matches!(c, '=' | '<' | '>' | '~' | '!'))
         .map(|c| c.len_utf8())
         .sum();
-    let mut line = String::new();
-    for _ in 0..op_len {
-        line.push('^');
+    if op_len > 0 {
+        spans.push((0, op_len));
     }
-    if let Some(ver) = portage_dep::parse_atom(atom).and_then(|a| a.version.clone()) {
+    let parsed = portage_dep::parse_atom(atom);
+    if let Some(ver) = parsed.as_ref().and_then(|a| a.version.clone()) {
         // Last occurrence: a package name itself may contain digits
         // (`foo-2-bar-1.0`), so anchoring on the first would mark the
         // wrong span. A trailing `-rN` revision is left out of the
         // span (no oracle covers it).
         if let Some(start) = atom.rfind(ver.as_str()) {
-            while line.len() < start {
-                line.push(' ');
+            spans.push((start, start + ver.len()));
+        }
+    }
+    // Real's `highlight_slot`: the atom names a slot (or sub-slot) the
+    // missed package does not have. The span covers `:slot`, the
+    // `/sub-slot` half when present, and the trailing slot operator
+    // (`=`/`*`), anchored on its occurrence in the raw atom text.
+    if let Some(a) = parsed.as_ref() {
+        let slot_mismatch = a.slot.as_deref().is_some_and(|s| s != pkg_slot);
+        let sub_mismatch = a.sub_slot.as_deref().is_some_and(|s| s != pkg_sub_slot);
+        if (slot_mismatch || sub_mismatch)
+            && let Some(slot) = a.slot.as_deref()
+        {
+            let mut slot_str = format!(":{slot}");
+            if let Some(sub) = a.sub_slot.as_deref() {
+                slot_str.push('/');
+                slot_str.push_str(sub);
             }
-            for _ in 0..ver.len() {
-                line.push('^');
+            match a.slot_operator {
+                Some(portage_dep::SlotOperator::Star) => slot_str.push('*'),
+                Some(portage_dep::SlotOperator::Equals) => slot_str.push('='),
+                None => {}
             }
+            if let Some(start) = atom.find(slot_str.as_str()) {
+                spans.push((start, start + slot_str.len()));
+            }
+        }
+    }
+    let end = spans.iter().map(|(_, e)| *e).max().unwrap_or(0);
+    let mut line = String::new();
+    for i in 0..end {
+        if spans.iter().any(|(s, e)| *s <= i && i < *e) {
+            line.push('^');
+        } else {
+            line.push(' ');
         }
     }
     line
@@ -9498,7 +9671,9 @@ pub fn run(args: &[String]) -> ExitCode {
     // displayed and before anything is actually built/merged/removed,
     // prompt `Would you like to ...? [Yes/No]` (real `UserQuery.query`,
     // `_emerge/actions.py:525` / `unmerge.py:621`). Bare Enter = Yes. "No"
-    // (or EOF) prints `Quitting.` / `Interrupted.` and exits 130
+    // prints `Quitting.` and exits 130, while EOF/SIGINT prints only
+    // `Interrupted.` and exits 130 (real exits from inside `query`, so
+    // its `Quitting.` never runs -- backlog #240).
     // (`128 + SIGINT`). Ignored under `--pretend` (nothing executes
     // anyway).
     let mut ask = false;
@@ -13835,16 +14010,40 @@ pub fn run(args: &[String]) -> ExitCode {
     // producers, one shape: the direct solve's removed instances and
     // the reverse-pin withholds (`GraphResult::skipped_updates`; the
     // renderer cannot tell them apart and real does not distinguish
-    // them either). Root suffixes (`for <root>`, `to/in '<root>'`)
-    // are omitted like every other portuale notice row. The `^`
-    // marker line mirrors real's operator + version spans
-    // (approximation: leading operator chars plus the version token;
-    // real derives them from its collision-reason keys). Suppressed
-    // under `--quiet` unless `--debug` -- real `_show_missed_update`
-    // drops both notice types then (`depgraph.py:1576-1581`).
-    // `--json` never reaches this block (it returns above);
-    // `--columns` has no gate (real shows the notices regardless of
-    // columns: they are not merge-list rows).
+    // them either). Backlog #230 renders each package with real's full
+    // `pkg_use_display` (`skipped_update_use_display_for` /
+    // `skipped_update_installed_use_display_for`, reusing the
+    // slot-collision notice's `render_pkg_use_display` string form):
+    // the whole effective USE masked to the valid-IUSE domain, one
+    // `VAR="…"` group per non-hidden `USE_EXPAND` var, `( )`-wrapped
+    // force/mask flags. Root suffixes follow the slot-collision notice
+    // exactly: merge-scheduled nodes and group headers stay bare (no
+    // `to '<root>'` / `for <root>` -- portuale resolves single-rooted,
+    // so every fixture-test `ROOT` would otherwise leak its own tmp
+    // path into the output, the same reason #206 cut the suffix on
+    // circular nodes); an installed consumer renders
+    // `(cpv, installed in '<root>')` with the real path, like the
+    // notice's installed instances. Real's own rendering pairs a bare
+    // missed line with `to`-suffixed parents because the missed package
+    // stays rooted at the host-config running-root (`/`) tree even for
+    // EAPI-8 `DEPEND` (fix-round-1 probe: a merge-operation missed line
+    // with no `to` suffix means its ROOT is `/` per real
+    // `Package.__str__`, and its `ABI_X86="(64)"` appears nowhere in
+    // the fixture tree) -- a second config portuale deliberately does
+    // not model (single-root determinism), so the missed line's
+    // fixture-tree display is the rendered shape and the bed keeps
+    // exactly that residual. The `^` marker line
+    // mirrors real `format_unmatched_atom`'s operator + version spans
+    // plus a mismatched `:slot[/sub-slot]` span (USE-token spans stay a
+    // documented cut -- no grounded case carries USE-deps here). A
+    // top-level `(Argument)` parent (empty `consumer_cpv`: a CLI atom
+    // that accepts only the surviving instance) renders as real's bare
+    // indented arg line with no atom and no marker
+    // (`depgraph.py:1681-1686`). Suppressed under `--quiet` unless
+    // `--debug` -- real `_show_missed_update` drops both notice types
+    // then (`depgraph.py:1576-1581`). `--json` never reaches this block
+    // (it returns above); `--columns` has no gate (real shows the
+    // notices regardless of columns: they are not merge-list rows).
     if !(quiet && !debug) && !result.skipped_updates.is_empty() {
         println!(
             "WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:"
@@ -13866,20 +14065,47 @@ pub fn run(args: &[String]) -> ExitCode {
                 header.skipped_repo,
                 render_pkg_use_display(&header.skipped_use),
             );
-            for s in group {
-                let consumer_state = if s.consumer_installed {
-                    "installed"
+            for s in group.iter() {
+                if s.consumer_cpv.is_empty() {
+                    // Real's `PackageArg`/`AtomArg` arm
+                    // (`depgraph.py:1681-1686`): the bare command-line
+                    // argument, no atom and no `^` marker. `s.atom`
+                    // already IS that argument here: the only producer
+                    // that emits empty-`consumer_cpv` rows is the
+                    // direct-solve path, and its empty-cpv parents come
+                    // solely from top-level argument pullers, whose
+                    // recorded atom is the argument text as typed
+                    // (unit-pinned by portage-repo's
+                    // `direct_solve_reports_an_argument_parent_with_the_cli_text`;
+                    // the reverse-pin producer always builds a
+                    // non-empty consumer, the backtrack-mask rows skip
+                    // empty pullers). No contract or bed cell grounds
+                    // this arm end to end (blk0 parents are all
+                    // Packages), so beyond that producer pin it stays
+                    // unpinned.
+                    println!("    {}", s.atom);
+                    continue;
+                }
+                if s.consumer_installed {
+                    println!(
+                        "    {} required by ({}, installed in '{}') {}",
+                        s.atom,
+                        s.consumer_cpv,
+                        root.display(),
+                        render_pkg_use_display(&s.consumer_use),
+                    );
                 } else {
-                    "ebuild scheduled for merge"
-                };
+                    println!(
+                        "    {} required by ({}, ebuild scheduled for merge) {}",
+                        s.atom,
+                        s.consumer_cpv,
+                        render_pkg_use_display(&s.consumer_use),
+                    );
+                }
                 println!(
-                    "    {} required by ({}, {}) {}",
-                    s.atom,
-                    s.consumer_cpv,
-                    consumer_state,
-                    render_pkg_use_display(&s.consumer_use),
+                    "    {}",
+                    skip_conflict_caret_line(&s.atom, &header.slot, &header.skipped_sub_slot)
                 );
-                println!("    {}", skip_conflict_caret_line(&s.atom));
             }
         }
         println!();
@@ -15979,6 +16205,493 @@ mod tests {
         assert!(
             !stdout.contains("Calculating dependencies"),
             "an interrupted news prompt must exit before the resolve: {stdout}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// `pre_exec` for the backlog #240 SIGINT tests: the child leaves
+    /// the test's session and process group (`setsid`), takes the pty
+    /// slave as its controlling terminal (`TIOCSCTTY`), and makes
+    /// itself the foreground group (`tcsetpgrp`). Only then does the
+    /// slave line discipline turn a `^C` byte written to the master
+    /// into a real SIGINT for the child (a plain spawned child has no
+    /// foreground group, so the byte is swallowed and the test would
+    /// hang). Only async-signal-safe syscalls run here.
+    #[cfg(unix)]
+    fn pty_foreground_pre_exec() -> std::io::Result<()> {
+        // SAFETY: `setsid`/`ioctl`/`tcsetpgrp`/`getpid` are plain
+        // syscalls on fd 0, which std has already duped onto the pty
+        // slave before `pre_exec` runs.
+        unsafe {
+            if libc::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::ioctl(libc::STDIN_FILENO, libc::TIOCSCTTY, 0 as libc::c_ulong) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::tcsetpgrp(libc::STDIN_FILENO, libc::getpid()) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        }
+    }
+
+    /// Drain the child's piped stdout until `marker` appears, with a
+    /// hard deadline so a prompt regression fails loudly instead of
+    /// hanging the suite. Returns every byte read so far; the caller
+    /// keeps draining the pipe afterwards. EOF before the marker
+    /// panics with the output so far (the child died before
+    /// prompting).
+    #[cfg(unix)]
+    fn read_stdout_until_marker(
+        pipe: &mut std::process::ChildStdout,
+        marker: &[u8],
+        what: &str,
+    ) -> Vec<u8> {
+        use std::os::fd::AsRawFd;
+        let mut seen = Vec::new();
+        let mut buf = [0u8; 512];
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        loop {
+            if !marker.is_empty() && seen.windows(marker.len()).any(|w| w == marker) {
+                return seen;
+            }
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                panic!(
+                    "timed out waiting for {what}; got so far: {}",
+                    String::from_utf8_lossy(&seen)
+                );
+            }
+            let mut pfd = libc::pollfd {
+                fd: pipe.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: a single valid `pollfd`; the timeout fits in a
+            // `c_int` by construction (120 s ceiling).
+            let pr = unsafe { libc::poll(&mut pfd, 1, remaining.as_millis() as libc::c_int) };
+            assert!(pr >= 0, "poll on child stdout failed");
+            if pr == 0 {
+                continue;
+            }
+            let n = std::io::Read::read(pipe, &mut buf).expect("read child stdout");
+            if n == 0 {
+                panic!(
+                    "child exited before printing {what}; got: {}",
+                    String::from_utf8_lossy(&seen)
+                );
+            }
+            seen.extend_from_slice(&buf[..n]);
+        }
+    }
+
+    /// Spawn `emerge --ask ...` for a backlog #240 SIGINT test: pty
+    /// stdin in the child's foreground group (so `^C` raises SIGINT),
+    /// both outputs piped, stderr drained on a thread from the start
+    /// (so a chatty resolve can never block on a full pipe while the
+    /// test polls stdout for the prompt). Returns the child, the
+    /// master, the stdout pipe, and the stderr-drain handle.
+    #[cfg(unix)]
+    fn sigint_prompt_child(
+        portuale_bin: &std::path::Path,
+        args: &[&str],
+        env: Vec<(String, String)>,
+        master: std::fs::File,
+        slave_stdio: std::process::Stdio,
+    ) -> (
+        std::process::Child,
+        std::fs::File,
+        std::process::ChildStdout,
+        std::thread::JoinHandle<Vec<u8>>,
+    ) {
+        let mut cmd = std::process::Command::new(portuale_bin);
+        cmd.args(args);
+        cmd.stdin(slave_stdio);
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
+        cmd.envs(env);
+        // SAFETY: `pty_foreground_pre_exec` runs only async-signal-safe
+        // syscalls (`setsid`, `ioctl`, `tcsetpgrp`, `getpid`) on the
+        // already-duped stdio fds; it allocates nothing and touches no
+        // locks. (Fully qualified: another `CommandExt` is in scope
+        // via `super::*`, and this toolchain's `pre_exec` is `unsafe`.)
+        unsafe {
+            <std::process::Command as std::os::unix::process::CommandExt>::pre_exec(
+                &mut cmd,
+                pty_foreground_pre_exec,
+            );
+        }
+        let mut child = cmd.spawn().expect("portuale emerge spawns");
+        let mut stderr_pipe = child.stderr.take().expect("piped stderr");
+        let err_handle = std::thread::spawn(move || {
+            let mut v = Vec::new();
+            std::io::Read::read_to_end(&mut stderr_pipe, &mut v).expect("drain child stderr");
+            v
+        });
+        let stdout_pipe = child.stdout.take().expect("piped stdout");
+        (child, master, stdout_pipe, err_handle)
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ask_merge_sigint_prints_interrupted_and_exits_130_like_real() {
+        // Backlog #240: real `_emerge/UserQuery.query`
+        // (`_emerge/UserQuery.py:74-76`) catches `KeyboardInterrupt`
+        // out of `input()`, prints `Interrupted.`, and exits
+        // `128 + SIGINT` from inside `query` -- the merge prompt's
+        // `== "No"` comparison and its `Quitting.` never run. A `^C`
+        // byte written to the pty master makes the slave line
+        // discipline raise a real SIGINT in the child (delivery needs
+        // the foreground group from `pty_foreground_pre_exec`; probed:
+        // without it the byte is swallowed). The child must exit 130
+        // *by exit* (`code() == Some(130)` with no signal -- before
+        // the fix it died by signal), print `Interrupted.` exactly
+        // once, and never print `Quitting.`. The `^C` goes out only
+        // after the prompt text is seen on stdout, so it cannot strike
+        // during startup or the resolve, where SIGINT must keep
+        // killing the process as today.
+        use std::io::Write;
+        use std::os::unix::process::ExitStatusExt;
+        let portuale_bin = built_portuale_bin();
+        let base = std::env::temp_dir().join(format!(
+            "ask_merge_sigint_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = base.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let env = fixture_resolve_env(&root, &base.join("pt"));
+        let (master, slave_stdio) = pty_pair();
+        let (mut child, mut master, mut stdout_pipe, err_handle) = sigint_prompt_child(
+            &portuale_bin,
+            &["emerge", "--ask", "--oneshot", "dev-libs/schedok"],
+            env,
+            master,
+            slave_stdio,
+        );
+        let mut stdout = read_stdout_until_marker(
+            &mut stdout_pipe,
+            b"Would you like to merge these packages?",
+            "the merge prompt",
+        );
+        master.write_all(b"\x03").expect("Ctrl-C the merge prompt");
+        let out_handle = std::thread::spawn(move || {
+            let mut v = Vec::new();
+            std::io::Read::read_to_end(&mut stdout_pipe, &mut v).expect("drain child stdout");
+            v
+        });
+        let status = child.wait().expect("wait for emerge");
+        drop(master);
+        stdout.extend(out_handle.join().expect("stdout drain"));
+        let stderr = err_handle.join().expect("stderr drain");
+        assert_eq!(
+            status.code(),
+            Some(130),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&stdout),
+            String::from_utf8_lossy(&stderr)
+        );
+        assert_eq!(
+            status.signal(),
+            None,
+            "SIGINT at the prompt must exit 130, not die by signal"
+        );
+        let text = String::from_utf8_lossy(&stdout);
+        assert_eq!(text.matches("Interrupted.").count(), 1, "{text}");
+        assert!(
+            !text.contains("Quitting."),
+            "an interrupted merge prompt must not print `Quitting.` like real: {text}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ask_read_news_sigint_exits_before_resolve_like_real() {
+        // Backlog #240, the news prompt (`_emerge/actions.py:4266-4288`
+        // through `_emerge/UserQuery.py:74-76`): a `^C` at the "read
+        // the news items while calculating dependencies?" prompt
+        // prints `Interrupted.` and exits `128 + SIGINT` before
+        // `action_build` -- by exit (`Some(130)`, no signal), exactly
+        // like the #234 EOF arm, and with no `eselect` spawn and no
+        // resolve (`Calculating dependencies` stays absent). Same
+        // `^C`-through-the-pty delivery and prompt-synchronized timing
+        // as the merge-prompt test above.
+        use std::io::Write;
+        use std::os::unix::process::ExitStatusExt;
+        let portuale_bin = built_portuale_bin();
+        let base = std::env::temp_dir().join(format!(
+            "ask_read_news_sigint_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = base.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let env = news_resolve_env(&root, &base.join("pt"));
+        let (master, slave_stdio) = pty_pair();
+        let (mut child, mut master, mut stdout_pipe, err_handle) = sigint_prompt_child(
+            &portuale_bin,
+            &[
+                "emerge",
+                "--ask",
+                "--read-news",
+                "--oneshot",
+                "dev-libs/schedok",
+            ],
+            env,
+            master,
+            slave_stdio,
+        );
+        let mut stdout = read_stdout_until_marker(
+            &mut stdout_pipe,
+            b"Would you like to read the news items",
+            "the news prompt",
+        );
+        master.write_all(b"\x03").expect("Ctrl-C the news prompt");
+        let out_handle = std::thread::spawn(move || {
+            let mut v = Vec::new();
+            std::io::Read::read_to_end(&mut stdout_pipe, &mut v).expect("drain child stdout");
+            v
+        });
+        let status = child.wait().expect("wait for emerge");
+        drop(master);
+        stdout.extend(out_handle.join().expect("stdout drain"));
+        let stderr = err_handle.join().expect("stderr drain");
+        assert_eq!(
+            status.code(),
+            Some(130),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&stdout),
+            String::from_utf8_lossy(&stderr)
+        );
+        assert_eq!(
+            status.signal(),
+            None,
+            "SIGINT at the prompt must exit 130, not die by signal"
+        );
+        let text = String::from_utf8_lossy(&stdout);
+        assert_eq!(text.matches("Interrupted.").count(), 1, "{text}");
+        assert!(
+            !text.contains("Quitting."),
+            "an interrupted news prompt must not print `Quitting.` like real: {text}"
+        );
+        assert_eq!(text.matches("news items need reading").count(), 1, "{text}");
+        assert!(
+            !text.contains("Calculating dependencies"),
+            "an interrupted news prompt must exit before the resolve: {text}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ask_config_select_sigint_prints_interrupted_and_exits_130_like_real() {
+        // Backlog #240 follow-up: the config `Selection?` menu goes
+        // through the same `UserQuery.query` in real
+        // (`_emerge/actions.py:746` through
+        // `_emerge/UserQuery.py:74-76`), so a `^C` there prints
+        // `Interrupted.` and exits `128 + SIGINT` by exit -- `X`'s own
+        // `Quitting.` (`actions.py:747-748`) never runs. Two fake vdb
+        // entries make `dev-libs/seltest` match twice, reaching the
+        // menu with no ebuild work at all; same `^C`-through-the-pty
+        // delivery and prompt-synchronized timing as the merge-prompt
+        // test above.
+        use std::io::Write;
+        use std::os::unix::process::ExitStatusExt;
+        let portuale_bin = built_portuale_bin();
+        let base = std::env::temp_dir().join(format!(
+            "ask_config_select_sigint_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = base.join("root");
+        for v in ["1.0", "2.0"] {
+            std::fs::create_dir_all(root.join(format!("var/db/pkg/dev-libs/seltest-{v}"))).unwrap();
+        }
+        let env = fixture_resolve_env(&root, &base.join("pt"));
+        let (master, slave_stdio) = pty_pair();
+        let (mut child, mut master, mut stdout_pipe, err_handle) = sigint_prompt_child(
+            &portuale_bin,
+            &["emerge", "--ask", "--config", "dev-libs/seltest"],
+            env,
+            master,
+            slave_stdio,
+        );
+        let mut stdout =
+            read_stdout_until_marker(&mut stdout_pipe, b"Selection?", "the Selection? prompt");
+        master
+            .write_all(b"\x03")
+            .expect("Ctrl-C the Selection? prompt");
+        let out_handle = std::thread::spawn(move || {
+            let mut v = Vec::new();
+            std::io::Read::read_to_end(&mut stdout_pipe, &mut v).expect("drain child stdout");
+            v
+        });
+        let status = child.wait().expect("wait for emerge");
+        drop(master);
+        stdout.extend(out_handle.join().expect("stdout drain"));
+        let stderr = err_handle.join().expect("stderr drain");
+        assert_eq!(
+            status.code(),
+            Some(130),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&stdout),
+            String::from_utf8_lossy(&stderr)
+        );
+        assert_eq!(
+            status.signal(),
+            None,
+            "SIGINT at the prompt must exit 130, not die by signal"
+        );
+        let text = String::from_utf8_lossy(&stdout);
+        assert!(
+            text.contains("Please select a package to configure:"),
+            "{text}"
+        );
+        assert_eq!(text.matches("Interrupted.").count(), 1, "{text}");
+        assert!(
+            !text.contains("Quitting."),
+            "an interrupted Selection? prompt must not print `Quitting.` like real: {text}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn sigint_during_merge_still_dies_by_signal_like_before() {
+        // Backlog #240 scoping pin: the guard lives strictly inside
+        // the prompt functions, so a `^C` outside any prompt keeps
+        // the default disposition -- death by signal, exactly as
+        // before this slice. A promptless `emerge --oneshot` merge of
+        // `dev-libs/schedok` runs ebuild phases for well over a
+        // second after printing `>>> Emerging`, so a `^C`
+        // synchronized on that marker deterministically lands outside
+        // any prompt: no `Interrupted.` line, no exit code,
+        // `signal() == Some(SIGINT)`.
+        use std::io::Write;
+        use std::os::unix::process::ExitStatusExt;
+        let portuale_bin = built_portuale_bin();
+        let base = std::env::temp_dir().join(format!(
+            "merge_sigint_dies_by_signal_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = base.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let env = fixture_resolve_env(&root, &base.join("pt"));
+        let (master, slave_stdio) = pty_pair();
+        let (mut child, mut master, mut stdout_pipe, err_handle) = sigint_prompt_child(
+            &portuale_bin,
+            &["emerge", "--oneshot", "dev-libs/schedok"],
+            env,
+            master,
+            slave_stdio,
+        );
+        let mut stdout =
+            read_stdout_until_marker(&mut stdout_pipe, b">>> Emerging", "the merge start");
+        master.write_all(b"\x03").expect("Ctrl-C the running merge");
+        let out_handle = std::thread::spawn(move || {
+            let mut v = Vec::new();
+            std::io::Read::read_to_end(&mut stdout_pipe, &mut v).expect("drain child stdout");
+            v
+        });
+        let status = child.wait().expect("wait for emerge");
+        drop(master);
+        stdout.extend(out_handle.join().expect("stdout drain"));
+        let stderr = err_handle.join().expect("stderr drain");
+        assert_eq!(
+            status.signal(),
+            Some(libc::SIGINT),
+            "SIGINT outside a prompt must kill the process: stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&stdout),
+            String::from_utf8_lossy(&stderr)
+        );
+        assert_eq!(
+            status.code(),
+            None,
+            "a signal death has no exit code: stdout: {}",
+            String::from_utf8_lossy(&stdout),
+        );
+        let text = String::from_utf8_lossy(&stdout);
+        assert!(
+            !text.contains("Interrupted."),
+            "only the prompt arm prints `Interrupted.`: {text}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ask_merge_eof_prints_interrupted_without_quitting_like_real() {
+        // Backlog #240's second fix: EOF at the merge prompt printed a
+        // spurious `Quitting.` after `Interrupted.` (the `None` arm
+        // fell into the decline arm). Real exits from inside
+        // `UserQuery.query` (`_emerge/UserQuery.py:74-76`), so only
+        // `Interrupted.` prints -- same VEOF delivery as the #234 news
+        // EOF test, at the later merge prompt instead.
+        use std::io::Write;
+        let portuale_bin = built_portuale_bin();
+        let base = std::env::temp_dir().join(format!(
+            "ask_merge_eof_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = base.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let env = fixture_resolve_env(&root, &base.join("pt"));
+        let (master, slave_stdio) = pty_pair();
+        let (mut child, mut master, mut stdout_pipe, err_handle) = sigint_prompt_child(
+            &portuale_bin,
+            &["emerge", "--ask", "--oneshot", "dev-libs/schedok"],
+            env,
+            master,
+            slave_stdio,
+        );
+        let mut stdout = read_stdout_until_marker(
+            &mut stdout_pipe,
+            b"Would you like to merge these packages?",
+            "the merge prompt",
+        );
+        master
+            .write_all(b"\x04")
+            .expect("EOF the merge prompt with VEOF");
+        let out_handle = std::thread::spawn(move || {
+            let mut v = Vec::new();
+            std::io::Read::read_to_end(&mut stdout_pipe, &mut v).expect("drain child stdout");
+            v
+        });
+        let status = child.wait().expect("wait for emerge");
+        drop(master);
+        stdout.extend(out_handle.join().expect("stdout drain"));
+        let stderr = err_handle.join().expect("stderr drain");
+        assert_eq!(
+            status.code(),
+            Some(130),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&stdout),
+            String::from_utf8_lossy(&stderr)
+        );
+        let text = String::from_utf8_lossy(&stdout);
+        assert_eq!(text.matches("Interrupted.").count(), 1, "{text}");
+        assert!(
+            !text.contains("Quitting."),
+            "an EOF merge prompt must not print `Quitting.` like real: {text}"
         );
         let _ = std::fs::remove_dir_all(&base);
     }
