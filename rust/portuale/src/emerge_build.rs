@@ -3042,6 +3042,7 @@ mod tests {
             priority: 1,
             location: None,
             verify_signature: false,
+            frozen: false,
         }];
         assert_eq!(
             resume_binary_repo(&local, &binrepos, here, "dev-libs", "bin-r", "2.0"),
