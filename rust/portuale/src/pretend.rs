@@ -2815,19 +2815,29 @@ fn circular_node_text(
 /// as a callable unit — the `* Error: circular dependencies:` block, the
 /// `Change USE:` suggestion-or-advisory branch, and the
 /// `large_cycle_count` trailer. Faithful transcription of the `writemsg`
-/// sequence (see the call sites for the re-display note); every edge is
-/// buildtime by construction. Prints only — every call site returns
-/// `ExitCode::from(1)` itself, except the gated cycle-abort path, which
-/// prints this *before* the autounmask section (real `display_problems`
-/// order, `:11113` before `:11140`) and then continues into it.
+/// sequence (see the call sites for the re-display note). Prints only —
+/// every call site returns `ExitCode::from(1)` itself, except the gated
+/// cycle-abort path, which prints this *before* the autounmask section
+/// (real `display_problems` order, `:11113` before `:11140`) and then
+/// continues into it.
 ///
 /// Backlog #206: the block opens with real's own three newlines (real
 /// `writemsg("\n\n")` before `display(handler.merge_list)` plus
 /// `writemsg("\n")` after it, all stderr), and each cycle member renders
 /// through `circular_node_text` (real `str(Package)`).
+///
+/// Backlog #228: every cycle line after `depends on` carries its own
+/// edge's `priorities[-1]` label (real
+/// `_prepare_circular_dep_message`, `resolver/circular_dependency.py`;
+/// `DepPriority.__str__`, `_emerge/DepPriority.py`), threaded in as
+/// `edge_labels` (`portage_repo::cycle_edge_labels` over the same
+/// `entries` the message renders -- `labels[i]` is the edge
+/// `cycle[i] -> cycle[(i + 1) % len]`). All-buildtime cycles (every
+/// pin before #228) still render `(buildtime)` on every line.
 #[allow(clippy::too_many_arguments)]
 fn print_circular_block(
     cycle: &[String],
+    edge_labels: &[String],
     color: &Colorizer,
     repos: &[portage_repo::RepoConfig],
     config: &portage_profile::Config,
@@ -2838,11 +2848,15 @@ fn print_circular_block(
     let prefix = color.c("BAD", " * ");
     eprint!("\n\n\n{prefix}Error: circular dependencies:\n\n");
     // `_prepare_circular_dep_message`: `<node> depends on`, then each
-    // subsequent `<node> (buildtime)` at a growing one-space indent,
-    // closing back on the first package. Each node is real
-    // `str(Package)` (`circular_node_text`); a member missing from
-    // `entries` (unreachable for resolver-built cycles) keeps the bare
-    // cpv so the block still prints.
+    // subsequent `<node> (<priorities[-1]>)` at a growing one-space
+    // indent, closing back on the first package. Each node is real
+    // `str(Package)` (`circular_node_text`); each label is real
+    // `DepPriority.__str__` of the edge into that line's package
+    // (`edge_labels`, backlog #228 -- `(buildtime)` on every line for
+    // the all-buildtime cycles that were the only reachable shape
+    // before it). A member missing from `entries` (unreachable for
+    // resolver-built cycles) keeps the bare cpv so the block still
+    // prints.
     let mut by_cpv: HashMap<String, (String, String, String, &str)> = HashMap::new();
     for e in entries {
         let version = match &e.outcome {
@@ -2875,11 +2889,24 @@ fn print_circular_block(
         }
     };
     let mut lines: Vec<String> = vec![format!("{} depends on", node(&cycle[0]))];
+    // Backlog #228: `edge_labels[i]` is the edge into line `i + 1`'s
+    // package (`cycle[i] -> cycle[i + 1]`), and the closing line's label
+    // is the wrap-around edge (`cycle[last] -> cycle[0]`). A short
+    // slice (unreachable -- `cycle_edge_labels` emits one label per
+    // member) falls back to `(buildtime)`, the pre-#228 rendering.
     for (pos, pkg) in cycle.iter().enumerate().skip(1) {
-        lines.push(format!("{}{} (buildtime)", " ".repeat(pos), node(pkg)));
+        let label = edge_labels
+            .get(pos - 1)
+            .map(String::as_str)
+            .unwrap_or("buildtime");
+        lines.push(format!("{}{} ({label})", " ".repeat(pos), node(pkg)));
     }
+    let closing = edge_labels
+        .last()
+        .map(String::as_str)
+        .unwrap_or("buildtime");
     lines.push(format!(
-        "{}{} (buildtime)",
+        "{}{} ({closing})",
         " ".repeat(cycle.len()),
         node(&cycle[0])
     ));
@@ -13371,6 +13398,7 @@ pub fn run(args: &[String]) -> ExitCode {
     {
         print_circular_block(
             cycle,
+            &portage_repo::cycle_edge_labels(&result.entries, cycle),
             &color,
             &repos,
             &config,
@@ -13798,12 +13826,13 @@ pub fn run(args: &[String]) -> ExitCode {
     }
 
     // Real `_serialize_tasks` -> `_show_circular_deps` (`depgraph.py:
-    // 10425`): an unbreakable build-time dependency cycle among the
-    // merge-bound packages -- every edge in it an unsatisfied
-    // `DEPEND`/`BDEPEND` with no run-time alternative, the only cycle
-    // real portage's `_ignore_runtime` scan can't linearize. Printed to
-    // stderr after the merge list, then the whole action fails (exit 1),
-    // pretend or not -- real portage never proceeds to build a cycle.
+    // 10425`): an unbreakable dependency cycle among the merge-bound
+    // packages -- every edge in it one real portage's `_ignore_runtime`
+    // scan can't linearize (an unsatisfied `DEPEND`/`BDEPEND` with no
+    // run-time alternative, or since backlog #228 an unsatisfied
+    // slot-operator edge). Printed to stderr after the merge list, then
+    // the whole action fails (exit 1), pretend or not -- real portage
+    // never proceeds to build a cycle.
     //
     // Faithful transcription of `_show_circular_deps`'s `writemsg`
     // sequence: the reduced cycle-only re-display
@@ -13819,8 +13848,9 @@ pub fn run(args: &[String]) -> ExitCode {
     // disqualifies it), and `fucyclec` (conditional grandparent clash
     // keeps it with `followup_change`) pin all three outcomes.
     // The shortest cycle drives `_prepare_circular_dep_message`; every
-    // edge is build-time by construction, so every priority label is
-    // `(buildtime)`.
+    // line after `depends on` carries its own edge's `priorities[-1]`
+    // label (backlog #228 -- `(buildtime)` on every line for the
+    // all-buildtime cycles, `slopcyca` pins the mixed shape).
     // Slice 5 routing for the legacy site: gate-on aborts never reach
     // here with work left (a cycle abort printed above, before the
     // autounmask section; a masked/unsat abort prints no circular block
@@ -13835,6 +13865,7 @@ pub fn run(args: &[String]) -> ExitCode {
         if !gated_abort {
             print_circular_block(
                 cycle,
+                &portage_repo::cycle_edge_labels(&result.entries, cycle),
                 &color,
                 &repos,
                 &config,
