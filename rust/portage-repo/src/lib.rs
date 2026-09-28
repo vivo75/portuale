@@ -16066,6 +16066,7 @@ fn slot_operator_eliminate_rebuilds(
 /// `topological_merge_order`, and its own `RDEPEND` is never re-walked.
 /// The default `--solver=portage` path has none of that -- see
 /// `BacktrackParams::slot_operator_replace_installed`.
+#[allow(clippy::too_many_arguments)]
 fn slot_operator_rebuild_entries(
     root: &Path,
     repos: &[RepoConfig],
@@ -16073,6 +16074,8 @@ fn slot_operator_rebuild_entries(
     reachable: &HashSet<(String, String)>,
     with_bdeps: bool,
     excluded: &[String],
+    update: bool,
+    top_level_cps: &HashSet<(String, String)>,
 ) -> (Vec<GraphEntry>, Vec<(String, String)>) {
     let installed = all_installed_packages(root);
     let mut scheduled: BTreeSet<(String, String)> = BTreeSet::new();
@@ -16089,12 +16092,13 @@ fn slot_operator_rebuild_entries(
             &scheduled,
             &BTreeSet::new(),
             with_bdeps,
-            // The `--solver=` bridge keeps the pre-#211 behaviour: the
-            // new-slot update arm stays off here (no `update`/`top_level`
-            // context at this layer), so this fixpoint can only schedule
-            // same-slot rebuilds exactly as before.
-            false,
-            &HashSet::new(),
+            // #211 I1: the `--solver=` bridge threads the same
+            // `update`/`top_level` context the default path passes, so
+            // both solvers agree on the new-slot arm (the request
+            // carries both -- the "no context at this layer" cut that
+            // kept this fixpoint same-slot-only is gone).
+            update,
+            top_level_cps,
             excluded,
         );
         abi_rebuilds = pairs;
@@ -40745,6 +40749,8 @@ mod tests {
             &reach,
             true,
             &[],
+            false,
+            &HashSet::new(),
         );
         let names: Vec<&str> = out.iter().map(|e| e.package.as_str()).collect();
         assert_eq!(names, vec!["stale"]);
@@ -40755,6 +40761,115 @@ mod tests {
                 ..
             }
         ));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #211 I1: the `--solver=` bridge fixpoint runs the
+    /// new-slot update arm once `update`/`top_level_cps` are threaded
+    /// through, so both solvers agree -- a slot-moving provider merged
+    /// fresh schedules the walked consumer bound to the old slot, and
+    /// stays off without `--update` (real's `want_update` gate).
+    #[test]
+    fn slot_operator_bridge_entries_run_the_new_slot_arm() {
+        use md5::Digest as _;
+        use std::fmt::Write as _;
+        let dir = std::env::temp_dir().join(format!(
+            "portage-repo-slotop-bridge-newslot-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        for (name, slot, rdepend) in [
+            ("massb-1", "1", ""),
+            ("massc-1", "0", "dev-libs/massb:1/1="),
+        ] {
+            let d = dir.join("var/db/pkg/dev-libs").join(name);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+            fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+            fs::write(d.join("repository"), "testrepo\n").unwrap();
+            if !rdepend.is_empty() {
+                fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+            }
+        }
+        let repo = dir.join("repo");
+        for (pkg, pv, slot) in [("massb", "2.0", "2/2"), ("massc", "1.0", "0")] {
+            let d = repo.join("dev-libs").join(pkg);
+            std::fs::create_dir_all(&d).unwrap();
+            let body = format!(
+                "EAPI=8\nDESCRIPTION=\"211 bridge\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\n"
+            );
+            std::fs::write(d.join(format!("{pkg}-{pv}.ebuild")), body.as_bytes()).unwrap();
+            let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+            let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=211 bridge\nEAPI=8\n".to_string();
+            writeln!(entry, "KEYWORDS=amd64\nSLOT={slot}\n_md5_={md5}").unwrap();
+            let cachedir = repo.join("metadata/md5-cache/dev-libs");
+            std::fs::create_dir_all(&cachedir).unwrap();
+            std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+        }
+        let repos = vec![RepoConfig {
+            name: "testrepo".to_string(),
+            location: repo.clone(),
+            priority: 0,
+            is_main: true,
+            masters: vec![],
+            profile_formats: vec![],
+            cache_formats: vec![],
+            aliases: vec![],
+            sync_type: None,
+            sync_uri: None,
+            volatile: false,
+            module_specific_options: vec![],
+        }];
+        let fresh = GraphEntry {
+            slot: Some("2".into()),
+            sub_slot: Some("2".into()),
+            ..graph_entry("dev-libs", "massb", "2.0")
+        };
+        let consumer = GraphEntry {
+            outcome: PretendOutcome::AlreadyInstalled {
+                version: "1.0".into(),
+            },
+            slot: Some("0".into()),
+            sub_slot: Some("0".into()),
+            ..graph_entry("dev-libs", "massc", "1.0")
+        };
+        let entries = [fresh, consumer];
+        // With `--update` the bridge synthesises the consumer rebuild,
+        // exactly like the default path's scan-then-seed.
+        let (out, _) = slot_operator_rebuild_entries(
+            &dir,
+            &repos,
+            &entries,
+            &HashSet::new(),
+            true,
+            &[],
+            true,
+            &HashSet::new(),
+        );
+        let names: Vec<&str> = out.iter().map(|e| e.package.as_str()).collect();
+        assert_eq!(names, vec!["massc"]);
+        assert!(matches!(
+            out[0].outcome,
+            PretendOutcome::Reinstall {
+                slot_operator_rebuild: true,
+                ..
+            }
+        ));
+        // Without `--update` (and no arg-chain) the arm stays off.
+        let (off, _) = slot_operator_rebuild_entries(
+            &dir,
+            &repos,
+            &entries,
+            &HashSet::new(),
+            true,
+            &[],
+            false,
+            &HashSet::new(),
+        );
+        assert!(off.is_empty(), "no want_update, no schedule");
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -41997,6 +42112,8 @@ mod tests {
             &reach,
             true,
             &[],
+            false,
+            &HashSet::new(),
         );
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].slot.as_deref(), Some("0"));

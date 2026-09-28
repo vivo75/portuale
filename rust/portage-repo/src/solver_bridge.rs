@@ -689,14 +689,29 @@ fn graph_result_from_order(
         if req.ignore_built_slot_operator_deps || !req.rebuild_if_new_slot {
             (Vec::new(), Vec::new())
         } else {
-            super::slot_operator_rebuild_entries(
-                &req.root,
-                repos,
-                &entries,
-                &slot_op_reachable,
-                req.with_bdeps,
-                &req.excluded,
-            )
+            {
+                // #211 I1: the request carries the same `update` flag
+                // and top-level atoms the default path resolves under
+                // (same construction as `ResolveCtx::top_level_cps`), so
+                // the bridge fixpoint runs the new-slot arm too and both
+                // solvers agree.
+                let top_level_cps: HashSet<(String, String)> = req
+                    .atoms
+                    .iter()
+                    .filter_map(|a| portage_dep::parse_atom(a))
+                    .map(|atom| (atom.category, atom.package))
+                    .collect();
+                super::slot_operator_rebuild_entries(
+                    &req.root,
+                    repos,
+                    &entries,
+                    &slot_op_reachable,
+                    req.with_bdeps,
+                    &req.excluded,
+                    req.update,
+                    &top_level_cps,
+                )
+            }
         };
     entries.extend(slot_op_rebuilds);
     // Same merge-order sort the walk path applies (real portage's
