@@ -14437,8 +14437,12 @@ pub struct GraphEntry {
 /// `(target cp, owner cp) -> (has_hard, has_soft)`: for each dependency
 /// edge the BFS walked, whether it was ever pulled as an unsatisfied
 /// build-time-only dep (`QueueItem::buildtime_hard`) and/or via any
-/// softer route. An edge is unbreakable in a cycle only when
-/// `(true, false)`. Built in `resolve_pretend_graph`, consumed by
+/// softer route. An edge is unbreakable in a cycle when `(true, false)`
+/// -- or, since backlog #228, when the owner's entry carries an
+/// unsatisfied non-optional slot-operator priority toward the dep
+/// (`find_hard_cycles`' own deps rule, which the map's token-text view
+/// cannot see: a run-time-key `:=` atom is never `buildtime_hard`).
+/// Built in `resolve_pretend_graph`, consumed by
 /// `topological_merge_order` (and Commit 2's cycle detection).
 type EdgeKindMap = HashMap<((String, String), (String, String)), (bool, bool)>;
 
@@ -16180,31 +16184,12 @@ fn merge_bound_cpv(entry: &GraphEntry) -> Option<String> {
     Some(format!("{}/{}-{version}", entry.category, entry.package))
 }
 
-/// Finds the shortest **unbreakable** dependency cycle among the
-/// merge-bound `entries` -- real `circular_dependency_handler`'s
-/// `_find_cycles` + `shortest_cycle`, restricted to *hard* edges (an
-/// unsatisfied build-time dep with no run-time alternative,
-/// `edge_kind_map[(dep cp, owner cp)] == (true, false)`). Those are the
-/// only edges real `_serialize_tasks`' `_ignore_runtime` scan can't
-/// drop, so a cycle made entirely of them is exactly the case real
-/// portage reports with `* Error: circular dependencies:`.
-///
-/// The hard-edge digraph has an edge `owner -> dep` for every such
-/// `edge_kind_map` entry whose both endpoints are merge-bound `entries`.
-/// Returns the shortest directed cycle as an ordered CPV list where each
-/// element depends on the next (the last wrapping to the first), rotated
-/// to start at its lowest `entries` index for a deterministic render;
-/// empty when the hard-edge graph is acyclic (every ordinary resolve).
-///
-/// Full elementary-cycle enumeration lives separately
-/// (`merge_order::elementary_cycles`, real `digraph.get_cycles` over the
-/// `medium_soft` rung) and feeds only `large_cycle_count` and the
-/// cycle-only re-display -- this stays the short hard ring the message
-/// and the suggestions render.
-fn find_hard_cycles(entries: &[GraphEntry], edge_kind_map: &EdgeKindMap) -> Vec<Vec<String>> {
-    // Merge-bound entries only, lowest index per cp (the merge list is
-    // already in dependency order, so the first is the one to start a
-    // rendered cycle at).
+/// Lowest-index merge-bound entry per `(category, package)` -- the merge
+/// list is already in dependency order, so the first is the one to
+/// start a rendered cycle at. Shared by `find_hard_cycles` (cycle
+/// nodes) and `cycle_edge_labels` (owner lookup), so the two cannot
+/// disagree on which instance an edge belongs to.
+fn merge_bound_index(entries: &[GraphEntry]) -> HashMap<(&str, &str), usize> {
     let mut cp_index: HashMap<(&str, &str), usize> = HashMap::new();
     for (i, e) in entries.iter().enumerate() {
         if merge_bound_cpv(e).is_some() {
@@ -16213,20 +16198,113 @@ fn find_hard_cycles(entries: &[GraphEntry], edge_kind_map: &EdgeKindMap) -> Vec<
                 .or_insert(i);
         }
     }
+    cp_index
+}
+
+/// Finds the shortest **unbreakable** dependency cycle among the
+/// merge-bound `entries` -- real `circular_dependency_handler`'s
+/// `_find_cycles` + `shortest_cycle`, restricted to *hard* edges. Those
+/// are the only edges real `_serialize_tasks`' `_ignore_runtime` scan
+/// can't drop, so a cycle made entirely of them is exactly the case
+/// real portage reports with `* Error: circular dependencies:`.
+///
+/// A hard edge is an unsatisfied build-time dep with no run-time
+/// alternative, `edge_kind_map[(dep cp, owner cp)] == (true, false)`
+/// -- or, since backlog #228, an unsatisfied non-optional
+/// slot-operator edge (`DEPEND`/`RDEPEND` `:=`, real `DepPriority`
+/// `buildtime_slot_op`/`runtime_slot_op`, which no
+/// `ignore_priority` rung of either `DepPriority*Range` relaxes --
+/// real `_emerge/DepPriorityNormalRange.py` / `_emerge/
+/// DepPrioritySatisfiedRange.py`, grounded by the n228 probe: real
+/// 3.0.81.3 aborts `dev-libs/slopcyca -RDEPEND:=-> dev-libs/slopcycb
+/// -DEPEND-> dev-libs/slopcyca` with `(runtime_slot_op)` /
+/// `(buildtime)`). A plain unsatisfied run-time edge stays soft on
+/// purpose: both serializers merge a run-time cycle as a group
+/// (`find_smallest_cycle`/`gather_deps`), so it never forces an
+/// abort. The slot-op arm reads the owner's own `deps` edges (the
+/// merge-order graph input, which carries real's per-key `DepPriority`
+/// including the `:=` promotion) with the walk's own installed gate
+/// (`best_installed_for_atom`, so a satisfied slot-op edge stays
+/// breakable exactly like real's `satisfied` rung); `DepEdge`
+/// `priority.satisfied` itself is never consulted -- it is always
+/// false on an entry (`build_digraph` only sets it on a local copy).
+///
+/// The hard-edge digraph has an edge `owner -> dep` for every such
+/// `edge_kind_map` entry whose both endpoints are merge-bound `entries`
+/// (plus every slot-op deps edge between two merge-bound entries, even
+/// one the walk never recorded -- a disjunctive branch the scheduler
+/// suppressed still counts, since real's digraph holds the resolved
+/// edge too). Returns the shortest directed cycle as an ordered CPV
+/// list where each element depends on the next (the last wrapping to
+/// the first), rotated to start at its lowest `entries` index for a
+/// deterministic render; empty when the hard-edge graph is acyclic
+/// (every ordinary resolve).
+///
+/// Full elementary-cycle enumeration lives separately
+/// (`merge_order::elementary_cycles`, real `digraph.get_cycles` over the
+/// `medium_soft` rung) and feeds only `large_cycle_count` and the
+/// cycle-only re-display -- this stays the short hard ring the message
+/// and the suggestions render.
+fn find_hard_cycles(
+    entries: &[GraphEntry],
+    edge_kind_map: &EdgeKindMap,
+    root: &Path,
+) -> Vec<Vec<String>> {
+    // Merge-bound entries only, lowest index per cp (the merge list is
+    // already in dependency order, so the first is the one to start a
+    // rendered cycle at).
+    let cp_index = merge_bound_index(entries);
+    // Backlog #228 slot-op arm: owner index -> dep indices with an
+    // unsatisfied non-optional slot-operator `deps` edge between two
+    // merge-bound entries.
+    let slot_op_hard = |owner_idx: usize, dep_cp: &(String, String)| -> bool {
+        entries[owner_idx].deps.iter().any(|d| {
+            d.category == dep_cp.0
+                && d.package == dep_cp.1
+                && (d.priority.buildtime_slot_op || d.priority.runtime_slot_op)
+                && !d.priority.optional
+                && best_installed_for_atom(root, &d.atom, &d.category, &d.package).is_none()
+        })
+    };
     // adjacency: owner index -> sorted, deduped dep indices (hard edges).
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); entries.len()];
     for ((dep_cp, owner_cp), (has_hard, has_soft)) in edge_kind_map {
-        if !has_hard || *has_soft {
-            continue;
-        }
         let (Some(&oi), Some(&di)) = (
             cp_index.get(&(owner_cp.0.as_str(), owner_cp.1.as_str())),
             cp_index.get(&(dep_cp.0.as_str(), dep_cp.1.as_str())),
         ) else {
             continue;
         };
-        if oi != di {
+        if oi == di {
+            continue;
+        }
+        // Backlog #228: the walk's `(true, false)` arm, or the
+        // slot-op deps arm (an `RDEPEND` `:=` edge is never
+        // `buildtime_hard`, so the map alone can never see it).
+        if (*has_hard && !*has_soft) || slot_op_hard(oi, dep_cp) {
             adj[oi].push(di);
+        }
+    }
+    // A slot-op deps edge the walk never recorded has no map entry at
+    // all (a disjunctive branch the scheduler suppressed still counts
+    // -- real's digraph holds the resolved edge too).
+    for &oi in cp_index.values() {
+        for dep in &entries[oi].deps {
+            if !(dep.priority.buildtime_slot_op || dep.priority.runtime_slot_op)
+                || dep.priority.optional
+            {
+                continue;
+            }
+            let Some(&di) = cp_index
+                .get(&(dep.category.as_str(), dep.package.as_str()))
+                .filter(|&&di| di != oi)
+            else {
+                continue;
+            };
+            let dep_cp = (dep.category.clone(), dep.package.clone());
+            if slot_op_hard(oi, &dep_cp) && !adj[oi].contains(&di) {
+                adj[oi].push(di);
+            }
         }
     }
     for v in &mut adj {
@@ -16287,6 +16365,53 @@ fn find_hard_cycles(entries: &[GraphEntry], edge_kind_map: &EdgeKindMap) -> Vec<
             vec![rotated]
         }
     }
+}
+
+/// Backlog #228: one label per edge of a `find_hard_cycles` cycle --
+/// real `_prepare_circular_dep_message`
+/// (`resolver/circular_dependency.py`, the `({pkg}
+/// ({priorities[-1]}))` on every line after `depends on`).
+/// `labels[i]` is the edge `cycle[i] -> cycle[(i + 1) % len]`: the
+/// `DepPriority.__str__` (`_emerge/DepPriority.py`) of the hardest
+/// `deps` priority the owner's entry carries toward the dep's cp.
+/// Real keeps the per-edge priorities sorted by hardness
+/// (`digraph.add`'s `bisect.insort`), so `[-1]` is the max -- taken
+/// here with `max_by_key(dep_priority_rank)`, the ordering
+/// `resolver_trace::max_priority` implements, rendered with the same
+/// `dep_priority_str` the `--debug` digraph dump already prints per
+/// edge. `satisfied` never affects a label (real ranks by
+/// hardness only); a `||` group contributes every branch's priority
+/// (real's digraph holds only the resolved branch -- an approximation,
+/// immaterial whenever the branches share a key, which they do by
+/// construction). `"buildtime"` when the owner carries no `deps` edge
+/// there at all (a map-only edge from a `deps`-less synthetic entry;
+/// every resolver-built cycle edge has its atom queued, so the
+/// fallback never fires on a real resolve).
+pub fn cycle_edge_labels(entries: &[GraphEntry], cycle: &[String]) -> Vec<String> {
+    if cycle.is_empty() {
+        return Vec::new();
+    }
+    cycle
+        .iter()
+        .enumerate()
+        .map(|(i, owner_cpv)| {
+            let dep_cpv = &cycle[(i + 1) % cycle.len()];
+            let hardest = entries
+                .iter()
+                .find(|e| merge_bound_cpv(e).as_deref() == Some(owner_cpv.as_str()))
+                .into_iter()
+                .flat_map(|e| e.deps.iter())
+                .filter_map(|d| {
+                    split_cpv(dep_cpv).and_then(|(cat, pkg, _)| {
+                        (d.category == cat && d.package == pkg).then_some(d.priority)
+                    })
+                })
+                .max_by_key(crate::resolver_trace::dep_priority_rank);
+            hardest
+                .map(|p| crate::resolver_trace::dep_priority_str(&p).to_string())
+                .unwrap_or_else(|| "buildtime".to_string())
+        })
+        .collect()
 }
 
 /// Split a `category/package-version` string into its three parts (the
@@ -25699,7 +25824,7 @@ fn assemble_result(
     // cycle in discovery order (it can't linearize one); this
     // records it for `pretend.rs` to render the fatal
     // `* Error: circular dependencies:` block.
-    let circular_deps = find_hard_cycles(&pass.entries, &pass.edge_kind_map);
+    let circular_deps = find_hard_cycles(&pass.entries, &pass.edge_kind_map, ctx.root);
 
     // Elementary-cycle enumeration + reduced display order for the
     // `large_cycle_count` trailer and the cycle-only re-display
@@ -37174,12 +37299,13 @@ mod tests {
         ];
 
         // Pure hard cycle hca <-> hcb: reported, rotated to start at the
-        // lowest index (hca).
+        // lowest index (hca). The entries carry no `deps`, so the #228
+        // slot-op arm never fires and no vdb is consulted (fake root).
         let mut hard: EdgeKindMap = HashMap::new();
         hard.insert((cp("hcb"), cp("hca")), (true, false));
         hard.insert((cp("hca"), cp("hcb")), (true, false));
         assert_eq!(
-            find_hard_cycles(&entries, &hard),
+            find_hard_cycles(&entries, &hard, Path::new("/nonexistent-root")),
             vec![vec![hardcpv("hca"), hardcpv("hcb")]]
         );
 
@@ -37188,7 +37314,7 @@ mod tests {
         let mut mixed: EdgeKindMap = HashMap::new();
         mixed.insert((cp("hcb"), cp("hca")), (true, false));
         mixed.insert((cp("hca"), cp("hcb")), (true, true));
-        assert!(find_hard_cycles(&entries, &mixed).is_empty());
+        assert!(find_hard_cycles(&entries, &mixed, Path::new("/nonexistent-root")).is_empty());
 
         // An AlreadyInstalled node can't be in a build-time cycle.
         let installed = vec![
@@ -37201,7 +37327,7 @@ mod tests {
                 ..graph_entry("dev-libs", "hcb", "1.0")
             },
         ];
-        assert!(find_hard_cycles(&installed, &hard).is_empty());
+        assert!(find_hard_cycles(&installed, &hard, Path::new("/nonexistent-root")).is_empty());
     }
 
     #[test]
@@ -37273,6 +37399,39 @@ mod tests {
             &result.entries,
         );
         assert!(sols.is_empty(), "{:?}", sols);
+    }
+
+    #[test]
+    fn mixed_priority_cycle_reports_per_edge_labels() {
+        // Backlog #228: `dev-libs/slopcyca -RDEPEND:=-> dev-libs/slopcycb
+        // -DEPEND-> dev-libs/slopcyca`. The `RDEPEND` `:=` edge is an
+        // unsatisfied `runtime_slot_op` priority -- unbreakable at every
+        // `ignore_priority` rung, so real aborts (n228 probe: real
+        // 3.0.81.3 rc 1 with `(buildtime)` on the back edge and
+        // `(runtime_slot_op)` on the slot-op edge) where the pre-#228
+        // detector saw only a soft run-time edge and merged silently.
+        // Rotation starts at the requested atom (lowest entries index --
+        // the #208 family, not this slice), so the labels read
+        // `runtime_slot_op` into the second line, `buildtime` closing.
+        let result = graph_result_real("dev-libs/slopcyca");
+        assert_eq!(
+            result.circular_deps,
+            vec![vec![
+                "dev-libs/slopcyca-1.0".to_string(),
+                "dev-libs/slopcycb-1.0".to_string()
+            ]]
+        );
+        assert_eq!(
+            cycle_edge_labels(&result.entries, &result.circular_deps[0]),
+            vec!["runtime_slot_op".to_string(), "buildtime".to_string()]
+        );
+        // The all-buildtime fixtures keep the old rendering: every
+        // edge labels `(buildtime)`.
+        let hard = graph_result_real("dev-libs/hardcyclea");
+        assert_eq!(
+            cycle_edge_labels(&hard.entries, &hard.circular_deps[0]),
+            vec!["buildtime".to_string(), "buildtime".to_string()]
+        );
     }
 
     #[test]
