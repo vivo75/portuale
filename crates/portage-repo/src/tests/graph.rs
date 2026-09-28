@@ -334,6 +334,85 @@ fn fixture_best_version_wins_regardless_of_which_repo_has_it() {
 }
 
 #[test]
+fn backtrack_zero_feeds_satisfiable_reverse_dep_pins_in_pass() {
+    // `--backtrack=0` must not skip the reverse-dependency feed loop:
+    // Portage calls `_complete_graph()` with no backtracking gate, so a
+    // satisfiable installed-consumer pin enforces in-pass.
+    //
+    // The fixture world file does not carry the consumer, so the seed is set
+    // directly.
+    let root = fixtures_root();
+    let mut config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    config.complete_seed_atoms = vec!["dev-libs/r25consumer".to_string()];
+    let result = ResolveRequest {
+        newuse: true,
+        update: true,
+        deep: Deep::Unlimited,
+        backtrack_max: 0,
+        ..ResolveRequest::new(
+            &root,
+            &root,
+            &["dev-libs/r25target".to_string()],
+            &config,
+            &fixtures_root().join("distfiles"),
+        )
+    }
+    .resolve()
+    .unwrap_or_else(|e| panic!("resolving r25target failed: {e}"));
+    // The lib upgrade is withheld: no merge of any r25lib version.
+    assert!(
+        result.entries.iter().all(|e| {
+            e.package != "r25lib" || matches!(e.outcome, PretendOutcome::AlreadyInstalled { .. })
+        }),
+        "r25lib must settle installed, not merge: {:?}",
+        result
+            .entries
+            .iter()
+            .filter(|e| e.package == "r25lib")
+            .collect::<Vec<_>>()
+    );
+    // Portage's silence: no slot-operator withhold rows at bt0 (the
+    // minimizer/probe path writes no missed-update state).
+    assert_eq!(result.skipped_updates, vec![]);
+    assert_eq!(result.backtrack_restarts, 0);
+    assert_eq!(result.slot_conflicts, vec![]);
+    // The rest of Portage's merge set is intact.
+    let versions: HashMap<(&str, &str), String> = result
+        .entries
+        .iter()
+        .filter_map(|e| match &e.outcome {
+            PretendOutcome::Upgrade { to, .. } => {
+                Some(((e.category.as_str(), e.package.as_str()), format!("U {to}")))
+            }
+            PretendOutcome::New { version } => Some((
+                (e.category.as_str(), e.package.as_str()),
+                format!("N {version}"),
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        versions.get(&("dev-libs", "r25up")).map(String::as_str),
+        Some("U 2.0"),
+        "r25up still upgrades"
+    );
+    assert_eq!(
+        versions.get(&("dev-libs", "r25target")).map(String::as_str),
+        Some("N 1.0"),
+        "r25target still merges"
+    );
+}
+
+#[test]
 fn fixture_package_mask_hides_with_no_unmask() {
     assert_eq!(
         resolve_real("dev-libs", "hardmaskedpkg"),
@@ -493,6 +572,750 @@ fn sibling_package_prefix_does_not_contaminate_vdb_scan() {
 }
 
 #[test]
+fn exclude_threads_through_dependency_recursion_not_just_top_level() {
+    // --exclude must still leave it alone despite --update, proving the flag
+    // threads uniformly through the whole BFS, not just top-level atoms.
+    let root = fixtures_root();
+    let entries: Vec<(String, PretendOutcome)> = ResolveRequest {
+        update: true,
+        excluded: vec!["dev-libs/upgradepkg".to_string()],
+        ..ResolveRequest::new(
+            &root,
+            &root,
+            &["dev-libs/withdeps".to_string()],
+            &test_config(),
+            &fixtures_root().join("distfiles"),
+        )
+    }
+    .resolve()
+    .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
+    .entries
+    .into_iter()
+    .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
+    .collect();
+    assert_eq!(
+        entries,
+        vec![
+            (
+                "dev-libs/newpkg".to_string(),
+                PretendOutcome::New {
+                    version: "1.0".to_string()
+                }
+            ),
+            (
+                "dev-libs/upgradepkg".to_string(),
+                PretendOutcome::AlreadyInstalled {
+                    version: "1.0".to_string()
+                }
+            ),
+            (
+                "dev-libs/withdeps".to_string(),
+                PretendOutcome::New {
+                    version: "1.0".to_string()
+                }
+            )
+        ]
+    );
+}
+
+#[test]
+fn rebuild_if_new_ver_ignores_a_same_version_dep() {
+    // rebuildnochange's best tree version equals the installed one.
+    // Even forced to reinstall (--reinstall-atoms), that is not a
+    // "new version"/"new revision" -> its consumer is NOT rebuilt
+    // under --rebuild-if-new-ver / -new-rev.
+    let root = fixtures_root();
+    for (nr, nv) in [(true, false), (false, true)] {
+        let g = ResolveRequest {
+            reinstall_atoms: vec!["dev-libs/rebuildnochange".to_string()],
+            rebuild_if_new_rev: nr,
+            rebuild_if_new_ver: nv,
+            ..ResolveRequest::new(
+                &root,
+                &root,
+                &["dev-libs/rebuildnochange".to_string()],
+                &test_config(),
+                &fixtures_root().join("distfiles"),
+            )
+        }
+        .resolve()
+        .unwrap()
+        .entries
+        .into_iter()
+        .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
+        .collect::<Vec<_>>();
+        assert!(
+            g.iter().any(|(n, _)| n == "dev-libs/rebuildnochange"),
+            "the dep itself should be forced into the graph: {g:?}"
+        );
+        assert!(
+            !g.iter()
+                .any(|(n, _)| n == "dev-libs/rebuildnochangeconsumer"),
+            "no rebuild for a same-version dep: {g:?}"
+        );
+    }
+}
+
+#[test]
+fn dynamic_deps_picks_ebuild_vs_vdb_deps_for_an_already_installed_deep_walk() {
+    // Installed with a vdb RDEPEND but a current-ebuild RDEPEND naming someone
+    // else: dynamic walks the ebuild, =n walks the vdb snapshot.
+    let root = fixtures_root();
+    let call = |dynamic_deps: bool| -> Vec<String> {
+        ResolveRequest {
+            deep: Deep::Unlimited,
+            dynamic_deps,
+            ..ResolveRequest::new(
+                &root,
+                &root,
+                &["dev-libs/changeddepspkg".to_string()],
+                &test_config(),
+                &fixtures_root().join("distfiles"),
+            )
+        }
+        .resolve()
+        .unwrap()
+        .entries
+        .into_iter()
+        .map(|e| format!("{}/{}", e.category, e.package))
+        .collect()
+    };
+    // dynamic (default): the current ebuild's RDEPEND -> newpkg (New).
+    assert!(call(true).iter().any(|n| n == "dev-libs/newpkg"));
+    // =n: the vdb RDEPEND -> samepkg (installed) -> newpkg not pulled.
+    assert!(!call(false).iter().any(|n| n == "dev-libs/newpkg"));
+}
+
+#[test]
+fn default_dynamic_deps_walks_the_live_ebuild_alone() {
+    // No vdb `EAPI` file, so the installed EAPI reads as `"0"` and the overlay
+    // never applies here: the default walks the live ebuild alone, `=n`
+    // walks the vdb snapshot alone.
+    let root = fixtures_root();
+    let call = |dynamic_deps: bool, ignore_built: bool| -> Vec<String> {
+        ResolveRequest {
+            deep: Deep::Unlimited,
+            ignore_built_slot_operator_deps: ignore_built,
+            dynamic_deps,
+            ..ResolveRequest::new(
+                &root,
+                &root,
+                &["dev-libs/builtbindpkg".to_string()],
+                &test_config(),
+                &fixtures_root().join("distfiles"),
+            )
+        }
+        .resolve()
+        .unwrap()
+        .entries
+        .into_iter()
+        .map(|e| format!("{}/{}", e.category, e.package))
+        .collect()
+    };
+    let default = call(true, false);
+    assert!(
+        default.iter().any(|n| n == "dev-libs/newpkg"),
+        "live ebuild dep: {default:?}"
+    );
+    assert!(
+        !default.iter().any(|n| n == "dev-libs/builtbindtarget"),
+        "no append: the vdb-only binding is not walked: {default:?}"
+    );
+    let static_ = call(false, false);
+    assert!(
+        !static_.iter().any(|n| n == "dev-libs/newpkg"),
+        "=n reads the vdb snapshot, not the ebuild: {static_:?}"
+    );
+    assert!(
+        static_.iter().any(|n| n == "dev-libs/builtbindtarget"),
+        "=n still walks the recorded built binding: {static_:?}"
+    );
+    let ignored = call(true, true);
+    assert!(
+        ignored.iter().any(|n| n == "dev-libs/newpkg"),
+        "append suppressed, live dep intact: {ignored:?}"
+    );
+    assert!(
+        !ignored.iter().any(|n| n == "dev-libs/builtbindtarget"),
+        "ignore flag changes nothing here: {ignored:?}"
+    );
+}
+
+#[test]
+fn deep_walk_evaluates_flag_deps_against_the_installed_vdb_use_not_effective() {
+    // The conditional is evaluated against the recorded vdb USE (Portage's
+    // `_pkg_use_enabled` for a built package), so the target is NOT pulled.
+    let root = fixtures_root();
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    let names: Vec<String> = ResolveRequest {
+        deep: Deep::Unlimited,
+        ..ResolveRequest::new(
+            &root,
+            &root,
+            &["dev-libs/deepvdbuseconsumer".to_string()],
+            &config,
+            &fixtures_root().join("distfiles"),
+        )
+    }
+    .resolve()
+    .unwrap()
+    .entries
+    .into_iter()
+    .map(|e| format!("{}/{}", e.category, e.package))
+    .collect();
+    assert!(
+        names.iter().any(|n| n == "dev-libs/deepvdbuseconsumer"),
+        "{names:?}"
+    );
+    assert!(
+        !names.iter().any(|n| n == "dev-libs/deepvdbusetarget"),
+        "vdb USE lacks `wantdep`, so the gated dep must not be walked: {names:?}"
+    );
+}
+
+/// A `--root-deps` running-root build entry's `use_flags_display` carries the
+/// rebuild's flipped flag for the renderer's `-flip*` column.
+#[test]
+fn root_deps_build_entry_displays_the_rebuild_use_column() {
+    let root = fixtures_root();
+    let config = test_config();
+    let entries = ResolveRequest {
+        deep: Deep::Unlimited,
+        root_deps_running_root: Some(root.to_path_buf()),
+        ..ResolveRequest::new(
+            &root,
+            &root,
+            &["dev-libs/deeprootdepconsumer".to_string()],
+            &config,
+            &fixtures_root().join("distfiles"),
+        )
+    }
+    .resolve()
+    .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
+    .entries;
+
+    let child = entries
+        .iter()
+        .find(|e| e.package == "deeprootdepchild")
+        .expect("the running-root rebuild entry is present");
+    assert!(
+        child.targets_running_root,
+        "the rebuild is the running-root build entry: {child:?}"
+    );
+    // Installed +flip (vdb USE="flip"), rebuilt with flip off: the pair the
+    // renderer's `-flip*` comes from.
+    assert_eq!(
+        child.use_flags_display,
+        vec![("flip".to_string(), false)],
+        "the rebuild's flipped flag must reach the display (#141)"
+    );
+    assert_eq!(child.slot.as_deref(), Some("0"));
+}
+
+/// An unsatisfied BDEPEND with a visible ebuild gets its own running-root
+/// `New` entry under `--root-deps` (Portage's "recursively pull in and build
+/// a new package against the running root").
+#[test]
+fn root_deps_adds_a_real_build_entry_for_an_unsatisfied_bdepend_with_a_visible_ebuild() {
+    let root = fixtures_root();
+    let entries = ResolveRequest {
+        deep: Deep::Unlimited,
+        root_deps_running_root: Some(root.to_path_buf()),
+        ..ResolveRequest::new(
+            &root,
+            &root,
+            &["dev-libs/rootdepsbuildpkg".to_string()],
+            &test_config(),
+            &fixtures_root().join("distfiles"),
+        )
+    }
+    .resolve()
+    .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
+    .entries;
+
+    let names: Vec<(String, bool)> = entries
+        .iter()
+        .map(|e| {
+            (
+                format!("{}/{}", e.category, e.package),
+                e.targets_running_root,
+            )
+        })
+        .collect();
+    assert_eq!(
+        names,
+        vec![
+            ("dev-libs/rootdepsbuildtool".to_string(), true),
+            ("dev-libs/rootdepsbuildpkg".to_string(), false)
+        ]
+    );
+
+    let build_entry = entries
+        .iter()
+        .find(|e| e.package == "rootdepsbuildtool")
+        .unwrap();
+    assert_eq!(
+        build_entry.outcome,
+        PretendOutcome::New {
+            version: "1.0".to_string()
+        }
+    );
+    assert_eq!(
+        build_entry.required_by,
+        vec![("dev-libs".to_string(), "rootdepsbuildpkg".to_string())]
+    );
+}
+
+/// Recursive successor to the test above: all four resolve, the three build
+/// entries carry `targets_running_root: true`, each names its immediate
+/// requester, and `rdrlib` proves RDEPEND walks against the running root too.
+#[test]
+fn root_deps_recursion_walks_a_build_entrys_own_build_and_runtime_deps() {
+    let root = fixtures_root();
+    let entries = ResolveRequest {
+        deep: Deep::Unlimited,
+        root_deps_running_root: Some(root.to_path_buf()),
+        ..ResolveRequest::new(
+            &root,
+            &root,
+            &["dev-libs/rdrapp".to_string()],
+            &test_config(),
+            &fixtures_root().join("distfiles"),
+        )
+    }
+    .resolve()
+    .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
+    .entries;
+
+    // (name, targets_running_root, sole immediate requester or "")
+    let seen: Vec<(String, bool, String)> = entries
+        .iter()
+        .map(|e| {
+            let requester = match e.required_by.as_slice() {
+                [] => String::new(),
+                [(c, p)] => format!("{c}/{p}"),
+                many => format!("{many:?}"),
+            };
+            (
+                format!("{}/{}", e.category, e.package),
+                e.targets_running_root,
+                requester,
+            )
+        })
+        .collect();
+    assert_eq!(
+        seen,
+        vec![
+            (
+                "dev-libs/rdrtooldep".to_string(),
+                true,
+                "dev-libs/rdrtool".to_string(),
+            ),
+            (
+                "dev-libs/rdrlib".to_string(),
+                true,
+                "dev-libs/rdrtool".to_string(),
+            ),
+            (
+                "dev-libs/rdrtool".to_string(),
+                true,
+                "dev-libs/rdrapp".to_string(),
+            ),
+            ("dev-libs/rdrapp".to_string(), false, String::new())
+        ]
+    );
+}
+
+/// `IDEPEND` of a running-root build entry is walked against the running root
+/// too (Portage: `IDEPEND` always targets the running root).
+#[test]
+fn root_deps_recursion_walks_a_build_entrys_own_idepend() {
+    let root = fixtures_root();
+    let names: Vec<(String, bool)> = ResolveRequest {
+        deep: Deep::Unlimited,
+        root_deps_running_root: Some(root.to_path_buf()),
+        ..ResolveRequest::new(
+            &root,
+            &root,
+            &["dev-libs/rdriapp".to_string()],
+            &test_config(),
+            &fixtures_root().join("distfiles"),
+        )
+    }
+    .resolve()
+    .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
+    .entries
+    .iter()
+    .map(|e| {
+        (
+            format!("{}/{}", e.category, e.package),
+            e.targets_running_root,
+        )
+    })
+    .collect();
+    assert_eq!(
+        names,
+        vec![
+            ("dev-libs/rdrilib".to_string(), true),
+            ("dev-libs/rdritool".to_string(), true),
+            ("dev-libs/rdriapp".to_string(), false)
+        ]
+    );
+}
+
+/// A *top-level* package's own `IDEPEND` resolves against the running root too
+/// (Portage: `IDEPEND` always targets the running root for every package).
+#[test]
+fn root_deps_top_level_idepend_resolves_against_the_running_root() {
+    let root = fixtures_root();
+    let run = |root_deps_running_root: Option<&Path>| -> Vec<(String, bool)> {
+        ResolveRequest {
+            deep: Deep::Unlimited,
+            root_deps_running_root: root_deps_running_root.map(std::path::Path::to_path_buf),
+            ..ResolveRequest::new(
+                &root,
+                &root,
+                &["dev-libs/topidepapp".to_string()],
+                &test_config(),
+                &fixtures_root().join("distfiles"),
+            )
+        }
+        .resolve()
+        .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
+        .entries
+        .iter()
+        .map(|e| {
+            (
+                format!("{}/{}", e.category, e.package),
+                e.targets_running_root,
+            )
+        })
+        .collect()
+    };
+    assert_eq!(
+        run(None),
+        vec![
+            ("dev-libs/topideplib".to_string(), false),
+            ("dev-libs/topidepapp".to_string(), false)
+        ]
+    );
+    assert_eq!(
+        run(Some(&root)),
+        vec![
+            ("dev-libs/topideplib".to_string(), true),
+            ("dev-libs/topidepapp".to_string(), false),
+        ]
+    );
+}
+
+/// The g216 shape under default staging: the running-root build dep merges
+/// before its target-root consumer, and `g216comp` lands TWICE (one row per
+/// root, like Portage's display list).
+#[test]
+fn cross_root_bdepend_self_branch_merges_in_both_roots() {
+    let root = fixtures_root();
+    // Hermetic running root: nothing installed there, so every build dep
+    // selects from the tree.
+    let running = TempDir::new("portuale-242-xc-empty-running-root").keep();
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    let result = ResolveRequest {
+        root_deps_running_root: Some(running.to_path_buf()),
+        backtrack_max: 20,
+        ..ResolveRequest::new(
+            &root,
+            &root,
+            &["app-misc/g216top".to_string()],
+            &config,
+            &fixtures_root().join("distfiles"),
+        )
+    }
+    .resolve()
+    .unwrap_or_else(|e| panic!("resolving app-misc/g216top failed: {e}"));
+    // Portage spends its single backtrack retry on the serialize abort.
+    assert!(result.backtrack_restarts >= 1);
+    assert!(matches!(result.outcome, ResolveOutcome::Complete));
+    // Merge order runs across roots: the running-root build dep merges before
+    // its target-root consumer, and `g216comp` lands twice.
+    let rows: Vec<(String, String, bool)> = result
+        .entries
+        .iter()
+        .map(|e| {
+            (
+                e.category.clone(),
+                e.package.clone(),
+                e.targets_running_root,
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            ("dev-lang".to_string(), "g216boot".to_string(), true),
+            ("dev-lang".to_string(), "g216comp".to_string(), true),
+            ("dev-lang".to_string(), "g216comp".to_string(), false),
+            ("dev-libs".to_string(), "g216mid".to_string(), false),
+            ("app-misc".to_string(), "g216top".to_string(), false),
+        ]
+    );
+}
+
+/// The cycle guard: each cycle node appears exactly once, not overflow the
+/// stack (the shared seen set is inserted before a package's own deps walk).
+#[test]
+fn root_deps_recursion_terminates_on_a_mutual_bdepend_cycle() {
+    let root = fixtures_root();
+    let names: Vec<String> = ResolveRequest {
+        deep: Deep::Unlimited,
+        root_deps_running_root: Some(root.to_path_buf()),
+        ..ResolveRequest::new(
+            &root,
+            &root,
+            &["dev-libs/rdrcyc".to_string()],
+            &test_config(),
+            &fixtures_root().join("distfiles"),
+        )
+    }
+    .resolve()
+    .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
+    .entries
+    .iter()
+    .map(|e| format!("{}/{}", e.category, e.package))
+    .collect();
+    assert_eq!(
+        names,
+        vec![
+            "dev-libs/rdrcycb".to_string(),
+            "dev-libs/rdrcyca".to_string(),
+            "dev-libs/rdrcyc".to_string()
+        ]
+    );
+}
+
+/// An unbuildable, not-installed dep of a running-root build entry surfaces as
+/// its own `NoVisibleCandidate` entry instead of being silently swallowed.
+#[test]
+fn root_deps_recursion_surfaces_an_unbuildable_build_dep() {
+    let root = fixtures_root();
+    let entry = ResolveRequest {
+        deep: Deep::Unlimited,
+        root_deps_running_root: Some(root.to_path_buf()),
+        ..ResolveRequest::new(
+            &root,
+            &root,
+            &["dev-libs/rdrmiss".to_string()],
+            &test_config(),
+            &fixtures_root().join("distfiles"),
+        )
+    }
+    .resolve()
+    .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
+    .entries
+    .into_iter()
+    .find(|e| e.package == "rdrnothere")
+    .expect("rdrnothere should appear as a NoVisibleCandidate entry");
+    assert_eq!(entry.outcome, PretendOutcome::NoVisibleCandidate);
+    assert!(entry.targets_running_root);
+    assert_eq!(
+        entry.required_by,
+        vec![("dev-libs".to_string(), "rdrmisstool".to_string())]
+    );
+}
+
+#[test]
+fn deep_is_ignored_when_nodeps_disables_the_dependency_walk_entirely() {
+    // --nodeps trumps --deep (Portage pops "recurse" outright, checked before
+    // `deep` is ever consulted).
+    let root = fixtures_root();
+    let entries: Vec<(String, PretendOutcome)> = ResolveRequest {
+        nodeps: true,
+        deep: Deep::Unlimited,
+        ..ResolveRequest::new(
+            &root,
+            &root,
+            &["dev-libs/deeppkg".to_string()],
+            &test_config(),
+            &fixtures_root().join("distfiles"),
+        )
+    }
+    .resolve()
+    .expect("resolve_pretend_graph must succeed")
+    .entries
+    .into_iter()
+    .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
+    .collect();
+    assert_eq!(
+        entries,
+        vec![(
+            "dev-libs/deeppkg".to_string(),
+            PretendOutcome::AlreadyInstalled {
+                version: "1.0".to_string()
+            }
+        )]
+    );
+}
+
+#[test]
+fn nodeps_still_computes_use_flags_display_for_the_top_level_atom() {
+    // Portage's own -v USE display is about a package's own metadata, so
+    // --nodeps must not blank it out.
+    let root = fixtures_root();
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    let entries = ResolveRequest {
+        nodeps: true,
+        ..ResolveRequest::new(
+            &root,
+            &root,
+            &["dev-libs/useflagpkg".to_string()],
+            &config,
+            &fixtures_root().join("distfiles"),
+        )
+    }
+    .resolve()
+    .expect("resolve_pretend_graph must succeed")
+    .entries;
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].use_flags_display,
+        vec![
+            ("foo".to_string(), true),
+            ("missingflag".to_string(), false),
+        ]
+    );
+}
+
+#[test]
+fn use_expand_hidden_group_is_absent_from_the_pv_display() {
+    let root = fixtures_root();
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    let entry = ResolveRequest::new(
+        &root,
+        &root,
+        &["dev-libs/hiddenexpandpkg".to_string()],
+        &config,
+        &fixtures_root().join("distfiles"),
+    )
+    .resolve()
+    .expect("resolve_pretend_graph must succeed")
+    .entries
+    .remove(0);
+    // cpu_flags_x86_sse2 is a real enabled flag...
+    assert!(
+        entry
+            .use_flags_display
+            .contains(&("cpu_flags_x86_sse2".to_string(), true))
+    );
+    // ...but CPU_FLAGS_X86 is USE_EXPAND_HIDDEN, so it never reaches the
+    // `-pv` display.
+    assert!(entry.use_expand_display.is_empty());
+}
+
+#[test]
+fn conditional_grandparent_with_undeclared_flag_is_masked_invalid_before_any_cycle_analysis() {
+    // The USE-gated cycle is still in the tree, but the target constrains the
+    // flag conditionally with `x` in no IUSE: Portage masks the candidate
+    // `invalid` at construction, so the resolve fails before any cycle walk.
+    let root = fixtures_root();
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    let err = ResolveRequest::new(
+        &root,
+        &root,
+        &["dev-libs/fucyclec".to_string()],
+        &config,
+        &fixtures_root().join("distfiles"),
+    )
+    .resolve()
+    .expect_err("fucyclec must fail: its only candidate is masked invalid");
+    let Error::Detail(report) = err else {
+        panic!("expected the all-masked report, got: {err:?}");
+    };
+    assert!(
+        report.contains(
+            "- dev-libs/fucyclec-1.0::testrepo (masked by: invalid: DEPEND: \
+             USE flag 'x' referenced in conditional 'x?' in atom \
+             'dev-libs/fucyclea[x?]' is not in IUSE)"
+        ),
+        "{report}"
+    );
+}
+
+/// End-to-end wiring check: the fully resolved config proves genuine USE flags
+/// reach use_reduce and change dependency resolution.
+#[test]
+fn real_resolved_use_flags_drive_dependency_recursion() {
+    let root = fixtures_root();
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    let entries = ResolveRequest::new(
+        &root,
+        &root,
+        &["dev-libs/useflagpkg".to_string()],
+        &config,
+        &fixtures_root().join("distfiles"),
+    )
+    .resolve()
+    .expect("resolve_pretend_graph must succeed")
+    .entries;
+    let full_names: Vec<String> = entries
+        .iter()
+        .map(|e| format!("{}/{}", e.category, e.package))
+        .collect();
+    assert_eq!(full_names, vec!["dev-libs/newpkg", "dev-libs/useflagpkg"]);
+}
+
+#[test]
 fn use_dep_enforcement_matches_a_declared_and_enabled_flag() {
     // IUSE="foo missingflag" with "foo" enabled globally.
     assert_eq!(
@@ -544,6 +1367,132 @@ fn use_dep_enforcement_plus_default_rescues_an_undeclared_flag() {
         PretendOutcome::New {
             version: "1.0".to_string()
         }
+    );
+}
+
+#[test]
+fn required_use_violations_are_collected_across_the_whole_walk_not_just_the_first() {
+    // Portage does NOT abort the whole walk on a violation, so a SECOND,
+    // independent top-level atom's own violation still gets reported too.
+    // Report order follows the walk (last-declared-first), so badpkg2's block
+    // leads. (Portage itself stops at the first violation; collecting both
+    // stays portuale's own separately-pinned behavior.)
+    let root = fixtures_root();
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    let err = ResolveRequest::new(
+        &root,
+        &root,
+        &[
+            "dev-libs/requiredusebadpkg".to_string(),
+            "dev-libs/requiredusebadpkg2".to_string(),
+        ],
+        &config,
+        &fixtures_root().join("distfiles"),
+    )
+    .resolve()
+    .expect_err("both atoms should fail their own REQUIRED_USE");
+    assert_eq!(
+        err.to_string(),
+        "\n!!! The ebuild selected to satisfy \"dev-libs/requiredusebadpkg2\" \
+         has unmet requirements.\n\
+         - dev-libs/requiredusebadpkg2-1.0::testrepo USE=\"baz -qux\" ELIBC=\"glibc\"\n\
+         \n  The following REQUIRED_USE flag constraints are unsatisfied:\n\
+         \x20   baz? ( qux )\n\n\
+         \n!!! The ebuild selected to satisfy \"dev-libs/requiredusebadpkg\" \
+         has unmet requirements.\n\
+         - dev-libs/requiredusebadpkg-1.0::testrepo USE=\"foo -bar\" ELIBC=\"glibc\"\n\
+         \n  The following REQUIRED_USE flag constraints are unsatisfied:\n\
+         \x20   foo? ( bar )\n\n"
+    );
+}
+
+#[test]
+fn fixture_dependency_no_visible_candidate_gets_a_keyword_suggestion_once_enabled() {
+    let root = fixtures_root();
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    let atoms = vec!["dev-libs/autounmaskdepconsumer".to_string()];
+    let result = ResolveRequest {
+        autounmask_suggest_keywords: true,
+        autounmask_suggest_use: true,
+        ..ResolveRequest::new(
+            &root,
+            &root,
+            &atoms,
+            &config,
+            &fixtures_root().join("distfiles"),
+        )
+    }
+    .resolve()
+    .expect("dependency's own NoVisibleCandidate is never fatal");
+    let dep = result
+        .entries
+        .iter()
+        .find(|e| e.package == "autounmaskkeywordpkg")
+        .expect("dependency entry present");
+    // With `--autounmask` explicit the keyword-masked dependency now RESOLVES
+    // (was `NoVisibleCandidate` + a suggestion before keyword resolution).
+    assert!(matches!(dep.outcome, PretendOutcome::New { .. }));
+    assert_eq!(dep.keyword_mask, Some('~'));
+    assert_eq!(result.autounmask_keyword_changes.len(), 1);
+    assert_eq!(
+        result.autounmask_keyword_changes[0].dep_chain,
+        vec![
+            "required by dev-libs/autounmaskdepconsumer-1.0::testrepo".to_string(),
+            "required by dev-libs/autounmaskdepconsumer (argument)".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn top_level_use_miss_reports_the_use_block_without_chain() {
+    // An *argument* atom's own USE miss aborts with the "no ebuilds built with
+    // USE flags" block: the `(Change USE: …)` row and no dep-chain lines
+    // (Portage skips the chain for an argument parent).
+    let root = fixtures_root();
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    let atoms = vec!["dev-libs/useflagpkg[-foo]".to_string()];
+    let err = ResolveRequest::new(
+        &root,
+        &root,
+        &atoms,
+        &config,
+        &fixtures_root().join("distfiles"),
+    )
+    .resolve()
+    .expect_err("no visible candidate at all");
+    assert_eq!(
+        err.to_string(),
+        "there are no ebuilds built with USE flags to satisfy \
+         \"dev-libs/useflagpkg[-foo]\".\n\
+         !!! One of the following packages is required to complete your request:\n\
+         - dev-libs/useflagpkg-1.0::testrepo (Change USE: -foo)"
     );
 }
 
@@ -677,4 +1626,313 @@ fn backtracker_feedback_missing_dep_latches_without_duplicating() {
     assert!(node.missing_dep_masked.contains(&entry.neg));
     assert_eq!(node.mask_steps, 1);
     assert_eq!(node.depth, 1);
+}
+
+#[test]
+fn ignore_built_slot_operator_deps_skips_the_rebuild_scan() {
+    // A test-local vdb: the consumer is normally rebuilt on the target upgrade
+    // unless `ignore_built_slot_operator_deps` is set.
+    let cfg_root = fixtures_root();
+    let mut config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &cfg_root,
+        main_repo_location: &cfg_root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), cfg_root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &cfg_root,
+    })
+    .expect("fixture config resolves");
+    // Complete mode: `slotbindconsumer` is in `@world`, so the
+    // slot-op scan considers it (see `required_set_reachable_cps`).
+    config.complete_seed_atoms = vec!["dev-libs/slotbindconsumer".to_string()];
+    let dir = TempDir::new("portage-repo-ignoreslotop").keep();
+    let mk = |name: &str, slot: &str, rdepend: &str| {
+        let d = dir.join("var/db/pkg/dev-libs").join(name);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+        fs::write(d.join("repository"), "testrepo\n").unwrap();
+        if !rdepend.is_empty() {
+            fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+        }
+    };
+    mk("slotbindtarget-1.0", "2", "");
+    mk("slotbindconsumer-1.0", "0", "dev-libs/slotbindtarget:2/2=");
+
+    let resolve = |ignore: bool| {
+        ResolveRequest {
+            // selective = false: a directly-named installed atom with a higher
+            // version still upgrades (matching Portage without --noreplace).
+            selective: false,
+            ignore_built_slot_operator_deps: ignore,
+            ..ResolveRequest::new(
+                &cfg_root,
+                &dir,
+                &["dev-libs/slotbindtarget".to_string()],
+                &config,
+                &fixtures_root().join("distfiles"),
+            )
+        }
+        .resolve()
+        .expect("resolves")
+    };
+
+    let normal = resolve(false);
+    let consumer = normal
+        .entries
+        .iter()
+        .find(|e| e.package == "slotbindconsumer")
+        .expect("consumer is rebuilt by default");
+    assert!(!normal.abi_rebuilds.is_empty());
+    // The rebuilt consumer is a *walked node*, not a post-pass synthetic entry:
+    // it carries the tree ebuild's own dependency edges, which is what puts
+    // the provider ahead of it in merge order.
+    assert!(
+        matches!(
+            consumer.outcome,
+            PretendOutcome::Reinstall {
+                slot_operator_rebuild: true,
+                ..
+            }
+        ),
+        "outcome flipped by the replace set, not synthesised: {:?}",
+        consumer.outcome
+    );
+    assert!(
+        consumer
+            .deps
+            .iter()
+            .any(|d| d.atom.starts_with("dev-libs/slotbindtarget")),
+        "the walked rebuild owns its tree deps: {:?}",
+        consumer.deps
+    );
+    let pos = |pkg: &str| {
+        normal
+            .entries
+            .iter()
+            .position(|e| e.package == pkg)
+            .expect("entry")
+    };
+    assert!(
+        pos("slotbindtarget") < pos("slotbindconsumer"),
+        "the provider merges before the consumer it forces a rebuild of"
+    );
+    // Exactly one entry per cp: the flip happens where the outcome is first
+    // decided, so no `AlreadyInstalled` row is left behind.
+    assert_eq!(
+        normal
+            .entries
+            .iter()
+            .filter(|e| e.package == "slotbindconsumer")
+            .count(),
+        1
+    );
+
+    let ignored = resolve(true);
+    assert!(
+        !ignored
+            .entries
+            .iter()
+            .any(|e| e.package == "slotbindconsumer"),
+        "--ignore-built-slot-operator-deps drops the consumer rebuild"
+    );
+    assert!(ignored.abi_rebuilds.is_empty());
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn dependency_avoid_update_candidate_is_slot_aware() {
+    // Installed at SLOT="2" while the repo ebuild says SLOT="1": the `:1`
+    // dependency must NOT short-circuit to "already installed".
+    let cfg_root = fixtures_root();
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &cfg_root,
+        main_repo_location: &cfg_root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), cfg_root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &cfg_root,
+    })
+    .expect("fixture config resolves");
+    let dir = TempDir::new("portage-repo-avoidslot").keep();
+    let d = dir.join("var/db/pkg/dev-libs/avoidslotpkg-1.0");
+    fs::create_dir_all(&d).unwrap();
+    fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+    fs::write(d.join("SLOT"), "2\n").unwrap();
+    fs::write(d.join("repository"), "testrepo\n").unwrap();
+
+    let result = ResolveRequest {
+        selective: false,
+        ..ResolveRequest::new(
+            &cfg_root,
+            &dir,
+            &["dev-libs/avoidslotconsumer".to_string()],
+            &config,
+            &fixtures_root().join("distfiles"),
+        )
+    }
+    .resolve()
+    .expect("resolves");
+
+    let dep = result
+        .entries
+        .iter()
+        .find(|e| e.package == "avoidslotpkg")
+        .expect("the :1 dependency is a real graph entry, not silently AlreadyInstalled");
+    assert!(
+        matches!(dep.outcome, PretendOutcome::New { .. }),
+        "slot 1 is new: {:?}",
+        dep.outcome
+    );
+    assert_eq!(dep.slot.as_deref(), Some("1"));
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// An exact-version top-level request keeps its named installed instance
+/// under `--update` (the argument pins it; the rebuilt consumer reuses it
+/// instead of upgrading).
+#[test]
+fn exact_version_update_keeps_arg_pinned_provider() {
+    let base = TempDir::new("portage-repo-285-exact-update").keep();
+    for (name, slot, rdepend) in [
+        ("mmprov-1", "0/1", ""),
+        ("mmprov-2", "1/1", ""),
+        ("mmcons-1", "0", "app-misc/mmprov:0/1="),
+    ] {
+        let d = base.join("var/db/pkg/app-misc").join(name);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("CATEGORY"), "app-misc\n").unwrap();
+        fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+        fs::write(d.join("repository"), "testrepo\n").unwrap();
+        fs::write(d.join("EAPI"), "8\n").unwrap();
+        if !rdepend.is_empty() {
+            fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+        }
+    }
+    fs::create_dir_all(base.join("var/lib/portage")).unwrap();
+    fs::write(base.join("var/lib/portage/world"), "").unwrap();
+    fs::create_dir_all(base.join("distfiles")).unwrap();
+    let root = fixtures_root();
+    let resolve = |atoms: &[&str]| {
+        let req = ResolveRequest {
+            config_root: root.clone(),
+            root: base.clone(),
+            atoms: atoms.iter().map(|a| a.to_string()).collect(),
+            config: test_config(),
+            newuse: false,
+            changed_use: false,
+            nodeps: false,
+            onlydeps: false,
+            onlydeps_with_rdeps: true,
+            onlydeps_with_ideps: false,
+            update: true,
+            deep: Deep::Unlimited,
+            excluded: Vec::new(),
+            with_bdeps: true,
+            changed_deps: false,
+            changed_slot: false,
+            with_test_deps: false,
+            changed_deps_report: false,
+            selective: true,
+            autounmask_suggest_keywords: false,
+            autounmask_suggest_use: false,
+            autounmask_suggest_license: false,
+            autounmask_suggest_masks: false,
+            usepkg: false,
+            usepkgonly: false,
+            binpkg_respect_use: false,
+            usepkg_exclude: Vec::new(),
+            usepkg_include: Vec::new(),
+            rebuilt_binaries: false,
+            rebuilt_binaries_timestamp: None,
+            newrepo: false,
+            buildpkgonly: false,
+            root_deps_running_root: None,
+            distdir: base.join("distfiles"),
+            empty: false,
+            getbinpkg: false,
+            ignore_built_slot_operator_deps: false,
+            backtrack_max: 3,
+            reinstall_atoms: Vec::new(),
+            rebuild_if_new_slot: true,
+            rebuild_if_unbuilt: false,
+            rebuild_if_new_rev: false,
+            rebuild_if_new_ver: false,
+            rebuild_exclude: Vec::new(),
+            rebuild_ignore: Vec::new(),
+            dynamic_deps: true,
+            implicit_system_deps: true,
+            complete: false,
+            set_args: std::collections::HashSet::new(),
+            solver: SolverKind::Portage,
+        };
+        active_resolver()
+            .resolve(&req)
+            .unwrap_or_else(|e| panic!("resolve({atoms:?}) failed: {e}"))
+    };
+    // Merge-bound `(cat/pkg, version)` pairs (`AlreadyInstalled` merges nothing
+    // and renders no row).
+    let merges = |result: &GraphResult| {
+        result
+            .entries
+            .iter()
+            .filter_map(|e| match &e.outcome {
+                PretendOutcome::New { version } => {
+                    Some((format!("{}/{}", e.category, e.package), version.clone()))
+                }
+                PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
+                    Some((format!("{}/{}", e.category, e.package), to.clone()))
+                }
+                PretendOutcome::Reinstall { version, .. } => {
+                    Some((format!("{}/{}", e.category, e.package), version.clone()))
+                }
+                PretendOutcome::AlreadyInstalled { .. }
+                | PretendOutcome::NoVisibleCandidate
+                | PretendOutcome::Uninstall { .. } => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    for atoms in [
+        ["=app-misc/mmprov-2", "app-misc/mmcons"],
+        ["~app-misc/mmprov-2", "app-misc/mmcons"],
+    ] {
+        let result = resolve(&atoms);
+        assert_eq!(
+            merges(&result),
+            vec![("app-misc/mmcons".to_string(), "1".to_string())],
+            "exact-version pin keeps mmprov-2, only the consumer rebuilds: {atoms:?}"
+        );
+        let consumer = result
+            .entries
+            .iter()
+            .find(|e| e.package == "mmcons")
+            .expect("mmcons entry");
+        assert!(
+            matches!(
+                consumer.outcome,
+                PretendOutcome::Reinstall {
+                    slot_operator_rebuild: true,
+                    ..
+                }
+            ),
+            "the consumer rebuilds through the slot-operator path: {:?}",
+            consumer.outcome
+        );
+    }
+    // Control: the slot atom upgrades the provider itself, so the rebuilt
+    // consumer binds the upgrade.
+    let result = resolve(&["app-misc/mmprov:1/2", "app-misc/mmcons"]);
+    assert_eq!(
+        merges(&result),
+        vec![
+            ("app-misc/mmprov".to_string(), "3".to_string()),
+            ("app-misc/mmcons".to_string(), "1".to_string()),
+        ],
+        "slot-atom control still upgrades the provider"
+    );
+    let _ = fs::remove_dir_all(&base);
 }

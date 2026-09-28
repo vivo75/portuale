@@ -377,6 +377,77 @@ fn find_hard_cycles_reports_a_true_self_loop_but_not_a_cross_slot_edge() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// The dead-end retry fires only for a fresh single-node self-loop closed by a
+/// kept `||` self-branch.
+#[test]
+fn cycle_restartable_gates_the_retry_to_fresh_branch_self_loops() {
+    let buildtime = DepPriority {
+        buildtime: true,
+        ..DepPriority::default()
+    };
+    let self_edge = |pkg: &str, atom: &str, branch: Option<u32>| DepEdge {
+        atom: atom.to_string(),
+        evaluated: atom.to_string(),
+        category: "dev-libs".to_string(),
+        package: pkg.to_string(),
+        priority: buildtime,
+        disjunctive: branch.is_some(),
+        alt: branch.map(|b| (0, b)),
+        key: 4,
+    };
+    let fresh_root = Path::new("/nonexistent-root");
+    let mut fresh = vec![graph_entry("dev-libs", "hcs", "1.0")];
+    fresh[0].deps = vec![self_edge("hcs", ">=dev-libs/hcs-1.0", Some(0))];
+    let kept = kept_alt_branches(&fresh, fresh_root, &HashMap::new());
+    assert!(cycle_restartable(
+        &fresh,
+        &kept,
+        &["dev-libs/hcs-1.0".to_string()],
+        fresh_root
+    ));
+
+    // A two-node ring never retries.
+    let pair = vec![
+        graph_entry("dev-libs", "hcs", "1.0"),
+        graph_entry("dev-libs", "hct", "1.0"),
+    ];
+    let kept_pair = kept_alt_branches(&pair, fresh_root, &HashMap::new());
+    assert!(!cycle_restartable(
+        &pair,
+        &kept_pair,
+        &[
+            "dev-libs/hcs-1.0".to_string(),
+            "dev-libs/hct-1.0".to_string()
+        ],
+        fresh_root
+    ));
+
+    // An inline (branch-less) self-dep never retries.
+    let mut inline = vec![graph_entry("dev-libs", "hcs", "1.0")];
+    inline[0].deps = vec![self_edge("hcs", "dev-libs/hcs", None)];
+    let kept_inline = kept_alt_branches(&inline, fresh_root, &HashMap::new());
+    assert!(!cycle_restartable(
+        &inline,
+        &kept_inline,
+        &["dev-libs/hcs-1.0".to_string()],
+        fresh_root
+    ));
+
+    // An installed instance of the owner never retries.
+    let root = TempDir::new("portuale-restartable").keep();
+    let inst_dir = root.join("var/db/pkg/dev-libs/hcs-1.0");
+    std::fs::create_dir_all(&inst_dir).unwrap();
+    std::fs::write(inst_dir.join("SLOT"), "0\n").unwrap();
+    let kept_fresh = kept_alt_branches(&fresh, &root, &HashMap::new());
+    assert!(!cycle_restartable(
+        &fresh,
+        &kept_fresh,
+        &["dev-libs/hcs-1.0".to_string()],
+        &root
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 fn find_hard_cycles_ignores_a_suppressed_disjunctive_slot_op_branch() {
     // Portage's digraph holds the selected `||` branch (first resolvable branch in
