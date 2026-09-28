@@ -5700,16 +5700,31 @@ fn installed_parent_use_state(
 /// fixture profile's `foo` on IUSE-less `aup0d`) never counts as set:
 /// pass `child_use` already intersected with `child_valid`.
 ///
-/// Per operator, for parent-has `P` and child-has `C` (valid flags
-/// only — an invalid, default-less token poisons the candidate, see
-/// below):
-/// * `flag?` (`IfParentEnabled`): violated iff `P && !C` (parent-lacks
-///   drops the token, child-has satisfies it — `:1518-1524`);
-/// * `flag=` (`EqualParent`): violated iff `P != C` (both mismatch
-///   directions land in `conditional.equal` — `:1526-1549`);
-/// * `!flag?` (`IfParentDisabled`): violated iff `!P && C` (`:1568-1576`);
-/// * `!flag=` (`OppositeParent`): violated iff `P == C` (both match
-///   directions land in `conditional.not_equal` — `:1550-1567`).
+/// Per operator, for parent-has `P` and child-has `C`, child-IUSE-valid
+/// `V`, `(+)`-defaulted `E` and `(-)`-defaulted `D` (oracle:
+/// `docs/evidence/2026-09-28-g195/g195d-oracle-output.txt`, from
+/// `g195d-oracle-probe.py` over real 3.0.82.2; pinned cell-by-cell by
+/// `tests_195d`):
+/// * `flag?` (`IfParentEnabled`, `:1525-1531`): violated iff the parent
+///   has the flag, the child lacks it, and the flag is valid or
+///   `(-)`-assumed — an invalid `(+)` flag is satisfied there (its
+///   default already assumes it enabled, so the parent having it on
+///   changes nothing).
+/// * `flag=` (`EqualParent`, `:1532-1549`): parent-has-child-lacks
+///   violates for a valid or `(-)` flag; parent-lacks-child-lacks
+///   violates only for an invalid `(+)` flag (the `missing_enabled`
+///   sub-branch — a flip off is already in effect); parent-lacks-
+///   child-has always violates.
+/// * `flag!=` (`OppositeParent`, `:1550-1567`): the mirror image —
+///   parent-lacks-child-lacks violates for a valid or `(-)` flag;
+///   parent-has-child-lacks violates only for an invalid `(+)` flag;
+///   parent-has-child-has always violates.
+/// * `!flag?` (`IfParentDisabled`, `:1568-1576`): parent-has is always
+///   satisfied; otherwise child-has always violates, and
+///   parent-lacks-child-lacks violates only for an invalid `(+)` flag.
+///
+/// For valid flags these reduce to the uniform `P`/`C` math (`P && !C`,
+/// `P != C`, `P == C`, `!P && C`).
 ///
 /// Empty means "no parent flip helps this candidate" — either no
 /// conditional is parent-active, or the concrete gate fails (real's
@@ -5723,18 +5738,21 @@ fn installed_parent_use_state(
 ///
 /// Documented narrowings vs real: a conditional token whose flag is
 /// neither valid child IUSE nor `(+)/(-)`-defaulted poisons the whole
-/// candidate (real partitions such tokens per-branch into concrete
-/// `enabled`/`disabled`, which fails the same gate for every shape in
-/// the fixture corpus — same outcome, less bookkeeping); the
-/// unconditional-`required` subset must sit in child IUSE (real's
-/// `missing_iuse` branch skips the parent arm — `:6725-6727`).
+/// candidate. End-to-end this matches real exactly: such a flag sits in
+/// the unevaluated atom's `required` set, so real's `missing_iuse`
+/// branch (`:6721-6727`) skips the parent arm before
+/// `violated_conditionals` is ever called — no flip either way. (In
+/// isolation real's function would report the token in `conditional`;
+/// the `tests_195d` oracle table's `arm` column shows the composed
+/// outcome.) The unconditional-`required` subset must sit in child IUSE
+/// for the same reason (real's `missing_iuse` branch — `:6725-6727`).
 fn violated_parent_flags(
     unevaluated: &portage_dep::Atom,
     parent_use: &HashSet<String>,
     child_use: &HashSet<String>,
     child_valid: &HashSet<String>,
 ) -> Vec<String> {
-    use portage_dep::UseDepOp;
+    use portage_dep::{UseDepDefault, UseDepOp};
     let is_conditional = |op: &UseDepOp| {
         matches!(
             op,
@@ -5754,7 +5772,8 @@ fn violated_parent_flags(
     }
     // Real `validate_flag`: valid child IUSE, or a `(+)/(-)` default
     // standing in for it. Anything else is a concrete violation there;
-    // here it poisons the candidate (same gate outcome).
+    // here it poisons the candidate (same arm outcome -- see the doc
+    // comment's `missing_iuse` note).
     if conds
         .iter()
         .any(|ud| !child_valid.contains(&ud.flag) && ud.default.is_none())
@@ -5789,11 +5808,40 @@ fn violated_parent_flags(
         .filter(|ud| {
             let p = parent_use.contains(&ud.flag);
             let c = child_use.contains(&ud.flag);
+            let valid = child_valid.contains(&ud.flag);
+            let missing_en = ud.default == Some(UseDepDefault::Enabled);
+            let missing_dis = ud.default == Some(UseDepDefault::Disabled);
             match ud.op {
-                UseDepOp::IfParentEnabled => p && !c,
-                UseDepOp::EqualParent => p != c,
-                UseDepOp::IfParentDisabled => !p && c,
-                UseDepOp::OppositeParent => p == c,
+                // Real `:1525-1531`.
+                UseDepOp::IfParentEnabled => p && !c && (valid || missing_dis),
+                // Real `:1532-1549`.
+                UseDepOp::EqualParent => {
+                    if p && !c {
+                        valid || missing_dis
+                    } else if !p && !c {
+                        !valid && missing_en
+                    } else {
+                        !p && c
+                    }
+                }
+                // Real `:1550-1567`.
+                UseDepOp::OppositeParent => {
+                    if !p && !c {
+                        valid || missing_dis
+                    } else if p && !c {
+                        !valid && missing_en
+                    } else {
+                        p && c
+                    }
+                }
+                // Real `:1568-1576`.
+                UseDepOp::IfParentDisabled => {
+                    if !p && !c {
+                        !valid && missing_en
+                    } else {
+                        !p && c
+                    }
+                }
                 _ => false,
             }
         })
@@ -24633,7 +24681,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     // top-level argument, real's dep chain is just the
                     // argument line: `_get_dep_chain` never prints the
                     // start node (`elif node is not start_node`,
-                    // `depgraph.py:6397`), and the failed graph walks
+                    // `depgraph.py:6357`), and the failed graph walks
                     // straight to the argument (oracle: the aup0b
                     // container probe prints a single `# required by
                     // =dev-libs/aup0b-1 (argument)`). Pre-fill it (the
@@ -28178,7 +28226,19 @@ fn assemble_result(
         // USE flip (record-and-fail) is not a miss at all -- real drops
         // the collected item from `_unsatisfied_deps_for_display`, so
         // the sweep must not re-add it here (same gate as the walk-time
-        // disclosure block and the abort renderer).
+        // disclosure block and the abort renderer). Invariant: the
+        // `parent_flip_recorded` latch is only ever inserted on the
+        // record-and-fail path, after `suggested_parent_use_candidate`
+        // returned `Some` -- so every latched key has
+        // `parent_use_suggestion.is_some()`, and the latch-keyed
+        // walk-time gate suppresses exactly the entries these
+        // `is_some()` gates suppress. One corner breaks the converse:
+        // when the re-probe fails after the suggestion returned `Some`
+        // (the `NoVisibleCandidate` break in the `'parent_flip` arm),
+        // the entry keeps `Some` with no latch -- walk-time records a
+        // miss block for it, but the sweep and the abort renderer still
+        // skip it. Benign (no corpus cell hits it) and deliberate: the
+        // flip genuinely did not rescue the dep.
         if e.parent_use_suggestion.is_some() {
             continue;
         }
@@ -42662,8 +42722,8 @@ mod tests {
         // parentflipeqpkg (`use.mask pf`), so the same untouchable-child
         // `continue` (`depgraph.py:6732-6736`) applies -- live real
         // (`localhost/test-portuale:latest`, staged fixtures, g195c
-        // probe `/tmp/opencode/g195c/real-probe.txt`) reports the bare
-        // miss under default AND `--autounmask-backtrack=y`:
+        // probe `docs/evidence/2026-09-28-g195/g195c-real-probe.txt`)
+        // reports the bare miss under default AND `--autounmask-backtrack=y`:
         // `emerge: there are no ebuilds to satisfy
         // "dev-libs/pfgraphchild[pf=]"`, no rows, no block, rc 1.
         // (Corrected under coordinator ruling B20, option (a); the old
@@ -63952,5 +64012,133 @@ mod tests_184 {
         ));
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// Backlog #195, round 4 (g195d Important-1): operator-level pins for
+/// [`violated_parent_flags`] against real `Atom.violated_conditionals`
+/// (`lib/portage/dep/__init__.py:1465`, branches `:1525-1576`).
+///
+/// Oracle: `docs/evidence/2026-09-28-g195/g195d-oracle-output.txt` (a
+/// host run of real Portage 3.0.82.2 on these same inputs via
+/// `g195d-oracle-probe.py`). Each row's expectation is the oracle's
+/// `arm` column — the parent arm's composed end-to-end outcome, not
+/// just the in-isolation `conditional` hit: `SKIP-missing-iuse` rows
+/// (invalid defaultless conditionals, which real never calls the
+/// function for — `depgraph.py:6721-6727`) and `FAIL-gate` rows both
+/// expect `[]`, exactly what the port returns through its poison and
+/// concrete-gate paths.
+#[cfg(test)]
+mod tests_195d {
+    use super::*;
+
+    fn set_195d(flags: &[&str]) -> HashSet<String> {
+        flags.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// One single-token oracle cell: `token` is the full `[...]` entry
+    /// (e.g. `"foo(+)?"`), `valid` whether `foo` is in child IUSE, `p` /
+    /// `c` the parent/child USE bits. `hit` is the oracle `arm` column
+    /// (`true` = `[foo]`, `false` = `[]`).
+    fn cell_195d(token: &str, valid: bool, p: bool, c: bool, hit: bool) {
+        let atom = portage_dep::parse_atom(&format!("dev-libs/child[{token}]"))
+            .expect("oracle token parses");
+        let child_valid = if valid {
+            set_195d(&["foo"])
+        } else {
+            set_195d(&["other"])
+        };
+        // Real `Package.py:728-731` filters child USE to valid IUSE, so
+        // an invalid flag is never set -- the same contract
+        // `violated_parent_flags` documents.
+        let child_use = if c && valid {
+            set_195d(&["foo"])
+        } else {
+            HashSet::new()
+        };
+        let parent_use = if p {
+            set_195d(&["foo"])
+        } else {
+            HashSet::new()
+        };
+        let want: Vec<String> = if hit { vec!["foo".to_string()] } else { vec![] };
+        assert_eq!(
+            violated_parent_flags(&atom, &parent_use, &child_use, &child_valid),
+            want,
+            "token={token} valid={valid} P={p} C={c}"
+        );
+    }
+
+    /// Full operator x validity x default x P x C matrix (oracle rows
+    /// 1-72; invalid rows only carry C=0, since filtered child USE
+    /// never holds an invalid flag).
+    #[test]
+    fn violated_parent_flags_matches_real_across_the_oracle_matrix() {
+        // `flag?` -- real `:1525-1531`. Valid: violated iff P && !C.
+        for tok in ["foo?", "foo(+)?", "foo(-)?"] {
+            for p in [false, true] {
+                for c in [false, true] {
+                    cell_195d(tok, true, p, c, p && !c);
+                }
+            }
+        }
+        // Invalid: parent-lacks is always satisfied; parent-has
+        // violates only for `(-)` (defaultless poisons via the
+        // `missing_iuse`-equivalent path).
+        for tok in ["foo?", "foo(+)?", "foo(-)?"] {
+            cell_195d(tok, false, false, false, false);
+        }
+        cell_195d("foo?", false, true, false, false);
+        cell_195d("foo(+)?", false, true, false, false);
+        cell_195d("foo(-)?", false, true, false, true);
+        // `flag=` -- real `:1532-1549`. Valid: violated iff P != C.
+        for tok in ["foo=", "foo(+)=", "foo(-)="] {
+            for p in [false, true] {
+                for c in [false, true] {
+                    cell_195d(tok, true, p, c, p != c);
+                }
+            }
+        }
+        // Invalid: defaultless poisons; `(+)` violates only when the
+        // parent lacks the flag (the `missing_enabled` sub-branch);
+        // `(-)` violates only when the parent has it.
+        for tok in ["foo=", "foo(+)=", "foo(-)="] {
+            // Only the `(+)` parent-lacks row violates (oracle `= invalid plus 0 0`).
+            cell_195d(tok, false, false, false, tok == "foo(+)=");
+        }
+        cell_195d("foo=", false, true, false, false);
+        cell_195d("foo(+)=", false, true, false, false);
+        cell_195d("foo(-)=", false, true, false, true);
+        // `flag!=` -- real `:1550-1567`.
+        for p in [false, true] {
+            for c in [false, true] {
+                cell_195d("!foo=", true, p, c, p == c);
+                cell_195d("!foo(+)=", true, p, c, p == c);
+                cell_195d("!foo(-)=", true, p, c, p == c);
+            }
+        }
+        cell_195d("!foo=", false, false, false, false);
+        cell_195d("!foo=", false, true, false, false);
+        // Invalid `(+)`: parent-has-child-lacks violates (the review's
+        // corner: real's `missing_enabled` sub-branch); parent-lacks-
+        // child-lacks is satisfied.
+        cell_195d("!foo(+)=", false, false, false, false);
+        cell_195d("!foo(+)=", false, true, false, true);
+        cell_195d("!foo(-)=", false, false, false, true);
+        cell_195d("!foo(-)=", false, true, false, false);
+        // `!flag?` -- real `:1568-1576`.
+        for p in [false, true] {
+            for c in [false, true] {
+                cell_195d("!foo?", true, p, c, !p && c);
+                cell_195d("!foo(+)?", true, p, c, !p && c);
+                cell_195d("!foo(-)?", true, p, c, !p && c);
+            }
+        }
+        for tok in ["!foo?", "!foo(+)?", "!foo(-)?"] {
+            cell_195d(tok, false, true, false, false);
+        }
+        cell_195d("!foo?", false, false, false, false);
+        cell_195d("!foo(+)?", false, false, false, true);
+        cell_195d("!foo(-)?", false, false, false, false);
     }
 }
