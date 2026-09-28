@@ -26752,6 +26752,48 @@ fn collect_feedback(
 /// and the `GraphResult`. Residual conflicts (`slot_conflicts`
 /// extension) live here, not in `PassResult`: no `continue`
 /// follows them, so they cannot influence a retry.
+/// Backlog #205: USE changes start their chain at the forcing
+/// parent, not the first requirer. Real `_get_dep_chain(pkg,
+/// unsatisfied_dependency=True)` (`depgraph.py:6257`) picks the
+/// parent whose atom the package still does not satisfy
+/// (`best_match_to_list`); when every parent is satisfied
+/// post-change -- the ordinary flip shape, the change fixed them
+/// all -- it walks the digraph parents preferring the last merge
+/// parent (bug #354747), i.e. the deepest forcing edge, then the
+/// argument. The flip site records its forcing owner in
+/// `AutounmaskChange::trigger`; the fill starts there when it is
+/// still a requirer, else the legacy first-requirer start stands
+/// (stale triggers after a masking retry, parent-flip rescues).
+/// (Keyword/license/mask changes keep the legacy start: real
+/// renders those without the unsatisfied filter.) The ascent above
+/// that start is unchanged (single-branch, first-requirer hops).
+fn fill_use_change_chains(
+    entries: &[GraphEntry],
+    changes: &mut [AutounmaskChange],
+    top_level: &std::collections::HashSet<&str>,
+    root: &Path,
+) {
+    for change in changes.iter_mut() {
+        if change.dep_chain.is_empty()
+            && let Some(atom) = portage_dep::parse_atom(&change.atom)
+        {
+            let own = (atom.category.clone(), atom.package.clone());
+            let owner = entries
+                .iter()
+                .find(|e| e.category == atom.category && e.package == atom.package)
+                .and_then(|e| {
+                    change
+                        .trigger
+                        .clone()
+                        .filter(|t| e.required_by.contains(t))
+                        .or_else(|| e.required_by.first().cloned())
+                })
+                .or(Some(own));
+            change.dep_chain = autounmask_dep_chain(&owner, &change.atom, top_level, entries, root);
+        }
+    }
+}
+
 fn assemble_result(
     ctx: &ResolveCtx<'_>,
     params: &BacktrackParams,
@@ -27155,47 +27197,12 @@ fn assemble_result(
             );
         }
     }
-    // Backlog #205: USE changes start their chain at the forcing
-    // parent, not the first requirer. Real `_get_dep_chain(pkg,
-    // unsatisfied_dependency=True)` (`depgraph.py:6257`) picks the
-    // parent whose atom the package still does not satisfy
-    // (`best_match_to_list`); when every parent is satisfied
-    // post-change -- the ordinary flip shape, the change fixed them
-    // all -- it walks the digraph parents preferring the last merge
-    // parent (bug #354747), i.e. the deepest forcing edge, then the
-    // argument. The flip site records its forcing owner in
-    // `AutounmaskChange::trigger`; the fill starts there when it is
-    // still a requirer, else the legacy first-requirer start stands
-    // (stale triggers after a masking retry, parent-flip rescues).
-    // (Keyword/license/mask changes keep the legacy start: real
-    // renders those without the unsatisfied filter.) The ascent above
-    // that start is unchanged (single-branch, first-requirer hops).
-    for change in pass.autounmask_use_changes.iter_mut() {
-        if change.dep_chain.is_empty()
-            && let Some(atom) = portage_dep::parse_atom(&change.atom)
-        {
-            let own = (atom.category.clone(), atom.package.clone());
-            let owner = pass
-                .entries
-                .iter()
-                .find(|e| e.category == atom.category && e.package == atom.package)
-                .and_then(|e| {
-                    change
-                        .trigger
-                        .clone()
-                        .filter(|t| e.required_by.contains(t))
-                        .or_else(|| e.required_by.first().cloned())
-                })
-                .or(Some(own));
-            change.dep_chain = autounmask_dep_chain(
-                &owner,
-                &change.atom,
-                &ctx.top_level,
-                &pass.entries,
-                ctx.root,
-            );
-        }
-    }
+    fill_use_change_chains(
+        &pass.entries,
+        &mut pass.autounmask_use_changes,
+        &ctx.top_level,
+        ctx.root,
+    );
     // Same walk for the plain-miss disclosures (#135 (d)).
     for rep in &mut pass.plain_miss_deps {
         rep.chain = masked_dep_chain(
@@ -46968,6 +46975,303 @@ mod tests {
                 panic!("akk0b is masked-only, not a plain miss: {report:?}")
             }
         }
+    }
+
+    /// Backlog #205, world=B shape shared by the R3/R4 unit tests:
+    /// `dev-libs/abk0d` with `--autounmask-backtrack=y` while installed
+    /// `abk0b-1` (`RDEPEND=<dev-libs/abk0a-3`) is reachable through the
+    /// required sets. The fixture world file stays pristine (an `abk0b`
+    /// line there would perturb every other fixture-ROOT test), so the
+    /// seed is set directly -- the `FX_WORLD_EXTRA=dev-libs/abk0b`
+    /// equivalent the bed cell stages, and the same trick the #209
+    /// `backtrack_zero_feeds_satisfiable_reverse_dep_pins_in_pass`
+    /// test uses for its world consumer.
+    fn graph_result_abk0_worldb_on(root: &Path, backtrack_max: u32) -> GraphResult {
+        let fixture_root = fixtures_root();
+        let mut config = portage_profile::resolve_config(
+            &fixture_root,
+            &fixture_root.join("repo"),
+            &[("overlay".to_string(), fixture_root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+            &fixture_root,
+        )
+        .expect("fixture config resolves");
+        config.autounmask_backtrack = true;
+        config.complete_seed_atoms = vec!["dev-libs/abk0b".to_string()];
+        resolve_pretend_graph(
+            &fixture_root,
+            root,
+            &["dev-libs/abk0d".to_string()],
+            &config,
+            false,
+            false,
+            false,
+            false,
+            Deep::NotRequested,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+            true,
+            true,
+            true,
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            false,
+            None,
+            false,
+            false,
+            None,
+            &fixtures_root().join("distfiles"),
+            false,
+            false,
+            false,
+            backtrack_max,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            true,
+            false,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend_graph(dev-libs/abk0d) failed: {e}"))
+    }
+
+    fn graph_result_abk0_worldb(backtrack_max: u32) -> GraphResult {
+        let root = fixtures_root();
+        graph_result_abk0_worldb_on(&root, backtrack_max)
+    }
+
+    /// Backlog #205 R3: the enforced pin's rejection is recorded as a
+    /// slot-conflict-style mask on the chosen version (real "Record
+    /// missed updates", `lib/_emerge/depgraph.py:2085-2106`), so the
+    /// existing `backtrack_missed_updates` derivation renders the
+    /// `WARNING` row. The run settles `[abk0c-1, abk0a-2, abk0d-1]`
+    /// (`backtrack: 2/2`, rc 1 in the contract pin) and the rejected
+    /// `abk0a-3` rides out as exactly one skipped-update row naming
+    /// the enforcing consumer: installed `abk0b-1`, rendered vdb-based
+    /// (`installed`, vdb USE, `__unknown__` repo fallback -- the
+    /// fixture vdb entry carries no `repository` file, like real's
+    /// `portage.versions._unknown_repo`) instead of the
+    /// merge-scheduled tree form a graph puller keeps.
+    #[test]
+    fn enforced_pin_miss_renders_the_installed_enforcing_consumer() {
+        let result = graph_result_abk0_worldb(2);
+        let versions: Vec<(&str, &str)> = result
+            .entries
+            .iter()
+            .filter_map(|e| {
+                merge_bound_version(&e.outcome).map(|v| (e.package.as_str(), v.as_str()))
+            })
+            .collect();
+        assert_eq!(
+            versions,
+            vec![("abk0c", "1"), ("abk0a", "2"), ("abk0d", "1")],
+            "settles C-1 + A-2 + D-1, saw {versions:?}"
+        );
+        assert_eq!(
+            result.backtrack_restarts, 2,
+            "two retries mask A-3 away, restarts={}",
+            result.backtrack_restarts
+        );
+        assert_eq!(
+            result.skipped_updates.len(),
+            1,
+            "exactly the rejected A-3 rides out: {:?}",
+            result.skipped_updates
+        );
+        let row = &result.skipped_updates[0];
+        assert_eq!(
+            (
+                row.category.as_str(),
+                row.package.as_str(),
+                row.slot.as_str()
+            ),
+            ("dev-libs", "abk0a", "0")
+        );
+        assert_eq!(row.skipped_version, "3");
+        assert_eq!(row.atom, "<dev-libs/abk0a-3");
+        assert_eq!(row.consumer_cpv, "dev-libs/abk0b-1:0/0::__unknown__");
+        assert!(
+            row.consumer_installed,
+            "the enforcing consumer renders installed (vdb-based), not merge-scheduled"
+        );
+        // The fixture vdb entry carries no USE/IUSE files, so the
+        // vdb-based display is empty (renders `USE=""`, as pinned).
+        // That the row carries the vdb-sourced (here empty) set rather
+        // than the tree ebuild's IUSE is the mechanism; the non-empty
+        // shape is pinned by
+        // `enforced_pin_miss_carries_the_vdb_use_and_repo` below.
+        assert!(
+            row.consumer_use.is_empty(),
+            "vdb USE of the fixture abk0b-1 entry: {:?}",
+            row.consumer_use
+        );
+    }
+
+    /// Backlog #205 R3, vdb legs: with `IUSE`/`USE`/`repository` files
+    /// staged on a scratch copy of the `abk0*` vdb entries, the same
+    /// skipped-update row carries the recorded vdb USE and the recorded
+    /// repo instead of the `__unknown__` fallback. Repos and config
+    /// stay on the fixtures (like the contract pin's test-local ROOT,
+    /// whose `PORTAGE_CONFIGROOT` stays shared); only the vdb comes
+    /// from the scratch root.
+    #[test]
+    fn enforced_pin_miss_carries_the_vdb_use_and_repo() {
+        let fixture_root = fixtures_root();
+        let dir = slotundo_temp_dir("205-vdb-consumer");
+        for pkg in ["abk0a-1", "abk0b-1", "abk0c-1"] {
+            let src = fixture_root.join("var/db/pkg/dev-libs").join(pkg);
+            let dst = dir.join("var/db/pkg/dev-libs").join(pkg);
+            std::fs::create_dir_all(&dst).expect("stage vdb dir");
+            for entry in std::fs::read_dir(&src).expect("fixture vdb dir") {
+                let entry = entry.expect("vdb entry");
+                std::fs::copy(entry.path(), dst.join(entry.file_name())).expect("stage vdb file");
+            }
+        }
+        let consumer = dir.join("var/db/pkg/dev-libs/abk0b-1");
+        std::fs::write(consumer.join("IUSE"), "x y\n").expect("stage IUSE");
+        std::fs::write(consumer.join("USE"), "x\n").expect("stage USE");
+        std::fs::write(consumer.join("repository"), "testrepo\n").expect("stage repository");
+        let result = graph_result_abk0_worldb_on(&dir, 2);
+        let versions: Vec<(&str, &str)> = result
+            .entries
+            .iter()
+            .filter_map(|e| {
+                merge_bound_version(&e.outcome).map(|v| (e.package.as_str(), v.as_str()))
+            })
+            .collect();
+        assert_eq!(
+            versions,
+            vec![("abk0c", "1"), ("abk0a", "2"), ("abk0d", "1")],
+            "the staged USE/repository files must not move selection, saw {versions:?}"
+        );
+        assert_eq!(result.skipped_updates.len(), 1);
+        let row = &result.skipped_updates[0];
+        assert_eq!(row.skipped_version, "3");
+        assert_eq!(row.atom, "<dev-libs/abk0a-3");
+        assert_eq!(row.consumer_cpv, "dev-libs/abk0b-1:0/0::testrepo");
+        assert!(row.consumer_installed);
+        // The row's USE is the vdb-sourced display for the scratched
+        // entry -- the same `installed_use_display_for` value, read off
+        // the staged root -- not the tree ebuild's IUSE (abk0b-1's
+        // ebuild declares none, so a tree-sourced display would be
+        // empty).
+        let config = portage_profile::resolve_config(
+            &fixture_root,
+            &fixture_root.join("repo"),
+            &[("overlay".to_string(), fixture_root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+            &fixture_root,
+        )
+        .expect("fixture config resolves");
+        let expected = installed_use_display_for(&dir, &config, "dev-libs", "abk0b", "1");
+        assert!(!expected.is_empty(), "the staged USE file must surface");
+        assert_eq!(row.consumer_use, expected);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #205 R4: the USE-change chain starts at the recorded
+    /// forcing parent. Real `_get_dep_chain(pkg,
+    /// unsatisfied_dependency=True)` (`lib/_emerge/depgraph.py:6257`)
+    /// picks the parent whose atom the package still does not satisfy;
+    /// here that is `abk0d-1` (whose `C[x]` the flip satisfies, not
+    /// `abk0a-2`'s plain `C`). The flip site records that owner in
+    /// `AutounmaskChange::trigger`, and the fill starts the chain
+    /// there -- asserting the recorded trigger itself, not just the
+    /// final text, is what distinguishes this from the legacy
+    /// first-requirer start.
+    #[test]
+    fn use_change_chain_starts_at_the_recorded_forcing_parent() {
+        let result = graph_result_abk0_worldb(2);
+        assert_eq!(
+            result.autounmask_use_changes.len(),
+            1,
+            "one USE change: {:?}",
+            result.autounmask_use_changes
+        );
+        let change = &result.autounmask_use_changes[0];
+        assert_eq!(change.atom, ">=dev-libs/abk0c-1");
+        assert_eq!(change.token, "x y");
+        assert_eq!(
+            change.trigger,
+            Some(("dev-libs".to_string(), "abk0d".to_string())),
+            "the flip site records its forcing owner"
+        );
+        assert_eq!(
+            change.dep_chain,
+            vec![
+                "required by dev-libs/abk0d-1::testrepo".to_string(),
+                "required by dev-libs/abk0d (argument)".to_string(),
+            ]
+        );
+    }
+
+    /// Backlog #205 R4, stale-trigger leg: when the recorded trigger is
+    /// no longer a requirer (masking retry, parent-flip rescue), the
+    /// fill falls back to the legacy first-requirer start. Direct
+    /// `fill_use_change_chains` shape: `abk0c` is required by `abk0a`
+    /// (which ascends to the `abk0d` argument), while the recorded
+    /// trigger names a `abk0d` that requires nothing here -- stale.
+    #[test]
+    fn stale_trigger_falls_back_to_the_first_requirer() {
+        let mut abk0c = graph_entry("dev-libs", "abk0c", "1");
+        abk0c.required_by = vec![("dev-libs".to_string(), "abk0a".to_string())];
+        let mut abk0a = graph_entry("dev-libs", "abk0a", "2");
+        abk0a.required_by = vec![("dev-libs".to_string(), "abk0d".to_string())];
+        let abk0d = graph_entry("dev-libs", "abk0d", "1");
+        let entries = vec![abk0c, abk0a, abk0d];
+        let top_level: std::collections::HashSet<&str> = ["dev-libs/abk0d"].into_iter().collect();
+        let mut changes = vec![AutounmaskChange {
+            atom: ">=dev-libs/abk0c-1".to_string(),
+            token: "x y".to_string(),
+            dep_chain: Vec::new(),
+            trigger: Some(("dev-libs".to_string(), "abk0d".to_string())),
+        }];
+        fill_use_change_chains(
+            &entries,
+            &mut changes,
+            &top_level,
+            Path::new("/nonexistent-root-for-this-test"),
+        );
+        assert_eq!(
+            changes[0].dep_chain,
+            vec![
+                "required by dev-libs/abk0a-2::testrepo".to_string(),
+                "required by dev-libs/abk0d-1::testrepo".to_string(),
+                "required by dev-libs/abk0d (argument)".to_string(),
+            ]
+        );
+    }
+
+    /// Backlog #205 R4, negative legs: keyword/license/mask changes keep
+    /// `trigger: None` (real renders those without the unsatisfied
+    /// filter), on the same fixture shapes their own tests pin.
+    #[test]
+    fn non_use_changes_keep_no_trigger() {
+        let keyword = graph_result_autounmask("dev-libs/autounmaskkeywordpkg");
+        assert_eq!(keyword.autounmask_keyword_changes.len(), 1);
+        assert_eq!(keyword.autounmask_keyword_changes[0].trigger, None);
+        let license = graph_result_autounmask("dev-libs/licensemaskedconsumer");
+        assert_eq!(license.autounmask_license_changes.len(), 1);
+        assert_eq!(license.autounmask_license_changes[0].trigger, None);
+        let mask = graph_result_autounmask("dev-libs/maskmaskedconsumer");
+        assert_eq!(mask.autounmask_mask_changes.len(), 1);
+        assert_eq!(mask.autounmask_mask_changes[0].trigger, None);
     }
 
     /// Backlog #129 (S1): real's two notices on the mg2top backtrack
