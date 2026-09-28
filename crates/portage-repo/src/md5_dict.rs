@@ -508,4 +508,14 @@ mod tests {
             assert!(!eapi_has_idepend(eapi), "{eapi:?}");
         }
     }
+
+    #[test]
+    fn eapi_empty_groups_matches_portage() {
+        for eapi in ["0", "1", "5", "6", " 6 "] {
+            assert!(eapi_empty_groups_always_true(eapi), "{eapi}");
+        }
+        for eapi in ["7", "7-pre1", "8", "9", "9-pre1", ""] {
+            assert!(!eapi_empty_groups_always_true(eapi), "{eapi:?}");
+        }
+    }
 }

@@ -1112,6 +1112,25 @@ mod tests {
     }
 
     #[test]
+    fn disjunctive_emptied_group_becomes_empty_any_of_placeholder() {
+        // Fully-emptied group under EAPI 7+ rules: placeholder atom.
+        let result = use_reduce_flat_disjunctive(
+            UseReduceFlatDisjunctiveArgs {
+                tokens: &toks("|| ( foo? ( dev-libs/a ) )"),
+                uselist: &HashSet::new(),
+                mode: MatchMode::Normal,
+                empty_groups_always_true: false,
+                tie_break: &mut |_| 0,
+            },
+            &mut |_: &[String]| -> AltPreference {
+                panic!("no surviving alternative may reach the probe")
+            },
+        )
+        .unwrap();
+        assert_eq!(result, vec!["__const__/empty-any-of"]);
+    }
+
+    #[test]
     fn disjunctive_emptied_group_is_dropped_when_empty_groups_always_true() {
         // Fully-emptied group under EAPI <= 6 rules: dropped.
         let result = use_reduce_flat_disjunctive(
