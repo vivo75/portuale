@@ -9903,6 +9903,12 @@ fn atom_currently_satisfiable(
             .into_iter()
             .filter(|m| {
                 extra_constraints.iter().all(|c| {
+                    // #212: a binary-only `slot_operator_mask_built`
+                    // negative hides no ebuild candidate (see
+                    // [`is_binary_only_mask`]).
+                    if is_binary_only_mask(c) {
+                        return true;
+                    }
                     if let Some(neg) = c.strip_prefix('!') {
                         !portage_dep::match_from_list(neg, std::slice::from_ref(m))
                             .is_some_and(|r| !r.is_empty())
@@ -10099,6 +10105,12 @@ fn highest_available_candidate_ignoring_use(
             .into_iter()
             .filter(|m| {
                 extra_constraints.iter().all(|c| {
+                    // #212: a binary-only `slot_operator_mask_built`
+                    // negative hides no ebuild candidate (see
+                    // [`is_binary_only_mask`]).
+                    if is_binary_only_mask(c) {
+                        return true;
+                    }
                     if let Some(neg) = c.strip_prefix('!') {
                         !portage_dep::match_from_list(neg, std::slice::from_ref(m))
                             .is_some_and(|r| !r.is_empty())
@@ -11452,6 +11464,9 @@ fn visible_tree_matches(
     };
     let passes_constraints = |m: &str| {
         extra_constraints.iter().all(|c| match c.strip_prefix('!') {
+            // #212: a binary-only `slot_operator_mask_built` negative
+            // hides no ebuild candidate (see [`is_binary_only_mask`]).
+            Some(_) if is_binary_only_mask(c) => true,
             Some(neg) => !portage_dep::match_from_list(neg, &[m]).is_some_and(|r| !r.is_empty()),
             None => portage_dep::match_from_list(c, &[m]).is_some_and(|r| !r.is_empty()),
         })
@@ -13270,6 +13285,37 @@ fn already_installed_or_reinstall(
     })
 }
 
+// Backlog #212 (v2 `#24c`): read one `slot_operator_mask_built`
+// negative in its binary-marked form (`!=cat/pkg-ver[binary]`, see
+// [`MaskReason::SlotOperatorBuilt`]). Returns the masked version when
+// `neg` marks a binary of this `cat/pkg`, else `None`. Real keys the
+// mask by package object so only the binary instance hides; portuale's
+// string readers match binary and ebuild alike, so the marker keeps the
+// two apart: every string-constraint reader below skips marked entries
+// (see [`is_binary_only_mask`] -- `match_from_list` ignores USE-deps,
+// so the marker would otherwise match the same-version ebuild too) and
+// only the binary-candidate pool filter calls this.
+fn slot_operator_binary_masked_version(neg: &str, category: &str, package: &str) -> Option<String> {
+    let rest = neg.strip_prefix("!=")?.strip_suffix("[binary]")?;
+    let (c, p, v) = split_cpv(rest)?;
+    (c == category && p == package).then_some(v)
+}
+
+// Backlog #212 (v2 `#24c`): whether a string constraint is a
+// binary-only `slot_operator_mask_built` negative
+// (`!=cat/pkg-ver[binary]`). String-constraint readers (every
+// `extra_constraints` filter and the missing-dep probe's masked
+// negatives) match ebuild and binary candidates at one
+// `cpv:slot::repo` key and must skip these -- the same-version ebuild
+// stays visible (real keys by package object). Only the
+// binary-candidate pool filter honours them (via
+// [`slot_operator_binary_masked_version`]).
+fn is_binary_only_mask(constraint: &str) -> bool {
+    constraint
+        .strip_prefix('!')
+        .is_some_and(|neg| neg.ends_with("[binary]"))
+}
+
 // 11 args trips clippy::too_many_arguments; a bundled options struct
 // would touch every one of this function's own call sites (production
 // and test) for a single-slice-sized addition of one more CLI flag
@@ -13510,7 +13556,23 @@ pub fn resolve_pretend(
         // surviving build of each `cpv:slot::repo` (real
         // `_iter_match_pkgs` yields instances newest-first and the
         // selection loop `break`s on the first acceptable one).
-        let binary_candidates = dedup_binary_instances(binary_candidates, &atom, config);
+        let mut binary_candidates = dedup_binary_instances(binary_candidates, &atom, config);
+        // #212 (v2 `#24c`): real `_slot_change_backtrack`'s
+        // `slot_operator_mask_built` (`depgraph.py:2383`) steers the
+        // backtrack-config restart away from the stale binary
+        // (`resolver/backtracking.py::_feedback_config:237-242` files
+        // it under `runtime_pkg_mask`, and `_iter_similar_available`
+        // (`:3034`) skips masked packages on the re-pass). A
+        // candidate-level filter, like every other binary rejection
+        // above: the same-version ebuild must survive (real masks the
+        // binary package object only), so the marked negative must not
+        // reach the matched-string pipeline below.
+        binary_candidates.retain(|c| {
+            !extra_constraints.iter().any(|ec| {
+                slot_operator_binary_masked_version(ec, &atom.category, &atom.package)
+                    .is_some_and(|ver| ver == c.version)
+            })
+        });
         candidates.extend(filter_usepkg_exclude_include(
             binary_candidates,
             &atom.category,
@@ -13561,6 +13623,10 @@ pub fn resolve_pretend(
             extra_constraints
                 .iter()
                 .all(|ec| match ec.strip_prefix('!') {
+                    // #212: a binary-only `slot_operator_mask_built`
+                    // negative hides no ebuild candidate (see
+                    // [`is_binary_only_mask`]).
+                    Some(_) if is_binary_only_mask(ec) => true,
                     Some(neg) => !portage_dep::match_from_list(neg, &[s.as_str()])
                         .is_some_and(|r| !r.is_empty()),
                     None => portage_dep::match_from_list(ec, &[s.as_str()])
@@ -13632,6 +13698,11 @@ pub fn resolve_pretend(
             return false;
         }
         extra_constraints.iter().all(|ec| {
+            // #212: a binary-only `slot_operator_mask_built` negative
+            // hides no ebuild candidate (see [`is_binary_only_mask`]).
+            if is_binary_only_mask(ec) {
+                return true;
+            }
             if let Some(neg) = ec.strip_prefix('!') {
                 !portage_dep::match_from_list(neg, &[s.as_str()]).is_some_and(|r| !r.is_empty())
             } else {
@@ -13755,6 +13826,12 @@ pub fn resolve_pretend(
             .into_iter()
             .filter(|m| {
                 extra_constraints.iter().all(|c| {
+                    // #212: a binary-only `slot_operator_mask_built`
+                    // negative hides no ebuild candidate (see
+                    // [`is_binary_only_mask`]).
+                    if is_binary_only_mask(c) {
+                        return true;
+                    }
                     if let Some(neg) = c.strip_prefix('!') {
                         !portage_dep::match_from_list(neg, std::slice::from_ref(m))
                             .is_some_and(|r| !r.is_empty())
@@ -15291,10 +15368,17 @@ fn reverse_dependency_constraints(
 }
 
 /// [`slot_operator_rebuild_scan`]'s result: the consumer `(cat, pkg)`
-/// replace set (real `_slot_operator_replace_installed`) and the
+/// replace set (real `_slot_operator_replace_installed`), the
 /// `(provider_cpv, consumer_cpv)` display pairs (real `_forced_rebuilds`,
-/// what `_show_abi_rebuild_info` renders).
-type SlotOpRebuildScan = (BTreeSet<(String, String)>, Vec<(String, String)>);
+/// what `_show_abi_rebuild_info` renders), and the stale-binary
+/// `(category, package, version)` triples for `collect_feedback`'s
+/// `slot_operator_mask_built` records (real `_slot_change_backtrack`,
+/// backlog #212 v2 `#24c`).
+type SlotOpRebuildScan = (
+    BTreeSet<(String, String)>,
+    Vec<(String, String)>,
+    BTreeSet<(String, String, String)>,
+);
 
 /// One installed parent's atom on a provider, for the update-probe
 /// refusal below: the parent's identity plus the atom text to match the
@@ -15505,9 +15589,15 @@ fn probe_refused(
 /// `reachable` gate: the slot-conflict path rebuilds graph-node runtime
 /// consumers in both shapes.
 ///
-/// Cuts (v2 remainder): no `slot_operator_mask_built` for non-installed
-/// binaries (v2 `#24c`); the `:8786` slot-conflict-fired probe never
-/// reaches this scan (v2 `#24e`).
+/// Cuts (v2 remainder): the `_slot_change_probe`'s `runtime_pkg_mask`
+/// check on the tree ebuild (`:2341`); the update-probe
+/// (`_slot_operator_update_backtrack`, `:2427-2431`) and unsatisfied-probe
+/// (`_slot_operator_unsatisfied_backtrack`, `:2901-2903`)
+/// `slot_operator_mask_built` arms, which have no portuale-visible
+/// diverging shape -- both steer a *parent* the graph is already
+/// replacing (update) or failing on (unsatisfied), so same-version
+/// binary-vs-ebuild steering is vacuous there; the `:8786`
+/// slot-conflict-fired probe never reaches this scan (v2 `#24e`).
 #[allow(clippy::too_many_arguments)]
 fn slot_operator_rebuild_scan(
     root: &Path,
@@ -15766,12 +15856,24 @@ fn slot_operator_rebuild_scan(
     // #24 S5: real `_slot_change_probe` (depgraph.py:2317-2359), the
     // slot-move-without-revbump arm (bug 456208). Runs even when the vdb
     // scan above is gated off (real's first trigger arm is not
-    // complete-mode gated) -- see the helper's own doc comment.
-    slot_operator_slot_change_probe(root, repos, entries, undone, &mut scheduled);
+    // complete-mode gated) -- see the helper's own doc comment. The #212
+    // binary arm rides the same call and reports stale binaries into
+    // `masked` for `collect_feedback`'s `slot_operator_mask_built`
+    // records.
+    let mut masked: BTreeSet<(String, String, String)> = BTreeSet::new();
+    slot_operator_slot_change_probe(
+        root,
+        repos,
+        entries,
+        undone,
+        &mut scheduled,
+        excluded,
+        &mut masked,
+    );
 
     abi_rebuilds.sort();
     abi_rebuilds.dedup();
-    (scheduled, abi_rebuilds)
+    (scheduled, abi_rebuilds, masked)
 }
 
 /// Backlog #24 S5: real `_slot_change_probe` (`depgraph.py:2317-2359`),
@@ -15807,6 +15909,12 @@ fn slot_operator_slot_change_probe(
     entries: &[GraphEntry],
     undone: &BTreeSet<(String, String)>,
     scheduled: &mut BTreeSet<(String, String)>,
+    excluded: &[String],
+    // #212 (v2 `#24c`): every merge-bound binary the arm below finds
+    // stale -- `(category, package, version)` triples for
+    // `collect_feedback`'s `slot_operator_mask_built` records (real
+    // `_slot_change_backtrack`, `depgraph.py:2381-2398`).
+    masked: &mut BTreeSet<(String, String, String)>,
 ) {
     const DEP_KEYS: [&str; 5] = ["BDEPEND", "DEPEND", "IDEPEND", "PDEPEND", "RDEPEND"];
     for e in entries {
@@ -15854,32 +15962,128 @@ fn slot_operator_slot_change_probe(
                 // this dep to that installed instance. A merge-bound
                 // entry means the walk chose a different candidate
                 // (typically a real upgrade) -- the probe does not fire.
-                let Some(installed_version) =
+                // (A merge-bound *binary* is the #212 arm below, which
+                // runs independently -- real files the two backtracks
+                // from independent deps.)
+                if let Some(installed_version) =
                     best_installed_for_atom(root, &token, &atom.category, &atom.package)
-                else {
-                    continue;
-                };
-                let resolved_installed = entries.iter().any(|x| {
-                    x.category == child_cp.0
-                        && x.package == child_cp.1
-                        && matches!(
-                            &x.outcome,
-                            PretendOutcome::AlreadyInstalled { version } if *version == installed_version
+                {
+                    let resolved_installed = entries.iter().any(|x| {
+                        x.category == child_cp.0
+                            && x.package == child_cp.1
+                            && matches!(
+                                &x.outcome,
+                                PretendOutcome::AlreadyInstalled { version } if *version == installed_version
+                            )
+                    });
+                    // The probe itself: the tree ebuild at the child's own
+                    // cpv moved (slot, sub_slot) vs the installed instance.
+                    if resolved_installed
+                        && slot_changed(
+                            root,
+                            repos,
+                            &atom.category,
+                            &atom.package,
+                            &installed_version,
                         )
-                });
-                if !resolved_installed {
-                    continue;
+                    {
+                        scheduled.insert(child_cp.clone());
+                    }
                 }
-                // The probe itself: the tree ebuild at the child's own
-                // cpv moved (slot, sub_slot) vs the installed instance.
-                if slot_changed(
-                    root,
-                    repos,
-                    &atom.category,
-                    &atom.package,
-                    &installed_version,
-                ) {
-                    scheduled.insert(child_cp);
+                // #212 binary arm (real `_slot_change_backtrack`,
+                // `depgraph.py:2381-2398`, v2 `#24c`): the graph resolved
+                // this dep to a merge-bound *binary* (`dep.child.built`
+                // and not installed), and the tree ebuild at the binary's
+                // own cpv (`=cpv`, real `_slot_change_probe`'s
+                // `self._pkg(dep.child.cpv, "ebuild", ...)` then
+                // `_iter_match_pkgs(..., "ebuild", ...)` fallback) carries
+                // a different `(slot, sub_slot)` -- the same slot move
+                // without a revbump, but the stale side is a binary, not
+                // the vdb. Real masks it (`slot_operator_mask_built`) so
+                // the backtrack-config restart resolves the dep to the
+                // tree ebuild instead. Portuale's one-instance-per-cp
+                // model makes entry existence equivalent to dep
+                // resolution: whatever atom pulled this cp sees the
+                // binary entry's version.
+                //
+                // Gates, mirroring real (`_slot_change_probe`
+                // `2317-2359`): the tree ebuild at the binary's cpv must
+                // exist (a `replacement_parent` -- else masking dead-ends
+                // the re-pass, the same gate the #211 arms carry), must
+                // not be `--exclude`d (real `:2343`, the same
+                // `matches_config_entry` idiom as the C4 grouping and
+                // `collect_probe_parents`), and must pass the same
+                // visibility the pool already enforced:
+                // `_equiv_ebuild_visible` (`depgraph.py:8015-8025`)
+                // refused pool binaries with no visible same-version
+                // ebuild, so a binary entry implies its tree ebuild is
+                // visible. No `--usepkgonly` exemption: the probe's own
+                // visibility check is keyword/mask-based, not pool-based,
+                // so real masks there too and fails the re-pass the same
+                // way portuale dead-ends on `NoVisibleCandidate`
+                // (code-grounded; the S0 probe covers `--usepkg`).
+                // Real's `runtime_pkg_mask` check on the tree ebuild
+                // (`:2341`) has no counterpart (standing cut, same as
+                // the installed arm above).
+                for child_entry in entries
+                    .iter()
+                    .filter(|x| x.category == child_cp.0 && x.package == child_cp.1)
+                {
+                    if child_entry.source != CandidateSource::Binary {
+                        continue;
+                    }
+                    let binary_version = match &child_entry.outcome {
+                        PretendOutcome::New { version }
+                        | PretendOutcome::Reinstall { version, .. } => version,
+                        PretendOutcome::Upgrade { to, .. }
+                        | PretendOutcome::Downgrade { to, .. } => to,
+                        _ => continue,
+                    };
+                    // A merge-bound entry always carries its resolved
+                    // slot; without it there is nothing to compare
+                    // against the tree (real compares package objects
+                    // that always have one).
+                    let (Some(bin_slot), Some(bin_sub)) =
+                        (child_entry.slot.as_deref(), child_entry.sub_slot.as_deref())
+                    else {
+                        continue;
+                    };
+                    // The replacement gate and the slot compare read one
+                    // tree lookup: the highest-priority repo's candidate
+                    // at the binary's own version (the same tolerant
+                    // metadata `slot_changed` trusts).
+                    let Ok(tree_cands) = list_candidates(repos, &atom.category, &atom.package)
+                    else {
+                        continue;
+                    };
+                    let Some(tree) = tree_cands
+                        .iter()
+                        .filter(|c| c.version == *binary_version)
+                        .max_by_key(|c| c.repo_priority)
+                    else {
+                        continue;
+                    };
+                    let tree_str = format!(
+                        "{}/{}-{}:{}/{}::{}",
+                        atom.category,
+                        atom.package,
+                        tree.version,
+                        tree.slot,
+                        tree.sub_slot,
+                        tree.repo_name
+                    );
+                    if excluded.iter().any(|ex| {
+                        matches_config_entry(ex, &tree_str, &atom.category, &atom.package)
+                    }) {
+                        continue;
+                    }
+                    if (bin_slot, bin_sub) != (tree.slot.as_str(), tree.sub_slot.as_str()) {
+                        masked.insert((
+                            child_cp.0.clone(),
+                            child_cp.1.clone(),
+                            binary_version.clone(),
+                        ));
+                    }
                 }
             }
         }
@@ -16284,6 +16488,13 @@ fn slot_operator_eliminate_rebuilds(
 /// `topological_merge_order`, and its own `RDEPEND` is never re-walked.
 /// The default `--solver=portage` path has none of that -- see
 /// `BacktrackParams::slot_operator_replace_installed`.
+///
+/// #212 cut: the scan's stale-binary triples are dropped here. The
+/// bridge resolves in one shot with no `Backtracker`, so there is no
+/// re-pass a `slot_operator_mask_built` record could steer (real
+/// enforces the mask through the backtrack-config restart,
+/// `depgraph.py:5703-5712`); recording one would be dead state. The
+/// bridge keeps its pre-#212 answers on stale-binary shapes.
 #[allow(clippy::too_many_arguments)]
 fn slot_operator_rebuild_entries(
     root: &Path,
@@ -16302,7 +16513,7 @@ fn slot_operator_rebuild_entries(
     loop {
         let mut combined: Vec<GraphEntry> = entries.to_vec();
         combined.extend(out.iter().cloned());
-        let (next, pairs) = slot_operator_rebuild_scan(
+        let (next, pairs, ..) = slot_operator_rebuild_scan(
             root,
             repos,
             &combined,
@@ -19923,6 +20134,17 @@ pub(crate) fn backtrack_missed_updates(
     for ((cat, pkg), bucket) in &params.runtime_pkg_mask {
         let cp = (cat.clone(), pkg.clone());
         for entry in bucket {
+            // #212: built-binary steers render no missed-update rows.
+            // Real `_get_missed_updates` reads the same mask dict, but a
+            // `slot_operator_mask_built` mask steers *within* a version
+            // (binary -> same-version ebuild), so the masked version is
+            // never higher than the chosen one -- the row real would
+            // print never materialises. (A lower-version choice against
+            // a masked-higher binary is unreached: the re-pass picks the
+            // same-version ebuild, never a lower version.)
+            if matches!(entry.reason, MaskReason::SlotOperatorBuilt) {
+                continue;
+            }
             // `!=cat/pkg-ver` back to the version (defensive: skip what
             // does not parse against its own bucket).
             let (ver, order) = match entry.neg.strip_prefix("!=").and_then(split_cpv) {
@@ -20047,6 +20269,9 @@ pub(crate) fn backtrack_missed_updates(
                     });
                 }
             }
+            // Unreachable: the collection loop above skips
+            // `SlotOperatorBuilt` entries, so none ever reach `kept`.
+            MaskReason::SlotOperatorBuilt => {}
         }
     }
     (skipped, missing)
@@ -22016,6 +22241,12 @@ fn check_runtime_pkg_mask(masks: &HashMap<(String, String), Vec<MaskEntry>>) -> 
             let parents = match &entry.reason {
                 MaskReason::SlotConflict { parents } => parents,
                 MaskReason::MissingDependency { .. } => continue,
+                // Real `Backtracker._check_runtime_pkg_mask`
+                // (`backtracking.py:150-154`) skips
+                // `slot_operator_mask_built` (and missing-dependency)
+                // masks the same way: a built-package steer never
+                // invalidates the node that carries it.
+                MaskReason::SlotOperatorBuilt => continue,
             };
             if parents.is_empty() {
                 continue;
@@ -24192,6 +24423,22 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 }
             }
             let binary_candidates = dedup_binary_instances(binary_candidates, &atom, config);
+            // #212 (v2 `#24c`): mirror of `resolve_pretend`'s own
+            // `slot_operator_mask_built` pool filter -- a masked binary
+            // must not be re-derived as the entry source here either
+            // (this step MUST agree with what `resolve_pretend`
+            // chose). Plain (`!=cpv`) negatives read as `None` and are
+            // ignored; only the `[binary]`-marked form filters.
+            let masked_here = bp.masked_negatives_for(&key);
+            let binary_candidates: Vec<Candidate> = binary_candidates
+                .into_iter()
+                .filter(|c| {
+                    !masked_here.iter().any(|neg| {
+                        slot_operator_binary_masked_version(neg, &key.0, &key.1)
+                            .is_some_and(|ver| ver == c.version)
+                    })
+                })
+                .collect();
             repo_candidates.extend(filter_usepkg_exclude_include(
                 binary_candidates,
                 &key.0,
@@ -25853,6 +26100,31 @@ enum MaskReason {
         parent: (String, String),
         atom: String,
     },
+    /// Real `mask_info["slot_operator_mask_built"]` (backlog #212,
+    /// v2 `#24c`): a non-installed binary whose built slot-operator dep
+    /// cannot be satisfied the way it was built, recorded by
+    /// `_slot_change_backtrack` (`depgraph.py:2383`),
+    /// `_slot_operator_update_backtrack` (`:2427-2431`) and
+    /// `_slot_operator_unsatisfied_backtrack` (`:2901-2903`) and
+    /// enforced through the backtrack-config restart (`:5703-5712`,
+    /// `resolver/backtracking.py::_feedback_config:237-242`, which
+    /// files the mask under *both* `slot_operator_mask_built` *and*
+    /// `runtime_pkg_mask`). Real keys by package object, so the mask
+    /// hides only the binary instance -- the same-version ebuild stays
+    /// visible. Portuale's string readers match binary and ebuild at
+    /// one `cpv:slot::repo` key, so the rendered `neg` carries a
+    /// `[binary]` marker (`!=cat/pkg-ver[binary]`): every
+    /// string-constraint reader skips marked entries (see
+    /// [`is_binary_only_mask`] -- `match_from_list` ignores USE-deps,
+    /// so the marker would otherwise match the ebuild too), and only
+    /// the binary-candidate pool filter honours them (via
+    /// [`slot_operator_binary_masked_version`]). Only the slot-change
+    /// arm is ported
+    /// (see [`slot_operator_slot_change_probe`]); the update-probe and
+    /// unsatisfied-probe arms have no portuale-visible diverging shape
+    /// (both steer a parent the graph already replaces or fails on, so
+    /// same-version binary-vs-ebuild steering is vacuous there).
+    SlotOperatorBuilt,
 }
 
 /// One `!=cat/pkg-ver` negative with its reason. `neg` renders exactly
@@ -26246,7 +26518,7 @@ fn collect_feedback(
     {
         pass.abi_rebuilds = Some(Vec::new());
     } else {
-        let (scheduled, abi_rebuilds) = slot_operator_rebuild_scan(
+        let (scheduled, abi_rebuilds, masked_binaries) = slot_operator_rebuild_scan(
             ctx.root,
             &ctx.repos,
             &pass.entries,
@@ -26259,7 +26531,42 @@ fn collect_feedback(
             ctx.excluded,
         );
         pass.abi_rebuilds = Some(abi_rebuilds);
-        if scheduled != grown.slot_operator_replace_installed {
+        // #212 (v2 `#24c`): file the scan's stale-binary triples as
+        // `slot_operator_mask_built` negatives (real
+        // `_slot_change_backtrack`, `depgraph.py:2381-2398`, recorded
+        // into `backtrack_infos["config"]["slot_operator_mask_built"]`
+        // and enforced through the backtrack-config restart,
+        // `depgraph.py:5703-5712` /
+        // `resolver/backtracking.py::_feedback_config:237-242`, which
+        // files the mask under *both* `slot_operator_mask_built` *and*
+        // `runtime_pkg_mask`). The `neg` carries a `[binary]` marker
+        // (`!=cat/pkg-ver[binary]`): real keys by package object so
+        // only the binary instance hides, while portuale's string
+        // readers match binary and ebuild alike -- every
+        // string-constraint reader skips marked entries (see
+        // [`is_binary_only_mask`]) and only the binary-candidate pool
+        // filter honours them. A repeated mask replaces nothing (the
+        // set semantics are real's dict assignment); `mask_order`
+        // takes no entry, since a same-version steer never renders a
+        // missed-update row (see `backtrack_missed_updates`).
+        // Mask-only growth still restarts: real sets `_need_restart`
+        // unconditionally, even with an empty reinstall set.
+        let mut masks_new = false;
+        for (cat, pkg, ver) in &masked_binaries {
+            let neg = format!("!={cat}/{pkg}-{ver}[binary]");
+            let bucket = grown
+                .runtime_pkg_mask
+                .entry((cat.clone(), pkg.clone()))
+                .or_default();
+            if !bucket.iter().any(|m| m.neg == neg) {
+                bucket.push(MaskEntry {
+                    neg,
+                    reason: MaskReason::SlotOperatorBuilt,
+                });
+                masks_new = true;
+            }
+        }
+        if scheduled != grown.slot_operator_replace_installed || masks_new {
             grown.slot_operator_replace_installed = scheduled;
             return PassDecision::Feedback(BacktrackFeedback::Config {
                 params: Box::new(grown),
@@ -41447,7 +41754,7 @@ mod tests {
             .map(|p| ("dev-libs".to_string(), (*p).to_string()))
             .collect();
         let empty: BTreeSet<(String, String)> = BTreeSet::new();
-        let (scheduled, abi) = slot_operator_rebuild_scan(
+        let (scheduled, abi, ..) = slot_operator_rebuild_scan(
             &dir,
             &[],
             std::slice::from_ref(&bar_upgrade),
@@ -41473,7 +41780,7 @@ mod tests {
         );
 
         // Nothing changing `bar` -> no rebuilds.
-        let (empty_sched, empty_abi) = slot_operator_rebuild_scan(
+        let (empty_sched, empty_abi, ..) = slot_operator_rebuild_scan(
             &dir,
             &[],
             &[],
@@ -41491,7 +41798,7 @@ mod tests {
         // (real: no slot-op rebuild for a consumer outside the required
         // sets). The S5 probe is not complete-mode gated, but `bar`'s
         // upgrade carries no unbuilt `:=` dep, so nothing fires here.
-        let (none_sched, none_abi) = slot_operator_rebuild_scan(
+        let (none_sched, none_abi, ..) = slot_operator_rebuild_scan(
             &dir,
             &[],
             std::slice::from_ref(&bar_upgrade),
@@ -41527,7 +41834,7 @@ mod tests {
             ..graph_entry("dev-libs", "stale", "1.0")
         };
         let already = BTreeSet::from([("dev-libs".to_string(), "stale".to_string())]);
-        let (again, again_abi) = slot_operator_rebuild_scan(
+        let (again, again_abi, ..) = slot_operator_rebuild_scan(
             &dir,
             &[],
             &[bar_upgrade.clone(), stale_rebuild],
@@ -41768,7 +42075,7 @@ mod tests {
         let entries = vec![fresh.clone(), consumer.clone()];
         let empty: BTreeSet<(String, String)> = BTreeSet::new();
         let massc = ("dev-libs".to_string(), "massc".to_string());
-        let (scheduled, abi) = slot_operator_rebuild_scan(
+        let (scheduled, abi, ..) = slot_operator_rebuild_scan(
             &base,
             &repos,
             &entries,
@@ -41794,7 +42101,7 @@ mod tests {
         );
         // No `--update` and provider not directly requested: withheld,
         // mirroring real's `want_update` gate.
-        let (withheld, _) = slot_operator_rebuild_scan(
+        let (withheld, ..) = slot_operator_rebuild_scan(
             &base,
             &repos,
             &entries,
@@ -41810,7 +42117,7 @@ mod tests {
         // ...unless the provider itself is directly requested (real's
         // arg-chain disjunct).
         let top = HashSet::from([("dev-libs".to_string(), "massb".to_string())]);
-        let (via_arg, _) = slot_operator_rebuild_scan(
+        let (via_arg, ..) = slot_operator_rebuild_scan(
             &base,
             &repos,
             &entries,
@@ -41832,7 +42139,7 @@ mod tests {
             sub_slot: Some("2".into()),
             ..graph_entry("dev-libs", "massb", "0.9")
         };
-        let (downgraded, _) = slot_operator_rebuild_scan(
+        let (downgraded, ..) = slot_operator_rebuild_scan(
             &base,
             &repos,
             &[older, consumer.clone()],
@@ -41847,7 +42154,7 @@ mod tests {
         assert!(downgraded.is_empty(), "downgrades never probe");
         // No tree candidate for the consumer: no replacement parent, no
         // schedule (real finds nothing and does nothing).
-        let (nocand, _) = slot_operator_rebuild_scan(
+        let (nocand, ..) = slot_operator_rebuild_scan(
             &base,
             &[],
             &entries,
@@ -41861,7 +42168,7 @@ mod tests {
         );
         assert!(nocand.is_empty(), "no candidate means no schedule");
         // Neither walked nor reachable: outside the probe's population.
-        let (unwalked, _) = slot_operator_rebuild_scan(
+        let (unwalked, ..) = slot_operator_rebuild_scan(
             &base,
             &repos,
             std::slice::from_ref(&fresh),
@@ -41976,14 +42283,14 @@ mod tests {
         };
         // The veto parent walked: the fresh candidate violates its pin,
         // so the whole replacement is refused -- nothing schedules.
-        let (refused, _) = scan(&[fresh.clone(), consumer.clone(), veto_parent.clone()], &[]);
+        let (refused, ..) = scan(&[fresh.clone(), consumer.clone(), veto_parent.clone()], &[]);
         assert!(refused.is_empty(), "a vetoed replacement schedules nothing");
         // Out of scope (neither walked nor reachable): real never walks
         // the parent, so there is no veto.
-        let (unscoped, _) = scan(&[fresh.clone(), consumer.clone()], &[]);
+        let (unscoped, ..) = scan(&[fresh.clone(), consumer.clone()], &[]);
         assert_eq!(unscoped, BTreeSet::from([massc.clone()]));
         // Excluded: real's `excluded_pkgs` skip.
-        let (excluded_out, _) = scan(
+        let (excluded_out, ..) = scan(
             &[fresh.clone(), consumer.clone(), veto_parent.clone()],
             &["dev-libs/massv".to_string()],
         );
@@ -42001,7 +42308,7 @@ mod tests {
         };
         let reach_massc: HashSet<(String, String)> =
             HashSet::from([massc.clone(), ("dev-libs".to_string(), "massv".to_string())]);
-        let (same_refused, _) = slot_operator_rebuild_scan(
+        let (same_refused, ..) = slot_operator_rebuild_scan(
             &base,
             &repos,
             &[upgrade.clone(), consumer.clone(), veto_parent.clone()],
@@ -42014,7 +42321,7 @@ mod tests {
             &[],
         );
         assert!(same_refused.is_empty(), "the same-slot arm refuses too");
-        let (same_kept, _) = slot_operator_rebuild_scan(
+        let (same_kept, ..) = slot_operator_rebuild_scan(
             &base,
             &repos,
             &[upgrade, consumer, veto_parent],
@@ -42119,7 +42426,7 @@ mod tests {
         // out of scope. `massn` (bound to slot 0) probes the slot-1
         // upgrade; `masso` (bound to the entry's own slot 1) must not
         // leak that entry into the new arm.
-        let (scheduled, abi) = slot_operator_rebuild_scan(
+        let (scheduled, abi, ..) = slot_operator_rebuild_scan(
             &base,
             &repos,
             &[upgrade, walked_consumer("massn"), walked_consumer("masso")],
@@ -42202,7 +42509,7 @@ mod tests {
         };
 
         // bdeps off, consumers only reachable: runtime/install-time keys.
-        let (scheduled, abi) = slot_operator_rebuild_scan(
+        let (scheduled, abi, ..) = slot_operator_rebuild_scan(
             &dir,
             &[],
             std::slice::from_ref(&bar_upgrade),
@@ -42228,7 +42535,7 @@ mod tests {
         // keys off. Real's complete-mode-only reachability never probes
         // an installed parent's optional build-time dep
         // (depgraph.py:3114,3802-3806,4277/4287).
-        let (scheduled, _) = slot_operator_rebuild_scan(
+        let (scheduled, ..) = slot_operator_rebuild_scan(
             &dir,
             &[],
             std::slice::from_ref(&bar_upgrade),
@@ -42251,7 +42558,7 @@ mod tests {
         for name in ["rdep", "dep", "bdep", "pdep", "idep"] {
             walked.push(walked_entry(name));
         }
-        let (scheduled, abi) = slot_operator_rebuild_scan(
+        let (scheduled, abi, ..) = slot_operator_rebuild_scan(
             &dir,
             &[],
             &walked,
@@ -42292,7 +42599,7 @@ mod tests {
 
         // The S1 gate beats the S2 walk test: even a walked consumer's
         // build-time keys stay out when bdeps is off.
-        let (scheduled, _) = slot_operator_rebuild_scan(
+        let (scheduled, ..) = slot_operator_rebuild_scan(
             &dir,
             &[],
             &walked,
@@ -42358,17 +42665,24 @@ mod tests {
         let empty = BTreeSet::new();
 
         let mut scheduled = BTreeSet::new();
+        let mut masked: BTreeSet<(String, String, String)> = BTreeSet::new();
         slot_operator_slot_change_probe(
             &dir,
             &repos,
             &[parent.clone(), child.clone()],
             &empty,
             &mut scheduled,
+            &[],
+            &mut masked,
         );
         assert_eq!(
             scheduled,
             BTreeSet::from([child_cp.clone()]),
             "the moved installed child joins the replace set (bug 456208)"
+        );
+        assert!(
+            masked.is_empty(),
+            "no binary entry is merged, so the #212 arm reports nothing"
         );
 
         // Real's `dep.child.built`: when the graph resolved the dep to a
@@ -42390,6 +42704,8 @@ mod tests {
             &[parent.clone(), merged_child],
             &empty,
             &mut scheduled,
+            &[],
+            &mut BTreeSet::new(),
         );
         assert!(scheduled.is_empty());
 
@@ -42401,6 +42717,8 @@ mod tests {
             &[parent, child],
             &BTreeSet::from([child_cp]),
             &mut scheduled,
+            &[],
+            &mut BTreeSet::new(),
         );
         assert!(scheduled.is_empty());
 
@@ -42439,6 +42757,8 @@ mod tests {
             &[parent_souprov, child_souprov],
             &empty,
             &mut scheduled,
+            &[],
+            &mut BTreeSet::new(),
         );
         assert!(scheduled.is_empty());
 
@@ -42602,7 +42922,7 @@ mod tests {
         let empty: BTreeSet<(String, String)> = BTreeSet::new();
         // The Reinstall parent feeds `new_slot`, so the stale `:2/2=`
         // binding schedules a rebuild.
-        let (scheduled, abi) = slot_operator_rebuild_scan(
+        let (scheduled, abi, ..) = slot_operator_rebuild_scan(
             &dir,
             &[],
             std::slice::from_ref(&bar_reinstall),
@@ -42624,7 +42944,7 @@ mod tests {
         );
         // An `undone` consumer is skipped even though it is reachable.
         let undone = BTreeSet::from([stale.clone()]);
-        let (done_sched, _) = slot_operator_rebuild_scan(
+        let (done_sched, ..) = slot_operator_rebuild_scan(
             &dir,
             &[],
             std::slice::from_ref(&bar_reinstall),
@@ -42641,7 +42961,7 @@ mod tests {
         // the gate itself is non-empty, so the loop runs and skips.
         let elsewhere: HashSet<(String, String)> =
             HashSet::from([("dev-libs".to_string(), "other".to_string())]);
-        let (far_sched, _) = slot_operator_rebuild_scan(
+        let (far_sched, ..) = slot_operator_rebuild_scan(
             &dir,
             &[],
             std::slice::from_ref(&bar_reinstall),
@@ -42734,12 +43054,15 @@ mod tests {
             ..graph_entry("dev-libs", "probeparentA", "1.0")
         };
         let mut scheduled = BTreeSet::new();
+        let mut masked: BTreeSet<(String, String, String)> = BTreeSet::new();
         slot_operator_slot_change_probe(
             &base,
             &repos,
             &[upgrade_a, child.clone()],
             &empty,
             &mut scheduled,
+            &[],
+            &mut masked,
         );
         assert_eq!(
             scheduled,
@@ -42750,11 +43073,211 @@ mod tests {
         // A plain `:0` dep is not a slot-operator atom: no probe.
         let new_b = graph_entry("dev-libs", "probeparentB", "1.0");
         let mut scheduled_b = BTreeSet::new();
-        slot_operator_slot_change_probe(&base, &repos, &[new_b, child], &empty, &mut scheduled_b);
+        slot_operator_slot_change_probe(
+            &base,
+            &repos,
+            &[new_b, child],
+            &empty,
+            &mut scheduled_b,
+            &[],
+            &mut BTreeSet::new(),
+        );
         assert!(
             scheduled_b.is_empty(),
             "a slot-only dep without `=` never probes"
         );
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// Backlog #212 (v2 `#24c`): only a `!=cpv[binary]` negative reads
+    /// as a `slot_operator_mask_built` record. A plain `!=cpv` (real's
+    /// slot-conflict / missing-dependency negatives), another package's
+    /// marked negative, and a positive marked atom all read as `None`;
+    /// [`is_binary_only_mask`] answers the same question for the
+    /// string-constraint readers.
+    #[test]
+    fn slot_operator_binary_masked_version_reads_only_marked_negatives() {
+        assert_eq!(
+            slot_operator_binary_masked_version(
+                "!=dev-libs/maskchild-1.0[binary]",
+                "dev-libs",
+                "maskchild"
+            ),
+            Some("1.0".to_string())
+        );
+        assert_eq!(
+            slot_operator_binary_masked_version(
+                "!=dev-libs/maskchild-1.0",
+                "dev-libs",
+                "maskchild"
+            ),
+            None
+        );
+        assert_eq!(
+            slot_operator_binary_masked_version(
+                "!=dev-libs/other-1.0[binary]",
+                "dev-libs",
+                "maskchild"
+            ),
+            None
+        );
+        assert_eq!(
+            slot_operator_binary_masked_version(
+                "=dev-libs/maskchild-1.0[binary]",
+                "dev-libs",
+                "maskchild"
+            ),
+            None
+        );
+        assert!(is_binary_only_mask("!=dev-libs/maskchild-1.0[binary]"));
+        assert!(!is_binary_only_mask("!=dev-libs/maskchild-1.0"));
+        assert!(!is_binary_only_mask("=dev-libs/maskchild-1.0[binary]"));
+    }
+
+    /// Backlog #212 (v2 `#24c`): real `_slot_change_backtrack`
+    /// (`depgraph.py:2381-2398`) masks a merge-bound *binary* whose
+    /// built slot-operator dep cannot be satisfied the way it was
+    /// built, so the backtrack-config restart resolves the dep to the
+    /// tree ebuild instead. Shape: an ebuild parent with unbuilt
+    /// `:=` deps; the graph resolved `dev-libs/maskchild` to a binary
+    /// built at SLOT 0/1 while the tree ebuild at the same cpv moved
+    /// to 0/2 without a revbump (the S0 `somaskchild` shape).
+    #[test]
+    fn slot_operator_slot_change_probe_masks_a_stale_binary() {
+        use md5::Digest as _;
+        use std::fmt::Write as _;
+        let base = slotundo_temp_dir("212-probe");
+        let repo = base.join("repo");
+        let write_pkg = |cp: &str, pv: &str, slot: &str, rdepend: &str| {
+            let (cat, pkg) = cp.split_once('/').expect("category/package");
+            let dir = repo.join(cat).join(pkg);
+            std::fs::create_dir_all(&dir).unwrap();
+            let mut body =
+                format!("EAPI=8\nDESCRIPTION=\"212 probe\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\n");
+            if !rdepend.is_empty() {
+                writeln!(body, "RDEPEND=\"{rdepend}\"").unwrap();
+            }
+            std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
+            let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+            let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=212 probe\nEAPI=8\n".to_string();
+            if !rdepend.is_empty() {
+                writeln!(entry, "RDEPEND={rdepend}").unwrap();
+            }
+            writeln!(entry, "KEYWORDS=amd64\nSLOT={slot}\n_md5_={md5}").unwrap();
+            let cachedir = repo.join("metadata/md5-cache").join(cat);
+            std::fs::create_dir_all(&cachedir).unwrap();
+            std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+        };
+        write_pkg(
+            "dev-libs/maskparent",
+            "1.0",
+            "0",
+            "dev-libs/maskchild:= dev-libs/samechild:= dev-libs/notreechild:=",
+        );
+        // Stale: tree moved 0/1 -> 0/2, the binary below was built at 0/1.
+        write_pkg("dev-libs/maskchild", "1.0", "0/2", "");
+        // Unmoved: tree and binary agree on 0/1.
+        write_pkg("dev-libs/samechild", "1.0", "0/1", "");
+        // `notreechild` has no tree ebuild at all (no write_pkg call).
+        let repos = vec![RepoConfig {
+            name: "testrepo".to_string(),
+            location: repo.clone(),
+            priority: 0,
+            is_main: true,
+            masters: vec![],
+            profile_formats: vec![],
+            cache_formats: vec![],
+            aliases: vec![],
+            sync_type: None,
+            sync_uri: None,
+            volatile: false,
+            module_specific_options: vec![],
+        }];
+        let parent = GraphEntry {
+            discovery: 0,
+            outcome: PretendOutcome::New {
+                version: "1.0".into(),
+            },
+            ..graph_entry("dev-libs", "maskparent", "1.0")
+        };
+        let binary_child = |package: &str, slot: &str, sub: &str| GraphEntry {
+            discovery: 0,
+            outcome: PretendOutcome::New {
+                version: "1.0".into(),
+            },
+            slot: Some(slot.into()),
+            sub_slot: Some(sub.into()),
+            source: CandidateSource::Binary,
+            ..graph_entry("dev-libs", package, "1.0")
+        };
+        let entries = vec![
+            parent.clone(),
+            binary_child("maskchild", "0", "1"),
+            binary_child("samechild", "0", "1"),
+            binary_child("notreechild", "0", "1"),
+        ];
+        let empty = BTreeSet::new();
+
+        // Only the slot-moved binary is reported; nothing is scheduled
+        // (no installed instance exists in this scratch root).
+        let mut scheduled = BTreeSet::new();
+        let mut masked: BTreeSet<(String, String, String)> = BTreeSet::new();
+        slot_operator_slot_change_probe(
+            &base,
+            &repos,
+            &entries,
+            &empty,
+            &mut scheduled,
+            &[],
+            &mut masked,
+        );
+        assert!(scheduled.is_empty());
+        assert_eq!(
+            masked,
+            BTreeSet::from([(
+                "dev-libs".to_string(),
+                "maskchild".to_string(),
+                "1.0".to_string()
+            )]),
+            "the stale binary is masked; the unmoved one, the ebuild-less \
+             one and the scheduled set are untouched"
+        );
+
+        // `--exclude` on the tree ebuild vetoes the mask (real `:2343`).
+        let mut masked_excl: BTreeSet<(String, String, String)> = BTreeSet::new();
+        let mut scheduled_excl = BTreeSet::new();
+        slot_operator_slot_change_probe(
+            &base,
+            &repos,
+            &entries,
+            &empty,
+            &mut scheduled_excl,
+            &["dev-libs/maskchild".to_string()],
+            &mut masked_excl,
+        );
+        assert!(
+            masked_excl.is_empty(),
+            "an excluded tree ebuild is no replacement"
+        );
+
+        // A built (binary) parent is not a probing parent (real's
+        // `not dep.parent.built` gate, `:2324`).
+        let binary_parent = GraphEntry {
+            source: CandidateSource::Binary,
+            ..parent.clone()
+        };
+        let mut masked_bpar: BTreeSet<(String, String, String)> = BTreeSet::new();
+        let mut scheduled_bpar = BTreeSet::new();
+        slot_operator_slot_change_probe(
+            &base,
+            &repos,
+            &[binary_parent, binary_child("maskchild", "0", "1")],
+            &empty,
+            &mut scheduled_bpar,
+            &[],
+            &mut masked_bpar,
+        );
+        assert!(masked_bpar.is_empty(), "a binary parent never probes");
         let _ = fs::remove_dir_all(&base);
     }
 
@@ -47571,7 +48094,7 @@ mod tests {
             false,
         );
         assert_eq!(latched, replace);
-        let (rescheduled, _) = slot_operator_rebuild_scan(
+        let (rescheduled, ..) = slot_operator_rebuild_scan(
             &dir,
             &[],
             &[provider, entry],
@@ -49622,6 +50145,34 @@ mod tests {
             let pos_one = ["=dev-libs/vtmneg-1.0".to_string()];
             let got_pos = visible_tree_matches(&repos, "dev-libs/vtmneg", &config, &pos_one);
             assert_eq!(got_pos, vec![("1.0".to_string(), "0".to_string())]);
+            let _ = fs::remove_dir_all(&dir);
+        }
+
+        /// Backlog #212 (v2 `#24c`): a binary-only
+        /// `slot_operator_mask_built` negative (`!=cpv[binary]`) hides
+        /// only the binary instance -- the same-version ebuild stays
+        /// visible to every string-constraint reader (real keys the
+        /// mask by package object; `match_from_list` ignores USE-deps,
+        /// so the marker would otherwise match the ebuild too -- see
+        /// [`is_binary_only_mask`]).
+        #[test]
+        fn visible_tree_matches_212_ignores_binary_only_masks() {
+            let dir = slotundo_temp_dir("212-vtm-bin");
+            let repos = repo_164(&dir, &[("dev-libs/vtmbin", "1.0", "0", "amd64", "MIT")]);
+            let mut config = test_config();
+            config.accept_license = vec!["*".to_string()];
+            // A plain negative hides the ebuild ...
+            let plain = ["!=dev-libs/vtmbin-1.0".to_string()];
+            assert_eq!(
+                visible_tree_matches(&repos, "dev-libs/vtmbin", &config, &plain),
+                Vec::new()
+            );
+            // ... while the binary-marked form leaves it visible.
+            let marked = ["!=dev-libs/vtmbin-1.0[binary]".to_string()];
+            assert_eq!(
+                visible_tree_matches(&repos, "dev-libs/vtmbin", &config, &marked),
+                vec![("1.0".to_string(), "0".to_string())]
+            );
             let _ = fs::remove_dir_all(&dir);
         }
 
