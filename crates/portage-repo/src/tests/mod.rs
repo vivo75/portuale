@@ -2041,6 +2041,29 @@ mod tests_164 {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// A binary-only `slot_operator_mask_built` negative hides only the binary
+    /// instance; the same-version ebuild stays visible (see [`is_binary_only_mask`]).
+    #[test]
+    fn visible_tree_matches_212_ignores_binary_only_masks() {
+        let dir = slotundo_temp_dir("212-vtm-bin");
+        let repos = repo_164(&dir, &[("dev-libs/vtmbin", "1.0", "0", "amd64", "MIT")]);
+        let mut config = test_config();
+        config.accept_license = vec!["*".to_string()];
+        // A plain negative hides the ebuild ...
+        let plain = ["!=dev-libs/vtmbin-1.0".to_string()];
+        assert_eq!(
+            visible_tree_matches(&repos, "dev-libs/vtmbin", &config, &plain),
+            Vec::new()
+        );
+        // ... while the binary-marked form leaves it visible.
+        let marked = ["!=dev-libs/vtmbin-1.0[binary]".to_string()];
+        assert_eq!(
+            visible_tree_matches(&repos, "dev-libs/vtmbin", &config, &marked),
+            vec![("1.0".to_string(), "0".to_string())]
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn visible_tree_matches_164_atom_still_selects_within_visible() {
         // Both versions visible here: `=...-1.0` must not leak 2.0

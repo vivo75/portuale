@@ -133,6 +133,43 @@ fn resolve_pretend_rejects_a_sub_slot_restricted_atom_that_does_not_match() {
     assert_eq!(outcome, PretendOutcome::NoVisibleCandidate);
 }
 
+/// Only a `!=cpv[binary]` negative reads as a
+/// `slot_operator_mask_built` record; other negatives read as `None`.
+#[test]
+fn slot_operator_binary_masked_version_reads_only_marked_negatives() {
+    assert_eq!(
+        slot_operator_binary_masked_version(
+            "!=dev-libs/maskchild-1.0[binary]",
+            "dev-libs",
+            "maskchild"
+        ),
+        Some("1.0".to_string())
+    );
+    assert_eq!(
+        slot_operator_binary_masked_version("!=dev-libs/maskchild-1.0", "dev-libs", "maskchild"),
+        None
+    );
+    assert_eq!(
+        slot_operator_binary_masked_version(
+            "!=dev-libs/other-1.0[binary]",
+            "dev-libs",
+            "maskchild"
+        ),
+        None
+    );
+    assert_eq!(
+        slot_operator_binary_masked_version(
+            "=dev-libs/maskchild-1.0[binary]",
+            "dev-libs",
+            "maskchild"
+        ),
+        None
+    );
+    assert!(is_binary_only_mask("!=dev-libs/maskchild-1.0[binary]"));
+    assert!(!is_binary_only_mask("!=dev-libs/maskchild-1.0"));
+    assert!(!is_binary_only_mask("=dev-libs/maskchild-1.0[binary]"));
+}
+
 /// A stale built slot-operator dep with no ebuild reports
 /// `NoVisibleCandidate` at this level; the walk rewrites the
 /// dependency case one layer up.

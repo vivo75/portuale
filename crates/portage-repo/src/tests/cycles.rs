@@ -506,6 +506,106 @@ fn find_hard_cycles_slot_op_gate_requires_the_child_slot_like_portage() {
 }
 
 #[test]
+fn find_virtual_cycles_reports_self_loop_ring_and_lollipop() {
+    // Portage fails a virtual that (transitively) requires itself through
+    // selected providers (upstream virtual-cycle test).
+    let redge = |pkg: &str| DepEdge {
+        atom: format!("virtual/{pkg}"),
+        evaluated: format!("virtual/{pkg}"),
+        category: "virtual".to_string(),
+        package: pkg.to_string(),
+        priority: DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        },
+        disjunctive: false,
+        alt: None,
+        key: 0,
+    };
+    let virt = |pkg: &str, deps: Vec<DepEdge>| {
+        let mut e = graph_entry("virtual", pkg, "1");
+        e.deps = deps;
+        e
+    };
+    let fake = Path::new("/nonexistent-root");
+    // Self-loop: the single member reports.
+    let gzip = virt("gzip", vec![redge("gzip")]);
+    assert_eq!(
+        find_virtual_cycles(&[gzip], fake),
+        vec!["virtual/gzip-1::testrepo".to_string()]
+    );
+    // Three-ring: every member reports, sorted.
+    let ring = vec![
+        virt("A", vec![redge("B")]),
+        virt("B", vec![redge("C")]),
+        virt("C", vec![redge("A")]),
+    ];
+    assert_eq!(
+        find_virtual_cycles(&ring, fake),
+        vec![
+            "virtual/A-1::testrepo".to_string(),
+            "virtual/B-1::testrepo".to_string(),
+            "virtual/C-1::testrepo".to_string(),
+        ]
+    );
+    // Lollipop: the whole recursion set reports, not just the loop.
+    let lollipop = vec![virt("X", vec![redge("Y")]), virt("Y", vec![redge("Y")])];
+    assert_eq!(
+        find_virtual_cycles(&lollipop, fake),
+        vec![
+            "virtual/X-1::testrepo".to_string(),
+            "virtual/Y-1::testrepo".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn find_virtual_cycles_ignores_non_rdepend_and_non_virtual_shapes() {
+    // Portage's stack holds virtuals only and expands RDEPEND alone.
+    let redge = |cat: &str, pkg: &str, key: u8| DepEdge {
+        atom: format!("{cat}/{pkg}"),
+        evaluated: format!("{cat}/{pkg}"),
+        category: cat.to_string(),
+        package: pkg.to_string(),
+        priority: DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        },
+        disjunctive: false,
+        alt: None,
+        key,
+    };
+    let fake = Path::new("/nonexistent-root");
+    // virtual/V → dev-libs/P → virtual/V: no report.
+    let mut v = graph_entry("virtual", "V", "1");
+    v.deps = vec![redge("dev-libs", "P", 0)];
+    let mut p = graph_entry("dev-libs", "P", "1");
+    p.deps = vec![redge("virtual", "V", 0)];
+    assert!(find_virtual_cycles(&[v, p], fake).is_empty());
+    // DEPEND-only loop: never expanded.
+    let mut d1 = graph_entry("virtual", "D1", "1");
+    d1.deps = vec![redge("virtual", "D2", 3)];
+    let mut d2 = graph_entry("virtual", "D2", "1");
+    d2.deps = vec![redge("virtual", "D1", 3)];
+    assert!(find_virtual_cycles(&[d1, d2], fake).is_empty());
+    // AlreadyInstalled virtual: not merge-bound, never expanded.
+    let mut ai = GraphEntry {
+        outcome: PretendOutcome::AlreadyInstalled {
+            version: "1".to_string(),
+        },
+        ..graph_entry("virtual", "AI", "1")
+    };
+    ai.deps = vec![redge("virtual", "AI", 0)];
+    assert!(find_virtual_cycles(&[ai], fake).is_empty());
+    // No virtual in the ring: the category gate skips it.
+    let mut n1 = graph_entry("dev-libs", "N1", "1");
+    n1.deps = vec![redge("dev-libs", "N2", 0)];
+    let mut n2 = graph_entry("dev-libs", "N2", "1");
+    n2.deps = vec![redge("dev-libs", "N1", 0)];
+    assert!(find_virtual_cycles(&[n1, n2], fake).is_empty());
+}
+
+#[test]
 fn find_virtual_cycles_ignores_a_suppressed_disjunctive_branch() {
     // The walk keeps the first written branch, so `O → D` is suppressed and the
     // loop never closes through it (a documented cut: Portage may probe the
