@@ -45007,8 +45007,8 @@ mod tests {
                         PretendOutcome::Reinstall { version, .. } => version.clone(),
                         PretendOutcome::Upgrade { to, .. }
                         | PretendOutcome::Downgrade { to, .. } => to.clone(),
-                        PretendOutcome::NoVisibleCandidate
-                        | PretendOutcome::Uninstall { .. } => "?".to_string(),
+                        PretendOutcome::NoVisibleCandidate | PretendOutcome::Uninstall { .. } =>
+                            "?".to_string(),
                     }
                 ))
                 .collect::<Vec<_>>(),
