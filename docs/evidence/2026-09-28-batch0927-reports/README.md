@@ -44,6 +44,7 @@ evidence where one was kept.
 | [`n196-report.md`](n196-report.md) | #196: the GLEP 42 news-count notice |
 | [`n230-report.md`](n230-report.md) | Track N17, #230: skipped-update block rendered like real |
 | [`r25c-report.md`](r25c-report.md) | #25 S1c gate + S2/S3 |
+| [`n196-review.md`](n196-review.md) | #196 review, cited next to its report by the #231 entry. The file on disk is the **re-review** of fix round 1 (verdict APPROVE); the first review it refers to was overwritten under the same name and is not recoverable. |
 
-Still open under 09-28 H0 step 3: repoint each citing backlog entry at
-its tracked copy here.
+The citing `backlog-tasks.md` entries (#201, #207, #231, #233, #236,
+#237, #243–#245, #247–#252) point at these tracked copies (2026-09-28).
