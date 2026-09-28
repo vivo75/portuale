@@ -2,6 +2,26 @@
 
 use crate::remote::*;
 
+/// mrg entry point for remote mode: `--remote-binpkg` runs the
+/// single-file flow, target atoms run the resolve flow (which enforces
+/// `--getbinpkgonly`). `--pretend` never reaches here (mrg routes it
+/// locally with the remote options dropped).
+pub fn run_remote_cli(matches: &ArgMatches, ctx: RemoteContext, argv: Vec<String>) -> ExitCode {
+    if ctx.binpkg.is_some() {
+        if matches.get_many::<String>("package").is_some() {
+            eprintln!("mrg: --remote-binpkg cannot be combined with target atoms");
+            return ExitCode::from(2);
+        }
+        return run_remote(&ctx);
+    }
+    // No binpkg and no atoms: the slice-1 preflight-only run (no payload,
+    // no resolve) -- `--getbinpkgonly` is only forced once targets exist.
+    if matches.get_many::<String>("package").is_none() {
+        return run_remote(&ctx);
+    }
+    run_remote_resolve(matches, ctx, argv)
+}
+
 // --- Resolve-path support ----------------------------------------------------------
 
 /// Repo position for one merged entry: `(repo name, commit hash)` from
@@ -31,6 +51,83 @@ pub(crate) fn repo_position(
         })
         .unwrap_or_else(|| "unknown".to_string());
     (name, commit)
+}
+
+/// mrg atoms-mode entry point: enforce `--getbinpkgonly`, place
+/// `/etc/portage`, hand the resolve to `pretend::run` with the remote
+/// execution published. Exit 2 = usage error, else pretend's own code.
+pub fn run_remote_resolve(
+    matches: &ArgMatches,
+    mut ctx: RemoteContext,
+    argv: Vec<String>,
+) -> ExitCode {
+    if !matches.get_flag("getbinpkgonly") {
+        eprintln!("mrg: remote execution requires --getbinpkgonly (no source build on client)");
+        return ExitCode::from(2);
+    }
+    if matches.get_flag("buildpkgonly") {
+        eprintln!(
+            "mrg: --remote-* cannot be combined with --buildpkgonly (remote runs install, not build)"
+        );
+        return ExitCode::from(2);
+    }
+    if let Some(action) = crate::mrg::action_selected(matches) {
+        eprintln!(
+            "mrg: --remote-hostname cannot be combined with --{action} (remote runs install, not actions)"
+        );
+        return ExitCode::from(2);
+    }
+    let control_dir = control_dir();
+    let control = control_dir.as_deref();
+    // Fail-early: client sanity before resolving.
+    let (values, bin) = match run_preflight_inner(&ctx, control) {
+        Ok(pair) => pair,
+        Err(message) => {
+            eprintln!("{message}");
+            return ExitCode::from(1);
+        }
+    };
+    let (mut failures, mut warnings) = evaluate_preflight(&ctx, &values);
+    // Binary gates (read-only): the plan rides the handoff into
+    // `run_remote_plan`, which installs only when units ship. Local
+    // transport without the override skips the gates and keeps
+    // `current_exe()`.
+    match bin {
+        Some(pre) => {
+            let override_given = ctx.portuale_dir.is_some();
+            let (plan, mut bin_failures, bin_notes) =
+                evaluate_bin_gates(&values, &pre, override_given);
+            failures.append(&mut bin_failures);
+            for note in bin_notes {
+                warnings.push(note);
+            }
+            ctx.bin_plan = plan;
+        }
+        None => {
+            ctx.bin_plan = ClientBinPlan::Local(crate::self_exe::self_exe().display().to_string());
+        }
+    }
+    let first_contact =
+        ctx.strict_host_key_checking == StrictHostKeyChecking::AcceptNew && is_first_contact(&ctx);
+    if !failures.is_empty() {
+        return print_preflight_report(&ctx, &failures, &warnings, first_contact);
+    }
+    print_preflight_report(&ctx, &failures, &warnings, first_contact);
+    // Place etc-portage for the resolve; `_placed` stays alive across
+    // it and its temp pull is removed best-effort on drop.
+    let _placed = match place_config_root(&ctx, control) {
+        Ok(placed) => placed,
+        Err(message) => {
+            eprintln!("{message}");
+            return ExitCode::from(1);
+        }
+    };
+    set_remote_exec(ctx);
+    let code = crate::pretend::run(&argv);
+    // Defensive: the dispatch site takes the handoff, but an early return
+    // (resolve error, unexpected action) must not leak it in-process.
+    let _ = take_remote_exec();
+    code
 }
 
 /// BFS-drop the transitive dependents of a failed package (Portage
@@ -363,4 +460,67 @@ pub(crate) fn run_one_remote_unit(args: RunOneRemoteUnitArgs<'_>) -> Result<(), 
     })?;
     record_server_ledger(server_ledger_base, &ctx.hostname, &ledger_entry)?;
     Ok(())
+}
+
+/// Entry point: connect, preflight, report. Exit 0 = every hard gate
+/// passed; 1 = a gate failed or the client is unreachable. With
+/// `--remote-binpkg`: preflight, then bundle, stream, unpack and verify
+/// one explicit binpkg file.
+pub fn run_remote(ctx: &RemoteContext) -> ExitCode {
+    // An explicit `--remote-binpkg` bundles the phase runtime into the
+    // unit, so a binary with no runtime fails here, with one message,
+    // before the first connection -- not after the preflight.
+    if ctx.binpkg.is_some()
+        && let Err(message) = crate::ebuild_phases::require_phase_runtime()
+    {
+        eprintln!("mrg: {message}");
+        return ExitCode::from(1);
+    }
+    let control_dir = control_dir();
+    let control = control_dir.as_deref();
+    // Before the first connection: afterwards the key is present even on
+    // first contact, so this decision cannot be made later.
+    let first_contact =
+        ctx.strict_host_key_checking == StrictHostKeyChecking::AcceptNew && is_first_contact(ctx);
+    let (values, bin) = match run_preflight_inner(ctx, control) {
+        Ok(pair) => pair,
+        Err(message) => {
+            eprintln!("{message}");
+            return ExitCode::from(1);
+        }
+    };
+    let (mut failures, mut warnings) = evaluate_preflight(ctx, &values);
+    // The trial path ships one unit, so it enforces the binary gates
+    // like the resolve path; the preflight-only run ships nothing and
+    // skips them (like `--pretend`, which installs nothing).
+    let mut ctx = ctx.clone();
+    if ctx.binpkg.is_some() {
+        match bin {
+            Some(pre) => {
+                let override_given = ctx.portuale_dir.is_some();
+                let (plan, mut bin_failures, bin_notes) =
+                    evaluate_bin_gates(&values, &pre, override_given);
+                failures.append(&mut bin_failures);
+                for note in bin_notes {
+                    warnings.push(note);
+                }
+                ctx.bin_plan = plan;
+            }
+            None => {
+                ctx.bin_plan =
+                    ClientBinPlan::Local(crate::self_exe::self_exe().display().to_string());
+            }
+        }
+    }
+    if !failures.is_empty() {
+        return print_preflight_report(&ctx, &failures, &warnings, first_contact);
+    }
+    print_preflight_report(&ctx, &failures, &warnings, first_contact);
+    match &ctx.binpkg {
+        None => ExitCode::from(0),
+        Some(path) => {
+            let path = Path::new(path).to_path_buf();
+            run_bundle_stage(&ctx, control, &path)
+        }
+    }
 }
