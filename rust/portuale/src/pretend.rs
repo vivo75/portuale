@@ -3542,11 +3542,18 @@ fn world_sets_additions(current: &[String], set_names: &[String]) -> Vec<String>
 /// never both). Section names are case-sensitive, option names are
 /// not (real `ConfigParser` semantics). Anything missing, unreadable,
 /// or unparsable stays a candidate -- portuale never suppresses a
-/// record it cannot prove real suppresses. Cuts: per-set single
+/// record it cannot prove real suppresses. That includes a
+/// `world-candidate` value `getboolean` rejects, where real's
+/// `_parse` (`_sets/__init__.py:259-262`) raises and aborts: a
+/// deliberate leniency, not fidelity. Cuts: per-set single
 /// sections (real routes those through `singleBuilder`, which needs a
 /// `filename`, and a same-named file set then takes the "Redefinition
-/// of set" error path) and repo `sets.conf` files (portuale models no
-/// per-repo set config) are not consulted.
+/// of set" error path), repo `sets.conf` files (portuale models no
+/// per-repo set config) and the host-global `sets.conf` real also
+/// merges (`_sets/__init__.py:352-359`) are not consulted, and the
+/// directory form is read one level deep with no skips, where real
+/// walks it recursively and skips dot, tilde and VCS entries
+/// (`:365-375`).
 fn usersets_world_candidate(config_root: &Path) -> bool {
     fn files_in(dir: &Path) -> Vec<std::path::PathBuf> {
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -3575,9 +3582,11 @@ fn usersets_world_candidate(config_root: &Path) -> bool {
         }
     }
     let mut candidate = true;
-    // Section state carries across files: real feeds every file to one
-    // `ConfigParser`, so bare keys at the top of a later file still
-    // belong to the previous file's trailing section.
+    // Section state carries across files. This is a leniency, not real's
+    // behaviour: real `read_configs` (`util/configparser.py:29-58`) calls
+    // `read_file` once per file, which resets the section, so bare keys at
+    // the top of a later fragment raise `MissingSectionHeaderError` and
+    // abort. Malformed input only.
     let mut in_usersets = false;
     for path in &paths {
         let Ok(text) = std::fs::read_to_string(path) else {
