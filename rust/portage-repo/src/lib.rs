@@ -11348,6 +11348,54 @@ fn atom_installed_in_slot_of(
 /// Returns `false` for an empty or all-blocker alternative (nothing to be
 /// "in graph"); the caller's own zero-atom / circular-self handling
 /// covers those cases first.
+/// Real `dep_zapdeps`'s per-atom `all_in_graph` test (`dep_check.py:636-649`;
+/// see `atoms_all_in_graph` for the whole-alternative predicate): the atom
+/// is satisfied by a package already added to the graph this run
+/// (merge-bound), with `[use]` deps checked against that entry's resolved
+/// USE. Split out of `atoms_all_in_graph` so the circular-self-dep check
+/// in `disjunction_preference` can ask the same question for one atom: a
+/// self-naming atom that matches an in-graph node is real's pass-1
+/// `preferred_in_graph` pick (backlog #216), not a circle to refuse.
+fn atom_matches_graph(
+    atom_str: &str,
+    entries: &[GraphEntry],
+    config: &portage_profile::Config,
+    queued_cps: &HashSet<(String, String)>,
+) -> bool {
+    let Some(parsed) = portage_dep::parse_atom(atom_str) else {
+        return false;
+    };
+    if parsed.blocker != portage_dep::Blocker::None {
+        return false;
+    }
+    if queued_cps.contains(&(parsed.category.clone(), parsed.package.clone())) {
+        return true;
+    };
+    let use_deps = parsed.use_deps.unwrap_or_default();
+    entries.iter().any(|e| {
+        let Some(cpv) = merge_bound_cpv(e) else {
+            return false;
+        };
+        if e.category != parsed.category || e.package != parsed.package {
+            return false;
+        }
+        if portage_dep::match_from_list(atom_str, &[cpv.as_str()]).is_none_or(|m| m.is_empty()) {
+            return false;
+        }
+        if use_deps.is_empty() {
+            return true;
+        }
+        let enabled: HashSet<String> = e
+            .use_flags_display
+            .iter()
+            .filter(|(_, on)| *on)
+            .map(|(f, _)| f.clone())
+            .collect();
+        let iuse: HashSet<String> = e.use_flags_display.iter().map(|(f, _)| f.clone()).collect();
+        portage_dep::use_deps_satisfied(&use_deps, &valid_iuse(&iuse, config), &enabled)
+    })
+}
+
 fn atoms_all_in_graph(
     atoms: &[String],
     entries: &[GraphEntry],
@@ -11380,38 +11428,9 @@ fn atoms_all_in_graph(
             portage_dep::parse_atom(&q.atom).map(|a| (a.category.clone(), a.package.clone()))
         })
         .collect();
-    non_blocker.iter().all(|a| {
-        let Some(parsed) = portage_dep::parse_atom(a) else {
-            return false;
-        };
-        if queued_cps.contains(&(parsed.category.clone(), parsed.package.clone())) {
-            return true;
-        };
-        let use_deps = parsed.use_deps.unwrap_or_default();
-        entries.iter().any(|e| {
-            let Some(cpv) = merge_bound_cpv(e) else {
-                return false;
-            };
-            if e.category != parsed.category || e.package != parsed.package {
-                return false;
-            }
-            if portage_dep::match_from_list(a, &[cpv.as_str()]).is_none_or(|m| m.is_empty()) {
-                return false;
-            }
-            if use_deps.is_empty() {
-                return true;
-            }
-            let enabled: HashSet<String> = e
-                .use_flags_display
-                .iter()
-                .filter(|(_, on)| *on)
-                .map(|(f, _)| f.clone())
-                .collect();
-            let iuse: HashSet<String> =
-                e.use_flags_display.iter().map(|(f, _)| f.clone()).collect();
-            portage_dep::use_deps_satisfied(&use_deps, &valid_iuse(&iuse, config), &enabled)
-        })
-    })
+    non_blocker
+        .iter()
+        .all(|a| atom_matches_graph(a, entries, config, &queued_cps))
 }
 
 /// The visible tree candidates matching `atom_str` (USE deps ignored) after
@@ -11646,7 +11665,11 @@ fn alternative_downgrade_demoted(
 /// / "also borrowed as mutable" conflict this hit against the
 /// `'backtrack` loop's later `slot_constraints.entry(...)` mutations.
 /// `self_cp` is the entry currently being resolved, for the
-/// circular-self-dep check; `root_deps_running_root` is the `--root-deps`
+/// circular-self-dep check; `circular_dep` is the `'backtrack` loop's
+/// `circular_dependency` map (owner `cat/pkg` → circular-child cpv
+/// strings; empty on the first pass, a strict no-op) -- real
+/// `dep_zapdeps`' `circular_atom` demotion (`dep_check.py:673-691`),
+/// backlog #216. `root_deps_running_root` is the `--root-deps`
 /// feed-in (`None` = strict no-op). See `atom_currently_satisfiable`'s,
 /// `atom_all_use_unmasked`'s, `atom_cp_installed`'s and
 /// `atom_installed_in_slot_of`'s own doc comments for the per-predicate
@@ -11669,6 +11692,7 @@ fn disjunction_preference(
     entries: &[GraphEntry],
     self_cp: &(String, String),
     constraints: &HashMap<(String, String), Vec<String>>,
+    circular_dep: &HashMap<(String, String), Vec<String>>,
     root_deps_running_root: Option<&Path>,
     atoms: &[String],
     queued: &[QueueItem],
@@ -11685,16 +11709,47 @@ fn disjunction_preference(
     // Portuale's own bolt-on (real has no equivalent): once true, the
     // alternative is hard `Unsatisfiable` in BOTH passes below, never
     // promoted into one of the `other_*` bins the way a genuine
-    // `!all_available` atom is -- selecting it even as a last resort
-    // would let a package self-satisfy its own not-yet-resolved atom.
+    // `!all_available` atom is.
+    //
+    // Backlog #216: narrowed to real's actual pass-1 rule. Real has no
+    // self-exclusion at all -- `_create_graph` adds the package to the
+    // digraph before walking its deps (`_add_pkg` at select time), so by
+    // the time the owner's own `||` group pops off
+    // `_dep_disjunctive_stack` the self-naming atom matches an in-graph
+    // node and the alternative ranks `preferred_in_graph` (bin 0): the
+    // cycle forms, then `_serialize_tasks` dead-ends and the
+    // `circular_dependency` map re-resolves it (see
+    // `BacktrackParams::circular_dependency`). Only a self atom matching
+    // nothing in-graph (and nothing installed) stays `Unsatisfiable` --
+    // selecting it even as a last resort would let a package
+    // self-satisfy its own not-yet-resolved atom.
     let mut circular = false;
+    // Backlog #90 (S1)'s drain-state approximation (see
+    // `atoms_all_in_graph`), built lazily: only a self-naming atom needs
+    // it, and most alternatives have none.
+    let mut queued_cps: Option<HashSet<(String, String)>> = None;
     for a in atoms {
-        let circular_self = portage_dep::parse_atom(a).is_some_and(|at| {
+        let self_naming = portage_dep::parse_atom(a).is_some_and(|at| {
             at.blocker == portage_dep::Blocker::None
                 && (at.category.clone(), at.package.clone()) == *self_cp
-                && !atom_cp_installed(root, a)
         });
-        if circular_self {
+        if self_naming
+            && !atom_cp_installed(root, a)
+            && !atom_matches_graph(
+                a,
+                entries,
+                config,
+                queued_cps.get_or_insert_with(|| {
+                    queued
+                        .iter()
+                        .filter_map(|q| {
+                            portage_dep::parse_atom(&q.atom)
+                                .map(|at| (at.category.clone(), at.package.clone()))
+                        })
+                        .collect()
+                }),
+            )
+        {
             all_available = false;
             circular = true;
             break;
@@ -11810,16 +11865,49 @@ fn disjunction_preference(
     ) {
         return portage_use_reduce::AltPreference::Other;
     }
-    // Backlog #22 slice 5 (`docs/history/022-agent-task-22-zapdeps.fable.md` §4):
-    // one further demotion stays a documented cut, needing inputs
-    // portuale's architecture doesn't have:
-    //   - `circular_atom` (soft 649-682): needs `circular_dependency`
-    //     (populated by an earlier, separate real backtrack pass this
-    //     alternative isn't itself running inside of) and
-    //     `parent.onlydeps` (the `--onlydeps` CLI flag, not threaded to
-    //     this call depth).
-    // It belongs with the circular-dependency backtracking work if those
-    // inputs ever get mapped, per the brief's own slice-5 note.
+    // Backlog #216: real `dep_zapdeps`' `circular_atom` demotion
+    // (`dep_check.py:673-691`) -- the first half of backlog #22 slice
+    // 5's documented cut, whose input is now mapped. Once
+    // `_serialize_tasks` dead-ends on a hard cycle, real records every
+    // (node → predecessor) edge in the `circular_dependency` backtrack
+    // map (`depgraph.py:10262-10289`, carried here as `circular_dep`:
+    // owner cp → circular-child cpv strings), and the next pass demotes any
+    // `all_available` alternative with an atom matching a recorded
+    // child straight to `other`, below every real bin -- so
+    // `dev-lang/go`'s own `BDEPEND=|| ( >=dev-lang/go-X
+    // dev-lang/go-bootstrap )` takes `go-bootstrap` on the re-resolve.
+    // Blockers are skipped, and an atom satisfied by an installed
+    // instance is not circular (real's own `vardb.match(atom)`
+    // exemption -- a "cycle" through an installed package is no
+    // deadlock). The `parent.onlydeps` half of real's check stays a
+    // documented cut (the `--onlydeps` CLI flag is not threaded to this
+    // call depth, and mis-threading it breaks bug 756961's own test
+    // case), as does `virt_parent` (no virtual-parent notion here).
+    if let Some(children) = circular_dep.get(self_cp) {
+        for child_cpv in children {
+            let mut demote = false;
+            for a in atoms {
+                let Some(at) = portage_dep::parse_atom(a) else {
+                    continue;
+                };
+                if at.blocker != portage_dep::Blocker::None {
+                    continue;
+                }
+                if atom_matches_installed(root, a, config) {
+                    continue;
+                }
+                if portage_dep::match_from_list(a, &[child_cpv.as_str()])
+                    .is_some_and(|m| !m.is_empty())
+                {
+                    demote = true;
+                    break;
+                }
+            }
+            if demote {
+                return portage_use_reduce::AltPreference::Other;
+            }
+        }
+    }
     if all_use_satisfied {
         // Real `dep_zapdeps` choice bin 0 -- the single list
         // `preferred_in_graph` / `preferred_installed` / `preferred_any_slot`
@@ -16762,6 +16850,101 @@ fn merge_bound_index(entries: &[GraphEntry]) -> HashMap<(&str, &str), usize> {
 /// `medium_soft` rung) and feeds only `large_cycle_count` and the
 /// cycle-only re-display -- this stays the short hard ring the message
 /// and the suggestions render.
+///
+/// Backlog #216: a same-cp edge is a cycle only when it targets the
+/// owner's own instance. `owner_self_loop` is that test: one of the
+/// owner's kept `deps` edges (inline, or on the `||` branch the walk
+/// selected -- a suppressed alternative's edge is not in real's
+/// digraph) names the owner's own `cat/pkg` and its atom matches the
+/// owner's merge-bound cpv. `>=dev-lang/go-X` against in-graph `go-X`
+/// loops; `=foo-2` against `foo-1` (a same-cp cross-slot edge, ordinary
+/// in real's package-keyed digraph) does not.
+///
+/// Scope gate for the serialize-dead-end retry in `collect_feedback`
+/// (`cycle_restartable`, below): only a fresh single-node self-loop
+/// closed by a kept `||` self-branch retries. That is exactly the `||`
+/// pick this slice ports (real's pass-1 `preferred_in_graph` self
+/// choice, `dep_check.py`); everything else keeps today's
+/// report-no-retry path:
+/// - multi-node rings are backlog #221's general branch-switching scope
+///   (G18, EAPI-gated), whose display-side (`kept_alt_branches`)
+///   re-derivation and merge-vs-installed bookkeeping this slice does
+///   not re-model;
+/// - an inline (branch-less) self-dep has no alternative branch a retry
+///   could switch to;
+/// - an installed instance of the owner cp means the demoted branch
+///   lands on installed subgraphs (slot_want unification, display
+///   re-derivation), same scope cut.
+///
+/// `kept` is `kept_alt_branches` over the same entries.
+fn cycle_restartable(
+    entries: &[GraphEntry],
+    kept: &[HashSet<usize>],
+    cycle: &[String],
+    root: &Path,
+) -> bool {
+    let [node_cpv] = cycle else {
+        return false;
+    };
+    let Some((cat, pkg, _)) = split_cpv(node_cpv) else {
+        return false;
+    };
+    // Fresh: no installed instance of the owner cp, so the demoted
+    // retry only ever pulls fresh merges, never installed subgraphs.
+    if !installed_candidates(root, &cat, &pkg).is_empty() {
+        return false;
+    }
+    let Some(owner_idx) = entries.iter().position(|e| {
+        e.category == cat && e.package == pkg && merge_bound_cpv(e).as_deref() == Some(node_cpv)
+    }) else {
+        return false;
+    };
+    let Some(owner_cpv) = merge_bound_cpv(&entries[owner_idx]) else {
+        return false;
+    };
+    entries[owner_idx].deps.iter().enumerate().any(|(ei, d)| {
+        d.alt.is_some()
+            && kept[owner_idx].contains(&ei)
+            && d.category == cat
+            && d.package == pkg
+            && !d.priority.optional
+            && portage_dep::match_from_list(&d.atom, &[owner_cpv.as_str()])
+                .is_some_and(|m| !m.is_empty())
+    })
+}
+
+/// Scope: self-loops touching an installed instance stay invisible
+/// (like before this slice). Real deadlocks on them too, but only ever
+/// as a transient: its `circular_dependency` retry re-resolves past
+/// them, which needs the merge-vs-installed bookkeeping (slot_want
+/// unification, display re-derivation) backlog #221's general
+/// branch-switching scope (G18, EAPI-gated) owns. Reporting one here
+/// would flip an outcome-correct resolve (the invisible self-edge never
+/// constrained order or display) into a spurious circular abort, so the
+/// retry gate (`cycle_restartable`, below) never sees them either --
+/// fresh self-loops only, both sides consistent.
+fn owner_self_loop(
+    entries: &[GraphEntry],
+    kept: &[std::collections::HashSet<usize>],
+    oi: usize,
+    root: &Path,
+) -> bool {
+    let Some(owner_cpv) = merge_bound_cpv(&entries[oi]) else {
+        return false;
+    };
+    if !installed_candidates(root, &entries[oi].category, &entries[oi].package).is_empty() {
+        return false;
+    }
+    entries[oi].deps.iter().enumerate().any(|(ei, d)| {
+        (d.alt.is_none() || kept[oi].contains(&ei))
+            && d.category == entries[oi].category
+            && d.package == entries[oi].package
+            && !d.priority.optional
+            && portage_dep::match_from_list(&d.atom, &[owner_cpv.as_str()])
+                .is_some_and(|m| !m.is_empty())
+    })
+}
+
 fn find_hard_cycles(
     entries: &[GraphEntry],
     edge_kind_map: &EdgeKindMap,
@@ -16801,13 +16984,23 @@ fn find_hard_cycles(
         ) else {
             continue;
         };
-        if oi == di {
-            continue;
-        }
         // Backlog #228: the walk's `(true, false)` arm, or the
         // slot-op deps arm (an `RDEPEND` `:=` edge is never
         // `buildtime_hard`, so the map alone can never see it).
-        if (*has_hard && !*has_soft) || slot_op_hard(oi, di) {
+        let hard = (*has_hard && !*has_soft) || slot_op_hard(oi, di);
+        if oi == di {
+            // Backlog #216: a same-cp edge is a cycle only when it
+            // targets the owner's own instance (real's digraph keys by
+            // package, so `foo:1 → foo:2` is an ordinary edge while
+            // `go → go` deadlocks `_serialize_tasks`). The kept
+            // branch's atom decides, matched against the owner's
+            // merge-bound cpv.
+            if hard && owner_self_loop(entries, &kept, oi, root) {
+                adj[oi].push(oi);
+            }
+            continue;
+        }
+        if hard {
             adj[oi].push(di);
         }
     }
@@ -16825,12 +17018,16 @@ fn find_hard_cycles(
             {
                 continue;
             }
-            let Some(&di) = cp_index
-                .get(&(dep.category.as_str(), dep.package.as_str()))
-                .filter(|&&di| di != oi)
-            else {
+            let Some(&di) = cp_index.get(&(dep.category.as_str(), dep.package.as_str())) else {
                 continue;
             };
+            // Backlog #216: same true-self-loop gate as the map arm
+            // above -- a same-cp slot-op edge on a suppressed branch,
+            // or one whose atom does not match the owner's own
+            // instance, is no cycle.
+            if di == oi && !owner_self_loop(entries, &kept, oi, root) {
+                continue;
+            }
             if !dep_edge_satisfied_by_installed(root, dep, Some(&entries[di]))
                 && !adj[oi].contains(&di)
             {
@@ -17639,6 +17836,10 @@ fn collect_unwalked_installed_blockers(
     dynamic_deps: bool,
     ignore_built_slot_operator_deps: bool,
     disj_constraints: &HashMap<(String, String), Vec<String>>,
+    // Backlog #216: the loop's `circular_dependency` map, for the same
+    // `||` demotion the two dep-walk sites apply (this scan's branch
+    // ranking decides which branch's blockers surface).
+    circular_dep: &HashMap<(String, String), Vec<String>>,
     root_deps_running_root: Option<&Path>,
     entries: &[GraphEntry],
     pending_blockers: &mut Vec<PendingBlocker>,
@@ -17726,6 +17927,7 @@ fn collect_unwalked_installed_blockers(
                     entries,
                     &self_cp,
                     disj_constraints,
+                    circular_dep,
                     root_deps_running_root,
                     atoms,
                     &[],
@@ -21990,6 +22192,7 @@ fn params_equal(a: &BacktrackParams, b: &BacktrackParams) -> bool {
         && a.reverse_dep_pins == b.reverse_dep_pins
         && a.slot_constraints == b.slot_constraints
         && a.runtime_pkg_mask == b.runtime_pkg_mask
+        && a.circular_dependency == b.circular_dependency
         && a.autounmask_use_config == b.autounmask_use_config
         && a.autounmask_use_change_records == b.autounmask_use_change_records
         && a.autounmask_use_broke == b.autounmask_use_broke
@@ -22110,9 +22313,9 @@ impl Backtracker {
             .expect("feedback() only after get() returned params");
         let current_terminal = self.nodes[current_idx].terminal;
         let (mut params, terminal, mask_cost) = match kind {
-            BacktrackFeedback::Config { params } | BacktrackFeedback::RevDep { params } => {
-                (*params, current_terminal, 0)
-            }
+            BacktrackFeedback::Config { params }
+            | BacktrackFeedback::RevDep { params }
+            | BacktrackFeedback::Circular { params } => (*params, current_terminal, 0),
             BacktrackFeedback::SlotConflict { base, choices } => {
                 // #57 S1: keep the pass's merged accumulators on the node
                 // itself, exactly as `PassDecision::DeadEnd` does -- the
@@ -22401,6 +22604,17 @@ enum BacktrackFeedback {
         base: Box<BacktrackParams>,
         choices: Vec<MaskChoice>,
     },
+    /// Backlog #216: the serialize dead-end retry (real
+    /// `_serialize_tasks`' `not selected_nodes` branch setting
+    /// `_need_restart` with a grown `circular_dependency` map). Carries
+    /// the grown working copy like `Config`/`RevDep` and behaves
+    /// identically inside the search (budget-free re-pass, not a mask
+    /// step): the driver explores it when backtracking and settles the
+    /// pass as-is under `--backtrack=0`, where it renders the circular
+    /// abort like real's own pass-0 display.
+    Circular {
+        params: Box<BacktrackParams>,
+    },
     MissingDep {
         base: Box<BacktrackParams>,
         owner: (String, String),
@@ -22460,6 +22674,24 @@ struct BacktrackParams {
     /// (real's `dep.parent not in _runtime_pkg_mask` check) holds every
     /// `!=parent-cpv` already tried, guaranteeing termination.
     missing_dep_masked: HashSet<String>,
+    /// Backlog #216: real `_serialize_tasks`' circular dead-end
+    /// (`depgraph.py:10262-10289`, the `not selected_nodes` branch of
+    /// `_serialize_tasks`' `altlist`): the walk finished but a hard
+    /// cycle -- now including a true self-loop, see `find_hard_cycles`
+    /// -- leaves nodes unselectable. Real records every (node → its
+    /// predecessor in the cycle) edge into the `circular_dependency`
+    /// backtrack map, and the next pass's `dep_zapdeps` demotes any
+    /// `||` alternative matching a recorded child to `other`
+    /// (`dep_check.py:673-691` -- see `disjunction_preference`'s
+    /// `circular_dep` argument). Owner `(cat, pkg)` → circular-child cpv
+    /// strings (real keys by `Package`; the cpv carries the same
+    /// identity for `match_from_list`, and the installed exemption is
+    /// re-checked at use). Compared by `params_equal` (new edges = new
+    /// search state); monotone along a search path and bounded by the
+    /// owner×child product, so the loop terminates: a pass whose cycle
+    /// adds nothing new is an unsolved cycle (real's `unsolved_cycle` →
+    /// `_skip_restart`), reported, not retried.
+    circular_dependency: HashMap<(String, String), Vec<String>>,
     /// Real `_complete_graph`'s own parent atoms, discovered by vdb
     /// reverse scan -- see `reverse_dependency_constraints`. Latches every
     /// `(cat/pkg, atom)` already folded into `slot_constraints` so a
@@ -23912,6 +24144,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     &mut state.installed_meta_memo,
                     &mut state.slot_pullers,
                     &union_constraints,
+                    &bp.circular_dependency,
                     ctx.update,
                     &ctx.local_binpkg,
                 );
@@ -25243,15 +25476,15 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         // alternative wins on the retry -- `disjunction_preference`
         // takes `slot_constraints` itself (not a lookup closure over
         // it; see that function's own doc comment for why).
-        // Real `dep_zapdeps` skips a `||` alternative that would only
-        // be satisfied by the package currently being resolved (a
-        // circular self-dep) -- e.g. `dev-lang/go`'s BDEPEND
-        // `|| ( >=dev-lang/go-<min> >=dev-lang/go-bootstrap-<min> )`
-        // with nothing installed: the first branch's only tree match
-        // *is* `dev-lang/go`, so real falls through to the
-        // `go-bootstrap` branch. An atom whose `cat/pkg` is this
-        // entry's own and which nothing installed satisfies counts
-        // as unavailable here.
+        // Backlog #216: real `dep_zapdeps` has no self-exclusion on the
+        // first pass -- e.g. `dev-lang/go`'s BDEPEND
+        // `|| ( >=dev-lang/go-<min> dev-lang/go-bootstrap-<min> )` with
+        // in-graph `go` ranks the first branch `preferred_in_graph`
+        // (bin 0), so the cycle forms and the `circular_dependency`
+        // map re-resolves it (`BacktrackParams::circular_dependency`);
+        // only a self atom matching nothing in-graph (and nothing
+        // installed) refuses. See `disjunction_preference`'s own
+        // circular-self-dep check.
         let self_cp = (
             state.entries[entry_idx].category.clone(),
             state.entries[entry_idx].package.clone(),
@@ -25279,6 +25512,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     &state.entries,
                     &self_cp,
                     &union_constraints,
+                    &bp.circular_dependency,
                     ctx.root_deps_running_root,
                     atoms,
                     &queued,
@@ -25726,6 +25960,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             ctx.dynamic_deps,
             ctx.ignore_built_slot_operator_deps,
             &union_constraints,
+            &bp.circular_dependency,
             ctx.root_deps_running_root,
             &state.entries,
             &mut state.pending_blockers,
@@ -25939,6 +26174,71 @@ fn collect_feedback(
                 grown.dropped_pins.push(pin);
             }
         }
+    }
+
+    // Backlog #216: real `_serialize_tasks`' circular dead-end
+    // (`depgraph.py:10262-10289`). The walk finished but the merge-bound
+    // graph does not serialize: a hard build-time cycle -- now including
+    // a true self-loop (see `find_hard_cycles`) -- leaves nodes
+    // unselectable. Real records every (node → its predecessor in the
+    // cycle) edge into the `circular_dependency` backtrack map and
+    // retries, and the next pass's `dep_zapdeps` demotes the matching
+    // `||` branch to `other` (see `disjunction_preference`'s
+    // `circular_dep` argument). A cycle that adds nothing new is
+    // unsolved (real's `unsolved_cycle` → `_skip_restart`): a dead end,
+    // reported from the best run, not retried.
+    //
+    // Scope (`cycle_restartable`): only the fresh self-pick shape
+    // retries. Every other hard cycle falls through to the pre-existing
+    // arms exactly as before (a walk-time NVC still beats it below,
+    // multi-node rings still settle into the abort path via
+    // `assemble_result`), so their reports are byte-identical with and
+    // without this slice.
+    //
+    // Placed before the slot-conflict arms: a deadlocked graph pre-empts
+    // conflict repair (real never reaches conflict processing with a
+    // failed serialize); a re-pass whose demotion clears the cycle
+    // re-runs those arms normally.
+    let hard_cycles = find_hard_cycles(&pass.entries, &pass.edge_kind_map, ctx.root);
+    if hard_cycles.len() == 1
+        && cycle_restartable(
+            &pass.entries,
+            &kept_alt_branches(&pass.entries, ctx.root),
+            &hard_cycles[0],
+            ctx.root,
+        )
+    {
+        let mut new_info = false;
+        for cycle in &hard_cycles {
+            for (index, node_cpv) in cycle.iter().enumerate() {
+                let Some((node_cat, node_pkg, _)) = split_cpv(node_cpv) else {
+                    continue;
+                };
+                // Real's own predecessor formula: `cycle[-1]` for index
+                // 0, `cycle[index-1]` otherwise.
+                let child_cpv = if index == 0 {
+                    &cycle[cycle.len() - 1]
+                } else {
+                    &cycle[index - 1]
+                };
+                let bucket = grown
+                    .circular_dependency
+                    .entry((node_cat, node_pkg))
+                    .or_default();
+                if !bucket.contains(child_cpv) {
+                    bucket.push(child_cpv.clone());
+                    new_info = true;
+                }
+            }
+        }
+        if new_info {
+            return PassDecision::Feedback(BacktrackFeedback::Circular {
+                params: Box::new(grown),
+            });
+        }
+        return PassDecision::DeadEnd {
+            params: Box::new(grown),
+        };
     }
 
     // Backtracking (real `backtracking.py` retry loop driven by
@@ -26898,7 +27198,8 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
                         kind => {
                             let grown: BacktrackParams = match kind {
                                 BacktrackFeedback::Config { params }
-                                | BacktrackFeedback::RevDep { params } => *params,
+                                | BacktrackFeedback::RevDep { params }
+                                | BacktrackFeedback::Circular { params } => *params,
                                 BacktrackFeedback::SlotConflict { base, .. } => *base,
                                 BacktrackFeedback::MissingDep { base, .. } => *base,
                             };
@@ -27414,6 +27715,11 @@ fn enqueue_dependencies(
     // selection the same way the main New/Upgrade loop's is -- empty on
     // the first pass, so a strict no-op there.
     disj_constraints: &HashMap<(String, String), Vec<String>>,
+    // Backlog #216: the loop's `circular_dependency` map (owner cp →
+    // circular-child cpvs), consulted by the same `||` selection for
+    // real `dep_zapdeps`' `circular_atom` demotion -- empty on the first
+    // pass, so a strict no-op there.
+    circular_dep: &HashMap<(String, String), Vec<String>>,
     // Backlog #90 (S1): `--update`, for the downgrade-guard's
     // queued-update lookahead (same feed as the main walk's
     // `ctx.update` at its own `disjunction_preference` call).
@@ -27522,9 +27828,9 @@ fn enqueue_dependencies(
     // New/Upgrade/Reinstall loop's own identical fix, above, for the
     // full grounding (this is `resolve_pretend_graph`'s own
     // `--deep`/AlreadyInstalled-recursion counterpart to it).
-    // Real `dep_zapdeps` skips a `||` alternative satisfied only by the
-    // package currently being resolved (circular self-dep) -- see the
-    // main New/Upgrade `||` closure's identical `self_cp` check.
+    // Backlog #216: no self-exclusion on the first pass (see the main
+    // walk's note above) -- the shared `disjunction_preference` check
+    // applies here unchanged.
     let self_cp = (category.to_string(), package.to_string());
     // The whole `dep_zapdeps` choice-bin classification lives in the
     // single shared `disjunction_preference` helper -- see its own doc
@@ -27546,6 +27852,7 @@ fn enqueue_dependencies(
                 entries,
                 &self_cp,
                 disj_constraints,
+                circular_dep,
                 root_deps_running_root,
                 atoms,
                 &queued,
@@ -38148,6 +38455,156 @@ mod tests {
             },
         ];
         assert!(find_hard_cycles(&installed, &hard, Path::new("/nonexistent-root")).is_empty());
+    }
+
+    /// Backlog #216: a true self-loop -- the kept `||` branch's atom
+    /// matching the owner's own merge-bound cpv -- reports the
+    /// one-member ring (real deadlocks on `go → go` in
+    /// `_serialize_tasks`), while a same-cp cross-slot edge
+    /// (`=hcs-2.0` against merged `hcs-1.0`, ordinary in real's
+    /// package-keyed digraph) does not. The `oi == di` gate and the
+    /// atom-match `&&` widening fail here.
+    #[test]
+    fn find_hard_cycles_reports_a_true_self_loop_but_not_a_cross_slot_edge() {
+        let hardcpv = |p: &str, v: &str| format!("dev-libs/{p}-{v}");
+        let cp = |p: &str| ("dev-libs".to_string(), p.to_string());
+        let buildtime = DepPriority {
+            buildtime: true,
+            ..DepPriority::default()
+        };
+        let self_edge = |pkg: &str, atom: &str, branch: Option<u32>| DepEdge {
+            atom: atom.to_string(),
+            evaluated: atom.to_string(),
+            category: "dev-libs".to_string(),
+            package: pkg.to_string(),
+            priority: buildtime,
+            disjunctive: branch.is_some(),
+            alt: branch.map(|b| (0, b)),
+            key: 4,
+        };
+        let mut entries = vec![graph_entry("dev-libs", "hcs", "1.0")];
+        entries[0].deps = vec![self_edge("hcs", ">=dev-libs/hcs-1.0", Some(0))];
+        let mut hard: EdgeKindMap = HashMap::new();
+        hard.insert((cp("hcs"), cp("hcs")), (true, false));
+        assert_eq!(
+            find_hard_cycles(&entries, &hard, Path::new("/nonexistent-root")),
+            vec![vec![hardcpv("hcs", "1.0")]]
+        );
+
+        // Same-cp cross-slot edge: the atom names another version, so
+        // the owner's own instance is not its target -- no cycle.
+        let mut cross = vec![graph_entry("dev-libs", "hcs", "1.0")];
+        cross[0].deps = vec![self_edge("hcs", "=dev-libs/hcs-2.0", Some(0))];
+        assert!(find_hard_cycles(&cross, &hard, Path::new("/nonexistent-root")).is_empty());
+
+        // An inline (non-`||`) self edge with a matching atom loops too.
+        let mut inline = vec![graph_entry("dev-libs", "hcs", "1.0")];
+        inline[0].deps = vec![self_edge("hcs", "dev-libs/hcs", None)];
+        assert_eq!(
+            find_hard_cycles(&inline, &hard, Path::new("/nonexistent-root")),
+            vec![vec![hardcpv("hcs", "1.0")]]
+        );
+
+        // A self-loop touching an installed instance stays invisible
+        // (backlog #216 scope: reporting it would flip an
+        // outcome-correct resolve into a spurious circular abort; the
+        // retry that would re-resolve past it is #221's scope).
+        let root = std::env::temp_dir().join(format!(
+            "portuale-selfloop-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let inst_dir = root.join("var/db/pkg/dev-libs/hcs-1.0");
+        std::fs::create_dir_all(&inst_dir).unwrap();
+        std::fs::write(inst_dir.join("SLOT"), "0\n").unwrap();
+        assert!(find_hard_cycles(&entries, &hard, &root).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Backlog #216: the serialize-dead-end retry fires only for a fresh
+    /// single-node self-loop closed by a kept `||` self-branch. A
+    /// two-node ring, an inline self-dep, and a self-loop with an
+    /// installed instance of the owner keep today's report-no-retry
+    /// path (multi-node rings are #221's scope; the installed cases
+    /// entangle merge-vs-installed bookkeeping this slice does not
+    /// re-model). Each gate `&&` fails here.
+    #[test]
+    fn cycle_restartable_gates_the_retry_to_fresh_branch_self_loops() {
+        let buildtime = DepPriority {
+            buildtime: true,
+            ..DepPriority::default()
+        };
+        let self_edge = |pkg: &str, atom: &str, branch: Option<u32>| DepEdge {
+            atom: atom.to_string(),
+            evaluated: atom.to_string(),
+            category: "dev-libs".to_string(),
+            package: pkg.to_string(),
+            priority: buildtime,
+            disjunctive: branch.is_some(),
+            alt: branch.map(|b| (0, b)),
+            key: 4,
+        };
+        let fresh_root = Path::new("/nonexistent-root");
+        let mut fresh = vec![graph_entry("dev-libs", "hcs", "1.0")];
+        fresh[0].deps = vec![self_edge("hcs", ">=dev-libs/hcs-1.0", Some(0))];
+        let kept = kept_alt_branches(&fresh, fresh_root);
+        assert!(cycle_restartable(
+            &fresh,
+            &kept,
+            &["dev-libs/hcs-1.0".to_string()],
+            fresh_root
+        ));
+
+        // A two-node ring never retries.
+        let pair = vec![
+            graph_entry("dev-libs", "hcs", "1.0"),
+            graph_entry("dev-libs", "hct", "1.0"),
+        ];
+        let kept_pair = kept_alt_branches(&pair, fresh_root);
+        assert!(!cycle_restartable(
+            &pair,
+            &kept_pair,
+            &[
+                "dev-libs/hcs-1.0".to_string(),
+                "dev-libs/hct-1.0".to_string()
+            ],
+            fresh_root
+        ));
+
+        // An inline (branch-less) self-dep never retries.
+        let mut inline = vec![graph_entry("dev-libs", "hcs", "1.0")];
+        inline[0].deps = vec![self_edge("hcs", "dev-libs/hcs", None)];
+        let kept_inline = kept_alt_branches(&inline, fresh_root);
+        assert!(!cycle_restartable(
+            &inline,
+            &kept_inline,
+            &["dev-libs/hcs-1.0".to_string()],
+            fresh_root
+        ));
+
+        // An installed instance of the owner never retries.
+        let root = std::env::temp_dir().join(format!(
+            "portuale-restartable-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let inst_dir = root.join("var/db/pkg/dev-libs/hcs-1.0");
+        std::fs::create_dir_all(&inst_dir).unwrap();
+        std::fs::write(inst_dir.join("SLOT"), "0\n").unwrap();
+        let kept_fresh = kept_alt_branches(&fresh, &root);
+        assert!(!cycle_restartable(
+            &fresh,
+            &kept_fresh,
+            &["dev-libs/hcs-1.0".to_string()],
+            &root
+        ));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -52844,6 +53301,7 @@ mod tests {
             false,
             false,
             &constraints,
+            &HashMap::new(),
             None,
             &[installed],
             &mut pending,
@@ -52869,6 +53327,7 @@ mod tests {
             false,
             false,
             &constraints,
+            &HashMap::new(),
             None,
             &[upgrade],
             &mut pending,
@@ -53797,6 +54256,32 @@ mod tests_162 {
         atoms: &[&str],
         queued: &[QueueItem],
     ) -> portage_use_reduce::AltPreference {
+        disj_162_circ(
+            repos,
+            config,
+            root,
+            entries,
+            self_cp,
+            atoms,
+            queued,
+            &HashMap::new(),
+        )
+    }
+
+    /// `disj_162` with an explicit `circular_dependency` map (backlog
+    /// #216) -- owner cp → circular-child cpv strings, like the
+    /// `'backtrack` loop carries.
+    #[allow(clippy::too_many_arguments)]
+    fn disj_162_circ(
+        repos: &[RepoConfig],
+        config: &portage_profile::Config,
+        root: &Path,
+        entries: &[GraphEntry],
+        self_cp: &(String, String),
+        atoms: &[&str],
+        queued: &[QueueItem],
+        circular_dep: &HashMap<(String, String), Vec<String>>,
+    ) -> portage_use_reduce::AltPreference {
         disjunction_preference(
             repos,
             config,
@@ -53804,6 +54289,7 @@ mod tests_162 {
             entries,
             self_cp,
             &HashMap::new(),
+            circular_dep,
             None,
             &atoms_162(atoms),
             queued,
@@ -53858,9 +54344,11 @@ mod tests_162 {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// An alternative on the resolving package itself, not installed,
-    /// is circular and ranks `Unsatisfiable` -- the blocker-`==`
-    /// flip fails here.
+    /// An alternative on the resolving package itself, not installed and
+    /// matching nothing in-graph (backlog #216 narrows the old
+    /// unconditional refusal: an in-graph self match is real's pass-1
+    /// `preferred_in_graph` pick), is circular and ranks `Unsatisfiable`
+    /// -- the blocker-`==` flip fails here.
     #[test]
     fn disjunction_preference_rejects_a_circular_self_alternative() {
         let dir = dir_162("disj-circ");
@@ -53899,6 +54387,114 @@ mod tests_162 {
                 &self_162("test", "pkgA"),
                 &["test/pkgA"],
                 &[]
+            ),
+            portage_use_reduce::AltPreference::Installed
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #216: the same self alternative with the package already
+    /// merge-bound in-graph is real's pass-1 `preferred_in_graph` pick,
+    /// not a circle -- it ranks `Installed` (the cycle forms, then the
+    /// `circular_dependency` map re-resolves it). The in-graph `&&`
+    /// widening fails here.
+    #[test]
+    fn disjunction_preference_keeps_an_in_graph_self_alternative() {
+        let dir = dir_162("disj-circ-graph");
+        let repos = repo_pkgs_162(&dir, &[("test/pkgA", "1.0", "0", "")]);
+        let config = cfg_162();
+        let entries = vec![entry_162(
+            "test",
+            "pkgA",
+            PretendOutcome::New {
+                version: "1.0".to_string(),
+            },
+            Some("0"),
+            false,
+        )];
+        assert_eq!(
+            disj_162(
+                &repos,
+                &config,
+                &dir,
+                &entries,
+                &self_162("test", "pkgA"),
+                &[">=test/pkgA-1.0"],
+                &[]
+            ),
+            portage_use_reduce::AltPreference::Installed
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #216: with the self edge recorded in the
+    /// `circular_dependency` map, the in-graph self alternative demotes
+    /// to `Other` (real `dep_zapdeps`' `circular_atom`,
+    /// `dep_check.py:688-691`) -- the re-resolve takes the bootstrap
+    /// branch. The demotion `return` fails here.
+    #[test]
+    fn disjunction_preference_demotes_a_recorded_circular_self_alternative() {
+        let dir = dir_162("disj-circ-demote");
+        let repos = repo_pkgs_162(&dir, &[("test/pkgA", "1.0", "0", "")]);
+        let config = cfg_162();
+        let entries = vec![entry_162(
+            "test",
+            "pkgA",
+            PretendOutcome::New {
+                version: "1.0".to_string(),
+            },
+            Some("0"),
+            false,
+        )];
+        let mut circular: HashMap<(String, String), Vec<String>> = HashMap::new();
+        circular.insert(self_162("test", "pkgA"), vec!["test/pkgA-1.0".to_string()]);
+        assert_eq!(
+            disj_162_circ(
+                &repos,
+                &config,
+                &dir,
+                &entries,
+                &self_162("test", "pkgA"),
+                &[">=test/pkgA-1.0"],
+                &[],
+                &circular,
+            ),
+            portage_use_reduce::AltPreference::Other
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #216: the demotion spares an atom an installed instance
+    /// satisfies (real's own `vardb.match(atom)` exemption -- a "cycle"
+    /// through an installed package is no deadlock). Still `Installed`;
+    /// the exemption `continue` fails here.
+    #[test]
+    fn disjunction_preference_circular_demotion_spares_an_installed_atom() {
+        let dir = dir_162("disj-circ-exempt");
+        let repos = repo_pkgs_162(&dir, &[("test/pkgA", "1.0", "0", "")]);
+        install_162(&dir, "test", "pkgA-1.0", "0", &[]);
+        let config = cfg_162();
+        let entries = vec![entry_162(
+            "test",
+            "pkgA",
+            PretendOutcome::New {
+                version: "1.0".to_string(),
+            },
+            Some("0"),
+            false,
+        )];
+        let mut circular: HashMap<(String, String), Vec<String>> = HashMap::new();
+        circular.insert(self_162("test", "pkgA"), vec!["test/pkgA-1.0".to_string()]);
+        assert_eq!(
+            disj_162_circ(
+                &repos,
+                &config,
+                &dir,
+                &entries,
+                &self_162("test", "pkgA"),
+                &["test/pkgA"],
+                &[],
+                &circular,
             ),
             portage_use_reduce::AltPreference::Installed
         );
@@ -59984,6 +60580,7 @@ mod tests_165 {
             false,
             false,
             &HashMap::new(),
+            &HashMap::new(),
             None,
             &entries,
             &mut pending,
@@ -60032,6 +60629,7 @@ mod tests_165 {
             false,
             false,
             &HashMap::new(),
+            &HashMap::new(),
             None,
             &entries,
             &mut pending,
@@ -60075,6 +60673,7 @@ mod tests_165 {
             &cfg_165(),
             false,
             false,
+            &HashMap::new(),
             &HashMap::new(),
             None,
             &entries,
@@ -60128,6 +60727,7 @@ mod tests_165 {
             &mut seen,
             &mut memo,
             &mut pullers,
+            &HashMap::new(),
             &HashMap::new(),
             false,
             &std::sync::Arc::new(BinaryIndex::default()),
