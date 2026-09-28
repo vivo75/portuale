@@ -12795,6 +12795,7 @@ fn root_deps_satisfied_atoms(
     config: &portage_profile::Config,
     running_root: &Path,
     dep_keys: &[&str],
+    empty_groups_always_true: bool,
 ) -> HashSet<String> {
     let mut build_depstr = String::new();
     for dep_key in dep_keys {
@@ -12808,6 +12809,7 @@ fn root_deps_satisfied_atoms(
         &build_tokens,
         use_flags,
         portage_use_reduce::MatchMode::Normal,
+        empty_groups_always_true,
         &mut |atoms: &[String]| {
             // `--root-deps` only needs the satisfiable-or-not split here
             // (there's no "prefer the installed branch" question for a
@@ -12879,6 +12881,7 @@ fn unsatisfied_root_deps_atoms(
     config: &portage_profile::Config,
     running_root: &Path,
     dep_keys: &[&str],
+    empty_groups_always_true: bool,
 ) -> Vec<String> {
     let mut build_depstr = String::new();
     for dep_key in dep_keys {
@@ -12892,6 +12895,7 @@ fn unsatisfied_root_deps_atoms(
         &build_tokens,
         use_flags,
         portage_use_reduce::MatchMode::Normal,
+        empty_groups_always_true,
         &mut |atoms: &[String]| {
             // `--root-deps` only needs the satisfiable-or-not split here
             // (there's no "prefer the installed branch" question for a
@@ -13155,6 +13159,9 @@ fn resolve_root_deps_build_entries(
             config,
             running_root,
             &["DEPEND", "BDEPEND", "RDEPEND", "IDEPEND"],
+            md5_dict::eapi_empty_groups_always_true(
+                metadata.get("EAPI").map(String::as_str).unwrap_or("0"),
+            ),
         ) {
             result.extend(resolve_root_deps_build_entries(
                 repos,
@@ -18497,6 +18504,11 @@ fn collect_unwalked_installed_blockers(
             &tokens,
             &use_flags,
             portage_use_reduce::MatchMode::Normal,
+            // Installed blocker scan: real `dep_check` passes
+            // `eapi=None` for installed packages
+            // (`dep_check.py:865-877`), whose defaults struct reads
+            // `empty_groups_always_true = false`.
+            false,
             &mut |atoms: &[String]| {
                 disjunction_preference(
                     repos,
@@ -22795,6 +22807,9 @@ fn expand_resolved_slot_with_flipped_use(
         &tokens,
         new_use,
         portage_use_reduce::MatchMode::Normal,
+        md5_dict::eapi_empty_groups_always_true(
+            delta_meta.get("EAPI").map(String::as_str).unwrap_or("0"),
+        ),
         &mut |atoms: &[String]| {
             disjunction_preference(
                 &ctx.repos,
@@ -22836,6 +22851,9 @@ fn expand_resolved_slot_with_flipped_use(
                 config,
                 root,
                 &["DEPEND", "BDEPEND", "IDEPEND"],
+                md5_dict::eapi_empty_groups_always_true(
+                    delta_meta.get("EAPI").map(String::as_str).unwrap_or("0"),
+                ),
             )
         })
         .unwrap_or_default();
@@ -22849,6 +22867,9 @@ fn expand_resolved_slot_with_flipped_use(
                 config,
                 root,
                 &["DEPEND", "BDEPEND", "IDEPEND"],
+                md5_dict::eapi_empty_groups_always_true(
+                    delta_meta.get("EAPI").map(String::as_str).unwrap_or("0"),
+                ),
             )
         })
         .unwrap_or_default();
@@ -27443,6 +27464,9 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             &tokens,
             &use_flags,
             portage_use_reduce::MatchMode::Normal,
+            md5_dict::eapi_empty_groups_always_true(
+                metadata.get("EAPI").map(String::as_str).unwrap_or("0"),
+            ),
             &mut |atoms: &[String]| {
                 disjunction_preference(
                     &ctx.repos,
@@ -27487,6 +27511,9 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     config,
                     root,
                     &["DEPEND", "BDEPEND", "IDEPEND"],
+                    md5_dict::eapi_empty_groups_always_true(
+                        metadata.get("EAPI").map(String::as_str).unwrap_or("0"),
+                    ),
                 )
             })
             .unwrap_or_default();
@@ -27517,6 +27544,9 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     config,
                     root,
                     &["DEPEND", "BDEPEND", "IDEPEND"],
+                    md5_dict::eapi_empty_groups_always_true(
+                        metadata.get("EAPI").map(String::as_str).unwrap_or("0"),
+                    ),
                 )
             })
             .unwrap_or_default();
@@ -29876,6 +29906,11 @@ fn enqueue_dependencies(
         &tokens,
         &use_flags,
         portage_use_reduce::MatchMode::Normal,
+        // Installed `--deep` recursion: real `dep_check` passes
+        // `eapi=None` for installed packages (`dep_check.py:865-877`),
+        // whose defaults struct reads `empty_groups_always_true =
+        // false`.
+        false,
         &mut |atoms: &[String]| {
             disjunction_preference(
                 repos,
@@ -29916,6 +29951,11 @@ fn enqueue_dependencies(
                     config,
                     root,
                     &["DEPEND", "BDEPEND", "IDEPEND"],
+                    // Installed walk: real `dep_check` passes
+                    // `eapi=None` for installed packages
+                    // (`dep_check.py:865-877`), whose defaults struct
+                    // reads `empty_groups_always_true = false`.
+                    false,
                 )
             })
             .unwrap_or_default()
@@ -29942,6 +29982,9 @@ fn enqueue_dependencies(
                     config,
                     root,
                     &["DEPEND", "BDEPEND", "IDEPEND"],
+                    // Installed walk, same real `eapi=None` default as
+                    // `root_deps_satisfied` just above.
+                    false,
                 )
             })
             .unwrap_or_default()
