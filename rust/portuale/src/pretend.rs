@@ -8721,33 +8721,71 @@ fn render_pkg_use_display(disp: &[(String, String)]) -> String {
     out
 }
 
-/// Backlog #90 (S2): the `^` marker line under a skip-conflict pin --
-/// real marks the leading operator chars plus the version token
-/// (`~` + `1.0` in `~dev-libs/whblocker-1.0`, staged oracle). The
+/// Backlog #90 (S2), extended by #230: the `^` marker line under a
+/// skip-conflict pin -- real `format_unmatched_atom`
+/// (`_emerge/resolver/output.py:892`) marks the leading operator chars
+/// plus the version token (`~` + `1.0` in `~dev-libs/whblocker-1.0`,
+/// staged oracle), plus a `:slot[/sub-slot][op]` span when the atom
+/// carries one that mismatches the missed package (`:967-975`). The
 /// spans are computed on the raw atom text (no color realignment --
 /// same deliberate divergence as the slot block's own markers).
-fn skip_conflict_caret_line(atom: &str) -> String {
+/// USE-token spans stay a documented cut (no grounded case carries
+/// USE-deps on a skipped row).
+fn skip_conflict_caret_line(atom: &str, pkg_slot: &str, pkg_sub_slot: &str) -> String {
+    // Collect real's highlight spans first, then render once: spans may
+    // abut (a version end meets its `:slot` start), so incremental
+    // push-`^`-or-pad rendering would misplace the later one.
+    let mut spans: Vec<(usize, usize)> = Vec::new();
     let op_len: usize = atom
         .chars()
         .take_while(|c| matches!(c, '=' | '<' | '>' | '~' | '!'))
         .map(|c| c.len_utf8())
         .sum();
-    let mut line = String::new();
-    for _ in 0..op_len {
-        line.push('^');
+    if op_len > 0 {
+        spans.push((0, op_len));
     }
-    if let Some(ver) = portage_dep::parse_atom(atom).and_then(|a| a.version.clone()) {
+    let parsed = portage_dep::parse_atom(atom);
+    if let Some(ver) = parsed.as_ref().and_then(|a| a.version.clone()) {
         // Last occurrence: a package name itself may contain digits
         // (`foo-2-bar-1.0`), so anchoring on the first would mark the
         // wrong span. A trailing `-rN` revision is left out of the
         // span (no oracle covers it).
         if let Some(start) = atom.rfind(ver.as_str()) {
-            while line.len() < start {
-                line.push(' ');
+            spans.push((start, start + ver.len()));
+        }
+    }
+    // Real's `highlight_slot`: the atom names a slot (or sub-slot) the
+    // missed package does not have. The span covers `:slot`, the
+    // `/sub-slot` half when present, and the trailing slot operator
+    // (`=`/`*`), anchored on its occurrence in the raw atom text.
+    if let Some(a) = parsed.as_ref() {
+        let slot_mismatch = a.slot.as_deref().is_some_and(|s| s != pkg_slot);
+        let sub_mismatch = a.sub_slot.as_deref().is_some_and(|s| s != pkg_sub_slot);
+        if (slot_mismatch || sub_mismatch)
+            && let Some(slot) = a.slot.as_deref()
+        {
+            let mut slot_str = format!(":{slot}");
+            if let Some(sub) = a.sub_slot.as_deref() {
+                slot_str.push('/');
+                slot_str.push_str(sub);
             }
-            for _ in 0..ver.len() {
-                line.push('^');
+            match a.slot_operator {
+                Some(portage_dep::SlotOperator::Star) => slot_str.push('*'),
+                Some(portage_dep::SlotOperator::Equals) => slot_str.push('='),
+                None => {}
             }
+            if let Some(start) = atom.find(slot_str.as_str()) {
+                spans.push((start, start + slot_str.len()));
+            }
+        }
+    }
+    let end = spans.iter().map(|(_, e)| *e).max().unwrap_or(0);
+    let mut line = String::new();
+    for i in 0..end {
+        if spans.iter().any(|(s, e)| *s <= i && i < *e) {
+            line.push('^');
+        } else {
+            line.push(' ');
         }
     }
     line
@@ -12978,16 +13016,37 @@ pub fn run(args: &[String]) -> ExitCode {
     // producers, one shape: the direct solve's removed instances and
     // the reverse-pin withholds (`GraphResult::skipped_updates`; the
     // renderer cannot tell them apart and real does not distinguish
-    // them either). Root suffixes (`for <root>`, `to/in '<root>'`)
-    // are omitted like every other portuale notice row. The `^`
-    // marker line mirrors real's operator + version spans
-    // (approximation: leading operator chars plus the version token;
-    // real derives them from its collision-reason keys). Suppressed
-    // under `--quiet` unless `--debug` -- real `_show_missed_update`
-    // drops both notice types then (`depgraph.py:1576-1581`).
-    // `--json` never reaches this block (it returns above);
-    // `--columns` has no gate (real shows the notices regardless of
-    // columns: they are not merge-list rows).
+    // them either). Backlog #230 renders each package with real's full
+    // `pkg_use_display` (`skipped_update_use_display_for` /
+    // `skipped_update_installed_use_display_for`, reusing the
+    // slot-collision notice's `render_pkg_use_display` string form):
+    // the whole effective USE masked to the valid-IUSE domain, one
+    // `VAR="…"` group per non-hidden `USE_EXPAND` var, `( )`-wrapped
+    // force/mask flags. Root suffixes follow the slot-collision notice
+    // exactly: merge-scheduled nodes and group headers stay bare (no
+    // `to '<root>'` / `for <root>` -- portuale resolves single-rooted,
+    // so every fixture-test `ROOT` would otherwise leak its own tmp
+    // path into the output, the same reason #206 cut the suffix on
+    // circular nodes); an installed consumer renders
+    // `(cpv, installed in '<root>')` with the real path, like the
+    // notice's installed instances. Real's own bed rendering mixes bare
+    // missed lines with `to`-suffixed parents only because pre-EAPI-7
+    // `DEPEND` resolves against the host-config running-root tree
+    // (`depgraph.py:4224-4226`) -- a second config portuale deliberately
+    // does not model (bed `l0-fx-20260927T125711Z` shows the missed line
+    // with the container's `USE="(test-rust)" ABI_X86="(64)" ...`, which
+    // no fixture-tree rendering can reproduce). The `^` marker line
+    // mirrors real `format_unmatched_atom`'s operator + version spans
+    // plus a mismatched `:slot[/sub-slot]` span (USE-token spans stay a
+    // documented cut -- no grounded case carries USE-deps here). A
+    // top-level `(Argument)` parent (empty `consumer_cpv`: a CLI atom
+    // that accepts only the surviving instance) renders as real's bare
+    // indented arg line with no atom and no marker
+    // (`depgraph.py:1681-1686`). Suppressed under `--quiet` unless
+    // `--debug` -- real `_show_missed_update` drops both notice types
+    // then (`depgraph.py:1576-1581`). `--json` never reaches this block
+    // (it returns above); `--columns` has no gate (real shows the
+    // notices regardless of columns: they are not merge-list rows).
     if !(quiet && !debug) && !result.skipped_updates.is_empty() {
         println!(
             "WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:"
@@ -13009,20 +13068,33 @@ pub fn run(args: &[String]) -> ExitCode {
                 header.skipped_repo,
                 render_pkg_use_display(&header.skipped_use),
             );
-            for s in group {
-                let consumer_state = if s.consumer_installed {
-                    "installed"
+            for s in group.iter() {
+                if s.consumer_cpv.is_empty() {
+                    // Real's `PackageArg`/`AtomArg` arm: the bare
+                    // command-line parent, no atom and no `^` marker.
+                    println!("    {}", s.atom);
+                    continue;
+                }
+                if s.consumer_installed {
+                    println!(
+                        "    {} required by ({}, installed in '{}') {}",
+                        s.atom,
+                        s.consumer_cpv,
+                        root.display(),
+                        render_pkg_use_display(&s.consumer_use),
+                    );
                 } else {
-                    "ebuild scheduled for merge"
-                };
+                    println!(
+                        "    {} required by ({}, ebuild scheduled for merge) {}",
+                        s.atom,
+                        s.consumer_cpv,
+                        render_pkg_use_display(&s.consumer_use),
+                    );
+                }
                 println!(
-                    "    {} required by ({}, {}) {}",
-                    s.atom,
-                    s.consumer_cpv,
-                    consumer_state,
-                    render_pkg_use_display(&s.consumer_use),
+                    "    {}",
+                    skip_conflict_caret_line(&s.atom, &header.slot, &header.skipped_sub_slot)
                 );
-                println!("    {}", skip_conflict_caret_line(&s.atom));
             }
         }
         println!();

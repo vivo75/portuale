@@ -17661,6 +17661,332 @@ fn pkg_use_display_for(
     build_use_expand_display(&disp, config, None, &forced, true, &HashSet::new())
 }
 
+/// Backlog #230: real `pkg_use_display(pkg, opts, modified_use=...)` for a
+/// scheduled-for-merge package (`_emerge/UseFlagDisplay.py:55`), built for
+/// the skipped-update block -- the FULL per-package display, not the
+/// IUSE-only approximation `pkg_use_display_for` (which the
+/// slot-collision notice keeps, out of this slice's scope).
+///
+/// Two real behaviors the approximation misses, both bed-grounded (bed
+/// `l0-fx-20260927T125711Z`, `--backtrack=0 dev-libs/blk0b dev-libs/blk0c
+/// dev-libs/blk0a`: real renders `USE="(test-rust)" ABI_X86="(64)"
+/// LLVM_TARGETS="(X86)"` on the missed line and `USE="(globalforceflag)"`
+/// on the parents where portuale printed bare `USE=""`):
+///
+/// 1. `modified_use` is the package's whole effective USE
+///    (`PORTAGE_USE`), so profile-global flags and forced flags render
+///    even when no ebuild declares them in `IUSE`.
+/// 2. `PORTAGE_USE` itself is the effective USE *masked* to the
+///    package's valid-IUSE domain (`config.py` setcpv, `:2166-2220`): a
+///    flag survives iff it is in the declared `IUSE` or matches the
+///    implicit domain -- EAPI 5+ `IUSE_EFFECTIVE`
+///    (`_calc_iuse_effective`: `IUSE_IMPLICIT` + unprefixed +
+///    expand-implicit values), pre-EAPI-5 `_get_implicit_iuse` (`ARCH` +
+///    `arch.list` + `USE_EXPAND_HIDDEN`-derived `xxx_.*` + the
+///    per-package use.mask/use.force + `build`/`bootstrap`).
+///
+/// Bed-grounded against the real 3.0.82.2 container probe in
+/// `docs/history/` (see `skipped_update_use_display_for`'s callers for
+/// the pointer): `emerge --info dev-libs/pkginfopkg` shows
+/// `USE="alpha -beta" ELIBC="glibc"` -- the `foo`/`bar`/forced globals
+/// masked out, the implicit `elibc_glibc` kept -- and a flagless blk0
+/// package keeps exactly `amd64`→(discarded as `ARCH`), the hidden-expand
+/// `cpu_flags_x86_sse2`, and the forced `globalforceflag`.
+///
+/// Deliberate narrowings: no `--alphabetical` interleave (no contract or
+/// bed cell passes it with this block) and no ANSI colour (a no-op under
+/// `emerge -p` without `--color=y`, matching `render_pkg_use_display`'s
+/// own cut). The installed-consumer twin is
+/// [`skipped_update_installed_use_display_for`].
+pub fn skipped_update_use_display_for(
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> Vec<(String, String)> {
+    let candidates = match list_candidates(repos, category, package) {
+        Ok(cs) => cs,
+        Err(_) => return Vec::new(),
+    };
+    let Some(cand) = candidates
+        .iter()
+        .filter(|c| c.version == version)
+        .max_by_key(|c| c.repo_priority)
+        .cloned()
+    else {
+        return Vec::new();
+    };
+    let pf = format!("{package}-{version}");
+    let metadata = match repo_aux_metadata(&cand.repo_location, category, &pf) {
+        Ok(md) => md,
+        Err(_) => return Vec::new(),
+    };
+    // Same "absence is real" as `pkg_use_display_for`: a missing IUSE key
+    // declares no flags; a missing md5-cache entry entirely (the `?`
+    // above... here the Err arm) yields no display.
+    let iuse_str = metadata.get("IUSE").map(String::as_str).unwrap_or_default();
+    let explicit: HashSet<String> = iuse_str
+        .split_whitespace()
+        .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
+        .collect();
+    let eapi = metadata.get("EAPI").map(String::as_str).unwrap_or("");
+    let candidate_str = format!(
+        "{category}/{package}-{version}:{}/{}::{}",
+        cand.slot, cand.sub_slot, cand.repo_name
+    );
+    let use_flags = match candidate_iuse_and_use(&cand, category, package, config) {
+        Some((_, uf)) => uf,
+        None => return Vec::new(),
+    };
+    // Real `pkg.use.force ∪ pkg.use.mask` (`pkgsettings.useforce` /
+    // `usemask` after `setcpv`): the unfiltered per-package stack, since
+    // the `( )` wraps apply to implicit-domain flags too (an implicit
+    // flag is displayed, so a forced implicit flag must wrap).
+    let force_mask = forced_or_masked_flags_unfiltered(
+        &cand.keywords,
+        &candidate_str,
+        category,
+        package,
+        config,
+    );
+    let kept = mask_use_to_valid_domain(
+        &explicit,
+        &use_flags,
+        md5_dict::eapi_has_iuse_effective(eapi),
+        config,
+        &force_mask,
+    );
+    assemble_pkg_use_display(&kept, &explicit, &force_mask, config)
+}
+
+/// Backlog #230: the installed-consumer twin of
+/// [`skipped_update_use_display_for`] -- real `pkg_use_display` for an
+/// installed parent (`depgraph.py:1696-1700` calls it with the vdb
+/// package's own `use.enabled`). The vdb `USE` is ground truth (real
+/// validates it against the implicit domain at `Package` construction
+/// but never re-masks it), so no masking runs here: enabled is the
+/// recorded `USE`, disabled the recorded `IUSE` minus that. Narrowing,
+/// documented: no profile-force/mask `( )` wraps (those need the tree
+/// candidate's keywords via `forced_or_masked_flags_unfiltered`, and an
+/// installed consumer's version may be gone from every repo -- the same
+/// narrowing `installed_use_display_for` already documents).
+pub fn skipped_update_installed_use_display_for(
+    root: &Path,
+    config: &portage_profile::Config,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> Vec<(String, String)> {
+    let (iuse, use_flags) = installed_pkg_iuse_and_use(root, category, package, version);
+    let enabled: HashSet<String> = use_flags.iter().cloned().collect();
+    let explicit: HashSet<String> = iuse.iter().cloned().collect();
+    assemble_pkg_use_display(&enabled, &explicit, &HashSet::new(), config)
+}
+
+/// Backlog #230: one consumer's full `pkg_use_display` for a
+/// `SkippedUpdate` row, shared by the three producers. `parent_cpv` is
+/// the `cat/pkg-ver:slot/sub::repo` form `slot_conflict_puller_cpv`
+/// builds (empty for a top-level `(Argument)` parent, whose row the
+/// renderer prints bare -- the display value is unused there).
+/// Installed consumers read the vdb twin, merge consumers the tree twin.
+fn skipped_consumer_use_display(
+    repos: &[RepoConfig],
+    root: &Path,
+    config: &portage_profile::Config,
+    parent_cpv: &str,
+    installed: bool,
+) -> Vec<(String, String)> {
+    let cpv = parent_cpv.split(':').next().unwrap_or("");
+    let Some((cc, cp2, cv)) = split_cpv(cpv) else {
+        return Vec::new();
+    };
+    if installed {
+        skipped_update_installed_use_display_for(root, config, &cc, &cp2, &cv)
+    } else {
+        skipped_update_use_display_for(repos, config, &cc, &cp2, &cv)
+    }
+}
+
+/// Backlog #230: real `config.py` setcpv's own
+/// `PORTAGE_USE` masking (`:2166-2220`) -- keep an effective-USE flag
+/// iff it is in the package's declared `IUSE` or matches the implicit
+/// domain. `iuse_effective` selects the EAPI 5+ rule
+/// (`IUSE_EFFECTIVE`, real `_iuse_effective_match`); otherwise the
+/// pre-EAPI-5 `_get_implicit_iuse` rule (`ARCH`, `arch.list`,
+/// `USE_EXPAND_HIDDEN`-derived `xxx_*` prefixes, the per-package
+/// use.mask/use.force stack, `build`/`bootstrap`).
+fn mask_use_to_valid_domain(
+    explicit: &HashSet<String>,
+    use_flags: &HashSet<String>,
+    iuse_effective: bool,
+    config: &portage_profile::Config,
+    force_mask: &HashSet<String>,
+) -> HashSet<String> {
+    if iuse_effective {
+        return use_flags
+            .iter()
+            .filter(|f| explicit.contains(*f) || config.iuse_effective.contains(*f))
+            .cloned()
+            .collect();
+    }
+    let hidden_prefixes: Vec<String> = config
+        .use_expand_hidden
+        .iter()
+        .map(|v| format!("{}_", v.to_lowercase()))
+        .collect();
+    let arch = config.other_vars.get("ARCH").cloned().unwrap_or_default();
+    use_flags
+        .iter()
+        .filter(|f| {
+            explicit.contains(*f)
+                || **f == arch
+                || config.archlist.contains(*f)
+                || hidden_prefixes.iter().any(|p| f.starts_with(p))
+                || force_mask.contains(*f)
+                || **f == "build"
+                || **f == "bootstrap"
+        })
+        .cloned()
+        .collect()
+}
+
+/// Backlog #230: real `pkg_use_display`'s own assembly
+/// (`_emerge/UseFlagDisplay.py:55-122`), minus colour and
+/// `--alphabetical`. `enabled` is the masked `PORTAGE_USE`-equivalent
+/// set, `explicit` the declared `IUSE` names (the disabled side), and
+/// `forced` the per-package force ∪ mask stack for the `( )` wraps.
+/// `ARCH` is discarded from the `USE` group; `USE_EXPAND_HIDDEN` groups
+/// are skipped; groups render `USE` first then byte-sorted var names,
+/// each enabled-first then byte-sorted (real's default
+/// `sort_separated`, plain string order).
+fn assemble_pkg_use_display(
+    enabled: &HashSet<String>,
+    explicit: &HashSet<String>,
+    forced: &HashSet<String>,
+    config: &portage_profile::Config,
+) -> Vec<(String, String)> {
+    let arch = config.other_vars.get("ARCH").cloned().unwrap_or_default();
+    let hidden: HashSet<String> = config
+        .use_expand_hidden
+        .iter()
+        .map(|s| s.to_uppercase())
+        .collect();
+    let mut expand_vars: Vec<String> = config.use_expand.iter().cloned().collect();
+    expand_vars.sort();
+    let prefix_of = |var: &str| format!("{}_", var.to_lowercase());
+    // (group, full flag name, bare display name, enabled)
+    let mut grouped: HashMap<String, Vec<(String, String, bool)>> = HashMap::new();
+    for f in enabled {
+        if f == &arch {
+            continue;
+        }
+        let mut placed = false;
+        for var in &expand_vars {
+            if let Some(bare) = f.strip_prefix(&prefix_of(var)) {
+                grouped.entry(var.to_uppercase()).or_default().push((
+                    f.clone(),
+                    bare.to_string(),
+                    true,
+                ));
+                placed = true;
+                break;
+            }
+        }
+        if !placed {
+            grouped
+                .entry("USE".to_string())
+                .or_default()
+                .push((f.clone(), f.clone(), true));
+        }
+    }
+    // Real iterates `pkg.iuse.all` for the disabled side; the same
+    // routing by expand prefix applies.
+    for f in explicit {
+        if enabled.contains(f) {
+            continue;
+        }
+        let mut placed = false;
+        for var in &expand_vars {
+            if let Some(bare) = f.strip_prefix(&prefix_of(var)) {
+                grouped.entry(var.to_uppercase()).or_default().push((
+                    f.clone(),
+                    bare.to_string(),
+                    false,
+                ));
+                placed = true;
+                break;
+            }
+        }
+        if !placed {
+            grouped
+                .entry("USE".to_string())
+                .or_default()
+                .push((f.clone(), f.clone(), false));
+        }
+    }
+    let mut names: Vec<String> = grouped.keys().cloned().collect();
+    names.sort();
+    let mut out = Vec::new();
+    // Real `var_order.insert(0, "USE")`: the USE group always renders
+    // first (possibly as the bare `USE=""` real always emits).
+    if let Some(flags) = grouped.remove("USE") {
+        out.push(("USE".to_string(), render_use_group(flags, forced)));
+    } else {
+        out.push(("USE".to_string(), String::new()));
+    }
+    for name in names {
+        if name == "USE" || hidden.contains(&name) {
+            continue;
+        }
+        if let Some(flags) = grouped.remove(&name) {
+            out.push((name, render_use_group(flags, forced)));
+        }
+    }
+    out
+}
+
+/// Backlog #230: one `VAR="…"` group of real `pkg_use_display` --
+/// enabled flags first, then disabled, each byte-sorted by display name
+/// (real's default `sort_separated`); enabled render bare, disabled
+/// `-`-prefixed, and force/mask members `( )`-wrapped (real
+/// `UseFlagDisplay.__str__`, minus the red/blue that are a no-op without
+/// `--color=y`). Entries carry `(full flag name, bare display name,
+/// enabled)`; the wrap lookup runs on the full name, the sort on the
+/// bare display name exactly like real's own `UseFlagDisplay.name`.
+fn render_use_group(flags: Vec<(String, String, bool)>, forced: &HashSet<String>) -> String {
+    let mut enabled: Vec<(String, String)> = Vec::new();
+    let mut disabled: Vec<(String, String)> = Vec::new();
+    for (full, bare, on) in flags {
+        if on {
+            enabled.push((full, bare));
+        } else {
+            disabled.push((full, bare));
+        }
+    }
+    enabled.sort_by(|a, b| a.1.cmp(&b.1));
+    disabled.sort_by(|a, b| a.1.cmp(&b.1));
+    enabled
+        .into_iter()
+        .map(|(full, bare)| {
+            if forced.contains(&full) {
+                format!("({bare})")
+            } else {
+                bare
+            }
+        })
+        .chain(disabled.into_iter().map(|(full, bare)| {
+            let tok = format!("-{bare}");
+            if forced.contains(&full) {
+                format!("({tok})")
+            } else {
+                tok
+            }
+        }))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// The same `USE="…"` display pairs as `pkg_use_display_for`, built from
 /// an **installed** package's vdb-recorded `IUSE`/`USE` instead of a tree
 /// candidate -- real `pkg_use_display(installed_pkg)` for a nomerge node
@@ -18958,6 +19284,25 @@ pub(crate) fn direct_solve_slot_conflicts(input: DirectSolveInput<'_>) -> Direct
                     if direct_solve_atom_matches(&input, c, jj, &p.atom, false) {
                         continue;
                     }
+                    // Backlog #230: the slot instances' own
+                    // `use_display` is the slot-collision notice's
+                    // IUSE-only rendering; the skipped block renders
+                    // real's full `pkg_use_display` instead (recomputed
+                    // here -- the notice keeps its own).
+                    let skipped_use = skipped_update_use_display_for(
+                        input.repos,
+                        input.config,
+                        &c.category,
+                        &c.package,
+                        &inst.version,
+                    );
+                    let consumer_use = skipped_consumer_use_display(
+                        input.repos,
+                        input.root,
+                        input.config,
+                        &p.parent_cpv,
+                        p.installed,
+                    );
                     skipped.push(SkippedUpdate {
                         category: c.category.clone(),
                         package: c.package.clone(),
@@ -18965,11 +19310,11 @@ pub(crate) fn direct_solve_slot_conflicts(input: DirectSolveInput<'_>) -> Direct
                         skipped_version: inst.version.clone(),
                         skipped_sub_slot: inst.sub_slot.clone(),
                         skipped_repo: inst.repo_name.clone(),
-                        skipped_use: inst.use_display.clone(),
+                        skipped_use,
                         atom: p.atom.clone(),
                         consumer_cpv: p.parent_cpv.clone(),
                         consumer_installed: p.installed,
-                        consumer_use: p.use_display.clone(),
+                        consumer_use,
                     });
                 }
             }
@@ -19148,11 +19493,13 @@ pub(crate) fn constraint_withheld_updates(
                 skipped_version: wver.clone(),
                 skipped_sub_slot: wsub,
                 skipped_repo: wrepo.clone(),
-                skipped_use: pkg_use_display_for(repos, config, &pin.cp.0, &pin.cp.1, &wver),
+                skipped_use: skipped_update_use_display_for(
+                    repos, config, &pin.cp.0, &pin.cp.1, &wver,
+                ),
                 atom: pin.raw_atom.clone(),
                 consumer_cpv: format!("{cc}/{cp2}-{cv}:{cslot}/{csub}::{crepo}"),
                 consumer_installed: true,
-                consumer_use: installed_use_display_for(root, config, cc, cp2, cv),
+                consumer_use: skipped_update_installed_use_display_for(root, config, cc, cp2, cv),
             });
         }
     }
@@ -19366,11 +19713,13 @@ pub(crate) fn backtrack_missed_updates(
                         skipped_version: ver.clone(),
                         skipped_sub_slot: sub.clone(),
                         skipped_repo: repo.clone(),
-                        skipped_use: pkg_use_display_for(repos, config, &cat, &pkg, &ver),
+                        skipped_use: skipped_update_use_display_for(
+                            repos, config, &cat, &pkg, &ver,
+                        ),
                         atom,
                         consumer_cpv: slot_conflict_puller_cpv(repos, &pc, &pp, &pv),
                         consumer_installed: false,
-                        consumer_use: pkg_use_display_for(repos, config, &pc, &pp, &pv),
+                        consumer_use: skipped_update_use_display_for(repos, config, &pc, &pp, &pv),
                     });
                 }
             }
@@ -44613,6 +44962,175 @@ mod tests {
         );
         assert_eq!(groups[1].len(), 1);
         assert_eq!(groups[1][0].skipped_version, "2");
+    }
+
+    /// Backlog #230: the skipped-update block renders real's full
+    /// `pkg_use_display`, not the IUSE-only approximation -- the
+    /// effective USE masked to the valid-IUSE domain, one group per
+    /// non-hidden `USE_EXPAND` var, `( )`-wrapped force/mask flags.
+    /// Pure-function level: masking plus assembly, no repos needed.
+    #[test]
+    fn skipped_use_display_masks_to_the_valid_domain_and_groups_expands() {
+        let config = portage_profile::Config {
+            use_expand: HashSet::from(["ELIBC".to_string(), "CPU_FLAGS_X86".to_string()]),
+            use_expand_hidden: HashSet::from(["CPU_FLAGS_X86".to_string()]),
+            iuse_effective: HashSet::from(["elibc_glibc".to_string(), "elibc_musl".to_string()]),
+            archlist: HashSet::from(["amd64".to_string(), "x86".to_string()]),
+            ..Default::default()
+        };
+        // EAPI 8 (iuse_effective rule): only declared IUSE and
+        // IUSE_EFFECTIVE survive; the profile-global `foo` and the
+        // forced-but-undeclared `globalforceflag` are masked out, while
+        // the implicit `elibc_glibc` is kept and grouped.
+        let explicit: HashSet<String> = HashSet::from(["alpha".to_string(), "beta".to_string()]);
+        let use_flags: HashSet<String> = HashSet::from([
+            "alpha".to_string(),
+            "foo".to_string(),
+            "amd64".to_string(),
+            "globalforceflag".to_string(),
+            "elibc_glibc".to_string(),
+        ]);
+        let kept = mask_use_to_valid_domain(
+            &explicit,
+            &use_flags,
+            true,
+            &config,
+            &HashSet::from(["globalforceflag".to_string()]),
+        );
+        assert_eq!(
+            kept,
+            HashSet::from(["alpha".to_string(), "elibc_glibc".to_string()]),
+            "IUSE_EFFECTIVE keeps the implicit expand flag only",
+        );
+        assert_eq!(
+            assemble_pkg_use_display(
+                &kept,
+                &explicit,
+                &HashSet::from(["globalforceflag".to_string()]),
+                &config,
+            ),
+            vec![
+                ("USE".to_string(), "alpha -beta".to_string()),
+                ("ELIBC".to_string(), "glibc".to_string()),
+            ],
+            "real `emerge --info dev-libs/pkginfopkg` shape: USE=\"alpha -beta\" ELIBC=\"glibc\"",
+        );
+        // Pre-EAPI-5 rule: ARCH is kept-then-discarded, hidden-expand
+        // flags are kept but their group is hidden, and per-package
+        // force/mask membership keeps a flag no IUSE declares (and wraps
+        // it). `other_vars["ARCH"]` is the profile ARCH scalar.
+        let mut pre_config = portage_profile::Config {
+            use_expand: HashSet::from(["CPU_FLAGS_X86".to_string()]),
+            use_expand_hidden: HashSet::from(["CPU_FLAGS_X86".to_string()]),
+            archlist: HashSet::from(["amd64".to_string()]),
+            ..Default::default()
+        };
+        pre_config
+            .other_vars
+            .insert("ARCH".to_string(), "amd64".to_string());
+        let kept_pre = mask_use_to_valid_domain(
+            &HashSet::new(),
+            &use_flags,
+            false,
+            &pre_config,
+            &HashSet::from(["globalforceflag".to_string()]),
+        );
+        assert_eq!(
+            kept_pre,
+            HashSet::from(["amd64".to_string(), "globalforceflag".to_string()]),
+            "ARCH + useforce survive the pre-EAPI-5 mask; foo/alpha/elibc drop",
+        );
+        assert_eq!(
+            assemble_pkg_use_display(
+                &kept_pre,
+                &HashSet::new(),
+                &HashSet::from(["globalforceflag".to_string()]),
+                &pre_config,
+            ),
+            vec![("USE".to_string(), "(globalforceflag)".to_string())],
+            "ARCH discarded, hidden group skipped, forced flag wrapped",
+        );
+    }
+
+    /// Backlog #230: within-group order is enabled-first then byte-sorted
+    /// (real's default `sort_separated`, plain string order), groups are
+    /// `USE`-first then byte-sorted var names.
+    #[test]
+    fn skipped_use_display_orders_enabled_first_then_byte_sorted() {
+        let config = portage_profile::Config {
+            use_expand: HashSet::from(["ELIBC".to_string(), "ABI_X86".to_string()]),
+            ..Default::default()
+        };
+        let enabled: HashSet<String> = HashSet::from([
+            "zebra".to_string(),
+            "apple".to_string(),
+            "abi_x86_64".to_string(),
+            "elibc_glibc".to_string(),
+        ]);
+        let explicit: HashSet<String> = HashSet::from([
+            "zebra".to_string(),
+            "apple".to_string(),
+            "mango".to_string(),
+            "abi_x86_64".to_string(),
+            "abi_x86_32".to_string(),
+            "elibc_glibc".to_string(),
+            "elibc_musl".to_string(),
+        ]);
+        assert_eq!(
+            assemble_pkg_use_display(&enabled, &explicit, &HashSet::new(), &config),
+            vec![
+                ("USE".to_string(), "apple zebra -mango".to_string()),
+                ("ABI_X86".to_string(), "64 -32".to_string()),
+                ("ELIBC".to_string(), "glibc -musl".to_string()),
+            ],
+        );
+    }
+
+    /// Backlog #230: end to end over the fixture tree -- a flagless
+    /// pre-EAPI-5 package keeps exactly the implicit + forced flags
+    /// (bed `l0-fx-20260927T125711Z` parents show
+    /// `USE="(globalforceflag)"`; the fixture additionally force-enables
+    /// `stableforceflag` for stable candidates), and a missing version
+    /// yields no display rather than a panic.
+    #[test]
+    fn skipped_update_use_display_for_renders_the_fixture_blk0_shape() {
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf resolves");
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+            &root,
+        )
+        .expect("fixture config resolves");
+        assert_eq!(
+            skipped_update_use_display_for(&repos, &config, "dev-libs", "blk0x", "3"),
+            vec![(
+                "USE".to_string(),
+                "(globalforceflag) (stableforceflag)".to_string()
+            )],
+        );
+        assert_eq!(
+            skipped_update_use_display_for(&repos, &config, "dev-libs", "blk0b", "1"),
+            vec![(
+                "USE".to_string(),
+                "(globalforceflag) (stableforceflag)".to_string()
+            )],
+        );
+        // EAPI 8, no IUSE: only the implicit ELIBC group survives.
+        assert_eq!(
+            skipped_update_use_display_for(&repos, &config, "dev-libs", "mgxc", "2"),
+            vec![
+                ("USE".to_string(), String::new()),
+                ("ELIBC".to_string(), "glibc".to_string()),
+            ],
+        );
+        assert!(
+            skipped_update_use_display_for(&repos, &config, "dev-libs", "blk0x", "9").is_empty()
+        );
     }
 
     /// Backlog #161 S6: the missing-dep trigger names the upgraded
