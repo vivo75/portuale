@@ -674,6 +674,7 @@ fn localized_size(bytes: u64) -> String {
 /// comment (portage-repo) explains. A top-level package suppressed by
 /// `--onlydeps` isn't in real's merge list at all (`pkg_info.ordered`),
 /// so it isn't counted here either.
+#[allow(clippy::too_many_arguments)]
 fn package_counters_summary(
     entries: &[GraphEntry],
     root: &Path,
@@ -687,6 +688,9 @@ fn package_counters_summary(
     // Backlog #81: in tree mode the solved-stuck rows count too (C0 p2b:
     // `Conflict: 1 block (all satisfied)` under `--tree -v`).
     tree: bool,
+    // Backlog #221 (I5): the settling pass's recorded cycle edges,
+    // threaded into the blocker-row counters below.
+    circular: &HashMap<(String, String), Vec<portage_repo::CircularDepChild>>,
 ) -> String {
     let plural = |n: u64| if n > 1 { "s" } else { "" };
     let (mut upgrades, mut downgrades, mut new, mut newslot, mut reinst) =
@@ -696,7 +700,7 @@ fn package_counters_summary(
     // (`count_blocker_rows`), the same disposition split the line printer
     // uses -- plus the #80 orphans, which print in the same trailing
     // group (unsolvable ones are never suppressed anywhere).
-    let (blocks, blocks_unsolvable) = count_blocker_rows(entries, root, tree);
+    let (blocks, blocks_unsolvable) = count_blocker_rows(entries, root, tree, circular);
     let orphan_unsolvable = orphans.iter().filter(|o| o.conflict.unsolvable).count() as u64;
     let blocks = blocks + orphans.len() as u64;
     let blocks_unsolvable = blocks_unsolvable + orphan_unsolvable;
@@ -916,6 +920,14 @@ fn kept_alt_for_display(
     entries: &[GraphEntry],
     root: &Path,
     owners: impl IntoIterator<Item = usize>,
+    // Backlog #221: the settling pass's recorded cycle edges. Both the
+    // `--tree` walk and the flat-list blocker walks pass the resolve's
+    // own map, so a wait chain follows the cycle-breaking branch the
+    // walk took (backlogs #216/#221 reconciliation, I5: the flat walks
+    // used to pass an empty map, which could mis-disposition a wait
+    // chain through a demoted branch when Replacement rows coexist with
+    // a backtrack).
+    circular: &HashMap<(String, String), Vec<portage_repo::CircularDepChild>>,
 ) -> Vec<HashSet<usize>> {
     let has_replacement_row = owners.into_iter().any(|i| {
         entries[i]
@@ -924,7 +936,7 @@ fn kept_alt_for_display(
             .any(|b| matches!(b.satisfied_by, Some(BlockerSatisfiedBy::Replacement { .. })))
     });
     if has_replacement_row {
-        portage_repo::kept_alt_branches(entries, root)
+        portage_repo::kept_alt_branches(entries, root, circular)
     } else {
         Vec::new()
     }
@@ -1176,12 +1188,16 @@ fn trailing_blocker_lines(
     include_mask: bool,
     columns: bool,
     color: &Colorizer,
+    // Backlog #221 (I5): the settling pass's recorded cycle edges (see
+    // `kept_alt_for_display`): a wait chain through a demoted branch
+    // dispositions like the walk took it.
+    circular: &HashMap<(String, String), Vec<portage_repo::CircularDepChild>>,
 ) -> Vec<String> {
     let entry = &entries[owner_index];
     // #84: one kept-branch derivation for this owner's rows -- and none
     // at all unless one of them is a `Replacement`, which is what keeps
     // the per-entry call cheap.
-    let kept_alt = kept_alt_for_display(entries, root, [owner_index]);
+    let kept_alt = kept_alt_for_display(entries, root, [owner_index], circular);
     entry
         .blockers
         .iter()
@@ -1220,12 +1236,15 @@ fn collect_inline_blocker_lines(
     quiet: bool,
     columns: bool,
     color: &Colorizer,
+    // Backlog #221 (I5): the settling pass's recorded cycle edges (see
+    // `kept_alt_for_display`).
+    circular: &HashMap<(String, String), Vec<portage_repo::CircularDepChild>>,
 ) -> Vec<(usize, String)> {
     if columns {
         return Vec::new();
     }
     // #84: one kept-branch derivation for the whole display list.
-    let kept_alt = kept_alt_for_display(entries, root, 0..entries.len());
+    let kept_alt = kept_alt_for_display(entries, root, 0..entries.len(), circular);
     let mut out: Vec<(usize, String)> = Vec::new();
     for (owner_index, entry) in entries.iter().enumerate() {
         for b in &entry.blockers {
@@ -1262,11 +1281,18 @@ fn collect_inline_blocker_lines(
 /// flat-Hidden Replacement row the #81 simulation solves DOES enter it
 /// (C0 p2b: `Conflict: 1 block (all satisfied)` under `--tree -v` and
 /// nothing under flat `-v`).
-fn count_blocker_rows(entries: &[GraphEntry], root: &Path, tree: bool) -> (u64, u64) {
+fn count_blocker_rows(
+    entries: &[GraphEntry],
+    root: &Path,
+    tree: bool,
+    // Backlog #221 (I5): the settling pass's recorded cycle edges (see
+    // `kept_alt_for_display`).
+    circular: &HashMap<(String, String), Vec<portage_repo::CircularDepChild>>,
+) -> (u64, u64) {
     let mut blocks = 0u64;
     let mut unsolvable = 0u64;
     // #84: one kept-branch derivation for the whole counter scan.
-    let kept_alt = kept_alt_for_display(entries, root, 0..entries.len());
+    let kept_alt = kept_alt_for_display(entries, root, 0..entries.len(), circular);
     for (owner_index, entry) in entries.iter().enumerate() {
         for b in &entry.blockers {
             // Backlog #81: in tree mode a flat-Hidden Replacement row
@@ -1364,6 +1390,10 @@ fn print_entry_line(
     // True only for the circular re-display; every other caller passes
     // false.
     force_sizes: bool,
+    // Backlog #221 (I5): the settling pass's recorded cycle edges,
+    // threaded into the trailing blocker disposition below (a wait chain
+    // through a demoted branch dispositions like the walk took it).
+    circular: &HashMap<(String, String), Vec<portage_repo::CircularDepChild>>,
 ) {
     let entry = &entries[index];
     // Real `_DisplayConfig` verbosity: `--quiet and 1 or --verbose and 3
@@ -1655,7 +1685,7 @@ fn print_entry_line(
             }
             emit(&field(true, entry.new_slot, false, false, false), version);
             blocker_lines.extend(trailing_blocker_lines(
-                entries, root, index, !quiet, columns, color,
+                entries, root, index, !quiet, columns, color, circular,
             ));
         }
         PretendOutcome::Upgrade { from: _, to } => {
@@ -1669,7 +1699,7 @@ fn print_entry_line(
             }
             emit(&field(false, false, false, true, false), to);
             blocker_lines.extend(trailing_blocker_lines(
-                entries, root, index, !quiet, columns, color,
+                entries, root, index, !quiet, columns, color, circular,
             ));
         }
         PretendOutcome::Downgrade { from: _, to } => {
@@ -1681,7 +1711,7 @@ fn print_entry_line(
             }
             emit(&field(false, false, false, true, true), to);
             blocker_lines.extend(trailing_blocker_lines(
-                entries, root, index, !quiet, columns, color,
+                entries, root, index, !quiet, columns, color, circular,
             ));
         }
         PretendOutcome::Reinstall {
@@ -1708,7 +1738,7 @@ fn print_entry_line(
             }
             emit(&field(false, false, true, false, false), version);
             blocker_lines.extend(trailing_blocker_lines(
-                entries, root, index, !quiet, columns, color,
+                entries, root, index, !quiet, columns, color, circular,
             ));
         }
         PretendOutcome::AlreadyInstalled { .. } => {
@@ -1996,6 +2026,10 @@ fn print_tree(
     // Backlog #206 S2: forwarded to `print_entry_line` (see its
     // `force_sizes`).
     force_sizes: bool,
+    // Backlog #221: the resolve's recorded cycle edges (see
+    // `kept_alt_for_display`): the `--tree` walk keeps the
+    // cycle-breaking branch the walk took.
+    circular: &HashMap<(String, String), Vec<portage_repo::CircularDepChild>>,
 ) -> Vec<(usize, bool)> {
     /// One node of the display graph: an entry, or a satisfied blocker
     /// row `entries[owner].blockers[index]`.
@@ -2029,7 +2063,7 @@ fn print_tree(
     // function used to carry, whose tie-break had drifted to a string
     // version compare. Suppressed `|| ( … )` alternatives are already
     // `None` there, so no separate `kept_alt_branches` pass is needed.
-    let dep_targets = portage_repo::resolved_dep_targets(entries, root);
+    let dep_targets = portage_repo::resolved_dep_targets(entries, root, circular);
     // #131 S1: the walk consumes the tree-mode serialization order
     // (merge direction; the ordered walk below iterates it reversed),
     // exactly like real's `_ordered_tree_display` consumes the reversed
@@ -2095,7 +2129,7 @@ fn print_tree(
     // already lives on that same removal entry -- the #77 absent-owner
     // arm, whose owner is real's non-node vardb `Package`).
     // #84: one kept-branch derivation for the whole node walk.
-    let kept_alt = kept_alt_for_display(entries, root, 0..entries.len());
+    let kept_alt = kept_alt_for_display(entries, root, 0..entries.len(), circular);
     for (owner, entry) in entries.iter().enumerate() {
         for (index, b) in entry.blockers.iter().enumerate() {
             // Backlog #81: a flat-Hidden Replacement row the tree-mode
@@ -2372,6 +2406,7 @@ fn print_tree(
                     use_unsat_deps,
                     plain_miss_deps,
                     force_sizes,
+                    circular,
                 )
             }
             TreeNode::Blocker { owner, index } => {
@@ -5571,6 +5606,7 @@ fn run_resume(
                 &[],
                 &[],
                 false,
+                &HashMap::new(),
             );
         }
         // Backlog #231 (a): real reaches `post_emerge` after the
@@ -13289,6 +13325,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 implicit_system_deps,
                 &repos,
                 dynamic_deps,
+                &result.circular_dependency,
             );
             rendered_rows = print_tree(
                 display_entries,
@@ -13311,14 +13348,21 @@ pub fn run(args: &[String]) -> ExitCode {
                 &result.use_unsat_deps,
                 &result.plain_miss_deps,
                 circular_forced_display,
+                &result.circular_dependency,
             );
         } else {
             // #68/#72 B2: rows whose replacement waits on its owner print
             // right after that replacement's package line (real appends
             // them to `print_msg` at the solved blocker's merge-list
             // position, `output.py:119-121`).
-            let inline_blockers =
-                collect_inline_blocker_lines(display_entries, &root, quiet, columns, &color);
+            let inline_blockers = collect_inline_blocker_lines(
+                display_entries,
+                &root,
+                quiet,
+                columns,
+                &color,
+                &result.circular_dependency,
+            );
             for i in 0..display_entries.len() {
                 print_entry_line(
                     display_entries,
@@ -13344,6 +13388,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     &result.use_unsat_deps,
                     &result.plain_miss_deps,
                     circular_forced_display,
+                    &result.circular_dependency,
                 );
                 for (_, line) in inline_blockers.iter().filter(|(after, _)| *after == i) {
                     println!("{line}");
@@ -13448,6 +13493,7 @@ pub fn run(args: &[String]) -> ExitCode {
                         &result.use_unsat_deps,
                         &result.plain_miss_deps,
                         false,
+                        &result.circular_dependency,
                     );
                 }
             }
@@ -13528,7 +13574,8 @@ pub fn run(args: &[String]) -> ExitCode {
                 onlydeps,
                 &color,
                 &result.orphan_blockers,
-                disp_tree
+                disp_tree,
+                &result.circular_dependency,
             )
         );
     }
@@ -13617,6 +13664,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 // the gated path's main list above (whose re-display is
                 // skipped as duplicative).
                 false,
+                &result.circular_dependency,
             );
         }
     }
@@ -18680,16 +18728,30 @@ mod tests {
             },
         ];
         let entries = [entry];
-        let lines =
-            trailing_blocker_lines(&entries, Path::new("/nonexistent"), 0, true, false, &nc);
+        let lines = trailing_blocker_lines(
+            &entries,
+            Path::new("/nonexistent"),
+            0,
+            true,
+            false,
+            &nc,
+            &HashMap::new(),
+        );
         assert_eq!(lines.len(), 1, "only the uninstall-satisfied row trails");
         assert!(
             lines[0].starts_with("[blocks b      ] dev-libs/other ("),
             "the trailing row is the Uninstall one: {lines:?}"
         );
         assert!(
-            collect_inline_blocker_lines(&entries, Path::new("/nonexistent"), false, false, &nc)
-                .is_empty()
+            collect_inline_blocker_lines(
+                &entries,
+                Path::new("/nonexistent"),
+                false,
+                false,
+                &nc,
+                &HashMap::new(),
+            )
+            .is_empty()
         );
         let summary = package_counters_summary(
             &entries,
@@ -18699,6 +18761,7 @@ mod tests {
             &nc,
             &[],
             false,
+            &HashMap::new(),
         );
         assert!(
             summary.contains("Conflict: 1 block (all satisfied)"),
@@ -18720,8 +18783,14 @@ mod tests {
             ),
             replacement(),
         ];
-        let inline =
-            collect_inline_blocker_lines(&entries, Path::new("/nonexistent"), false, false, &nc);
+        let inline = collect_inline_blocker_lines(
+            &entries,
+            Path::new("/nonexistent"),
+            false,
+            false,
+            &nc,
+            &HashMap::new(),
+        );
         assert_eq!(inline.len(), 1, "the wait prints one inline row");
         assert_eq!(inline[0].0, 2, "after the replacement entry");
         assert!(
@@ -18731,7 +18800,7 @@ mod tests {
             "{inline:?}"
         );
         assert_eq!(
-            count_blocker_rows(&entries, Path::new("/nonexistent"), false),
+            count_blocker_rows(&entries, Path::new("/nonexistent"), false, &HashMap::new()),
             (1, 0)
         );
 
@@ -18739,11 +18808,18 @@ mod tests {
         // (real counts every Blocker node in the merge list).
         let entries = [replacement_owner(&[]), replacement()];
         assert!(
-            collect_inline_blocker_lines(&entries, Path::new("/nonexistent"), false, true, &nc)
-                .is_empty()
+            collect_inline_blocker_lines(
+                &entries,
+                Path::new("/nonexistent"),
+                false,
+                true,
+                &nc,
+                &HashMap::new(),
+            )
+            .is_empty()
         );
         assert_eq!(
-            count_blocker_rows(&entries, Path::new("/nonexistent"), false),
+            count_blocker_rows(&entries, Path::new("/nonexistent"), false, &HashMap::new()),
             (1, 0)
         );
     }
@@ -18815,8 +18891,14 @@ mod tests {
                 alt_edge("absent", "1.0", 1),
             ]),
         ];
-        let inline =
-            collect_inline_blocker_lines(&entries, Path::new("/nonexistent"), false, false, &nc);
+        let inline = collect_inline_blocker_lines(
+            &entries,
+            Path::new("/nonexistent"),
+            false,
+            false,
+            &nc,
+            &HashMap::new(),
+        );
         assert_eq!(inline.len(), 1, "the kept disjunctive wait prints a row");
         assert_eq!(inline[0].0, 1, "after the replacement entry");
 
@@ -18840,8 +18922,15 @@ mod tests {
             other,
         ];
         assert!(
-            collect_inline_blocker_lines(&entries, Path::new("/nonexistent"), false, false, &nc)
-                .is_empty(),
+            collect_inline_blocker_lines(
+                &entries,
+                Path::new("/nonexistent"),
+                false,
+                false,
+                &nc,
+                &HashMap::new(),
+            )
+            .is_empty(),
             "a suppressed wait branch is not followed"
         );
     }
@@ -18860,7 +18949,7 @@ mod tests {
             "",
         );
         assert!(
-            kept_alt_for_display(&[plain], root, 0..1).is_empty(),
+            kept_alt_for_display(&[plain], root, 0..1, &HashMap::new()).is_empty(),
             "no Replacement row means no derivation"
         );
 
@@ -18910,12 +18999,15 @@ mod tests {
             key: 4,
         }];
         let entries = [owner, replacement];
-        let shared = kept_alt_for_display(&entries, root, 0..entries.len());
+        let shared = kept_alt_for_display(&entries, root, 0..entries.len(), &HashMap::new());
         // The owner-restricted form (what `trailing_blocker_lines` uses)
         // derives for the owner that carries the row and for nobody else.
-        assert_eq!(kept_alt_for_display(&entries, root, [0]), shared);
-        assert!(kept_alt_for_display(&entries, root, [1]).is_empty());
-        let on_demand = portage_repo::kept_alt_branches(&entries, root);
+        assert_eq!(
+            kept_alt_for_display(&entries, root, [0], &HashMap::new()),
+            shared
+        );
+        assert!(kept_alt_for_display(&entries, root, [1], &HashMap::new()).is_empty());
+        let on_demand = portage_repo::kept_alt_branches(&entries, root, &HashMap::new());
         assert_eq!(
             shared, on_demand,
             "the shared set is the derivation it replaces"

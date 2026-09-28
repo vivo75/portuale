@@ -11675,11 +11675,87 @@ fn atom_installed_in_slot_of(
 /// see `atoms_all_in_graph` for the whole-alternative predicate): the atom
 /// is satisfied by a package already added to the graph this run
 /// (merge-bound), with `[use]` deps checked against that entry's resolved
-/// USE. Split out of `atoms_all_in_graph` so the circular-self-dep check
+/// USE. Real matches against full package objects -- slot included
+/// (`graph_db.match_pkgs(atom)` over the digraph) -- so the candidate
+/// carries the entry's `:slot[/sub-slot]` (the same assembled shape as
+/// [`circular_child_candidate`]; a slotless entry falls back to the bare
+/// cpv). Matching slotless used to over-match `:slot` atoms (`matches_slot`
+/// is vacuous without a candidate slot): `dev-lang/rust:1.95.0`
+/// "matched" graphed `rust-1.96.1`, ranked `Installed`, and beat
+/// `rust-bin:1.96.1` on the backtrack retry -- the g221c L0 regression
+/// (real's slot check rejects it, `rust-bin` wins). Split out of
+/// `atoms_all_in_graph` so the circular-self-dep check
 /// in `disjunction_preference` can ask the same question for one atom: a
 /// self-naming atom that matches an in-graph node is real's pass-1
 /// `preferred_in_graph` pick (backlog #216), not a circle to refuse.
+/// (The gate itself asks the coarser cp-presence question --
+/// [`atom_cp_present_in_graph`] -- since a cross-slot same-cp atom must
+/// still proceed to the bins; only the choice bins use this
+/// slot-precise rule.)
 fn atom_matches_graph(
+    atom_str: &str,
+    entries: &[GraphEntry],
+    config: &portage_profile::Config,
+    queued_cps: &HashSet<(String, String)>,
+) -> bool {
+    let Some(parsed) = portage_dep::parse_atom(atom_str) else {
+        return false;
+    };
+    if parsed.blocker != portage_dep::Blocker::None {
+        return false;
+    }
+    if queued_cps.contains(&(parsed.category.clone(), parsed.package.clone())) {
+        return true;
+    };
+    let use_deps = parsed.use_deps.unwrap_or_default();
+    entries.iter().any(|e| {
+        let Some(cpv) = merge_bound_cpv(e) else {
+            return false;
+        };
+        if e.category != parsed.category || e.package != parsed.package {
+            return false;
+        }
+        let mut candidate = cpv;
+        if let Some(slot) = &e.slot {
+            candidate.push(':');
+            candidate.push_str(slot);
+            if let Some(sub_slot) = &e.sub_slot {
+                candidate.push('/');
+                candidate.push_str(sub_slot);
+            }
+        }
+        if portage_dep::match_from_list(atom_str, &[candidate.as_str()])
+            .is_none_or(|m| m.is_empty())
+        {
+            return false;
+        }
+        if use_deps.is_empty() {
+            return true;
+        }
+        let enabled: HashSet<String> = e
+            .use_flags_display
+            .iter()
+            .filter(|(_, on)| *on)
+            .map(|(f, _)| f.clone())
+            .collect();
+        let iuse: HashSet<String> = e.use_flags_display.iter().map(|(f, _)| f.clone()).collect();
+        portage_dep::use_deps_satisfied(&use_deps, &valid_iuse(&iuse, config), &enabled)
+    })
+}
+
+/// The circular-self-dep gate's cp-level presence check: does a merge-bound
+/// entry (or a queued-but-unresolved atom, backlog #90 (S1)'s drain-state
+/// approximation) share the atom's `cat/pkg`? Deliberately slot-blind,
+/// unlike [`atom_matches_graph`]: the gate (portuale-only, real has no
+/// self-exclusion) asks "is our cp in play at all", not "does this atom
+/// resolve to a graphed instance". A same-cp cross-slot atom with a
+/// different-slot instance graphed (e.g. `dev-lang/rust:1.95.0` while
+/// `rust-1.96.1` is merge-bound) must still proceed to the choice bins --
+/// real merges the second instance as an ordinary dependency -- so slot
+/// precision here would wrongly refuse it as circular. Body is the
+/// pre-g221c `atom_matches_graph` verbatim; only the choice bins moved to
+/// the slot-precise rule.
+fn atom_cp_present_in_graph(
     atom_str: &str,
     entries: &[GraphEntry],
     config: &portage_profile::Config,
@@ -11704,9 +11780,6 @@ fn atom_matches_graph(
         }
         if portage_dep::match_from_list(atom_str, &[cpv.as_str()]).is_none_or(|m| m.is_empty()) {
             return false;
-        }
-        if use_deps.is_empty() {
-            return true;
         }
         let enabled: HashSet<String> = e
             .use_flags_display
@@ -11991,16 +12064,32 @@ fn alternative_downgrade_demoted(
 /// / "also borrowed as mutable" conflict this hit against the
 /// `'backtrack` loop's later `slot_constraints.entry(...)` mutations.
 /// `self_cp` is the entry currently being resolved, for the
-/// circular-self-dep check; `circular_dep` is the `'backtrack` loop's
-/// `circular_dependency` map (owner `cat/pkg` → circular-child cpv
-/// strings; empty on the first pass, a strict no-op) -- real
-/// `dep_zapdeps`' `circular_atom` demotion (`dep_check.py:673-691`),
-/// backlog #216. `root_deps_running_root` is the `--root-deps`
+/// circular-self-dep check; `circular_dependency` is the `'backtrack`
+/// loop's map (owner `cat/pkg` → circular-child records; empty on the
+/// first pass, a strict no-op) -- real `dep_zapdeps`' `circular_atom`
+/// demotion (`dep_check.py:673-691`), backlogs #216/#221. `root_deps_running_root` is the `--root-deps`
 /// feed-in (`None` = strict no-op). See `atom_currently_satisfiable`'s,
 /// `atom_all_use_unmasked`'s, `atom_cp_installed`'s and
 /// `atom_installed_in_slot_of`'s own doc comments for the per-predicate
 /// grounding; this function only sequences them the way real
 /// `dep_zapdeps`'s per-atom loop does.
+///
+/// `circular_dependency` is backlog #221's `backtrack_infos["config"]
+/// ["circular_dependency"] for this pass (empty on the first attempt):
+/// the previous attempt's cycle edges, parent `cat/pkg` to in-cycle
+/// children. An alternative with an atom matching one of `self_cp`'s
+/// recorded children -- real's `circular_atom`
+/// (`lib/portage/dep/dep_check.py:673-691`) -- ranks `Other`, so the
+/// re-walk takes the branch that breaks the cycle (bugs 703440, 705986).
+/// The installed-walk call sites (`collect_unwalked_installed_blockers`,
+/// `enqueue_dependencies`) pass an empty map: real keys exact package
+/// nodes (`Package.__hash__ = Task.__hash__`, no `__eq__` override), so
+/// an installed parent -- never a merge-bound cycle node -- can never
+/// hit. The argument is node-identity keying, not cp-disjointness:
+/// portuale's cp-keying would over-demote on an installed-v1/merging-v2
+/// cp collision real never exhibits (the blocker scan skips walked cps,
+/// but `enqueue_dependencies` parents are `AlreadyInstalled` entries
+/// whose cp may coincide with a merging cp).
 ///
 /// Real's per-atom loop probes each atom's availability once and
 /// short-circuits (`if not avail_pkg: ... break`, soft 469): review
@@ -12018,7 +12107,7 @@ fn disjunction_preference(
     entries: &[GraphEntry],
     self_cp: &(String, String),
     constraints: &HashMap<(String, String), Vec<String>>,
-    circular_dep: &HashMap<(String, String), Vec<String>>,
+    circular_dependency: &HashMap<(String, String), Vec<CircularDepChild>>,
     root_deps_running_root: Option<&Path>,
     atoms: &[String],
     queued: &[QueueItem],
@@ -12061,7 +12150,7 @@ fn disjunction_preference(
         });
         if self_naming
             && !atom_cp_installed(root, a)
-            && !atom_matches_graph(
+            && !atom_cp_present_in_graph(
                 a,
                 entries,
                 config,
@@ -12191,47 +12280,40 @@ fn disjunction_preference(
     ) {
         return portage_use_reduce::AltPreference::Other;
     }
-    // Backlog #216: real `dep_zapdeps`' `circular_atom` demotion
-    // (`dep_check.py:673-691`) -- the first half of backlog #22 slice
-    // 5's documented cut, whose input is now mapped. Once
-    // `_serialize_tasks` dead-ends on a hard cycle, real records every
-    // (node → predecessor) edge in the `circular_dependency` backtrack
-    // map (`depgraph.py:10262-10289`, carried here as `circular_dep`:
-    // owner cp → circular-child cpv strings), and the next pass demotes any
-    // `all_available` alternative with an atom matching a recorded
-    // child straight to `other`, below every real bin -- so
-    // `dev-lang/go`'s own `BDEPEND=|| ( >=dev-lang/go-X
-    // dev-lang/go-bootstrap )` takes `go-bootstrap` on the re-resolve.
-    // Blockers are skipped, and an atom satisfied by an installed
-    // instance is not circular (real's own `vardb.match(atom)`
-    // exemption -- a "cycle" through an installed package is no
-    // deadlock). The `parent.onlydeps` half of real's check stays a
-    // documented cut (the `--onlydeps` CLI flag is not threaded to this
-    // call depth, and mis-threading it breaks bug 756961's own test
-    // case), as does `virt_parent` (no virtual-parent notion here).
-    if let Some(children) = circular_dep.get(self_cp) {
-        for child_cpv in children {
-            let mut demote = false;
-            for a in atoms {
-                let Some(at) = portage_dep::parse_atom(a) else {
-                    continue;
-                };
-                if at.blocker != portage_dep::Blocker::None {
-                    continue;
-                }
-                if atom_matches_installed(root, a, config) {
-                    continue;
-                }
-                if portage_dep::match_from_list(a, &[child_cpv.as_str()])
+    // Backlog #221: real's `circular_atom` demotion
+    // (`lib/portage/dep/dep_check.py:673-691`, bugs 703440, 705986): on a
+    // backtrack restart after a stranded merge-order walk, an alternative
+    // with an atom matching one of the resolving parent's recorded
+    // in-cycle children ranks `other`, so the re-walk takes the branch
+    // that breaks the cycle. Before the USE binning below because real
+    // demotes regardless of USE-satisfaction (`if circular_atom is not
+    // None: other.append(this_choice)` ahead of the `all_use_satisfied`
+    // split). Two exemptions straight from real: blocker atoms never
+    // match, and an atom satisfied by an installed version is not a
+    // circular dep (`if vardb.match(atom): continue`). The
+    // `parent.onlydeps` half of the `circular_atom` site (soft 649-671)
+    // stays a documented cut: `--onlydeps` is not threaded to this call
+    // depth, and its demotion (avoiding the direct self-cycle for
+    // `--onlydeps` arguments) is independent of this backtracking one.
+    if let Some(children) = circular_dependency.get(self_cp) {
+        let circular_hit = atoms.iter().any(|a| {
+            let Some(atom) = portage_dep::parse_atom(a) else {
+                return false;
+            };
+            if atom.blocker != portage_dep::Blocker::None {
+                return false;
+            }
+            if atom_matches_installed(root, a, config) {
+                return false;
+            }
+            children.iter().any(|child| {
+                let candidate = circular_child_candidate(child);
+                portage_dep::match_from_list(a, &[candidate.as_str()])
                     .is_some_and(|m| !m.is_empty())
-                {
-                    demote = true;
-                    break;
-                }
-            }
-            if demote {
-                return portage_use_reduce::AltPreference::Other;
-            }
+            })
+        });
+        if circular_hit {
+            return portage_use_reduce::AltPreference::Other;
         }
     }
     if all_use_satisfied {
@@ -15059,6 +15141,12 @@ type EdgeKindMap = HashMap<((String, String), (String, String)), (bool, bool)>;
 /// loop both read this order directly; `--tree` walks the tree-mode
 /// serialization (`merge_order::tree_display_order`) over this same Vec,
 /// so the Vec order seeds its discovery exactly like the flat list does.
+///
+/// `circular` is backlog #221's settling pass's recorded cycle edges:
+/// the suppression inside the scheduler must demote exactly like the
+/// walk did, or a phantom edge re-closes the broken cycle and the order
+/// falls back to bias (bug 705986's `pypy-exe` request merging ahead of
+/// its own buildtime dep).
 #[allow(clippy::too_many_arguments)]
 fn topological_merge_order(
     entries: Vec<GraphEntry>,
@@ -15068,6 +15156,7 @@ fn topological_merge_order(
     implicit_system_deps: bool,
     repos: &[RepoConfig],
     dynamic_deps: bool,
+    circular: &HashMap<(String, String), Vec<CircularDepChild>>,
 ) -> Vec<GraphEntry> {
     // Backlog #155 S1: stamp BFS discovery order before the merge
     // sort consumes it -- the input vec IS discovery order (a package's
@@ -15083,7 +15172,7 @@ fn topological_merge_order(
         // (its scheduler runs regardless); portuale short-circuits the
         // scheduler, so dump here explicitly under `--pretend --debug`.
         if entries.len() == 1 && resolver_debug() {
-            merge_order::debug_dump_graph_only(&entries, top_level_atoms, root);
+            merge_order::debug_dump_graph_only(&entries, top_level_atoms, root, circular);
         }
         return entries;
     }
@@ -15095,6 +15184,7 @@ fn topological_merge_order(
         implicit_system_deps,
         repos,
         dynamic_deps,
+        circular,
     );
     let mut slots: Vec<Option<GraphEntry>> = entries.into_iter().map(Some).collect();
     order
@@ -17672,6 +17762,7 @@ fn find_hard_cycles(
     entries: &[GraphEntry],
     edge_kind_map: &EdgeKindMap,
     root: &Path,
+    circular: &HashMap<(String, String), Vec<CircularDepChild>>,
 ) -> Vec<Vec<String>> {
     // Merge-bound entries only, lowest index per cp (the merge list is
     // already in dependency order, so the first is the one to start a
@@ -17687,7 +17778,7 @@ fn find_hard_cycles(
     // edge is satisfied only by an installed instance in the dep
     // entry's own slot/sub-slot (real `_add_pkg_dep_string`'s
     // `inst_pkgs` same-slot filter in `depgraph.py`).
-    let kept = kept_alt_branches(entries, root);
+    let kept = kept_alt_branches(entries, root, circular);
     let slot_op_hard = |owner_idx: usize, dep_idx: usize| -> bool {
         entries[owner_idx].deps.iter().enumerate().any(|(ei, d)| {
             (d.alt.is_none() || kept[owner_idx].contains(&ei))
@@ -17818,6 +17909,158 @@ fn find_hard_cycles(
     }
 }
 
+/// Backlog #221: the restart-trigger half of real `_serialize_tasks`' no-leaf
+/// handling (`_emerge/depgraph.py:10264-10296`).
+///
+/// Real records `backtrack_infos["config"]["circular_dependency"]` and
+/// restarts whenever its leaf selection strands -- i.e. whenever the digraph
+/// filtered by `DepPrioritySatisfiedRange.ignore_medium_soft` still holds a
+/// cycle. That rung (`_ignore_satisfied_buildtime_slot_op`,
+/// `DepPrioritySatisfiedRange.py:79-86`) keeps exactly the non-optional
+/// edges real cannot satisfy without merging: unsatisfied `buildtime` AND
+/// unsatisfied `runtime` alike (`return not priority.buildtime and not
+/// priority.runtime` -- only an edge with neither flag, or a satisfied or
+/// optional one, is ignored). A pure-runtime cycle never reaches the
+/// recorder: `find_smallest_cycle` group-merges it first (no restart, no
+/// error). So the trigger is a directed cycle over those kept edges that
+/// contains at least one buildtime edge -- the shape a group merge can
+/// never absorb, since a buildtime edge is unignorable at every rung.
+///
+/// Edge sources mirror `find_hard_cycles`: the walk's `edge_kind_map` hard
+/// arm (precomputed unsatisfied-buildtime, cp-level) plus the selected
+/// `||`-branch `deps` walk (`kept_alt_branches`, real's digraph holding
+/// the resolved edge only), widened from buildtime-only to
+/// buildtime-or-runtime with real's own installed gate
+/// (`dep_edge_satisfied_by_installed`, so an installed-provided dep stays
+/// breakable exactly like real's `satisfied` rung). `PDEPEND`-only
+/// (`runtime_post` without `runtime`) edges stay out -- real's rung
+/// ignores those too.
+///
+/// Returns one index cycle per hard edge that closes a loop (each element
+/// depends on the next, the last wrapping to the first, the
+/// `find_hard_cycles` convention, so the recorder below can reuse real's
+/// `circular_child = cycle[index - 1]` rotation). One cycle per hard
+/// edge rather than full elementary enumeration: disjoint co-cycles
+/// converge over successive restarts (each retry strictly grows the
+/// recorded map -- see the `unsolved_cycle` gate at the call site), while
+/// enumeration would blow up on big graphs. Empty when no hard edge
+/// closes a loop (every ordinary resolve, and every pure-runtime cycle).
+fn find_restart_cycles(
+    entries: &[GraphEntry],
+    edge_kind_map: &EdgeKindMap,
+    root: &Path,
+    circular: &HashMap<(String, String), Vec<CircularDepChild>>,
+) -> Vec<Vec<usize>> {
+    let cp_index = merge_bound_index(entries);
+    // Trigger adjacency: owner index -> (dep index, hard). `hard` is an
+    // unsatisfied buildtime edge; any entry is an unsatisfied
+    // non-optional buildtime-or-runtime edge (real's kept set).
+    let mut adj: Vec<Vec<(usize, bool)>> = vec![Vec::new(); entries.len()];
+    let add_edge = |adj: &mut [Vec<(usize, bool)>], oi: usize, di: usize, hard: bool| {
+        if oi == di {
+            return;
+        }
+        match adj[oi].iter_mut().find(|(t, _)| *t == di) {
+            Some(slot) => {
+                slot.1 |= hard;
+            }
+            None => adj[oi].push((di, hard)),
+        }
+    };
+    // The walk's hard arm, same reading as `find_hard_cycles`.
+    for ((dep_cp, owner_cp), (has_hard, _)) in edge_kind_map {
+        if !has_hard {
+            continue;
+        }
+        let (Some(&oi), Some(&di)) = (
+            cp_index.get(&(owner_cp.0.as_str(), owner_cp.1.as_str())),
+            cp_index.get(&(dep_cp.0.as_str(), dep_cp.1.as_str())),
+        ) else {
+            continue;
+        };
+        add_edge(&mut adj, oi, di, true);
+    }
+    // The `deps` walk: selected branches only, real's installed gate.
+    let kept = kept_alt_branches(entries, root, circular);
+    for oi in 0..entries.len() {
+        if merge_bound_cpv(&entries[oi]).is_none() {
+            continue;
+        }
+        for (ei, d) in entries[oi].deps.iter().enumerate() {
+            if d.alt.is_some() && !kept[oi].contains(&ei) {
+                continue;
+            }
+            if d.priority.optional {
+                continue;
+            }
+            if !(d.priority.buildtime || d.priority.runtime) {
+                continue;
+            }
+            let Some(&di) = cp_index.get(&(d.category.as_str(), d.package.as_str())) else {
+                continue;
+            };
+            if dep_edge_satisfied_by_installed(root, d, Some(&entries[di])) {
+                continue;
+            }
+            add_edge(&mut adj, oi, di, d.priority.buildtime);
+        }
+    }
+    for v in &mut adj {
+        v.sort_unstable();
+    }
+    // One BFS per hard edge: from the hard edge's target back to its
+    // owner over trigger edges; success is a hard-containing cycle.
+    let mut cycles: Vec<Vec<usize>> = Vec::new();
+    for (u, targets) in adj.iter().enumerate() {
+        for &(v, hard) in targets {
+            if !hard {
+                continue;
+            }
+            // BFS v -> ... -> u.
+            let mut prev: HashMap<usize, usize> = HashMap::new();
+            let mut seen: HashSet<usize> = HashSet::from([v]);
+            let mut frontier = vec![v];
+            let mut found = false;
+            while !frontier.is_empty() && !found {
+                let mut next = Vec::new();
+                for &x in &frontier {
+                    for &(w, _) in &adj[x] {
+                        if w == u {
+                            prev.insert(w, x);
+                            found = true;
+                            break;
+                        }
+                        if seen.insert(w) {
+                            prev.insert(w, x);
+                            next.push(w);
+                        }
+                    }
+                    if found {
+                        break;
+                    }
+                }
+                frontier = next;
+            }
+            if !found {
+                continue;
+            }
+            // Walk u backwards to v: [u, ..., v]; reversed and
+            // re-rooted at u it reads u -> v -> ... -> u.
+            let mut rev = vec![u];
+            let mut cur = u;
+            while cur != v {
+                cur = prev[&cur];
+                rev.push(cur);
+            }
+            rev.reverse();
+            rev.truncate(rev.len() - 1);
+            let mut cycle = vec![u];
+            cycle.extend(rev);
+            cycles.push(cycle);
+        }
+    }
+    cycles
+}
 /// Backlog #193: real `depgraph._virt_deps_visible`'s virtual-cycle rule
 /// (`lib/_emerge/depgraph.py:6208-6222` in 3rdparty/portage 3.0.82.2).
 /// While resolving a `virtual/` atom, real recursively probes the
@@ -17877,13 +18120,17 @@ fn find_virtual_cycles(entries: &[GraphEntry], root: &Path) -> Vec<String> {
     // Branch selection reuses `kept_alt_branches`, the same set
     // `build_digraph` collapses to (real's digraph holds the resolved
     // edge only) -- computed lazily so resolves without a `||` edge on
-    // any merge-bound virtual never touch the digraph prelude.
+    // any merge-bound virtual never touch the digraph prelude. The empty
+    // map is backlog #193's own settled behaviour (this check predates
+    // the circular backtrack map; its pins must stay byte-identical):
+    // branch switching from a later backtrack pass is already reflected
+    // in the walk's own selection, which is what this re-derives.
     let kept: Vec<HashSet<usize>> = if entries.iter().any(|e| {
         e.category == "virtual"
             && merge_bound_cpv(e).is_some()
             && e.deps.iter().any(|d| d.alt.is_some())
     }) {
-        kept_alt_branches(entries, root)
+        kept_alt_branches(entries, root, &HashMap::new())
     } else {
         vec![HashSet::new(); entries.len()]
     };
@@ -18734,10 +18981,19 @@ fn collect_unwalked_installed_blockers(
     dynamic_deps: bool,
     ignore_built_slot_operator_deps: bool,
     disj_constraints: &HashMap<(String, String), Vec<String>>,
-    // Backlog #216: the loop's `circular_dependency` map, for the same
-    // `||` demotion the two dep-walk sites apply (this scan's branch
-    // ranking decides which branch's blockers surface).
-    circular_dep: &HashMap<(String, String), Vec<String>>,
+    // No `circular_dependency` map (backlogs #216/#221): this scan only
+    // processes installed packages whose cp was never walked (the
+    // walked-cp skip above), while both record sites key the map by
+    // merge-bound cycle-node cps (`find_hard_cycles`' merge-bound cpvs
+    // for #216's self-loops, `find_restart_cycles`' merge-bound indices
+    // for #221's rings) -- and every merge-bound cp is walked by
+    // definition. The demotion lookup therefore always misses here, so
+    // threading the live map would be exactly equivalent to the empty
+    // one real's per-parent `_select_atoms` would consult for a parent
+    // real never walks. (Real has no equivalent scan: it discovers
+    // installed blockers by walking installed packages in complete
+    // mode, which is `enqueue_dependencies`' job -- and that site also
+    // passes the empty map, per its own site decision below.)
     root_deps_running_root: Option<&Path>,
     entries: &[GraphEntry],
     pending_blockers: &mut Vec<PendingBlocker>,
@@ -18830,7 +19086,14 @@ fn collect_unwalked_installed_blockers(
                     entries,
                     &self_cp,
                     disj_constraints,
-                    circular_dep,
+                    // Site decision (backlogs #216/#221 reconciliation):
+                    // real keys `circular_dependency` by exact package
+                    // node, and this scan only processes installed
+                    // packages whose cp was never walked -- while the map
+                    // is keyed by merge-bound cycle-node cps only -- so
+                    // the demotion lookup always misses and the empty map
+                    // is exactly faithful here. See the parameter doc.
+                    &HashMap::new(),
                     root_deps_running_root,
                     atoms,
                     &[],
@@ -22284,6 +22547,13 @@ pub struct GraphResult {
     /// renders `_show_circular_deps`'s block and exits 1 when this is
     /// non-empty. Empty in every ordinary resolve.
     pub circular_deps: Vec<Vec<String>>,
+    /// Backlog #221: the settling pass's recorded cycle edges (real
+    /// `backtrack_infos["config"]["circular_dependency"]`), empty when no
+    /// backtrack restart happened. The caller (`pretend.rs`) feeds it back
+    /// into the display-side `kept_alt_branches` / `resolved_dep_targets`
+    /// derivations so `--tree` and the blocker disposition keep the
+    /// cycle-breaking branch the walk took.
+    pub circular_dependency: HashMap<(String, String), Vec<CircularDepChild>>,
     /// Real `circular_dependency_handler.large_cycle_count`: the full
     /// elementary-cycle enumeration (`merge_order::cycle_report`, real
     /// `digraph.get_cycles` over the `medium_soft` rung) counted more
@@ -24420,6 +24690,7 @@ fn params_equal(a: &BacktrackParams, b: &BacktrackParams) -> bool {
         && a.autounmask_disabled == b.autounmask_disabled
         && a.slot_operator_replace_installed == b.slot_operator_replace_installed
         && a.slot_operator_undone == b.slot_operator_undone
+        && a.circular_dependency == b.circular_dependency
 }
 
 /// Real `Backtracker._check_runtime_pkg_mask` (bug 375573): a node is
@@ -24901,24 +25172,6 @@ struct BacktrackParams {
     /// (real's `dep.parent not in _runtime_pkg_mask` check) holds every
     /// `!=parent-cpv` already tried, guaranteeing termination.
     missing_dep_masked: HashSet<String>,
-    /// Backlog #216: real `_serialize_tasks`' circular dead-end
-    /// (`depgraph.py:10262-10289`, the `not selected_nodes` branch of
-    /// `_serialize_tasks`' `altlist`): the walk finished but a hard
-    /// cycle -- now including a true self-loop, see `find_hard_cycles`
-    /// -- leaves nodes unselectable. Real records every (node → its
-    /// predecessor in the cycle) edge into the `circular_dependency`
-    /// backtrack map, and the next pass's `dep_zapdeps` demotes any
-    /// `||` alternative matching a recorded child to `other`
-    /// (`dep_check.py:673-691` -- see `disjunction_preference`'s
-    /// `circular_dep` argument). Owner `(cat, pkg)` → circular-child cpv
-    /// strings (real keys by `Package`; the cpv carries the same
-    /// identity for `match_from_list`, and the installed exemption is
-    /// re-checked at use). Compared by `params_equal` (new edges = new
-    /// search state); monotone along a search path and bounded by the
-    /// owner×child product, so the loop terminates: a pass whose cycle
-    /// adds nothing new is an unsolved cycle (real's `unsolved_cycle` →
-    /// `_skip_restart`), reported, not retried.
-    circular_dependency: HashMap<(String, String), Vec<String>>,
     /// Real `_complete_graph`'s own parent atoms, discovered by vdb
     /// reverse scan -- see `reverse_dependency_constraints`. Latches every
     /// `(cat/pkg, atom)` already folded into `slot_constraints` so a
@@ -25036,6 +25289,66 @@ struct BacktrackParams {
     /// caller-side `already` set (real has no analogue of this latch to
     /// compare -- its undo mutates the graph in place).
     slot_operator_undone: BTreeSet<(String, String)>,
+    /// Backlog #221: real `backtrack_infos["config"]["circular_dependency"]`
+    /// (`_emerge/depgraph.py:10270-10287`, written by `_serialize_tasks`
+    /// when no leaf node selects and consumed by `resolver/backtracking.py::
+    /// _feedback_config` on the restart). When the merge-order walk strands
+    /// on a dependency cycle real does not fail at once: it records, for
+    /// every cycle node, the in-cycle package it depends on
+    /// (`circular_dependency.setdefault(node, set()).add(circular_child)`)
+    /// and re-runs the whole walk, on which `dep_zapdeps`
+    /// (`lib/portage/dep/dep_check.py:673-691`) demotes any `||`
+    /// alternative with an atom matching such a child (`circular_atom`)
+    /// to the `other` bin, so the walk takes the branch that breaks the
+    /// cycle (bugs 703440, 705986). Keyed by the cycle node's `cat/pkg`
+    /// (real keys exact package nodes; portuale resolves one instance per
+    /// `cat/pkg`, so the cp carries the same information -- see
+    /// `slot_operator_replace_installed`'s own narrowing note). A retry
+    /// whose cycle re-uses an already-recorded node is unsolved (real's
+    /// `unsolved_cycle`) and settles into the circular report instead of
+    /// retrying, so the map strictly grows per retry and the search
+    /// terminates. Included in `params_equal`: a grown map is a distinct
+    /// search state, or the retry node would dedup against its parent.
+    /// Backlog #216's fresh-self-loop records share this map (same
+    /// rotation, `cycle_restartable`'s scope gate in `collect_feedback`):
+    /// one field, structured children, both triggers.
+    circular_dependency: HashMap<(String, String), Vec<CircularDepChild>>,
+}
+
+/// Backlog #221: one in-cycle dependency of a `circular_dependency` parent
+/// above -- real's `circular_child` package object, reduced to the fields
+/// `atom.match(child)` needs: the child's own `cat/pkg-version` plus the
+/// slot/sub-slot an atom's `:slot` pin would match against
+/// (`match_from_list` on the assembled candidate string, the same shape
+/// `best_installed_matching` matches installed candidates with).
+/// `pub` (fields private) so the CLI crate can carry the settling pass's
+/// map into its own `kept_alt_branches` / `resolved_dep_targets` display
+/// derivations, which must demote exactly like the walk did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CircularDepChild {
+    category: String,
+    package: String,
+    version: String,
+    slot: Option<String>,
+    sub_slot: Option<String>,
+}
+
+/// The `cat/pkg-version[:slot[/sub]]` candidate string real's
+/// `atom.match(circular_child)` sees, shared by the walk's demotion and
+/// the merge-order suppression's (see `suppressed_alt_edges`): the two
+/// must agree on what matches, or the re-derivation keeps the branch the
+/// walk dropped and a phantom edge re-closes the cycle.
+pub(crate) fn circular_child_candidate(child: &CircularDepChild) -> String {
+    let mut candidate = format!("{}/{}-{}", child.category, child.package, child.version);
+    if let Some(slot) = &child.slot {
+        candidate.push(':');
+        candidate.push_str(slot);
+        if let Some(sub) = &child.sub_slot {
+            candidate.push('/');
+            candidate.push_str(sub);
+        }
+    }
+    candidate
 }
 
 impl BacktrackParams {
@@ -26558,7 +26871,6 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     &mut state.installed_meta_memo,
                     &mut state.slot_pullers,
                     &union_constraints,
-                    &bp.circular_dependency,
                     ctx.update,
                     &ctx.local_binpkg,
                 );
@@ -28064,6 +28376,10 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     &state.entries,
                     &self_cp,
                     &union_constraints,
+                    // Backlog #221: this pass's recorded cycle edges --
+                    // empty on the first attempt, populated on the
+                    // restart after a stranded walk (see
+                    // `collect_feedback`).
                     &bp.circular_dependency,
                     ctx.root_deps_running_root,
                     atoms,
@@ -28518,7 +28834,6 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             ctx.dynamic_deps,
             ctx.ignore_built_slot_operator_deps,
             &union_constraints,
-            &bp.circular_dependency,
             ctx.root_deps_running_root,
             &state.entries,
             &mut state.pending_blockers,
@@ -28563,6 +28878,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             ctx.implicit_system_deps,
             &ctx.repos,
             ctx.dynamic_deps,
+            &bp.circular_dependency,
         ) {
             if let Some(b) = state
                 .entries
@@ -28769,26 +29085,31 @@ fn collect_feedback(
     // cycle) edge into the `circular_dependency` backtrack map and
     // retries, and the next pass's `dep_zapdeps` demotes the matching
     // `||` branch to `other` (see `disjunction_preference`'s
-    // `circular_dep` argument). A cycle that adds nothing new is
+    // `circular_dependency` argument). A cycle that adds nothing new is
     // unsolved (real's `unsolved_cycle` → `_skip_restart`): a dead end,
     // reported from the best run, not retried.
     //
     // Scope (`cycle_restartable`): only the fresh self-pick shape
-    // retries. Every other hard cycle falls through to the pre-existing
-    // arms exactly as before (a walk-time NVC still beats it below,
-    // multi-node rings still settle into the abort path via
-    // `assemble_result`), so their reports are byte-identical with and
+    // retries HERE. Every other hard cycle falls through to the later
+    // arms exactly as before (a walk-time NVC still beats it below;
+    // multi-node rings reach backlog #221's general restart arm, which
+    // shares this map), so their reports are byte-identical with and
     // without this slice.
     //
     // Placed before the slot-conflict arms: a deadlocked graph pre-empts
     // conflict repair (real never reaches conflict processing with a
     // failed serialize); a re-pass whose demotion clears the cycle
     // re-runs those arms normally.
-    let hard_cycles = find_hard_cycles(&pass.entries, &pass.edge_kind_map, ctx.root);
+    let hard_cycles = find_hard_cycles(
+        &pass.entries,
+        &pass.edge_kind_map,
+        ctx.root,
+        &grown.circular_dependency,
+    );
     if hard_cycles.len() == 1
         && cycle_restartable(
             &pass.entries,
-            &kept_alt_branches(&pass.entries, ctx.root),
+            &kept_alt_branches(&pass.entries, ctx.root, &grown.circular_dependency),
             &hard_cycles[0],
             ctx.root,
         )
@@ -28806,12 +29127,38 @@ fn collect_feedback(
                 } else {
                     &cycle[index - 1]
                 };
+                let Some((child_cat, child_pkg, child_ver)) = split_cpv(child_cpv) else {
+                    continue;
+                };
+                // An empty version builds a `cat/pkg-` candidate that no
+                // atom ever matches (M1): skip the record instead of
+                // recording a dead edge that would still count as
+                // `new_info` and force a futile retry.
+                if child_ver.is_empty() {
+                    continue;
+                }
+                // Slot fidelity like #221's ring records below: the
+                // merge-bound entry behind the child cpv carries the
+                // slot/sub-slot an atom's `:slot` pin matches against.
+                let (child_slot, child_sub_slot) = pass
+                    .entries
+                    .iter()
+                    .find(|e| merge_bound_cpv(e).as_deref() == Some(child_cpv.as_str()))
+                    .map(|e| (e.slot.clone(), e.sub_slot.clone()))
+                    .unwrap_or((None, None));
+                let record = CircularDepChild {
+                    category: child_cat,
+                    package: child_pkg,
+                    version: child_ver,
+                    slot: child_slot,
+                    sub_slot: child_sub_slot,
+                };
                 let bucket = grown
                     .circular_dependency
                     .entry((node_cat, node_pkg))
                     .or_default();
-                if !bucket.contains(child_cpv) {
-                    bucket.push(child_cpv.clone());
+                if !bucket.contains(&record) {
+                    bucket.push(record);
                     new_info = true;
                 }
             }
@@ -29285,6 +29632,90 @@ fn collect_feedback(
         }
     }
 
+    // Backlog #221: real `_serialize_tasks`' no-leaf restart
+    // (`_emerge/depgraph.py:10264-10296`, bugs 703440, 705986). A pass
+    // that settled everywhere else but stranded the merge-order walk on
+    // a dependency cycle records the cycle's edges into
+    // `circular_dependency` and re-runs the whole walk, on which
+    // `disjunction_preference` demotes the cycle-closing `||` branches
+    // (see its `circular_atom` site). Placed after every other feedback:
+    // real only reaches serialization once graph creation (slot
+    // conflicts, missing deps, autounmask growth, reverse-dep pins, the
+    // slot-operator trigger) settled. Gated on `--backtrack=0` (real's
+    // `_allow_backtracking` -- the `--backtrack=0` run reports the
+    // circular error exactly as before), on no unsatisfiable dependency
+    // (real never serializes a failed `_create_graph`), and on no
+    // surviving slot conflict or orphan blocker (real backtracks those
+    // first; a conflict-only fall-through still settles below).
+    // `unsolved_cycle`: a cycle re-using an already-recorded node means
+    // the demotion did not break it -- settle into the circular report
+    // instead of retrying, exactly like real's `_skip_restart`. Every
+    // retry therefore strictly grows the map, so the search terminates.
+    // `Circular` feedback is budget-free (the driver treats it like
+    // `Config`: no mask step, and under `--backtrack=0` the pass
+    // settles into the circular report) -- shared with backlog #216's
+    // fresh-self-loop arm above, which emits the same variant.
+    if ctx.backtrack_max > 0
+        && !has_nvc
+        && pass.slot_conflicts.is_empty()
+        && pass.orphan_blockers.is_empty()
+    {
+        let cycles = find_restart_cycles(
+            &pass.entries,
+            &pass.edge_kind_map,
+            ctx.root,
+            &grown.circular_dependency,
+        );
+        if !cycles.is_empty() {
+            let unsolved = cycles.iter().flatten().any(|&idx| {
+                grown.circular_dependency.contains_key(&(
+                    pass.entries[idx].category.clone(),
+                    pass.entries[idx].package.clone(),
+                ))
+            });
+            if !unsolved {
+                for cycle in &cycles {
+                    for (i, &idx) in cycle.iter().enumerate() {
+                        // Real's rotation: `circular_child = cycle[-1]`
+                        // for index 0, `cycle[index - 1]` otherwise --
+                        // each node's in-cycle dependency.
+                        let child = &pass.entries[cycle[(i + cycle.len() - 1) % cycle.len()]];
+                        let parent = &pass.entries[idx];
+                        // Merge-bound by construction (both trigger arms
+                        // only link merge-bound entries), so the version
+                        // is never empty in practice; skip belt-and-braces
+                        // (M1): an empty version would build a `cat/pkg-`
+                        // candidate no atom matches.
+                        let Some(child_version) = merge_bound_version(&child.outcome).cloned()
+                        else {
+                            continue;
+                        };
+                        if child_version.is_empty() {
+                            continue;
+                        }
+                        let record = CircularDepChild {
+                            category: child.category.clone(),
+                            package: child.package.clone(),
+                            version: child_version,
+                            slot: child.slot.clone(),
+                            sub_slot: child.sub_slot.clone(),
+                        };
+                        let bucket = grown
+                            .circular_dependency
+                            .entry((parent.category.clone(), parent.package.clone()))
+                            .or_default();
+                        if !bucket.contains(&record) {
+                            bucket.push(record);
+                        }
+                    }
+                }
+                return PassDecision::Feedback(BacktrackFeedback::Circular {
+                    params: Box::new(grown),
+                });
+            }
+        }
+    }
+
     if has_nvc {
         PassDecision::DeadEnd {
             params: Box::new(grown),
@@ -29418,6 +29849,7 @@ fn assemble_result(
         ctx.implicit_system_deps,
         &ctx.repos,
         ctx.dynamic_deps,
+        &params.circular_dependency,
     );
 
     // Real depgraph.py:5706-5717 -- see GraphResult::
@@ -29467,7 +29899,70 @@ fn assemble_result(
     // cycle in discovery order (it can't linearize one); this
     // records it for `pretend.rs` to render the fatal
     // `* Error: circular dependencies:` block.
-    let circular_deps = find_hard_cycles(&pass.entries, &pass.edge_kind_map, ctx.root);
+    let mut circular_deps = find_hard_cycles(
+        &pass.entries,
+        &pass.edge_kind_map,
+        ctx.root,
+        &params.circular_dependency,
+    );
+
+    // Backlog #221: a persisting restart cycle the hard reporter cannot
+    // see -- either backtracking never ran (`--backtrack=0`, where real
+    // fails instead of retrying: pg5's runtime-closing ring) or a retry
+    // ran and the demotion did not break it (real's `unsolved_cycle` --
+    // e.g. a single-branch `||` closing the ring, demoted but still
+    // picked as last resort). Real's own error block covers these (its
+    // `get_cycles` runs over the `medium_soft` rung, which keeps
+    // unsatisfied runtime edges), so report the persisting ring in the
+    // same `circular_deps` shape instead of settling `Complete` over an
+    // unlinearizable graph. Gated to otherwise-clean passes (an
+    // unsatisfiable dep, slot conflict or orphan blocker is what real
+    // reports first -- same precedence as `collect_feedback`'s own
+    // trigger), to an empty hard report (no double render), and to
+    // passes that could not have retried past this ring: with
+    // backtracking on, a clean pass carrying a trigger cycle always
+    // retries out of `collect_feedback`, so a settled one either broke
+    // the ring (nothing to report) or is unsolved (recorded map).
+    let pass_has_nvc = pass.suppressed_nvc
+        || pass
+            .entries
+            .iter()
+            .any(|e| matches!(e.outcome, PretendOutcome::NoVisibleCandidate));
+    if circular_deps.is_empty()
+        && (ctx.backtrack_max == 0 || !params.circular_dependency.is_empty())
+        && !pass_has_nvc
+        && pass.slot_conflicts.is_empty()
+        && pass.orphan_blockers.is_empty()
+    {
+        for cycle in find_restart_cycles(
+            &pass.entries,
+            &pass.edge_kind_map,
+            ctx.root,
+            &params.circular_dependency,
+        ) {
+            let mut cpvs: Vec<String> = cycle
+                .iter()
+                .filter_map(|&i| merge_bound_cpv(&pass.entries[i]))
+                .collect();
+            if cpvs.len() != cycle.len() {
+                continue;
+            }
+            // Same rotation convention as `find_hard_cycles` (lowest
+            // entries index first -- entries are already in merge
+            // order), which also dedupes the one-cycle-per-hard-edge
+            // repeats into a single ring.
+            let min_pos = cpvs
+                .iter()
+                .enumerate()
+                .min_by_key(|&(p, _)| cycle[p])
+                .map(|(p, _)| p)
+                .unwrap_or(0);
+            cpvs.rotate_left(min_pos);
+            if !circular_deps.contains(&cpvs) {
+                circular_deps.push(cpvs);
+            }
+        }
+    }
 
     // Elementary-cycle enumeration + reduced display order for the
     // `large_cycle_count` trailer and the cycle-only re-display
@@ -29477,7 +29972,12 @@ fn assemble_result(
     let (large_cycle_count, cycle_display) = if circular_deps.is_empty() {
         (false, Vec::new())
     } else {
-        let (cycles, display) = merge_order::cycle_report(&pass.entries, ctx.atoms, ctx.root);
+        let (cycles, display) = merge_order::cycle_report(
+            &pass.entries,
+            ctx.atoms,
+            ctx.root,
+            &params.circular_dependency,
+        );
         let display = display
             .into_iter()
             .filter_map(|i| merge_bound_cpv(&pass.entries[i]))
@@ -29866,6 +30366,7 @@ fn assemble_result(
             || pass.parent_flip_rescued,
         abi_rebuilds,
         circular_deps,
+        circular_dependency: params.circular_dependency.clone(),
         masked_deps: pass.masked_deps,
         use_unsat_deps: pass.use_unsat_deps,
         plain_miss_deps: pass.plain_miss_deps,
@@ -30503,11 +31004,18 @@ fn enqueue_dependencies(
     // selection the same way the main New/Upgrade loop's is -- empty on
     // the first pass, so a strict no-op there.
     disj_constraints: &HashMap<(String, String), Vec<String>>,
-    // Backlog #216: the loop's `circular_dependency` map (owner cp →
-    // circular-child cpvs), consulted by the same `||` selection for
-    // real `dep_zapdeps`' `circular_atom` demotion -- empty on the first
-    // pass, so a strict no-op there.
-    circular_dep: &HashMap<(String, String), Vec<String>>,
+    // No `circular_dependency` map (backlogs #216/#221 reconciliation):
+    // this deep-walk's parents are `AlreadyInstalled` entries only (see
+    // the call site -- merge-bound upgrades go through the main
+    // New/Upgrade loop), while recorded nodes are merge-bound-only on
+    // both sides: real records serialize-digraph nodes that stranded on
+    // unmet buildtime deps (an installed node is always a leaf), keyed
+    // by node identity (`Package.__hash__ = Task.__hash__`), and
+    // portuale's two record sites only link merge-bound entries. Real's
+    // lookup for such a parent therefore always misses -- and portuale's
+    // cp-keying would over-demote on an installed-v1/merging-v2 cp
+    // collision real never exhibits -- so the empty map is exactly
+    // faithful here, like the unwalked-installed scan above.
     // Backlog #90 (S1): `--update`, for the downgrade-guard's
     // queued-update lookahead (same feed as the main walk's
     // `ctx.update` at its own `disjunction_preference` call).
@@ -30645,7 +31153,14 @@ fn enqueue_dependencies(
                 entries,
                 &self_cp,
                 disj_constraints,
-                circular_dep,
+                // Site decision (backlogs #216/#221 reconciliation): the
+                // empty map. See the parameter doc: this deep-walk's
+                // parents are `AlreadyInstalled` entries only, which
+                // real's node-identity-keyed lookup always misses, so
+                // threading the live map would over-demote on
+                // installed-v1/merging-v2 cp collisions real never
+                // exhibits.
+                &HashMap::new(),
                 root_deps_running_root,
                 atoms,
                 &queued,
@@ -37919,6 +38434,7 @@ mod tests {
             true,
             &repos,
             true,
+            &HashMap::new(),
         );
         let names: Vec<String> = order
             .iter()
@@ -37952,6 +38468,7 @@ mod tests {
             true,
             &repos,
             true,
+            &HashMap::new(),
         );
         let names: Vec<String> = order
             .iter()
@@ -41491,6 +42008,261 @@ mod tests {
         );
     }
 
+    /// Backlog #221: `find_restart_cycles` (real `_serialize_tasks`'
+    /// no-leaf restart trigger, `_emerge/depgraph.py:10264-10296`) finds
+    /// the hard-containing cycle a stranded walk leaves behind, one
+    /// index cycle per closing hard edge, in `find_hard_cycles` order
+    /// convention (each element depends on the next, last wraps to
+    /// first). The empty result and the rotation flips fail here.
+    #[test]
+    fn find_restart_cycles_reports_a_hard_two_cycle() {
+        let dep = |pkg: &str, priority: DepPriority| DepEdge {
+            atom: format!("dev-libs/{pkg}"),
+            evaluated: format!("dev-libs/{pkg}"),
+            category: "dev-libs".to_string(),
+            package: pkg.to_string(),
+            priority,
+            disjunctive: false,
+            alt: None,
+            key: 3,
+        };
+        let buildtime = DepPriority {
+            buildtime: true,
+            ..DepPriority::default()
+        };
+        let mut a = graph_entry("dev-libs", "cyc-a", "1.0");
+        let mut b = graph_entry("dev-libs", "cyc-b", "1.0");
+        a.deps = vec![dep("cyc-b", buildtime)];
+        b.deps = vec![dep("cyc-a", buildtime)];
+        let entries = vec![a, b];
+        let mut map: EdgeKindMap = HashMap::new();
+        map.insert(
+            (
+                ("dev-libs".to_string(), "cyc-b".to_string()),
+                ("dev-libs".to_string(), "cyc-a".to_string()),
+            ),
+            (true, false),
+        );
+        map.insert(
+            (
+                ("dev-libs".to_string(), "cyc-a".to_string()),
+                ("dev-libs".to_string(), "cyc-b".to_string()),
+            ),
+            (true, false),
+        );
+        let cycles = find_restart_cycles(
+            &entries,
+            &map,
+            Path::new("/nonexistent-root"),
+            &HashMap::new(),
+        );
+        assert_eq!(cycles.len(), 2, "{cycles:?}");
+        for cycle in &cycles {
+            assert_eq!(cycle.len(), 2, "{cycles:?}");
+        }
+        // Canonical rotations of the same a -> b -> a loop.
+        let mut canon: Vec<Vec<usize>> = cycles
+            .iter()
+            .map(|c| {
+                let min = c.iter().enumerate().min_by_key(|&(_, &i)| i).unwrap().0;
+                c.iter().cycle().skip(min).take(c.len()).copied().collect()
+            })
+            .collect();
+        canon.sort();
+        canon.dedup();
+        assert_eq!(canon, vec![vec![0, 1]], "{cycles:?}");
+    }
+
+    /// The bug-705986/icedtea shape: the closing edge is runtime-only
+    /// (an RDEPEND `||` branch), invisible to `find_hard_cycles`, but
+    /// the cycle still holds an unsatisfied buildtime edge -- so it is
+    /// a restart trigger. The runtime-edge inclusion flip fails here.
+    #[test]
+    fn find_restart_cycles_reports_a_runtime_closing_cycle() {
+        let dep = |pkg: &str, priority: DepPriority, key: u8| DepEdge {
+            atom: format!("dev-libs/{pkg}"),
+            evaluated: format!("dev-libs/{pkg}"),
+            category: "dev-libs".to_string(),
+            package: pkg.to_string(),
+            priority,
+            disjunctive: false,
+            alt: None,
+            key,
+        };
+        let buildtime = DepPriority {
+            buildtime: true,
+            ..DepPriority::default()
+        };
+        let runtime = DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        };
+        let mut a = graph_entry("dev-libs", "cyc-a", "1.0");
+        let mut v = graph_entry("dev-libs", "cyc-v", "1.0");
+        a.deps = vec![dep("cyc-v", buildtime, 3)];
+        v.deps = vec![dep("cyc-a", runtime, 0)];
+        let entries = vec![a, v];
+        // Only the buildtime half reaches the walk's hard arm; the
+        // runtime half is a soft map entry at most.
+        let mut map: EdgeKindMap = HashMap::new();
+        map.insert(
+            (
+                ("dev-libs".to_string(), "cyc-v".to_string()),
+                ("dev-libs".to_string(), "cyc-a".to_string()),
+            ),
+            (true, false),
+        );
+        let cycles = find_restart_cycles(
+            &entries,
+            &map,
+            Path::new("/nonexistent-root"),
+            &HashMap::new(),
+        );
+        assert_eq!(cycles.len(), 1, "{cycles:?}");
+        assert_eq!(cycles[0].len(), 2, "{cycles:?}");
+    }
+
+    /// A pure-runtime two-cycle is group-merged, never restarted (real's
+    /// `find_smallest_cycle` absorbs it): no hard edge, no trigger. An
+    /// acyclic pair is quiet too. Both emptiness flips fail here.
+    #[test]
+    fn find_restart_cycles_ignores_runtime_only_and_acyclic_graphs() {
+        let dep = |pkg: &str, priority: DepPriority| DepEdge {
+            atom: format!("dev-libs/{pkg}"),
+            evaluated: format!("dev-libs/{pkg}"),
+            category: "dev-libs".to_string(),
+            package: pkg.to_string(),
+            priority,
+            disjunctive: false,
+            alt: None,
+            key: 0,
+        };
+        let runtime = DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        };
+        let mut a = graph_entry("dev-libs", "cyc-a", "1.0");
+        let mut b = graph_entry("dev-libs", "cyc-b", "1.0");
+        a.deps = vec![dep("cyc-b", runtime)];
+        b.deps = vec![dep("cyc-a", runtime)];
+        let entries = vec![a, b];
+        let mut map: EdgeKindMap = HashMap::new();
+        map.insert(
+            (
+                ("dev-libs".to_string(), "cyc-b".to_string()),
+                ("dev-libs".to_string(), "cyc-a".to_string()),
+            ),
+            (false, true),
+        );
+        map.insert(
+            (
+                ("dev-libs".to_string(), "cyc-a".to_string()),
+                ("dev-libs".to_string(), "cyc-b".to_string()),
+            ),
+            (false, true),
+        );
+        assert!(
+            find_restart_cycles(
+                &entries,
+                &map,
+                Path::new("/nonexistent-root"),
+                &HashMap::new()
+            )
+            .is_empty()
+        );
+        // Acyclic: b's edge dropped.
+        let mut a = graph_entry("dev-libs", "cyc-a", "1.0");
+        let b = graph_entry("dev-libs", "cyc-b", "1.0");
+        a.deps = vec![dep(
+            "cyc-b",
+            DepPriority {
+                buildtime: true,
+                ..DepPriority::default()
+            },
+        )];
+        let entries = vec![a, b];
+        assert!(
+            find_restart_cycles(
+                &entries,
+                &map,
+                Path::new("/nonexistent-root"),
+                &HashMap::new()
+            )
+            .is_empty()
+        );
+    }
+
+    /// Backlog #221 (I3): a build-time edge softened by a parallel
+    /// run-time route -- `sbrA` BDEPENDs+RDEPENDs on `sbrB` while `sbrB`
+    /// BDEPENDs back -- is breakable for the hard reporter (`(true,
+    /// true)` in the walk's `EdgeKindMap`, so `find_hard_cycles` stays
+    /// empty) but still strands the walk, so `find_restart_cycles`
+    /// reports it. `assemble_result`'s persisting-ring leg (not the hard
+    /// leg) renders the failure. The emptiness/non-emptiness flips fail
+    /// here.
+    #[test]
+    fn softened_buildtime_edge_hides_from_hard_cycles_but_not_restart_cycles() {
+        let dep = |pkg: &str, priority: DepPriority, key: u8| DepEdge {
+            atom: format!("dev-libs/{pkg}"),
+            evaluated: format!("dev-libs/{pkg}"),
+            category: "dev-libs".to_string(),
+            package: pkg.to_string(),
+            priority,
+            disjunctive: false,
+            alt: None,
+            key,
+        };
+        let buildtime = DepPriority {
+            buildtime: true,
+            ..DepPriority::default()
+        };
+        let runtime = DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        };
+        let mut a = graph_entry("dev-libs", "sbr-a", "1.0");
+        let mut b = graph_entry("dev-libs", "sbr-b", "1.0");
+        a.deps = vec![dep("sbr-b", buildtime, 4), dep("sbr-b", runtime, 0)];
+        b.deps = vec![dep("sbr-a", buildtime, 4)];
+        let entries = vec![a, b];
+        let cp = |pkg: &str| ("dev-libs".to_string(), pkg.to_string());
+        let mut map: EdgeKindMap = HashMap::new();
+        // Owner `sbr-a` reaches `sbr-b` both hard (BDEPEND) and soft
+        // (RDEPEND): breakable, invisible to the hard reporter.
+        map.insert((cp("sbr-b"), cp("sbr-a")), (true, true));
+        // Owner `sbr-b` reaches `sbr-a` hard only -- but one directed
+        // edge is no cycle.
+        map.insert((cp("sbr-a"), cp("sbr-b")), (true, false));
+        assert!(
+            find_hard_cycles(
+                &entries,
+                &map,
+                Path::new("/nonexistent-root"),
+                &HashMap::new()
+            )
+            .is_empty()
+        );
+        let cycles = find_restart_cycles(
+            &entries,
+            &map,
+            Path::new("/nonexistent-root"),
+            &HashMap::new(),
+        );
+        // One index cycle per closing hard edge (both edges are hard
+        // here): the two rotations of the same a -> b -> a loop.
+        assert_eq!(cycles.len(), 2, "{cycles:?}");
+        let mut canon: Vec<Vec<usize>> = cycles
+            .iter()
+            .map(|c| {
+                let min = c.iter().enumerate().min_by_key(|&(_, &i)| i).unwrap().0;
+                c.iter().cycle().skip(min).take(c.len()).copied().collect()
+            })
+            .collect();
+        canon.sort();
+        canon.dedup();
+        assert_eq!(canon, vec![vec![0, 1]], "{cycles:?}");
+    }
+
     #[test]
     fn recursion_terminates_on_a_dependency_cycle() {
         let entries = graph("dev-libs/cycle-a");
@@ -41540,6 +42312,7 @@ mod tests {
             true,
             &[],
             true,
+            &HashMap::new(),
         );
         let names: Vec<&str> = ordered.iter().map(|e| e.package.as_str()).collect();
         assert_eq!(names, vec!["cyc-b", "cyc-a"]);
@@ -41562,6 +42335,7 @@ mod tests {
             true,
             &[],
             true,
+            &HashMap::new(),
         );
         let names: Vec<&str> = ordered.iter().map(|e| e.package.as_str()).collect();
         assert_eq!(names, vec!["cyc-a", "cyc-b"]);
@@ -41599,6 +42373,7 @@ mod tests {
             true,
             &[],
             true,
+            &HashMap::new(),
         );
         let ranks: Vec<(&str, usize)> = ordered
             .iter()
@@ -41632,6 +42407,7 @@ mod tests {
             true,
             &[],
             true,
+            &HashMap::new(),
         );
         let names: Vec<&str> = biased.iter().map(|e| e.package.as_str()).collect();
         assert_eq!(names, vec!["c", "a", "b"]);
@@ -41647,6 +42423,7 @@ mod tests {
             false,
             &[],
             true,
+            &HashMap::new(),
         );
         let names: Vec<&str> = unbiased.iter().map(|e| e.package.as_str()).collect();
         assert_eq!(names, vec!["a", "b", "c"]);
@@ -41668,7 +42445,12 @@ mod tests {
         hard.insert((cp("hcb"), cp("hca")), (true, false));
         hard.insert((cp("hca"), cp("hcb")), (true, false));
         assert_eq!(
-            find_hard_cycles(&entries, &hard, Path::new("/nonexistent-root")),
+            find_hard_cycles(
+                &entries,
+                &hard,
+                Path::new("/nonexistent-root"),
+                &HashMap::new()
+            ),
             vec![vec![hardcpv("hca"), hardcpv("hcb")]]
         );
 
@@ -41677,7 +42459,15 @@ mod tests {
         let mut mixed: EdgeKindMap = HashMap::new();
         mixed.insert((cp("hcb"), cp("hca")), (true, false));
         mixed.insert((cp("hca"), cp("hcb")), (true, true));
-        assert!(find_hard_cycles(&entries, &mixed, Path::new("/nonexistent-root")).is_empty());
+        assert!(
+            find_hard_cycles(
+                &entries,
+                &mixed,
+                Path::new("/nonexistent-root"),
+                &HashMap::new()
+            )
+            .is_empty()
+        );
 
         // An AlreadyInstalled node can't be in a build-time cycle.
         let installed = vec![
@@ -41690,7 +42480,15 @@ mod tests {
                 ..graph_entry("dev-libs", "hcb", "1.0")
             },
         ];
-        assert!(find_hard_cycles(&installed, &hard, Path::new("/nonexistent-root")).is_empty());
+        assert!(
+            find_hard_cycles(
+                &installed,
+                &hard,
+                Path::new("/nonexistent-root"),
+                &HashMap::new()
+            )
+            .is_empty()
+        );
     }
 
     /// Backlog #216: a true self-loop -- the kept `||` branch's atom
@@ -41723,7 +42521,12 @@ mod tests {
         let mut hard: EdgeKindMap = HashMap::new();
         hard.insert((cp("hcs"), cp("hcs")), (true, false));
         assert_eq!(
-            find_hard_cycles(&entries, &hard, Path::new("/nonexistent-root")),
+            find_hard_cycles(
+                &entries,
+                &hard,
+                Path::new("/nonexistent-root"),
+                &HashMap::new()
+            ),
             vec![vec![hardcpv("hcs", "1.0")]]
         );
 
@@ -41731,13 +42534,26 @@ mod tests {
         // the owner's own instance is not its target -- no cycle.
         let mut cross = vec![graph_entry("dev-libs", "hcs", "1.0")];
         cross[0].deps = vec![self_edge("hcs", "=dev-libs/hcs-2.0", Some(0))];
-        assert!(find_hard_cycles(&cross, &hard, Path::new("/nonexistent-root")).is_empty());
+        assert!(
+            find_hard_cycles(
+                &cross,
+                &hard,
+                Path::new("/nonexistent-root"),
+                &HashMap::new()
+            )
+            .is_empty()
+        );
 
         // An inline (non-`||`) self edge with a matching atom loops too.
         let mut inline = vec![graph_entry("dev-libs", "hcs", "1.0")];
         inline[0].deps = vec![self_edge("hcs", "dev-libs/hcs", None)];
         assert_eq!(
-            find_hard_cycles(&inline, &hard, Path::new("/nonexistent-root")),
+            find_hard_cycles(
+                &inline,
+                &hard,
+                Path::new("/nonexistent-root"),
+                &HashMap::new()
+            ),
             vec![vec![hardcpv("hcs", "1.0")]]
         );
 
@@ -41756,7 +42572,7 @@ mod tests {
         let inst_dir = root.join("var/db/pkg/dev-libs/hcs-1.0");
         std::fs::create_dir_all(&inst_dir).unwrap();
         std::fs::write(inst_dir.join("SLOT"), "0\n").unwrap();
-        assert!(find_hard_cycles(&entries, &hard, &root).is_empty());
+        assert!(find_hard_cycles(&entries, &hard, &root, &HashMap::new()).is_empty());
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -41786,7 +42602,7 @@ mod tests {
         let fresh_root = Path::new("/nonexistent-root");
         let mut fresh = vec![graph_entry("dev-libs", "hcs", "1.0")];
         fresh[0].deps = vec![self_edge("hcs", ">=dev-libs/hcs-1.0", Some(0))];
-        let kept = kept_alt_branches(&fresh, fresh_root);
+        let kept = kept_alt_branches(&fresh, fresh_root, &HashMap::new());
         assert!(cycle_restartable(
             &fresh,
             &kept,
@@ -41799,7 +42615,7 @@ mod tests {
             graph_entry("dev-libs", "hcs", "1.0"),
             graph_entry("dev-libs", "hct", "1.0"),
         ];
-        let kept_pair = kept_alt_branches(&pair, fresh_root);
+        let kept_pair = kept_alt_branches(&pair, fresh_root, &HashMap::new());
         assert!(!cycle_restartable(
             &pair,
             &kept_pair,
@@ -41813,7 +42629,7 @@ mod tests {
         // An inline (branch-less) self-dep never retries.
         let mut inline = vec![graph_entry("dev-libs", "hcs", "1.0")];
         inline[0].deps = vec![self_edge("hcs", "dev-libs/hcs", None)];
-        let kept_inline = kept_alt_branches(&inline, fresh_root);
+        let kept_inline = kept_alt_branches(&inline, fresh_root, &HashMap::new());
         assert!(!cycle_restartable(
             &inline,
             &kept_inline,
@@ -41833,7 +42649,7 @@ mod tests {
         let inst_dir = root.join("var/db/pkg/dev-libs/hcs-1.0");
         std::fs::create_dir_all(&inst_dir).unwrap();
         std::fs::write(inst_dir.join("SLOT"), "0\n").unwrap();
-        let kept_fresh = kept_alt_branches(&fresh, &root);
+        let kept_fresh = kept_alt_branches(&fresh, &root, &HashMap::new());
         assert!(!cycle_restartable(
             &fresh,
             &kept_fresh,
@@ -41905,7 +42721,15 @@ mod tests {
         let mut map: EdgeKindMap = HashMap::new();
         map.insert((cp("keb"), cp("own")), (false, true));
         map.insert((cp("own"), cp("kea")), (true, false));
-        assert!(find_hard_cycles(&entries, &map, Path::new("/nonexistent-root")).is_empty());
+        assert!(
+            find_hard_cycles(
+                &entries,
+                &map,
+                Path::new("/nonexistent-root"),
+                &HashMap::new()
+            )
+            .is_empty()
+        );
     }
 
     #[test]
@@ -41964,7 +42788,7 @@ mod tests {
         // Installed slot `0`, child slot `1`: unsatisfied (hard).
         let root = make_vdb("n228-slot-gate-other-slot", "0");
         assert_eq!(
-            find_hard_cycles(&make_entries(), &make_map(), &root),
+            find_hard_cycles(&make_entries(), &make_map(), &root, &HashMap::new()),
             vec![vec![
                 "dev-libs/sown-1.0".to_string(),
                 "dev-libs/sdep-1.0".to_string()
@@ -41972,7 +42796,7 @@ mod tests {
         );
         // Installed slot `1/0`, child slot `1/0`: satisfied (soft).
         let root = make_vdb("n228-slot-gate-same-slot", "1/0");
-        assert!(find_hard_cycles(&make_entries(), &make_map(), &root).is_empty());
+        assert!(find_hard_cycles(&make_entries(), &make_map(), &root, &HashMap::new()).is_empty());
     }
 
     #[test]
@@ -44465,6 +45289,160 @@ mod tests {
         unsafe {
             std::env::remove_var("PORTUALE_ABORT_PATH");
         }
+    }
+
+    /// Backlog #221: circular `||` backtracking (upstream
+    /// `test_circular_choices.py`, bugs 703440 and 705986). Each cell's
+    /// first pass takes the in-graph `||` branch and strands the
+    /// merge-order walk; the restart demotes the cycle-closing branch
+    /// (`circular_atom`) and merges real's exact set in real's exact
+    /// order. `--backtrack=0` keeps real's circular failure everywhere
+    /// (probed against 3rdparty/portage 3.0.82.2's `ResolverPlayground`,
+    /// which fails all three cells with `{"--backtrack": 0}`).
+    #[test]
+    fn circular_choices_backtrack_to_the_cycle_breaking_branch() {
+        let names_of = |result: &GraphResult| {
+            result
+                .entries
+                .iter()
+                .map(|e| e.package.clone())
+                .collect::<Vec<_>>()
+        };
+        // pg1 (bug 703440): `[bootstrap, jsoncpp, cmake]`.
+        let result = graph_result_real("dev-libs/ccd1c");
+        assert!(matches!(result.outcome, ResolveOutcome::Complete));
+        assert!(
+            result.circular_deps.is_empty(),
+            "{:?}",
+            result.circular_deps
+        );
+        assert_eq!(names_of(&result), vec!["ccd1b", "ccd1a", "ccd1c"]);
+        assert!(
+            !graph_result_real_backtrack("dev-libs/ccd1c", 0)
+                .circular_deps
+                .is_empty()
+        );
+        // pg4 (bug 705986): `[exe-bin, pypy]`, no `+low-memory` rescue.
+        let result = graph_result_real("dev-libs/ccd4a");
+        assert!(matches!(result.outcome, ResolveOutcome::Complete));
+        assert!(
+            result.circular_deps.is_empty(),
+            "{:?}",
+            result.circular_deps
+        );
+        assert_eq!(names_of(&result), vec!["ccd4c", "ccd4a"]);
+        assert!(result.autounmask_use_changes.is_empty());
+        assert!(
+            !graph_result_real_backtrack("dev-libs/ccd4a", 0)
+                .circular_deps
+                .is_empty()
+        );
+        // pg4 requesting the exe itself: real merges it after its own
+        // buildtime dep (`[exe-bin, pypy, exe]`).
+        let result = graph_result_real("dev-libs/ccd4b");
+        assert!(matches!(result.outcome, ResolveOutcome::Complete));
+        assert_eq!(names_of(&result), vec!["ccd4c", "ccd4a", "ccd4b"]);
+        // pg5 (`testDirectVirtualCircularDependency`): the
+        // runtime-closing ring still backtracks to `-bin` first.
+        let result = graph_result_real("dev-libs/ccd5a");
+        assert!(matches!(result.outcome, ResolveOutcome::Complete));
+        assert!(
+            result.circular_deps.is_empty(),
+            "{:?}",
+            result.circular_deps
+        );
+        assert_eq!(names_of(&result), vec!["ccd5b", "ccd5v", "ccd5a"]);
+        assert!(
+            !graph_result_real_backtrack("dev-libs/ccd5a", 0)
+                .circular_deps
+                .is_empty()
+        );
+    }
+
+    /// g221c (L0 `dev-lang/rust` regression): a slot-pinned `||` build
+    /// dep over an older slot of the package itself vs the `-bin`
+    /// package, the older slot carrying its own self buildtime edge.
+    /// The first pass self-picks and strands; the retry demotes the
+    /// recorded self branch and must take `-bin` -- real's exact set in
+    /// real's exact order after exactly one retry (grounded in
+    /// 3rdparty/portage 3.0.82.2 `ResolverPlayground`,
+    /// `/tmp/opencode/g221c/probe_slcirc.py`: backtracking on merges
+    /// `[slcirc-bin-2.0, slcirc-2.0]` after `backtracking try 1`,
+    /// `--backtrack=0` fails circular). The g221b reconciliation broke
+    /// this: the slot-blind in-graph check ranked the older-slot branch
+    /// `Installed`, beating `-bin` and re-closing the cycle through the
+    /// older slot's self edge (rc 1, `slcirc-1.0 depends on slcirc-1.0`).
+    #[test]
+    fn circular_slot_pinned_branch_prefers_bin_over_older_slot() {
+        let result = graph_result_real("dev-libs/slcirc");
+        assert!(matches!(result.outcome, ResolveOutcome::Complete));
+        assert!(
+            result.circular_deps.is_empty(),
+            "{:?}",
+            result.circular_deps
+        );
+        assert_eq!(
+            result
+                .entries
+                .iter()
+                .map(|e| format!(
+                    "{}-{}",
+                    e.package,
+                    match &e.outcome {
+                        PretendOutcome::New { version }
+                        | PretendOutcome::AlreadyInstalled { version } => version.clone(),
+                        PretendOutcome::Reinstall { version, .. } => version.clone(),
+                        PretendOutcome::Upgrade { to, .. }
+                        | PretendOutcome::Downgrade { to, .. } => to.clone(),
+                        PretendOutcome::NoVisibleCandidate | PretendOutcome::Uninstall { .. } =>
+                            "?".to_string(),
+                    }
+                ))
+                .collect::<Vec<_>>(),
+            vec!["slcirc-bin-2.0", "slcirc-2.0"],
+        );
+        assert_eq!(result.backtrack_restarts, 1);
+        assert!(
+            !graph_result_real_backtrack("dev-libs/slcirc", 0)
+                .circular_deps
+                .is_empty()
+        );
+    }
+
+    /// Backlog #221 (I3): the unsolved-cycle-with-backtracking-ON
+    /// leg of `assemble_result`'s persisting-ring report. `dev-libs/sbrA`
+    /// BDEPENDs+RDEPENDs on `dev-libs/sbrB` (the dual edge softens the
+    /// hard reporter's arm to `(true, true)`) while `sbrB` BDEPENDs back,
+    /// so the hard reporter stays empty but the walk strands: the retry
+    /// re-strands identically (no `||` branch to switch to -- the
+    /// demotion has nothing to demote), the ring is unsolved, and the
+    /// settled pass reports it through the persisting-ring leg instead
+    /// of settling `Complete`. Grounded in real runs
+    /// (`/tmp/opencode/g221b/probe_sbr.py`, 3rdparty portage 3.0.82.2
+    /// `ResolverPlayground`, debug `backtracking try` count): backtracking
+    /// on fails after exactly 1 retry, `--backtrack=0` fails with none.
+    #[test]
+    fn softened_ring_reports_the_persisting_cycle_with_backtracking_on() {
+        let result = graph_result_real("dev-libs/sbrA");
+        assert!(
+            !matches!(result.outcome, ResolveOutcome::Complete),
+            "softened ring must stay rc 1 with backtracking on"
+        );
+        assert_eq!(
+            result.circular_deps,
+            vec![vec![
+                "dev-libs/sbrA-1.0".to_string(),
+                "dev-libs/sbrB-1.0".to_string()
+            ]],
+            "{:?}",
+            result.circular_deps
+        );
+        // `--backtrack=0` fails the same way (real never retries there).
+        assert!(
+            !graph_result_real_backtrack("dev-libs/sbrA", 0)
+                .circular_deps
+                .is_empty()
+        );
     }
 
     #[test]
@@ -58048,7 +59026,6 @@ mod tests {
             false,
             false,
             &constraints,
-            &HashMap::new(),
             None,
             &[installed],
             &mut pending,
@@ -58074,7 +59051,6 @@ mod tests {
             false,
             false,
             &constraints,
-            &HashMap::new(),
             None,
             &[upgrade],
             &mut pending,
@@ -59114,8 +60090,8 @@ mod tests_162 {
         )
     }
 
-    /// `disj_162` with an explicit `circular_dependency` map (backlog
-    /// #216) -- owner cp → circular-child cpv strings, like the
+    /// `disj_162` with an explicit `circular_dependency` map (backlogs
+    /// #216/#221) -- owner cp → circular-child records, like the
     /// `'backtrack` loop carries.
     #[allow(clippy::too_many_arguments)]
     fn disj_162_circ(
@@ -59126,7 +60102,7 @@ mod tests_162 {
         self_cp: &(String, String),
         atoms: &[&str],
         queued: &[QueueItem],
-        circular_dep: &HashMap<(String, String), Vec<String>>,
+        circular_dependency: &HashMap<(String, String), Vec<CircularDepChild>>,
     ) -> portage_use_reduce::AltPreference {
         disjunction_preference(
             repos,
@@ -59135,7 +60111,7 @@ mod tests_162 {
             entries,
             self_cp,
             &HashMap::new(),
-            circular_dep,
+            circular_dependency,
             None,
             &atoms_162(atoms),
             queued,
@@ -59273,6 +60249,118 @@ mod tests_162 {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// g221c (L0 `dev-lang/rust`): a `:slot` atom naming a different slot
+    /// than the graphed instance is NOT in-graph -- real's
+    /// `graph_db.match_pkgs(atom)` checks the slot, so the older-slot
+    /// branch ranks `Available` and the retry takes `-bin`. The
+    /// slot-blind candidate used to rank it `Installed`, beating
+    /// `-bin` and re-closing the cycle through the older slot's own
+    /// self edge. The `Available` (not `Unsatisfiable`) also pins that
+    /// the circular-self gate let it through (see the next test).
+    #[test]
+    fn disjunction_preference_cross_slot_atom_is_not_in_graph() {
+        let dir = dir_162("disj-crossslot");
+        let repos = repo_pkgs_162(
+            &dir,
+            &[("test/pkgB", "1.0", "0", ""), ("test/pkgB", "2.0", "1", "")],
+        );
+        let config = cfg_162();
+        let entries = vec![entry_162(
+            "test",
+            "pkgB",
+            PretendOutcome::New {
+                version: "2.0".to_string(),
+            },
+            Some("1"),
+            false,
+        )];
+        assert_eq!(
+            disj_162(
+                &repos,
+                &config,
+                &dir,
+                &entries,
+                &self_162("test", "consumer"),
+                &["test/pkgB:0"],
+                &[]
+            ),
+            portage_use_reduce::AltPreference::Available
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The same-slot `:slot` atom still matches the graphed instance --
+    /// the g221c precision must not over-narrow to `Available`.
+    #[test]
+    fn disjunction_preference_same_slot_atom_stays_in_graph() {
+        let dir = dir_162("disj-sameslot");
+        let repos = repo_pkgs_162(
+            &dir,
+            &[("test/pkgB", "1.0", "0", ""), ("test/pkgB", "2.0", "1", "")],
+        );
+        let config = cfg_162();
+        let entries = vec![entry_162(
+            "test",
+            "pkgB",
+            PretendOutcome::New {
+                version: "2.0".to_string(),
+            },
+            Some("1"),
+            false,
+        )];
+        assert_eq!(
+            disj_162(
+                &repos,
+                &config,
+                &dir,
+                &entries,
+                &self_162("test", "consumer"),
+                &["test/pkgB:1"],
+                &[]
+            ),
+            portage_use_reduce::AltPreference::Installed
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The circular-self gate still lets a cross-slot self atom through:
+    /// the gate asks cp-presence ([`atom_cp_present_in_graph`]), not
+    /// instance identity -- real merges the second instance as an
+    /// ordinary dependency, so slot precision here would wrongly refuse
+    /// it as circular. Ranks `Available` (the bins use the slot-precise
+    /// rule), never `Unsatisfiable`.
+    #[test]
+    fn disjunction_preference_cross_slot_self_atom_still_proceeds() {
+        let dir = dir_162("disj-crossself");
+        let repos = repo_pkgs_162(
+            &dir,
+            &[("test/pkgB", "1.0", "0", ""), ("test/pkgB", "2.0", "1", "")],
+        );
+        let config = cfg_162();
+        let entries = vec![entry_162(
+            "test",
+            "pkgB",
+            PretendOutcome::New {
+                version: "2.0".to_string(),
+            },
+            Some("1"),
+            false,
+        )];
+        assert_eq!(
+            disj_162(
+                &repos,
+                &config,
+                &dir,
+                &entries,
+                &self_162("test", "pkgB"),
+                &["test/pkgB:0"],
+                &[]
+            ),
+            portage_use_reduce::AltPreference::Available
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Backlog #216: with the self edge recorded in the
     /// `circular_dependency` map, the in-graph self alternative demotes
     /// to `Other` (real `dep_zapdeps`' `circular_atom`,
@@ -59292,8 +60380,17 @@ mod tests_162 {
             Some("0"),
             false,
         )];
-        let mut circular: HashMap<(String, String), Vec<String>> = HashMap::new();
-        circular.insert(self_162("test", "pkgA"), vec!["test/pkgA-1.0".to_string()]);
+        let mut circular: HashMap<(String, String), Vec<CircularDepChild>> = HashMap::new();
+        circular.insert(
+            self_162("test", "pkgA"),
+            vec![CircularDepChild {
+                category: "test".to_string(),
+                package: "pkgA".to_string(),
+                version: "1.0".to_string(),
+                slot: Some("0".to_string()),
+                sub_slot: None,
+            }],
+        );
         assert_eq!(
             disj_162_circ(
                 &repos,
@@ -59329,8 +60426,17 @@ mod tests_162 {
             Some("0"),
             false,
         )];
-        let mut circular: HashMap<(String, String), Vec<String>> = HashMap::new();
-        circular.insert(self_162("test", "pkgA"), vec!["test/pkgA-1.0".to_string()]);
+        let mut circular: HashMap<(String, String), Vec<CircularDepChild>> = HashMap::new();
+        circular.insert(
+            self_162("test", "pkgA"),
+            vec![CircularDepChild {
+                category: "test".to_string(),
+                package: "pkgA".to_string(),
+                version: "1.0".to_string(),
+                slot: Some("0".to_string()),
+                sub_slot: None,
+            }],
+        );
         assert_eq!(
             disj_162_circ(
                 &repos,
@@ -59555,6 +60661,180 @@ mod tests_162 {
                 &[]
             ),
             portage_use_reduce::AltPreference::OtherInstalled
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- S5b: `disjunction_preference`'s backlog #221 `circular_atom`
+    // demotion (real `dep_zapdeps`, `dep_check.py:673-691`, bugs 703440,
+    // 705986): on the restart after a stranded walk, an alternative with
+    // an atom matching a recorded in-cycle child of the resolving parent
+    // ranks `Other`, so the re-walk takes the cycle-breaking branch. ----
+    #[allow(clippy::too_many_arguments)]
+    fn disj_circ_162(
+        repos: &[RepoConfig],
+        config: &portage_profile::Config,
+        root: &Path,
+        entries: &[GraphEntry],
+        self_cp: &(String, String),
+        atoms: &[&str],
+        queued: &[QueueItem],
+        circular: &HashMap<(String, String), Vec<CircularDepChild>>,
+    ) -> portage_use_reduce::AltPreference {
+        disjunction_preference(
+            repos,
+            config,
+            root,
+            entries,
+            self_cp,
+            &HashMap::new(),
+            circular,
+            None,
+            &atoms_162(atoms),
+            queued,
+            false,
+        )
+    }
+
+    fn circ_child_162(cat: &str, pkg: &str, ver: &str, slot: &str) -> CircularDepChild {
+        CircularDepChild {
+            category: cat.to_string(),
+            package: pkg.to_string(),
+            version: ver.to_string(),
+            slot: Some(slot.to_string()),
+            sub_slot: Some(slot.to_string()),
+        }
+    }
+
+    fn circ_map_162(
+        parent: &(String, String),
+        children: Vec<CircularDepChild>,
+    ) -> HashMap<(String, String), Vec<CircularDepChild>> {
+        let mut map = HashMap::new();
+        map.insert(parent.clone(), children);
+        map
+    }
+
+    /// An alternative matching the parent's recorded in-cycle child --
+    /// otherwise `Installed` via the in-graph branch -- ranks `Other`:
+    /// the bug-703440 `|| ( bootstrap cmake )` re-pick. The empty-map
+    /// leg fails here.
+    #[test]
+    fn disjunction_preference_demotes_a_recorded_circular_child_to_other() {
+        let dir = dir_162("disj-circ-hit");
+        let repos = repo_pkgs_162(&dir, &[("test/pkgB", "1.0", "0", "")]);
+        let config = cfg_162();
+        let entries = vec![entry_162(
+            "test",
+            "pkgB",
+            PretendOutcome::New {
+                version: "1.0".to_string(),
+            },
+            Some("0"),
+            false,
+        )];
+        let parent = self_162("test", "consumer");
+        assert_eq!(
+            disj_circ_162(
+                &repos,
+                &config,
+                &dir,
+                &entries,
+                &parent,
+                &["test/pkgB"],
+                &[],
+                &HashMap::new(),
+            ),
+            portage_use_reduce::AltPreference::Installed
+        );
+        let recorded = circ_map_162(&parent, vec![circ_child_162("test", "pkgB", "1.0", "0")]);
+        assert_eq!(
+            disj_circ_162(
+                &repos,
+                &config,
+                &dir,
+                &entries,
+                &parent,
+                &["test/pkgB"],
+                &[],
+                &recorded,
+            ),
+            portage_use_reduce::AltPreference::Other
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A recorded child for another parent, or for a version the atom
+    /// does not match, leaves the rank alone -- the lookup-key and the
+    /// `atom.match(child)` flips fail here.
+    #[test]
+    fn disjunction_preference_ignores_a_non_matching_circular_record() {
+        let dir = dir_162("disj-circ-miss");
+        let repos = repo_pkgs_162(
+            &dir,
+            &[("test/pkgB", "1.0", "0", ""), ("test/pkgB", "2.0", "1", "")],
+        );
+        let config = cfg_162();
+        let parent = self_162("test", "consumer");
+        let other_parent = self_162("test", "stranger");
+        let wrong_parent = circ_map_162(
+            &other_parent,
+            vec![circ_child_162("test", "pkgB", "1.0", "0")],
+        );
+        assert_eq!(
+            disj_circ_162(
+                &repos,
+                &config,
+                &dir,
+                &[],
+                &parent,
+                &["test/pkgB:0"],
+                &[],
+                &wrong_parent,
+            ),
+            portage_use_reduce::AltPreference::Available
+        );
+        let wrong_slot = circ_map_162(&parent, vec![circ_child_162("test", "pkgB", "2.0", "1")]);
+        assert_eq!(
+            disj_circ_162(
+                &repos,
+                &config,
+                &dir,
+                &[],
+                &parent,
+                &["test/pkgB:0"],
+                &[],
+                &wrong_slot,
+            ),
+            portage_use_reduce::AltPreference::Available
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An atom satisfied by an installed version is not a circular dep
+    /// (real's `if vardb.match(atom): continue`) -- the installed
+    /// exemption holds `Installed` even with a matching record. The
+    /// exemption deletion fails here.
+    #[test]
+    fn disjunction_preference_exempts_an_installed_satisfying_circular_atom() {
+        let dir = dir_162("disj-circ-inst");
+        let repos = repo_pkgs_162(&dir, &[("test/pkgB", "1.0", "0", "")]);
+        install_162(&dir, "test", "pkgB-1.0", "0", &[]);
+        let config = cfg_162();
+        let parent = self_162("test", "consumer");
+        let recorded = circ_map_162(&parent, vec![circ_child_162("test", "pkgB", "1.0", "0")]);
+        assert_eq!(
+            disj_circ_162(
+                &repos,
+                &config,
+                &dir,
+                &[],
+                &parent,
+                &["test/pkgB"],
+                &[],
+                &recorded,
+            ),
+            portage_use_reduce::AltPreference::Installed
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -65459,7 +66739,6 @@ mod tests_165 {
             false,
             false,
             &HashMap::new(),
-            &HashMap::new(),
             None,
             &entries,
             &mut pending,
@@ -65508,7 +66787,6 @@ mod tests_165 {
             false,
             false,
             &HashMap::new(),
-            &HashMap::new(),
             None,
             &entries,
             &mut pending,
@@ -65552,7 +66830,6 @@ mod tests_165 {
             &cfg_165(),
             false,
             false,
-            &HashMap::new(),
             &HashMap::new(),
             None,
             &entries,
@@ -65606,7 +66883,6 @@ mod tests_165 {
             &mut seen,
             &mut memo,
             &mut pullers,
-            &HashMap::new(),
             &HashMap::new(),
             false,
             &std::sync::Arc::new(BinaryIndex::default()),
