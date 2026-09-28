@@ -114,6 +114,30 @@ pub(crate) fn binhost_fetch_warning(binrepo_name: &str, sync_uri: &str, detail: 
     )
 }
 
+/// Real `bintree._populate_remote_repo`'s no-`TIMESTAMP` drop
+/// (`bintree.py:1722-1732`): `\n\n!!! [<name>] Binhost package index
+///  has no TIMESTAMP field.\n` on stderr. The double space is real's
+/// own implicit concatenation (`"index " " has no ..."`), kept
+/// byte-identical.
+pub(crate) fn binhost_no_timestamp_warning(binrepo_name: &str) -> String {
+    format!("\n\n!!! [{binrepo_name}] Binhost package index  has no TIMESTAMP field.\n")
+}
+
+/// Real `bintree._populate_remote_repo`'s version-gate drop
+/// (`bintree.py:1735-1744`): `\n\n!!! [<name>] Binhost package index
+/// version is not supported: '<ver>'\n` on stderr, where `<ver>` is
+/// the raw `VERSION` header (`'None'` when absent -- real formats
+/// `header.get("VERSION")`, i.e. `None`).
+pub(crate) fn binhost_unsupported_version_warning(
+    binrepo_name: &str,
+    version: Option<&str>,
+) -> String {
+    format!(
+        "\n\n!!! [{binrepo_name}] Binhost package index version is not supported: '{}'\n",
+        version.unwrap_or("None")
+    )
+}
+
 /// Real `bintree._populate_remote`: refresh every binrepo's live
 /// `Packages` index and hand it to the resolver in memory -- in
 /// `--pretend` exactly like in a real merge (real
@@ -152,12 +176,20 @@ pub(crate) fn binhost_fetch_warning(binrepo_name: &str, sync_uri: &str, detail: 
 ///     `... is up-to-date and will be used.` Resolution is identical
 ///     (the `TIMESTAMP` compare keeps the cache silently either way);
 ///     only that one stdout line differs, and only across runs.
-///   - a fetched index without a `TIMESTAMP` header, or with
-///     unparseable stamps, is used as-is (real drops it with
-///     `!!! [name] Binhost package index has no TIMESTAMP field.`);
-///     likewise no `VERSION` gate is applied (real
-///     `_pkgindex_version_supported`) -- the fixture indexes carry
-///     neither field.
+///   - a fetched index with no `TIMESTAMP` header, or an
+///     unparseable one, is dropped with real's own
+///     `!!! [name] Binhost package index  has no TIMESTAMP field.`
+///     (stderr, `bintree.py:1722-1732` -- the double space is real's
+///     own `"index " " has"` concatenation; real only tests falsiness
+///     there, so an unparseable stamp takes the same arm rather than
+///     real's `int()` `ValueError` unwind); a fetched index whose
+///     `VERSION` is missing, unparseable, or newer than real's
+///     `_pkgindex_version` (`0`, `bintree.py:2429-2437`) is dropped
+///     with `!!! [name] Binhost package index version is not
+///     supported: '<ver>' (`bintree.py:1735-1744`, `'None'` when the
+///     header is absent). Either drop discards even a stale cache for
+///     the run (real `pkgindex = None`), in `--pretend` exactly like
+///     in a real merge -- real draws no pretend distinction here.
 ///   - `--verbose`'s `Last-Modified` mismatch warning, `ssh://`
 ///     transports, `getbinpkg-exclude`/`-include` pool filtering and the
 ///     trust-helper/`gpkg_only` gating are not modelled.
@@ -301,6 +333,40 @@ fn refresh_one_binrepo(binrepo: &BinRepo, root: &Path, pretend: bool) -> Refresh
         }
         Ok(remote_text) => {
             let (remote_header, remote_entries) = portage_repo::parse_packages_index(&remote_text);
+            // Real drops a fetched index with no `TIMESTAMP` header
+            // (`pkgindex = None` + the `!!! ... has no TIMESTAMP
+            // field.` warning, `bintree.py:1722-1732`).
+            if remote_header
+                .get("TIMESTAMP")
+                .and_then(|s| s.parse::<i64>().ok())
+                .is_none()
+            {
+                portage_repo::set_remote_binary_index_override(&binrepo.packages_dir(root), None);
+                return RefreshOutcome {
+                    stderr_warning: Some(binhost_no_timestamp_warning(&binrepo.name)),
+                    stdout_note: None,
+                };
+            }
+            // Real `_pkgindex_version_supported`
+            // (`bintree.py:2429-2437`, `_pkgindex_version = 0`,
+            // `bintree.py:547`): the `VERSION` header must parse to an
+            // int `<= 0`, else the index is dropped with the
+            // `!!! ... version is not supported: ...` warning
+            // (`bintree.py:1735-1744`).
+            if !remote_header
+                .get("VERSION")
+                .and_then(|s| s.parse::<i64>().ok())
+                .is_some_and(|v| v <= 0)
+            {
+                portage_repo::set_remote_binary_index_override(&binrepo.packages_dir(root), None);
+                return RefreshOutcome {
+                    stderr_warning: Some(binhost_unsupported_version_warning(
+                        &binrepo.name,
+                        remote_header.get("VERSION").map(String::as_str),
+                    )),
+                    stdout_note: None,
+                };
+            }
             // Real serves the remote index only when strictly newer
             // (`not local_timestamp or int(local) < int(remote)`,
             // `bintree.py:1739-1744`); an equally-old or older remote
@@ -373,20 +439,18 @@ fn unix_now() -> f64 {
         .unwrap_or(0.0)
 }
 
-/// Real `os.access(dirname, W_OK)` (`bintree.py:1821`) without libc: a
-/// probe file decides. A missing directory probes unwritable (its own
-/// creation is the caller's `create_dir_all`, whose failure lands here
-/// the same way).
+/// Real `os.access(dirname, W_OK)` (`bintree.py:1821`) without libc:
+/// the parent dir's mode bits decide (review M3 -- no probe file is
+/// ever created, so nothing can linger in the EROOT cache dir). A
+/// missing directory counts as unwritable (its own creation is the
+/// caller's `create_dir_all`, whose failure lands here the same way).
+/// Like `access(2)` this is a permission-bit check rather than a write
+/// attempt, so on a read-only filesystem with writable bits a failed
+/// write still warns (where real would re-raise -- portuale refreshes
+/// stay non-fatal per backlog #175).
 fn cache_dir_writable(cache_file: &Path) -> bool {
     let dir = cache_file.parent().unwrap_or_else(|| Path::new("."));
-    let probe = dir.join(format!(".portuale-write-probe-{}", std::process::id()));
-    match std::fs::write(&probe, b"") {
-        Ok(()) => {
-            let _ = std::fs::remove_file(&probe);
-            true
-        }
-        Err(_) => false,
-    }
+    std::fs::metadata(dir).is_ok_and(|m| !m.permissions().readonly())
 }
 
 /// Insert (or replace) the `DOWNLOAD_TIMESTAMP` header real stamps
@@ -1283,7 +1347,10 @@ mod tests {
     }
 
     fn packages_index(entries: &[&str]) -> Vec<u8> {
-        let mut s = format!("TIMESTAMP: 0\nPACKAGES: {}\n\n", entries.len());
+        // A genuine binhost index always carries both headers real
+        // gates on (`TIMESTAMP`, `bintree.py:1722-1732`; `VERSION`,
+        // `bintree.py:1735-1744`), so the helper stamps both.
+        let mut s = format!("TIMESTAMP: 0\nVERSION: 0\nPACKAGES: {}\n\n", entries.len());
         for e in entries {
             s.push_str(e);
             s.push_str("\n\n");
@@ -2362,7 +2429,7 @@ mod tests {
     fn refresh_binhost_indexes_decompresses_a_packages_gz() {
         let tmp = tempdir();
         let root = tmp.join("root");
-        let plain = b"TIMESTAMP: 0\nPACKAGES: 1\n\nCPV: dev-libs/foo-1.0\n\n".to_vec();
+        let plain = b"TIMESTAMP: 0\nVERSION: 0\nPACKAGES: 1\n\nCPV: dev-libs/foo-1.0\n\n".to_vec();
         // Real `gzip` output of `plain`.
         let mut gz_child = std::process::Command::new("gzip")
             .arg("-c")
@@ -2421,7 +2488,7 @@ mod tests {
         // post-fix no cache file is left at all.
         let tmp = tempdir();
         let root = tmp.join("root");
-        let plain = b"TIMESTAMP: 0\nPACKAGES: 0\n\n".to_vec();
+        let plain = b"TIMESTAMP: 0\nVERSION: 0\nPACKAGES: 0\n\n".to_vec();
         let mut routes = HashMap::new();
         routes.insert("/Packages.gz".to_string(), b"this is not gzip\n".to_vec());
         routes.insert("/Packages".to_string(), plain);
@@ -2850,7 +2917,7 @@ mod tests {
         let tmp = tempdir();
         let root = tmp.join("root");
         let stale = "TIMESTAMP: 5\nPACKAGES: 1\n\nCPV: dev-libs/tstpkg-1.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo\n\n";
-        let fresh = "TIMESTAMP: 9\nPACKAGES: 1\n\nCPV: dev-libs/tstpkg-2.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo\n\n";
+        let fresh = "TIMESTAMP: 9\nVERSION: 0\nPACKAGES: 1\n\nCPV: dev-libs/tstpkg-2.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo\n\n";
         let mut routes = HashMap::new();
         routes.insert("/Packages".to_string(), fresh.as_bytes().to_vec());
         // gz + zst 404, then the plain index: 3 connections.
@@ -2894,7 +2961,7 @@ mod tests {
         let tmp = tempdir();
         let root = tmp.join("root");
         let cached_body = "TIMESTAMP: 9\nPACKAGES: 1\n\nCPV: dev-libs/tstpkg-2.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo\n\n";
-        let stale_remote = "TIMESTAMP: 5\nPACKAGES: 1\n\nCPV: dev-libs/tstpkg-1.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo\n\n";
+        let stale_remote = "TIMESTAMP: 5\nVERSION: 0\nPACKAGES: 1\n\nCPV: dev-libs/tstpkg-1.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo\n\n";
         let mut routes = HashMap::new();
         routes.insert("/Packages".to_string(), stale_remote.as_bytes().to_vec());
         let (base, _h) = serve(routes, 3);
@@ -2952,6 +3019,131 @@ mod tests {
         assert_eq!(
             remote_versions(std::slice::from_ref(&binrepo), &root, "frzpkg"),
             vec!["1.0"],
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn refresh_pretend_drops_a_remote_index_without_a_timestamp() {
+        timestamp_or_version_drop_case(
+            true,
+            "VERSION: 0\nPACKAGES: 1\n\nCPV: dev-libs/newpkg-1.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo\n\n",
+            "\n\n!!! [drop] Binhost package index  has no TIMESTAMP field.\n",
+        );
+    }
+
+    #[test]
+    fn refresh_real_merge_drops_a_remote_index_without_a_timestamp() {
+        timestamp_or_version_drop_case(
+            false,
+            "VERSION: 0\nPACKAGES: 1\n\nCPV: dev-libs/newpkg-1.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo\n\n",
+            "\n\n!!! [drop] Binhost package index  has no TIMESTAMP field.\n",
+        );
+    }
+
+    #[test]
+    fn refresh_pretend_drops_a_remote_index_with_an_unparseable_timestamp() {
+        timestamp_or_version_drop_case(
+            true,
+            "TIMESTAMP: yesterday\nVERSION: 0\nPACKAGES: 1\n\nCPV: dev-libs/newpkg-1.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo\n\n",
+            "\n\n!!! [drop] Binhost package index  has no TIMESTAMP field.\n",
+        );
+    }
+
+    #[test]
+    fn refresh_real_merge_drops_a_remote_index_with_an_unparseable_timestamp() {
+        timestamp_or_version_drop_case(
+            false,
+            "TIMESTAMP: yesterday\nVERSION: 0\nPACKAGES: 1\n\nCPV: dev-libs/newpkg-1.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo\n\n",
+            "\n\n!!! [drop] Binhost package index  has no TIMESTAMP field.\n",
+        );
+    }
+
+    #[test]
+    fn refresh_pretend_drops_a_remote_index_with_an_unsupported_version() {
+        timestamp_or_version_drop_case(
+            true,
+            "TIMESTAMP: 9\nVERSION: 1\nPACKAGES: 1\n\nCPV: dev-libs/newpkg-1.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo\n\n",
+            "\n\n!!! [drop] Binhost package index version is not supported: '1'\n",
+        );
+    }
+
+    #[test]
+    fn refresh_real_merge_drops_a_remote_index_with_an_unsupported_version() {
+        timestamp_or_version_drop_case(
+            false,
+            "TIMESTAMP: 9\nVERSION: 1\nPACKAGES: 1\n\nCPV: dev-libs/newpkg-1.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo\n\n",
+            "\n\n!!! [drop] Binhost package index version is not supported: '1'\n",
+        );
+    }
+
+    #[test]
+    fn refresh_pretend_drops_a_remote_index_without_a_version() {
+        timestamp_or_version_drop_case(
+            true,
+            "TIMESTAMP: 9\nPACKAGES: 1\n\nCPV: dev-libs/newpkg-1.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo\n\n",
+            "\n\n!!! [drop] Binhost package index version is not supported: 'None'\n",
+        );
+    }
+
+    #[test]
+    fn refresh_real_merge_drops_a_remote_index_without_a_version() {
+        timestamp_or_version_drop_case(
+            false,
+            "TIMESTAMP: 9\nPACKAGES: 1\n\nCPV: dev-libs/newpkg-1.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo\n\n",
+            "\n\n!!! [drop] Binhost package index version is not supported: 'None'\n",
+        );
+    }
+
+    /// Backlog #192 fix round: real drops a fetched index with no (or
+    /// unparseable) `TIMESTAMP` (`bintree.py:1722-1732`) or with a
+    /// `VERSION` its `_pkgindex_version_supported` rejects
+    /// (`bintree.py:1735-1744`, `_pkgindex_version = 0`) -- `pkgindex =
+    /// None`, so even a stale cache contributes nothing for the run, in
+    /// `--pretend` exactly like in a real merge. A `file://` binhost
+    /// serves `remote_body`; a valid stale cache is seeded to prove it
+    /// is suppressed, not resurrected.
+    fn timestamp_or_version_drop_case(pretend: bool, remote_body: &str, expected_warning: &str) {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let binhost = tmp.join("binhost");
+        std::fs::create_dir_all(&binhost).unwrap();
+        std::fs::write(binhost.join("Packages"), remote_body).unwrap();
+        let binrepo = BinRepo {
+            name: "drop".to_string(),
+            sync_uri: format!("file://{}", binhost.display()),
+            priority: 1,
+            location: None,
+            verify_signature: true,
+            frozen: false,
+        };
+        let stale = "TIMESTAMP: 5\nVERSION: 0\nPACKAGES: 1\n\nCPV: dev-libs/stalepkg-1.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo\n\n";
+        let cached = edb_cache_packages_file(&root, &binrepo.sync_uri);
+        std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
+        std::fs::write(&cached, stale).unwrap();
+        let outcome = refresh_one_binrepo(&binrepo, &root, pretend);
+        assert_eq!(
+            outcome.stderr_warning.as_deref(),
+            Some(expected_warning),
+            "pretend={pretend}: the drop warns exactly like real",
+        );
+        assert!(
+            outcome.stdout_note.is_none(),
+            "pretend={pretend}: a drop carries no skip note: {:?}",
+            outcome.stdout_note
+        );
+        assert!(
+            remote_versions(std::slice::from_ref(&binrepo), &root, "newpkg").is_empty(),
+            "pretend={pretend}: the dropped index contributes nothing",
+        );
+        assert!(
+            remote_versions(std::slice::from_ref(&binrepo), &root, "stalepkg").is_empty(),
+            "pretend={pretend}: the drop discards even the stale cache like real's pkgindex = None",
+        );
+        assert_eq!(
+            std::fs::read_to_string(&cached).unwrap(),
+            stale,
+            "pretend={pretend}: a dropped index never rewrites the cache",
         );
         let _ = std::fs::remove_dir_all(&tmp);
     }

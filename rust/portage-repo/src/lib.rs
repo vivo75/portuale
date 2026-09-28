@@ -2365,8 +2365,12 @@ fn cached_binary_index(pkgdir: &Path) -> std::sync::Arc<BinaryIndex> {
 
 /// The live-refresh override table for [`cached_binary_index`], keyed by
 /// the same `packages_dir` the resolver reads. Set once per binrepo by
-/// the refresh, before any resolution; never cleared mid-process
-/// (`emerge` is one-shot, and unit tests use unique temp dirs).
+/// the refresh, before any resolution. `emerge` is a one-shot process,
+/// but an in-process multi-run caller (or tests sharing an EROOT)
+/// must not inherit a previous run's indexes, so `pretend::run`
+/// calls [`clear_remote_binary_index_overrides`] where a run starts;
+/// unit tests use pid+nanos-unique temp dirs, so their keys never
+/// collide either way.
 static REMOTE_INDEX_OVERRIDE: OnceLock<
     RwLock<HashMap<PathBuf, Option<std::sync::Arc<BinaryIndex>>>>,
 > = OnceLock::new();
@@ -2381,6 +2385,17 @@ pub fn set_remote_binary_index_override(pkgdir: &Path, index: Option<std::sync::
         .write()
         .unwrap()
         .insert(pkgdir.to_path_buf(), index);
+}
+
+/// Drop every live-refresh override installed by
+/// [`set_remote_binary_index_override`]. Called where a run starts
+/// (review M4), so a second in-process run resolves from its own
+/// refresh (or the disk) instead of inheriting the first run's
+/// in-memory indexes.
+pub fn clear_remote_binary_index_overrides() {
+    if let Some(table) = REMOTE_INDEX_OVERRIDE.get() {
+        table.write().unwrap().clear();
+    }
 }
 
 fn remote_binary_index_override(pkgdir: &Path) -> Option<Option<std::sync::Arc<BinaryIndex>>> {

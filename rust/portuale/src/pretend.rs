@@ -9070,6 +9070,11 @@ pub fn run(args: &[String]) -> ExitCode {
     // (the CLI parse below sets it again from argv or the defaults).
     ASK_ENTER_INVALID.store(false, std::sync::atomic::Ordering::Relaxed);
 
+    // The live binhost-index overrides are process-wide state too
+    // (review M4): a second in-process run must resolve from its own
+    // refresh, not inherit the first run's in-memory indexes.
+    portage_repo::clear_remote_binary_index_overrides();
+
     // Config resolution comes before argv parsing, matching real
     // `emerge`'s own order: its first pass only finds `--config-root`,
     // then it loads the config and re-parses with
