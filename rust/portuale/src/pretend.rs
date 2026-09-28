@@ -5239,6 +5239,10 @@ fn run_resume(
     // introduced here) -- unlike a pure-source resume, a binary-
     // involving one never had `--jobs` parallelism to begin with, so
     // this isn't a regression for it.
+    // Backlog #197: `--resume` carries no `--quiet`/`--verbose` in
+    // `mtimedb["resume"]` (a documented `myopts` cut), so the display
+    // mode is serial-streaming unless `-j` >1.
+    let resume_mode = emerge_build::scheduler_status_mode(jobs, false, None, entries.len(), false);
     let merge_result = if entries
         .iter()
         .all(|e| e.source == portage_repo::CandidateSource::Ebuild)
@@ -5257,6 +5261,7 @@ fn run_resume(
             // `--resume` carries no `--quiet-build` in `mtimedb["resume"]`
             // (a documented `myopts` cut) -- stream, unless `-j` >1.
             false,
+            resume_mode,
         )
     } else {
         let package_options = package_options_from_env(
@@ -5276,6 +5281,7 @@ fn run_resume(
             false,
             None,
             &[],
+            resume_mode,
         )
     };
     if let Err(e) = merge_result {
@@ -13868,17 +13874,27 @@ pub fn run(args: &[String]) -> ExitCode {
         if ask && !ask_confirm(&color, "Would you like to merge these packages?") {
             return ExitCode::from(130);
         }
-        // Backlog #185: real `Scheduler._status_msg`
+        // Backlog #185/#197: real `Scheduler._status_msg`
         // (`Scheduler.py:2387-2397`) precedes every status line -- the
         // first `>>> Emerging ...` among them -- with a blank line,
         // unless the scheduler is in background mode (real
         // `_background_mode`: parallel `--jobs`, `--quiet`, or
-        // `--quiet-build=y`). Only the first one is ported here: the
-        // text before the first merge line is this slice's contract;
-        // the per-message generalization is deferred.
-        if jobs <= 1 && !quiet && quiet_build != Some(true) {
-            println!();
-        }
+        // `--quiet-build=y`, except a one-package mergelist without
+        // `--quiet` -- see `emerge_build::scheduler_status_mode`).
+        // #185 ported only the first blank with a `jobs`/`quiet`
+        // approximation; #197 generalizes the rule to every status
+        // line, and the merge functions own every blank through their
+        // `StatusDisplay::status()` -- including the first, so no
+        // blank prints here (fix round 1 removed the duplicate that
+        // printed a second blank before the first `>>>` line). The
+        // exact background predicate still computes here.
+        let status_mode = crate::emerge_build::scheduler_status_mode(
+            jobs,
+            quiet,
+            quiet_build,
+            entries.len(),
+            verbose,
+        );
         // Real BINPKG_COMPRESS/BINPKG_COMPRESS_FLAGS[_<NAME>]/
         // PORTAGE_BZIP2_COMMAND/PKGDIR/... resolution -- see
         // `package_options_from_env`.
@@ -13954,6 +13970,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 &portage_tmpdir,
                 &package_options,
                 keep_going,
+                status_mode,
             ) {
                 eprintln!("emerge: {e}");
                 return ExitCode::from(1);
@@ -14043,6 +14060,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 keep_going,
                 buildpkg,
                 &buildpkg_exclude,
+                status_mode,
             ) {
                 // Backlog #174: a merge-time binpkg digest failure
                 // already printed real's full tail (digest block +
@@ -14138,6 +14156,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 // build output when `--quiet-build=y` or `-q` is set (a
                 // `-j` >1 run always captures regardless).
                 quiet_build.unwrap_or(false) || quiet,
+                status_mode,
             ) {
                 // Real `Scheduler._save_resume_list`: on a merge failure,
                 // record every still-unmerged package so `emerge --resume`
