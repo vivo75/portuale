@@ -13457,10 +13457,18 @@ pub fn run(args: &[String]) -> ExitCode {
             }
             let mut thrown_away: Vec<String> = Vec::new();
             for (i, entry) in result.entries.iter().enumerate() {
+                // Backlog #195 (round 2): a dependency the resolver
+                // collected into a parent USE flip (record-and-fail, real
+                // `_apply_parent_use_changes` dropping the item from
+                // `_unsatisfied_deps_for_display`) renders no row at all
+                // -- the USE-changes block below is its whole output, and
+                // the `!!! note:` fallback in `print_entry_line` would
+                // duplicate it.
                 if matches!(
                     entry.outcome,
                     portage_repo::PretendOutcome::NoVisibleCandidate
-                ) {
+                ) && entry.parent_use_suggestion.is_none()
+                {
                     print_entry_line(
                         &result.entries,
                         &root,
