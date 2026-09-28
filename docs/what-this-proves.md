@@ -18248,3 +18248,13 @@ The last `FEATURES` row was bed asymmetry, not product: #189, pmtest `df84a67`. 
 # from ../pmtest; expect UNEXPLAINED 0
 PORTTEST_PODMAN=$HOME/.local/bin/podman-lxc L31_MODE=candidate differential-test-bed/run/l31-remote-merge.sh
 ```
+
+## `--ask` / `--read-news` edges: news-prompt EOF exits 130, `=True` spellings accepted (backlog #234, 2026-09-28)
+
+Two edges on the `--ask --read-news` path (backlog #231 built it). (a) EOF at the "read the news items" prompt: real `UserQuery.query` prints `Interrupted.` and exits `128 + SIGINT` before `action_build` (`3rdparty/portage: _emerge/UserQuery.py:70-72`, `actions.py:4270-4281`); portuale skipped the spawn and kept resolving until the later merge prompt. Now the shared `ask_yes_no` (`rust/portuale/src/pretend.rs`) returns `None` on EOF/read-error and both news-prompt call sites exit 130 before the resolve — the same arm the merge-list prompt already took. (b) `--ask=True` / `--read-news=True` (and `=y`): real's `true_y_or_n` choices (`_emerge/main.py:321-322,625`) admit `True`, a bare flag inserts `"True"` (`insert_optional_args`), and `in true_y` normalizes it (`main.py:950-953`); portuale died with "unrecognized option". Now accepted; a separate-word `True` is still left as a positional atom, matching real (the insert set is only `y_or_n`). Ctrl-C still dies by signal shell-wide (shell reports 130, no `Interrupted.` line) — same as the pre-existing merge prompt, no new handler. Survey (report-only, fix was these two): nine more real-`true_y_or_n` options still parse narrow (`=y`/`=n` only, `--X=True` unrecognized) — `--changed-deps`, `--changed-deps-report`, `--changed-slot`, `--deselect`, `--quiet`, `--quiet-build`, `--selective`, `--verbose`, `--with-test-deps` — and `--autounmask-keep-keywords` / `--autounmask-keep-masks` reject `=True` with an explicit invalid-choice error. Re-run:
+
+```sh
+# from ../pmtest; expect 6 passed (3 older #231 + 3 new #234)
+python3 -m pytest pytests-contract-suite/test_portuale.py -q -p no:cacheprovider \
+  -k 'ask_read_news or ask_true_spelling'
+```

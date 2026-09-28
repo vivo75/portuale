@@ -4916,9 +4916,12 @@ fn stdin_is_tty() -> bool {
 /// matches "Yes") -- an unrecognized response reprints "Sorry,
 /// response '...' not understood." and loops again, real's own
 /// behavior, rather than giving up on the first bad answer. Returns
-/// `true` for "Yes"/EOF, `false` (after printing `Quitting.`, a caller-
+/// `true` for "Yes", `false` (after printing `Quitting.`, a caller-
 /// side convenience real portage's own callers each print for
-/// themselves) for "No". TTY gating happens once, globally, before
+/// themselves) for "No" -- and `false` (after printing
+/// `Interrupted.`, then `Quitting.`) on EOF or a read error, the same
+/// `128 + SIGINT` exit the merge-list prompt already takes below.
+/// TTY gating happens once, globally, before
 /// `ask` is ever `true` at all (`run()`'s own `stdin_is_tty` check
 /// right after CLI parsing) -- by the time this runs, stdin is already
 /// known to be a real terminal.
@@ -4927,7 +4930,7 @@ fn stdin_is_tty() -> bool {
 /// makes a bare Enter loop back for a real answer instead of matching
 /// "Yes"; see `classify_yes_no`.
 fn ask_confirm(color: &Colorizer, question: &str) -> bool {
-    if ask_yes_no(color, question) {
+    if ask_yes_no(color, question) == Some(true) {
         return true;
     }
     println!("\nQuitting.\n");
@@ -4943,7 +4946,13 @@ fn ask_confirm(color: &Colorizer, question: &str) -> bool {
 /// (real `_emerge/actions.py:4271-4281`): answering "No" there skips
 /// the `eselect` spawn and continues into `action_build`, it does not
 /// quit the run.
-fn ask_yes_no(color: &Colorizer, question: &str) -> bool {
+///
+/// Returns `None` on EOF or a read error (after printing real
+/// `UserQuery.query`'s own `Interrupted.`, `_emerge/UserQuery.py:74-76`):
+/// the news prompt (backlog #234) turns that into real's
+/// `sys.exit(128 + SIGINT)` before `action_build`, while `ask_confirm`
+/// folds it into its ordinary decline arm.
+fn ask_yes_no(color: &Colorizer, question: &str) -> Option<bool> {
     use std::io::Write;
     print!("\n{} ", color.c("bold", question));
     loop {
@@ -4957,16 +4966,16 @@ fn ask_yes_no(color: &Colorizer, question: &str) -> bool {
         match std::io::stdin().read_line(&mut line) {
             Ok(0) => {
                 println!("Interrupted.");
-                return false;
+                return None;
             }
             Err(_) => {
                 println!("Interrupted.");
-                return false;
+                return None;
             }
             Ok(_) => match classify_yes_no(line.trim(), ask_enter_invalid()) {
-                Some(true) => return true,
+                Some(true) => return Some(true),
                 Some(false) => {
-                    return false;
+                    return Some(false);
                 }
                 None => print!("Sorry, response '{}' not understood. ", line.trim()),
             },
@@ -5166,7 +5175,12 @@ fn run_resume(
     } else {
         false
     };
-    offer_news_reading(ask, read_news, resume_pre_printed, &color);
+    // An interrupted news prompt (backlog #234) exits `128 + SIGINT`
+    // before `action_build`, like real `UserQuery.query`'s own
+    // `sys.exit` (`_emerge/UserQuery.py:74-76`).
+    if offer_news_reading(ask, read_news, resume_pre_printed, &color) {
+        return ExitCode::from(130);
+    }
     let Some((favorites, mut mergelist, opts)) = crate::mtimedb::read_resume_list(root) else {
         // Real reaches `post_emerge` even on this path (unconditional
         // in `run_action`, `actions.py:4289-4297`): with nothing merged
@@ -7259,29 +7273,40 @@ fn display_news_notice_if_any(
 /// like to read the news items while calculating dependencies?" (real
 /// `UserQuery.query` with the `--ask-enter-invalid` flag) and spawns
 /// `eselect news read` on "Yes" (stdio inherited, return code ignored).
-/// A "No" (or EOF) answer skips the spawn and continues into the
-/// resolve -- only the merge-list prompt quits the run. When `eselect`
+/// A "No" answer skips the spawn and continues into the
+/// resolve -- only the merge-list prompt quits the run. EOF or a read
+/// error (backlog #234) prints real `UserQuery.query`'s own
+/// `Interrupted.` (inside `ask_yes_no`, `_emerge/UserQuery.py:74-76`)
+/// and reports `true` so the caller exits `128 + SIGINT` before
+/// `action_build`, exactly like real `actions.py:4270-4281` (whose
+/// `sys.exit` never reaches `action_build` either).
+/// When `eselect`
 /// is missing the spawn raises `OSError`, and real prints `Please
 /// install eselect to use this feature.` to stderr. `--ask` without a
 /// TTY never reaches here (the up-front `stdin_is_tty` gate exits
 /// first), matching real `actions.py:3917-3926`; under `--pretend`
 /// `ask` is already false, matching real's `--pretend` gate around the
 /// whole block.
-fn offer_news_reading(ask: bool, read_news: bool, notice_printed: bool, color: &Colorizer) {
+fn offer_news_reading(ask: bool, read_news: bool, notice_printed: bool, color: &Colorizer) -> bool {
     if !(ask && read_news && notice_printed) {
-        return;
+        return false;
     }
-    if ask_yes_no(
+    match ask_yes_no(
         color,
         "Would you like to read the news items while calculating dependencies?",
     ) {
-        match std::process::Command::new("eselect")
-            .args(["news", "read"])
-            .status()
-        {
-            Ok(_) => {}
-            Err(_) => eprintln!("Please install eselect to use this feature."),
+        Some(true) => {
+            match std::process::Command::new("eselect")
+                .args(["news", "read"])
+                .status()
+            {
+                Ok(_) => {}
+                Err(_) => eprintln!("Please install eselect to use this feature."),
+            }
+            false
         }
+        Some(false) => false,
+        None => true,
     }
 }
 
@@ -9272,8 +9297,9 @@ pub fn run(args: &[String]) -> ExitCode {
     // (`128 + SIGINT`). Ignored under `--pretend` (nothing executes
     // anyway).
     let mut ask = false;
-    // --read-news (real `y_or_n`, `main.py:175`: `choices: true_y_or_n`,
-    // normalized to `True`/`None` at `main.py:950-953`): with `--ask`,
+    // --read-news (real `y_or_n` insert default, `main.py:175`, with
+    // `choices: true_y_or_n`, `main.py:625`, normalized to `True`/`None`
+    // at `main.py:950-953`): with `--ask`,
     // offer `eselect news read` while calculating dependencies (real
     // `actions.py:4266-4281`, backlog #231). Alone it changes nothing --
     // real's prompt requires both flags.
@@ -9716,7 +9742,12 @@ pub fn run(args: &[String]) -> ExitCode {
             // `args_with_emerge_defaults`; accepted here as a no-op.
             i += 1;
         } else if arg == "--ask" || arg == "-a" {
-            // Real `true_y_or_n`: a bare flag, or `--ask=y`/`--ask=n`.
+            // Real `true_y_or_n`: a bare flag (real
+            // `insert_optional_args` inserts `"True"`), `--ask=y` /
+            // `--ask=True` / `--ask=n`, or a separate `y` / `n` word
+            // (only `y`/`n` are consumed -- real's insert `y_or_n`
+            // set; a separate `True` stays a positional atom, same as
+            // here where it falls through to the atom args below).
             match args.get(i + 1).map(String::as_str) {
                 Some("y") => {
                     ask = true;
@@ -9731,14 +9762,17 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
             }
-        } else if arg == "--ask=y" {
+        } else if arg == "--ask=y" || arg == "--ask=True" {
             ask = true;
             i += 1;
         } else if arg == "--ask=n" {
             ask = false;
             i += 1;
         } else if arg == "--read-news" {
-            // Real `true_y_or_n`: a bare flag, or `--read-news=y`/`--read-news=n`.
+            // Real `true_y_or_n`: a bare flag (real
+            // `insert_optional_args` inserts `"True"`), `--read-news=y`
+            // / `--read-news=True` / `--read-news=n`, or a separate `y`
+            // / `n` word -- same separate-word shape as `--ask` above.
             match args.get(i + 1).map(String::as_str) {
                 Some("y") => {
                     read_news = true;
@@ -9753,7 +9787,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
             }
-        } else if arg == "--read-news=y" {
+        } else if arg == "--read-news=y" || arg == "--read-news=True" {
             read_news = true;
             i += 1;
         } else if arg == "--read-news=n" {
@@ -12386,8 +12420,13 @@ pub fn run(args: &[String]) -> ExitCode {
     if !pretend {
         let notice_printed = display_news_notice_if_any(&repos, &root, &config, &color);
         // Backlog #231 (c): real `actions.py:4266-4281` offers the
-        // `eselect news read` spawn here, once the notice printed.
-        offer_news_reading(ask, read_news, notice_printed, &color);
+        // `eselect news read` spawn here, once the notice printed. An
+        // interrupted news prompt (backlog #234) exits `128 + SIGINT`
+        // before `action_build`, like real `UserQuery.query`'s own
+        // `sys.exit` (`_emerge/UserQuery.py:74-76`).
+        if offer_news_reading(ask, read_news, notice_printed, &color) {
+            return ExitCode::from(130);
+        }
     }
     let run_resolve = |complete: bool, locked: &[String], with_seeds: bool| {
         let cfg: std::borrow::Cow<portage_profile::Config> =
@@ -15457,6 +15496,184 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
+    fn ask_read_news_eof_exits_before_resolve_like_real() {
+        // Backlog #234 (a): real `_emerge/UserQuery.query`
+        // (`_emerge/UserQuery.py:74-76`) prints `Interrupted.` and exits
+        // `128 + SIGINT` on EOF -- the news prompt's `sys.exit` fires
+        // before `action_build`. EOF here is a VEOF byte (`Ctrl-D`)
+        // written to the pty master: the slave line discipline turns it
+        // into a zero-byte read, exactly how a terminal user types EOF
+        // into real's `input()` (which then raises `EOFError`). The
+        // master must stay open until the child exits -- closing it
+        // first makes the slave stop being a tty at all (Linux drops
+        // the termios once the last master closes), so the run would
+        // die in the up-front `--ask` isatty gate instead of reaching
+        // the prompt. Must print `Interrupted.`, exit 130, and never
+        // reach the resolve (`Calculating dependencies` stays absent);
+        // before the fix the run skipped the spawn, resolved, and only
+        // exited 130 at the later merge prompt.
+        use std::io::Write;
+        let portuale_bin = built_portuale_bin();
+        let base = std::env::temp_dir().join(format!(
+            "ask_read_news_eof_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = base.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let env = news_resolve_env(&root, &base.join("pt"));
+        let (mut master, slave_stdio) = pty_pair();
+        let child = std::process::Command::new(&portuale_bin)
+            .args([
+                "emerge",
+                "--ask",
+                "--read-news",
+                "--oneshot",
+                "dev-libs/schedok",
+            ])
+            .stdin(slave_stdio)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .envs(env)
+            .spawn()
+            .expect("portuale emerge spawns");
+        // The pty buffers until the child prompts -- no synchronisation
+        // needed.
+        master
+            .write_all(b"\x04")
+            .expect("EOF the news prompt with VEOF");
+        let output = child.wait_with_output().expect("wait for emerge");
+        drop(master);
+        assert_eq!(
+            output.status.code(),
+            Some(130),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout
+                .contains("Would you like to read the news items while calculating dependencies?"),
+            "{stdout}"
+        );
+        assert!(stdout.contains("Interrupted."), "{stdout}");
+        assert_eq!(
+            stdout.matches("news items need reading").count(),
+            1,
+            "{stdout}"
+        );
+        assert!(
+            !stdout.contains("Calculating dependencies"),
+            "an interrupted news prompt must exit before the resolve: {stdout}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ask_read_news_true_spellings_prompt_like_real() {
+        // Backlog #234 (b): real `true_y_or_n` (`main.py:321-322,625`)
+        // accepts `--ask=True` / `--read-news=True` (a bare flag inserts
+        // `"True"` via `insert_optional_args`, the choices admit it, and
+        // `in true_y` normalizes it at `main.py:802-805,950-953`). The
+        // `=True` pair prompts exactly like the bare flags: "No" to the
+        // news prompt skips eselect, "No" to the merge prompt exits 130
+        // with `Quitting.`.
+        use std::io::Write;
+        let portuale_bin = built_portuale_bin();
+        let (stubdir, marker) = eselect_stub("true_spellings");
+        let path = format!(
+            "{}:{}",
+            stubdir.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let base = std::env::temp_dir().join(format!(
+            "ask_read_news_true_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = base.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let mut env = news_resolve_env(&root, &base.join("pt"));
+        env.push(("PATH".to_string(), path));
+        let (mut master, slave_stdio) = pty_pair();
+        let child = std::process::Command::new(&portuale_bin)
+            .args([
+                "emerge",
+                "--ask=True",
+                "--read-news=True",
+                "--oneshot",
+                "dev-libs/schedok",
+            ])
+            .stdin(slave_stdio)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .envs(env)
+            .spawn()
+            .expect("portuale emerge spawns");
+        master.write_all(b"No\n").expect("decline the news prompt");
+        master.write_all(b"No\n").expect("decline the merge prompt");
+        let output = child.wait_with_output().expect("wait for emerge");
+        drop(master);
+        assert_eq!(
+            output.status.code(),
+            Some(130),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout
+                .contains("Would you like to read the news items while calculating dependencies?"),
+            "{stdout}"
+        );
+        assert_eq!(
+            stdout.matches("news items need reading").count(),
+            1,
+            "{stdout}"
+        );
+        assert!(stdout.contains("Quitting."), "{stdout}");
+        assert!(
+            !marker.exists(),
+            "a declined news prompt must not spawn eselect"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(stubdir);
+    }
+
+    #[test]
+    fn ask_true_spelling_hits_the_tty_gate_like_real() {
+        // Backlog #234 (b): `--ask=True` parses as ask-on (real
+        // `true_y_or_n` choices + `in true_y` normalization,
+        // `main.py:321-322,802-805`), so a non-terminal stdin hits real
+        // `actions.py:3920-3926`'s gate exactly like a bare `--ask`
+        // (before the fix `--ask=True` died as an unrecognized option).
+        let portuale_bin = built_portuale_bin();
+        let output = std::process::Command::new(&portuale_bin)
+            .args(["emerge", "--ask=True", "dev-libs/does-not-matter"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("portuale emerge spawns");
+        assert_eq!(output.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("\"--ask\" should only be used in a terminal"),
+            "{stderr}"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
     fn ask_read_news_without_eselect_prints_real_hint() {
         // Backlog #231 (c): real catches the spawn's `OSError`
         // (eselect missing) and prints `Please install eselect to use
@@ -15921,10 +16138,24 @@ mod tests {
                 .to_str()
                 .expect("pty name is utf8")
                 .to_owned();
-            let master_file = std::fs::File::from_raw_fd(master);
             let cname = std::ffi::CString::new(name).expect("pty name has no nul");
             let slave = libc::open(cname.as_ptr(), libc::O_RDWR | libc::O_NOCTTY);
             assert!(slave >= 0, "pty slave open failed");
+            // Backlog #234: close-on-exec on both ends. Without it the
+            // spawned child inherits the master, so dropping the test's
+            // `master` never delivers EOF to the child's slave read (the
+            // EOF test hung on exactly this). The stdio dup onto fd 0
+            // clears the flag on the dup, so the child's stdin survives.
+            for fd in [master, slave] {
+                let flags = libc::fcntl(fd, libc::F_GETFD);
+                assert!(flags >= 0, "fcntl F_GETFD failed");
+                assert_eq!(
+                    libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC),
+                    0,
+                    "fcntl F_SETFD failed"
+                );
+            }
+            let master_file = std::fs::File::from_raw_fd(master);
             let slave_stdio = std::process::Stdio::from(std::os::fd::OwnedFd::from_raw_fd(slave));
             (master_file, slave_stdio)
         }
