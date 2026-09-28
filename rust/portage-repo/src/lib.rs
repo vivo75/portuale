@@ -5795,9 +5795,20 @@ fn violated_parent_flags(
     // violated atom carries no `enabled`/`disabled` here (a
     // parent-lacks-child-has `flag=`, or either `flag!=` match
     // direction, lands in `conditional`, never in the concrete sets).
+    // Real `:1511-1524`: `flag` violates iff the child lacks it and the
+    // flag is valid or `(-)`-assumed; `-flag` violates iff the child
+    // has it, or (lacking it) the flag is invalid-`(+)`-assumed. The
+    // defaultless-invalid shapes never reach this gate: `required`
+    // poisons above, as real's `missing_iuse` branch does.
     let concrete_violated = use_deps.iter().any(|ud| match ud.op {
-        UseDepOp::Enabled => child_valid.contains(&ud.flag) && !child_use.contains(&ud.flag),
-        UseDepOp::Disabled => child_valid.contains(&ud.flag) && child_use.contains(&ud.flag),
+        UseDepOp::Enabled => {
+            !child_use.contains(&ud.flag)
+                && (child_valid.contains(&ud.flag) || ud.default == Some(UseDepDefault::Disabled))
+        }
+        UseDepOp::Disabled => {
+            child_use.contains(&ud.flag)
+                || (!child_valid.contains(&ud.flag) && ud.default == Some(UseDepDefault::Enabled))
+        }
         _ => false,
     });
     if concrete_violated {
@@ -64140,5 +64151,56 @@ mod tests_195d {
         cell_195d("!foo?", false, false, false, false);
         cell_195d("!foo(+)?", false, false, false, true);
         cell_195d("!foo(-)?", false, false, false, false);
+    }
+
+    /// The concrete gate on two-token atoms (oracle gate cells G0-G10):
+    /// a valid parent-active conditional plus one unconditional token.
+    /// `bar_valid` / `bar_use` mirror the oracle's columns; `hit` is
+    /// the oracle `arm` column.
+    fn gate_195d(cond_tok: &str, uncond_tok: &str, bar_valid: bool, bar_use: bool, hit: bool) {
+        let atom = portage_dep::parse_atom(&format!("dev-libs/child[{cond_tok},{uncond_tok}]"))
+            .expect("oracle gate atom parses");
+        let mut valid = set_195d(&["foo"]);
+        if bar_valid {
+            valid.insert("bar".to_string());
+        } else {
+            valid.insert("other".to_string());
+        }
+        let mut child_use = HashSet::new();
+        if bar_use && bar_valid {
+            child_use.insert("bar".to_string());
+        }
+        let parent_use = set_195d(&["foo"]);
+        let want: Vec<String> = if hit { vec!["foo".to_string()] } else { vec![] };
+        assert_eq!(
+            violated_parent_flags(&atom, &parent_use, &child_use, &valid),
+            want,
+            "cond={cond_tok} uncond={uncond_tok} bar_valid={bar_valid} bar_use={bar_use}"
+        );
+    }
+
+    #[test]
+    fn violated_parent_flags_concrete_gate_matches_real() {
+        // Controls: satisfied unconditional tokens leave the parent:foo
+        // hit alone (oracle-verified `[foo]`, gate PASS).
+        gate_195d("foo?", "bar", true, true, true);
+        gate_195d("foo?", "-bar", true, false, true);
+        // Valid concrete violations fail the gate (G1, G2).
+        gate_195d("foo?", "bar", true, false, false);
+        gate_195d("foo?", "-bar", true, true, false);
+        // Invalid `(-)`-assumed `bar` / invalid `(+)`-assumed `-bar`
+        // fail real's gate (G3, G4, G9, G10); the port's valid-only
+        // gate used to let them through.
+        gate_195d("foo?", "bar(-)", false, false, false);
+        gate_195d("foo?", "-bar(+)", false, false, false);
+        gate_195d("foo=", "bar(-)", false, false, false);
+        gate_195d("foo=", "-bar(+)", false, false, false);
+        // The satisfied invalid-defaulted mirrors pass (G5, G6).
+        gate_195d("foo?", "bar(+)", false, false, true);
+        gate_195d("foo?", "-bar(-)", false, false, true);
+        // Invalid defaultless unconditionals poison via `required`
+        // (G7, G8 -- real skips the arm via `missing_iuse`).
+        gate_195d("foo?", "bar", false, false, false);
+        gate_195d("foo?", "-bar", false, false, false);
     }
 }
