@@ -362,6 +362,8 @@ they shipped, not a rule for new work.
 
 234. **OPEN (filed 2026-09-28, #231 review) — two `--ask` / `--read-news` edges.** (a) EOF or Ctrl-C at the "read the news items" prompt: real `UserQuery` prints `Interrupted.` and exits 130 before `action_build` (`_emerge/UserQuery.py:70-72`), portuale skips the spawn and keeps resolving until the later merge prompt; (b) `--read-news=True` / `--read-news True` (and the same for `--ask`) are not accepted: real's `true_y_or_n` choices take `True` and bare flags insert `"True"` (`_emerge/main.py:321-322,625,950-953`). [I]
 
+235. **DONE 2026-09-28 (filed and fixed the same day; pmtest `89ef261`) — the upstream-test translator leaked one `gpg-agent` per run.** `scripts/upstream_resolver_translate.py` `_bootstrap` points `PORTAGE_GNUPGHOME` at a fresh `/tmp/portuale-upstream-gpg-*` directory; the `ResolverPlayground`'s binpkg signing starts a `gpg-agent --homedir <dir> --daemon` there, and nothing stopped it or removed the directory (335 daemons found and removed by hand on 2026-09-28 after the #50 batches). Fixed with an exit handler (`gpgconf --homedir <dir> --kill gpg-agent`, then remove the directory). [T]
+
 ## Tier 4 — `--solver=` real-tree correctness (pubgrub / resolvo)
 
 33. **`--solver=resolvo` cycle linearization** — `install_order` can't order any closure with a toolchain cycle (glibc↔gcc↔perl); `solver_bridge.rs` prints raw ids. Non-functional on real targets. `docs/history/solver-backends-analysis.md`. [J]
