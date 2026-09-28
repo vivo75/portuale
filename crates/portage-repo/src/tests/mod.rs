@@ -1112,6 +1112,10 @@ fn graph_result_real_atoms(atoms: &[String], backtrack_max: u32) -> GraphResult 
     .unwrap_or_else(|e| panic!("resolving {atom_str} failed: {e}"))
 }
 
+fn graph_entries_real(atom_str: &str) -> Vec<GraphEntry> {
+    graph_result_real(atom_str).entries
+}
+
 fn aub0_conflict_versions(result: &GraphResult) -> Vec<Vec<String>> {
     result
         .slot_conflicts

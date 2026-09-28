@@ -388,6 +388,53 @@ fn fixture_best_version_wins_regardless_of_which_repo_has_it() {
 }
 
 #[test]
+fn fixture_same_version_tie_across_repos_is_broken_toward_higher_priority() {
+    // Resolving it must pull in newpkg, proving the overlay's copy is read.
+    let full_names: Vec<String> = graph_entries_real("dev-libs/overlaytiepkg")
+        .into_iter()
+        .map(|e| format!("{}/{}", e.category, e.package))
+        .collect();
+    assert_eq!(
+        full_names,
+        vec!["dev-libs/newpkg", "dev-libs/overlaytiepkg"]
+    );
+}
+
+#[test]
+fn fixture_solvable_slot_conflict_is_reconciled_by_backtracking() {
+    // The walk resolves last-declared-first (Portage's stack), so the old
+    // consumer's `<2.0` graphs 1.0 first and the bare dep reuses it: no
+    // conflict ever forms, at any backtrack budget.
+    let result = graph_result_real("dev-libs/slotconflictparent");
+    let full_names: Vec<String> = result
+        .entries
+        .iter()
+        .map(|e| format!("{}/{}", e.category, e.package))
+        .collect();
+    assert_eq!(
+        full_names,
+        vec![
+            "dev-libs/slotconflicttarget",
+            "dev-libs/slotconflictnewconsumer",
+            "dev-libs/slotconflictoldconsumer",
+            "dev-libs/slotconflictparent"
+        ]
+    );
+    assert_eq!(result.slot_conflicts, vec![]);
+    let target = result
+        .entries
+        .iter()
+        .find(|e| e.package == "slotconflicttarget")
+        .expect("slotconflicttarget entry");
+    assert_eq!(
+        target.outcome,
+        PretendOutcome::New {
+            version: "1.0".to_string()
+        }
+    );
+}
+
+#[test]
 fn backtrack_zero_feeds_satisfiable_reverse_dep_pins_in_pass() {
     // `--backtrack=0` must not skip the reverse-dependency feed loop:
     // Portage calls `_complete_graph()` with no backtracking gate, so a
@@ -503,6 +550,264 @@ fn two_atom_old_new_withholds_with_a_skip_notice_at_any_budget() {
 }
 
 #[test]
+fn fixture_unsolvable_slot_conflict_is_resolved_by_masking_a_puller_version() {
+    // No bttarget version satisfies both pullers, so the retry masks 2.0 and
+    // falls back to btconsumer-1.0 + bttarget-1.0 via Portage's feedback paths.
+    let result = graph_result_real("dev-libs/btparent");
+    assert_eq!(result.slot_conflicts, vec![]);
+    let ver = |pkg: &str| {
+        result
+            .entries
+            .iter()
+            .find(|e| e.package == pkg)
+            .map(|e| match &e.outcome {
+                PretendOutcome::New { version } => version.clone(),
+                other => panic!("{pkg}: unexpected {other:?}"),
+            })
+            .unwrap_or_else(|| panic!("no entry for {pkg}"))
+    };
+    assert_eq!(ver("btconsumer"), "1.0");
+    assert_eq!(ver("bttarget"), "1.0");
+}
+
+#[test]
+fn fixture_masking_trial_is_reverted_when_it_makes_a_dependency_unsatisfiable() {
+    // Masking only turns the >=2.0 dep into an NVC, so the trial reverts and
+    // the original conflict reports unchanged.
+    let result = graph_result_real("dev-libs/slotconflictunsolvable");
+    assert_one_conflict(AssertOneConflictArgs {
+        result: &result,
+        category: "dev-libs",
+        package: "slotconflicttarget",
+        slot: "0",
+        resolved_version: "1.0",
+        conflicting_atom: ">=dev-libs/slotconflicttarget-2.0",
+    });
+    assert!(
+        !result
+            .entries
+            .iter()
+            .any(|e| matches!(e.outcome, PretendOutcome::NoVisibleCandidate)),
+        "the reverted graph must not carry the trial's NoVisibleCandidate"
+    );
+}
+
+#[test]
+fn fixture_slot_conflict_carries_per_instance_pulled_in_by_data() {
+    // The SlotConflict names every conflicting version and, per version, the
+    // (parent cpv, atom) that pulled it (Portage's per-slot_atom).
+    let result = graph_result_real("dev-libs/slotconflictunsolvable");
+    assert_eq!(result.slot_conflicts.len(), 1);
+    let c = &result.slot_conflicts[0];
+    assert_eq!(
+        c.instances
+            .iter()
+            .map(|i| i.version.as_str())
+            .collect::<Vec<_>>(),
+        vec!["1.0", "2.0"]
+    );
+    assert_eq!(
+        c.instances[0]
+            .parents
+            .iter()
+            .map(|p| (p.parent_cpv.as_str(), p.atom.as_str()))
+            .collect::<Vec<_>>(),
+        vec![(
+            "dev-libs/slotconflictoldpin-1.0:0/0::testrepo",
+            "<dev-libs/slotconflicttarget-2.0"
+        )]
+    );
+    assert_eq!(
+        c.instances[1]
+            .parents
+            .iter()
+            .map(|p| (p.parent_cpv.as_str(), p.atom.as_str()))
+            .collect::<Vec<_>>(),
+        vec![(
+            "dev-libs/slotconflictnewpin-1.0:0/0::testrepo",
+            ">=dev-libs/slotconflicttarget-2.0"
+        )]
+    );
+    // No IUSE anywhere: every instance/parent renders `USE="" ELIBC="glibc"`
+    // (Portage's `pkg_use_display` bare group plus the implicit USE_EXPAND).
+    assert!(c.instances.iter().all(|i| i.use_display
+        == vec![
+            ("USE".to_string(), String::new()),
+            ("ELIBC".to_string(), "glibc".to_string()),
+        ]));
+}
+
+#[test]
+fn fixture_slot_conflict_carries_pkg_use_display() {
+    // scusetarget IUSE="+scuon scuoff": both instances render
+    // `USE="scuon -scuoff" ELIBC="glibc"` (Portage's `pkg_use_display`).
+    let result = graph_result_real("dev-libs/scuseparent");
+    assert_eq!(result.slot_conflicts.len(), 1);
+    let c = &result.slot_conflicts[0];
+    for inst in &c.instances {
+        assert_eq!(
+            inst.use_display,
+            vec![
+                ("USE".to_string(), "scuon -scuoff".to_string()),
+                ("ELIBC".to_string(), "glibc".to_string()),
+            ]
+        );
+    }
+    // Instance order follows the walk: the oldpin's `<2.0` resolves first, so
+    // 1.0 sorts first (Portage's notice order).
+    assert_eq!(
+        c.instances[0].parents[0].use_display,
+        vec![
+            ("USE".to_string(), String::new()),
+            ("ELIBC".to_string(), "glibc".to_string()),
+        ]
+    );
+    assert_eq!(
+        c.instances[1].parents[0].use_display,
+        vec![
+            ("USE".to_string(), "scupin".to_string()),
+            ("ELIBC".to_string(), "glibc".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn fixture_unsolvable_slot_conflict_survives_backtracking_and_is_reported() {
+    // No single version satisfies both pullers, so no retry is attempted and
+    // the SlotConflict reports unchanged.
+    let result = graph_result_real("dev-libs/slotconflictunsolvable");
+    assert_one_conflict(AssertOneConflictArgs {
+        result: &result,
+        category: "dev-libs",
+        package: "slotconflicttarget",
+        slot: "0",
+        resolved_version: "1.0",
+        conflicting_atom: ">=dev-libs/slotconflicttarget-2.0",
+    });
+}
+
+#[test]
+fn fixture_different_slots_of_the_same_package_coexist_without_conflict() {
+    // Different slots of the same package coexist (like dev-lang/python:3.11
+    // and :3.12): both appear as independent entries.
+    let result = graph_result_real("dev-libs/multislotparent");
+    let full_names: Vec<String> = result
+        .entries
+        .iter()
+        .map(|e| format!("{}/{}", e.category, e.package))
+        .collect();
+    assert_eq!(
+        full_names,
+        vec![
+            "dev-libs/multislotpkg",
+            "dev-libs/multislotpkg",
+            "dev-libs/multislotparent",
+        ]
+    );
+    let mut slots: Vec<Option<String>> = result
+        .entries
+        .iter()
+        .filter(|e| e.package == "multislotpkg")
+        .map(|e| e.slot.clone())
+        .collect();
+    slots.sort();
+    assert_eq!(slots, vec![Some("0".to_string()), Some("1".to_string())]);
+    assert!(result.slot_conflicts.is_empty());
+}
+
+#[test]
+fn fixture_new_slot_install_is_new_not_an_upgrade() {
+    // Requesting `:1` matches only -2.0, whose own slot has nothing installed:
+    // a `New` with `new_slot=True`, NOT an `Upgrade` from 1.0.
+    let entries = graph_entries_real("dev-libs/newslotpkg:1");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].outcome,
+        PretendOutcome::New {
+            version: "2.0".to_string()
+        }
+    );
+    assert!(entries[0].new_slot);
+    assert_eq!(entries[0].slot.as_deref(), Some("1"));
+}
+
+#[test]
+fn fixture_in_slot_request_is_not_flagged_new_slot() {
+    // Requesting the installed slot stays an in-slot outcome, never `new_slot`.
+    let entries = graph_entries_real("dev-libs/newslotpkg:0");
+    assert_eq!(entries.len(), 1);
+    assert!(!entries[0].new_slot);
+    assert_eq!(
+        entries[0].outcome,
+        PretendOutcome::AlreadyInstalled {
+            version: "1.0".to_string()
+        }
+    );
+}
+
+#[test]
+fn fixture_interactive_bracket_column_tracks_evaluated_properties() {
+    // Unconditional PROPERTIES=interactive on a merge-bound pkg -> the
+    // interactive bracket (Portage's output.py attr_display).
+    let entries = graph_entries_real("dev-libs/interactivemergepkg");
+    assert_eq!(entries.len(), 1);
+    assert!(entries[0].interactive);
+    assert!(matches!(entries[0].outcome, PretendOutcome::New { .. }));
+
+    // `interactive` behind a `gtk?` conditional with `gtk` disabled is gated
+    // out by USE-conditional evaluation.
+    let entries = graph_entries_real("dev-libs/interactivecondpkg");
+    assert_eq!(entries.len(), 1);
+    assert!(!entries[0].interactive);
+    // (The merge-bound `Reinstall` case is covered end to end by the contract
+    // suite; this helper is selective, so a bare installed atom resolves to
+    // `AlreadyInstalled` here, which carries no bracket.)
+}
+
+#[test]
+fn fixture_fetch_restrict_column_tracks_distdir_state() {
+    // Both fixtures are `RESTRICT="fetch"`. The distdir holds `frs-1.0.tar.gz`
+    // at its Manifest size but not `frm-1.0.tar.gz` (Portage's fetch_restrict).
+    let entries = graph_entries_real("dev-libs/fetchrestrictsatisfiedpkg");
+    assert_eq!(entries.len(), 1);
+    assert!(entries[0].fetch_restrict);
+    assert!(entries[0].fetch_restrict_satisfied);
+
+    let entries = graph_entries_real("dev-libs/fetchrestrictmissingpkg");
+    assert_eq!(entries.len(), 1);
+    assert!(entries[0].fetch_restrict);
+    assert!(!entries[0].fetch_restrict_satisfied);
+
+    // A package with no `fetch` in RESTRICT never sets the flag.
+    let entries = graph_entries_real("dev-libs/newpkg");
+    assert!(!entries[0].fetch_restrict);
+    assert!(!entries[0].fetch_restrict_satisfied);
+}
+
+#[test]
+fn fixture_virtual_resolves_through_ordinary_category_and_any_of_machinery() {
+    // No PROVIDE mechanism, no dedicated virtuals code: the installed
+    // alternative wins over the first-listed one (Portage's dep_zapdeps
+    // preference, like `virtual/wine` -> installed `wine-staging`).
+    let entries = graph_entries_real("virtual/texteditor");
+    let full_names: Vec<String> = entries
+        .iter()
+        .map(|e| format!("{}/{}", e.category, e.package))
+        .collect();
+    assert_eq!(full_names, vec!["dev-libs/samepkg", "virtual/texteditor"]);
+    assert_eq!(
+        entries
+            .iter()
+            .find(|e| e.package == "samepkg")
+            .expect("samepkg entry")
+            .outcome,
+        PretendOutcome::AlreadyInstalled {
+            version: "1.0".to_string()
+        }
+    );
+}
+
+#[test]
 fn fixture_package_mask_hides_with_no_unmask() {
     assert_eq!(
         resolve_real("dev-libs", "hardmaskedpkg"),
@@ -517,6 +822,75 @@ fn fixture_package_unmask_cancels_the_matching_mask() {
         PretendOutcome::New {
             version: "1.0".to_string()
         }
+    );
+}
+
+#[test]
+fn fixture_provenance_records_the_matching_mask_and_unmask_entries() {
+    let entries = graph_entries_real("dev-libs/maskedandunmaskedpkg");
+    assert_eq!(
+        entries[0].provenance.mask_entry.as_deref(),
+        Some("dev-libs/maskedandunmaskedpkg")
+    );
+    assert_eq!(
+        entries[0].provenance.unmask_entry.as_deref(),
+        Some("dev-libs/maskedandunmaskedpkg")
+    );
+}
+
+#[test]
+fn fixture_provenance_records_no_mask_entry_when_never_masked() {
+    let entries = graph_entries_real("dev-libs/wildcardkeywordpkg");
+    assert_eq!(entries[0].provenance.mask_entry, None);
+    assert_eq!(entries[0].provenance.unmask_entry, None);
+}
+
+#[test]
+fn fixture_provenance_records_the_keyword_entry_that_was_actually_needed() {
+    // dev-libs/wildcardkeywordpkg is ~amd64-only, accepted only via
+    // the "*/wildcardkeywordpkg ~amd64" package.accept_keywords entry
+    // (see fixtures/etc/portage/package.accept_keywords) -- the
+    // global ACCEPT_KEYWORDS alone doesn't accept it.
+    let entries = graph_entries_real("dev-libs/wildcardkeywordpkg");
+    assert_eq!(
+        entries[0].provenance.keyword_entry.as_deref(),
+        Some("*/wildcardkeywordpkg")
+    );
+}
+
+#[test]
+fn fixture_provenance_records_no_keyword_entry_when_global_keywords_suffice() {
+    // dev-libs/newpkg is a plain stable-amd64 package needing no
+    // package.accept_keywords help at all.
+    let entries = graph_entries_real("dev-libs/newpkg");
+    assert_eq!(entries[0].provenance.keyword_entry, None);
+}
+
+#[test]
+fn keyword_mask_marker_classifies_the_bracket_column() {
+    // Plain stable-amd64: no marker (globally keyword-visible).
+    assert_eq!(graph_entries_real("dev-libs/newpkg")[0].keyword_mask, None);
+    // ~amd64, visible only via a package.accept_keywords entry -- a
+    // testing keyword for our own arch -> '~'.
+    assert_eq!(
+        graph_entries_real("dev-libs/wildcardkeywordpkg")[0].keyword_mask,
+        Some('~')
+    );
+    assert_eq!(
+        graph_entries_real("dev-libs/bareacceptkeywordspkg")[0].keyword_mask,
+        Some('~')
+    );
+    // ~arm64, visible only via "~*" -- a different arch's testing
+    // keyword -> '*' (Portage's get_keyword_mask "missing").
+    assert_eq!(
+        graph_entries_real("dev-libs/tildestarkeywordpkg")[0].keyword_mask,
+        Some('*')
+    );
+    // package.mask'd then package.unmask'd -> '#' (Portage's isHardMasked
+    // ignores package.unmask), and it wins over any keyword state.
+    assert_eq!(
+        graph_entries_real("dev-libs/maskedandunmaskedpkg")[0].keyword_mask,
+        Some('#')
     );
 }
 
@@ -1990,6 +2364,36 @@ fn recursion_terminates_on_a_dependency_cycle() {
 }
 
 #[test]
+fn virtual_cycle_aborts_like_portage_on_the_upstream_fixtures() {
+    // Upstream bug 965570: both cells fail in Portage, while portuale merged
+    // both as ordinary rings.
+    for (top, expected) in [
+        ("app-misc/bar", vec!["virtual/gzip-1::testrepo".to_string()]),
+        (
+            "app-misc/foo",
+            vec![
+                "virtual/A-1::testrepo".to_string(),
+                "virtual/B-1::testrepo".to_string(),
+                "virtual/C-1::testrepo".to_string(),
+            ],
+        ),
+    ] {
+        let result = graph_result_real(top);
+        assert_eq!(result.virtual_cycle, expected, "{top}");
+        match &result.outcome {
+            ResolveOutcome::Aborted {
+                reason: AbortReason::VirtualCycle { members },
+                partial,
+            } => {
+                assert_eq!(members, &expected, "{top}");
+                assert!(partial.is_empty(), "{top}: real shows no list at all");
+            }
+            other => panic!("{top}: expected VirtualCycle, got {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn conditional_grandparent_with_undeclared_flag_is_masked_invalid_before_any_cycle_analysis() {
     // The USE-gated cycle is still in the tree, but the target constrains the
     // flag conditionally with `x` in no IUSE: Portage masks the candidate
@@ -2024,6 +2428,161 @@ fn conditional_grandparent_with_undeclared_flag_is_masked_invalid_before_any_cyc
              'dev-libs/fucyclea[x?]' is not in IUSE)"
         ),
         "{report}"
+    );
+}
+
+#[test]
+fn large_cycle_count_and_display_fire_on_a_four_ring() {
+    // A four-ring of build-time deps: Portage records one ring per node, so
+    // four records trip `large_cycle_count`.
+    let result = graph_result_real("dev-libs/cyc4a");
+    assert_eq!(result.circular_deps.len(), 1);
+    assert!(
+        result.large_cycle_count,
+        "four rotations must trip the trailer"
+    );
+    let mut display = result.cycle_display.clone();
+    display.sort();
+    assert_eq!(
+        display,
+        vec![
+            "dev-libs/cyc4a-1.0".to_string(),
+            "dev-libs/cyc4b-1.0".to_string(),
+            "dev-libs/cyc4c-1.0".to_string(),
+            "dev-libs/cyc4d-1.0".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn small_cycles_report_without_large_count_or_display() {
+    // Control: the two-ring still re-displays its two members, but
+    // `large_cycle_count` stays false.
+    let result = graph_result_real("dev-libs/hardcyclea");
+    assert_eq!(result.circular_deps.len(), 1);
+    assert!(
+        !result.large_cycle_count,
+        "two rotations must not trip the trailer"
+    );
+    assert_eq!(result.cycle_display.len(), 2);
+}
+
+#[test]
+fn masked_dep_report_carries_the_chain_to_the_argument() {
+    // The masked_deps report chain walks the merge parent up to the top-level
+    // argument (Portage's dependency-required-by lines).
+    let result = graph_result_real("dev-libs/maskneedpkg");
+    assert_eq!(result.masked_deps.len(), 1);
+    let rep = &result.masked_deps[0];
+    assert_eq!(
+        (
+            rep.category.as_str(),
+            rep.package.as_str(),
+            rep.atom.as_str()
+        ),
+        ("dev-libs", "maskeddep", "dev-libs/maskeddep")
+    );
+    assert_eq!(rep.masked.len(), 1);
+    assert_eq!(rep.masked[0].0, "dev-libs/maskeddep-1.0::testrepo");
+    assert_eq!(
+        rep.chain,
+        vec![
+            (
+                "dev-libs/maskneedpkg-1.0::testrepo".to_string(),
+                "ebuild".to_string()
+            ),
+            ("dev-libs/maskneedpkg".to_string(), "argument".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn use_unsat_dep_report_carries_the_chain_to_the_argument() {
+    // The Missing IUSE disclosure chain walks the merge parent up to the
+    // top-level argument (Portage's lines).
+    let result = graph_result_real("dev-libs/unsatuseiuse");
+    assert_eq!(result.use_unsat_deps.len(), 1);
+    let rep = &result.use_unsat_deps[0];
+    assert_eq!(
+        (
+            rep.category.as_str(),
+            rep.package.as_str(),
+            rep.atom.as_str()
+        ),
+        (
+            "dev-libs",
+            "unsatuseiusetarget",
+            "dev-libs/unsatuseiusetarget[noiuse]"
+        )
+    );
+    assert_eq!(
+        rep.rows,
+        vec![(
+            "dev-libs/unsatuseiusetarget-1.0::testrepo".to_string(),
+            vec!["Missing IUSE: noiuse".to_string()]
+        )]
+    );
+    assert_eq!(
+        rep.chain,
+        vec![
+            (
+                "dev-libs/unsatuseiuse-1.0::testrepo".to_string(),
+                "ebuild".to_string()
+            ),
+            ("dev-libs/unsatuseiuse".to_string(), "argument".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn unreachable_installed_pin_does_not_block_an_upgrade() {
+    // keeper-1.0 is installed but outside every closure, so its pin never
+    // applies and the explicit `=paired-2.0` request merges cleanly.
+    let result = graph_result_real("=dev-libs/paired-2.0");
+    let paired = result
+        .entries
+        .iter()
+        .find(|e| e.package == "paired")
+        .expect("paired resolves");
+    assert!(
+        matches!(
+            &paired.outcome,
+            PretendOutcome::Upgrade { to, .. } if to == "2.0"
+        ),
+        "the upgrade merges, unblocked by keeper's unreachable pin: {:?}",
+        paired.outcome
+    );
+    assert!(
+        result.slot_conflicts.is_empty(),
+        "keeper is unreachable, so there is no residual conflict: {:?}",
+        result.slot_conflicts
+    );
+}
+
+#[test]
+fn build_time_cycle_between_two_installed_packages_is_not_a_hard_cycle() {
+    // Both already installed: Portage demotes the build-time edge an installed
+    // package provides, so the cycle breaks (contrast the genuine hard cycle,
+    // neither installed, which still reports).
+    let result = graph_result_empty("dev-libs/instcyclea");
+    assert!(
+        result.circular_deps.is_empty(),
+        "expected no hard cycle, got {:?}",
+        result.circular_deps
+    );
+    let names: Vec<&str> = result.entries.iter().map(|e| e.package.as_str()).collect();
+    assert!(names.contains(&"instcyclea") && names.contains(&"instcycleb"));
+    assert!(
+        result
+            .entries
+            .iter()
+            .all(|e| matches!(e.outcome, PretendOutcome::Reinstall { .. }))
+    );
+    // sanity: the genuine hard cycle is still detected.
+    assert!(
+        !graph_result_real("dev-libs/hardcyclea")
+            .circular_deps
+            .is_empty()
     );
 }
 
@@ -2503,6 +3062,19 @@ fn required_use_violations_are_collected_across_the_whole_walk_not_just_the_firs
 }
 
 #[test]
+fn fixture_dependency_no_visible_candidate_gets_no_keyword_suggestion_by_default() {
+    // A dependency's own NoVisibleCandidate carries a suggestion only once
+    // autounmask_suggest_keywords is on.
+    let entries = graph_entries_real("dev-libs/autounmaskdepconsumer");
+    let dep = entries
+        .iter()
+        .find(|e| e.package == "autounmaskkeywordpkg")
+        .expect("dependency entry present");
+    assert_eq!(dep.outcome, PretendOutcome::NoVisibleCandidate);
+    assert_eq!(dep.keyword_suggestion, None);
+}
+
+#[test]
 fn fixture_dependency_no_visible_candidate_gets_a_keyword_suggestion_once_enabled() {
     let root = fixtures_root();
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
@@ -2581,6 +3153,19 @@ fn top_level_use_miss_reports_the_use_block_without_chain() {
          !!! One of the following packages is required to complete your request:\n\
          - dev-libs/useflagpkg-1.0::testrepo (Change USE: -foo)"
     );
+}
+
+#[test]
+fn fixture_dependency_no_visible_candidate_gets_no_use_suggestion_by_default() {
+    // A dependency's own NoVisibleCandidate carries a use_suggestion only once
+    // autounmask_suggest_use is on.
+    let entries = graph_entries_real("dev-libs/usedeprejectedpkg");
+    let dep = entries
+        .iter()
+        .find(|e| e.package == "useflagpkg")
+        .expect("dependency entry present");
+    assert_eq!(dep.outcome, PretendOutcome::NoVisibleCandidate);
+    assert_eq!(dep.use_suggestion, None);
 }
 
 #[test]
@@ -2967,6 +3552,139 @@ fn dependency_avoid_update_candidate_is_slot_aware() {
     assert_eq!(dep.slot.as_deref(), Some("1"));
 
     let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn graph_entry_carries_sub_slot_repo_and_oldbest_for_slot_repo_decoration() {
+    // A New from testrepo: sub_slot/repo populated, oldbest empty.
+    let n = &graph_entries_real("dev-libs/newpkg")[0];
+    assert_eq!(n.sub_slot.as_deref(), Some("0"));
+    assert_eq!(n.repo_name.as_deref(), Some("testrepo"));
+    assert!(n.oldbest.is_empty());
+
+    // A sub-slotted dep: sub_slot != slot is carried through.
+    let entries = graph_entries_real("dev-libs/subslotconsumer");
+    let sub = entries.iter().find(|e| e.package == "subslotpkg").unwrap();
+    assert_eq!(sub.slot.as_deref(), Some("0"));
+    assert_eq!(sub.sub_slot.as_deref(), Some("2"));
+
+    // A new-slot New: oldbest lists every installed version (all slots).
+    let ns = &graph_entries_real("dev-libs/newslotpkg:1")[0];
+    assert!(ns.new_slot);
+    assert_eq!(
+        ns.oldbest
+            .iter()
+            .map(|r| r.version.as_str())
+            .collect::<Vec<_>>(),
+        vec!["1.0"]
+    );
+    assert_eq!(ns.oldbest[0].slot, "0");
+}
+
+#[test]
+fn package_provided_drops_a_matching_dependency_from_the_walk() {
+    // The provided dep is silently dropped; pprovided_atoms stays empty (it's a
+    // dependency, not a top-level target).
+    let result = graph_result_real("dev-libs/needsprovided");
+    let names: Vec<&str> = result.entries.iter().map(|e| e.package.as_str()).collect();
+    assert_eq!(names, vec!["newpkg", "needsprovided"]);
+    assert!(result.pprovided_atoms.is_empty());
+}
+
+#[test]
+fn package_provided_records_a_matching_top_level_target_for_the_warning() {
+    // A direct `emerge providedpkg` resolves nothing (no entry) and records the
+    // atom in pprovided_atoms (Portage's own `_pprovided_args`).
+    let result = graph_result_real("dev-libs/providedpkg");
+    assert!(result.entries.is_empty());
+    assert_eq!(
+        result.pprovided_atoms,
+        vec!["dev-libs/providedpkg".to_string()]
+    );
+}
+
+#[test]
+fn buildpkgonly_is_always_false_when_not_requested() {
+    // `graph_result_real` always passes buildpkgonly=false -- even for the same
+    // dualdep fixture that trips the check above, the field must stay false
+    // when the flag isn't given at all.
+    let result = graph_result_real("dev-libs/dualdep");
+    assert!(!result.buildpkgonly_deps_unsatisfied);
+}
+
+#[test]
+fn fixture_strong_blocker_matches_an_installed_package() {
+    // A plain `emerge -p` prints `b` + `[uninstall samepkg-1.0]` (rc 0); the
+    // other installed fixtures that RDEPEND on samepkg are not walked, so
+    // they do not block the unmerge.
+    let entries = graph_entries_real("dev-libs/blockerpkg");
+    // The satisfied block also produces the removal entry Portage models as an
+    // uninstall task.
+    assert_eq!(entries.len(), 2);
+    assert_eq!(
+        entries[0].blockers,
+        vec![BlockerConflict {
+            atom_str: "!!dev-libs/samepkg".to_string(),
+            strong: true,
+            matched_category: "dev-libs".to_string(),
+            matched_package: "samepkg".to_string(),
+            matched_version: "1.0".to_string(),
+            unsolvable: false,
+            // Resolved by removing the installed match.
+            satisfied_by: Some(BlockerSatisfiedBy::Uninstall {
+                cpv: "dev-libs/samepkg-1.0".to_string(),
+                anchor: ("dev-libs".to_string(), "blockerpkg".to_string()),
+            }),
+            tree_scheduled_uninstall: false,
+        }]
+    );
+}
+
+#[test]
+fn fixture_weak_blocker_matches_another_new_package_in_the_same_graph() {
+    // The weak blocker is reported against the graph-resolved version, not
+    // just against the (empty) vdb.
+    let entries = graph_entries_real("dev-libs/graphblockerparent");
+    let full_names: Vec<String> = entries
+        .iter()
+        .map(|e| format!("{}/{}", e.category, e.package))
+        .collect();
+    assert_eq!(
+        full_names,
+        vec![
+            "dev-libs/blockerpartnerpkg",
+            "dev-libs/weakblockerpkg",
+            "dev-libs/graphblockerparent"
+        ]
+    );
+    let by_pkg = |p: &str| entries.iter().find(|e| e.package == p).unwrap();
+    assert!(by_pkg("blockerpartnerpkg").blockers.is_empty());
+    assert!(by_pkg("graphblockerparent").blockers.is_empty());
+    // weakblockerpkg's own RDEPEND carries the `!dev-libs/blockerpartnerpkg`
+    // weak blocker.
+    assert_eq!(
+        by_pkg("weakblockerpkg").blockers,
+        vec![BlockerConflict {
+            atom_str: "!dev-libs/blockerpartnerpkg".to_string(),
+            strong: false,
+            matched_category: "dev-libs".to_string(),
+            matched_package: "blockerpartnerpkg".to_string(),
+            matched_version: "1.0".to_string(),
+            // A merge-bound match with a merging parent is unresolved (Portage
+            // prints `[blocks B]` for this merge-vs-merge shape).
+            unsolvable: true,
+            satisfied_by: None,
+            tree_scheduled_uninstall: false,
+        }]
+    );
+}
+
+#[test]
+fn fixture_unrelated_packages_report_no_blockers() {
+    // Regression guard: the diamond fixture has no blockers at all, so
+    // none of its entries should gain a spurious one.
+    let entries = graph_entries_real("dev-libs/diamond");
+    assert!(entries.iter().all(|e| e.blockers.is_empty()));
 }
 
 /// An exact-version top-level request keeps its named installed instance
