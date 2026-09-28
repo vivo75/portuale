@@ -915,6 +915,13 @@ fn kept_alt_for_display(
     entries: &[GraphEntry],
     root: &Path,
     owners: impl IntoIterator<Item = usize>,
+    // Backlog #221: the settling pass's recorded cycle edges. The `--tree`
+    // walk passes the resolve's own map (so a wait chain follows the
+    // cycle-breaking branch the walk took); the flat-list blocker walks
+    // pass an empty map (today's derivation -- a wait chain through a
+    // demoted branch in a post-backtrack resolve with Replacement rows
+    // is a display-only residue, see the g221 report).
+    circular: &HashMap<(String, String), Vec<portage_repo::CircularDepChild>>,
 ) -> Vec<HashSet<usize>> {
     let has_replacement_row = owners.into_iter().any(|i| {
         entries[i]
@@ -923,7 +930,7 @@ fn kept_alt_for_display(
             .any(|b| matches!(b.satisfied_by, Some(BlockerSatisfiedBy::Replacement { .. })))
     });
     if has_replacement_row {
-        portage_repo::kept_alt_branches(entries, root)
+        portage_repo::kept_alt_branches(entries, root, circular)
     } else {
         Vec::new()
     }
@@ -1180,7 +1187,7 @@ fn trailing_blocker_lines(
     // #84: one kept-branch derivation for this owner's rows -- and none
     // at all unless one of them is a `Replacement`, which is what keeps
     // the per-entry call cheap.
-    let kept_alt = kept_alt_for_display(entries, root, [owner_index]);
+    let kept_alt = kept_alt_for_display(entries, root, [owner_index], &HashMap::new());
     entry
         .blockers
         .iter()
@@ -1224,7 +1231,7 @@ fn collect_inline_blocker_lines(
         return Vec::new();
     }
     // #84: one kept-branch derivation for the whole display list.
-    let kept_alt = kept_alt_for_display(entries, root, 0..entries.len());
+    let kept_alt = kept_alt_for_display(entries, root, 0..entries.len(), &HashMap::new());
     let mut out: Vec<(usize, String)> = Vec::new();
     for (owner_index, entry) in entries.iter().enumerate() {
         for b in &entry.blockers {
@@ -1265,7 +1272,7 @@ fn count_blocker_rows(entries: &[GraphEntry], root: &Path, tree: bool) -> (u64, 
     let mut blocks = 0u64;
     let mut unsolvable = 0u64;
     // #84: one kept-branch derivation for the whole counter scan.
-    let kept_alt = kept_alt_for_display(entries, root, 0..entries.len());
+    let kept_alt = kept_alt_for_display(entries, root, 0..entries.len(), &HashMap::new());
     for (owner_index, entry) in entries.iter().enumerate() {
         for b in &entry.blockers {
             // Backlog #81: in tree mode a flat-Hidden Replacement row
@@ -1995,6 +2002,10 @@ fn print_tree(
     // Backlog #206 S2: forwarded to `print_entry_line` (see its
     // `force_sizes`).
     force_sizes: bool,
+    // Backlog #221: the resolve's recorded cycle edges (see
+    // `kept_alt_for_display`): the `--tree` walk keeps the
+    // cycle-breaking branch the walk took.
+    circular: &HashMap<(String, String), Vec<portage_repo::CircularDepChild>>,
 ) -> Vec<(usize, bool)> {
     /// One node of the display graph: an entry, or a satisfied blocker
     /// row `entries[owner].blockers[index]`.
@@ -2028,7 +2039,7 @@ fn print_tree(
     // function used to carry, whose tie-break had drifted to a string
     // version compare. Suppressed `|| ( … )` alternatives are already
     // `None` there, so no separate `kept_alt_branches` pass is needed.
-    let dep_targets = portage_repo::resolved_dep_targets(entries, root);
+    let dep_targets = portage_repo::resolved_dep_targets(entries, root, circular);
     // #131 S1: the walk consumes the tree-mode serialization order
     // (merge direction; the ordered walk below iterates it reversed),
     // exactly like real's `_ordered_tree_display` consumes the reversed
@@ -2094,7 +2105,7 @@ fn print_tree(
     // already lives on that same removal entry -- the #77 absent-owner
     // arm, whose owner is real's non-node vardb `Package`).
     // #84: one kept-branch derivation for the whole node walk.
-    let kept_alt = kept_alt_for_display(entries, root, 0..entries.len());
+    let kept_alt = kept_alt_for_display(entries, root, 0..entries.len(), circular);
     for (owner, entry) in entries.iter().enumerate() {
         for (index, b) in entry.blockers.iter().enumerate() {
             // Backlog #81: a flat-Hidden Replacement row the tree-mode
@@ -12878,6 +12889,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 implicit_system_deps,
                 &repos,
                 dynamic_deps,
+                &result.circular_dependency,
             );
             rendered_rows = print_tree(
                 display_entries,
@@ -12900,6 +12912,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 &result.use_unsat_deps,
                 &result.plain_miss_deps,
                 circular_forced_display,
+                &result.circular_dependency,
             );
         } else {
             // #68/#72 B2: rows whose replacement waits on its owner print
@@ -17314,7 +17327,7 @@ mod tests {
             "",
         );
         assert!(
-            kept_alt_for_display(&[plain], root, 0..1).is_empty(),
+            kept_alt_for_display(&[plain], root, 0..1, &HashMap::new()).is_empty(),
             "no Replacement row means no derivation"
         );
 
@@ -17364,12 +17377,15 @@ mod tests {
             key: 4,
         }];
         let entries = [owner, replacement];
-        let shared = kept_alt_for_display(&entries, root, 0..entries.len());
+        let shared = kept_alt_for_display(&entries, root, 0..entries.len(), &HashMap::new());
         // The owner-restricted form (what `trailing_blocker_lines` uses)
         // derives for the owner that carries the row and for nobody else.
-        assert_eq!(kept_alt_for_display(&entries, root, [0]), shared);
-        assert!(kept_alt_for_display(&entries, root, [1]).is_empty());
-        let on_demand = portage_repo::kept_alt_branches(&entries, root);
+        assert_eq!(
+            kept_alt_for_display(&entries, root, [0], &HashMap::new()),
+            shared
+        );
+        assert!(kept_alt_for_display(&entries, root, [1], &HashMap::new()).is_empty());
+        let on_demand = portage_repo::kept_alt_branches(&entries, root, &HashMap::new());
         assert_eq!(
             shared, on_demand,
             "the shared set is the derivation it replaces"

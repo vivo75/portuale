@@ -728,6 +728,12 @@ fn graph_result_from_order(
         req.implicit_system_deps,
         repos,
         req.dynamic_deps,
+        // The bridge engines pick `||` branches natively (PubGrub /
+        // resolvo unit propagation, not `dep_zapdeps` bins) and run no
+        // backtrack restart, so there is no recorded cycle map to
+        // demote by -- an empty map keeps the suppression's
+        // re-derivation exactly as before (backlog #221).
+        &HashMap::new(),
     );
     // Circular-dep notice (J): the walk records every dependency edge's
     // hard/soft kind while draining its queue and reports the shortest
@@ -764,14 +770,15 @@ fn graph_result_from_order(
             }
         }
     }
-    let circular_deps = super::find_hard_cycles(&entries, &edge_kinds, &req.root);
+    let circular_deps = super::find_hard_cycles(&entries, &edge_kinds, &req.root, &HashMap::new());
     // Elementary-cycle enumeration for the `large_cycle_count` trailer
     // and cycle-only re-display, same as the walk path: only a reported
     // hard cycle pays for the report build.
     let (large_cycle_count, cycle_display) = if circular_deps.is_empty() {
         (false, Vec::new())
     } else {
-        let (cycles, display) = super::merge_order::cycle_report(&entries, &req.atoms, &req.root);
+        let (cycles, display) =
+            super::merge_order::cycle_report(&entries, &req.atoms, &req.root, &HashMap::new());
         let display = display
             .into_iter()
             .filter_map(|i| super::merge_bound_cpv(&entries[i]))
@@ -784,6 +791,9 @@ fn graph_result_from_order(
         // and `--backtrack` is not consumed by them.
         backtrack_restarts: 0,
         backtrack_max: req.backtrack_max,
+        // No restart runs, so no cycle map is ever recorded either
+        // (backlog #221 is a walk-path rule).
+        circular_dependency: HashMap::new(),
         // A solved engine plan admits no same-slot divergence and no
         // relaxation loop ran, so it cannot abort either (no
         // `_create_graph` 0-return, no `_serialize_tasks` give-up, no

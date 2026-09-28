@@ -43,7 +43,7 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::path::Path;
 
 use crate::{
-    BlockerSatisfiedBy, CandidateSource, GraphEntry, PretendOutcome, RepoConfig,
+    BlockerSatisfiedBy, CandidateSource, CircularDepChild, GraphEntry, PretendOutcome, RepoConfig,
     VisibilityProvenance, all_installed_packages, read_vdb_flag_set, read_vdb_slot,
 };
 
@@ -1728,11 +1728,19 @@ fn digraph_prelude<'a>(entries: &'a [GraphEntry], root: &Path) -> DigraphPrelude
 /// anything at all. Returns, per entry, the `deps` indices of the
 /// branches **not** picked. If *no* branch fully resolves, nothing is
 /// suppressed (keep the over-inclusive stopgap).
-fn suppressed_alt_edges(entries: &[GraphEntry], pre: &DigraphPrelude<'_>) -> Vec<HashSet<usize>> {
+fn suppressed_alt_edges(
+    entries: &[GraphEntry],
+    pre: &DigraphPrelude<'_>,
+    root: &Path,
+    circular: &HashMap<(String, String), Vec<CircularDepChild>>,
+) -> Vec<HashSet<usize>> {
+    let installed_by_cp = installed_candidates_by_cp(root);
+    let children_of = |e: &GraphEntry| circular.get(&(e.category.clone(), e.package.clone()));
     entries
         .iter()
         .enumerate()
         .map(|(i, e)| {
+            let children = children_of(e);
             let mut groups: HashMap<(u8, u32), Vec<(u32, usize)>> = HashMap::new();
             for (ei, edge) in e.deps.iter().enumerate() {
                 if let Some((g, b)) = edge.alt
@@ -1750,6 +1758,21 @@ fn suppressed_alt_edges(entries: &[GraphEntry], pre: &DigraphPrelude<'_>) -> Vec
                 let mut all_inst: std::collections::BTreeMap<u32, bool> =
                     std::collections::BTreeMap::new();
                 let mut all_any: std::collections::BTreeMap<u32, bool> =
+                    std::collections::BTreeMap::new();
+                // Backlog #221: per branch, real `dep_zapdeps`'
+                // `circular_atom` demotion at this re-derivation's
+                // coarse level -- a branch with an atom matching one of
+                // the owner's recorded in-cycle children ranks below
+                // every non-demoted tier, so the kept branch stays the
+                // one the walk took instead of re-closing the cycle with
+                // a phantom edge. Blocker atoms never match; the
+                // installed exemption is version/slot-only here (no
+                // `[use]` check): the full `atom_matches_installed`
+                // rule needs `Config`, which no suppression signature
+                // carries, for a USE-mismatch corner no fixture
+                // reaches. Empty map (every pre-#221 call shape): no
+                // branch demotes, byte-identical behaviour.
+                let mut demoted: std::collections::BTreeMap<u32, bool> =
                     std::collections::BTreeMap::new();
                 for &(b, ei) in members {
                     let edge = &e.deps[ei];
@@ -1789,13 +1812,46 @@ fn suppressed_alt_edges(entries: &[GraphEntry], pre: &DigraphPrelude<'_>) -> Vec
                     *all_graph.entry(b).or_insert(true) &= graph_m;
                     *all_inst.entry(b).or_insert(true) &= inst_m;
                     *all_any.entry(b).or_insert(true) &= any_m;
+                    if let Some(children) = children
+                        && let Some(atom) = portage_dep::parse_atom(&edge.atom)
+                        && atom.blocker == portage_dep::Blocker::None
+                        && !installed_by_cp
+                            .get(&(atom.category.clone(), atom.package.clone()))
+                            .is_some_and(|cands| {
+                                let refs: Vec<&str> = cands.iter().map(String::as_str).collect();
+                                portage_dep::match_from_list(&edge.atom, &refs)
+                                    .is_some_and(|m| !m.is_empty())
+                            })
+                        && children.iter().any(|child| {
+                            let candidate = crate::circular_child_candidate(child);
+                            portage_dep::match_from_list(&edge.atom, &[candidate.as_str()])
+                                .is_some_and(|m| !m.is_empty())
+                        })
+                    {
+                        demoted.insert(b, true);
+                    }
                 }
-                let pick = all_graph
-                    .iter()
-                    .find(|(_, v)| **v)
-                    .map(|(b, _)| *b)
-                    .or_else(|| all_inst.iter().find(|(_, v)| **v).map(|(b, _)| *b))
-                    .or_else(|| all_any.iter().find(|(_, v)| **v).map(|(b, _)| *b));
+                let is_demoted = |b: &u32| demoted.get(b).is_some_and(|d| *d);
+                let rank = |tiers: &std::collections::BTreeMap<u32, bool>| {
+                    tiers
+                        .iter()
+                        .filter(|(b, _)| !is_demoted(b))
+                        .find(|(_, v)| **v)
+                        .map(|(b, _)| *b)
+                };
+                let pick = rank(&all_graph)
+                    .or_else(|| rank(&all_inst))
+                    .or_else(|| rank(&all_any))
+                    // Real's `other` bin keeps ebuild order: a group
+                    // with every branch demoted still resolves, to its
+                    // first-listed branch.
+                    .or_else(|| {
+                        members
+                            .iter()
+                            .map(|(b, _)| *b)
+                            .filter(|b| is_demoted(b))
+                            .min()
+                    });
                 if let Some(pick) = pick {
                     for &(b, ei) in members {
                         if b != pick {
@@ -1818,9 +1874,18 @@ fn suppressed_alt_edges(entries: &[GraphEntry], pre: &DigraphPrelude<'_>) -> Vec
 /// when that edge's branch was the kept one (`TEST/findings/l0.md`
 /// "#76 B0"). The #53 circular-self-branch exclusion is preserved
 /// because both callers share `suppressed_alt_edges`.
-pub fn kept_alt_branches(entries: &[GraphEntry], root: &Path) -> Vec<HashSet<usize>> {
+///
+/// `circular` is backlog #221's settling pass's recorded cycle edges
+/// (empty when no backtrack restart happened): `suppressed_alt_edges`
+/// demotes matching branches like the walk did, so the kept branch
+/// stays the cycle-breaking one.
+pub fn kept_alt_branches(
+    entries: &[GraphEntry],
+    root: &Path,
+    circular: &HashMap<(String, String), Vec<CircularDepChild>>,
+) -> Vec<HashSet<usize>> {
     let pre = digraph_prelude(entries, root);
-    let suppressed = suppressed_alt_edges(entries, &pre);
+    let suppressed = suppressed_alt_edges(entries, &pre, root, circular);
     entries
         .iter()
         .enumerate()
@@ -1846,9 +1911,16 @@ pub fn kept_alt_branches(entries: &[GraphEntry], root: &Path) -> Vec<HashSet<usi
 /// It shares `DigraphPrelude::select_dep_target` with `build_digraph`
 /// (see that function's doc for the single `merge_bound_only`
 /// difference and for why the sharing matters).
-pub fn resolved_dep_targets(entries: &[GraphEntry], root: &Path) -> Vec<Vec<Option<usize>>> {
+///
+/// `circular` is backlog #221's settling pass's recorded cycle edges
+/// (see `kept_alt_branches`).
+pub fn resolved_dep_targets(
+    entries: &[GraphEntry],
+    root: &Path,
+    circular: &HashMap<(String, String), Vec<CircularDepChild>>,
+) -> Vec<Vec<Option<usize>>> {
     let pre = digraph_prelude(entries, root);
-    let suppressed = suppressed_alt_edges(entries, &pre);
+    let suppressed = suppressed_alt_edges(entries, &pre, root, circular);
     entries
         .iter()
         .enumerate()
@@ -1877,7 +1949,12 @@ pub fn resolved_dep_targets(entries: &[GraphEntry], root: &Path) -> Vec<Vec<Opti
 /// owner, a synthetic rebuild entry, an entry whose metadata was
 /// unreadable) so the new scheduler is never *less* constrained than the
 /// `required_by`-only one it replaces.
-fn build_digraph(entries: &[GraphEntry], top_level_atoms: &[String], root: &Path) -> Digraph {
+fn build_digraph(
+    entries: &[GraphEntry],
+    top_level_atoms: &[String],
+    root: &Path,
+    circular: &HashMap<(String, String), Vec<CircularDepChild>>,
+) -> Digraph {
     let n = entries.len();
     let pre = digraph_prelude(entries, root);
     let cp_indices = &pre.cp_indices;
@@ -1916,7 +1993,7 @@ fn build_digraph(entries: &[GraphEntry], top_level_atoms: &[String], root: &Path
     // one alternative, not all. The derivation lives in
     // `suppressed_alt_edges` so the public `kept_alt_branches` used by the
     // #76 wait predicate cannot drift from this internal use.
-    let alt_suppressed = suppressed_alt_edges(entries, &pre);
+    let alt_suppressed = suppressed_alt_edges(entries, &pre, root, circular);
 
     // Real `_create_graph`: an explicit LIFO `dep_stack` seeded from the
     // top-level atoms. A node is recorded into `.order` the moment its
@@ -2621,8 +2698,9 @@ pub(crate) fn cycle_report(
     entries: &[GraphEntry],
     top_level_atoms: &[String],
     root: &Path,
+    circular: &HashMap<(String, String), Vec<CircularDepChild>>,
 ) -> (Vec<Vec<usize>>, Vec<usize>) {
-    let g = build_digraph(entries, top_level_atoms, root);
+    let g = build_digraph(entries, top_level_atoms, root, circular);
     let cycles = elementary_cycles(&g, satisfied_medium_soft_rung());
     let members: HashSet<usize> = cycles.iter().flatten().copied().collect();
     let mut cp_indices: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
@@ -2880,6 +2958,7 @@ pub(crate) fn tree_solved_replacements(
     implicit_system_deps: bool,
     repos: &[RepoConfig],
     dynamic_deps: bool,
+    circular: &HashMap<(String, String), Vec<CircularDepChild>>,
 ) -> Vec<(usize, usize)> {
     let pending = tree_stuck_pending(entries);
     if pending.is_empty() {
@@ -2893,6 +2972,7 @@ pub(crate) fn tree_solved_replacements(
         implicit_system_deps,
         repos,
         dynamic_deps,
+        circular,
     );
     // NOTE: `ext` may append synthetic closure entries; `pending`
     // addresses resolver indexing, which is a prefix of `ext` (the
@@ -2932,6 +3012,7 @@ pub fn tree_display_order(
     implicit_system_deps: bool,
     repos: &[RepoConfig],
     dynamic_deps: bool,
+    circular: &HashMap<(String, String), Vec<CircularDepChild>>,
 ) -> Vec<usize> {
     let pending = tree_stuck_pending(entries);
     let (ext, mut g, real_n, discovery_rank) = schedule_graph(
@@ -2942,6 +3023,7 @@ pub fn tree_display_order(
         implicit_system_deps,
         repos,
         dynamic_deps,
+        circular,
     );
     // NOTE: `ext` may append synthetic closure entries; `pending`
     // addresses resolver indexing, which is a prefix of `ext` (the
@@ -3545,8 +3627,9 @@ pub(crate) fn debug_dump_graph_only(
     entries: &[GraphEntry],
     top_level_atoms: &[String],
     root: &Path,
+    circular: &HashMap<(String, String), Vec<CircularDepChild>>,
 ) {
-    let g = build_digraph(entries, top_level_atoms, root);
+    let g = build_digraph(entries, top_level_atoms, root, circular);
     debug_dump_graph(&g, entries, top_level_atoms, root);
 }
 
@@ -3627,6 +3710,7 @@ pub(crate) fn serialize_merge_order(
     implicit_system_deps: bool,
     repos: &[RepoConfig],
     dynamic_deps: bool,
+    circular: &HashMap<(String, String), Vec<CircularDepChild>>,
 ) -> Vec<usize> {
     let (ext, mut g, real_n, discovery_rank) = schedule_graph(
         entries,
@@ -3636,6 +3720,7 @@ pub(crate) fn serialize_merge_order(
         implicit_system_deps,
         repos,
         dynamic_deps,
+        circular,
     );
     let entries: &[GraphEntry] = &ext;
 
@@ -3690,6 +3775,7 @@ fn schedule_graph(
     implicit_system_deps: bool,
     repos: &[RepoConfig],
     dynamic_deps: bool,
+    circular: &HashMap<(String, String), Vec<CircularDepChild>>,
 ) -> (Vec<GraphEntry>, Digraph, usize, Vec<usize>) {
     let real_n = entries.len();
     // Real `_complete_graph` auto-enables (a merge changes an
@@ -3729,7 +3815,7 @@ fn schedule_graph(
     let entries: &[GraphEntry] = &ext;
     let n = entries.len();
 
-    let mut g = build_digraph(entries, top_level_atoms, root);
+    let mut g = build_digraph(entries, top_level_atoms, root, circular);
     // Unbiased discovery rank, kept before the bias re-sorts `g.order` --
     // it is what the trivial (non-merge-bound) entries are woven back in
     // on, so that a "package is already installed" notice never gets
@@ -4279,6 +4365,7 @@ mod tests {
             &entries,
             &["dev-lang/mogo".to_string()],
             Path::new("/nonexistent-root-for-unit-test"),
+            &HashMap::new(),
         );
         assert!(
             g.children[0].iter().all(|&(c, _)| c != 0),
@@ -4337,7 +4424,7 @@ mod tests {
         // the ranking were not comparing versions at all.
         let entries = vec![low, high, user];
         let root = Path::new("/nonexistent-root-for-unit-test");
-        let targets = resolved_dep_targets(&entries, root);
+        let targets = resolved_dep_targets(&entries, root, &HashMap::new());
         assert_eq!(
             targets[2][0],
             Some(1),
@@ -4345,7 +4432,12 @@ mod tests {
              string-highest 1.9"
         );
         // `build_digraph` shares the ranking, so its edge agrees.
-        let g = build_digraph(&entries, &["dev-libs/user".to_string()], root);
+        let g = build_digraph(
+            &entries,
+            &["dev-libs/user".to_string()],
+            root,
+            &HashMap::new(),
+        );
         let children: Vec<usize> = g.children[2].iter().map(|&(c, _)| c).collect();
         assert_eq!(
             children,
@@ -4419,6 +4511,7 @@ mod tests {
             true,
             &[],
             true,
+            &HashMap::new(),
         );
         assert_eq!(
             solved,
@@ -4466,13 +4559,18 @@ mod tests {
         );
         let entries = vec![low, high, user];
         let root = Path::new("/nonexistent-root-for-unit-test");
-        let targets = resolved_dep_targets(&entries, root);
+        let targets = resolved_dep_targets(&entries, root, &HashMap::new());
         assert_eq!(
             targets[2],
             vec![Some(0), Some(0)],
             "both atoms resolve to 1.9: the bare atom's 1.10 selection is redundant"
         );
-        let g = build_digraph(&entries, &["dev-libs/user".to_string()], root);
+        let g = build_digraph(
+            &entries,
+            &["dev-libs/user".to_string()],
+            root,
+            &HashMap::new(),
+        );
         let children: Vec<usize> = g.children[2].iter().map(|&(c, _)| c).collect();
         assert_eq!(
             children,
@@ -4523,7 +4621,12 @@ mod tests {
         // view, where the edge lives.
         let entries = vec![nvc, installed, user];
         let root = Path::new("/nonexistent-root-for-unit-test");
-        let g = build_digraph(&entries, &["dev-libs/user".to_string()], root);
+        let g = build_digraph(
+            &entries,
+            &["dev-libs/user".to_string()],
+            root,
+            &HashMap::new(),
+        );
         let children: Vec<usize> = g.children[2].iter().map(|&(c, _)| c).collect();
         assert_eq!(
             children,
@@ -4558,8 +4661,16 @@ mod tests {
         };
         let entries = vec![new_entry("dev-libs", "user", "1.0", vec![dep]), installed];
         let root = Path::new("/nonexistent-root-for-unit-test");
-        assert_eq!(resolved_dep_targets(&entries, root)[0][0], None);
-        let g = build_digraph(&entries, &["dev-libs/user".to_string()], root);
+        assert_eq!(
+            resolved_dep_targets(&entries, root, &HashMap::new())[0][0],
+            None
+        );
+        let g = build_digraph(
+            &entries,
+            &["dev-libs/user".to_string()],
+            root,
+            &HashMap::new(),
+        );
         let children: Vec<usize> = g.children[0].iter().map(|&(c, _)| c).collect();
         assert_eq!(children, vec![1], "the scheduling graph keeps the edge");
     }
@@ -4609,13 +4720,18 @@ mod tests {
             olddep,
         ];
         let root = Path::new("/nonexistent-root-for-unit-test");
-        let kept = kept_alt_branches(&entries, root);
+        let kept = kept_alt_branches(&entries, root, &HashMap::new());
         assert_eq!(
             kept[0],
             HashSet::from([0usize]),
             "the in-graph branch is kept over the installed one"
         );
-        let g = build_digraph(&entries, &["app-misc/owner".to_string()], root);
+        let g = build_digraph(
+            &entries,
+            &["app-misc/owner".to_string()],
+            root,
+            &HashMap::new(),
+        );
         let children: Vec<usize> = g.children[0].iter().map(|&(c, _)| c).collect();
         assert!(
             children.contains(&1),
@@ -4658,7 +4774,7 @@ mod tests {
             new_entry("dev-lang", "mogo", "1.26", mogo_deps),
             new_entry("dev-lang", "mogoboot", "1.24", Vec::new()),
         ];
-        let kept = kept_alt_branches(&entries, root);
+        let kept = kept_alt_branches(&entries, root, &HashMap::new());
         assert_eq!(
             kept[0],
             HashSet::from([1usize]),
@@ -5348,7 +5464,12 @@ mod tests {
                 runtime,
             )],
         )];
-        let g = build_digraph(&entries, &["dev-libs/selfish".to_string()], root);
+        let g = build_digraph(
+            &entries,
+            &["dev-libs/selfish".to_string()],
+            root,
+            &HashMap::new(),
+        );
         assert!(
             g.children[0].is_empty(),
             "runtime self-edge dropped: {:?}",
@@ -5369,7 +5490,12 @@ mod tests {
                 },
             )],
         )];
-        let g = build_digraph(&entries, &["dev-libs/selfish".to_string()], root);
+        let g = build_digraph(
+            &entries,
+            &["dev-libs/selfish".to_string()],
+            root,
+            &HashMap::new(),
+        );
         assert_eq!(
             g.children[0].iter().map(|(c, _)| *c).collect::<Vec<_>>(),
             vec![0],
@@ -5389,6 +5515,7 @@ mod tests {
             &entries,
             &["!dev-libs/a".to_string(), "dev-libs/b".to_string()],
             root,
+            &HashMap::new(),
         );
         assert_eq!(
             g.order,
@@ -5402,7 +5529,12 @@ mod tests {
         a2.slot = Some("2".into());
         a2.sub_slot = Some("2".into());
         let entries = vec![a1, a2];
-        let g = build_digraph(&entries, &["<dev-libs/a-2".to_string()], root);
+        let g = build_digraph(
+            &entries,
+            &["<dev-libs/a-2".to_string()],
+            root,
+            &HashMap::new(),
+        );
         assert_eq!(
             g.order,
             vec![0, 1],
@@ -5435,7 +5567,12 @@ mod tests {
             new_entry("dev-libs", "early", "1.0", Vec::new()),
             new_entry("dev-libs", "late", "1.0", Vec::new()),
         ];
-        let g = build_digraph(&entries, &["dev-libs/owner".to_string()], root);
+        let g = build_digraph(
+            &entries,
+            &["dev-libs/owner".to_string()],
+            root,
+            &HashMap::new(),
+        );
         assert_eq!(
             g.order,
             vec![0, 1, 2],
@@ -5464,7 +5601,12 @@ mod tests {
         };
         removal.required_by = vec![("dev-libs".to_string(), "owner".to_string())];
         let entries = vec![owner, leaf, removal];
-        let g = build_digraph(&entries, &["dev-libs/owner".to_string()], root);
+        let g = build_digraph(
+            &entries,
+            &["dev-libs/owner".to_string()],
+            root,
+            &HashMap::new(),
+        );
         assert_eq!(
             g.children[0].iter().map(|(c, _)| *c).collect::<Vec<_>>(),
             vec![1],
@@ -5491,7 +5633,12 @@ mod tests {
         dep.required_by = vec![("dev-libs".to_string(), "owner".to_string())];
         let owner = new_entry("dev-libs", "owner", "1.0", Vec::new());
         let entries = vec![owner.clone(), dep.clone()];
-        let g = build_digraph(&entries, &["dev-libs/owner".to_string()], root);
+        let g = build_digraph(
+            &entries,
+            &["dev-libs/owner".to_string()],
+            root,
+            &HashMap::new(),
+        );
         let fallback = g.children[0]
             .iter()
             .find(|(c, _)| *c == 1)
@@ -5509,6 +5656,7 @@ mod tests {
             &entries,
             &["dev-libs/owner".to_string(), "dev-libs/leaf".to_string()],
             root,
+            &HashMap::new(),
         );
         assert!(
             g.children[0].iter().any(|(c, _)| *c == 1),
@@ -5541,7 +5689,12 @@ mod tests {
         x2.sub_slot = Some("2".into());
         x2.required_by = vec![("dev-libs".to_string(), "owner".to_string())];
         let entries = vec![owner, x1, x2];
-        let g = build_digraph(&entries, &["dev-libs/owner".to_string()], root);
+        let g = build_digraph(
+            &entries,
+            &["dev-libs/owner".to_string()],
+            root,
+            &HashMap::new(),
+        );
         assert_eq!(
             g.children[0].iter().map(|(c, _)| *c).collect::<Vec<_>>(),
             vec![1],
@@ -5564,6 +5717,7 @@ mod tests {
             &entries,
             &["dev-libs/owner".to_string(), "dev-libs/y".to_string()],
             root,
+            &HashMap::new(),
         );
         assert!(
             g.children[0].iter().any(|(c, _)| *c == 2),
@@ -5578,7 +5732,7 @@ mod tests {
         let mut a = new_entry("dev-libs", "a", "1.0", Vec::new());
         a.required_by = vec![("dev-libs".to_string(), "a".to_string())];
         let entries = vec![a];
-        let g = build_digraph(&entries, &["dev-libs/a".to_string()], root);
+        let g = build_digraph(&entries, &["dev-libs/a".to_string()], root, &HashMap::new());
         assert!(
             g.children[0].is_empty(),
             "a self fallback edge is skipped: {:?}",
@@ -5641,7 +5795,7 @@ mod tests {
         let entries = vec![x1, x2, user];
         let root = Path::new("/nonexistent-root-for-unit-test");
         let pre = digraph_prelude(&entries, root);
-        let suppressed = suppressed_alt_edges(&entries, &pre);
+        let suppressed = suppressed_alt_edges(&entries, &pre, root, &HashMap::new());
         assert_eq!(
             suppressed[2],
             HashSet::from([1usize]),
@@ -5819,7 +5973,12 @@ mod tests {
             new_entry("dev-libs", "c", "1.0", Vec::new()),
         ];
         let root = Path::new("/nonexistent-root-for-unit-test");
-        let g = build_digraph(&entries, &["dev-libs/owner".to_string()], root);
+        let g = build_digraph(
+            &entries,
+            &["dev-libs/owner".to_string()],
+            root,
+            &HashMap::new(),
+        );
         assert_eq!(
             g.order,
             vec![0, 1, 3, 2],
@@ -5837,7 +5996,12 @@ mod tests {
         let owner = new_entry("dev-libs", "owner", "1.0", Vec::new());
         let entries = vec![owner, dep];
         let root = Path::new("/nonexistent-root-for-unit-test");
-        let g = build_digraph(&entries, &["dev-libs/owner".to_string()], root);
+        let g = build_digraph(
+            &entries,
+            &["dev-libs/owner".to_string()],
+            root,
+            &HashMap::new(),
+        );
         let fallback = g.children[0]
             .iter()
             .find(|(c, _)| *c == 1)
@@ -6584,7 +6748,12 @@ mod tests {
             new_entry("dev-libs", "owner", "1.0", Vec::new()),
         ];
         let root = Path::new("/nonexistent-root-for-unit-test");
-        let (cycles, display) = cycle_report(&entries, &["dev-libs/owner".to_string()], root);
+        let (cycles, display) = cycle_report(
+            &entries,
+            &["dev-libs/owner".to_string()],
+            root,
+            &HashMap::new(),
+        );
         assert!(
             !cycles.is_empty(),
             "the runtime ring is recorded: {cycles:?}"
@@ -6800,6 +6969,7 @@ mod tests {
             true,
             &[],
             true,
+            &HashMap::new(),
         );
         assert_eq!(
             order.len(),
@@ -6848,6 +7018,7 @@ mod tests {
             true,
             repos,
             true,
+            &HashMap::new(),
         );
         assert_eq!(
             ext.len(),
@@ -6881,6 +7052,7 @@ mod tests {
             true,
             repos,
             true,
+            &HashMap::new(),
         );
         assert_eq!(real_n, 1);
         let seed = ext
@@ -6932,6 +7104,7 @@ mod tests {
             true,
             &[],
             true,
+            &HashMap::new(),
         );
         assert!(
             solved.is_empty(),
@@ -6990,7 +7163,7 @@ mod tests {
         ];
         let root = Path::new("/nonexistent-root-for-unit-test");
         assert_eq!(
-            kept_alt_branches(&entries, root)[0],
+            kept_alt_branches(&entries, root, &HashMap::new())[0],
             HashSet::from([2usize, 3]),
             "only a branch whose every atom matches installed wins the all-installed bin"
         );
@@ -7013,7 +7186,7 @@ mod tests {
         };
         let entries = vec![owner, i1];
         assert_eq!(
-            kept_alt_branches(&entries, root)[0],
+            kept_alt_branches(&entries, root, &HashMap::new())[0],
             HashSet::from([0usize, 1, 2]),
             "no branch fully resolves, so every branch is kept"
         );
@@ -7127,7 +7300,12 @@ mod tests {
             new_entry("dev-libs", "other", "1.0", Vec::new()),
         ];
         let root = Path::new("/nonexistent-root-for-unit-test");
-        let mut g = build_digraph(&entries, &["virtual/libc".to_string()], root);
+        let mut g = build_digraph(
+            &entries,
+            &["virtual/libc".to_string()],
+            root,
+            &HashMap::new(),
+        );
         let order = select_nodes(&mut g, &entries, root, None);
         assert_eq!(
             order,
@@ -7246,7 +7424,12 @@ mod tests {
             new_entry("dev-libs", "other", "1.0", Vec::new()),
         ];
         let root = Path::new("/nonexistent-root-for-unit-test");
-        let mut g = build_digraph(&entries, &["virtual/libc".to_string()], root);
+        let mut g = build_digraph(
+            &entries,
+            &["virtual/libc".to_string()],
+            root,
+            &HashMap::new(),
+        );
         let order = select_nodes(&mut g, &entries, root, None);
         assert_eq!(
             order,
