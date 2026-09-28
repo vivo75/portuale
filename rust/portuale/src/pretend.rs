@@ -3127,6 +3127,7 @@ Dependency and target selection:
       --rebuild-if-unbuilt, -new-rev, -new-ver, -new-slot  rebuild an installed package when a build dep is merged
       --rebuild-exclude ATOMS, --rebuild-ignore ATOMS  keep packages out of the rebuild triggers
       --complete-graph[=y|n], --complete-graph-if-new-use, --complete-graph-if-new-ver  force a full deep graph walk
+      --ignore-world[=y|n]  ignore the @world set and its dependencies (complete-graph walks args only)
       --dynamic-deps[=y|n]  walk the ebuild (y, default) or the vdb snapshot (n) during --deep
       --backtrack N         maximum resolver backtracking passes (default 10; 0 disables)
       --package-moves[=y|n]  apply profiles/updates/ package moves (default y)
@@ -9233,6 +9234,21 @@ pub fn run(args: &[String]) -> ExitCode {
     // `complete` param). `--rebuild-if-{unbuilt,new-rev,new-ver}` imply it
     // too (same `create_depgraph_params.py` block); `--nodeps` pops it.
     let mut complete_graph = false;
+    // --ignore-world (real `y_or_n` in `default_arg_opts` so a bare flag
+    // inserts `"True"`, `true_y_or_n` choices in `argument_options`,
+    // `main.py:164`/`486`/`928-929`: only a `true_y` value flips it to
+    // `True`; `create_depgraph_params.py:128-129` sets
+    // `myparams["ignore_world"]` only on `is True`). "Ignore the @world
+    // package set and its dependencies" (`man/emerge.1`): real
+    // `depgraph.py:357-360` empties `_required_set_names` (dropping
+    // `@world` -- which nests `@selected`/`@system`/`@profile`, real
+    // `_sets/__init__.py:97-98` -- from the complete-graph seeds, so the
+    // complete walk covers only the deep dependencies of the args) and
+    // `:10107` skips the `@selected` uninstall guard. No `actions.py`
+    // handling, no `--complete-graph`/`--deep`/`--update` interplay, and
+    // no removal-action effect (real `create_depgraph_params.py`
+    // returns early for `remove` before reaching the flag).
+    let mut ignore_world = false;
     // --complete-graph-if-new-use / --complete-graph-if-new-ver (real
     // `y_or_n`, `main.py:157-158`). Both default ON -- real
     // `_complete_graph` reads `myparams.get("complete_if_new_*", "y")`, so
@@ -9940,6 +9956,24 @@ pub fn run(args: &[String]) -> ExitCode {
                 "y".to_string()
             };
             complete_graph = matches!(val.as_str(), "y" | "True");
+        } else if arg == "--ignore-world" || arg.starts_with("--ignore-world=") {
+            // Same `true_y_or_n` bare/`=y`/`=True` -> on, `=n` -> off shape
+            // as `--complete-graph` above (real `main.py:164`/`486`/
+            // `928-929` + `create_depgraph_params.py:128-129`).
+            let val = if let Some(v) = arg.strip_prefix("--ignore-world=") {
+                i += 1;
+                v.to_string()
+            } else if matches!(
+                args.get(i + 1).map(String::as_str),
+                Some("y" | "n" | "True")
+            ) {
+                i += 2;
+                args[i - 1].clone()
+            } else {
+                i += 1;
+                "y".to_string()
+            };
+            ignore_world = matches!(val.as_str(), "y" | "True");
         } else if arg == "--complete-graph-if-new-use"
             || arg.starts_with("--complete-graph-if-new-use=")
             || arg == "--complete-graph-if-new-ver"
@@ -12075,13 +12109,23 @@ pub fn run(args: &[String]) -> ExitCode {
     // slot-operator-rebuild scan (real only slot-op-rebuilds a consumer
     // reachable from these). Computed once; `run_resolve` injects it into
     // a cloned `Config` only for the `complete = true` pass.
+    // `--ignore-world` (real `depgraph.py:357-360`) empties
+    // `_required_set_names`, so the seeds are empty here too -- the
+    // complete walk then covers only the args' own deep dependencies
+    // (real `man/emerge.1`). Explicit `@world`/`@selected` args still
+    // expand above (real always processes `_initial_arg_list`); only the
+    // seed sets drop out.
     let complete_seed_atoms: Vec<String> = {
-        let mut v = expand_selected(&root, &config_root).unwrap_or_default();
-        v.extend(config.profile_packages.iter().cloned());
-        v.extend(config.system_packages.iter().cloned());
-        v.sort();
-        v.dedup();
-        v
+        if ignore_world {
+            Vec::new()
+        } else {
+            let mut v = expand_selected(&root, &config_root).unwrap_or_default();
+            v.extend(config.profile_packages.iter().cloned());
+            v.extend(config.system_packages.iter().cloned());
+            v.sort();
+            v.dedup();
+            v
+        }
     };
     // Backlog #196: real `_emerge/actions.py:4264-4270` (`run_action`):
     // the GLEP 42 news-count notice prints BEFORE resolution on a
