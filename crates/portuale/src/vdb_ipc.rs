@@ -43,6 +43,8 @@ use std::time::Duration;
 
 /// The variable that carries the socket path to the children.
 pub(crate) const IPC_VAR: &str = "PORTUALE_VDB_IPC";
+/// Name prefix of the private socket directory.
+const DIR_PREFIX: &str = "portuale-vdb-ipc-";
 
 /// A running server. Dropping it stops the accept thread and removes the
 /// socket and its directory.
@@ -67,6 +69,34 @@ impl Drop for Server {
         let _ = std::fs::remove_dir(&self.dir);
         cleanup::unregister(&self.dir);
     }
+}
+
+/// `mkdir <parent>/portuale-vdb-ipc-<pid>-<nanos>` with mode 0700 (never
+/// an existing directory).
+fn make_private_dir(parent: &Path) -> std::io::Result<PathBuf> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let mut last = None;
+    for attempt in 0..16u128 {
+        let dir = parent.join(format!(
+            "{DIR_PREFIX}{}-{}",
+            std::process::id(),
+            nanos + attempt
+        ));
+        match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
+            Ok(()) => {
+                // The umask can only remove bits; make sure of 0700.
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+                return Ok(dir);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = Some(e),
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| std::io::Error::other("no free socket directory name")))
 }
 
 // ---------------------------------------------------------------------

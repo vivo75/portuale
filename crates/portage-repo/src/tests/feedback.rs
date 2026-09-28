@@ -445,3 +445,88 @@ fn collect_feedback_collects_a_dropped_pin_once() {
     assert_eq!(base_c.dropped_pins.len(), 1);
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// A stale recorded trigger falls back to the first-requirer start.
+#[test]
+fn stale_trigger_falls_back_to_the_first_requirer() {
+    let mut abk0c = graph_entry("dev-libs", "abk0c", "1");
+    abk0c.required_by = vec![("dev-libs".to_string(), "abk0a".to_string())];
+    let mut abk0a = graph_entry("dev-libs", "abk0a", "2");
+    abk0a.required_by = vec![("dev-libs".to_string(), "abk0d".to_string())];
+    let abk0d = graph_entry("dev-libs", "abk0d", "1");
+    let entries = vec![abk0c, abk0a, abk0d];
+    let top_level: std::collections::HashSet<&str> = ["dev-libs/abk0d"].into_iter().collect();
+    let mut changes = vec![AutounmaskChange {
+        atom: ">=dev-libs/abk0c-1".to_string(),
+        token: "x y".to_string(),
+        dep_chain: Vec::new(),
+        trigger: Some(("dev-libs".to_string(), "abk0d".to_string())),
+    }];
+    fill_use_change_chains(
+        &entries,
+        &mut changes,
+        &top_level,
+        Path::new("/nonexistent-root-for-this-test"),
+    );
+    assert_eq!(
+        changes[0].dep_chain,
+        vec![
+            "required by dev-libs/abk0a-2::testrepo".to_string(),
+            "required by dev-libs/abk0d-1::testrepo".to_string(),
+            "required by dev-libs/abk0d (argument)".to_string(),
+        ]
+    );
+}
+
+/// A USE change on an argument package yields exactly the `(argument)` row:
+/// Portage's `_get_dep_chain` never prints the start node.
+#[test]
+fn use_change_on_an_argument_package_yields_only_the_argument_row() {
+    let own = graph_entry("dev-libs", "useflagpkg", "1.0");
+    assert!(own.required_by.is_empty());
+    let entries = vec![own];
+    let top_level: std::collections::HashSet<&str> =
+        ["dev-libs/useflagpkg[-foo]"].into_iter().collect();
+    let mut changes = vec![AutounmaskChange {
+        atom: ">=dev-libs/useflagpkg-1.0".to_string(),
+        token: "-foo".to_string(),
+        dep_chain: Vec::new(),
+        trigger: None,
+    }];
+    fill_use_change_chains(
+        &entries,
+        &mut changes,
+        &top_level,
+        Path::new("/nonexistent-root-for-this-test"),
+    );
+    assert_eq!(
+        changes[0].dep_chain,
+        vec!["required by dev-libs/useflagpkg[-foo] (argument)".to_string()]
+    );
+}
+
+/// Keyword twin of the above: exactly the `(argument)` row.
+#[test]
+fn keyword_change_on_an_argument_package_yields_only_the_argument_row() {
+    let own = graph_entry("dev-libs", "autounmaskkeywordpkg", "1.0");
+    assert!(own.required_by.is_empty());
+    let entries = vec![own];
+    let top_level: std::collections::HashSet<&str> =
+        ["dev-libs/autounmaskkeywordpkg"].into_iter().collect();
+    let mut changes = vec![AutounmaskChange {
+        atom: "=dev-libs/autounmaskkeywordpkg-1.0".to_string(),
+        token: "~amd64".to_string(),
+        dep_chain: Vec::new(),
+        trigger: None,
+    }];
+    fill_non_use_change_chains(
+        &entries,
+        &mut changes,
+        &top_level,
+        Path::new("/nonexistent-root-for-this-test"),
+    );
+    assert_eq!(
+        changes[0].dep_chain,
+        vec!["required by dev-libs/autounmaskkeywordpkg (argument)".to_string()]
+    );
+}

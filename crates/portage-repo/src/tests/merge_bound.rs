@@ -43,6 +43,68 @@ fn cross_root_bdepend_self_branch_backtrack0_reports_the_self_cycle() {
     assert_eq!(merge_rows, 4);
 }
 
+/// A missing-dependency backtrack masks the top-level-selected parent and
+/// retries on the older version, with a skipped-missing-dep row.
+#[test]
+fn missing_dep_backtrack_masks_the_top_level_selected_parent() {
+    let result = graph_result_real_backtrack("dev-libs/akk0a", 10);
+    let versions: Vec<(&str, &str)> = result
+        .entries
+        .iter()
+        .filter_map(|e| merge_bound_version(&e.outcome).map(|v| (e.package.as_str(), v.as_str())))
+        .collect();
+    assert_eq!(
+        versions,
+        vec![("akk0c", "1"), ("akk0a", "1")],
+        "falls back to akk0a-1, saw {versions:?}"
+    );
+    assert_eq!(
+        result.backtrack_restarts, 1,
+        "one retry masks akk0a-2, restarts={}",
+        result.backtrack_restarts
+    );
+    assert_eq!(result.skipped_missing_dep_full.len(), 1);
+    let row = &result.skipped_missing_dep_full[0];
+    assert_eq!(
+        (
+            row.category.as_str(),
+            row.package.as_str(),
+            row.slot.as_str()
+        ),
+        ("dev-libs", "akk0a", "0")
+    );
+    assert_eq!(
+        row.selected_display,
+        "(dev-libs/akk0a-1:0/0::testrepo, ebuild scheduled for merge)"
+    );
+    assert_eq!(
+        row.skipped_display,
+        "(dev-libs/akk0a-2:0/0::testrepo, ebuild scheduled for merge)"
+    );
+    match &row.dep {
+        SkippedDepDisclosure::Masked(report) => {
+            assert_eq!(report.atom, "dev-libs/akk0b");
+            assert_eq!(
+                report.masked,
+                vec![(
+                    "dev-libs/akk0b-1::testrepo".to_string(),
+                    vec!["~amd64 keyword".to_string()]
+                )]
+            );
+            assert_eq!(
+                report.chain,
+                vec![(
+                    "dev-libs/akk0a-2::testrepo".to_string(),
+                    "ebuild".to_string()
+                )]
+            );
+        }
+        SkippedDepDisclosure::Plain(report) => {
+            panic!("akk0b is masked-only, not a plain miss: {report:?}")
+        }
+    }
+}
+
 /// Missed-update notices come from the settled backtrack trial state.
 #[test]
 fn backtrack_missed_updates_reports_the_mg2top_shape() {

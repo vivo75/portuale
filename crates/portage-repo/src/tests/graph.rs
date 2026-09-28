@@ -3330,6 +3330,34 @@ fn backtracker_feedback_missing_dep_latches_without_duplicating() {
     assert_eq!(node.depth, 1);
 }
 
+/// The USE-change chain starts at the recorded forcing parent (Portage picks
+/// the parent whose atom the package still does not satisfy).
+#[test]
+fn use_change_chain_starts_at_the_recorded_forcing_parent() {
+    let result = graph_result_abk0_worldb(2);
+    assert_eq!(
+        result.autounmask_use_changes.len(),
+        1,
+        "one USE change: {:?}",
+        result.autounmask_use_changes
+    );
+    let change = &result.autounmask_use_changes[0];
+    assert_eq!(change.atom, ">=dev-libs/abk0c-1");
+    assert_eq!(change.token, "x y");
+    assert_eq!(
+        change.trigger,
+        Some(("dev-libs".to_string(), "abk0d".to_string())),
+        "the flip site records its forcing owner"
+    );
+    assert_eq!(
+        change.dep_chain,
+        vec![
+            "required by dev-libs/abk0d-1::testrepo".to_string(),
+            "required by dev-libs/abk0d (argument)".to_string(),
+        ]
+    );
+}
+
 #[test]
 fn installed_instance_then_merge_records_an_unsolvable_slot_conflict() {
     // Direction 2, argv `[othermod, needer]`: last-declared-first graphs 2.0
