@@ -18258,3 +18258,557 @@ Two edges on the `--ask --read-news` path (backlog #231 built it). (a) EOF at th
 python3 -m pytest pytests-contract-suite/test_portuale.py -q -p no:cacheprovider \
   -k 'ask_read_news or ask_true_spelling'
 ```
+
+## Installed packages' recorded bounds now join the live deps, EAPI-gated, with rebuild triggers kept (#25 DONE-PARTIAL, 2026-09-27)
+
+Real evaluates an installed package's dependencies as the live ebuild atoms plus the vdb-recorded bound atoms: `FakeVartree._apply_dynamic_deps` appends `find_built_slot_operator_atoms(pkg)` (the vdb's `>=cp-ver:S/SS=` forms, `lib/portage/dep/_slot_operator.py:24-38`) to the live depstring (`lib/_emerge/FakeVartree.py:146-191`), void entirely when the live EAPI lacks slot-operator support. Portuale read live atoms only. The shipped part ports that overlay into `installed_dep_string`, the single shared installed-parent evaluation every walk and scan reader already uses: a missing vdb EAPI reads as `"0"` (real `vartree.py:1054-1055`), so the EAPI-less fixture vdbs keep reading live, byte-identical, and `--ignore-built-slot-operator-deps` suppresses only the append (real `FakeVartree.py:166-168`). The first cut withheld the slot-operator `@world` upgrade (the recorded edge resolved installed 1.0 while the world/`:=` edges resolved merge 2.0, and the direct solve removed the upgrade), because real's update probe relaxes built parent atoms to bare `:=` before checking the candidate (`lib/_emerge/depgraph.py:2494-2502` — a rebuild trigger, never a withhold): the fix skips recording such edges at the record site (`built_slot_operator_rebuild_trigger`), so version vetoes still withhold while rebuild shapes upgrade. Commits: pmtest `09fd46e` (S1a fixture-oracle r25 list) then `9c7f399` + `e4c9fa6` (the `@world` pin, plus asserting the skipped-update warning is gone), portuale `62951cd0` (the overlay) then `dc9e624a` (the fix, quoting `9c7f399`); beds fixture-oracle 6/6 and L0 identical to Z0. Residues: the r25 shape itself still prints the skipped-update warning (`--json` restarts 1) — real's `_minimize_children` (`depgraph.py:4751`) needs the slot-operator update probe downstream, so S1c waits for #211 — and S1c–S3 moved to #236. The fix predicate forgives any installed-vs-merge edge whose relaxed built atom matches, including live-ebuild and command-line parents where real relaxes only `Package` parents (`depgraph.py:2486-2487`). Re-run the pin:
+
+```sh
+# from ../pmtest; expect 1 passed
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider -k 'slotop_world_upgrade_with_eapi_installed_bindings'
+```
+
+## A residual slot-conflict notice now fails the run, like real (#62 DONE, 2026-09-27)
+
+The #57 K1 standing convention is retired: real treats a residual or slot-conflict notice as an error (rc 1), while portuale exited 0 and called it informational. `pretend.rs::run` now fails the action whenever `result.slot_conflicts` is non-empty, in the existing display-then-fail band next to `unsolvable_blockers` (after the `--autounmask-only` early return, before any merge dispatch), gated on the data so `-q`/`--json`/`--columns` follow the same rule. Both real escapes are ported: `--autounmask-only` keeps rc 0, and backtracking-off plus `--buildpkgonly`/`--nodeps` tolerates (real `_accept_blocker_conflicts`; `--fetchonly`/`--fetch-all-uri` are still unimplemented options, rc 2 before the gate). Every existing rc-0-with-notice pin was re-pinned against a real capture (14 CASES entries; the corpus re-blessed in pmtest). A 2026-09-27 follow-up shares #25's S1 commits (fixture-oracle r25 list pmtest `09fd46e`, the `FakeVartree._apply_dynamic_deps` overlay portuale `62951cd0`, the slot-op `@world` fix portuale `dc9e624a` with pmtest `9c7f399` + `e4c9fa6`): the r25 shape still prints the skipped-update warning there, which is #25's residue, not an exit-code regression. Residue filed as #90 (at `--backtrack=0` real silently reconciles the solvable shape while portuale records the conflict — a recording divergence, not an exit-code one; since closed 2026-09-20). Re-run the re-pinned exit-code cells:
+
+```sh
+# from ../pmtest; expect 18 passed
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider -k 'test_pretend_case_exit_code and 62 and not args62 and not args262 and not args162'
+```
+
+## Abort and autounmask rows: installed-parent flips and affecting-USE chain qualifiers (#135 DONE, 2026-09-27)
+
+Two of the #132 display-fidelity residues shipped on one hermetic cell (`dev-libs/r135{leaf,parent,consumer}`, `-D --autounmask-use=n dev-libs/r135consumer`), probed live against real once. (a) Real appends a parent-flip row for an *installed* requirer (`- dev-libs/r135parent-1.0::testrepo (Change USE: +flip)`): the violation is entirely conditional, so the requirer joins `missing_use_reasons` with its own flip (`lib/_emerge/depgraph.py:6768-6858`), with vdb USE/IUSE as real `_pkg_use_enabled` for built packages. Portuale's `use_unsat_parent_row` returned `None` for `AlreadyInstalled` parents, so the row never appeared; the new `installed_parent_use_state` fallback adds it, display only — the repair path is unchanged. (b) Real qualifies chain atoms with the affecting USE (`[qml]`): `_get_dep_chain` (`depgraph.py:6257+`) runs `extract_affecting_use` over each node's own dep keys. Portuale printed bare cpvs; the new `chain_node_usedep_suffix` ports the per-node computation and is shared by the masked, USE-unsatisfied and plain-miss blocks, like real's single `_get_dep_chain`. Documented narrowings: no edge-priority filtering, multi-flag suffixes sorted (real iterates a set). Portuale is byte-real on the cell apart from the standing `for <root>` suffix class. Commits: pmtest `81e5908` (fixtures) + `c311bd5` (arm-a pin) + `d11c91d` (arm-b pin) + `08de880` (cell into the default fixture-oracle list), portuale `94ae8bf1` (arm a) + `2b00160c` (arm b); small-case oracle `l0-fx-20260927T171915Z` family 0 unexplained and L0 identical to Z0 (beds, not re-run here). Arms (d)(e)(c) shipped earlier 2026-09-22. Re-run the two pins:
+
+```sh
+# from ../pmtest; expect 2 passed
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider -k 'use_unsat_conditional_miss'
+```
+
+## Real `emerge` as fixture oracle has no suppressed bugs left (#49 DONE, 2026-09-27)
+
+The #142/#143 cells that were still suppressed as `owner: portuale-bug` landed with those items on 2026-09-23, so no filed bug is suppressed any more. P-O1 (pmtest `14ffd9c`) added the fifth atomlist (`whpin`, #91 S2) to `run/l0-fixture-oracle-all.sh`, which never ran it, and removed the two `triangle-residual-conflict-*` entries that had matched nothing since #62 retired the exit-0 convention (both `needer`/`othermod` cells exit 1 on both sides). All-lists run 5/5 green, 0 unexplained (`l0-fx-20260927T165048Z` family). Re-run the bed (bed, not re-run here — no containers in this dispatch):
+
+```sh
+# from ../pmtest; expect 5/5 lists green, 0 unexplained
+differential-test-bed/run/l0-fixture-oracle-all.sh
+# log family: differential-test-bed/logs/l0-fx-20260927T165048Z
+```
+
+## Bulk translation of upstream resolver tests, batches 2–7 (#50 DONE-PARTIAL, 2026-09-27)
+
+`scripts/upstream_resolver_translate.py` wraps real's own `ResolverPlayground` (`lib/portage/tests/resolver/ResolverPlayground.py`, 3.0.82.2) and captures the executed oracle; each batch emits fixtures plus rc-only CASES, pinning exact text only where the oracle is real-grounded. Batch 2 (pmtest `4c5f424`): `test_circular_dependencies`, 8 CASES, oracle = playground on host; running count 12 → 20. Batch 3 (`8c4b5dd` autounmask-parent 1 CASES, `89d17e0` virtual-cycle fixtures only with both cells diverging as F1, `15ba75e` onlydeps-minimal fixtures only with all four diverging as F2, `d6a73b9` autounmask-use-breakage 6 CASES): 20 → 33. Batch 4 (`8bcb506` use-slot-conflict 1, `2e94cb9` keep-keywords 2, `a0ab885` missing-iuse 2, `f837636` old-dep-chain 2): 33 → 40. Batch 5 (`70e8b21` slot-conflict-mask-update 1, `e677d62` use-dep-defaults 3 + 1 pinned-output test, `5f51ee7` onlydeps-ideps fixtures only with all ten rc 2 vs 0, `c7de6d5` required-use 26 with 10 profile-artifact mismatches left unpinned): 40 → 92. Batch 6 (`8420ae2` eapi 23 + 1 pin with 13 no-EAPI-gating cells and 2 profile artifacts, `747b232` autounmask-use-backtrack 1, `513d41d` backtracking 8 + 1 pin; aggressive-backtrack-downgrade skipped, needs shared world entries): 92 → 139. Batch 7 (`8f8b18d` circular-choices 4 + 1 pin with three `||`-preference divergences, `be12e00` circular-choices-rust 5 + 1 pin with no divergence, `dee24a6` complete-graph 3 + 1 pin with breakage-gate and `--ignore-world` divergences; broken-deps emitted fixtures-only and reverted by the coordinator in `7795806`): 139 → 161; #220's EAPI rebase then dropped the 21 pg1 eapi CASES, running count 140. Findings F1 (no virtual-cycle detection) shipped as #193 and F2 (`--onlydeps-with-rdeps/ideps` rc 2) shipped as #194. Re-run the batches' CASES plus pins:
+
+```sh
+# from ../pmtest; expect 68 passed
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider -k '(cyc0 or aup0 or aub0 or aus0 or akk0 or mia0 or odc0 or scm0 or udd0 or rqu0 or rqu1 or epi0 or epi2 or abk0 or bkt1 or bkt3 or bkt4 or bkt5 or ccd0 or ccd1 or ccd3 or ccd4 or ccd5 or ccr0 or cgp0 or cgp1 or use_dep_defaults_pg0 or eapi_pg012 or backtracking_pg345 or circular_choices or complete_graph_pg01) and not circular_dependencies_upstream_pg0_real_text'
+```
+
+## Two consecutive soname bumps replace the preserved-libs record under the merging cpv (#178 DONE, 2026-09-27)
+
+Real `register()` unconditionally overwrites the `cp:slot` record at the new package's treewalk (`lib/portage/dbapi/vartree.py`, `PreservedLibsRegistry.py register() :5266-5272`); portuale re-attributed the old entry, so a second consecutive soname bump kept a stale path list — and worse, the replace-loop unmerge deleted the entry while the new `CONTENTS` never owned the preserved files, leaving the registry `{}` and the `.so.1` files orphaned on disk (the `.so.2` pair is never preserved and is unmerged). The fix mirrors real's call sequence: merge-side preserve computation from the installed same-slot instance (`vartree.py` treewalk's pre-replace-loop block, new-owner check = new image path set), preserved lines carried into the new `CONTENTS` verbatim with real's sorted `>>> needed` prints (`_add_preserve_libs_to_contents :3775-3826`), then post-replace-loop `register()` as an unconditional replace; `is_replacement` threading gives unmerge-with-replacement unregister-only semantics, and a deferred orphan-`scanelf` feed (`LinkageMapELF.py:233-324`) covers libraries whose provider already left every `NEEDED.ELF.2`. A follow-up ports real `store()`'s write-only-on-change, the replacement prune inputs, and the empty-`CONTENTS` unregister. Commits: pmtest `f36fc60` (fixtures + real-execution pin), portuale `4d583f8c` + `07540580`; beds merge gate + `l32` 0 unexplained. Residue filed as #167. Re-run the pin:
+
+```sh
+# from ../pmtest; expect 1 passed
+python3 -m pytest pytests-contract-suite/test_portuale.py -q -p no:cacheprovider -k 'two_consecutive_soname_bumps_replace_the_registry_record'
+```
+
+## `--pretend` never touches the resume list; an all-noop plan clears a stale one (#179 DONE, 2026-09-27)
+
+Real assigns the resume list unconditionally at merge start (`Scheduler._save_resume_list`, `lib/_emerge/Scheduler.py:2398-2431`, from `merge()` ~1172 — favorites, mergelist, myopts, even when empty), while `--pretend` returns before any `Scheduler` exists (`lib/_emerge/actions.py` ~540s) and an `--ask`-declined run exits `128 + SIGINT` (~525-536) before anything builds. But an all-noop plan with no display flags has `mergecount is None`, so `merge()` runs and commits the empty dict over any stale list. Portuale skipped empty writes, so it never wrote on `--pretend`/`--ask`-declined (correct) but also left a stale 1-item resume after an all-noop plan (wrong). Now the up-front save is unconditional like real's, and the three failure-path re-saves guard `!empty` so a failure with nothing unmerged leaves the per-merge shrink's tail alone. Pinned by Rust units (stale-overwrite, pretend-no-write even over a stale list through a pty, ask-declined rc 130) and pmtest `test_emerge_pretend_writes_no_resume_list`. Commits: pmtest `2ecb1f7` + `8db341d` (hermetic against a leftover mtimedb), portuale `76102ace`; `l32` C4 `l32-20260927T061016Z`. Residue #225. Re-run the pin:
+
+```sh
+# from ../pmtest; expect 1 passed
+python3 -m pytest pytests-contract-suite/test_portuale.py -q -p no:cacheprovider -k 'pretend_writes_no_resume_list'
+```
+
+## `PKGDIR`, `BINPKG_COMPRESS*` and `PORTAGE_BZIP2_COMMAND` obey the config chain (#180 DONE, 2026-09-27)
+
+#173 ported the `BINPKG_FORMAT` default plus config chain but left these three on the env-only path at the same call sites. Real's defaults live in `cnf/make.globals` (`PKGDIR` :31, `BINPKG_COMPRESS` :39, `PORTAGE_BZIP2_COMMAND` :105), the calling environment outranks everything (`config.py:549-567`, `USE_ORDER` `env:pkg:conf:...` at `:1031-1035`), and the phase env splits them: `BINPKG_COMPRESS`/`FLAGS` are `environ_filter`ed (xpak reads them from the package settings, gpkg never sees the calling env — the pmtest `bf0692f` probe), while `PKGDIR`/`PORTAGE_BZIP2_COMMAND`/`BINPKG_FORMAT` ride the whitelist into the phase env (`lib/portage/special_env_vars.py:257-348`). Now `package_options_from_env`, the standalone `ebuild <file> package` path, and the merge-path xpak pipe (`refresh_entry_compression_command`, which also fixes a pre-existing clobber where a `make.conf` gzip fell back to `bzip2` through the saved environment) all resolve through the chain with that split. Pinned by Rust units (defaults, verbatim chain, FLAGS override order, empty-PKGDIR fallback) and two pmtest pins (make.conf gzip lands a `.tbz2` under the configured dir; env beats make.conf; env gpkg keeps real's Q6 shape). Commits: pmtest `78aedb4` (pins + conftest scrub), portuale `f7283ef0` + `6821e7b6`. Re-run the pins:
+
+```sh
+# from ../pmtest; expect 2 passed
+python3 -m pytest pytests-contract-suite/test_portuale.py -q -p no:cacheprovider -k 'make_conf_binpkg_chain_is_obeyed or make_conf_bzip2_command_is_obeyed'
+```
+
+## The circular-dep wording gets a real-text oracle, pinned as strict xfails (#181 DONE, 2026-09-27)
+
+Batch 2's `test_circular_dependencies` CASES (pmtest `4c5f424`) pin portuale's wording without checking it against real's. Closed by capturing live real `emerge -p` on all eight cases (fixture-oracle run `l0-fx-20260927T202111Z`): exit codes agree on every cell, the text does not — real prints full package nodes instead of bare cpvs, blames a different package for `=cyc0z-1/2` after a backtrack run, and rotates the `cyc0w` cycles with a `-foo` suggestion for `cyc0w-3` — filed as #206, #207, #208, with real's blocks pinned as strict expected failures (pmtest `5810144`; the eight CASES labels now say their oracle was the playground). Portuale-side close-out is docs only (`9e93d471`); captures and the per-case table live in `docs/evidence/2026-09-27-181-circular-text/`. Re-run the pins (bed, not re-run here for the oracle itself):
+
+```sh
+# from ../pmtest; expect 1 passed, 2 xfailed
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider -k 'circular_dependencies_upstream_pg0_real_text'
+```
+
+## The `-MERGING-<pf>` in-progress vdb entry exists during the merge (#183 DONE, 2026-09-27)
+
+Portuale wrote no real-style in-progress vdb entry during a merge. Real's ordered sequence (`lib/portage/dbapi/vartree.py` `dblink.treewalk`, `MERGING_IDENTIFIER` in `lib/portage/const.py`): wipe a stale `-MERGING-<pf>` and create the fresh tmp before `pkg_preinst` and before a byte reaches `${ROOT}`; build-info copy plus the `COUNTER` tick after preinst; `CONTENTS` plus consolidated metadata after the `${ROOT}` copy; publish (drop live, rename tmp into place) only after the replace loop, before postinst — with readers skipping `-MERGING-*` via `_excluded_dirs`, and `emaint merges` owning cross-run cleanup (`Scheduler` has none; resume is the separate mtimedb key, #179). Portuale created the tmp after the `${ROOT}` copy and published before unmerging the replaced instances, so the C4 harness's `marker_seen` could never fire and upgrades briefly showed the new entry beside the old. The vdb write is now four stages at real's exact positions in both merge paths, with the replace loop reading the replacing version's file list from the tmp (otherwise upgrades delete shared files) and every installed-package reader skipping stale tmp entries. Nothing here is CLI-observable, so there is no pmtest pin; the live behaviour is the coordinator-run `l32` C4 cell, which now leaves `-MERGING-slow-a-1.0` on both sides. Commit: portuale `42974bdc` (merged with #178 in `881781fb`). Re-run the Rust pins:
+
+```sh
+# from portuale/rust; expect 10 passed
+cargo test --release -p portuale merging
+```
+
+## A non-pretend `emerge` shows the merge list only when real does (#185 DONE, 2026-09-27)
+
+A non-pretend `emerge` printed the merge-list line on every shape where real prints `Calculating dependencies ... done!` plus the repo news-count notice and no list. Ported `action_build`'s gate verbatim (`lib/_emerge/actions.py:464-469`: list only under `--pretend`, or `--ask`/`--tree`/`--verbose` without `--quiet`-sans-`--ask`) and `_start_resolution_display` (`lib/_emerge/depgraph.py:12087`: header only with ask/tree/verbose and no `--quiet`, including under `--nodeps`; `Calculating dependencies ... done!` plus `Dependency resolution took (backtrack: B/M).` whenever not `--quiet`/`--nodeps`, seconds cut for determinism), grounded in a six-shape container probe. Review then split the gate: `--verbose --nodeps` shows the header but no notice or timing (real consults no `--nodeps` for the header at `:12089-12094`, QUIET mode at `:12129-12130` kills the notice). Commits: pmtest `c8a0583` + `b07c2f7`, portuale `ec814bad` + `51ace1d7` (owner B7); merge-path gate `l1-20260927T180433Z` rc 0 and `l32` candidate 0 on all 7 cells. Residues: #196 (news-count notice) and #197 (scheduler status-line layout); the `--quiet --verbose` Jobs lines and the news notice stay unported by design. Re-run the pin:
+
+```sh
+# from ../pmtest; expect 1 passed
+python3 -m pytest pytests-contract-suite/test_portuale.py -q -p no:cacheprovider -k 'without_display_flags_shows_no_merge_list_like_real'
+```
+
+## A resumed binary entry's `::repo` comes from the binhost, not the ebuild repo (#186 DONE, 2026-09-27)
+
+A resumed *binary* entry's `(N of M) cpv::repo` line showed the ebuild repo. Real re-resolves resume items from the bintree (`depgraph._loadResumeCommand`, `lib/_emerge/depgraph.py:11404+`, `pkg_type == "binary"` matched via the binary tree), and the progress line (`PackageMerge._make_msg`, `PackageMerge.py:25`) prints the binary `repo` — the `Packages` index `REPO` field, `__unknown__` when absent. Now `resume_binary_repo` looks the version up in the local `$PKGDIR` pool through the resolver's own index, then remote binhosts with local-shadows-remote, mapping a record without `REPO` to `"__unknown__"`; `resume_entry` prefers it for `Binary` entries only (display-only — binpkg location never reads `repo_name`). When no pool lists the version at all the old ebuild-repo fallback is kept, where real would drop the package — resume never re-resolves, and changing that is out of scope. Pinned by Rust units (local hit, `__unknown__`, absent, remote `file://` hit, local-shadows-remote) and a real-execution pmtest pin that replays a `[ebuild, binary]` run with `--resume --skipfirst`. Commits: pmtest `7e97687`, portuale `7c655bc9`; `l32` C4 `l32-20260927T061016Z`. Filed as a #177 residue. Re-run the pin:
+
+```sh
+# from ../pmtest; expect 1 passed
+python3 -m pytest pytests-contract-suite/test_portuale.py -q -p no:cacheprovider -k 'resume_replays_a_binary_entry'
+```
+
+## A stale binhost index selects the binary and aborts at merge, like real (#187 DONE, 2026-09-27)
+
+With a `Packages` stanza whose file was removed, portuale built from the ebuild (rc 0) where real selects the binary and aborts (rc 1). Root cause: `populate_local_pkgdir` was file-driven, so the orphan stanza never entered the pool whenever some other file was present — while real, under the bed's `pkgdir-index-trusted` FEATURES, runs `_populate_local` with `reindex=False` and `cpv_inject`s every stanza without stating any file (`lib/portage/dbapi/bintree.py:937-938,1057-1064`). Stanzas are now re-injected verbatim, and the merge prints real `BinpkgVerifier._start`'s ENOENT lines (`Tried to use non-existent binary …` / `Fetching Binary failed …` plus the `>>> Failed to emerge` tail, rc 1 via a silent sentinel). The bed never saw it because `l32` ignored exit codes: `check_f3_rc` now fails a cell on an F3 rc mismatch. Pinned by Rust units (re-inject shapes, both abort arms) and a pmtest pin rebuilt so the scan is non-empty — the exact regression shape, which the old single-build test passed via the raw-index fallback. Commits: pmtest `aadc6b6` (pins + `check_f3_rc`), portuale `a749e257`; merge-path gate `l1-20260927T175305Z` rc 0, `l32` control + candidate 0 on all 7 cells with F3 `[RC-OK]`. Residue #199. Re-run the pins:
+
+```sh
+# from ../pmtest; expect 2 passed
+python3 -m pytest pytests-contract-suite/test_portuale.py -q -p no:cacheprovider -k '500ing_binhost'
+```
+
+## Binpkg index stanzas follow real's `SLOT` rule; the digest list was already right (#188 DONE, 2026-09-27)
+
+Portuale-written index stanzas lacked `SLOT` on one path and carried a fixed digest list that looked configuration-dependent. A container probe plus source read settled both: real always writes `MD5` + `SHA1` (`_pkgindex_hashes`, `lib/portage/dbapi/bintree.py:548` — `PORTAGE_CHECKSUM_FILTER` is only consulted at verification time), and `PackageIndex.write` omits any stanza value equal to `_pkgindex_default_pkg_data` (`SLOT`/`EAPI` `"0"`, `lib/portage/getbinpkg.py:169-172`, defaults at `bintree.py:609-629`, restored on read by `readBody`'s `setdefault`). The `--buildpkg` writer already complied; only `quickpkg_from_vdb` (the unmerge-backup path) wrote `SLOT: 0` and the internal `_mtime_` key — now fixed through the shared `omit_stanza_default`, with the translated `MTIME` key real writes. Pinned by Rust units (rule table, byte-exact stanza blocks, a phase-running `packagepkg` leg) and a real-execution pmtest pin that rebuilds under `PORTAGE_CHECKSUM_FILTER='-SHA1'` and pins both digests surviving. Commits: pmtest `9a908f3`, portuale `a69f98f3`; merge-path gate `l1-20260927T191723Z` rc 0, `l32` candidate 0 on all cells. Residue #203 (`REPO_REVISIONS` and the reader-side `MTIME`/`SLOT` translations stay out of scope). Re-run the pin:
+
+```sh
+# from ../pmtest; expect 1 passed
+python3 -m pytest pytests-contract-suite/test_portuale.py -q -p no:cacheprovider -k 'packages_stanza_matches_real_slot_and_digest_rules'
+```
+
+## Portuale dies like real when `${S}` is missing (#190 DONE, 2026-09-27)
+
+Real dies in `src_install` on a source-less EAPI-8 ebuild with `src_install` defined (`The source directory '${S}' doesn't exist`, `bin/phase-functions.sh:638` — all five `__dyn_*` phases share the shape at `:444,480,512,546,638`, with the `S=${WORKDIR}/${P}` default at `bin/ebuild.sh:500` and only the EAPI 0–3 fallback in `bin/eapi.sh:8`), while portuale built it: `create_directories` pre-created `env.s()` as a v1 simplification, so real's `[[ -d ${S} ]]` check always passed. One functional line stops pre-creating it, so all phase paths inherit real's check; 54 source-less fixtures portuale builds got the intent-preserving `S="${WORKDIR}"` (the `heredocpkg` idiom), with md5-cache entries regenerated under real `egencache` 3.0.82.2 (every diff `_md5_`-only — real confirms `S` is not a cached key). Pinned by the hermetic e2e `install_dies_like_real_when_s_is_missing` (fails before, passes after). Commits: pmtest `e01e0b2` (89 files), portuale `475f6fc6` (owner B2); suite 1965/0 with no corpus drift, merge-path gate `l1-20260927T165138Z` rc 0, small-case oracle `l0-fx-20260927T165802Z` family 0 unexplained. Re-run the e2e:
+
+```sh
+# from portuale/rust; expect 1 passed
+cargo test --release -p portuale install_dies_like_real_when_s_is_missing
+```
+
+## `--pretend --getbinpkg` refreshes the remote index like real, even when the cache is unwritable (#192 DONE, 2026-09-28)
+
+As a non-root user on this host, `--getbinpkg` found no binhost packages where real did (`emerge -puD --getbinpkg net-libs/rest`: real `[binary N g] net-libs/rest-0.10.2-1`, portuale `[ebuild N]`). Strace plus source showed why: real fetches the remote index live even for pretend (`populate(getbinpkgs=True, getbinpkg_refresh=True)`, `lib/_emerge/actions.py:3752`), writes the cache best-effort, and resolves from the in-memory index when the write fails (`lib/portage/dbapi/bintree.py:1811-1823` — the unwritable `location = /.gentoo/cache/binhost/<name>` plays no role; the index path `<EROOT>/var/cache/edb/binhost/<host>/<path>/Packages` at `:1497-1504` does), while portuale's pretend never touched the network and its refresh aborted on the uncreatable cache dir. Now pretend refreshes like real (fetch first into temp files, write best-effort, resolve from a process-global in-memory override), with real's skips ported: `frozen`, `DOWNLOAD_TIMESTAMP` + TTL, the `TIMESTAMP` compare (remote wins iff strictly newer), and the fetched-index drops (no/unparseable `TIMESTAMP` at `:1722-1744`, unsupported `VERSION` via `_pkgindex_version_supported` `:2429-2437` — which also stamped `VERSION: 0` into the six fixture binhost headers, since real always stamps both on write at `:2388-2397`). Deliberate narrowings: no conditional-GET (wget always downloads; resolution identical via the compare), no `ssh://`, no trust-helper gating. Commits: pmtest `a71519f`, portuale `020273df` + `4687a857` (owner decision B15); beds `l31` + merge gate 0 unexplained. The remaining diffs on the two probe commands belong to #185 (headers) and #107 (warning). Re-run the Rust pins (all hermetic `file://`/loopback, no https):
+
+```sh
+# from portuale/rust; expect 21 passed
+cargo test --release -p portuale refresh_
+```
+
+## A virtual satisfied by an ebuild that depends on the same virtual fails like real (#193 DONE, 2026-09-28)
+
+No virtual-cycle detection: a virtual satisfied by an ebuild that transitively depends on the same virtual merged as an ordinary ring (both upstream `test_virtual_cycle.py` cells rc 0; pmtest `89d17e0`). Real recursively probes the selected provider's RDEPEND closure (`_virt_deps_visible`, `lib/_emerge/depgraph.py:6208-6222`) and re-entering a probed virtual raises `_virtual_cycle_error` (`:6215-6216`, class `:11685`), which `select_files` (`:5002-5013`) turns into the `!!! virtual cycle detected:` block (one `  {cpv}::{repo}` line per stack member, sorted) and a failed resolve — confirmed live in the container (both cells rc 1, text from one probe). Ported as a settled-graph check over the walk's own provider selection: `find_virtual_cycles` DFS from every merge-bound virtual along kept-branch RDEPEND edges to merge-bound virtual targets, reporting the whole stack; `abort_outcome` fails first (real raises out of the walk, preempting serialize-time failures) with an empty partial (real shows no list), and pretend prints the header, timing preamble and real's stderr block verbatim, exiting 1 through the shared abort gate (`--json` gains reason `virtual-cycle`). The parked `--solver=` engines still resolve it, like their other documented cuts. Commits: pmtest `31dc13f` (two rc-1 CASES + byte-exact block pin), portuale `826c7822`; L0 identical to Z0, fixture oracle green. Filed as #50 batch-3 finding F1. Re-run the pins:
+
+```sh
+# from ../pmtest; expect 2 passed
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider -k 'virtual_cycle_detected_like_real'
+```
+
+## `--onlydeps-with-rdeps` / `--onlydeps-with-ideps` work like real instead of exiting 2 (#194 DONE, 2026-09-28)
+
+Both flags were recognised but died with "not yet implemented" (rc 2) against real's rc 0 (upstream `test_onlydeps_minimal.py` 4 cells, pmtest `15ba75e`, plus `test_onlydeps_ideps.py` 10 cells, pmtest `5f51ee7`). Real's rule (`_add_pkg_deps`, `lib/_emerge/depgraph.py:4186-4193`): for an `--onlydeps` root, `rdeps=n` blanks `RDEPEND` and `PDEPEND`, then `ideps in (n, None)` blanks `IDEPEND` — root-only (`onlydeps` never propagates to child `Dependency()`s), inert without `--onlydeps`; the spellings accept `y`/`n`/bare-`True` (`lib/_emerge/main.py` `true_y_or_n :575-583`, `y_or_n :169-170`), anything else an argparse invalid-choice rc 2; and `IDEPEND` only exists at EAPI 8 (`bin/ebuild.sh:790-795`, `eapi_has_idepend` at `portage/eapi.py:135,304`), which is why the EAPI-7 playground merges without `E`. Ported at `run_pass`'s dep-key site (depth 0 under `onlydeps`, covering merge-order and runtime classification) with an `eapi_has_idepend` gate on the main walk and the installed overlay. Pinned by 15 CASES over new EAPI-8/7 `odw0*` fixtures (the upstream `odm0*`/`odi*` cells belong to #220, verified matching but unpinned) plus the exact-row pin and the `--help` update; review added the `=True`/space-separated/inertness cells and the walk-vs-classification split for atoms shared with build-time keys. Commits: pmtest `53bdc94` + `0f6063a`, portuale `25b3359b` + `e4fcf513`; L0 identical to Z0, fixture oracle green. Filed as #50 batch-3 finding F2. Re-run the pins:
+
+```sh
+# from ../pmtest; expect 16 passed
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider -k '(194 or onlydeps_with_rdeps_ideps_pins_mergelists) and not args194'
+```
+
+## Autounmask USE-change suggestions where real proposes one (#195 DONE, 2026-09-28)
+
+Upstream `test_autounmask_parent` (`aup0b`): real suggests disabling `foo`/`bar` on the parent and still fails, while portuale printed the bare `emerge: there are no ebuilds to satisfy` block with no suggestion. Real's parent-side partition lives in `Atom.violated_conditionals` (`3rdparty/portage lib/portage/dep/__init__.py:1465`, child USE filtered to valid IUSE per `Package.py:728-731`); portuale now ports it branch-exact as `violated_parent_flags` plus `viable_parent_flip_targets` (version-matching visible children, real's masked-instance skip at `depgraph.py:6775` and untouchable-child `continue` at `:6732-6736`), verified against a host-python oracle table in `docs/evidence/2026-09-28-g195/`. With backtracking off the arm records the USE change and fails like real (no rows), and the `parentflipeqpkg`/`pfgraphparent` cells now show real's probed bare miss. Portuale `d949ed4f`/`b43d96e4`/`93954ad3`/`b3420f99`/`55d8c709`, pmtest `e23a3e9`/`0b0596b`/`e23fec7`, bless `9fb5110` (merges `903e9bd2`/`3057070`; rulings B18, B20). Residues: the argument-order half moves to #244, the dep-chain self-row to #248. Re-run the pins:
+
+```sh
+# from ../pmtest; expect 3 passed
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider \
+  -k 'test_autounmask_use_parent_flip_fails_like_real_when_the_child_flag_is_masked or test_autounmask_parent_suggests_disabling_foo_and_still_fails or test_autounmask_use_parent_flip_pfgraph_reports_the_bare_miss_like_real'
+```
+
+## GLEP 42 news-count notices on every real print point (#196 DONE, 2026-09-27)
+
+Real prints `* IMPORTANT: N news items need reading for repository '<repo>'.` from `display_news_notification` (`_emerge/post_emerge.py`, gated on `news` in FEATURES and a non-zero unread count via `NewsManager` in `portage/news.py`): once before resolution in `run_action` (`actions.py`, not under `--pretend`) and again from `post_emerge()`. Every `l32` real log shows it; portuale printed nothing, although the count was already available from `--check-news`. Portuale `651e5aab` + `ad753912`, pmtest `1f09884` + `55137b2`, cover all four print points: pre-resolution, post-merge including failed merges, `--pretend` end, and after uninstall actions (beds: merge gate + `l32` 0 unexplained — bed, not re-run here). Residue #231. Re-run the pins (`and not resume` excludes #231's later resume pin):
+
+```sh
+# from ../pmtest; expect 9 passed
+python3 -m pytest pytests-contract-suite/test_portuale.py -q -p no:cacheprovider \
+  -k '(news_count_notice or without_news_feature or prints_news_notice or prints_pre_notice or prints_no_post_notice or unmerge_prints_news) and not resume'
+```
+
+## Scheduler `>>> Jobs:` status lines under `--quiet --verbose` (#197 DONE, 2026-09-28)
+
+Real `_status_msg` (`_emerge/Scheduler.py`) prefixes every status line with a newline outside background mode, and `JobStatusDisplay` prints `>>> Jobs: M of N complete … Load avg: …` in the `--quiet` + `--verbose` shape. Portuale printed no `>>> Jobs:` lines there, and its leading blank line is now ported only before the first `>>>`. The live `Load avg:` field is cut (not pinned), the same determinism rule as #185's seconds cut (batch file B14). Portuale `5ff7897a` + `5a3646bf`, pmtest `c44becb` + `ed032a5` (bed: `l32` 0 unexplained — bed, not re-run here). Re-run the pins (the `-j2` pin is the extended pre-existing one):
+
+```sh
+# from ../pmtest; expect 4 passed
+python3 -m pytest pytests-contract-suite/test_portuale.py -q -p no:cacheprovider \
+  -k 'serial_merge_status_lines or quiet_verbose_shows_jobs or jobs_failure_shape or jobs_builds_independent'
+```
+
+## `--autounmask-keep-keywords=y` falls back to the older stable version (#198 DONE, 2026-09-28)
+
+Upstream `test_autounmask_keep_keywords` (`akk0`): with keep-keywords on, real backtracks to `A-1` plus a USE change; portuale held the newest `A-2` and failed on the keyword-masked `B`. Real's missing-dep backtrack masks the top-level-selected parent (`_feedback_missing_dep`, `backtracking.py:197-207`); portuale now does the same, so keep-`y` falls back to the older stable version, a failed retry counts as a consumed iteration, and the full-form skipped-update notice renders. Portuale `d93b7609`/`f713be43`, pmtest `a45e7c5` (merge `92a35b3a`/`cfd77f9`). Re-run the pins (2 pins + 2 CASES rows):
+
+```sh
+# from ../pmtest; expect 4 passed
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider \
+  -k 'autounmask_keep_keywords'
+```
+
+## PKGDIR scan obeys `pkgdir-index-trusted` (#199 DONE, 2026-09-27)
+
+Real `bintree.populate` (`bintree.py:936-938`) trusts the `Packages` index unconditionally only with the feature on (`reindex = "pkgdir-index-trusted" not in features or force_reindex`); with `FEATURES=-pkgdir-index-trusted` it stats every file, drops stanzas whose file is gone and re-reads changed ones. Portuale's `populate_local_pkgdir` took no FEATURES, so #174's present-file arm and #187's orphan arm both behaved as if the feature were on (which matches real's `make.globals` default, so the default case was already right). The feature is now threaded into the scan with the `reindex=True` branch ported. Portuale `c3f097e8` + `ed522a87`, pmtest `3687dde` (beds: merge gate + `l32` 0 unexplained — bed, not re-run here). Re-run the pin:
+
+```sh
+# from ../pmtest; expect 1 passed
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider \
+  -k 'pkgdir_scan_with_untrusted'
+```
+
+## Same-second re-merge no longer skips the unmerge backup (#202 DONE, 2026-09-27)
+
+`FEATURES=unmerge-backup` silently skipped the backup after a same-second re-merge: `quickpkg_from_vdb` skipped when any `Packages` stanza shared the vdb entry's `BUILD_TIME`, a stale stanza included. Real's `_quickpkg_dblink` (`dbapi/vartree.py:6297-6313`) checks `bintree.dbapi.match`, but on `emerge -C` real's bintree is never populated (`run_action` populates it only for search / `--usepkg` merges, `actions.py:3725-3765`), so real always rebuilds. The index consult is gone; the test forces the same-second state and fails every time on the old code. Portuale `3e1ed9ca`, pmtest `d5d82b3` (merge-path gate `l1-20260927T193952Z` rc 0 — bed, not re-run here). Residual cut, kept: the existing-file guard still skips a same-format re-backup where real overwrites. Re-run the pins:
+
+```sh
+# from ../pmtest; expect 3 passed
+python3 -m pytest pytests-contract-suite/test_portuale.py -q -p no:cacheprovider \
+  -k 'unmerge_backup'
+```
+
+## quickpkg `Packages` stanzas carry `EAPI` and real key order (#203 DONE, 2026-09-27)
+
+#188 fixed `SLOT` and the `MTIME` key name; three divergences remained. Real's quickpkg stanza carries `EAPI` (vdb `EAPI` through archive metadata into `bintree._pkgindex_entry`, `bintree.py:2289-2313`, written unless `0`); real writes keys in `PackageIndex.write` order (`getbinpkg.py`, `keys.sort()` with `MTIME`/`REPO` last) where portuale used a fixed order; and real's `--buildpkg` stanza has `REPO_REVISIONS` (`EbuildPhase._setup_repo_revisions` into `build-info/REPO_REVISIONS`), which portuale never wrote. Both writers plus the stanza pin now match. Portuale `297744c9` + `2b2b8472`, pmtest `500cdf2` (beds: merge gate + `l32` 0 unexplained — bed, not re-run here). Residue #226. Re-run the pin:
+
+```sh
+# from ../pmtest; expect 1 passed
+python3 -m pytest pytests-contract-suite/test_portuale.py -q -p no:cacheprovider \
+  -k 'buildpkgonly_packages_stanza'
+```
+
+## `--autounmask-backtrack=y` display rules for enforced pins and USE chains (#205 DONE, 2026-09-28)
+
+Probing showed real also keeps the newest version on the pristine cell (the filed case compared against an upstream oracle with a different world), so #205 landed as two display rules: enforced-pin misses are recorded like real's missed updates (`depgraph.py:2087-2106`) with installed consumers rendered from the vdb, and USE-change chains start at the forcing parent (`_get_dep_chain(unsatisfied_dependency=True)`, `:6257`). The pristine-world cell keeps `A-3`+`x`; the world-`B` shape falls back to `A-2` with the skipped-update row and forcing-chain USE block. Portuale `a321452a`/`db0e23bd`/`740e6c05`/`0007fd64`, pmtest `a0340f8`/`62f58ce`/`b589298`, bless `d83cbaa` (merge `92a35b3a`/`cfd77f9`). Residue: the `[1]` old-best marker on repo drift goes to #247. Re-run the pins (2 pins + the `abk0d` CASES row):
+
+```sh
+# from ../pmtest; expect 3 passed
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider \
+  -k 'autounmask_use_backtrack'
+```
+
+## Circular-dependency block prints real package nodes (#206 DONE, 2026-09-27)
+
+Real `_show_circular_deps` (`depgraph.py:10425`) forces `--verbose` and `--tree` before `display(handler.merge_list)`, and the cycle lines come from `digraph.debug_print`, printing `str(Package)` = `(dev-libs/cyc0b-1:0/0::testrepo, ebuild scheduled for merge)` (`Package.py:590`). Portuale printed bare cpvs and a flat list; every circular pin in pmtest (`hardcycle*`, `usecycle*`, `gpcycle*`, `cyc4*`, `cyc0*`) pinned portuale's form. Now the node text, three leading stderr newlines, and the forced verbose-tree remainder (tree rows, `[nomerge]` arms, `::repo`, `0 KiB`, `Total:`) match, with evidence in `docs/evidence/2026-09-27-181-circular-text/`. Portuale `b68717d6`, pmtest `ddad9d4` + corpus bless `668bb2a` (beds: fixture oracle 5/5, L0 identical to Z0 — bed, not re-run here). Residue #228. Re-run the pins:
+
+```sh
+# from ../pmtest; expect 14 passed
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py pytests-contract-suite/test_portuale.py -q -p no:cacheprovider \
+  -k 'test_unbreakable_build_time_cycle_prints_the_circular_deps_error or test_circular_dep_use_flag_suggestion or test_circular_dep_grandparent_use_conflict_disqualifies_the_suggestion or test_circular_dep_four_ring_reports_redisplay_suggestion_and_lot_of_cycles or test_abort_path_cycle_shows_reduced_list_only or test_circular_dependencies_upstream_pg0_real_text_cyc0b1 or test_solver_pubgrub_reports_the_unbreakable_build_time_cycle'
+```
+
+## `cyc0w-3` cycle suggestion uses the autounmasked USE (#208 DONE, 2026-09-28)
+
+For `=dev-libs/cyc0w-3` (which needs `cyc0z[bar]`, autounmask) real evaluates the suggestion on the autounmasked `USE="bar foo"` and prints `cyc0z-3 (Change USE: -foo)`; portuale printed the generic "temporarily disabling USE flags" advisory. `circular_dep_solutions` now overlays the autounmask-USE changes onto the parent's USE before enumerating assignments, like real `_pkg_use_enabled` (`depgraph.py:7669`) feeding `_find_suggestions` (`circular_dependency.py:104-114`); changed flags stay untouchable as before. Part (a), the cycle start node, closed into #242 by owner decision B17 (real builds the cycle over its cross-root graph), so the contract pin stays strict-xfail. Portuale `6fa90a45`, pmtest `7780459` (L0 identical to Z0, fixture oracle green — bed, not re-run here). Re-run the xfail contract pin plus the Rust unit test:
+
+```sh
+# from ../pmtest; expect 2 xfailed
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider \
+  -k 'test_circular_dependencies_upstream_pg0_real_text and not cyc0b1'
+```
+
+```sh
+# from portuale/rust; expect 1 passed
+cargo test --release -p portage-repo circular_dep_solutions_applies_the_autounmask_use_overlay
+```
+
+## `--backtrack=0` enforces satisfiable reverse-dep pins in-pass (#209 DONE, 2026-09-28)
+
+Real `_resolve_conflicts` (`depgraph.py:9444`) calls `_complete_graph()` (`:8562`) with no `_allow_backtracking` gate, so a satisfiable installed-consumer pin is enforced in-pass (the consumer is a nomerge node; its atom constrains selection). Portuale settled pass 1 (`portage-repo/src/lib.rs:25872`: `backtrack_max == 0` discards `collect_feedback`'s `Feedback`), so the pin never applied. A bounded feed loop now enforces satisfiable pins in-pass under `--backtrack=0` (`restarts` stays 0); the unsatisfiable half is pinned by contract with no product change. Probe: #107's reference workload (installed `dev-libs/weston-16.0.0`'s `<media-libs/libdisplay-info-0.4.0:=` pin). Portuale `721105e5`, pmtest `5513eb3` (guard: fixture oracle 7/7, L0 identical to Z0 — bed, not re-run here). Residue #237. Re-run the pins:
+
+```sh
+# from ../pmtest; expect 2 passed
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider \
+  -k 'oracle_209'
+```
+
+## Slot-change reinstalls join the reverse-dep scan (#210 DONE, 2026-09-28)
+
+Real `_complete_graph` (`depgraph.py:8619-8648`) counts a slot/sub-slot change without revbump as `version_change`, auto-enables complete mode, and re-seeds the required sets so the consumer's atom constrains selection. Portuale's `reverse_dependency_constraints` (`lib.rs:14729`) filled its `upgrading` map only from `Upgrade`/`Downgrade` outcomes, so a same-version `Reinstall` at a new slot never constrained. With the consumers in `@world` the sub-slot-change reinstall is now withheld with real's skipped-update warning, and a no-op argument is not a constraint source. Portuale `d43cf7b0`, pmtest `834e66f` + bed/compare fixes `4a5156c` `b879ad9` `1fa1581` (guard: L0 identical to Z0, fixture oracle 7/7 — bed, not re-run here). The `@world` cell's abort is #233. Re-run the pins (one pin is parametrized twice):
+
+```sh
+# from ../pmtest; expect 3 passed
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider \
+  -k 'oracle_210'
+```
+
+## Slot-operator update probe and reverse-dependency refusal (#211 DONE, 2026-09-28)
+
+Real `_slot_operator_update_probe` (`depgraph.py:2576`) detects an installed package pinning a child at its built slot/sub-slot and schedules the rebuild/reinstall, refusing replacements that fail `_slot_operator_check_reverse_dependencies` (`:2472`; gates at `:2622`, `:2738`, `:3131`, `:8786`). Portuale's `slot_operator_rebuild_scan` doc comment still listed both as cuts (`lib.rs:15066`); now the new-child-slot arm, the refusal on both arms, bound-slot-mismatched `Upgrade`/`Downgrade`/`Reinstall` entries, and the same probe in the solver bridge are ported (bug 486580's conflict-mass shape un-xfailed). Portuale `d3ff24fd`, `e4c443e8`, `ad8476cd`, `83814e19`; pmtest `fdbbbdf`, `58062bb`, `b3481a1`, `b0cccdd` (each commit passed the guard with L0 identical to Z0 and the fixture oracle green — bed, not re-run here). Residue: probe-side upgrade forcing and `_minimize_children` move to #236 (B16). Re-run the pins:
+
+```sh
+# from ../pmtest; expect 4 passed
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider \
+  -k 'conflict_mass or slotop_update_probe or slotop_bridge'
+```
+
+## Stale-slot binaries are masked as `slot_operator_mask_built` (#212 DONE, 2026-09-28)
+
+Real records the masks (`depgraph.py:2383`, `:2427-2431`, `:2901-2903`) and enforces them through the backtrack-config restart (`:5703-5712`), steering the solver away from built packages whose slot-op deps cannot be satisfied. Portuale had no equivalent for non-installed binaries (`lib.rs:15068`): now a non-installed binary whose built `:=` slot no longer matches the same-version ebuild is masked and the pass restarts, so the solver takes the ebuild; the update and unsatisfied arms are documented cuts with no diverging shape. New fixture-oracle list `l0-fixture-oracle-g212.txt`. Portuale `04c16276`; pmtest `c5ea8da`, `a8cbdae` (L0 identical to Z0, fixture oracle 8/8 green — bed, not re-run here). Residue: the probe skips real's ebuild-visibility gate (#243). Re-run the pin:
+
+```sh
+# from ../pmtest; expect 1 passed
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider \
+  -k 'usepkg_slot_operator_mask_built'
+```
+
+## `prune_rebuilds` restart drops unnecessary rebuilds (#213 DONE, 2026-09-28)
+
+When `_slot_operator_replace_installed` meets missed updates, real restarts with `config["prune_rebuilds"]` (`depgraph.py:5763-5780`; `_ENABLE_PRUNE_REBUILDS` at `:628`, the `prune_rebuilds` backtrack param at `:710`) and drops the unnecessary rebuilds on the re-resolve. Portuale had no prune pass; the restart is now ported (hermetic fixture `app-misc/pprov`, bed cell and count pin; probe on real Portage 3.0.81.3 plus Playground 3.0.82.2). Portuale `54d019a9` (merge-from-main `4e8044f4`); pmtest `9aab356`/`1f0cee2` (merge `0a51fa6f`/`2aef78e`). Residues: the #211 `mmprov` pin is unprobed (#252), the missed-update half of `prune_rebuilds` (#253). Re-run the pin:
+
+```sh
+# from ../pmtest; expect 1 passed
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider \
+  -k 'prune_rebuilds'
+```
+
+## Slot conflicts with a rebuildable built parent heal via ABI rebuild (#214 DONE, 2026-09-28)
+
+Real `_slot_conflict_backtrack_abi` (`depgraph.py:2282`) rebuilds a built parent whose soname/`:=` conflict atom the update probe can resolve, instead of reporting the slot conflict. Portuale reported; now the `slot_conflict_abi_probe` sits next to the #211/#212 probes (a surviving slot conflict whose installed `:=` parent can be rebuilt against the other instance joins the replace set and restarts before the mask arms), and the display carries real's `rR` row and causing-rebuilds block. Hermetic fixture `app-misc/abiprov`/`abicons`/`abiforce` (oracle list `l0-fixture-oracle-g214.txt`, `l0-fx-20260928T184506Z`; L0 `l0-20260928T184001Z` identical to Z0 — bed, not re-run here). The installed `abicons-1` joins the shared vdb, so the two `--prune` pins list it (blessed `0db7fb9`). Portuale `9c7197f5`, `87371462`; pmtest `218ecc6`/`8d406b3`/`b7d3ab0` (merge `3c14cd60`/`2334823`). Residues #254, #255. Re-run the pin:
+
+```sh
+# from ../pmtest; expect 1 passed
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider \
+  -k 'slot_conflict_abi'
+```
+
+## In-walk unsatisfied slot-operator probe (#215 DONE, 2026-09-28)
+
+Real `_slot_operator_unsatisfied_probe` (`depgraph.py:2817`) with `_slot_operator_unsatisfied_backtrack` (`:2881`), fired at `:3447-3458` when a masked parent's built `:=` dep goes unsatisfied and a replacement parent exists in the tree. Portuale had no equivalent; the `slot_operator_unsatisfied_probe` now fires on a dead-end pass under `backtrack_max > 0` (installed parent's built `:=` want paired through the pass's puller triples, same-slot replacement screened like `_iter_similar_available`), joining the replace set and restarting. Hermetic fixture `app-misc/sousatpar`/`sousatprov` (oracle list `l0-fixture-oracle-g215.txt`, `FX_SOUSAT_UNSAT=1 FX_HOST_ROOTS=1`): real 3.0.82.2 heals with `N prov-2` + reinstall `par-1`, both abort at `--backtrack=0`. Portuale `c0665bae`, `a454e150`, `903ec81a`; pmtest `345e079`/`af49e43`/`70b18f7` (merge `5ef13439`/`692b607`). Residues #256, #257. Re-run the pin:
+
+```sh
+# from ../pmtest; expect 1 passed
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider \
+  -k 'unsatisfied_probe'
+```
+
+## In-graph `||` self-branch resolves through the cycle map (#216 DONE, 2026-09-28)
+
+On host `@world` plasma-meta/podman, real's `_create_graph` (`depgraph.py:3254`, `_dep_stack` push/pop order) keeps in-graph `>=dev-lang/go` live when the cycle forms, then cycles and aborts with the remainder under autounmask (else the `circular_dependency`-map re-resolve); portuale's `circular_self` bolt-on (`lib.rs:11575`) picked `go-bootstrap` on pass 0 and never saw the cycle. The in-graph self `||` branch is now preferred and the self-cycle re-resolves through the `circular_dependency` map like real. Hermetic fixture `app-misc/g216top` (oracle list `l0-fixture-oracle-g216.txt`, `FX_HOST_ROOTS=1`). Portuale `ebebbed8`, pmtest `ae75be8`/`c9f6e8a`/`44f0c91` (merge `29e19eff`/`6ca61ee`). Residue: the `--backtrack=0` cycle-abort `--tree` partial shows two extra ancestors (#245). Re-run the pins:
+
+```sh
+# from ../pmtest; expect 4 passed
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider \
+  -k 'or_pick'
+```
+
+## Autounmask notices and flips follow real's order (#217 + #218 DONE, 2026-09-27/28)
+
+Two findings from the same §A triage (P-R4 step 2). (a) Real `need_config_change` (`_emerge/depgraph.py:11713-11717`) returns on `_success_without_autounmask` before `_autounmask_backtrack_disabled` is ever set (`:11752`), so the "terminated early" notice (`:11093`) fires only when another failure coincides; portuale printed it for every change with backtracking off (`pretend.rs:12891`). Portuale `7bf59514` gates the notice on a coinciding failure, pinned by fixture `dev-libs/abort-au-plain` and `test_autounmask_only_resolve_prints_no_terminated_early_notice` (pmtest `46ec571`, corpus bless `7bde01d`; guard: L0 identical to Z0, fixture oracle 5/5). (b) Real's DFS applies an autounmask `[use]` flip to the still-pushed node before walking its dependencies (`_add_dep` only pushes onto `_dep_stack`, `depgraph.py:3254-3271`), so the newly ungated leaf joins the list; portuale's already-resolved-slot re-check left the `flag?`-gated dep out. Portuale `c0b55d5a`, `7d0616a0`, `290b9016` apply the in-graph flip before the flipped node's walk and queue only genuinely new atoms (pmtest `e19376b`, bless `9cd4c02`), pinned by fixture `dev-libs/aucasctop` and `test_autounmask_cascade_flip_before_dep_walk_pulls_the_gated_leaf` plus its backward-cascade companion. Guard: fixture oracle green, L0 identical to Z0 except plasma-meta's suppressed truncated row, whose portuale count grew 465 → 472 (back at 465 on main since #216). Re-run the pins:
+
+```sh
+# from ../pmtest; expect 3 passed
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider \
+  -k 'test_autounmask_only_resolve_prints_no_terminated_early_notice or test_autounmask_cascade_flip_before_dep_walk_pulls_the_gated_leaf or test_autounmask_backward_cascade_re_resolves_an_already_resolved_slot'
+```
+
+## `emerge --info` prints the calling environment over the config files (#219 DONE, 2026-09-27)
+
+Real's `env` layer is the highest-priority one (`config.py` `configdict["env"]`, `USE_ORDER` `env:pkg:conf:…`), so `--info` shows `PKGDIR`, `BINPKG_COMPRESS*`, and `PORTAGE_BZIP2_COMMAND` from the environment even when the config files set them; portuale's `--info` (around `pretend.rs:7713`) read the config files first and the environment only as a fallback. Portuale `8cde7bb9` + `d1a1095e` flip the order (pmtest `62239f5` + `f65a136`); `PORTAGE_BUNZIP2_COMMAND` and the `CONFIG_PROTECT` / `CONFIG_PROTECT_MASK` / `ENV_UNSET` incremental folds now take the calling env like real too. Display-only: the build and merge paths were already fixed under #180. Beds: merge gate + `l32` 0 unexplained. Re-run the pin:
+
+```sh
+# from ../pmtest; expect 1 passed
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider \
+  -k 'test_info_shows_the_calling_env_over_make_conf'
+```
+
+## Fixture tree raised to the supported EAPI range (#220 DONE, 2026-09-28)
+
+Owner rule, 2026-09-27: portuale never sees an ebuild below EAPI 7, and profiles are EAPI 5. The fixture repos had no `profiles/eapi` file, so real read every profile directory as EAPI 0 (the fixture oracle's `--- EAPI '0' does not support 'package.use.stable.mask'` lines), and 159 ebuilds sat below EAPI 7, almost all copied from upstream's EAPI by #50's translation. Fix, in pmtest (`ba57e30`..`a382fda`, merged `2c9730c`): an `eapi` file saying `5` in every fixture profile directory real reads (seven files); each old-EAPI ebuild raised to EAPI 8 (850 at 8, 27 at 7) with the `ResolverPlayground` oracle re-run at the raised EAPI; cases whose point was an old-EAPI rule dropped (`test_eapi` `epi1*` cells, `test_required_use`'s EAPI-4 empty groups, with withdrawn #200/#204); every moved CASES entry re-triaged and pinned; the translator now emits EAPI 8 for playground EAPIs below 7. Portuale side is the re-check commit `dcaf0281` (no product change). Guard: suite 2087 passed, L0 identical to Z0, fixture oracle 7/7 green. Residues: the emptied conditional `||` shape the old `epi1c-2` carried (never pinned) is #238; translator assert narrowing is #239. Re-run the EAPI pins:
+
+```sh
+# from ../pmtest; expect 11 passed (L0 and the 7/7 oracle are beds, not re-run here)
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider \
+  -k 'eapi'
+```
+
+## Circular `||` choices backtrack to the branch that breaks the cycle (#221 DONE, 2026-09-28)
+
+Upstream `test_circular_choices.py` shapes (pmtest `8f8b18d`, `be12e00`; playground oracle): `dev-libs/ccd1c` real rc 0 `[bootstrap, jsoncpp, cmake]` while portuale died circular (bug 703440 shape); `dev-libs/ccd4a` real rc 0 `[exe-bin, pypy]` while portuale suggested `+low-memory` (bug 705986 shape); `dev-libs/ccd5a` real pulls the `-bin` package while portuale satisfied the virtual's `|| ( ccd5b =ccd5a-6* )` with the requested package itself. Both halves of real's machinery are now ported: `_serialize_tasks` records the stranded ring in the `circular_dependency` map and restarts (`depgraph.py:10264-10296`), and `dep_zapdeps` demotes a `||` alternative matching a recorded child (`dep_check.py:673-691`) — merged with #216's self-loop trigger into one structured map and one `Circular` feedback variant, with the self-branch in-graph check slot-precise (the `dev-lang/rust` L0 row, fixture `slcirc`). Portuale `1a262a67` with the #216 reconciliation `b191765a`, `6a065835`, `96f71073` (pmtest `8e42672`/`144a765`/`670b20b`, bless `865e7cb`; merge `9b4d4bf2`/`bbd8071`). Upstream `test_circular_choices` mergelists match; the `--json` restart count moves 0 → 1 on 23 cases, grounded per family against real. Residues: #249, #250, #251. Re-run the pins:
+
+```sh
+# from ../pmtest; expect 19 passed
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider \
+  -k 'circular_choices or test_ccd4b_tree_follows_the_cycle_breaking_branch or test_softened_build_time_cycle_reports_the_persisting_ring'
+```
+
+## A USE or version change that breaks an installed bound fails the run (#222 DONE, 2026-09-28)
+
+Upstream `test_complete_graph.py` (pmtest `dee24a6`; playground oracle): with `new-use=y` real fails (rc 1) because the flip breaks installed `cgp0q`'s `[-icu]` dep, and with `new-ver=y` real fails because the change breaks installed `cgp1a`'s `<x-2` bound; portuale succeeded in all three cells. Portuale `43c4d821`, `10a19909` port real `_complete_graph`: the auto-enabled `--complete-graph` seeds plus the end-of-walk broken-dependency failure (`depgraph.py:8592-8648`, `:8751-8791`), with the slot-conflict reasons following real's `elif` chain (pmtest `066e6b5`). Upstream `test_complete_graph.py` cells match. Guard: L0 identical to Z0, fixture oracle green. Re-run the pins:
+
+```sh
+# from ../pmtest; expect 3 passed
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider \
+  -k 'test_complete_graph_use_break_fails_with_world_consumer or test_complete_graph_ver_break_fails_with_world_consumer or test_upstream_complete_graph_pg01_pins_mergelists'
+```
+
+## `--ignore-world` merges only the named argument (#223 DONE, 2026-09-28)
+
+Upstream `test_complete_graph.py` (3 cells, pmtest `dee24a6`): real rc 0, because `--ignore-world` drops `@world` from the complete-graph seeds (`_emerge/depgraph.py`); portuale recognised the flag but exited 2 "not yet implemented". Portuale `2c592f91` implements it (pmtest `5adae13` + `67b3e81`), pinned by `test_ignore_world_merges_only_the_arg_on_an_eapi_8_tree` and `test_ignore_world_contrast_against_a_world_bound_consumer`. Guard: fixture oracle 6/6, L0 identical to Z0. Re-run the pins:
+
+```sh
+# from ../pmtest; expect 2 passed
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider \
+  -k 'test_ignore_world_merges_only_the_arg_on_an_eapi_8_tree or test_ignore_world_contrast_against_a_world_bound_consumer'
+```
+
+## Replace-loop prune and merge-side preserve see the replacing package's `NEEDED.ELF.2` (#224 + #229 DONE, 2026-09-27)
+
+One gap in two halves. Real feeds the new package's `NEEDED` lines explicitly because its vdb entry is still `-MERGING-` and `cpv_all()` skips it: on the unmerge side `dblink.unmerge(..., needed=<build-info>/NEEDED.ELF.2, preserve_paths=…)` → `_prune_plib_registry` → `LinkageMapELF.rebuild(exclude_pkgs, include_file=needed, preserve_paths)` (`vartree.py:2425-2429`, `LinkageMapELF.py:212-216`); on the merge side `dblink.treewalk` calls `self._linkmap_rebuild(include_file=needed)` before `_find_libs_to_preserve()`. Since #183 portuale's `read_all_needed_entries` skips `-MERGING-` too, but neither #178's `linkage_owner_entries` nor `find_preserve_paths_for_merge` had the include feed — so a preserved library whose only remaining consumer is the replacing package could be pruned (#224) or missed for preservation (#229). Fixes: portuale `66cda605` passes the `-MERGING-<new_pf>/NEEDED.ELF.2` lines (the build-info copy) into the replace-loop prune, and `f5bc9fd7` feeds the tmp entry's `NEEDED.ELF.2` first, owner none, into the merge-side preserve computation. Both Rust-only (pmtest untouched), each with a unit test naming the consumer-only-by-the-replacer shape. Beds: merge gate + `l32` 0 unexplained. Re-run the unit tests:
+
+```sh
+# from portuale/rust; expect 1 passed each
+cargo test --release -p portuale replace_loop_prune_sees_the_replacing_packages_merging_needed
+cargo test --release -p portuale merge_side_preserve_sees_the_replacing_packages_merging_needed
+```
+
+## An all-noop plan with display flags stops with `Nothing to merge` (#225 DONE, 2026-09-27)
+
+Real `action_build` (`_emerge/actions.py:496-521`) prints `Nothing to merge; quitting.` and returns before the mtimedb rotation and before `Scheduler`, so the resume list is untouched; portuale prompted, rotated, and (since #179) wrote the empty list when `--ask`, `--tree`, or `--verbose` was given. Portuale `4b69739c` returns right after the list/`Total:` rendering (pmtest `3ab3f0c`, reusing #179's stale-list pattern: the display-flag pins assert the message, the untouched file, and no prompt; the negative keeps rotation plus #179's write). Bed: `l32` 0 unexplained. Residue: #232. Re-run the pins:
+
+```sh
+# from ../pmtest; expect 4 passed
+python3 -m pytest pytests-contract-suite/test_portuale.py -q -p no:cacheprovider \
+  -k 'test_emerge_ask_nothing_to_merge_never_prompts or test_emerge_tree_nothing_to_merge_leaves_the_resume_list_alone or test_emerge_verbose_nothing_to_merge_leaves_the_resume_list_alone or test_emerge_plain_all_noop_plan_still_writes_the_empty_resume_list'
+```
+
+## The quickpkg `Packages` stanza carries `REPO` (#226 DONE, 2026-09-27)
+
+Real quickpkg packs the whole vdb dir, so the vdb `repository` file becomes the stanza's `REPO` — written last, after `MTIME`, unless it equals the header value (`_pkgindex_inherited_keys`, `bintree.py:630`, `getbinpkg.py:164-168`); portuale's `quickpkg_from_vdb` never read `repository`. Portuale `4a396e04` reads it and appends `REPO` last with the same header-equals omission (Rust-only; #203's real probe `l32/dep-a` ends `…, MTIME, REPO: l32`). Beds: merge gate + `l32` 0 unexplained. Re-run the unit tests:
+
+```sh
+# from portuale/rust; expect 1 passed and 30 passed
+cargo test --release -p portuale quickpkg
+cargo test --release -p portuale ebuild_package
+```
+
+## The L0 and fixture-oracle comparators check the skipped-updates warning block (#227 DONE, 2026-09-27)
+
+The r25 cell (`l0-fx-20260927T213111Z`) reported 0 unexplained while portuale printed the `One or more updates/rebuilds have been skipped due to a dependency conflict` warning and real did not. Fix, in pmtest `differential-test-bed/compare/` (`9da31fc` + allowlist `1878415`): the block's presence and its package list are compared as their own finding category (portuale's one-block-per-parent grouping is regrouped to real's one-block-per-slot shape for the package-list comparison). Re-running L0 and the fixture oracle with the comparator filed what appears: #230 plus the r25/whpuller rows of #25. Re-run the comparator checks:
+
+```sh
+# from ../pmtest; expect ALL OK (15 checks)
+python3 differential-test-bed/compare/test-skipped-updates.py
+```
+
+## Circular-dependency cycle lines print each edge's real priority (#228 DONE, 2026-09-28)
+
+Real prints each edge's `priorities[-1]` (`resolver/circular_dependency.py` debug print; `DepPriority.__str__`, `_emerge/DepPriority.py:52-70`), which can be `runtime`, `runtime_slot_op`, `buildtime_slot_op`, `optional`, or `soft`; portuale's `print_circular_block` hard-coded `buildtime`. Every pinned cycle today is buildtime-only, so a mixed-priority unserializable cycle would misrender. Portuale `9ce79004` + `0e3a1b83` thread the real label per edge (pmtest `1c8a58e`, new fixture `dev-libs/slopcyca` plus `test_mixed_priority_cycle_prints_each_edge_real_label`). Guard: fixture oracle 7/7, L0 identical to Z0. Re-run the pin:
+
+```sh
+# from ../pmtest; expect 1 passed
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider \
+  -k 'test_mixed_priority_cycle_prints_each_edge_real_label'
+```
+
+## Skipped-update warnings print real's USE display and root suffix (#230 DONE, 2026-09-28)
+
+Real's missed-update block (`_show_missed_update_slot_conflicts`, `3rdparty/portage: lib/_emerge/depgraph.py:1652`) prints each package with its `pkg_use_display` (`lib/_emerge/UseFlagDisplay.py:55`: whole effective USE masked to the valid-IUSE domain, grouped per USE_EXPAND variable) and, under a non-`/` ROOT, `to '<root>'` for merge nodes and `installed in '<root>'` for installed ones (`lib/_emerge/Package.py:568-608`). Portuale printed every row bare (`USE=""`, no root). Now the three `SkippedUpdate` producers carry the display and the renderer reuses the slot-collision notice's painter, with merge nodes kept bare by the #206 convention and only installed consumers carrying the real path (portuale `61ffbc88`/`a6825b5d`, pmtest `9648488` re-pins plus `2963703` comparator `to`-suffix normalisation, `75a766b` post-#220 re-pins; bless `3126268` moved 65 corpus cases in that block only, no rc change; merge `669363f0`/`c1ecaa9`). Residue: the missed line's USE under staged-ROOT beds comes from real's running-root `/` tree, which portuale deliberately does not model, filed as #242 (narrow allowlist `skipped-updates-cross-root-missed-line`, pmtest `a7dba52`).
+
+```sh
+# from ../pmtest; expect 7 passed
+git clean -fdq fixtures/var
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider -k 'test_upstream_blocker_pg0_all_orders_pin_x1_and_uninstall_y1 or test_oracle_210_slot_change_reinstall_withheld_with_a_skip_notice or test_or_group_alternative_yields_to_the_next_when_backtracking_masks_it or test_unsolvable_slot_conflict_resolved_by_masking_a_puller_version or test_tree_mg2top_nests_backtrack_parents_under_the_earliest_puller or test_oracle_90_reversed_two_targets_withhold_with_a_skip_notice'
+```
+
+## `--resume` and remote runs print the news notices, and `--ask --read-news` offers to read them (#231 DONE, 2026-09-28)
+
+Real prints the news notice before the resolve and after the merge on every non-`--pretend` run including resumed ones (`run_action`, `3rdparty/portage: lib/_emerge/actions.py:4264-4288`, resume handled inside `action_build`, unconditional `post_emerge` at `:4289-4297`), and with `--ask --read-news` asks "Would you like to read the news items while calculating dependencies?" before spawning `eselect news read`. Portuale printed no notice on `--resume` runs, returned early on remote execution before the tail, and had no `--read-news` flag or prompt at all. All three paths are ported (the remote early return keeps its shape with a comment: the local vdb never changes, so real's `_pkgs_changed` gate in `post_emerge.py:112-117` prints nothing there either) in portuale `9d6e9142` with pmtest `3ed5de3` pins; bed `l32` 0 unexplained. Residue #234 (news-prompt EOF and `=True` spellings) shipped separately.
+
+```sh
+# from ../pmtest; expect 8 passed (5 new #231 + 3 older #234 ask_read_news)
+git clean -fdq fixtures/var
+python3 -m pytest pytests-contract-suite/test_portuale.py -q -p no:cacheprovider -k 'resume_prints_news_notices or remote_success_prints_no_post_merge_notice or ask_read_news'
+```
+
+## A selective all-noop run without `--oneshot` rotates the resume list and records world favorites (#232 DONE, 2026-09-28)
+
+Real's deferral arm (`3rdparty/portage: lib/_emerge/actions.py:514-516`) does not return early: it falls through to the `resume_backup` rotation (`:664-672`) and `saveNomergeFavorites`, skipping only the scheduler. Portuale's #225 early return skipped the rotation too, so a stale resume list survived where real moves it aside, and nothing was recorded in the world file. The arm now prints the single blank line, rotates unconditionally, and records through the existing world writers with real's suppression set (`--buildpkgonly`/`--onlydeps` suppress the record; `--onlydeps` also suppresses the deferral itself via the `actions.py:257` fold; `world-candidate = false` sets neither trigger nor record), prompting under `--ask` (portuale `7d134c9d`/`cb0da003`/`a8f7a96c`/`f2ce0380`/`2db50a19`/`7c913355`, pmtest `55f0aaf`/`8573274`/`57e42de`; merge `91257ef2`/`947091e`). L1 merge gate and L32 clean.
+
+```sh
+# from ../pmtest; expect 8 passed
+git clean -fdq fixtures/var
+python3 -m pytest pytests-contract-suite/test_portuale.py -q -p no:cacheprovider -k 'selective_noop or onlydeps_selective_noop or non_candidate_set'
+```
+
+## An installed world member's stale built `:=` dependency no longer aborts `@world` (#233 DONE, 2026-09-28)
+
+Real iterates the installed database on every resolve (`_wrapped_select_pkg_highest_available_imp`, `3rdparty/portage: lib/_emerge/depgraph.py:7854+`, falling back in `_select_pkg_from_installed` at `:8518-8524`), so a world member's recorded `:0/1=` dependency is satisfied from the installed instance instead of pulling a second instance. Portuale evaluated the recorded dependency as a hard forward edge, so `--changed-slot --update --deep --newuse @world` on the g210 shape aborted with rc 1 ("there are no ebuilds to satisfy dev-libs/reinstslottarget:0/1=") before the reverse-dependency scan. A runtime edge with no visible candidate now settles to the installed instance when one matches, scoped to slot-operator atoms on plain runtime edges (portuale `d597f24e`, pmtest `fb094af` pin plus removal of the `g210-world-installed-arg-hard-edge` allowlist entry). Real merges the unrelated world updates and withholds the reinstall with rc 0; portuale prints the identical four lines. L0 identical to Z0, fixture oracle green.
+
+```sh
+# from ../pmtest; expect 1 passed
+git clean -fdq fixtures/var
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider -k 'test_oracle_233_world_member_stale_slot_operator_dep_does_not_abort_world'
+```
+
+## The upstream-test translator stops the `gpg-agent` it starts (#235 DONE, 2026-09-28)
+
+`scripts/upstream_resolver_translate.py` points `PORTAGE_GNUPGHOME` at a fresh directory per run, and the playground's binpkg signing starts a `gpg-agent --homedir <dir> --daemon` there that nothing stopped or removed (335 stray daemons found on 2026-09-28). An exit handler now runs `gpgconf --homedir <dir> --kill gpg-agent` and removes the directory (pmtest `89ef261`, standalone, no product change, no pins). Verified the handler is registered:
+
+```sh
+# from ../pmtest; expect the atexit registration plus the gpgconf kill and rmtree lines
+grep -n "gpgconf\|atexit\|rmtree" scripts/upstream_resolver_translate.py
+```
+
+## The `--backtrack=0` unsatisfiable-pin case is oracled on 3.0.82.2 (#237 DONE, 2026-09-28)
+
+#209's probe ran on a 3.0.81.3 image while only the 3.0.82.2 source was read. The `=dev-libs/r25lib-2.0 --backtrack=0` shape is now a fixture-oracle cell in `l0-fixture-oracle-r25.txt` (pmtest `2fc7922`, standalone, no product change: portuale already matched the probed expectation, rc 1 with the residual slot-collision block). On the 3.0.82.2 bed image real and portuale agree, 0 unexplained findings, so #209's grounding holds on 3.0.82.2.
+
+```sh
+# from ../pmtest; covers the new r25-bt0-unsat cell (bed, not re-run here)
+differential-test-bed/run/l0-fixture-oracle-all.sh
+```
+
+## A USE-conditional-only `||` group emptied by USE fails at EAPI 7+ (#238 DONE, 2026-09-28)
+
+Real's `use_reduce` (`3rdparty/portage: lib/portage/dep/__init__.py:864-869`) turns an emptied `|| ( )` into the unsatisfiable atom `__const__/empty-any-of` whenever `empty_groups_always_true` is false (EAPI 7 and up, `lib/portage/eapi.py:295`); EAPI 6 and below still drop the group. Portuale's resolver flattening dropped the empty group at every EAPI and merged with rc 0. The rule is ported into the resolver path (the structured path already had it), with the package EAPI at the six flatten sites and `false` for installed walks where real passes `eapi=None` (portuale `c3d214a9`; fixtures `dev-libs/condanyof` plus oracle cell in pmtest `e30af34`, contract pin in `a22476a`, CASES label fix `bc593c2`; merge `5533d6cb`/`1b4aa18`). The L0 plasma-meta 465 to 472 move seen on its bed was bisected to #218, not #238; since #216 main is back at 465 (a suppressed row). Guard: L0 identical or better row by row, fixture oracle green.
+
+```sh
+# from ../pmtest; expect 1 passed
+git clean -fdq fixtures/var
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider -k 'test_or_group_emptied_by_use_conditionals_fails_at_eapi7'
+```
+
+## The translator's `--no-assert` patch is narrowed to equality asserts and its EAPI floor is tested (#239 DONE, 2026-09-28)
+
+`scripts/upstream_resolver_translate.py` neutralised every `assert*` method and turned `assertRaises` into a swallow-all when flooring EAPIs, so a floored playground's validity rested only on base-vs-floor case counts. An upstream census (247 `assertEqual` for every recorded-result comparison; the 32 `assertTrue`, 7 `assertIsNotNone`, 3 `assertNotIn`, 1 `assertIs`, 1 `assertIn` guarding tracker/depgraph validity; the single `assertRaises` at `test_package_tracker.py:57`) shows only `assertEqual` plus the unused container aliases can legitimately move under the floor, so the patch now no-ops exactly those and `assertRaises` stays real and aborts loudly on a broken playground. The change also records per-module playground/case counts, passes `--eapi-floor` through without the None-to-"0" round-trip, and adds a unit test for `_floor_eapi` (pmtest `3003517`, standalone; regenerating every module gives byte-identical fixtures and CASES).
+
+```sh
+# from ../pmtest; expect 8 passed
+git clean -fdq fixtures/var
+python3 -m pytest pytests-contract-suite/test_translator_floor.py -q -p no:cacheprovider
+
+## Ctrl-C at a `--ask` prompt prints `Interrupted.` and exits 130 (#240 DONE, 2026-09-28)
+
+Real catches `KeyboardInterrupt` and `EOFError` out of `input()`, prints `Interrupted.`, and exits with `128 + SIGINT` from inside `UserQuery.query` (`3rdparty/portage: lib/_emerge/UserQuery.py:74-76`), so the caller's `Quitting.` never runs; this covers the merge, news, and config `Selection?` prompts. Portuale installed no handler, so the process died by signal with no `Interrupted.` line, and merge-prompt EOF printed a spurious `Quitting.` after it. A prompt-scoped SIGINT guard (installed on prompt entry, restored on drop, so merges and children keep the default disposition) plus a raw-read loop that observes `EINTR` gives the merge, news, and `Selection?` prompts the exit-130 shape, and merge-prompt EOF no longer adds `Quitting.` (portuale `f0188b15`/`936d128a`, pmtest `9c82243`/`66ef653`; merge `b9d17bed`/`21f3d03`). Merge-path gate: L1 glibc plus bash reinstall and L32 clean. Residue: the non-privileged `--pretend` offer prompt goes to #246.
+
+```sh
+# from ../pmtest; expect 3 passed
+git clean -fdq fixtures/var
+python3 -m pytest pytests-contract-suite/test_portuale.py -q -p no:cacheprovider -k 'sigint'
+```
+
+## Eleven `true_y_or_n` options accept `=True` (#241 DONE, 2026-09-28)
+
+Real gives `--changed-deps`, `--changed-deps-report`, `--changed-slot`, `--deselect`, `--quiet`, `--quiet-build`, `--selective`, `--verbose`, `--with-test-deps`, `--autounmask-keep-keywords`, and `--autounmask-keep-masks` the choices `("True", "y", "n")` (`3rdparty/portage: lib/_emerge/main.py:320-322` with per-option sites) and normalises with `in true_y`, while a separate-word `True` stays positional (the bare-flag insert set is `y_or_n`-only). Portuale accepted only `=y`/`=n` (rc 2 unrecognized option for the first nine; a wrong `choose from "y", "n"` message for the last two). All eleven take the `--ask`/`--read-news` shape from #234, the keep options' messages name the real choices, and the arm comments cite real's choice lines (portuale `20725103`, pmtest `9743cda`; 11 Rust byte-equality tests, 11 CASES rows).
+
+```sh
+# from ../pmtest; expect 13 passed (11 new #241 + 2 older #234 ask/read-news)
+git clean -fdq fixtures/var
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider -k 'spelling'
+```
