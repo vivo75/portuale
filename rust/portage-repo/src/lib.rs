@@ -15296,9 +15296,11 @@ type SlotOpRebuildScan = (BTreeSet<(String, String)>, Vec<(String, String)>);
 /// `reachable` gate: the slot-conflict path rebuilds graph-node runtime
 /// consumers in both shapes.
 ///
-/// Cuts (unchanged from v1): no `_slot_operator_check_reverse_dependencies`
-/// rejection, no `_slot_operator_update_probe` family (v2 `#24b`), no
+/// Cuts (v2 `#24b` remainder): no `_slot_operator_check_reverse_dependencies`
+/// refusal (the scan schedules whenever the probe's shape holds; a parent
+/// whose atom the new child violates does not veto), no
 /// `slot_operator_mask_built` for non-installed binaries (v2 `#24c`).
+#[allow(clippy::too_many_arguments)]
 fn slot_operator_rebuild_scan(
     root: &Path,
     repos: &[RepoConfig],
@@ -15307,10 +15309,18 @@ fn slot_operator_rebuild_scan(
     already: &BTreeSet<(String, String)>,
     undone: &BTreeSet<(String, String)>,
     with_bdeps: bool,
+    update: bool,
+    top_level_cps: &HashSet<(String, String)>,
 ) -> SlotOpRebuildScan {
     // cp -> (new version, new slot, new sub-slot) for every entry that
     // replaces an installed version in that slot.
     let mut new_slot: HashMap<(String, String), (String, String, String)> = HashMap::new();
+    // cp -> (new version, new slot, new sub-slot) for every entry merged
+    // into a fresh slot (no installed instance in that slot -- real's
+    // `_get_installed_best` empty-`myinslotlist` case, rendered `[ebuild N]`).
+    // A provider that moves slot only ever arrives this way; the update
+    // probe's new-child-slot arm (`:3121-3126`) is the sole consumer.
+    let mut new_slot_fresh: HashMap<(String, String), (String, String, String)> = HashMap::new();
     let mut in_graph: HashSet<(String, String)> = HashSet::new();
     for e in entries {
         // #72 B3: a removal installs nothing, so it is not "in graph" for
@@ -15337,8 +15347,26 @@ fn slot_operator_rebuild_scan(
                 (version.clone(), slot, sub_slot),
             );
         }
+        if let PretendOutcome::New { version } = &e.outcome
+            && let (Some(slot), Some(sub_slot)) = (e.slot.clone(), e.sub_slot.clone())
+        {
+            new_slot_fresh.insert(
+                (e.category.clone(), e.package.clone()),
+                (version.clone(), slot, sub_slot),
+            );
+        }
     }
     let installed = all_installed_packages(root);
+    // cp -> every installed (version, main slot): the update probe's
+    // superseded child (`dep.child`) is the installed instance in the
+    // consumer's bound slot, looked up per built atom below.
+    let mut installed_by_cp: HashMap<(String, String), Vec<(String, String)>> = HashMap::new();
+    for p in &installed {
+        installed_by_cp
+            .entry((p.category.clone(), p.package.clone()))
+            .or_default()
+            .push((p.version.clone(), p.slot.clone()));
+    }
     let mut scheduled: BTreeSet<(String, String)> = already.clone();
     let mut abi_rebuilds: Vec<(String, String)> = Vec::new();
     // #65 S2: every cp this pass actually walked (any outcome, installed
@@ -15355,18 +15383,33 @@ fn slot_operator_rebuild_scan(
         .iter()
         .map(|e| (e.category.clone(), e.package.clone()))
         .collect();
-    // #24 S5: the rest of this function is the post-walk vdb scan, which
-    // stays behind the `reachable` gate (complete mode). The
-    // `_slot_change_probe` half below is *not* complete-mode gated in
+    // #24 S5: the post-walk vdb scan stays behind the `reachable` gate
+    // (complete mode) for the same-slot arm. The #211 new-slot arm
+    // additionally accepts walked consumers: real registers slot-operator
+    // deps for every walked parent (`_add_pkg_deps`), and the update
+    // probe's own gate is `want_update`, not reachability -- an empty
+    // world (the conflict-mass shape) leaves `reachable` empty while the
+    // installed consumers sit in the graph as walked nodes.
+    // The `_slot_change_probe` half below is *not* complete-mode gated in
     // real (its first trigger arm runs for any merge-bound parent,
     // 3103-3107), so it is called unconditionally.
-    if !new_slot.is_empty() && !reachable.is_empty() {
+    if !new_slot.is_empty() || !new_slot_fresh.is_empty() {
         for pkg in &installed {
             let cp = (pkg.category.clone(), pkg.package.clone());
-            if undone.contains(&cp)
-                || !reachable.contains(&cp)
-                || (in_graph.contains(&cp) && !already.contains(&cp))
-            {
+            if undone.contains(&cp) || (in_graph.contains(&cp) && !already.contains(&cp)) {
+                continue;
+            }
+            // Same-slot arm scope (frozen): complete-mode reachability only.
+            let same_slot_scope = !new_slot.is_empty() && reachable.contains(&cp);
+            // New-slot arm scope (#211): reachability or walked this pass.
+            // Merge-bound consumers stay skipped by the `in_graph` rule
+            // above -- their live `:=` re-binds through their own walk and
+            // their vdb is rewritten at merge, so no reinstall is needed
+            // (real's not-installed-parent disjunct would probe them; the
+            // refusal half of that probe is v2 `#24b` remainder either way).
+            let new_slot_scope =
+                !new_slot_fresh.is_empty() && (reachable.contains(&cp) || walked.contains(&cp));
+            if !same_slot_scope && !new_slot_scope {
                 continue;
             }
             let consumer_cpv = pkg.cpv();
@@ -15391,10 +15434,56 @@ fn slot_operator_rebuild_scan(
                         return None;
                     }
                     let (a_slot, a_sub) = (atom.slot.as_deref()?, atom.sub_slot.as_deref()?);
-                    let (n_ver, n_slot, n_sub) =
-                        new_slot.get(&(atom.category.clone(), atom.package.clone()))?;
-                    (a_slot == n_slot && a_sub != n_sub)
-                        .then(|| format!("{}/{}-{n_ver}", atom.category, atom.package))
+                    let provider_cp = (atom.category.clone(), atom.package.clone());
+                    if same_slot_scope {
+                        let (n_ver, n_slot, n_sub) = new_slot.get(&provider_cp)?;
+                        if a_slot == n_slot && a_sub != n_sub {
+                            return Some(format!("{}/{}-{n_ver}", atom.category, atom.package));
+                        }
+                    }
+                    // #211 (v2 `#24b`): real `_slot_operator_update_probe`
+                    // with `new_child_slot=True` (`depgraph.py:3121-3126`,
+                    // bug 486580): an installed consumer whose built
+                    // `:S/SS=` dep is bound to a slot the provider no
+                    // longer occupies rebuilds against the fresh slot.
+                    if new_slot_scope {
+                        let (f_ver, f_slot, _) = new_slot_fresh.get(&provider_cp)?;
+                        if *f_slot == a_slot {
+                            return None;
+                        }
+                        // The superseded child: an installed provider
+                        // instance must sit in the bound slot (else there
+                        // is no `dep.child` to update away from).
+                        let old_ver = installed_by_cp.get(&provider_cp)?.iter().find_map(
+                            |(version, slot)| (*slot == a_slot).then(|| version.clone()),
+                        )?;
+                        // Higher version only (real `pkg < dep.child`
+                        // skips downgrades; equal versions -- a slot move
+                        // without a revbump -- probe).
+                        if vercmp_ordering(f_ver, &old_ver) == Ordering::Less {
+                            return None;
+                        }
+                        // `want_update` stand-in (real `:3805-3809`):
+                        // `--update`, or the provider itself is directly
+                        // requested (real's arg-chain disjunct). The
+                        // registration-time complete-mode/depth nuance is
+                        // not modelled.
+                        if !update && !top_level_cps.contains(&provider_cp) {
+                            return None;
+                        }
+                        // A `replacement_parent` must exist: with no
+                        // visible tree candidate the forced reinstall
+                        // would dead-end (real finds no replacement and
+                        // does nothing).
+                        if list_candidates(repos, &pkg.category, &pkg.package)
+                            .ok()
+                            .is_none_or(|cands| cands.is_empty())
+                        {
+                            return None;
+                        }
+                        return Some(format!("{}/{}-{f_ver}", atom.category, atom.package));
+                    }
+                    None
                 })
                 .collect();
             providers.sort();
@@ -15952,6 +16041,12 @@ fn slot_operator_rebuild_entries(
             &scheduled,
             &BTreeSet::new(),
             with_bdeps,
+            // The `--solver=` bridge keeps the pre-#211 behaviour: the
+            // new-slot update arm stays off here (no `update`/`top_level`
+            // context at this layer), so this fixpoint can only schedule
+            // same-slot rebuilds exactly as before.
+            false,
+            &HashSet::new(),
         );
         abi_rebuilds = pairs;
         if next == scheduled {
@@ -19991,6 +20086,40 @@ pub struct GraphResult {
     /// v1 cut: real's `# <filename>:` + masking-comment lines (no
     /// source-file provenance on portuale's `package_mask` list).
     pub autounmask_mask_changes: Vec<AutounmaskChange>,
+    /// Backlog #217: the settled pass took an autounmask path on which
+    /// real's final `_resolve` would NOT have set `_success_without_
+    /// autounmask` -- so `need_config_change` (`depgraph.py:11708`)
+    /// reaches its third branch (`:11752`) and sets `_autounmask_
+    /// backtrack_disabled`, and the "terminated early" notice prints.
+    /// Two shapes, both observed on the final pass:
+    ///
+    /// * a `package.use` flip was folded for an already-graphed
+    ///   package (the already-resolved-slot re-check or the parent
+    ///   flip with `--autounmask-backtrack=y` grew the settled
+    ///   `autounmask_use_config` accumulator -- real `_needed_use_
+    ///   config_changes` grown for a digraph node). Real's
+    ///   `want_restart_for_use_change` (`:7719`) answers True there,
+    ///   so `_resolve` returns before the autounmask tail (oracle:
+    ///   `aucasctop` prints the notice, `fixtures/abort-captures/`);
+    /// * a failed dependency was rescued by a parent USE flip after
+    ///   the walk failed (default `--autounmask-backtrack` off: real
+    ///   `_apply_parent_use_changes` (`:5820`) collects the flip into
+    ///   `_needed_use_config_changes` post-failure, so `_have_
+    ///   autounmask_changes()` holds while the tail was never
+    ///   reached).
+    ///
+    /// A fresh-candidate flip (the package is picked with the flip
+    /// before it is ever graphed) leaves this False: real reaches the
+    /// tail (`:5793`, "reserved for cases where there are *zero* other
+    /// problems"), the early return (`:11713-11717`) fires, and the
+    /// notice stays off (oracle: `abort-au-plain`).
+    ///
+    /// Approximation: portuale folds a graphed-package flip
+    /// unconditionally while real additionally requires the reduced
+    /// deps to change (or a parent USE-dep to break), so such a flip
+    /// still counts here -- that only ever keeps the notice (the
+    /// status quo), never removes it where real prints it.
+    pub autounmask_no_clean_tail: bool,
     /// `(provider-cpv, consumer-cpv)` pairs behind each slot-operator
     /// auto-rebuild (real `_compute_abi_rebuild_info`'s `_forced_rebuilds`):
     /// the consumer got a `Reinstall { slot_operator_rebuild: true }`
@@ -20060,6 +20189,59 @@ pub struct GraphResult {
     /// bare `!!! no visible ebuild for dependency` line, after the two
     /// sibling blocks' precedence.
     pub plain_miss_deps: Vec<PlainMissDepReport>,
+}
+
+impl GraphResult {
+    /// Backlog #217: real `_dynamic_config._autounmask_backtrack_
+    /// disabled` as a pure predicate over the settled result -- the
+    /// gate for `_display_autounmask`'s "backtracking has terminated
+    /// early" tail (`depgraph.py:11093`, set at exactly one site,
+    /// `need_config_change:11752`).
+    ///
+    /// Real sets the flag iff autounmask changes exist (`_have_
+    /// autounmask_changes`), backtracking is allowed (`_allow_
+    /// backtracking`, i.e. `--backtrack` budget > 0) and not opted back
+    /// in (`--autounmask-backtrack=y`, or `--autounmask-continue`
+    /// implying it), AND `need_config_change` reaches its third branch:
+    /// the early return (`:11713-11717`) did not fire -- neither
+    /// `_success_without_autounmask` (the `_resolve` tail `:5793`,
+    /// "reserved for cases where there are *zero* other problems") nor
+    /// `_required_use_unsatisfied` (`:3652`) -- and the slot-conflict
+    /// handler branch (`:11719-11736`) found no changes to suggest.
+    ///
+    /// Portuale's terms for "zero other problems" (i.e. real would have
+    /// reached the tail): the outcome is `Complete`, no restart-worthy
+    /// flip was folded and no post-failure parent rescue ran
+    /// ([`GraphResult::autounmask_no_clean_tail`]), no slot conflict
+    /// was recorded, no unsolvable blocker exists, and
+    /// `--buildpkgonly`'s own check is satisfied. Anything else means
+    /// another failure coincides and the notice stays. Known
+    /// approximations, all on the keep-the-notice side (never a new
+    /// divergence where real prints it): portuale has no slot-conflict
+    /// handler (branch 2 would suppress there) and no REQUIRED_USE
+    /// early-return signal, and `autounmask_no_clean_tail`
+    /// over-approximates `want_restart_for_use_change` (see its docs).
+    /// Warnings that do not fail real's `_resolve` (`skipped_updates`,
+    /// `skipped_missing_deps`, the masked/use-unsat/plain-miss
+    /// disclosures on a `Complete` outcome) correctly do not count.
+    pub fn autounmask_backtrack_disabled(&self, autounmask_backtrack: bool) -> bool {
+        let has_changes = !self.autounmask_keyword_changes.is_empty()
+            || !self.autounmask_mask_changes.is_empty()
+            || !self.autounmask_use_changes.is_empty()
+            || !self.autounmask_license_changes.is_empty();
+        has_changes
+            && !autounmask_backtrack
+            && self.backtrack_max > 0
+            && (matches!(self.outcome, ResolveOutcome::Aborted { .. })
+                || self.autounmask_no_clean_tail
+                || !self.slot_conflicts.is_empty()
+                || self.buildpkgonly_deps_unsatisfied
+                || self
+                    .entries
+                    .iter()
+                    .any(|e| e.blockers.iter().any(|b| b.unsolvable))
+                || !self.orphan_blockers.is_empty())
+    }
 }
 
 /// One real `--autounmask` change (`depgraph.py::_display_autounmask`):
@@ -22040,6 +22222,15 @@ struct PassResult {
     nvc_dep_atoms: HashMap<(String, String), String>,
     missing_dep_trigger: Option<((String, String), String, String)>,
     autounmask_grew: bool,
+    /// Backlog #217: set when the pass rescued a failed dependency via
+    /// a parent USE flip with `--autounmask-backtrack` off (the
+    /// `'parent_flip` off-arm applies the flip to this dep's resolution
+    /// directly instead of the overlay). Real's counterpart collects
+    /// the flip post-failure (`_apply_parent_use_changes`,
+    /// `depgraph.py:5820`), so the `_success_without_autounmask` tail
+    /// is pre-empted and the "terminated early" notice prints. Rides
+    /// into [`GraphResult::autounmask_no_clean_tail`].
+    parent_flip_rescued: bool,
     edge_kind_map: EdgeKindMap,
     changed_deps_report_entries: Vec<ChangedDepsReportEntry>,
     pprovided_atoms: Vec<String>,
@@ -22158,6 +22349,10 @@ struct PassState {
     /// The driver at the bottom re-runs the whole walk with the grown
     /// config, so the flipped package's `flag?`-gated deps appear.
     autounmask_grew: bool,
+    /// Backlog #217: set when the pass rescued a failed dependency via
+    /// a parent USE flip with `--autounmask-backtrack` off (the
+    /// `'parent_flip` off-arm). Rides into `PassResult` (same name).
+    parent_flip_rescued: bool,
     /// Set (once) when this pass hit a dependency `NoVisibleCandidate`
     /// whose non-top-level parent isn't already latched -- the driver
     /// at the bottom masks `!=parent-cpv` and re-runs (real
@@ -22716,6 +22911,11 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     // ascent like every other change (#135 (e)).
                     dep_chain: Vec::new(),
                 });
+                // Backlog #217: a failed dep rescued by a parent flip
+                // (real `_apply_parent_use_changes` collecting
+                // post-failure) pre-empts the `_success_without_
+                // autounmask` tail -- the notice stays.
+                state.parent_flip_rescued = true;
                 let mut disp_seen: HashSet<String> = HashSet::new();
                 let mut disp: Vec<(String, bool)> = parent_cand
                     .iuse
@@ -25174,6 +25374,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         nvc_dep_atoms: state.nvc_dep_atoms,
         missing_dep_trigger: state.missing_dep_trigger,
         autounmask_grew: state.autounmask_grew,
+        parent_flip_rescued: state.parent_flip_rescued,
         edge_kind_map: state.edge_kind_map,
         changed_deps_report_entries: state.changed_deps_report_entries,
         // Backlog #90 (S1): the walk resolves last-declared-first
@@ -25624,6 +25825,8 @@ fn collect_feedback(
             &grown.slot_operator_replace_installed,
             &grown.slot_operator_undone,
             ctx.with_bdeps,
+            ctx.update,
+            &ctx.top_level_cps,
         );
         pass.abi_rebuilds = Some(abi_rebuilds);
         if scheduled != grown.slot_operator_replace_installed {
@@ -25723,6 +25926,8 @@ fn assemble_result(
                 &params.slot_operator_replace_installed,
                 &params.slot_operator_undone,
                 ctx.with_bdeps,
+                ctx.update,
+                &ctx.top_level_cps,
             )
             .1
         }
@@ -26132,6 +26337,17 @@ fn assemble_result(
         autounmask_use_changes: pass.autounmask_use_changes,
         autounmask_license_changes: pass.autounmask_license_changes,
         autounmask_mask_changes: pass.autounmask_mask_changes,
+        // Backlog #217: the settled accumulator still holds a flip
+        // folded for an already-graphed package (the Settle/Feedback
+        // params carry the pass's overlay union -- see
+        // `collect_feedback`'s `grown`), i.e. real's final pass grew
+        // `_needed_use_config_changes` for a digraph node and wanted a
+        // restart instead of reaching the `_success_without_autounmask`
+        // tail -- or the pass rescued a failed dep via a parent USE
+        // flip (real `_apply_parent_use_changes` collecting
+        // post-failure). Either way the tail was pre-empted.
+        autounmask_no_clean_tail: !params.autounmask_use_config.is_empty()
+            || pass.parent_flip_rescued,
         abi_rebuilds,
         circular_deps,
         masked_deps: pass.masked_deps,
@@ -39660,6 +39876,89 @@ mod tests {
         }
     }
 
+    #[test]
+    fn autounmask_backtrack_disabled_gate() {
+        // Backlog #217, both branches of the "terminated early" gate
+        // (`GraphResult::autounmask_backtrack_disabled`, real
+        // `_autounmask_backtrack_disabled`, `depgraph.py:11752`).
+        // Fixture ground truth is live real, captured in
+        // `fixtures/abort-captures/`: `abort-au-plain`'s USE block has
+        // NO notice (lone change -- `_success_without_autounmask`),
+        // `abort-au-cycle`'s and `aucasctop`'s blocks DO (a cycle /
+        // a restart-worthy flip on the already-graphed `aucascmid`
+        // coincide).
+        let plain = graph_result_autounmask("dev-libs/abort-au-plain");
+        assert!(
+            !plain.autounmask_use_changes.is_empty(),
+            "plain: the change block is still reported"
+        );
+        assert!(
+            !plain.autounmask_no_clean_tail,
+            "plain: fresh-candidate flip, the tail stays clean"
+        );
+        assert!(
+            !plain.autounmask_backtrack_disabled(false),
+            "plain: lone change prints no notice"
+        );
+        // The cycle shape keeps the notice via the outcome arm, and the
+        // restart-wanted shape via the accumulator arm.
+        let cycle = graph_result_autounmask("dev-libs/abort-au-cycle");
+        assert!(
+            !cycle.autounmask_use_changes.is_empty(),
+            "cycle: the change block is still reported alongside"
+        );
+        assert!(
+            cycle.autounmask_backtrack_disabled(false),
+            "cycle: another failure coincides, notice stays"
+        );
+        let casc = graph_result_autounmask("dev-libs/aucasctop");
+        assert!(
+            casc.autounmask_no_clean_tail,
+            "aucasctop: the flip folds for the already-graphed slot"
+        );
+        assert!(
+            casc.autounmask_backtrack_disabled(false),
+            "aucasctop: restart-wanted, notice stays"
+        );
+        // Post-failure parent rescues keep the notice too (real
+        // `_apply_parent_use_changes`, `depgraph.py:5820`).
+        for top in ["dev-libs/parentflipeqpkg", "dev-libs/pfgraphparent"] {
+            let result = graph_result_autounmask(top);
+            assert!(
+                !result.autounmask_use_changes.is_empty(),
+                "{top}: the parent flip is still reported"
+            );
+            assert!(
+                result.autounmask_no_clean_tail,
+                "{top}: the failed dep was rescued by a parent flip"
+            );
+            assert!(
+                result.autounmask_backtrack_disabled(false),
+                "{top}: notice stays"
+            );
+        }
+        // The config conjuncts suppress unconditionally, even where the
+        // notice would otherwise print: `--autounmask-backtrack=y`
+        // opts back in, and `--backtrack=0` leaves real's
+        // `_allow_backtracking` False so the flag is never set.
+        assert!(
+            !graph_result_autounmask_backtrack("dev-libs/abort-au-cycle")
+                .autounmask_backtrack_disabled(true),
+            "backtrack=y suppresses the notice"
+        );
+        let mut no_budget = graph_result_autounmask("dev-libs/aucasctop");
+        no_budget.backtrack_max = 0;
+        assert!(
+            !no_budget.autounmask_backtrack_disabled(false),
+            "--backtrack=0 never prints the notice"
+        );
+        // No changes, no notice -- the predicate's first conjunct.
+        assert!(
+            !graph_result_real("dev-libs/diamond").autounmask_backtrack_disabled(false),
+            "a clean resolve prints no notice"
+        );
+    }
+
     #[track_caller]
     fn assert_one_conflict(
         result: &GraphResult,
@@ -40365,6 +40664,8 @@ mod tests {
             &empty,
             &empty,
             true,
+            false,
+            &HashSet::new(),
         );
         assert_eq!(
             scheduled,
@@ -40380,8 +40681,17 @@ mod tests {
         );
 
         // Nothing changing `bar` -> no rebuilds.
-        let (empty_sched, empty_abi) =
-            slot_operator_rebuild_scan(&dir, &[], &[], &reach, &empty, &empty, true);
+        let (empty_sched, empty_abi) = slot_operator_rebuild_scan(
+            &dir,
+            &[],
+            &[],
+            &reach,
+            &empty,
+            &empty,
+            true,
+            false,
+            &HashSet::new(),
+        );
         assert!(empty_sched.is_empty() && empty_abi.is_empty());
 
         // Not reachable -> the post-walk vdb scan is suppressed entirely
@@ -40396,6 +40706,8 @@ mod tests {
             &empty,
             &empty,
             true,
+            false,
+            &HashSet::new(),
         );
         assert!(none_sched.is_empty() && none_abi.is_empty());
 
@@ -40429,6 +40741,8 @@ mod tests {
             &already,
             &empty,
             true,
+            false,
+            &HashSet::new(),
         );
         assert_eq!(again, already, "the set is stable -- no second restart");
         assert_eq!(
@@ -40459,6 +40773,195 @@ mod tests {
             }
         ));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #211 (v2 `#24b`): real `_slot_operator_update_probe`'s
+    /// new-child-slot arm (`depgraph.py:3121-3126`, bug 486580) -- a
+    /// provider merged into a fresh slot schedules the installed
+    /// consumers bound to the old slot, even with an empty `reachable`
+    /// set, as long as they were walked this pass. Guards: a superseded
+    /// installed child in the bound slot, a higher (or equal) version,
+    /// `--update` (or a directly-requested provider), and a visible tree
+    /// candidate for the consumer.
+    #[test]
+    fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
+        use md5::Digest as _;
+        use std::fmt::Write as _;
+        let base = std::env::temp_dir().join(format!(
+            "portage-repo-slotop-newslot-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        // vdb: provider `massb-1` in slot 1, consumer `massc-1` bound
+        // `massb:1/1=`.
+        for (name, slot, rdepend) in [
+            ("massb-1", "1", ""),
+            ("massc-1", "0", "dev-libs/massb:1/1="),
+        ] {
+            let d = base.join("var/db/pkg/dev-libs").join(name);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+            fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+            fs::write(d.join("repository"), "testrepo\n").unwrap();
+            if !rdepend.is_empty() {
+                fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+            }
+        }
+        // Tree: `massb-2.0` at slot 2/2, plus a `massc-1.0` ebuild (the
+        // replacement parent must exist).
+        let repo = base.join("repo");
+        let write_pkg = |pkg: &str, pv: &str, slot: &str| {
+            let dir = repo.join("dev-libs").join(pkg);
+            std::fs::create_dir_all(&dir).unwrap();
+            let body =
+                format!("EAPI=8\nDESCRIPTION=\"211 probe\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\n");
+            std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
+            let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+            let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=211 probe\nEAPI=8\n".to_string();
+            writeln!(entry, "KEYWORDS=amd64\nSLOT={slot}\n_md5_={md5}").unwrap();
+            let cachedir = repo.join("metadata/md5-cache/dev-libs");
+            std::fs::create_dir_all(&cachedir).unwrap();
+            std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+        };
+        write_pkg("massb", "2.0", "2/2");
+        write_pkg("massc", "1.0", "0");
+        let repos = vec![RepoConfig {
+            name: "testrepo".to_string(),
+            location: repo.clone(),
+            priority: 0,
+            is_main: true,
+            masters: vec![],
+            profile_formats: vec![],
+            cache_formats: vec![],
+            aliases: vec![],
+            sync_type: None,
+            sync_uri: None,
+            volatile: false,
+            module_specific_options: vec![],
+        }];
+        // `massb-2.0` merged into the fresh slot 2; the consumer is walked
+        // (AlreadyInstalled) but `reachable` is empty -- the empty-world
+        // conflict-mass shape.
+        let fresh = GraphEntry {
+            slot: Some("2".into()),
+            sub_slot: Some("2".into()),
+            ..graph_entry("dev-libs", "massb", "2.0")
+        };
+        let consumer = GraphEntry {
+            outcome: PretendOutcome::AlreadyInstalled {
+                version: "1.0".into(),
+            },
+            slot: Some("0".into()),
+            sub_slot: Some("0".into()),
+            ..graph_entry("dev-libs", "massc", "1.0")
+        };
+        let entries = vec![fresh.clone(), consumer.clone()];
+        let empty: BTreeSet<(String, String)> = BTreeSet::new();
+        let massc = ("dev-libs".to_string(), "massc".to_string());
+        let (scheduled, abi) = slot_operator_rebuild_scan(
+            &base,
+            &repos,
+            &entries,
+            &HashSet::new(),
+            &empty,
+            &empty,
+            true,
+            true,
+            &HashSet::new(),
+        );
+        assert_eq!(
+            scheduled,
+            BTreeSet::from([massc.clone()]),
+            "the consumer bound to the abandoned slot rebuilds"
+        );
+        assert_eq!(
+            abi,
+            vec![(
+                "dev-libs/massb-2.0".to_string(),
+                "dev-libs/massc-1".to_string()
+            )]
+        );
+        // No `--update` and provider not directly requested: withheld,
+        // mirroring real's `want_update` gate.
+        let (withheld, _) = slot_operator_rebuild_scan(
+            &base,
+            &repos,
+            &entries,
+            &HashSet::new(),
+            &empty,
+            &empty,
+            true,
+            false,
+            &HashSet::new(),
+        );
+        assert!(withheld.is_empty(), "without --update the probe withholds");
+        // ...unless the provider itself is directly requested (real's
+        // arg-chain disjunct).
+        let top = HashSet::from([("dev-libs".to_string(), "massb".to_string())]);
+        let (via_arg, _) = slot_operator_rebuild_scan(
+            &base,
+            &repos,
+            &entries,
+            &HashSet::new(),
+            &empty,
+            &empty,
+            true,
+            false,
+            &top,
+        );
+        assert_eq!(via_arg, BTreeSet::from([massc.clone()]));
+        // A lower-version fresh slot is a downgrade real never probes.
+        let older = GraphEntry {
+            outcome: PretendOutcome::New {
+                version: "0.9".into(),
+            },
+            slot: Some("2".into()),
+            sub_slot: Some("2".into()),
+            ..graph_entry("dev-libs", "massb", "0.9")
+        };
+        let (downgraded, _) = slot_operator_rebuild_scan(
+            &base,
+            &repos,
+            &[older, consumer.clone()],
+            &HashSet::new(),
+            &empty,
+            &empty,
+            true,
+            true,
+            &HashSet::new(),
+        );
+        assert!(downgraded.is_empty(), "downgrades never probe");
+        // No tree candidate for the consumer: no replacement parent, no
+        // schedule (real finds nothing and does nothing).
+        let (nocand, _) = slot_operator_rebuild_scan(
+            &base,
+            &[],
+            &entries,
+            &HashSet::new(),
+            &empty,
+            &empty,
+            true,
+            true,
+            &HashSet::new(),
+        );
+        assert!(nocand.is_empty(), "no candidate means no schedule");
+        // Neither walked nor reachable: outside the probe's population.
+        let (unwalked, _) = slot_operator_rebuild_scan(
+            &base,
+            &repos,
+            std::slice::from_ref(&fresh),
+            &HashSet::new(),
+            &empty,
+            &empty,
+            true,
+            true,
+            &HashSet::new(),
+        );
+        assert!(unwalked.is_empty(), "unwalked consumers never schedule");
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]
@@ -40529,6 +41032,8 @@ mod tests {
             &empty,
             &empty,
             false,
+            false,
+            &HashSet::new(),
         );
         assert_eq!(
             scheduled, runtime_only,
@@ -40552,6 +41057,8 @@ mod tests {
             &empty,
             &empty,
             true,
+            false,
+            &HashSet::new(),
         );
         assert_eq!(
             scheduled, runtime_only,
@@ -40564,8 +41071,17 @@ mod tests {
         for name in ["rdep", "dep", "bdep", "pdep", "idep"] {
             walked.push(walked_entry(name));
         }
-        let (scheduled, abi) =
-            slot_operator_rebuild_scan(&dir, &[], &walked, &reach, &empty, &empty, true);
+        let (scheduled, abi) = slot_operator_rebuild_scan(
+            &dir,
+            &[],
+            &walked,
+            &reach,
+            &empty,
+            &empty,
+            true,
+            false,
+            &HashSet::new(),
+        );
         assert_eq!(scheduled, all_five);
         assert_eq!(
             abi,
@@ -40595,8 +41111,17 @@ mod tests {
 
         // The S1 gate beats the S2 walk test: even a walked consumer's
         // build-time keys stay out when bdeps is off.
-        let (scheduled, _) =
-            slot_operator_rebuild_scan(&dir, &[], &walked, &reach, &empty, &empty, false);
+        let (scheduled, _) = slot_operator_rebuild_scan(
+            &dir,
+            &[],
+            &walked,
+            &reach,
+            &empty,
+            &empty,
+            false,
+            false,
+            &HashSet::new(),
+        );
         assert_eq!(scheduled, runtime_only);
 
         // The slot-change probe (`slot_operator_slot_change_probe`) reads
@@ -40903,6 +41428,8 @@ mod tests {
             &empty,
             &empty,
             true,
+            false,
+            &HashSet::new(),
         );
         assert_eq!(scheduled, BTreeSet::from([stale.clone()]));
         assert_eq!(
@@ -40922,6 +41449,8 @@ mod tests {
             &empty,
             &undone,
             true,
+            false,
+            &HashSet::new(),
         );
         assert!(done_sched.is_empty(), "`undone` suppresses the rebuild");
         // A reachable set that omits the consumer suppresses the scan --
@@ -40936,6 +41465,8 @@ mod tests {
             &empty,
             &empty,
             true,
+            false,
+            &HashSet::new(),
         );
         assert!(far_sched.is_empty(), "unreachable consumers never schedule");
         let _ = fs::remove_dir_all(&dir);
@@ -41933,6 +42464,7 @@ mod tests {
             nvc_dep_atoms: HashMap::new(),
             missing_dep_trigger: None,
             autounmask_grew: false,
+            parent_flip_rescued: false,
             edge_kind_map: HashMap::new(),
             changed_deps_report_entries: Vec::new(),
             pprovided_atoms: Vec::new(),
@@ -45856,6 +46388,8 @@ mod tests {
             &BTreeSet::new(),
             &latched,
             true,
+            false,
+            &HashSet::new(),
         );
         assert!(
             rescheduled.is_empty(),
@@ -55533,6 +56067,7 @@ mod tests_163 {
             nvc_dep_atoms: HashMap::new(),
             missing_dep_trigger: None,
             autounmask_grew: false,
+            parent_flip_rescued: false,
             edge_kind_map: HashMap::new(),
             changed_deps_report_entries: Vec::new(),
             pprovided_atoms: Vec::new(),

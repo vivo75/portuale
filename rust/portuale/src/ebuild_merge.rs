@@ -1482,17 +1482,45 @@ fn register_preserved_libs(
 /// it under the replacing cpv is the closest this `String`-keyed input
 /// gets, and the owner only feeds that inference, never the keep/drop
 /// verdict.
+///
+/// `replacement_needed` is real `LinkageMap.rebuild()`'s own
+/// `include_file` (backlog #224): the replacing package's
+/// `NEEDED.ELF.2` lines, fed explicitly because its vdb entry still
+/// sits in its `-MERGING-<pf>` temporary at prune time and enumeration
+/// (`read_all_needed_entries`, real `cpv_all()`) skips it -- without
+/// the feed a preserved library whose only remaining consumer is the
+/// replacing package looks orphaned and is pruned. Real indexes those
+/// lines with owner `None` (`LinkageMapELF.rebuild` processes the
+/// include file first); grouped here under the replacing cpv for the
+/// same `String`-keyed reason as `replacement_preserved` above, with
+/// the same verdict-neutrality (the owner only feeds the same-owner
+/// bundled-library runpath inference, never the keep/drop verdict --
+/// and these lines genuinely share one owner, so the inference is, if
+/// anything, more faithful). Empty on every path but the replace-loop
+/// prune and the merge-side preserve computation
+/// (`find_preserve_paths_for_merge`, backlog #229): standalone
+/// `emerge -C` has no replacing package, and the
+/// merge-end prune runs after the rename into place, when the new
+/// entry's own lines are already enumerated.
 fn linkage_owner_entries(
     root: &Path,
     preserved: &BTreeMap<String, Vec<String>>,
     exclude_cpv: Option<&str>,
     replacement_preserved: &BTreeMap<String, Vec<String>>,
+    replacement_needed: &[(String, Vec<crate::needed_elf::NeededEntry>)],
 ) -> Vec<(String, Vec<crate::needed_elf::NeededEntry>)> {
     let mut owner_entries: Vec<(String, Vec<crate::needed_elf::NeededEntry>)> =
         crate::needed_elf::read_all_needed_entries(root)
             .into_iter()
             .filter(|(cpv, _)| Some(cpv.as_str()) != exclude_cpv)
             .collect();
+    for (owner, entries) in replacement_needed {
+        if let Some(slot) = owner_entries.iter_mut().find(|(o, _)| o == owner) {
+            slot.1.extend(entries.iter().cloned());
+        } else {
+            owner_entries.push((owner.clone(), entries.clone()));
+        }
+    }
     let mut scan_input = preserved.clone();
     for (owner, paths) in replacement_preserved {
         scan_input
@@ -1520,12 +1548,49 @@ fn owner_entries_with_preserved_orphans(
     root: &Path,
     preserved: &BTreeMap<String, Vec<String>>,
 ) -> Vec<(String, Vec<crate::needed_elf::NeededEntry>)> {
-    linkage_owner_entries(root, preserved, None, &BTreeMap::new())
+    linkage_owner_entries(root, preserved, None, &BTreeMap::new(), &[])
+}
+
+/// Real `dblink.treewalk()`'s own `needed = os.path.join(inforoot,
+/// LinkageMap._needed_aux_key)` (backlogs #224/#229): the replacing
+/// package's `NEEDED.ELF.2` lines, read from its `-MERGING-<new_pf>`
+/// temporary vdb entry, which holds the build-info copy from
+/// `populate_vdb_tmp` (every build-info file is copied there, the
+/// `scanelf` QA step's `NEEDED.ELF.2` included). Real's replace loop
+/// passes that path as `dblink.unmerge(needed=...)` into
+/// `_prune_plib_registry`, whose `_linkmap_rebuild(include_file=needed,
+/// ...)` indexes the lines explicitly -- because the entry is still
+/// `-MERGING-`, `cpv_all()` (portuale's own `read_all_needed_entries`,
+/// which skips `-MERGING-` names) never yields them. Grouped under the
+/// replacing cpv (see `linkage_owner_entries` for why that owner
+/// choice is verdict-neutral). Empty when the temporary entry carries
+/// no `NEEDED.ELF.2` at all (a package with no ELF content -- real
+/// `grabfile` on a missing file degrades the same way), so callers on
+/// paths with no replacing package simply never call this.
+fn replacement_needed_entries(
+    root: &Path,
+    category: &str,
+    new_pf: &str,
+) -> Vec<(String, Vec<crate::needed_elf::NeededEntry>)> {
+    let needed_path = root
+        .join("var/db/pkg")
+        .join(category)
+        .join(format!("{MERGING_IDENTIFIER}{new_pf}"))
+        .join("NEEDED.ELF.2");
+    let Ok(text) = std::fs::read_to_string(&needed_path) else {
+        return Vec::new();
+    };
+    let entries = crate::needed_elf::NeededEntry::parse_file(&text);
+    if entries.is_empty() {
+        return Vec::new();
+    }
+    vec![(format!("{category}/{new_pf}"), entries)]
 }
 
 /// Real `dblink.treewalk`'s own pre-replace-loop preserve-libs
-/// computation (the `_linkmap_rebuild` + `_find_libs_to_preserve()`
-/// block): rebuild the system-wide `LinkageMap` and select the installed same-slot instance's libraries
+/// computation (the `_linkmap_rebuild(include_file=needed)` +
+/// `_find_libs_to_preserve()` block): rebuild the system-wide
+/// `LinkageMap` and select the installed same-slot instance's libraries
 /// that are still needed (`_find_libs_to_preserve()`, `unmerge=False`).
 /// `new_image_paths` is the just-merged image's own path set (parsed
 /// from `merge_tree`'s `CONTENTS` text) -- real `self.isowner(f)` on the
@@ -1537,14 +1602,20 @@ fn owner_entries_with_preserved_orphans(
 /// the preserve set plus the old instance's own raw `CONTENTS` text (for
 /// entry injection below).
 ///
-/// Must run after `merge_tree` (the files are on disk for `lstat`, and
-/// the new vdb entry is *not* written yet, so -- exactly like real, whose
-/// `LinkageMap` rebuild only sees installed packages -- the new package
-/// is not part of the linkage map) and before `write_vdb_entry`.
+/// Must run after `merge_tree` (the files are on disk for `lstat`) and
+/// after `populate_vdb_tmp` (backlog #183: the new vdb entry *is*
+/// written by then, into its `-MERGING-<pf>` temporary -- the doc used
+/// to say it was not). Enumeration (`read_all_needed_entries`, real
+/// `cpv_all()`) still skips `-MERGING-` names, so the new package
+/// reaches the linkage map only through the explicit include feed below
+/// (real `include_file=needed`, backlog #229): without it a library
+/// owned by the replaced instance whose only consumer is the replacing
+/// package would not be preserved. Runs before `write_vdb_tmp_contents`.
 fn find_preserve_paths_for_merge(
     root: &Path,
     category: &str,
     package: &str,
+    new_pf: &str,
     main_slot: &str,
     new_image_paths: &BTreeSet<String>,
 ) -> Option<(BTreeSet<String>, String)> {
@@ -1571,7 +1642,21 @@ fn find_preserve_paths_for_merge(
     // here, and a second consecutive soname bump would preserve nothing
     // (backlog #178).
     let preserved = read_plib_registry(root).preserved_libs();
-    let owner_entries = owner_entries_with_preserved_orphans(root, &preserved);
+    // Real `LinkageMap.rebuild(include_file=needed)` (backlog #229):
+    // the replacing package's `-MERGING-<new_pf>/NEEDED.ELF.2` lines
+    // (live since `populate_vdb_tmp`, skipped by enumeration) join the
+    // linkage input first, owner verdict-neutral -- see
+    // `linkage_owner_entries`. A library owned by the replaced
+    // instance whose only consumer is the replacing package is
+    // preserved only because of this feed.
+    let replacement_needed = replacement_needed_entries(root, category, new_pf);
+    let owner_entries = linkage_owner_entries(
+        root,
+        &preserved,
+        None,
+        &BTreeMap::new(),
+        &replacement_needed,
+    );
     let map = crate::needed_elf::rebuild(root, &owner_entries);
     let defpath =
         crate::needed_elf::getlibpaths(root, std::env::var("LD_LIBRARY_PATH").ok().as_deref());
@@ -1841,6 +1926,14 @@ pub(crate) fn preserved_lib_paths(root: &Path) -> BTreeMap<String, Vec<String>> 
 /// whose only linkmap consumer is a just-preserved file is kept. Both
 /// are empty/`None` on every other path.
 ///
+/// `replacement_needed`: real `include_file` (see
+/// `linkage_owner_entries`): the replacing package's own
+/// `NEEDED.ELF.2` lines, so a preserved library whose only remaining
+/// consumer is the replacing package itself survives the
+/// replace-loop prune. Empty on every other path (standalone
+/// `emerge -C` has no replacing package; the merge-end prune runs
+/// after the rename into place, when the new entry is enumerated).
+///
 /// Deliberate narrowing vs. real: the per-consumer "an alternative,
 /// non-preserved provider of the same soname is installed" edge removal
 /// (real "erroneously preserved due to a move from one directory to
@@ -1853,6 +1946,7 @@ pub(crate) fn find_unused_preserved_libs(
     being_unmerged: &dyn Fn(&str) -> bool,
     exclude_cpv: Option<&str>,
     replacement_preserved: &BTreeMap<String, Vec<String>>,
+    replacement_needed: &[(String, Vec<crate::needed_elf::NeededEntry>)],
 ) -> BTreeMap<String, BTreeSet<String>> {
     let registry = read_plib_registry(root);
     let plib_dict = registry.preserved_libs();
@@ -1860,7 +1954,13 @@ pub(crate) fn find_unused_preserved_libs(
         return BTreeMap::new();
     }
 
-    let owner_entries = linkage_owner_entries(root, &plib_dict, exclude_cpv, replacement_preserved);
+    let owner_entries = linkage_owner_entries(
+        root,
+        &plib_dict,
+        exclude_cpv,
+        replacement_preserved,
+        replacement_needed,
+    );
     let map = crate::needed_elf::rebuild(root, &owner_entries);
     let defpath =
         crate::needed_elf::getlibpaths(root, std::env::var("LD_LIBRARY_PATH").ok().as_deref());
@@ -1924,16 +2024,17 @@ pub(crate) fn find_unused_preserved_libs(
 /// `ROOT`-relative paths.
 ///
 /// `unmerge_no_replacement` / `being_unmerged` / `exclude_cpv` /
-/// `replacement_preserved` are passed straight through to
-/// `find_unused_preserved_libs` (see its own doc comment for the real
-/// grounding); every caller except the replace-loop unmerge passes
-/// `exclude_cpv=None` and an empty set.
+/// `replacement_preserved` / `replacement_needed` are passed straight
+/// through to `find_unused_preserved_libs` (see its own doc comment
+/// for the real grounding); every caller except the replace-loop
+/// unmerge passes `exclude_cpv=None` and empty feeds.
 pub(crate) fn prune_unused_preserved_libs(
     root: &Path,
     unmerge_no_replacement: bool,
     being_unmerged: &dyn Fn(&str) -> bool,
     exclude_cpv: Option<&str>,
     replacement_preserved: &BTreeMap<String, Vec<String>>,
+    replacement_needed: &[(String, Vec<crate::needed_elf::NeededEntry>)],
 ) -> Result<Vec<String>, String> {
     let cpv_lib_map = find_unused_preserved_libs(
         root,
@@ -1941,6 +2042,7 @@ pub(crate) fn prune_unused_preserved_libs(
         being_unmerged,
         exclude_cpv,
         replacement_preserved,
+        replacement_needed,
     );
 
     let mut removed: Vec<String> = Vec::new();
@@ -3939,10 +4041,12 @@ fn merge_after_install(
     )?;
     // Real `dblink.treewalk`'s own pre-replace-loop preserve-libs
     // block: the replaced same-slot instance's
-    // still-needed libraries are selected now -- the new vdb entry is
-    // not written yet, so (exactly like real, whose `LinkageMap`
-    // rebuild only ever sees installed packages) the new package is
-    // not part of the linkage map -- and their entries are carried
+    // still-needed libraries are selected now -- the new vdb entry sits
+    // in its `-MERGING-<pf>` temporary (written by `populate_vdb_tmp`
+    // above), so enumeration skips it and it reaches the linkage map
+    // only through the explicit include feed inside
+    // `find_preserve_paths_for_merge` (real `include_file=needed`) --
+    // and their entries are carried
     // into the new package's own `CONTENTS`
     // (`_add_preserve_libs_to_contents`). The
     // record itself lands after the replace loop below
@@ -3956,6 +4060,7 @@ fn merge_after_install(
         root,
         &env.category,
         &env.split.pn,
+        &env.split.pf,
         main_slot,
         &new_image_paths,
     ) {
@@ -4074,7 +4179,9 @@ fn merge_after_install(
         // removed after the library path has been updated" -- a preserved
         // lib whose last consumer this merge just rebuilt is now orphaned
         // and gets deleted + unregistered (real `_prune_plib_registry()`).
-        prune_unused_preserved_libs(root, false, &|_| false, None, &BTreeMap::new())?;
+        // No include feed: the new entry is already renamed into place,
+        // so its own lines are enumerated (backlog #224).
+        prune_unused_preserved_libs(root, false, &|_| false, None, &BTreeMap::new(), &[])?;
     }
 
     // Real `dblink.merge()`: `self._elog_process()` runs here, after the
@@ -4154,6 +4261,14 @@ pub(crate) fn unmerge_replaced_same_slot(
     }
 
     let keep = [new_pf.to_string()];
+    // Real `dblink.unmerge(needed=...)` (backlog #224): the replacing
+    // package's own `NEEDED.ELF.2` lines travel with the replace loop
+    // into `_prune_plib_registry`'s `_linkmap_rebuild(include_file=...)`,
+    // because the new entry still sits in its `-MERGING-<pf>` temporary
+    // and enumeration skips it. Read once here (the temporary is live
+    // for the whole loop) and thread through every replaced instance's
+    // own post-unmerge prune below.
+    let replacement_needed = replacement_needed_entries(root, category, new_pf);
     for old_pf in &replaced {
         unmerge_one_installed(
             root,
@@ -4167,6 +4282,7 @@ pub(crate) fn unmerge_replaced_same_slot(
             None,
             true,
             replacement_preserved,
+            &replacement_needed,
         )?;
     }
 
@@ -4247,6 +4363,10 @@ pub(crate) fn unmerge_replaced_same_slot(
 /// just preserved merge-side): threaded from the merge caller through
 /// `unmerge_replaced_same_slot` into the post-unmerge prune (see
 /// `ebuild_unmerge::unmerge_pkgfiles`); empty on the standalone path.
+/// `replacement_needed` is real `include_file` (the replacing
+/// package's own `NEEDED.ELF.2` lines -- see
+/// `unmerge_replaced_same_slot`): same threading, same empty-on-
+/// standalone rule.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn unmerge_one_installed(
     root: &Path,
@@ -4260,6 +4380,7 @@ pub(crate) fn unmerge_one_installed(
     backup: Option<&crate::ebuild_package::PackageOptions>,
     is_replacement: bool,
     replacement_preserved: &BTreeMap<String, Vec<String>>,
+    replacement_needed: &[(String, Vec<crate::needed_elf::NeededEntry>)],
 ) -> Result<(), String> {
     let vdb_dir = root.join("var/db/pkg").join(category).join(pf);
     let unmerge_options = crate::ebuild_unmerge::UnmergeOptions {
@@ -4325,6 +4446,7 @@ pub(crate) fn unmerge_one_installed(
         &unmerge_options,
         is_replacement,
         replacement_preserved,
+        replacement_needed,
     )?;
     let postrm_status = run_hook("postrm")?;
     if postrm_status != 0 {
@@ -4741,7 +4863,7 @@ pub fn merge_binpkg(
         .collect();
     let mut preserve_paths = BTreeSet::new();
     if let Some((paths, old_contents_text)) =
-        find_preserve_paths_for_merge(root, &category, &package, &main_slot, &new_image_paths)
+        find_preserve_paths_for_merge(root, &category, &package, &pf, &main_slot, &new_image_paths)
     {
         let (injected, surviving) =
             inject_preserved_libs_into_contents(&old_contents_text, &paths, &new_image_paths);
@@ -4822,8 +4944,10 @@ pub fn merge_binpkg(
     if !contents.is_empty() || !replaced_same_slot.is_empty() {
         env_update::run_env_update(root)?;
         // Real `treewalk()`: prune preserved libs orphaned by this merge
-        // (identical to `merge_after_install`).
-        prune_unused_preserved_libs(root, false, &|_| false, None, &BTreeMap::new())?;
+        // (identical to `merge_after_install`). No include feed: the new
+        // entry is already renamed into place, so its own lines are
+        // enumerated (backlog #224).
+        prune_unused_preserved_libs(root, false, &|_| false, None, &BTreeMap::new(), &[])?;
     }
 
     // Real `dblink.merge()`'s `_elog_process()`, before the builddir
@@ -7459,7 +7583,8 @@ mod tests {
         unregister_preserved_libs(&root, "dev-libs/plain-1.0", registry, &BTreeMap::new()).unwrap();
 
         let removed =
-            prune_unused_preserved_libs(&root, false, &|_| false, None, &BTreeMap::new()).unwrap();
+            prune_unused_preserved_libs(&root, false, &|_| false, None, &BTreeMap::new(), &[])
+                .unwrap();
         assert!(removed.is_empty());
 
         let after = std::fs::metadata(&reg_path).unwrap();
@@ -7545,6 +7670,7 @@ mod tests {
             &|p| being.contains(p),
             None,
             &BTreeMap::new(),
+            &[],
         )
         .unwrap();
         assert!(
@@ -8047,8 +8173,14 @@ mod tests {
         let tmp = tempdir();
         let (root, being) = seed_old_owned_consumer_root(&tmp);
 
-        let unneeded =
-            find_unused_preserved_libs(&root, true, &|p| being.contains(p), None, &BTreeMap::new());
+        let unneeded = find_unused_preserved_libs(
+            &root,
+            true,
+            &|p| being.contains(p),
+            None,
+            &BTreeMap::new(),
+            &[],
+        );
         assert_eq!(
             unneeded,
             BTreeMap::from([(
@@ -8064,6 +8196,7 @@ mod tests {
             &|p| being.contains(p),
             None,
             &BTreeMap::new(),
+            &[],
         );
         assert!(
             unneeded.is_empty(),
@@ -8101,6 +8234,7 @@ mod tests {
             &crate::ebuild_unmerge::UnmergeOptions::default(),
             true,
             &BTreeMap::new(),
+            &[],
         )
         .expect("replacement unmerge succeeds");
 
@@ -8121,6 +8255,161 @@ mod tests {
                 vec!["/usr/lib/keepA.so".to_string()],
             )),
             "the registry entry must survive the replacement unmerge"
+        );
+    }
+
+    /// Backlog #224: real `dblink.unmerge(needed=...)` feeds the
+    /// replacing package's `NEEDED.ELF.2` lines into the replace-loop
+    /// prune explicitly (`_prune_plib_registry` ->
+    /// `_linkmap_rebuild(include_file=needed, ...)`), because the new
+    /// entry still sits in its `-MERGING-<pf>` temporary and
+    /// enumeration (`cpv_all()`) skips it. A preserved library whose
+    /// only remaining consumer is the replacing package itself must
+    /// therefore survive the replace-loop prune; without the feed it
+    /// looks orphaned and is deleted + unregistered.
+    ///
+    /// Same seed shape as
+    /// `replacement_unmerge_keeps_a_preserved_lib_needed_by_the_replacing_consumer`
+    /// (hand-written `NEEDED.ELF.2` lines, per the brief's "or a
+    /// hand-written NEEDED line"), except the replacing entry is
+    /// `-MERGING-newapp-1.0` -- the real replace-loop state since #183,
+    /// invisible to `read_all_needed_entries` -- and the call goes
+    /// through the replace loop itself (`unmerge_replaced_same_slot`,
+    /// whose signature is unchanged: it reads the feed from that
+    /// temporary entry), so this test compiles and fails without the
+    /// fix and passes with it.
+    #[test]
+    fn replace_loop_prune_sees_the_replacing_packages_merging_needed() {
+        let tmp = tempdir();
+        let (root, _) = seed_old_owned_consumer_root(&tmp);
+        // The replacing package's vdb entry, exactly as the replace
+        // loop sees it: still `-MERGING-`, so only the explicit
+        // include feed (never enumeration) can show its consumer to
+        // the prune. The `CONTENTS` entry is what the `also_keep`
+        // ownership check sees (via the `-MERGING-` fallback).
+        let vdb_new = root.join("var/db/pkg/dev-libs/-MERGING-newapp-1.0");
+        std::fs::create_dir_all(&vdb_new).unwrap();
+        std::fs::write(vdb_new.join("CONTENTS"), "obj /usr/bin/cprog abc 1\n").unwrap();
+        std::fs::write(
+            vdb_new.join("NEEDED.ELF.2"),
+            "X86_64;/usr/bin/cprog;;;libkeep.so.1\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("var/db/pkg/dev-libs/oldapp-1.0/SLOT"), "0\n").unwrap();
+
+        let scratch = tmp.join("scratch");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&scratch).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+        let replaced = unmerge_replaced_same_slot(
+            &root,
+            "dev-libs",
+            "oldapp",
+            "newapp-1.0",
+            "0",
+            &scratch,
+            &portage_tmpdir,
+            &MergeOptions::default(),
+            &BTreeMap::new(),
+        )
+        .expect("the replace loop succeeds");
+        assert_eq!(
+            replaced,
+            vec!["oldapp-1.0".to_string()],
+            "the loop must have unmerged the old instance"
+        );
+
+        assert!(
+            root.join("usr/lib/keepA.so").is_file(),
+            "the preserved lib consumed only by the replacing package must survive the replace-loop prune"
+        );
+        assert!(
+            root.join("usr/bin/cprog").is_file(),
+            "the consumer owned by the replacing package must survive"
+        );
+        let registry = read_plib_registry(&root);
+        assert_eq!(
+            registry.entries.get("dev-libs/provider:0"),
+            Some(&(
+                "dev-libs/provider-1.0".to_string(),
+                "4".to_string(),
+                vec!["/usr/lib/keepA.so".to_string()],
+            )),
+            "the registry entry must survive the replace-loop prune"
+        );
+        assert!(
+            vdb_new.join("NEEDED.ELF.2").is_file(),
+            "the replace loop must leave the `-MERGING-` entry alone"
+        );
+    }
+
+    /// Backlog #229 (merge-side half of #224): real `dblink.treewalk`
+    /// feeds the replacing package's build-info `NEEDED.ELF.2` into the
+    /// merge-side preserve computation explicitly
+    /// (`self._linkmap_rebuild(include_file=needed)` before
+    /// `_find_libs_to_preserve()`), because the new entry still sits in
+    /// its `-MERGING-<pf>` temporary and enumeration (`cpv_all()`)
+    /// skips it. A library owned by the replaced instance whose only
+    /// consumer is the replacing package itself must therefore be
+    /// preserved merge-side; without the feed the consumer is invisible
+    /// and the lib is never preserved (missed-preserve, so the file is
+    /// unmerged with the old instance).
+    ///
+    /// Same hand-written-`NEEDED.ELF.2` seed shape as the #224 test,
+    /// except the provider is the replaced same-slot instance itself
+    /// (`oldapp-1.0`, live) and the only consumer (`/usr/bin/newtool`,
+    /// shipped by the new image) is known solely to the
+    /// `-MERGING-oldapp-2.0` temporary -- the real merge-side state
+    /// since #183 (`populate_vdb_tmp` runs before the preserve block).
+    /// The call goes through `find_preserve_paths_for_merge` itself
+    /// (new `new_pf` parameter), so this test compiles and fails
+    /// without the fix and passes with it.
+    #[test]
+    fn merge_side_preserve_sees_the_replacing_packages_merging_needed() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("usr/lib")).unwrap();
+        std::fs::create_dir_all(root.join("usr/bin")).unwrap();
+        std::fs::write(root.join("usr/lib/libold.so.1"), b"fake elf").unwrap();
+        std::fs::write(root.join("usr/bin/newtool"), b"fake elf").unwrap();
+        // The replaced same-slot instance, live: owns the library.
+        let vdb_old = root.join("var/db/pkg/dev-libs/oldapp-1.0");
+        std::fs::create_dir_all(&vdb_old).unwrap();
+        std::fs::write(vdb_old.join("CONTENTS"), "obj /usr/lib/libold.so.1 def 1\n").unwrap();
+        std::fs::write(
+            vdb_old.join("NEEDED.ELF.2"),
+            "X86_64;/usr/lib/libold.so.1;libold.so.1;;\n",
+        )
+        .unwrap();
+        std::fs::write(vdb_old.join("SLOT"), "0\n").unwrap();
+        std::fs::write(vdb_old.join("COUNTER"), "7\n").unwrap();
+        // The replacing package, exactly as the merge-side preserve
+        // block sees it: still `-MERGING-`, so only the explicit
+        // include feed (never enumeration) can show its consumer to
+        // the preserve computation.
+        let vdb_new = root.join("var/db/pkg/dev-libs/-MERGING-oldapp-2.0");
+        std::fs::create_dir_all(&vdb_new).unwrap();
+        std::fs::write(
+            vdb_new.join("NEEDED.ELF.2"),
+            "X86_64;/usr/bin/newtool;;;libold.so.1\n",
+        )
+        .unwrap();
+        // The new image ships the consumer but not the library.
+        let new_image_paths: BTreeSet<String> =
+            ["/usr/bin/newtool".to_string()].into_iter().collect();
+
+        let (paths, _) = find_preserve_paths_for_merge(
+            &root,
+            "dev-libs",
+            "oldapp",
+            "oldapp-2.0",
+            "0",
+            &new_image_paths,
+        )
+        .expect("a same-slot instance owning files preserves");
+        assert!(
+            paths.contains("/usr/lib/libold.so.1"),
+            "the old-owned lib consumed only by the replacing package must be preserved: {paths:?}"
         );
     }
 
@@ -8180,6 +8469,7 @@ mod tests {
             &|_| false,
             Some("dev-libs/oldapp-1.0"),
             &BTreeMap::new(),
+            &[],
         );
         assert_eq!(
             unneeded,
@@ -8190,7 +8480,8 @@ mod tests {
             "with the replaced instance excluded nothing consumes the lib"
         );
 
-        let unneeded = find_unused_preserved_libs(&root, false, &|_| false, None, &BTreeMap::new());
+        let unneeded =
+            find_unused_preserved_libs(&root, false, &|_| false, None, &BTreeMap::new(), &[]);
         assert!(
             unneeded.is_empty(),
             "without the exclusion the stale consumer keeps it (the corruption real excludes): {unneeded:?}"
@@ -8300,7 +8591,8 @@ mod tests {
         )
         .expect("seeding the registry succeeds");
 
-        let unneeded = find_unused_preserved_libs(&root, false, &|_| false, None, &BTreeMap::new());
+        let unneeded =
+            find_unused_preserved_libs(&root, false, &|_| false, None, &BTreeMap::new(), &[]);
         assert_eq!(
             unneeded,
             BTreeMap::from([(
@@ -8314,7 +8606,7 @@ mod tests {
             "dev-libs/newapp-2.0".to_string(),
             vec!["/usr/lib/libB.so.1.0.0".to_string()],
         )]);
-        let unneeded = find_unused_preserved_libs(&root, false, &|_| false, None, &feed);
+        let unneeded = find_unused_preserved_libs(&root, false, &|_| false, None, &feed, &[]);
         assert!(
             unneeded.is_empty(),
             "the just-preserved consumer keeps the lib alive: {unneeded:?}"
