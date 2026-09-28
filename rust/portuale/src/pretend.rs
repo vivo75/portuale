@@ -3370,8 +3370,8 @@ fn preserved_rebuild_atoms(root: &Path) -> Vec<String> {
 /// `Would you like to add these packages to your world favorites?`
 /// prompt (`depgraph.py:11376-11386`) *before* anything is recorded.
 /// Returns the new world atoms in argument order (a duplicate argument
-/// repeats, exactly as the writer prints it); the caller sorts only its
-/// own display copy.
+/// repeats); both the writer and the `--ask` display sort their own
+/// print order like real (`depgraph.py:11373-11374`).
 fn world_file_additions(
     current: &[String],
     target_atoms: &[&str],
@@ -3476,7 +3476,14 @@ fn update_world_file(
         return Ok(());
     }
     let mut current = read_world_atoms(root)?;
-    let added = world_file_additions(&current, target_atoms, entries, system_atoms, repos);
+    let mut added = world_file_additions(&current, target_atoms, entries, system_atoms, repos);
+    // Real sorts the combined additions before both the `--ask` prompt
+    // and the `>>> Recording` loop (`depgraph.py:11373-11374`); each
+    // file half sorts its own print order here (the file itself was
+    // always rewritten sorted; only multi-addition stdout order
+    // changes, which no pin records -- the cross-file interleave of a
+    // mixed world + world_sets run stays file-grouped, see the arm).
+    added.sort();
     for world_atom in &added {
         println!(">>> Recording {world_atom} in \"world\" favorites file...");
         current.push(world_atom.clone());
@@ -3500,7 +3507,8 @@ fn update_world_file(
 /// `update_world_sets_file` (see its doc comment for the grounding),
 /// split out for the same pre-record `--ask` prompt as
 /// `world_file_additions`. Takes the `@`-prefixed current lines and
-/// returns the new ones, in argument order.
+/// returns the new ones, in argument order; the writer sorts its own
+/// print order like real (`depgraph.py:11373-11374`).
 fn world_sets_additions(current: &[String], set_names: &[String]) -> Vec<String> {
     let before: std::collections::HashSet<String> = current.iter().cloned().collect();
     let mut added = Vec::new();
@@ -3630,7 +3638,10 @@ fn update_world_sets_file(
         .into_iter()
         .map(|n| format!("@{n}"))
         .collect();
-    let added = world_sets_additions(&current, set_names);
+    let mut added = world_sets_additions(&current, set_names);
+    // Sorted print order like real (`depgraph.py:11373-11374`) -- see the
+    // same comment in `update_world_file`.
+    added.sort();
     for line in &added {
         println!(">>> Recording {line} in \"world_sets\" favorites file...");
         current.push(line.clone());
@@ -14478,7 +14489,7 @@ pub fn run(args: &[String]) -> ExitCode {
         );
         if nothing_to_merge(pretend, show_merge_list, mergecount) {
             if deferred {
-                // Real `actions.py:524`: the blank line prints on the
+                // Real `actions.py:526`: the blank line prints on the
                 // prompt shape too (`prompt` stays `None` on this arm,
                 // so `UserQuery` is skipped), then the run falls through
                 // to the `resume_backup` rotation and
@@ -14553,6 +14564,12 @@ pub fn run(args: &[String]) -> ExitCode {
                             return ExitCode::SUCCESS;
                         }
                     }
+                    // The writers below re-read the world files and
+                    // recompute the same additions instead of reusing
+                    // `additions`: deliberate -- single-threaded, no
+                    // intervening write, so the recompute is identical,
+                    // and it keeps one writer entry point for both this
+                    // arm and the success path.
                     if let Err(e) = update_world_file(
                         &root,
                         &fav_refs,
