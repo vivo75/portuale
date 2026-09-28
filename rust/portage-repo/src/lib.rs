@@ -20834,8 +20834,11 @@ fn enqueue_flat_deps(
 /// Additive only, by design: atoms the pre-flip expansion already queued
 /// stay queued (a flag turned *off* cannot unqueue them mid-pass -- the
 /// narrowing half is reconciled by the next whole-walk pass, same as the
-/// pre-#218 behaviour). A no-op unless the flip actually reveals new
-/// atoms, so every non-autounmask walk is untouched.
+/// pre-#218 behaviour), and merge-order edges are added only for
+/// newly-queued targets -- never re-derived for already-graphed ones
+/// (a whole-flatten union over-constrained Kahn's walk and reordered
+/// unrelated packages on L0). A no-op unless the flip actually reveals
+/// new atoms, so every non-autounmask walk is untouched.
 #[allow(clippy::too_many_arguments)]
 fn expand_resolved_slot_with_flipped_use(
     ctx: &ResolveCtx,
@@ -20887,20 +20890,14 @@ fn expand_resolved_slot_with_flipped_use(
     }
     let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
     // Real `RDEPEND`-first discovery order for the merge-order edges,
-    // same `real_order_keys` as the fresh expansion above.
+    // same `real_order_keys` as the fresh expansion above. Applied
+    // below, after the genuinely-new filter: only edges pointing at a
+    // newly-queued atom are added (see the narrowing note there).
     let real_order_keys: &[&str] = if buildpkgonly_narrow {
         &["DEPEND", "BDEPEND"]
     } else {
         &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"]
     };
-    let fresh_edges =
-        merge_order::dep_edges_from_metadata(&delta_meta, new_use, real_order_keys, false);
-    let entry_deps = &mut state.entries[existing_idx].deps;
-    for edge in fresh_edges {
-        if !entry_deps.contains(&edge) {
-            entry_deps.push(edge);
-        }
-    }
     // The same build-time/run-time classification as the fresh expansion
     // above (an ebuild source always classifies from both key sets).
     let flatten_keys = |keys: &[&str]| -> HashSet<String> {
@@ -21039,7 +21036,7 @@ fn expand_resolved_slot_with_flipped_use(
         }
     }
     enqueue_flat_deps(
-        new_toks,
+        new_toks.clone(),
         key,
         existing_version,
         existing_depth,
@@ -21050,6 +21047,34 @@ fn expand_resolved_slot_with_flipped_use(
         &runtime_atoms,
         &or_group_universe(&tokens),
     );
+    // Narrowing (L0 20260928T054625Z): merge-order edges are added ONLY
+    // for newly-queued targets. Unioning the whole flipped flatten here
+    // also re-added edges for already-graphed targets (a `||` re-choice
+    // under the later queue state, an evaluated-form difference), which
+    // over-constrained Kahn's walk and reordered unrelated packages
+    // (gui-libs/gtk:4 went set-identical but order-shifted). Pre-flip
+    // edges stay exactly as the fresh expansion left them -- the
+    // additive approximation; the flipped package's genuinely new deps
+    // still get their real edge (and cycle classification) below.
+    let new_targets: HashSet<(String, String)> = new_toks
+        .iter()
+        .filter_map(|tok| {
+            portage_dep::parse_atom(tok)
+                .map(|dep_atom| (dep_atom.category.clone(), dep_atom.package.clone()))
+        })
+        .collect();
+    if !new_targets.is_empty() {
+        let fresh_edges =
+            merge_order::dep_edges_from_metadata(&delta_meta, new_use, real_order_keys, false);
+        let entry_deps = &mut state.entries[existing_idx].deps;
+        for edge in fresh_edges {
+            if new_targets.contains(&(edge.category.clone(), edge.package.clone()))
+                && !entry_deps.contains(&edge)
+            {
+                entry_deps.push(edge);
+            }
+        }
+    }
     // `--with-test-deps` follow-up, same gating as the fresh expansion
     // above (top-level packages only): the flipped USE may newly enable
     // `test?` deps the pre-flip `use_flags` hid.
@@ -21084,8 +21109,24 @@ fn expand_resolved_slot_with_flipped_use(
                 portage_use_reduce::MatchMode::Normal,
                 &subset,
             ) {
+                // Same genuinely-new filter as the main delta above: the
+                // pre-flip expansion already queued this package's test
+                // deps under the old USE (evaluated here against the
+                // flipped test uselist, like the fresh path evaluates at
+                // queue time).
+                let queued_now: HashSet<&str> =
+                    state.queue.iter().map(|q| q.atom.as_str()).collect();
+                let new_test_deps: Vec<String> = test_deps
+                    .into_iter()
+                    .filter(|tok| {
+                        let evaluated = portage_dep::evaluate_atom_conditionals(tok, &test_uselist)
+                            .unwrap_or_else(|| tok.clone());
+                        !state.visited_atoms.contains(&evaluated)
+                            && !queued_now.contains(evaluated.as_str())
+                    })
+                    .collect();
                 enqueue_flat_deps(
-                    test_deps,
+                    new_test_deps,
                     key,
                     existing_version,
                     existing_depth,
