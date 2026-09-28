@@ -23746,10 +23746,15 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         let Some(version) = resolved_version else {
             // Real `_feedback_missing_dep`: this dependency atom has
             // no matching package. If backtracking is live and its
-            // parent is a merge-bound, non-top-level entry not yet
-            // tried, remember to mask `!=parent-cpv` and retry -- so a
-            // `||` group whose chosen alternative has an unsatisfiable
-            // subtree yields to the next alternative. Only the first
+            // parent is a merge-bound entry not yet tried, remember to
+            // mask `!=parent-cpv` and retry -- so a `||` group whose
+            // chosen alternative has an unsatisfiable subtree yields to
+            // the next alternative, and so a top-level-selected version
+            // whose dependency is unmaskable yields to the next older
+            // version (backlog #198: `akk0a-2` masked, `akk0a-1` picked,
+            // real `depgraph.py:3493-3503` + `backtracking.py:197-207`
+            // carry no top-level exemption -- the mask names one cpv,
+            // never the requested package itself). Only the first
             // such trigger per pass is acted on (like real, one
             // backtrack node at a time); the NVC entry is still built
             // below so an un-fixable dep is reported unchanged.
@@ -23777,7 +23782,6 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 && state.missing_dep_trigger.is_none()
                 && !atom_currently_satisfiable(&ctx.repos, bare_atom, config, &masked_probe)
                 && let Some((pc, pp)) = owner.clone()
-                && !ctx.top_level_cps.contains(&(pc.clone(), pp.clone()))
             {
                 let parent_cpv = state
                     .entries
@@ -27007,7 +27011,21 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
         let Some(params) = feed_params.take().or_else(|| bt.get()) else {
             break;
         };
-        let mut pass = run_pass(&ctx, &params, first_pass)?;
+        // Real `_backtrack_depgraph`: a retry whose walk fails (a masked
+        // top-level select, backlog #198's single-version peel) is a
+        // failed iteration, not a result -- the search continues and an
+        // exhausted search falls back to the best run. Only the root
+        // pass's own failure propagates (nothing to fall back to). A
+        // feed pass has no node to adopt into, so it is just dropped.
+        let mut pass = match run_pass(&ctx, &params, first_pass) {
+            Ok(pass) => pass,
+            Err(_) if from_feed => continue,
+            Err(_) if !first_pass => {
+                bt.adopt_current(params.clone());
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
         if !from_feed {
             passes += 1;
             restarts = passes - 1;
@@ -46558,6 +46576,38 @@ mod tests {
             "the dropped 2.0 rides out as a skipped update"
         );
         let _ = fixture_root;
+    }
+
+    /// Backlog #198: with keyword suggestions off (real
+    /// `--autounmask-keep-keywords=y`, i.e. no `_autounmask_levels`
+    /// step unmasks `~amd64`), the newest `akk0a-2`'s `akk0b` dep is
+    /// unsatisfiable even USE-free, so the missing-dependency
+    /// backtrack masks the top-level-selected parent
+    /// (`depgraph.py:3493-3503`, no top-level exemption) and the retry
+    /// settles `akk0a-1` + `akk0c-1` (`foo` is globally on, so no USE
+    /// change is recorded). The masked `akk0a-2` rides out as a
+    /// full-form skipped-missing-dep row (asserted in the display
+    /// commit's extension of this test).
+    #[test]
+    fn missing_dep_backtrack_masks_the_top_level_selected_parent() {
+        let result = graph_result_real_backtrack("dev-libs/akk0a", 10);
+        let versions: Vec<(&str, &str)> = result
+            .entries
+            .iter()
+            .filter_map(|e| {
+                merge_bound_version(&e.outcome).map(|v| (e.package.as_str(), v.as_str()))
+            })
+            .collect();
+        assert_eq!(
+            versions,
+            vec![("akk0c", "1"), ("akk0a", "1")],
+            "falls back to akk0a-1, saw {versions:?}"
+        );
+        assert_eq!(
+            result.backtrack_restarts, 1,
+            "one retry masks akk0a-2, restarts={}",
+            result.backtrack_restarts
+        );
     }
 
     /// Backlog #129 (S1): real's two notices on the mg2top backtrack
