@@ -74,6 +74,30 @@ fn ask_merge_sigint_prints_interrupted_and_exits_130_like_portage() {
 
 #[test]
 #[cfg(unix)]
+fn ask_read_news_sigint_exits_before_resolve_like_portage() {
+    // Portage: actions.py. A `^C` at the news prompt exits before the resolve,
+    // with no eselect spawn.
+    let text = ctrl_c_at_prompt(
+        "ask_read_news_sigint",
+        &[
+            "emerge",
+            "--ask",
+            "--read-news",
+            "--oneshot",
+            "dev-libs/schedok",
+        ],
+        news_resolve_env,
+        b"Would you like to read the news items",
+    );
+    assert_eq!(text.matches("news items need reading").count(), 1, "{text}");
+    assert!(
+        !text.contains("Calculating dependencies"),
+        "an interrupted news prompt must exit before the resolve: {text}"
+    );
+}
+
+#[test]
+#[cfg(unix)]
 fn ask_pretend_offer_prompts_on_stdout_for_a_write_action() {
     // Portage: actions.py. `--ask` with an unowned ROOT offers
     // `Would you like to add --pretend to options?` on stdout. The answer here is "No".

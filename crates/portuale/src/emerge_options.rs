@@ -259,6 +259,11 @@ mod tests {
     }
 
     #[test]
+    fn does_not_recognize_read_news_itself() {
+        assert!(lookup("--read-news").is_none());
+    }
+
+    #[test]
     fn does_not_recognize_onlydeps_itself() {
         assert!(lookup("--onlydeps").is_none());
         assert!(lookup("-o").is_none());

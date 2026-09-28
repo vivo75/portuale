@@ -1531,6 +1531,16 @@ mod tests {
         );
     }
 
+    /// `mrg --read-news` parses and forwards bare to the emerge codepath
+    /// (which pairs it with `--ask` for the `eselect news read` prompt).
+    #[test]
+    fn read_news_forwards_bare() {
+        let m = parse(&["--ask", "--read-news", "cat/pkg"]).unwrap();
+        assert!(m.get_flag("ask"));
+        assert!(m.get_flag("read_news"));
+        assert_eq!(to_emerge_argv(&m), ["--ask", "--read-news", "cat/pkg"]);
+    }
+
     /// Implemented `Value` options forward `--long=<value>`; ones the
     /// emerge codepath does not implement yet forward BARE so it can name
     /// them honestly.

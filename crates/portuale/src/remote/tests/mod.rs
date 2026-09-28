@@ -648,6 +648,52 @@ impl Drop for S8Tree {
     }
 }
 
+/// Run the child `portuale mrg` trial flow against the tree.
+/// `extra` appends argv (e.g. `--pretend`).
+fn s8_run(tree: &S8Tree, extra: &[&str]) -> std::process::Output {
+    let binpkg = s8_fixtures().join("pkgdir/dev-libs/binpkgrmpkg-1.0.tbz2");
+    assert!(
+        binpkg.is_file(),
+        "fixture binpkg missing: {}",
+        binpkg.display()
+    );
+    let shipped = s8_portuale_bin();
+    let etc = format!("server:{}", tree.clientetc.display());
+    let mut args = vec![
+        "mrg",
+        "--getbinpkgonly",
+        "--remote-hostname",
+        "localtest",
+        "--remote-transport",
+        "local",
+        "--remote-root",
+        tree.root.to_str().unwrap(),
+        "--remote-workdir",
+        tree.work.to_str().unwrap(),
+        "--remote-etc-portage",
+        etc.as_str(),
+        "--remote-portuale-dir",
+        tree.bindir.to_str().unwrap(),
+        "--remote-portuale-binary",
+        shipped.to_str().unwrap(),
+        "--remote-binpkg",
+        binpkg.to_str().unwrap(),
+    ];
+    args.extend(extra.iter().copied());
+    std::process::Command::new(s8_portuale_bin())
+        .args(&args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .env("PORTAGE_CONFIGROOT", &tree.clientetc)
+        .env("ROOT", &tree.root)
+        .env("DISTDIR", s8_fixtures().join("distfiles"))
+        .env("PORTAGE_TMPDIR", tree.tmp.join("pt"))
+        .env("FEATURES", "sandbox")
+        .output()
+        .expect("portuale mrg spawns")
+}
+
 fn s8_stdout(output: &std::process::Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
