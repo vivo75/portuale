@@ -473,6 +473,19 @@ const OPTIONS: &[Opt] = &[
         help: "prompt before performing any actions",
     },
     Opt {
+        // Backlog #231 (c): with `--ask`, offer `eselect news read`
+        // while calculating dependencies (real
+        // `_emerge/actions.py:4266-4281`).
+        id: "read_news",
+        long: "--read-news",
+        alias: None,
+        short: None,
+        kind: Kind::Flag,
+        choices: &[],
+        missing: "",
+        help: "with --ask: offer to read unread news via eselect",
+    },
+    Opt {
         id: "buildpkg",
         long: "--buildpkg",
         alias: None,
@@ -1195,6 +1208,7 @@ fn emerge_handles(long: &str) -> bool {
             | "--keep-going"
             | "--quiet"
             | "--quiet-build"
+            | "--read-news"
             | "--use-ebuild-visibility"
             | "--usepkg"
             | "--usepkgonly"
@@ -1586,6 +1600,17 @@ mod tests {
             to_emerge_argv(&m),
             ["--pretend", "--update", "--verbose", "cat/pkg"]
         );
+    }
+
+    /// Backlog #231 (c): `mrg --read-news` parses and forwards bare
+    /// to the emerge codepath (which pairs it with `--ask` for the
+    /// `eselect news read` prompt).
+    #[test]
+    fn read_news_forwards_bare() {
+        let m = parse(&["--ask", "--read-news", "cat/pkg"]).unwrap();
+        assert!(m.get_flag("ask"));
+        assert!(m.get_flag("read_news"));
+        assert_eq!(to_emerge_argv(&m), ["--ask", "--read-news", "cat/pkg"]);
     }
 
     /// Implemented `Value` options forward `--long=<value>`; ones the
