@@ -16223,18 +16223,25 @@ fn merge_bound_index(entries: &[GraphEntry]) -> HashMap<(&str, &str), usize> {
 /// (`find_smallest_cycle`/`gather_deps`), so it never forces an
 /// abort. The slot-op arm reads the owner's own `deps` edges (the
 /// merge-order graph input, which carries real's per-key `DepPriority`
-/// including the `:=` promotion) with the walk's own installed gate
-/// (`best_installed_for_atom`, so a satisfied slot-op edge stays
-/// breakable exactly like real's `satisfied` rung); `DepEdge`
+/// including the `:=` promotion) with real's own installed gate
+/// (`dep_edge_satisfied_by_installed`, so a satisfied slot-op edge
+/// stays breakable exactly like real's `satisfied` rung -- and, for a
+/// slot-operator edge, only an installed instance in the child's own
+/// slot/sub-slot satisfies, real `_add_pkg_dep_string`'s `inst_pkgs`
+/// same-slot filter in `depgraph.py`); `DepEdge`
 /// `priority.satisfied` itself is never consulted -- it is always
 /// false on an entry (`build_digraph` only sets it on a local copy).
 ///
 /// The hard-edge digraph has an edge `owner -> dep` for every such
 /// `edge_kind_map` entry whose both endpoints are merge-bound `entries`
 /// (plus every slot-op deps edge between two merge-bound entries, even
-/// one the walk never recorded -- a disjunctive branch the scheduler
-/// suppressed still counts, since real's digraph holds the resolved
-/// edge too). Returns the shortest directed cycle as an ordered CPV
+/// one the walk never recorded -- provided it sits on the `||` branch
+/// the walk selected: real's digraph holds the resolved edge only, so
+/// a suppressed alternative's `:=` edge never hardens, real
+/// `dep_check.py::dep_zapdeps`). Branch selection reuses
+/// `merge_order::kept_alt_branches`, the same set `build_digraph`
+/// collapses to, so the two cannot disagree. Returns the shortest
+/// directed cycle as an ordered CPV
 /// list where each element depends on the next (the last wrapping to
 /// the first), rotated to start at its lowest `entries` index for a
 /// deterministic render; empty when the hard-edge graph is acyclic
@@ -16256,14 +16263,23 @@ fn find_hard_cycles(
     let cp_index = merge_bound_index(entries);
     // Backlog #228 slot-op arm: owner index -> dep indices with an
     // unsatisfied non-optional slot-operator `deps` edge between two
-    // merge-bound entries.
-    let slot_op_hard = |owner_idx: usize, dep_cp: &(String, String)| -> bool {
-        entries[owner_idx].deps.iter().any(|d| {
-            d.category == dep_cp.0
-                && d.package == dep_cp.1
+    // merge-bound entries. Only the `||` branch the walk selected
+    // counts (`kept_alt_branches`, real `dep_zapdeps`' choice -- the
+    // same set `build_digraph` collapses to): real's digraph holds the
+    // resolved edge only, never a suppressed alternative's. The
+    // installed gate is `dep_edge_satisfied_by_installed`, so a `:=`
+    // edge is satisfied only by an installed instance in the dep
+    // entry's own slot/sub-slot (real `_add_pkg_dep_string`'s
+    // `inst_pkgs` same-slot filter in `depgraph.py`).
+    let kept = kept_alt_branches(entries, root);
+    let slot_op_hard = |owner_idx: usize, dep_idx: usize| -> bool {
+        entries[owner_idx].deps.iter().enumerate().any(|(ei, d)| {
+            (d.alt.is_none() || kept[owner_idx].contains(&ei))
+                && d.category == entries[dep_idx].category
+                && d.package == entries[dep_idx].package
                 && (d.priority.buildtime_slot_op || d.priority.runtime_slot_op)
                 && !d.priority.optional
-                && best_installed_for_atom(root, &d.atom, &d.category, &d.package).is_none()
+                && !dep_edge_satisfied_by_installed(root, d, Some(&entries[dep_idx]))
         })
     };
     // adjacency: owner index -> sorted, deduped dep indices (hard edges).
@@ -16281,15 +16297,19 @@ fn find_hard_cycles(
         // Backlog #228: the walk's `(true, false)` arm, or the
         // slot-op deps arm (an `RDEPEND` `:=` edge is never
         // `buildtime_hard`, so the map alone can never see it).
-        if (*has_hard && !*has_soft) || slot_op_hard(oi, dep_cp) {
+        if (*has_hard && !*has_soft) || slot_op_hard(oi, di) {
             adj[oi].push(di);
         }
     }
     // A slot-op deps edge the walk never recorded has no map entry at
-    // all (a disjunctive branch the scheduler suppressed still counts
-    // -- real's digraph holds the resolved edge too).
+    // all -- it still counts when it sits on the branch the walk
+    // selected (real's digraph holds that resolved edge); a suppressed
+    // `||` alternative's edge is skipped above.
     for &oi in cp_index.values() {
-        for dep in &entries[oi].deps {
+        for (ei, dep) in entries[oi].deps.iter().enumerate() {
+            if dep.alt.is_some() && !kept[oi].contains(&ei) {
+                continue;
+            }
             if !(dep.priority.buildtime_slot_op || dep.priority.runtime_slot_op)
                 || dep.priority.optional
             {
@@ -16301,8 +16321,9 @@ fn find_hard_cycles(
             else {
                 continue;
             };
-            let dep_cp = (dep.category.clone(), dep.package.clone());
-            if slot_op_hard(oi, &dep_cp) && !adj[oi].contains(&di) {
+            if !dep_edge_satisfied_by_installed(root, dep, Some(&entries[di]))
+                && !adj[oi].contains(&di)
+            {
                 adj[oi].push(di);
             }
         }
@@ -37328,6 +37349,138 @@ mod tests {
             },
         ];
         assert!(find_hard_cycles(&installed, &hard, Path::new("/nonexistent-root")).is_empty());
+    }
+
+    #[test]
+    fn find_hard_cycles_ignores_a_suppressed_disjunctive_slot_op_branch() {
+        // Backlog #228 fix round 1 (review Important-1): real's digraph
+        // holds the `||` branch the walk selected (real
+        // `dep_check.py::dep_zapdeps`' `choice_bins`: the first branch,
+        // in written order, all of whose atoms resolve in the graph
+        // wins), not a suppressed one. Owner `dev-libs/own` carries
+        // RDEPEND `|| ( dev-libs/keb dev-libs/kea:= )`; the walk kept the
+        // first (plain run-time) branch, while `dev-libs/kea` is
+        // merge-bound through its own hard DEPEND back-edge to the
+        // owner. The discarded `:=` branch's unsatisfied
+        // `runtime_slot_op` edge must not harden `own -> kea`: there is
+        // no cycle to report. (Pre-fix the unrecorded-edge arm added
+        // that suppressed edge and reported a phantom `own -> kea ->
+        // own` cycle.)
+        let cp = |p: &str| ("dev-libs".to_string(), p.to_string());
+        let runtime = DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        };
+        let runtime_slot_op = DepPriority {
+            runtime: true,
+            runtime_slot_op: true,
+            ..DepPriority::default()
+        };
+        let buildtime = DepPriority {
+            buildtime: true,
+            ..DepPriority::default()
+        };
+        let alt_edge = |pkg: &str, atom: &str, priority: DepPriority, branch: u32| DepEdge {
+            atom: atom.to_string(),
+            evaluated: atom.to_string(),
+            category: "dev-libs".to_string(),
+            package: pkg.to_string(),
+            priority,
+            disjunctive: true,
+            alt: Some((0, branch)),
+            key: 0,
+        };
+        let mut own = graph_entry("dev-libs", "own", "1.0");
+        own.deps = vec![
+            alt_edge("keb", "dev-libs/keb", runtime, 0),
+            alt_edge("kea", "dev-libs/kea:=", runtime_slot_op, 1),
+        ];
+        let mut kea = graph_entry("dev-libs", "kea", "1.0");
+        kea.deps = vec![DepEdge {
+            atom: "dev-libs/own".to_string(),
+            evaluated: "dev-libs/own".to_string(),
+            category: "dev-libs".to_string(),
+            package: "own".to_string(),
+            priority: buildtime,
+            disjunctive: false,
+            alt: None,
+            key: 3,
+        }];
+        let keb = graph_entry("dev-libs", "keb", "1.0");
+        let entries = vec![own, kea, keb];
+        // The walk recorded the kept branch (soft run-time) and kea's
+        // hard back-edge; the suppressed `:=` branch has no map entry.
+        let mut map: EdgeKindMap = HashMap::new();
+        map.insert((cp("keb"), cp("own")), (false, true));
+        map.insert((cp("own"), cp("kea")), (true, false));
+        assert!(find_hard_cycles(&entries, &map, Path::new("/nonexistent-root")).is_empty());
+    }
+
+    #[test]
+    fn find_hard_cycles_slot_op_gate_requires_the_child_slot_like_real() {
+        // Backlog #228 fix round 1 (review Important-2): real filters
+        // `inst_pkgs` to the child's slot and sub-slot for
+        // `slot_operator == "="` (real
+        // `depgraph.py::_add_pkg_dep_string`), so an installed same-cp
+        // different-slot instance does NOT satisfy a `:=` edge. Owner
+        // `dev-libs/sown -RDEPEND:=-> dev-libs/sdep` (child slot `1`)
+        // with `dev-libs/sdep-1.0:0` installed: the edge stays hard and
+        // the two-cycle reports. With `dev-libs/sdep-1.0:1/0`
+        // installed the edge is satisfied and breakable: no cycle.
+        let cp = |p: &str| ("dev-libs".to_string(), p.to_string());
+        let runtime_slot_op = DepPriority {
+            runtime: true,
+            runtime_slot_op: true,
+            ..DepPriority::default()
+        };
+        let buildtime = DepPriority {
+            buildtime: true,
+            ..DepPriority::default()
+        };
+        let plain_edge = |pkg: &str, atom: &str, priority: DepPriority, key: u8| DepEdge {
+            atom: atom.to_string(),
+            evaluated: atom.to_string(),
+            category: "dev-libs".to_string(),
+            package: pkg.to_string(),
+            priority,
+            disjunctive: false,
+            alt: None,
+            key,
+        };
+        let make_entries = || {
+            let mut sown = graph_entry("dev-libs", "sown", "1.0");
+            sown.deps = vec![plain_edge("sdep", "dev-libs/sdep:=", runtime_slot_op, 0)];
+            let mut sdep = graph_entry("dev-libs", "sdep", "1.0");
+            sdep.slot = Some("1".to_string());
+            sdep.sub_slot = Some("0".to_string());
+            sdep.deps = vec![plain_edge("sown", "dev-libs/sown", buildtime, 3)];
+            vec![sown, sdep]
+        };
+        let make_map = || {
+            let mut map: EdgeKindMap = HashMap::new();
+            map.insert((cp("sdep"), cp("sown")), (false, true));
+            map.insert((cp("sown"), cp("sdep")), (true, false));
+            map
+        };
+        let make_vdb = |name: &str, slot: &str| {
+            let root = masters_test_root(name);
+            let vdb = root.join("var/db/pkg/dev-libs/sdep-1.0");
+            std::fs::create_dir_all(&vdb).unwrap();
+            std::fs::write(vdb.join("SLOT"), format!("{slot}\n")).unwrap();
+            root
+        };
+        // Installed slot `0`, child slot `1`: unsatisfied (hard).
+        let root = make_vdb("n228-slot-gate-other-slot", "0");
+        assert_eq!(
+            find_hard_cycles(&make_entries(), &make_map(), &root),
+            vec![vec![
+                "dev-libs/sown-1.0".to_string(),
+                "dev-libs/sdep-1.0".to_string()
+            ]]
+        );
+        // Installed slot `1/0`, child slot `1/0`: satisfied (soft).
+        let root = make_vdb("n228-slot-gate-same-slot", "1/0");
+        assert!(find_hard_cycles(&make_entries(), &make_map(), &root).is_empty());
     }
 
     #[test]
