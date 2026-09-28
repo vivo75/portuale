@@ -16797,9 +16797,9 @@ fn slot_operator_slot_change_probe(
 /// arm (`:2901-2903`) is a cut of its own -- deliberately not ported
 /// here, and not covered by #212 (whose slot-change probe fires on a
 /// different trigger: a merge-bound binary's shifted built dep, real
-/// `:2381-2398`): a non-installed ebuild parent with an unsatisfied
-/// built dep has no unsatisfied-probe path at all. The installed arm
-/// below is this probe.
+/// `:2381-2398`): a non-installed built parent (a binary package whose
+/// recorded `:=` dep is unsatisfied) has no unsatisfied-probe path at
+/// all (residue #257). The installed arm below is this probe.
 ///
 /// Portuale has no in-walk backtrack for this shape, so the probe runs
 /// here, on a dead-end pass, next to the #211/#212 post-pass trigger:
@@ -16902,9 +16902,12 @@ fn slot_operator_unsatisfied_probe(
             // `:3447-3458` into the `:2817` probe): seed only an owner
             // whose own recorded want is the built atom -- this pass's
             // puller triples pair owner and atom text -- never the
-            // cp-level `required_by` x `slot_want` cross product. (A
-            // USE-conditional built want never parses here; that corner
-            // rides the filed conditional-`:=` cut.)
+            // cp-level `required_by` x `slot_want` cross product. The
+            // puller triples are recorded after USE evaluation, so a
+            // conditional built want that evaluates false is absent here,
+            // as in real's USE-evaluated view. Real restarts on the first
+            // hitting edge (`:3453-3455`); this seeds every hitting owner
+            // of the cp in one pass (residue #256).
             let paired = pullers.get(&dep_cp).is_some_and(|triples| {
                 triples.iter().any(|(pc, pp, _, atom_text)| {
                     pc == &owner.0
