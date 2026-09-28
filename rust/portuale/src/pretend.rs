@@ -9275,11 +9275,18 @@ fn nothing_to_merge(pretend: bool, show_merge_list: bool, mergecount: usize) -> 
 /// Backlog #232: real `_emerge/actions.py:496-521` (`action_build`),
 /// the `mergecount == 0` arm's own deferral (`:514-516`): when the run
 /// is `selective` (real `create_depgraph_params.py` -- `-u`/`-N`/
-/// `--noreplace`/...) without `--oneshot` and a world-candidate
-/// favorite exists, real does NOT print `Nothing to merge; quitting.`
-/// -- the prompt just moves into `depgraph.saveNomergeFavorites` while
-/// the run falls through to the `resume_backup` rotation (`:664-672`)
-/// and the world-file record, skipping only `Scheduler` (`:674-675`).
+/// `--noreplace`/...) without `--oneshot`/`--onlydeps` and a
+/// world-candidate favorite exists, real does NOT print `Nothing to
+/// merge; quitting.` -- the prompt just moves into
+/// `depgraph.saveNomergeFavorites` while the run falls through to the
+/// `resume_backup` rotation (`:664-672`) and the world-file record,
+/// skipping only `Scheduler` (`:674-675`). The second parameter is the
+/// folded gate variable itself: real computes `oneshot =
+/// "--oneshot" in myopts or "--onlydeps" in myopts`
+/// (`actions.py:257`), and both the `:499` world-candidates guard and
+/// the `:514` deferral test that folded value -- so `--onlydeps` keeps
+/// the deferral at bay exactly like `--oneshot` (the #225 shape), and
+/// only `--buildpkgonly` still suppresses at the record level below.
 /// `selective` is portuale's own real-faithful computation (see its
 /// site); a world candidate is any non-`@` favorite (real keeps every
 /// non-`SETPREFIX` string, `actions.py:498-513`) or user `@set` (real
@@ -9290,8 +9297,12 @@ fn nothing_to_merge(pretend: bool, show_merge_list: bool, mergecount: usize) -> 
 /// never marks them world candidates). Pure predicate so the gate
 /// matrix stays unit-pinned; the rotation half is pinned end to end in
 /// pmtest (`test_portuale.py`, backlog #232).
-fn selective_noop_deferred(selective: bool, oneshot: bool, has_world_candidates: bool) -> bool {
-    selective && !oneshot && has_world_candidates
+fn selective_noop_deferred(
+    selective: bool,
+    oneshot_or_onlydeps: bool,
+    has_world_candidates: bool,
+) -> bool {
+    selective && !oneshot_or_onlydeps && has_world_candidates
 }
 
 /// Backlog #185 fix round 1: real's resolution-phase header gating
@@ -14368,7 +14379,9 @@ pub fn run(args: &[String]) -> ExitCode {
         // `@world`/`@system`/`@profile` never count on either side.
         let deferred = selective_noop_deferred(
             selective,
-            oneshot,
+            // Real's folded gate variable (`actions.py:257`): `--onlydeps`
+            // keeps the deferral at bay exactly like `--oneshot`.
+            oneshot || onlydeps,
             atom_args.iter().any(|a| !a.starts_with('@')) || !selected_set_args.is_empty(),
         );
         if nothing_to_merge(pretend, show_merge_list, mergecount) {
@@ -14388,18 +14401,19 @@ pub fn run(args: &[String]) -> ExitCode {
                 // (`:11308-11317`) is `--buildpkgonly` / `--fetchonly` /
                 // `--fetch-all-uri` / `--oneshot` / `--onlydeps` /
                 // `--pretend`: `--pretend` never reaches this branch,
-                // `--oneshot` contradicts the deferral gate above, and
-                // `--fetchonly` / `--fetch-all-uri` are
-                // portuale-unimplemented options (a usage error long
-                // before this point), so only `--buildpkgonly` /
-                // `--onlydeps` still suppress here. Under `--ask` the
+                // `--oneshot` / `--onlydeps` already keep the deferral
+                // gate above at bay (real's folded variable,
+                // `actions.py:257`), and `--fetchonly` / `--fetch-all-uri`
+                // are portuale-unimplemented options (a usage error long
+                // before this point), so only `--buildpkgonly` still
+                // suppresses here. Under `--ask` the
                 // prompt moves here (`:11376-11386`): the additions list
                 // prints first, then `Would you like to add these
                 // packages to your world favorites?`, and a "No" (or EOF,
                 // which `ask_yes_no` folds into the same decline) records
                 // nothing -- the run still succeeds, the rotation above
                 // already happened.
-                if !buildpkgonly && !onlydeps {
+                if !buildpkgonly {
                     let fav_refs: Vec<&str> = atom_args.to_vec();
                     let mut additions = match read_world_atoms(&root) {
                         Ok(current) => {
@@ -16708,12 +16722,17 @@ mod tests {
     fn selective_noop_deferred_only_for_selective_non_oneshot_world_runs() {
         // Backlog #232: real `_emerge/actions.py:514-516` -- the
         // deferral (no message, rotation + world record, no `Scheduler`)
-        // fires only when the run is `selective` without `--oneshot`
-        // and a world-candidate favorite exists.
-        // (selective, oneshot, has_world_candidates) -> deferred.
+        // fires only when the run is `selective` without `--oneshot` /
+        // `--onlydeps` and a world-candidate favorite exists. The second
+        // parameter is real's folded gate variable (`actions.py:257`:
+        // `--oneshot` or `--onlydeps`), so one `true` covers both flags.
+        // (selective, oneshot_or_onlydeps, has_world_candidates) -> deferred.
         assert!(selective_noop_deferred(true, false, true));
-        // `--oneshot` keeps the deferral at bay (the #225 shape).
+        // `--oneshot` -- or `--onlydeps`, which real folds into the same
+        // gate variable (`actions.py:257`) -- keeps the deferral at bay
+        // (the #225 shape), with or without world candidates.
         assert!(!selective_noop_deferred(true, true, true));
+        assert!(!selective_noop_deferred(true, true, false));
         // A non-selective all-noop run is the plain `Nothing to merge`
         // shape even with world candidates around.
         assert!(!selective_noop_deferred(false, false, true));
