@@ -341,8 +341,12 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--getbinpkg-include", None),
     ("--usepkg-exclude", None),
     ("--usepkg-include", None),
-    ("--onlydeps-with-ideps", None),
-    ("--onlydeps-with-rdeps", None),
+    // `--onlydeps-with-rdeps` / `--onlydeps-with-ideps` ARE implemented
+    // -- real `main.py` `true_y_or_n` (`"True"`/`"y"`/`"n"`, bare inserts
+    // `"True"`), `depgraph.py:4186-4193` (blank an `--onlydeps` root's
+    // `RDEPEND`+`PDEPEND` on `=n`, its `IDEPEND` too unless ideps is
+    // `y`/`True`). See pretend.rs's own parse loop + `ResolveRequest`'s
+    // `onlydeps*` fields. Excluded here for the same reason.
     // `--rebuild-exclude` / `--rebuild-ignore` IS implemented -- filters
     // for the `--rebuild-if-*` scan (see pretend.rs + portage-repo's
     // `rebuild_if_entries`).
