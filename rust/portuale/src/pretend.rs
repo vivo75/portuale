@@ -8791,6 +8791,11 @@ fn slot_conflict_reasons(atom: &Atom, others: &[ConflictOther]) -> (Vec<SlotConf
                     reasons.push(r);
                 }
             }
+            // Real's `elif` chain (`slot_collision.py:307-397`): a
+            // version-mismatched pair skips the slot and USE checks
+            // below -- even when the operator is `None` and nothing is
+            // recorded for this pair.
+            continue;
         } else if atom.slot.is_some() {
             let matches_no_use =
                 match_from_list(&no_use, &[other.cpv.as_str()]).is_some_and(|v| !v.is_empty());
@@ -16148,6 +16153,15 @@ mod tests {
         assert_eq!(
             slot_conflict_reasons(&ok, &others_gone),
             (vec![SlotConflictReason::Use("x".to_string())], true,)
+        );
+
+        // Real's `elif` chain (`slot_collision.py:307-397`): a
+        // version-mismatched pair skips the USE check even when the
+        // atom's USE deps would also fail against the other instance.
+        let both = parse_atom(">=dev-libs/t-2.0[x]").unwrap();
+        assert_eq!(
+            slot_conflict_reasons(&both, &others_off),
+            (vec![SlotConflictReason::Version("ge")], false,)
         );
 
         // caret span: under ">=" (idx 0,1) and under "2.0" (rfind)

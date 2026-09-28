@@ -908,7 +908,8 @@ pub fn use_mismatch_flags(
 /// four conditional forms, and only the unconditional two against the
 /// candidate) still matches it.
 ///
-/// Composed from the two primitives real itself fuses here --
+/// Composed from the two primitives real's `violated_conditionals` is
+/// equivalent to here --
 /// `evaluate_conditionals` (parent-relative `?`/`!`/`=`/`!` resolved to
 /// unconditional demands or dropped) then the match-time satisfied check
 /// (`use_deps_satisfied`, including its IUSE-validity and `(+)`/`(-)`
