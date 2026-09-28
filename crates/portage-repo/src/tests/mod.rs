@@ -708,6 +708,54 @@ fn graph_update(atom_str: &str) -> Vec<(String, PretendOutcome)> {
     graph_with(atom_str, |r| r.update = true)
 }
 
+/// Like `graph`, but with a specific `Deep` value.
+fn graph_deep(atom_str: &str, deep: Deep) -> Vec<(String, PretendOutcome)> {
+    let root = fixtures_root();
+    ResolveRequest {
+        deep,
+        ..ResolveRequest::new(
+            &root,
+            &root,
+            &[atom_str.to_string()],
+            &test_config(),
+            &fixtures_root().join("distfiles"),
+        )
+    }
+    .resolve()
+    .unwrap_or_else(|e| panic!("resolving {atom_str} failed: {e}"))
+    .entries
+    .into_iter()
+    .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
+    .collect()
+}
+
+/// Like `graph_deep(atom, Deep::Unlimited)`, but with a
+/// `--reinstall-atoms` set applied.
+fn graph_deep_reinstall_atoms(
+    atom_str: &str,
+    reinstall_atoms: &[&str],
+) -> Vec<(String, PretendOutcome)> {
+    let root = fixtures_root();
+    let ra: Vec<String> = reinstall_atoms.iter().map(|s| s.to_string()).collect();
+    ResolveRequest {
+        deep: Deep::Unlimited,
+        reinstall_atoms: ra.to_vec(),
+        ..ResolveRequest::new(
+            &root,
+            &root,
+            &[atom_str.to_string()],
+            &test_config(),
+            &fixtures_root().join("distfiles"),
+        )
+    }
+    .resolve()
+    .unwrap_or_else(|e| panic!("resolving {atom_str} failed: {e}"))
+    .entries
+    .into_iter()
+    .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
+    .collect()
+}
+
 /// Arguments of [`graph_rebuild_if`].
 struct GraphRebuildIfArgs<'a> {
     atom_str: &'a str,
@@ -716,6 +764,199 @@ struct GraphRebuildIfArgs<'a> {
     new_ver: bool,
     rebuild_exclude: &'a [&'a str],
     rebuild_ignore: &'a [&'a str],
+}
+
+/// `resolve_pretend_graph` for one atom with the `--rebuild-if-*`
+/// flags set (and `--update` on, so `rebuildtrigger` upgrades).
+fn graph_rebuild_if(args: GraphRebuildIfArgs<'_>) -> Vec<(String, PretendOutcome)> {
+    let GraphRebuildIfArgs {
+        atom_str,
+        unbuilt,
+        new_rev,
+        new_ver,
+        rebuild_exclude,
+        rebuild_ignore,
+    } = args;
+    let root = fixtures_root();
+    let ex: Vec<String> = rebuild_exclude.iter().map(|s| s.to_string()).collect();
+    let ig: Vec<String> = rebuild_ignore.iter().map(|s| s.to_string()).collect();
+    ResolveRequest {
+        update: true,
+        rebuild_if_unbuilt: unbuilt,
+        rebuild_if_new_rev: new_rev,
+        rebuild_if_new_ver: new_ver,
+        rebuild_exclude: ex.to_vec(),
+        rebuild_ignore: ig.to_vec(),
+        ..ResolveRequest::new(
+            &root,
+            &root,
+            &[atom_str.to_string()],
+            &test_config(),
+            &fixtures_root().join("distfiles"),
+        )
+    }
+    .resolve()
+    .unwrap_or_else(|e| panic!("resolving {atom_str} failed: {e}"))
+    .entries
+    .into_iter()
+    .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
+    .collect()
+}
+
+/// Resolve one consumer atom through the `--deep` walk and return
+/// `(cat/pkg, outcome-variant, targets_running_root)` per graph entry.
+/// `root_deps` passes the fixture root itself as the running root.
+fn resolve_deep_consumer(atom: &str, root_deps: bool) -> Vec<(String, String, bool)> {
+    let root = fixtures_root();
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    let running_root = root.clone();
+    ResolveRequest {
+        deep: Deep::Unlimited,
+        root_deps_running_root: (if root_deps {
+            Some(running_root.as_path())
+        } else {
+            None
+        })
+        .map(std::path::Path::to_path_buf),
+        ..ResolveRequest::new(
+            &root,
+            &root,
+            &[atom.to_string()],
+            &config,
+            &fixtures_root().join("distfiles"),
+        )
+    }
+    .resolve()
+    .unwrap()
+    .entries
+    .into_iter()
+    .map(|e| {
+        let outcome = match &e.outcome {
+            PretendOutcome::NoVisibleCandidate => "NoVisibleCandidate",
+            PretendOutcome::New { .. } => "New",
+            PretendOutcome::Upgrade { .. } => "Upgrade",
+            PretendOutcome::Downgrade { .. } => "Downgrade",
+            PretendOutcome::AlreadyInstalled { .. } => "AlreadyInstalled",
+            PretendOutcome::Reinstall { .. } => "Reinstall",
+            PretendOutcome::Uninstall { .. } => "Uninstall",
+        };
+        (
+            format!("{}/{}", e.category, e.package),
+            outcome.to_string(),
+            e.targets_running_root,
+        )
+    })
+    .collect()
+}
+
+/// Like `graph_deep`, but driven by `--emptytree`/`-e` instead
+/// (`deep` forced on, every installed atom -> a bare Reinstall).
+fn graph_empty(atom_str: &str) -> Vec<(String, PretendOutcome)> {
+    graph_with(atom_str, |r| r.empty = true)
+}
+
+fn graph_deep_with_bdeps(atom_str: &str, with_bdeps: bool) -> Vec<(String, PretendOutcome)> {
+    let root = fixtures_root();
+    ResolveRequest {
+        deep: Deep::Unlimited,
+        with_bdeps,
+        ..ResolveRequest::new(
+            &root,
+            &root,
+            &[atom_str.to_string()],
+            &test_config(),
+            &fixtures_root().join("distfiles"),
+        )
+    }
+    .resolve()
+    .unwrap_or_else(|e| panic!("resolving {atom_str} failed: {e}"))
+    .entries
+    .into_iter()
+    .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
+    .collect()
+}
+
+fn graph_root_deps(
+    atom_str: &str,
+    root_deps_running_root: Option<&Path>,
+) -> Vec<(String, PretendOutcome)> {
+    let root = fixtures_root();
+    ResolveRequest {
+        deep: Deep::Unlimited,
+        root_deps_running_root: root_deps_running_root.map(std::path::Path::to_path_buf),
+        ..ResolveRequest::new(
+            &root,
+            &root,
+            &[atom_str.to_string()],
+            &test_config(),
+            &fixtures_root().join("distfiles"),
+        )
+    }
+    .resolve()
+    .unwrap_or_else(|e| panic!("resolving {atom_str} failed: {e}"))
+    .entries
+    .into_iter()
+    .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
+    .collect()
+}
+
+fn full_graph(atom_str: &str) -> Vec<GraphEntry> {
+    let root = fixtures_root();
+    ResolveRequest::new(
+        &root,
+        &root,
+        &[atom_str.to_string()],
+        &test_config(),
+        &fixtures_root().join("distfiles"),
+    )
+    .resolve()
+    .unwrap_or_else(|e| panic!("resolving {atom_str} failed: {e}"))
+    .entries
+}
+
+fn graph_real_with(
+    atom_str: &str,
+    tweak: impl FnOnce(&mut ResolveRequest),
+) -> Vec<(String, PretendOutcome)> {
+    let root = fixtures_root();
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    let mut request = ResolveRequest::new(
+        &root,
+        &root,
+        &[atom_str.to_string()],
+        &config,
+        &fixtures_root().join("distfiles"),
+    );
+    tweak(&mut request);
+    request
+        .resolve()
+        .unwrap_or_else(|e| panic!("resolving {atom_str} failed: {e}"))
+        .entries
+        .into_iter()
+        .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
+        .collect()
+}
+
+fn graph_real(atom_str: &str) -> Vec<(String, PretendOutcome)> {
+    graph_real_with(atom_str, |_| {})
 }
 
 /// Arguments of [`assert_one_conflict`].

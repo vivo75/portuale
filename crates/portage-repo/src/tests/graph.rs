@@ -226,6 +226,31 @@ fn keyword_masked_but_installed_dependency_still_requires_visibility_as_a_top_le
 }
 
 #[test]
+fn emptytree_downgrades_a_keyword_masked_installed_dependency_to_the_visible_stable() {
+    // Under `--emptytree` Portage drops every installed candidate wholesale,
+    // so the best visible stable wins -> downgrade 2.0 -> 1.0.
+    let entries = graph_empty("dev-libs/needskeywordmasked");
+    assert_eq!(
+        entries,
+        vec![
+            (
+                "dev-libs/keywordmaskedpkg".to_string(),
+                PretendOutcome::Downgrade {
+                    from: "2.0".to_string(),
+                    to: "1.0".to_string(),
+                }
+            ),
+            (
+                "dev-libs/needskeywordmasked".to_string(),
+                PretendOutcome::New {
+                    version: "1.0".to_string()
+                }
+            )
+        ]
+    );
+}
+
+#[test]
 fn masked_by_keywords_is_not_visible() {
     assert_eq!(
         resolve("dev-libs", "maskedpkg"),
@@ -712,6 +737,37 @@ fn exclude_threads_through_dependency_recursion_not_just_top_level() {
 }
 
 #[test]
+fn reinstall_atoms_accepts_a_wildcard_atom() {
+    let forced = graph_deep_reinstall_atoms("dev-libs/deeppkg", &["dev-libs/*"]);
+    assert!(forced.iter().any(|(n, _)| n == "dev-libs/deeppkg2"));
+}
+
+#[test]
+fn rebuild_if_unbuilt_reinstalls_a_consumer_of_a_merged_build_dep() {
+    // Installed with a vdb DEPEND on the trigger; upgrading the trigger then
+    // schedules the consumer for a rebuild.
+    let g = graph_rebuild_if(GraphRebuildIfArgs {
+        atom_str: "dev-libs/rebuildtrigger",
+        unbuilt: true,
+        new_rev: false,
+        new_ver: false,
+        rebuild_exclude: &[],
+        rebuild_ignore: &[],
+    });
+    assert!(
+        g.iter().any(|(n, o)| n == "dev-libs/rebuildconsumer"
+            && matches!(
+                o,
+                PretendOutcome::Reinstall {
+                    slot_operator_rebuild: false,
+                    ..
+                }
+            )),
+        "{g:?}"
+    );
+}
+
+#[test]
 fn rebuild_if_new_ver_ignores_a_same_version_dep() {
     // rebuildnochange's best tree version equals the installed one.
     // Even forced to reinstall (--reinstall-atoms), that is not a
@@ -747,6 +803,30 @@ fn rebuild_if_new_ver_ignores_a_same_version_dep() {
             "no rebuild for a same-version dep: {g:?}"
         );
     }
+}
+
+#[test]
+fn rebuild_exclude_and_ignore_suppress_the_rebuild() {
+    // --rebuild-exclude matches the parent; --rebuild-ignore matches
+    // the merged dep. Either one keeps rebuildconsumer out.
+    let ex = graph_rebuild_if(GraphRebuildIfArgs {
+        atom_str: "dev-libs/rebuildtrigger",
+        unbuilt: true,
+        new_rev: false,
+        new_ver: false,
+        rebuild_exclude: &["dev-libs/rebuildconsumer"],
+        rebuild_ignore: &[],
+    });
+    assert!(!ex.iter().any(|(n, _)| n == "dev-libs/rebuildconsumer"));
+    let ig = graph_rebuild_if(GraphRebuildIfArgs {
+        atom_str: "dev-libs/rebuildtrigger",
+        unbuilt: true,
+        new_rev: false,
+        new_ver: false,
+        rebuild_exclude: &[],
+        rebuild_ignore: &["dev-libs/rebuildtrigger"],
+    });
+    assert!(!ig.iter().any(|(n, _)| n == "dev-libs/rebuildconsumer"));
 }
 
 #[test]
@@ -875,6 +955,95 @@ fn deep_walk_evaluates_flag_deps_against_the_installed_vdb_use_not_effective() {
     );
 }
 
+#[test]
+fn deep_walk_evaluates_conditional_use_deps_of_installed_parents() {
+    // Each installed parent carries `~child-1.0[flip=]`; the token is evaluated
+    // against the parent's recorded vdb USE (Portage's `_pkg_use_enabled`)
+    // before candidate selection.
+    //
+    // Arm A (parent built -flip, child installed +flip and profile-pinned
+    // +flip): `[-flip]` is unsatisfiable, so the child surfaces unsatisfied
+    // for the abort path to report.
+    let arm_a = resolve_deep_consumer("dev-libs/deepusedepconsumer", false);
+    assert!(
+        arm_a
+            .iter()
+            .any(|(n, _, _)| n == "dev-libs/deepusedepconsumer"),
+        "{arm_a:?}"
+    );
+    assert!(
+        arm_a
+            .iter()
+            .any(|(n, _, _)| n == "dev-libs/deepusedepchild"),
+        "evaluated [-flip] is not satisfied by the installed +flip child, \
+         so the child must surface (unsatisfied), not vanish: {arm_a:?}"
+    );
+    assert!(
+        !arm_a
+            .iter()
+            .any(|(n, o, _)| n == "dev-libs/deepusedepchild"
+                && (o == "AlreadyInstalled" || o == "New")),
+        "the +flip instance satisfies neither [-flip] nor a fresh build \
+         under the profile pin: {arm_a:?}"
+    );
+    //
+    // Arm B (same parent shape, child not profile-pinned): `[-flip]` reaches
+    // candidate selection -- the child rebuilds with flip off.
+    let arm_b = resolve_deep_consumer("dev-libs/deepusedepbconsumer", false);
+    assert!(
+        arm_b
+            .iter()
+            .any(|(n, o, _)| n == "dev-libs/deepusedepbchild" && o == "Reinstall"),
+        "evaluated [-flip] must rebuild the installed +flip child with \
+         flip off: {arm_b:?}"
+    );
+    //
+    // Arm C (control -- parent built +flip): the atom evaluates to `[flip]`,
+    // which the installed child satisfies, so nothing merges.
+    let arm_c = resolve_deep_consumer("dev-libs/deepusedepokconsumer", false);
+    assert!(
+        arm_c
+            .iter()
+            .any(|(n, o, _)| n == "dev-libs/deepusedepokconsumer" && o == "New"),
+        "{arm_c:?}"
+    );
+    assert!(
+        !arm_c
+            .iter()
+            .any(|(_, o, _)| o != "New" && o != "AlreadyInstalled"),
+        "control: a satisfied evaluated dep merges nothing: {arm_c:?}"
+    );
+}
+
+#[test]
+fn root_deps_walk_evaluates_conditional_use_deps_before_the_satisfied_check() {
+    // With `--root-deps` the producers must evaluate the atom to `[-flip]`
+    // *and* enforce it against the running-root instance (Portage rebuilds
+    // it with flip off).
+    let with_root_deps = resolve_deep_consumer("dev-libs/deeprootdepconsumer", true);
+    assert!(
+        with_root_deps
+            .iter()
+            .any(|(n, o, running)| n == "dev-libs/deeprootdepchild"
+                && o == "Reinstall"
+                && *running),
+        "evaluated [-flip] is not satisfied by the running root's +flip \
+         child, so it resolves as a running-root rebuild: {with_root_deps:?}"
+    );
+    //
+    // Control without `--root-deps`: the producers are a strict no-op and the
+    // ordinary walk rebuilds the child against the target root instead.
+    let without = resolve_deep_consumer("dev-libs/deeprootdepconsumer", false);
+    assert!(
+        without
+            .iter()
+            .any(|(n, o, running)| n == "dev-libs/deeprootdepchild"
+                && o == "Reinstall"
+                && !*running),
+        "control: without --root-deps the same rebuild targets ROOT: {without:?}"
+    );
+}
+
 /// A `--root-deps` running-root build entry's `use_flags_display` carries the
 /// rebuild's flipped flag for the renderer's `-flip*` column.
 #[test]
@@ -912,6 +1081,95 @@ fn root_deps_build_entry_displays_the_rebuild_use_column() {
         "the rebuild's flipped flag must reach the display (#141)"
     );
     assert_eq!(child.slot.as_deref(), Some("0"));
+}
+
+#[test]
+fn emptytree_reinstalls_the_whole_deep_dependency_tree() {
+    // --emptytree forces `deep` on AND turns each installed dep into a
+    // Reinstall, so the whole chain shows.
+    let entries = graph_empty("dev-libs/deeppkg");
+    let bare = PretendOutcome::Reinstall {
+        version: "1.0".to_string(),
+        changed_flags: vec![],
+        deps_changed: false,
+        slot_changed: false,
+        rebuilt_binary: false,
+        new_repo: false,
+        slot_operator_rebuild: false,
+    };
+    assert_eq!(
+        entries,
+        vec![
+            (
+                "dev-libs/newpkg".to_string(),
+                PretendOutcome::New {
+                    version: "1.0".to_string()
+                }
+            ),
+            ("dev-libs/deeppkg2".to_string(), bare.clone()),
+            ("dev-libs/deeppkg".to_string(), bare)
+        ]
+    );
+}
+
+#[test]
+fn with_bdeps_default_true_walks_depend_and_bdepend_of_an_already_installed_package() {
+    // with_bdeps defaults to true (Portage's --with-bdeps=auto/y): all three
+    // dep classes walk under --deep.
+    // Merge order follows Portage's discovery order (RDEPEND, IDEPEND,
+    // PDEPEND, DEPEND, BDEPEND).
+    assert_eq!(
+        graph_deep_with_bdeps("dev-libs/withbdepspkg", true),
+        vec![
+            (
+                "dev-libs/newpkg".to_string(),
+                PretendOutcome::New {
+                    version: "1.0".to_string()
+                }
+            ),
+            (
+                "dev-libs/builddeponlypkg".to_string(),
+                PretendOutcome::New {
+                    version: "1.0".to_string()
+                }
+            ),
+            (
+                "dev-libs/hostdeponlypkg".to_string(),
+                PretendOutcome::New {
+                    version: "1.0".to_string()
+                }
+            ),
+            (
+                "dev-libs/withbdepspkg".to_string(),
+                PretendOutcome::AlreadyInstalled {
+                    version: "1.0".to_string()
+                }
+            )
+        ]
+    );
+}
+
+#[test]
+fn with_bdeps_false_skips_depend_and_bdepend_but_not_rdepend() {
+    // --with-bdeps=n only ever drops DEPEND/BDEPEND for an already-built
+    // package; RDEPEND still shows up.
+    assert_eq!(
+        graph_deep_with_bdeps("dev-libs/withbdepspkg", false),
+        vec![
+            (
+                "dev-libs/newpkg".to_string(),
+                PretendOutcome::New {
+                    version: "1.0".to_string()
+                }
+            ),
+            (
+                "dev-libs/withbdepspkg".to_string(),
+                PretendOutcome::AlreadyInstalled {
+                    version: "1.0".to_string()
+                }
+            )
+        ]
+    );
 }
 
 /// An unsatisfied BDEPEND with a visible ebuild gets its own running-root
@@ -1563,6 +1821,71 @@ fn entries_are_returned_in_dependency_first_merge_order() {
 }
 
 #[test]
+fn required_by_is_empty_for_a_directly_requested_top_level_atom() {
+    let entries = full_graph("dev-libs/newpkg");
+    assert_eq!(entries[0].category, "dev-libs");
+    assert_eq!(entries[0].package, "newpkg");
+    assert_eq!(entries[0].required_by, Vec::new());
+}
+
+#[test]
+fn required_by_names_the_single_owner_of_a_plain_dependency() {
+    // Both deps list withdeps as their only owner.
+    let entries = full_graph("dev-libs/withdeps");
+    for entry in &entries {
+        if entry.category == "dev-libs"
+            && (entry.package == "newpkg" || entry.package == "upgradepkg")
+        {
+            assert_eq!(
+                entry.required_by,
+                vec![("dev-libs".to_string(), "withdeps".to_string())],
+                "{}/{}",
+                entry.category,
+                entry.package
+            );
+        }
+    }
+}
+
+#[test]
+fn required_by_lists_every_owner_of_a_diamond_dependency() {
+    // Both owners must be recorded (sorted), not just whichever the BFS
+    // resolved first.
+    let entries = full_graph("dev-libs/diamond");
+    let common = entries
+        .iter()
+        .find(|e| e.category == "dev-libs" && e.package == "common")
+        .expect("dev-libs/common must be in the graph");
+    assert_eq!(
+        common.required_by,
+        vec![
+            ("dev-libs".to_string(), "shared-a".to_string()),
+            ("dev-libs".to_string(), "shared-b".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn required_by_is_set_on_every_slot_of_a_multi_slot_dependency() {
+    // Two separate entries sharing one (category, package); both must carry
+    // the owner (the old destructive map handed it to only the first).
+    let entries = full_graph("dev-libs/multislotparent");
+    let slots: Vec<&GraphEntry> = entries
+        .iter()
+        .filter(|e| e.category == "dev-libs" && e.package == "multislotpkg")
+        .collect();
+    assert_eq!(slots.len(), 2, "both slots must be present");
+    for e in slots {
+        assert_eq!(
+            e.required_by,
+            vec![("dev-libs".to_string(), "multislotparent".to_string())],
+            "slot {:?} lost its required_by owner",
+            e.slot
+        );
+    }
+}
+
+#[test]
 fn a_slot_qualified_dep_does_not_edge_to_a_sibling_slot() {
     // `build_digraph` resolves each dep atom to the entries it actually
     // matches before adding an edge (a slot-blind lookup gave phantom edges).
@@ -1732,6 +2055,133 @@ fn real_resolved_use_flags_drive_dependency_recursion() {
 }
 
 #[test]
+fn use_expand_flag_drives_dependency_recursion() {
+    // VIDEO_CARDS="nvidia" expands into "video_cards_nvidia", which the RDEPEND
+    // is gated on.
+    let full_names: Vec<String> = graph_real("dev-libs/useexpandpkg")
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    assert_eq!(full_names, vec!["dev-libs/newpkg", "dev-libs/useexpandpkg"]);
+}
+
+#[test]
+fn package_use_expand_shorthand_drives_dependency_recursion() {
+    // package.use shorthand expands into the qualified flag the RDEPEND is
+    // gated on.
+    let full_names: Vec<String> = graph_real("dev-libs/packageuseexpandpkg")
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    assert_eq!(
+        full_names,
+        vec!["dev-libs/newpkg", "dev-libs/packageuseexpandpkg"]
+    );
+}
+
+#[test]
+fn use_expand_star_wildcard_enables_every_matching_iuse_flag() {
+    // The `_*` wildcard enables every matching flag in the package's OWN IUSE
+    // (Portage's setcpv); the masked one stays off, so only its gate fires.
+    let full_names: Vec<String> = graph_real("dev-libs/wildexpandpkg")
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    assert_eq!(
+        full_names,
+        vec!["dev-libs/wildexpanddep", "dev-libs/wildexpandpkg"]
+    );
+}
+
+#[test]
+fn use_expand_implicit_flag_is_valid_iuse_even_when_unlisted() {
+    // elibc_glibc is valid implicit IUSE for every package AND enabled, so the
+    // dep resolves (before this slice the declared-only `.required` check
+    // left it invisible).
+    let entries = graph_real("dev-libs/implicitiusepkg");
+    let prov = entries
+        .iter()
+        .find(|(name, _)| name == "dev-libs/implicitiuseprov")
+        .expect("the dep is in the graph");
+    // Resolved as a genuine New entry, NOT NoVisibleCandidate.
+    assert_eq!(
+        prov.1,
+        PretendOutcome::New {
+            version: "1.0".to_string()
+        }
+    );
+}
+
+#[test]
+fn use_expand_implicit_flag_valid_but_not_enabled_still_fails_the_use_dep() {
+    // elibc_musl is valid implicit IUSE but not enabled, so the dep is
+    // genuinely unsatisfiable (the slice widened the *valid* domain, not the
+    // *enabled* one).
+    let entries = graph_real("dev-libs/implicitiusepkgmusl");
+    let prov = entries
+        .iter()
+        .find(|(name, _)| name == "dev-libs/implicitiuseprov")
+        .expect("the unsatisfiable dep is still recorded");
+    assert_eq!(prov.1, PretendOutcome::NoVisibleCandidate);
+}
+
+#[test]
+fn fixture_stable_use_force_and_package_use_stable_mask_apply_when_stable() {
+    // Genuinely stable KEYWORDS: use.stable.force pulls in its own RDEPEND.
+    let full_names: Vec<String> = graph_real("dev-libs/stableusepkg")
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    assert_eq!(full_names, vec!["dev-libs/newpkg", "dev-libs/stableusepkg"]);
+}
+
+#[test]
+fn fixture_stable_use_force_skips_an_unstable_candidate() {
+    // Genuinely NOT stable: the same use.stable.force never applies.
+    let full_names: Vec<String> = graph_real("dev-libs/unstableusepkg")
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    assert_eq!(full_names, vec!["dev-libs/unstableusepkg"]);
+}
+
+#[test]
+fn without_with_test_deps_the_test_gated_dependency_is_absent() {
+    let full_names: Vec<String> = graph_real("dev-libs/withtestdeppkg")
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    assert_eq!(
+        full_names,
+        vec!["dev-libs/newpkg", "dev-libs/withtestdeppkg"]
+    );
+}
+
+#[test]
+fn fixture_package_use_enables_a_flag_not_on_globally() {
+    // A package.use wildcard entry enables the gating flag for this package.
+    let full_names: Vec<String> = graph_real("dev-libs/packageuseenablepkg")
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    assert_eq!(
+        full_names,
+        vec!["dev-libs/newpkg", "dev-libs/packageuseenablepkg"]
+    );
+}
+
+#[test]
+fn fixture_package_use_disables_a_flag_that_is_on_globally() {
+    // The fixture profile chain enables "foo" globally, but a package.use
+    // "-foo" entry scoped to just this package keeps its gate closed.
+    let full_names: Vec<String> = graph_real("dev-libs/packageusedisablepkg")
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    assert_eq!(full_names, vec!["dev-libs/packageusedisablepkg"]);
+}
+
+#[test]
 fn use_dep_enforcement_matches_a_declared_and_enabled_flag() {
     // IUSE="foo missingflag" with "foo" enabled globally.
     assert_eq!(
@@ -1783,6 +2233,43 @@ fn use_dep_enforcement_plus_default_rescues_an_undeclared_flag() {
         PretendOutcome::New {
             version: "1.0".to_string()
         }
+    );
+}
+
+#[test]
+fn use_dep_enforcement_rejects_a_dependency_atom_but_does_not_fail_the_graph() {
+    // Genuinely unsatisfiable: the parent still resolves, and the dependency
+    // gets its own NoVisibleCandidate entry (reported, not failing the graph).
+    let entries = graph_real("dev-libs/usedeprejectedpkg");
+    assert_eq!(
+        entries,
+        vec![
+            (
+                "dev-libs/useflagpkg".to_string(),
+                PretendOutcome::NoVisibleCandidate
+            ),
+            (
+                "dev-libs/usedeprejectedpkg".to_string(),
+                PretendOutcome::New {
+                    version: "1.0".to_string()
+                }
+            )
+        ]
+    );
+}
+
+#[test]
+fn required_use_satisfied_resolves_normally() {
+    // REQUIRED_USE="foo? ( bar )", genuinely satisfied via the package.use
+    // entry forcing bar on.
+    assert_eq!(
+        graph_real("dev-libs/requireduseokpkg"),
+        vec![(
+            "dev-libs/requireduseokpkg".to_string(),
+            PretendOutcome::New {
+                version: "1.0".to_string()
+            }
+        )]
     );
 }
 
@@ -1909,6 +2396,22 @@ fn top_level_use_miss_reports_the_use_block_without_chain() {
          \"dev-libs/useflagpkg[-foo]\".\n\
          !!! One of the following packages is required to complete your request:\n\
          - dev-libs/useflagpkg-1.0::testrepo (Change USE: -foo)"
+    );
+}
+
+#[test]
+fn required_use_referencing_an_implicit_arch_list_flag_is_valid() {
+    // "!x86" with "x86" never declared in IUSE is still valid via
+    // PORTAGE_ARCHLIST (like Portage's media-libs/mesa); x86 stays disabled
+    // here, so "!x86" is satisfied.
+    assert_eq!(
+        graph_real("dev-libs/archiuseimplicitpkg"),
+        vec![(
+            "dev-libs/archiuseimplicitpkg".to_string(),
+            PretendOutcome::New {
+                version: "1.0".to_string()
+            }
+        )]
     );
 }
 
