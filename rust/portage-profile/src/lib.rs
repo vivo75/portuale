@@ -1183,6 +1183,11 @@ pub struct BinRepo {
     /// `true` (it does not parse that global `[DEFAULT]` itself) and lets
     /// a section's own `verify-signature = false` override.
     pub verify_signature: bool,
+    /// `frozen` (real `BinRepoConfig.frozen`, a `_bool_opts` member,
+    /// default `"false"`): a frozen binrepo's cached `Packages` index is
+    /// used as-is, never refreshed (real `bintree._populate_remote_repo`
+    /// raises `UseCachedCopyOfRemoteIndex("frozen")`, backlog #192).
+    pub frozen: bool,
 }
 
 impl BinRepo {
@@ -1670,6 +1675,20 @@ fn apply_env_layer(scalars: &mut HashMap<String, String>, config: &mut Config) {
             if TRACKED_INCREMENTALS.contains(&name) {
                 note_incremental(config, name, &value);
             }
+            scalars.insert(name.to_string(), value);
+        }
+    }
+    // `CONFIG_PROTECT` / `CONFIG_PROTECT_MASK` / `ENV_UNSET`: also in
+    // real `const.INCREMENTALS` (`const.py:125-138`), so real
+    // `config.regenerate()` stacks the calling env as the final source
+    // of their fold like `FEATURES` (`mydbs = configlist[:-1] +
+    // [backupenv]`, `config.py:2735-2736`) -- `emerge --info`'s
+    // `settings.get(k)` then prints the stacked, sorted union (backlog
+    // #219 fix round 1). Same treatment as `FEATURES` above: the env
+    // value is both the final incremental source and the scalar.
+    for name in ["CONFIG_PROTECT", "CONFIG_PROTECT_MASK", "ENV_UNSET"] {
+        if let Some(value) = config_env_var(name) {
+            note_incremental(config, name, &value);
             scalars.insert(name.to_string(), value);
         }
     }
@@ -3741,7 +3760,8 @@ pub fn resolve_config(
 
 /// Real `BinRepoConfigLoader` (`lib/portage/binrepo/config.py:97-172`),
 /// narrowed. Parses `binrepos.conf`'s own `[section]` / `key = value`
-/// INI (only `sync-uri` and `priority` are read), then appends one
+/// INI (`sync-uri`, `priority`, `location`, `verify-signature` and
+/// `frozen` are read), then appends one
 /// implicit `BinRepo` per whitespace-separated `PORTAGE_BINHOST` URI
 /// that isn't already a section's `sync-uri` (real "Convert
 /// PORTAGE_BINHOST entries into implicit binrepos.conf ones", iterated in
@@ -3768,12 +3788,14 @@ fn parse_binrepos(binrepos_conf: &str, portage_binhost: &str) -> Vec<BinRepo> {
     let mut priority: i32 = 0;
     let mut location: Option<String> = None;
     let mut verify_signature = true;
+    let mut frozen = false;
     #[allow(clippy::type_complexity)]
     let flush = |section: &mut Option<String>,
                  sync_uri: &mut Option<String>,
                  priority: &mut i32,
                  location: &mut Option<String>,
                  verify_signature: &mut bool,
+                 frozen: &mut bool,
                  repos: &mut Vec<BinRepo>,
                  seen: &mut std::collections::HashSet<String>| {
         if let (Some(name), Some(uri)) = (section.take(), sync_uri.take()) {
@@ -3785,11 +3807,13 @@ fn parse_binrepos(binrepos_conf: &str, portage_binhost: &str) -> Vec<BinRepo> {
                 priority: *priority,
                 location: location.take(),
                 verify_signature: *verify_signature,
+                frozen: *frozen,
             });
         }
         *priority = 0;
         *location = None;
         *verify_signature = true;
+        *frozen = false;
     };
     for line in binrepos_conf.lines() {
         let line = line.trim();
@@ -3803,6 +3827,7 @@ fn parse_binrepos(binrepos_conf: &str, portage_binhost: &str) -> Vec<BinRepo> {
                 &mut priority,
                 &mut location,
                 &mut verify_signature,
+                &mut frozen,
                 &mut repos,
                 &mut seen_uris,
             );
@@ -3824,6 +3849,14 @@ fn parse_binrepos(binrepos_conf: &str, portage_binhost: &str) -> Vec<BinRepo> {
                         "true" | "yes" | "1" | "on"
                     )
                 }
+                // Real `binrepo/config.py` `_bool_opts` (`"frozen":
+                // "false"` default): a frozen binrepo is never refreshed.
+                "frozen" => {
+                    frozen = matches!(
+                        v.trim().to_ascii_lowercase().as_str(),
+                        "true" | "yes" | "1" | "on"
+                    )
+                }
                 _ => {}
             }
         }
@@ -3834,6 +3867,7 @@ fn parse_binrepos(binrepos_conf: &str, portage_binhost: &str) -> Vec<BinRepo> {
         &mut priority,
         &mut location,
         &mut verify_signature,
+        &mut frozen,
         &mut repos,
         &mut seen_uris,
     );
@@ -3858,6 +3892,7 @@ fn parse_binrepos(binrepos_conf: &str, portage_binhost: &str) -> Vec<BinRepo> {
                 // is skipped -- an implicit entry keeps `location = None`.
                 location: None,
                 verify_signature: true,
+                frozen: false,
             });
         }
     }
@@ -3900,6 +3935,24 @@ sync-uri = file:///srv/pkgs
     }
 
     #[test]
+    fn parse_binrepos_reads_frozen_defaulting_to_false() {
+        // Real `binrepo/config.py` `_bool_opts` (`"frozen": "false"`
+        // default, backlog #192).
+        let conf = "\
+[frozenrepo]
+sync-uri = https://frozen.example.org/amd64/
+frozen = true
+
+[plainrepo]
+sync-uri = https://plain.example.org/amd64/
+";
+        let repos = parse_binrepos(conf, "");
+        assert_eq!(repos.len(), 2);
+        assert!(repos[0].frozen, "frozenrepo is frozen");
+        assert!(!repos[1].frozen, "plainrepo defaults to unfrozen");
+    }
+
+    #[test]
     fn binrepo_packages_dir_maps_scheme_to_the_real_edb_cache_layout() {
         let root = Path::new("/eroot");
         let http = BinRepo {
@@ -3908,6 +3961,7 @@ sync-uri = file:///srv/pkgs
             priority: 0,
             location: None,
             verify_signature: true,
+            frozen: false,
         };
         assert_eq!(
             http.packages_dir(root),
@@ -3919,6 +3973,7 @@ sync-uri = file:///srv/pkgs
             priority: 0,
             location: None,
             verify_signature: true,
+            frozen: false,
         };
         assert_eq!(file.packages_dir(root), Path::new("/srv/pkgs"));
     }
@@ -5971,6 +6026,85 @@ sync-uri = file:///srv/pkgs
             assert!(!c.other_vars.contains_key("BINPKG_FORMAT"));
             assert_eq!(env_over_config_scalar(&c, "BINPKG_FORMAT"), None);
         });
+    }
+
+    #[test]
+    fn env_layer_stacks_onto_the_config_protect_and_env_unset_folds() {
+        // Backlog #219 fix round 1: `CONFIG_PROTECT`,
+        // `CONFIG_PROTECT_MASK` and `ENV_UNSET` are in real
+        // `const.INCREMENTALS` (`const.py:125-138`), so real
+        // `config.regenerate()` stacks the calling env as the final
+        // source (`mydbs = configlist[:-1] + [backupenv]`,
+        // `config.py:2735-2736`) -- like `FEATURES`, not last-wins.
+        // `emerge --info`'s `settings.get(k)` then prints the stacked,
+        // sorted union.
+        let root = std::env::temp_dir().join("portage-profile-test-info-incrementals");
+        let repo = root.join("repo");
+        let prof = repo.join("profiles/default");
+        let portage_dir = root.join("etc/portage");
+        fs::create_dir_all(&prof).unwrap();
+        fs::create_dir_all(&portage_dir).unwrap();
+        fs::write(
+            prof.join("make.defaults"),
+            "ARCH=\"amd64\"\nACCEPT_KEYWORDS=\"${ARCH}\"\n",
+        )
+        .unwrap();
+        fs::write(
+            portage_dir.join("make.conf"),
+            "CONFIG_PROTECT=\"/conf-protect\"\n\
+             CONFIG_PROTECT_MASK=\"/conf-mask\"\n\
+             ENV_UNSET=\"CONF_UNSET\"\n",
+        )
+        .unwrap();
+        let make_profile = portage_dir.join("make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&prof, &make_profile).unwrap();
+        let resolve = || {
+            resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new(), &root)
+                .expect("resolves")
+        };
+
+        // No env: the `make.conf` layer alone.
+        with_test_env(&[], || {
+            let c = resolve();
+            assert_eq!(
+                c.resolved_incremental("CONFIG_PROTECT"),
+                Some(vec!["/conf-protect".to_string()])
+            );
+            assert_eq!(
+                c.resolved_incremental("ENV_UNSET"),
+                Some(vec!["CONF_UNSET".to_string()])
+            );
+        });
+
+        // Calling env stacks onto the file fold (union, sorted --
+        // including `-tok` removal, as in real's fold).
+        with_test_env(
+            &[
+                ("CONFIG_PROTECT", "/env-protect"),
+                ("CONFIG_PROTECT_MASK", "-/conf-mask /env-mask"),
+                ("ENV_UNSET", "ENV_UNSET_X"),
+            ],
+            || {
+                let c = resolve();
+                assert_eq!(
+                    c.resolved_incremental("CONFIG_PROTECT"),
+                    Some(vec![
+                        "/conf-protect".to_string(),
+                        "/env-protect".to_string()
+                    ])
+                );
+                assert_eq!(
+                    c.resolved_incremental("CONFIG_PROTECT_MASK"),
+                    Some(vec!["/env-mask".to_string()])
+                );
+                assert_eq!(
+                    c.resolved_incremental("ENV_UNSET"),
+                    Some(vec!["CONF_UNSET".to_string(), "ENV_UNSET_X".to_string()])
+                );
+            },
+        );
     }
 
     #[test]

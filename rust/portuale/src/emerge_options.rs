@@ -314,7 +314,15 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     // `portuale/src/difflib.rs`). Excluded here for the same reason.
     ("--ignore-built-slot-operator-deps", None),
     ("--ignore-soname-deps", None),
-    ("--ignore-world", None),
+    // `--ignore-world` IS implemented -- real `create_depgraph_params.py:128`
+    // (`is True`, so bare / `=y` / `=True` only) + `depgraph.py:357-360`
+    // (empties `_required_set_names`, dropping `@world` -- which nests
+    // `@selected`/`@system`/`@profile` -- from the complete-graph seeds)
+    // + `:10107` (skips the `@selected` uninstall guard). Portuale empties
+    // `complete_seed_atoms` (which also empties `blocker_retry_seed_atoms`
+    // via the existing clone); explicit args, `--deep`/`--update` and the
+    // removal actions (real returns early for those) are untouched. See
+    // pretend.rs's own parse loop + `run_resolve`'s seed block.
     ("--jobs", Some("-j")),
     ("--jobs-tmpdir-require-free-gb", None),
     ("--keep-going", None),
@@ -352,7 +360,10 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     // reason `--verbose`/`-v` is: the caller parses them directly. See
     // pretend.rs.
     ("--quiet-fail", None),
-    ("--read-news", None),
+    // `--read-news` IS implemented -- with `--ask`, offer `eselect news
+    // read` while calculating dependencies (see pretend.rs, backlog
+    // #231) -- deliberately excluded here for the same reason `--ask`
+    // is: the caller parses it directly.
     // `--rebuild-if-new-slot` / `-new-rev` / `-new-ver` / `-unbuilt` ARE
     // implemented -- rebuild an installed package whose build-time dep is
     // being merged this run (see pretend.rs + portage-repo's
@@ -513,11 +524,18 @@ mod tests {
     }
 
     #[test]
-    fn does_not_recognize_nodeps_itself() {
-        // --nodeps/-O is handled directly by the caller (it's
+    fn does_not_recognize_with_test_deps_itself() {
+        // --with-test-deps is handled directly by the caller (it's
         // implemented), not through this "not implemented" table.
-        assert!(lookup("--nodeps").is_none());
-        assert!(lookup("-O").is_none());
+        assert!(lookup("--with-test-deps").is_none());
+    }
+
+    #[test]
+    fn does_not_recognize_read_news_itself() {
+        // --read-news is handled directly by the caller (it's
+        // implemented, backlog #231), not through this "not
+        // implemented" table.
+        assert!(lookup("--read-news").is_none());
     }
 
     #[test]
@@ -586,13 +604,6 @@ mod tests {
     }
 
     #[test]
-    fn does_not_recognize_with_test_deps_itself() {
-        // --with-test-deps is handled directly by the caller (it's
-        // implemented), not through this "not implemented" table.
-        assert!(lookup("--with-test-deps").is_none());
-    }
-
-    #[test]
     fn does_not_recognize_noreplace_or_selective_either() {
         // Both are handled directly by the caller now (both
         // implemented), not through this "not implemented" table.
@@ -618,6 +629,18 @@ mod tests {
                 "{flag} should not be recognized here"
             );
         }
+    }
+
+    #[test]
+    fn does_not_recognize_ignore_world_itself() {
+        // --ignore-world is handled directly by the caller (it's
+        // implemented: real `create_depgraph_params.py:128-129` +
+        // `depgraph.py:357-360`), not through this "not implemented"
+        // table. It has no short alias (real `main.py` declares none),
+        // and the `=n` spelling must not match either (lookup strips the
+        // value before the table search).
+        assert!(lookup("--ignore-world").is_none());
+        assert!(lookup("--ignore-world=n").is_none());
     }
 
     #[test]

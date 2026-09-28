@@ -132,6 +132,9 @@ pub struct SourceEngine<'a> {
     pub buildpkg: Option<&'a crate::ebuild_package::PackageOptions>,
     /// `--buildpkg-exclude` atoms.
     pub buildpkg_exclude: &'a [String],
+    /// Backlog #197: the run's status display (blank/`>>>` rule for the
+    /// `Emerging`/`Installing`/`Completed` lines).
+    pub display: &'a crate::emerge_build::StatusDisplay,
 }
 
 impl SourceEngine<'_> {
@@ -160,6 +163,7 @@ impl SourceEngine<'_> {
             self.options,
             bp,
             progress,
+            self.display,
         )
     }
 }
@@ -196,6 +200,9 @@ pub struct BinaryEngine<'a> {
     pub portage_tmpdir: &'a Path,
     /// Merge options.
     pub options: &'a crate::ebuild_merge::MergeOptions,
+    /// Backlog #197: the run's status display (blank/`>>>` rule for the
+    /// `Emerging binary`/`Installing`/`Completed` lines).
+    pub display: &'a crate::emerge_build::StatusDisplay,
 }
 
 impl BinaryEngine<'_> {
@@ -215,6 +222,7 @@ impl BinaryEngine<'_> {
             self.portage_tmpdir,
             self.options,
             progress,
+            self.display,
         )
     }
 }
@@ -352,6 +360,7 @@ mod tests {
         };
         let repos: Vec<RepoConfig> = Vec::new();
         let options = crate::ebuild_merge::MergeOptions::default();
+        let display = crate::emerge_build::StatusDisplay::for_tests();
         let source = SourceEngine {
             repos: &repos,
             root: Path::new("/root"),
@@ -359,6 +368,7 @@ mod tests {
             options: &options,
             buildpkg: None,
             buildpkg_exclude: &[],
+            display: &display,
         };
         let binary_unit = MergeUnit::binary("dev-libs/example-1.0", Path::new("/root"));
         assert!(matches!(
@@ -378,6 +388,7 @@ mod tests {
             pkgdir: Path::new("/var/cache/binpkgs"),
             portage_tmpdir: Path::new("/var/tmp/portage"),
             options: &options,
+            display: &display,
         };
         let source_unit = MergeUnit::source("dev-libs/example-1.0", Path::new("/root"));
         assert!(matches!(
