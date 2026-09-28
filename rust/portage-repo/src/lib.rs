@@ -15045,6 +15045,65 @@ fn is_build_time_dep_key(key: impl AsRef<str>) -> bool {
 /// requirements -- see `rev_dep_pin_holdable`) feed the residual
 /// installed-instance conflict report instead of masking the
 /// hard-required version into invisibility.
+/// A same-version USE-change reinstall's decided merge state, for the
+/// USE-break check below: the candidate string this run installs (same
+/// shape as `reverse_dependency_constraints`' own `upgrading` values),
+/// plus the merge's own effective USE set and declared IUSE -- real's
+/// `violated_conditionals(child_use, parent_use)` needs both sides.
+struct UseBreakSource {
+    candidate: String,
+    merge_use: HashSet<String>,
+    merge_iuse: HashSet<String>,
+}
+
+/// The decided merge USE/IUSE for `category/package-version`: the
+/// candidate's own effective flags (`candidate_iuse_and_use` -- the
+/// profile-resolved set this run merges with, or the baked set for a
+/// binary). `None` when no readable candidate exists (an unreadable
+/// md5-cache entry); callers fall back to ignoring USE, today's
+/// behaviour.
+fn merge_use_state(
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> Option<(HashSet<String>, HashSet<String>)> {
+    let cands = list_candidates(repos, category, package).ok()?;
+    let cand = cands.iter().find(|c| c.version == version)?;
+    let (iuse, use_flags) = candidate_iuse_and_use(cand, category, package, config)?;
+    Some(((*use_flags).clone(), iuse))
+}
+
+/// Real `_complete_graph`'s own USE-change trigger
+/// (`depgraph.py:8620-8637`): the merge node's IUSE, or its enabled USE
+/// intersected with IUSE, differs from the installed instance's. This is
+/// a node-vs-vdb comparison real makes unconditionally -- it does NOT go
+/// through `--newuse`/`--changed-use` (a bare, reasonless `[ebuild R]`
+/// for an explicitly-requested installed package carries no
+/// `changed_flags` yet still flips USE and still enables complete
+/// mode). `None` when the merge side is unreadable (no md5-cache
+/// entry); callers fall back to the entry's own `changed_flags`,
+/// today's behaviour.
+fn merge_use_changed_vs_installed(
+    root: &Path,
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> Option<bool> {
+    let (merge_use, merge_iuse) = merge_use_state(repos, config, category, package, version)?;
+    let inst_use = read_vdb_flag_set(root, category, package, version, "USE");
+    let inst_iuse = read_vdb_flag_set(root, category, package, version, "IUSE");
+    if merge_iuse != inst_iuse {
+        return Some(true);
+    }
+    let merge_enabled: HashSet<&String> = merge_use.intersection(&merge_iuse).collect();
+    let inst_enabled: HashSet<&String> = inst_use.intersection(&inst_iuse).collect();
+    Some(merge_enabled != inst_enabled)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn reverse_dependency_constraints(
     repos: &[RepoConfig],
@@ -15058,6 +15117,8 @@ fn reverse_dependency_constraints(
     ignore_built_slot_operator_deps: bool,
     top_level_cps: &HashSet<(String, String)>,
     world_reachable: &HashSet<(String, String)>,
+    config: &portage_profile::Config,
+    complete: bool,
 ) -> (Vec<RevDepPin>, Vec<RevDepPin>) {
     // (`cat/pkg`, slot) -> (the candidate string this run would install,
     // whether it comes from a same-version slot-change reinstall) for
@@ -15082,6 +15143,22 @@ fn reverse_dependency_constraints(
     // deep-walks the required sets, but a package the requested atoms'
     // own tree already pulled in is a graph node regardless of that walk).
     let mut graph_cps: HashSet<(String, String)> = HashSet::new();
+    // Backlog #222: (`cat/pkg`, slot) -> decided merge state for every
+    // same-version USE-change reinstall -- a `Reinstall` whose version
+    // never moves, so the stripped-constraint check below always holds,
+    // but whose USE flip can still break an installed consumer's `[use]`
+    // bound (upstream `test_complete_graph.py` pg0: the `icu` flip
+    // breaks installed `cgp0q`'s `[-icu]` dep). Real fails exactly that
+    // shape in its complete-mode end-of-walk unsatisfied-dep loop
+    // (`depgraph.py:8751-8791`), having enabled complete mode on the USE
+    // change (`complete_if_new_use`, `:8620-8637` -- portuale's
+    // `complete_graph_auto_enable` already re-resolves with
+    // `complete = true` for it, so these sources are collected only in
+    // complete mode). Upgrade/Downgrade/slot-change entries are
+    // deliberately NOT sources: their version machinery owns the
+    // break, and a USE interplay there (the #91 qemu shapes) belongs to
+    // the slot-operator probe's rebuild domain, not to a failure pin.
+    let mut use_breaks: HashMap<((String, String), String), UseBreakSource> = HashMap::new();
     for e in entries {
         let cp = (e.category.clone(), e.package.clone());
         graph_cps.insert(cp.clone());
@@ -15095,6 +15172,33 @@ fn reverse_dependency_constraints(
             && top_level_cps.contains(&cp)
         {
             already_installed_top_level.insert(cp.clone());
+        }
+        if complete
+            && let PretendOutcome::Reinstall {
+                version,
+                slot_changed: false,
+                ..
+            } = &e.outcome
+            && let Some((merge_use, merge_iuse)) =
+                merge_use_state(repos, config, &e.category, &e.package, version)
+            && merge_use_changed_vs_installed(root, repos, config, &e.category, &e.package, version)
+                .unwrap_or(false)
+        {
+            let slot = e.slot.clone().unwrap_or_else(|| "0".to_string());
+            use_breaks.insert(
+                (cp.clone(), slot.clone()),
+                UseBreakSource {
+                    candidate: format!(
+                        "{}/{}-{version}:{slot}/{}::{}",
+                        e.category,
+                        e.package,
+                        e.sub_slot.as_deref().unwrap_or("0"),
+                        e.repo_name.as_deref().unwrap_or_default()
+                    ),
+                    merge_use,
+                    merge_iuse,
+                },
+            );
         }
         let (to, reinstall_slot_change) = match &e.outcome {
             PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
@@ -15122,7 +15226,7 @@ fn reverse_dependency_constraints(
             ),
         );
     }
-    if upgrading.is_empty() {
+    if upgrading.is_empty() && use_breaks.is_empty() {
         return (Vec::new(), Vec::new());
     }
 
@@ -15264,6 +15368,91 @@ fn reverse_dependency_constraints(
                     }
                 }
                 if failing.is_empty() {
+                    // Backlog #222: no version in any upgraded slot breaks
+                    // the stripped constraint -- but a same-version
+                    // USE-change reinstall can still break the pin's
+                    // `[use]` bound, which real's complete-mode
+                    // end-of-walk loop fails on (`depgraph.py:8751-8791`:
+                    // an unsatisfied dep the vdb still matches pulls the
+                    // installed package in as a nomerge node, i.e. a slot
+                    // collision). The merge's USE is already decided --
+                    // real fails rather than reflipping it (the EAPI-8
+                    // oracle answers `success=False` with no
+                    // `slot_collision_solutions`) -- so a broken USE pin
+                    // is dropped for the residual installed-instance
+                    // report, never enforced (enforcing the verbatim atom
+                    // would let the re-resolve silently flip the USE back
+                    // and succeed where real fails). The stripped probe
+                    // must still hold the merge: otherwise the break is
+                    // not USE at all (and a consumer already broken before
+                    // the run is real's `initially_unsatisfied` skip).
+                    // Built slot-operator pins stay out: their domain
+                    // owns the version/USE interplay through rebuilds
+                    // (#24), and build-time keys stay out like the D0
+                    // ignore below (real empties a built package's
+                    // `DEPEND`/`BDEPEND` before registering any parent
+                    // atom, `depgraph.py:4194-4247`).
+                    let use_deps = atom.use_deps.clone().unwrap_or_default();
+                    if !use_deps.is_empty() && !is_build_time_dep_key(dep_key) && !built_slot_op {
+                        let pin_slot = atom.slot.as_deref();
+                        let mut broken = false;
+                        for ((ucp, uslot), source) in &use_breaks {
+                            if *ucp != cp {
+                                continue;
+                            }
+                            if pin_slot.is_some_and(|ps| ps != uslot.as_str()) {
+                                continue;
+                            }
+                            if portage_dep::match_from_list(
+                                constraint.as_str(),
+                                &[source.candidate.as_str()],
+                            )
+                            .is_none_or(|m| m.is_empty())
+                            {
+                                continue;
+                            }
+                            if portage_dep::use_deps_violated(
+                                &use_deps,
+                                &use_flags,
+                                &source.merge_use,
+                                &source.merge_iuse,
+                            ) {
+                                broken = true;
+                                break;
+                            }
+                        }
+                        if broken {
+                            // Real stores the parent atom evaluated
+                            // against the parent's own USE (real
+                            // `Atom.evaluate_conditionals` at edge time,
+                            // `lib/portage/dep/__init__.py:1387`): the
+                            // collision renderer classifies USE reasons
+                            // from the unconditional forms alone (real
+                            // `slot_collision.py:331-389`), so the pin
+                            // carries the evaluated text (`[-icu]`, not
+                            // `[!icu?]`) while `raw_atom` keeps the
+                            // recorded verbatim form for notices.
+                            let evaluated = portage_dep::evaluate_atom_conditionals(
+                                atom_str.as_str(),
+                                &use_flags,
+                            )
+                            .unwrap_or_else(|| atom_str.clone());
+                            let pin = RevDepPin {
+                                cp: cp.clone(),
+                                atom: evaluated,
+                                raw_atom: atom_str.clone(),
+                                consumer: (
+                                    consumer.category.clone(),
+                                    consumer.package.clone(),
+                                    consumer.version.clone(),
+                                ),
+                            };
+                            if seen.insert((pin.cp.clone(), pin.atom.clone(), pin.consumer.clone()))
+                            {
+                                dropped.push(pin);
+                            }
+                        }
+                    }
                     continue;
                 }
                 // The enforced/dropped atom text: verbatim when a built
@@ -19307,10 +19496,36 @@ fn build_residual_slot_conflicts(
         };
         // The pin holds after all -- a later pass picked a compatible
         // version. Nothing to report (real reconciles silently too).
+        // Backlog #222: a `[use]`-carrying pin (a USE-break dropped pin)
+        // version-matches the merge by construction -- `match_from_list`
+        // never reads use-deps, same as real's -- so the holds check
+        // must also evaluate the pin's use-deps against the merge's own
+        // decided USE (real `violated_conditionals`, the same check that
+        // fired the pin). A merge whose USE still breaks the pin stays
+        // reported; an uncomputable merge USE falls back to the
+        // version-only check, today's behaviour.
         let merge_str =
             format!("{category}/{package}-{merge_ver}:{slot}/{merge_sub}::{merge_repo}");
-        if portage_dep::match_from_list(&pin.atom, &[merge_str.as_str()])
-            .is_some_and(|m| !m.is_empty())
+        let use_still_broken = portage_dep::parse_atom(&pin.atom)
+            .and_then(|parsed| parsed.use_deps)
+            .filter(|deps| !deps.is_empty())
+            .is_some_and(|deps| {
+                merge_use_state(repos, config, &category, &package, &merge_ver).is_some_and(
+                    |(merge_use, merge_iuse)| {
+                        let parent_use = read_vdb_flag_set(
+                            root,
+                            &pin.consumer.0,
+                            &pin.consumer.1,
+                            &pin.consumer.2,
+                            "USE",
+                        );
+                        portage_dep::use_deps_violated(&deps, &parent_use, &merge_use, &merge_iuse)
+                    },
+                )
+            });
+        if !use_still_broken
+            && portage_dep::match_from_list(&pin.atom, &[merge_str.as_str()])
+                .is_some_and(|m| !m.is_empty())
         {
             continue;
         }
@@ -22278,7 +22493,15 @@ fn expand_resolved_slot_with_flipped_use(
 ///   - `complete_if_new_use`: `node.iuse.all != inst_pkg.iuse.all` or the
 ///     enabled-USE ∩ IUSE sets differ -- portuale's `--newuse`/
 ///     `--changed-use` `Reinstall`, whose `changed_flags` is real
-///     `_reinstall_for_flags`'s own return value.
+///     `_reinstall_for_flags`'s own return value, *plus* a bare
+///     reasonless `[ebuild R]` for an explicitly-requested installed
+///     package (backlog #222): real compares the merge node's own USE
+///     against the vdb unconditionally, while `changed_flags` is only
+///     ever computed under `--newuse`/`--changed-use`. The reasonless
+///     shape is detected with the same fresh `iuse.all` /
+///     enabled-∩-IUSE diff real makes (`merge_use_changed_vs_installed`),
+///     falling back to `changed_flags` when the merge side is
+///     unreadable.
 ///   - `complete_if_new_slot`: `vardb.match_pkgs(Atom(node.cp))` exists,
 ///     same `cp`, and no installed pkg matches `node`'s slot/sub-slot
 ///     (8634-8645) -- a new-slot install, portuale's `New` + `new_slot`.
@@ -22287,23 +22510,38 @@ fn expand_resolved_slot_with_flipped_use(
 /// (if it returns `true` and neither `--complete-graph` nor `--deep` is
 /// already in force) re-resolves with `complete = true` -- see
 /// `pretend.rs`'s two-pass, which mirrors real portage's own "resolve,
-/// then `_complete_graph` re-walk" structure. Narrowing vs real: the
-/// USE comparison is `changed_flags` (already computed against the vdb),
-/// not a fresh `iuse.all` / enabled-∩-IUSE diff.
+/// then `_complete_graph` re-walk" structure.
 pub fn complete_graph_auto_enable(
     entries: &[GraphEntry],
     if_new_use: bool,
     if_new_ver: bool,
     if_new_slot: bool,
+    root: &Path,
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
 ) -> bool {
     entries.iter().any(|e| match &e.outcome {
         PretendOutcome::Upgrade { .. } | PretendOutcome::Downgrade { .. } => if_new_ver,
         PretendOutcome::New { .. } if e.new_slot => if_new_ver || if_new_slot,
         PretendOutcome::Reinstall {
+            version,
             changed_flags,
             slot_changed,
             ..
-        } => (if_new_use && !changed_flags.is_empty()) || (if_new_ver && *slot_changed),
+        } => {
+            (if_new_ver && *slot_changed)
+                || (if_new_use
+                    && (!changed_flags.is_empty()
+                        || merge_use_changed_vs_installed(
+                            root,
+                            repos,
+                            config,
+                            &e.category,
+                            &e.package,
+                            version,
+                        )
+                        .unwrap_or(false)))
+        }
         _ => false,
     })
 }
@@ -27292,6 +27530,8 @@ fn collect_feedback(
             ctx.ignore_built_slot_operator_deps,
             &ctx.top_level_cps,
             &ctx.world_reachable,
+            ctx.config,
+            ctx.complete,
         );
         for pin in dropped {
             if !grown.dropped_pins.contains(&pin) {
@@ -27514,6 +27754,8 @@ fn collect_feedback(
         ctx.ignore_built_slot_operator_deps,
         &ctx.top_level_cps,
         &ctx.world_reachable,
+        ctx.config,
+        ctx.complete,
     );
     // #24 S4: rule 4 of `_eliminate_rebuilds` checks every parent atom of
     // the rebuilt pkg, and real's complete-graph nomerge consumers are
@@ -37697,14 +37939,41 @@ mod tests {
             Some(PretendOutcome::Upgrade { .. })
         ));
         assert!(!has_newpkg(&up));
-        assert!(complete_graph_auto_enable(&up.entries, true, true, true));
-        assert!(complete_graph_auto_enable(&up.entries, false, true, false));
-        assert!(!complete_graph_auto_enable(&up.entries, true, false, true));
+        assert!(complete_graph_auto_enable(
+            &up.entries,
+            true,
+            true,
+            true,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
+        ));
+        assert!(complete_graph_auto_enable(
+            &up.entries,
+            false,
+            true,
+            false,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
+        ));
+        assert!(!complete_graph_auto_enable(
+            &up.entries,
+            true,
+            false,
+            true,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
+        ));
         assert!(!complete_graph_auto_enable(
             &up.entries,
             false,
             false,
-            false
+            false,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
         ));
         // Even after the auto-enable re-walk, the missing deep dep is not
         // merged (2-pass, `completegraphpkg` is the only phase-1 merge).
@@ -37718,7 +37987,15 @@ mod tests {
 
         // An AlreadyInstalled-only graph never auto-enables.
         let noop = resolve("dev-libs/deeppkg2", false, Deep::NotRequested, false);
-        assert!(!complete_graph_auto_enable(&noop.entries, true, true, true));
+        assert!(!complete_graph_auto_enable(
+            &noop.entries,
+            true,
+            true,
+            true,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
+        ));
     }
 
     /// Like `graph_deep`, but driven by `--emptytree`/`-e` instead
@@ -50003,6 +50280,8 @@ mod tests {
             false,
             &HashSet::new(),
             &HashSet::new(),
+            &portage_profile::Config::default(),
+            false,
         );
         assert!(
             enforced.is_empty() && dropped.is_empty(),
@@ -50027,6 +50306,8 @@ mod tests {
             false,
             &HashSet::new(),
             &HashSet::new(),
+            &portage_profile::Config::default(),
+            false,
         );
         assert_eq!(
             enforced.len() + dropped.len(),
@@ -50085,6 +50366,8 @@ mod tests {
             false,
             &HashSet::new(),
             &HashSet::new(),
+            &portage_profile::Config::default(),
+            false,
         );
         assert_eq!(
             enforced.len(),
@@ -50169,6 +50452,8 @@ mod tests {
             false,
             &HashSet::new(),
             &HashSet::new(),
+            &portage_profile::Config::default(),
+            false,
         );
         let mut atoms: Vec<String> = enforced
             .iter()
@@ -50197,6 +50482,8 @@ mod tests {
             false,
             &HashSet::new(),
             &HashSet::new(),
+            &portage_profile::Config::default(),
+            false,
         );
         assert!(
             enforced.is_empty() && dropped.is_empty(),
@@ -50282,6 +50569,8 @@ mod tests {
             false,
             &top_level,
             &HashSet::new(),
+            &portage_profile::Config::default(),
+            false,
         );
         assert!(
             enforced.is_empty() && dropped.is_empty(),
@@ -50304,6 +50593,8 @@ mod tests {
             false,
             &top_level,
             &world,
+            &portage_profile::Config::default(),
+            false,
         );
         assert_eq!(
             enforced.len() + dropped.len(),
@@ -50312,6 +50603,180 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reverse_dependency_constraints_drops_a_use_break_from_a_use_change_reinstall() {
+        // Backlog #222, on the committed fixtures (upstream
+        // `test_complete_graph.py` pg0: `dev-libs/cgp0x-2.8.0` IUSE
+        // `+icu`, installed with `USE=""`; installed `dev-libs/cgp0q`
+        // records `dev-libs/cgp0x:2[-icu]`): a same-version USE-change
+        // reinstall moves no version, so the stripped-constraint scan
+        // finds nothing -- but the flip breaks the installed consumer's
+        // `[use]` bound, which real fails in its complete-mode
+        // end-of-walk loop (`depgraph.py:8751-8791`). The pin is
+        // dropped for the residual report (the merge's USE is decided;
+        // real fails rather than reflipping it), never enforced.
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+        let entry = GraphEntry {
+            outcome: PretendOutcome::Reinstall {
+                version: "2.8.0".into(),
+                changed_flags: vec!["icu".to_string()],
+                deps_changed: false,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: false,
+                slot_operator_rebuild: false,
+            },
+            slot: Some("2".into()),
+            sub_slot: Some("0".into()),
+            ..graph_entry("dev-libs", "cgp0x", "2.8.0")
+        };
+        let hard_want: HashMap<(String, String), Vec<String>> = HashMap::from([(
+            ("dev-libs".to_string(), "cgp0x".to_string()),
+            vec!["dev-libs/cgp0x".to_string()],
+        )]);
+        let reachable: HashSet<(String, String)> =
+            HashSet::from([("dev-libs".to_string(), "cgp0q".to_string())]);
+
+        // Complete mode off (`--complete-graph-if-new-use=n`, real rc 0):
+        // no pin at all.
+        let (enforced, dropped) = reverse_dependency_constraints(
+            &repos,
+            &root,
+            std::slice::from_ref(&entry),
+            false,
+            &[],
+            &hard_want,
+            &reachable,
+            true,
+            false,
+            &HashSet::new(),
+            &reachable,
+            &portage_profile::Config::default(),
+            false,
+        );
+        assert!(
+            enforced.is_empty() && dropped.is_empty(),
+            "complete mode off must yield no USE-break pin, got enforced={enforced:?} dropped={dropped:?}"
+        );
+
+        // Complete mode on (real rc 1): the broken `[use]` pin drops for
+        // the residual installed-instance report.
+        let (enforced, dropped) = reverse_dependency_constraints(
+            &repos,
+            &root,
+            &[entry],
+            false,
+            &[],
+            &hard_want,
+            &reachable,
+            true,
+            false,
+            &HashSet::new(),
+            &reachable,
+            &portage_profile::Config::default(),
+            true,
+        );
+        assert!(
+            enforced.is_empty(),
+            "a USE-break pin must never be enforced, got {enforced:?}"
+        );
+        assert_eq!(
+            dropped.len(),
+            1,
+            "expected one USE-break pin, got {dropped:?}"
+        );
+        assert_eq!(
+            (dropped[0].cp.1.as_str(), dropped[0].consumer.1.as_str(),),
+            ("cgp0x", "cgp0q"),
+        );
+
+        // Unreachable consumer (the shared-world shape -- real rc 0 with
+        // that world): still nothing.
+        let (enforced, dropped) = reverse_dependency_constraints(
+            &repos,
+            &root,
+            &[GraphEntry {
+                outcome: PretendOutcome::Reinstall {
+                    version: "2.8.0".into(),
+                    changed_flags: vec!["icu".to_string()],
+                    deps_changed: false,
+                    slot_changed: false,
+                    rebuilt_binary: false,
+                    new_repo: false,
+                    slot_operator_rebuild: false,
+                },
+                slot: Some("2".into()),
+                sub_slot: Some("0".into()),
+                ..graph_entry("dev-libs", "cgp0x", "2.8.0")
+            }],
+            false,
+            &[],
+            &hard_want,
+            &HashSet::new(),
+            true,
+            false,
+            &HashSet::new(),
+            &HashSet::new(),
+            &portage_profile::Config::default(),
+            true,
+        );
+        assert!(
+            enforced.is_empty() && dropped.is_empty(),
+            "an unreachable consumer must yield no pin, got enforced={enforced:?} dropped={dropped:?}"
+        );
+    }
+
+    #[test]
+    fn complete_graph_auto_enable_reasonless_reinstall_with_use_drift() {
+        // Backlog #222: a bare reasonless `[ebuild R]` for an
+        // explicitly-requested installed package carries no
+        // `changed_flags` (they are only computed under `--newuse`/
+        // `--changed-use`), yet real still enables complete mode when
+        // the merge node's own USE differs from the vdb's
+        // (`depgraph.py:8620-8637`). On the committed fixtures
+        // `dev-libs/cgp0x-2.8.0` (IUSE `+icu`, installed `USE=""`)
+        // such a reinstall enables on `if_new_use` even with empty
+        // `changed_flags`.
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+        let reasonless = GraphEntry {
+            category: "dev-libs".to_string(),
+            package: "cgp0x".to_string(),
+            outcome: PretendOutcome::Reinstall {
+                version: "2.8.0".to_string(),
+                changed_flags: Vec::new(),
+                deps_changed: false,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: false,
+                slot_operator_rebuild: false,
+            },
+            slot: Some("2".to_string()),
+            sub_slot: Some("0".to_string()),
+            repo_name: Some("testrepo".to_string()),
+            ..graph_entry("dev-libs", "cgp0x", "2.8.0")
+        };
+        assert!(complete_graph_auto_enable(
+            std::slice::from_ref(&reasonless),
+            true,
+            false,
+            false,
+            &root,
+            &repos,
+            &portage_profile::Config::default()
+        ));
+        assert!(!complete_graph_auto_enable(
+            std::slice::from_ref(&reasonless),
+            false,
+            false,
+            false,
+            &root,
+            &repos,
+            &portage_profile::Config::default()
+        ));
     }
 
     /// #57 S1: one shared assertion for the triangle's conflict record --
@@ -55768,10 +56233,42 @@ mod tests_162 {
                 false,
             ),
         ];
-        assert!(complete_graph_auto_enable(&entries, true, true, true));
-        assert!(complete_graph_auto_enable(&entries, false, true, false));
-        assert!(!complete_graph_auto_enable(&entries, true, false, true));
-        assert!(!complete_graph_auto_enable(&entries, false, false, false));
+        assert!(complete_graph_auto_enable(
+            &entries,
+            true,
+            true,
+            true,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
+        ));
+        assert!(complete_graph_auto_enable(
+            &entries,
+            false,
+            true,
+            false,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
+        ));
+        assert!(!complete_graph_auto_enable(
+            &entries,
+            true,
+            false,
+            true,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
+        ));
+        assert!(!complete_graph_auto_enable(
+            &entries,
+            false,
+            false,
+            false,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
+        ));
     }
 
     /// A new-slot `New` enables on `if_new_ver` or `if_new_slot`
@@ -55789,9 +56286,33 @@ mod tests_162 {
             Some("1"),
             true,
         )];
-        assert!(complete_graph_auto_enable(&new_slot, false, false, true));
-        assert!(complete_graph_auto_enable(&new_slot, false, true, false));
-        assert!(!complete_graph_auto_enable(&new_slot, false, false, false));
+        assert!(complete_graph_auto_enable(
+            &new_slot,
+            false,
+            false,
+            true,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
+        ));
+        assert!(complete_graph_auto_enable(
+            &new_slot,
+            false,
+            true,
+            false,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
+        ));
+        assert!(!complete_graph_auto_enable(
+            &new_slot,
+            false,
+            false,
+            false,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
+        ));
         let same_slot = vec![entry_162(
             "dev-libs",
             "fresh",
@@ -55801,7 +56322,15 @@ mod tests_162 {
             Some("0"),
             false,
         )];
-        assert!(!complete_graph_auto_enable(&same_slot, true, true, true));
+        assert!(!complete_graph_auto_enable(
+            &same_slot,
+            true,
+            true,
+            true,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
+        ));
     }
 
     /// A `Reinstall` with USE churn enables on `if_new_use`, one with
@@ -55831,19 +56360,28 @@ mod tests_162 {
             &[use_churn(vec!["flip".to_string()])],
             true,
             false,
-            false
+            false,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
         ));
         assert!(!complete_graph_auto_enable(
             &[use_churn(vec!["flip".to_string()])],
             false,
             false,
-            false
+            false,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
         ));
         assert!(!complete_graph_auto_enable(
             &[use_churn(Vec::new())],
             true,
             false,
-            false
+            false,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
         ));
     }
 
@@ -55872,19 +56410,28 @@ mod tests_162 {
             std::slice::from_ref(&slot_churn),
             true,
             false,
-            false
+            false,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
         ));
         assert!(complete_graph_auto_enable(
             std::slice::from_ref(&slot_churn),
             false,
             true,
-            false
+            false,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
         ));
         assert!(!complete_graph_auto_enable(
             &[slot_churn],
             false,
             false,
-            false
+            false,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
         ));
         let crossed = entry_162(
             "dev-libs",
@@ -55901,7 +56448,15 @@ mod tests_162 {
             Some("0"),
             false,
         );
-        assert!(!complete_graph_auto_enable(&[crossed], false, true, false));
+        assert!(!complete_graph_auto_enable(
+            &[crossed],
+            false,
+            true,
+            false,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
+        ));
     }
 
     /// Settled entries never enable, whatever the flags -- pins the
@@ -55926,7 +56481,15 @@ mod tests_162 {
                 false,
             ),
         ];
-        assert!(!complete_graph_auto_enable(&entries, true, true, true));
+        assert!(!complete_graph_auto_enable(
+            &entries,
+            true,
+            true,
+            true,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
+        ));
     }
 
     /// Fixed "amd64"-only, no-overrides config, mirroring `tests`'
