@@ -71,6 +71,22 @@ pub fn eapi_has_slot_operator(eapi: &str) -> bool {
     digits.parse::<u32>().is_ok_and(|n| n >= 5)
 }
 
+/// Backlog #230: real `_get_eapi_attrs(eapi).iuse_effective`
+/// (`portage/eapi.py`): whether `IUSE_EFFECTIVE` exists in this EAPI and
+/// therefore governs the `PORTAGE_USE` masking (`config.py` setcpv) and
+/// the valid-flag domain, instead of the pre-EAPI-5
+/// `_get_implicit_iuse` rule. PMS defines `IUSE_EFFECTIVE` beginning
+/// with EAPI 5; same numeric-prefix reading as `eapi_has_slot_operator`
+/// (both attributes share the `Eapi(eapi) >= Eapi("5")` gate).
+pub fn eapi_has_iuse_effective(eapi: &str) -> bool {
+    let digits: String = eapi
+        .trim()
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.parse::<u32>().is_ok_and(|n| n >= 5)
+}
+
 /// Real `eapi_has_idepend` (`portage/eapi.py:135`): whether `IDEPEND`
 /// exists in this EAPI (`_get_eapi_attrs(eapi).idepend`, `eapi.py:304`:
 /// `idepend = eapi >= Eapi("8")`, same dash-suffix-insensitive integer
