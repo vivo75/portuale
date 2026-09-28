@@ -15078,6 +15078,145 @@ fn reverse_dependency_constraints(
 /// what `_show_abi_rebuild_info` renders).
 type SlotOpRebuildScan = (BTreeSet<(String, String)>, Vec<(String, String)>);
 
+/// One installed parent's atom on a provider, for the update-probe
+/// refusal below: the parent's identity plus the atom text to match the
+/// fresh candidate against (built `:S/SS=` atoms already relaxed the way
+/// real checks them).
+#[derive(Debug, Clone)]
+struct ProbeParent {
+    /// The installed parent `(category, package)`.
+    parent: (String, String),
+    /// Effective atom: [`relax_built_slot_operator_atom`] for built
+    /// slot-operator atoms, verbatim otherwise.
+    atom: String,
+}
+
+/// Real `_slot_operator_check_reverse_dependencies`
+/// (`lib/_emerge/depgraph.py:2472-2573`) as the update probe's refusal
+/// gate on both scan arms (the `:2622` replacement-parent gate and the
+/// `:2738` candidate-child gate inside `_slot_operator_update_probe`;
+/// the `:8786` slot-conflict-fired probe is v2 `#24e` and never reaches
+/// this scan).
+///
+/// The caller precollects, per provider cp, every installed package Q
+/// whose recorded deps name that cp -- real's `_parent_atoms[child]`.
+/// Only parents real could see are collected: Q must be complete-mode
+/// reachable or walked this pass (an unwalked parent registers no dep);
+/// a Q this run replaces (merge-bound entry, or already in the replace
+/// set), uninstalls (blocker-conflict removal), or excludes carries a
+/// stale pin real skips (`:2513-2528` elimination,
+/// `_upgrade_available`, bug 612772, `excluded_pkgs`).
+///
+/// `probe_refused` then answers per scheduling edge: the fresh provider
+/// candidate (`fresh_cand`, `"cat/pkg-ver:slot/sub"` -- repo-less, so a
+/// `::repo` atom passes vacuously, a documented over-match corner) must
+/// match every surviving parent atom, with the consumer itself skipped
+/// (real's `replacement_parent` skip: the rebuild replaces it, so its
+/// own pin is not a veto). A single mismatch refuses the whole
+/// replacement -- the caller schedules nothing for that edge.
+///
+/// The `:2622` gate is not separately ported: the scheduled rebuild
+/// reinstalls the same version, which satisfies every atom the installed
+/// instance satisfied, so the replacement-parent check is vacuous here
+/// (real needs it only because its replacement can be an upgrade).
+///
+/// Cuts: `_too_deep` (no depths at this layer), the direct-circular
+/// escape (no digraph here), and soname atoms (the parser rejects them,
+/// same direction as real's `continue`). `[use]` deps are not evaluated
+/// (the candidate carries no USE state -- allows, never blocks).
+#[allow(clippy::too_many_arguments)]
+fn collect_probe_parents(
+    root: &Path,
+    entries: &[GraphEntry],
+    reachable: &HashSet<(String, String)>,
+    walked: &HashSet<(String, String)>,
+    in_graph: &HashSet<(String, String)>,
+    already: &BTreeSet<(String, String)>,
+    with_bdeps: bool,
+    excluded: &[String],
+) -> HashMap<(String, String), Vec<ProbeParent>> {
+    let mut being_removed: HashSet<(String, String)> = HashSet::new();
+    for e in entries {
+        if matches!(e.outcome, PretendOutcome::Uninstall { .. }) {
+            being_removed.insert((e.category.clone(), e.package.clone()));
+        }
+    }
+    let mut parents: HashMap<(String, String), Vec<ProbeParent>> = HashMap::new();
+    for pkg in all_installed_packages(root) {
+        let qcp = (pkg.category.clone(), pkg.package.clone());
+        if !reachable.contains(&qcp) && !walked.contains(&qcp) {
+            continue;
+        }
+        // Merge-bound this pass, or already in the replace set: real's
+        // elimination / `_upgrade_available` skips (the pin is stale).
+        // Consumers scheduled later in this same scan loop are skipped at
+        // check time instead (see `probe_refused`).
+        if in_graph.contains(&qcp) || already.contains(&qcp) {
+            continue;
+        }
+        if being_removed.contains(&qcp) {
+            continue;
+        }
+        let q_str = format!("{}/{}-{}", pkg.category, pkg.package, pkg.version);
+        if excluded
+            .iter()
+            .any(|ex| matches_config_entry(ex, &q_str, &pkg.category, &pkg.package))
+        {
+            continue;
+        }
+        // Same build-time-key rule as the scheduling loop: real drops a
+        // built package's `DEPEND`/`BDEPEND` before any dep is registered
+        // when `bdeps` is off, and only non-optional (walked) parents
+        // register them when it is on.
+        let dep_keys: &[&str] = match with_bdeps && walked.contains(&qcp) {
+            true => &["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"],
+            false => &["RDEPEND", "PDEPEND", "IDEPEND"],
+        };
+        for key in dep_keys {
+            let tokens = read_vdb_string(root, &pkg.category, &pkg.package, &pkg.version, key);
+            for token in tokens.split_whitespace() {
+                let Some(atom) = portage_dep::parse_atom(token) else {
+                    continue;
+                };
+                if atom.blocker != portage_dep::Blocker::None {
+                    continue;
+                }
+                let provider_cp = (atom.category.clone(), atom.package.clone());
+                let effective = relax_built_slot_operator_atom(token);
+                parents.entry(provider_cp).or_default().push(ProbeParent {
+                    parent: qcp.clone(),
+                    atom: effective,
+                });
+            }
+        }
+    }
+    parents
+}
+
+/// Refusal half of the probe: does any surviving parent of `provider_cp`
+/// (other than the consumer itself) reject `fresh_cand`? See
+/// [`collect_probe_parents`]. `scheduled` is the replace set as it grows
+/// during the scan loop -- a parent scheduled earlier in this same scan
+/// is already being rebuilt, so its pin is stale too.
+fn probe_refused(
+    parents: &HashMap<(String, String), Vec<ProbeParent>>,
+    scheduled: &BTreeSet<(String, String)>,
+    provider_cp: &(String, String),
+    fresh_cand: &str,
+    consumer_cp: &(String, String),
+) -> bool {
+    let Some(list) = parents.get(provider_cp) else {
+        return false;
+    };
+    let refs = [fresh_cand];
+    list.iter().any(|p| {
+        if &p.parent == consumer_cp || scheduled.contains(&p.parent) {
+            return false;
+        }
+        portage_dep::match_from_list(&p.atom, &refs).is_none_or(|m| m.is_empty())
+    })
+}
+
 /// Real depgraph's `_slot_operator_trigger_reinstalls` (3089-3132) +
 /// `_slot_operator_replace_installed` (the
 /// `@__auto_slot_operator_replace_installed__` set), run once every
@@ -15148,10 +15287,9 @@ type SlotOpRebuildScan = (BTreeSet<(String, String)>, Vec<(String, String)>);
 /// `reachable` gate: the slot-conflict path rebuilds graph-node runtime
 /// consumers in both shapes.
 ///
-/// Cuts (v2 `#24b` remainder): no `_slot_operator_check_reverse_dependencies`
-/// refusal (the scan schedules whenever the probe's shape holds; a parent
-/// whose atom the new child violates does not veto), no
-/// `slot_operator_mask_built` for non-installed binaries (v2 `#24c`).
+/// Cuts (v2 remainder): no `slot_operator_mask_built` for non-installed
+/// binaries (v2 `#24c`); the `:8786` slot-conflict-fired probe never
+/// reaches this scan (v2 `#24e`).
 #[allow(clippy::too_many_arguments)]
 fn slot_operator_rebuild_scan(
     root: &Path,
@@ -15163,6 +15301,7 @@ fn slot_operator_rebuild_scan(
     with_bdeps: bool,
     update: bool,
     top_level_cps: &HashSet<(String, String)>,
+    excluded: &[String],
 ) -> SlotOpRebuildScan {
     // cp -> (new version, new slot, new sub-slot) for every entry that
     // replaces an installed version in that slot.
@@ -15245,6 +15384,13 @@ fn slot_operator_rebuild_scan(
     // The `_slot_change_probe` half below is *not* complete-mode gated in
     // real (its first trigger arm runs for any merge-bound parent,
     // 3103-3107), so it is called unconditionally.
+    // #211 R2: the update-probe refusal parents (real
+    // `_slot_operator_check_reverse_dependencies`, `depgraph.py:2472`).
+    // Collected once per scan; the per-edge verdict reads the replace
+    // set as it grows (see `probe_refused`).
+    let probe_parents = collect_probe_parents(
+        root, entries, reachable, &walked, &in_graph, already, with_bdeps, excluded,
+    );
     if !new_slot.is_empty() || !new_slot_fresh.is_empty() {
         for pkg in &installed {
             let cp = (pkg.category.clone(), pkg.package.clone());
@@ -15272,7 +15418,9 @@ fn slot_operator_rebuild_scan(
                 true => &["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"],
                 false => &["RDEPEND", "PDEPEND", "IDEPEND"],
             };
-            let mut providers: Vec<String> = dep_keys
+            // (display `provider_cpv`, provider cp, fresh candidate
+            // `"cat/pkg-ver:slot/sub"` for the refusal check).
+            let mut edges: Vec<(String, (String, String), String)> = dep_keys
                 .iter()
                 .flat_map(|key| {
                     read_vdb_string(root, &pkg.category, &pkg.package, &pkg.version, key)
@@ -15290,7 +15438,12 @@ fn slot_operator_rebuild_scan(
                     if same_slot_scope {
                         let (n_ver, n_slot, n_sub) = new_slot.get(&provider_cp)?;
                         if a_slot == n_slot && a_sub != n_sub {
-                            return Some(format!("{}/{}-{n_ver}", atom.category, atom.package));
+                            let display = format!("{}/{}-{n_ver}", atom.category, atom.package);
+                            let cand = format!(
+                                "{}/{}-{n_ver}:{n_slot}/{n_sub}",
+                                atom.category, atom.package
+                            );
+                            return Some((display, provider_cp, cand));
                         }
                     }
                     // #211 (v2 `#24b`): real `_slot_operator_update_probe`
@@ -15299,7 +15452,7 @@ fn slot_operator_rebuild_scan(
                     // `:S/SS=` dep is bound to a slot the provider no
                     // longer occupies rebuilds against the fresh slot.
                     if new_slot_scope {
-                        let (f_ver, f_slot, _) = new_slot_fresh.get(&provider_cp)?;
+                        let (f_ver, f_slot, f_sub) = new_slot_fresh.get(&provider_cp)?;
                         if *f_slot == a_slot {
                             return None;
                         }
@@ -15333,13 +15486,29 @@ fn slot_operator_rebuild_scan(
                         {
                             return None;
                         }
-                        return Some(format!("{}/{}-{f_ver}", atom.category, atom.package));
+                        let display = format!("{}/{}-{f_ver}", atom.category, atom.package);
+                        let cand = format!(
+                            "{}/{}-{f_ver}:{f_slot}/{f_sub}",
+                            atom.category, atom.package
+                        );
+                        return Some((display, provider_cp, cand));
                     }
                     None
                 })
                 .collect();
-            providers.sort();
-            providers.dedup();
+            edges.sort();
+            edges.dedup();
+            // #211 R2: real `_slot_operator_check_reverse_dependencies`
+            // (`depgraph.py:2472-2573`, gates `:2622`/`:2738`) refuses
+            // the whole replacement when the fresh candidate violates
+            // another parent's atom -- on both arms alike.
+            let mut providers: Vec<String> = Vec::new();
+            for (display, provider_cp, cand) in edges {
+                if probe_refused(&probe_parents, &scheduled, &provider_cp, &cand, &cp) {
+                    continue;
+                }
+                providers.push(display);
+            }
             if providers.is_empty() {
                 continue;
             }
@@ -15877,6 +16046,7 @@ fn slot_operator_rebuild_entries(
     entries: &[GraphEntry],
     reachable: &HashSet<(String, String)>,
     with_bdeps: bool,
+    excluded: &[String],
 ) -> (Vec<GraphEntry>, Vec<(String, String)>) {
     let installed = all_installed_packages(root);
     let mut scheduled: BTreeSet<(String, String)> = BTreeSet::new();
@@ -15899,6 +16069,7 @@ fn slot_operator_rebuild_entries(
             // same-slot rebuilds exactly as before.
             false,
             &HashSet::new(),
+            excluded,
         );
         abi_rebuilds = pairs;
         if next == scheduled {
@@ -25606,6 +25777,7 @@ fn collect_feedback(
             ctx.with_bdeps,
             ctx.update,
             &ctx.top_level_cps,
+            ctx.excluded,
         );
         pass.abi_rebuilds = Some(abi_rebuilds);
         if scheduled != grown.slot_operator_replace_installed {
@@ -25707,6 +25879,7 @@ fn assemble_result(
                 ctx.with_bdeps,
                 ctx.update,
                 &ctx.top_level_cps,
+                ctx.excluded,
             )
             .1
         }
@@ -40445,6 +40618,7 @@ mod tests {
             true,
             false,
             &HashSet::new(),
+            &[],
         );
         assert_eq!(
             scheduled,
@@ -40470,6 +40644,7 @@ mod tests {
             true,
             false,
             &HashSet::new(),
+            &[],
         );
         assert!(empty_sched.is_empty() && empty_abi.is_empty());
 
@@ -40487,6 +40662,7 @@ mod tests {
             true,
             false,
             &HashSet::new(),
+            &[],
         );
         assert!(none_sched.is_empty() && none_abi.is_empty());
 
@@ -40522,6 +40698,7 @@ mod tests {
             true,
             false,
             &HashSet::new(),
+            &[],
         );
         assert_eq!(again, already, "the set is stable -- no second restart");
         assert_eq!(
@@ -40541,6 +40718,7 @@ mod tests {
             std::slice::from_ref(&bar_upgrade),
             &reach,
             true,
+            &[],
         );
         let names: Vec<&str> = out.iter().map(|e| e.package.as_str()).collect();
         assert_eq!(names, vec!["stale"]);
@@ -40650,6 +40828,7 @@ mod tests {
             true,
             true,
             &HashSet::new(),
+            &[],
         );
         assert_eq!(
             scheduled,
@@ -40675,6 +40854,7 @@ mod tests {
             true,
             false,
             &HashSet::new(),
+            &[],
         );
         assert!(withheld.is_empty(), "without --update the probe withholds");
         // ...unless the provider itself is directly requested (real's
@@ -40690,6 +40870,7 @@ mod tests {
             true,
             false,
             &top,
+            &[],
         );
         assert_eq!(via_arg, BTreeSet::from([massc.clone()]));
         // A lower-version fresh slot is a downgrade real never probes.
@@ -40711,6 +40892,7 @@ mod tests {
             true,
             true,
             &HashSet::new(),
+            &[],
         );
         assert!(downgraded.is_empty(), "downgrades never probe");
         // No tree candidate for the consumer: no replacement parent, no
@@ -40725,6 +40907,7 @@ mod tests {
             true,
             true,
             &HashSet::new(),
+            &[],
         );
         assert!(nocand.is_empty(), "no candidate means no schedule");
         // Neither walked nor reachable: outside the probe's population.
@@ -40738,8 +40921,162 @@ mod tests {
             true,
             true,
             &HashSet::new(),
+            &[],
         );
         assert!(unwalked.is_empty(), "unwalked consumers never schedule");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// Backlog #211 R2: real `_slot_operator_check_reverse_dependencies`
+    /// (`depgraph.py:2472-2573`, gates `:2622`/`:2738`) refuses the whole
+    /// replacement when the fresh candidate violates another parent's
+    /// atom -- on the new-slot arm and the same-slot arm alike. A parent
+    /// whose pin the candidate still satisfies (built `:S/SS=`, relaxed
+    /// to `:=`) never vetoes; neither does the consumer itself (real's
+    /// `replacement_parent` skip), an out-of-scope parent real never
+    /// walked, a parent this run replaces, or an excluded one.
+    #[test]
+    fn slot_operator_update_probe_refusal_vetoes_both_arms() {
+        use md5::Digest as _;
+        use std::fmt::Write as _;
+        let base = std::env::temp_dir().join(format!(
+            "portage-repo-slotop-refusal-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        // vdb: provider `massb-1` in slot 1, consumer `massc-1` bound
+        // `massb:1/1=`, veto parent `massv-1` pinning `<massb-2`.
+        for (name, slot, rdepend) in [
+            ("massb-1", "1", ""),
+            ("massc-1", "0", "dev-libs/massb:1/1="),
+            ("massv-1", "0", "<dev-libs/massb-2"),
+        ] {
+            let d = base.join("var/db/pkg/dev-libs").join(name);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+            fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+            fs::write(d.join("repository"), "testrepo\n").unwrap();
+            if !rdepend.is_empty() {
+                fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+            }
+        }
+        let repo = base.join("repo");
+        let write_pkg = |pkg: &str, pv: &str, slot: &str| {
+            let dir = repo.join("dev-libs").join(pkg);
+            std::fs::create_dir_all(&dir).unwrap();
+            let body =
+                format!("EAPI=8\nDESCRIPTION=\"211 R2\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\n");
+            std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
+            let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+            let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=211 R2\nEAPI=8\n".to_string();
+            writeln!(entry, "KEYWORDS=amd64\nSLOT={slot}\n_md5_={md5}").unwrap();
+            let cachedir = repo.join("metadata/md5-cache/dev-libs");
+            std::fs::create_dir_all(&cachedir).unwrap();
+            std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+        };
+        write_pkg("massb", "2.0", "2/2");
+        write_pkg("massc", "1.0", "0");
+        let repos = vec![RepoConfig {
+            name: "testrepo".to_string(),
+            location: repo.clone(),
+            priority: 0,
+            is_main: true,
+            masters: vec![],
+            profile_formats: vec![],
+            cache_formats: vec![],
+            aliases: vec![],
+            sync_type: None,
+            sync_uri: None,
+            volatile: false,
+            module_specific_options: vec![],
+        }];
+        let fresh = GraphEntry {
+            slot: Some("2".into()),
+            sub_slot: Some("2".into()),
+            ..graph_entry("dev-libs", "massb", "2.0")
+        };
+        let walked_entry = |package: &str| GraphEntry {
+            outcome: PretendOutcome::AlreadyInstalled {
+                version: "1.0".into(),
+            },
+            slot: Some("0".into()),
+            sub_slot: Some("0".into()),
+            ..graph_entry("dev-libs", package, "1.0")
+        };
+        let consumer = walked_entry("massc");
+        let veto_parent = walked_entry("massv");
+        let empty: BTreeSet<(String, String)> = BTreeSet::new();
+        let massc = ("dev-libs".to_string(), "massc".to_string());
+        let scan = |entries: &[GraphEntry], excluded: &[String]| {
+            slot_operator_rebuild_scan(
+                &base,
+                &repos,
+                entries,
+                &HashSet::new(),
+                &empty,
+                &empty,
+                true,
+                true,
+                &HashSet::new(),
+                excluded,
+            )
+        };
+        // The veto parent walked: the fresh candidate violates its pin,
+        // so the whole replacement is refused -- nothing schedules.
+        let (refused, _) = scan(&[fresh.clone(), consumer.clone(), veto_parent.clone()], &[]);
+        assert!(refused.is_empty(), "a vetoed replacement schedules nothing");
+        // Out of scope (neither walked nor reachable): real never walks
+        // the parent, so there is no veto.
+        let (unscoped, _) = scan(&[fresh.clone(), consumer.clone()], &[]);
+        assert_eq!(unscoped, BTreeSet::from([massc.clone()]));
+        // Excluded: real's `excluded_pkgs` skip.
+        let (excluded_out, _) = scan(
+            &[fresh.clone(), consumer.clone(), veto_parent.clone()],
+            &["dev-libs/massv".to_string()],
+        );
+        assert_eq!(excluded_out, BTreeSet::from([massc.clone()]));
+        // Same-slot arm: an in-slot upgrade the veto parent rejects is
+        // refused the same way.
+        let upgrade = GraphEntry {
+            outcome: PretendOutcome::Upgrade {
+                from: "1.0".into(),
+                to: "2.0".into(),
+            },
+            slot: Some("1".into()),
+            sub_slot: Some("2".into()),
+            ..graph_entry("dev-libs", "massb", "2.0")
+        };
+        let reach_massc: HashSet<(String, String)> =
+            HashSet::from([massc.clone(), ("dev-libs".to_string(), "massv".to_string())]);
+        let (same_refused, _) = slot_operator_rebuild_scan(
+            &base,
+            &repos,
+            &[upgrade.clone(), consumer.clone(), veto_parent.clone()],
+            &reach_massc,
+            &empty,
+            &empty,
+            true,
+            true,
+            &HashSet::new(),
+            &[],
+        );
+        assert!(same_refused.is_empty(), "the same-slot arm refuses too");
+        let (same_kept, _) = slot_operator_rebuild_scan(
+            &base,
+            &repos,
+            &[upgrade, consumer, veto_parent],
+            &reach_massc,
+            &empty,
+            &empty,
+            true,
+            true,
+            &HashSet::new(),
+            &["dev-libs/massv".to_string()],
+        );
+        assert_eq!(same_kept, BTreeSet::from([massc]));
         let _ = fs::remove_dir_all(&base);
     }
 
@@ -40813,6 +41150,7 @@ mod tests {
             false,
             false,
             &HashSet::new(),
+            &[],
         );
         assert_eq!(
             scheduled, runtime_only,
@@ -40838,6 +41176,7 @@ mod tests {
             true,
             false,
             &HashSet::new(),
+            &[],
         );
         assert_eq!(
             scheduled, runtime_only,
@@ -40860,6 +41199,7 @@ mod tests {
             true,
             false,
             &HashSet::new(),
+            &[],
         );
         assert_eq!(scheduled, all_five);
         assert_eq!(
@@ -40900,6 +41240,7 @@ mod tests {
             false,
             false,
             &HashSet::new(),
+            &[],
         );
         assert_eq!(scheduled, runtime_only);
 
@@ -41209,6 +41550,7 @@ mod tests {
             true,
             false,
             &HashSet::new(),
+            &[],
         );
         assert_eq!(scheduled, BTreeSet::from([stale.clone()]));
         assert_eq!(
@@ -41230,6 +41572,7 @@ mod tests {
             true,
             false,
             &HashSet::new(),
+            &[],
         );
         assert!(done_sched.is_empty(), "`undone` suppresses the rebuild");
         // A reachable set that omits the consumer suppresses the scan --
@@ -41246,6 +41589,7 @@ mod tests {
             true,
             false,
             &HashSet::new(),
+            &[],
         );
         assert!(far_sched.is_empty(), "unreachable consumers never schedule");
         let _ = fs::remove_dir_all(&dir);
@@ -41514,6 +41858,7 @@ mod tests {
             std::slice::from_ref(&bar_upgrade),
             &reach,
             true,
+            &[],
         );
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].slot.as_deref(), Some("0"));
@@ -46168,6 +46513,7 @@ mod tests {
             true,
             false,
             &HashSet::new(),
+            &[],
         );
         assert!(
             rescheduled.is_empty(),

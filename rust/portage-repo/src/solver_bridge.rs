@@ -695,6 +695,7 @@ fn graph_result_from_order(
                 &entries,
                 &slot_op_reachable,
                 req.with_bdeps,
+                &req.excluded,
             )
         };
     entries.extend(slot_op_rebuilds);
