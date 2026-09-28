@@ -13494,13 +13494,16 @@ pub fn run(args: &[String]) -> ExitCode {
     // path into the output, the same reason #206 cut the suffix on
     // circular nodes); an installed consumer renders
     // `(cpv, installed in '<root>')` with the real path, like the
-    // notice's installed instances. Real's own bed rendering mixes bare
-    // missed lines with `to`-suffixed parents only because pre-EAPI-7
-    // `DEPEND` resolves against the host-config running-root tree
-    // (`depgraph.py:4224-4226`) -- a second config portuale deliberately
-    // does not model (bed `l0-fx-20260927T125711Z` shows the missed line
-    // with the container's `USE="(test-rust)" ABI_X86="(64)" ...`, which
-    // no fixture-tree rendering can reproduce). The `^` marker line
+    // notice's installed instances. Real's own rendering pairs a bare
+    // missed line with `to`-suffixed parents because the missed package
+    // stays rooted at the host-config running-root (`/`) tree even for
+    // EAPI-8 `DEPEND` (fix-round-1 probe: a merge-operation missed line
+    // with no `to` suffix means its ROOT is `/` per real
+    // `Package.__str__`, and its `ABI_X86="(64)"` appears nowhere in
+    // the fixture tree) -- a second config portuale deliberately does
+    // not model (single-root determinism), so the missed line's
+    // fixture-tree display is the rendered shape and the bed keeps
+    // exactly that residual. The `^` marker line
     // mirrors real `format_unmatched_atom`'s operator + version spans
     // plus a mismatched `:slot[/sub-slot]` span (USE-token spans stay a
     // documented cut -- no grounded case carries USE-deps here). A
@@ -13535,8 +13538,22 @@ pub fn run(args: &[String]) -> ExitCode {
             );
             for s in group.iter() {
                 if s.consumer_cpv.is_empty() {
-                    // Real's `PackageArg`/`AtomArg` arm: the bare
-                    // command-line parent, no atom and no `^` marker.
+                    // Real's `PackageArg`/`AtomArg` arm
+                    // (`depgraph.py:1681-1686`): the bare command-line
+                    // argument, no atom and no `^` marker. `s.atom`
+                    // already IS that argument here: the only producer
+                    // that emits empty-`consumer_cpv` rows is the
+                    // direct-solve path, and its empty-cpv parents come
+                    // solely from top-level argument pullers, whose
+                    // recorded atom is the argument text as typed
+                    // (unit-pinned by portage-repo's
+                    // `direct_solve_reports_an_argument_parent_with_the_cli_text`;
+                    // the reverse-pin producer always builds a
+                    // non-empty consumer, the backtrack-mask rows skip
+                    // empty pullers). No contract or bed cell grounds
+                    // this arm end to end (blk0 parents are all
+                    // Packages), so beyond that producer pin it stays
+                    // unpinned.
                     println!("    {}", s.atom);
                     continue;
                 }

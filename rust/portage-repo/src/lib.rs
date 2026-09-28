@@ -18354,6 +18354,13 @@ fn pkg_use_display_for(
 /// `emerge -p` without `--color=y`, matching `render_pkg_use_display`'s
 /// own cut). The installed-consumer twin is
 /// [`skipped_update_installed_use_display_for`].
+///
+/// NOTE (post-#220): the blk0 ebuilds are EAPI 8 now, so the
+/// `eapi_has_iuse_effective` gate selects the `IUSE_EFFECTIVE` domain
+/// and the profile globals mask out -- a flagless blk0 package renders
+/// `USE="" ELIBC="glibc"`. The `pre-EAPI-5 ... forced flags survive`
+/// pin in pmtest's `test_upstream_blocker_pg0_all_orders_pin_x1_and_uninstall_y1`
+/// predates that merge and is stale (see the fix-round-1 report).
 pub fn skipped_update_use_display_for(
     repos: &[RepoConfig],
     config: &portage_profile::Config,
@@ -18426,7 +18433,17 @@ pub fn skipped_update_use_display_for(
 /// documented: no profile-force/mask `( )` wraps (those need the tree
 /// candidate's keywords via `forced_or_masked_flags_unfiltered`, and an
 /// installed consumer's version may be gone from every repo -- the same
-/// narrowing `installed_use_display_for` already documents).
+/// narrowing `installed_use_display_for` already documents). The exact
+/// trigger that would expose the gap is an installed skipped-block
+/// consumer carrying a flag from the profile/repo force/mask stack:
+/// real wraps it (`forced_flags = chain(pkg.use.force, pkg.use.mask)`,
+/// `UseFlagDisplay.py:60`, applied to installed parents too via
+/// `depgraph.py:1696-1700`) -- e.g. a globally `use.force`d flag
+/// recorded enabled in the vdb `USE` renders `(flag)`, a `use.mask`ed
+/// flag still present in the recorded `IUSE` renders `(-flag)` --
+/// while portuale renders either bare. No grounded case exercises it
+/// (every bed blk0 parent is a merge node), so the wrap gap is pinned
+/// nowhere.
 pub fn skipped_update_installed_use_display_for(
     root: &Path,
     config: &portage_profile::Config,
@@ -32926,6 +32943,88 @@ mod tests {
     }
 
     #[test]
+    fn direct_solve_reports_an_argument_parent_with_the_cli_text() {
+        // Backlog #230 fix round 1 (review Important 3): real's
+        // `PackageArg`/`AtomArg` arm (`depgraph.py:1681-1686`) prints
+        // `str(parent)` -- the CLI argument -- with no atom and no `^`
+        // marker. The direct-solve producer is the one path that can
+        // supply it: a top-level argument puller is recorded with
+        // empty parent fields and the argument text as its atom (see
+        // `slot_pullers`' depth-0 ownerless push), so when that atom
+        // rejects the removed instance the skip row carries the CLI
+        // text in `atom` with an empty `consumer_cpv`, and the
+        // renderer printing `s.atom` bare reproduces real's arm
+        // exactly. (The reverse-pin producer always builds a non-empty
+        // consumer cpv; the backtrack-mask rows skip empty-category
+        // pullers outright.) No contract or bed cell grounds an
+        // Argument parent end to end (blk0 parents are all Packages),
+        // so this producer-level pin is the only coverage -- the
+        // renderer arm beyond it stays unpinned.
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+        let config = test_config();
+        let new_cpv = "dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo";
+        let old_cpv = "dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo";
+        // A versioned CLI argument pinning the kept instance: it
+        // rejects the removed 2.0 exactly like oldconsumer's pin.
+        let arg = "=dev-libs/slotconflicttarget-1.0";
+        let conflicts = [s2_conflict(vec![
+            (
+                "2.0",
+                false,
+                vec![(new_cpv, "dev-libs/slotconflicttarget", false)],
+            ),
+            (
+                "1.0",
+                false,
+                vec![
+                    (old_cpv, "<dev-libs/slotconflicttarget-2.0", false),
+                    ("", arg, false),
+                ],
+            ),
+        ])];
+        let entries = s2_entries(vec!["2.0", "1.0"]);
+        let top: HashSet<(String, String)> = HashSet::from([
+            (
+                "dev-libs".to_string(),
+                "slotconflictnewconsumer".to_string(),
+            ),
+            (
+                "dev-libs".to_string(),
+                "slotconflictoldconsumer".to_string(),
+            ),
+        ]);
+        let empty_replace: BTreeSet<(String, String)> = BTreeSet::new();
+        let out = direct_solve_slot_conflicts(s2_input(
+            &conflicts,
+            &entries,
+            &top,
+            &empty_replace,
+            &root,
+            &repos,
+            &config,
+        ));
+        assert_eq!(
+            out.removed,
+            vec![(
+                "dev-libs".to_string(),
+                "slotconflicttarget".to_string(),
+                "2.0".to_string(),
+                "1.0".to_string()
+            )]
+        );
+        assert_eq!(out.skipped.len(), 2);
+        let arg_row = out
+            .skipped
+            .iter()
+            .find(|s| s.consumer_cpv.is_empty())
+            .expect("the argument parent rides out as a bare row");
+        assert_eq!(arg_row.skipped_version, "2.0");
+        assert_eq!(arg_row.atom, arg);
+        assert!(!arg_row.consumer_installed);
+    }
+
+    #[test]
     fn direct_solve_keeps_an_unsolvable_conflict_untouched() {
         // Both instances singly forced (newpin's `>=2.0`, oldpin's
         // `<2.0`): nothing is unforced, the conflict survives with no
@@ -46830,12 +46929,15 @@ mod tests {
         );
     }
 
-    /// Backlog #230: end to end over the fixture tree -- a flagless
-    /// pre-EAPI-5 package keeps exactly the implicit + forced flags
-    /// (bed `l0-fx-20260927T125711Z` parents show
-    /// `USE="(globalforceflag)"`; the fixture additionally force-enables
-    /// `stableforceflag` for stable candidates), and a missing version
-    /// yields no display rather than a panic.
+    /// Backlog #230, fix round 1 (post-#220): end to end over the
+    /// fixture tree -- the blk0 ebuilds are EAPI 8 now, so the
+    /// `eapi_has_iuse_effective` gate selects the `IUSE_EFFECTIVE`
+    /// domain and the profile globals mask out: a flagless blk0
+    /// package renders `USE="" ELIBC="glibc"`, byte-identical to
+    /// real's own parent lines in the fix-round-1 probe
+    /// (`<dev-libs/blk0x-2 required by (dev-libs/blk0b-1:0/0::testrepo,
+    /// ebuild scheduled for merge to '<root>') USE="" ELIBC="glibc"`).
+    /// A missing version yields no display rather than a panic.
     #[test]
     fn skipped_update_use_display_for_renders_the_fixture_blk0_shape() {
         let root = fixtures_root();
@@ -46852,17 +46954,17 @@ mod tests {
         .expect("fixture config resolves");
         assert_eq!(
             skipped_update_use_display_for(&repos, &config, "dev-libs", "blk0x", "3"),
-            vec![(
-                "USE".to_string(),
-                "(globalforceflag) (stableforceflag)".to_string()
-            )],
+            vec![
+                ("USE".to_string(), String::new()),
+                ("ELIBC".to_string(), "glibc".to_string()),
+            ],
         );
         assert_eq!(
             skipped_update_use_display_for(&repos, &config, "dev-libs", "blk0b", "1"),
-            vec![(
-                "USE".to_string(),
-                "(globalforceflag) (stableforceflag)".to_string()
-            )],
+            vec![
+                ("USE".to_string(), String::new()),
+                ("ELIBC".to_string(), "glibc".to_string()),
+            ],
         );
         // EAPI 8, no IUSE: only the implicit ELIBC group survives.
         assert_eq!(
