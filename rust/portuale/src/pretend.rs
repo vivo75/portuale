@@ -86,9 +86,10 @@
 // for the dominant plain-atom case. A `@set`-prefixed world entry is
 // never matched, consistent with the pre-existing `read_world_atoms` cut
 // for `@world` itself (not a new one). Real `--deselect` is
-// `argument_options` with an optional y/n value, the same shape
-// `--verbose`/`-v` already has: a bare `--deselect`/`-W` or `--deselect
-// y` enables it, `--deselect n` explicitly disables it (falling through
+// `true_y_or_n` choices (`_emerge/main.py:446-449`, `in true_y` at
+// `:869-870`), the same optional-value shape `--verbose`/`-v` already
+// has: a bare `--deselect`/`-W` or `--deselect y`/`--deselect True`
+// enables it, `--deselect n` explicitly disables it (falling through
 // to ordinary resolution instead); a bundled `-W` (e.g. `-pW`) never
 // consumes a value, always enabling, the same "no ambiguity with another
 // bundled flag character" reasoning as bundled `-v`/`-D`. `--ask`
@@ -9635,10 +9636,9 @@ pub fn run(args: &[String]) -> ExitCode {
     // '--verbose-conflicts' option" trailer. Never reaches the resolver.
     let mut verbose_conflicts = false;
     // --autounmask/--autounmask-keep-keywords: real "true_y_or_n"
-    // (bare flag, "=y", or "=n") for the first, plain required "y"/"n"
-    // (no bare form) for the second -- see the on/off default-
-    // resolution logic just below where these are actually consumed,
-    // grounded against real create_depgraph_params.py's own
+    // (bare flag, "=y", "=True", or "=n") for both -- see the on/off
+    // default-resolution logic just below where these are actually
+    // consumed, grounded against real create_depgraph_params.py's own
     // autounmask/autounmask_keep_keywords computation.
     let mut autounmask: Option<bool> = None;
     let mut autounmask_keep_keywords: Option<bool> = None;
@@ -9647,7 +9647,8 @@ pub fn run(args: &[String]) -> ExitCode {
     // `"y" if autounmask is True else "n"` (create_depgraph_params.py) --
     // so OFF unless `--autounmask` itself is explicit or `=y` is given.
     let mut autounmask_license: Option<bool> = None;
-    // --autounmask-keep-masks: real `y_or_n`. Real KEEPS masks by default
+    // --autounmask-keep-masks: real `true_y_or_n` (bare flag, "=y",
+    // "=True", or "=n"). Real KEEPS masks by default
     // (`autounmask_keep_masks` defaults `True`); only `=n` unmasks.
     let mut autounmask_keep_masks: Option<bool> = None;
     // --autounmask-only (real `true_y_or_n`, `main.py:813`): "only perform
@@ -10388,16 +10389,20 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
             }
-        } else if arg == "--verbose=y" {
+        } else if arg == "--verbose=y" || arg == "--verbose=True" {
             verbose = true;
             i += 1;
         } else if arg == "--verbose=n" {
             verbose = false;
             i += 1;
         } else if arg == "--quiet" || arg == "-q" {
-            // Real `--quiet`/`-q`: `true_y_or_n` (`argument_options`), the
-            // same optional-value shape `--verbose`/`-v` has -- a bare
-            // occurrence enables it, `y`/`n` set it explicitly. Sets real
+            // Real `--quiet`/`-q`: `true_y_or_n` choices
+            // (`_emerge/main.py:612-614`, normalized `in true_y` at
+            // `:939-941`); a bare occurrence inserts `"True"` via
+            // `insert_optional_args` (`:172` is in the `y_or_n` insert
+            // set, so only a separate `y`/`n` is consumed and a
+            // separate `True` stays positional) -- the same
+            // optional-value shape `--verbose`/`-v` has. Sets real
             // `_DisplayConfig` verbosity to 1 (see `render` / `use_suffix`
             // / `attr_display_field` for what that changes).
             match args.get(i + 1).map(String::as_str) {
@@ -10414,16 +10419,21 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
             }
-        } else if arg == "--quiet=y" {
+        } else if arg == "--quiet=y" || arg == "--quiet=True" {
             quiet = true;
             i += 1;
         } else if arg == "--quiet=n" {
             quiet = false;
             i += 1;
         } else if arg == "--deselect" || arg == "-W" {
-            // Real "--deselect": y_or_n (argument_options), the same
-            // optional-value shape "--verbose"/"-v" already has -- see
-            // that branch's own comment. Unlike "--verbose", a bare
+            // Real "--deselect": `true_y_or_n` choices
+            // (`_emerge/main.py:446-449`, normalized `in true_y` at
+            // `:869-870`), the same optional-value shape
+            // "--verbose"/"-v" already has -- a bare `--deselect`/`-W`
+            // inserts `"True"` via `insert_optional_args` (`:158` is in
+            // the `y_or_n` insert set, so only a separate `y`/`n` is
+            // consumed and a separate `True` stays positional; see that
+            // branch's own comment). Unlike "--verbose", a bare
             // "--deselect"/"-W" turns this whole invocation into a
             // different, standalone action (see run_deselect's own doc
             // comment) rather than modifying the ordinary --pretend
@@ -10444,7 +10454,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
             }
-        } else if arg == "--deselect=y" {
+        } else if arg == "--deselect=y" || arg == "--deselect=True" {
             deselect = true;
             i += 1;
         } else if arg == "--deselect=n" {
@@ -10574,11 +10584,16 @@ pub fn run(args: &[String]) -> ExitCode {
                 }
             }
         } else if arg == "--changed-deps" {
-            // Real "--changed-deps": y_or_n (default_arg_opts), the same
-            // optional-value shape "--verbose"/"-v" and "--deselect"/"-W"
-            // already have -- no short alias, though (real main.py
-            // declares none). Unlike --deselect, this stays an ordinary
-            // --pretend modifier, not a standalone action.
+            // Real "--changed-deps": `true_y_or_n` choices
+            // (`_emerge/main.py:405-407`, normalized `in true_y` at
+            // `:848-851`), the same optional-value shape
+            // "--verbose"/"-v" and "--deselect"/"-W" already have -- a
+            // bare occurrence inserts `"True"` via
+            // `insert_optional_args` (`:152` is in the `y_or_n` insert
+            // set, so only a separate `y`/`n` is consumed and a
+            // separate `True` stays positional). No short alias, though
+            // (real main.py declares none). Unlike --deselect, this stays
+            // an ordinary --pretend modifier, not a standalone action.
             match args.get(i + 1).map(String::as_str) {
                 Some("y") => {
                     changed_deps = true;
@@ -10593,19 +10608,22 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
             }
-        } else if arg == "--changed-deps=y" {
+        } else if arg == "--changed-deps=y" || arg == "--changed-deps=True" {
             changed_deps = true;
             i += 1;
         } else if arg == "--changed-deps=n" {
             changed_deps = false;
             i += 1;
         } else if arg == "--changed-deps-report" {
-            // Real "--changed-deps-report": y_or_n (default_arg_opts),
-            // the identical optional-value shape "--changed-deps"
-            // already has -- no short alias (real main.py declares
-            // none). Unlike --changed-deps, this never changes what
-            // gets reinstalled -- see resolve_pretend_graph's own doc
-            // comment.
+            // Real "--changed-deps-report": `true_y_or_n` choices
+            // (`_emerge/main.py:409-411`, normalized `in true_y` at
+            // `:854-857`), the identical optional-value shape
+            // "--changed-deps" already has -- a bare occurrence inserts
+            // `"True"` via `insert_optional_args` (`:154` is in the
+            // `y_or_n` insert set, so only a separate `y`/`n` is
+            // consumed). No short alias (real main.py declares none).
+            // Unlike --changed-deps, this never changes what gets
+            // reinstalled -- see resolve_pretend_graph's own doc comment.
             match args.get(i + 1).map(String::as_str) {
                 Some("y") => {
                     changed_deps_report = true;
@@ -10620,7 +10638,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
             }
-        } else if arg == "--changed-deps-report=y" {
+        } else if arg == "--changed-deps-report=y" || arg == "--changed-deps-report=True" {
             changed_deps_report = true;
             i += 1;
         } else if arg == "--changed-deps-report=n" {
@@ -10695,15 +10713,20 @@ pub fn run(args: &[String]) -> ExitCode {
             ignore_built_slot_operator_deps = false;
             i += 1;
         } else if arg == "--selective" {
-            // Real "--selective": y_or_n (default_arg_opts), the same
-            // optional-value shape "--changed-deps" already has -- no
-            // short alias for this exact spelling (real main.py declares
-            // none; "-n" is "--noreplace" above, real portage's own
-            // separate, bare-boolean spelling of the identical meaning).
-            // "n" here explicitly CANCELS `selective` even if some other
-            // flag already set it -- see `resolve_pretend`'s own doc
-            // comment (portage-repo) and this override's own application
-            // just before the `resolve_pretend_graph` call below.
+            // Real "--selective": `true_y_or_n` choices
+            // (`_emerge/main.py:697`, normalized `in true_y` at
+            // `:988-989`), the same optional-value shape
+            // "--changed-deps" already has -- a bare occurrence inserts
+            // `"True"` via `insert_optional_args` (`:183` is in the
+            // `y_or_n` insert set, so only a separate `y`/`n` is
+            // consumed). No short alias for this exact spelling (real
+            // main.py declares none; "-n" is "--noreplace" above, real
+            // portage's own separate, bare-boolean spelling of the
+            // identical meaning). "n" here explicitly CANCELS `selective`
+            // even if some other flag already set it -- see
+            // `resolve_pretend`'s own doc comment (portage-repo) and this
+            // override's own application just before the
+            // `resolve_pretend_graph` call below.
             match args.get(i + 1).map(String::as_str) {
                 Some("y") => {
                     selective_flag = Some(true);
@@ -10718,16 +10741,20 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
             }
-        } else if arg == "--selective=y" {
+        } else if arg == "--selective=y" || arg == "--selective=True" {
             selective_flag = Some(true);
             i += 1;
         } else if arg == "--selective=n" {
             selective_flag = Some(false);
             i += 1;
         } else if arg == "--changed-slot" {
-            // Real "--changed-slot": y_or_n (default_arg_opts), the
-            // identical optional-value shape "--changed-deps" already
-            // has -- no short alias (real main.py declares none).
+            // Real "--changed-slot": `true_y_or_n` choices
+            // (`_emerge/main.py:413-415`, normalized `in true_y` at
+            // `:860-863`), the identical optional-value shape
+            // "--changed-deps" already has -- a bare occurrence inserts
+            // `"True"` via `insert_optional_args` (`:153` is in the
+            // `y_or_n` insert set, so only a separate `y`/`n` is
+            // consumed). No short alias (real main.py declares none).
             match args.get(i + 1).map(String::as_str) {
                 Some("y") => {
                     changed_slot = true;
@@ -10742,7 +10769,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
             }
-        } else if arg == "--changed-slot=y" {
+        } else if arg == "--changed-slot=y" || arg == "--changed-slot=True" {
             changed_slot = true;
             i += 1;
         } else if arg == "--changed-slot=n" {
@@ -10799,7 +10826,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
             }
-        } else if arg == "--quiet-build=y" {
+        } else if arg == "--quiet-build=y" || arg == "--quiet-build=True" {
             quiet_build = Some(true);
             i += 1;
         } else if arg == "--quiet-build=n" {
@@ -11008,10 +11035,14 @@ pub fn run(args: &[String]) -> ExitCode {
             root_deps = true;
             i += 1;
         } else if arg == "--with-test-deps" {
-            // Real "--with-test-deps": y_or_n (default_arg_opts), the
-            // identical optional-value shape "--changed-deps"/
-            // "--changed-slot" already have -- no short alias (real
-            // main.py declares none).
+            // Real "--with-test-deps": `true_y_or_n` choices
+            // (`_emerge/main.py:745-747`, normalized `in true_y` at
+            // `:1133-1136`), the identical optional-value shape
+            // "--changed-deps"/"--changed-slot" already have -- a bare
+            // occurrence inserts `"True"` via `insert_optional_args`
+            // (`:191` is in the `y_or_n` insert set, so only a separate
+            // `y`/`n` is consumed). No short alias (real main.py
+            // declares none).
             match args.get(i + 1).map(String::as_str) {
                 Some("y") => {
                     with_test_deps = true;
@@ -11026,7 +11057,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
             }
-        } else if arg == "--with-test-deps=y" {
+        } else if arg == "--with-test-deps=y" || arg == "--with-test-deps=True" {
             with_test_deps = true;
             i += 1;
         } else if arg == "--with-test-deps=n" {
@@ -11118,33 +11149,30 @@ pub fn run(args: &[String]) -> ExitCode {
             autounmask_backtrack = Some(value == "y");
             i += 1;
         } else if arg == "--autounmask-keep-keywords" {
-            // Real "--autounmask-keep-keywords": plain y_or_n, a
-            // REQUIRED value -- no bare/optional form real
-            // "--autounmask" itself has, the same required shape
-            // "--with-bdeps" already has.
-            let Some(value) = args.get(i + 1) else {
-                eprintln!("emerge: option \"--autounmask-keep-keywords\" requires an argument");
-                return ExitCode::from(2);
-            };
-            match value.as_str() {
-                "y" => {
+            // Real "--autounmask-keep-keywords": `true_y_or_n` choices
+            // (`_emerge/main.py:365-367`, normalized `in true_y` at
+            // `:821-822`) -- a bare occurrence inserts `"True"` via
+            // `insert_optional_args` (`:146` is in the `y_or_n` insert
+            // set, so only a separate `y`/`n` is consumed and a
+            // separate `True` stays positional), the same
+            // optional-value shape "--changed-deps" already has.
+            match args.get(i + 1).map(String::as_str) {
+                Some("y") => {
                     autounmask_keep_keywords = Some(true);
                     i += 2;
                 }
-                "n" => {
+                Some("n") => {
                     autounmask_keep_keywords = Some(false);
                     i += 2;
                 }
                 _ => {
-                    eprintln!(
-                        "emerge: option \"--autounmask-keep-keywords\": invalid choice: {value:?} (choose from \"y\", \"n\")"
-                    );
-                    return ExitCode::from(2);
+                    autounmask_keep_keywords = Some(true);
+                    i += 1;
                 }
             }
         } else if let Some(value) = arg.strip_prefix("--autounmask-keep-keywords=") {
             match value {
-                "y" => {
+                "y" | "True" => {
                     autounmask_keep_keywords = Some(true);
                     i += 1;
                 }
@@ -11154,7 +11182,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 }
                 _ => {
                     eprintln!(
-                        "emerge: option \"--autounmask-keep-keywords\": invalid choice: {value:?} (choose from \"y\", \"n\")"
+                        "emerge: option \"--autounmask-keep-keywords\": invalid choice: {value:?} (choose from \"True\", \"y\", \"n\")"
                     );
                     return ExitCode::from(2);
                 }
@@ -11242,29 +11270,30 @@ pub fn run(args: &[String]) -> ExitCode {
                 }
             }
         } else if arg == "--autounmask-keep-masks" {
-            let Some(value) = args.get(i + 1) else {
-                eprintln!("emerge: option \"--autounmask-keep-masks\" requires an argument");
-                return ExitCode::from(2);
-            };
-            match value.as_str() {
-                "y" => {
+            // Real "--autounmask-keep-masks": `true_y_or_n` choices
+            // (`_emerge/main.py:369-371`, normalized `in true_y` at
+            // `:824-825`) -- a bare occurrence inserts `"True"` via
+            // `insert_optional_args` (`:147` is in the `y_or_n` insert
+            // set, so only a separate `y`/`n` is consumed and a
+            // separate `True` stays positional), the same
+            // optional-value shape "--changed-deps" already has.
+            match args.get(i + 1).map(String::as_str) {
+                Some("y") => {
                     autounmask_keep_masks = Some(true);
                     i += 2;
                 }
-                "n" => {
+                Some("n") => {
                     autounmask_keep_masks = Some(false);
                     i += 2;
                 }
                 _ => {
-                    eprintln!(
-                        "emerge: option \"--autounmask-keep-masks\": invalid choice: {value:?} (choose from \"y\", \"n\")"
-                    );
-                    return ExitCode::from(2);
+                    autounmask_keep_masks = Some(true);
+                    i += 1;
                 }
             }
         } else if let Some(value) = arg.strip_prefix("--autounmask-keep-masks=") {
             match value {
-                "y" => {
+                "y" | "True" => {
                     autounmask_keep_masks = Some(true);
                     i += 1;
                 }
@@ -11274,7 +11303,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 }
                 _ => {
                     eprintln!(
-                        "emerge: option \"--autounmask-keep-masks\": invalid choice: {value:?} (choose from \"y\", \"n\")"
+                        "emerge: option \"--autounmask-keep-masks\": invalid choice: {value:?} (choose from \"True\", \"y\", \"n\")"
                     );
                     return ExitCode::from(2);
                 }
@@ -15669,6 +15698,189 @@ mod tests {
         assert!(
             stderr.contains("\"--ask\" should only be used in a terminal"),
             "{stderr}"
+        );
+    }
+
+    /// Run the built binary twice under `--pretend` -- once with
+    /// `--X=True`, once with the bare `--X` -- against the committed
+    /// fixture tree on a shared scratch `ROOT`, and assert the two runs
+    /// are byte-identical (exit code, stdout, stderr). Backlog #241:
+    /// real's `true_y_or_n` choices
+    /// (`_emerge/main.py:320-322,365-371,405-415,446-449,612-623,697,732-747`;
+    /// normalized `in true_y` per option) admit `=True` for eleven
+    /// options portuale parsed narrowly (`=y`/`=n` only, rc 2
+    /// `unrecognized option` for nine of them and a wrong
+    /// `(choose from "y", "n")` rejection for the two
+    /// autounmask-keep options); `=True` must behave exactly like the
+    /// bare flag. `expected_rc` pins the shared exit code (0 for the
+    /// resolving shapes, 1 for the two autounmask-keep shapes whose
+    /// fixtures fail like real). `--pretend` never writes, so sharing
+    /// one `ROOT` across both runs is hermetic.
+    fn true_spelling_matches_bare(
+        flag_eq_true: &str,
+        flag_bare: &str,
+        atom: &str,
+        expected_rc: i32,
+    ) {
+        let portuale_bin = built_portuale_bin();
+        let base = std::env::temp_dir().join(format!(
+            "true_y_or_n_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = base.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let env = fixture_resolve_env(&root, &base.join("pt"));
+        let run = |flag: &str| {
+            std::process::Command::new(&portuale_bin)
+                .args(["emerge", "--pretend", flag, atom])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .envs(env.clone())
+                .output()
+                .expect("portuale emerge spawns")
+        };
+        let spelled = run(flag_eq_true);
+        let bare = run(flag_bare);
+        for (label, output) in [("spelled", &spelled), ("bare", &bare)] {
+            assert_eq!(
+                output.status.code(),
+                Some(expected_rc),
+                "--pretend {flag_bare} {atom} ({label}) must exit {expected_rc}\nstdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+        }
+        assert_eq!(
+            String::from_utf8_lossy(&spelled.stdout),
+            String::from_utf8_lossy(&bare.stdout),
+            "--pretend {flag_eq_true} {atom} must print like the bare flag",
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&spelled.stderr),
+            String::from_utf8_lossy(&bare.stderr),
+            "--pretend {flag_eq_true} {atom} must warn like the bare flag",
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn verbose_true_spelling_behaves_like_the_bare_flag() {
+        // Backlog #241: real `--verbose` is `true_y_or_n` choices
+        // (`main.py:732-735`, `in true_y` at `:1128-1131`).
+        true_spelling_matches_bare("--verbose=True", "--verbose", "dev-libs/newpkg", 0);
+    }
+
+    #[test]
+    fn quiet_true_spelling_behaves_like_the_bare_flag() {
+        // Backlog #241: real `--quiet` is `true_y_or_n` choices
+        // (`main.py:612-614`, `in true_y` at `:939-941`).
+        true_spelling_matches_bare("--quiet=True", "--quiet", "dev-libs/newpkg", 0);
+    }
+
+    #[test]
+    fn deselect_true_spelling_behaves_like_the_bare_flag() {
+        // Backlog #241: real `--deselect` is `true_y_or_n` choices
+        // (`main.py:446-449`, `in true_y` at `:869-870`); the bare form
+        // stays the standalone deselect action either way.
+        true_spelling_matches_bare("--deselect=True", "--deselect", "dev-libs/foo", 0);
+    }
+
+    #[test]
+    fn changed_deps_true_spelling_behaves_like_the_bare_flag() {
+        // Backlog #241: real `--changed-deps` is `true_y_or_n` choices
+        // (`main.py:405-407`, `in true_y` at `:848-851`).
+        true_spelling_matches_bare(
+            "--changed-deps=True",
+            "--changed-deps",
+            "dev-libs/changeddepspkg",
+            0,
+        );
+    }
+
+    #[test]
+    fn changed_deps_report_true_spelling_behaves_like_the_bare_flag() {
+        // Backlog #241: real `--changed-deps-report` is `true_y_or_n`
+        // choices (`main.py:409-411`, `in true_y` at `:854-857`).
+        true_spelling_matches_bare(
+            "--changed-deps-report=True",
+            "--changed-deps-report",
+            "dev-libs/changeddepspkg",
+            0,
+        );
+    }
+
+    #[test]
+    fn selective_true_spelling_behaves_like_the_bare_flag() {
+        // Backlog #241: real `--selective` is `true_y_or_n` choices
+        // (`main.py:697`, `in true_y` at `:988-989`).
+        true_spelling_matches_bare("--selective=True", "--selective", "dev-libs/samepkg", 0);
+    }
+
+    #[test]
+    fn changed_slot_true_spelling_behaves_like_the_bare_flag() {
+        // Backlog #241: real `--changed-slot` is `true_y_or_n` choices
+        // (`main.py:413-415`, `in true_y` at `:860-863`).
+        true_spelling_matches_bare(
+            "--changed-slot=True",
+            "--changed-slot",
+            "dev-libs/changedslotpkg",
+            0,
+        );
+    }
+
+    #[test]
+    fn quiet_build_true_spelling_behaves_like_the_bare_flag() {
+        // Backlog #241: real `--quiet-build` is `true_y_or_n` choices
+        // (`main.py:617-619`, `in true_y` at `:944-945`); inert under
+        // `--pretend` either way.
+        true_spelling_matches_bare("--quiet-build=True", "--quiet-build", "dev-libs/newpkg", 0);
+    }
+
+    #[test]
+    fn with_test_deps_true_spelling_behaves_like_the_bare_flag() {
+        // Backlog #241: real `--with-test-deps` is `true_y_or_n`
+        // choices (`main.py:745-747`, `in true_y` at `:1133-1136`).
+        true_spelling_matches_bare(
+            "--with-test-deps=True",
+            "--with-test-deps",
+            "dev-libs/withtestdeppkg",
+            0,
+        );
+    }
+
+    #[test]
+    fn autounmask_keep_keywords_true_spelling_behaves_like_the_bare_flag() {
+        // Backlog #241: real `--autounmask-keep-keywords` is
+        // `true_y_or_n` choices (`main.py:365-367`, `in true_y` at
+        // `:821-822`) -- the old wrong `(choose from "y", "n")`
+        // rejection of `=True` is gone, and the bare form (once a
+        // "requires an argument" rc 2) now keeps keywords like real's
+        // inserted `"True"`. `=True` keeps the unstable-keyworded B-1,
+        // so newest A-2 fails like real (rc 1, same as the `=y` pin).
+        true_spelling_matches_bare(
+            "--autounmask-keep-keywords=True",
+            "--autounmask-keep-keywords",
+            "dev-libs/akk0a",
+            1,
+        );
+    }
+
+    #[test]
+    fn autounmask_keep_masks_true_spelling_behaves_like_the_bare_flag() {
+        // Backlog #241: real `--autounmask-keep-masks` is `true_y_or_n`
+        // choices (`main.py:369-371`, `in true_y` at `:824-825`) --
+        // same rework as keep-keywords. `=True` keeps the mask, so the
+        // package.mask'd target stays fatal (rc 1, the default).
+        true_spelling_matches_bare(
+            "--autounmask-keep-masks=True",
+            "--autounmask-keep-masks",
+            "dev-libs/hardmaskedpkg",
+            1,
         );
     }
 
