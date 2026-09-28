@@ -329,6 +329,13 @@ mod tests {
     }
 
     #[test]
+    fn does_not_recognize_ignore_world_itself() {
+        // Implemented: handled by the caller. No short alias; `=n` strips before lookup.
+        assert!(lookup("--ignore-world").is_none());
+        assert!(lookup("--ignore-world=n").is_none());
+    }
+
+    #[test]
     fn does_not_recognize_a_bundled_short_flag() {
         assert!(lookup("-pv").is_none());
     }
