@@ -2224,6 +2224,16 @@ pub fn read_packages_index(pkgdir: &Path) -> Vec<HashMap<String, String>> {
     let Ok(text) = fs::read_to_string(&path) else {
         return Vec::new();
     };
+    parse_packages_index(&text).1
+}
+
+/// Split a `Packages` index text into its global header block (the
+/// first `KEY: value` block -- real `getbinpkg.PackageIndex.header`,
+/// carrying `TIMESTAMP`/`TTL`/`DOWNLOAD_TIMESTAMP` for the remote-index
+/// freshness checks in `bintree._populate_remote_repo`) and one
+/// `HashMap` per package entry. [`read_packages_index`] is this same
+/// split with the header dropped.
+pub fn parse_packages_index(text: &str) -> (HashMap<String, String>, Vec<HashMap<String, String>>) {
     let mut blocks: Vec<HashMap<String, String>> = Vec::new();
     let mut current: HashMap<String, String> = HashMap::new();
     for line in text.lines() {
@@ -2243,10 +2253,10 @@ pub fn read_packages_index(pkgdir: &Path) -> Vec<HashMap<String, String>> {
     // The first block is the index's own global header, never a real
     // package entry -- see this function's own doc comment.
     if blocks.is_empty() {
-        blocks
+        (HashMap::new(), Vec::new())
     } else {
-        blocks.remove(0);
-        blocks
+        let header = blocks.remove(0);
+        (header, blocks)
     }
 }
 
@@ -2326,7 +2336,20 @@ impl BinaryIndex {
 /// made a large `emerge -p --getbinpkg` graph take minutes. `emerge` is
 /// a one-shot process and a synced index doesn't change mid-run, so a
 /// path-keyed global cache is safe.
+///
+/// A live binhost-index refresh (`portuale::emerge_getbinpkg`, real
+/// `bintree._populate_remote`) installs a per-directory override here
+/// *before* resolution, so the resolver uses the fetched index
+/// in memory even when the edb cache write failed (real ignores an
+/// unwritable cache dir, `bintree.py:1819-1823`, backlog #192) -- and,
+/// on a non-`--pretend` fetch failure, suppresses even a stale cached
+/// copy (real sets `pkgindex = None`, `bintree.py:1809`). `Some` is the
+/// index to use; `None` means "this binrepo contributes nothing this
+/// run". An override wins over both the memo below and the disk.
 fn cached_binary_index(pkgdir: &Path) -> std::sync::Arc<BinaryIndex> {
+    if let Some(overridden) = remote_binary_index_override(pkgdir) {
+        return overridden.unwrap_or_default();
+    }
     static CACHE: OnceLock<RwLock<HashMap<PathBuf, std::sync::Arc<BinaryIndex>>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| RwLock::new(HashMap::new()));
     if let Some(hit) = cache.read().unwrap().get(pkgdir) {
@@ -2338,6 +2361,47 @@ fn cached_binary_index(pkgdir: &Path) -> std::sync::Arc<BinaryIndex> {
         .unwrap()
         .insert(pkgdir.to_path_buf(), idx.clone());
     idx
+}
+
+/// The live-refresh override table for [`cached_binary_index`], keyed by
+/// the same `packages_dir` the resolver reads. Set once per binrepo by
+/// the refresh, before any resolution. `emerge` is a one-shot process,
+/// but an in-process multi-run caller (or tests sharing an EROOT)
+/// must not inherit a previous run's indexes, so `pretend::run`
+/// calls [`clear_remote_binary_index_overrides`] where a run starts;
+/// unit tests use pid+nanos-unique temp dirs, so their keys never
+/// collide either way.
+static REMOTE_INDEX_OVERRIDE: OnceLock<
+    RwLock<HashMap<PathBuf, Option<std::sync::Arc<BinaryIndex>>>>,
+> = OnceLock::new();
+
+/// Install (or replace) the in-memory index for `pkgdir` (real
+/// `bintree`'s fetched-then-maybe-cached `pkgindex` for the run):
+/// `Some(index)` resolves from it, `None` resolves nothing (a failed
+/// non-`--pretend` refresh drops even a stale cache, like real).
+pub fn set_remote_binary_index_override(pkgdir: &Path, index: Option<std::sync::Arc<BinaryIndex>>) {
+    REMOTE_INDEX_OVERRIDE
+        .get_or_init(|| RwLock::new(HashMap::new()))
+        .write()
+        .unwrap()
+        .insert(pkgdir.to_path_buf(), index);
+}
+
+/// Drop every live-refresh override installed by
+/// [`set_remote_binary_index_override`]. Called where a run starts
+/// (review M4), so a second in-process run resolves from its own
+/// refresh (or the disk) instead of inheriting the first run's
+/// in-memory indexes.
+pub fn clear_remote_binary_index_overrides() {
+    if let Some(table) = REMOTE_INDEX_OVERRIDE.get() {
+        table.write().unwrap().clear();
+    }
+}
+
+fn remote_binary_index_override(pkgdir: &Path) -> Option<Option<std::sync::Arc<BinaryIndex>>> {
+    REMOTE_INDEX_OVERRIDE
+        .get()
+        .and_then(|table| table.read().unwrap().get(pkgdir).cloned())
 }
 
 /// The local `$PKGDIR` binary index for this run: the CLI layer's own
@@ -2625,9 +2689,11 @@ fn dedup_binary_instances(
 }
 
 /// `--getbinpkg`/`-g`: binary candidates for `category/package` from
-/// every `config.binrepos` binrepo's own on-disk `Packages` index (real
-/// `bintree._populate_remote`, narrowed -- `--pretend` never fetches, so
-/// a binrepo whose cached index is absent simply contributes nothing).
+/// every `config.binrepos` binrepo's own `Packages` index -- the live
+/// refresh's in-memory copy when it ran (real `bintree._populate_remote`,
+/// backlog #192; `--pretend` refreshes exactly like a real merge), else
+/// the on-disk index (`BinRepo::packages_dir`: the edb cache for
+/// `http(s)`/`ssh`, the URI's own directory for `file://`).
 /// `root` is the `EROOT` under which the `http(s)://`/`ssh://` cache
 /// lives (`BinRepo::packages_dir`). A remote build of a cpv+version the
 /// local `$PKGDIR` (`local_pkgdir`) also carries is dropped -- real
@@ -27571,6 +27637,7 @@ mod tests {
             priority: 1,
             location: None,
             verify_signature: true,
+            frozen: false,
         }
     }
 

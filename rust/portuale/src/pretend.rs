@@ -9123,6 +9123,11 @@ pub fn run(args: &[String]) -> ExitCode {
     // (the CLI parse below sets it again from argv or the defaults).
     ASK_ENTER_INVALID.store(false, std::sync::atomic::Ordering::Relaxed);
 
+    // The live binhost-index overrides are process-wide state too
+    // (review M4): a second in-process run must resolve from its own
+    // refresh, not inherit the first run's in-memory indexes.
+    portage_repo::clear_remote_binary_index_overrides();
+
     // Config resolution comes before argv parsing, matching real
     // `emerge`'s own order: its first pass only finds `--config-root`,
     // then it loads the config and re-parses with
@@ -12091,16 +12096,18 @@ pub fn run(args: &[String]) -> ExitCode {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("/var/cache/distfiles"));
 
-    // Real `bintree._populate_remote`: a non-`--pretend` `--getbinpkg`
-    // run refreshes each `http(s)` binhost's `Packages` index into the
-    // local edb cache *before* resolution, so the resolver picks up the
-    // live pool. (`--pretend` deliberately never touches the network --
-    // it resolves against whatever is already cached.) A failed refresh
-    // is non-fatal (backlog #175): real warns (`!!! [<repo>] Error
-    // fetching ...`) and resolves against the local pool, so this
-    // returns nothing -- it never aborts the run.
-    if !pretend && getbinpkg {
-        emerge_getbinpkg::refresh_binhost_indexes(&config.binrepos, &root);
+    // Real `bintree._populate_remote`: a `--getbinpkg` run refreshes
+    // each binhost's `Packages` index into the local edb cache *before*
+    // resolution, so the resolver picks up the live pool -- in
+    // `--pretend` exactly like in a real merge (real `actions.py:3752`
+    // passes `getbinpkg_refresh=True` unconditionally; `pretend` only
+    // selects the stale-fallback message, never skips the fetch,
+    // `bintree.py:917-920`, backlog #192). A failed refresh is non-fatal
+    // (backlog #175): real warns (`!!! [<repo>] Error fetching ...`)
+    // and resolves against the local pool, so this returns nothing --
+    // it never aborts the run.
+    if getbinpkg {
+        emerge_getbinpkg::refresh_binhost_indexes(&config.binrepos, &root, pretend);
     }
 
     // Real `main.py:958-975` precedence for the `--rebuild-if-*` trio:
