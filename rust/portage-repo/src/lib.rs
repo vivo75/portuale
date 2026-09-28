@@ -15310,7 +15310,9 @@ fn slot_operator_rebuild_scan(
     // into a fresh slot (no installed instance in that slot -- real's
     // `_get_installed_best` empty-`myinslotlist` case, rendered `[ebuild N]`).
     // A provider that moves slot only ever arrives this way; the update
-    // probe's new-child-slot arm (`:3121-3126`) is the sole consumer.
+    // probe's new-child-slot arm (`:3121-3126`) prefers these, falling
+    // back to `Upgrade`/`Downgrade`/`Reinstall` entries in a slot the
+    // consumer is not bound to (same real candidate loop).
     let mut new_slot_fresh: HashMap<(String, String), (String, String, String)> = HashMap::new();
     let mut in_graph: HashSet<(String, String)> = HashSet::new();
     for e in entries {
@@ -15405,8 +15407,8 @@ fn slot_operator_rebuild_scan(
             // their vdb is rewritten at merge, so no reinstall is needed
             // (real's not-installed-parent disjunct would probe them; the
             // refusal half of that probe is v2 `#24b` remainder either way).
-            let new_slot_scope =
-                !new_slot_fresh.is_empty() && (reachable.contains(&cp) || walked.contains(&cp));
+            let new_slot_scope = (!new_slot_fresh.is_empty() || !new_slot.is_empty())
+                && (reachable.contains(&cp) || walked.contains(&cp));
             if !same_slot_scope && !new_slot_scope {
                 continue;
             }
@@ -15451,47 +15453,71 @@ fn slot_operator_rebuild_scan(
                     // bug 486580): an installed consumer whose built
                     // `:S/SS=` dep is bound to a slot the provider no
                     // longer occupies rebuilds against the fresh slot.
+                    // Candidates are the fresh (`New`) entries first, then
+                    // `Upgrade`/`Downgrade`/`Reinstall` entries in a slot
+                    // the consumer is not bound to: real's candidate loop
+                    // (`_iter_similar_available`, `:2660-2695`) ranges
+                    // over every available package, not only fresh-slot
+                    // merges, so a bound-slot mismatch on a same-slot
+                    // entry probes the same way (entries at the bound
+                    // slot stay with the same-slot arm above). First
+                    // acceptable candidate wins, gates and R2 refusal
+                    // per candidate.
                     if new_slot_scope {
-                        let (f_ver, f_slot, f_sub) = new_slot_fresh.get(&provider_cp)?;
-                        if *f_slot == a_slot {
-                            return None;
+                        let mut cands: Vec<(&String, &String, &String)> = Vec::new();
+                        if let Some(fresh) = new_slot_fresh.get(&provider_cp) {
+                            cands.push((&fresh.0, &fresh.1, &fresh.2));
                         }
-                        // The superseded child: an installed provider
-                        // instance must sit in the bound slot (else there
-                        // is no `dep.child` to update away from).
-                        let old_ver = installed_by_cp.get(&provider_cp)?.iter().find_map(
-                            |(version, slot)| (*slot == a_slot).then(|| version.clone()),
-                        )?;
-                        // Higher version only (real `pkg < dep.child`
-                        // skips downgrades; equal versions -- a slot move
-                        // without a revbump -- probe).
-                        if vercmp_ordering(f_ver, &old_ver) == Ordering::Less {
-                            return None;
+                        if let Some(other) = new_slot.get(&provider_cp) {
+                            cands.push((&other.0, &other.1, &other.2));
                         }
-                        // `want_update` stand-in (real `:3805-3809`):
-                        // `--update`, or the provider itself is directly
-                        // requested (real's arg-chain disjunct). The
-                        // registration-time complete-mode/depth nuance is
-                        // not modelled.
-                        if !update && !top_level_cps.contains(&provider_cp) {
-                            return None;
+                        for (c_ver, c_slot, c_sub) in cands {
+                            if *c_slot == a_slot {
+                                continue;
+                            }
+                            // The superseded child: an installed provider
+                            // instance must sit in the bound slot (else
+                            // there is no `dep.child` to update away from).
+                            let Some(old_ver) = installed_by_cp.get(&provider_cp)?.iter().find_map(
+                                |(version, slot)| (*slot == a_slot).then(|| version.clone()),
+                            ) else {
+                                continue;
+                            };
+                            // Higher version only (real `pkg < dep.child`
+                            // skips downgrades; equal versions -- a slot
+                            // move without a revbump -- probe).
+                            if vercmp_ordering(c_ver, &old_ver) == Ordering::Less {
+                                continue;
+                            }
+                            // `want_update` stand-in (real `:3805-3809`):
+                            // `--update`, or the provider itself is
+                            // directly requested (real's arg-chain
+                            // disjunct). The registration-time
+                            // complete-mode/depth nuance is not modelled.
+                            if !update && !top_level_cps.contains(&provider_cp) {
+                                continue;
+                            }
+                            // A `replacement_parent` must exist: with no
+                            // visible tree candidate the forced reinstall
+                            // would dead-end (real finds no replacement
+                            // and does nothing).
+                            if list_candidates(repos, &pkg.category, &pkg.package)
+                                .ok()
+                                .is_none_or(|cands| cands.is_empty())
+                            {
+                                continue;
+                            }
+                            let display = format!("{}/{}-{c_ver}", atom.category, atom.package);
+                            let cand = format!(
+                                "{}/{}-{c_ver}:{c_slot}/{c_sub}",
+                                atom.category, atom.package
+                            );
+                            if probe_refused(&probe_parents, &scheduled, &provider_cp, &cand, &cp) {
+                                continue;
+                            }
+                            return Some((display, provider_cp, cand));
                         }
-                        // A `replacement_parent` must exist: with no
-                        // visible tree candidate the forced reinstall
-                        // would dead-end (real finds no replacement and
-                        // does nothing).
-                        if list_candidates(repos, &pkg.category, &pkg.package)
-                            .ok()
-                            .is_none_or(|cands| cands.is_empty())
-                        {
-                            return None;
-                        }
-                        let display = format!("{}/{}-{f_ver}", atom.category, atom.package);
-                        let cand = format!(
-                            "{}/{}-{f_ver}:{f_slot}/{f_sub}",
-                            atom.category, atom.package
-                        );
-                        return Some((display, provider_cp, cand));
+                        return None;
                     }
                     None
                 })
@@ -41077,6 +41103,118 @@ mod tests {
             &["dev-libs/massv".to_string()],
         );
         assert_eq!(same_kept, BTreeSet::from([massc]));
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// Backlog #211 item 2: the new-child-slot arm also probes
+    /// `Upgrade`/`Downgrade`/`Reinstall` entries in a slot the consumer
+    /// is not bound to. Real's candidate loop (`_iter_similar_available`,
+    /// `depgraph.py:2660-2695`) ranges over every available package, not
+    /// only fresh-slot merges; entries at the bound slot stay with the
+    /// same-slot arm and never leak into the new arm.
+    #[test]
+    fn slot_operator_new_slot_arm_probes_bound_slot_mismatched_entries() {
+        use md5::Digest as _;
+        use std::fmt::Write as _;
+        let base = std::env::temp_dir().join(format!(
+            "portage-repo-slotop-mismatch-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        // vdb: provider `massm` installed in slots 0 (`1`) and 1 (`2`),
+        // consumer `massn-1` bound `massm:0/1=`, consumer `masso-1`
+        // bound `massm:1/1=`.
+        for (name, slot, rdepend) in [
+            ("massm-1", "0", ""),
+            ("massm-2", "1", ""),
+            ("massn-1", "0", "dev-libs/massm:0/1="),
+            ("masso-1", "0", "dev-libs/massm:1/1="),
+        ] {
+            let d = base.join("var/db/pkg/dev-libs").join(name);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+            fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+            fs::write(d.join("repository"), "testrepo\n").unwrap();
+            if !rdepend.is_empty() {
+                fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+            }
+        }
+        let repo = base.join("repo");
+        for pkg in ["massn", "masso"] {
+            let dir = repo.join("dev-libs").join(pkg);
+            std::fs::create_dir_all(&dir).unwrap();
+            let body = "EAPI=8\nDESCRIPTION=\"211 mismatch\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\n";
+            std::fs::write(dir.join(format!("{pkg}-1.0.ebuild")), body).unwrap();
+            let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+            let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=211 mismatch\nEAPI=8\n".to_string();
+            writeln!(entry, "KEYWORDS=amd64\nSLOT=0\n_md5_={md5}").unwrap();
+            let cachedir = repo.join("metadata/md5-cache/dev-libs");
+            std::fs::create_dir_all(&cachedir).unwrap();
+            std::fs::write(cachedir.join(format!("{pkg}-1.0")), entry).unwrap();
+        }
+        let repos = vec![RepoConfig {
+            name: "testrepo".to_string(),
+            location: repo.clone(),
+            priority: 0,
+            is_main: true,
+            masters: vec![],
+            profile_formats: vec![],
+            cache_formats: vec![],
+            aliases: vec![],
+            sync_type: None,
+            sync_uri: None,
+            volatile: false,
+            module_specific_options: vec![],
+        }];
+        // `massm-3.0` upgrades the slot-1 instance; the consumer is bound
+        // to slot 0 -- a bound-slot mismatch on an `Upgrade` entry, with
+        // no `New` entry anywhere.
+        let upgrade = GraphEntry {
+            outcome: PretendOutcome::Upgrade {
+                from: "2".into(),
+                to: "3.0".into(),
+            },
+            slot: Some("1".into()),
+            sub_slot: Some("2".into()),
+            ..graph_entry("dev-libs", "massm", "3.0")
+        };
+        let walked_consumer = |package: &str| GraphEntry {
+            outcome: PretendOutcome::AlreadyInstalled {
+                version: "1.0".into(),
+            },
+            slot: Some("0".into()),
+            sub_slot: Some("0".into()),
+            ..graph_entry("dev-libs", package, "1.0")
+        };
+        let empty: BTreeSet<(String, String)> = BTreeSet::new();
+        let massn = ("dev-libs".to_string(), "massn".to_string());
+        // Both consumers walked, neither reachable: the same-slot arm is
+        // out of scope. `massn` (bound to slot 0) probes the slot-1
+        // upgrade; `masso` (bound to the entry's own slot 1) must not
+        // leak that entry into the new arm.
+        let (scheduled, abi) = slot_operator_rebuild_scan(
+            &base,
+            &repos,
+            &[upgrade, walked_consumer("massn"), walked_consumer("masso")],
+            &HashSet::new(),
+            &empty,
+            &empty,
+            true,
+            true,
+            &HashSet::new(),
+            &[],
+        );
+        assert_eq!(scheduled, BTreeSet::from([massn]));
+        assert_eq!(
+            abi,
+            vec![(
+                "dev-libs/massm-3.0".to_string(),
+                "dev-libs/massn-1".to_string()
+            )]
+        );
         let _ = fs::remove_dir_all(&base);
     }
 
