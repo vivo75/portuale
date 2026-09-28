@@ -20801,6 +20801,306 @@ fn enqueue_flat_deps(
     }
 }
 
+/// Backlog #218: in-pass delta re-expansion for an already-resolved
+/// slot's `--autounmask-use` flip.
+///
+/// Real's rule (`3rdparty/portage`, `lib/_emerge/depgraph.py`): `_add_dep`
+/// only pushes onto `_dep_stack` (`_add_pkg`, :3820: `if not
+/// previously_added: dep_stack.append(pkg)`), and `_create_graph`
+/// (:3254-3271) pops that stack LIFO -- so `aucasctop`'s two deps are
+/// both *added* before either is *walked*, `aucasclate` pops first, and
+/// its `aucascmid[cascade]` atom flips the still-unwalked `aucascmid`
+/// through `_pkg_use_enabled(pkg, target_use)` (:7669), which records
+/// `_needed_use_config_changes` synchronously. When `aucascmid` then pops,
+/// `_add_pkg_deps` (:4151) reduces `cascade? ( dev-libs/aucascleaf )`
+/// with the flip already in force, so `aucascleaf` joins the graph in the
+/// same attempt (live-verified: `fixtures/abort-captures/
+/// dev-libs_aucasctop.pretend-debug.stdout` shows one continuous walk --
+/// `aucascmid` added `USE="-cascade"`, flipped by `aucasclate`'s dep,
+/// then walked with `cascade?` live).
+///
+/// Portuale fuses resolve+expand at pop time (FIFO), so the flipped
+/// package's `flag?`-gated deps were already flattened pre-flip by the
+/// time the later atom's already-resolved-slot re-check folds the flip.
+/// This helper restores real's observable ordering within the same pass:
+/// it re-flattens the already-resolved package's dependency strings under
+/// the flipped USE and queues every genuinely new atom through the normal
+/// `enqueue_flat_deps` machinery (owner, depth, disjunction preference,
+/// pullers, merge-order edges), exactly as if the flip had landed before
+/// the package's walk. Only with `--autounmask-backtrack=y` does the
+/// driver additionally re-drive the whole walk (`autounmask_grew`); the
+/// default keeps real's single attempt.
+///
+/// Additive only, by design: atoms the pre-flip expansion already queued
+/// stay queued (a flag turned *off* cannot unqueue them mid-pass -- the
+/// narrowing half is reconciled by the next whole-walk pass, same as the
+/// pre-#218 behaviour). A no-op unless the flip actually reveals new
+/// atoms, so every non-autounmask walk is untouched.
+#[allow(clippy::too_many_arguments)]
+fn expand_resolved_slot_with_flipped_use(
+    ctx: &ResolveCtx,
+    config: &portage_profile::Config,
+    union_constraints: &HashMap<(String, String), Vec<String>>,
+    state: &mut PassState,
+    key: &(String, String),
+    existing_idx: usize,
+    existing_cand: &Candidate,
+    existing_version: &str,
+    new_use: &HashSet<String>,
+) {
+    // Real never flips a built package (`_pkg_use_enabled` returns the
+    // baked USE for `pkg.built`, `depgraph.py:7676`; `can_adjust_use =
+    // not pkg.built`, `:8131`): the delta only ever applies to a fresh
+    // ebuild entry, which is also the only shape whose md5-cache
+    // metadata this re-reads below. (`resolved_slots` only ever indexes
+    // New/Upgrade/Downgrade/Reinstall outcomes, so no outcome check.)
+    if state.entries[existing_idx].source != CandidateSource::Ebuild || ctx.nodeps {
+        return;
+    }
+    let pf = format!("{}-{existing_version}", key.1);
+    let Ok(delta_meta) = repo_aux_metadata(&existing_cand.repo_location, &key.0, &pf) else {
+        return;
+    };
+    // The flipped package's own depth (real `pkg.depth`): the delta atoms
+    // queue one deeper, exactly where the fresh expansion put its own.
+    let slot = state.entries[existing_idx].slot.clone().unwrap_or_default();
+    let existing_depth = state
+        .resolved_depths
+        .get(&(key.0.clone(), key.1.clone(), slot))
+        .copied()
+        .unwrap_or(0);
+    // The same key-inclusion rule as the fresh expansion above (an
+    // ebuild source, so only the `--buildpkgonly`-without-`--deep`
+    // runtime blanking applies).
+    let buildpkgonly_narrow = ctx.buildpkgonly && matches!(ctx.deep, Deep::NotRequested);
+    let dep_keys: &[&str] = if buildpkgonly_narrow {
+        &["DEPEND", "BDEPEND"]
+    } else {
+        &["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"]
+    };
+    let mut depstr = String::new();
+    for dep_key in dep_keys {
+        if let Some(d) = delta_meta.get(*dep_key) {
+            depstr.push_str(d);
+            depstr.push(' ');
+        }
+    }
+    let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
+    // Real `RDEPEND`-first discovery order for the merge-order edges,
+    // same `real_order_keys` as the fresh expansion above.
+    let real_order_keys: &[&str] = if buildpkgonly_narrow {
+        &["DEPEND", "BDEPEND"]
+    } else {
+        &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"]
+    };
+    let fresh_edges =
+        merge_order::dep_edges_from_metadata(&delta_meta, new_use, real_order_keys, false);
+    let entry_deps = &mut state.entries[existing_idx].deps;
+    for edge in fresh_edges {
+        if !entry_deps.contains(&edge) {
+            entry_deps.push(edge);
+        }
+    }
+    // The same build-time/run-time classification as the fresh expansion
+    // above (an ebuild source always classifies from both key sets).
+    let flatten_keys = |keys: &[&str]| -> HashSet<String> {
+        let joined: String = keys
+            .iter()
+            .filter_map(|k| delta_meta.get(*k))
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let toks: Vec<String> = joined.split_whitespace().map(String::from).collect();
+        portage_use_reduce::use_reduce_flat(&toks, new_use, portage_use_reduce::MatchMode::Normal)
+            .map(|v| v.into_iter().filter(|t| t != "||").collect())
+            .unwrap_or_default()
+    };
+    let buildtime_atoms = flatten_keys(&["DEPEND", "BDEPEND"]);
+    let runtime_atoms = flatten_keys(&["RDEPEND", "PDEPEND", "IDEPEND"]);
+    let queued: Vec<QueueItem> = state.queue.iter().cloned().collect();
+    let Ok(flat_deps) = portage_use_reduce::use_reduce_flat_disjunctive(
+        &tokens,
+        new_use,
+        portage_use_reduce::MatchMode::Normal,
+        &mut |atoms: &[String]| {
+            disjunction_preference(
+                &ctx.repos,
+                config,
+                ctx.root,
+                &state.entries,
+                key,
+                union_constraints,
+                ctx.root_deps_running_root,
+                atoms,
+                &queued,
+                ctx.update,
+            )
+        },
+        &mut |alts: &[Vec<String>]| {
+            promote_tied_alternative(
+                &ctx.repos,
+                config,
+                ctx.root,
+                &state.entries,
+                union_constraints,
+                alts,
+                &queued,
+            )
+        },
+    ) else {
+        return;
+    };
+    // The same `--root-deps` running-root split as the fresh expansion
+    // above (both no-ops unless `root_deps_running_root` is set).
+    let root_deps_satisfied: HashSet<String> = ctx
+        .root_deps_running_root
+        .map(|root| {
+            root_deps_satisfied_atoms(
+                &delta_meta,
+                new_use,
+                &ctx.repos,
+                config,
+                root,
+                &["DEPEND", "BDEPEND", "IDEPEND"],
+            )
+        })
+        .unwrap_or_default();
+    let root_deps_unsatisfied: Vec<String> = ctx
+        .root_deps_running_root
+        .map(|root| {
+            unsatisfied_root_deps_atoms(
+                &delta_meta,
+                new_use,
+                &ctx.repos,
+                config,
+                root,
+                &["DEPEND", "BDEPEND", "IDEPEND"],
+            )
+        })
+        .unwrap_or_default();
+    let flat_deps: Vec<String> = flat_deps
+        .into_iter()
+        .filter(|tok| {
+            let evaluated = portage_dep::evaluate_atom_conditionals(tok, new_use)
+                .unwrap_or_else(|| tok.clone());
+            !root_deps_satisfied.contains(&evaluated)
+        })
+        .filter(|tok| {
+            let evaluated = portage_dep::evaluate_atom_conditionals(tok, new_use)
+                .unwrap_or_else(|| tok.clone());
+            !root_deps_unsatisfied.contains(&evaluated)
+        })
+        .collect();
+    if let Some(running_root) = ctx.root_deps_running_root {
+        for atom_str in &root_deps_unsatisfied {
+            state.entries.extend(resolve_root_deps_build_entries(
+                &ctx.repos,
+                running_root,
+                atom_str,
+                config,
+                key.clone(),
+                &mut state.root_deps_build_seen,
+                &ctx.local_binpkg,
+            ));
+        }
+    }
+    // Only genuinely new atoms flow: anything the pre-flip expansion
+    // already visited or queued keeps its single resolution (re-queueing
+    // it would duplicate puller rows and re-resolve a settled atom).
+    // Compared in evaluated form, the same text `visited_atoms` and the
+    // queue itself carry.
+    let queued_atoms: HashSet<&str> = state.queue.iter().map(|q| q.atom.as_str()).collect();
+    let mut new_toks: Vec<String> = Vec::new();
+    for tok in &flat_deps {
+        let evaluated =
+            portage_dep::evaluate_atom_conditionals(tok, new_use).unwrap_or_else(|| tok.clone());
+        if state.visited_atoms.contains(&evaluated) || queued_atoms.contains(evaluated.as_str()) {
+            continue;
+        }
+        new_toks.push(tok.clone());
+    }
+    if new_toks.is_empty() {
+        return;
+    }
+    for tok in &new_toks {
+        if let Some(dep_atom) = portage_dep::parse_atom(tok)
+            && dep_atom.blocker == portage_dep::Blocker::None
+        {
+            state
+                .slot_pullers
+                .entry((dep_atom.category.clone(), dep_atom.package.clone()))
+                .or_default()
+                .push((
+                    key.0.clone(),
+                    key.1.clone(),
+                    existing_version.to_string(),
+                    tok.clone(),
+                ));
+        }
+    }
+    enqueue_flat_deps(
+        new_toks,
+        key,
+        existing_version,
+        existing_depth,
+        new_use,
+        &mut state.queue,
+        &mut state.pending_blockers,
+        &buildtime_atoms,
+        &runtime_atoms,
+        &or_group_universe(&tokens),
+    );
+    // `--with-test-deps` follow-up, same gating as the fresh expansion
+    // above (top-level packages only): the flipped USE may newly enable
+    // `test?` deps the pre-flip `use_flags` hid.
+    if ctx.with_test_deps && existing_depth == 0 && !new_use.contains("test") {
+        let iuse_flags: HashSet<String> = delta_meta
+            .get("IUSE")
+            .map(String::as_str)
+            .unwrap_or_default()
+            .split_whitespace()
+            .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
+            .collect();
+        let candidate_str = format!(
+            "{}/{}-{existing_version}:{}/{}::{}",
+            key.0, key.1, existing_cand.slot, existing_cand.sub_slot, existing_cand.repo_name
+        );
+        let test_masked = config.use_mask.contains("test")
+            || specificity_ordered_flags(
+                &config.package_use_mask,
+                &candidate_str,
+                &key.0,
+                &key.1,
+                HashSet::new(),
+            )
+            .contains("test");
+        if iuse_flags.contains("test") && !test_masked {
+            let mut test_uselist = new_use.clone();
+            test_uselist.insert("test".to_string());
+            let subset: HashSet<String> = ["test".to_string()].into_iter().collect();
+            if let Ok(test_deps) = portage_use_reduce::use_reduce_flat_subset(
+                &tokens,
+                &test_uselist,
+                portage_use_reduce::MatchMode::Normal,
+                &subset,
+            ) {
+                enqueue_flat_deps(
+                    test_deps,
+                    key,
+                    existing_version,
+                    existing_depth,
+                    &test_uselist,
+                    &mut state.queue,
+                    &mut state.pending_blockers,
+                    &HashSet::new(),
+                    &HashSet::new(),
+                    &HashSet::new(),
+                );
+            }
+        }
+    }
+}
+
 /// Real `depgraph.py::_complete_graph` (8581-8648) auto-enable check:
 /// even without `--complete-graph`, complete mode switches on when
 /// `--complete-graph-if-new-use` (`complete_if_new_use`, default `"y"`)
@@ -22289,6 +22589,13 @@ struct PassState {
     /// (see `SlotConflict`) instead of triggering a second, independent
     /// resolution.
     resolved_slots: HashMap<(String, String, String), usize>,
+    /// Backlog #218: (category, package, slot) -> the queue depth the
+    /// first-resolving atom carried when this slot's entry was pushed.
+    /// An in-pass `--autounmask-use` flip on an already-resolved slot
+    /// re-expands that package's newly-gated deps at this depth (real
+    /// `pkg.depth`, set once in `_add_pkg`, `depgraph.py:3763`), so the
+    /// delta atoms queue exactly where a fresh walk would put them.
+    resolved_depths: HashMap<(String, String, String), u32>,
     /// #57: (category, package, slot) -> the version of the
     /// `AlreadyInstalled` node this pass put in that slot (slot read from
     /// the vdb `InstalledRef`, since an `AlreadyInstalled` `GraphEntry`
@@ -24091,6 +24398,37 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                             if ctx.autounmask_backtrack_enabled {
                                 state.autounmask_grew = true;
                             }
+                            // Backlog #218: real needs no re-drive here
+                            // at all -- the flip lands while the flipped
+                            // package is still stacked, so its own dep
+                            // walk already sees it
+                            // (`expand_resolved_slot_with_flipped_use`'s
+                            // doc comment). Re-expand this pass's
+                            // already-flattened deps under the flipped
+                            // USE so the newly-gated atoms queue
+                            // in-walk; a no-op when the flip reveals
+                            // nothing new.
+                            let mut delta_use: HashSet<String> = existing_use.as_ref().clone();
+                            if let Some(overlay) = state.use_overlay.get(&key) {
+                                for (f, on) in overlay {
+                                    if *on {
+                                        delta_use.insert(f.clone());
+                                    } else {
+                                        delta_use.remove(f);
+                                    }
+                                }
+                            }
+                            expand_resolved_slot_with_flipped_use(
+                                ctx,
+                                config,
+                                &union_constraints,
+                                &mut state,
+                                &key,
+                                existing_idx,
+                                existing_cand,
+                                &existing_version,
+                                &delta_use,
+                            );
                         }
                     }
                 }
@@ -24142,7 +24480,10 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             }
         }
         let entry_idx = state.entries.len();
-        state.resolved_slots.insert(slot_key, entry_idx);
+        state.resolved_slots.insert(slot_key.clone(), entry_idx);
+        // Backlog #218: remember the first-resolving depth for a later
+        // in-pass autounmask delta re-expansion (see `resolved_depths`).
+        state.resolved_depths.insert(slot_key, depth);
         let candidate_source = resolved.source;
         // Real `output.py:648`: `attr_display.remote_binary = pkg.remote`.
         let candidate_remote = resolved.remote;
@@ -39957,6 +40298,73 @@ mod tests {
             !graph_result_real("dev-libs/diamond").autounmask_backtrack_disabled(false),
             "a clean resolve prints no notice"
         );
+    }
+
+    #[test]
+    fn autounmask_cascade_flip_before_dep_walk_pulls_the_gated_leaf() {
+        // Backlog #218: real's DFS applies `aucasclate`'s `[cascade]`
+        // flip to the still-unwalked `aucascmid` before walking its deps
+        // (`_add_dep` only pushes onto `_dep_stack`,
+        // `lib/_emerge/depgraph.py:3254-3271`; the flip itself is
+        // `_pkg_use_enabled(pkg, target_use)`, `:7669`), so
+        // `aucascleaf` joins the graph in the same attempt
+        // (live-captured in `fixtures/abort-captures/
+        // dev-libs_aucasctop.pretend-debug.stdout`, one continuous walk).
+        // Portuale's already-resolved-slot re-check re-expands the
+        // flipped package's newly-gated deps in-walk
+        // (`expand_resolved_slot_with_flipped_use`), so the default
+        // (no-backtrack) graph carries the full 4-package list.
+        let result = graph_result_autounmask("dev-libs/aucasctop");
+        let mut pkgs: Vec<&str> = result.entries.iter().map(|e| e.package.as_str()).collect();
+        pkgs.sort_unstable();
+        assert_eq!(
+            pkgs,
+            vec!["aucasclate", "aucascleaf", "aucascmid", "aucasctop"],
+            "the in-graph flip lands before the flipped node's walk"
+        );
+        // The flipped package carries a real merge-order edge to the
+        // leaf (not a stitched-on entry): its deps were re-flattened
+        // under the flipped USE.
+        let mid = result
+            .entries
+            .iter()
+            .find(|e| e.package == "aucascmid")
+            .expect("aucascmid is in the graph");
+        assert!(
+            mid.deps.iter().any(|d| d.package == "aucascleaf"),
+            "aucascmid's re-expanded deps name aucascleaf"
+        );
+        // The change block still records the flip (the #217 notice gate
+        // reads the same accumulator).
+        assert!(
+            !result.autounmask_use_changes.is_empty(),
+            "the [cascade] flip is still reported"
+        );
+        // The fresh-flip shape is untouched: `aucasclate` alone resolves
+        // `aucascmid[cascade]` on first encounter, leaf included, with no
+        // delta pass involved.
+        let late_result = graph_result_autounmask("dev-libs/aucasclate");
+        let mut late_pkgs: Vec<&str> = late_result
+            .entries
+            .iter()
+            .map(|e| e.package.as_str())
+            .collect();
+        late_pkgs.sort_unstable();
+        assert_eq!(
+            late_pkgs,
+            vec!["aucasclate", "aucascleaf", "aucascmid"],
+            "first-encounter flip still pulls the leaf"
+        );
+        // `--autounmask-backtrack=y` (whole-walk re-drive) agrees on the
+        // graph -- the delta only anticipates what the re-drive finds.
+        let bt_result = graph_result_autounmask_backtrack("dev-libs/aucasctop");
+        let mut bt_pkgs: Vec<&str> = bt_result
+            .entries
+            .iter()
+            .map(|e| e.package.as_str())
+            .collect();
+        bt_pkgs.sort_unstable();
+        assert_eq!(bt_pkgs, pkgs, "backtrack re-drive and in-walk delta agree");
     }
 
     #[track_caller]
