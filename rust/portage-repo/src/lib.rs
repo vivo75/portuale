@@ -21277,6 +21277,31 @@ pub struct ResolveRequest {
     pub newuse: bool,
     pub changed_use: bool,
     pub nodeps: bool,
+    /// `--onlydeps`/`-o` (real `main.py` boolean): merge the targets'
+    /// dependencies but not the targets themselves. The resolver itself
+    /// walks every dep class for the root (real selects the root node
+    /// with `onlydeps=True` and still traverses its deps); the root's
+    /// own merge-list suppression is display-layer (`pretend.rs`
+    /// `onlydeps`/`top_level_pkgs`). Carried here so the
+    /// `--onlydeps-with-*` pair below can gate on it, exactly like
+    /// real's `pkg.onlydeps` gate in `_add_pkg_deps`.
+    pub onlydeps: bool,
+    /// `--onlydeps-with-rdeps <y|n>` (real `main.py` `true_y_or_n`,
+    /// default enabled -- `man emerge.1` "This option is enabled by
+    /// default"): include run-time deps under `--onlydeps`. Real
+    /// `depgraph.py::_add_pkg_deps` blanks an onlydeps root's
+    /// `RDEPEND` **and** `PDEPEND` when the value is `"n"`; any other
+    /// value (`"y"`, `"True"`, absent) keeps them. `false` here is
+    /// exactly that `"n"`.
+    pub onlydeps_with_rdeps: bool,
+    /// `--onlydeps-with-ideps <y|n>` (real `main.py` `true_y_or_n`,
+    /// default disabled -- `man emerge.1` "This option is disabled by
+    /// default", and only consulted "when `--onlydeps` and
+    /// `--onlydeps-with-rdeps=n` are both specified"): include
+    /// install-time deps for an onlydeps root whose run-time deps are
+    /// disabled. Real blanks its `IDEPEND` when the value is `"n"` or
+    /// absent (`in ("n", None)`); `true` here is `"y"`/`"True"`.
+    pub onlydeps_with_ideps: bool,
     pub update: bool,
     pub deep: Deep,
     pub excluded: Vec<String>,
@@ -21401,7 +21426,11 @@ pub fn active_resolver() -> Box<dyn Resolver> {
 
 /// Pick the [`Resolver`] for one [`SolverKind`] (`--solver=`): the
 /// backtracking walk for `Portage`, lu-zero's PubGrub / resolvo bridges
-/// (see `solver_bridge.rs`) for the other two.
+/// (see `solver_bridge.rs`) for the other two. The parked engines only
+/// implement version solving over repo facts: they ignore `--onlydeps`
+/// and its `--onlydeps-with-rdeps` / `--onlydeps-with-ideps` root
+/// filtering (like `--nodeps` / `--buildpkgonly`) -- only the
+/// backtracking walk above applies them.
 pub fn active_resolver_for(kind: SolverKind) -> Box<dyn Resolver> {
     match kind {
         SolverKind::Portage => Box::new(BacktrackingResolver),
@@ -21712,6 +21741,9 @@ struct ResolveCtx<'a> {
     newuse: bool,
     changed_use: bool,
     nodeps: bool,
+    onlydeps: bool,
+    onlydeps_with_rdeps: bool,
+    onlydeps_with_ideps: bool,
     update: bool,
     deep: Deep,
     excluded: &'a [String],
@@ -21886,6 +21918,9 @@ impl<'a> ResolveCtx<'a> {
             newuse: req.newuse,
             changed_use: req.changed_use,
             nodeps: req.nodeps,
+            onlydeps: req.onlydeps,
+            onlydeps_with_rdeps: req.onlydeps_with_rdeps,
+            onlydeps_with_ideps: req.onlydeps_with_ideps,
             update: req.update,
             deep,
             excluded: &req.excluded,
@@ -22897,6 +22932,56 @@ fn overlay_use_want(
         .and_then(|b| b.get(flag))
         .copied()
         .or_else(|| committed.get(key).and_then(|b| b.get(flag)).copied())
+}
+
+/// Backlog #194: whether one dep key is walked for this package.
+/// Real `bin/ebuild.sh`'s own `depend` phase unsets `IDEPEND` below
+/// EAPI 8 (`portage/eapi.py:135`), so a stale or hand-written cache
+/// entry can still *carry* `IDEPEND` under EAPI 7 (real `egencache`
+/// never emits one) -- the read-time gate here drops it anyway. Real
+/// `depgraph.py:4186-4193` additionally blanks an `--onlydeps` root's
+/// `RDEPEND`/`PDEPEND` under `--onlydeps-with-rdeps=n`, and its
+/// `IDEPEND` too unless `--onlydeps-with-ideps` is `y`/`True`.
+/// Extracted (rather than left as `run_pass`'s inline closure) so the
+/// adversarial-cache path stays pinned after the fixtures stopped
+/// carrying one.
+fn onlydeps_walk_dep_key(
+    key: &str,
+    eapi_has_idepend: bool,
+    onlydeps_blanks_runtime: bool,
+    onlydeps_blanks_idepend: bool,
+) -> bool {
+    if key == "IDEPEND" && (!eapi_has_idepend || onlydeps_blanks_idepend) {
+        return false;
+    }
+    if onlydeps_blanks_runtime && (key == "RDEPEND" || key == "PDEPEND") {
+        return false;
+    }
+    true
+}
+
+/// Backlog #194: which run-time keys classify atoms as runtime edges
+/// for this package (real `DepPriority`: an atom in a build-time key
+/// but no walked run-time key is `buildtime_hard`, an unbreakable
+/// merge-order edge). Mirrors `onlydeps_walk_dep_key` above: under
+/// `--onlydeps --onlydeps-with-rdeps=n --onlydeps-with-ideps=y` on
+/// EAPI 8, `IDEPEND` is still walked, so it still classifies.
+fn onlydeps_runtime_keys(
+    onlydeps_blanks_runtime: bool,
+    onlydeps_blanks_idepend: bool,
+    eapi_has_idepend: bool,
+) -> &'static [&'static str] {
+    if onlydeps_blanks_runtime {
+        if onlydeps_blanks_idepend || !eapi_has_idepend {
+            &[]
+        } else {
+            &["IDEPEND"]
+        }
+    } else if onlydeps_blanks_idepend || !eapi_has_idepend {
+        &["RDEPEND", "PDEPEND"]
+    } else {
+        &["RDEPEND", "PDEPEND", "IDEPEND"]
+    }
 }
 
 /// Phase A3 (023): one full BFS walk over the current `bp`.
@@ -25132,7 +25217,41 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         // package under `--buildpkgonly` without `--deep` — runtime
         // blockers never enter the graph (upstream pg1 E/F). A binary
         // or installed candidate is `pkg.built` and keeps its keys.
-        let dep_keys: &[&str] = if candidate_source == CandidateSource::Binary && !ctx.with_bdeps {
+        //
+        // Backlog #194: real `depgraph.py:4186-4193` (`_add_pkg_deps`)
+        // blanks an `--onlydeps` root's (`pkg.onlydeps` -- the
+        // arg-selected package, i.e. this walk's `depth == 0`)
+        // `RDEPEND` and `PDEPEND` when `--onlydeps-with-rdeps=n`, and
+        // its `IDEPEND` too unless `--onlydeps-with-ideps` is `y` or
+        // `True` (`man emerge.1`: rdeps enabled by default so only an
+        // explicit `=n` blanks; ideps disabled by default so only an
+        // explicit `=y`/bare flag keeps). Build-time keys
+        // (`DEPEND`/`BDEPEND`) always stay (`man emerge.1`: "When this
+        // is disabled only build time dependencies are included").
+        // Without `--onlydeps` both flags are inert (no `pkg.onlydeps`
+        // node exists to blank).
+        let onlydeps_blanks_runtime = ctx.onlydeps && depth == 0 && !ctx.onlydeps_with_rdeps;
+        let onlydeps_blanks_idepend = onlydeps_blanks_runtime && !ctx.onlydeps_with_ideps;
+        // Real `bin/ebuild.sh`'s own `depend` phase (`if !
+        // ___eapi_has_IDEPEND; then unset IDEPEND; fi`) + real
+        // `portage/eapi.py:135` (`eapi_has_idepend`): below EAPI 8
+        // `IDEPEND` never reaches saved metadata, so `portdb.aux_get`
+        // serves `""` for it -- for ebuild and binary candidates alike
+        // (real's `bintree` defaults a missing `EAPI` to `"0"`, same as
+        // `porttree.py:644-648` does for ebuilds). #194's EAPI-7 oracle
+        // cell needs this: `--onlydeps-with-rdeps=y` on an EAPI-7 root
+        // merges `[B, C, D]`, never `E`.
+        let eapi_has_idepend =
+            md5_dict::eapi_has_idepend(metadata.get("EAPI").map(String::as_str).unwrap_or("0"));
+        let keep_key = |key: &&str| {
+            onlydeps_walk_dep_key(
+                key,
+                eapi_has_idepend,
+                onlydeps_blanks_runtime,
+                onlydeps_blanks_idepend,
+            )
+        };
+        let base_keys: &[&str] = if candidate_source == CandidateSource::Binary && !ctx.with_bdeps {
             &["RDEPEND", "PDEPEND", "IDEPEND"]
         } else if ctx.buildpkgonly
             && candidate_source != CandidateSource::Binary
@@ -25141,6 +25260,16 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             &["DEPEND", "BDEPEND"]
         } else {
             &["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"]
+        };
+        // The filter only ever removes keys, so when nothing is blanked
+        // the static slices above are used as-is (no per-package alloc
+        // on the hot path).
+        let filtered_keys: Vec<&str>;
+        let dep_keys: &[&str] = if onlydeps_blanks_runtime || !eapi_has_idepend {
+            filtered_keys = base_keys.iter().copied().filter(keep_key).collect();
+            &filtered_keys
+        } else {
+            base_keys
         };
         let mut depstr = String::new();
         for dep_key in dep_keys {
@@ -25162,7 +25291,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         // listing every branch's atoms in written order (the *other*
         // branches are simply never a real entry, so they contribute
         // no edge once the merge-order digraph looks them up).
-        let real_order_keys: &[&str] =
+        let base_order_keys: &[&str] =
             if candidate_source == CandidateSource::Binary && !ctx.with_bdeps {
                 &["RDEPEND", "PDEPEND", "IDEPEND"]
             } else if ctx.buildpkgonly
@@ -25176,6 +25305,15 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             } else {
                 &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"]
             };
+        // #194: the same blanked keys stay out of the merge-order
+        // digraph (real never walks them, so they contribute no edge).
+        let filtered_order_keys: Vec<&str>;
+        let real_order_keys: &[&str] = if onlydeps_blanks_runtime || !eapi_has_idepend {
+            filtered_order_keys = base_order_keys.iter().copied().filter(keep_key).collect();
+            &filtered_order_keys
+        } else {
+            base_order_keys
+        };
         state.entries[entry_idx].deps = merge_order::dep_edges_from_metadata(
             &metadata,
             &use_flags,
@@ -25215,7 +25353,19 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         } else {
             flatten_keys(&["DEPEND", "BDEPEND"])
         };
-        let runtime_atoms = flatten_keys(&["RDEPEND", "PDEPEND", "IDEPEND"]);
+        // #194: a blanked runtime key classifies nothing -- real never
+        // walks it, so an atom that only survives via a build-time key
+        // is `buildtime_hard`, not runtime. A *walked* `IDEPEND` still
+        // classifies (rdeps=n + ideps=y on EAPI 8), so the selection
+        // mirrors `onlydeps_walk_dep_key`, not just the rdeps blank.
+        // Without blanking this is the long-standing unconditional
+        // three-key set.
+        let runtime_keys: &[&str] = onlydeps_runtime_keys(
+            onlydeps_blanks_runtime,
+            onlydeps_blanks_idepend,
+            eapi_has_idepend,
+        );
+        let runtime_atoms = flatten_keys(runtime_keys);
         // Real `--root-deps` branch-selection feed-in (see
         // `root_deps_satisfied_atoms`'s own doc comment): a `||` group
         // with no branch tree-visible still needs a branch selected
@@ -27077,6 +27227,15 @@ pub fn resolve_pretend_graph(
         newuse,
         changed_use,
         nodeps,
+        // The legacy marshaller only ever answers with onlydeps off:
+        // real's `pkg.onlydeps` is set exactly when `--onlydeps` is in
+        // myopts, and every legacy caller resolves without it (the one
+        // production `--onlydeps` path builds a `ResolveRequest`
+        // directly). The with-* defaults are real's own
+        // (`man emerge.1`: rdeps enabled, ideps disabled).
+        onlydeps: false,
+        onlydeps_with_rdeps: true,
+        onlydeps_with_ideps: false,
         update,
         deep,
         excluded: excluded.to_vec(),
@@ -27255,6 +27414,8 @@ fn built_slot_operator_atoms(raw_depstr: &str, use_flags: &HashSet<String>) -> V
 ///   `:166-168`), or an installed EAPI without `:=` support
 ///   (`_get_eapi_attrs(pkg.eapi).slot_operator`, `:168-169`): the live
 ///   ebuild string stands alone.
+/// - `IDEPEND` from a live EAPI without `idepend` support (backlog #194;
+///   real `bin/ebuild.sh` unsets it, `portage/eapi.py:135`): `""`.
 /// - otherwise the vdb's own built `:=` atoms for this key are appended
 ///   to the live string (`:175-180`); when the live EAPI itself lacks
 ///   `:=` support the whole overlay is void (`:176-178`, raw fallback).
@@ -27310,6 +27471,16 @@ pub(crate) fn installed_dep_string(
             if !(md5_dict::eapi_is_supported(&live_eapi) && md5_dict::eapi_is_supported(inst_eapi))
             {
                 apply_updates_to_dep_string(&raw).unwrap_or_else(|| raw.clone())
+            } else if key == "IDEPEND" && !md5_dict::eapi_has_idepend(&live_eapi) {
+                // Backlog #194: real `bin/ebuild.sh`'s own `depend`
+                // phase unsets `IDEPEND` when the EAPI lacks it
+                // (`portage/eapi.py:135`: `idepend = eapi >=
+                // Eapi("8")`), so installed-metadata readers
+                // (`FakeVartree`, serving `portdb.aux_get`) see `""`.
+                // The vdb's own record needs no gate (an EAPI-7 build
+                // never wrote an `IDEPEND` file); only the live-ebuild
+                // overlay does.
+                String::new()
             } else if ignore_built_slot_operator_deps
                 || !md5_dict::eapi_has_slot_operator(inst_eapi)
             {
@@ -34231,7 +34402,217 @@ mod tests {
         .collect()
     }
 
-    /// #74 S2a: the `AlreadyInstalled` dedup is keyed by the installed
+    /// Backlog #194: resolve one atom as an `--onlydeps` root with the
+    /// given `--onlydeps-with-*` values, over the shared fixture tree --
+    /// the unit-level counterpart of the `odw0*` contract cells. A full
+    /// `ResolveRequest` (like production's own `run_resolve` builds it),
+    /// since the legacy marshaller answers with onlydeps off.
+    fn graph_onlydeps(
+        atom_str: &str,
+        with_rdeps: bool,
+        with_ideps: bool,
+    ) -> Vec<(String, PretendOutcome)> {
+        let root = fixtures_root();
+        let req = ResolveRequest {
+            config_root: root.clone(),
+            root: root.clone(),
+            atoms: vec![atom_str.to_string()],
+            config: test_config(),
+            newuse: false,
+            changed_use: false,
+            nodeps: false,
+            onlydeps: true,
+            onlydeps_with_rdeps: with_rdeps,
+            onlydeps_with_ideps: with_ideps,
+            update: false,
+            deep: Deep::NotRequested,
+            excluded: Vec::new(),
+            with_bdeps: true,
+            changed_deps: false,
+            changed_slot: false,
+            with_test_deps: false,
+            changed_deps_report: false,
+            selective: false,
+            autounmask_suggest_keywords: false,
+            autounmask_suggest_use: false,
+            autounmask_suggest_license: false,
+            autounmask_suggest_masks: false,
+            usepkg: false,
+            usepkgonly: false,
+            binpkg_respect_use: false,
+            usepkg_exclude: Vec::new(),
+            usepkg_include: Vec::new(),
+            rebuilt_binaries: false,
+            rebuilt_binaries_timestamp: None,
+            newrepo: false,
+            buildpkgonly: false,
+            root_deps_running_root: None,
+            distdir: root.join("distfiles"),
+            empty: false,
+            getbinpkg: false,
+            ignore_built_slot_operator_deps: false,
+            backtrack_max: 10,
+            reinstall_atoms: Vec::new(),
+            rebuild_if_new_slot: true,
+            rebuild_if_unbuilt: false,
+            rebuild_if_new_rev: false,
+            rebuild_if_new_ver: false,
+            rebuild_exclude: Vec::new(),
+            rebuild_ignore: Vec::new(),
+            dynamic_deps: true,
+            implicit_system_deps: true,
+            complete: false,
+            solver: SolverKind::Portage,
+        };
+        active_resolver()
+            .resolve(&req)
+            .unwrap_or_else(|e| panic!("resolve({atom_str}) failed: {e}"))
+            .entries
+            .into_iter()
+            .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
+            .collect()
+    }
+
+    /// Backlog #194: `--onlydeps-with-rdeps` / `--onlydeps-with-ideps`
+    /// blank an onlydeps root's dep classes exactly like real
+    /// `depgraph.py:4186-4193` (sets asserted against the
+    /// `/tmp/opencode/n194/oracle_odw.log` playground oracle; the root
+    /// itself is always resolved -- only the display layer suppresses
+    /// it -- so it stays in the entries here).
+    #[test]
+    fn onlydeps_with_rdeps_and_ideps_blank_the_root_dep_classes() {
+        let names = |entries: Vec<(String, PretendOutcome)>| {
+            let mut names: Vec<String> = entries.into_iter().map(|(n, _)| n).collect();
+            names.sort();
+            names
+        };
+        // Default (rdeps on): every class walked.
+        assert_eq!(
+            names(graph_onlydeps("dev-libs/odw0a", true, false)),
+            vec![
+                "dev-libs/odw0a",
+                "dev-libs/odw0b",
+                "dev-libs/odw0c",
+                "dev-libs/odw0d",
+                "dev-libs/odw0e",
+                "dev-libs/odw0f",
+            ],
+            "default"
+        );
+        // with-rdeps=n: build-time keys (DEPEND B, BDEPEND F) only.
+        assert_eq!(
+            names(graph_onlydeps("dev-libs/odw0a", false, false)),
+            vec!["dev-libs/odw0a", "dev-libs/odw0b", "dev-libs/odw0f"],
+            "with-rdeps=n"
+        );
+        // with-rdeps=n + with-ideps=y: IDEPEND E restored.
+        assert_eq!(
+            names(graph_onlydeps("dev-libs/odw0a", false, true)),
+            vec![
+                "dev-libs/odw0a",
+                "dev-libs/odw0b",
+                "dev-libs/odw0e",
+                "dev-libs/odw0f",
+            ],
+            "with-rdeps=n with-ideps=y"
+        );
+    }
+
+    /// Backlog #194: an EAPI-7 root's `IDEPEND` never reaches the walk
+    /// (real `bin/ebuild.sh` unsets it in the depend phase), so even the
+    /// default rdeps-on shape merges no `E`.
+    #[test]
+    fn onlydeps_eapi7_root_ignores_idepend() {
+        let mut names: Vec<String> = graph_onlydeps("dev-libs/odw0g", true, false)
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec![
+                "dev-libs/odw0b",
+                "dev-libs/odw0c",
+                "dev-libs/odw0d",
+                "dev-libs/odw0g",
+            ]
+        );
+    }
+    /// Backlog #194 (review round 1): under `--onlydeps
+    /// --onlydeps-with-rdeps=n --onlydeps-with-ideps=y` on an EAPI-8
+    /// root, real keeps walking `IDEPEND` (`depgraph.py:4186-4193`;
+    /// oracle cell `[B, E, F]`), so an atom present in both a
+    /// build-time key and `IDEPEND` is a runtime edge -- not
+    /// `buildtime_hard` (real `DepPriority`: an unbreakable
+    /// merge-order edge). Pinned at the classification level: the key
+    /// selection still carries `IDEPEND`, and one shared atom enqueued
+    /// with those sets lands soft.
+    #[test]
+    fn onlydeps_ideps_atom_shared_with_buildtime_key_is_not_buildtime_hard() {
+        // rdeps blanked, ideps kept, EAPI 8: IDEPEND still classifies;
+        // with ideps blanked (or below EAPI 8) nothing does.
+        assert_eq!(onlydeps_runtime_keys(true, false, true), &["IDEPEND"][..]);
+        assert!(onlydeps_runtime_keys(true, true, true).is_empty());
+        assert!(onlydeps_runtime_keys(true, false, false).is_empty());
+        let flatten = |text: &str| -> HashSet<String> {
+            let toks: Vec<String> = text.split_whitespace().map(String::from).collect();
+            let use_flags: HashSet<String> = HashSet::new();
+            portage_use_reduce::use_reduce_flat(
+                &toks,
+                &use_flags,
+                portage_use_reduce::MatchMode::Normal,
+            )
+            .map(|v| v.into_iter().filter(|t| t != "||").collect())
+            .unwrap_or_default()
+        };
+        // One atom in both a build-time key and the walked IDEPEND.
+        let buildtime_atoms = flatten("dev-libs/odw0e");
+        let runtime_atoms = flatten("dev-libs/odw0e");
+        assert!(buildtime_atoms.contains("dev-libs/odw0e"));
+        assert!(runtime_atoms.contains("dev-libs/odw0e"));
+        let mut queue = VecDeque::new();
+        let mut blockers = Vec::new();
+        enqueue_flat_deps(
+            vec!["dev-libs/odw0e".to_string()],
+            &("dev-libs".to_string(), "odw0a".to_string()),
+            "1",
+            1,
+            &HashSet::new(),
+            &mut queue,
+            &mut blockers,
+            &buildtime_atoms,
+            &runtime_atoms,
+            &HashSet::new(),
+        );
+        assert_eq!(queue.len(), 1);
+        assert!(
+            !queue[0].buildtime_hard,
+            "an IDEPEND-walked atom is a runtime edge even when rdeps are blanked"
+        );
+    }
+
+    /// Backlog #194 (review round 1): the read-time EAPI gate drops
+    /// `IDEPEND` from an EAPI-7 cache entry that still carries it.
+    /// Real `egencache` could never emit such an entry (real
+    /// `bin/ebuild.sh`'s `depend` phase unsets `IDEPEND` below EAPI 8),
+    /// so no fixture pins this path -- the adversarial entry is fed to
+    /// the gate directly.
+    #[test]
+    fn eapi7_cache_entry_carrying_idepend_is_gated_at_read_time() {
+        // EAPI 7 + IDEPEND present: dropped even with no onlydeps
+        // blanking.
+        assert!(!onlydeps_walk_dep_key("IDEPEND", false, false, false));
+        // EAPI 8 keeps it under the default flags ...
+        assert!(onlydeps_walk_dep_key("IDEPEND", true, false, false));
+        // ... but rdeps=n + ideps=n drops it there too.
+        assert!(!onlydeps_walk_dep_key("IDEPEND", true, true, true));
+        // Build-time keys are never gated; RDEPEND/PDEPEND fall to the
+        // rdeps blank only.
+        assert!(onlydeps_walk_dep_key("DEPEND", false, true, true));
+        assert!(onlydeps_walk_dep_key("BDEPEND", false, true, true));
+        assert!(!onlydeps_walk_dep_key("RDEPEND", false, true, true));
+        assert!(onlydeps_walk_dep_key("RDEPEND", true, false, false));
+    }
     /// instance's own slot (real's `pkg.slot_atom` node identity), not
     /// the cp. `fixtures/var/db/pkg` has `dev-libs/slotdedup-1.0` (slot
     /// 1, no deps) and `slotdedup-2.0` (slot 2, RDEPEND
@@ -43590,6 +43971,9 @@ mod tests {
             newuse: o.newuse,
             changed_use: false,
             nodeps: o.nodeps,
+            onlydeps: false,
+            onlydeps_with_rdeps: true,
+            onlydeps_with_ideps: false,
             deep: o.deep,
             excluded: &o.excluded,
             with_bdeps: o.with_bdeps,
@@ -57300,6 +57684,9 @@ mod tests_163 {
             newuse: false,
             changed_use: false,
             nodeps: false,
+            onlydeps: false,
+            onlydeps_with_rdeps: true,
+            onlydeps_with_ideps: false,
             deep: Deep::NotRequested,
             excluded: no_strings,
             with_bdeps: false,

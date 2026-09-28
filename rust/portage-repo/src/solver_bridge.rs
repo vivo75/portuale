@@ -1267,6 +1267,12 @@ mod tests {
             newuse: false,
             changed_use: false,
             nodeps: false,
+            // Bridge test helper resolves without `--onlydeps`; the
+            // parked pubgrub/resolvo engines do not implement the
+            // `--onlydeps-with-*` root filtering (nor `--nodeps`).
+            onlydeps: false,
+            onlydeps_with_rdeps: true,
+            onlydeps_with_ideps: false,
             update: false,
             deep: Deep::NotRequested,
             excluded: Vec::new(),
