@@ -71,6 +71,42 @@ pub fn eapi_has_slot_operator(eapi: &str) -> bool {
     digits.parse::<u32>().is_ok_and(|n| n >= 5)
 }
 
+/// Real `eapi_empty_groups_always_true` (`portage/eapi.py:139-140`):
+/// whether a `||` group an inactive conditional emptied is dropped
+/// (`_get_eapi_attrs(eapi).empty_groups_always_true`, `eapi.py:295`:
+/// `empty_groups_always_true = eapi <= Eapi("6")`, same
+/// dash-suffix-insensitive integer comparison `eapi_has_slot_operator`
+/// documents). Call only with an `eapi_is_supported` EAPI -- real
+/// evaluates the attribute strictly after the support gate, and an
+/// unparseable input reads `false`, matching real's own defaults struct
+/// for `None`/unsupported EAPIs (`eapi.py:247-253`, which is also what
+/// real `dep_check` feeds `use_reduce` for installed packages,
+/// `dep_check.py:865-877`).
+pub fn eapi_empty_groups_always_true(eapi: &str) -> bool {
+    let digits: String = eapi
+        .trim()
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.parse::<u32>().is_ok_and(|n| n <= 6)
+}
+
+/// Backlog #230: real `_get_eapi_attrs(eapi).iuse_effective`
+/// (`portage/eapi.py`): whether `IUSE_EFFECTIVE` exists in this EAPI and
+/// therefore governs the `PORTAGE_USE` masking (`config.py` setcpv) and
+/// the valid-flag domain, instead of the pre-EAPI-5
+/// `_get_implicit_iuse` rule. PMS defines `IUSE_EFFECTIVE` beginning
+/// with EAPI 5; same numeric-prefix reading as `eapi_has_slot_operator`
+/// (both attributes share the `Eapi(eapi) >= Eapi("5")` gate).
+pub fn eapi_has_iuse_effective(eapi: &str) -> bool {
+    let digits: String = eapi
+        .trim()
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.parse::<u32>().is_ok_and(|n| n >= 5)
+}
+
 /// Real `eapi_has_idepend` (`portage/eapi.py:135`): whether `IDEPEND`
 /// exists in this EAPI (`_get_eapi_attrs(eapi).idepend`, `eapi.py:304`:
 /// `idepend = eapi >= Eapi("8")`, same dash-suffix-insensitive integer
@@ -530,6 +566,19 @@ mod tests {
         }
         for eapi in ["0", "1", "5", "6", "7", "7-pre1", ""] {
             assert!(!eapi_has_idepend(eapi), "{eapi:?}");
+        }
+    }
+
+    #[test]
+    fn eapi_empty_groups_matches_real() {
+        // Real `_get_eapi_attrs(eapi).empty_groups_always_true`
+        // (`portage/eapi.py:295`): `eapi <= Eapi("6")`,
+        // dash-suffix-insensitive like the slot operator above.
+        for eapi in ["0", "1", "5", "6", " 6 "] {
+            assert!(eapi_empty_groups_always_true(eapi), "{eapi}");
+        }
+        for eapi in ["7", "7-pre1", "8", "9", "9-pre1", ""] {
+            assert!(!eapi_empty_groups_always_true(eapi), "{eapi:?}");
         }
     }
 }

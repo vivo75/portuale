@@ -11671,6 +11671,54 @@ fn atom_installed_in_slot_of(
 /// Returns `false` for an empty or all-blocker alternative (nothing to be
 /// "in graph"); the caller's own zero-atom / circular-self handling
 /// covers those cases first.
+/// Real `dep_zapdeps`'s per-atom `all_in_graph` test (`dep_check.py:636-649`;
+/// see `atoms_all_in_graph` for the whole-alternative predicate): the atom
+/// is satisfied by a package already added to the graph this run
+/// (merge-bound), with `[use]` deps checked against that entry's resolved
+/// USE. Split out of `atoms_all_in_graph` so the circular-self-dep check
+/// in `disjunction_preference` can ask the same question for one atom: a
+/// self-naming atom that matches an in-graph node is real's pass-1
+/// `preferred_in_graph` pick (backlog #216), not a circle to refuse.
+fn atom_matches_graph(
+    atom_str: &str,
+    entries: &[GraphEntry],
+    config: &portage_profile::Config,
+    queued_cps: &HashSet<(String, String)>,
+) -> bool {
+    let Some(parsed) = portage_dep::parse_atom(atom_str) else {
+        return false;
+    };
+    if parsed.blocker != portage_dep::Blocker::None {
+        return false;
+    }
+    if queued_cps.contains(&(parsed.category.clone(), parsed.package.clone())) {
+        return true;
+    };
+    let use_deps = parsed.use_deps.unwrap_or_default();
+    entries.iter().any(|e| {
+        let Some(cpv) = merge_bound_cpv(e) else {
+            return false;
+        };
+        if e.category != parsed.category || e.package != parsed.package {
+            return false;
+        }
+        if portage_dep::match_from_list(atom_str, &[cpv.as_str()]).is_none_or(|m| m.is_empty()) {
+            return false;
+        }
+        if use_deps.is_empty() {
+            return true;
+        }
+        let enabled: HashSet<String> = e
+            .use_flags_display
+            .iter()
+            .filter(|(_, on)| *on)
+            .map(|(f, _)| f.clone())
+            .collect();
+        let iuse: HashSet<String> = e.use_flags_display.iter().map(|(f, _)| f.clone()).collect();
+        portage_dep::use_deps_satisfied(&use_deps, &valid_iuse(&iuse, config), &enabled)
+    })
+}
+
 fn atoms_all_in_graph(
     atoms: &[String],
     entries: &[GraphEntry],
@@ -11703,38 +11751,9 @@ fn atoms_all_in_graph(
             portage_dep::parse_atom(&q.atom).map(|a| (a.category.clone(), a.package.clone()))
         })
         .collect();
-    non_blocker.iter().all(|a| {
-        let Some(parsed) = portage_dep::parse_atom(a) else {
-            return false;
-        };
-        if queued_cps.contains(&(parsed.category.clone(), parsed.package.clone())) {
-            return true;
-        };
-        let use_deps = parsed.use_deps.unwrap_or_default();
-        entries.iter().any(|e| {
-            let Some(cpv) = merge_bound_cpv(e) else {
-                return false;
-            };
-            if e.category != parsed.category || e.package != parsed.package {
-                return false;
-            }
-            if portage_dep::match_from_list(a, &[cpv.as_str()]).is_none_or(|m| m.is_empty()) {
-                return false;
-            }
-            if use_deps.is_empty() {
-                return true;
-            }
-            let enabled: HashSet<String> = e
-                .use_flags_display
-                .iter()
-                .filter(|(_, on)| *on)
-                .map(|(f, _)| f.clone())
-                .collect();
-            let iuse: HashSet<String> =
-                e.use_flags_display.iter().map(|(f, _)| f.clone()).collect();
-            portage_dep::use_deps_satisfied(&use_deps, &valid_iuse(&iuse, config), &enabled)
-        })
-    })
+    non_blocker
+        .iter()
+        .all(|a| atom_matches_graph(a, entries, config, &queued_cps))
 }
 
 /// The visible tree candidates matching `atom_str` (USE deps ignored) after
@@ -11972,7 +11991,11 @@ fn alternative_downgrade_demoted(
 /// / "also borrowed as mutable" conflict this hit against the
 /// `'backtrack` loop's later `slot_constraints.entry(...)` mutations.
 /// `self_cp` is the entry currently being resolved, for the
-/// circular-self-dep check; `root_deps_running_root` is the `--root-deps`
+/// circular-self-dep check; `circular_dep` is the `'backtrack` loop's
+/// `circular_dependency` map (owner `cat/pkg` → circular-child cpv
+/// strings; empty on the first pass, a strict no-op) -- real
+/// `dep_zapdeps`' `circular_atom` demotion (`dep_check.py:673-691`),
+/// backlog #216. `root_deps_running_root` is the `--root-deps`
 /// feed-in (`None` = strict no-op). See `atom_currently_satisfiable`'s,
 /// `atom_all_use_unmasked`'s, `atom_cp_installed`'s and
 /// `atom_installed_in_slot_of`'s own doc comments for the per-predicate
@@ -11995,6 +12018,7 @@ fn disjunction_preference(
     entries: &[GraphEntry],
     self_cp: &(String, String),
     constraints: &HashMap<(String, String), Vec<String>>,
+    circular_dep: &HashMap<(String, String), Vec<String>>,
     root_deps_running_root: Option<&Path>,
     atoms: &[String],
     queued: &[QueueItem],
@@ -12011,16 +12035,47 @@ fn disjunction_preference(
     // Portuale's own bolt-on (real has no equivalent): once true, the
     // alternative is hard `Unsatisfiable` in BOTH passes below, never
     // promoted into one of the `other_*` bins the way a genuine
-    // `!all_available` atom is -- selecting it even as a last resort
-    // would let a package self-satisfy its own not-yet-resolved atom.
+    // `!all_available` atom is.
+    //
+    // Backlog #216: narrowed to real's actual pass-1 rule. Real has no
+    // self-exclusion at all -- `_create_graph` adds the package to the
+    // digraph before walking its deps (`_add_pkg` at select time), so by
+    // the time the owner's own `||` group pops off
+    // `_dep_disjunctive_stack` the self-naming atom matches an in-graph
+    // node and the alternative ranks `preferred_in_graph` (bin 0): the
+    // cycle forms, then `_serialize_tasks` dead-ends and the
+    // `circular_dependency` map re-resolves it (see
+    // `BacktrackParams::circular_dependency`). Only a self atom matching
+    // nothing in-graph (and nothing installed) stays `Unsatisfiable` --
+    // selecting it even as a last resort would let a package
+    // self-satisfy its own not-yet-resolved atom.
     let mut circular = false;
+    // Backlog #90 (S1)'s drain-state approximation (see
+    // `atoms_all_in_graph`), built lazily: only a self-naming atom needs
+    // it, and most alternatives have none.
+    let mut queued_cps: Option<HashSet<(String, String)>> = None;
     for a in atoms {
-        let circular_self = portage_dep::parse_atom(a).is_some_and(|at| {
+        let self_naming = portage_dep::parse_atom(a).is_some_and(|at| {
             at.blocker == portage_dep::Blocker::None
                 && (at.category.clone(), at.package.clone()) == *self_cp
-                && !atom_cp_installed(root, a)
         });
-        if circular_self {
+        if self_naming
+            && !atom_cp_installed(root, a)
+            && !atom_matches_graph(
+                a,
+                entries,
+                config,
+                queued_cps.get_or_insert_with(|| {
+                    queued
+                        .iter()
+                        .filter_map(|q| {
+                            portage_dep::parse_atom(&q.atom)
+                                .map(|at| (at.category.clone(), at.package.clone()))
+                        })
+                        .collect()
+                }),
+            )
+        {
             all_available = false;
             circular = true;
             break;
@@ -12136,16 +12191,49 @@ fn disjunction_preference(
     ) {
         return portage_use_reduce::AltPreference::Other;
     }
-    // Backlog #22 slice 5 (`docs/history/022-agent-task-22-zapdeps.fable.md` §4):
-    // one further demotion stays a documented cut, needing inputs
-    // portuale's architecture doesn't have:
-    //   - `circular_atom` (soft 649-682): needs `circular_dependency`
-    //     (populated by an earlier, separate real backtrack pass this
-    //     alternative isn't itself running inside of) and
-    //     `parent.onlydeps` (the `--onlydeps` CLI flag, not threaded to
-    //     this call depth).
-    // It belongs with the circular-dependency backtracking work if those
-    // inputs ever get mapped, per the brief's own slice-5 note.
+    // Backlog #216: real `dep_zapdeps`' `circular_atom` demotion
+    // (`dep_check.py:673-691`) -- the first half of backlog #22 slice
+    // 5's documented cut, whose input is now mapped. Once
+    // `_serialize_tasks` dead-ends on a hard cycle, real records every
+    // (node → predecessor) edge in the `circular_dependency` backtrack
+    // map (`depgraph.py:10262-10289`, carried here as `circular_dep`:
+    // owner cp → circular-child cpv strings), and the next pass demotes any
+    // `all_available` alternative with an atom matching a recorded
+    // child straight to `other`, below every real bin -- so
+    // `dev-lang/go`'s own `BDEPEND=|| ( >=dev-lang/go-X
+    // dev-lang/go-bootstrap )` takes `go-bootstrap` on the re-resolve.
+    // Blockers are skipped, and an atom satisfied by an installed
+    // instance is not circular (real's own `vardb.match(atom)`
+    // exemption -- a "cycle" through an installed package is no
+    // deadlock). The `parent.onlydeps` half of real's check stays a
+    // documented cut (the `--onlydeps` CLI flag is not threaded to this
+    // call depth, and mis-threading it breaks bug 756961's own test
+    // case), as does `virt_parent` (no virtual-parent notion here).
+    if let Some(children) = circular_dep.get(self_cp) {
+        for child_cpv in children {
+            let mut demote = false;
+            for a in atoms {
+                let Some(at) = portage_dep::parse_atom(a) else {
+                    continue;
+                };
+                if at.blocker != portage_dep::Blocker::None {
+                    continue;
+                }
+                if atom_matches_installed(root, a, config) {
+                    continue;
+                }
+                if portage_dep::match_from_list(a, &[child_cpv.as_str()])
+                    .is_some_and(|m| !m.is_empty())
+                {
+                    demote = true;
+                    break;
+                }
+            }
+            if demote {
+                return portage_use_reduce::AltPreference::Other;
+            }
+        }
+    }
     if all_use_satisfied {
         // Real `dep_zapdeps` choice bin 0 -- the single list
         // `preferred_in_graph` / `preferred_installed` / `preferred_any_slot`
@@ -13018,6 +13106,7 @@ fn root_deps_satisfied_atoms(
     config: &portage_profile::Config,
     running_root: &Path,
     dep_keys: &[&str],
+    empty_groups_always_true: bool,
 ) -> HashSet<String> {
     let mut build_depstr = String::new();
     for dep_key in dep_keys {
@@ -13031,6 +13120,7 @@ fn root_deps_satisfied_atoms(
         &build_tokens,
         use_flags,
         portage_use_reduce::MatchMode::Normal,
+        empty_groups_always_true,
         &mut |atoms: &[String]| {
             // `--root-deps` only needs the satisfiable-or-not split here
             // (there's no "prefer the installed branch" question for a
@@ -13102,6 +13192,7 @@ fn unsatisfied_root_deps_atoms(
     config: &portage_profile::Config,
     running_root: &Path,
     dep_keys: &[&str],
+    empty_groups_always_true: bool,
 ) -> Vec<String> {
     let mut build_depstr = String::new();
     for dep_key in dep_keys {
@@ -13115,6 +13206,7 @@ fn unsatisfied_root_deps_atoms(
         &build_tokens,
         use_flags,
         portage_use_reduce::MatchMode::Normal,
+        empty_groups_always_true,
         &mut |atoms: &[String]| {
             // `--root-deps` only needs the satisfiable-or-not split here
             // (there's no "prefer the installed branch" question for a
@@ -13378,6 +13470,9 @@ fn resolve_root_deps_build_entries(
             config,
             running_root,
             &["DEPEND", "BDEPEND", "RDEPEND", "IDEPEND"],
+            md5_dict::eapi_empty_groups_always_true(
+                metadata.get("EAPI").map(String::as_str).unwrap_or("0"),
+            ),
         ) {
             result.extend(resolve_root_deps_build_entries(
                 repos,
@@ -15358,6 +15453,65 @@ fn is_build_time_dep_key(key: impl AsRef<str>) -> bool {
 /// requirements -- see `rev_dep_pin_holdable`) feed the residual
 /// installed-instance conflict report instead of masking the
 /// hard-required version into invisibility.
+/// A same-version USE-change reinstall's decided merge state, for the
+/// USE-break check below: the candidate string this run installs (same
+/// shape as `reverse_dependency_constraints`' own `upgrading` values),
+/// plus the merge's own effective USE set and declared IUSE -- real's
+/// `violated_conditionals(child_use, parent_use)` needs both sides.
+struct UseBreakSource {
+    candidate: String,
+    merge_use: HashSet<String>,
+    merge_iuse: HashSet<String>,
+}
+
+/// The decided merge USE/IUSE for `category/package-version`: the
+/// candidate's own effective flags (`candidate_iuse_and_use` -- the
+/// profile-resolved set this run merges with, or the baked set for a
+/// binary). `None` when no readable candidate exists (an unreadable
+/// md5-cache entry); callers fall back to ignoring USE, today's
+/// behaviour.
+fn merge_use_state(
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> Option<(HashSet<String>, HashSet<String>)> {
+    let cands = list_candidates(repos, category, package).ok()?;
+    let cand = cands.iter().find(|c| c.version == version)?;
+    let (iuse, use_flags) = candidate_iuse_and_use(cand, category, package, config)?;
+    Some(((*use_flags).clone(), iuse))
+}
+
+/// Real `_complete_graph`'s own USE-change trigger
+/// (`depgraph.py:8620-8637`): the merge node's IUSE, or its enabled USE
+/// intersected with IUSE, differs from the installed instance's. This is
+/// a node-vs-vdb comparison real makes unconditionally -- it does NOT go
+/// through `--newuse`/`--changed-use` (a bare, reasonless `[ebuild R]`
+/// for an explicitly-requested installed package carries no
+/// `changed_flags` yet still flips USE and still enables complete
+/// mode). `None` when the merge side is unreadable (no md5-cache
+/// entry); callers fall back to the entry's own `changed_flags`,
+/// today's behaviour.
+fn merge_use_changed_vs_installed(
+    root: &Path,
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> Option<bool> {
+    let (merge_use, merge_iuse) = merge_use_state(repos, config, category, package, version)?;
+    let inst_use = read_vdb_flag_set(root, category, package, version, "USE");
+    let inst_iuse = read_vdb_flag_set(root, category, package, version, "IUSE");
+    if merge_iuse != inst_iuse {
+        return Some(true);
+    }
+    let merge_enabled: HashSet<&String> = merge_use.intersection(&merge_iuse).collect();
+    let inst_enabled: HashSet<&String> = inst_use.intersection(&inst_iuse).collect();
+    Some(merge_enabled != inst_enabled)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn reverse_dependency_constraints(
     repos: &[RepoConfig],
@@ -15371,6 +15525,8 @@ fn reverse_dependency_constraints(
     ignore_built_slot_operator_deps: bool,
     top_level_cps: &HashSet<(String, String)>,
     world_reachable: &HashSet<(String, String)>,
+    config: &portage_profile::Config,
+    complete: bool,
 ) -> (Vec<RevDepPin>, Vec<RevDepPin>) {
     // (`cat/pkg`, slot) -> (the candidate string this run would install,
     // whether it comes from a same-version slot-change reinstall) for
@@ -15395,6 +15551,22 @@ fn reverse_dependency_constraints(
     // deep-walks the required sets, but a package the requested atoms'
     // own tree already pulled in is a graph node regardless of that walk).
     let mut graph_cps: HashSet<(String, String)> = HashSet::new();
+    // Backlog #222: (`cat/pkg`, slot) -> decided merge state for every
+    // same-version USE-change reinstall -- a `Reinstall` whose version
+    // never moves, so the stripped-constraint check below always holds,
+    // but whose USE flip can still break an installed consumer's `[use]`
+    // bound (upstream `test_complete_graph.py` pg0: the `icu` flip
+    // breaks installed `cgp0q`'s `[-icu]` dep). Real fails exactly that
+    // shape in its complete-mode end-of-walk unsatisfied-dep loop
+    // (`depgraph.py:8751-8791`), having enabled complete mode on the USE
+    // change (`complete_if_new_use`, `:8620-8637` -- portuale's
+    // `complete_graph_auto_enable` already re-resolves with
+    // `complete = true` for it, so these sources are collected only in
+    // complete mode). Upgrade/Downgrade/slot-change entries are
+    // deliberately NOT sources: their version machinery owns the
+    // break, and a USE interplay there (the #91 qemu shapes) belongs to
+    // the slot-operator probe's rebuild domain, not to a failure pin.
+    let mut use_breaks: HashMap<((String, String), String), UseBreakSource> = HashMap::new();
     for e in entries {
         let cp = (e.category.clone(), e.package.clone());
         graph_cps.insert(cp.clone());
@@ -15408,6 +15580,33 @@ fn reverse_dependency_constraints(
             && top_level_cps.contains(&cp)
         {
             already_installed_top_level.insert(cp.clone());
+        }
+        if complete
+            && let PretendOutcome::Reinstall {
+                version,
+                slot_changed: false,
+                ..
+            } = &e.outcome
+            && let Some((merge_use, merge_iuse)) =
+                merge_use_state(repos, config, &e.category, &e.package, version)
+            && merge_use_changed_vs_installed(root, repos, config, &e.category, &e.package, version)
+                .unwrap_or(false)
+        {
+            let slot = e.slot.clone().unwrap_or_else(|| "0".to_string());
+            use_breaks.insert(
+                (cp.clone(), slot.clone()),
+                UseBreakSource {
+                    candidate: format!(
+                        "{}/{}-{version}:{slot}/{}::{}",
+                        e.category,
+                        e.package,
+                        e.sub_slot.as_deref().unwrap_or("0"),
+                        e.repo_name.as_deref().unwrap_or_default()
+                    ),
+                    merge_use,
+                    merge_iuse,
+                },
+            );
         }
         let (to, reinstall_slot_change) = match &e.outcome {
             PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
@@ -15435,7 +15634,7 @@ fn reverse_dependency_constraints(
             ),
         );
     }
-    if upgrading.is_empty() {
+    if upgrading.is_empty() && use_breaks.is_empty() {
         return (Vec::new(), Vec::new());
     }
 
@@ -15577,6 +15776,91 @@ fn reverse_dependency_constraints(
                     }
                 }
                 if failing.is_empty() {
+                    // Backlog #222: no version in any upgraded slot breaks
+                    // the stripped constraint -- but a same-version
+                    // USE-change reinstall can still break the pin's
+                    // `[use]` bound, which real's complete-mode
+                    // end-of-walk loop fails on (`depgraph.py:8751-8791`:
+                    // an unsatisfied dep the vdb still matches pulls the
+                    // installed package in as a nomerge node, i.e. a slot
+                    // collision). The merge's USE is already decided --
+                    // real fails rather than reflipping it (the EAPI-8
+                    // oracle answers `success=False` with no
+                    // `slot_collision_solutions`) -- so a broken USE pin
+                    // is dropped for the residual installed-instance
+                    // report, never enforced (enforcing the verbatim atom
+                    // would let the re-resolve silently flip the USE back
+                    // and succeed where real fails). The stripped probe
+                    // must still hold the merge: otherwise the break is
+                    // not USE at all (and a consumer already broken before
+                    // the run is real's `initially_unsatisfied` skip).
+                    // Built slot-operator pins stay out: their domain
+                    // owns the version/USE interplay through rebuilds
+                    // (#24), and build-time keys stay out like the D0
+                    // ignore below (real empties a built package's
+                    // `DEPEND`/`BDEPEND` before registering any parent
+                    // atom, `depgraph.py:4194-4247`).
+                    let use_deps = atom.use_deps.clone().unwrap_or_default();
+                    if !use_deps.is_empty() && !is_build_time_dep_key(dep_key) && !built_slot_op {
+                        let pin_slot = atom.slot.as_deref();
+                        let mut broken = false;
+                        for ((ucp, uslot), source) in &use_breaks {
+                            if *ucp != cp {
+                                continue;
+                            }
+                            if pin_slot.is_some_and(|ps| ps != uslot.as_str()) {
+                                continue;
+                            }
+                            if portage_dep::match_from_list(
+                                constraint.as_str(),
+                                &[source.candidate.as_str()],
+                            )
+                            .is_none_or(|m| m.is_empty())
+                            {
+                                continue;
+                            }
+                            if portage_dep::use_deps_violated(
+                                &use_deps,
+                                &use_flags,
+                                &source.merge_use,
+                                &source.merge_iuse,
+                            ) {
+                                broken = true;
+                                break;
+                            }
+                        }
+                        if broken {
+                            // Real stores the parent atom evaluated
+                            // against the parent's own USE (real
+                            // `Atom.evaluate_conditionals` at edge time,
+                            // `lib/portage/dep/__init__.py:1387`): the
+                            // collision renderer classifies USE reasons
+                            // from the unconditional forms alone (real
+                            // `slot_collision.py:331-389`), so the pin
+                            // carries the evaluated text (`[-icu]`, not
+                            // `[!icu?]`) while `raw_atom` keeps the
+                            // recorded verbatim form for notices.
+                            let evaluated = portage_dep::evaluate_atom_conditionals(
+                                atom_str.as_str(),
+                                &use_flags,
+                            )
+                            .unwrap_or_else(|| atom_str.clone());
+                            let pin = RevDepPin {
+                                cp: cp.clone(),
+                                atom: evaluated,
+                                raw_atom: atom_str.clone(),
+                                consumer: (
+                                    consumer.category.clone(),
+                                    consumer.package.clone(),
+                                    consumer.version.clone(),
+                                ),
+                            };
+                            if seen.insert((pin.cp.clone(), pin.atom.clone(), pin.consumer.clone()))
+                            {
+                                dropped.push(pin);
+                            }
+                        }
+                    }
                     continue;
                 }
                 // The enforced/dropped atom text: verbatim when a built
@@ -17289,6 +17573,101 @@ fn merge_bound_index(entries: &[GraphEntry]) -> HashMap<(&str, &str), usize> {
 /// `medium_soft` rung) and feeds only `large_cycle_count` and the
 /// cycle-only re-display -- this stays the short hard ring the message
 /// and the suggestions render.
+///
+/// Backlog #216: a same-cp edge is a cycle only when it targets the
+/// owner's own instance. `owner_self_loop` is that test: one of the
+/// owner's kept `deps` edges (inline, or on the `||` branch the walk
+/// selected -- a suppressed alternative's edge is not in real's
+/// digraph) names the owner's own `cat/pkg` and its atom matches the
+/// owner's merge-bound cpv. `>=dev-lang/go-X` against in-graph `go-X`
+/// loops; `=foo-2` against `foo-1` (a same-cp cross-slot edge, ordinary
+/// in real's package-keyed digraph) does not.
+///
+/// Scope gate for the serialize-dead-end retry in `collect_feedback`
+/// (`cycle_restartable`, below): only a fresh single-node self-loop
+/// closed by a kept `||` self-branch retries. That is exactly the `||`
+/// pick this slice ports (real's pass-1 `preferred_in_graph` self
+/// choice, `dep_check.py`); everything else keeps today's
+/// report-no-retry path:
+/// - multi-node rings are backlog #221's general branch-switching scope
+///   (G18, EAPI-gated), whose display-side (`kept_alt_branches`)
+///   re-derivation and merge-vs-installed bookkeeping this slice does
+///   not re-model;
+/// - an inline (branch-less) self-dep has no alternative branch a retry
+///   could switch to;
+/// - an installed instance of the owner cp means the demoted branch
+///   lands on installed subgraphs (slot_want unification, display
+///   re-derivation), same scope cut.
+///
+/// `kept` is `kept_alt_branches` over the same entries.
+fn cycle_restartable(
+    entries: &[GraphEntry],
+    kept: &[HashSet<usize>],
+    cycle: &[String],
+    root: &Path,
+) -> bool {
+    let [node_cpv] = cycle else {
+        return false;
+    };
+    let Some((cat, pkg, _)) = split_cpv(node_cpv) else {
+        return false;
+    };
+    // Fresh: no installed instance of the owner cp, so the demoted
+    // retry only ever pulls fresh merges, never installed subgraphs.
+    if !installed_candidates(root, &cat, &pkg).is_empty() {
+        return false;
+    }
+    let Some(owner_idx) = entries.iter().position(|e| {
+        e.category == cat && e.package == pkg && merge_bound_cpv(e).as_deref() == Some(node_cpv)
+    }) else {
+        return false;
+    };
+    let Some(owner_cpv) = merge_bound_cpv(&entries[owner_idx]) else {
+        return false;
+    };
+    entries[owner_idx].deps.iter().enumerate().any(|(ei, d)| {
+        d.alt.is_some()
+            && kept[owner_idx].contains(&ei)
+            && d.category == cat
+            && d.package == pkg
+            && !d.priority.optional
+            && portage_dep::match_from_list(&d.atom, &[owner_cpv.as_str()])
+                .is_some_and(|m| !m.is_empty())
+    })
+}
+
+/// Scope: self-loops touching an installed instance stay invisible
+/// (like before this slice). Real deadlocks on them too, but only ever
+/// as a transient: its `circular_dependency` retry re-resolves past
+/// them, which needs the merge-vs-installed bookkeeping (slot_want
+/// unification, display re-derivation) backlog #221's general
+/// branch-switching scope (G18, EAPI-gated) owns. Reporting one here
+/// would flip an outcome-correct resolve (the invisible self-edge never
+/// constrained order or display) into a spurious circular abort, so the
+/// retry gate (`cycle_restartable`, below) never sees them either --
+/// fresh self-loops only, both sides consistent.
+fn owner_self_loop(
+    entries: &[GraphEntry],
+    kept: &[std::collections::HashSet<usize>],
+    oi: usize,
+    root: &Path,
+) -> bool {
+    let Some(owner_cpv) = merge_bound_cpv(&entries[oi]) else {
+        return false;
+    };
+    if !installed_candidates(root, &entries[oi].category, &entries[oi].package).is_empty() {
+        return false;
+    }
+    entries[oi].deps.iter().enumerate().any(|(ei, d)| {
+        (d.alt.is_none() || kept[oi].contains(&ei))
+            && d.category == entries[oi].category
+            && d.package == entries[oi].package
+            && !d.priority.optional
+            && portage_dep::match_from_list(&d.atom, &[owner_cpv.as_str()])
+                .is_some_and(|m| !m.is_empty())
+    })
+}
+
 fn find_hard_cycles(
     entries: &[GraphEntry],
     edge_kind_map: &EdgeKindMap,
@@ -17328,13 +17707,23 @@ fn find_hard_cycles(
         ) else {
             continue;
         };
-        if oi == di {
-            continue;
-        }
         // Backlog #228: the walk's `(true, false)` arm, or the
         // slot-op deps arm (an `RDEPEND` `:=` edge is never
         // `buildtime_hard`, so the map alone can never see it).
-        if (*has_hard && !*has_soft) || slot_op_hard(oi, di) {
+        let hard = (*has_hard && !*has_soft) || slot_op_hard(oi, di);
+        if oi == di {
+            // Backlog #216: a same-cp edge is a cycle only when it
+            // targets the owner's own instance (real's digraph keys by
+            // package, so `foo:1 → foo:2` is an ordinary edge while
+            // `go → go` deadlocks `_serialize_tasks`). The kept
+            // branch's atom decides, matched against the owner's
+            // merge-bound cpv.
+            if hard && owner_self_loop(entries, &kept, oi, root) {
+                adj[oi].push(oi);
+            }
+            continue;
+        }
+        if hard {
             adj[oi].push(di);
         }
     }
@@ -17352,12 +17741,16 @@ fn find_hard_cycles(
             {
                 continue;
             }
-            let Some(&di) = cp_index
-                .get(&(dep.category.as_str(), dep.package.as_str()))
-                .filter(|&&di| di != oi)
-            else {
+            let Some(&di) = cp_index.get(&(dep.category.as_str(), dep.package.as_str())) else {
                 continue;
             };
+            // Backlog #216: same true-self-loop gate as the map arm
+            // above -- a same-cp slot-op edge on a suppressed branch,
+            // or one whose atom does not match the owner's own
+            // instance, is no cycle.
+            if di == oi && !owner_self_loop(entries, &kept, oi, root) {
+                continue;
+            }
             if !dep_edge_satisfied_by_installed(root, dep, Some(&entries[di]))
                 && !adj[oi].contains(&di)
             {
@@ -17423,6 +17816,161 @@ fn find_hard_cycles(
             vec![rotated]
         }
     }
+}
+
+/// Backlog #193: real `depgraph._virt_deps_visible`'s virtual-cycle rule
+/// (`lib/_emerge/depgraph.py:6208-6222` in 3rdparty/portage 3.0.82.2).
+/// While resolving a `virtual/` atom, real recursively probes the
+/// selected provider's own `RDEPEND` closure
+/// (`_virt_deps_visible_imp`, `:6224-6256`, reached through `dep_check`
+/// → `_dep_check_composite_db.match_pkgs`, `:11833` → `_visible`,
+/// `:11921` → `_virt_deps_visible`, `:11945`), and re-entering a
+/// virtual already on the probe stack (`_virt_deps_visible_recursion`,
+/// `:873`) raises `_virtual_cycle_error` (class `:11685`, `:6215-6216`).
+/// `select_files` (`:5002-5013`) catches it into `_virtual_cycle`,
+/// prints `\n\n!!! virtual cycle detected:\n\n` plus one
+/// `  {cpv}::{repo}` line per stack member (sorted) plus `\n`
+/// (`writemsg`, stderr), and fails the resolve (`_skip_restart`, no
+/// merge list, exit 1). Upstream `test_virtual_cycle.py` (bug 965570):
+/// `virtual/gzip-1` whose `RDEPEND` is itself, and the
+/// `virtual/A-1 → B-1 → C-1 → A-1` ring, both fail (the playground
+/// surfaces the members as `virtual_cycle`,
+/// `ResolverPlayground.py:1241-1242`). Grounded live by the g193 probe
+/// (`podman run localhost/test-portuale:latest`, portage 3.0.81.3 --
+/// same message shape in 3.0.82.2 by source read --
+/// `emerge -p --color=n app-misc/{bar,foo}` on the staged #50
+/// fixtures, rc 1 both, members `virtual/gzip-1` /
+/// `virtual/A-1,B-1,C-1` each with `::testrepo`).
+///
+/// Ported as a settled-graph check over the provider selection the walk
+/// already made: DFS from every merge-bound `virtual/` entry along
+/// kept-branch `RDEPEND` (`DepEdge.key == 0`, the only key real's imp
+/// expands) edges to merge-bound `virtual/` targets; revisiting an
+/// on-stack entry reports the whole stack -- real reports the full
+/// recursion set, so a lollipop (a virtual pulling a self-looping
+/// virtual) reports every virtual on the path, not just the loop.
+/// Members return as `cpv::repo` lines in real's sorted order (cp, then
+/// `vercmp` version, then repo). Empty when no merge-bound virtual
+/// (transitively) requires itself; a `virtual/ → non-virtual →
+/// virtual/` ring is NOT one (real's stack holds virtuals only, so
+/// that shape probes clean) and stays an ordinary merge.
+///
+/// Documented cuts: a dep target that is not merge-bound
+/// (`AlreadyInstalled`, unresolvable) is not expanded -- real probes
+/// the installed/available package's own recorded `RDEPEND` there too,
+/// but no fixture shapes an installed virtual with a cyclic recorded
+/// `RDEPEND` that nothing merges; and a suppressed `||` alternative is
+/// never probed -- real's `dep_check` may probe a non-selected branch
+/// first and fail where this succeeds (no fixture shapes that
+/// either). A virtual the walk considered but did not select is likewise
+/// never a start node (real may probe such a candidate mid-search;
+/// single-provider fixtures cannot tell).
+fn find_virtual_cycles(entries: &[GraphEntry], root: &Path) -> Vec<String> {
+    // Cheap gate: no merge-bound virtual, no probe (every ordinary resolve).
+    if !entries
+        .iter()
+        .any(|e| e.category == "virtual" && merge_bound_cpv(e).is_some())
+    {
+        return Vec::new();
+    }
+    let cp_index = merge_bound_index(entries);
+    // Branch selection reuses `kept_alt_branches`, the same set
+    // `build_digraph` collapses to (real's digraph holds the resolved
+    // edge only) -- computed lazily so resolves without a `||` edge on
+    // any merge-bound virtual never touch the digraph prelude.
+    let kept: Vec<HashSet<usize>> = if entries.iter().any(|e| {
+        e.category == "virtual"
+            && merge_bound_cpv(e).is_some()
+            && e.deps.iter().any(|d| d.alt.is_some())
+    }) {
+        kept_alt_branches(entries, root)
+    } else {
+        vec![HashSet::new(); entries.len()]
+    };
+    // Successors: kept-branch RDEPEND edges to merge-bound virtual targets.
+    let succ = |idx: usize| -> Vec<usize> {
+        let mut out: Vec<usize> = entries[idx]
+            .deps
+            .iter()
+            .enumerate()
+            .filter(|(ei, d)| {
+                d.key == 0 && d.category == "virtual" && (d.alt.is_none() || kept[idx].contains(ei))
+            })
+            .filter_map(|(_, d)| cp_index.get(&(d.category.as_str(), d.package.as_str())))
+            .copied()
+            .filter(|&t| entries[t].category == "virtual")
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    };
+    fn visit(
+        idx: usize,
+        succ: &dyn Fn(usize) -> Vec<usize>,
+        stack: &mut Vec<usize>,
+        on_stack: &mut HashSet<usize>,
+        done: &mut HashSet<usize>,
+    ) -> Option<Vec<usize>> {
+        for t in succ(idx) {
+            // The revisit check is the `_virt_deps_visible_recursion`
+            // membership test (`:6215`): the reported members are the
+            // whole stack, like real's `list(recursion_set)`.
+            if on_stack.contains(&t) {
+                return Some(stack.clone());
+            }
+            if !done.contains(&t) {
+                stack.push(t);
+                on_stack.insert(t);
+                if let Some(members) = visit(t, succ, stack, on_stack, done) {
+                    return Some(members);
+                }
+                stack.pop();
+                on_stack.remove(&t);
+            }
+        }
+        done.insert(idx);
+        None
+    }
+    for start in 0..entries.len() {
+        if entries[start].category != "virtual" {
+            continue;
+        }
+        if merge_bound_cpv(&entries[start]).is_none() {
+            continue;
+        }
+        let mut stack = vec![start];
+        let mut on_stack: HashSet<usize> = HashSet::from([start]);
+        let mut done: HashSet<usize> = HashSet::new();
+        if let Some(path) = visit(start, &succ, &mut stack, &mut on_stack, &mut done) {
+            let mut members: Vec<(&str, &str, &str, &str)> = path
+                .iter()
+                .map(|&i| {
+                    let e = &entries[i];
+                    (
+                        e.category.as_str(),
+                        e.package.as_str(),
+                        merge_bound_version(&e.outcome)
+                            .expect("merge-bound")
+                            .as_str(),
+                        e.repo_name.as_deref().unwrap_or("unknown"),
+                    )
+                })
+                .collect();
+            // Real `sorted()` on `Package` (`Package.py:830`: cp, then
+            // `vercmp` version); the `::repo` suffix plays no part there.
+            members.sort_by(|a, b| {
+                a.0.cmp(b.0)
+                    .then(a.1.cmp(b.1))
+                    .then(vercmp_ordering(a.2, b.2))
+                    .then(a.3.cmp(b.3))
+            });
+            return members
+                .into_iter()
+                .map(|(c, p, v, r)| format!("{c}/{p}-{v}::{r}"))
+                .collect();
+        }
+    }
+    Vec::new()
 }
 
 /// Backlog #228: one label per edge of a `find_hard_cycles` cycle --
@@ -18186,6 +18734,10 @@ fn collect_unwalked_installed_blockers(
     dynamic_deps: bool,
     ignore_built_slot_operator_deps: bool,
     disj_constraints: &HashMap<(String, String), Vec<String>>,
+    // Backlog #216: the loop's `circular_dependency` map, for the same
+    // `||` demotion the two dep-walk sites apply (this scan's branch
+    // ranking decides which branch's blockers surface).
+    circular_dep: &HashMap<(String, String), Vec<String>>,
     root_deps_running_root: Option<&Path>,
     entries: &[GraphEntry],
     pending_blockers: &mut Vec<PendingBlocker>,
@@ -18265,6 +18817,11 @@ fn collect_unwalked_installed_blockers(
             &tokens,
             &use_flags,
             portage_use_reduce::MatchMode::Normal,
+            // Installed blocker scan: real `dep_check` passes
+            // `eapi=None` for installed packages
+            // (`dep_check.py:865-877`), whose defaults struct reads
+            // `empty_groups_always_true = false`.
+            false,
             &mut |atoms: &[String]| {
                 disjunction_preference(
                     repos,
@@ -18273,6 +18830,7 @@ fn collect_unwalked_installed_blockers(
                     entries,
                     &self_cp,
                     disj_constraints,
+                    circular_dep,
                     root_deps_running_root,
                     atoms,
                     &[],
@@ -18862,6 +19420,349 @@ fn pkg_use_display_for(
         config,
     );
     build_use_expand_display(&disp, config, None, &forced, true, &HashSet::new())
+}
+
+/// Backlog #230: real `pkg_use_display(pkg, opts, modified_use=...)` for a
+/// scheduled-for-merge package (`_emerge/UseFlagDisplay.py:55`), built for
+/// the skipped-update block -- the FULL per-package display, not the
+/// IUSE-only approximation `pkg_use_display_for` (which the
+/// slot-collision notice keeps, out of this slice's scope).
+///
+/// Two real behaviors the approximation misses, both bed-grounded (bed
+/// `l0-fx-20260927T125711Z`, `--backtrack=0 dev-libs/blk0b dev-libs/blk0c
+/// dev-libs/blk0a`: real renders `USE="(test-rust)" ABI_X86="(64)"
+/// LLVM_TARGETS="(X86)"` on the missed line and `USE="(globalforceflag)"`
+/// on the parents where portuale printed bare `USE=""`):
+///
+/// 1. `modified_use` is the package's whole effective USE
+///    (`PORTAGE_USE`), so profile-global flags and forced flags render
+///    even when no ebuild declares them in `IUSE`.
+/// 2. `PORTAGE_USE` itself is the effective USE *masked* to the
+///    package's valid-IUSE domain (`config.py` setcpv, `:2166-2220`): a
+///    flag survives iff it is in the declared `IUSE` or matches the
+///    implicit domain -- EAPI 5+ `IUSE_EFFECTIVE`
+///    (`_calc_iuse_effective`: `IUSE_IMPLICIT` + unprefixed +
+///    expand-implicit values), pre-EAPI-5 `_get_implicit_iuse` (`ARCH` +
+///    `arch.list` + `USE_EXPAND_HIDDEN`-derived `xxx_.*` + the
+///    per-package use.mask/use.force + `build`/`bootstrap`).
+///
+/// Bed-grounded against the real 3.0.82.2 container probe in
+/// `docs/history/` (see `skipped_update_use_display_for`'s callers for
+/// the pointer): `emerge --info dev-libs/pkginfopkg` shows
+/// `USE="alpha -beta" ELIBC="glibc"` -- the `foo`/`bar`/forced globals
+/// masked out, the implicit `elibc_glibc` kept -- and a flagless blk0
+/// package keeps exactly `amd64`→(discarded as `ARCH`), the hidden-expand
+/// `cpu_flags_x86_sse2`, and the forced `globalforceflag`.
+///
+/// Deliberate narrowings: no `--alphabetical` interleave (no contract or
+/// bed cell passes it with this block) and no ANSI colour (a no-op under
+/// `emerge -p` without `--color=y`, matching `render_pkg_use_display`'s
+/// own cut). The installed-consumer twin is
+/// [`skipped_update_installed_use_display_for`].
+///
+/// NOTE (post-#220): the blk0 ebuilds are EAPI 8 now, so the
+/// `eapi_has_iuse_effective` gate selects the `IUSE_EFFECTIVE` domain
+/// and the profile globals mask out -- a flagless blk0 package renders
+/// `USE="" ELIBC="glibc"`. The `pre-EAPI-5 ... forced flags survive`
+/// pin in pmtest's `test_upstream_blocker_pg0_all_orders_pin_x1_and_uninstall_y1`
+/// predates that merge and is stale (see the fix-round-1 report).
+pub fn skipped_update_use_display_for(
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> Vec<(String, String)> {
+    let candidates = match list_candidates(repos, category, package) {
+        Ok(cs) => cs,
+        Err(_) => return Vec::new(),
+    };
+    let Some(cand) = candidates
+        .iter()
+        .filter(|c| c.version == version)
+        .max_by_key(|c| c.repo_priority)
+        .cloned()
+    else {
+        return Vec::new();
+    };
+    let pf = format!("{package}-{version}");
+    let metadata = match repo_aux_metadata(&cand.repo_location, category, &pf) {
+        Ok(md) => md,
+        Err(_) => return Vec::new(),
+    };
+    // Same "absence is real" as `pkg_use_display_for`: a missing IUSE key
+    // declares no flags; a missing md5-cache entry entirely (the `?`
+    // above... here the Err arm) yields no display.
+    let iuse_str = metadata.get("IUSE").map(String::as_str).unwrap_or_default();
+    let explicit: HashSet<String> = iuse_str
+        .split_whitespace()
+        .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
+        .collect();
+    let eapi = metadata.get("EAPI").map(String::as_str).unwrap_or("");
+    let candidate_str = format!(
+        "{category}/{package}-{version}:{}/{}::{}",
+        cand.slot, cand.sub_slot, cand.repo_name
+    );
+    let use_flags = match candidate_iuse_and_use(&cand, category, package, config) {
+        Some((_, uf)) => uf,
+        None => return Vec::new(),
+    };
+    // Real `pkg.use.force ∪ pkg.use.mask` (`pkgsettings.useforce` /
+    // `usemask` after `setcpv`): the unfiltered per-package stack, since
+    // the `( )` wraps apply to implicit-domain flags too (an implicit
+    // flag is displayed, so a forced implicit flag must wrap).
+    let force_mask = forced_or_masked_flags_unfiltered(
+        &cand.keywords,
+        &candidate_str,
+        category,
+        package,
+        config,
+    );
+    let kept = mask_use_to_valid_domain(
+        &explicit,
+        &use_flags,
+        md5_dict::eapi_has_iuse_effective(eapi),
+        config,
+        &force_mask,
+    );
+    assemble_pkg_use_display(&kept, &explicit, &force_mask, config)
+}
+
+/// Backlog #230: the installed-consumer twin of
+/// [`skipped_update_use_display_for`] -- real `pkg_use_display` for an
+/// installed parent (`depgraph.py:1696-1700` calls it with the vdb
+/// package's own `use.enabled`). The vdb `USE` is ground truth (real
+/// validates it against the implicit domain at `Package` construction
+/// but never re-masks it), so no masking runs here: enabled is the
+/// recorded `USE`, disabled the recorded `IUSE` minus that. Narrowing,
+/// documented: no profile-force/mask `( )` wraps (those need the tree
+/// candidate's keywords via `forced_or_masked_flags_unfiltered`, and an
+/// installed consumer's version may be gone from every repo -- the same
+/// narrowing `installed_use_display_for` already documents). The exact
+/// trigger that would expose the gap is an installed skipped-block
+/// consumer carrying a flag from the profile/repo force/mask stack:
+/// real wraps it (`forced_flags = chain(pkg.use.force, pkg.use.mask)`,
+/// `UseFlagDisplay.py:60`, applied to installed parents too via
+/// `depgraph.py:1696-1700`) -- e.g. a globally `use.force`d flag
+/// recorded enabled in the vdb `USE` renders `(flag)`, a `use.mask`ed
+/// flag still present in the recorded `IUSE` renders `(-flag)` --
+/// while portuale renders either bare. No grounded case exercises it
+/// (every bed blk0 parent is a merge node), so the wrap gap is pinned
+/// nowhere.
+pub fn skipped_update_installed_use_display_for(
+    root: &Path,
+    config: &portage_profile::Config,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> Vec<(String, String)> {
+    let (iuse, use_flags) = installed_pkg_iuse_and_use(root, category, package, version);
+    let enabled: HashSet<String> = use_flags.iter().cloned().collect();
+    let explicit: HashSet<String> = iuse.iter().cloned().collect();
+    assemble_pkg_use_display(&enabled, &explicit, &HashSet::new(), config)
+}
+
+/// Backlog #230: one consumer's full `pkg_use_display` for a
+/// `SkippedUpdate` row, shared by the three producers. `parent_cpv` is
+/// the `cat/pkg-ver:slot/sub::repo` form `slot_conflict_puller_cpv`
+/// builds (empty for a top-level `(Argument)` parent, whose row the
+/// renderer prints bare -- the display value is unused there).
+/// Installed consumers read the vdb twin, merge consumers the tree twin.
+fn skipped_consumer_use_display(
+    repos: &[RepoConfig],
+    root: &Path,
+    config: &portage_profile::Config,
+    parent_cpv: &str,
+    installed: bool,
+) -> Vec<(String, String)> {
+    let cpv = parent_cpv.split(':').next().unwrap_or("");
+    let Some((cc, cp2, cv)) = split_cpv(cpv) else {
+        return Vec::new();
+    };
+    if installed {
+        skipped_update_installed_use_display_for(root, config, &cc, &cp2, &cv)
+    } else {
+        skipped_update_use_display_for(repos, config, &cc, &cp2, &cv)
+    }
+}
+
+/// Backlog #230: real `config.py` setcpv's own
+/// `PORTAGE_USE` masking (`:2166-2220`) -- keep an effective-USE flag
+/// iff it is in the package's declared `IUSE` or matches the implicit
+/// domain. `iuse_effective` selects the EAPI 5+ rule
+/// (`IUSE_EFFECTIVE`, real `_iuse_effective_match`); otherwise the
+/// pre-EAPI-5 `_get_implicit_iuse` rule (`ARCH`, `arch.list`,
+/// `USE_EXPAND_HIDDEN`-derived `xxx_*` prefixes, the per-package
+/// use.mask/use.force stack, `build`/`bootstrap`).
+fn mask_use_to_valid_domain(
+    explicit: &HashSet<String>,
+    use_flags: &HashSet<String>,
+    iuse_effective: bool,
+    config: &portage_profile::Config,
+    force_mask: &HashSet<String>,
+) -> HashSet<String> {
+    if iuse_effective {
+        return use_flags
+            .iter()
+            .filter(|f| explicit.contains(*f) || config.iuse_effective.contains(*f))
+            .cloned()
+            .collect();
+    }
+    let hidden_prefixes: Vec<String> = config
+        .use_expand_hidden
+        .iter()
+        .map(|v| format!("{}_", v.to_lowercase()))
+        .collect();
+    let arch = config.other_vars.get("ARCH").cloned().unwrap_or_default();
+    use_flags
+        .iter()
+        .filter(|f| {
+            explicit.contains(*f)
+                || **f == arch
+                || config.archlist.contains(*f)
+                || hidden_prefixes.iter().any(|p| f.starts_with(p))
+                || force_mask.contains(*f)
+                || **f == "build"
+                || **f == "bootstrap"
+        })
+        .cloned()
+        .collect()
+}
+
+/// Backlog #230: real `pkg_use_display`'s own assembly
+/// (`_emerge/UseFlagDisplay.py:55-122`), minus colour and
+/// `--alphabetical`. `enabled` is the masked `PORTAGE_USE`-equivalent
+/// set, `explicit` the declared `IUSE` names (the disabled side), and
+/// `forced` the per-package force ∪ mask stack for the `( )` wraps.
+/// `ARCH` is discarded from the `USE` group; `USE_EXPAND_HIDDEN` groups
+/// are skipped; groups render `USE` first then byte-sorted var names,
+/// each enabled-first then byte-sorted (real's default
+/// `sort_separated`, plain string order).
+fn assemble_pkg_use_display(
+    enabled: &HashSet<String>,
+    explicit: &HashSet<String>,
+    forced: &HashSet<String>,
+    config: &portage_profile::Config,
+) -> Vec<(String, String)> {
+    let arch = config.other_vars.get("ARCH").cloned().unwrap_or_default();
+    let hidden: HashSet<String> = config
+        .use_expand_hidden
+        .iter()
+        .map(|s| s.to_uppercase())
+        .collect();
+    let mut expand_vars: Vec<String> = config.use_expand.iter().cloned().collect();
+    expand_vars.sort();
+    let prefix_of = |var: &str| format!("{}_", var.to_lowercase());
+    // (group, full flag name, bare display name, enabled)
+    let mut grouped: HashMap<String, Vec<(String, String, bool)>> = HashMap::new();
+    for f in enabled {
+        if f == &arch {
+            continue;
+        }
+        let mut placed = false;
+        for var in &expand_vars {
+            if let Some(bare) = f.strip_prefix(&prefix_of(var)) {
+                grouped.entry(var.to_uppercase()).or_default().push((
+                    f.clone(),
+                    bare.to_string(),
+                    true,
+                ));
+                placed = true;
+                break;
+            }
+        }
+        if !placed {
+            grouped
+                .entry("USE".to_string())
+                .or_default()
+                .push((f.clone(), f.clone(), true));
+        }
+    }
+    // Real iterates `pkg.iuse.all` for the disabled side; the same
+    // routing by expand prefix applies.
+    for f in explicit {
+        if enabled.contains(f) {
+            continue;
+        }
+        let mut placed = false;
+        for var in &expand_vars {
+            if let Some(bare) = f.strip_prefix(&prefix_of(var)) {
+                grouped.entry(var.to_uppercase()).or_default().push((
+                    f.clone(),
+                    bare.to_string(),
+                    false,
+                ));
+                placed = true;
+                break;
+            }
+        }
+        if !placed {
+            grouped
+                .entry("USE".to_string())
+                .or_default()
+                .push((f.clone(), f.clone(), false));
+        }
+    }
+    let mut names: Vec<String> = grouped.keys().cloned().collect();
+    names.sort();
+    let mut out = Vec::new();
+    // Real `var_order.insert(0, "USE")`: the USE group always renders
+    // first (possibly as the bare `USE=""` real always emits).
+    if let Some(flags) = grouped.remove("USE") {
+        out.push(("USE".to_string(), render_use_group(flags, forced)));
+    } else {
+        out.push(("USE".to_string(), String::new()));
+    }
+    for name in names {
+        if name == "USE" || hidden.contains(&name) {
+            continue;
+        }
+        if let Some(flags) = grouped.remove(&name) {
+            out.push((name, render_use_group(flags, forced)));
+        }
+    }
+    out
+}
+
+/// Backlog #230: one `VAR="…"` group of real `pkg_use_display` --
+/// enabled flags first, then disabled, each byte-sorted by display name
+/// (real's default `sort_separated`); enabled render bare, disabled
+/// `-`-prefixed, and force/mask members `( )`-wrapped (real
+/// `UseFlagDisplay.__str__`, minus the red/blue that are a no-op without
+/// `--color=y`). Entries carry `(full flag name, bare display name,
+/// enabled)`; the wrap lookup runs on the full name, the sort on the
+/// bare display name exactly like real's own `UseFlagDisplay.name`.
+fn render_use_group(flags: Vec<(String, String, bool)>, forced: &HashSet<String>) -> String {
+    let mut enabled: Vec<(String, String)> = Vec::new();
+    let mut disabled: Vec<(String, String)> = Vec::new();
+    for (full, bare, on) in flags {
+        if on {
+            enabled.push((full, bare));
+        } else {
+            disabled.push((full, bare));
+        }
+    }
+    enabled.sort_by(|a, b| a.1.cmp(&b.1));
+    disabled.sort_by(|a, b| a.1.cmp(&b.1));
+    enabled
+        .into_iter()
+        .map(|(full, bare)| {
+            if forced.contains(&full) {
+                format!("({bare})")
+            } else {
+                bare
+            }
+        })
+        .chain(disabled.into_iter().map(|(full, bare)| {
+            let tok = format!("-{bare}");
+            if forced.contains(&full) {
+                format!("({tok})")
+            } else {
+                tok
+            }
+        }))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The same `USE="…"` display pairs as `pkg_use_display_for`, built from
@@ -19465,10 +20366,36 @@ fn build_residual_slot_conflicts(
         };
         // The pin holds after all -- a later pass picked a compatible
         // version. Nothing to report (real reconciles silently too).
+        // Backlog #222: a `[use]`-carrying pin (a USE-break dropped pin)
+        // version-matches the merge by construction -- `match_from_list`
+        // never reads use-deps, same as real's -- so the holds check
+        // must also evaluate the pin's use-deps against the merge's own
+        // decided USE (real `violated_conditionals`, the same check that
+        // fired the pin). A merge whose USE still breaks the pin stays
+        // reported; an uncomputable merge USE falls back to the
+        // version-only check, today's behaviour.
         let merge_str =
             format!("{category}/{package}-{merge_ver}:{slot}/{merge_sub}::{merge_repo}");
-        if portage_dep::match_from_list(&pin.atom, &[merge_str.as_str()])
-            .is_some_and(|m| !m.is_empty())
+        let use_still_broken = portage_dep::parse_atom(&pin.atom)
+            .and_then(|parsed| parsed.use_deps)
+            .filter(|deps| !deps.is_empty())
+            .is_some_and(|deps| {
+                merge_use_state(repos, config, &category, &package, &merge_ver).is_some_and(
+                    |(merge_use, merge_iuse)| {
+                        let parent_use = read_vdb_flag_set(
+                            root,
+                            &pin.consumer.0,
+                            &pin.consumer.1,
+                            &pin.consumer.2,
+                            "USE",
+                        );
+                        portage_dep::use_deps_violated(&deps, &parent_use, &merge_use, &merge_iuse)
+                    },
+                )
+            });
+        if !use_still_broken
+            && portage_dep::match_from_list(&pin.atom, &[merge_str.as_str()])
+                .is_some_and(|m| !m.is_empty())
         {
             continue;
         }
@@ -19688,6 +20615,48 @@ pub struct SkippedMissingDep {
     pub category: String,
     pub package: String,
     pub slot: String,
+}
+
+/// Backlog #198: one update real reports through the full per-update
+/// form of `_show_missed_update_unsatisfied_dep`
+/// (`lib/_emerge/depgraph.py:1592-1636`) -- a masked version higher
+/// than the chosen one whose missing-dependency mask no longer bites
+/// at settle time (real's `check_backtrack` probe does *not* raise
+/// `_backtrack_mask`, i.e. the missing atom names no backtrack-masked
+/// version). Renders the `cat/pkg:slot` header, the `selected:` /
+/// `skipped: ... (see unsatisfied dependency below)` rows (real
+/// `str(Package)`, destinations omitted like every other portuale
+/// notice row), then the missing atom's own disclosure -- the masked
+/// block or the plain-miss block, with a single-parent
+/// `(dependency required by ...)` chain: the skipped package is not in
+/// the settled graph, so real's `_get_dep_chain` stops there
+/// (`depgraph.py:6397`, "not in the graph ... break") with no
+/// `(argument)` line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkippedMissingDepFull {
+    pub category: String,
+    pub package: String,
+    pub slot: String,
+    /// `(cpv:slot/sub::repo, ebuild scheduled for merge)` for a
+    /// merge-bound selected entry, `(cpv:slot/sub::repo, installed)`
+    /// for an installed one (vdb repo, `__unknown__` fallback).
+    pub selected_display: String,
+    /// `(cpv:slot/sub::repo, ebuild scheduled for merge)` for the
+    /// masked higher version (never installed: real excludes
+    /// `pkg.installed` from missed updates, `:1539-1542`).
+    pub skipped_display: String,
+    /// The missing atom's disclosure: masked-only candidates, or the
+    /// plain miss when the atom names nothing at all.
+    pub dep: SkippedDepDisclosure,
+}
+
+/// The missing atom's disclosure inside [`SkippedMissingDepFull`]:
+/// reuses the settled-pass report shapes, with the chain pinned to the
+/// single skipped parent (see above).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkippedDepDisclosure {
+    Masked(MaskedDepReport),
+    Plain(PlainMissDepReport),
 }
 
 /// Backlog #90 (S2): real `_solve_non_slot_operator_slot_conflicts`
@@ -20161,6 +21130,25 @@ pub(crate) fn direct_solve_slot_conflicts(input: DirectSolveInput<'_>) -> Direct
                     if direct_solve_atom_matches(&input, c, jj, &p.atom, false) {
                         continue;
                     }
+                    // Backlog #230: the slot instances' own
+                    // `use_display` is the slot-collision notice's
+                    // IUSE-only rendering; the skipped block renders
+                    // real's full `pkg_use_display` instead (recomputed
+                    // here -- the notice keeps its own).
+                    let skipped_use = skipped_update_use_display_for(
+                        input.repos,
+                        input.config,
+                        &c.category,
+                        &c.package,
+                        &inst.version,
+                    );
+                    let consumer_use = skipped_consumer_use_display(
+                        input.repos,
+                        input.root,
+                        input.config,
+                        &p.parent_cpv,
+                        p.installed,
+                    );
                     skipped.push(SkippedUpdate {
                         category: c.category.clone(),
                         package: c.package.clone(),
@@ -20168,11 +21156,11 @@ pub(crate) fn direct_solve_slot_conflicts(input: DirectSolveInput<'_>) -> Direct
                         skipped_version: inst.version.clone(),
                         skipped_sub_slot: inst.sub_slot.clone(),
                         skipped_repo: inst.repo_name.clone(),
-                        skipped_use: inst.use_display.clone(),
+                        skipped_use,
                         atom: p.atom.clone(),
                         consumer_cpv: p.parent_cpv.clone(),
                         consumer_installed: p.installed,
-                        consumer_use: p.use_display.clone(),
+                        consumer_use,
                     });
                 }
             }
@@ -20359,11 +21347,13 @@ pub(crate) fn constraint_withheld_updates(
                 skipped_version: wver.clone(),
                 skipped_sub_slot: wsub,
                 skipped_repo: wrepo.clone(),
-                skipped_use: pkg_use_display_for(repos, config, &pin.cp.0, &pin.cp.1, &wver),
+                skipped_use: skipped_update_use_display_for(
+                    repos, config, &pin.cp.0, &pin.cp.1, &wver,
+                ),
                 atom: pin.raw_atom.clone(),
                 consumer_cpv: format!("{cc}/{cp2}-{cv}:{cslot}/{csub}::{crepo}"),
                 consumer_installed: true,
-                consumer_use: installed_use_display_for(root, config, cc, cp2, cv),
+                consumer_use: skipped_update_installed_use_display_for(root, config, cc, cp2, cv),
             });
         }
     }
@@ -20420,11 +21410,11 @@ type SkippedUpdateKey = (
 /// rows (same shape as the direct-solve rows -- one row per rejecting
 /// parent, like the established provisional shape, where real renders
 /// one block with every parent inside); real's `"missing dependency"`
-/// becomes [`SkippedMissingDep`] slots *only when the missing atom
-/// still matches a backtrack-masked version at settle time* -- real's
-/// `check_backtrack` probe (`:6471-6484`: raise `_backtrack_mask`,
-/// abbreviated tail) as opposed to the full per-update form it prints
-/// otherwise, which has no portuale renderer.
+/// becomes [`SkippedMissingDep`] slots when the missing atom still
+/// matches a backtrack-masked version at settle time (real's
+/// `check_backtrack` probe (`:6471-6484`): raise `_backtrack_mask`,
+/// abbreviated tail), and [`SkippedMissingDepFull`] rows otherwise
+/// (backlog #198: the full per-update form, `:1592-1636`).
 ///
 /// Deliberate narrowings (all documented at the call site too):
 /// - one root only (portuale resolves a single root; real keys by
@@ -20435,10 +21425,11 @@ type SkippedUpdateKey = (
 /// - a masked version with no tree metadata (no slot to key on) is
 ///   skipped: there is no honest slot_atom for it.
 /// - a `"missing dependency"` record whose atom matches nothing
-///   backtrack-masked at settle time is skipped, not rendered: real
-///   shows its full form there, which is its own slice (no renderer
-///   exists here). Silence preserves current behaviour on those
-///   un-oracled shapes.
+///   backtrack-masked at settle time becomes a
+///   [`SkippedMissingDepFull`] row (backlog #198) -- except when no
+///   settled entry holds the slot (defensive; real's `any_selected`
+///   gate already filtered that) or the masked version's tree metadata
+///   cannot name the skipped node (same slot-narrowing as above).
 /// - cross-source collapse against the direct-solve rows happens at
 ///   the call site (`collapse_skipped_updates`, real `:1553-1562`):
 ///   per slot only the highest-version rows survive, whichever source
@@ -20452,7 +21443,11 @@ pub(crate) fn backtrack_missed_updates(
     config: &portage_profile::Config,
     entries: &[GraphEntry],
     params: &BacktrackParams,
-) -> (Vec<SkippedUpdate>, Vec<SkippedMissingDep>) {
+) -> (
+    Vec<SkippedUpdate>,
+    Vec<SkippedMissingDep>,
+    Vec<SkippedMissingDepFull>,
+) {
     // First-seen position per negative (real's dict insertion order;
     // defensive `usize::MAX` for entries the order vector never saw).
     let order_of = |cp: &(String, String), neg: &str| -> usize {
@@ -20574,6 +21569,7 @@ pub(crate) fn backtrack_missed_updates(
     });
     let mut skipped: Vec<SkippedUpdate> = Vec::new();
     let mut missing: Vec<SkippedMissingDep> = Vec::new();
+    let mut full: Vec<SkippedMissingDepFull> = Vec::new();
     for ((cat, pkg, slot), (ver, _, reason, sub, repo)) in kept {
         match reason {
             MaskReason::SlotConflict { parents } => {
@@ -20581,6 +21577,30 @@ pub(crate) fn backtrack_missed_updates(
                     if pc.is_empty() {
                         continue;
                     }
+                    // Backlog #205: an installed enforcing consumer
+                    // (the world-reachable bound behind an enforced
+                    // pin) renders vdb-based -- `(<cpv>, installed
+                    // ...)` with the vdb repo (`__unknown__`
+                    // fallback), like real `str(Package)` for an
+                    // installed node and like the withhold rows'
+                    // established shape -- instead of the
+                    // merge-scheduled tree form. A graph puller keeps
+                    // the tree form.
+                    let installed_ref = installed_refs(root, &pc, &pp)
+                        .into_iter()
+                        .find(|r| r.version == pv);
+                    let (consumer_cpv, consumer_installed, consumer_use) = match &installed_ref {
+                        Some(r) => (
+                            format!("{pc}/{pp}-{pv}:{}/{}::{}", r.slot, r.sub_slot, r.repo),
+                            true,
+                            skipped_update_installed_use_display_for(root, config, &pc, &pp, &pv),
+                        ),
+                        None => (
+                            slot_conflict_puller_cpv(repos, &pc, &pp, &pv),
+                            false,
+                            skipped_update_use_display_for(repos, config, &pc, &pp, &pv),
+                        ),
+                    };
                     skipped.push(SkippedUpdate {
                         category: cat.clone(),
                         package: pkg.clone(),
@@ -20588,11 +21608,13 @@ pub(crate) fn backtrack_missed_updates(
                         skipped_version: ver.clone(),
                         skipped_sub_slot: sub.clone(),
                         skipped_repo: repo.clone(),
-                        skipped_use: pkg_use_display_for(repos, config, &cat, &pkg, &ver),
+                        skipped_use: skipped_update_use_display_for(
+                            repos, config, &cat, &pkg, &ver,
+                        ),
                         atom,
-                        consumer_cpv: slot_conflict_puller_cpv(repos, &pc, &pp, &pv),
-                        consumer_installed: false,
-                        consumer_use: pkg_use_display_for(repos, config, &pc, &pp, &pv),
+                        consumer_cpv,
+                        consumer_installed,
+                        consumer_use,
                     });
                 }
             }
@@ -20603,6 +21625,10 @@ pub(crate) fn backtrack_missed_updates(
                         package: pkg.clone(),
                         slot: slot.clone(),
                     });
+                } else if let Some(row) = missing_dep_full_row(
+                    repos, root, config, entries, &cat, &pkg, &slot, &ver, &sub, &repo, &atom,
+                ) {
+                    full.push(row);
                 }
             }
             // Unreachable: the collection loop above skips
@@ -20610,7 +21636,116 @@ pub(crate) fn backtrack_missed_updates(
             MaskReason::SlotOperatorBuilt => {}
         }
     }
-    (skipped, missing)
+    (skipped, missing, full)
+}
+/// Backlog #198: build the full-form row for a missing-dependency mask
+/// whose atom bites nothing backtrack-masked at settle time (real
+/// `_show_missed_update_unsatisfied_dep`, `depgraph.py:1592-1636`).
+/// `cat/pkg` at `slot` is the masked higher version `ver` (tree
+/// sub-slot `sub`, tree repo `repo`); `atom` is the missing atom text
+/// as queued. Returns `None` when no settled entry holds the slot
+/// (real's `any_selected` gate) or the masked version's tree metadata
+/// cannot name the skipped node.
+#[allow(clippy::too_many_arguments)]
+fn missing_dep_full_row(
+    repos: &[RepoConfig],
+    root: &Path,
+    config: &portage_profile::Config,
+    entries: &[GraphEntry],
+    cat: &str,
+    pkg: &str,
+    slot: &str,
+    ver: &str,
+    sub: &str,
+    repo: &str,
+    atom: &str,
+) -> Option<SkippedMissingDepFull> {
+    // Real's `selected_pkg`: the tracker's match for the slot -- a
+    // merge-bound entry first, else the installed instance.
+    let mut selected_merge: Option<(&str, &str, &str, &str)> = None;
+    let mut selected_installed: Option<&str> = None;
+    for e in entries {
+        if e.category != cat || e.package != pkg {
+            continue;
+        }
+        match &e.outcome {
+            PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+                if e.slot.as_deref() == Some(slot) {
+                    selected_merge = Some((
+                        version.as_str(),
+                        e.slot.as_deref().unwrap_or(slot),
+                        e.sub_slot.as_deref().unwrap_or(sub),
+                        e.repo_name.as_deref().unwrap_or(repo),
+                    ));
+                    break;
+                }
+            }
+            PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
+                if e.slot.as_deref() == Some(slot) {
+                    selected_merge = Some((
+                        to.as_str(),
+                        e.slot.as_deref().unwrap_or(slot),
+                        e.sub_slot.as_deref().unwrap_or(sub),
+                        e.repo_name.as_deref().unwrap_or(repo),
+                    ));
+                    break;
+                }
+            }
+            PretendOutcome::AlreadyInstalled { version } => {
+                if selected_installed.is_none() && read_vdb_slot(root, cat, pkg, version).0 == slot
+                {
+                    selected_installed = Some(version.as_str());
+                }
+            }
+            PretendOutcome::NoVisibleCandidate | PretendOutcome::Uninstall { .. } => {}
+        }
+    }
+    let selected_display = if let Some((v, s, ss, r)) = selected_merge {
+        format!("({cat}/{pkg}-{v}:{s}/{ss}::{r}, ebuild scheduled for merge)")
+    } else {
+        let v = selected_installed?;
+        let (s, ss) = read_vdb_slot(root, cat, pkg, v);
+        let r = installed_pkg_repo(root, cat, pkg, v);
+        format!("({cat}/{pkg}-{v}:{s}/{ss}::{r}, installed)")
+    };
+    let skipped_display =
+        format!("({cat}/{pkg}-{ver}:{slot}/{sub}::{repo}, ebuild scheduled for merge)");
+    // The skipped package is not in the settled graph, so the chain is
+    // the single skipped node (real stops there, no `(argument)` line).
+    let chain = vec![(format!("{cat}/{pkg}-{ver}::{repo}"), "ebuild".to_string())];
+    let dep = match masked_candidates_for_atom(repos, atom, config) {
+        Some(masked) => {
+            let (acat, apkg) = portage_dep::parse_atom(atom)
+                .map(|a| (a.category, a.package))
+                .unwrap_or_else(|| (cat.to_string(), pkg.to_string()));
+            SkippedDepDisclosure::Masked(MaskedDepReport {
+                category: acat,
+                package: apkg,
+                atom: atom.to_string(),
+                masked,
+                chain,
+            })
+        }
+        None => {
+            let (acat, apkg) = portage_dep::parse_atom(atom)
+                .map(|a| (a.category, a.package))
+                .unwrap_or_else(|| (cat.to_string(), pkg.to_string()));
+            SkippedDepDisclosure::Plain(PlainMissDepReport {
+                category: acat,
+                package: apkg,
+                atom: atom.to_string(),
+                chain,
+            })
+        }
+    };
+    Some(SkippedMissingDepFull {
+        category: cat.to_string(),
+        package: pkg.to_string(),
+        slot: slot.to_string(),
+        selected_display,
+        skipped_display,
+        dep,
+    })
 }
 
 /// Backlog #129 (review): real `_get_missed_updates` chains
@@ -20808,6 +21943,17 @@ pub enum AbortReason {
     /// tree nesting/`[nomerge]` rows stay a deliberate cut
     /// (dedup-by-design, Gate G0.2).
     UnserializableCycle { members: Vec<String> },
+    /// Real `depgraph._virt_deps_visible`'s virtual-cycle failure
+    /// (backlog #193): a merge-bound `virtual/` package (transitively)
+    /// requires itself through selected virtual providers, so the
+    /// virtual can never resolve to a real package. Real raises out of
+    /// the walk (`_virtual_cycle_error`, `depgraph.py:6215-6216`),
+    /// prints `!!! virtual cycle detected:` with one `  {cpv}::{repo}`
+    /// line per probe-stack member (`select_files`, `:5002-5013`), and
+    /// fails with no merge list. `members` are those `cpv::repo` lines
+    /// in real's sorted order (see [`find_virtual_cycles`]); the
+    /// renderer prefixes the two spaces.
+    VirtualCycle { members: Vec<String> },
 }
 
 /// Whether the resolve ran to completion or was abandoned: real's
@@ -20884,7 +22030,24 @@ pub fn abort_outcome(
     circular_deps: &[Vec<String>],
     cycle_display: &[String],
     nvc_dep_atoms: &HashMap<(String, String), String>,
+    virtual_cycle: &[String],
 ) -> ResolveOutcome {
+    // Backlog #193: real's virtual-cycle failure is an exception raised
+    // out of the walk (`_virtual_cycle_error` propagating through
+    // `_resolve` to `select_files`, `depgraph.py:5002`), so it preempts
+    // every serialize-time failure the way a walk-time masked/unsat miss
+    // does -- checked before both. Against a masked/unsat miss in the
+    // same graph real reports whichever its DFS reaches first (a walk-
+    // order artefact); virtual-first is the documented choice, and no
+    // fixture shapes both at once.
+    if !virtual_cycle.is_empty() {
+        return ResolveOutcome::Aborted {
+            reason: AbortReason::VirtualCycle {
+                members: virtual_cycle.to_vec(),
+            },
+            partial: Vec::new(),
+        };
+    }
     for entry in entries {
         if !matches!(entry.outcome, PretendOutcome::NoVisibleCandidate) {
             continue;
@@ -20992,6 +22155,11 @@ pub struct GraphResult {
     /// Rendered right after [`GraphResult::skipped_updates`] by
     /// `pretend.rs`, in first-mask order like the `WARNING` rows.
     pub skipped_missing_deps: Vec<SkippedMissingDep>,
+    /// Backlog #198: updates real reports through the full
+    /// unsatisfied-dependencies form (see [`SkippedMissingDepFull`]).
+    /// Rendered right after [`GraphResult::skipped_missing_deps`] by
+    /// `pretend.rs`, in the same first-mask order.
+    pub skipped_missing_dep_full: Vec<SkippedMissingDepFull>,
     /// Backlog #80: unresolved blocker rows whose owner has no display
     /// entry (scan-collected, absent from the graph). The renderer
     /// prints them in the trailing blocker group, counts them in
@@ -21137,6 +22305,13 @@ pub struct GraphResult {
     /// a package under two parents the way real's ordered tree does;
     /// isolating *which* packages is what's ported).
     pub cycle_display: Vec<String>,
+    /// Backlog #193: real `depgraph._virt_deps_visible`'s probe-stack
+    /// members for a virtual cycle among the merge-bound entries (see
+    /// [`find_virtual_cycles`]): `cpv::repo` lines in real's sorted
+    /// order. Non-empty exactly when the outcome is
+    /// `Aborted { VirtualCycle }`; the renderer prints real's
+    /// `!!! virtual cycle detected:` block from it and exits 1.
+    pub virtual_cycle: Vec<String>,
     /// Masked-only dependency disclosures (real `_show_unsatisfied_dep`'s
     /// "All ebuilds that could satisfy … have been masked" block for a
     /// *dependency* atom): one per dependency `NoVisibleCandidate` entry
@@ -21238,6 +22413,17 @@ pub struct AutounmaskChange {
     /// package parent, `required by <atom> (argument)` for a command-line
     /// argument.
     pub dep_chain: Vec<String>,
+    /// Backlog #205: the `(category, package)` whose atom mismatch
+    /// forced this USE flip (real `_get_dep_chain`'s
+    /// `unsatisfied_dependency` first parent). `None` for
+    /// keyword/license/mask changes (real renders those without the
+    /// unsatisfied filter) and for flips whose trigger is the change
+    /// owner itself (parent-flip rescues). The post-loop fill starts
+    /// the chain there instead of at the first requirer; a stale
+    /// trigger (no longer a requirer) falls back to the legacy start.
+    /// Travels with the record across backtrack passes (it names the
+    /// flip site, which the re-resolve reproduces).
+    pub trigger: Option<(String, String)>,
 }
 
 /// Real `_get_dep_chain_as_comment` (`depgraph.py:6457`), narrowed to
@@ -22135,6 +23321,9 @@ fn expand_resolved_slot_with_flipped_use(
         &tokens,
         new_use,
         portage_use_reduce::MatchMode::Normal,
+        md5_dict::eapi_empty_groups_always_true(
+            delta_meta.get("EAPI").map(String::as_str).unwrap_or("0"),
+        ),
         &mut |atoms: &[String]| {
             disjunction_preference(
                 &ctx.repos,
@@ -22143,6 +23332,7 @@ fn expand_resolved_slot_with_flipped_use(
                 &state.entries,
                 key,
                 union_constraints,
+                &bp.circular_dependency,
                 ctx.root_deps_running_root,
                 atoms,
                 &queued,
@@ -22175,6 +23365,9 @@ fn expand_resolved_slot_with_flipped_use(
                 config,
                 root,
                 &["DEPEND", "BDEPEND", "IDEPEND"],
+                md5_dict::eapi_empty_groups_always_true(
+                    delta_meta.get("EAPI").map(String::as_str).unwrap_or("0"),
+                ),
             )
         })
         .unwrap_or_default();
@@ -22188,6 +23381,9 @@ fn expand_resolved_slot_with_flipped_use(
                 config,
                 root,
                 &["DEPEND", "BDEPEND", "IDEPEND"],
+                md5_dict::eapi_empty_groups_always_true(
+                    delta_meta.get("EAPI").map(String::as_str).unwrap_or("0"),
+                ),
             )
         })
         .unwrap_or_default();
@@ -22401,7 +23597,15 @@ fn expand_resolved_slot_with_flipped_use(
 ///   - `complete_if_new_use`: `node.iuse.all != inst_pkg.iuse.all` or the
 ///     enabled-USE ∩ IUSE sets differ -- portuale's `--newuse`/
 ///     `--changed-use` `Reinstall`, whose `changed_flags` is real
-///     `_reinstall_for_flags`'s own return value.
+///     `_reinstall_for_flags`'s own return value, *plus* a bare
+///     reasonless `[ebuild R]` for an explicitly-requested installed
+///     package (backlog #222): real compares the merge node's own USE
+///     against the vdb unconditionally, while `changed_flags` is only
+///     ever computed under `--newuse`/`--changed-use`. The reasonless
+///     shape is detected with the same fresh `iuse.all` /
+///     enabled-∩-IUSE diff real makes (`merge_use_changed_vs_installed`),
+///     falling back to `changed_flags` when the merge side is
+///     unreadable.
 ///   - `complete_if_new_slot`: `vardb.match_pkgs(Atom(node.cp))` exists,
 ///     same `cp`, and no installed pkg matches `node`'s slot/sub-slot
 ///     (8634-8645) -- a new-slot install, portuale's `New` + `new_slot`.
@@ -22410,23 +23614,38 @@ fn expand_resolved_slot_with_flipped_use(
 /// (if it returns `true` and neither `--complete-graph` nor `--deep` is
 /// already in force) re-resolves with `complete = true` -- see
 /// `pretend.rs`'s two-pass, which mirrors real portage's own "resolve,
-/// then `_complete_graph` re-walk" structure. Narrowing vs real: the
-/// USE comparison is `changed_flags` (already computed against the vdb),
-/// not a fresh `iuse.all` / enabled-∩-IUSE diff.
+/// then `_complete_graph` re-walk" structure.
 pub fn complete_graph_auto_enable(
     entries: &[GraphEntry],
     if_new_use: bool,
     if_new_ver: bool,
     if_new_slot: bool,
+    root: &Path,
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
 ) -> bool {
     entries.iter().any(|e| match &e.outcome {
         PretendOutcome::Upgrade { .. } | PretendOutcome::Downgrade { .. } => if_new_ver,
         PretendOutcome::New { .. } if e.new_slot => if_new_ver || if_new_slot,
         PretendOutcome::Reinstall {
+            version,
             changed_flags,
             slot_changed,
             ..
-        } => (if_new_use && !changed_flags.is_empty()) || (if_new_ver && *slot_changed),
+        } => {
+            (if_new_ver && *slot_changed)
+                || (if_new_use
+                    && (!changed_flags.is_empty()
+                        || merge_use_changed_vs_installed(
+                            root,
+                            repos,
+                            config,
+                            &e.category,
+                            &e.package,
+                            version,
+                        )
+                        .unwrap_or(false)))
+        }
         _ => false,
     })
 }
@@ -23194,6 +24413,7 @@ fn params_equal(a: &BacktrackParams, b: &BacktrackParams) -> bool {
         && a.reverse_dep_pins == b.reverse_dep_pins
         && a.slot_constraints == b.slot_constraints
         && a.runtime_pkg_mask == b.runtime_pkg_mask
+        && a.circular_dependency == b.circular_dependency
         && a.autounmask_use_config == b.autounmask_use_config
         && a.autounmask_use_change_records == b.autounmask_use_change_records
         && a.autounmask_use_broke == b.autounmask_use_broke
@@ -23320,9 +24540,9 @@ impl Backtracker {
             .expect("feedback() only after get() returned params");
         let current_terminal = self.nodes[current_idx].terminal;
         let (mut params, terminal, mask_cost) = match kind {
-            BacktrackFeedback::Config { params } | BacktrackFeedback::RevDep { params } => {
-                (*params, current_terminal, 0)
-            }
+            BacktrackFeedback::Config { params }
+            | BacktrackFeedback::RevDep { params }
+            | BacktrackFeedback::Circular { params } => (*params, current_terminal, 0),
             BacktrackFeedback::SlotConflict { base, choices } => {
                 // #57 S1: keep the pass's merged accumulators on the node
                 // itself, exactly as `PassDecision::DeadEnd` does -- the
@@ -23611,6 +24831,17 @@ enum BacktrackFeedback {
         base: Box<BacktrackParams>,
         choices: Vec<MaskChoice>,
     },
+    /// Backlog #216: the serialize dead-end retry (real
+    /// `_serialize_tasks`' `not selected_nodes` branch setting
+    /// `_need_restart` with a grown `circular_dependency` map). Carries
+    /// the grown working copy like `Config`/`RevDep` and behaves
+    /// identically inside the search (budget-free re-pass, not a mask
+    /// step): the driver explores it when backtracking and settles the
+    /// pass as-is under `--backtrack=0`, where it renders the circular
+    /// abort like real's own pass-0 display.
+    Circular {
+        params: Box<BacktrackParams>,
+    },
     MissingDep {
         base: Box<BacktrackParams>,
         owner: (String, String),
@@ -23670,6 +24901,24 @@ struct BacktrackParams {
     /// (real's `dep.parent not in _runtime_pkg_mask` check) holds every
     /// `!=parent-cpv` already tried, guaranteeing termination.
     missing_dep_masked: HashSet<String>,
+    /// Backlog #216: real `_serialize_tasks`' circular dead-end
+    /// (`depgraph.py:10262-10289`, the `not selected_nodes` branch of
+    /// `_serialize_tasks`' `altlist`): the walk finished but a hard
+    /// cycle -- now including a true self-loop, see `find_hard_cycles`
+    /// -- leaves nodes unselectable. Real records every (node → its
+    /// predecessor in the cycle) edge into the `circular_dependency`
+    /// backtrack map, and the next pass's `dep_zapdeps` demotes any
+    /// `||` alternative matching a recorded child to `other`
+    /// (`dep_check.py:673-691` -- see `disjunction_preference`'s
+    /// `circular_dep` argument). Owner `(cat, pkg)` → circular-child cpv
+    /// strings (real keys by `Package`; the cpv carries the same
+    /// identity for `match_from_list`, and the installed exemption is
+    /// re-checked at use). Compared by `params_equal` (new edges = new
+    /// search state); monotone along a search path and bounded by the
+    /// owner×child product, so the loop terminates: a pass whose cycle
+    /// adds nothing new is an unsolved cycle (real's `unsolved_cycle` →
+    /// `_skip_restart`), reported, not retried.
+    circular_dependency: HashMap<(String, String), Vec<String>>,
     /// Real `_complete_graph`'s own parent atoms, discovered by vdb
     /// reverse scan -- see `reverse_dependency_constraints`. Latches every
     /// `(cat/pkg, atom)` already folded into `slot_constraints` so a
@@ -24688,6 +25937,10 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 state.autounmask_use_changes.push(AutounmaskChange {
                     atom: autounmask_use_atom_form(&parent_cand, &parent_all, &pc, &pp, config),
                     token,
+                    // A parent-flip rescue names the flipped parent, not
+                    // the failed dep: no single forcing parent, legacy
+                    // fill (backlog #205).
+                    trigger: None,
                     // When the change's own package is itself a
                     // top-level argument, real's dep chain is just the
                     // argument line: `_get_dep_chain` never prints the
@@ -24829,6 +26082,12 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                         atom: atom_form,
                         token,
                         dep_chain: Vec::new(),
+                        // Backward-cascade overlay: the flip serves an
+                        // already-resolved slot, and the current dep's
+                        // owner is often not the forcing parent (e.g.
+                        // the bare-depending top package) -- no single
+                        // forcing parent, legacy fill (backlog #205).
+                        trigger: None,
                     });
                 }
                 state.autounmask_grew = true;
@@ -25044,10 +26303,15 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         let Some(version) = resolved_version else {
             // Real `_feedback_missing_dep`: this dependency atom has
             // no matching package. If backtracking is live and its
-            // parent is a merge-bound, non-top-level entry not yet
-            // tried, remember to mask `!=parent-cpv` and retry -- so a
-            // `||` group whose chosen alternative has an unsatisfiable
-            // subtree yields to the next alternative. Only the first
+            // parent is a merge-bound entry not yet tried, remember to
+            // mask `!=parent-cpv` and retry -- so a `||` group whose
+            // chosen alternative has an unsatisfiable subtree yields to
+            // the next alternative, and so a top-level-selected version
+            // whose dependency is unmaskable yields to the next older
+            // version (backlog #198: `akk0a-2` masked, `akk0a-1` picked,
+            // real `depgraph.py:3493-3503` + `backtracking.py:197-207`
+            // carry no top-level exemption -- the mask names one cpv,
+            // never the requested package itself). Only the first
             // such trigger per pass is acted on (like real, one
             // backtrack node at a time); the NVC entry is still built
             // below so an un-fixable dep is reported unchanged.
@@ -25075,7 +26339,6 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 && state.missing_dep_trigger.is_none()
                 && !atom_currently_satisfiable(&ctx.repos, bare_atom, config, &masked_probe)
                 && let Some((pc, pp)) = owner.clone()
-                && !ctx.top_level_cps.contains(&(pc.clone(), pp.clone()))
             {
                 let parent_cpv = state
                     .entries
@@ -25295,6 +26558,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     &mut state.installed_meta_memo,
                     &mut state.slot_pullers,
                     &union_constraints,
+                    &bp.circular_dependency,
                     ctx.update,
                     &ctx.local_binpkg,
                 );
@@ -25913,6 +27177,8 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                                     atom: atom_form,
                                     token,
                                     dep_chain: Vec::new(),
+                                    // Backward-cascade overlay: see above.
+                                    trigger: None,
                                 });
                             }
                             // Real `_backtrack_depgraph` finishes
@@ -26056,6 +27322,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 atom: format!("={}/{}-{version}", key.0, key.1),
                 token: kw.to_string(),
                 dep_chain: Vec::new(),
+                trigger: None,
             });
         }
         // Real `--autounmask-license`: `resolve_pretend` accepted this
@@ -26073,6 +27340,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     atom: check_if_latest_atom_form(resolved, &all, &key.0, &key.1, config, false),
                     token: missing.join(" "),
                     dep_chain: Vec::new(),
+                    trigger: None,
                 });
             }
         }
@@ -26090,6 +27358,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 atom: format!("={}/{}-{version}", key.0, key.1),
                 token: String::new(),
                 dep_chain: Vec::new(),
+                trigger: None,
             });
         }
         // Real `_get_installed_best`'s `new_slot`: a `New` entry whose
@@ -26285,6 +27554,8 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     ),
                     token,
                     dep_chain: Vec::new(),
+                    // This dep's owner forced the flip.
+                    trigger: owner.clone(),
                 });
             }
         }
@@ -26754,15 +28025,15 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         // alternative wins on the retry -- `disjunction_preference`
         // takes `slot_constraints` itself (not a lookup closure over
         // it; see that function's own doc comment for why).
-        // Real `dep_zapdeps` skips a `||` alternative that would only
-        // be satisfied by the package currently being resolved (a
-        // circular self-dep) -- e.g. `dev-lang/go`'s BDEPEND
-        // `|| ( >=dev-lang/go-<min> >=dev-lang/go-bootstrap-<min> )`
-        // with nothing installed: the first branch's only tree match
-        // *is* `dev-lang/go`, so real falls through to the
-        // `go-bootstrap` branch. An atom whose `cat/pkg` is this
-        // entry's own and which nothing installed satisfies counts
-        // as unavailable here.
+        // Backlog #216: real `dep_zapdeps` has no self-exclusion on the
+        // first pass -- e.g. `dev-lang/go`'s BDEPEND
+        // `|| ( >=dev-lang/go-<min> dev-lang/go-bootstrap-<min> )` with
+        // in-graph `go` ranks the first branch `preferred_in_graph`
+        // (bin 0), so the cycle forms and the `circular_dependency`
+        // map re-resolves it (`BacktrackParams::circular_dependency`);
+        // only a self atom matching nothing in-graph (and nothing
+        // installed) refuses. See `disjunction_preference`'s own
+        // circular-self-dep check.
         let self_cp = (
             state.entries[entry_idx].category.clone(),
             state.entries[entry_idx].package.clone(),
@@ -26782,6 +28053,9 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             &tokens,
             &use_flags,
             portage_use_reduce::MatchMode::Normal,
+            md5_dict::eapi_empty_groups_always_true(
+                metadata.get("EAPI").map(String::as_str).unwrap_or("0"),
+            ),
             &mut |atoms: &[String]| {
                 disjunction_preference(
                     &ctx.repos,
@@ -26790,6 +28064,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     &state.entries,
                     &self_cp,
                     &union_constraints,
+                    &bp.circular_dependency,
                     ctx.root_deps_running_root,
                     atoms,
                     &queued,
@@ -26825,6 +28100,9 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     config,
                     root,
                     &["DEPEND", "BDEPEND", "IDEPEND"],
+                    md5_dict::eapi_empty_groups_always_true(
+                        metadata.get("EAPI").map(String::as_str).unwrap_or("0"),
+                    ),
                 )
             })
             .unwrap_or_default();
@@ -26855,6 +28133,9 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     config,
                     root,
                     &["DEPEND", "BDEPEND", "IDEPEND"],
+                    md5_dict::eapi_empty_groups_always_true(
+                        metadata.get("EAPI").map(String::as_str).unwrap_or("0"),
+                    ),
                 )
             })
             .unwrap_or_default();
@@ -27237,6 +28518,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             ctx.dynamic_deps,
             ctx.ignore_built_slot_operator_deps,
             &union_constraints,
+            &bp.circular_dependency,
             ctx.root_deps_running_root,
             &state.entries,
             &mut state.pending_blockers,
@@ -27469,12 +28751,79 @@ fn collect_feedback(
             ctx.ignore_built_slot_operator_deps,
             &ctx.top_level_cps,
             &ctx.world_reachable,
+            ctx.config,
+            ctx.complete,
         );
         for pin in dropped {
             if !grown.dropped_pins.contains(&pin) {
                 grown.dropped_pins.push(pin);
             }
         }
+    }
+
+    // Backlog #216: real `_serialize_tasks`' circular dead-end
+    // (`depgraph.py:10262-10289`). The walk finished but the merge-bound
+    // graph does not serialize: a hard build-time cycle -- now including
+    // a true self-loop (see `find_hard_cycles`) -- leaves nodes
+    // unselectable. Real records every (node → its predecessor in the
+    // cycle) edge into the `circular_dependency` backtrack map and
+    // retries, and the next pass's `dep_zapdeps` demotes the matching
+    // `||` branch to `other` (see `disjunction_preference`'s
+    // `circular_dep` argument). A cycle that adds nothing new is
+    // unsolved (real's `unsolved_cycle` → `_skip_restart`): a dead end,
+    // reported from the best run, not retried.
+    //
+    // Scope (`cycle_restartable`): only the fresh self-pick shape
+    // retries. Every other hard cycle falls through to the pre-existing
+    // arms exactly as before (a walk-time NVC still beats it below,
+    // multi-node rings still settle into the abort path via
+    // `assemble_result`), so their reports are byte-identical with and
+    // without this slice.
+    //
+    // Placed before the slot-conflict arms: a deadlocked graph pre-empts
+    // conflict repair (real never reaches conflict processing with a
+    // failed serialize); a re-pass whose demotion clears the cycle
+    // re-runs those arms normally.
+    let hard_cycles = find_hard_cycles(&pass.entries, &pass.edge_kind_map, ctx.root);
+    if hard_cycles.len() == 1
+        && cycle_restartable(
+            &pass.entries,
+            &kept_alt_branches(&pass.entries, ctx.root),
+            &hard_cycles[0],
+            ctx.root,
+        )
+    {
+        let mut new_info = false;
+        for cycle in &hard_cycles {
+            for (index, node_cpv) in cycle.iter().enumerate() {
+                let Some((node_cat, node_pkg, _)) = split_cpv(node_cpv) else {
+                    continue;
+                };
+                // Real's own predecessor formula: `cycle[-1]` for index
+                // 0, `cycle[index-1]` otherwise.
+                let child_cpv = if index == 0 {
+                    &cycle[cycle.len() - 1]
+                } else {
+                    &cycle[index - 1]
+                };
+                let bucket = grown
+                    .circular_dependency
+                    .entry((node_cat, node_pkg))
+                    .or_default();
+                if !bucket.contains(child_cpv) {
+                    bucket.push(child_cpv.clone());
+                    new_info = true;
+                }
+            }
+        }
+        if new_info {
+            return PassDecision::Feedback(BacktrackFeedback::Circular {
+                params: Box::new(grown),
+            });
+        }
+        return PassDecision::DeadEnd {
+            params: Box::new(grown),
+        };
     }
 
     // Backtracking (real `backtracking.py` retry loop driven by
@@ -27691,6 +29040,8 @@ fn collect_feedback(
         ctx.ignore_built_slot_operator_deps,
         &ctx.top_level_cps,
         &ctx.world_reachable,
+        ctx.config,
+        ctx.complete,
     );
     // #24 S4: rule 4 of `_eliminate_rebuilds` checks every parent atom of
     // the rebuilt pkg, and real's complete-graph nomerge consumers are
@@ -27709,6 +29060,59 @@ fn collect_feedback(
             .reverse_dep_masked
             .insert((pin.cp.clone(), pin.atom.clone()))
         {
+            // Backlog #205: real's "Record missed updates" tail
+            // (`lib/_emerge/depgraph.py:2085-2106`) -- a version the
+            // re-resolve drops for the enforced pin is reported
+            // through `_show_missed_update_slot_conflicts`. Record the
+            // rejection as a slot-conflict-style mask on the chosen
+            // version (parents = the enforcing consumer), so the
+            // existing `backtrack_missed_updates` derivation renders
+            // the `WARNING` row. The positive pin above still drives
+            // selection; the negative excludes nothing the pin does
+            // not already exclude. Gated on a live search like every
+            // mask (real `_allow_backtracking`); budget-free like the
+            // RevDep feedback it rides.
+            if ctx.backtrack_max > 0 {
+                for e in &pass.entries {
+                    if e.category != pin.cp.0 || e.package != pin.cp.1 {
+                        continue;
+                    }
+                    let (ver, slot, sub, repo) = match &e.outcome {
+                        PretendOutcome::New { version }
+                        | PretendOutcome::Reinstall { version, .. } => (
+                            version.as_str(),
+                            e.slot.as_deref().unwrap_or("0"),
+                            e.sub_slot.as_deref().unwrap_or("0"),
+                            e.repo_name.as_deref().unwrap_or(""),
+                        ),
+                        PretendOutcome::Upgrade { to, .. }
+                        | PretendOutcome::Downgrade { to, .. } => (
+                            to.as_str(),
+                            e.slot.as_deref().unwrap_or("0"),
+                            e.sub_slot.as_deref().unwrap_or("0"),
+                            e.repo_name.as_deref().unwrap_or(""),
+                        ),
+                        _ => continue,
+                    };
+                    let candidate = format!("{}/{}-{ver}:{slot}/{sub}::{repo}", pin.cp.0, pin.cp.1);
+                    if portage_dep::match_from_list(&pin.atom, &[candidate.as_str()])
+                        .is_some_and(|m| !m.is_empty())
+                    {
+                        continue;
+                    }
+                    let neg = format!("!={}/{}-{ver}", pin.cp.0, pin.cp.1);
+                    let bucket = grown.runtime_pkg_mask.entry(pin.cp.clone()).or_default();
+                    if !bucket.iter().any(|m| m.neg == neg) {
+                        bucket.push(MaskEntry {
+                            neg: neg.clone(),
+                            reason: MaskReason::SlotConflict {
+                                parents: vec![(pin.consumer.clone(), pin.atom.clone())],
+                            },
+                        });
+                        grown.mask_order.push((pin.cp.clone(), neg));
+                    }
+                }
+            }
             // C1: enforced pins are positive enforcement atoms (the
             // consumer's recorded atom must keep matching), not
             // masks -- they stay in the positives bucket, exactly
@@ -27898,6 +29302,48 @@ fn collect_feedback(
 /// and the `GraphResult`. Residual conflicts (`slot_conflicts`
 /// extension) live here, not in `PassResult`: no `continue`
 /// follows them, so they cannot influence a retry.
+/// Backlog #205: USE changes start their chain at the forcing
+/// parent, not the first requirer. Real `_get_dep_chain(pkg,
+/// unsatisfied_dependency=True)` (`depgraph.py:6257`) picks the
+/// parent whose atom the package still does not satisfy
+/// (`best_match_to_list`); when every parent is satisfied
+/// post-change -- the ordinary flip shape, the change fixed them
+/// all -- it walks the digraph parents preferring the last merge
+/// parent (bug #354747), i.e. the deepest forcing edge, then the
+/// argument. The flip site records its forcing owner in
+/// `AutounmaskChange::trigger`; the fill starts there when it is
+/// still a requirer, else the legacy first-requirer start stands
+/// (stale triggers after a masking retry, parent-flip rescues).
+/// (Keyword/license/mask changes keep the legacy start: real
+/// renders those without the unsatisfied filter.) The ascent above
+/// that start is unchanged (single-branch, first-requirer hops).
+fn fill_use_change_chains(
+    entries: &[GraphEntry],
+    changes: &mut [AutounmaskChange],
+    top_level: &std::collections::HashSet<&str>,
+    root: &Path,
+) {
+    for change in changes.iter_mut() {
+        if change.dep_chain.is_empty()
+            && let Some(atom) = portage_dep::parse_atom(&change.atom)
+        {
+            let own = (atom.category.clone(), atom.package.clone());
+            let owner = entries
+                .iter()
+                .find(|e| e.category == atom.category && e.package == atom.package)
+                .and_then(|e| {
+                    change
+                        .trigger
+                        .clone()
+                        .filter(|t| e.required_by.contains(t))
+                        .or_else(|| e.required_by.first().cloned())
+                })
+                .or(Some(own));
+            change.dep_chain = autounmask_dep_chain(&owner, &change.atom, top_level, entries, root);
+        }
+    }
+}
+
 fn assemble_result(
     ctx: &ResolveCtx<'_>,
     params: &BacktrackParams,
@@ -28293,7 +29739,6 @@ fn assemble_result(
     for change in pass
         .autounmask_keyword_changes
         .iter_mut()
-        .chain(pass.autounmask_use_changes.iter_mut())
         .chain(pass.autounmask_license_changes.iter_mut())
         .chain(pass.autounmask_mask_changes.iter_mut())
     {
@@ -28322,6 +29767,12 @@ fn assemble_result(
             );
         }
     }
+    fill_use_change_chains(
+        &pass.entries,
+        &mut pass.autounmask_use_changes,
+        &ctx.top_level,
+        ctx.root,
+    );
     // Same walk for the plain-miss disclosures (#135 (d)).
     for rep in &mut pass.plain_miss_deps {
         rep.chain = masked_dep_chain(
@@ -28336,13 +29787,20 @@ fn assemble_result(
     }
 
     // Backlog #19 Slice 3: classify the settled graph the way real's
-    // abandon sites would have (see `abort_outcome`).
+    // abandon sites would have (see `abort_outcome`). Backlog #193:
+    // the virtual-cycle probe runs on the same settled graph (real's
+    // `_virt_deps_visible` recursion over the selected providers);
+    // like `find_hard_cycles` it is unconditional -- its own cheap
+    // gate (no merge-bound virtual, no probe) keeps ordinary resolves
+    // free.
+    let virtual_cycle = find_virtual_cycles(&pass.entries, ctx.root);
     let outcome = abort_outcome(
         &pass.entries,
         &pass.masked_deps,
         &circular_deps,
         &cycle_display,
         &pass.nvc_dep_atoms,
+        &virtual_cycle,
     );
 
     // Backlog #129 (S1): real `display_problems` shows missed updates
@@ -28353,6 +29811,7 @@ fn assemble_result(
     // unsolvable blocker rows and no orphan rows. A mask-free search
     // (including every `--backtrack=0` run) derives nothing here.
     let mut skipped_missing_deps: Vec<SkippedMissingDep> = Vec::new();
+    let mut skipped_missing_dep_full: Vec<SkippedMissingDepFull> = Vec::new();
     if matches!(outcome, ResolveOutcome::Complete)
         && pass.slot_conflicts.is_empty()
         && pass.orphan_blockers.is_empty()
@@ -28361,7 +29820,7 @@ fn assemble_result(
             .iter()
             .any(|e| e.blockers.iter().any(|b| b.unsolvable))
     {
-        let (mask_skipped, mask_missing) =
+        let (mask_skipped, mask_missing, mask_full) =
             backtrack_missed_updates(&ctx.repos, ctx.root, config, &pass.entries, params);
         // Real chains the mask dict before the handler removals
         // (`:1533-1536`), so mask rows lead in first-seen order and the
@@ -28374,6 +29833,7 @@ fn assemble_result(
         combined.append(&mut pass.skipped_updates);
         pass.skipped_updates = collapse_skipped_updates(combined);
         skipped_missing_deps = mask_missing;
+        skipped_missing_dep_full = mask_full;
     }
 
     GraphResult {
@@ -28384,6 +29844,7 @@ fn assemble_result(
         slot_conflicts: pass.slot_conflicts,
         skipped_updates: pass.skipped_updates,
         skipped_missing_deps,
+        skipped_missing_dep_full,
         orphan_blockers: pass.orphan_blockers,
         changed_deps_report: pass.changed_deps_report_entries,
         buildpkgonly_deps_unsatisfied,
@@ -28410,6 +29871,7 @@ fn assemble_result(
         plain_miss_deps: pass.plain_miss_deps,
         large_cycle_count,
         cycle_display,
+        virtual_cycle,
     }
 }
 
@@ -28448,7 +29910,21 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
         let Some(params) = feed_params.take().or_else(|| bt.get()) else {
             break;
         };
-        let mut pass = run_pass(&ctx, &params, first_pass)?;
+        // Real `_backtrack_depgraph`: a retry whose walk fails (a masked
+        // top-level select, backlog #198's single-version peel) is a
+        // failed iteration, not a result -- the search continues and an
+        // exhausted search falls back to the best run. Only the root
+        // pass's own failure propagates (nothing to fall back to). A
+        // feed pass has no node to adopt into, so it is just dropped.
+        let mut pass = match run_pass(&ctx, &params, first_pass) {
+            Ok(pass) => pass,
+            Err(_) if from_feed => continue,
+            Err(_) if !first_pass => {
+                bt.adopt_current(params.clone());
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
         if !from_feed {
             passes += 1;
             restarts = passes - 1;
@@ -28489,7 +29965,8 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
                         kind => {
                             let grown: BacktrackParams = match kind {
                                 BacktrackFeedback::Config { params }
-                                | BacktrackFeedback::RevDep { params } => *params,
+                                | BacktrackFeedback::RevDep { params }
+                                | BacktrackFeedback::Circular { params } => *params,
                                 BacktrackFeedback::SlotConflict { base, .. } => *base,
                                 BacktrackFeedback::MissingDep { base, .. } => *base,
                             };
@@ -29026,6 +30503,11 @@ fn enqueue_dependencies(
     // selection the same way the main New/Upgrade loop's is -- empty on
     // the first pass, so a strict no-op there.
     disj_constraints: &HashMap<(String, String), Vec<String>>,
+    // Backlog #216: the loop's `circular_dependency` map (owner cp →
+    // circular-child cpvs), consulted by the same `||` selection for
+    // real `dep_zapdeps`' `circular_atom` demotion -- empty on the first
+    // pass, so a strict no-op there.
+    circular_dep: &HashMap<(String, String), Vec<String>>,
     // Backlog #90 (S1): `--update`, for the downgrade-guard's
     // queued-update lookahead (same feed as the main walk's
     // `ctx.update` at its own `disjunction_preference` call).
@@ -29134,9 +30616,9 @@ fn enqueue_dependencies(
     // New/Upgrade/Reinstall loop's own identical fix, above, for the
     // full grounding (this is `resolve_pretend_graph`'s own
     // `--deep`/AlreadyInstalled-recursion counterpart to it).
-    // Real `dep_zapdeps` skips a `||` alternative satisfied only by the
-    // package currently being resolved (circular self-dep) -- see the
-    // main New/Upgrade `||` closure's identical `self_cp` check.
+    // Backlog #216: no self-exclusion on the first pass (see the main
+    // walk's note above) -- the shared `disjunction_preference` check
+    // applies here unchanged.
     let self_cp = (category.to_string(), package.to_string());
     // The whole `dep_zapdeps` choice-bin classification lives in the
     // single shared `disjunction_preference` helper -- see its own doc
@@ -29150,6 +30632,11 @@ fn enqueue_dependencies(
         &tokens,
         &use_flags,
         portage_use_reduce::MatchMode::Normal,
+        // Installed `--deep` recursion: real `dep_check` passes
+        // `eapi=None` for installed packages (`dep_check.py:865-877`),
+        // whose defaults struct reads `empty_groups_always_true =
+        // false`.
+        false,
         &mut |atoms: &[String]| {
             disjunction_preference(
                 repos,
@@ -29158,6 +30645,7 @@ fn enqueue_dependencies(
                 entries,
                 &self_cp,
                 disj_constraints,
+                circular_dep,
                 root_deps_running_root,
                 atoms,
                 &queued,
@@ -29189,6 +30677,11 @@ fn enqueue_dependencies(
                     config,
                     root,
                     &["DEPEND", "BDEPEND", "IDEPEND"],
+                    // Installed walk: real `dep_check` passes
+                    // `eapi=None` for installed packages
+                    // (`dep_check.py:865-877`), whose defaults struct
+                    // reads `empty_groups_always_true = false`.
+                    false,
                 )
             })
             .unwrap_or_default()
@@ -29215,6 +30708,9 @@ fn enqueue_dependencies(
                     config,
                     root,
                     &["DEPEND", "BDEPEND", "IDEPEND"],
+                    // Installed walk, same real `eapi=None` default as
+                    // `root_deps_satisfied` just above.
+                    false,
                 )
             })
             .unwrap_or_default()
@@ -34261,6 +35757,88 @@ mod tests {
     }
 
     #[test]
+    fn direct_solve_reports_an_argument_parent_with_the_cli_text() {
+        // Backlog #230 fix round 1 (review Important 3): real's
+        // `PackageArg`/`AtomArg` arm (`depgraph.py:1681-1686`) prints
+        // `str(parent)` -- the CLI argument -- with no atom and no `^`
+        // marker. The direct-solve producer is the one path that can
+        // supply it: a top-level argument puller is recorded with
+        // empty parent fields and the argument text as its atom (see
+        // `slot_pullers`' depth-0 ownerless push), so when that atom
+        // rejects the removed instance the skip row carries the CLI
+        // text in `atom` with an empty `consumer_cpv`, and the
+        // renderer printing `s.atom` bare reproduces real's arm
+        // exactly. (The reverse-pin producer always builds a non-empty
+        // consumer cpv; the backtrack-mask rows skip empty-category
+        // pullers outright.) No contract or bed cell grounds an
+        // Argument parent end to end (blk0 parents are all Packages),
+        // so this producer-level pin is the only coverage -- the
+        // renderer arm beyond it stays unpinned.
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+        let config = test_config();
+        let new_cpv = "dev-libs/slotconflictnewconsumer-1.0:0/0::testrepo";
+        let old_cpv = "dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo";
+        // A versioned CLI argument pinning the kept instance: it
+        // rejects the removed 2.0 exactly like oldconsumer's pin.
+        let arg = "=dev-libs/slotconflicttarget-1.0";
+        let conflicts = [s2_conflict(vec![
+            (
+                "2.0",
+                false,
+                vec![(new_cpv, "dev-libs/slotconflicttarget", false)],
+            ),
+            (
+                "1.0",
+                false,
+                vec![
+                    (old_cpv, "<dev-libs/slotconflicttarget-2.0", false),
+                    ("", arg, false),
+                ],
+            ),
+        ])];
+        let entries = s2_entries(vec!["2.0", "1.0"]);
+        let top: HashSet<(String, String)> = HashSet::from([
+            (
+                "dev-libs".to_string(),
+                "slotconflictnewconsumer".to_string(),
+            ),
+            (
+                "dev-libs".to_string(),
+                "slotconflictoldconsumer".to_string(),
+            ),
+        ]);
+        let empty_replace: BTreeSet<(String, String)> = BTreeSet::new();
+        let out = direct_solve_slot_conflicts(s2_input(
+            &conflicts,
+            &entries,
+            &top,
+            &empty_replace,
+            &root,
+            &repos,
+            &config,
+        ));
+        assert_eq!(
+            out.removed,
+            vec![(
+                "dev-libs".to_string(),
+                "slotconflicttarget".to_string(),
+                "2.0".to_string(),
+                "1.0".to_string()
+            )]
+        );
+        assert_eq!(out.skipped.len(), 2);
+        let arg_row = out
+            .skipped
+            .iter()
+            .find(|s| s.consumer_cpv.is_empty())
+            .expect("the argument parent rides out as a bare row");
+        assert_eq!(arg_row.skipped_version, "2.0");
+        assert_eq!(arg_row.atom, arg);
+        assert!(!arg_row.consumer_installed);
+    }
+
+    #[test]
     fn direct_solve_keeps_an_unsolvable_conflict_untouched() {
         // Both instances singly forced (newpin's `>=2.0`, oldpin's
         // `<2.0`): nothing is unforced, the conflict survives with no
@@ -37886,14 +39464,41 @@ mod tests {
             Some(PretendOutcome::Upgrade { .. })
         ));
         assert!(!has_newpkg(&up));
-        assert!(complete_graph_auto_enable(&up.entries, true, true, true));
-        assert!(complete_graph_auto_enable(&up.entries, false, true, false));
-        assert!(!complete_graph_auto_enable(&up.entries, true, false, true));
+        assert!(complete_graph_auto_enable(
+            &up.entries,
+            true,
+            true,
+            true,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
+        ));
+        assert!(complete_graph_auto_enable(
+            &up.entries,
+            false,
+            true,
+            false,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
+        ));
+        assert!(!complete_graph_auto_enable(
+            &up.entries,
+            true,
+            false,
+            true,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
+        ));
         assert!(!complete_graph_auto_enable(
             &up.entries,
             false,
             false,
-            false
+            false,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
         ));
         // Even after the auto-enable re-walk, the missing deep dep is not
         // merged (2-pass, `completegraphpkg` is the only phase-1 merge).
@@ -37907,7 +39512,15 @@ mod tests {
 
         // An AlreadyInstalled-only graph never auto-enables.
         let noop = resolve("dev-libs/deeppkg2", false, Deep::NotRequested, false);
-        assert!(!complete_graph_auto_enable(&noop.entries, true, true, true));
+        assert!(!complete_graph_auto_enable(
+            &noop.entries,
+            true,
+            true,
+            true,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
+        ));
     }
 
     /// Like `graph_deep`, but driven by `--emptytree`/`-e` instead
@@ -40080,6 +41693,156 @@ mod tests {
         assert!(find_hard_cycles(&installed, &hard, Path::new("/nonexistent-root")).is_empty());
     }
 
+    /// Backlog #216: a true self-loop -- the kept `||` branch's atom
+    /// matching the owner's own merge-bound cpv -- reports the
+    /// one-member ring (real deadlocks on `go → go` in
+    /// `_serialize_tasks`), while a same-cp cross-slot edge
+    /// (`=hcs-2.0` against merged `hcs-1.0`, ordinary in real's
+    /// package-keyed digraph) does not. The `oi == di` gate and the
+    /// atom-match `&&` widening fail here.
+    #[test]
+    fn find_hard_cycles_reports_a_true_self_loop_but_not_a_cross_slot_edge() {
+        let hardcpv = |p: &str, v: &str| format!("dev-libs/{p}-{v}");
+        let cp = |p: &str| ("dev-libs".to_string(), p.to_string());
+        let buildtime = DepPriority {
+            buildtime: true,
+            ..DepPriority::default()
+        };
+        let self_edge = |pkg: &str, atom: &str, branch: Option<u32>| DepEdge {
+            atom: atom.to_string(),
+            evaluated: atom.to_string(),
+            category: "dev-libs".to_string(),
+            package: pkg.to_string(),
+            priority: buildtime,
+            disjunctive: branch.is_some(),
+            alt: branch.map(|b| (0, b)),
+            key: 4,
+        };
+        let mut entries = vec![graph_entry("dev-libs", "hcs", "1.0")];
+        entries[0].deps = vec![self_edge("hcs", ">=dev-libs/hcs-1.0", Some(0))];
+        let mut hard: EdgeKindMap = HashMap::new();
+        hard.insert((cp("hcs"), cp("hcs")), (true, false));
+        assert_eq!(
+            find_hard_cycles(&entries, &hard, Path::new("/nonexistent-root")),
+            vec![vec![hardcpv("hcs", "1.0")]]
+        );
+
+        // Same-cp cross-slot edge: the atom names another version, so
+        // the owner's own instance is not its target -- no cycle.
+        let mut cross = vec![graph_entry("dev-libs", "hcs", "1.0")];
+        cross[0].deps = vec![self_edge("hcs", "=dev-libs/hcs-2.0", Some(0))];
+        assert!(find_hard_cycles(&cross, &hard, Path::new("/nonexistent-root")).is_empty());
+
+        // An inline (non-`||`) self edge with a matching atom loops too.
+        let mut inline = vec![graph_entry("dev-libs", "hcs", "1.0")];
+        inline[0].deps = vec![self_edge("hcs", "dev-libs/hcs", None)];
+        assert_eq!(
+            find_hard_cycles(&inline, &hard, Path::new("/nonexistent-root")),
+            vec![vec![hardcpv("hcs", "1.0")]]
+        );
+
+        // A self-loop touching an installed instance stays invisible
+        // (backlog #216 scope: reporting it would flip an
+        // outcome-correct resolve into a spurious circular abort; the
+        // retry that would re-resolve past it is #221's scope).
+        let root = std::env::temp_dir().join(format!(
+            "portuale-selfloop-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let inst_dir = root.join("var/db/pkg/dev-libs/hcs-1.0");
+        std::fs::create_dir_all(&inst_dir).unwrap();
+        std::fs::write(inst_dir.join("SLOT"), "0\n").unwrap();
+        assert!(find_hard_cycles(&entries, &hard, &root).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Backlog #216: the serialize-dead-end retry fires only for a fresh
+    /// single-node self-loop closed by a kept `||` self-branch. A
+    /// two-node ring, an inline self-dep, and a self-loop with an
+    /// installed instance of the owner keep today's report-no-retry
+    /// path (multi-node rings are #221's scope; the installed cases
+    /// entangle merge-vs-installed bookkeeping this slice does not
+    /// re-model). Each gate `&&` fails here.
+    #[test]
+    fn cycle_restartable_gates_the_retry_to_fresh_branch_self_loops() {
+        let buildtime = DepPriority {
+            buildtime: true,
+            ..DepPriority::default()
+        };
+        let self_edge = |pkg: &str, atom: &str, branch: Option<u32>| DepEdge {
+            atom: atom.to_string(),
+            evaluated: atom.to_string(),
+            category: "dev-libs".to_string(),
+            package: pkg.to_string(),
+            priority: buildtime,
+            disjunctive: branch.is_some(),
+            alt: branch.map(|b| (0, b)),
+            key: 4,
+        };
+        let fresh_root = Path::new("/nonexistent-root");
+        let mut fresh = vec![graph_entry("dev-libs", "hcs", "1.0")];
+        fresh[0].deps = vec![self_edge("hcs", ">=dev-libs/hcs-1.0", Some(0))];
+        let kept = kept_alt_branches(&fresh, fresh_root);
+        assert!(cycle_restartable(
+            &fresh,
+            &kept,
+            &["dev-libs/hcs-1.0".to_string()],
+            fresh_root
+        ));
+
+        // A two-node ring never retries.
+        let pair = vec![
+            graph_entry("dev-libs", "hcs", "1.0"),
+            graph_entry("dev-libs", "hct", "1.0"),
+        ];
+        let kept_pair = kept_alt_branches(&pair, fresh_root);
+        assert!(!cycle_restartable(
+            &pair,
+            &kept_pair,
+            &[
+                "dev-libs/hcs-1.0".to_string(),
+                "dev-libs/hct-1.0".to_string()
+            ],
+            fresh_root
+        ));
+
+        // An inline (branch-less) self-dep never retries.
+        let mut inline = vec![graph_entry("dev-libs", "hcs", "1.0")];
+        inline[0].deps = vec![self_edge("hcs", "dev-libs/hcs", None)];
+        let kept_inline = kept_alt_branches(&inline, fresh_root);
+        assert!(!cycle_restartable(
+            &inline,
+            &kept_inline,
+            &["dev-libs/hcs-1.0".to_string()],
+            fresh_root
+        ));
+
+        // An installed instance of the owner never retries.
+        let root = std::env::temp_dir().join(format!(
+            "portuale-restartable-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let inst_dir = root.join("var/db/pkg/dev-libs/hcs-1.0");
+        std::fs::create_dir_all(&inst_dir).unwrap();
+        std::fs::write(inst_dir.join("SLOT"), "0\n").unwrap();
+        let kept_fresh = kept_alt_branches(&fresh, &root);
+        assert!(!cycle_restartable(
+            &fresh,
+            &kept_fresh,
+            &["dev-libs/hcs-1.0".to_string()],
+            &root
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn find_hard_cycles_ignores_a_suppressed_disjunctive_slot_op_branch() {
         // Backlog #228 fix round 1 (review Important-1): real's digraph
@@ -40210,6 +41973,204 @@ mod tests {
         // Installed slot `1/0`, child slot `1/0`: satisfied (soft).
         let root = make_vdb("n228-slot-gate-same-slot", "1/0");
         assert!(find_hard_cycles(&make_entries(), &make_map(), &root).is_empty());
+    }
+
+    #[test]
+    fn find_virtual_cycles_reports_self_loop_ring_and_lollipop() {
+        // Backlog #193: real `_virt_deps_visible` (`depgraph.py:6208`)
+        // fails a virtual that (transitively) requires itself through
+        // selected virtual providers -- upstream `test_virtual_cycle.py`
+        // (bug 965570): `virtual/gzip-1` (self-`RDEPEND`) and the
+        // `virtual/A-1 → B-1 → C-1 → A-1` ring.
+        let redge = |pkg: &str| DepEdge {
+            atom: format!("virtual/{pkg}"),
+            evaluated: format!("virtual/{pkg}"),
+            category: "virtual".to_string(),
+            package: pkg.to_string(),
+            priority: DepPriority {
+                runtime: true,
+                ..DepPriority::default()
+            },
+            disjunctive: false,
+            alt: None,
+            key: 0,
+        };
+        let virt = |pkg: &str, deps: Vec<DepEdge>| {
+            let mut e = graph_entry("virtual", pkg, "1");
+            e.deps = deps;
+            e
+        };
+        let fake = Path::new("/nonexistent-root");
+        // Self-loop: the single member reports with `::testrepo`.
+        let gzip = virt("gzip", vec![redge("gzip")]);
+        assert_eq!(
+            find_virtual_cycles(&[gzip], fake),
+            vec!["virtual/gzip-1::testrepo".to_string()]
+        );
+        // Three-ring: every member reports, sorted (real sorts the
+        // probe-stack packages, `Package.py:830`).
+        let ring = vec![
+            virt("A", vec![redge("B")]),
+            virt("B", vec![redge("C")]),
+            virt("C", vec![redge("A")]),
+        ];
+        assert_eq!(
+            find_virtual_cycles(&ring, fake),
+            vec![
+                "virtual/A-1::testrepo".to_string(),
+                "virtual/B-1::testrepo".to_string(),
+                "virtual/C-1::testrepo".to_string(),
+            ]
+        );
+        // Lollipop: `X` pulls self-looping `Y` -- real reports the
+        // whole recursion set (`list(_virt_deps_visible_recursion)`),
+        // not just the loop.
+        let lollipop = vec![virt("X", vec![redge("Y")]), virt("Y", vec![redge("Y")])];
+        assert_eq!(
+            find_virtual_cycles(&lollipop, fake),
+            vec![
+                "virtual/X-1::testrepo".to_string(),
+                "virtual/Y-1::testrepo".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn find_virtual_cycles_ignores_non_rdepend_and_non_virtual_shapes() {
+        // Real's stack holds virtuals only and the imp expands `RDEPEND`
+        // alone (`depgraph.py:6224-6256`): a `virtual/ → non-virtual →
+        // virtual/` ring probes clean (an ordinary merge), a `DEPEND`
+        // (`key: 3`) loop is never expanded, and an `AlreadyInstalled`
+        // virtual is never a start node (not merge-bound).
+        let redge = |cat: &str, pkg: &str, key: u8| DepEdge {
+            atom: format!("{cat}/{pkg}"),
+            evaluated: format!("{cat}/{pkg}"),
+            category: cat.to_string(),
+            package: pkg.to_string(),
+            priority: DepPriority {
+                runtime: true,
+                ..DepPriority::default()
+            },
+            disjunctive: false,
+            alt: None,
+            key,
+        };
+        let fake = Path::new("/nonexistent-root");
+        // virtual/V → dev-libs/P → virtual/V: no report.
+        let mut v = graph_entry("virtual", "V", "1");
+        v.deps = vec![redge("dev-libs", "P", 0)];
+        let mut p = graph_entry("dev-libs", "P", "1");
+        p.deps = vec![redge("virtual", "V", 0)];
+        assert!(find_virtual_cycles(&[v, p], fake).is_empty());
+        // DEPEND-only loop between two virtuals: no report.
+        let mut d1 = graph_entry("virtual", "D1", "1");
+        d1.deps = vec![redge("virtual", "D2", 3)];
+        let mut d2 = graph_entry("virtual", "D2", "1");
+        d2.deps = vec![redge("virtual", "D1", 3)];
+        assert!(find_virtual_cycles(&[d1, d2], fake).is_empty());
+        // AlreadyInstalled virtual with a self-edge: not merge-bound,
+        // never expanded.
+        let mut ai = GraphEntry {
+            outcome: PretendOutcome::AlreadyInstalled {
+                version: "1".to_string(),
+            },
+            ..graph_entry("virtual", "AI", "1")
+        };
+        ai.deps = vec![redge("virtual", "AI", 0)];
+        assert!(find_virtual_cycles(&[ai], fake).is_empty());
+        // A ring with no virtual at all: the category gate skips it
+        // (ordinary circular handling owns that shape).
+        let mut n1 = graph_entry("dev-libs", "N1", "1");
+        n1.deps = vec![redge("dev-libs", "N2", 0)];
+        let mut n2 = graph_entry("dev-libs", "N2", "1");
+        n2.deps = vec![redge("dev-libs", "N1", 0)];
+        assert!(find_virtual_cycles(&[n1, n2], fake).is_empty());
+    }
+
+    #[test]
+    fn find_virtual_cycles_ignores_a_suppressed_disjunctive_branch() {
+        // `O` (virtual, merge-bound): `RDEPEND`
+        // `|| ( virtual/plain virtual/D )`, both merge-bound; the walk
+        // keeps the first written branch (real `dep_zapdeps`
+        // choice_bins, the same `kept_alt_branches` set
+        // `build_digraph` collapses to), so `O → D` is suppressed. `D`
+        // is still merged (pulled by `P`), and `D → O` is selected --
+        // but the `D → O → D` loop never closes through the suppressed
+        // edge, so nothing reports. Without the kept check this walk
+        // would follow `O → D → O` and report both. (Real's `dep_check`
+        // may probe the suppressed branch during choice evaluation and
+        // fail here instead -- a documented cut in
+        // `find_virtual_cycles`.)
+        let alt_edge = |pkg: &str, branch: u32| DepEdge {
+            atom: format!("virtual/{pkg}"),
+            evaluated: format!("virtual/{pkg}"),
+            category: "virtual".to_string(),
+            package: pkg.to_string(),
+            priority: DepPriority {
+                runtime: true,
+                ..DepPriority::default()
+            },
+            disjunctive: true,
+            alt: Some((0, branch)),
+            key: 0,
+        };
+        let plain_edge = |pkg: &str| DepEdge {
+            atom: format!("virtual/{pkg}"),
+            evaluated: format!("virtual/{pkg}"),
+            category: "virtual".to_string(),
+            package: pkg.to_string(),
+            priority: DepPriority {
+                runtime: true,
+                ..DepPriority::default()
+            },
+            disjunctive: false,
+            alt: None,
+            key: 0,
+        };
+        let mut o = graph_entry("virtual", "O", "1");
+        o.deps = vec![alt_edge("plain", 0), alt_edge("D", 1)];
+        let plain = graph_entry("virtual", "plain", "1");
+        let mut d = graph_entry("virtual", "D", "1");
+        d.deps = vec![plain_edge("O")];
+        let mut p = graph_entry("dev-libs", "P", "1");
+        p.deps = vec![plain_edge("D")];
+        let entries = vec![o, plain, d, p];
+        assert!(find_virtual_cycles(&entries, Path::new("/nonexistent-root")).is_empty());
+    }
+
+    #[test]
+    fn virtual_cycle_aborts_like_real_on_the_upstream_fixtures() {
+        // Backlog #193, upstream `test_virtual_cycle.py` (bug 965570) as
+        // emitted by pmtest `89d17e0`: both cells fail in real
+        // (`ResolverPlayground` success=False,
+        // virtual_cycle={gzip-1} / {A-1,B-1,C-1}; g193 container probe
+        // `emerge -p --color=n app-misc/{bar,foo}` on the staged tree:
+        // rc 1 with the `!!! virtual cycle detected:` block). Portuale
+        // merged both as ordinary rings (rc 0).
+        for (top, expected) in [
+            ("app-misc/bar", vec!["virtual/gzip-1::testrepo".to_string()]),
+            (
+                "app-misc/foo",
+                vec![
+                    "virtual/A-1::testrepo".to_string(),
+                    "virtual/B-1::testrepo".to_string(),
+                    "virtual/C-1::testrepo".to_string(),
+                ],
+            ),
+        ] {
+            let result = graph_result_real(top);
+            assert_eq!(result.virtual_cycle, expected, "{top}");
+            match &result.outcome {
+                ResolveOutcome::Aborted {
+                    reason: AbortReason::VirtualCycle { members },
+                    partial,
+                } => {
+                    assert_eq!(members, &expected, "{top}");
+                    assert!(partial.is_empty(), "{top}: real shows no list at all");
+                }
+                other => panic!("{top}: expected VirtualCycle, got {other:?}"),
+            }
+        }
     }
 
     #[test]
@@ -45456,6 +47417,7 @@ mod tests {
             atom: ">=a/b-1.0".to_string(),
             token: "flag".to_string(),
             dep_chain: Vec::new(),
+            trigger: None,
         });
         assert!(differs(p), "autounmask_use_change_records");
         let mut p = base.clone();
@@ -46165,11 +48127,13 @@ mod tests {
                 atom: "=dev-libs/overpkg-1.0".to_string(),
                 token: "+flag".to_string(),
                 dep_chain: Vec::new(),
+                trigger: None,
             },
             AutounmaskChange {
                 atom: "=dev-libs/overpkg-1.0".to_string(),
                 token: "-other".to_string(),
                 dep_chain: Vec::new(),
+                trigger: None,
             },
         ];
         let params = BacktrackParams::default();
@@ -46180,6 +48144,7 @@ mod tests {
             atom: "=dev-libs/overpkg-1.0".to_string(),
             token: "-other".to_string(),
             dep_chain: Vec::new(),
+            trigger: None,
         });
         let decision = collect_feedback(&ctx, &grown, &mut pass, &config);
         let PassDecision::Settle { params: out } = decision else {
@@ -48634,6 +50599,399 @@ mod tests {
         let _ = fixture_root;
     }
 
+    /// Backlog #198: with keyword suggestions off (real
+    /// `--autounmask-keep-keywords=y`, i.e. no `_autounmask_levels`
+    /// step unmasks `~amd64`), the newest `akk0a-2`'s `akk0b` dep is
+    /// unsatisfiable even USE-free, so the missing-dependency
+    /// backtrack masks the top-level-selected parent
+    /// (`depgraph.py:3493-3503`, no top-level exemption) and the retry
+    /// settles `akk0a-1` + `akk0c-1` (`foo` is globally on, so no USE
+    /// change is recorded). The masked `akk0a-2` rides out as a
+    /// full-form skipped-missing-dep row (real
+    /// `_show_missed_update_unsatisfied_dep`, `depgraph.py:1592`):
+    /// selected `akk0a-1`, skipped `akk0a-2`, masked-only `akk0b`
+    /// disclosure chained to the single skipped parent.
+    #[test]
+    fn missing_dep_backtrack_masks_the_top_level_selected_parent() {
+        let result = graph_result_real_backtrack("dev-libs/akk0a", 10);
+        let versions: Vec<(&str, &str)> = result
+            .entries
+            .iter()
+            .filter_map(|e| {
+                merge_bound_version(&e.outcome).map(|v| (e.package.as_str(), v.as_str()))
+            })
+            .collect();
+        assert_eq!(
+            versions,
+            vec![("akk0c", "1"), ("akk0a", "1")],
+            "falls back to akk0a-1, saw {versions:?}"
+        );
+        assert_eq!(
+            result.backtrack_restarts, 1,
+            "one retry masks akk0a-2, restarts={}",
+            result.backtrack_restarts
+        );
+        assert_eq!(result.skipped_missing_dep_full.len(), 1);
+        let row = &result.skipped_missing_dep_full[0];
+        assert_eq!(
+            (
+                row.category.as_str(),
+                row.package.as_str(),
+                row.slot.as_str()
+            ),
+            ("dev-libs", "akk0a", "0")
+        );
+        assert_eq!(
+            row.selected_display,
+            "(dev-libs/akk0a-1:0/0::testrepo, ebuild scheduled for merge)"
+        );
+        assert_eq!(
+            row.skipped_display,
+            "(dev-libs/akk0a-2:0/0::testrepo, ebuild scheduled for merge)"
+        );
+        match &row.dep {
+            SkippedDepDisclosure::Masked(report) => {
+                assert_eq!(report.atom, "dev-libs/akk0b");
+                assert_eq!(
+                    report.masked,
+                    vec![(
+                        "dev-libs/akk0b-1::testrepo".to_string(),
+                        vec!["~amd64 keyword".to_string()]
+                    )]
+                );
+                assert_eq!(
+                    report.chain,
+                    vec![(
+                        "dev-libs/akk0a-2::testrepo".to_string(),
+                        "ebuild".to_string()
+                    )]
+                );
+            }
+            SkippedDepDisclosure::Plain(report) => {
+                panic!("akk0b is masked-only, not a plain miss: {report:?}")
+            }
+        }
+    }
+
+    /// Backlog #205, world=B shape shared by the R3/R4 unit tests:
+    /// `dev-libs/abk0d` with `--autounmask-backtrack=y` while installed
+    /// `abk0b-1` (`RDEPEND=<dev-libs/abk0a-3`) is reachable through the
+    /// required sets. The fixture world file stays pristine (an `abk0b`
+    /// line there would perturb every other fixture-ROOT test), so the
+    /// seed is set directly -- the `FX_WORLD_EXTRA=dev-libs/abk0b`
+    /// equivalent the bed cell stages, and the same trick the #209
+    /// `backtrack_zero_feeds_satisfiable_reverse_dep_pins_in_pass`
+    /// test uses for its world consumer.
+    fn graph_result_abk0_worldb_on(root: &Path, backtrack_max: u32) -> GraphResult {
+        let fixture_root = fixtures_root();
+        let mut config = portage_profile::resolve_config(
+            &fixture_root,
+            &fixture_root.join("repo"),
+            &[("overlay".to_string(), fixture_root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+            &fixture_root,
+        )
+        .expect("fixture config resolves");
+        config.autounmask_backtrack = true;
+        config.complete_seed_atoms = vec!["dev-libs/abk0b".to_string()];
+        resolve_pretend_graph(
+            &fixture_root,
+            root,
+            &["dev-libs/abk0d".to_string()],
+            &config,
+            false,
+            false,
+            false,
+            false,
+            Deep::NotRequested,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+            true,
+            true,
+            true,
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            false,
+            None,
+            false,
+            false,
+            None,
+            &fixtures_root().join("distfiles"),
+            false,
+            false,
+            false,
+            backtrack_max,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            true,
+            false,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend_graph(dev-libs/abk0d) failed: {e}"))
+    }
+
+    fn graph_result_abk0_worldb(backtrack_max: u32) -> GraphResult {
+        let root = fixtures_root();
+        graph_result_abk0_worldb_on(&root, backtrack_max)
+    }
+
+    /// Backlog #205 R3: the enforced pin's rejection is recorded as a
+    /// slot-conflict-style mask on the chosen version (real "Record
+    /// missed updates", `lib/_emerge/depgraph.py:2085-2106`), so the
+    /// existing `backtrack_missed_updates` derivation renders the
+    /// `WARNING` row. The run settles `[abk0c-1, abk0a-2, abk0d-1]`
+    /// (`backtrack: 2/2`, rc 1 in the contract pin) and the rejected
+    /// `abk0a-3` rides out as exactly one skipped-update row naming
+    /// the enforcing consumer: installed `abk0b-1`, rendered vdb-based
+    /// (`installed`, vdb USE, `__unknown__` repo fallback -- the
+    /// fixture vdb entry carries no `repository` file, like real's
+    /// `portage.versions._unknown_repo`) instead of the
+    /// merge-scheduled tree form a graph puller keeps.
+    #[test]
+    fn enforced_pin_miss_renders_the_installed_enforcing_consumer() {
+        let result = graph_result_abk0_worldb(2);
+        let versions: Vec<(&str, &str)> = result
+            .entries
+            .iter()
+            .filter_map(|e| {
+                merge_bound_version(&e.outcome).map(|v| (e.package.as_str(), v.as_str()))
+            })
+            .collect();
+        assert_eq!(
+            versions,
+            vec![("abk0c", "1"), ("abk0a", "2"), ("abk0d", "1")],
+            "settles C-1 + A-2 + D-1, saw {versions:?}"
+        );
+        assert_eq!(
+            result.backtrack_restarts, 2,
+            "two retries mask A-3 away, restarts={}",
+            result.backtrack_restarts
+        );
+        assert_eq!(
+            result.skipped_updates.len(),
+            1,
+            "exactly the rejected A-3 rides out: {:?}",
+            result.skipped_updates
+        );
+        let row = &result.skipped_updates[0];
+        assert_eq!(
+            (
+                row.category.as_str(),
+                row.package.as_str(),
+                row.slot.as_str()
+            ),
+            ("dev-libs", "abk0a", "0")
+        );
+        assert_eq!(row.skipped_version, "3");
+        assert_eq!(row.atom, "<dev-libs/abk0a-3");
+        assert_eq!(row.consumer_cpv, "dev-libs/abk0b-1:0/0::__unknown__");
+        assert!(
+            row.consumer_installed,
+            "the enforcing consumer renders installed (vdb-based), not merge-scheduled"
+        );
+        // The fixture vdb entry carries no USE/IUSE files, so the
+        // vdb-based display is the empty-valued USE group (renders bare
+        // `USE=""`, as pinned -- and as real's probe consumer line
+        // shows). That the row carries the vdb-sourced set rather than
+        // the tree ebuild's IUSE is the mechanism; the non-empty shape
+        // is pinned by
+        // `enforced_pin_miss_carries_the_vdb_use_and_repo` below.
+        // Post-#230 the display is real's full `pkg_use_display`
+        // (`skipped_update_installed_use_display_for`), which always
+        // emits the USE group instead of the old empty vec.
+        let fixture_root = fixtures_root();
+        let config = portage_profile::resolve_config(
+            &fixture_root,
+            &fixture_root.join("repo"),
+            &[("overlay".to_string(), fixture_root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+            &fixture_root,
+        )
+        .expect("fixture config resolves");
+        let expected = skipped_update_installed_use_display_for(
+            &fixture_root,
+            &config,
+            "dev-libs",
+            "abk0b",
+            "1",
+        );
+        assert_eq!(
+            row.consumer_use, expected,
+            "vdb USE of the fixture abk0b-1 entry: {:?}",
+            row.consumer_use
+        );
+    }
+
+    /// Backlog #205 R3, vdb legs: with `IUSE`/`USE`/`repository` files
+    /// staged on a scratch copy of the `abk0*` vdb entries, the same
+    /// skipped-update row carries the recorded vdb USE and the recorded
+    /// repo instead of the `__unknown__` fallback. Repos and config
+    /// stay on the fixtures (like the contract pin's test-local ROOT,
+    /// whose `PORTAGE_CONFIGROOT` stays shared); only the vdb comes
+    /// from the scratch root.
+    #[test]
+    fn enforced_pin_miss_carries_the_vdb_use_and_repo() {
+        let fixture_root = fixtures_root();
+        let dir = slotundo_temp_dir("205-vdb-consumer");
+        for pkg in ["abk0a-1", "abk0b-1", "abk0c-1"] {
+            let src = fixture_root.join("var/db/pkg/dev-libs").join(pkg);
+            let dst = dir.join("var/db/pkg/dev-libs").join(pkg);
+            std::fs::create_dir_all(&dst).expect("stage vdb dir");
+            for entry in std::fs::read_dir(&src).expect("fixture vdb dir") {
+                let entry = entry.expect("vdb entry");
+                std::fs::copy(entry.path(), dst.join(entry.file_name())).expect("stage vdb file");
+            }
+        }
+        let consumer = dir.join("var/db/pkg/dev-libs/abk0b-1");
+        std::fs::write(consumer.join("IUSE"), "x y\n").expect("stage IUSE");
+        std::fs::write(consumer.join("USE"), "x\n").expect("stage USE");
+        std::fs::write(consumer.join("repository"), "testrepo\n").expect("stage repository");
+        let result = graph_result_abk0_worldb_on(&dir, 2);
+        let versions: Vec<(&str, &str)> = result
+            .entries
+            .iter()
+            .filter_map(|e| {
+                merge_bound_version(&e.outcome).map(|v| (e.package.as_str(), v.as_str()))
+            })
+            .collect();
+        assert_eq!(
+            versions,
+            vec![("abk0c", "1"), ("abk0a", "2"), ("abk0d", "1")],
+            "the staged USE/repository files must not move selection, saw {versions:?}"
+        );
+        assert_eq!(result.skipped_updates.len(), 1);
+        let row = &result.skipped_updates[0];
+        assert_eq!(row.skipped_version, "3");
+        assert_eq!(row.atom, "<dev-libs/abk0a-3");
+        assert_eq!(row.consumer_cpv, "dev-libs/abk0b-1:0/0::testrepo");
+        assert!(row.consumer_installed);
+        // The row's USE is the vdb-sourced display for the scratched
+        // entry -- the same `installed_use_display_for` value, read off
+        // the staged root -- not the tree ebuild's IUSE (abk0b-1's
+        // ebuild declares none, so a tree-sourced display would be
+        // empty).
+        let config = portage_profile::resolve_config(
+            &fixture_root,
+            &fixture_root.join("repo"),
+            &[("overlay".to_string(), fixture_root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+            &fixture_root,
+        )
+        .expect("fixture config resolves");
+        let expected = installed_use_display_for(&dir, &config, "dev-libs", "abk0b", "1");
+        assert!(!expected.is_empty(), "the staged USE file must surface");
+        assert_eq!(row.consumer_use, expected);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #205 R4: the USE-change chain starts at the recorded
+    /// forcing parent. Real `_get_dep_chain(pkg,
+    /// unsatisfied_dependency=True)` (`lib/_emerge/depgraph.py:6257`)
+    /// picks the parent whose atom the package still does not satisfy;
+    /// here that is `abk0d-1` (whose `C[x]` the flip satisfies, not
+    /// `abk0a-2`'s plain `C`). The flip site records that owner in
+    /// `AutounmaskChange::trigger`, and the fill starts the chain
+    /// there -- asserting the recorded trigger itself, not just the
+    /// final text, is what distinguishes this from the legacy
+    /// first-requirer start.
+    #[test]
+    fn use_change_chain_starts_at_the_recorded_forcing_parent() {
+        let result = graph_result_abk0_worldb(2);
+        assert_eq!(
+            result.autounmask_use_changes.len(),
+            1,
+            "one USE change: {:?}",
+            result.autounmask_use_changes
+        );
+        let change = &result.autounmask_use_changes[0];
+        assert_eq!(change.atom, ">=dev-libs/abk0c-1");
+        assert_eq!(change.token, "x y");
+        assert_eq!(
+            change.trigger,
+            Some(("dev-libs".to_string(), "abk0d".to_string())),
+            "the flip site records its forcing owner"
+        );
+        assert_eq!(
+            change.dep_chain,
+            vec![
+                "required by dev-libs/abk0d-1::testrepo".to_string(),
+                "required by dev-libs/abk0d (argument)".to_string(),
+            ]
+        );
+    }
+
+    /// Backlog #205 R4, stale-trigger leg: when the recorded trigger is
+    /// no longer a requirer (masking retry, parent-flip rescue), the
+    /// fill falls back to the legacy first-requirer start. Direct
+    /// `fill_use_change_chains` shape: `abk0c` is required by `abk0a`
+    /// (which ascends to the `abk0d` argument), while the recorded
+    /// trigger names a `abk0d` that requires nothing here -- stale.
+    #[test]
+    fn stale_trigger_falls_back_to_the_first_requirer() {
+        let mut abk0c = graph_entry("dev-libs", "abk0c", "1");
+        abk0c.required_by = vec![("dev-libs".to_string(), "abk0a".to_string())];
+        let mut abk0a = graph_entry("dev-libs", "abk0a", "2");
+        abk0a.required_by = vec![("dev-libs".to_string(), "abk0d".to_string())];
+        let abk0d = graph_entry("dev-libs", "abk0d", "1");
+        let entries = vec![abk0c, abk0a, abk0d];
+        let top_level: std::collections::HashSet<&str> = ["dev-libs/abk0d"].into_iter().collect();
+        let mut changes = vec![AutounmaskChange {
+            atom: ">=dev-libs/abk0c-1".to_string(),
+            token: "x y".to_string(),
+            dep_chain: Vec::new(),
+            trigger: Some(("dev-libs".to_string(), "abk0d".to_string())),
+        }];
+        fill_use_change_chains(
+            &entries,
+            &mut changes,
+            &top_level,
+            Path::new("/nonexistent-root-for-this-test"),
+        );
+        assert_eq!(
+            changes[0].dep_chain,
+            vec![
+                "required by dev-libs/abk0a-2::testrepo".to_string(),
+                "required by dev-libs/abk0d-1::testrepo".to_string(),
+                "required by dev-libs/abk0d (argument)".to_string(),
+            ]
+        );
+    }
+
+    /// Backlog #205 R4, negative legs: keyword/license/mask changes keep
+    /// `trigger: None` (real renders those without the unsatisfied
+    /// filter), on the same fixture shapes their own tests pin.
+    #[test]
+    fn non_use_changes_keep_no_trigger() {
+        let keyword = graph_result_autounmask("dev-libs/autounmaskkeywordpkg");
+        assert_eq!(keyword.autounmask_keyword_changes.len(), 1);
+        assert_eq!(keyword.autounmask_keyword_changes[0].trigger, None);
+        let license = graph_result_autounmask("dev-libs/licensemaskedconsumer");
+        assert_eq!(license.autounmask_license_changes.len(), 1);
+        assert_eq!(license.autounmask_license_changes[0].trigger, None);
+        let mask = graph_result_autounmask("dev-libs/maskmaskedconsumer");
+        assert_eq!(mask.autounmask_mask_changes.len(), 1);
+        assert_eq!(mask.autounmask_mask_changes[0].trigger, None);
+    }
+
     /// Backlog #129 (S1): real's two notices on the mg2top backtrack
     /// shape (`l0-fx-20260927T080515Z` oracle) come from the settled
     /// backtrack trial state, not from a second pass. The search
@@ -48815,6 +51173,178 @@ mod tests {
         );
         assert_eq!(groups[1].len(), 1);
         assert_eq!(groups[1][0].skipped_version, "2");
+    }
+
+    /// Backlog #230: the skipped-update block renders real's full
+    /// `pkg_use_display`, not the IUSE-only approximation -- the
+    /// effective USE masked to the valid-IUSE domain, one group per
+    /// non-hidden `USE_EXPAND` var, `( )`-wrapped force/mask flags.
+    /// Pure-function level: masking plus assembly, no repos needed.
+    #[test]
+    fn skipped_use_display_masks_to_the_valid_domain_and_groups_expands() {
+        let config = portage_profile::Config {
+            use_expand: HashSet::from(["ELIBC".to_string(), "CPU_FLAGS_X86".to_string()]),
+            use_expand_hidden: HashSet::from(["CPU_FLAGS_X86".to_string()]),
+            iuse_effective: HashSet::from(["elibc_glibc".to_string(), "elibc_musl".to_string()]),
+            archlist: HashSet::from(["amd64".to_string(), "x86".to_string()]),
+            ..Default::default()
+        };
+        // EAPI 8 (iuse_effective rule): only declared IUSE and
+        // IUSE_EFFECTIVE survive; the profile-global `foo` and the
+        // forced-but-undeclared `globalforceflag` are masked out, while
+        // the implicit `elibc_glibc` is kept and grouped.
+        let explicit: HashSet<String> = HashSet::from(["alpha".to_string(), "beta".to_string()]);
+        let use_flags: HashSet<String> = HashSet::from([
+            "alpha".to_string(),
+            "foo".to_string(),
+            "amd64".to_string(),
+            "globalforceflag".to_string(),
+            "elibc_glibc".to_string(),
+        ]);
+        let kept = mask_use_to_valid_domain(
+            &explicit,
+            &use_flags,
+            true,
+            &config,
+            &HashSet::from(["globalforceflag".to_string()]),
+        );
+        assert_eq!(
+            kept,
+            HashSet::from(["alpha".to_string(), "elibc_glibc".to_string()]),
+            "IUSE_EFFECTIVE keeps the implicit expand flag only",
+        );
+        assert_eq!(
+            assemble_pkg_use_display(
+                &kept,
+                &explicit,
+                &HashSet::from(["globalforceflag".to_string()]),
+                &config,
+            ),
+            vec![
+                ("USE".to_string(), "alpha -beta".to_string()),
+                ("ELIBC".to_string(), "glibc".to_string()),
+            ],
+            "real `emerge --info dev-libs/pkginfopkg` shape: USE=\"alpha -beta\" ELIBC=\"glibc\"",
+        );
+        // Pre-EAPI-5 rule: ARCH is kept-then-discarded, hidden-expand
+        // flags are kept but their group is hidden, and per-package
+        // force/mask membership keeps a flag no IUSE declares (and wraps
+        // it). `other_vars["ARCH"]` is the profile ARCH scalar.
+        let mut pre_config = portage_profile::Config {
+            use_expand: HashSet::from(["CPU_FLAGS_X86".to_string()]),
+            use_expand_hidden: HashSet::from(["CPU_FLAGS_X86".to_string()]),
+            archlist: HashSet::from(["amd64".to_string()]),
+            ..Default::default()
+        };
+        pre_config
+            .other_vars
+            .insert("ARCH".to_string(), "amd64".to_string());
+        let kept_pre = mask_use_to_valid_domain(
+            &HashSet::new(),
+            &use_flags,
+            false,
+            &pre_config,
+            &HashSet::from(["globalforceflag".to_string()]),
+        );
+        assert_eq!(
+            kept_pre,
+            HashSet::from(["amd64".to_string(), "globalforceflag".to_string()]),
+            "ARCH + useforce survive the pre-EAPI-5 mask; foo/alpha/elibc drop",
+        );
+        assert_eq!(
+            assemble_pkg_use_display(
+                &kept_pre,
+                &HashSet::new(),
+                &HashSet::from(["globalforceflag".to_string()]),
+                &pre_config,
+            ),
+            vec![("USE".to_string(), "(globalforceflag)".to_string())],
+            "ARCH discarded, hidden group skipped, forced flag wrapped",
+        );
+    }
+
+    /// Backlog #230: within-group order is enabled-first then byte-sorted
+    /// (real's default `sort_separated`, plain string order), groups are
+    /// `USE`-first then byte-sorted var names.
+    #[test]
+    fn skipped_use_display_orders_enabled_first_then_byte_sorted() {
+        let config = portage_profile::Config {
+            use_expand: HashSet::from(["ELIBC".to_string(), "ABI_X86".to_string()]),
+            ..Default::default()
+        };
+        let enabled: HashSet<String> = HashSet::from([
+            "zebra".to_string(),
+            "apple".to_string(),
+            "abi_x86_64".to_string(),
+            "elibc_glibc".to_string(),
+        ]);
+        let explicit: HashSet<String> = HashSet::from([
+            "zebra".to_string(),
+            "apple".to_string(),
+            "mango".to_string(),
+            "abi_x86_64".to_string(),
+            "abi_x86_32".to_string(),
+            "elibc_glibc".to_string(),
+            "elibc_musl".to_string(),
+        ]);
+        assert_eq!(
+            assemble_pkg_use_display(&enabled, &explicit, &HashSet::new(), &config),
+            vec![
+                ("USE".to_string(), "apple zebra -mango".to_string()),
+                ("ABI_X86".to_string(), "64 -32".to_string()),
+                ("ELIBC".to_string(), "glibc -musl".to_string()),
+            ],
+        );
+    }
+
+    /// Backlog #230, fix round 1 (post-#220): end to end over the
+    /// fixture tree -- the blk0 ebuilds are EAPI 8 now, so the
+    /// `eapi_has_iuse_effective` gate selects the `IUSE_EFFECTIVE`
+    /// domain and the profile globals mask out: a flagless blk0
+    /// package renders `USE="" ELIBC="glibc"`, byte-identical to
+    /// real's own parent lines in the fix-round-1 probe
+    /// (`<dev-libs/blk0x-2 required by (dev-libs/blk0b-1:0/0::testrepo,
+    /// ebuild scheduled for merge to '<root>') USE="" ELIBC="glibc"`).
+    /// A missing version yields no display rather than a panic.
+    #[test]
+    fn skipped_update_use_display_for_renders_the_fixture_blk0_shape() {
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf resolves");
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+            &root,
+        )
+        .expect("fixture config resolves");
+        assert_eq!(
+            skipped_update_use_display_for(&repos, &config, "dev-libs", "blk0x", "3"),
+            vec![
+                ("USE".to_string(), String::new()),
+                ("ELIBC".to_string(), "glibc".to_string()),
+            ],
+        );
+        assert_eq!(
+            skipped_update_use_display_for(&repos, &config, "dev-libs", "blk0b", "1"),
+            vec![
+                ("USE".to_string(), String::new()),
+                ("ELIBC".to_string(), "glibc".to_string()),
+            ],
+        );
+        // EAPI 8, no IUSE: only the implicit ELIBC group survives.
+        assert_eq!(
+            skipped_update_use_display_for(&repos, &config, "dev-libs", "mgxc", "2"),
+            vec![
+                ("USE".to_string(), String::new()),
+                ("ELIBC".to_string(), "glibc".to_string()),
+            ],
+        );
+        assert!(
+            skipped_update_use_display_for(&repos, &config, "dev-libs", "blk0x", "9").is_empty()
+        );
     }
 
     /// Backlog #161 S6: the missing-dep trigger names the upgraded
@@ -50149,6 +52679,8 @@ mod tests {
             false,
             &HashSet::new(),
             &HashSet::new(),
+            &portage_profile::Config::default(),
+            false,
         );
         assert!(
             enforced.is_empty() && dropped.is_empty(),
@@ -50173,6 +52705,8 @@ mod tests {
             false,
             &HashSet::new(),
             &HashSet::new(),
+            &portage_profile::Config::default(),
+            false,
         );
         assert_eq!(
             enforced.len() + dropped.len(),
@@ -50231,6 +52765,8 @@ mod tests {
             false,
             &HashSet::new(),
             &HashSet::new(),
+            &portage_profile::Config::default(),
+            false,
         );
         assert_eq!(
             enforced.len(),
@@ -50315,6 +52851,8 @@ mod tests {
             false,
             &HashSet::new(),
             &HashSet::new(),
+            &portage_profile::Config::default(),
+            false,
         );
         let mut atoms: Vec<String> = enforced
             .iter()
@@ -50343,6 +52881,8 @@ mod tests {
             false,
             &HashSet::new(),
             &HashSet::new(),
+            &portage_profile::Config::default(),
+            false,
         );
         assert!(
             enforced.is_empty() && dropped.is_empty(),
@@ -50428,6 +52968,8 @@ mod tests {
             false,
             &top_level,
             &HashSet::new(),
+            &portage_profile::Config::default(),
+            false,
         );
         assert!(
             enforced.is_empty() && dropped.is_empty(),
@@ -50450,6 +52992,8 @@ mod tests {
             false,
             &top_level,
             &world,
+            &portage_profile::Config::default(),
+            false,
         );
         assert_eq!(
             enforced.len() + dropped.len(),
@@ -50458,6 +53002,180 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reverse_dependency_constraints_drops_a_use_break_from_a_use_change_reinstall() {
+        // Backlog #222, on the committed fixtures (upstream
+        // `test_complete_graph.py` pg0: `dev-libs/cgp0x-2.8.0` IUSE
+        // `+icu`, installed with `USE=""`; installed `dev-libs/cgp0q`
+        // records `dev-libs/cgp0x:2[-icu]`): a same-version USE-change
+        // reinstall moves no version, so the stripped-constraint scan
+        // finds nothing -- but the flip breaks the installed consumer's
+        // `[use]` bound, which real fails in its complete-mode
+        // end-of-walk loop (`depgraph.py:8751-8791`). The pin is
+        // dropped for the residual report (the merge's USE is decided;
+        // real fails rather than reflipping it), never enforced.
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+        let entry = GraphEntry {
+            outcome: PretendOutcome::Reinstall {
+                version: "2.8.0".into(),
+                changed_flags: vec!["icu".to_string()],
+                deps_changed: false,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: false,
+                slot_operator_rebuild: false,
+            },
+            slot: Some("2".into()),
+            sub_slot: Some("0".into()),
+            ..graph_entry("dev-libs", "cgp0x", "2.8.0")
+        };
+        let hard_want: HashMap<(String, String), Vec<String>> = HashMap::from([(
+            ("dev-libs".to_string(), "cgp0x".to_string()),
+            vec!["dev-libs/cgp0x".to_string()],
+        )]);
+        let reachable: HashSet<(String, String)> =
+            HashSet::from([("dev-libs".to_string(), "cgp0q".to_string())]);
+
+        // Complete mode off (`--complete-graph-if-new-use=n`, real rc 0):
+        // no pin at all.
+        let (enforced, dropped) = reverse_dependency_constraints(
+            &repos,
+            &root,
+            std::slice::from_ref(&entry),
+            false,
+            &[],
+            &hard_want,
+            &reachable,
+            true,
+            false,
+            &HashSet::new(),
+            &reachable,
+            &portage_profile::Config::default(),
+            false,
+        );
+        assert!(
+            enforced.is_empty() && dropped.is_empty(),
+            "complete mode off must yield no USE-break pin, got enforced={enforced:?} dropped={dropped:?}"
+        );
+
+        // Complete mode on (real rc 1): the broken `[use]` pin drops for
+        // the residual installed-instance report.
+        let (enforced, dropped) = reverse_dependency_constraints(
+            &repos,
+            &root,
+            &[entry],
+            false,
+            &[],
+            &hard_want,
+            &reachable,
+            true,
+            false,
+            &HashSet::new(),
+            &reachable,
+            &portage_profile::Config::default(),
+            true,
+        );
+        assert!(
+            enforced.is_empty(),
+            "a USE-break pin must never be enforced, got {enforced:?}"
+        );
+        assert_eq!(
+            dropped.len(),
+            1,
+            "expected one USE-break pin, got {dropped:?}"
+        );
+        assert_eq!(
+            (dropped[0].cp.1.as_str(), dropped[0].consumer.1.as_str(),),
+            ("cgp0x", "cgp0q"),
+        );
+
+        // Unreachable consumer (the shared-world shape -- real rc 0 with
+        // that world): still nothing.
+        let (enforced, dropped) = reverse_dependency_constraints(
+            &repos,
+            &root,
+            &[GraphEntry {
+                outcome: PretendOutcome::Reinstall {
+                    version: "2.8.0".into(),
+                    changed_flags: vec!["icu".to_string()],
+                    deps_changed: false,
+                    slot_changed: false,
+                    rebuilt_binary: false,
+                    new_repo: false,
+                    slot_operator_rebuild: false,
+                },
+                slot: Some("2".into()),
+                sub_slot: Some("0".into()),
+                ..graph_entry("dev-libs", "cgp0x", "2.8.0")
+            }],
+            false,
+            &[],
+            &hard_want,
+            &HashSet::new(),
+            true,
+            false,
+            &HashSet::new(),
+            &HashSet::new(),
+            &portage_profile::Config::default(),
+            true,
+        );
+        assert!(
+            enforced.is_empty() && dropped.is_empty(),
+            "an unreachable consumer must yield no pin, got enforced={enforced:?} dropped={dropped:?}"
+        );
+    }
+
+    #[test]
+    fn complete_graph_auto_enable_reasonless_reinstall_with_use_drift() {
+        // Backlog #222: a bare reasonless `[ebuild R]` for an
+        // explicitly-requested installed package carries no
+        // `changed_flags` (they are only computed under `--newuse`/
+        // `--changed-use`), yet real still enables complete mode when
+        // the merge node's own USE differs from the vdb's
+        // (`depgraph.py:8620-8637`). On the committed fixtures
+        // `dev-libs/cgp0x-2.8.0` (IUSE `+icu`, installed `USE=""`)
+        // such a reinstall enables on `if_new_use` even with empty
+        // `changed_flags`.
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+        let reasonless = GraphEntry {
+            category: "dev-libs".to_string(),
+            package: "cgp0x".to_string(),
+            outcome: PretendOutcome::Reinstall {
+                version: "2.8.0".to_string(),
+                changed_flags: Vec::new(),
+                deps_changed: false,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: false,
+                slot_operator_rebuild: false,
+            },
+            slot: Some("2".to_string()),
+            sub_slot: Some("0".to_string()),
+            repo_name: Some("testrepo".to_string()),
+            ..graph_entry("dev-libs", "cgp0x", "2.8.0")
+        };
+        assert!(complete_graph_auto_enable(
+            std::slice::from_ref(&reasonless),
+            true,
+            false,
+            false,
+            &root,
+            &repos,
+            &portage_profile::Config::default()
+        ));
+        assert!(!complete_graph_auto_enable(
+            std::slice::from_ref(&reasonless),
+            false,
+            false,
+            false,
+            &root,
+            &repos,
+            &portage_profile::Config::default()
+        ));
     }
 
     /// #57 S1: one shared assertion for the triangle's conflict record --
@@ -55330,6 +58048,7 @@ mod tests {
             false,
             false,
             &constraints,
+            &HashMap::new(),
             None,
             &[installed],
             &mut pending,
@@ -55355,6 +58074,7 @@ mod tests {
             false,
             false,
             &constraints,
+            &HashMap::new(),
             None,
             &[upgrade],
             &mut pending,
@@ -55914,10 +58634,42 @@ mod tests_162 {
                 false,
             ),
         ];
-        assert!(complete_graph_auto_enable(&entries, true, true, true));
-        assert!(complete_graph_auto_enable(&entries, false, true, false));
-        assert!(!complete_graph_auto_enable(&entries, true, false, true));
-        assert!(!complete_graph_auto_enable(&entries, false, false, false));
+        assert!(complete_graph_auto_enable(
+            &entries,
+            true,
+            true,
+            true,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
+        ));
+        assert!(complete_graph_auto_enable(
+            &entries,
+            false,
+            true,
+            false,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
+        ));
+        assert!(!complete_graph_auto_enable(
+            &entries,
+            true,
+            false,
+            true,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
+        ));
+        assert!(!complete_graph_auto_enable(
+            &entries,
+            false,
+            false,
+            false,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
+        ));
     }
 
     /// A new-slot `New` enables on `if_new_ver` or `if_new_slot`
@@ -55935,9 +58687,33 @@ mod tests_162 {
             Some("1"),
             true,
         )];
-        assert!(complete_graph_auto_enable(&new_slot, false, false, true));
-        assert!(complete_graph_auto_enable(&new_slot, false, true, false));
-        assert!(!complete_graph_auto_enable(&new_slot, false, false, false));
+        assert!(complete_graph_auto_enable(
+            &new_slot,
+            false,
+            false,
+            true,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
+        ));
+        assert!(complete_graph_auto_enable(
+            &new_slot,
+            false,
+            true,
+            false,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
+        ));
+        assert!(!complete_graph_auto_enable(
+            &new_slot,
+            false,
+            false,
+            false,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
+        ));
         let same_slot = vec![entry_162(
             "dev-libs",
             "fresh",
@@ -55947,7 +58723,15 @@ mod tests_162 {
             Some("0"),
             false,
         )];
-        assert!(!complete_graph_auto_enable(&same_slot, true, true, true));
+        assert!(!complete_graph_auto_enable(
+            &same_slot,
+            true,
+            true,
+            true,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
+        ));
     }
 
     /// A `Reinstall` with USE churn enables on `if_new_use`, one with
@@ -55977,19 +58761,28 @@ mod tests_162 {
             &[use_churn(vec!["flip".to_string()])],
             true,
             false,
-            false
+            false,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
         ));
         assert!(!complete_graph_auto_enable(
             &[use_churn(vec!["flip".to_string()])],
             false,
             false,
-            false
+            false,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
         ));
         assert!(!complete_graph_auto_enable(
             &[use_churn(Vec::new())],
             true,
             false,
-            false
+            false,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
         ));
     }
 
@@ -56018,19 +58811,28 @@ mod tests_162 {
             std::slice::from_ref(&slot_churn),
             true,
             false,
-            false
+            false,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
         ));
         assert!(complete_graph_auto_enable(
             std::slice::from_ref(&slot_churn),
             false,
             true,
-            false
+            false,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
         ));
         assert!(!complete_graph_auto_enable(
             &[slot_churn],
             false,
             false,
-            false
+            false,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
         ));
         let crossed = entry_162(
             "dev-libs",
@@ -56047,7 +58849,15 @@ mod tests_162 {
             Some("0"),
             false,
         );
-        assert!(!complete_graph_auto_enable(&[crossed], false, true, false));
+        assert!(!complete_graph_auto_enable(
+            &[crossed],
+            false,
+            true,
+            false,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
+        ));
     }
 
     /// Settled entries never enable, whatever the flags -- pins the
@@ -56072,7 +58882,15 @@ mod tests_162 {
                 false,
             ),
         ];
-        assert!(!complete_graph_auto_enable(&entries, true, true, true));
+        assert!(!complete_graph_auto_enable(
+            &entries,
+            true,
+            true,
+            true,
+            std::path::Path::new(""),
+            &[],
+            &portage_profile::Config::default()
+        ));
     }
 
     /// Fixed "amd64"-only, no-overrides config, mirroring `tests`'
@@ -56284,6 +59102,32 @@ mod tests_162 {
         atoms: &[&str],
         queued: &[QueueItem],
     ) -> portage_use_reduce::AltPreference {
+        disj_162_circ(
+            repos,
+            config,
+            root,
+            entries,
+            self_cp,
+            atoms,
+            queued,
+            &HashMap::new(),
+        )
+    }
+
+    /// `disj_162` with an explicit `circular_dependency` map (backlog
+    /// #216) -- owner cp → circular-child cpv strings, like the
+    /// `'backtrack` loop carries.
+    #[allow(clippy::too_many_arguments)]
+    fn disj_162_circ(
+        repos: &[RepoConfig],
+        config: &portage_profile::Config,
+        root: &Path,
+        entries: &[GraphEntry],
+        self_cp: &(String, String),
+        atoms: &[&str],
+        queued: &[QueueItem],
+        circular_dep: &HashMap<(String, String), Vec<String>>,
+    ) -> portage_use_reduce::AltPreference {
         disjunction_preference(
             repos,
             config,
@@ -56291,6 +59135,7 @@ mod tests_162 {
             entries,
             self_cp,
             &HashMap::new(),
+            circular_dep,
             None,
             &atoms_162(atoms),
             queued,
@@ -56345,9 +59190,11 @@ mod tests_162 {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// An alternative on the resolving package itself, not installed,
-    /// is circular and ranks `Unsatisfiable` -- the blocker-`==`
-    /// flip fails here.
+    /// An alternative on the resolving package itself, not installed and
+    /// matching nothing in-graph (backlog #216 narrows the old
+    /// unconditional refusal: an in-graph self match is real's pass-1
+    /// `preferred_in_graph` pick), is circular and ranks `Unsatisfiable`
+    /// -- the blocker-`==` flip fails here.
     #[test]
     fn disjunction_preference_rejects_a_circular_self_alternative() {
         let dir = dir_162("disj-circ");
@@ -56386,6 +59233,114 @@ mod tests_162 {
                 &self_162("test", "pkgA"),
                 &["test/pkgA"],
                 &[]
+            ),
+            portage_use_reduce::AltPreference::Installed
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #216: the same self alternative with the package already
+    /// merge-bound in-graph is real's pass-1 `preferred_in_graph` pick,
+    /// not a circle -- it ranks `Installed` (the cycle forms, then the
+    /// `circular_dependency` map re-resolves it). The in-graph `&&`
+    /// widening fails here.
+    #[test]
+    fn disjunction_preference_keeps_an_in_graph_self_alternative() {
+        let dir = dir_162("disj-circ-graph");
+        let repos = repo_pkgs_162(&dir, &[("test/pkgA", "1.0", "0", "")]);
+        let config = cfg_162();
+        let entries = vec![entry_162(
+            "test",
+            "pkgA",
+            PretendOutcome::New {
+                version: "1.0".to_string(),
+            },
+            Some("0"),
+            false,
+        )];
+        assert_eq!(
+            disj_162(
+                &repos,
+                &config,
+                &dir,
+                &entries,
+                &self_162("test", "pkgA"),
+                &[">=test/pkgA-1.0"],
+                &[]
+            ),
+            portage_use_reduce::AltPreference::Installed
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #216: with the self edge recorded in the
+    /// `circular_dependency` map, the in-graph self alternative demotes
+    /// to `Other` (real `dep_zapdeps`' `circular_atom`,
+    /// `dep_check.py:688-691`) -- the re-resolve takes the bootstrap
+    /// branch. The demotion `return` fails here.
+    #[test]
+    fn disjunction_preference_demotes_a_recorded_circular_self_alternative() {
+        let dir = dir_162("disj-circ-demote");
+        let repos = repo_pkgs_162(&dir, &[("test/pkgA", "1.0", "0", "")]);
+        let config = cfg_162();
+        let entries = vec![entry_162(
+            "test",
+            "pkgA",
+            PretendOutcome::New {
+                version: "1.0".to_string(),
+            },
+            Some("0"),
+            false,
+        )];
+        let mut circular: HashMap<(String, String), Vec<String>> = HashMap::new();
+        circular.insert(self_162("test", "pkgA"), vec!["test/pkgA-1.0".to_string()]);
+        assert_eq!(
+            disj_162_circ(
+                &repos,
+                &config,
+                &dir,
+                &entries,
+                &self_162("test", "pkgA"),
+                &[">=test/pkgA-1.0"],
+                &[],
+                &circular,
+            ),
+            portage_use_reduce::AltPreference::Other
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #216: the demotion spares an atom an installed instance
+    /// satisfies (real's own `vardb.match(atom)` exemption -- a "cycle"
+    /// through an installed package is no deadlock). Still `Installed`;
+    /// the exemption `continue` fails here.
+    #[test]
+    fn disjunction_preference_circular_demotion_spares_an_installed_atom() {
+        let dir = dir_162("disj-circ-exempt");
+        let repos = repo_pkgs_162(&dir, &[("test/pkgA", "1.0", "0", "")]);
+        install_162(&dir, "test", "pkgA-1.0", "0", &[]);
+        let config = cfg_162();
+        let entries = vec![entry_162(
+            "test",
+            "pkgA",
+            PretendOutcome::New {
+                version: "1.0".to_string(),
+            },
+            Some("0"),
+            false,
+        )];
+        let mut circular: HashMap<(String, String), Vec<String>> = HashMap::new();
+        circular.insert(self_162("test", "pkgA"), vec!["test/pkgA-1.0".to_string()]);
+        assert_eq!(
+            disj_162_circ(
+                &repos,
+                &config,
+                &dir,
+                &entries,
+                &self_162("test", "pkgA"),
+                &["test/pkgA"],
+                &[],
+                &circular,
             ),
             portage_use_reduce::AltPreference::Installed
         );
@@ -57263,7 +60218,7 @@ mod tests_163 {
             entry_163("dev-libs", "top", new_163("1.0"), &[]),
         ];
         let masked = vec![masked_163("dev-libs", "need", "dev-libs/need")];
-        match abort_outcome(&entries, &masked, &[], &[], &HashMap::new()) {
+        match abort_outcome(&entries, &masked, &[], &[], &HashMap::new(), &[]) {
             ResolveOutcome::Aborted {
                 reason: AbortReason::MaskedDep { atom, parent_cpv },
                 partial,
@@ -57292,7 +60247,7 @@ mod tests_163 {
             entry_163("dev-libs", "top", new_163("1.0"), &[]),
         ];
         assert_eq!(
-            abort_outcome(&entries, &[], &[], &[], &HashMap::new()),
+            abort_outcome(&entries, &[], &[], &[], &HashMap::new(), &[]),
             ResolveOutcome::Complete
         );
     }
@@ -57318,7 +60273,7 @@ mod tests_163 {
             ("dev-libs".to_string(), "need".to_string()),
             ">=dev-libs/need-2.0".to_string(),
         );
-        match abort_outcome(&entries, &[], &[], &[], &atoms) {
+        match abort_outcome(&entries, &[], &[], &[], &atoms, &[]) {
             ResolveOutcome::Aborted {
                 reason: AbortReason::UnsatisfiedAtom { atom, parent_cpv },
                 partial,
@@ -57348,7 +60303,7 @@ mod tests_163 {
             entry_163("dev-libs", "top", installed_163("1.0"), &[]),
         ];
         assert_eq!(
-            abort_outcome(&entries, &[], &[], &[], &HashMap::new()),
+            abort_outcome(&entries, &[], &[], &[], &HashMap::new(), &[]),
             ResolveOutcome::Complete
         );
     }
@@ -57370,7 +60325,7 @@ mod tests_163 {
             entry_163("dev-libs", "top", new_163("1.0"), &[]),
         ];
         let masked = vec![masked_163("dev-libs", "other", "dev-libs/other")];
-        match abort_outcome(&entries, &masked, &[], &[], &HashMap::new()) {
+        match abort_outcome(&entries, &masked, &[], &[], &HashMap::new(), &[]) {
             ResolveOutcome::Aborted {
                 reason: AbortReason::UnsatisfiedAtom { atom, parent_cpv },
                 partial,
@@ -57399,7 +60354,7 @@ mod tests_163 {
             entry_163("dev-libs", "top", new_163("1.0"), &[]),
         ];
         let masked = vec![masked_163("sys-libs", "need", "sys-libs/need")];
-        match abort_outcome(&entries, &masked, &[], &[], &HashMap::new()) {
+        match abort_outcome(&entries, &masked, &[], &[], &HashMap::new(), &[]) {
             ResolveOutcome::Aborted {
                 reason: AbortReason::UnsatisfiedAtom { atom, parent_cpv },
                 partial,
@@ -57423,7 +60378,7 @@ mod tests_163 {
             &[],
         )];
         assert_eq!(
-            abort_outcome(&entries, &[], &[], &[], &HashMap::new()),
+            abort_outcome(&entries, &[], &[], &[], &HashMap::new(), &[]),
             ResolveOutcome::Complete
         );
     }
@@ -57434,7 +60389,7 @@ mod tests_163 {
     fn abort_outcome_empty_graph_completes() {
         let entries = vec![entry_163("dev-libs", "top", new_163("1.0"), &[])];
         assert_eq!(
-            abort_outcome(&entries, &[], &[], &[], &HashMap::new()),
+            abort_outcome(&entries, &[], &[], &[], &HashMap::new(), &[]),
             ResolveOutcome::Complete
         );
     }
@@ -57457,6 +60412,7 @@ mod tests_163 {
             &[vec!["x".to_string()]],
             &display,
             &HashMap::new(),
+            &[],
         ) {
             ResolveOutcome::Aborted {
                 reason: AbortReason::UnserializableCycle { members },
@@ -59868,6 +62824,7 @@ mod tests_163 {
             atom: atom.to_string(),
             token: token.to_string(),
             dep_chain: chain.iter().map(|s| s.to_string()).collect(),
+            trigger: None,
         }
     }
 
@@ -62502,6 +65459,7 @@ mod tests_165 {
             false,
             false,
             &HashMap::new(),
+            &HashMap::new(),
             None,
             &entries,
             &mut pending,
@@ -62550,6 +65508,7 @@ mod tests_165 {
             false,
             false,
             &HashMap::new(),
+            &HashMap::new(),
             None,
             &entries,
             &mut pending,
@@ -62593,6 +65552,7 @@ mod tests_165 {
             &cfg_165(),
             false,
             false,
+            &HashMap::new(),
             &HashMap::new(),
             None,
             &entries,
@@ -62646,6 +65606,7 @@ mod tests_165 {
             &mut seen,
             &mut memo,
             &mut pullers,
+            &HashMap::new(),
             &HashMap::new(),
             false,
             &std::sync::Arc::new(BinaryIndex::default()),

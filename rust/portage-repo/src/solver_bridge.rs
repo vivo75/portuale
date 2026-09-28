@@ -796,6 +796,7 @@ fn graph_result_from_order(
         // Bridge engines run no backtrack loop, so no trial masks ever
         // accumulate: nothing for either missed-update notice.
         skipped_missing_deps: Vec::new(),
+        skipped_missing_dep_full: Vec::new(),
         orphan_blockers,
         changed_deps_report: Vec::new(),
         buildpkgonly_deps_unsatisfied: false,
@@ -823,6 +824,11 @@ fn graph_result_from_order(
         use_unsat_deps: Vec::new(),
         // Same standing empty: no BFS walk, no plain-miss disclosure.
         plain_miss_deps: Vec::new(),
+        // Same standing empty (backlog #193): the engine backends have
+        // no `_virt_deps_visible` probe walk, and the bridge outcome is
+        // always `Complete` by design -- a virtual cycle is one more
+        // abort shape the bridges do not do, like slot conflicts above.
+        virtual_cycle: Vec::new(),
     }
 }
 

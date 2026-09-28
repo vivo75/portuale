@@ -86,9 +86,10 @@
 // for the dominant plain-atom case. A `@set`-prefixed world entry is
 // never matched, consistent with the pre-existing `read_world_atoms` cut
 // for `@world` itself (not a new one). Real `--deselect` is
-// `argument_options` with an optional y/n value, the same shape
-// `--verbose`/`-v` already has: a bare `--deselect`/`-W` or `--deselect
-// y` enables it, `--deselect n` explicitly disables it (falling through
+// `true_y_or_n` choices (`_emerge/main.py:446-449`, `in true_y` at
+// `:869-870`), the same optional-value shape `--verbose`/`-v` already
+// has: a bare `--deselect`/`-W` or `--deselect y`/`--deselect True`
+// enables it, `--deselect n` explicitly disables it (falling through
 // to ordinary resolution instead); a bundled `-W` (e.g. `-pW`) never
 // consumes a value, always enabling, the same "no ambiguity with another
 // bundled flag character" reasoning as bundled `-v`/`-D`. `--ask`
@@ -2770,6 +2771,13 @@ fn abort_outcome_to_json(outcome: &portage_repo::ResolveOutcome) -> String {
                     members.join(",")
                 )
             }
+            portage_repo::AbortReason::VirtualCycle { members } => {
+                let members: Vec<String> = members.iter().map(|m| json_string(m)).collect();
+                format!(
+                    "{{\"reason\":\"virtual-cycle\",\"members\":[{}]}}",
+                    members.join(",")
+                )
+            }
         },
     }
 }
@@ -3352,42 +3360,27 @@ fn preserved_rebuild_atoms(root: &Path) -> Vec<String> {
     atoms
 }
 
-/// Real `Scheduler._world_atom` + `depgraph.saveNomergeFavorites`: after
-/// a successful non-`--pretend` `emerge <atom>`, each directly-requested
-/// **plain** target atom (not a dependency, not a `@set`) is recorded in
-/// `<root>/var/lib/portage/world` -- whether it merged or was already
-/// installed. `--oneshot`/`--onlydeps` suppress this entirely (real
-/// `_world_atom`'s own early-return set). The recorded atom is the
-/// argument's own `cat/pkg` (plus `::repo` when the arg carried one),
-/// EXCEPT that a `cat/pkg:slot` argument is recorded slot-qualified when
-/// `cat/pkg` is genuinely slotted -- real `create_world_atom`: "If the
-/// argument atom is precise enough to identify a specific slot then a
-/// slot atom will be returned." "Slotted" here is real's own test: more
-/// than one `SLOT` available in the repo, or a single `SLOT` that isn't
-/// `"0"`. v1 cuts still: a *version*-pinned arg that identifies one slot
-/// (real records the slot atom there too); the vdb-only multislot
-/// fallback; system-virtual exclusion; and the `@set` target -> `world_sets`
-/// half (needs `emerge @set` build support, not implemented yet).
-/// An unslotted `@system` member is not recorded (real "unslotted system
-/// packages will not be stored in world"). Already-present atoms are
-/// left alone; when anything is added the file is rewritten sorted +
-/// deduplicated (real `WorldSelectedPackagesSet.write`). Prints the real
-/// `>>> Recording <atom> in "world" favorites file...` line per addition.
-fn update_world_file(
-    root: &Path,
+/// Backlog #232: the pure "what would be added" half of
+/// `update_world_file` (real `Scheduler._world_atom` +
+/// `depgraph.saveNomergeFavorites` -- see the writer's own doc comment
+/// for the full grounding), split out so the
+/// selective-without-`--oneshot` deferral arm
+/// (`_emerge/actions.py:514-516` -- the prompt moves into
+/// `depgraph.saveNomergeFavorites`) can show real's
+/// `Would you like to add these packages to your world favorites?`
+/// prompt (`depgraph.py:11376-11386`) *before* anything is recorded.
+/// Returns the new world atoms in argument order (a duplicate argument
+/// repeats); both the writer and the `--ask` display sort their own
+/// print order like real (`depgraph.py:11373-11374`).
+fn world_file_additions(
+    current: &[String],
     target_atoms: &[&str],
     entries: &[GraphEntry],
     system_atoms: &[String],
     repos: &[portage_repo::RepoConfig],
-    oneshot: bool,
-    onlydeps: bool,
-) -> Result<(), String> {
-    if oneshot || onlydeps {
-        return Ok(());
-    }
-    let mut current = read_world_atoms(root)?;
+) -> Vec<String> {
     let before: std::collections::HashSet<String> = current.iter().cloned().collect();
-    let mut added = false;
+    let mut added = Vec::new();
 
     for raw in target_atoms {
         if raw.starts_with('@') {
@@ -3444,12 +3437,59 @@ fn update_world_file(
         if before.contains(&world_atom) {
             continue;
         }
+        added.push(world_atom);
+    }
+    added
+}
+
+/// Real `Scheduler._world_atom` + `depgraph.saveNomergeFavorites`: after
+/// a successful non-`--pretend` `emerge <atom>`, each directly-requested
+/// **plain** target atom (not a dependency, not a `@set`) is recorded in
+/// `<root>/var/lib/portage/world` -- whether it merged or was already
+/// installed. `--oneshot`/`--onlydeps` suppress this entirely (real
+/// `_world_atom`'s own early-return set). The recorded atom is the
+/// argument's own `cat/pkg` (plus `::repo` when the arg carried one),
+/// EXCEPT that a `cat/pkg:slot` argument is recorded slot-qualified when
+/// `cat/pkg` is genuinely slotted -- real `create_world_atom`: "If the
+/// argument atom is precise enough to identify a specific slot then a
+/// slot atom will be returned." "Slotted" here is real's own test: more
+/// than one `SLOT` available in the repo, or a single `SLOT` that isn't
+/// `"0"`. v1 cuts still: a *version*-pinned arg that identifies one slot
+/// (real records the slot atom there too); the vdb-only multislot
+/// fallback; system-virtual exclusion; and the `@set` target -> `world_sets`
+/// half (needs `emerge @set` build support, not implemented yet).
+/// An unslotted `@system` member is not recorded (real "unslotted system
+/// packages will not be stored in world"). Already-present atoms are
+/// left alone; when anything is added the file is rewritten sorted +
+/// deduplicated (real `WorldSelectedPackagesSet.write`). Prints the real
+/// `>>> Recording <atom> in "world" favorites file...` line per addition.
+fn update_world_file(
+    root: &Path,
+    target_atoms: &[&str],
+    entries: &[GraphEntry],
+    system_atoms: &[String],
+    repos: &[portage_repo::RepoConfig],
+    oneshot: bool,
+    onlydeps: bool,
+) -> Result<(), String> {
+    if oneshot || onlydeps {
+        return Ok(());
+    }
+    let mut current = read_world_atoms(root)?;
+    let mut added = world_file_additions(&current, target_atoms, entries, system_atoms, repos);
+    // Real sorts the combined additions before both the `--ask` prompt
+    // and the `>>> Recording` loop (`depgraph.py:11373-11374`); each
+    // file half sorts its own print order here (the file itself was
+    // always rewritten sorted; only multi-addition stdout order
+    // changes, which no pin records -- the cross-file interleave of a
+    // mixed world + world_sets run stays file-grouped, see the arm).
+    added.sort();
+    for world_atom in &added {
         println!(">>> Recording {world_atom} in \"world\" favorites file...");
-        current.push(world_atom);
-        added = true;
+        current.push(world_atom.clone());
     }
 
-    if added {
+    if !added.is_empty() {
         current.sort();
         current.dedup();
         let path = root.join("var/lib/portage/world");
@@ -3463,6 +3503,119 @@ fn update_world_file(
     Ok(())
 }
 
+/// Backlog #232: the pure "what would be added" half of
+/// `update_world_sets_file` (see its doc comment for the grounding),
+/// split out for the same pre-record `--ask` prompt as
+/// `world_file_additions`. Takes the `@`-prefixed current lines and
+/// returns the new ones, in argument order; the writer sorts its own
+/// print order like real (`depgraph.py:11373-11374`).
+fn world_sets_additions(current: &[String], set_names: &[String]) -> Vec<String> {
+    let before: std::collections::HashSet<String> = current.iter().cloned().collect();
+    let mut added = Vec::new();
+    for name in set_names {
+        let line = format!("@{name}");
+        if before.contains(&line) {
+            continue;
+        }
+        added.push(line);
+    }
+    added
+}
+
+/// Backlog #232 review (Important-2): real's `[usersets]`
+/// `world-candidate` default -- every file set under
+/// `<config_root>/etc/portage/sets` is a world candidate
+/// (`lib/portage/_sets/__init__.py:133`, shipped as
+/// `cnf/sets/portage.conf`) unless the user overrides it in
+/// `sets.conf` (`man portage.5`: settings there override; same-named
+/// sections merge across files with later wins, via
+/// `util/configparser.py:read_configs`). Real applies the merged
+/// `[usersets]` flag to every set its multiset builds
+/// (`_sets/__init__.py:258-262`); the deferral gate
+/// (`actions.py:500-512`) and the record (`depgraph.py:11366`) then
+/// skip the non-candidates. Returns false only on an explicit
+/// `world-candidate = false` (real `ConfigParser.getboolean`
+/// spelling) in the `[usersets]` section of
+/// `<config_root>/etc/portage/sets.conf`, or of a file under
+/// `<config_root>/etc/portage/sets.conf/` (sorted walk, later wins --
+/// real's own `_getfiles` yields the directory form or the file form,
+/// never both). Section names are case-sensitive, option names are
+/// not (real `ConfigParser` semantics). Anything missing, unreadable,
+/// or unparsable stays a candidate -- portuale never suppresses a
+/// record it cannot prove real suppresses. That includes a
+/// `world-candidate` value `getboolean` rejects, where real's
+/// `_parse` (`_sets/__init__.py:259-262`) raises and aborts: a
+/// deliberate leniency, not fidelity. Cuts: per-set single
+/// sections (real routes those through `singleBuilder`, which needs a
+/// `filename`, and a same-named file set then takes the "Redefinition
+/// of set" error path), repo `sets.conf` files (portuale models no
+/// per-repo set config) and the host-global `sets.conf` real also
+/// merges (`_sets/__init__.py:352-359`) are not consulted, and the
+/// directory form is read one level deep with no skips, where real
+/// walks it recursively and skips dot, tilde and VCS entries
+/// (`:365-375`).
+fn usersets_world_candidate(config_root: &Path) -> bool {
+    fn files_in(dir: &Path) -> Vec<std::path::PathBuf> {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        let mut out: Vec<std::path::PathBuf> =
+            entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
+        out.sort();
+        out
+    }
+    let base = config_root.join("etc/portage/sets.conf");
+    let paths: Vec<std::path::PathBuf> = if base.is_dir() {
+        files_in(&base)
+    } else if base.is_file() {
+        vec![base]
+    } else {
+        return true;
+    };
+    // Real `getboolean` vocabulary; anything else (or a missing `=`)
+    // leaves the running value alone (see the doc comment).
+    fn as_bool(value: &str) -> Option<bool> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "1" | "yes" | "true" | "on" => Some(true),
+            "0" | "no" | "false" | "off" => Some(false),
+            _ => None,
+        }
+    }
+    let mut candidate = true;
+    // Section state carries across files. This is a leniency, not real's
+    // behaviour: real `read_configs` (`util/configparser.py:29-58`) calls
+    // `read_file` once per file, which resets the section, so bare keys at
+    // the top of a later fragment raise `MissingSectionHeaderError` and
+    // abort. Malformed input only.
+    let mut in_usersets = false;
+    for path in &paths {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+                continue;
+            }
+            if line.starts_with('[') && line.ends_with(']') {
+                in_usersets = line[1..line.len() - 1].trim() == "usersets";
+                continue;
+            }
+            if !in_usersets {
+                continue;
+            }
+            let split = line.find('=').or_else(|| line.find(':'));
+            let Some(i) = split else { continue };
+            if line[..i].trim().eq_ignore_ascii_case("world-candidate")
+                && let Some(v) = as_bool(&line[i + 1..])
+            {
+                candidate = v;
+            }
+        }
+    }
+    candidate
+}
+
 /// Real `depgraph.saveNomergeFavorites`'s own `@set` half: after a
 /// successful non-`--pretend` `emerge @name`, each directly-given
 /// user-defined set arg is recorded as `@name` in
@@ -3474,10 +3627,13 @@ fn update_world_file(
 /// add the file is rewritten sorted + deduplicated (comment / non-`@`
 /// lines dropped, exactly like `WorldSelectedSetsSet.write`). Prints the
 /// real `>>> Recording @name in "world_sets" favorites file...` line per
-/// addition. v1 cut: the real `world_candidate` gate (built-in sets like
-/// `@security` aren't world candidates) -- portuale only knows
-/// `@world`/`@system` as built-ins, and everything reaching here already
-/// resolved via a real set file, so it's a user set by construction.
+/// addition. v1 cut: the real `world_candidate` gate for built-in sets
+/// like `@security` -- portuale only knows `@world`/`@system` as
+/// built-ins, and everything reaching here already resolved via a real
+/// set file, so it's a user set by construction. The user-level
+/// `[usersets] world-candidate = false` override is filtered at the
+/// call sites instead (see `usersets_world_candidate`), which pass an
+/// already-filtered `set_names`.
 fn update_world_sets_file(
     root: &Path,
     set_names: &[String],
@@ -3491,18 +3647,15 @@ fn update_world_sets_file(
         .into_iter()
         .map(|n| format!("@{n}"))
         .collect();
-    let before: std::collections::HashSet<String> = current.iter().cloned().collect();
-    let mut added = false;
-    for name in set_names {
-        let line = format!("@{name}");
-        if before.contains(&line) {
-            continue;
-        }
+    let mut added = world_sets_additions(&current, set_names);
+    // Sorted print order like real (`depgraph.py:11373-11374`) -- see the
+    // same comment in `update_world_file`.
+    added.sort();
+    for line in &added {
         println!(">>> Recording {line} in \"world_sets\" favorites file...");
-        current.push(line);
-        added = true;
+        current.push(line.clone());
     }
-    if added {
+    if !added.is_empty() {
         current.sort();
         current.dedup();
         let path = root.join("var/lib/portage/world_sets");
@@ -4918,9 +5071,14 @@ fn stdin_is_tty() -> bool {
 /// behavior, rather than giving up on the first bad answer. Returns
 /// `true` for "Yes", `false` (after printing `Quitting.`, a caller-
 /// side convenience real portage's own callers each print for
-/// themselves) for "No" -- and `false` (after printing
-/// `Interrupted.`, then `Quitting.`) on EOF or a read error, the same
-/// `128 + SIGINT` exit the merge-list prompt already takes below.
+/// themselves) for "No" -- and `false` (after `ask_yes_no`'s own
+/// `Interrupted.`, with no `Quitting.`) on EOF, a read error, or
+/// SIGINT (backlog #240). Real `_emerge/UserQuery.query`
+/// (`_emerge/UserQuery.py:74-76`) exits from *inside* `query` on
+/// `EOFError`/`KeyboardInterrupt`, so the merge prompt's own
+/// `== "No"` comparison and its `Quitting.` never run there either;
+/// the caller still exits `128 + SIGINT` through the same arm a "No"
+/// takes below.
 /// TTY gating happens once, globally, before
 /// `ask` is ever `true` at all (`run()`'s own `stdin_is_tty` check
 /// right after CLI parsing) -- by the time this runs, stdin is already
@@ -4930,11 +5088,14 @@ fn stdin_is_tty() -> bool {
 /// makes a bare Enter loop back for a real answer instead of matching
 /// "Yes"; see `classify_yes_no`.
 fn ask_confirm(color: &Colorizer, question: &str) -> bool {
-    if ask_yes_no(color, question) == Some(true) {
-        return true;
+    match ask_yes_no(color, question) {
+        Some(true) => true,
+        Some(false) => {
+            println!("\nQuitting.\n");
+            false
+        }
+        None => false,
     }
-    println!("\nQuitting.\n");
-    false
 }
 
 /// The prompt half of `ask_confirm`, without the decline side effect:
@@ -4947,13 +5108,25 @@ fn ask_confirm(color: &Colorizer, question: &str) -> bool {
 /// the `eselect` spawn and continues into `action_build`, it does not
 /// quit the run.
 ///
-/// Returns `None` on EOF or a read error (after printing real
-/// `UserQuery.query`'s own `Interrupted.`, `_emerge/UserQuery.py:74-76`):
-/// the news prompt (backlog #234) turns that into real's
-/// `sys.exit(128 + SIGINT)` before `action_build`, while `ask_confirm`
-/// folds it into its ordinary decline arm.
+/// Returns `None` on EOF, a read error, or SIGINT (after printing
+/// real `UserQuery.query`'s own `Interrupted.`,
+/// `_emerge/UserQuery.py:74-76`): the news prompt (backlog #234)
+/// turns that into real's `sys.exit(128 + SIGINT)` before
+/// `action_build`, while `ask_confirm` folds it into a quiet decline
+/// (no `Quitting.`, backlog #240 -- real exits from inside `query`).
+///
+/// SIGINT handling is scoped to the prompt read itself (backlog
+/// #240): `PromptSigintGuard` installs a handler that only records
+/// the signal, and `read_prompt_line` turns it into `None`; the
+/// previous disposition is restored before this returns, so SIGINT
+/// during a merge, a build phase, or a resolve keeps doing exactly
+/// what it does today.
 fn ask_yes_no(color: &Colorizer, question: &str) -> Option<bool> {
     use std::io::Write;
+    // Installed before the first print, so a ^C typed the moment the
+    // prompt exists is already handled (the prompt text reaching the
+    // terminal strictly implies the handler is active).
+    let _sigint = PromptSigintGuard::install();
     print!("\n{} ", color.c("bold", question));
     loop {
         print!(
@@ -4962,17 +5135,12 @@ fn ask_yes_no(color: &Colorizer, question: &str) -> Option<bool> {
             color.c("PROMPT_CHOICE_OTHER", "No")
         );
         let _ = std::io::stdout().flush();
-        let mut line = String::new();
-        match std::io::stdin().read_line(&mut line) {
-            Ok(0) => {
+        match read_prompt_line() {
+            None => {
                 println!("Interrupted.");
                 return None;
             }
-            Err(_) => {
-                println!("Interrupted.");
-                return None;
-            }
-            Ok(_) => match classify_yes_no(line.trim(), ask_enter_invalid()) {
+            Some(line) => match classify_yes_no(line.trim(), ask_enter_invalid()) {
                 Some(true) => return Some(true),
                 Some(false) => {
                     return Some(false);
@@ -4981,6 +5149,128 @@ fn ask_yes_no(color: &Colorizer, question: &str) -> Option<bool> {
             },
         }
     }
+}
+
+/// Backlog #240: real `_emerge/UserQuery.query` catches
+/// `KeyboardInterrupt` out of `input()` (`_emerge/UserQuery.py:74-76`),
+/// printing `Interrupted.` and exiting `128 + SIGINT`. Python installs
+/// a SIGINT handler process-wide (its default one raises
+/// `KeyboardInterrupt`); portuale instead installs this handler only
+/// around the prompt read, so a merge, a build phase, or a resolve
+/// keeps the default disposition (death by signal) exactly as today.
+/// Set by the handler, consumed by `read_prompt_line`; cleared on
+/// every install so a stale flag can never interrupt a later prompt.
+static PROMPT_SIGINT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The handler behind `PromptSigintGuard`: records the signal and
+/// returns. An atomic store is async-signal-safe; nothing else runs
+/// here, so interrupting allocator locks or stdio buffers is safe.
+extern "C" fn prompt_sigint_handler(_sig: libc::c_int) {
+    PROMPT_SIGINT.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// RAII SIGINT scope for the prompt reads: installs
+/// `prompt_sigint_handler` (without `SA_RESTART`, so the raw
+/// `libc::read` in `read_prompt_line` observes `EINTR`) and restores
+/// the previous disposition on drop. Covers the prints too, not just
+/// the blocking read -- `read_prompt_line` re-checks the flag on
+/// entry, since a ^C that lands while printing consumes its character
+/// as the signal and no input byte will ever arrive for it. (One line
+/// per raw `read` is a line-discipline guarantee in canonical mode,
+/// so an answer written ahead can never be swallowed with the next
+/// one -- the existing `Yes\n`+`No\n` tests rely on it.)
+struct PromptSigintGuard {
+    old: libc::sigaction,
+}
+
+impl PromptSigintGuard {
+    fn install() -> Self {
+        // SAFETY: `sigaction`/`sigemptyset` touch only the two local
+        // structs; the handler is a plain function pointer valid for
+        // the process lifetime.
+        unsafe {
+            let mut old: libc::sigaction = std::mem::zeroed();
+            let mut new: libc::sigaction = std::mem::zeroed();
+            new.sa_sigaction = prompt_sigint_handler as *const () as usize;
+            libc::sigemptyset(&mut new.sa_mask);
+            new.sa_flags = 0;
+            // Clear before installing, so a SIGINT landing in between is not lost.
+            PROMPT_SIGINT.store(false, std::sync::atomic::Ordering::SeqCst);
+            assert_eq!(
+                libc::sigaction(libc::SIGINT, &new, &mut old),
+                0,
+                "sigaction(SIGINT) failed"
+            );
+            Self { old }
+        }
+    }
+}
+
+impl Drop for PromptSigintGuard {
+    fn drop(&mut self) {
+        // SAFETY: restores the disposition saved at install; the
+        // pointer is the guard's own field, valid until drop returns.
+        unsafe {
+            libc::sigaction(libc::SIGINT, &self.old, std::ptr::null_mut());
+        }
+    }
+}
+
+/// One line from fd 0 for the prompt loops: blocks in a raw
+/// `libc::read` (a std `read_line` would retry `EINTR` internally and
+/// never observe the scoped SIGINT) on the canonical-mode tty until
+/// `\n`, EOF, a read error, or the guard's SIGINT flag. Returns
+/// `Some(line)` (newline included when one arrived, like `read_line`;
+/// callers trim) or `None` for a bare EOF (`Ok(0)` on an empty
+/// buffer, real's `EOFError`), SIGINT (`EINTR` with the flag set,
+/// real's `KeyboardInterrupt`), or any other read error (real's
+/// `input()` failure arm, same `Interrupted.` treatment the old
+/// `Err(_)` arm gave). A partial line pending at EOF is evaluated
+/// like `read_line`'s `Ok(_)` arm. Invalid UTF-8 also yields `None`,
+/// matching that old arm byte for byte; real decodes with replacement
+/// and reprompts, a pre-existing divergence this slice keeps.
+fn read_prompt_line() -> Option<String> {
+    if PROMPT_SIGINT.load(std::sync::atomic::Ordering::SeqCst) {
+        return None;
+    }
+    let mut buf: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 256];
+    loop {
+        // SAFETY: `chunk` is a live, writable stack buffer of `len`
+        // bytes; `read` writes at most that many or returns < 0.
+        let n = unsafe {
+            libc::read(
+                libc::STDIN_FILENO,
+                chunk.as_mut_ptr() as *mut libc::c_void,
+                chunk.len(),
+            )
+        };
+        if n < 0 {
+            if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                if PROMPT_SIGINT.load(std::sync::atomic::Ordering::SeqCst) {
+                    return None;
+                }
+                continue;
+            }
+            return None;
+        }
+        if n == 0 {
+            // EOF: a bare one yields `None` below, while a partial
+            // line pending (`^D` after typed-but-unentered text)
+            // falls through and is evaluated -- exactly like the old
+            // `read_line` `Ok(_)` arm, and like real's `input()`,
+            // which returns the partial line before the `EOFError`.
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n as usize]);
+        if buf.contains(&b'\n') {
+            break;
+        }
+    }
+    if buf.is_empty() {
+        return None;
+    }
+    String::from_utf8(buf).ok()
 }
 
 /// `--ask-enter-invalid` (real `main.py`'s boolean flag, consumed by
@@ -5033,19 +5323,17 @@ fn classify_yes_no(answer: &str, enter_invalid: bool) -> Option<bool> {
 /// calling this).
 fn ask_select(n: usize) -> Option<usize> {
     use std::io::Write;
+    // Backlog #240: same scoped SIGINT as `ask_yes_no` -- real's
+    // `UserQuery.query` exits `128 + SIGINT` on `KeyboardInterrupt`
+    // for this menu too (the config `Selection?` prompt).
+    let _sigint = PromptSigintGuard::install();
     loop {
         print!("\nSelection? ");
         let _ = std::io::stdout().flush();
-        let mut line = String::new();
-        if std::io::stdin()
-            .read_line(&mut line)
-            .ok()
-            .filter(|&b| b > 0)
-            .is_none()
-        {
+        let Some(line) = read_prompt_line() else {
             println!("Interrupted.");
             return None;
-        }
+        };
         let a = line.trim();
         if a.is_empty() {
             // Real `UserQuery.query`'s prefix match makes an empty
@@ -8723,6 +9011,10 @@ enum SlotConflictReason {
     Version(&'static str), // "ge" | "eq" | "le"
     Slot(String),          // the ":slot[/sub]" text, for the caret span
     Use(String),           // the violated flag, for the caret span
+    /// Real `slot_collision.py`'s `("AtomArg", None)` key: a bare
+    /// command-line parent whose atom is satisfied by every other
+    /// instance, shown when some other instance is installed.
+    Argument,
 }
 
 /// One slot-conflict parent that contributed at least one specific
@@ -8784,6 +9076,7 @@ struct ConflictOther {
     cpv: String,
     iuse: HashSet<String>,
     use_flags: HashSet<String>,
+    installed: bool,
 }
 
 /// Real `_prepare_conflict_msg_and_check_for_specificity`'s per-parent
@@ -8813,6 +9106,11 @@ fn slot_conflict_reasons(atom: &Atom, others: &[ConflictOther]) -> (Vec<SlotConf
                     reasons.push(r);
                 }
             }
+            // Real's `elif` chain (`slot_collision.py:307-397`): a
+            // version-mismatched pair skips the slot and USE checks
+            // below -- even when the operator is `None` and nothing is
+            // recorded for this pair.
+            continue;
         } else if atom.slot.is_some() {
             let matches_no_use =
                 match_from_list(&no_use, &[other.cpv.as_str()]).is_some_and(|v| !v.is_empty());
@@ -8830,8 +9128,14 @@ fn slot_conflict_reasons(atom: &Atom, others: &[ConflictOther]) -> (Vec<SlotConf
                 if !reasons.contains(&r) {
                     reasons.push(r);
                 }
+                // Real's `elif` chain (`slot_collision.py`): the USE
+                // check below runs only when the slot half matched --
+                // otherwise the slot reason already explains this
+                // parent against this other instance.
+                continue;
             }
-        } else if let Some(use_deps) = &atom.use_deps {
+        }
+        if let Some(use_deps) = &atom.use_deps {
             // `match_from_list` skips USE evaluation against plain-string
             // candidates (real's own `hasattr(x, "use")` guard), so a
             // version+slot match always "matches" here -- the USE verdict
@@ -9081,33 +9385,71 @@ fn render_pkg_use_display(disp: &[(String, String)]) -> String {
     out
 }
 
-/// Backlog #90 (S2): the `^` marker line under a skip-conflict pin --
-/// real marks the leading operator chars plus the version token
-/// (`~` + `1.0` in `~dev-libs/whblocker-1.0`, staged oracle). The
+/// Backlog #90 (S2), extended by #230: the `^` marker line under a
+/// skip-conflict pin -- real `format_unmatched_atom`
+/// (`_emerge/resolver/output.py:892`) marks the leading operator chars
+/// plus the version token (`~` + `1.0` in `~dev-libs/whblocker-1.0`,
+/// staged oracle), plus a `:slot[/sub-slot][op]` span when the atom
+/// carries one that mismatches the missed package (`:967-975`). The
 /// spans are computed on the raw atom text (no color realignment --
 /// same deliberate divergence as the slot block's own markers).
-fn skip_conflict_caret_line(atom: &str) -> String {
+/// USE-token spans stay a documented cut (no grounded case carries
+/// USE-deps on a skipped row).
+fn skip_conflict_caret_line(atom: &str, pkg_slot: &str, pkg_sub_slot: &str) -> String {
+    // Collect real's highlight spans first, then render once: spans may
+    // abut (a version end meets its `:slot` start), so incremental
+    // push-`^`-or-pad rendering would misplace the later one.
+    let mut spans: Vec<(usize, usize)> = Vec::new();
     let op_len: usize = atom
         .chars()
         .take_while(|c| matches!(c, '=' | '<' | '>' | '~' | '!'))
         .map(|c| c.len_utf8())
         .sum();
-    let mut line = String::new();
-    for _ in 0..op_len {
-        line.push('^');
+    if op_len > 0 {
+        spans.push((0, op_len));
     }
-    if let Some(ver) = portage_dep::parse_atom(atom).and_then(|a| a.version.clone()) {
+    let parsed = portage_dep::parse_atom(atom);
+    if let Some(ver) = parsed.as_ref().and_then(|a| a.version.clone()) {
         // Last occurrence: a package name itself may contain digits
         // (`foo-2-bar-1.0`), so anchoring on the first would mark the
         // wrong span. A trailing `-rN` revision is left out of the
         // span (no oracle covers it).
         if let Some(start) = atom.rfind(ver.as_str()) {
-            while line.len() < start {
-                line.push(' ');
+            spans.push((start, start + ver.len()));
+        }
+    }
+    // Real's `highlight_slot`: the atom names a slot (or sub-slot) the
+    // missed package does not have. The span covers `:slot`, the
+    // `/sub-slot` half when present, and the trailing slot operator
+    // (`=`/`*`), anchored on its occurrence in the raw atom text.
+    if let Some(a) = parsed.as_ref() {
+        let slot_mismatch = a.slot.as_deref().is_some_and(|s| s != pkg_slot);
+        let sub_mismatch = a.sub_slot.as_deref().is_some_and(|s| s != pkg_sub_slot);
+        if (slot_mismatch || sub_mismatch)
+            && let Some(slot) = a.slot.as_deref()
+        {
+            let mut slot_str = format!(":{slot}");
+            if let Some(sub) = a.sub_slot.as_deref() {
+                slot_str.push('/');
+                slot_str.push_str(sub);
             }
-            for _ in 0..ver.len() {
-                line.push('^');
+            match a.slot_operator {
+                Some(portage_dep::SlotOperator::Star) => slot_str.push('*'),
+                Some(portage_dep::SlotOperator::Equals) => slot_str.push('='),
+                None => {}
             }
+            if let Some(start) = atom.find(slot_str.as_str()) {
+                spans.push((start, start + slot_str.len()));
+            }
+        }
+    }
+    let end = spans.iter().map(|(_, e)| *e).max().unwrap_or(0);
+    let mut line = String::new();
+    for i in 0..end {
+        if spans.iter().any(|(s, e)| *s <= i && i < *e) {
+            line.push('^');
+        } else {
+            line.push(' ');
         }
     }
     line
@@ -9198,7 +9540,9 @@ fn merge_list_shown(pretend: bool, ask: bool, tree: bool, verbose: bool, quiet: 
 /// `emerge_build::resume_cpv` is `Some` for exactly that set) prints
 /// `Nothing to merge; quitting.` on stdout and returns `EX_OK` before
 /// the `resume_backup` rotation and before `Scheduler` -- the resume
-/// list and its backup stay untouched. Pure predicate so the
+/// list and its backup stay untouched (except the
+/// selective-without-`--oneshot` deferral, which still rotates -- see
+/// `selective_noop_deferred`). Pure predicate so the
 /// `--pretend` exclusion (real's `--pretend` branch returns after the
 /// display with no message) and the plain-run exclusion (`mergecount`
 /// stays `None` without display flags, so `Scheduler` still writes --
@@ -9207,6 +9551,40 @@ fn merge_list_shown(pretend: bool, ask: bool, tree: bool, verbose: bool, quiet: 
 /// (`test_portuale.py`, backlog #225).
 fn nothing_to_merge(pretend: bool, show_merge_list: bool, mergecount: usize) -> bool {
     !pretend && show_merge_list && mergecount == 0
+}
+
+/// Backlog #232: real `_emerge/actions.py:496-521` (`action_build`),
+/// the `mergecount == 0` arm's own deferral (`:514-516`): when the run
+/// is `selective` (real `create_depgraph_params.py` -- `-u`/`-N`/
+/// `--noreplace`/...) without `--oneshot`/`--onlydeps` and a
+/// world-candidate favorite exists, real does NOT print `Nothing to
+/// merge; quitting.` -- the prompt just moves into
+/// `depgraph.saveNomergeFavorites` while the run falls through to the
+/// `resume_backup` rotation (`:664-672`) and the world-file record,
+/// skipping only `Scheduler` (`:674-675`). The second parameter is the
+/// folded gate variable itself: real computes `oneshot =
+/// "--oneshot" in myopts or "--onlydeps" in myopts`
+/// (`actions.py:257`), and both the `:499` world-candidates guard and
+/// the `:514` deferral test that folded value -- so `--onlydeps` keeps
+/// the deferral at bay exactly like `--oneshot` (the #225 shape), and
+/// only `--buildpkgonly` still suppresses at the record level below.
+/// `selective` is portuale's own real-faithful computation (see its
+/// site); a world candidate is any non-`@` favorite (real keeps every
+/// non-`SETPREFIX` string, `actions.py:498-513`) or user `@set` (real
+/// defaults `usersets` to `world-candidate = true`,
+/// `_sets/__init__.py:133`, honoring a `sets.conf` override -- the
+/// call site filters through `usersets_world_candidate`, so an
+/// overridden set neither triggers here nor gets recorded; the
+/// built-in `@world`/`@system`/`@profile` filter out on both sides
+/// since real never marks them world candidates). Pure predicate so the gate
+/// matrix stays unit-pinned; the rotation half is pinned end to end in
+/// pmtest (`test_portuale.py`, backlog #232).
+fn selective_noop_deferred(
+    selective: bool,
+    oneshot_or_onlydeps: bool,
+    has_world_candidates: bool,
+) -> bool {
+    selective && !oneshot_or_onlydeps && has_world_candidates
 }
 
 /// Backlog #185 fix round 1: real's resolution-phase header gating
@@ -9293,7 +9671,9 @@ pub fn run(args: &[String]) -> ExitCode {
     // displayed and before anything is actually built/merged/removed,
     // prompt `Would you like to ...? [Yes/No]` (real `UserQuery.query`,
     // `_emerge/actions.py:525` / `unmerge.py:621`). Bare Enter = Yes. "No"
-    // (or EOF) prints `Quitting.` / `Interrupted.` and exits 130
+    // prints `Quitting.` and exits 130, while EOF/SIGINT prints only
+    // `Interrupted.` and exits 130 (real exits from inside `query`, so
+    // its `Quitting.` never runs -- backlog #240).
     // (`128 + SIGINT`). Ignored under `--pretend` (nothing executes
     // anyway).
     let mut ask = false;
@@ -9635,10 +10015,9 @@ pub fn run(args: &[String]) -> ExitCode {
     // '--verbose-conflicts' option" trailer. Never reaches the resolver.
     let mut verbose_conflicts = false;
     // --autounmask/--autounmask-keep-keywords: real "true_y_or_n"
-    // (bare flag, "=y", or "=n") for the first, plain required "y"/"n"
-    // (no bare form) for the second -- see the on/off default-
-    // resolution logic just below where these are actually consumed,
-    // grounded against real create_depgraph_params.py's own
+    // (bare flag, "=y", "=True", or "=n") for both -- see the on/off
+    // default-resolution logic just below where these are actually
+    // consumed, grounded against real create_depgraph_params.py's own
     // autounmask/autounmask_keep_keywords computation.
     let mut autounmask: Option<bool> = None;
     let mut autounmask_keep_keywords: Option<bool> = None;
@@ -9647,7 +10026,8 @@ pub fn run(args: &[String]) -> ExitCode {
     // `"y" if autounmask is True else "n"` (create_depgraph_params.py) --
     // so OFF unless `--autounmask` itself is explicit or `=y` is given.
     let mut autounmask_license: Option<bool> = None;
-    // --autounmask-keep-masks: real `y_or_n`. Real KEEPS masks by default
+    // --autounmask-keep-masks: real `true_y_or_n` (bare flag, "=y",
+    // "=True", or "=n"). Real KEEPS masks by default
     // (`autounmask_keep_masks` defaults `True`); only `=n` unmasks.
     let mut autounmask_keep_masks: Option<bool> = None;
     // --autounmask-only (real `true_y_or_n`, `main.py:813`): "only perform
@@ -10388,16 +10768,20 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
             }
-        } else if arg == "--verbose=y" {
+        } else if arg == "--verbose=y" || arg == "--verbose=True" {
             verbose = true;
             i += 1;
         } else if arg == "--verbose=n" {
             verbose = false;
             i += 1;
         } else if arg == "--quiet" || arg == "-q" {
-            // Real `--quiet`/`-q`: `true_y_or_n` (`argument_options`), the
-            // same optional-value shape `--verbose`/`-v` has -- a bare
-            // occurrence enables it, `y`/`n` set it explicitly. Sets real
+            // Real `--quiet`/`-q`: `true_y_or_n` choices
+            // (`_emerge/main.py:612-614`, normalized `in true_y` at
+            // `:939-941`); a bare occurrence inserts `"True"` via
+            // `insert_optional_args` (`:172` is in the `y_or_n` insert
+            // set, so only a separate `y`/`n` is consumed and a
+            // separate `True` stays positional) -- the same
+            // optional-value shape `--verbose`/`-v` has. Sets real
             // `_DisplayConfig` verbosity to 1 (see `render` / `use_suffix`
             // / `attr_display_field` for what that changes).
             match args.get(i + 1).map(String::as_str) {
@@ -10414,16 +10798,21 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
             }
-        } else if arg == "--quiet=y" {
+        } else if arg == "--quiet=y" || arg == "--quiet=True" {
             quiet = true;
             i += 1;
         } else if arg == "--quiet=n" {
             quiet = false;
             i += 1;
         } else if arg == "--deselect" || arg == "-W" {
-            // Real "--deselect": y_or_n (argument_options), the same
-            // optional-value shape "--verbose"/"-v" already has -- see
-            // that branch's own comment. Unlike "--verbose", a bare
+            // Real "--deselect": `true_y_or_n` choices
+            // (`_emerge/main.py:446-449`, normalized `in true_y` at
+            // `:869-870`), the same optional-value shape
+            // "--verbose"/"-v" already has -- a bare `--deselect`/`-W`
+            // inserts `"True"` via `insert_optional_args` (`:158` is in
+            // the `y_or_n` insert set, so only a separate `y`/`n` is
+            // consumed and a separate `True` stays positional; see that
+            // branch's own comment). Unlike "--verbose", a bare
             // "--deselect"/"-W" turns this whole invocation into a
             // different, standalone action (see run_deselect's own doc
             // comment) rather than modifying the ordinary --pretend
@@ -10444,7 +10833,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
             }
-        } else if arg == "--deselect=y" {
+        } else if arg == "--deselect=y" || arg == "--deselect=True" {
             deselect = true;
             i += 1;
         } else if arg == "--deselect=n" {
@@ -10574,11 +10963,16 @@ pub fn run(args: &[String]) -> ExitCode {
                 }
             }
         } else if arg == "--changed-deps" {
-            // Real "--changed-deps": y_or_n (default_arg_opts), the same
-            // optional-value shape "--verbose"/"-v" and "--deselect"/"-W"
-            // already have -- no short alias, though (real main.py
-            // declares none). Unlike --deselect, this stays an ordinary
-            // --pretend modifier, not a standalone action.
+            // Real "--changed-deps": `true_y_or_n` choices
+            // (`_emerge/main.py:405-407`, normalized `in true_y` at
+            // `:848-851`), the same optional-value shape
+            // "--verbose"/"-v" and "--deselect"/"-W" already have -- a
+            // bare occurrence inserts `"True"` via
+            // `insert_optional_args` (`:152` is in the `y_or_n` insert
+            // set, so only a separate `y`/`n` is consumed and a
+            // separate `True` stays positional). No short alias, though
+            // (real main.py declares none). Unlike --deselect, this stays
+            // an ordinary --pretend modifier, not a standalone action.
             match args.get(i + 1).map(String::as_str) {
                 Some("y") => {
                     changed_deps = true;
@@ -10593,19 +10987,22 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
             }
-        } else if arg == "--changed-deps=y" {
+        } else if arg == "--changed-deps=y" || arg == "--changed-deps=True" {
             changed_deps = true;
             i += 1;
         } else if arg == "--changed-deps=n" {
             changed_deps = false;
             i += 1;
         } else if arg == "--changed-deps-report" {
-            // Real "--changed-deps-report": y_or_n (default_arg_opts),
-            // the identical optional-value shape "--changed-deps"
-            // already has -- no short alias (real main.py declares
-            // none). Unlike --changed-deps, this never changes what
-            // gets reinstalled -- see resolve_pretend_graph's own doc
-            // comment.
+            // Real "--changed-deps-report": `true_y_or_n` choices
+            // (`_emerge/main.py:409-411`, normalized `in true_y` at
+            // `:854-857`), the identical optional-value shape
+            // "--changed-deps" already has -- a bare occurrence inserts
+            // `"True"` via `insert_optional_args` (`:154` is in the
+            // `y_or_n` insert set, so only a separate `y`/`n` is
+            // consumed). No short alias (real main.py declares none).
+            // Unlike --changed-deps, this never changes what gets
+            // reinstalled -- see resolve_pretend_graph's own doc comment.
             match args.get(i + 1).map(String::as_str) {
                 Some("y") => {
                     changed_deps_report = true;
@@ -10620,7 +11017,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
             }
-        } else if arg == "--changed-deps-report=y" {
+        } else if arg == "--changed-deps-report=y" || arg == "--changed-deps-report=True" {
             changed_deps_report = true;
             i += 1;
         } else if arg == "--changed-deps-report=n" {
@@ -10695,15 +11092,20 @@ pub fn run(args: &[String]) -> ExitCode {
             ignore_built_slot_operator_deps = false;
             i += 1;
         } else if arg == "--selective" {
-            // Real "--selective": y_or_n (default_arg_opts), the same
-            // optional-value shape "--changed-deps" already has -- no
-            // short alias for this exact spelling (real main.py declares
-            // none; "-n" is "--noreplace" above, real portage's own
-            // separate, bare-boolean spelling of the identical meaning).
-            // "n" here explicitly CANCELS `selective` even if some other
-            // flag already set it -- see `resolve_pretend`'s own doc
-            // comment (portage-repo) and this override's own application
-            // just before the `resolve_pretend_graph` call below.
+            // Real "--selective": `true_y_or_n` choices
+            // (`_emerge/main.py:697`, normalized `in true_y` at
+            // `:988-989`), the same optional-value shape
+            // "--changed-deps" already has -- a bare occurrence inserts
+            // `"True"` via `insert_optional_args` (`:183` is in the
+            // `y_or_n` insert set, so only a separate `y`/`n` is
+            // consumed). No short alias for this exact spelling (real
+            // main.py declares none; "-n" is "--noreplace" above, real
+            // portage's own separate, bare-boolean spelling of the
+            // identical meaning). "n" here explicitly CANCELS `selective`
+            // even if some other flag already set it -- see
+            // `resolve_pretend`'s own doc comment (portage-repo) and this
+            // override's own application just before the
+            // `resolve_pretend_graph` call below.
             match args.get(i + 1).map(String::as_str) {
                 Some("y") => {
                     selective_flag = Some(true);
@@ -10718,16 +11120,20 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
             }
-        } else if arg == "--selective=y" {
+        } else if arg == "--selective=y" || arg == "--selective=True" {
             selective_flag = Some(true);
             i += 1;
         } else if arg == "--selective=n" {
             selective_flag = Some(false);
             i += 1;
         } else if arg == "--changed-slot" {
-            // Real "--changed-slot": y_or_n (default_arg_opts), the
-            // identical optional-value shape "--changed-deps" already
-            // has -- no short alias (real main.py declares none).
+            // Real "--changed-slot": `true_y_or_n` choices
+            // (`_emerge/main.py:413-415`, normalized `in true_y` at
+            // `:860-863`), the identical optional-value shape
+            // "--changed-deps" already has -- a bare occurrence inserts
+            // `"True"` via `insert_optional_args` (`:153` is in the
+            // `y_or_n` insert set, so only a separate `y`/`n` is
+            // consumed). No short alias (real main.py declares none).
             match args.get(i + 1).map(String::as_str) {
                 Some("y") => {
                     changed_slot = true;
@@ -10742,7 +11148,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
             }
-        } else if arg == "--changed-slot=y" {
+        } else if arg == "--changed-slot=y" || arg == "--changed-slot=True" {
             changed_slot = true;
             i += 1;
         } else if arg == "--changed-slot=n" {
@@ -10799,7 +11205,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
             }
-        } else if arg == "--quiet-build=y" {
+        } else if arg == "--quiet-build=y" || arg == "--quiet-build=True" {
             quiet_build = Some(true);
             i += 1;
         } else if arg == "--quiet-build=n" {
@@ -11008,10 +11414,14 @@ pub fn run(args: &[String]) -> ExitCode {
             root_deps = true;
             i += 1;
         } else if arg == "--with-test-deps" {
-            // Real "--with-test-deps": y_or_n (default_arg_opts), the
-            // identical optional-value shape "--changed-deps"/
-            // "--changed-slot" already have -- no short alias (real
-            // main.py declares none).
+            // Real "--with-test-deps": `true_y_or_n` choices
+            // (`_emerge/main.py:745-747`, normalized `in true_y` at
+            // `:1133-1136`), the identical optional-value shape
+            // "--changed-deps"/"--changed-slot" already have -- a bare
+            // occurrence inserts `"True"` via `insert_optional_args`
+            // (`:191` is in the `y_or_n` insert set, so only a separate
+            // `y`/`n` is consumed). No short alias (real main.py
+            // declares none).
             match args.get(i + 1).map(String::as_str) {
                 Some("y") => {
                     with_test_deps = true;
@@ -11026,7 +11436,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
             }
-        } else if arg == "--with-test-deps=y" {
+        } else if arg == "--with-test-deps=y" || arg == "--with-test-deps=True" {
             with_test_deps = true;
             i += 1;
         } else if arg == "--with-test-deps=n" {
@@ -11118,33 +11528,30 @@ pub fn run(args: &[String]) -> ExitCode {
             autounmask_backtrack = Some(value == "y");
             i += 1;
         } else if arg == "--autounmask-keep-keywords" {
-            // Real "--autounmask-keep-keywords": plain y_or_n, a
-            // REQUIRED value -- no bare/optional form real
-            // "--autounmask" itself has, the same required shape
-            // "--with-bdeps" already has.
-            let Some(value) = args.get(i + 1) else {
-                eprintln!("emerge: option \"--autounmask-keep-keywords\" requires an argument");
-                return ExitCode::from(2);
-            };
-            match value.as_str() {
-                "y" => {
+            // Real "--autounmask-keep-keywords": `true_y_or_n` choices
+            // (`_emerge/main.py:365-367`, normalized `in true_y` at
+            // `:821-822`) -- a bare occurrence inserts `"True"` via
+            // `insert_optional_args` (`:146` is in the `y_or_n` insert
+            // set, so only a separate `y`/`n` is consumed and a
+            // separate `True` stays positional), the same
+            // optional-value shape "--changed-deps" already has.
+            match args.get(i + 1).map(String::as_str) {
+                Some("y") => {
                     autounmask_keep_keywords = Some(true);
                     i += 2;
                 }
-                "n" => {
+                Some("n") => {
                     autounmask_keep_keywords = Some(false);
                     i += 2;
                 }
                 _ => {
-                    eprintln!(
-                        "emerge: option \"--autounmask-keep-keywords\": invalid choice: {value:?} (choose from \"y\", \"n\")"
-                    );
-                    return ExitCode::from(2);
+                    autounmask_keep_keywords = Some(true);
+                    i += 1;
                 }
             }
         } else if let Some(value) = arg.strip_prefix("--autounmask-keep-keywords=") {
             match value {
-                "y" => {
+                "y" | "True" => {
                     autounmask_keep_keywords = Some(true);
                     i += 1;
                 }
@@ -11154,7 +11561,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 }
                 _ => {
                     eprintln!(
-                        "emerge: option \"--autounmask-keep-keywords\": invalid choice: {value:?} (choose from \"y\", \"n\")"
+                        "emerge: option \"--autounmask-keep-keywords\": invalid choice: {value:?} (choose from \"True\", \"y\", \"n\")"
                     );
                     return ExitCode::from(2);
                 }
@@ -11242,29 +11649,30 @@ pub fn run(args: &[String]) -> ExitCode {
                 }
             }
         } else if arg == "--autounmask-keep-masks" {
-            let Some(value) = args.get(i + 1) else {
-                eprintln!("emerge: option \"--autounmask-keep-masks\" requires an argument");
-                return ExitCode::from(2);
-            };
-            match value.as_str() {
-                "y" => {
+            // Real "--autounmask-keep-masks": `true_y_or_n` choices
+            // (`_emerge/main.py:369-371`, normalized `in true_y` at
+            // `:824-825`) -- a bare occurrence inserts `"True"` via
+            // `insert_optional_args` (`:147` is in the `y_or_n` insert
+            // set, so only a separate `y`/`n` is consumed and a
+            // separate `True` stays positional), the same
+            // optional-value shape "--changed-deps" already has.
+            match args.get(i + 1).map(String::as_str) {
+                Some("y") => {
                     autounmask_keep_masks = Some(true);
                     i += 2;
                 }
-                "n" => {
+                Some("n") => {
                     autounmask_keep_masks = Some(false);
                     i += 2;
                 }
                 _ => {
-                    eprintln!(
-                        "emerge: option \"--autounmask-keep-masks\": invalid choice: {value:?} (choose from \"y\", \"n\")"
-                    );
-                    return ExitCode::from(2);
+                    autounmask_keep_masks = Some(true);
+                    i += 1;
                 }
             }
         } else if let Some(value) = arg.strip_prefix("--autounmask-keep-masks=") {
             match value {
-                "y" => {
+                "y" | "True" => {
                     autounmask_keep_masks = Some(true);
                     i += 1;
                 }
@@ -11274,7 +11682,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 }
                 _ => {
                     eprintln!(
-                        "emerge: option \"--autounmask-keep-masks\": invalid choice: {value:?} (choose from \"y\", \"n\")"
+                        "emerge: option \"--autounmask-keep-masks\": invalid choice: {value:?} (choose from \"True\", \"y\", \"n\")"
                     );
                     return ExitCode::from(2);
                 }
@@ -12573,6 +12981,9 @@ pub fn run(args: &[String]) -> ExitCode {
             complete_if_new_use,
             complete_if_new_ver,
             rebuild_if_new_slot,
+            &root,
+            &repos,
+            &config,
         );
     let want_complete = complete_graph || (deep == portage_repo::Deep::NotRequested && auto_enable);
     let result = if want_complete {
@@ -12965,7 +13376,8 @@ pub fn run(args: &[String]) -> ExitCode {
                 &result.outcome,
                 portage_repo::ResolveOutcome::Aborted {
                     reason: portage_repo::AbortReason::MaskedDep { .. }
-                        | portage_repo::AbortReason::UnsatisfiedAtom { .. },
+                        | portage_repo::AbortReason::UnsatisfiedAtom { .. }
+                        | portage_repo::AbortReason::VirtualCycle { .. },
                     ..
                 }
             )
@@ -13291,11 +13703,16 @@ pub fn run(args: &[String]) -> ExitCode {
                 let show_argument_parents = c
                     .instances
                     .iter()
-                    .any(|o| o.version != inst.version && o.installed);
+                    .any(|o| !std::ptr::eq(o, inst) && o.installed);
+                // Real compares against every *other* instance in the
+                // slot (`slot_collision.py`: `if other_pkg == pkg:
+                // continue`) -- identity, not version: a same-version
+                // merge/installed twin (a USE-only break, backlog #222)
+                // still sees its twin, so the USE parent classifies.
                 let others: Vec<ConflictOther> = c
                     .instances
                     .iter()
-                    .filter(|o| o.version != inst.version)
+                    .filter(|o| !std::ptr::eq(*o, inst))
                     .map(|o| {
                         // Flag sets for the `("use", flag)` branch: an
                         // installed other's own vdb-recorded sets, like
@@ -13323,6 +13740,7 @@ pub fn run(args: &[String]) -> ExitCode {
                             ),
                             iuse,
                             use_flags,
+                            installed: o.installed,
                         }
                     })
                     .collect();
@@ -13338,7 +13756,22 @@ pub fn run(args: &[String]) -> ExitCode {
                     let Some(atom) = parse_atom(&p.atom) else {
                         continue;
                     };
-                    let (reasons, use_unconditional) = slot_conflict_reasons(&atom, &others);
+                    let (mut reasons, use_unconditional) = slot_conflict_reasons(&atom, &others);
+                    // Real `slot_collision.py`'s `("AtomArg", None)` key
+                    // (`elif isinstance(ppkg, AtomArg) and
+                    // other_pkg.installed`): a bare command-line parent
+                    // satisfied by every other instance is still shown
+                    // once some other instance is installed. Like real's
+                    // `elif`, it only fires when no version/slot/USE
+                    // reason did (so an argument parent that already
+                    // classifies, like pg1's `>=cgp1x-2`, renders exactly
+                    // once, as today).
+                    if p.parent_cpv.is_empty()
+                        && reasons.is_empty()
+                        && others.iter().any(|o| o.installed)
+                    {
+                        reasons.push(SlotConflictReason::Argument);
+                    }
                     if !reasons.is_empty() {
                         classified.push(ClassifiedParent {
                             parent_cpv: &p.parent_cpv,
@@ -13405,6 +13838,9 @@ pub fn run(args: &[String]) -> ExitCode {
                             }
                         }
                         SlotConflictReason::Use(_) => {
+                            selected.extend(members.iter().copied());
+                        }
+                        SlotConflictReason::Argument => {
                             selected.extend(members.iter().copied());
                         }
                     }
@@ -13582,16 +14018,40 @@ pub fn run(args: &[String]) -> ExitCode {
     // producers, one shape: the direct solve's removed instances and
     // the reverse-pin withholds (`GraphResult::skipped_updates`; the
     // renderer cannot tell them apart and real does not distinguish
-    // them either). Root suffixes (`for <root>`, `to/in '<root>'`)
-    // are omitted like every other portuale notice row. The `^`
-    // marker line mirrors real's operator + version spans
-    // (approximation: leading operator chars plus the version token;
-    // real derives them from its collision-reason keys). Suppressed
-    // under `--quiet` unless `--debug` -- real `_show_missed_update`
-    // drops both notice types then (`depgraph.py:1576-1581`).
-    // `--json` never reaches this block (it returns above);
-    // `--columns` has no gate (real shows the notices regardless of
-    // columns: they are not merge-list rows).
+    // them either). Backlog #230 renders each package with real's full
+    // `pkg_use_display` (`skipped_update_use_display_for` /
+    // `skipped_update_installed_use_display_for`, reusing the
+    // slot-collision notice's `render_pkg_use_display` string form):
+    // the whole effective USE masked to the valid-IUSE domain, one
+    // `VAR="…"` group per non-hidden `USE_EXPAND` var, `( )`-wrapped
+    // force/mask flags. Root suffixes follow the slot-collision notice
+    // exactly: merge-scheduled nodes and group headers stay bare (no
+    // `to '<root>'` / `for <root>` -- portuale resolves single-rooted,
+    // so every fixture-test `ROOT` would otherwise leak its own tmp
+    // path into the output, the same reason #206 cut the suffix on
+    // circular nodes); an installed consumer renders
+    // `(cpv, installed in '<root>')` with the real path, like the
+    // notice's installed instances. Real's own rendering pairs a bare
+    // missed line with `to`-suffixed parents because the missed package
+    // stays rooted at the host-config running-root (`/`) tree even for
+    // EAPI-8 `DEPEND` (fix-round-1 probe: a merge-operation missed line
+    // with no `to` suffix means its ROOT is `/` per real
+    // `Package.__str__`, and its `ABI_X86="(64)"` appears nowhere in
+    // the fixture tree) -- a second config portuale deliberately does
+    // not model (single-root determinism), so the missed line's
+    // fixture-tree display is the rendered shape and the bed keeps
+    // exactly that residual. The `^` marker line
+    // mirrors real `format_unmatched_atom`'s operator + version spans
+    // plus a mismatched `:slot[/sub-slot]` span (USE-token spans stay a
+    // documented cut -- no grounded case carries USE-deps here). A
+    // top-level `(Argument)` parent (empty `consumer_cpv`: a CLI atom
+    // that accepts only the surviving instance) renders as real's bare
+    // indented arg line with no atom and no marker
+    // (`depgraph.py:1681-1686`). Suppressed under `--quiet` unless
+    // `--debug` -- real `_show_missed_update` drops both notice types
+    // then (`depgraph.py:1576-1581`). `--json` never reaches this block
+    // (it returns above); `--columns` has no gate (real shows the
+    // notices regardless of columns: they are not merge-list rows).
     if !(quiet && !debug) && !result.skipped_updates.is_empty() {
         println!(
             "WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:"
@@ -13613,20 +14073,47 @@ pub fn run(args: &[String]) -> ExitCode {
                 header.skipped_repo,
                 render_pkg_use_display(&header.skipped_use),
             );
-            for s in group {
-                let consumer_state = if s.consumer_installed {
-                    "installed"
+            for s in group.iter() {
+                if s.consumer_cpv.is_empty() {
+                    // Real's `PackageArg`/`AtomArg` arm
+                    // (`depgraph.py:1681-1686`): the bare command-line
+                    // argument, no atom and no `^` marker. `s.atom`
+                    // already IS that argument here: the only producer
+                    // that emits empty-`consumer_cpv` rows is the
+                    // direct-solve path, and its empty-cpv parents come
+                    // solely from top-level argument pullers, whose
+                    // recorded atom is the argument text as typed
+                    // (unit-pinned by portage-repo's
+                    // `direct_solve_reports_an_argument_parent_with_the_cli_text`;
+                    // the reverse-pin producer always builds a
+                    // non-empty consumer, the backtrack-mask rows skip
+                    // empty pullers). No contract or bed cell grounds
+                    // this arm end to end (blk0 parents are all
+                    // Packages), so beyond that producer pin it stays
+                    // unpinned.
+                    println!("    {}", s.atom);
+                    continue;
+                }
+                if s.consumer_installed {
+                    println!(
+                        "    {} required by ({}, installed in '{}') {}",
+                        s.atom,
+                        s.consumer_cpv,
+                        root.display(),
+                        render_pkg_use_display(&s.consumer_use),
+                    );
                 } else {
-                    "ebuild scheduled for merge"
-                };
+                    println!(
+                        "    {} required by ({}, ebuild scheduled for merge) {}",
+                        s.atom,
+                        s.consumer_cpv,
+                        render_pkg_use_display(&s.consumer_use),
+                    );
+                }
                 println!(
-                    "    {} required by ({}, {}) {}",
-                    s.atom,
-                    s.consumer_cpv,
-                    consumer_state,
-                    render_pkg_use_display(&s.consumer_use),
+                    "    {}",
+                    skip_conflict_caret_line(&s.atom, &header.slot, &header.skipped_sub_slot)
                 );
-                println!("    {}", skip_conflict_caret_line(&s.atom));
             }
         }
         println!();
@@ -13649,6 +14136,61 @@ pub fn run(args: &[String]) -> ExitCode {
         println!();
         for s in &result.skipped_missing_deps {
             println!("{}/{}:{}", s.category, s.package, s.slot);
+        }
+    }
+
+    // Backlog #198: real `_show_missed_update_unsatisfied_dep`'s full
+    // per-update form (`depgraph.py:1592-1636`) -- one block per masked
+    // higher version whose missing atom bites nothing backtrack-masked
+    // (`GraphResult::skipped_missing_dep_full`, in the same first-mask
+    // order). The `cat/pkg:slot` header, the `selected:` / `skipped:
+    // ... (see unsatisfied dependency below)` rows and the missing
+    // atom's own disclosure follow real line for line; the `for <root>`
+    // suffix is omitted like every other portuale notice row. Same
+    // `--quiet`-unless-`--debug` gate as the two blocks above (real
+    // drops all missed-update types together, `depgraph.py:1576-1581`);
+    // likewise no `--columns` gate, and `--json` returns above.
+    if !(quiet && !debug) && !result.skipped_missing_dep_full.is_empty() {
+        for f in &result.skipped_missing_dep_full {
+            println!();
+            println!("!!! The following update has been skipped due to unsatisfied dependencies:");
+            println!();
+            println!("{}/{}:{}", f.category, f.package, f.slot);
+            println!();
+            println!("  selected: {}", f.selected_display);
+            println!(
+                "  skipped: {} (see unsatisfied dependency below)",
+                f.skipped_display
+            );
+            println!();
+            match &f.dep {
+                portage_repo::SkippedDepDisclosure::Masked(report) => {
+                    println!(
+                        "!!! All ebuilds that could satisfy {:?} have been masked.",
+                        report.atom
+                    );
+                    println!(
+                        "!!! One of the following masked packages is required to complete your request:"
+                    );
+                    for (cpv, reasons) in &report.masked {
+                        println!("- {cpv} (masked by: {})", reasons.join(", "));
+                    }
+                    println!();
+                    for (node, ty) in &report.chain {
+                        println!("(dependency required by \"{node}\" [{ty}])");
+                    }
+                    println!("For more information, see the MASKED PACKAGES section in the emerge");
+                    println!("man page or refer to the Gentoo Handbook.");
+                    println!();
+                }
+                portage_repo::SkippedDepDisclosure::Plain(report) => {
+                    println!("emerge: there are no ebuilds to satisfy {:?}.", report.atom);
+                    for (node, ty) in &report.chain {
+                        println!("(dependency required by \"{node}\" [{ty}])");
+                    }
+                    println!();
+                }
+            }
         }
     }
 
@@ -13678,6 +14220,30 @@ pub fn run(args: &[String]) -> ExitCode {
             &result.entries,
             result.large_cycle_count,
         );
+    }
+
+    // Backlog #193: real `select_files`' `_virtual_cycle_error` handler
+    // (`lib/_emerge/depgraph.py:5002-5013` in 3rdparty/portage 3.0.82.2)
+    // prints `\n\n!!! virtual cycle detected:\n\n`, one
+    // `  {cpv}::{repo}` line per probe-stack member (sorted), then `\n`
+    // -- to stderr (`writemsg`, noiselevel -1), mid-resolution (between
+    // real's `Calculating dependencies ...` notice halves; portuale
+    // prints that notice whole in the preamble above, like the
+    // masked/unsat arm). No merge list, no counters, no trailing error
+    // block: real's run ends after the timing line (g193 probe), and the
+    // shared abort gate below exits 1. Uncoloured like real's own
+    // `writemsg` (no colour markup on that path).
+    if portage_repo::abort_path_enabled()
+        && let portage_repo::ResolveOutcome::Aborted {
+            reason: portage_repo::AbortReason::VirtualCycle { members },
+            ..
+        } = &result.outcome
+    {
+        eprint!("\n\n!!! virtual cycle detected:\n\n");
+        for member in members {
+            eprintln!("  {member}");
+        }
+        eprintln!();
     }
 
     // Real `depgraph.py::_display_autounmask` (`:10625`), the
@@ -14190,20 +14756,137 @@ pub fn run(args: &[String]) -> ExitCode {
         // `run_resume` far above, with its own `nothing to resume`
         // message).
         //
-        // Residue (deliberate, follow-up): real defers instead when the
-        // run is `selective` (`-u`/`-N`/`--noreplace`/..., real
-        // `create_depgraph_params.py`) without `--oneshot` and a
-        // world-candidate favorite exists (`actions.py:514-516` -- the
-        // prompt moves into `depgraph.saveNomergeFavorites`, the
-        // rotation still runs, still no `Scheduler` write). Portuale has
-        // no world-favorites prompt, so the whole branch returns here; a
-        // selective all-noop run without `--oneshot` therefore skips the
-        // world-file record real would still make.
+        // Residue (deliberate scope boundary): the deferral arm above
+        // restores real's rotation plus `saveNomergeFavorites`'s record
+        // (`actions.py:514-516` + `:664-675` + `depgraph.py:11305-11402`)
+        // within portuale's existing world-file cuts -- the
+        // `world_file_additions`/`update_world_file` v1 cuts
+        // (version-pinned slot args, the vdb-only multislot fallback,
+        // system-virtual exclusion). A `world-candidate = false` user
+        // set is filtered at the gate and the record alike (see
+        // `usersets_world_candidate`); per-set single sections and repo
+        // `sets.conf` files stay unconsulted cuts (see its doc comment).
         let mergecount = display_entries
             .iter()
             .filter_map(emerge_build::resume_cpv)
             .count();
+        // Backlog #232: real's selective-without-`--oneshot` world
+        // candidates -- a plain (non-`@`) favorite, which real's own
+        // `world_candidates` filter always keeps (`actions.py:498-513`),
+        // or a user `@set` (`selected_set_args`; real defaults
+        // `usersets` to `world-candidate = true`, honoring a `sets.conf`
+        // override -- see `usersets_world_candidate`). Built-in
+        // `@world`/`@system`/`@profile` never count on either side.
+        let deferred = selective_noop_deferred(
+            selective,
+            // Real's folded gate variable (`actions.py:257`): `--onlydeps`
+            // keeps the deferral at bay exactly like `--oneshot`.
+            oneshot || onlydeps,
+            atom_args.iter().any(|a| !a.starts_with('@'))
+                || (usersets_world_candidate(&config_root) && !selected_set_args.is_empty()),
+        );
         if nothing_to_merge(pretend, show_merge_list, mergecount) {
+            if deferred {
+                // Real `actions.py:526`: the blank line prints on the
+                // prompt shape too (`prompt` stays `None` on this arm,
+                // so `UserQuery` is skipped), then the run falls through
+                // to the `resume_backup` rotation and
+                // `saveNomergeFavorites` -- only `Scheduler` is skipped
+                // (`:664-675`).
+                println!();
+                crate::mtimedb::rotate_resume_to_backup(&root);
+                // Backlog #232, second half: real
+                // `depgraph.saveNomergeFavorites`
+                // (`depgraph.py:11305-11402`) records the world-candidate
+                // favorites that stayed unmerged. Its own suppression set
+                // (`:11308-11317`) is `--buildpkgonly` / `--fetchonly` /
+                // `--fetch-all-uri` / `--oneshot` / `--onlydeps` /
+                // `--pretend`: `--pretend` never reaches this branch,
+                // `--oneshot` / `--onlydeps` already keep the deferral
+                // gate above at bay (real's folded variable,
+                // `actions.py:257`), and `--fetchonly` / `--fetch-all-uri`
+                // are portuale-unimplemented options (a usage error long
+                // before this point), so only `--buildpkgonly` still
+                // suppresses here. Under `--ask` the
+                // prompt moves here (`:11376-11386`): the additions list
+                // prints first, then `Would you like to add these
+                // packages to your world favorites?`, and a "No" (or EOF,
+                // which `ask_yes_no` folds into the same decline) records
+                // nothing -- the run still succeeds, the rotation above
+                // already happened.
+                if !buildpkgonly {
+                    // Backlog #232 review (Important-2): real's record
+                    // skips non-candidate sets (`depgraph.py:11366`) --
+                    // the same `usersets_world_candidate` filter as the
+                    // gate above, so only the gate-passing sets record.
+                    let record_sets: &[String] = if usersets_world_candidate(&config_root) {
+                        &selected_set_args
+                    } else {
+                        &[]
+                    };
+                    let fav_refs: Vec<&str> = atom_args.to_vec();
+                    let mut additions = match read_world_atoms(&root) {
+                        Ok(current) => {
+                            world_file_additions(&current, &fav_refs, entries, system_atoms, &repos)
+                        }
+                        Err(e) => {
+                            eprintln!("emerge: {e}");
+                            return ExitCode::from(1);
+                        }
+                    };
+                    match read_world_sets(&root) {
+                        Ok(names) => {
+                            let current: Vec<String> =
+                                names.into_iter().map(|n| format!("@{n}")).collect();
+                            additions.extend(world_sets_additions(&current, record_sets));
+                        }
+                        Err(e) => {
+                            eprintln!("emerge: {e}");
+                            return ExitCode::from(1);
+                        }
+                    }
+                    if ask && !additions.is_empty() {
+                        println!();
+                        let mut shown = additions.clone();
+                        shown.sort();
+                        shown.dedup();
+                        for a in &shown {
+                            println!(" {} {}", color.c("GOOD", "*"), a);
+                        }
+                        println!();
+                        if ask_yes_no(
+                            &color,
+                            "Would you like to add these packages to your world favorites?",
+                        ) != Some(true)
+                        {
+                            return ExitCode::SUCCESS;
+                        }
+                    }
+                    // The writers below re-read the world files and
+                    // recompute the same additions instead of reusing
+                    // `additions`: deliberate -- single-threaded, no
+                    // intervening write, so the recompute is identical,
+                    // and it keeps one writer entry point for both this
+                    // arm and the success path.
+                    if let Err(e) = update_world_file(
+                        &root,
+                        &fav_refs,
+                        entries,
+                        system_atoms,
+                        &repos,
+                        oneshot,
+                        onlydeps,
+                    ) {
+                        eprintln!("emerge: {e}");
+                        return ExitCode::from(1);
+                    }
+                    if let Err(e) = update_world_sets_file(&root, record_sets, oneshot, onlydeps) {
+                        eprintln!("emerge: {e}");
+                        return ExitCode::from(1);
+                    }
+                }
+                return ExitCode::SUCCESS;
+            }
             // Real's own `print()` before the message
             // (`actions.py:518`): `--ask` reaches here with no blank
             // line printed yet (the #185 `actions.py:526` blank only
@@ -14582,8 +15265,16 @@ pub fn run(args: &[String]) -> ExitCode {
             }
             // Real `saveNomergeFavorites`'s `@set` half: a directly-given
             // `@name` set arg is recorded in `world_sets` (same
-            // suppression set as the world file).
-            if let Err(e) = update_world_sets_file(&root, &selected_set_args, oneshot, onlydeps) {
+            // suppression set as the world file). Backlog #232 review
+            // (Important-2): non-candidate sets are skipped
+            // (`depgraph.py:11366`) -- the same `usersets_world_candidate`
+            // filter as the deferral arm above.
+            let record_sets: &[String] = if usersets_world_candidate(&config_root) {
+                &selected_set_args
+            } else {
+                &[]
+            };
+            if let Err(e) = update_world_sets_file(&root, record_sets, oneshot, onlydeps) {
                 eprintln!("emerge: {e}");
                 return ExitCode::from(1);
             }
@@ -15581,6 +16272,493 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    /// `pre_exec` for the backlog #240 SIGINT tests: the child leaves
+    /// the test's session and process group (`setsid`), takes the pty
+    /// slave as its controlling terminal (`TIOCSCTTY`), and makes
+    /// itself the foreground group (`tcsetpgrp`). Only then does the
+    /// slave line discipline turn a `^C` byte written to the master
+    /// into a real SIGINT for the child (a plain spawned child has no
+    /// foreground group, so the byte is swallowed and the test would
+    /// hang). Only async-signal-safe syscalls run here.
+    #[cfg(unix)]
+    fn pty_foreground_pre_exec() -> std::io::Result<()> {
+        // SAFETY: `setsid`/`ioctl`/`tcsetpgrp`/`getpid` are plain
+        // syscalls on fd 0, which std has already duped onto the pty
+        // slave before `pre_exec` runs.
+        unsafe {
+            if libc::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::ioctl(libc::STDIN_FILENO, libc::TIOCSCTTY, 0 as libc::c_ulong) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::tcsetpgrp(libc::STDIN_FILENO, libc::getpid()) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        }
+    }
+
+    /// Drain the child's piped stdout until `marker` appears, with a
+    /// hard deadline so a prompt regression fails loudly instead of
+    /// hanging the suite. Returns every byte read so far; the caller
+    /// keeps draining the pipe afterwards. EOF before the marker
+    /// panics with the output so far (the child died before
+    /// prompting).
+    #[cfg(unix)]
+    fn read_stdout_until_marker(
+        pipe: &mut std::process::ChildStdout,
+        marker: &[u8],
+        what: &str,
+    ) -> Vec<u8> {
+        use std::os::fd::AsRawFd;
+        let mut seen = Vec::new();
+        let mut buf = [0u8; 512];
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        loop {
+            if !marker.is_empty() && seen.windows(marker.len()).any(|w| w == marker) {
+                return seen;
+            }
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                panic!(
+                    "timed out waiting for {what}; got so far: {}",
+                    String::from_utf8_lossy(&seen)
+                );
+            }
+            let mut pfd = libc::pollfd {
+                fd: pipe.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: a single valid `pollfd`; the timeout fits in a
+            // `c_int` by construction (120 s ceiling).
+            let pr = unsafe { libc::poll(&mut pfd, 1, remaining.as_millis() as libc::c_int) };
+            assert!(pr >= 0, "poll on child stdout failed");
+            if pr == 0 {
+                continue;
+            }
+            let n = std::io::Read::read(pipe, &mut buf).expect("read child stdout");
+            if n == 0 {
+                panic!(
+                    "child exited before printing {what}; got: {}",
+                    String::from_utf8_lossy(&seen)
+                );
+            }
+            seen.extend_from_slice(&buf[..n]);
+        }
+    }
+
+    /// Spawn `emerge --ask ...` for a backlog #240 SIGINT test: pty
+    /// stdin in the child's foreground group (so `^C` raises SIGINT),
+    /// both outputs piped, stderr drained on a thread from the start
+    /// (so a chatty resolve can never block on a full pipe while the
+    /// test polls stdout for the prompt). Returns the child, the
+    /// master, the stdout pipe, and the stderr-drain handle.
+    #[cfg(unix)]
+    fn sigint_prompt_child(
+        portuale_bin: &std::path::Path,
+        args: &[&str],
+        env: Vec<(String, String)>,
+        master: std::fs::File,
+        slave_stdio: std::process::Stdio,
+    ) -> (
+        std::process::Child,
+        std::fs::File,
+        std::process::ChildStdout,
+        std::thread::JoinHandle<Vec<u8>>,
+    ) {
+        let mut cmd = std::process::Command::new(portuale_bin);
+        cmd.args(args);
+        cmd.stdin(slave_stdio);
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
+        cmd.envs(env);
+        // SAFETY: `pty_foreground_pre_exec` runs only async-signal-safe
+        // syscalls (`setsid`, `ioctl`, `tcsetpgrp`, `getpid`) on the
+        // already-duped stdio fds; it allocates nothing and touches no
+        // locks. (Fully qualified: another `CommandExt` is in scope
+        // via `super::*`, and this toolchain's `pre_exec` is `unsafe`.)
+        unsafe {
+            <std::process::Command as std::os::unix::process::CommandExt>::pre_exec(
+                &mut cmd,
+                pty_foreground_pre_exec,
+            );
+        }
+        let mut child = cmd.spawn().expect("portuale emerge spawns");
+        let mut stderr_pipe = child.stderr.take().expect("piped stderr");
+        let err_handle = std::thread::spawn(move || {
+            let mut v = Vec::new();
+            std::io::Read::read_to_end(&mut stderr_pipe, &mut v).expect("drain child stderr");
+            v
+        });
+        let stdout_pipe = child.stdout.take().expect("piped stdout");
+        (child, master, stdout_pipe, err_handle)
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ask_merge_sigint_prints_interrupted_and_exits_130_like_real() {
+        // Backlog #240: real `_emerge/UserQuery.query`
+        // (`_emerge/UserQuery.py:74-76`) catches `KeyboardInterrupt`
+        // out of `input()`, prints `Interrupted.`, and exits
+        // `128 + SIGINT` from inside `query` -- the merge prompt's
+        // `== "No"` comparison and its `Quitting.` never run. A `^C`
+        // byte written to the pty master makes the slave line
+        // discipline raise a real SIGINT in the child (delivery needs
+        // the foreground group from `pty_foreground_pre_exec`; probed:
+        // without it the byte is swallowed). The child must exit 130
+        // *by exit* (`code() == Some(130)` with no signal -- before
+        // the fix it died by signal), print `Interrupted.` exactly
+        // once, and never print `Quitting.`. The `^C` goes out only
+        // after the prompt text is seen on stdout, so it cannot strike
+        // during startup or the resolve, where SIGINT must keep
+        // killing the process as today.
+        use std::io::Write;
+        use std::os::unix::process::ExitStatusExt;
+        let portuale_bin = built_portuale_bin();
+        let base = std::env::temp_dir().join(format!(
+            "ask_merge_sigint_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = base.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let env = fixture_resolve_env(&root, &base.join("pt"));
+        let (master, slave_stdio) = pty_pair();
+        let (mut child, mut master, mut stdout_pipe, err_handle) = sigint_prompt_child(
+            &portuale_bin,
+            &["emerge", "--ask", "--oneshot", "dev-libs/schedok"],
+            env,
+            master,
+            slave_stdio,
+        );
+        let mut stdout = read_stdout_until_marker(
+            &mut stdout_pipe,
+            b"Would you like to merge these packages?",
+            "the merge prompt",
+        );
+        master.write_all(b"\x03").expect("Ctrl-C the merge prompt");
+        let out_handle = std::thread::spawn(move || {
+            let mut v = Vec::new();
+            std::io::Read::read_to_end(&mut stdout_pipe, &mut v).expect("drain child stdout");
+            v
+        });
+        let status = child.wait().expect("wait for emerge");
+        drop(master);
+        stdout.extend(out_handle.join().expect("stdout drain"));
+        let stderr = err_handle.join().expect("stderr drain");
+        assert_eq!(
+            status.code(),
+            Some(130),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&stdout),
+            String::from_utf8_lossy(&stderr)
+        );
+        assert_eq!(
+            status.signal(),
+            None,
+            "SIGINT at the prompt must exit 130, not die by signal"
+        );
+        let text = String::from_utf8_lossy(&stdout);
+        assert_eq!(text.matches("Interrupted.").count(), 1, "{text}");
+        assert!(
+            !text.contains("Quitting."),
+            "an interrupted merge prompt must not print `Quitting.` like real: {text}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ask_read_news_sigint_exits_before_resolve_like_real() {
+        // Backlog #240, the news prompt (`_emerge/actions.py:4266-4288`
+        // through `_emerge/UserQuery.py:74-76`): a `^C` at the "read
+        // the news items while calculating dependencies?" prompt
+        // prints `Interrupted.` and exits `128 + SIGINT` before
+        // `action_build` -- by exit (`Some(130)`, no signal), exactly
+        // like the #234 EOF arm, and with no `eselect` spawn and no
+        // resolve (`Calculating dependencies` stays absent). Same
+        // `^C`-through-the-pty delivery and prompt-synchronized timing
+        // as the merge-prompt test above.
+        use std::io::Write;
+        use std::os::unix::process::ExitStatusExt;
+        let portuale_bin = built_portuale_bin();
+        let base = std::env::temp_dir().join(format!(
+            "ask_read_news_sigint_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = base.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let env = news_resolve_env(&root, &base.join("pt"));
+        let (master, slave_stdio) = pty_pair();
+        let (mut child, mut master, mut stdout_pipe, err_handle) = sigint_prompt_child(
+            &portuale_bin,
+            &[
+                "emerge",
+                "--ask",
+                "--read-news",
+                "--oneshot",
+                "dev-libs/schedok",
+            ],
+            env,
+            master,
+            slave_stdio,
+        );
+        let mut stdout = read_stdout_until_marker(
+            &mut stdout_pipe,
+            b"Would you like to read the news items",
+            "the news prompt",
+        );
+        master.write_all(b"\x03").expect("Ctrl-C the news prompt");
+        let out_handle = std::thread::spawn(move || {
+            let mut v = Vec::new();
+            std::io::Read::read_to_end(&mut stdout_pipe, &mut v).expect("drain child stdout");
+            v
+        });
+        let status = child.wait().expect("wait for emerge");
+        drop(master);
+        stdout.extend(out_handle.join().expect("stdout drain"));
+        let stderr = err_handle.join().expect("stderr drain");
+        assert_eq!(
+            status.code(),
+            Some(130),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&stdout),
+            String::from_utf8_lossy(&stderr)
+        );
+        assert_eq!(
+            status.signal(),
+            None,
+            "SIGINT at the prompt must exit 130, not die by signal"
+        );
+        let text = String::from_utf8_lossy(&stdout);
+        assert_eq!(text.matches("Interrupted.").count(), 1, "{text}");
+        assert!(
+            !text.contains("Quitting."),
+            "an interrupted news prompt must not print `Quitting.` like real: {text}"
+        );
+        assert_eq!(text.matches("news items need reading").count(), 1, "{text}");
+        assert!(
+            !text.contains("Calculating dependencies"),
+            "an interrupted news prompt must exit before the resolve: {text}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ask_config_select_sigint_prints_interrupted_and_exits_130_like_real() {
+        // Backlog #240 follow-up: the config `Selection?` menu goes
+        // through the same `UserQuery.query` in real
+        // (`_emerge/actions.py:746` through
+        // `_emerge/UserQuery.py:74-76`), so a `^C` there prints
+        // `Interrupted.` and exits `128 + SIGINT` by exit -- `X`'s own
+        // `Quitting.` (`actions.py:747-748`) never runs. Two fake vdb
+        // entries make `dev-libs/seltest` match twice, reaching the
+        // menu with no ebuild work at all; same `^C`-through-the-pty
+        // delivery and prompt-synchronized timing as the merge-prompt
+        // test above.
+        use std::io::Write;
+        use std::os::unix::process::ExitStatusExt;
+        let portuale_bin = built_portuale_bin();
+        let base = std::env::temp_dir().join(format!(
+            "ask_config_select_sigint_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = base.join("root");
+        for v in ["1.0", "2.0"] {
+            std::fs::create_dir_all(root.join(format!("var/db/pkg/dev-libs/seltest-{v}"))).unwrap();
+        }
+        let env = fixture_resolve_env(&root, &base.join("pt"));
+        let (master, slave_stdio) = pty_pair();
+        let (mut child, mut master, mut stdout_pipe, err_handle) = sigint_prompt_child(
+            &portuale_bin,
+            &["emerge", "--ask", "--config", "dev-libs/seltest"],
+            env,
+            master,
+            slave_stdio,
+        );
+        let mut stdout =
+            read_stdout_until_marker(&mut stdout_pipe, b"Selection?", "the Selection? prompt");
+        master
+            .write_all(b"\x03")
+            .expect("Ctrl-C the Selection? prompt");
+        let out_handle = std::thread::spawn(move || {
+            let mut v = Vec::new();
+            std::io::Read::read_to_end(&mut stdout_pipe, &mut v).expect("drain child stdout");
+            v
+        });
+        let status = child.wait().expect("wait for emerge");
+        drop(master);
+        stdout.extend(out_handle.join().expect("stdout drain"));
+        let stderr = err_handle.join().expect("stderr drain");
+        assert_eq!(
+            status.code(),
+            Some(130),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&stdout),
+            String::from_utf8_lossy(&stderr)
+        );
+        assert_eq!(
+            status.signal(),
+            None,
+            "SIGINT at the prompt must exit 130, not die by signal"
+        );
+        let text = String::from_utf8_lossy(&stdout);
+        assert!(
+            text.contains("Please select a package to configure:"),
+            "{text}"
+        );
+        assert_eq!(text.matches("Interrupted.").count(), 1, "{text}");
+        assert!(
+            !text.contains("Quitting."),
+            "an interrupted Selection? prompt must not print `Quitting.` like real: {text}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn sigint_during_merge_still_dies_by_signal_like_before() {
+        // Backlog #240 scoping pin: the guard lives strictly inside
+        // the prompt functions, so a `^C` outside any prompt keeps
+        // the default disposition -- death by signal, exactly as
+        // before this slice. A promptless `emerge --oneshot` merge of
+        // `dev-libs/schedok` runs ebuild phases for well over a
+        // second after printing `>>> Emerging`, so a `^C`
+        // synchronized on that marker deterministically lands outside
+        // any prompt: no `Interrupted.` line, no exit code,
+        // `signal() == Some(SIGINT)`.
+        use std::io::Write;
+        use std::os::unix::process::ExitStatusExt;
+        let portuale_bin = built_portuale_bin();
+        let base = std::env::temp_dir().join(format!(
+            "merge_sigint_dies_by_signal_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = base.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let env = fixture_resolve_env(&root, &base.join("pt"));
+        let (master, slave_stdio) = pty_pair();
+        let (mut child, mut master, mut stdout_pipe, err_handle) = sigint_prompt_child(
+            &portuale_bin,
+            &["emerge", "--oneshot", "dev-libs/schedok"],
+            env,
+            master,
+            slave_stdio,
+        );
+        let mut stdout =
+            read_stdout_until_marker(&mut stdout_pipe, b">>> Emerging", "the merge start");
+        master.write_all(b"\x03").expect("Ctrl-C the running merge");
+        let out_handle = std::thread::spawn(move || {
+            let mut v = Vec::new();
+            std::io::Read::read_to_end(&mut stdout_pipe, &mut v).expect("drain child stdout");
+            v
+        });
+        let status = child.wait().expect("wait for emerge");
+        drop(master);
+        stdout.extend(out_handle.join().expect("stdout drain"));
+        let stderr = err_handle.join().expect("stderr drain");
+        assert_eq!(
+            status.signal(),
+            Some(libc::SIGINT),
+            "SIGINT outside a prompt must kill the process: stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&stdout),
+            String::from_utf8_lossy(&stderr)
+        );
+        assert_eq!(
+            status.code(),
+            None,
+            "a signal death has no exit code: stdout: {}",
+            String::from_utf8_lossy(&stdout),
+        );
+        let text = String::from_utf8_lossy(&stdout);
+        assert!(
+            !text.contains("Interrupted."),
+            "only the prompt arm prints `Interrupted.`: {text}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ask_merge_eof_prints_interrupted_without_quitting_like_real() {
+        // Backlog #240's second fix: EOF at the merge prompt printed a
+        // spurious `Quitting.` after `Interrupted.` (the `None` arm
+        // fell into the decline arm). Real exits from inside
+        // `UserQuery.query` (`_emerge/UserQuery.py:74-76`), so only
+        // `Interrupted.` prints -- same VEOF delivery as the #234 news
+        // EOF test, at the later merge prompt instead.
+        use std::io::Write;
+        let portuale_bin = built_portuale_bin();
+        let base = std::env::temp_dir().join(format!(
+            "ask_merge_eof_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = base.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let env = fixture_resolve_env(&root, &base.join("pt"));
+        let (master, slave_stdio) = pty_pair();
+        let (mut child, mut master, mut stdout_pipe, err_handle) = sigint_prompt_child(
+            &portuale_bin,
+            &["emerge", "--ask", "--oneshot", "dev-libs/schedok"],
+            env,
+            master,
+            slave_stdio,
+        );
+        let mut stdout = read_stdout_until_marker(
+            &mut stdout_pipe,
+            b"Would you like to merge these packages?",
+            "the merge prompt",
+        );
+        master
+            .write_all(b"\x04")
+            .expect("EOF the merge prompt with VEOF");
+        let out_handle = std::thread::spawn(move || {
+            let mut v = Vec::new();
+            std::io::Read::read_to_end(&mut stdout_pipe, &mut v).expect("drain child stdout");
+            v
+        });
+        let status = child.wait().expect("wait for emerge");
+        drop(master);
+        stdout.extend(out_handle.join().expect("stdout drain"));
+        let stderr = err_handle.join().expect("stderr drain");
+        assert_eq!(
+            status.code(),
+            Some(130),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&stdout),
+            String::from_utf8_lossy(&stderr)
+        );
+        let text = String::from_utf8_lossy(&stdout);
+        assert_eq!(text.matches("Interrupted.").count(), 1, "{text}");
+        assert!(
+            !text.contains("Quitting."),
+            "an EOF merge prompt must not print `Quitting.` like real: {text}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[test]
     #[cfg(unix)]
     fn ask_read_news_true_spellings_prompt_like_real() {
@@ -15677,6 +16855,190 @@ mod tests {
         assert!(
             stderr.contains("\"--ask\" should only be used in a terminal"),
             "{stderr}"
+        );
+    }
+
+    /// Run the built binary twice under `--pretend` -- once with
+    /// `--X=True`, once with the bare `--X` -- against the committed
+    /// fixture tree on a shared scratch `ROOT`, and assert the two runs
+    /// are byte-identical (exit code, stdout, stderr). Backlog #241:
+    /// real's `true_y_or_n` choices
+    /// (`_emerge/main.py:320-322,365-371,405-415,446-449,612-623,697,732-747`;
+    /// normalized `in true_y` per option) admit `=True` for eleven
+    /// options portuale parsed narrowly (`=y`/`=n` only, rc 2
+    /// `unrecognized option` for nine of them and a wrong
+    /// `(choose from "y", "n")` rejection for the two
+    /// autounmask-keep options); `=True` must behave exactly like the
+    /// bare flag. `expected_rc` pins the shared exit code (0 for the
+    /// resolving shapes, 1 for the two autounmask-keep shapes whose
+    /// fixtures fail like real). `--pretend` never writes, so sharing
+    /// one `ROOT` across both runs is hermetic.
+    fn true_spelling_matches_bare(
+        flag_eq_true: &str,
+        flag_bare: &str,
+        atom: &str,
+        expected_rc: i32,
+    ) {
+        let portuale_bin = built_portuale_bin();
+        let base = std::env::temp_dir().join(format!(
+            "true_y_or_n_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = base.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let env = fixture_resolve_env(&root, &base.join("pt"));
+        let run = |flag: &str| {
+            std::process::Command::new(&portuale_bin)
+                .args(["emerge", "--pretend", flag, atom])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .envs(env.clone())
+                .output()
+                .expect("portuale emerge spawns")
+        };
+        let spelled = run(flag_eq_true);
+        let bare = run(flag_bare);
+        for (label, output) in [("spelled", &spelled), ("bare", &bare)] {
+            assert_eq!(
+                output.status.code(),
+                Some(expected_rc),
+                "--pretend {flag_bare} {atom} ({label}) must exit {expected_rc}\nstdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+        }
+        assert_eq!(
+            String::from_utf8_lossy(&spelled.stdout),
+            String::from_utf8_lossy(&bare.stdout),
+            "--pretend {flag_eq_true} {atom} must print like the bare flag",
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&spelled.stderr),
+            String::from_utf8_lossy(&bare.stderr),
+            "--pretend {flag_eq_true} {atom} must warn like the bare flag",
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn verbose_true_spelling_behaves_like_the_bare_flag() {
+        // Backlog #241: real `--verbose` is `true_y_or_n` choices
+        // (`main.py:732-735`, `in true_y` at `:1128-1131`).
+        true_spelling_matches_bare("--verbose=True", "--verbose", "dev-libs/newpkg", 0);
+    }
+
+    #[test]
+    fn quiet_true_spelling_behaves_like_the_bare_flag() {
+        // Backlog #241: real `--quiet` is `true_y_or_n` choices
+        // (`main.py:612-614`, `in true_y` at `:939-941`).
+        true_spelling_matches_bare("--quiet=True", "--quiet", "dev-libs/newpkg", 0);
+    }
+
+    #[test]
+    fn deselect_true_spelling_behaves_like_the_bare_flag() {
+        // Backlog #241: real `--deselect` is `true_y_or_n` choices
+        // (`main.py:446-449`, `in true_y` at `:869-870`); the bare form
+        // stays the standalone deselect action either way.
+        true_spelling_matches_bare("--deselect=True", "--deselect", "dev-libs/foo", 0);
+    }
+
+    #[test]
+    fn changed_deps_true_spelling_behaves_like_the_bare_flag() {
+        // Backlog #241: real `--changed-deps` is `true_y_or_n` choices
+        // (`main.py:405-407`, `in true_y` at `:848-851`).
+        true_spelling_matches_bare(
+            "--changed-deps=True",
+            "--changed-deps",
+            "dev-libs/changeddepspkg",
+            0,
+        );
+    }
+
+    #[test]
+    fn changed_deps_report_true_spelling_behaves_like_the_bare_flag() {
+        // Backlog #241: real `--changed-deps-report` is `true_y_or_n`
+        // choices (`main.py:409-411`, `in true_y` at `:854-857`).
+        true_spelling_matches_bare(
+            "--changed-deps-report=True",
+            "--changed-deps-report",
+            "dev-libs/changeddepspkg",
+            0,
+        );
+    }
+
+    #[test]
+    fn selective_true_spelling_behaves_like_the_bare_flag() {
+        // Backlog #241: real `--selective` is `true_y_or_n` choices
+        // (`main.py:697`, `in true_y` at `:988-989`).
+        true_spelling_matches_bare("--selective=True", "--selective", "dev-libs/samepkg", 0);
+    }
+
+    #[test]
+    fn changed_slot_true_spelling_behaves_like_the_bare_flag() {
+        // Backlog #241: real `--changed-slot` is `true_y_or_n` choices
+        // (`main.py:413-415`, `in true_y` at `:860-863`).
+        true_spelling_matches_bare(
+            "--changed-slot=True",
+            "--changed-slot",
+            "dev-libs/changedslotpkg",
+            0,
+        );
+    }
+
+    #[test]
+    fn quiet_build_true_spelling_behaves_like_the_bare_flag() {
+        // Backlog #241: real `--quiet-build` is `true_y_or_n` choices
+        // (`main.py:617-619`, `in true_y` at `:944-945`); inert under
+        // `--pretend` either way.
+        true_spelling_matches_bare("--quiet-build=True", "--quiet-build", "dev-libs/newpkg", 0);
+    }
+
+    #[test]
+    fn with_test_deps_true_spelling_behaves_like_the_bare_flag() {
+        // Backlog #241: real `--with-test-deps` is `true_y_or_n`
+        // choices (`main.py:745-747`, `in true_y` at `:1133-1136`).
+        true_spelling_matches_bare(
+            "--with-test-deps=True",
+            "--with-test-deps",
+            "dev-libs/withtestdeppkg",
+            0,
+        );
+    }
+
+    #[test]
+    fn autounmask_keep_keywords_true_spelling_behaves_like_the_bare_flag() {
+        // Backlog #241: real `--autounmask-keep-keywords` is
+        // `true_y_or_n` choices (`main.py:365-367`, `in true_y` at
+        // `:821-822`) -- the old wrong `(choose from "y", "n")`
+        // rejection of `=True` is gone, and the bare form (once a
+        // "requires an argument" rc 2) now keeps keywords like real's
+        // inserted `"True"`. `=True` keeps keywords, so the run falls
+        // back to the older stable `akk0a-1` like real (rc 0, same as
+        // the `=y` pin since backlog #198's missing-dep backtrack).
+        true_spelling_matches_bare(
+            "--autounmask-keep-keywords=True",
+            "--autounmask-keep-keywords",
+            "dev-libs/akk0a",
+            0,
+        );
+    }
+
+    #[test]
+    fn autounmask_keep_masks_true_spelling_behaves_like_the_bare_flag() {
+        // Backlog #241: real `--autounmask-keep-masks` is `true_y_or_n`
+        // choices (`main.py:369-371`, `in true_y` at `:824-825`) --
+        // same rework as keep-keywords. `=True` keeps the mask, so the
+        // package.mask'd target stays fatal (rc 1, the default).
+        true_spelling_matches_bare(
+            "--autounmask-keep-masks=True",
+            "--autounmask-keep-masks",
+            "dev-libs/hardmaskedpkg",
+            1,
         );
     }
 
@@ -16267,6 +17629,30 @@ mod tests {
     }
 
     #[test]
+    fn selective_noop_deferred_only_for_selective_non_oneshot_world_runs() {
+        // Backlog #232: real `_emerge/actions.py:514-516` -- the
+        // deferral (no message, rotation + world record, no `Scheduler`)
+        // fires only when the run is `selective` without `--oneshot` /
+        // `--onlydeps` and a world-candidate favorite exists. The second
+        // parameter is real's folded gate variable (`actions.py:257`:
+        // `--oneshot` or `--onlydeps`), so one `true` covers both flags.
+        // (selective, oneshot_or_onlydeps, has_world_candidates) -> deferred.
+        assert!(selective_noop_deferred(true, false, true));
+        // `--oneshot` -- or `--onlydeps`, which real folds into the same
+        // gate variable (`actions.py:257`) -- keeps the deferral at bay
+        // (the #225 shape), with or without world candidates.
+        assert!(!selective_noop_deferred(true, true, true));
+        assert!(!selective_noop_deferred(true, true, false));
+        // A non-selective all-noop run is the plain `Nothing to merge`
+        // shape even with world candidates around.
+        assert!(!selective_noop_deferred(false, false, true));
+        // No world candidate (bare args, or only `@world`/`@system`) is
+        // the plain `Nothing to merge` shape even when selective.
+        assert!(!selective_noop_deferred(true, false, false));
+        assert!(!selective_noop_deferred(false, true, false));
+    }
+
+    #[test]
     fn nonpretend_resolution_display_splits_header_from_notice_under_nodeps() {
         // Backlog #185 fix round 1: real
         // `_emerge/depgraph.py::_start_resolution_display`
@@ -16402,6 +17788,7 @@ mod tests {
             cpv: "dev-libs/t-1.0:0/0::r".to_string(),
             iuse: ["x".to_string()].into_iter().collect(),
             use_flags: ["x".to_string()].into_iter().collect(),
+            installed: false,
         }];
         // ">=dev-libs/t-2.0" does not accept 1.0 -> ("version", "ge")
         let ge = parse_atom(">=dev-libs/t-2.0").unwrap();
@@ -16424,6 +17811,7 @@ mod tests {
             cpv: "dev-libs/t-1.0:0/0::r".to_string(),
             iuse: ["x".to_string()].into_iter().collect(),
             use_flags: HashSet::new(),
+            installed: false,
         }];
         assert_eq!(
             slot_conflict_reasons(&ok, &others_off),
@@ -16434,10 +17822,20 @@ mod tests {
             cpv: "dev-libs/t-1.0:0/0::r".to_string(),
             iuse: HashSet::new(),
             use_flags: HashSet::new(),
+            installed: false,
         }];
         assert_eq!(
             slot_conflict_reasons(&ok, &others_gone),
             (vec![SlotConflictReason::Use("x".to_string())], true,)
+        );
+
+        // Real's `elif` chain (`slot_collision.py:307-397`): a
+        // version-mismatched pair skips the USE check even when the
+        // atom's USE deps would also fail against the other instance.
+        let both = parse_atom(">=dev-libs/t-2.0[x]").unwrap();
+        assert_eq!(
+            slot_conflict_reasons(&both, &others_off),
+            (vec![SlotConflictReason::Version("ge")], false,)
         );
 
         // caret span: under ">=" (idx 0,1) and under "2.0" (rfind)
@@ -16691,6 +18089,146 @@ mod tests {
         e.package = package.into();
         e.slot = Some(slot.into());
         e
+    }
+
+    #[test]
+    fn world_file_additions_reports_only_new_plain_targets() {
+        // Backlog #232: the deferral arm's pre-record computation --
+        // new atoms in argument order; already-present atoms, `@set`
+        // targets (the `world_sets` half), and args with no resolved
+        // entry contribute nothing.
+        let entries = vec![
+            world_entry("dev-libs", "wanted", "0"),
+            world_entry("dev-libs", "existing", "0"),
+        ];
+        assert_eq!(
+            world_file_additions(
+                &["dev-libs/existing".to_string()],
+                &[
+                    "dev-libs/wanted",
+                    "dev-libs/existing",
+                    "@someset",
+                    "dev-libs/ghost"
+                ],
+                &entries,
+                &[],
+                &[],
+            ),
+            vec!["dev-libs/wanted".to_string()],
+        );
+        // Nothing new -> empty (the `--ask` prompt stays silent too).
+        assert!(
+            world_file_additions(
+                &[
+                    "dev-libs/existing".to_string(),
+                    "dev-libs/wanted".to_string()
+                ],
+                &["dev-libs/wanted"],
+                &entries,
+                &[],
+                &[],
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn world_sets_additions_reports_only_new_sets() {
+        // Backlog #232: the `@set` half of the deferral arm's
+        // pre-record computation -- `@`-prefixed lines for names not
+        // already recorded, in argument order.
+        assert_eq!(
+            world_sets_additions(
+                &["@kept".to_string()],
+                &["kept".to_string(), "fresh".to_string()],
+            ),
+            vec!["@fresh".to_string()],
+        );
+        assert!(world_sets_additions(&["@kept".to_string()], &["kept".to_string()]).is_empty());
+    }
+
+    #[test]
+    fn usersets_world_candidate_honors_only_an_explicit_usersets_override() {
+        // Backlog #232 review (Important-2): real
+        // `lib/portage/_sets/__init__.py:133` + `:258-262` -- file sets
+        // are candidates unless `sets.conf` says otherwise.
+        fn cfg(tag: &str) -> std::path::PathBuf {
+            let dir = std::env::temp_dir().join(format!(
+                "portuale-usersets-{}-{}-{tag}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("clock")
+                    .as_nanos(),
+            ));
+            std::fs::create_dir_all(dir.join("etc/portage")).expect("mkdir");
+            dir
+        }
+        // No `sets.conf` at all: the shipped default (candidate).
+        assert!(usersets_world_candidate(&cfg("absent")));
+        // An explicit `[usersets] world-candidate = false` flips it;
+        // option names are case-insensitive, section names are not.
+        let dir = cfg("false");
+        std::fs::write(
+            dir.join("etc/portage/sets.conf"),
+            "[usersets]\nWORLD-CANDIDATE = false\n",
+        )
+        .expect("write");
+        assert!(!usersets_world_candidate(&dir));
+        let dir = cfg("wrong-section");
+        std::fs::write(
+            dir.join("etc/portage/sets.conf"),
+            "[UserSets]\nworld-candidate = false\n",
+        )
+        .expect("write");
+        assert!(usersets_world_candidate(&dir));
+        // Every `getboolean` false spelling counts; `true` spellings
+        // flip back (later lines win, like real's merged sections).
+        let dir = cfg("spellings");
+        std::fs::write(
+            dir.join("etc/portage/sets.conf"),
+            "[usersets]\nworld-candidate = no\nworld-candidate = 0\n",
+        )
+        .expect("write");
+        assert!(!usersets_world_candidate(&dir));
+        let dir = cfg("revert");
+        std::fs::write(
+            dir.join("etc/portage/sets.conf"),
+            "[usersets]\nworld-candidate = false\nworld-candidate = True\n",
+        )
+        .expect("write");
+        assert!(usersets_world_candidate(&dir));
+        // An unparsable value is ignored, never a suppression.
+        let dir = cfg("garbage");
+        std::fs::write(
+            dir.join("etc/portage/sets.conf"),
+            "[usersets]\nworld-candidate = maybe\n",
+        )
+        .expect("write");
+        assert!(usersets_world_candidate(&dir));
+        // The `sets.conf/` directory form: sorted walk, later wins.
+        let dir = cfg("dir");
+        let dotd = dir.join("etc/portage/sets.conf");
+        std::fs::create_dir_all(&dotd).expect("mkdir");
+        std::fs::write(
+            dotd.join("10-first.conf"),
+            "[usersets]\nworld-candidate = false\n",
+        )
+        .expect("write");
+        std::fs::write(
+            dotd.join("20-second.conf"),
+            "[usersets]\nworld-candidate = on\n",
+        )
+        .expect("write");
+        assert!(usersets_world_candidate(&dir));
+        // Unrelated sections never matter.
+        let dir = cfg("other");
+        std::fs::write(
+            dir.join("etc/portage/sets.conf"),
+            "[noworldset]\nworld-candidate = false\n",
+        )
+        .expect("write");
+        assert!(usersets_world_candidate(&dir));
     }
 
     #[test]
