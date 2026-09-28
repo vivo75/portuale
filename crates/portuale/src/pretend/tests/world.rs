@@ -1,6 +1,125 @@
 use super::*;
 
 #[test]
+fn world_file_additions_reports_only_new_plain_targets() {
+    // New atoms in argument order; already-present, `@set`, and unresolved targets add nothing.
+    let entries = vec![
+        world_entry("dev-libs", "wanted", "0"),
+        world_entry("dev-libs", "existing", "0"),
+    ];
+    assert_eq!(
+        world_file_additions(
+            &["dev-libs/existing".to_string()],
+            &[
+                "dev-libs/wanted",
+                "dev-libs/existing",
+                "@someset",
+                "dev-libs/ghost"
+            ],
+            &entries,
+            &[],
+            &[],
+        ),
+        vec!["dev-libs/wanted".to_string()],
+    );
+    assert!(
+        world_file_additions(
+            &[
+                "dev-libs/existing".to_string(),
+                "dev-libs/wanted".to_string()
+            ],
+            &["dev-libs/wanted"],
+            &entries,
+            &[],
+            &[],
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn world_sets_additions_reports_only_new_sets() {
+    // New `@`-prefixed lines in argument order.
+    assert_eq!(
+        world_sets_additions(
+            &["@kept".to_string()],
+            &["kept".to_string(), "fresh".to_string()],
+        ),
+        vec!["@fresh".to_string()],
+    );
+    assert!(world_sets_additions(&["@kept".to_string()], &["kept".to_string()]).is_empty());
+}
+
+#[test]
+fn usersets_world_candidate_honors_only_an_explicit_usersets_override() {
+    // Portage: _sets/__init__.py. File sets are candidates unless `sets.conf` says otherwise.
+    // Option names are case-insensitive, section names are not; later lines win.
+    fn cfg(tag: &str) -> std::path::PathBuf {
+        let dir = TempDir::new(&format!("portuale-usersets-{tag}")).keep();
+        std::fs::create_dir_all(dir.join("etc/portage")).expect("mkdir");
+        dir
+    }
+    assert!(usersets_world_candidate(&cfg("absent")));
+    let dir = cfg("false");
+    std::fs::write(
+        dir.join("etc/portage/sets.conf"),
+        "[usersets]\nWORLD-CANDIDATE = false\n",
+    )
+    .expect("write");
+    assert!(!usersets_world_candidate(&dir));
+    let dir = cfg("wrong-section");
+    std::fs::write(
+        dir.join("etc/portage/sets.conf"),
+        "[UserSets]\nworld-candidate = false\n",
+    )
+    .expect("write");
+    assert!(usersets_world_candidate(&dir));
+    let dir = cfg("spellings");
+    std::fs::write(
+        dir.join("etc/portage/sets.conf"),
+        "[usersets]\nworld-candidate = no\nworld-candidate = 0\n",
+    )
+    .expect("write");
+    assert!(!usersets_world_candidate(&dir));
+    let dir = cfg("revert");
+    std::fs::write(
+        dir.join("etc/portage/sets.conf"),
+        "[usersets]\nworld-candidate = false\nworld-candidate = True\n",
+    )
+    .expect("write");
+    assert!(usersets_world_candidate(&dir));
+    // An unparsable value is ignored, never a suppression.
+    let dir = cfg("garbage");
+    std::fs::write(
+        dir.join("etc/portage/sets.conf"),
+        "[usersets]\nworld-candidate = maybe\n",
+    )
+    .expect("write");
+    assert!(usersets_world_candidate(&dir));
+    let dir = cfg("dir");
+    let dotd = dir.join("etc/portage/sets.conf");
+    std::fs::create_dir_all(&dotd).expect("mkdir");
+    std::fs::write(
+        dotd.join("10-first.conf"),
+        "[usersets]\nworld-candidate = false\n",
+    )
+    .expect("write");
+    std::fs::write(
+        dotd.join("20-second.conf"),
+        "[usersets]\nworld-candidate = on\n",
+    )
+    .expect("write");
+    assert!(usersets_world_candidate(&dir));
+    let dir = cfg("other");
+    std::fs::write(
+        dir.join("etc/portage/sets.conf"),
+        "[noworldset]\nworld-candidate = false\n",
+    )
+    .expect("write");
+    assert!(usersets_world_candidate(&dir));
+}
+
+#[test]
 fn update_world_file_records_a_new_target_and_skips_deps_and_oneshot() {
     let tmp = TempDir::new("portuale-world").keep();
     let root = tmp.join("root");
