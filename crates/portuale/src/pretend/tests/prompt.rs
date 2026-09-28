@@ -98,6 +98,170 @@ fn ask_read_news_sigint_exits_before_resolve_like_portage() {
 
 #[test]
 #[cfg(unix)]
+fn ask_config_select_sigint_prints_interrupted_and_exits_130_like_portage() {
+    // Portage: actions.py, UserQuery.py, query. A `^C` at the `Selection?` menu
+    // prints `Interrupted.` and exits 130; its own `Quitting.` never runs.
+    use std::io::Write;
+    use std::os::unix::process::ExitStatusExt;
+    let portuale_bin = built_portuale_bin();
+    let base = TempDir::new("ask_config_select_sigint").keep();
+    let root = base.join("root");
+    for v in ["1.0", "2.0"] {
+        std::fs::create_dir_all(root.join(format!("var/db/pkg/dev-libs/seltest-{v}"))).unwrap();
+    }
+    let env = fixture_resolve_env(&root, &base.join("pt"));
+    let (master, slave_stdio) = pty_pair();
+    let (child, mut master, mut stdout_pipe, err_handle) = sigint_prompt_child(
+        &portuale_bin,
+        &["emerge", "--ask", "--config", "dev-libs/seltest"],
+        env,
+        master,
+        slave_stdio,
+    );
+    let mut stdout =
+        read_stdout_until_marker(&mut stdout_pipe, b"Selection?", "the Selection? prompt");
+    master
+        .write_all(b"\x03")
+        .expect("Ctrl-C the Selection? prompt");
+    let out_handle = std::thread::spawn(move || {
+        let mut v = Vec::new();
+        std::io::Read::read_to_end(&mut stdout_pipe, &mut v).expect("drain child stdout");
+        v
+    });
+    let status = wait_pty_status(child);
+    drop(master);
+    stdout.extend(out_handle.join().expect("stdout drain"));
+    let stderr = err_handle.join().expect("stderr drain");
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&stdout),
+        String::from_utf8_lossy(&stderr)
+    );
+    assert_eq!(
+        status.signal(),
+        None,
+        "SIGINT at the prompt must exit 130, not die by signal"
+    );
+    let text = String::from_utf8_lossy(&stdout);
+    assert!(
+        text.contains("Please select a package to configure:"),
+        "{text}"
+    );
+    assert_eq!(text.matches("Interrupted.").count(), 1, "{text}");
+    assert!(
+        !text.contains("Quitting."),
+        "an interrupted Selection? prompt must not print `Quitting.` like real: {text}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+#[cfg(unix)]
+fn sigint_during_merge_still_dies_by_signal_like_before() {
+    // The guard lives inside the prompt functions only; a `^C` during a merge
+    // still kills by signal.
+    use std::io::Write;
+    use std::os::unix::process::ExitStatusExt;
+    let portuale_bin = built_portuale_bin();
+    let base = TempDir::new("merge_sigint_dies_by_signal").keep();
+    let root = base.join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    let env = fixture_resolve_env(&root, &base.join("pt"));
+    let (master, slave_stdio) = pty_pair();
+    let (child, mut master, mut stdout_pipe, err_handle) = sigint_prompt_child(
+        &portuale_bin,
+        &["emerge", "--oneshot", "dev-libs/schedok"],
+        env,
+        master,
+        slave_stdio,
+    );
+    let mut stdout = read_stdout_until_marker(&mut stdout_pipe, b">>> Emerging", "the merge start");
+    master.write_all(b"\x03").expect("Ctrl-C the running merge");
+    let out_handle = std::thread::spawn(move || {
+        let mut v = Vec::new();
+        std::io::Read::read_to_end(&mut stdout_pipe, &mut v).expect("drain child stdout");
+        v
+    });
+    let status = wait_pty_status(child);
+    drop(master);
+    stdout.extend(out_handle.join().expect("stdout drain"));
+    let stderr = err_handle.join().expect("stderr drain");
+    assert_eq!(
+        status.signal(),
+        Some(libc::SIGINT),
+        "SIGINT outside a prompt must kill the process: stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&stdout),
+        String::from_utf8_lossy(&stderr)
+    );
+    assert_eq!(
+        status.code(),
+        None,
+        "a signal death has no exit code: stdout: {}",
+        String::from_utf8_lossy(&stdout),
+    );
+    let text = String::from_utf8_lossy(&stdout);
+    assert!(
+        !text.contains("Interrupted."),
+        "only the prompt arm prints `Interrupted.`: {text}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+#[cfg(unix)]
+fn ask_merge_eof_prints_interrupted_without_quitting_like_portage() {
+    // Portage: UserQuery.py, query. EOF at the merge prompt prints only `Interrupted.`.
+    use std::io::Write;
+    let portuale_bin = built_portuale_bin();
+    let base = TempDir::new("ask_merge_eof").keep();
+    let root = base.join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    let env = fixture_resolve_env(&root, &base.join("pt"));
+    let (master, slave_stdio) = pty_pair();
+    let (child, mut master, mut stdout_pipe, err_handle) = sigint_prompt_child(
+        &portuale_bin,
+        &["emerge", "--ask", "--oneshot", "dev-libs/schedok"],
+        env,
+        master,
+        slave_stdio,
+    );
+    let mut stdout = read_stdout_until_marker(
+        &mut stdout_pipe,
+        b"Would you like to merge these packages?",
+        "the merge prompt",
+    );
+    master
+        .write_all(b"\x04")
+        .expect("EOF the merge prompt with VEOF");
+    let out_handle = std::thread::spawn(move || {
+        let mut v = Vec::new();
+        std::io::Read::read_to_end(&mut stdout_pipe, &mut v).expect("drain child stdout");
+        v
+    });
+    let status = wait_pty_status(child);
+    drop(master);
+    stdout.extend(out_handle.join().expect("stdout drain"));
+    let stderr = err_handle.join().expect("stderr drain");
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&stdout),
+        String::from_utf8_lossy(&stderr)
+    );
+    let text = String::from_utf8_lossy(&stdout);
+    assert_eq!(text.matches("Interrupted.").count(), 1, "{text}");
+    assert!(
+        !text.contains("Quitting."),
+        "an EOF merge prompt must not print `Quitting.` like real: {text}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+#[cfg(unix)]
 fn ask_pretend_offer_prompts_on_stdout_for_a_write_action() {
     // Portage: actions.py. `--ask` with an unowned ROOT offers
     // `Would you like to add --pretend to options?` on stdout. The answer here is "No".
