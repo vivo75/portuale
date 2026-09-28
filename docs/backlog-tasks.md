@@ -385,6 +385,8 @@ they shipped, not a rule for new work.
 
 247. **OPEN (filed 2026-09-28, #205 residue, g198 report) — the same-version reinstall `[1]` old-best marker is cut when only the repository differs.** Real `resolver/output.py:720-731` shows the old-best version when `not quiet_repo_display and repo differs` (third disjunct, `:729-730`); portuale deliberately drops that disjunct (`resolve_pretend`'s `myoldbest` comment in `portage-repo/src/lib.rs`). Visible on the #205 abk0 cells, whose pins disclose the delta. Decide whether to reopen the cut (policy) and, if so, port the disjunct and re-pin those cells. [A]
 
+248. **OPEN (filed 2026-09-28, #195 round 2, g195 report) — the autounmask dep-chain fill prints an extra self-row for an argument package's own change.** Real `_get_dep_chain` (`_emerge/depgraph.py:6257-6454`) never prints the start node, so a USE change on an argument package reads with one `# required by <pkg> (argument)` line (host 3.0.82.2 probe on `useflagpkg[-foo]`); portuale's generic fill adds the package's own `# required by` row first, and the useflagpkg pins assert those two lines. #195's record-and-fail arm already pre-fills the real one-liner; port the same rule into the generic fill and re-pin the useflagpkg cells from a probe. [A]
+
 ## Tier 4 — `--solver=` real-tree correctness (pubgrub / resolvo)
 
 33. **`--solver=resolvo` cycle linearization** — `install_order` can't order any closure with a toolchain cycle (glibc↔gcc↔perl); `solver_bridge.rs` prints raw ids. Non-functional on real targets. `docs/history/solver-backends-analysis.md`. [J]
