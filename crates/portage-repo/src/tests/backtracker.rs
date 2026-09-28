@@ -186,6 +186,32 @@ fn circular_slot_pinned_branch_prefers_bin_over_older_slot() {
     );
 }
 
+/// Unsolved ring with backtracking on: the retry re-strands identically (nothing
+/// to demote), and the settled pass reports the persisting ring.
+#[test]
+fn softened_ring_reports_the_persisting_cycle_with_backtracking_on() {
+    let result = graph_result_real("dev-libs/sbrA");
+    assert!(
+        !matches!(result.outcome, ResolveOutcome::Complete),
+        "softened ring must stay rc 1 with backtracking on"
+    );
+    assert_eq!(
+        result.circular_deps,
+        vec![vec![
+            "dev-libs/sbrA-1.0".to_string(),
+            "dev-libs/sbrB-1.0".to_string()
+        ]],
+        "{:?}",
+        result.circular_deps
+    );
+    // `--backtrack=0` fails the same way.
+    assert!(
+        !graph_result_real_backtrack("dev-libs/sbrA", 0)
+            .circular_deps
+            .is_empty()
+    );
+}
+
 /// `params_equal` compares accumulator state only; search position never compares
 /// unequal, and every conjunct is load-bearing.
 #[test]

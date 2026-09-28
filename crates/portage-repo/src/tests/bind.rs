@@ -1,5 +1,65 @@
 use super::*;
 
+/// `apply_prune_rebuilds` latches the flag, clears the replace set, and drops
+/// only the built steers; other masks and search state survive.
+#[test]
+fn slot_operator_prune_rebuilds_clears_replace_and_built_masks() {
+    let mut params = BacktrackParams::default();
+    params
+        .slot_operator_replace_installed
+        .insert(("app-misc".to_string(), "pcons".to_string()));
+    params
+        .slot_operator_undone
+        .insert(("app-misc".to_string(), "oldcons".to_string()));
+    params.runtime_pkg_mask.insert(
+        ("dev-libs".to_string(), "bttarget".to_string()),
+        vec![MaskEntry {
+            neg: "!=dev-libs/bttarget-2.0".to_string(),
+            reason: MaskReason::SlotConflict { parents: vec![] },
+        }],
+    );
+    params.runtime_pkg_mask.insert(
+        ("dev-libs".to_string(), "somaskchild".to_string()),
+        vec![MaskEntry {
+            neg: "!=dev-libs/somaskchild-1.0[binary]".to_string(),
+            reason: MaskReason::SlotOperatorBuilt,
+        }],
+    );
+    params.mask_order = vec![
+        (
+            ("dev-libs".to_string(), "bttarget".to_string()),
+            "!=dev-libs/bttarget-2.0".to_string(),
+        ),
+        (
+            ("dev-libs".to_string(), "somaskchild".to_string()),
+            "!=dev-libs/somaskchild-1.0[binary]".to_string(),
+        ),
+    ];
+    apply_prune_rebuilds(&mut params);
+    assert!(params.prune_rebuilds);
+    assert!(params.slot_operator_replace_installed.is_empty());
+    // The undone latch is not real state -- the prune does not touch it.
+    assert!(
+        params
+            .slot_operator_undone
+            .contains(&("app-misc".to_string(), "oldcons".to_string()))
+    );
+    // The conflict mask survives; the built steer is gone with its order slot.
+    assert_eq!(params.runtime_pkg_mask.len(), 1);
+    assert!(
+        params
+            .runtime_pkg_mask
+            .contains_key(&("dev-libs".to_string(), "bttarget".to_string()))
+    );
+    assert_eq!(
+        params.mask_order,
+        vec![(
+            ("dev-libs".to_string(), "bttarget".to_string()),
+            "!=dev-libs/bttarget-2.0".to_string()
+        )]
+    );
+}
+
 /// One token of the binder: another package never binds, graph entries beat the
 /// installed fallback, and the greatest same-cp version wins.
 #[test]
