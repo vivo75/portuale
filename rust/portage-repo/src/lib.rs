@@ -19143,6 +19143,48 @@ pub struct SkippedMissingDep {
     pub slot: String,
 }
 
+/// Backlog #198: one update real reports through the full per-update
+/// form of `_show_missed_update_unsatisfied_dep`
+/// (`lib/_emerge/depgraph.py:1592-1636`) -- a masked version higher
+/// than the chosen one whose missing-dependency mask no longer bites
+/// at settle time (real's `check_backtrack` probe does *not* raise
+/// `_backtrack_mask`, i.e. the missing atom names no backtrack-masked
+/// version). Renders the `cat/pkg:slot` header, the `selected:` /
+/// `skipped: ... (see unsatisfied dependency below)` rows (real
+/// `str(Package)`, destinations omitted like every other portuale
+/// notice row), then the missing atom's own disclosure -- the masked
+/// block or the plain-miss block, with a single-parent
+/// `(dependency required by ...)` chain: the skipped package is not in
+/// the settled graph, so real's `_get_dep_chain` stops there
+/// (`depgraph.py:6397`, "not in the graph ... break") with no
+/// `(argument)` line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkippedMissingDepFull {
+    pub category: String,
+    pub package: String,
+    pub slot: String,
+    /// `(cpv:slot/sub::repo, ebuild scheduled for merge)` for a
+    /// merge-bound selected entry, `(cpv:slot/sub::repo, installed)`
+    /// for an installed one (vdb repo, `__unknown__` fallback).
+    pub selected_display: String,
+    /// `(cpv:slot/sub::repo, ebuild scheduled for merge)` for the
+    /// masked higher version (never installed: real excludes
+    /// `pkg.installed` from missed updates, `:1539-1542`).
+    pub skipped_display: String,
+    /// The missing atom's disclosure: masked-only candidates, or the
+    /// plain miss when the atom names nothing at all.
+    pub dep: SkippedDepDisclosure,
+}
+
+/// The missing atom's disclosure inside [`SkippedMissingDepFull`]:
+/// reuses the settled-pass report shapes, with the chain pinned to the
+/// single skipped parent (see above).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkippedDepDisclosure {
+    Masked(MaskedDepReport),
+    Plain(PlainMissDepReport),
+}
+
 /// Backlog #90 (S2): real `_solve_non_slot_operator_slot_conflicts`
 /// (`depgraph.py:1774-2106`), run unconditionally by
 /// `_process_slot_conflicts` (`:2108-2116`) -- no backtracking gate
@@ -19873,11 +19915,11 @@ type SkippedUpdateKey = (
 /// rows (same shape as the direct-solve rows -- one row per rejecting
 /// parent, like the established provisional shape, where real renders
 /// one block with every parent inside); real's `"missing dependency"`
-/// becomes [`SkippedMissingDep`] slots *only when the missing atom
-/// still matches a backtrack-masked version at settle time* -- real's
-/// `check_backtrack` probe (`:6471-6484`: raise `_backtrack_mask`,
-/// abbreviated tail) as opposed to the full per-update form it prints
-/// otherwise, which has no portuale renderer.
+/// becomes [`SkippedMissingDep`] slots when the missing atom still
+/// matches a backtrack-masked version at settle time (real's
+/// `check_backtrack` probe (`:6471-6484`): raise `_backtrack_mask`,
+/// abbreviated tail), and [`SkippedMissingDepFull`] rows otherwise
+/// (backlog #198: the full per-update form, `:1592-1636`).
 ///
 /// Deliberate narrowings (all documented at the call site too):
 /// - one root only (portuale resolves a single root; real keys by
@@ -19888,10 +19930,11 @@ type SkippedUpdateKey = (
 /// - a masked version with no tree metadata (no slot to key on) is
 ///   skipped: there is no honest slot_atom for it.
 /// - a `"missing dependency"` record whose atom matches nothing
-///   backtrack-masked at settle time is skipped, not rendered: real
-///   shows its full form there, which is its own slice (no renderer
-///   exists here). Silence preserves current behaviour on those
-///   un-oracled shapes.
+///   backtrack-masked at settle time becomes a
+///   [`SkippedMissingDepFull`] row (backlog #198) -- except when no
+///   settled entry holds the slot (defensive; real's `any_selected`
+///   gate already filtered that) or the masked version's tree metadata
+///   cannot name the skipped node (same slot-narrowing as above).
 /// - cross-source collapse against the direct-solve rows happens at
 ///   the call site (`collapse_skipped_updates`, real `:1553-1562`):
 ///   per slot only the highest-version rows survive, whichever source
@@ -19905,7 +19948,11 @@ pub(crate) fn backtrack_missed_updates(
     config: &portage_profile::Config,
     entries: &[GraphEntry],
     params: &BacktrackParams,
-) -> (Vec<SkippedUpdate>, Vec<SkippedMissingDep>) {
+) -> (
+    Vec<SkippedUpdate>,
+    Vec<SkippedMissingDep>,
+    Vec<SkippedMissingDepFull>,
+) {
     // First-seen position per negative (real's dict insertion order;
     // defensive `usize::MAX` for entries the order vector never saw).
     let order_of = |cp: &(String, String), neg: &str| -> usize {
@@ -20016,6 +20063,7 @@ pub(crate) fn backtrack_missed_updates(
     });
     let mut skipped: Vec<SkippedUpdate> = Vec::new();
     let mut missing: Vec<SkippedMissingDep> = Vec::new();
+    let mut full: Vec<SkippedMissingDepFull> = Vec::new();
     for ((cat, pkg, slot), (ver, _, reason, sub, repo)) in kept {
         match reason {
             MaskReason::SlotConflict { parents } => {
@@ -20045,11 +20093,124 @@ pub(crate) fn backtrack_missed_updates(
                         package: pkg.clone(),
                         slot: slot.clone(),
                     });
+                } else if let Some(row) = missing_dep_full_row(
+                    repos, root, config, entries, &cat, &pkg, &slot, &ver, &sub, &repo, &atom,
+                ) {
+                    full.push(row);
                 }
             }
         }
     }
-    (skipped, missing)
+    (skipped, missing, full)
+}
+/// Backlog #198: build the full-form row for a missing-dependency mask
+/// whose atom bites nothing backtrack-masked at settle time (real
+/// `_show_missed_update_unsatisfied_dep`, `depgraph.py:1592-1636`).
+/// `cat/pkg` at `slot` is the masked higher version `ver` (tree
+/// sub-slot `sub`, tree repo `repo`); `atom` is the missing atom text
+/// as queued. Returns `None` when no settled entry holds the slot
+/// (real's `any_selected` gate) or the masked version's tree metadata
+/// cannot name the skipped node.
+#[allow(clippy::too_many_arguments)]
+fn missing_dep_full_row(
+    repos: &[RepoConfig],
+    root: &Path,
+    config: &portage_profile::Config,
+    entries: &[GraphEntry],
+    cat: &str,
+    pkg: &str,
+    slot: &str,
+    ver: &str,
+    sub: &str,
+    repo: &str,
+    atom: &str,
+) -> Option<SkippedMissingDepFull> {
+    // Real's `selected_pkg`: the tracker's match for the slot -- a
+    // merge-bound entry first, else the installed instance.
+    let mut selected_merge: Option<(&str, &str, &str, &str)> = None;
+    let mut selected_installed: Option<&str> = None;
+    for e in entries {
+        if e.category != cat || e.package != pkg {
+            continue;
+        }
+        match &e.outcome {
+            PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+                if e.slot.as_deref() == Some(slot) {
+                    selected_merge = Some((
+                        version.as_str(),
+                        e.slot.as_deref().unwrap_or(slot),
+                        e.sub_slot.as_deref().unwrap_or(sub),
+                        e.repo_name.as_deref().unwrap_or(repo),
+                    ));
+                    break;
+                }
+            }
+            PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
+                if e.slot.as_deref() == Some(slot) {
+                    selected_merge = Some((
+                        to.as_str(),
+                        e.slot.as_deref().unwrap_or(slot),
+                        e.sub_slot.as_deref().unwrap_or(sub),
+                        e.repo_name.as_deref().unwrap_or(repo),
+                    ));
+                    break;
+                }
+            }
+            PretendOutcome::AlreadyInstalled { version } => {
+                if selected_installed.is_none() && read_vdb_slot(root, cat, pkg, version).0 == slot
+                {
+                    selected_installed = Some(version.as_str());
+                }
+            }
+            PretendOutcome::NoVisibleCandidate | PretendOutcome::Uninstall { .. } => {}
+        }
+    }
+    let selected_display = if let Some((v, s, ss, r)) = selected_merge {
+        format!("({cat}/{pkg}-{v}:{s}/{ss}::{r}, ebuild scheduled for merge)")
+    } else {
+        let v = selected_installed?;
+        let (s, ss) = read_vdb_slot(root, cat, pkg, v);
+        let r = installed_pkg_repo(root, cat, pkg, v);
+        format!("({cat}/{pkg}-{v}:{s}/{ss}::{r}, installed)")
+    };
+    let skipped_display =
+        format!("({cat}/{pkg}-{ver}:{slot}/{sub}::{repo}, ebuild scheduled for merge)");
+    // The skipped package is not in the settled graph, so the chain is
+    // the single skipped node (real stops there, no `(argument)` line).
+    let chain = vec![(format!("{cat}/{pkg}-{ver}::{repo}"), "ebuild".to_string())];
+    let dep = match masked_candidates_for_atom(repos, atom, config) {
+        Some(masked) => {
+            let (acat, apkg) = portage_dep::parse_atom(atom)
+                .map(|a| (a.category, a.package))
+                .unwrap_or_else(|| (cat.to_string(), pkg.to_string()));
+            SkippedDepDisclosure::Masked(MaskedDepReport {
+                category: acat,
+                package: apkg,
+                atom: atom.to_string(),
+                masked,
+                chain,
+            })
+        }
+        None => {
+            let (acat, apkg) = portage_dep::parse_atom(atom)
+                .map(|a| (a.category, a.package))
+                .unwrap_or_else(|| (cat.to_string(), pkg.to_string()));
+            SkippedDepDisclosure::Plain(PlainMissDepReport {
+                category: acat,
+                package: apkg,
+                atom: atom.to_string(),
+                chain,
+            })
+        }
+    };
+    Some(SkippedMissingDepFull {
+        category: cat.to_string(),
+        package: pkg.to_string(),
+        slot: slot.to_string(),
+        selected_display,
+        skipped_display,
+        dep,
+    })
 }
 
 /// Backlog #129 (review): real `_get_missed_updates` chains
@@ -20431,6 +20592,11 @@ pub struct GraphResult {
     /// Rendered right after [`GraphResult::skipped_updates`] by
     /// `pretend.rs`, in first-mask order like the `WARNING` rows.
     pub skipped_missing_deps: Vec<SkippedMissingDep>,
+    /// Backlog #198: updates real reports through the full
+    /// unsatisfied-dependencies form (see [`SkippedMissingDepFull`]).
+    /// Rendered right after [`GraphResult::skipped_missing_deps`] by
+    /// `pretend.rs`, in the same first-mask order.
+    pub skipped_missing_dep_full: Vec<SkippedMissingDepFull>,
     /// Backlog #80: unresolved blocker rows whose owner has no display
     /// entry (scan-collected, absent from the graph). The renderer
     /// prints them in the trailing blocker group, counts them in
@@ -26916,6 +27082,7 @@ fn assemble_result(
     // unsolvable blocker rows and no orphan rows. A mask-free search
     // (including every `--backtrack=0` run) derives nothing here.
     let mut skipped_missing_deps: Vec<SkippedMissingDep> = Vec::new();
+    let mut skipped_missing_dep_full: Vec<SkippedMissingDepFull> = Vec::new();
     if matches!(outcome, ResolveOutcome::Complete)
         && pass.slot_conflicts.is_empty()
         && pass.orphan_blockers.is_empty()
@@ -26924,7 +27091,7 @@ fn assemble_result(
             .iter()
             .any(|e| e.blockers.iter().any(|b| b.unsolvable))
     {
-        let (mask_skipped, mask_missing) =
+        let (mask_skipped, mask_missing, mask_full) =
             backtrack_missed_updates(&ctx.repos, ctx.root, config, &pass.entries, params);
         // Real chains the mask dict before the handler removals
         // (`:1533-1536`), so mask rows lead in first-seen order and the
@@ -26937,6 +27104,7 @@ fn assemble_result(
         combined.append(&mut pass.skipped_updates);
         pass.skipped_updates = collapse_skipped_updates(combined);
         skipped_missing_deps = mask_missing;
+        skipped_missing_dep_full = mask_full;
     }
 
     GraphResult {
@@ -26947,6 +27115,7 @@ fn assemble_result(
         slot_conflicts: pass.slot_conflicts,
         skipped_updates: pass.skipped_updates,
         skipped_missing_deps,
+        skipped_missing_dep_full,
         orphan_blockers: pass.orphan_blockers,
         changed_deps_report: pass.changed_deps_report_entries,
         buildpkgonly_deps_unsatisfied,
@@ -46586,8 +46755,10 @@ mod tests {
     /// (`depgraph.py:3493-3503`, no top-level exemption) and the retry
     /// settles `akk0a-1` + `akk0c-1` (`foo` is globally on, so no USE
     /// change is recorded). The masked `akk0a-2` rides out as a
-    /// full-form skipped-missing-dep row (asserted in the display
-    /// commit's extension of this test).
+    /// full-form skipped-missing-dep row (real
+    /// `_show_missed_update_unsatisfied_dep`, `depgraph.py:1592`):
+    /// selected `akk0a-1`, skipped `akk0a-2`, masked-only `akk0b`
+    /// disclosure chained to the single skipped parent.
     #[test]
     fn missing_dep_backtrack_masks_the_top_level_selected_parent() {
         let result = graph_result_real_backtrack("dev-libs/akk0a", 10);
@@ -46608,6 +46779,46 @@ mod tests {
             "one retry masks akk0a-2, restarts={}",
             result.backtrack_restarts
         );
+        assert_eq!(result.skipped_missing_dep_full.len(), 1);
+        let row = &result.skipped_missing_dep_full[0];
+        assert_eq!(
+            (
+                row.category.as_str(),
+                row.package.as_str(),
+                row.slot.as_str()
+            ),
+            ("dev-libs", "akk0a", "0")
+        );
+        assert_eq!(
+            row.selected_display,
+            "(dev-libs/akk0a-1:0/0::testrepo, ebuild scheduled for merge)"
+        );
+        assert_eq!(
+            row.skipped_display,
+            "(dev-libs/akk0a-2:0/0::testrepo, ebuild scheduled for merge)"
+        );
+        match &row.dep {
+            SkippedDepDisclosure::Masked(report) => {
+                assert_eq!(report.atom, "dev-libs/akk0b");
+                assert_eq!(
+                    report.masked,
+                    vec![(
+                        "dev-libs/akk0b-1::testrepo".to_string(),
+                        vec!["~amd64 keyword".to_string()]
+                    )]
+                );
+                assert_eq!(
+                    report.chain,
+                    vec![(
+                        "dev-libs/akk0a-2::testrepo".to_string(),
+                        "ebuild".to_string()
+                    )]
+                );
+            }
+            SkippedDepDisclosure::Plain(report) => {
+                panic!("akk0b is masked-only, not a plain miss: {report:?}")
+            }
+        }
     }
 
     /// Backlog #129 (S1): real's two notices on the mg2top backtrack
