@@ -1,0 +1,125 @@
+real_portage: Portage 3.0.81.3 (python 3.14.6-final-0, default, gcc-15, unavailable, 6.18.39-serv x86_64)
+### emerge -p --color=n app-misc/g216top
+--- EAPI '0' does not support 'package.use.stable.mask': '/tmp/g216-probe/fixtures/repo/profiles/package.use.stable.mask'
+--- EAPI '0' does not support 'use.stable.force': '/tmp/g216-probe/fixtures/repo/profiles/base/use.stable.force'
+--- EAPI '0' does not support 'package.use.stable.mask': '/tmp/g216-probe/fixtures/repo/profiles/base/package.use.stable.mask'
+--- EAPI '0' does not support 'package.use.stable.mask': '/tmp/g216-probe/fixtures/repo/profiles/package.use.stable.mask'
+Undefined license group 'FREE'
+FEATURES variable contains unknown value(s): cgroup, observability
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/tmp/g216-probe/fixtures/repo/profiles/updates/2Q-2024..
+@s
+
+--- EAPI '0' does not support 'package.use.stable.mask': '/tmp/g216-probe/fixtures/repo/profiles/package.use.stable.mask'
+--- EAPI '0' does not support 'use.stable.force': '/tmp/g216-probe/fixtures/repo/profiles/base/use.stable.force'
+--- EAPI '0' does not support 'package.use.stable.mask': '/tmp/g216-probe/fixtures/repo/profiles/base/package.use.stable.mask'
+--- EAPI '0' does not support 'package.use.stable.mask': '/tmp/g216-probe/fixtures/repo/profiles/package.use.stable.mask'
+Undefined license group 'FREE'
+FEATURES variable contains unknown value(s): cgroup, observability
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/tmp/g216-probe/fixtures/repo/profiles/updates/2Q-2024..
+@s
+
+--- EAPI '0' does not support 'package.use.stable.mask': '/tmp/g216-probe/fixtures/repo/profiles/package.use.stable.mask'
+--- EAPI '0' does not support 'use.stable.force': '/tmp/g216-probe/fixtures/repo/profiles/base/use.stable.force'
+--- EAPI '0' does not support 'package.use.stable.mask': '/tmp/g216-probe/fixtures/repo/profiles/base/package.use.stable.mask'
+--- EAPI '0' does not support 'package.use.stable.mask': '/tmp/g216-probe/fixtures/repo/profiles/package.use.stable.mask'
+Undefined license group 'FREE'
+FEATURES variable contains unknown value(s): cgroup, observability
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies  ... done!
+Dependency resolution took 0.24 s (backtrack: 1/20).
+
+[ebuild  N     ] dev-lang/g216boot-1.0 
+[ebuild  N     ] dev-lang/g216comp-1.0 
+[ebuild  N     ] dev-lang/g216comp-1.0 to /tmp/g216-probe/fixtures/
+[ebuild  N     ] dev-libs/g216mid-1.0 to /tmp/g216-probe/fixtures/
+[ebuild  N     ] app-misc/g216top-1.0 to /tmp/g216-probe/fixtures/
+rc=0
+### emerge -p --color=n dev-lang/g216comp
+--- EAPI '0' does not support 'package.use.stable.mask': '/tmp/g216-probe/fixtures/repo/profiles/package.use.stable.mask'
+--- EAPI '0' does not support 'use.stable.force': '/tmp/g216-probe/fixtures/repo/profiles/base/use.stable.force'
+--- EAPI '0' does not support 'package.use.stable.mask': '/tmp/g216-probe/fixtures/repo/profiles/base/package.use.stable.mask'
+--- EAPI '0' does not support 'package.use.stable.mask': '/tmp/g216-probe/fixtures/repo/profiles/package.use.stable.mask'
+Undefined license group 'FREE'
+FEATURES variable contains unknown value(s): cgroup, observability
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies  ... done!
+Dependency resolution took 0.29 s (backtrack: 1/20).
+
+[ebuild  N     ] dev-lang/g216boot-1.0 
+[ebuild  N     ] dev-lang/g216comp-1.0 
+[ebuild  N     ] dev-lang/g216comp-1.0 to /tmp/g216-probe/fixtures/
+rc=0
+### emerge -p --color=n --backtrack=0 app-misc/g216top
+--- EAPI '0' does not support 'package.use.stable.mask': '/tmp/g216-probe/fixtures/repo/profiles/package.use.stable.mask'
+--- EAPI '0' does not support 'use.stable.force': '/tmp/g216-probe/fixtures/repo/profiles/base/use.stable.force'
+--- EAPI '0' does not support 'package.use.stable.mask': '/tmp/g216-probe/fixtures/repo/profiles/base/package.use.stable.mask'
+--- EAPI '0' does not support 'package.use.stable.mask': '/tmp/g216-probe/fixtures/repo/profiles/package.use.stable.mask'
+Undefined license group 'FREE'
+FEATURES variable contains unknown value(s): cgroup, observability
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies  ... done!
+Dependency resolution took 0.24 s (backtrack: 0/0).
+
+
+
+[ebuild  N     ] app-misc/g216top-1.0::testrepo to /tmp/g216-probe/fixtures/ 0 KiB
+[ebuild  N     ]  dev-libs/g216mid-1.0::testrepo to /tmp/g216-probe/fixtures/ 0 KiB
+[ebuild  N     ]   dev-lang/g216comp-1.0::testrepo to /tmp/g216-probe/fixtures/ 0 KiB
+[ebuild  N     ]    dev-lang/g216comp-1.0::testrepo  0 KiB
+
+Total: 4 packages (4 new), Size of downloads: 0 KiB
+
+ * Error: circular dependencies:
+
+(dev-lang/g216comp-1.0:0/0::testrepo, ebuild scheduled for merge) depends on
+ (dev-lang/g216comp-1.0:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+
+ * Note that circular dependencies can often be avoided by temporarily
+ * disabling USE flags that trigger optional dependencies.
+rc=1
+### emerge -p --color=n --backtrack=0 dev-lang/g216comp
+--- EAPI '0' does not support 'package.use.stable.mask': '/tmp/g216-probe/fixtures/repo/profiles/package.use.stable.mask'
+--- EAPI '0' does not support 'use.stable.force': '/tmp/g216-probe/fixtures/repo/profiles/base/use.stable.force'
+--- EAPI '0' does not support 'package.use.stable.mask': '/tmp/g216-probe/fixtures/repo/profiles/base/package.use.stable.mask'
+--- EAPI '0' does not support 'package.use.stable.mask': '/tmp/g216-probe/fixtures/repo/profiles/package.use.stable.mask'
+Undefined license group 'FREE'
+FEATURES variable contains unknown value(s): cgroup, observability
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies  ... done!
+Dependency resolution took 0.13 s (backtrack: 0/0).
+
+
+
+[ebuild  N     ] dev-lang/g216comp-1.0::testrepo to /tmp/g216-probe/fixtures/ 0 KiB
+[ebuild  N     ]  dev-lang/g216comp-1.0::testrepo  0 KiB
+
+Total: 2 packages (2 new), Size of downloads: 0 KiB
+
+ * Error: circular dependencies:
+
+(dev-lang/g216comp-1.0:0/0::testrepo, ebuild scheduled for merge) depends on
+ (dev-lang/g216comp-1.0:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+
+ * Note that circular dependencies can often be avoided by temporarily
+ * disabling USE flags that trigger optional dependencies.
+rc=1

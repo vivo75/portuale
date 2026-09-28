@@ -1,0 +1,261 @@
+### CELL aup0b: emerge --pretend --autounmask =dev-libs/aup0b-1
+FEATURES variable contains unknown value(s): cgroup, observability
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/var/db/repos/gentoo/profiles/updates/1Q-2021.......
+/var/db/repos/gentoo/profiles/updates/3Q-2022.....................
+/var/db/repos/gentoo/profiles/updates/4Q-2020.......
+/var/db/repos/gentoo/profiles/updates/2Q-2025......
+/var/db/repos/gentoo/profiles/updates/2Q-2022...........
+/var/db/repos/gentoo/profiles/updates/1Q-2026...
+/var/db/repos/gentoo/profiles/updates/3Q-2025.......
+/var/db/repos/gentoo/profiles/updates/3Q-2021...........
+/var/db/repos/gentoo/profiles/updates/2Q-2026......
+/var/db/repos/gentoo/profiles/updates/4Q-2023........................................
+/var/db/repos/gentoo/profiles/updates/4Q-2024................................................................................
+/var/db/repos/gentoo/profiles/updates/2Q-2021.......
+/var/db/repos/gentoo/profiles/updates/1Q-2025...........................
+/var/db/repos/gentoo/profiles/updates/3Q-2024.............
+/var/db/repos/gentoo/profiles/updates/2Q-2023..............................
+/var/db/repos/gentoo/profiles/updates/4Q-2021.......................................................................
+/var/db/repos/gentoo/profiles/updates/2Q-2024...........
+/var/db/repos/gentoo/profiles/updates/3Q-2023...................
+/var/db/repos/gentoo/profiles/updates/1Q-2020.........
+/var/db/repos/gentoo/profiles/updates/1Q-2024........................................................................................
+/var/db/repos/gentoo/profiles/updates/4Q-2025...
+/var/db/repos/gentoo/profiles/updates/2Q-2020.........
+/var/db/repos/gentoo/profiles/updates/4Q-2022........
+/var/db/repos/gentoo/profiles/updates/1Q-2023.......................
+/var/db/repos/gentoo/profiles/updates/3Q-2020..............
+/tmp/fxstage/fixtures/repo/profiles/updates/2Q-2024..
+@s
+
+FEATURES variable contains unknown value(s): cgroup, observability
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/var/db/repos/gentoo/profiles/updates/1Q-2021.......
+/var/db/repos/gentoo/profiles/updates/3Q-2022.....................
+/var/db/repos/gentoo/profiles/updates/4Q-2020.......
+/var/db/repos/gentoo/profiles/updates/2Q-2025......
+/var/db/repos/gentoo/profiles/updates/2Q-2022...........
+/var/db/repos/gentoo/profiles/updates/1Q-2026...
+/var/db/repos/gentoo/profiles/updates/3Q-2025.......
+/var/db/repos/gentoo/profiles/updates/3Q-2021...........
+/var/db/repos/gentoo/profiles/updates/2Q-2026......
+/var/db/repos/gentoo/profiles/updates/4Q-2023........................................
+/var/db/repos/gentoo/profiles/updates/4Q-2024................................................................................
+/var/db/repos/gentoo/profiles/updates/2Q-2021.......
+/var/db/repos/gentoo/profiles/updates/1Q-2025...........................
+/var/db/repos/gentoo/profiles/updates/3Q-2024.............
+/var/db/repos/gentoo/profiles/updates/2Q-2023..............................
+/var/db/repos/gentoo/profiles/updates/4Q-2021.......................................................................
+/var/db/repos/gentoo/profiles/updates/2Q-2024...........
+/var/db/repos/gentoo/profiles/updates/3Q-2023...................
+/var/db/repos/gentoo/profiles/updates/1Q-2020.........
+/var/db/repos/gentoo/profiles/updates/1Q-2024........................................................................................
+/var/db/repos/gentoo/profiles/updates/4Q-2025...
+/var/db/repos/gentoo/profiles/updates/2Q-2020.........
+/var/db/repos/gentoo/profiles/updates/4Q-2022........
+/var/db/repos/gentoo/profiles/updates/1Q-2023.......................
+/var/db/repos/gentoo/profiles/updates/3Q-2020..............
+/tmp/fxstage/fixtures/repo/profiles/updates/2Q-2024..
+
+
+FEATURES variable contains unknown value(s): cgroup, observability
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies  ... done!
+Dependency resolution took 0.38 s (backtrack: 0/20).
+
+
+The following USE changes are necessary to proceed:
+ (see "package.use" in the portage(5) man page for more details)
+# required by =dev-libs/aup0b-1 (argument)
+>=dev-libs/aup0b-1 -foo
+
+ * In order to avoid wasting time, backtracking has terminated early
+ * due to the above autounmask change(s). The --autounmask-backtrack=y
+ * option can be used to force further backtracking, but there is no
+ * guarantee that it will produce a solution.
+
+ * IMPORTANT: 11 news items need reading for repository 'gentoo'.
+ * Use eselect news read to view new items.
+
+rc=1
+### CELL aub0 :: dev-libs/aub0c dev-libs/aub0b dev-libs/aub0a
+FEATURES variable contains unknown value(s): cgroup, observability
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies  ... done!
+Dependency resolution took 0.49 s (backtrack: 0/20).
+
+
+emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aub0d[-foo]" for /tmp/fxstage/fixtures/.
+!!! One of the following packages is required to complete your request:
+- dev-libs/aub0d-0::testrepo (Change USE: -foo)
+(dependency required by "dev-libs/aub0a-0::testrepo" [ebuild])
+(dependency required by "dev-libs/aub0a" [argument])
+
+ * IMPORTANT: 11 news items need reading for repository 'gentoo'.
+ * Use eselect news read to view new items.
+
+rc=1
+### CELL aub0 :: dev-libs/aub0c dev-libs/aub0a dev-libs/aub0b
+FEATURES variable contains unknown value(s): cgroup, observability
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies  ... done!
+Dependency resolution took 1.31 s (backtrack: 2/20).
+
+
+emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aub0d[-foo]" for /tmp/fxstage/fixtures/.
+!!! One of the following packages is required to complete your request:
+- dev-libs/aub0d-0::testrepo (Change USE: -foo)
+(dependency required by "dev-libs/aub0a-0::testrepo" [ebuild])
+(dependency required by "dev-libs/aub0a" [argument])
+
+ * IMPORTANT: 11 news items need reading for repository 'gentoo'.
+ * Use eselect news read to view new items.
+
+rc=1
+### CELL aub0 :: dev-libs/aub0b dev-libs/aub0c dev-libs/aub0a
+FEATURES variable contains unknown value(s): cgroup, observability
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies  ... done!
+Dependency resolution took 0.54 s (backtrack: 0/20).
+
+
+emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aub0d[-foo]" for /tmp/fxstage/fixtures/.
+!!! One of the following packages is required to complete your request:
+- dev-libs/aub0d-0::testrepo (Change USE: -foo)
+(dependency required by "dev-libs/aub0a-0::testrepo" [ebuild])
+(dependency required by "dev-libs/aub0a" [argument])
+
+ * IMPORTANT: 11 news items need reading for repository 'gentoo'.
+ * Use eselect news read to view new items.
+
+rc=1
+### CELL aub0 :: dev-libs/aub0b dev-libs/aub0a dev-libs/aub0c
+FEATURES variable contains unknown value(s): cgroup, observability
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies  ... done!
+Dependency resolution took 0.50 s (backtrack: 0/20).
+
+
+emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aub0d[-foo]" for /tmp/fxstage/fixtures/.
+!!! One of the following packages is required to complete your request:
+- dev-libs/aub0d-0::testrepo (Change USE: -foo)
+(dependency required by "dev-libs/aub0a-0::testrepo" [ebuild])
+(dependency required by "dev-libs/aub0a" [argument])
+
+ * IMPORTANT: 11 news items need reading for repository 'gentoo'.
+ * Use eselect news read to view new items.
+
+rc=1
+### CELL aub0 :: dev-libs/aub0a dev-libs/aub0c dev-libs/aub0b
+FEATURES variable contains unknown value(s): cgroup, observability
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies  ... done!
+Dependency resolution took 1.22 s (backtrack: 2/20).
+
+
+!!! Multiple package instances within a single package slot have been pulled
+!!! into the dependency graph, resulting in a slot conflict:
+
+dev-libs/aub0d:0 for /tmp/fxstage/fixtures/
+
+  (dev-libs/aub0d-0:0/0::testrepo, ebuild scheduled for merge to '/tmp/fxstage/fixtures/') USE="foo" ELIBC="glibc" pulled in by
+    dev-libs/aub0d[foo] required by (dev-libs/aub0b-0:0/0::testrepo, ebuild scheduled for merge to '/tmp/fxstage/fixtures/') USE="" ELIBC="glibc"
+                   ^^^                                                                                                                            
+
+  (dev-libs/aub0d-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/fxstage/fixtures/') USE="-bar" ELIBC="glibc" pulled in by
+    >=dev-libs/aub0d-1 required by (dev-libs/aub0c-0:0/0::testrepo, ebuild scheduled for merge to '/tmp/fxstage/fixtures/') USE="" ELIBC="glibc"
+    ^^               ^                                                                                                                           
+
+
+It may be possible to solve this problem by using package.mask to
+prevent one of those packages from being selected. However, it is also
+possible that conflicting dependencies exist such that they are
+impossible to satisfy simultaneously.  If such a conflict exists in
+the dependencies of two different packages, then those packages can
+not be installed simultaneously. You may want to try a larger value of
+the --backtrack option, such as --backtrack=30, in order to see if
+that will solve this conflict automatically.
+
+For more information, see MASKED PACKAGES section in the emerge man
+page or refer to the Gentoo Handbook.
+
+
+emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aub0d[-foo]" for /tmp/fxstage/fixtures/.
+!!! One of the following packages is required to complete your request:
+- dev-libs/aub0d-0::testrepo (Change USE: -foo)
+(dependency required by "dev-libs/aub0a-0::testrepo" [ebuild])
+(dependency required by "dev-libs/aub0a" [argument])
+
+ * IMPORTANT: 11 news items need reading for repository 'gentoo'.
+ * Use eselect news read to view new items.
+
+rc=1
+### CELL aub0 :: dev-libs/aub0a dev-libs/aub0b dev-libs/aub0c
+FEATURES variable contains unknown value(s): cgroup, observability
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies  ... done!
+Dependency resolution took 1.33 s (backtrack: 3/20).
+
+
+!!! Multiple package instances within a single package slot have been pulled
+!!! into the dependency graph, resulting in a slot conflict:
+
+dev-libs/aub0d:0 for /tmp/fxstage/fixtures/
+
+  (dev-libs/aub0d-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/fxstage/fixtures/') USE="-bar" ELIBC="glibc" pulled in by
+    >=dev-libs/aub0d-1 required by (dev-libs/aub0c-0:0/0::testrepo, ebuild scheduled for merge to '/tmp/fxstage/fixtures/') USE="" ELIBC="glibc"
+    ^^               ^                                                                                                                           
+
+  (dev-libs/aub0d-0:0/0::testrepo, ebuild scheduled for merge to '/tmp/fxstage/fixtures/') USE="foo" ELIBC="glibc" pulled in by
+    dev-libs/aub0d[foo] required by (dev-libs/aub0b-0:0/0::testrepo, ebuild scheduled for merge to '/tmp/fxstage/fixtures/') USE="" ELIBC="glibc"
+                   ^^^                                                                                                                            
+
+
+It may be possible to solve this problem by using package.mask to
+prevent one of those packages from being selected. However, it is also
+possible that conflicting dependencies exist such that they are
+impossible to satisfy simultaneously.  If such a conflict exists in
+the dependencies of two different packages, then those packages can
+not be installed simultaneously. You may want to try a larger value of
+the --backtrack option, such as --backtrack=30, in order to see if
+that will solve this conflict automatically.
+
+For more information, see MASKED PACKAGES section in the emerge man
+page or refer to the Gentoo Handbook.
+
+
+emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aub0d[-foo]" for /tmp/fxstage/fixtures/.
+!!! One of the following packages is required to complete your request:
+- dev-libs/aub0d-0::testrepo (Change USE: -foo)
+(dependency required by "dev-libs/aub0a-0::testrepo" [ebuild])
+(dependency required by "dev-libs/aub0a" [argument])
+
+ * IMPORTANT: 11 news items need reading for repository 'gentoo'.
+ * Use eselect news read to view new items.
+
+rc=1
