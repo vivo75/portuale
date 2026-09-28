@@ -5689,36 +5689,323 @@ fn installed_parent_use_state(
     ))
 }
 
-/// Which of `unevaluated_atom`'s own use-deps are conditional on the
-/// *requesting parent's* own USE (`opt?`/`!opt?`/`opt=`/`!opt=` --
-/// `UseDepOp::IfParentEnabled`/`IfParentDisabled`/`EqualParent`/
-/// `OppositeParent`), deduplicated. Empty when `unevaluated_atom` has no
-/// conditional use-deps at all (shouldn't happen for anything this
-/// module ever populates `unevaluated_atom` for in the first place, but
-/// defensive either way).
-fn conditional_flags(unevaluated_atom: &str) -> Vec<String> {
-    let Some(atom) = portage_dep::parse_atom(unevaluated_atom) else {
-        return Vec::new();
+/// Real `Atom.violated_conditionals(child_use, child_is_valid_flag,
+/// parent_use)` (`lib/portage/dep/__init__.py:1465`), narrowed to the
+/// parent-conditional arm's question (`lib/_emerge/depgraph.py:
+/// 6779-6798`): which of the unevaluated atom's conditional use-deps are
+/// violated *by the parent's current USE* — i.e. flipping the parent's
+/// flag changes the evaluation — given the child's IUSE-filtered
+/// effective USE. Real `Package.py:728-731` filters `pkg.use.enabled`
+/// to valid IUSE, so a profile flag the child never declares (the
+/// fixture profile's `foo` on IUSE-less `aup0d`) never counts as set:
+/// pass `child_use` already intersected with `child_valid`.
+///
+/// Per operator, for parent-has `P` and child-has `C`, child-IUSE-valid
+/// `V`, `(+)`-defaulted `E` and `(-)`-defaulted `D` (oracle:
+/// `docs/evidence/2026-09-28-g195/g195d-oracle-output.txt`, from
+/// `g195d-oracle-probe.py` over real 3.0.82.2; pinned cell-by-cell by
+/// `tests_195d`):
+/// * `flag?` (`IfParentEnabled`, `:1525-1531`): violated iff the parent
+///   has the flag, the child lacks it, and the flag is valid or
+///   `(-)`-assumed — an invalid `(+)` flag is satisfied there (its
+///   default already assumes it enabled, so the parent having it on
+///   changes nothing).
+/// * `flag=` (`EqualParent`, `:1532-1549`): parent-has-child-lacks
+///   violates for a valid or `(-)` flag; parent-lacks-child-lacks
+///   violates only for an invalid `(+)` flag (the `missing_enabled`
+///   sub-branch — a flip off is already in effect); parent-lacks-
+///   child-has always violates.
+/// * `flag!=` (`OppositeParent`, `:1550-1567`): the mirror image —
+///   parent-lacks-child-lacks violates for a valid or `(-)` flag;
+///   parent-has-child-lacks violates only for an invalid `(+)` flag;
+///   parent-has-child-has always violates.
+/// * `!flag?` (`IfParentDisabled`, `:1568-1576`): parent-has is always
+///   satisfied; otherwise child-has always violates, and
+///   parent-lacks-child-lacks violates only for an invalid `(+)` flag.
+///
+/// For valid flags these reduce to the uniform `P`/`C` math (`P && !C`,
+/// `P != C`, `P == C`, `!P && C`).
+///
+/// Empty means "no parent flip helps this candidate" — either no
+/// conditional is parent-active, or the concrete gate fails (real's
+/// `not (violated_atom.use.enabled or violated_atom.use.disabled)`;
+/// here the unevaluated atom's own unconditional `flag`/`-flag` deps
+/// must already hold for this candidate -- note the gate is on the
+/// *unevaluated* form: a parent-lacks-child-has `flag=` (or either
+/// `flag!=` match direction) lands in real's `conditional` partition,
+/// not in `enabled`/`disabled`, so it never fails the gate even though
+/// the *evaluated* form shows a concrete mismatch for it).
+///
+/// Documented narrowings vs real: a conditional token whose flag is
+/// neither valid child IUSE nor `(+)/(-)`-defaulted poisons the whole
+/// candidate. End-to-end this matches real exactly: such a flag sits in
+/// the unevaluated atom's `required` set, so real's `missing_iuse`
+/// branch (`:6721-6727`) skips the parent arm before
+/// `violated_conditionals` is ever called — no flip either way. (In
+/// isolation real's function would report the token in `conditional`;
+/// the `tests_195d` oracle table's `arm` column shows the composed
+/// outcome.) The unconditional-`required` subset must sit in child IUSE
+/// for the same reason (real's `missing_iuse` branch — `:6725-6727`).
+fn violated_parent_flags(
+    unevaluated: &portage_dep::Atom,
+    parent_use: &HashSet<String>,
+    child_use: &HashSet<String>,
+    child_valid: &HashSet<String>,
+) -> Vec<String> {
+    use portage_dep::{UseDepDefault, UseDepOp};
+    let is_conditional = |op: &UseDepOp| {
+        matches!(
+            op,
+            UseDepOp::IfParentEnabled
+                | UseDepOp::IfParentDisabled
+                | UseDepOp::EqualParent
+                | UseDepOp::OppositeParent
+        )
     };
-    let Some(use_deps) = atom.use_deps else {
+    let use_deps = unevaluated.use_deps.as_deref().unwrap_or_default();
+    let conds: Vec<&portage_dep::UseDep> = use_deps
+        .iter()
+        .filter(|ud| is_conditional(&ud.op))
+        .collect();
+    if conds.is_empty() {
         return Vec::new();
-    };
-    let mut flags: Vec<String> = use_deps
-        .into_iter()
+    }
+    // Real `validate_flag`: valid child IUSE, or a `(+)/(-)` default
+    // standing in for it. Anything else is a concrete violation there;
+    // here it poisons the candidate (same arm outcome -- see the doc
+    // comment's `missing_iuse` note).
+    if conds
+        .iter()
+        .any(|ud| !child_valid.contains(&ud.flag) && ud.default.is_none())
+    {
+        return Vec::new();
+    }
+    // Real `required` (`no_default`): unconditional `flag`/`-flag`
+    // forms without a `(+)`/`(-)` marker. Outside child IUSE they take
+    // the `missing_iuse` branch, which never reaches the parent arm.
+    let required_missing = use_deps.iter().any(|ud| {
+        ud.default.is_none()
+            && matches!(ud.op, UseDepOp::Enabled | UseDepOp::Disabled)
+            && !child_valid.contains(&ud.flag)
+    });
+    if required_missing {
+        return Vec::new();
+    }
+    // The concrete gate, on the unevaluated unconditional deps: real's
+    // violated atom carries no `enabled`/`disabled` here (a
+    // parent-lacks-child-has `flag=`, or either `flag!=` match
+    // direction, lands in `conditional`, never in the concrete sets).
+    // Real `:1511-1524`: `flag` violates iff the child lacks it and the
+    // flag is valid or `(-)`-assumed; `-flag` violates iff the child
+    // has it, or (lacking it) the flag is invalid-`(+)`-assumed. The
+    // defaultless-invalid shapes never reach this gate: `required`
+    // poisons above, as real's `missing_iuse` branch does.
+    let concrete_violated = use_deps.iter().any(|ud| match ud.op {
+        UseDepOp::Enabled => {
+            !child_use.contains(&ud.flag)
+                && (child_valid.contains(&ud.flag) || ud.default == Some(UseDepDefault::Disabled))
+        }
+        UseDepOp::Disabled => {
+            child_use.contains(&ud.flag)
+                || (!child_valid.contains(&ud.flag) && ud.default == Some(UseDepDefault::Enabled))
+        }
+        _ => false,
+    });
+    if concrete_violated {
+        return Vec::new();
+    }
+    let mut involved: Vec<String> = conds
+        .iter()
         .filter(|ud| {
-            matches!(
-                ud.op,
-                portage_dep::UseDepOp::IfParentEnabled
-                    | portage_dep::UseDepOp::IfParentDisabled
-                    | portage_dep::UseDepOp::EqualParent
-                    | portage_dep::UseDepOp::OppositeParent
+            let p = parent_use.contains(&ud.flag);
+            let c = child_use.contains(&ud.flag);
+            let valid = child_valid.contains(&ud.flag);
+            let missing_en = ud.default == Some(UseDepDefault::Enabled);
+            let missing_dis = ud.default == Some(UseDepDefault::Disabled);
+            match ud.op {
+                // Real `:1525-1531`.
+                UseDepOp::IfParentEnabled => p && !c && (valid || missing_dis),
+                // Real `:1532-1549`.
+                UseDepOp::EqualParent => {
+                    if p && !c {
+                        valid || missing_dis
+                    } else if !p && !c {
+                        !valid && missing_en
+                    } else {
+                        !p && c
+                    }
+                }
+                // Real `:1550-1567`.
+                UseDepOp::OppositeParent => {
+                    if !p && !c {
+                        valid || missing_dis
+                    } else if p && !c {
+                        !valid && missing_en
+                    } else {
+                        p && c
+                    }
+                }
+                // Real `:1568-1576`.
+                UseDepOp::IfParentDisabled => {
+                    if !p && !c {
+                        !valid && missing_en
+                    } else {
+                        !p && c
+                    }
+                }
+                _ => false,
+            }
+        })
+        .map(|ud| ud.flag.clone())
+        .collect();
+    involved.sort();
+    involved.dedup();
+    involved
+}
+
+/// Real `_show_unsatisfied_dep`'s per-`missing_use`-package loop
+/// (`lib/_emerge/depgraph.py:6716-6858`), descending-cpv order: the
+/// version/slot-matching *visible* ebuilds behind the unevaluated atom
+/// (real `db.match(atom.without_use)` plus the `masked_pkg_instances`
+/// skip — `:6775`), each paired with the parent-active violated flags
+/// [`violated_parent_flags`] finds for it. A candidate is skipped when
+/// a flag its own `use.mask`/`use.force` pins is needed to satisfy the
+/// evaluated atom (real's untouchable-child `continue`, `:6732-6736`:
+/// no child flip — and no parent flip either — can fix it) or when no
+/// conditional is parent-active for it. The repair probe
+/// ([`suggested_parent_use_candidate`]) and the display twin
+/// ([`use_unsat_parent_row`]) both walk this list and take the first
+/// viable candidate, mirroring real's return-True-on-first-collect.
+fn viable_parent_flip_targets(
+    repos: &[RepoConfig],
+    unevaluated: &portage_dep::Atom,
+    evaluated: &portage_dep::Atom,
+    unevaluated_atom: &str,
+    parent_use: &HashSet<String>,
+    config: &portage_profile::Config,
+) -> Vec<(Candidate, Vec<String>)> {
+    let category = unevaluated.category.clone();
+    let package = unevaluated.package.clone();
+    let Ok(candidates) = list_candidates(repos, &category, &package) else {
+        return Vec::new();
+    };
+    let strs: Vec<String> = candidates
+        .iter()
+        .map(|c| {
+            format!(
+                "{}/{}-{}:{}/{}::{}",
+                category, package, c.version, c.slot, c.sub_slot, c.repo_name
             )
         })
-        .map(|ud| ud.flag)
         .collect();
-    flags.sort();
-    flags.dedup();
-    flags
+    let refs: Vec<&str> = strs.iter().map(String::as_str).collect();
+    // Real `db.match(atom.without_use)`: version/slot filter, USE and
+    // visibility ignored.
+    let Some(matched) =
+        portage_dep::match_from_list(portage_dep::without_use(unevaluated_atom), &refs)
+    else {
+        return Vec::new();
+    };
+    let matched: std::collections::HashSet<&str> = matched.into_iter().collect();
+    let mut cands: Vec<&Candidate> = candidates
+        .iter()
+        .zip(strs.iter())
+        .filter(|(_, s)| matched.contains(s.as_str()))
+        .map(|(c, _)| c)
+        .collect();
+    // Real `cpv_list.reverse()` -> descending version.
+    cands.sort_by(|a, b| vercmp_ordering(&b.version, &a.version));
+
+    let eval_deps = evaluated.use_deps.as_deref().unwrap_or_default();
+    let mut out = Vec::new();
+    for c in cands {
+        // Real `masked_pkg_instances`: masked instances never reach the
+        // parent arm (`:6775`).
+        if !is_visible(c, &category, &package, config) {
+            continue;
+        }
+        let Some((declared, use_flags)) = candidate_iuse_and_use(c, &category, &package, config)
+        else {
+            continue;
+        };
+        let valid = valid_iuse(&declared, config);
+        // Real `pkg.use.enabled` (`Package.py:728-731` filters to valid
+        // IUSE).
+        let child_use: HashSet<String> = use_flags
+            .iter()
+            .filter(|f| valid.contains(*f))
+            .cloned()
+            .collect();
+        // Real `need_enable`/`need_disable` (`:6729-6730`), for the
+        // untouchable-child `continue` below.
+        let need_enable: Vec<&String> = eval_deps
+            .iter()
+            .filter(|ud| {
+                ud.op == portage_dep::UseDepOp::Enabled
+                    && !child_use.contains(&ud.flag)
+                    && valid.contains(&ud.flag)
+            })
+            .map(|ud| &ud.flag)
+            .collect();
+        let need_disable: Vec<&String> = eval_deps
+            .iter()
+            .filter(|ud| {
+                ud.op == portage_dep::UseDepOp::Disabled
+                    && child_use.contains(&ud.flag)
+                    && valid.contains(&ud.flag)
+            })
+            .map(|ud| &ud.flag)
+            .collect();
+        // Real `:6732-6736`: a flag this candidate's own `use.mask`/
+        // `use.force` pins is not adjustable — no parent flip either.
+        let candidate_str = format!(
+            "{}/{}-{}:{}/{}::{}",
+            category, package, c.version, c.slot, c.sub_slot, c.repo_name
+        );
+        let stable = is_stable(
+            &c.keywords,
+            &candidate_str,
+            &category,
+            &package,
+            &config.accept_keywords,
+            &config.package_accept_keywords,
+        );
+        let mut untouchable = resolved_use_mask_or_force(
+            MaskOrForce::Mask,
+            config,
+            &candidate_str,
+            &category,
+            &package,
+            stable,
+        )
+        .as_ref()
+        .clone();
+        untouchable.extend(
+            resolved_use_mask_or_force(
+                MaskOrForce::Force,
+                config,
+                &candidate_str,
+                &category,
+                &package,
+                stable,
+            )
+            .iter()
+            .cloned(),
+        );
+        if need_enable
+            .iter()
+            .chain(need_disable.iter())
+            .any(|f| untouchable.contains(*f))
+        {
+            continue;
+        }
+        let involved = violated_parent_flags(unevaluated, parent_use, &child_use, &valid);
+        if involved.is_empty() {
+            continue;
+        }
+        out.push((c.clone(), involved));
+    }
+    out
 }
 
 /// Real `--autounmask-use`'s own second, architecturally distinct
@@ -5733,19 +6020,15 @@ fn conditional_flags(unevaluated_atom: &str) -> Vec<String> {
 /// involved flag(s) were toggled together instead, would the
 /// re-evaluated atom now actually resolve?"
 ///
-/// Deliberately narrower than real `Atom.violated_conditionals` (~150
-/// lines of per-token-operator partitioning portuale doesn't
-/// reproduce): instead of determining exactly *which* conditional
-/// use-deps were violated, this toggles *every* flag the unevaluated
-/// atom's own conditional use-deps reference, together, in one
-/// hypothetical -- matching real portage's own `target_use` (which also
-/// flips every `involved_flags` member at once) for the common case (an
-/// atom whose conditional use-deps are the *only* USE-deps present, all
-/// referencing flags that need to move the same direction to fix it),
-/// but diverging from it for more exotic mixed cases (concrete *and*
-/// conditional use-deps on the same atom, or independent conditional
-/// flags where only a subset actually needs flipping). Confirmed with
-/// the user before implementing.
+/// The involved flags are real `Atom.violated_conditionals`' parent-side
+/// partition ([`violated_parent_flags`]): only conditionals the parent's
+/// current USE actually activates (e.g. `foo(-)?` with parent `foo` on;
+/// a `bar(-)?` the parent already has off is satisfied, not violated),
+/// never every conditional flag the atom references. And each child
+/// candidate is subject to real's untouchable-child `continue`
+/// (`:6732-6736`): when the flag the child would need is `use.mask`'d
+/// or `use.force`'d on the child, no parent flip is attempted for it
+/// (a normal miss is displayed instead).
 ///
 /// Gated on: every involved flag must be real, valid IUSE on the parent
 /// (`implicit_iuse_set`); none may be `package.use.mask`/`.force`'d on
@@ -5757,7 +6040,9 @@ fn conditional_flags(unevaluated_atom: &str) -> Vec<String> {
 /// `collect_use_changes and not required_use_warning` gate -- a flip
 /// that already-violated `REQUIRED_USE` before the change is not
 /// disqualified by it, only one that goes from satisfied to violated
-/// is). Returns `(parent_category, parent_package, parent_version,
+/// is). Candidates are tried in descending version order and the first
+/// viable one wins (real returns True on the first successful collect).
+/// Returns `(parent_category, parent_package, parent_version,
 /// [(flag, desired_state)])`, attached to the *dependency's* own
 /// `GraphEntry` (`parent_use_suggestion`) rather than the parent's own
 /// entry, unlike real portage's own `missing_use_reasons.append
@@ -5775,68 +6060,80 @@ fn suggested_parent_use_candidate(
     owner: &(String, String),
     config: &portage_profile::Config,
 ) -> Option<ParentUseSuggestion> {
-    let involved_flags = conditional_flags(unevaluated_atom);
-    if involved_flags.is_empty() {
-        return None;
-    }
+    let unevaluated = portage_dep::parse_atom(unevaluated_atom)?;
     let (parent_candidate, parent_iuse, parent_use, parent_required_use) =
         parent_use_state(repos, entries, owner, config)?;
-    if involved_flags.iter().any(|f| !parent_iuse.contains(f)) {
-        return None;
-    }
-
-    let target_use: Vec<(String, bool)> = involved_flags
-        .iter()
-        .map(|f| (f.clone(), !parent_use.contains(f)))
-        .collect();
-    if target_use.iter().any(|(flag, desired)| {
-        !flag_is_settable(
-            &parent_candidate,
-            &owner.0,
-            &owner.1,
-            flag,
-            *desired,
-            config,
-        )
-    }) {
-        return None;
-    }
-
-    let mut hypothetical_use = parent_use.as_ref().clone();
-    for (flag, desired) in &target_use {
-        if *desired {
-            hypothetical_use.insert(flag.clone());
-        } else {
-            hypothetical_use.remove(flag);
+    let evaluated_atom = portage_dep::evaluate_atom_conditionals(unevaluated_atom, &parent_use)?;
+    let evaluated = portage_dep::parse_atom(&evaluated_atom)?;
+    for (_child, involved) in viable_parent_flip_targets(
+        repos,
+        &unevaluated,
+        &evaluated,
+        unevaluated_atom,
+        &parent_use,
+        config,
+    ) {
+        if involved.iter().any(|f| !parent_iuse.contains(f)) {
+            continue;
         }
-    }
 
-    let re_evaluated =
-        portage_dep::evaluate_atom_conditionals(unevaluated_atom, &hypothetical_use)?;
-    if !atom_currently_satisfiable(repos, &re_evaluated, config, &[]) {
-        return None;
-    }
-
-    if let Some(required_use) = &parent_required_use
-        && !required_use.trim().is_empty()
-    {
-        let old_sat =
-            portage_required_use::check_required_use(required_use, &parent_use, &parent_iuse)
-                .unwrap_or(false);
-        let new_sat =
-            portage_required_use::check_required_use(required_use, &hypothetical_use, &parent_iuse)
-                .unwrap_or(false);
-        if old_sat && !new_sat {
-            return None;
+        let target_use: Vec<(String, bool)> = involved
+            .iter()
+            .map(|f| (f.clone(), !parent_use.contains(f)))
+            .collect();
+        if target_use.iter().any(|(flag, desired)| {
+            !flag_is_settable(
+                &parent_candidate,
+                &owner.0,
+                &owner.1,
+                flag,
+                *desired,
+                config,
+            )
+        }) {
+            continue;
         }
-    }
 
-    Some((
-        owner.0.clone(),
-        owner.1.clone(),
-        parent_candidate.version.clone(),
-        target_use,
-    ))
+        let mut hypothetical_use = parent_use.as_ref().clone();
+        for (flag, desired) in &target_use {
+            if *desired {
+                hypothetical_use.insert(flag.clone());
+            } else {
+                hypothetical_use.remove(flag);
+            }
+        }
+
+        let re_evaluated =
+            portage_dep::evaluate_atom_conditionals(unevaluated_atom, &hypothetical_use)?;
+        if !atom_currently_satisfiable(repos, &re_evaluated, config, &[]) {
+            continue;
+        }
+
+        if let Some(required_use) = &parent_required_use
+            && !required_use.trim().is_empty()
+        {
+            let old_sat =
+                portage_required_use::check_required_use(required_use, &parent_use, &parent_iuse)
+                    .unwrap_or(false);
+            let new_sat = portage_required_use::check_required_use(
+                required_use,
+                &hypothetical_use,
+                &parent_iuse,
+            )
+            .unwrap_or(false);
+            if old_sat && !new_sat {
+                continue;
+            }
+        }
+
+        return Some((
+            owner.0.clone(),
+            owner.1.clone(),
+            parent_candidate.version.clone(),
+            target_use,
+        ));
+    }
+    None
 }
 
 /// `--json`'s own "state-change trace" (portuale's own feature -- see
@@ -10567,14 +10864,16 @@ fn masked_candidates_for_atom(
 /// 6768-6858`): when a `[use]`-dep is `opt?`-conditional on the requirer
 /// and the child's violation is entirely conditional, real appends the
 /// *requirer* to `missing_use_reasons` with its own `Change USE:` flip,
-/// and the display shows it after the latest child row. Portuale
-/// approximates real's `violated_conditionals` partitioning by toggling
-/// **every** conditional flag the unevaluated atom references (the same
-/// narrowing `suggested_parent_use_candidate` documents), gated on the
-/// flip being settable and not newly violating the parent's own
-/// REQUIRED_USE (real's warning text is reproduced when it would).
-/// `None` when the atom has no conditional use-deps, the parent's state
-/// can't be read, or a flip is pinned by `use.mask`/`use.force`.
+/// and the display shows it after the latest child row. The involved
+/// flags are real `violated_conditionals`' parent-side partition (the
+/// same narrowing [`suggested_parent_use_candidate`] uses, via
+/// [`viable_parent_flip_targets`]: only parent-active violated
+/// conditionals of a version-matching visible child that passes the
+/// untouchable-child `continue`), gated on the flip being settable and
+/// not newly violating the parent's own REQUIRED_USE (real's warning
+/// text is reproduced when it would). `None` when no child yields a
+/// viable flip, the parent's state can't be read, or a flip is pinned
+/// by `use.mask`/`use.force`.
 fn use_unsat_parent_row(
     repos: &[RepoConfig],
     root: &Path,
@@ -10584,10 +10883,7 @@ fn use_unsat_parent_row(
     config: &portage_profile::Config,
 ) -> Option<(String, Vec<String>)> {
     let owner = owner?;
-    let involved_flags = conditional_flags(display_atom);
-    if involved_flags.is_empty() {
-        return None;
-    }
+    let unevaluated = portage_dep::parse_atom(display_atom)?;
     // Merge-bound parents resolve through `parent_use_state`; installed
     // ones (the live `qtdeclarative` row, the r135 fixture) through the
     // vdb-backed twin -- the abort block is display-only, so the
@@ -10595,9 +10891,24 @@ fn use_unsat_parent_row(
     let (parent_candidate, parent_iuse, parent_use, parent_required_use) =
         parent_use_state(repos, entries, owner, config)
             .or_else(|| installed_parent_use_state(repos, root, entries, owner, config))?;
+    let evaluated_atom = portage_dep::evaluate_atom_conditionals(display_atom, &parent_use)?;
+    let evaluated = portage_dep::parse_atom(&evaluated_atom)?;
+    let (_child, involved) = viable_parent_flip_targets(
+        repos,
+        &unevaluated,
+        &evaluated,
+        display_atom,
+        &parent_use,
+        config,
+    )
+    .into_iter()
+    .next()?;
+    if involved.iter().any(|f| !parent_iuse.contains(f)) {
+        return None;
+    }
     let mut hypothetical = parent_use.as_ref().clone();
     let mut changes: Vec<String> = Vec::new();
-    for flag in &involved_flags {
+    for flag in &involved {
         let desired = !parent_use.contains(flag);
         if !flag_is_settable(&parent_candidate, &owner.0, &owner.1, flag, desired, config) {
             return None;
@@ -14630,15 +14941,17 @@ pub struct GraphEntry {
     /// not the candidate's). `(parent_category, parent_package,
     /// parent_version, [(flag, desired_state)])`.
     ///
-    /// `Some` only when the parent flip is *not applied* -- i.e. it would
-    /// resolve the dep but `resolve_pretend_graph` chose not to (there is
-    /// currently no such gate beyond `autounmask_suggest_use` itself, so
-    /// in practice this is `Some` only when the re-resolve unexpectedly
-    /// still fails). When the flip *is* applied, `resolve_pretend_graph`
-    /// re-resolves the dependency, records the change in
-    /// `GraphResult::autounmask_use_changes`, and this stays `None`
-    /// (the dep is no longer `NoVisibleCandidate`). Kept as a field for
-    /// the `--json` provenance trace and symmetry with `use_suggestion`.
+    /// `Some` for a `NoVisibleCandidate` entry whose parent flip would
+    /// resolve the dep: with `--autounmask-backtrack` off the flip is
+    /// recorded in `GraphResult::autounmask_use_changes` and the resolve
+    /// fails (record-and-fail, real `_apply_parent_use_changes`), so this
+    /// stays `Some` on the failed entry -- and doubles as the abort
+    /// renderer's skip signal (a collected dep renders no row; the
+    /// change block is its whole output). With
+    /// `--autounmask-backtrack=y` the flip is folded and the graph
+    /// re-walked instead, so a still-failing entry keeps `Some` only
+    /// when the re-walk could not use it. Kept as a field for the
+    /// `--json` provenance trace and symmetry with `use_suggestion`.
     pub parent_use_suggestion: Option<ParentUseSuggestion>,
     /// `--root-deps`'s own real `ESYSROOT`-vs-running-root distinction
     /// (see `running_root_satisfies_atom`'s own doc comment for the full
@@ -24794,13 +25107,13 @@ struct PassResult {
     nvc_dep_atoms: HashMap<(String, String), String>,
     missing_dep_trigger: Option<((String, String), String, String)>,
     autounmask_grew: bool,
-    /// Backlog #217: set when the pass rescued a failed dependency via
-    /// a parent USE flip with `--autounmask-backtrack` off (the
-    /// `'parent_flip` off-arm applies the flip to this dep's resolution
-    /// directly instead of the overlay). Real's counterpart collects
-    /// the flip post-failure (`_apply_parent_use_changes`,
-    /// `depgraph.py:5820`), so the `_success_without_autounmask` tail
-    /// is pre-empted and the "terminated early" notice prints. Rides
+    /// Backlog #217: set when the pass collected a failed dependency's
+    /// parent USE flip with `--autounmask-backtrack` off (the
+    /// `'parent_flip` off-arm records the flip and fails instead of the
+    /// overlay). Real's counterpart collects the flip post-failure
+    /// (`_apply_parent_use_changes`, `depgraph.py:5820`), so the
+    /// `_success_without_autounmask` tail is pre-empted and the
+    /// "terminated early" notice prints. Rides
     /// into [`GraphResult::autounmask_no_clean_tail`].
     parent_flip_rescued: bool,
     edge_kind_map: EdgeKindMap,
@@ -24932,6 +25245,14 @@ struct PassState {
     /// a parent USE flip with `--autounmask-backtrack` off (the
     /// `'parent_flip` off-arm). Rides into `PassResult` (same name).
     parent_flip_rescued: bool,
+    /// Backlog #195 (round 2): the `(category, package)` keys of
+    /// dependencies whose `NoVisibleCandidate` the `'parent_flip`
+    /// off-arm collected into a parent USE flip (record-and-fail, real
+    /// `_apply_parent_use_changes`, `depgraph.py:5820`). Real drops each
+    /// collected item from `_unsatisfied_deps_for_display`
+    /// (`remaining_items`), so no masked/use-unsat/plain-miss disclosure
+    /// is recorded for them below.
+    parent_flip_recorded: HashSet<(String, String)>,
     /// Set (once) when this pass hit a dependency `NoVisibleCandidate`
     /// whose non-top-level parent isn't already latched -- the driver
     /// at the bottom masks `!=parent-cpv` and re-runs (real
@@ -25495,24 +25816,25 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             }
         }
 
-        // Real `--autounmask-use` PART B *resolution* (`_apply_parent_use_changes`
+        // Real `--autounmask-use` PART B (`_apply_parent_use_changes`
         // -> `_show_unsatisfied_dep(collect_use_changes=True)`,
         // `depgraph.py:5820`/`6768`): a dependency's use-dep was originally
         // conditional on the *requesting parent's* own USE (`opt?`/`opt=`
-        // forms), and no candidate satisfies the evaluated form -- because
-        // the child's own flag is `use.mask`'d/forced, so a child-side
-        // `package.use` flip (`suggested_use_flip`) is impossible. Real
+        // forms), and no candidate satisfies the evaluated form. Real
         // portage flips the *parent's* conditional flag instead
         // (`suggested_parent_use_candidate`), folds it into
-        // `_needed_use_config_changes`, and re-drives the *whole* graph
-        // (`_backtrack_depgraph`) so the parent's other `flag?`-gated deps
-        // re-evaluate against the flipped state too. Slice 4: fold the flip
+        // `_needed_use_config_changes`, and -- the graph having already
+        // failed -- FAILS the resolve (`_success_without_autounmask`):
+        // no merge rows, just the change block (and, with
+        // `--autounmask-backtrack` off, the "terminated early" notice).
+        // With `--autounmask-backtrack=y` (Slice 4) the flip is folded
         // into `autounmask_use_config` (keyed `(parent_cat, parent_pkg)` --
-        // exactly a `package.use` entry) and let the driver's
-        // `autounmask_grew` restart re-walk everything; a probe
-        // re-resolution of just the freed atom still gates it, so only a
-        // flip that actually helps is folded. `--autounmask-use=n`
-        // suppresses it via the shared `autounmask_suggest_use` gate.
+        // exactly a `package.use` entry) and the driver's
+        // `autounmask_grew` restart re-walks everything instead. A probe
+        // re-resolution of just the freed atom still gates both arms, so
+        // only a flip that actually helps is recorded or folded.
+        // `--autounmask-use=n` suppresses it via the shared
+        // `autounmask_suggest_use` gate.
         let (current_atom, atom) = 'parent_flip: {
             if !(matches!(outcome, PretendOutcome::NoVisibleCandidate)
                 && bp.autounmask_suggest_use
@@ -25552,7 +25874,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             else {
                 break 'parent_flip (current_atom, atom);
             };
-            let Some(re_parsed) = portage_dep::parse_atom(&re_atom) else {
+            let Some(_re_parsed) = portage_dep::parse_atom(&re_atom) else {
                 break 'parent_flip (current_atom, atom);
             };
             let re_outcome = resolve_pretend(
@@ -25591,14 +25913,20 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             }
 
             if !ctx.autounmask_backtrack_enabled {
-                // Default (real `--autounmask-backtrack` off): apply the
-                // parent flip to *this* dependency's resolution and
-                // re-render the parent's own USE line, but do NOT
-                // re-drive the whole graph -- the parent's other
-                // `flag?`-gated deps keep whatever the first walk gave
-                // them (real records `_needed_use_config_changes` and
-                // breaks out of `_backtrack_depgraph`).
-                outcome = re_outcome;
+                // Default (real `--autounmask-backtrack` off): the flip
+                // is RECORDED into `_needed_use_config_changes` and the
+                // resolve FAILS (real `_apply_parent_use_changes` runs
+                // only after `_create_graph` already failed,
+                // `depgraph.py:5677`, and the `_success_without_
+                // autounmask` tail `:5793` returns False) -- no merge
+                // rows. The change block plus the "terminated early"
+                // notice are the whole output (rc 1). The rescued dep's
+                // own key is latched in `parent_flip_recorded` so its
+                // masked/use-unsat/plain-miss disclosure is suppressed
+                // (real drops the collected item from
+                // `_unsatisfied_deps_for_display`, `:5820`
+                // `remaining_items`) and the abort renderer skips its
+                // row (see the `pretend` NVC loop's own gate).
                 let parent_cpv = format!("{pc}/{pp}-{pv}");
                 let parent_all = list_candidates(&ctx.repos, &pc, &pp).unwrap_or_default();
                 let token = target_use
@@ -25613,16 +25941,39 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     // the failed dep: no single forcing parent, legacy
                     // fill (backlog #205).
                     trigger: None,
-                    // Walk-time chain would be one row (required_by
-                    // unfilled); the post-loop fill walks the full
-                    // ascent like every other change (#135 (e)).
-                    dep_chain: Vec::new(),
+                    // When the change's own package is itself a
+                    // top-level argument, real's dep chain is just the
+                    // argument line: `_get_dep_chain` never prints the
+                    // start node (`elif node is not start_node`,
+                    // `depgraph.py:6357`), and the failed graph walks
+                    // straight to the argument (oracle: the aup0b
+                    // container probe prints a single `# required by
+                    // =dev-libs/aup0b-1 (argument)`). Pre-fill it (the
+                    // post-loop fill leaves non-empty chains alone); a
+                    // non-argument parent keeps the generic fill, which
+                    // already matches real there (oracle:
+                    // `abort-au-plain`'s parent-plus-argument rows).
+                    dep_chain: ctx
+                        .top_level
+                        .iter()
+                        .find(|t| {
+                            portage_dep::parse_atom(t).is_some_and(|a| {
+                                a.category == pc
+                                    && a.package == pp
+                                    && a.blocker == portage_dep::Blocker::None
+                            })
+                        })
+                        .map(|t| vec![format!("required by {t} (argument)")])
+                        .unwrap_or_default(),
                 });
                 // Backlog #217: a failed dep rescued by a parent flip
                 // (real `_apply_parent_use_changes` collecting
                 // post-failure) pre-empts the `_success_without_
                 // autounmask` tail -- the notice stays.
                 state.parent_flip_rescued = true;
+                state
+                    .parent_flip_recorded
+                    .insert((key.0.clone(), key.1.clone()));
                 let mut disp_seen: HashSet<String> = HashSet::new();
                 let mut disp: Vec<(String, bool)> = parent_cand
                     .iuse
@@ -25657,7 +26008,11 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     pe.use_expand_display = pv_disp;
                     pe.use_expand_display_p = p_disp;
                 }
-                (re_atom, re_parsed)
+                // Record-and-fail: the dependency keeps its
+                // `NoVisibleCandidate` outcome (real's failed
+                // `_create_graph`), so no merge rows render -- only the
+                // change block and the notice.
+                (current_atom, atom)
             } else {
                 // `--autounmask-backtrack=y`: fold the flip into
                 // `autounmask_use_config` (a `package.use` change on the
@@ -26282,76 +26637,88 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     .nvc_dep_atoms
                     .entry(key.clone())
                     .or_insert_with(|| display_atom.to_string());
-                if let Some(masked) = masked_candidates_for_atom(&ctx.repos, display_atom, config)
-                    && !state
-                        .masked_deps
-                        .iter()
-                        .any(|r: &MaskedDepReport| r.category == key.0 && r.package == key.1)
-                {
-                    state.masked_deps.push(MaskedDepReport {
-                        category: key.0.clone(),
-                        package: key.1.clone(),
-                        atom: display_atom.to_string(),
-                        masked,
-                        // Walked post-loop out of the final entries
-                        // (see below).
-                        chain: Vec::new(),
-                    });
-                }
-                // USE-unsatisfied-dependency disclosure (backlog #20,
-                // real `_show_unsatisfied_dep`'s separate "no ebuilds
-                // built with USE flags to satisfy" path): a dependency
-                // `NoVisibleCandidate` whose atom names version-matching
-                // ebuilds that are *visible* but cannot satisfy the
-                // atom's own `[use]` deps. Real's precedence puts this
-                // block before the masked one (`show_missing_use` wins),
-                // and the caller renders it first. Computed every pass;
-                // only the final pass's reports are rendered.
-                if let Some(rows) = use_unsat_candidates_for_atom(
-                    &ctx.repos,
-                    ctx.root,
-                    &state.entries,
-                    display_atom,
-                    &current_atom,
-                    owner.as_ref(),
-                    config,
-                ) && !state
-                    .use_unsat_deps
-                    .iter()
-                    .any(|r: &UseUnsatDepReport| r.category == key.0 && r.package == key.1)
-                {
-                    state.use_unsat_deps.push(UseUnsatDepReport {
-                        category: key.0.clone(),
-                        package: key.1.clone(),
-                        atom: display_atom.to_string(),
-                        rows,
-                        chain: Vec::new(),
-                    });
-                } else if !state
-                    .masked_deps
-                    .iter()
-                    .any(|r: &MaskedDepReport| r.category == key.0 && r.package == key.1)
-                    && !state
+                // A dep the `'parent_flip` off-arm collected into a
+                // parent USE flip records no disclosure at all: real
+                // drops the collected item from
+                // `_unsatisfied_deps_for_display` (`depgraph.py:5820`
+                // `remaining_items`), so neither the masked block, nor
+                // the use-unsat block, nor the plain-miss block prints
+                // for it -- the change block is its whole output.
+                // (`nvc_dep_atoms` above is kept: `abort_outcome` still
+                // needs the atom for the abort reason.)
+                if !state.parent_flip_recorded.contains(&key) {
+                    if let Some(masked) =
+                        masked_candidates_for_atom(&ctx.repos, display_atom, config)
+                        && !state
+                            .masked_deps
+                            .iter()
+                            .any(|r: &MaskedDepReport| r.category == key.0 && r.package == key.1)
+                    {
+                        state.masked_deps.push(MaskedDepReport {
+                            category: key.0.clone(),
+                            package: key.1.clone(),
+                            atom: display_atom.to_string(),
+                            masked,
+                            // Walked post-loop out of the final entries
+                            // (see below).
+                            chain: Vec::new(),
+                        });
+                    }
+                    // USE-unsatisfied-dependency disclosure (backlog #20,
+                    // real `_show_unsatisfied_dep`'s separate "no ebuilds
+                    // built with USE flags to satisfy" path): a dependency
+                    // `NoVisibleCandidate` whose atom names version-matching
+                    // ebuilds that are *visible* but cannot satisfy the
+                    // atom's own `[use]` deps. Real's precedence puts this
+                    // block before the masked one (`show_missing_use` wins),
+                    // and the caller renders it first. Computed every pass;
+                    // only the final pass's reports are rendered.
+                    if let Some(rows) = use_unsat_candidates_for_atom(
+                        &ctx.repos,
+                        ctx.root,
+                        &state.entries,
+                        display_atom,
+                        &current_atom,
+                        owner.as_ref(),
+                        config,
+                    ) && !state
                         .use_unsat_deps
                         .iter()
                         .any(|r: &UseUnsatDepReport| r.category == key.0 && r.package == key.1)
-                    && !state
-                        .plain_miss_deps
+                    {
+                        state.use_unsat_deps.push(UseUnsatDepReport {
+                            category: key.0.clone(),
+                            package: key.1.clone(),
+                            atom: display_atom.to_string(),
+                            rows,
+                            chain: Vec::new(),
+                        });
+                    } else if !state
+                        .masked_deps
                         .iter()
-                        .any(|r: &PlainMissDepReport| r.category == key.0 && r.package == key.1)
-                {
-                    // Neither sibling block claimed this miss: nothing
-                    // matches by version at all, or no candidate's
-                    // failure is a `Change USE:`/`Missing IUSE:` one
-                    // (e.g. a profile-forced flag). Real's
-                    // `emerge: there are no ebuilds to satisfy "<atom>"`
-                    // block (#135 (d)).
-                    state.plain_miss_deps.push(PlainMissDepReport {
-                        category: key.0.clone(),
-                        package: key.1.clone(),
-                        atom: display_atom.to_string(),
-                        chain: Vec::new(),
-                    });
+                        .any(|r: &MaskedDepReport| r.category == key.0 && r.package == key.1)
+                        && !state
+                            .use_unsat_deps
+                            .iter()
+                            .any(|r: &UseUnsatDepReport| r.category == key.0 && r.package == key.1)
+                        && !state
+                            .plain_miss_deps
+                            .iter()
+                            .any(|r: &PlainMissDepReport| r.category == key.0 && r.package == key.1)
+                    {
+                        // Neither sibling block claimed this miss: nothing
+                        // matches by version at all, or no candidate's
+                        // failure is a `Change USE:`/`Missing IUSE:` one
+                        // (e.g. a profile-forced flag). Real's
+                        // `emerge: there are no ebuilds to satisfy "<atom>"`
+                        // block (#135 (d)).
+                        state.plain_miss_deps.push(PlainMissDepReport {
+                            category: key.0.clone(),
+                            package: key.1.clone(),
+                            atom: display_atom.to_string(),
+                            chain: Vec::new(),
+                        });
+                    }
                 }
             }
             state.entries.push(GraphEntry {
@@ -29310,6 +29677,26 @@ fn assemble_result(
     let mut extra_plain_miss: Vec<PlainMissDepReport> = Vec::new();
     for e in &pass.entries {
         if !matches!(e.outcome, PretendOutcome::NoVisibleCandidate) {
+            continue;
+        }
+        // Backlog #195 (round 2): a dependency collected into a parent
+        // USE flip (record-and-fail) is not a miss at all -- real drops
+        // the collected item from `_unsatisfied_deps_for_display`, so
+        // the sweep must not re-add it here (same gate as the walk-time
+        // disclosure block and the abort renderer). Invariant: the
+        // `parent_flip_recorded` latch is only ever inserted on the
+        // record-and-fail path, after `suggested_parent_use_candidate`
+        // returned `Some` -- so every latched key has
+        // `parent_use_suggestion.is_some()`, and the latch-keyed
+        // walk-time gate suppresses exactly the entries these
+        // `is_some()` gates suppress. One corner breaks the converse:
+        // when the re-probe fails after the suggestion returned `Some`
+        // (the `NoVisibleCandidate` break in the `'parent_flip` arm),
+        // the entry keeps `Some` with no latch -- walk-time records a
+        // miss block for it, but the sweep and the abort renderer still
+        // skip it. Benign (no corpus cell hits it) and deliberate: the
+        // flip genuinely did not rescue the dep.
+        if e.parent_use_suggestion.is_some() {
             continue;
         }
         let cat = e.category.as_str();
@@ -44267,23 +44654,66 @@ mod tests {
             casc.autounmask_backtrack_disabled(false),
             "aucasctop: restart-wanted, notice stays"
         );
-        // Post-failure parent rescues keep the notice too (real
-        // `_apply_parent_use_changes`, `depgraph.py:5820`).
-        for top in ["dev-libs/parentflipeqpkg", "dev-libs/pfgraphparent"] {
-            let result = graph_result_autounmask(top);
-            assert!(
-                !result.autounmask_use_changes.is_empty(),
-                "{top}: the parent flip is still reported"
-            );
-            assert!(
-                result.autounmask_no_clean_tail,
-                "{top}: the failed dep was rescued by a parent flip"
-            );
-            assert!(
-                result.autounmask_backtrack_disabled(false),
-                "{top}: notice stays"
-            );
-        }
+        // Post-failure parent collects keep the notice too (real
+        // `_apply_parent_use_changes`, `depgraph.py:5820`): the aup0b
+        // cell records `-foo` on the failed dep and fails with the
+        // notice.
+        let aup = graph_result_autounmask("=dev-libs/aup0b-1");
+        assert_eq!(
+            aup.autounmask_use_changes.len(),
+            1,
+            "aup0b: the parent flip is still reported"
+        );
+        assert!(
+            aup.autounmask_no_clean_tail,
+            "aup0b: the failed dep was collected into a parent flip"
+        );
+        assert!(
+            aup.autounmask_backtrack_disabled(false),
+            "aup0b: notice stays"
+        );
+        // `dev-libs/parentflipeqpkg`: the masked child means no flip is
+        // recorded at all (real's untouchable-child `continue`,
+        // `depgraph.py:6732-6736`), so there is no change block and no
+        // notice -- the bare miss (round-2 correction of the old
+        // resolve+rows expectation, which was never live-probed).
+        let flip = graph_result_autounmask("dev-libs/parentflipeqpkg");
+        assert!(
+            flip.autounmask_use_changes.is_empty(),
+            "parentflipeqpkg: no flip is recorded for a masked child"
+        );
+        assert!(
+            !flip.autounmask_no_clean_tail,
+            "parentflipeqpkg: nothing collected, the tail stays clean"
+        );
+        assert!(
+            !flip.autounmask_backtrack_disabled(false),
+            "parentflipeqpkg: bare miss prints no notice"
+        );
+        // `dev-libs/pfgraphparent`: same masked-child shape as
+        // parentflipeqpkg (`use.mask pf`), so the same untouchable-child
+        // `continue` (`depgraph.py:6732-6736`) applies -- live real
+        // (`localhost/test-portuale:latest`, staged fixtures, g195c
+        // probe `docs/evidence/2026-09-28-g195/g195c-real-probe.txt`)
+        // reports the bare miss under default AND `--autounmask-backtrack=y`:
+        // `emerge: there are no ebuilds to satisfy
+        // "dev-libs/pfgraphchild[pf=]"`, no rows, no block, rc 1.
+        // (Corrected under coordinator ruling B20, option (a); the old
+        // flip+notice assertions below were a source-reading inference,
+        // never a live measurement.)
+        let result = graph_result_autounmask("dev-libs/pfgraphparent");
+        assert!(
+            result.autounmask_use_changes.is_empty(),
+            "pfgraphparent: no flip is recorded for a masked child"
+        );
+        assert!(
+            !result.autounmask_no_clean_tail,
+            "pfgraphparent: nothing collected, the tail stays clean"
+        );
+        assert!(
+            !result.autounmask_backtrack_disabled(false),
+            "pfgraphparent: bare miss prints no notice"
+        );
         // The config conjuncts suppress unconditionally, even where the
         // notice would otherwise print: `--autounmask-backtrack=y`
         // opts back in, and `--backtrack=0` leaves real's
@@ -44918,23 +45348,32 @@ mod tests {
     }
 
     #[test]
-    fn autounmask_use_parent_flip_resolves_when_the_child_flag_is_masked() {
+    fn autounmask_use_parent_flip_fails_like_real_when_the_child_flag_is_masked() {
         // `dev-libs/parentflipeqpkg` (IUSE +feat) RDEPENDs
         // `dev-libs/parentflipchildpkg[feat=]`; the child's own `feat` is
-        // `use.mask`'d, so a child-side flip is impossible -- real
-        // portage flips the *parent's* `feat` off instead, dropping the
-        // conditional constraint. The dependency must resolve as `New`
-        // (not stay `NoVisibleCandidate`), the parent's own `feat` must
-        // read off in its USE display, and the recorded change is the
-        // parent's own `>=cpv -feat` with the parent's own dep chain.
+        // `use.mask`'d. Live real (`localhost/test-portuale:latest`,
+        // staged fixtures, `emerge --pretend dev-libs/parentflipeqpkg`,
+        // rc 1) reports the BARE miss -- no rows, no USE block:
+        // `emerge: there are no ebuilds to satisfy
+        // "dev-libs/parentflipchildpkg[feat=]"`. Real's untouchable-child
+        // `continue` (`lib/_emerge/depgraph.py:6732-6736`) skips the
+        // parent probe when the child's needed flag is masked/forced, so
+        // no parent flip is ever recorded. (The old resolve+rows+block
+        // expectation was verified against the since-removed second
+        // Python copy, never live real.)
         let result = graph_result_autounmask("dev-libs/parentflipeqpkg");
+        assert!(
+            matches!(result.outcome, ResolveOutcome::Aborted { .. }),
+            "unexpected outcome: {:?}",
+            result.outcome
+        );
         let child = result
             .entries
             .iter()
             .find(|e| e.package == "parentflipchildpkg")
             .expect("child entry");
         assert!(
-            matches!(child.outcome, PretendOutcome::New { .. }),
+            matches!(child.outcome, PretendOutcome::NoVisibleCandidate),
             "{child:?}"
         );
         assert!(child.parent_use_suggestion.is_none());
@@ -44950,51 +45389,154 @@ mod tests {
                 .iter()
                 .find(|(f, _)| f == "feat")
                 .map(|(_, on)| *on),
-            Some(false),
-            "the parent flip must show in the parent's own USE display"
+            Some(true),
+            "no parent flip is recorded, so the parent keeps its own +feat default"
         );
 
-        assert_eq!(result.autounmask_use_changes.len(), 1);
-        let change = &result.autounmask_use_changes[0];
-        assert_eq!(change.atom, ">=dev-libs/parentflipeqpkg-1.0");
-        assert_eq!(change.token, "-feat");
-        assert_eq!(
-            change.dep_chain,
-            vec![
-                "required by dev-libs/parentflipeqpkg-1.0::testrepo".to_string(),
-                "required by dev-libs/parentflipeqpkg (argument)".to_string(),
-            ]
+        assert!(
+            result.autounmask_use_changes.is_empty(),
+            "no flip is recorded: {:?}",
+            result.autounmask_use_changes
         );
+        assert!(result.use_unsat_deps.is_empty());
+        assert_eq!(result.plain_miss_deps.len(), 1);
     }
 
     #[test]
-    fn autounmask_use_parent_flip_re_resolves_the_whole_graph() {
-        // `dev-libs/pfgraphparent` (IUSE +pf) RDEPENDs
-        // `dev-libs/pfgraphchild[pf=]` AND `pf? ( dev-libs/pfgraphextra )`.
-        // The child's `pf` is `use.mask`'d, so the parent's own `pf` is
-        // flipped off. Slice 4 + `--autounmask-backtrack=y`: that flip is
-        // folded into `autounmask_use_config` and the whole walk re-runs
-        // -- so `pf? ( pfgraphextra )` re-evaluates with `pf` OFF and
-        // `pfgraphextra` is NOT pulled (the default single-dep re-resolve
-        // leaves it in the graph -- see the `--autounmask-backtrack` off
-        // contract test). Real `_needed_use_config_changes` ->
-        // `_backtrack_depgraph`.
-        let result = graph_result_autounmask_backtrack("dev-libs/pfgraphparent");
-        let names: Vec<&str> = result.entries.iter().map(|e| e.package.as_str()).collect();
+    fn autounmask_use_parent_flip_records_minus_foo_and_fails_for_aup0b() {
+        // Upstream `test_autounmask_parent.py` (`aup0b`): `dev-libs/aup0b`
+        // (IUSE `+bar +foo`) DEPENDs `dev-libs/aup0d[foo(-)?,bar(-)?]`;
+        // the fixture profile leaves the parent at `{foo}`, so only the
+        // `foo(-)?` conditional is parent-active. Live real
+        // (`localhost/test-portuale:latest`, staged fixtures,
+        // `emerge --pretend --autounmask =dev-libs/aup0b-1`, rc 1)
+        // records `-foo` on the parent and FAILS: stdout is the merge
+        // header with no rows, stderr is the `-foo` USE block plus the
+        // "backtracking has terminated early" notice. Real
+        // `_apply_parent_use_changes` (`lib/_emerge/depgraph.py:5820`)
+        // re-probes with `violated_conditionals` (`:6779-6798`), which
+        // sees only the parent-active `foo`, and the
+        // `_success_without_autounmask` tail (`:5793`) returns False.
+        let result = graph_result_autounmask("=dev-libs/aup0b-1");
         assert!(
-            names.contains(&"pfgraphchild") && names.contains(&"pfgraphparent"),
-            "{names:?}"
-        );
-        assert!(
-            !names.contains(&"pfgraphextra"),
-            "pf? ( pfgraphextra ) must drop once the parent flip turns pf off: {names:?}"
+            matches!(result.outcome, ResolveOutcome::Aborted { .. }),
+            "unexpected outcome: {:?}",
+            result.outcome
         );
         assert_eq!(result.autounmask_use_changes.len(), 1);
+        let change = &result.autounmask_use_changes[0];
+        assert_eq!(change.atom, ">=dev-libs/aup0b-1");
+        assert_eq!(change.token, "-foo");
         assert_eq!(
-            result.autounmask_use_changes[0].atom,
-            ">=dev-libs/pfgraphparent-1.0"
+            change.dep_chain,
+            vec!["required by =dev-libs/aup0b-1 (argument)".to_string(),]
         );
-        assert_eq!(result.autounmask_use_changes[0].token, "-pf");
+        assert!(
+            result.autounmask_no_clean_tail,
+            "post-failure parent collect pre-empts the clean tail"
+        );
+        assert!(
+            result.autounmask_backtrack_disabled(false),
+            "the terminated-early notice prints"
+        );
+        let child = result
+            .entries
+            .iter()
+            .find(|e| e.package == "aup0d")
+            .expect("child entry");
+        assert!(
+            matches!(child.outcome, PretendOutcome::NoVisibleCandidate),
+            "{child:?}"
+        );
+        assert!(child.parent_use_suggestion.is_some());
+        assert!(result.use_unsat_deps.is_empty());
+        assert!(result.plain_miss_deps.is_empty());
+    }
+
+    #[test]
+    fn autounmask_use_parent_flip_pfgraph_reports_the_bare_miss_like_real() {
+        // `dev-libs/pfgraphparent` (IUSE +pf) RDEPENDs
+        // `dev-libs/pfgraphchild[pf=]` AND `pf? ( dev-libs/pfgraphextra )`.
+        // The child's `pf` is `use.mask`'d. Live real
+        // (`localhost/test-portuale:latest`, staged fixtures,
+        // `emerge --pretend dev-libs/pfgraphparent`, rc 1) reports the
+        // BARE miss -- no rows, no USE block:
+        //
+        //     These are the packages that would be merged, in order:
+        //
+        //     Calculating dependencies  ... done!
+        //     Dependency resolution took 0.35 s (backtrack: 0/20).
+        //
+        //
+        //     emerge: there are no ebuilds to satisfy "dev-libs/pfgraphchild[pf=]" for /tmp/fxstage/fixtures/.
+        //     (dependency required by "dev-libs/pfgraphparent-1.0::testrepo" [ebuild])
+        //     (dependency required by "dev-libs/pfgraphparent" [argument])
+        //     rc=1
+        //
+        // (identical text with `--autounmask-backtrack=y` and with
+        // `--autounmask-use=n`; Global-Updates/news/FEATURES noise cut;
+        // portuale omits real's staging `for <root>.` suffix, the
+        // long-standing `fixture-miss-message-unsuffixed` class.)
+        // Real's untouchable-child `continue`
+        // (`lib/_emerge/depgraph.py:6732-6736`) skips the parent probe
+        // when the child's needed flag is masked/forced, so no parent
+        // flip is ever recorded and there is nothing to re-resolve --
+        // neither the default single-dep re-resolve (which kept
+        // `pf? ( pfgraphextra )` in the list) nor the
+        // `--autounmask-backtrack=y` whole-graph re-resolve (which
+        // dropped it) ever happens. (The old resolve+rows+block
+        // expectation was a source-reading inference, never a live
+        // measurement. Renamed from
+        // `autounmask_use_parent_flip_re_resolves_the_whole_graph`,
+        // which stated the opposite of what real does -- coordinator
+        // ruling B20, option (a).)
+        for result in [
+            graph_result_autounmask("dev-libs/pfgraphparent"),
+            graph_result_autounmask_backtrack("dev-libs/pfgraphparent"),
+            graph_result_autounmask_use_n("dev-libs/pfgraphparent"),
+        ] {
+            assert!(
+                matches!(result.outcome, ResolveOutcome::Aborted { .. }),
+                "unexpected outcome: {:?}",
+                result.outcome
+            );
+            let child = result
+                .entries
+                .iter()
+                .find(|e| e.package == "pfgraphchild")
+                .expect("child entry");
+            assert!(
+                matches!(child.outcome, PretendOutcome::NoVisibleCandidate),
+                "{child:?}"
+            );
+            assert!(child.parent_use_suggestion.is_none());
+
+            let parent = result
+                .entries
+                .iter()
+                .find(|e| e.package == "pfgraphparent")
+                .expect("parent entry");
+            assert_eq!(
+                parent
+                    .use_flags_display
+                    .iter()
+                    .find(|(f, _)| f == "pf")
+                    .map(|(_, on)| *on),
+                Some(true),
+                "no parent flip is recorded, so the parent keeps its own +pf default"
+            );
+
+            assert!(
+                result.autounmask_use_changes.is_empty(),
+                "no flip is recorded: {:?}",
+                result.autounmask_use_changes
+            );
+            assert!(result.use_unsat_deps.is_empty());
+            assert_eq!(result.plain_miss_deps.len(), 1);
+            // `pfgraphextra` is still walked (`pf? (...)` stays active
+            // with the parent's +pf unflipped) but the `Aborted` outcome
+            // prints no rows -- real's merge list is likewise empty.
+        }
     }
 
     #[test]
@@ -59980,14 +60522,24 @@ mod tests_163 {
     // parent-flag flip row, `depgraph.py:6756-6846`: the requesting
     // parent flips its own USE to satisfy a conditional use-dep). ----
 
-    /// A conditional use-dep on a flag the parent has off suggests
-    /// `+flag` with the parent's cpv. Kills the whole-body `None` row
-    /// and every whole-body `Some` row with a wrong value, plus the
-    /// `!flag_is_settable` deletion (which returns `None` here).
+    /// An `=`-conditional use-dep on a flag the parent has off (the
+    /// child has it on) suggests `+flag` with the parent's cpv. Real
+    /// `violated_conditionals` sees the parent-lacks-child-has mismatch
+    /// as violated-conditional (`dep/__init__.py:1541-1549`), so the row
+    /// fires; a `?` with the parent off would be satisfied instead (no
+    /// row). Kills the whole-body `None` row and every whole-body `Some`
+    /// row with a wrong value, plus the `!flag_is_settable` deletion
+    /// (which returns `None` here).
     #[test]
     fn use_unsat_parent_row_suggests_enabling_an_off_flag() {
         let dir = dir_163("parent-on");
-        let repos = repo_pkgs_163_ru(&dir, &[("dev-libs/parent", "1.0", "0", "flipme", "")]);
+        let repos = repo_pkgs_163_ru(
+            &dir,
+            &[
+                ("dev-libs/parent", "1.0", "0", "flipme", ""),
+                ("dev-libs/child", "1.0", "0", "+flipme", ""),
+            ],
+        );
         let config = cfg_163();
         let entries = vec![entry_163("dev-libs", "parent", new_163("1.0"), &[])];
         assert_eq!(
@@ -59995,7 +60547,7 @@ mod tests_163 {
                 &repos,
                 dir.as_path(),
                 &entries,
-                "dev-libs/child[flipme?]",
+                "dev-libs/child[flipme=]",
                 Some(&owner_163("dev-libs", "parent")),
                 &config,
             ),
@@ -60013,7 +60565,13 @@ mod tests_163 {
     #[test]
     fn use_unsat_parent_row_suggests_disabling_an_on_flag() {
         let dir = dir_163("parent-off");
-        let repos = repo_pkgs_163_ru(&dir, &[("dev-libs/parent", "1.0", "0", "+keepoff", "")]);
+        let repos = repo_pkgs_163_ru(
+            &dir,
+            &[
+                ("dev-libs/parent", "1.0", "0", "+keepoff", ""),
+                ("dev-libs/child", "1.0", "0", "keepoff", ""),
+            ],
+        );
         let config = cfg_163();
         let entries = vec![entry_163("dev-libs", "parent", new_163("1.0"), &[])];
         assert_eq!(
@@ -60042,7 +60600,13 @@ mod tests_163 {
     #[test]
     fn use_unsat_parent_row_suggests_enabling_an_installed_parents_off_flag() {
         let dir = dir_163("parent-installed");
-        let repos = repo_pkgs_163_ru(&dir, &[("dev-libs/parent", "1.0", "0", "flip", "")]);
+        let repos = repo_pkgs_163_ru(
+            &dir,
+            &[
+                ("dev-libs/parent", "1.0", "0", "flip", ""),
+                ("dev-libs/child", "1.0", "0", "+flip", ""),
+            ],
+        );
         let config = cfg_163();
         let vdb = dir.join("var/db/pkg/dev-libs/parent-1.0");
         std::fs::create_dir_all(&vdb).unwrap();
@@ -60263,13 +60827,16 @@ mod tests_163 {
         let dir = dir_163("parent-req");
         let repos = repo_pkgs_163_ru(
             &dir,
-            &[(
-                "dev-libs/parent",
-                "1.0",
-                "0",
-                "flipme other",
-                "flipme? ( other )",
-            )],
+            &[
+                (
+                    "dev-libs/parent",
+                    "1.0",
+                    "0",
+                    "flipme other",
+                    "flipme? ( other )",
+                ),
+                ("dev-libs/child", "1.0", "0", "+flipme", ""),
+            ],
         );
         let config = cfg_163();
         let entries = vec![entry_163("dev-libs", "parent", new_163("1.0"), &[])];
@@ -60278,7 +60845,7 @@ mod tests_163 {
                 &repos,
                 dir.as_path(),
                 &entries,
-                "dev-libs/child[flipme?]",
+                "dev-libs/child[flipme=]",
                 Some(&owner_163("dev-libs", "parent")),
                 &config,
             ),
@@ -60299,13 +60866,16 @@ mod tests_163 {
         let dir = dir_163("parent-req-ok");
         let repos = repo_pkgs_163_ru(
             &dir,
-            &[(
-                "dev-libs/parent",
-                "1.0",
-                "0",
-                "flipme",
-                "flipme? ( flipme )",
-            )],
+            &[
+                (
+                    "dev-libs/parent",
+                    "1.0",
+                    "0",
+                    "flipme",
+                    "flipme? ( flipme )",
+                ),
+                ("dev-libs/child", "1.0", "0", "+flipme", ""),
+            ],
         );
         let config = cfg_163();
         let entries = vec![entry_163("dev-libs", "parent", new_163("1.0"), &[])];
@@ -60314,7 +60884,7 @@ mod tests_163 {
                 &repos,
                 dir.as_path(),
                 &entries,
-                "dev-libs/child[flipme?]",
+                "dev-libs/child[flipme=]",
                 Some(&owner_163("dev-libs", "parent")),
                 &config,
             ),
@@ -66414,5 +66984,184 @@ mod tests_184 {
         ));
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// Backlog #195, round 4 (g195d Important-1): operator-level pins for
+/// [`violated_parent_flags`] against real `Atom.violated_conditionals`
+/// (`lib/portage/dep/__init__.py:1465`, branches `:1525-1576`).
+///
+/// Oracle: `docs/evidence/2026-09-28-g195/g195d-oracle-output.txt` (a
+/// host run of real Portage 3.0.82.2 on these same inputs via
+/// `g195d-oracle-probe.py`). Each row's expectation is the oracle's
+/// `arm` column — the parent arm's composed end-to-end outcome, not
+/// just the in-isolation `conditional` hit: `SKIP-missing-iuse` rows
+/// (invalid defaultless conditionals, which real never calls the
+/// function for — `depgraph.py:6721-6727`) and `FAIL-gate` rows both
+/// expect `[]`, exactly what the port returns through its poison and
+/// concrete-gate paths.
+#[cfg(test)]
+mod tests_195d {
+    use super::*;
+
+    fn set_195d(flags: &[&str]) -> HashSet<String> {
+        flags.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// One single-token oracle cell: `token` is the full `[...]` entry
+    /// (e.g. `"foo(+)?"`), `valid` whether `foo` is in child IUSE, `p` /
+    /// `c` the parent/child USE bits. `hit` is the oracle `arm` column
+    /// (`true` = `[foo]`, `false` = `[]`).
+    fn cell_195d(token: &str, valid: bool, p: bool, c: bool, hit: bool) {
+        let atom = portage_dep::parse_atom(&format!("dev-libs/child[{token}]"))
+            .expect("oracle token parses");
+        let child_valid = if valid {
+            set_195d(&["foo"])
+        } else {
+            set_195d(&["other"])
+        };
+        // Real `Package.py:728-731` filters child USE to valid IUSE, so
+        // an invalid flag is never set -- the same contract
+        // `violated_parent_flags` documents.
+        let child_use = if c && valid {
+            set_195d(&["foo"])
+        } else {
+            HashSet::new()
+        };
+        let parent_use = if p {
+            set_195d(&["foo"])
+        } else {
+            HashSet::new()
+        };
+        let want: Vec<String> = if hit { vec!["foo".to_string()] } else { vec![] };
+        assert_eq!(
+            violated_parent_flags(&atom, &parent_use, &child_use, &child_valid),
+            want,
+            "token={token} valid={valid} P={p} C={c}"
+        );
+    }
+
+    /// Full operator x validity x default x P x C matrix (oracle rows
+    /// 1-72; invalid rows only carry C=0, since filtered child USE
+    /// never holds an invalid flag).
+    #[test]
+    fn violated_parent_flags_matches_real_across_the_oracle_matrix() {
+        // `flag?` -- real `:1525-1531`. Valid: violated iff P && !C.
+        for tok in ["foo?", "foo(+)?", "foo(-)?"] {
+            for p in [false, true] {
+                for c in [false, true] {
+                    cell_195d(tok, true, p, c, p && !c);
+                }
+            }
+        }
+        // Invalid: parent-lacks is always satisfied; parent-has
+        // violates only for `(-)` (defaultless poisons via the
+        // `missing_iuse`-equivalent path).
+        for tok in ["foo?", "foo(+)?", "foo(-)?"] {
+            cell_195d(tok, false, false, false, false);
+        }
+        cell_195d("foo?", false, true, false, false);
+        cell_195d("foo(+)?", false, true, false, false);
+        cell_195d("foo(-)?", false, true, false, true);
+        // `flag=` -- real `:1532-1549`. Valid: violated iff P != C.
+        for tok in ["foo=", "foo(+)=", "foo(-)="] {
+            for p in [false, true] {
+                for c in [false, true] {
+                    cell_195d(tok, true, p, c, p != c);
+                }
+            }
+        }
+        // Invalid: defaultless poisons; `(+)` violates only when the
+        // parent lacks the flag (the `missing_enabled` sub-branch);
+        // `(-)` violates only when the parent has it.
+        for tok in ["foo=", "foo(+)=", "foo(-)="] {
+            // Only the `(+)` parent-lacks row violates (oracle `= invalid plus 0 0`).
+            cell_195d(tok, false, false, false, tok == "foo(+)=");
+        }
+        cell_195d("foo=", false, true, false, false);
+        cell_195d("foo(+)=", false, true, false, false);
+        cell_195d("foo(-)=", false, true, false, true);
+        // `flag!=` -- real `:1550-1567`.
+        for p in [false, true] {
+            for c in [false, true] {
+                cell_195d("!foo=", true, p, c, p == c);
+                cell_195d("!foo(+)=", true, p, c, p == c);
+                cell_195d("!foo(-)=", true, p, c, p == c);
+            }
+        }
+        cell_195d("!foo=", false, false, false, false);
+        cell_195d("!foo=", false, true, false, false);
+        // Invalid `(+)`: parent-has-child-lacks violates (the review's
+        // corner: real's `missing_enabled` sub-branch); parent-lacks-
+        // child-lacks is satisfied.
+        cell_195d("!foo(+)=", false, false, false, false);
+        cell_195d("!foo(+)=", false, true, false, true);
+        cell_195d("!foo(-)=", false, false, false, true);
+        cell_195d("!foo(-)=", false, true, false, false);
+        // `!flag?` -- real `:1568-1576`.
+        for p in [false, true] {
+            for c in [false, true] {
+                cell_195d("!foo?", true, p, c, !p && c);
+                cell_195d("!foo(+)?", true, p, c, !p && c);
+                cell_195d("!foo(-)?", true, p, c, !p && c);
+            }
+        }
+        for tok in ["!foo?", "!foo(+)?", "!foo(-)?"] {
+            cell_195d(tok, false, true, false, false);
+        }
+        cell_195d("!foo?", false, false, false, false);
+        cell_195d("!foo(+)?", false, false, false, true);
+        cell_195d("!foo(-)?", false, false, false, false);
+    }
+
+    /// The concrete gate on two-token atoms (oracle gate cells G1-G10):
+    /// a valid parent-active conditional plus one unconditional token.
+    /// `bar_valid` / `bar_use` mirror the oracle's columns; `hit` is
+    /// the oracle `arm` column.
+    fn gate_195d(cond_tok: &str, uncond_tok: &str, bar_valid: bool, bar_use: bool, hit: bool) {
+        let atom = portage_dep::parse_atom(&format!("dev-libs/child[{cond_tok},{uncond_tok}]"))
+            .expect("oracle gate atom parses");
+        let mut valid = set_195d(&["foo"]);
+        if bar_valid {
+            valid.insert("bar".to_string());
+        } else {
+            valid.insert("other".to_string());
+        }
+        let mut child_use = HashSet::new();
+        if bar_use && bar_valid {
+            child_use.insert("bar".to_string());
+        }
+        let parent_use = set_195d(&["foo"]);
+        let want: Vec<String> = if hit { vec!["foo".to_string()] } else { vec![] };
+        assert_eq!(
+            violated_parent_flags(&atom, &parent_use, &child_use, &valid),
+            want,
+            "cond={cond_tok} uncond={uncond_tok} bar_valid={bar_valid} bar_use={bar_use}"
+        );
+    }
+
+    #[test]
+    fn violated_parent_flags_concrete_gate_matches_real() {
+        // Controls: satisfied unconditional tokens leave the parent:foo
+        // hit alone (oracle-verified `[foo]`, gate PASS).
+        gate_195d("foo?", "bar", true, true, true);
+        gate_195d("foo?", "-bar", true, false, true);
+        // Valid concrete violations fail the gate (G1, G2).
+        gate_195d("foo?", "bar", true, false, false);
+        gate_195d("foo?", "-bar", true, true, false);
+        // Invalid `(-)`-assumed `bar` / invalid `(+)`-assumed `-bar`
+        // fail real's gate (G3, G4, G9, G10); the port's valid-only
+        // gate used to let them through.
+        gate_195d("foo?", "bar(-)", false, false, false);
+        gate_195d("foo?", "-bar(+)", false, false, false);
+        gate_195d("foo=", "bar(-)", false, false, false);
+        gate_195d("foo=", "-bar(+)", false, false, false);
+        // The satisfied invalid-defaulted mirrors pass (G5, G6).
+        gate_195d("foo?", "bar(+)", false, false, true);
+        gate_195d("foo?", "-bar(-)", false, false, true);
+        // Invalid defaultless unconditionals poison via `required`
+        // (G7, G8 -- real skips the arm via `missing_iuse`).
+        gate_195d("foo?", "bar", false, false, false);
+        gate_195d("foo?", "-bar", false, false, false);
     }
 }
