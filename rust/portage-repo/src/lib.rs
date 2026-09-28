@@ -42658,28 +42658,29 @@ mod tests {
             !flip.autounmask_backtrack_disabled(false),
             "parentflipeqpkg: bare miss prints no notice"
         );
-        // `dev-libs/pfgraphparent` keeps the OLD assertions below even
-        // though they now fail: its masked child (`use.mask pf`) hits
-        // the same untouchable-child `continue`, so live real reports
-        // the bare miss there too (host probe, portage 3.0.82.2:
-        // `emerge --pretend dev-libs/pfgraphparent` and with
-        // `--autounmask-backtrack=y` both print `there are no ebuilds
-        // to satisfy "dev-libs/pfgraphchild[pf=]"`, no rows, no block).
-        // Correcting this pin needs the coordinator's ruling (same
-        // question as round 1's parentflip, next round); see the g195b
-        // report. Do not "fix" these asserts without it.
+        // `dev-libs/pfgraphparent`: same masked-child shape as
+        // parentflipeqpkg (`use.mask pf`), so the same untouchable-child
+        // `continue` (`depgraph.py:6732-6736`) applies -- live real
+        // (`localhost/test-portuale:latest`, staged fixtures, g195c
+        // probe `/tmp/opencode/g195c/real-probe.txt`) reports the bare
+        // miss under default AND `--autounmask-backtrack=y`:
+        // `emerge: there are no ebuilds to satisfy
+        // "dev-libs/pfgraphchild[pf=]"`, no rows, no block, rc 1.
+        // (Corrected under coordinator ruling B20, option (a); the old
+        // flip+notice assertions below were a source-reading inference,
+        // never a live measurement.)
         let result = graph_result_autounmask("dev-libs/pfgraphparent");
         assert!(
-            !result.autounmask_use_changes.is_empty(),
-            "pfgraphparent: the parent flip is still reported"
+            result.autounmask_use_changes.is_empty(),
+            "pfgraphparent: no flip is recorded for a masked child"
         );
         assert!(
-            result.autounmask_no_clean_tail,
-            "pfgraphparent: the failed dep was rescued by a parent flip"
+            !result.autounmask_no_clean_tail,
+            "pfgraphparent: nothing collected, the tail stays clean"
         );
         assert!(
-            result.autounmask_backtrack_disabled(false),
-            "pfgraphparent: notice stays"
+            !result.autounmask_backtrack_disabled(false),
+            "pfgraphparent: bare miss prints no notice"
         );
         // The config conjuncts suppress unconditionally, even where the
         // notice would otherwise print: `--autounmask-backtrack=y`
@@ -43421,33 +43422,89 @@ mod tests {
     }
 
     #[test]
-    fn autounmask_use_parent_flip_re_resolves_the_whole_graph() {
+    fn autounmask_use_parent_flip_pfgraph_reports_the_bare_miss_like_real() {
         // `dev-libs/pfgraphparent` (IUSE +pf) RDEPENDs
         // `dev-libs/pfgraphchild[pf=]` AND `pf? ( dev-libs/pfgraphextra )`.
-        // The child's `pf` is `use.mask`'d, so the parent's own `pf` is
-        // flipped off. Slice 4 + `--autounmask-backtrack=y`: that flip is
-        // folded into `autounmask_use_config` and the whole walk re-runs
-        // -- so `pf? ( pfgraphextra )` re-evaluates with `pf` OFF and
-        // `pfgraphextra` is NOT pulled (the default single-dep re-resolve
-        // leaves it in the graph -- see the `--autounmask-backtrack` off
-        // contract test). Real `_needed_use_config_changes` ->
-        // `_backtrack_depgraph`.
-        let result = graph_result_autounmask_backtrack("dev-libs/pfgraphparent");
-        let names: Vec<&str> = result.entries.iter().map(|e| e.package.as_str()).collect();
-        assert!(
-            names.contains(&"pfgraphchild") && names.contains(&"pfgraphparent"),
-            "{names:?}"
-        );
-        assert!(
-            !names.contains(&"pfgraphextra"),
-            "pf? ( pfgraphextra ) must drop once the parent flip turns pf off: {names:?}"
-        );
-        assert_eq!(result.autounmask_use_changes.len(), 1);
-        assert_eq!(
-            result.autounmask_use_changes[0].atom,
-            ">=dev-libs/pfgraphparent-1.0"
-        );
-        assert_eq!(result.autounmask_use_changes[0].token, "-pf");
+        // The child's `pf` is `use.mask`'d. Live real
+        // (`localhost/test-portuale:latest`, staged fixtures,
+        // `emerge --pretend dev-libs/pfgraphparent`, rc 1) reports the
+        // BARE miss -- no rows, no USE block:
+        //
+        //     These are the packages that would be merged, in order:
+        //
+        //     Calculating dependencies  ... done!
+        //     Dependency resolution took 0.35 s (backtrack: 0/20).
+        //
+        //
+        //     emerge: there are no ebuilds to satisfy "dev-libs/pfgraphchild[pf=]" for /tmp/fxstage/fixtures/.
+        //     (dependency required by "dev-libs/pfgraphparent-1.0::testrepo" [ebuild])
+        //     (dependency required by "dev-libs/pfgraphparent" [argument])
+        //     rc=1
+        //
+        // (identical text with `--autounmask-backtrack=y` and with
+        // `--autounmask-use=n`; Global-Updates/news/FEATURES noise cut;
+        // portuale omits real's staging `for <root>.` suffix, the
+        // long-standing `fixture-miss-message-unsuffixed` class.)
+        // Real's untouchable-child `continue`
+        // (`lib/_emerge/depgraph.py:6732-6736`) skips the parent probe
+        // when the child's needed flag is masked/forced, so no parent
+        // flip is ever recorded and there is nothing to re-resolve --
+        // neither the default single-dep re-resolve (which kept
+        // `pf? ( pfgraphextra )` in the list) nor the
+        // `--autounmask-backtrack=y` whole-graph re-resolve (which
+        // dropped it) ever happens. (The old resolve+rows+block
+        // expectation was a source-reading inference, never a live
+        // measurement. Renamed from
+        // `autounmask_use_parent_flip_re_resolves_the_whole_graph`,
+        // which stated the opposite of what real does -- coordinator
+        // ruling B20, option (a).)
+        for result in [
+            graph_result_autounmask("dev-libs/pfgraphparent"),
+            graph_result_autounmask_backtrack("dev-libs/pfgraphparent"),
+            graph_result_autounmask_use_n("dev-libs/pfgraphparent"),
+        ] {
+            assert!(
+                matches!(result.outcome, ResolveOutcome::Aborted { .. }),
+                "unexpected outcome: {:?}",
+                result.outcome
+            );
+            let child = result
+                .entries
+                .iter()
+                .find(|e| e.package == "pfgraphchild")
+                .expect("child entry");
+            assert!(
+                matches!(child.outcome, PretendOutcome::NoVisibleCandidate),
+                "{child:?}"
+            );
+            assert!(child.parent_use_suggestion.is_none());
+
+            let parent = result
+                .entries
+                .iter()
+                .find(|e| e.package == "pfgraphparent")
+                .expect("parent entry");
+            assert_eq!(
+                parent
+                    .use_flags_display
+                    .iter()
+                    .find(|(f, _)| f == "pf")
+                    .map(|(_, on)| *on),
+                Some(true),
+                "no parent flip is recorded, so the parent keeps its own +pf default"
+            );
+
+            assert!(
+                result.autounmask_use_changes.is_empty(),
+                "no flip is recorded: {:?}",
+                result.autounmask_use_changes
+            );
+            assert!(result.use_unsat_deps.is_empty());
+            assert_eq!(result.plain_miss_deps.len(), 1);
+            // `pfgraphextra` is still walked (`pf? (...)` stays active
+            // with the parent's +pf unflipped) but the `Aborted` outcome
+            // prints no rows -- real's merge list is likewise empty.
+        }
     }
 
     #[test]
