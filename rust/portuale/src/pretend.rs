@@ -3514,6 +3514,91 @@ fn world_sets_additions(current: &[String], set_names: &[String]) -> Vec<String>
     added
 }
 
+/// Backlog #232 review (Important-2): real's `[usersets]`
+/// `world-candidate` default -- every file set under
+/// `<config_root>/etc/portage/sets` is a world candidate
+/// (`lib/portage/_sets/__init__.py:133`, shipped as
+/// `cnf/sets/portage.conf`) unless the user overrides it in
+/// `sets.conf` (`man portage.5`: settings there override; same-named
+/// sections merge across files with later wins, via
+/// `util/configparser.py:read_configs`). Real applies the merged
+/// `[usersets]` flag to every set its multiset builds
+/// (`_sets/__init__.py:258-262`); the deferral gate
+/// (`actions.py:500-512`) and the record (`depgraph.py:11366`) then
+/// skip the non-candidates. Returns false only on an explicit
+/// `world-candidate = false` (real `ConfigParser.getboolean`
+/// spelling) in the `[usersets]` section of
+/// `<config_root>/etc/portage/sets.conf`, or of a file under
+/// `<config_root>/etc/portage/sets.conf/` (sorted walk, later wins --
+/// real's own `_getfiles` yields the directory form or the file form,
+/// never both). Section names are case-sensitive, option names are
+/// not (real `ConfigParser` semantics). Anything missing, unreadable,
+/// or unparsable stays a candidate -- portuale never suppresses a
+/// record it cannot prove real suppresses. Cuts: per-set single
+/// sections (real routes those through `singleBuilder`, which needs a
+/// `filename`, and a same-named file set then takes the "Redefinition
+/// of set" error path) and repo `sets.conf` files (portuale models no
+/// per-repo set config) are not consulted.
+fn usersets_world_candidate(config_root: &Path) -> bool {
+    fn files_in(dir: &Path) -> Vec<std::path::PathBuf> {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        let mut out: Vec<std::path::PathBuf> =
+            entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
+        out.sort();
+        out
+    }
+    let base = config_root.join("etc/portage/sets.conf");
+    let paths: Vec<std::path::PathBuf> = if base.is_dir() {
+        files_in(&base)
+    } else if base.is_file() {
+        vec![base]
+    } else {
+        return true;
+    };
+    // Real `getboolean` vocabulary; anything else (or a missing `=`)
+    // leaves the running value alone (see the doc comment).
+    fn as_bool(value: &str) -> Option<bool> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "1" | "yes" | "true" | "on" => Some(true),
+            "0" | "no" | "false" | "off" => Some(false),
+            _ => None,
+        }
+    }
+    let mut candidate = true;
+    // Section state carries across files: real feeds every file to one
+    // `ConfigParser`, so bare keys at the top of a later file still
+    // belong to the previous file's trailing section.
+    let mut in_usersets = false;
+    for path in &paths {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+                continue;
+            }
+            if line.starts_with('[') && line.ends_with(']') {
+                in_usersets = line[1..line.len() - 1].trim() == "usersets";
+                continue;
+            }
+            if !in_usersets {
+                continue;
+            }
+            let split = line.find('=').or_else(|| line.find(':'));
+            let Some(i) = split else { continue };
+            if line[..i].trim().eq_ignore_ascii_case("world-candidate")
+                && let Some(v) = as_bool(&line[i + 1..])
+            {
+                candidate = v;
+            }
+        }
+    }
+    candidate
+}
+
 /// Real `depgraph.saveNomergeFavorites`'s own `@set` half: after a
 /// successful non-`--pretend` `emerge @name`, each directly-given
 /// user-defined set arg is recorded as `@name` in
@@ -3525,10 +3610,13 @@ fn world_sets_additions(current: &[String], set_names: &[String]) -> Vec<String>
 /// add the file is rewritten sorted + deduplicated (comment / non-`@`
 /// lines dropped, exactly like `WorldSelectedSetsSet.write`). Prints the
 /// real `>>> Recording @name in "world_sets" favorites file...` line per
-/// addition. v1 cut: the real `world_candidate` gate (built-in sets like
-/// `@security` aren't world candidates) -- portuale only knows
-/// `@world`/`@system` as built-ins, and everything reaching here already
-/// resolved via a real set file, so it's a user set by construction.
+/// addition. v1 cut: the real `world_candidate` gate for built-in sets
+/// like `@security` -- portuale only knows `@world`/`@system` as
+/// built-ins, and everything reaching here already resolved via a real
+/// set file, so it's a user set by construction. The user-level
+/// `[usersets] world-candidate = false` override is filtered at the
+/// call sites instead (see `usersets_world_candidate`), which pass an
+/// already-filtered `set_names`.
 fn update_world_sets_file(
     root: &Path,
     set_names: &[String],
@@ -9291,10 +9379,11 @@ fn nothing_to_merge(pretend: bool, show_merge_list: bool, mergecount: usize) -> 
 /// site); a world candidate is any non-`@` favorite (real keeps every
 /// non-`SETPREFIX` string, `actions.py:498-513`) or user `@set` (real
 /// defaults `usersets` to `world-candidate = true`,
-/// `_sets/__init__.py:133` -- portuale's `selected_set_args` holds
-/// exactly the user sets, so it is that set; the built-in
-/// `@world`/`@system`/`@profile` filter out on both sides since real
-/// never marks them world candidates). Pure predicate so the gate
+/// `_sets/__init__.py:133`, honoring a `sets.conf` override -- the
+/// call site filters through `usersets_world_candidate`, so an
+/// overridden set neither triggers here nor gets recorded; the
+/// built-in `@world`/`@system`/`@profile` filter out on both sides
+/// since real never marks them world candidates). Pure predicate so the gate
 /// matrix stays unit-pinned; the rotation half is pinned end to end in
 /// pmtest (`test_portuale.py`, backlog #232).
 fn selective_noop_deferred(
@@ -14364,9 +14453,10 @@ pub fn run(args: &[String]) -> ExitCode {
         // within portuale's existing world-file cuts -- the
         // `world_file_additions`/`update_world_file` v1 cuts
         // (version-pinned slot args, the vdb-only multislot fallback,
-        // system-virtual exclusion) and the `world_candidate = false`
-        // user-set cut (a set opting out still counts as a candidate
-        // here, matching `update_world_sets_file`'s own standing cut).
+        // system-virtual exclusion). A `world-candidate = false` user
+        // set is filtered at the gate and the record alike (see
+        // `usersets_world_candidate`); per-set single sections and repo
+        // `sets.conf` files stay unconsulted cuts (see its doc comment).
         let mergecount = display_entries
             .iter()
             .filter_map(emerge_build::resume_cpv)
@@ -14375,14 +14465,16 @@ pub fn run(args: &[String]) -> ExitCode {
         // candidates -- a plain (non-`@`) favorite, which real's own
         // `world_candidates` filter always keeps (`actions.py:498-513`),
         // or a user `@set` (`selected_set_args`; real defaults
-        // `usersets` to `world-candidate = true`). Built-in
+        // `usersets` to `world-candidate = true`, honoring a `sets.conf`
+        // override -- see `usersets_world_candidate`). Built-in
         // `@world`/`@system`/`@profile` never count on either side.
         let deferred = selective_noop_deferred(
             selective,
             // Real's folded gate variable (`actions.py:257`): `--onlydeps`
             // keeps the deferral at bay exactly like `--oneshot`.
             oneshot || onlydeps,
-            atom_args.iter().any(|a| !a.starts_with('@')) || !selected_set_args.is_empty(),
+            atom_args.iter().any(|a| !a.starts_with('@'))
+                || (usersets_world_candidate(&config_root) && !selected_set_args.is_empty()),
         );
         if nothing_to_merge(pretend, show_merge_list, mergecount) {
             if deferred {
@@ -14414,6 +14506,15 @@ pub fn run(args: &[String]) -> ExitCode {
                 // nothing -- the run still succeeds, the rotation above
                 // already happened.
                 if !buildpkgonly {
+                    // Backlog #232 review (Important-2): real's record
+                    // skips non-candidate sets (`depgraph.py:11366`) --
+                    // the same `usersets_world_candidate` filter as the
+                    // gate above, so only the gate-passing sets record.
+                    let record_sets: &[String] = if usersets_world_candidate(&config_root) {
+                        &selected_set_args
+                    } else {
+                        &[]
+                    };
                     let fav_refs: Vec<&str> = atom_args.to_vec();
                     let mut additions = match read_world_atoms(&root) {
                         Ok(current) => {
@@ -14428,7 +14529,7 @@ pub fn run(args: &[String]) -> ExitCode {
                         Ok(names) => {
                             let current: Vec<String> =
                                 names.into_iter().map(|n| format!("@{n}")).collect();
-                            additions.extend(world_sets_additions(&current, &selected_set_args));
+                            additions.extend(world_sets_additions(&current, record_sets));
                         }
                         Err(e) => {
                             eprintln!("emerge: {e}");
@@ -14464,9 +14565,7 @@ pub fn run(args: &[String]) -> ExitCode {
                         eprintln!("emerge: {e}");
                         return ExitCode::from(1);
                     }
-                    if let Err(e) =
-                        update_world_sets_file(&root, &selected_set_args, oneshot, onlydeps)
-                    {
+                    if let Err(e) = update_world_sets_file(&root, record_sets, oneshot, onlydeps) {
                         eprintln!("emerge: {e}");
                         return ExitCode::from(1);
                     }
@@ -14851,8 +14950,16 @@ pub fn run(args: &[String]) -> ExitCode {
             }
             // Real `saveNomergeFavorites`'s `@set` half: a directly-given
             // `@name` set arg is recorded in `world_sets` (same
-            // suppression set as the world file).
-            if let Err(e) = update_world_sets_file(&root, &selected_set_args, oneshot, onlydeps) {
+            // suppression set as the world file). Backlog #232 review
+            // (Important-2): non-candidate sets are skipped
+            // (`depgraph.py:11366`) -- the same `usersets_world_candidate`
+            // filter as the deferral arm above.
+            let record_sets: &[String] = if usersets_world_candidate(&config_root) {
+                &selected_set_args
+            } else {
+                &[]
+            };
+            if let Err(e) = update_world_sets_file(&root, record_sets, oneshot, onlydeps) {
                 eprintln!("emerge: {e}");
                 return ExitCode::from(1);
             }
@@ -17235,6 +17342,90 @@ mod tests {
             vec!["@fresh".to_string()],
         );
         assert!(world_sets_additions(&["@kept".to_string()], &["kept".to_string()]).is_empty());
+    }
+
+    #[test]
+    fn usersets_world_candidate_honors_only_an_explicit_usersets_override() {
+        // Backlog #232 review (Important-2): real
+        // `lib/portage/_sets/__init__.py:133` + `:258-262` -- file sets
+        // are candidates unless `sets.conf` says otherwise.
+        fn cfg(tag: &str) -> std::path::PathBuf {
+            let dir = std::env::temp_dir().join(format!(
+                "portuale-usersets-{}-{}-{tag}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("clock")
+                    .as_nanos(),
+            ));
+            std::fs::create_dir_all(dir.join("etc/portage")).expect("mkdir");
+            dir
+        }
+        // No `sets.conf` at all: the shipped default (candidate).
+        assert!(usersets_world_candidate(&cfg("absent")));
+        // An explicit `[usersets] world-candidate = false` flips it;
+        // option names are case-insensitive, section names are not.
+        let dir = cfg("false");
+        std::fs::write(
+            dir.join("etc/portage/sets.conf"),
+            "[usersets]\nWORLD-CANDIDATE = false\n",
+        )
+        .expect("write");
+        assert!(!usersets_world_candidate(&dir));
+        let dir = cfg("wrong-section");
+        std::fs::write(
+            dir.join("etc/portage/sets.conf"),
+            "[UserSets]\nworld-candidate = false\n",
+        )
+        .expect("write");
+        assert!(usersets_world_candidate(&dir));
+        // Every `getboolean` false spelling counts; `true` spellings
+        // flip back (later lines win, like real's merged sections).
+        let dir = cfg("spellings");
+        std::fs::write(
+            dir.join("etc/portage/sets.conf"),
+            "[usersets]\nworld-candidate = no\nworld-candidate = 0\n",
+        )
+        .expect("write");
+        assert!(!usersets_world_candidate(&dir));
+        let dir = cfg("revert");
+        std::fs::write(
+            dir.join("etc/portage/sets.conf"),
+            "[usersets]\nworld-candidate = false\nworld-candidate = True\n",
+        )
+        .expect("write");
+        assert!(usersets_world_candidate(&dir));
+        // An unparsable value is ignored, never a suppression.
+        let dir = cfg("garbage");
+        std::fs::write(
+            dir.join("etc/portage/sets.conf"),
+            "[usersets]\nworld-candidate = maybe\n",
+        )
+        .expect("write");
+        assert!(usersets_world_candidate(&dir));
+        // The `sets.conf/` directory form: sorted walk, later wins.
+        let dir = cfg("dir");
+        let dotd = dir.join("etc/portage/sets.conf");
+        std::fs::create_dir_all(&dotd).expect("mkdir");
+        std::fs::write(
+            dotd.join("10-first.conf"),
+            "[usersets]\nworld-candidate = false\n",
+        )
+        .expect("write");
+        std::fs::write(
+            dotd.join("20-second.conf"),
+            "[usersets]\nworld-candidate = on\n",
+        )
+        .expect("write");
+        assert!(usersets_world_candidate(&dir));
+        // Unrelated sections never matter.
+        let dir = cfg("other");
+        std::fs::write(
+            dir.join("etc/portage/sets.conf"),
+            "[noworldset]\nworld-candidate = false\n",
+        )
+        .expect("write");
+        assert!(usersets_world_candidate(&dir));
     }
 
     #[test]
