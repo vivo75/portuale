@@ -68,6 +68,59 @@ fn onlydeps_ideps_atom_shared_with_buildtime_key_is_not_buildtime_hard() {
     );
 }
 
+/// The read-time EAPI gate drops `IDEPEND` from an EAPI-7 cache
+/// entry that still carries it.
+#[test]
+fn eapi7_cache_entry_carrying_idepend_is_gated_at_read_time() {
+    // EAPI 7 drops IDEPEND even with no onlydeps blanking.
+    assert!(!onlydeps_walk_dep_key(OnlydepsWalkDepKeyArgs {
+        key: "IDEPEND",
+        eapi_has_idepend: false,
+        onlydeps_blanks_runtime: false,
+        onlydeps_blanks_idepend: false
+    }));
+    // EAPI 8 keeps it under the default flags ...
+    assert!(onlydeps_walk_dep_key(OnlydepsWalkDepKeyArgs {
+        key: "IDEPEND",
+        eapi_has_idepend: true,
+        onlydeps_blanks_runtime: false,
+        onlydeps_blanks_idepend: false
+    }));
+    // ... but rdeps=n + ideps=n drops it there too.
+    assert!(!onlydeps_walk_dep_key(OnlydepsWalkDepKeyArgs {
+        key: "IDEPEND",
+        eapi_has_idepend: true,
+        onlydeps_blanks_runtime: true,
+        onlydeps_blanks_idepend: true
+    }));
+    // Build-time keys are never gated; RDEPEND/PDEPEND fall to the
+    // rdeps blank only.
+    assert!(onlydeps_walk_dep_key(OnlydepsWalkDepKeyArgs {
+        key: "DEPEND",
+        eapi_has_idepend: false,
+        onlydeps_blanks_runtime: true,
+        onlydeps_blanks_idepend: true
+    }));
+    assert!(onlydeps_walk_dep_key(OnlydepsWalkDepKeyArgs {
+        key: "BDEPEND",
+        eapi_has_idepend: false,
+        onlydeps_blanks_runtime: true,
+        onlydeps_blanks_idepend: true
+    }));
+    assert!(!onlydeps_walk_dep_key(OnlydepsWalkDepKeyArgs {
+        key: "RDEPEND",
+        eapi_has_idepend: false,
+        onlydeps_blanks_runtime: true,
+        onlydeps_blanks_idepend: true
+    }));
+    assert!(onlydeps_walk_dep_key(OnlydepsWalkDepKeyArgs {
+        key: "RDEPEND",
+        eapi_has_idepend: true,
+        onlydeps_blanks_runtime: false,
+        onlydeps_blanks_idepend: false
+    }));
+}
+
 /// Collapses co-selected atoms onto one pick like Portage's
 /// `_minimize_children`: installed-first for dynamic deps,
 /// ascending for version ranges.
