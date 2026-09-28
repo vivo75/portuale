@@ -86,9 +86,10 @@
 // for the dominant plain-atom case. A `@set`-prefixed world entry is
 // never matched, consistent with the pre-existing `read_world_atoms` cut
 // for `@world` itself (not a new one). Real `--deselect` is
-// `argument_options` with an optional y/n value, the same shape
-// `--verbose`/`-v` already has: a bare `--deselect`/`-W` or `--deselect
-// y` enables it, `--deselect n` explicitly disables it (falling through
+// `true_y_or_n` choices (`_emerge/main.py:446-449`, `in true_y` at
+// `:869-870`), the same optional-value shape `--verbose`/`-v` already
+// has: a bare `--deselect`/`-W` or `--deselect y`/`--deselect True`
+// enables it, `--deselect n` explicitly disables it (falling through
 // to ordinary resolution instead); a bundled `-W` (e.g. `-pW`) never
 // consumes a value, always enabling, the same "no ambiguity with another
 // bundled flag character" reasoning as bundled `-v`/`-D`. `--ask`
@@ -673,6 +674,7 @@ fn localized_size(bytes: u64) -> String {
 /// comment (portage-repo) explains. A top-level package suppressed by
 /// `--onlydeps` isn't in real's merge list at all (`pkg_info.ordered`),
 /// so it isn't counted here either.
+#[allow(clippy::too_many_arguments)]
 fn package_counters_summary(
     entries: &[GraphEntry],
     root: &Path,
@@ -686,6 +688,9 @@ fn package_counters_summary(
     // Backlog #81: in tree mode the solved-stuck rows count too (C0 p2b:
     // `Conflict: 1 block (all satisfied)` under `--tree -v`).
     tree: bool,
+    // Backlog #221 (I5): the settling pass's recorded cycle edges,
+    // threaded into the blocker-row counters below.
+    circular: &HashMap<(String, String), Vec<portage_repo::CircularDepChild>>,
 ) -> String {
     let plural = |n: u64| if n > 1 { "s" } else { "" };
     let (mut upgrades, mut downgrades, mut new, mut newslot, mut reinst) =
@@ -695,7 +700,7 @@ fn package_counters_summary(
     // (`count_blocker_rows`), the same disposition split the line printer
     // uses -- plus the #80 orphans, which print in the same trailing
     // group (unsolvable ones are never suppressed anywhere).
-    let (blocks, blocks_unsolvable) = count_blocker_rows(entries, root, tree);
+    let (blocks, blocks_unsolvable) = count_blocker_rows(entries, root, tree, circular);
     let orphan_unsolvable = orphans.iter().filter(|o| o.conflict.unsolvable).count() as u64;
     let blocks = blocks + orphans.len() as u64;
     let blocks_unsolvable = blocks_unsolvable + orphan_unsolvable;
@@ -915,12 +920,13 @@ fn kept_alt_for_display(
     entries: &[GraphEntry],
     root: &Path,
     owners: impl IntoIterator<Item = usize>,
-    // Backlog #221: the settling pass's recorded cycle edges. The `--tree`
-    // walk passes the resolve's own map (so a wait chain follows the
-    // cycle-breaking branch the walk took); the flat-list blocker walks
-    // pass an empty map (today's derivation -- a wait chain through a
-    // demoted branch in a post-backtrack resolve with Replacement rows
-    // is a display-only residue, see the g221 report).
+    // Backlog #221: the settling pass's recorded cycle edges. Both the
+    // `--tree` walk and the flat-list blocker walks pass the resolve's
+    // own map, so a wait chain follows the cycle-breaking branch the
+    // walk took (backlogs #216/#221 reconciliation, I5: the flat walks
+    // used to pass an empty map, which could mis-disposition a wait
+    // chain through a demoted branch when Replacement rows coexist with
+    // a backtrack).
     circular: &HashMap<(String, String), Vec<portage_repo::CircularDepChild>>,
 ) -> Vec<HashSet<usize>> {
     let has_replacement_row = owners.into_iter().any(|i| {
@@ -1182,12 +1188,16 @@ fn trailing_blocker_lines(
     include_mask: bool,
     columns: bool,
     color: &Colorizer,
+    // Backlog #221 (I5): the settling pass's recorded cycle edges (see
+    // `kept_alt_for_display`): a wait chain through a demoted branch
+    // dispositions like the walk took it.
+    circular: &HashMap<(String, String), Vec<portage_repo::CircularDepChild>>,
 ) -> Vec<String> {
     let entry = &entries[owner_index];
     // #84: one kept-branch derivation for this owner's rows -- and none
     // at all unless one of them is a `Replacement`, which is what keeps
     // the per-entry call cheap.
-    let kept_alt = kept_alt_for_display(entries, root, [owner_index], &HashMap::new());
+    let kept_alt = kept_alt_for_display(entries, root, [owner_index], circular);
     entry
         .blockers
         .iter()
@@ -1226,12 +1236,15 @@ fn collect_inline_blocker_lines(
     quiet: bool,
     columns: bool,
     color: &Colorizer,
+    // Backlog #221 (I5): the settling pass's recorded cycle edges (see
+    // `kept_alt_for_display`).
+    circular: &HashMap<(String, String), Vec<portage_repo::CircularDepChild>>,
 ) -> Vec<(usize, String)> {
     if columns {
         return Vec::new();
     }
     // #84: one kept-branch derivation for the whole display list.
-    let kept_alt = kept_alt_for_display(entries, root, 0..entries.len(), &HashMap::new());
+    let kept_alt = kept_alt_for_display(entries, root, 0..entries.len(), circular);
     let mut out: Vec<(usize, String)> = Vec::new();
     for (owner_index, entry) in entries.iter().enumerate() {
         for b in &entry.blockers {
@@ -1268,11 +1281,18 @@ fn collect_inline_blocker_lines(
 /// flat-Hidden Replacement row the #81 simulation solves DOES enter it
 /// (C0 p2b: `Conflict: 1 block (all satisfied)` under `--tree -v` and
 /// nothing under flat `-v`).
-fn count_blocker_rows(entries: &[GraphEntry], root: &Path, tree: bool) -> (u64, u64) {
+fn count_blocker_rows(
+    entries: &[GraphEntry],
+    root: &Path,
+    tree: bool,
+    // Backlog #221 (I5): the settling pass's recorded cycle edges (see
+    // `kept_alt_for_display`).
+    circular: &HashMap<(String, String), Vec<portage_repo::CircularDepChild>>,
+) -> (u64, u64) {
     let mut blocks = 0u64;
     let mut unsolvable = 0u64;
     // #84: one kept-branch derivation for the whole counter scan.
-    let kept_alt = kept_alt_for_display(entries, root, 0..entries.len(), &HashMap::new());
+    let kept_alt = kept_alt_for_display(entries, root, 0..entries.len(), circular);
     for (owner_index, entry) in entries.iter().enumerate() {
         for b in &entry.blockers {
             // Backlog #81: in tree mode a flat-Hidden Replacement row
@@ -1370,6 +1390,10 @@ fn print_entry_line(
     // True only for the circular re-display; every other caller passes
     // false.
     force_sizes: bool,
+    // Backlog #221 (I5): the settling pass's recorded cycle edges,
+    // threaded into the trailing blocker disposition below (a wait chain
+    // through a demoted branch dispositions like the walk took it).
+    circular: &HashMap<(String, String), Vec<portage_repo::CircularDepChild>>,
 ) {
     let entry = &entries[index];
     // Real `_DisplayConfig` verbosity: `--quiet and 1 or --verbose and 3
@@ -1661,7 +1685,7 @@ fn print_entry_line(
             }
             emit(&field(true, entry.new_slot, false, false, false), version);
             blocker_lines.extend(trailing_blocker_lines(
-                entries, root, index, !quiet, columns, color,
+                entries, root, index, !quiet, columns, color, circular,
             ));
         }
         PretendOutcome::Upgrade { from: _, to } => {
@@ -1675,7 +1699,7 @@ fn print_entry_line(
             }
             emit(&field(false, false, false, true, false), to);
             blocker_lines.extend(trailing_blocker_lines(
-                entries, root, index, !quiet, columns, color,
+                entries, root, index, !quiet, columns, color, circular,
             ));
         }
         PretendOutcome::Downgrade { from: _, to } => {
@@ -1687,7 +1711,7 @@ fn print_entry_line(
             }
             emit(&field(false, false, false, true, true), to);
             blocker_lines.extend(trailing_blocker_lines(
-                entries, root, index, !quiet, columns, color,
+                entries, root, index, !quiet, columns, color, circular,
             ));
         }
         PretendOutcome::Reinstall {
@@ -1714,7 +1738,7 @@ fn print_entry_line(
             }
             emit(&field(false, false, true, false, false), version);
             blocker_lines.extend(trailing_blocker_lines(
-                entries, root, index, !quiet, columns, color,
+                entries, root, index, !quiet, columns, color, circular,
             ));
         }
         PretendOutcome::AlreadyInstalled { .. } => {
@@ -2382,6 +2406,7 @@ fn print_tree(
                     use_unsat_deps,
                     plain_miss_deps,
                     force_sizes,
+                    circular,
                 )
             }
             TreeNode::Blocker { owner, index } => {
@@ -2778,6 +2803,13 @@ fn abort_outcome_to_json(outcome: &portage_repo::ResolveOutcome) -> String {
                 let members: Vec<String> = members.iter().map(|m| json_string(m)).collect();
                 format!(
                     "{{\"reason\":\"unserializable-cycle\",\"members\":[{}]}}",
+                    members.join(",")
+                )
+            }
+            portage_repo::AbortReason::VirtualCycle { members } => {
+                let members: Vec<String> = members.iter().map(|m| json_string(m)).collect();
+                format!(
+                    "{{\"reason\":\"virtual-cycle\",\"members\":[{}]}}",
                     members.join(",")
                 )
             }
@@ -5294,6 +5326,7 @@ fn run_resume(
                 &[],
                 &[],
                 false,
+                &HashMap::new(),
             );
         }
         // Backlog #231 (a): real reaches `post_emerge` after the
@@ -8734,6 +8767,10 @@ enum SlotConflictReason {
     Version(&'static str), // "ge" | "eq" | "le"
     Slot(String),          // the ":slot[/sub]" text, for the caret span
     Use(String),           // the violated flag, for the caret span
+    /// Real `slot_collision.py`'s `("AtomArg", None)` key: a bare
+    /// command-line parent whose atom is satisfied by every other
+    /// instance, shown when some other instance is installed.
+    Argument,
 }
 
 /// One slot-conflict parent that contributed at least one specific
@@ -8795,6 +8832,7 @@ struct ConflictOther {
     cpv: String,
     iuse: HashSet<String>,
     use_flags: HashSet<String>,
+    installed: bool,
 }
 
 /// Real `_prepare_conflict_msg_and_check_for_specificity`'s per-parent
@@ -8824,6 +8862,11 @@ fn slot_conflict_reasons(atom: &Atom, others: &[ConflictOther]) -> (Vec<SlotConf
                     reasons.push(r);
                 }
             }
+            // Real's `elif` chain (`slot_collision.py:307-397`): a
+            // version-mismatched pair skips the slot and USE checks
+            // below -- even when the operator is `None` and nothing is
+            // recorded for this pair.
+            continue;
         } else if atom.slot.is_some() {
             let matches_no_use =
                 match_from_list(&no_use, &[other.cpv.as_str()]).is_some_and(|v| !v.is_empty());
@@ -8841,8 +8884,14 @@ fn slot_conflict_reasons(atom: &Atom, others: &[ConflictOther]) -> (Vec<SlotConf
                 if !reasons.contains(&r) {
                     reasons.push(r);
                 }
+                // Real's `elif` chain (`slot_collision.py`): the USE
+                // check below runs only when the slot half matched --
+                // otherwise the slot reason already explains this
+                // parent against this other instance.
+                continue;
             }
-        } else if let Some(use_deps) = &atom.use_deps {
+        }
+        if let Some(use_deps) = &atom.use_deps {
             // `match_from_list` skips USE evaluation against plain-string
             // candidates (real's own `hasattr(x, "use")` guard), so a
             // version+slot match always "matches" here -- the USE verdict
@@ -9646,10 +9695,9 @@ pub fn run(args: &[String]) -> ExitCode {
     // '--verbose-conflicts' option" trailer. Never reaches the resolver.
     let mut verbose_conflicts = false;
     // --autounmask/--autounmask-keep-keywords: real "true_y_or_n"
-    // (bare flag, "=y", or "=n") for the first, plain required "y"/"n"
-    // (no bare form) for the second -- see the on/off default-
-    // resolution logic just below where these are actually consumed,
-    // grounded against real create_depgraph_params.py's own
+    // (bare flag, "=y", "=True", or "=n") for both -- see the on/off
+    // default-resolution logic just below where these are actually
+    // consumed, grounded against real create_depgraph_params.py's own
     // autounmask/autounmask_keep_keywords computation.
     let mut autounmask: Option<bool> = None;
     let mut autounmask_keep_keywords: Option<bool> = None;
@@ -9658,7 +9706,8 @@ pub fn run(args: &[String]) -> ExitCode {
     // `"y" if autounmask is True else "n"` (create_depgraph_params.py) --
     // so OFF unless `--autounmask` itself is explicit or `=y` is given.
     let mut autounmask_license: Option<bool> = None;
-    // --autounmask-keep-masks: real `y_or_n`. Real KEEPS masks by default
+    // --autounmask-keep-masks: real `true_y_or_n` (bare flag, "=y",
+    // "=True", or "=n"). Real KEEPS masks by default
     // (`autounmask_keep_masks` defaults `True`); only `=n` unmasks.
     let mut autounmask_keep_masks: Option<bool> = None;
     // --autounmask-only (real `true_y_or_n`, `main.py:813`): "only perform
@@ -10399,16 +10448,20 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
             }
-        } else if arg == "--verbose=y" {
+        } else if arg == "--verbose=y" || arg == "--verbose=True" {
             verbose = true;
             i += 1;
         } else if arg == "--verbose=n" {
             verbose = false;
             i += 1;
         } else if arg == "--quiet" || arg == "-q" {
-            // Real `--quiet`/`-q`: `true_y_or_n` (`argument_options`), the
-            // same optional-value shape `--verbose`/`-v` has -- a bare
-            // occurrence enables it, `y`/`n` set it explicitly. Sets real
+            // Real `--quiet`/`-q`: `true_y_or_n` choices
+            // (`_emerge/main.py:612-614`, normalized `in true_y` at
+            // `:939-941`); a bare occurrence inserts `"True"` via
+            // `insert_optional_args` (`:172` is in the `y_or_n` insert
+            // set, so only a separate `y`/`n` is consumed and a
+            // separate `True` stays positional) -- the same
+            // optional-value shape `--verbose`/`-v` has. Sets real
             // `_DisplayConfig` verbosity to 1 (see `render` / `use_suffix`
             // / `attr_display_field` for what that changes).
             match args.get(i + 1).map(String::as_str) {
@@ -10425,16 +10478,21 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
             }
-        } else if arg == "--quiet=y" {
+        } else if arg == "--quiet=y" || arg == "--quiet=True" {
             quiet = true;
             i += 1;
         } else if arg == "--quiet=n" {
             quiet = false;
             i += 1;
         } else if arg == "--deselect" || arg == "-W" {
-            // Real "--deselect": y_or_n (argument_options), the same
-            // optional-value shape "--verbose"/"-v" already has -- see
-            // that branch's own comment. Unlike "--verbose", a bare
+            // Real "--deselect": `true_y_or_n` choices
+            // (`_emerge/main.py:446-449`, normalized `in true_y` at
+            // `:869-870`), the same optional-value shape
+            // "--verbose"/"-v" already has -- a bare `--deselect`/`-W`
+            // inserts `"True"` via `insert_optional_args` (`:158` is in
+            // the `y_or_n` insert set, so only a separate `y`/`n` is
+            // consumed and a separate `True` stays positional; see that
+            // branch's own comment). Unlike "--verbose", a bare
             // "--deselect"/"-W" turns this whole invocation into a
             // different, standalone action (see run_deselect's own doc
             // comment) rather than modifying the ordinary --pretend
@@ -10455,7 +10513,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
             }
-        } else if arg == "--deselect=y" {
+        } else if arg == "--deselect=y" || arg == "--deselect=True" {
             deselect = true;
             i += 1;
         } else if arg == "--deselect=n" {
@@ -10585,11 +10643,16 @@ pub fn run(args: &[String]) -> ExitCode {
                 }
             }
         } else if arg == "--changed-deps" {
-            // Real "--changed-deps": y_or_n (default_arg_opts), the same
-            // optional-value shape "--verbose"/"-v" and "--deselect"/"-W"
-            // already have -- no short alias, though (real main.py
-            // declares none). Unlike --deselect, this stays an ordinary
-            // --pretend modifier, not a standalone action.
+            // Real "--changed-deps": `true_y_or_n` choices
+            // (`_emerge/main.py:405-407`, normalized `in true_y` at
+            // `:848-851`), the same optional-value shape
+            // "--verbose"/"-v" and "--deselect"/"-W" already have -- a
+            // bare occurrence inserts `"True"` via
+            // `insert_optional_args` (`:152` is in the `y_or_n` insert
+            // set, so only a separate `y`/`n` is consumed and a
+            // separate `True` stays positional). No short alias, though
+            // (real main.py declares none). Unlike --deselect, this stays
+            // an ordinary --pretend modifier, not a standalone action.
             match args.get(i + 1).map(String::as_str) {
                 Some("y") => {
                     changed_deps = true;
@@ -10604,19 +10667,22 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
             }
-        } else if arg == "--changed-deps=y" {
+        } else if arg == "--changed-deps=y" || arg == "--changed-deps=True" {
             changed_deps = true;
             i += 1;
         } else if arg == "--changed-deps=n" {
             changed_deps = false;
             i += 1;
         } else if arg == "--changed-deps-report" {
-            // Real "--changed-deps-report": y_or_n (default_arg_opts),
-            // the identical optional-value shape "--changed-deps"
-            // already has -- no short alias (real main.py declares
-            // none). Unlike --changed-deps, this never changes what
-            // gets reinstalled -- see resolve_pretend_graph's own doc
-            // comment.
+            // Real "--changed-deps-report": `true_y_or_n` choices
+            // (`_emerge/main.py:409-411`, normalized `in true_y` at
+            // `:854-857`), the identical optional-value shape
+            // "--changed-deps" already has -- a bare occurrence inserts
+            // `"True"` via `insert_optional_args` (`:154` is in the
+            // `y_or_n` insert set, so only a separate `y`/`n` is
+            // consumed). No short alias (real main.py declares none).
+            // Unlike --changed-deps, this never changes what gets
+            // reinstalled -- see resolve_pretend_graph's own doc comment.
             match args.get(i + 1).map(String::as_str) {
                 Some("y") => {
                     changed_deps_report = true;
@@ -10631,7 +10697,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
             }
-        } else if arg == "--changed-deps-report=y" {
+        } else if arg == "--changed-deps-report=y" || arg == "--changed-deps-report=True" {
             changed_deps_report = true;
             i += 1;
         } else if arg == "--changed-deps-report=n" {
@@ -10706,15 +10772,20 @@ pub fn run(args: &[String]) -> ExitCode {
             ignore_built_slot_operator_deps = false;
             i += 1;
         } else if arg == "--selective" {
-            // Real "--selective": y_or_n (default_arg_opts), the same
-            // optional-value shape "--changed-deps" already has -- no
-            // short alias for this exact spelling (real main.py declares
-            // none; "-n" is "--noreplace" above, real portage's own
-            // separate, bare-boolean spelling of the identical meaning).
-            // "n" here explicitly CANCELS `selective` even if some other
-            // flag already set it -- see `resolve_pretend`'s own doc
-            // comment (portage-repo) and this override's own application
-            // just before the `resolve_pretend_graph` call below.
+            // Real "--selective": `true_y_or_n` choices
+            // (`_emerge/main.py:697`, normalized `in true_y` at
+            // `:988-989`), the same optional-value shape
+            // "--changed-deps" already has -- a bare occurrence inserts
+            // `"True"` via `insert_optional_args` (`:183` is in the
+            // `y_or_n` insert set, so only a separate `y`/`n` is
+            // consumed). No short alias for this exact spelling (real
+            // main.py declares none; "-n" is "--noreplace" above, real
+            // portage's own separate, bare-boolean spelling of the
+            // identical meaning). "n" here explicitly CANCELS `selective`
+            // even if some other flag already set it -- see
+            // `resolve_pretend`'s own doc comment (portage-repo) and this
+            // override's own application just before the
+            // `resolve_pretend_graph` call below.
             match args.get(i + 1).map(String::as_str) {
                 Some("y") => {
                     selective_flag = Some(true);
@@ -10729,16 +10800,20 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
             }
-        } else if arg == "--selective=y" {
+        } else if arg == "--selective=y" || arg == "--selective=True" {
             selective_flag = Some(true);
             i += 1;
         } else if arg == "--selective=n" {
             selective_flag = Some(false);
             i += 1;
         } else if arg == "--changed-slot" {
-            // Real "--changed-slot": y_or_n (default_arg_opts), the
-            // identical optional-value shape "--changed-deps" already
-            // has -- no short alias (real main.py declares none).
+            // Real "--changed-slot": `true_y_or_n` choices
+            // (`_emerge/main.py:413-415`, normalized `in true_y` at
+            // `:860-863`), the identical optional-value shape
+            // "--changed-deps" already has -- a bare occurrence inserts
+            // `"True"` via `insert_optional_args` (`:153` is in the
+            // `y_or_n` insert set, so only a separate `y`/`n` is
+            // consumed). No short alias (real main.py declares none).
             match args.get(i + 1).map(String::as_str) {
                 Some("y") => {
                     changed_slot = true;
@@ -10753,7 +10828,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
             }
-        } else if arg == "--changed-slot=y" {
+        } else if arg == "--changed-slot=y" || arg == "--changed-slot=True" {
             changed_slot = true;
             i += 1;
         } else if arg == "--changed-slot=n" {
@@ -10810,7 +10885,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
             }
-        } else if arg == "--quiet-build=y" {
+        } else if arg == "--quiet-build=y" || arg == "--quiet-build=True" {
             quiet_build = Some(true);
             i += 1;
         } else if arg == "--quiet-build=n" {
@@ -11019,10 +11094,14 @@ pub fn run(args: &[String]) -> ExitCode {
             root_deps = true;
             i += 1;
         } else if arg == "--with-test-deps" {
-            // Real "--with-test-deps": y_or_n (default_arg_opts), the
-            // identical optional-value shape "--changed-deps"/
-            // "--changed-slot" already have -- no short alias (real
-            // main.py declares none).
+            // Real "--with-test-deps": `true_y_or_n` choices
+            // (`_emerge/main.py:745-747`, normalized `in true_y` at
+            // `:1133-1136`), the identical optional-value shape
+            // "--changed-deps"/"--changed-slot" already have -- a bare
+            // occurrence inserts `"True"` via `insert_optional_args`
+            // (`:191` is in the `y_or_n` insert set, so only a separate
+            // `y`/`n` is consumed). No short alias (real main.py
+            // declares none).
             match args.get(i + 1).map(String::as_str) {
                 Some("y") => {
                     with_test_deps = true;
@@ -11037,7 +11116,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     i += 1;
                 }
             }
-        } else if arg == "--with-test-deps=y" {
+        } else if arg == "--with-test-deps=y" || arg == "--with-test-deps=True" {
             with_test_deps = true;
             i += 1;
         } else if arg == "--with-test-deps=n" {
@@ -11129,33 +11208,30 @@ pub fn run(args: &[String]) -> ExitCode {
             autounmask_backtrack = Some(value == "y");
             i += 1;
         } else if arg == "--autounmask-keep-keywords" {
-            // Real "--autounmask-keep-keywords": plain y_or_n, a
-            // REQUIRED value -- no bare/optional form real
-            // "--autounmask" itself has, the same required shape
-            // "--with-bdeps" already has.
-            let Some(value) = args.get(i + 1) else {
-                eprintln!("emerge: option \"--autounmask-keep-keywords\" requires an argument");
-                return ExitCode::from(2);
-            };
-            match value.as_str() {
-                "y" => {
+            // Real "--autounmask-keep-keywords": `true_y_or_n` choices
+            // (`_emerge/main.py:365-367`, normalized `in true_y` at
+            // `:821-822`) -- a bare occurrence inserts `"True"` via
+            // `insert_optional_args` (`:146` is in the `y_or_n` insert
+            // set, so only a separate `y`/`n` is consumed and a
+            // separate `True` stays positional), the same
+            // optional-value shape "--changed-deps" already has.
+            match args.get(i + 1).map(String::as_str) {
+                Some("y") => {
                     autounmask_keep_keywords = Some(true);
                     i += 2;
                 }
-                "n" => {
+                Some("n") => {
                     autounmask_keep_keywords = Some(false);
                     i += 2;
                 }
                 _ => {
-                    eprintln!(
-                        "emerge: option \"--autounmask-keep-keywords\": invalid choice: {value:?} (choose from \"y\", \"n\")"
-                    );
-                    return ExitCode::from(2);
+                    autounmask_keep_keywords = Some(true);
+                    i += 1;
                 }
             }
         } else if let Some(value) = arg.strip_prefix("--autounmask-keep-keywords=") {
             match value {
-                "y" => {
+                "y" | "True" => {
                     autounmask_keep_keywords = Some(true);
                     i += 1;
                 }
@@ -11165,7 +11241,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 }
                 _ => {
                     eprintln!(
-                        "emerge: option \"--autounmask-keep-keywords\": invalid choice: {value:?} (choose from \"y\", \"n\")"
+                        "emerge: option \"--autounmask-keep-keywords\": invalid choice: {value:?} (choose from \"True\", \"y\", \"n\")"
                     );
                     return ExitCode::from(2);
                 }
@@ -11253,29 +11329,30 @@ pub fn run(args: &[String]) -> ExitCode {
                 }
             }
         } else if arg == "--autounmask-keep-masks" {
-            let Some(value) = args.get(i + 1) else {
-                eprintln!("emerge: option \"--autounmask-keep-masks\" requires an argument");
-                return ExitCode::from(2);
-            };
-            match value.as_str() {
-                "y" => {
+            // Real "--autounmask-keep-masks": `true_y_or_n` choices
+            // (`_emerge/main.py:369-371`, normalized `in true_y` at
+            // `:824-825`) -- a bare occurrence inserts `"True"` via
+            // `insert_optional_args` (`:147` is in the `y_or_n` insert
+            // set, so only a separate `y`/`n` is consumed and a
+            // separate `True` stays positional), the same
+            // optional-value shape "--changed-deps" already has.
+            match args.get(i + 1).map(String::as_str) {
+                Some("y") => {
                     autounmask_keep_masks = Some(true);
                     i += 2;
                 }
-                "n" => {
+                Some("n") => {
                     autounmask_keep_masks = Some(false);
                     i += 2;
                 }
                 _ => {
-                    eprintln!(
-                        "emerge: option \"--autounmask-keep-masks\": invalid choice: {value:?} (choose from \"y\", \"n\")"
-                    );
-                    return ExitCode::from(2);
+                    autounmask_keep_masks = Some(true);
+                    i += 1;
                 }
             }
         } else if let Some(value) = arg.strip_prefix("--autounmask-keep-masks=") {
             match value {
-                "y" => {
+                "y" | "True" => {
                     autounmask_keep_masks = Some(true);
                     i += 1;
                 }
@@ -11285,7 +11362,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 }
                 _ => {
                     eprintln!(
-                        "emerge: option \"--autounmask-keep-masks\": invalid choice: {value:?} (choose from \"y\", \"n\")"
+                        "emerge: option \"--autounmask-keep-masks\": invalid choice: {value:?} (choose from \"True\", \"y\", \"n\")"
                     );
                     return ExitCode::from(2);
                 }
@@ -12584,6 +12661,9 @@ pub fn run(args: &[String]) -> ExitCode {
             complete_if_new_use,
             complete_if_new_ver,
             rebuild_if_new_slot,
+            &root,
+            &repos,
+            &config,
         );
     let want_complete = complete_graph || (deep == portage_repo::Deep::NotRequested && auto_enable);
     let result = if want_complete {
@@ -12919,8 +12999,14 @@ pub fn run(args: &[String]) -> ExitCode {
             // right after that replacement's package line (real appends
             // them to `print_msg` at the solved blocker's merge-list
             // position, `output.py:119-121`).
-            let inline_blockers =
-                collect_inline_blocker_lines(display_entries, &root, quiet, columns, &color);
+            let inline_blockers = collect_inline_blocker_lines(
+                display_entries,
+                &root,
+                quiet,
+                columns,
+                &color,
+                &result.circular_dependency,
+            );
             for i in 0..display_entries.len() {
                 print_entry_line(
                     display_entries,
@@ -12946,6 +13032,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     &result.use_unsat_deps,
                     &result.plain_miss_deps,
                     circular_forced_display,
+                    &result.circular_dependency,
                 );
                 for (_, line) in inline_blockers.iter().filter(|(after, _)| *after == i) {
                     println!("{line}");
@@ -12978,7 +13065,8 @@ pub fn run(args: &[String]) -> ExitCode {
                 &result.outcome,
                 portage_repo::ResolveOutcome::Aborted {
                     reason: portage_repo::AbortReason::MaskedDep { .. }
-                        | portage_repo::AbortReason::UnsatisfiedAtom { .. },
+                        | portage_repo::AbortReason::UnsatisfiedAtom { .. }
+                        | portage_repo::AbortReason::VirtualCycle { .. },
                     ..
                 }
             )
@@ -13041,6 +13129,7 @@ pub fn run(args: &[String]) -> ExitCode {
                         &result.use_unsat_deps,
                         &result.plain_miss_deps,
                         false,
+                        &result.circular_dependency,
                     );
                 }
             }
@@ -13121,7 +13210,8 @@ pub fn run(args: &[String]) -> ExitCode {
                 onlydeps,
                 &color,
                 &result.orphan_blockers,
-                disp_tree
+                disp_tree,
+                &result.circular_dependency,
             )
         );
     }
@@ -13210,6 +13300,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 // the gated path's main list above (whose re-display is
                 // skipped as duplicative).
                 false,
+                &result.circular_dependency,
             );
         }
     }
@@ -13296,11 +13387,16 @@ pub fn run(args: &[String]) -> ExitCode {
                 let show_argument_parents = c
                     .instances
                     .iter()
-                    .any(|o| o.version != inst.version && o.installed);
+                    .any(|o| !std::ptr::eq(o, inst) && o.installed);
+                // Real compares against every *other* instance in the
+                // slot (`slot_collision.py`: `if other_pkg == pkg:
+                // continue`) -- identity, not version: a same-version
+                // merge/installed twin (a USE-only break, backlog #222)
+                // still sees its twin, so the USE parent classifies.
                 let others: Vec<ConflictOther> = c
                     .instances
                     .iter()
-                    .filter(|o| o.version != inst.version)
+                    .filter(|o| !std::ptr::eq(*o, inst))
                     .map(|o| {
                         // Flag sets for the `("use", flag)` branch: an
                         // installed other's own vdb-recorded sets, like
@@ -13328,6 +13424,7 @@ pub fn run(args: &[String]) -> ExitCode {
                             ),
                             iuse,
                             use_flags,
+                            installed: o.installed,
                         }
                     })
                     .collect();
@@ -13343,7 +13440,22 @@ pub fn run(args: &[String]) -> ExitCode {
                     let Some(atom) = parse_atom(&p.atom) else {
                         continue;
                     };
-                    let (reasons, use_unconditional) = slot_conflict_reasons(&atom, &others);
+                    let (mut reasons, use_unconditional) = slot_conflict_reasons(&atom, &others);
+                    // Real `slot_collision.py`'s `("AtomArg", None)` key
+                    // (`elif isinstance(ppkg, AtomArg) and
+                    // other_pkg.installed`): a bare command-line parent
+                    // satisfied by every other instance is still shown
+                    // once some other instance is installed. Like real's
+                    // `elif`, it only fires when no version/slot/USE
+                    // reason did (so an argument parent that already
+                    // classifies, like pg1's `>=cgp1x-2`, renders exactly
+                    // once, as today).
+                    if p.parent_cpv.is_empty()
+                        && reasons.is_empty()
+                        && others.iter().any(|o| o.installed)
+                    {
+                        reasons.push(SlotConflictReason::Argument);
+                    }
                     if !reasons.is_empty() {
                         classified.push(ClassifiedParent {
                             parent_cpv: &p.parent_cpv,
@@ -13410,6 +13522,9 @@ pub fn run(args: &[String]) -> ExitCode {
                             }
                         }
                         SlotConflictReason::Use(_) => {
+                            selected.extend(members.iter().copied());
+                        }
+                        SlotConflictReason::Argument => {
                             selected.extend(members.iter().copied());
                         }
                     }
@@ -13683,6 +13798,30 @@ pub fn run(args: &[String]) -> ExitCode {
             &result.entries,
             result.large_cycle_count,
         );
+    }
+
+    // Backlog #193: real `select_files`' `_virtual_cycle_error` handler
+    // (`lib/_emerge/depgraph.py:5002-5013` in 3rdparty/portage 3.0.82.2)
+    // prints `\n\n!!! virtual cycle detected:\n\n`, one
+    // `  {cpv}::{repo}` line per probe-stack member (sorted), then `\n`
+    // -- to stderr (`writemsg`, noiselevel -1), mid-resolution (between
+    // real's `Calculating dependencies ...` notice halves; portuale
+    // prints that notice whole in the preamble above, like the
+    // masked/unsat arm). No merge list, no counters, no trailing error
+    // block: real's run ends after the timing line (g193 probe), and the
+    // shared abort gate below exits 1. Uncoloured like real's own
+    // `writemsg` (no colour markup on that path).
+    if portage_repo::abort_path_enabled()
+        && let portage_repo::ResolveOutcome::Aborted {
+            reason: portage_repo::AbortReason::VirtualCycle { members },
+            ..
+        } = &result.outcome
+    {
+        eprint!("\n\n!!! virtual cycle detected:\n\n");
+        for member in members {
+            eprintln!("  {member}");
+        }
+        eprintln!();
     }
 
     // Real `depgraph.py::_display_autounmask` (`:10625`), the
@@ -15685,6 +15824,189 @@ mod tests {
         );
     }
 
+    /// Run the built binary twice under `--pretend` -- once with
+    /// `--X=True`, once with the bare `--X` -- against the committed
+    /// fixture tree on a shared scratch `ROOT`, and assert the two runs
+    /// are byte-identical (exit code, stdout, stderr). Backlog #241:
+    /// real's `true_y_or_n` choices
+    /// (`_emerge/main.py:320-322,365-371,405-415,446-449,612-623,697,732-747`;
+    /// normalized `in true_y` per option) admit `=True` for eleven
+    /// options portuale parsed narrowly (`=y`/`=n` only, rc 2
+    /// `unrecognized option` for nine of them and a wrong
+    /// `(choose from "y", "n")` rejection for the two
+    /// autounmask-keep options); `=True` must behave exactly like the
+    /// bare flag. `expected_rc` pins the shared exit code (0 for the
+    /// resolving shapes, 1 for the two autounmask-keep shapes whose
+    /// fixtures fail like real). `--pretend` never writes, so sharing
+    /// one `ROOT` across both runs is hermetic.
+    fn true_spelling_matches_bare(
+        flag_eq_true: &str,
+        flag_bare: &str,
+        atom: &str,
+        expected_rc: i32,
+    ) {
+        let portuale_bin = built_portuale_bin();
+        let base = std::env::temp_dir().join(format!(
+            "true_y_or_n_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = base.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let env = fixture_resolve_env(&root, &base.join("pt"));
+        let run = |flag: &str| {
+            std::process::Command::new(&portuale_bin)
+                .args(["emerge", "--pretend", flag, atom])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .envs(env.clone())
+                .output()
+                .expect("portuale emerge spawns")
+        };
+        let spelled = run(flag_eq_true);
+        let bare = run(flag_bare);
+        for (label, output) in [("spelled", &spelled), ("bare", &bare)] {
+            assert_eq!(
+                output.status.code(),
+                Some(expected_rc),
+                "--pretend {flag_bare} {atom} ({label}) must exit {expected_rc}\nstdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+        }
+        assert_eq!(
+            String::from_utf8_lossy(&spelled.stdout),
+            String::from_utf8_lossy(&bare.stdout),
+            "--pretend {flag_eq_true} {atom} must print like the bare flag",
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&spelled.stderr),
+            String::from_utf8_lossy(&bare.stderr),
+            "--pretend {flag_eq_true} {atom} must warn like the bare flag",
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn verbose_true_spelling_behaves_like_the_bare_flag() {
+        // Backlog #241: real `--verbose` is `true_y_or_n` choices
+        // (`main.py:732-735`, `in true_y` at `:1128-1131`).
+        true_spelling_matches_bare("--verbose=True", "--verbose", "dev-libs/newpkg", 0);
+    }
+
+    #[test]
+    fn quiet_true_spelling_behaves_like_the_bare_flag() {
+        // Backlog #241: real `--quiet` is `true_y_or_n` choices
+        // (`main.py:612-614`, `in true_y` at `:939-941`).
+        true_spelling_matches_bare("--quiet=True", "--quiet", "dev-libs/newpkg", 0);
+    }
+
+    #[test]
+    fn deselect_true_spelling_behaves_like_the_bare_flag() {
+        // Backlog #241: real `--deselect` is `true_y_or_n` choices
+        // (`main.py:446-449`, `in true_y` at `:869-870`); the bare form
+        // stays the standalone deselect action either way.
+        true_spelling_matches_bare("--deselect=True", "--deselect", "dev-libs/foo", 0);
+    }
+
+    #[test]
+    fn changed_deps_true_spelling_behaves_like_the_bare_flag() {
+        // Backlog #241: real `--changed-deps` is `true_y_or_n` choices
+        // (`main.py:405-407`, `in true_y` at `:848-851`).
+        true_spelling_matches_bare(
+            "--changed-deps=True",
+            "--changed-deps",
+            "dev-libs/changeddepspkg",
+            0,
+        );
+    }
+
+    #[test]
+    fn changed_deps_report_true_spelling_behaves_like_the_bare_flag() {
+        // Backlog #241: real `--changed-deps-report` is `true_y_or_n`
+        // choices (`main.py:409-411`, `in true_y` at `:854-857`).
+        true_spelling_matches_bare(
+            "--changed-deps-report=True",
+            "--changed-deps-report",
+            "dev-libs/changeddepspkg",
+            0,
+        );
+    }
+
+    #[test]
+    fn selective_true_spelling_behaves_like_the_bare_flag() {
+        // Backlog #241: real `--selective` is `true_y_or_n` choices
+        // (`main.py:697`, `in true_y` at `:988-989`).
+        true_spelling_matches_bare("--selective=True", "--selective", "dev-libs/samepkg", 0);
+    }
+
+    #[test]
+    fn changed_slot_true_spelling_behaves_like_the_bare_flag() {
+        // Backlog #241: real `--changed-slot` is `true_y_or_n` choices
+        // (`main.py:413-415`, `in true_y` at `:860-863`).
+        true_spelling_matches_bare(
+            "--changed-slot=True",
+            "--changed-slot",
+            "dev-libs/changedslotpkg",
+            0,
+        );
+    }
+
+    #[test]
+    fn quiet_build_true_spelling_behaves_like_the_bare_flag() {
+        // Backlog #241: real `--quiet-build` is `true_y_or_n` choices
+        // (`main.py:617-619`, `in true_y` at `:944-945`); inert under
+        // `--pretend` either way.
+        true_spelling_matches_bare("--quiet-build=True", "--quiet-build", "dev-libs/newpkg", 0);
+    }
+
+    #[test]
+    fn with_test_deps_true_spelling_behaves_like_the_bare_flag() {
+        // Backlog #241: real `--with-test-deps` is `true_y_or_n`
+        // choices (`main.py:745-747`, `in true_y` at `:1133-1136`).
+        true_spelling_matches_bare(
+            "--with-test-deps=True",
+            "--with-test-deps",
+            "dev-libs/withtestdeppkg",
+            0,
+        );
+    }
+
+    #[test]
+    fn autounmask_keep_keywords_true_spelling_behaves_like_the_bare_flag() {
+        // Backlog #241: real `--autounmask-keep-keywords` is
+        // `true_y_or_n` choices (`main.py:365-367`, `in true_y` at
+        // `:821-822`) -- the old wrong `(choose from "y", "n")`
+        // rejection of `=True` is gone, and the bare form (once a
+        // "requires an argument" rc 2) now keeps keywords like real's
+        // inserted `"True"`. `=True` keeps the unstable-keyworded B-1,
+        // so newest A-2 fails like real (rc 1, same as the `=y` pin).
+        true_spelling_matches_bare(
+            "--autounmask-keep-keywords=True",
+            "--autounmask-keep-keywords",
+            "dev-libs/akk0a",
+            1,
+        );
+    }
+
+    #[test]
+    fn autounmask_keep_masks_true_spelling_behaves_like_the_bare_flag() {
+        // Backlog #241: real `--autounmask-keep-masks` is `true_y_or_n`
+        // choices (`main.py:369-371`, `in true_y` at `:824-825`) --
+        // same rework as keep-keywords. `=True` keeps the mask, so the
+        // package.mask'd target stays fatal (rc 1, the default).
+        true_spelling_matches_bare(
+            "--autounmask-keep-masks=True",
+            "--autounmask-keep-masks",
+            "dev-libs/hardmaskedpkg",
+            1,
+        );
+    }
+
     #[test]
     #[cfg(unix)]
     fn ask_read_news_without_eselect_prints_real_hint() {
@@ -16407,6 +16729,7 @@ mod tests {
             cpv: "dev-libs/t-1.0:0/0::r".to_string(),
             iuse: ["x".to_string()].into_iter().collect(),
             use_flags: ["x".to_string()].into_iter().collect(),
+            installed: false,
         }];
         // ">=dev-libs/t-2.0" does not accept 1.0 -> ("version", "ge")
         let ge = parse_atom(">=dev-libs/t-2.0").unwrap();
@@ -16429,6 +16752,7 @@ mod tests {
             cpv: "dev-libs/t-1.0:0/0::r".to_string(),
             iuse: ["x".to_string()].into_iter().collect(),
             use_flags: HashSet::new(),
+            installed: false,
         }];
         assert_eq!(
             slot_conflict_reasons(&ok, &others_off),
@@ -16439,10 +16763,20 @@ mod tests {
             cpv: "dev-libs/t-1.0:0/0::r".to_string(),
             iuse: HashSet::new(),
             use_flags: HashSet::new(),
+            installed: false,
         }];
         assert_eq!(
             slot_conflict_reasons(&ok, &others_gone),
             (vec![SlotConflictReason::Use("x".to_string())], true,)
+        );
+
+        // Real's `elif` chain (`slot_collision.py:307-397`): a
+        // version-mismatched pair skips the USE check even when the
+        // atom's USE deps would also fail against the other instance.
+        let both = parse_atom(">=dev-libs/t-2.0[x]").unwrap();
+        assert_eq!(
+            slot_conflict_reasons(&both, &others_off),
+            (vec![SlotConflictReason::Version("ge")], false,)
         );
 
         // caret span: under ">=" (idx 0,1) and under "2.0" (rfind)
@@ -17147,16 +17481,30 @@ mod tests {
             },
         ];
         let entries = [entry];
-        let lines =
-            trailing_blocker_lines(&entries, Path::new("/nonexistent"), 0, true, false, &nc);
+        let lines = trailing_blocker_lines(
+            &entries,
+            Path::new("/nonexistent"),
+            0,
+            true,
+            false,
+            &nc,
+            &HashMap::new(),
+        );
         assert_eq!(lines.len(), 1, "only the uninstall-satisfied row trails");
         assert!(
             lines[0].starts_with("[blocks b      ] dev-libs/other ("),
             "the trailing row is the Uninstall one: {lines:?}"
         );
         assert!(
-            collect_inline_blocker_lines(&entries, Path::new("/nonexistent"), false, false, &nc)
-                .is_empty()
+            collect_inline_blocker_lines(
+                &entries,
+                Path::new("/nonexistent"),
+                false,
+                false,
+                &nc,
+                &HashMap::new(),
+            )
+            .is_empty()
         );
         let summary = package_counters_summary(
             &entries,
@@ -17166,6 +17514,7 @@ mod tests {
             &nc,
             &[],
             false,
+            &HashMap::new(),
         );
         assert!(
             summary.contains("Conflict: 1 block (all satisfied)"),
@@ -17187,8 +17536,14 @@ mod tests {
             ),
             replacement(),
         ];
-        let inline =
-            collect_inline_blocker_lines(&entries, Path::new("/nonexistent"), false, false, &nc);
+        let inline = collect_inline_blocker_lines(
+            &entries,
+            Path::new("/nonexistent"),
+            false,
+            false,
+            &nc,
+            &HashMap::new(),
+        );
         assert_eq!(inline.len(), 1, "the wait prints one inline row");
         assert_eq!(inline[0].0, 2, "after the replacement entry");
         assert!(
@@ -17198,7 +17553,7 @@ mod tests {
             "{inline:?}"
         );
         assert_eq!(
-            count_blocker_rows(&entries, Path::new("/nonexistent"), false),
+            count_blocker_rows(&entries, Path::new("/nonexistent"), false, &HashMap::new()),
             (1, 0)
         );
 
@@ -17206,11 +17561,18 @@ mod tests {
         // (real counts every Blocker node in the merge list).
         let entries = [replacement_owner(&[]), replacement()];
         assert!(
-            collect_inline_blocker_lines(&entries, Path::new("/nonexistent"), false, true, &nc)
-                .is_empty()
+            collect_inline_blocker_lines(
+                &entries,
+                Path::new("/nonexistent"),
+                false,
+                true,
+                &nc,
+                &HashMap::new(),
+            )
+            .is_empty()
         );
         assert_eq!(
-            count_blocker_rows(&entries, Path::new("/nonexistent"), false),
+            count_blocker_rows(&entries, Path::new("/nonexistent"), false, &HashMap::new()),
             (1, 0)
         );
     }
@@ -17282,8 +17644,14 @@ mod tests {
                 alt_edge("absent", "1.0", 1),
             ]),
         ];
-        let inline =
-            collect_inline_blocker_lines(&entries, Path::new("/nonexistent"), false, false, &nc);
+        let inline = collect_inline_blocker_lines(
+            &entries,
+            Path::new("/nonexistent"),
+            false,
+            false,
+            &nc,
+            &HashMap::new(),
+        );
         assert_eq!(inline.len(), 1, "the kept disjunctive wait prints a row");
         assert_eq!(inline[0].0, 1, "after the replacement entry");
 
@@ -17307,8 +17675,15 @@ mod tests {
             other,
         ];
         assert!(
-            collect_inline_blocker_lines(&entries, Path::new("/nonexistent"), false, false, &nc)
-                .is_empty(),
+            collect_inline_blocker_lines(
+                &entries,
+                Path::new("/nonexistent"),
+                false,
+                false,
+                &nc,
+                &HashMap::new(),
+            )
+            .is_empty(),
             "a suppressed wait branch is not followed"
         );
     }

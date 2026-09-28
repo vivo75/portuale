@@ -1844,7 +1844,19 @@ fn suppressed_alt_edges(
                     .or_else(|| rank(&all_any))
                     // Real's `other` bin keeps ebuild order: a group
                     // with every branch demoted still resolves, to its
-                    // first-listed branch.
+                    // first-listed branch (`dep_check.py:392-401` puts
+                    // `other` last in `choice_bins`, and the final
+                    // selection at `:804-808` returns the first
+                    // `all_available` choice of the first non-empty
+                    // bin). Residue: the in-bin promotion pass
+                    // (`:738-802`, upgrade/in-graph) also runs over
+                    // `other`, so two demoted branches with different
+                    // versions could resolve in non-ebuild order while
+                    // this keeps the first-listed one -- the walk's own
+                    // `promote_tied_alternative` tie-break fires there
+                    // instead. No fixture shapes it (demoted branches
+                    // of one group match the same recorded child at the
+                    // same version in every cycle fixture).
                     .or_else(|| {
                         members
                             .iter()

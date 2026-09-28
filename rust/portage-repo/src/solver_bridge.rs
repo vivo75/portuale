@@ -833,6 +833,11 @@ fn graph_result_from_order(
         use_unsat_deps: Vec::new(),
         // Same standing empty: no BFS walk, no plain-miss disclosure.
         plain_miss_deps: Vec::new(),
+        // Same standing empty (backlog #193): the engine backends have
+        // no `_virt_deps_visible` probe walk, and the bridge outcome is
+        // always `Complete` by design -- a virtual cycle is one more
+        // abort shape the bridges do not do, like slot conflicts above.
+        virtual_cycle: Vec::new(),
     }
 }
 
