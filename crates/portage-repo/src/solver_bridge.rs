@@ -1080,7 +1080,7 @@ fn resolve_resolvo(req: &ResolveRequest) -> Result<GraphResult, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::SolverKind;
+    use super::super::{SolverKind, active_resolver_for};
     use portage_util::TempDir;
 
     #[test]
@@ -1100,6 +1100,14 @@ mod tests {
         assert_eq!(SolverKind::Resolvo.as_str(), "resolvo");
         assert_eq!(format!("{}", SolverKind::Resolvo), "resolvo");
         assert_eq!(SolverKind::default(), SolverKind::Portage);
+    }
+
+    #[test]
+    fn active_resolver_for_selects_all_three_backends() {
+        // Every kind yields a resolver; behaviour is pinned elsewhere.
+        let _portage = active_resolver_for(SolverKind::Portage);
+        let _pubgrub = active_resolver_for(SolverKind::PubGrub);
+        let _resolvo = active_resolver_for(SolverKind::Resolvo);
     }
 
     fn fixture_request(atoms: &[&str]) -> super::super::ResolveRequest {
@@ -1233,5 +1241,279 @@ mod tests {
         let newpkg = lazy.load_versions("dev-libs/newpkg").expect("loads newpkg");
         assert_eq!(newpkg.len(), 1);
         assert_eq!(newpkg[0].version, "1.0");
+    }
+
+    /// Unsatisfiable targets render the engine-native conflict naming the
+    /// packages, never the internals dump.
+    #[test]
+    fn resolvo_failure_text_is_engine_native_not_a_debug_dump() {
+        use super::super::active_resolver_for;
+        let mut req = fixture_request(&[">=dev-libs/newpkg-99.0"]);
+        req.solver = super::super::SolverKind::Resolvo;
+        let err = active_resolver_for(super::super::SolverKind::Resolvo)
+            .resolve(&req)
+            .expect_err("nothing provides newpkg-99.0");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("dev-libs/newpkg"),
+            "names the conflicted package: {msg}"
+        );
+        assert!(
+            !msg.contains("ClauseId") && !msg.contains("Unsolvable("),
+            "no engine-internals debug dump leaks out: {msg}"
+        );
+    }
+
+    /// Bridge entries report matched blockers through the shared walk-path helper,
+    /// in the walk's own shapes.
+    #[test]
+    fn bridge_entries_report_matched_blockers() {
+        use super::super::active_resolver_for;
+        let mut req = fixture_request(&["dev-libs/graphblockerparent"]);
+        req.solver = super::super::SolverKind::PubGrub;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("graphblockerparent solves");
+        let weak = result
+            .entries
+            .iter()
+            .find(|e| e.package == "weakblockerpkg")
+            .expect("weakblockerpkg entry");
+        assert_eq!(
+            weak.blockers,
+            vec![super::super::BlockerConflict {
+                atom_str: "!dev-libs/blockerpartnerpkg".to_string(),
+                strong: false,
+                matched_category: "dev-libs".to_string(),
+                matched_package: "blockerpartnerpkg".to_string(),
+                matched_version: "1.0".to_string(),
+                // Merge-bound match with a merging parent: unresolved.
+                unsolvable: true,
+                satisfied_by: None,
+                tree_scheduled_uninstall: false,
+            }]
+        );
+
+        for kind in [
+            super::super::SolverKind::PubGrub,
+            super::super::SolverKind::Resolvo,
+        ] {
+            let mut req = fixture_request(&["dev-libs/blockerpkg"]);
+            req.solver = kind;
+            let result = active_resolver_for(kind)
+                .resolve(&req)
+                .expect("blockerpkg solves");
+            let entry = result
+                .entries
+                .iter()
+                .find(|e| e.package == "blockerpkg")
+                .expect("blockerpkg entry");
+            assert_eq!(
+                entry.blockers,
+                vec![super::super::BlockerConflict {
+                    atom_str: "!!dev-libs/samepkg".to_string(),
+                    strong: true,
+                    matched_category: "dev-libs".to_string(),
+                    matched_package: "samepkg".to_string(),
+                    matched_version: "1.0".to_string(),
+                    // Not walked graph nodes, so Portage uninstalls the match.
+                    unsolvable: false,
+                    satisfied_by: Some(super::super::BlockerSatisfiedBy::Uninstall {
+                        cpv: "dev-libs/samepkg-1.0".to_string(),
+                        anchor: ("dev-libs".to_string(), "blockerpkg".to_string()),
+                    }),
+                    tree_scheduled_uninstall: false,
+                }]
+            );
+        }
+    }
+
+    /// Plans moving a slot's sub-slot reinstall stale `:=` consumers via the
+    /// walk's fixpoint, recording the `(provider, consumer)` pair.
+    #[test]
+    fn bridge_plans_schedule_stale_equals_consumer_reinstalls() {
+        use std::io::Write as _;
+        let dir = TempDir::new("portage-bridge-slotop").keep();
+        let _ = std::fs::remove_dir_all(&dir);
+        let mk = |name: &str, files: &[(&str, &str)]| {
+            let d = dir.join("var/db/pkg/dev-libs").join(name);
+            std::fs::create_dir_all(&d).unwrap();
+            for (file, content) in files {
+                let mut f = std::fs::File::create(d.join(file)).unwrap();
+                f.write_all(content.as_bytes()).unwrap();
+            }
+        };
+        mk(
+            "slotbindtarget-1.0",
+            &[
+                ("CATEGORY", "dev-libs\n"),
+                ("SLOT", "2\n"),
+                ("repository", "testrepo\n"),
+            ],
+        );
+        mk(
+            "slotbindconsumer-1.0",
+            &[
+                ("CATEGORY", "dev-libs\n"),
+                ("SLOT", "0\n"),
+                ("repository", "testrepo\n"),
+                ("RDEPEND", "dev-libs/slotbindtarget:2/2=\n"),
+            ],
+        );
+        mk(
+            "slotbindfresh-1.0",
+            &[
+                ("CATEGORY", "dev-libs\n"),
+                ("SLOT", "0\n"),
+                ("repository", "testrepo\n"),
+                ("RDEPEND", "dev-libs/slotbindtarget:2/9=\n"),
+            ],
+        );
+        let mut req = fixture_request(&["dev-libs/slotbindtarget"]);
+        req.root = dir.to_path_buf();
+        req.solver = super::super::SolverKind::PubGrub;
+        req.rebuild_if_new_slot = true;
+        req.config.complete_seed_atoms = vec![
+            "dev-libs/slotbindconsumer".to_string(),
+            "dev-libs/slotbindfresh".to_string(),
+        ];
+        let result = super::super::active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("slotbindtarget resolves");
+        let by_pkg = |p: &str| {
+            result
+                .entries
+                .iter()
+                .find(|e| e.package == p)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "no {p} entry in {:?}",
+                        result
+                            .entries
+                            .iter()
+                            .map(|e| format!("{}/{}", e.category, e.package))
+                            .collect::<Vec<_>>()
+                    )
+                })
+        };
+        // Only the stale consumer reinstalls as a slot-operator rebuild.
+        assert!(matches!(
+            by_pkg("slotbindtarget").outcome,
+            super::super::PretendOutcome::Upgrade { .. }
+        ));
+        let consumer = by_pkg("slotbindconsumer");
+        assert!(
+            matches!(
+                consumer.outcome,
+                super::super::PretendOutcome::Reinstall {
+                    slot_operator_rebuild: true,
+                    ..
+                }
+            ),
+            "unexpected outcome: {:?}",
+            consumer.outcome
+        );
+        assert!(!result.abi_rebuilds.is_empty());
+        assert!(
+            result.entries.iter().all(|e| e.package != "slotbindfresh"),
+            "the fresh :2/9= consumer is already bound correctly -- never rebuilt"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Bridge entries carry walk-derived `deps` edges, so the shared sort -- not
+    /// engine install order -- decides the display order.
+    #[test]
+    fn bridge_entries_carry_merge_order_dep_edges() {
+        for kind in [
+            super::super::SolverKind::PubGrub,
+            super::super::SolverKind::Resolvo,
+        ] {
+            let mut req = fixture_request(&["dev-libs/diamond"]);
+            req.solver = kind;
+            let result = active_resolver_for(kind)
+                .resolve(&req)
+                .expect("diamond resolves");
+            assert_eq!(result.entries.len(), 4);
+            let diamond = result
+                .entries
+                .iter()
+                .find(|e| e.package == "diamond")
+                .expect("diamond entry");
+            let mut dep_pkgs: Vec<&str> = diamond.deps.iter().map(|d| d.package.as_str()).collect();
+            dep_pkgs.sort();
+            dep_pkgs.dedup();
+            assert_eq!(dep_pkgs, vec!["shared-a", "shared-b"]);
+        }
+    }
+
+    /// Both backends render the walk's forced/masked `( )` wraps (same fixture
+    /// package the walk-path contract pins).
+    #[test]
+    fn bridge_use_display_wraps_forced_and_masked_flags() {
+        for kind in [
+            super::super::SolverKind::PubGrub,
+            super::super::SolverKind::Resolvo,
+        ] {
+            let mut req = fixture_request(&["dev-libs/pkgusemaskforcepkg"]);
+            req.solver = kind;
+            // One synthetic repo level forcing `forceflag` and masking `maskflag`.
+            req.config.use_mask_force_levels = vec![portage_profile::UseMaskForceLevel {
+                package_use_force: vec![(
+                    "dev-libs/pkgusemaskforcepkg".to_string(),
+                    vec!["forceflag".to_string()],
+                )],
+                package_use_mask: vec![(
+                    "dev-libs/pkgusemaskforcepkg".to_string(),
+                    vec!["maskflag".to_string()],
+                )],
+                ..Default::default()
+            }];
+            let result = active_resolver_for(kind)
+                .resolve(&req)
+                .expect("pkgusemaskforcepkg resolves");
+            assert_eq!(result.entries.len(), 1);
+            let body: String = result.entries[0]
+                .use_expand_display
+                .iter()
+                .map(|(_, text)| text.clone())
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert!(
+                body.contains("(forceflag)"),
+                "forced flag unwrapped ({kind:?}): {body}"
+            );
+            assert!(
+                body.contains("(-maskflag)"),
+                "masked flag unwrapped ({kind:?}): {body}"
+            );
+        }
+    }
+
+    /// The bridge reports the unbreakable build-time cycle through the walk's own
+    /// map; resolvo cannot order a cyclic closure and errors first.
+    #[test]
+    fn bridge_plan_reports_the_unbreakable_build_time_cycle() {
+        let mut req = fixture_request(&["dev-libs/hardcyclea"]);
+        req.solver = super::super::SolverKind::PubGrub;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("hardcyclea solves under pubgrub");
+        assert_eq!(result.circular_deps.len(), 1);
+        let cycle = &result.circular_deps[0];
+        assert!(
+            cycle.contains(&"dev-libs/hardcyclea-1.0".to_string())
+                && cycle.contains(&"dev-libs/hardcycleb-1.0".to_string()),
+            "unexpected cycle: {cycle:?}"
+        );
+
+        let mut req = fixture_request(&["dev-libs/hardcyclea"]);
+        req.solver = super::super::SolverKind::Resolvo;
+        assert!(
+            active_resolver_for(super::super::SolverKind::Resolvo)
+                .resolve(&req)
+                .is_err(),
+            "resolvo still cannot order a cyclic closure (Tier-4 item)"
+        );
     }
 }

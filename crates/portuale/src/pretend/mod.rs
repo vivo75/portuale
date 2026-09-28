@@ -104,8 +104,8 @@ use portage_dep::{
 
 use portage_repo::{
     BlockerConflict, BlockerSatisfiedBy, ChangedDepsReportEntry, GraphEntry, PretendOutcome,
-    ResolveRequest, SlotConflict, all_installed_packages, config_root_from_env, ebuild_visible_at,
-    root_from_env, slot_conflict_flag_sets, split_pf,
+    ResolveRequest, SlotConflict, active_resolver_for, all_installed_packages,
+    config_root_from_env, ebuild_visible_at, root_from_env, slot_conflict_flag_sets, split_pf,
 };
 
 use std::collections::{BTreeMap, HashMap, HashSet};

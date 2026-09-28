@@ -1155,6 +1155,13 @@ mod tests {
         }
     }
 
+    /// The director's `Resolver` IS `portage_repo::Resolver` (never a
+    /// second, parallel seam); the runtime hook is `active_resolver`.
+    #[test]
+    fn resolver_seam_is_the_single_re_export() {
+        let _solver: Box<dyn Resolver> = portage_repo::active_resolver();
+    }
+
     /// `Resolver::resolve` returns portage-repo's plan type, so an
     /// alternate solver must speak Portage-facing data.
     #[test]

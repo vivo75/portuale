@@ -181,4 +181,9 @@ impl ResolveRequest {
             solver: SolverKind::Portage,
         }
     }
+
+    /// Resolves this request with the [`active_resolver`].
+    pub fn resolve(&self) -> Result<GraphResult, Error> {
+        active_resolver().resolve(self)
+    }
 }

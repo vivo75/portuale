@@ -53,3 +53,31 @@ impl std::fmt::Display for SolverKind {
 pub trait Resolver {
     fn resolve(&self, req: &ResolveRequest) -> Result<GraphResult, Error>;
 }
+
+/// The default resolver: a single-pass BFS graph walk wrapped in the backtracking
+/// retry loop. See `backtracking_resolve`.
+// Portage: _emerge/resolver/backtracking.py
+pub struct BacktrackingResolver;
+
+impl Resolver for BacktrackingResolver {
+    fn resolve(&self, req: &ResolveRequest) -> Result<GraphResult, Error> {
+        backtracking_resolve(req)
+    }
+}
+
+/// The resolver portuale uses: currently always [`BacktrackingResolver`].
+pub fn active_resolver() -> Box<dyn Resolver> {
+    active_resolver_for(SolverKind::Portage)
+}
+
+/// Pick the [`Resolver`] for one [`SolverKind`]. The parked engines only do
+/// version solving over repo facts: they ignore `--onlydeps` and its root
+/// filtering (like `--nodeps`/`--buildpkgonly); only the backtracking walk
+/// applies them.
+pub fn active_resolver_for(kind: SolverKind) -> Box<dyn Resolver> {
+    match kind {
+        SolverKind::Portage => Box::new(BacktrackingResolver),
+        SolverKind::PubGrub => Box::new(solver_bridge::PubGrubResolver),
+        SolverKind::Resolvo => Box::new(solver_bridge::ResolvoResolver),
+    }
+}
