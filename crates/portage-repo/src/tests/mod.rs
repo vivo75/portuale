@@ -959,6 +959,89 @@ fn graph_real(atom_str: &str) -> Vec<(String, PretendOutcome)> {
     graph_real_with(atom_str, |_| {})
 }
 
+/// Like `graph_real`, but with `--with-test-deps` enabled.
+fn graph_real_with_test_deps(atom_str: &str) -> Vec<(String, PretendOutcome)> {
+    graph_real_with(atom_str, |r| r.with_test_deps = true)
+}
+
+/// Like `graph_real`, but for a call expected to fail outright --
+/// returns the error message instead of panicking on one.
+fn graph_real_err(atom_str: &str) -> String {
+    let root = fixtures_root();
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    ResolveRequest::new(
+        &root,
+        &root,
+        &[atom_str.to_string()],
+        &config,
+        &fixtures_root().join("distfiles"),
+    )
+    .resolve()
+    .expect_err(&format!(
+        "resolve_pretend_graph({atom_str}) should have failed"
+    ))
+    .to_string()
+}
+
+/// Like `graph_real`, but with `--newuse` enabled.
+fn graph_real_newuse(atom_str: &str) -> Vec<(String, PretendOutcome)> {
+    graph_real_with(atom_str, |r| r.newuse = true)
+}
+
+/// Like `graph_real`, but with `--changed-use` enabled.
+fn graph_real_changed_use(atom_str: &str) -> Vec<(String, PretendOutcome)> {
+    graph_real_with(atom_str, |r| r.changed_use = true)
+}
+
+/// Like `graph_real`, but with `--nodeps` enabled.
+fn graph_real_nodeps(atom_str: &str) -> Vec<(String, PretendOutcome)> {
+    graph_real_with(atom_str, |r| r.nodeps = true)
+}
+
+fn graph_result_real(atom_str: &str) -> GraphResult {
+    graph_result_real_backtrack(atom_str, 10)
+}
+
+/// Resolves `atom_str` over the fixture tree's own resolved config,
+/// after `tweak` adjusts the request.
+fn graph_result_with(atom_str: &str, tweak: impl FnOnce(&mut ResolveRequest)) -> GraphResult {
+    let root = fixtures_root();
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    let mut request = ResolveRequest::new(
+        &root,
+        &root,
+        &[atom_str.to_string()],
+        &config,
+        &fixtures_root().join("distfiles"),
+    );
+    tweak(&mut request);
+    request
+        .resolve()
+        .unwrap_or_else(|e| panic!("resolving {atom_str} failed: {e}"))
+}
+
+fn graph_result_empty(atom_str: &str) -> GraphResult {
+    graph_result_with(atom_str, |r| r.empty = true)
+}
+
 /// Arguments of [`assert_one_conflict`].
 struct AssertOneConflictArgs<'a> {
     result: &'a GraphResult,
@@ -995,6 +1078,38 @@ fn assert_one_conflict(args: AssertOneConflictArgs<'_>) {
         ),
         (category, package, slot, resolved_version, conflicting_atom)
     );
+}
+
+fn graph_result_real_backtrack(atom_str: &str, backtrack_max: u32) -> GraphResult {
+    graph_result_real_atoms(&[atom_str.to_string()], backtrack_max)
+}
+
+/// `graph_result_real_backtrack` for more than one top-level atom.
+fn graph_result_real_atoms(atoms: &[String], backtrack_max: u32) -> GraphResult {
+    let atom_str = atoms.join(" ");
+    let root = fixtures_root();
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    ResolveRequest {
+        backtrack_max,
+        ..ResolveRequest::new(
+            &root,
+            &root,
+            atoms,
+            &config,
+            &fixtures_root().join("distfiles"),
+        )
+    }
+    .resolve()
+    .unwrap_or_else(|e| panic!("resolving {atom_str} failed: {e}"))
 }
 
 fn aub0_conflict_versions(result: &GraphResult) -> Vec<Vec<String>> {

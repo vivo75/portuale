@@ -717,3 +717,116 @@ fn find_virtual_cycles_ignores_a_suppressed_disjunctive_branch() {
     let entries = vec![o, plain, d, p];
     assert!(find_virtual_cycles(&entries, Path::new("/nonexistent-root")).is_empty());
 }
+
+#[test]
+fn circular_dep_solutions_suggests_disabling_the_gating_flag() {
+    // USE-gated build cycle: exactly "disable x on usecyclea".
+    let root = fixtures_root();
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    let repos = find_repos(&root).expect("repos");
+    let result = graph_result_real("dev-libs/usecyclea");
+    assert_eq!(result.circular_deps.len(), 1);
+    let sols = circular_dep_solutions(
+        &result.circular_deps[0],
+        &repos,
+        &config,
+        &result.autounmask_use_changes,
+        &result.entries,
+    );
+    assert_eq!(
+        sols,
+        vec![CircularSuggestion {
+            parent_cpv: "dev-libs/usecyclea-1.0".to_string(),
+            changes: vec![("x".to_string(), false)],
+            followup: false,
+        }]
+    );
+}
+
+#[test]
+fn circular_dep_solutions_grandparent_conflict_disqualifies_the_suggestion() {
+    // Grandparent with a hard use-dep on the fix: the suggestion list is empty.
+    let root = fixtures_root();
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    let repos = find_repos(&root).expect("repos");
+    let result = graph_result_real("dev-libs/gpcyclec");
+    assert_eq!(result.circular_deps.len(), 1);
+    let sols = circular_dep_solutions(
+        &result.circular_deps[0],
+        &repos,
+        &config,
+        &result.autounmask_use_changes,
+        &result.entries,
+    );
+    assert!(sols.is_empty(), "{:?}", sols);
+}
+
+#[test]
+fn mixed_priority_cycle_reports_per_edge_labels() {
+    // The `:=` edge is unbreakable at every rung, so Portage aborts; rotation
+    // starts at the earliest-inserted node.
+    let result = graph_result_real("dev-libs/slopcyca");
+    assert_eq!(
+        result.circular_deps,
+        vec![vec![
+            "dev-libs/slopcycb-1.0".to_string(),
+            "dev-libs/slopcyca-1.0".to_string()
+        ]]
+    );
+    assert_eq!(
+        cycle_edge_labels(&result.entries, &result.circular_deps[0]),
+        vec!["buildtime".to_string(), "runtime_slot_op".to_string()]
+    );
+    // All-buildtime fixtures keep the old rendering.
+    let hard = graph_result_real("dev-libs/hardcyclea");
+    assert_eq!(
+        cycle_edge_labels(&hard.entries, &hard.circular_deps[0]),
+        vec!["buildtime".to_string(), "buildtime".to_string()]
+    );
+}
+
+#[test]
+fn circular_dep_solutions_is_empty_for_a_cycle_with_no_conditional_edge() {
+    // Unconditional DEPENDs, no IUSE: no suggestion (the generic advisory).
+    let root = fixtures_root();
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    let repos = find_repos(&root).expect("repos");
+    let result = graph_result_real("dev-libs/hardcyclea");
+    assert!(
+        circular_dep_solutions(
+            &result.circular_deps[0],
+            &repos,
+            &config,
+            &result.autounmask_use_changes,
+            &result.entries,
+        )
+        .is_empty()
+    );
+}

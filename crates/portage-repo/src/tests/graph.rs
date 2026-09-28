@@ -336,6 +336,35 @@ fn changed_use_still_catches_an_enablement_change_on_a_shared_flag() {
 }
 
 #[test]
+fn changed_use_reinstall_still_recurses_into_its_own_dependencies() {
+    // Same proof as newuse_reinstall_still_recurses_into_its_own_dependencies
+    // below, but via --changed-use instead of --newuse.
+    assert_eq!(
+        graph_real_changed_use("dev-libs/reinstallpkg"),
+        vec![
+            (
+                "dev-libs/newpkg".to_string(),
+                PretendOutcome::New {
+                    version: "1.0".to_string()
+                }
+            ),
+            (
+                "dev-libs/reinstallpkg".to_string(),
+                PretendOutcome::Reinstall {
+                    version: "1.0".to_string(),
+                    changed_flags: vec!["foo".to_string()],
+                    deps_changed: false,
+                    slot_changed: false,
+                    rebuilt_binary: false,
+                    new_repo: false,
+                    slot_operator_rebuild: false,
+                }
+            )
+        ]
+    );
+}
+
+#[test]
 fn fixture_overlay_only_package_is_found() {
     // dev-libs/overlayonlypkg exists only in the overlay repo: proves the
     // overlay is actually searched, not just present in repos.conf.
@@ -435,6 +464,42 @@ fn backtrack_zero_feeds_satisfiable_reverse_dep_pins_in_pass() {
         Some("N 1.0"),
         "r25target still merges"
     );
+}
+
+#[test]
+fn two_atom_old_new_withholds_with_a_skip_notice_at_any_budget() {
+    // At `--backtrack=0` and the default budget alike, no conflict survives
+    // and exactly one skip row names oldconsumer's pin (staged oracle).
+    for bt in [0, 10] {
+        let result = graph_result_real_atoms(
+            &[
+                "dev-libs/slotconflictoldconsumer".to_string(),
+                "dev-libs/slotconflictnewconsumer".to_string(),
+            ],
+            bt,
+        );
+        assert!(
+            result.slot_conflicts.is_empty(),
+            "bt={bt}: expected no surviving conflict, got {:?}",
+            result.slot_conflicts
+        );
+        let target = result
+            .entries
+            .iter()
+            .find(|e| e.package == "slotconflicttarget")
+            .expect("slotconflicttarget entry");
+        assert_eq!(
+            target.outcome,
+            PretendOutcome::New {
+                version: "1.0".to_string()
+            }
+        );
+        assert_eq!(result.skipped_updates.len(), 1, "bt={bt}");
+        let s = &result.skipped_updates[0];
+        assert_eq!(s.skipped_version, "2.0");
+        assert_eq!(s.atom, "<dev-libs/slotconflicttarget-2.0");
+        assert!(s.consumer_cpv.contains("slotconflictoldconsumer-1.0"));
+    }
 }
 
 #[test]
@@ -2146,6 +2211,22 @@ fn fixture_stable_use_force_skips_an_unstable_candidate() {
 }
 
 #[test]
+fn with_test_deps_pulls_in_a_top_level_atoms_own_test_gated_dependency() {
+    let full_names: Vec<String> = graph_real_with_test_deps("dev-libs/withtestdeppkg")
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    assert_eq!(
+        full_names,
+        vec![
+            "dev-libs/newpkg",
+            "dev-libs/testonlydep",
+            "dev-libs/withtestdeppkg"
+        ]
+    );
+}
+
+#[test]
 fn without_with_test_deps_the_test_gated_dependency_is_absent() {
     let full_names: Vec<String> = graph_real("dev-libs/withtestdeppkg")
         .into_iter()
@@ -2154,6 +2235,63 @@ fn without_with_test_deps_the_test_gated_dependency_is_absent() {
     assert_eq!(
         full_names,
         vec!["dev-libs/newpkg", "dev-libs/withtestdeppkg"]
+    );
+}
+
+#[test]
+fn with_test_deps_does_not_apply_beyond_a_top_level_atom() {
+    // Reached at depth 1, not depth 0: testonlydep stays absent even with
+    // --with-test-deps.
+    let full_names: Vec<String> = graph_real_with_test_deps("dev-libs/withtestdepconsumer")
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    assert_eq!(
+        full_names,
+        vec![
+            "dev-libs/newpkg",
+            "dev-libs/withtestdeppkg",
+            "dev-libs/withtestdepconsumer"
+        ]
+    );
+}
+
+#[test]
+fn with_test_deps_is_a_no_op_for_a_package_with_no_test_iuse_flag_at_all() {
+    // No "test" IUSE flag declared at all: Portage's validity guard means
+    // --with-test-deps changes nothing for it.
+    assert_eq!(
+        graph_real_with_test_deps("dev-libs/newpkg"),
+        graph_real("dev-libs/newpkg")
+    );
+}
+
+#[test]
+fn newuse_reinstall_still_recurses_into_its_own_dependencies() {
+    // A Reinstall entry is walked for dependencies exactly like New/Upgrade,
+    // not treated like the AlreadyInstalled dead-end.
+    assert_eq!(
+        graph_real_newuse("dev-libs/reinstallpkg"),
+        vec![
+            (
+                "dev-libs/newpkg".to_string(),
+                PretendOutcome::New {
+                    version: "1.0".to_string()
+                }
+            ),
+            (
+                "dev-libs/reinstallpkg".to_string(),
+                PretendOutcome::Reinstall {
+                    version: "1.0".to_string(),
+                    changed_flags: vec!["foo".to_string()],
+                    deps_changed: false,
+                    slot_changed: false,
+                    rebuilt_binary: false,
+                    new_repo: false,
+                    slot_operator_rebuild: false,
+                }
+            )
+        ]
     );
 }
 
@@ -2168,6 +2306,17 @@ fn fixture_package_use_enables_a_flag_not_on_globally() {
         full_names,
         vec!["dev-libs/newpkg", "dev-libs/packageuseenablepkg"]
     );
+}
+
+#[test]
+fn nodeps_skips_recursion_even_when_package_use_would_otherwise_pull_something_in() {
+    // Same fixture with --nodeps: only the *recursion* into the now-enabled
+    // gate is skipped; visibility/USE still resolve normally.
+    let full_names: Vec<String> = graph_real_nodeps("dev-libs/packageuseenablepkg")
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    assert_eq!(full_names, vec!["dev-libs/packageuseenablepkg"]);
 }
 
 #[test]
@@ -2270,6 +2419,41 @@ fn required_use_satisfied_resolves_normally() {
                 version: "1.0".to_string()
             }
         )]
+    );
+}
+
+#[test]
+fn required_use_violated_top_level_fails_the_whole_call() {
+    // Genuinely violated: Portage aborts the whole run right after package
+    // selection (a different severity than a merely unresolvable dependency).
+    // The whole one-clause expression is the minimal unsatisfied one, with no
+    // dep chain for a top-level atom.
+    let err = graph_real_err("dev-libs/requiredusebadpkg");
+    assert_eq!(
+        err,
+        "\n!!! The ebuild selected to satisfy \"dev-libs/requiredusebadpkg\" \
+         has unmet requirements.\n\
+         - dev-libs/requiredusebadpkg-1.0::testrepo USE=\"foo -bar\" ELIBC=\"glibc\"\n\
+         \n  The following REQUIRED_USE flag constraints are unsatisfied:\n\
+         \x20   foo? ( bar )\n\n"
+    );
+}
+
+#[test]
+fn required_use_violated_dependency_still_fails_the_whole_call() {
+    // Same fatal severity whether reached as a top-level atom or a dependency.
+    // As a dependency the block gains the chain plus a trailing `[argument]`
+    // line since the parent is itself the CLI argument.
+    let err = graph_real_err("dev-libs/requiredusebadparentpkg");
+    assert_eq!(
+        err,
+        "\n!!! The ebuild selected to satisfy \"dev-libs/requiredusebadpkg\" \
+         has unmet requirements.\n\
+         - dev-libs/requiredusebadpkg-1.0::testrepo USE=\"foo -bar\" ELIBC=\"glibc\"\n\
+         \n  The following REQUIRED_USE flag constraints are unsatisfied:\n\
+         \x20   foo? ( bar )\n\n\
+         (dependency required by \"dev-libs/requiredusebadparentpkg-1.0::testrepo\" [ebuild])\n\
+         (dependency required by \"dev-libs/requiredusebadparentpkg\" [argument])\n"
     );
 }
 
@@ -2545,6 +2729,80 @@ fn backtracker_feedback_missing_dep_latches_without_duplicating() {
     assert!(node.missing_dep_masked.contains(&entry.neg));
     assert_eq!(node.mask_steps, 1);
     assert_eq!(node.depth, 1);
+}
+
+#[test]
+fn installed_instance_then_merge_records_an_unsolvable_slot_conflict() {
+    // Direction 2, argv `[othermod, needer]`: last-declared-first graphs 2.0
+    // first, then collides with the installed 1.0 -- the merge instance files
+    // first (Portage's notice order for this argv order).
+    let result = graph_result_real_atoms(
+        &[
+            "dev-libs/othermod".to_string(),
+            "dev-libs/needer".to_string(),
+        ],
+        10,
+    );
+    assert_triangle_conflict(&result, false);
+    // The upgrade still merges, like Portage's merge list.
+    let paired = result
+        .entries
+        .iter()
+        .find(|e| e.package == "paired")
+        .expect("paired entry");
+    assert_eq!(
+        paired.outcome,
+        PretendOutcome::Upgrade {
+            from: "1.0".to_string(),
+            to: "2.0".to_string()
+        }
+    );
+}
+
+#[test]
+fn merge_then_installed_instance_records_the_same_slot_conflict() {
+    // Direction 1, the mirror argv order: the installed instance files first
+    // (Portage's notice order for this argv order).
+    let result = graph_result_real_atoms(
+        &[
+            "dev-libs/needer".to_string(),
+            "dev-libs/othermod".to_string(),
+        ],
+        10,
+    );
+    assert_triangle_conflict(&result, true);
+}
+
+#[test]
+fn solvable_installed_instance_collision_records_nothing() {
+    // One graphed instance satisfies every hard parent atom, so the conflict
+    // reconciles silently through the existing `slot_want` check.
+    for argv in [
+        [
+            "dev-libs/plainuser".to_string(),
+            "dev-libs/needer".to_string(),
+        ],
+        [
+            "dev-libs/needer".to_string(),
+            "dev-libs/plainuser".to_string(),
+        ],
+    ] {
+        let result = graph_result_real_atoms(&argv, 10);
+        assert_eq!(result.slot_conflicts, vec![], "argv {argv:?}");
+        let paired = result
+            .entries
+            .iter()
+            .find(|e| e.package == "paired")
+            .expect("paired entry");
+        assert_eq!(
+            paired.outcome,
+            PretendOutcome::Upgrade {
+                from: "1.0".to_string(),
+                to: "2.0".to_string()
+            },
+            "argv {argv:?}"
+        );
+    }
 }
 
 #[test]
