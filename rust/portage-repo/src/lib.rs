@@ -21909,7 +21909,9 @@ impl Backtracker {
             .expect("feedback() only after get() returned params");
         let current_terminal = self.nodes[current_idx].terminal;
         let (mut params, terminal, mask_cost) = match kind {
-            BacktrackFeedback::Config { params } => (*params, current_terminal, 0),
+            BacktrackFeedback::Config { params } | BacktrackFeedback::RevDep { params } => {
+                (*params, current_terminal, 0)
+            }
             BacktrackFeedback::SlotConflict { base, choices } => {
                 // #57 S1: keep the pass's merged accumulators on the node
                 // itself, exactly as `PassDecision::DeadEnd` does -- the
@@ -22181,6 +22183,17 @@ fn slot_conflict_mask_choices(
 /// a deliberate C2 cut).
 enum BacktrackFeedback {
     Config {
+        params: Box<BacktrackParams>,
+    },
+    /// Backlog #209: the reverse-dependency feed (`_complete_graph`'s
+    /// installed-consumer pins, `collect_feedback`'s scan). Real
+    /// `_resolve_conflicts` (`_emerge/depgraph.py:9444`) calls
+    /// `_complete_graph()` (`:8562`) with no `_allow_backtracking` gate,
+    /// so these pins enforce in-pass even under `--backtrack=0`; the
+    /// driver re-runs the pass with them instead of settling. Carries
+    /// the same working copy as `Config` and behaves identically inside
+    /// the search.
+    RevDep {
         params: Box<BacktrackParams>,
     },
     SlotConflict {
@@ -25977,7 +25990,10 @@ fn collect_feedback(
         }
     }
     if added {
-        return PassDecision::Feedback(BacktrackFeedback::Config {
+        // Backlog #209: a distinct variant (see its doc comment) so the
+        // driver can feed these pins back in-pass under `--backtrack=0`,
+        // where every other feedback kind still settles.
+        return PassDecision::Feedback(BacktrackFeedback::RevDep {
             params: Box::new(grown),
         });
     }
@@ -26346,12 +26362,45 @@ fn assemble_result(
     // block (same shape, same rc 0; the renderer cannot tell the
     // producers apart). Exact-dedupe against the removal rows covers
     // the pathological both-paths shape.
+    //
+    // Backlog #209: under `--backtrack=0` a slot-operator withhold
+    // stays silent. Real never reports that path: the minimizer/probe
+    // selection writes no `_runtime_pkg_mask` and no
+    // `_conflict_missed_update`, so `_show_missed_update`
+    // (`_emerge/depgraph.py:1566`) has nothing to render (the r25 shape
+    // merges silently at `backtrack: 0/20`, both bound forms of the
+    // consumer's pin). A plain-pin withhold still synthesizes its rows:
+    // real reaches it through the slot-conflict solver, whose "Record
+    // missed updates" tail (`:2089-2110`) runs with no
+    // `_allow_backtracking` gate, so the notice prints even with
+    // backtracking off (the #90 S2 two-target cell pins it).
+    // `raw_atom` is the verbatim recorded text: the live `:=` form and
+    // the recorded `:S/SS=` form both carry a slot operator there,
+    // while `atom` is normalised (the built form strips to a bare
+    // version pin), so the raw text is what classifies the path.
+    let bt0_plain_pins: Vec<RevDepPin> = if ctx.backtrack_max == 0 {
+        params
+            .reverse_dep_pins
+            .iter()
+            .filter(|pin| {
+                !portage_dep::parse_atom(&pin.raw_atom).is_some_and(|a| a.slot_operator.is_some())
+            })
+            .cloned()
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let enforced_pins: &[RevDepPin] = if ctx.backtrack_max == 0 {
+        &bt0_plain_pins
+    } else {
+        &params.reverse_dep_pins
+    };
     pass.skipped_updates.extend(constraint_withheld_updates(
         &ctx.repos,
         ctx.root,
         config,
         &pass.entries,
-        &params.reverse_dep_pins,
+        enforced_pins,
     ));
     pass.skipped_updates.sort_by(|a, b| {
         (
@@ -26585,10 +26634,31 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
     // real's counter is frozen before its own best-run re-pass.
     let mut passes: u64 = 0;
     let mut restarts: u64 = 0;
-    while let Some(params) = bt.get() {
+    // Backlog #209: the `--backtrack=0` reverse-dependency feed loop.
+    // Real `_resolve_conflicts` (`_emerge/depgraph.py:9444`) runs
+    // `_complete_graph()` (`:8562`) with no `_allow_backtracking` gate
+    // (that flag only gates auto-enabling `complete` mode on slot
+    // conflicts at `:9444-9450`, and the slot-op trigger at `:2131`),
+    // so a satisfiable installed-consumer pin enforces in-pass even
+    // with backtracking off. Portuale's scan runs post-pass, so its
+    // `RevDep` working copy feeds one more pass here instead of
+    // settling -- a feed loop, not a backtrack retry (`restarts` stays
+    // 0, real `backtrack: 0/0`). Bounded: `reverse_dep_masked` latches
+    // every enforced `(cp, atom)`, so a pass that adds nothing new
+    // falls through to `Settle`. `--nodeps` is excluded: real pops
+    // `recurse` there (`create_depgraph_params.py:181-183`), so its
+    // complete graph never runs.
+    let mut feed_params: Option<BacktrackParams> = None;
+    loop {
+        let from_feed = feed_params.is_some();
+        let Some(params) = feed_params.take().or_else(|| bt.get()) else {
+            break;
+        };
         let mut pass = run_pass(&ctx, &params, first_pass)?;
-        passes += 1;
-        restarts = passes - 1;
+        if !from_feed {
+            passes += 1;
+            restarts = passes - 1;
+        }
         first_pass = false;
         // The per-pass config view: the accumulator's autounmask-use
         // changes layered on as the top USE tier (see `Config::
@@ -26613,13 +26683,25 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
             PassDecision::Feedback(kind) => {
                 if ctx.backtrack_max == 0 {
                     // No search: report the root pass with its merged
-                    // working copy, exactly like the old single pass.
-                    let grown: BacktrackParams = match kind {
-                        BacktrackFeedback::Config { params } => *params,
-                        BacktrackFeedback::SlotConflict { base, .. } => *base,
-                        BacktrackFeedback::MissingDep { base, .. } => *base,
-                    };
-                    return Ok(assemble_result(&ctx, &grown, pass, config, restarts));
+                    // working copy, exactly like the old single pass --
+                    // except the #209 feed above, which enforces
+                    // satisfiable reverse-dep pins in-pass like real's
+                    // ungated `_complete_graph`.
+                    match kind {
+                        BacktrackFeedback::RevDep { params: grown } if !ctx.nodeps => {
+                            feed_params = Some(*grown);
+                            continue;
+                        }
+                        kind => {
+                            let grown: BacktrackParams = match kind {
+                                BacktrackFeedback::Config { params }
+                                | BacktrackFeedback::RevDep { params } => *params,
+                                BacktrackFeedback::SlotConflict { base, .. } => *base,
+                                BacktrackFeedback::MissingDep { base, .. } => *base,
+                            };
+                            return Ok(assemble_result(&ctx, &grown, pass, config, restarts));
+                        }
+                    }
                 }
                 bt.feedback(kind);
             }
@@ -26716,7 +26798,11 @@ pub fn resolve_pretend_graph(
     // deferred, not silently assumed). `--backtrack=0` disables
     // backtracking entirely -- no feedback node is explored, so a slot
     // conflict is reported without any retry, exactly the
-    // pre-backtracking behavior.
+    // pre-backtracking behavior. The one exception is backlog #209's
+    // reverse-dependency feed: real `_resolve_conflicts` runs
+    // `_complete_graph` with no backtracking gate, so satisfiable
+    // installed-consumer pins re-run the pass in-process (a feed loop,
+    // never a counted restart) instead of settling.
     // Config-growth retries never counted against this budget (real's
     // `_feedback_config` doesn't count toward `--backtrack=N` either).
     backtrack_max: u32,
@@ -32022,6 +32108,129 @@ mod tests {
         // A single retry is enough to reconcile this one-step conflict.
         let one = graph_result_real_backtrack("dev-libs/slotconflictparent", 1);
         assert_eq!(one.slot_conflicts, vec![]);
+    }
+
+    #[test]
+    fn backtrack_zero_feeds_satisfiable_reverse_dep_pins_in_pass() {
+        // Backlog #209: `--backtrack=0` must not skip the
+        // reverse-dependency feed loop. Real `_resolve_conflicts`
+        // (`_emerge/depgraph.py:9444`) calls `_complete_graph()`
+        // (`:8562`) with no `_allow_backtracking` gate, so a satisfiable
+        // installed-consumer pin enforces in-pass even with backtracking
+        // off. Hermetic r25 shape (#25 S0): installed world consumer
+        // `r25consumer` pins `<r25lib-2.0:=` (both bound forms), and
+        // `-uD r25target` must withhold `r25lib-2.0` silently --
+        // `backtrack_restarts` 0 (real `backtrack: 0/20`) and no
+        // skipped-update rows (real merges `r25up-2.0 + r25target-1.0`
+        // with no warning).
+        //
+        // The fixture world file does not carry the consumer (it would
+        // perturb every other fixture-ROOT test), so the seed is set
+        // directly -- the `FX_WORLD_EXTRA=dev-libs/r25consumer`
+        // equivalent the bed cell stages.
+        let root = fixtures_root();
+        let mut config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+            &root,
+        )
+        .expect("fixture config resolves");
+        config.complete_seed_atoms = vec!["dev-libs/r25consumer".to_string()];
+        #[allow(clippy::fn_params_excessive_bools)]
+        let result = resolve_pretend_graph(
+            &root,
+            &root,
+            &["dev-libs/r25target".to_string()],
+            &config,
+            true,
+            false,
+            false,
+            true,
+            Deep::Unlimited,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            false,
+            None,
+            false,
+            false,
+            None,
+            &fixtures_root().join("distfiles"),
+            false,
+            false,
+            false,
+            0,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            true,
+            false,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend_graph(r25target) failed: {e}"));
+        // The lib upgrade is withheld: no merge of any r25lib version.
+        assert!(
+            result.entries.iter().all(|e| {
+                e.package != "r25lib"
+                    || matches!(e.outcome, PretendOutcome::AlreadyInstalled { .. })
+            }),
+            "r25lib must settle installed, not merge: {:?}",
+            result
+                .entries
+                .iter()
+                .filter(|e| e.package == "r25lib")
+                .collect::<Vec<_>>()
+        );
+        // Real's silence: no slot-operator withhold rows at bt0 (the
+        // minimizer/probe path writes no missed-update state).
+        assert_eq!(result.skipped_updates, vec![]);
+        assert_eq!(result.backtrack_restarts, 0);
+        assert_eq!(result.slot_conflicts, vec![]);
+        // The rest of real's merge set is intact.
+        let versions: HashMap<(&str, &str), String> = result
+            .entries
+            .iter()
+            .filter_map(|e| match &e.outcome {
+                PretendOutcome::Upgrade { to, .. } => {
+                    Some(((e.category.as_str(), e.package.as_str()), format!("U {to}")))
+                }
+                PretendOutcome::New { version } => Some((
+                    (e.category.as_str(), e.package.as_str()),
+                    format!("N {version}"),
+                )),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            versions.get(&("dev-libs", "r25up")).map(String::as_str),
+            Some("U 2.0"),
+            "r25up still upgrades"
+        );
+        assert_eq!(
+            versions.get(&("dev-libs", "r25target")).map(String::as_str),
+            Some("N 1.0"),
+            "r25target still merges"
+        );
     }
 
     /// Backlog #90 (S2) shared builders: a synthetic `SlotConflict`
@@ -43140,8 +43349,11 @@ mod tests {
         let mut pass = pass_161();
         pass.entries = vec![souprov_upgrade.clone()];
         // Append leg: fresh params collect the pin via config feedback.
+        // Backlog #209: the enforced-pin feedback travels as `RevDep`
+        // (same working copy as `Config`; the driver feeds it back
+        // in-pass under `--backtrack=0`).
         let decision = collect_feedback(&ctx, &BacktrackParams::default(), &mut pass, &config);
-        let PassDecision::Feedback(BacktrackFeedback::Config { params: out }) = decision else {
+        let PassDecision::Feedback(BacktrackFeedback::RevDep { params: out }) = decision else {
             panic!("a newly enforced pin retries with config");
         };
         assert_eq!(out.reverse_dep_pins, vec![pin.clone()]);
