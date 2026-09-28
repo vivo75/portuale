@@ -20071,6 +20071,30 @@ pub(crate) fn backtrack_missed_updates(
                     if pc.is_empty() {
                         continue;
                     }
+                    // Backlog #205: an installed enforcing consumer
+                    // (the world-reachable bound behind an enforced
+                    // pin) renders vdb-based -- `(<cpv>, installed
+                    // ...)` with the vdb repo (`__unknown__`
+                    // fallback), like real `str(Package)` for an
+                    // installed node and like the withhold rows'
+                    // established shape -- instead of the
+                    // merge-scheduled tree form. A graph puller keeps
+                    // the tree form.
+                    let installed_ref = installed_refs(root, &pc, &pp)
+                        .into_iter()
+                        .find(|r| r.version == pv);
+                    let (consumer_cpv, consumer_installed, consumer_use) = match &installed_ref {
+                        Some(r) => (
+                            format!("{pc}/{pp}-{pv}:{}/{}::{}", r.slot, r.sub_slot, r.repo),
+                            true,
+                            installed_use_display_for(root, config, &pc, &pp, &pv),
+                        ),
+                        None => (
+                            slot_conflict_puller_cpv(repos, &pc, &pp, &pv),
+                            false,
+                            pkg_use_display_for(repos, config, &pc, &pp, &pv),
+                        ),
+                    };
                     skipped.push(SkippedUpdate {
                         category: cat.clone(),
                         package: pkg.clone(),
@@ -20080,9 +20104,9 @@ pub(crate) fn backtrack_missed_updates(
                         skipped_repo: repo.clone(),
                         skipped_use: pkg_use_display_for(repos, config, &cat, &pkg, &ver),
                         atom,
-                        consumer_cpv: slot_conflict_puller_cpv(repos, &pc, &pp, &pv),
-                        consumer_installed: false,
-                        consumer_use: pkg_use_display_for(repos, config, &pc, &pp, &pv),
+                        consumer_cpv,
+                        consumer_installed,
+                        consumer_use,
                     });
                 }
             }
@@ -26493,6 +26517,59 @@ fn collect_feedback(
             .reverse_dep_masked
             .insert((pin.cp.clone(), pin.atom.clone()))
         {
+            // Backlog #205: real's "Record missed updates" tail
+            // (`lib/_emerge/depgraph.py:2085-2106`) -- a version the
+            // re-resolve drops for the enforced pin is reported
+            // through `_show_missed_update_slot_conflicts`. Record the
+            // rejection as a slot-conflict-style mask on the chosen
+            // version (parents = the enforcing consumer), so the
+            // existing `backtrack_missed_updates` derivation renders
+            // the `WARNING` row. The positive pin above still drives
+            // selection; the negative excludes nothing the pin does
+            // not already exclude. Gated on a live search like every
+            // mask (real `_allow_backtracking`); budget-free like the
+            // RevDep feedback it rides.
+            if ctx.backtrack_max > 0 {
+                for e in &pass.entries {
+                    if e.category != pin.cp.0 || e.package != pin.cp.1 {
+                        continue;
+                    }
+                    let (ver, slot, sub, repo) = match &e.outcome {
+                        PretendOutcome::New { version }
+                        | PretendOutcome::Reinstall { version, .. } => (
+                            version.as_str(),
+                            e.slot.as_deref().unwrap_or("0"),
+                            e.sub_slot.as_deref().unwrap_or("0"),
+                            e.repo_name.as_deref().unwrap_or(""),
+                        ),
+                        PretendOutcome::Upgrade { to, .. }
+                        | PretendOutcome::Downgrade { to, .. } => (
+                            to.as_str(),
+                            e.slot.as_deref().unwrap_or("0"),
+                            e.sub_slot.as_deref().unwrap_or("0"),
+                            e.repo_name.as_deref().unwrap_or(""),
+                        ),
+                        _ => continue,
+                    };
+                    let candidate = format!("{}/{}-{ver}:{slot}/{sub}::{repo}", pin.cp.0, pin.cp.1);
+                    if portage_dep::match_from_list(&pin.atom, &[candidate.as_str()])
+                        .is_some_and(|m| !m.is_empty())
+                    {
+                        continue;
+                    }
+                    let neg = format!("!={}/{}-{ver}", pin.cp.0, pin.cp.1);
+                    let bucket = grown.runtime_pkg_mask.entry(pin.cp.clone()).or_default();
+                    if !bucket.iter().any(|m| m.neg == neg) {
+                        bucket.push(MaskEntry {
+                            neg: neg.clone(),
+                            reason: MaskReason::SlotConflict {
+                                parents: vec![(pin.consumer.clone(), pin.atom.clone())],
+                            },
+                        });
+                        grown.mask_order.push((pin.cp.clone(), neg));
+                    }
+                }
+            }
             // C1: enforced pins are positive enforcement atoms (the
             // consumer's recorded atom must keep matching), not
             // masks -- they stay in the positives bucket, exactly
