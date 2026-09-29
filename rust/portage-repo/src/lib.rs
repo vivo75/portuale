@@ -16569,6 +16569,21 @@ fn slot_conflict_abi_display_pairs(
 /// slot-conflict-fired probe is NOT this scan (v2 `#214` ports it as
 /// the sibling [`slot_conflict_abi_probe`], fed by the surviving
 /// conflict records rather than the merge entries).
+/// Highest visible `(slot, version)` for a cp: real `_greedy_slots`'
+/// highest package (`lib/_emerge/depgraph.py:5896`), the slot a
+/// `--update` request keeps unpinned while every lower installed slot
+/// gains a `cat/pkg:S` request-argument pin. See the `#252` gate in
+/// [`slot_operator_rebuild_scan`].
+fn highest_visible_slot(repos: &[RepoConfig], cp: &(String, String)) -> Option<(String, String)> {
+    list_candidates(repos, &cp.0, &cp.1)
+        .ok()?
+        .iter()
+        .max_by(|a, b| vercmp_ordering(&a.version, &b.version))
+        .map(|c| (c.slot.clone(), c.version.clone()))
+}
+
+// Ten parameters like its siblings below; the arity is the port, not
+// accident (`#[allow]` matches `slot_operator_rebuild_entries` etc.).
 #[allow(clippy::too_many_arguments)]
 fn slot_operator_rebuild_scan(
     root: &Path,
@@ -16734,15 +16749,75 @@ fn slot_operator_rebuild_scan(
                     // longer occupies rebuilds against the fresh slot.
                     // Candidates are the fresh (`New`) entries first, then
                     // `Upgrade`/`Downgrade`/`Reinstall` entries in a slot
-                    // the consumer is not bound to: real's candidate loop
+                    // the consumer is not bound to -- but only while no
+                    // greedy request-argument pin covers the bound slot
+                    // (the `#252` gate below): real's candidate loop
                     // (`_iter_similar_available`, `:2660-2695`) ranges
-                    // over every available package, not only fresh-slot
-                    // merges, so a bound-slot mismatch on a same-slot
-                    // entry probes the same way (entries at the bound
-                    // slot stay with the same-slot arm above). First
-                    // acceptable candidate wins, gates and R2 refusal
+                    // over every available package, yet the reverse-deps
+                    // gate refuses each off-slot candidate against the
+                    // `P:S` arg, so a bound-slot mismatch on a requested
+                    // provider's upgrade probes nothing (entries at the
+                    // bound slot stay with the same-slot arm above).
+                    // First acceptable candidate wins, gates and R2 refusal
                     // per candidate.
                     if new_slot_scope {
+                        // #252: real's greedy request-argument pin. Under
+                        // `--update` real expands a directly-requested cp
+                        // into per-slot arg atoms (`_select_files`,
+                        // `depgraph.py:5380`, via `_greedy_slots`, `:5896`):
+                        // every installed slot below the highest visible
+                        // slot gains a `cat/pkg:S` arg recorded on the
+                        // installed instance in S (`_add_parent_atom`,
+                        // `:4136`). The update probe's reverse-deps gate
+                        // (`_slot_operator_check_reverse_dependencies`,
+                        // `:2472-2538`) checks the fresh candidate against
+                        // those too, and a non-`Package` parent goes
+                        // straight to the atom match (`:2487-2541`) -- so
+                        // every candidate in another slot is refused, the
+                        // probe returns None, and the replace set stays
+                        // empty. Probed on real 3.0.82.2 (host
+                        // staged-fixture probe 2026-09-29, plus a
+                        // vendored-`ResolverPlayground` spy run): on the
+                        // `mmprov` shape (`mmprov` requested, consumer
+                        // bound `0/1=`, upgrade `1/1 -> 1/2`) both
+                        // `new_child_slot` forms return None -- the
+                        // `mmprov:0` arg kills the slot-1 candidates --
+                        // and only `mmprov-3` merges. Without the pin
+                        // (provider not requested, bound to the highest
+                        // slot, or no `--update`) the arm fires as before.
+                        //
+                        // The pin is recorded per installed instance, but
+                        // this edge already carries its bound slot
+                        // (`a_slot`), and every candidate this arm keeps
+                        // sits in another slot -- so a pin on `a_slot`
+                        // refuses the whole edge. Same-slot candidates
+                        // match `P:S` trivially, so the same-slot arm
+                        // above needs no gate.
+                        //
+                        // Cuts: explicit slot/version request atoms
+                        // (greedy adds nothing there, and the plain arg
+                        // never reaches a non-highest installed instance
+                        // -- real `_iter_atoms_for_pkg`'s higher-slot
+                        // dance) and the blocker-lookahead revision
+                        // discards.
+                        if update
+                            && top_level_cps.contains(&provider_cp)
+                            && let Some((high_slot, high_ver)) =
+                                highest_visible_slot(repos, &provider_cp)
+                            && high_slot.as_str() != a_slot
+                            && installed_by_cp.get(&provider_cp).is_some_and(|insts| {
+                                insts
+                                    .iter()
+                                    .filter(|(_, s)| *s == a_slot)
+                                    .map(|(v, _)| v)
+                                    .max_by(|a, b| vercmp_ordering(a, b))
+                                    .is_some_and(|best| {
+                                        vercmp_ordering(&high_ver, best) == Ordering::Greater
+                                    })
+                            })
+                        {
+                            return None;
+                        }
                         let mut cands: Vec<(&String, &String, &String)> = Vec::new();
                         if let Some(fresh) = new_slot_fresh.get(&provider_cp) {
                             cands.push((&fresh.0, &fresh.1, &fresh.2));
@@ -49533,6 +49608,29 @@ mod tests {
             &[],
         );
         assert_eq!(via_arg, BTreeSet::from([massc.clone()]));
+        // #252: with `--update` and the provider directly requested,
+        // real's greedy request-argument expansion pins the installed
+        // slot (`massb:1`), and the update probe's reverse-deps gate
+        // refuses every slot-2 candidate against it -- the replace set
+        // stays empty (probed on real 3.0.82.2: the `mmprov` shape
+        // merges only the provider upgrade). Same call as `via_arg`
+        // above, only with `update` on.
+        let (greedy_pinned, ..) = slot_operator_rebuild_scan(
+            &base,
+            &repos,
+            &entries,
+            &HashSet::new(),
+            &empty,
+            &empty,
+            true,
+            true,
+            &top,
+            &[],
+        );
+        assert!(
+            greedy_pinned.is_empty(),
+            "a requested provider below the highest slot probes nothing"
+        );
         // A lower-version fresh slot is a downgrade real never probes.
         let older = GraphEntry {
             outcome: PretendOutcome::New {
