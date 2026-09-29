@@ -1,0 +1,8 @@
+{
+  "pm": "portuale",
+  "version": "feedb558-dirty",
+  "profile": "release",
+  "binary": "/home/vivo/repo/PORTUALE/portuale/rust/target/release/portuale",
+  "repo": "/home/vivo/repo/PORTUALE/portuale",
+  "stamped_at": "2026-09-29T15:25:44Z"
+}

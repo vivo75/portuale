@@ -1,0 +1,35 @@
+# Backlog #244 (batch-2026-09-28_244 Slice A): argument-order-dependent
+# autounmask display (upstream test_autounmask_use_breakage, six orders,
+# both --autounmask-backtrack shapes), plus the abort family and the
+# #195 batch-4 sister cells, for the fail-fast/walk-order port.
+--autounmask-backtrack=y dev-libs/aub0c dev-libs/aub0b dev-libs/aub0a
+--autounmask-backtrack=y dev-libs/aub0c dev-libs/aub0a dev-libs/aub0b
+--autounmask-backtrack=y dev-libs/aub0b dev-libs/aub0c dev-libs/aub0a
+--autounmask-backtrack=y dev-libs/aub0b dev-libs/aub0a dev-libs/aub0c
+--autounmask-backtrack=y dev-libs/aub0a dev-libs/aub0c dev-libs/aub0b
+--autounmask-backtrack=y dev-libs/aub0a dev-libs/aub0b dev-libs/aub0c
+--autounmask-backtrack=n dev-libs/aub0c dev-libs/aub0b dev-libs/aub0a
+--autounmask-backtrack=n dev-libs/aub0c dev-libs/aub0a dev-libs/aub0b
+--autounmask-backtrack=n dev-libs/aub0b dev-libs/aub0c dev-libs/aub0a
+--autounmask-backtrack=n dev-libs/aub0b dev-libs/aub0a dev-libs/aub0c
+--autounmask-backtrack=n dev-libs/aub0a dev-libs/aub0c dev-libs/aub0b
+--autounmask-backtrack=n dev-libs/aub0a dev-libs/aub0b dev-libs/aub0c
+dev-libs/abort-masked-mid
+dev-libs/abort-masked-last
+dev-libs/abort-unsat-mid
+dev-libs/abort-unsat-last
+dev-libs/abort-cycle-mid
+dev-libs/abort-cycle-last
+dev-libs/abort-au-cycle
+dev-libs/abort-au-restart-cycle
+dev-libs/abort-au-plain
+dev-libs/abort-masked-cycle
+dev-libs/does-not-exist dev-libs/newpkg
+dev-libs/newpkg dev-libs/does-not-exist
+dev-libs/useflagpkg[-foo]
+--autounmask-use=n dev-libs/useflagpkg[-foo]
+--backtrack=0 dev-libs/aus0l dev-libs/aus0m
+=dev-libs/mia0a-1
+=dev-libs/mia0a-2
+--autounmask=n =dev-libs/odc0a-1
+--autounmask=n =dev-libs/odc0a-2

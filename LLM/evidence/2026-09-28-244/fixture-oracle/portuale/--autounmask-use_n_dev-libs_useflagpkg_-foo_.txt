@@ -1,0 +1,1 @@
+emerge: there are no ebuilds to satisfy "dev-libs/useflagpkg[-foo]".
