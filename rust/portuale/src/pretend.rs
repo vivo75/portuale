@@ -7325,10 +7325,10 @@ fn render_ambiguous_search_output(
 /// (`<lang>` = `en` here -- `L10N`/`PORTAGE_L10N` not modelled). It is
 /// **valid** iff its `News-Item-Format:` header matches `[12].*` (real
 /// `NewsItem.isValid`). It is **relevant** iff it has no `Display-If-*`
-/// restriction, or its `Display-If-Installed:` atom matches the vdb
-/// (real `DisplayInstalledRestriction`; `Display-If-Keyword` /
-/// `Display-If-Profile` are treated as always-satisfied here -- the
-/// portuale's fixtures are all one `amd64` profile).
+/// restriction, or each kind it carries (`Display-If-Installed` against
+/// the vdb, `Display-If-Profile` against the profile path,
+/// `Display-If-Keyword` against `ARCH`) has a matching value -- see
+/// `news_item_relevant`.
 ///
 /// Real `NewsManager.updateItems`'s write-back (`news.py:112-190`) is
 /// shipped: an item not already in `.skip` is (re-)evaluated; once
@@ -7365,6 +7365,30 @@ pub struct FilesystemNews<'a> {
     /// The `${ROOT}` the `Display-If-Installed` atoms match against and
     /// the state files live under.
     pub root: &'a Path,
+    /// The profile/`ARCH` the `Display-If-Profile` / `Display-If-Keyword`
+    /// restrictions match against (backlog #258).
+    pub context: &'a NewsContext,
+}
+
+/// What real `NewsItem.isRelevant` passes its non-vdb restrictions
+/// (`news.py:406-423`) plus the ownership real
+/// `NewsManager.__init__` gives the state files (`news.py:79-84`).
+/// Built once per run by [`news_context`].
+#[derive(Debug, Clone, Default)]
+pub struct NewsContext {
+    /// Real `NewsManager._profile_path`: `realpath(settings.profile_path)`
+    /// with the main repo's `<location>/profiles/` prefix removed (the
+    /// full real path when the profile lives elsewhere); `None` with no
+    /// profile at all.
+    pub profile: Option<String>,
+    /// Real `config.get("ARCH", "")`, the `Display-If-Keyword` operand.
+    pub arch: String,
+    /// Real `int(config["PORTAGE_INST_UID"])` (default 0).
+    pub inst_uid: u32,
+    /// Real `portage.data.portage_gid`: the host's `PORTAGE_GRPNAME`
+    /// group (default `portage`), 0 when that group does not exist
+    /// (`data.py:173-178`).
+    pub portage_gid: u32,
 }
 
 /// The pure result of one [`FilesystemNews::evaluate`]: the state-file
@@ -7440,7 +7464,7 @@ impl FilesystemNews<'_> {
             if !news_item_valid(&text) {
                 continue;
             }
-            if news_item_relevant(&text, self.root) {
+            if news_item_relevant(&text, self.root, self.context) {
                 unread.insert(id.clone());
                 skip.insert(id);
             }
@@ -7488,7 +7512,11 @@ impl mrg_director::NewsSelector for FilesystemNews<'_> {
 /// no `metadata/news` directory at all. The `.unread`/`.skip` files are
 /// rewritten (sorted, one id per line) only when their sets actually
 /// changed, exactly like `run_check_news` always did.
-fn unread_news_counts(repos: &[portage_repo::RepoConfig], root: &Path) -> Vec<(String, usize)> {
+fn unread_news_counts(
+    repos: &[portage_repo::RepoConfig],
+    root: &Path,
+    context: &NewsContext,
+) -> Vec<(String, usize)> {
     let mut per_repo: Vec<(String, usize)> = Vec::new();
     for repo in repos {
         // The unread computation runs through the director's news slot:
@@ -7499,17 +7527,27 @@ fn unread_news_counts(repos: &[portage_repo::RepoConfig], root: &Path) -> Vec<(S
             repo_location: &repo.location,
             repo_name: &repo.name,
             root,
+            context,
         };
+        // Real `updateItems` prepares the state directory first, even
+        // for a repo with no `metadata/news` (its `listdir` raises
+        // after, and `getUnreadItems` turns that into 0).
+        let state_dir_ready = ensure_news_state_dir(&root.join("var/lib/gentoo/news"), context);
         let Some(eval) = selector.evaluate() else {
             per_repo.push((repo.name.clone(), 0));
             continue;
         };
+        if !state_dir_ready {
+            per_repo.push((repo.name.clone(), eval.unread_orig.len()));
+            continue;
+        }
         write_news_state_if_changed(
             &root.join("var/lib/gentoo/news"),
             &repo.name,
             "unread",
             &eval.unread_orig,
             &eval.unread,
+            context,
         );
         write_news_state_if_changed(
             &root.join("var/lib/gentoo/news"),
@@ -7517,6 +7555,7 @@ fn unread_news_counts(repos: &[portage_repo::RepoConfig], root: &Path) -> Vec<(S
             "skip",
             &eval.skip_orig,
             &eval.skip,
+            context,
         );
         per_repo.push((repo.name.clone(), eval.unread.len()));
     }
@@ -7587,7 +7626,8 @@ fn display_news_notice_if_any(
     if !news_notice_enabled(config) {
         return false;
     }
-    let per_repo = unread_news_counts(repos, root);
+    let context = news_context(repos, &config_root_from_env(), config);
+    let per_repo = unread_news_counts(repos, root, &context);
     print_news_notifications(&per_repo, color)
 }
 
@@ -7681,10 +7721,13 @@ fn merge_failure_news_notice(
 fn run_check_news(
     repos: &[portage_repo::RepoConfig],
     root: &Path,
+    config_root: &Path,
+    config: &portage_profile::Config,
     quiet: bool,
     color: &Colorizer,
 ) -> ExitCode {
-    let per_repo = unread_news_counts(repos, root);
+    let context = news_context(repos, config_root, config);
+    let per_repo = unread_news_counts(repos, root, &context);
     let any = per_repo.iter().any(|(_, count)| *count > 0);
 
     if any {
@@ -7698,22 +7741,23 @@ fn run_check_news(
 }
 
 /// Real `NewsManager.updateItems`'s own `write_atomic` calls
-/// (`news.py:184-193`): `news-<repo>.<suffix>` gets rewritten -- one id
+/// (`news.py:183-200`): `news-<repo>.<suffix>` gets rewritten -- one id
 /// per line, sorted -- only when `updated` differs from `orig`, i.e. the
-/// set genuinely changed this run. A create-dir failure (real's
-/// `OperationNotPermitted`/`PermissionDenied` catch around `ensure_dirs`)
-/// is a silent no-op, same as real.
+/// set genuinely changed this run, and then gets real's
+/// `apply_secpass_permissions(uid=PORTAGE_INST_UID, gid=portage_gid,
+/// mode=0o064, mask=0)`: group `portage`, group read/write and world
+/// read on top of the umask mode (a root run lands `0664 root:portage`,
+/// backlog #258). The state directory itself was already prepared by
+/// [`ensure_news_state_dir`].
 fn write_news_state_if_changed(
     news_state_dir: &Path,
     repo_name: &str,
     suffix: &str,
     orig: &std::collections::HashSet<String>,
     updated: &std::collections::HashSet<String>,
+    context: &NewsContext,
 ) {
     if updated == orig {
-        return;
-    }
-    if std::fs::create_dir_all(news_state_dir).is_err() {
         return;
     }
     let mut ids: Vec<&String> = updated.iter().collect();
@@ -7725,9 +7769,118 @@ fn write_news_state_if_changed(
     }
     let path = news_state_dir.join(format!("news-{repo_name}.{suffix}"));
     let tmp = news_state_dir.join(format!(".news-{repo_name}.{suffix}.tmp"));
-    if std::fs::write(&tmp, &out).is_ok() {
-        let _ = std::fs::rename(&tmp, &path);
+    if std::fs::write(&tmp, &out).is_ok() && std::fs::rename(&tmp, &path).is_ok() {
+        apply_news_permissions(&path, context, 0o064);
     }
+}
+
+/// Real `updateItems`'s preamble (`news.py:121-133`): `ensure_dirs(
+/// unread_path, uid=PORTAGE_INST_UID, gid=portage_gid, mode=0o074,
+/// mask=0)` -- a permission failure returns before anything is read or
+/// written -- then `os.access(unread_path, os.W_OK)`, same early return.
+/// `false` means "no write-back this run": the caller then counts the
+/// `.unread` file as found, exactly like real `getUnreadItems` reading
+/// `len(grabfile(unread))` after the early return.
+fn ensure_news_state_dir(dir: &Path, context: &NewsContext) -> bool {
+    if std::fs::create_dir_all(dir).is_err() || !apply_news_permissions(dir, context, 0o074) {
+        return false;
+    }
+    let Ok(c_dir) = std::ffi::CString::new(dir.as_os_str().as_encoded_bytes()) else {
+        return false;
+    };
+    // SAFETY: `c_dir` is a valid NUL-terminated path for the call.
+    unsafe { libc::access(c_dir.as_ptr(), libc::W_OK) == 0 }
+}
+
+/// Real `apply_permissions` with `mask=0` (`util/__init__.py:1145`):
+/// chown to `PORTAGE_INST_UID:portage_gid` when either differs, then
+/// OR the `mode` bits into the existing mode when any is missing.
+/// Ownership is only changed by a root caller: a non-root caller is
+/// real's unprivileged mode (`PORTAGE_INST_UID` and the portage group
+/// become the caller's own, so the files it creates already match) or
+/// real's `apply_secpass_permissions` skipping what `secpass < 2` cannot
+/// do. `false` on a failed chown/chmod (real `OperationNotPermitted`).
+fn apply_news_permissions(path: &Path, context: &NewsContext, mode: u32) -> bool {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    // SAFETY: `geteuid` has no preconditions.
+    let is_root = unsafe { libc::geteuid() } == 0;
+    if is_root
+        && (meta.uid() != context.inst_uid || meta.gid() != context.portage_gid)
+        && std::os::unix::fs::chown(path, Some(context.inst_uid), Some(context.portage_gid))
+            .is_err()
+    {
+        return false;
+    }
+    let st_mode = meta.mode() & 0o7777;
+    if st_mode & mode != mode
+        && std::fs::set_permissions(path, std::fs::Permissions::from_mode(st_mode | mode)).is_err()
+    {
+        return false;
+    }
+    true
+}
+
+/// Build the [`NewsContext`] real `NewsManager` works from: the profile
+/// path (`news.py:88-98`), `ARCH`, `PORTAGE_INST_UID` and the portage
+/// group id.
+fn news_context(
+    repos: &[portage_repo::RepoConfig],
+    config_root: &Path,
+    config: &portage_profile::Config,
+) -> NewsContext {
+    let var = |name: &str| {
+        std::env::var(name)
+            .ok()
+            .filter(|v| !v.is_empty())
+            .or_else(|| config.other_vars.get(name).cloned())
+    };
+    let grpname = var("PORTAGE_GRPNAME").unwrap_or_else(|| "portage".to_string());
+    NewsContext {
+        profile: news_profile_path(repos, config_root),
+        arch: config.other_vars.get("ARCH").cloned().unwrap_or_default(),
+        inst_uid: var("PORTAGE_INST_UID")
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(0),
+        portage_gid: host_group_gid(&grpname).unwrap_or(0),
+    }
+}
+
+/// Real `NewsManager.__init__`'s `_profile_path` (`news.py:88-98`):
+/// `realpath` of `settings.profile_path` -- `<config_root>/etc/portage/
+/// make.profile`, else the deprecated `<config_root>/etc/make.profile`
+/// (`LocationsManager.py:119-143`), else none -- with the main repo's
+/// `<location>/profiles/` prefix removed. Real builds that prefix from
+/// the configured location without resolving it, so a profile outside
+/// it stays a full real path (and matches no `Display-If-Profile`).
+fn news_profile_path(repos: &[portage_repo::RepoConfig], config_root: &Path) -> Option<String> {
+    let main = repos.iter().find(|r| r.is_main)?;
+    let make_profile = [
+        config_root.join("etc/portage/make.profile"),
+        config_root.join("etc/make.profile"),
+    ]
+    .into_iter()
+    .find(|p| p.is_dir())?;
+    let real = std::fs::canonicalize(&make_profile).ok()?;
+    let real = real.to_string_lossy().into_owned();
+    let base = format!("{}/", main.location.join("profiles").to_string_lossy());
+    Some(real.strip_prefix(&base).map(str::to_string).unwrap_or(real))
+}
+
+/// Real `grp.getgrnam(name).gr_gid` for `portage.data.portage_gid`: the
+/// running host's group database (`/etc/group`), never `${ROOT}`'s.
+fn host_group_gid(name: &str) -> Option<u32> {
+    std::fs::read_to_string("/etc/group")
+        .ok()?
+        .lines()
+        .find_map(|line| {
+            let mut f = line.split(':');
+            (f.next() == Some(name))
+                .then(|| f.nth(1).and_then(|g| g.parse::<u32>().ok()))
+                .flatten()
+        })
 }
 
 /// Real `NewsItem.isValid`: a `News-Item-Format:` header whose value
@@ -7772,80 +7925,119 @@ fn news_item_valid(text: &str) -> bool {
     // implements). No crate EAPI parameterization is added -- Part 3's
     // non-goal is about ebuild-conditional EAPI logic, not this
     // one-off legacy news-format rule.
+    //
+    // Real `DisplayProfileRestriction.isValid` (`news.py:398-404`) fails
+    // a 1.x item whose `Display-If-Profile:` value holds a `*` anywhere
+    // but a trailing `/*` (`_valid_profile_RE`, `^[^*]+(/\*)?$`); a 2.x
+    // value is always valid.
+    let profile_valid = |value: &str| {
+        !is_1x || !value.contains('*') || {
+            let head = value.strip_suffix("/*").unwrap_or(value);
+            !head.is_empty() && !head.contains('*')
+        }
+    };
     text.lines()
-        .filter_map(|l| l.strip_prefix("Display-If-Installed:").map(str::trim))
-        .all(|atom| match parse_atom(atom) {
-            Some(a) => {
-                !is_1x
-                    || (a.slot.is_none()
-                        && a.sub_slot.is_none()
-                        && a.slot_operator.is_none()
-                        && a.use_deps.is_none())
-            }
-            None => false,
-        })
+        .filter_map(|l| l.strip_prefix("Display-If-Profile:").map(str::trim))
+        .all(profile_valid)
+        && text
+            .lines()
+            .filter_map(|l| l.strip_prefix("Display-If-Installed:").map(str::trim))
+            .all(|atom| match parse_atom(atom) {
+                Some(a) => {
+                    !is_1x
+                        || (a.slot.is_none()
+                            && a.sub_slot.is_none()
+                            && a.slot_operator.is_none()
+                            && a.use_deps.is_none())
+                }
+                None => false,
+            })
 }
 
-/// Real `NewsItem.isRelevant`: no restriction → relevant; otherwise each
-/// `Display-If-*` type is OR'd within and AND'd across. Only
-/// `Display-If-Installed` is modelled (`Display-If-Keyword` /
-/// `Display-If-Profile` are treated as always-satisfied -- portuale's
-/// fixtures are all one `amd64` profile). Real
-/// `DisplayInstalledRestriction.checkRestriction` is `vardb.match(self.
-/// atom)` -- a full atom match, version operators (`>=cat/pkg-1`),
-/// slot/sub-slot (`cat/pkg:2/3`) and all, against every installed
-/// version of the atom's `cat/pkg`.
+/// Real `NewsItem.isRelevant` (`news.py:269-306`): no restriction ->
+/// relevant; otherwise each `Display-If-*` kind is OR'd within and
+/// AND'd across. The three kinds (backlog #258 added the last two):
 ///
-/// A `[use]`-dep in the atom **is** post-filtered now (2026-09-07):
-/// real `DisplayInstalledRestriction.checkRestriction` is
-/// `vardb.match(atom)`, which honours a `cat/pkg[flag]` atom against the
-/// installed package's own recorded (vdb) `USE`. Portuale's
-/// `match_from_list` ignores use-deps like every other caller, so this
-/// re-checks `atom.use_deps` against the matched version's vdb
-/// `IUSE`/`USE` via `use_deps_satisfied`. A malformed atom now makes the
-/// whole item *invalid* (see `news_item_valid`), not merely unsatisfied.
-fn news_item_relevant(text: &str, root: &Path) -> bool {
-    let mut installed_atoms: Vec<&str> = Vec::new();
-    for line in text.lines() {
-        if let Some(v) = line.strip_prefix("Display-If-Installed:") {
-            installed_atoms.push(v.trim());
-        }
-    }
-    if installed_atoms.is_empty() {
-        return true;
-    }
-    installed_atoms.iter().any(|atom_str| {
-        let Some(atom) = parse_atom(atom_str) else {
-            return false;
-        };
-        let use_deps = atom.use_deps.as_deref().filter(|d| !d.is_empty());
-        portage_repo::installed_candidates(root, &atom.category, &atom.package)
+/// - `Display-If-Installed` -- real `DisplayInstalledRestriction.
+///   checkRestriction` is `vardb.match(self.atom)`: a full atom match,
+///   version operators (`>=cat/pkg-1`), slot/sub-slot (`cat/pkg:2/3`)
+///   and all, against every installed version of the atom's `cat/pkg`.
+///   A `[use]`-dep is post-filtered against the matched version's own
+///   vdb `IUSE`/`USE` (`use_deps_satisfied`), since portuale's
+///   `match_from_list` ignores use-deps. A malformed atom makes the
+///   whole item *invalid* (see `news_item_valid`), not merely
+///   unsatisfied.
+/// - `Display-If-Profile` -- real `DisplayProfileRestriction.
+///   checkRestriction` (`news.py:406-409`): a 2.x item's `…/*` value
+///   matches every profile under that prefix (`startswith` of the value
+///   minus its `*`), anything else must equal the profile path exactly.
+///   No profile at all matches nothing.
+/// - `Display-If-Keyword` -- real `DisplayKeywordRestriction.
+///   checkRestriction` (`news.py:422-423`): `config.get("ARCH", "")`
+///   equals the value, verbatim (so `~amd64` never matches).
+///
+/// Real only matches a restriction line that ends in a newline
+/// (`_installedRE` and friends end in `\n`); a header on a file's final,
+/// unterminated line is the one shape not mirrored here.
+fn news_item_relevant(text: &str, root: &Path, context: &NewsContext) -> bool {
+    let is_2x = news_item_format(text) == Some(false);
+    let values = |key: &str| -> Vec<&str> {
+        text.lines()
+            .filter_map(|l| l.strip_prefix(key).map(str::trim))
+            .collect()
+    };
+    let installed_atoms = values("Display-If-Installed:");
+    let profiles = values("Display-If-Profile:");
+    let keywords = values("Display-If-Keyword:");
+    let installed_ok = installed_atoms.is_empty()
+        || installed_atoms.iter().any(|atom_str| {
+            let Some(atom) = parse_atom(atom_str) else {
+                return false;
+            };
+            let use_deps = atom.use_deps.as_deref().filter(|d| !d.is_empty());
+            portage_repo::installed_candidates(root, &atom.category, &atom.package)
+                .iter()
+                .any(|(version, slot, sub_slot)| {
+                    let candidate = format!(
+                        "{}/{}-{version}:{slot}/{sub_slot}",
+                        atom.category, atom.package
+                    );
+                    if !match_from_list(atom_str, &[candidate.as_str()])
+                        .is_some_and(|m| !m.is_empty())
+                    {
+                        return false;
+                    }
+                    // Real `vardb.match` also enforces the atom's use-deps
+                    // against this version's own recorded USE.
+                    match use_deps {
+                        None => true,
+                        Some(uds) => {
+                            let (iuse, use_flags) = portage_repo::installed_pkg_iuse_and_use(
+                                root,
+                                &atom.category,
+                                &atom.package,
+                                version,
+                            );
+                            portage_dep::use_deps_satisfied(uds, &iuse, &use_flags)
+                        }
+                    }
+                })
+        });
+    let profile_ok = profiles.is_empty()
+        || profiles
             .iter()
-            .any(|(version, slot, sub_slot)| {
-                let candidate = format!(
-                    "{}/{}-{version}:{slot}/{sub_slot}",
-                    atom.category, atom.package
-                );
-                if !match_from_list(atom_str, &[candidate.as_str()]).is_some_and(|m| !m.is_empty())
-                {
-                    return false;
-                }
-                // Real `vardb.match` also enforces the atom's use-deps
-                // against this version's own recorded USE.
-                match use_deps {
-                    None => true,
-                    Some(uds) => {
-                        let (iuse, use_flags) = portage_repo::installed_pkg_iuse_and_use(
-                            root,
-                            &atom.category,
-                            &atom.package,
-                            version,
-                        );
-                        portage_dep::use_deps_satisfied(uds, &iuse, &use_flags)
+            .any(|value| match context.profile.as_deref() {
+                Some(profile) => {
+                    if is_2x && value.ends_with("/*") {
+                        profile.starts_with(&value[..value.len() - 1])
+                    } else {
+                        profile == *value
                     }
                 }
-            })
-    })
+                None => false,
+            });
+    let keyword_ok = keywords.is_empty() || keywords.contains(&context.arch.as_str());
+    installed_ok && profile_ok && keyword_ok
 }
 
 /// The run-wide half of the build-phase flag env: real `preinst_mask()` (`bin/misc-functions.sh`) driven by the
@@ -12248,7 +12440,7 @@ pub fn run(args: &[String]) -> ExitCode {
     // `actions.py`'s `count_unread_news` block). Real gates its output on
     // `"--quiet" not in myopts`.
     if check_news {
-        return run_check_news(&repos, &root, quiet, &color);
+        return run_check_news(&repos, &root, &config_root, &config, quiet, &color);
     }
 
     // `--info`: a standalone read-only query action (real
@@ -15680,10 +15872,12 @@ mod tests {
         item("2026-09-02-irrelevant", "dev-libs/missing-pkg");
         std::fs::create_dir_all(root.join("var/db/pkg/dev-libs/installed-pkg-1.0")).unwrap();
 
+        let context = test_news_context();
         let selector = FilesystemNews {
             repo_location: &repo,
             repo_name: "testrepo",
             root: &root,
+            context: &context,
         };
         assert_eq!(selector.repo_name(), "testrepo");
         let eval = selector.evaluate().expect("news dir exists");
@@ -15702,9 +15896,164 @@ mod tests {
             repo_location: &base.join("no-such-repo"),
             repo_name: "testrepo",
             root: &root,
+            context: &context,
         };
         assert!(empty.evaluate().is_none());
         assert!(empty.unread_ids().is_empty());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A [`NewsContext`] for the unit tests: the fixture tree's own
+    /// `default` profile and `amd64`, owned by this process's own
+    /// uid/gid (real's unprivileged mode) so no chown is ever needed.
+    fn test_news_context() -> NewsContext {
+        NewsContext {
+            profile: Some("default".to_string()),
+            arch: "amd64".to_string(),
+            // SAFETY: `geteuid`/`getegid` have no preconditions.
+            inst_uid: unsafe { libc::geteuid() },
+            portage_gid: unsafe { libc::getegid() },
+        }
+    }
+
+    #[test]
+    fn news_profile_and_keyword_restrictions_match_like_real() {
+        // Backlog #258: real `DisplayProfileRestriction` /
+        // `DisplayKeywordRestriction` (`news.py:388-423`). The l3
+        // `l3-20260928T195717Z` container probe counted 15 gentoo items
+        // for real and 34 for portuale on `default/linux/amd64/23.0/
+        // systemd`; the 19 extras were all profile/keyword-restricted
+        // to other profiles and arches.
+        let root = std::env::temp_dir().join(format!(
+            "pretend-test-{}-news_restrictions",
+            std::process::id()
+        ));
+        let context = NewsContext {
+            profile: Some("default/linux/amd64/23.0/systemd".to_string()),
+            ..test_news_context()
+        };
+        let item = |format: &str, headers: &str| {
+            format!("Title: t\nNews-Item-Format: {format}\n{headers}\nbody\n")
+        };
+        let relevant = |text: &str| news_item_relevant(text, &root, &context);
+        // Profile: exact, 2.x `/*` prefix, other profiles, 1.x `/*`.
+        assert!(relevant(&item(
+            "2.0",
+            "Display-If-Profile: default/linux/amd64/23.0/systemd"
+        )));
+        assert!(relevant(&item(
+            "2.0",
+            "Display-If-Profile: default/linux/amd64/23.0/*"
+        )));
+        assert!(!relevant(&item(
+            "2.0",
+            "Display-If-Profile: default/linux/amd64/23.0"
+        )));
+        assert!(!relevant(&item(
+            "2.0",
+            "Display-If-Profile: default/linux/s390/23.0\nDisplay-If-Profile: default/linux/ia64/23.0/*"
+        )));
+        assert!(!relevant(&item(
+            "1.0",
+            "Display-If-Profile: default/linux/amd64/23.0/*"
+        )));
+        // Keyword: `ARCH` verbatim, OR'd within the kind.
+        assert!(relevant(&item("2.0", "Display-If-Keyword: amd64")));
+        assert!(relevant(&item(
+            "2.0",
+            "Display-If-Keyword: sparc\nDisplay-If-Keyword: amd64"
+        )));
+        assert!(!relevant(&item("2.0", "Display-If-Keyword: ~amd64")));
+        assert!(!relevant(&item("2.0", "Display-If-Keyword: hppa")));
+        // AND across kinds: a matching keyword does not rescue a
+        // non-matching profile.
+        assert!(!relevant(&item(
+            "2.0",
+            "Display-If-Keyword: amd64\nDisplay-If-Profile: default/linux/sparc/23.0"
+        )));
+        // No profile at all matches no profile restriction.
+        let no_profile = NewsContext {
+            profile: None,
+            ..test_news_context()
+        };
+        assert!(!news_item_relevant(
+            &item("2.0", "Display-If-Profile: default/*"),
+            &root,
+            &no_profile
+        ));
+        // Real `DisplayProfileRestriction.isValid`: a 1.x value with a
+        // `*` anywhere but a trailing `/*` fails the whole item; a 2.x
+        // one never does.
+        assert!(news_item_valid(&item(
+            "1.0",
+            "Display-If-Profile: default/*"
+        )));
+        assert!(!news_item_valid(&item(
+            "1.0",
+            "Display-If-Profile: default/*/amd64"
+        )));
+        assert!(news_item_valid(&item(
+            "2.0",
+            "Display-If-Profile: default/*/amd64"
+        )));
+    }
+
+    #[test]
+    fn news_profile_path_strips_the_main_repo_profiles_prefix() {
+        // Real `NewsManager.__init__` (`news.py:88-98`) with the fixture
+        // tree's own `etc/portage/make.profile -> ../../repo/profiles/
+        // default`: the realpath minus `<main repo>/profiles/`.
+        let fixtures = fixtures_root();
+        let repos = vec![portage_repo::RepoConfig {
+            name: "testrepo".to_string(),
+            location: std::fs::canonicalize(fixtures.join("repo")).unwrap(),
+            priority: 0,
+            is_main: true,
+            masters: Vec::new(),
+            profile_formats: Vec::new(),
+            cache_formats: Vec::new(),
+            aliases: Vec::new(),
+            sync_type: None,
+            sync_uri: None,
+            volatile: false,
+            module_specific_options: Vec::new(),
+        }];
+        assert_eq!(
+            news_profile_path(&repos, &fixtures).as_deref(),
+            Some("default")
+        );
+        // No main repo, or no make.profile: no profile.
+        let mut not_main = repos.clone();
+        not_main[0].is_main = false;
+        assert_eq!(news_profile_path(&not_main, &fixtures), None);
+        assert_eq!(
+            news_profile_path(&repos, &fixtures.join("no-such-config-root")),
+            None
+        );
+    }
+
+    #[test]
+    fn news_state_files_get_the_group_write_bit_like_real() {
+        // Real `apply_secpass_permissions(..., mode=0o064, mask=0)` on
+        // each rewritten state file and `ensure_dirs(..., mode=0o074,
+        // mask=0)` on the directory (`news.py:121-200`): the bits are
+        // OR'd onto whatever the umask left. The l3 probe showed real's
+        // files at 0664 and portuale's at 0644.
+        use std::os::unix::fs::PermissionsExt;
+        let base =
+            std::env::temp_dir().join(format!("pretend-test-{}-news_perms", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dir = base.join("var/lib/gentoo/news");
+        let context = test_news_context();
+        assert!(ensure_news_state_dir(&dir, &context));
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(mode(&dir) & 0o074, 0o074);
+        let orig = HashSet::new();
+        let updated = HashSet::from(["2026-09-01-a".to_string()]);
+        write_news_state_if_changed(&dir, "testrepo", "unread", &orig, &updated, &context);
+        let file = dir.join("news-testrepo.unread");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "2026-09-01-a\n");
+        assert_eq!(mode(&file) & 0o064, 0o064);
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -15766,7 +16115,8 @@ mod tests {
             repo_config("testrepo", "repo"),
             repo_config("overlay", "overlay"),
         ];
-        let counts = unread_news_counts(&repos, &root);
+        let context = test_news_context();
+        let counts = unread_news_counts(&repos, &root, &context);
         assert_eq!(
             counts,
             vec![("testrepo".to_string(), 5), ("overlay".to_string(), 0),]
@@ -15786,7 +16136,7 @@ mod tests {
             sorted.sort();
             sorted
         });
-        assert_eq!(unread_news_counts(&repos, &root), counts);
+        assert_eq!(unread_news_counts(&repos, &root, &context), counts);
         let _ = std::fs::remove_dir_all(&base);
     }
 

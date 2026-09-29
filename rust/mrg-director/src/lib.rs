@@ -1166,8 +1166,9 @@ impl BinpkgIndex for RemoteBinhostIndex<'_> {
 
 /// The current `NewsSelector`: real `--check-news` relevance over the
 /// repo's `metadata/news/<id>/<id>.en.txt` items, gated by
-/// `News-Item-Format`/EAPI validity + `Display-If-Installed` matching
-/// against the installed db (real `portage/news.py::Item.isRelevant` /
+/// `News-Item-Format`/EAPI validity + `Display-If-Installed` /
+/// `Display-If-Profile` / `Display-If-Keyword` matching against the
+/// installed db, the profile path and `ARCH` (real `portage/news.py::Item.isRelevant` /
 /// `isValid`; portuale's `pretend.rs::news_item_valid` /
 /// `news_item_relevant`).
 ///

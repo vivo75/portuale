@@ -18812,3 +18812,13 @@ Real gives `--changed-deps`, `--changed-deps-report`, `--changed-slot`, `--desel
 git clean -fdq fixtures/var
 python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider -k 'spelling'
 ```
+
+## GLEP 42 news honours profile and keyword restrictions (#258, 2026-09-29)
+
+The `l3-core` re-run `l3-20260928T195717Z` left four candidate rows, all on `/var/lib/gentoo/news/news-gentoo.{unread,skip}`: real wrote 15 items at `0664 root:portage`, portuale 34 items at `0644 root:root`. Since #196/#231 every real merge runs the news update, so the old shortcut (Display-If-Profile and Display-If-Keyword treated as always satisfied) reached real systems. The 19 extra items were all restricted to other profiles (ia64, s390, riscv, 17.x profiles) or other arches (hppa, sparc, alpha). Portuale now ports `DisplayProfileRestriction` (exact match, a 2.x `…/*` value matches the prefix, a 1.x value with a stray `*` invalidates the item; `3rdparty/portage: lib/portage/news.py:388-409`), `DisplayKeywordRestriction` (`ARCH` verbatim, `:412-423`), `NewsManager._profile_path` (`:88-98`) and the state-file permissions: `ensure_dirs(mode=0o074)` plus the write-access early return (`:121-133`) and `apply_secpass_permissions(PORTAGE_INST_UID, portage_gid, mode=0o064, mask=0)` on each rewritten file (`:183-200`). In the L3 image, real and portuale now both count 15 items with the same ids and both files at `0664 0:250`. The fixture tree gains two items that must never count (another profile, another keyword).
+
+```sh
+# from ../pmtest; expect the check-news tests to pass with the count still 5
+git clean -fdq fixtures/var
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider -k 'check_news'
+```
