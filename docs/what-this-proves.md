@@ -18893,3 +18893,39 @@ python3 differential-test-bed/compare/diff.py --layer l3 --tolerate-payload \
   differential-test-bed/logs/l3-20260929T082541Z/portuale \
   differential-test-bed/compare/known-divergences.yaml | grep -A3 '^## summary'
 ```
+
+## #244: the autounmask breakage and real's fail-fast walk, argument order by argument order (2026-09-29)
+
+Upstream `test_autounmask_use_breakage` (`dev-libs/aub0{a,b,c,d}`) now
+matches real 3.0.82.2 byte for byte (after the standing root-suffix,
+wall-clock and USE_EXPAND conventions) in all six argument orders under
+both `--autounmask-backtrack` values, in the two-argument pair, and in
+`dev-libs/aubreaktop` both ways. The captures corrected the entry's own
+premise: the reported instance and USE change never depend on the order.
+What depends on it is whether a USE flip contradicts a change already
+needed on the same package. The fixture profile enables `foo`, so A's
+`aub0d[-foo]` needs `-foo`, and if A is walked before B, B's `aub0d[foo]`
+contradicts it. Real walks the arguments LIFO. A contradicted pass fails
+(`depgraph.py:7714`) and `_autounmask_breakage` re-runs one clean pass
+whose `_create_graph` stops at A's miss. That pass keeps only what it
+admitted, so the slot-conflict block appears only when B and C were
+walked first. Portuale gets there with a post-pass replay of real's walk
+(`merge_order::replay_create_graph`) at real's three decision points,
+plus `fail_fast_truncate` on the clean pass. Under `=n`, an order that
+walks B first stops at the first pass, as real's `need_config_change`
+does, and prints the list, both parents under `aub0d-0`, the change and
+the notice. Evidence: `docs/evidence/2026-09-28-244/`. Pins: the
+parameterised `test_autounmask_use_breakage_argument_order_text_matches_real`
+(16 cells) and the fixture-oracle list `l0-fixture-oracle-244.txt`.
+
+```sh
+# from the portuale root; expect rc=1 both times, the slot-conflict block only
+# for `a c b` (aub0d-0 by B first, then aub0d-1 by C), then the same
+# "built with USE flags ... aub0d[-foo]" miss required by aub0a
+FX=$PWD/fixtures
+for o in "a c b" "c b a"; do set -- $o
+  PORTAGE_CONFIGROOT=$FX ROOT=$FX PORTAGE_RUNNING_ROOT=$FX DISTDIR=$FX/distfiles \
+    rust/target/release/emerge --pretend --autounmask-backtrack=y \
+    dev-libs/aub0$1 dev-libs/aub0$2 dev-libs/aub0$3; echo "rc=$?"
+done
+```
