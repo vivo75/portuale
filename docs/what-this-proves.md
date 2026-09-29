@@ -18978,3 +18978,31 @@ printf 'n\n' | script -qec "env PORTAGE_CONFIGROOT=$PWD/fixtures ROOT=/usr/portu
 printf 'y\n' | script -qec "env PORTAGE_CONFIGROOT=$PWD/fixtures ROOT=/usr/portuale-ask-pretend-test-does-not-exist DISTDIR=$PWD/fixtures/distfiles ./rust/target/release/portuale emerge --ask --oneshot dev-libs/schedok" /dev/null
 # expect: the offer, then `[ebuild  N     ] dev-libs/schedok-1.0`, rc 0
 ```
+
+An autounmask change on an argument package itself prints a one-line
+dep chain with no self-row (backlog #248, 2026-09-29). Real
+`_get_dep_chain` (`_emerge/depgraph.py:6257-6454`) never prints the
+start node: its docstring says that with no `target_atom` the first
+package shown is the package's parent, and the start node is appended
+only in the `target_atom` branch (`:6294-6297`). Portuale's generic
+fill did the opposite -- when the changed package had no requirers it
+fell back to the package itself (`.or(Some(own))`), printing its own
+`# required by <cpv>::<repo>` row above the `(argument)` line. Both
+post-loop fills (`fill_use_change_chains` and the extracted
+keyword/license/mask twin `fill_non_use_change_chains`) now pass
+`None` when no requirer exists, so the chain is just the `(argument)`
+line. Grounded on fresh host `/usr/sbin/emerge` 3.0.82.2
+staged-fixture probes: `dev-libs/useflagpkg[-foo]`,
+`dev-libs/useflagpkg[missingflag]`,
+`dev-libs/useflagpkg[missingflag,nonexistentflag(+)]`, and
+`--autounmask dev-libs/autounmaskkeywordpkg` (with and without
+`--autounmask-only`) each print exactly one `# required by <atom as
+given> (argument)` line.
+
+```sh
+# from the repo root; expect rc 1 and the single-chain-line USE block on stderr
+env PORTAGE_CONFIGROOT=$PWD/fixtures ROOT=$PWD/fixtures PORTAGE_RUNNING_ROOT=$PWD/fixtures DISTDIR=$PWD/fixtures/distfiles ./rust/target/release/portuale emerge --pretend -v 'dev-libs/useflagpkg[-foo]'
+# stderr ends with:
+# # required by dev-libs/useflagpkg[-foo] (argument)
+# >=dev-libs/useflagpkg-1.0 -foo
+```
