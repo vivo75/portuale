@@ -30847,22 +30847,29 @@ fn collect_feedback(
         // `depgraph.py:1529-1565`; here the mask half of
         // [`backtrack_missed_updates`] -- built-binary steers never
         // render rows there, the same outcome as real's falsy-`None`
-        // skip at `:1556`), real records `config["prune_rebuilds"]`
-        // and restarts, and the re-resolve drops the unnecessary
-        // rebuilds. `_ENABLE_PRUNE_REBUILDS` (`:628`) is
-        // unconditionally true upstream. Two deliberate cuts: the
-        // `_ignored_binaries_autounmask_backtrack` disjunct (`:5764`)
-        // needs the ignored-binaries/autounmask-USE state portuale's
-        // A3 overlay does not track at this layer (no pin diverges on
-        // it); real's second missed-update source,
+        // skip at `:1556` -- chained with the conflict half below,
+        // exactly real's `:1533-1536`), real records
+        // `config["prune_rebuilds"]` and restarts, and the re-resolve
+        // drops the unnecessary rebuilds. `_ENABLE_PRUNE_REBUILDS`
+        // (`:628`) is unconditionally true upstream. One deliberate
+        // cut: the `_ignored_binaries_autounmask_backtrack` disjunct
+        // (`:5764`) needs the ignored-binaries/autounmask-USE state
+        // portuale's A3 overlay does not track at this layer (no pin
+        // diverges on it). Fires once (the latch); Config feedback is
+        // budget-free, and the re-walk re-schedules genuine rebuilds
+        // through the probe above, so the search terminates with the
+        // same rows and two extra passes.
+        //
+        // Backlog #253 (half 1): real's second missed-update source,
         // `_conflict_missed_update` (the slot-conflict handler's
-        // removals), rides `pass.skipped_updates` here mixed with
-        // #90-withhold rows, with no clean read at this layer -- the
-        // mask half fires on every probed shape. Fires once (the
-        // latch); Config feedback is budget-free, and the re-walk
-        // re-schedules genuine rebuilds through the probe above, so
-        // the search terminates with the same rows and two extra
-        // passes.
+        // removals, `:2087-2106`), rides `pass.skipped_updates` -- the
+        // direct solve's removal rows, filed during this pass's walk
+        // before this trigger runs (the withhold and residual rows join
+        // only later, at settle) -- so a non-empty row set here IS the
+        // conflict-source read. The per-slot-highest chaining only
+        // shapes the display (`collapse_skipped_updates` at settle);
+        // the trigger is a bare OR over both halves, like real's
+        // truthiness check.
         //
         // Gated on no live slot conflict like `_eliminate_rebuilds`
         // below: real never reaches the check with one (its
@@ -30874,7 +30881,11 @@ fn collect_feedback(
         {
             let (skipped, missing, full) =
                 backtrack_missed_updates(&ctx.repos, ctx.root, config, &pass.entries, &grown);
-            if !skipped.is_empty() || !missing.is_empty() || !full.is_empty() {
+            if !skipped.is_empty()
+                || !missing.is_empty()
+                || !full.is_empty()
+                || !pass.skipped_updates.is_empty()
+            {
                 apply_prune_rebuilds(&mut grown);
                 return PassDecision::Feedback(BacktrackFeedback::Config {
                     params: Box::new(grown),
@@ -51096,6 +51107,80 @@ mod tests {
                 "!=dev-libs/bttarget-2.0".to_string()
             )]
         );
+    }
+
+    /// Backlog #253 (half 1): the prune trigger chains the conflict
+    /// half of real's missed updates (`_get_missed_updates`,
+    /// `depgraph.py:1529-1565`, the `:1533-1536` chain). At this layer
+    /// the conflict half rides `pass.skipped_updates` (the direct
+    /// solve's removal rows, filed before the trigger runs), while the
+    /// mask half comes out of [`backtrack_missed_updates`] -- so a
+    /// conflict-source-only pass (non-empty replace set, no live
+    /// conflicts, mask half empty, direct rows present) must take the
+    /// prune restart exactly like a mask-half one. RED before the
+    /// predicate chains both sources (the pass settles after the
+    /// replace-growth restart instead).
+    #[test]
+    fn slot_operator_prune_rebuilds_fires_on_conflict_source_only() {
+        let dir = slotundo_temp_dir("253-prune-conflict");
+        let config = test_config();
+        let opts = CtxOpts161 {
+            backtrack_max: 20,
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, Vec::new(), &opts);
+        let mut grown = BacktrackParams::default();
+        grown
+            .slot_operator_replace_installed
+            .insert(("app-misc".to_string(), "pcons".to_string()));
+        let mut pass = pass_161();
+        pass.skipped_updates.push(SkippedUpdate {
+            category: "dev-libs".to_string(),
+            package: "slotconflicttarget".to_string(),
+            slot: "0".to_string(),
+            skipped_version: "2.0".to_string(),
+            skipped_sub_slot: "0".to_string(),
+            skipped_repo: "testrepo".to_string(),
+            skipped_use: Vec::new(),
+            atom: "<dev-libs/slotconflicttarget-2.0".to_string(),
+            consumer_cpv: "dev-libs/slotconflictoldconsumer-1.0".to_string(),
+            consumer_installed: false,
+            consumer_use: Vec::new(),
+        });
+        let decision = collect_feedback(&ctx, &grown, &mut pass, &config);
+        let PassDecision::Feedback(BacktrackFeedback::Config { params: out }) = decision else {
+            panic!("a conflict-source-only pass restarts with prune_rebuilds");
+        };
+        assert!(out.prune_rebuilds, "the prune latch is set");
+        assert!(
+            out.slot_operator_replace_installed.is_empty(),
+            "the prune clears the replace set"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #253 (half 1, no-over-fire guard): with neither half
+    /// present the trigger stays quiet -- a replace set alone settles.
+    #[test]
+    fn slot_operator_prune_rebuilds_stays_quiet_without_missed_updates() {
+        let dir = slotundo_temp_dir("253-prune-quiet");
+        let config = test_config();
+        let opts = CtxOpts161 {
+            backtrack_max: 20,
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, Vec::new(), &opts);
+        let mut grown = BacktrackParams::default();
+        grown
+            .slot_operator_replace_installed
+            .insert(("app-misc".to_string(), "pcons".to_string()));
+        let mut pass = pass_161();
+        let decision = collect_feedback(&ctx, &grown, &mut pass, &config);
+        assert!(
+            matches!(decision, PassDecision::Settle { .. }),
+            "no missed updates, no prune restart"
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// Backlog #212 (v2 `#24c`): real `_slot_change_backtrack`
