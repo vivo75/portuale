@@ -1,0 +1,2 @@
+[ebuild     U  ] dev-libs/r25up-2.0 [1.0]
+[ebuild  N     ] dev-libs/r25target-1.0 
