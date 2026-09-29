@@ -12,6 +12,9 @@ use std::fs::DirEntry;
 use std::io;
 use std::path::{Path, PathBuf};
 
+mod temp_dir;
+pub use temp_dir::{TEMP_DIR_PREFIX, TempDir};
+
 /// The seed from `PORTUALE_SHUFFLE_DIRS` (test/CI-only), if set.
 ///
 /// Read once at first use and frozen for the life of the process
@@ -173,8 +176,7 @@ mod tests {
     // the variable from its first instruction.
     #[test]
     fn shuffle_seed_is_frozen_at_first_use_and_read_dir_is_sorted_by_default() {
-        let dir = std::env::temp_dir().join(format!("portage-util-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("portage-util").keep();
         for name in ["g", "a", "h", "c", "b", "f", "d", "e"] {
             std::fs::write(dir.join(name), b"").unwrap();
         }
@@ -207,8 +209,7 @@ mod tests {
     // level, interleaved file/dir sort, symlinked file and directory).
     #[test]
     fn recursive_config_files_matches_reals_traversal_and_filters() {
-        let root =
-            std::env::temp_dir().join(format!("portage-util-recursive-{}", std::process::id()));
+        let root = TempDir::new("portage-util-recursive").keep();
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("aa")).unwrap();
         std::fs::create_dir_all(root.join("zz")).unwrap();

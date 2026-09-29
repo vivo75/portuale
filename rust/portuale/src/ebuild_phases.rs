@@ -715,7 +715,7 @@ pub(crate) fn bin_dir() -> &'static Path {
         let overlay = std::env::temp_dir().join(format!("portuale-bin.{}", std::process::id()));
         match build_bin_overlay(&overlay, &checkout, &vendored) {
             Ok(()) => {
-                let _ = CREATED.set(overlay.clone());
+                let _ = CREATED.set(overlay.to_path_buf());
                 // `extern "C"`, no closure capture: the handler reads
                 // `CREATED` itself. A failed registration keeps the
                 // old leak rather than breaking the run (best effort,
@@ -2117,7 +2117,7 @@ fn write_post_install_soname_deps(env: &Environment, root: &Path) -> Result<(), 
         // Real's own symlink QA: only for an entry with an soname in a
         // real libdir, and never created -- reported only.
         if !entry.soname.is_empty() {
-            let obj_dir = obj_path.parent().map(|p| p.to_path_buf());
+            let obj_dir = obj_path.parent();
             let parent_rel = std::path::Path::new(&entry.filename)
                 .parent()
                 .map(|p| p.to_string_lossy().to_string())
@@ -4990,6 +4990,7 @@ pub(crate) fn run_phase_from_saved_env(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use portage_util::TempDir;
 
     #[test]
     fn remove_bin_overlay_dir_is_idempotent() {
@@ -4997,8 +4998,7 @@ mod tests {
         // populated overlay, then silently tolerates the missing dir
         // (double exit paths, or an overlay a previous run already
         // reclaimed, must never fail).
-        let dir =
-            std::env::temp_dir().join(format!("portuale-bin-overlay-test-{}", std::process::id()));
+        let dir = TempDir::new("portuale-bin-overlay-test").keep();
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("sub")).unwrap();
         std::fs::write(dir.join("sub").join("f"), "x").unwrap();
@@ -5010,14 +5010,7 @@ mod tests {
 
     #[test]
     fn bind_slot_operator_binds_a_matched_equals_dep_and_leaves_the_rest_alone() {
-        let root = std::env::temp_dir().join(format!(
-            "portuale-slotbind-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let root = TempDir::new("portuale-slotbind").keep();
         let vdb = root.join("var/db/pkg/dev-libs/foo-1.2");
         std::fs::create_dir_all(&vdb).unwrap();
         std::fs::write(vdb.join("CATEGORY"), "dev-libs\n").unwrap();
@@ -5117,10 +5110,7 @@ mod tests {
         // test threads. Spawning the real `portuale` binary gives each
         // invocation its own independent environment, exactly the way
         // real portage's own `FEATURES` behavior is env-var-scoped.
-        let tmp = std::env::temp_dir().join(format!(
-            "ebuild-phases-test-{}-features_test_passthrough",
-            std::process::id()
-        ));
+        let tmp = TempDir::new("ebuild-phases-test-features_test_passthrough").keep();
         let _ = std::fs::remove_dir_all(&tmp);
         let pkg_dir = tmp.join("pkg/dev-libs/srctestpkg");
         std::fs::create_dir_all(&pkg_dir).unwrap();
@@ -5205,10 +5195,8 @@ mod tests {
     #[test]
     fn restrict_and_properties_reads_and_use_reduces_the_real_md5_cache_entry() {
         let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
-        let portage_tmpdir = std::env::temp_dir().join(format!(
-            "ebuild-phases-test-{}-restrict_and_properties_reads_real_md5_cache",
-            std::process::id()
-        ));
+        let portage_tmpdir =
+            TempDir::new("ebuild-phases-test-restrict_and_properties_reads_real_md5_cache").keep();
         let env = compute_environment(
             &repo_root.join("dev-libs/propertiespkg/propertiespkg-1.0.ebuild"),
             &portage_tmpdir,
@@ -5231,10 +5219,7 @@ mod tests {
         // tokens). No fixture change: a throwaway repo carries the
         // conditional entry, while the config `USE` comes from the
         // fixture tree (`make.conf` sets `confflag`).
-        let tmp = std::env::temp_dir().join(format!(
-            "ebuild-phases-test-{}-depend_use_set",
-            std::process::id()
-        ));
+        let tmp = TempDir::new("ebuild-phases-test-depend_use_set").keep();
         let _ = std::fs::remove_dir_all(&tmp);
         let repo = tmp.join("repo");
         std::fs::create_dir_all(repo.join("profiles")).unwrap();
@@ -5298,10 +5283,7 @@ mod tests {
 
     #[test]
     fn restrict_and_properties_is_empty_outside_any_repo_checkout() {
-        let tmp = std::env::temp_dir().join(format!(
-            "ebuild-phases-test-{}-restrict_and_properties_outside_repo",
-            std::process::id()
-        ));
+        let tmp = TempDir::new("ebuild-phases-test-restrict_and_properties_outside_repo").keep();
         let _ = std::fs::remove_dir_all(&tmp);
         let pkg_dir = tmp.join("standalone");
         std::fs::create_dir_all(&pkg_dir).unwrap();
@@ -5450,7 +5432,7 @@ mod tests {
     fn install_lands_a_real_file_under_a_real_d() {
         let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/repo/dev-libs/phasepkg/phasepkg-1.0.ebuild");
-        let portage_tmpdir = std::env::temp_dir().join(format!(
+        let portage_tmpdir = TempDir::new(&format!(
             "ebuild-phases-test-{}-{}",
             std::process::id(),
             "install_lands_a_real_file_under_a_real_d"
@@ -5493,7 +5475,7 @@ mod tests {
     /// `S` must therefore fail the `install` run with real's message.
     #[test]
     fn install_dies_like_real_when_s_is_missing() {
-        let tmp = std::env::temp_dir().join(format!(
+        let tmp = TempDir::new(&format!(
             "ebuild-phases-test-{}-{}",
             std::process::id(),
             "install_dies_like_real_when_s_is_missing"
@@ -5543,7 +5525,7 @@ mod tests {
     fn install_writes_the_real_build_time_file() {
         let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/repo/dev-libs/phasepkg/phasepkg-1.0.ebuild");
-        let portage_tmpdir = std::env::temp_dir().join(format!(
+        let portage_tmpdir = TempDir::new(&format!(
             "ebuild-phases-test-{}-{}",
             std::process::id(),
             "install_writes_the_real_build_time_file"
@@ -5585,10 +5567,7 @@ mod tests {
     fn run_clean_removes_a_stale_installed_marker_image_and_temp() {
         let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/repo/dev-libs/phasepkg/phasepkg-1.0.ebuild");
-        let portage_tmpdir = std::env::temp_dir().join(format!(
-            "ebuild-phases-test-{}-run-clean",
-            std::process::id()
-        ));
+        let portage_tmpdir = TempDir::new("ebuild-phases-test-run-clean").keep();
         let _ = std::fs::remove_dir_all(&portage_tmpdir);
         let builddir = portage_tmpdir.join("portage/dev-libs/phasepkg-1.0");
         std::fs::create_dir_all(builddir.join("image/usr/share/phasepkg")).unwrap();
@@ -5636,10 +5615,7 @@ mod tests {
     fn run_clean_with_keepwork_keeps_temp_and_workdir_but_still_drops_the_marker() {
         let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/repo/dev-libs/phasepkg/phasepkg-1.0.ebuild");
-        let portage_tmpdir = std::env::temp_dir().join(format!(
-            "ebuild-phases-test-{}-run-clean-keepwork",
-            std::process::id()
-        ));
+        let portage_tmpdir = TempDir::new("ebuild-phases-test-run-clean-keepwork").keep();
         let _ = std::fs::remove_dir_all(&portage_tmpdir);
         let builddir = portage_tmpdir.join("portage/dev-libs/phasepkg-1.0");
         std::fs::create_dir_all(builddir.join("image/usr/share/phasepkg")).unwrap();
@@ -5692,10 +5668,7 @@ mod tests {
         }
         let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/repo/dev-libs/doccompresspkg/doccompresspkg-1.0.ebuild");
-        let portage_tmpdir = std::env::temp_dir().join(format!(
-            "ebuild-phases-test-{}-docompress",
-            std::process::id()
-        ));
+        let portage_tmpdir = TempDir::new("ebuild-phases-test-docompress").keep();
         let _ = std::fs::remove_dir_all(&portage_tmpdir);
 
         let extra_env = vec![
@@ -5757,10 +5730,7 @@ mod tests {
         }
         let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/repo/dev-libs/doccompresspkg/doccompresspkg-1.0.ebuild");
-        let portage_tmpdir = std::env::temp_dir().join(format!(
-            "ebuild-phases-test-{}-instprep",
-            std::process::id()
-        ));
+        let portage_tmpdir = TempDir::new("ebuild-phases-test-instprep").keep();
         let _ = std::fs::remove_dir_all(&portage_tmpdir);
         let no_root = Path::new("/dev/null/no-config-root");
         let env_with = |features: &str| {
@@ -5841,10 +5811,8 @@ mod tests {
     /// recommends) survives untouched.
     #[test]
     fn install_runs_the_real_post_install_qa_check_and_strips_a_genuinely_empty_dir() {
-        let tmp = std::env::temp_dir().join(format!(
-            "ebuild-phases-test-{}-install_runs_the_real_post_install_qa_check",
-            std::process::id()
-        ));
+        let tmp =
+            TempDir::new("ebuild-phases-test-install_runs_the_real_post_install_qa_check").keep();
         let _ = std::fs::remove_dir_all(&tmp);
         let repo_root = tmp.join("repo");
         let pkg_dir = repo_root.join("dev-libs/qacheckpkg");
@@ -5907,7 +5875,7 @@ mod tests {
     fn run_single_phase_actually_runs_pkg_config_and_pkg_info() {
         let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/repo/dev-libs/standalonephasepkg/standalonephasepkg-1.0.ebuild");
-        let portage_tmpdir = std::env::temp_dir().join(format!(
+        let portage_tmpdir = TempDir::new(&format!(
             "ebuild-phases-test-{}-{}",
             std::process::id(),
             "run_single_phase_actually_runs_pkg_config_and_pkg_info"
@@ -5968,7 +5936,7 @@ mod tests {
     fn run_single_phase_actually_runs_pkg_prerm_and_pkg_postrm() {
         let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/repo/dev-libs/standalonephasepkg/standalonephasepkg-1.0.ebuild");
-        let portage_tmpdir = std::env::temp_dir().join(format!(
+        let portage_tmpdir = TempDir::new(&format!(
             "ebuild-phases-test-{}-{}",
             std::process::id(),
             "run_single_phase_actually_runs_pkg_prerm_and_pkg_postrm"
@@ -6024,7 +5992,7 @@ mod tests {
     fn install_lands_a_real_file_under_a_real_d_via_real_bash() {
         let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/repo/dev-libs/phasepkg/phasepkg-1.0.ebuild");
-        let portage_tmpdir = std::env::temp_dir().join(format!(
+        let portage_tmpdir = TempDir::new(&format!(
             "ebuild-phases-test-{}-{}",
             std::process::id(),
             "install_lands_a_real_file_under_a_real_d_via_real_bash"
@@ -6071,12 +6039,12 @@ mod tests {
     fn install_computes_real_a_from_a_verified_distfile_and_leaves_aa_unset() {
         let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/repo/dev-libs/verifiedfetchpkg/verifiedfetchpkg-1.0.ebuild");
-        let portage_tmpdir = std::env::temp_dir().join(format!(
+        let portage_tmpdir = TempDir::new(&format!(
             "ebuild-phases-test-{}-{}",
             std::process::id(),
             "install_computes_real_a_from_a_verified_distfile_and_leaves_aa_unset"
         ));
-        let distdir = std::env::temp_dir().join(format!(
+        let distdir = TempDir::new(&format!(
             "ebuild-phases-test-distdir-{}-{}",
             std::process::id(),
             "install_computes_real_a_from_a_verified_distfile_and_leaves_aa_unset"
@@ -6128,10 +6096,7 @@ mod tests {
     fn depend_phase_standalone_base_env_stays_empty_with_a_real_repo() {
         let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/repo/dev-libs/phaseenvpkg/phaseenvpkg-1.0.ebuild");
-        let portage_tmpdir = std::env::temp_dir().join(format!(
-            "ebuild-phases-test-depend-base-{}",
-            std::process::id()
-        ));
+        let portage_tmpdir = TempDir::new("ebuild-phases-test-depend-base").keep();
         let env = compute_environment(&ebuild_path, &portage_tmpdir).unwrap();
         let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
         let (use_str, flags) =
@@ -6242,10 +6207,7 @@ mod tests {
     fn phase_setup_script_exports_extra_env_features_last() {
         let ebuild = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/repo/dev-libs/phaseenvpkg/phaseenvpkg-1.0.ebuild");
-        let portage_tmpdir = std::env::temp_dir().join(format!(
-            "ebuild-phases-test-setup-script-{}",
-            std::process::id()
-        ));
+        let portage_tmpdir = TempDir::new("ebuild-phases-test-setup-script").keep();
         let env = compute_environment(&ebuild, &portage_tmpdir).unwrap();
         let script = phase_setup_script(
             &env,
@@ -6282,7 +6244,7 @@ mod tests {
     fn install_really_inherits_a_real_eclass_and_calls_its_own_function() {
         let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/repo/dev-libs/eclasspkg/eclasspkg-1.0.ebuild");
-        let portage_tmpdir = std::env::temp_dir().join(format!(
+        let portage_tmpdir = TempDir::new(&format!(
             "ebuild-phases-test-{}-{}",
             std::process::id(),
             "install_really_inherits_a_real_eclass_and_calls_its_own_function"
@@ -6331,7 +6293,7 @@ mod tests {
     fn install_does_not_deadlock_on_an_eclass_scope_larger_than_the_pipe_buffer() {
         let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/repo/dev-libs/bigeclasspkg/bigeclasspkg-1.0.ebuild");
-        let portage_tmpdir = std::env::temp_dir().join(format!(
+        let portage_tmpdir = TempDir::new(&format!(
             "ebuild-phases-test-{}-{}",
             std::process::id(),
             "install_does_not_deadlock_on_an_eclass_scope_larger_than_the_pipe_buffer"
@@ -6340,7 +6302,7 @@ mod tests {
 
         let (tx, rx) = std::sync::mpsc::channel();
         let thread_ebuild_path = ebuild_path.clone();
-        let thread_portage_tmpdir = portage_tmpdir.clone();
+        let thread_portage_tmpdir = portage_tmpdir.to_path_buf();
         std::thread::spawn(move || {
             let result = run_commands(
                 &thread_ebuild_path,
@@ -6386,7 +6348,7 @@ mod tests {
     fn a_corrupt_saved_environment_fails_the_next_phase_in_both_backends() {
         let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/repo/dev-libs/heredocpkg/heredocpkg-1.0.ebuild");
-        let tmp = std::env::temp_dir().join(format!(
+        let tmp = TempDir::new(&format!(
             "ebuild-phases-test-{}-{}",
             std::process::id(),
             "a_corrupt_saved_environment_fails_the_next_phase_in_both_backends"
@@ -6462,7 +6424,7 @@ mod tests {
     fn brush_phase_env_is_filtered_of_bash_special_variables() {
         let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/repo/dev-libs/phasepkg/phasepkg-1.0.ebuild");
-        let portage_tmpdir = std::env::temp_dir().join(format!(
+        let portage_tmpdir = TempDir::new(&format!(
             "ebuild-phases-test-{}-{}",
             std::process::id(),
             "brush_phase_env_is_filtered_of_bash_special_variables"
@@ -6547,7 +6509,7 @@ mod tests {
 
         let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/repo/dev-libs/exportexpandpkg/exportexpandpkg-1.0.ebuild");
-        let tmp = std::env::temp_dir().join(format!(
+        let tmp = TempDir::new(&format!(
             "ebuild-phases-test-{}-{}",
             std::process::id(),
             "expanded_name_export_assigns_in_both_backends"
@@ -6631,10 +6593,7 @@ mod tests {
         assert_eq!(env.inherited.as_deref(), Some("pilotcheck"));
 
         // A standalone ebuild outside any repo -> no md5-cache -> None.
-        let tmp = std::env::temp_dir().join(format!(
-            "ebuild-phases-test-{}-inherited-none",
-            std::process::id()
-        ));
+        let tmp = TempDir::new("ebuild-phases-test-inherited-none").keep();
         let pkg_dir = tmp.join("dev-libs/standalone");
         std::fs::create_dir_all(&pkg_dir).unwrap();
         let solo = pkg_dir.join("standalone-1.0.ebuild");
@@ -6649,10 +6608,7 @@ mod tests {
         // Real `_prepare_fake_filesdir`: FILESDIR is builddir/files, a
         // symlink to the ebuild's own repo `files/`. Without it every
         // ebuild patch via `eapply` dies (L2 S5).
-        let tmp = std::env::temp_dir().join(format!(
-            "ebuild-phases-test-{}-filesdir",
-            std::process::id()
-        ));
+        let tmp = TempDir::new("ebuild-phases-test-filesdir").keep();
         let _ = std::fs::remove_dir_all(&tmp);
         let pkg_dir = tmp.join("repo/dev-libs/patchpkg");
         std::fs::create_dir_all(pkg_dir.join("files")).unwrap();
@@ -6678,10 +6634,7 @@ mod tests {
         // `__dyn_clean` fails with "Is a directory" and aborts the
         // rest of the cleanup under `set -e`, leaving `/var/tmp`
         // residue -- host `emerge -1 sys-libs/timezone-data`).
-        let tmp = std::env::temp_dir().join(format!(
-            "ebuild-phases-test-{}-filesdir-missing",
-            std::process::id()
-        ));
+        let tmp = TempDir::new("ebuild-phases-test-filesdir-missing").keep();
         let _ = std::fs::remove_dir_all(&tmp);
         let pkg_dir = tmp.join("repo/sys-libs/notimezonefiles");
         std::fs::create_dir_all(&pkg_dir).unwrap();
@@ -6722,10 +6675,7 @@ mod tests {
         // Migration path for pre-fix residue: a plain directory left at
         // builddir/files (the shape `__dyn_clean` choked on) becomes the
         // symlink again instead of erroring.
-        let tmp = std::env::temp_dir().join(format!(
-            "ebuild-phases-test-{}-filesdir-stale-dir",
-            std::process::id()
-        ));
+        let tmp = TempDir::new("ebuild-phases-test-filesdir-stale-dir").keep();
         let _ = std::fs::remove_dir_all(&tmp);
         let pkg_dir = tmp.join("repo/dev-libs/dirpkg");
         std::fs::create_dir_all(pkg_dir.join("files")).unwrap();
@@ -6744,10 +6694,7 @@ mod tests {
 
     #[test]
     fn eclass_locations_value_is_empty_outside_any_repo_checkout() {
-        let tmp = std::env::temp_dir().join(format!(
-            "ebuild-phases-test-{}-eclass_locations_value_none",
-            std::process::id()
-        ));
+        let tmp = TempDir::new("ebuild-phases-test-eclass_locations_value_none").keep();
         let _ = std::fs::remove_dir_all(&tmp);
         let pkg_dir = tmp.join("dev-libs/standalone");
         std::fs::create_dir_all(&pkg_dir).unwrap();
@@ -6765,10 +6712,7 @@ mod tests {
         // [repo.location]`, exported `reversed()` -- so the ebuild's own
         // containing repo is searched first, its masters after, in real
         // declared order.
-        let tmp = std::env::temp_dir().join(format!(
-            "ebuild-phases-test-{}-eclass_locations_masters_order",
-            std::process::id()
-        ));
+        let tmp = TempDir::new("ebuild-phases-test-eclass_locations_masters_order").keep();
         let _ = std::fs::remove_dir_all(&tmp);
         let main = tmp.join("main");
         let secondary = tmp.join("secondary");
@@ -6818,10 +6762,7 @@ mod tests {
         // empty (`config.py:1229-1260`, "the main repo can never be its
         // own master"), so this also doubles as a real-default-masters
         // proof: no explicit `masters =` key at all for `main`.
-        let tmp = std::env::temp_dir().join(format!(
-            "ebuild-phases-test-{}-eclass_locations_no_dup",
-            std::process::id()
-        ));
+        let tmp = TempDir::new("ebuild-phases-test-eclass_locations_no_dup").keep();
         let _ = std::fs::remove_dir_all(&tmp);
         let main = tmp.join("main");
         std::fs::create_dir_all(main.join("profiles")).unwrap();
@@ -6851,10 +6792,7 @@ mod tests {
     /// own doc comment (before this slice) named as out of scope.
     #[test]
     fn install_inherits_a_real_eclass_that_only_exists_in_the_overlays_own_master_repo() {
-        let tmp = std::env::temp_dir().join(format!(
-            "ebuild-phases-test-{}-eclass_masters_e2e",
-            std::process::id()
-        ));
+        let tmp = TempDir::new("ebuild-phases-test-eclass_masters_e2e").keep();
         let _ = std::fs::remove_dir_all(&tmp);
         let main = tmp.join("main");
         let overlay = tmp.join("overlay");
@@ -6925,10 +6863,7 @@ mod tests {
 
     #[test]
     fn repo_root_for_finds_the_nearest_ancestor_repo_root() {
-        let tmp = std::env::temp_dir().join(format!(
-            "ebuild-phases-test-{}-repo_root_for_finds",
-            std::process::id()
-        ));
+        let tmp = TempDir::new("ebuild-phases-test-repo_root_for_finds").keep();
         let _ = std::fs::remove_dir_all(&tmp);
         let repo = tmp.join("myrepo");
         let pkg_dir = repo.join("dev-libs/foo");
@@ -6941,10 +6876,7 @@ mod tests {
 
     #[test]
     fn repo_root_for_is_none_when_no_ancestor_has_one() {
-        let tmp = std::env::temp_dir().join(format!(
-            "ebuild-phases-test-{}-repo_root_for_none",
-            std::process::id()
-        ));
+        let tmp = TempDir::new("ebuild-phases-test-repo_root_for_none").keep();
         let _ = std::fs::remove_dir_all(&tmp);
         let pkg_dir = tmp.join("dev-libs/foo");
         std::fs::create_dir_all(&pkg_dir).unwrap();
@@ -6970,7 +6902,7 @@ mod tests {
             .join("../../fixtures/repo/dev-libs/debugpkg/debugpkg-1.0.ebuild");
 
         for (debug, expected) in [(true, "1"), (false, "0")] {
-            let portage_tmpdir = std::env::temp_dir().join(format!(
+            let portage_tmpdir = TempDir::new(&format!(
                 "ebuild-phases-test-{}-{}-{debug}",
                 std::process::id(),
                 "debug_flag_exports_real_portage_debug"
@@ -7013,7 +6945,7 @@ mod tests {
     fn pretend_alone_succeeds_with_no_explicit_phase_functions() {
         let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/repo/dev-libs/phasepkg/phasepkg-1.0.ebuild");
-        let portage_tmpdir = std::env::temp_dir().join(format!(
+        let portage_tmpdir = TempDir::new(&format!(
             "ebuild-phases-test-{}-{}",
             std::process::id(),
             "pretend_alone_succeeds_with_no_explicit_phase_functions"
@@ -7046,14 +6978,7 @@ mod tests {
     #[test]
     fn open_log_file_gzip_pump_round_trips() {
         use std::io::{Read, Write};
-        let dir = std::env::temp_dir().join(format!(
-            "ebuild-phases-gzlog-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = TempDir::new("ebuild-phases-gzlog").keep();
         let _ = std::fs::remove_dir_all(&dir);
         let gz = dir.join("build.log.gz");
         let plain = dir.join("build.log");
@@ -7106,10 +7031,7 @@ mod tests {
     fn standalone_phase_env_layers_matching_package_env_build_vars() {
         let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
         let repo = fixtures.join("repo");
-        let portage_tmpdir = std::env::temp_dir().join(format!(
-            "ebuild-phases-test-{}-standalone-penv",
-            std::process::id()
-        ));
+        let portage_tmpdir = TempDir::new("ebuild-phases-test-standalone-penv").keep();
         let bin_dir = bin_dir().to_path_buf();
         let vars_for = |pkg: &str, pf: &str, phase: &str| {
             let env = compute_environment(
@@ -7456,11 +7378,7 @@ mod tests {
             .expect("no entry keeps the run tmpdir");
         assert_eq!(out, run);
         // Matched, directory exists: re-derived.
-        let probe = std::env::temp_dir().join(format!(
-            "ebuild-phases-test-{}-per_package_portage_tmpdir",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&probe).expect("probe tmpdir is creatable");
+        let probe = TempDir::new("ebuild-phases-test-per_package_portage_tmpdir").keep();
         let out = resolve_entry_portage_tmpdir(
             &files(probe.to_str().expect("probe path is UTF-8")),
             cpv,
@@ -7521,10 +7439,7 @@ mod tests {
     /// `PORTAGE_BUILDDIR` half).
     #[test]
     fn compute_environment_builds_the_builddir_under_the_given_tmpdir() {
-        let probe = std::env::temp_dir().join(format!(
-            "ebuild-phases-test-{}-compute_environment_builddir",
-            std::process::id()
-        ));
+        let probe = TempDir::new("ebuild-phases-test-compute_environment_builddir").keep();
         let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
         let env = compute_environment(
             &repo_root.join("dev-libs/envdumppkg/envdumppkg-1.0.ebuild"),
@@ -7621,10 +7536,7 @@ mod tests {
     /// win and the assertion would be testing the developer's shell).
     #[test]
     fn resolve_unmerge_config_reads_binpkg_format_from_make_conf() {
-        let probe = std::env::temp_dir().join(format!(
-            "ebuild-phases-test-{}-unmerge_binpkg_format",
-            std::process::id()
-        ));
+        let probe = TempDir::new("ebuild-phases-test-unmerge_binpkg_format").keep();
         std::fs::remove_dir_all(&probe).ok();
         let repo = probe.join("repo");
         let prof = repo.join("profiles/default");

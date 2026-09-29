@@ -18822,3 +18822,62 @@ The `l3-core` re-run `l3-20260928T195717Z` left four candidate rows, all on `/va
 git clean -fdq fixtures/var
 python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider -k 'check_news'
 ```
+
+## The pty prompt tests cannot hang a `cargo test` run (#259, 2026-09-29)
+
+The eleven `--ask`/`--read-news`/`--config` prompt tests share `pty_pair()`
+and waited with an unbounded `wait_with_output`/`wait`
+(`rust/portuale/src/pretend.rs`). A `cargo test` run from the #230 worktree
+left the child blocked in `read_prompt_line`'s raw `libc::read`
+(`pretend.rs:5267`) and the test binary waiting on it for 20 hours (PIDs
+95126/49163, killed 2026-09-29). `wait_pty_output` / `wait_pty_status` now
+poll `try_wait` against a bound (60 s default,
+`PORTUALE_TEST_PTY_WATCHDOG_SECS` override) and kill the child at expiry,
+failing with a `watchdog:` prefix carrying whatever the child printed — the
+race-chase hook the incident lacked. The race itself is still unexplained
+(`read_prompt_line` reads one canonical line per `read`; the `eselect` stub
+reads no stdin): the first watchdog timeout's captured output is the
+evidence for chasing it. Pinned by `pty_watchdog_kills_a_hung_child_and_fails_the_test`
+(a `sleep 3600` stand-in killed at a 1 s bound, panic prefix asserted).
+
+```sh
+# from rust/; expect 1 passed in ~1s (the watchdog kills the hung child)
+cargo test --release -p portuale pty_watchdog
+```
+
+## Test scratch dirs are reclaimed instead of exhausting `/tmp` (#260, 2026-09-29)
+
+Every test scratch directory was `std::env::temp_dir().join(format!("{tag}-{pid}-{nanos}"))`
+with a trailing `remove_dir_all` at the end of the test — which a panic
+skips, and which `panic = "abort"` (the release profile the verification
+pass runs under) skips even on a plain failed assert. A hung test killed
+from outside skips it too. Measured on this host before the fix:
+**16,393** `portage-repo-masters-test-*`, 768 `emerge_build_test_*`, 152
+`portage-bridge-slotop-*`, 97 `ebuild-phases-test-*`, 55 `mrg_director_*`,
+49 `portage-profile-test-*` (plus `portuale*`, `ask_*`, `resume*`,
+`eselect*`, `remote*`, `true_y_or_n_*`) — ~85k top-level `/tmp` entries on a
+1,048,576-inode tmpfs. Every creator now goes through
+`portage_util::TempDir` (`rust/portage-util/src/temp_dir.rs`): one name
+family (`$TMPDIR/portuale-td-{tag}-{pid}-{nanos}`, so the entries are
+recognizable from the outside) and two cleanup paths. `Drop` covers the
+unwind/success paths; a **stale sweep** at the first `TempDir::new` of each
+process reclaims `portuale-td-*` directories whose owning pid is gone —
+the only mechanism that runs after `panic = "abort"` or SIGKILL, where
+nothing can run on the way out. This is the same division of labour
+`ebuild_phases.rs::bin_dir` and pmtest's `_reclaim_portuale_bin_overlays`
+already use for the `portuale-bin.*` overlay (backlog #88). 159 creation
+sites across 28 files converted (the `portage-profile` fixed-name sites
+gained unique names); product `bin_dir()` keeps its `atexit` path
+deliberately (a `OnceLock` static, not a test guard). The pre-existing pile
+under the old names is not reclaimed by the sweep (they do not carry the
+prefix) and still wants one manual `find /tmp -maxdepth 1 -mmin +30` sweep;
+the `tmp????????` / `tmp_???????` 0-byte files on this host date from
+2026-09-25 (pre-conftest-redirect) and an S0 run of
+`test_output_invariants.py` created none (45 → 45), so the current suites
+are clean for that pattern.
+
+```sh
+# from rust/; expect the sweep test green and no `portuale-td-*` left behind
+cargo test --release -p portage-util temp_dir
+ls /tmp/portuale-td-* 2>/dev/null | wc -l   # expect 0 after a clean run
+```

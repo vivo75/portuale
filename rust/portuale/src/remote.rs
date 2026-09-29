@@ -20,6 +20,7 @@
 //! `docs/remote-merge.md` §1 / §14).
 
 use clap::ArgMatches;
+use portage_util::TempDir;
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::ExitCode;
@@ -736,14 +737,7 @@ pub(crate) fn place_config_root(
     let (dir, tmp): (std::path::PathBuf, Option<std::path::PathBuf>) = match &ctx.etc_portage {
         ConfigPlacement::Server(path) => (std::path::PathBuf::from(path), None),
         ConfigPlacement::Client(path) => {
-            let tmp = std::env::temp_dir().join(format!(
-                "portuale-remote-etc-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos())
-                    .unwrap_or(0)
-            ));
+            let tmp = TempDir::new("portuale-remote-etc").keep();
             // The pulled tree is the *contents* of the client's
             // `/etc/portage`; re-root it as `<tmp>/etc/portage` so the
             // dir is a valid `PORTAGE_CONFIGROOT` (real-root layout).
@@ -818,7 +812,7 @@ pub(crate) fn place_config_root(
                     tmp.display()
                 ));
             }
-            (tmp.clone(), Some(tmp))
+            (tmp.clone(), Some(tmp.clone()))
         }
     };
     let guard = ConfigRootOverride::set(&dir);
@@ -2044,14 +2038,7 @@ fn load_vdb_shadow(
     match &ctx.vdb {
         ConfigPlacement::Server(path) => Ok(VdbShadow::load(std::path::Path::new(path))),
         ConfigPlacement::Client(path) => {
-            let tmp = std::env::temp_dir().join(format!(
-                "portuale-remote-vdb-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos())
-                    .unwrap_or(0)
-            ));
+            let tmp = TempDir::new("portuale-remote-vdb").keep();
             // Like the etc-portage pull, the tmp dir is left for
             // forensics; it carries no secrets beyond file lists.
             pull_dir(ctx, control, path, &tmp)?;
@@ -2122,14 +2109,7 @@ fn run_binpkg_flow(
     regen_features: Option<&str>,
     regen_bzip2: Option<&str>,
 ) -> Result<String, String> {
-    let staging = std::env::temp_dir().join(format!(
-        "portuale-remote-bundle-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
+    let staging = TempDir::new("portuale-remote-bundle").keep();
     if let Err(message) = std::fs::create_dir_all(&staging) {
         return Err(format!("mrg: staging dir {}: {message}", staging.display()));
     }
@@ -2403,7 +2383,7 @@ fn run_bundle_stage(
             return ExitCode::from(1);
         }
     };
-    let config_dir = _placed.dir.clone();
+    let config_dir = _placed.dir.to_path_buf();
     let (_repos, config) =
         match crate::pretend::load_repos_and_config(&config_dir, &portage_repo::root_from_env()) {
             Ok(loaded) => loaded,
@@ -3580,14 +3560,7 @@ fn install_file_atomic(
             Ok(())
         }
         RemoteTransport::Ssh => {
-            let server_tmp = std::env::temp_dir().join(format!(
-                "portuale-regen-install-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos())
-                    .unwrap_or(0)
-            ));
+            let server_tmp = TempDir::new("portuale-regen-install").keep();
             std::fs::write(&server_tmp, bytes)
                 .map_err(|e| format!("mrg: staging the regen install failed: {e}"))?;
             let result = send_file(ctx, control, &server_tmp, &tmp).and_then(|()| {
@@ -3862,6 +3835,7 @@ fn run_phases_stage(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use portage_util::TempDir;
 
     #[test]
     fn sh_quote_wraps_and_escapes() {
@@ -3978,8 +3952,12 @@ mod tests {
         let deep = PathBuf::from("/tmp/pytest-of-vivo/pytest-707/loopback-sshd0/home");
         assert!(control_dir_for(None, Some(deep)).is_none());
         // XDG_RUNTIME_DIR wins when it fits (and gets created 0700).
-        let tmp = std::env::temp_dir().join(format!("portuale-cp-test-{}", std::process::id()));
+        // Deliberately NOT `TempDir`: this test is about the 108-byte
+        // `sun_path` budget, and `TempDir`'s own `portuale-td-…-{pid}-{nanos}`
+        // name already eats too much of it to fit `%C` + suffix.
+        let tmp = PathBuf::from("/tmp/cpfit");
         let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
         let picked = control_dir_for(Some(tmp.clone()), None);
         assert_eq!(picked, Some(tmp.join(".portuale-cp")));
         assert!(tmp.join(".portuale-cp").is_dir());
@@ -4041,14 +4019,7 @@ mod tests {
 
     #[test]
     fn ledger_append_keeps_the_last_ten_lines() {
-        let dir = std::env::temp_dir().join(format!(
-            "portuale-remote-ledger-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = TempDir::new("portuale-remote-ledger").keep();
         let path = dir.join("ledger");
         for n in 0..14 {
             ledger_append(&path, &format!("line{n}")).unwrap();
@@ -4114,14 +4085,7 @@ mod tests {
 
     #[test]
     fn shadow_precheck_fails_only_foreign_owners() {
-        let dir = std::env::temp_dir().join(format!(
-            "portuale-remote-shadow-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = TempDir::new("portuale-remote-shadow").keep();
         let vdb = dir.join("vdb");
         std::fs::create_dir_all(vdb.join("dev-libs/oldpkg-1.0")).unwrap();
         std::fs::write(
@@ -4189,14 +4153,7 @@ mod tests {
     /// -- real `vardbapi._excluded_dirs` (`vartree.py`).
     #[test]
     fn shadow_ignores_a_stale_merging_entry() {
-        let dir = std::env::temp_dir().join(format!(
-            "portuale-remote-shadow-merging-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = TempDir::new("portuale-remote-shadow-merging").keep();
         let vdb = dir.join("vdb");
         std::fs::create_dir_all(vdb.join("dev-libs/-MERGING-stalepkg-1.0")).unwrap();
         std::fs::write(
@@ -4326,14 +4283,7 @@ mod tests {
     /// anything: byte-count gate first, tar never runs on short input.
     #[test]
     fn unpack_script_rejects_a_truncated_bundle() {
-        let tmp = std::env::temp_dir().join(format!(
-            "portuale-remote-trunc-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let tmp = TempDir::new("portuale-remote-trunc").keep();
         let staging = tmp.join("staging");
         std::fs::create_dir_all(&staging).unwrap();
         let staged = crate::remote_bundle::build_bundle(
@@ -4392,14 +4342,7 @@ mod tests {
     fn remote_merge_masks_image_and_lands_aux_files_in_vdb() {
         use md5::Digest as _;
 
-        let tmp = std::env::temp_dir().join(format!(
-            "portuale-remote-mask-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let tmp = TempDir::new("portuale-remote-mask").keep();
         let binpkg = fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2");
         let staging = tmp.join("staging");
         std::fs::create_dir_all(&staging).unwrap();
@@ -4484,14 +4427,7 @@ mod tests {
     fn unpack_then_merge_preserves_special_mode_bits() {
         use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 
-        let tmp = std::env::temp_dir().join(format!(
-            "portuale-remote-setuid-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let tmp = TempDir::new("portuale-remote-setuid").keep();
         let pf = "probe-1.0";
         // Stage the unit the way `build_bundle` lays it out (`<pf>/`
         // with image/, build-info/, remote-manifest, filemeta).
@@ -4744,14 +4680,7 @@ mod tests {
 
     #[test]
     fn merge_driver_protects_a_modified_config() {
-        let tmp = std::env::temp_dir().join(format!(
-            "portuale-remote-protect-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let tmp = TempDir::new("portuale-remote-protect").keep();
         let root = tmp.join("root");
         std::fs::create_dir_all(root.join("etc")).unwrap();
         std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
@@ -4816,14 +4745,7 @@ mod tests {
         use std::io::Read;
         use std::os::unix::fs::MetadataExt as _;
 
-        let tmp = std::env::temp_dir().join(format!(
-            "portuale-remote-atomic-fd-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let tmp = TempDir::new("portuale-remote-atomic-fd").keep();
         let root = tmp.join("root");
         std::fs::create_dir_all(root.join("lib")).unwrap();
         std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
@@ -4885,14 +4807,7 @@ mod tests {
             .find(|p| p.is_file())
             .expect("a system true binary");
 
-        let tmp = std::env::temp_dir().join(format!(
-            "portuale-remote-atomic-exec-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let tmp = TempDir::new("portuale-remote-atomic-exec").keep();
         let root = tmp.join("root");
         std::fs::create_dir_all(root.join("bin")).unwrap();
         std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
@@ -4956,14 +4871,7 @@ mod tests {
 
     #[test]
     fn merge_driver_aborts_on_unowned_collision() {
-        let tmp = std::env::temp_dir().join(format!(
-            "portuale-remote-collide-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let tmp = TempDir::new("portuale-remote-collide").keep();
         let root = tmp.join("root");
         std::fs::create_dir_all(root.join("usr/share")).unwrap();
         std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
@@ -5087,14 +4995,7 @@ mod tests {
     /// the ebuild/env being synthetic is the only unreal part.
     #[test]
     fn phase_script_runs_pkg_pretend_from_saved_env() {
-        let tmp = std::env::temp_dir().join(format!(
-            "portuale-remote-pretend-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let tmp = TempDir::new("portuale-remote-pretend").keep();
         let unit = tmp.join("work/probe-1.0");
         let build_info = unit.join("build-info");
         std::fs::create_dir_all(&build_info).unwrap();
@@ -5287,14 +5188,7 @@ mod tests {
     }
 
     fn regen_tmp(tag: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!(
-            "portuale-remote-regen-{tag}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ))
+        TempDir::new(&format!("portuale-remote-regen-{tag}")).keep()
     }
 
     /// Decompress a vdb `environment.bz2` for content assertions.
@@ -5818,7 +5712,7 @@ mod tests {
             );
             assert_eq!(crate::pretend::config_bzip2_command(&config), "lbzip2");
             if matches!(placement, ConfigPlacement::Client(_)) {
-                client_tmp = Some(placed.dir.clone());
+                client_tmp = Some(placed.dir.to_path_buf());
             }
             drop(placed);
         }

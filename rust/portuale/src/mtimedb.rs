@@ -532,18 +532,10 @@ pub fn clear_resume_list(root: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use portage_util::TempDir;
 
-    fn tmproot() -> PathBuf {
-        let d = std::env::temp_dir().join(format!(
-            "mtimedb_test_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&d).unwrap();
-        d
+    fn tmproot() -> std::path::PathBuf {
+        TempDir::new("mtimedb_test").keep()
     }
 
     #[test]

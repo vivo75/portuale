@@ -2225,7 +2225,7 @@ fn merge_tree(
                 // `protect_decision` computes the comparison from the
                 // dest's own real on-disk type, whatever it actually is
                 // (see that function's own doc comment).
-                let mut write_dest = dest.clone();
+                let mut write_dest = dest.to_path_buf();
                 let mut moveme = true;
                 let protected_path = is_protected(root, config_protect, config_protect_mask, &dest);
                 if protected_path {
@@ -2338,7 +2338,7 @@ fn merge_tree(
                 // directly, don't re-protect; `NOCONFMEM` forces
                 // re-protection regardless of memory, real `cfgfiledict[
                 // "IGNORE"]`).
-                let mut write_dest = dest.clone();
+                let mut write_dest = dest.to_path_buf();
                 let mut moveme = true;
                 if is_protected(root, config_protect, config_protect_mask, &dest) {
                     (write_dest, moveme) = protect_decision(
@@ -4972,6 +4972,7 @@ pub fn merge_binpkg(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use portage_util::TempDir;
 
     #[test]
     fn is_real_merge_command_covers_exactly_merge() {
@@ -6217,17 +6218,8 @@ mod tests {
         );
     }
 
-    fn tempdir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "portuale-ebuild-merge-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn tempdir() -> std::path::PathBuf {
+        TempDir::new("portuale-ebuild-merge-test").keep()
     }
 
     #[test]

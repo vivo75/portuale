@@ -227,6 +227,7 @@ fn fnmatch_to_regex(pattern: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use portage_util::TempDir;
 
     #[test]
     fn resolve_folds_no_star_features_in_real_order() {
@@ -274,7 +275,7 @@ mod tests {
 
     #[test]
     fn install_mask_dir_removes_matched_files_and_empty_dirs_only() {
-        let tmp = std::env::temp_dir().join(format!("im-test-{}", std::process::id()));
+        let tmp = TempDir::new("im-test").keep();
         let ed = tmp.join("image");
         std::fs::create_dir_all(ed.join("usr/share/info")).unwrap();
         std::fs::create_dir_all(ed.join("usr/share/fonts/noto")).unwrap();

@@ -31411,7 +31411,7 @@ pub fn resolve_pretend_graph(
         rebuilt_binaries_timestamp,
         newrepo,
         buildpkgonly,
-        root_deps_running_root: root_deps_running_root.map(|p| p.to_path_buf()),
+        root_deps_running_root: root_deps_running_root.map(std::path::Path::to_path_buf),
         distdir: distdir.to_path_buf(),
         empty,
         getbinpkg,
@@ -32123,6 +32123,7 @@ fn enqueue_dependencies(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use portage_util::TempDir;
 
     /// The fixture tree is not in this repository: `fixtures/` is a
     /// symlink to `../pmtest/fixtures`, the single copy, which the
@@ -32219,15 +32220,7 @@ mod tests {
     #[test]
     fn has_usable_md5_cache_is_the_presence_of_the_cache_dir() {
         assert!(has_usable_md5_cache(&fixtures_root().join("repo")));
-        let bare = std::env::temp_dir().join(format!(
-            "portage-repo-has-usable-md5-cache-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&bare).unwrap();
+        let bare = TempDir::new("portage-repo-has-usable-md5-cache-test").keep();
         assert!(!has_usable_md5_cache(&bare));
     }
 
@@ -32265,17 +32258,8 @@ mod tests {
         assert_eq!(map.get("SLOT").map(String::as_str), Some("0"));
     }
 
-    fn masters_test_root(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "portage-repo-masters-test-{name}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn masters_test_root(name: &str) -> std::path::PathBuf {
+        TempDir::new(&format!("portage-repo-masters-test-{name}")).keep()
     }
 
     fn fixture_binhost() -> portage_profile::BinRepo {
@@ -33006,14 +32990,7 @@ mod tests {
         // `identical_binary`+`_equiv_ebuild_visible` (differing, ebuild
         // gone, --update): the latter only fires under `--update`
         // (real's `not avoid_update`).
-        let root = std::env::temp_dir().join(format!(
-            "portuale-btre-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let root = TempDir::new("portuale-btre").keep();
         let vdb = root.join("var/db/pkg/dev-libs/rebuiltbinarypkg-1.0");
         std::fs::create_dir_all(&vdb).unwrap();
         std::fs::write(vdb.join("BUILD_TIME"), "1000\n").unwrap();
@@ -33969,15 +33946,8 @@ mod tests {
 
     /// A minimal ad-hoc vdb entry: `var/db/pkg/<cat>/<pf>/` with a
     /// `SLOT` file plus whatever extra files the test writes.
-    fn tmp_vdb(cat: &str, pf: &str, files: &[(&str, &[u8])]) -> PathBuf {
-        let root = std::env::temp_dir().join(format!(
-            "portuale-vdb-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
+    fn tmp_vdb(cat: &str, pf: &str, files: &[(&str, &[u8])]) -> std::path::PathBuf {
+        let root = TempDir::new("portuale-vdb").keep();
         let dir = root.join("var/db/pkg").join(cat).join(pf);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("SLOT"), "0\n").unwrap();
@@ -34653,14 +34623,7 @@ mod tests {
     fn live_metadata_for_installed_prefers_the_recorded_repo() {
         use md5::Digest as _;
         use std::fmt::Write as _;
-        let base = std::env::temp_dir().join(format!(
-            "portuale-live-meta-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
+        let base = TempDir::new("portuale-live-meta").keep();
         // Two scratch repos, same cpv, different RDEPEND.
         for (repo, rdepend) in [("lowrepo", ""), ("highrepo", "dev-libs/blocked")] {
             let dir = base.join(repo).join("dev-libs").join("twounit");
@@ -43295,14 +43258,7 @@ mod tests {
         // (backlog #216 scope: reporting it would flip an
         // outcome-correct resolve into a spurious circular abort; the
         // retry that would re-resolve past it is #221's scope).
-        let root = std::env::temp_dir().join(format!(
-            "portuale-selfloop-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
+        let root = TempDir::new("portuale-selfloop").keep();
         let inst_dir = root.join("var/db/pkg/dev-libs/hcs-1.0");
         std::fs::create_dir_all(&inst_dir).unwrap();
         std::fs::write(inst_dir.join("SLOT"), "0\n").unwrap();
@@ -43372,14 +43328,7 @@ mod tests {
         ));
 
         // An installed instance of the owner never retries.
-        let root = std::env::temp_dir().join(format!(
-            "portuale-restartable-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
+        let root = TempDir::new("portuale-restartable").keep();
         let inst_dir = root.join("var/db/pkg/dev-libs/hcs-1.0");
         std::fs::create_dir_all(&inst_dir).unwrap();
         std::fs::write(inst_dir.join("SLOT"), "0\n").unwrap();
@@ -47316,14 +47265,7 @@ mod tests {
         // `bar:2/2=`, a `fresh` consumer bound `bar:2/9=`, an
         // `otherslot` consumer bound `bar:1/1=`, and a `nonop` consumer
         // with a plain (no `=`) `bar:2` dep.
-        let dir = std::env::temp_dir().join(format!(
-            "portage-repo-slotop-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = TempDir::new("portage-repo-slotop").keep();
         let mk = |name: &str, slot: &str, rdepend: &str| {
             let d = dir.join("var/db/pkg/dev-libs").join(name);
             fs::create_dir_all(&d).unwrap();
@@ -47494,14 +47436,7 @@ mod tests {
     fn slot_operator_bridge_entries_run_the_new_slot_arm() {
         use md5::Digest as _;
         use std::fmt::Write as _;
-        let dir = std::env::temp_dir().join(format!(
-            "portage-repo-slotop-bridge-newslot-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = TempDir::new("portage-repo-slotop-bridge-newslot").keep();
         for (name, slot, rdepend) in [
             ("massb-1", "1", ""),
             ("massc-1", "0", "dev-libs/massb:1/1="),
@@ -47618,15 +47553,8 @@ mod tests {
             tag: &str,
             vdb: &[(&str, &str)],
             pars: &[(&str, &str, &str)],
-        ) -> (PathBuf, Vec<RepoConfig>) {
-            let base = std::env::temp_dir().join(format!(
-                "portage-repo-slotop-unsat-{tag}-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos()
-            ));
+        ) -> (std::path::PathBuf, Vec<RepoConfig>) {
+            let base = TempDir::new(&format!("portage-repo-slotop-unsat-{tag}")).keep();
             for (pkg, rdepend) in vdb {
                 // EAPI-bearing vdb, like the bed fragment.
                 let d = base.join(format!("var/db/pkg/app-misc/{pkg}-1"));
@@ -47949,14 +47877,7 @@ mod tests {
     fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
         use md5::Digest as _;
         use std::fmt::Write as _;
-        let base = std::env::temp_dir().join(format!(
-            "portage-repo-slotop-newslot-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let base = TempDir::new("portage-repo-slotop-newslot").keep();
         // vdb: provider `massb-1` in slot 1, consumer `massc-1` bound
         // `massb:1/1=`.
         for (name, slot, rdepend) in [
@@ -48144,14 +48065,7 @@ mod tests {
     fn slot_operator_update_probe_refusal_vetoes_both_arms() {
         use md5::Digest as _;
         use std::fmt::Write as _;
-        let base = std::env::temp_dir().join(format!(
-            "portage-repo-slotop-refusal-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let base = TempDir::new("portage-repo-slotop-refusal").keep();
         // vdb: provider `massb-1` in slot 1, consumer `massc-1` bound
         // `massb:1/1=`, veto parent `massv-1` pinning `<massb-2`.
         for (name, slot, rdepend) in [
@@ -48295,14 +48209,7 @@ mod tests {
     fn abi_probe_harness(with_consumer: bool) -> (std::path::PathBuf, Vec<RepoConfig>) {
         use md5::Digest as _;
         use std::fmt::Write as _;
-        let base = std::env::temp_dir().join(format!(
-            "portage-repo-abi-probe-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let base = TempDir::new("portage-repo-abi-probe").keep();
         for (name, slot, rdepend) in [
             ("abiprov-1", "0/1", ""),
             ("abicons-1", "0", "app-misc/abiprov:0/1="),
@@ -48722,14 +48629,7 @@ mod tests {
     fn slot_operator_new_slot_arm_probes_bound_slot_mismatched_entries() {
         use md5::Digest as _;
         use std::fmt::Write as _;
-        let base = std::env::temp_dir().join(format!(
-            "portage-repo-slotop-mismatch-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let base = TempDir::new("portage-repo-slotop-mismatch").keep();
         // vdb: provider `massm` installed in slots 0 (`1`) and 1 (`2`),
         // consumer `massn-1` bound `massm:0/1=`, consumer `masso-1`
         // bound `massm:1/1=`.
@@ -48830,14 +48730,7 @@ mod tests {
         // when `with_bdeps` is true (real empties them otherwise,
         // `_emerge/depgraph.py:4194-4247`); RDEPEND/PDEPEND/IDEPEND are
         // runtime/install-time keys and stay unconditional.
-        let dir = std::env::temp_dir().join(format!(
-            "portage-repo-slotop-bdeps-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = TempDir::new("portage-repo-slotop-bdeps").keep();
         let mk = |name: &str, key: &str| {
             let d = dir.join("var/db/pkg/dev-libs").join(name);
             fs::create_dir_all(&d).unwrap();
@@ -54826,15 +54719,8 @@ mod tests {
         }
     }
 
-    fn slotundo_temp_dir(tag: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "portage-repo-{tag}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ))
+    fn slotundo_temp_dir(tag: &str) -> std::path::PathBuf {
+        TempDir::new(&format!("portage-repo-{tag}")).keep()
     }
 
     #[test]
@@ -55129,14 +55015,7 @@ mod tests {
         // Throwaway vdb: a 3-link chain tail -> mid -> target, plus an
         // `island` reachable from nothing and a `sysdep` pulled only by a
         // `@system` member. Mirrors the container's CASE 2 / CASE 3.
-        let dir = std::env::temp_dir().join(format!(
-            "portage-repo-reach-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = TempDir::new("portage-repo-reach").keep();
         let mk = |name: &str, rdepend: &str| {
             let d = dir.join("var/db/pkg/dev-libs").join(name);
             fs::create_dir_all(&d).unwrap();
@@ -55175,14 +55054,7 @@ mod tests {
         // `reachable` (the `@world ∪ @selected ∪ @system ∪` argument-cp
         // closure, `ResolveCtx::slot_op_reachable`) or is itself a graph
         // entry this pass -- not merely because it is installed.
-        let dir = std::env::temp_dir().join(format!(
-            "portage-repo-revdep-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = TempDir::new("portage-repo-revdep").keep();
         let mk = |name: &str, rdepend: &str| {
             let d = dir.join("var/db/pkg/dev-libs").join(name);
             fs::create_dir_all(&d).unwrap();
@@ -55343,14 +55215,7 @@ mod tests {
         // re-seed constrains selection with the recorded atom as-is
         // (`depgraph.py:8677-8754`). A `slot_changed: false` reinstall
         // still yields nothing.
-        let dir = std::env::temp_dir().join(format!(
-            "portage-repo-revdep-210-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = TempDir::new("portage-repo-revdep-210").keep();
         let mk = |name: &str, slot: &str, rdepend: &str| {
             let d = dir.join("var/db/pkg/dev-libs").join(name);
             fs::create_dir_all(&d).unwrap();
@@ -55446,14 +55311,7 @@ mod tests {
         // carries a graph entry and complete-mode arg-seeding pulls it
         // into `reachable`. A consumer the required sets reach stays a
         // source, whether or not it was also requested.
-        let dir = std::env::temp_dir().join(format!(
-            "portage-repo-revdep-210-gate-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = TempDir::new("portage-repo-revdep-210-gate").keep();
         let mk = |name: &str, rdepend: &str| {
             let d = dir.join("var/db/pkg/dev-libs").join(name);
             fs::create_dir_all(&d).unwrap();
@@ -55891,14 +55749,7 @@ mod tests {
         // Complete mode: `slotbindconsumer` is in `@world`, so the
         // slot-op scan considers it (see `required_set_reachable_cps`).
         config.complete_seed_atoms = vec!["dev-libs/slotbindconsumer".to_string()];
-        let dir = std::env::temp_dir().join(format!(
-            "portage-repo-ignoreslotop-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = TempDir::new("portage-repo-ignoreslotop").keep();
         let mk = |name: &str, slot: &str, rdepend: &str| {
             let d = dir.join("var/db/pkg/dev-libs").join(name);
             fs::create_dir_all(&d).unwrap();
@@ -56049,14 +55900,7 @@ mod tests {
             &cfg_root,
         )
         .expect("fixture config resolves");
-        let dir = std::env::temp_dir().join(format!(
-            "portage-repo-avoidslot-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = TempDir::new("portage-repo-avoidslot").keep();
         let d = dir.join("var/db/pkg/dev-libs/avoidslotpkg-1.0");
         fs::create_dir_all(&d).unwrap();
         fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
@@ -60964,6 +60808,7 @@ mod tests {
 #[cfg(test)]
 mod tests_162 {
     use super::*;
+    use portage_util::TempDir;
 
     // ---- S1: `bare_cp` (real `3rdparty/portage/lib/portage/update.py`
     // `parse_updates`: `atom.blocker or atom != atom.cp` rejects
@@ -61007,17 +60852,8 @@ mod tests_162 {
 
     /// Fresh unique scratch dir per test (vdb + repo live under it, so
     /// the per-root memo caches never see a reused path).
-    fn dir_162(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!(
-            "portuale-162-{tag}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        std::fs::create_dir_all(&d).unwrap();
-        d
+    fn dir_162(tag: &str) -> std::path::PathBuf {
+        TempDir::new(&format!("portuale-162-{tag}")).keep()
     }
 
     /// One installed instance under `<root>/var/db/pkg` with the given
@@ -61043,7 +60879,7 @@ mod tests_162 {
     /// Scratch vdb for the `clean_selection` legs: `multi` spans two
     /// versions in one slot, `single` has one (skipped), `spread`
     /// spans two versions in each of two slots.
-    fn clean_root_162() -> PathBuf {
+    fn clean_root_162() -> std::path::PathBuf {
         let root = dir_162("clean");
         install_162(&root, "dev-libs", "multi-1.0", "0", &[]);
         install_162(&root, "dev-libs", "multi-2.0", "0", &[]);
@@ -62978,6 +62814,7 @@ mod tests_162 {
 #[cfg(test)]
 mod tests_163 {
     use super::*;
+    use portage_util::TempDir;
 
     /// Minimal merge-bound `GraphEntry` for the assembly legs (slot and
     /// `new_slot` as the leg needs; everything display-side left at its
@@ -63277,17 +63114,8 @@ mod tests_163 {
     /// Fresh unique scratch dir per test (vdb + repo live under it, so
     /// the per-root memo caches never see a reused path). Mirrors
     /// `tests_162::dir_162`, which must stay untouched.
-    fn dir_163(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!(
-            "portuale-163-{tag}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        std::fs::create_dir_all(&d).unwrap();
-        d
+    fn dir_163(tag: &str) -> std::path::PathBuf {
+        TempDir::new(&format!("portuale-163-{tag}")).keep()
     }
 
     /// Fixed "amd64"-only, no-overrides config, mirroring `tests_162`'
@@ -66665,21 +66493,13 @@ mod tests_163 {
 #[cfg(test)]
 mod tests_165 {
     use super::*;
+    use portage_util::TempDir;
 
     /// Fresh unique scratch dir per test (vdb + repo live under it, so
     /// the per-root memo caches -- `all_installed_packages`,
     /// `installed_candidates` -- never see a reused path).
-    fn dir_165(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!(
-            "portuale-165-{tag}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        std::fs::create_dir_all(&d).unwrap();
-        d
+    fn dir_165(tag: &str) -> std::path::PathBuf {
+        TempDir::new(&format!("portuale-165-{tag}")).keep()
     }
 
     fn install_165(root: &Path, cat: &str, pf: &str, slot: &str, files: &[(&str, &str)]) {
@@ -68729,6 +68549,7 @@ mod tests_165 {
 #[cfg(test)]
 mod tests_166 {
     use super::*;
+    use portage_util::TempDir;
 
     // ---- S1: `strip_revision` (`--rebuild-if-new-ver` compares the
     // merged version against installed ones with `-r<n>` stripped on
@@ -68834,17 +68655,8 @@ mod tests_166 {
 
     /// Fresh unique scratch dir per test (vdb lives under it, so the
     /// per-root aux caches never see a reused path).
-    fn dir_166(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!(
-            "portuale-166-{tag}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        std::fs::create_dir_all(&d).unwrap();
-        d
+    fn dir_166(tag: &str) -> std::path::PathBuf {
+        TempDir::new(&format!("portuale-166-{tag}")).keep()
     }
 
     /// One installed instance with the given `BUILD_TIME` (plus `SLOT`,
@@ -69640,6 +69452,7 @@ mod tests_166 {
 #[cfg(test)]
 mod tests_184 {
     use super::*;
+    use portage_util::TempDir;
 
     // ---- #184: the shadowed (no-entry) arm of
     // `direct_solve_instance_use` returned `slot_conflict_flag_sets`'s
@@ -69657,17 +69470,8 @@ mod tests_184 {
 
     /// Fresh unique scratch dir per test (vdb lives under it, so the
     /// per-root aux caches never see a reused path).
-    fn dir_184(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!(
-            "portuale-184-{tag}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        std::fs::create_dir_all(&d).unwrap();
-        d
+    fn dir_184(tag: &str) -> std::path::PathBuf {
+        TempDir::new(&format!("portuale-184-{tag}")).keep()
     }
 
     /// One scratch ebuild plus its real md5-cache entry (the md5-cache

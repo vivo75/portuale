@@ -1429,6 +1429,7 @@ pub fn find_unneeded_preserved(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use portage_util::TempDir;
 
     #[test]
     fn parse_reads_a_real_minimal_five_field_line() {
@@ -1528,16 +1529,7 @@ mod tests {
     }
 
     fn tempdir() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "portuale-needed-elf-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+        TempDir::new("portuale-needed-elf-test").keep()
     }
 
     #[test]

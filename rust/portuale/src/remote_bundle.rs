@@ -512,6 +512,7 @@ pub fn build_bundle(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use portage_util::TempDir;
 
     fn fixture(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -519,18 +520,13 @@ mod tests {
             .join(name)
     }
 
-    fn tempdir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "portuale-remote-bundle-{}-{}-{}",
+    fn tempdir(tag: &str) -> std::path::PathBuf {
+        TempDir::new(&format!(
+            "portuale-remote-bundle-{}-{}",
             std::process::id(),
-            tag,
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+            tag
+        ))
+        .keep()
     }
 
     #[test]

@@ -796,19 +796,10 @@ pub fn run_unmerge(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use portage_util::TempDir;
 
-    fn tempdir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "portuale-ebuild-unmerge-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn tempdir() -> std::path::PathBuf {
+        TempDir::new("portuale-ebuild-unmerge-test").keep()
     }
 
     #[test]

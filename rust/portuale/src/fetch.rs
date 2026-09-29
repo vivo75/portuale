@@ -967,17 +967,11 @@ pub fn fetch_src_uri(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use portage_util::TempDir;
     use std::fs;
 
-    fn tempdir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "portuale_fetch_test_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+    fn tempdir() -> std::path::PathBuf {
+        let dir = TempDir::new("portuale_fetch_test").keep();
         fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -1131,7 +1125,7 @@ mod tests {
 
         let lock1 = PortageLockfile::acquire(&dest).expect("first acquire succeeds");
 
-        let dest2 = dest.clone();
+        let dest2 = dest.to_path_buf();
         let (tx, rx) = std::sync::mpsc::channel();
         let handle = std::thread::spawn(move || {
             let _lock2 =

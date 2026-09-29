@@ -3908,6 +3908,7 @@ fn parse_binrepos(binrepos_conf: &str, portage_binhost: &str) -> Vec<BinRepo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use portage_util::TempDir;
 
     #[test]
     fn parse_binrepos_reads_sections_and_implicit_portage_binhost_entries() {
@@ -4097,14 +4098,7 @@ sync-uri = https://plain.example.org/amd64/
             args(&root).envd_use_tokens,
             vec!["envdusetestflag".to_string()]
         );
-        let bare = std::env::temp_dir().join(format!(
-            "portage-profile-test-eroot-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let bare = TempDir::new("portage-profile-test-eroot").keep();
         fs::create_dir_all(&bare).unwrap();
         assert_eq!(args(&bare).envd_use_tokens, Vec::<String>::new());
         let _ = fs::remove_dir_all(&bare);
@@ -4331,7 +4325,7 @@ sync-uri = https://plain.example.org/amd64/
 
     #[test]
     fn missing_profile_and_make_conf_yield_empty_config() {
-        let empty_root = std::env::temp_dir().join("portage-profile-test-empty-root");
+        let empty_root = TempDir::new("portage-profile-test-empty-root").keep();
         let _ = fs::create_dir_all(&empty_root);
         let config = resolve_config(
             &empty_root,
@@ -4360,7 +4354,7 @@ sync-uri = https://plain.example.org/amd64/
         // must resolve that to otherrepo's own profiles/base directory
         // regardless, proving repo-name lookup doesn't depend on the
         // referencing node's own repo membership.
-        let root = std::env::temp_dir().join("portage-profile-test-cross-repo-named");
+        let root = TempDir::new("portage-profile-test-cross-repo-named").keep();
         let main_repo = root.join("repo");
         let other_repo = root.join("otherrepo");
         let leaf = root.join("leaf-profile");
@@ -4402,7 +4396,7 @@ sync-uri = https://plain.example.org/amd64/
         // *alias* ("ovl") rather than its canonical name ("otherrepo").
         // Real `_expand_parent_colon` -> `get_location_for_name` is keyed
         // on aliases too, so `resolve_config` gets `repo_aliases`.
-        let root = std::env::temp_dir().join("portage-profile-test-cross-repo-alias");
+        let root = TempDir::new("portage-profile-test-cross-repo-alias").keep();
         let main_repo = root.join("repo");
         let other_repo = root.join("otherrepo");
         let leaf = root.join("leaf-profile");
@@ -4455,7 +4449,7 @@ sync-uri = https://plain.example.org/amd64/
 
     #[test]
     fn cross_repo_profile_parent_unknown_repo_name_is_a_clear_error() {
-        let root = std::env::temp_dir().join("portage-profile-test-cross-repo-unknown");
+        let root = TempDir::new("portage-profile-test-cross-repo-unknown").keep();
         let profile_dir = root.join("etc/portage");
         let leaf = root.join("leaf-profile");
         fs::create_dir_all(&profile_dir).unwrap();
@@ -4490,7 +4484,7 @@ sync-uri = https://plain.example.org/amd64/
         // necessarily the main repo (repo_containing's own longest-
         // prefix-match), so the leaf profile here lives inside the main
         // repo itself.
-        let root = std::env::temp_dir().join("portage-profile-test-same-repo-colon");
+        let root = TempDir::new("portage-profile-test-same-repo-colon").keep();
         let main_repo = root.join("repo");
         fs::create_dir_all(main_repo.join("profiles/leaf")).unwrap();
         fs::create_dir_all(main_repo.join("profiles/base")).unwrap();
@@ -4537,7 +4531,7 @@ sync-uri = https://plain.example.org/amd64/
         // `portage-2`). The `:base` line is then left literal, and
         // resolution fails trying to open `<leaf>/:base` -- proving the
         // gate actually gates.
-        let root = std::env::temp_dir().join("portage-profile-test-colon-no-portage2");
+        let root = TempDir::new("portage-profile-test-colon-no-portage2").keep();
         let main_repo = root.join("repo");
         fs::create_dir_all(main_repo.join("profiles/leaf")).unwrap();
         fs::create_dir_all(main_repo.join("profiles/base")).unwrap();
@@ -4566,7 +4560,7 @@ sync-uri = https://plain.example.org/amd64/
 
     #[test]
     fn same_repo_colon_profile_parent_outside_any_known_repo_is_a_clear_error() {
-        let root = std::env::temp_dir().join("portage-profile-test-same-repo-colon-outside");
+        let root = TempDir::new("portage-profile-test-same-repo-colon-outside").keep();
         let profile_dir = root.join("etc/portage");
         let leaf = root.join("leaf-profile");
         fs::create_dir_all(&profile_dir).unwrap();
@@ -4602,7 +4596,7 @@ sync-uri = https://plain.example.org/amd64/
         // mechanism is exactly what also protects a genuine cycle, so this
         // proves that mechanism doesn't accidentally block a legitimate
         // multi-path DAG from resolving at all).
-        let root = std::env::temp_dir().join("portage-profile-test-diamond");
+        let root = TempDir::new("portage-profile-test-diamond").keep();
         let profile_dir = root.join("etc/portage");
         fs::create_dir_all(&profile_dir).unwrap();
         for name in ["shared", "left", "right", "top"] {
@@ -4636,7 +4630,7 @@ sync-uri = https://plain.example.org/amd64/
 
     #[test]
     fn package_mask_unmask_accept_keywords_load_correctly() {
-        let root = std::env::temp_dir().join("portage-profile-test-package-star");
+        let root = TempDir::new("portage-profile-test-package-star").keep();
         let portage_dir = root.join("etc/portage");
         fs::create_dir_all(&portage_dir).unwrap();
 
@@ -4699,7 +4693,7 @@ sync-uri = https://plain.example.org/amd64/
         // each removed by a LATER source than the one that added them,
         // which only works if -atom removal spans all three sources, not
         // just within each file on its own.
-        let root = std::env::temp_dir().join("portage-profile-test-cross-source-mask");
+        let root = TempDir::new("portage-profile-test-cross-source-mask").keep();
         let repo = root.join("repo");
         let repo_profiles = repo.join("profiles");
         let portage_dir = root.join("etc/portage");
@@ -4756,7 +4750,7 @@ sync-uri = https://plain.example.org/amd64/
         // with a bare atom (no "::repo" part) -- resolve_config must
         // auto-scope it to "::overlay" via scope_repo_mask_lines, so it
         // never also masks a same-named package in the main repo.
-        let root = std::env::temp_dir().join("portage-profile-test-overlay-mask");
+        let root = TempDir::new("portage-profile-test-overlay-mask").keep();
         let repo = root.join("repo");
         let overlay = root.join("overlay");
         fs::create_dir_all(repo.join("profiles")).unwrap();
@@ -4764,7 +4758,7 @@ sync-uri = https://plain.example.org/amd64/
 
         fs::write(overlay.join("profiles/package.mask"), "dev-libs/a\n").unwrap();
 
-        let overlay_repos = [("overlay".to_string(), overlay.clone())];
+        let overlay_repos = [("overlay".to_string(), overlay.to_path_buf())];
         let config = resolve_config(
             &root,
             &repo,
@@ -4786,7 +4780,7 @@ sync-uri = https://plain.example.org/amd64/
         // which matches both against the same "::overlay"-suffixed
         // candidate string; this test only checks that resolve_config
         // itself scopes both sources consistently.
-        let root = std::env::temp_dir().join("portage-profile-test-overlay-mask-unmask");
+        let root = TempDir::new("portage-profile-test-overlay-mask-unmask").keep();
         let repo = root.join("repo");
         let overlay = root.join("overlay");
         fs::create_dir_all(repo.join("profiles")).unwrap();
@@ -4795,7 +4789,7 @@ sync-uri = https://plain.example.org/amd64/
         fs::write(overlay.join("profiles/package.mask"), "dev-libs/a\n").unwrap();
         fs::write(overlay.join("profiles/package.unmask"), "dev-libs/a\n").unwrap();
 
-        let overlay_repos = [("overlay".to_string(), overlay.clone())];
+        let overlay_repos = [("overlay".to_string(), overlay.to_path_buf())];
         let config = resolve_config(
             &root,
             &repo,
@@ -4823,7 +4817,7 @@ sync-uri = https://plain.example.org/amd64/
         // this function's own doc comment on that follow-up), even
         // though the overlay's own package.mask never mentions
         // "dev-libs/a" at all (only "b").
-        let root = std::env::temp_dir().join("portage-profile-test-overlay-masters-mask");
+        let root = TempDir::new("portage-profile-test-overlay-masters-mask").keep();
         let repo = root.join("repo");
         let overlay = root.join("overlay");
         fs::create_dir_all(repo.join("profiles")).unwrap();
@@ -4832,7 +4826,7 @@ sync-uri = https://plain.example.org/amd64/
         fs::write(repo.join("profiles/package.mask"), "dev-libs/a\n").unwrap();
         fs::write(overlay.join("profiles/package.mask"), "dev-libs/b\n").unwrap();
 
-        let overlay_repos = [("overlay".to_string(), overlay.clone())];
+        let overlay_repos = [("overlay".to_string(), overlay.to_path_buf())];
         let config = resolve_config(
             &root,
             &repo,
@@ -4861,7 +4855,7 @@ sync-uri = https://plain.example.org/amd64/
         // own repo-level scoping, see this function's own doc comment on
         // that follow-up), never *also* "::overlay"-scoped just because
         // the overlay implicitly masters the main repo.
-        let root = std::env::temp_dir().join("portage-profile-test-overlay-masters-unmask");
+        let root = TempDir::new("portage-profile-test-overlay-masters-unmask").keep();
         let repo = root.join("repo");
         let overlay = root.join("overlay");
         fs::create_dir_all(repo.join("profiles")).unwrap();
@@ -4869,7 +4863,7 @@ sync-uri = https://plain.example.org/amd64/
 
         fs::write(repo.join("profiles/package.unmask"), "dev-libs/a\n").unwrap();
 
-        let overlay_repos = [("overlay".to_string(), overlay.clone())];
+        let overlay_repos = [("overlay".to_string(), overlay.to_path_buf())];
         let config = resolve_config(
             &root,
             &repo,
@@ -4893,7 +4887,7 @@ sync-uri = https://plain.example.org/amd64/
         // "masters the main repo alone" default this crate always fell
         // back to before -- an explicit empty masters list means NO
         // package.mask inheritance at all, even from the main repo.
-        let root = std::env::temp_dir().join("portage-profile-test-explicit-masters-empty");
+        let root = TempDir::new("portage-profile-test-explicit-masters-empty").keep();
         let repo = root.join("repo");
         let overlay = root.join("overlay");
         fs::create_dir_all(repo.join("profiles")).unwrap();
@@ -4901,7 +4895,7 @@ sync-uri = https://plain.example.org/amd64/
 
         fs::write(repo.join("profiles/package.mask"), "dev-libs/a\n").unwrap();
 
-        let overlay_repos = [("overlay".to_string(), overlay.clone())];
+        let overlay_repos = [("overlay".to_string(), overlay.to_path_buf())];
         let repo_masters = HashMap::from([("overlay".to_string(), Vec::<PathBuf>::new())]);
         let config = resolve_config(
             &root,
@@ -4929,7 +4923,7 @@ sync-uri = https://plain.example.org/amd64/
         // A repo can explicitly declare a master other than the main
         // repo -- its own package.mask must be stacked in too, exactly
         // like the implicit main-repo case already is.
-        let root = std::env::temp_dir().join("portage-profile-test-explicit-masters-chain");
+        let root = TempDir::new("portage-profile-test-explicit-masters-chain").keep();
         let repo = root.join("repo");
         let overlay = root.join("overlay");
         let downstream = root.join("downstream");
@@ -4943,10 +4937,10 @@ sync-uri = https://plain.example.org/amd64/
         fs::write(overlay.join("profiles/package.mask"), "dev-libs/b\n").unwrap();
 
         let overlay_repos = [
-            ("overlay".to_string(), overlay.clone()),
+            ("overlay".to_string(), overlay.to_path_buf()),
             ("downstream".to_string(), downstream.clone()),
         ];
-        let repo_masters = HashMap::from([("downstream".to_string(), vec![overlay.clone()])]);
+        let repo_masters = HashMap::from([("downstream".to_string(), vec![overlay.to_path_buf()])]);
         let config = resolve_config(
             &root,
             &repo,
@@ -4977,7 +4971,7 @@ sync-uri = https://plain.example.org/amd64/
         // scope_repo_package_use_lines, the same way package.mask's own
         // overlay entries are scoped, so it never also applies to a
         // same-named package in the main repo.
-        let root = std::env::temp_dir().join("portage-profile-test-overlay-package-use");
+        let root = TempDir::new("portage-profile-test-overlay-package-use").keep();
         let repo = root.join("repo");
         let overlay = root.join("overlay");
         fs::create_dir_all(repo.join("profiles")).unwrap();
@@ -4985,7 +4979,7 @@ sync-uri = https://plain.example.org/amd64/
 
         fs::write(overlay.join("profiles/package.use"), "dev-libs/a flag\n").unwrap();
 
-        let overlay_repos = [("overlay".to_string(), overlay.clone())];
+        let overlay_repos = [("overlay".to_string(), overlay.to_path_buf())];
         let config = resolve_config(
             &root,
             &repo,
@@ -5010,7 +5004,7 @@ sync-uri = https://plain.example.org/amd64/
         // main repo's entry for "dev-libs/a" stays unscoped (applies
         // everywhere) and the overlay's own entry for "dev-libs/b" gets
         // "::overlay"-scoped, with no cross-stacking between the two.
-        let root = std::env::temp_dir().join("portage-profile-test-overlay-package-use-mask-force");
+        let root = TempDir::new("portage-profile-test-overlay-package-use-mask-force").keep();
         let repo = root.join("repo");
         let overlay = root.join("overlay");
         fs::create_dir_all(repo.join("profiles")).unwrap();
@@ -5033,7 +5027,7 @@ sync-uri = https://plain.example.org/amd64/
         )
         .unwrap();
 
-        let overlay_repos = [("overlay".to_string(), overlay.clone())];
+        let overlay_repos = [("overlay".to_string(), overlay.to_path_buf())];
         let config = resolve_config(
             &root,
             &repo,
@@ -5068,7 +5062,7 @@ sync-uri = https://plain.example.org/amd64/
         // Mirrors overlay_package_use_mask_and_force_are_scoped_with_no_masters_merge
         // exactly, for the .stable. variant.
         let root =
-            std::env::temp_dir().join("portage-profile-test-overlay-package-use-stable-mask-force");
+            TempDir::new("portage-profile-test-overlay-package-use-stable-mask-force").keep();
         let repo = root.join("repo");
         let overlay = root.join("overlay");
         fs::create_dir_all(repo.join("profiles")).unwrap();
@@ -5095,7 +5089,7 @@ sync-uri = https://plain.example.org/amd64/
         )
         .unwrap();
 
-        let overlay_repos = [("overlay".to_string(), overlay.clone())];
+        let overlay_repos = [("overlay".to_string(), overlay.to_path_buf())];
         let config = resolve_config(
             &root,
             &repo,
@@ -5135,7 +5129,7 @@ sync-uri = https://plain.example.org/amd64/
         // within one file), and adds "*dev-libs/b".
         // Final @system list: just "dev-libs/b" -- "a" was added then
         // removed, "hint" was never eligible in the first place.
-        let root = std::env::temp_dir().join("portage-profile-test-system-packages");
+        let root = TempDir::new("portage-profile-test-system-packages").keep();
         let repo = root.join("repo");
         let repo_profiles = repo.join("profiles");
         let base = repo_profiles.join("base");
@@ -5170,7 +5164,7 @@ sync-uri = https://plain.example.org/amd64/
         //        "dev-libs/leafonly" + "*dev-libs/sysleaf"
         // @profile: ["dev-libs/leafonly"] (baseonly removed)
         // @system:  ["dev-libs/sysbase", "dev-libs/sysleaf"]
-        let root = std::env::temp_dir().join("portage-profile-test-profile-packages");
+        let root = TempDir::new("portage-profile-test-profile-packages").keep();
         let repo = root.join("repo");
         let base = repo.join("profiles/base");
         let leaf = repo.join("profiles/leaf");
@@ -5222,7 +5216,7 @@ sync-uri = https://plain.example.org/amd64/
         // portage-2` without `profile-set`, so nothing is an @profile
         // source and the whole `packages` file stays @system-only (real
         // `ProfilePackageSet.load`'s own gate). @system is unaffected.
-        let root = std::env::temp_dir().join("portage-profile-test-no-profile-set");
+        let root = TempDir::new("portage-profile-test-no-profile-set").keep();
         let repo = root.join("repo");
         let base = repo.join("profiles/base");
         let leaf = repo.join("profiles/leaf");
@@ -5267,7 +5261,7 @@ sync-uri = https://plain.example.org/amd64/
         // leaf (parent -> base): removes b, adds dev-libs/c-1.0.
         // user (/etc/portage/profile/package.provided): removes a.
         // Final: just dev-libs/c-1.0.
-        let root = std::env::temp_dir().join("portage-profile-test-package-provided");
+        let root = TempDir::new("portage-profile-test-package-provided").keep();
         let repo = root.join("repo");
         let base = repo.join("profiles/base");
         let leaf = root.join("leaf-profile");
@@ -5319,7 +5313,7 @@ sync-uri = https://plain.example.org/amd64/
         // `portage-repo`'s own `effective_use_flags` applies
         // `use_force`/`use_mask` at that later, correct position
         // instead.
-        let root = std::env::temp_dir().join("portage-profile-test-use-mask-force");
+        let root = TempDir::new("portage-profile-test-use-mask-force").keep();
         let repo = root.join("repo");
         let repo_profiles = repo.join("profiles");
         let base = repo_profiles.join("base");
@@ -5362,7 +5356,7 @@ sync-uri = https://plain.example.org/amd64/
         // adds "arm64" -- proving the same chain-order, "-entry"-removal
         // stacking use.mask/use.force already get (real config.py's own
         // stack_lists(archlist, incremental=1)).
-        let root = std::env::temp_dir().join("portage-profile-test-archlist");
+        let root = TempDir::new("portage-profile-test-archlist").keep();
         let repo = root.join("repo");
         let repo_profiles = repo.join("profiles");
         let base = repo_profiles.join("base");
@@ -5404,7 +5398,7 @@ sync-uri = https://plain.example.org/amd64/
         // a *different* seed (a package's own IUSE defaults) instead of
         // just union-ing the pre-flattened use_flags on top, which could
         // never let "-foo" cancel an IUSE "+foo" default.
-        let root = std::env::temp_dir().join("portage-profile-test-use-tokens");
+        let root = TempDir::new("portage-profile-test-use-tokens").keep();
         let repo = root.join("repo");
         let repo_profiles = repo.join("profiles");
         let base = repo_profiles.join("base");
@@ -5446,7 +5440,7 @@ sync-uri = https://plain.example.org/amd64/
         // up recognized) and PYTHON_TARGETS="python3_11". Each variable's
         // own value is set at only one level, proving expansion works
         // regardless of which level actually declared USE_EXPAND for it.
-        let root = std::env::temp_dir().join("portage-profile-test-use-expand-names-stack");
+        let root = TempDir::new("portage-profile-test-use-expand-names-stack").keep();
         let repo = root.join("repo");
         let repo_profiles = repo.join("profiles");
         let base = repo_profiles.join("base");
@@ -5493,7 +5487,7 @@ sync-uri = https://plain.example.org/amd64/
         // "+" stripped, not baked into the flag name), "-nvidia" then
         // removes the flag "nvidia" itself already added earlier in the
         // very same value list -- final: only video_cards_intel remains.
-        let root = std::env::temp_dir().join("portage-profile-test-use-expand-negation");
+        let root = TempDir::new("portage-profile-test-use-expand-negation").keep();
         let repo = root.join("repo");
         let repo_profiles = repo.join("profiles");
         let base = repo_profiles.join("base");
@@ -5528,7 +5522,7 @@ sync-uri = https://plain.example.org/amd64/
         // and it is NOT also folded into the high-priority conf tier
         // (real skips configdict["defaults"] in its own re-fold, 2964).
         // The neovim `^^ ( lua_single_target_* )` case in miniature.
-        let root = std::env::temp_dir().join("portage-profile-test-use-expand-per-level-fold");
+        let root = TempDir::new("portage-profile-test-use-expand-per-level-fold").keep();
         let repo = root.join("repo");
         let base = repo.join("profiles/base");
         fs::create_dir_all(&base).unwrap();
@@ -5586,7 +5580,7 @@ sync-uri = https://plain.example.org/amd64/
         // into that level's USE (2853-2866), and USE is incremental -- so
         // the later level does NOT wipe `dummy`; the union stands. A
         // genuine `-video_cards_*` in a later level still cancels.
-        let root = std::env::temp_dir().join("portage-profile-test-use-expand-two-level-stack");
+        let root = TempDir::new("portage-profile-test-use-expand-two-level-stack").keep();
         let repo = root.join("repo");
         let base = repo.join("profiles/base");
         let leaf = root.join("leaf-profile");
@@ -5631,7 +5625,7 @@ sync-uri = https://plain.example.org/amd64/
         // `-video_cards_*`, which apply_incremental treated as an exact
         // removal of a flag literally named `video_cards_*` -- a no-op --
         // so the parent's cards survived.
-        let root = std::env::temp_dir().join("portage-profile-test-use-expand-prefix-wildcard");
+        let root = TempDir::new("portage-profile-test-use-expand-prefix-wildcard").keep();
         let repo = root.join("repo");
         let base = repo.join("profiles/base");
         let leaf = root.join("leaf-profile");
@@ -5669,7 +5663,7 @@ sync-uri = https://plain.example.org/amd64/
         // NOT "arch_amd64" -- the defining difference from an ordinary
         // USE_EXPAND variable, which use_expand_variable_names_stack_
         // incrementally_across_profile_levels above already covers.
-        let root = std::env::temp_dir().join("portage-profile-test-use-expand-unprefixed");
+        let root = TempDir::new("portage-profile-test-use-expand-unprefixed").keep();
         let repo = root.join("repo");
         let repo_profiles = repo.join("profiles");
         let base = repo_profiles.join("base");
@@ -5706,7 +5700,7 @@ sync-uri = https://plain.example.org/amd64/
         // for an unprefixed one: "foo" adds, "+bar" adds ("+" stripped),
         // "-foo" then removes "foo" itself, added earlier in the same
         // value list -- final: only "bar" remains, no prefix on either.
-        let root = std::env::temp_dir().join("portage-profile-test-use-expand-unprefixed-negation");
+        let root = TempDir::new("portage-profile-test-use-expand-unprefixed-negation").keep();
         let repo = root.join("repo");
         let repo_profiles = repo.join("profiles");
         let base = repo_profiles.join("base");
@@ -5740,7 +5734,7 @@ sync-uri = https://plain.example.org/amd64/
         // source at all (only portuale's existing repo/profiles/package.mask
         // convention would exist if there were one, and this test
         // deliberately never creates that file).
-        let root = std::env::temp_dir().join("portage-profile-test-accept-keywords-stack");
+        let root = TempDir::new("portage-profile-test-accept-keywords-stack").keep();
         let repo = root.join("repo");
         let portage_dir = root.join("etc/portage");
         let leaf = root.join("leaf-profile");
@@ -5782,7 +5776,7 @@ sync-uri = https://plain.example.org/amd64/
         // ACCEPT_KEYWORDS -- here just "amd64", so "dev-libs/foo" gets
         // an implicit "~amd64", the same as if the user had written
         // "dev-libs/foo ~amd64" themselves.
-        let root = std::env::temp_dir().join("portage-profile-test-accept-keywords-defaults");
+        let root = TempDir::new("portage-profile-test-accept-keywords-defaults").keep();
         let repo = root.join("repo");
         let leaf = root.join("leaf-profile");
         fs::create_dir_all(&leaf).unwrap();
@@ -5815,8 +5809,7 @@ sync-uri = https://plain.example.org/amd64/
         // ACCEPT_KEYWORDS tokens (keyword[:1] not in "~-") -- an
         // already-"~"-prefixed or "-"-prefixed global token is excluded
         // entirely, not doubly-prefixed or left bare.
-        let root =
-            std::env::temp_dir().join("portage-profile-test-accept-keywords-defaults-filter");
+        let root = TempDir::new("portage-profile-test-accept-keywords-defaults-filter").keep();
         let repo = root.join("repo");
         let leaf = root.join("leaf-profile");
         fs::create_dir_all(&leaf).unwrap();
@@ -5855,7 +5848,7 @@ sync-uri = https://plain.example.org/amd64/
         // slice), proving no source is silently dropped and no `-atom`
         // removal happens anywhere (package.use is purely additive,
         // unlike package.mask).
-        let root = std::env::temp_dir().join("portage-profile-test-package-use-stack");
+        let root = TempDir::new("portage-profile-test-package-use-stack").keep();
         let repo = root.join("repo");
         let repo_profiles = repo.join("profiles");
         let portage_dir = root.join("etc/portage");
@@ -5913,7 +5906,7 @@ sync-uri = https://plain.example.org/amd64/
         // the env layer's incremental (ACCEPT_KEYWORDS, USE), last-wins
         // (a USE_EXPAND value + a plain scalar) and USE_EXPAND-name paths
         // are all exercised.
-        let root = std::env::temp_dir().join("portage-profile-test-env-layer");
+        let root = TempDir::new("portage-profile-test-env-layer").keep();
         let repo = root.join("repo");
         let prof = repo.join("profiles/default");
         let portage_dir = root.join("etc/portage");
@@ -5973,7 +5966,7 @@ sync-uri = https://plain.example.org/amd64/
         // (real `config.regenerate()`'s `env` `USE_ORDER` layer on top of
         // the file stack). The scratch root carries no `make.globals`
         // (the fixture shape), so the file side is `make.conf` here.
-        let root = std::env::temp_dir().join("portage-profile-test-binpkg-format");
+        let root = TempDir::new("portage-profile-test-binpkg-format").keep();
         let repo = root.join("repo");
         let prof = repo.join("profiles/default");
         let portage_dir = root.join("etc/portage");
@@ -6038,7 +6031,7 @@ sync-uri = https://plain.example.org/amd64/
         // `config.py:2735-2736`) -- like `FEATURES`, not last-wins.
         // `emerge --info`'s `settings.get(k)` then prints the stacked,
         // sorted union.
-        let root = std::env::temp_dir().join("portage-profile-test-info-incrementals");
+        let root = TempDir::new("portage-profile-test-info-incrementals").keep();
         let repo = root.join("repo");
         let prof = repo.join("profiles/default");
         let portage_dir = root.join("etc/portage");
@@ -6113,7 +6106,7 @@ sync-uri = https://plain.example.org/amd64/
         // USER package.use is popped out of the per-package dict and
         // stacked onto the global USE like make.conf USE= would --
         // USE_EXPAND-prefix shorthand included.
-        let root = std::env::temp_dir().join("portage-profile-test-global-puse");
+        let root = TempDir::new("portage-profile-test-global-puse").keep();
         let repo = root.join("repo");
         let prof = repo.join("profiles/default");
         let portage_dir = root.join("etc/portage/package.use");
@@ -6151,7 +6144,7 @@ sync-uri = https://plain.example.org/amd64/
 
     #[test]
     fn profile_use_layers_are_built_one_per_chain_level() {
-        let root = std::env::temp_dir().join("portage-profile-test-profile-use-layers");
+        let root = TempDir::new("portage-profile-test-profile-use-layers").keep();
         let repo = root.join("repo");
         let base = repo.join("profiles/base");
         let leaf = repo.join("profiles/leaf");
@@ -6193,7 +6186,7 @@ sync-uri = https://plain.example.org/amd64/
 
     #[test]
     fn repo_make_defaults_use_is_read_per_repo_with_var_expansion() {
-        let root = std::env::temp_dir().join("portage-profile-test-repo-make-defaults");
+        let root = TempDir::new("portage-profile-test-repo-make-defaults").keep();
         let repo = root.join("repo");
         let overlay = root.join("overlay");
         let prof = repo.join("profiles/default");
@@ -6226,7 +6219,7 @@ sync-uri = https://plain.example.org/amd64/
         let config = resolve_config(
             &root,
             &repo,
-            &[("myoverlay".to_string(), overlay.clone())],
+            &[("myoverlay".to_string(), overlay.to_path_buf())],
             &[],
             "testrepo",
             &HashMap::new(),
@@ -6247,7 +6240,7 @@ sync-uri = https://plain.example.org/amd64/
 
     #[test]
     fn envd_use_tokens_are_read_from_profile_env() {
-        let root = std::env::temp_dir().join("portage-profile-test-envd");
+        let root = TempDir::new("portage-profile-test-envd").keep();
         let repo = root.join("repo");
         let etc = root.join("etc");
         fs::create_dir_all(repo.join("profiles")).unwrap();
@@ -6279,7 +6272,7 @@ sync-uri = https://plain.example.org/amd64/
 
     #[test]
     fn package_env_resolves_env_file_use_including_source_and_missing_files() {
-        let root = std::env::temp_dir().join("portage-profile-test-package-env");
+        let root = TempDir::new("portage-profile-test-package-env").keep();
         let repo = root.join("repo");
         let portage_dir = root.join("etc/portage");
         let env_dir = portage_dir.join("env");
@@ -6351,7 +6344,7 @@ sync-uri = https://plain.example.org/amd64/
         // the same file's own earlier line, and `ACROSS` chained from an
         // earlier file of the same entry. The scalar half expands the
         // same way.
-        let root = std::env::temp_dir().join("portage-profile-test-package-env-expand");
+        let root = TempDir::new("portage-profile-test-package-env-expand").keep();
         let repo = root.join("repo");
         let portage_dir = root.join("etc/portage");
         let env_dir = portage_dir.join("env");
@@ -6402,7 +6395,7 @@ sync-uri = https://plain.example.org/amd64/
         // "nvidia"/"intel" get the video_cards_ prefix (negation kept
         // outside it), "plainflag" (before the "VIDEO_CARDS:" marker)
         // does not.
-        let root = std::env::temp_dir().join("portage-profile-test-package-use-expand-shorthand");
+        let root = TempDir::new("portage-profile-test-package-use-expand-shorthand").keep();
         let repo = root.join("repo");
         let portage_dir = root.join("etc/portage");
         fs::create_dir_all(repo.join("profiles")).unwrap();
@@ -6433,7 +6426,7 @@ sync-uri = https://plain.example.org/amd64/
     fn package_use_expand_shorthand_resets_at_the_start_of_each_line() {
         // Two lines for the SAME atom: the first sets a shorthand prefix
         // that must not leak into the second line's own tokens.
-        let root = std::env::temp_dir().join("portage-profile-test-package-use-expand-reset");
+        let root = TempDir::new("portage-profile-test-package-use-expand-reset").keep();
         let repo = root.join("repo");
         let portage_dir = root.join("etc/portage");
         fs::create_dir_all(repo.join("profiles")).unwrap();
@@ -6465,7 +6458,7 @@ sync-uri = https://plain.example.org/amd64/
         // package.use file is genuine real behavior's own literal,
         // unexpanded token -- real portage's shorthand support is
         // user-only (see parse_package_use_lines's own doc comment).
-        let root = std::env::temp_dir().join("portage-profile-test-package-use-expand-user-only");
+        let root = TempDir::new("portage-profile-test-package-use-expand-user-only").keep();
         let repo = root.join("repo");
         let repo_profiles = repo.join("profiles");
         fs::create_dir_all(&repo_profiles).unwrap();
@@ -6496,7 +6489,7 @@ sync-uri = https://plain.example.org/amd64/
         // completely ignored -- real portage has no such source at all
         // (confirmed by reading UseManager.__init__'s own file/variable
         // table), unlike package.use itself.
-        let root = std::env::temp_dir().join("portage-profile-test-package-use-mask-force");
+        let root = TempDir::new("portage-profile-test-package-use-mask-force").keep();
         let repo = root.join("repo");
         let repo_profiles = repo.join("profiles");
         let portage_dir = root.join("etc/portage");
@@ -6547,7 +6540,7 @@ sync-uri = https://plain.example.org/amd64/
         // deliberately never folded into use_flags itself (see
         // use_stable_force's own doc comment: stability is per-candidate,
         // so portage-repo applies these conditionally instead).
-        let root = std::env::temp_dir().join("portage-profile-test-use-stable-mask-force");
+        let root = TempDir::new("portage-profile-test-use-stable-mask-force").keep();
         let repo = root.join("repo");
         let leaf = root.join("leaf-profile");
         fs::create_dir_all(repo.join("profiles")).unwrap();
@@ -6584,7 +6577,7 @@ sync-uri = https://plain.example.org/amd64/
         // profile-level entry for "b", a deliberately-written user-level
         // file completely ignored (no such source exists in real
         // portage).
-        let root = std::env::temp_dir().join("portage-profile-test-package-use-stable-mask-force");
+        let root = TempDir::new("portage-profile-test-package-use-stable-mask-force").keep();
         let repo = root.join("repo");
         let repo_profiles = repo.join("profiles");
         let portage_dir = root.join("etc/portage");
@@ -6641,7 +6634,7 @@ sync-uri = https://plain.example.org/amd64/
 
     #[test]
     fn package_use_loads_tokens_and_skips_bare_atom_lines() {
-        let root = std::env::temp_dir().join("portage-profile-test-package-use");
+        let root = TempDir::new("portage-profile-test-package-use").keep();
         let portage_dir = root.join("etc/portage");
         fs::create_dir_all(&portage_dir).unwrap();
         fs::write(

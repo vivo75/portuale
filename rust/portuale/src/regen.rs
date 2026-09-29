@@ -705,6 +705,7 @@ fn eclasses_field(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use portage_util::TempDir;
     use std::collections::VecDeque;
 
     fn work_item(category: &str, pf: &str) -> RegenWorkItem {
@@ -815,8 +816,7 @@ mod tests {
     /// `_eclasses_` instead).
     #[test]
     fn render_entry_writes_the_eclass_shape_of_each_rung() {
-        let dir =
-            std::env::temp_dir().join(format!("portuale-regen-render-{}", std::process::id()));
+        let dir = TempDir::new("portuale-regen-render").keep();
         let _ = std::fs::remove_dir_all(&dir);
         let repo = dir.join("repo");
         let ebuild = repo.join("dev-libs/pkg/pkg-1.0.ebuild");

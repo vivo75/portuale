@@ -1074,6 +1074,7 @@ pub fn verify_digests_reader<R: std::io::Read>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use portage_util::TempDir;
     use std::fs;
 
     /// Serialises stub-script creation against every stub spawn across
@@ -1120,15 +1121,7 @@ mod tests {
         // shared dir would still break the tests' file assertions.)
         static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!(
-            "portage_fetch_test_{}_{}_{}",
-            std::process::id(),
-            n,
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = TempDir::new(&format!("portage_fetch_test_{}_{}", std::process::id(), n)).keep();
         fs::create_dir_all(&dir).unwrap();
         dir
     }

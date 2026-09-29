@@ -2553,21 +2553,15 @@ fn run_build_scheduler(
 mod tests {
     use super::*;
     use portage_repo::find_repos;
+    use portage_util::TempDir;
     use std::fs;
 
     fn fixtures_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
     }
 
-    fn tempdir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "emerge_build_test_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+    fn tempdir() -> std::path::PathBuf {
+        let dir = TempDir::new("emerge_build_test").keep();
         fs::create_dir_all(&dir).unwrap();
         dir
     }

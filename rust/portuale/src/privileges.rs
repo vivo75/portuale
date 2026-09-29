@@ -73,18 +73,10 @@ pub fn deny_superuser(prog: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use portage_util::TempDir;
 
     fn tempdir() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "portuale-privileges-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+        TempDir::new("portuale-privileges-test").keep()
     }
 
     #[test]

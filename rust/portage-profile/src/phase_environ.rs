@@ -513,6 +513,7 @@ pub fn phase_environ_pkg(config: &Config, pkg: Option<PhaseUse<'_>>) -> Vec<(Str
 mod tests {
     use super::*;
     use crate::{TEST_ENV_OVERRIDE, resolve_config};
+    use portage_util::TempDir;
     use std::collections::HashMap;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -538,8 +539,8 @@ mod tests {
     /// would get from there is seeded in `make.conf` explicitly, the
     /// #37 plan's trap §7.5). Mirrors the real `arch/amd64/make.defaults`
     /// + `base/make.defaults` lines the S0 oracle env came from.
-    fn synthetic_root(name: &str, make_conf: &str) -> (PathBuf, PathBuf) {
-        let root = std::env::temp_dir().join(format!("portage-profile-phase-environ-{name}"));
+    fn synthetic_root(name: &str, make_conf: &str) -> (std::path::PathBuf, PathBuf) {
+        let root = TempDir::new(&format!("portage-profile-phase-environ-{name}")).keep();
         let _ = fs::remove_dir_all(&root);
         let repo = root.join("repo");
         let prof = repo.join("profiles/default");

@@ -3881,6 +3881,7 @@ fn schedule_graph(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use portage_util::TempDir;
 
     #[test]
     fn mo_sel_trace_line_pins_the_harness_format() {
@@ -6091,15 +6092,7 @@ mod tests {
     type VdbEntry<'a> = (&'a str, &'a str, &'a [VdbFile<'a>]);
 
     fn mo_tmp_vdb(tag: &str, entries: &[VdbEntry<'_>]) -> std::path::PathBuf {
-        let root = std::env::temp_dir().join(format!(
-            "portuale-mo-vdb-{}-{}-{}",
-            std::process::id(),
-            tag,
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
+        let root = TempDir::new(&format!("portuale-mo-vdb-{}-{}", std::process::id(), tag)).keep();
         for (cat, pf, files) in entries {
             let dir = root.join("var/db/pkg").join(cat).join(pf);
             std::fs::create_dir_all(&dir).unwrap();

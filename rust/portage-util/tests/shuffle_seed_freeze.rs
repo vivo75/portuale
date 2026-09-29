@@ -11,7 +11,7 @@
 
 use std::path::Path;
 
-use portage_util::{read_dir_entries, shuffle_seed};
+use portage_util::{TempDir, read_dir_entries, shuffle_seed};
 
 fn names(dir: &Path) -> Vec<String> {
     read_dir_entries(dir)
@@ -29,8 +29,7 @@ fn shuffle_seed_is_frozen_at_first_use_and_still_shuffles() {
 
     assert_eq!(shuffle_seed(), Some(7), "first use reads the variable");
 
-    let dir = std::env::temp_dir().join(format!("portage-util-freeze-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = TempDir::new("portage-util-freeze").keep();
     for name in ["g", "a", "h", "c", "b", "f", "d", "e"] {
         std::fs::write(dir.join(name), b"").unwrap();
     }

@@ -1233,6 +1233,7 @@ fn resolve_resolvo(req: &ResolveRequest) -> Result<GraphResult, String> {
 #[cfg(test)]
 mod tests {
     use super::super::{SolverKind, active_resolver_for};
+    use portage_util::TempDir;
 
     #[test]
     fn solver_kind_parses_the_three_accepted_values() {
@@ -1276,7 +1277,7 @@ mod tests {
         let mut config = portage_profile::Config::default();
         config.accept_keywords.insert("amd64".to_string());
         ResolveRequest {
-            config_root: root.clone(),
+            config_root: root.to_path_buf(),
             root,
             atoms: atoms.iter().map(|s| s.to_string()).collect(),
             config,
@@ -1511,14 +1512,7 @@ mod tests {
     #[test]
     fn bridge_plans_schedule_stale_equals_consumer_reinstalls() {
         use std::io::Write as _;
-        let dir = std::env::temp_dir().join(format!(
-            "portage-bridge-slotop-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = TempDir::new("portage-bridge-slotop").keep();
         let _ = std::fs::remove_dir_all(&dir);
         let mk = |name: &str, files: &[(&str, &str)]| {
             let d = dir.join("var/db/pkg/dev-libs").join(name);
@@ -1555,7 +1549,7 @@ mod tests {
             ],
         );
         let mut req = fixture_request(&["dev-libs/slotbindtarget"]);
-        req.root = dir.clone();
+        req.root = dir.to_path_buf();
         req.solver = super::super::SolverKind::PubGrub;
         req.rebuild_if_new_slot = true;
         req.config.complete_seed_atoms = vec![

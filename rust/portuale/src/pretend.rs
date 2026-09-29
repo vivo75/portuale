@@ -13132,7 +13132,7 @@ pub fn run(args: &[String]) -> ExitCode {
         // this is the one production call site that carries `--solver=`.
         let req = ResolveRequest {
             config_root: config_root.clone(),
-            root: root.clone(),
+            root: root.to_path_buf(),
             atoms: expanded_atoms.clone(),
             config: cfg.into_owned(),
             newuse,
@@ -15635,6 +15635,7 @@ pub fn run(args: &[String]) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use portage_util::TempDir;
 
     fn fixtures_root() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
@@ -15651,14 +15652,7 @@ mod tests {
         // skippable) yet still records the memo -- so neither case needs
         // the host binary.
         fn scratch_info_root(tag: &str) -> (std::path::PathBuf, String) {
-            let root = std::env::temp_dir().join(format!(
-                "unmerge_info_wiring_{tag}_{}_{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos()
-            ));
+            let root = TempDir::new(&format!("unmerge_info_wiring_{tag}")).keep();
             std::fs::create_dir_all(root.join("etc/env.d")).unwrap();
             std::fs::write(
                 root.join("etc/env.d/50-test"),
@@ -15896,10 +15890,7 @@ mod tests {
         // matches nothing installed) lands in neither; a repo without a
         // `metadata/news` dir evaluates to `None` (nothing pending).
         use mrg_director::NewsSelector;
-        let base = std::env::temp_dir().join(format!(
-            "pretend-test-{}-filesystem_news",
-            std::process::id()
-        ));
+        let base = TempDir::new("pretend-test-filesystem_news").keep();
         let _ = std::fs::remove_dir_all(&base);
         let repo = base.join("repo");
         let root = base.join("root");
@@ -15969,10 +15960,7 @@ mod tests {
         // for real and 34 for portuale on `default/linux/amd64/23.0/
         // systemd`; the 19 extras were all profile/keyword-restricted
         // to other profiles and arches.
-        let root = std::env::temp_dir().join(format!(
-            "pretend-test-{}-news_restrictions",
-            std::process::id()
-        ));
+        let root = TempDir::new("pretend-test-news_restrictions").keep();
         let context = NewsContext {
             profile: Some("default/linux/amd64/23.0/systemd".to_string()),
             ..test_news_context()
@@ -16084,8 +16072,7 @@ mod tests {
         // an unusable state directory returns before the news dir is
         // read, and `getUnreadItems` counts `.unread` as it stands --
         // `grabfile`, so comment lines and trailing comments drop out.
-        let base =
-            std::env::temp_dir().join(format!("pretend-test-{}-news_gates", std::process::id()));
+        let base = TempDir::new("pretend-test-news_gates").keep();
         let _ = std::fs::remove_dir_all(&base);
         let root = base.join("root");
         let repo = portage_repo::RepoConfig {
@@ -16157,8 +16144,7 @@ mod tests {
         // OR'd onto whatever the umask left. The l3 probe showed real's
         // files at 0664 and portuale's at 0644.
         use std::os::unix::fs::PermissionsExt;
-        let base =
-            std::env::temp_dir().join(format!("pretend-test-{}-news_perms", std::process::id()));
+        let base = TempDir::new("pretend-test-news_perms").keep();
         let _ = std::fs::remove_dir_all(&base);
         let dir = base.join("var/lib/gentoo/news");
         let context = test_news_context();
@@ -16207,8 +16193,7 @@ mod tests {
         // tests -- nothing is ever written into the git-tracked
         // fixtures tree itself.
         let fixtures = fixtures_root();
-        let base =
-            std::env::temp_dir().join(format!("pretend-test-{}-news_counts", std::process::id()));
+        let base = TempDir::new("pretend-test-news_counts").keep();
         let _ = std::fs::remove_dir_all(&base);
         let root = base.join("root");
         std::fs::create_dir_all(root.join("var/lib")).unwrap();
@@ -16275,10 +16260,7 @@ mod tests {
         portage_profile::Config,
     ) {
         let fixtures = fixtures_root();
-        let base = std::env::temp_dir().join(format!(
-            "pretend-test-{}-news_notice_{tag}",
-            std::process::id()
-        ));
+        let base = TempDir::new(&format!("pretend-test-news_notice_{tag}")).keep();
         let _ = std::fs::remove_dir_all(&base);
         let root = base.join("root");
         std::fs::create_dir_all(root.join("var/lib")).unwrap();
@@ -16396,14 +16378,7 @@ mod tests {
     /// `--resume --skipfirst` empties it and takes the "nothing to do"
     /// exit without merging anything (fast, hermetic).
     fn single_resume_root(tag: &str) -> std::path::PathBuf {
-        let root = std::env::temp_dir().join(format!(
-            "resume_single_{tag}_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let root = TempDir::new(&format!("resume_single_{tag}")).keep();
         crate::mtimedb::write_resume_list(
             &root,
             &["dev-libs/stale-a"],
@@ -16462,15 +16437,7 @@ mod tests {
         // isolated ROOT; no merge runs.
         let portuale_bin = built_portuale_bin();
         let (root, _) = stale_resume_root("news_pretend");
-        let tmp = std::env::temp_dir().join(format!(
-            "resume_news_pretend_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&tmp).unwrap();
+        let tmp = TempDir::new("resume_news_pretend").keep();
         let output = std::process::Command::new(&portuale_bin)
             .args(["emerge", "--resume", "--pretend"])
             .stdin(std::process::Stdio::null())
@@ -16507,15 +16474,7 @@ mod tests {
         // stale list, no merge runs.
         let portuale_bin = built_portuale_bin();
         let root = single_resume_root("news_empty");
-        let tmp = std::env::temp_dir().join(format!(
-            "resume_news_empty_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&tmp).unwrap();
+        let tmp = TempDir::new("resume_news_empty").keep();
         let output = std::process::Command::new(&portuale_bin)
             .args(["emerge", "--resume", "--skipfirst"])
             .stdin(std::process::Stdio::null())
@@ -16547,15 +16506,7 @@ mod tests {
     #[cfg(unix)]
     fn eselect_stub(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
         use std::os::unix::fs::PermissionsExt;
-        let dir = std::env::temp_dir().join(format!(
-            "eselect_stub_{tag}_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new(&format!("eselect_stub_{tag}")).keep();
         let marker = dir.join("eselect.log");
         std::fs::write(
             dir.join("eselect"),
@@ -16587,14 +16538,7 @@ mod tests {
         // marker survives the cleanup below for the assertion.
         use std::io::Write;
         let portuale_bin = built_portuale_bin();
-        let base = std::env::temp_dir().join(format!(
-            "ask_read_news_yes_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let base = TempDir::new("ask_read_news_yes").keep();
         let root = base.join("root");
         std::fs::create_dir_all(&root).unwrap();
         let mut env = news_resolve_env(&root, &base.join("pt"));
@@ -16616,7 +16560,7 @@ mod tests {
             .expect("portuale emerge spawns");
         master.write_all(b"Yes\n").expect("answer the news prompt");
         master.write_all(b"No\n").expect("decline the merge prompt");
-        let output = child.wait_with_output().expect("wait for emerge");
+        let output = wait_pty_output(child);
         drop(master);
         assert_eq!(
             output.status.code(),
@@ -16661,14 +16605,7 @@ mod tests {
             stubdir.display(),
             std::env::var("PATH").unwrap_or_default()
         );
-        let base = std::env::temp_dir().join(format!(
-            "ask_read_news_no_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let base = TempDir::new("ask_read_news_no").keep();
         let root = base.join("root");
         std::fs::create_dir_all(&root).unwrap();
         let mut env = news_resolve_env(&root, &base.join("pt"));
@@ -16690,7 +16627,7 @@ mod tests {
             .expect("portuale emerge spawns");
         master.write_all(b"No\n").expect("decline the news prompt");
         master.write_all(b"No\n").expect("decline the merge prompt");
-        let output = child.wait_with_output().expect("wait for emerge");
+        let output = wait_pty_output(child);
         drop(master);
         assert_eq!(
             output.status.code(),
@@ -16738,14 +16675,7 @@ mod tests {
         // exited 130 at the later merge prompt.
         use std::io::Write;
         let portuale_bin = built_portuale_bin();
-        let base = std::env::temp_dir().join(format!(
-            "ask_read_news_eof_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let base = TempDir::new("ask_read_news_eof").keep();
         let root = base.join("root");
         std::fs::create_dir_all(&root).unwrap();
         let env = news_resolve_env(&root, &base.join("pt"));
@@ -16769,7 +16699,7 @@ mod tests {
         master
             .write_all(b"\x04")
             .expect("EOF the news prompt with VEOF");
-        let output = child.wait_with_output().expect("wait for emerge");
+        let output = wait_pty_output(child);
         drop(master);
         assert_eq!(
             output.status.code(),
@@ -16942,19 +16872,12 @@ mod tests {
         use std::io::Write;
         use std::os::unix::process::ExitStatusExt;
         let portuale_bin = built_portuale_bin();
-        let base = std::env::temp_dir().join(format!(
-            "ask_merge_sigint_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let base = TempDir::new("ask_merge_sigint").keep();
         let root = base.join("root");
         std::fs::create_dir_all(&root).unwrap();
         let env = fixture_resolve_env(&root, &base.join("pt"));
         let (master, slave_stdio) = pty_pair();
-        let (mut child, mut master, mut stdout_pipe, err_handle) = sigint_prompt_child(
+        let (child, mut master, mut stdout_pipe, err_handle) = sigint_prompt_child(
             &portuale_bin,
             &["emerge", "--ask", "--oneshot", "dev-libs/schedok"],
             env,
@@ -16972,7 +16895,7 @@ mod tests {
             std::io::Read::read_to_end(&mut stdout_pipe, &mut v).expect("drain child stdout");
             v
         });
-        let status = child.wait().expect("wait for emerge");
+        let status = wait_pty_status(child);
         drop(master);
         stdout.extend(out_handle.join().expect("stdout drain"));
         let stderr = err_handle.join().expect("stderr drain");
@@ -17012,19 +16935,12 @@ mod tests {
         use std::io::Write;
         use std::os::unix::process::ExitStatusExt;
         let portuale_bin = built_portuale_bin();
-        let base = std::env::temp_dir().join(format!(
-            "ask_read_news_sigint_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let base = TempDir::new("ask_read_news_sigint").keep();
         let root = base.join("root");
         std::fs::create_dir_all(&root).unwrap();
         let env = news_resolve_env(&root, &base.join("pt"));
         let (master, slave_stdio) = pty_pair();
-        let (mut child, mut master, mut stdout_pipe, err_handle) = sigint_prompt_child(
+        let (child, mut master, mut stdout_pipe, err_handle) = sigint_prompt_child(
             &portuale_bin,
             &[
                 "emerge",
@@ -17048,7 +16964,7 @@ mod tests {
             std::io::Read::read_to_end(&mut stdout_pipe, &mut v).expect("drain child stdout");
             v
         });
-        let status = child.wait().expect("wait for emerge");
+        let status = wait_pty_status(child);
         drop(master);
         stdout.extend(out_handle.join().expect("stdout drain"));
         let stderr = err_handle.join().expect("stderr drain");
@@ -17094,21 +17010,14 @@ mod tests {
         use std::io::Write;
         use std::os::unix::process::ExitStatusExt;
         let portuale_bin = built_portuale_bin();
-        let base = std::env::temp_dir().join(format!(
-            "ask_config_select_sigint_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let base = TempDir::new("ask_config_select_sigint").keep();
         let root = base.join("root");
         for v in ["1.0", "2.0"] {
             std::fs::create_dir_all(root.join(format!("var/db/pkg/dev-libs/seltest-{v}"))).unwrap();
         }
         let env = fixture_resolve_env(&root, &base.join("pt"));
         let (master, slave_stdio) = pty_pair();
-        let (mut child, mut master, mut stdout_pipe, err_handle) = sigint_prompt_child(
+        let (child, mut master, mut stdout_pipe, err_handle) = sigint_prompt_child(
             &portuale_bin,
             &["emerge", "--ask", "--config", "dev-libs/seltest"],
             env,
@@ -17125,7 +17034,7 @@ mod tests {
             std::io::Read::read_to_end(&mut stdout_pipe, &mut v).expect("drain child stdout");
             v
         });
-        let status = child.wait().expect("wait for emerge");
+        let status = wait_pty_status(child);
         drop(master);
         stdout.extend(out_handle.join().expect("stdout drain"));
         let stderr = err_handle.join().expect("stderr drain");
@@ -17169,19 +17078,12 @@ mod tests {
         use std::io::Write;
         use std::os::unix::process::ExitStatusExt;
         let portuale_bin = built_portuale_bin();
-        let base = std::env::temp_dir().join(format!(
-            "merge_sigint_dies_by_signal_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let base = TempDir::new("merge_sigint_dies_by_signal").keep();
         let root = base.join("root");
         std::fs::create_dir_all(&root).unwrap();
         let env = fixture_resolve_env(&root, &base.join("pt"));
         let (master, slave_stdio) = pty_pair();
-        let (mut child, mut master, mut stdout_pipe, err_handle) = sigint_prompt_child(
+        let (child, mut master, mut stdout_pipe, err_handle) = sigint_prompt_child(
             &portuale_bin,
             &["emerge", "--oneshot", "dev-libs/schedok"],
             env,
@@ -17196,7 +17098,7 @@ mod tests {
             std::io::Read::read_to_end(&mut stdout_pipe, &mut v).expect("drain child stdout");
             v
         });
-        let status = child.wait().expect("wait for emerge");
+        let status = wait_pty_status(child);
         drop(master);
         stdout.extend(out_handle.join().expect("stdout drain"));
         let stderr = err_handle.join().expect("stderr drain");
@@ -17232,19 +17134,12 @@ mod tests {
         // EOF test, at the later merge prompt instead.
         use std::io::Write;
         let portuale_bin = built_portuale_bin();
-        let base = std::env::temp_dir().join(format!(
-            "ask_merge_eof_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let base = TempDir::new("ask_merge_eof").keep();
         let root = base.join("root");
         std::fs::create_dir_all(&root).unwrap();
         let env = fixture_resolve_env(&root, &base.join("pt"));
         let (master, slave_stdio) = pty_pair();
-        let (mut child, mut master, mut stdout_pipe, err_handle) = sigint_prompt_child(
+        let (child, mut master, mut stdout_pipe, err_handle) = sigint_prompt_child(
             &portuale_bin,
             &["emerge", "--ask", "--oneshot", "dev-libs/schedok"],
             env,
@@ -17264,7 +17159,7 @@ mod tests {
             std::io::Read::read_to_end(&mut stdout_pipe, &mut v).expect("drain child stdout");
             v
         });
-        let status = child.wait().expect("wait for emerge");
+        let status = wait_pty_status(child);
         drop(master);
         stdout.extend(out_handle.join().expect("stdout drain"));
         let stderr = err_handle.join().expect("stderr drain");
@@ -17302,14 +17197,7 @@ mod tests {
             stubdir.display(),
             std::env::var("PATH").unwrap_or_default()
         );
-        let base = std::env::temp_dir().join(format!(
-            "ask_read_news_true_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let base = TempDir::new("ask_read_news_true").keep();
         let root = base.join("root");
         std::fs::create_dir_all(&root).unwrap();
         let mut env = news_resolve_env(&root, &base.join("pt"));
@@ -17331,7 +17219,7 @@ mod tests {
             .expect("portuale emerge spawns");
         master.write_all(b"No\n").expect("decline the news prompt");
         master.write_all(b"No\n").expect("decline the merge prompt");
-        let output = child.wait_with_output().expect("wait for emerge");
+        let output = wait_pty_output(child);
         drop(master);
         assert_eq!(
             output.status.code(),
@@ -17405,14 +17293,7 @@ mod tests {
         expected_rc: i32,
     ) {
         let portuale_bin = built_portuale_bin();
-        let base = std::env::temp_dir().join(format!(
-            "true_y_or_n_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let base = TempDir::new("true_y_or_n").keep();
         let root = base.join("root");
         std::fs::create_dir_all(&root).unwrap();
         let env = fixture_resolve_env(&root, &base.join("pt"));
@@ -17577,23 +17458,8 @@ mod tests {
         // consumed and the declined merge prompt still exits 130.
         use std::io::Write;
         let portuale_bin = built_portuale_bin();
-        let emptydir = std::env::temp_dir().join(format!(
-            "ask_read_news_empty_path_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&emptydir).unwrap();
-        let base = std::env::temp_dir().join(format!(
-            "ask_read_news_missing_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let emptydir = TempDir::new("ask_read_news_empty_path").keep();
+        let base = TempDir::new("ask_read_news_missing").keep();
         let root = base.join("root");
         std::fs::create_dir_all(&root).unwrap();
         let mut env = news_resolve_env(&root, &base.join("pt"));
@@ -17615,7 +17481,7 @@ mod tests {
             .expect("portuale emerge spawns");
         master.write_all(b"Yes\n").expect("answer the news prompt");
         master.write_all(b"No\n").expect("decline the merge prompt");
-        let output = child.wait_with_output().expect("wait for emerge");
+        let output = wait_pty_output(child);
         drop(master);
         assert_eq!(
             output.status.code(),
@@ -17649,14 +17515,7 @@ mod tests {
         // `Calculating...`, and no second notice follows the merge.
         let portuale_bin = built_portuale_bin();
         let fixtures = fixtures_root();
-        let base = std::env::temp_dir().join(format!(
-            "remote_news_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let base = TempDir::new("remote_news").keep();
         // Client ROOT: a copy of the fixtures' `var` (the hermetic
         // 5-count vdb), so the pre notice has something to print.
         let root = base.join("root");
@@ -17885,14 +17744,7 @@ mod tests {
     /// stays out too). Returns the root plus the file's bytes before the
     /// run under test.
     fn stale_resume_root(tag: &str) -> (std::path::PathBuf, Vec<u8>) {
-        let root = std::env::temp_dir().join(format!(
-            "resume_no_write_{tag}_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let root = TempDir::new(&format!("resume_no_write_{tag}")).keep();
         let stale = vec![
             (
                 crate::mtimedb::ResumeEntryKind::Ebuild,
@@ -17952,15 +17804,7 @@ mod tests {
         // preview never touches `mtimedb`. A stale list must come back
         // byte-identical, and no fresh list may appear on a bare root.
         let portuale_bin = built_portuale_bin();
-        let tmp = std::env::temp_dir().join(format!(
-            "resume_no_write_pretend_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&tmp).unwrap();
+        let tmp = TempDir::new("resume_no_write_pretend").keep();
 
         // Bare root first: `--pretend` resolves and prints, and leaves
         // no `mtimedb` behind at all.
@@ -18056,6 +17900,127 @@ mod tests {
         }
     }
 
+    /// Backlog #259: bound every wait on a pty-driven child. Plain
+    /// `wait_with_output`/`wait` has no timeout, so a child stuck in
+    /// `read_prompt_line`'s blocking `libc::read` (the #259 hang: the
+    /// slave sat in `wait_woken` and the test binary waited 20 hours)
+    /// takes the whole `cargo test` run with it. Polls `try_wait`
+    /// against a bound and kills the child when it expires.
+    ///
+    /// The bound is 60 s by default -- orders of magnitude past these
+    /// prompt tests' real runtime (sub-second) and still short enough
+    /// to fail a CI job instead of hanging it.
+    /// `PORTUALE_TEST_PTY_WATCHDOG_SECS` overrides it: set it low to
+    /// reproduce a hang, or high to give a loaded machine room. The
+    /// `watchdog:` prefix on the timeout message is the race-chase hook
+    /// -- the first timeout's captured output is the evidence for why
+    /// the child never woke.
+    fn pty_watchdog_bound() -> std::time::Duration {
+        let secs = std::env::var("PORTUALE_TEST_PTY_WATCHDOG_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(60);
+        std::time::Duration::from_secs(secs.max(1))
+    }
+
+    /// Bounded wait collecting the child's piped stdout/stderr. The
+    /// pty-driven `--ask`/`--read-news` tests answer through the
+    /// master and read the merged result back; on timeout the child is
+    /// killed and the panic carries whatever it had printed, which is
+    /// what the #259 race chase reads.
+    #[cfg(unix)]
+    fn wait_pty_output(mut child: std::process::Child) -> std::process::Output {
+        let bound = pty_watchdog_bound();
+        let start = std::time::Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => {
+                    return child.wait_with_output().expect("collect child output");
+                }
+                Ok(None) if start.elapsed() >= bound => {
+                    let _ = child.kill();
+                    let output = child
+                        .wait_with_output()
+                        .expect("collect killed child output");
+                    panic!(
+                        "watchdog: pty child exceeded {bound:?} and was killed\n\
+                         stdout: {}\n\
+                         stderr: {}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr),
+                    );
+                }
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(25)),
+                Err(e) => panic!("watchdog: try_wait failed: {e}"),
+            }
+        }
+    }
+
+    /// Bounded wait for the `sigint_prompt_child` shape, whose stdout
+    /// and stderr are already owned by the caller's drain threads --
+    /// there is nothing left for `wait_with_output` to collect, so this
+    /// returns the exit status alone. Same bound and `watchdog:`
+    /// panic; the pre-wait marker text the caller already holds is the
+    /// chase evidence for these tests.
+    #[cfg(unix)]
+    fn wait_pty_status(mut child: std::process::Child) -> std::process::ExitStatus {
+        let bound = pty_watchdog_bound();
+        let start = std::time::Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => return status,
+                Ok(None) if start.elapsed() >= bound => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!(
+                        "watchdog: pty child exceeded {bound:?} and was killed \
+                         (status-only shape; see the test's pre-wait marker text)"
+                    );
+                }
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(25)),
+                Err(e) => panic!("watchdog: try_wait failed: {e}"),
+            }
+        }
+    }
+
+    /// Backlog #259's proof: a child that never exits is killed at the
+    /// bound and the test fails with the `watchdog:` prefix the race
+    /// chase greps for -- instead of hanging the whole `cargo test` run
+    /// the way the #259 incident did (20 hours on a pty-blocked child).
+    #[test]
+    #[cfg(unix)]
+    fn pty_watchdog_kills_a_hung_child_and_fails_the_test() {
+        // `sleep` is the stand-in for the #259 child stuck in
+        // `read_prompt_line`'s blocking read: it will never exit on its
+        // own. A 1 s bound keeps the test itself fast.
+        // SAFETY: this is the only test setting the watchdog variable,
+        // and the value is read once per `wait_pty_*` call in this
+        // thread's own child.
+        unsafe {
+            std::env::set_var("PORTUALE_TEST_PTY_WATCHDOG_SECS", "1");
+        }
+        let child = std::process::Command::new("sleep")
+            .arg("3600")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn the hung child");
+        let result = std::panic::catch_unwind(|| wait_pty_output(child));
+        assert!(result.is_err(), "the watchdog must panic, not return");
+        let msg = result
+            .err()
+            .and_then(|e| e.downcast_ref::<String>().cloned())
+            .unwrap_or_default();
+        assert!(
+            msg.contains("watchdog:"),
+            "the panic must carry the `watchdog:` prefix the chase greps for: {msg}"
+        );
+        // SAFETY: paired with the `set_var` above in the same test.
+        unsafe {
+            std::env::remove_var("PORTUALE_TEST_PTY_WATCHDOG_SECS");
+        }
+    }
+
     #[test]
     #[cfg(unix)]
     fn ask_declined_writes_no_resume_list() {
@@ -18068,15 +18033,7 @@ mod tests {
         use std::io::Write;
         let portuale_bin = built_portuale_bin();
         let (root, before) = stale_resume_root("ask");
-        let tmp = std::env::temp_dir().join(format!(
-            "resume_no_write_ask_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&tmp).unwrap();
+        let tmp = TempDir::new("resume_no_write_ask").keep();
 
         let (mut master, slave_stdio) = pty_pair();
         let child = std::process::Command::new(&portuale_bin)
@@ -18090,7 +18047,7 @@ mod tests {
         // The pty buffers until the child prompts -- no synchronisation
         // needed.
         master.write_all(b"No\n").expect("answer the --ask prompt");
-        let output = child.wait_with_output().expect("wait for emerge");
+        let output = wait_pty_output(child);
         drop(master);
         assert_eq!(
             output.status.code(),
@@ -18215,10 +18172,7 @@ mod tests {
         // and a binary entry together -- `source_entries_not_merged`
         // (this function's own former name) used to silently drop
         // every `Binary` entry instead of tagging and including it.
-        let root = std::env::temp_dir().join(format!(
-            "pretend-test-{}-entries_not_merged_binary",
-            std::process::id()
-        ));
+        let root = TempDir::new("pretend-test-entries_not_merged_binary").keep();
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
 
@@ -18274,10 +18228,7 @@ mod tests {
         // writes alongside the new up-front save + per-merge shrink is
         // provably a harmless redundancy, and failure behaviour is
         // unchanged.
-        let root = std::env::temp_dir().join(format!(
-            "pretend-test-{}-up_front_matches_failure_tail",
-            std::process::id()
-        ));
+        let root = TempDir::new("pretend-test-up_front_matches_failure_tail").keep();
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let entries = vec![
@@ -18678,14 +18629,7 @@ mod tests {
         // `lib/portage/_sets/__init__.py:133` + `:258-262` -- file sets
         // are candidates unless `sets.conf` says otherwise.
         fn cfg(tag: &str) -> std::path::PathBuf {
-            let dir = std::env::temp_dir().join(format!(
-                "portuale-usersets-{}-{}-{tag}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .expect("clock")
-                    .as_nanos(),
-            ));
+            let dir = TempDir::new(&format!("portuale-usersets-{tag}")).keep();
             std::fs::create_dir_all(dir.join("etc/portage")).expect("mkdir");
             dir
         }
@@ -18758,14 +18702,7 @@ mod tests {
 
     #[test]
     fn update_world_file_records_a_new_target_and_skips_deps_and_oneshot() {
-        let tmp = std::env::temp_dir().join(format!(
-            "portuale-world-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let tmp = TempDir::new("portuale-world").keep();
         let root = tmp.join("root");
         std::fs::create_dir_all(root.join("var/lib/portage")).unwrap();
         std::fs::write(root.join("var/lib/portage/world"), "dev-libs/existing\n").unwrap();
@@ -18840,14 +18777,7 @@ mod tests {
         // dev-libs/dualslotpkg has SLOT=1 and SLOT=2 in the repo (neither
         // "0") -> "slotted"; dev-libs/packagepkg is SLOT="0" only.
         let repos = portage_repo::find_repos(&fixtures_root()).expect("repos");
-        let tmp = std::env::temp_dir().join(format!(
-            "portuale-worldslot-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let tmp = TempDir::new("portuale-worldslot").keep();
         let root = tmp.join("root");
         std::fs::create_dir_all(root.join("var/lib/portage")).unwrap();
 
@@ -18908,14 +18838,7 @@ mod tests {
 
     #[test]
     fn update_world_sets_file_records_a_new_set_and_skips_oneshot() {
-        let tmp = std::env::temp_dir().join(format!(
-            "portuale-worldsets-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let tmp = TempDir::new("portuale-worldsets").keep();
         let root = tmp.join("root");
         std::fs::create_dir_all(root.join("var/lib/portage")).unwrap();
         std::fs::write(
@@ -18946,14 +18869,7 @@ mod tests {
 
     #[test]
     fn installed_set_atoms_are_slot_qualified_sorted_and_deduped() {
-        let tmp = std::env::temp_dir().join(format!(
-            "portuale-instset-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let tmp = TempDir::new("portuale-instset").keep();
         let mk = |cat: &str, dir: &str, slot: &str| {
             let d = tmp.join("var/db/pkg").join(cat).join(dir);
             std::fs::create_dir_all(&d).unwrap();

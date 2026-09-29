@@ -445,6 +445,7 @@ pub fn post_merge_info_update(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use portage_util::TempDir;
 
     fn test_color() -> Colorizer {
         // No colour in tests: `color.c` passes text through when the
@@ -452,17 +453,8 @@ mod tests {
         Colorizer::new(false)
     }
 
-    fn tmproot() -> PathBuf {
-        let d = std::env::temp_dir().join(format!(
-            "info_files_test_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&d).unwrap();
-        d
+    fn tmproot() -> std::path::PathBuf {
+        TempDir::new("info_files_test").keep()
     }
 
     fn install_info_present() -> bool {
@@ -508,7 +500,7 @@ mod tests {
         .unwrap();
     }
 
-    fn scratch_root_with_infopath() -> (PathBuf, String) {
+    fn scratch_root_with_infopath() -> (std::path::PathBuf, String) {
         let root = tmproot();
         std::fs::create_dir_all(root.join("etc/env.d")).unwrap();
         std::fs::write(

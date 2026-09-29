@@ -1300,6 +1300,7 @@ mod tests {
     use portage_repo::CandidateSource;
     use portage_repo::PretendOutcome;
     use portage_repo::find_remote_binpkg;
+    use portage_util::TempDir;
     use std::collections::HashMap;
     use std::io::{Read, Write};
     use std::net::TcpListener;
@@ -1309,16 +1310,7 @@ mod tests {
     }
 
     fn tempdir() -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!(
-            "portuale-getbinpkg-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&d).unwrap();
-        d
+        TempDir::new("portuale-getbinpkg").keep()
     }
 
     /// Serves each `routes` entry (`"/path" -> body`) over real plain

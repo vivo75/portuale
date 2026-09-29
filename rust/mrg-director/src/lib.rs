@@ -1467,20 +1467,12 @@ where
 mod tests {
     use super::*;
     use portage_repo::{GraphResult, ResolveRequest};
+    use portage_util::TempDir;
 
     /// A fresh scratch dir per test (process id + nanos, so parallel
     /// `cargo test` workers never share one).
-    fn tempdir(prefix: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "{prefix}_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn tempdir(prefix: &str) -> std::path::PathBuf {
+        TempDir::new(prefix).keep()
     }
 
     /// Write one vdb entry: `<root>/var/db/pkg/<cat>/<pkg>-<ver>/` with

@@ -33,6 +33,7 @@
 //     written back to `Packages` -- portuale recomputes each run, so
 //     `--pretend` still writes nothing).
 
+use portage_util::TempDir;
 use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
@@ -2538,14 +2539,8 @@ fn verify_detached_signature(
     gpg: &GpgVerify,
     what: &str,
 ) -> Result<(), String> {
-    let sig_path = std::env::temp_dir().join(format!(
-        "portuale-sign-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
+    let sig_dir = TempDir::new("portuale-sign").keep();
+    let sig_path = sig_dir.join("x.sig");
     fs::write(&sig_path, sig_bytes).map_err(|e| format!("{}: {e}", sig_path.display()))?;
     let argv = gpg_verify_argv(
         &gpg.base_command,
@@ -2574,6 +2569,7 @@ fn verify_clearsigned_manifest(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use portage_util::TempDir;
 
     fn fixture(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -2820,7 +2816,7 @@ mod tests {
 
     #[test]
     fn extract_binpkg_unpacks_an_xpak_image_and_build_info() {
-        let tmp = std::env::temp_dir().join(format!("binpkg-xpak-{}", std::process::id()));
+        let tmp = TempDir::new("binpkg-xpak").keep();
         let image = tmp.join("image");
         let bi = tmp.join("build-info");
         extract_binpkg(
@@ -2854,7 +2850,7 @@ mod tests {
 
     #[test]
     fn extract_binpkg_unpacks_a_real_gpkg_image_and_build_info() {
-        let tmp = std::env::temp_dir().join(format!("binpkg-gpkg-{}", std::process::id()));
+        let tmp = TempDir::new("binpkg-gpkg").keep();
         let image = tmp.join("image");
         let bi = tmp.join("build-info");
         extract_binpkg(
@@ -3000,14 +2996,7 @@ mod tests {
             "verify_gpkg_manifest",
             &verify_gpkg_manifest(g, &GpgVerify::default()).unwrap_err(),
         );
-        let dest = std::env::temp_dir().join(format!(
-            "portuale-56-reject-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
+        let dest = TempDir::new("portuale-56-reject").keep();
         let _ = fs::remove_dir_all(&dest);
         fs::create_dir_all(&dest).unwrap();
         check(
@@ -3257,7 +3246,7 @@ mod tests {
             &[("gpkg-1", b""), ("image.tar", img)],
             Some(&manifest),
         );
-        let tmp = std::env::temp_dir().join(format!("binpkg-gpkg-bad-{}", std::process::id()));
+        let tmp = TempDir::new("binpkg-gpkg-bad").keep();
         let err = extract_binpkg(
             &g,
             &tmp.join("image"),
@@ -3398,7 +3387,7 @@ mod tests {
     /// (`gpg` refuses a homedir it doesn't own outright, and signs /
     /// verifies with lock files inside it -- the committed tree itself
     /// must stay read-only). `chmod 700`, real's own requirement.
-    fn test_gpg_home(tag: &str) -> PathBuf {
+    fn test_gpg_home(tag: &str) -> std::path::PathBuf {
         fn copy_dir(src: &Path, dest: &Path) {
             fs::create_dir_all(dest).unwrap();
             for entry in portage_util::read_dir_entries(src).unwrap() {
@@ -3410,14 +3399,7 @@ mod tests {
                 }
             }
         }
-        let dest = std::env::temp_dir().join(format!(
-            "portuale-gpg-{tag}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
+        let dest = TempDir::new(&format!("portuale-gpg-{tag}")).keep();
         copy_dir(
             &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("../../3rdparty/portage/lib/portage/tests/.gnupg"),
@@ -3628,14 +3610,7 @@ mod tests {
     /// bytes in the packed tar directly would just corrupt the tar
     /// framing instead of failing the signature).
     fn repack_gpkg_with_mutation(src: &Path, tag: &str, mutate: impl Fn(&Path)) -> PathBuf {
-        let root = std::env::temp_dir().join(format!(
-            "portuale-gpg-{tag}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
+        let root = TempDir::new(&format!("portuale-gpg-{tag}")).keep();
         let outer = root.join("outer");
         fs::create_dir_all(&outer).unwrap();
         run_tar(&["-xf", &lossy(src), "-C", &lossy(&outer)]).unwrap();
@@ -4800,7 +4775,7 @@ mod tests {
                 inner_symlink("metadata/DESCRIPTION", "SLOT"),
             ],
         );
-        let tmp = std::env::temp_dir().join(format!("binpkg-gpkg-meta-{}", std::process::id()));
+        let tmp = TempDir::new("binpkg-gpkg-meta").keep();
         let image = tmp.join("image");
         let bi = tmp.join("build-info");
         extract_binpkg(&g, &image, &bi, &GpgVerify::default()).expect("extract succeeds");
@@ -4820,8 +4795,7 @@ mod tests {
         let check = |entries: &[InnerTestEntry<'_>], needle: &str| {
             let g = build_gpkg_with_inner_entries("gen-1.0", entries);
             verify_gpkg_manifest(&g, &GpgVerify::default()).expect("verifies");
-            let tmp =
-                std::env::temp_dir().join(format!("binpkg-gpkg-reject-{}", std::process::id()));
+            let tmp = TempDir::new("binpkg-gpkg-reject").keep();
             let err = extract_binpkg(
                 &g,
                 &tmp.join("image"),
@@ -4880,7 +4854,7 @@ mod tests {
                 inner_symlink("image/usr/lib/liblink.so", "libreal.so"),
             ],
         );
-        let tmp = std::env::temp_dir().join(format!("binpkg-gpkg-imgsym-{}", std::process::id()));
+        let tmp = TempDir::new("binpkg-gpkg-imgsym").keep();
         let image = tmp.join("image");
         let bi = tmp.join("build-info");
         extract_binpkg(&g, &image, &bi, &GpgVerify::default()).expect("extract succeeds");
@@ -4952,8 +4926,7 @@ mod tests {
                 image,
             );
             verify_gpkg_manifest(&g, &GpgVerify::default()).expect("verifies");
-            let tmp =
-                std::env::temp_dir().join(format!("binpkg-gpkg-imgreject-{}", std::process::id()));
+            let tmp = TempDir::new("binpkg-gpkg-imgreject").keep();
             let err = extract_binpkg(
                 &g,
                 &tmp.join("image"),
@@ -5024,7 +4997,7 @@ mod tests {
         // S0 cell i19: the regression shape -- legitimate symlink,
         // hardlink-to-earlier, GNU sparse file, PAX xattr records -- must
         // still extract exactly as before S4 (the pre-scan only rejects).
-        let tmp = std::env::temp_dir().join(format!("binpkg-gpkg-i19-{}", std::process::id()));
+        let tmp = TempDir::new("binpkg-gpkg-i19").keep();
         let stage = tmp.join("stage");
         fs::create_dir_all(&stage).unwrap();
         let image_bytes = build_gnu_sparse_image(&stage);
