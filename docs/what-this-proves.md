@@ -19006,3 +19006,47 @@ env PORTAGE_CONFIGROOT=$PWD/fixtures ROOT=$PWD/fixtures PORTAGE_RUNNING_ROOT=$PW
 # # required by dev-libs/useflagpkg[-foo] (argument)
 # >=dev-libs/useflagpkg-1.0 -foo
 ```
+
+A same-version reinstall shows the `[1]` old-best marker when only the
+repository differs (backlog #247, 2026-09-29; owner B5 reopened the
+deliberate cut). Real `_get_installed_best`
+(`_emerge/resolver/output.py:721-731`) lists the installed instance in
+`myoldbest` when `(slot, sub_slot)` differs **or** `not
+quiet_repo_display and installed_version.repo != pkg.repo`; portuale's
+`resolve_pretend` oldbest assembly ported only the slot/sub-slot half,
+so a reinstall whose only difference was the repository (every
+hand-staged vdb that omits the `repository` file reads as real's
+`__unknown__` sentinel against the `testrepo` ebuild) printed no `[1]`
+where real does. The `Reinstall` filter now carries the third disjunct
+verbatim; the `not quiet_repo_display` half needs no threading because
+`--quiet-repo-display` stays an unimplemented option (it exits 2), so
+every successful run has it off. Grounded on fresh host
+`/usr/sbin/emerge` 3.0.82.2 staged-fixture probes (mount-namespace
+staging with an empty `/etc/make.local` shadow, since the fixture
+`make.conf` sources the host absolute path and its
+`EMERGE_DEFAULT_OPTS=--getbinpkg=y` otherwise breaks the autounmask
+flow): both #205 `abk0` cells show `[ebuild   R    ]
+dev-libs/abk0c-1 [1]`, plus confirmatory probes for a fixture-vdb
+reinstall (`dev-libs/samepkg` -> `[1.0]`), a recorded-repo reinstall
+(`--newrepo dev-libs/newrepopkg`, vdb `oldrepo` -> `[1.0]`), and the
+`ccr0r`/`cgp0x` reinstall rows. The world-bound cell's USE chain flaps
+across real runs between two and three `# required by` lines (a
+hash-order tie-break between the two unsatisfied parents in
+`_get_dep_chain`, not a version change); the pin holds the
+deterministic two-line variant portuale stably renders. The same probes
+showed the crafted fixture binpkgs lacked the `repository` member a
+genuine real-built binary embeds (verified by building
+`dev-libs/newpkg` with real `--buildpkgonly` and reading its xpak), so
+their scanned candidates read `__unknown__` and every `[binary R]`
+reinstall spuriously gained `[1.0]`; both tbz2s now embed
+`repository=testrepo` like genuine ones, keeping the `[binary R]` rows
+bare.
+
+```sh
+# from the repo root; expect rc 1 and the [1] on the R row, byte-identical
+# to the fresh real probe minus real's `to <root>` destination suffixes
+env PORTAGE_CONFIGROOT=$PWD/fixtures ROOT=$PWD/fixtures PORTAGE_RUNNING_ROOT=$PWD/fixtures DISTDIR=$PWD/fixtures/distfiles ./rust/target/release/portuale emerge --pretend --autounmask-backtrack=y --backtrack=2 dev-libs/abk0d
+# [ebuild   R    ] dev-libs/abk0c-1 [1] USE="x*"
+# [ebuild     U  ] dev-libs/abk0a-3 [1]
+# [ebuild  N     ] dev-libs/abk0d-1
+```

@@ -14862,8 +14862,10 @@ pub struct GraphEntry {
     /// `pkg_info.oldbest_list`, the `blue("[…]")` column after the cpv.
     /// One entry for an `Upgrade`/`Downgrade` (the in-slot installed
     /// version); every installed version (all slots) for a new-slot
-    /// `New`; empty for a brand-new `New`, a `Reinstall`, and
-    /// `AlreadyInstalled`/`NoVisibleCandidate`. Carries each old
+    /// `New`; empty for a brand-new `New` and
+    /// `AlreadyInstalled`/`NoVisibleCandidate`; the same-version
+    /// installed instance for a `Reinstall` whose slot, sub-slot or
+    /// repo drifts (else empty). Carries each old
     /// package's own slot/sub_slot/repo so `convert_myoldbest` can
     /// decorate it the same way `_append_slot`/`_append_repository`
     /// decorate the main cpv at `-pv`.
@@ -28784,14 +28786,19 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         // display order. A brand-new `New` -> empty.
         //
         // A `Reinstall` is real's `vardb.cpv_exists(pkg.cpv)` arm
-        // (`output.py:721-727`): `replace = True`, and `myoldbest` is the
-        // installed instance *only* when its `(slot, sub_slot)` differs
-        // from the one being merged -- the `[oldver]` bracket a
-        // slot/sub-slot move (e.g. a slot-operator cascade rebuild landing
-        // at its tree ebuild's new sub-slot) shows. Same rule the old
-        // post-pass slot-op synthesiser applied to its own entries; real's
-        // third disjunct (`not quiet_repo_display and repo differs`) stays
-        // out, as it did there.
+        // (`output.py:721-731`): `replace = True`, and `myoldbest` is the
+        // installed instance when its `(slot, sub_slot)` differs from the
+        // one being merged -- the `[oldver]` bracket a slot/sub-slot move
+        // (e.g. a slot-operator cascade rebuild landing at its tree
+        // ebuild's new sub-slot) shows -- or when the repo differs and
+        // repo display is not quieted (real's third disjunct, `not
+        // quiet_repo_display and installed_version.repo != pkg.repo`).
+        // Same rule the old post-pass slot-op synthesiser applied to its
+        // own entries. The quiet half needs no threading:
+        // `--quiet-repo-display` stays an unimplemented option (it exits
+        // 2), so every successful run has it off and the disjunct below
+        // reduces to the repo comparison (owner B5 reopened this cut,
+        // backlog #247).
         let mut oldbest: Vec<InstalledRef> = match &outcome {
             PretendOutcome::Upgrade { .. } | PretendOutcome::Downgrade { .. } => {
                 installed_refs(ctx.root, &key.0, &key.1)
@@ -28802,7 +28809,10 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             PretendOutcome::New { .. } if new_slot => installed_refs(ctx.root, &key.0, &key.1),
             PretendOutcome::Reinstall { version, .. } => installed_refs(ctx.root, &key.0, &key.1)
                 .into_iter()
-                .filter(|r| &r.version == version && (r.slot != slot || r.sub_slot != sub_slot))
+                .filter(|r| {
+                    &r.version == version
+                        && (r.slot != slot || r.sub_slot != sub_slot || r.repo != repo_name)
+                })
                 .collect(),
             _ => Vec::new(),
         };
@@ -53415,6 +53425,57 @@ mod tests {
                 ..
             } if version == "1.0" && changed_flags.is_empty()
         ));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #247: a same-version/slot/sub-slot `Reinstall` whose
+    /// installed instance's repo differs from the merged candidate's
+    /// carries that instance as `oldbest` -- real
+    /// `_get_installed_best`'s third disjunct (`not quiet_repo_display
+    /// and repo differs`, `output.py:721-731`; owner B5 reopened the
+    /// cut). The staged vdb omits the `repository` file (like the
+    /// hand-staged abk0/samepkg fixture vdbs), so the installed repo
+    /// is real's `__unknown__` sentinel while the candidate merges
+    /// from `testrepo`.
+    #[test]
+    fn run_pass_reinstall_with_only_repo_drift_carries_oldbest() {
+        let dir = slotundo_temp_dir("161-run-repobest");
+        let d = dir.join("var/db/pkg/dev-libs/sounneed-1.0");
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        fs::write(d.join("SLOT"), "0/1\n").unwrap();
+        fs::write(d.join("USE"), "\n").unwrap();
+        // No `repository` file: `installed_pkg_repo` falls back to
+        // `__unknown__`, which never equals the `testrepo` candidate.
+        let config = test_config();
+        let repos = find_repos(&fixtures_root()).expect("fixture repos");
+        let opts = CtxOpts161 {
+            backtrack_max: 10,
+            atoms: vec!["dev-libs/sounneed".to_string()],
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, repos, &opts);
+        let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+        assert_eq!(pass.entries.len(), 1);
+        let e = &pass.entries[0];
+        assert!(
+            matches!(
+                e.outcome,
+                PretendOutcome::Reinstall { ref version, .. } if version == "1.0"
+            ),
+            "the requested installed version reinstalls, got {:?}",
+            e.outcome
+        );
+        assert_eq!(
+            e.oldbest,
+            vec![InstalledRef {
+                version: "1.0".to_string(),
+                slot: "0".to_string(),
+                sub_slot: "1".to_string(),
+                repo: "__unknown__".to_string(),
+            }],
+            "repo drift alone puts the installed instance in oldbest"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
