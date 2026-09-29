@@ -18889,6 +18889,52 @@ ls /tmp/portuale-td-* 2>/dev/null | wc -l   # expect 0 after a clean run
 Two `l3-core` runs closed batch 2026-09-27, both with `L3_CONTROL=1 L3_JOBS=28` (the owner raised `-j` from the planned 20). The first, `l3-20260928T195717Z`, left four candidate rows on the GLEP 42 news state files, fixed as #258, and sixteen control rows from real-against-real `getconf` split-debug in glibc, filed as #261. The re-run `l3-20260929T082541Z`, built from `main` @ `042a8daf`, is candidate 19 hard / 19 explained / 0 unexplained (all nineteen are the allowlisted `l3-vm-repo-revisions-vdb-env` `environment` rows) and control 1/1/0, both sides touching 62 packages. The python and icu vdb `SIZE` rows that kept P-C3 at 2 unexplained now report as `PAYLOAD`, so #191's comparator fix is confirmed on a live run. The `getconf` split did not recur, so #261 stays open as an intermittent control class. Re-verify from the saved snapshots without containers:
 
 ```sh
+# from ../pmtest; expect hard 19 / explained 19 / UNEXPLAINED 0, rc 0
+python3 differential-test-bed/compare/diff.py --layer l3 --tolerate-payload \
+  differential-test-bed/logs/l3-20260929T082541Z/portage \
+  differential-test-bed/logs/l3-20260929T082541Z/portuale \
+  differential-test-bed/compare/known-divergences.yaml | grep -A3 '^## summary'
+```
+
+## #244: the autounmask breakage and real's fail-fast walk, argument order by argument order (2026-09-29)
+
+Upstream `test_autounmask_use_breakage` (`dev-libs/aub0{a,b,c,d}`) now
+matches real 3.0.82.2 byte for byte (after the standing root-suffix,
+wall-clock and USE_EXPAND conventions) in all six argument orders under
+both `--autounmask-backtrack` values, in the two-argument pair, and in
+`dev-libs/aubreaktop` both ways. The captures corrected the entry's own
+premise: the reported instance and USE change never depend on the order.
+What depends on it is whether a USE flip contradicts a change already
+needed on the same package. The fixture profile enables `foo`, so A's
+`aub0d[-foo]` needs `-foo`, and if A is walked before B, B's `aub0d[foo]`
+contradicts it. Real walks the arguments LIFO. A contradicted pass fails
+(`depgraph.py:7714`) and `_autounmask_breakage` re-runs one clean pass
+whose `_create_graph` stops at A's miss. That pass keeps only what it
+admitted, so the slot-conflict block appears only when B and C were
+walked first. Portuale gets there with a post-pass replay of real's walk
+(`merge_order::replay_create_graph`) at real's three decision points,
+plus `fail_fast_truncate` on the clean pass. Under `=n`, an order that
+walks B first stops at the first pass, as real's `need_config_change`
+does, and prints the list, both parents under `aub0d-0`, the change and
+the notice. Evidence: `docs/evidence/2026-09-28-244/`. Pins: the
+parameterised `test_autounmask_use_breakage_argument_order_text_matches_real`
+(16 cells) and the fixture-oracle list `l0-fixture-oracle-244.txt`.
+
+```sh
+# from the portuale root; expect rc=1 both times, the slot-conflict block only
+# for `a c b` (aub0d-0 by B first, then aub0d-1 by C), then the same
+# "built with USE flags ... aub0d[-foo]" miss required by aub0a
+FX=$PWD/fixtures
+for o in "a c b" "c b a"; do set -- $o
+  PORTAGE_CONFIGROOT=$FX ROOT=$FX PORTAGE_RUNNING_ROOT=$FX DISTDIR=$FX/distfiles \
+    rust/target/release/emerge --pretend --autounmask-backtrack=y \
+    dev-libs/aub0$1 dev-libs/aub0$2 dev-libs/aub0$3; echo "rc=$?"
+done
+```
+
+**#236 — `_minimize_children` and the slot-operator update probe's forcing half (batch-2026-09-28_236_107, Slices A–C).** When real walks an installed package, `FakeVartree._apply_dynamic_deps` appends the vdb's built slot-operator atoms to the live deps. r25mid therefore depends on both `dev-libs/r25lib:=` and `>=dev-libs/r25lib-1.0:0/1=`. Real selects a package for every one of a parent's plain atoms. `_minimize_children` (`_emerge/depgraph.py:4751-4854`) then drops redundant selections per cp, installed packages first, ascending, so both atoms bind the installed `r25lib-1.0`. Any upgrade comes afterwards from the slot-operator update probe (`_slot_operator_update_probe` + `_slot_operator_update_backtrack`, `:2576-2800`, `:2400-2452`). Here the installed world consumer's `<r25lib-2.0` refuses it, and real settles in one silent pass. Portuale resolved each atom on its own. `:=` picked `r25lib-2.0`, the post-pass scan found the consumer's pin, and a second pass printed the skipped-update warning. Slice A adds the probe's forcing half (`slot_operator_update_force_scan`). An installed child whose visible same-slot, other-sub-slot, higher candidate passes the #211 refusal check joins the replace set together with its consumer. The candidate goes into `slot_operator_forced_upgrade`, and the restart selects it. Slice B ports the elimination at a new per-owner collapse point, so the slotop argument cells keep their upgrade through the probe while r25 goes silent. The same collapse removes a spurious warning on an ebuild parent's version range: the fixture's `libgit2-glib`, `<libgit2-1:0= >=libgit2-0.26.0`, now binds both atoms to `0.99.0-r1`, as real does. Evidence: real's ResolverPlayground and the fixture-oracle r25 cells in `docs/evidence/2026-09-29-236/`. L0 was byte-identical on all 120 probes after each slice. Pins (pmtest): `test_236_r25_default_backtracking_settles_in_one_silent_pass`, `test_236_minimize_children_collapses_an_ebuild_parents_version_range`, `test_236_collapsed_slot_operator_child_is_upgraded_by_the_update_probe`. Rust: `minimize_children_collapses_like_real`, `slot_operator_update_force_scan_forces_the_installed_childs_update`.
+
+```sh
 # # required by dev-libs/useflagpkg[-foo] (argument)
 # from ../pmtest; expect 2 passed
 python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider \
