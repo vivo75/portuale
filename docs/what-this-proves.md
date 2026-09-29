@@ -18943,3 +18943,13 @@ for j in "" --json; do
 done
 ```
 
+**#107 — the live workload's extra pass is gone (batch-2026-09-28_236_107, Slice D).** The reference workload is this host's `emerge -puD --getbinpkg net-libs/rest`. Installed `weston-16.0.0` pins `<media-libs/libdisplay-info-0.4.0:=`. Installed `mesa`'s dynamic deps bind `libdisplay-info` through live `:=[abi_x86_32(-),abi_x86_64(-)]` plus built `:0/3=[...]`. After #236 the workload still restarted once and printed the skipped-update warning, because the collapse counted a use-dep atom as matching only its own pick. Real's `_minimize_children` matches use-deps against the installed instance's recorded USE (`findAtomForPackage(pkg, modified_use=_pkg_use_enabled(pkg))`), so both of mesa's atoms bind the installed `0.3.0`. The update probe is then refused by weston: one silent pass (`backtrack: 0/20`). Portuale now does the same, checking an installed package's use-deps against its vdb USE/IUSE: `U md4c-0.6.0` + `N rest-0.10.2`, no warning, `--json` restarts 0. Evidence: `docs/evidence/2026-09-29-107-reprobe/` (both sides live, before and after, real's `--debug` excerpt, and real's playground on the hermetic fixture). Pin (pmtest): `test_107_use_dep_dynamic_deps_pair_settles_in_one_silent_pass`, fixtures `dev-libs/r107{lib,mid,pin,up,target}`.
+
+```sh
+# on the reference host (installed weston-16.0.0 + libdisplay-info-0.3.0), from
+# the portuale root, as a non-root user; expect the md4c/rest rows, no
+# "have been skipped" block, and "restarts": 0
+rust/target/release/emerge -puD --getbinpkg --color=n net-libs/rest
+rust/target/release/emerge -puD --getbinpkg --color=n --json net-libs/rest | python3 -c 'import json,sys; print(json.load(sys.stdin)["backtrack"])'
+```
+

@@ -1,0 +1,13 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 8.69 s (backtrack: 0/20).
+
+[ebuild     U  ] dev-libs/md4c-0.6.0 [0.5.3]
+[ebuild  N     ] net-libs/rest-0.10.2  USE="introspection -gtk-doc -test -vala" 
+
+ * IMPORTANT: 20 news items need reading for repository 'gentoo'.
+ * Use eselect news read to view new items.
+
+real rc=0

@@ -26551,13 +26551,6 @@ fn onlydeps_runtime_keys(
     }
 }
 
-/// Phase A3 (023): one full BFS walk over the current `bp`.
-/// Takes `&bp`, never `&mut bp` -- the walk records its
-/// autounmask flips into the pass-local overlay (`PassState`:
-/// `use_overlay` / `use_change_overlay` / `use_broke`, read back
-/// overlay-then-`bp` within the pass) and `collect_feedback` + driver folds them
-/// into `bp` before deciding. Returns the settled pass; the
-/// `REQUIRED_USE` early-`Err` below is the only failure mode.
 /// #236 B: real `_minimize_children` (`_emerge/depgraph.py:4751-4854`)
 /// over one parent's atoms on one cp, each already paired with the
 /// outcome it would resolve to on its own. Returns every atom with the
@@ -26570,15 +26563,22 @@ fn onlydeps_runtime_keys(
 ///
 /// A package is `(version, installed)`: the installed instance and a
 /// same-version ebuild are distinct nodes in real. Matching is real's
-/// `findAtomForPackage` on the package's `cat/pkg-ver:slot/sub` string;
-/// an atom carrying use-deps or a `::repo` restriction is only ever
-/// counted as matching its own selection (conservative: it can keep a
-/// package alive, never drop one real would keep for USE reasons).
+/// `findAtomForPackage(pkg, modified_use=self._pkg_use_enabled(pkg))` on
+/// the package's `cat/pkg-ver:slot/sub::repo` string. For an installed
+/// package the use-deps are checked against its recorded vdb `USE`/`IUSE`
+/// (real's `_pkg_use_enabled` for a built package, the same check
+/// [`best_installed_matching`] makes) -- #107: installed `mesa`'s live
+/// `libdisplay-info:=[abi_x86_32(-),abi_x86_64(-)]` and built
+/// `libdisplay-info:0/3=[...]` both bind the installed `0.3.0`. For a
+/// not-yet-built package an atom carrying use-deps only ever counts as
+/// matching its own selection (conservative: it can keep a package
+/// alive, never drop one real would keep for USE reasons).
 /// Atoms without a package (`NoVisibleCandidate`, a removal) are passed
 /// through untouched, like real's `(atom, None)` yield.
 fn minimize_children(
     root: &Path,
     repos: &[RepoConfig],
+    config: &portage_profile::Config,
     key: &(String, String),
     picks: Vec<(String, PretendOutcome)>,
 ) -> Vec<(String, PretendOutcome)> {
@@ -26608,14 +26608,19 @@ fn minimize_children(
         return picks;
     }
     let pkg_str = |(version, installed): &(String, bool)| -> String {
-        let (slot, sub) = if *installed {
-            read_vdb_slot(root, &key.0, &key.1, version)
+        let (slot, sub, repo) = if *installed {
+            let (slot, sub) = read_vdb_slot(root, &key.0, &key.1, version);
+            (slot, sub, installed_pkg_repo(root, &key.0, &key.1, version))
         } else {
-            let (sub, _repo, slot) = slot_conflict_meta(repos, &key.0, &key.1, version);
-            (slot, sub)
+            let (sub, repo, slot) = slot_conflict_meta(repos, &key.0, &key.1, version);
+            (slot, sub, repo)
         };
         let sub = if sub.is_empty() { slot.clone() } else { sub };
-        format!("{}/{}-{version}:{slot}/{sub}", key.0, key.1)
+        if repo.is_empty() {
+            format!("{}/{}-{version}:{slot}/{sub}", key.0, key.1)
+        } else {
+            format!("{}/{}-{version}:{slot}/{sub}::{repo}", key.0, key.1)
+        }
     };
     let strs: HashMap<(String, bool), String> =
         pkgs.iter().map(|p| (p.clone(), pkg_str(p))).collect();
@@ -26623,13 +26628,31 @@ fn minimize_children(
     let mut matches: Vec<(String, Vec<(String, bool)>)> = Vec::new();
     for (a, o) in &picks {
         let Some(own) = pkg_of(o) else { continue };
-        let restricted = a.contains('[') || a.contains("::");
+        let parsed = portage_dep::parse_atom(a);
+        let use_deps = parsed
+            .as_ref()
+            .and_then(|x| x.use_deps.as_ref())
+            .filter(|d| !d.is_empty());
         let mut ms: Vec<(String, bool)> = Vec::new();
         for p in &pkgs {
-            let hit = *p == own
-                || (!restricted
-                    && portage_dep::match_from_list(a, &[strs[p].as_str()])
-                        .is_some_and(|m| !m.is_empty()));
+            let matches_str = || {
+                portage_dep::match_from_list(portage_dep::without_use(a), &[strs[p].as_str()])
+                    .is_some_and(|m| !m.is_empty())
+            };
+            let use_ok = || match use_deps {
+                None => true,
+                // Real `_pkg_use_enabled` of a built package: its vdb
+                // record (see the doc comment).
+                Some(deps) if p.1 => {
+                    let vdb_iuse = read_vdb_flag_set(root, &key.0, &key.1, &p.0, "IUSE");
+                    let vdb_use = read_vdb_flag_set(root, &key.0, &key.1, &p.0, "USE");
+                    let mut valid = valid_iuse(&vdb_iuse, config);
+                    valid.extend(vdb_use.iter().cloned());
+                    portage_dep::use_deps_satisfied(deps, &valid, &vdb_use)
+                }
+                Some(_) => false,
+            };
+            let hit = *p == own || (matches_str() && use_ok());
             if hit {
                 ms.push(p.clone());
             }
@@ -26668,6 +26691,13 @@ fn minimize_children(
         .collect()
 }
 
+/// Phase A3 (023): one full BFS walk over the current `bp`.
+/// Takes `&bp`, never `&mut bp` -- the walk records its
+/// autounmask flips into the pass-local overlay (`PassState`:
+/// `use_overlay` / `use_change_overlay` / `use_broke`, read back
+/// overlay-then-`bp` within the pass) and `collect_feedback` + driver folds them
+/// into `bp` before deciding. Returns the settled pass; the
+/// `REQUIRED_USE` early-`Err` below is the only failure mode.
 fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<PassResult, Error> {
     // The same effective-config view the loop feeds `collect_feedback` + driver /
     // `assemble_result` (cloned out of `bp`; only `&bp` is borrowed
@@ -26980,7 +27010,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     }
                     picks.push((a.clone(), out));
                 }
-                for (a, out) in minimize_children(ctx.root, &ctx.repos, &key, picks) {
+                for (a, out) in minimize_children(ctx.root, &ctx.repos, config, &key, picks) {
                     state.minimize_pins.insert((o.clone(), a), out);
                 }
             }
@@ -49086,6 +49116,9 @@ mod tests {
         let d = base.join("var/db/pkg/dev-libs/minlib-1.0");
         fs::create_dir_all(&d).unwrap();
         fs::write(d.join("SLOT"), "0/1\n").unwrap();
+        fs::write(d.join("IUSE"), "abi\n").unwrap();
+        fs::write(d.join("USE"), "abi\n").unwrap();
+        let config = test_config();
         let repo = base.join("repo");
         for (pv, slot) in [("1.0", "0/1"), ("2.0", "0/2"), ("3.0", "0/3")] {
             let dir = repo.join("dev-libs/minlib");
@@ -49126,6 +49159,7 @@ mod tests {
         let out = minimize_children(
             &base,
             &repos,
+            &config,
             &key,
             vec![
                 ("dev-libs/minlib:=".to_string(), up("2.0")),
@@ -49144,6 +49178,7 @@ mod tests {
         let out = minimize_children(
             &base,
             &repos,
+            &config,
             &key,
             vec![
                 ("<dev-libs/minlib-3".to_string(), up("2.0")),
@@ -49157,22 +49192,47 @@ mod tests {
                 (">=dev-libs/minlib-1.5".to_string(), up("2.0")),
             ]
         );
-        // Disjoint selections (each atom matches only its own pick) and a
-        // lone selection are left alone; so is a use-dep atom, which only
-        // ever counts as matching its own pick.
+        // (3) #107's mesa shape: both atoms carry use-deps. The installed
+        // instance's recorded `USE` satisfies `[abi]`, so real's
+        // `findAtomForPackage(pkg, modified_use=_pkg_use_enabled(pkg))`
+        // matches it and the tree pick is eliminated.
+        let out = minimize_children(
+            &base,
+            &repos,
+            &config,
+            &key,
+            vec![
+                ("dev-libs/minlib:=[abi]".to_string(), up("2.0")),
+                ("dev-libs/minlib:0/1=[abi]".to_string(), installed.clone()),
+            ],
+        );
+        assert_eq!(
+            out,
+            vec![
+                ("dev-libs/minlib:=[abi]".to_string(), installed.clone()),
+                ("dev-libs/minlib:0/1=[abi]".to_string(), installed.clone()),
+            ]
+        );
+        // Disjoint selections (each atom matches only its own pick) are
+        // left alone; so is a use-dep atom the installed instance's
+        // recorded USE does not satisfy (`foo` is not in its IUSE), and a
+        // use-dep atom never matches a not-yet-built package but its own.
         let disjoint = vec![
             ("<dev-libs/minlib-2".to_string(), installed.clone()),
             (">=dev-libs/minlib-3".to_string(), up("3.0")),
         ];
         assert_eq!(
-            minimize_children(&base, &repos, &key, disjoint.clone()),
+            minimize_children(&base, &repos, &config, &key, disjoint.clone()),
             disjoint
         );
         let used = vec![
             ("dev-libs/minlib[foo]".to_string(), up("2.0")),
             (">=dev-libs/minlib-1.0:0/1=".to_string(), installed.clone()),
         ];
-        assert_eq!(minimize_children(&base, &repos, &key, used.clone()), used);
+        assert_eq!(
+            minimize_children(&base, &repos, &config, &key, used.clone()),
+            used
+        );
         let _ = fs::remove_dir_all(&base);
     }
 
