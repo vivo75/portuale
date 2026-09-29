@@ -1,0 +1,23 @@
+Undefined license group 'FREE'
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.11 s (backtrack: 0/20).
+
+[ebuild  N     ] dev-libs/aubreaksub-1.0 to /tmp/l0-fixture-oracle/fixtures/ USE="brk" 
+[ebuild  N     ] dev-libs/aubreakwant-1.0 to /tmp/l0-fixture-oracle/fixtures/
+[ebuild  N     ] dev-libs/aubreakunwant-1.0 to /tmp/l0-fixture-oracle/fixtures/
+[ebuild  N     ] dev-libs/aubreaktop-1.0 to /tmp/l0-fixture-oracle/fixtures/
+
+The following USE changes are necessary to proceed:
+ (see "package.use" in the portage(5) man page for more details)
+# required by dev-libs/aubreakwant-1.0::testrepo
+# required by dev-libs/aubreaktop-1.0::testrepo
+# required by dev-libs/aubreaktop (argument)
+>=dev-libs/aubreaksub-1.0 brk
+
+ * In order to avoid wasting time, backtracking has terminated early
+ * due to the above autounmask change(s). The --autounmask-backtrack=y
+ * option can be used to force further backtracking, but there is no
+ * guarantee that it will produce a solution.

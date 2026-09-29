@@ -1,0 +1,6 @@
+--autounmask-backtrack=y dev-libs/aub0b dev-libs/aub0a
+--autounmask-backtrack=y dev-libs/aub0a dev-libs/aub0b
+--autounmask-backtrack=n dev-libs/aub0b dev-libs/aub0a
+--autounmask-backtrack=n dev-libs/aub0a dev-libs/aub0b
+dev-libs/aubreaktop
+--autounmask-backtrack=y dev-libs/aubreaktop

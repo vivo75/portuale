@@ -1,0 +1,4 @@
+emerge: there are no ebuilds to satisfy "dev-libs/does-not-exist".
+
+emerge: searching for similar names...
+emerge: Maybe you meant any of these: dev-libs/boost, dev-libs/slotusex, dev-libs/nomtarget?

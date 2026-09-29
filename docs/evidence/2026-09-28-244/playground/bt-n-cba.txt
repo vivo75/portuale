@@ -1,0 +1,8 @@
+
+emerge: there are no ebuilds built with USE flags to satisfy "app-misc/D[-foo]".
+!!! One of the following packages is required to complete your request:
+- app-misc/D-0::test_repo (Change USE: -foo)
+(dependency required by "app-misc/A-0::test_repo" [ebuild])
+(dependency required by "app-misc/A" [argument])
+### ORDER C/B/A {'--pretend': True, '--autounmask-backtrack': 'n'} success 0 mergelist None use_changes None
+backtrack {}
