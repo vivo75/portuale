@@ -11364,6 +11364,67 @@ fn chain_node_usedep_suffix(
     format!("[{}]", flags.join(","))
 }
 
+/// `masked_dep_chain`'s `(node, type)` for one chain entry, or `None` to stop. `child`
+/// is the cp below this node on the chain (the failed dependency
+/// for the first row) -- its linking atom decides the affecting-USE
+/// suffix.
+fn chain_node_line(
+    entry: &GraphEntry,
+    root: &Path,
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    child: &(String, String),
+) -> Option<(String, String)> {
+    let version = match &entry.outcome {
+        PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+            version.clone()
+        }
+        PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to.clone(),
+        PretendOutcome::AlreadyInstalled { version } => version.clone(),
+        // #72 B3: a removal is not a dependency-chain node.
+        PretendOutcome::NoVisibleCandidate | PretendOutcome::Uninstall { .. } => return None,
+    };
+    let (installed, repo, ty) = match &entry.outcome {
+        PretendOutcome::AlreadyInstalled { .. } => (
+            true,
+            installed_pkg_repo(root, &entry.category, &entry.package, &version),
+            "installed".to_string(),
+        ),
+        _ => (
+            false,
+            entry.repo_name.clone().unwrap_or_default(),
+            if entry.source == CandidateSource::Binary {
+                "binary".to_string()
+            } else {
+                "ebuild".to_string()
+            },
+        ),
+    };
+    let suffix = chain_node_usedep_suffix(repos, config, root, entry, &version, installed, child);
+    Some((
+        format!(
+            "{}/{}-{version}::{repo}{suffix}",
+            entry.category, entry.package
+        ),
+        ty,
+    ))
+}
+/// `masked_dep_chain`'s argument lines: the top-level atom texts
+/// targeting `cp`, in request order.
+fn chain_arg_lines(atoms: &[String], cp: &(String, String)) -> Vec<(String, String)> {
+    atoms
+        .iter()
+        .filter(|a| {
+            portage_dep::parse_atom(a).is_some_and(|at| {
+                at.blocker == portage_dep::Blocker::None
+                    && at.category == cp.0
+                    && at.package == cp.1
+            })
+        })
+        .map(|a| (a.clone(), "argument".to_string()))
+        .collect()
+}
+
 /// Real `_get_dep_chain` for one masked-dependency disclosure
 /// (`depgraph.py:6257+`): `(node, type)` pairs from the failed
 /// dependency's direct parents up to the top-level argument(s),
@@ -11417,67 +11478,6 @@ fn masked_dep_chain(
                 })
             })
     }
-    /// `(node, type)` for one chain entry, or `None` to stop. `child`
-    /// is the cp below this node on the chain (the failed dependency
-    /// for the first row) -- its linking atom decides the affecting-USE
-    /// suffix.
-    fn node_line(
-        entry: &GraphEntry,
-        root: &Path,
-        repos: &[RepoConfig],
-        config: &portage_profile::Config,
-        child: &(String, String),
-    ) -> Option<(String, String)> {
-        let version = match &entry.outcome {
-            PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
-                version.clone()
-            }
-            PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to.clone(),
-            PretendOutcome::AlreadyInstalled { version } => version.clone(),
-            // #72 B3: a removal is not a dependency-chain node.
-            PretendOutcome::NoVisibleCandidate | PretendOutcome::Uninstall { .. } => return None,
-        };
-        let (installed, repo, ty) = match &entry.outcome {
-            PretendOutcome::AlreadyInstalled { .. } => (
-                true,
-                installed_pkg_repo(root, &entry.category, &entry.package, &version),
-                "installed".to_string(),
-            ),
-            _ => (
-                false,
-                entry.repo_name.clone().unwrap_or_default(),
-                if entry.source == CandidateSource::Binary {
-                    "binary".to_string()
-                } else {
-                    "ebuild".to_string()
-                },
-            ),
-        };
-        let suffix =
-            chain_node_usedep_suffix(repos, config, root, entry, &version, installed, child);
-        Some((
-            format!(
-                "{}/{}-{version}::{repo}{suffix}",
-                entry.category, entry.package
-            ),
-            ty,
-        ))
-    }
-    /// Top-level atom texts targeting `cp`, in request order.
-    fn arg_lines(atoms: &[String], cp: &(String, String)) -> Vec<(String, String)> {
-        atoms
-            .iter()
-            .filter(|a| {
-                portage_dep::parse_atom(a).is_some_and(|at| {
-                    at.blocker == portage_dep::Blocker::None
-                        && at.category == cp.0
-                        && at.package == cp.1
-                })
-            })
-            .map(|a| (a.clone(), "argument".to_string()))
-            .collect()
-    }
-
     let start = entries.iter().find(|e| {
         e.category == category
             && e.package == package
@@ -11495,13 +11495,13 @@ fn masked_dep_chain(
         let mut child = (category.to_string(), package.to_string());
         let mut cur = parent;
         while let Some(entry) = select_entry(entries, &cur) {
-            let Some((node, ty)) = node_line(entry, root, repos, config, &child) else {
+            let Some((node, ty)) = chain_node_line(entry, root, repos, config, &child) else {
                 break;
             };
             chain.push((node, ty));
             // A chain top directly targeted from the command line ends
             // in its argument line(s), like real stopping at args.
-            let args = arg_lines(atoms, &cur);
+            let args = chain_arg_lines(atoms, &cur);
             if !args.is_empty() {
                 chain.extend(args);
                 break;
@@ -22820,8 +22820,11 @@ pub fn abort_path_enabled() -> bool {
 /// graph (oracle: `abort-masked-cycle` — no list, no circular block).
 /// Between several walk-time failures real records only the first one
 /// its DFS reaches; portuale takes the first in BFS admission order
-/// (`entries` order) — a deliberate cut, since which failure is "first"
-/// is a walk-order artefact, and the fixtures never carry two.
+/// (`entries` order) here. Backlog #244 closed the cut where it shows:
+/// the autounmask-breakage clean pass (the `aub0` two-losing-deps shape
+/// the fixtures once lacked) is re-cut afterwards to real's fail-fast
+/// walk -- first failure, its own chain, only the slot conflicts admitted
+/// before it (`fail_fast_truncate`, `merge_order::replay_create_graph`).
 ///
 /// A `NoVisibleCandidate` dependency entry always aborts: real has no
 /// installed-parent rescue for a settled miss. Its
@@ -23083,6 +23086,12 @@ pub struct GraphResult {
     /// still counts here -- that only ever keeps the notice (the
     /// status quo), never removes it where real prints it.
     pub autounmask_no_clean_tail: bool,
+    /// Backlog #244: the reported graph comes from a pass real runs with
+    /// backtracking still allowed -- the loop ended early on
+    /// `need_config_change` (`depgraph.py:12228-12234`) -- so real's
+    /// slot-conflict advisory omits its `--backtrack=30` hint (shown only
+    /// when `not _allow_backtracking`, `depgraph.py:1750-1759`).
+    pub settled_with_backtracking: bool,
     /// `(provider-cpv, consumer-cpv)` pairs behind each slot-operator
     /// auto-rebuild (real `_compute_abi_rebuild_info`'s `_forced_rebuilds`):
     /// the consumer got a `Reinstall { slot_operator_rebuild: true }`
@@ -28057,8 +28066,17 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                                     atom: atom_form,
                                     token,
                                     dep_chain: Vec::new(),
-                                    // Backward-cascade overlay: see above.
-                                    trigger: None,
+                                    // Backlog #244: unlike the parent-flip
+                                    // arm above, this dep's owner *is* the
+                                    // forcing parent -- its own `[flag]`
+                                    // atom needs the change on the
+                                    // already-resolved package (real
+                                    // `_get_dep_chain` starts at the
+                                    // requester, not at whoever pulled the
+                                    // package in first; oracle:
+                                    // `aubreaktop`, evidence
+                                    // 2026-09-28-244).
+                                    trigger: owner.clone(),
                                 });
                             }
                             // Real `_backtrack_depgraph` finishes
@@ -31098,6 +31116,7 @@ fn assemble_result(
         // post-failure). Either way the tail was pre-empted.
         autounmask_no_clean_tail: !params.autounmask_use_config.is_empty()
             || pass.parent_flip_rescued,
+        settled_with_backtracking: false,
         abi_rebuilds,
         circular_deps,
         circular_dependency: params.circular_dependency.clone(),
@@ -31110,6 +31129,419 @@ fn assemble_result(
     }
 }
 
+/// Backlog #244: `merge_order::replay_create_graph`'s USE model for one
+/// entry -- the ebuild's profile-valid `IUSE`, its configured USE with
+/// no autounmask change applied (`ctx.config`, never a pass's
+/// autounmask-tiered view: the replay layers the needed changes itself),
+/// and the forced/masked flags no change can touch. `None` for anything
+/// but a merge-bound ebuild (an installed or binary package's USE is
+/// fixed, so the replay does not check use-deps against it).
+fn replay_use_of(ctx: &ResolveCtx<'_>, e: &GraphEntry) -> Option<merge_order::ReplayUse> {
+    if e.source != CandidateSource::Ebuild {
+        return None;
+    }
+    let version = match &e.outcome {
+        PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => version,
+        PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to,
+        _ => return None,
+    };
+    let cands = list_candidates(&ctx.repos, &e.category, &e.package).ok()?;
+    let cand = cands.iter().find(|c| {
+        &c.version == version && e.repo_name.as_deref().is_none_or(|r| r == c.repo_name)
+    })?;
+    let declared: HashSet<String> = cand
+        .iuse
+        .split_whitespace()
+        .map(|t| t.trim_start_matches(['+', '-']).to_string())
+        .collect();
+    let cpv = format!(
+        "{}/{}-{version}:{}/{}::{}",
+        e.category, e.package, cand.slot, cand.sub_slot, cand.repo_name
+    );
+    Some(merge_order::ReplayUse {
+        iuse: valid_iuse(&declared, ctx.config),
+        enabled: effective_use_flags(
+            ctx.config,
+            &cand.iuse,
+            &cand.keywords,
+            &cpv,
+            &e.category,
+            &e.package,
+        )
+        .as_ref()
+        .clone(),
+        fixed: forced_or_masked_flags(
+            &cand.iuse,
+            &cand.keywords,
+            &cpv,
+            &e.category,
+            &e.package,
+            ctx.config,
+        ),
+    })
+}
+
+/// Backlog #244: real `_create_graph`'s walk over `entries` (see
+/// `merge_order::replay_create_graph`), with the USE model above.
+fn replay_walk(
+    ctx: &ResolveCtx<'_>,
+    entries: &[GraphEntry],
+    allow_flips: bool,
+    needed_init: &HashMap<(String, String), HashMap<String, bool>>,
+) -> merge_order::WalkReplay {
+    let use_of = |i: usize| replay_use_of(ctx, &entries[i]);
+    merge_order::replay_create_graph(
+        entries,
+        ctx.atoms,
+        ctx.root,
+        allow_flips,
+        needed_init,
+        &use_of,
+    )
+}
+
+/// Backlog #244: whether a pass carries any autounmask USE change -- the
+/// only passes the autounmask-breakage replay has anything to decide on.
+fn pass_has_use_changes(params: &BacktrackParams, pass: &PassResult) -> bool {
+    !pass.autounmask_use_changes.is_empty()
+        || !pass.use_overlay.is_empty()
+        || !params.autounmask_use_config.is_empty()
+}
+
+/// Real `_autounmask_breakage` (`depgraph.py:12262-12280`): the params of
+/// the one final clean pass -- every autounmask change dropped and
+/// suggestion fully off (`myparams["autounmask"] = False`).
+fn breakage_clean_params(params: &BacktrackParams) -> BacktrackParams {
+    let mut grown = params.clone();
+    grown.autounmask_disabled = true;
+    grown.autounmask_suggest_keywords = false;
+    grown.autounmask_suggest_use = false;
+    grown.autounmask_suggest_license = false;
+    grown.autounmask_suggest_masks = false;
+    grown.autounmask_use_config.clear();
+    grown.autounmask_use_change_records.clear();
+    grown.backtrack_config = None;
+    grown
+}
+
+/// Backlog #244: real's clean pass after an autounmask breakage runs
+/// with `allow_backtracking=False` (`depgraph.py:12270-12279`) -- one
+/// pass, reported as it stands, then cut to what real's fail-fast walk
+/// reached ([`fail_fast_truncate`]).
+fn run_breakage_clean_pass(
+    ctx: &ResolveCtx<'_>,
+    initial: &BacktrackParams,
+    restarts: u64,
+) -> Result<GraphResult, Error> {
+    // Real builds the clean depgraph with no `backtrack_parameters` at
+    // all: none of the search's masks or config carries over.
+    let clean = breakage_clean_params(initial);
+    let pass = run_pass(ctx, &clean, false)?;
+    let mut result = assemble_result(ctx, &clean, pass, ctx.config, restarts);
+    fail_fast_truncate(ctx, &mut result);
+    Ok(result)
+}
+
+/// Backlog #244: real `_create_graph` returns at the first dependency
+/// that fails (`depgraph.py:3254-3271`, `:3483-3522`); portuale's pass
+/// walks everything and classifies afterwards. Replay real's walk over
+/// the result (autounmask off -- this runs on the breakage clean pass)
+/// and keep only what that walk reached:
+///
+/// - the unsatisfied-dependency report of the first failing atom, with
+///   its own dep chain (real `_get_dep_chain` from the failing parent up
+///   the admitting edges to the argument) -- the other failing atoms
+///   were never reached;
+/// - the slot conflicts between instances admitted before the failure,
+///   instances and parents in admission order (real's package tracker
+///   insertion order) -- a conflict the walk would only have formed
+///   after the failure never existed.
+///
+/// Leaves `result` untouched when the replay finds no failure or the
+/// pass has no report for the failing atom (nothing provably better).
+fn fail_fast_truncate(ctx: &ResolveCtx<'_>, result: &mut GraphResult) {
+    if !matches!(result.outcome, ResolveOutcome::Aborted { .. }) {
+        return;
+    }
+    let r = replay_walk(ctx, &result.entries, false, &HashMap::new());
+    let Some(f) = r.failure.clone() else {
+        return;
+    };
+    let entries = &result.entries;
+    let edge = &entries[f.parent].deps[f.edge];
+    let (fc, fp) = (edge.category.clone(), edge.package.clone());
+    let same = |c: &str, p: &str, a: &str| c == fc && p == fp && a == edge.atom;
+    let has_report = result
+        .use_unsat_deps
+        .iter()
+        .any(|d| same(&d.category, &d.package, &d.atom))
+        || result
+            .plain_miss_deps
+            .iter()
+            .any(|d| same(&d.category, &d.package, &d.atom));
+    if !has_report {
+        return;
+    }
+    // The failing parent's own chain, innermost first.
+    let mut chain: Vec<(String, String)> = Vec::new();
+    let mut child = (fc.clone(), fp.clone());
+    let mut cur = f.parent;
+    let mut guard = 0usize;
+    loop {
+        let e = &entries[cur];
+        let Some(line) = chain_node_line(e, ctx.root, &ctx.repos, ctx.config, &child) else {
+            break;
+        };
+        chain.push(line);
+        if let Some(ai) = r.admitted_arg[cur] {
+            chain.push((ctx.atoms[ai].clone(), "argument".to_string()));
+            break;
+        }
+        let Some((p, _)) = r.admitted_by[cur] else {
+            break;
+        };
+        child = (e.category.clone(), e.package.clone());
+        cur = p;
+        guard += 1;
+        if guard > entries.len() {
+            break;
+        }
+    }
+    result
+        .use_unsat_deps
+        .retain(|d| same(&d.category, &d.package, &d.atom));
+    for d in &mut result.use_unsat_deps {
+        d.chain = chain.clone();
+    }
+    result
+        .plain_miss_deps
+        .retain(|d| same(&d.category, &d.package, &d.atom));
+    for d in &mut result.plain_miss_deps {
+        d.chain = chain.clone();
+    }
+    result.masked_deps.clear();
+    // Slot conflicts: only admitted instances, in admission order.
+    let rank: HashMap<(String, String, String), usize> = r
+        .admitted
+        .iter()
+        .enumerate()
+        .filter_map(|(pos, &i)| {
+            let e = &entries[i];
+            merge_bound_version(&e.outcome)
+                .map(|v| ((e.category.clone(), e.package.clone(), v.clone()), pos))
+        })
+        .collect();
+    let parent_rank = |cpv: &str| -> Option<usize> {
+        let (c, p, v) = split_cpv(cpv.split(':').next().unwrap_or(cpv))?;
+        rank.get(&(c, p, v)).copied()
+    };
+    for c in &mut result.slot_conflicts {
+        c.instances.retain(|inst| {
+            rank.contains_key(&(c.category.clone(), c.package.clone(), inst.version.clone()))
+        });
+        c.instances.sort_by_key(|inst| {
+            rank[&(c.category.clone(), c.package.clone(), inst.version.clone())]
+        });
+        for inst in &mut c.instances {
+            inst.parents
+                .retain(|p| p.parent_cpv.is_empty() || parent_rank(&p.parent_cpv).is_some());
+        }
+    }
+    result.slot_conflicts.retain(|c| c.instances.len() >= 2);
+    if let ResolveOutcome::Aborted { reason, .. } = &mut result.outcome
+        && let AbortReason::UnsatisfiedAtom { atom, parent_cpv }
+        | AbortReason::MaskedDep { atom, parent_cpv } = reason
+    {
+        let pe = &entries[f.parent];
+        if let Some(v) = merge_bound_version(&pe.outcome) {
+            *parent_cpv = format!("{}/{}-{v}", pe.category, pe.package);
+        }
+        *atom = edge.atom.clone();
+    }
+}
+
+/// Backlog #244: a slot-conflict block as real's package tracker holds it
+/// after the walk `r` replayed over `entries` (see
+/// `merge_order::replay_create_graph`): instances in admission order,
+/// each instance's parents every edge that landed on it in walk order --
+/// including a requester whose use-dep the instance no longer satisfies
+/// once a later requester's autounmask change flipped it (real keeps the
+/// edge; the conflict block lists and marks both) -- and each instance's
+/// `USE="…"` its displayed row's (the flip applied). Conflicts or
+/// instances the replay cannot place are left as they are.
+fn replay_slot_conflicts(
+    ctx: &ResolveCtx<'_>,
+    entries: &[GraphEntry],
+    r: &merge_order::WalkReplay,
+    conflicts: &mut [SlotConflict],
+) {
+    let find = |c: &str, p: &str, v: &str| {
+        entries.iter().position(|e| {
+            e.category == c
+                && e.package == p
+                && merge_bound_version(&e.outcome).is_some_and(|x| x == v)
+        })
+    };
+    let pos: HashMap<usize, usize> = r
+        .admitted
+        .iter()
+        .enumerate()
+        .map(|(k, &i)| (i, k))
+        .collect();
+    for c in conflicts.iter_mut() {
+        let idx: Vec<Option<usize>> = c
+            .instances
+            .iter()
+            .map(|inst| {
+                find(&c.category, &c.package, &inst.version).filter(|i| pos.contains_key(i))
+            })
+            .collect();
+        if idx.iter().any(Option::is_none) {
+            continue;
+        }
+        for (inst, i) in c.instances.iter_mut().zip(idx.iter().flatten()) {
+            let parents: Vec<SlotConflictParent> = r
+                .edges
+                .iter()
+                .filter(|(_, _, t)| t == i)
+                .filter_map(|&(p, ei, _)| {
+                    let pe = &entries[p];
+                    let v = merge_bound_version(&pe.outcome)?;
+                    let (sub, repo, slot) =
+                        slot_conflict_meta(&ctx.repos, &pe.category, &pe.package, v);
+                    Some(SlotConflictParent {
+                        parent_cpv: format!(
+                            "{}/{}-{v}:{slot}/{sub}::{repo}",
+                            pe.category, pe.package
+                        ),
+                        atom: pe.deps[ei].atom.clone(),
+                        use_display: pe.use_expand_display.clone(),
+                        installed: false,
+                    })
+                })
+                .collect();
+            if !parents.is_empty() {
+                inst.parents = parents;
+            }
+            inst.use_display = entries[*i].use_expand_display.clone();
+        }
+        let mut order: Vec<(usize, SlotConflictInstance)> = idx
+            .iter()
+            .flatten()
+            .map(|i| pos[i])
+            .zip(c.instances.drain(..))
+            .collect();
+        order.sort_by_key(|(k, _)| *k);
+        c.instances = order.into_iter().map(|(_, inst)| inst).collect();
+    }
+}
+
+/// Backlog #244: the USE changes real's walk needed on this pass
+/// (`r.needed`, beyond the ones `base` already carried in from earlier
+/// passes) applied to the entries they land on -- the row's and the
+/// slot-conflict block's `USE="…"` show the changed state (real
+/// `_pkg_use_enabled`) -- and recorded in `changes` when the pass
+/// itself did not record them (portuale's walk skips the flip when the
+/// requester's atom first lands on another instance of the slot), with
+/// the requester that first needed the change as the chain trigger.
+fn apply_replay_flips(
+    ctx: &ResolveCtx<'_>,
+    entries: &mut [GraphEntry],
+    r: &merge_order::WalkReplay,
+    base: &HashMap<(String, String), HashMap<String, bool>>,
+    changes: &mut Vec<AutounmaskChange>,
+) {
+    let origin_cp: HashMap<(String, String), (String, String)> = r
+        .flip_origin
+        .iter()
+        .map(|(cp, &(p, _))| {
+            (
+                cp.clone(),
+                (entries[p].category.clone(), entries[p].package.clone()),
+            )
+        })
+        .collect();
+    let mut needed: Vec<&(String, String)> = r.needed.keys().collect();
+    needed.sort();
+    for cp in needed {
+        let flags = &r.needed[cp];
+        let mut new: Vec<(String, bool)> = flags
+            .iter()
+            .filter(|(f, v)| base.get(cp).and_then(|m| m.get(*f)) != Some(v))
+            .map(|(f, v)| (f.clone(), *v))
+            .collect();
+        if new.is_empty() {
+            continue;
+        }
+        new.sort();
+        let Ok(cands) = list_candidates(&ctx.repos, &cp.0, &cp.1) else {
+            continue;
+        };
+        for e in entries.iter_mut().filter(|e| {
+            e.category == cp.0 && e.package == cp.1 && e.source == CandidateSource::Ebuild
+        }) {
+            let Some(version) = merge_bound_version(&e.outcome).cloned() else {
+                continue;
+            };
+            if !new
+                .iter()
+                .all(|(f, _)| e.use_flags_display.iter().any(|(g, _)| g == f))
+            {
+                continue;
+            }
+            let Some(cand) = cands.iter().find(|c| {
+                c.version == version && e.repo_name.as_deref().is_none_or(|r| r == c.repo_name)
+            }) else {
+                continue;
+            };
+            for (f, on) in &new {
+                for (g, v) in e.use_flags_display.iter_mut() {
+                    if g == f {
+                        *v = *on;
+                    }
+                }
+            }
+            let cpv = format!(
+                "{}/{}-{version}:{}/{}::{}",
+                cp.0, cp.1, cand.slot, cand.sub_slot, cand.repo_name
+            );
+            let forced =
+                forced_or_masked_flags(&cand.iuse, &cand.keywords, &cpv, &cp.0, &cp.1, ctx.config);
+            let no_reinst = HashSet::new();
+            e.use_expand_display = build_use_expand_display(
+                &e.use_flags_display,
+                ctx.config,
+                None,
+                &forced,
+                true,
+                &no_reinst,
+            );
+            e.use_expand_display_p = build_use_expand_display(
+                &e.use_flags_display,
+                ctx.config,
+                None,
+                &forced,
+                false,
+                &no_reinst,
+            );
+            let atom = autounmask_use_atom_form(cand, &cands, &cp.0, &cp.1, ctx.config);
+            let token = new
+                .iter()
+                .map(|(f, on)| if *on { f.clone() } else { format!("-{f}") })
+                .collect::<Vec<_>>()
+                .join(" ");
+            if !changes.iter().any(|c| c.atom == atom && c.token == token) {
+                changes.push(AutounmaskChange {
+                    atom,
+                    token,
+                    dep_chain: Vec::new(),
+                    trigger: origin_cp.get(cp).cloned(),
+                });
+            }
+        }
+    }
+}
+
 fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
     // Phase C2 (023): real `_backtrack_depgraph` -- pop a node, run one
     // pass, settle or feed the outcome back, and when the search is
@@ -31117,7 +31549,8 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
     // `--backtrack=0` explores no feedback at all (real's
     // `_allow_backtracking` gate): the root pass settles as-is.
     let ctx = ResolveCtx::new(req)?;
-    let mut bt = Backtracker::new(ctx.backtrack_max, BacktrackParams::initial(req));
+    let initial = BacktrackParams::initial(req);
+    let mut bt = Backtracker::new(ctx.backtrack_max, initial.clone());
     let mut first_pass = true;
     // #59 S2: real `_backtrack_depgraph`'s `backtracked` counter -- one
     // per loop iteration beyond the first (`passes - 1`). The final
@@ -31140,6 +31573,9 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
     // `recurse` there (`create_depgraph_params.py:181-183`), so its
     // complete graph never runs.
     let mut feed_params: Option<BacktrackParams> = None;
+    // Backlog #244: the USE changes `replay_walk` found needed on earlier
+    // passes (see the `_feedback_config` note in the loop).
+    let mut replay_needed: HashMap<(String, String), HashMap<String, bool>> = HashMap::new();
     loop {
         let from_feed = feed_params.is_some();
         let Some(params) = feed_params.take().or_else(|| bt.get()) else {
@@ -31172,7 +31608,91 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
         // the clone only allocates on autounmask-growth passes.
         let config_owned: Option<portage_profile::Config> = params.backtrack_config.clone();
         let config: &portage_profile::Config = config_owned.as_ref().unwrap_or(ctx.config);
-        match collect_feedback(&ctx, &params, &mut pass, config) {
+        // Backlog #244: the clean pass after an autounmask breakage is
+        // real's last pass (`allow_backtracking=False`) -- reported as
+        // it stands, cut to what the fail-fast walk reached.
+        if params.autounmask_disabled {
+            return run_breakage_clean_pass(&ctx, &initial, restarts);
+        }
+        // Backlog #244: real's own walk over this pass, with the USE
+        // changes it needs (`_needed_use_config_changes`). A flip that
+        // contradicts one already needed fails the pass right there
+        // (`depgraph.py:7714`) -- no slot-conflict or config feedback is
+        // ever computed for it (`_resolve` returns before
+        // `_process_slot_conflicts`), and the failure is an autounmask
+        // breakage (`autounmask_breakage_detected`, `:11779`): one clean
+        // pass follows (`:12262-12280`).
+        let mut needed_init = params.autounmask_use_config.clone();
+        for (cp, flags) in &replay_needed {
+            let m = needed_init.entry(cp.clone()).or_default();
+            for (f, on) in flags {
+                m.entry(f.clone()).or_insert(*on);
+            }
+        }
+        // With `--autounmask-backtrack` off real stops after the first
+        // pass that carries an autounmask change (`need_config_change`),
+        // so only that pass is replayed; later passes portuale runs for
+        // other feedback have no real counterpart to mirror.
+        let replay = (params.autounmask_suggest_use
+            && (ctx.autounmask_backtrack_enabled || passes == 1)
+            && (pass_has_use_changes(&params, &pass)
+                || !pass.slot_conflicts.is_empty()
+                || !replay_needed.is_empty()))
+        .then(|| replay_walk(&ctx, &pass.entries, true, &needed_init));
+        // Real `_feedback_config` (`--autounmask-backtrack=y`): the changes
+        // this walk needed carry into every later try, including the ones
+        // portuale's own pass never recorded (its walk skips the flip
+        // when the requester first lands on another instance of the
+        // slot).
+        if ctx.autounmask_backtrack_enabled
+            && let Some(r) = replay.as_ref()
+        {
+            for (cp, flags) in &r.needed {
+                let m = replay_needed.entry(cp.clone()).or_default();
+                for (f, on) in flags {
+                    m.entry(f.clone()).or_insert(*on);
+                }
+            }
+        }
+        if replay
+            .as_ref()
+            .is_some_and(|r| r.failure.as_ref().is_some_and(|f| f.contradiction))
+        {
+            return run_breakage_clean_pass(&ctx, &initial, restarts);
+        }
+        let decision = collect_feedback(&ctx, &params, &mut pass, config);
+        // Backlog #244: real `need_config_change` (`depgraph.py:11708`):
+        // with `--autounmask-backtrack` off, a pass whose graph carries
+        // an autounmask change ends the loop before any slot-conflict
+        // backtracking (`_autounmask_backtrack_disabled`) -- the pass is
+        // the report, conflict block, change block and "terminated
+        // early" notice together.
+        let decision = match decision {
+            PassDecision::Feedback(BacktrackFeedback::SlotConflict { base, .. })
+                if ctx.backtrack_max > 0
+                    && !ctx.autounmask_backtrack_enabled
+                    && let Some(r) = replay.as_ref()
+                    && r.failure.is_none()
+                    && r.needed != needed_init =>
+            {
+                apply_replay_flips(
+                    &ctx,
+                    &mut pass.entries,
+                    r,
+                    &params.autounmask_use_config,
+                    &mut pass.autounmask_use_changes,
+                );
+                let entries = pass.entries.clone();
+                let slot_conflicts = std::mem::take(&mut pass.slot_conflicts);
+                let mut result = assemble_result(&ctx, &base, pass, config, restarts);
+                result.slot_conflicts = slot_conflicts;
+                result.settled_with_backtracking = true;
+                replay_slot_conflicts(&ctx, &entries, r, &mut result.slot_conflicts);
+                return Ok(result);
+            }
+            d => d,
+        };
+        match decision {
             PassDecision::Settle { params } => {
                 return Ok(assemble_result(&ctx, &params, pass, config, restarts));
             }
@@ -31218,6 +31738,28 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
     // better exists (real `get_best_run`).
     let best = bt.get_best_run();
     let pass = run_pass(&ctx, &best, false)?;
+    // Backlog #244: real's post-loop `autounmask_breakage_detected()`
+    // (`depgraph.py:12262`): with the changes the search accumulated, a
+    // dependency of the best run wants a flag the other way from a
+    // needed change -- one clean pass instead.
+    let mut best_needed = best.autounmask_use_config.clone();
+    for (cp, flags) in &replay_needed {
+        let m = best_needed.entry(cp.clone()).or_default();
+        for (f, on) in flags {
+            m.entry(f.clone()).or_insert(*on);
+        }
+    }
+    if !best.autounmask_disabled
+        && best.autounmask_suggest_use
+        && (pass_has_use_changes(&best, &pass)
+            || !pass.slot_conflicts.is_empty()
+            || !replay_needed.is_empty())
+        && replay_walk(&ctx, &pass.entries, true, &best_needed)
+            .failure
+            .is_some_and(|f| f.contradiction)
+    {
+        return run_breakage_clean_pass(&ctx, &initial, restarts);
+    }
     let config_owned: Option<portage_profile::Config> = best.backtrack_config.clone();
     let config: &portage_profile::Config = config_owned.as_ref().unwrap_or(ctx.config);
     Ok(assemble_result(&ctx, &best, pass, config, restarts))
@@ -46708,11 +47250,21 @@ mod tests {
         config: &portage_profile::Config,
         atom_str: &str,
     ) -> GraphResult {
+        graph_result_autounmask_cfg_atoms(config, &[atom_str.to_string()])
+    }
+
+    /// `graph_result_autounmask_cfg` for several top-level atoms, in argv
+    /// order (backlog #244's argument-order cells).
+    fn graph_result_autounmask_cfg_atoms(
+        config: &portage_profile::Config,
+        atoms: &[String],
+    ) -> GraphResult {
+        let atom_str = atoms.join(" ");
         let root = fixtures_root();
         resolve_pretend_graph(
             &root,
             &root,
-            &[atom_str.to_string()],
+            atoms,
             config,
             false,
             false,
@@ -47198,6 +47750,172 @@ mod tests {
             // with the parent's +pf unflipped) but the `Aborted` outcome
             // prints no rows -- real's merge list is likewise empty.
         }
+    }
+
+    /// Backlog #244: the six `aub0` argument orders (upstream
+    /// `test_autounmask_use_breakage`; `aub0a` needs `aub0d[-foo]`,
+    /// `aub0b` `aub0d[foo]`, `aub0c` `>=aub0d-1`; the fixture profile
+    /// enables `foo`). Expected values from real 3.0.82.2
+    /// (`docs/evidence/2026-09-28-244/fixture-oracle/real/`).
+    fn aub0_result(order: &str, backtrack_y: bool) -> GraphResult {
+        let root = fixtures_root();
+        let mut config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+            &root,
+        )
+        .expect("fixture config resolves");
+        config.autounmask_backtrack = backtrack_y;
+        let atoms: Vec<String> = order
+            .split_whitespace()
+            .map(|p| format!("dev-libs/aub0{p}"))
+            .collect();
+        graph_result_autounmask_cfg_atoms(&config, &atoms)
+    }
+
+    fn aub0_conflict_versions(result: &GraphResult) -> Vec<Vec<String>> {
+        result
+            .slot_conflicts
+            .iter()
+            .map(|c| c.instances.iter().map(|i| i.version.clone()).collect())
+            .collect()
+    }
+
+    fn assert_aub0_fails_on_a(result: &GraphResult, order: &str) {
+        assert!(
+            matches!(
+                &result.outcome,
+                ResolveOutcome::Aborted {
+                    reason: AbortReason::UnsatisfiedAtom { atom, parent_cpv },
+                    ..
+                } if atom == "dev-libs/aub0d[-foo]" && parent_cpv == "dev-libs/aub0a-0"
+            ),
+            "{order}: {:?}",
+            result.outcome
+        );
+        assert!(result.autounmask_use_changes.is_empty(), "{order}");
+        assert_eq!(result.use_unsat_deps.len(), 1, "{order}");
+        assert_eq!(
+            result.use_unsat_deps[0].chain,
+            vec![
+                (
+                    "dev-libs/aub0a-0::testrepo".to_string(),
+                    "ebuild".to_string()
+                ),
+                ("dev-libs/aub0a".to_string(), "argument".to_string()),
+            ],
+            "{order}: the failing dependency's own chain only"
+        );
+    }
+
+    #[test]
+    fn aub0_backtrack_y_fails_on_a_with_the_order_dependent_slot_prefix() {
+        for (order, prefix) in [
+            ("c b a", vec![]),
+            ("c a b", vec![]),
+            ("b c a", vec![]),
+            ("b a c", vec![]),
+            ("a c b", vec![vec!["0".to_string(), "1".to_string()]]),
+            ("a b c", vec![vec!["1".to_string(), "0".to_string()]]),
+        ] {
+            let result = aub0_result(order, true);
+            assert_aub0_fails_on_a(&result, order);
+            assert_eq!(aub0_conflict_versions(&result), prefix, "{order}");
+        }
+    }
+
+    #[test]
+    fn aub0_backtrack_n_fails_or_stops_early_by_walk_order() {
+        // A walked before B: B contradicts A's needed `-foo`, real's
+        // breakage clean pass fails on A, no conflict reached.
+        for order in ["c b a", "b c a", "b a c"] {
+            let result = aub0_result(order, false);
+            assert_aub0_fails_on_a(&result, order);
+            assert!(result.slot_conflicts.is_empty(), "{order}");
+        }
+        // B walked before A: A's `-foo` is the first needed change; the
+        // loop stops on it (`need_config_change`), the pass is the report.
+        for (order, instances) in [
+            ("c a b", ["0", "1"]),
+            ("a c b", ["0", "1"]),
+            ("a b c", ["1", "0"]),
+        ] {
+            let result = aub0_result(order, false);
+            assert!(
+                matches!(result.outcome, ResolveOutcome::Complete),
+                "{order}: {:?}",
+                result.outcome
+            );
+            assert!(result.settled_with_backtracking, "{order}");
+            assert_eq!(
+                result
+                    .autounmask_use_changes
+                    .iter()
+                    .map(|c| (c.atom.as_str(), c.token.as_str()))
+                    .collect::<Vec<_>>(),
+                vec![("=dev-libs/aub0d-0", "-foo")],
+                "{order}"
+            );
+            assert_eq!(
+                result.autounmask_use_changes[0].dep_chain,
+                vec![
+                    "required by dev-libs/aub0a-0::testrepo".to_string(),
+                    "required by dev-libs/aub0a (argument)".to_string(),
+                ],
+                "{order}"
+            );
+            assert_eq!(
+                aub0_conflict_versions(&result),
+                vec![instances.iter().map(|v| v.to_string()).collect::<Vec<_>>()],
+                "{order}"
+            );
+            let d0 = result.slot_conflicts[0]
+                .instances
+                .iter()
+                .find(|i| i.version == "0")
+                .unwrap();
+            assert_eq!(
+                d0.parents
+                    .iter()
+                    .map(|p| p.atom.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["dev-libs/aub0d[foo]", "dev-libs/aub0d[-foo]"],
+                "{order}: B first (walked first), then A, whose change broke it"
+            );
+            assert_eq!(
+                d0.use_display,
+                vec![("USE".to_string(), "-foo".to_string())],
+                "{order}"
+            );
+        }
+    }
+
+    #[test]
+    fn existing_slot_use_change_chain_starts_at_the_requester() {
+        // Backlog #244: `aubreaktop` pulls `aubreaksub` plain first, then
+        // `aubreakwant` needs `aubreaksub[brk]` on the already-resolved
+        // package. Real's change chain starts at the requester whose atom
+        // needed the change (`aubreakwant`), not at `aubreaktop`, which
+        // pulled the package in first (real 3.0.82.2,
+        // docs/evidence/2026-09-28-244/fixture-oracle-2/real/dev-libs_aubreaktop.txt).
+        let result = graph_result_autounmask("dev-libs/aubreaktop");
+        let change = result
+            .autounmask_use_changes
+            .iter()
+            .find(|c| c.token == "brk")
+            .expect("the brk change is collected");
+        assert_eq!(
+            change.dep_chain,
+            vec![
+                "required by dev-libs/aubreakwant-1.0::testrepo".to_string(),
+                "required by dev-libs/aubreaktop-1.0::testrepo".to_string(),
+                "required by dev-libs/aubreaktop (argument)".to_string(),
+            ]
+        );
     }
 
     #[test]
