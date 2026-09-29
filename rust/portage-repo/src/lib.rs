@@ -16845,6 +16845,229 @@ fn slot_operator_rebuild_scan(
     (scheduled, abi_rebuilds, masked)
 }
 
+/// [`slot_operator_update_force_scan`]'s result: the consumers joining
+/// the replace set and the `(category, package, version)` children whose
+/// update the restart must select.
+type SlotOpForceScan = (
+    BTreeSet<(String, String)>,
+    BTreeSet<(String, String, String)>,
+);
+
+/// #236 A: the forcing half of real's slot-operator update probe
+/// (`_slot_operator_trigger_reinstalls` -> `_slot_operator_update_probe`
+/// -> `_slot_operator_update_backtrack`, `_emerge/depgraph.py:3089-3132`,
+/// `:2576-2800`, `:2400-2452`) for the case [`slot_operator_rebuild_scan`]
+/// cannot see: the walk bound a built consumer's `:S/SS=` dep to the
+/// *installed* child and put no update of that child in the graph at all
+/// (the `_minimize_children` collapse makes this the normal shape -- the
+/// live `cat/pkg:=` and the appended built atom both bind the installed
+/// instance). Real's probe then looks for a visible candidate of the
+/// child in the same slot with a different sub-slot and a higher version
+/// (downgrades need `_downgrade_probe`, not modelled), which the
+/// consumer's replacement ebuild's own atoms on that cp accept
+/// (`_iter_similar_available(dep.child, atom)` intersected over the
+/// atoms, highest wins), and which every other parent of the child
+/// accepts (`_slot_operator_check_reverse_dependencies`, the #211 R2
+/// [`probe_refused`] helper). A hit writes both halves of real's
+/// backtrack: the consumer into the replace set, the child's candidate
+/// into `slot_operator_forced_upgrade`, and the restart selects them.
+///
+/// Gates, as the scan's #211 arms: the consumer is a walked installed
+/// node (real registers `_slot_operator_deps` for walked parents only)
+/// that is not merge-bound, neither end is `--exclude`d (`:2589-2603`),
+/// `want_update` is stood in for by `--update` or the child being
+/// directly requested, the child's graph node is the installed instance
+/// the atom is bound to, and a visible replacement ebuild exists. The
+/// `_select_atoms_probe` check (`||` choices) and `_too_deep` are not
+/// modelled; the consumer's atoms are flattened like the scan's.
+#[allow(clippy::too_many_arguments)]
+fn slot_operator_update_force_scan(
+    root: &Path,
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    entries: &[GraphEntry],
+    reachable: &HashSet<(String, String)>,
+    already: &BTreeSet<(String, String)>,
+    undone: &BTreeSet<(String, String)>,
+    with_bdeps: bool,
+    update: bool,
+    top_level_cps: &HashSet<(String, String)>,
+    excluded: &[String],
+) -> SlotOpForceScan {
+    let mut consumers: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut forced: BTreeSet<(String, String, String)> = BTreeSet::new();
+    let mut in_graph: HashSet<(String, String)> = HashSet::new();
+    // cp -> version of every walked installed node.
+    let mut installed_nodes: HashMap<(String, String), Vec<String>> = HashMap::new();
+    for e in entries {
+        let cp = (e.category.clone(), e.package.clone());
+        match &e.outcome {
+            PretendOutcome::AlreadyInstalled { version } => {
+                installed_nodes.entry(cp).or_default().push(version.clone());
+            }
+            PretendOutcome::NoVisibleCandidate | PretendOutcome::Uninstall { .. } => {}
+            _ => {
+                in_graph.insert(cp);
+            }
+        }
+    }
+    if installed_nodes.is_empty() {
+        return (consumers, forced);
+    }
+    let walked: HashSet<(String, String)> = entries
+        .iter()
+        .map(|e| (e.category.clone(), e.package.clone()))
+        .collect();
+    let is_excluded = |cat: &str, pkg: &str, ver: &str| {
+        let cpv = format!("{cat}/{pkg}-{ver}");
+        excluded
+            .iter()
+            .any(|a| matches_config_entry(a, &cpv, cat, pkg))
+    };
+    let probe_parents = collect_probe_parents(
+        root, entries, reachable, &walked, &in_graph, already, with_bdeps, excluded,
+    );
+    let mut scheduled: BTreeSet<(String, String)> = already.clone();
+    let mut consumer_cps: Vec<&(String, String)> = installed_nodes.keys().collect();
+    consumer_cps.sort();
+    for cp in consumer_cps {
+        if undone.contains(cp) || in_graph.contains(cp) || scheduled.contains(cp) {
+            continue;
+        }
+        for version in &installed_nodes[cp] {
+            if is_excluded(&cp.0, &cp.1, version) {
+                continue;
+            }
+            let Some(live) = live_metadata_for_installed(repos, root, &cp.0, &cp.1, version) else {
+                continue;
+            };
+            if !ebuild_visible_at(repos, &cp.0, &cp.1, version, config) {
+                continue;
+            }
+            let dep_keys: &[&str] = if with_bdeps {
+                &["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"]
+            } else {
+                &["RDEPEND", "PDEPEND", "IDEPEND"]
+            };
+            let use_flags = read_vdb_flag_set(root, &cp.0, &cp.1, version, "USE");
+            let mut live_atoms: Vec<String> = Vec::new();
+            for key in dep_keys {
+                if let Some(toks) = flat_dep_atoms(
+                    live.get(*key).map(String::as_str).unwrap_or_default(),
+                    &use_flags,
+                ) {
+                    live_atoms.extend(toks);
+                }
+            }
+            let mut built: Vec<portage_dep::Atom> = dep_keys
+                .iter()
+                .flat_map(|key| {
+                    read_vdb_string(root, &cp.0, &cp.1, version, key)
+                        .split_whitespace()
+                        .map(String::from)
+                        .collect::<Vec<_>>()
+                })
+                .filter_map(|tok| portage_dep::parse_atom(&tok))
+                .filter(|a| {
+                    a.blocker == portage_dep::Blocker::None
+                        && a.slot_operator == Some(portage_dep::SlotOperator::Equals)
+                        && a.slot.is_some()
+                        && a.sub_slot.is_some()
+                })
+                .collect();
+            built.sort_by(|a, b| (&a.category, &a.package).cmp(&(&b.category, &b.package)));
+            for atom in built {
+                let child_cp = (atom.category.clone(), atom.package.clone());
+                if in_graph.contains(&child_cp)
+                    || forced
+                        .iter()
+                        .any(|(c, p, _)| (c, p) == (&child_cp.0, &child_cp.1))
+                {
+                    continue;
+                }
+                if !update && !top_level_cps.contains(&child_cp) {
+                    continue;
+                }
+                let (a_slot, a_sub) = (atom.slot.clone().unwrap(), atom.sub_slot.clone().unwrap());
+                // The graph's child: the walked installed instance in the
+                // bound slot.
+                let Some(child_ver) = installed_nodes.get(&child_cp).and_then(|vs| {
+                    vs.iter()
+                        .find(|v| read_vdb_slot(root, &child_cp.0, &child_cp.1, v).0 == a_slot)
+                        .cloned()
+                }) else {
+                    continue;
+                };
+                if is_excluded(&child_cp.0, &child_cp.1, &child_ver) {
+                    continue;
+                }
+                let (_, child_sub) = read_vdb_slot(root, &child_cp.0, &child_cp.1, &child_ver);
+                let child_sub = if child_sub.is_empty() {
+                    a_slot.clone()
+                } else {
+                    child_sub
+                };
+                // The replacement parent's atoms on the child's cp.
+                let parent_atoms: Vec<&str> = live_atoms
+                    .iter()
+                    .filter_map(|t| {
+                        let a = portage_dep::parse_atom(t)?;
+                        (a.blocker == portage_dep::Blocker::None
+                            && a.category == child_cp.0
+                            && a.package == child_cp.1)
+                            .then(|| portage_dep::without_use(t))
+                    })
+                    .collect();
+                if parent_atoms.is_empty() {
+                    continue;
+                }
+                let Ok(cands) = list_candidates(repos, &child_cp.0, &child_cp.1) else {
+                    continue;
+                };
+                let mut best: Option<(&Candidate, String)> = None;
+                for c in cands.iter() {
+                    if c.slot != a_slot
+                        || c.sub_slot == child_sub
+                        || c.sub_slot == a_sub
+                        || vercmp_ordering(&c.version, &child_ver) != Ordering::Greater
+                        || !is_visible(c, &child_cp.0, &child_cp.1, config)
+                    {
+                        continue;
+                    }
+                    let s = format!(
+                        "{}/{}-{}:{}/{}::{}",
+                        child_cp.0, child_cp.1, c.version, c.slot, c.sub_slot, c.repo_name
+                    );
+                    let ok = parent_atoms.iter().all(|a| {
+                        portage_dep::match_from_list(a, &[s.as_str()])
+                            .is_some_and(|m| !m.is_empty())
+                    });
+                    if !ok {
+                        continue;
+                    }
+                    if best.as_ref().is_none_or(|(b, _)| {
+                        vercmp_ordering(&c.version, &b.version) == Ordering::Greater
+                    }) {
+                        best = Some((c, s));
+                    }
+                }
+                let Some((cand, _)) = best else { continue };
+                let cand_str = format!(
+                    "{}/{}-{}:{}/{}",
+                    child_cp.0, child_cp.1, cand.version, cand.slot, cand.sub_slot
+                );
+                if probe_refused(&probe_parents, &scheduled, &child_cp, &cand_str, cp) {
+                    continue;
+                }
+                consumers.insert(cp.clone());
+                scheduled.insert(cp.clone());
+                forced.insert((child_cp.0.clone(), child_cp.1.clone(), cand.version.clone()));
+            }
+        }
+    }
+    (consumers, forced)
+}
+
 /// Backlog #24 S5: real `_slot_change_probe` (`depgraph.py:2317-2359`),
 /// the first arm of `_slot_operator_trigger_reinstalls` (`3103-3107`).
 /// For an *unbuilt* slot-operator dep -- `:=` or `:S=`, real's
@@ -25256,6 +25479,7 @@ fn params_equal(a: &BacktrackParams, b: &BacktrackParams) -> bool {
         && a.autounmask_use_broke == b.autounmask_use_broke
         && a.autounmask_disabled == b.autounmask_disabled
         && a.slot_operator_replace_installed == b.slot_operator_replace_installed
+        && a.slot_operator_forced_upgrade == b.slot_operator_forced_upgrade
         && a.slot_operator_undone == b.slot_operator_undone
         && a.prune_rebuilds == b.prune_rebuilds
         && a.circular_dependency == b.circular_dependency
@@ -25845,6 +26069,16 @@ struct BacktrackParams {
     /// cp), so `(cat, pkg)` carries the same information here. `BTreeSet` for
     /// deterministic seed order.
     slot_operator_replace_installed: BTreeSet<(String, String)>,
+    /// #236 A: the child half of real `_slot_operator_update_backtrack`
+    /// (`_emerge/depgraph.py:2400-2452`) -- an installed child whose
+    /// update the probe found joins the replace set there, and
+    /// `@__auto_slot_operator_replace_installed__`'s `force_reinstall`
+    /// (installed instances excluded from selection) makes the restart
+    /// pick the probe's candidate. Portuale's replace-set flip reinstalls
+    /// the same version, so the child keeps its own record here:
+    /// `(category, package, version)` of the candidate the restart must
+    /// select. Filled by [`slot_operator_update_force_scan`].
+    slot_operator_forced_upgrade: BTreeSet<(String, String, String)>,
     /// Backlog #24 S4: the undo latch. Real `_eliminate_rebuilds`
     /// (3859-4000) re-adds the installed instance in the rebuilt pkg's
     /// place and never sets `_need_restart`, so a within-node redo cannot
@@ -26383,6 +26617,19 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             from_disjunction: false,
         });
     }
+    // #236 A: the probe's upgraded child rides the same auto set (real
+    // `abi_reinstalls.add((child.root, child slot atom))`), seeded at the
+    // exact candidate the probe chose.
+    for (cat, pkg, ver) in &bp.slot_operator_forced_upgrade {
+        state.queue.push_back(QueueItem {
+            atom: format!("={cat}/{pkg}-{ver}"),
+            depth: 1,
+            owner: None,
+            unevaluated: None,
+            buildtime_hard: false,
+            from_disjunction: false,
+        });
+    }
 
     let pprovided_refs: Vec<&str> = config.package_provided.iter().map(String::as_str).collect();
 
@@ -26518,20 +26765,13 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         // layer's complete pass does that); top-level atoms always go
         // through `resolve_pretend` (their `NoVisibleCandidate` is
         // fatal, handled below).
-        let mut outcome = if ctx.complete
-            && !ctx.complete_locked_merges.is_empty()
-            && owner.is_some()
-            && !ctx.complete_locked_merges.contains(&key)
-        {
-            match best_installed_for_atom(ctx.root, &current_atom, &key.0, &key.1) {
-                Some(v) => PretendOutcome::AlreadyInstalled { version: v },
-                None => continue 'queue,
-            }
-        } else {
+        // The selection call, shared with the #236 A forced-upgrade flip
+        // below (same pass-constant inputs, another atom).
+        let resolve_atom = |a: &str| -> Result<PretendOutcome, Error> {
             resolve_pretend(
                 &ctx.repos,
                 ctx.root,
-                &current_atom,
+                a,
                 config,
                 ctx.newuse,
                 ctx.changed_use,
@@ -26558,7 +26798,19 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 bp.autounmask_suggest_masks,
                 extra_constraints,
                 &ctx.local_binpkg,
-            )?
+            )
+        };
+        let mut outcome = if ctx.complete
+            && !ctx.complete_locked_merges.is_empty()
+            && owner.is_some()
+            && !ctx.complete_locked_merges.contains(&key)
+        {
+            match best_installed_for_atom(ctx.root, &current_atom, &key.0, &key.1) {
+                Some(v) => PretendOutcome::AlreadyInstalled { version: v },
+                None => continue 'queue,
+            }
+        } else {
+            resolve_atom(&current_atom)?
         };
 
         // Backlog #233: a runtime-keyed dependency no ebuild satisfies
@@ -26644,6 +26896,22 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         // first in the walk -- the seed, or an ordinary dependency edge
         // that reached it earlier -- is the one that flips; patching the
         // entry afterwards would leave its deps unenqueued.
+        // #236 A: an installed child the update probe forced (see
+        // `BacktrackParams::slot_operator_forced_upgrade`) is never kept:
+        // whichever visit reaches it first selects the probe's candidate,
+        // like real's `force_reinstall` excluding the installed instance.
+        if let PretendOutcome::AlreadyInstalled { version } = &outcome
+            && let Some((_, _, target)) = bp
+                .slot_operator_forced_upgrade
+                .iter()
+                .find(|(c, p, _)| *c == key.0 && *p == key.1)
+            && target != version
+        {
+            let forced = resolve_atom(&format!("={}/{}-{target}", key.0, key.1))?;
+            if !matches!(forced, PretendOutcome::NoVisibleCandidate) {
+                outcome = forced;
+            }
+        }
         if let PretendOutcome::AlreadyInstalled { version } = &outcome {
             let cpv = format!("{}/{}-{version}", key.0, key.1);
             if ctx
@@ -30205,6 +30473,25 @@ fn collect_feedback(
             ctx.excluded,
         );
         pass.abi_rebuilds = Some(abi_rebuilds);
+        // #236 A: the update probe's forcing half, for a child the walk
+        // left installed (see the function's doc comment).
+        let mut scheduled = scheduled;
+        let (force_consumers, forced) = slot_operator_update_force_scan(
+            ctx.root,
+            &ctx.repos,
+            config,
+            &pass.entries,
+            &ctx.slot_op_reachable,
+            &scheduled,
+            &grown.slot_operator_undone,
+            ctx.with_bdeps,
+            ctx.update,
+            &ctx.top_level_cps,
+            ctx.excluded,
+        );
+        scheduled.extend(force_consumers);
+        let forced_new = !forced.is_subset(&grown.slot_operator_forced_upgrade);
+        grown.slot_operator_forced_upgrade.extend(forced);
         // #212 (v2 `#24c`): file the scan's stale-binary triples as
         // `slot_operator_mask_built` negatives (real
         // `_slot_change_backtrack`, `depgraph.py:2381-2398`, recorded
@@ -30240,7 +30527,7 @@ fn collect_feedback(
                 masks_new = true;
             }
         }
-        if scheduled != grown.slot_operator_replace_installed || masks_new {
+        if scheduled != grown.slot_operator_replace_installed || masks_new || forced_new {
             grown.slot_operator_replace_installed = scheduled;
             return PassDecision::Feedback(BacktrackFeedback::Config {
                 params: Box::new(grown),
@@ -48591,6 +48878,145 @@ mod tests {
     /// installed child in the bound slot, a higher (or equal) version,
     /// `--update` (or a directly-requested provider), and a visible tree
     /// candidate for the consumer.
+    /// #236 A: real `_slot_operator_update_probe` +
+    /// `_slot_operator_update_backtrack` (`_emerge/depgraph.py:2576-2800`,
+    /// `:2400-2452`) on the shape the `_minimize_children` collapse leaves
+    /// behind -- the walk bound the installed consumer's built
+    /// `>=forceprov-1.0:0/1=` and live `forceprov:=` to the *installed*
+    /// child, and no update of the child is in the graph. The probe finds
+    /// the tree's `2.0` (`0/2`), which the replacement ebuild's `:=`
+    /// accepts, and forces both halves: the consumer into the replace set,
+    /// the child's candidate into `slot_operator_forced_upgrade`. A second
+    /// in-scope parent pinning `<forceprov-2.0` refuses it
+    /// (`_slot_operator_check_reverse_dependencies`), and without
+    /// `--update` the probe does not run (`want_update`). Real's own
+    /// answer on this shape: the ResolverPlayground probe in
+    /// `docs/evidence/2026-09-29-236/` (`slotop`: `backtracking due to
+    /// missed slot abi update`, then `U provpkg-2.0 + rR consrdep`).
+    #[test]
+    fn slot_operator_update_force_scan_forces_the_installed_childs_update() {
+        use md5::Digest as _;
+        use std::fmt::Write as _;
+        let base = TempDir::new("portage-repo-236-force").keep();
+        for (name, slot, rdepend) in [
+            ("forceprov-1.0", "0/1", ""),
+            ("forcecons-1.0", "0", ">=dev-libs/forceprov-1.0:0/1="),
+            ("forceveto-1.0", "0", "<dev-libs/forceprov-2.0:0/1="),
+        ] {
+            let d = base.join("var/db/pkg/dev-libs").join(name);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+            fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+            fs::write(d.join("EAPI"), "8\n").unwrap();
+            fs::write(d.join("repository"), "testrepo\n").unwrap();
+            if !rdepend.is_empty() {
+                fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+            }
+        }
+        let repo = base.join("repo");
+        let write_pkg = |pkg: &str, pv: &str, slot: &str, rdepend: &str| {
+            let dir = repo.join("dev-libs").join(pkg);
+            std::fs::create_dir_all(&dir).unwrap();
+            let body = format!(
+                "EAPI=8\nDESCRIPTION=\"236 probe\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\nRDEPEND=\"{rdepend}\"\n"
+            );
+            std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
+            let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+            let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=236 probe\nEAPI=8\n".to_string();
+            writeln!(entry, "KEYWORDS=amd64").unwrap();
+            if !rdepend.is_empty() {
+                writeln!(entry, "RDEPEND={rdepend}").unwrap();
+            }
+            writeln!(entry, "SLOT={slot}\n_md5_={md5}").unwrap();
+            let cachedir = repo.join("metadata/md5-cache/dev-libs");
+            std::fs::create_dir_all(&cachedir).unwrap();
+            std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+        };
+        write_pkg("forceprov", "1.0", "0/1", "");
+        write_pkg("forceprov", "2.0", "0/2", "");
+        write_pkg("forcecons", "1.0", "0", "dev-libs/forceprov:=");
+        write_pkg("forceveto", "1.0", "0", "<dev-libs/forceprov-2.0:=");
+        let repos = vec![RepoConfig {
+            name: "testrepo".to_string(),
+            location: repo.clone(),
+            priority: 0,
+            is_main: true,
+            masters: vec![],
+            profile_formats: vec![],
+            cache_formats: vec![],
+            aliases: vec![],
+            sync_type: None,
+            sync_uri: None,
+            volatile: false,
+            module_specific_options: vec![],
+        }];
+        let installed = |pkg: &str| GraphEntry {
+            outcome: PretendOutcome::AlreadyInstalled {
+                version: "1.0".into(),
+            },
+            ..graph_entry("dev-libs", pkg, "1.0")
+        };
+        let entries = vec![installed("forcecons"), installed("forceprov")];
+        let empty: BTreeSet<(String, String)> = BTreeSet::new();
+        let cons = ("dev-libs".to_string(), "forcecons".to_string());
+        let veto = ("dev-libs".to_string(), "forceveto".to_string());
+        let config = test_config();
+        let scan = |entries: &[GraphEntry], reachable: &HashSet<(String, String)>, update: bool| {
+            slot_operator_update_force_scan(
+                &base,
+                &repos,
+                &config,
+                entries,
+                reachable,
+                &empty,
+                &empty,
+                false,
+                update,
+                &HashSet::new(),
+                &[],
+            )
+        };
+        let (consumers, forced) = scan(&entries, &HashSet::new(), true);
+        assert_eq!(consumers, BTreeSet::from([cons.clone()]));
+        assert_eq!(
+            forced,
+            BTreeSet::from([(
+                "dev-libs".to_string(),
+                "forceprov".to_string(),
+                "2.0".to_string()
+            )])
+        );
+        // No `--update`, child not requested: real's `want_update` is off.
+        assert_eq!(
+            scan(&entries, &HashSet::new(), false),
+            (empty.clone(), BTreeSet::new())
+        );
+        // A reachable installed parent pinning `<2.0` refuses the update.
+        let mut with_veto = entries.clone();
+        with_veto.push(installed("forceveto"));
+        assert_eq!(
+            scan(&with_veto, &HashSet::from([veto.clone()]), true),
+            (empty.clone(), BTreeSet::new())
+        );
+        // Already merge-bound child: the walk's own selection upgraded it,
+        // the entry-keyed scan owns that case.
+        let upgraded = vec![
+            installed("forcecons"),
+            GraphEntry {
+                outcome: PretendOutcome::Upgrade {
+                    from: "1.0".into(),
+                    to: "2.0".into(),
+                },
+                ..graph_entry("dev-libs", "forceprov", "2.0")
+            },
+        ];
+        assert_eq!(
+            scan(&upgraded, &HashSet::new(), true),
+            (empty, BTreeSet::new())
+        );
+        let _ = fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
         use md5::Digest as _;
