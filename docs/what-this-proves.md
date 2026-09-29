@@ -18881,3 +18881,15 @@ are clean for that pattern.
 cargo test --release -p portage-util temp_dir
 ls /tmp/portuale-td-* 2>/dev/null | wc -l   # expect 0 after a clean run
 ```
+
+## `l3-core` is 0 unexplained on both sides and #191 is DONE (2026-09-29)
+
+Two `l3-core` runs closed batch 2026-09-27, both with `L3_CONTROL=1 L3_JOBS=28` (the owner raised `-j` from the planned 20). The first, `l3-20260928T195717Z`, left four candidate rows on the GLEP 42 news state files, fixed as #258, and sixteen control rows from real-against-real `getconf` split-debug in glibc, filed as #261. The re-run `l3-20260929T082541Z`, built from `main` @ `042a8daf`, is candidate 19 hard / 19 explained / 0 unexplained (all nineteen are the allowlisted `l3-vm-repo-revisions-vdb-env` `environment` rows) and control 1/1/0, both sides touching 62 packages. The python and icu vdb `SIZE` rows that kept P-C3 at 2 unexplained now report as `PAYLOAD`, so #191's comparator fix is confirmed on a live run. The `getconf` split did not recur, so #261 stays open as an intermittent control class. Re-verify from the saved snapshots without containers:
+
+```sh
+# from ../pmtest; expect hard 19 / explained 19 / UNEXPLAINED 0, rc 0
+python3 differential-test-bed/compare/diff.py --layer l3 --tolerate-payload \
+  differential-test-bed/logs/l3-20260929T082541Z/portage \
+  differential-test-bed/logs/l3-20260929T082541Z/portuale \
+  differential-test-bed/compare/known-divergences.yaml | grep -A3 '^## summary'
+```

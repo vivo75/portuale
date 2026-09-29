@@ -747,7 +747,10 @@ DONE):
   filed) and `l3-core`/`@system` are not started per the S4 stop rule.
   `l3-core` has since run twice (P17 `l3-20260925T074707Z`, then P-C3
   `l3-20260927T080452Z`: candidate 347/345/2, control 0 unexplained)
-  and #30 is DONE 2026-09-27; `@system` still not started.
+  and #30 is DONE 2026-09-27. Two more runs at `-j28`:
+  `l3-20260928T195717Z` (4 news-file rows, fixed as #258) and
+  `l3-20260929T082541Z` (candidate 19/19/0, control 1/1/0; #191 DONE).
+  `@system` still not started.
   `TEST/findings/l3.md`; plan `docs/history/030_L3-source-build-parity.deepseek.md`.
 - **DONE 2026-09-26 — L4** — `mrg` remote merge over SSH (`remote-merge.md` §6). Bed shipped: `differential-test-bed/run/l31-remote-merge.sh` (loopback sshd + container ROOT); candidate `l31-20260926T061556Z`, control green; classes filed as #169–#172.
 - **DONE 2026-09-26 — L5** — lifecycle & failure injection: `-C` / `--depclean` diffs, soname bump → preserved-libs, `CONFIG_PROTECT`, `--resume` after SIGKILL, disk-full / corrupt-archive / binhost-500 fault injection. Bed shipped: `differential-test-bed/run/l32-lifecycle.sh` (life-cycle C1–C4 + fault F1–F3); classes filed as #167/#168 and #173–#175.
