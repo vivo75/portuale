@@ -30990,8 +30990,15 @@ fn collect_feedback(
 /// still a requirer, else the legacy first-requirer start stands
 /// (stale triggers after a masking retry, parent-flip rescues).
 /// (Keyword/license/mask changes keep the legacy start: real
-/// renders those without the unsatisfied filter.) The ascent above
-/// that start is unchanged (single-branch, first-requirer hops).
+/// renders those without the unsatisfied filter -- see
+/// [`fill_non_use_change_chains`].) The ascent above that start is
+/// unchanged (single-branch, first-requirer hops).
+/// Backlog #248: no requirer at all means the change sits on a start
+/// node (an argument package) -- real `_get_dep_chain` never prints
+/// the start node, so the fill passes `None` and
+/// [`autounmask_dep_chain`] renders just the `(argument)` line. (The
+/// old `.or(Some(own))` fallback started the walk at the change's own
+/// package, printing its `# required by <cpv>::<repo>` row first.)
 fn fill_use_change_chains(
     entries: &[GraphEntry],
     changes: &mut [AutounmaskChange],
@@ -31002,7 +31009,6 @@ fn fill_use_change_chains(
         if change.dep_chain.is_empty()
             && let Some(atom) = portage_dep::parse_atom(&change.atom)
         {
-            let own = (atom.category.clone(), atom.package.clone());
             let owner = entries
                 .iter()
                 .find(|e| e.category == atom.category && e.package == atom.package)
@@ -31012,8 +31018,34 @@ fn fill_use_change_chains(
                         .clone()
                         .filter(|t| e.required_by.contains(t))
                         .or_else(|| e.required_by.first().cloned())
-                })
-                .or(Some(own));
+                });
+            change.dep_chain = autounmask_dep_chain(&owner, &change.atom, top_level, entries, root);
+        }
+    }
+}
+
+/// Backlog #248: keyword/license/mask twin of
+/// [`fill_use_change_chains`]. Re-derive from the change's own atom:
+/// its left-hand `=<cpv>` / `>=<cpv>` names the package the change is
+/// on, whose requirer chain is what real `_get_dep_chain_as_comment`
+/// prints (real renders those without the unsatisfied filter, so no
+/// `trigger` narrowing here). Same no-start-node rule: a change on an
+/// argument package (no requirers) passes `None`, yielding just the
+/// `(argument)` line.
+fn fill_non_use_change_chains(
+    entries: &[GraphEntry],
+    changes: &mut [AutounmaskChange],
+    top_level: &std::collections::HashSet<&str>,
+    root: &Path,
+) {
+    for change in changes.iter_mut() {
+        if change.dep_chain.is_empty()
+            && let Some(atom) = portage_dep::parse_atom(&change.atom)
+        {
+            let owner = entries
+                .iter()
+                .find(|e| e.category == atom.category && e.package == atom.package)
+                .and_then(|e| e.required_by.first().cloned());
             change.dep_chain = autounmask_dep_chain(&owner, &change.atom, top_level, entries, root);
         }
     }
@@ -31493,37 +31525,26 @@ fn assemble_result(
     // #135 (e): the `#required by …` chain is walked out of the final
     // entries (post `required_by` fill) exactly like the disclosure
     // chains above -- the walk-time call sites record `Vec::new()`.
-    for change in pass
-        .autounmask_keyword_changes
-        .iter_mut()
-        .chain(pass.autounmask_license_changes.iter_mut())
-        .chain(pass.autounmask_mask_changes.iter_mut())
-    {
-        // Re-derive from the change's own atom: its left-hand `=<cpv>` /
-        // `>=<cpv>` names the package the change is on, whose owner
-        // chain is what real `_get_dep_chain_as_comment` prints.
-        if change.dep_chain.is_empty()
-            && let Some(atom) = portage_dep::parse_atom(&change.atom)
-        {
-            // The chain starts at the change's own package (its cpv::repo
-            // row) and ascends through requirers to the argument. For a
-            // change on a top-level package the owner is itself.
-            let own = (atom.category.clone(), atom.package.clone());
-            let owner = pass
-                .entries
-                .iter()
-                .find(|e| e.category == atom.category && e.package == atom.package)
-                .and_then(|e| e.required_by.first().cloned())
-                .or(Some(own));
-            change.dep_chain = autounmask_dep_chain(
-                &owner,
-                &change.atom,
-                &ctx.top_level,
-                &pass.entries,
-                ctx.root,
-            );
-        }
-    }
+    // Backlog #248: same no-start-node rule as the USE fill (a change
+    // on an argument package yields just the `(argument)` line).
+    fill_non_use_change_chains(
+        &pass.entries,
+        &mut pass.autounmask_keyword_changes,
+        &ctx.top_level,
+        ctx.root,
+    );
+    fill_non_use_change_chains(
+        &pass.entries,
+        &mut pass.autounmask_license_changes,
+        &ctx.top_level,
+        ctx.root,
+    );
+    fill_non_use_change_chains(
+        &pass.entries,
+        &mut pass.autounmask_mask_changes,
+        &ctx.top_level,
+        ctx.root,
+    );
     fill_use_change_chains(
         &pass.entries,
         &mut pass.autounmask_use_changes,
@@ -47974,14 +47995,15 @@ mod tests {
 
     #[test]
     fn autounmask_keywords_top_level_dep_chain_is_the_argument_line() {
+        // Backlog #248: the change sits on the argument package itself,
+        // and real `_get_dep_chain` never prints the start node -- just
+        // the `(argument)` line (fresh host 3.0.82.2 staged-fixture
+        // probe 2026-09-29).
         let result = graph_result_autounmask("dev-libs/autounmaskkeywordpkg");
         assert_eq!(result.autounmask_keyword_changes.len(), 1);
         assert_eq!(
             result.autounmask_keyword_changes[0].dep_chain,
-            vec![
-                "required by dev-libs/autounmaskkeywordpkg-1.0::testrepo".to_string(),
-                "required by dev-libs/autounmaskkeywordpkg (argument)".to_string(),
-            ]
+            vec!["required by dev-libs/autounmaskkeywordpkg (argument)".to_string(),]
         );
     }
 
@@ -47992,7 +48014,10 @@ mod tests {
         // autounmask`) applies the flip so the entry resolves as `New`,
         // the `-pv` USE display shows `foo` disabled, and the change is
         // recorded with the `>=<cpv>` atom form (real `check_if_latest`
-        // for USE, bug #536392).
+        // for USE, bug #536392). Backlog #248: the dep chain is just the
+        // `(argument)` line -- real `_get_dep_chain` never prints the
+        // start node (fresh host 3.0.82.2 staged-fixture probe
+        // 2026-09-29).
         let result = graph_result_autounmask("dev-libs/useflagpkg[-foo]");
         let entry = result
             .entries
@@ -48016,10 +48041,7 @@ mod tests {
         assert_eq!(change.token, "-foo");
         assert_eq!(
             change.dep_chain,
-            vec![
-                "required by dev-libs/useflagpkg-1.0::testrepo".to_string(),
-                "required by dev-libs/useflagpkg[-foo] (argument)".to_string(),
-            ]
+            vec!["required by dev-libs/useflagpkg[-foo] (argument)".to_string(),]
         );
     }
 
@@ -54914,6 +54936,70 @@ mod tests {
                 "required by dev-libs/abk0d-1::testrepo".to_string(),
                 "required by dev-libs/abk0d (argument)".to_string(),
             ]
+        );
+    }
+
+    /// Backlog #248: a USE change on an argument package (no requirers)
+    /// yields exactly the `(argument)` row -- real `_get_dep_chain`
+    /// never prints the start node (fresh host 3.0.82.2 staged-fixture
+    /// probe 2026-09-29: `emerge --pretend dev-libs/useflagpkg[-foo]`
+    /// prints only `# required by dev-libs/useflagpkg[-foo]
+    /// (argument)`). Direct `fill_use_change_chains` shape: the
+    /// `useflagpkg` entry requires nothing, so there is no forcing
+    /// parent to start from.
+    #[test]
+    fn use_change_on_an_argument_package_yields_only_the_argument_row() {
+        let own = graph_entry("dev-libs", "useflagpkg", "1.0");
+        assert!(own.required_by.is_empty());
+        let entries = vec![own];
+        let top_level: std::collections::HashSet<&str> =
+            ["dev-libs/useflagpkg[-foo]"].into_iter().collect();
+        let mut changes = vec![AutounmaskChange {
+            atom: ">=dev-libs/useflagpkg-1.0".to_string(),
+            token: "-foo".to_string(),
+            dep_chain: Vec::new(),
+            trigger: None,
+        }];
+        fill_use_change_chains(
+            &entries,
+            &mut changes,
+            &top_level,
+            Path::new("/nonexistent-root-for-this-test"),
+        );
+        assert_eq!(
+            changes[0].dep_chain,
+            vec!["required by dev-libs/useflagpkg[-foo] (argument)".to_string()]
+        );
+    }
+
+    /// Backlog #248, keyword twin: a keyword change on an argument
+    /// package yields exactly the `(argument)` row (same fresh host
+    /// probe family as the contract pin:
+    /// `emerge --pretend --autounmask dev-libs/autounmaskkeywordpkg`
+    /// prints only `# required by dev-libs/autounmaskkeywordpkg
+    /// (argument)`).
+    #[test]
+    fn keyword_change_on_an_argument_package_yields_only_the_argument_row() {
+        let own = graph_entry("dev-libs", "autounmaskkeywordpkg", "1.0");
+        assert!(own.required_by.is_empty());
+        let entries = vec![own];
+        let top_level: std::collections::HashSet<&str> =
+            ["dev-libs/autounmaskkeywordpkg"].into_iter().collect();
+        let mut changes = vec![AutounmaskChange {
+            atom: "=dev-libs/autounmaskkeywordpkg-1.0".to_string(),
+            token: "~amd64".to_string(),
+            dep_chain: Vec::new(),
+            trigger: None,
+        }];
+        fill_non_use_change_chains(
+            &entries,
+            &mut changes,
+            &top_level,
+            Path::new("/nonexistent-root-for-this-test"),
+        );
+        assert_eq!(
+            changes[0].dep_chain,
+            vec!["required by dev-libs/autounmaskkeywordpkg (argument)".to_string()]
         );
     }
 
