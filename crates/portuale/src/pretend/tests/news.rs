@@ -95,6 +95,74 @@ fn filesystem_news_selector_evaluates_one_repo_through_the_seam() {
 }
 
 #[test]
+fn news_profile_and_keyword_restrictions_match_like_portage() {
+    // Portage: news.py, DisplayProfileRestriction and DisplayKeywordRestriction.
+    let root = TempDir::new("pretend-test-news_restrictions").keep();
+    let context = NewsContext {
+        profile: Some("default/linux/amd64/23.0/systemd".to_string()),
+        ..test_news_context()
+    };
+    let item = |format: &str, headers: &str| {
+        format!("Title: t\nNews-Item-Format: {format}\n{headers}\nbody\n")
+    };
+    let relevant = |text: &str| news_item_relevant(text, &root, &context);
+    assert!(relevant(&item(
+        "2.0",
+        "Display-If-Profile: default/linux/amd64/23.0/systemd"
+    )));
+    assert!(relevant(&item(
+        "2.0",
+        "Display-If-Profile: default/linux/amd64/23.0/*"
+    )));
+    assert!(!relevant(&item(
+        "2.0",
+        "Display-If-Profile: default/linux/amd64/23.0"
+    )));
+    assert!(!relevant(&item(
+        "2.0",
+        "Display-If-Profile: default/linux/s390/23.0\nDisplay-If-Profile: default/linux/ia64/23.0/*"
+    )));
+    assert!(!relevant(&item(
+        "1.0",
+        "Display-If-Profile: default/linux/amd64/23.0/*"
+    )));
+    assert!(relevant(&item("2.0", "Display-If-Keyword: amd64")));
+    assert!(relevant(&item(
+        "2.0",
+        "Display-If-Keyword: sparc\nDisplay-If-Keyword: amd64"
+    )));
+    assert!(!relevant(&item("2.0", "Display-If-Keyword: ~amd64")));
+    assert!(!relevant(&item("2.0", "Display-If-Keyword: hppa")));
+    // Kinds AND; values within a kind OR.
+    assert!(!relevant(&item(
+        "2.0",
+        "Display-If-Keyword: amd64\nDisplay-If-Profile: default/linux/sparc/23.0"
+    )));
+    let no_profile = NewsContext {
+        profile: None,
+        ..test_news_context()
+    };
+    assert!(!news_item_relevant(
+        &item("2.0", "Display-If-Profile: default/*"),
+        &root,
+        &no_profile
+    ));
+    // A 1.x `*` anywhere but a trailing `/*` fails the whole item; a 2.x one never does.
+    assert!(news_item_valid(&item(
+        "1.0",
+        "Display-If-Profile: default/*"
+    )));
+    assert!(!news_item_valid(&item(
+        "1.0",
+        "Display-If-Profile: default/*/amd64"
+    )));
+    assert!(news_item_valid(&item(
+        "2.0",
+        "Display-If-Profile: default/*/amd64"
+    )));
+}
+
+#[test]
 fn news_profile_path_strips_the_main_repo_profiles_prefix() {
     // Portage: news.py, NewsManager. The profile is the symlinked path minus the
     // main repo's `profiles/` prefix.
@@ -187,6 +255,33 @@ fn news_counts_follow_portage_count_unread_news_gates() {
         grab_news_state_file(&base.join("unread")),
         vec!["2026-09-01-a".to_string(), "2026-09-02-b".to_string()]
     );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn news_state_files_get_the_group_write_bit_like_portage() {
+    // Portage: news.py. The group-write bits are OR'd onto whatever the umask left.
+    use std::os::unix::fs::PermissionsExt;
+    let base = TempDir::new("pretend-test-news_perms").keep();
+    let _ = std::fs::remove_dir_all(&base);
+    let dir = base.join("var/lib/gentoo/news");
+    let context = test_news_context();
+    assert!(ensure_news_state_dir(&dir, &context));
+    let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o7777;
+    assert_eq!(mode(&dir) & 0o074, 0o074);
+    let orig = HashSet::new();
+    let updated = HashSet::from(["2026-09-01-a".to_string()]);
+    write_news_state_if_changed(WriteNewsStateIfChangedArgs {
+        news_state_dir: &dir,
+        repo_name: "testrepo",
+        suffix: "unread",
+        orig: &orig,
+        updated: &updated,
+        context: &context,
+    });
+    let file = dir.join("news-testrepo.unread");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "2026-09-01-a\n");
+    assert_eq!(mode(&file) & 0o064, 0o064);
     let _ = std::fs::remove_dir_all(&base);
 }
 
