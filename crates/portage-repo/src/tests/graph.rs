@@ -3185,6 +3185,91 @@ fn required_use_referencing_an_implicit_arch_list_flag_is_valid() {
 }
 
 #[test]
+fn aub0_backtrack_y_fails_on_a_with_the_order_dependent_slot_prefix() {
+    for (order, prefix) in [
+        ("c b a", vec![]),
+        ("c a b", vec![]),
+        ("b c a", vec![]),
+        ("b a c", vec![]),
+        ("a c b", vec![vec!["0".to_string(), "1".to_string()]]),
+        ("a b c", vec![vec!["1".to_string(), "0".to_string()]]),
+    ] {
+        let result = aub0_result(order, true);
+        assert_aub0_fails_on_a(&result, order);
+        assert_eq!(aub0_conflict_versions(&result), prefix, "{order}");
+    }
+}
+
+#[test]
+fn aub0_backtrack_n_fails_or_stops_early_by_walk_order() {
+    // A walked before B: B contradicts A's needed `-foo`, so the clean pass
+    // fails on A with no conflict reached.
+    for order in ["c b a", "b c a", "b a c"] {
+        let result = aub0_result(order, false);
+        assert_aub0_fails_on_a(&result, order);
+        assert!(result.slot_conflicts.is_empty(), "{order}");
+    }
+    // B walked before A: A's `-foo` is the first needed change; the loop stops
+    // on it and the pass is the report.
+    for (order, instances) in [
+        ("c a b", ["0", "1"]),
+        ("a c b", ["0", "1"]),
+        ("a b c", ["1", "0"]),
+    ] {
+        let result = aub0_result(order, false);
+        assert!(
+            matches!(result.outcome, ResolveOutcome::Complete),
+            "{order}: {:?}",
+            result.outcome
+        );
+        assert!(result.settled_with_backtracking, "{order}");
+        assert_eq!(
+            result
+                .autounmask_use_changes
+                .iter()
+                .map(|c| (c.atom.as_str(), c.token.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("=dev-libs/aub0d-0", "-foo")],
+            "{order}"
+        );
+        assert_eq!(
+            result.autounmask_use_changes[0].dep_chain,
+            vec![
+                "required by dev-libs/aub0a-0::testrepo".to_string(),
+                "required by dev-libs/aub0a (argument)".to_string(),
+            ],
+            "{order}"
+        );
+        assert_eq!(
+            aub0_conflict_versions(&result),
+            vec![instances.iter().map(|v| v.to_string()).collect::<Vec<_>>()],
+            "{order}"
+        );
+        let d0 = result.slot_conflicts[0]
+            .instances
+            .iter()
+            .find(|i| i.version == "0")
+            .unwrap();
+        assert_eq!(
+            d0.parents
+                .iter()
+                .map(|p| p.atom.as_str())
+                .collect::<Vec<_>>(),
+            vec!["dev-libs/aub0d[foo]", "dev-libs/aub0d[-foo]"],
+            "{order}: B first (walked first), then A, whose change broke it"
+        );
+        assert_eq!(
+            d0.use_display,
+            vec![
+                ("USE".to_string(), "-foo".to_string()),
+                ("ELIBC".to_string(), "glibc".to_string()),
+            ],
+            "{order}"
+        );
+    }
+}
+
+#[test]
 fn autounmask_use_n_leaves_a_masked_child_flag_dep_unresolved() {
     // With `--autounmask-use=n` neither the child nor the parent flip is
     // attempted: the dependency stays NoVisibleCandidate with no change.

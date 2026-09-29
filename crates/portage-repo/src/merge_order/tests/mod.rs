@@ -152,6 +152,56 @@ fn tokens(items: &[&str]) -> Vec<String> {
     items.iter().map(|s| s.to_string()).collect()
 }
 
+/// The `aub0` shape: A needs `d[-foo]`, B needs `d[foo]`, C needs
+/// `>=d-1`; `d-0` declares `foo` (on by default), `d-1` does not.
+/// Portage: _create_graph walks the arguments LIFO and fails at the
+/// first contradiction or unsatisfied atom.
+fn aub0_entries(order: &[&str]) -> Vec<GraphEntry> {
+    let rt = DepPriority {
+        runtime: true,
+        ..DepPriority::default()
+    };
+    let mut entries: Vec<GraphEntry> = order
+        .iter()
+        .map(|p| {
+            let atom = match *p {
+                "a" => "t/d[-foo]",
+                "b" => "t/d[foo]",
+                _ => ">=t/d-1",
+            };
+            let mut e = new_entry("t", p, "0", vec![plain_edge(atom, "t", "d", rt)]);
+            e.slot = Some("0".into());
+            e.sub_slot = Some("0".into());
+            e
+        })
+        .collect();
+    for v in ["0", "1"] {
+        let mut d = new_entry("t", "d", v, Vec::new());
+        d.slot = Some("0".into());
+        d.sub_slot = Some("0".into());
+        entries.push(d);
+    }
+    entries
+}
+
+fn aub0_use(entries: &[GraphEntry]) -> impl Fn(usize) -> Option<ReplayUse> + '_ {
+    move |i: usize| {
+        let e = &entries[i];
+        (e.package == "d").then(|| {
+            let d0 = outcome_version(e) == Some("0");
+            ReplayUse {
+                iuse: [if d0 { "foo" } else { "bar" }.to_string()].into(),
+                enabled: if d0 {
+                    ["foo".to_string()].into()
+                } else {
+                    HashSet::new()
+                },
+                fixed: HashSet::new(),
+            }
+        })
+    }
+}
+
 fn plain_edge(atom: &str, category: &str, package: &str, priority: DepPriority) -> DepEdge {
     DepEdge {
         atom: atom.to_string(),
@@ -231,6 +281,7 @@ mod digraph;
 mod installed_closure;
 mod prelude;
 mod priority;
+mod replay;
 mod select_nodes;
 mod serialize;
 mod tree_display;

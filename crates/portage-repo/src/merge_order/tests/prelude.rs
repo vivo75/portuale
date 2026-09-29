@@ -1,6 +1,54 @@
 use super::*;
 
 #[test]
+fn select_dep_target_keeps_the_flag_carrier_a_later_flip_broke() {
+    // Keeps the flag carrier a later flip broke: B's `d[foo]` stays on
+    // d-0 (whose IUSE carries `foo`), not the vercmp-highest d-1.
+    let rt = DepPriority {
+        runtime: true,
+        ..DepPriority::default()
+    };
+    let mut d0 = new_entry("t", "d", "0", Vec::new());
+    d0.slot = Some("0".into());
+    d0.sub_slot = Some("0".into());
+    d0.use_flags_display = vec![("foo".into(), false)];
+    let mut d1 = new_entry("t", "d", "1", Vec::new());
+    d1.slot = Some("0".into());
+    d1.sub_slot = Some("0".into());
+    d1.use_flags_display = vec![("bar".into(), false)];
+    let b = new_entry("t", "b", "0", vec![plain_edge("t/d[foo]", "t", "d", rt)]);
+    let a = new_entry("t", "a", "0", vec![plain_edge("t/d[-foo]", "t", "d", rt)]);
+    let entries = vec![d0, d1, b, a];
+    let root = Path::new("/nonexistent-root-for-unit-test");
+    let none = HashSet::new();
+    let pre = digraph_prelude(&entries, root);
+    assert_eq!(
+        pre.select_dep_target(SelectDepTargetArgs {
+            entries: &entries,
+            from: 2,
+            from_deps: &entries[2].deps,
+            ei: 0,
+            suppressed: &none,
+            merge_bound_only: false
+        }),
+        Some(0),
+        "B stays on the flipped d-0"
+    );
+    assert_eq!(
+        pre.select_dep_target(SelectDepTargetArgs {
+            entries: &entries,
+            from: 3,
+            from_deps: &entries[3].deps,
+            ei: 0,
+            suppressed: &none,
+            merge_bound_only: false
+        }),
+        Some(0),
+        "A's own atom is satisfied by d-0 as displayed"
+    );
+}
+
+#[test]
 fn select_dep_target_narrows_and_ranks_like_portage() {
     let runtime = DepPriority {
         runtime: true,

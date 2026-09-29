@@ -1143,6 +1143,27 @@ fn graph_entries_with_retry_seeds(atom_str: &str, seeds: &[&str]) -> Vec<GraphEn
     .entries
 }
 
+/// Like `graph_result_real`, but with `--autounmask` keyword
+/// resolution enabled (`autounmask_suggest_keywords = true`).
+fn graph_result_autounmask(atom_str: &str) -> GraphResult {
+    let root = fixtures_root();
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    graph_result_autounmask_cfg(&config, atom_str)
+}
+
+fn graph_result_autounmask_cfg(config: &portage_profile::Config, atom_str: &str) -> GraphResult {
+    graph_result_autounmask_cfg_atoms(config, &[atom_str.to_string()])
+}
+
 /// `graph_result_autounmask_cfg` for several top-level atoms, in argv order.
 fn graph_result_autounmask_cfg_atoms(
     config: &portage_profile::Config,
@@ -3466,6 +3487,7 @@ mod tests_184;
 mod tests_195d;
 
 mod abi_probe;
+mod autounmask;
 mod backtrack_params;
 mod backtracker;
 mod binary_index;
