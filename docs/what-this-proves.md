@@ -19079,3 +19079,49 @@ probed bytes (RED first: the old code listed `mmcons-1`). Re-run the pins:
 python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider \
   -k 'mismatched_upgrade_entry or agrees_on_mismatched'
 ```
+
+## The `prune_rebuilds` trigger chains the conflict half of missed updates (#253 half 1 DONE, 2026-09-29)
+
+Real's missed updates (`_get_missed_updates`, `_emerge/depgraph.py:1529-1565`)
+chain two sources (`:1533-1536`): the backtracking runtime masks and the
+slot-conflict handler's removals (`_conflict_missed_update`, `:2086-2110`).
+Portuale's prune trigger (`apply_prune_rebuilds`, backlog #213) read only
+the mask half (`backtrack_missed_updates`), so a shape whose only missed
+updates are conflict-source ones under-fired the prune -- same rows, fewer
+passes. The trigger now ORs both halves exactly like real's truthiness
+check: at that layer the conflict half rides `pass.skipped_updates` (the
+direct solve's removal rows, filed before the trigger runs), while the
+per-slot-highest chaining still shapes only the display
+(`collapse_skipped_updates` at settle). The pin reuses the #213
+`pprov`/`pcons` cell plus the #90 reversed conflict pair (zero new
+fixtures), so the replace set is genuine and the only missed update is
+`sct-2.0` skipped against oldconsumer's `<2.0` -- no `!!!` backtracking
+tail anywhere. Grounded on a fresh host `/usr/sbin/emerge` 3.0.82.2
+staged-fixture probe (mount-namespace `make.local` shadow, ad-hoc ROOT
+with EAPI-bearing `pprov-1`/`pcons-1` vdb): rc 0, `backtrack: 3/20`,
+five rows, the `WARNING` block, and the `pprov-2 rebuilds pcons-1`
+block. Portuale prints no timing line, so the prune rides `--json`
+(`backtrack.restarts == 3`; 1 before the fix). A `--backtrack=0`
+control locks the gating (WARNING persists, no tail, no prune). The
+shape needs ad-hoc vdb (the pin stages it), so the runnable form is
+the pin itself (its docstring carries the verbatim host probe):
+
+Half 2 (a rebuild the re-resolve drops) stays open with no pin, and the
+S0 is recorded on the entry: a vendored-3.0.82.2 `ResolverPlayground`
+sweep (same-slot, new-slot requested/unrequested, pulled-consumer,
+USE-conditional, `||`, downgrade, keyword, and bug-622270 shapes with
+per-pass replace/eliminate tracing) shows no honest ebuild shape drops
+a probe-scheduled rebuild -- the prune re-walk is identical once the set
+regrows, and `_eliminate_rebuilds` rule 8 keeps every `:=` consumer
+whose binding broke, which is exactly the probe's scheduling condition.
+Two adjacent divergences found while probing are filed, not fixed here:
+#269 (`abi_rebuilds` over-reports the new-slot arm: provider `r` plus
+the `causing rebuilds` block where real shows neither) and #270 (at
+`--backtrack=0` real withholds the provider update itself where
+portuale upgrades partially). Re-run the pins:
+
+```sh
+# from ../pmtest; expect 2 passed
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider \
+  -k 'prune_rebuilds_restart_adds_passes or prune_rebuilds_conflict_missed_updates'
+```
