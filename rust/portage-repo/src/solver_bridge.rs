@@ -820,6 +820,7 @@ fn graph_result_from_order(
         // changes, so `autounmask_backtrack_disabled()` is False
         // regardless).
         autounmask_no_clean_tail: false,
+        settled_with_backtracking: false,
         abi_rebuilds,
         circular_deps,
         large_cycle_count,

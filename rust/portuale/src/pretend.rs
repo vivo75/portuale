@@ -13529,6 +13529,10 @@ pub fn run(args: &[String]) -> ExitCode {
     // the entries and printed as one group after every package line (see
     // `format_blocker_lines`).
     let mut blocker_lines: Vec<String> = Vec::new();
+    // Backlog #244: abort-path unsatisfied-dependency lines held back
+    // until after the slot-conflict block (real `display_problems`
+    // order).
+    let mut deferred_abort_unsat: Vec<usize> = Vec::new();
     // Backlog #206 S2: real `_show_circular_deps` (`depgraph.py:10425`)
     // pops `--quiet` and forces `--verbose` + `--tree` before
     // `display(handler.merge_list)` — the stuck remainder renders as a
@@ -13715,6 +13719,15 @@ pub fn run(args: &[String]) -> ExitCode {
                     portage_repo::PretendOutcome::NoVisibleCandidate
                 ) && entry.parent_use_suggestion.is_none()
                 {
+                    // Backlog #244: real's `display_problems` prints the
+                    // slot-conflict block before the leftover
+                    // `_unsatisfied_deps_for_display` item
+                    // (`depgraph.py:11113-11280`); with a conflict
+                    // recorded, this line waits until after that block.
+                    if !result.slot_conflicts.is_empty() {
+                        deferred_abort_unsat.push(i);
+                        continue;
+                    }
                     print_entry_line(
                         &result.entries,
                         &root,
@@ -14286,7 +14299,11 @@ pub fn run(args: &[String]) -> ExitCode {
         ] {
             println!("{line}");
         }
-        if backtrack_max > 0 && backtrack_max < 30 {
+        // Real gates the hint on the reported depgraph's own
+        // `not _allow_backtracking` too (`depgraph.py:1750-1759`): a loop
+        // ended early by `need_config_change` reports a pass that still
+        // allowed backtracking (backlog #244).
+        if backtrack_max > 0 && backtrack_max < 30 && !result.settled_with_backtracking {
             println!("not be installed simultaneously. You may want to try a larger value of");
             println!("the --backtrack option, such as --backtrack=30, in order to see if");
             println!("that will solve this conflict automatically.");
@@ -14297,6 +14314,37 @@ pub fn run(args: &[String]) -> ExitCode {
         println!("For more information, see MASKED PACKAGES section in the emerge man");
         println!("page or refer to the Gentoo Handbook.");
         println!();
+    }
+    if !deferred_abort_unsat.is_empty() {
+        let mut thrown_away: Vec<String> = Vec::new();
+        for &i in &deferred_abort_unsat {
+            print_entry_line(
+                &result.entries,
+                &root,
+                i,
+                "",
+                true,
+                &top_level_pkgs,
+                onlydeps,
+                oneshot,
+                verbose,
+                quiet,
+                alphabetical,
+                columns,
+                columnwidth,
+                root_deps_running_root.as_deref(),
+                &color,
+                system_atoms,
+                &world_atoms,
+                &force_reinstall_cps,
+                &mut thrown_away,
+                &result.masked_deps,
+                &result.use_unsat_deps,
+                &result.plain_miss_deps,
+                false,
+                &result.circular_dependency,
+            );
+        }
     }
 
     // Backlog #90 (S2) + #92, #129 review round 2: real
