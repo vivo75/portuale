@@ -19050,3 +19050,32 @@ env PORTAGE_CONFIGROOT=$PWD/fixtures ROOT=$PWD/fixtures PORTAGE_RUNNING_ROOT=$PW
 # [ebuild     U  ] dev-libs/abk0a-3 [1]
 # [ebuild  N     ] dev-libs/abk0d-1
 ```
+
+## The `mmprov` pin re-probe: greedy request args veto the new-slot probe (#252 DONE, 2026-09-29)
+
+#211's item-2 pin said the new-child-slot arm probes bound-slot-mismatch
+`Upgrade` entries and rebuilds `mmcons-1` as "MATCHES real" -- grounded in
+source reading only, never probed. The g213 Playground data disagreed, so
+#252 ran one host staged-fixture probe of the committed shape (installed
+`mmprov-1` `0/1` + `mmprov-2` `1/1` + `mmcons-1` bound `mmprov:0/1=`, tree
+`mmprov-3` `1/2`, `emerge -uD mmprov mmcons` on real 3.0.82.2 with a
+mount-namespace `make.local` shadow): real merges only `mmprov-3` (rc 0,
+`backtrack: 0/3`, no `mmcons-1` row, no `causing rebuilds` block). A
+vendored-3.0.82.2 `ResolverPlayground` spy run names the mechanism: under
+`--update` the request gains a greedy per-slot arg (`_select_files`,
+`depgraph.py:5380`, via `_greedy_slots`, `:5896` -- `app-misc/mmprov:0`
+recorded on the installed slot-0 instance), and the update probe's
+reverse-deps gate (`_slot_operator_check_reverse_dependencies`,
+`:2472-2538`) refuses every slot-1 candidate against it, so both
+`new_child_slot` probe forms return None and
+`slot_operator_replace_installed` stays empty. Ported as the `#252` edge
+gate in `slot_operator_rebuild_scan`'s new-slot arm (requested provider +
+`--update` + bound slot below the highest visible slot + older installed
+instance there ⇒ no probe for that edge); both pins re-pinned to the
+probed bytes (RED first: the old code listed `mmcons-1`). Re-run the pins:
+
+```sh
+# from ../pmtest; expect 2 passed
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider \
+  -k 'mismatched_upgrade_entry or agrees_on_mismatched'
+```
