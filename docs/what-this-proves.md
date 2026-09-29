@@ -18929,3 +18929,17 @@ for o in "a c b" "c b a"; do set -- $o
     dev-libs/aub0$1 dev-libs/aub0$2 dev-libs/aub0$3; echo "rc=$?"
 done
 ```
+
+**#236 — `_minimize_children` and the slot-operator update probe's forcing half (batch-2026-09-28_236_107, Slices A–C).** When real walks an installed package, `FakeVartree._apply_dynamic_deps` appends the vdb's built slot-operator atoms to the live deps. r25mid therefore depends on both `dev-libs/r25lib:=` and `>=dev-libs/r25lib-1.0:0/1=`. Real selects a package for every one of a parent's plain atoms. `_minimize_children` (`_emerge/depgraph.py:4751-4854`) then drops redundant selections per cp, installed packages first, ascending, so both atoms bind the installed `r25lib-1.0`. Any upgrade comes afterwards from the slot-operator update probe (`_slot_operator_update_probe` + `_slot_operator_update_backtrack`, `:2576-2800`, `:2400-2452`). Here the installed world consumer's `<r25lib-2.0` refuses it, and real settles in one silent pass. Portuale resolved each atom on its own. `:=` picked `r25lib-2.0`, the post-pass scan found the consumer's pin, and a second pass printed the skipped-update warning. Slice A adds the probe's forcing half (`slot_operator_update_force_scan`). An installed child whose visible same-slot, other-sub-slot, higher candidate passes the #211 refusal check joins the replace set together with its consumer. The candidate goes into `slot_operator_forced_upgrade`, and the restart selects it. Slice B ports the elimination at a new per-owner collapse point, so the slotop argument cells keep their upgrade through the probe while r25 goes silent. The same collapse removes a spurious warning on an ebuild parent's version range: the fixture's `libgit2-glib`, `<libgit2-1:0= >=libgit2-0.26.0`, now binds both atoms to `0.99.0-r1`, as real does. Evidence: real's ResolverPlayground and the fixture-oracle r25 cells in `docs/evidence/2026-09-29-236/`. L0 was byte-identical on all 120 probes after each slice. Pins (pmtest): `test_236_r25_default_backtracking_settles_in_one_silent_pass`, `test_236_minimize_children_collapses_an_ebuild_parents_version_range`, `test_236_collapsed_slot_operator_child_is_upgraded_by_the_update_probe`. Rust: `minimize_children_collapses_like_real`, `slot_operator_update_force_scan_forces_the_installed_childs_update`.
+
+```sh
+# from the portuale root; expect the two rows, no "have been skipped" block,
+# rc=0, and "restarts":0 in the --json run
+FX=$(mktemp -d)/fx; cp -a fixtures/. $FX; echo dev-libs/r25consumer >> $FX/var/lib/portage/world
+for j in "" --json; do
+  PORTAGE_CONFIGROOT=$FX ROOT=$FX PORTAGE_RUNNING_ROOT=$FX DISTDIR=$FX/distfiles \
+    rust/target/release/emerge --pretend $j --update --deep --newuse --oneshot dev-libs/r25target
+  echo "rc=$?"
+done
+```
+
