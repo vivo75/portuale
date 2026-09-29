@@ -425,6 +425,36 @@ fn classify_yes_no_prefix_matches_case_insensitively_and_rejects_garbage() {
     assert_eq!(classify_yes_no("No", true), Some(false));
 }
 
+// A hung child is killed at the bound with a `watchdog:` panic, instead of
+// hanging the whole run.
+#[test]
+#[cfg(unix)]
+fn pty_watchdog_kills_a_hung_child_and_fails_the_test() {
+    // `sleep` stands in for a child stuck in a blocking read; a 1 s bound keeps it fast.
+    // The bound travels as an argument, never through the process environment:
+    // every pty wait in this process reads `PORTUALE_TEST_PTY_WATCHDOG_SECS`,
+    // so exporting a 1 s value here would let a parallel pty test kill its own
+    // child on a slow machine.
+    let child = std::process::Command::new("sleep")
+        .arg("3600")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn the hung child");
+    let result = std::panic::catch_unwind(|| {
+        wait_pty_output_bound(child, std::time::Duration::from_secs(1))
+    });
+    assert!(result.is_err(), "the watchdog must panic, not return");
+    let msg = result
+        .err()
+        .and_then(|e| e.downcast_ref::<String>().cloned())
+        .unwrap_or_default();
+    assert!(
+        msg.contains("watchdog:"),
+        "the panic must carry the `watchdog:` prefix the chase greps for: {msg}"
+    );
+}
+
 #[test]
 #[cfg(unix)]
 fn ask_declined_writes_no_resume_list() {

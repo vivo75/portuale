@@ -18820,6 +18820,75 @@ python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p n
 The `l3-core` re-run `l3-20260928T195717Z` left four candidate rows, all on `/var/lib/gentoo/news/news-gentoo.{unread,skip}`: real wrote 15 items at `0664 root:portage`, portuale 34 items at `0644 root:root`. Since #196/#231 every real merge runs the news update, so the old shortcut (Display-If-Profile and Display-If-Keyword treated as always satisfied) reached real systems. The 19 extra items were all restricted to other profiles (ia64, s390, riscv, 17.x profiles) or other arches (hppa, sparc, alpha). Portuale now ports `DisplayProfileRestriction` (exact match, a 2.x `…/*` value matches the prefix, a 1.x value with a stray `*` invalidates the item; `3rdparty/portage: lib/portage/news.py:388-409`), `DisplayKeywordRestriction` (`ARCH` verbatim, `:412-423`), `NewsManager._profile_path` (`:88-98`) and the state-file permissions: `ensure_dirs(mode=0o074)` plus the write-access early return (`:121-133`) and `apply_secpass_permissions(PORTAGE_INST_UID, portage_gid, mode=0o064, mask=0)` on each rewritten file (`:183-200`), and `count_unread_news` counts nothing without a profile (`:470-479`). In the L3 image, real and portuale now both count 15 items with the same ids and both files at `0664 0:250`. The fixture tree gains two items that must never count (another profile, another keyword).
 
 ```sh
+# from ../pmtest; expect the check-news tests to pass with the count still 5
+git clean -fdq fixtures/var
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider -k 'check_news'
+```
+
+## The pty prompt tests cannot hang a `cargo test` run (#259, 2026-09-29)
+
+The eleven `--ask`/`--read-news`/`--config` prompt tests share `pty_pair()`
+and waited with an unbounded `wait_with_output`/`wait`
+(`rust/portuale/src/pretend.rs`). A `cargo test` run from the #230 worktree
+left the child blocked in `read_prompt_line`'s raw `libc::read`
+(`pretend.rs:5267`) and the test binary waiting on it for 20 hours (PIDs
+95126/49163, killed 2026-09-29). `wait_pty_output` / `wait_pty_status` now
+poll `try_wait` against a bound (60 s default,
+`PORTUALE_TEST_PTY_WATCHDOG_SECS` override) and kill the child at expiry,
+failing with a `watchdog:` prefix carrying whatever the child printed — the
+race-chase hook the incident lacked. The race itself is still unexplained
+(`read_prompt_line` reads one canonical line per `read`; the `eselect` stub
+reads no stdin): the first watchdog timeout's captured output is the
+evidence for chasing it. Pinned by `pty_watchdog_kills_a_hung_child_and_fails_the_test`
+(a `sleep 3600` stand-in killed at a 1 s bound, panic prefix asserted).
+
+```sh
+# from rust/; expect 1 passed in ~1s (the watchdog kills the hung child)
+cargo test --release -p portuale pty_watchdog
+```
+
+## Test scratch dirs are reclaimed instead of exhausting `/tmp` (#260, 2026-09-29)
+
+Every test scratch directory was `std::env::temp_dir().join(format!("{tag}-{pid}-{nanos}"))`
+with a trailing `remove_dir_all` at the end of the test — which a panic
+skips, and which `panic = "abort"` (the release profile the verification
+pass runs under) skips even on a plain failed assert. A hung test killed
+from outside skips it too. Measured on this host before the fix:
+**16,393** `portage-repo-masters-test-*`, 768 `emerge_build_test_*`, 152
+`portage-bridge-slotop-*`, 97 `ebuild-phases-test-*`, 55 `mrg_director_*`,
+49 `portage-profile-test-*` (plus `portuale*`, `ask_*`, `resume*`,
+`eselect*`, `remote*`, `true_y_or_n_*`) — ~85k top-level `/tmp` entries on a
+1,048,576-inode tmpfs. Every creator now goes through
+`portage_util::TempDir` (`rust/portage-util/src/temp_dir.rs`): one name
+family (`$TMPDIR/portuale-td-{tag}-{pid}-{nanos}`, so the entries are
+recognizable from the outside) and two cleanup paths. `Drop` covers the
+unwind/success paths; a **stale sweep** at the first `TempDir::new` of each
+process reclaims `portuale-td-*` directories whose owning pid is gone —
+the only mechanism that runs after `panic = "abort"` or SIGKILL, where
+nothing can run on the way out. This is the same division of labour
+`ebuild_phases.rs::bin_dir` and pmtest's `_reclaim_portuale_bin_overlays`
+already use for the `portuale-bin.*` overlay (backlog #88). 159 creation
+sites across 28 files converted (the `portage-profile` fixed-name sites
+gained unique names); product `bin_dir()` keeps its `atexit` path
+deliberately (a `OnceLock` static, not a test guard). The pre-existing pile
+under the old names is not reclaimed by the sweep (they do not carry the
+prefix) and still wants one manual `find /tmp -maxdepth 1 -mmin +30` sweep;
+the `tmp????????` / `tmp_???????` 0-byte files on this host date from
+2026-09-25 (pre-conftest-redirect) and an S0 run of
+`test_output_invariants.py` created none (45 → 45), so the current suites
+are clean for that pattern.
+
+```sh
+# from rust/; expect the sweep test green and no `portuale-td-*` left behind
+cargo test --release -p portage-util temp_dir
+ls /tmp/portuale-td-* 2>/dev/null | wc -l   # expect 0 after a clean run
+```
+
+## `l3-core` is 0 unexplained on both sides and #191 is DONE (2026-09-29)
+
+Two `l3-core` runs closed batch 2026-09-27, both with `L3_CONTROL=1 L3_JOBS=28` (the owner raised `-j` from the planned 20). The first, `l3-20260928T195717Z`, left four candidate rows on the GLEP 42 news state files, fixed as #258, and sixteen control rows from real-against-real `getconf` split-debug in glibc, filed as #261. The re-run `l3-20260929T082541Z`, built from `main` @ `042a8daf`, is candidate 19 hard / 19 explained / 0 unexplained (all nineteen are the allowlisted `l3-vm-repo-revisions-vdb-env` `environment` rows) and control 1/1/0, both sides touching 62 packages. The python and icu vdb `SIZE` rows that kept P-C3 at 2 unexplained now report as `PAYLOAD`, so #191's comparator fix is confirmed on a live run. The `getconf` split did not recur, so #261 stays open as an intermittent control class. Re-verify from the saved snapshots without containers:
+
+```sh
 # # required by dev-libs/useflagpkg[-foo] (argument)
 # from ../pmtest; expect 2 passed
 python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider \

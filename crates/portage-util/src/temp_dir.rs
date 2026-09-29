@@ -41,6 +41,11 @@ impl TempDir {
         Self { path }
     }
 
+    /// The directory itself.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
     /// Relinquish cleanup and hand the path back.
     pub fn keep(self) -> PathBuf {
         let path = self.path.clone();
@@ -131,4 +136,101 @@ fn parse_owner_pid(rest: &str) -> Option<u32> {
 /// procfs this returns `true` and the sweep stays out of the way.
 fn pid_is_alive(pid: u32) -> bool {
     Path::new(&format!("/proc/{pid}")).exists()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn temp_dir_removes_itself_on_drop() {
+        let tmp = TempDir::new("drop-probe");
+        let path = tmp.path().to_path_buf();
+        assert!(path.is_dir(), "{path:?} must exist while the guard is held");
+        assert!(
+            path.file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("portuale-td-drop-probe-"),
+            "name carries the prefix and tag: {path:?}"
+        );
+        drop(tmp);
+        assert!(!path.exists(), "{path:?} must be gone after drop");
+    }
+
+    #[test]
+    fn temp_dir_removes_itself_on_unwind() {
+        // The trailing `remove_dir_all` is skipped when the test panics;
+        // `catch_unwind` stands in for the panic.
+        let probe = std::sync::Arc::new(std::sync::Mutex::new(None::<PathBuf>));
+        let slot = probe.clone();
+        let result = std::panic::catch_unwind(move || {
+            let tmp = TempDir::new("unwind-probe");
+            *slot.lock().unwrap() = Some(tmp.path().to_path_buf());
+            panic!("test failure under the guard");
+        });
+        assert!(result.is_err(), "the inner panic must propagate");
+        let path = probe.lock().unwrap().take().expect("guard created");
+        assert!(
+            !path.exists(),
+            "{path:?} must be reclaimed even when the test panics"
+        );
+    }
+
+    #[test]
+    fn temp_dir_keep_relinquishes_cleanup() {
+        let tmp = TempDir::new("keep-probe");
+        let path = tmp.keep();
+        assert!(path.is_dir(), "{path:?} survives keep()");
+        let _ = fs::remove_dir_all(&path);
+    }
+
+    #[test]
+    fn temp_dir_derefs_to_path() {
+        let tmp = TempDir::new("deref-probe");
+        let child = tmp.join("child");
+        std::fs::create_dir_all(&child).unwrap();
+        assert!(child.is_dir());
+        assert!(AsRef::<Path>::as_ref(&tmp).is_dir());
+        assert!(format!("{tmp}").contains("portuale-td-deref-probe-"));
+    }
+
+    #[test]
+    fn stale_sweep_reclaims_a_dead_pids_directories_and_keeps_our_own() {
+        // One live directory (must survive) and one dead one (`u32::MAX`).
+        let parent = TempDir::new("sweep-parent");
+        let live = parent.path().join(format!(
+            "{TEMP_DIR_PREFIX}sweep-live-{}-1",
+            std::process::id()
+        ));
+        let dead = parent
+            .path()
+            .join(format!("{TEMP_DIR_PREFIX}sweep-dead-{}-1", u32::MAX));
+        fs::create_dir_all(&live).unwrap();
+        fs::create_dir_all(&dead).unwrap();
+        let foreign = parent.path().join("not-ours-1");
+        fs::create_dir_all(&foreign).unwrap();
+
+        stale_sweep(parent.path());
+
+        assert!(live.is_dir(), "our own live directories must survive");
+        assert!(!dead.exists(), "a dead pid's directories must be reclaimed");
+        assert!(
+            foreign.is_dir(),
+            "unrecognised names are not ours to remove"
+        );
+    }
+
+    #[test]
+    fn parse_owner_pid_takes_the_last_two_components() {
+        assert_eq!(parse_owner_pid("tag-123-456"), Some(123));
+        // A tag with dashes and digits of its own must not shift the parse.
+        assert_eq!(parse_owner_pid("161-run-missdep-999-888"), Some(999));
+        assert_eq!(parse_owner_pid("a-b-c-1-2"), Some(1));
+        // Missing the nanos tail (or not numeric) is not one of ours.
+        assert_eq!(parse_owner_pid("tag-123"), None);
+        assert_eq!(parse_owner_pid("tag-pid-nanos"), None);
+        assert_eq!(parse_owner_pid(""), None);
+    }
 }

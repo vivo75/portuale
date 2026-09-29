@@ -1231,6 +1231,73 @@ mod tests {
         assert!(db.installed_versions("sys-apps", "missing").is_empty());
     }
 
+    /// `VdbReader` serves the same three reads from a `<root>/var/db/pkg`
+    /// tree; unknown reads as empty.
+    #[test]
+    fn packages_db_vdb_reader_reads_a_real_vdb_tree() {
+        let root = tempdir("mrg_director_vdb");
+        write_vdb_entry(WriteVdbEntryArgs {
+            root: &root,
+            category: "dev-libs",
+            package: "example",
+            version: "1.0",
+            slot: "0",
+            files: &[
+                (
+                    "CONTENTS",
+                    "obj /usr/lib/libx.a abc 123\nsym /usr/lib/libx.so -> libx.a 123\ndir /usr/lib\n",
+                ),
+                ("USE", ""),
+                ("RDEPEND", ""),
+            ],
+        });
+        write_vdb_entry(WriteVdbEntryArgs {
+            root: &root,
+            category: "dev-libs",
+            package: "example",
+            version: "2.0",
+            slot: "0",
+            files: &[("CONTENTS", "obj /usr/lib/libx.so.2 def 456\n")],
+        });
+        write_vdb_entry(WriteVdbEntryArgs {
+            root: &root,
+            category: "dev-libs",
+            package: "consumer",
+            version: "1.0",
+            slot: "0",
+            files: &[
+                ("CONTENTS", "obj /usr/lib/libc.a 000 1\n"),
+                ("USE", ""),
+                ("RDEPEND", "dev-libs/example"),
+            ],
+        });
+        let db = VdbReader::new(&root);
+        assert_eq!(
+            db.root().to_str(),
+            Some(root.to_str().unwrap()),
+            "the snapshot owns its root like MemoryDb does"
+        );
+        assert_eq!(
+            db.installed_versions("dev-libs", "example"),
+            vec!["2.0", "1.0"],
+            "highest-first, real dbapi.cp_list order"
+        );
+        assert_eq!(
+            db.contents_files("dev-libs", "example", "1.0"),
+            vec!["usr/lib/libx.a", "usr/lib/libx.so", "usr/lib"],
+        );
+        assert_eq!(
+            db.reverse_dependents("dev-libs", "example", "2.0"),
+            vec!["dev-libs/consumer-1.0"],
+        );
+        assert!(
+            db.reverse_dependents("dev-libs", "consumer", "1.0")
+                .is_empty()
+        );
+        assert!(db.installed_versions("sys-apps", "missing").is_empty());
+        assert!(db.contents_files("dev-libs", "example", "9.9").is_empty());
+    }
+
     struct FakeDb<'a> {
         root: &'a Path,
     }
@@ -1260,6 +1327,39 @@ mod tests {
         assert_eq!(cache.repo(), "main");
         assert!(cache.category("dev-libs").is_empty());
         assert!(cache.metadata("dev-libs", "example-1.0").is_err());
+    }
+
+    /// `Md5Cache::category` covers both shapes: cache-dir entries, else
+    /// `<pf>.ebuild` file stems (deduped, sorted, non-ebuilds excluded).
+    #[test]
+    fn md5_cache_category_lists_cache_entries_or_ebuild_stems() {
+        let bare = tempdir("mrg_director_bare_repo");
+        std::fs::create_dir_all(bare.join("dev-libs/docs")).unwrap();
+        std::fs::write(bare.join("dev-libs/docs/docs-1.0.ebuild"), "EAPI=8\n").unwrap();
+        std::fs::write(bare.join("dev-libs/docs/Manifest"), "").unwrap();
+        let cache = Md5Cache {
+            repo_location: &bare,
+            repo_name: "bare",
+        };
+        assert_eq!(cache.category("dev-libs"), vec!["docs-1.0"]);
+        assert!(cache.metadata("dev-libs", "docs-1.0").is_err());
+
+        let cached = tempdir("mrg_director_cached_repo");
+        std::fs::create_dir_all(cached.join("metadata/md5-cache/dev-libs")).unwrap();
+        std::fs::write(
+            cached.join("metadata/md5-cache/dev-libs/docs-2"),
+            "SLOT=0\n",
+        )
+        .unwrap();
+        let cache = Md5Cache {
+            repo_location: &cached,
+            repo_name: "cached",
+        };
+        assert_eq!(cache.category("dev-libs"), vec!["docs-2"]);
+        assert_eq!(
+            cache.metadata("dev-libs", "docs-2").unwrap().get("SLOT"),
+            Some(&"0".to_string())
+        );
     }
 
     /// `VolatileCache` is the repo-cache slot's second implementation
@@ -1299,6 +1399,47 @@ mod tests {
         assert!(empty.category("dev-libs").is_empty());
         empty.insert("dev-libs", "c-3.0", aux);
         assert_eq!(empty.category("dev-libs"), vec!["c-3.0"]);
+    }
+
+    /// `Fetcher::fetch` takes one resolved [`FetchRequest`] (live-tested
+    /// in `portuale::fetch`, not here -- this pins the seam's shape).
+    #[test]
+    fn fetcher_takes_one_resolved_candidate_request() {
+        let fetcher = WgetFetcher;
+        let dir = tempdir("mrg_director_fetch");
+        let dest = dir.join("x.tgz");
+        let request = FetchRequest {
+            filename: "x.tgz",
+            uri: "https://example.invalid/x.tgz",
+            dest: &dest,
+            resume: false,
+            commands: None,
+            vars: Default::default(),
+        };
+        // Unfetchable host, no partial: the shared `wget` transport
+        // fails, and the seam reports it.
+        assert!(fetcher.fetch(&request).is_err());
+        assert!(!dest.exists());
+
+        // `resume` rides the same request (Portage `RESUMECOMMAND` vs
+        // `FETCHCOMMAND`).
+        assert!(
+            fetcher
+                .fetch(&FetchRequest {
+                    resume: true,
+                    ..request
+                })
+                .is_err()
+        );
+
+        // The unit constructors carry the common-case defaults (local,
+        // unqualified, no replace).
+        let unit = MergeUnit::source("dev-libs/example-1.0", Path::new("/root"));
+        assert_eq!(unit.kind, MergeKind::Source);
+        assert!(!unit.remote_binary);
+        assert!(unit.build_id.is_none());
+        let unit = MergeUnit::binary("dev-libs/example-1.0", Path::new("/root"));
+        assert_eq!(unit.kind, MergeKind::Binary);
     }
 
     /// `MergeEngine::execute` takes one [`MergeUnit`] under a

@@ -46,6 +46,11 @@ use std::process::ExitCode;
 
 use portage_vdb::{BackendKind, EntryKey, FilesDb, InstalledDb};
 
+struct Spec {
+    kind: BackendKind,
+    path: PathBuf,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
