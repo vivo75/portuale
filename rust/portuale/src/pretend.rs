@@ -7381,13 +7381,18 @@ pub struct NewsContext {
     /// full real path when the profile lives elsewhere); `None` with no
     /// profile at all.
     pub profile: Option<String>,
+    /// Real `settings.profile_path` is set (a `make.profile` directory
+    /// exists): `count_unread_news`'s gate (`news.py:470-479`). It can
+    /// be set while `profile` is `None` (no main repo).
+    pub has_profile: bool,
     /// Real `config.get("ARCH", "")`, the `Display-If-Keyword` operand.
     pub arch: String,
     /// Real `int(config["PORTAGE_INST_UID"])` (default 0).
     pub inst_uid: u32,
     /// Real `portage.data.portage_gid`: the host's `PORTAGE_GRPNAME`
     /// group (default `portage`), 0 when that group does not exist
-    /// (`data.py:173-178`).
+    /// (`data.py:173-178`). Read from `/etc/group` only, where real's
+    /// `grp.getgrnam` also sees NSS sources (LDAP, sssd).
     pub portage_gid: u32,
 }
 
@@ -7421,13 +7426,10 @@ impl FilesystemNews<'_> {
         // per-item skip list) -- an id in either is not counted.
         let news_state_dir = self.root.join("var/lib/gentoo/news");
         let read_state_file = |suffix: &str| -> HashSet<String> {
-            std::fs::read_to_string(
-                news_state_dir.join(format!("news-{}.{}", self.repo_name, suffix)),
+            grab_news_state_file(
+                &news_state_dir.join(format!("news-{}.{}", self.repo_name, suffix)),
             )
-            .unwrap_or_default()
-            .lines()
-            .map(|l| l.trim().to_string())
-            .filter(|l| !l.is_empty())
+            .into_iter()
             .collect()
         };
         let read_only = read_state_file("read");
@@ -7517,6 +7519,14 @@ fn unread_news_counts(
     root: &Path,
     context: &NewsContext,
 ) -> Vec<(String, usize)> {
+    // Real `count_unread_news` (`news.py:470-479`): with no profile
+    // path at all it prints two errors and counts nothing, because
+    // profile restrictions cannot be evaluated.
+    if !context.has_profile {
+        eprintln!("!!! News items will not be displayed due to an invalid profile setting.");
+        eprintln!("!!! Use eselect profile to update your profile.");
+        return Vec::new();
+    }
     let mut per_repo: Vec<(String, usize)> = Vec::new();
     for repo in repos {
         // The unread computation runs through the director's news slot:
@@ -7531,16 +7541,21 @@ fn unread_news_counts(
         };
         // Real `updateItems` prepares the state directory first, even
         // for a repo with no `metadata/news` (its `listdir` raises
-        // after, and `getUnreadItems` turns that into 0).
-        let state_dir_ready = ensure_news_state_dir(&root.join("var/lib/gentoo/news"), context);
+        // after, and `getUnreadItems` turns that into 0). When the
+        // preparation fails it returns before touching the news dir,
+        // and `getUnreadItems` counts the `.unread` file as it stands
+        // (`news.py:206-239`).
+        let news_state_dir = root.join("var/lib/gentoo/news");
+        if !ensure_news_state_dir(&news_state_dir, context) {
+            let unread =
+                grab_news_state_file(&news_state_dir.join(format!("news-{}.unread", repo.name)));
+            per_repo.push((repo.name.clone(), unread.len()));
+            continue;
+        }
         let Some(eval) = selector.evaluate() else {
             per_repo.push((repo.name.clone(), 0));
             continue;
         };
-        if !state_dir_ready {
-            per_repo.push((repo.name.clone(), eval.unread_orig.len()));
-            continue;
-        }
         write_news_state_if_changed(
             &root.join("var/lib/gentoo/news"),
             &repo.name,
@@ -7740,6 +7755,23 @@ fn run_check_news(
     ExitCode::SUCCESS
 }
 
+/// Real `grabfile` (`util/__init__.py`) over one news state file: each
+/// line split on whitespace, cut at the first `#`-led token, re-joined;
+/// empty results dropped. A missing file reads as empty.
+fn grab_news_state_file(path: &Path) -> Vec<String> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .map(|line| {
+            line.split_whitespace()
+                .take_while(|tok| !tok.starts_with('#'))
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .filter(|l| !l.is_empty())
+        .collect()
+}
+
 /// Real `NewsManager.updateItems`'s own `write_atomic` calls
 /// (`news.py:183-200`): `news-<repo>.<suffix>` gets rewritten -- one id
 /// per line, sorted -- only when `updated` differs from `orig`, i.e. the
@@ -7797,9 +7829,13 @@ fn ensure_news_state_dir(dir: &Path, context: &NewsContext) -> bool {
 /// OR the `mode` bits into the existing mode when any is missing.
 /// Ownership is only changed by a root caller: a non-root caller is
 /// real's unprivileged mode (`PORTAGE_INST_UID` and the portage group
-/// become the caller's own, so the files it creates already match) or
-/// real's `apply_secpass_permissions` skipping what `secpass < 2` cannot
-/// do. `false` on a failed chown/chmod (real `OperationNotPermitted`).
+/// become the caller's own, so the files it creates already match) or,
+/// for the state files, real's `apply_secpass_permissions` skipping
+/// what `secpass < 2` cannot do. One narrow difference remains for the
+/// directory: real's `ensure_dirs` has no secpass gate, so a non-root
+/// caller facing a writable directory it does not own fails the chown
+/// and skips the update, where this proceeds. `false` on a failed
+/// chown/chmod (real `OperationNotPermitted`).
 fn apply_news_permissions(path: &Path, context: &NewsContext, mode: u32) -> bool {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
     let Ok(meta) = std::fs::metadata(path) else {
@@ -7840,6 +7876,7 @@ fn news_context(
     let grpname = var("PORTAGE_GRPNAME").unwrap_or_else(|| "portage".to_string());
     NewsContext {
         profile: news_profile_path(repos, config_root),
+        has_profile: config_profile_dir(config_root).is_some(),
         arch: config.other_vars.get("ARCH").cloned().unwrap_or_default(),
         inst_uid: var("PORTAGE_INST_UID")
             .and_then(|v| v.trim().parse().ok())
@@ -7857,16 +7894,23 @@ fn news_context(
 /// it stays a full real path (and matches no `Display-If-Profile`).
 fn news_profile_path(repos: &[portage_repo::RepoConfig], config_root: &Path) -> Option<String> {
     let main = repos.iter().find(|r| r.is_main)?;
-    let make_profile = [
-        config_root.join("etc/portage/make.profile"),
-        config_root.join("etc/make.profile"),
-    ]
-    .into_iter()
-    .find(|p| p.is_dir())?;
+    let make_profile = config_profile_dir(config_root)?;
     let real = std::fs::canonicalize(&make_profile).ok()?;
     let real = real.to_string_lossy().into_owned();
     let base = format!("{}/", main.location.join("profiles").to_string_lossy());
     Some(real.strip_prefix(&base).map(str::to_string).unwrap_or(real))
+}
+
+/// Real `settings.profile_path` (`LocationsManager.py:119-143`):
+/// `<config_root>/etc/portage/make.profile`, else the deprecated
+/// `<config_root>/etc/make.profile`, whichever is a directory.
+fn config_profile_dir(config_root: &Path) -> Option<std::path::PathBuf> {
+    [
+        config_root.join("etc/portage/make.profile"),
+        config_root.join("etc/make.profile"),
+    ]
+    .into_iter()
+    .find(|p| p.is_dir())
 }
 
 /// Real `grp.getgrnam(name).gr_gid` for `portage.data.portage_gid`: the
@@ -15909,6 +15953,7 @@ mod tests {
     fn test_news_context() -> NewsContext {
         NewsContext {
             profile: Some("default".to_string()),
+            has_profile: true,
             arch: "amd64".to_string(),
             // SAFETY: `geteuid`/`getegid` have no preconditions.
             inst_uid: unsafe { libc::geteuid() },
@@ -16030,6 +16075,78 @@ mod tests {
             news_profile_path(&repos, &fixtures.join("no-such-config-root")),
             None
         );
+    }
+
+    #[test]
+    fn news_counts_follow_real_count_unread_news_gates() {
+        // Real `count_unread_news` (`news.py:470-479`): no profile path
+        // at all counts nothing. Real `updateItems` (`news.py:121-133`):
+        // an unusable state directory returns before the news dir is
+        // read, and `getUnreadItems` counts `.unread` as it stands --
+        // `grabfile`, so comment lines and trailing comments drop out.
+        let base =
+            std::env::temp_dir().join(format!("pretend-test-{}-news_gates", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("root");
+        let repo = portage_repo::RepoConfig {
+            name: "testrepo".to_string(),
+            location: base.join("no-news-repo"),
+            priority: 0,
+            is_main: true,
+            masters: Vec::new(),
+            profile_formats: Vec::new(),
+            cache_formats: Vec::new(),
+            aliases: Vec::new(),
+            sync_type: None,
+            sync_uri: None,
+            volatile: false,
+            module_specific_options: Vec::new(),
+        };
+        let repos = vec![repo];
+        let no_profile = NewsContext {
+            profile: None,
+            has_profile: false,
+            ..test_news_context()
+        };
+        assert!(unread_news_counts(&repos, &root, &no_profile).is_empty());
+        assert!(!root.join("var/lib/gentoo/news").exists());
+
+        // A stale `.unread` in a state directory the caller cannot
+        // write still counts, even for a repo with no `metadata/news`.
+        // `ensure_dirs(mode=0o074)` adds only group/other bits, so an
+        // owner-read-only directory stays unwritable for a non-root
+        // caller (root writes anyway, so the check is skipped there).
+        use std::os::unix::fs::PermissionsExt;
+        let state = root.join("var/lib/gentoo/news");
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::write(
+            state.join("news-testrepo.unread"),
+            "2026-09-01-a\n2026-09-02-b\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o555)).unwrap();
+        // SAFETY: `geteuid` has no preconditions.
+        if unsafe { libc::geteuid() } != 0 {
+            assert_eq!(
+                unread_news_counts(&repos, &root, &test_news_context()),
+                vec![("testrepo".to_string(), 2)]
+            );
+        }
+        std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            grab_news_state_file(&base.join("missing")),
+            Vec::<String>::new()
+        );
+        std::fs::write(
+            base.join("unread"),
+            "# header\n2026-09-01-a\n\n  2026-09-02-b  # note\n",
+        )
+        .unwrap();
+        assert_eq!(
+            grab_news_state_file(&base.join("unread")),
+            vec!["2026-09-01-a".to_string(), "2026-09-02-b".to_string()]
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
