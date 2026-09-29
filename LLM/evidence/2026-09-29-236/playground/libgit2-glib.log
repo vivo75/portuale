@@ -1,0 +1,2 @@
+{'--pretend': True, '--verbose': True} True ['dev-libs/libgit2-0.99.0-r1', 'dev-libs/libgit2-glib-0.99.0.1']
+{'--pretend': True, '--update': True, '--deep': True} True ['dev-libs/libgit2-0.99.0-r1', 'dev-libs/libgit2-glib-0.99.0.1']
