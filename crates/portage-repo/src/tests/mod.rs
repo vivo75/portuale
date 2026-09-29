@@ -1160,6 +1160,26 @@ fn graph_result_autounmask(atom_str: &str) -> GraphResult {
     graph_result_autounmask_cfg(&config, atom_str)
 }
 
+/// `graph_result_autounmask` with `--autounmask-backtrack=y`: the
+/// `'backtrack` loop re-drives the whole walk on every accumulator
+/// growth (Slices 1/4's full cascade), rather than the default
+/// collect-and-display-only behaviour.
+fn graph_result_autounmask_backtrack(atom_str: &str) -> GraphResult {
+    let root = fixtures_root();
+    let mut config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    config.autounmask_backtrack = true;
+    graph_result_autounmask_cfg(&config, atom_str)
+}
+
 fn graph_result_autounmask_cfg(config: &portage_profile::Config, atom_str: &str) -> GraphResult {
     graph_result_autounmask_cfg_atoms(config, &[atom_str.to_string()])
 }

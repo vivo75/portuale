@@ -753,6 +753,49 @@ fn circular_dep_solutions_suggests_disabling_the_gating_flag() {
 }
 
 #[test]
+fn circular_dep_solutions_applies_the_autounmask_use_overlay() {
+    // Portage evaluates the suggestion on the autounmasked USE while `bar` stays
+    // untouchable, so the only fix is `foo` off.
+    let root = fixtures_root();
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    let repos = find_repos(&root).expect("repos");
+    let result = graph_result_autounmask("=dev-libs/cyc0w-3");
+    assert_eq!(result.circular_deps.len(), 1);
+    assert!(
+        result
+            .autounmask_use_changes
+            .iter()
+            .any(|ch| ch.token.split_whitespace().any(|t| t == "bar")),
+        "expected an autounmask `bar` change, got {:?}",
+        result.autounmask_use_changes
+    );
+    let sols = circular_dep_solutions(
+        &result.circular_deps[0],
+        &repos,
+        &config,
+        &result.autounmask_use_changes,
+        &result.entries,
+    );
+    assert_eq!(
+        sols,
+        vec![CircularSuggestion {
+            parent_cpv: "dev-libs/cyc0z-3".to_string(),
+            changes: vec![("foo".to_string(), false)],
+            followup: false,
+        }]
+    );
+}
+
+#[test]
 fn circular_dep_solutions_grandparent_conflict_disqualifies_the_suggestion() {
     // Grandparent with a hard use-dep on the fix: the suggestion list is empty.
     let root = fixtures_root();

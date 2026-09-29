@@ -307,6 +307,190 @@ fn abort_outcome_membership_and_order() {
 }
 
 #[test]
+fn autounmask_backtrack_disabled_gate() {
+    // Both branches of the "terminated early" gate, expected value from Portage
+    // (live captures in fixtures/abort-captures/).
+    let plain = graph_result_autounmask("dev-libs/abort-au-plain");
+    assert!(
+        !plain.autounmask_use_changes.is_empty(),
+        "plain: the change block is still reported"
+    );
+    assert!(
+        !plain.autounmask_no_clean_tail,
+        "plain: fresh-candidate flip, the tail stays clean"
+    );
+    assert!(
+        !plain.autounmask_backtrack_disabled(false),
+        "plain: lone change prints no notice"
+    );
+    // Cycle keeps the notice via the outcome arm, restart-wanted via the
+    // accumulator arm.
+    let cycle = graph_result_autounmask("dev-libs/abort-au-cycle");
+    assert!(
+        !cycle.autounmask_use_changes.is_empty(),
+        "cycle: the change block is still reported alongside"
+    );
+    assert!(
+        cycle.autounmask_backtrack_disabled(false),
+        "cycle: another failure coincides, notice stays"
+    );
+    let casc = graph_result_autounmask("dev-libs/aucasctop");
+    assert!(
+        casc.autounmask_no_clean_tail,
+        "aucasctop: the flip folds for the already-graphed slot"
+    );
+    assert!(
+        casc.autounmask_backtrack_disabled(false),
+        "aucasctop: restart-wanted, notice stays"
+    );
+    // Post-failure parent collects keep the notice too (Portage applies parent
+    // changes before re-probing).
+    let aup = graph_result_autounmask("=dev-libs/aup0b-1");
+    assert_eq!(
+        aup.autounmask_use_changes.len(),
+        1,
+        "aup0b: the parent flip is still reported"
+    );
+    assert!(
+        aup.autounmask_no_clean_tail,
+        "aup0b: the failed dep was collected into a parent flip"
+    );
+    assert!(
+        aup.autounmask_backtrack_disabled(false),
+        "aup0b: notice stays"
+    );
+    // Masked child: no flip recorded at all (Portage skips the parent probe), so
+    // no change block and no notice -- the bare miss.
+    let flip = graph_result_autounmask("dev-libs/parentflipeqpkg");
+    assert!(
+        flip.autounmask_use_changes.is_empty(),
+        "parentflipeqpkg: no flip is recorded for a masked child"
+    );
+    assert!(
+        !flip.autounmask_no_clean_tail,
+        "parentflipeqpkg: nothing collected, the tail stays clean"
+    );
+    assert!(
+        !flip.autounmask_backtrack_disabled(false),
+        "parentflipeqpkg: bare miss prints no notice"
+    );
+    // Same masked-child shape (`use.mask pf`): Portage reports the bare miss under
+    // default and `--autounmask-backtrack=y` alike (live probe, rc 1, no rows).
+    let result = graph_result_autounmask("dev-libs/pfgraphparent");
+    assert!(
+        result.autounmask_use_changes.is_empty(),
+        "pfgraphparent: no flip is recorded for a masked child"
+    );
+    assert!(
+        !result.autounmask_no_clean_tail,
+        "pfgraphparent: nothing collected, the tail stays clean"
+    );
+    assert!(
+        !result.autounmask_backtrack_disabled(false),
+        "pfgraphparent: bare miss prints no notice"
+    );
+    // Config conjuncts suppress unconditionally: `--autounmask-backtrack=y` opts
+    // back in, and `--backtrack=0` never sets the flag.
+    assert!(
+        !graph_result_autounmask_backtrack("dev-libs/abort-au-cycle")
+            .autounmask_backtrack_disabled(true),
+        "backtrack=y suppresses the notice"
+    );
+    let mut no_budget = graph_result_autounmask("dev-libs/aucasctop");
+    no_budget.backtrack_max = 0;
+    assert!(
+        !no_budget.autounmask_backtrack_disabled(false),
+        "--backtrack=0 never prints the notice"
+    );
+    // No changes, no notice -- the predicate's first conjunct.
+    assert!(
+        !graph_result_real("dev-libs/diamond").autounmask_backtrack_disabled(false),
+        "a clean resolve prints no notice"
+    );
+}
+
+#[test]
+fn autounmask_cascade_flip_before_dep_walk_pulls_the_gated_leaf() {
+    // Portage's DFS applies the late flip before walking the mid package's deps,
+    // so the leaf joins the graph in the same attempt; portuale re-expands the
+    // flipped package's newly-gated deps in-walk instead.
+    let result = graph_result_autounmask("dev-libs/aucasctop");
+    let mut pkgs: Vec<&str> = result.entries.iter().map(|e| e.package.as_str()).collect();
+    pkgs.sort_unstable();
+    assert_eq!(
+        pkgs,
+        vec!["aucasclate", "aucascleaf", "aucascmid", "aucasctop"],
+        "the in-graph flip lands before the flipped node's walk"
+    );
+    // Genuine merge-order edge to the leaf: deps re-flattened under the flipped USE.
+    let mid = result
+        .entries
+        .iter()
+        .find(|e| e.package == "aucascmid")
+        .expect("aucascmid is in the graph");
+    assert!(
+        mid.deps.iter().any(|d| d.package == "aucascleaf"),
+        "aucascmid's re-expanded deps name aucascleaf"
+    );
+    // The change block still records the flip.
+    assert!(
+        !result.autounmask_use_changes.is_empty(),
+        "the [cascade] flip is still reported"
+    );
+    // No phantom owners: every `required_by` set is exactly the forward-walk
+    // owners (Portage carries no flip-landing edge here either).
+    for (pkg, want) in [
+        ("aucasctop", vec![]),
+        (
+            "aucascmid",
+            vec![
+                ("dev-libs".to_string(), "aucasclate".to_string()),
+                ("dev-libs".to_string(), "aucasctop".to_string()),
+            ],
+        ),
+        (
+            "aucasclate",
+            vec![("dev-libs".to_string(), "aucasctop".to_string())],
+        ),
+        (
+            "aucascleaf",
+            vec![("dev-libs".to_string(), "aucascmid".to_string())],
+        ),
+    ] {
+        let entry = result
+            .entries
+            .iter()
+            .find(|e| e.package == pkg)
+            .unwrap_or_else(|| panic!("{pkg} is in the graph"));
+        let mut got = entry.required_by.clone();
+        got.sort_unstable();
+        assert_eq!(got, want, "{pkg} has exactly its forward-walk owners");
+    }
+    // First-encounter flip still pulls the leaf with no delta pass involved.
+    let late_result = graph_result_autounmask("dev-libs/aucasclate");
+    let mut late_pkgs: Vec<&str> = late_result
+        .entries
+        .iter()
+        .map(|e| e.package.as_str())
+        .collect();
+    late_pkgs.sort_unstable();
+    assert_eq!(
+        late_pkgs,
+        vec!["aucasclate", "aucascleaf", "aucascmid"],
+        "first-encounter flip still pulls the leaf"
+    );
+    // Whole-walk re-drive agrees with the in-walk delta.
+    let bt_result = graph_result_autounmask_backtrack("dev-libs/aucasctop");
+    let mut bt_pkgs: Vec<&str> = bt_result
+        .entries
+        .iter()
+        .map(|e| e.package.as_str())
+        .collect();
+    bt_pkgs.sort_unstable();
+    assert_eq!(bt_pkgs, pkgs, "backtrack re-drive and in-walk delta agree");
+}
+
+#[test]
 fn autounmask_keywords_records_the_dep_chain_for_a_keyword_masked_dependency() {
     let result = graph_result_autounmask("dev-libs/autounmaskdepconsumer");
     // Consumer and unmasked dependency both resolve as New.
@@ -554,6 +738,58 @@ fn autounmask_use_parent_flip_records_minus_foo_and_fails_for_aup0b() {
 }
 
 #[test]
+fn autounmask_use_parent_flip_pfgraph_reports_the_bare_miss_like_portage() {
+    // Masked child flag with a second conditional dep: Portage still reports the
+    // bare miss under every flag combination (live probe, rc 1); nothing ever
+    // re-resolves, and the parent keeps its own default.
+    for result in [
+        graph_result_autounmask("dev-libs/pfgraphparent"),
+        graph_result_autounmask_backtrack("dev-libs/pfgraphparent"),
+        graph_result_autounmask_use_n("dev-libs/pfgraphparent"),
+    ] {
+        assert!(
+            matches!(result.outcome, ResolveOutcome::Aborted { .. }),
+            "unexpected outcome: {:?}",
+            result.outcome
+        );
+        let child = result
+            .entries
+            .iter()
+            .find(|e| e.package == "pfgraphchild")
+            .expect("child entry");
+        assert!(
+            matches!(child.outcome, PretendOutcome::NoVisibleCandidate),
+            "{child:?}"
+        );
+        assert!(child.parent_use_suggestion.is_none());
+
+        let parent = result
+            .entries
+            .iter()
+            .find(|e| e.package == "pfgraphparent")
+            .expect("parent entry");
+        assert_eq!(
+            parent
+                .use_flags_display
+                .iter()
+                .find(|(f, _)| f == "pf")
+                .map(|(_, on)| *on),
+            Some(true),
+            "no parent flip is recorded, so the parent keeps its own +pf default"
+        );
+
+        assert!(
+            result.autounmask_use_changes.is_empty(),
+            "no flip is recorded: {:?}",
+            result.autounmask_use_changes
+        );
+        assert!(result.use_unsat_deps.is_empty());
+        assert_eq!(result.plain_miss_deps.len(), 1);
+        // Still walked but the aborted outcome prints no rows.
+    }
+}
+
+#[test]
 fn existing_slot_use_change_chain_starts_at_the_requester() {
     // The change chain starts at the requester whose atom needed the change, not
     // at the package that pulled it in first.
@@ -570,6 +806,37 @@ fn existing_slot_use_change_chain_starts_at_the_requester() {
             "required by dev-libs/aubreaktop-1.0::testrepo".to_string(),
             "required by dev-libs/aubreaktop (argument)".to_string(),
         ]
+    );
+}
+
+#[test]
+fn autounmask_use_breakage_abandons_autounmask_and_re_resolves_clean() {
+    // A flag wanted both ways: Portage drops every change and re-resolves clean,
+    // so the contradiction surfaces as an ordinary `NoVisibleCandidate`. Only
+    // detectable across backtrack re-drives.
+    let result = graph_result_autounmask_backtrack("dev-libs/aubreaktop");
+    assert!(
+        result.autounmask_use_changes.is_empty(),
+        "autounmask must be abandoned, not left with a contradictory change: {:?}",
+        result.autounmask_use_changes
+    );
+    let sub = result
+        .entries
+        .iter()
+        .find(|e| e.package == "aubreaksub" && matches!(e.outcome, PretendOutcome::New { .. }))
+        .expect("aubreaksub still resolves as New");
+    assert_eq!(
+        sub.use_flags_display
+            .iter()
+            .find(|(f, _)| f == "brk")
+            .map(|(_, on)| *on),
+        Some(false),
+        "the reverted graph keeps aubreaksub's default brk off"
+    );
+    assert!(
+        result.entries.iter().any(|e| e.package == "aubreaksub"
+            && matches!(e.outcome, PretendOutcome::NoVisibleCandidate)),
+        "aubreakwant's [brk] dep is unsatisfiable once autounmask is off"
     );
 }
 
