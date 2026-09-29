@@ -1512,7 +1512,8 @@ fn print_entry_line(
     // Real `convert_myoldbest`: `blue("[" + ", ".join(versions) + "]")`,
     // each version `-r0`-stripped and (at `-pv`) `:slot::repo`-decorated
     // with *its own* slot/sub_slot/repo. Empty string when there's no
-    // `oldbest` (a brand-new `New`, a `Reinstall`).
+    // `oldbest` (a brand-new `New`, or a `Reinstall` whose version,
+    // slot, sub-slot and repo all match the installed instance).
     let oldbest_str = || -> String {
         if entry.oldbest.is_empty() {
             return String::new();
