@@ -1,0 +1,2 @@
+backtrack {'restarts': 1, 'max': 10}
+[('dev-libs/md4c-0.6.0', 'upgrade'), ('net-libs/rest-0.10.2', 'new')]

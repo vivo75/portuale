@@ -1,0 +1,7 @@
+date: 2026-09-29T21:09:44Z
+host: portuale nproc=32 installed=2128
+portuale: 3a4e4ffd (branch backlog/107-reprobe == main 3a4e4ffd + nothing) release, 2026-09-29 20:34:32.251857023 -0000
+real: Portage 3.0.82.2 (python 3.14.7-final-0, default/linux/amd64/23.0/desktop/plasma/systemd, gcc-16, glibc-2.43-r4, 6.18.39-serv x86_64)
+argv both sides (non-root): emerge -puD --getbinpkg --color=n net-libs/rest
+weston-16.0.0
+libdisplay-info-0.3.0
