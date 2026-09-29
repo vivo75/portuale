@@ -18953,3 +18953,28 @@ rust/target/release/emerge -puD --getbinpkg --color=n net-libs/rest
 rust/target/release/emerge -puD --getbinpkg --color=n --json net-libs/rest | python3 -c 'import json,sys; print(json.load(sys.stdin)["backtrack"])'
 ```
 
+
+A non-privileged `emerge --ask <write-action>` offers to add
+`--pretend` instead of refusing (backlog #246, 2026-09-29). Real
+`action_build` (`_emerge/actions.py:3983-4006`) prints `This action
+requires superuser access...` and asks `Would you like to add --pretend
+to options?`; portuale refused outright through
+`privileges::deny_superuser` (exit 1). The offer now goes through the
+shared `UserQuery.query` port (`ask_yes_no`, backlog #240), so No exits
+130 with nothing else printed, EOF/SIGINT prints `Interrupted.` and
+exits 130, and Yes continues as a pretend run with `--ask` dropped;
+without `--ask` the refusal is real's single `emerge: superuser access
+is required` line (the extra hint line is gone on the emerge path).
+Grounded on host `/usr/sbin/emerge` 3.0.82.2 as uid 1000 (secpass 0):
+No prints the two stdout lines and exits 130; Yes continues into
+`Calculating dependencies ... done!` with no second prompt; bare
+`--depclean` prints only the stderr line with rc 1.
+
+```sh
+# unowned ROOT makes the caller unprivileged; answer on the pty
+printf 'n\n' | script -qec "env PORTAGE_CONFIGROOT=$PWD/fixtures ROOT=/usr/portuale-ask-pretend-test-does-not-exist DISTDIR=$PWD/fixtures/distfiles ./rust/target/release/portuale emerge --ask --oneshot dev-libs/schedok" /dev/null
+# expect: `This action requires superuser access...` +
+# `Would you like to add --pretend to options?`, rc 130
+printf 'y\n' | script -qec "env PORTAGE_CONFIGROOT=$PWD/fixtures ROOT=/usr/portuale-ask-pretend-test-does-not-exist DISTDIR=$PWD/fixtures/distfiles ./rust/target/release/portuale emerge --ask --oneshot dev-libs/schedok" /dev/null
+# expect: the offer, then `[ebuild  N     ] dev-libs/schedok-1.0`, rc 0
+```

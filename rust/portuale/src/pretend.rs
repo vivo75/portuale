@@ -12319,8 +12319,43 @@ pub fn run(args: &[String]) -> ExitCode {
         && !regen_action
         && !metadata_action;
     if write_action && !crate::privileges::is_privileged(&root_from_env()) {
-        crate::privileges::deny_superuser("emerge");
-        return ExitCode::from(1);
+        // Real `_emerge/actions.py:3983-4006` (backlog #246): with
+        // `--ask`, a non-privileged caller is offered `Would you like
+        // to add --pretend to options?` instead of being refused. Real
+        // prints `This action requires {access_desc} access...` to
+        // stdout first; portuale has a single privilege tier (no
+        // portage-group tier -- see `privileges.rs`), so `access_desc`
+        // is always `superuser` here. The prompt itself goes through
+        // the shared `UserQuery.query` port (`ask_yes_no`, backlog
+        // #240), so "No" exits `128 + SIGINT` with nothing else
+        // printed, and EOF/SIGINT prints `Interrupted.` and exits the
+        // same way; "Yes" sets `--pretend` and drops `--ask`, and the
+        // run continues as a pretend run. (Host probe 2026-09-29,
+        // `/usr/sbin/emerge` 3.0.82.2 as uid 1000, secpass 0: exact
+        // bytes in the pin docstrings below.)
+        if ask {
+            println!("This action requires superuser access...");
+            match ask_yes_no(
+                &Colorizer::new(color::resolve_havecolor(color_opt)),
+                "Would you like to add --pretend to options?",
+            ) {
+                Some(true) => {
+                    pretend = true;
+                    ask = false;
+                    portage_repo::set_resolver_debug(debug && pretend);
+                }
+                Some(false) => return ExitCode::from(130),
+                None => return ExitCode::from(130),
+            }
+        } else {
+            // Real `actions.py:4007-4012` without `--ask`: `emerge:
+            // superuser access is required` on stderr, exit 1 -- and no
+            // hint line (host probe 2026-09-29), so this no longer goes
+            // through `privileges::deny_superuser` (kept for `ebuild`,
+            // whose refusal is unprobed).
+            eprintln!("emerge: superuser access is required");
+            return ExitCode::from(1);
+        }
     }
 
     // Real `actions.py:4106-4111`: the `config`, `metadata` and `regen`
@@ -17223,6 +17258,203 @@ mod tests {
         assert!(
             !text.contains("Quitting."),
             "an EOF merge prompt must not print `Quitting.` like real: {text}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// ROOT the test caller cannot own, so `privileges::is_privileged`
+    /// is false for a non-root caller: `/usr` reliably exists, is
+    /// root-owned and not world-writable, so its non-existent child is
+    /// an unowned target (the same trick as
+    /// `privileges::tests::a_dir_the_caller_cannot_write_is_not_privileged`
+    /// and pmtest's `..._refuse_to_merge_into_a_root_owned_tree`).
+    /// Every #246 pin returns early for a root caller -- the privilege
+    /// gate only fires for a non-root caller, like those pins.
+    /// Returns `None` for a root caller (the test returns early).
+    #[cfg(unix)]
+    fn ask_pretend_unowned_root() -> Option<std::path::PathBuf> {
+        // SAFETY: `geteuid` has no preconditions.
+        if unsafe { libc::geteuid() } == 0 {
+            return None;
+        }
+        Some(std::path::PathBuf::from(
+            "/usr/portuale-ask-pretend-test-does-not-exist",
+        ))
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ask_pretend_offer_prompts_on_stdout_for_a_write_action() {
+        // Backlog #246: real `_emerge/actions.py:3983-4006` offers a
+        // non-privileged caller `Would you like to add --pretend to
+        // options?` when `--ask` is set, instead of refusing outright.
+        // `emerge --ask --oneshot dev-libs/schedok` with an unowned
+        // ROOT must print `This action requires superuser access...`
+        // and the question on stdout (real's `writemsg_stdout` +
+        // `print(bold(prompt))`; only the `[Yes/No]` choices go to
+        // stderr, via readline's `input()` -- host probe 2026-09-29,
+        // `/usr/sbin/emerge` 3.0.82.2 as uid 1000, secpass 0,
+        // verbatim pty bytes for the No run:
+        //   `This action requires superuser access...`
+        //   `[01mWould you like to add --pretend to options?[39;49;00m `
+        //   (stderr:) `[32;01mYes[39;49;00m/[31;01mNo[39;49;00m] `
+        //   rc 130, nothing else printed).
+        // The answer here is "No" (rc 130); the arms are pinned
+        // separately below.
+        use std::io::Write;
+        let portuale_bin = built_portuale_bin();
+        let Some(unowned) = ask_pretend_unowned_root() else {
+            return;
+        };
+        let base = TempDir::new("ask_pretend_offer").keep();
+        let env = fixture_resolve_env(&unowned, &base.join("pt"));
+        let (mut master, slave_stdio) = pty_pair();
+        let child = std::process::Command::new(&portuale_bin)
+            .args(["emerge", "--ask", "--oneshot", "dev-libs/schedok"])
+            .stdin(slave_stdio)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .envs(env)
+            .spawn()
+            .expect("portuale emerge spawns");
+        master.write_all(b"n\n").expect("decline the offer");
+        let output = wait_pty_output(child);
+        drop(master);
+        assert_eq!(
+            output.status.code(),
+            Some(130),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stdout.contains("This action requires superuser access..."),
+            "the access line must print on stdout like real: {stdout}"
+        );
+        assert!(
+            stdout.contains("Would you like to add --pretend to options?"),
+            "the offer must print on stdout like real: {stdout}"
+        );
+        assert!(
+            !stderr.contains("This action requires superuser access..."),
+            "the access line is stdout in real, not stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ask_pretend_offer_no_exits_130_like_real() {
+        // Backlog #246, the "No" arm: real returns `128 + SIGINT`
+        // with nothing else printed (`actions.py:3997-4003` -- the
+        // `== "No"` comparison just returns, no notice, no resolve).
+        // Answering `n` must exit 130 with no `Interrupted.` line
+        // (that line is the EOF/SIGINT arm's, #240) and must never
+        // reach the resolve (`Calculating dependencies` stays absent);
+        // the old outright refusal (`superuser access is required` on
+        // stderr) must be gone on this path.
+        use std::io::Write;
+        let portuale_bin = built_portuale_bin();
+        let Some(unowned) = ask_pretend_unowned_root() else {
+            return;
+        };
+        let base = TempDir::new("ask_pretend_offer_no").keep();
+        let env = fixture_resolve_env(&unowned, &base.join("pt"));
+        let (mut master, slave_stdio) = pty_pair();
+        let child = std::process::Command::new(&portuale_bin)
+            .args(["emerge", "--ask", "--oneshot", "dev-libs/schedok"])
+            .stdin(slave_stdio)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .envs(env)
+            .spawn()
+            .expect("portuale emerge spawns");
+        master.write_all(b"n\n").expect("decline the offer");
+        let output = wait_pty_output(child);
+        drop(master);
+        assert_eq!(
+            output.status.code(),
+            Some(130),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !stdout.contains("Interrupted."),
+            "a declined offer is not an interrupt: {stdout}"
+        );
+        assert!(
+            !stdout.contains("Calculating dependencies"),
+            "a declined offer must exit before the resolve: {stdout}"
+        );
+        assert!(
+            !stdout.contains("dev-libs/schedok-1.0"),
+            "a declined offer must not print a merge list: {stdout}"
+        );
+        assert!(
+            !stderr.contains("superuser access is required"),
+            "the offer replaces the outright refusal: {stderr}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ask_pretend_offer_yes_continues_as_pretend_like_real() {
+        // Backlog #246, the "Yes" arm: real sets
+        // `opts["--pretend"] = True`, pops `--ask`, and the run
+        // continues as a pretend run (`actions.py:4004-4006`). Host
+        // probe 2026-09-29 (`printf 'y\n' | script -qec
+        // "/usr/sbin/emerge --ask --depclean"`): after the offer the
+        // run prints the depclean notice, `Calculating dependencies
+        // ... done!`, and continues -- with no second prompt, since
+        // `--ask` is gone. Here answering `y` must resolve the
+        // pretend merge list (`dev-libs/schedok-1.0`) with rc 0 and
+        // must not prompt again (`Would you like to merge these
+        // packages?` stays absent -- `--ask` is no longer in effect).
+        use std::io::Write;
+        let portuale_bin = built_portuale_bin();
+        let Some(unowned) = ask_pretend_unowned_root() else {
+            return;
+        };
+        let base = TempDir::new("ask_pretend_offer_yes").keep();
+        let env = fixture_resolve_env(&unowned, &base.join("pt"));
+        let (mut master, slave_stdio) = pty_pair();
+        let child = std::process::Command::new(&portuale_bin)
+            .args(["emerge", "--ask", "--oneshot", "dev-libs/schedok"])
+            .stdin(slave_stdio)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .envs(env)
+            .spawn()
+            .expect("portuale emerge spawns");
+        master.write_all(b"y\n").expect("accept the offer");
+        let output = wait_pty_output(child);
+        drop(master);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("Would you like to add --pretend to options?"),
+            "the offer must print first: {stdout}"
+        );
+        assert!(
+            stdout.contains("dev-libs/schedok-1.0"),
+            "accepting the offer must continue as a pretend run: {stdout}"
+        );
+        assert!(
+            !stdout.contains("Would you like to merge these packages?"),
+            "--ask is dropped with the offer, so no merge prompt follows: {stdout}"
         );
         let _ = std::fs::remove_dir_all(&base);
     }
