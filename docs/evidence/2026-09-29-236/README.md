@@ -28,3 +28,14 @@ Captured 2026-09-29.
   merges `libgit2-0.99.0-r1` + `libgit2-glib-0.99.0.1` with no problems
   block (portuale before Slice B: the same rows plus a skipped-update
   warning).
+
+## `fixture-oracle/` — the r25 cells after Slice B
+
+From pmtest's fixture-oracle bed run `l0-fx-20260929T204839Z`
+(`differential-test-bed/atomlists/l0-fixture-oracle-r25.txt`,
+`FX_WORLD_EXTRA=dev-libs/r25consumer`, real Portage 3.0.82.2 in the
+container, portuale from branch `backlog/236-minimize` — `pm.json`). Real
+(`real/`) prints `U r25up-2.0` + `N r25target-1.0` with `backtrack: 0/20`
+and no skipped-update block; portuale (`portuale/`) prints the same two
+rows and nothing else (its `--json` reports `restarts: 0`). Slice C pins
+this in pmtest's `test_236_r25_default_backtracking_settles_in_one_silent_pass`.
