@@ -26291,6 +26291,10 @@ struct PassState {
     /// can both need to be resolved even though they'd share a visited-atom
     /// check keyed any coarser than exact text).
     visited_atoms: HashSet<String>,
+    /// #236 B: `_minimize_children` verdicts for an owner's same-cp
+    /// sibling atoms, keyed `(owner cp, atom text)` -- filled when the
+    /// first sibling pops, consumed as each one pops (see `run_pass`).
+    minimize_pins: HashMap<((String, String), String), PretendOutcome>,
     /// (category, package, slot) -> index into `entries`, for New/Upgrade
     /// outcomes only. The first atom to resolve a given slot "wins" (its
     /// version is what gets recursed into); every later atom landing on
@@ -26554,6 +26558,116 @@ fn onlydeps_runtime_keys(
 /// overlay-then-`bp` within the pass) and `collect_feedback` + driver folds them
 /// into `bp` before deciding. Returns the settled pass; the
 /// `REQUIRED_USE` early-`Err` below is the only failure mode.
+/// #236 B: real `_minimize_children` (`_emerge/depgraph.py:4751-4854`)
+/// over one parent's atoms on one cp, each already paired with the
+/// outcome it would resolve to on its own. Returns every atom with the
+/// outcome it keeps: when two or more distinct packages were selected,
+/// real's elimination runs -- installed packages first, then the rest,
+/// each group ascending by version (bug 631894), and a package is dropped
+/// when every atom that matches it also matches another surviving
+/// package -- and each atom is then bound to the highest surviving
+/// package it matches (`child_pkgs.sort(); child_pkgs[-1]`).
+///
+/// A package is `(version, installed)`: the installed instance and a
+/// same-version ebuild are distinct nodes in real. Matching is real's
+/// `findAtomForPackage` on the package's `cat/pkg-ver:slot/sub` string;
+/// an atom carrying use-deps or a `::repo` restriction is only ever
+/// counted as matching its own selection (conservative: it can keep a
+/// package alive, never drop one real would keep for USE reasons).
+/// Atoms without a package (`NoVisibleCandidate`, a removal) are passed
+/// through untouched, like real's `(atom, None)` yield.
+fn minimize_children(
+    root: &Path,
+    repos: &[RepoConfig],
+    key: &(String, String),
+    picks: Vec<(String, PretendOutcome)>,
+) -> Vec<(String, PretendOutcome)> {
+    fn pkg_of(o: &PretendOutcome) -> Option<(String, bool)> {
+        match o {
+            PretendOutcome::AlreadyInstalled { version } => Some((version.clone(), true)),
+            PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+                Some((version.clone(), false))
+            }
+            PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
+                Some((to.clone(), false))
+            }
+            PretendOutcome::NoVisibleCandidate | PretendOutcome::Uninstall { .. } => None,
+        }
+    }
+    let mut pkgs: Vec<(String, bool)> = Vec::new();
+    let mut pkg_outcome: HashMap<(String, bool), PretendOutcome> = HashMap::new();
+    for (_, o) in &picks {
+        if let Some(p) = pkg_of(o)
+            && !pkgs.contains(&p)
+        {
+            pkg_outcome.insert(p.clone(), o.clone());
+            pkgs.push(p);
+        }
+    }
+    if pkgs.len() < 2 {
+        return picks;
+    }
+    let pkg_str = |(version, installed): &(String, bool)| -> String {
+        let (slot, sub) = if *installed {
+            read_vdb_slot(root, &key.0, &key.1, version)
+        } else {
+            let (sub, _repo, slot) = slot_conflict_meta(repos, &key.0, &key.1, version);
+            (slot, sub)
+        };
+        let sub = if sub.is_empty() { slot.clone() } else { sub };
+        format!("{}/{}-{version}:{slot}/{sub}", key.0, key.1)
+    };
+    let strs: HashMap<(String, bool), String> =
+        pkgs.iter().map(|p| (p.clone(), pkg_str(p))).collect();
+    // atom -> packages it matches (real's `atom_pkg_graph.child_nodes`).
+    let mut matches: Vec<(String, Vec<(String, bool)>)> = Vec::new();
+    for (a, o) in &picks {
+        let Some(own) = pkg_of(o) else { continue };
+        let restricted = a.contains('[') || a.contains("::");
+        let mut ms: Vec<(String, bool)> = Vec::new();
+        for p in &pkgs {
+            let hit = *p == own
+                || (!restricted
+                    && portage_dep::match_from_list(a, &[strs[p].as_str()])
+                        .is_some_and(|m| !m.is_empty()));
+            if hit {
+                ms.push(p.clone());
+            }
+        }
+        matches.push((a.clone(), ms));
+    }
+    let mut order: Vec<(String, bool)> = pkgs.clone();
+    order.sort_by(|x, y| y.1.cmp(&x.1).then_with(|| vercmp_ordering(&x.0, &y.0)));
+    let mut alive: HashSet<(String, bool)> = pkgs.iter().cloned().collect();
+    for p in &order {
+        let eliminate = matches.iter().all(|(_, ms)| {
+            !ms.contains(p) || ms.iter().filter(|q| alive.contains(*q)).count() >= 2
+        });
+        if eliminate {
+            alive.remove(p);
+        }
+    }
+    picks
+        .into_iter()
+        .map(|(a, o)| {
+            let Some((_, ms)) = matches.iter().find(|(x, _)| *x == a) else {
+                return (a, o);
+            };
+            let best = ms
+                .iter()
+                .filter(|q| alive.contains(*q))
+                .max_by(|x, y| vercmp_ordering(&x.0, &y.0).then_with(|| x.1.cmp(&y.1).reverse()));
+            match best {
+                Some(b) => {
+                    let bo = pkg_outcome[b].clone();
+                    (a, bo)
+                }
+                None => (a, o),
+            }
+        })
+        .collect()
+}
+
 fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<PassResult, Error> {
     // The same effective-config view the loop feeds `collect_feedback` + driver /
     // `assemble_result` (cloned out of `bp`; only `&bp` is borrowed
@@ -26800,11 +26914,85 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 &ctx.local_binpkg,
             )
         };
-        let mut outcome = if ctx.complete
+        let complete_locked = ctx.complete
             && !ctx.complete_locked_merges.is_empty()
             && owner.is_some()
-            && !ctx.complete_locked_merges.contains(&key)
+            && !ctx.complete_locked_merges.contains(&key);
+        // #236 B: real `_minimize_children` (`_emerge/depgraph.py:4751-4854`,
+        // called on every parent's selected atom set at `:4521`/`:4660`).
+        // Real selects a package for each of the parent's atoms first, then
+        // -- per cp with two or more distinct selections -- eliminates the
+        // redundant ones, installed first and ascending, so an atom whose
+        // own pick is also satisfied by another selection is re-pointed at
+        // that one. The dominant shape is an installed parent's dynamic
+        // deps (`FakeVartree._apply_dynamic_deps`): the live `cat/pkg:=`
+        // picks the tree's highest version while the appended built
+        // `>=cat/pkg-1.0:0/1=` picks the installed one, and real binds
+        // both to the installed instance (the #211 update probe decides
+        // any upgrade afterwards). Portuale resolves each queued atom on
+        // its own, so the collapse point is built here: the owner's plain
+        // siblings on the same cp are contiguous at the queue front (one
+        // `enqueue_*` call pushed them together), and the first one popped
+        // resolves the whole group and pins every member's outcome.
+        // `||`-chosen atoms stay out, like real's per-disjunction call.
+        if let Some(o) = owner.as_ref()
+            && !from_disjunction
+            && !state
+                .minimize_pins
+                .contains_key(&(o.clone(), current_atom.clone()))
         {
+            let mut group: Vec<(String, bool)> = vec![(current_atom.clone(), buildtime_hard)];
+            for it in state.queue.iter() {
+                if it.owner.as_ref() != Some(o) || it.depth != depth || it.from_disjunction {
+                    break;
+                }
+                if let Some(a) = portage_dep::parse_atom(&it.atom)
+                    && a.blocker == portage_dep::Blocker::None
+                    && a.category == key.0
+                    && a.package == key.1
+                    && !group.iter().any(|(g, _)| *g == it.atom)
+                {
+                    group.push((it.atom.clone(), it.buildtime_hard));
+                }
+            }
+            if group.len() >= 2 {
+                let mut picks: Vec<(String, PretendOutcome)> = Vec::new();
+                for (a, bh) in &group {
+                    let mut out = if complete_locked {
+                        match best_installed_for_atom(ctx.root, a, &key.0, &key.1) {
+                            Some(v) => PretendOutcome::AlreadyInstalled { version: v },
+                            None => continue,
+                        }
+                    } else {
+                        resolve_atom(a)?
+                    };
+                    // The #233 installed fallback below, applied to the
+                    // prediction too (real's selection iterates vartree).
+                    if matches!(out, PretendOutcome::NoVisibleCandidate)
+                        && depth != 0
+                        && !bh
+                        && !ctx.empty
+                        && portage_dep::parse_atom(a)
+                            .is_some_and(|p| p.slot.is_some() || p.slot_operator.is_some())
+                        && let Some(version) = best_installed_matching(ctx.root, a, config)
+                    {
+                        out = PretendOutcome::AlreadyInstalled { version };
+                    }
+                    picks.push((a.clone(), out));
+                }
+                for (a, out) in minimize_children(ctx.root, &ctx.repos, &key, picks) {
+                    state.minimize_pins.insert((o.clone(), a), out);
+                }
+            }
+        }
+        let pinned = owner.as_ref().and_then(|o| {
+            state
+                .minimize_pins
+                .remove(&(o.clone(), current_atom.clone()))
+        });
+        let mut outcome = if let Some(pinned) = pinned {
+            pinned
+        } else if complete_locked {
             match best_installed_for_atom(ctx.root, &current_atom, &key.0, &key.1) {
                 Some(v) => PretendOutcome::AlreadyInstalled { version: v },
                 None => continue 'queue,
@@ -48878,6 +49066,116 @@ mod tests {
     /// installed child in the bound slot, a higher (or equal) version,
     /// `--update` (or a directly-requested provider), and a visible tree
     /// candidate for the consumer.
+    /// #236 B: real `_minimize_children` (`_emerge/depgraph.py:4751-4854`)
+    /// on its two observed shapes. (1) An installed parent's dynamic deps
+    /// (the r25 shape, real's own probe in
+    /// `docs/evidence/2026-09-29-236/playground/r25-debug.log`): the live
+    /// `minlib:=` picks the tree's `2.0` (`0/2`), the appended built
+    /// `>=minlib-1.0:0/1=` the installed `1.0`; installed-first elimination
+    /// drops `2.0` and both atoms bind the installed instance. (2) An
+    /// ebuild parent's version range (the fixture's `libgit2-glib`,
+    /// `libgit2-glib.log` there): `<minlib-3` picks `2.0`, `>=minlib-1.5`
+    /// the tree's `3.0`; ascending elimination keeps `2.0` (the only
+    /// match of `<3`) and drops `3.0`. A single selection, or atoms whose
+    /// selections match nothing else, pass through unchanged.
+    #[test]
+    fn minimize_children_collapses_like_real() {
+        use md5::Digest as _;
+        use std::fmt::Write as _;
+        let base = TempDir::new("portage-repo-236-minimize").keep();
+        let d = base.join("var/db/pkg/dev-libs/minlib-1.0");
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("SLOT"), "0/1\n").unwrap();
+        let repo = base.join("repo");
+        for (pv, slot) in [("1.0", "0/1"), ("2.0", "0/2"), ("3.0", "0/3")] {
+            let dir = repo.join("dev-libs/minlib");
+            fs::create_dir_all(&dir).unwrap();
+            let body =
+                format!("EAPI=8\nDESCRIPTION=\"236\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\n");
+            fs::write(dir.join(format!("minlib-{pv}.ebuild")), &body).unwrap();
+            let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+            let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=236\nEAPI=8\n".to_string();
+            writeln!(entry, "KEYWORDS=amd64\nSLOT={slot}\n_md5_={md5}").unwrap();
+            let cachedir = repo.join("metadata/md5-cache/dev-libs");
+            fs::create_dir_all(&cachedir).unwrap();
+            fs::write(cachedir.join(format!("minlib-{pv}")), entry).unwrap();
+        }
+        let repos = vec![RepoConfig {
+            name: "testrepo".to_string(),
+            location: repo.clone(),
+            priority: 0,
+            is_main: true,
+            masters: vec![],
+            profile_formats: vec![],
+            cache_formats: vec![],
+            aliases: vec![],
+            sync_type: None,
+            sync_uri: None,
+            volatile: false,
+            module_specific_options: vec![],
+        }];
+        let key = ("dev-libs".to_string(), "minlib".to_string());
+        let installed = PretendOutcome::AlreadyInstalled {
+            version: "1.0".into(),
+        };
+        let up = |to: &str| PretendOutcome::Upgrade {
+            from: "1.0".into(),
+            to: to.into(),
+        };
+        // (1) dynamic deps of an installed parent.
+        let out = minimize_children(
+            &base,
+            &repos,
+            &key,
+            vec![
+                ("dev-libs/minlib:=".to_string(), up("2.0")),
+                (">=dev-libs/minlib-1.0:0/1=".to_string(), installed.clone()),
+            ],
+        );
+        assert_eq!(
+            out,
+            vec![
+                ("dev-libs/minlib:=".to_string(), installed.clone()),
+                (">=dev-libs/minlib-1.0:0/1=".to_string(), installed.clone()),
+            ]
+        );
+        // (2) an ebuild parent's version range: ascending, the lower pick
+        // is the only match of `<3` and stays; `3.0` is eliminated.
+        let out = minimize_children(
+            &base,
+            &repos,
+            &key,
+            vec![
+                ("<dev-libs/minlib-3".to_string(), up("2.0")),
+                (">=dev-libs/minlib-1.5".to_string(), up("3.0")),
+            ],
+        );
+        assert_eq!(
+            out,
+            vec![
+                ("<dev-libs/minlib-3".to_string(), up("2.0")),
+                (">=dev-libs/minlib-1.5".to_string(), up("2.0")),
+            ]
+        );
+        // Disjoint selections (each atom matches only its own pick) and a
+        // lone selection are left alone; so is a use-dep atom, which only
+        // ever counts as matching its own pick.
+        let disjoint = vec![
+            ("<dev-libs/minlib-2".to_string(), installed.clone()),
+            (">=dev-libs/minlib-3".to_string(), up("3.0")),
+        ];
+        assert_eq!(
+            minimize_children(&base, &repos, &key, disjoint.clone()),
+            disjoint
+        );
+        let used = vec![
+            ("dev-libs/minlib[foo]".to_string(), up("2.0")),
+            (">=dev-libs/minlib-1.0:0/1=".to_string(), installed.clone()),
+        ];
+        assert_eq!(minimize_children(&base, &repos, &key, used.clone()), used);
+        let _ = fs::remove_dir_all(&base);
+    }
+
     /// #236 A: real `_slot_operator_update_probe` +
     /// `_slot_operator_update_backtrack` (`_emerge/depgraph.py:2576-2800`,
     /// `:2400-2452`) on the shape the `_minimize_children` collapse leaves
