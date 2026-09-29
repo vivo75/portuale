@@ -1,0 +1,17 @@
+Undefined license group 'FREE'
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.12 s (backtrack: 0/20).
+
+[ebuild  N     ] dev-libs/abort-leaf-a-1.0 to /tmp/l0-fixture-oracle/fixtures/
+[ebuild  N     ] dev-libs/abort-au-dep-1.0 to /tmp/l0-fixture-oracle/fixtures/ USE="auflag" 
+[ebuild  N     ] dev-libs/abort-leaf-b-1.0 to /tmp/l0-fixture-oracle/fixtures/
+[ebuild  N     ] dev-libs/abort-au-plain-1.0 to /tmp/l0-fixture-oracle/fixtures/
+
+The following USE changes are necessary to proceed:
+ (see "package.use" in the portage(5) man page for more details)
+# required by dev-libs/abort-au-plain-1.0::testrepo
+# required by dev-libs/abort-au-plain (argument)
+>=dev-libs/abort-au-dep-1.0 auflag

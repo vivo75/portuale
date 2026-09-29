@@ -1,0 +1,40 @@
+Undefined license group 'FREE'
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.14 s (backtrack: 3/20).
+
+
+!!! Multiple package instances within a single package slot have been pulled
+!!! into the dependency graph, resulting in a slot conflict:
+
+dev-libs/aub0d:0 for /tmp/l0-fixture-oracle/fixtures/
+
+  (dev-libs/aub0d-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/l0-fixture-oracle/fixtures/') USE="-bar" ELIBC="glibc" pulled in by
+    >=dev-libs/aub0d-1 required by (dev-libs/aub0c-0:0/0::testrepo, ebuild scheduled for merge to '/tmp/l0-fixture-oracle/fixtures/') USE="" ELIBC="glibc"
+    ^^               ^                                                                                                                                     
+
+  (dev-libs/aub0d-0:0/0::testrepo, ebuild scheduled for merge to '/tmp/l0-fixture-oracle/fixtures/') USE="foo" ELIBC="glibc" pulled in by
+    dev-libs/aub0d[foo] required by (dev-libs/aub0b-0:0/0::testrepo, ebuild scheduled for merge to '/tmp/l0-fixture-oracle/fixtures/') USE="" ELIBC="glibc"
+                   ^^^                                                                                                                                      
+
+
+It may be possible to solve this problem by using package.mask to
+prevent one of those packages from being selected. However, it is also
+possible that conflicting dependencies exist such that they are
+impossible to satisfy simultaneously.  If such a conflict exists in
+the dependencies of two different packages, then those packages can
+not be installed simultaneously. You may want to try a larger value of
+the --backtrack option, such as --backtrack=30, in order to see if
+that will solve this conflict automatically.
+
+For more information, see MASKED PACKAGES section in the emerge man
+page or refer to the Gentoo Handbook.
+
+
+emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/aub0d[-foo]" for /tmp/l0-fixture-oracle/fixtures/.
+!!! One of the following packages is required to complete your request:
+- dev-libs/aub0d-0::testrepo (Change USE: -foo)
+(dependency required by "dev-libs/aub0a-0::testrepo" [ebuild])
+(dependency required by "dev-libs/aub0a" [argument])

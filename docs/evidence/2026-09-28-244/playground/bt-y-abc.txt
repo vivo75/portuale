@@ -1,0 +1,35 @@
+
+!!! Multiple package instances within a single package slot have been pulled
+!!! into the dependency graph, resulting in a slot conflict:
+
+app-misc/D:0
+
+  (app-misc/D-1:0/0::test_repo, ebuild scheduled for merge) USE="-bar" pulled in by
+    >=app-misc/D-1 required by (app-misc/C-0:0/0::test_repo, ebuild scheduled for merge) USE=""
+    ^^           ^                                                                                                                                    
+
+  (app-misc/D-0:0/0::test_repo, ebuild scheduled for merge) USE="foo" pulled in by
+    app-misc/D[foo] required by (app-misc/B-0:0/0::test_repo, ebuild scheduled for merge) USE=""
+               ^^^                                                                                                                  
+
+
+It may be possible to solve this problem by using package.mask to
+prevent one of those packages from being selected. However, it is also
+possible that conflicting dependencies exist such that they are
+impossible to satisfy simultaneously.  If such a conflict exists in
+the dependencies of two different packages, then those packages can
+not be installed simultaneously. You may want to try a larger value of
+the --backtrack option, such as --backtrack=30, in order to see if
+that will solve this conflict automatically.
+
+For more information, see MASKED PACKAGES section in the emerge man
+page or refer to the Gentoo Handbook.
+
+
+emerge: there are no ebuilds built with USE flags to satisfy "app-misc/D[-foo]".
+!!! One of the following packages is required to complete your request:
+- app-misc/D-0::test_repo (Change USE: -foo)
+(dependency required by "app-misc/A-0::test_repo" [ebuild])
+(dependency required by "app-misc/A" [argument])
+### ORDER A/B/C {'--pretend': True, '--autounmask-backtrack': 'y'} success 0 mergelist None use_changes None
+backtrack {}

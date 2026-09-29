@@ -1,0 +1,18 @@
+[nomerge       ] dev-libs/abort-cycle-last-1.0::testrepo
+[nomerge       ]  dev-libs/abort-cycle-a-1.0::testrepo
+[ebuild  N     ]   dev-libs/abort-cycle-b-1.0::testrepo  0 KiB
+[ebuild  N     ]    dev-libs/abort-cycle-a-1.0::testrepo  0 KiB
+[ebuild  N     ] dev-libs/abort-cycle-last-1.0::testrepo  0 KiB
+
+Total: 3 packages (3 new), Size of downloads: 0 KiB
+
+
+
+ * Error: circular dependencies:
+
+(dev-libs/abort-cycle-a-1.0:0/0::testrepo, ebuild scheduled for merge) depends on
+ (dev-libs/abort-cycle-b-1.0:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+  (dev-libs/abort-cycle-a-1.0:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+
+ * Note that circular dependencies can often be avoided by temporarily
+ * disabling USE flags that trigger optional dependencies.
