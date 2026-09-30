@@ -237,6 +237,13 @@ per-slice ledger) and `git log`. The per-slice "current state" narrative
 that used to live here is snapshotted at
 [`history/agent-context-current-state-2026-09-10.md`](history/agent-context-current-state-2026-09-10.md).
 
+**2026-09-30 close-out note:** `batch-2026-09-28.md` is **done**
+(Status header + §8 P-Z record): #256+#257, #254+#255, #249, #250,
+#251 shipped; #245 stays OPEN by owner decision; residues #276–#278
+filed (next free #279). The integration branch
+`backlog/259-260-test-hygiene` was merged into `main`; nothing pushed.
+The note below is the superseded mid-batch handoff.
+
 **2026-09-30 memory note:** `batch-2026-09-28.md` is the live batch and
 its **"Execution state (2026-09-30, post-rebase)"** section at the top
 is the handoff record: what is done (H0, Z0, Track C, Track D #246/#248/
