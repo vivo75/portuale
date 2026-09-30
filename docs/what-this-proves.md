@@ -19173,3 +19173,12 @@ for f in CATEGORY:dev-util SLOT:0 EAPI:8 IUSE:foo USE: repository:testrepo "BDEP
 PORTAGE_CONFIGROOT=$FX ROOT=$FX PORTAGE_RUNNING_ROOT=$FX DISTDIR=$FX/distfiles \
   rust/target/release/emerge --pretend dev-util/u250make
 ```
+
+**L3 fast path (#280–#282) — the per-slice source-parity smoke (branch `l3-fast-path`).** `l3-smoke.txt` (tree, pv, dmidecode plus `sys-libs/glibc` and `app-shells/bash`, built without `--emptytree` via its own `# l3-build-args: --oneshot --usepkg=n --color=n` directive) runs both PMs with no control pair; portage 3.0.82.2 is baked into `localhost/test-portuale:latest` (`5616d41d00cd`) so no container upgrades it first, and builds run on a tmpfs at `/var/tmp/portage` (`L3_TMPFS=1`, size default 8g). Run it from `../pmtest` (≈15 min wall-clock, both sides serial, nothing else on the beds):
+
+```sh
+# from ../pmtest; expect rc 0 and UNEXPLAINED: 0
+L3_TMPFS=1 L3_JOBS=28 differential-test-bed/run/l3-source-parity.sh differential-test-bed/atomlists/l3-smoke.txt
+```
+
+The 2026-09-30 report `differential-test-bed/logs/l3-20260930T211117Z` (21:11:16Z→21:26:02Z) shows `hard findings: 1, explained: 1, UNEXPLAINED: 0, payload diffs: 26 (tolerated), mtime-only: 3946` — the one explained row is the known `[VDB] (l3-vm-repo-revisions-vdb-env)` bash-environment row (`owner: portuale-bug`) — with `portage tmpfs-peak: 931418112 0.9` and `portuale tmpfs-peak: 891035648 0.8`, merge rc 0 on both sides (all 5 atoms `Completed`; the report's `touched` metric counts 3 per side). One honesty note: the report's `build_args` lines are present but empty — at that point `compare/snapshot.sh` was still erasing `meta.tsv` before the snapshot (fixed the same day by re-appending the block; the effective argv, `emerge --oneshot --usepkg=n --color=n` plus the 5 atoms, is visible in both container logs instead). The confirmation smoke with that fix plus the 8g default was still running at close-out, so the numbers above are quoted from the S1–S3 bed-report capture (`.superpowers/sdd/l3-fast-path/bed-report.md`), not re-run for this paragraph. Plainly: the smoke measures ≈15 min (≈4.5 min build + ≈2.7 min full-tree snapshot per container, two containers in series), not the ~5 min target — the remaining speedup is filed as #283 (concurrent sides, parallel snapshot hashing).
