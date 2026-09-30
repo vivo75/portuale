@@ -425,6 +425,64 @@ fn classify_yes_no_prefix_matches_case_insensitively_and_rejects_garbage() {
     assert_eq!(classify_yes_no("No", true), Some(false));
 }
 
+// After the first line is served the kernel must hold nothing, or a child
+// inheriting the fd could steal the next answer and hang the next prompt.
+#[test]
+#[cfg(unix)]
+fn prompt_line_buffer_drains_the_kernel_so_a_child_cannot_steal_the_next_answer() {
+    // A pty, not a pipe: the line discipline queues the second answer in the kernel.
+    unsafe {
+        let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC);
+        assert!(master >= 0, "posix_openpt");
+        assert_eq!(libc::grantpt(master), 0, "grantpt");
+        assert_eq!(libc::unlockpt(master), 0, "unlockpt");
+        let cname = pty_slave_path(master);
+        let slave = libc::open(
+            cname.as_ptr(),
+            libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC,
+        );
+        assert!(slave >= 0, "pty slave open");
+        assert_eq!(
+            libc::write(master, b"No\n".as_ptr() as *const libc::c_void, 3),
+            3,
+            "queue the first answer"
+        );
+        assert_eq!(
+            libc::write(master, b"Yes\n".as_ptr() as *const libc::c_void, 4),
+            4,
+            "queue the second answer"
+        );
+        let mut buf = PromptLineBuffer::new();
+        assert_eq!(buf.read_line(slave).as_deref(), Some("No\n"), "first line");
+        // Drained means a stealing child would see EAGAIN.
+        let flags = libc::fcntl(slave, libc::F_GETFL);
+        assert_eq!(
+            libc::fcntl(slave, libc::F_SETFL, flags | libc::O_NONBLOCK),
+            0,
+            "set non-blocking"
+        );
+        let mut stolen = [0u8; 8];
+        let n = libc::read(slave, stolen.as_mut_ptr() as *mut libc::c_void, 8);
+        assert!(
+            n < 0,
+            "the next answer must not sit in the kernel (a child would steal it); read returned {:?}",
+            &stolen[..n.max(0) as usize]
+        );
+        assert_eq!(
+            libc::fcntl(slave, libc::F_SETFL, flags),
+            0,
+            "restore blocking"
+        );
+        assert_eq!(
+            buf.read_line(slave).as_deref(),
+            Some("Yes\n"),
+            "the next answer is served from the userspace leftover"
+        );
+        libc::close(slave);
+        libc::close(master);
+    }
+}
+
 // A hung child is killed at the bound with a `watchdog:` panic, instead of
 // hanging the whole run.
 #[test]
@@ -585,4 +643,34 @@ fn ask_without_a_tty_exits_immediately_instead_of_prompting() {
         stderr.contains("\"--ask\" should only be used in a terminal"),
         "{stderr}"
     );
+}
+
+// `read_prompt_line` must return exactly one line per call, buffering leftovers
+// in userspace like Portage's buffered `sys.stdin`.
+#[test]
+#[cfg(unix)]
+fn prompt_line_buffer_returns_exactly_one_line_per_call() {
+    let mut fds = [0i32; 2];
+    assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0, "pipe");
+    let (read_fd, write_fd) = (fds[0], fds[1]);
+    let written = unsafe { libc::write(write_fd, b"No\nYes\n".as_ptr() as *const libc::c_void, 7) };
+    assert_eq!(written, 7, "write both answers in one chunk");
+    unsafe { libc::close(write_fd) };
+    let mut buf = PromptLineBuffer::new();
+    assert_eq!(
+        buf.read_line(read_fd).as_deref(),
+        Some("No\n"),
+        "first call returns exactly one line"
+    );
+    assert_eq!(
+        buf.read_line(read_fd).as_deref(),
+        Some("Yes\n"),
+        "second call returns the next line"
+    );
+    assert_eq!(
+        buf.read_line(read_fd),
+        None,
+        "EOF once both lines are served"
+    );
+    unsafe { libc::close(read_fd) };
 }
