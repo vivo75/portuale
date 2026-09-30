@@ -29638,6 +29638,44 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         // resolves `||` only after the dep stack drains, so a
         // queued-but-unresolved dep counts as will-be-in-graph.
         let queued: Vec<QueueItem> = state.queue.iter().cloned().collect();
+        // #249: real expands a new-style virtual's deps inline, inside the
+        // dep_check of the package that pulled it, and its `dep_zapdeps`
+        // chains `circular_dependency.get(parent)` and
+        // `.get(virt_parent)` (`portage/dep/dep_check.py:673-678`, with
+        // `virt_parent` set at `:236-252`). Portuale walks the virtual as
+        // its own node, so `self_cp` is already real's `virt_parent` key;
+        // the `parent` half is the virtual's puller(s), whose recorded
+        // cycle children join the lookup here. (Real runs the expansion
+        // once per pulling edge; the union over this pass's pullers is
+        // the one-node approximation.)
+        let circ_with_pullers: Option<HashMap<(String, String), Vec<CircularDepChild>>> =
+            if self_cp.0 == "virtual" && !bp.circular_dependency.is_empty() {
+                let mut extra: Vec<CircularDepChild> = Vec::new();
+                if let Some(pullers) = state.required_by_map.get(&self_cp) {
+                    let mut pullers: Vec<&(String, String)> = pullers.iter().collect();
+                    pullers.sort();
+                    for p in pullers {
+                        if let Some(children) = bp.circular_dependency.get(p) {
+                            extra.extend(children.iter().cloned());
+                        }
+                    }
+                }
+                (!extra.is_empty()).then(|| {
+                    let mut m = bp.circular_dependency.clone();
+                    let bucket = m.entry(self_cp.clone()).or_default();
+                    for c in extra {
+                        if !bucket.contains(&c) {
+                            bucket.push(c);
+                        }
+                    }
+                    m
+                })
+            } else {
+                None
+            };
+        let circular_view = circ_with_pullers
+            .as_ref()
+            .unwrap_or(&bp.circular_dependency);
         let Ok(flat_deps) = portage_use_reduce::use_reduce_flat_disjunctive(
             &tokens,
             &use_flags,
@@ -29656,8 +29694,8 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     // Backlog #221: this pass's recorded cycle edges --
                     // empty on the first attempt, populated on the
                     // restart after a stranded walk (see
-                    // `collect_feedback`).
-                    &bp.circular_dependency,
+                    // `collect_feedback`); #249 adds a virtual's pullers.
+                    circular_view,
                     ctx.root_deps_running_root,
                     atoms,
                     &queued,
@@ -47230,6 +47268,45 @@ mod tests {
                     version: "1.0".to_string()
                 }
             )]
+        );
+    }
+
+    /// #249: real `dep_zapdeps` chains `circular_dependency.get(parent)`
+    /// and `.get(virt_parent)` (`portage/dep/dep_check.py:673-678`); a
+    /// virtual's `||` is expanded inline under the package that pulled it,
+    /// so the puller's circular record demotes the cycle-closing branch.
+    /// The pmtest fixture `dev-util/u249make` (bug 703440's cycle with the
+    /// `||` inside `virtual/u249make`): real's ResolverPlayground merges the
+    /// bootstrap after one circular restart and aborts under
+    /// `--backtrack=0` (portuale `docs/evidence/2026-09-30-249/u249.txt`).
+    #[test]
+    fn virtual_or_choice_is_demoted_through_its_pullers_circular_record() {
+        let ok = graph_result_real("dev-util/u249make");
+        let cpvs: Vec<String> = ok
+            .entries
+            .iter()
+            .filter_map(merge_bound_cpv)
+            .filter(|c| c.contains("u249"))
+            .collect();
+        assert_eq!(
+            cpvs,
+            vec![
+                "dev-util/u249make-bootstrap-1".to_string(),
+                "virtual/u249make-0".to_string(),
+                "dev-libs/u249json-1".to_string(),
+                "dev-util/u249make-1".to_string(),
+            ]
+        );
+        let bt0 = graph_result_real_backtrack("dev-util/u249make", 0);
+        assert!(
+            matches!(
+                bt0.outcome,
+                ResolveOutcome::Aborted {
+                    reason: AbortReason::UnserializableCycle { .. },
+                    ..
+                }
+            ),
+            "--backtrack=0 keeps the cycle"
         );
     }
 
