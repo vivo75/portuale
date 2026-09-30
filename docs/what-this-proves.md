@@ -19125,3 +19125,23 @@ portuale upgrades partially). Re-run the pins:
 python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider \
   -k 'prune_rebuilds_restart_adds_passes or prune_rebuilds_conflict_missed_updates'
 ```
+
+**#256 + #257 — the unsatisfied slot-operator probe for binary parents, and one pass for every hitting parent (batch-2026-09-28 Track R).** Real's `_slot_operator_unsatisfied_probe` fires when a built parent's recorded `:S/SS=` dependency no longer resolves but a same-slot ebuild of the parent accepts a visible provider. For an installed parent it seeds a reinstall. For a non-installed (binary) parent `_slot_operator_unsatisfied_backtrack` masks the binary (`slot_operator_mask_built`, `_emerge/depgraph.py:2896-2903`), and `_add_dep` tries this before the missing-dependency mask (`:3447-3455`). Portuale had only the installed arm, so a stale local binary of `app-misc/u257par` (recorded `u257prov:0/1=`, the provider since moved to slot `2/2`) aborted the run. It now masks the binary and restarts into the ebuild, as real does: `[ebuild N] u257prov-2` + `[ebuild N] u257par-1`, one restart. `--usepkgonly` still fails, because no ebuild replacement exists there. #256's worry, that real probes one edge and restarts, did not survive real's own playground. Two hitting parents both probe in the same pass (`return 1` ends only that edge) and one restart heals both, which is what portuale already did. Evidence: `docs/evidence/2026-09-30-256-257/`. Pins (pmtest): `test_256_unsatisfied_probe_seeds_every_hitting_parent_in_one_pass`, `test_257_unsatisfied_probe_masks_a_stale_binary_parent`.
+
+```sh
+# from the portuale root; expect the two [ebuild N] rows and rc=0
+FX=$(mktemp -d)/fx; cp -a fixtures/. $FX
+python3 - "$FX/pkgdir/Packages" <<'PY'
+import re, sys
+p = sys.argv[1]; s = open(p).read()
+n = int(re.search(r"^PACKAGES: (\d+)", s, re.M).group(1))
+s = re.sub(r"^PACKAGES: \d+", f"PACKAGES: {n + 1}", s, count=1, flags=re.M)
+s = s.rstrip("\n") + ("\n\nCPV: app-misc/u257par-1\nBUILD_TIME: 1000\nDEFINED_PHASES: -\nEAPI: 8\n"
+    "IUSE:\nKEYWORDS: amd64\nPATH: app-misc/u257par-1.tbz2\nRDEPEND: app-misc/u257prov:0/1=\n"
+    "REPO: testrepo\nSIZE: 4096\nSLOT: 0\nUSE:\n")
+open(p, "w").write(s)
+PY
+PORTAGE_CONFIGROOT=$FX ROOT=$FX PORTAGE_RUNNING_ROOT=$FX DISTDIR=$FX/distfiles \
+  rust/target/release/emerge --pretend --usepkg app-misc/u257par; echo "rc=$?"
+```
+

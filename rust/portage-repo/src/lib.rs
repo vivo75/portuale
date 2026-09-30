@@ -17424,6 +17424,7 @@ fn slot_operator_slot_change_probe(
 ///   half) is a cp-level seed here like the scan's: with a single
 ///   available parent version the two coincide; a newer-version
 ///   replacement alongside the same-version reinstall is a filed cut.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn slot_operator_unsatisfied_probe(
     root: &Path,
@@ -17436,6 +17437,42 @@ fn slot_operator_unsatisfied_probe(
     excluded: &[String],
     config: &portage_profile::Config,
 ) -> BTreeSet<(String, String)> {
+    slot_operator_unsatisfied_probe_full(
+        root, repos, entries, slot_want, pullers, masked, with_bdeps, excluded, config,
+    )
+    .0
+}
+
+/// [`slot_operator_unsatisfied_probe_full`]'s result: the installed
+/// parents to reinstall and the `(category, package, version)` binary
+/// parents to mask.
+type SlotOpUnsatProbe = (
+    BTreeSet<(String, String)>,
+    BTreeSet<(String, String, String)>,
+);
+
+/// [`slot_operator_unsatisfied_probe`] plus #257's binary arm: real
+/// `_slot_operator_unsatisfied_backtrack` (`_emerge/depgraph.py:2881-2915`)
+/// masks a *non-installed* built parent (`slot_operator_mask_built`,
+/// `:2896-2903`) instead of seeding a reinstall, and restarts, so the
+/// next pass selects the replacement ebuild. Here that parent is a
+/// merge-bound binary graph entry; the second result carries its
+/// `(category, package, version)`, filed by the caller as the same
+/// `[binary]`-marked `SlotOperatorBuilt` negative #212 uses. The firing
+/// gate is real's `dep.parent not in _runtime_pkg_mask` (`:3447-3448`)
+/// for that binary instance.
+#[allow(clippy::too_many_arguments)]
+fn slot_operator_unsatisfied_probe_full(
+    root: &Path,
+    repos: &[RepoConfig],
+    entries: &[GraphEntry],
+    slot_want: &HashMap<(String, String), Vec<String>>,
+    pullers: &SlotPullers,
+    masked: &HashMap<(String, String), Vec<MaskEntry>>,
+    with_bdeps: bool,
+    excluded: &[String],
+    config: &portage_profile::Config,
+) -> SlotOpUnsatProbe {
     const RUNTIME_KEYS: [&str; 3] = ["RDEPEND", "IDEPEND", "PDEPEND"];
     const BUILD_KEYS: [&str; 2] = ["DEPEND", "BDEPEND"];
     // Real `_iter_similar_available` (`:3036-3040`) and the firing gate
@@ -17459,6 +17496,7 @@ fn slot_operator_unsatisfied_probe(
         })
     };
     let mut seeds: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut binary_masks: BTreeSet<(String, String, String)> = BTreeSet::new();
     for e in entries {
         if !matches!(e.outcome, PretendOutcome::NoVisibleCandidate) {
             continue;
@@ -17502,10 +17540,32 @@ fn slot_operator_unsatisfied_probe(
             if !paired {
                 continue;
             }
-            // Real `dep.parent.installed`.
-            let installed = installed_candidates(root, &owner.0, &owner.1);
+            // Real `dep.parent.installed`; #257: otherwise a merge-bound
+            // binary parent (real's `not parent.installed` mask arm).
+            let mut installed: Vec<(String, String, bool)> =
+                installed_candidates(root, &owner.0, &owner.1)
+                    .into_iter()
+                    .map(|(v, slot, _)| (v, slot, false))
+                    .collect();
             if installed.is_empty() {
-                continue;
+                let binary = entries.iter().find_map(|x| {
+                    if x.category != owner.0
+                        || x.package != owner.1
+                        || x.source != CandidateSource::Binary
+                    {
+                        return None;
+                    }
+                    let v = merge_bound_version(&x.outcome)?;
+                    Some((
+                        v.clone(),
+                        x.slot.clone().unwrap_or_else(|| "0".to_string()),
+                        true,
+                    ))
+                });
+                match binary {
+                    Some(b) => installed.push(b),
+                    None => continue,
+                }
             }
             // Real `:2818-2824`: an installed parent matching
             // `--exclude` refuses the probe.
@@ -17518,10 +17578,17 @@ fn slot_operator_unsatisfied_probe(
             if excluded_parent {
                 continue;
             }
-            for (installed_version, parent_slot, _) in &installed {
+            for (installed_version, parent_slot, is_binary) in &installed {
                 // Real `:3447-3448`: an installed instance already in
-                // `runtime_pkg_mask` would restart-loop.
-                if masked_version(owner, installed_version) {
+                // `runtime_pkg_mask` would restart-loop; for a binary
+                // parent, its own `[binary]` mask is that instance.
+                let binary_neg = format!("!={}/{}-{installed_version}[binary]", owner.0, owner.1);
+                if (!is_binary && masked_version(owner, installed_version))
+                    || (*is_binary
+                        && masked
+                            .get(owner)
+                            .is_some_and(|b| b.iter().any(|m| m.neg == binary_neg)))
+                {
                     continue;
                 }
                 let Ok(tree) = list_candidates(repos, &owner.0, &owner.1) else {
@@ -17601,13 +17668,21 @@ fn slot_operator_unsatisfied_probe(
                     }
                 }
                 if hit {
-                    seeds.insert(owner.clone());
+                    if *is_binary {
+                        binary_masks.insert((
+                            owner.0.clone(),
+                            owner.1.clone(),
+                            installed_version.clone(),
+                        ));
+                    } else {
+                        seeds.insert(owner.clone());
+                    }
                     break;
                 }
             }
         }
     }
-    seeds
+    (seeds, binary_masks)
 }
 
 /// Backlog #24 S4: real portage's graph-aware `:=`/`:S=` binder (real
@@ -30558,6 +30633,52 @@ fn collect_feedback(
     // trigger at all, falls through below (dead end unless other
     // feedback fired first).
     if let Some(((pc, pp), neg, dep_atom)) = pass.missing_dep_trigger.take() {
+        // #257: real tries `_slot_operator_unsatisfied_probe` before the
+        // missing-dependency mask for a built slot-operator atom
+        // (`_emerge/depgraph.py:3447-3455` returns ahead of the
+        // `runtime_pkg_mask` fallback): a binary parent whose recorded
+        // `:S/SS=` dep no longer resolves, but whose same-slot ebuild
+        // accepts the visible provider, is masked as a binary
+        // (`slot_operator_mask_built`) and the restart takes the ebuild.
+        // Under `--usepkgonly` real's `_iter_similar_available` yields
+        // binaries only, so no ebuild replacement exists and the probe
+        // fails (the missing-dependency path below stands).
+        if ctx.backtrack_max > 0
+            && !ctx.usepkgonly
+            && portage_dep::parse_atom(&dep_atom).is_some_and(|a| is_built_slot_op(&a))
+        {
+            let (_, binary_masks) = slot_operator_unsatisfied_probe_full(
+                ctx.root,
+                &ctx.repos,
+                &pass.entries,
+                &pass.slot_want,
+                &pass.slot_pullers,
+                &grown.runtime_pkg_mask,
+                ctx.with_bdeps,
+                ctx.excluded,
+                config,
+            );
+            let mut masks_new = false;
+            for (cat, pkg, ver) in &binary_masks {
+                let bin_neg = format!("!={cat}/{pkg}-{ver}[binary]");
+                let bucket = grown
+                    .runtime_pkg_mask
+                    .entry((cat.clone(), pkg.clone()))
+                    .or_default();
+                if !bucket.iter().any(|m| m.neg == bin_neg) {
+                    bucket.push(MaskEntry {
+                        neg: bin_neg,
+                        reason: MaskReason::SlotOperatorBuilt,
+                    });
+                    masks_new = true;
+                }
+            }
+            if masks_new {
+                return PassDecision::Feedback(BacktrackFeedback::Config {
+                    params: Box::new(grown),
+                });
+            }
+        }
         // C2: the latch moves into the node with the mask (see
         // `Backtracker::feedback`); the trigger here only packages.
         return PassDecision::Feedback(BacktrackFeedback::MissingDep {
@@ -31034,7 +31155,7 @@ fn collect_feedback(
     // ever grows the set, so the search terminates; a pass with no
     // replacement stays a dead end below.
     if has_nvc && ctx.backtrack_max > 0 {
-        let fresh = slot_operator_unsatisfied_probe(
+        let (fresh, binary_masks) = slot_operator_unsatisfied_probe_full(
             ctx.root,
             &ctx.repos,
             &pass.entries,
@@ -31045,9 +31166,34 @@ fn collect_feedback(
             ctx.excluded,
             config,
         );
-        if fresh
-            .iter()
-            .any(|cp| !grown.slot_operator_replace_installed.contains(cp))
+        // #257: a non-installed built (binary) parent is masked like
+        // #212's stale binaries (`[binary]`-marked `SlotOperatorBuilt`
+        // negative, `runtime_pkg_mask` bucket), real `:2896-2903`.
+        let mut masks_new = false;
+        // `--usepkgonly`: no ebuild replacement (see the trigger site).
+        let binary_masks = if ctx.usepkgonly {
+            BTreeSet::new()
+        } else {
+            binary_masks
+        };
+        for (cat, pkg, ver) in &binary_masks {
+            let neg = format!("!={cat}/{pkg}-{ver}[binary]");
+            let bucket = grown
+                .runtime_pkg_mask
+                .entry((cat.clone(), pkg.clone()))
+                .or_default();
+            if !bucket.iter().any(|m| m.neg == neg) {
+                bucket.push(MaskEntry {
+                    neg,
+                    reason: MaskReason::SlotOperatorBuilt,
+                });
+                masks_new = true;
+            }
+        }
+        if masks_new
+            || fresh
+                .iter()
+                .any(|cp| !grown.slot_operator_replace_installed.contains(cp))
         {
             grown.slot_operator_replace_installed.extend(fresh);
             return PassDecision::Feedback(BacktrackFeedback::Config {
@@ -49201,19 +49347,72 @@ mod tests {
             .is_empty(),
             "uninstalled owners never seed"
         );
-        for dir in [&base, &base_x, &base_m, &base_m2, &base_n, &base_s, &base_u] {
+        // #257: a non-installed built (binary) parent. No vdb owner, the
+        // parent is a merge-bound binary graph entry; real's
+        // `_slot_operator_unsatisfied_backtrack` masks it
+        // (`slot_operator_mask_built`, `_emerge/depgraph.py:2896-2903`)
+        // instead of seeding a reinstall.
+        let (base_b, repos_b) = unsat_base("binary", &[], &[("unsatpar", "1", "0")]);
+        let (mut entries_b, slot_want_b, pullers_b) = unsat_inputs(&[("unsatpar", built)]);
+        let mut bin_par = graph_entry("app-misc", "unsatpar", "1");
+        bin_par.source = CandidateSource::Binary;
+        bin_par.slot = Some("0".to_string());
+        entries_b.push(bin_par);
+        let (seeds_b, masks_b) = slot_operator_unsatisfied_probe_full(
+            &base_b,
+            &repos_b,
+            &entries_b,
+            &slot_want_b,
+            &pullers_b,
+            &masked,
+            false,
+            &[],
+            &config,
+        );
+        assert!(
+            seeds_b.is_empty(),
+            "a binary parent is never a reinstall seed"
+        );
+        assert_eq!(
+            masks_b,
+            BTreeSet::from([(
+                "app-misc".to_string(),
+                "unsatpar".to_string(),
+                "1".to_string()
+            )]),
+            "the stale binary parent is masked"
+        );
+        // Already masked as a binary: real's `dep.parent not in
+        // _runtime_pkg_mask` gate (`:3447-3448`) stops the loop.
+        let mut masked_b = masked.clone();
+        masked_b.insert(
+            par.clone(),
+            vec![MaskEntry {
+                neg: "!=app-misc/unsatpar-1[binary]".to_string(),
+                reason: MaskReason::SlotOperatorBuilt,
+            }],
+        );
+        assert_eq!(
+            slot_operator_unsatisfied_probe_full(
+                &base_b,
+                &repos_b,
+                &entries_b,
+                &slot_want_b,
+                &pullers_b,
+                &masked_b,
+                false,
+                &[],
+                &config,
+            ),
+            (BTreeSet::new(), BTreeSet::new())
+        );
+        for dir in [
+            &base, &base_x, &base_m, &base_m2, &base_n, &base_s, &base_u, &base_b,
+        ] {
             let _ = fs::remove_dir_all(dir);
         }
     }
 
-    /// Backlog #211 (v2 `#24b`): real `_slot_operator_update_probe`'s
-    /// new-child-slot arm (`depgraph.py:3121-3126`, bug 486580) -- a
-    /// provider merged into a fresh slot schedules the installed
-    /// consumers bound to the old slot, even with an empty `reachable`
-    /// set, as long as they were walked this pass. Guards: a superseded
-    /// installed child in the bound slot, a higher (or equal) version,
-    /// `--update` (or a directly-requested provider), and a visible tree
-    /// candidate for the consumer.
     /// #236 B: real `_minimize_children` (`_emerge/depgraph.py:4751-4854`)
     /// on its two observed shapes. (1) An installed parent's dynamic deps
     /// (the r25 shape, real's own probe in
@@ -49493,6 +49692,14 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
+    /// Backlog #211 (v2 `#24b`): real `_slot_operator_update_probe`'s
+    /// new-child-slot arm (`depgraph.py:3121-3126`, bug 486580) -- a
+    /// provider merged into a fresh slot schedules the installed
+    /// consumers bound to the old slot, even with an empty `reachable`
+    /// set, as long as they were walked this pass. Guards: a superseded
+    /// installed child in the bound slot, a higher (or equal) version,
+    /// `--update` (or a directly-requested provider), and a visible tree
+    /// candidate for the consumer.
     #[test]
     fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
         use md5::Digest as _;

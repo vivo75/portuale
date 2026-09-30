@@ -1,0 +1,537 @@
+
+
+myparams {'recurse': True, 'binpkg_respect_use': 'auto', 'autounmask': True, 'autounmask_keep_use': False, 'autounmask_keep_license': True, 'autounmask_keep_keywords': True, 'autounmask_keep_masks': True, 'bdeps': 'auto', 'ignore_soname_deps': 'y', 'dynamic_deps': True, 'implicit_system_deps': True, 'selective': True, 'deep': True, 'binpkg_changed_deps': 'auto'}
+
+
+
+      Arg: @selected
+     Atom: app-misc/u256pa
+   ebuild: app-misc/u256pa-1::test_repo
+installed: app-misc/u256pa-1::test_repo
+
+Child:         (app-misc/u256pa-1:0/0::test_repo, installed) USE=""
+Parent Dep:    app-misc/u256pa required by @selected
+
+      Arg: @selected
+     Atom: app-misc/u256pb
+   ebuild: app-misc/u256pb-1::test_repo
+installed: app-misc/u256pb-1::test_repo
+
+Child:         (app-misc/u256pb-1:0/0::test_repo, installed) USE=""
+Parent Dep:    app-misc/u256pb required by @selected
+
+Parent:    (app-misc/u256pb-1:0/0::test_repo, installed)
+Depstring: <app-misc/u256prov-2:= >=app-misc/u256prov-1:0/1=
+Priority:  runtime
+
+Parent:    (app-misc/u256pb-1:0/0::test_repo, installed)
+Depstring: <app-misc/u256prov-2:= >=app-misc/u256prov-1:0/1=
+Priority:  runtime
+Candidates: ['<app-misc/u256prov-2:=', '>=app-misc/u256prov-1:0/1=']
+
+
+backtracking due to unsatisfied dep:
+    parent: (app-misc/u256pb-1:0/0::test_repo, installed)
+  priority: runtime_slot_op
+      root: /tmp/tmpvhx4cniz/
+      atom: <app-misc/u256prov-2:=
+
+
+
+backtracking try 1 
+
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+
+
+emerge: there are no ebuilds to satisfy "<app-misc/u256prov-2:=".
+(dependency required by "app-misc/u256pb-1::test_repo" [installed])
+(dependency required by "@selected" [set])
+(dependency required by "@world" [argument])
+
+
+runtime_pkg_mask: {<Package ('installed', '/tmp/tmpvhx4cniz/', 'app-misc/u256pb-1', 'nomerge', 'installed')>: {'missing dependency': {(<Package ('installed', '/tmp/tmpvhx4cniz/', 'app-misc/u256pb-1', 'nomerge', 'installed')>, '/tmp/tmpvhx4cniz/', Atom('<app-misc/u256prov-2:='))}}} 
+
+
+
+      Arg: @selected
+     Atom: app-misc/u256pa
+   ebuild: app-misc/u256pa-1::test_repo
+installed: app-misc/u256pa-1::test_repo
+
+Child:         (app-misc/u256pa-1:0/0::test_repo, installed) USE=""
+Parent Dep:    app-misc/u256pa required by @selected
+
+      Arg: @selected
+     Atom: app-misc/u256pb
+   ebuild: app-misc/u256pb-1::test_repo
+
+Child:         (app-misc/u256pb-1:0/0::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    app-misc/u256pb required by @selected
+
+Parent:    (app-misc/u256pb-1:0/0::test_repo, ebuild scheduled for merge)
+Depstring: <app-misc/u256prov-2:=
+Priority:  runtime
+
+Parent:    (app-misc/u256pb-1:0/0::test_repo, ebuild scheduled for merge)
+Depstring: <app-misc/u256prov-2:=
+Priority:  runtime
+Candidates: ['<app-misc/u256prov-2:=']
+
+
+backtracking due to unsatisfied dep:
+    parent: (app-misc/u256pb-1:0/0::test_repo, ebuild scheduled for merge)
+  priority: runtime_slot_op
+      root: /tmp/tmpvhx4cniz/
+      atom: <app-misc/u256prov-2:=
+
+
+
+backtracking try 2 
+
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+
+
+emerge: there are no ebuilds to satisfy "<app-misc/u256prov-2:=".
+(dependency required by "app-misc/u256pb-1::test_repo" [ebuild])
+(dependency required by "@selected" [set])
+(dependency required by "@world" [argument])
+
+
+runtime_pkg_mask: {<Package ('installed', '/tmp/tmpvhx4cniz/', 'app-misc/u256pb-1', 'nomerge', 'installed')>: {'missing dependency': {(<Package ('installed', '/tmp/tmpvhx4cniz/', 'app-misc/u256pb-1', 'nomerge', 'installed')>, '/tmp/tmpvhx4cniz/', Atom('<app-misc/u256prov-2:='))}}, <Package ('ebuild', '/tmp/tmpvhx4cniz/', 'app-misc/u256pb-1', 'merge', 'test_repo')>: {'missing dependency': {(<Package ('ebuild', '/tmp/tmpvhx4cniz/', 'app-misc/u256pb-1', 'merge', 'test_repo')>, '/tmp/tmpvhx4cniz/', Atom('<app-misc/u256prov-2:='))}}} 
+
+
+
+      Arg: @selected
+     Atom: app-misc/u256pa
+   ebuild: app-misc/u256pa-1::test_repo
+installed: app-misc/u256pa-1::test_repo
+
+Child:         (app-misc/u256pa-1:0/0::test_repo, installed) USE=""
+Parent Dep:    app-misc/u256pa required by @selected
+
+      Arg: @selected
+     Atom: app-misc/u256pb
+
+Parent:    (app-misc/u256pa-1:0/0::test_repo, installed)
+Depstring: app-misc/u256prov:= >=app-misc/u256prov-1:0/1=
+Priority:  runtime
+
+Parent:    (app-misc/u256pa-1:0/0::test_repo, installed)
+Depstring: app-misc/u256prov:= >=app-misc/u256prov-1:0/1=
+Priority:  runtime
+Candidates: ['app-misc/u256prov:=', '>=app-misc/u256prov-1:0/1=']
+   ebuild: app-misc/u256prov-2::test_repo
+   ebuild: app-misc/u256prov-2::test_repo
+
+
+slot_operator_unsatisfied_probe:
+   existing parent package: (app-misc/u256pa-1:0/0::test_repo, installed)
+   existing parent atom: >=app-misc/u256prov-1:0/1=
+   new parent package: (app-misc/u256pa-1:0/0::test_repo, ebuild scheduled for merge)
+   new child package:  (app-misc/u256prov-2:2/2::test_repo, ebuild scheduled for merge)
+
+
+backtracking due to unsatisfied built slot-operator dep:
+   parent package: (app-misc/u256pa-1:0/0::test_repo, installed)
+   atom: >=app-misc/u256prov-1:0/1=
+
+Child:         (app-misc/u256prov-2:2/2::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    app-misc/u256prov:= required by (app-misc/u256pa-1:0/0::test_repo, installed)
+
+Exiting... (app-misc/u256pa-1:0/0::test_repo, installed)
+
+digraph:
+
+@world depends on
+  @profile (blocker)
+  @selected (blocker)
+  @system (blocker)
+@profile (no children)
+@selected depends on
+  (app-misc/u256pa-1:0/0::test_repo, installed) (soft)
+@system (no children)
+(app-misc/u256pa-1:0/0::test_repo, installed) depends on
+  (app-misc/u256prov-2:2/2::test_repo, ebuild scheduled for merge) (runtime_slot_op)
+(app-misc/u256prov-2:2/2::test_repo, ebuild scheduled for merge) (no children)
+
+
+
+backtracking try 3 
+
+[ebuild  N     ] app-misc/u256prov-2:2::test_repo  0 KiB
+
+Total: 1 package (1 new), Size of downloads: 0 KiB
+
+!!! The following update has been skipped due to unsatisfied dependencies:
+
+app-misc/u256pb:0
+
+  selected: (app-misc/u256pb-1:0/0::test_repo, installed)
+  skipped: (app-misc/u256pb-1:0/0::test_repo, ebuild scheduled for merge) (see unsatisfied dependency below)
+
+emerge: there are no ebuilds to satisfy "<app-misc/u256prov-2:=".
+(dependency required by "app-misc/u256pb-1::test_repo" [ebuild])
+
+forced reinstall atoms:
+
+
+slot operator dependencies:
+   (/tmp/tmpvhx4cniz/, app-misc/u256prov:2)
+      parent: (app-misc/u256pa-1:0/0::test_repo, installed)
+        child: (app-misc/u256prov-2:2/2::test_repo, ebuild scheduled for merge) (runtime_slot_op)
+
+
+forced rebuilds:
+
+
+
+!!! Problems have been detected with your world file
+!!! Please run emaint --check world
+
+
+!!! Ebuilds for the following packages are either all
+!!! masked or don't exist:
+app-misc/u256pb
+
+emerge: there are no ebuilds to satisfy ">=app-misc/u256prov-1:0/1=".
+(dependency required by "app-misc/u256pa-1::test_repo" [installed])
+(dependency required by "@selected" [set])
+(dependency required by "@world" [argument])
+
+
+runtime_pkg_mask: {<Package ('installed', '/tmp/tmpvhx4cniz/', 'app-misc/u256pb-1', 'nomerge', 'installed')>: {'missing dependency': {(<Package ('installed', '/tmp/tmpvhx4cniz/', 'app-misc/u256pb-1', 'nomerge', 'installed')>, '/tmp/tmpvhx4cniz/', Atom('<app-misc/u256prov-2:='))}}, <Package ('ebuild', '/tmp/tmpvhx4cniz/', 'app-misc/u256pb-1', 'merge', 'test_repo')>: {'missing dependency': {(<Package ('ebuild', '/tmp/tmpvhx4cniz/', 'app-misc/u256pb-1', 'merge', 'test_repo')>, '/tmp/tmpvhx4cniz/', Atom('<app-misc/u256prov-2:='))}}} 
+
+
+
+      Arg: @selected
+     Atom: app-misc/u256pa
+   ebuild: app-misc/u256pa-1::test_repo
+
+Child:         (app-misc/u256pa-1:0/0::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    app-misc/u256pa required by @selected
+
+      Arg: @selected
+     Atom: app-misc/u256pb
+
+      Arg: @__auto_slot_operator_replace_installed__
+     Atom: app-misc/u256pa:0
+   ebuild: app-misc/u256pa-1::test_repo
+
+Child:         (app-misc/u256pa-1:0/0::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    app-misc/u256pa:0 required by @__auto_slot_operator_replace_installed__
+
+Parent:    (app-misc/u256pa-1:0/0::test_repo, ebuild scheduled for merge)
+Depstring: app-misc/u256prov:=
+Priority:  runtime
+
+Parent:    (app-misc/u256pa-1:0/0::test_repo, ebuild scheduled for merge)
+Depstring: app-misc/u256prov:=
+Priority:  runtime
+Candidates: ['app-misc/u256prov:=']
+   ebuild: app-misc/u256prov-2::test_repo
+
+Child:         (app-misc/u256prov-2:2/2::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    app-misc/u256prov:= required by (app-misc/u256pa-1:0/0::test_repo, ebuild scheduled for merge)
+
+Exiting... (app-misc/u256pa-1:0/0::test_repo, ebuild scheduled for merge)
+
+digraph:
+
+@world depends on
+  @profile (blocker)
+  @selected (blocker)
+  @system (blocker)
+@profile (no children)
+@selected depends on
+  (app-misc/u256pa-1:0/0::test_repo, ebuild scheduled for merge) (soft)
+@system (no children)
+(app-misc/u256pa-1:0/0::test_repo, ebuild scheduled for merge) depends on
+  (app-misc/u256prov-2:2/2::test_repo, ebuild scheduled for merge) (runtime_slot_op)
+@__auto_slot_operator_replace_installed__ depends on
+  (app-misc/u256pa-1:0/0::test_repo, ebuild scheduled for merge) (soft)
+(app-misc/u256prov-2:2/2::test_repo, ebuild scheduled for merge) (no children)
+
+
+
+backtracking try 4 
+
+[ebuild  N     ] app-misc/u256prov-2:2::test_repo  0 KiB
+[ebuild  rR    ] app-misc/u256pa-1::test_repo  0 KiB
+
+Total: 2 packages (1 new, 1 reinstall), Size of downloads: 0 KiB
+
+!!! The following update has been skipped due to unsatisfied dependencies:
+
+app-misc/u256pb:0
+
+  selected: (app-misc/u256pb-1:0/0::test_repo, installed)
+  skipped: (app-misc/u256pb-1:0/0::test_repo, ebuild scheduled for merge) (see unsatisfied dependency below)
+
+emerge: there are no ebuilds to satisfy "<app-misc/u256prov-2:=".
+(dependency required by "app-misc/u256pb-1::test_repo" [ebuild])
+
+forced reinstall atoms:
+   root: /tmp/tmpvhx4cniz/
+      atom: app-misc/u256pa:0
+
+
+slot operator dependencies:
+   (/tmp/tmpvhx4cniz/, app-misc/u256prov:2)
+      parent: (app-misc/u256pa-1:0/0::test_repo, ebuild scheduled for merge)
+        child: (app-misc/u256prov-2:2/2::test_repo, ebuild scheduled for merge) (runtime_slot_op)
+
+
+forced rebuilds:
+
+
+
+!!! Problems have been detected with your world file
+!!! Please run emaint --check world
+
+
+!!! Ebuilds for the following packages are either all
+!!! masked or don't exist:
+app-misc/u256pb
+
+
+runtime_pkg_mask: {<Package ('installed', '/tmp/tmpvhx4cniz/', 'app-misc/u256pb-1', 'nomerge', 'installed')>: {'missing dependency': {(<Package ('installed', '/tmp/tmpvhx4cniz/', 'app-misc/u256pb-1', 'nomerge', 'installed')>, '/tmp/tmpvhx4cniz/', Atom('<app-misc/u256prov-2:='))}}, <Package ('ebuild', '/tmp/tmpvhx4cniz/', 'app-misc/u256pb-1', 'merge', 'test_repo')>: {'missing dependency': {(<Package ('ebuild', '/tmp/tmpvhx4cniz/', 'app-misc/u256pb-1', 'merge', 'test_repo')>, '/tmp/tmpvhx4cniz/', Atom('<app-misc/u256prov-2:='))}}} 
+
+
+
+      Arg: @selected
+     Atom: app-misc/u256pa
+   ebuild: app-misc/u256pa-1::test_repo
+installed: app-misc/u256pa-1::test_repo
+
+Child:         (app-misc/u256pa-1:0/0::test_repo, installed) USE=""
+Parent Dep:    app-misc/u256pa required by @selected
+
+      Arg: @selected
+     Atom: app-misc/u256pb
+
+Parent:    (app-misc/u256pa-1:0/0::test_repo, installed)
+Depstring: app-misc/u256prov:= >=app-misc/u256prov-1:0/1=
+Priority:  runtime
+
+Parent:    (app-misc/u256pa-1:0/0::test_repo, installed)
+Depstring: app-misc/u256prov:= >=app-misc/u256prov-1:0/1=
+Priority:  runtime
+Candidates: ['app-misc/u256prov:=', '>=app-misc/u256prov-1:0/1=']
+   ebuild: app-misc/u256prov-2::test_repo
+   ebuild: app-misc/u256prov-2::test_repo
+
+
+slot_operator_unsatisfied_probe:
+   existing parent package: (app-misc/u256pa-1:0/0::test_repo, installed)
+   existing parent atom: >=app-misc/u256prov-1:0/1=
+   new parent package: (app-misc/u256pa-1:0/0::test_repo, ebuild scheduled for merge)
+   new child package:  (app-misc/u256prov-2:2/2::test_repo, ebuild scheduled for merge)
+
+
+backtracking due to unsatisfied built slot-operator dep:
+   parent package: (app-misc/u256pa-1:0/0::test_repo, installed)
+   atom: >=app-misc/u256prov-1:0/1=
+
+Child:         (app-misc/u256prov-2:2/2::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    app-misc/u256prov:= required by (app-misc/u256pa-1:0/0::test_repo, installed)
+
+Exiting... (app-misc/u256pa-1:0/0::test_repo, installed)
+
+digraph:
+
+@world depends on
+  @profile (blocker)
+  @selected (blocker)
+  @system (blocker)
+@profile (no children)
+@selected depends on
+  (app-misc/u256pa-1:0/0::test_repo, installed) (soft)
+@system (no children)
+(app-misc/u256pa-1:0/0::test_repo, installed) depends on
+  (app-misc/u256prov-2:2/2::test_repo, ebuild scheduled for merge) (runtime_slot_op)
+(app-misc/u256prov-2:2/2::test_repo, ebuild scheduled for merge) (no children)
+
+
+
+backtracking try 5 
+
+[ebuild  N     ] app-misc/u256prov-2:2::test_repo  0 KiB
+
+Total: 1 package (1 new), Size of downloads: 0 KiB
+
+!!! The following update has been skipped due to unsatisfied dependencies:
+
+app-misc/u256pb:0
+
+  selected: (app-misc/u256pb-1:0/0::test_repo, installed)
+  skipped: (app-misc/u256pb-1:0/0::test_repo, ebuild scheduled for merge) (see unsatisfied dependency below)
+
+emerge: there are no ebuilds to satisfy "<app-misc/u256prov-2:=".
+(dependency required by "app-misc/u256pb-1::test_repo" [ebuild])
+
+forced reinstall atoms:
+
+
+slot operator dependencies:
+   (/tmp/tmpvhx4cniz/, app-misc/u256prov:2)
+      parent: (app-misc/u256pa-1:0/0::test_repo, installed)
+        child: (app-misc/u256prov-2:2/2::test_repo, ebuild scheduled for merge) (runtime_slot_op)
+
+
+forced rebuilds:
+
+
+
+!!! Problems have been detected with your world file
+!!! Please run emaint --check world
+
+
+!!! Ebuilds for the following packages are either all
+!!! masked or don't exist:
+app-misc/u256pb
+
+emerge: there are no ebuilds to satisfy ">=app-misc/u256prov-1:0/1=".
+(dependency required by "app-misc/u256pa-1::test_repo" [installed])
+(dependency required by "@selected" [set])
+(dependency required by "@world" [argument])
+
+
+runtime_pkg_mask: {<Package ('installed', '/tmp/tmpvhx4cniz/', 'app-misc/u256pb-1', 'nomerge', 'installed')>: {'missing dependency': {(<Package ('installed', '/tmp/tmpvhx4cniz/', 'app-misc/u256pb-1', 'nomerge', 'installed')>, '/tmp/tmpvhx4cniz/', Atom('<app-misc/u256prov-2:='))}}, <Package ('ebuild', '/tmp/tmpvhx4cniz/', 'app-misc/u256pb-1', 'merge', 'test_repo')>: {'missing dependency': {(<Package ('ebuild', '/tmp/tmpvhx4cniz/', 'app-misc/u256pb-1', 'merge', 'test_repo')>, '/tmp/tmpvhx4cniz/', Atom('<app-misc/u256prov-2:='))}}} 
+
+
+
+      Arg: @selected
+     Atom: app-misc/u256pa
+   ebuild: app-misc/u256pa-1::test_repo
+
+Child:         (app-misc/u256pa-1:0/0::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    app-misc/u256pa required by @selected
+
+      Arg: @selected
+     Atom: app-misc/u256pb
+
+      Arg: @__auto_slot_operator_replace_installed__
+     Atom: app-misc/u256pa:0
+   ebuild: app-misc/u256pa-1::test_repo
+
+Child:         (app-misc/u256pa-1:0/0::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    app-misc/u256pa:0 required by @__auto_slot_operator_replace_installed__
+
+Parent:    (app-misc/u256pa-1:0/0::test_repo, ebuild scheduled for merge)
+Depstring: app-misc/u256prov:=
+Priority:  runtime
+
+Parent:    (app-misc/u256pa-1:0/0::test_repo, ebuild scheduled for merge)
+Depstring: app-misc/u256prov:=
+Priority:  runtime
+Candidates: ['app-misc/u256prov:=']
+   ebuild: app-misc/u256prov-2::test_repo
+
+Child:         (app-misc/u256prov-2:2/2::test_repo, ebuild scheduled for merge) USE=""
+Parent Dep:    app-misc/u256prov:= required by (app-misc/u256pa-1:0/0::test_repo, ebuild scheduled for merge)
+
+Exiting... (app-misc/u256pa-1:0/0::test_repo, ebuild scheduled for merge)
+
+digraph:
+
+@world depends on
+  @profile (blocker)
+  @selected (blocker)
+  @system (blocker)
+@profile (no children)
+@selected depends on
+  (app-misc/u256pa-1:0/0::test_repo, ebuild scheduled for merge) (soft)
+@system (no children)
+(app-misc/u256pa-1:0/0::test_repo, ebuild scheduled for merge) depends on
+  (app-misc/u256prov-2:2/2::test_repo, ebuild scheduled for merge) (runtime_slot_op)
+@__auto_slot_operator_replace_installed__ depends on
+  (app-misc/u256pa-1:0/0::test_repo, ebuild scheduled for merge) (soft)
+(app-misc/u256prov-2:2/2::test_repo, ebuild scheduled for merge) (no children)
+
+[ebuild  N     ] app-misc/u256prov-2:2::test_repo  0 KiB
+[ebuild  rR    ] app-misc/u256pa-1::test_repo  0 KiB
+
+Total: 2 packages (1 new, 1 reinstall), Size of downloads: 0 KiB
+
+!!! The following update has been skipped due to unsatisfied dependencies:
+
+app-misc/u256pb:0
+
+  selected: (app-misc/u256pb-1:0/0::test_repo, installed)
+  skipped: (app-misc/u256pb-1:0/0::test_repo, ebuild scheduled for merge) (see unsatisfied dependency below)
+
+emerge: there are no ebuilds to satisfy "<app-misc/u256prov-2:=".
+(dependency required by "app-misc/u256pb-1::test_repo" [ebuild])
+
+forced reinstall atoms:
+   root: /tmp/tmpvhx4cniz/
+      atom: app-misc/u256pa:0
+
+
+slot operator dependencies:
+   (/tmp/tmpvhx4cniz/, app-misc/u256prov:2)
+      parent: (app-misc/u256pa-1:0/0::test_repo, ebuild scheduled for merge)
+        child: (app-misc/u256prov-2:2/2::test_repo, ebuild scheduled for merge) (runtime_slot_op)
+
+
+forced rebuilds:
+
+
+
+!!! Problems have been detected with your world file
+!!! Please run emaint --check world
+
+
+!!! Ebuilds for the following packages are either all
+!!! masked or don't exist:
+app-misc/u256pb
+
+!!! The following update has been skipped due to unsatisfied dependencies:
+
+app-misc/u256pb:0
+
+  selected: (app-misc/u256pb-1:0/0::test_repo, installed)
+  skipped: (app-misc/u256pb-1:0/0::test_repo, ebuild scheduled for merge) (see unsatisfied dependency below)
+
+emerge: there are no ebuilds to satisfy "<app-misc/u256prov-2:=".
+(dependency required by "app-misc/u256pb-1::test_repo" [ebuild])
+
+### u256 b ['@world'] success True mergelist ['app-misc/u256prov-2', 'app-misc/u256pa-1']
+forced reinstall atoms:
+   root: /tmp/tmpvhx4cniz/
+      atom: app-misc/u256pa:0
+
+
+slot operator dependencies:
+   (/tmp/tmpvhx4cniz/, app-misc/u256prov:2)
+      parent: (app-misc/u256pa-1:0/0::test_repo, ebuild scheduled for merge)
+        child: (app-misc/u256prov-2:2/2::test_repo, ebuild scheduled for merge) (runtime_slot_op)
+
+
+forced rebuilds:
+
+
+
+!!! Problems have been detected with your world file
+!!! Please run emaint --check world
+
+
+!!! Ebuilds for the following packages are either all
+!!! masked or don't exist:
+app-misc/u256pb
+
+EROOT=/tmp/tmpvhx4cniz/
