@@ -19145,3 +19145,14 @@ PORTAGE_CONFIGROOT=$FX ROOT=$FX PORTAGE_RUNNING_ROOT=$FX DISTDIR=$FX/distfiles \
   rust/target/release/emerge --pretend --usepkg app-misc/u257par; echo "rc=$?"
 ```
 
+**#254 + #255 — the conflict-fired ABI probe reads the replacement like real, and the `r` marker is slot-keyed (batch-2026-09-28 Track R).** When a slot conflict's built parent could be rebuilt against the other instance, real's `_slot_conflict_backtrack_abi` asks the update probe. That probe evaluates the replacement ebuild's USE conditionals (`_select_atoms_probe`), so a `cflag? ( app-misc/abiprov:= )` with `cflag` off is not a candidate. Real then masks the conflicting `abiprov-1`, heals the consumer through the unsatisfied probe (whose `validated_atoms` keep every conditional branch) and prints no "causing rebuilds" block, because `_compute_abi_rebuild_info` only pairs a provider the rebuilt consumer still depends on. Portuale matched the flat token, rebuilt through the ABI probe and printed the block. It now USE-reduces the replacement in the ABI probe, reads it match-all in the unsatisfied probe, and pairs a provider only when the rebuilt consumer pulls it: the same three rows as real, without the block. The `r` column follows real's slot-keyed `_get_installed_best`: a provider installed only in another slot is `NS`, not `rS`. Evidence: `docs/evidence/2026-09-30-254-255/`. Pins (pmtest): `test_254_conflict_abi_probe_evaluates_the_replacements_use_conditionals`, `test_255_forced_rebuild_marker_is_keyed_by_the_providers_slot`.
+
+```sh
+# from the portuale root; expect NS on abiprov-2 (no r), rR abicons, N abiforce
+FX=$(mktemp -d)/fx; cp -a fixtures/. $FX
+mkdir -p $FX/var/db/pkg/app-misc/abiprov-0.5
+for f in CATEGORY:app-misc SLOT:1/1 EAPI:8 repository:testrepo; do echo "${f#*:}" > $FX/var/db/pkg/app-misc/abiprov-0.5/${f%%:*}; done
+printf 'app-misc/abicons\napp-misc/abiforce\n' >> $FX/var/lib/portage/world
+PORTAGE_CONFIGROOT=$FX ROOT=$FX PORTAGE_RUNNING_ROOT=$FX DISTDIR=$FX/distfiles \
+  rust/target/release/emerge --pretend --update --deep --backtrack 4 @world | grep app-misc/abi
+```

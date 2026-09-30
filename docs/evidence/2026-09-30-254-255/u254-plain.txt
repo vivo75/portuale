@@ -1,0 +1,11 @@
+### u254 plain success True mergelist ['app-misc/abiprov-2', 'app-misc/abicons-1', 'app-misc/abiforce-1']
+[ebuild  N     ] app-misc/abiprov-2:0/2::test_repo  0 KiB
+[ebuild  rR    ] app-misc/abicons-1::test_repo  USE="-cflag*" 0 KiB
+[ebuild  N     ] app-misc/abiforce-1::test_repo  0 KiB
+
+Total: 3 packages (2 new, 1 reinstall), Size of downloads: 0 KiB
+
+The following packages are causing rebuilds:
+
+  (app-misc/abiprov-2:0/2::test_repo, ebuild scheduled for merge) causes rebuilds for:
+    (app-misc/abicons-1:0/0::test_repo, ebuild scheduled for merge)
