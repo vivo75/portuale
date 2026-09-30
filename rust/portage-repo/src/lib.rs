@@ -26987,8 +26987,13 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             // `app-portage/elt-patches` build-time cycle are still
             // installed, so real orders them by their installed
             // versions rather than reporting a circular dependency.
-            if buildtime_hard
-                && best_installed_for_atom(ctx.root, &current_atom, &key.0, &key.1).is_none()
+            // #250: real's satisfaction test is `vardb.match_pkgs(atom)`,
+            // which honours the atom's use-deps against the installed
+            // instance's recorded USE -- an installed `foo` built `-bar`
+            // does not satisfy `foo[bar]`, so the edge stays unbreakable
+            // (the version/slot-only lookup let a USE-mismatched instance
+            // hide a genuine build-time cycle).
+            if buildtime_hard && best_installed_matching(ctx.root, &current_atom, config).is_none()
             {
                 kinds.0 = true;
             } else {
@@ -53705,6 +53710,52 @@ mod tests {
         };
         let ctx = ctx_161(dir, &config, repos, &opts);
         run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles")
+    }
+
+    /// #250: real's build-edge satisfaction is `vardb.match_pkgs(atom)`,
+    /// which honours use-deps: an installed `dev-util/u250make` built
+    /// `-foo` does not satisfy `dev-util/u250make[foo]`, so the
+    /// `u250json -> u250make` build edge stays unbreakable (the pmtest
+    /// fixture; real's playground in `docs/evidence/2026-09-30-250/`).
+    #[test]
+    fn run_pass_use_mismatched_installed_instance_leaves_the_build_edge_hard() {
+        let dir = slotundo_temp_dir("250-edge");
+        let d = dir.join("var/db/pkg/dev-util/u250make-1");
+        fs::create_dir_all(&d).unwrap();
+        for (f, v) in [
+            ("CATEGORY", "dev-util"),
+            ("SLOT", "0"),
+            ("EAPI", "8"),
+            ("IUSE", "foo"),
+            ("USE", ""),
+            ("repository", "testrepo"),
+        ] {
+            fs::write(d.join(f), format!("{v}\n")).unwrap();
+        }
+        let atoms = vec!["dev-util/u250make".to_string()];
+        let pass = run_161(
+            &dir,
+            &atoms,
+            false,
+            &[],
+            false,
+            false,
+            false,
+            false,
+            false,
+            Deep::NotRequested,
+            false,
+        );
+        let edge = pass.edge_kind_map.get(&(
+            ("dev-util".to_string(), "u250make".to_string()),
+            ("dev-libs".to_string(), "u250json".to_string()),
+        ));
+        assert_eq!(
+            edge,
+            Some(&(true, false)),
+            "the -foo installed build does not satisfy u250make[foo]"
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// Backlog #161 S6: a bare leaf atom resolves to a single `New`
