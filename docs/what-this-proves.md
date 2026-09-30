@@ -19145,3 +19145,11 @@ PORTAGE_CONFIGROOT=$FX ROOT=$FX PORTAGE_RUNNING_ROOT=$FX DISTDIR=$FX/distfiles \
   rust/target/release/emerge --pretend --usepkg app-misc/u257par; echo "rc=$?"
 ```
 
+**#249 — a virtual's `||` is demoted through its puller's circular record (batch-2026-09-28 Track R).** Real expands a new-style virtual's RDEPEND inline, inside the dependency check of the package that pulled it, and `dep_zapdeps` then consults `circular_dependency` under both that parent and the virtual (`portage/dep/dep_check.py:673-678`). Take bug 703440's cycle (a build tool needs a library that needs the build tool) with the `|| ( bootstrap tool )` choice moved into a virtual. After real's circular restart, the puller's record demotes the cycle-closing branch and the bootstrap merges. Portuale walks the virtual as its own node and consulted only the virtual's record, so it reported the cycle. It now adds the virtual's pullers' records and resolves like real: `u249make-bootstrap-1`, `virtual/u249make-0`, `u249json-1`, `u249make-1`. Evidence: `docs/evidence/2026-09-30-249/`. Pin (pmtest): `test_249_virtual_or_choice_uses_the_pullers_circular_record`.
+
+```sh
+# from the portuale root; expect the four rows (bootstrap first) and rc=0
+FX=$PWD/fixtures
+PORTAGE_CONFIGROOT=$FX ROOT=$FX PORTAGE_RUNNING_ROOT=$FX DISTDIR=$FX/distfiles \
+  rust/target/release/emerge --pretend dev-util/u249make; echo "rc=$?"
+```
