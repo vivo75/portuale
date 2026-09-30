@@ -19163,4 +19163,13 @@ PORTAGE_CONFIGROOT=$FX ROOT=$FX PORTAGE_RUNNING_ROOT=$FX DISTDIR=$FX/distfiles \
 FX=$PWD/fixtures
 PORTAGE_CONFIGROOT=$FX ROOT=$FX PORTAGE_RUNNING_ROOT=$FX DISTDIR=$FX/distfiles \
   rust/target/release/emerge --pretend dev-util/u249make; echo "rc=$?"
+
+**#250 — a USE-mismatched installed instance does not satisfy a build edge (batch-2026-09-28 Track O).** Take bug 703440's cycle: a build tool needs a library, and the library needs `|| ( tool-bootstrap tool[foo] )`. With the tool already installed but built without `foo`, real's check (`vardb.match_pkgs`, which honours use-deps) says the installed tool does not satisfy `tool[foo]`. The build edge is unbreakable, the cycle forms, the circular restart demotes the branch and the bootstrap merges. Portuale's edge check matched version and slot only, never saw the cycle, and reinstalled the tool instead. It now checks the installed instance's recorded USE and matches real in both branch orders. The owner asked for this fixture first (B6) to decide whether merge order's `||` suppression, also version/slot only, needs `Config` threaded through it. On the fixed walk it never reopens a phantom edge, so that half is closed by the proof. Evidence: `docs/evidence/2026-09-30-250/`. Pin (pmtest): `test_250_use_mismatched_installed_instance_does_not_satisfy_a_build_edge`.
+
+```sh
+# from the portuale root; expect u250make-bootstrap-1, u250json-1, u250make-1 (R)
+FX=$(mktemp -d)/fx; cp -a fixtures/. $FX; D=$FX/var/db/pkg/dev-util/u250make-1; mkdir -p $D
+for f in CATEGORY:dev-util SLOT:0 EAPI:8 IUSE:foo USE: repository:testrepo "BDEPEND:dev-libs/u250json:0/0="; do echo "${f#*:}" > $D/${f%%:*}; done
+PORTAGE_CONFIGROOT=$FX ROOT=$FX PORTAGE_RUNNING_ROOT=$FX DISTDIR=$FX/distfiles \
+  rust/target/release/emerge --pretend dev-util/u250make
 ```
