@@ -5265,48 +5265,113 @@ impl Drop for PromptSigintGuard {
 /// like `read_line`'s `Ok(_)` arm. Invalid UTF-8 also yields `None`,
 /// matching that old arm byte for byte; real decodes with replacement
 /// and reprompts, a pre-existing divergence this slice keeps.
+/// Line-oriented reader for the interactive prompts' stdin. One call
+/// returns exactly one line (including its `\n`); anything past that
+/// line is kept in userspace, and any further data already queued in
+/// the kernel is drained into that same leftover on the way out.
+///
+/// Real is protected by Python's buffered `sys.stdin` (`input()` pulls
+/// whatever the kernel has and serves the rest from the file object's
+/// buffer); a raw `libc::read` is not, so without this the next prompt
+/// answer sits in the kernel where any child spawned with inherited
+/// stdin (`eselect`/`renice`/`ionice`, all `.status()`) can steal it --
+/// the #259 root race, identified from the Z0 watchdog capture.
+struct PromptLineBuffer {
+    leftover: Vec<u8>,
+}
+
+impl PromptLineBuffer {
+    const fn new() -> Self {
+        Self {
+            leftover: Vec::new(),
+        }
+    }
+
+    /// Split the first line out of `self.leftover`, if it holds one.
+    fn take_line(&mut self) -> Option<String> {
+        let pos = self.leftover.iter().position(|&b| b == b'\n')?;
+        let line: Vec<u8> = self.leftover.drain(..=pos).collect();
+        String::from_utf8(line).ok()
+    }
+
+    /// One line from `fd`, or `None` on EOF with nothing buffered or on
+    /// a read error. Blocking only until the first line is complete (or
+    /// EOF/error).
+    fn read_line(&mut self, fd: i32) -> Option<String> {
+        if let Some(line) = self.take_line() {
+            self.drain_available(fd);
+            return Some(line);
+        }
+        let mut chunk = [0u8; 256];
+        loop {
+            let n = unsafe { libc::read(fd, chunk.as_mut_ptr() as *mut libc::c_void, chunk.len()) };
+            if n < 0 {
+                if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                    // Same as the old `read_prompt_line`: a prompt
+                    // SIGINT aborts the read (`Interrupted.` upstream),
+                    // any other EINTR just retries.
+                    if PROMPT_SIGINT.load(std::sync::atomic::Ordering::SeqCst) {
+                        return None;
+                    }
+                    continue;
+                }
+                return None;
+            }
+            if n == 0 {
+                break;
+            }
+            self.leftover.extend_from_slice(&chunk[..n as usize]);
+            if let Some(line) = self.take_line() {
+                self.drain_available(fd);
+                return Some(line);
+            }
+        }
+        if self.leftover.is_empty() {
+            None
+        } else {
+            let line: Vec<u8> = std::mem::take(&mut self.leftover);
+            String::from_utf8(line).ok()
+        }
+    }
+
+    /// Pull whatever else is already queued into `self.leftover` so it
+    /// cannot be read by anyone else sharing the fd. Non-blocking; the
+    /// fd's flags are restored on the way out.
+    fn drain_available(&mut self, fd: i32) {
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+        if flags < 0 {
+            return;
+        }
+        if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } != 0 {
+            return;
+        }
+        let mut chunk = [0u8; 256];
+        loop {
+            let n = unsafe { libc::read(fd, chunk.as_mut_ptr() as *mut libc::c_void, chunk.len()) };
+            if n <= 0 {
+                break;
+            }
+            self.leftover.extend_from_slice(&chunk[..n as usize]);
+        }
+        unsafe {
+            libc::fcntl(fd, libc::F_SETFL, flags);
+        }
+    }
+}
+
 fn read_prompt_line() -> Option<String> {
     if PROMPT_SIGINT.load(std::sync::atomic::Ordering::SeqCst) {
         return None;
     }
-    let mut buf: Vec<u8> = Vec::new();
-    let mut chunk = [0u8; 256];
-    loop {
-        // SAFETY: `chunk` is a live, writable stack buffer of `len`
-        // bytes; `read` writes at most that many or returns < 0.
-        let n = unsafe {
-            libc::read(
-                libc::STDIN_FILENO,
-                chunk.as_mut_ptr() as *mut libc::c_void,
-                chunk.len(),
-            )
-        };
-        if n < 0 {
-            if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
-                if PROMPT_SIGINT.load(std::sync::atomic::Ordering::SeqCst) {
-                    return None;
-                }
-                continue;
-            }
-            return None;
-        }
-        if n == 0 {
-            // EOF: a bare one yields `None` below, while a partial
-            // line pending (`^D` after typed-but-unentered text)
-            // falls through and is evaluated -- exactly like the old
-            // `read_line` `Ok(_)` arm, and like real's `input()`,
-            // which returns the partial line before the `EOFError`.
-            break;
-        }
-        buf.extend_from_slice(&chunk[..n as usize]);
-        if buf.contains(&b'\n') {
-            break;
-        }
-    }
-    if buf.is_empty() {
-        return None;
-    }
-    String::from_utf8(buf).ok()
+    // Process-wide because fd 0 is process-wide and the interactive
+    // prompts are the only readers of it (the #259 leftover must
+    // survive across successive `ask_*` calls).
+    static PROMPT_LINE_BUFFER: std::sync::Mutex<PromptLineBuffer> =
+        std::sync::Mutex::new(PromptLineBuffer::new());
+    let mut buffer = PROMPT_LINE_BUFFER
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    buffer.read_line(libc::STDIN_FILENO)
 }
 
 /// `--ask-enter-invalid` (real `main.py`'s boolean flag, consumed by
@@ -18288,6 +18353,110 @@ mod tests {
                 Ok(None) => std::thread::sleep(std::time::Duration::from_millis(25)),
                 Err(e) => panic!("watchdog: try_wait failed: {e}"),
             }
+        }
+    }
+
+    /// #259's root race, chased from the Z0 watchdog capture
+    /// (2026-09-30): `read_prompt_line` is a raw `libc::read` with no
+    /// userspace leftover, so a multi-line chunk becomes ONE answer and
+    /// a line left in the kernel is stealable by any child spawned with
+    /// inherited stdin (`eselect`/`renice`/`ionice` all use `.status()`).
+    /// Real is protected by Python's buffered `sys.stdin` (`input()`
+    /// drains the kernel and serves leftovers from userspace). Part 1:
+    /// one line per call.
+    #[test]
+    #[cfg(unix)]
+    fn prompt_line_buffer_returns_exactly_one_line_per_call() {
+        let mut fds = [0i32; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0, "pipe");
+        let (read_fd, write_fd) = (fds[0], fds[1]);
+        let written =
+            unsafe { libc::write(write_fd, b"No\nYes\n".as_ptr() as *const libc::c_void, 7) };
+        assert_eq!(written, 7, "write both answers in one chunk");
+        unsafe { libc::close(write_fd) };
+        let mut buf = PromptLineBuffer::new();
+        assert_eq!(
+            buf.read_line(read_fd).as_deref(),
+            Some("No\n"),
+            "first call returns exactly one line"
+        );
+        assert_eq!(
+            buf.read_line(read_fd).as_deref(),
+            Some("Yes\n"),
+            "second call returns the next line"
+        );
+        assert_eq!(
+            buf.read_line(read_fd),
+            None,
+            "EOF once both lines are served"
+        );
+        unsafe { libc::close(read_fd) };
+    }
+
+    /// Part 2 of the same race: after the first line is served the
+    /// kernel must hold nothing -- otherwise a child that inherits the
+    /// fd and reads it (real's helper shape) steals the next answer and
+    /// the next prompt hangs until the #259 watchdog fires. That is
+    /// exactly the Z0 capture: both answers pre-written, the news
+    /// prompt answered, the merge prompt hung with no input left.
+    #[test]
+    #[cfg(unix)]
+    fn prompt_line_buffer_drains_the_kernel_so_a_child_cannot_steal_the_next_answer() {
+        // A pty, not a pipe: the canonical line discipline is what
+        // queues the second answer in the kernel in the real capture.
+        unsafe {
+            let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+            assert!(master >= 0, "posix_openpt");
+            assert_eq!(libc::grantpt(master), 0, "grantpt");
+            assert_eq!(libc::unlockpt(master), 0, "unlockpt");
+            let name_ptr = libc::ptsname(master);
+            assert!(!name_ptr.is_null(), "ptsname");
+            let name = std::ffi::CStr::from_ptr(name_ptr)
+                .to_str()
+                .expect("pty name is utf8")
+                .to_owned();
+            let cname = std::ffi::CString::new(name).expect("pty name has no nul");
+            let slave = libc::open(cname.as_ptr(), libc::O_RDWR | libc::O_NOCTTY);
+            assert!(slave >= 0, "pty slave open");
+            assert_eq!(
+                libc::write(master, b"No\n".as_ptr() as *const libc::c_void, 3),
+                3,
+                "queue the first answer"
+            );
+            assert_eq!(
+                libc::write(master, b"Yes\n".as_ptr() as *const libc::c_void, 4),
+                4,
+                "queue the second answer"
+            );
+            let mut buf = PromptLineBuffer::new();
+            assert_eq!(buf.read_line(slave).as_deref(), Some("No\n"), "first line");
+            // The kernel must be drained: a non-blocking read gets
+            // EAGAIN, which is exactly what a stealing child would see.
+            let flags = libc::fcntl(slave, libc::F_GETFL);
+            assert_eq!(
+                libc::fcntl(slave, libc::F_SETFL, flags | libc::O_NONBLOCK),
+                0,
+                "set non-blocking"
+            );
+            let mut stolen = [0u8; 8];
+            let n = libc::read(slave, stolen.as_mut_ptr() as *mut libc::c_void, 8);
+            assert!(
+                n < 0,
+                "the next answer must not sit in the kernel (a child would steal it); read returned {:?}",
+                &stolen[..n.max(0) as usize]
+            );
+            assert_eq!(
+                libc::fcntl(slave, libc::F_SETFL, flags),
+                0,
+                "restore blocking"
+            );
+            assert_eq!(
+                buf.read_line(slave).as_deref(),
+                Some("Yes\n"),
+                "the next answer is served from the userspace leftover"
+            );
+            libc::close(slave);
+            libc::close(master);
         }
     }
 
