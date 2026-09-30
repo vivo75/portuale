@@ -1,0 +1,23 @@
+### u251a ['dev-util/u251ta'] {'--pretend': True} success True mergelist ['dev-util/u251tb-1', '[uninstall]dev-util/u251oldb-1', Atom('!dev-util/u251oldb'), 'dev-libs/u251m-1', 'dev-util/u251ta-1', '[uninstall]dev-util/u251olda-1', Atom('!dev-util/u251olda')]
+[ebuild  N     ] dev-util/u251tb-1 
+[uninstall     ] dev-util/u251oldb-1 
+[blocks b      ] dev-util/u251oldb ("dev-util/u251oldb" is soft blocking dev-util/u251tb-1)
+[ebuild  N     ] dev-libs/u251m-1 
+[ebuild  N     ] dev-util/u251ta-1 
+[uninstall     ] dev-util/u251olda-1 
+[blocks b      ] dev-util/u251olda ("dev-util/u251olda" is soft blocking dev-util/u251ta-1)
+### u251a ['dev-libs/u251m'] {'--pretend': True} success True mergelist ['dev-util/u251tb-1', '[uninstall]dev-util/u251oldb-1', Atom('!dev-util/u251oldb'), 'dev-libs/u251m-1']
+[ebuild  N     ] dev-util/u251tb-1 
+[uninstall     ] dev-util/u251oldb-1 
+[blocks b      ] dev-util/u251oldb ("dev-util/u251oldb" is soft blocking dev-util/u251tb-1)
+[ebuild  N     ] dev-libs/u251m-1 
+### u251a ['dev-util/u251ta'] {'--pretend': True, '--verbose': True} success True mergelist ['dev-util/u251tb-1', '[uninstall]dev-util/u251oldb-1', Atom('!dev-util/u251oldb'), 'dev-libs/u251m-1', 'dev-util/u251ta-1', '[uninstall]dev-util/u251olda-1', Atom('!dev-util/u251olda')]
+[ebuild  N     ] dev-util/u251tb-1::test_repo  0 KiB
+[uninstall     ] dev-util/u251oldb-1::test_repo 
+[blocks b      ] dev-util/u251oldb ("dev-util/u251oldb" is soft blocking dev-util/u251tb-1)
+[ebuild  N     ] dev-libs/u251m-1::test_repo  0 KiB
+[ebuild  N     ] dev-util/u251ta-1::test_repo  0 KiB
+[uninstall     ] dev-util/u251olda-1::test_repo 
+[blocks b      ] dev-util/u251olda ("dev-util/u251olda" is soft blocking dev-util/u251ta-1)
+Total: 3 packages (3 new, 2 uninstalls), Size of downloads: 0 KiB
+Conflict: 2 blocks (all satisfied)
