@@ -18953,3 +18953,223 @@ rust/target/release/emerge -puD --getbinpkg --color=n net-libs/rest
 rust/target/release/emerge -puD --getbinpkg --color=n --json net-libs/rest | python3 -c 'import json,sys; print(json.load(sys.stdin)["backtrack"])'
 ```
 
+
+A non-privileged `emerge --ask <write-action>` offers to add
+`--pretend` instead of refusing (backlog #246, 2026-09-29). Real
+`action_build` (`_emerge/actions.py:3983-4006`) prints `This action
+requires superuser access...` and asks `Would you like to add --pretend
+to options?`; portuale refused outright through
+`privileges::deny_superuser` (exit 1). The offer now goes through the
+shared `UserQuery.query` port (`ask_yes_no`, backlog #240), so No exits
+130 with nothing else printed, EOF/SIGINT prints `Interrupted.` and
+exits 130, and Yes continues as a pretend run with `--ask` dropped;
+without `--ask` the refusal is real's single `emerge: superuser access
+is required` line (the extra hint line is gone on the emerge path).
+Grounded on host `/usr/sbin/emerge` 3.0.82.2 as uid 1000 (secpass 0):
+No prints the two stdout lines and exits 130; Yes continues into
+`Calculating dependencies ... done!` with no second prompt; bare
+`--depclean` prints only the stderr line with rc 1.
+
+```sh
+# unowned ROOT makes the caller unprivileged; answer on the pty
+printf 'n\n' | script -qec "env PORTAGE_CONFIGROOT=$PWD/fixtures ROOT=/usr/portuale-ask-pretend-test-does-not-exist DISTDIR=$PWD/fixtures/distfiles ./rust/target/release/portuale emerge --ask --oneshot dev-libs/schedok" /dev/null
+# expect: `This action requires superuser access...` +
+# `Would you like to add --pretend to options?`, rc 130
+printf 'y\n' | script -qec "env PORTAGE_CONFIGROOT=$PWD/fixtures ROOT=/usr/portuale-ask-pretend-test-does-not-exist DISTDIR=$PWD/fixtures/distfiles ./rust/target/release/portuale emerge --ask --oneshot dev-libs/schedok" /dev/null
+# expect: the offer, then `[ebuild  N     ] dev-libs/schedok-1.0`, rc 0
+```
+
+An autounmask change on an argument package itself prints a one-line
+dep chain with no self-row (backlog #248, 2026-09-29). Real
+`_get_dep_chain` (`_emerge/depgraph.py:6257-6454`) never prints the
+start node: its docstring says that with no `target_atom` the first
+package shown is the package's parent, and the start node is appended
+only in the `target_atom` branch (`:6294-6297`). Portuale's generic
+fill did the opposite -- when the changed package had no requirers it
+fell back to the package itself (`.or(Some(own))`), printing its own
+`# required by <cpv>::<repo>` row above the `(argument)` line. Both
+post-loop fills (`fill_use_change_chains` and the extracted
+keyword/license/mask twin `fill_non_use_change_chains`) now pass
+`None` when no requirer exists, so the chain is just the `(argument)`
+line. Grounded on fresh host `/usr/sbin/emerge` 3.0.82.2
+staged-fixture probes: `dev-libs/useflagpkg[-foo]`,
+`dev-libs/useflagpkg[missingflag]`,
+`dev-libs/useflagpkg[missingflag,nonexistentflag(+)]`, and
+`--autounmask dev-libs/autounmaskkeywordpkg` (with and without
+`--autounmask-only`) each print exactly one `# required by <atom as
+given> (argument)` line.
+
+```sh
+# from the repo root; expect rc 1 and the single-chain-line USE block on stderr
+env PORTAGE_CONFIGROOT=$PWD/fixtures ROOT=$PWD/fixtures PORTAGE_RUNNING_ROOT=$PWD/fixtures DISTDIR=$PWD/fixtures/distfiles ./rust/target/release/portuale emerge --pretend -v 'dev-libs/useflagpkg[-foo]'
+# stderr ends with:
+# # required by dev-libs/useflagpkg[-foo] (argument)
+# >=dev-libs/useflagpkg-1.0 -foo
+```
+
+A same-version reinstall shows the `[1]` old-best marker when only the
+repository differs (backlog #247, 2026-09-29; owner B5 reopened the
+deliberate cut). Real `_get_installed_best`
+(`_emerge/resolver/output.py:721-731`) lists the installed instance in
+`myoldbest` when `(slot, sub_slot)` differs **or** `not
+quiet_repo_display and installed_version.repo != pkg.repo`; portuale's
+`resolve_pretend` oldbest assembly ported only the slot/sub-slot half,
+so a reinstall whose only difference was the repository (every
+hand-staged vdb that omits the `repository` file reads as real's
+`__unknown__` sentinel against the `testrepo` ebuild) printed no `[1]`
+where real does. The `Reinstall` filter now carries the third disjunct
+verbatim; the `not quiet_repo_display` half needs no threading because
+`--quiet-repo-display` stays an unimplemented option (it exits 2), so
+every successful run has it off. Grounded on fresh host
+`/usr/sbin/emerge` 3.0.82.2 staged-fixture probes (mount-namespace
+staging with an empty `/etc/make.local` shadow, since the fixture
+`make.conf` sources the host absolute path and its
+`EMERGE_DEFAULT_OPTS=--getbinpkg=y` otherwise breaks the autounmask
+flow): both #205 `abk0` cells show `[ebuild   R    ]
+dev-libs/abk0c-1 [1]`, plus confirmatory probes for a fixture-vdb
+reinstall (`dev-libs/samepkg` -> `[1.0]`), a recorded-repo reinstall
+(`--newrepo dev-libs/newrepopkg`, vdb `oldrepo` -> `[1.0]`), and the
+`ccr0r`/`cgp0x` reinstall rows. The world-bound cell's USE chain flaps
+across real runs between two and three `# required by` lines (a
+hash-order tie-break between the two unsatisfied parents in
+`_get_dep_chain`, not a version change); the pin holds the
+deterministic two-line variant portuale stably renders. The same probes
+showed the crafted fixture binpkgs lacked the `repository` member a
+genuine real-built binary embeds (verified by building
+`dev-libs/newpkg` with real `--buildpkgonly` and reading its xpak), so
+their scanned candidates read `__unknown__` and every `[binary R]`
+reinstall spuriously gained `[1.0]`; both tbz2s now embed
+`repository=testrepo` like genuine ones, keeping the `[binary R]` rows
+bare.
+
+```sh
+# from the repo root; expect rc 1 and the [1] on the R row, byte-identical
+# to the fresh real probe minus real's `to <root>` destination suffixes
+env PORTAGE_CONFIGROOT=$PWD/fixtures ROOT=$PWD/fixtures PORTAGE_RUNNING_ROOT=$PWD/fixtures DISTDIR=$PWD/fixtures/distfiles ./rust/target/release/portuale emerge --pretend --autounmask-backtrack=y --backtrack=2 dev-libs/abk0d
+# [ebuild   R    ] dev-libs/abk0c-1 [1] USE="x*"
+# [ebuild     U  ] dev-libs/abk0a-3 [1]
+# [ebuild  N     ] dev-libs/abk0d-1
+```
+
+## The `mmprov` pin re-probe: greedy request args veto the new-slot probe (#252 DONE, 2026-09-29)
+
+#211's item-2 pin said the new-child-slot arm probes bound-slot-mismatch
+`Upgrade` entries and rebuilds `mmcons-1` as "MATCHES real" -- grounded in
+source reading only, never probed. The g213 Playground data disagreed, so
+#252 ran one host staged-fixture probe of the committed shape (installed
+`mmprov-1` `0/1` + `mmprov-2` `1/1` + `mmcons-1` bound `mmprov:0/1=`, tree
+`mmprov-3` `1/2`, `emerge -uD mmprov mmcons` on real 3.0.82.2 with a
+mount-namespace `make.local` shadow): real merges only `mmprov-3` (rc 0,
+`backtrack: 0/3`, no `mmcons-1` row, no `causing rebuilds` block). A
+vendored-3.0.82.2 `ResolverPlayground` spy run names the mechanism: under
+`--update` the request gains a greedy per-slot arg (`_select_files`,
+`depgraph.py:5380`, via `_greedy_slots`, `:5896` -- `app-misc/mmprov:0`
+recorded on the installed slot-0 instance), and the update probe's
+reverse-deps gate (`_slot_operator_check_reverse_dependencies`,
+`:2472-2538`) refuses every slot-1 candidate against it, so both
+`new_child_slot` probe forms return None and
+`slot_operator_replace_installed` stays empty. Ported as the `#252` edge
+gate in `slot_operator_rebuild_scan`'s new-slot arm (requested provider +
+`--update` + bound slot below the highest visible slot + older installed
+instance there ⇒ no probe for that edge); both pins re-pinned to the
+probed bytes (RED first: the old code listed `mmcons-1`). Re-run the pins:
+
+```sh
+# from ../pmtest; expect 2 passed
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider \
+  -k 'mismatched_upgrade_entry or agrees_on_mismatched'
+```
+
+## The `prune_rebuilds` trigger chains the conflict half of missed updates (#253 half 1 DONE, 2026-09-29)
+
+Real's missed updates (`_get_missed_updates`, `_emerge/depgraph.py:1529-1565`)
+chain two sources (`:1533-1536`): the backtracking runtime masks and the
+slot-conflict handler's removals (`_conflict_missed_update`, `:2086-2110`).
+Portuale's prune trigger (`apply_prune_rebuilds`, backlog #213) read only
+the mask half (`backtrack_missed_updates`), so a shape whose only missed
+updates are conflict-source ones under-fired the prune -- same rows, fewer
+passes. The trigger now ORs both halves exactly like real's truthiness
+check: at that layer the conflict half rides `pass.skipped_updates` (the
+direct solve's removal rows, filed before the trigger runs), while the
+per-slot-highest chaining still shapes only the display
+(`collapse_skipped_updates` at settle). The pin reuses the #213
+`pprov`/`pcons` cell plus the #90 reversed conflict pair (zero new
+fixtures), so the replace set is genuine and the only missed update is
+`sct-2.0` skipped against oldconsumer's `<2.0` -- no `!!!` backtracking
+tail anywhere. Grounded on a fresh host `/usr/sbin/emerge` 3.0.82.2
+staged-fixture probe (mount-namespace `make.local` shadow, ad-hoc ROOT
+with EAPI-bearing `pprov-1`/`pcons-1` vdb): rc 0, `backtrack: 3/20`,
+five rows, the `WARNING` block, and the `pprov-2 rebuilds pcons-1`
+block. Portuale prints no timing line, so the prune rides `--json`
+(`backtrack.restarts == 3`; 1 before the fix). A `--backtrack=0`
+control locks the gating (WARNING persists, no tail, no prune). The
+shape needs ad-hoc vdb (the pin stages it), so the runnable form is
+the pin itself (its docstring carries the verbatim host probe):
+
+Half 2 (a rebuild the re-resolve drops) stays open with no pin, and the
+S0 is recorded on the entry: a vendored-3.0.82.2 `ResolverPlayground`
+sweep (same-slot, new-slot requested/unrequested, pulled-consumer,
+USE-conditional, `||`, downgrade, keyword, and bug-622270 shapes with
+per-pass replace/eliminate tracing) shows no honest ebuild shape drops
+a probe-scheduled rebuild -- the prune re-walk is identical once the set
+regrows, and `_eliminate_rebuilds` rule 8 keeps every `:=` consumer
+whose binding broke, which is exactly the probe's scheduling condition.
+Two adjacent divergences found while probing are filed, not fixed here:
+#269 (`abi_rebuilds` over-reports the new-slot arm: provider `r` plus
+the `causing rebuilds` block where real shows neither) and #270 (at
+`--backtrack=0` real withholds the provider update itself where
+portuale upgrades partially). Re-run the pins:
+
+```sh
+# from ../pmtest; expect 2 passed
+python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -p no:cacheprovider \
+  -k 'prune_rebuilds_restart_adds_passes or prune_rebuilds_conflict_missed_updates'
+```
+
+**#256 + #257 — the unsatisfied slot-operator probe for binary parents, and one pass for every hitting parent (batch-2026-09-28 Track R).** Real's `_slot_operator_unsatisfied_probe` fires when a built parent's recorded `:S/SS=` dependency no longer resolves but a same-slot ebuild of the parent accepts a visible provider. For an installed parent it seeds a reinstall. For a non-installed (binary) parent `_slot_operator_unsatisfied_backtrack` masks the binary (`slot_operator_mask_built`, `_emerge/depgraph.py:2896-2903`), and `_add_dep` tries this before the missing-dependency mask (`:3447-3455`). Portuale had only the installed arm, so a stale local binary of `app-misc/u257par` (recorded `u257prov:0/1=`, the provider since moved to slot `2/2`) aborted the run. It now masks the binary and restarts into the ebuild, as real does: `[ebuild N] u257prov-2` + `[ebuild N] u257par-1`, one restart. `--usepkgonly` still fails, because no ebuild replacement exists there. #256's worry, that real probes one edge and restarts, did not survive real's own playground. Two hitting parents both probe in the same pass (`return 1` ends only that edge) and one restart heals both, which is what portuale already did. Evidence: `docs/evidence/2026-09-30-256-257/`. Pins (pmtest): `test_256_unsatisfied_probe_seeds_every_hitting_parent_in_one_pass`, `test_257_unsatisfied_probe_masks_a_stale_binary_parent`.
+
+```sh
+# from the portuale root; expect the two [ebuild N] rows and rc=0
+FX=$(mktemp -d)/fx; cp -a fixtures/. $FX
+python3 - "$FX/pkgdir/Packages" <<'PY'
+import re, sys
+p = sys.argv[1]; s = open(p).read()
+n = int(re.search(r"^PACKAGES: (\d+)", s, re.M).group(1))
+s = re.sub(r"^PACKAGES: \d+", f"PACKAGES: {n + 1}", s, count=1, flags=re.M)
+s = s.rstrip("\n") + ("\n\nCPV: app-misc/u257par-1\nBUILD_TIME: 1000\nDEFINED_PHASES: -\nEAPI: 8\n"
+    "IUSE:\nKEYWORDS: amd64\nPATH: app-misc/u257par-1.tbz2\nRDEPEND: app-misc/u257prov:0/1=\n"
+    "REPO: testrepo\nSIZE: 4096\nSLOT: 0\nUSE:\n")
+open(p, "w").write(s)
+PY
+PORTAGE_CONFIGROOT=$FX ROOT=$FX PORTAGE_RUNNING_ROOT=$FX DISTDIR=$FX/distfiles \
+  rust/target/release/emerge --pretend --usepkg app-misc/u257par; echo "rc=$?"
+```
+
+**#254 + #255 — the conflict-fired ABI probe reads the replacement like real, and the `r` marker is slot-keyed (batch-2026-09-28 Track R).** When a slot conflict's built parent could be rebuilt against the other instance, real's `_slot_conflict_backtrack_abi` asks the update probe. That probe evaluates the replacement ebuild's USE conditionals (`_select_atoms_probe`), so a `cflag? ( app-misc/abiprov:= )` with `cflag` off is not a candidate. Real then masks the conflicting `abiprov-1`, heals the consumer through the unsatisfied probe (whose `validated_atoms` keep every conditional branch) and prints no "causing rebuilds" block, because `_compute_abi_rebuild_info` only pairs a provider the rebuilt consumer still depends on. Portuale matched the flat token, rebuilt through the ABI probe and printed the block. It now USE-reduces the replacement in the ABI probe, reads it match-all in the unsatisfied probe, and pairs a provider only when the rebuilt consumer pulls it: the same three rows as real, without the block. The `r` column follows real's slot-keyed `_get_installed_best`: a provider installed only in another slot is `NS`, not `rS`. Evidence: `docs/evidence/2026-09-30-254-255/`. Pins (pmtest): `test_254_conflict_abi_probe_evaluates_the_replacements_use_conditionals`, `test_255_forced_rebuild_marker_is_keyed_by_the_providers_slot`.
+
+```sh
+# from the portuale root; expect NS on abiprov-2 (no r), rR abicons, N abiforce
+FX=$(mktemp -d)/fx; cp -a fixtures/. $FX
+mkdir -p $FX/var/db/pkg/app-misc/abiprov-0.5
+for f in CATEGORY:app-misc SLOT:1/1 EAPI:8 repository:testrepo; do echo "${f#*:}" > $FX/var/db/pkg/app-misc/abiprov-0.5/${f%%:*}; done
+printf 'app-misc/abicons\napp-misc/abiforce\n' >> $FX/var/lib/portage/world
+PORTAGE_CONFIGROOT=$FX ROOT=$FX PORTAGE_RUNNING_ROOT=$FX DISTDIR=$FX/distfiles \
+  rust/target/release/emerge --pretend --update --deep --backtrack 4 @world | grep app-misc/abi
+
+**#249 — a virtual's `||` is demoted through its puller's circular record (batch-2026-09-28 Track R).** Real expands a new-style virtual's RDEPEND inline, inside the dependency check of the package that pulled it, and `dep_zapdeps` then consults `circular_dependency` under both that parent and the virtual (`portage/dep/dep_check.py:673-678`). Take bug 703440's cycle (a build tool needs a library that needs the build tool) with the `|| ( bootstrap tool )` choice moved into a virtual. After real's circular restart, the puller's record demotes the cycle-closing branch and the bootstrap merges. Portuale walks the virtual as its own node and consulted only the virtual's record, so it reported the cycle. It now adds the virtual's pullers' records and resolves like real: `u249make-bootstrap-1`, `virtual/u249make-0`, `u249json-1`, `u249make-1`. Evidence: `docs/evidence/2026-09-30-249/`. Pin (pmtest): `test_249_virtual_or_choice_uses_the_pullers_circular_record`.
+
+```sh
+# from the portuale root; expect the four rows (bootstrap first) and rc=0
+FX=$PWD/fixtures
+PORTAGE_CONFIGROOT=$FX ROOT=$FX PORTAGE_RUNNING_ROOT=$FX DISTDIR=$FX/distfiles \
+  rust/target/release/emerge --pretend dev-util/u249make; echo "rc=$?"
+
+**#250 — a USE-mismatched installed instance does not satisfy a build edge (batch-2026-09-28 Track O).** Take bug 703440's cycle: a build tool needs a library, and the library needs `|| ( tool-bootstrap tool[foo] )`. With the tool already installed but built without `foo`, real's check (`vardb.match_pkgs`, which honours use-deps) says the installed tool does not satisfy `tool[foo]`. The build edge is unbreakable, the cycle forms, the circular restart demotes the branch and the bootstrap merges. Portuale's edge check matched version and slot only, never saw the cycle, and reinstalled the tool instead. It now checks the installed instance's recorded USE and matches real in both branch orders. The owner asked for this fixture first (B6) to decide whether merge order's `||` suppression, also version/slot only, needs `Config` threaded through it. On the fixed walk it never reopens a phantom edge, so that half is closed by the proof. Evidence: `docs/evidence/2026-09-30-250/`. Pin (pmtest): `test_250_use_mismatched_installed_instance_does_not_satisfy_a_build_edge`.
+
+```sh
+# from the portuale root; expect u250make-bootstrap-1, u250json-1, u250make-1 (R)
+FX=$(mktemp -d)/fx; cp -a fixtures/. $FX; D=$FX/var/db/pkg/dev-util/u250make-1; mkdir -p $D
+for f in CATEGORY:dev-util SLOT:0 EAPI:8 IUSE:foo USE: repository:testrepo "BDEPEND:dev-libs/u250json:0/0="; do echo "${f#*:}" > $D/${f%%:*}; done
+PORTAGE_CONFIGROOT=$FX ROOT=$FX PORTAGE_RUNNING_ROOT=$FX DISTDIR=$FX/distfiles \
+  rust/target/release/emerge --pretend dev-util/u250make
+```

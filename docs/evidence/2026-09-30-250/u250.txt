@@ -1,0 +1,3 @@
+### u250 ['dev-util/u250make'] {'--pretend': True} success True mergelist ['dev-util/u250make-bootstrap-1', 'dev-libs/u250json-1', 'dev-util/u250make-1']
+### u250 ['dev-libs/u250json'] {'--pretend': True} success True mergelist ['dev-util/u250make-bootstrap-1', 'dev-libs/u250json-1']
+### u250 ['dev-util/u250make'] {'--pretend': True, '--newuse': True, '--update': True, '--deep': True} success True mergelist ['dev-util/u250make-bootstrap-1', 'dev-libs/u250json-1', 'dev-util/u250make-1']
