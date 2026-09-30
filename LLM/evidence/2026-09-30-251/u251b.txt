@@ -1,0 +1,6 @@
+### u251b ['dev-util/u251q', 'dev-libs/u251p:2'] success True mergelist ['dev-util/u251r-1', 'dev-libs/u251p-2', 'dev-util/u251q-1']
+circular_dependency {'dev-libs/u251p-2': ['dev-util/u251q-1'], 'dev-util/u251q-1': ['dev-libs/u251p-2']}
+### u251b ['dev-libs/u251p:2', 'dev-util/u251q'] success True mergelist ['dev-util/u251r-1', 'dev-libs/u251p-2', 'dev-util/u251q-1']
+circular_dependency {'dev-util/u251q-1': ['dev-libs/u251p-2'], 'dev-libs/u251p-2': ['dev-util/u251q-1']}
+### u251b ['dev-util/u251q', 'dev-libs/u251p:2', '@world'] success True mergelist ['dev-util/u251r-1', 'dev-libs/u251p-2', 'dev-util/u251q-1']
+circular_dependency {'dev-libs/u251p-2': ['dev-util/u251q-1'], 'dev-util/u251q-1': ['dev-libs/u251p-2']}

@@ -87,6 +87,39 @@ fn check_runtime_pkg_mask_discards_fully_masked_parent_sets() {
     assert!(check_runtime_pkg_mask(&masks2));
 }
 
+/// A virtual's `||` demotes through its puller's circular record: the merge order
+/// below holds, and `--backtrack=0` keeps the cycle.
+#[test]
+fn virtual_or_choice_is_demoted_through_its_pullers_circular_record() {
+    let ok = graph_result_real("dev-util/u249make");
+    let cpvs: Vec<String> = ok
+        .entries
+        .iter()
+        .filter_map(merge_bound_cpv)
+        .filter(|c| c.contains("u249"))
+        .collect();
+    assert_eq!(
+        cpvs,
+        vec![
+            "dev-util/u249make-bootstrap-1".to_string(),
+            "virtual/u249make-0".to_string(),
+            "dev-libs/u249json-1".to_string(),
+            "dev-util/u249make-1".to_string(),
+        ]
+    );
+    let bt0 = graph_result_real_backtrack("dev-util/u249make", 0);
+    assert!(
+        matches!(
+            bt0.outcome,
+            ResolveOutcome::Aborted {
+                reason: AbortReason::UnserializableCycle { .. },
+                ..
+            }
+        ),
+        "--backtrack=0 keeps the cycle"
+    );
+}
+
 /// Circular `||` backtracking: the restart demotes the cycle-closing branch and
 /// merges Portage's set in Portage's order; `--backtrack=0` keeps the failure.
 #[test]

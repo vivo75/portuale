@@ -1,0 +1,12 @@
+[ebuild  N     ] dev-libs/newpkg-1.0 to /tmp/root-E3-holder-world-set
+[ebuild  N     ] dev-libs/upgradepkg-2.0 to /tmp/root-E3-holder-world-set
+[ebuild  N     ] dev-libs/systempkg-1.0 to /tmp/root-E3-holder-world-set
+[ebuild  N     ] dev-libs/withdeps-1.0 to /tmp/root-E3-holder-world-set
+
+!!! Problems have been detected with your world file
+!!! Please run emaint --check world
+
+
+!!! Ebuilds for the following packages are either all
+!!! masked or don't exist:
+app-misc/bdhold

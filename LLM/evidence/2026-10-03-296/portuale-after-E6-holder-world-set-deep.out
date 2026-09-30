@@ -1,0 +1,14 @@
+[ebuild  N     ] dev-libs/newpkg-1.0 to /tmp/root-E6-holder-world-set-deep
+[ebuild  N     ] dev-libs/upgradepkg-2.0 to /tmp/root-E6-holder-world-set-deep
+[ebuild  N     ] dev-libs/systempkg-1.0 to /tmp/root-E6-holder-world-set-deep
+[ebuild     U  ] app-misc/bdprov-3 [2] to /tmp/root-E6-holder-world-set-deep
+[ebuild  N     ] dev-libs/withdeps-1.0 to /tmp/root-E6-holder-world-set-deep
+[blocks B      ] app-misc/bdprov:0 ("app-misc/bdprov:0" is soft blocking app-misc/bdprov-3)
+
+!!! Problems have been detected with your world file
+!!! Please run emaint --check world
+
+
+!!! Ebuilds for the following packages are either all
+!!! masked or don't exist:
+app-misc/bdhold
