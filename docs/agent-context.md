@@ -237,6 +237,21 @@ per-slice ledger) and `git log`. The per-slice "current state" narrative
 that used to live here is snapshotted at
 [`history/agent-context-current-state-2026-09-10.md`](history/agent-context-current-state-2026-09-10.md).
 
+**2026-09-30 memory note:** `batch-2026-09-28.md` is the live batch and
+its **"Execution state (2026-09-30, post-rebase)"** section at the top
+is the handoff record: what is done (H0, Z0, Track C, Track D #246/#248/
+#247, Track R #252/#253), what is open (#256+#257, #254+#255, #249,
+#250, #251, #245, P-Z), the 2026-09-30 rebase onto `origin/main`
+`71f24e15` (paired-sha rewording, the #262–#266 → #271–#275 number
+remap forced by the parallel session's filings, pre-rebase objects on
+the local `backup/pre-rebase-0928` branches), the half-done rebase
+verification (pmtest suite + corpus re-bless + L0 re-baseline still
+owed), and the session's gotchas — including the **stale-artifact
+trap** (`cargo test` does not relink `target/release/portuale`, which
+the pty tests spawn; `cargo build --release -p portuale` first). Work
+continues on portuale branch `backlog/259-260-test-hygiene` (the
+integration branch, owner: left unmerged to `main`) and pmtest `main`.
+
 **2026-09-12 memory note:** backlog #24 (slot-operator rebuild undo
 path, S1–S7) is **closed** — the rebuild is a walked graph node, the
 `_eliminate_rebuilds` undo and the `_slot_change_probe` slot-move
