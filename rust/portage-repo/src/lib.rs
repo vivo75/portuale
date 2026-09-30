@@ -16268,8 +16268,10 @@ fn parse_conflict_parent_cpv(parent_cpv: &str) -> Option<(String, String, String
 /// (`_slot_operator_update_probe_slot_conflict` re-probes at each level
 /// when `_autounmask` is on); merge-bound veto parents (the refusal only
 /// sees installed parents, like the scan's); the child-side
-/// `--exclude` check (only the parent end is gated); USE-conditional
-/// and `||` evaluation of the replacement's atoms (flat token match).
+/// `--exclude` check (only the parent end is gated); `||` evaluation
+/// of the replacement's atoms (every branch is flattened -- USE
+/// conditionals ARE evaluated against the replacement's effective USE,
+/// #254).
 /// Not gated on `rebuild_if_new_slot`: real's conflict path never is
 /// (the scan's call-site gate is the pre-existing narrowing for its own
 /// arms, not this one).
@@ -16285,6 +16287,7 @@ fn slot_conflict_abi_probe(
     walked: &HashSet<(String, String)>,
     excluded: &[String],
     probe_parents: &HashMap<(String, String), Vec<ProbeParent>>,
+    config: &portage_profile::Config,
 ) -> BTreeSet<(String, String)> {
     // cp -> () for every merge-bound entry: a merging parent rebinds
     // through its own walk, so only installed parents probe.
@@ -16375,16 +16378,43 @@ fn slot_conflict_abi_probe(
                         true => &["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"],
                         false => &["RDEPEND", "PDEPEND", "IDEPEND"],
                     };
+                    // #254: real's probe evaluates the replacement's USE
+                    // conditionals (`_select_atoms_probe`,
+                    // `_emerge/depgraph.py:2667-2713`, with
+                    // `_pkg_use_enabled(replacement_parent)`): an atom
+                    // under a `flag? ( ... )` whose flag the replacement
+                    // ebuild does not enable is never selected, so it
+                    // cannot accept C. The replacement is the same-version
+                    // tree ebuild; its effective USE is the one the walk
+                    // would give it.
+                    let Some(rep_use) = list_candidates(repos, &pcat, &ppkg).ok().and_then(|cs| {
+                        let c = cs
+                            .iter()
+                            .filter(|c| c.version == pver && c.source == CandidateSource::Ebuild)
+                            .max_by_key(|c| c.repo_priority)?;
+                        let cand_str = format!(
+                            "{pcat}/{ppkg}-{}:{}/{}::{}",
+                            c.version, c.slot, c.sub_slot, c.repo_name
+                        );
+                        Some(effective_use_flags_uncached(
+                            config,
+                            live.get("IUSE").map(String::as_str).unwrap_or_default(),
+                            &c.keywords,
+                            &cand_str,
+                            &pcat,
+                            &ppkg,
+                        ))
+                    }) else {
+                        continue;
+                    };
                     let accepts = dep_keys
                         .iter()
-                        .flat_map(|k| {
-                            live.get(*k)
-                                .map(|s| s.as_str())
-                                .unwrap_or("")
-                                .split_whitespace()
+                        .filter_map(|k| {
+                            flat_dep_atoms(live.get(*k).map(String::as_str).unwrap_or(""), &rep_use)
                         })
+                        .flatten()
                         .any(|tok| {
-                            let Some(la) = portage_dep::parse_atom(tok) else {
+                            let Some(la) = portage_dep::parse_atom(&tok) else {
                                 return false;
                             };
                             if la.blocker != portage_dep::Blocker::None {
@@ -16393,8 +16423,11 @@ fn slot_conflict_abi_probe(
                             if la.category != sc.category || la.package != sc.package {
                                 return false;
                             }
-                            portage_dep::match_from_list(tok, &[c_str.as_str()])
-                                .is_some_and(|mt| !mt.is_empty())
+                            portage_dep::match_from_list(
+                                portage_dep::without_use(&tok),
+                                &[c_str.as_str()],
+                            )
+                            .is_some_and(|mt| !mt.is_empty())
                         });
                     if !accepts {
                         continue;
@@ -16467,12 +16500,20 @@ fn slot_conflict_abi_display_pairs(
                     continue;
                 };
                 let bound_sub = atom.sub_slot.clone().unwrap_or_default();
+                // #254: real `_compute_abi_rebuild_info`
+                // (`_emerge/depgraph.py:996-1090`) only pairs a provider
+                // that is a graph child of the *replacement* consumer
+                // (`digraph.child_nodes(reinst_pkg)`): a rebuild whose new
+                // build no longer pulls the provider (a USE-conditional
+                // `:=` now off) was not caused by it, and real prints no
+                // pair. The provider entry's `required_by` is that edge.
                 for cand in entries.iter().filter(|o| {
                     o.category == atom.category
                         && o.package == atom.package
                         && merge_bound_version(&o.outcome).is_some()
                         && o.slot.as_deref() == Some(bound_slot.as_str())
                         && o.sub_slot.as_deref().is_some_and(|s| *s != bound_sub)
+                        && o.required_by.contains(&ccp)
                 }) {
                     let Some(pver) = merge_bound_version(&cand.outcome) else {
                         continue;
@@ -17413,10 +17454,9 @@ fn slot_operator_slot_change_probe(
 /// - the replacement's live dep keys are runtime keys always,
 ///   `DEPEND`/`BDEPEND` only `with_bdeps` (the scan's own key
 ///   discipline; real's `validated_atoms` spans every key).
-/// - the replacement's atoms are USE-reduced against its effective USE
-///   (real `use_reduce(..., matchall=True)` keeps every conditional
-///   branch; the conditional-`:=` corner is a documented
-///   over-/under-approximation either way).
+/// - the replacement's atoms are reduced with every conditional branch
+///   active, real's `validated_atoms` (`use_reduce(..., matchall=True)`,
+///   `_emerge/Package.py:329-359`).
 /// - no `check_reverse_dependencies` refusal: real's unsatisfied probe
 ///   has none (unlike the #211 update probe) -- a vetoing sibling does
 ///   not withhold the reinstall (S0 veto cell).
@@ -17615,22 +17655,27 @@ fn slot_operator_unsatisfied_probe_full(
                     let Ok(meta) = repo_aux_metadata(&cand.repo_location, &owner.0, &pf) else {
                         continue;
                     };
-                    let use_flags = effective_use_flags_uncached(
-                        config,
-                        meta.get("IUSE").map(String::as_str).unwrap_or_default(),
-                        &cand.keywords,
-                        &cand_str,
-                        &owner.0,
-                        &owner.1,
-                    );
                     let mut keys: Vec<&str> = RUNTIME_KEYS.to_vec();
                     if with_bdeps {
                         keys.extend(BUILD_KEYS);
                     }
                     for key in keys {
-                        let Some(tokens) = flat_dep_atoms(
-                            meta.get(key).map(String::as_str).unwrap_or_default(),
-                            &use_flags,
+                        // Real `replacement_parent.validated_atoms`
+                        // (`_emerge/Package.py:329-359`): `use_reduce(...,
+                        // matchall=True)`, every conditional branch kept
+                        // regardless of the replacement's USE (#254's
+                        // conditional shape heals only through this).
+                        let toks: Vec<String> = meta
+                            .get(key)
+                            .map(String::as_str)
+                            .unwrap_or_default()
+                            .split_whitespace()
+                            .map(String::from)
+                            .collect();
+                        let Ok(tokens) = portage_use_reduce::use_reduce_flat(
+                            &toks,
+                            &HashSet::new(),
+                            portage_use_reduce::MatchMode::All,
                         ) else {
                             continue;
                         };
@@ -30469,6 +30514,7 @@ fn collect_feedback(
             &walked,
             ctx.excluded,
             &probe_parents,
+            config,
         );
         if !fresh.is_empty() {
             grown.slot_operator_replace_installed.extend(fresh);
@@ -50233,6 +50279,7 @@ mod tests {
                 &walked,
                 excluded,
                 &parents,
+                &test_config(),
             )
         };
         let abicons = ("app-misc".to_string(), "abicons".to_string());
@@ -50354,6 +50401,7 @@ mod tests {
                 &walked,
                 &[],
                 &bare_parents,
+                &test_config(),
             )
             .is_empty(),
             "without a visible replacement the probe does nothing"
@@ -50385,6 +50433,59 @@ mod tests {
             .is_empty(),
             "a vetoed candidate refuses the whole replacement"
         );
+        // #254: the replacement's `:=` under a USE conditional that is off
+        // in the tree ebuild. Real's `_select_atoms_probe`
+        // (`_emerge/depgraph.py:2667-2713`) evaluates it against the
+        // replacement's USE, so the atom is not selected and the probe
+        // refuses; a flat token match would accept it.
+        {
+            use md5::Digest as _;
+            let (cond_base, cond_repos) = abi_probe_harness(true);
+            let body = "EAPI=8\nDESCRIPTION=\"214 abi\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\nIUSE=\"cflag\"\nRDEPEND=\"cflag? ( app-misc/abiprov:= )\"\n";
+            let dir = cond_base.join("repo/app-misc/abicons");
+            fs::write(dir.join("abicons-1.ebuild"), body).unwrap();
+            let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+            fs::write(
+                cond_base.join("repo/metadata/md5-cache/app-misc/abicons-1"),
+                format!(
+                    "DEFINED_PHASES=-\nDESCRIPTION=214 abi\nEAPI=8\nIUSE=cflag\nKEYWORDS=amd64\nRDEPEND=cflag? ( app-misc/abiprov:= )\nSLOT=0\n_md5_={md5}\n"
+                ),
+            )
+            .unwrap();
+            let cond_entries = abi_probe_entries(installed_consumer.clone());
+            let walked: HashSet<(String, String)> = cond_entries
+                .iter()
+                .map(|e| (e.category.clone(), e.package.clone()))
+                .collect();
+            let parents = collect_probe_parents(
+                &cond_base,
+                &cond_entries,
+                &HashSet::new(),
+                &walked,
+                &HashSet::new(),
+                &BTreeSet::new(),
+                true,
+                &[],
+            );
+            assert!(
+                slot_conflict_abi_probe(
+                    &cond_base,
+                    &cond_repos,
+                    &cond_entries,
+                    std::slice::from_ref(&record),
+                    &BTreeSet::new(),
+                    &BTreeSet::new(),
+                    true,
+                    &walked,
+                    &[],
+                    &parents,
+                    &test_config(),
+                )
+                .is_empty(),
+                "a conditional `:=` whose flag is off is not selected"
+            );
+            let _ = fs::remove_dir_all(&cond_base);
+        }
         let _ = fs::remove_dir_all(&base);
         let _ = fs::remove_dir_all(&bare_base);
     }
@@ -50417,6 +50518,9 @@ mod tests {
             },
             slot: Some("0".into()),
             sub_slot: Some("2".into()),
+            // #254: the rebuilt consumer's own walk pulls the provider
+            // (real pairs only a child of the replacement).
+            required_by: vec![("app-misc".to_string(), "abicons".to_string())],
             ..graph_entry("app-misc", "abiprov", "2")
         };
         let set: BTreeSet<(String, String)> =
@@ -50433,6 +50537,18 @@ mod tests {
                 "app-misc/abiprov-2".to_string(),
                 "app-misc/abicons-1".to_string()
             )]
+        );
+        // #254: the rebuilt consumer does not pull the provider (its new
+        // build dropped the `:=`, e.g. a USE conditional now off): real's
+        // `_compute_abi_rebuild_info` finds no child, so no pair.
+        let unpulled = GraphEntry {
+            required_by: Vec::new(),
+            ..provider.clone()
+        };
+        assert!(
+            slot_conflict_abi_display_pairs(&base, &[reinstall(true), unpulled], &set, true)
+                .is_empty(),
+            "a provider the rebuilt consumer no longer pulls is not paired"
         );
         // Not a slot-operator rebuild: no pair.
         assert!(

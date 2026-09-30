@@ -13549,14 +13549,41 @@ pub fn run(args: &[String]) -> ExitCode {
     // (`resolver/output.py:812-816`, `not pkg_info.attr_display.new`) --
     // a provider with nothing installed anywhere (a pure `New` install
     // that still caused a rebuild, like `abiprov-2`) stays `N`.
+    // #255: real's `new` comes from `_get_installed_best`
+    // (`output.py:708-768`), which is slot-keyed: a provider installed
+    // only in *another* slot is `new_slot` and therefore still `new`
+    // (`NS`, no `r`). So the gate is "nothing installed in the
+    // provider's own slot".
     let force_reinstall_cps: HashSet<(String, String)> = result
         .abi_rebuilds
         .iter()
         .flat_map(|(provider, consumer)| [(provider, true), (consumer, false)])
         .filter_map(|(cpv, is_provider)| {
-            let (c, p, _) = portage_repo::split_cpv(cpv)?;
-            if is_provider && portage_repo::installed_candidates(&root, &c, &p).is_empty() {
-                return None;
+            let (c, p, v) = portage_repo::split_cpv(cpv)?;
+            if is_provider {
+                let slot = result
+                    .entries
+                    .iter()
+                    .find(|e| {
+                        e.category == c
+                            && e.package == p
+                            && match &e.outcome {
+                                portage_repo::PretendOutcome::New { version }
+                                | portage_repo::PretendOutcome::Reinstall { version, .. } => {
+                                    *version == v
+                                }
+                                portage_repo::PretendOutcome::Upgrade { to, .. }
+                                | portage_repo::PretendOutcome::Downgrade { to, .. } => *to == v,
+                                _ => false,
+                            }
+                    })
+                    .and_then(|e| e.slot.clone());
+                let in_slot = portage_repo::installed_candidates(&root, &c, &p)
+                    .iter()
+                    .any(|(_, s, _)| slot.as_ref().is_none_or(|want| s == want));
+                if !in_slot {
+                    return None;
+                }
             }
             Some((c, p))
         })
