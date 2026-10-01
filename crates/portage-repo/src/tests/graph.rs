@@ -2497,6 +2497,42 @@ fn masked_dep_report_carries_the_chain_to_the_argument() {
 }
 
 #[test]
+fn mia0a_cells_report_missing_iuse_for_the_conditional_dep() {
+    // Both `mia0a` cells record one `Missing IUSE` disclosure with a chain to
+    // the argument (Portage's lines).
+    for (arg, atom) in [
+        ("=dev-libs/mia0a-1", "dev-libs/mia0b[foo?]"),
+        ("=dev-libs/mia0a-2", "dev-libs/mia0b[foo?,bar]"),
+    ] {
+        let result = graph_result_real(arg);
+        assert_eq!(result.use_unsat_deps.len(), 1, "{arg}");
+        let rep = &result.use_unsat_deps[0];
+        assert_eq!(
+            (
+                rep.category.as_str(),
+                rep.package.as_str(),
+                rep.atom.as_str()
+            ),
+            ("dev-libs", "mia0b", atom),
+            "{arg}"
+        );
+        assert_eq!(
+            rep.rows,
+            vec![(
+                "dev-libs/mia0b-1::testrepo".to_string(),
+                vec!["Missing IUSE: foo".to_string()]
+            )],
+            "{arg}"
+        );
+        assert!(
+            result.plain_miss_deps.is_empty(),
+            "{arg}: no bare miss once the USE block claims the dep: {:?}",
+            result.plain_miss_deps
+        );
+    }
+}
+
+#[test]
 fn use_unsat_dep_report_carries_the_chain_to_the_argument() {
     // The Missing IUSE disclosure chain walks the merge parent up to the
     // top-level argument (Portage's lines).

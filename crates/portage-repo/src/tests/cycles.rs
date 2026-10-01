@@ -304,6 +304,43 @@ fn find_hard_cycles_reports_a_build_time_cycle_and_ignores_a_run_time_one() {
     );
 }
 
+/// The printed cycle starts where Portage's does: earliest-inserted node first,
+/// not a lowest-index rotation.
+#[test]
+fn find_hard_cycles_starts_where_portages_get_cycles_starts() {
+    let cpv = |c: &str, p: &str| format!("{c}/{p}-1");
+    let cp = |c: &str, p: &str| (false, c.to_string(), p.to_string());
+    // Explicit `discovery` mirroring the resolve.
+    let mut make = graph_entry("dev-util", "u249make", "1");
+    make.discovery = 0;
+    let mut json = graph_entry("dev-libs", "u249json", "1");
+    json.discovery = 1;
+    let entries = vec![make, json];
+    let mut hard: EdgeKindMap = HashMap::new();
+    hard.insert(
+        (cp("dev-libs", "u249json"), cp("dev-util", "u249make")),
+        (true, false),
+    );
+    hard.insert(
+        (cp("dev-util", "u249make"), cp("dev-libs", "u249json")),
+        (true, false),
+    );
+    assert_eq!(
+        find_hard_cycles(
+            &entries,
+            &hard,
+            Path::new("/nonexistent-root"),
+            &HashMap::new(),
+            // The insertion-rank path (what the resolver threads).
+            Some(&[0, 1])
+        ),
+        vec![vec![
+            cpv("dev-libs", "u249json"),
+            cpv("dev-util", "u249make")
+        ]]
+    );
+}
+
 /// A true self-loop reports the one-member ring; a same-cp cross-slot edge does
 /// not.
 #[test]

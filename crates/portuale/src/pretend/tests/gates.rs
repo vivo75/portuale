@@ -1,6 +1,63 @@
 use super::*;
 
 #[test]
+fn autounmask_only_reshows_the_merge_list_under_pretend() {
+    // Portage: depgraph.py, _display_autounmask. Re-shows only with changes
+    // on the `--pretend --autounmask-only` early-return path.
+    // (pretend, autounmask_only, has_changes) -> re-shown.
+    assert!(autounmask_only_reshows_merge_list(
+        AutounmaskOnlyReshowsMergeListArgs {
+            pretend: true,
+            autounmask_only: true,
+            has_changes: true
+        }
+    ));
+    assert!(!autounmask_only_reshows_merge_list(
+        AutounmaskOnlyReshowsMergeListArgs {
+            pretend: true,
+            autounmask_only: true,
+            has_changes: false
+        }
+    ));
+    assert!(!autounmask_only_reshows_merge_list(
+        AutounmaskOnlyReshowsMergeListArgs {
+            pretend: true,
+            autounmask_only: false,
+            has_changes: true
+        }
+    ));
+    assert!(!autounmask_only_reshows_merge_list(
+        AutounmaskOnlyReshowsMergeListArgs {
+            pretend: true,
+            autounmask_only: false,
+            has_changes: false
+        }
+    ));
+    // Non-pretend keeps the old suppression (a cut: unprobed this slice).
+    assert!(!autounmask_only_reshows_merge_list(
+        AutounmaskOnlyReshowsMergeListArgs {
+            pretend: false,
+            autounmask_only: true,
+            has_changes: true
+        }
+    ));
+    assert!(!autounmask_only_reshows_merge_list(
+        AutounmaskOnlyReshowsMergeListArgs {
+            pretend: false,
+            autounmask_only: true,
+            has_changes: false
+        }
+    ));
+    assert!(!autounmask_only_reshows_merge_list(
+        AutounmaskOnlyReshowsMergeListArgs {
+            pretend: false,
+            autounmask_only: false,
+            has_changes: true
+        }
+    ));
+}
+
+#[test]
 fn nothing_to_merge_fires_only_for_a_shown_nonpretend_empty_plan() {
     // Portage: actions.py. The early return fires only inside the display-flag
     // branch of a non-pretend run, and only when `mergecount == 0`.
