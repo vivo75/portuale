@@ -701,6 +701,9 @@ fn graph_result_from_order(
                     .filter_map(|a| portage_dep::parse_atom(a))
                     .map(|atom| (atom.category, atom.package))
                     .collect();
+                // #268: the raw request atoms behind `top_level_cps`,
+                // for the greedy-eligibility half of the `#252` gate.
+                let top_level_atoms: HashSet<String> = req.atoms.iter().cloned().collect();
                 super::slot_operator_rebuild_entries(
                     &req.root,
                     repos,
@@ -710,6 +713,7 @@ fn graph_result_from_order(
                     &req.excluded,
                     req.update,
                     &top_level_cps,
+                    &top_level_atoms,
                     &req.config,
                 )
             }

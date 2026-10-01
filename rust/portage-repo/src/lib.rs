@@ -16629,6 +16629,168 @@ fn highest_visible_slot(repos: &[RepoConfig], cp: &(String, String)) -> Option<(
         .map(|c| (c.slot.clone(), c.version.clone()))
 }
 
+/// Backlog #268 cut (a): the requested cps real's `--update` greedy
+/// expansion actually pins (`_greedy_slots`, `depgraph.py:5896`).
+///
+/// Real expands each directly-requested atom into per-slot `cat/pkg:S`
+/// args, but only when the atom spans slots: `slots` is every installed
+/// slot matching the atom plus the highest visible match's slot, and a
+/// single slot means no pins at all. An explicit slot (`mmprov:1/2`) or
+/// exact version (`=mmprov-2`) atom therefore pins nothing -- the update
+/// probe's reverse-deps gate has no `P:S` arg to refuse against and the
+/// probe fires (probed on real 3.0.82.2, 2026-10-01; see
+/// `test_oracle_slotop_pin_gate_explicit_request_atoms_probe`).
+/// `top_level_cps` (every requested cp, whatever the atom form) stays
+/// the `want_update` stand-in -- an exact-version request still selects
+/// the provider through the arg chain (`=mmprov-2` rebuilds its consumer
+/// with no upgrade row at all).
+///
+/// Visibility/masking is unfiltered here, the same approximation as
+/// [`highest_visible_slot`] (real `_select_package` respects it).
+fn greedy_pinned_cps(
+    atoms: &HashSet<String>,
+    repos: &[RepoConfig],
+    installed_by_cp: &HashMap<(String, String), Vec<(String, String)>>,
+) -> HashSet<(String, String)> {
+    let mut out = HashSet::new();
+    for atom_str in atoms {
+        let Some(atom) = portage_dep::parse_atom(atom_str) else {
+            continue;
+        };
+        let cp = (atom.category.clone(), atom.package.clone());
+        if out.contains(&cp) {
+            continue;
+        }
+        let mut slots: HashSet<String> = HashSet::new();
+        if let Some(insts) = installed_by_cp.get(&cp) {
+            for (version, slot) in insts {
+                let r = format!("{}/{}-{version}:{slot}", atom.category, atom.package);
+                if portage_dep::match_from_list(atom_str, &[r.as_str()])
+                    .is_some_and(|m| !m.is_empty())
+                {
+                    slots.insert(slot.split('/').next().unwrap_or(slot).to_string());
+                }
+            }
+        }
+        if let Ok(tree) = list_candidates(repos, &atom.category, &atom.package) {
+            let best = tree
+                .iter()
+                .filter(|c| {
+                    let r = format!(
+                        "{}/{}-{}:{}/{}",
+                        atom.category, atom.package, c.version, c.slot, c.sub_slot
+                    );
+                    portage_dep::match_from_list(atom_str, &[r.as_str()])
+                        .is_some_and(|m| !m.is_empty())
+                })
+                .max_by(|a, b| vercmp_ordering(&a.version, &b.version));
+            if let Some(h) = best {
+                slots.insert(h.slot.clone());
+            }
+        }
+        if slots.len() >= 2 {
+            out.insert(cp);
+        }
+    }
+    out
+}
+
+/// Backlog #268 cut (b): does the bound-slot pin survive real's greedy
+/// revision with blocker lookahead (`depgraph.py:5421`,
+/// `_greedy_slots(..., blocker_lookahead=True)`)?
+///
+/// Real re-derives the greedy args accounting for blockers between the
+/// selected packages and discards a pin whose package conflicts with
+/// the highest one, so the old slot is uninstalled instead of updated
+/// and the probe fires (probed on real 3.0.82.2, 2026-10-01; see
+/// `test_oracle_slotop_pin_gate_blocker_discard_probes`). This models
+/// the highest-vs-bound-slot half: `G` is the highest visible tree
+/// package in the bound slot (real `_select_package` of the `P:S`
+/// atom), `H` the highest visible overall, both with their effective
+/// USE (the walk's own, via `effective_use_flags_uncached` over
+/// `flat_dep_atoms` -- real `_select_atoms` with `_pkg_use_enabled`);
+/// a `!`/`!!` token on either side matching the other package discards
+/// the pin. Unreadable tree metadata keeps the pin (no proven
+/// discard); an unreducible dep string drops it (real filters packages
+/// with invalid deps out of the greedy set). Still cut: the pairwise
+/// lower-version discard among two or more greedy packages (needs three
+/// installed slots; no fixture spans that yet).
+fn greedy_pin_survives_revision(
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    provider_cp: &(String, String),
+    bound_slot: &str,
+) -> bool {
+    let Ok(tree) = list_candidates(repos, &provider_cp.0, &provider_cp.1) else {
+        return true;
+    };
+    let ebuilds: Vec<&Candidate> = tree
+        .iter()
+        .filter(|c| c.source == CandidateSource::Ebuild)
+        .collect();
+    let highest = ebuilds
+        .iter()
+        .max_by(|a, b| vercmp_ordering(&a.version, &b.version));
+    let bound = ebuilds
+        .iter()
+        .filter(|c| c.slot == bound_slot)
+        .max_by(|a, b| vercmp_ordering(&a.version, &b.version));
+    let (Some(h), Some(g)) = (highest, bound) else {
+        return true;
+    };
+    if h.version == g.version {
+        return true;
+    }
+    let blockers_of = |c: &Candidate| -> Option<HashSet<String>> {
+        let pf = format!("{}-{}", provider_cp.1, c.version);
+        let meta = repo_aux_metadata(&c.repo_location, &provider_cp.0, &pf).ok()?;
+        let cand_str = format!(
+            "{}/{}-{}:{}/{}::{}",
+            provider_cp.0, provider_cp.1, c.version, c.slot, c.sub_slot, c.repo_name
+        );
+        let use_flags = effective_use_flags_uncached(
+            config,
+            meta.get("IUSE").map(String::as_str).unwrap_or_default(),
+            &c.keywords,
+            &cand_str,
+            &provider_cp.0,
+            &provider_cp.1,
+        );
+        let mut out = HashSet::new();
+        for key in ["BDEPEND", "DEPEND", "IDEPEND", "PDEPEND", "RDEPEND"] {
+            let atoms =
+                flat_dep_atoms(meta.get(key).map(String::as_str).unwrap_or(""), &use_flags)?;
+            for tok in atoms {
+                let Some(la) = portage_dep::parse_atom(&tok) else {
+                    continue;
+                };
+                if la.blocker != portage_dep::Blocker::None {
+                    out.insert(tok);
+                }
+            }
+        }
+        Some(out)
+    };
+    let (Some(h_blockers), Some(g_blockers)) = (blockers_of(h), blockers_of(g)) else {
+        return false;
+    };
+    let g_ref = format!(
+        "{}/{}-{}:{}/{}",
+        provider_cp.0, provider_cp.1, g.version, g.slot, g.sub_slot
+    );
+    let h_ref = format!(
+        "{}/{}-{}:{}/{}",
+        provider_cp.0, provider_cp.1, h.version, h.slot, h.sub_slot
+    );
+    let hits = |tokens: &HashSet<String>, r: &str| {
+        tokens.iter().any(|t| {
+            portage_dep::match_from_list(portage_dep::without_use(t), &[r])
+                .is_some_and(|m| !m.is_empty())
+        })
+    };
+    !(hits(&h_blockers, &g_ref) || hits(&g_blockers, &h_ref))
+}
+
 // Ten parameters like its siblings below; the arity is the port, not
 // accident (`#[allow]` matches `slot_operator_rebuild_entries` etc.).
 #[allow(clippy::too_many_arguments)]
@@ -16642,6 +16804,7 @@ fn slot_operator_rebuild_scan(
     with_bdeps: bool,
     update: bool,
     top_level_cps: &HashSet<(String, String)>,
+    top_level_atoms: &HashSet<String>,
     excluded: &[String],
     config: &portage_profile::Config,
 ) -> SlotOpRebuildScan {
@@ -16735,6 +16898,18 @@ fn slot_operator_rebuild_scan(
     let probe_parents = collect_probe_parents(
         root, entries, reachable, &walked, &in_graph, already, with_bdeps, excluded,
     );
+    // #268 cut (a): the requested cps real's `--update` greedy expansion
+    // actually pins. Collected once per scan; the `#252` gate below reads
+    // it per edge.
+    let greedy_cps: HashSet<(String, String)> = if update {
+        greedy_pinned_cps(top_level_atoms, repos, &installed_by_cp)
+    } else {
+        HashSet::new()
+    };
+    // #268 cut (b): per-(provider, bound-slot) memo for the revision
+    // check below (tree metadata + effective-USE walks, so not
+    // recomputed per consumer edge).
+    let mut revision_memo: HashMap<((String, String), String), bool> = HashMap::new();
     // #269: real's update probe ranges over every *available* package
     // (`_iter_similar_available`, `depgraph.py:3015`), not just the
     // scheduled entries, so the new-slot arm below can fire with both
@@ -16855,14 +17030,21 @@ fn slot_operator_rebuild_scan(
                         // match `P:S` trivially, so the same-slot arm
                         // above needs no gate.
                         //
-                        // Cuts: explicit slot/version request atoms
-                        // (greedy adds nothing there, and the plain arg
-                        // never reaches a non-highest installed instance
-                        // -- real `_iter_atoms_for_pkg`'s higher-slot
-                        // dance) and the blocker-lookahead revision
-                        // discards.
+                        // #268: both cuts are now modelled. (a) The pin
+                        // only exists when the request atom spans slots
+                        // (`greedy_cps` -- real `_greedy_slots`' own
+                        // single-slot emptiness): an explicit slot or
+                        // exact-version request pins nothing, so the arm
+                        // fires. (b) The pin must survive the greedy
+                        // revision with blocker lookahead
+                        // (`greedy_pin_survives_revision`): a discarded
+                        // pin refuses nothing, so the arm fires and the
+                        // old slot is uninstalled instead of updated.
+                        // Still cut: the pairwise lower-version discard
+                        // among two or more greedy packages (needs three
+                        // installed slots).
                         if update
-                            && top_level_cps.contains(&provider_cp)
+                            && greedy_cps.contains(&provider_cp)
                             && let Some((high_slot, high_ver)) =
                                 highest_visible_slot(repos, &provider_cp)
                             && high_slot.as_str() != a_slot
@@ -16876,6 +17058,16 @@ fn slot_operator_rebuild_scan(
                                         vercmp_ordering(&high_ver, best) == Ordering::Greater
                                     })
                             })
+                            && *revision_memo
+                                .entry((provider_cp.clone(), a_slot.to_string()))
+                                .or_insert_with(|| {
+                                    greedy_pin_survives_revision(
+                                        repos,
+                                        config,
+                                        &provider_cp,
+                                        a_slot,
+                                    )
+                                })
                         {
                             return None;
                         }
@@ -18241,6 +18433,7 @@ fn slot_operator_rebuild_entries(
     excluded: &[String],
     update: bool,
     top_level_cps: &HashSet<(String, String)>,
+    top_level_atoms: &HashSet<String>,
     config: &portage_profile::Config,
 ) -> (Vec<GraphEntry>, Vec<(String, String)>) {
     let installed = all_installed_packages(root);
@@ -18265,6 +18458,7 @@ fn slot_operator_rebuild_entries(
             // kept this fixpoint same-slot-only is gone).
             update,
             top_level_cps,
+            top_level_atoms,
             excluded,
             config,
         );
@@ -31117,6 +31311,10 @@ fn collect_feedback(
     {
         pass.abi_rebuilds = Some(Vec::new());
     } else {
+        // #268: the raw request atoms behind `top_level_cps`, for the
+        // greedy-eligibility half of the `#252` gate (explicit
+        // slot/version atoms pin nothing).
+        let top_atoms: HashSet<String> = ctx.top_level.iter().map(|s| (*s).to_string()).collect();
         let (scheduled, abi_rebuilds, masked_binaries) = slot_operator_rebuild_scan(
             ctx.root,
             &ctx.repos,
@@ -31127,6 +31325,7 @@ fn collect_feedback(
             ctx.with_bdeps,
             ctx.update,
             &ctx.top_level_cps,
+            &top_atoms,
             ctx.excluded,
             config,
         );
@@ -31548,6 +31747,9 @@ fn assemble_result(
         Some(pairs) => pairs,
         None if ctx.ignore_built_slot_operator_deps || !ctx.rebuild_if_new_slot => Vec::new(),
         None => {
+            // #268: raw request atoms for the `#252` gate (see above).
+            let top_atoms: HashSet<String> =
+                ctx.top_level.iter().map(|s| (*s).to_string()).collect();
             slot_operator_rebuild_scan(
                 ctx.root,
                 &ctx.repos,
@@ -31558,6 +31760,7 @@ fn assemble_result(
                 ctx.with_bdeps,
                 ctx.update,
                 &ctx.top_level_cps,
+                &top_atoms,
                 ctx.excluded,
                 config,
             )
@@ -49406,6 +49609,7 @@ mod tests {
             true,
             false,
             &HashSet::new(),
+            &HashSet::new(),
             &[],
             &test_config(),
         );
@@ -49433,6 +49637,7 @@ mod tests {
             true,
             false,
             &HashSet::new(),
+            &HashSet::new(),
             &[],
             &test_config(),
         );
@@ -49451,6 +49656,7 @@ mod tests {
             &empty,
             true,
             false,
+            &HashSet::new(),
             &HashSet::new(),
             &[],
             &test_config(),
@@ -49489,6 +49695,7 @@ mod tests {
             true,
             false,
             &HashSet::new(),
+            &HashSet::new(),
             &[],
             &test_config(),
         );
@@ -49512,6 +49719,7 @@ mod tests {
             true,
             &[],
             false,
+            &HashSet::new(),
             &HashSet::new(),
             &test_config(),
         );
@@ -49604,6 +49812,7 @@ mod tests {
             &[],
             true,
             &HashSet::new(),
+            &HashSet::new(),
             &test_config(),
         );
         let names: Vec<&str> = out.iter().map(|e| e.package.as_str()).collect();
@@ -49624,6 +49833,7 @@ mod tests {
             true,
             &[],
             false,
+            &HashSet::new(),
             &HashSet::new(),
             &test_config(),
         );
@@ -50396,6 +50606,7 @@ mod tests {
             true,
             true,
             &HashSet::new(),
+            &HashSet::new(),
             &[],
             &test_config(),
         );
@@ -50426,6 +50637,7 @@ mod tests {
             true,
             false,
             &HashSet::new(),
+            &HashSet::new(),
             &[],
             &test_config(),
         );
@@ -50433,6 +50645,7 @@ mod tests {
         // ...unless the provider itself is directly requested (real's
         // arg-chain disjunct).
         let top = HashSet::from([("dev-libs".to_string(), "massb".to_string())]);
+        let top_atoms = HashSet::from(["dev-libs/massb".to_string()]);
         let (via_arg, ..) = slot_operator_rebuild_scan(
             &base,
             &repos,
@@ -50443,6 +50656,7 @@ mod tests {
             true,
             false,
             &top,
+            &top_atoms,
             &[],
             &test_config(),
         );
@@ -50454,6 +50668,7 @@ mod tests {
         // stays empty (probed on real 3.0.82.2: the `mmprov` shape
         // merges only the provider upgrade). Same call as `via_arg`
         // above, only with `update` on.
+        let top_atoms = HashSet::from(["dev-libs/massb".to_string()]);
         let (greedy_pinned, ..) = slot_operator_rebuild_scan(
             &base,
             &repos,
@@ -50464,6 +50679,7 @@ mod tests {
             true,
             true,
             &top,
+            &top_atoms,
             &[],
             &test_config(),
         );
@@ -50493,6 +50709,7 @@ mod tests {
             &empty,
             true,
             true,
+            &HashSet::new(),
             &HashSet::new(),
             &[],
             &test_config(),
@@ -50546,6 +50763,7 @@ mod tests {
             true,
             true,
             &HashSet::new(),
+            &HashSet::new(),
             &[],
             &test_config(),
         );
@@ -50563,6 +50781,7 @@ mod tests {
             true,
             true,
             &HashSet::new(),
+            &HashSet::new(),
             &[],
             &test_config(),
         );
@@ -50578,10 +50797,139 @@ mod tests {
             true,
             true,
             &HashSet::new(),
+            &HashSet::new(),
             &[],
             &test_config(),
         );
         assert!(unwalked.is_empty(), "unwalked consumers never schedule");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// Backlog #268: the two cuts of the `#252` pin gate, at scan level.
+    /// Scratch `massb`/`massc` shape with a twist: the tree's highest
+    /// package `massb-2.0` (`2/2`) soft-blocks the bound slot
+    /// (`RDEPEND="!dev-libs/massb:1"`), so real's greedy revision with
+    /// blocker lookahead discards the `massb:1` pin and the probe fires;
+    /// and the request atoms are explicit (`massb:2`,
+    /// `=massb-1.0`-style), which span a single slot and pin nothing.
+    /// Every call below schedules the consumer alone (no display pair --
+    /// the new-slot arm, #269).
+    #[test]
+    fn slot_operator_rebuild_scan_pin_gate_cuts_probe() {
+        use md5::Digest as _;
+        use std::fmt::Write as _;
+        let base = TempDir::new("portage-repo-slotop-pingate").keep();
+        for (name, slot, rdepend) in [
+            ("massb-1", "1", ""),
+            ("massc-1", "0", "dev-libs/massb:1/1="),
+        ] {
+            let d = base.join("var/db/pkg/dev-libs").join(name);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+            fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+            fs::write(d.join("repository"), "testrepo\n").unwrap();
+            if !rdepend.is_empty() {
+                fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+            }
+        }
+        let repo = base.join("repo");
+        let write_pkg = |pkg: &str, pv: &str, slot: &str, rdepend: &str| {
+            let dir = repo.join("dev-libs").join(pkg);
+            std::fs::create_dir_all(&dir).unwrap();
+            let mut body =
+                format!("EAPI=8\nDESCRIPTION=\"268 probe\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\n");
+            if !rdepend.is_empty() {
+                body.push_str(&format!("RDEPEND=\"{rdepend}\"\n"));
+            }
+            std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
+            let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+            let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=268 probe\nEAPI=8\n".to_string();
+            writeln!(entry, "KEYWORDS=amd64").unwrap();
+            if !rdepend.is_empty() {
+                writeln!(entry, "RDEPEND={rdepend}").unwrap();
+            }
+            writeln!(entry, "SLOT={slot}\n_md5_={md5}").unwrap();
+            let cachedir = repo.join("metadata/md5-cache/dev-libs");
+            std::fs::create_dir_all(&cachedir).unwrap();
+            std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+        };
+        write_pkg("massb", "1.0", "1/1", "");
+        write_pkg("massb", "2.0", "2/2", "!dev-libs/massb:1");
+        write_pkg("massc", "1.0", "0", "");
+        let repos = vec![RepoConfig {
+            name: "testrepo".to_string(),
+            location: repo.clone(),
+            priority: 0,
+            is_main: true,
+            masters: vec![],
+            profile_formats: vec![],
+            cache_formats: vec![],
+            aliases: vec![],
+            sync_type: None,
+            sync_uri: None,
+            volatile: false,
+            module_specific_options: vec![],
+        }];
+        let fresh = GraphEntry {
+            slot: Some("2".into()),
+            sub_slot: Some("2".into()),
+            ..graph_entry("dev-libs", "massb", "2.0")
+        };
+        let consumer = GraphEntry {
+            outcome: PretendOutcome::AlreadyInstalled {
+                version: "1.0".into(),
+            },
+            slot: Some("0".into()),
+            sub_slot: Some("0".into()),
+            ..graph_entry("dev-libs", "massc", "1.0")
+        };
+        let entries = vec![fresh, consumer];
+        let empty: BTreeSet<(String, String)> = BTreeSet::new();
+        let massb = ("dev-libs".to_string(), "massb".to_string());
+        let massc = ("dev-libs".to_string(), "massc".to_string());
+        let top = HashSet::from([massb.clone()]);
+        let scan = |atoms: &HashSet<String>| {
+            slot_operator_rebuild_scan(
+                &base,
+                &repos,
+                &entries,
+                &HashSet::new(),
+                &empty,
+                &empty,
+                true,
+                true,
+                &top,
+                atoms,
+                &[],
+                &test_config(),
+            )
+        };
+        // Cut (b): the bare request's pin is discarded by the blocker
+        // lookahead, so the probe fires.
+        let bare = HashSet::from(["dev-libs/massb".to_string()]);
+        let (discarded, abi, ..) = scan(&bare);
+        assert_eq!(
+            discarded,
+            BTreeSet::from([massc.clone()]),
+            "a blocker-discarded pin refuses nothing"
+        );
+        assert!(abi.is_empty(), "new-slot arm: consumer alone");
+        // Cut (a): an explicit slot atom spans one slot and pins nothing.
+        let slot_atom = HashSet::from(["dev-libs/massb:2".to_string()]);
+        let (slotted, ..) = scan(&slot_atom);
+        assert_eq!(
+            slotted,
+            BTreeSet::from([massc.clone()]),
+            "an explicit slot atom pins nothing"
+        );
+        // Cut (a): an exact-version atom spans one slot and pins nothing.
+        let ver_atom = HashSet::from(["=dev-libs/massb-1.0".to_string()]);
+        let (versioned, ..) = scan(&ver_atom);
+        assert_eq!(
+            versioned,
+            BTreeSet::from([massc.clone()]),
+            "an exact-version atom pins nothing"
+        );
         let _ = fs::remove_dir_all(&base);
     }
 
@@ -50672,6 +51020,7 @@ mod tests {
         // Only `mmcons` requested (never the provider): the #252 greedy
         // pin stays out, and `want_update` rides on `--update`.
         let top = HashSet::from([mmcons.clone()]);
+        let top_atoms = HashSet::from(["app-misc/mmcons".to_string()]);
         let (scheduled, abi, ..) = slot_operator_rebuild_scan(
             &base,
             &repos,
@@ -50682,6 +51031,7 @@ mod tests {
             true,
             true,
             &top,
+            &top_atoms,
             &[],
             &test_config(),
         );
@@ -50697,6 +51047,8 @@ mod tests {
         // The #252 shape (provider requested too) still probes nothing.
         let mut both = top.clone();
         both.insert(mmprov.clone());
+        let both_atoms =
+            HashSet::from(["app-misc/mmcons".to_string(), "app-misc/mmprov".to_string()]);
         let (greedy_pinned, ..) = slot_operator_rebuild_scan(
             &base,
             &repos,
@@ -50707,6 +51059,7 @@ mod tests {
             true,
             true,
             &both,
+            &both_atoms,
             &[],
             &test_config(),
         );
@@ -50804,6 +51157,7 @@ mod tests {
                 true,
                 true,
                 &HashSet::new(),
+                &HashSet::new(),
                 excluded,
                 &test_config(),
             )
@@ -50845,6 +51199,7 @@ mod tests {
             true,
             true,
             &HashSet::new(),
+            &HashSet::new(),
             &[],
             &test_config(),
         );
@@ -50858,6 +51213,7 @@ mod tests {
             &empty,
             true,
             true,
+            &HashSet::new(),
             &HashSet::new(),
             &["dev-libs/massv".to_string()],
             &test_config(),
@@ -51448,6 +51804,7 @@ mod tests {
             true,
             true,
             &HashSet::new(),
+            &HashSet::new(),
             &[],
             &test_config(),
         );
@@ -51526,6 +51883,7 @@ mod tests {
             false,
             false,
             &HashSet::new(),
+            &HashSet::new(),
             &[],
             &test_config(),
         );
@@ -51553,6 +51911,7 @@ mod tests {
             true,
             false,
             &HashSet::new(),
+            &HashSet::new(),
             &[],
             &test_config(),
         );
@@ -51576,6 +51935,7 @@ mod tests {
             &empty,
             true,
             false,
+            &HashSet::new(),
             &HashSet::new(),
             &[],
             &test_config(),
@@ -51618,6 +51978,7 @@ mod tests {
             &empty,
             false,
             false,
+            &HashSet::new(),
             &HashSet::new(),
             &[],
             &test_config(),
@@ -51943,6 +52304,7 @@ mod tests {
             true,
             false,
             &HashSet::new(),
+            &HashSet::new(),
             &[],
             &test_config(),
         );
@@ -51966,6 +52328,7 @@ mod tests {
             true,
             false,
             &HashSet::new(),
+            &HashSet::new(),
             &[],
             &test_config(),
         );
@@ -51983,6 +52346,7 @@ mod tests {
             &empty,
             true,
             false,
+            &HashSet::new(),
             &HashSet::new(),
             &[],
             &test_config(),
@@ -52597,6 +52961,7 @@ mod tests {
             true,
             &[],
             false,
+            &HashSet::new(),
             &HashSet::new(),
             &test_config(),
         );
@@ -58033,6 +58398,7 @@ mod tests {
             &latched,
             true,
             false,
+            &HashSet::new(),
             &HashSet::new(),
             &[],
             &test_config(),
