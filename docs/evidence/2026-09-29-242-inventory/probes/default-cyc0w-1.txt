@@ -1,0 +1,24 @@
+Undefined license group 'FREE'
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.12 s (backtrack: 1/20).
+
+
+
+[ebuild  N     ] dev-libs/cyc0w-1::testrepo to /tmp/xa-inv-fx/fixtures/ 0 KiB
+[ebuild  N     ]  dev-libs/cyc0y-1::testrepo  0 KiB
+[ebuild  N     ]   dev-libs/cyc0z-3::testrepo  USE="foo -bar" 0 KiB
+
+Total: 3 packages (3 new), Size of downloads: 0 KiB
+
+ * Error: circular dependencies:
+
+(dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) depends on
+ (dev-libs/cyc0z-3:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+  (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+
+ * Note that circular dependencies can often be avoided by temporarily
+ * disabling USE flags that trigger optional dependencies.
+rc=1
