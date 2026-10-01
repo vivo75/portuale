@@ -3123,6 +3123,16 @@ fn report_option(token: &str) -> ExitCode {
     ExitCode::from(2)
 }
 
+/// The `--backtrack` budget when the flag is absent: real Portage's own
+/// default (backlog #263). Grounded in real 3.0.82.2 (`/usr/sbin/emerge`):
+/// `_emerge/depgraph.py:12188` (`_backtrack_depgraph`) reads
+/// `max_retries = 0 if nodeps else myopts.get("--backtrack", 20)` --
+/// `--backtrack` itself is `action: store` with no default
+/// (`lib/_emerge/main.py:385-389`), so the 20 lives only in that reader
+/// (`0` only under `--nodeps`). Single source for the `run()` flag-absent
+/// initializer below and the `--help` line's advertised default.
+const DEFAULT_BACKTRACK_MAX: u32 = 20;
+
 /// Whether `--help`/`-h` appears anywhere in `args`, including as one
 /// character of a short-flag bundle -- see the module doc comment on why
 /// this wins unconditionally, checked before anything else.
@@ -3202,7 +3212,7 @@ Dependency and target selection:
       --complete-graph[=y|n], --complete-graph-if-new-use, --complete-graph-if-new-ver  force a full deep graph walk
       --ignore-world[=y|n]  ignore the @world set and its dependencies (complete-graph walks args only)
       --dynamic-deps[=y|n]  walk the ebuild (y, default) or the vdb snapshot (n) during --deep
-      --backtrack N         maximum resolver backtracking passes (default 10; 0 disables)
+      --backtrack N         maximum resolver backtracking passes (default 20; 0 disables)
       --package-moves[=y|n]  apply profiles/updates/ package moves (default y)
       --misspell-suggestions[=y|n]  suggest close names for a missing cat/pkg
       --implicit-system-deps[=y|n]  order as if @system packages were implicit deps (default y)
@@ -10335,9 +10345,10 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut ignore_built_slot_operator_deps = false;
     // --backtrack=COUNT: real `type=int` / `valid_integers` (`main.py`).
     // The resolver's retry ceiling after a solvable slot conflict; real
-    // portage's default (flag absent) is 10, `--backtrack=0` disables
+    // portage's default (flag absent) is 20 (`_backtrack_depgraph` reads
+    // `myopts.get("--backtrack", 20)`), `--backtrack=0` disables
     // backtracking. Threaded into `resolve_pretend_graph`.
-    let mut backtrack_max: u32 = 10;
+    let mut backtrack_max: u32 = DEFAULT_BACKTRACK_MAX;
     // --solver=<portage|pubgrub|resolvo>: portuale-only (real `emerge`
     // has no `--solver`), same "special-cased, not in emerge_options.rs"
     // treatment `--shell`/`--json` get. Picks the dependency-solving
@@ -20122,6 +20133,27 @@ mod tests {
             info_scalar_value(&config, key).as_deref(),
             Some("conf-value-219"),
             "without the env layer the config value still shows"
+        );
+    }
+
+    #[test]
+    fn backtrack_default_matches_real_portage_twenty() {
+        // Backlog #263 (R1): real's default `--backtrack` is 20, not 10.
+        // Grounded in real Portage 3.0.82.2 (`/usr/sbin/emerge`):
+        // `_emerge/depgraph.py:12188` (`_backtrack_depgraph`) reads
+        // `max_retries = 0 if nodeps else myopts.get("--backtrack", 20)`,
+        // while `--backtrack` itself is `action: store` with no default
+        // (`lib/_emerge/main.py:385-389`) -- the 20 lives only in that
+        // reader (`0` only under `--nodeps`). The flag-absent initializer
+        // (`DEFAULT_BACKTRACK_MAX`) and the `--help` line must both carry
+        // it, so the printed `(backtrack: N/M)` denominator and the
+        // `--json` `"max"` agree with real's `M`.
+        assert_eq!(DEFAULT_BACKTRACK_MAX, 20);
+        assert!(
+            HELP_TEXT.contains(
+                "--backtrack N         maximum resolver backtracking passes (default 20; 0 disables)"
+            ),
+            "the --help line must advertise the real default"
         );
     }
 }
