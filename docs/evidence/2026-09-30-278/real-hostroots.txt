@@ -1,0 +1,23 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.07 s (backtrack: 0/0).
+
+
+
+[nomerge       ] dev-util/u249make-1::testrepo 
+[ebuild  N     ]  dev-libs/u249json-1::testrepo  0 KiB
+[ebuild  N     ]   virtual/u249make-0::testrepo  0 KiB
+[ebuild  N     ]    dev-util/u249make-1::testrepo  0 KiB
+
+Total: 3 packages (3 new), Size of downloads: 0 KiB
+
+ * Error: circular dependencies:
+
+(dev-libs/u249json-1:0/0::testrepo, ebuild scheduled for merge) depends on
+ (dev-util/u249make-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+  (dev-libs/u249json-1:0/0::testrepo, ebuild scheduled for merge) (buildtime_slot_op)
+
+ * Note that circular dependencies can often be avoided by temporarily
+ * disabling USE flags that trigger optional dependencies.

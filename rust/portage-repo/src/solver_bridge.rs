@@ -721,7 +721,7 @@ fn graph_result_from_order(
     // `deps` edges above plus the `required_by` fallback, with the same
     // top-level atoms, profile config, root, and `--implicit-system-deps`
     // bias the walk resolves under.
-    let entries = super::topological_merge_order(
+    let (entries, insertion_rank) = super::topological_merge_order(
         entries,
         &req.atoms,
         &req.config,
@@ -771,7 +771,13 @@ fn graph_result_from_order(
             }
         }
     }
-    let circular_deps = super::find_hard_cycles(&entries, &edge_kinds, &req.root, &HashMap::new());
+    let circular_deps = super::find_hard_cycles(
+        &entries,
+        &edge_kinds,
+        &req.root,
+        &HashMap::new(),
+        Some(&insertion_rank),
+    );
     // Elementary-cycle enumeration for the `large_cycle_count` trailer
     // and cycle-only re-display, same as the walk path: only a reported
     // hard cycle pays for the report build.

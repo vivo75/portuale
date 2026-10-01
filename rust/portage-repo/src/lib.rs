@@ -15146,6 +15146,12 @@ type EdgeKindMap = HashMap<((String, String), (String, String)), (bool, bool)>;
 /// walk did, or a phantom edge re-closes the broken cycle and the order
 /// falls back to bias (bug 705986's `pypy-exe` request merging ahead of
 /// its own buildtime dep).
+/// Returns the sorted entries plus, per sorted position, the entry's
+/// rank in the scheduler digraph's pre-bias insertion order (backlog
+/// #278: real `digraph`'s node insertion order, which `get_cycles`
+/// iterates -- the cycle reporter threads it to `find_hard_cycles`).
+/// Short-circuited inputs (< 2 entries) never reach the scheduler, so
+/// their rank is plain array position.
 #[allow(clippy::too_many_arguments)]
 fn topological_merge_order(
     entries: Vec<GraphEntry>,
@@ -15156,7 +15162,7 @@ fn topological_merge_order(
     repos: &[RepoConfig],
     dynamic_deps: bool,
     circular: &HashMap<(String, String), Vec<CircularDepChild>>,
-) -> Vec<GraphEntry> {
+) -> (Vec<GraphEntry>, Vec<usize>) {
     // Backlog #155 S1: stamp BFS discovery order before the merge
     // sort consumes it -- the input vec IS discovery order (a package's
     // entry is pushed before its dependencies are ever queued; see the
@@ -15173,9 +15179,10 @@ fn topological_merge_order(
         if entries.len() == 1 && resolver_debug() {
             merge_order::debug_dump_graph_only(&entries, top_level_atoms, root, circular);
         }
-        return entries;
+        let rank: Vec<usize> = (0..entries.len()).collect();
+        return (entries, rank);
     }
-    let order = merge_order::serialize_merge_order(
+    let (order, insertion_rank) = merge_order::serialize_merge_order(
         &entries,
         top_level_atoms,
         config,
@@ -15186,10 +15193,12 @@ fn topological_merge_order(
         circular,
     );
     let mut slots: Vec<Option<GraphEntry>> = entries.into_iter().map(Some).collect();
-    order
+    let rank: Vec<usize> = order.iter().map(|&i| insertion_rank[i]).collect();
+    let entries = order
         .into_iter()
         .map(|i| slots[i].take().expect("each index emitted once"))
-        .collect()
+        .collect();
+    (entries, rank)
 }
 
 /// Real `_slot_operator_check_reverse_dependencies`'s own atom
@@ -18635,10 +18644,12 @@ fn merge_bound_cpv(entry: &GraphEntry) -> Option<String> {
 }
 
 /// Lowest-index merge-bound entry per `(category, package)` -- the merge
-/// list is already in dependency order, so the first is the one to
-/// start a rendered cycle at. Shared by `find_hard_cycles` (cycle
-/// nodes) and `cycle_edge_labels` (owner lookup), so the two cannot
-/// disagree on which instance an edge belongs to.
+/// list is already in dependency order, so the first is the instance an
+/// edge belongs to. Shared by `find_hard_cycles` (cycle nodes) and
+/// `cycle_edge_labels` (owner lookup), so the two cannot disagree on
+/// which instance an edge belongs to. (It no longer picks the rendered
+/// start node: since backlog #278 that follows real's
+/// `shortest_cycle[0]`, i.e. `discovery` order.)
 fn merge_bound_index(entries: &[GraphEntry]) -> HashMap<(&str, &str), usize> {
     let mut cp_index: HashMap<(&str, &str), usize> = HashMap::new();
     for (i, e) in entries.iter().enumerate() {
@@ -18693,9 +18704,10 @@ fn merge_bound_index(entries: &[GraphEntry]) -> HashMap<(&str, &str), usize> {
 /// collapses to, so the two cannot disagree. Returns the shortest
 /// directed cycle as an ordered CPV
 /// list where each element depends on the next (the last wrapping to
-/// the first), rotated to start at its lowest `entries` index for a
-/// deterministic render; empty when the hard-edge graph is acyclic
-/// (every ordinary resolve).
+/// the first), starting where real's `shortest_cycle[0]` starts
+/// (backlog #278 -- `discovery` order stands in for real's digraph
+/// insertion order; see the selection below); empty when the hard-edge
+/// graph is acyclic (every ordinary resolve).
 ///
 /// Full elementary-cycle enumeration lives separately
 /// (`merge_order::elementary_cycles`, real `digraph.get_cycles` over the
@@ -18802,6 +18814,7 @@ fn find_hard_cycles(
     edge_kind_map: &EdgeKindMap,
     root: &Path,
     circular: &HashMap<(String, String), Vec<CircularDepChild>>,
+    insertion_rank: Option<&[usize]>,
 ) -> Vec<Vec<String>> {
     // Merge-bound entries only, lowest index per cp (the merge list is
     // already in dependency order, so the first is the one to start a
@@ -18888,37 +18901,71 @@ fn find_hard_cycles(
             }
         }
     }
+    // The iteration order analogue of real `digraph`'s node insertion
+    // order: the scheduler's pre-bias rank when the caller threads it
+    // (post-sort positions), else the resolver's `discovery` stamp, else
+    // plain array position -- all stable sorts.
+    let order_key = |i: usize| -> (usize, usize) {
+        match insertion_rank {
+            Some(ranks) => (ranks[i], i),
+            None => (entries[i].discovery, i),
+        }
+    };
     for v in &mut adj {
-        v.sort_unstable();
+        // Insertion order, not array position: the merge sort above
+        // reorders cycle members (a dependent discovered later sorts
+        // earlier), while real's child lists follow edge-insertion
+        // order, i.e. resolution order.
+        v.sort_by_key(|&i| order_key(i));
         v.dedup();
     }
-    // Shortest directed cycle: BFS from each node, first return to that
-    // node wins; keep the globally shortest.
-    let mut best: Option<Vec<usize>> = None;
-    for start in 0..entries.len() {
-        if adj[start].is_empty() {
-            continue;
+    // Shortest directed cycle, chosen the way real
+    // `circular_dependency_handler` chooses what to print (backlog
+    // #278): real `digraph.get_cycles` (`portage/util/digraph.py:387`)
+    // walks nodes in insertion order and, per node, closes a cycle
+    // through each child with the shortest child-`>`node path; real
+    // `_find_cycles` (`resolver/circular_dependency.py:48`) keeps the
+    // first strictly-shortest one, and
+    // `_prepare_circular_dep_message` (`:76`) prints from its `[0]`.
+    // The scheduler's pre-bias insertion rank is the insertion-order
+    // analogue (it re-discovers the graph from the top-level atoms the
+    // way real `_create_graph` does, unlike the resolver's walk order,
+    // which can pull a later argument's subtree first); without one,
+    // `discovery` order stands in. The discovery-sorted adjacency
+    // stands in for real's edge-insertion
+    // child order (deterministic; real's BFS set order is hash-seeded,
+    // but only same-length ties can differ, and per node only the first
+    // of those can win the strict-shortest race).
+    //
+    // Only the display's start node changes: the winning length is the
+    // same global minimum the per-start BFS found before, so the cycle
+    // set (and, for two-node rings, the members) is untouched, and
+    // empty stays empty (a start reaches itself iff one of its children
+    // reaches it).
+    let shortest_to = |from: usize, to: usize| -> Option<Vec<usize>> {
+        if from == to {
+            // Real `shortest_path(node, node)`: `bfs` yields the start
+            // first, so the one-member path wins immediately.
+            return Some(vec![from]);
         }
         let mut prev: HashMap<usize, usize> = HashMap::new();
-        let mut seen: HashSet<usize> = HashSet::from([start]);
-        let mut frontier = vec![start];
-        'bfs: while !frontier.is_empty() {
+        let mut seen: HashSet<usize> = HashSet::from([from]);
+        let mut frontier = vec![from];
+        while !frontier.is_empty() {
             let mut next = Vec::new();
             for &u in &frontier {
                 for &w in &adj[u] {
-                    if w == start {
-                        // Reconstruct start -> ... -> u, then wrap.
+                    if w == to {
+                        // Reconstruct from -> ... -> u, then wrap to `to`.
                         let mut path = vec![u];
                         let mut cur = u;
-                        while cur != start {
+                        while cur != from {
                             cur = prev[&cur];
                             path.push(cur);
                         }
                         path.reverse();
-                        if best.as_ref().is_none_or(|b| path.len() < b.len()) {
-                            best = Some(path);
-                        }
-                        break 'bfs;
+                        path.push(to);
+                        return Some(path);
                     }
                     if seen.insert(w) {
                         prev.insert(w, u);
@@ -18928,22 +18975,41 @@ fn find_hard_cycles(
             }
             frontier = next;
         }
+        None
+    };
+    let mut best: Option<Vec<usize>> = None;
+    // Insertion rank order (the scheduler's pre-bias insertion order),
+    // not array position: the merge sort above can place a
+    // later-discovered dependent ahead of its puller.
+    let mut by_insertion: Vec<usize> = (0..entries.len()).collect();
+    by_insertion.sort_by_key(|&i| order_key(i));
+    for &start in &by_insertion {
+        if adj[start].is_empty() {
+            continue;
+        }
+        let mut node_best: Option<Vec<usize>> = None;
+        for &child in &adj[start] {
+            if let Some(path) = shortest_to(child, start)
+                && node_best.as_ref().is_none_or(|b| path.len() < b.len())
+            {
+                node_best = Some(path);
+            }
+        }
+        if let Some(candidate) = node_best
+            && best.as_ref().is_none_or(|b| candidate.len() < b.len())
+        {
+            best = Some(candidate);
+        }
     }
     match best {
         None => Vec::new(),
         Some(cycle) => {
-            let min_pos = cycle
-                .iter()
-                .enumerate()
-                .min_by_key(|&(_, &idx)| idx)
-                .map(|(p, _)| p)
-                .unwrap_or(0);
-            let rotated: Vec<String> = cycle[min_pos..]
-                .iter()
-                .chain(&cycle[..min_pos])
-                .map(|&i| merge_bound_cpv(&entries[i]).expect("merge-bound"))
-                .collect();
-            vec![rotated]
+            vec![
+                cycle
+                    .into_iter()
+                    .map(|i| merge_bound_cpv(&entries[i]).expect("merge-bound"))
+                    .collect(),
+            ]
         }
     }
 }
@@ -23573,7 +23639,8 @@ pub struct GraphResult {
     /// with `* Error: circular dependencies:`. Currently at most one
     /// entry (the shortest cycle -- real `_find_cycles`'s
     /// `shortest_cycle`, all `_prepare_circular_dep_message` renders),
-    /// rotated to start at its lowest merge-order index. `pretend.rs`
+    /// starting where real's does (its `[0]`, backlog #278 -- `discovery`
+    /// order stands in for real's digraph insertion order). `pretend.rs`
     /// renders `_show_circular_deps`'s block and exits 1 when this is
     /// non-empty. Empty in every ordinary resolve.
     pub circular_deps: Vec<Vec<String>>,
@@ -30498,6 +30565,10 @@ fn collect_feedback(
         &pass.edge_kind_map,
         ctx.root,
         &grown.circular_dependency,
+        // Pre-sort pass: only the single-node `cycle_restartable` gate
+        // reads the result, so the insertion rank (a post-sort notion)
+        // is meaningless here; `None` falls back to `discovery` order.
+        None,
     );
     if hard_cycles.len() == 1
         && cycle_restartable(
@@ -31535,8 +31606,10 @@ fn assemble_result(
     // builds `entries` the other way (a package's entry is pushed before
     // its dependencies are ever queued). Re-sort into merge order now
     // that every `required_by` edge is known -- see
-    // `topological_merge_order`.
-    pass.entries = topological_merge_order(
+    // `topological_merge_order`. The insertion rank travels alongside
+    // for the cycle reporter below (backlog #278: real `get_cycles`
+    // iterates digraph insertion order).
+    let (sorted_entries, insertion_rank) = topological_merge_order(
         pass.entries,
         ctx.atoms,
         config,
@@ -31546,6 +31619,7 @@ fn assemble_result(
         ctx.dynamic_deps,
         &params.circular_dependency,
     );
+    pass.entries = sorted_entries;
 
     // Real depgraph.py:5706-5717 -- see GraphResult::
     // buildpkgonly_deps_unsatisfied's own doc comment.
@@ -31599,6 +31673,7 @@ fn assemble_result(
         &pass.edge_kind_map,
         ctx.root,
         &params.circular_dependency,
+        Some(&insertion_rank),
     );
 
     // Backlog #221: a persisting restart cycle the hard reporter cannot
@@ -31642,10 +31717,13 @@ fn assemble_result(
             if cpvs.len() != cycle.len() {
                 continue;
             }
-            // Same rotation convention as `find_hard_cycles` (lowest
-            // entries index first -- entries are already in merge
-            // order), which also dedupes the one-cycle-per-hard-edge
-            // repeats into a single ring.
+            // Backlog #278 leaves this leg on the old lowest-index
+            // rotation on purpose: it only fires when the hard reporter
+            // above is empty (persisting soft-containing rings real
+            // prints from its own fuller-graph `shortest_cycle[0]`),
+            // and rotating those to entries order would move pins (e.g.
+            // `sbrA`) real grounds elsewhere. It also dedupes the
+            // one-cycle-per-hard-edge repeats into a single ring.
             let min_pos = cpvs
                 .iter()
                 .enumerate()
@@ -44489,7 +44567,8 @@ mod tests {
                 &entries,
                 &map,
                 Path::new("/nonexistent-root"),
-                &HashMap::new()
+                &HashMap::new(),
+                None
             )
             .is_empty()
         );
@@ -44555,7 +44634,7 @@ mod tests {
         b.deps = vec![dep("cyc-a", runtime)];
         a.required_by = vec![("dev-libs".to_string(), "cyc-b".to_string())];
         b.required_by = vec![("dev-libs".to_string(), "cyc-a".to_string())];
-        let ordered = topological_merge_order(
+        let (ordered, _) = topological_merge_order(
             vec![a, b],
             &["dev-libs/cyc-a".to_string()],
             &test_config(),
@@ -44578,7 +44657,7 @@ mod tests {
         b.deps = vec![dep("cyc-a", buildtime)];
         a.required_by = vec![("dev-libs".to_string(), "cyc-b".to_string())];
         b.required_by = vec![("dev-libs".to_string(), "cyc-a".to_string())];
-        let ordered = topological_merge_order(
+        let (ordered, _) = topological_merge_order(
             vec![a, b],
             &["dev-libs/cyc-a".to_string()],
             &test_config(),
@@ -44616,7 +44695,7 @@ mod tests {
         let mut a = graph_entry("dev-libs", "a", "1.0");
         let b = graph_entry("dev-libs", "b", "1.0");
         a.deps = vec![dep("b", runtime)];
-        let ordered = topological_merge_order(
+        let (ordered, _) = topological_merge_order(
             vec![a, b],
             &["dev-libs/a".to_string()],
             &test_config(),
@@ -44646,7 +44725,7 @@ mod tests {
             "dev-libs/b".to_string(),
             "dev-libs/c".to_string(),
         ];
-        let biased = topological_merge_order(
+        let (biased, _) = topological_merge_order(
             vec![
                 graph_entry("dev-libs", "a", "1.0"),
                 graph_entry("dev-libs", "b", "1.0"),
@@ -44662,7 +44741,7 @@ mod tests {
         );
         let names: Vec<&str> = biased.iter().map(|e| e.package.as_str()).collect();
         assert_eq!(names, vec!["c", "a", "b"]);
-        let unbiased = topological_merge_order(
+        let (unbiased, _) = topological_merge_order(
             vec![
                 graph_entry("dev-libs", "a", "1.0"),
                 graph_entry("dev-libs", "b", "1.0"),
@@ -44684,25 +44763,32 @@ mod tests {
     fn find_hard_cycles_reports_a_build_time_cycle_and_ignores_a_run_time_one() {
         let hardcpv = |p: &str| format!("dev-libs/{p}-1.0");
         let cp = |p: &str| ("dev-libs".to_string(), p.to_string());
-        let entries = vec![
-            graph_entry("dev-libs", "hca", "1.0"),
-            graph_entry("dev-libs", "hcb", "1.0"),
-        ];
 
-        // Pure hard cycle hca <-> hcb: reported, rotated to start at the
-        // lowest index (hca). The entries carry no `deps`, so the #228
-        // slot-op arm never fires and no vdb is consulted (fake root).
+        // Pure hard cycle hca <-> hcb: reported starting where real's
+        // `shortest_cycle[0]` starts -- hca is the earliest-inserted
+        // node, so the cycle closes through its child hcb
+        // (`[hcb, hca]`, backlog #278). The entries carry no `deps`, so
+        // the #228 slot-op arm never fires and no vdb is consulted
+        // (fake root).
         let mut hard: EdgeKindMap = HashMap::new();
         hard.insert((cp("hcb"), cp("hca")), (true, false));
         hard.insert((cp("hca"), cp("hcb")), (true, false));
+        // Explicit `discovery` (unit entries default to 0, which would
+        // tie and fall back to array order): hca discovered first.
+        let mut first = graph_entry("dev-libs", "hca", "1.0");
+        first.discovery = 0;
+        let mut second = graph_entry("dev-libs", "hcb", "1.0");
+        second.discovery = 1;
+        let entries = vec![first, second];
         assert_eq!(
             find_hard_cycles(
                 &entries,
                 &hard,
                 Path::new("/nonexistent-root"),
-                &HashMap::new()
+                &HashMap::new(),
+                None
             ),
-            vec![vec![hardcpv("hca"), hardcpv("hcb")]]
+            vec![vec![hardcpv("hcb"), hardcpv("hca")]]
         );
 
         // Same shape but one edge has a run-time alternative -> breakable,
@@ -44715,7 +44801,8 @@ mod tests {
                 &entries,
                 &mixed,
                 Path::new("/nonexistent-root"),
-                &HashMap::new()
+                &HashMap::new(),
+                None
             )
             .is_empty()
         );
@@ -44736,9 +44823,59 @@ mod tests {
                 &installed,
                 &hard,
                 Path::new("/nonexistent-root"),
-                &HashMap::new()
+                &HashMap::new(),
+                None
             )
             .is_empty()
+        );
+    }
+
+    /// Backlog #278: the printed cycle starts where real's does. Real
+    /// `circular_dependency_handler` prints `shortest_cycle[0]` (real
+    /// `resolver/circular_dependency.py:76-99`), and `_find_cycles`
+    /// (`:48-56`) keeps the first strictly-shortest cycle of real
+    /// `digraph.get_cycles` order (earliest-inserted node first) -- not
+    /// a lowest-index rotation. The #249 variant shape (entries in
+    /// discovery order, the requested build tool first): hard edges both
+    /// ways (`u249make -BDEPEND(dev-libs/u249json:0=)-> u249json`,
+    /// `u249json -BDEPEND(dev-util/u249make)-> u249make`), so real
+    /// 3.0.82.2 prints from `u249json`
+    /// (`u249json -> u249make -> u249json`; O1 S0 probe). The old
+    /// lowest-index rotation started at `u249make` instead.
+    #[test]
+    fn find_hard_cycles_starts_where_reals_get_cycles_starts() {
+        let cpv = |c: &str, p: &str| format!("{c}/{p}-1");
+        let cp = |c: &str, p: &str| (c.to_string(), p.to_string());
+        // Explicit `discovery` mirroring the resolve (the requested
+        // build tool is discovered before the library it pulls).
+        let mut make = graph_entry("dev-util", "u249make", "1");
+        make.discovery = 0;
+        let mut json = graph_entry("dev-libs", "u249json", "1");
+        json.discovery = 1;
+        let entries = vec![make, json];
+        let mut hard: EdgeKindMap = HashMap::new();
+        hard.insert(
+            (cp("dev-libs", "u249json"), cp("dev-util", "u249make")),
+            (true, false),
+        );
+        hard.insert(
+            (cp("dev-util", "u249make"), cp("dev-libs", "u249json")),
+            (true, false),
+        );
+        assert_eq!(
+            find_hard_cycles(
+                &entries,
+                &hard,
+                Path::new("/nonexistent-root"),
+                &HashMap::new(),
+                // The insertion-rank path (what the resolver threads):
+                // the requested tool is inserted before the library.
+                Some(&[0, 1])
+            ),
+            vec![vec![
+                cpv("dev-libs", "u249json"),
+                cpv("dev-util", "u249make")
+            ]]
         );
     }
 
@@ -44776,7 +44913,8 @@ mod tests {
                 &entries,
                 &hard,
                 Path::new("/nonexistent-root"),
-                &HashMap::new()
+                &HashMap::new(),
+                None
             ),
             vec![vec![hardcpv("hcs", "1.0")]]
         );
@@ -44790,7 +44928,8 @@ mod tests {
                 &cross,
                 &hard,
                 Path::new("/nonexistent-root"),
-                &HashMap::new()
+                &HashMap::new(),
+                None
             )
             .is_empty()
         );
@@ -44803,7 +44942,8 @@ mod tests {
                 &inline,
                 &hard,
                 Path::new("/nonexistent-root"),
-                &HashMap::new()
+                &HashMap::new(),
+                None
             ),
             vec![vec![hardcpv("hcs", "1.0")]]
         );
@@ -44816,7 +44956,7 @@ mod tests {
         let inst_dir = root.join("var/db/pkg/dev-libs/hcs-1.0");
         std::fs::create_dir_all(&inst_dir).unwrap();
         std::fs::write(inst_dir.join("SLOT"), "0\n").unwrap();
-        assert!(find_hard_cycles(&entries, &hard, &root, &HashMap::new()).is_empty());
+        assert!(find_hard_cycles(&entries, &hard, &root, &HashMap::new(), None).is_empty());
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -44963,7 +45103,8 @@ mod tests {
                 &entries,
                 &map,
                 Path::new("/nonexistent-root"),
-                &HashMap::new()
+                &HashMap::new(),
+                None
             )
             .is_empty()
         );
@@ -45002,8 +45143,10 @@ mod tests {
         };
         let make_entries = || {
             let mut sown = graph_entry("dev-libs", "sown", "1.0");
+            sown.discovery = 0;
             sown.deps = vec![plain_edge("sdep", "dev-libs/sdep:=", runtime_slot_op, 0)];
             let mut sdep = graph_entry("dev-libs", "sdep", "1.0");
+            sdep.discovery = 1;
             sdep.slot = Some("1".to_string());
             sdep.sub_slot = Some("0".to_string());
             sdep.deps = vec![plain_edge("sown", "dev-libs/sown", buildtime, 3)];
@@ -45023,17 +45166,22 @@ mod tests {
             root
         };
         // Installed slot `0`, child slot `1`: unsatisfied (hard).
+        // Starts at `sdep` since backlog #278 (real's
+        // `shortest_cycle[0]`: `sown` is earliest-inserted, so the ring
+        // closes through its child).
         let root = make_vdb("n228-slot-gate-other-slot", "0");
         assert_eq!(
-            find_hard_cycles(&make_entries(), &make_map(), &root, &HashMap::new()),
+            find_hard_cycles(&make_entries(), &make_map(), &root, &HashMap::new(), None),
             vec![vec![
-                "dev-libs/sown-1.0".to_string(),
-                "dev-libs/sdep-1.0".to_string()
+                "dev-libs/sdep-1.0".to_string(),
+                "dev-libs/sown-1.0".to_string()
             ]]
         );
         // Installed slot `1/0`, child slot `1/0`: satisfied (soft).
         let root = make_vdb("n228-slot-gate-same-slot", "1/0");
-        assert!(find_hard_cycles(&make_entries(), &make_map(), &root, &HashMap::new()).is_empty());
+        assert!(
+            find_hard_cycles(&make_entries(), &make_map(), &root, &HashMap::new(), None).is_empty()
+        );
     }
 
     #[test]
@@ -45366,20 +45514,22 @@ mod tests {
         // 3.0.81.3 rc 1 with `(buildtime)` on the back edge and
         // `(runtime_slot_op)` on the slot-op edge) where the pre-#228
         // detector saw only a soft run-time edge and merged silently.
-        // Rotation starts at the requested atom (lowest entries index --
-        // the #208 family, not this slice), so the labels read
-        // `runtime_slot_op` into the second line, `buildtime` closing.
+        // Since backlog #278 the rotation starts where real's
+        // `shortest_cycle[0]` starts (`slopcycb`: fresh 3.0.82.2 probe
+        // prints `slopcycb depends on / slopcyca (buildtime) / slopcycb
+        // (runtime_slot_op)`), so the labels read `buildtime` into the
+        // second line, `runtime_slot_op` closing.
         let result = graph_result_real("dev-libs/slopcyca");
         assert_eq!(
             result.circular_deps,
             vec![vec![
-                "dev-libs/slopcyca-1.0".to_string(),
-                "dev-libs/slopcycb-1.0".to_string()
+                "dev-libs/slopcycb-1.0".to_string(),
+                "dev-libs/slopcyca-1.0".to_string()
             ]]
         );
         assert_eq!(
             cycle_edge_labels(&result.entries, &result.circular_deps[0]),
-            vec!["runtime_slot_op".to_string(), "buildtime".to_string()]
+            vec!["buildtime".to_string(), "runtime_slot_op".to_string()]
         );
         // The all-buildtime fixtures keep the old rendering: every
         // edge labels `(buildtime)`.
