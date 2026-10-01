@@ -10954,7 +10954,8 @@ fn use_unsat_parent_row(
 /// satisfy" candidate scan (`depgraph.py:6619` collects `missing_use`,
 /// `:6714-6873` turns it into `unmasked_use_reasons` /
 /// `unmasked_iuse_reasons`): the version/slot-matching, *visible* ebuilds
-/// whose own IUSE is missing a required (unconditional) flag, or whose
+/// whose own IUSE is missing a required no-default flag (unconditional
+/// *or* conditional -- real `use.required`, #265(a)), or whose
 /// effective USE cannot satisfy the atom's unconditional use-deps.
 /// `None` when the atom carries no use-deps or no visible candidate
 /// misses on USE -- real's plain masked / "no ebuilds to satisfy" paths
@@ -11022,8 +11023,10 @@ fn use_unsat_candidates_for_atom(
             .collect()
     };
     // Real `atom.unevaluated_atom.use.required` -- `no_default`, i.e.
-    // the unconditional (`flag`/`-flag`) forms *without* a `(+)`/`(-)`
-    // default marker, in declaration order here. A default-marked token
+    // every token *without* a `(+)`/`(-)` default marker, conditionals
+    // (`flag?`, `flag=`, `!flag?`, …) included, in declaration order
+    // here (`lib/portage/dep/__init__.py:1363` `self.required =
+    // frozenset(no_default)`; backlog #265(a)). A default-marked token
     // is not a `required` flag in real's parser (it has a fallback when
     // missing from IUSE).
     let required_of = |atom: &portage_dep::Atom| -> Vec<String> {
@@ -11031,13 +11034,7 @@ fn use_unsat_candidates_for_atom(
             .as_deref()
             .unwrap_or_default()
             .iter()
-            .filter(|d| {
-                d.default.is_none()
-                    && matches!(
-                        d.op,
-                        portage_dep::UseDepOp::Enabled | portage_dep::UseDepOp::Disabled
-                    )
-            })
+            .filter(|d| d.default.is_none())
             .map(|d| d.flag.clone())
             .collect()
     };
@@ -27820,6 +27817,36 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     &format!("{current_atom:?}"),
                 ) {
                     return Err(Error::Detail(report));
+                }
+                // Backlog #265(b) (with #273): a top-level atom's own
+                // USE miss aborts with real `_show_unsatisfied_dep`'s
+                // "no ebuilds built with USE flags to satisfy" block
+                // (`depgraph.py:6969-6994`), not the bare miss -- the
+                // `(Change USE: …)` / `(Missing IUSE: …)` rows and, like
+                // real for an `AtomArg` parent (`:7080-7090`), no
+                // `(dependency required by …)` lines. Real's staging
+                // `for <root>.` suffix stays absent (the long-standing
+                // `fixture-miss-message-unsuffixed` class). Ordered
+                // after the masked block like real's own
+                // `show_missing_use`-before-`masked_packages` precedence
+                // (the dependency arm renders the same way).
+                if let Some(rows) = use_unsat_candidates_for_atom(
+                    &ctx.repos,
+                    ctx.root,
+                    &state.entries,
+                    unevaluated_atom.as_deref().unwrap_or(current_atom.as_str()),
+                    current_atom.as_str(),
+                    None,
+                    config,
+                ) {
+                    let mut block = format!(
+                        "there are no ebuilds built with USE flags to satisfy {current_atom:?}.\n\
+                         !!! One of the following packages is required to complete your request:"
+                    );
+                    for (cpv, reasons) in rows {
+                        block.push_str(&format!("\n- {cpv} ({})", reasons.join(", ")));
+                    }
+                    return Err(Error::Detail(block));
                 }
                 let mut message = format!("there are no ebuilds to satisfy {current_atom:?}.");
                 // --autounmask's own keyword-suggestion sub-feature (see
@@ -45788,6 +45815,93 @@ mod tests {
     }
 
     #[test]
+    fn use_unsat_candidates_count_conditional_flags_toward_missing_iuse() {
+        // Backlog #265(a): real `use.required` is every no-default flag,
+        // conditionals included (`lib/portage/dep/__init__.py:1363`
+        // `self.required = frozenset(no_default)`), so a conditional flag
+        // a visible candidate's own IUSE lacks is `Missing IUSE:`, never
+        // a `Change USE:` row and never a plain miss. Live real 3.0.82.2
+        // staged-fixture probes
+        // (`docs/evidence/2026-09-30-265/real/mia0a-{1,2}.txt`):
+        // `=dev-libs/mia0a-1` (`mia0b[foo?]`) prints the block with
+        // `- dev-libs/mia0b-1::testrepo (Missing IUSE: foo)`, and
+        // `=dev-libs/mia0a-2` (`mia0b[foo?,bar]`) prints the same row
+        // (not portuale's `Change USE: +bar`).
+        let root = fixtures_root();
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+            &root,
+        )
+        .expect("fixture config resolves");
+        let repos = find_repos(&root).expect("repos");
+        let scan = |display: &str, evaluated: &str| {
+            use_unsat_candidates_for_atom(&repos, &root, &[], display, evaluated, None, &config)
+        };
+        // `foo?` alone: no unconditional flag at all, yet Missing IUSE.
+        assert_eq!(
+            scan("dev-libs/mia0b[foo?]", "dev-libs/mia0b[foo?]"),
+            Some(vec![(
+                "dev-libs/mia0b-1::testrepo".to_string(),
+                vec!["Missing IUSE: foo".to_string()]
+            )])
+        );
+        // `foo?` beside a satisfiable unconditional `bar`: the conditional
+        // flag still counts, so the row is Missing IUSE, not Change USE.
+        // (Evaluated against a foo-enabled parent, as the walk does.)
+        assert_eq!(
+            scan("dev-libs/mia0b[foo?,bar]", "dev-libs/mia0b[foo,bar]"),
+            Some(vec![(
+                "dev-libs/mia0b-1::testrepo".to_string(),
+                vec!["Missing IUSE: foo".to_string()]
+            )])
+        );
+    }
+
+    #[test]
+    fn mia0a_cells_report_missing_iuse_for_the_conditional_dep() {
+        // End to end through the driver for #265(a): both `mia0a` cells
+        // record one `Missing IUSE: foo` disclosure on `mia0b` whose chain
+        // walks the merge parent up to the top-level argument, like
+        // real's `(dependency required by …)` lines in
+        // `docs/evidence/2026-09-30-265/real/mia0a-{1,2}.txt`.
+        for (arg, atom) in [
+            ("=dev-libs/mia0a-1", "dev-libs/mia0b[foo?]"),
+            ("=dev-libs/mia0a-2", "dev-libs/mia0b[foo?,bar]"),
+        ] {
+            let result = graph_result_real(arg);
+            assert_eq!(result.use_unsat_deps.len(), 1, "{arg}");
+            let rep = &result.use_unsat_deps[0];
+            assert_eq!(
+                (
+                    rep.category.as_str(),
+                    rep.package.as_str(),
+                    rep.atom.as_str()
+                ),
+                ("dev-libs", "mia0b", atom),
+                "{arg}"
+            );
+            assert_eq!(
+                rep.rows,
+                vec![(
+                    "dev-libs/mia0b-1::testrepo".to_string(),
+                    vec!["Missing IUSE: foo".to_string()]
+                )],
+                "{arg}"
+            );
+            assert!(
+                result.plain_miss_deps.is_empty(),
+                "{arg}: no bare miss once the USE block claims the dep: {:?}",
+                result.plain_miss_deps
+            );
+        }
+    }
+
+    #[test]
     fn use_unsat_dep_report_carries_the_chain_to_the_argument() {
         // End to end through the driver: the unsatuseiuse resolve records
         // one Missing IUSE disclosure whose chain walks the merge parent
@@ -47191,6 +47305,88 @@ mod tests {
     }
 
     #[test]
+    fn top_level_use_miss_reports_the_use_block_without_chain() {
+        // Backlog #265(b) (with #273): an *argument* atom's own USE miss
+        // aborts with real `_show_unsatisfied_dep`'s "no ebuilds built
+        // with USE flags" block -- the `(Change USE: …)` row and no
+        // `(dependency required by …)` lines (real skips the chain for
+        // an `AtomArg` parent, `depgraph.py:7080-7090`). Live real
+        // 3.0.82.2 staged-fixture probe
+        // (`docs/evidence/2026-09-30-265/real/useflagpkg-autounmask-use-n.txt`):
+        // `emerge --pretend --autounmask-use=n
+        // 'dev-libs/useflagpkg[-foo]'` prints the block where portuale
+        // printed the plain `no ebuilds to satisfy` miss. Real's staging
+        // `for <root>.` suffix stays absent (the long-standing
+        // `fixture-miss-message-unsuffixed` class).
+        let root = fixtures_root();
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+            &root,
+        )
+        .expect("fixture config resolves");
+        let atoms = vec!["dev-libs/useflagpkg[-foo]".to_string()];
+        let err = resolve_pretend_graph(
+            &root,
+            &root,
+            &atoms,
+            &config,
+            false,
+            false,
+            false,
+            false,
+            Deep::NotRequested,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            false,
+            None,
+            false,
+            false,
+            None,
+            &fixtures_root().join("distfiles"),
+            false,
+            false,
+            false,
+            10,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            true,
+            false,
+        )
+        .expect_err("no visible candidate at all");
+        assert_eq!(
+            err.to_string(),
+            "there are no ebuilds built with USE flags to satisfy \
+             \"dev-libs/useflagpkg[-foo]\".\n\
+             !!! One of the following packages is required to complete your request:\n\
+             - dev-libs/useflagpkg-1.0::testrepo (Change USE: -foo)"
+        );
+    }
+
+    #[test]
     fn autounmask_use_suggests_a_flag_flip_only_when_enabled() {
         // dev-libs/useflagpkg's own "foo" flag is enabled globally by
         // the fixture profile's own make.conf (see use_dep_enforcement's
@@ -47199,8 +47395,8 @@ mod tests {
         // alone (package.mask/license/KEYWORDS all pass), the exact
         // "use_masked_only" shape --autounmask-use's own v1 suggestion
         // targets. With autounmask_suggest_use off (the real default),
-        // no suggestion is appended, matching portuale's own
-        // pre-existing behavior exactly.
+        // no suggestion is appended; the abort is real's own USE block
+        // (backlog #265(b)), not the bare miss.
         let root = fixtures_root();
         let config = portage_profile::resolve_config(
             &root,
@@ -47262,7 +47458,10 @@ mod tests {
         .expect_err("no visible candidate at all");
         assert_eq!(
             err_without_suggestion.to_string(),
-            "there are no ebuilds to satisfy \"dev-libs/useflagpkg[-foo]\"."
+            "there are no ebuilds built with USE flags to satisfy \
+             \"dev-libs/useflagpkg[-foo]\".\n\
+             !!! One of the following packages is required to complete your request:\n\
+             - dev-libs/useflagpkg-1.0::testrepo (Change USE: -foo)"
         );
 
         // With `--autounmask-use` (on by default), the same
