@@ -1,0 +1,28 @@
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/tmp/r269stage/fixtures/repo/profiles/updates/2Q-2024..
+
+
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.07 s (backtrack: 1/3).
+
+[ebuild  NS    ] app-misc/somassb-2 [1]
+[ebuild  NS    ] app-misc/somassb-2 [1] to /tmp/r269root-cm/
+[ebuild  rR    ] app-misc/somassc0c-1 
+[ebuild  rR    ] app-misc/somassc1c-1 
+[ebuild  rR    ] app-misc/somassc2c-1 
+[ebuild  rR    ] app-misc/somassc3c-1 
+[ebuild  rR    ] app-misc/somassc4c-1 
+[ebuild  rR    ] app-misc/somassc0c-1 to /tmp/r269root-cm/
+[ebuild  rR    ] app-misc/somassc1c-1 to /tmp/r269root-cm/
+[ebuild  rR    ] app-misc/somassc2c-1 to /tmp/r269root-cm/
+[ebuild  rR    ] app-misc/somassc3c-1 to /tmp/r269root-cm/
+[ebuild  rR    ] app-misc/somassc4c-1 to /tmp/r269root-cm/
+[ebuild  N     ] app-misc/somassa-1 to /tmp/r269root-cm/

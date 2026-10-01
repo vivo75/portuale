@@ -1,0 +1,12 @@
+Undefined license group 'FREE'
+Undefined license group 'FREE'
+Undefined license group 'FREE'
+
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+
+dev-libs/slotconflicttarget:0 for /tmp/r269root/
+
+  (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc" conflicts with
+    <dev-libs/slotconflicttarget-2.0 required by (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/r269root/') USE="" ELIBC="glibc"
+    ^                            ^^^
+
