@@ -1,0 +1,25 @@
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/tmp/opencode/d3/stage/fixtures/repo/profiles/updates/2Q-2024..
+@s
+
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 3.59 s (backtrack: 0/20).
+
+[ebuild  N    ~] dev-libs/autounmaskkeywordpkg-1.0 to /tmp/opencode/d3/stage/fixtures/
+
+ * IMPORTANT: 11 news items need reading for repository 'gentoo'.
+ * Use eselect news read to view new items.
+
+
+The following keyword changes are necessary to proceed:
+ (see "package.accept_keywords" in the portage(5) man page for more details)
+# required by dev-libs/autounmaskkeywordpkg (argument)
+=dev-libs/autounmaskkeywordpkg-1.0 ~amd64
