@@ -710,6 +710,7 @@ fn graph_result_from_order(
                     &req.excluded,
                     req.update,
                     &top_level_cps,
+                    &req.config,
                 )
             }
         };
