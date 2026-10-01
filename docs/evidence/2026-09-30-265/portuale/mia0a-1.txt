@@ -1,0 +1,11 @@
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+
+emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/mia0b[foo?]".
+!!! One of the following packages is required to complete your request:
+- dev-libs/mia0b-1::testrepo (Missing IUSE: foo)
+(dependency required by "dev-libs/mia0a-1::testrepo" [ebuild])
+(dependency required by "=dev-libs/mia0a-1" [argument])
