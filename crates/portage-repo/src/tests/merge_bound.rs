@@ -1,5 +1,60 @@
 use super::*;
 
+/// With a non-`/` target ROOT, EAPI >= 7 `DEPEND` resolves against the running
+/// root (Portage's `depend_root`), so graph nodes carry their root.
+#[test]
+fn cross_root_depend_forms_the_running_root_cycle() {
+    let root = fixtures_root();
+    // Hermetic running root: nothing installed, so build deps select from
+    // the tree.
+    let running = TempDir::new("portuale-242-xb-empty-running-root").keep();
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    let result = ResolveRequest {
+        root_deps_running_root: Some(running.to_path_buf()),
+        backtrack_max: 20,
+        ..ResolveRequest::new(
+            &root,
+            &root,
+            &["=dev-libs/cyc0z-1".to_string()],
+            &config,
+            &fixtures_root().join("distfiles"),
+        )
+    }
+    .resolve()
+    .unwrap_or_else(|e| panic!("resolving =dev-libs/cyc0z-1 failed: {e}"));
+    // The printed cycle starts at `cyc0z-3`, reached from `cyc0y-1`.
+    assert_eq!(
+        result.circular_deps,
+        vec![vec![
+            "dev-libs/cyc0z-3".to_string(),
+            "dev-libs/cyc0y-1".to_string()
+        ]]
+    );
+    // The blame node is a running-root merge: it carries its root.
+    let blamed = result
+        .entries
+        .iter()
+        .find(|e| {
+            e.category == "dev-libs"
+                && e.package == "cyc0z"
+                && merge_bound_version(&e.outcome).is_some_and(|v| v == "3")
+        })
+        .expect("cyc0z-3 is a graph node");
+    assert!(blamed.targets_running_root);
+    // The single backtrack retry is spent on the serialize abort.
+    assert!(result.backtrack_restarts >= 1);
+    assert!(matches!(result.outcome, ResolveOutcome::Aborted { .. }));
+}
+
 /// The same g216 shape with `--backtrack=0` reports the pass-1 self-cycle block.
 #[test]
 fn cross_root_bdepend_self_branch_backtrack0_reports_the_self_cycle() {
