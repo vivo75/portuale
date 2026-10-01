@@ -1,0 +1,108 @@
+#### WC real
+Dependency resolution took 0.48 s (backtrack: 0/20).
+[ebuild  N     ] dev-libs/slotconflicttarget-1.0 to ROOT
+[ebuild     U  ] dev-libs/whpuller-2.0 [1.0] to ROOT
+[ebuild  N     ] dev-libs/slotconflictoldconsumer-1.0 to ROOT
+[ebuild  N     ] dev-libs/slotconflictnewconsumer-1.0 to ROOT
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+  (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to 'ROOT') USE="" ELIBC="glibc" conflicts with
+    <dev-libs/slotconflicttarget-2.0 required by (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to 'ROOT') USE="" ELIBC="glibc"
+    ^                            ^^^
+  (dev-libs/whblocker-2.0:0/0::testrepo, ebuild scheduled for merge to 'ROOT') USE="" ELIBC="glibc" conflicts with
+    ~dev-libs/whblocker-1.0 required by (dev-libs/whtarget-1.0:0/0::testrepo, installed in 'ROOT') USE=""
+    ^                   ^^^
+#### WC portuale
+[ebuild  N     ] dev-libs/slotconflicttarget-1.0 to ROOT
+[ebuild     U  ] dev-libs/whpuller-2.0 [1.0] to ROOT
+[ebuild  N     ] dev-libs/slotconflictoldconsumer-1.0 to ROOT
+[ebuild  N     ] dev-libs/slotconflictnewconsumer-1.0 to ROOT
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+dev-libs/slotconflicttarget:0
+  (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to 'ROOT') USE="" ELIBC="glibc" conflicts with
+    <dev-libs/slotconflicttarget-2.0 required by (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to 'ROOT') USE="" ELIBC="glibc"
+    ^                            ^^^
+dev-libs/whblocker:0
+  (dev-libs/whblocker-2.0:0/0::testrepo, ebuild scheduled for merge to 'ROOT') USE="" ELIBC="glibc" conflicts with
+    ~dev-libs/whblocker-1.0 required by (dev-libs/whtarget-1.0:0/0::testrepo, installed in 'ROOT') USE=""
+    ^                   ^^^
+#### CW real
+Dependency resolution took 0.47 s (backtrack: 0/20).
+[ebuild  N     ] dev-libs/slotconflicttarget-1.0 to ROOT
+[ebuild  N     ] dev-libs/slotconflictoldconsumer-1.0 to ROOT
+[ebuild  N     ] dev-libs/slotconflictnewconsumer-1.0 to ROOT
+[ebuild     U  ] dev-libs/whpuller-2.0 [1.0] to ROOT
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+  (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to 'ROOT') USE="" ELIBC="glibc" conflicts with
+    <dev-libs/slotconflicttarget-2.0 required by (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to 'ROOT') USE="" ELIBC="glibc"
+    ^                            ^^^
+  (dev-libs/whblocker-2.0:0/0::testrepo, ebuild scheduled for merge to 'ROOT') USE="" ELIBC="glibc" conflicts with
+    ~dev-libs/whblocker-1.0 required by (dev-libs/whtarget-1.0:0/0::testrepo, installed in 'ROOT') USE=""
+    ^                   ^^^
+#### CW portuale
+[ebuild  N     ] dev-libs/slotconflicttarget-1.0 to ROOT
+[ebuild  N     ] dev-libs/slotconflictoldconsumer-1.0 to ROOT
+[ebuild  N     ] dev-libs/slotconflictnewconsumer-1.0 to ROOT
+[ebuild     U  ] dev-libs/whpuller-2.0 [1.0] to ROOT
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+dev-libs/slotconflicttarget:0
+  (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to 'ROOT') USE="" ELIBC="glibc" conflicts with
+    <dev-libs/slotconflicttarget-2.0 required by (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to 'ROOT') USE="" ELIBC="glibc"
+    ^                            ^^^
+dev-libs/whblocker:0
+  (dev-libs/whblocker-2.0:0/0::testrepo, ebuild scheduled for merge to 'ROOT') USE="" ELIBC="glibc" conflicts with
+    ~dev-libs/whblocker-1.0 required by (dev-libs/whtarget-1.0:0/0::testrepo, installed in 'ROOT') USE=""
+    ^                   ^^^
+#### WC0 real
+Dependency resolution took 0.46 s (backtrack: 0/0).
+[ebuild  N     ] dev-libs/slotconflicttarget-1.0 to ROOT
+[ebuild     U  ] dev-libs/whpuller-2.0 [1.0] to ROOT
+[ebuild  N     ] dev-libs/slotconflictoldconsumer-1.0 to ROOT
+[ebuild  N     ] dev-libs/slotconflictnewconsumer-1.0 to ROOT
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+  (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to 'ROOT') USE="" ELIBC="glibc" conflicts with
+    <dev-libs/slotconflicttarget-2.0 required by (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to 'ROOT') USE="" ELIBC="glibc"
+    ^                            ^^^
+  (dev-libs/whblocker-2.0:0/0::testrepo, ebuild scheduled for merge to 'ROOT') USE="" ELIBC="glibc" conflicts with
+    ~dev-libs/whblocker-1.0 required by (dev-libs/whtarget-1.0:0/0::testrepo, installed in 'ROOT') USE=""
+    ^                   ^^^
+#### WC0 portuale
+[ebuild  N     ] dev-libs/slotconflicttarget-1.0 to ROOT
+[ebuild     U  ] dev-libs/whpuller-2.0 [1.0] to ROOT
+[ebuild  N     ] dev-libs/slotconflictoldconsumer-1.0 to ROOT
+[ebuild  N     ] dev-libs/slotconflictnewconsumer-1.0 to ROOT
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+dev-libs/slotconflicttarget:0
+  (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to 'ROOT') USE="" ELIBC="glibc" conflicts with
+    <dev-libs/slotconflicttarget-2.0 required by (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to 'ROOT') USE="" ELIBC="glibc"
+    ^                            ^^^
+dev-libs/whblocker:0
+  (dev-libs/whblocker-2.0:0/0::testrepo, ebuild scheduled for merge to 'ROOT') USE="" ELIBC="glibc" conflicts with
+    ~dev-libs/whblocker-1.0 required by (dev-libs/whtarget-1.0:0/0::testrepo, installed in 'ROOT') USE=""
+    ^                   ^^^
+#### CW0 real
+Dependency resolution took 0.46 s (backtrack: 0/0).
+[ebuild  N     ] dev-libs/slotconflicttarget-1.0 to ROOT
+[ebuild  N     ] dev-libs/slotconflictoldconsumer-1.0 to ROOT
+[ebuild  N     ] dev-libs/slotconflictnewconsumer-1.0 to ROOT
+[ebuild     U  ] dev-libs/whpuller-2.0 [1.0] to ROOT
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+  (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to 'ROOT') USE="" ELIBC="glibc" conflicts with
+    <dev-libs/slotconflicttarget-2.0 required by (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to 'ROOT') USE="" ELIBC="glibc"
+    ^                            ^^^
+  (dev-libs/whblocker-2.0:0/0::testrepo, ebuild scheduled for merge to 'ROOT') USE="" ELIBC="glibc" conflicts with
+    ~dev-libs/whblocker-1.0 required by (dev-libs/whtarget-1.0:0/0::testrepo, installed in 'ROOT') USE=""
+    ^                   ^^^
+#### CW0 portuale
+[ebuild  N     ] dev-libs/slotconflicttarget-1.0 to ROOT
+[ebuild  N     ] dev-libs/slotconflictoldconsumer-1.0 to ROOT
+[ebuild  N     ] dev-libs/slotconflictnewconsumer-1.0 to ROOT
+[ebuild     U  ] dev-libs/whpuller-2.0 [1.0] to ROOT
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+dev-libs/slotconflicttarget:0
+  (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to 'ROOT') USE="" ELIBC="glibc" conflicts with
+    <dev-libs/slotconflicttarget-2.0 required by (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to 'ROOT') USE="" ELIBC="glibc"
+    ^                            ^^^
+dev-libs/whblocker:0
+  (dev-libs/whblocker-2.0:0/0::testrepo, ebuild scheduled for merge to 'ROOT') USE="" ELIBC="glibc" conflicts with
+    ~dev-libs/whblocker-1.0 required by (dev-libs/whtarget-1.0:0/0::testrepo, installed in 'ROOT') USE=""
+    ^                   ^^^

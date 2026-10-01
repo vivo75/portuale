@@ -1,0 +1,4 @@
+real_portage: Portage 3.0.82.2 (python 3.14.6-final-0, default, gcc-15, unavailable, 6.18.39-serv x86_64)
+date_utc: 2026-10-01T03:12:03Z
+v1_argv: emerge --ignore-default-opts --pretend --color=n --backtrack=20 --update --deep app-misc/mmcons dev-libs/slotconflictoldconsumer dev-libs/slotconflictnewconsumer
+cm_argv: emerge --ignore-default-opts --pretend --color=n --backtrack=3 --update --deep app-misc/somassa
