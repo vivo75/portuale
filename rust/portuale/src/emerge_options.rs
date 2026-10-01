@@ -280,9 +280,12 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     // `--autounmask-continue has been disabled by --autounmask=n`
     // warning. See pretend.rs.
     // `--autounmask-only` (real `true_y_or_n`, `actions.py:456`) IS
-    // implemented -- resolve, show only the `display_problems()`
+    // implemented -- resolve, show the `display_problems()`
     // equivalent, exit 0 (see pretend.rs's `autounmask_only` /
-    // `show_merge_list`). Excluded here for the same reason.
+    // `show_merge_list`); under `--pretend` the merge list is re-shown
+    // ahead of the change blocks too (backlog #271, real
+    // `_display_autounmask` -> `_show_merge_list`). Excluded here for
+    // the same reason.
     ("--autounmask-license", None),
     ("--autounmask-unrestricted-atoms", None),
     ("--autounmask-use", None),

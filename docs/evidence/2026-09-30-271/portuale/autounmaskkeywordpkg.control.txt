@@ -1,0 +1,6 @@
+[ebuild  N    ~] dev-libs/autounmaskkeywordpkg-1.0 
+
+The following keyword changes are necessary to proceed:
+ (see "package.accept_keywords" in the portage(5) man page for more details)
+# required by dev-libs/autounmaskkeywordpkg (argument)
+=dev-libs/autounmaskkeywordpkg-1.0 ~amd64

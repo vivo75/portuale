@@ -3220,7 +3220,7 @@ Dependency and target selection:
 Autounmask (read-only: prints the required changes and stops -- never writes config):
       --autounmask[=y|n], --autounmask-use[=y|n], --autounmask-keep-keywords[=y|n]
       --autounmask-license[=y|n], --autounmask-keep-masks[=y|n]
-      --autounmask-only[=y|n]  resolve, print only the change block, and exit 0
+      --autounmask-only[=y|n]  resolve, print the merge list and the change block, and exit 0
       --autounmask-backtrack<y|n>  keep re-resolving after autounmask changes (off by default)
       --autounmask-continue[=y|n]  recognized; implies --autounmask-backtrack=y
 
@@ -9880,6 +9880,27 @@ fn merge_list_shown(pretend: bool, ask: bool, tree: bool, verbose: bool, quiet: 
     pretend || ((ask || tree || verbose) && !(quiet && !ask))
 }
 
+/// Backlog #271: real's `--autounmask-only` re-show (real
+/// `_emerge/depgraph.py:10625` `_display_autounmask`, via
+/// `_show_merge_list` at `:10488-10495` called from each change loop at
+/// `:10686`/`:10733`/`:10767`/`:10803`, on the `actions.py:456-458`
+/// early-return path that skips the normal `display()`): the merge list
+/// prints ahead of the change blocks whenever there are changes to
+/// report, even under `--autounmask-only`. Ported for `--pretend` runs
+/// (grounded on the fresh host 3.0.82.2 staged-fixture probe,
+/// `docs/evidence/2026-09-30-271/`); a non-`--pretend` run keeps the old
+/// suppression -- real has no pretend gate here, so that half is a cut,
+/// unprobed this slice. Pure predicate so the matrix stays unit-pinned;
+/// the empty-changes arm (a plain package prints nothing, rc 0) falls
+/// out of `has_changes=false`, exactly like real's empty change loops.
+fn autounmask_only_reshows_merge_list(
+    pretend: bool,
+    autounmask_only: bool,
+    has_changes: bool,
+) -> bool {
+    pretend && autounmask_only && has_changes
+}
+
 /// Backlog #225: real `_emerge/actions.py:496-521` (`action_build`):
 /// inside the display-flag branch (the same gate `show_merge_list`
 /// carries for a non-`--pretend` run -- aborts and `--autounmask-only`
@@ -13421,10 +13442,16 @@ pub fn run(args: &[String]) -> ExitCode {
     // partial rows only.
     let display_list_suppressed = gated_abort_partial.is_some() && display_entries.is_empty();
 
-    // `--autounmask-only` (real `actions.py:456`): skip the whole merge
-    // list -- only the `display_problems()` equivalent (slot-conflict
-    // notice + autounmask blocks) is shown, then exit 0. Also forces the
-    // dry-run path: nothing is ever built.
+    // `--autounmask-only` (real `actions.py:456`): the normal merge
+    // list is skipped and the run exits 0 right after the
+    // `display_problems()` equivalent (slot-conflict notice + autounmask
+    // blocks). But real `_display_autounmask` re-shows the list itself
+    // via `_show_merge_list` (`depgraph.py:10625`, `:10488`) whenever it
+    // has changes to report -- so under `--pretend --autounmask
+    // --autounmask-only` the list IS printed (backlog #271; grounded on
+    // the fresh host 3.0.82.2 staged-fixture probe,
+    // `docs/evidence/2026-09-30-271/`). Also forces the dry-run path:
+    // nothing is ever built.
     //
     // Backlog #185: real `_emerge/actions.py:464-469` (`mergelist_shown`
     // branch) shows the merge list before a non-`--pretend` merge only
@@ -13433,9 +13460,14 @@ pub fn run(args: &[String]) -> ExitCode {
     // shows it (the long-standing, corpus-pinned behavior above). An
     // aborted resolve shows no list on a real non-`--pretend` run
     // either (real `actions.py:460-462` fails before any `display()`).
-    let show_merge_list = !autounmask_only
+    let has_autounmask_changes = !result.autounmask_keyword_changes.is_empty()
+        || !result.autounmask_mask_changes.is_empty()
+        || !result.autounmask_use_changes.is_empty()
+        || !result.autounmask_license_changes.is_empty();
+    let show_merge_list = (!autounmask_only
         && merge_list_shown(pretend, ask, tree, verbose, quiet)
-        && (pretend || gated_abort_partial.is_none());
+        && (pretend || gated_abort_partial.is_none()))
+        || autounmask_only_reshows_merge_list(pretend, autounmask_only, has_autounmask_changes);
     // Backlog #185 (fix round 1): real's resolution-phase display for
     // a non-`--pretend` run, printed whether or not the list itself is
     // shown -- and whether or not resolution succeeds. Real `depgraph.py::
@@ -13552,10 +13584,8 @@ pub fn run(args: &[String]) -> ExitCode {
         // below (a `--json` consumer's exit-code check must see the
         // "config still needs editing" signal too). `--autounmask-only`
         // stays exit 0 (its whole point is "just show the changes").
-        let has_autounmask_changes = !result.autounmask_keyword_changes.is_empty()
-            || !result.autounmask_mask_changes.is_empty()
-            || !result.autounmask_use_changes.is_empty()
-            || !result.autounmask_license_changes.is_empty();
+        // (`has_autounmask_changes` is bound once, above, next to the
+        // `--autounmask-only` re-show gate -- backlog #271.)
         if has_autounmask_changes
             && !autounmask_only
             && !(!pretend && autounmask_continue == Some(true))
@@ -14802,10 +14832,8 @@ pub fn run(args: &[String]) -> ExitCode {
     // config still needs editing. The one exception is a real (non-
     // `--pretend`) `--autounmask-continue`, which writes the changes and
     // proceeds (real `_resolve`'s own `'--pretend' not in myopts` guard).
-    let has_autounmask_changes = !result.autounmask_keyword_changes.is_empty()
-        || !result.autounmask_mask_changes.is_empty()
-        || !result.autounmask_use_changes.is_empty()
-        || !result.autounmask_license_changes.is_empty();
+    // (`has_autounmask_changes` is bound once, above, next to the
+    // `--autounmask-only` re-show gate -- backlog #271.)
     let autounmask_continue_active = !pretend && autounmask_continue == Some(true);
 
     // Real `_display_autounmask`'s tail (`depgraph.py:11093`, gated on
@@ -18577,6 +18605,28 @@ mod tests {
         assert!(!merge_list_shown(false, false, false, false, true));
         assert!(!merge_list_shown(false, false, false, true, true));
         assert!(merge_list_shown(false, true, false, false, true));
+    }
+
+    #[test]
+    fn autounmask_only_reshows_the_merge_list_under_pretend() {
+        // Backlog #271: real `_display_autounmask` re-shows the merge
+        // list via `_show_merge_list` (`depgraph.py:10625`, `:10686`,
+        // `:10488`) even on the `--autounmask-only` early-return path
+        // (`actions.py:456-458`) -- whenever it has changes to report.
+        // (pretend, autounmask_only, has_changes) -> re-shown.
+        assert!(autounmask_only_reshows_merge_list(true, true, true));
+        // No changes (a plain package): still nothing, like real (no
+        // `_show_merge_list` call fires from an empty change loop).
+        assert!(!autounmask_only_reshows_merge_list(true, true, false));
+        // The control path shows the list through the normal gate, not
+        // this carve-out.
+        assert!(!autounmask_only_reshows_merge_list(true, false, true));
+        assert!(!autounmask_only_reshows_merge_list(true, false, false));
+        // Non-`--pretend` keeps the old suppression (unprobed this
+        // slice; real has no pretend gate here, so this is a cut).
+        assert!(!autounmask_only_reshows_merge_list(false, true, true));
+        assert!(!autounmask_only_reshows_merge_list(false, true, false));
+        assert!(!autounmask_only_reshows_merge_list(false, false, true));
     }
 
     #[test]

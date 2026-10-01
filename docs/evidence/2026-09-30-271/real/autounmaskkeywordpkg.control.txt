@@ -1,0 +1,16 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 1.74 s (backtrack: 0/20).
+
+[ebuild  N    ~] dev-libs/autounmaskkeywordpkg-1.0 to /tmp/opencode/d3/stage/fixtures/
+
+ * IMPORTANT: 11 news items need reading for repository 'gentoo'.
+ * Use eselect news read to view new items.
+
+
+The following keyword changes are necessary to proceed:
+ (see "package.accept_keywords" in the portage(5) man page for more details)
+# required by dev-libs/autounmaskkeywordpkg (argument)
+=dev-libs/autounmaskkeywordpkg-1.0 ~amd64
