@@ -24448,7 +24448,17 @@ struct QueueItem {
     atom: String,
     depth: u32,
     owner: Option<(String, String)>,
-    unevaluated: Option<String>,
+    unevaluated: Option<String>,    /// Track X Slice B (#242): real `_add_pkg_deps`' five-group `deps`
+    /// queue (`depgraph.py:4255-4291`) resolves each group against its own
+    /// root -- `RDEPEND`/`PDEPEND` against the target root, `DEPEND`/
+    /// `BDEPEND`/`IDEPEND` against the running root -- so this atom must
+    /// be selected against the running root's tree/installed db, and its
+    /// entry carries that root (`GraphEntry::targets_running_root`).
+    /// `true` only when the running root differs from the target root
+    /// (otherwise every atom is target-rooted, a strict no-op); top-level
+    /// atoms are always target-rooted (real installs the argument under
+    /// the target `ROOT`).
+    targets_running_root: bool,
     /// The edge from `owner` to this atom's `cat/pkg` is an unsatisfied
     /// **build-time** dep (`DEPEND`/`BDEPEND`) with no run-time
     /// alternative -- real `DepPriority` `buildtime && !runtime`. Such an
@@ -24526,6 +24536,81 @@ fn or_group_universe(tokens: &[String]) -> HashSet<String> {
     out
 }
 
+/// Track X Slice B (#242): which atoms of one owner's flattened
+/// dependencies resolve against the running root rather than the target
+/// root -- real `_add_pkg_deps`' five-group `deps` queue
+/// (`depgraph.py:4255-4291`) as a per-token predicate, for a walk that
+/// flattens every key into one string before queueing (so key provenance
+/// is recovered from per-key flattens here).
+///
+/// Real's mapping, for an owner in the target root: `RDEPEND`/`PDEPEND`
+/// stay target-rooted; `DEPEND`/`BDEPEND`/`IDEPEND` go to the running
+/// root (native builds: `ESYSROOT` collapses to the running root, and the
+/// pre-EAPI-7 `DEPEND`-against-running-root branch lands in the same
+/// place, so no EAPI gate is needed -- both real branches map here).
+/// For an owner already in the running root: `RDEPEND`/`IDEPEND`/`DEPEND`/
+/// `BDEPEND` stay running-rooted and only a `PDEPEND`-only atom stays a
+/// target-`ROOT` concern (scope-backlog's permanent non-gap, not
+/// reopened). Overlaps resolve by real's group order (`RDEPEND` first, so
+/// a runtime key always wins over a build key; `IDEPEND` precedes
+/// `PDEPEND`, so it wins that overlap).
+///
+/// The returned tokens are keyed exactly like the `buildtime_atoms` /
+/// `runtime_atoms` sets `enqueue_flat_deps` classifies with (same
+/// per-key `use_reduce_flat` over the same `use_flags`), so the same
+/// raw-text `contains` comparisons apply -- including their shared
+/// assumption that a merged-flatten token matches its per-key flatten
+/// textually. Callers only invoke this when the running root differs
+/// from the target root; otherwise every atom is target-rooted and the
+/// empty set is the whole answer (strict no-op).
+fn dep_running_tags(
+    metadata: &HashMap<String, String>,
+    use_flags: &HashSet<String>,
+    owner_targets_running_root: bool,
+) -> HashSet<String> {
+    let flatten_key = |key: &str| -> HashSet<String> {
+        let joined: String = metadata
+            .get(key)
+            .map(String::as_str)
+            .unwrap_or_default()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let toks: Vec<String> = joined.split_whitespace().map(String::from).collect();
+        portage_use_reduce::use_reduce_flat(&toks, use_flags, portage_use_reduce::MatchMode::Normal)
+            .map(|v| v.into_iter().filter(|t| t != "||").collect())
+            .unwrap_or_default()
+    };
+    let (in_r, in_p, in_d, in_b, in_i) = (
+        flatten_key("RDEPEND"),
+        flatten_key("PDEPEND"),
+        flatten_key("DEPEND"),
+        flatten_key("BDEPEND"),
+        flatten_key("IDEPEND"),
+    );
+    let all: HashSet<String> = in_r
+        .union(&in_p)
+        .chain(in_d.union(&in_b))
+        .chain(in_i.iter())
+        .cloned()
+        .collect();
+    all.into_iter()
+        .filter(|tok| {
+            if !owner_targets_running_root {
+                (in_d.contains(tok) || in_b.contains(tok) || in_i.contains(tok))
+                    && !in_r.contains(tok)
+                    && (!in_p.contains(tok) || in_i.contains(tok))
+            } else {
+                !(in_p.contains(tok)
+                    && !in_r.contains(tok)
+                    && !in_i.contains(tok)
+                    && !in_d.contains(tok)
+                    && !in_b.contains(tok))
+            }
+        })
+        .collect()
+}
+
 /// Queues every atom in `flat_deps` (a `use_reduce_flat`/
 /// `use_reduce_flat_subset` result) onto `queue` at `depth + 1`, owned by
 /// `key`/`version`, splitting off a blocker atom into `pending_blockers`
@@ -24564,7 +24649,21 @@ fn enqueue_flat_deps(
     // dep is `DepPriority.optional`, never a hard cycle contributor.
     buildtime_atoms: &HashSet<String>,
     runtime_atoms: &HashSet<String>,
+    // Track X Slice B fix (#242): `BDEPEND` alone (subset of
+    // `buildtime_atoms` above) -- a running-root `BDEPEND` edge is
+    // `DepPriority` soft (its own bootstrap cycle scope, terminating
+    // like the old sidecar `seen` guard instead of reporting), while a
+    // running `DEPEND` edge stays hard (the cross-root `DEPEND` cycle
+    // around `cyc0z-3` still reports, the #207 flip). Empty at the
+    // `--with-test-deps` call sites and in the unit-test pin below.
+    bdepend_atoms: &HashSet<String>,
     or_universe: &HashSet<String>,
+    // Track X Slice B (#242): `dep_running_tags` over the same dependency
+    // string -- an atom in this set resolves against the running root
+    // (its `QueueItem::targets_running_root`). Empty at the
+    // `--with-test-deps` call sites (a `test?` dep stays target-rooted)
+    // and everywhere the roots coincide (strict no-op).
+    running_atoms: &HashSet<String>,
 ) {
     // Backlog #90 (S1): real pops each deplist last-declared-first
     // (stack discipline), BUT drains every plain dep before touching a
@@ -24590,7 +24689,23 @@ fn enqueue_flat_deps(
         if tok == "||" {
             continue;
         }
-        let buildtime_hard = buildtime_atoms.contains(&tok) && !runtime_atoms.contains(&tok);
+        // Track X Slice B fix (#242): a running-root `BDEPEND` edge is
+        // soft -- its bootstrap cycle (`rdrcyca <-> rdrcycb`) terminates
+        // instead of reporting, like the old sidecar `seen` guard did --
+        // while a running `DEPEND` edge stays hard (the `cyc0z-3`/`cyc0y`
+        // cross-root `DEPEND` cycle still reports, the #207 flip, which
+        // this must not touch). Bound on the raw token like
+        // `buildtime_hard`/`targets_running` below (same flatten family,
+        // same raw-text assumption; `||` groups never span keys).
+        let targets_running_first = running_atoms.contains(&tok);
+        let buildtime_hard = buildtime_atoms.contains(&tok)
+            && !runtime_atoms.contains(&tok)
+            && !(targets_running_first && bdepend_atoms.contains(&tok));
+        // Track X Slice B (#242): the per-group root travels with the
+        // atom -- bound on the raw token here, before evaluation moves
+        // it, exactly like `buildtime_hard` (same flatten family, same
+        // raw-text form assumption).
+        let targets_running = targets_running_first;
         // `evaluate_atom_conditionals` returns `Some(...)` even when
         // nothing changed (the common case: no conditional use-deps at
         // all) -- only `None` on a genuinely unparseable atom. So
@@ -24631,6 +24746,7 @@ fn enqueue_flat_deps(
             depth: depth + 1,
             owner: Some(key.clone()),
             unevaluated,
+            targets_running_root: targets_running,
             buildtime_hard,
             from_disjunction,
         });
@@ -24679,6 +24795,11 @@ fn delta_atom_cleanly_reuses_resolved_slot(
     state: &PassState,
     bp: &BacktrackParams,
     evaluated: &str,
+    // Track X Slice B (#242): this delta atom's own resolving root (its
+    // queue tag) -- the speculative selection and the slot lookup both
+    // run against it, so a running-root atom never reuses a target-root
+    // slot (and vice versa).
+    atom_running: bool,
 ) -> bool {
     let Some(atom) = portage_dep::parse_atom(evaluated) else {
         return false;
@@ -24697,9 +24818,14 @@ fn delta_atom_cleanly_reuses_resolved_slot(
     }
     let empty_constraints: Vec<String> = Vec::new();
     let extra_constraints = union_constraints.get(&key2).unwrap_or(&empty_constraints);
+    let select_root: &Path = if atom_running {
+        ctx.cross_root().expect("running-root atom without a cross root")
+    } else {
+        ctx.root
+    };
     let Ok(outcome) = resolve_pretend(
         &ctx.repos,
-        ctx.root,
+        select_root,
         evaluated,
         config,
         ctx.newuse,
@@ -24758,7 +24884,7 @@ fn delta_atom_cleanly_reuses_resolved_slot(
     else {
         return false;
     };
-    let slot_key2 = (key2.0.clone(), key2.1.clone(), resolved.slot.clone());
+    let slot_key2 = (key2.0.clone(), key2.1.clone(), resolved.slot.clone(), atom_running);
     let Some(&existing_idx2) = state.resolved_slots.get(&slot_key2) else {
         // A genuinely new slot: the aucascleaf case. Queue it.
         return false;
@@ -24973,6 +25099,26 @@ fn expand_resolved_slot_with_flipped_use(
     };
     let buildtime_atoms = flatten_keys(&["DEPEND", "BDEPEND"]);
     let runtime_atoms = flatten_keys(&["RDEPEND", "PDEPEND", "IDEPEND"]);
+    // Track X Slice B fix (#242): `BDEPEND` alone, for the same
+    // running-`BDEPEND`-soft rule the fresh expansion applies (see
+    // `enqueue_flat_deps`'s own `bdepend_atoms` doc comment).
+    let bdepend_atoms = flatten_keys(&["BDEPEND"]);
+    // Track X Slice B (#242): the flipped entry's own per-group roots --
+    // same rule as the fresh expansion (a flipped running-root entry
+    // re-resolves its build groups against the running root).
+    let cross_running_root: Option<&Path> = ctx.cross_root();
+    let running_tags: HashSet<String> = cross_running_root
+        .map(|_| {
+            dep_running_tags(
+                &delta_meta,
+                new_use,
+                state.entries[existing_idx].targets_running_root,
+            )
+        })
+        .unwrap_or_default();
+    let group_running = |atoms: &[String]| -> bool {
+        cross_running_root.is_some() && atoms.iter().all(|a| running_tags.contains(a))
+    };
     let queued: Vec<QueueItem> = state.queue.iter().cloned().collect();
     let Ok(flat_deps) = portage_use_reduce::use_reduce_flat_disjunctive(
         &tokens,
@@ -24982,38 +25128,94 @@ fn expand_resolved_slot_with_flipped_use(
             delta_meta.get("EAPI").map(String::as_str).unwrap_or("0"),
         ),
         &mut |atoms: &[String]| {
+            let grp_running = group_running(atoms);
+            let grp_root: &Path = if grp_running {
+                cross_running_root.expect("running-root group without a cross root")
+            } else {
+                ctx.root
+            };
+            let scoped_entries: Option<Vec<GraphEntry>> = cross_running_root.map(|_| {
+                state
+                    .entries
+                    .iter()
+                    .filter(|e| e.targets_running_root == grp_running)
+                    .cloned()
+                    .collect()
+            });
+            let entries_view: &[GraphEntry] =
+                scoped_entries.as_deref().unwrap_or(&state.entries);
+            let scoped_queued: Option<Vec<QueueItem>> = cross_running_root.map(|_| {
+                queued
+                    .iter()
+                    .filter(|q| q.targets_running_root == grp_running)
+                    .cloned()
+                    .collect()
+            });
+            let queued_view: &[QueueItem] = scoped_queued.as_deref().unwrap_or(&queued);
             disjunction_preference(
                 &ctx.repos,
                 config,
-                ctx.root,
-                &state.entries,
+                grp_root,
+                entries_view,
                 key,
                 union_constraints,
                 &bp.circular_dependency,
                 ctx.root_deps_running_root,
                 atoms,
-                &queued,
+                queued_view,
                 ctx.update,
             )
         },
         &mut |alts: &[Vec<String>]| {
+            let grp_running = cross_running_root.is_some()
+                && alts
+                    .iter()
+                    .flat_map(|v| v.iter())
+                    .next()
+                    .is_some_and(|a| running_tags.contains(a));
+            let grp_root: &Path = if grp_running {
+                cross_running_root.expect("running-root group without a cross root")
+            } else {
+                ctx.root
+            };
+            let scoped_entries: Option<Vec<GraphEntry>> = cross_running_root.map(|_| {
+                state
+                    .entries
+                    .iter()
+                    .filter(|e| e.targets_running_root == grp_running)
+                    .cloned()
+                    .collect()
+            });
+            let entries_view: &[GraphEntry] =
+                scoped_entries.as_deref().unwrap_or(&state.entries);
+            let scoped_queued: Option<Vec<QueueItem>> = cross_running_root.map(|_| {
+                queued
+                    .iter()
+                    .filter(|q| q.targets_running_root == grp_running)
+                    .cloned()
+                    .collect()
+            });
+            let queued_view: &[QueueItem] = scoped_queued.as_deref().unwrap_or(&queued);
             promote_tied_alternative(
                 &ctx.repos,
                 config,
-                ctx.root,
-                &state.entries,
+                grp_root,
+                entries_view,
                 union_constraints,
                 alts,
-                &queued,
+                queued_view,
             )
         },
     ) else {
         return;
     };
     // The same `--root-deps` running-root split as the fresh expansion
-    // above (both no-ops unless `root_deps_running_root` is set).
-    let root_deps_satisfied: HashSet<String> = ctx
-        .root_deps_running_root
+    // above (Track X Slice B: flag-on coinciding-roots only -- the unified
+    // per-group walk owns every cross-root atom).
+    let root_deps_split: Option<&Path> =
+        ctx.root_deps_running_root.filter(|_| cross_running_root.is_none());
+    // above (both no-ops unless `root_deps_split` is set).
+    let root_deps_satisfied: HashSet<String> = root_deps_split
         .map(|root| {
             root_deps_satisfied_atoms(
                 &delta_meta,
@@ -25028,8 +25230,7 @@ fn expand_resolved_slot_with_flipped_use(
             )
         })
         .unwrap_or_default();
-    let root_deps_unsatisfied: Vec<String> = ctx
-        .root_deps_running_root
+    let root_deps_unsatisfied: Vec<String> = root_deps_split
         .map(|root| {
             unsatisfied_root_deps_atoms(
                 &delta_meta,
@@ -25097,6 +25298,8 @@ fn expand_resolved_slot_with_flipped_use(
     for tok in &new_toks {
         let evaluated =
             portage_dep::evaluate_atom_conditionals(tok, new_use).unwrap_or_else(|| tok.clone());
+        // Track X Slice B (#242): the tag is raw-keyed -- `tok` here is
+        // still the raw survivor (evaluated only for the lookup below).
         if delta_atom_cleanly_reuses_resolved_slot(
             ctx,
             config,
@@ -25104,6 +25307,7 @@ fn expand_resolved_slot_with_flipped_use(
             state,
             bp,
             &evaluated,
+            running_tags.contains(tok),
         ) {
             continue;
         }
@@ -25139,7 +25343,9 @@ fn expand_resolved_slot_with_flipped_use(
         &mut state.pending_blockers,
         &buildtime_atoms,
         &runtime_atoms,
+        &bdepend_atoms,
         &or_group_universe(&tokens),
+        &running_tags,
     );
     // Narrowing (L0 20260928T054625Z): merge-order edges are added ONLY
     // for newly-queued targets. Unioning the whole flipped flatten here
@@ -25229,6 +25435,10 @@ fn expand_resolved_slot_with_flipped_use(
                     &mut state.pending_blockers,
                     &HashSet::new(),
                     &HashSet::new(),
+                    &HashSet::new(),
+                    &HashSet::new(),
+                    // Track X Slice B (#242): a `test?` dep stays
+                    // target-rooted (same gate as the fresh expansion).
                     &HashSet::new(),
                 );
             }
@@ -25888,6 +26098,22 @@ struct ResolveCtx<'a> {
 }
 
 impl<'a> ResolveCtx<'a> {
+    /// Track X Slice B (#242): the running root this walk resolves
+    /// build-time groups against -- `Some` exactly when it differs from
+    /// the target root (a genuine cross-root build), `None` otherwise --
+    /// real `_add_pkg_deps`' `depend_root` selection plus the `BDEPEND`/
+    /// `IDEPEND`-against-running-root groups (`depgraph.py:4218-4291`),
+    /// as a per-group root rather than the `--root-deps` existence check.
+    /// `root_deps_running_root` stays the `--root-deps` flag machinery
+    /// (folds/drops); this is the always-on cross-root routing both share
+    /// as a root source. `None` at every same-root call site -- including
+    /// flag-on coinciding-roots runs -- so those keep the sidecar path
+    /// byte-identical.
+    fn cross_root(&self) -> Option<&'a Path> {
+        self.root_deps_running_root
+            .filter(|r| r.as_os_str() != self.root.as_os_str())
+    }
+
     fn new(req: &'a ResolveRequest) -> Result<Self, Error> {
         // Real `create_depgraph_params.py:178`: `--emptytree` sets
         // `myparams["deep"] = True`. Real `_complete_graph` (8668-8670)
@@ -26898,7 +27124,12 @@ struct PassState {
     /// the same slot is checked against that already-resolved version
     /// (see `SlotConflict`) instead of triggering a second, independent
     /// resolution.
-    resolved_slots: HashMap<(String, String, String), usize>,
+    /// Track X Slice B (#242): keyed by resolving root too -- real
+    /// keys graph nodes by package object (`Package.__hash__`), so one
+    /// `cat/pkg:slot` needed in both roots is two nodes, and a
+    /// running-root atom never reuses a target-root slot (nor vice
+    /// versa). Uniformly `false` on same-root runs: identical keys.
+    resolved_slots: HashMap<(String, String, String, bool), usize>,
     /// Backlog #218: (category, package, slot) -> the queue depth the
     /// first-resolving atom carried when this slot's entry was pushed.
     /// An in-pass `--autounmask-use` flip on an already-resolved slot
@@ -26920,7 +27151,9 @@ struct PassState {
     /// installed nodes only through the early `resolved_version.is_none()`
     /// branch, which never consulted `resolved_slots` at all -- the whole
     /// of backlog #57.
-    installed_slots: HashMap<(String, String, String), String>,
+    /// Track X Slice B (#242): like `resolved_slots`, keyed by
+    /// resolving root (an installed instance in each root is two nodes).
+    installed_slots: HashMap<(String, String, String, bool), String>,
     /// `(category, package, slot)` -> already added an
     /// `AlreadyInstalled` entry for that installed instance; a
     /// `NoVisibleCandidate` has no instance, so it uses `None` there and
@@ -26930,7 +27163,9 @@ struct PassState {
     /// independently -- `llvm-core/clang:22` and `:23` coexisting is
     /// exactly the #74 S2a shape. Separate from `resolved_slots` (which
     /// keys merge-bound instances).
-    other_outcomes: HashSet<(String, String, Option<String>)>,
+    /// Track X Slice B (#242): like `resolved_slots`, keyed by
+    /// resolving root.
+    other_outcomes: HashSet<(String, String, Option<String>, bool)>,
     /// (category, package) -> already added a `targets_running_root`
     /// entry for it (see `resolve_root_deps_build_entries`'s own doc
     /// comment). Deliberately separate from `resolved_slots`/
@@ -27362,6 +27597,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             depth: 0,
             owner: None,
             unevaluated: None,
+            targets_running_root: false,
             buildtime_hard: false,
             from_disjunction: false,
         });
@@ -27388,6 +27624,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             depth: 1,
             owner: None,
             unevaluated: None,
+            targets_running_root: false,
             buildtime_hard: false,
             from_disjunction: false,
         });
@@ -27401,6 +27638,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             depth: 1,
             owner: None,
             unevaluated: None,
+            targets_running_root: false,
             buildtime_hard: false,
             from_disjunction: false,
         });
@@ -27413,6 +27651,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         depth,
         owner,
         unevaluated: unevaluated_atom,
+        targets_running_root: item_targets_running_root,
         buildtime_hard,
         from_disjunction,
     }) = state.queue.pop_front()
@@ -27444,6 +27683,36 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             continue;
         }
         let key = (atom.category.clone(), atom.package.clone());
+        // Track X Slice B (#242): this atom's resolving root -- real
+        // `_dep_expand`'s `root_config` (`depgraph.py:4928`). The flag
+        // implies `cross_root().is_some()` (tags are only ever set when
+        // the roots differ); same-root runs always resolve here.
+        let atom_root: &Path = if item_targets_running_root {
+            ctx.cross_root().expect("running-root atom without a cross root")
+        } else {
+            ctx.root
+        };
+        // Track X Slice B fix (#242): the running-root subgraph's own
+        // cycle scope -- a soft running edge back into an already-visited
+        // atom (a running `BDEPEND` bootstrap cycle like
+        // `rdrcyca <-> rdrcycb`, whose edges are soft via the
+        // running-`BDEPEND`-soft rule in `enqueue_flat_deps`) cuts here
+        // with no edge and no entry, like the old sidecar
+        // `root_deps_build_seen` guard did (`resolve_root_deps_build_entries`:
+        // "the second edge back into an in-progress package just yields
+        // no further entry", losing one `required_by` edge by design).
+        // A hard running edge back (a running `DEPEND` cycle like the
+        // `cyc0z-3`/`cyc0y` cross-root `DEPEND` cycle, the #207 flip)
+        // still records its edge below so the cycle reports, and a
+        // same-root soft revisit (a `RDEPEND` diamond's second owner)
+        // still records too (its `--json` `required_by` lists both).
+        if owner.is_some()
+            && state.visited_atoms.contains(&current_atom)
+            && item_targets_running_root
+            && !buildtime_hard
+        {
+            continue 'queue;
+        }
         if let Some(owner) = owner.clone() {
             state
                 .required_by_map
@@ -27471,8 +27740,10 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             // instance's recorded USE -- an installed `foo` built `-bar`
             // does not satisfy `foo[bar]`, so the edge stays unbreakable
             // (the version/slot-only lookup let a USE-mismatched instance
-            // hide a genuine build-time cycle).
-            if buildtime_hard && best_installed_matching(ctx.root, &current_atom, config).is_none()
+            // hide a genuine build-time cycle). Track X Slice B (#242):
+            // satisfaction is tested against this atom's own resolving
+            // root (real `DepPriority.satisfied` reads that root's vdb).
+            if buildtime_hard && best_installed_matching(atom_root, &current_atom, config).is_none()
             {
                 kinds.0 = true;
             } else {
@@ -27582,11 +27853,20 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         // through `resolve_pretend` (their `NoVisibleCandidate` is
         // fatal, handled below).
         // The selection call, shared with the #236 A forced-upgrade flip
-        // below (same pass-constant inputs, another atom).
-        let resolve_atom = |a: &str| -> Result<PretendOutcome, Error> {
+        // below (same pass-constant inputs, another atom). Track X Slice
+        // B (#242): selection runs against the atom's own resolving root
+        // (real `_dep_expand`'s `root_config`) -- the group loop below
+        // passes each sibling's own flag, the single resolve the popped
+        // item's.
+        let resolve_atom = |a: &str, a_running: bool| -> Result<PretendOutcome, Error> {
+            let select_root: &Path = if a_running {
+                ctx.cross_root().expect("running-root atom without a cross root")
+            } else {
+                ctx.root
+            };
             resolve_pretend(
                 &ctx.repos,
-                ctx.root,
+                select_root,
                 a,
                 config,
                 ctx.newuse,
@@ -27643,7 +27923,8 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 .minimize_pins
                 .contains_key(&(o.clone(), current_atom.clone()))
         {
-            let mut group: Vec<(String, bool)> = vec![(current_atom.clone(), buildtime_hard)];
+            let mut group: Vec<(String, bool, bool)> =
+                vec![(current_atom.clone(), buildtime_hard, item_targets_running_root)];
             for it in state.queue.iter() {
                 if it.owner.as_ref() != Some(o) || it.depth != depth || it.from_disjunction {
                     break;
@@ -27652,37 +27933,50 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     && a.blocker == portage_dep::Blocker::None
                     && a.category == key.0
                     && a.package == key.1
-                    && !group.iter().any(|(g, _)| *g == it.atom)
+                    && !group.iter().any(|(g, _, _)| *g == it.atom)
                 {
-                    group.push((it.atom.clone(), it.buildtime_hard));
+                    group.push((it.atom.clone(), it.buildtime_hard, it.targets_running_root));
                 }
             }
             if group.len() >= 2 {
                 let mut picks: Vec<(String, PretendOutcome)> = Vec::new();
-                for (a, bh) in &group {
+                for (a, bh, running) in &group {
                     let mut out = if complete_locked {
                         match best_installed_for_atom(ctx.root, a, &key.0, &key.1) {
                             Some(v) => PretendOutcome::AlreadyInstalled { version: v },
                             None => continue,
                         }
                     } else {
-                        resolve_atom(a)?
+                        resolve_atom(a, *running)?
                     };
                     // The #233 installed fallback below, applied to the
-                    // prediction too (real's selection iterates vartree).
+                    // prediction too (real's selection iterates vartree --
+                    // Track X Slice B: the sibling's own resolving root).
                     if matches!(out, PretendOutcome::NoVisibleCandidate)
                         && depth != 0
                         && !bh
                         && !ctx.empty
                         && portage_dep::parse_atom(a)
                             .is_some_and(|p| p.slot.is_some() || p.slot_operator.is_some())
-                        && let Some(version) = best_installed_matching(ctx.root, a, config)
+                        && let Some(version) = best_installed_matching(
+                            if *running {
+                                ctx.cross_root().expect("running-root atom without a cross root")
+                            } else {
+                                ctx.root
+                            },
+                            a,
+                            config,
+                        )
                     {
                         out = PretendOutcome::AlreadyInstalled { version };
                     }
                     picks.push((a.clone(), out));
                 }
-                for (a, out) in minimize_children(ctx.root, &ctx.repos, config, &key, picks) {
+                // Track X Slice B (#242): `minimize_children` reads
+                // installed slots out of its `root` -- the group's own
+                // resolving root (homogeneous in practice; siblings share
+                // one owner and one cp).
+                for (a, out) in minimize_children(atom_root, &ctx.repos, config, &key, picks) {
                     state.minimize_pins.insert((o.clone(), a), out);
                 }
             }
@@ -27700,7 +27994,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 None => continue 'queue,
             }
         } else {
-            resolve_atom(&current_atom)?
+            resolve_atom(&current_atom, item_targets_running_root)?
         };
 
         // Backlog #233: a runtime-keyed dependency no ebuild satisfies
@@ -27761,7 +28055,9 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         // assembly scan is about to withhold *to*), which real's
         // integrated scan never creates -- respecting them diverts the
         // walk into missing-dep feedback instead of terminating with
-        // the both-instances shape the withhold needs.
+        // the both-instances shape the withhold needs. Track X Slice B
+        // (#242): the installed fallback reads this atom's own resolving
+        // root (real iterates that root's installed db).
         if matches!(outcome, PretendOutcome::NoVisibleCandidate)
             && owner.is_some()
             && depth != 0
@@ -27769,7 +28065,39 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             && !from_disjunction
             && !ctx.empty
             && (atom.slot.is_some() || atom.slot_operator.is_some())
-            && let Some(version) = best_installed_matching(ctx.root, &current_atom, config)
+            && let Some(version) = best_installed_matching(atom_root, &current_atom, config)
+        {
+            outcome = PretendOutcome::AlreadyInstalled { version };
+        }
+        // Track X Slice B fix (#242): a running-root `BDEPEND`/`IDEPEND`
+        // (and `DEPEND`) no ebuild satisfies but the running root has
+        // installed settles `AlreadyInstalled`, never
+        // `NoVisibleCandidate` -- real `_add_pkg_deps` resolves those
+        // groups against the running root's installed db
+        // (`depgraph.py:4218-4291`), so a cross-root build without
+        // `--root-deps` (`rootdepspkg`'s own `BDEPEND`
+        // `rootdepsprovider`, installed in the running root, no ebuild
+        // anywhere) drops it silently instead of failing. Loosens both
+        // gates the #233 fallback above keeps for target-rooted atoms:
+        // `buildtime_hard` (a `BDEPEND` is always hard) and the
+        // slot-operator requirement (a bare `BDEPEND` like
+        // `rootdepsprovider` carries no slot). Scoped to running atoms
+        // with an installed match in their own resolving root
+        // (`atom_root`, already the running root here) -- the
+        // `cyc0z-3`/`cyc0y` fixture-only CPs are never in the host vdb
+        // (the #207 flip's own determinism basis), and neither are
+        // `rdrtool*`/`rdrcyc*` in `/`, so that flip and the recursion
+        // pins are untouched. `||`-chosen edges stay out (the
+        // disjunction layer classifies installed-ness itself, like
+        // above) and `--emptytree` stays out (real selects no
+        // installed candidates there).
+        if matches!(outcome, PretendOutcome::NoVisibleCandidate)
+            && owner.is_some()
+            && depth != 0
+            && !from_disjunction
+            && !ctx.empty
+            && item_targets_running_root
+            && let Some(version) = best_installed_matching(atom_root, &current_atom, config)
         {
             outcome = PretendOutcome::AlreadyInstalled { version };
         }
@@ -27797,7 +28125,8 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 .find(|(c, p, _)| *c == key.0 && *p == key.1)
             && target != version
         {
-            let forced = resolve_atom(&format!("={}/{}-{target}", key.0, key.1))?;
+            let forced =
+                resolve_atom(&format!("={}/{}-{target}", key.0, key.1), item_targets_running_root)?;
             if !matches!(forced, PretendOutcome::NoVisibleCandidate) {
                 outcome = forced;
             }
@@ -28488,13 +28817,20 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             // record.
             let installed_node_slot = match &outcome {
                 PretendOutcome::AlreadyInstalled { version } => {
-                    Some(read_vdb_slot(ctx.root, &key.0, &key.1, version).0)
+                    // Track X Slice B (#242): the instance lives in this
+                    // atom's own resolving root.
+                    Some(read_vdb_slot(atom_root, &key.0, &key.1, version).0)
                 }
                 _ => None,
             };
             if let PretendOutcome::AlreadyInstalled { version } = &outcome {
                 let inst_slot = installed_node_slot.clone().unwrap_or_default();
-                let slot_key = (key.0.clone(), key.1.clone(), inst_slot.clone());
+                let slot_key = (
+                    key.0.clone(),
+                    key.1.clone(),
+                    inst_slot.clone(),
+                    item_targets_running_root,
+                );
                 if let Some(&existing_idx) = state.resolved_slots.get(&slot_key)
                     && let Some(existing_version) =
                         merge_bound_version(&state.entries[existing_idx].outcome).cloned()
@@ -28548,7 +28884,12 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             // shadow the rest, dropping `llvm-core/clang:23`'s own build
             // deps). NoVisibleCandidate has no instance to key by: `None`
             // keeps the old cp-scoped repeat dedup.
-            let other_key = (key.0.clone(), key.1.clone(), installed_node_slot);
+            let other_key = (
+                key.0.clone(),
+                key.1.clone(),
+                installed_node_slot,
+                item_targets_running_root,
+            );
             if !state.other_outcomes.insert(other_key) {
                 // #57: a deduped `NoVisibleCandidate` never gets its own
                 // entry, so under an active `runtime_pkg_mask` the
@@ -28593,15 +28934,17 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 // recorded-repo view the recursion walks (never a
                 // priority search), so `--debug`/`--tree` cannot
                 // contradict the queued child.
+                // Track X Slice B (#242): this installed instance lives
+                // in the atom's own resolving root (real `pkg.root`).
                 if let Some(metadata) =
-                    live_metadata_for_installed(&ctx.repos, ctx.root, &key.0, &key.1, version)
+                    live_metadata_for_installed(&ctx.repos, atom_root, &key.0, &key.1, version)
                 {
                     // Installed recorded USE, not effective profile
                     // USE -- see `enqueue_dependencies`'s own note
                     // just below; a `flag?`-gated dep this display
                     // list shows must match what the recursion
                     // actually queued.
-                    let use_flags = read_vdb_flag_set(ctx.root, &key.0, &key.1, version, "USE");
+                    let use_flags = read_vdb_flag_set(atom_root, &key.0, &key.1, version, "USE");
                     let real_order_keys: &[&str] = if ctx.with_bdeps {
                         &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"]
                     } else {
@@ -28615,7 +28958,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     let mut effective: HashMap<String, String> = HashMap::new();
                     for k in real_order_keys {
                         let s = installed_dep_string(
-                            ctx.root,
+                            atom_root,
                             ctx.dynamic_deps,
                             ctx.ignore_built_slot_operator_deps,
                             &key.0,
@@ -28641,6 +28984,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 }
                 enqueue_dependencies(
                     &ctx.repos,
+                    atom_root,
                     ctx.root,
                     ctx.dynamic_deps,
                     ctx.ignore_built_slot_operator_deps,
@@ -28847,7 +29191,9 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 keyword_suggestion,
                 use_suggestion,
                 parent_use_suggestion,
-                targets_running_root: false,
+                // Track X Slice B (#242): the node carries its resolving
+                // root -- real `Package.root_config` / `pkg.root`.
+                targets_running_root: item_targets_running_root,
                 remote_binary: false,
                 build_id: None,
                 deps: already_installed_deps,
@@ -28999,7 +29345,11 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         let repo_name = resolved.repo_name.clone();
         let keywords = resolved.keywords.clone();
 
-        let slot_key = (key.0.clone(), key.1.clone(), slot.clone());
+        // Track X Slice B (#242): node identity includes the resolving
+        // root -- a running-root atom never reuses a target-root slot
+        // (this is the cross-root in-graph boundary: real's per-root
+        // graph db). Same-root runs key uniformly `false`: identical.
+        let slot_key = (key.0.clone(), key.1.clone(), slot.clone(), item_targets_running_root);
         if let Some(&existing_idx) = state.resolved_slots.get(&slot_key) {
             // This exact category/package/slot was already resolved by
             // an earlier atom. If the current atom's own constraint
@@ -29390,7 +29740,11 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         state.resolved_slots.insert(slot_key.clone(), entry_idx);
         // Backlog #218: remember the first-resolving depth for a later
         // in-pass autounmask delta re-expansion (see `resolved_depths`).
-        state.resolved_depths.insert(slot_key, depth);
+        // Still root-blind (one depth per slot): same-cp-both-roots depth
+        // arbitration is Slice C's dual-node modeling, not this slice's.
+        state
+            .resolved_depths
+            .insert((key.0.clone(), key.1.clone(), slot.clone()), depth);
         let candidate_source = resolved.source;
         // Real `output.py:648`: `attr_display.remote_binary = pkg.remote`.
         let candidate_remote = resolved.remote;
@@ -29571,7 +29925,9 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             keyword_suggestion: None,
             use_suggestion: None,
             parent_use_suggestion: None,
-            targets_running_root: false,
+            // Track X Slice B (#242): the node carries its resolving
+            // root -- real `Package.root_config` / `pkg.root`.
+            targets_running_root: item_targets_running_root,
             remote_binary: candidate_remote,
             build_id: candidate_build_id,
             deps: Vec::new(),
@@ -30052,6 +30408,17 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 // above — runtime edges must not reach the merge-order
                 // digraph under `--buildpkgonly` either.
                 &["DEPEND", "BDEPEND"]
+            } else if state.entries[entry_idx].targets_running_root {
+                // Track X Slice B fix (#242): a running-root build entry's
+                // own `deps` preserve real's insertion order -- `BDEPEND`
+                // before `RDEPEND` (`rdrtooldep` before `rdrlib`), like the
+                // old sidecar `["DEPEND", "BDEPEND", "RDEPEND", "IDEPEND"]`
+                // walk did -- instead of the target-root
+                // `RDEPEND`-first `deps` tuple above. `DEPEND`-only
+                // running entries (the `cyc0z-3`/`cyc0y` cross-root
+                // `DEPEND` cycle, the #207 flip) carry a single key either
+                // way, so the flip is untouched.
+                &["DEPEND", "BDEPEND", "RDEPEND", "IDEPEND", "PDEPEND"]
             } else {
                 &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"]
             };
@@ -30070,6 +30437,33 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             real_order_keys,
             candidate_source == CandidateSource::Binary,
         );
+        // Track X Slice B fix (#242): the running-root subgraph's own
+        // cycle scope for the merge-order digraph too -- a running
+        // `BDEPEND` edge back into an already-visited package (the
+        // `rdrcycb -> rdrcyca` bootstrap closing edge) is dropped here,
+        // like the old sidecar `seen` guard dropped its second
+        // `required_by` edge (and like the `required_by` cut above drops
+        // it for `find_hard_cycles`). A running `DEPEND` edge back is
+        // kept (the `cyc0z-3`/`cyc0y` cross-root `DEPEND` cycle still
+        // reports, the #207 flip), as is every first-visit edge (its
+        // target is not visited yet -- `rdrtooldep`/`rdrlib` stay, so
+        // the insertion-order pin above still orders them). Key `4`
+        // is `BDEPEND` (`DepEdge::key`'s own `0=R,1=I,2=P,3=D,4=B`
+        // numbering); visited is compared by `cat/pkg` (bare and
+        // versioned atom texts alike collapse to their cp, matching
+        // `required_by_map`'s own cp keying).
+        if state.entries[entry_idx].targets_running_root {
+            let mut visited_cps: HashSet<(String, String)> = HashSet::new();
+            for v in state.visited_atoms.iter() {
+                if let Some(a) = portage_dep::parse_atom(v) {
+                    visited_cps.insert((a.category, a.package));
+                }
+            }
+            state.entries[entry_idx].deps.retain(|d| {
+                !(d.key == 4
+                    && visited_cps.contains(&(d.category.clone(), d.package.clone())))
+            });
+        }
 
         // Per-edge build-time/run-time classification for the
         // merge-order sort + circular-dependency detection (real
@@ -30116,6 +30510,45 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             eapi_has_idepend,
         );
         let runtime_atoms = flatten_keys(runtime_keys);
+        // Track X Slice B fix (#242): `BDEPEND` alone, for the running-
+        // `BDEPEND`-soft rule in `enqueue_flat_deps` (a running `BDEPEND`
+        // edge is soft so its bootstrap cycle terminates; a running
+        // `DEPEND` edge stays hard so the `cyc0z-3` cross-root `DEPEND`
+        // cycle still reports -- the #207 flip). Same plain flatten
+        // family as `buildtime_atoms`/`runtime_atoms` above (groups never
+        // span keys, so the `||` branch choice matches). Empty for a
+        // binary without `with_bdeps`, mirroring `buildtime_atoms`.
+        let bdepend_atoms = if candidate_source == CandidateSource::Binary && !ctx.with_bdeps {
+            HashSet::new()
+        } else {
+            flatten_keys(&["BDEPEND"])
+        };
+        // Track X Slice B (#242): this expansion's per-group roots --
+        // real `_add_pkg_deps`' `depend_root` selection plus the
+        // `BDEPEND`/`IDEPEND`-against-running-root groups. `None` on every
+        // same-root run (the whole walk stays target-rooted, a strict
+        // no-op); on a cross-root run each queued atom carries its group
+        // root with it (`QueueItem::targets_running_root`), candidates
+        // select against that root's installed db, and same-root entries
+        // alone satisfy the in-graph preference below.
+        let cross_running_root: Option<&Path> = ctx.cross_root();
+        let running_tags: HashSet<String> = cross_running_root
+            .map(|_| {
+                dep_running_tags(
+                    &metadata,
+                    &use_flags,
+                    state.entries[entry_idx].targets_running_root,
+                )
+            })
+            .unwrap_or_default();
+        // Whether one `||` alternative (a single dep key, hence a single
+        // group root -- groups never span keys) resolves running-rooted:
+        // every member tagged running (mixed-key same text falls target,
+        // matching the queue tag's target-wins rule). Gated on an active
+        // cross root so same-root runs keep the pass-through below.
+        let group_running = |atoms: &[String]| -> bool {
+            cross_running_root.is_some() && atoms.iter().all(|a| running_tags.contains(a))
+        };
         // Real `--root-deps` branch-selection feed-in (see
         // `root_deps_satisfied_atoms`'s own doc comment): a `||` group
         // with no branch tree-visible still needs a branch selected
@@ -30213,11 +30646,40 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 metadata.get("EAPI").map(String::as_str).unwrap_or("0"),
             ),
             &mut |atoms: &[String]| {
+                // Track X Slice B (#242): branch selection sees the
+                // group's own root -- its installed db, and only the
+                // same-root graph (a target-rooted argument never
+                // satisfies a running-root dep's in-graph preference, and
+                // vice versa). Pass-through unless cross-root and running.
+                let grp_running = group_running(atoms);
+                let grp_root: &Path = if grp_running {
+                    cross_running_root.expect("running-root group without a cross root")
+                } else {
+                    ctx.root
+                };
+                let scoped_entries: Option<Vec<GraphEntry>> = cross_running_root.map(|_| {
+                    state
+                        .entries
+                        .iter()
+                        .filter(|e| e.targets_running_root == grp_running)
+                        .cloned()
+                        .collect()
+                });
+                let entries_view: &[GraphEntry] =
+                    scoped_entries.as_deref().unwrap_or(&state.entries);
+                let scoped_queued: Option<Vec<QueueItem>> = cross_running_root.map(|_| {
+                    queued
+                        .iter()
+                        .filter(|q| q.targets_running_root == grp_running)
+                        .cloned()
+                        .collect()
+                });
+                let queued_view: &[QueueItem] = scoped_queued.as_deref().unwrap_or(&queued);
                 disjunction_preference(
                     &ctx.repos,
                     config,
-                    ctx.root,
-                    &state.entries,
+                    grp_root,
+                    entries_view,
                     &self_cp,
                     &union_constraints,
                     // Backlog #221: this pass's recorded cycle edges --
@@ -30227,31 +30689,68 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     circular_view,
                     ctx.root_deps_running_root,
                     atoms,
-                    &queued,
+                    queued_view,
                     ctx.update,
                 )
             },
             &mut |alts: &[Vec<String>]| {
+                // Same root scoping for the tied-alternative promotion
+                // (its installed/in-graph checks are the group's own).
+                let grp_running = cross_running_root.is_some()
+                    && alts
+                        .iter()
+                        .flat_map(|v| v.iter())
+                        .next()
+                        .is_some_and(|a| running_tags.contains(a));
+                let grp_root: &Path = if grp_running {
+                    cross_running_root.expect("running-root group without a cross root")
+                } else {
+                    ctx.root
+                };
+                let scoped_entries: Option<Vec<GraphEntry>> = cross_running_root.map(|_| {
+                    state
+                        .entries
+                        .iter()
+                        .filter(|e| e.targets_running_root == grp_running)
+                        .cloned()
+                        .collect()
+                });
+                let entries_view: &[GraphEntry] =
+                    scoped_entries.as_deref().unwrap_or(&state.entries);
+                let scoped_queued: Option<Vec<QueueItem>> = cross_running_root.map(|_| {
+                    queued
+                        .iter()
+                        .filter(|q| q.targets_running_root == grp_running)
+                        .cloned()
+                        .collect()
+                });
+                let queued_view: &[QueueItem] = scoped_queued.as_deref().unwrap_or(&queued);
                 promote_tied_alternative(
                     &ctx.repos,
                     config,
-                    ctx.root,
-                    &state.entries,
+                    grp_root,
+                    entries_view,
                     &union_constraints,
                     alts,
-                    &queued,
+                    queued_view,
                 )
             },
         ) else {
             continue;
         };
+        // Track X Slice B (#242): the existence-check split below only
+        // runs for flag-on coinciding-roots builds (its long-pinned
+        // behavior there). On a cross-root run the unified per-group walk
+        // above already resolved every build atom against its own root, so
+        // filtering here would double-resolve (and disconnect) them.
+        let root_deps_split: Option<&Path> =
+            ctx.root_deps_running_root.filter(|_| cross_running_root.is_none());
         // `--root-deps`: real `ESYSROOT`-vs-`ROOT` distinction (see
         // `root_deps_satisfied_atoms`'s own doc comment for the full
         // grounding and its documented scope cut) -- a strict no-op when
-        // `root_deps_running_root` is `None`, matching every pre-existing
+        // `root_deps_split` is `None`, matching every pre-existing
         // call site/test.
-        let root_deps_satisfied: HashSet<String> = ctx
-            .root_deps_running_root
+        let root_deps_satisfied: HashSet<String> = root_deps_split
             .map(|root| {
                 root_deps_satisfied_atoms(
                     &metadata,
@@ -30281,10 +30780,9 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         // same way any other atom would be, added as its own
         // `targets_running_root` entry, and recursed into. Kept as a
         // `Vec` (not a `HashSet`) so the resulting entry order is
-        // deterministic. A strict no-op when `root_deps_running_root` is
+        // deterministic. A strict no-op when `root_deps_split` is
         // `None`, matching every pre-existing call site/test.
-        let root_deps_unsatisfied: Vec<String> = ctx
-            .root_deps_running_root
+        let root_deps_unsatisfied: Vec<String> = root_deps_split
             .map(|root| {
                 unsatisfied_root_deps_atoms(
                     &metadata,
@@ -30319,7 +30817,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 !root_deps_unsatisfied.contains(&evaluated)
             })
             .collect();
-        if let Some(running_root) = ctx.root_deps_running_root {
+        if let Some(running_root) = root_deps_split {
             for atom_str in &root_deps_unsatisfied {
                 state.entries.extend(resolve_root_deps_build_entries(
                     &ctx.repos,
@@ -30357,7 +30855,9 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             &mut state.pending_blockers,
             &buildtime_atoms,
             &runtime_atoms,
+            &bdepend_atoms,
             &or_group_universe(&tokens),
+            &running_tags,
         );
 
         // --with-test-deps: additive on top of the normal deps just
@@ -30405,9 +30905,15 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                         // never a hard cycle contributor.
                         &HashSet::new(),
                         &HashSet::new(),
+                        // Track X Slice B fix (#242): no `BDEPEND`
+                        // origin for a `test?` dep (never hard anyway).
+                        &HashSet::new(),
                         // `test?`-gated deps are plain atoms, never a
                         // `||` choice (the subset filter drops the
                         // group structure) -- empty universe.
+                        &HashSet::new(),
+                        // Track X Slice B (#242): a `test?` dep stays
+                        // target-rooted.
                         &HashSet::new(),
                     );
                 }
@@ -33728,6 +34234,11 @@ pub(crate) fn installed_dep_string(
 fn enqueue_dependencies(
     repos: &[RepoConfig],
     root: &Path,
+    // Track X Slice B (#242): the walk's target root, so an installed
+    // parent's own deps resolve per group like every other owner (real
+    // `_add_pkg_deps` attributes the owner to its root first). `root`
+    // stays this parent's own vdb root for every metadata read.
+    target_root: &Path,
     dynamic_deps: bool,
     ignore_built_slot_operator_deps: bool,
     category: &str,
@@ -33810,6 +34321,9 @@ fn enqueue_dependencies(
     // `text? ( || ( virtual/w3m … ) )` and dragged in w3m + ~40 of its
     // own deps that real never touches.
     let use_flags = read_vdb_flag_set(root, category, package, version, "USE");
+    // Track X Slice B (#242): per-key strings for the group-root tags
+    // below (the merged `depstr` alone cannot recover key provenance).
+    let mut keyed_depstr: HashMap<String, String> = HashMap::new();
     let depstr = {
         let mut depstr = String::new();
         for dep_key in dep_keys {
@@ -33818,7 +34332,7 @@ fn enqueue_dependencies(
             } else {
                 InstalledMetaLayer::Raw
             };
-            depstr.push_str(&installed_dep_string(
+            let s = installed_dep_string(
                 root,
                 dynamic_deps,
                 ignore_built_slot_operator_deps,
@@ -33829,12 +34343,26 @@ fn enqueue_dependencies(
                 dep_key,
                 layer,
                 installed_meta_memo,
-            ));
+            );
+            depstr.push_str(&s);
             depstr.push(' ');
+            keyed_depstr.insert(dep_key.to_string(), s);
         }
         depstr
     };
     let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
+    // Track X Slice B (#242): this installed owner's own per-group roots
+    // (an installed running-root entry's build groups resolve running).
+    // Inactive on every same-root run (strict no-op).
+    let cross_active =
+        root_deps_running_root.is_some_and(|rr| rr.as_os_str() != target_root.as_os_str());
+    let owner_is_running = root.as_os_str() != target_root.as_os_str();
+    let running_tags: HashSet<String> = cross_active
+        .then(|| dep_running_tags(&keyed_depstr, &use_flags, owner_is_running))
+        .unwrap_or_default();
+    let group_running = |atoms: &[String]| -> bool {
+        cross_active && atoms.iter().all(|a| running_tags.contains(a))
+    };
     // #143 S1: real's `blocker.priority.buildtime` for this walk's own
     // blockers — flatten just the build-time keys the same way, so a
     // blocker token's provenance survives the combined-key flatten
@@ -33900,11 +34428,37 @@ fn enqueue_dependencies(
         // false`.
         false,
         &mut |atoms: &[String]| {
+            // Track X Slice B (#242): same root scoping as the main
+            // walk's closures -- the group's own installed db and
+            // same-root graph. (`root` here is already this installed
+            // owner's own vdb root; only the entry/queue views narrow.)
+            let grp_running = group_running(atoms);
+            let grp_root: &Path = if grp_running {
+                root_deps_running_root.expect("running-root group without a running root")
+            } else {
+                root
+            };
+            let scoped_entries: Option<Vec<GraphEntry>> = cross_active.then(|| {
+                entries
+                    .iter()
+                    .filter(|e| e.targets_running_root == grp_running)
+                    .cloned()
+                    .collect()
+            });
+            let entries_view: &[GraphEntry] = scoped_entries.as_deref().unwrap_or(entries);
+            let scoped_queued: Option<Vec<QueueItem>> = cross_active.then(|| {
+                queued
+                    .iter()
+                    .filter(|q| q.targets_running_root == grp_running)
+                    .cloned()
+                    .collect()
+            });
+            let queued_view: &[QueueItem] = scoped_queued.as_deref().unwrap_or(&queued);
             disjunction_preference(
                 repos,
                 config,
-                root,
-                entries,
+                grp_root,
+                entries_view,
                 &self_cp,
                 disj_constraints,
                 // Site decision (backlogs #216/#221 reconciliation): the
@@ -33917,19 +34471,46 @@ fn enqueue_dependencies(
                 &HashMap::new(),
                 root_deps_running_root,
                 atoms,
-                &queued,
+                queued_view,
                 update,
             )
         },
         &mut |alts: &[Vec<String>]| {
+            let grp_running = cross_active
+                && alts
+                    .iter()
+                    .flat_map(|v| v.iter())
+                    .next()
+                    .is_some_and(|a| running_tags.contains(a));
+            let grp_root: &Path = if grp_running {
+                root_deps_running_root.expect("running-root group without a running root")
+            } else {
+                root
+            };
+            let scoped_entries: Option<Vec<GraphEntry>> = cross_active.then(|| {
+                entries
+                    .iter()
+                    .filter(|e| e.targets_running_root == grp_running)
+                    .cloned()
+                    .collect()
+            });
+            let entries_view: &[GraphEntry] = scoped_entries.as_deref().unwrap_or(entries);
+            let scoped_queued: Option<Vec<QueueItem>> = cross_active.then(|| {
+                queued
+                    .iter()
+                    .filter(|q| q.targets_running_root == grp_running)
+                    .cloned()
+                    .collect()
+            });
+            let queued_view: &[QueueItem] = scoped_queued.as_deref().unwrap_or(&queued);
             promote_tied_alternative(
                 repos,
                 config,
-                root,
-                entries,
+                grp_root,
+                entries_view,
                 disj_constraints,
                 alts,
-                &queued,
+                queued_view,
             )
         },
     ) else {
@@ -33967,6 +34548,9 @@ fn enqueue_dependencies(
     // the same way `root_deps_satisfied` just above already is --
     // `DEPEND`/`BDEPEND` aren't even in `tokens` at all when it's
     // `false`. Kept as a `Vec` for deterministic entry order.
+    // Track X Slice B (#242): flag-on coinciding-roots only (like the
+    // main walk, the unified per-group walk owns every cross-root atom).
+    let root_deps_split = root_deps_running_root.filter(|_| !cross_active);
     let root_deps_unsatisfied: Vec<String> = if with_bdeps {
         root_deps_running_root
             .map(|root| {
@@ -33986,7 +34570,7 @@ fn enqueue_dependencies(
     } else {
         Vec::new()
     };
-    if let Some(running_root) = root_deps_running_root {
+    if let Some(running_root) = root_deps_split {
         for atom_str in &root_deps_unsatisfied {
             entries.extend(resolve_root_deps_build_entries(
                 repos,
@@ -34069,13 +34653,13 @@ fn enqueue_dependencies(
             });
             continue;
         }
-        if root_deps_satisfied.contains(&tok) {
+        if root_deps_split.is_some() && root_deps_satisfied.contains(&tok) {
             // Real "no separate graph node needed for an
             // already-satisfied dep": ESYSROOT (here, the real running
             // root) already has it.
             continue;
         }
-        if root_deps_unsatisfied.contains(&tok) {
+        if root_deps_split.is_some() && root_deps_unsatisfied.contains(&tok) {
             // Real `DEPEND`/`BDEPEND` never targets `ROOT`/`ESYSROOT` at
             // all under portuale's own established `--root-deps`
             // simplification -- already handled above instead (either a
@@ -34134,6 +34718,11 @@ fn enqueue_dependencies(
             depth: child_depth,
             owner: Some(owner_key.clone()),
             unevaluated,
+            // Track X Slice B (#242): the per-group root travels with the
+            // atom -- keyed on the raw token like the main walk (the
+            // evaluated `tok` may have shed `[use]` conditionals the tag
+            // sets still carry).
+            targets_running_root: running_tags.contains(&raw),
             buildtime_hard: false,
             from_disjunction,
         });
@@ -40927,6 +41516,8 @@ mod tests {
             &buildtime_atoms,
             &runtime_atoms,
             &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
         );
         assert_eq!(queue.len(), 1);
         assert!(
@@ -43651,6 +44242,108 @@ mod tests {
                 ("dev-libs/topidepapp".to_string(), false),
             ]
         );
+    }
+
+    /// Track X Slice B (backlog #242, ex-#207): with a non-`/` target
+    /// ROOT, EAPI >= 7 `DEPEND` resolves against the running root (real
+    /// `_add_pkg_deps`'s `depend_root`), so graph nodes carry their root
+    /// and candidates select against that root's tree/installed db.
+    /// `=dev-libs/cyc0z-1`'s `DEPEND` pulls `cyc0y` into the (here empty)
+    /// running root, whose unversioned `DEPEND` then selects `cyc0z-3` --
+    /// the target-root argument is not reused across the root boundary --
+    /// forming the running-root `cyc0z-3 <-> cyc0y-1` cycle live real
+    /// reports under default staging (backtrack `1/20`, blame `cyc0z-3`;
+    /// `docs/evidence/2026-09-29-242-inventory/probes/default-cyc0z-1.txt`).
+    #[test]
+    fn cross_root_depend_forms_the_running_root_cycle() {
+        let root = fixtures_root();
+        // Hermetic running root: nothing installed there, so every build
+        // dep selects from the tree -- the empty-`/` half of the S0 repro
+        // (a parent in <ROOT> whose DEPEND resolves against the running
+        // root, where the running-root choice forms a cycle).
+        let running = TempDir::new("portuale-242-xb-empty-running-root").keep();
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+            &root,
+        )
+        .expect("fixture config resolves");
+        #[allow(clippy::fn_params_excessive_bools)]
+        let result = resolve_pretend_graph(
+            &root,
+            &root,
+            &["=dev-libs/cyc0z-1".to_string()],
+            &config,
+            false,
+            false,
+            false,
+            false,
+            Deep::NotRequested,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            false,
+            None,
+            false,
+            false,
+            Some(&running),
+            &fixtures_root().join("distfiles"),
+            false,
+            false,
+            false,
+            20,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            true,
+            false,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend_graph(=dev-libs/cyc0z-1) failed: {e}"));
+        // Real starts the printed cycle at `cyc0z-3`, reached from
+        // `cyc0y-1` -- the argument version is not a cycle member.
+        // (`cat/pkg-version` CPVs: `cyc0z-3` is version 3 of `cyc0z`.)
+        assert_eq!(
+            result.circular_deps,
+            vec![vec![
+                "dev-libs/cyc0z-3".to_string(),
+                "dev-libs/cyc0y-1".to_string()
+            ]]
+        );
+        // The blame node is a running-root merge: it carries its root.
+        let blamed = result
+            .entries
+            .iter()
+            .find(|e| {
+                e.category == "dev-libs"
+                    && e.package == "cyc0z"
+                    && merge_bound_version(&e.outcome).is_some_and(|v| v == "3")
+            })
+            .expect("cyc0z-3 is a graph node");
+        assert!(blamed.targets_running_root);
+        // Real spends its single backtrack retry on the serialize abort.
+        assert!(result.backtrack_restarts >= 1);
+        assert!(matches!(result.outcome, ResolveOutcome::Aborted { .. }));
     }
 
     /// The cycle guard: `rdrcyca` BDEPENDs `rdrcycb` BDEPENDs `rdrcyca`.
@@ -65201,6 +65894,7 @@ mod tests_162 {
             depth: 0,
             owner: None,
             unevaluated: None,
+            targets_running_root: false,
             buildtime_hard: false,
             from_disjunction: false,
         }
@@ -71998,6 +72692,9 @@ mod tests_165 {
         let mut pullers = HashMap::new();
         enqueue_dependencies(
             repos,
+            root,
+            // Same-root test walk: target root coincides with the vdb
+            // root (Track X Slice B: no cross-root routing here).
             root,
             false,
             false,
