@@ -658,6 +658,25 @@ fn install_file_atomic_removes_tmp_when_mv_fails() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// The ssh leg stages the bytes into a file before shipping: against an
+/// unreachable host the install still fails, but past staging -- at
+/// transport.
+#[test]
+fn install_file_atomic_ssh_stages_bytes_before_transport() {
+    let ctx = ctx_with_args("unreachable.invalid", None);
+    let err = install_file_atomic(
+        &ctx,
+        None,
+        b"regen",
+        "/var/db/pkg/dev-libs/regen-1.0/environment.bz2",
+    )
+    .expect_err("no ssh server: the install must fail");
+    assert!(
+        !err.contains("staging the regen install failed"),
+        "ssh staging must succeed (transport may fail): {err}"
+    );
+}
+
 /// The scrub rewrites only the unit-local passthrough stand-in; every
 /// other value passes verbatim and a missing line stays missing.
 #[test]
