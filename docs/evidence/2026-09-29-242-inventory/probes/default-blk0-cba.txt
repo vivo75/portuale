@@ -1,0 +1,25 @@
+Undefined license group 'FREE'
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.14 s (backtrack: 0/0).
+
+[ebuild  N     ] dev-libs/blk0x-1 
+[uninstall     ] dev-libs/blk0y-1 
+[blocks b      ] =dev-libs/blk0y-1 ("=dev-libs/blk0y-1" is soft blocking dev-libs/blk0x-1)
+[ebuild  N     ] dev-libs/blk0c-1 to /tmp/xa-inv-fx/fixtures/
+[ebuild  N     ] dev-libs/blk0b-1 to /tmp/xa-inv-fx/fixtures/
+[ebuild  N     ] dev-libs/blk0a-1 to /tmp/xa-inv-fx/fixtures/
+
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+
+dev-libs/blk0x:0
+
+  (dev-libs/blk0x-3:0/0::testrepo, ebuild scheduled for merge) USE="" ABI_X86="(64)" conflicts with
+    <dev-libs/blk0x-2 required by (dev-libs/blk0b-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/xa-inv-fx/fixtures/') USE="" ELIBC="glibc"
+    ^               ^
+    <dev-libs/blk0x-3 required by (dev-libs/blk0c-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/xa-inv-fx/fixtures/') USE="" ELIBC="glibc"
+    ^               ^
+
+rc=0

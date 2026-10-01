@@ -1,0 +1,185 @@
+[DEBUG] Using selector: EpollSelector
+myaction None
+myopts {'--debug': True, '--pretend': True, '--color': 'n', '--regex-search-auto': 'y'}
+
+
+myparams {'recurse': True, 'binpkg_respect_use': 'auto', 'autounmask': True, 'autounmask_keep_use': False, 'autounmask_keep_license': True, 'autounmask_keep_keywords': True, 'autounmask_keep_masks': True, 'bdeps': 'auto', 'ignore_soname_deps': 'y', 'dynamic_deps': True, 'implicit_system_deps': True, 'binpkg_changed_deps': 'auto'}
+
+
+These are the packages that would be merged, in order:
+
+
+
+      Arg: =dev-libs/cyc0z-1
+     Atom: =dev-libs/cyc0z-1
+   ebuild: dev-libs/cyc0z-1::testrepo
+
+Child:         (dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge) USE="foo -bar" ELIBC="glibc"
+Parent Dep:    =dev-libs/cyc0z-1
+
+Parent:    (dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge)
+Depstring: foo? ( !bar? ( dev-libs/cyc0y ) )
+Priority:  buildtime
+
+Parent:    (dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge)
+Depstring: dev-libs/cyc0y
+Priority:  buildtime
+Candidates: ['dev-libs/cyc0y']
+   ebuild: dev-libs/cyc0y-1::testrepo
+
+Child:         (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/cyc0y required by (dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge)
+
+Exiting... (dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge)
+
+Parent:    (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge)
+Depstring: dev-libs/cyc0z
+Priority:  buildtime
+
+Parent:    (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge)
+Depstring: dev-libs/cyc0z
+Priority:  buildtime
+Candidates: ['dev-libs/cyc0z']
+   ebuild: dev-libs/cyc0z-1::testrepo
+
+Child:         (dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge) USE="foo -bar" ELIBC="glibc"
+Parent Dep:    dev-libs/cyc0z required by (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge)
+
+Exiting... (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge)
+
+digraph:
+
+(dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge) depends on
+  (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+=dev-libs/cyc0z-1 depends on
+  (dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+(dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) depends on
+  (dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+
+
+
+backtracking try 1 
+
+
+
+circular dependency graph:
+
+(dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge) depends on
+  (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+(dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) depends on
+  (dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+
+
+[nomerge       ] dev-libs/cyc0z-1::testrepo  USE="foo -bar" 
+[ebuild  N     ]  dev-libs/cyc0y-1::testrepo  0 KiB
+[ebuild  N     ]   dev-libs/cyc0z-1::testrepo  USE="foo -bar" 0 KiB
+
+Total: 2 packages (2 new), Size of downloads: 0 KiB
+
+ * Error: circular dependencies:
+
+(dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) depends on
+ (dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+  (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+
+It might be possible to break this cycle
+by applying any of the following changes:
+- dev-libs/cyc0z-1 (Change USE: -foo)
+- dev-libs/cyc0z-1 (Change USE: +bar)
+
+Note that this change can be reverted, once the package has been installed.
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+
+
+
+      Arg: =dev-libs/cyc0z-1
+     Atom: =dev-libs/cyc0z-1
+   ebuild: dev-libs/cyc0z-1::testrepo
+
+Child:         (dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge) USE="foo -bar" ELIBC="glibc"
+Parent Dep:    =dev-libs/cyc0z-1
+
+Parent:    (dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge)
+Depstring: foo? ( !bar? ( dev-libs/cyc0y ) )
+Priority:  buildtime
+
+Parent:    (dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge)
+Depstring: dev-libs/cyc0y
+Priority:  buildtime
+Candidates: ['dev-libs/cyc0y']
+   ebuild: dev-libs/cyc0y-1::testrepo
+
+Child:         (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/cyc0y required by (dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge)
+
+Exiting... (dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge)
+
+Parent:    (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge)
+Depstring: dev-libs/cyc0z
+Priority:  buildtime
+
+Parent:    (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge)
+Depstring: dev-libs/cyc0z
+Priority:  buildtime
+Candidates: ['dev-libs/cyc0z']
+   ebuild: dev-libs/cyc0z-1::testrepo
+
+Child:         (dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge) USE="foo -bar" ELIBC="glibc"
+Parent Dep:    dev-libs/cyc0z required by (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge)
+
+Exiting... (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge)
+
+digraph:
+
+(dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge) depends on
+  (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+=dev-libs/cyc0z-1 depends on
+  (dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+(dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) depends on
+  (dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+
+
+
+circular dependency graph:
+
+(dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge) depends on
+  (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+(dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) depends on
+  (dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+
+
+[nomerge       ] dev-libs/cyc0z-1::testrepo  USE="foo -bar" 
+[ebuild  N     ]  dev-libs/cyc0y-1::testrepo  0 KiB
+[ebuild  N     ]   dev-libs/cyc0z-1::testrepo  USE="foo -bar" 0 KiB
+
+Total: 2 packages (2 new), Size of downloads: 0 KiB
+
+ * Error: circular dependencies:
+
+(dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) depends on
+ (dev-libs/cyc0z-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+  (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+
+It might be possible to break this cycle
+by applying any of the following changes:
+- dev-libs/cyc0z-1 (Change USE: -foo)
+- dev-libs/cyc0z-1 (Change USE: +bar)
+
+Note that this change can be reverted, once the package has been installed.
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+
+rc=1

@@ -1,0 +1,63 @@
+== default staging ROOT=/tmp/xa-inv-fx/fixtures ==
+### emerge -p --color=n =dev-libs/cyc0z-1
+  =dev-libs/cyc0z-1  (rc=1)
+### emerge -p --color=n =dev-libs/cyc0z-2
+  =dev-libs/cyc0z-2  (rc=1)
+### emerge -p --color=n =dev-libs/cyc0w-1
+  =dev-libs/cyc0w-1  (rc=1)
+### emerge -p --color=n =dev-libs/cyc0w-2
+  =dev-libs/cyc0w-2  (rc=1)
+### emerge -p --color=n =dev-libs/cyc0w-3
+  =dev-libs/cyc0w-3  (rc=1)
+### emerge -p --color=n --backtrack=0 dev-libs/blk0a dev-libs/blk0c dev-libs/blk0b
+  --backtrack=0 dev-libs/blk0a dev-libs/blk0c dev-libs/blk0b  (rc=0)
+### emerge -p --color=n --backtrack=0 dev-libs/blk0a dev-libs/blk0b dev-libs/blk0c
+  --backtrack=0 dev-libs/blk0a dev-libs/blk0b dev-libs/blk0c  (rc=0)
+### emerge -p --color=n --backtrack=0 dev-libs/blk0b dev-libs/blk0a dev-libs/blk0c
+  --backtrack=0 dev-libs/blk0b dev-libs/blk0a dev-libs/blk0c  (rc=0)
+### emerge -p --color=n --backtrack=0 dev-libs/blk0b dev-libs/blk0c dev-libs/blk0a
+  --backtrack=0 dev-libs/blk0b dev-libs/blk0c dev-libs/blk0a  (rc=0)
+### emerge -p --color=n --backtrack=0 dev-libs/blk0c dev-libs/blk0a dev-libs/blk0b
+  --backtrack=0 dev-libs/blk0c dev-libs/blk0a dev-libs/blk0b  (rc=0)
+### emerge -p --color=n --backtrack=0 dev-libs/blk0c dev-libs/blk0b dev-libs/blk0a
+  --backtrack=0 dev-libs/blk0c dev-libs/blk0b dev-libs/blk0a  (rc=0)
+### emerge -p --color=n app-misc/g216top
+  app-misc/g216top  (rc=0)
+### emerge -p --color=n dev-lang/g216comp
+  dev-lang/g216comp  (rc=0)
+### emerge -p --color=n --backtrack=0 app-misc/g216top
+  --backtrack=0 app-misc/g216top  (rc=1)
+### emerge -p --color=n --backtrack=0 dev-lang/g216comp
+  --backtrack=0 dev-lang/g216comp  (rc=1)
+== control ROOT=/ ==
+### emerge -p --color=n =dev-libs/cyc0z-1
+  =dev-libs/cyc0z-1  (rc=1)
+### emerge -p --color=n =dev-libs/cyc0z-2
+  =dev-libs/cyc0z-2  (rc=1)
+### emerge -p --color=n =dev-libs/cyc0w-1
+  =dev-libs/cyc0w-1  (rc=1)
+### emerge -p --color=n =dev-libs/cyc0w-2
+  =dev-libs/cyc0w-2  (rc=1)
+### emerge -p --color=n =dev-libs/cyc0w-3
+  =dev-libs/cyc0w-3  (rc=1)
+### emerge -p --color=n --backtrack=0 dev-libs/blk0a dev-libs/blk0c dev-libs/blk0b
+  --backtrack=0 dev-libs/blk0a dev-libs/blk0c dev-libs/blk0b  (rc=0)
+### emerge -p --color=n --backtrack=0 dev-libs/blk0a dev-libs/blk0b dev-libs/blk0c
+  --backtrack=0 dev-libs/blk0a dev-libs/blk0b dev-libs/blk0c  (rc=0)
+### emerge -p --color=n --backtrack=0 dev-libs/blk0b dev-libs/blk0a dev-libs/blk0c
+  --backtrack=0 dev-libs/blk0b dev-libs/blk0a dev-libs/blk0c  (rc=0)
+### emerge -p --color=n --backtrack=0 dev-libs/blk0b dev-libs/blk0c dev-libs/blk0a
+  --backtrack=0 dev-libs/blk0b dev-libs/blk0c dev-libs/blk0a  (rc=0)
+### emerge -p --color=n --backtrack=0 dev-libs/blk0c dev-libs/blk0a dev-libs/blk0b
+  --backtrack=0 dev-libs/blk0c dev-libs/blk0a dev-libs/blk0b  (rc=0)
+### emerge -p --color=n --backtrack=0 dev-libs/blk0c dev-libs/blk0b dev-libs/blk0a
+  --backtrack=0 dev-libs/blk0c dev-libs/blk0b dev-libs/blk0a  (rc=0)
+### emerge -p --color=n app-misc/g216top
+  app-misc/g216top  (rc=0)
+### emerge -p --color=n dev-lang/g216comp
+  dev-lang/g216comp  (rc=0)
+### emerge -p --color=n --backtrack=0 app-misc/g216top
+  --backtrack=0 app-misc/g216top  (rc=1)
+### emerge -p --color=n --backtrack=0 dev-lang/g216comp
+  --backtrack=0 dev-lang/g216comp  (rc=1)
+ALLDONE
