@@ -10200,10 +10200,11 @@ fn atom_currently_satisfiable(
             .into_iter()
             .filter(|m| {
                 extra_constraints.iter().all(|c| {
-                    // #212: a binary-only `slot_operator_mask_built`
-                    // negative hides no ebuild candidate (see
-                    // [`is_binary_only_mask`]).
-                    if is_binary_only_mask(c) {
+                    // #212/#276: a per-instance negative (`[binary]`
+                    // `slot_operator_mask_built`, `[installed]`
+                    // missing-dependency) hides no tree candidate (see
+                    // [`is_instance_only_mask`]).
+                    if is_instance_only_mask(c) {
                         return true;
                     }
                     if let Some(neg) = c.strip_prefix('!') {
@@ -10402,10 +10403,11 @@ fn highest_available_candidate_ignoring_use(
             .into_iter()
             .filter(|m| {
                 extra_constraints.iter().all(|c| {
-                    // #212: a binary-only `slot_operator_mask_built`
-                    // negative hides no ebuild candidate (see
-                    // [`is_binary_only_mask`]).
-                    if is_binary_only_mask(c) {
+                    // #212/#276: a per-instance negative (`[binary]`
+                    // `slot_operator_mask_built`, `[installed]`
+                    // missing-dependency) hides no tree candidate (see
+                    // [`is_instance_only_mask`]).
+                    if is_instance_only_mask(c) {
                         return true;
                     }
                     if let Some(neg) = c.strip_prefix('!') {
@@ -11864,9 +11866,11 @@ fn visible_tree_matches(
     };
     let passes_constraints = |m: &str| {
         extra_constraints.iter().all(|c| match c.strip_prefix('!') {
-            // #212: a binary-only `slot_operator_mask_built` negative
-            // hides no ebuild candidate (see [`is_binary_only_mask`]).
-            Some(_) if is_binary_only_mask(c) => true,
+            // #212/#276: a per-instance negative (`[binary]`
+            // `slot_operator_mask_built`, `[installed]`
+            // missing-dependency) hides no tree candidate (see
+            // [`is_instance_only_mask`]).
+            Some(_) if is_instance_only_mask(c) => true,
             Some(neg) => !portage_dep::match_from_list(neg, &[m]).is_some_and(|r| !r.is_empty()),
             None => portage_dep::match_from_list(c, &[m]).is_some_and(|r| !r.is_empty()),
         })
@@ -13801,6 +13805,51 @@ fn is_binary_only_mask(constraint: &str) -> bool {
         .is_some_and(|neg| neg.ends_with("[binary]"))
 }
 
+// Backlog #276: the installed-only half of the same per-instance
+// distinction. Real `_add_dep`'s missing-dependency mask
+// (`depgraph.py:3456-3470`) keys by package object, so masking an
+// installed parent hides only that instance -- the same-version ebuild
+// stays visible for real's next backtracking try. Portuale's string
+// readers match installed and ebuild at one key, so the rendered
+// negative carries an `[installed]` marker
+// (`!=cat/pkg-ver[installed]`, filed by the missing-dep trigger for an
+// installed parent with no merge-bound version): every tree-candidate
+// (`ebuild` or binary) string-constraint reader skips marked entries
+// exactly like [`is_binary_only_mask`], and only the installed-instance
+// selection honours them (via
+// [`slot_operator_installed_masked_version`]). A marked negative never
+// parses as a version (`split_cpv` rejects the brackets), so the
+// missed-update collection skips it the same way.
+fn is_installed_only_mask(constraint: &str) -> bool {
+    constraint
+        .strip_prefix('!')
+        .is_some_and(|neg| neg.ends_with("[installed]"))
+}
+
+// Backlog #276: read one installed-only missing-dependency negative
+// (`!=cat/pkg-ver[installed]`, see [`is_installed_only_mask`]).
+// Returns the masked version when `neg` marks an installed instance of
+// this `cat/pkg`, else `None`. Mirror of
+// [`slot_operator_binary_masked_version`] for the other instance kind.
+fn slot_operator_installed_masked_version(
+    neg: &str,
+    category: &str,
+    package: &str,
+) -> Option<String> {
+    let rest = neg.strip_prefix("!=")?.strip_suffix("[installed]")?;
+    let (c, p, v) = split_cpv(rest)?;
+    (c == category && p == package).then_some(v)
+}
+
+// Every per-instance string negative (`[binary]` and `[installed]`
+// marks): tree-candidate readers skip them all -- each hides only its
+// own instance kind, never a tree candidate (real keys every such mask
+// by package object). Instance pools keep honouring their own mark
+// (see the two functions above).
+fn is_instance_only_mask(constraint: &str) -> bool {
+    is_binary_only_mask(constraint) || is_installed_only_mask(constraint)
+}
+
 // 11 args trips clippy::too_many_arguments; a bundled options struct
 // would touch every one of this function's own call sites (production
 // and test) for a single-slice-sized addition of one more CLI flag
@@ -14108,10 +14157,11 @@ pub fn resolve_pretend(
             extra_constraints
                 .iter()
                 .all(|ec| match ec.strip_prefix('!') {
-                    // #212: a binary-only `slot_operator_mask_built`
-                    // negative hides no ebuild candidate (see
-                    // [`is_binary_only_mask`]).
-                    Some(_) if is_binary_only_mask(ec) => true,
+                    // #212/#276: a per-instance negative (`[binary]`
+                    // `slot_operator_mask_built`, `[installed]`
+                    // missing-dependency) hides no tree candidate (see
+                    // [`is_instance_only_mask`]).
+                    Some(_) if is_instance_only_mask(ec) => true,
                     Some(neg) => !portage_dep::match_from_list(neg, &[s.as_str()])
                         .is_some_and(|r| !r.is_empty()),
                     None => portage_dep::match_from_list(ec, &[s.as_str()])
@@ -14183,9 +14233,11 @@ pub fn resolve_pretend(
             return false;
         }
         extra_constraints.iter().all(|ec| {
-            // #212: a binary-only `slot_operator_mask_built` negative
-            // hides no ebuild candidate (see [`is_binary_only_mask`]).
-            if is_binary_only_mask(ec) {
+            // #212/#276: a per-instance negative (`[binary]`
+            // `slot_operator_mask_built`, `[installed]`
+            // missing-dependency) hides no tree candidate (see
+            // [`is_instance_only_mask`]).
+            if is_instance_only_mask(ec) {
                 return true;
             }
             if let Some(neg) = ec.strip_prefix('!') {
@@ -14314,10 +14366,11 @@ pub fn resolve_pretend(
             .into_iter()
             .filter(|m| {
                 extra_constraints.iter().all(|c| {
-                    // #212: a binary-only `slot_operator_mask_built`
-                    // negative hides no ebuild candidate (see
-                    // [`is_binary_only_mask`]).
-                    if is_binary_only_mask(c) {
+                    // #212/#276: a per-instance negative (`[binary]`
+                    // `slot_operator_mask_built`, `[installed]`
+                    // missing-dependency) hides no tree candidate (see
+                    // [`is_instance_only_mask`]).
+                    if is_instance_only_mask(c) {
                         return true;
                     }
                     if let Some(neg) = c.strip_prefix('!') {
@@ -14431,9 +14484,19 @@ pub fn resolve_pretend(
     // main slot is installed at that version (sub-slot ignored, exactly
     // like real `pkg.slot_atom`).
     let candidate_is_installed = |c: &Candidate| -> bool {
-        installed_pairs
-            .iter()
-            .any(|(version, slot, _sub_slot)| version == &c.version && slot == &c.slot)
+        installed_pairs.iter().any(|(version, slot, _sub_slot)| {
+            version == &c.version
+                && slot == &c.slot
+                // Backlog #276: an `[installed]`-marked
+                // missing-dependency negative hides the installed
+                // instance itself (real keys the mask by package
+                // object) -- the same-version tree candidate stays
+                // eligible for merge.
+                && !extra_constraints.iter().any(|ec| {
+                    slot_operator_installed_masked_version(ec, &atom.category, &atom.package)
+                        .is_some_and(|v| &v == version)
+                })
+        })
     };
 
     // --exclude/-X: an installed version matching an exclude atom is
@@ -14712,7 +14775,16 @@ pub fn resolve_pretend(
     // fresh slot (the renderer's `[ebuild NS]`, see `GraphEntry::new_slot`).
     let installed_in_slot: Vec<&String> = installed_pairs
         .iter()
-        .filter(|(_version, slot, _sub_slot)| slot == &best.slot)
+        // Backlog #276: an `[installed]`-marked instance is hidden
+        // (see `candidate_is_installed` above), so it neither anchors
+        // an upgrade/downgrade nor blocks a `New`.
+        .filter(|(version, slot, _sub_slot)| {
+            slot == &best.slot
+                && !extra_constraints.iter().any(|ec| {
+                    slot_operator_installed_masked_version(ec, &atom.category, &atom.package)
+                        .is_some_and(|v| &v == version)
+                })
+        })
         .map(|(version, _slot, _sub_slot)| version)
         .collect();
     match installed_in_slot
@@ -17786,6 +17858,14 @@ fn slot_operator_unsatisfied_probe_full(
             bucket.iter().any(|entry| {
                 if is_binary_only_mask(&entry.neg) {
                     return false;
+                }
+                // #276: an `[installed]`-marked negative screens the
+                // installed instance itself (real `:3447-3448` skips a
+                // masked parent, or the restart would loop).
+                if slot_operator_installed_masked_version(&entry.neg, &cp.0, &cp.1)
+                    .is_some_and(|v| v == version)
+                {
+                    return true;
                 }
                 entry
                     .neg
@@ -26046,12 +26126,15 @@ impl Backtracker {
     /// Returns whether the node will be explored.
     fn add_node(&mut self, params: BacktrackParams, terminal: bool, explore: bool) -> bool {
         if !check_runtime_pkg_mask(&params.runtime_pkg_mask) {
+            eprintln!("TRACE276 add_node rejected: mask check");
             return false;
         }
         if params.mask_steps > self.max_depth {
+            eprintln!("TRACE276 add_node rejected: budget");
             return false;
         }
         if self.nodes.iter().any(|n| params_equal(&n.params, &params)) {
+            eprintln!("TRACE276 add_node rejected: dup");
             return false;
         }
         self.nodes.push(BacktrackNode { params, terminal });
@@ -28303,6 +28386,31 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     let neg = format!("!={pc}/{pp}-{pv}");
                     if !bp.missing_dep_masked.contains(&neg) {
                         state.missing_dep_trigger = Some(((pc, pp), neg, current_atom.clone()));
+                    }
+                } else {
+                    // Backlog #276: real masks an *installed* parent
+                    // whose dep cannot be satisfied (`_add_dep`
+                    // `depgraph.py:3456-3470` -> `runtime_pkg_mask`
+                    // "missing dependency") and restarts; the
+                    // merge-bound-only arming above never fires for it,
+                    // so the run aborts on the installed parent's built
+                    // atom where real steers. Fall back to the highest
+                    // installed instance. The `[installed]` marker hides
+                    // only that instance (real keys the mask by package
+                    // object -- see [`is_installed_only_mask`]), so the
+                    // same-version ebuild stays visible and the next
+                    // pass walks it, exactly like real's second
+                    // backtracking try masking the ebuild.
+                    if let Some(iv) = installed_candidates(ctx.root, &pc, &pp)
+                        .into_iter()
+                        .map(|(v, _, _)| v)
+                        .max_by(|a, b| vercmp_ordering(a, b))
+                    {
+                        let neg = format!("!={pc}/{pp}-{iv}[installed]");
+                        if !bp.missing_dep_masked.contains(&neg) {
+                            state.missing_dep_trigger =
+                                Some(((pc, pp), neg, current_atom.clone()));
+                        }
                     }
                 }
             }
@@ -30690,6 +30798,58 @@ struct MaskEntry {
     reason: MaskReason,
 }
 
+/// File one `_slot_operator_unsatisfied_probe` result into the working
+/// backtrack accumulators: replace-set seeds grow
+/// `slot_operator_replace_installed` (real
+/// `backtrack_infos["config"]["slot_operator_replace_installed"]`),
+/// binary parents become `[binary]`-marked `SlotOperatorBuilt`
+/// negatives (real `:2896-2903`). Returns true when anything grew --
+/// the caller restarts with the same budget-free Config feedback the
+/// #211 scan returns. Single filing point for both probe sites (the
+/// missing-dep trigger arm, which real runs first per failing edge, and
+/// the no-trigger dead-end fallback); the replace set therefore
+/// expands in exactly one place here, and neither arm keeps restart
+/// bookkeeping of its own. Under `--usepkgonly` the binary result is
+/// discarded (real's `_iter_similar_available` yields binaries only,
+/// so no ebuild replacement exists -- see the trigger site).
+fn file_unsat_probe_results(
+    grown: &mut BacktrackParams,
+    fresh: BTreeSet<(String, String)>,
+    binary_masks: BTreeSet<(String, String, String)>,
+    usepkgonly: bool,
+) -> bool {
+    let mut masks_new = false;
+    // `--usepkgonly`: no ebuild replacement (see the trigger site).
+    let binary_masks = if usepkgonly {
+        BTreeSet::new()
+    } else {
+        binary_masks
+    };
+    for (cat, pkg, ver) in &binary_masks {
+        let neg = format!("!={cat}/{pkg}-{ver}[binary]");
+        let bucket = grown
+            .runtime_pkg_mask
+            .entry((cat.clone(), pkg.clone()))
+            .or_default();
+        if !bucket.iter().any(|m| m.neg == neg) {
+            bucket.push(MaskEntry {
+                neg,
+                reason: MaskReason::SlotOperatorBuilt,
+            });
+            masks_new = true;
+        }
+    }
+    if masks_new
+        || fresh
+            .iter()
+            .any(|cp| !grown.slot_operator_replace_installed.contains(cp))
+    {
+        grown.slot_operator_replace_installed.extend(fresh);
+        return true;
+    }
+    false
+}
+
 /// One pass's outcome in real `_backtrack_depgraph` terms -- see the
 /// type docs above. The overlay merge runs first (steps read the merged
 /// accumulators, as they always did); each arm then packages its effect
@@ -31096,21 +31256,26 @@ fn collect_feedback(
     // trigger at all, falls through below (dead end unless other
     // feedback fired first).
     if let Some(((pc, pp), neg, dep_atom)) = pass.missing_dep_trigger.take() {
-        // #257: real tries `_slot_operator_unsatisfied_probe` before the
+        eprintln!("TRACE276 trigger owner={pc}/{pp} neg={neg} atom={dep_atom}");
+        // #257 + #276: real tries the whole
+        // `_slot_operator_unsatisfied_probe` before the
         // missing-dependency mask for a built slot-operator atom
         // (`_emerge/depgraph.py:3447-3455` returns ahead of the
-        // `runtime_pkg_mask` fallback): a binary parent whose recorded
-        // `:S/SS=` dep no longer resolves, but whose same-slot ebuild
-        // accepts the visible provider, is masked as a binary
-        // (`slot_operator_mask_built`) and the restart takes the ebuild.
-        // Under `--usepkgonly` real's `_iter_similar_available` yields
-        // binaries only, so no ebuild replacement exists and the probe
-        // fails (the missing-dependency path below stands).
+        // `runtime_pkg_mask` fallback at `:3456-3470`): a hit seeds the
+        // replace set (an installed parent with a resolving
+        // replacement) or masks the binary (a non-installed built
+        // parent, `slot_operator_mask_built`), and the restart takes
+        // the replacement; only a miss falls through to the mask
+        // below. Filed through the shared helper (one expansion point,
+        // no new restart bookkeeping). Under `--usepkgonly` real's
+        // `_iter_similar_available` yields binaries only, so no ebuild
+        // replacement exists and the probe is skipped (the
+        // missing-dependency path below stands).
         if ctx.backtrack_max > 0
             && !ctx.usepkgonly
             && portage_dep::parse_atom(&dep_atom).is_some_and(|a| is_built_slot_op(&a))
         {
-            let (_, binary_masks) = slot_operator_unsatisfied_probe_full(
+            let (fresh, binary_masks) = slot_operator_unsatisfied_probe_full(
                 ctx.root,
                 &ctx.repos,
                 &pass.entries,
@@ -31121,22 +31286,7 @@ fn collect_feedback(
                 ctx.excluded,
                 config,
             );
-            let mut masks_new = false;
-            for (cat, pkg, ver) in &binary_masks {
-                let bin_neg = format!("!={cat}/{pkg}-{ver}[binary]");
-                let bucket = grown
-                    .runtime_pkg_mask
-                    .entry((cat.clone(), pkg.clone()))
-                    .or_default();
-                if !bucket.iter().any(|m| m.neg == bin_neg) {
-                    bucket.push(MaskEntry {
-                        neg: bin_neg,
-                        reason: MaskReason::SlotOperatorBuilt,
-                    });
-                    masks_new = true;
-                }
-            }
-            if masks_new {
+            if file_unsat_probe_results(&mut grown, fresh, binary_masks, ctx.usepkgonly) {
                 return PassDecision::Feedback(BacktrackFeedback::Config {
                     params: Box::new(grown),
                 });
@@ -31638,33 +31788,8 @@ fn collect_feedback(
         // #257: a non-installed built (binary) parent is masked like
         // #212's stale binaries (`[binary]`-marked `SlotOperatorBuilt`
         // negative, `runtime_pkg_mask` bucket), real `:2896-2903`.
-        let mut masks_new = false;
-        // `--usepkgonly`: no ebuild replacement (see the trigger site).
-        let binary_masks = if ctx.usepkgonly {
-            BTreeSet::new()
-        } else {
-            binary_masks
-        };
-        for (cat, pkg, ver) in &binary_masks {
-            let neg = format!("!={cat}/{pkg}-{ver}[binary]");
-            let bucket = grown
-                .runtime_pkg_mask
-                .entry((cat.clone(), pkg.clone()))
-                .or_default();
-            if !bucket.iter().any(|m| m.neg == neg) {
-                bucket.push(MaskEntry {
-                    neg,
-                    reason: MaskReason::SlotOperatorBuilt,
-                });
-                masks_new = true;
-            }
-        }
-        if masks_new
-            || fresh
-                .iter()
-                .any(|cp| !grown.slot_operator_replace_installed.contains(cp))
-        {
-            grown.slot_operator_replace_installed.extend(fresh);
+        // Filed through the shared helper with the trigger arm above.
+        if file_unsat_probe_results(&mut grown, fresh, binary_masks, ctx.usepkgonly) {
             return PassDecision::Feedback(BacktrackFeedback::Config {
                 params: Box::new(grown),
             });
@@ -31672,10 +31797,12 @@ fn collect_feedback(
     }
 
     if has_nvc {
+        eprintln!("TRACE276 deadend");
         PassDecision::DeadEnd {
             params: Box::new(grown),
         }
     } else {
+        eprintln!("TRACE276 settle");
         PassDecision::Settle {
             params: Box::new(grown),
         }
