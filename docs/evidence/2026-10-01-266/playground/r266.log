@@ -1,0 +1,2 @@
+### profile B-default success True mergelist ['dev-libs/r266lib-3.0', 'dev-libs/r266lib-2.0', 'dev-libs/r266mid-1.0']
+### profile A-bar-on success True mergelist ['dev-libs/r266lib-2.0', 'dev-libs/r266mid-1.0']
