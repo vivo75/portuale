@@ -643,6 +643,7 @@ mod conflicts;
 mod env_config;
 mod flag_spellings;
 mod gates;
+mod help;
 mod info;
 mod json;
 mod news;
