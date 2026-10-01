@@ -20604,14 +20604,14 @@ fn slot_conflict_meta(
 /// Real `pkg_use_display(pkg, opts, modified_use=...)` for a
 /// scheduled-for-merge package (`_emerge/UseFlagDisplay.py:55`) -- the
 /// `USE="…"` (+ one `VAR="…"` per non-hidden `USE_EXPAND` group) pairs
-/// on a slot-conflict instance's / parent's line. `category/package` at
-/// `version`, resolved against the highest-`repo_priority` candidate
-/// carrying that exact version (the same re-lookup `slot_conflict_meta`
-/// does); every `IUSE` flag rendered (real never abbreviates here),
-/// enabled-first, `( )`-wrapped for profile force/mask -- exactly the
-/// `build_use_expand_display(disp, config, None, forced, true, {})`
-/// shape `resolve_info_candidate` already uses for `--info`. Empty when
-/// the version is gone from every repo (rendered as a bare `USE=""`).
+/// on a slot-conflict instance's / parent's line (and the REQUIRED_USE
+/// violation block, which renders the same helper). Backlog #264: this
+/// is the full display [`skipped_update_use_display_for`] ships for the
+/// skipped-update block -- the effective USE masked to the package's
+/// valid-IUSE domain, so implicit-expand flags (e.g. `elibc_glibc`
+/// under `USE_EXPAND_IMPLICIT="ELIBC"`) render in their own group
+/// instead of vanishing. Empty when the version is gone from every
+/// repo (rendered as a bare `USE=""`).
 fn pkg_use_display_for(
     repos: &[RepoConfig],
     config: &portage_profile::Config,
@@ -20619,55 +20619,15 @@ fn pkg_use_display_for(
     package: &str,
     version: &str,
 ) -> Vec<(String, String)> {
-    let Some(cand) = list_candidates(repos, category, package)
-        .ok()
-        .and_then(|cs| {
-            cs.iter()
-                .filter(|c| c.version == version)
-                .max_by_key(|c| c.repo_priority)
-                .cloned()
-        })
-    else {
-        return Vec::new();
-    };
-    // A missing md5-cache entry yields an empty effective-USE set (same
-    // "absence is real" handling the Python oracle's `_candidate_iuse_
-    // and_use` OSError branch has) -- every declared `IUSE` flag then
-    // renders disabled, rather than the whole `USE=` field vanishing.
-    let (_iuse, use_flags) =
-        candidate_iuse_and_use(&cand, category, package, config).unwrap_or_default();
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut disp: Vec<(String, bool)> = cand
-        .iuse
-        .split_whitespace()
-        .map(|t| t.trim_start_matches(['+', '-']).to_string())
-        .filter(|f| seen.insert(f.clone()))
-        .map(|f| {
-            let on = use_flags.contains(&f);
-            (f, on)
-        })
-        .collect();
-    disp.sort_by_key(|p| alnum_sort_key(&p.0));
-    let candidate_str = format!(
-        "{category}/{package}-{version}:{}/{}::{}",
-        cand.slot, cand.sub_slot, cand.repo_name
-    );
-    let forced = forced_or_masked_flags(
-        &cand.iuse,
-        &cand.keywords,
-        &candidate_str,
-        category,
-        package,
-        config,
-    );
-    build_use_expand_display(&disp, config, None, &forced, true, &HashSet::new())
+    skipped_update_use_display_for(repos, config, category, package, version)
 }
 
 /// Backlog #230: real `pkg_use_display(pkg, opts, modified_use=...)` for a
 /// scheduled-for-merge package (`_emerge/UseFlagDisplay.py:55`), built for
-/// the skipped-update block -- the FULL per-package display, not the
-/// IUSE-only approximation `pkg_use_display_for` (which the
-/// slot-collision notice keeps, out of this slice's scope).
+/// the skipped-update block -- the FULL per-package display. Backlog #264
+/// unified the slot-collision notice onto this same implementation
+/// ([`pkg_use_display_for`] delegates here): real renders both blocks
+/// through the one helper, so portuale does too.
 ///
 /// Two real behaviors the approximation misses, both bed-grounded (bed
 /// `l0-fx-20260927T125711Z`, `--backtrack=0 dev-libs/blk0b dev-libs/blk0c
@@ -20734,6 +20694,33 @@ pub fn skipped_update_use_display_for(
     // Same "absence is real" as `pkg_use_display_for`: a missing IUSE key
     // declares no flags; a missing md5-cache entry entirely (the `?`
     // above... here the Err arm) yields no display.
+    let use_flags = match candidate_iuse_and_use(&cand, category, package, config) {
+        Some((_, uf)) => uf,
+        None => return Vec::new(),
+    };
+    assemble_tree_pkg_use_display(
+        &cand, &metadata, &use_flags, config, category, package, version,
+    )
+}
+
+/// Shared assembly tail of [`skipped_update_use_display_for`] and the
+/// #244-replay conflict displays below: real `pkg_use_display`'s own
+/// grouping (`_emerge/UseFlagDisplay.py:55-122`) over an explicit
+/// enabled set -- the masked `PORTAGE_USE`-equivalent, whose source
+/// differs per caller (the walk-time effective USE for the skipped
+/// block, the flip-applied entry USE for a replayed conflict).
+/// `explicit` is the declared `IUSE` names (the disabled side),
+/// `force_mask` the unfiltered per-package force ∪ mask stack for the
+/// `( )` wraps.
+fn assemble_tree_pkg_use_display(
+    cand: &Candidate,
+    metadata: &std::sync::Arc<HashMap<String, String>>,
+    enabled: &HashSet<String>,
+    config: &portage_profile::Config,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> Vec<(String, String)> {
     let iuse_str = metadata.get("IUSE").map(String::as_str).unwrap_or_default();
     let explicit: HashSet<String> = iuse_str
         .split_whitespace()
@@ -20744,10 +20731,6 @@ pub fn skipped_update_use_display_for(
         "{category}/{package}-{version}:{}/{}::{}",
         cand.slot, cand.sub_slot, cand.repo_name
     );
-    let use_flags = match candidate_iuse_and_use(&cand, category, package, config) {
-        Some((_, uf)) => uf,
-        None => return Vec::new(),
-    };
     // Real `pkg.use.force ∪ pkg.use.mask` (`pkgsettings.useforce` /
     // `usemask` after `setcpv`): the unfiltered per-package stack, since
     // the `( )` wraps apply to implicit-domain flags too (an implicit
@@ -20761,7 +20744,7 @@ pub fn skipped_update_use_display_for(
     );
     let kept = mask_use_to_valid_domain(
         &explicit,
-        &use_flags,
+        enabled,
         md5_dict::eapi_has_iuse_effective(eapi),
         config,
         &force_mask,
@@ -21006,15 +20989,20 @@ fn render_use_group(flags: Vec<(String, String, bool)>, forced: &HashSet<String>
         .join(" ")
 }
 
-/// The same `USE="…"` display pairs as `pkg_use_display_for`, built from
+/// The same `USE="…"` display pairs as [`pkg_use_display_for`], built from
 /// an **installed** package's vdb-recorded `IUSE`/`USE` instead of a tree
 /// candidate -- real `pkg_use_display(installed_pkg)` for a nomerge node
 /// or an installed parent in the residual installed-instance conflict
-/// report (see `build_residual_slot_conflicts`). An empty `IUSE` renders
-/// the bare `USE=""` real shows. Narrowing, documented: no
-/// profile-force/mask `( )` wraps (those need the tree candidate's
-/// keywords, which the vdb does not record); a flagless package -- every
-/// residual fixture so far -- renders byte-identical either way.
+/// report (see `build_residual_slot_conflicts`). Backlog #264: this is
+/// the vdb twin [`skipped_update_installed_use_display_for`] ships for
+/// the skipped-update block, so recorded-USE flags outside the recorded
+/// IUSE (e.g. implicit-expand `elibc_glibc`) render in their own group
+/// the way real's `use.enabled` side does. An empty `IUSE` with an empty
+/// recorded `USE` renders the bare `USE=""` real shows. Narrowing,
+/// documented: no profile-force/mask `( )` wraps (those need the tree
+/// candidate's keywords, which the vdb does not record); a flagless
+/// package -- every residual fixture so far -- renders byte-identical
+/// either way.
 pub fn installed_use_display_for(
     root: &Path,
     config: &portage_profile::Config,
@@ -21022,13 +21010,7 @@ pub fn installed_use_display_for(
     package: &str,
     version: &str,
 ) -> Vec<(String, String)> {
-    let (iuse, use_flags) = installed_pkg_iuse_and_use(root, category, package, version);
-    let mut disp: Vec<(String, bool)> = iuse
-        .iter()
-        .map(|f| (f.clone(), use_flags.contains(f)))
-        .collect();
-    disp.sort_by_key(|p| alnum_sort_key(&p.0));
-    build_use_expand_display(&disp, config, None, &HashSet::new(), true, &HashSet::new())
+    skipped_update_installed_use_display_for(root, config, category, package, version)
 }
 
 /// Declared-IUSE names and resolved USE for `category/package` at
@@ -32217,6 +32199,59 @@ fn fail_fast_truncate(ctx: &ResolveCtx<'_>, result: &mut GraphResult) {
     }
 }
 
+/// Backlog #264: real `pkg_use_display(pkg, modified_use=...)` for a
+/// walked entry the #244 replay placed in a slot-conflict block -- the
+/// header/parent line shows the flip-applied state (real
+/// `_pkg_use_enabled`), grouped into `USE` + `USE_EXPAND` like every
+/// other conflict line. The merge-row display
+/// (`GraphEntry::use_expand_display`) is the wrong helper here: it is
+/// real `_create_use_string`, which knows only `IUSE`-declared flags
+/// and drops unchanged ones at plain `-p`, while real renders the
+/// conflict block through `pkg_use_display` (implicit-expand groups
+/// included, every flag shown).
+///
+/// The modified set is the walk-time effective USE
+/// ([`candidate_iuse_and_use`], the same source
+/// [`skipped_update_use_display_for`] assembles) overridden by the
+/// entry's own `use_flags_display` states -- the replay flips land
+/// there first (`apply_replay_flips`), and only `IUSE`-declared flags
+/// can flip (the flip loop skips anything outside it, same as real's
+/// changed-state reporting). `None` when the candidate or its metadata
+/// is unreadable; the caller then keeps the pre-replay display.
+fn replay_conflict_use_display(
+    ctx: &ResolveCtx<'_>,
+    entry: &GraphEntry,
+    version: &str,
+) -> Option<Vec<(String, String)>> {
+    let candidates = list_candidates(&ctx.repos, &entry.category, &entry.package).ok()?;
+    let cand = candidates
+        .iter()
+        .filter(|c| c.version == version)
+        .filter(|c| entry.repo_name.as_deref().is_none_or(|r| r == c.repo_name))
+        .max_by_key(|c| c.repo_priority)
+        .cloned()?;
+    let pf = format!("{}-{version}", entry.package);
+    let metadata = repo_aux_metadata(&cand.repo_location, &entry.category, &pf).ok()?;
+    let (_, base) = candidate_iuse_and_use(&cand, &entry.category, &entry.package, ctx.config)?;
+    let mut modified: HashSet<String> = base.iter().cloned().collect();
+    for (flag, on) in &entry.use_flags_display {
+        if *on {
+            modified.insert(flag.clone());
+        } else {
+            modified.remove(flag);
+        }
+    }
+    Some(assemble_tree_pkg_use_display(
+        &cand,
+        &metadata,
+        &modified,
+        ctx.config,
+        &entry.category,
+        &entry.package,
+        version,
+    ))
+}
+
 /// Backlog #244: a slot-conflict block as real's package tracker holds it
 /// after the walk `r` replayed over `entries` (see
 /// `merge_order::replay_create_graph`): instances in admission order,
@@ -32224,7 +32259,9 @@ fn fail_fast_truncate(ctx: &ResolveCtx<'_>, result: &mut GraphResult) {
 /// including a requester whose use-dep the instance no longer satisfies
 /// once a later requester's autounmask change flipped it (real keeps the
 /// edge; the conflict block lists and marks both) -- and each instance's
-/// `USE="…"` its displayed row's (the flip applied). Conflicts or
+/// `USE="…"` the flip-applied `pkg_use_display` (backlog #264: real
+/// `_pkg_use_enabled` through `UseFlagDisplay.pkg_use_display`, grouped,
+/// not the merge row's `_create_use_string`). Conflicts or
 /// instances the replay cannot place are left as they are.
 fn replay_slot_conflicts(
     ctx: &ResolveCtx<'_>,
@@ -32272,7 +32309,8 @@ fn replay_slot_conflicts(
                             pe.category, pe.package
                         ),
                         atom: pe.deps[ei].atom.clone(),
-                        use_display: pe.use_expand_display.clone(),
+                        use_display: replay_conflict_use_display(ctx, pe, v)
+                            .unwrap_or_else(|| pe.use_expand_display.clone()),
                         installed: false,
                     })
                 })
@@ -32280,7 +32318,10 @@ fn replay_slot_conflicts(
             if !parents.is_empty() {
                 inst.parents = parents;
             }
-            inst.use_display = entries[*i].use_expand_display.clone();
+            let version = inst.version.clone();
+            if let Some(disp) = replay_conflict_use_display(ctx, &entries[*i], &version) {
+                inst.use_display = disp;
+            }
         }
         let mut order: Vec<(usize, SlotConflictInstance)> = idx
             .iter()
@@ -38943,8 +38984,16 @@ mod tests {
             )]
         );
         // slotconflicttarget and both pins declare no IUSE -> every
-        // instance/parent renders a bare `USE=""` (empty display).
-        assert!(c.instances.iter().all(|i| i.use_display.is_empty()));
+        // instance/parent renders `USE="" ELIBC="glibc"` (real
+        // `pkg_use_display`: the bare USE group plus the implicit
+        // USE_EXPAND group -- backlog #264, grounded in real
+        // `/usr/sbin/emerge` 3.0.82.2 `--pretend --ignore-default-opts
+        // dev-libs/slotconflictunsolvable` on the staged fixture).
+        assert!(c.instances.iter().all(|i| i.use_display
+            == vec![
+                ("USE".to_string(), String::new()),
+                ("ELIBC".to_string(), "glibc".to_string()),
+            ]));
     }
 
     #[test]
@@ -38952,16 +39001,23 @@ mod tests {
         // dev-libs/scuseparent -> scusenewpin (>=scusetarget-2.0) +
         // scuseoldpin (<scusetarget-2.0): unsolvable slot conflict on
         // scusetarget:0. scusetarget IUSE="+scuon scuoff" -> both
-        // instances render `USE="scuon -scuoff"` (real pkg_use_display,
-        // enabled-first). scusenewpin IUSE="+scupin" -> that parent line
-        // renders `USE="scupin"`; scuseoldpin has no IUSE -> `USE=""`.
+        // instances render `USE="scuon -scuoff" ELIBC="glibc"` (real
+        // pkg_use_display, enabled-first, plus the implicit USE_EXPAND
+        // group -- backlog #264, grounded in real `/usr/sbin/emerge`
+        // 3.0.82.2 `--pretend --ignore-default-opts dev-libs/scuseparent`
+        // on the staged fixture). scusenewpin IUSE="+scupin" -> that
+        // parent line renders `USE="scupin" ELIBC="glibc"`; scuseoldpin
+        // has no IUSE -> `USE="" ELIBC="glibc"`.
         let result = graph_result_real("dev-libs/scuseparent");
         assert_eq!(result.slot_conflicts.len(), 1);
         let c = &result.slot_conflicts[0];
         for inst in &c.instances {
             assert_eq!(
                 inst.use_display,
-                vec![("USE".to_string(), "scuon -scuoff".to_string())]
+                vec![
+                    ("USE".to_string(), "scuon -scuoff".to_string()),
+                    ("ELIBC".to_string(), "glibc".to_string()),
+                ]
             );
         }
         // Backlog #90 (S1): instance order follows the walk -- the
@@ -38971,11 +39027,17 @@ mod tests {
         // 2.0 by newpin).
         assert_eq!(
             c.instances[0].parents[0].use_display,
-            Vec::<(String, String)>::new()
+            vec![
+                ("USE".to_string(), String::new()),
+                ("ELIBC".to_string(), "glibc".to_string()),
+            ]
         );
         assert_eq!(
             c.instances[1].parents[0].use_display,
-            vec![("USE".to_string(), "scupin".to_string())]
+            vec![
+                ("USE".to_string(), "scupin".to_string()),
+                ("ELIBC".to_string(), "glibc".to_string()),
+            ]
         );
     }
 
@@ -46740,7 +46802,7 @@ mod tests {
             err,
             "\n!!! The ebuild selected to satisfy \"dev-libs/requiredusebadpkg\" \
              has unmet requirements.\n\
-             - dev-libs/requiredusebadpkg-1.0::testrepo USE=\"foo -bar\"\n\
+             - dev-libs/requiredusebadpkg-1.0::testrepo USE=\"foo -bar\" ELIBC=\"glibc\"\n\
              \n  The following REQUIRED_USE flag constraints are unsatisfied:\n\
              \x20   foo? ( bar )\n\n"
         );
@@ -46760,7 +46822,7 @@ mod tests {
             err,
             "\n!!! The ebuild selected to satisfy \"dev-libs/requiredusebadpkg\" \
              has unmet requirements.\n\
-             - dev-libs/requiredusebadpkg-1.0::testrepo USE=\"foo -bar\"\n\
+             - dev-libs/requiredusebadpkg-1.0::testrepo USE=\"foo -bar\" ELIBC=\"glibc\"\n\
              \n  The following REQUIRED_USE flag constraints are unsatisfied:\n\
              \x20   foo? ( bar )\n\n\
              (dependency required by \"dev-libs/requiredusebadparentpkg-1.0::testrepo\" [ebuild])\n\
@@ -46851,12 +46913,12 @@ mod tests {
             err.to_string(),
             "\n!!! The ebuild selected to satisfy \"dev-libs/requiredusebadpkg2\" \
              has unmet requirements.\n\
-             - dev-libs/requiredusebadpkg2-1.0::testrepo USE=\"baz -qux\"\n\
+             - dev-libs/requiredusebadpkg2-1.0::testrepo USE=\"baz -qux\" ELIBC=\"glibc\"\n\
              \n  The following REQUIRED_USE flag constraints are unsatisfied:\n\
              \x20   baz? ( qux )\n\n\
              \n!!! The ebuild selected to satisfy \"dev-libs/requiredusebadpkg\" \
              has unmet requirements.\n\
-             - dev-libs/requiredusebadpkg-1.0::testrepo USE=\"foo -bar\"\n\
+             - dev-libs/requiredusebadpkg-1.0::testrepo USE=\"foo -bar\" ELIBC=\"glibc\"\n\
              \n  The following REQUIRED_USE flag constraints are unsatisfied:\n\
              \x20   foo? ( bar )\n\n"
         );
@@ -48785,7 +48847,10 @@ mod tests {
             );
             assert_eq!(
                 d0.use_display,
-                vec![("USE".to_string(), "-foo".to_string())],
+                vec![
+                    ("USE".to_string(), "-foo".to_string()),
+                    ("ELIBC".to_string(), "glibc".to_string()),
+                ],
                 "{order}"
             );
         }
@@ -56067,6 +56132,57 @@ mod tests {
         assert!(
             skipped_update_use_display_for(&repos, &config, "dev-libs", "blk0x", "9").is_empty()
         );
+    }
+
+    /// Backlog #264: the slot-conflict `USE="…"` display carries real's
+    /// USE_EXPAND groups -- real's `slot_collision.py` header / parent
+    /// lines go through the same `pkg_use_display`
+    /// (`_emerge/UseFlagDisplay.py:55`) as the skipped-update block, so
+    /// the slot-conflict producers must render the same groups.
+    /// Grounded in real `/usr/sbin/emerge` 3.0.82.2 `--pretend
+    /// --ignore-default-opts --autounmask-backtrack=y dev-libs/aub0a
+    /// dev-libs/aub0b dev-libs/aub0c` on the staged fixture, whose
+    /// header lines read `USE="foo" ELIBC="glibc"` (aub0d-0) /
+    /// `USE="-bar" ELIBC="glibc"` (aub0d-1, `bar` incrementally
+    /// removed by `profiles/default/make.defaults`) and whose parent
+    /// lines read `USE="" ELIBC="glibc"`.
+    #[test]
+    fn slot_conflict_use_display_renders_use_expand_groups() {
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf resolves");
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+            &root,
+        )
+        .expect("fixture config resolves");
+        assert_eq!(
+            pkg_use_display_for(&repos, &config, "dev-libs", "aub0d", "0"),
+            vec![
+                ("USE".to_string(), "foo".to_string()),
+                ("ELIBC".to_string(), "glibc".to_string()),
+            ],
+        );
+        assert_eq!(
+            pkg_use_display_for(&repos, &config, "dev-libs", "aub0d", "1"),
+            vec![
+                ("USE".to_string(), "-bar".to_string()),
+                ("ELIBC".to_string(), "glibc".to_string()),
+            ],
+        );
+        // EAPI 8, no IUSE: the bare `USE=""` gains the implicit group.
+        assert_eq!(
+            pkg_use_display_for(&repos, &config, "dev-libs", "aub0b", "0"),
+            vec![
+                ("USE".to_string(), String::new()),
+                ("ELIBC".to_string(), "glibc".to_string()),
+            ],
+        );
+        assert!(pkg_use_display_for(&repos, &config, "dev-libs", "aub0d", "9").is_empty());
     }
 
     /// Backlog #161 S6: the missing-dep trigger names the upgraded
