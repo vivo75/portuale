@@ -911,13 +911,13 @@ mod tests {
             ("d/cons".to_string(), "d/cons".to_string()),
             ("=d/prov-1".to_string(), "=d/prov-1".to_string()),
         ];
-        let atoms = vec!["=d/prov-1".to_string(), "d/cons".to_string()];
+        let atoms = ["=d/prov-1".to_string(), "d/cons".to_string()];
         assert_eq!(
             sort_by_dep_position(&deps, vec![0, 1], |pi| atoms[pi].clone()),
             vec![1, 0]
         );
         // Unmatched edges keep walk order at the end.
-        let atoms = vec!["=d/prov-1".to_string(), "d/ghost".to_string()];
+        let atoms = ["=d/prov-1".to_string(), "d/ghost".to_string()];
         assert_eq!(
             sort_by_dep_position(&deps, vec![0, 1], |pi| atoms[pi].clone()),
             vec![0, 1]

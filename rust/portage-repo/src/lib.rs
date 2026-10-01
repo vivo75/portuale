@@ -18555,41 +18555,57 @@ fn slot_operator_rebuild_entries(
                 // vdb's (real re-reads `SLOT` at merge time).
                 let (v_slot, v_sub) =
                     read_vdb_slot(root, &pkg.category, &pkg.package, &pkg.version);
-                let (slot, sub_slot) = list_candidates(repos, &pkg.category, &pkg.package)
-                    .ok()
-                    .and_then(|cands| {
-                        cands
-                            .iter()
-                            .find(|c| c.version == pkg.version)
-                            .map(|c| (c.slot.clone(), c.sub_slot.clone()))
-                    })
-                    .unwrap_or_else(|| (v_slot.clone(), v_sub.clone()));
-                let repo = read_vdb_string(
-                    root,
-                    &pkg.category,
-                    &pkg.package,
-                    &pkg.version,
-                    "repository",
-                )
-                .trim()
-                .to_string();
-                // Real `output.py::_get_installed_best` (721-727): the
+                let (slot, sub_slot, tree_repo) =
+                    list_candidates(repos, &pkg.category, &pkg.package)
+                        .ok()
+                        .and_then(|cands| {
+                            cands
+                                .iter()
+                                .find(|c| c.version == pkg.version)
+                                .map(|c| (c.slot.clone(), c.sub_slot.clone(), c.repo_name.clone()))
+                        })
+                        .map(|(slot, sub_slot, repo)| (slot, sub_slot, Some(repo)))
+                        .unwrap_or_else(|| (v_slot.clone(), v_sub.clone(), None));
+                // The installed repo, `__unknown__` when the vdb records
+                // none (real `portage.versions._unknown_repo`) -- the same
+                // value `resolve_pretend`'s own oldbest assembly compares
+                // (backlog #247).
+                let installed_repo =
+                    installed_pkg_repo(root, &pkg.category, &pkg.package, &pkg.version);
+                // Real `output.py::_get_installed_best` (721-731): the
                 // rebuilt cpv is already installed (`replace = True`), so
-                // the `[oldver]` bracket shows only when the rebuild
-                // lands at a different slot/sub-slot than the installed
-                // instance -- exactly the sub-slot bump driving the
-                // cascade.
-                let oldbest =
-                    if (slot.as_str(), sub_slot.as_str()) != (v_slot.as_str(), v_sub.as_str()) {
-                        vec![InstalledRef {
-                            version: pkg.version.clone(),
-                            slot: v_slot,
-                            sub_slot: v_sub,
-                            repo: repo.clone(),
-                        }]
-                    } else {
-                        Vec::new()
-                    };
+                // the `[oldver]` bracket shows when the rebuild lands at
+                // a different slot/sub-slot than the installed instance
+                // (the sub-slot bump driving the cascade) *or* when the
+                // repo differs and repo display is not quieted (the third
+                // disjunct -- #247 ported it to `resolve_pretend`, #274
+                // ports it to this synthesiser assembly;
+                // `--quiet-repo-display` stays an unimplemented option
+                // exiting 2, so every successful run has it off and the
+                // disjunct reduces to the repo comparison).
+                let repo_drift = tree_repo
+                    .as_deref()
+                    .is_some_and(|tree| tree != installed_repo.as_str());
+                let oldbest = if (slot.as_str(), sub_slot.as_str())
+                    != (v_slot.as_str(), v_sub.as_str())
+                    || repo_drift
+                {
+                    vec![InstalledRef {
+                        version: pkg.version.clone(),
+                        slot: v_slot,
+                        sub_slot: v_sub,
+                        repo: installed_repo.clone(),
+                    }]
+                } else {
+                    Vec::new()
+                };
+                // The entry is the tree package being merged (real
+                // `pkg.repo`), not the installed instance -- the two agree
+                // unless the repo drifted, in which case the row keeps
+                // `::tree` and the bracket names the installed repo.
+                let entry_repo = tree_repo
+                    .filter(|tree| !tree.is_empty())
+                    .or_else(|| (installed_repo != "__unknown__").then(|| installed_repo.clone()));
                 GraphEntry {
                     discovery: 0,
                     category: pkg.category.clone(),
@@ -18605,7 +18621,7 @@ fn slot_operator_rebuild_entries(
                     },
                     slot: Some(slot),
                     sub_slot: Some(sub_slot),
-                    repo_name: (!repo.is_empty()).then_some(repo),
+                    repo_name: entry_repo,
                     oldbest,
                     blockers: Vec::new(),
                     use_flags_display: Vec::new(),
@@ -28439,8 +28455,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     {
                         let neg = format!("!={pc}/{pp}-{iv}[installed]");
                         if !bp.missing_dep_masked.contains(&neg) {
-                            state.missing_dep_trigger =
-                                Some(((pc, pp), neg, current_atom.clone()));
+                            state.missing_dep_trigger = Some(((pc, pp), neg, current_atom.clone()));
                         }
                     }
                 }
@@ -53241,6 +53256,65 @@ mod tests {
         assert_eq!(out[0].sub_slot.as_deref(), Some("1"));
         assert!(out[0].oldbest.is_empty(), "same slot: no [oldver] bracket");
         assert_eq!(out[0].repo_name.as_deref(), Some("testrepo"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Backlog #274: the old post-pass slot-op synthesiser's own
+    /// `oldbest` assembly carries #247's third disjunct (real
+    /// `resolver/output.py:721-731`) -- a same-slot / same-sub-slot
+    /// rebuild whose installed repo drifted from the tree repo still
+    /// gets the `[oldver]` bracket, and the entry itself keeps the tree
+    /// repo (real `pkg.repo`).
+    #[test]
+    fn slot_operator_rebuild_entries_mark_repo_drifted_rebuilds_oldbest() {
+        let dir = slotundo_temp_dir("274-entries");
+        let d = dir.join("var/db/pkg/dev-libs/souprov-1.0");
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        fs::write(d.join("SLOT"), "0/1\n").unwrap();
+        fs::write(d.join("RDEPEND"), "dev-libs/bar:2/2=\n").unwrap();
+        fs::write(d.join("repository"), "oldrepo\n").unwrap();
+        let repos = find_repos(&fixtures_root()).expect("fixture repos");
+        let bar_upgrade = GraphEntry {
+            discovery: 0,
+            category: "dev-libs".into(),
+            package: "bar".into(),
+            outcome: PretendOutcome::Upgrade {
+                from: "1.0".into(),
+                to: "2.0".into(),
+            },
+            slot: Some("2".into()),
+            sub_slot: Some("9".into()),
+            ..graph_entry("dev-libs", "bar", "2.0")
+        };
+        let reach: HashSet<(String, String)> =
+            HashSet::from([("dev-libs".to_string(), "souprov".to_string())]);
+        let (out, _) = slot_operator_rebuild_entries(
+            &dir,
+            &repos,
+            std::slice::from_ref(&bar_upgrade),
+            &reach,
+            true,
+            &[],
+            false,
+            &HashSet::new(),
+            &HashSet::new(),
+            &test_config(),
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].slot.as_deref(), Some("0"));
+        assert_eq!(out[0].sub_slot.as_deref(), Some("1"));
+        assert_eq!(out[0].repo_name.as_deref(), Some("testrepo"));
+        assert_eq!(
+            out[0].oldbest,
+            vec![InstalledRef {
+                version: "1.0".into(),
+                slot: "0".into(),
+                sub_slot: "1".into(),
+                repo: "oldrepo".into(),
+            }],
+            "same slot/sub-slot, drifted repo: the installed instance is oldbest"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
