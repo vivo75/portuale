@@ -26126,15 +26126,12 @@ impl Backtracker {
     /// Returns whether the node will be explored.
     fn add_node(&mut self, params: BacktrackParams, terminal: bool, explore: bool) -> bool {
         if !check_runtime_pkg_mask(&params.runtime_pkg_mask) {
-            eprintln!("TRACE276 add_node rejected: mask check");
             return false;
         }
         if params.mask_steps > self.max_depth {
-            eprintln!("TRACE276 add_node rejected: budget");
             return false;
         }
         if self.nodes.iter().any(|n| params_equal(&n.params, &params)) {
-            eprintln!("TRACE276 add_node rejected: dup");
             return false;
         }
         self.nodes.push(BacktrackNode { params, terminal });
@@ -31256,7 +31253,6 @@ fn collect_feedback(
     // trigger at all, falls through below (dead end unless other
     // feedback fired first).
     if let Some(((pc, pp), neg, dep_atom)) = pass.missing_dep_trigger.take() {
-        eprintln!("TRACE276 trigger owner={pc}/{pp} neg={neg} atom={dep_atom}");
         // #257 + #276: real tries the whole
         // `_slot_operator_unsatisfied_probe` before the
         // missing-dependency mask for a built slot-operator atom
@@ -31797,12 +31793,10 @@ fn collect_feedback(
     }
 
     if has_nvc {
-        eprintln!("TRACE276 deadend");
         PassDecision::DeadEnd {
             params: Box::new(grown),
         }
     } else {
-        eprintln!("TRACE276 settle");
         PassDecision::Settle {
             params: Box::new(grown),
         }
