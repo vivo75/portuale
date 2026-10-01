@@ -681,7 +681,142 @@ pub(crate) fn dump_resolution_walk(
 mod tests {
     use super::*;
 
+    fn row(
+        child: (&str, &str, &str, bool),
+        parent: Option<(&str, &str)>,
+        atom: &str,
+    ) -> ParentAtom {
+        ParentAtom {
+            child_category: child.0.to_string(),
+            child_package: child.1.to_string(),
+            child_version: child.2.to_string(),
+            child_installed: child.3,
+            parent: parent.map(|(c, p)| (c.to_string(), p.to_string())),
+            atom: atom.to_string(),
+            unevaluated: None,
+        }
+    }
+
+    fn key(cat: &str, pkg: &str, ver: &str, installed: bool) -> (String, String, String, bool) {
+        (cat.to_string(), pkg.to_string(), ver.to_string(), installed)
+    }
+
     fn cp(cat: &str, pkg: &str) -> (String, String) {
         (cat.to_string(), pkg.to_string())
+    }
+
+    #[test]
+    fn renarration_dag_schedules_nothing() {
+        // Linear a -> b -> c in entries order: every edge is forward,
+        // covered by the child's own later stanza.
+        let cps = vec![cp("x", "a"), cp("x", "b"), cp("x", "c")];
+        let keys = vec![
+            key("x", "a", "1", false),
+            key("x", "b", "1", false),
+            key("x", "c", "1", false),
+        ];
+        let rows = vec![
+            row(("x", "b", "1", false), Some(("x", "a")), "x/b"),
+            row(("x", "c", "1", false), Some(("x", "b")), "x/c"),
+        ];
+        assert!(renarration_order(&cps, &keys, &rows, 10).is_empty());
+    }
+
+    #[test]
+    fn renarration_back_edges_schedule_in_walk_order() {
+        // Oldslot-like ring: cons(0) -> prov(1) -> abi(2) -> {cons, prov}.
+        let cps = vec![cp("d", "cons"), cp("d", "prov"), cp("d", "abi")];
+        let keys = vec![
+            key("d", "cons", "1", false),
+            key("d", "prov", "1", false),
+            key("d", "abi", "1", false),
+        ];
+        let rows = vec![
+            row(("d", "prov", "1", false), Some(("d", "cons")), "d/prov:0="),
+            row(("d", "abi", "1", false), Some(("d", "prov")), "d/abi"),
+            row(("d", "cons", "1", false), Some(("d", "abi")), "d/cons"),
+            row(("d", "prov", "1", false), Some(("d", "abi")), "=d/prov-1"),
+        ];
+        // Forward edges (rows 0, 1) schedule nothing; the two back edges
+        // under abi (rows 2, 3) schedule in walk order.
+        assert_eq!(
+            renarration_order(&cps, &keys, &rows, 10),
+            vec![(2, 2), (2, 3)]
+        );
+    }
+
+    #[test]
+    fn renarration_budget_bounds_volume() {
+        let cps = vec![cp("d", "cons"), cp("d", "prov"), cp("d", "abi")];
+        let keys = vec![
+            key("d", "cons", "1", false),
+            key("d", "prov", "1", false),
+            key("d", "abi", "1", false),
+        ];
+        let rows = vec![
+            row(("d", "cons", "1", false), Some(("d", "abi")), "d/cons"),
+            row(("d", "prov", "1", false), Some(("d", "abi")), "=d/prov-1"),
+        ];
+        assert_eq!(renarration_order(&cps, &keys, &rows, 1), vec![(2, 0)]);
+        assert!(renarration_order(&cps, &keys, &rows, 0).is_empty());
+    }
+
+    #[test]
+    fn renarration_cycle_terminates_without_recursion() {
+        // Two-node ring a <-> b: one back edge, no expansion, no loop.
+        let cps = vec![cp("x", "a"), cp("x", "b")];
+        let keys = vec![key("x", "a", "1", false), key("x", "b", "1", false)];
+        let rows = vec![
+            row(("x", "b", "1", false), Some(("x", "a")), "x/b"),
+            row(("x", "a", "1", false), Some(("x", "b")), "x/a"),
+        ];
+        assert_eq!(renarration_order(&cps, &keys, &rows, 10), vec![(1, 1)]);
+    }
+
+    #[test]
+    fn renarration_skips_argument_and_unknown_parents() {
+        let cps = vec![cp("x", "a")];
+        let keys = vec![key("x", "a", "1", false)];
+        let rows = vec![
+            row(("x", "a", "1", false), None, "x/a"),
+            row(("x", "a", "1", false), Some(("x", "ghost")), "x/a"),
+        ];
+        assert!(renarration_order(&cps, &keys, &rows, 10).is_empty());
+    }
+
+    #[test]
+    fn renarration_sorts_by_dep_position() {
+        // Walk order [prov, cons], ebuild text order [cons, prov].
+        let deps = vec![
+            ("d/cons".to_string(), "d/cons".to_string()),
+            ("=d/prov-1".to_string(), "=d/prov-1".to_string()),
+        ];
+        let atoms = ["=d/prov-1".to_string(), "d/cons".to_string()];
+        assert_eq!(
+            sort_by_dep_position(&deps, vec![0, 1], |pi| atoms[pi].clone()),
+            vec![1, 0]
+        );
+        // Unmatched edges keep walk order at the end.
+        let atoms = ["=d/prov-1".to_string(), "d/ghost".to_string()];
+        assert_eq!(
+            sort_by_dep_position(&deps, vec![0, 1], |pi| atoms[pi].clone()),
+            vec![0, 1]
+        );
+    }
+
+    #[test]
+    fn renarration_hosts_under_first_cp_match() {
+        // A slot conflict's pair shares one cp: the row hosts under the
+        // first entry (deterministic approximation, documented).
+        let cps = vec![cp("d", "prov"), cp("d", "prov")];
+        let keys = vec![key("d", "prov", "1", false), key("d", "prov", "2", false)];
+        let rows = vec![row(
+            ("d", "prov", "2", false),
+            Some(("d", "prov")),
+            "d/prov",
+        )];
+        // Child prov-2 (idx 1) is not in keys[..=0]: a self-cp forward
+        // edge to a later instance schedules nothing.
+        assert!(renarration_order(&cps, &keys, &rows, 10).is_empty());
     }
 }
