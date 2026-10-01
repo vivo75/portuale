@@ -3742,7 +3742,7 @@ pub(crate) fn serialize_merge_order(
     repos: &[RepoConfig],
     dynamic_deps: bool,
     circular: &HashMap<(String, String), Vec<CircularDepChild>>,
-) -> Vec<usize> {
+) -> (Vec<usize>, Vec<usize>) {
     let (ext, mut g, real_n, discovery_rank) = schedule_graph(
         entries,
         top_level_atoms,
@@ -3789,7 +3789,13 @@ pub(crate) fn serialize_merge_order(
     // any entry with no node at all. Each goes on its own unbiased
     // discovery rank, so such an entry is never bias-promoted past a
     // merge task it was behind in plain discovery order.
-    weave_scheduled_leftovers(&scheduled, real_n, &discovery_rank)
+    let scheduled = weave_scheduled_leftovers(&scheduled, real_n, &discovery_rank);
+    // Backlog #278: the pre-bias insertion order over the caller's
+    // (pre-sort, pre-extension) indices -- real `digraph`'s node
+    // insertion order, which `get_cycles` iterates. Only indices below
+    // `real_n` can appear in `scheduled` (synthetics are filtered
+    // above), so truncating the extended rank is exact.
+    (scheduled, discovery_rank[..real_n].to_vec())
 }
 /// The shared scheduler-graph setup for [`serialize_merge_order`]
 /// and the #81 tree-mode simulation: the installed-dependency closure,
@@ -7544,7 +7550,7 @@ mod tests {
             new_entry("dev-libs", "dep", "1.0", Vec::new()),
             new_entry("dev-libs", "isolated", "1.0", Vec::new()),
         ];
-        let order = serialize_merge_order(
+        let (order, _) = serialize_merge_order(
             &entries,
             &["dev-libs/top".to_string()],
             &config,

@@ -1,0 +1,47 @@
+Undefined license group 'FREE'
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/tmp/o1stage/fixtures/repo/profiles/updates/2Q-2024..
+@s
+
+Undefined license group 'FREE'
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/tmp/o1stage/fixtures/repo/profiles/updates/2Q-2024..
+@s
+
+Undefined license group 'FREE'
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ...!!! cgroup: cannot create base cgroup /sys/fs/cgroup/portage: [Errno 30] Read-only file system: '/sys/fs/cgroup/portage'
+Unable to unshare: EPERM (for FEATURES="ipc-sandbox network-sandbox pid-sandbox")
+ done!
+Dependency resolution took 0.17 s (backtrack: 0/0).
+
+
+
+[ebuild  N     ] dev-util/u249make-1::testrepo to /tmp/o1stage/fixtures/ 0 KiB
+[nomerge       ]  dev-libs/u249json-1::testrepo 
+[ebuild  N     ]   virtual/u249make-0::testrepo  0 KiB
+[ebuild  N     ]    dev-util/u249make-1::testrepo  0 KiB
+[ebuild  N     ]     dev-libs/u249json-1::testrepo  0 KiB
+
+Total: 4 packages (4 new), Size of downloads: 0 KiB
+
+ * Error: circular dependencies:
+
+(dev-util/u249make-1:0/0::testrepo, ebuild scheduled for merge) depends on
+ (dev-libs/u249json-1:0/0::testrepo, ebuild scheduled for merge) (buildtime_slot_op)
+  (dev-util/u249make-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+
+ * Note that circular dependencies can often be avoided by temporarily
+ * disabling USE flags that trigger optional dependencies.
