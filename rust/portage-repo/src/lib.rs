@@ -27350,6 +27350,42 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             }
         }
         if !state.visited_atoms.insert(current_atom.clone()) {
+            // #277: the atom text already resolved (the single-resolution
+            // invariant above), but real's live `--debug` trace still
+            // narrates the re-visit (`Child:`/`Parent Dep:` at every
+            // `_add_pkg` call). Re-record the edge against the earlier
+            // resolution -- same text, same child by the invariant --
+            // so the dump's bounded re-narration can print the
+            // innermost chain. `--debug` only: `parent_atoms` feeds
+            // nothing but the trace dump, so production runs are
+            // bit-identical with the flag off.
+            if resolver_debug()
+                && let Some(prior) = state
+                    .parent_atoms
+                    .iter()
+                    .find(|r| r.atom == current_atom)
+                    .map(|r| {
+                        (
+                            r.child_category.clone(),
+                            r.child_package.clone(),
+                            r.child_version.clone(),
+                            r.child_installed,
+                        )
+                    })
+            {
+                let row = resolver_trace::ParentAtom {
+                    child_category: prior.0,
+                    child_package: prior.1,
+                    child_version: prior.2,
+                    child_installed: prior.3,
+                    parent: owner.clone(),
+                    atom: current_atom.clone(),
+                    unevaluated: unevaluated_atom.clone(),
+                };
+                if !state.parent_atoms.contains(&row) {
+                    state.parent_atoms.push(row);
+                }
+            }
             continue;
         }
         // `emerge --pretend --debug` Stage 3: real
@@ -31802,7 +31838,7 @@ fn assemble_result(
     // `resolver_trace::dump_resolution_walk`. Before the merge-order
     // sort / `digraph:` dump, matching real's order (walk, then
     // graph).
-    resolver_trace::dump_resolution_walk(&pass.entries, ctx.root, &pass.parent_atoms);
+    resolver_trace::dump_resolution_walk(&pass.entries, ctx.root, &pass.parent_atoms, &ctx.repos);
 
     // Real portage's `mylist` is dependency-first (its Scheduler installs
     // a package only after everything it depends on); portuale's BFS
