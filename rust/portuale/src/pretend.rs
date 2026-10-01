@@ -552,6 +552,13 @@ fn use_suffix(
     // already-rendered tokens. Colour (real `_create_use_string`'s own
     // `red`/`green`/`blue`/`yellow`) is applied per token *after* the
     // sort, so the `--alphabetical` sort key still sees plain tokens.
+    //
+    // Backlog #272: real `_create_use_string`
+    // (`output_helpers.py:336-338`) returns `f'{name}="{ret}" '` -- one
+    // trailing space per non-empty group, concatenated directly -- and
+    // `print_messages` (`output.py:542-544`) joins the whole display
+    // with a single leading space. Each group is therefore rendered
+    // with its own trailing space below.
     let groups: Vec<String> = display
         .iter()
         .map(|(name, rendered)| {
@@ -567,13 +574,13 @@ fn use_suffix(
                 .map(|t| colorize_use_token(t, color))
                 .collect::<Vec<_>>()
                 .join(" ");
-            format!("{name}=\"{body}\"")
+            format!("{name}=\"{body}\" ")
         })
         .collect();
     // Real `print_messages`: `myprint += " " + self.verboseadd` -- a
     // single space joins the USE display to the line, which already ends
     // with the (possibly empty) `oldbest` slot's own trailing space.
-    format!(" {}", groups.join(" "))
+    format!(" {}", groups.concat())
 }
 
 /// Pure constructor for the `[nomerge …]` row, so the ancestor arm's
@@ -1579,7 +1586,18 @@ fn print_entry_line(
         // `0 KiB` like the live oracle).
         let size_suffix = if v3 && (entry.remote_binary || force_sizes) {
             let bytes: u64 = entry.download_files.iter().map(|(_, s)| s).sum();
-            format!(" {}", localized_size(bytes))
+            let size = localized_size(bytes);
+            // Backlog #272: real `verbose_size` concatenates directly onto
+            // the trailing-spaced USE string (`verboseadd +=
+            // localized_size(mysize)`), so the size carries no leading
+            // space of its own when a USE display precedes it
+            // (`USE="x" 0 KiB`, one space). With no USE display the
+            // leading space separates the size from the version slot.
+            if use_str.is_empty() {
+                format!(" {size}")
+            } else {
+                size
+            }
         } else {
             String::new()
         };
@@ -20008,11 +20026,11 @@ mod tests {
         );
         assert_eq!(
             use_suffix(&new, false, false, false, &nc),
-            " USE=\"bar -baz\""
+            " USE=\"bar -baz\" "
         );
         assert_eq!(
             use_suffix(&new, true, false, false, &nc),
-            " USE=\"bar -baz\""
+            " USE=\"bar -baz\" "
         );
         // `--quiet` (verbosity 1): no USE line at all unless `-v` too.
         assert_eq!(use_suffix(&new, false, true, false, &nc), "");
@@ -20020,7 +20038,7 @@ mod tests {
         // full list (like `-pv`).
         assert_eq!(
             use_suffix(&new, true, true, false, &nc),
-            " USE=\"bar -baz\""
+            " USE=\"bar -baz\" "
         );
 
         // A `Reinstall` with one flipped flag: `-pv` shows the full list,
@@ -20040,16 +20058,16 @@ mod tests {
         );
         assert_eq!(
             use_suffix(&reinstall, false, false, false, &nc),
-            " USE=\"bar*\""
+            " USE=\"bar*\" "
         );
         assert_eq!(
             use_suffix(&reinstall, true, false, false, &nc),
-            " USE=\"bar* -baz\""
+            " USE=\"bar* -baz\" "
         );
         // `-pvq`: full list, same as `-pv`.
         assert_eq!(
             use_suffix(&reinstall, true, true, false, &nc),
-            " USE=\"bar* -baz\""
+            " USE=\"bar* -baz\" "
         );
 
         // A `Reinstall` with nothing changed: no USE line at `-p`.
@@ -20069,13 +20087,13 @@ mod tests {
         assert_eq!(use_suffix(&unchanged, false, false, false, &nc), "");
         assert_eq!(
             use_suffix(&unchanged, true, false, false, &nc),
-            " USE=\"bar -baz\""
+            " USE=\"bar -baz\" "
         );
         // `-pvq`: `all_flags` true -> the full list shows even though
         // nothing changed.
         assert_eq!(
             use_suffix(&unchanged, true, true, false, &nc),
-            " USE=\"bar -baz\""
+            " USE=\"bar -baz\" "
         );
     }
 
@@ -20099,10 +20117,10 @@ mod tests {
             "x",
         );
         let use_str = use_suffix(&gpcyclea, false, false, false, &nc);
-        assert_eq!(use_str, " USE=\"x\"");
+        assert_eq!(use_str, " USE=\"x\" ");
         assert_eq!(
             nomerge_row("dev-libs", "gpcyclea", "1.0", " ", false, &use_str),
-            "[nomerge       ]  dev-libs/gpcyclea-1.0 USE=\"x\""
+            "[nomerge       ]  dev-libs/gpcyclea-1.0 USE=\"x\" "
         );
         // A USE-less package (empty display, e.g. `dev-libs/diamond`):
         // the tail is empty and the row is byte-identical to the
@@ -20125,6 +20143,54 @@ mod tests {
             nomerge_row("dev-libs", "diamond", "1.0", " ", true, &bare_use),
             "[nomerge      ]  dev-libs/diamond-1.0"
         );
+    }
+
+    #[test]
+    fn use_suffix_renders_reals_trailing_space_after_each_use_group() {
+        // Backlog #272: real `_create_use_string`
+        // (`output_helpers.py:336-338`) returns `f'{name}="{ret}" '` --
+        // one trailing space per non-empty group -- and `print_messages`
+        // (`output.py:542-544`) joins it with a single leading space, so
+        // every painted merge-list row ends with `" `, at `-p` and `-v`
+        // alike. Grounded on host real 3.0.82.2 (`/usr/sbin/emerge`)
+        // staged-fixture probes (`--pretend --autounmask
+        // "dev-libs/useflagpkg[missingflag]"`, New and installed-USE
+        // reinstall shapes): real's changed row reads
+        // `... USE="missingflag*" ` where portuale printed
+        // `... USE="missingflag*"`.
+        let nc = Colorizer::new(false);
+        let reinstall = entry_with_use(
+            PretendOutcome::Reinstall {
+                version: "1.0".into(),
+                changed_flags: vec![],
+                deps_changed: false,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: false,
+                slot_operator_rebuild: false,
+            },
+            "bar* -baz",
+            "bar*",
+        );
+        // Plain `-p`: the changed flag paints, with real's trailing space.
+        assert_eq!(
+            use_suffix(&reinstall, false, false, false, &nc),
+            " USE=\"bar*\" "
+        );
+        // `-pv`: the full list, same trailing space.
+        assert_eq!(
+            use_suffix(&reinstall, true, false, false, &nc),
+            " USE=\"bar* -baz\" "
+        );
+        // Bare rows stay bare: an empty display still renders nothing.
+        let bare = entry_with_use(
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+            "",
+            "",
+        );
+        assert_eq!(use_suffix(&bare, false, false, false, &nc), "");
     }
 
     // Serialize the one test that mutates the process environment, in
