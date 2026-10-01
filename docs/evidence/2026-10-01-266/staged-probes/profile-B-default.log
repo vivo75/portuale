@@ -1,0 +1,107 @@
+!!! Repository 'overlay' is missing masters attribute in '/tmp/r266b/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/tmp/r266b/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/tmp/r266b/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/tmp/r266b/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+--- Invalid atom in /tmp/r266b/repo/profiles/package.use.force: */pkgusemaskforcepkg
+!!! Repository 'independentoverlay' is missing masters attribute in '/tmp/r266b/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'overlay' is missing masters attribute in '/tmp/r266b/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/tmp/r266b/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/tmp/r266b/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+--- Invalid atom in /tmp/r266b/repo/profiles/package.use.force: */pkgusemaskforcepkg
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/.gentoo/repos/gentoo/profiles/updates/4Q-2022........
+/.gentoo/repos/gentoo/profiles/updates/3Q-2020..............
+/.gentoo/repos/gentoo/profiles/updates/1Q-2023.......................
+/.gentoo/repos/gentoo/profiles/updates/1Q-2024........................................................................................
+/.gentoo/repos/gentoo/profiles/updates/2Q-2020.........
+/.gentoo/repos/gentoo/profiles/updates/4Q-2025...
+/.gentoo/repos/gentoo/profiles/updates/2Q-2024...........
+/.gentoo/repos/gentoo/profiles/updates/4Q-2021.......................................................................
+/.gentoo/repos/gentoo/profiles/updates/1Q-2020.........
+/.gentoo/repos/gentoo/profiles/updates/3Q-2023...................
+/.gentoo/repos/gentoo/profiles/updates/3Q-2024.............
+/.gentoo/repos/gentoo/profiles/updates/2Q-2023..............................
+/.gentoo/repos/gentoo/profiles/updates/2Q-2021.......
+/.gentoo/repos/gentoo/profiles/updates/4Q-2024................................................................................
+/.gentoo/repos/gentoo/profiles/updates/1Q-2025...........................
+/.gentoo/repos/gentoo/profiles/updates/3Q-2026.
+/.gentoo/repos/gentoo/profiles/updates/3Q-2021...........
+/.gentoo/repos/gentoo/profiles/updates/4Q-2023........................................
+/.gentoo/repos/gentoo/profiles/updates/2Q-2026......
+/.gentoo/repos/gentoo/profiles/updates/2Q-2022...........
+/.gentoo/repos/gentoo/profiles/updates/3Q-2025.......
+/.gentoo/repos/gentoo/profiles/updates/1Q-2026...
+/.gentoo/repos/gentoo/profiles/updates/3Q-2022.....................
+/.gentoo/repos/gentoo/profiles/updates/1Q-2021.......
+/.gentoo/repos/gentoo/profiles/updates/2Q-2025......
+/.gentoo/repos/gentoo/profiles/updates/4Q-2020.......
+/tmp/r266b/repo/profiles/updates/2Q-2024..
+ERROR: Update type not recognized '# Quarter 2 2024 package moves (fixture)'
+@s
+
+!!! Repository 'overlay' is missing masters attribute in '/tmp/r266b/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/tmp/r266b/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/tmp/r266b/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/tmp/r266b/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+--- Invalid atom in /tmp/r266b/repo/profiles/package.use.force: */pkgusemaskforcepkg
+!!! Repository 'independentoverlay' is missing masters attribute in '/tmp/r266b/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'overlay' is missing masters attribute in '/tmp/r266b/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/tmp/r266b/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/tmp/r266b/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+--- Invalid atom in /tmp/r266b/repo/profiles/package.use.force: */pkgusemaskforcepkg
+WARNING: One or more repositories have missing repo_name entries:
+
+	/tmp/r266b/overlay/profiles/repo_name
+	/tmp/r266b/independentoverlay/profiles/repo_name
+
+NOTE: Each repo_name entry should be a plain text file containing a
+unique name for the repository on the first line.
+
+
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 1.61 s (backtrack: 0/20).
+
+[ebuild  N     ] dev-libs/r266lib-3.0 to /tmp/r266b/ USE="bar" 
+[ebuild  N     ] dev-libs/r266lib-2.0 to /tmp/r266b/ USE="-bar" 
+[ebuild  N     ] dev-libs/r266mid-1.0 to /tmp/r266b/
+
+The following USE changes are necessary to proceed:
+ (see "package.use" in the portage(5) man page for more details)
+# required by dev-libs/r266mid-1.0::testrepo
+# required by dev-libs/r266mid (argument)
+>=dev-libs/r266lib-3.0 bar
+!!! Invalid news item: /tmp/r266b/repo/metadata/news/2026-09-10-portuale-format1-useatom/2026-09-10-portuale-format1-useatom.en.txt
+!!!   line 7: Display-If-Installed: dev-libs/infoinstpkg[alpha]
+!!! Invalid news item: /tmp/r266b/repo/metadata/news/2026-09-09-portuale-format1-slotatom/2026-09-09-portuale-format1-slotatom.en.txt
+!!!   line 7: Display-If-Installed: dev-libs/samepkg:1
+!!! Invalid news item: /tmp/r266b/repo/metadata/news/2026-09-08-portuale-malformed/2026-09-08-portuale-malformed.en.txt
+!!!   line 7: Display-If-Installed: dev-libs/infoinstpkg[[bad
+
+ * IMPORTANT: 11 news items need reading for repository 'gentoo'.
+ * IMPORTANT: 5 news items need reading for repository 'testrepo'.
+ * Use eselect news read to view new items.
+

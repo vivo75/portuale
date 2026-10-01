@@ -27151,9 +27151,14 @@ fn onlydeps_runtime_keys(
 /// [`best_installed_matching`] makes) -- #107: installed `mesa`'s live
 /// `libdisplay-info:=[abi_x86_32(-),abi_x86_64(-)]` and built
 /// `libdisplay-info:0/3=[...]` both bind the installed `0.3.0`. For a
-/// not-yet-built package an atom carrying use-deps only ever counts as
-/// matching its own selection (conservative: it can keep a package
-/// alive, never drop one real would keep for USE reasons).
+/// not-yet-built package the use-deps are checked against that version's
+/// ebuild candidate -- its md5-cache IUSE plus its profile-computed
+/// effective USE (real's `_pkg_use_enabled` for an unbuilt package, the
+/// same pair the walk's own selection applies) -- #266: `>=foo-1[bar]`
+/// alongside `<foo-3` collapses onto the lower pick when that pick builds
+/// `bar`, and stays split when it does not. A version with no ebuild
+/// candidate (a binary-only pick) still only ever counts as matching its
+/// own selection.
 /// Atoms without a package (`NoVisibleCandidate`, a removal) are passed
 /// through untouched, like real's `(atom, None)` yield.
 fn minimize_children(
@@ -27205,6 +27210,21 @@ fn minimize_children(
     };
     let strs: HashMap<(String, bool), String> =
         pkgs.iter().map(|p| (p.clone(), pkg_str(p))).collect();
+    // #266: the ebuild candidate behind each not-yet-built version, for
+    // the use-dep check below. A same-version tie goes to the highest
+    // `repo_priority`, the walk's own selection tie-break; versions with
+    // no ebuild candidate stay absent (binary-only picks keep the old
+    // own-selection-only match).
+    let ebuilds = list_candidates(repos, &key.0, &key.1).unwrap_or_default();
+    let mut ebuild_by_version: HashMap<&str, &Candidate> = HashMap::new();
+    for c in ebuilds.iter() {
+        match ebuild_by_version.get(c.version.as_str()) {
+            Some(prev) if prev.repo_priority >= c.repo_priority => {}
+            _ => {
+                ebuild_by_version.insert(c.version.as_str(), c);
+            }
+        }
+    }
     // atom -> packages it matches (real's `atom_pkg_graph.child_nodes`).
     let mut matches: Vec<(String, Vec<(String, bool)>)> = Vec::new();
     for (a, o) in &picks {
@@ -27231,7 +27251,21 @@ fn minimize_children(
                     valid.extend(vdb_use.iter().cloned());
                     portage_dep::use_deps_satisfied(deps, &valid, &vdb_use)
                 }
-                Some(_) => false,
+                // #266: real `_pkg_use_enabled` of a not-yet-built
+                // package -- the ebuild candidate's own effective USE,
+                // the same pair the walk's own selection applies. A
+                // version with no ebuild candidate (a binary-only pick)
+                // keeps the old own-selection-only match.
+                Some(deps) => ebuild_by_version
+                    .get(p.0.as_str())
+                    .and_then(|c| candidate_iuse_and_use(c, &key.0, &key.1, config))
+                    .is_some_and(|(iuse, use_flags)| {
+                        portage_dep::use_deps_satisfied(
+                            deps,
+                            &valid_iuse(&iuse, config),
+                            &use_flags,
+                        )
+                    }),
             };
             let hit = *p == own || (matches_str() && use_ok());
             if hit {
@@ -50514,8 +50548,9 @@ mod tests {
         );
         // Disjoint selections (each atom matches only its own pick) are
         // left alone; so is a use-dep atom the installed instance's
-        // recorded USE does not satisfy (`foo` is not in its IUSE), and a
-        // use-dep atom never matches a not-yet-built package but its own.
+        // recorded USE does not satisfy (`foo` is not in its IUSE), and
+        // one no ebuild candidate satisfies either (`foo` is in no
+        // candidate's IUSE here).
         let disjoint = vec![
             ("<dev-libs/minlib-2".to_string(), installed.clone()),
             (">=dev-libs/minlib-3".to_string(), up("3.0")),
@@ -50531,6 +50566,85 @@ mod tests {
         assert_eq!(
             minimize_children(&base, &repos, &config, &key, used.clone()),
             used
+        );
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// #266: real `findAtomForPackage(pkg,
+    /// modified_use=self._pkg_use_enabled(pkg))` evaluates a use-dep atom
+    /// against a not-yet-built package's own candidate effective USE, so
+    /// `>=minlib2-1[bar]` alongside `<minlib2-3` collapses onto the lower
+    /// pick when that pick builds `bar`, and stays split when it does
+    /// not. Grounded on real 3.0.82.2's ResolverPlayground
+    /// (`docs/evidence/2026-10-01-266/r266_pg.py`).
+    #[test]
+    fn minimize_children_matches_use_deps_against_candidate_use() {
+        use md5::Digest as _;
+        use std::fmt::Write as _;
+        let base = TempDir::new("portage-repo-266-minimize").keep();
+        let repo = base.join("repo");
+        for (pv, slot, iuse) in [
+            ("1.0", "1", "-bar"),
+            ("2.0", "2", "-bar"),
+            ("3.0", "3", "+bar"),
+        ] {
+            let dir = repo.join("dev-libs/minlib2");
+            fs::create_dir_all(&dir).unwrap();
+            let body = format!(
+                "EAPI=8\nDESCRIPTION=\"266\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\nIUSE=\"{iuse}\"\n"
+            );
+            fs::write(dir.join(format!("minlib2-{pv}.ebuild")), &body).unwrap();
+            let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+            let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=266\nEAPI=8\n".to_string();
+            writeln!(
+                entry,
+                "IUSE={iuse}\nKEYWORDS=amd64\nSLOT={slot}\n_md5_={md5}"
+            )
+            .unwrap();
+            let cachedir = repo.join("metadata/md5-cache/dev-libs");
+            fs::create_dir_all(&cachedir).unwrap();
+            fs::write(cachedir.join(format!("minlib2-{pv}")), entry).unwrap();
+        }
+        let repos = vec![RepoConfig {
+            name: "testrepo".to_string(),
+            location: repo.clone(),
+            priority: 0,
+            is_main: true,
+            masters: vec![],
+            profile_formats: vec![],
+            cache_formats: vec![],
+            aliases: vec![],
+            sync_type: None,
+            sync_uri: None,
+            volatile: false,
+            module_specific_options: vec![],
+        }];
+        let key = ("dev-libs".to_string(), "minlib2".to_string());
+        let up = |to: &str| PretendOutcome::Upgrade {
+            from: "1.0".into(),
+            to: to.into(),
+        };
+        let picks = vec![
+            (">=dev-libs/minlib2-1[bar]".to_string(), up("3.0")),
+            ("<dev-libs/minlib2-3".to_string(), up("2.0")),
+        ];
+        // Default flags: 2.0 builds `-bar`, so the use-dep atom matches
+        // only 3.0 and the pair stays split.
+        let config = test_config();
+        assert_eq!(
+            minimize_children(&base, &repos, &config, &key, picks.clone()),
+            picks
+        );
+        // With `bar` enabled the lower pick satisfies both atoms, so the
+        // pair collapses onto 2.0.
+        let mut bar_config = test_config();
+        bar_config.use_tokens.push("bar".to_string());
+        assert_eq!(
+            minimize_children(&base, &repos, &bar_config, &key, picks.clone()),
+            vec![
+                (">=dev-libs/minlib2-1[bar]".to_string(), up("2.0")),
+                ("<dev-libs/minlib2-3".to_string(), up("2.0")),
+            ]
         );
         let _ = fs::remove_dir_all(&base);
     }
