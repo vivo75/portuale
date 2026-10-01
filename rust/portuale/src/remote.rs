@@ -3560,7 +3560,14 @@ fn install_file_atomic(
             Ok(())
         }
         RemoteTransport::Ssh => {
-            let server_tmp = TempDir::new("portuale-regen-install").keep();
+            // Backlog #262: `TempDir::new` creates a directory (backlog
+            // #260), so the bytes must ride a file *inside* it --
+            // staging straight into its path fails every ssh install
+            // with `Is a directory`, and the vdb keeps the build-time
+            // env (with its stray `declare -- x=""`) instead of the
+            // regen'd one.
+            let server_dir = TempDir::new("portuale-regen-install").keep();
+            let server_tmp = server_dir.join("regen.env");
             std::fs::write(&server_tmp, bytes)
                 .map_err(|e| format!("mrg: staging the regen install failed: {e}"))?;
             let result = send_file(ctx, control, &server_tmp, &tmp).and_then(|()| {
@@ -3584,7 +3591,7 @@ fn install_file_atomic(
                     ))
                 }
             });
-            let _ = std::fs::remove_file(&server_tmp);
+            let _ = std::fs::remove_dir_all(&server_dir);
             result
         }
     }
@@ -6496,6 +6503,30 @@ mod tests {
         );
         assert!(dest.is_dir(), "the blocking directory is untouched");
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #262: the ssh leg of the atomic install must stage the
+    /// bytes into a *file* before shipping them. `TempDir::new` creates
+    /// a directory (backlog #260), so staging straight into its path
+    /// fails with `Is a directory (os error 21)` on every ssh install
+    /// -- the regen'd env never reaches the vdb and the build-time env
+    /// (with its stray `declare -- x=""`) survives. Against an
+    /// unreachable host the install still fails, but past staging, at
+    /// transport -- the assertion pins exactly that boundary.
+    #[test]
+    fn install_file_atomic_ssh_stages_bytes_before_transport() {
+        let ctx = ctx_with_args("unreachable.invalid", None);
+        let err = install_file_atomic(
+            &ctx,
+            None,
+            b"regen",
+            "/var/db/pkg/dev-libs/regen-1.0/environment.bz2",
+        )
+        .expect_err("no ssh server: the install must fail");
+        assert!(
+            !err.contains("staging the regen install failed"),
+            "ssh staging must succeed (transport may fail): {err}"
+        );
     }
 
     /// Pure unit: the `PORTAGE_BZIP2_COMMAND` scrub rewrites only the
