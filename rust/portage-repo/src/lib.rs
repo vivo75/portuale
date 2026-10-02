@@ -27699,6 +27699,11 @@ struct PassState {
     /// Track X Slice B (#242): like `resolved_slots`, keyed by
     /// resolving root.
     other_outcomes: HashSet<(String, String, Option<String>, bool)>,
+    /// Backlog #285: per-pass memo for [`arg_pinned_installed_reuse`] --
+    /// `cat/pkg` -> the `(version, main slot)` pairs the top-level atoms
+    /// on that cp keep installed. A missing key means uncomputed for
+    /// this pass (an empty vec is a computed miss).
+    top_pinned_installed: HashMap<(String, String), Vec<(String, String)>>,
     /// (category, package) -> already added a `targets_running_root`
     /// entry for it (see `resolve_root_deps_build_entries`'s own doc
     /// comment). Deliberately separate from `resolved_slots`/
@@ -28095,6 +28100,197 @@ fn minimize_children(
             }
         })
         .collect()
+}
+
+/// Backlog #285: real `_wrapped_select_pkg_highest_available_imp`'s
+/// `find_existing_node` pass (`lib/_emerge/depgraph.py:7854`, the `for
+/// find_existing_node in True, False` loop) as a pop-site reuse check.
+///
+/// Real consults the packages already added to the graph before picking
+/// the highest available one: for the current db's first match it looks
+/// up `_package_tracker.match(root, pkg.slot_atom, installed=False)`
+/// (`:8180-8215`) -- the in-graph nodes in that (main-)`slot_atom`
+/// (`slot_atom` is `cp:slot`, `_emerge/Package.py:139`, so `1/1` and
+/// `1/2` share it) -- and reuses the node when the dep atom matches it
+/// (`atom.match(e_pkg)`), unless a higher version is available in a
+/// *different* slot (then the node is "irrelevant" and the highest
+/// wins). The winner returns directly (`:8370-8371`, mirrored at add
+/// time by `_check_slot_conflict`'s reuse, `:3532-3547`, in `_add_pkg`,
+/// `:3661-3670`).
+///
+/// The slice shape (`=app-misc/mmprov-2 app-misc/mmcons` under
+/// `--update --deep`, real 3.0.82.2 probed 2026-10-02): the `=mmprov-2`
+/// argument puts installed `mmprov-2:1/1` in the graph, and after the
+/// missed-slot-abi backtrack (`_slot_operator_update_backtrack`,
+/// `:2400-2452`) the rebuilt mmcons' dep `app-misc/mmprov:=` reuses
+/// that node (soft/`runtime_slot_op` edge) instead of re-selecting the
+/// highest slot-1 version (mmprov-3). Real only keeps it when it
+/// satisfies the dep atom.
+///
+/// Portuale resolves the consumer's dep *before* the pinning argument
+/// (reversed queue order, #90 S1), so no pass-state node exists yet at
+/// selection time and `resolve_pretend` itself is stateless: the pinned
+/// set is re-derived from the top-level atoms instead. For every
+/// same-cp top-level atom (blockers skipped) the helper speculatively
+/// re-resolves it exactly as the walk would (`is_top_level = true`,
+/// same flags and constraints) and keeps its `AlreadyInstalled`
+/// verdicts as `(version, main slot)` pairs -- the instances the
+/// arguments pin in the graph, whatever the walk order. Memoized per
+/// pass in [`PassState::top_pinned_installed`] (a missing key means
+/// uncomputed; the replace set and every other `BacktrackParams` input
+/// can change the verdict per pass, so the cache never outlives one).
+///
+/// The caller applies the reuse only when its fresh verdict is a new
+/// merge (`New`/`Upgrade`/`Downgrade`) in main slot `S`, and this
+/// helper additionally requires: a pinned instance in that same slot
+/// (real's same-`slot_atom` requirement -- a pin in another slot never
+/// diverts an upgrade, e.g. `=mmprov-1` still upgrades slot 1), the dep
+/// atom matching the pinned `cat/pkg-ver:slot/sub` string (real's
+/// `atom.match`, the "only keeps it when it satisfies the dep atom"
+/// half), and -- for `[use]` deps -- the pinned instance's own recorded
+/// vdb `USE` satisfying them (the same check
+/// [`dependency_avoid_update_candidate`] runs). Highest matching pin
+/// wins (real iterates the tracker descending). A `Reinstall` verdict
+/// is never overridden by the caller (something already decided that
+/// version rebuilds); `resolve_pretend` writes no global state, so the
+/// speculative resolutions are side-effect free.
+///
+/// Cuts (listed, not grown, per the slice): `||`-chosen atoms keep
+/// their own in-graph preference; `@world`/`@selected` members are not
+/// `ctx.atoms` and pin nothing here; cross-root atoms resolve against
+/// the dep's own root.
+#[allow(clippy::too_many_arguments)]
+fn arg_pinned_installed_reuse(
+    ctx: &ResolveCtx,
+    config: &portage_profile::Config,
+    bp: &BacktrackParams,
+    union_constraints: &HashMap<(String, String), Vec<String>>,
+    cache: &mut HashMap<(String, String), Vec<(String, String)>>,
+    atom_root: &Path,
+    key: &(String, String),
+    current_atom: &str,
+    atom: &portage_dep::Atom,
+    fresh_version: &str,
+) -> Option<String> {
+    // The fresh pick's own main slot -- the reuse target must sit in it.
+    // Same winner rule as the pop site's own `resolved` pick ("ebuild
+    // type is the last resort", then repo priority).
+    let fresh_slot = list_candidates(&ctx.repos, &key.0, &key.1)
+        .ok()?
+        .iter()
+        .filter(|c| c.version == fresh_version)
+        .max_by(|a, b| {
+            let src_rank = |c: &Candidate| match c.source {
+                CandidateSource::Binary => 1u8,
+                CandidateSource::Ebuild => 0,
+            };
+            src_rank(a)
+                .cmp(&src_rank(b))
+                .then(a.repo_priority.cmp(&b.repo_priority))
+        })?
+        .slot
+        .clone();
+    if !cache.contains_key(key) {
+        let empty_constraints: Vec<String> = Vec::new();
+        let extra_constraints = union_constraints.get(key).unwrap_or(&empty_constraints);
+        let mut kept: Vec<(String, String)> = Vec::new();
+        for t in ctx.atoms {
+            let Some(arg) = portage_dep::parse_atom(t) else {
+                continue;
+            };
+            if arg.blocker != portage_dep::Blocker::None {
+                continue;
+            }
+            if arg.category != key.0 || arg.package != key.1 {
+                continue;
+            }
+            let Ok(outcome) = resolve_pretend(
+                &ctx.repos,
+                atom_root,
+                t,
+                config,
+                ctx.newuse,
+                ctx.changed_use,
+                ctx.update,
+                ctx.excluded,
+                ctx.changed_deps,
+                ctx.with_bdeps,
+                ctx.changed_slot,
+                ctx.selective,
+                true,
+                ctx.usepkg,
+                ctx.usepkgonly,
+                ctx.binpkg_respect_use,
+                ctx.usepkg_exclude,
+                ctx.usepkg_include,
+                ctx.rebuilt_binaries,
+                ctx.rebuilt_binaries_timestamp,
+                ctx.newrepo,
+                ctx.empty,
+                ctx.getbinpkg,
+                bp.autounmask_suggest_keywords,
+                bp.autounmask_suggest_use,
+                bp.autounmask_suggest_license,
+                bp.autounmask_suggest_masks,
+                extra_constraints,
+                &ctx.local_binpkg,
+            ) else {
+                continue;
+            };
+            if let PretendOutcome::AlreadyInstalled { version } = outcome
+                && let Some((_, slot, _)) = installed_candidates(atom_root, &key.0, &key.1)
+                    .into_iter()
+                    .find(|(v, _, _)| v == &version)
+            {
+                kept.push((version, slot));
+            }
+        }
+        kept.sort();
+        kept.dedup();
+        cache.insert(key.clone(), kept);
+    }
+    let kept = cache.get(key)?;
+    let installed = installed_candidates(atom_root, &key.0, &key.1);
+    let mut best: Option<(String, String, String)> = None;
+    for (version, slot) in kept {
+        if *slot != fresh_slot {
+            continue;
+        }
+        let sub = installed
+            .iter()
+            .find(|(v, _, _)| v == version)
+            .map(|(_, _, sub)| sub.clone())
+            .unwrap_or_default();
+        let pinned_str = if sub.is_empty() {
+            format!("{}/{}-{version}:{slot}", key.0, key.1)
+        } else {
+            format!("{}/{}-{version}:{slot}/{sub}", key.0, key.1)
+        };
+        if portage_dep::match_from_list(current_atom, &[pinned_str.as_str()])
+            .is_none_or(|m| m.is_empty())
+        {
+            continue;
+        }
+        if let Some(use_deps) = atom.use_deps.as_deref()
+            && !use_deps.is_empty()
+        {
+            let vdb_iuse = read_vdb_flag_set(atom_root, &key.0, &key.1, version, "IUSE");
+            let vdb_use = read_vdb_flag_set(atom_root, &key.0, &key.1, version, "USE");
+            let mut valid = valid_iuse(&vdb_iuse, config);
+            valid.extend(vdb_use.iter().cloned());
+            if !portage_dep::use_deps_satisfied(use_deps, &valid, &vdb_use) {
+                continue;
+            }
+        }
+        let take = match &best {
+            None => true,
+            Some((bv, _, _)) => vercmp_ordering(version, bv) == Ordering::Greater,
+        };
+        if take {
+            best = Some((version.clone(), slot.clone(), sub));
+        }
+    }
+    best.map(|(version, _, _)| version)
 }
 
 /// Phase A3 (023): one full BFS walk over the current `bp`.
@@ -28559,6 +28755,37 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         } else {
             resolve_atom(&current_atom, item_targets_running_root)?
         };
+
+        // Backlog #285: an argument-pinned installed instance satisfies
+        // this atom -- reuse it instead of scheduling a new merge. See
+        // [`arg_pinned_installed_reuse`] for the real grounding
+        // (`find_existing_node`, `depgraph.py:7854/8180-8215/8370-8371`).
+        // Fires only on a fresh new-merge verdict (`New`/`Upgrade`/
+        // `Downgrade` -- a `Reinstall` verdict is never overridden) and
+        // never for `||`-chosen atoms (the disjunction layer owns
+        // installed classification there).
+        if !from_disjunction
+            && let Some(fresh) = match &outcome {
+                PretendOutcome::New { version } => Some(version.clone()),
+                PretendOutcome::Upgrade { to, .. } => Some(to.clone()),
+                PretendOutcome::Downgrade { to, .. } => Some(to.clone()),
+                _ => None,
+            }
+            && let Some(kept) = arg_pinned_installed_reuse(
+                ctx,
+                config,
+                bp,
+                &union_constraints,
+                &mut state.top_pinned_installed,
+                atom_root,
+                &key,
+                &current_atom,
+                &atom,
+                &fresh,
+            )
+        {
+            outcome = PretendOutcome::AlreadyInstalled { version: kept };
+        }
 
         // Backlog #233: a runtime-keyed dependency no ebuild satisfies
         // but an installed instance does settles `AlreadyInstalled`,
@@ -52907,6 +53134,169 @@ mod tests {
             versioned,
             BTreeSet::from([massc.clone()]),
             "an exact-version atom pins nothing"
+        );
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// Backlog #285: an exact-version top-level request keeps its named
+    /// installed instance under `--update`. Same installed/tree shape as
+    /// the #268 pin (`mmprov-1` `0/1` + `mmprov-2` `1/1` + `mmcons-1`
+    /// bound `mmprov:0/1=`, tree `mmprov-1/-2/-3` with `mmprov-3` at
+    /// `1/2`), but the tree here is the shared fixture repo (resolved
+    /// through `config_root`) while the vdb is ad-hoc under `root` --
+    /// the `_b1_root` split. Full `--update --deep` walks, real 3.0.82.2
+    /// bytes from the R3 S0 capture (host staged-fixture probe
+    /// 2026-10-02, `--ignore-default-opts --pretend --color=n
+    /// --backtrack=3 --update --deep <atoms>`, rc 0 throughout):
+    /// - `=app-misc/mmprov-2 app-misc/mmcons` -> `[ebuild rR]
+    ///   app-misc/mmcons-1` alone (`backtrack: 1/3`): the argument pins
+    ///   installed `mmprov-2` in the graph and the rebuilt consumer's
+    ///   `app-misc/mmprov:=` reuses it (real
+    ///   `_wrapped_select_pkg_highest_available_imp`'s
+    ///   `find_existing_node` pass) instead of upgrading to `mmprov-3`.
+    /// - `~app-misc/mmprov-2 app-misc/mmcons` -> the same single row.
+    /// - Control `app-misc/mmprov:1/2 app-misc/mmcons` -> `[ebuild U]
+    ///   app-misc/mmprov-3 [2]` + `[ebuild rR] app-misc/mmcons-1`: the
+    ///   slot atom's own pick is the upgrade, so the dep binds that.
+    #[test]
+    fn exact_version_update_keeps_arg_pinned_provider() {
+        let base = TempDir::new("portage-repo-285-exact-update").keep();
+        for (name, slot, rdepend) in [
+            ("mmprov-1", "0/1", ""),
+            ("mmprov-2", "1/1", ""),
+            ("mmcons-1", "0", "app-misc/mmprov:0/1="),
+        ] {
+            let d = base.join("var/db/pkg/app-misc").join(name);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(d.join("CATEGORY"), "app-misc\n").unwrap();
+            fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+            fs::write(d.join("repository"), "testrepo\n").unwrap();
+            fs::write(d.join("EAPI"), "8\n").unwrap();
+            if !rdepend.is_empty() {
+                fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+            }
+        }
+        fs::create_dir_all(base.join("var/lib/portage")).unwrap();
+        fs::write(base.join("var/lib/portage/world"), "").unwrap();
+        fs::create_dir_all(base.join("distfiles")).unwrap();
+        let root = fixtures_root();
+        let resolve = |atoms: &[&str]| {
+            let req = ResolveRequest {
+                config_root: root.clone(),
+                root: base.clone(),
+                atoms: atoms.iter().map(|a| a.to_string()).collect(),
+                config: test_config(),
+                newuse: false,
+                changed_use: false,
+                nodeps: false,
+                onlydeps: false,
+                onlydeps_with_rdeps: true,
+                onlydeps_with_ideps: false,
+                update: true,
+                deep: Deep::Unlimited,
+                excluded: Vec::new(),
+                with_bdeps: true,
+                changed_deps: false,
+                changed_slot: false,
+                with_test_deps: false,
+                changed_deps_report: false,
+                selective: true,
+                autounmask_suggest_keywords: false,
+                autounmask_suggest_use: false,
+                autounmask_suggest_license: false,
+                autounmask_suggest_masks: false,
+                usepkg: false,
+                usepkgonly: false,
+                binpkg_respect_use: false,
+                usepkg_exclude: Vec::new(),
+                usepkg_include: Vec::new(),
+                rebuilt_binaries: false,
+                rebuilt_binaries_timestamp: None,
+                newrepo: false,
+                buildpkgonly: false,
+                root_deps_running_root: None,
+                distdir: base.join("distfiles"),
+                empty: false,
+                getbinpkg: false,
+                ignore_built_slot_operator_deps: false,
+                backtrack_max: 3,
+                reinstall_atoms: Vec::new(),
+                rebuild_if_new_slot: true,
+                rebuild_if_unbuilt: false,
+                rebuild_if_new_rev: false,
+                rebuild_if_new_ver: false,
+                rebuild_exclude: Vec::new(),
+                rebuild_ignore: Vec::new(),
+                dynamic_deps: true,
+                implicit_system_deps: true,
+                complete: false,
+                set_args: std::collections::HashSet::new(),
+                solver: SolverKind::Portage,
+            };
+            active_resolver()
+                .resolve(&req)
+                .unwrap_or_else(|e| panic!("resolve({atoms:?}) failed: {e}"))
+        };
+        // Merge-bound `(cat/pkg, version)` pairs, for the row-level
+        // assertion below (an `AlreadyInstalled` provider merges
+        // nothing and renders no row).
+        let merges = |result: &GraphResult| {
+            result
+                .entries
+                .iter()
+                .filter_map(|e| match &e.outcome {
+                    PretendOutcome::New { version } => {
+                        Some((format!("{}/{}", e.category, e.package), version.clone()))
+                    }
+                    PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
+                        Some((format!("{}/{}", e.category, e.package), to.clone()))
+                    }
+                    PretendOutcome::Reinstall { version, .. } => {
+                        Some((format!("{}/{}", e.category, e.package), version.clone()))
+                    }
+                    PretendOutcome::AlreadyInstalled { .. }
+                    | PretendOutcome::NoVisibleCandidate
+                    | PretendOutcome::Uninstall { .. } => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        for atoms in [
+            ["=app-misc/mmprov-2", "app-misc/mmcons"],
+            ["~app-misc/mmprov-2", "app-misc/mmcons"],
+        ] {
+            let result = resolve(&atoms);
+            assert_eq!(
+                merges(&result),
+                vec![("app-misc/mmcons".to_string(), "1".to_string())],
+                "exact-version pin keeps mmprov-2, only the consumer rebuilds: {atoms:?}"
+            );
+            let consumer = result
+                .entries
+                .iter()
+                .find(|e| e.package == "mmcons")
+                .expect("mmcons entry");
+            assert!(
+                matches!(
+                    consumer.outcome,
+                    PretendOutcome::Reinstall {
+                        slot_operator_rebuild: true,
+                        ..
+                    }
+                ),
+                "the consumer rebuilds through the slot-operator path: {:?}",
+                consumer.outcome
+            );
+        }
+        // Control: the slot atom upgrades the provider itself, so the
+        // rebuilt consumer binds the upgrade.
+        let result = resolve(&["app-misc/mmprov:1/2", "app-misc/mmcons"]);
+        assert_eq!(
+            merges(&result),
+            vec![
+                ("app-misc/mmprov".to_string(), "3".to_string()),
+                ("app-misc/mmcons".to_string(), "1".to_string()),
+            ],
+            "slot-atom control still upgrades the provider"
         );
         let _ = fs::remove_dir_all(&base);
     }
