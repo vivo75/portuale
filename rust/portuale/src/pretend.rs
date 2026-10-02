@@ -13220,11 +13220,7 @@ pub fn run(args: &[String]) -> ExitCode {
     // Backlog #242 Slice D: the running root's own profile for per-node
     // USE paint (see `load_running_config`). Loaded once per run, from
     // the effective running root — never the target config.
-    let running_config = load_running_config(
-        &root,
-        &portage_repo::running_root_from_env(),
-        &repos,
-    );
+    let running_config = load_running_config(&root, &portage_repo::running_root_from_env(), &repos);
 
     // Real `make.globals`'s own `DISTDIR="/var/cache/distfiles"` --
     // env-var-sourced at this CLI boundary, the same "env var / hardcoded
@@ -13502,10 +13498,9 @@ pub fn run(args: &[String]) -> ExitCode {
     // single-root runs (and hermetic trees without one) keep the
     // resolve-time target paint.
     let mut result = result;
-    if let (Some(running), Some(running_cfg)) = (
-        root_deps_running_root.as_deref(),
-        running_config.as_ref(),
-    ) {
+    if let (Some(running), Some(running_cfg)) =
+        (root_deps_running_root.as_deref(), running_config.as_ref())
+    {
         portage_repo::repaint_running_root_entry_displays(
             &mut result.entries,
             &repos,
@@ -14738,12 +14733,11 @@ pub fn run(args: &[String]) -> ExitCode {
                     // when the consumer rides it — always the target walk
                     // from every producer today, so the flag is false and
                     // this matches the old rendering exactly).
-                    let installed_root: &Path =
-                        if s.consumer_targets_running_root {
-                            root_deps_running_root.as_deref().unwrap_or(root.as_path())
-                        } else {
-                            root.as_path()
-                        };
+                    let installed_root: &Path = if s.consumer_targets_running_root {
+                        root_deps_running_root.as_deref().unwrap_or(root.as_path())
+                    } else {
+                        root.as_path()
+                    };
                     println!(
                         "    {} required by ({}, installed in '{}') {}",
                         s.atom,
@@ -14761,21 +14755,18 @@ pub fn run(args: &[String]) -> ExitCode {
                         &root,
                         root_deps_running_root.as_deref(),
                     );
-                    let consumer_use =
-                        if s.consumer_targets_running_root
-                            && let Some(cfg) = running_config.as_ref()
-                            && let Some((cc, cp2, cv)) = s
-                                .consumer_cpv
-                                .split(':')
-                                .next()
-                                .and_then(portage_repo::split_cpv)
-                        {
-                            portage_repo::skipped_update_use_display_for(
-                                &repos, cfg, &cc, &cp2, &cv,
-                            )
-                        } else {
-                            s.consumer_use.clone()
-                        };
+                    let consumer_use = if s.consumer_targets_running_root
+                        && let Some(cfg) = running_config.as_ref()
+                        && let Some((cc, cp2, cv)) = s
+                            .consumer_cpv
+                            .split(':')
+                            .next()
+                            .and_then(portage_repo::split_cpv)
+                    {
+                        portage_repo::skipped_update_use_display_for(&repos, cfg, &cc, &cp2, &cv)
+                    } else {
+                        s.consumer_use.clone()
+                    };
                     println!(
                         "    {} required by ({}, ebuild scheduled for merge{}) {}",
                         s.atom,

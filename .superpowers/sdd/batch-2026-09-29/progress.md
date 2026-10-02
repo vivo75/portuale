@@ -409,3 +409,28 @@ between each. This is the batch's "max 2 at once" rule being exceeded
 (three at once) -- the lesson is recorded here.
 
 D4 (#272) and R4 (#268) remain landed and green.
+
+**R5 (#277) NOT READY -- 2026-10-01.** Landed alone onto R4, it breaks
+116 contract tests (including O1's `test_278` and the
+`test_autounmask_use_breakage_argument_order` family). Root cause:
+`resolver_trace.rs`'s `renarration_order` is called from `lib.rs:606` in
+the display path and **reorders the merge-list rows**, which no pin
+expects. Its `portage-repo` unit tests pass (944/0) because they only
+test `renarration_order` in isolation. Fix needed: `renarration_order`
+must not touch the display order -- it is the G18 two-chain walk for the
+conflict block's *text*, not a row reordering. Re-work before landing.
+
+R6 and R7: untested against a clean R4+R5 base (R5 must land first,
+fixed). Mains reset to `15db961f` (R4 + docs).
+
+State reset complete 2026-10-01: portuale `15db961f` (R4 + docs),
+pmtest `c4bbf4d` (R4). Both green: `portage-repo` 937/0, contract suite
+1485 passed / 4 xfailed (the O1 cycle-corpus drift is the known reviewed
+one). The earlier `test_output_invariants` flurries were the pmtest
+half still carrying R5/R6 pins against R4 code -- gone now.
+
+R5's root cause confirmed: `resolver_trace::renarration_order` is
+invoked at `lib.rs:606` in the display path and reorders merge-list
+rows. It must only feed the conflict block's *text* (the G18 two-chain
+walk), never the row order. Re-work R5 on `backlog/277-slot-conflict-nodes`
+before any landing; then R6, R7 one at a time.
