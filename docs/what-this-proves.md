@@ -19197,3 +19197,13 @@ PORTAGE_CONFIGROOT=$FX ROOT=$FX PORTAGE_RUNNING_ROOT=$FX DISTDIR=$FX/distfiles \
   rust/target/release/portuale emerge --pretend --color=n --backtrack=3 --update --deep app-misc/mmprov:1/2 app-misc/mmcons; echo "rc=$?"
 rm -rf $(dirname $FX)
 ```
+
+**#242 Slice D — the cross-root `to '<root>'` suffix and per-root USE paint (batch-2026-09-29 Track X).** Under a non-`/` `ROOT`, real decorates every merge/nomerge row whose entry root differs from `/` with `to <root>` (`lib/_emerge/resolver/output.py:841-862`: `darkgreen("to " + pkg.root)`), and keeps bare what is already bare (cycle-node text via `Package.__str__`, which forms in `/` on every pinned shape). Portuale now applies the same per-entry gate (`root_suffix`: the entry's own root — running root for `targets_running_root` entries, target root otherwise — suffixed iff `!= "/"`), on the merge, nomerge, `--columns`, uninstall and quiet arms alike; and each row/parent paints USE from its own root's profile (the blk0 missed line retires the `skipped-updates-cross-root-missed-line` allowlist entry: the missed `blk0x` sits in `/` and paints the host's `ABI_X86="(64)"`, its FX parents the fixture's `ELIBC="glibc"` — the bed's main oracle list now runs with `FX_HOST_RUNNING_ROOT=1`, dropping the `PORTAGE_RUNNING_ROOT=$FX` pin so both sides resolve the running root against the container host). The contract suite's fixture staging is single-root (`PORTAGE_RUNNING_ROOT=ROOT=$FX`), so every merge row there gains the suffix — ~300 pins re-pinned to the f-string form (Slice C precedent), cycle text untouched. Grounded in Slice A's fresh captures (`docs/evidence/2026-09-29-242-inventory/`) and Slice D's per-site map (`docs/evidence/2026-10-02-242-display-sites.md`, real 3.0.82.2, both stagings).
+
+```sh
+# from the portuale root; expect the ` to $FX` suffix, rc=0
+FX=$PWD/../pmtest/fixtures
+PORTAGE_CONFIGROOT=$FX ROOT=$FX PORTAGE_RUNNING_ROOT=$FX DISTDIR=$FX/distfiles \
+  rust/target/release/portuale emerge --pretend --color=n virtual/texteditor; echo "rc=$?"
+# [ebuild  N     ] virtual/texteditor-0 to $FX
+```

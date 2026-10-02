@@ -9066,76 +9066,159 @@ fn refresh_entry_use_display(
         if e.category != cat || e.package != pkg {
             continue;
         }
-        let (version, installed_version) = match &e.outcome {
-            PretendOutcome::New { version } => (version.clone(), None),
-            PretendOutcome::Upgrade { from, to } | PretendOutcome::Downgrade { from, to } => {
-                (to.clone(), Some(from.clone()))
+        let Some(cand) = cands.iter().find(|c| match &e.outcome {
+            PretendOutcome::New { version } => *c.version == *version,
+            PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
+                *c.version == *to
             }
-            PretendOutcome::Reinstall { version, .. } => (version.clone(), Some(version.clone())),
-            _ => continue,
-        };
-        let Some(cand) = cands.iter().find(|c| c.version == version) else {
+            PretendOutcome::Reinstall { version, .. } => *c.version == *version,
+            _ => false,
+        }) else {
             continue;
         };
-        let slot = e.slot.clone().unwrap_or_else(|| cand.slot.clone());
-        let sub_slot = e.sub_slot.clone().unwrap_or_else(|| cand.sub_slot.clone());
-        let repo_name = e
-            .repo_name
-            .clone()
-            .unwrap_or_else(|| cand.repo_name.clone());
-        let candidate_str = format!("{cat}/{pkg}-{version}:{slot}/{sub_slot}::{repo_name}");
-        let use_flags =
-            effective_use_flags(config, &cand.iuse, &cand.keywords, &candidate_str, cat, pkg);
-        // Real builds the USE display from `sorted(pkg.iuse.all)`, where
-        // `iuse.all` is a `frozenset` (`Package.py`) -- so a flag that
-        // `IUSE` names more than once (an eclass and the ebuild both
-        // declaring it, e.g. gnome-extra/gnome-color-manager's
-        // `IUSE="test test"`) still renders exactly once. Dedup by bare
-        // name, keeping the first spelling.
-        let mut iuse_seen: HashSet<String> = HashSet::new();
-        let mut display: Vec<(String, bool)> = cand
-            .iuse
-            .split_whitespace()
-            .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
-            .filter(|flag| iuse_seen.insert(flag.clone()))
-            .map(|flag| {
-                let enabled = use_flags.contains(&flag);
-                (flag, enabled)
-            })
-            .collect();
-        display.sort_by_key(|p| alnum_sort_key(&p.0));
-        let installed = installed_version.map(|v| {
-            let old_iuse = read_vdb_flag_set(root, cat, pkg, &v, "IUSE");
-            let mut old_use = read_vdb_flag_set(root, cat, pkg, &v, "USE");
-            old_use.retain(|f| old_iuse.contains(f));
-            InstalledUseState { old_use, old_iuse }
-        });
-        let forced =
-            forced_or_masked_flags(&cand.iuse, &cand.keywords, &candidate_str, cat, pkg, config);
-        let reinst_flags: HashSet<String> = match &e.outcome {
-            PretendOutcome::Reinstall { changed_flags, .. } => {
-                changed_flags.iter().cloned().collect()
-            }
-            _ => HashSet::new(),
-        };
-        e.use_expand_display = build_use_expand_display(
-            &display,
-            config,
-            installed.as_ref(),
-            &forced,
-            true,
-            &reinst_flags,
-        );
-        e.use_expand_display_p = build_use_expand_display(
-            &display,
-            config,
-            installed.as_ref(),
-            &forced,
-            false,
-            &reinst_flags,
-        );
-        e.use_flags_display = display;
+        refresh_one_entry_display(e, cand, root, config);
     }
+}
+
+/// Backlog #242 Slice D: repaint every running-rooted merge entry's USE
+/// displays from the running root's own profile (`running_config`) — real
+/// `_display_use` reads the package's own `root_config` (`output.py:822`),
+/// so a cross-root row's `USE=`/`VAR=` groups come from its own root, not
+/// the target's. The CLI layer calls this once per resolve when the run
+/// is genuinely cross-root (running root differs from target); single-root
+/// runs never reach here (no entry is running-rooted there). Candidate
+/// lookups reuse the shared `repos` (both roots resolve the same trees —
+/// Track X Slice B/C); old-USE diffs read the running root's own vdb,
+/// like real's per-root `vardb`. A no-op for entries the candidate lookup
+/// misses (same tolerance as [`refresh_entry_use_display`]).
+pub fn repaint_running_root_entry_displays(
+    entries: &mut [GraphEntry],
+    repos: &[RepoConfig],
+    running_root: &Path,
+    running_config: &portage_profile::Config,
+) {
+    let mut cps: Vec<(String, String)> = entries
+        .iter()
+        .filter(|e| e.targets_running_root)
+        .map(|e| (e.category.clone(), e.package.clone()))
+        .collect();
+    cps.sort();
+    cps.dedup();
+    for (cat, pkg) in &cps {
+        let Ok(cands) = list_candidates(repos, cat, pkg) else {
+            continue;
+        };
+        for e in entries.iter_mut() {
+            if !e.targets_running_root || e.category != *cat || e.package != *pkg {
+                continue;
+            }
+            let outcome_version = match &e.outcome {
+                PretendOutcome::New { version } => Some(version.as_str()),
+                PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
+                    Some(to.as_str())
+                }
+                PretendOutcome::Reinstall { version, .. } => Some(version.as_str()),
+                _ => None,
+            };
+            let Some(version) = outcome_version else {
+                continue;
+            };
+            let Some(cand) = cands.iter().find(|c| c.version == version) else {
+                continue;
+            };
+            refresh_one_entry_display(e, cand, running_root, running_config);
+        }
+    }
+}
+
+/// Per-entry core of [`refresh_entry_use_display`]: rebuild one merge
+/// entry's `use_flags_display` / `use_expand_display[_p]` from `config`
+/// (effective USE, force/mask wraps, expand grouping and the installed
+/// old-USE diff all read that config and `root`'s vdb).
+fn refresh_one_entry_display(
+    e: &mut GraphEntry,
+    cand: &Candidate,
+    root: &Path,
+    config: &portage_profile::Config,
+) {
+    let (version, installed_version) = match &e.outcome {
+        PretendOutcome::New { version } => (version.clone(), None),
+        PretendOutcome::Upgrade { from, to } | PretendOutcome::Downgrade { from, to } => {
+            (to.clone(), Some(from.clone()))
+        }
+        PretendOutcome::Reinstall { version, .. } => (version.clone(), Some(version.clone())),
+        _ => return,
+    };
+    let cat = e.category.clone();
+    let pkg = e.package.clone();
+    let slot = e.slot.clone().unwrap_or_else(|| cand.slot.clone());
+    let sub_slot = e.sub_slot.clone().unwrap_or_else(|| cand.sub_slot.clone());
+    let repo_name = e
+        .repo_name
+        .clone()
+        .unwrap_or_else(|| cand.repo_name.clone());
+    let candidate_str = format!("{cat}/{pkg}-{version}:{slot}/{sub_slot}::{repo_name}");
+    let use_flags = effective_use_flags(
+        config,
+        &cand.iuse,
+        &cand.keywords,
+        &candidate_str,
+        &cat,
+        &pkg,
+    );
+    // Real builds the USE display from `sorted(pkg.iuse.all)`, where
+    // `iuse.all` is a `frozenset` (`Package.py`) -- so a flag that
+    // `IUSE` names more than once (an eclass and the ebuild both
+    // declaring it, e.g. gnome-extra/gnome-color-manager's
+    // `IUSE="test test"`) still renders exactly once. Dedup by bare
+    // name, keeping the first spelling.
+    let mut iuse_seen: HashSet<String> = HashSet::new();
+    let mut display: Vec<(String, bool)> = cand
+        .iuse
+        .split_whitespace()
+        .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
+        .filter(|flag| iuse_seen.insert(flag.clone()))
+        .map(|flag| {
+            let enabled = use_flags.contains(&flag);
+            (flag, enabled)
+        })
+        .collect();
+    display.sort_by_key(|p| alnum_sort_key(&p.0));
+    let installed = installed_version.map(|v| {
+        let old_iuse = read_vdb_flag_set(root, &cat, &pkg, &v, "IUSE");
+        let mut old_use = read_vdb_flag_set(root, &cat, &pkg, &v, "USE");
+        old_use.retain(|f| old_iuse.contains(f));
+        InstalledUseState { old_use, old_iuse }
+    });
+    let forced = forced_or_masked_flags(
+        &cand.iuse,
+        &cand.keywords,
+        &candidate_str,
+        &cat,
+        &pkg,
+        config,
+    );
+    let reinst_flags: HashSet<String> = match &e.outcome {
+        PretendOutcome::Reinstall { changed_flags, .. } => changed_flags.iter().cloned().collect(),
+        _ => HashSet::new(),
+    };
+    e.use_expand_display = build_use_expand_display(
+        &display,
+        config,
+        installed.as_ref(),
+        &forced,
+        true,
+        &reinst_flags,
+    );
+    e.use_expand_display_p = build_use_expand_display(
+        &display,
+        config,
+        installed.as_ref(),
+        &forced,
+        false,
+        &reinst_flags,
+    );
+    e.use_flags_display = display;
 }
 
 fn build_use_expand_display(
@@ -15130,12 +15213,14 @@ pub struct GraphEntry {
     /// `resolve_root_deps_build_entries`, which walks such an entry's own
     /// `DEPEND` + `BDEPEND` + `RDEPEND` + `IDEPEND` against the running
     /// root recursively, cycle-guarded by the shared `root_deps_build_seen`
-    /// set (see that function's own doc comment). `blockers`/
-    /// `use_flags_display` are always empty for such an entry (not
-    /// computed -- a documented cut). Residual: a *top-level* package's
-    /// own `IDEPEND` still resolves against `ROOT` (real portage targets
-    /// the running root for it too), and the full multi-root graph
-    /// architecture, both still approximated edge by edge.
+    /// set (see that function's own doc comment). `blockers` stay empty
+    /// for such an entry (not computed -- a documented cut); the USE
+    /// displays are built like every other entry's and repainted from the
+    /// running profile at display time (backlog #242 Slice D). Residual:
+    /// a *top-level* package's own `IDEPEND` still resolves against `ROOT`
+    /// (real portage targets the running root for it too), and the full
+    /// multi-root graph architecture, both still approximated edge by
+    /// edge.
     pub targets_running_root: bool,
     /// Real `output.py:648`'s own `attr_display.remote_binary = pkg.remote`
     /// (the `g` bracket column, in the `f`/`F` slot): `true` for a
@@ -15233,6 +15318,77 @@ pub(crate) fn dep_child_root(owner_targets_running_root: bool, key: u8) -> bool 
         // kept owner-local like the run-time keys.
         _ => owner_targets_running_root,
     }
+}
+
+/// Backlog #242 Slice D: attribute a skipped-update row's missed node and
+/// merge parent to their resolving roots, so the renderer paints real's
+/// per-node `to '<root>'` suffix and per-root USE (`Package.__str__` +
+/// `pkg_use_display`, S0 map
+/// `docs/evidence/2026-10-02-242-display-sites.md` §1e).
+///
+/// A merge parent sits in its entry's root (looked up by cpv; first
+/// merge-match wins — a dual-root same-cp-same-version parent is
+/// ambiguous from the cpv alone, an unpinned shape). The missed instance
+/// sits in the root the rejecting parent's edge points at (real's
+/// five-group `deps` queue — [`dep_child_root`] over the parent entry's
+/// own recorded edge to the missed cp, preferring the rejecting atom's
+/// edge): a buildtime edge off a target parent lands the miss in the
+/// running root (the blk0 shape: `<blk0x-2` off target `blk0b-1` rejects
+/// `blk0x-3` into `/`), a runtime edge keeps it with the parent. Both
+/// collapse to `false` on a single-root run (no entry is ever
+/// running-rooted there, so the edge rule's running arm is gated on
+/// that). Installed parents resolve from the walk root's own vdb, which
+/// every producer passes as `root` — always the target walk here — so
+/// they attribute target (documented, not derived).
+pub(crate) fn skipped_update_roots(
+    entries: &[GraphEntry],
+    missed: (&str, &str),
+    parent: (&str, &str, &str),
+    atom: &str,
+) -> (bool, bool) {
+    fn merge_version(e: &GraphEntry) -> Option<&str> {
+        match &e.outcome {
+            PretendOutcome::New { version } => Some(version.as_str()),
+            PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
+                Some(to.as_str())
+            }
+            PretendOutcome::Reinstall { version, .. } => Some(version.as_str()),
+            _ => None,
+        }
+    }
+    let (cc, cp2, cv) = parent;
+    let parent = entries
+        .iter()
+        .find(|e| {
+            e.category.as_str() == cc
+                && e.package.as_str() == cp2
+                && merge_version(e).is_some_and(|v| v == cv)
+        })
+        .or_else(|| {
+            entries.iter().find(|e| {
+                e.category.as_str() == cc && e.package.as_str() == cp2 && merge_version(e).is_some()
+            })
+        });
+    let Some(parent) = parent else {
+        return (false, false);
+    };
+    let consumer_running = parent.targets_running_root;
+    let edge = parent
+        .deps
+        .iter()
+        .find(|d| d.category == missed.0 && d.package == missed.1 && d.atom == atom)
+        .or_else(|| {
+            parent
+                .deps
+                .iter()
+                .find(|d| d.category == missed.0 && d.package == missed.1)
+        });
+    let cross_active = entries.iter().any(|e| e.targets_running_root);
+    let missed_running = match edge {
+        Some(d) => cross_active && dep_child_root(parent.targets_running_root, d.key),
+        None => false,
+    };
+    (missed_running, consumer_running)
 }
 
 /// Put `entries` in real portage's dependency-first *merge* order.
@@ -22366,6 +22522,15 @@ pub struct SkippedUpdate {
     pub consumer_cpv: String,
     pub consumer_installed: bool,
     pub consumer_use: Vec<(String, String)>,
+    /// Backlog #242 Slice D: whether the missed instance resolves in the
+    /// running root (real's per-node `to '<root>'` + per-root USE paint,
+    /// [`skipped_update_roots`]). `false` on every single-root run and on
+    /// the target-walk-only withhold path.
+    pub missed_targets_running_root: bool,
+    /// Backlog #242 Slice D: whether a merge consumer resolves in the
+    /// running root (its entry's root; installed consumers always resolve
+    /// from the walk root's own vdb — the target walk — so `false`).
+    pub consumer_targets_running_root: bool,
 }
 
 /// Backlog #129 (S1): one slot real reports through the abbreviated
@@ -22916,6 +23081,24 @@ pub(crate) fn direct_solve_slot_conflicts(input: DirectSolveInput<'_>) -> Direct
                         &p.parent_cpv,
                         p.installed,
                     );
+                    // Backlog #242 Slice D: per-node roots (the missed
+                    // instance rides the rejecting parent's edge; a merge
+                    // parent rides its entry; installed parents ride the
+                    // walk root — always the target walk here).
+                    let (missed_running, consumer_running) = if p.installed {
+                        (false, false)
+                    } else {
+                        let parent = p.parent_cpv.split(':').next().unwrap_or("");
+                        match split_cpv(parent) {
+                            Some((cc, cp2, cv)) => skipped_update_roots(
+                                input.entries,
+                                (&c.category, &c.package),
+                                (&cc, &cp2, &cv),
+                                &p.atom,
+                            ),
+                            None => (false, false),
+                        }
+                    };
                     skipped.push(SkippedUpdate {
                         category: c.category.clone(),
                         package: c.package.clone(),
@@ -22928,6 +23111,8 @@ pub(crate) fn direct_solve_slot_conflicts(input: DirectSolveInput<'_>) -> Direct
                         consumer_cpv: p.parent_cpv.clone(),
                         consumer_installed: p.installed,
                         consumer_use,
+                        missed_targets_running_root: missed_running,
+                        consumer_targets_running_root: consumer_running,
                     });
                 }
             }
@@ -23121,6 +23306,11 @@ pub(crate) fn constraint_withheld_updates(
                 consumer_cpv: format!("{cc}/{cp2}-{cv}:{cslot}/{csub}::{crepo}"),
                 consumer_installed: true,
                 consumer_use: skipped_update_installed_use_display_for(root, config, cc, cp2, cv),
+                // Backlog #242 Slice D: the withhold path is target-walk
+                // only (installed consumers from the walk root's own vdb,
+                // withheld versions from that same walk).
+                missed_targets_running_root: false,
+                consumer_targets_running_root: false,
             });
         }
     }
@@ -23152,7 +23342,9 @@ type KeptMissed = HashMap<(String, String, String), KeptMissedValue>;
 
 /// Backlog #129 (review): row-identity key for
 /// [`collapse_skipped_updates`]'s exact-duplicate pass -- every
-/// [`SkippedUpdate`] field.
+/// [`SkippedUpdate`] field (backlog #242 Slice D: the two root flags
+/// included, so a target-rooted and a running-rooted row for the same
+/// missed pkg never collapse into one).
 type SkippedUpdateKey = (
     (String, String, String, String, String, String),
     Vec<(String, String)>,
@@ -23160,6 +23352,8 @@ type SkippedUpdateKey = (
     String,
     bool,
     Vec<(String, String)>,
+    bool,
+    bool,
 );
 
 /// Backlog #129 (S1): real `_get_missed_updates`
@@ -23368,6 +23562,16 @@ pub(crate) fn backtrack_missed_updates(
                             skipped_update_use_display_for(repos, config, &pc, &pp, &pv),
                         ),
                     };
+                    // Backlog #242 Slice D: per-node roots — the missed
+                    // instance rides the rejecting parent's edge, a merge
+                    // parent rides its entry; an installed parent rides
+                    // the walk root's own vdb (always the target walk
+                    // here, so target).
+                    let (missed_running, consumer_running) = if consumer_installed {
+                        (false, false)
+                    } else {
+                        skipped_update_roots(entries, (&cat, &pkg), (&pc, &pp, &pv), &atom)
+                    };
                     skipped.push(SkippedUpdate {
                         category: cat.clone(),
                         package: pkg.clone(),
@@ -23382,6 +23586,8 @@ pub(crate) fn backtrack_missed_updates(
                         consumer_cpv,
                         consumer_installed,
                         consumer_use,
+                        missed_targets_running_root: missed_running,
+                        consumer_targets_running_root: consumer_running,
                     });
                 }
             }
@@ -23563,6 +23769,8 @@ fn collapse_skipped_updates(rows: Vec<SkippedUpdate>) -> Vec<SkippedUpdate> {
                 s.consumer_cpv.clone(),
                 s.consumer_installed,
                 s.consumer_use.clone(),
+                s.missed_targets_running_root,
+                s.consumer_targets_running_root,
             ))
         })
         .collect()
@@ -54062,6 +54270,8 @@ mod tests {
             consumer_cpv: "dev-libs/slotconflictoldconsumer-1.0".to_string(),
             consumer_installed: false,
             consumer_use: Vec::new(),
+            missed_targets_running_root: false,
+            consumer_targets_running_root: false,
         });
         let decision = collect_feedback(&ctx, &grown, &mut pass, &config);
         let PassDecision::Feedback(BacktrackFeedback::Config { params: out }) = decision else {
@@ -58372,6 +58582,124 @@ mod tests {
         );
     }
 
+    /// Backlog #242 Slice D: `skipped_update_roots` attributes the missed
+    /// instance to the root the rejecting parent's edge points at, and a
+    /// merge parent to its entry's root. The blk0 shape: target `blk0b-1`
+    /// rejects `blk0x-3` through its `DEPEND` edge while a running-rooted
+    /// twin of the graph exists (cross-active) — the miss lands running,
+    /// the parent stays target. Single-rooted (no running entry anywhere)
+    /// the same edges attribute target — the `fixture_env` shape.
+    #[test]
+    fn skipped_update_roots_attributes_miss_and_parent_per_edge() {
+        fn entry(package: &str, version: &str, running: bool, deps: Vec<DepEdge>) -> GraphEntry {
+            GraphEntry {
+                discovery: 0,
+                category: "dev-libs".to_string(),
+                package: package.to_string(),
+                outcome: PretendOutcome::New {
+                    version: version.to_string(),
+                },
+                blockers: Vec::new(),
+                slot: Some("0".to_string()),
+                sub_slot: Some("0".to_string()),
+                repo_name: Some("testrepo".to_string()),
+                oldbest: Vec::new(),
+                use_flags_display: Vec::new(),
+                use_expand_display: Vec::new(),
+                use_expand_display_p: Vec::new(),
+                keyword_mask: None,
+                new_slot: false,
+                interactive: false,
+                fetch_restrict: false,
+                fetch_restrict_satisfied: false,
+                download_files: Vec::new(),
+                required_by: Vec::new(),
+                source: CandidateSource::Ebuild,
+                provenance: VisibilityProvenance::default(),
+                keyword_suggestion: None,
+                use_suggestion: None,
+                parent_use_suggestion: None,
+                targets_running_root: running,
+                remote_binary: false,
+                build_id: None,
+                deps,
+            }
+        }
+        fn edge(child: &str, atom: &str, key: u8) -> DepEdge {
+            DepEdge {
+                atom: atom.to_string(),
+                evaluated: atom.to_string(),
+                category: "dev-libs".to_string(),
+                package: child.to_string(),
+                priority: DepPriority::default(),
+                disjunctive: false,
+                alt: None,
+                key,
+            }
+        }
+        // Cross-active: a target parent with a DEPEND edge at the miss
+        // plus a running entry elsewhere in the graph.
+        let running_twin = entry("blk0x", "1", true, Vec::new());
+        let parent = entry(
+            "blk0b",
+            "1",
+            false,
+            vec![edge("blk0x", "<dev-libs/blk0x-2", 3)],
+        );
+        let entries = vec![running_twin, parent];
+        assert_eq!(
+            skipped_update_roots(
+                &entries,
+                ("dev-libs", "blk0x"),
+                ("dev-libs", "blk0b", "1"),
+                "<dev-libs/blk0x-2",
+            ),
+            (true, false),
+            "DEPEND-rejected miss lands running, target parent stays target",
+        );
+        // Same edges, single-rooted: everything attributes target.
+        let parent = entry(
+            "blk0b",
+            "1",
+            false,
+            vec![edge("blk0x", "<dev-libs/blk0x-2", 3)],
+        );
+        let entries = vec![parent];
+        assert_eq!(
+            skipped_update_roots(
+                &entries,
+                ("dev-libs", "blk0x"),
+                ("dev-libs", "blk0b", "1"),
+                "<dev-libs/blk0x-2",
+            ),
+            (false, false),
+            "single-root runs keep the target attribution",
+        );
+        // A runtime edge keeps the miss with a running parent.
+        let parent = entry("blk0b", "1", true, vec![edge("blk0x", "dev-libs/blk0x", 0)]);
+        let entries = vec![parent];
+        assert_eq!(
+            skipped_update_roots(
+                &entries,
+                ("dev-libs", "blk0x"),
+                ("dev-libs", "blk0b", "1"),
+                "dev-libs/blk0x",
+            ),
+            (true, true),
+            "RDEPEND keeps the miss in the parent's (running) root",
+        );
+        // Unknown parent: both target (today's rendering, documented).
+        assert_eq!(
+            skipped_update_roots(
+                &entries,
+                ("dev-libs", "blk0x"),
+                ("dev-libs", "nope", "1"),
+                "x",
+            ),
+            (false, false),
+        );
+    }
+
     /// Backlog #129 (review minor 3): the two `SkippedUpdate` sources
     /// (backtrack-mask rows, direct-solve rows) collapse per slot
     /// keeping the highest missed pkg, like real `_get_missed_updates`
@@ -58395,6 +58723,8 @@ mod tests {
                 consumer_cpv: "dev-libs/consumer-1:0/0::testrepo".to_string(),
                 consumer_installed: false,
                 consumer_use: Vec::new(),
+                missed_targets_running_root: false,
+                consumer_targets_running_root: false,
             }
         }
         // Mask source leads (first-seen order), direct source follows.
@@ -58448,6 +58778,8 @@ mod tests {
                 consumer_cpv: consumer.to_string(),
                 consumer_installed: false,
                 consumer_use: Vec::new(),
+                missed_targets_running_root: false,
+                consumer_targets_running_root: false,
             }
         }
         let rows = vec![
