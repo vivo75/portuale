@@ -697,7 +697,7 @@ fn package_counters_summary(
     tree: bool,
     // Backlog #221 (I5): the settling pass's recorded cycle edges,
     // threaded into the blocker-row counters below.
-    circular: &HashMap<(String, String), Vec<portage_repo::CircularDepChild>>,
+    circular: &HashMap<(bool, String, String), Vec<portage_repo::CircularDepChild>>,
 ) -> String {
     let plural = |n: u64| if n > 1 { "s" } else { "" };
     let (mut upgrades, mut downgrades, mut new, mut newslot, mut reinst) =
@@ -934,7 +934,7 @@ fn kept_alt_for_display(
     // used to pass an empty map, which could mis-disposition a wait
     // chain through a demoted branch when Replacement rows coexist with
     // a backtrack).
-    circular: &HashMap<(String, String), Vec<portage_repo::CircularDepChild>>,
+    circular: &HashMap<(bool, String, String), Vec<portage_repo::CircularDepChild>>,
 ) -> Vec<HashSet<usize>> {
     let has_replacement_row = owners.into_iter().any(|i| {
         entries[i]
@@ -1198,7 +1198,7 @@ fn trailing_blocker_lines(
     // Backlog #221 (I5): the settling pass's recorded cycle edges (see
     // `kept_alt_for_display`): a wait chain through a demoted branch
     // dispositions like the walk took it.
-    circular: &HashMap<(String, String), Vec<portage_repo::CircularDepChild>>,
+    circular: &HashMap<(bool, String, String), Vec<portage_repo::CircularDepChild>>,
 ) -> Vec<String> {
     let entry = &entries[owner_index];
     // #84: one kept-branch derivation for this owner's rows -- and none
@@ -1245,7 +1245,7 @@ fn collect_inline_blocker_lines(
     color: &Colorizer,
     // Backlog #221 (I5): the settling pass's recorded cycle edges (see
     // `kept_alt_for_display`).
-    circular: &HashMap<(String, String), Vec<portage_repo::CircularDepChild>>,
+    circular: &HashMap<(bool, String, String), Vec<portage_repo::CircularDepChild>>,
 ) -> Vec<(usize, String)> {
     if columns {
         return Vec::new();
@@ -1294,7 +1294,7 @@ fn count_blocker_rows(
     tree: bool,
     // Backlog #221 (I5): the settling pass's recorded cycle edges (see
     // `kept_alt_for_display`).
-    circular: &HashMap<(String, String), Vec<portage_repo::CircularDepChild>>,
+    circular: &HashMap<(bool, String, String), Vec<portage_repo::CircularDepChild>>,
 ) -> (u64, u64) {
     let mut blocks = 0u64;
     let mut unsolvable = 0u64;
@@ -1400,7 +1400,7 @@ fn print_entry_line(
     // Backlog #221 (I5): the settling pass's recorded cycle edges,
     // threaded into the trailing blocker disposition below (a wait chain
     // through a demoted branch dispositions like the walk took it).
-    circular: &HashMap<(String, String), Vec<portage_repo::CircularDepChild>>,
+    circular: &HashMap<(bool, String, String), Vec<portage_repo::CircularDepChild>>,
 ) {
     let entry = &entries[index];
     // Real `_DisplayConfig` verbosity: `--quiet and 1 or --verbose and 3
@@ -2048,7 +2048,7 @@ fn print_tree(
     // Backlog #221: the resolve's recorded cycle edges (see
     // `kept_alt_for_display`): the `--tree` walk keeps the
     // cycle-breaking branch the walk took.
-    circular: &HashMap<(String, String), Vec<portage_repo::CircularDepChild>>,
+    circular: &HashMap<(bool, String, String), Vec<portage_repo::CircularDepChild>>,
 ) -> Vec<(usize, bool)> {
     /// One node of the display graph: an entry, or a satisfied blocker
     /// row `entries[owner].blockers[index]`.

@@ -44,7 +44,7 @@ use std::path::Path;
 
 use crate::{
     BlockerSatisfiedBy, CandidateSource, CircularDepChild, GraphEntry, PretendOutcome, RepoConfig,
-    VisibilityProvenance, all_installed_packages, read_vdb_flag_set, read_vdb_slot,
+    RootCp, VisibilityProvenance, all_installed_packages, read_vdb_flag_set, read_vdb_slot,
 };
 
 /// Real `_emerge/DepPriority.py::DepPriority` -- the per-edge dependency
@@ -1595,6 +1595,25 @@ impl DigraphPrelude<'_> {
                 true
             })
             .collect();
+        // Track X Slice C (#242): real resolves every dep atom against
+        // its group's root (`_dep_expand`'s `root_config`,
+        // `depgraph.py:4928`), so an edge lands on the resolving-root
+        // instance -- never on a same-cp sibling merged into the other
+        // root. Without this, every edge onto a both-roots cp collapses
+        // onto the first scheduled instance (a phantom self-edge on the
+        // target instance, and a missing buildtime edge that strands the
+        // running instance). The filter only ever removes a provably
+        // same-cp other-root sibling: when no resolving-root instance
+        // survives, the unfiltered set stands (same rule as
+        // `edge_matches`), so single-root graphs resolve exactly as
+        // before.
+        let want = crate::dep_child_root(entries[from].targets_running_root, edge.key);
+        let rooted: Vec<usize> = cands
+            .iter()
+            .copied()
+            .filter(|&j| entries[j].targets_running_root == want)
+            .collect();
+        let cands = if rooted.is_empty() { cands } else { rooted };
         self.narrow_by_use(entries, &edge.atom, cands)
     }
 
@@ -1751,10 +1770,16 @@ fn suppressed_alt_edges(
     entries: &[GraphEntry],
     pre: &DigraphPrelude<'_>,
     root: &Path,
-    circular: &HashMap<(String, String), Vec<CircularDepChild>>,
+    circular: &HashMap<RootCp, Vec<CircularDepChild>>,
 ) -> Vec<HashSet<usize>> {
     let installed_by_cp = installed_candidates_by_cp(root);
-    let children_of = |e: &GraphEntry| circular.get(&(e.category.clone(), e.package.clone()));
+    let children_of = |e: &GraphEntry| {
+        circular.get(&(
+            e.targets_running_root,
+            e.category.clone(),
+            e.package.clone(),
+        ))
+    };
     entries
         .iter()
         .enumerate()
@@ -1913,7 +1938,7 @@ fn suppressed_alt_edges(
 pub fn kept_alt_branches(
     entries: &[GraphEntry],
     root: &Path,
-    circular: &HashMap<(String, String), Vec<CircularDepChild>>,
+    circular: &HashMap<RootCp, Vec<CircularDepChild>>,
 ) -> Vec<HashSet<usize>> {
     let pre = digraph_prelude(entries, root);
     let suppressed = suppressed_alt_edges(entries, &pre, root, circular);
@@ -1948,7 +1973,7 @@ pub fn kept_alt_branches(
 pub fn resolved_dep_targets(
     entries: &[GraphEntry],
     root: &Path,
-    circular: &HashMap<(String, String), Vec<CircularDepChild>>,
+    circular: &HashMap<RootCp, Vec<CircularDepChild>>,
 ) -> Vec<Vec<Option<usize>>> {
     let pre = digraph_prelude(entries, root);
     let suppressed = suppressed_alt_edges(entries, &pre, root, circular);
@@ -1984,7 +2009,7 @@ fn build_digraph(
     entries: &[GraphEntry],
     top_level_atoms: &[String],
     root: &Path,
-    circular: &HashMap<(String, String), Vec<CircularDepChild>>,
+    circular: &HashMap<RootCp, Vec<CircularDepChild>>,
 ) -> Digraph {
     let n = entries.len();
     let pre = digraph_prelude(entries, root);
@@ -2214,6 +2239,21 @@ fn build_digraph(
                 if g.children[i].iter().any(|(c, _)| {
                     entries[*c].category == e.category && entries[*c].package == e.package
                 }) {
+                    continue;
+                }
+                // Track X Slice C (#242): `required_by` is cp-keyed and
+                // root-blind, so one puller's cp fans out to every
+                // scheduled instance -- including a same-cp sibling in
+                // the other root that never pulled `j`. When the forward
+                // walk already edged `j` back to this owner, synthesising
+                // `i -> j` closes a two-node ring the walk never recorded
+                // (the g216 target `g216comp` edges to the running one;
+                // the fallback would edge the running one back, stranding
+                // the whole chain behind a phantom cycle). The forward
+                // direction is authoritative: a genuine relationship the
+                // forward walk missed has no edge either way. Never
+                // synthesise a two-cycle.
+                if g.children[j].iter().any(|(c, _)| *c == i) {
                     continue;
                 }
                 g.add_edge(
@@ -2729,7 +2769,7 @@ pub(crate) fn cycle_report(
     entries: &[GraphEntry],
     top_level_atoms: &[String],
     root: &Path,
-    circular: &HashMap<(String, String), Vec<CircularDepChild>>,
+    circular: &HashMap<RootCp, Vec<CircularDepChild>>,
 ) -> (Vec<Vec<usize>>, Vec<usize>) {
     let g = build_digraph(entries, top_level_atoms, root, circular);
     let cycles = elementary_cycles(&g, satisfied_medium_soft_rung());
@@ -2989,7 +3029,7 @@ pub(crate) fn tree_solved_replacements(
     implicit_system_deps: bool,
     repos: &[RepoConfig],
     dynamic_deps: bool,
-    circular: &HashMap<(String, String), Vec<CircularDepChild>>,
+    circular: &HashMap<RootCp, Vec<CircularDepChild>>,
 ) -> Vec<(usize, usize)> {
     let pending = tree_stuck_pending(entries);
     if pending.is_empty() {
@@ -3043,7 +3083,7 @@ pub fn tree_display_order(
     implicit_system_deps: bool,
     repos: &[RepoConfig],
     dynamic_deps: bool,
-    circular: &HashMap<(String, String), Vec<CircularDepChild>>,
+    circular: &HashMap<RootCp, Vec<CircularDepChild>>,
 ) -> Vec<usize> {
     let pending = tree_stuck_pending(entries);
     let (ext, mut g, real_n, discovery_rank) = schedule_graph(
@@ -3658,7 +3698,7 @@ pub(crate) fn debug_dump_graph_only(
     entries: &[GraphEntry],
     top_level_atoms: &[String],
     root: &Path,
-    circular: &HashMap<(String, String), Vec<CircularDepChild>>,
+    circular: &HashMap<RootCp, Vec<CircularDepChild>>,
 ) {
     let g = build_digraph(entries, top_level_atoms, root, circular);
     debug_dump_graph(&g, entries, top_level_atoms, root);
@@ -3741,7 +3781,7 @@ pub(crate) fn serialize_merge_order(
     implicit_system_deps: bool,
     repos: &[RepoConfig],
     dynamic_deps: bool,
-    circular: &HashMap<(String, String), Vec<CircularDepChild>>,
+    circular: &HashMap<RootCp, Vec<CircularDepChild>>,
 ) -> (Vec<usize>, Vec<usize>) {
     let (ext, mut g, real_n, discovery_rank) = schedule_graph(
         entries,
@@ -3812,7 +3852,7 @@ fn schedule_graph(
     implicit_system_deps: bool,
     repos: &[RepoConfig],
     dynamic_deps: bool,
-    circular: &HashMap<(String, String), Vec<CircularDepChild>>,
+    circular: &HashMap<RootCp, Vec<CircularDepChild>>,
 ) -> (Vec<GraphEntry>, Digraph, usize, Vec<usize>) {
     let real_n = entries.len();
     // Real `_complete_graph` auto-enables (a merge changes an

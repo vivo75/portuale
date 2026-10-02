@@ -11936,7 +11936,7 @@ fn alternative_downgrade_demoted(
     root: &Path,
     config: &portage_profile::Config,
     entries: &[GraphEntry],
-    self_cp: &(String, String),
+    self_cp: &RootCp,
     constraints: &HashMap<(String, String), Vec<String>>,
     atoms: &[String],
     queued: &[QueueItem],
@@ -11947,7 +11947,7 @@ fn alternative_downgrade_demoted(
             return false;
         };
         if at.blocker != portage_dep::Blocker::None
-            || (at.category.clone(), at.package.clone()) == *self_cp
+            || (at.category == self_cp.1 && at.package == self_cp.2)
         {
             return false;
         }
@@ -12106,13 +12106,23 @@ fn disjunction_preference(
     config: &portage_profile::Config,
     root: &Path,
     entries: &[GraphEntry],
-    self_cp: &(String, String),
+    self_cp: &RootCp,
     constraints: &HashMap<(String, String), Vec<String>>,
-    circular_dependency: &HashMap<(String, String), Vec<CircularDepChild>>,
+    circular_dependency: &HashMap<RootCp, Vec<CircularDepChild>>,
     root_deps_running_root: Option<&Path>,
     atoms: &[String],
     queued: &[QueueItem],
     update: bool,
+    // Track X Slice C (#242): the whole-graph views for the
+    // circular-self-dep gate below. `entries`/`queued` above are the
+    // group's own root scope (real's group-rooted `graph_db` match);
+    // the gate asks whether the owner's cp is in play *at all* (real
+    // has no self-exclusion -- the package is already graphed when its
+    // own `||` group pops, whichever root it sits in), so it reads
+    // these unscoped views instead. Same slices as `entries`/`queued`
+    // on every same-root call -- a strict no-op there.
+    gate_entries: &[GraphEntry],
+    gate_queued: &[QueueItem],
 ) -> portage_use_reduce::AltPreference {
     let constraints_for = |a: &str| -> &[String] {
         portage_dep::parse_atom(a)
@@ -12147,16 +12157,17 @@ fn disjunction_preference(
     for a in atoms {
         let self_naming = portage_dep::parse_atom(a).is_some_and(|at| {
             at.blocker == portage_dep::Blocker::None
-                && (at.category.clone(), at.package.clone()) == *self_cp
+                && at.category == self_cp.1
+                && at.package == self_cp.2
         });
         if self_naming
             && !atom_cp_installed(root, a)
             && !atom_cp_present_in_graph(
                 a,
-                entries,
+                gate_entries,
                 config,
                 queued_cps.get_or_insert_with(|| {
-                    queued
+                    gate_queued
                         .iter()
                         .filter_map(|q| {
                             portage_dep::parse_atom(&q.atom)
@@ -15177,17 +15188,52 @@ pub struct GraphEntry {
     pub discovery: usize,
 }
 
-/// `(target cp, owner cp) -> (has_hard, has_soft)`: for each dependency
-/// edge the BFS walked, whether it was ever pulled as an unsatisfied
-/// build-time-only dep (`QueueItem::buildtime_hard`) and/or via any
-/// softer route. An edge is unbreakable in a cycle when `(true, false)`
-/// -- or, since backlog #228, when the owner's entry carries an
-/// unsatisfied non-optional slot-operator priority toward the dep
-/// (`find_hard_cycles`' own deps rule, which the map's token-text view
-/// cannot see: a run-time-key `:=` atom is never `buildtime_hard`).
-/// Built in `resolve_pretend_graph`, consumed by
+/// A root-qualified `cat/pkg`: real's graph nodes are `Package` objects
+/// carrying their own `root_config` (`depgraph.py:4218-4291` deps queue,
+/// `Package.root_config` / `pkg.root`), so the same cp merged in both
+/// roots is two nodes. Track X Slice C (#242): every node-keyed map uses
+/// this instead of the bare cp, or a both-roots package collapses into
+/// one key and the second root's edges demote, misattribute, or vanish.
+pub type RootCp = (bool, String, String);
+
+/// `((child root, child cp), (owner root, owner cp)) -> (has_hard,
+/// has_soft)`: for each dependency edge the BFS walked, whether it was
+/// ever pulled as an unsatisfied build-time-only dep
+/// (`QueueItem::buildtime_hard`) and/or via any softer route. An edge is
+/// unbreakable in a cycle when `(true, false)` -- or, since backlog #228,
+/// when the owner's entry carries an unsatisfied non-optional
+/// slot-operator priority toward the dep (`find_hard_cycles`' own deps
+/// rule, which the map's token-text view cannot see: a run-time-key `:=`
+/// atom is never `buildtime_hard`). Track X Slice C (#242): keyed by
+/// [`RootCp`] on both ends (real's `PackageTracker` keys `(root, cp)`,
+/// `resolver/package_tracker.py:240`), so a target-root edge into a
+/// running-root instance no longer merges with the running-root self
+/// edge it depends on. Built in `resolve_pretend_graph`, consumed by
 /// `topological_merge_order` (and Commit 2's cycle detection).
-type EdgeKindMap = HashMap<((String, String), (String, String)), (bool, bool)>;
+type EdgeKindMap = HashMap<(RootCp, RootCp), (bool, bool)>;
+
+/// Real `_add_pkg_deps`' five-group `deps` queue (`depgraph.py:4255-4291`)
+/// as a resolving root per dep key: which root a dependency edge's child
+/// lands in, given the owner's own root. `RDEPEND`/`PDEPEND` stay with
+/// the owner (`myroot`); `IDEPEND`/`DEPEND`/`BDEPEND` resolve against the
+/// running root (native builds: `ESYSROOT` collapses to the running root
+/// -- Track X Slice B's rule, kept here). Track X Slice C (#242): the
+/// merge-order digraph and the cycle detectors use this to edge each atom
+/// at the instance the walk actually resolved, instead of collapsing
+/// every same-cp edge onto the first scheduled instance. Key ordinals are
+/// `DepEdge::key`'s (`merge_order.rs`): 0=`RDEPEND`, 1=`IDEPEND`,
+/// 2=`PDEPEND`, 3=`DEPEND`, 4=`BDEPEND`.
+pub(crate) fn dep_child_root(owner_targets_running_root: bool, key: u8) -> bool {
+    match key {
+        // `RDEPEND` / `PDEPEND`: the owner's own root (`myroot`).
+        0 | 2 => owner_targets_running_root,
+        // `IDEPEND` / `DEPEND` / `BDEPEND`: the running root.
+        1 | 3 | 4 => true,
+        // Unreachable (`DepEdge::key` is always one of the five keys),
+        // kept owner-local like the run-time keys.
+        _ => owner_targets_running_root,
+    }
+}
 
 /// Put `entries` in real portage's dependency-first *merge* order.
 ///
@@ -15233,7 +15279,7 @@ fn topological_merge_order(
     implicit_system_deps: bool,
     repos: &[RepoConfig],
     dynamic_deps: bool,
-    circular: &HashMap<(String, String), Vec<CircularDepChild>>,
+    circular: &HashMap<RootCp, Vec<CircularDepChild>>,
 ) -> (Vec<GraphEntry>, Vec<usize>) {
     // Backlog #155 S1: stamp BFS discovery order before the merge
     // sort consumes it -- the input vec IS discovery order (a package's
@@ -18952,6 +18998,62 @@ fn merge_bound_index(entries: &[GraphEntry]) -> HashMap<(&str, &str), usize> {
     cp_index
 }
 
+/// Track X Slice C (#242): merge-bound entry indices keyed by
+/// [`RootCp`] -- first index per (root, cp). `merge_bound_index` stays
+/// the cp-level view (render order starts at the first scheduled
+/// instance); this is the edge-resolution view (real's package-keyed
+/// digraph never merges two roots' instances).
+fn merge_bound_root_index(entries: &[GraphEntry]) -> HashMap<(bool, &str, &str), usize> {
+    let mut index: HashMap<(bool, &str, &str), usize> = HashMap::new();
+    for (i, e) in entries.iter().enumerate() {
+        if merge_bound_cpv(e).is_some() {
+            index
+                .entry((
+                    e.targets_running_root,
+                    e.category.as_str(),
+                    e.package.as_str(),
+                ))
+                .or_insert(i);
+        }
+    }
+    index
+}
+
+/// Track X Slice C (#242): resolve one root-qualified map endpoint to
+/// its entry index -- the exact-root instance first, falling back to the
+/// cp-level first index (the pre-slice behaviour) when this graph holds
+/// no such instance in that root (same-root graphs, synthetic entries,
+/// the `--root-deps` sidecar shapes the walk never root-splits).
+fn root_cp_lookup(
+    root_index: &HashMap<(bool, &str, &str), usize>,
+    cp_index: &HashMap<(&str, &str), usize>,
+    endpoint: &(bool, String, String),
+) -> Option<usize> {
+    root_index
+        .get(&(endpoint.0, endpoint.1.as_str(), endpoint.2.as_str()))
+        .or_else(|| cp_index.get(&(endpoint.1.as_str(), endpoint.2.as_str())))
+        .copied()
+}
+
+/// Track X Slice C (#242): resolve a `deps` edge to its child instance
+/// -- the resolving-root instance (`dep_child_root` from the owner's own
+/// root and the edge's dep key) when one is merge-bound, else the legacy
+/// cp-level first index. The walk always resolved the atom in the
+/// resolving root, so the filter only ever removes a provably-wrong
+/// same-cp other-root sibling.
+fn dep_child_lookup(
+    root_index: &HashMap<(bool, &str, &str), usize>,
+    cp_index: &HashMap<(&str, &str), usize>,
+    owner_running_root: bool,
+    dep: &DepEdge,
+) -> Option<usize> {
+    let want = dep_child_root(owner_running_root, dep.key);
+    root_index
+        .get(&(want, dep.category.as_str(), dep.package.as_str()))
+        .or_else(|| cp_index.get(&(dep.category.as_str(), dep.package.as_str())))
+        .copied()
+}
+
 /// Finds the shortest **unbreakable** dependency cycle among the
 /// merge-bound `entries` -- real `circular_dependency_handler`'s
 /// `_find_cycles` + `shortest_cycle`, restricted to *hard* edges. Those
@@ -19103,13 +19205,17 @@ fn find_hard_cycles(
     entries: &[GraphEntry],
     edge_kind_map: &EdgeKindMap,
     root: &Path,
-    circular: &HashMap<(String, String), Vec<CircularDepChild>>,
+    circular: &HashMap<RootCp, Vec<CircularDepChild>>,
     insertion_rank: Option<&[usize]>,
 ) -> Vec<Vec<String>> {
     // Merge-bound entries only, lowest index per cp (the merge list is
     // already in dependency order, so the first is the one to start a
     // rendered cycle at).
     let cp_index = merge_bound_index(entries);
+    // Track X Slice C (#242): the per-(root, cp) resolution view (real's
+    // package-keyed digraph). Single-root graphs resolve every endpoint
+    // through the cp fallback below, exactly as before.
+    let root_index = merge_bound_root_index(entries);
     // Backlog #228 slot-op arm: owner index -> dep indices with an
     // unsatisfied non-optional slot-operator `deps` edge between two
     // merge-bound entries. Only the `||` branch the walk selected
@@ -19134,9 +19240,9 @@ fn find_hard_cycles(
     // adjacency: owner index -> sorted, deduped dep indices (hard edges).
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); entries.len()];
     for ((dep_cp, owner_cp), (has_hard, has_soft)) in edge_kind_map {
-        let (Some(&oi), Some(&di)) = (
-            cp_index.get(&(owner_cp.0.as_str(), owner_cp.1.as_str())),
-            cp_index.get(&(dep_cp.0.as_str(), dep_cp.1.as_str())),
+        let (Some(oi), Some(di)) = (
+            root_cp_lookup(&root_index, &cp_index, owner_cp),
+            root_cp_lookup(&root_index, &cp_index, dep_cp),
         ) else {
             continue;
         };
@@ -19174,7 +19280,15 @@ fn find_hard_cycles(
             {
                 continue;
             }
-            let Some(&di) = cp_index.get(&(dep.category.as_str(), dep.package.as_str())) else {
+            // Track X Slice C (#242): the child's resolving-root
+            // instance (real resolves each atom against its group's
+            // root); the cp fallback is the pre-slice behaviour.
+            let Some(di) = dep_child_lookup(
+                &root_index,
+                &cp_index,
+                entries[oi].targets_running_root,
+                dep,
+            ) else {
                 continue;
             };
             // Backlog #216: same true-self-loop gate as the map arm
@@ -19344,9 +19458,12 @@ fn find_restart_cycles(
     entries: &[GraphEntry],
     edge_kind_map: &EdgeKindMap,
     root: &Path,
-    circular: &HashMap<(String, String), Vec<CircularDepChild>>,
+    circular: &HashMap<RootCp, Vec<CircularDepChild>>,
 ) -> Vec<Vec<usize>> {
     let cp_index = merge_bound_index(entries);
+    // Track X Slice C (#242): the per-(root, cp) resolution view (see
+    // `find_hard_cycles`).
+    let root_index = merge_bound_root_index(entries);
     // Trigger adjacency: owner index -> (dep index, hard). `hard` is an
     // unsatisfied buildtime edge; any entry is an unsatisfied
     // non-optional buildtime-or-runtime edge (real's kept set).
@@ -19367,9 +19484,9 @@ fn find_restart_cycles(
         if !has_hard {
             continue;
         }
-        let (Some(&oi), Some(&di)) = (
-            cp_index.get(&(owner_cp.0.as_str(), owner_cp.1.as_str())),
-            cp_index.get(&(dep_cp.0.as_str(), dep_cp.1.as_str())),
+        let (Some(oi), Some(di)) = (
+            root_cp_lookup(&root_index, &cp_index, owner_cp),
+            root_cp_lookup(&root_index, &cp_index, dep_cp),
         ) else {
             continue;
         };
@@ -19391,7 +19508,11 @@ fn find_restart_cycles(
             if !(d.priority.buildtime || d.priority.runtime) {
                 continue;
             }
-            let Some(&di) = cp_index.get(&(d.category.as_str(), d.package.as_str())) else {
+            // Track X Slice C (#242): the child's resolving-root
+            // instance (same rule as `find_hard_cycles`' slot-op arm).
+            let Some(di) =
+                dep_child_lookup(&root_index, &cp_index, entries[oi].targets_running_root, d)
+            else {
                 continue;
             };
             if dep_edge_satisfied_by_installed(root, d, Some(&entries[di])) {
@@ -20464,6 +20585,10 @@ fn collect_unwalked_installed_blockers(
         }
         let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
         let self_cp = (pkg.category.clone(), pkg.package.clone());
+        // Track X Slice C (#242): the node key for the resolver map
+        // (installed owner -- never a merge-bound cycle node, so the
+        // target-root half, matching the pre-slice cp-keyed lookups).
+        let self_node: RootCp = (false, pkg.category.clone(), pkg.package.clone());
         let Ok(flat_deps) = portage_use_reduce::use_reduce_flat_disjunctive(
             &tokens,
             &use_flags,
@@ -20479,7 +20604,7 @@ fn collect_unwalked_installed_blockers(
                     config,
                     root,
                     entries,
-                    &self_cp,
+                    &self_node,
                     disj_constraints,
                     // Site decision (backlogs #216/#221 reconciliation):
                     // real keys `circular_dependency` by exact package
@@ -20493,6 +20618,8 @@ fn collect_unwalked_installed_blockers(
                     atoms,
                     &[],
                     false,
+                    entries,
+                    &[],
                 )
             },
             &mut |alts: &[Vec<String>]| {
@@ -23940,7 +24067,7 @@ pub struct GraphResult {
     /// into the display-side `kept_alt_branches` / `resolved_dep_targets`
     /// derivations so `--tree` and the blocker disposition keep the
     /// cycle-breaking branch the walk took.
-    pub circular_dependency: HashMap<(String, String), Vec<CircularDepChild>>,
+    pub circular_dependency: HashMap<RootCp, Vec<CircularDepChild>>,
     /// Real `circular_dependency_handler.large_cycle_count`: the full
     /// elementary-cycle enumeration (`merge_order::cycle_report`, real
     /// `digraph.get_cycles` over the `medium_soft` rung) counted more
@@ -24448,7 +24575,16 @@ struct QueueItem {
     atom: String,
     depth: u32,
     owner: Option<(String, String)>,
-    unevaluated: Option<String>,    /// Track X Slice B (#242): real `_add_pkg_deps`' five-group `deps`
+    /// Track X Slice C (#242): the *expanding* entry's own root flag --
+    /// the owner half of the root-qualified edge this item records when
+    /// it resolves. The atom's own resolving root rides in
+    /// `targets_running_root` below (the child half); the two differ
+    /// exactly for a cross-root group (a target-rooted owner's
+    /// `BDEPEND` atom, or a running-rooted owner's `RDEPEND` atom).
+    /// `false` for a directly-requested top-level atom.
+    owner_targets_running_root: bool,
+    unevaluated: Option<String>,
+    /// Track X Slice B (#242): real `_add_pkg_deps`' five-group `deps`
     /// queue (`depgraph.py:4255-4291`) resolves each group against its own
     /// root -- `RDEPEND`/`PDEPEND` against the target root, `DEPEND`/
     /// `BDEPEND`/`IDEPEND` against the running root -- so this atom must
@@ -24664,6 +24800,12 @@ fn enqueue_flat_deps(
     // `--with-test-deps` call sites (a `test?` dep stays target-rooted)
     // and everywhere the roots coincide (strict no-op).
     running_atoms: &HashSet<String>,
+    // Track X Slice C (#242): the expanding entry's own root flag (its
+    // `GraphEntry::targets_running_root`) -- the owner half of the
+    // root-qualified edge each queued atom records. `false` for the
+    // `--with-test-deps` call sites (a `test?` dep stays target-rooted)
+    // and everywhere else the owner is target-rooted.
+    owner_targets_running_root: bool,
 ) {
     // Backlog #90 (S1): real pops each deplist last-declared-first
     // (stack discipline), BUT drains every plain dep before touching a
@@ -24698,9 +24840,19 @@ fn enqueue_flat_deps(
         // `buildtime_hard`/`targets_running` below (same flatten family,
         // same raw-text assumption; `||` groups never span keys).
         let targets_running_first = running_atoms.contains(&tok);
+        // Track X Slice C (#242): the running-`BDEPEND`-soft exception
+        // above does not apply to a self-naming atom (its `cat/pkg` is
+        // the owner's own): real never relaxes a build-time edge in
+        // `_serialize_tasks`, so a running-root self loop dead-ends and
+        // aborts exactly like a target-root one (`depgraph.py:10262`),
+        // while a non-self bootstrap ring keeps Slice B's terminating
+        // scope. Bound on the raw token like everything else here.
+        let self_naming = portage_dep::parse_atom(&tok).is_some_and(|at| {
+            at.blocker == portage_dep::Blocker::None && at.category == key.0 && at.package == key.1
+        });
         let buildtime_hard = buildtime_atoms.contains(&tok)
             && !runtime_atoms.contains(&tok)
-            && !(targets_running_first && bdepend_atoms.contains(&tok));
+            && !(targets_running_first && bdepend_atoms.contains(&tok) && !self_naming);
         // Track X Slice B (#242): the per-group root travels with the
         // atom -- bound on the raw token here, before evaluation moves
         // it, exactly like `buildtime_hard` (same flatten family, same
@@ -24745,6 +24897,7 @@ fn enqueue_flat_deps(
             atom: tok,
             depth: depth + 1,
             owner: Some(key.clone()),
+            owner_targets_running_root,
             unevaluated,
             targets_running_root: targets_running,
             buildtime_hard,
@@ -24819,7 +24972,8 @@ fn delta_atom_cleanly_reuses_resolved_slot(
     let empty_constraints: Vec<String> = Vec::new();
     let extra_constraints = union_constraints.get(&key2).unwrap_or(&empty_constraints);
     let select_root: &Path = if atom_running {
-        ctx.cross_root().expect("running-root atom without a cross root")
+        ctx.cross_root()
+            .expect("running-root atom without a cross root")
     } else {
         ctx.root
     };
@@ -24884,7 +25038,12 @@ fn delta_atom_cleanly_reuses_resolved_slot(
     else {
         return false;
     };
-    let slot_key2 = (key2.0.clone(), key2.1.clone(), resolved.slot.clone(), atom_running);
+    let slot_key2 = (
+        key2.0.clone(),
+        key2.1.clone(),
+        resolved.slot.clone(),
+        atom_running,
+    );
     let Some(&existing_idx2) = state.resolved_slots.get(&slot_key2) else {
         // A genuinely new slot: the aucascleaf case. Queue it.
         return false;
@@ -25142,8 +25301,7 @@ fn expand_resolved_slot_with_flipped_use(
                     .cloned()
                     .collect()
             });
-            let entries_view: &[GraphEntry] =
-                scoped_entries.as_deref().unwrap_or(&state.entries);
+            let entries_view: &[GraphEntry] = scoped_entries.as_deref().unwrap_or(&state.entries);
             let scoped_queued: Option<Vec<QueueItem>> = cross_running_root.map(|_| {
                 queued
                     .iter()
@@ -25152,18 +25310,29 @@ fn expand_resolved_slot_with_flipped_use(
                     .collect()
             });
             let queued_view: &[QueueItem] = scoped_queued.as_deref().unwrap_or(&queued);
+            // Track X Slice C (#242): the node key carries the flipped
+            // entry's own root (real's node-identity keying); the gate
+            // reads the whole graph (same slices the bins would see on
+            // a same-root run).
+            let self_node: RootCp = (
+                state.entries[existing_idx].targets_running_root,
+                key.0.clone(),
+                key.1.clone(),
+            );
             disjunction_preference(
                 &ctx.repos,
                 config,
                 grp_root,
                 entries_view,
-                key,
+                &self_node,
                 union_constraints,
                 &bp.circular_dependency,
                 ctx.root_deps_running_root,
                 atoms,
                 queued_view,
                 ctx.update,
+                &state.entries,
+                &queued,
             )
         },
         &mut |alts: &[Vec<String>]| {
@@ -25186,8 +25355,7 @@ fn expand_resolved_slot_with_flipped_use(
                     .cloned()
                     .collect()
             });
-            let entries_view: &[GraphEntry] =
-                scoped_entries.as_deref().unwrap_or(&state.entries);
+            let entries_view: &[GraphEntry] = scoped_entries.as_deref().unwrap_or(&state.entries);
             let scoped_queued: Option<Vec<QueueItem>> = cross_running_root.map(|_| {
                 queued
                     .iter()
@@ -25212,8 +25380,9 @@ fn expand_resolved_slot_with_flipped_use(
     // The same `--root-deps` running-root split as the fresh expansion
     // above (Track X Slice B: flag-on coinciding-roots only -- the unified
     // per-group walk owns every cross-root atom).
-    let root_deps_split: Option<&Path> =
-        ctx.root_deps_running_root.filter(|_| cross_running_root.is_none());
+    let root_deps_split: Option<&Path> = ctx
+        .root_deps_running_root
+        .filter(|_| cross_running_root.is_none());
     // above (both no-ops unless `root_deps_split` is set).
     let root_deps_satisfied: HashSet<String> = root_deps_split
         .map(|root| {
@@ -25346,6 +25515,7 @@ fn expand_resolved_slot_with_flipped_use(
         &bdepend_atoms,
         &or_group_universe(&tokens),
         &running_tags,
+        state.entries[existing_idx].targets_running_root,
     );
     // Narrowing (L0 20260928T054625Z): merge-order edges are added ONLY
     // for newly-queued targets. Unioning the whole flipped flatten here
@@ -25440,6 +25610,7 @@ fn expand_resolved_slot_with_flipped_use(
                     // Track X Slice B (#242): a `test?` dep stays
                     // target-rooted (same gate as the fresh expansion).
                     &HashSet::new(),
+                    state.entries[existing_idx].targets_running_root,
                 );
             }
         }
@@ -26946,7 +27117,7 @@ struct BacktrackParams {
     /// Backlog #216's fresh-self-loop records share this map (same
     /// rotation, `cycle_restartable`'s scope gate in `collect_feedback`):
     /// one field, structured children, both triggers.
-    circular_dependency: HashMap<(String, String), Vec<CircularDepChild>>,
+    circular_dependency: HashMap<RootCp, Vec<CircularDepChild>>,
 }
 
 /// Backlog #221: one in-cycle dependency of a `circular_dependency` parent
@@ -27596,6 +27767,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             atom: a.clone(),
             depth: 0,
             owner: None,
+            owner_targets_running_root: false,
             unevaluated: None,
             targets_running_root: false,
             buildtime_hard: false,
@@ -27623,6 +27795,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             atom: format!("{cat}/{pkg}"),
             depth: 1,
             owner: None,
+            owner_targets_running_root: false,
             unevaluated: None,
             targets_running_root: false,
             buildtime_hard: false,
@@ -27637,6 +27810,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             atom: format!("={cat}/{pkg}-{ver}"),
             depth: 1,
             owner: None,
+            owner_targets_running_root: false,
             unevaluated: None,
             targets_running_root: false,
             buildtime_hard: false,
@@ -27650,6 +27824,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         atom: current_atom,
         depth,
         owner,
+        owner_targets_running_root: item_owner_targets_running_root,
         unevaluated: unevaluated_atom,
         targets_running_root: item_targets_running_root,
         buildtime_hard,
@@ -27688,7 +27863,8 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         // implies `cross_root().is_some()` (tags are only ever set when
         // the roots differ); same-root runs always resolve here.
         let atom_root: &Path = if item_targets_running_root {
-            ctx.cross_root().expect("running-root atom without a cross root")
+            ctx.cross_root()
+                .expect("running-root atom without a cross root")
         } else {
             ctx.root
         };
@@ -27719,9 +27895,22 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 .entry(key.clone())
                 .or_default()
                 .insert(owner.clone());
+            // Track X Slice C (#242): the edge ends are root-qualified
+            // (real's `(root, cp)` tracker keys). The child's root is the
+            // atom's own resolving root -- the entry this resolution
+            // creates or reuses always carries the queue item's flag
+            // (slot/installed dedup is root-qualified since Slice B, and
+            // top-level atoms are target-rooted like their flag).
             let kinds = state
                 .edge_kind_map
-                .entry((key.clone(), owner))
+                .entry((
+                    (item_targets_running_root, key.0.clone(), key.1.clone()),
+                    (
+                        item_owner_targets_running_root,
+                        owner.0.clone(),
+                        owner.1.clone(),
+                    ),
+                ))
                 .or_insert((false, false));
             // Real `DepPriority.satisfied` (`_emerge/DepPriority.py`):
             // a build-time dep already provided by an installed
@@ -27860,7 +28049,8 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         // item's.
         let resolve_atom = |a: &str, a_running: bool| -> Result<PretendOutcome, Error> {
             let select_root: &Path = if a_running {
-                ctx.cross_root().expect("running-root atom without a cross root")
+                ctx.cross_root()
+                    .expect("running-root atom without a cross root")
             } else {
                 ctx.root
             };
@@ -27923,8 +28113,11 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 .minimize_pins
                 .contains_key(&(o.clone(), current_atom.clone()))
         {
-            let mut group: Vec<(String, bool, bool)> =
-                vec![(current_atom.clone(), buildtime_hard, item_targets_running_root)];
+            let mut group: Vec<(String, bool, bool)> = vec![(
+                current_atom.clone(),
+                buildtime_hard,
+                item_targets_running_root,
+            )];
             for it in state.queue.iter() {
                 if it.owner.as_ref() != Some(o) || it.depth != depth || it.from_disjunction {
                     break;
@@ -27960,7 +28153,8 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                             .is_some_and(|p| p.slot.is_some() || p.slot_operator.is_some())
                         && let Some(version) = best_installed_matching(
                             if *running {
-                                ctx.cross_root().expect("running-root atom without a cross root")
+                                ctx.cross_root()
+                                    .expect("running-root atom without a cross root")
                             } else {
                                 ctx.root
                             },
@@ -28125,8 +28319,10 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 .find(|(c, p, _)| *c == key.0 && *p == key.1)
             && target != version
         {
-            let forced =
-                resolve_atom(&format!("={}/{}-{target}", key.0, key.1), item_targets_running_root)?;
+            let forced = resolve_atom(
+                &format!("={}/{}-{target}", key.0, key.1),
+                item_targets_running_root,
+            )?;
             if !matches!(forced, PretendOutcome::NoVisibleCandidate) {
                 outcome = forced;
             }
@@ -29349,7 +29545,12 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         // root -- a running-root atom never reuses a target-root slot
         // (this is the cross-root in-graph boundary: real's per-root
         // graph db). Same-root runs key uniformly `false`: identical.
-        let slot_key = (key.0.clone(), key.1.clone(), slot.clone(), item_targets_running_root);
+        let slot_key = (
+            key.0.clone(),
+            key.1.clone(),
+            slot.clone(),
+            item_targets_running_root,
+        );
         if let Some(&existing_idx) = state.resolved_slots.get(&slot_key) {
             // This exact category/package/slot was already resolved by
             // an earlier atom. If the current atom's own constraint
@@ -30459,8 +30660,24 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     visited_cps.insert((a.category, a.package));
                 }
             }
+            // Track X Slice C (#242): real `_add_pkg` drops a direct
+            // self-edge "unless it is an unsatisfied build-time
+            // dependency" (`depgraph.py:3765-3770`) -- and
+            // `_serialize_tasks` dead-ends on exactly that kept edge
+            // (`depgraph.py:10262`, the g216 running-root self cycle).
+            // The owner's own cp is trivially "visited" (its own pulling
+            // atom resolved to it), so without the exemption below this
+            // cut deletes the true self-loop along with the
+            // bootstrap-ring closing edges it exists for
+            // (`rdrcycb -> rdrcyca`) -- and the pass-1 abort never fires.
+            // A satisfied self-edge is still dropped downstream, by
+            // `build_digraph`'s own self-edge rule and
+            // `owner_self_loop`'s installed gate.
+            let own_category = state.entries[entry_idx].category.clone();
+            let own_package = state.entries[entry_idx].package.clone();
             state.entries[entry_idx].deps.retain(|d| {
                 !(d.key == 4
+                    && !(d.category == own_category && d.package == own_package)
                     && visited_cps.contains(&(d.category.clone(), d.package.clone())))
             });
         }
@@ -30589,6 +30806,13 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             state.entries[entry_idx].category.clone(),
             state.entries[entry_idx].package.clone(),
         );
+        // Track X Slice C (#242): the node key for the resolver map --
+        // the expanding entry's own root (real's node-identity keying).
+        let self_node: RootCp = (
+            state.entries[entry_idx].targets_running_root,
+            state.entries[entry_idx].category.clone(),
+            state.entries[entry_idx].package.clone(),
+        );
         // The whole `dep_zapdeps` choice-bin classification lives in
         // the single shared `disjunction_preference` helper -- see its
         // own doc comment (2026-09-11 review F1/F2: this closure and
@@ -30610,21 +30834,30 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         // cycle children join the lookup here. (Real runs the expansion
         // once per pulling edge; the union over this pass's pullers is
         // the one-node approximation.)
-        let circ_with_pullers: Option<HashMap<(String, String), Vec<CircularDepChild>>> =
-            if self_cp.0 == "virtual" && !bp.circular_dependency.is_empty() {
+        let circ_with_pullers: Option<HashMap<RootCp, Vec<CircularDepChild>>> =
+            if self_node.1 == "virtual" && !bp.circular_dependency.is_empty() {
                 let mut extra: Vec<CircularDepChild> = Vec::new();
                 if let Some(pullers) = state.required_by_map.get(&self_cp) {
                     let mut pullers: Vec<&(String, String)> = pullers.iter().collect();
                     pullers.sort();
                     for p in pullers {
-                        if let Some(children) = bp.circular_dependency.get(p) {
-                            extra.extend(children.iter().cloned());
+                        // Track X Slice C (#242): pullers are cp-keyed
+                        // (that map stays root-blind); the cycle map is
+                        // node-keyed, so consult both roots -- same-root
+                        // runs only ever hit the target half.
+                        for flag in [false, true] {
+                            if let Some(children) =
+                                bp.circular_dependency
+                                    .get(&(flag, p.0.clone(), p.1.clone()))
+                            {
+                                extra.extend(children.iter().cloned());
+                            }
                         }
                     }
                 }
                 (!extra.is_empty()).then(|| {
                     let mut m = bp.circular_dependency.clone();
-                    let bucket = m.entry(self_cp.clone()).or_default();
+                    let bucket = m.entry(self_node.clone()).or_default();
                     for c in extra {
                         if !bucket.contains(&c) {
                             bucket.push(c);
@@ -30680,7 +30913,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     config,
                     grp_root,
                     entries_view,
-                    &self_cp,
+                    &self_node,
                     &union_constraints,
                     // Backlog #221: this pass's recorded cycle edges --
                     // empty on the first attempt, populated on the
@@ -30691,6 +30924,8 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     atoms,
                     queued_view,
                     ctx.update,
+                    &state.entries,
+                    &queued,
                 )
             },
             &mut |alts: &[Vec<String>]| {
@@ -30743,8 +30978,9 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         // behavior there). On a cross-root run the unified per-group walk
         // above already resolved every build atom against its own root, so
         // filtering here would double-resolve (and disconnect) them.
-        let root_deps_split: Option<&Path> =
-            ctx.root_deps_running_root.filter(|_| cross_running_root.is_none());
+        let root_deps_split: Option<&Path> = ctx
+            .root_deps_running_root
+            .filter(|_| cross_running_root.is_none());
         // `--root-deps`: real `ESYSROOT`-vs-`ROOT` distinction (see
         // `root_deps_satisfied_atoms`'s own doc comment for the full
         // grounding and its documented scope cut) -- a strict no-op when
@@ -30858,6 +31094,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             &bdepend_atoms,
             &or_group_universe(&tokens),
             &running_tags,
+            state.entries[entry_idx].targets_running_root,
         );
 
         // --with-test-deps: additive on top of the normal deps just
@@ -30915,6 +31152,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                         // Track X Slice B (#242): a `test?` dep stays
                         // target-rooted.
                         &HashSet::new(),
+                        state.entries[entry_idx].targets_running_root,
                     );
                 }
             }
@@ -31526,6 +31764,22 @@ fn collect_feedback(
                 let Some((node_cat, node_pkg, _)) = split_cpv(node_cpv) else {
                     continue;
                 };
+                // Track X Slice C (#242): the cycle cpv may name two
+                // merge-bound instances (one per root) -- real records
+                // the node that actually dead-ends
+                // (`circular_dependency.setdefault(node, ...)` keyed by
+                // package object). The true cycler is the instance with
+                // the hard self edge in the root-qualified walk map;
+                // the other instance's self pick resolves to it, not to
+                // itself. No hard self pair (the slot-op-only shapes)
+                // keeps the legacy target-root key.
+                let cycler_running = pass
+                    .edge_kind_map
+                    .get(&(
+                        (true, node_cat.clone(), node_pkg.clone()),
+                        (true, node_cat.clone(), node_pkg.clone()),
+                    ))
+                    .is_some_and(|(has_hard, _)| *has_hard);
                 // Real's own predecessor formula: `cycle[-1]` for index
                 // 0, `cycle[index-1]` otherwise.
                 let child_cpv = if index == 0 {
@@ -31561,7 +31815,7 @@ fn collect_feedback(
                 };
                 let bucket = grown
                     .circular_dependency
-                    .entry((node_cat, node_pkg))
+                    .entry((cycler_running, node_cat, node_pkg))
                     .or_default();
                 if !bucket.contains(&record) {
                     bucket.push(record);
@@ -32263,8 +32517,13 @@ fn collect_feedback(
             &grown.circular_dependency,
         );
         if !cycles.is_empty() {
+            // Track X Slice C (#242): node-identity keys (real's
+            // package-object keying) -- a both-roots cp reusing an
+            // already-recorded node in the *other* root is a new edge,
+            // not an unsolved cycle.
             let unsolved = cycles.iter().flatten().any(|&idx| {
                 grown.circular_dependency.contains_key(&(
+                    pass.entries[idx].targets_running_root,
                     pass.entries[idx].category.clone(),
                     pass.entries[idx].package.clone(),
                 ))
@@ -32298,7 +32557,11 @@ fn collect_feedback(
                         };
                         let bucket = grown
                             .circular_dependency
-                            .entry((parent.category.clone(), parent.package.clone()))
+                            .entry((
+                                parent.targets_running_root,
+                                parent.category.clone(),
+                                parent.package.clone(),
+                            ))
                             .or_default();
                         if !bucket.contains(&record) {
                             bucket.push(record);
@@ -34357,9 +34620,11 @@ fn enqueue_dependencies(
     let cross_active =
         root_deps_running_root.is_some_and(|rr| rr.as_os_str() != target_root.as_os_str());
     let owner_is_running = root.as_os_str() != target_root.as_os_str();
-    let running_tags: HashSet<String> = cross_active
-        .then(|| dep_running_tags(&keyed_depstr, &use_flags, owner_is_running))
-        .unwrap_or_default();
+    let running_tags: HashSet<String> = if cross_active {
+        dep_running_tags(&keyed_depstr, &use_flags, owner_is_running)
+    } else {
+        Default::default()
+    };
     let group_running = |atoms: &[String]| -> bool {
         cross_active && atoms.iter().all(|a| running_tags.contains(a))
     };
@@ -34409,7 +34674,12 @@ fn enqueue_dependencies(
     // Backlog #216: no self-exclusion on the first pass (see the main
     // walk's note above) -- the shared `disjunction_preference` check
     // applies here unchanged.
-    let self_cp = (category.to_string(), package.to_string());
+    // Track X Slice C (#242): the node key for the resolver map
+    // (installed deep-walk owner -- never a merge-bound cycle node, so
+    // the target-root half, matching the pre-slice cp-keyed lookups).
+    // (The bare-cp `self_cp` this replaces also fed nothing else in this
+    // walk, so it is gone rather than renamed.)
+    let self_node: RootCp = (false, category.to_string(), package.to_string());
     // The whole `dep_zapdeps` choice-bin classification lives in the
     // single shared `disjunction_preference` helper -- see its own doc
     // comment (2026-09-11 review F1/F2: this closure used to be its own,
@@ -34459,7 +34729,7 @@ fn enqueue_dependencies(
                 config,
                 grp_root,
                 entries_view,
-                &self_cp,
+                &self_node,
                 disj_constraints,
                 // Site decision (backlogs #216/#221 reconciliation): the
                 // empty map. See the parameter doc: this deep-walk's
@@ -34473,6 +34743,8 @@ fn enqueue_dependencies(
                 atoms,
                 queued_view,
                 update,
+                entries,
+                &queued,
             )
         },
         &mut |alts: &[Vec<String>]| {
@@ -34717,6 +34989,15 @@ fn enqueue_dependencies(
             atom: tok,
             depth: child_depth,
             owner: Some(owner_key.clone()),
+            // Track X Slice C (#242): the installed owner's own root
+            // flag (first match -- this deep walk's parents are
+            // `AlreadyInstalled` entries whose edges are never
+            // build-time-hard, so owner-half imprecision cannot forge a
+            // hard cycle; the child half above stays exact).
+            owner_targets_running_root: entries
+                .iter()
+                .find(|e| e.category == owner_key.0 && e.package == owner_key.1)
+                .is_some_and(|e| e.targets_running_root),
             unevaluated,
             // Track X Slice B (#242): the per-group root travels with the
             // atom -- keyed on the raw token like the main walk (the
@@ -41518,6 +41799,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
+            false,
         );
         assert_eq!(queue.len(), 1);
         assert!(
@@ -44346,6 +44628,194 @@ mod tests {
         assert!(matches!(result.outcome, ResolveOutcome::Aborted { .. }));
     }
 
+    /// Track X Slice C (#242): the g216 shape under default staging --
+    /// `g216top` RDEPENDs `g216mid` RDEPENDs `g216comp` BDEPENDs
+    /// `|| ( >=dev-lang/g216comp-1.0 dev-lang/g216boot )`. Real's pass 1
+    /// keeps the in-graph self branch live and dead-ends on the
+    /// running-root self cycle (`_serialize_tasks`, `depgraph.py:10262`),
+    /// then re-resolves with the `circular_dependency` map to `g216boot`
+    /// (`backtrack: 1/20`, rc 0). The merge list spans both roots: the
+    /// running-root build dep merges before its target-root consumer, and
+    /// `g216comp` lands TWICE (one row per root, real `output.py`
+    /// `get_display_list`).
+    /// (`docs/evidence/2026-09-29-242-inventory/probes/default-g216top.txt`).
+    #[test]
+    fn cross_root_bdepend_self_branch_merges_in_both_roots() {
+        let root = fixtures_root();
+        // Hermetic running root: nothing installed there, so every build
+        // dep selects from the tree.
+        let running = TempDir::new("portuale-242-xc-empty-running-root").keep();
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+            &root,
+        )
+        .expect("fixture config resolves");
+        #[allow(clippy::fn_params_excessive_bools)]
+        let result = resolve_pretend_graph(
+            &root,
+            &root,
+            &["app-misc/g216top".to_string()],
+            &config,
+            false,
+            false,
+            false,
+            false,
+            Deep::NotRequested,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            false,
+            None,
+            false,
+            false,
+            Some(&running),
+            &fixtures_root().join("distfiles"),
+            false,
+            false,
+            false,
+            20,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            true,
+            false,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend_graph(app-misc/g216top) failed: {e}"));
+        // Real spends its single backtrack retry on the serialize abort.
+        assert!(result.backtrack_restarts >= 1);
+        assert!(matches!(result.outcome, ResolveOutcome::Complete));
+        // Merge order runs across roots: the running-root build dep
+        // merges before its target-root consumer, and `g216comp` lands
+        // twice -- real's `default-g216top.txt` rows.
+        let rows: Vec<(String, String, bool)> = result
+            .entries
+            .iter()
+            .map(|e| {
+                (
+                    e.category.clone(),
+                    e.package.clone(),
+                    e.targets_running_root,
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("dev-lang".to_string(), "g216boot".to_string(), true),
+                ("dev-lang".to_string(), "g216comp".to_string(), true),
+                ("dev-lang".to_string(), "g216comp".to_string(), false),
+                ("dev-libs".to_string(), "g216mid".to_string(), false),
+                ("app-misc".to_string(), "g216top".to_string(), false),
+            ]
+        );
+    }
+
+    /// Track X Slice C (#242): the same g216 shape with `--backtrack=0`
+    /// reports real's pass-1 self-cycle block (rc 1), like real's
+    /// `default-g216top-b0.txt` (`Total: 4` over the dual rows).
+    #[test]
+    fn cross_root_bdepend_self_branch_backtrack0_reports_the_self_cycle() {
+        let root = fixtures_root();
+        let running = TempDir::new("portuale-242-xc-empty-running-root-b0").keep();
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+            &root,
+        )
+        .expect("fixture config resolves");
+        #[allow(clippy::fn_params_excessive_bools)]
+        let result = resolve_pretend_graph(
+            &root,
+            &root,
+            &["app-misc/g216top".to_string()],
+            &config,
+            false,
+            false,
+            false,
+            false,
+            Deep::NotRequested,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            false,
+            None,
+            false,
+            false,
+            Some(&running),
+            &fixtures_root().join("distfiles"),
+            false,
+            false,
+            false,
+            0,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            true,
+            false,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend_graph(app-misc/g216top) failed: {e}"));
+        assert!(matches!(result.outcome, ResolveOutcome::Aborted { .. }));
+        // The pass-1 graph strands on the running-root self loop: four
+        // merge rows (dual `g216comp`) behind the self block. The cycle
+        // node is the merge-bound cpv (the `circular_deps` convention
+        // everywhere -- real prints
+        // `(dev-lang/g216comp-1.0:0/0::testrepo, ebuild scheduled for
+        // merge)`).
+        assert_eq!(
+            result.circular_deps,
+            vec![vec!["dev-lang/g216comp-1.0".to_string()]]
+        );
+        let merge_rows = result
+            .entries
+            .iter()
+            .filter(|e| merge_bound_version(&e.outcome).is_some())
+            .count();
+        assert_eq!(merge_rows, 4);
+    }
+
     /// The cycle guard: `rdrcyca` BDEPENDs `rdrcycb` BDEPENDs `rdrcyca`.
     /// The shared `root_deps_build_seen` set (inserted *before* a
     /// package's own deps are walked) must cut the recursion so each
@@ -45469,15 +45939,15 @@ mod tests {
         let mut map: EdgeKindMap = HashMap::new();
         map.insert(
             (
-                ("dev-libs".to_string(), "cyc-b".to_string()),
-                ("dev-libs".to_string(), "cyc-a".to_string()),
+                (false, "dev-libs".to_string(), "cyc-b".to_string()),
+                (false, "dev-libs".to_string(), "cyc-a".to_string()),
             ),
             (true, false),
         );
         map.insert(
             (
-                ("dev-libs".to_string(), "cyc-a".to_string()),
-                ("dev-libs".to_string(), "cyc-b".to_string()),
+                (false, "dev-libs".to_string(), "cyc-a".to_string()),
+                (false, "dev-libs".to_string(), "cyc-b".to_string()),
             ),
             (true, false),
         );
@@ -45538,8 +46008,8 @@ mod tests {
         let mut map: EdgeKindMap = HashMap::new();
         map.insert(
             (
-                ("dev-libs".to_string(), "cyc-v".to_string()),
-                ("dev-libs".to_string(), "cyc-a".to_string()),
+                (false, "dev-libs".to_string(), "cyc-v".to_string()),
+                (false, "dev-libs".to_string(), "cyc-a".to_string()),
             ),
             (true, false),
         );
@@ -45580,15 +46050,15 @@ mod tests {
         let mut map: EdgeKindMap = HashMap::new();
         map.insert(
             (
-                ("dev-libs".to_string(), "cyc-b".to_string()),
-                ("dev-libs".to_string(), "cyc-a".to_string()),
+                (false, "dev-libs".to_string(), "cyc-b".to_string()),
+                (false, "dev-libs".to_string(), "cyc-a".to_string()),
             ),
             (false, true),
         );
         map.insert(
             (
-                ("dev-libs".to_string(), "cyc-a".to_string()),
-                ("dev-libs".to_string(), "cyc-b".to_string()),
+                (false, "dev-libs".to_string(), "cyc-a".to_string()),
+                (false, "dev-libs".to_string(), "cyc-b".to_string()),
             ),
             (false, true),
         );
@@ -45656,7 +46126,7 @@ mod tests {
         a.deps = vec![dep("sbr-b", buildtime, 4), dep("sbr-b", runtime, 0)];
         b.deps = vec![dep("sbr-a", buildtime, 4)];
         let entries = vec![a, b];
-        let cp = |pkg: &str| ("dev-libs".to_string(), pkg.to_string());
+        let cp = |pkg: &str| (false, "dev-libs".to_string(), pkg.to_string());
         let mut map: EdgeKindMap = HashMap::new();
         // Owner `sbr-a` reaches `sbr-b` both hard (BDEPEND) and soft
         // (RDEPEND): breakable, invisible to the hard reporter.
@@ -45864,7 +46334,7 @@ mod tests {
     #[test]
     fn find_hard_cycles_reports_a_build_time_cycle_and_ignores_a_run_time_one() {
         let hardcpv = |p: &str| format!("dev-libs/{p}-1.0");
-        let cp = |p: &str| ("dev-libs".to_string(), p.to_string());
+        let cp = |p: &str| (false, "dev-libs".to_string(), p.to_string());
 
         // Pure hard cycle hca <-> hcb: reported starting where real's
         // `shortest_cycle[0]` starts -- hca is the earliest-inserted
@@ -45947,7 +46417,7 @@ mod tests {
     #[test]
     fn find_hard_cycles_starts_where_reals_get_cycles_starts() {
         let cpv = |c: &str, p: &str| format!("{c}/{p}-1");
-        let cp = |c: &str, p: &str| (c.to_string(), p.to_string());
+        let cp = |c: &str, p: &str| (false, c.to_string(), p.to_string());
         // Explicit `discovery` mirroring the resolve (the requested
         // build tool is discovered before the library it pulls).
         let mut make = graph_entry("dev-util", "u249make", "1");
@@ -45991,7 +46461,7 @@ mod tests {
     #[test]
     fn find_hard_cycles_reports_a_true_self_loop_but_not_a_cross_slot_edge() {
         let hardcpv = |p: &str, v: &str| format!("dev-libs/{p}-{v}");
-        let cp = |p: &str| ("dev-libs".to_string(), p.to_string());
+        let cp = |p: &str| (false, "dev-libs".to_string(), p.to_string());
         let buildtime = DepPriority {
             buildtime: true,
             ..DepPriority::default()
@@ -46153,7 +46623,7 @@ mod tests {
         // no cycle to report. (Pre-fix the unrecorded-edge arm added
         // that suppressed edge and reported a phantom `own -> kea ->
         // own` cycle.)
-        let cp = |p: &str| ("dev-libs".to_string(), p.to_string());
+        let cp = |p: &str| (false, "dev-libs".to_string(), p.to_string());
         let runtime = DepPriority {
             runtime: true,
             ..DepPriority::default()
@@ -46223,7 +46693,7 @@ mod tests {
         // with `dev-libs/sdep-1.0:0` installed: the edge stays hard and
         // the two-cycle reports. With `dev-libs/sdep-1.0:1/0`
         // installed the edge is satisfied and breakable: no cycle.
-        let cp = |p: &str| ("dev-libs".to_string(), p.to_string());
+        let cp = |p: &str| (false, "dev-libs".to_string(), p.to_string());
         let runtime_slot_op = DepPriority {
             runtime: true,
             runtime_slot_op: true,
@@ -56042,8 +56512,8 @@ mod tests {
             false,
         );
         let edge = pass.edge_kind_map.get(&(
-            ("dev-util".to_string(), "u250make".to_string()),
-            ("dev-libs".to_string(), "u250json".to_string()),
+            (false, "dev-util".to_string(), "u250make".to_string()),
+            (false, "dev-libs".to_string(), "u250json".to_string()),
         ));
         assert_eq!(
             edge,
@@ -58573,8 +59043,8 @@ mod tests {
         // the `buildtime_atoms` gate computes.
         assert_eq!(
             pass.edge_kind_map.get(&(
-                ("dev-libs".to_string(), "buildonlydep".to_string()),
-                ("dev-libs".to_string(), "binparent".to_string())
+                (false, "dev-libs".to_string(), "buildonlydep".to_string()),
+                (false, "dev-libs".to_string(), "binparent".to_string())
             )),
             Some(&(true, false)),
             "the build-time edge is hard, not soft"
@@ -58638,8 +59108,8 @@ mod tests {
         // installed provider, no run-time alternative).
         assert_eq!(
             pass.edge_kind_map.get(&(
-                ("dev-libs".to_string(), "builddep".to_string()),
-                ("dev-libs".to_string(), "bpkgparent".to_string())
+                (false, "dev-libs".to_string(), "builddep".to_string()),
+                (false, "dev-libs".to_string(), "bpkgparent".to_string())
             )),
             Some(&(true, false)),
             "the build-time edge is hard, not soft"
@@ -65893,6 +66363,7 @@ mod tests_162 {
             atom: atom.to_string(),
             depth: 0,
             owner: None,
+            owner_targets_running_root: false,
             unevaluated: None,
             targets_running_root: false,
             buildtime_hard: false,
@@ -65900,8 +66371,8 @@ mod tests_162 {
         }
     }
 
-    fn self_162(cat: &str, pkg: &str) -> (String, String) {
-        (cat.to_string(), pkg.to_string())
+    fn self_162(cat: &str, pkg: &str) -> RootCp {
+        (false, cat.to_string(), pkg.to_string())
     }
 
     // ---- S5: `disjunction_preference` (real `dep_check.py`
@@ -65917,7 +66388,7 @@ mod tests_162 {
         config: &portage_profile::Config,
         root: &Path,
         entries: &[GraphEntry],
-        self_cp: &(String, String),
+        self_cp: &RootCp,
         atoms: &[&str],
         queued: &[QueueItem],
     ) -> portage_use_reduce::AltPreference {
@@ -65942,10 +66413,10 @@ mod tests_162 {
         config: &portage_profile::Config,
         root: &Path,
         entries: &[GraphEntry],
-        self_cp: &(String, String),
+        self_cp: &RootCp,
         atoms: &[&str],
         queued: &[QueueItem],
-        circular_dependency: &HashMap<(String, String), Vec<CircularDepChild>>,
+        circular_dependency: &HashMap<RootCp, Vec<CircularDepChild>>,
     ) -> portage_use_reduce::AltPreference {
         disjunction_preference(
             repos,
@@ -65959,6 +66430,8 @@ mod tests_162 {
             &atoms_162(atoms),
             queued,
             false,
+            entries,
+            queued,
         )
     }
 
@@ -66223,7 +66696,7 @@ mod tests_162 {
             Some("0"),
             false,
         )];
-        let mut circular: HashMap<(String, String), Vec<CircularDepChild>> = HashMap::new();
+        let mut circular: HashMap<RootCp, Vec<CircularDepChild>> = HashMap::new();
         circular.insert(
             self_162("test", "pkgA"),
             vec![CircularDepChild {
@@ -66269,7 +66742,7 @@ mod tests_162 {
             Some("0"),
             false,
         )];
-        let mut circular: HashMap<(String, String), Vec<CircularDepChild>> = HashMap::new();
+        let mut circular: HashMap<RootCp, Vec<CircularDepChild>> = HashMap::new();
         circular.insert(
             self_162("test", "pkgA"),
             vec![CircularDepChild {
@@ -66519,10 +66992,10 @@ mod tests_162 {
         config: &portage_profile::Config,
         root: &Path,
         entries: &[GraphEntry],
-        self_cp: &(String, String),
+        self_cp: &RootCp,
         atoms: &[&str],
         queued: &[QueueItem],
-        circular: &HashMap<(String, String), Vec<CircularDepChild>>,
+        circular: &HashMap<RootCp, Vec<CircularDepChild>>,
     ) -> portage_use_reduce::AltPreference {
         disjunction_preference(
             repos,
@@ -66536,6 +67009,8 @@ mod tests_162 {
             &atoms_162(atoms),
             queued,
             false,
+            entries,
+            queued,
         )
     }
 
@@ -66550,9 +67025,9 @@ mod tests_162 {
     }
 
     fn circ_map_162(
-        parent: &(String, String),
+        parent: &RootCp,
         children: Vec<CircularDepChild>,
-    ) -> HashMap<(String, String), Vec<CircularDepChild>> {
+    ) -> HashMap<RootCp, Vec<CircularDepChild>> {
         let mut map = HashMap::new();
         map.insert(parent.clone(), children);
         map
@@ -67049,7 +67524,7 @@ mod tests_162 {
         config: &portage_profile::Config,
         root: &Path,
         entries: &[GraphEntry],
-        self_cp: &(String, String),
+        self_cp: &RootCp,
         atoms: &[&str],
         queued: &[QueueItem],
         update: bool,
@@ -70713,7 +71188,7 @@ mod tests_163 {
             entry_163("dev-libs", "ca", new_163("1.0"), &[]),
             entry_163("dev-libs", "cb", new_163("1.0"), &[]),
         ];
-        let cp = |p: &str| ("dev-libs".to_string(), p.to_string());
+        let cp = |p: &str| (false, "dev-libs".to_string(), p.to_string());
         pass.edge_kind_map
             .insert((cp("cb"), cp("ca")), (true, false));
         pass.edge_kind_map
@@ -70783,7 +71258,7 @@ mod tests_163 {
         ec.deps = vec![edge("ta")];
         let mut pass = pass_163();
         pass.entries = vec![ea, eb, ec];
-        let cp = |p: &str| ("dev-libs".to_string(), p.to_string());
+        let cp = |p: &str| (false, "dev-libs".to_string(), p.to_string());
         pass.edge_kind_map
             .insert((cp("tb"), cp("ta")), (true, false));
         pass.edge_kind_map

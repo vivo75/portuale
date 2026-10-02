@@ -760,10 +760,21 @@ fn graph_result_from_order(
     // fails instead -- the remaining cut, same as the module doc).
     let mut edge_kinds: super::EdgeKindMap = HashMap::new();
     for e in &entries {
-        let owner = (e.category.clone(), e.package.clone());
+        let owner = (
+            e.targets_running_root,
+            e.category.clone(),
+            e.package.clone(),
+        );
         for dep in &e.deps {
             let kinds = edge_kinds
-                .entry(((dep.category.clone(), dep.package.clone()), owner.clone()))
+                .entry((
+                    (
+                        super::dep_child_root(e.targets_running_root, dep.key),
+                        dep.category.clone(),
+                        dep.package.clone(),
+                    ),
+                    owner.clone(),
+                ))
                 .or_insert((false, false));
             if dep.priority.buildtime
                 && super::best_installed_for_atom(&req.root, &dep.atom, &dep.category, &dep.package)
