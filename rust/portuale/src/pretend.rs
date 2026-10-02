@@ -627,28 +627,30 @@ fn resolve_root_deps_running_root(
 }
 
 /// Real `lib/_emerge/resolver/output.py:841-862`'s own `darkgreen("to " +
-/// pkg.root)` suffix: an entry that builds against the running root
-/// rather than the target `ROOT` (`GraphEntry::targets_running_root`,
-/// `--root-deps`'s own real `ESYSROOT`-vs-`ROOT` distinction) is
-/// annotated with where it actually installs -- exactly as real portage
-/// annotates any entry whose own `pkg.root_config.settings["ROOT"] !=
-/// "/"`. Deliberately narrower than that real gate, though: portuale
-/// annotates *only* the running-root build entries, never every entry
-/// merged under a non-`/` `ROOT`. Porting the real gate literally would
-/// make every fixture test emit its own non-deterministic `mktemp -d`
-/// `ROOT` path, breaking the shared contract suite's determinism -- the
-/// same tension the parent `--root-deps` slice resolved by scoping its
-/// behavior as strictly opt-in machinery. Empty for every ordinary
-/// `ROOT`-targeted entry, and empty (defensively) if the caller somehow
-/// has a `targets_running_root` entry but no running-root path in hand.
+/// pkg.root)` suffix, per merge row: an entry whose OWN root is not `/`
+/// is annotated with where it actually installs — exactly as real portage
+/// annotates any row whose own `pkg.root_config.settings["ROOT"] != "/"`
+/// (backlog #242 Slice D S0 map
+/// `docs/evidence/2026-10-02-242-display-sites.md` §1a; the #206 cut
+/// reopened per display site). Under a staged target `ROOT` every
+/// target-rooted row carries `to <target>` and every running-rooted row
+/// `to <running>`; a `/`-rooted row stays bare on both sides (real's
+/// blk0x/cyc0y rows). Under `ROOT=/` everything is bare (L0). Empty
+/// (defensively) when a running-rooted entry arrives with no running-root
+/// path in hand.
 /// Returned bare (`"to /"`, no leading space) -- real `output.py:856-861`
 /// places it right after the always-present space that follows the
 /// package string, with `oldbest` (when non-empty) getting its own
 /// trailing space before it; `print_entry_line`'s own `emit` reproduces
 /// that spacing.
-fn root_suffix(entry: &GraphEntry, running_root: Option<&Path>) -> String {
-    match (entry.targets_running_root, running_root) {
-        (true, Some(root)) => format!("to {}", root.display()),
+fn root_suffix(entry: &GraphEntry, target_root: &Path, running_root: Option<&Path>) -> String {
+    let own_root: Option<&Path> = if entry.targets_running_root {
+        running_root
+    } else {
+        Some(target_root)
+    };
+    match own_root {
+        Some(root) if root != Path::new("/") => format!("to {}", root.display()),
         _ => String::new(),
     }
 }
@@ -1436,14 +1438,14 @@ fn print_entry_line(
         (system, world)
     };
     // Real `output.py:841-862`'s own `to <root>` annotation for a
-    // running-root build entry -- empty for every ordinary entry (see
+    // non-`/`-rooted entry -- empty for every `/`-rooted one (see
     // `root_suffix`'s own doc comment). Placed right before `use_suffix`
     // in each arm below, matching real portage's own ordering
     // (`pkg_str + " " + oldbest + "to " + pkg.root`, with the USE display
-    // coming later on the same line) -- though in practice a
-    // `targets_running_root` entry always has an empty `use_flags_display`
-    // anyway (a documented cut, see `GraphEntry::targets_running_root`).
-    let root_annotation = root_suffix(entry, running_root);
+    // coming later on the same line -- backlog #242 Slice D repaints a
+    // running-rooted row's USE from the running profile, so the order
+    // matters there too).
+    let root_annotation = root_suffix(entry, root, running_root);
     // Real --pretend's own bracket word: literally `pkg.type_name`
     // (`lib/_emerge/RootConfig.py`'s own `pkg_tree_map`, the exact
     // two strings `"ebuild"`/`"binary"` portuale's own
@@ -1814,9 +1816,8 @@ fn print_entry_line(
             // u5b), and skipped entirely under `--columns`
             // (`output.py:869`, u5a). `-pv` decorates the cpv like every
             // other row (`_append_slot`/`_append_repository`, `:523-524`);
-            // a non-"/" ROOT's `to <root>` stays the pre-existing
-            // divergence portuale has on every row (only `--root-deps`
-            // build entries carry it, `root_suffix`).
+            // a non-`/`-rooted entry carries real's `to <root>` like every
+            // other row (`root_suffix`).
             if columns {
                 return;
             }
@@ -2848,8 +2849,12 @@ fn abort_outcome_to_json(outcome: &portage_repo::ResolveOutcome) -> String {
 /// live real: the ` to '<ROOT>'` arm never fires (eight unanimous
 /// `docs/evidence/2026-09-27-181-circular-text/real/` captures plus the
 /// six-case n206 container probe, all `ROOT=$FX`, show no suffix — and
-/// portuale's root is non-`/` in every test, so the literal gate would
-/// inject tmp paths; same rationale as `root_suffix`), and the
+/// backlog #242 Slice D's S0
+/// (`docs/evidence/2026-10-02-242-display-sites.md` §1d) settles why:
+/// every pinned cycle forms in the running root `/`, so real's own
+/// per-node gate stays shut on every pinned shape; portuale's root is
+/// non-`/` in every test, so the literal gate would inject tmp paths;
+/// same rationale as `root_suffix`'s pre-D form), and the
 /// `installed` / `uninstall` variants are unreachable here (cycle members
 /// are merge-bound by construction — `find_hard_cycles` only considers
 /// merge-bound entries; a member missing from `entries` falls back to
@@ -9751,6 +9756,21 @@ fn render_pkg_use_display(disp: &[(String, String)]) -> String {
     out
 }
 
+/// Backlog #242 Slice D: real `Package.__str__`'s own quoted destination
+/// (`Package.py:568-608`) for a scheduled-for-merge skipped-block node
+/// whose OWN root is not `/` — ` to '<ROOT>'`, inside the paren, or empty
+/// when that root is `/` (real's bare `/`-rooted missed line). `running`
+/// is the row's `missed_targets_running_root` /
+/// `consumer_targets_running_root`; the path comes from the display
+/// roots (target `root`, `running_root` when the row rides it).
+fn skipped_node_suffix(running: bool, root: &Path, running_root: Option<&Path>) -> String {
+    let own: Option<&Path> = if running { running_root } else { Some(root) };
+    match own {
+        Some(r) if r != Path::new("/") => format!(" to '{}'", r.display()),
+        _ => String::new(),
+    }
+}
+
 /// Backlog #90 (S2), extended by #230: the `^` marker line under a
 /// skip-conflict pin -- real `format_unmatched_atom`
 /// (`_emerge/resolver/output.py:892`) marks the leading operator chars
@@ -9834,6 +9854,21 @@ pub(crate) fn load_repos_and_config(
     root: &std::path::Path,
 ) -> Result<(Vec<portage_repo::RepoConfig>, portage_profile::Config), String> {
     let repos = portage_repo::find_repos(config_root).map_err(|e| e.to_string())?;
+    let config = resolve_config_for_root(config_root, &repos, root)?;
+    Ok((repos, config))
+}
+
+/// `load_repos_and_config`'s profile half over an already-loaded repo
+/// list: resolve the `Config` for `root` (`eroot`) reading
+/// `config_root`'s `/etc/portage` overrides, with the SHARED repo set
+/// (both roots resolve the same trees — Track X Slice B/C; real's
+/// running tree inherits `PORTAGE_REPOSITORIES` the same way,
+/// `create_trees`' `clean_env`).
+fn resolve_config_for_root(
+    config_root: &std::path::Path,
+    repos: &[portage_repo::RepoConfig],
+    root: &std::path::Path,
+) -> Result<portage_profile::Config, String> {
     let main_repo = repos
         .iter()
         .find(|r| r.is_main)
@@ -9882,7 +9917,25 @@ pub(crate) fn load_repos_and_config(
         root,
     )
     .map_err(|e| e.to_string())?;
-    Ok((repos, config))
+    Ok(config)
+}
+
+/// Backlog #242 Slice D: the running root's own profile (`Config`) for
+/// per-node USE paint (S0 map
+/// `docs/evidence/2026-10-02-242-display-sites.md` §2). `None` on a
+/// single-root run (the running root coincides with the target — target
+/// paint everywhere) and when the running config fails to load (a
+/// hermetic test tree carries no `/etc/portage` — the target paint is
+/// the documented fallback; real has no such tree at all).
+fn load_running_config(
+    target_root: &std::path::Path,
+    running_root: &std::path::Path,
+    repos: &[portage_repo::RepoConfig],
+) -> Option<portage_profile::Config> {
+    if running_root == target_root {
+        return None;
+    }
+    resolve_config_for_root(running_root, repos, running_root).ok()
 }
 
 /// Backlog #185: real's merge-list gating (real
@@ -13164,6 +13217,15 @@ pub fn run(args: &[String]) -> ExitCode {
     let root_deps_running_root =
         resolve_root_deps_running_root(root_deps, &root, portage_repo::running_root_from_env());
 
+    // Backlog #242 Slice D: the running root's own profile for per-node
+    // USE paint (see `load_running_config`). Loaded once per run, from
+    // the effective running root — never the target config.
+    let running_config = load_running_config(
+        &root,
+        &portage_repo::running_root_from_env(),
+        &repos,
+    );
+
     // Real `make.globals`'s own `DISTDIR="/var/cache/distfiles"` --
     // env-var-sourced at this CLI boundary, the same "env var / hardcoded
     // default" shortcut `fetch.rs`'s own `FetchOptions::distdir` already
@@ -13433,6 +13495,32 @@ pub fn run(args: &[String]) -> ExitCode {
     } else {
         result
     };
+    // Backlog #242 Slice D: repaint running-rooted rows from the running
+    // root's own profile (S0 §2) — merge entries and abort-partial rows
+    // alike (the circular re-display renders the partial list). Runs only
+    // on a genuine cross-root run with a loaded running profile;
+    // single-root runs (and hermetic trees without one) keep the
+    // resolve-time target paint.
+    let mut result = result;
+    if let (Some(running), Some(running_cfg)) = (
+        root_deps_running_root.as_deref(),
+        running_config.as_ref(),
+    ) {
+        portage_repo::repaint_running_root_entry_displays(
+            &mut result.entries,
+            &repos,
+            running,
+            running_cfg,
+        );
+        if let portage_repo::ResolveOutcome::Aborted { partial, .. } = &mut result.outcome {
+            portage_repo::repaint_running_root_entry_displays(
+                partial,
+                &repos,
+                running,
+                running_cfg,
+            );
+        }
+    }
     let entries = &result.entries;
     // Backlog #19 Slice 4: with the gate on, an aborted resolve renders
     // the outcome's partial list *instead of* the full entries — real
@@ -14553,23 +14641,21 @@ pub fn run(args: &[String]) -> ExitCode {
     // slot-collision notice's `render_pkg_use_display` string form):
     // the whole effective USE masked to the valid-IUSE domain, one
     // `VAR="…"` group per non-hidden `USE_EXPAND` var, `( )`-wrapped
-    // force/mask flags. Root suffixes follow the slot-collision notice
-    // exactly: merge-scheduled nodes and group headers stay bare (no
-    // `to '<root>'` / `for <root>` -- portuale resolves single-rooted,
-    // so every fixture-test `ROOT` would otherwise leak its own tmp
-    // path into the output, the same reason #206 cut the suffix on
-    // circular nodes); an installed consumer renders
-    // `(cpv, installed in '<root>')` with the real path, like the
+    // force/mask flags. Backlog #242 Slice D: destinations follow real's
+    // per-node rule (`skipped_node_suffix` — quoted `to '<root>'` iff
+    // the node's OWN root is not `/`), and each side paints from its own
+    // root's profile (the running `Config` when the row rides the
+    // running root, recomputed here from the shared repos; single-root
+    // runs keep the resolve-time target paint). An installed consumer
+    // renders `(cpv, installed in '<root>')` with its own root, like the
     // notice's installed instances. Real's own rendering pairs a bare
-    // missed line with `to`-suffixed parents because the missed package
-    // stays rooted at the host-config running-root (`/`) tree even for
-    // EAPI-8 `DEPEND` (fix-round-1 probe: a merge-operation missed line
-    // with no `to` suffix means its ROOT is `/` per real
-    // `Package.__str__`, and its `ABI_X86="(64)"` appears nowhere in
-    // the fixture tree) -- a second config portuale deliberately does
-    // not model (single-root determinism), so the missed line's
-    // fixture-tree display is the rendered shape and the bed keeps
-    // exactly that residual. The `^` marker line
+    // missed line with `to`-suffixed parents exactly when the missed
+    // package sits in the running-root (`/`) tree while the parents sit
+    // in the target (the bed blk0 shape with the running pin dropped);
+    // under `fixture_env`'s single root every node is target-rooted, so
+    // the missed line and the parents all carry the fixture `to` suffix
+    // with fixture-profile paint — deterministic, and the contract pin
+    // records it as such. The `^` marker line
     // mirrors real `format_unmatched_atom`'s operator + version spans
     // plus a mismatched `:slot[/sub-slot]` span (USE-token spans stay a
     // documented cut -- no grounded case carries USE-deps here). A
@@ -14592,15 +14678,38 @@ pub fn run(args: &[String]) -> ExitCode {
             println!();
             println!("{}/{}:{}", header.category, header.package, header.slot);
             println!();
+            // Backlog #242 Slice D: per-node destination (quoted, iff the
+            // missed node's own root is not `/`) and own-root USE paint
+            // (recomputed from the shared repos under the running profile
+            // when the miss rides the running root).
+            let missed_suffix = skipped_node_suffix(
+                header.missed_targets_running_root,
+                &root,
+                root_deps_running_root.as_deref(),
+            );
+            let missed_use = if header.missed_targets_running_root
+                && let Some(cfg) = running_config.as_ref()
+            {
+                portage_repo::skipped_update_use_display_for(
+                    &repos,
+                    cfg,
+                    &header.category,
+                    &header.package,
+                    &header.skipped_version,
+                )
+            } else {
+                header.skipped_use.clone()
+            };
             println!(
-                "  ({}/{}-{}:{}/{}::{}, ebuild scheduled for merge) {} conflicts with",
+                "  ({}/{}-{}:{}/{}::{}, ebuild scheduled for merge{}) {} conflicts with",
                 header.category,
                 header.package,
                 header.skipped_version,
                 header.slot,
                 header.skipped_sub_slot,
                 header.skipped_repo,
-                render_pkg_use_display(&header.skipped_use),
+                missed_suffix,
+                render_pkg_use_display(&missed_use),
             );
             for s in group.iter() {
                 if s.consumer_cpv.is_empty() {
@@ -14624,19 +14733,55 @@ pub fn run(args: &[String]) -> ExitCode {
                     continue;
                 }
                 if s.consumer_installed {
+                    // Backlog #242 Slice D: the installed root is the
+                    // consumer's own (`in '<root>'` with the running path
+                    // when the consumer rides it — always the target walk
+                    // from every producer today, so the flag is false and
+                    // this matches the old rendering exactly).
+                    let installed_root: &Path =
+                        if s.consumer_targets_running_root {
+                            root_deps_running_root.as_deref().unwrap_or(root.as_path())
+                        } else {
+                            root.as_path()
+                        };
                     println!(
                         "    {} required by ({}, installed in '{}') {}",
                         s.atom,
                         s.consumer_cpv,
-                        root.display(),
+                        installed_root.display(),
                         render_pkg_use_display(&s.consumer_use),
                     );
                 } else {
+                    // Backlog #242 Slice D: per-node destination + own-root
+                    // USE paint, like the missed line above. The consumer
+                    // cpv re-derives `(cat, pkg, ver)` for the recompute;
+                    // an unparsable cpv keeps the resolve-time paint.
+                    let consumer_suffix = skipped_node_suffix(
+                        s.consumer_targets_running_root,
+                        &root,
+                        root_deps_running_root.as_deref(),
+                    );
+                    let consumer_use =
+                        if s.consumer_targets_running_root
+                            && let Some(cfg) = running_config.as_ref()
+                            && let Some((cc, cp2, cv)) = s
+                                .consumer_cpv
+                                .split(':')
+                                .next()
+                                .and_then(portage_repo::split_cpv)
+                        {
+                            portage_repo::skipped_update_use_display_for(
+                                &repos, cfg, &cc, &cp2, &cv,
+                            )
+                        } else {
+                            s.consumer_use.clone()
+                        };
                     println!(
-                        "    {} required by ({}, ebuild scheduled for merge) {}",
+                        "    {} required by ({}, ebuild scheduled for merge{}) {}",
                         s.atom,
                         s.consumer_cpv,
-                        render_pkg_use_display(&s.consumer_use),
+                        consumer_suffix,
+                        render_pkg_use_display(&consumer_use),
                     );
                 }
                 println!(
@@ -19498,6 +19643,57 @@ mod tests {
             resolve_root_deps_running_root(true, Path::new("/"), stage()),
             Some(stage())
         );
+    }
+
+    #[test]
+    fn root_suffix_annotates_each_entry_with_its_own_root() {
+        // Backlog #242 Slice D: real `output.py:841-862` appends unquoted
+        // `to <EROOT>` on every merge row whose OWN root is not `/` (S0 map
+        // `docs/evidence/2026-10-02-242-display-sites.md` §1a) — the #206
+        // cut reopened per display site.
+        use std::path::Path;
+        let target_entry = || {
+            entry_with_use(
+                PretendOutcome::New {
+                    version: "1.0".into(),
+                },
+                "",
+                "",
+            )
+        };
+        let running_entry = || {
+            let mut e = entry_with_use(
+                PretendOutcome::New {
+                    version: "1.0".into(),
+                },
+                "",
+                "",
+            );
+            e.targets_running_root = true;
+            e
+        };
+        let stage = Path::new("/mnt/stage3");
+        let slash = Path::new("/");
+        let running = Path::new("/tmp/running");
+
+        // Single-root `/`: everything bare (L0).
+        assert_eq!(root_suffix(&target_entry(), slash, None), "");
+        // Staged target: target rows carry the target root (reopened cut).
+        assert_eq!(root_suffix(&target_entry(), stage, None), "to /mnt/stage3");
+        // Dual roots: each side annotates its own root...
+        assert_eq!(
+            root_suffix(&target_entry(), stage, Some(running)),
+            "to /mnt/stage3"
+        );
+        assert_eq!(
+            root_suffix(&running_entry(), stage, Some(running)),
+            "to /tmp/running"
+        );
+        // ...and a `/`-rooted row stays bare even under a staged target
+        // (real's blk0x/cyc0y rows, S0 §1a).
+        assert_eq!(root_suffix(&running_entry(), stage, Some(slash)), "");
+        // Defensive: a running entry with no running root in hand stays bare.
+        assert_eq!(root_suffix(&running_entry(), stage, None), "");
     }
 
     #[test]
