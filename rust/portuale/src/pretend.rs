@@ -1668,9 +1668,11 @@ fn print_entry_line(
             tail.push_str(&color.c("blue", &oldbest));
         }
         if !root_annotation.is_empty() {
-            if !oldbest.is_empty() {
-                tail.push(' ');
-            }
+            // Real pastes `pkg_str + " " + oldbest + suffix`: the space
+            // after the version is unconditional, so the suffix carries
+            // its own leading space even when oldbest is empty (else the
+            // version glues to `to`, e.g. `diamond-1.0to <root>`).
+            tail.push(' ');
             tail.push_str(&root_col(&root_annotation));
         }
         // #154: the nomerge arm carries the same USE suffix as a merge
