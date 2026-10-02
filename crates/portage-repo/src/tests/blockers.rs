@@ -1,5 +1,75 @@
 use super::*;
 
+/// An installed holder's recorded `bdprov:0` is a seed atom like a world atom;
+/// `:=` / bare edges hold nothing.
+#[test]
+fn set_seed_holds_the_instance_an_installed_holders_slot_edge_selects() {
+    let merged = GraphEntry {
+        outcome: PretendOutcome::Upgrade {
+            from: "2".into(),
+            to: "3".into(),
+        },
+        slot: Some("1".into()),
+        sub_slot: Some("2".into()),
+        ..graph_entry("app-misc", "bdprov", "3")
+    };
+    let held = |atoms: &[&str]| {
+        let atoms: Vec<String> = atoms.iter().map(|a| (*a).to_string()).collect();
+        set_seed_holds_instance(SetSeedHoldsInstanceArgs {
+            set_seed_atoms: &atoms,
+            entries: std::slice::from_ref(&merged),
+            category: "app-misc",
+            package: "bdprov",
+            version: "1",
+            slot: "0",
+            sub_slot: "1",
+        })
+    };
+    assert!(held(&["app-misc/bdprov:0"]));
+    assert!(
+        !held(&["app-misc/bdprov:="]),
+        "a bare `:=` edge rebinds to the merge"
+    );
+    assert!(!held(&["app-misc/bdprov"]));
+}
+
+/// A set atom selecting the old instance holds it; a bare atom the merged new
+/// instance also matches does not.
+#[test]
+fn set_seed_holds_the_instance_only_a_slot_atom_selects() {
+    let merged = GraphEntry {
+        outcome: PretendOutcome::Upgrade {
+            from: "2".into(),
+            to: "3".into(),
+        },
+        slot: Some("1".into()),
+        sub_slot: Some("2".into()),
+        ..graph_entry("app-misc", "bdprov", "3")
+    };
+    let held = |atoms: &[&str]| {
+        let atoms: Vec<String> = atoms.iter().map(|a| (*a).to_string()).collect();
+        set_seed_holds_instance(SetSeedHoldsInstanceArgs {
+            set_seed_atoms: &atoms,
+            entries: std::slice::from_ref(&merged),
+            category: "app-misc",
+            package: "bdprov",
+            version: "1",
+            slot: "0",
+            sub_slot: "1",
+        })
+    };
+    assert!(held(&["app-misc/bdprov:0"]), "a slot atom selects slot 0");
+    assert!(
+        !held(&["app-misc/bdprov"]),
+        "a bare atom selects the new slot"
+    );
+    assert!(!held(&["app-misc/bdprov:1"]), "another slot's atom");
+    assert!(
+        !held(&["@world", "!app-misc/bdprov:0"]),
+        "sets and blockers"
+    );
+}
+
 #[test]
 fn resolve_blockers_matches_a_graph_resolved_package_with_no_installed_candidates() {
     let entries = vec![
