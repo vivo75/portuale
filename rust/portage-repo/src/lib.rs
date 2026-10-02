@@ -20448,6 +20448,7 @@ pub struct OrphanBlocker {
 /// blocker owner itself. `DepEdge::atom` already carries the with-bdeps
 /// key choice the entry was built with, so a build-time-only edge is only
 /// present when build-time deps were walked.
+#[allow(clippy::too_many_arguments)]
 fn graph_has_parent(
     category: &str,
     package: &str,
@@ -20456,6 +20457,13 @@ fn graph_has_parent(
     sub_slot: &str,
     exclude: &(String, String),
     entries: &[GraphEntry],
+    // #284: cp -> merge-bound slots this run. A merging parent rebinds a
+    // bare `:=` through its own walk to the resolved (merge-bound) slot,
+    // so such an edge no longer parents an installed instance in another
+    // slot -- the post-rebind reality real's per-instance digraph test
+    // (`depgraph.py:9218-9223`) sees. A pinned `:slot` (or built
+    // `:slot/sub=`) atom never rebinds and still counts.
+    merge_slots: &HashMap<(String, String), HashSet<String>>,
 ) -> bool {
     let candidate = format!("{category}/{package}-{version}:{slot}/{sub_slot}");
     entries.iter().any(|e| {
@@ -20466,10 +20474,25 @@ fn graph_has_parent(
             return false;
         }
         e.deps.iter().any(|d| {
-            d.category == category
-                && d.package == package
-                && portage_dep::match_from_list(&d.atom, &[candidate.as_str()])
-                    .is_some_and(|m| !m.is_empty())
+            if d.category != category || d.package != package {
+                return false;
+            }
+            // #284 rebind: this parent merges, its atom is a bare `:=`,
+            // and the dep's cp merges in some other slot than the tested
+            // instance -- the edge was re-pointed at the new slot, so it
+            // is not a parent of this instance any more.
+            if merge_bound_version(&e.outcome).is_some()
+                && let Some(atom) = portage_dep::parse_atom(&d.atom)
+                && atom.slot_operator == Some(portage_dep::SlotOperator::Equals)
+                && atom.slot.is_none()
+                && merge_slots
+                    .get(&(d.category.clone(), d.package.clone()))
+                    .is_some_and(|slots| !slots.is_empty() && slots.iter().all(|s| s != slot))
+            {
+                return false;
+            }
+            portage_dep::match_from_list(&d.atom, &[candidate.as_str()])
+                .is_some_and(|m| !m.is_empty())
         })
     })
 }
@@ -20919,6 +20942,25 @@ fn resolve_blockers(
     buildpkgonly: bool,
 ) -> Vec<FiledBlocker> {
     let mut conflicts = Vec::new();
+    // #284: cp -> slots with a merge-bound entry this run. Real's
+    // per-instance test (`depgraph.py:9218-9223`) holds an uninstall
+    // candidate only while it is a digraph node with parents; a cp the
+    // run re-resolves into another slot leaves its old instance
+    // parentless (the request parents the merge, and merging parents
+    // rebind their live `:=` to the new slot -- see `graph_has_parent`).
+    let merge_slots: HashMap<(String, String), HashSet<String>> = {
+        let mut m: HashMap<(String, String), HashSet<String>> = HashMap::new();
+        for e in entries {
+            if merge_bound_version(&e.outcome).is_some()
+                && let Some(slot) = e.slot.clone()
+            {
+                m.entry((e.category.clone(), e.package.clone()))
+                    .or_default()
+                    .insert(slot);
+            }
+        }
+        m
+    };
     for pb in pending {
         // #143 S1: under `--buildpkgonly` a blocker that is not
         // strong-buildtime never pairs an uninstall (real's
@@ -21164,6 +21206,23 @@ fn resolve_blockers(
             let unsolvable = if owner_merging {
                 // A merge-bound match with a merging parent is unresolved
                 // outright (cells b, e).
+                //
+                // #284: real's per-instance test (`depgraph.py:9218-9223`)
+                // holds the old instance only while some graph node that
+                // remains (after the rebind) still has it as a parent.
+                // The cp-keyed retry closure over-approximates that: a
+                // directly-requested cp is always a closure member, but
+                // the request parents the merge, not the old instance.
+                // So the closure veto lifts when the run re-resolves this
+                // cp into another slot -- the old instance is parentless
+                // then (case 1: nobody pulls `bdprov-1`; case 2: `bdcons`
+                // rebinds its live `:=` to the new slot, which
+                // `graph_has_parent` models by skipping the rebound edge).
+                // A cp that does not move keeps the veto (the request or
+                // set parents the staying instance, e.g. L0 systemd).
+                let cp_moves_slot = merge_slots
+                    .get(&target_key)
+                    .is_some_and(|slots| slots.iter().any(|s| s != slot));
                 merge_bound_match
                     || (installed_match
                         && (graph_has_parent(
@@ -21174,7 +21233,8 @@ fn resolve_blockers(
                             sub_slot,
                             &pb.owner_key,
                             entries,
-                        ) || blocker_retry_closure.contains(&target_key)))
+                            &merge_slots,
+                        ) || (blocker_retry_closure.contains(&target_key) && !cp_moves_slot)))
             } else {
                 // A nomerge parent is uninstall-ordered; it is unresolved
                 // when the *owner* is a digraph node with parents
@@ -21197,6 +21257,7 @@ fn resolve_blockers(
                         &sub_slot,
                         &pb.owner_key,
                         entries,
+                        &merge_slots,
                     )
                 } else {
                     owner_entry.is_some_and(|e| {
@@ -21208,6 +21269,7 @@ fn resolve_blockers(
                             e.sub_slot.as_deref().unwrap_or_default(),
                             &pb.owner_key,
                             entries,
+                            &merge_slots,
                         )
                     })
                 };
@@ -65606,6 +65668,130 @@ mod tests {
         );
         assert!(conflicts[0].conflict.unsolvable);
         assert_eq!(conflicts[0].conflict.satisfied_by, None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_blockers_uninstalls_a_settled_block_when_the_cp_moves_slot() {
+        // #284 (`app-misc/bdprov` shape): the provider upgrades 2 -> 3
+        // into a new slot while its own `!blocked:0` soft-blocks the old
+        // installed instance. Real uninstalls the old slot (`[uninstall]`
+        // + `[blocks b]`, rc 0): the request parents the merge, not the
+        // old instance, so the cp-keyed retry closure must not hold it
+        // once the run re-resolves the cp elsewhere.
+        let dir = slotundo_temp_dir("blocker-284-moves-slot");
+        slotundo_vdb(&dir, "blocked", "1", "0/1", "", "");
+        slotundo_vdb(&dir, "blocked", "2", "1/1", "", "");
+        slotundo_vdb(&dir, "bcons", "1", "0", "dev-libs/blocked:0/1=", "");
+        let mut upgrade = graph_entry("dev-libs", "blocked", "3");
+        upgrade.outcome = PretendOutcome::Upgrade {
+            from: "2".into(),
+            to: "3".into(),
+        };
+        upgrade.slot = Some("1".to_string());
+        upgrade.sub_slot = Some("2".to_string());
+        let pending = || PendingBlocker {
+            atom_str: "!dev-libs/blocked:0".to_string(),
+            strong: false,
+            buildtime: false,
+            target_category: "dev-libs".to_string(),
+            target_package: "blocked".to_string(),
+            owner_key: ("dev-libs".to_string(), "blocked".to_string()),
+            owner_version: "3".to_string(),
+            owner_merging: true,
+            owner_installed: false,
+        };
+        // The requested cp is always a retry-closure member; without the
+        // #284 per-instance rule that veto alone keeps the hard block.
+        let closure: HashSet<(String, String)> =
+            [("dev-libs".to_string(), "blocked".to_string())].into();
+        let conflicts = resolve_blockers(&dir, &[pending()], &[upgrade.clone()], &closure, false);
+        assert_eq!(conflicts.len(), 1);
+        assert!(
+            !conflicts[0].conflict.unsolvable,
+            "a parentless old slot uninstalls even though its cp was requested"
+        );
+        assert_eq!(
+            conflicts[0].conflict.satisfied_by,
+            Some(BlockerSatisfiedBy::Uninstall {
+                cpv: "dev-libs/blocked-1".to_string(),
+                anchor: ("dev-libs".to_string(), "blocked".to_string()),
+            })
+        );
+
+        // Case 2: the bound consumer rebuilds (`:=`), so its live dep is
+        // rebound to the new slot through its own walk -- its recorded
+        // edge no longer parents the old instance either.
+        let edge = DepEdge {
+            atom: "dev-libs/blocked:=".to_string(),
+            evaluated: "dev-libs/blocked:=".to_string(),
+            category: "dev-libs".to_string(),
+            package: "blocked".to_string(),
+            priority: DepPriority {
+                runtime: true,
+                runtime_slot_op: true,
+                ..DepPriority::default()
+            },
+            disjunctive: false,
+            alt: None,
+            key: 0,
+        };
+        let mut rebuild = graph_entry("dev-libs", "bcons", "1");
+        rebuild.outcome = PretendOutcome::Reinstall {
+            version: "1".into(),
+            changed_flags: Vec::new(),
+            deps_changed: false,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: false,
+            slot_operator_rebuild: true,
+        };
+        rebuild.slot = Some("0".to_string());
+        rebuild.sub_slot = Some("0".to_string());
+        rebuild.deps = vec![edge];
+        let conflicts = resolve_blockers(
+            &dir,
+            &[pending()],
+            &[upgrade.clone(), rebuild],
+            &closure,
+            false,
+        );
+        assert_eq!(conflicts.len(), 1);
+        assert!(
+            !conflicts[0].conflict.unsolvable,
+            "a rebound `:=` consumer does not hold the old slot"
+        );
+
+        // Control: a consumer pinned to the old slot (`:0`, no rebind)
+        // still holds it -- the edge survives the #284 skip, so the row
+        // stays unresolved even with the closure veto lifted (the cp
+        // moves, but a remaining graph node still pulls the instance).
+        let pinned = DepEdge {
+            atom: "dev-libs/blocked:0".to_string(),
+            evaluated: "dev-libs/blocked:0".to_string(),
+            category: "dev-libs".to_string(),
+            package: "blocked".to_string(),
+            priority: DepPriority {
+                runtime: true,
+                ..DepPriority::default()
+            },
+            disjunctive: false,
+            alt: None,
+            key: 0,
+        };
+        let mut staying = graph_entry("dev-libs", "bcons", "1");
+        staying.outcome = PretendOutcome::AlreadyInstalled {
+            version: "1".into(),
+        };
+        staying.slot = None;
+        staying.sub_slot = None;
+        staying.deps = vec![pinned];
+        let conflicts = resolve_blockers(&dir, &[pending()], &[upgrade, staying], &closure, false);
+        assert_eq!(conflicts.len(), 1);
+        assert!(
+            conflicts[0].conflict.unsolvable,
+            "a slot-pinned consumer still holds the old instance"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
