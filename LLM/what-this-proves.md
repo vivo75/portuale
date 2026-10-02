@@ -19213,6 +19213,23 @@ PORTAGE_CONFIGROOT=$FX ROOT=$FX PORTAGE_RUNNING_ROOT=$FX DISTDIR=$FX/distfiles \
 **#286 — the unsatisfied probe's rebuild under `@world` (batch-2026-10-02 Track R / R2).** Completes #276: installed `app-misc/u276pa-1` + `app-misc/u276pb-1` (both SLOT `0`, vdb `RDEPEND=">=app-misc/u276prov-1:0/1="`, both in the world file) against a tree with only `u276prov-2` (SLOT `2/2`); `u276pa-1`'s ebuild wants `app-misc/u276prov:=`, `u276pb-1`'s wants `<app-misc/u276prov-2:=` (no replacement exists for the abandoned slot). Probed on real 3.0.82.2, host staged-fixture probe 2026-10-02 (PORTAGE_CONFIGROOT at the fixture tree, ad-hoc ROOT, cwd at ROOT; argv `--ignore-default-opts --pretend --update --deep @world`): real heals with rc 0 — `[ebuild N] u276prov-2` + `[ebuild rR] u276pa-1` (`backtrack: 5/20`), the skipped-update block for `app-misc/u276pb:0` (`selected:` installed / `skipped:` ebuild-scheduled, `see unsatisfied dependency below`), the masked report on the *live* atom `<app-misc/u276prov-2:=` with the ebuild-parent chain, the world-file notice, and the `masked or don't exist: app-misc/u276pb` list. With explicit arguments (`u276pa u276pb`) real instead aborts rc 1 on the live atom with the 2-line `[installed]` + `[argument]` chain. Portuale aborted both modes on the *built* `>=` atom with an aggregated 4-line chain. Two real rules ported (`lib/_emerge/depgraph.py`): the installed parent's depstring carries the live atom first (dynamic deps prepend it), so the missing-dependency backtrack fires on the live atom; and an `@world`/`@selected` set member that selects no package drops into `_missing_args` (`:5560`, `:5603`) while an explicit argument fails the run. In portuale: `run_pass` records an unresolvable set-member miss into `PassState::missing_args` and continues, a live `:=`-family miss supersedes the recorded built `:S/SS=` one for the same cp at all four disclosure sites, `masked_dep_chain` starts from the one failing edge (2-line chain), and the `missing_args` tail renders real `display_problems()`'s order (skipped-update blocks, world-file notice only for world members, requested-order list). Pins (pmtest): `test_276_installed_parent_without_replacement_is_masked_and_sibling_heals` and `test_276_explicit_args_abort_on_the_stuck_parents_live_atom` (both green, markers off); one reviewed corpus bless on the way (`test_oracle_slotop_missed_update#0` rc 1→0 — a member that selects no package now drops instead of aborting). Residue: none new (a retry pass that drops a member yet still holds a slot conflict stays a failed iteration, keeping `test_oracle_backtrack_masks_are_discarded_with_their_reason`).
 
 ```sh
+# from the portuale root (repos read read-only from fixtures; ROOT is ad-hoc); expect rc=0, u276prov-2 N + u276pa-1 rR, the skipped-update block and the world-file notice
+F=$PWD/../pmtest/fixtures; R=$(mktemp -d)/b1root
+mkdir -p $R/var/db/pkg/app-misc/u276pa-1 $R/var/db/pkg/app-misc/u276pb-1 $R/var/lib/portage
+printf 'app-misc/u276pa\napp-misc/u276pb\n' > $R/var/lib/portage/world
+w() { d=$R/var/db/pkg/app-misc/$1; shift; for kv in "$@"; do k=${kv%%:*}; v=${kv#*:}; printf '%s\n' "$v" > $d/$k; done; }
+w u276pa-1 CATEGORY:app-misc SLOT:0 EAPI:8 repository:testrepo "RDEPEND:>=app-misc/u276prov-1:0/1="
+w u276pb-1 CATEGORY:app-misc SLOT:0 EAPI:8 repository:testrepo "RDEPEND:>=app-misc/u276prov-1:0/1="
+cd $F && PORTAGE_CONFIGROOT=$F ROOT=$R PORTAGE_RUNNING_ROOT=$R DISTDIR=$F/distfiles \
+  $OLDPWD/rust/target/release/portuale emerge --ignore-default-opts --pretend --update --deep @world; echo "rc=$?"
+# [ebuild  N     ] app-misc/u276prov-2 to $R
+# [ebuild  rR    ] app-misc/u276pa-1 to $R
+# !!! The following update has been skipped due to unsatisfied dependencies: / app-misc/u276pb:0 / !!! Problems have been detected with your world file / !!! masked or don't exist: / app-misc/u276pb
+```
+
+**#285 — an exact-version request keeps the named version under `--update` (batch-2026-10-02 Track R / R3).** `=app-misc/mmprov-2` (the installed version) + `mmcons` under `--update --deep`: real 3.0.82.2 (host staged-fixture probe 2026-10-02, same recipe as #268) merges `[ebuild rR] mmcons-1` alone (`backtrack: 1/3`), while portuale additionally upgraded the provider (`[ebuild U] mmprov-3 [2]`). Real's rule is reuse-inside-selection: `_wrapped_select_pkg_highest_available_imp`'s `for find_existing_node in True, False` loop (`lib/_emerge/depgraph.py:7854`, `:8180-8215`, `:8370-8371`) looks up the current db's first match for the dep's `slot_atom` (main-slot only — `Package.py:139` — so `mmprov-3` at `1/2` and the arg-pulled installed `mmprov-2` at `1/1` share `app-misc/mmprov:1`) and reuses the in-graph node when the dep atom matches it. Portuale's dep-candidate selection never consulted the graph, and the walk pops the consumer before the pinning `=` argument. Ported as `arg_pinned_installed_reuse`: every same-cp top-level atom is speculatively re-resolved exactly as the walk would, `AlreadyInstalled` verdicts are kept as `(version, main slot)` pins, and a pop-site hook overrides a `New`/`Upgrade`/`Downgrade` verdict with the kept instance when the dep atom matches the pinned `cat/pkg-ver:slot/sub` string (USE-deps checked against the pinned instance's recorded vdb USE) — never for `Reinstall`, never for `||`-chosen atoms, complete-locked/NVC paths untouched. The must-not-move shapes stayed byte-identical (`mmprov:1/2`, `=mmprov-3`, `=mmprov-2` alone, `>=mmprov-2`, each ± consumer). Pins: Rust `exact_version_update_keeps_arg_pinned_provider` + pmtest `test_oracle_285_exact_version_update_keeps_pinned_provider` (covers `=`/`~` → consumer-only; `:1/2`, `=mmprov-3`, `>=` → upgrade + rebuild). Residue filed as #288 (`=mmprov-1` + consumer merges nothing in real — the probe's ARG-parent refusal, scan-side, not selection).
+
+```sh
 # from the portuale root; expect [rR] mmcons-1 alone, rc=0
 FX=$(mktemp -d)/fx; cp -a fixtures/. $FX
 mkdir -p $FX/var/db/pkg/app-misc/mmprov-1 $FX/var/db/pkg/app-misc/mmprov-2 $FX/var/db/pkg/app-misc/mmcons-1
@@ -19222,4 +19239,33 @@ w mmprov-2 CATEGORY:app-misc SLOT:1/1 EAPI:8 repository:testrepo
 w mmcons-1 CATEGORY:app-misc SLOT:0 EAPI:8 repository:testrepo "RDEPEND:app-misc/mmprov:0/1="
 cd $FX && PORTAGE_CONFIGROOT=$FX ROOT=$FX PORTAGE_RUNNING_ROOT=$FX DISTDIR=$FX/distfiles \
   $OLDPWD/rust/target/release/portuale emerge --ignore-default-opts --pretend --color=n --backtrack=3 --update --deep '=app-misc/mmprov-2' app-misc/mmcons; echo "rc=$?"
+# [ebuild  rR    ] app-misc/mmcons-1 to $FX
+```
+
+**#284 — a settled blocker uninstalls instead of hard-blocking (batch-2026-10-02 Track R / R4).** On the #268 `bdprov` shape (highest `bdprov-3` soft-blocks installed slot-0 `bdprov-1`, consumer `bdcons-1` bound to slot 0) real uninstalls the old slot where portuale hard-blocked — and the provider-only cell (`bdprov` alone, no consumer at all) already shows it: real `[ebuild U] bdprov-3 [2]`, `[uninstall] bdprov-1`, `[blocks b] bdprov:0`, `backtrack: 0/3`, rc 0; portuale `[ebuild U] bdprov-3 [2]`, `[blocks B]`, rc 1 (host staged-fixture probe 2026-10-02, same recipe as #268). Real's rule is the per-instance digraph test (`lib/_emerge/depgraph.py:9218-9223`): no uninstall while the digraph contains the installed instance *with* parents — the rebind leaves `bdprov-1` parentless, so it uninstalls. Portuale's `resolve_blockers` unsolvable test (recorded-puller `graph_has_parent` plus the requested-cp retry-closure veto) held the removal from both sides: the raw `:=` textually matched the old instance, and the seed-derived veto never lifted. Ported locally: `graph_has_parent` skips a rebound edge (merge-bound parent + bare `:=` atom + dep cp merging only in other slots; a pinned `:slot` / built `:slot/sub=` never skips) and the veto lifts when the run re-resolves the target cp into another slot. Pins: `test_oracle_slotop_pin_gate_blocker_discard_probes` flipped strict-xfail → green (both cells byte-equal to real's rows, no `causing rebuilds`); the 105-pin blocker neighbourhood unmoved. Known concern filed as #289 (a genuinely set-held old instance of an *unwalked* installed package still uninstalls — needs seed atoms threaded into `resolve_blockers`).
+
+```sh
+# from the portuale root (repos read read-only from fixtures; ROOT is ad-hoc); expect U + uninstall + blocks b, rc=0
+F=$PWD/../pmtest/fixtures; R=$(mktemp -d)/b1root
+mkdir -p $R/var/db/pkg/app-misc/bdprov-1 $R/var/db/pkg/app-misc/bdprov-2 $R/var/lib/portage; touch $R/var/lib/portage/world
+w() { d=$R/var/db/pkg/app-misc/$1; shift; for kv in "$@"; do k=${kv%%:*}; v=${kv#*:}; printf '%s\n' "$v" > $d/$k; done; }
+w bdprov-1 CATEGORY:app-misc SLOT:0/1 EAPI:8 repository:testrepo
+w bdprov-2 CATEGORY:app-misc SLOT:1/1 EAPI:8 repository:testrepo
+cd $F && PORTAGE_CONFIGROOT=$F ROOT=$R PORTAGE_RUNNING_ROOT=$R DISTDIR=$F/distfiles \
+  $OLDPWD/rust/target/release/portuale emerge --ignore-default-opts --color=n --pretend --update --deep --backtrack=3 app-misc/bdprov; echo "rc=$?"
+# [ebuild     U  ] app-misc/bdprov-3 [2] to $R
+# [uninstall     ] app-misc/bdprov-1 to $R
+# [blocks b      ] app-misc/bdprov:0 ("app-misc/bdprov:0" is soft blocking app-misc/bdprov-3)
+```
+
+**#283 — L3 smoke wall-time (batch-2026-10-02 Track B / B1, pmtest-only).** The two sides of one smoke cell now run concurrently at `-j12` each on disjoint cpusets (`0-5,16-21` / `8-13,24-29`, taskset fallback because rootless podman lacks the cpuset controller), `snapshot.sh` hashing is parallel (byte-identical), and the `compare/diff.py` quadratic hardlink-debug scan is hoisted out of the per-set loop (5m55s → 3s, byte-identical over five invocation variants plus the saved runs' `candidate.txt`). Measured on this host: concurrent smoke `l3-20261002T163608Z` 7m40s vs serial `l3-20261002T164734Z` 11m11s (before the batch: ~18 min), both rc 0 with 0 unexplained and identical finding sets — the ~5 min target was NOT reached, honestly. Owner decision: no push.
+
+```sh
+# from ../pmtest; expect rc 0 and UNEXPLAINED: 0 (~8 min concurrent at -j12 on this host)
+L3_JOBS=12 differential-test-bed/run/l3-source-parity.sh
+```
+
+**#270 — at `--backtrack=0` the provider update is all-or-nothing (branch `backlog/270-bt0-atomic`, S0-S3).** Installed `pprov-1` (`0/1`) + `pcons-1` bound `>=pprov-1:0/1=`; the request names both plus the two `slotconflict*` consumers. Real 3.0.82.2 merges only `[slotconflicttarget-1.0, oldconsumer-1.0, newconsumer-1.0]` and prints the skipped-update WARNING with **two** blocks (`slotconflicttarget:0`, then `app-misc/pprov:0` whose parent `pcons-1` is `installed in '<root>'` and whose marker line covers only `:0/1=`); portuale used to upgrade `pprov-2` alone and print one block. Fixed by gating the rebuild-trigger exemption on a backtrack budget, re-filing lone conflict records from the live pullers at bt0, applying the version of a bare `:=` atom in the direct solve, and three display rules (installed parent, version-aware markers, first-seen block order). At `--backtrack=3`/`20` the cell is unchanged (the exemption still holds there, #253). Evidence: `docs/evidence/2026-10-02-270/` (real vs portuale captures, probe scripts); pins `test_oracle_270_*` in pmtest.
+
+```sh
 # == sqlite
