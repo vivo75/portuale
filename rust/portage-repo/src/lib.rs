@@ -11524,6 +11524,7 @@ fn chain_arg_lines(atoms: &[String], cp: &(String, String)) -> Vec<(String, Stri
 /// The affecting-USE suffix is real's own ([`chain_node_usedep_suffix`]
 /// documents its approximations); a node whose metadata can't be read
 /// keeps today's bare row.
+#[allow(clippy::too_many_arguments)]
 fn masked_dep_chain(
     repos: &[RepoConfig],
     config: &portage_profile::Config,
@@ -11532,6 +11533,16 @@ fn masked_dep_chain(
     package: &str,
     atoms: &[String],
     root: &Path,
+    // Backlog #286: the disclosed miss atom. Direct parents are
+    // restricted to those pulling this atom (real `_get_dep_chain`
+    // starts from the one failing parent edge, not every puller of
+    // the package): a built `:S/SS=` atom and a live `:=` atom on one
+    // package have different pullers, and the aggregated chain would
+    // blame both. A parent qualifies on an evaluated-or-raw edge-atom
+    // match; when no direct parent matches (conditional-evaluated
+    // edges, missing dep lists), the restriction is vacuous and every
+    // direct parent stays, exactly as before.
+    atom: &str,
 ) -> Vec<(String, String)> {
     /// This `cp`'s chain node: the merge-bound entry first (it
     /// supersedes any same-cp `AlreadyInstalled` shadow, like everywhere
@@ -11567,7 +11578,32 @@ fn masked_dep_chain(
     });
     let mut chain: Vec<(String, String)> = Vec::new();
     let mut visited: HashSet<(String, String)> = HashSet::new();
-    let direct: Vec<(String, String)> = start.map(|e| e.required_by.clone()).unwrap_or_default();
+    let direct_all: Vec<(String, String)> =
+        start.map(|e| e.required_by.clone()).unwrap_or_default();
+    // Backlog #286: keep only the direct parents that pull the
+    // disclosed atom (see `atom` above); vacuous when none match.
+    let direct: Vec<(String, String)> = {
+        let pulling: Vec<(String, String)> = direct_all
+            .iter()
+            .filter(|(c, p)| {
+                entries.iter().any(|e| {
+                    e.category == *c
+                        && e.package == *p
+                        && e.deps.iter().any(|d| {
+                            d.category == category
+                                && d.package == package
+                                && (d.atom == atom || d.evaluated == atom)
+                        })
+                })
+            })
+            .cloned()
+            .collect();
+        if pulling.is_empty() {
+            direct_all
+        } else {
+            pulling
+        }
+    };
     for parent in direct {
         if !visited.insert(parent.clone()) {
             continue;
@@ -15505,6 +15541,40 @@ fn is_built_slot_op(atom: &portage_dep::Atom) -> bool {
     atom.slot_operator == Some(portage_dep::SlotOperator::Equals)
         && atom.slot.is_some()
         && atom.sub_slot.is_some()
+}
+
+/// Backlog #286: whether a newly recorded miss atom supersedes the one
+/// already disclosed for the same `cat/pkg`. A live slot-operator atom
+/// (`:=` family without a built `:S/SS=` binding) wins over a recorded
+/// built one: real's fail-fast walk evaluates an installed parent's live
+/// dep first (dynamic deps prepend it to the depstring --
+/// `FakeVartree._apply_dynamic_deps`, confirmed on real's own
+/// `--debug` for the #276 shape: the installed parent's depstring is
+/// `<u276prov-2:= >=u276prov-1:0/1=` and the missing-dependency
+/// backtrack fires on the live atom, never the built one), so the built
+/// edge never reports when the live edge already failed. Portuale's BFS
+/// evaluates both and records first-wins, which picks the built atom.
+/// Scoped to exactly that pair (built recorded, live candidate) -- every
+/// other combination keeps first-wins, matching real's first-failed-edge
+/// report wherever only one shape exists.
+fn live_miss_atom_supersedes(recorded: &str, candidate: &str) -> bool {
+    let recorded_built = portage_dep::parse_atom(recorded).is_some_and(|a| is_built_slot_op(&a));
+    if !recorded_built {
+        return false;
+    }
+    if let Some(new) = portage_dep::parse_atom(candidate) {
+        return new.slot_operator.is_some() && !is_built_slot_op(&new);
+    }
+    // The bare slot-operator suffix form (`<cat/pkg-2:=`: an operator
+    // with no slot) never parses in `portage_dep` (its slot part hangs
+    // off a `:`), but real `Atom` accepts it -- and it is always live
+    // (no `:S/SS` binding to be built). Strip a trailing `[use]` group
+    // first: use-deps never affect the operator shape.
+    let bare = match candidate.rfind('[') {
+        Some(i) if candidate.ends_with(']') => &candidate[..i],
+        _ => candidate,
+    };
+    bare.ends_with(":=")
 }
 
 fn reverse_dep_constraint_atom(atom_str: &str, atom: &portage_dep::Atom) -> String {
@@ -23404,6 +23474,16 @@ pub(crate) fn backtrack_missed_updates(
     config: &portage_profile::Config,
     entries: &[GraphEntry],
     params: &BacktrackParams,
+    // Backlog #286: the settled pass's dropped set-member atoms. A
+    // dropped member has no entry, so the chosen-instance scan below
+    // would find nothing selected; real's tracker still holds its
+    // installed instance (complete-walk nomerge node), hence the vdb
+    // fallback in [`missing_dep_full_row`] consults these. Empty at the
+    // prune-rebuilds probe site (that check runs mid-search on the live
+    // graph, where the row must not materialize -- real prunes from the
+    // live graph too, but portuale's blunt clear would drop the healing
+    // sibling's forced reinstall for good).
+    missing_args: &[String],
 ) -> (
     Vec<SkippedUpdate>,
     Vec<SkippedMissingDep>,
@@ -23443,10 +23523,22 @@ pub(crate) fn backtrack_missed_updates(
                 Some((c, p, v)) if c == *cat && p == *pkg => (v, order_of(&cp, &entry.neg)),
                 _ => continue,
             };
-            // Real's installed exclusion (`:1539-1542`).
-            if installed_candidates(root, cat, pkg)
-                .iter()
-                .any(|(v, _, _)| v == &ver)
+            // Real's installed exclusion (`:1539-1542`): a mask whose
+            // package object is installed reports nothing. Portuale's
+            // string key conflates the installed and merge-bound
+            // instances, so this stays for `SlotConflict` (the masked
+            // node may genuinely be the installed one there, and the
+            // mg2top pins rely on the silence). It does NOT apply to a
+            // `MissingDependency` mask: real keys that mask by package
+            // object, so a mask on the merge-bound instance reports even
+            // when the same version is installed -- the #286
+            // selected/skipped pair (the true installed key, the
+            // `[installed]`-marked neg, already skips at `split_cpv`
+            // above since brackets never parse as a version).
+            if matches!(entry.reason, MaskReason::SlotConflict { .. })
+                && installed_candidates(root, cat, pkg)
+                    .iter()
+                    .any(|(v, _, _)| v == &ver)
             {
                 continue;
             }
@@ -23497,6 +23589,29 @@ pub(crate) fn backtrack_missed_updates(
                     }
                     _ => {}
                 }
+            }
+            if !any_selected
+                && matches!(entry.reason, MaskReason::MissingDependency { .. })
+                && missing_args.iter().any(|a| {
+                    portage_dep::parse_atom(a).is_some_and(|p| {
+                        p.category == *cat
+                            && p.package == *pkg
+                            && p.blocker == portage_dep::Blocker::None
+                    })
+                })
+                && installed_candidates(root, cat, pkg)
+                    .iter()
+                    .any(|(iv, _, _)| iv == &ver && read_vdb_slot(root, cat, pkg, iv).0 == slot)
+            {
+                // Backlog #286: the dropped set member's installed
+                // instance is real's `selected_pkg` (its complete-walk
+                // nomerge node survives the argument drop). The vdb
+                // version must equal the masked one -- any other
+                // installed version has no proven graph presence
+                // (real's `any_selected` gate), so it stays silent.
+                // `missed` stays true: like real's equal-version
+                // installed choice, it never clears the miss.
+                any_selected = true;
             }
             if !any_selected || !missed {
                 continue;
@@ -23675,10 +23790,25 @@ fn missing_dep_full_row(
     }
     let selected_display = if let Some((v, s, ss, r)) = selected_merge {
         format!("({cat}/{pkg}-{v}:{s}/{ss}::{r}, ebuild scheduled for merge)")
-    } else {
-        let v = selected_installed?;
+    } else if let Some(v) = selected_installed {
         let (s, ss) = read_vdb_slot(root, cat, pkg, v);
         let r = installed_pkg_repo(root, cat, pkg, v);
+        format!("({cat}/{pkg}-{v}:{s}/{ss}::{r}, installed)")
+    } else {
+        // Backlog #286: no settled entry holds the slot, but the vdb
+        // holds the masked version itself in it -- the dropped set-arg
+        // shape (real's tracker still selects the installed instance:
+        // the `@world` argument is dropped from the graph, but the
+        // installed package stays visible through the complete walk).
+        // Scoped to version equality: any other installed version has
+        // no proven graph presence (real's `any_selected` gate), so it
+        // stays silent like before.
+        let v = installed_candidates(root, cat, pkg)
+            .into_iter()
+            .find(|(iv, _, _)| iv.as_str() == ver && read_vdb_slot(root, cat, pkg, iv).0 == slot)
+            .map(|(iv, _, _)| iv)?;
+        let (s, ss) = read_vdb_slot(root, cat, pkg, &v);
+        let r = installed_pkg_repo(root, cat, pkg, &v);
         format!("({cat}/{pkg}-{v}:{s}/{ss}::{r}, installed)")
     };
     let skipped_display =
@@ -24168,6 +24298,13 @@ pub struct GraphResult {
     /// from the dep walk instead (real `dep_check.py:1052`), never
     /// recorded here.
     pub pprovided_atoms: Vec<String>,
+    /// Backlog #286: top-level `@world`/`@selected` set members that
+    /// selected no package on the settled pass. Real drops them into
+    /// `_missing_args` (`depgraph.py:5577-5605`) and continues the walk;
+    /// the caller (`pretend.rs`) prints real `display_problems()`'s
+    /// world-file notice plus the masked-or-don't-exist list from these,
+    /// in requested order.
+    pub missing_args: Vec<String>,
     /// Real `--autounmask` keyword changes that were applied to make the
     /// graph resolve (real `depgraph.py::_display_autounmask`'s
     /// `unstable_keyword_msg`): one per entry that only became visible
@@ -25979,6 +26116,14 @@ pub struct ResolveRequest {
     /// return) -- the `--pretend` merge list then stays in discovery order.
     pub implicit_system_deps: bool,
     pub complete: bool,
+    /// Top-level atoms expanded from a `@world`/`@selected` set argument
+    /// (real `SetArg` named `"world"`/`"selected"`, `depgraph.py:5577-5605`).
+    /// A member that selects no package is dropped into the missing-args
+    /// report (`_missing_args`) and the walk continues, where an explicit
+    /// argument fails the run. Populated by the CLI layer, which owns set
+    /// expansion; empty for direct resolver callers (every existing unit
+    /// test), which keeps the fatal top-level miss everywhere.
+    pub set_args: std::collections::HashSet<String>,
     /// Portuale-only `--solver=` selection (see [`SolverKind`]): which
     /// algorithm answers this request. `Portage` (the default) runs the
     /// backtracking walk; the other two run lu-zero's bridges over the
@@ -26418,6 +26563,11 @@ struct ResolveCtx<'a> {
     dynamic_deps: bool,
     implicit_system_deps: bool,
     complete: bool,
+    /// The CLI's `@world`/`@selected`-expanded atoms (see
+    /// [`ResolveRequest::set_args`]): a member that selects no package
+    /// drops into the pass's missing-args report instead of failing the
+    /// walk (real `_missing_args`, `depgraph.py:5577-5605`).
+    set_args: HashSet<String>,
     repos: Vec<RepoConfig>,
     /// Real `_complete_graph`'s deep re-walk of the required sets: the
     /// installed `(cat, pkg)` closure reachable from `@world ∪ @selected ∪
@@ -26606,6 +26756,7 @@ impl<'a> ResolveCtx<'a> {
             dynamic_deps: req.dynamic_deps,
             implicit_system_deps: req.implicit_system_deps,
             complete: req.complete,
+            set_args: req.set_args.clone(),
             repos: find_repos(&req.config_root)?,
             slot_op_reachable,
             world_reachable,
@@ -27432,6 +27583,9 @@ struct PassResult {
     plain_miss_deps: Vec<PlainMissDepReport>,
     nvc_dep_atoms: HashMap<(String, String), String>,
     missing_dep_trigger: Option<((String, String), String, String)>,
+    /// Backlog #286: the pass's dropped set-member atoms (see
+    /// `PassState::missing_args`).
+    missing_args: Vec<String>,
     autounmask_grew: bool,
     /// Backlog #217: set when the pass collected a failed dependency's
     /// parent USE flip with `--autounmask-backtrack` off (the
@@ -27627,6 +27781,13 @@ struct PassState {
     /// `NoVisibleCandidate` entry (first requirer wins, like the entry
     /// itself), for `abort_outcome`'s `UnsatisfiedAtom` reason.
     nvc_dep_atoms: HashMap<(String, String), String>,
+    /// Backlog #286: top-level set-member atoms (`@world`/`@selected`
+    /// expansion, see [`ResolveRequest::set_args`]) that selected no
+    /// package on this pass. Real drops them into `_missing_args`
+    /// (`depgraph.py:5577-5605`) and continues the walk; they ride into
+    /// [`PassResult::missing_args`] below. Deduped per pass (a repeat
+    /// visit of the same atom does not re-record).
+    missing_args: Vec<String>,
     /// `--changed-deps-report`: real `_changed_deps_pkgs` is a dict keyed
     /// by the installed `Package` object, so a repeat visit to the same
     /// installed category/package/version (e.g. via both a bare
@@ -28935,6 +29096,22 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         if ctx.top_level.contains(current_atom.as_str())
             && matches!(outcome, PretendOutcome::NoVisibleCandidate)
         {
+            // Backlog #286: real `_resolve` (`depgraph.py:5577-5605`) drops
+            // a `@world`/`@selected` set member that selects no package
+            // into `_missing_args` and continues the walk, where an
+            // explicit argument fails the run. The missing parent is an
+            // installed one with no merge-bound replacement (the #276
+            // shape: both instances masked by now), so the healed rest of
+            // the graph settles and the display layer reports the skipped
+            // update plus the world-file problem from `missing_args`.
+            // Deduped: a repeat visit of the same atom text (e.g. the
+            // best-run re-pass) records once.
+            if ctx.set_args.contains(current_atom.as_str()) {
+                if !state.missing_args.contains(&current_atom) {
+                    state.missing_args.push(current_atom.clone());
+                }
+                continue 'queue;
+            }
             // Backlog #210: complete-mode withhold of a phase-1 merge
             // (see `complete_mode_withheld_version`): a top-level
             // argument an enforced parent-atom pin leaves with no
@@ -29308,6 +29485,72 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 {
                     state.suppressed_nvc = true;
                 }
+                // Backlog #286: a deduped miss still refreshes the
+                // disclosure when its atom is the live one real reports
+                // (see `live_miss_atom_supersedes`): the repeat edge
+                // carries the atom the first edge lacked, and real's
+                // fail-fast walk would have hit it first. Rows refresh
+                // alongside (both row builders read the new atom only).
+                // Cheap gate first: the row builders run only when the
+                // recorded atom is a supersedeable built one.
+                if matches!(outcome, PretendOutcome::NoVisibleCandidate) {
+                    let display_atom = unevaluated_atom.as_deref().unwrap_or(&current_atom);
+                    if state
+                        .nvc_dep_atoms
+                        .get(&key)
+                        .is_some_and(|old| live_miss_atom_supersedes(old, display_atom))
+                    {
+                        let masked_rows =
+                            masked_candidates_for_atom(&ctx.repos, display_atom, config);
+                        let use_rows = use_unsat_candidates_for_atom(
+                            &ctx.repos,
+                            ctx.root,
+                            &state.entries,
+                            display_atom,
+                            &current_atom,
+                            owner.as_ref(),
+                            config,
+                        );
+                        state.nvc_dep_atoms.entry(key.clone()).and_modify(|old| {
+                            if live_miss_atom_supersedes(old, display_atom) {
+                                *old = display_atom.to_string();
+                            }
+                        });
+                        for rep in state
+                            .masked_deps
+                            .iter_mut()
+                            .filter(|r| r.category == key.0 && r.package == key.1)
+                        {
+                            if live_miss_atom_supersedes(&rep.atom, display_atom) {
+                                rep.atom = display_atom.to_string();
+                                if let Some(masked) = masked_rows.clone() {
+                                    rep.masked = masked;
+                                }
+                            }
+                        }
+                        for rep in state
+                            .use_unsat_deps
+                            .iter_mut()
+                            .filter(|r| r.category == key.0 && r.package == key.1)
+                        {
+                            if live_miss_atom_supersedes(&rep.atom, display_atom) {
+                                rep.atom = display_atom.to_string();
+                                if let Some(rows) = use_rows.clone() {
+                                    rep.rows = rows;
+                                }
+                            }
+                        }
+                        for rep in state
+                            .plain_miss_deps
+                            .iter_mut()
+                            .filter(|r| r.category == key.0 && r.package == key.1)
+                        {
+                            if live_miss_atom_supersedes(&rep.atom, display_atom) {
+                                rep.atom = display_atom.to_string();
+                            }
+                        }
+                    }
+                }
                 continue;
             }
             // `--deep`: an AlreadyInstalled package's own further
@@ -29485,6 +29728,14 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 state
                     .nvc_dep_atoms
                     .entry(key.clone())
+                    .and_modify(|old| {
+                        // Backlog #286: a live slot-operator miss
+                        // supersedes a built one (see
+                        // `live_miss_atom_supersedes`).
+                        if live_miss_atom_supersedes(old, display_atom) {
+                            *old = display_atom.to_string();
+                        }
+                    })
                     .or_insert_with(|| display_atom.to_string());
                 // A dep the `'parent_flip` off-arm collected into a
                 // parent USE flip records no disclosure at all: real
@@ -29498,20 +29749,31 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                 if !state.parent_flip_recorded.contains(&key) {
                     if let Some(masked) =
                         masked_candidates_for_atom(&ctx.repos, display_atom, config)
-                        && !state
-                            .masked_deps
-                            .iter()
-                            .any(|r: &MaskedDepReport| r.category == key.0 && r.package == key.1)
                     {
-                        state.masked_deps.push(MaskedDepReport {
-                            category: key.0.clone(),
-                            package: key.1.clone(),
-                            atom: display_atom.to_string(),
-                            masked,
-                            // Walked post-loop out of the final entries
-                            // (see below).
-                            chain: Vec::new(),
-                        });
+                        // Backlog #286: live supersedes built (see
+                        // `live_miss_atom_supersedes`); the rows were just
+                        // computed for the new atom, so a supersede
+                        // refreshes them too.
+                        match state
+                            .masked_deps
+                            .iter_mut()
+                            .find(|r| r.category == key.0 && r.package == key.1)
+                        {
+                            Some(r) if live_miss_atom_supersedes(&r.atom, display_atom) => {
+                                r.atom = display_atom.to_string();
+                                r.masked = masked;
+                            }
+                            Some(_) => {}
+                            None => state.masked_deps.push(MaskedDepReport {
+                                category: key.0.clone(),
+                                package: key.1.clone(),
+                                atom: display_atom.to_string(),
+                                masked,
+                                // Walked post-loop out of the final entries
+                                // (see below).
+                                chain: Vec::new(),
+                            }),
+                        }
                     }
                     // USE-unsatisfied-dependency disclosure (backlog #20,
                     // real `_show_unsatisfied_dep`'s separate "no ebuilds
@@ -29530,18 +29792,29 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                         &current_atom,
                         owner.as_ref(),
                         config,
-                    ) && !state
-                        .use_unsat_deps
-                        .iter()
-                        .any(|r: &UseUnsatDepReport| r.category == key.0 && r.package == key.1)
-                    {
-                        state.use_unsat_deps.push(UseUnsatDepReport {
-                            category: key.0.clone(),
-                            package: key.1.clone(),
-                            atom: display_atom.to_string(),
-                            rows,
-                            chain: Vec::new(),
-                        });
+                    ) {
+                        // Backlog #286: live supersedes built (see
+                        // `live_miss_atom_supersedes`); the rows were just
+                        // computed for the new atom, so a supersede
+                        // refreshes them too.
+                        match state
+                            .use_unsat_deps
+                            .iter_mut()
+                            .find(|r| r.category == key.0 && r.package == key.1)
+                        {
+                            Some(r) if live_miss_atom_supersedes(&r.atom, display_atom) => {
+                                r.atom = display_atom.to_string();
+                                r.rows = rows;
+                            }
+                            Some(_) => {}
+                            None => state.use_unsat_deps.push(UseUnsatDepReport {
+                                category: key.0.clone(),
+                                package: key.1.clone(),
+                                atom: display_atom.to_string(),
+                                rows,
+                                chain: Vec::new(),
+                            }),
+                        }
                     } else if !state
                         .masked_deps
                         .iter()
@@ -29560,13 +29833,24 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                         // failure is a `Change USE:`/`Missing IUSE:` one
                         // (e.g. a profile-forced flag). Real's
                         // `emerge: there are no ebuilds to satisfy "<atom>"`
-                        // block (#135 (d)).
-                        state.plain_miss_deps.push(PlainMissDepReport {
-                            category: key.0.clone(),
-                            package: key.1.clone(),
-                            atom: display_atom.to_string(),
-                            chain: Vec::new(),
-                        });
+                        // block (#135 (d)). Backlog #286: live supersedes
+                        // built (see `live_miss_atom_supersedes`).
+                        match state
+                            .plain_miss_deps
+                            .iter_mut()
+                            .find(|r| r.category == key.0 && r.package == key.1)
+                        {
+                            Some(r) if live_miss_atom_supersedes(&r.atom, display_atom) => {
+                                r.atom = display_atom.to_string();
+                            }
+                            Some(_) => {}
+                            None => state.plain_miss_deps.push(PlainMissDepReport {
+                                category: key.0.clone(),
+                                package: key.1.clone(),
+                                atom: display_atom.to_string(),
+                                chain: Vec::new(),
+                            }),
+                        }
                     }
                 }
             }
@@ -31704,6 +31988,7 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         plain_miss_deps: state.plain_miss_deps,
         nvc_dep_atoms: state.nvc_dep_atoms,
         missing_dep_trigger: state.missing_dep_trigger,
+        missing_args: state.missing_args,
         autounmask_grew: state.autounmask_grew,
         parent_flip_rescued: state.parent_flip_rescued,
         edge_kind_map: state.edge_kind_map,
@@ -32633,7 +32918,7 @@ fn collect_feedback(
             && pass.slot_conflicts.is_empty()
         {
             let (skipped, missing, full) =
-                backtrack_missed_updates(&ctx.repos, ctx.root, config, &pass.entries, &grown);
+                backtrack_missed_updates(&ctx.repos, ctx.root, config, &pass.entries, &grown, &[]);
             if !skipped.is_empty()
                 || !missing.is_empty()
                 || !full.is_empty()
@@ -33303,6 +33588,7 @@ fn assemble_result(
     // (`required_by` is only complete post-pass); the atom+masked
     // data was recorded at each `NoVisibleCandidate` push above.
     for rep in &mut pass.masked_deps {
+        let atom = rep.atom.clone();
         rep.chain = masked_dep_chain(
             &ctx.repos,
             ctx.config,
@@ -33311,11 +33597,13 @@ fn assemble_result(
             &rep.package,
             ctx.atoms,
             ctx.root,
+            &atom,
         );
     }
     // Same walk for the `[use]`-unsatisfied disclosures (#20): the chain
     // shape is real `_get_dep_chain`'s, shared with the masked block.
     for rep in &mut pass.use_unsat_deps {
+        let atom = rep.atom.clone();
         rep.chain = masked_dep_chain(
             &ctx.repos,
             ctx.config,
@@ -33324,6 +33612,7 @@ fn assemble_result(
             &rep.package,
             ctx.atoms,
             ctx.root,
+            &atom,
         );
     }
     // #135 (d) post-pass: every dependency `NoVisibleCandidate` entry
@@ -33423,6 +33712,7 @@ fn assemble_result(
     );
     // Same walk for the plain-miss disclosures (#135 (d)).
     for rep in &mut pass.plain_miss_deps {
+        let atom = rep.atom.clone();
         rep.chain = masked_dep_chain(
             &ctx.repos,
             ctx.config,
@@ -33431,6 +33721,7 @@ fn assemble_result(
             &rep.package,
             ctx.atoms,
             ctx.root,
+            &atom,
         );
     }
 
@@ -33468,8 +33759,14 @@ fn assemble_result(
             .iter()
             .any(|e| e.blockers.iter().any(|b| b.unsolvable))
     {
-        let (mask_skipped, mask_missing, mask_full) =
-            backtrack_missed_updates(&ctx.repos, ctx.root, config, &pass.entries, params);
+        let (mask_skipped, mask_missing, mask_full) = backtrack_missed_updates(
+            &ctx.repos,
+            ctx.root,
+            config,
+            &pass.entries,
+            params,
+            &pass.missing_args,
+        );
         // Real chains the mask dict before the handler removals
         // (`:1533-1536`), so mask rows lead in first-seen order and the
         // direct-solve/withhold rows keep their established sorted
@@ -33497,6 +33794,7 @@ fn assemble_result(
         changed_deps_report: pass.changed_deps_report_entries,
         buildpkgonly_deps_unsatisfied,
         pprovided_atoms: pass.pprovided_atoms,
+        missing_args: pass.missing_args,
         autounmask_keyword_changes: pass.autounmask_keyword_changes,
         autounmask_use_changes: pass.autounmask_use_changes,
         autounmask_license_changes: pass.autounmask_license_changes,
@@ -34055,6 +34353,7 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
             passes += 1;
             restarts = passes - 1;
         }
+        let was_first = first_pass;
         first_pass = false;
         // The per-pass config view: the accumulator's autounmask-use
         // changes layered on as the top USE tier (see `Config::
@@ -34149,7 +34448,24 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
         };
         match decision {
             PassDecision::Settle { params } => {
-                return Ok(assemble_result(&ctx, &params, pass, config, restarts));
+                let settled = params.clone();
+                let result = assemble_result(&ctx, &params, pass, config, restarts);
+                // Backlog #286: a retry pass that dropped a set member
+                // and still reports a slot conflict is a failed
+                // iteration, like the abort the drop replaced -- the
+                // search goes on to masks that settle cleanly (`btnr`:
+                // masking the world-selected `btrb` ends in the very
+                // conflict the bound mask was meant to avoid). A drop
+                // on an otherwise conflict-free pass settles (#276).
+                if !result.missing_args.is_empty()
+                    && !result.slot_conflicts.is_empty()
+                    && !was_first
+                    && !from_feed
+                {
+                    bt.adopt_current(*settled);
+                    continue;
+                }
+                return Ok(result);
             }
             PassDecision::DeadEnd { params } => {
                 // Real's abandoned `_create_graph` attempt: the node is
@@ -34428,6 +34744,10 @@ pub fn resolve_pretend_graph(
         // comment below.
         implicit_system_deps: true,
         complete,
+        // No set expansion here (legacy marshaller / unit helper pass
+        // explicit atoms only), so no argument can drop as a missing set
+        // member -- see `ResolveRequest::set_args`.
+        set_args: std::collections::HashSet::new(),
         // `resolve_pretend_graph` is the legacy 44-arg marshaller: it only
         // ever answers with the default solver. New code builds a
         // `ResolveRequest` (setting `solver`) and calls
@@ -41884,6 +42204,7 @@ mod tests {
             dynamic_deps: true,
             implicit_system_deps: true,
             complete: false,
+            set_args: std::collections::HashSet::new(),
             solver: SolverKind::Portage,
         };
         active_resolver()
@@ -55311,7 +55632,6 @@ mod tests {
     /// legs. A minimal `ResolveCtx` plus an empty `PassResult` each
     /// leg fills in.
     static NO_STRINGS_161: Vec<String> = Vec::new();
-    static NO_STRS_161: [&str; 0] = [];
     #[derive(Default)]
     struct CtxOpts161 {
         reachable: HashSet<(String, String)>,
@@ -55335,6 +55655,13 @@ mod tests {
         complete: bool,
         locked: HashSet<(String, String)>,
         blocker_closure: HashSet<(String, String)>,
+        /// Backlog #286: the request's top-level atom texts (production
+        /// builds this from the request atoms; empty here unless a test
+        /// needs the fatal top-level miss or the set-member drop).
+        top_level: Vec<String>,
+        /// Backlog #286: request atoms expanded from `@world`/`@selected`
+        /// (see [`ResolveRequest::set_args`]).
+        set_args: HashSet<String>,
     }
     fn ctx_161<'a>(
         root: &'a Path,
@@ -55387,12 +55714,13 @@ mod tests {
             dynamic_deps: true,
             implicit_system_deps: false,
             complete: o.complete,
+            set_args: o.set_args.clone(),
             repos,
             slot_op_reachable: o.reachable.clone(),
             world_reachable: o.reachable.clone(),
             blocker_retry_closure: o.blocker_closure.clone(),
             complete_locked_merges: o.locked.clone(),
-            top_level: NO_STRS_161.iter().copied().collect(),
+            top_level: o.top_level.iter().map(|s| s.as_str()).collect(),
             top_level_cps: HashSet::new(),
             // Like production's `ResolveCtx::new`: the binary pool
             // derives from the config's scanned binpkgs (empty here
@@ -55414,6 +55742,7 @@ mod tests {
             plain_miss_deps: Vec::new(),
             nvc_dep_atoms: HashMap::new(),
             missing_dep_trigger: None,
+            missing_args: Vec::new(),
             autounmask_grew: false,
             parent_flip_rescued: false,
             edge_kind_map: HashMap::new(),
@@ -59058,6 +59387,54 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// Backlog #286: a top-level set member (`@world`/`@selected`
+    /// expansion, real `SetArg` "world"/"selected") that selects no
+    /// package drops into `missing_args` instead of failing the walk
+    /// (real `_missing_args`, `depgraph.py:5577-5605`); the same atom
+    /// requested explicitly (no set membership) fails with the bare
+    /// miss. The drop leaves no entry, so the healed rest of the graph
+    /// can settle around it.
+    #[test]
+    fn run_pass_drops_an_unresolvable_set_member() {
+        let dir = slotundo_temp_dir("286-run-missing-arg");
+        let repos = blocker_161_scratch_repo(&dir, "dev-libs/someother", "1.0", "0", "", "");
+        let config = test_config();
+        let atoms = vec!["dev-libs/nosuchpkg".to_string()];
+        let walk = |from_set: bool| {
+            let opts = CtxOpts161 {
+                backtrack_max: 10,
+                atoms: atoms.clone(),
+                top_level: atoms.clone(),
+                set_args: if from_set {
+                    HashSet::from(["dev-libs/nosuchpkg".to_string()])
+                } else {
+                    HashSet::new()
+                },
+                ..Default::default()
+            };
+            let ctx = ctx_161(&dir, &config, vec![repos.clone()], &opts);
+            run_pass(&ctx, &BacktrackParams::default(), true)
+        };
+        let Err(err) = walk(false) else {
+            panic!("an explicit miss fails the walk");
+        };
+        assert!(
+            format!("{err}").contains("there are no ebuilds to satisfy"),
+            "explicit miss keeps the bare report, got: {err}"
+        );
+        let pass = walk(true).expect("a set member drops instead of failing");
+        assert_eq!(pass.missing_args, vec!["dev-libs/nosuchpkg".to_string()]);
+        assert!(
+            pass.entries.is_empty(),
+            "the dropped member leaves no entry, saw {:?}",
+            pass.entries
+                .iter()
+                .map(|e| format!("{}/{}", e.category, e.package))
+                .collect::<Vec<_>>()
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     /// Backlog #161 S6: one report per missing cp, even across
     /// categories sharing a package name.
     #[test]
@@ -62628,6 +63005,7 @@ mod tests {
                 "target",
                 &atoms,
                 &dir,
+                "",
             );
             assert_eq!(
                 got,
@@ -62703,6 +63081,7 @@ mod tests {
                 "target",
                 &atoms,
                 &dir,
+                "",
             );
             assert_eq!(
                 got,
@@ -62761,6 +63140,7 @@ mod tests {
                 "target",
                 &atoms,
                 &dir,
+                "",
             );
             assert_eq!(
                 got,
@@ -68591,6 +68971,7 @@ mod tests_163 {
                 "leaf",
                 &atoms,
                 dir.as_path(),
+                "",
             ),
             vec![(
                 "dev-libs/consumer-1.0::testrepo[qml]".to_string(),
@@ -68636,6 +69017,7 @@ mod tests_163 {
                 "leaf",
                 &atoms,
                 dir.as_path(),
+                "",
             ),
             vec![(
                 "dev-libs/consumer-1.0::testrepo".to_string(),
@@ -68696,6 +69078,7 @@ mod tests_163 {
                 "leaf",
                 &atoms,
                 dir.as_path(),
+                "",
             ),
             vec![(
                 "dev-libs/parent-1.0::testrepo[qml]".to_string(),
@@ -70651,6 +71034,7 @@ mod tests_163 {
             plain_miss_deps: Vec::new(),
             nvc_dep_atoms: HashMap::new(),
             missing_dep_trigger: None,
+            missing_args: Vec::new(),
             autounmask_grew: false,
             parent_flip_rescued: false,
             edge_kind_map: HashMap::new(),
@@ -70730,6 +71114,7 @@ mod tests_163 {
             dynamic_deps: true,
             implicit_system_deps: false,
             complete: false,
+            set_args: HashSet::new(),
             repos,
             slot_op_reachable: reachable.clone(),
             world_reachable: reachable,

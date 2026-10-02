@@ -12870,6 +12870,14 @@ pub fn run(args: &[String]) -> ExitCode {
     // `--unmerge`/`--depclean`/`--deselect` paths already use; a `@name`
     // with no matching set file is a fatal "set 'name' not found".
     let mut expanded_atoms: Vec<String> = Vec::new();
+    // Backlog #286: which expanded atoms rode a `@world`/`@selected` set
+    // argument (real `SetArg` named `"world"`/`"selected"`,
+    // `depgraph.py:5577-5605` -- a member that selects no package drops
+    // into `_missing_args` instead of failing the run). Parallel to
+    // `expanded_atoms` through the moves rewrite and dedup below (both
+    // index-preserving); `dep_expand_token` mutates atoms in place, so
+    // the flag rides renames too.
+    let mut expanded_from_set: Vec<bool> = Vec::new();
     // The user-given `@name` set args (leading `@` stripped) that are
     // world candidates -- i.e. resolved via a set FILE, not `@world`/
     // `@system`. Recorded in `world_sets` after a successful
@@ -12890,10 +12898,14 @@ pub fn run(args: &[String]) -> ExitCode {
                 // `@profile @selected @system`.
                 let mut atoms = config.profile_packages.clone();
                 atoms.sort();
+                expanded_from_set.extend(std::iter::repeat_n(true, atoms.len()));
                 expanded_atoms.extend(atoms);
             }
             match expand_selected(&root, &config_root) {
-                Ok(atoms) => expanded_atoms.extend(atoms),
+                Ok(atoms) => {
+                    expanded_from_set.extend(std::iter::repeat_n(true, atoms.len()));
+                    expanded_atoms.extend(atoms);
+                }
                 Err(e) => {
                     eprintln!("{e}");
                     return ExitCode::from(1);
@@ -12905,6 +12917,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 // key=str)`; the nested `@system` set is one such arg.
                 let mut atoms = config.system_packages.clone();
                 atoms.sort();
+                expanded_from_set.extend(std::iter::repeat_n(true, atoms.len()));
                 expanded_atoms.extend(atoms);
             }
         } else if *atom_str == "@profile" {
@@ -12913,6 +12926,7 @@ pub fn run(args: &[String]) -> ExitCode {
             // `@system` above.
             let mut atoms = config.profile_packages.clone();
             atoms.sort();
+            expanded_from_set.extend(std::iter::repeat_n(false, atoms.len()));
             expanded_atoms.extend(atoms);
         } else if *atom_str == "@system" {
             // Real `_resolve` (`depgraph.py:5500`): `for atom in
@@ -12927,15 +12941,21 @@ pub fn run(args: &[String]) -> ExitCode {
             // `_merge_order_bias` preserves -- diverged from index 1.
             let mut atoms = config.system_packages.clone();
             atoms.sort();
+            expanded_from_set.extend(std::iter::repeat_n(false, atoms.len()));
             expanded_atoms.extend(atoms);
         } else if *atom_str == "@installed" {
-            expanded_atoms.extend(installed_set_atoms(&root));
+            let atoms = installed_set_atoms(&root);
+            expanded_from_set.extend(std::iter::repeat_n(false, atoms.len()));
+            expanded_atoms.extend(atoms);
         } else if *atom_str == "@preserved-rebuild" {
-            expanded_atoms.extend(preserved_rebuild_atoms(&root));
+            let atoms = preserved_rebuild_atoms(&root);
+            expanded_from_set.extend(std::iter::repeat_n(false, atoms.len()));
+            expanded_atoms.extend(atoms);
         } else if let Some(name) = atom_str.strip_prefix('@') {
             let mut seen = HashSet::new();
             match resolve_custom_set(&config_root, name, &mut seen) {
                 Ok(atoms) => {
+                    expanded_from_set.extend(std::iter::repeat_n(false, atoms.len()));
                     expanded_atoms.extend(atoms);
                     selected_set_args.push(name.to_string());
                 }
@@ -12945,6 +12965,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 }
             }
         } else {
+            expanded_from_set.push(false);
             expanded_atoms.push((*atom_str).to_string());
         }
     }
@@ -12965,8 +12986,27 @@ pub fn run(args: &[String]) -> ExitCode {
     // `emerge --noreplace @system`. Drop later duplicates, keeping first
     // position (portuale's merge order is position-sensitive).
     {
+        // Explicit-wins: an atom given both explicitly and through a
+        // set keeps its explicit nature (real holds both a `SetArg`
+        // and an `AtomArg` for it: the set member drops but the
+        // explicit argument still fails the run).
+        let explicit: HashSet<String> = expanded_atoms
+            .iter()
+            .zip(expanded_from_set.iter())
+            .filter(|(_, f)| !**f)
+            .map(|(a, _)| (*a).clone())
+            .collect();
         let mut seen: HashSet<String> = HashSet::new();
-        expanded_atoms.retain(|a| seen.insert(a.clone()));
+        let mut kept_atoms = Vec::with_capacity(expanded_atoms.len());
+        let mut kept_flags = Vec::with_capacity(expanded_from_set.len());
+        for (a, f) in expanded_atoms.drain(..).zip(expanded_from_set.drain(..)) {
+            if seen.insert(a.clone()) {
+                kept_flags.push(f && !explicit.contains(a.as_str()));
+                kept_atoms.push(a);
+            }
+        }
+        expanded_atoms = kept_atoms;
+        expanded_from_set = kept_flags;
     }
 
     // Real `dep_expand()` / `cpv_expand()` (`lib/portage/dbapi/`): a
@@ -13017,6 +13057,15 @@ pub fn run(args: &[String]) -> ExitCode {
         );
         return ExitCode::from(2);
     }
+    // Backlog #286: the droppable set members (see `expanded_from_set`).
+    // Built after `dep_expand_token` so renames (bare `pkg` -> `cat/pkg`)
+    // match the resolver's own atom texts.
+    let set_args: HashSet<String> = expanded_atoms
+        .iter()
+        .zip(expanded_from_set.iter())
+        .filter(|(_, f)| **f)
+        .map(|(a, _)| (*a).clone())
+        .collect();
 
     for atom_str in &expanded_atoms {
         let Some(atom) = parse_atom(atom_str) else {
@@ -13390,6 +13439,7 @@ pub fn run(args: &[String]) -> ExitCode {
             dynamic_deps,
             implicit_system_deps,
             complete,
+            set_args: set_args.clone(),
             solver,
         };
         active_resolver_for(solver).resolve(&req)
@@ -14859,6 +14909,35 @@ pub fn run(args: &[String]) -> ExitCode {
                 }
             }
         }
+    }
+
+    // Backlog #286: real `display_problems()`'s world-file tail
+    // (`depgraph.py:11150-11190`) for the dropped set members
+    // (`GraphResult::missing_args`) -- what real prints right after the
+    // skipped-update block above. The world-file notice fires only for a
+    // missing member of the world file itself (real's `atom in world_set`
+    // gate: a `@system`/`@profile` member riding `@world` prints only
+    // the list); the masked-or-don't-exist list names every missing arg
+    // in requested order. Unlike the missed-update blocks above these
+    // two carry no `--quiet` gate (real prints them outside
+    // `_show_missed_update`); `--json` returns above, and `--columns`
+    // has no gate (not merge-list rows).
+    if !result.missing_args.is_empty() {
+        let world_atoms: HashSet<String> = read_world_atoms(&root)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|a| portage_repo::apply_updates_to_atom(&a))
+            .collect();
+        if result.missing_args.iter().any(|a| world_atoms.contains(a)) {
+            println!();
+            println!("!!! Problems have been detected with your world file");
+            println!("!!! Please run emaint --check world");
+            println!();
+        }
+        println!();
+        println!("!!! Ebuilds for the following packages are either all");
+        println!("!!! masked or don't exist:");
+        println!("{}", result.missing_args.join(" "));
     }
 
     // Backlog #19 Slice 5: with the gate on, an aborted cycle prints its

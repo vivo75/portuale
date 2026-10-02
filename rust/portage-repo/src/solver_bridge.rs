@@ -833,6 +833,10 @@ fn graph_result_from_order(
         changed_deps_report: Vec::new(),
         buildpkgonly_deps_unsatisfied: false,
         pprovided_atoms: Vec::new(),
+        // Same standing empty: the bridge paths never drop a set
+        // member (their tests resolve explicit atoms, so `set_args`
+        // is empty and the fatal top-level miss stands).
+        missing_args: Vec::new(),
         autounmask_keyword_changes: Vec::new(),
         autounmask_use_changes: Vec::new(),
         autounmask_license_changes: Vec::new(),
@@ -1351,6 +1355,7 @@ mod tests {
             dynamic_deps: false,
             implicit_system_deps: true,
             complete: false,
+            set_args: std::collections::HashSet::new(),
             solver: SolverKind::Portage,
         }
     }
