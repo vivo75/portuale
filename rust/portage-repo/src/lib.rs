@@ -23979,7 +23979,9 @@ fn missing_dep_full_row(
 /// one block at render by [`group_skipped_updates`]); exact
 /// duplicates collapse to one. Relative order is preserved: mask
 /// rows lead, then the direct solve's rows in first-seen block order,
-/// then the pin withholds (sorted).
+/// then the pin withholds (sorted) -- except that a slot's surviving
+/// rows sit at the position of the slot's first row (#292, real's dict
+/// key order), however the higher version arrived later.
 fn collapse_skipped_updates(rows: Vec<SkippedUpdate>) -> Vec<SkippedUpdate> {
     let mut best: HashMap<(String, String, String), String> = HashMap::new();
     for s in &rows {
@@ -23992,6 +23994,24 @@ fn collapse_skipped_updates(rows: Vec<SkippedUpdate>) -> Vec<SkippedUpdate> {
             best.insert(key, s.skipped_version.clone());
         }
     }
+    // Backlog #292: real's `missed_updates[k] = ...` overwrites the value
+    // of an existing `(root, slot_atom)` key, and a Python dict keeps the
+    // key's *first* insertion position (`_get_missed_updates`,
+    // `depgraph.py:1544-1560`): a higher pkg replacing a lower one of the
+    // same slot renders where the lower was first recorded, not where the
+    // higher row sits. Record each slot's first row index over the
+    // pre-collapse rows and order the survivors by it (stable).
+    let mut first_pos: HashMap<(String, String, String), usize> = HashMap::new();
+    for (i, s) in rows.iter().enumerate() {
+        first_pos
+            .entry((s.category.clone(), s.package.clone(), s.slot.clone()))
+            .or_insert(i);
+    }
+    let slot_pos = |s: &SkippedUpdate| -> usize {
+        first_pos[&(s.category.clone(), s.package.clone(), s.slot.clone())]
+    };
+    let mut rows = rows;
+    rows.sort_by_key(slot_pos);
     let mut seen: HashSet<SkippedUpdateKey> = HashSet::new();
     rows.into_iter()
         .filter(|s| {
@@ -59771,6 +59791,38 @@ mod tests {
                 ("mgxd", "2", "=dev-libs/mgxd-2"),
                 ("mgxd", "2", "<dev-libs/mgxd-3"),
             ]
+        );
+    }
+
+    /// Backlog #292: a higher pkg replacing a lower one of its slot keeps
+    /// the slot's first position (real `_get_missed_updates` dict key
+    /// order, `depgraph.py:1544-1560`): slot X's lower row, block Y, then
+    /// X's higher row render X, Y -- not Y, X.
+    #[test]
+    fn collapse_skipped_updates_keeps_a_slots_first_position() {
+        fn row(pkg: &str, ver: &str) -> SkippedUpdate {
+            SkippedUpdate {
+                category: "dev-libs".to_string(),
+                package: pkg.to_string(),
+                slot: "0".to_string(),
+                skipped_version: ver.to_string(),
+                skipped_sub_slot: "0".to_string(),
+                skipped_repo: "testrepo".to_string(),
+                skipped_use: Vec::new(),
+                atom: format!("={pkg}-{ver}"),
+                consumer_cpv: "dev-libs/consumer-1:0/0::testrepo".to_string(),
+                consumer_installed: false,
+                consumer_use: Vec::new(),
+                missed_targets_running_root: false,
+                consumer_targets_running_root: false,
+            }
+        }
+        let out = collapse_skipped_updates(vec![row("x", "1"), row("y", "1"), row("x", "2")]);
+        assert_eq!(
+            out.iter()
+                .map(|s| (s.package.as_str(), s.skipped_version.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("x", "2"), ("y", "1")]
         );
     }
 
