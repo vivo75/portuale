@@ -1,0 +1,7 @@
+[ebuild  N     ] dev-libs/newpkg-1.0 to /tmp/root-E4-slotatom-world-set
+[ebuild  N     ] dev-libs/upgradepkg-2.0 to /tmp/root-E4-slotatom-world-set
+[ebuild  N     ] dev-libs/systempkg-1.0 to /tmp/root-E4-slotatom-world-set
+[ebuild  N     ] dev-libs/withdeps-1.0 to /tmp/root-E4-slotatom-world-set
+[ebuild     U  ] app-misc/bdprov-3 [2] to /tmp/root-E4-slotatom-world-set
+[uninstall     ] app-misc/bdprov-1 to /tmp/root-E4-slotatom-world-set
+[blocks b      ] app-misc/bdprov:0 ("app-misc/bdprov:0" is soft blocking app-misc/bdprov-3)

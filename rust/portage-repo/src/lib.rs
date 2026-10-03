@@ -20503,6 +20503,72 @@ pub struct OrphanBlocker {
 /// the same fallback `split_slot` already uses for a plain (no `/`)
 /// `SLOT` value -- "unknown" and "not yet split from an unslashed SLOT"
 /// look identical here, and both mean "assume it matches the slot".
+/// Backlog #289: real's complete graph adds the required sets' atoms as
+/// `SetArg`s (`_expand_set_args(..., add_to_digraph=True)`), so an
+/// installed instance a set atom *selects* is a digraph node with a parent
+/// and a blocker that would unmerge it stays unresolved (`[blocks B]`,
+/// `depgraph.py:9216-9224`). A set atom selects this instance only when it
+/// matches it and no instance this run merges for the same cp (a bare
+/// `bdprov` selects the new, higher slot instead): `bdprov:0` in world
+/// holds the slot-0 instance a slot-1 update would otherwise uninstall.
+/// Cut: only the set atoms themselves; an installed *holder* in the set
+/// (a vdb edge of a package the walk never visited) is not modelled.
+fn set_seed_holds_instance(
+    set_seed_atoms: &[String],
+    entries: &[GraphEntry],
+    category: &str,
+    package: &str,
+    version: &str,
+    slot: &str,
+    sub_slot: &str,
+) -> bool {
+    let candidate = format!("{category}/{package}-{version}:{slot}/{sub_slot}");
+    let merged: Vec<String> = entries
+        .iter()
+        .filter(|e| e.category == category && e.package == package)
+        .filter_map(|e| {
+            let v = merge_bound_version(&e.outcome)?;
+            Some(format!(
+                "{category}/{package}-{v}:{}/{}",
+                e.slot.as_deref().unwrap_or("0"),
+                e.sub_slot.as_deref().or(e.slot.as_deref()).unwrap_or("0")
+            ))
+        })
+        .collect();
+    let matches = |atom: &str, cpv: &str| {
+        portage_dep::match_from_list(atom, &[cpv]).is_some_and(|m| !m.is_empty())
+    };
+    set_seed_atoms.iter().any(|a| {
+        let Some(parsed) = portage_dep::parse_atom(a) else {
+            return false;
+        };
+        parsed.blocker == portage_dep::Blocker::None
+            && parsed.category == category
+            && parsed.package == package
+            && matches(a, &candidate)
+            && !merged.iter().any(|m| matches(a, m))
+    })
+}
+
+/// [`resolve_blockers_with_seeds`] without set seeds (the solver bridge and
+/// the unit tests carry none).
+fn resolve_blockers(
+    root: &Path,
+    pending: &[PendingBlocker],
+    entries: &[GraphEntry],
+    blocker_retry_closure: &HashSet<(String, String)>,
+    buildpkgonly: bool,
+) -> Vec<FiledBlocker> {
+    resolve_blockers_with_seeds(
+        root,
+        pending,
+        entries,
+        blocker_retry_closure,
+        buildpkgonly,
+        &[],
+    )
+}
+
 /// #68 S3: real "we don't unmerge any package that has been pulled into
 /// the graph" (`_validate_blockers`'s `digraph.contains(inst_pkg) and
 /// digraph.parent_nodes(inst_pkg)`, `depgraph.py:9216-9224`, and the same
@@ -20974,7 +21040,7 @@ fn collect_unwalked_installed_blockers(
     }
 }
 
-fn resolve_blockers(
+fn resolve_blockers_with_seeds(
     root: &Path,
     pending: &[PendingBlocker],
     entries: &[GraphEntry],
@@ -21007,6 +21073,9 @@ fn resolve_blockers(
     // silently (real's irrelevant-blockers arm) and keeps only
     // strong-buildtime ones, resolved by uninstall — the abort's rows.
     buildpkgonly: bool,
+    // #289: the set seed atoms (`@world`/`@selected` members) real adds as
+    // `SetArg` parents in its complete graph; see [`set_seed_holds_instance`].
+    set_seed_atoms: &[String],
 ) -> Vec<FiledBlocker> {
     let mut conflicts = Vec::new();
     // #284: cp -> slots with a merge-bound entry this run. Real's
@@ -21301,7 +21370,16 @@ fn resolve_blockers(
                             &pb.owner_key,
                             entries,
                             &merge_slots,
-                        ) || (blocker_retry_closure.contains(&target_key) && !cp_moves_slot)))
+                        ) || (blocker_retry_closure.contains(&target_key) && !cp_moves_slot)
+                            || set_seed_holds_instance(
+                                set_seed_atoms,
+                                entries,
+                                &pb.target_category,
+                                &pb.target_package,
+                                version,
+                                slot,
+                                sub_slot,
+                            )))
             } else {
                 // A nomerge parent is uninstall-ordered; it is unresolved
                 // when the *owner* is a digraph node with parents
@@ -32416,12 +32494,13 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         );
     }
 
-    let conflicts = resolve_blockers(
+    let conflicts = resolve_blockers_with_seeds(
         ctx.root,
         &state.pending_blockers,
         &state.entries,
         &ctx.blocker_retry_closure,
         ctx.buildpkgonly,
+        &ctx.config.blocker_retry_seed_atoms,
     );
     // Backlog #80: unresolved rows whose owner has no display entry
     // ride out on the result instead of being dropped.
@@ -59961,6 +60040,44 @@ mod tests {
                 .map(|s| (s.package.as_str(), s.skipped_version.as_str()))
                 .collect::<Vec<_>>(),
             vec![("x", "2"), ("y", "1")]
+        );
+    }
+
+    /// Backlog #289: a set atom that selects the old instance holds it
+    /// (real `SetArg` parent), a bare atom that the merged new instance
+    /// also matches does not.
+    #[test]
+    fn set_seed_holds_the_instance_only_a_slot_atom_selects() {
+        let merged = GraphEntry {
+            outcome: PretendOutcome::Upgrade {
+                from: "2".into(),
+                to: "3".into(),
+            },
+            slot: Some("1".into()),
+            sub_slot: Some("2".into()),
+            ..graph_entry("app-misc", "bdprov", "3")
+        };
+        let held = |atoms: &[&str]| {
+            let atoms: Vec<String> = atoms.iter().map(|a| (*a).to_string()).collect();
+            set_seed_holds_instance(
+                &atoms,
+                &[merged.clone()],
+                "app-misc",
+                "bdprov",
+                "1",
+                "0",
+                "1",
+            )
+        };
+        assert!(held(&["app-misc/bdprov:0"]), "a slot atom selects slot 0");
+        assert!(
+            !held(&["app-misc/bdprov"]),
+            "a bare atom selects the new slot"
+        );
+        assert!(!held(&["app-misc/bdprov:1"]), "another slot's atom");
+        assert!(
+            !held(&["@world", "!app-misc/bdprov:0"]),
+            "sets and blockers"
         );
     }
 
