@@ -1,0 +1,12 @@
+A-pprov-req-bt0 | app-misc/pprov-1:0/1 ; app-misc/pcons-1:0:>=app-misc/pprov-1:0/1= | | --pretend --backtrack 0 --update --deep app-misc/pprov app-misc/pcons dev-libs/slotconflictoldconsumer dev-libs/slotconflictnewconsumer
+B-pprov-notreq-bt0 | app-misc/pprov-1:0/1 ; app-misc/pcons-1:0:>=app-misc/pprov-1:0/1= | | --pretend --backtrack 0 --update --deep app-misc/pcons dev-libs/slotconflictoldconsumer dev-libs/slotconflictnewconsumer
+A-pprov-req-bt3 | app-misc/pprov-1:0/1 ; app-misc/pcons-1:0:>=app-misc/pprov-1:0/1= | | --pretend --backtrack 3 --update --deep app-misc/pprov app-misc/pcons dev-libs/slotconflictoldconsumer dev-libs/slotconflictnewconsumer
+B-pprov-notreq-bt3 | app-misc/pprov-1:0/1 ; app-misc/pcons-1:0:>=app-misc/pprov-1:0/1= | | --pretend --backtrack 3 --update --deep app-misc/pcons dev-libs/slotconflictoldconsumer dev-libs/slotconflictnewconsumer
+A-pprov-req-bt20 | app-misc/pprov-1:0/1 ; app-misc/pcons-1:0:>=app-misc/pprov-1:0/1= | | --pretend --backtrack 20 --update --deep app-misc/pprov app-misc/pcons dev-libs/slotconflictoldconsumer dev-libs/slotconflictnewconsumer
+B-pprov-notreq-bt20 | app-misc/pprov-1:0/1 ; app-misc/pcons-1:0:>=app-misc/pprov-1:0/1= | | --pretend --backtrack 20 --update --deep app-misc/pcons dev-libs/slotconflictoldconsumer dev-libs/slotconflictnewconsumer
+C-mmcons-req-bt0 | app-misc/mmprov-1:0/1 ; app-misc/mmprov-2:1/1 ; app-misc/mmcons-1:0:app-misc/mmprov:0/1= | | --pretend --backtrack 0 --update --deep app-misc/mmcons dev-libs/slotconflictoldconsumer dev-libs/slotconflictnewconsumer
+D-mmboth-bt0 | app-misc/mmprov-1:0/1 ; app-misc/mmprov-2:1/1 ; app-misc/mmcons-1:0:app-misc/mmprov:0/1= | | --pretend --backtrack 0 --update --deep app-misc/mmprov app-misc/mmcons
+C-mmcons-req-bt3 | app-misc/mmprov-1:0/1 ; app-misc/mmprov-2:1/1 ; app-misc/mmcons-1:0:app-misc/mmprov:0/1= | | --pretend --backtrack 3 --update --deep app-misc/mmcons dev-libs/slotconflictoldconsumer dev-libs/slotconflictnewconsumer
+D-mmboth-bt3 | app-misc/mmprov-1:0/1 ; app-misc/mmprov-2:1/1 ; app-misc/mmcons-1:0:app-misc/mmprov:0/1= | | --pretend --backtrack 3 --update --deep app-misc/mmprov app-misc/mmcons
+C-mmcons-req-bt20 | app-misc/mmprov-1:0/1 ; app-misc/mmprov-2:1/1 ; app-misc/mmcons-1:0:app-misc/mmprov:0/1= | | --pretend --backtrack 20 --update --deep app-misc/mmcons dev-libs/slotconflictoldconsumer dev-libs/slotconflictnewconsumer
+D-mmboth-bt20 | app-misc/mmprov-1:0/1 ; app-misc/mmprov-2:1/1 ; app-misc/mmcons-1:0:app-misc/mmprov:0/1= | | --pretend --backtrack 20 --update --deep app-misc/mmprov app-misc/mmcons

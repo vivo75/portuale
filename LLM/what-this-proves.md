@@ -19268,4 +19268,20 @@ L3_JOBS=12 differential-test-bed/run/l3-source-parity.sh
 **#270 — at `--backtrack=0` the provider update is all-or-nothing (branch `backlog/270-bt0-atomic`, S0-S3).** Installed `pprov-1` (`0/1`) + `pcons-1` bound `>=pprov-1:0/1=`; the request names both plus the two `slotconflict*` consumers. Real 3.0.82.2 merges only `[slotconflicttarget-1.0, oldconsumer-1.0, newconsumer-1.0]` and prints the skipped-update WARNING with **two** blocks (`slotconflicttarget:0`, then `app-misc/pprov:0` whose parent `pcons-1` is `installed in '<root>'` and whose marker line covers only `:0/1=`); portuale used to upgrade `pprov-2` alone and print one block. Fixed by gating the rebuild-trigger exemption on a backtrack budget, re-filing lone conflict records from the live pullers at bt0, applying the version of a bare `:=` atom in the direct solve, and three display rules (installed parent, version-aware markers, first-seen block order). At `--backtrack=3`/`20` the cell is unchanged (the exemption still holds there, #253). Evidence: `docs/evidence/2026-10-02-270/` (real vs portuale captures, probe scripts); pins `test_oracle_270_*` in pmtest.
 
 ```sh
+# from the repo root (portuale built); expect rc 0 and exactly the three N rows, then the two-block WARNING
+F=$PWD/../pmtest/fixtures; R=$(mktemp -d)/b1root
+w() { d=$R/var/db/pkg/app-misc/$1; mkdir -p $d; shift; for kv in "$@"; do k=${kv%%:*}; v=${kv#*:}; printf '%s\n' "$v" > $d/$k; done; }
+mkdir -p $R/var/lib/portage; touch $R/var/lib/portage/world
+w pprov-1 CATEGORY:app-misc SLOT:0/1 EAPI:8 repository:testrepo
+w pcons-1 CATEGORY:app-misc SLOT:0 EAPI:8 repository:testrepo 'RDEPEND:>=app-misc/pprov-1:0/1='
+cd $F && PORTAGE_CONFIGROOT=$F ROOT=$R PORTAGE_RUNNING_ROOT=$R DISTDIR=$F/distfiles \
+  $OLDPWD/rust/target/release/portuale emerge --ignore-default-opts --color=n --pretend --backtrack=0 --update --deep \
+  app-misc/pprov app-misc/pcons dev-libs/slotconflictoldconsumer dev-libs/slotconflictnewconsumer; echo "rc=$?"
+# [ebuild  N     ] dev-libs/slotconflicttarget-1.0 to $R   (no pprov-2, no pcons row)
+# WARNING ... dev-libs/slotconflicttarget:0 ... then app-misc/pprov:0 ... (pcons-1:0/0::testrepo, installed in '$R')
+```
+
+**#305 (design "feat#157") — the installed-package database is swappable: `files` / `sqlite` / `redb` (branch `backlog/305-vdb-backends`, plan [`02.305-vdb-backends.opus.md`](02.305-vdb-backends.opus.md), S0–S8, portuale-only).** Every VDB access in portuale goes through one `portage-vdb::InstalledDb` interface. `files` is the historic `/var/db/pkg` tree and stays the default (and the only thing `emerge` uses). `sqlite` and `redb` keep the same entries in one database file, with an index derived from the stored files: owners from `CONTENTS`, dependency atoms from the five `*DEPEND` files, `NEEDED.ELF.2` lines. `mrg --vdb-backend=sqlite|redb` merges, unmerges and resolves on them. Ebuild phases on a database answer `has_version` / `best_version` through the native `portuale portageq`, over a parent pipe on redb (which allows one writer process at a time). `portuale vdb` converts, verifies, reports and sweeps interrupted merges, rebuilds the index (`rebuild-index`), and serves any backend as a read-only FUSE tree (`mount`). How it was checked: one conformance suite runs on all three backends; the host VDB (2130 entries, 75 611 files) round-trips files → sqlite → files byte-identically (`diff -r` empty; `vdb verify`, which also compares modes and mtimes, equal; `docs/evidence/305-s2-roundtrip.md`), and `vdb verify` finds files and redb equal. `mrg --pretend` prints the same plan from each backend, in fixture tests and on this host. The merge-path gate (glibc + bash binpkg merges in the L1 bed) passes on files, sqlite and redb with 0 hard / 0 unexplained (`305-s4-gate-sqlite.md`, `305-s5-gate-redb.md`). Through the FUSE view, `qlist`, `qcheck`, `qfile`, `eix`, `equery` and real Portage 3.0.82.2 `emerge -p @world` give the same output as from `/var/db/pkg`, apart from a timing line (`305-s7-fuse.md`). Open residues: `docs/evidence/305-residues.md`.
+
+```sh
 # == sqlite
