@@ -1,0 +1,1 @@
+/usr/sbin/emerge --ignore-default-opts --color=n  --pretend --backtrack 0 --update --deep app-misc/mmprov app-misc/mmcons
