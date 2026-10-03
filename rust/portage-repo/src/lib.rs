@@ -33119,6 +33119,54 @@ fn collect_feedback(
                 })
         });
         if added {
+            // #297: real's `_process_slot_conflicts` also runs
+            // `_slot_operator_trigger_reinstalls` in the same pass, so
+            // the replace set rides the conflict's node (`infos` carries
+            // `config` and `slot conflict` together) instead of costing a
+            // separate restart once the masks settle.
+            let nvc = pass.suppressed_nvc
+                || pass
+                    .entries
+                    .iter()
+                    .any(|e| matches!(e.outcome, PretendOutcome::NoVisibleCandidate));
+            if !nvc
+                && ctx.backtrack_max > 0
+                && !ctx.ignore_built_slot_operator_deps
+                && ctx.rebuild_if_new_slot
+            {
+                let top_atoms: HashSet<String> =
+                    ctx.top_level.iter().map(|s| (*s).to_string()).collect();
+                let (mut scheduled, _abi, _masked) = slot_operator_rebuild_scan(
+                    ctx.root,
+                    &ctx.repos,
+                    &pass.entries,
+                    &ctx.slot_op_reachable,
+                    &grown.slot_operator_replace_installed,
+                    &grown.slot_operator_undone,
+                    ctx.with_bdeps,
+                    ctx.update,
+                    &ctx.top_level_cps,
+                    &top_atoms,
+                    ctx.excluded,
+                    config,
+                );
+                let (force_consumers, forced) = slot_operator_update_force_scan(
+                    ctx.root,
+                    &ctx.repos,
+                    config,
+                    &pass.entries,
+                    &ctx.slot_op_reachable,
+                    &scheduled,
+                    &grown.slot_operator_undone,
+                    ctx.with_bdeps,
+                    ctx.update,
+                    &ctx.top_level_cps,
+                    ctx.excluded,
+                );
+                scheduled.extend(force_consumers);
+                grown.slot_operator_forced_upgrade.extend(forced);
+                grown.slot_operator_replace_installed = scheduled;
+            }
             return PassDecision::Feedback(BacktrackFeedback::SlotConflict {
                 base: Box::new(grown),
                 choices,
@@ -34982,6 +35030,16 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
             Err(_) if from_feed => continue,
             Err(_) if !first_pass => {
                 bt.adopt_current(params.clone());
+                // Real counts a failed iteration without feedback too
+                // (`elif backtracker: backtracked += 1`) and checks the
+                // cap first (`backtracked >= max_retries`) (#297).
+                if passes >= u64::from(ctx.backtrack_max) {
+                    break;
+                }
+                if !bt.unexplored.is_empty() {
+                    passes += 1;
+                    restarts = passes - 1;
+                }
                 continue;
             }
             Err(e) => return Err(e),
@@ -35112,6 +35170,10 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
                 // continues elsewhere; the report comes from the best
                 // run below.
                 bt.adopt_current(*params);
+                // Same cap as the failed-iteration arm above (#297).
+                if restarts >= u64::from(ctx.backtrack_max) {
+                    break;
+                }
             }
             PassDecision::Feedback(kind) => {
                 if ctx.backtrack_max == 0 {
