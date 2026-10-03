@@ -1,0 +1,1 @@
+D-arg-pin | app-misc/mmprov-1:0/1 ; app-misc/mmprov-2:1/1 ; app-misc/mmcons-1:0:app-misc/mmprov:0/1= | | --pretend --update --deep =app-misc/mmprov-1 app-misc/mmcons
