@@ -15230,6 +15230,12 @@ pub fn run(args: &[String]) -> ExitCode {
         pretend_end_news_notice(pretend, &repos, &root, &config, &color);
         return ExitCode::from(1);
     }
+    // Backlog #295: the best-run re-pass could not take the `prune_rebuilds`
+    // restart real wants (`depgraph.py:5763-5775`) -- display, then fail.
+    if result.prune_unresolved {
+        pretend_end_news_notice(pretend, &repos, &root, &config, &color);
+        return ExitCode::from(1);
+    }
 
     // `emerge --pretend --debug` Stage 5: real
     // `_compute_abi_rebuild_info`'s own DEBUG-level dump (real

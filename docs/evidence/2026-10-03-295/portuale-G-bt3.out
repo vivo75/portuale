@@ -1,0 +1,16 @@
+[ebuild  N     ] dev-libs/btgc-1 to /tmp/root-G-bt3
+[ebuild  N     ] dev-libs/btgb-1 to /tmp/root-G-bt3
+[ebuild  N     ] dev-libs/btgp-1 to /tmp/root-G-bt3
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+
+dev-libs/btgc:0
+
+  (dev-libs/btgc-2:0/0::testrepo, ebuild scheduled for merge to '/tmp/root-G-bt3') USE="" ELIBC="glibc" conflicts with
+    =dev-libs/btgc-1 required by (dev-libs/btgp-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/root-G-bt3') USE="" ELIBC="glibc"
+    ^              ^
+
+
+!!! The following update(s) have been skipped due to unsatisfied dependencies
+!!! triggered by backtracking:
+
+dev-libs/btgb:0
