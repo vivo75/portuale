@@ -24245,6 +24245,7 @@ pub fn abort_outcome(
     masked_deps: &[MaskedDepReport],
     circular_deps: &[Vec<String>],
     cycle_display: &[String],
+    cycle_display_idx: &[usize],
     nvc_dep_atoms: &HashMap<(String, String), String>,
     virtual_cycle: &[String],
 ) -> ResolveOutcome {
@@ -24321,15 +24322,26 @@ pub fn abort_outcome(
         };
     }
     if !circular_deps.is_empty() {
-        let partial = cycle_display
-            .iter()
-            .filter_map(|cpv| {
-                entries
-                    .iter()
-                    .find(|e| merge_bound_cpv(e).as_deref() == Some(cpv.as_str()))
-                    .cloned()
-            })
-            .collect();
+        // Backlog #245/#287: the drain's own node indices keep the two
+        // instances of a cp that lives in both roots apart (target and
+        // running root share one cpv string); the cpv lookup is the
+        // fallback for callers without indices.
+        let partial = if cycle_display_idx.is_empty() {
+            cycle_display
+                .iter()
+                .filter_map(|cpv| {
+                    entries
+                        .iter()
+                        .find(|e| merge_bound_cpv(e).as_deref() == Some(cpv.as_str()))
+                        .cloned()
+                })
+                .collect()
+        } else {
+            cycle_display_idx
+                .iter()
+                .map(|&i| entries[i].clone())
+                .collect()
+        };
         return ResolveOutcome::Aborted {
             reason: AbortReason::UnserializableCycle {
                 members: cycle_display.to_vec(),
@@ -33800,8 +33812,8 @@ fn assemble_result(
     // (real `circular_dependency_handler`, fed by `get_cycles` over
     // the `medium_soft` rung). Built on demand: only a reported hard
     // cycle consumes either number, so acyclic resolves pay nothing.
-    let (large_cycle_count, cycle_display) = if circular_deps.is_empty() {
-        (false, Vec::new())
+    let (large_cycle_count, cycle_display, cycle_display_idx) = if circular_deps.is_empty() {
+        (false, Vec::new(), Vec::new())
     } else {
         let (cycles, display) = merge_order::cycle_report(
             &pass.entries,
@@ -33809,11 +33821,15 @@ fn assemble_result(
             ctx.root,
             &params.circular_dependency,
         );
-        let display = display
+        let display_idx: Vec<usize> = display
             .into_iter()
-            .filter_map(|i| merge_bound_cpv(&pass.entries[i]))
+            .filter(|&i| merge_bound_cpv(&pass.entries[i]).is_some())
             .collect();
-        (cycles.len() > 3, display)
+        let display = display_idx
+            .iter()
+            .filter_map(|&i| merge_bound_cpv(&pass.entries[i]))
+            .collect();
+        (cycles.len() > 3, display, display_idx)
     };
 
     // Backtracking slice: the `--autounmask-use` changes recorded
@@ -34133,6 +34149,7 @@ fn assemble_result(
         &pass.masked_deps,
         &circular_deps,
         &cycle_display,
+        &cycle_display_idx,
         &pass.nvc_dep_atoms,
         &virtual_cycle,
     );
@@ -69212,7 +69229,7 @@ mod tests_163 {
             entry_163("dev-libs", "top", new_163("1.0"), &[]),
         ];
         let masked = vec![masked_163("dev-libs", "need", "dev-libs/need")];
-        match abort_outcome(&entries, &masked, &[], &[], &HashMap::new(), &[]) {
+        match abort_outcome(&entries, &masked, &[], &[], &[], &HashMap::new(), &[]) {
             ResolveOutcome::Aborted {
                 reason: AbortReason::MaskedDep { atom, parent_cpv },
                 partial,
@@ -69241,7 +69258,7 @@ mod tests_163 {
             entry_163("dev-libs", "top", new_163("1.0"), &[]),
         ];
         assert_eq!(
-            abort_outcome(&entries, &[], &[], &[], &HashMap::new(), &[]),
+            abort_outcome(&entries, &[], &[], &[], &[], &HashMap::new(), &[]),
             ResolveOutcome::Complete
         );
     }
@@ -69267,7 +69284,7 @@ mod tests_163 {
             ("dev-libs".to_string(), "need".to_string()),
             ">=dev-libs/need-2.0".to_string(),
         );
-        match abort_outcome(&entries, &[], &[], &[], &atoms, &[]) {
+        match abort_outcome(&entries, &[], &[], &[], &[], &atoms, &[]) {
             ResolveOutcome::Aborted {
                 reason: AbortReason::UnsatisfiedAtom { atom, parent_cpv },
                 partial,
@@ -69297,7 +69314,7 @@ mod tests_163 {
             entry_163("dev-libs", "top", installed_163("1.0"), &[]),
         ];
         assert_eq!(
-            abort_outcome(&entries, &[], &[], &[], &HashMap::new(), &[]),
+            abort_outcome(&entries, &[], &[], &[], &[], &HashMap::new(), &[]),
             ResolveOutcome::Complete
         );
     }
@@ -69319,7 +69336,7 @@ mod tests_163 {
             entry_163("dev-libs", "top", new_163("1.0"), &[]),
         ];
         let masked = vec![masked_163("dev-libs", "other", "dev-libs/other")];
-        match abort_outcome(&entries, &masked, &[], &[], &HashMap::new(), &[]) {
+        match abort_outcome(&entries, &masked, &[], &[], &[], &HashMap::new(), &[]) {
             ResolveOutcome::Aborted {
                 reason: AbortReason::UnsatisfiedAtom { atom, parent_cpv },
                 partial,
@@ -69348,7 +69365,7 @@ mod tests_163 {
             entry_163("dev-libs", "top", new_163("1.0"), &[]),
         ];
         let masked = vec![masked_163("sys-libs", "need", "sys-libs/need")];
-        match abort_outcome(&entries, &masked, &[], &[], &HashMap::new(), &[]) {
+        match abort_outcome(&entries, &masked, &[], &[], &[], &HashMap::new(), &[]) {
             ResolveOutcome::Aborted {
                 reason: AbortReason::UnsatisfiedAtom { atom, parent_cpv },
                 partial,
@@ -69372,7 +69389,7 @@ mod tests_163 {
             &[],
         )];
         assert_eq!(
-            abort_outcome(&entries, &[], &[], &[], &HashMap::new(), &[]),
+            abort_outcome(&entries, &[], &[], &[], &[], &HashMap::new(), &[]),
             ResolveOutcome::Complete
         );
     }
@@ -69383,7 +69400,7 @@ mod tests_163 {
     fn abort_outcome_empty_graph_completes() {
         let entries = vec![entry_163("dev-libs", "top", new_163("1.0"), &[])];
         assert_eq!(
-            abort_outcome(&entries, &[], &[], &[], &HashMap::new(), &[]),
+            abort_outcome(&entries, &[], &[], &[], &[], &HashMap::new(), &[]),
             ResolveOutcome::Complete
         );
     }
@@ -69405,6 +69422,7 @@ mod tests_163 {
             &[],
             &[vec!["x".to_string()]],
             &display,
+            &[],
             &HashMap::new(),
             &[],
         ) {
@@ -69420,6 +69438,32 @@ mod tests_163 {
             other => panic!("expected UnserializableCycle, got {other:?}"),
         }
     }
+    #[test]
+    fn abort_outcome_cycle_idx_keeps_both_root_instances_of_one_cpv() {
+        // Backlog #245/#287: a cp merged in both roots shares one cpv
+        // string; the drain's indices keep the two rows apart and in order.
+        let target = entry_163("dev-lang", "comp", new_163("1.0"), &[]);
+        let mut running = entry_163("dev-lang", "comp", new_163("1.0"), &[]);
+        running.targets_running_root = true;
+        let entries = vec![target, running];
+        let display = vec!["dev-lang/comp-1.0".to_string(); 2];
+        match abort_outcome(
+            &entries,
+            &[],
+            &[vec!["x".to_string()]],
+            &display,
+            &[0, 1],
+            &HashMap::new(),
+            &[],
+        ) {
+            ResolveOutcome::Aborted { partial, .. } => {
+                let flags: Vec<bool> = partial.iter().map(|e| e.targets_running_root).collect();
+                assert_eq!(flags, vec![false, true]);
+            }
+            other => panic!("expected Aborted, got {other:?}"),
+        }
+    }
+
     /// Fresh unique scratch dir per test (vdb + repo live under it, so
     /// the per-root memo caches never see a reused path). Mirrors
     /// `tests_162::dir_162`, which must stay untouched.
