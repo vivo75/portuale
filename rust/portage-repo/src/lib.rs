@@ -18636,6 +18636,9 @@ fn tree_metadata_for(
 fn apply_prune_rebuilds(params: &mut BacktrackParams) {
     params.prune_rebuilds = true;
     params.slot_operator_replace_installed.clear();
+    // The #236 A forcing half is real's replace-set probe upgrade: it goes
+    // with the set (#295).
+    params.slot_operator_forced_upgrade.clear();
     let mut removed: Vec<((String, String), String)> = Vec::new();
     params.runtime_pkg_mask.retain(|cp, bucket| {
         bucket.retain(|entry| {
@@ -24621,6 +24624,12 @@ pub struct GraphResult {
     /// `display_problems()`). Always `false` when `buildpkgonly` wasn't
     /// requested at all.
     pub buildpkgonly_deps_unsatisfied: bool,
+    /// Backlog #295: the best-run pass (real's `allow_backtracking=False`
+    /// re-run) still carries a non-empty replace set with missed updates
+    /// and no prune latch. Real's `_resolve` (`depgraph.py:5763-5775`)
+    /// then wants the `prune_rebuilds` restart, cannot take it, and
+    /// returns failure: the graph is displayed and the run exits 1.
+    pub prune_unresolved: bool,
     /// Directly-requested (top-level) atoms that matched a
     /// `package.provided` entry (`config.package_provided`) and were
     /// therefore *not* resolved -- real `depgraph.py:5497-5615`'s own
@@ -27130,12 +27139,9 @@ struct BacktrackNode {
 /// mirroring real `backtracking.py::Backtracker`. `nodes` holds every
 /// node ever added; `unexplored` is the DFS stack of pending node
 /// indices; `current` is the node whose pass just ran (feedback builds
-/// from it). `max_depth` is real's `_max_depth` role (mask steps only)
-/// but NOT its formula: real computes `max(1, (retries + 1) // 2)` from
-/// `--backtrack` (default 20 retries) and additionally caps total
-/// restarts; portuale budgets `--backtrack=N` mask steps directly with
-/// no total cap (same depth-10 at default; documented deviation, see
-/// `backtrack_max`).
+/// from it). `max_depth` uses real's formula: `max(1, (retries + 1) // 2)`
+/// from `--backtrack`. A total restart cap is also enforced, matching
+/// real's `backtracked >= max_retries` check before feeding back.
 struct Backtracker {
     nodes: Vec<BacktrackNode>,
     unexplored: Vec<usize>,
@@ -34420,6 +34426,7 @@ fn assemble_result(
         orphan_blockers: pass.orphan_blockers,
         changed_deps_report: pass.changed_deps_report_entries,
         buildpkgonly_deps_unsatisfied,
+        prune_unresolved: false,
         pprovided_atoms: pass.pprovided_atoms,
         missing_args: pass.missing_args,
         autounmask_keyword_changes: pass.autounmask_keyword_changes,
@@ -34930,7 +34937,10 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
     // `_allow_backtracking` gate): the root pass settles as-is.
     let ctx = ResolveCtx::new(req)?;
     let initial = BacktrackParams::initial(req);
-    let mut bt = Backtracker::new(ctx.backtrack_max, initial.clone());
+    let mut bt = Backtracker::new(
+        std::cmp::max(1, (ctx.backtrack_max + 1) / 2),
+        initial.clone(),
+    );
     let mut first_pass = true;
     // #59 S2: real `_backtrack_depgraph`'s `backtracked` counter -- one
     // per loop iteration beyond the first (`passes - 1`). The final
@@ -35127,6 +35137,13 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
                         }
                     }
                 }
+                // Real `_backtrack_depgraph` breaks when `backtracked >=
+                // max_retries` before feeding back; `restarts` is the
+                // number of restarts already done (passes-1); breaking
+                // falls through to the best-run re-pass after the loop.
+                if restarts >= u64::from(ctx.backtrack_max) {
+                    break;
+                }
                 bt.feedback(kind);
             }
         }
@@ -35135,7 +35152,22 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
     // is reported, never a masked-by-backtracking graph unless nothing
     // better exists (real `get_best_run`).
     let best = bt.get_best_run();
-    let pass = run_pass(&ctx, &best, false)?;
+    // Real re-runs the best params with `allow_backtracking=False` once
+    // any restart happened (`backtracked`): every `--backtrack=0` gate
+    // applies to that last pass (#295).
+    let req0;
+    let ctx0;
+    let rctx: &ResolveCtx = if restarts > 0 && ctx.backtrack_max > 0 {
+        req0 = ResolveRequest {
+            backtrack_max: 0,
+            ..req.clone()
+        };
+        ctx0 = ResolveCtx::new(&req0)?;
+        &ctx0
+    } else {
+        &ctx
+    };
+    let pass = run_pass(rctx, &best, false)?;
     // Backlog #244: real's post-loop `autounmask_breakage_detected()`
     // (`depgraph.py:12262`): with the changes the search accumulated, a
     // dependency of the best run wants a flag the other way from a
@@ -35160,7 +35192,23 @@ fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
     }
     let config_owned: Option<portage_profile::Config> = best.backtrack_config.clone();
     let config: &portage_profile::Config = config_owned.as_ref().unwrap_or(ctx.config);
-    Ok(assemble_result(&ctx, &best, pass, config, restarts))
+    let prune_unresolved = restarts > 0
+        && ctx.backtrack_max > 0
+        && !best.prune_rebuilds
+        && !best.slot_operator_replace_installed.is_empty()
+        && pass.slot_conflicts.is_empty()
+        && {
+            let (skipped, missing, full) =
+                backtrack_missed_updates(&ctx.repos, ctx.root, config, &pass.entries, &best, &[]);
+            !skipped.is_empty()
+                || !missing.is_empty()
+                || !full.is_empty()
+                || !pass.skipped_updates.is_empty()
+        };
+    let mut result = assemble_result(rctx, &best, pass, config, restarts);
+    result.prune_unresolved = prune_unresolved;
+    result.backtrack_max = ctx.backtrack_max;
+    Ok(result)
 }
 
 /// Historical entry point, kept at its original 44-argument signature so
@@ -35234,20 +35282,17 @@ pub fn resolve_pretend_graph(
     // "Intended only for debugging purposes" per the real `--help`.
     ignore_built_slot_operator_deps: bool,
     // `--backtrack=COUNT` (real `main.py`, `type=int`, `valid_integers`).
-    // The maximum number of mask steps the backtracking search below may
-    // take. Portuale's CLI default is 10 (flag absent); real's own
-    // default is `--backtrack=20` retries with
-    // `max_depth = max(1, (retries + 1) // 2)` (= 10 at default -- the
-    // same depth portuale budgets, coincidentally) plus a total-restart
-    // cap real enforces and portuale does not (dedup termination is
-    // proven without it; matching real's exact stopping rule is
-    // deferred, not silently assumed). `--backtrack=0` disables
-    // backtracking entirely -- no feedback node is explored, so a slot
-    // conflict is reported without any retry, exactly the
-    // pre-backtracking behavior. The one exception is backlog #209's
-    // reverse-dependency feed: real `_resolve_conflicts` runs
-    // `_complete_graph` with no backtracking gate, so satisfiable
-    // installed-consumer pins re-run the pass in-process (a feed loop,
+    // The maximum number of retries for the backtracking search.
+    // max_depth is computed as `max(1, (COUNT + 1) / 2)`, and a total
+    // restart cap is enforced: the search stops when restarts >= COUNT.
+    // Portuale's CLI default is 10 (flag absent); real's own default is
+    // `--backtrack=20` (depth 10). `--backtrack=0` disables backtracking
+    // entirely -- no feedback node is explored, so a slot conflict is
+    // reported without any retry, exactly the pre-backtracking behavior.
+    // The one exception is backlog #209's reverse-dependency feed: real
+    // `_resolve_conflicts` runs `_complete_graph` with no backtracking
+    // gate, so satisfiable installed-consumer pins re-run the pass
+    // in-process (a feed loop,
     // never a counted restart) instead of settling.
     // Config-growth retries never counted against this budget (real's
     // `_feedback_config` doesn't count toward `--backtrack=N` either).

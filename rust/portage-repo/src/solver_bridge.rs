@@ -832,6 +832,7 @@ fn graph_result_from_order(
         orphan_blockers,
         changed_deps_report: Vec::new(),
         buildpkgonly_deps_unsatisfied: false,
+        prune_unresolved: false,
         pprovided_atoms: Vec::new(),
         // Same standing empty: the bridge paths never drop a set
         // member (their tests resolve explicit atoms, so `set_args`
