@@ -1,0 +1,29 @@
+#### N1
+SAME
+#### N1b
+2,4d1
+<   (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc" pulled in by
+<     <dev-libs/slotconflicttarget-2.0 required by (dev-libs/slotconflictoldpin-1.0:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc"
+<     ^                            ^^^
+7a5,7
+>   (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc" pulled in by
+>     <dev-libs/slotconflicttarget-2.0 required by (dev-libs/slotconflictoldpin-1.0:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc"
+>     ^                            ^^^
+#### N1z
+SAME
+#### N1bz
+2,4d1
+<   (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc" pulled in by
+<     <dev-libs/slotconflicttarget-2.0 required by (dev-libs/slotconflictoldpin-1.0:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc"
+<     ^                            ^^^
+7a5,7
+>   (dev-libs/slotconflicttarget-1.0:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc" pulled in by
+>     <dev-libs/slotconflicttarget-2.0 required by (dev-libs/slotconflictoldpin-1.0:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc"
+>     ^                            ^^^
+#### N2
+3c3
+<     <dev-libs/slotconflicttarget-2.0 required by (dev-libs/slotconflictoldpin-1.0:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc"
+---
+>     <dev-libs/slotconflicttarget-2.0 required by (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc"
+#### N2z
+SAME

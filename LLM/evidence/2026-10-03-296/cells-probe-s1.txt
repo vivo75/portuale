@@ -1,0 +1,5 @@
+H1-base | app-misc/bdprov-1:0/1 ; app-misc/bdprov-2:1/1 ; app-misc/bdhold-1:0:app-misc/bdprov:0 | app-misc/bdhold | --pretend --update app-misc/bdprov
+H1-bt0 | app-misc/bdprov-1:0/1 ; app-misc/bdprov-2:1/1 ; app-misc/bdhold-1:0:app-misc/bdprov:0 | app-misc/bdhold | --pretend --backtrack=0 --update app-misc/bdprov
+H1-debug | app-misc/bdprov-1:0/1 ; app-misc/bdprov-2:1/1 ; app-misc/bdhold-1:0:app-misc/bdprov:0 | app-misc/bdhold | --pretend --debug --update app-misc/bdprov
+H2-noworld | app-misc/bdprov-1:0/1 ; app-misc/bdprov-2:1/1 ; app-misc/bdhold-1:0:app-misc/bdprov:0 | | --pretend --update app-misc/bdprov
+H3-explicit | app-misc/bdprov-1:0/1 ; app-misc/bdprov-2:1/1 ; app-misc/bdhold-1:0:app-misc/bdprov:0 | app-misc/bdhold | --pretend --update =app-misc/bdprov-3

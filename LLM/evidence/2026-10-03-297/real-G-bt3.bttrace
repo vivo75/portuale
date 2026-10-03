@@ -1,0 +1,7 @@
+BTFEEDBACK keys=['slot conflict'] cur_depth=0 cur_ms=0 slotconf=[[['(dev-libs/btgc-2:0/0::testrepo, ebuild scheduled for merge)'], ['(dev-libs/btgc-1:0/0::testrepo, ebuild scheduled for merge)']]] missing=None config=[]
+BTFEEDBACK keys=['missing dependency'] cur_depth=1 cur_ms=1 slotconf=[] missing=<_emerge.Dependency.Dependency object at 0x7f4675570dd0> config=[]
+BTNODE 0 depth=0 ms=0 term=True mask=[] repl=[] rebuild=[] reinst=[] mb=[]
+BTNODE 1 depth=1 ms=1 term=False mask=['(dev-libs/btgc-2:0/0::testrepo, ebuild scheduled for merge)'] repl=[] rebuild=[] reinst=[] mb=[]
+BTNODE 2 depth=1 ms=1 term=False mask=['(dev-libs/btgc-1:0/0::testrepo, ebuild scheduled for merge)'] repl=[] rebuild=[] reinst=[] mb=[]
+BTNODE 3 depth=2 ms=2 term=False mask=['(dev-libs/btgc-1:0/0::testrepo, ebuild scheduled for merge)', "(dev-libs/btgp-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/root-G-bt3/')"] repl=[] rebuild=[] reinst=[] mb=[]
+BTBEST repl=[]

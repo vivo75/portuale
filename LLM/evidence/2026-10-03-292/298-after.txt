@@ -1,0 +1,27 @@
+#### U0
+SAME
+#### U1
+SAME
+#### U1b
+SAME
+#### U0z
+SAME
+#### U1z
+SAME
+#### U1bz
+SAME
+#### N1
+SAME
+#### N1b
+SAME
+#### N1z
+SAME
+#### N1bz
+SAME
+#### N2
+3c3
+<     <dev-libs/slotconflicttarget-2.0 required by (dev-libs/slotconflictoldpin-1.0:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc"
+---
+>     <dev-libs/slotconflicttarget-2.0 required by (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc"
+#### N2z
+SAME

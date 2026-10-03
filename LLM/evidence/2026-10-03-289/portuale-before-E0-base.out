@@ -1,0 +1,3 @@
+[ebuild     U  ] app-misc/bdprov-3 [2] to /tmp/root-E0-base
+[uninstall     ] app-misc/bdprov-1 to /tmp/root-E0-base
+[blocks b      ] app-misc/bdprov:0 ("app-misc/bdprov:0" is soft blocking app-misc/bdprov-3)
