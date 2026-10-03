@@ -23216,18 +23216,44 @@ pub(crate) fn direct_solve_slot_conflicts(input: DirectSolveInput<'_>) -> Direct
                         &c.package,
                         &inst.version,
                     );
+                    // #270: a parent no merge entry replaces, whose installed
+                    // instance carries the atom, is real's installed
+                    // (nomerge) node -- `installed in '<root>'`, vdb
+                    // slot/repo, like the #205 rows of
+                    // `backtrack_missed_updates` -- not a merge-scheduled
+                    // one. A merge-scheduled parent keeps the tree form.
+                    let parent_bare = p.parent_cpv.split(':').next().unwrap_or("");
+                    let (parent_cpv_disp, parent_installed) = if p.installed {
+                        (p.parent_cpv.clone(), true)
+                    } else if let Some((pc, pp, pv)) = split_cpv(parent_bare)
+                        && !input.entries.iter().any(|e| {
+                            e.category == pc
+                                && e.package == pp
+                                && merge_bound_version(&e.outcome) == Some(&pv)
+                        })
+                        && let Some(r) = installed_refs(input.root, &pc, &pp)
+                            .into_iter()
+                            .find(|r| r.version == pv)
+                    {
+                        (
+                            format!("{pc}/{pp}-{pv}:{}/{}::{}", r.slot, r.sub_slot, r.repo),
+                            true,
+                        )
+                    } else {
+                        (p.parent_cpv.clone(), false)
+                    };
                     let consumer_use = skipped_consumer_use_display(
                         input.repos,
                         input.root,
                         input.config,
-                        &p.parent_cpv,
-                        p.installed,
+                        &parent_cpv_disp,
+                        parent_installed,
                     );
                     // Backlog #242 Slice D: per-node roots (the missed
                     // instance rides the rejecting parent's edge; a merge
                     // parent rides its entry; installed parents ride the
                     // walk root — always the target walk here).
-                    let (missed_running, consumer_running) = if p.installed {
+                    let (missed_running, consumer_running) = if parent_installed {
                         (false, false)
                     } else {
                         let parent = p.parent_cpv.split(':').next().unwrap_or("");
@@ -23250,8 +23276,8 @@ pub(crate) fn direct_solve_slot_conflicts(input: DirectSolveInput<'_>) -> Direct
                         skipped_repo: inst.repo_name.clone(),
                         skipped_use,
                         atom: p.atom.clone(),
-                        consumer_cpv: p.parent_cpv.clone(),
-                        consumer_installed: p.installed,
+                        consumer_cpv: parent_cpv_disp,
+                        consumer_installed: parent_installed,
                         consumer_use,
                         missed_targets_running_root: missed_running,
                         consumer_targets_running_root: consumer_running,
@@ -23272,21 +23298,30 @@ pub(crate) fn direct_solve_slot_conflicts(input: DirectSolveInput<'_>) -> Direct
             surviving.push(rest);
         }
     }
+    // #270: blocks in the order their missed package was first recorded
+    // (real renders its `_conflict_missed_update` dict in insertion
+    // order, `depgraph.py:1529-1565`); only the parents inside one block
+    // are sorted -- real iterates a set there, so any fixed order is as
+    // good, and a stable one keeps the output deterministic.
+    let mut first_seen: Vec<(String, String, String)> = Vec::new();
+    for s in &skipped {
+        let k = (
+            s.category.clone(),
+            s.package.clone(),
+            s.skipped_version.clone(),
+        );
+        if !first_seen.contains(&k) {
+            first_seen.push(k);
+        }
+    }
+    let block_rank = |s: &SkippedUpdate| -> usize {
+        first_seen
+            .iter()
+            .position(|k| k.0 == s.category && k.1 == s.package && k.2 == s.skipped_version)
+            .unwrap_or(usize::MAX)
+    };
     skipped.sort_by(|a, b| {
-        (
-            &a.category,
-            &a.package,
-            &a.skipped_version,
-            &a.atom,
-            &a.consumer_cpv,
-        )
-            .cmp(&(
-                &b.category,
-                &b.package,
-                &b.skipped_version,
-                &b.atom,
-                &b.consumer_cpv,
-            ))
+        (block_rank(a), &a.atom, &a.consumer_cpv).cmp(&(block_rank(b), &b.atom, &b.consumer_cpv))
     });
     skipped.dedup();
     DirectSolveOutput {
@@ -33887,23 +33922,16 @@ fn assemble_result(
         &pass.entries,
         enforced_pins,
     ));
-    pass.skipped_updates.sort_by(|a, b| {
-        (
-            &a.category,
-            &a.package,
-            &a.skipped_version,
-            &a.atom,
-            &a.consumer_cpv,
-        )
-            .cmp(&(
-                &b.category,
-                &b.package,
-                &b.skipped_version,
-                &b.atom,
-                &b.consumer_cpv,
-            ))
-    });
-    pass.skipped_updates.dedup();
+    // #270: first-seen order, like real's `_conflict_missed_update` dict
+    // (insertion order of the solver's removals, `depgraph.py:1529-1565`),
+    // not alphabetical -- exact duplicates collapse to their first row.
+    let mut unique: Vec<SkippedUpdate> = Vec::with_capacity(pass.skipped_updates.len());
+    for row in std::mem::take(&mut pass.skipped_updates) {
+        if !unique.contains(&row) {
+            unique.push(row);
+        }
+    }
+    pass.skipped_updates = unique;
 
     // Masked-dependency chains are walked out of the final entries
     // (`required_by` is only complete post-pass); the atom+masked
