@@ -2710,7 +2710,7 @@ fn elementary_cycles(g: &Digraph, ig: Option<Ignore>) -> Vec<Vec<usize>> {
 /// transitive requirers. A drained child frees its parents (checked
 /// against the shrinking remainder, not the static set), matching
 /// real's shrinking copy.
-fn reduced_merge_order(g: &Digraph, drain: &HashSet<usize>) -> Vec<usize> {
+fn reduced_merge_order(g: &Digraph, drain: &HashSet<usize>, late: &[bool]) -> Vec<usize> {
     // A node is a leaf when it has no still-remaining child in the
     // drain set -- self-edges count, exactly like real's plain
     // `leaf_nodes()` on its shrinking copy (an unsatisfied buildtime
@@ -2732,12 +2732,25 @@ fn reduced_merge_order(g: &Digraph, drain: &HashSet<usize>) -> Vec<usize> {
             // Real `node = tempgraph.order[0]` -- lowest-order remaining
             // node in insertion order (the fallback only fires inside
             // a ring, where every remaining node has a remaining child).
-            leaves = g
-                .order
+            // Backlog #245: a cp that lives in both roots has its
+            // running-root (BDEPEND build-tool) instance inserted after
+            // the target-root one in real's graph, so among the remaining
+            // nodes the target-root ones go first; within a root the
+            // scheduler's own insertion order stands (`g.order`). `late`
+            // is `GraphEntry::targets_running_root` per node (empty = all
+            // target-rooted, the single-root case, which changes nothing).
+            let pos: HashMap<usize, usize> =
+                g.order.iter().enumerate().map(|(p, &i)| (i, p)).collect();
+            leaves = remaining
                 .iter()
                 .copied()
-                .filter(|i| remaining.contains(i))
-                .take(1)
+                .min_by_key(|&i| {
+                    (
+                        late.get(i).copied().unwrap_or(false),
+                        pos.get(&i).copied().unwrap_or(usize::MAX),
+                    )
+                })
+                .into_iter()
                 .collect();
         }
         for i in leaves {
@@ -2794,7 +2807,8 @@ pub(crate) fn cycle_report(
             }
         }
     }
-    let display = reduced_merge_order(&g, &drain);
+    let late: Vec<bool> = entries.iter().map(|e| e.targets_running_root).collect();
+    let display = reduced_merge_order(&g, &drain, &late);
     (cycles, display)
 }
 
@@ -4733,7 +4747,7 @@ mod tests {
             ],
         );
         let drain: HashSet<usize> = [0, 1, 2, 3, 4].into_iter().collect();
-        let order = reduced_merge_order(&g, &drain);
+        let order = reduced_merge_order(&g, &drain, &[]);
         assert_eq!(order.len(), 5);
         assert_eq!(
             order.iter().copied().collect::<HashSet<_>>(),
@@ -4742,13 +4756,13 @@ mod tests {
         );
         // Members-only drain: exactly the members.
         let members: HashSet<usize> = [0, 1, 2, 3].into_iter().collect();
-        let order = reduced_merge_order(&g, &members);
+        let order = reduced_merge_order(&g, &members, &[]);
         assert_eq!(order.len(), 4);
         assert_eq!(order.iter().copied().collect::<HashSet<_>>(), members);
         // Chain: tail-first.
         let chain = test_graph(4, &[(0, 1, prio(1)), (1, 2, prio(1)), (0, 3, prio(1))]);
         let members: HashSet<usize> = [0, 1, 2, 3].into_iter().collect();
-        assert_eq!(reduced_merge_order(&chain, &members), vec![2, 3, 1, 0]);
+        assert_eq!(reduced_merge_order(&chain, &members, &[]), vec![2, 3, 1, 0]);
     }
 
     /// A minimal `New` `GraphEntry` for `build_digraph` tests --

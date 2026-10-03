@@ -13896,16 +13896,27 @@ pub fn run(args: &[String]) -> ExitCode {
             // displayed slice, so abort-partial lists stay
             // self-consistent. One extra schedule+select pass per `--tree`
             // run; the flat list (and everything else) never sees it.
-            let tree_order = portage_repo::tree_display_order(
-                display_entries,
-                &expanded_atoms,
-                &config,
-                &root,
-                implicit_system_deps,
-                &repos,
-                dynamic_deps,
-                &result.circular_dependency,
-            );
+            let tree_order = if circular_forced_display
+                && display_entries.iter().any(|e| e.targets_running_root)
+            {
+                // Backlog #245 (cross-root partial only; the single-root
+                // cycle keeps the re-serialization below): real hands `handler.merge_list` (the stuck remainder
+                // drained in digraph insertion order) straight to `display`; it is
+                // not re-serialized, and `print_tree` walks the reverse of its
+                // retlist, so the partial goes in reversed.
+                (0..display_entries.len()).rev().collect()
+            } else {
+                portage_repo::tree_display_order(
+                    display_entries,
+                    &expanded_atoms,
+                    &config,
+                    &root,
+                    implicit_system_deps,
+                    &repos,
+                    dynamic_deps,
+                    &result.circular_dependency,
+                )
+            };
             rendered_rows = print_tree(
                 display_entries,
                 &tree_order,
