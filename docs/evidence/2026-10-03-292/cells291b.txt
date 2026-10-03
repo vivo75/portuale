@@ -1,0 +1,6 @@
+N1 | - | - | --pretend dev-libs/slotconflictunsolvable dev-libs/slotconflictnewconsumer
+N1b | - | - | --pretend dev-libs/slotconflictnewconsumer dev-libs/slotconflictunsolvable
+N1z | - | - | --pretend --backtrack 0 dev-libs/slotconflictunsolvable dev-libs/slotconflictnewconsumer
+N1bz | - | - | --pretend --backtrack 0 dev-libs/slotconflictnewconsumer dev-libs/slotconflictunsolvable
+N2 | - | - | --pretend dev-libs/slotconflictunsolvable dev-libs/slotconflictnewconsumer dev-libs/slotconflictoldconsumer
+N2z | - | - | --pretend --backtrack 0 dev-libs/slotconflictunsolvable dev-libs/slotconflictnewconsumer dev-libs/slotconflictoldconsumer

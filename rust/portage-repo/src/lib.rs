@@ -34455,8 +34455,29 @@ fn assemble_result(
         // real renders in. Both sources
         // collapse per `(root, slot_atom)` keeping the highest missed
         // pkg (`:1553-1562`) -- see `collapse_skipped_updates`.
+        //
+        // #292: a slot the pass already holds (portuale restarted over a
+        // conflict real settles in its in-pass solver, so the same record
+        // sits in both sources) is real's single `_conflict_missed_update`
+        // entry, at the solver's position -- not a leading
+        // `_runtime_pkg_mask` one. Move such a slot's rows to where its
+        // first pass row sits (rows inside the slot keep their order);
+        // slots only the mask knows keep leading.
+        let slot_of = |s: &SkippedUpdate| (s.category.clone(), s.package.clone(), s.slot.clone());
+        let mask_len = mask_skipped.len();
+        let mut anchor: HashMap<(String, String, String), usize> = HashMap::new();
+        for (i, s) in pass.skipped_updates.iter().enumerate() {
+            anchor.entry(slot_of(s)).or_insert(mask_len + i);
+        }
         let mut combined = mask_skipped;
         combined.append(&mut pass.skipped_updates);
+        let mut keyed: Vec<(usize, SkippedUpdate)> = combined
+            .into_iter()
+            .enumerate()
+            .map(|(i, s)| (anchor.get(&slot_of(&s)).copied().unwrap_or(i), s))
+            .collect();
+        keyed.sort_by_key(|(k, _)| *k);
+        let combined: Vec<SkippedUpdate> = keyed.into_iter().map(|(_, s)| s).collect();
         pass.skipped_updates = collapse_skipped_updates(combined);
         skipped_missing_deps = mask_missing;
         skipped_missing_dep_full = mask_full;
