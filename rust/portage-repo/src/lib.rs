@@ -22167,7 +22167,16 @@ fn merge_same_slot_conflicts(
                     // against (see its doc comment): tree
                     // slot/sub-slot, USE checked against the
                     // instance's own resolved flags.
-                    let (sub, _, _) = slot_conflict_meta(repos, category, package, &inst.version);
+                    // #291: an installed instance carries its own vdb
+                    // sub-slot (`build_slot_conflict` read it there); the
+                    // tree's metadata for the same version can differ, or
+                    // be absent, and would drop a built `:S/SS=` puller
+                    // from the instance it actually pulls.
+                    let sub = if inst.installed {
+                        inst.sub_slot.clone()
+                    } else {
+                        slot_conflict_meta(repos, category, package, &inst.version).0
+                    };
                     let match_str = if sub.is_empty() {
                         format!("{category}/{package}-{}:{slot}", inst.version)
                     } else {
@@ -59791,6 +59800,71 @@ mod tests {
                 ("mgxd", "2", "=dev-libs/mgxd-2"),
                 ("mgxd", "2", "<dev-libs/mgxd-3"),
             ]
+        );
+    }
+
+    /// Backlog #291: the bt0 lone-record re-file matches a built
+    /// `:S/SS=` puller against the installed instance's own vdb sub-slot,
+    /// not the tree's metadata for that version.
+    #[test]
+    fn merge_same_slot_conflicts_refiles_a_built_puller_under_the_installed_sub_slot() {
+        let base = slotundo_temp_dir("291-refile");
+        let repo = base.join("repo");
+        let dir = repo.join("dev-libs/foo");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("foo-1.0.ebuild"),
+            "EAPI=8\nDESCRIPTION=\"291\"\nSLOT=\"0/1\"\nKEYWORDS=\"amd64\"\n",
+        )
+        .unwrap();
+        let repos = vec![RepoConfig {
+            name: "testrepo".to_string(),
+            location: repo.clone(),
+            priority: 0,
+            is_main: true,
+            masters: vec![],
+            profile_formats: vec![],
+            cache_formats: vec![],
+            aliases: vec![],
+            sync_type: None,
+            sync_uri: None,
+            volatile: false,
+            module_specific_options: vec![],
+        }];
+        let inst = |version: &str, sub: &str, installed: bool| SlotConflictInstance {
+            version: version.to_string(),
+            sub_slot: sub.to_string(),
+            repo_name: "testrepo".to_string(),
+            use_display: Vec::new(),
+            parents: Vec::new(),
+            installed,
+        };
+        // The installed foo-1.0 was built at 0/9; the tree's 1.0 says 0/1.
+        let conflict = SlotConflict {
+            category: "dev-libs".to_string(),
+            package: "foo".to_string(),
+            slot: "0".to_string(),
+            resolved_version: "2.0".to_string(),
+            conflicting_atom: "dev-libs/foo:0/9=".to_string(),
+            instances: vec![inst("1.0", "9", true), inst("2.0", "2", false)],
+        };
+        let mut pullers: SlotPullers = HashMap::new();
+        pullers.insert(
+            ("dev-libs".to_string(), "foo".to_string()),
+            vec![(
+                "dev-libs".to_string(),
+                "parent".to_string(),
+                "1.0".to_string(),
+                "dev-libs/foo:0/9=".to_string(),
+            )],
+        );
+        let out =
+            merge_same_slot_conflicts(&[conflict], &pullers, &repos, &test_config(), &base, true);
+        let installed = out[0].instances.iter().find(|i| i.installed).unwrap();
+        assert_eq!(
+            installed.parents.len(),
+            1,
+            "the `:0/9=` puller files under the installed 0/9 instance"
         );
     }
 
