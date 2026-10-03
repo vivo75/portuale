@@ -1,0 +1,7 @@
+E0-base | app-misc/bdprov-1:0/1 ; app-misc/bdprov-2:1/1 | | --pretend --update --deep app-misc/bdprov
+E1-holder-world | app-misc/bdprov-1:0/1 ; app-misc/bdprov-2:1/1 ; app-misc/bdhold-1:0:app-misc/bdprov:0 | app-misc/bdhold | --pretend --update app-misc/bdprov
+E2-holder-world-deep | app-misc/bdprov-1:0/1 ; app-misc/bdprov-2:1/1 ; app-misc/bdhold-1:0:app-misc/bdprov:0 | app-misc/bdhold | --pretend --update --deep app-misc/bdprov
+E3-holder-world-set | app-misc/bdprov-1:0/1 ; app-misc/bdprov-2:1/1 ; app-misc/bdhold-1:0:app-misc/bdprov:0 | app-misc/bdhold | --pretend --update @world app-misc/bdprov
+E4-slotatom-world-set | app-misc/bdprov-1:0/1 ; app-misc/bdprov-2:1/1 | app-misc/bdprov:0 | --pretend --update @world app-misc/bdprov
+E5-slotatom-world | app-misc/bdprov-1:0/1 ; app-misc/bdprov-2:1/1 | app-misc/bdprov:0 | --pretend --update app-misc/bdprov
+E6-holder-world-set-deep | app-misc/bdprov-1:0/1 ; app-misc/bdprov-2:1/1 ; app-misc/bdhold-1:0:app-misc/bdprov:0 | app-misc/bdhold | --pretend --update --deep @world app-misc/bdprov
