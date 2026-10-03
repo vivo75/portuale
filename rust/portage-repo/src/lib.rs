@@ -16206,6 +16206,13 @@ fn reverse_dependency_constraints(
                     if *ucp != cp {
                         continue;
                     }
+                    // #296: an atom with an explicit slot constrains that
+                    // slot's instance only; an upgrade in another slot
+                    // leaves it standing (`bdhold`'s `bdprov:0` is not
+                    // broken by `bdprov-3` arriving in slot 1).
+                    if atom.slot.as_deref().is_some_and(|ps| ps != slot.as_str()) {
+                        continue;
+                    }
                     let probe = if *reinstall_slot_change {
                         verbatim_head
                     } else {
@@ -21097,6 +21104,38 @@ fn resolve_blockers_with_seeds(
         }
         m
     };
+    // #296: besides the set atoms themselves, real's complete graph holds an
+    // instance through the live vdb edge of an installed package the
+    // required sets reach (a nomerge node the walk never visited): its
+    // recorded atoms join the seeds `set_seed_holds_instance` tests, built
+    // lazily (one vdb scan, only when a blocker reaches that test) and
+    // never from a cp this run merges (its edges are re-resolved).
+    let hold_atoms: std::cell::OnceCell<Vec<String>> = std::cell::OnceCell::new();
+    let hold_seeds = || -> &Vec<String> {
+        hold_atoms.get_or_init(|| {
+            let merge_bound: HashSet<(String, String)> = entries
+                .iter()
+                .filter(|e| merge_bound_version(&e.outcome).is_some())
+                .map(|e| (e.category.clone(), e.package.clone()))
+                .collect();
+            let mut atoms: Vec<String> = set_seed_atoms.to_vec();
+            for pkg in all_installed_packages(root) {
+                let cp = (pkg.category.clone(), pkg.package.clone());
+                if !blocker_retry_closure.contains(&cp) || merge_bound.contains(&cp) {
+                    continue;
+                }
+                let use_flags =
+                    read_vdb_flag_set(root, &pkg.category, &pkg.package, &pkg.version, "USE");
+                for key in ["RDEPEND", "PDEPEND", "IDEPEND"] {
+                    let dep = read_vdb_string(root, &pkg.category, &pkg.package, &pkg.version, key);
+                    if let Some(found) = flat_dep_atoms(&dep, &use_flags) {
+                        atoms.extend(found);
+                    }
+                }
+            }
+            atoms
+        })
+    };
     for pb in pending {
         // #143 S1: under `--buildpkgonly` a blocker that is not
         // strong-buildtime never pairs an uninstall (real's
@@ -21372,7 +21411,7 @@ fn resolve_blockers_with_seeds(
                             &merge_slots,
                         ) || (blocker_retry_closure.contains(&target_key) && !cp_moves_slot)
                             || set_seed_holds_instance(
-                                set_seed_atoms,
+                                hold_seeds(),
                                 entries,
                                 &pb.target_category,
                                 &pb.target_package,
@@ -60041,6 +60080,40 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![("x", "2"), ("y", "1")]
         );
+    }
+
+    /// Backlog #296: an installed holder's recorded `bdprov:0` is a seed
+    /// atom like a world atom -- it holds the slot-0 instance a slot-1
+    /// merge would otherwise uninstall; `:=` / bare edges hold nothing.
+    #[test]
+    fn set_seed_holds_the_instance_an_installed_holders_slot_edge_selects() {
+        let merged = GraphEntry {
+            outcome: PretendOutcome::Upgrade {
+                from: "2".into(),
+                to: "3".into(),
+            },
+            slot: Some("1".into()),
+            sub_slot: Some("2".into()),
+            ..graph_entry("app-misc", "bdprov", "3")
+        };
+        let held = |atoms: &[&str]| {
+            let atoms: Vec<String> = atoms.iter().map(|a| (*a).to_string()).collect();
+            set_seed_holds_instance(
+                &atoms,
+                &[merged.clone()],
+                "app-misc",
+                "bdprov",
+                "1",
+                "0",
+                "1",
+            )
+        };
+        assert!(held(&["app-misc/bdprov:0"]));
+        assert!(
+            !held(&["app-misc/bdprov:="]),
+            "a bare `:=` edge rebinds to the merge"
+        );
+        assert!(!held(&["app-misc/bdprov"]));
     }
 
     /// Backlog #289: a set atom that selects the old instance holds it
