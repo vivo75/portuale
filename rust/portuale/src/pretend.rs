@@ -9782,8 +9782,15 @@ fn skipped_node_suffix(running: bool, root: &Path, running_root: Option<&Path>) 
 /// spans are computed on the raw atom text (no color realignment --
 /// same deliberate divergence as the slot block's own markers).
 /// USE-token spans stay a documented cut (no grounded case carries
-/// USE-deps on a skipped row).
-fn skip_conflict_caret_line(atom: &str, pkg_slot: &str, pkg_sub_slot: &str) -> String {
+/// USE-deps on a skipped row). `highlight_version` is real's
+/// `highlight_version` (#270): the operator and version spans are only
+/// marked when the missed package fails the atom's version part.
+fn skip_conflict_caret_line(
+    atom: &str,
+    pkg_slot: &str,
+    pkg_sub_slot: &str,
+    highlight_version: bool,
+) -> String {
     // Collect real's highlight spans first, then render once: spans may
     // abut (a version end meets its `:slot` start), so incremental
     // push-`^`-or-pad rendering would misplace the later one.
@@ -9793,11 +9800,11 @@ fn skip_conflict_caret_line(atom: &str, pkg_slot: &str, pkg_sub_slot: &str) -> S
         .take_while(|c| matches!(c, '=' | '<' | '>' | '~' | '!'))
         .map(|c| c.len_utf8())
         .sum();
-    if op_len > 0 {
+    if op_len > 0 && highlight_version {
         spans.push((0, op_len));
     }
     let parsed = portage_dep::parse_atom(atom);
-    if let Some(ver) = parsed.as_ref().and_then(|a| a.version.clone()) {
+    if highlight_version && let Some(ver) = parsed.as_ref().and_then(|a| a.version.clone()) {
         // Last occurrence: a package name itself may contain digits
         // (`foo-2-bar-1.0`), so anchoring on the first would mark the
         // wrong span. A trailing `-rN` revision is left out of the
@@ -14827,9 +14834,29 @@ pub fn run(args: &[String]) -> ExitCode {
                         render_pkg_use_display(&consumer_use),
                     );
                 }
+                // #270: real marks the operator + version only when the
+                // missed package does not satisfy the version part
+                // (`highlight_version`, `output.py:925-929`: the atom
+                // without repo, slot and USE against the package).
+                let version_ok = {
+                    let cpv = format!(
+                        "{}/{}-{}",
+                        header.category, header.package, header.skipped_version
+                    );
+                    let base = portage_dep::without_use(&s.atom);
+                    let base = base.split("::").next().unwrap_or(base);
+                    let base = base.split(':').next().unwrap_or(base);
+                    portage_dep::match_from_list(base, &[cpv.as_str()])
+                        .is_some_and(|m| !m.is_empty())
+                };
                 println!(
                     "    {}",
-                    skip_conflict_caret_line(&s.atom, &header.slot, &header.skipped_sub_slot)
+                    skip_conflict_caret_line(
+                        &s.atom,
+                        &header.slot,
+                        &header.skipped_sub_slot,
+                        !version_ok
+                    )
                 );
             }
         }

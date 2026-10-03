@@ -22116,6 +22116,7 @@ fn merge_same_slot_conflicts(
     repos: &[RepoConfig],
     config: &portage_profile::Config,
     root: &Path,
+    refile_singletons: bool,
 ) -> Vec<SlotConflict> {
     let mut order: Vec<(String, String, String)> = Vec::new();
     let mut groups: HashMap<(String, String, String), Vec<usize>> = HashMap::new();
@@ -22132,7 +22133,7 @@ fn merge_same_slot_conflicts(
     let mut merged = Vec::with_capacity(conflicts.len());
     for key in order {
         let idxs = &groups[&key];
-        if idxs.len() == 1 {
+        if idxs.len() == 1 && !refile_singletons {
             merged.push(conflicts[idxs[0]].clone());
             continue;
         }
@@ -22820,19 +22821,28 @@ fn direct_solve_atom_matches(
     // the need_rebuild-trailer conflict). Slot and cp always agree
     // here (edges are per-conflict); version/USE never discriminate
     // a same-slot `:=` pull.
-    if atom.slot_operator == Some(portage_dep::SlotOperator::Equals)
+    let bare_equals = atom.slot_operator == Some(portage_dep::SlotOperator::Equals)
         && atom.slot.is_none()
         && atom.sub_slot.is_none()
         && atom.category == c.category
-        && atom.package == c.package
-    {
+        && atom.package == c.package;
+    if bare_equals && atom.version.is_none() {
         return true;
     }
-    let probe_atom: String = if atom.use_deps.as_ref().is_some_and(|d| !d.is_empty()) {
+    let mut probe_atom: String = if atom.use_deps.as_ref().is_some_and(|d| !d.is_empty()) {
         portage_dep::without_use(atom_text).to_string()
     } else {
         atom_text.to_string()
     };
+    // #270: a *versioned* bare `:=` atom (`>=cat/pkg-4.02:=`) still
+    // discriminates by version in real (`atom.match` applies the
+    // version; the `:=` only narrows by slot linkage, which this
+    // per-conflict edge already shares), so drop the operator and match
+    // the rest. Without this `mllabltk`'s `>=mlocaml-4.02:=` accepted
+    // the installed `4.01.0` and never forced the `4.02.1` instance.
+    if bare_equals && let Some(stripped) = probe_atom.strip_suffix(":=") {
+        probe_atom = stripped.to_string();
+    }
     let (sub, repo, slot_of_ver) =
         slot_conflict_meta(input.repos, &c.category, &c.package, &inst.version);
     let probe = format!(
@@ -23206,18 +23216,44 @@ pub(crate) fn direct_solve_slot_conflicts(input: DirectSolveInput<'_>) -> Direct
                         &c.package,
                         &inst.version,
                     );
+                    // #270: a parent no merge entry replaces, whose installed
+                    // instance carries the atom, is real's installed
+                    // (nomerge) node -- `installed in '<root>'`, vdb
+                    // slot/repo, like the #205 rows of
+                    // `backtrack_missed_updates` -- not a merge-scheduled
+                    // one. A merge-scheduled parent keeps the tree form.
+                    let parent_bare = p.parent_cpv.split(':').next().unwrap_or("");
+                    let (parent_cpv_disp, parent_installed) = if p.installed {
+                        (p.parent_cpv.clone(), true)
+                    } else if let Some((pc, pp, pv)) = split_cpv(parent_bare)
+                        && !input.entries.iter().any(|e| {
+                            e.category == pc
+                                && e.package == pp
+                                && merge_bound_version(&e.outcome) == Some(&pv)
+                        })
+                        && let Some(r) = installed_refs(input.root, &pc, &pp)
+                            .into_iter()
+                            .find(|r| r.version == pv)
+                    {
+                        (
+                            format!("{pc}/{pp}-{pv}:{}/{}::{}", r.slot, r.sub_slot, r.repo),
+                            true,
+                        )
+                    } else {
+                        (p.parent_cpv.clone(), false)
+                    };
                     let consumer_use = skipped_consumer_use_display(
                         input.repos,
                         input.root,
                         input.config,
-                        &p.parent_cpv,
-                        p.installed,
+                        &parent_cpv_disp,
+                        parent_installed,
                     );
                     // Backlog #242 Slice D: per-node roots (the missed
                     // instance rides the rejecting parent's edge; a merge
                     // parent rides its entry; installed parents ride the
                     // walk root — always the target walk here).
-                    let (missed_running, consumer_running) = if p.installed {
+                    let (missed_running, consumer_running) = if parent_installed {
                         (false, false)
                     } else {
                         let parent = p.parent_cpv.split(':').next().unwrap_or("");
@@ -23240,8 +23276,8 @@ pub(crate) fn direct_solve_slot_conflicts(input: DirectSolveInput<'_>) -> Direct
                         skipped_repo: inst.repo_name.clone(),
                         skipped_use,
                         atom: p.atom.clone(),
-                        consumer_cpv: p.parent_cpv.clone(),
-                        consumer_installed: p.installed,
+                        consumer_cpv: parent_cpv_disp,
+                        consumer_installed: parent_installed,
                         consumer_use,
                         missed_targets_running_root: missed_running,
                         consumer_targets_running_root: consumer_running,
@@ -23262,21 +23298,30 @@ pub(crate) fn direct_solve_slot_conflicts(input: DirectSolveInput<'_>) -> Direct
             surviving.push(rest);
         }
     }
+    // #270: blocks in the order their missed package was first recorded
+    // (real renders its `_conflict_missed_update` dict in insertion
+    // order, `depgraph.py:1529-1565`); only the parents inside one block
+    // are sorted -- real iterates a set there, so any fixed order is as
+    // good, and a stable one keeps the output deterministic.
+    let mut first_seen: Vec<(String, String, String)> = Vec::new();
+    for s in &skipped {
+        let k = (
+            s.category.clone(),
+            s.package.clone(),
+            s.skipped_version.clone(),
+        );
+        if !first_seen.contains(&k) {
+            first_seen.push(k);
+        }
+    }
+    let block_rank = |s: &SkippedUpdate| -> usize {
+        first_seen
+            .iter()
+            .position(|k| k.0 == s.category && k.1 == s.package && k.2 == s.skipped_version)
+            .unwrap_or(usize::MAX)
+    };
     skipped.sort_by(|a, b| {
-        (
-            &a.category,
-            &a.package,
-            &a.skipped_version,
-            &a.atom,
-            &a.consumer_cpv,
-        )
-            .cmp(&(
-                &b.category,
-                &b.package,
-                &b.skipped_version,
-                &b.atom,
-                &b.consumer_cpv,
-            ))
+        (block_rank(a), &a.atom, &a.consumer_cpv).cmp(&(block_rank(b), &b.atom, &b.consumer_cpv))
     });
     skipped.dedup();
     DirectSolveOutput {
@@ -23927,7 +23972,8 @@ fn missing_dep_full_row(
 /// every parent inside, portuale one row per parent, grouped into
 /// one block at render by [`group_skipped_updates`]); exact
 /// duplicates collapse to one. Relative order is preserved: mask
-/// rows lead, direct rows follow.
+/// rows lead, then the direct solve's rows in first-seen block order,
+/// then the pin withholds (sorted).
 fn collapse_skipped_updates(rows: Vec<SkippedUpdate>) -> Vec<SkippedUpdate> {
     let mut best: HashMap<(String, String, String), String> = HashMap::new();
     for s in &rows {
@@ -23979,7 +24025,7 @@ fn collapse_skipped_updates(rows: Vec<SkippedUpdate>) -> Vec<SkippedUpdate> {
 /// renderer groups rows naming the same missed pkg into one block
 /// (`GraphResult::skipped_updates` order is preserved: groups keep
 /// first-seen order, parents keep row order -- mask rows arrive in
-/// first-seen mask order, direct rows sorted). Real itself iterates an
+/// first-seen mask order, direct rows in first-seen block order). Real itself iterates an
 /// unordered set -- `Package` keeps identity hash
 /// (`_emerge/Package.py:27`) -- so its within-block order is hash
 /// order; the `blk0b blk0c blk0a` oracle's b-then-c order is what the
@@ -29721,7 +29767,18 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     };
                     if portage_dep::match_from_list(&current_atom, &[existing_str.as_str()])
                         .is_none_or(|m| m.is_empty())
-                        && !built_slot_operator_rebuild_trigger(&current_atom, &existing_str)
+                        // #270: the "this is a rebuild trigger, not a conflict"
+                        // forgiveness presumes the slot-operator rebuild scan
+                        // will schedule the consumer, and that scan only runs
+                        // with a backtrack budget (`backtrack_max > 0`, like
+                        // its own call site). At `--backtrack=0` nothing
+                        // schedules the rebuild, so real's in-pass solver
+                        // (`_solve_non_slot_operator_slot_conflicts`,
+                        // `depgraph.py:1774-2115`) sees the conflict and
+                        // withholds the provider update instead of merging it
+                        // alone (real 3.0.82.2: `[sct, oldc, newc]` only).
+                        && !(ctx.backtrack_max > 0
+                            && built_slot_operator_rebuild_trigger(&current_atom, &existing_str))
                     {
                         record_slot_conflict(
                             &mut state.slot_conflicts,
@@ -32015,6 +32072,17 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         &ctx.repos,
         config,
         ctx.root,
+        // #270: a record is built when its first mismatching atom is
+        // seen, so a parent walked later (a sibling that pulls the same
+        // cp after the detection) is missing from a lone record's
+        // parents, and the direct solve would remove an instance real's
+        // solver keeps forced (`mlocaml`/`mllabltk`: real reports the
+        // unsolvable conflict, `depgraph.py:1858-1870`). Real's solver
+        // reads the final `_parent_atoms`; at `--backtrack=0`, where the
+        // exemption for built slot-operator triggers no longer hides
+        // such records (see the walk's conflict arm), re-file the lone
+        // records from the live pullers like the merged ones.
+        ctx.backtrack_max == 0,
     );
     if !state.slot_conflicts.is_empty() {
         let solved = direct_solve_slot_conflicts(DirectSolveInput {
@@ -33848,14 +33916,12 @@ fn assemble_result(
     } else {
         &params.reverse_dep_pins
     };
-    pass.skipped_updates.extend(constraint_withheld_updates(
-        &ctx.repos,
-        ctx.root,
-        config,
-        &pass.entries,
-        enforced_pins,
-    ));
-    pass.skipped_updates.sort_by(|a, b| {
+    // The withhold rows keep their established deterministic order
+    // (alphabetical by package, then atom and consumer); the direct
+    // solve's rows ahead of them keep real's first-seen block order.
+    let mut withheld =
+        constraint_withheld_updates(&ctx.repos, ctx.root, config, &pass.entries, enforced_pins);
+    withheld.sort_by(|a, b| {
         (
             &a.category,
             &a.package,
@@ -33871,7 +33937,17 @@ fn assemble_result(
                 &b.consumer_cpv,
             ))
     });
-    pass.skipped_updates.dedup();
+    pass.skipped_updates.extend(withheld);
+    // #270: first-seen order, like real's `_conflict_missed_update` dict
+    // (insertion order of the solver's removals, `depgraph.py:1529-1565`),
+    // not alphabetical -- exact duplicates collapse to their first row.
+    let mut unique: Vec<SkippedUpdate> = Vec::with_capacity(pass.skipped_updates.len());
+    for row in std::mem::take(&mut pass.skipped_updates) {
+        if !unique.contains(&row) {
+            unique.push(row);
+        }
+    }
+    pass.skipped_updates = unique;
 
     // Masked-dependency chains are walked out of the final entries
     // (`required_by` is only complete post-pass); the atom+masked
@@ -34058,9 +34134,10 @@ fn assemble_result(
         );
         // Real chains the mask dict before the handler removals
         // (`:1533-1536`), so mask rows lead in first-seen order and the
-        // direct-solve/withhold rows keep their established sorted
-        // order behind them. No re-sort: alphabetical would scramble
-        // the mask insertion order real renders in. Both sources
+        // direct-solve rows (first-seen block order) and the sorted
+        // withhold rows keep their established order behind them. No
+        // re-sort: alphabetical would scramble the mask insertion order
+        // real renders in. Both sources
         // collapse per `(root, slot_atom)` keeping the highest missed
         // pkg (`:1553-1562`) -- see `collapse_skipped_updates`.
         let mut combined = mask_skipped;

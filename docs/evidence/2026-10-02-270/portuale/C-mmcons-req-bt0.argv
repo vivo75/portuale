@@ -1,0 +1,1 @@
+/usr/local/bin/emerge --ignore-default-opts --color=n  --pretend --backtrack 0 --update --deep app-misc/mmcons dev-libs/slotconflictoldconsumer dev-libs/slotconflictnewconsumer
