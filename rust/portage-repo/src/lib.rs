@@ -30434,22 +30434,52 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                         ctx.excluded,
                     ));
             if !satisfied {
-                record_slot_conflict(
-                    &mut state.slot_conflicts,
-                    build_slot_conflict(
-                        &ctx.repos,
-                        config,
-                        ctx.root,
-                        &key.0,
-                        &key.1,
-                        &slot,
-                        &existing_version,
-                        &current_atom,
-                        &version,
-                        &state.slot_pullers,
-                        None,
-                    ),
-                );
+                // #290: the same rebuild-trigger forgiveness as the
+                // AlreadyInstalled arm above. A provider pulled in only
+                // by the slot-operator forced upgrade (`pprov` not
+                // requested) reaches this merge arm, where the installed
+                // `:=` consumer's built atom (`>=pprov-1:0/1=`) fails the
+                // new sub-slot -- a rebuild trigger the scan schedules
+                // (`rR pcons`), not a conflict (real 3.0.82.2, bt > 0).
+                //
+                // Only with an installed instance in this slot that the
+                // atom still accepts (the instance the forced upgrade
+                // replaces): with none installed (`abiprov`, both
+                // versions merge-bound) the record is what drives the
+                // conflict-fired ABI rebuild probe (#214), so it stays.
+                let installed_accepts = installed_refs(ctx.root, &key.0, &key.1)
+                    .iter()
+                    .filter(|r| r.slot == slot)
+                    .any(|r| {
+                        let inst = if r.sub_slot.is_empty() {
+                            format!("{}/{}-{}:{slot}", key.0, key.1, r.version)
+                        } else {
+                            format!("{}/{}-{}:{slot}/{}", key.0, key.1, r.version, r.sub_slot)
+                        };
+                        portage_dep::match_from_list(&current_atom, &[inst.as_str()])
+                            .is_some_and(|m| !m.is_empty())
+                    });
+                if !(ctx.backtrack_max > 0
+                    && installed_accepts
+                    && built_slot_operator_rebuild_trigger(&current_atom, &existing_str))
+                {
+                    record_slot_conflict(
+                        &mut state.slot_conflicts,
+                        build_slot_conflict(
+                            &ctx.repos,
+                            config,
+                            ctx.root,
+                            &key.0,
+                            &key.1,
+                            &slot,
+                            &existing_version,
+                            &current_atom,
+                            &version,
+                            &state.slot_pullers,
+                            None,
+                        ),
+                    );
+                }
                 continue;
             }
             // Backlog #90 (S1): a bare `:=` that *matches* the
