@@ -1,0 +1,12 @@
+B-bt1 | app-misc/pprov-1:0/1 ; app-misc/pcons-1:0:>=app-misc/pprov-1:0/1= | | --pretend --backtrack 1 --update --deep app-misc/pcons dev-libs/slotconflictoldconsumer dev-libs/slotconflictnewconsumer
+B-bt2 | app-misc/pprov-1:0/1 ; app-misc/pcons-1:0:>=app-misc/pprov-1:0/1= | | --pretend --backtrack 2 --update --deep app-misc/pcons dev-libs/slotconflictoldconsumer dev-libs/slotconflictnewconsumer
+B-bt3 | app-misc/pprov-1:0/1 ; app-misc/pcons-1:0:>=app-misc/pprov-1:0/1= | | --pretend --backtrack 3 --update --deep app-misc/pcons dev-libs/slotconflictoldconsumer dev-libs/slotconflictnewconsumer
+A-bt1 | app-misc/pprov-1:0/1 ; app-misc/pcons-1:0:>=app-misc/pprov-1:0/1= | | --pretend --backtrack 1 --update --deep app-misc/pprov app-misc/pcons dev-libs/slotconflictoldconsumer dev-libs/slotconflictnewconsumer
+A-bt2 | app-misc/pprov-1:0/1 ; app-misc/pcons-1:0:>=app-misc/pprov-1:0/1= | | --pretend --backtrack 2 --update --deep app-misc/pprov app-misc/pcons dev-libs/slotconflictoldconsumer dev-libs/slotconflictnewconsumer
+C-bt1 | app-misc/mmprov-1:0/1 ; app-misc/mmprov-2:1/1 ; app-misc/mmcons-1:0:app-misc/mmprov:0/1= | | --pretend --backtrack 1 --update --deep app-misc/mmcons dev-libs/slotconflictoldconsumer dev-libs/slotconflictnewconsumer
+C-bt2 | app-misc/mmprov-1:0/1 ; app-misc/mmprov-2:1/1 ; app-misc/mmcons-1:0:app-misc/mmprov:0/1= | | --pretend --backtrack 2 --update --deep app-misc/mmcons dev-libs/slotconflictoldconsumer dev-libs/slotconflictnewconsumer
+G-bt1 | - | - | --pretend --backtrack 1 dev-libs/btgp
+G-bt2 | - | - | --pretend --backtrack 2 dev-libs/btgp
+G-bt3 | - | - | --pretend --backtrack 3 dev-libs/btgp
+G-bt4 | - | - | --pretend --backtrack 4 dev-libs/btgp
+P-bt20 | app-misc/pprov-1:0/1 ; app-misc/pcons-1:0:>=app-misc/pprov-1:0/1= | | --pretend -uDvN app-misc/pprov app-misc/pcons dev-libs/btparent
