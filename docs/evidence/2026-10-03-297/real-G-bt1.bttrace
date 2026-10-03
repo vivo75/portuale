@@ -1,0 +1,5 @@
+BTFEEDBACK keys=['slot conflict'] cur_depth=0 cur_ms=0 slotconf=[[['(dev-libs/btgc-2:0/0::testrepo, ebuild scheduled for merge)'], ['(dev-libs/btgc-1:0/0::testrepo, ebuild scheduled for merge)']]] missing=None config=[]
+BTNODE 0 depth=0 ms=0 term=True mask=[] repl=[] rebuild=[] reinst=[] mb=[]
+BTNODE 1 depth=1 ms=1 term=False mask=['(dev-libs/btgc-2:0/0::testrepo, ebuild scheduled for merge)'] repl=[] rebuild=[] reinst=[] mb=[]
+BTNODE 2 depth=1 ms=1 term=False mask=['(dev-libs/btgc-1:0/0::testrepo, ebuild scheduled for merge)'] repl=[] rebuild=[] reinst=[] mb=[]
+BTBEST repl=[]
