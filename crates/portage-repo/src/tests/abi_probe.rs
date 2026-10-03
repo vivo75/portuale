@@ -339,3 +339,36 @@ fn slot_conflict_abi_display_pairs_follow_the_rebuild() {
     );
     let _ = fs::remove_dir_all(&base);
 }
+
+/// An argument atom is a probe parent of its own cp and vetoes candidates its
+/// atom does not match.
+#[test]
+fn argument_probe_parents_veto_a_candidate_the_argument_does_not_match() {
+    let mut parents: HashMap<(String, String), Vec<ProbeParent>> = HashMap::new();
+    let atoms: HashSet<String> = ["=app-misc/mmprov-1", "!app-misc/blk", "app-misc/mmcons"]
+        .iter()
+        .map(|a| (*a).to_string())
+        .collect();
+    add_argument_probe_parents(&mut parents, &atoms);
+    let provider = ("app-misc".to_string(), "mmprov".to_string());
+    let consumer = ("app-misc".to_string(), "mmcons".to_string());
+    assert!(
+        !parents.contains_key(&("app-misc".to_string(), "blk".to_string())),
+        "a blocker argument is not a parent"
+    );
+    let scheduled = BTreeSet::new();
+    assert!(probe_refused(
+        &parents,
+        &scheduled,
+        &provider,
+        "app-misc/mmprov-3:1/2",
+        &consumer
+    ));
+    assert!(!probe_refused(
+        &parents,
+        &scheduled,
+        &provider,
+        "app-misc/mmprov-1:0/1",
+        &consumer
+    ));
+}
