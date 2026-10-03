@@ -28724,17 +28724,47 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
 
     let pprovided_refs: Vec<&str> = config.package_provided.iter().map(String::as_str).collect();
 
-    'queue: while let Some(QueueItem {
-        atom: current_atom,
-        depth,
-        owner,
-        owner_targets_running_root: item_owner_targets_running_root,
-        unevaluated: unevaluated_atom,
-        targets_running_root: item_targets_running_root,
-        buildtime_hard,
-        from_disjunction,
-    }) = state.queue.pop_front()
-    {
+    // #298: real adds every argument's package first, then pops its
+    // `_dep_stack` LIFO, so the last argument's whole subtree is walked
+    // before the previous argument's deps are even looked at
+    // (`_create_graph`, `depgraph.py:3254-3271`). Portuale's FIFO queue
+    // would walk every argument's direct deps first, interleaving the
+    // subtrees (`slotconflictnewconsumer slotconflictunsolvable` selected
+    // the bare dep's 2.0 before the pin pair's 1.0; real adds 1.0 first).
+    // The children each seed item enqueues are set aside as one block
+    // and the blocks drain one after the other, in seed order.
+    let mut seeds_left = state.queue.len();
+    let mut seed_split_at: Option<usize> = None;
+    let mut held_blocks: VecDeque<VecDeque<QueueItem>> = VecDeque::new();
+    'queue: loop {
+        if let Some(n) = seed_split_at.take()
+            && state.queue.len() > n
+        {
+            held_blocks.push_back(state.queue.split_off(n));
+        }
+        if state.queue.is_empty() {
+            match held_blocks.pop_front() {
+                Some(block) => state.queue = block,
+                None => break,
+            }
+        }
+        let Some(QueueItem {
+            atom: current_atom,
+            depth,
+            owner,
+            owner_targets_running_root: item_owner_targets_running_root,
+            unevaluated: unevaluated_atom,
+            targets_running_root: item_targets_running_root,
+            buildtime_hard,
+            from_disjunction,
+        }) = state.queue.pop_front()
+        else {
+            break;
+        };
+        if seeds_left > 0 {
+            seeds_left -= 1;
+            seed_split_at = Some(state.queue.len());
+        }
         let Some(atom) = portage_dep::parse_atom(&current_atom) else {
             if owner.is_some() {
                 note_unparsed_dep_token(&current_atom, "resolver queue");
