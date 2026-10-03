@@ -16537,6 +16537,38 @@ fn collect_probe_parents(
     parents
 }
 
+/// Backlog #288: argument parents of the update probe. Real's
+/// `_add_parent_atom` records an argument (`Arg`) as a parent of the
+/// package it selects, so `_slot_operator_check_reverse_dependencies`
+/// refuses a provider candidate that fails an argument atom
+/// (`=app-misc/mmprov-1` vetoes every slot-1 candidate, `--debug`:
+/// `candidate package does not match atom`). The installed-parent
+/// collection above never sees arguments; this files each top-level atom
+/// under its own cp with an empty-cp pseudo parent, which
+/// [`probe_refused`] neither skips as the consumer nor finds scheduled.
+/// Cut: only the rebuild scan's call site files arguments (the slot-
+/// conflict probe and the force scan keep installed parents only).
+fn add_argument_probe_parents(
+    parents: &mut HashMap<(String, String), Vec<ProbeParent>>,
+    top_level_atoms: &HashSet<String>,
+) {
+    for token in top_level_atoms {
+        let Some(atom) = portage_dep::parse_atom(token) else {
+            continue;
+        };
+        if atom.blocker != portage_dep::Blocker::None {
+            continue;
+        }
+        parents
+            .entry((atom.category.clone(), atom.package.clone()))
+            .or_default()
+            .push(ProbeParent {
+                parent: (String::new(), String::new()),
+                atom: token.clone(),
+            });
+    }
+}
+
 /// Refusal half of the probe: does any surviving parent of `provider_cp`
 /// (other than the consumer itself) reject `fresh_cand`? See
 /// [`collect_probe_parents`]. `scheduled` is the replace set as it grows
@@ -17239,9 +17271,12 @@ fn slot_operator_rebuild_scan(
     // `_slot_operator_check_reverse_dependencies`, `depgraph.py:2472`).
     // Collected once per scan; the per-edge verdict reads the replace
     // set as it grows (see `probe_refused`).
-    let probe_parents = collect_probe_parents(
+    let mut probe_parents = collect_probe_parents(
         root, entries, reachable, &walked, &in_graph, already, with_bdeps, excluded,
     );
+    // #288: real records the arguments as parents too (`_add_parent_atom`),
+    // so an argument pin vetoes a provider candidate it does not match.
+    add_argument_probe_parents(&mut probe_parents, top_level_atoms);
     // #268 cut (a): the requested cps real's `--update` greedy expansion
     // actually pins. Collected once per scan; the `#252` gate below reads
     // it per edge.
@@ -17421,6 +17456,32 @@ fn slot_operator_rebuild_scan(
                         }
                         if let Some(other) = new_slot.get(&provider_cp) {
                             cands.push((&other.0, &other.1, &other.2));
+                        }
+                        // #288: an installed provider instance in another
+                        // slot that an argument names is a graph package
+                        // (real selects it for the argument), hence a probe
+                        // candidate the argument itself accepts: with
+                        // `=mmprov-2` the rebuild proceeds against it, while
+                        // `=mmprov-1` (the bound slot's own instance) leaves
+                        // no other-slot candidate the argument accepts.
+                        let arg_installed: Vec<(String, String, String)> =
+                            installed_refs(root, &provider_cp.0, &provider_cp.1)
+                                .into_iter()
+                                .filter(|r| r.slot != a_slot)
+                                .filter(|r| {
+                                    let s = format!(
+                                        "{}/{}-{}:{}",
+                                        provider_cp.0, provider_cp.1, r.version, r.slot
+                                    );
+                                    top_level_atoms.iter().any(|t| {
+                                        portage_dep::match_from_list(t, &[s.as_str()])
+                                            .is_some_and(|m| !m.is_empty())
+                                    })
+                                })
+                                .map(|r| (r.version, r.slot, r.sub_slot))
+                                .collect();
+                        for (v, sl, sub) in &arg_installed {
+                            cands.push((v, sl, sub));
                         }
                         // #269: real's probe ranges over every *available*
                         // package (`_iter_similar_available`,
@@ -53348,13 +53409,16 @@ mod tests {
             BTreeSet::from([massc.clone()]),
             "an explicit slot atom pins nothing"
         );
-        // Cut (a): an exact-version atom spans one slot and pins nothing.
+        // Cut (a): an exact-version atom spans one slot and takes no
+        // greedy pin -- but since #288 it is an argument *parent* of its
+        // cp, and real's update probe refuses every candidate it does not
+        // match (`=massb-1.0` vetoes the new-slot `massb-2.0`; real
+        // 3.0.82.2 merges nothing for the `mmprov` twin, probe `D-arg-pin`).
         let ver_atom = HashSet::from(["=dev-libs/massb-1.0".to_string()]);
         let (versioned, ..) = scan(&ver_atom);
-        assert_eq!(
-            versioned,
-            BTreeSet::from([massc.clone()]),
-            "an exact-version atom pins nothing"
+        assert!(
+            versioned.is_empty(),
+            "the exact-version argument vetoes the new-slot candidate: {versioned:?}"
         );
         let _ = fs::remove_dir_all(&base);
     }
@@ -59898,6 +59962,40 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![("x", "2"), ("y", "1")]
         );
+    }
+
+    /// Backlog #288: an argument atom is a probe parent of its own cp and
+    /// vetoes a provider candidate it does not match (real
+    /// `_slot_operator_check_reverse_dependencies` over `_parent_atoms`).
+    #[test]
+    fn argument_probe_parents_veto_a_candidate_the_argument_does_not_match() {
+        let mut parents: HashMap<(String, String), Vec<ProbeParent>> = HashMap::new();
+        let atoms: HashSet<String> = ["=app-misc/mmprov-1", "!app-misc/blk", "app-misc/mmcons"]
+            .iter()
+            .map(|a| (*a).to_string())
+            .collect();
+        add_argument_probe_parents(&mut parents, &atoms);
+        let provider = ("app-misc".to_string(), "mmprov".to_string());
+        let consumer = ("app-misc".to_string(), "mmcons".to_string());
+        assert!(
+            !parents.contains_key(&("app-misc".to_string(), "blk".to_string())),
+            "a blocker argument is not a parent"
+        );
+        let scheduled = BTreeSet::new();
+        assert!(probe_refused(
+            &parents,
+            &scheduled,
+            &provider,
+            "app-misc/mmprov-3:1/2",
+            &consumer
+        ));
+        assert!(!probe_refused(
+            &parents,
+            &scheduled,
+            &provider,
+            "app-misc/mmprov-1:0/1",
+            &consumer
+        ));
     }
 
     /// Backlog #129 (review round 2): rows naming the same missed pkg
