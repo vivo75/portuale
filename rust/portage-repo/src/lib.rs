@@ -22116,6 +22116,7 @@ fn merge_same_slot_conflicts(
     repos: &[RepoConfig],
     config: &portage_profile::Config,
     root: &Path,
+    refile_singletons: bool,
 ) -> Vec<SlotConflict> {
     let mut order: Vec<(String, String, String)> = Vec::new();
     let mut groups: HashMap<(String, String, String), Vec<usize>> = HashMap::new();
@@ -22132,7 +22133,7 @@ fn merge_same_slot_conflicts(
     let mut merged = Vec::with_capacity(conflicts.len());
     for key in order {
         let idxs = &groups[&key];
-        if idxs.len() == 1 {
+        if idxs.len() == 1 && !refile_singletons {
             merged.push(conflicts[idxs[0]].clone());
             continue;
         }
@@ -22820,19 +22821,28 @@ fn direct_solve_atom_matches(
     // the need_rebuild-trailer conflict). Slot and cp always agree
     // here (edges are per-conflict); version/USE never discriminate
     // a same-slot `:=` pull.
-    if atom.slot_operator == Some(portage_dep::SlotOperator::Equals)
+    let bare_equals = atom.slot_operator == Some(portage_dep::SlotOperator::Equals)
         && atom.slot.is_none()
         && atom.sub_slot.is_none()
         && atom.category == c.category
-        && atom.package == c.package
-    {
+        && atom.package == c.package;
+    if bare_equals && atom.version.is_none() {
         return true;
     }
-    let probe_atom: String = if atom.use_deps.as_ref().is_some_and(|d| !d.is_empty()) {
+    let mut probe_atom: String = if atom.use_deps.as_ref().is_some_and(|d| !d.is_empty()) {
         portage_dep::without_use(atom_text).to_string()
     } else {
         atom_text.to_string()
     };
+    // #270: a *versioned* bare `:=` atom (`>=cat/pkg-4.02:=`) still
+    // discriminates by version in real (`atom.match` applies the
+    // version; the `:=` only narrows by slot linkage, which this
+    // per-conflict edge already shares), so drop the operator and match
+    // the rest. Without this `mllabltk`'s `>=mlocaml-4.02:=` accepted
+    // the installed `4.01.0` and never forced the `4.02.1` instance.
+    if bare_equals && let Some(stripped) = probe_atom.strip_suffix(":=") {
+        probe_atom = stripped.to_string();
+    }
     let (sub, repo, slot_of_ver) =
         slot_conflict_meta(input.repos, &c.category, &c.package, &inst.version);
     let probe = format!(
@@ -29721,7 +29731,18 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
                     };
                     if portage_dep::match_from_list(&current_atom, &[existing_str.as_str()])
                         .is_none_or(|m| m.is_empty())
-                        && !built_slot_operator_rebuild_trigger(&current_atom, &existing_str)
+                        // #270: the "this is a rebuild trigger, not a conflict"
+                        // forgiveness presumes the slot-operator rebuild scan
+                        // will schedule the consumer, and that scan only runs
+                        // with a backtrack budget (`backtrack_max > 0`, like
+                        // its own call site). At `--backtrack=0` nothing
+                        // schedules the rebuild, so real's in-pass solver
+                        // (`_solve_non_slot_operator_slot_conflicts`,
+                        // `depgraph.py:1774-2115`) sees the conflict and
+                        // withholds the provider update instead of merging it
+                        // alone (real 3.0.82.2: `[sct, oldc, newc]` only).
+                        && !(ctx.backtrack_max > 0
+                            && built_slot_operator_rebuild_trigger(&current_atom, &existing_str))
                     {
                         record_slot_conflict(
                             &mut state.slot_conflicts,
@@ -32015,6 +32036,17 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
         &ctx.repos,
         config,
         ctx.root,
+        // #270: a record is built when its first mismatching atom is
+        // seen, so a parent walked later (a sibling that pulls the same
+        // cp after the detection) is missing from a lone record's
+        // parents, and the direct solve would remove an instance real's
+        // solver keeps forced (`mlocaml`/`mllabltk`: real reports the
+        // unsolvable conflict, `depgraph.py:1858-1870`). Real's solver
+        // reads the final `_parent_atoms`; at `--backtrack=0`, where the
+        // exemption for built slot-operator triggers no longer hides
+        // such records (see the walk's conflict arm), re-file the lone
+        // records from the live pullers like the merged ones.
+        ctx.backtrack_max == 0,
     );
     if !state.slot_conflicts.is_empty() {
         let solved = direct_solve_slot_conflicts(DirectSolveInput {
