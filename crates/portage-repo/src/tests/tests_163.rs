@@ -346,6 +346,31 @@ fn abort_outcome_cycle_members_collect_the_matching_partial_in_order() {
         other => panic!("expected UnserializableCycle, got {other:?}"),
     }
 }
+#[test]
+fn abort_outcome_cycle_idx_keeps_both_root_instances_of_one_cpv() {
+    // A cp merged in both roots shares one cpv string; the drain's
+    // indices keep the two rows apart and in order.
+    let target = entry_163("dev-lang", "comp", new_163("1.0"), &[]);
+    let mut running = entry_163("dev-lang", "comp", new_163("1.0"), &[]);
+    running.targets_running_root = true;
+    let entries = vec![target, running];
+    let display = vec!["dev-lang/comp-1.0".to_string(); 2];
+    match abort_outcome(AbortOutcomeArgs {
+        entries: &entries,
+        masked_deps: &[],
+        circular_deps: &[vec!["x".to_string()]],
+        cycle_display: &display,
+        cycle_display_idx: &[0, 1],
+        nvc_dep_atoms: &HashMap::new(),
+        virtual_cycle: &[],
+    }) {
+        ResolveOutcome::Aborted { partial, .. } => {
+            let flags: Vec<bool> = partial.iter().map(|e| e.targets_running_root).collect();
+            assert_eq!(flags, vec![false, true]);
+        }
+        other => panic!("expected Aborted, got {other:?}"),
+    }
+}
 
 /// Fresh unique scratch dir per test (vdb + repo live under it, so
 /// the per-root memo caches never see a reused path). Mirrors
