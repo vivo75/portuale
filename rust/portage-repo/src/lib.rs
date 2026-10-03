@@ -17560,6 +17560,7 @@ fn slot_operator_rebuild_scan(
         &mut scheduled,
         excluded,
         &mut masked,
+        config,
     );
 
     abi_rebuilds.sort();
@@ -17811,10 +17812,11 @@ fn slot_operator_update_force_scan(
 /// (`2361-2399`) writing `slot_operator_replace_installed` +
 /// `_need_restart`.
 ///
-/// Real's visibility / `runtime_pkg_mask` / excluded-package checks on
-/// the tree ebuild (`_pkg_visibility_check` 2347, 2341/2343) have no
-/// portuale counterpart here: [`slot_changed`] is the same tolerant
-/// metadata re-lookup the standalone `--changed-slot` trigger uses.
+/// Real's `runtime_pkg_mask` / excluded-package checks on the tree ebuild
+/// (2341/2343) have no portuale counterpart on the installed arm:
+/// [`slot_changed`] is the same tolerant metadata re-lookup the standalone
+/// `--changed-slot` trigger uses. The binary arm below carries real's
+/// visibility gate (`_pkg_visibility_check` 2347, #243).
 /// The binary arm (`dep.child` a binary package scheduled for merge) is
 /// v2 `#24c`.
 fn slot_operator_slot_change_probe(
@@ -17829,6 +17831,7 @@ fn slot_operator_slot_change_probe(
     // `collect_feedback`'s `slot_operator_mask_built` records (real
     // `_slot_change_backtrack`, `depgraph.py:2381-2398`).
     masked: &mut BTreeSet<(String, String, String)>,
+    config: &portage_profile::Config,
 ) {
     const DEP_KEYS: [&str; 5] = ["BDEPEND", "DEPEND", "IDEPEND", "PDEPEND", "RDEPEND"];
     for e in entries {
@@ -17926,16 +17929,11 @@ fn slot_operator_slot_change_probe(
                 // the re-pass, the same gate the #211 arms carry), must
                 // not be `--exclude`d (real `:2343`, the same
                 // `matches_config_entry` idiom as the C4 grouping and
-                // `collect_probe_parents`), and must pass the same
-                // visibility the pool already enforced:
-                // `_equiv_ebuild_visible` (`depgraph.py:8015-8025`)
-                // refused pool binaries with no visible same-version
-                // ebuild, so a binary entry implies its tree ebuild is
-                // visible. No `--usepkgonly` exemption: the probe's own
-                // visibility check is keyword/mask-based, not pool-based,
-                // so real masks there too and fails the re-pass the same
-                // way portuale dead-ends on `NoVisibleCandidate`
-                // (code-grounded; the S0 probe covers `--usepkg`).
+                // `collect_probe_parents`), and must be visible
+                // (`_pkg_visibility_check`, `:2347`, #243: an explicit
+                // gate here -- a binary entry does not imply a visible
+                // same-version ebuild, and masking a binary whose ebuild
+                // is hidden dead-ends the re-pass).
                 // Real's `runtime_pkg_mask` check on the tree ebuild
                 // (`:2341`) has no counterpart (standing cut, same as
                 // the installed arm above).
@@ -17989,6 +17987,14 @@ fn slot_operator_slot_change_probe(
                     if excluded.iter().any(|ex| {
                         matches_config_entry(ex, &tree_str, &atom.category, &atom.package)
                     }) {
+                        continue;
+                    }
+                    // Backlog #243: real masks the binary only when the
+                    // same-version ebuild passes `_pkg_visibility_check`
+                    // (`depgraph.py:2347`); an ebuild a keyword or package
+                    // mask hides leaves the binary alone (the live bed
+                    // run keeps `[binary]` on `--usepkg` there).
+                    if !is_visible(tree, &atom.category, &atom.package, config) {
                         continue;
                     }
                     if (bin_slot, bin_sub) != (tree.slot.as_str(), tree.sub_slot.as_str()) {
@@ -54600,6 +54606,7 @@ mod tests {
             &mut scheduled,
             &[],
             &mut masked,
+            &test_config(),
         );
         assert_eq!(
             scheduled,
@@ -54632,6 +54639,7 @@ mod tests {
             &mut scheduled,
             &[],
             &mut BTreeSet::new(),
+            &test_config(),
         );
         assert!(scheduled.is_empty());
 
@@ -54645,6 +54653,7 @@ mod tests {
             &mut scheduled,
             &[],
             &mut BTreeSet::new(),
+            &test_config(),
         );
         assert!(scheduled.is_empty());
 
@@ -54685,6 +54694,7 @@ mod tests {
             &mut scheduled,
             &[],
             &mut BTreeSet::new(),
+            &test_config(),
         );
         assert!(scheduled.is_empty());
 
@@ -54995,6 +55005,7 @@ mod tests {
             &mut scheduled,
             &[],
             &mut masked,
+            &test_config(),
         );
         assert_eq!(
             scheduled,
@@ -55013,6 +55024,7 @@ mod tests {
             &mut scheduled_b,
             &[],
             &mut BTreeSet::new(),
+            &test_config(),
         );
         assert!(
             scheduled_b.is_empty(),
@@ -55206,6 +55218,106 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// #243: the binary arm masks only when the same-version ebuild is
+    /// visible (real `_slot_change_probe`, `depgraph.py:2347`): a binary at
+    /// SLOT 0/1 whose tree ebuild moved to 0/2 *and* is keyword-masked
+    /// (`~amd64` against an `amd64`-only config) is left alone.
+    #[test]
+    fn slot_operator_slot_change_probe_keeps_a_binary_whose_ebuild_is_invisible() {
+        use md5::Digest as _;
+        use std::fmt::Write as _;
+        let base = slotundo_temp_dir("243-probe");
+        let repo = base.join("repo");
+        let write_pkg = |cp: &str, slot: &str, keywords: &str, rdepend: &str| {
+            let (cat, pkg) = cp.split_once('/').expect("category/package");
+            let dir = repo.join(cat).join(pkg);
+            std::fs::create_dir_all(&dir).unwrap();
+            let mut body = format!(
+                "EAPI=8\nDESCRIPTION=\"243 probe\"\nSLOT=\"{slot}\"\nKEYWORDS=\"{keywords}\"\n"
+            );
+            if !rdepend.is_empty() {
+                writeln!(body, "RDEPEND=\"{rdepend}\"").unwrap();
+            }
+            std::fs::write(dir.join(format!("{pkg}-1.0.ebuild")), &body).unwrap();
+            let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+            let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=243 probe\nEAPI=8\n".to_string();
+            if !rdepend.is_empty() {
+                writeln!(entry, "RDEPEND={rdepend}").unwrap();
+            }
+            writeln!(entry, "KEYWORDS={keywords}\nSLOT={slot}\n_md5_={md5}").unwrap();
+            let cachedir = repo.join("metadata/md5-cache").join(cat);
+            std::fs::create_dir_all(&cachedir).unwrap();
+            std::fs::write(cachedir.join(format!("{pkg}-1.0")), entry).unwrap();
+        };
+        write_pkg(
+            "dev-libs/visparent",
+            "0",
+            "amd64",
+            "dev-libs/stalechild:= dev-libs/hiddenchild:=",
+        );
+        // Both trees moved 0/1 -> 0/2; only `hiddenchild`'s ebuild is masked.
+        write_pkg("dev-libs/stalechild", "0/2", "amd64", "");
+        write_pkg("dev-libs/hiddenchild", "0/2", "~amd64", "");
+        let repos = vec![RepoConfig {
+            name: "testrepo".to_string(),
+            location: repo.clone(),
+            priority: 0,
+            is_main: true,
+            masters: vec![],
+            profile_formats: vec![],
+            cache_formats: vec![],
+            aliases: vec![],
+            sync_type: None,
+            sync_uri: None,
+            volatile: false,
+            module_specific_options: vec![],
+        }];
+        let parent = GraphEntry {
+            discovery: 0,
+            outcome: PretendOutcome::New {
+                version: "1.0".into(),
+            },
+            ..graph_entry("dev-libs", "visparent", "1.0")
+        };
+        let binary_child = |package: &str| GraphEntry {
+            discovery: 0,
+            outcome: PretendOutcome::New {
+                version: "1.0".into(),
+            },
+            slot: Some("0".into()),
+            sub_slot: Some("1".into()),
+            source: CandidateSource::Binary,
+            ..graph_entry("dev-libs", package, "1.0")
+        };
+        let entries = vec![
+            parent,
+            binary_child("stalechild"),
+            binary_child("hiddenchild"),
+        ];
+        let empty = BTreeSet::new();
+        let mut scheduled = BTreeSet::new();
+        let mut masked: BTreeSet<(String, String, String)> = BTreeSet::new();
+        slot_operator_slot_change_probe(
+            &base,
+            &repos,
+            &entries,
+            &empty,
+            &mut scheduled,
+            &[],
+            &mut masked,
+            &test_config(),
+        );
+        assert_eq!(
+            masked,
+            BTreeSet::from([(
+                "dev-libs".to_string(),
+                "stalechild".to_string(),
+                "1.0".to_string()
+            )]),
+            "the visible stale binary is masked, the one behind a hidden ebuild is kept"
+        );
+    }
+
     /// Backlog #212 (v2 `#24c`): real `_slot_change_backtrack`
     /// (`depgraph.py:2381-2398`) masks a merge-bound *binary* whose
     /// built slot-operator dep cannot be satisfied the way it was
@@ -55302,6 +55414,7 @@ mod tests {
             &mut scheduled,
             &[],
             &mut masked,
+            &test_config(),
         );
         assert!(scheduled.is_empty());
         assert_eq!(
@@ -55326,6 +55439,7 @@ mod tests {
             &mut scheduled_excl,
             &["dev-libs/maskchild".to_string()],
             &mut masked_excl,
+            &test_config(),
         );
         assert!(
             masked_excl.is_empty(),
@@ -55348,6 +55462,7 @@ mod tests {
             &mut scheduled_bpar,
             &[],
             &mut masked_bpar,
+            &test_config(),
         );
         assert!(masked_bpar.is_empty(), "a binary parent never probes");
         let _ = fs::remove_dir_all(&base);
