@@ -22167,7 +22167,16 @@ fn merge_same_slot_conflicts(
                     // against (see its doc comment): tree
                     // slot/sub-slot, USE checked against the
                     // instance's own resolved flags.
-                    let (sub, _, _) = slot_conflict_meta(repos, category, package, &inst.version);
+                    // #291: an installed instance carries its own vdb
+                    // sub-slot (`build_slot_conflict` read it there); the
+                    // tree's metadata for the same version can differ, or
+                    // be absent, and would drop a built `:S/SS=` puller
+                    // from the instance it actually pulls.
+                    let sub = if inst.installed {
+                        inst.sub_slot.clone()
+                    } else {
+                        slot_conflict_meta(repos, category, package, &inst.version).0
+                    };
                     let match_str = if sub.is_empty() {
                         format!("{category}/{package}-{}:{slot}", inst.version)
                     } else {
@@ -23979,7 +23988,9 @@ fn missing_dep_full_row(
 /// one block at render by [`group_skipped_updates`]); exact
 /// duplicates collapse to one. Relative order is preserved: mask
 /// rows lead, then the direct solve's rows in first-seen block order,
-/// then the pin withholds (sorted).
+/// then the pin withholds (sorted) -- except that a slot's surviving
+/// rows sit at the position of the slot's first row (#292, real's dict
+/// key order), however the higher version arrived later.
 fn collapse_skipped_updates(rows: Vec<SkippedUpdate>) -> Vec<SkippedUpdate> {
     let mut best: HashMap<(String, String, String), String> = HashMap::new();
     for s in &rows {
@@ -23992,6 +24003,24 @@ fn collapse_skipped_updates(rows: Vec<SkippedUpdate>) -> Vec<SkippedUpdate> {
             best.insert(key, s.skipped_version.clone());
         }
     }
+    // Backlog #292: real's `missed_updates[k] = ...` overwrites the value
+    // of an existing `(root, slot_atom)` key, and a Python dict keeps the
+    // key's *first* insertion position (`_get_missed_updates`,
+    // `depgraph.py:1544-1560`): a higher pkg replacing a lower one of the
+    // same slot renders where the lower was first recorded, not where the
+    // higher row sits. Record each slot's first row index over the
+    // pre-collapse rows and order the survivors by it (stable).
+    let mut first_pos: HashMap<(String, String, String), usize> = HashMap::new();
+    for (i, s) in rows.iter().enumerate() {
+        first_pos
+            .entry((s.category.clone(), s.package.clone(), s.slot.clone()))
+            .or_insert(i);
+    }
+    let slot_pos = |s: &SkippedUpdate| -> usize {
+        first_pos[&(s.category.clone(), s.package.clone(), s.slot.clone())]
+    };
+    let mut rows = rows;
+    rows.sort_by_key(slot_pos);
     let mut seen: HashSet<SkippedUpdateKey> = HashSet::new();
     rows.into_iter()
         .filter(|s| {
@@ -59771,6 +59800,103 @@ mod tests {
                 ("mgxd", "2", "=dev-libs/mgxd-2"),
                 ("mgxd", "2", "<dev-libs/mgxd-3"),
             ]
+        );
+    }
+
+    /// Backlog #291: the bt0 lone-record re-file matches a built
+    /// `:S/SS=` puller against the installed instance's own vdb sub-slot,
+    /// not the tree's metadata for that version.
+    #[test]
+    fn merge_same_slot_conflicts_refiles_a_built_puller_under_the_installed_sub_slot() {
+        let base = slotundo_temp_dir("291-refile");
+        let repo = base.join("repo");
+        let dir = repo.join("dev-libs/foo");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("foo-1.0.ebuild"),
+            "EAPI=8\nDESCRIPTION=\"291\"\nSLOT=\"0/1\"\nKEYWORDS=\"amd64\"\n",
+        )
+        .unwrap();
+        let repos = vec![RepoConfig {
+            name: "testrepo".to_string(),
+            location: repo.clone(),
+            priority: 0,
+            is_main: true,
+            masters: vec![],
+            profile_formats: vec![],
+            cache_formats: vec![],
+            aliases: vec![],
+            sync_type: None,
+            sync_uri: None,
+            volatile: false,
+            module_specific_options: vec![],
+        }];
+        let inst = |version: &str, sub: &str, installed: bool| SlotConflictInstance {
+            version: version.to_string(),
+            sub_slot: sub.to_string(),
+            repo_name: "testrepo".to_string(),
+            use_display: Vec::new(),
+            parents: Vec::new(),
+            installed,
+        };
+        // The installed foo-1.0 was built at 0/9; the tree's 1.0 says 0/1.
+        let conflict = SlotConflict {
+            category: "dev-libs".to_string(),
+            package: "foo".to_string(),
+            slot: "0".to_string(),
+            resolved_version: "2.0".to_string(),
+            conflicting_atom: "dev-libs/foo:0/9=".to_string(),
+            instances: vec![inst("1.0", "9", true), inst("2.0", "2", false)],
+        };
+        let mut pullers: SlotPullers = HashMap::new();
+        pullers.insert(
+            ("dev-libs".to_string(), "foo".to_string()),
+            vec![(
+                "dev-libs".to_string(),
+                "parent".to_string(),
+                "1.0".to_string(),
+                "dev-libs/foo:0/9=".to_string(),
+            )],
+        );
+        let out =
+            merge_same_slot_conflicts(&[conflict], &pullers, &repos, &test_config(), &base, true);
+        let installed = out[0].instances.iter().find(|i| i.installed).unwrap();
+        assert_eq!(
+            installed.parents.len(),
+            1,
+            "the `:0/9=` puller files under the installed 0/9 instance"
+        );
+    }
+
+    /// Backlog #292: a higher pkg replacing a lower one of its slot keeps
+    /// the slot's first position (real `_get_missed_updates` dict key
+    /// order, `depgraph.py:1544-1560`): slot X's lower row, block Y, then
+    /// X's higher row render X, Y -- not Y, X.
+    #[test]
+    fn collapse_skipped_updates_keeps_a_slots_first_position() {
+        fn row(pkg: &str, ver: &str) -> SkippedUpdate {
+            SkippedUpdate {
+                category: "dev-libs".to_string(),
+                package: pkg.to_string(),
+                slot: "0".to_string(),
+                skipped_version: ver.to_string(),
+                skipped_sub_slot: "0".to_string(),
+                skipped_repo: "testrepo".to_string(),
+                skipped_use: Vec::new(),
+                atom: format!("={pkg}-{ver}"),
+                consumer_cpv: "dev-libs/consumer-1:0/0::testrepo".to_string(),
+                consumer_installed: false,
+                consumer_use: Vec::new(),
+                missed_targets_running_root: false,
+                consumer_targets_running_root: false,
+            }
+        }
+        let out = collapse_skipped_updates(vec![row("x", "1"), row("y", "1"), row("x", "2")]);
+        assert_eq!(
+            out.iter()
+                .map(|s| (s.package.as_str(), s.skipped_version.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("x", "2"), ("y", "1")]
         );
     }
 

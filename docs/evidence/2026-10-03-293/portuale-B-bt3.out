@@ -1,0 +1,18 @@
+[ebuild  N     ] dev-libs/slotconflicttarget-1.0 to /tmp/root-B-bt3
+[ebuild  r  U  ] app-misc/pprov-2 [1] to /tmp/root-B-bt3
+[ebuild  rR    ] app-misc/pcons-1 to /tmp/root-B-bt3
+[ebuild  N     ] dev-libs/slotconflictoldconsumer-1.0 to /tmp/root-B-bt3
+[ebuild  N     ] dev-libs/slotconflictnewconsumer-1.0 to /tmp/root-B-bt3
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+
+dev-libs/slotconflicttarget:0
+
+  (dev-libs/slotconflicttarget-2.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/root-B-bt3') USE="" ELIBC="glibc" conflicts with
+    <dev-libs/slotconflicttarget-2.0 required by (dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/root-B-bt3') USE="" ELIBC="glibc"
+    ^                            ^^^
+
+
+The following packages are causing rebuilds:
+
+  (app-misc/pprov-2:0/2::testrepo, ebuild scheduled for merge to '/tmp/root-B-bt3') causes rebuilds for:
+    (app-misc/pcons-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/root-B-bt3')
