@@ -23972,7 +23972,8 @@ fn missing_dep_full_row(
 /// every parent inside, portuale one row per parent, grouped into
 /// one block at render by [`group_skipped_updates`]); exact
 /// duplicates collapse to one. Relative order is preserved: mask
-/// rows lead, direct rows follow.
+/// rows lead, then the direct solve's rows in first-seen block order,
+/// then the pin withholds (sorted).
 fn collapse_skipped_updates(rows: Vec<SkippedUpdate>) -> Vec<SkippedUpdate> {
     let mut best: HashMap<(String, String, String), String> = HashMap::new();
     for s in &rows {
@@ -24024,7 +24025,7 @@ fn collapse_skipped_updates(rows: Vec<SkippedUpdate>) -> Vec<SkippedUpdate> {
 /// renderer groups rows naming the same missed pkg into one block
 /// (`GraphResult::skipped_updates` order is preserved: groups keep
 /// first-seen order, parents keep row order -- mask rows arrive in
-/// first-seen mask order, direct rows sorted). Real itself iterates an
+/// first-seen mask order, direct rows in first-seen block order). Real itself iterates an
 /// unordered set -- `Package` keeps identity hash
 /// (`_emerge/Package.py:27`) -- so its within-block order is hash
 /// order; the `blk0b blk0c blk0a` oracle's b-then-c order is what the
@@ -33915,13 +33916,28 @@ fn assemble_result(
     } else {
         &params.reverse_dep_pins
     };
-    pass.skipped_updates.extend(constraint_withheld_updates(
-        &ctx.repos,
-        ctx.root,
-        config,
-        &pass.entries,
-        enforced_pins,
-    ));
+    // The withhold rows keep their established deterministic order
+    // (alphabetical by package, then atom and consumer); the direct
+    // solve's rows ahead of them keep real's first-seen block order.
+    let mut withheld =
+        constraint_withheld_updates(&ctx.repos, ctx.root, config, &pass.entries, enforced_pins);
+    withheld.sort_by(|a, b| {
+        (
+            &a.category,
+            &a.package,
+            &a.skipped_version,
+            &a.atom,
+            &a.consumer_cpv,
+        )
+            .cmp(&(
+                &b.category,
+                &b.package,
+                &b.skipped_version,
+                &b.atom,
+                &b.consumer_cpv,
+            ))
+    });
+    pass.skipped_updates.extend(withheld);
     // #270: first-seen order, like real's `_conflict_missed_update` dict
     // (insertion order of the solver's removals, `depgraph.py:1529-1565`),
     // not alphabetical -- exact duplicates collapse to their first row.
@@ -34118,9 +34134,10 @@ fn assemble_result(
         );
         // Real chains the mask dict before the handler removals
         // (`:1533-1536`), so mask rows lead in first-seen order and the
-        // direct-solve/withhold rows keep their established sorted
-        // order behind them. No re-sort: alphabetical would scramble
-        // the mask insertion order real renders in. Both sources
+        // direct-solve rows (first-seen block order) and the sorted
+        // withhold rows keep their established order behind them. No
+        // re-sort: alphabetical would scramble the mask insertion order
+        // real renders in. Both sources
         // collapse per `(root, slot_atom)` keeping the highest missed
         // pkg (`:1553-1562`) -- see `collapse_skipped_updates`.
         let mut combined = mask_skipped;
