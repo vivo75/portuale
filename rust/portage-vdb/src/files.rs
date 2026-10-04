@@ -121,6 +121,20 @@ fn file_meta_of(name: String, st: &fs::Metadata) -> FileMeta {
 /// write lacks it and is rejected rather than read as a short snapshot.
 fn read_metadata_file(path: &Path, dir_mtime_ns: i128) -> Option<HashMap<String, String>> {
     let raw = fs::read_to_string(path).ok()?;
+    let (result, dir_mtime) = parse_metadata_text(&raw)?;
+    if dir_mtime != Some(dir_mtime_ns) {
+        return None;
+    }
+    Some(result)
+}
+
+/// The text half of [`read_metadata_file`], shared with the SQLite
+/// backend (which stores the stamp state per entry and so does not compare
+/// the directory mtime): the parsed fields and the `#dir_mtime=` value
+/// when present. `None` unless `#format=` is present and equals
+/// [`METADATA_FILE_FORMAT_VERSION`] (or a `#format=`/`#dir_mtime=` value
+/// does not parse).
+pub(crate) fn parse_metadata_text(raw: &str) -> Option<(HashMap<String, String>, Option<i128>)> {
     let mut result: HashMap<String, String> = HashMap::new();
     let mut version: Option<u32> = None;
     let mut dir_mtime: Option<i128> = None;
@@ -140,10 +154,8 @@ fn read_metadata_file(path: &Path, dir_mtime_ns: i128) -> Option<HashMap<String,
             result.insert(k.to_string(), v.to_string());
         }
     }
-    if version.is_none() || dir_mtime.is_none() || dir_mtime != Some(dir_mtime_ns) {
-        return None;
-    }
-    Some(result)
+    version?;
+    Some((result, dir_mtime))
 }
 
 /// The per-key fallback read: the raw file normalised exactly like real
@@ -155,13 +167,17 @@ fn read_metadata_file(path: &Path, dir_mtime_ns: i128) -> Option<HashMap<String,
 /// of collapsing to `""` (backlog #125, audit O15).
 fn read_vdb_file(path: &Path) -> String {
     fs::read(path)
-        .map(|bytes| {
-            String::from_utf8_lossy(&bytes)
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
+        .map(|bytes| normalise_aux_bytes(&bytes))
         .unwrap_or_default()
+}
+
+/// The bytes of one field file as `aux_get` serves them: lossy UTF-8,
+/// whitespace-joined (shared with the SQLite backend).
+pub(crate) fn normalise_aux_bytes(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Whether `value` is a `SLOT` real `aux_get` keeps instead of
@@ -198,7 +214,7 @@ fn is_valid_aux_slot(value: &str) -> bool {
 /// `SLOT` key only, over present (non-empty) values. The memoised value
 /// is the translated one (observably identical: the translation is
 /// idempotent, `"0"` is valid).
-fn translate_aux_slot(key: &str, value: String) -> String {
+pub(crate) fn translate_aux_slot(key: &str, value: String) -> String {
     if key == "SLOT" && !value.is_empty() && !is_valid_aux_slot(&value) {
         return "0".to_string();
     }
@@ -333,6 +349,34 @@ impl FilesDb {
                 .insert(cache_key, (dir_mtime_ns, Rc::new(map)));
         });
         Some(value)
+    }
+}
+
+/// The claims of one entry's `CONTENTS` text (the per-line rule of
+/// [`FilesDb::owners`], shared with the SQLite backend): a line whose
+/// first two words are a kind (`obj`, `sym`, `dir`, `dev`, `fif`, `bin`)
+/// and a path claims that path; one leading `/` is ignored on both sides.
+/// Each claim pairs the first of `paths` it matches with `key`.
+pub(crate) fn claim_paths(
+    text: &str,
+    key: &EntryKey,
+    paths: &[&[u8]],
+    out: &mut Vec<(Vec<u8>, EntryKey)>,
+) {
+    for line in text.lines() {
+        let mut words = line.split_whitespace();
+        let path = match (words.next(), words.next()) {
+            (Some("obj" | "sym" | "dir" | "dev" | "fif" | "bin"), Some(path)) => {
+                path.strip_prefix('/').unwrap_or(path)
+            }
+            _ => continue,
+        };
+        let claimed = paths
+            .iter()
+            .find(|p| p.strip_prefix(b"/").unwrap_or(p) == path.as_bytes());
+        if let Some(p) = claimed {
+            out.push((p.to_vec(), key.clone()));
+        }
     }
 }
 
@@ -590,21 +634,7 @@ impl InstalledDb for FilesDb {
                 else {
                     continue;
                 };
-                for line in text.lines() {
-                    let mut words = line.split_whitespace();
-                    let path = match (words.next(), words.next()) {
-                        (Some("obj" | "sym" | "dir" | "dev" | "fif" | "bin"), Some(path)) => {
-                            path.strip_prefix('/').unwrap_or(path)
-                        }
-                        _ => continue,
-                    };
-                    let claimed = paths
-                        .iter()
-                        .find(|p| p.strip_prefix(b"/").unwrap_or(p) == path.as_bytes());
-                    if let Some(p) = claimed {
-                        out.push((p.to_vec(), key.clone()));
-                    }
-                }
+                claim_paths(&text, &key, paths, &mut out);
             }
         }
         Ok(out)

@@ -252,8 +252,28 @@
 //!
 //! # SqliteDb (feature `vdb-sqlite`)
 //!
-//! S2.3 adds the schema and `open` / `open_readonly`; every other method
-//! is [`Error::Unsupported`] until S2.4 (reads) and S2.5 (writes).
+//! S2.3 adds the schema and `open` / `open_readonly`; S2.4 the read side;
+//! `begin_write` is [`Error::Unsupported`] until S2.5.
+//!
+//! - **Reads (S2.4)** return what `FilesDb` returns for the same logical
+//!   content (unit tests in `sqlite.rs` seed both and compare every read).
+//!   Only `state = 'installed'` rows are live; `read_pending_file` reads
+//!   the `merging` row. Lists are ordered by `(category, pf)` / name,
+//!   byte order, like `FilesDb`'s sorted directory reads. `aux_get`
+//!   follows the stored `metadata_stamp`: `valid` serves the stored
+//!   `metadata` file as a complete snapshot (so a field the sealing
+//!   dropped, e.g. non-UTF-8, is `""`); `absent`/`stale` read the field
+//!   file, lossy and whitespace-joined; invalid `SLOT` is `"0"`. The
+//!   extracted `slot`/`subslot`/`repo` columns are not used by reads.
+//!   `owners` is computed from the stored `CONTENTS` files with `FilesDb`'s
+//!   own line rule (the `owner` table is for S2.5/S8).
+//!   `category_generation` is the global `meta.generation`.
+//!   `counter` is `meta.counter_hwm`, `-1` reading as `None`.
+//!   `read_file_at` is `substr` on the blob. `snapshot` is built from the
+//!   field files under the `aux_get` rules in one read transaction.
+//!   `reverse_dependents` returns every live entry (superset rule).
+//!   Known differences: `world` is sorted by atom, `categories` lists only
+//!   categories with a live entry.
 //!
 //! - **Schema version policy**: `meta.schema_version` (1,
 //!   [`SCHEMA_VERSION`]) is independent of [`METADATA_FILE_FORMAT_VERSION`] (plan §1, Q4).
