@@ -12,7 +12,7 @@
 //!
 //! The on-disk formats of the registry and the config memory live here
 //! too, because the database backends store the parsed values and a
-//! converter must read and write the `files` bytes (S2.2): the registry is
+//! converter must read and write the `files` bytes (S2.6): the registry is
 //! real `PreservedLibsRegistry.store()`'s `json.dumps(..., ensure_ascii=
 //! False, indent="\t", sort_keys=True)`, the config memory real
 //! `grabdict`/`writedict`'s `"path value\n"` lines.
@@ -327,7 +327,7 @@ impl WriteTxn for FilesTxn<'_> {
     }
 
     fn insert_entry(&mut self, _image: &EntryImage) -> Result<()> {
-        todo_step("insert_entry", "S2.2")
+        todo_step("insert_entry", "S2.6")
     }
 
     /// Moved from `ebuild_unmerge::delete_vdb_dir` (real `dblink.delete()`):
@@ -405,7 +405,7 @@ impl WriteTxn for FilesTxn<'_> {
     }
 
     fn set_counter(&mut self, _counter: Counter) -> Result<()> {
-        todo_step("set_counter", "S2.2")
+        todo_step("set_counter", "S2.6")
     }
 
     /// Nothing to do: every call above was applied when it was made.

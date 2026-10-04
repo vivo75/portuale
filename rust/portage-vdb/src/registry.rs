@@ -191,7 +191,7 @@ mod tests {
         // which step moves them.
         let mut txn = db.begin_write().unwrap();
         let msg = txn.set_counter(crate::Counter(1)).unwrap_err().to_string();
-        assert!(msg.contains("S2.2"), "{msg}");
+        assert!(msg.contains("S2.6"), "{msg}");
         drop(txn);
         // S1.6: a missing store reads as empty.
         assert!(db.world().unwrap().atoms.is_empty());

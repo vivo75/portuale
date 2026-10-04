@@ -532,7 +532,7 @@ impl InstalledDb for FilesDb {
     }
 
     fn entry_image(&self, _key: &EntryKey) -> Result<Option<EntryImage>> {
-        todo_step("entry_image", "S2.2")
+        todo_step("entry_image", "S2.6")
     }
 
     fn reverse_dependents(&self, _cp: &str, _classes: &[DepClass]) -> Result<Vec<DepRecord>> {
