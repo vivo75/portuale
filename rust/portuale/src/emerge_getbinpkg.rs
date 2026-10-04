@@ -818,7 +818,12 @@ pub(crate) fn merge_one_binary_entry(
                 local: &local_index,
             };
             let (binrepo_name, record) = remote
-                .metadata_with_source(&entry.category, &entry.package, &version)
+                .metadata_with_source_instance(
+                    &entry.category,
+                    &entry.package,
+                    &version,
+                    entry.build_id.as_deref(),
+                )
                 .ok_or_else(|| {
                     format!(
                         "{cp}-{version}: no binpkg file under {} and not in any binhost `Packages` index",

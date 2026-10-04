@@ -2716,34 +2716,72 @@ pub fn list_remote_binary_candidates(
     if binrepos.is_empty() {
         return Vec::new();
     }
-    let local_versions: HashSet<String> =
+    // Instances are identified by `(version, BUILD_ID)`: under
+    // binpkg-multi-instance real `bintree.isremote` is per `cpv` +
+    // `build_id`, so a local build 6 must not hide a remote build 7
+    // (backlog #300). An entry with no `BUILD_ID` is its own `None` key,
+    // which keeps the pre-multi-instance version-level shadowing.
+    let local_instances: HashSet<(String, Option<String>)> =
         binary_candidates_from_index(local, category, package, false)
             .into_iter()
-            .map(|c| c.version)
+            .map(|c| (c.version, c.build_id))
             .collect();
 
-    // A version already carried by the local `$PKGDIR` (real
+    // An instance already carried by the local `$PKGDIR` (real
     // `bintree.isremote`), or by an *earlier*-priority binrepo, shadows
-    // a later binrepo's build of it -- but binpkg-multi-instance means
-    // one binrepo can legitimately list several builds of one version,
-    // so the shadow set is only grown a whole binrepo at a time (all of
-    // that binrepo's instances stay; `dedup_binary_instances` collapses
-    // them later by `(cpv, slot, repo)` keeping the newest `BUILD_TIME`).
+    // a later binrepo's identical instance -- but binpkg-multi-instance
+    // means one binrepo can legitimately list several builds of one
+    // version, so the shadow set is only grown a whole binrepo at a time
+    // (all of that binrepo's instances stay; `dedup_binary_instances`
+    // collapses them later by `(cpv, slot, repo)` keeping the newest
+    // `BUILD_TIME`).
     let mut out: Vec<Candidate> = Vec::new();
-    let mut shadowed: HashSet<String> = local_versions;
+    let mut shadowed: HashSet<(String, Option<String>)> = local_instances;
     for binrepo in binrepos {
         let binrepo_index = cached_binary_index(&binrepo.packages_dir(root));
-        let mut this_repo: HashSet<String> = HashSet::new();
+        let mut this_repo: HashSet<(String, Option<String>)> = HashSet::new();
         for cand in binary_candidates_from_index(&binrepo_index, category, package, true) {
-            if shadowed.contains(&cand.version) {
+            let key = (cand.version.clone(), cand.build_id.clone());
+            if shadowed.contains(&key) {
                 continue;
             }
-            this_repo.insert(cand.version.clone());
+            this_repo.insert(key);
             out.push(cand);
         }
         shadowed.extend(this_repo);
     }
     out
+}
+
+/// Picks one `Packages` entry of `cat/pkg-version` from `entries`
+/// (binpkg-multi-instance aware, backlog #299/#301). `Some(id)` selects
+/// the entry whose `BUILD_ID` is exactly `id` (the build the resolver
+/// planned); `None` selects the newest build -- highest `(BUILD_TIME,
+/// BUILD_ID)`, real `dbapi._cmp_cpv` order -- which for an index with a
+/// single (or `BUILD_ID`-less) entry is simply that entry.
+fn pick_binary_instance<'a>(
+    entries: &'a [HashMap<String, String>],
+    want_cpv: &str,
+    build_id: Option<&str>,
+) -> Option<&'a HashMap<String, String>> {
+    let matching = entries
+        .iter()
+        .filter(|e| e.get("CPV").map(String::as_str) == Some(want_cpv));
+    match build_id {
+        Some(id) => matching
+            .into_iter()
+            .find(|e| e.get("BUILD_ID").map(String::as_str) == Some(id)),
+        None => matching.max_by_key(|e| {
+            (
+                e.get("BUILD_TIME")
+                    .and_then(|t| t.trim().parse::<i64>().ok())
+                    .unwrap_or(i64::MIN),
+                e.get("BUILD_ID")
+                    .and_then(|t| t.trim().parse::<i64>().ok())
+                    .unwrap_or(i64::MIN),
+            )
+        }),
+    }
 }
 
 /// The raw `Packages` index record for `category/package-version` from
@@ -2752,7 +2790,9 @@ pub fn list_remote_binary_candidates(
 /// `verify_signature` for real `gpkg.__init__`'s own per-binrepo
 /// signature policy, `gpkg.py:792-819`) plus the index record
 /// (`PATH`, `SIZE`, the `SHA*`/`MD5` digests). `None` if no configured
-/// binrepo lists that exact CPV.
+/// binrepo lists that exact CPV. When the binrepo lists several builds
+/// of the version, the newest one is returned; use
+/// [`find_remote_binpkg_instance`] to ask for a specific `BUILD_ID`.
 pub fn find_remote_binpkg<'a>(
     binrepos: &'a [portage_profile::BinRepo],
     root: &Path,
@@ -2760,13 +2800,35 @@ pub fn find_remote_binpkg<'a>(
     package: &str,
     version: &str,
 ) -> Option<(&'a portage_profile::BinRepo, HashMap<String, String>)> {
+    find_remote_binpkg_instance(binrepos, root, category, package, version, None)
+}
+
+/// [`find_remote_binpkg`] for one specific build (backlog #301): with
+/// `Some(build_id)` the binrepos are scanned in order for the record
+/// carrying exactly that `BUILD_ID`; if no binrepo has it (or `None` was
+/// given) the newest build of the version from the first binrepo that
+/// lists the version is returned.
+pub fn find_remote_binpkg_instance<'a>(
+    binrepos: &'a [portage_profile::BinRepo],
+    root: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+    build_id: Option<&str>,
+) -> Option<(&'a portage_profile::BinRepo, HashMap<String, String>)> {
     let want_cpv = format!("{category}/{package}-{version}");
-    for binrepo in binrepos {
-        let index = cached_binary_index(&binrepo.packages_dir(root));
-        for entry in index.entries() {
-            if entry.get("CPV").map(String::as_str) == Some(want_cpv.as_str()) {
+    if build_id.is_some() {
+        for binrepo in binrepos {
+            let index = cached_binary_index(&binrepo.packages_dir(root));
+            if let Some(entry) = pick_binary_instance(index.entries(), &want_cpv, build_id) {
                 return Some((binrepo, entry.clone()));
             }
+        }
+    }
+    for binrepo in binrepos {
+        let index = cached_binary_index(&binrepo.packages_dir(root));
+        if let Some(entry) = pick_binary_instance(index.entries(), &want_cpv, None) {
+            return Some((binrepo, entry.clone()));
         }
     }
     None
@@ -3130,12 +3192,23 @@ pub fn read_binary_metadata(
     package: &str,
     version: &str,
 ) -> Option<HashMap<String, String>> {
+    read_binary_metadata_instance(index, category, package, version, None)
+}
+
+/// [`read_binary_metadata`] for one specific build (backlog #299):
+/// `Some(build_id)` returns the entry carrying exactly that `BUILD_ID`
+/// (`None` result if the index lacks it); `None` returns the newest build
+/// of the version (see [`pick_binary_instance`]) -- never merely the first
+/// entry, which under binpkg-multi-instance is usually the oldest.
+pub fn read_binary_metadata_instance(
+    index: &BinaryIndex,
+    category: &str,
+    package: &str,
+    version: &str,
+    build_id: Option<&str>,
+) -> Option<HashMap<String, String>> {
     let want = format!("{category}/{package}-{version}");
-    index
-        .entries()
-        .iter()
-        .find(|entry| entry.get("CPV").map(String::as_str) == Some(want.as_str()))
-        .cloned()
+    pick_binary_instance(index.entries(), &want, build_id).cloned()
 }
 
 /// `read_binary_metadata` extended to a `--getbinpkg` resolution: the
@@ -3151,16 +3224,36 @@ pub fn read_binary_metadata_any(
     package: &str,
     version: &str,
 ) -> Option<HashMap<String, String>> {
-    if let Some(m) = read_binary_metadata(local, category, package, version) {
-        return Some(m);
-    }
-    for binrepo in &config.binrepos {
-        let binrepo_index = cached_binary_index(&binrepo.packages_dir(root));
-        if let Some(m) = read_binary_metadata(&binrepo_index, category, package, version) {
+    read_binary_metadata_any_instance(config, root, local, category, package, version, None)
+}
+
+/// [`read_binary_metadata_any`] for the build the resolver selected
+/// (backlog #299): with `Some(build_id)` every index (local, then each
+/// binrepo) is searched for exactly that `BUILD_ID` before falling back
+/// to the newest build of the version, so a chosen instance never walks
+/// another instance's dependency strings.
+pub fn read_binary_metadata_any_instance(
+    config: &portage_profile::Config,
+    root: &Path,
+    local: &BinaryIndex,
+    category: &str,
+    package: &str,
+    version: &str,
+    build_id: Option<&str>,
+) -> Option<HashMap<String, String>> {
+    let lookup = |build_id: Option<&str>| {
+        if let Some(m) = read_binary_metadata_instance(local, category, package, version, build_id)
+        {
             return Some(m);
         }
-    }
-    None
+        config.binrepos.iter().find_map(|binrepo| {
+            let index = cached_binary_index(&binrepo.packages_dir(root));
+            read_binary_metadata_instance(&index, category, package, version, build_id)
+        })
+    };
+    build_id
+        .and_then(|id| lookup(Some(id)))
+        .or_else(|| lookup(None))
 }
 
 /// Whether `entry` (a `package.mask`/`.unmask`/`.accept_keywords` line)
@@ -12904,9 +12997,13 @@ pub fn resolve_info_binary_candidate(
         .collect();
     ranked.sort_by(|a, b| vercmp_ordering(&b.version, &a.version));
     for best in ranked {
-        let Some(metadata) =
-            read_binary_metadata(index, &atom.category, &atom.package, &best.version)
-        else {
+        let Some(metadata) = read_binary_metadata_instance(
+            index,
+            &atom.category,
+            &atom.package,
+            &best.version,
+            best.build_id.as_deref(),
+        ) else {
             continue;
         };
         let eapi = metadata.get("EAPI").map(String::as_str).unwrap_or("0");
@@ -17223,10 +17320,27 @@ fn slot_operator_rebuild_scan(
         if let (Some(version), Some(slot), Some(sub_slot)) =
             (version, e.slot.clone(), e.sub_slot.clone())
         {
-            new_slot.insert(
-                (e.category.clone(), e.package.clone()),
-                (version.clone(), slot, sub_slot),
-            );
+            let cp = (e.category.clone(), e.package.clone());
+            // Backlog #303: under `--update`, a non-requested provider the
+            // pass *downgraded* was held back by an installed consumer's
+            // built `:=` pin (the pass picked the older sub-slot the
+            // consumer is bound to). Real's first pass does the same, then
+            // `_slot_operator_update_probe` (`depgraph.py:3131`) finds the
+            // installed instance as the missed update and backtracks to
+            // replace the consumer. Model the missed update by taking the
+            // slot/sub-slot of the version the downgrade replaces, so the
+            // same-slot arm below flags the consumer and the pin lifts.
+            let missed = match &e.outcome {
+                PretendOutcome::Downgrade { from, .. }
+                    if update && !top_level_cps.contains(&cp) =>
+                {
+                    let (from_slot, from_sub) = read_vdb_slot(root, &cp.0, &cp.1, from);
+                    (!from_slot.is_empty() && from_slot == slot && from_sub != sub_slot)
+                        .then_some((from.clone(), from_slot, from_sub))
+                }
+                _ => None,
+            };
+            new_slot.insert(cp, missed.unwrap_or((version.clone(), slot, sub_slot)));
         }
         if let PretendOutcome::New { version } = &e.outcome
             && let (Some(slot), Some(sub_slot)) = (e.slot.clone(), e.sub_slot.clone())
@@ -31259,18 +31373,19 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             // root -- real `Package.root_config` / `pkg.root`.
             targets_running_root: item_targets_running_root,
             remote_binary: candidate_remote,
-            build_id: candidate_build_id,
+            build_id: candidate_build_id.clone(),
             deps: Vec::new(),
         });
 
         let metadata = if candidate_source == CandidateSource::Binary {
-            let Some(metadata) = read_binary_metadata_any(
+            let Some(metadata) = read_binary_metadata_any_instance(
                 config,
                 ctx.root,
                 &ctx.local_binpkg,
                 &key.0,
                 &key.1,
                 &version,
+                candidate_build_id.as_deref(),
             ) else {
                 continue;
             };
@@ -36625,6 +36740,180 @@ mod tests {
         let out = dedup_binary_instances(vec![eb], &atom, &cfg);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].source, CandidateSource::Ebuild);
+    }
+
+    /// Backlog 2026-10 B1 (`docs/backlog-tasks-2026-10.md`): binpkg-multi-
+    /// instance builds of one `cpv` are told apart only by `BUILD_ID`.
+    /// Shared fixture for the three tests below, modelled on the real
+    /// `seed-desk` binhost's `app-text/libspectre-0.2.12` -6 (built
+    /// against ghostscript `0/10.06=`) and -7 (built against `0/10.08=`),
+    /// listed oldest first exactly like the live `Packages` index.
+    fn multi_instance_entry_1010(
+        build_id: &str,
+        build_time: i64,
+        rdepend: &str,
+    ) -> HashMap<String, String> {
+        HashMap::from([
+            ("CPV".to_string(), "dev-libs/spectre-0.2.12".to_string()),
+            ("SLOT".to_string(), "0".to_string()),
+            ("KEYWORDS".to_string(), "amd64".to_string()),
+            ("REPO".to_string(), "gentoo".to_string()),
+            ("BUILD_ID".to_string(), build_id.to_string()),
+            ("BUILD_TIME".to_string(), build_time.to_string()),
+            ("RDEPEND".to_string(), rdepend.to_string()),
+            (
+                "PATH".to_string(),
+                format!("dev-libs/spectre/spectre-0.2.12-{build_id}.gpkg.tar"),
+            ),
+        ])
+    }
+
+    /// A binrepo whose `Packages` index lives only in the in-memory
+    /// override table (`set_remote_binary_index_override`), under a
+    /// pid+nanos-unique `sync_uri` so parallel tests never collide.
+    fn in_memory_binhost_1010(
+        tag: &str,
+        entries: Vec<HashMap<String, String>>,
+    ) -> portage_profile::BinRepo {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let binrepo = portage_profile::BinRepo {
+            name: format!("multiinst-{tag}"),
+            sync_uri: format!(
+                "https://binhost.invalid/{tag}-{}-{nanos}",
+                std::process::id()
+            ),
+            priority: 1,
+            location: None,
+            verify_signature: false,
+            frozen: false,
+        };
+        set_remote_binary_index_override(
+            &binrepo.packages_dir(Path::new("/")),
+            Some(std::sync::Arc::new(BinaryIndex::from_entries(entries))),
+        );
+        binrepo
+    }
+
+    /// B1 bug 1: the dependency strings of a chosen binary instance are
+    /// read from the first `Packages` entry with the same `CPV`, not from
+    /// the instance that was actually selected. Here build 2 (newest)
+    /// wins `dedup_binary_instances`, but the walk follows build 1's
+    /// `RDEPEND` (`dev-libs/olddep`) -- in the field that is
+    /// `ghostscript-gpl:0/10.06=`, which forces a downgrade of the
+    /// installed 10.08. Expected value: real `_iter_match_pkgs` +
+    /// `pkg._metadata` of the selected instance (the `Packages` entry
+    /// carrying that `BUILD_ID`).
+    #[test]
+    fn multi_instance_walk_reads_the_selected_instances_own_deps() {
+        let dir = slotundo_temp_dir("1010-multiinst-deps");
+        let repo = dir.join("scratchrepo");
+        blocker_161_write_pkg(
+            &repo,
+            "dev-libs/spectre",
+            "0.2.12",
+            "0",
+            "",
+            "dev-libs/newdep",
+        );
+        for cp in ["dev-libs/olddep", "dev-libs/newdep"] {
+            blocker_161_write_pkg(&repo, cp, "1.0", "0", "", "");
+        }
+        let repos = vec![blocker_161_repo_config(repo)];
+        let mut config = test_config();
+        config.scanned_binpkgs = Some(vec![
+            multi_instance_entry_1010("1", 1000, "dev-libs/olddep"),
+            multi_instance_entry_1010("2", 2000, "dev-libs/newdep"),
+        ]);
+        let opts = CtxOpts161 {
+            backtrack_max: 10,
+            atoms: vec!["dev-libs/spectre".to_string()],
+            usepkg: true,
+            ..Default::default()
+        };
+        let ctx = ctx_161(&dir, &config, repos, &opts);
+        let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+        let parent = pass
+            .entries
+            .iter()
+            .find(|e| e.package == "spectre")
+            .expect("the parent merges");
+        assert_eq!(parent.build_id.as_deref(), Some("2"), "newest build wins");
+        let names: Vec<&str> = pass.entries.iter().map(|e| e.package.as_str()).collect();
+        assert!(
+            names.contains(&"newdep"),
+            "build 2's own RDEPEND must be walked, got {names:?}"
+        );
+        assert!(
+            !names.contains(&"olddep"),
+            "build 1's RDEPEND must not leak into build 2's walk, got {names:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// B1 bug 2: a version already present in the local `$PKGDIR` hides
+    /// *every* remote build of that version, including a newer
+    /// `BUILD_ID`. Real `bintree.isremote` is per instance
+    /// (`cpv` + `build_id` under binpkg-multi-instance), so the newer
+    /// remote build must stay a candidate and the stale local one must
+    /// not shadow it.
+    #[test]
+    fn multi_instance_local_build_does_not_shadow_a_newer_remote_build() {
+        let binrepo = in_memory_binhost_1010(
+            "shadow",
+            vec![
+                multi_instance_entry_1010("6", 1000, "dev-libs/old"),
+                multi_instance_entry_1010("7", 2000, "dev-libs/new"),
+            ],
+        );
+        let local =
+            BinaryIndex::from_entries(vec![multi_instance_entry_1010("6", 1000, "dev-libs/old")]);
+        let cands = list_remote_binary_candidates(
+            &[binrepo],
+            Path::new("/"),
+            &local,
+            "dev-libs",
+            "spectre",
+        );
+        let ids: Vec<Option<&str>> = cands.iter().map(|c| c.build_id.as_deref()).collect();
+        assert!(
+            ids.contains(&Some("7")),
+            "remote build 7 must survive the local build 6, got {ids:?}"
+        );
+        assert!(
+            !ids.contains(&Some("6")),
+            "remote build 6 is the already-downloaded local one, got {ids:?}"
+        );
+    }
+
+    /// B1 bug 3: `find_remote_binpkg` (the download lookup) matches by
+    /// `CPV` only and returns the first `Packages` entry -- the oldest
+    /// build, listed first -- so `-7` is planned but `-6` is fetched into
+    /// `$PKGDIR` (which then triggers bug 2). With no `BUILD_ID` to ask
+    /// for, the lookup must at least return the newest build (highest
+    /// `BUILD_TIME`, real `_cmp_cpv` order); the fix adds a `build_id`
+    /// parameter and this stays the fallback.
+    #[test]
+    fn multi_instance_download_lookup_returns_the_newest_build() {
+        let binrepo = in_memory_binhost_1010(
+            "download",
+            vec![
+                multi_instance_entry_1010("6", 1000, "dev-libs/old"),
+                multi_instance_entry_1010("7", 2000, "dev-libs/new"),
+            ],
+        );
+        let binrepos = [binrepo];
+        let (_, record) =
+            find_remote_binpkg(&binrepos, Path::new("/"), "dev-libs", "spectre", "0.2.12")
+                .expect("the binhost lists dev-libs/spectre-0.2.12");
+        assert_eq!(
+            record.get("BUILD_ID").map(String::as_str),
+            Some("7"),
+            "the newest build must be downloaded, got PATH {:?}",
+            record.get("PATH")
+        );
     }
 
     #[test]
@@ -52238,6 +52527,82 @@ mod tests {
             .expect("child entry");
         assert!(matches!(child.outcome, PretendOutcome::NoVisibleCandidate));
         assert!(result.autounmask_use_changes.is_empty());
+    }
+
+    /// Backlog #303: under `--update` a provider the pass *downgraded*
+    /// (held back by an installed consumer's built `:=` pin) is a missed
+    /// update. Real's first pass makes the same downgrade, then
+    /// `_slot_operator_update_probe` (`depgraph.py:3131`) finds the
+    /// installed instance and backtracks to replace the consumer. The scan
+    /// therefore treats the downgrade's `from` slot/sub-slot as the
+    /// provider's new slot and flags the stale consumer. Expected value:
+    /// host real Portage on `-uDN sys-apps/systemd` (libfido2 `rRg`,
+    /// libcbor kept at the installed 0.14), see
+    /// `docs/backlog-tasks-2026-10.md` #303.
+    #[test]
+    fn slot_operator_rebuild_scan_treats_a_pin_forced_downgrade_as_a_missed_update() {
+        let dir = TempDir::new("portage-repo-slotop-303").keep();
+        let mk = |name: &str, slot: &str, rdepend: &str| {
+            let d = dir.join("var/db/pkg/dev-libs").join(name);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+            fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+            if !rdepend.is_empty() {
+                fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+            }
+        };
+        // `bar` 2.0 is installed at sub-slot 2; `holder` was built
+        // against the older sub-slot 1 and pins it.
+        mk("bar-2.0", "0/2", "");
+        mk("holder-1.0", "0", "dev-libs/bar:0/1=");
+        let bar_downgrade = GraphEntry {
+            discovery: 0,
+            category: "dev-libs".into(),
+            package: "bar".into(),
+            outcome: PretendOutcome::Downgrade {
+                from: "2.0".into(),
+                to: "1.0".into(),
+            },
+            slot: Some("0".into()),
+            sub_slot: Some("1".into()),
+            ..graph_entry("dev-libs", "bar", "1.0")
+        };
+        let reach: HashSet<(String, String)> =
+            HashSet::from([("dev-libs".to_string(), "holder".to_string())]);
+        let empty: BTreeSet<(String, String)> = BTreeSet::new();
+        let scan = |update: bool, top: &HashSet<(String, String)>| {
+            slot_operator_rebuild_scan(
+                &dir,
+                &[],
+                std::slice::from_ref(&bar_downgrade),
+                &reach,
+                &empty,
+                &empty,
+                true,
+                update,
+                top,
+                &HashSet::new(),
+                &[],
+                &test_config(),
+            )
+            .0
+        };
+        assert_eq!(
+            scan(true, &HashSet::new()),
+            BTreeSet::from([("dev-libs".to_string(), "holder".to_string())]),
+            "the pin-forced downgrade schedules the stale consumer's rebuild"
+        );
+        assert!(
+            scan(false, &HashSet::new()).is_empty(),
+            "without --update a downgrade is not a missed update"
+        );
+        let requested: HashSet<(String, String)> =
+            HashSet::from([("dev-libs".to_string(), "bar".to_string())]);
+        assert!(
+            scan(true, &requested).is_empty(),
+            "an explicitly requested downgrade is not a missed update"
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
