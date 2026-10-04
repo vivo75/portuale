@@ -250,12 +250,31 @@ impl WriteTxn for FilesTxn<'_> {
         todo_step("insert_entry", "S2.2")
     }
 
-    fn delete_entry(&mut self, _key: &EntryKey) -> Result<()> {
-        todo_step("delete_entry", "S1.5")
+    /// Moved from `ebuild_unmerge::delete_vdb_dir` (real `dblink.delete()`):
+    /// `remove_dir_all` of the live entry (its error is returned), then a
+    /// best-effort `remove_dir` of the category directory, ignored when
+    /// another entry still lives there (N14).
+    fn delete_entry(&mut self, key: &EntryKey) -> Result<()> {
+        let dir = self.db.vdb_path().join(&key.category).join(&key.pf);
+        fs::remove_dir_all(&dir).map_err(|e| Error::io(&dir, e))?;
+        if let Some(cat_dir) = dir.parent() {
+            let _ = fs::remove_dir(cat_dir);
+        }
+        Ok(())
     }
 
-    fn replace_file(&mut self, _key: &EntryKey, _name: &str, _data: &[u8]) -> Result<()> {
-        todo_step("replace_file", "S1.5")
+    /// Moved from `remove_from_contents`' two `std::fs::write` calls: a
+    /// plain `std::fs::write` of `<entry>/<name>` (truncate in place, no
+    /// temporary file, no rename), so the entry directory's mtime and the
+    /// `metadata` stamp are untouched.
+    fn replace_file(&mut self, key: &EntryKey, name: &str, data: &[u8]) -> Result<()> {
+        let path = self
+            .db
+            .vdb_path()
+            .join(&key.category)
+            .join(&key.pf)
+            .join(name);
+        fs::write(&path, data).map_err(|e| Error::io(path, e))
     }
 
     fn set_world(&mut self, _world: &World) -> Result<()> {
@@ -616,6 +635,122 @@ mod tests {
         assert!(db.preserved_libs().unwrap().entries.is_empty());
         let mut txn = db.begin_write().unwrap();
         assert!(matches!(txn.next_counter(), Err(Error::Unsupported(_))));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    fn put_live(root: &Path, cat: &str, pf: &str, files: &[(&str, &str)]) {
+        let dir = root.join("var/db/pkg").join(cat).join(pf);
+        fs::create_dir_all(&dir).unwrap();
+        for (name, body) in files {
+            fs::write(dir.join(name), body).unwrap();
+        }
+    }
+
+    /// `delete_entry` removes the entry, and the category only when it is
+    /// then empty; a missing entry is the `remove_dir_all` error.
+    #[test]
+    fn delete_entry_removes_the_empty_category_only() {
+        let root = scratch("delete");
+        put_live(&root, "dev-libs", "a-1", &[("CONTENTS", "")]);
+        put_live(&root, "dev-libs", "b-1", &[("CONTENTS", "")]);
+        let db = FilesDb::new(&root);
+        let vdb = root.join("var/db/pkg");
+        let mut txn = db.begin_write().unwrap();
+        txn.delete_entry(&EntryKey::new("dev-libs", "a-1")).unwrap();
+        assert!(!vdb.join("dev-libs/a-1").exists());
+        assert!(vdb.join("dev-libs").is_dir(), "b-1 keeps the category");
+        txn.delete_entry(&EntryKey::new("dev-libs", "b-1")).unwrap();
+        assert!(!vdb.join("dev-libs").exists(), "empty category is removed");
+        let err = txn
+            .delete_entry(&EntryKey::new("dev-libs", "b-1"))
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .starts_with(&format!("{}: ", vdb.join("dev-libs/b-1").display()))
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// `replace_file` rewrites in place (same inode) and leaves the entry
+    /// directory's mtime alone.
+    #[test]
+    fn replace_file_rewrites_in_place() {
+        use std::os::unix::fs::MetadataExt as _;
+        let root = scratch("replace");
+        put_live(&root, "dev-libs", "a-1", &[("CONTENTS", "old old old\n")]);
+        let dir = root.join("var/db/pkg/dev-libs/a-1");
+        let (ino, mtime) = {
+            let f = fs::metadata(dir.join("CONTENTS")).unwrap();
+            let d = fs::metadata(&dir).unwrap();
+            (f.ino(), (d.mtime(), d.mtime_nsec()))
+        };
+        let db = FilesDb::new(&root);
+        let mut txn = db.begin_write().unwrap();
+        txn.replace_file(&EntryKey::new("dev-libs", "a-1"), "CONTENTS", b"new\n")
+            .unwrap();
+        assert_eq!(fs::read(dir.join("CONTENTS")).unwrap(), b"new\n");
+        assert_eq!(fs::metadata(dir.join("CONTENTS")).unwrap().ino(), ino);
+        let d = fs::metadata(&dir).unwrap();
+        assert_eq!((d.mtime(), d.mtime_nsec()), mtime);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// `read_file_all` lists every live entry (a missing file is `None`),
+    /// skips `-MERGING-`; `owners` matches with one leading `/` ignored,
+    /// in listing then `CONTENTS` order; `categories` lists directories.
+    #[test]
+    fn bulk_reads_and_owners_scan_the_tree() {
+        let root = scratch("bulk");
+        put_live(
+            &root,
+            "dev-libs",
+            "a-1",
+            &[
+                ("NEEDED.ELF.2", "n\n"),
+                ("CONTENTS", "dir /usr\nobj /usr/x abc 1\nfoo /usr/y\n"),
+            ],
+        );
+        put_live(
+            &root,
+            "dev-libs",
+            "b-1",
+            &[("CONTENTS", "sym /usr/x -> y 1\n")],
+        );
+        put_live(
+            &root,
+            "dev-libs",
+            "-MERGING-c-1",
+            &[("NEEDED.ELF.2", "p\n")],
+        );
+        put_live(&root, "app-misc", "d-1", &[]);
+        fs::write(root.join("var/db/pkg/stray"), "").unwrap();
+        let db = FilesDb::new(&root);
+        assert_eq!(db.categories().unwrap(), ["app-misc", "dev-libs"]);
+        let all = db.read_file_all("NEEDED.ELF.2").unwrap();
+        assert_eq!(
+            all,
+            vec![
+                (EntryKey::new("app-misc", "d-1"), None),
+                (EntryKey::new("dev-libs", "a-1"), Some(b"n\n".to_vec())),
+                (EntryKey::new("dev-libs", "b-1"), None),
+            ]
+        );
+        let owned = db
+            .owners(&[
+                b"/usr/x".as_slice(),
+                b"/usr/y".as_slice(),
+                b"/usr".as_slice(),
+            ])
+            .unwrap();
+        assert_eq!(
+            owned,
+            vec![
+                (b"/usr".to_vec(), EntryKey::new("dev-libs", "a-1")),
+                (b"/usr/x".to_vec(), EntryKey::new("dev-libs", "a-1")),
+                (b"/usr/x".to_vec(), EntryKey::new("dev-libs", "b-1")),
+            ],
+            "`foo` is not a recorded kind, so /usr/y is unowned"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 }

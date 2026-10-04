@@ -600,10 +600,29 @@ pub(crate) fn unmerge_pkgfiles(
     replacement_preserved: &BTreeMap<String, Vec<String>>,
     replacement_needed: &[(String, Vec<crate::needed_elf::NeededEntry>)],
 ) -> Result<(), String> {
-    let vdb_dir = root.join("var/db/pkg").join(category).join(pf);
-    let contents_path = vdb_dir.join("CONTENTS");
-    let contents_text = std::fs::read_to_string(&contents_path)
-        .map_err(|e| format!("{}: not installed ({e})", vdb_dir.display()))?;
+    // Through the root's installed-database backend. The error keeps the
+    // text `read_to_string` gave: the io error for a read that failed,
+    // `ENOENT` for a missing entry or file, the std UTF-8 text for a
+    // `CONTENTS` that is not UTF-8.
+    let key = portage_vdb::EntryKey::new(category, pf);
+    let db = portage_vdb::for_root(root);
+    let not_installed = |e: &dyn std::fmt::Display| {
+        format!(
+            "{}: not installed ({e})",
+            entry_path_for_message(root, category, pf).display()
+        )
+    };
+    let contents_text = match db.read_file(&key, "CONTENTS") {
+        Ok(Some(bytes)) => String::from_utf8(bytes).map_err(|_| {
+            not_installed(&std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "stream did not contain valid UTF-8",
+            ))
+        })?,
+        Ok(None) => return Err(not_installed(&std::io::Error::from_raw_os_error(2))),
+        Err(portage_vdb::Error::Io { source, .. }) => return Err(not_installed(&source)),
+        Err(e) => return Err(not_installed(&e)),
+    };
 
     // Real `others_in_slot`: every other installed version of this same
     // category/PN in the same SLOT, excluding self -- see this module's
@@ -719,12 +738,22 @@ pub(crate) fn unmerge_pkgfiles(
 /// `ebuild_merge::merge_binpkg`'s replace path can drop an old
 /// version's vdb entry without going through the phase machinery.
 pub(crate) fn delete_vdb_dir(root: &Path, category: &str, pf: &str) -> Result<(), String> {
-    let vdb_dir = root.join("var/db/pkg").join(category).join(pf);
-    std::fs::remove_dir_all(&vdb_dir).map_err(|e| format!("{}: {e}", vdb_dir.display()))?;
-    if let Some(cat_dir) = vdb_dir.parent() {
-        let _ = std::fs::remove_dir(cat_dir);
-    }
-    Ok(())
+    // `WriteTxn::delete_entry` is the old body, unchanged: `remove_dir_all`
+    // of the entry, then the best-effort category `rmdir` (N14).
+    let db = portage_vdb::for_root(root);
+    let mut txn = db.begin_write().map_err(|e| e.to_string())?;
+    txn.delete_entry(&portage_vdb::EntryKey::new(category, pf))
+        .map_err(|e| e.to_string())?;
+    txn.commit().map_err(|e| e.to_string())
+}
+
+/// The directory of the installed entry `category/pf` as the old messages
+/// printed it (`<root>/var/db/pkg/<category>/<pf>`); on a backend with no
+/// such directory, the bare `category/pf`.
+pub(crate) fn entry_path_for_message(root: &Path, category: &str, pf: &str) -> std::path::PathBuf {
+    portage_vdb::for_root(root)
+        .entry_path(&portage_vdb::EntryKey::new(category, pf))
+        .unwrap_or_else(|| std::path::PathBuf::from(format!("{category}/{pf}")))
 }
 
 /// Real top-level `unmerge()`: `dblink.unmerge()` (`prerm` -> delete
@@ -737,12 +766,19 @@ pub fn run_unmerge(
     options: &UnmergeOptions,
 ) -> Result<i32, String> {
     let env = ebuild_phases::compute_environment(ebuild_path, portage_tmpdir)?;
-    let vdb_dir = root
-        .join("var/db/pkg")
-        .join(&env.category)
-        .join(&env.split.pf);
-    if !vdb_dir.join("CONTENTS").exists() {
-        return Err(format!("{}: not installed", vdb_dir.display()));
+    // `exists()` of old: one `stat` that follows symlinks, any error is
+    // "not there".
+    let installed = portage_vdb::for_root(root)
+        .file_meta(
+            &portage_vdb::EntryKey::new(env.category.as_str(), env.split.pf.as_str()),
+            "CONTENTS",
+        )
+        .is_ok_and(|meta| meta.is_some());
+    if !installed {
+        return Err(format!(
+            "{}: not installed",
+            entry_path_for_message(root, &env.category, &env.split.pf).display()
+        ));
     }
 
     let prerm_status = ebuild_phases::run_single_phase(

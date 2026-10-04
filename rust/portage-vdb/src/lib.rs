@@ -197,6 +197,38 @@
 //!     "Text and bytes"); before S1.4 it was copied. No such name exists:
 //!     build-info names are fixed ASCII keys and `<PF>.ebuild`.
 //!
+//! 21. **S1.5: unmerge, the W4 rewrites and the scans (one interface
+//!     addition).** [`WriteTxn::delete_entry`] is the old
+//!     `delete_vdb_dir`: `remove_dir_all` of the entry (its error is
+//!     returned), then a best-effort `remove_dir` of the category
+//!     directory (N14). [`WriteTxn::replace_file`] is the two
+//!     `std::fs::write` calls of `remove_from_contents` (`CONTENTS`, then
+//!     `NEEDED.ELF.2` only when something was removed and the file was
+//!     readable): in place, no temporary file, so the entry directory's
+//!     mtime and the `metadata` stamp are untouched. The reads of the
+//!     unmerge (`CONTENTS`, `COUNTER`, `DEFINED_PHASES`, the
+//!     `environment.bz2` and `<pf>.ebuild` exists-tests) are
+//!     [`InstalledDb::read_file`] / [`InstalledDb::file_meta`]; the saved
+//!     environment and ebuild still go to bash by path
+//!     ([`InstalledDb::entry_path`], N9). [`InstalledDb::read_file_all`]
+//!     is the walk of `read_all_needed_entries`, moved unchanged: every
+//!     category is listed and tested first, then each category's entries
+//!     are listed, tested and read in turn; a file that cannot be read for
+//!     any reason is `None`. [`InstalledDb::owners`] is the walk of
+//!     `find_owners` plus the per-entry `CONTENTS` read of
+//!     `installed_contents_files`; the `<package>-<version>` split and the
+//!     package-move fallback stay above the crate (`find_owners` drops the
+//!     claims of an entry name that does not split, which the old loop
+//!     skipped before reading its `CONTENTS`). **New:**
+//!     [`InstalledDb::categories`] lists the category directories, so a
+//!     caller that scanned category by category (`blockers_from_flat_deps`)
+//!     keeps its order (list a category, read each entry's `SLOT`, next
+//!     category) with [`InstalledDb::category_entries`], which also drops
+//!     the per-entry `is_dir` `stat` (the entry still has to be a
+//!     directory, by `d_type` or `stat`). `unmerge_replaced_same_slot`
+//!     lists its category the same way, so a stray non-directory named
+//!     like a version is no longer taken for an installed instance.
+//!
 //! **Rejected from N1–N16:** N10 `cpv_for_path` (the caller prints the
 //! canonical VDB directory in its errors, so it needs
 //! [`InstalledDb::vdb_dir`], not a key); N16's `CONTENTS`-shaped
@@ -316,6 +348,11 @@ pub trait InstalledDb: Send + Sync {
 
     /// Every live entry (R3), in listing order.
     fn entries(&self) -> Result<Vec<EntryKey>>;
+
+    /// Every category that exists (`files`: each directory under the VDB),
+    /// in listing order. The caller lists each with
+    /// [`InstalledDb::category_entries`] (module doc, item 21).
+    fn categories(&self) -> Result<Vec<String>>;
 
     /// The `pf` of every live entry in `category` (R1), in listing order;
     /// empty when the category does not exist. The caller applies its

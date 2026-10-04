@@ -1249,11 +1249,14 @@ fn remove_from_contents(root: &Path, cpv: &str, paths: &BTreeSet<String>) -> Res
     let Some((category, pf)) = cpv.split_once('/') else {
         return Ok(());
     };
-    let vdb_dir = root.join("var/db/pkg").join(category).join(pf);
-    let contents_path = vdb_dir.join("CONTENTS");
-    let Ok(text) = std::fs::read_to_string(&contents_path) else {
+    // W4 through the backend: `read_entry_text` is today's `read_to_string(..)
+    // else return Ok(())` (missing, unreadable or non-UTF-8 all stop here),
+    // `replace_file` its two in-place `std::fs::write`s.
+    let key = portage_vdb::EntryKey::new(category, pf);
+    let Some(text) = read_entry_text(root, category, pf, "CONTENTS") else {
         return Ok(());
     };
+    let db = portage_vdb::for_root(root);
     let mut removed = false;
     let mut surviving_paths: BTreeSet<String> = BTreeSet::new();
     let new_text: String = text
@@ -1274,20 +1277,21 @@ fn remove_from_contents(root: &Path, cpv: &str, paths: &BTreeSet<String>) -> Res
         })
         .map(|l| format!("{l}\n"))
         .collect();
-    std::fs::write(&contents_path, new_text)
-        .map_err(|e| format!("{}: {e}", contents_path.display()))?;
+    let replace = |name: &str, data: String| -> Result<(), String> {
+        let mut txn = db.begin_write().map_err(|e| e.to_string())?;
+        txn.replace_file(&key, name, data.as_bytes())
+            .map_err(|e| e.to_string())?;
+        txn.commit().map_err(|e| e.to_string())
+    };
+    replace("CONTENTS", new_text)?;
 
-    if removed {
-        let needed_path = vdb_dir.join("NEEDED.ELF.2");
-        if let Ok(needed_text) = std::fs::read_to_string(&needed_path) {
-            let new_needed: String = crate::needed_elf::NeededEntry::parse_file(&needed_text)
-                .into_iter()
-                .filter(|entry| surviving_paths.contains(&entry.filename))
-                .map(|entry| entry.to_needed_line())
-                .collect();
-            std::fs::write(&needed_path, new_needed)
-                .map_err(|e| format!("{}: {e}", needed_path.display()))?;
-        }
+    if removed && let Some(needed_text) = read_entry_text(root, category, pf, "NEEDED.ELF.2") {
+        let new_needed: String = crate::needed_elf::NeededEntry::parse_file(&needed_text)
+            .into_iter()
+            .filter(|entry| surviving_paths.contains(&entry.filename))
+            .map(|entry| entry.to_needed_line())
+            .collect();
+        replace("NEEDED.ELF.2", new_needed)?;
     }
     Ok(())
 }
@@ -1695,12 +1699,7 @@ pub(crate) fn preserve_libs_on_unmerge(
     // preserve-set computation is skipped.
     let instance_owns_files = !contents_text.trim().is_empty();
 
-    let counter_path = root
-        .join("var/db/pkg")
-        .join(category)
-        .join(pf)
-        .join("COUNTER");
-    let counter = std::fs::read_to_string(&counter_path).unwrap_or_else(|_| "0".to_string());
+    let counter = read_entry_text(root, category, pf, "COUNTER").unwrap_or_else(|| "0".to_string());
     let cpv = format!("{category}/{pf}");
 
     let mut registry = read_plib_registry(root);
@@ -1959,7 +1958,11 @@ pub(crate) fn prune_unused_preserved_libs(
     for (cpv, paths) in &cpv_lib_map {
         let cat_pf = cpv.split_once('/');
         let still_installed = cat_pf
-            .map(|(cat, pf)| root.join("var/db/pkg").join(cat).join(pf).is_dir())
+            .map(|(cat, pf)| {
+                portage_vdb::for_root(root)
+                    .has_entry(&portage_vdb::EntryKey::new(cat, pf))
+                    .unwrap_or(false)
+            })
             .unwrap_or(false);
         if still_installed {
             remove_from_contents(root, cpv, paths)?;
@@ -2757,16 +2760,10 @@ fn installed_instance_pf(root: &Path, category: &str, package: &str, slot: &str)
         })
         .filter_map(|version| {
             let pf = format!("{package}-{version}");
-            let counter: i64 = std::fs::read_to_string(
-                root.join("var/db/pkg")
-                    .join(category)
-                    .join(&pf)
-                    .join("COUNTER"),
-            )
-            .ok()?
-            .trim()
-            .parse()
-            .ok()?;
+            let counter: i64 = read_entry_text(root, category, &pf, "COUNTER")?
+                .trim()
+                .parse()
+                .ok()?;
             Some((pf, counter))
         })
         .max_by_key(|(_, counter)| *counter)
@@ -2832,6 +2829,17 @@ fn read_contents_pf(root: &Path, category: &str, pf: &str) -> Option<String> {
         .ok()
         .flatten()
         .and_then(|bytes| String::from_utf8(bytes).ok())
+}
+
+/// `entry/<name>.is_file()` of old: one `stat` (following symlinks)
+/// through the root's [`portage_vdb::InstalledDb::file_meta`]; a missing
+/// entry or file, or any error, is `false`.
+fn entry_file_is_regular(root: &Path, category: &str, pf: &str, name: &str) -> bool {
+    portage_vdb::for_root(root)
+        .file_meta(&portage_vdb::EntryKey::new(category, pf), name)
+        .ok()
+        .flatten()
+        .is_some_and(|meta| meta.mode & 0o170000 == 0o100000)
 }
 
 /// One file of the live entry `category/pf` as UTF-8 text, through the
@@ -3058,26 +3066,18 @@ fn blocked_installed_packages(
 /// own `mypkglist` construction doesn't either).
 fn blockers_from_flat_deps(root: &Path, flat_deps: &[String]) -> HashSet<(String, String)> {
     (|| -> Option<HashSet<(String, String)>> {
-        let pkg_root = root.join("var/db/pkg");
-        let categories = portage_util::read_dir_entries(&pkg_root).ok()?;
-        let installed: Vec<(String, String, String)> = categories
+        // Category by category, like the old walk: list the category,
+        // then read each entry's `SLOT`, then the next category.
+        let db = portage_vdb::for_root(root);
+        let installed: Vec<(String, String, String)> = db
+            .categories()
+            .ok()?
             .into_iter()
-            .filter(|e| e.path().is_dir())
-            .flat_map(|category_entry| {
-                let category_name = category_entry.file_name().to_string_lossy().to_string();
-                portage_util::read_dir_entries(&category_entry.path())
+            .flat_map(|category_name| {
+                db.category_entries(&category_name)
                     .into_iter()
                     .flatten()
-                    .filter(|e| e.path().is_dir())
-                    .filter_map(move |pkg_entry| {
-                        let pf = pkg_entry.file_name().to_string_lossy().to_string();
-                        // Real `vardbapi._excluded_dirs`: an in-progress
-                        // `-MERGING-<pf>` entry is never an installed
-                        // package, so it never participates in blocker
-                        // matching either.
-                        if portage_util::is_merging_vdb_entry(&pf) {
-                            return None;
-                        }
+                    .map(move |pf| {
                         // #116: through the vdb seam, so this scan sees the
                         // same normalised `SLOT` every other consumer does
                         // (a missing field is `""` -> `("", "")` here).
@@ -3086,11 +3086,8 @@ fn blockers_from_flat_deps(root: &Path, flat_deps: &[String]) -> HashSet<(String
                             .split_once('/')
                             .map(|(s, ss)| (s.to_string(), ss.to_string()))
                             .unwrap_or_else(|| (slot.clone(), slot.clone()));
-                        Some((category_name.clone(), pf, slot, sub_slot))
-                    })
-                    .map(|(category, pf, slot, sub_slot)| {
-                        let candidate_str = format!("{category}/{pf}:{slot}/{sub_slot}");
-                        (category, pf, candidate_str)
+                        let candidate_str = format!("{category_name}/{pf}:{slot}/{sub_slot}");
+                        (category_name.clone(), pf, candidate_str)
                     })
                     .collect::<Vec<_>>()
             })
@@ -3256,65 +3253,32 @@ fn find_collisions(
 /// and returns the `category/pf` -> claimed-paths map for whichever
 /// ones actually claim it.
 ///
-/// The directory tree is still walked by hand -- `PackagesDb` has no
-/// "list every installed package" query -- but each `package-version`
-/// directory's path list is read through the trait
-/// ([`mrg_director::VdbReader`] over `root`, keyed by the
-/// `(package, version)` its directory name splits into), the same seam
-/// `owns_path` above uses. `collisions` entries are logical absolute
-/// paths; the seam's `contents_files` strips the vdb record's one
-/// leading `/` (its documented shape), so each collision is stripped the
-/// same way for the comparison -- the exact inverse of that strip on
-/// every `format_contents_line`-written entry -- and the matched
-/// collision (the same absolute string the old direct read pushed) is
-/// what lands in the map.
+/// The scan is [`portage_vdb::InstalledDb::owners`] (S1.5: the old
+/// two-level walk and per-entry `CONTENTS` read moved into `FilesDb`
+/// unchanged). Two things the old loop did stay here because they live
+/// above `portage-vdb`: an entry whose directory name does not split as
+/// `<package>-<version>` (`portage_repo::split_pf`) claims nothing (the
+/// old walk skipped it before reading its `CONTENTS`; it is now read and
+/// its claims dropped), and the result is regrouped as `category/pf` ->
+/// the matched collision strings (the same absolute strings the old
+/// direct read pushed). `owns_path` keeps reading through the
+/// `mrg_director::PackagesDb` seam.
 fn find_owners(root: &Path, collisions: &[String]) -> BTreeMap<String, Vec<String>> {
     let mut owners: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let db = mrg_director::VdbReader::new(root);
-    let pkg_root = root.join("var/db/pkg");
-    let Ok(categories) = portage_util::read_dir_entries(&pkg_root) else {
+    let paths: Vec<&[u8]> = collisions.iter().map(|c| c.as_bytes()).collect();
+    let Ok(claims) = portage_vdb::for_root(root).owners(&paths) else {
         return owners;
     };
-    for category_entry in categories {
-        let category_path = category_entry.path();
-        if !category_path.is_dir() {
+    for (path, key) in claims {
+        // The old walk skipped an entry name that is not
+        // `<package>-<version>` before reading its `CONTENTS`.
+        if portage_repo::split_pf(&key.pf).is_none() {
             continue;
         }
-        let category_name = category_entry.file_name().to_string_lossy().to_string();
-        let Ok(packages) = portage_util::read_dir_entries(&category_path) else {
-            continue;
-        };
-        for pkg_entry in packages {
-            let pkg_path = pkg_entry.path();
-            if !pkg_path.is_dir() {
-                continue;
-            }
-            let pf = pkg_entry.file_name().to_string_lossy().to_string();
-            // Real `vardbapi._excluded_dirs`: an in-progress
-            // `-MERGING-<pf>` entry owns nothing -- a stale one's
-            // half-written `CONTENTS` must never claim a colliding path.
-            if portage_util::is_merging_vdb_entry(&pf) {
-                continue;
-            }
-            let Some((package, version)) = portage_repo::split_pf(&pf) else {
-                continue;
-            };
-            let mut claimed = Vec::new();
-            for path in db.contents_files(&category_name, &package, &version) {
-                if let Some(c) = collisions
-                    .iter()
-                    .find(|c| c.strip_prefix('/').unwrap_or(c) == path)
-                {
-                    claimed.push(c.clone());
-                }
-            }
-            if !claimed.is_empty() {
-                owners
-                    .entry(format!("{category_name}/{pf}"))
-                    .or_default()
-                    .extend(claimed);
-            }
-        }
+        owners
+            .entry(format!("{}/{}", key.category, key.pf))
+            .or_default()
+            .push(String::from_utf8_lossy(&path).into_owned());
     }
     owners
 }
@@ -4057,14 +4021,9 @@ pub(crate) fn unmerge_replaced_same_slot(
     // temporary can never match the `<package>-<digit...>` shape (real
     // package names never start with `-`), but skip it explicitly anyway:
     // readers never see in-progress entries, not even here.
-    let vdb_cat = root.join("var/db/pkg").join(category);
     let mut replaced: Vec<String> = Vec::new();
-    if let Ok(entries) = portage_util::read_dir_entries(&vdb_cat) {
-        for e in entries {
-            let name = e.file_name().to_string_lossy().to_string();
-            if portage_util::is_merging_vdb_entry(&name) {
-                continue;
-            }
+    if let Ok(names) = portage_vdb::for_root(root).category_entries(category) {
+        for name in names {
             let is_this_cp = name.starts_with(&format!("{package}-"))
                 && name[package.len() + 1..].starts_with(|c: char| c.is_ascii_digit());
             if !is_this_cp || name == new_pf {
@@ -4202,7 +4161,6 @@ pub(crate) fn unmerge_one_installed(
     replacement_preserved: &BTreeMap<String, Vec<String>>,
     replacement_needed: &[(String, Vec<crate::needed_elf::NeededEntry>)],
 ) -> Result<(), String> {
-    let vdb_dir = root.join("var/db/pkg").join(category).join(pf);
     let unmerge_options = crate::ebuild_unmerge::UnmergeOptions {
         debug: options.debug,
         shell: options.shell,
@@ -4234,9 +4192,9 @@ pub(crate) fn unmerge_one_installed(
     }
 
     let run_hook = |phase: &str| -> Result<i32, String> {
-        let defined = std::fs::read_to_string(vdb_dir.join("DEFINED_PHASES")).unwrap_or_default();
-        if !vdb_dir.join("environment.bz2").is_file()
-            || !vdb_dir.join(format!("{pf}.ebuild")).is_file()
+        let defined = read_entry_text(root, category, pf, "DEFINED_PHASES").unwrap_or_default();
+        if !entry_file_is_regular(root, category, pf, "environment.bz2")
+            || !entry_file_is_regular(root, category, pf, &format!("{pf}.ebuild"))
             || !defined.split_whitespace().any(|d| d == phase)
         {
             return Ok(0);
@@ -4299,10 +4257,15 @@ pub(crate) fn run_vdb_saved_env_phase(
     portage_tmpdir: &Path,
     options: &MergeOptions,
 ) -> Result<i32, String> {
-    let vdb_dir = root.join("var/db/pkg").join(category).join(pf);
+    // Both files go to bash / a copier by path (N9), so the backend must
+    // have a directory for the entry (`files`).
+    let vdb_dir = crate::ebuild_unmerge::entry_path_for_message(root, category, pf);
     let env = vdb_dir.join("environment.bz2");
-    let ebuild = vdb_dir.join(format!("{pf}.ebuild"));
-    if !env.is_file() || !ebuild.is_file() {
+    let ebuild_name = format!("{pf}.ebuild");
+    let ebuild = vdb_dir.join(&ebuild_name);
+    if !entry_file_is_regular(root, category, pf, "environment.bz2")
+        || !entry_file_is_regular(root, category, pf, &ebuild_name)
+    {
         return Err(format!(
             "{}: no saved build environment (installed before portuale kept one?)",
             vdb_dir.display()

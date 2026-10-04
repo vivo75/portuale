@@ -8,8 +8,8 @@
 //! memory) is in `files_write.rs`. Every method that is not moved yet
 //! returns [`Error::Unsupported`] naming the plan step that moves it
 //! (`reverse_dependents` stays above this crate on `files`, see the module
-//! doc item 19; `owners` and `read_file_all` S1.5 (unmerge and the
-//! preserve-libs linkage input), unmerge and W4 S1.5, world S1.6).
+//! doc item 19; S1.5 moved `owners`, `read_file_all`, `delete_entry`
+//! and `replace_file`; world is S1.6).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -382,6 +382,19 @@ impl InstalledDb for FilesDb {
         Ok(out)
     }
 
+    /// The category directories of the VDB (each one tested with
+    /// `is_dir`), in listing order; empty when the VDB cannot be listed.
+    fn categories(&self) -> Result<Vec<String>> {
+        let Ok(cats) = portage_util::read_dir_entries(&self.vdb) else {
+            return Ok(Vec::new());
+        };
+        Ok(cats
+            .into_iter()
+            .filter(|e| e.path().is_dir())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect())
+    }
+
     fn category_entries(&self, category: &str) -> Result<Vec<String>> {
         let Ok(entries) = portage_util::read_dir_entries(&self.vdb.join(category)) else {
             return Ok(Vec::new());
@@ -480,8 +493,42 @@ impl InstalledDb for FilesDb {
         self.read_pending(key, name)
     }
 
-    fn read_file_all(&self, _name: &str) -> Result<Vec<(EntryKey, Option<Vec<u8>>)>> {
-        todo_step("read_file_all", "S1.5")
+    /// Moved from `needed_elf::read_all_needed_entries`: the same walk and
+    /// the same order of `open`s. Every category directory is listed and
+    /// tested first; then, category by category, the entry directories
+    /// are listed and tested, and the file of each non-`-MERGING-` entry
+    /// is read. A file that cannot be read is `None`, whatever the reason
+    /// (today's `read_to_string(..).unwrap_or_default()`); an unreadable
+    /// VDB or category directory ends or skips the listing.
+    fn read_file_all(&self, name: &str) -> Result<Vec<(EntryKey, Option<Vec<u8>>)>> {
+        let mut out = Vec::new();
+        let Ok(categories) = portage_util::read_dir_entries(&self.vdb) else {
+            return Ok(out);
+        };
+        let category_names: Vec<String> = categories
+            .into_iter()
+            .filter(|e| e.path().is_dir())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        for category in category_names {
+            let category_path = self.vdb.join(&category);
+            let Ok(packages) = portage_util::read_dir_entries(&category_path) else {
+                continue;
+            };
+            let pf_names: Vec<String> = packages
+                .into_iter()
+                .filter(|e| e.path().is_dir())
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .collect();
+            for pf in pf_names {
+                if portage_util::is_merging_vdb_entry(&pf) {
+                    continue;
+                }
+                let data = fs::read(category_path.join(&pf).join(name)).ok();
+                out.push((EntryKey::new(category.clone(), pf), data));
+            }
+        }
+        Ok(out)
     }
 
     fn entry_image(&self, _key: &EntryKey) -> Result<Option<EntryImage>> {
@@ -495,8 +542,72 @@ impl InstalledDb for FilesDb {
         )
     }
 
-    fn owners(&self, _paths: &[&[u8]]) -> Result<Vec<(Vec<u8>, EntryKey)>> {
-        todo_step("owners", "S1.5")
+    /// Moved from `ebuild_merge::find_owners` (its directory walk plus the
+    /// per-entry `installed_contents_files`): list the VDB, each category
+    /// directory (tested with `is_dir`) and each entry directory (tested
+    /// with `is_dir`), skip `-MERGING-` entries, `stat` the entry and read
+    /// its `CONTENTS` (a missing, unreadable or non-UTF-8 file owns
+    /// nothing). A `CONTENTS` line whose first two words are a kind
+    /// (`obj`, `sym`, `dir`, `dev`, `fif`, `bin`) and a path claims that
+    /// path; one leading `/` is ignored on both sides of the comparison.
+    /// Each claim pairs the first of `paths` it matches with the entry.
+    ///
+    /// Not done here, because both live above this crate: the
+    /// package-move fallback and the `<package>-<version>` split that
+    /// `find_owners` applies to the entry name (it skips a name that does
+    /// not split). `find_owners` applies the split to the result.
+    fn owners(&self, paths: &[&[u8]]) -> Result<Vec<(Vec<u8>, EntryKey)>> {
+        let mut out = Vec::new();
+        let Ok(categories) = portage_util::read_dir_entries(&self.vdb) else {
+            return Ok(out);
+        };
+        for category_entry in categories {
+            let category_path = category_entry.path();
+            if !category_path.is_dir() {
+                continue;
+            }
+            let category = category_entry.file_name().to_string_lossy().to_string();
+            let Ok(packages) = portage_util::read_dir_entries(&category_path) else {
+                continue;
+            };
+            for pkg_entry in packages {
+                if !pkg_entry.path().is_dir() {
+                    continue;
+                }
+                let pf = pkg_entry.file_name().to_string_lossy().to_string();
+                if portage_util::is_merging_vdb_entry(&pf) {
+                    continue;
+                }
+                let key = EntryKey::new(category.clone(), pf);
+                // Today's `resolve_vdb_entry` tests the entry once before
+                // the read; keep the `statx`.
+                let _ = self.has_entry(&key);
+                let Some(text) = self
+                    .read_file(&key, "CONTENTS")
+                    .ok()
+                    .flatten()
+                    .and_then(|b| String::from_utf8(b).ok())
+                else {
+                    continue;
+                };
+                for line in text.lines() {
+                    let mut words = line.split_whitespace();
+                    let path = match (words.next(), words.next()) {
+                        (Some("obj" | "sym" | "dir" | "dev" | "fif" | "bin"), Some(path)) => {
+                            path.strip_prefix('/').unwrap_or(path)
+                        }
+                        _ => continue,
+                    };
+                    let claimed = paths
+                        .iter()
+                        .find(|p| p.strip_prefix(b"/").unwrap_or(p) == path.as_bytes());
+                    if let Some(p) = claimed {
+                        out.push((p.to_vec(), key.clone()));
+                    }
+                }
+            }
+        }
+        Ok(out)
     }
 
     fn world(&self) -> Result<World> {
