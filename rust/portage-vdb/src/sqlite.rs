@@ -531,6 +531,21 @@ impl InstalledDb for SqliteDb {
         })
     }
 
+    fn pending_entries(&self) -> Result<Vec<EntryKey>> {
+        self.with(|c| {
+            let mut stmt = c.prepare(
+                "SELECT category, pf FROM entry WHERE state = 'merging' ORDER BY category, pf",
+            )?;
+            stmt.query_map([], |r| {
+                Ok(EntryKey::new(
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                ))
+            })?
+            .collect()
+        })
+    }
+
     fn has_entry(&self, key: &EntryKey) -> Result<bool> {
         self.with(|c| Ok(installed_row(c, key)?.is_some()))
     }

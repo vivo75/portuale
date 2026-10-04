@@ -64,6 +64,29 @@ impl FilesDb {
         }
     }
 
+    /// The `files` backend a command-line `files:PATH` names: `PATH` is a
+    /// root, or the VDB directory itself (a path ending in the VDB
+    /// location means the root three levels up, so the D4 stores come
+    /// along). Any other existing directory is a bare VDB directory
+    /// ([`FilesDb::open_vdb_dir`]: `root()` is `None`, no D4 stores).
+    /// `None` when `PATH` is no directory.
+    pub fn from_cli_path(path: &Path) -> Option<Self> {
+        if path.ends_with(VDB_PATH) {
+            let root = path.ancestors().nth(3)?;
+            let root = if root.as_os_str().is_empty() {
+                Path::new(".")
+            } else {
+                root
+            };
+            return Some(FilesDb::new(root));
+        }
+        if path.join(VDB_PATH).is_dir() {
+            Some(FilesDb::new(path))
+        } else {
+            path.is_dir().then(|| FilesDb::open_vdb_dir(path))
+        }
+    }
+
     /// The root given to [`FilesDb::new`]; `None` for
     /// [`FilesDb::open_vdb_dir`].
     pub fn root(&self) -> Option<&Path> {
@@ -437,6 +460,27 @@ impl InstalledDb for FilesDb {
             .filter(|e| e.path().is_dir())
             .map(|e| e.file_name().to_string_lossy().to_string())
             .collect())
+    }
+
+    fn pending_entries(&self) -> Result<Vec<EntryKey>> {
+        let mut out = Vec::new();
+        let Ok(cats) = portage_util::read_dir_entries(&self.vdb) else {
+            return Ok(out);
+        };
+        for cat in cats.into_iter().filter(|e| e.path().is_dir()) {
+            let category = cat.file_name().to_string_lossy().to_string();
+            let Ok(pkgs) = portage_util::read_dir_entries(&cat.path()) else {
+                continue;
+            };
+            for pkg in pkgs.into_iter().filter(|e| e.path().is_dir()) {
+                let dirname = pkg.file_name().to_string_lossy().to_string();
+                if let Some(pf) = dirname.strip_prefix(portage_util::MERGING_IDENTIFIER) {
+                    out.push(EntryKey::new(category.clone(), pf));
+                }
+            }
+        }
+        out.sort();
+        Ok(out)
     }
 
     fn category_entries(&self, category: &str) -> Result<Vec<String>> {

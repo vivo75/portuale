@@ -19,6 +19,7 @@ man_pages_in = [
     'emerge.1',
     'make.conf.5',
     'portage.5',
+    'portuale-vdb.1',
     'xpak.5',
 ]
 

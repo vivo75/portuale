@@ -1,0 +1,85 @@
+.TH "PORTUALE\-VDB" "1" "Oct 2026" "Portuale @VERSION@" "Portuale"
+.SH "NAME"
+portuale\-vdb \- Convert or verify the installed\-package database between backends
+.SH "SYNOPSIS"
+.TP
+.B portuale vdb convert
+\fB\-\-from\fR \fIKIND:PATH\fR \fB\-\-to\fR \fIKIND:PATH\fR [\fB\-\-force\fR]
+.TP
+.B portuale vdb verify
+[\fB\-\-against\fR] \fIKIND:PATH\fR \fIKIND:PATH\fR
+.TP
+.B portuale vdb
+\fB\-\-help\fR
+.SH "DESCRIPTION"
+The installed\-package database (the VDB, normally \fB/var/db/pkg\fR) can
+be kept in more than one backend.  \fBportuale vdb\fR copies it from one
+backend to another and checks that two backends hold the same data.
+It works on any pair of backends, in either direction.
+.LP
+\fBconvert\fR copies every live entry, with the exact bytes, modes and
+mtimes of its files and the mode and mtime of its directory, then the
+\fBworld\fR and \fBworld_sets\fR files, the preserved\-libs registry, the
+config\-protect memory and the merge counter.  Counters are preserved,
+never renumbered.  The consolidated \fBmetadata\fR file is never created,
+and a stale stamp stays stale; a valid one is stamped again for the new
+directory.  Entries that are still being merged (\fB\-MERGING\-\fR) are
+not copied; each one is listed on standard error.  A database
+destination is written in one transaction, so a failed conversion leaves
+it unchanged.
+.LP
+\fBverify\fR compares two backends without changing either: the set of
+live entries; for each entry its files, bytes, modes, mtimes, directory
+mode and mtime, and whether the \fBmetadata\fR stamp is valid; then the
+world files, preserved libs, config memory and counter.  The differences
+are listed, at most 100 lines.
+.SH "KIND:PATH"
+.TP
+\fBfiles:\fR\fIROOT\fR
+The historic tree: \fIROOT\fR\fB/var/db/pkg\fR plus the world,
+preserved\-libs, config\-memory and counter files that live outside the
+VDB directory, under \fIROOT\fR.  A \fIPATH\fR that ends in
+\fBvar/db/pkg\fR means the root three levels up, so \fBfiles:/var/db/pkg\fR
+is \fBfiles:/\fR.  As a source only, a directory without \fBvar/db/pkg\fR
+is read as a bare VDB directory (entries only, no other stores).
+.TP
+\fBsqlite:\fR\fIFILE\fR
+One SQLite file, created by \fBconvert\fR when missing.  Available only
+when portuale is built with the \fBvdb\-sqlite\fR feature.
+.TP
+\fBredb:\fR\fIFILE\fR
+Not implemented yet.
+.SH "OPTIONS"
+.TP
+\fB\-\-from\fR \fIKIND:PATH\fR
+The source of \fBconvert\fR.  It is only read.
+.TP
+\fB\-\-to\fR \fIKIND:PATH\fR
+The destination of \fBconvert\fR.  It must hold no entries, unless
+\fB\-\-force\fR is given.
+.TP
+.B \-\-force
+Make the destination an exact copy of the source: replace entries with
+the same name and delete the ones the source does not have.
+.TP
+\fB\-\-against\fR
+Accepted before the two arguments of \fBverify\fR.  It changes nothing.
+.SH "EXIT STATUS"
+.TP
+.B 0
+The conversion finished, or \fBverify\fR found no difference.
+.TP
+.B 1
+\fBverify\fR found differences.
+.TP
+.B 2
+Usage error, or an I/O or database error (including a destination that
+is not empty).
+.SH "EXAMPLES"
+.nf
+portuale vdb convert \-\-from files:/ \-\-to sqlite:/var/lib/portage/vdb.sqlite
+portuale vdb verify \-\-against files:/ sqlite:/var/lib/portage/vdb.sqlite
+portuale vdb convert \-\-from sqlite:vdb.sqlite \-\-to files:/tmp/vdb\-export
+.fi
+.SH "SEE ALSO"
+\fBemerge\fR(1), \fBebuild\fR(1)

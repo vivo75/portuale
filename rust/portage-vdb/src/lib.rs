@@ -386,6 +386,7 @@
 //! [`Error::Invalid`] by `list_files` / `entry_image`; none exists in the
 //! S0.3 corpus.
 
+mod convert;
 mod error;
 mod files;
 mod files_write;
@@ -394,6 +395,7 @@ mod registry;
 mod sqlite;
 mod types;
 
+pub use convert::{CopyReport, VerifyReport, copy_all, verify};
 pub use error::{Error, Result};
 pub use files::FilesDb;
 pub use files_write::{format_preserved_libs, parse_preserved_libs};
@@ -505,6 +507,14 @@ pub trait InstalledDb: Send + Sync {
 
     /// Whether `key` is a live entry (N13).
     fn has_entry(&self, key: &EntryKey) -> Result<bool>;
+
+    /// Entries that are mid-merge (`-MERGING-<pf>` directories on `files`,
+    /// `merging` rows on a database), by the key they will be published
+    /// under, sorted. Not live: absent from every other read. Converters
+    /// report them and never copy them. Default: none.
+    fn pending_entries(&self) -> Result<Vec<EntryKey>> {
+        Ok(Vec::new())
+    }
 
     /// One of the [`METADATA_FILE_FIELDS`] of a live entry, normalised
     /// like real `_aux_get`: whitespace runs collapsed to one space,
