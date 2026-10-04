@@ -24,6 +24,9 @@ pub enum Error {
     Invalid(String),
     /// The stored data cannot be read as the backend's format.
     Corrupt(String),
+    /// A database engine failure (SQLite: locked past the busy timeout,
+    /// disk full, ...). The text carries the file and the engine's message.
+    Backend(String),
 }
 
 impl Error {
@@ -43,6 +46,7 @@ impl fmt::Display for Error {
             Error::Unsupported(what) => write!(f, "unsupported: {what}"),
             Error::Invalid(what) => write!(f, "invalid argument: {what}"),
             Error::Corrupt(what) => write!(f, "corrupt VDB: {what}"),
+            Error::Backend(what) => write!(f, "database error: {what}"),
         }
     }
 }

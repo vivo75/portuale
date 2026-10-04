@@ -250,6 +250,28 @@
 //!     file" lines stay in `pretend`. On a bare VDB directory the reads
 //!     are empty and the writes are [`Error::Unsupported`].
 //!
+//! # SqliteDb (feature `vdb-sqlite`)
+//!
+//! S2.3 adds the schema and `open` / `open_readonly`; every other method
+//! is [`Error::Unsupported`] until S2.4 (reads) and S2.5 (writes).
+//!
+//! - **Schema version policy**: `meta.schema_version` (1,
+//!   [`SCHEMA_VERSION`]) is independent of [`METADATA_FILE_FORMAT_VERSION`] (plan §1, Q4).
+//!   A database with another value, no `meta` table, or that is not a
+//!   SQLite file is refused with [`Error::Corrupt`]; there is no silent
+//!   migration. Engine failures are [`Error::Backend`]; a missing file
+//!   for `open_readonly` is [`Error::Io`].
+//! - **Pragmas** (`open`): `journal_mode=WAL` (refused with
+//!   [`Error::Invalid`] if the filesystem will not take it),
+//!   `synchronous=FULL`, `busy_timeout=5000`, `foreign_keys=ON`. Local
+//!   filesystems only; a network filesystem is not detected.
+//! - **Tables**: `meta`, `entry` (keyed by `(category, pf)`, `state`
+//!   `merging`|`installed`, `metadata_stamp`, dir mode and mtime),
+//!   `entry_file` (the truth, bytes), and the rebuildable `owner`,
+//!   `dep_atom`, `needed`, plus `preserved_lib`, `world`, `world_sets`,
+//!   `config_memory`. `meta` holds `schema_version`, `generation`,
+//!   `counter_hwm` (`-1` = none yet) and `created_at`.
+//!
 //! **Rejected from N1–N16:** N10 `cpv_for_path` (the caller prints the
 //! canonical VDB directory in its errors, so it needs
 //! [`InstalledDb::vdb_dir`], not a key); N16's `CONTENTS`-shaped
@@ -278,12 +300,16 @@ mod error;
 mod files;
 mod files_write;
 mod registry;
+#[cfg(feature = "vdb-sqlite")]
+mod sqlite;
 mod types;
 
 pub use error::{Error, Result};
 pub use files::FilesDb;
 pub use files_write::{format_preserved_libs, parse_preserved_libs};
 pub use registry::{for_root, register, reset};
+#[cfg(feature = "vdb-sqlite")]
+pub use sqlite::{SCHEMA_VERSION, SqliteDb};
 pub use types::*;
 
 use std::path::{Path, PathBuf};
