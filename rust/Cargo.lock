@@ -1572,6 +1572,7 @@ dependencies = [
  "portage-solver",
  "portage-use-reduce",
  "portage-util",
+ "portage-vdb",
  "portage-versions",
  "resolvo",
 ]
@@ -1604,6 +1605,9 @@ version = "0.1.0"
 [[package]]
 name = "portage-vdb"
 version = "0.1.0"
+dependencies = [
+ "portage-util",
+]
 
 [[package]]
 name = "portage-versions"

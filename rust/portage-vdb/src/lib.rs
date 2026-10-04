@@ -13,11 +13,14 @@
 //!   (`root → Arc<dyn InstalledDb>`). An unregistered root gets a cached
 //!   [`FilesDb`], so `emerge` (which never registers) stays on the
 //!   historic `var/db/pkg` layout.
-//! - [`FilesDb`] is that layout. In S1.1 it is a stub: every method that
-//!   does I/O returns [`Error::Unsupported`]. S1.2–S1.5 move today's code
-//!   behind it.
+//! - [`FilesDb`] is that layout. S1.2 moved the per-entry and `aux` reads
+//!   behind it (`generation`, `category_generation`, `entries`,
+//!   `category_entries`, `has_entry`, `aux_get`, `file_meta`,
+//!   `list_files`, `read_file`); the other methods still return
+//!   [`Error::Unsupported`] until S1.3–S1.6 move today's code.
 //!
-//! This crate sits **below** `portage-repo` and depends on nothing. Atom
+//! This crate sits **below** `portage-repo` and depends only on
+//! `portage-util`. Atom
 //! parsing, `USE` reduction, version splitting (`split_pf`) and the
 //! package-move remapping (`installed_cp_sources`) stay above it.
 //!
@@ -114,9 +117,24 @@
 //!     format every caller prints today.
 //! 17. **One copy of the `metadata` format.** [`METADATA_FILE_FIELDS`],
 //!     [`METADATA_FILE_FORMAT_VERSION`] and [`in_metadata_file`] are
-//!     defined here. `portage-repo` still has its own copy until S1.2,
-//!     which must replace it with a re-export (the field set is part of
-//!     the format and two copies must not drift).
+//!     defined here. `portage-repo` re-exports them (S1.2; the field set
+//!     is part of the format and two copies must not drift).
+//! 18. **How `FilesDb` realises the S1.2 reads (no interface change).**
+//!     The per-entry memo of `aux_get` is thread-local and keyed by
+//!     `(vdb dir, category, pf)`, validated by the entry directory's
+//!     `st_mtime_ns` on every call, exactly the memo `portage-repo` had
+//!     (the registry hands out one `FilesDb` per root, but the memo is
+//!     per thread, as before). `aux_get` costs one `statx` of the entry
+//!     directory (`Ok(None)` when it is not a directory) and nothing
+//!     else on a memo hit. [`InstalledDb::has_entry`] is one `statx`.
+//!     [`InstalledDb::read_file`] is one `open` with no existence `stat`:
+//!     a missing entry directory and a missing file are both `Ok(None)`
+//!     (`NotFound`/`NotADirectory`); callers that need "entry exists"
+//!     call `has_entry` first, as the pre-`move` fallback in
+//!     `portage-repo` does.
+//!     [`InstalledDb::category_generation`] is one `statx` of the
+//!     category directory. [`InstalledDb::snapshot`] stays unimplemented
+//!     until S3.2 (nothing on `files` uses it).
 //!
 //! **Rejected from N1–N16:** N10 `cpv_for_path` (the caller prints the
 //! canonical VDB directory in its errors, so it needs

@@ -170,7 +170,7 @@ mod tests {
     }
 
     #[test]
-    fn files_stub_reports_unsupported_not_panics() {
+    fn files_reports_unsupported_for_unmoved_methods_and_not_panics() {
         let db = FilesDb::new(Path::new("/nonexistent/s1.1/stub"));
         let key = crate::EntryKey::new("app-shells", "bash-5.2");
         assert_eq!(
@@ -179,9 +179,12 @@ mod tests {
                 "/nonexistent/s1.1/stub/var/db/pkg/app-shells/bash-5.2"
             ))
         );
-        assert!(matches!(db.generation(), Err(Error::Unsupported(_))));
+        // S1.2 moved the per-entry reads here: a missing VDB is "no
+        // entries", not an error.
+        assert_eq!(db.generation().unwrap(), 0);
+        assert_eq!(db.aux_get(&key, "SLOT").unwrap(), None);
         assert!(matches!(
-            db.aux_get(&key, "SLOT"),
+            db.reverse_dependents("a/b", &[]),
             Err(Error::Unsupported(_))
         ));
         assert!(matches!(db.begin_write(), Err(Error::Unsupported(_))));
