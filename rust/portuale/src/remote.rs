@@ -1509,12 +1509,13 @@ fn run_one_remote_unit(
     regen_bzip2: Option<&str>,
 ) -> Result<(), String> {
     let binpkg_path = if entry.remote_binary {
-        let (binrepo, record) = portage_repo::find_remote_binpkg(
+        let (binrepo, record) = portage_repo::find_remote_binpkg_instance(
             &config.binrepos,
             root,
             &entry.category,
             &entry.package,
             version,
+            entry.build_id.as_deref(),
         )
         .ok_or_else(|| {
             format!(

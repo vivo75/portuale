@@ -2716,34 +2716,72 @@ pub fn list_remote_binary_candidates(
     if binrepos.is_empty() {
         return Vec::new();
     }
-    let local_versions: HashSet<String> =
+    // Instances are identified by `(version, BUILD_ID)`: under
+    // binpkg-multi-instance real `bintree.isremote` is per `cpv` +
+    // `build_id`, so a local build 6 must not hide a remote build 7
+    // (backlog #300). An entry with no `BUILD_ID` is its own `None` key,
+    // which keeps the pre-multi-instance version-level shadowing.
+    let local_instances: HashSet<(String, Option<String>)> =
         binary_candidates_from_index(local, category, package, false)
             .into_iter()
-            .map(|c| c.version)
+            .map(|c| (c.version, c.build_id))
             .collect();
 
-    // A version already carried by the local `$PKGDIR` (real
+    // An instance already carried by the local `$PKGDIR` (real
     // `bintree.isremote`), or by an *earlier*-priority binrepo, shadows
-    // a later binrepo's build of it -- but binpkg-multi-instance means
-    // one binrepo can legitimately list several builds of one version,
-    // so the shadow set is only grown a whole binrepo at a time (all of
-    // that binrepo's instances stay; `dedup_binary_instances` collapses
-    // them later by `(cpv, slot, repo)` keeping the newest `BUILD_TIME`).
+    // a later binrepo's identical instance -- but binpkg-multi-instance
+    // means one binrepo can legitimately list several builds of one
+    // version, so the shadow set is only grown a whole binrepo at a time
+    // (all of that binrepo's instances stay; `dedup_binary_instances`
+    // collapses them later by `(cpv, slot, repo)` keeping the newest
+    // `BUILD_TIME`).
     let mut out: Vec<Candidate> = Vec::new();
-    let mut shadowed: HashSet<String> = local_versions;
+    let mut shadowed: HashSet<(String, Option<String>)> = local_instances;
     for binrepo in binrepos {
         let binrepo_index = cached_binary_index(&binrepo.packages_dir(root));
-        let mut this_repo: HashSet<String> = HashSet::new();
+        let mut this_repo: HashSet<(String, Option<String>)> = HashSet::new();
         for cand in binary_candidates_from_index(&binrepo_index, category, package, true) {
-            if shadowed.contains(&cand.version) {
+            let key = (cand.version.clone(), cand.build_id.clone());
+            if shadowed.contains(&key) {
                 continue;
             }
-            this_repo.insert(cand.version.clone());
+            this_repo.insert(key);
             out.push(cand);
         }
         shadowed.extend(this_repo);
     }
     out
+}
+
+/// Picks one `Packages` entry of `cat/pkg-version` from `entries`
+/// (binpkg-multi-instance aware, backlog #299/#301). `Some(id)` selects
+/// the entry whose `BUILD_ID` is exactly `id` (the build the resolver
+/// planned); `None` selects the newest build -- highest `(BUILD_TIME,
+/// BUILD_ID)`, real `dbapi._cmp_cpv` order -- which for an index with a
+/// single (or `BUILD_ID`-less) entry is simply that entry.
+fn pick_binary_instance<'a>(
+    entries: &'a [HashMap<String, String>],
+    want_cpv: &str,
+    build_id: Option<&str>,
+) -> Option<&'a HashMap<String, String>> {
+    let matching = entries
+        .iter()
+        .filter(|e| e.get("CPV").map(String::as_str) == Some(want_cpv));
+    match build_id {
+        Some(id) => matching
+            .into_iter()
+            .find(|e| e.get("BUILD_ID").map(String::as_str) == Some(id)),
+        None => matching.max_by_key(|e| {
+            (
+                e.get("BUILD_TIME")
+                    .and_then(|t| t.trim().parse::<i64>().ok())
+                    .unwrap_or(i64::MIN),
+                e.get("BUILD_ID")
+                    .and_then(|t| t.trim().parse::<i64>().ok())
+                    .unwrap_or(i64::MIN),
+            )
+        }),
+    }
 }
 
 /// The raw `Packages` index record for `category/package-version` from
@@ -2752,7 +2790,9 @@ pub fn list_remote_binary_candidates(
 /// `verify_signature` for real `gpkg.__init__`'s own per-binrepo
 /// signature policy, `gpkg.py:792-819`) plus the index record
 /// (`PATH`, `SIZE`, the `SHA*`/`MD5` digests). `None` if no configured
-/// binrepo lists that exact CPV.
+/// binrepo lists that exact CPV. When the binrepo lists several builds
+/// of the version, the newest one is returned; use
+/// [`find_remote_binpkg_instance`] to ask for a specific `BUILD_ID`.
 pub fn find_remote_binpkg<'a>(
     binrepos: &'a [portage_profile::BinRepo],
     root: &Path,
@@ -2760,13 +2800,35 @@ pub fn find_remote_binpkg<'a>(
     package: &str,
     version: &str,
 ) -> Option<(&'a portage_profile::BinRepo, HashMap<String, String>)> {
+    find_remote_binpkg_instance(binrepos, root, category, package, version, None)
+}
+
+/// [`find_remote_binpkg`] for one specific build (backlog #301): with
+/// `Some(build_id)` the binrepos are scanned in order for the record
+/// carrying exactly that `BUILD_ID`; if no binrepo has it (or `None` was
+/// given) the newest build of the version from the first binrepo that
+/// lists the version is returned.
+pub fn find_remote_binpkg_instance<'a>(
+    binrepos: &'a [portage_profile::BinRepo],
+    root: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+    build_id: Option<&str>,
+) -> Option<(&'a portage_profile::BinRepo, HashMap<String, String>)> {
     let want_cpv = format!("{category}/{package}-{version}");
-    for binrepo in binrepos {
-        let index = cached_binary_index(&binrepo.packages_dir(root));
-        for entry in index.entries() {
-            if entry.get("CPV").map(String::as_str) == Some(want_cpv.as_str()) {
+    if build_id.is_some() {
+        for binrepo in binrepos {
+            let index = cached_binary_index(&binrepo.packages_dir(root));
+            if let Some(entry) = pick_binary_instance(index.entries(), &want_cpv, build_id) {
                 return Some((binrepo, entry.clone()));
             }
+        }
+    }
+    for binrepo in binrepos {
+        let index = cached_binary_index(&binrepo.packages_dir(root));
+        if let Some(entry) = pick_binary_instance(index.entries(), &want_cpv, None) {
+            return Some((binrepo, entry.clone()));
         }
     }
     None
@@ -3130,12 +3192,23 @@ pub fn read_binary_metadata(
     package: &str,
     version: &str,
 ) -> Option<HashMap<String, String>> {
+    read_binary_metadata_instance(index, category, package, version, None)
+}
+
+/// [`read_binary_metadata`] for one specific build (backlog #299):
+/// `Some(build_id)` returns the entry carrying exactly that `BUILD_ID`
+/// (`None` result if the index lacks it); `None` returns the newest build
+/// of the version (see [`pick_binary_instance`]) -- never merely the first
+/// entry, which under binpkg-multi-instance is usually the oldest.
+pub fn read_binary_metadata_instance(
+    index: &BinaryIndex,
+    category: &str,
+    package: &str,
+    version: &str,
+    build_id: Option<&str>,
+) -> Option<HashMap<String, String>> {
     let want = format!("{category}/{package}-{version}");
-    index
-        .entries()
-        .iter()
-        .find(|entry| entry.get("CPV").map(String::as_str) == Some(want.as_str()))
-        .cloned()
+    pick_binary_instance(index.entries(), &want, build_id).cloned()
 }
 
 /// `read_binary_metadata` extended to a `--getbinpkg` resolution: the
@@ -3151,16 +3224,36 @@ pub fn read_binary_metadata_any(
     package: &str,
     version: &str,
 ) -> Option<HashMap<String, String>> {
-    if let Some(m) = read_binary_metadata(local, category, package, version) {
-        return Some(m);
-    }
-    for binrepo in &config.binrepos {
-        let binrepo_index = cached_binary_index(&binrepo.packages_dir(root));
-        if let Some(m) = read_binary_metadata(&binrepo_index, category, package, version) {
+    read_binary_metadata_any_instance(config, root, local, category, package, version, None)
+}
+
+/// [`read_binary_metadata_any`] for the build the resolver selected
+/// (backlog #299): with `Some(build_id)` every index (local, then each
+/// binrepo) is searched for exactly that `BUILD_ID` before falling back
+/// to the newest build of the version, so a chosen instance never walks
+/// another instance's dependency strings.
+pub fn read_binary_metadata_any_instance(
+    config: &portage_profile::Config,
+    root: &Path,
+    local: &BinaryIndex,
+    category: &str,
+    package: &str,
+    version: &str,
+    build_id: Option<&str>,
+) -> Option<HashMap<String, String>> {
+    let lookup = |build_id: Option<&str>| {
+        if let Some(m) = read_binary_metadata_instance(local, category, package, version, build_id)
+        {
             return Some(m);
         }
-    }
-    None
+        config.binrepos.iter().find_map(|binrepo| {
+            let index = cached_binary_index(&binrepo.packages_dir(root));
+            read_binary_metadata_instance(&index, category, package, version, build_id)
+        })
+    };
+    build_id
+        .and_then(|id| lookup(Some(id)))
+        .or_else(|| lookup(None))
 }
 
 /// Whether `entry` (a `package.mask`/`.unmask`/`.accept_keywords` line)
@@ -12904,9 +12997,13 @@ pub fn resolve_info_binary_candidate(
         .collect();
     ranked.sort_by(|a, b| vercmp_ordering(&b.version, &a.version));
     for best in ranked {
-        let Some(metadata) =
-            read_binary_metadata(index, &atom.category, &atom.package, &best.version)
-        else {
+        let Some(metadata) = read_binary_metadata_instance(
+            index,
+            &atom.category,
+            &atom.package,
+            &best.version,
+            best.build_id.as_deref(),
+        ) else {
             continue;
         };
         let eapi = metadata.get("EAPI").map(String::as_str).unwrap_or("0");
@@ -31259,18 +31356,19 @@ fn run_pass(ctx: &ResolveCtx, bp: &BacktrackParams, first_pass: bool) -> Result<
             // root -- real `Package.root_config` / `pkg.root`.
             targets_running_root: item_targets_running_root,
             remote_binary: candidate_remote,
-            build_id: candidate_build_id,
+            build_id: candidate_build_id.clone(),
             deps: Vec::new(),
         });
 
         let metadata = if candidate_source == CandidateSource::Binary {
-            let Some(metadata) = read_binary_metadata_any(
+            let Some(metadata) = read_binary_metadata_any_instance(
                 config,
                 ctx.root,
                 &ctx.local_binpkg,
                 &key.0,
                 &key.1,
                 &version,
+                candidate_build_id.as_deref(),
             ) else {
                 continue;
             };

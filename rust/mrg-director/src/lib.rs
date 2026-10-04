@@ -574,6 +574,22 @@ pub trait BinpkgIndex {
         version: &str,
     ) -> Option<(String, std::collections::HashMap<String, String>)>;
 
+    /// [`Self::metadata_with_source`] for the build the resolver planned
+    /// (binpkg-multi-instance, backlog #301): `Some(build_id)` must return
+    /// the record with exactly that `BUILD_ID` when the store has it. The
+    /// default ignores `build_id` and defers to `metadata_with_source`, so
+    /// single-instance backends need no change.
+    fn metadata_with_source_instance(
+        &self,
+        category: &str,
+        package: &str,
+        version: &str,
+        build_id: Option<&str>,
+    ) -> Option<(String, std::collections::HashMap<String, String>)> {
+        let _ = build_id;
+        self.metadata_with_source(category, package, version)
+    }
+
     /// Where this index's candidates come from (`::reponame`, or the
     /// local `$PKGDIR` path) for provenance in the `g` bracket / `-pv`
     /// `::repo` decoration.
@@ -1145,14 +1161,24 @@ impl BinpkgIndex for RemoteBinhostIndex<'_> {
         // (which this replaces on the merge path), with the owning
         // binrepo's section name carried alongside the record so the
         // caller can recover its `sync-uri`/`verify-signature`.
-        for binrepo in &self.config.binrepos {
-            let index = portage_repo::BinaryIndex::from_pkgdir(&binrepo.packages_dir(self.root));
-            if let Some(m) = portage_repo::read_binary_metadata(&index, category, package, version)
-            {
-                return Some((binrepo.name.clone(), m));
-            }
-        }
-        None
+        self.metadata_with_source_instance(category, package, version, None)
+    }
+    fn metadata_with_source_instance(
+        &self,
+        category: &str,
+        package: &str,
+        version: &str,
+        build_id: Option<&str>,
+    ) -> Option<(String, std::collections::HashMap<String, String>)> {
+        portage_repo::find_remote_binpkg_instance(
+            &self.config.binrepos,
+            self.root,
+            category,
+            package,
+            version,
+            build_id,
+        )
+        .map(|(binrepo, m)| (binrepo.name.clone(), m))
     }
     fn source_name(&self) -> String {
         self.config
