@@ -253,7 +253,8 @@
 //! # SqliteDb (feature `vdb-sqlite`)
 //!
 //! S2.3 adds the schema and `open` / `open_readonly`; S2.4 the read side;
-//! `begin_write` is [`Error::Unsupported`] until S2.5.
+//! S2.5 the write side (below). Every [`WriteTxn`] and [`InstalledDb`]
+//! method is implemented; nothing is [`Error::Unsupported`].
 //!
 //! - **Reads (S2.4)** return what `FilesDb` returns for the same logical
 //!   content (unit tests in `sqlite.rs` seed both and compare every read).
@@ -272,8 +273,77 @@
 //!   `read_file_at` is `substr` on the blob. `snapshot` is built from the
 //!   field files under the `aux_get` rules in one read transaction.
 //!   `reverse_dependents` returns every live entry (superset rule).
-//!   Known differences: `world` is sorted by atom, `categories` lists only
-//!   categories with a live entry.
+//!   Known difference: `categories` lists only categories with a live entry.
+//!   (`world`, `world_sets` and an empty-path preserved-libs entry round-trip
+//!   as `files` does since S2.5.)
+//!
+//! - **Write transactions (S2.5).** The callers (S1.4 wrappers) open a
+//!   transaction, make a few calls and commit, and one merge spans several
+//!   transactions (`begin_entry` and the file puts in one, `finish_entry` in
+//!   a later one), so a pending entry is a **committed** `state = 'merging'`
+//!   row and `merging` rows survive a crash (design §9.1). Each
+//!   `SqliteTxn` is one SQLite transaction on **its own connection**,
+//!   started with `BEGIN IMMEDIATE` in [`InstalledDb::begin_write`] (a second
+//!   writer waits up to the 5 s `busy_timeout`, then [`Error::Backend`]),
+//!   committed by [`WriteTxn::commit`] and rolled back when dropped without
+//!   a commit. Because it owns a connection, reads on the [`SqliteDb`] during
+//!   an open transaction do not block (WAL) and see the committed state.
+//!   A read-only handle refuses `begin_write` with [`Error::Invalid`].
+//! - **Generation policy.** `meta.generation` goes up by exactly 1 in every
+//!   committed transaction that wrote anything (a transaction with no
+//!   effective write, or an unchanged `set_preserved_libs`, does not
+//!   bump), D4-only ones included. `files` has no counter (its key is a
+//!   directory-mtime fingerprint that D4 writes do not move); the portable
+//!   contract only needs a change after entry-level commits, and bumping
+//!   more can only invalidate caches more often.
+//! - **Entry writes.** `begin_entry` drops a stale `merging` row and inserts
+//!   a fresh one (an `installed` row of the same key stays: the schema is
+//!   `UNIQUE (category, pf, state)`). `put_entry_file` / `copy_entry_file`
+//!   store a regular file (`0100644`, or the source's mode) with the mtime
+//!   of the call; a file with a *new name* added to an entry whose stamp is
+//!   `valid` makes it `stale`, as a new name moves a directory mtime on
+//!   `files`. `seal_entry` stores the `metadata` bytes `FilesTxn` writes
+//!   (the `#dir_mtime=` line carries `entry.dir_mtime_ns`) and sets the
+//!   stamp `valid`. `finish_entry`, in one transaction, deletes the
+//!   `installed` row of the same key (cascade), flips the `merging` row,
+//!   fills the extracted columns and the derived tables and raises
+//!   `meta.counter_hwm` to the entry's `COUNTER` when larger.
+//!   `insert_entry` stores the image as given (files, modes, mtimes,
+//!   directory mode and mtime, stamp state; never a `metadata` file it did
+//!   not get), replaces a live row of the same key, fills the derived
+//!   tables and leaves `counter_hwm` alone (the converter calls
+//!   `set_counter`). `delete_entry` removes the `installed` row only (a
+//!   pending replacement survives) and a missing entry is
+//!   [`Error::Invalid`], as are puts and `finish_entry` without a pending
+//!   entry. `replace_file` keeps the file's mode and every other file, the
+//!   stamp state and the directory mtime, and refreshes what derives from
+//!   that file. `next_counter` is `counter_hwm + 1` stored in the same
+//!   transaction (atomic, unlike `files`; a dropped transaction does not
+//!   consume a value); `set_counter` is a plain store.
+//! - **Derived tables** exist only for `installed` rows and are refilled
+//!   from the stored files, so they can be rebuilt. `owner`: the
+//!   `claim_paths` line rule (kind in `obj sym dir dev fif bin`, path as
+//!   written, `obj` md5 and mtime, `sym` target and mtime, `seq` in
+//!   `CONTENTS` order; a non-UTF-8 `CONTENTS` gives no rows, like `files`).
+//!   `needed`: `NEEDED.ELF.2` lines with at least five `;` fields (`arch`,
+//!   `obj` bytes, `soname`, `rpath`, `needed`; the no-rpath sentinel is
+//!   `""`). `dep_atom`: a **prefilter** index (no `portage-dep`, item 8):
+//!   one row per distinct `(class, cp, token)` for every token of the five
+//!   `*DEPEND` fields that is clearly `category/package`, found by a small
+//!   string routine (`dep_cp`): skip `( ) || ^^ ??` and `flag?`; strip `!`
+//!   or `!!` and one operator (`<= >= < > = ~`); cut at `[` and `:`; require
+//!   a `[A-Za-z0-9+_.-]` category, a `[A-Za-z0-9+_-]` name, and, after an
+//!   operator, a stripped `-<version>[-rN][*]` (an unrecognisable version
+//!   skips the token), or, with no operator, a name that does not look
+//!   versioned. A superset of the real atoms is the goal; the caller of
+//!   `reverse_dependents` still reduces `USE` and matches (S8 reads this
+//!   index). The columns `slot`, `subslot` (the slot when there is no `/`),
+//!   `repo` and `counter` come from `SLOT` (as `aux_get` serves it),
+//!   `repository` and `COUNTER`.
+//! - **Schema edits in S2.5** (nothing is released, so `SCHEMA_VERSION`
+//!   stays 1): `UNIQUE (category, pf, state)`; `preserved_lib.path`
+//!   nullable (an entry with no paths is one NULL row); `world` and
+//!   `world_sets` keyed by `pos` so the written order is kept.
 //!
 //! - **Schema version policy**: `meta.schema_version` (1,
 //!   [`SCHEMA_VERSION`]) is independent of [`METADATA_FILE_FORMAT_VERSION`] (plan §1, Q4).

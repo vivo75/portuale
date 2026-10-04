@@ -1,5 +1,6 @@
 //! The SQLite backend (feat#157, backlog #305 S2.3: schema and open;
-//! S2.4: the read side; writes are S2.5). Design: `docs/vdb_to_db.md` §4, §7.1.
+//! S2.4: the read side; S2.5: writes in `write.rs`, transaction model in
+//! the crate doc). Design: `docs/vdb_to_db.md` §4, §7.1.
 //!
 //! One database file, WAL, `synchronous=FULL`. The `entry_file` rows are
 //! the truth; `owner`, `dep_atom` and `needed` are derived from them and
@@ -16,6 +17,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension as _, params};
+
+mod write;
+use write::SqliteTxn;
 
 use crate::files::{claim_paths, normalise_aux_bytes, parse_metadata_text, translate_aux_slot};
 use crate::{
@@ -41,8 +45,16 @@ const BUSY_TIMEOUT_MS: u32 = 5000;
 /// the directory mode is kept, and `counter` is not unique (a corpus can
 /// hold duplicates). `owner` and `needed` carry the keys the S2.4 reads
 /// need; `preserved_lib` is keyed by the registry key `cp:slot` with a
-/// position so the path order survives (an entry with no paths is not
-/// stored, as real's `store()` drops it). Paths and file data are BLOB.
+/// position so the path order survives (an entry with no paths is one row
+/// with a NULL `path`, so `files` and `sqlite` round-trip it alike).
+/// `world` / `world_sets` keep the written order in `pos`. Paths and file
+/// data are BLOB.
+///
+/// S2.5 edits (nothing is released, so `SCHEMA_VERSION` stays 1):
+/// `UNIQUE (category, pf, state)` instead of `(category, pf)`, because a
+/// pending same-`pf` replacement is a `merging` row beside the `installed`
+/// row of the same key (S2.4 finding); `preserved_lib.path` nullable and
+/// `world*.pos` (the conformance suite needs both round trips).
 pub const SCHEMA: &str = "
 CREATE TABLE meta (
     key   TEXT PRIMARY KEY,
@@ -62,7 +74,7 @@ CREATE TABLE entry (
                    CHECK (metadata_stamp IN ('absent', 'valid', 'stale')),
     dir_mode       INTEGER NOT NULL DEFAULT 493,
     dir_mtime_ns   INTEGER NOT NULL DEFAULT 0,
-    UNIQUE (category, pf)
+    UNIQUE (category, pf, state)
 );
 CREATE INDEX entry_counter ON entry (counter);
 
@@ -112,17 +124,19 @@ CREATE TABLE preserved_lib (
     pos     INTEGER NOT NULL,
     cpv     TEXT NOT NULL,
     counter TEXT NOT NULL,
-    path    BLOB NOT NULL,
+    path    BLOB,
     PRIMARY KEY (reg_key, pos)
 ) WITHOUT ROWID;
 
 CREATE TABLE world (
-    atom TEXT PRIMARY KEY
-) WITHOUT ROWID;
+    pos  INTEGER PRIMARY KEY,
+    atom TEXT NOT NULL
+);
 
 CREATE TABLE world_sets (
-    name TEXT PRIMARY KEY
-) WITHOUT ROWID;
+    pos  INTEGER PRIMARY KEY,
+    name TEXT NOT NULL
+);
 
 CREATE TABLE config_memory (
     path BLOB PRIMARY KEY,
@@ -298,12 +312,6 @@ fn check_version(conn: &Connection, path: &Path) -> Result<()> {
             path.display()
         ))),
     }
-}
-
-fn unsupported<T>(what: &str, step: &str) -> Result<T> {
-    Err(Error::Unsupported(format!(
-        "SqliteDb::{what} (plan step {step})"
-    )))
 }
 
 fn stamp_of(s: &str) -> MetadataStamp {
@@ -766,11 +774,10 @@ impl InstalledDb for SqliteDb {
         Ok(out)
     }
 
-    /// Sorted by atom (the table key); the writers sort and de-duplicate
-    /// anyway, so this equals the `files` order for anything they wrote.
+    /// In the order written (`pos`), like `files`.
     fn world(&self) -> Result<World> {
         self.with(|c| {
-            let mut stmt = c.prepare("SELECT atom FROM world ORDER BY atom")?;
+            let mut stmt = c.prepare("SELECT atom FROM world ORDER BY pos")?;
             Ok(World {
                 atoms: stmt
                     .query_map([], |r| r.get(0))?
@@ -781,7 +788,7 @@ impl InstalledDb for SqliteDb {
 
     fn world_sets(&self) -> Result<WorldSets> {
         self.with(|c| {
-            let mut stmt = c.prepare("SELECT name FROM world_sets ORDER BY name")?;
+            let mut stmt = c.prepare("SELECT name FROM world_sets ORDER BY pos")?;
             Ok(WorldSets {
                 sets: stmt
                     .query_map([], |r| r.get(0))?
@@ -805,11 +812,12 @@ impl InstalledDb for SqliteDb {
                         counter: String::new(),
                         paths: Vec::new(),
                     });
-                if e.paths.is_empty() {
-                    e.cpv = r.get(1)?;
-                    e.counter = r.get(2)?;
+                // Every row of a key repeats cpv/counter.
+                e.cpv = r.get(1)?;
+                e.counter = r.get(2)?;
+                if let Some(p) = r.get::<_, Option<Vec<u8>>>(3)? {
+                    e.paths.push(lossy(p));
                 }
-                e.paths.push(lossy(r.get(3)?));
             }
             Ok(m)
         })?;
@@ -843,8 +851,16 @@ impl InstalledDb for SqliteDb {
         }
     }
 
+    /// One SQLite transaction on its own connection, started with
+    /// `BEGIN IMMEDIATE` (module doc, "Write transactions").
     fn begin_write(&self) -> Result<Box<dyn WriteTxn + '_>> {
-        unsupported("begin_write", "S2.5")
+        if self.readonly {
+            return Err(Error::Invalid(format!(
+                "{}: opened read-only",
+                self.path.display()
+            )));
+        }
+        Ok(Box::new(SqliteTxn::begin(self)?))
     }
 }
 
@@ -917,7 +933,7 @@ mod tests {
         assert!(db.vdb_dir().is_none());
         assert!(db.entry_path(&EntryKey::new("a", "b-1")).is_none());
         assert!(db.entries().unwrap().is_empty());
-        assert!(matches!(db.begin_write(), Err(Error::Unsupported(m)) if m.contains("S2.5")));
+        assert!(db.begin_write().is_ok());
     }
 
     #[test]
@@ -1380,10 +1396,10 @@ mod tests {
         assert!(fdb.read_file(&a, "metadata").unwrap().is_some());
         assert!(fdb.read_file(&e, "metadata").unwrap().is_none());
         for atom in fdb.world().unwrap().atoms {
-            sdb.seed_sql("INSERT INTO world VALUES (?1)", [atom]);
+            sdb.seed_sql("INSERT INTO world (atom) VALUES (?1)", [atom]);
         }
         for n in fdb.world_sets().unwrap().sets {
-            sdb.seed_sql("INSERT INTO world_sets VALUES (?1)", [n]);
+            sdb.seed_sql("INSERT INTO world_sets (name) VALUES (?1)", [n]);
         }
         for (k, e) in fdb.preserved_libs().unwrap().entries {
             for (i, path) in e.paths.iter().enumerate() {
@@ -1600,5 +1616,686 @@ mod tests {
         let f = fixture();
         let ro = SqliteDb::open_readonly(f.sdb.path()).unwrap();
         assert_same_reads(&f.fdb, &ro, &f.keys);
+    }
+
+    // ------------------------------------------------------------------
+    // S2.5: writes, transactions and the derived tables.
+
+    fn count(db: &SqliteDb, table: &str) -> i64 {
+        db.conn
+            .lock()
+            .unwrap()
+            .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap()
+    }
+
+    fn id_of(db: &SqliteDb, k: &EntryKey, state: &str) -> Option<i64> {
+        entry_row(&db.conn.lock().unwrap(), k, state)
+            .unwrap()
+            .map(|r| r.0)
+    }
+
+    /// `(seq, path, kind, md5, mtime, target)` of the owner rows of `k`.
+    type OwnerRow = (
+        i64,
+        Vec<u8>,
+        String,
+        Option<String>,
+        Option<i64>,
+        Option<Vec<u8>>,
+    );
+
+    fn owner_rows(db: &SqliteDb, k: &EntryKey) -> Vec<OwnerRow> {
+        let id = id_of(db, k, "installed").unwrap();
+        let conn = db.conn.lock().unwrap();
+        let mut st = conn
+            .prepare(
+                "SELECT seq, path, kind, md5, mtime, target FROM owner
+                 WHERE entry_id = ?1 ORDER BY seq",
+            )
+            .unwrap();
+        st.query_map([id], |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+            ))
+        })
+        .unwrap()
+        .map(|x| x.unwrap())
+        .collect()
+    }
+
+    fn needed_rows(db: &SqliteDb, k: &EntryKey) -> Vec<(String, Vec<u8>, String, String, String)> {
+        let id = id_of(db, k, "installed").unwrap();
+        let conn = db.conn.lock().unwrap();
+        let mut st = conn
+            .prepare(
+                "SELECT arch, obj, soname, rpath, needed FROM needed
+                 WHERE entry_id = ?1 ORDER BY rowid",
+            )
+            .unwrap();
+        st.query_map([id], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })
+        .unwrap()
+        .map(|x| x.unwrap())
+        .collect()
+    }
+
+    fn dep_rows(db: &SqliteDb, k: &EntryKey) -> Vec<(String, String, String)> {
+        let id = id_of(db, k, "installed").unwrap();
+        let conn = db.conn.lock().unwrap();
+        let mut st = conn
+            .prepare(
+                "SELECT class, cp, atom FROM dep_atom WHERE entry_id = ?1
+                 ORDER BY class, cp, atom",
+            )
+            .unwrap();
+        st.query_map([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(|x| x.unwrap())
+            .collect()
+    }
+
+    type Columns = (Option<String>, Option<String>, Option<String>, Option<i64>);
+
+    fn columns(db: &SqliteDb, k: &EntryKey) -> Columns {
+        db.conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT slot, subslot, repo, counter FROM entry
+                 WHERE category = ?1 AND pf = ?2 AND state = 'installed'",
+                params![k.category, k.pf],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap()
+    }
+
+    fn merge(db: &SqliteDb, k: &EntryKey, files: &[(&str, &[u8])], seal: bool) {
+        let mut t = db.begin_write().unwrap();
+        t.begin_entry(k).unwrap();
+        for (n, d) in files {
+            t.put_entry_file(k, n, d).unwrap();
+        }
+        if seal {
+            t.seal_entry(k).unwrap();
+        }
+        t.finish_entry(k).unwrap();
+        t.commit().unwrap();
+    }
+
+    const CONTENTS_A: &[u8] = b"dir /usr\nobj /usr/bin/x d41d8cd98f00b204e9800998ecf8427e 1700\n\
+sym /usr/bin/y -> x 1701\nfoo /usr/z\ndev /dev/n\n";
+    const NEEDED_A: &[u8] =
+        b"X86_64;/usr/lib/liba.so;liba.so.1;/opt/a:/usr/lib;libc.so.6,libb.so\n\
+bad line\nX86_64;/usr/bin/x;;  -  ;liba.so.1\n";
+
+    fn a_files() -> Vec<(&'static str, &'static [u8])> {
+        vec![
+            ("SLOT", b"2/3.4\n"),
+            ("repository", b"gentoo\n"),
+            ("COUNTER", b"41\n"),
+            ("CONTENTS", CONTENTS_A),
+            ("NEEDED.ELF.2", NEEDED_A),
+            (
+                "RDEPEND",
+                b"!<dev-libs/old-2 ssl? ( >=dev-libs/ssl-1.1:0=[static] ) || ( a/b c/d )\n",
+            ),
+            ("DEPEND", b"dev-libs/ssl\n"),
+            ("BDEPEND", b""),
+            ("USE", b"ssl\n"),
+        ]
+    }
+
+    #[test]
+    fn a_dropped_or_failed_transaction_changes_nothing() {
+        let t = Tmp::new();
+        let db = SqliteDb::open(t.db()).unwrap();
+        let a = EntryKey::new("dev-libs", "a-1");
+        merge(&db, &a, &a_files(), true);
+        let gen0 = db.generation().unwrap();
+        let counts = |db: &SqliteDb| {
+            [
+                "entry",
+                "entry_file",
+                "owner",
+                "dep_atom",
+                "needed",
+                "world",
+                "world_sets",
+                "config_memory",
+                "preserved_lib",
+            ]
+            .map(|t| count(db, t))
+        };
+        let before = counts(&db);
+        let hwm = db.counter().unwrap();
+
+        // Dropped without commit: every kind of write is undone.
+        let b = EntryKey::new("dev-libs", "b-1");
+        {
+            let mut t = db.begin_write().unwrap();
+            t.begin_entry(&b).unwrap();
+            t.put_entry_file(&b, "CONTENTS", b"obj /x 0 0\n").unwrap();
+            t.finish_entry(&b).unwrap();
+            t.delete_entry(&a).unwrap();
+            t.next_counter().unwrap();
+            t.set_world(&World {
+                atoms: vec!["a/b".into()],
+            })
+            .unwrap();
+            t.set_world_sets(&WorldSets {
+                sets: vec!["s".into()],
+            })
+            .unwrap();
+            let mut cm = ConfigMemory::default();
+            cm.entries.insert("/etc/x".into(), "abc".into());
+            t.set_config_memory(&cm).unwrap();
+        }
+        assert_eq!(db.generation().unwrap(), gen0);
+        assert_eq!(counts(&db), before);
+        assert_eq!(db.counter().unwrap(), hwm);
+        assert!(db.has_entry(&a).unwrap());
+        assert!(!db.has_entry(&b).unwrap());
+
+        // A transaction that fails half way and is then dropped.
+        {
+            let mut t = db.begin_write().unwrap();
+            t.begin_entry(&b).unwrap();
+            t.put_entry_file(&b, "SLOT", b"0\n").unwrap();
+            assert!(matches!(
+                t.finish_entry(&EntryKey::new("x", "never-1")),
+                Err(Error::Invalid(_))
+            ));
+            assert!(matches!(
+                t.put_entry_file(&EntryKey::new("x", "never-1"), "f", b""),
+                Err(Error::Invalid(_))
+            ));
+            assert!(matches!(t.delete_entry(&b), Err(Error::Invalid(_))));
+            assert!(matches!(
+                t.replace_file(&b, "CONTENTS", b""),
+                Err(Error::Invalid(_))
+            ));
+        }
+        assert_eq!(db.generation().unwrap(), gen0);
+        assert_eq!(counts(&db), before);
+        assert_eq!(db.read_pending_file(&b, "SLOT").unwrap(), None);
+
+        // An open transaction does not block reads, which see the old state.
+        let mut t = db.begin_write().unwrap();
+        t.delete_entry(&a).unwrap();
+        assert!(db.has_entry(&a).unwrap());
+        assert_eq!(db.generation().unwrap(), gen0);
+        t.commit().unwrap();
+        assert!(!db.has_entry(&a).unwrap());
+        assert_eq!(db.generation().unwrap(), gen0 + 1);
+        for table in ["owner", "dep_atom", "needed", "entry_file"] {
+            assert_eq!(count(&db, table), 0, "{table}");
+        }
+    }
+
+    #[test]
+    fn generation_bumps_by_one_per_committed_write_transaction() {
+        let t = Tmp::new();
+        let db = SqliteDb::open(t.db()).unwrap();
+        let g = db.generation().unwrap();
+        db.begin_write().unwrap().commit().unwrap();
+        assert_eq!(db.generation().unwrap(), g, "an empty transaction");
+        let mut tx = db.begin_write().unwrap();
+        tx.set_preserved_libs(&PreservedLibs::default()).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(
+            db.generation().unwrap(),
+            g,
+            "an unchanged preserved-libs write"
+        );
+        let mut tx = db.begin_write().unwrap();
+        tx.set_world(&World::default()).unwrap();
+        tx.set_world_sets(&WorldSets::default()).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(db.generation().unwrap(), g + 1, "D4-only counts, once");
+        let k = EntryKey::new("a", "b-1");
+        merge(&db, &k, &[("SLOT", b"0\n")], true);
+        assert_eq!(db.generation().unwrap(), g + 2, "a whole merge in one txn");
+        let mut tx = db.begin_write().unwrap();
+        tx.begin_entry(&k).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(db.generation().unwrap(), g + 3);
+        assert!(db.begin_write().is_ok());
+        let ro = SqliteDb::open_readonly(t.db()).unwrap();
+        assert!(matches!(ro.begin_write(), Err(Error::Invalid(_))));
+    }
+
+    #[test]
+    fn finish_entry_fills_columns_and_derived_tables() {
+        let t = Tmp::new();
+        let db = SqliteDb::open(t.db()).unwrap();
+        let a = EntryKey::new("dev-libs", "a-1");
+        merge(&db, &a, &a_files(), true);
+
+        assert_eq!(
+            columns(&db, &a),
+            (
+                Some("2".into()),
+                Some("3.4".into()),
+                Some("gentoo".into()),
+                Some(41)
+            )
+        );
+        assert_eq!(
+            db.counter().unwrap(),
+            Some(Counter(41)),
+            "hwm follows COUNTER"
+        );
+
+        let b = |s: &str| s.as_bytes().to_vec();
+        assert_eq!(
+            owner_rows(&db, &a),
+            vec![
+                (0, b("/usr"), "dir".into(), None, None, None),
+                (
+                    1,
+                    b("/usr/bin/x"),
+                    "obj".into(),
+                    Some("d41d8cd98f00b204e9800998ecf8427e".into()),
+                    Some(1700),
+                    None
+                ),
+                (
+                    2,
+                    b("/usr/bin/y"),
+                    "sym".into(),
+                    None,
+                    Some(1701),
+                    Some(b("x"))
+                ),
+                (3, b("/dev/n"), "dev".into(), None, None, None),
+            ],
+            "`foo` is not a recorded kind"
+        );
+        assert_eq!(
+            needed_rows(&db, &a),
+            vec![
+                (
+                    "X86_64".into(),
+                    b("/usr/lib/liba.so"),
+                    "liba.so.1".into(),
+                    "/opt/a:/usr/lib".into(),
+                    "libc.so.6,libb.so".into()
+                ),
+                (
+                    "X86_64".into(),
+                    b("/usr/bin/x"),
+                    String::new(),
+                    String::new(),
+                    "liba.so.1".into()
+                ),
+            ],
+            "the short line is skipped, the no-rpath sentinel is empty"
+        );
+        let s = |c: &str, cp: &str, atom: &str| (c.to_string(), cp.to_string(), atom.to_string());
+        assert_eq!(
+            dep_rows(&db, &a),
+            vec![
+                s("DEPEND", "dev-libs/ssl", "dev-libs/ssl"),
+                s("RDEPEND", "a/b", "a/b"),
+                s("RDEPEND", "c/d", "c/d"),
+                s("RDEPEND", "dev-libs/old", "!<dev-libs/old-2"),
+                s("RDEPEND", "dev-libs/ssl", ">=dev-libs/ssl-1.1:0=[static]"),
+            ]
+        );
+        // The stored metadata file is the sealed one, stamped valid.
+        let img = db.entry_image(&a).unwrap().unwrap();
+        assert_eq!(img.metadata_stamp, MetadataStamp::Valid);
+        let meta = db.read_file(&a, "metadata").unwrap().unwrap();
+        let text = String::from_utf8(meta).unwrap();
+        assert!(
+            text.starts_with("#format=1\nBDEPEND=\nCOUNTER=41\n"),
+            "{text}"
+        );
+        assert!(text.contains("\nSLOT=2/3.4\n") && text.contains("\nUSE=ssl\n"));
+        assert!(text.ends_with(&format!("#dir_mtime={}\n", img.dir_mtime_ns)));
+        assert_eq!(db.aux_get(&a, "SLOT").unwrap().as_deref(), Some("2/3.4"));
+
+        // A lower COUNTER does not lower the hwm; a higher one raises it.
+        let c = EntryKey::new("dev-libs", "c-1");
+        merge(&db, &c, &[("COUNTER", b"7"), ("SLOT", b"bad slot")], false);
+        assert_eq!(db.counter().unwrap(), Some(Counter(41)));
+        assert_eq!(
+            columns(&db, &c).0.as_deref(),
+            Some("0"),
+            "invalid SLOT is 0"
+        );
+        let d = EntryKey::new("dev-libs", "d-1");
+        merge(&db, &d, &[("COUNTER", b"99\n")], false);
+        assert_eq!(db.counter().unwrap(), Some(Counter(99)));
+        assert_eq!(columns(&db, &d), (None, None, None, Some(99)));
+    }
+
+    #[test]
+    fn a_pending_entry_has_no_derived_rows_and_a_late_put_stales_the_stamp() {
+        let t = Tmp::new();
+        let db = SqliteDb::open(t.db()).unwrap();
+        let k = EntryKey::new("dev-libs", "a-1");
+        let mut tx = db.begin_write().unwrap();
+        tx.begin_entry(&k).unwrap();
+        tx.put_entry_file(&k, "CONTENTS", CONTENTS_A).unwrap();
+        tx.put_entry_file(&k, "SLOT", b"0\n").unwrap();
+        tx.seal_entry(&k).unwrap();
+        tx.commit().unwrap();
+        for table in ["owner", "dep_atom", "needed"] {
+            assert_eq!(count(&db, table), 0, "{table}");
+        }
+        let stamp = |db: &SqliteDb| {
+            db.conn
+                .lock()
+                .unwrap()
+                .query_row("SELECT metadata_stamp FROM entry", [], |r| {
+                    r.get::<_, String>(0)
+                })
+                .unwrap()
+        };
+        assert_eq!(stamp(&db), "valid");
+        let mut tx = db.begin_write().unwrap();
+        tx.put_entry_file(&k, "SLOT", b"1\n").unwrap();
+        tx.commit().unwrap();
+        assert_eq!(stamp(&db), "valid", "overwriting a name keeps the stamp");
+        let mut tx = db.begin_write().unwrap();
+        tx.put_entry_file(&k, "extra", b"x").unwrap();
+        tx.commit().unwrap();
+        assert_eq!(
+            stamp(&db),
+            "stale",
+            "a new name stales it, like a dir mtime"
+        );
+    }
+
+    #[test]
+    fn replacing_in_a_slot_and_deleting_cascade_to_the_derived_tables() {
+        let t = Tmp::new();
+        let db = SqliteDb::open(t.db()).unwrap();
+        let old = EntryKey::new("dev-libs", "a-1");
+        let new = EntryKey::new("dev-libs", "a-2");
+        merge(&db, &old, &a_files(), true);
+        let old_id = id_of(&db, &old, "installed").unwrap();
+        let (owners, needed, deps) = (
+            count(&db, "owner"),
+            count(&db, "needed"),
+            count(&db, "dep_atom"),
+        );
+        assert!(owners > 0 && needed > 0 && deps > 0);
+
+        // The merge's two-step shape: the pending row beside the live one,
+        // then delete(old) + finish(new) in one transaction.
+        let mut tx = db.begin_write().unwrap();
+        tx.begin_entry(&new).unwrap();
+        tx.put_entry_file(&new, "SLOT", b"2/5\n").unwrap();
+        tx.put_entry_file(&new, "CONTENTS", b"obj /usr/bin/n aaa 5\n")
+            .unwrap();
+        tx.put_entry_file(&new, "RDEPEND", b"dev-libs/ssl\n")
+            .unwrap();
+        tx.commit().unwrap();
+        assert_eq!(id_of(&db, &old, "installed"), Some(old_id));
+        assert_eq!(count(&db, "owner"), owners, "pending adds no owner rows");
+        let mut tx = db.begin_write().unwrap();
+        tx.delete_entry(&old).unwrap();
+        tx.finish_entry(&new).unwrap();
+        tx.commit().unwrap();
+        assert!(id_of(&db, &old, "installed").is_none());
+        assert_eq!(owner_rows(&db, &new).len(), 1);
+        assert_eq!(count(&db, "owner"), 1);
+        assert_eq!(count(&db, "needed"), 0);
+        assert_eq!(count(&db, "dep_atom"), 1);
+        assert_eq!(columns(&db, &new).1.as_deref(), Some("5"));
+        assert_eq!(count(&db, "entry"), 1, "no merging row is left");
+
+        // The same pf: the live row is replaced as a whole by finish.
+        let mut tx = db.begin_write().unwrap();
+        tx.begin_entry(&new).unwrap();
+        tx.put_entry_file(&new, "CONTENTS", b"dir /opt\ndir /opt/a\n")
+            .unwrap();
+        tx.commit().unwrap();
+        assert_eq!(count(&db, "entry"), 2, "merging beside installed");
+        let mut tx = db.begin_write().unwrap();
+        tx.finish_entry(&new).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(count(&db, "entry"), 1);
+        assert_eq!(owner_rows(&db, &new).len(), 2);
+        assert_eq!(count(&db, "dep_atom"), 0);
+        assert_eq!(columns(&db, &new), (None, None, None, None));
+        assert_eq!(db.read_file(&new, "SLOT").unwrap(), None);
+
+        // Delete cascades to everything.
+        let mut tx = db.begin_write().unwrap();
+        tx.delete_entry(&new).unwrap();
+        tx.commit().unwrap();
+        for table in ["entry", "entry_file", "owner", "dep_atom", "needed"] {
+            assert_eq!(count(&db, table), 0, "{table}");
+        }
+    }
+
+    #[test]
+    fn replace_file_refreshes_the_tables_that_derive_from_the_file() {
+        let t = Tmp::new();
+        let db = SqliteDb::open(t.db()).unwrap();
+        let a = EntryKey::new("dev-libs", "a-1");
+        merge(&db, &a, &a_files(), true);
+        let before = db.entry_image(&a).unwrap().unwrap();
+        let mode_of = |db: &SqliteDb, n: &str| db.file_meta(&a, n).unwrap().unwrap().mode;
+        let g0 = db.generation().unwrap();
+
+        let mut tx = db.begin_write().unwrap();
+        tx.replace_file(&a, "CONTENTS", b"obj /usr/bin/x ffff 9\n")
+            .unwrap();
+        tx.replace_file(&a, "NEEDED.ELF.2", b"X86_64;/usr/bin/x;;;libz.so.1\n")
+            .unwrap();
+        tx.replace_file(&a, "environment.bz2", b"\xff\x00").unwrap();
+        tx.commit().unwrap();
+
+        assert_eq!(db.generation().unwrap(), g0 + 1);
+        let rows = owner_rows(&db, &a);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].3.as_deref(), Some("ffff"));
+        let n = needed_rows(&db, &a);
+        assert_eq!(n.len(), 1);
+        assert_eq!(n[0].4, "libz.so.1");
+        assert_eq!(count(&db, "dep_atom"), 5, "untouched");
+        assert_eq!(
+            db.read_file(&a, "environment.bz2").unwrap().as_deref(),
+            Some(&b"\xff\x00"[..]),
+            "a new file name is created"
+        );
+        // Stamp state, directory mtime, modes and the other files stay.
+        let after = db.entry_image(&a).unwrap().unwrap();
+        assert_eq!(after.metadata_stamp, before.metadata_stamp);
+        assert_eq!(after.dir_mtime_ns, before.dir_mtime_ns);
+        assert_eq!(mode_of(&db, "CONTENTS"), 0o100_644);
+        assert_eq!(
+            db.read_file(&a, "metadata").unwrap(),
+            Some(
+                before
+                    .files
+                    .iter()
+                    .find(|f| f.meta.name == "metadata")
+                    .unwrap()
+                    .data
+                    .clone()
+            )
+        );
+        // The dependency fields and SLOT refresh theirs too.
+        let mut tx = db.begin_write().unwrap();
+        tx.replace_file(&a, "RDEPEND", b"x/y\n").unwrap();
+        tx.replace_file(&a, "SLOT", b"7\n").unwrap();
+        tx.commit().unwrap();
+        assert_eq!(dep_rows(&db, &a).len(), 2);
+        assert_eq!(columns(&db, &a).0.as_deref(), Some("7"));
+    }
+
+    #[test]
+    fn the_counter_is_atomic_across_transactions_and_handles() {
+        let t = Tmp::new();
+        let db = SqliteDb::open(t.db()).unwrap();
+        let other = SqliteDb::open(t.db()).unwrap();
+        // A tick that is dropped does not move the counter.
+        let mut tx = db.begin_write().unwrap();
+        assert_eq!(tx.next_counter().unwrap(), Counter(0));
+        assert_eq!(tx.next_counter().unwrap(), Counter(1));
+        drop(tx);
+        assert_eq!(db.counter().unwrap(), None);
+        let mut tx = db.begin_write().unwrap();
+        assert_eq!(tx.next_counter().unwrap(), Counter(0));
+        tx.commit().unwrap();
+        // Another handle continues from the committed value.
+        let mut tx = other.begin_write().unwrap();
+        assert_eq!(tx.next_counter().unwrap(), Counter(1));
+        tx.commit().unwrap();
+        let mut tx = db.begin_write().unwrap();
+        assert_eq!(tx.next_counter().unwrap(), Counter(2));
+        tx.commit().unwrap();
+        assert_eq!(other.counter().unwrap(), Some(Counter(2)));
+        // set_counter is a plain store; the tick continues from it.
+        let mut tx = db.begin_write().unwrap();
+        tx.set_counter(Counter(100)).unwrap();
+        assert_eq!(tx.next_counter().unwrap(), Counter(101));
+        tx.commit().unwrap();
+        assert_eq!(db.counter().unwrap(), Some(Counter(101)));
+    }
+
+    #[test]
+    fn insert_entry_keeps_stamps_as_given_and_fills_derived_tables() {
+        let t = Tmp::new();
+        let src = SqliteDb::open(t.db()).unwrap();
+        let a = EntryKey::new("dev-libs", "a-1");
+        merge(&src, &a, &a_files(), true);
+        let valid = src.entry_image(&a).unwrap().unwrap();
+
+        let image = |stamp, with_metadata: bool| {
+            let mut i = valid.clone();
+            i.metadata_stamp = stamp;
+            i.dir_mtime_ns = 77;
+            i.dir_mode = 0o750;
+            for f in &mut i.files {
+                f.meta.mtime_ns = 12_345;
+                f.meta.mode = 0o100_600;
+            }
+            if !with_metadata {
+                i.files.retain(|f| f.meta.name != "metadata");
+            }
+            i
+        };
+        for (tag, stamp, with_metadata) in [
+            ("stale", MetadataStamp::Stale, true),
+            ("absent", MetadataStamp::Absent, false),
+            ("valid", MetadataStamp::Valid, true),
+        ] {
+            let d = Tmp::new();
+            let dst = SqliteDb::open(d.db()).unwrap();
+            let img = image(stamp, with_metadata);
+            let mut tx = dst.begin_write().unwrap();
+            tx.insert_entry(&img).unwrap();
+            tx.commit().unwrap();
+            assert_eq!(
+                dst.entry_image(&a).unwrap().unwrap(),
+                img,
+                "{tag}: as given"
+            );
+            assert_eq!(dst.generation().unwrap(), 1);
+            assert_eq!(
+                dst.counter().unwrap(),
+                None,
+                "{tag}: counter store untouched"
+            );
+            assert_eq!(owner_rows(&dst, &a).len(), 4, "{tag}");
+            assert_eq!(needed_rows(&dst, &a).len(), 2, "{tag}");
+            assert_eq!(dep_rows(&dst, &a).len(), 5, "{tag}");
+            assert_eq!(columns(&dst, &a).3, Some(41), "{tag}");
+            // Stale stays stale through a second hop; no file is added.
+            let again = Tmp::new();
+            let dst2 = SqliteDb::open(again.db()).unwrap();
+            let mut tx = dst2.begin_write().unwrap();
+            tx.insert_entry(&dst.entry_image(&a).unwrap().unwrap())
+                .unwrap();
+            tx.commit().unwrap();
+            let hop = dst2.entry_image(&a).unwrap().unwrap();
+            assert_eq!(hop.metadata_stamp, stamp, "{tag}");
+            assert_eq!(
+                hop.files.iter().any(|f| f.meta.name == "metadata"),
+                with_metadata,
+                "{tag}"
+            );
+        }
+        // A stale stamp is not served: aux_get reads the field file.
+        let d = Tmp::new();
+        let dst = SqliteDb::open(d.db()).unwrap();
+        let mut img = image(MetadataStamp::Stale, true);
+        for f in &mut img.files {
+            if f.meta.name == "SLOT" {
+                f.data = b"9\n".to_vec();
+            }
+        }
+        let mut tx = dst.begin_write().unwrap();
+        tx.insert_entry(&img).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(dst.aux_get(&a, "SLOT").unwrap().as_deref(), Some("9"));
+        // Re-inserting the same key replaces the live row.
+        let mut tx = dst.begin_write().unwrap();
+        tx.insert_entry(&image(MetadataStamp::Absent, false))
+            .unwrap();
+        tx.commit().unwrap();
+        assert_eq!(count(&dst, "entry"), 1);
+        assert_eq!(count(&dst, "owner"), 4);
+        // Out-of-range times are refused, not truncated.
+        let mut bad = image(MetadataStamp::Absent, false);
+        bad.dir_mtime_ns = i128::MAX;
+        let mut tx = dst.begin_write().unwrap();
+        assert!(matches!(tx.insert_entry(&bad), Err(Error::Invalid(_))));
+    }
+
+    #[test]
+    fn d4_stores_keep_their_order_and_empty_path_entries() {
+        let t = Tmp::new();
+        let db = SqliteDb::open(t.db()).unwrap();
+        let mut tx = db.begin_write().unwrap();
+        tx.set_world(&World {
+            atoms: vec!["z/z".into(), "a/a".into()],
+        })
+        .unwrap();
+        tx.commit().unwrap();
+        assert_eq!(db.world().unwrap().atoms, ["z/z", "a/a"]);
+        let mut libs = PreservedLibs::default();
+        libs.entries.insert(
+            "a/b:0".into(),
+            PreservedLibsEntry {
+                cpv: "a/b-1".into(),
+                counter: "3".into(),
+                paths: vec![],
+            },
+        );
+        let mut tx = db.begin_write().unwrap();
+        tx.set_preserved_libs(&libs).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(db.preserved_libs().unwrap().entries, libs.entries);
+    }
+
+    #[test]
+    fn schema_allows_a_merging_row_beside_the_installed_one_only_once() {
+        let t = Tmp::new();
+        let db = SqliteDb::open(t.db()).unwrap();
+        let conn = db.conn.lock().unwrap();
+        let ins = |state: &str| {
+            conn.execute(
+                "INSERT INTO entry (category, pf, state) VALUES ('a', 'b-1', ?1)",
+                [state],
+            )
+        };
+        ins("installed").unwrap();
+        ins("merging").unwrap();
+        assert!(ins("merging").is_err());
+        assert!(ins("installed").is_err());
     }
 }

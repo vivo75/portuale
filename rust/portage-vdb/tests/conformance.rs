@@ -1355,9 +1355,21 @@ conformance_suite!(
     }
 );
 
-// S2.3+ add, e.g.:
-// #[cfg(feature = "vdb-sqlite")]
-// conformance_suite!(sqlite, |root| ..., Caps { .. });
+// S2.5: every method is implemented on sqlite. `seal_entry` stores the
+// consolidated `metadata` file as a row, like `files` stores the file.
+#[cfg(feature = "vdb-sqlite")]
+conformance_suite!(
+    sqlite,
+    |root| Arc::new(portage_vdb::SqliteDb::open(root.join("vdb.sqlite")).unwrap()),
+    Caps {
+        set_counter: None,
+        reverse_dependents: None,
+        snapshot: None,
+        read_file_at: None,
+        entry_image: None,
+        seal_stores_metadata_file: true,
+    }
+);
 
 // --------------------------------------------------- backend-independent
 
