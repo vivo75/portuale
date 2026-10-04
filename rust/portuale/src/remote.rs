@@ -1941,32 +1941,29 @@ impl VdbShadow {
     /// files are skipped, not fatal: an empty shadow pre-checks nothing,
     /// and the client driver still gates every collision for real.
     fn load(dir: &std::path::Path) -> Self {
+        Self::from_db(&portage_vdb::FilesDb::open_vdb_dir(dir))
+    }
+
+    /// The shadow of any installed-package database: entries in listing
+    /// order (in-progress `-MERGING-<pf>` entries are never listed), the
+    /// first owner of a path wins. An unlistable database or an
+    /// unreadable / non-UTF-8 `CONTENTS` contributes nothing.
+    fn from_db(db: &dyn portage_vdb::InstalledDb) -> Self {
         let mut owners = std::collections::HashMap::new();
-        let Ok(cats) = portage_util::read_dir_entries(dir) else {
+        let Ok(keys) = db.entries() else {
             return Self { owners };
         };
-        for cat in cats {
-            let category = cat.file_name().to_string_lossy().into_owned();
-            let Ok(pfs) = portage_util::read_dir_entries(&cat.path()) else {
+        for key in keys {
+            let Ok(Some(bytes)) = db.read_file(&key, "CONTENTS") else {
                 continue;
             };
-            for pf in pfs {
-                let pfname = pf.file_name().to_string_lossy().into_owned();
-                // Real `vardbapi._excluded_dirs`: an in-progress
-                // `-MERGING-<pf>` entry owns nothing -- a stale one's
-                // half-written `CONTENTS` must never claim a path.
-                if portage_util::is_merging_vdb_entry(&pfname) {
-                    continue;
-                }
-                let contents = pf.path().join("CONTENTS");
-                let Ok(text) = std::fs::read_to_string(&contents) else {
-                    continue;
-                };
-                for path in contents_owned_paths(&text) {
-                    owners
-                        .entry(path)
-                        .or_insert_with(|| (category.clone(), pfname.clone()));
-                }
+            let Ok(text) = String::from_utf8(bytes) else {
+                continue;
+            };
+            for path in contents_owned_paths(&text) {
+                owners
+                    .entry(path)
+                    .or_insert_with(|| (key.category.clone(), key.pf.clone()));
             }
         }
         Self { owners }
@@ -2919,6 +2916,11 @@ run_old_hook() {
 /// any existing file/symlink destination (outside CONFIG_PROTECT
 /// divert) is a fail-closed collision, and old hooks never run.
 /// New-postinst runs separately afterwards (see `run_bundle_stage`).
+///
+/// The `client:<path>` VDB is read and written by this bash on the
+/// client, so it stays in the files format by construction: portuale
+/// has no code there to call `portage-vdb` from (feat#157 design §6.3).
+/// Only the server-side `VdbShadow` read goes through `portage-vdb`.
 const MERGE_FLOW: &str = r##"OLD_PF=""; OLD_COUNTER=-1
 if [ "$STATELESS" = 1 ]; then :; else
 for d in "$VDBROOT"/"$PKG"-*/; do
